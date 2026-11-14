@@ -44,6 +44,8 @@ pub enum Container {
     MpegTs,
     /// MPEG-1/2 program stream (MPG, VOB).
     MpegPs,
+    /// Smacker (SMK).
+    Smacker,
 }
 
 impl Container {
@@ -66,6 +68,7 @@ impl Container {
             Container::Mxf => "MXF",
             Container::MpegTs => "MPEG-TS",
             Container::MpegPs => "MPEG-PS",
+            Container::Smacker => "Smacker",
         }
     }
 }
@@ -132,6 +135,10 @@ pub enum CodecId {
     Dnxhd,
     /// APV (Advanced Professional Video).
     Apv,
+    /// Smacker audio (Huffman-coded DPCM).
+    SmackerAudio,
+    /// Smacker video.
+    SmackerVideo,
     /// A codec this crate has no identifier for.
     Unknown,
 }
@@ -168,6 +175,8 @@ impl CodecId {
             CodecId::Theora => "Theora",
             CodecId::Dnxhd => "DNxHD",
             CodecId::Apv => "APV",
+            CodecId::SmackerAudio => "Smacker audio",
+            CodecId::SmackerVideo => "Smacker video",
             CodecId::Unknown => "unknown",
         }
     }
@@ -192,6 +201,7 @@ impl CodecId {
                 | CodecId::Opus
                 | CodecId::Vorbis
                 | CodecId::Speex
+                | CodecId::SmackerAudio
         )
     }
 
@@ -211,6 +221,7 @@ impl CodecId {
                 | CodecId::Theora
                 | CodecId::Dnxhd
                 | CodecId::Apv
+                | CodecId::SmackerVideo
         )
     }
 }
@@ -260,6 +271,7 @@ impl PcmFormat {
 /// | H.264 / HEVC / AV1 | the `avcC` / `hvcC` / `av1C` record |
 /// | VP9 | the MP4 `vpcC` payload, or Matroska's codec feature metadata |
 /// | APV | the `apvC` record |
+/// | Smacker video | the four tree table sizes (little-endian `u32`s), then the Huffman tree data |
 ///
 /// `sample_rate` and `channels` are what the container declares (for HE-AAC with implicit
 /// signalling, usually the core rate), except that Opus is always 48 kHz, the rate it decodes at;

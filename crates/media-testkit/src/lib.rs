@@ -14,10 +14,14 @@
 //! [`hostile::hammer`] runs a parser over truncations and mutations of a valid input and fails on
 //! a panic or a slow run; `CRAFT_MEDIA_HOSTILE_MULT=10` runs ten times the iterations.
 //!
+//! [`smacker`] builds synthetic Smacker trees, streams and files for the tests of the demuxer and
+//! the decoders.
+//!
 //! Failing loudly is what a test helper is for: a wrong `CRAFT_MEDIA_*` setting or an unwritable
 //! fixture directory panics, which fails the test that asked.
 
 pub mod hostile;
+pub mod smacker;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

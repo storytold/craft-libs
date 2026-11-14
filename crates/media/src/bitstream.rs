@@ -2,6 +2,7 @@
 //!
 //! - [`BitReader`]: MSB-first reader with Exp-Golomb (`ue(v)`, `se(v)`), as used by H.264/HEVC/AV1 headers.
 //! - [`BitWriter`]: the matching writer (for encoders and header rewriting).
+//! - [`LsbBitReader`]: LSB-first reader, as used by Smacker.
 //! - [`unescape_rbsp`] / [`escape_rbsp`]: remove/insert H.264/HEVC emulation-prevention bytes.
 //! - [`annexb_nals`] / [`length_prefixed_nals`]: split Annex-B byte streams and AVCC/HVCC samples into NAL units.
 
@@ -399,6 +400,57 @@ pub fn length_prefixed_nals(data: &[u8], length_size: usize) -> Result<Vec<&[u8]
         i += len;
     }
     Ok(out)
+}
+
+/// LSB-first bit reader over a byte slice: bit 0 of each byte comes first, and the first bit of a
+/// multi-bit field is its least significant one (the bit order of Smacker).
+#[derive(Clone)]
+pub struct LsbBitReader<'a> {
+    data: &'a [u8],
+    /// Position in bits.
+    pos: usize,
+}
+
+impl<'a> LsbBitReader<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+    /// Bit position from the start.
+    pub fn position(&self) -> usize {
+        self.pos
+    }
+    pub fn bits_left(&self) -> usize {
+        self.data.len().saturating_mul(8).saturating_sub(self.pos)
+    }
+
+    #[inline]
+    pub fn read_bit(&mut self) -> Result<bool> {
+        let byte = self.data.get(self.pos / 8).copied().ok_or(BitError::Eof)?;
+        let bit = (byte >> (self.pos % 8)) & 1;
+        self.pos += 1;
+        Ok(bit == 1)
+    }
+
+    /// Read `n` bits (at most 32).
+    #[inline]
+    pub fn read_bits(&mut self, n: u32) -> Result<u32> {
+        let n = n.min(32);
+        if n as usize > self.bits_left() {
+            return Err(BitError::Eof);
+        }
+        if n == 0 {
+            return Ok(0);
+        }
+        let byte = self.pos / 8;
+        let mut v = 0u64;
+        // 32 bits at a bit offset of up to 7 span at most five bytes
+        for (i, &b) in self.data.iter().skip(byte).take(5).enumerate() {
+            v |= u64::from(b) << (8 * i);
+        }
+        v >>= self.pos % 8;
+        self.pos += n as usize;
+        Ok((v & ((1u64 << n) - 1)) as u32)
+    }
 }
 
 /// CRC-32 (IEEE, reflected) — used by containers (e.g. Matroska CRC-32 elements, PNG).
@@ -975,5 +1027,23 @@ mod tests {
             prop_assert_eq!(unescape_rbsp(&e), data);
             for w in e.windows(3) { prop_assert!(!(w[0] == 0 && w[1] == 0 && w[2] < 3)); }
         }
+    }
+
+    #[test]
+    fn lsb_reader_takes_the_low_bits_first() {
+        let data = [0b1010_0101, 0xFF, 0x00, 0x12, 0x34, 0x56];
+        let mut r = LsbBitReader::new(&data);
+        assert_eq!(r.read_bit(), Ok(true));
+        assert_eq!(r.read_bits(3), Ok(0b010));
+        assert_eq!(r.read_bits(4), Ok(0b1010));
+        assert_eq!(r.read_bits(0), Ok(0));
+        // 32 bits at a bit offset span five bytes
+        assert_eq!(r.read_bits(3), Ok(0b111));
+        assert_eq!(r.read_bits(32), Ok((0x56_3412_00FFu64 >> 3) as u32));
+        assert_eq!((r.position(), r.bits_left()), (43, 5));
+        assert_eq!(r.read_bits(6), Err(BitError::Eof));
+        assert_eq!(r.read_bits(5), Ok(0x56 >> 3));
+        assert_eq!(r.read_bit(), Err(BitError::Eof));
+        assert_eq!(LsbBitReader::new(&[]).read_bits(1), Err(BitError::Eof));
     }
 }
