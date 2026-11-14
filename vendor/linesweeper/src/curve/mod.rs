@@ -202,33 +202,36 @@ impl CurveOrder {
         &self,
         y: f64,
     ) -> Option<CurveInteraction> {
-        let mut iter = self
-            .iter()
-            .skip_while(|(_start, end, _order)| end <= &y)
-            .skip_while(|(_start, _end, order)| *order == Order::Left);
+        let mut iter = self.iter().skip_while(|(_start, end, _order)| end <= &y);
+        // The height that a crossing found right away is reported at.
+        let mut from = y;
 
-        let (y0, y1, order) = iter.next()?;
-        if order == Order::Right {
-            return Some(CurveInteraction::Cross(y, y));
-        }
-
-        let Some((_, next_y1, next_order)) = iter.next() else {
-            return Some(CurveInteraction::Touch(y0, y1));
-        };
-
-        match next_order {
-            Order::Right => Some(CurveInteraction::Cross(y0, y1)),
-            Order::Left => {
-                if y < y0 {
-                    Some(CurveInteraction::Touch(y0, y1))
-                } else {
-                    self.next_touch_after(next_y1)
-                }
+        loop {
+            let (y0, y1, order) = iter.find(|(_start, _end, order)| *order != Order::Left)?;
+            if order == Order::Right {
+                return Some(CurveInteraction::Cross(from, from));
             }
-            Order::Ish => {
-                // The current order is Ish and adjacent orders get merged,
-                // so the next one isn't Ish.
-                unreachable!();
+
+            let Some((_, next_y1, next_order)) = iter.next() else {
+                return Some(CurveInteraction::Touch(y0, y1));
+            };
+
+            match next_order {
+                Order::Right => return Some(CurveInteraction::Cross(y0, y1)),
+                Order::Left => {
+                    if y < y0 {
+                        return Some(CurveInteraction::Touch(y0, y1));
+                    }
+                    // `y` is inside this Ish interval, so look for the next
+                    // one. It starts after `y`, so it is compared with `y`
+                    // and not with the end of the Left interval before it.
+                    from = next_y1;
+                }
+                Order::Ish => {
+                    // The current order is Ish and adjacent orders get merged,
+                    // so the next one isn't Ish.
+                    unreachable!();
+                }
             }
         }
     }
@@ -1745,6 +1748,49 @@ mod test {
         let b = CubicBez::new((0.3, 0.0), (0.3, 1.0 / 3.0), (0.3, 2.0 / 3.0), (0.3, 1.0));
         let cmp = intersect_cubics(a, b, sure_tol, ish_tol);
         assert_eq!(cmp.iter().count(), 3);
+    }
+
+    #[test]
+    fn next_touch_after_a_touch_that_contains_y() {
+        let mut cmp = CurveOrder::new(0.0);
+        for (end, order) in [
+            (1.0, Order::Ish),
+            (2.0, Order::Left),
+            (3.0, Order::Ish),
+            (4.0, Order::Left),
+        ] {
+            cmp.push(end, order, MetricsStatus::default());
+        }
+
+        let touch = |y: f64| match cmp.next_touch_after(y) {
+            Some(CurveInteraction::Touch(y0, y1)) => (y0, y1),
+            other => panic!("expected a touch after {y}, got {other:?}"),
+        };
+        // `y` inside the first touch or after it: the next one is the touch
+        // from 2 to 3.
+        assert_eq!(touch(0.0), (2.0, 3.0));
+        assert_eq!(touch(0.5), (2.0, 3.0));
+        assert_eq!(touch(1.5), (2.0, 3.0));
+        // `y` inside the second touch, with no touch after it.
+        assert!(cmp.next_touch_after(2.5).is_none());
+        assert!(cmp.next_touch_after(4.0).is_none());
+    }
+
+    #[test]
+    fn next_touch_after_on_two_curves_that_start_together() {
+        // The cubic starts on the line, moves left of it and comes back to
+        // touch it again near y = 2.4.
+        let a = CubicBez::new((0.0, 0.0), (-1.2, 4.0 / 3.0), (1.6, 8.0 / 3.0), (-1.6, 4.0));
+        let b = CubicBez::new((0.0, 0.0), (0.0, 4.0 / 3.0), (0.0, 8.0 / 3.0), (0.0, 4.0));
+        let cmp = intersect_cubics(a, b, 1e-3, 0.02);
+        let orders: Vec<_> = cmp.iter().map(|(_, _, order)| order).collect();
+        assert_eq!(orders, [Order::Ish, Order::Left, Order::Ish, Order::Left]);
+
+        let (touch_y0, touch_y1, _) = cmp.iter().nth(2).unwrap();
+        match cmp.next_touch_after(0.0) {
+            Some(CurveInteraction::Touch(y0, y1)) => assert_eq!((y0, y1), (touch_y0, touch_y1)),
+            other => panic!("expected the second touch, got {other:?}"),
+        }
     }
 
     #[test]
