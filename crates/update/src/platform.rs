@@ -105,7 +105,13 @@ pub struct Platform {
 }
 
 impl Platform {
-    /// The platform this binary was built for, or `None` for wasm and unsupported targets.
+    /// The machine this program runs on, or `None` for wasm and unsupported targets.
+    ///
+    /// On Windows the architecture is the machine's, which isn't always the build's: a 32-bit
+    /// (x86) build runs on 64-bit Windows too, and is then on an x64 machine whose x64 builds it
+    /// should prefer. Windows on ARM shows an x86 or x64 build the machine it emulates (x64 where
+    /// Windows emulates x64), so that build keeps to emulated builds; an ARM64 build sees ARM64.
+    /// Elsewhere it is the build's architecture.
     pub fn current() -> Option<Self> {
         let os = if cfg!(target_os = "windows") {
             Os::Windows
@@ -118,18 +124,16 @@ impl Platform {
         } else {
             return None;
         };
-        let arch = if cfg!(target_arch = "x86_64") {
-            Arch::X64
-        } else if cfg!(target_arch = "x86") {
-            Arch::X86
-        } else if cfg!(target_arch = "aarch64") {
-            Arch::Arm64
-        } else if cfg!(target_arch = "riscv64") {
-            Arch::Riscv64
-        } else {
-            return None;
-        };
-        Some(Self { os, arch })
+        Some(Self { os, arch: build_arch()? }.on_machine(native_windows_arch()))
+    }
+
+    /// This build's platform moved to the machine's own architecture `native`, as Windows reports
+    /// it. Only Windows runs builds of another architecture this way; `None` keeps the build's.
+    fn on_machine(self, native: Option<Arch>) -> Self {
+        match native {
+            Some(arch) if self.os == Os::Windows => Self { arch, ..self },
+            _ => self,
+        }
     }
 
     pub fn label(self) -> String {
@@ -179,6 +183,53 @@ impl Platform {
             Os::Linux => &[PackageKind::AppImage, PackageKind::Deb, PackageKind::Rpm, PackageKind::ArchPkg, PackageKind::Flatpak, PackageKind::TarGz],
             Os::FreeBsd => &[PackageKind::TarGz],
         }
+    }
+}
+
+/// The architecture this program was built for, or `None` for an unsupported one.
+pub(crate) fn build_arch() -> Option<Arch> {
+    if cfg!(target_arch = "x86_64") {
+        Some(Arch::X64)
+    } else if cfg!(target_arch = "x86") {
+        Some(Arch::X86)
+    } else if cfg!(target_arch = "aarch64") {
+        Some(Arch::Arm64)
+    } else if cfg!(target_arch = "riscv64") {
+        Some(Arch::Riscv64)
+    } else {
+        None
+    }
+}
+
+/// The machine's architecture as `GetNativeSystemInfo` reports it, which a 32-bit build on 64-bit
+/// Windows sees as x64; `None` off Windows.
+#[cfg(windows)]
+fn native_windows_arch() -> Option<Arch> {
+    windows_arch(u16::from(winsafe::GetNativeSystemInfo().wProcessorArchitecture))
+}
+
+#[cfg(not(windows))]
+fn native_windows_arch() -> Option<Arch> {
+    None
+}
+
+/// `SYSTEM_INFO::wProcessorArchitecture` values for the architectures Craft Apps are built for.
+#[cfg(any(windows, test))]
+const PROCESSOR_ARCHITECTURE_INTEL: u16 = 0;
+#[cfg(any(windows, test))]
+const PROCESSOR_ARCHITECTURE_AMD64: u16 = 9;
+#[cfg(any(windows, test))]
+const PROCESSOR_ARCHITECTURE_ARM64: u16 = 12;
+
+/// The [`Arch`] of a `SYSTEM_INFO::wProcessorArchitecture` value, or `None` for one no Craft App
+/// is built for (32-bit ARM, Itanium) or `PROCESSOR_ARCHITECTURE_UNKNOWN`.
+#[cfg(any(windows, test))]
+fn windows_arch(processor_architecture: u16) -> Option<Arch> {
+    match processor_architecture {
+        PROCESSOR_ARCHITECTURE_INTEL => Some(Arch::X86),
+        PROCESSOR_ARCHITECTURE_AMD64 => Some(Arch::X64),
+        PROCESSOR_ARCHITECTURE_ARM64 => Some(Arch::Arm64),
+        _ => None,
     }
 }
 
@@ -437,6 +488,110 @@ mod tests {
             pick_asset(&r_riscv_deb, &["photocraft"], p_riscv, p_riscv.download_kinds()).map(|(a, _)| a.name.clone()).as_deref(),
             Some("photocraft-0.5.0-linux-riscv64.deb")
         );
+    }
+
+    /// PhotoCraft 0.21.0's Windows packages, the last release with 32-bit (x86) builds.
+    const PHOTO_0_21_WINDOWS: &[&str] = &[
+        "photocraft-0.21.0-windows-arm64-portable.zip",
+        "photocraft-0.21.0-windows-arm64-symbols.zip",
+        "photocraft-0.21.0-windows-arm64.msi",
+        "photocraft-0.21.0-windows-x64-portable.zip",
+        "photocraft-0.21.0-windows-x64-symbols.zip",
+        "photocraft-0.21.0-windows-x64.msi",
+        "photocraft-0.21.0-windows-x86-portable.zip",
+        "photocraft-0.21.0-windows-x86-symbols.zip",
+        "photocraft-0.21.0-windows-x86.msi",
+    ];
+
+    /// PhotoCraft 0.23.1's Windows packages: x64 and ARM64 only.
+    const PHOTO_0_23_WINDOWS: &[&str] = &[
+        "photocraft-0.23.1-windows-arm64-portable.zip",
+        "photocraft-0.23.1-windows-arm64-symbols.zip",
+        "photocraft-0.23.1-windows-arm64.msi",
+        "photocraft-0.23.1-windows-x64-portable.zip",
+        "photocraft-0.23.1-windows-x64-symbols.zip",
+        "photocraft-0.23.1-windows-x64.msi",
+    ];
+
+    /// The portable zip in `names` for a Windows build of `build` architecture running on a machine
+    /// that `GetNativeSystemInfo` reports as `native` (a `PROCESSOR_ARCHITECTURE_*` value), put
+    /// together as [`Platform::current`] does.
+    fn portable_zip(names: &[&str], build: Arch, native: u16) -> Option<String> {
+        let platform = Platform { os: Os::Windows, arch: build }.on_machine(windows_arch(native));
+        pick_asset(&release(names), &["photocraft"], platform, &[PackageKind::PortableZip]).map(|(a, _)| a.name.clone())
+    }
+
+    /// [`portable_zip`] from PhotoCraft 0.21.0 and from 0.23.1.
+    fn portable_zips(build: Arch, native: u16) -> [Option<String>; 2] {
+        [PHOTO_0_21_WINDOWS, PHOTO_0_23_WINDOWS].map(|names| portable_zip(names, build, native))
+    }
+
+    #[test]
+    fn a_32_bit_build_on_64_bit_windows_updates_to_the_x64_build() {
+        // photocraft#13565: the x86 portable PhotoCraft 0.21.0 on 64-bit Windows looked for an x86
+        // zip in 0.23.1, which ships none. The machine's own build comes first while an x86 build
+        // is still published, too.
+        assert_eq!(
+            portable_zips(Arch::X86, PROCESSOR_ARCHITECTURE_AMD64),
+            [Some("photocraft-0.21.0-windows-x64-portable.zip".into()), Some("photocraft-0.23.1-windows-x64-portable.zip".into())]
+        );
+    }
+
+    #[test]
+    fn windows_builds_take_the_machine_architecture() {
+        let x64 = [Some("photocraft-0.21.0-windows-x64-portable.zip".to_string()), Some("photocraft-0.23.1-windows-x64-portable.zip".into())];
+        let arm64 = [Some("photocraft-0.21.0-windows-arm64-portable.zip".to_string()), Some("photocraft-0.23.1-windows-arm64-portable.zip".into())];
+        let x86_only = [Some("photocraft-0.21.0-windows-x86-portable.zip".to_string()), None];
+        // An x64 build on x64 Windows, or on Windows on ARM, which shows it an x64 machine.
+        assert_eq!(portable_zips(Arch::X64, PROCESSOR_ARCHITECTURE_AMD64), x64);
+        // 32-bit Windows runs only x86 builds, and 0.23.1 has none.
+        assert_eq!(portable_zips(Arch::X86, PROCESSOR_ARCHITECTURE_INTEL), x86_only);
+        // An ARM64 build on Windows on ARM, or any build told the machine is ARM64.
+        for build in [Arch::Arm64, Arch::X64, Arch::X86] {
+            assert_eq!(portable_zips(build, PROCESSOR_ARCHITECTURE_ARM64), arm64, "{build:?}");
+        }
+        // A machine no build is made for (32-bit ARM, Itanium, unknown) keeps the build's own.
+        for native in [5, 6, 0xffff] {
+            assert_eq!(portable_zips(Arch::X86, native), x86_only, "{native}");
+        }
+    }
+
+    #[test]
+    fn reads_windows_processor_architectures() {
+        assert_eq!(windows_arch(PROCESSOR_ARCHITECTURE_INTEL), Some(Arch::X86));
+        assert_eq!(windows_arch(PROCESSOR_ARCHITECTURE_AMD64), Some(Arch::X64));
+        assert_eq!(windows_arch(PROCESSOR_ARCHITECTURE_ARM64), Some(Arch::Arm64));
+        // ARM, IA64, IA32_ON_WIN64 and IA32_ON_ARM64 (process, not machine, values), UNKNOWN.
+        for other in [5, 6, 10, 14, 0xffff] {
+            assert_eq!(windows_arch(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn only_windows_runs_builds_of_another_architecture() {
+        for os in [Os::MacOs, Os::Linux, Os::FreeBsd] {
+            for arch in [Arch::X64, Arch::Arm64] {
+                let build = Platform { os, arch };
+                assert_eq!(build.on_machine(Some(Arch::Arm64)), build);
+                assert_eq!(build.on_machine(Some(Arch::X64)), build);
+            }
+        }
+        let windows = Platform { os: Os::Windows, arch: Arch::X86 };
+        assert_eq!(windows.on_machine(None), windows);
+        assert_eq!(windows.on_machine(Some(Arch::X64)), Platform { os: Os::Windows, arch: Arch::X64 });
+    }
+
+    /// This machine as Windows reports it: an x64 build runs on x64 Windows, or on Windows on ARM,
+    /// which shows it x64.
+    #[cfg(windows)]
+    #[test]
+    fn current_reports_the_machine_windows_reports() {
+        let current = Platform::current().unwrap();
+        assert_eq!(current.os, Os::Windows);
+        assert_eq!(Some(current.arch), native_windows_arch());
+        if cfg!(target_arch = "x86_64") {
+            assert!(matches!(current.arch, Arch::X64 | Arch::Arm64), "{current:?}");
+        }
     }
 
     #[test]
