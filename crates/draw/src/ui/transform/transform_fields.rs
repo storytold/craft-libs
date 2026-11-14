@@ -373,7 +373,8 @@ impl Cells<'_> {
         };
         let linked = matches!(self.linked.reborrow().read(cx), Some(Mixed::Same(true)));
         let relative = self.relative.as_mut().is_some_and(|on| matches!(on.reborrow().read(cx), Some(Mixed::Same(true))));
-        let conversion = Conversion { rect: self.start, x: self.x, y: self.y, size: self.size_unit.clone(), linked, document: self.document, relative };
+        let conversion =
+            Conversion { rect: self.start, x: self.x, y: self.y, size: self.size_unit.clone(), linked, document: self.document, relative };
         Pass { before, conversion, bases: cx.memory::<Bases>().clone() }
     }
 
@@ -473,7 +474,11 @@ impl Cells<'_> {
     /// The Δ toggle between X and Y; shown when the host gave the `relative` binding.
     fn relative_toggle(&mut self, ui: &mut Ui) {
         let Some(bind) = self.relative.as_mut() else { return };
-        let toggled = ToggleButton::new(self.words.relative.clone(), bind.reborrowed()).icon(IconId::new("triangle")).icon_only().enabled(self.enabled).show(ui);
+        let toggled = ToggleButton::new(self.words.relative.clone(), bind.reborrowed())
+            .icon(IconId::new("triangle"))
+            .icon_only()
+            .enabled(self.enabled)
+            .show(ui);
         if let Some(on) = toggled.value().copied() {
             self.out.relative = Some(on);
         }

@@ -124,7 +124,6 @@ impl<'a, W: TransformWarp> TransformBar<'a, W> {
         self
     }
 
-
     /// The Warp phase's group, shown in place of the fields.
     pub fn warp_fields(mut self, slot: BarSlot<'a>) -> Self {
         self.warp_fields = Some(slot);

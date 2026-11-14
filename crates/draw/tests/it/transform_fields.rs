@@ -150,7 +150,8 @@ fn relative_x_and_y_read_and_move_by_the_reference_points_offset() {
     assert_eq!(after.state.pivot.y, shifted.pivot.y);
 
     // A box flattened to zero height still reads a finite offset.
-    let flat = BoxState::new([Point::new(0.0, 50.0), Point::new(200.0, 50.0), Point::new(200.0, 50.0), Point::new(0.0, 50.0)], Point::new(100.0, 50.0));
+    let flat =
+        BoxState::new([Point::new(0.0, 50.0), Point::new(200.0, 50.0), Point::new(200.0, 50.0), Point::new(0.0, 50.0)], Point::new(100.0, 50.0));
     let mut h = harness_of(TransformRow::new(flat, 0.0), relative());
     h.type_into("X position", "5");
     let row = h.row();
