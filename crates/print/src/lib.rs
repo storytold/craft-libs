@@ -2,8 +2,8 @@
 //! queues, and the driverless destinations it can print to without one — and jobs are piped to
 //! `lp` with the job options (copies, collation, duplex, colour). On Windows the printers come
 //! from the spooler and jobs are drawn by the in-box `Windows.Data.Pdf` into the XPS print API
-//! with the options as a PrintTicket, all in this process (`windows.rs`): no PowerShell or other
-//! program is started, so printing works where scripts are locked down. Other platforms report
+//! with the options as a PrintTicket. These native APIs need no script runtime, so job submission
+//! works where scripts are locked down. Other platforms report
 //! that printing isn't available yet; the print-ready PDF can still be saved.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -20,6 +20,109 @@ mod ticket;
 mod windows;
 #[cfg(any(test, windows))]
 mod xml;
+
+#[cfg(windows)]
+mod windows_query;
+#[cfg(windows)]
+pub use windows_query::worker as query_worker;
+#[cfg(any(windows, test))]
+mod command;
+#[cfg(not(target_arch = "wasm32"))]
+mod discovery;
+#[cfg(not(target_arch = "wasm32"))]
+pub use discovery::DuplexSession;
+
+/// A selected-printer capability reader. Return `None` when unavailable, and return promptly
+/// when cancellation is requested.
+pub type DuplexSource = std::sync::Arc<dyn Fn(&str, &std::sync::atomic::AtomicBool) -> Option<bool> + Send + Sync>;
+
+/// A driver's paper name and dimensions in points.
+pub type PrinterPaper = (String, (f64, f64));
+/// Supported papers and the configured default's dimensions, when available.
+pub type PaperInfo = (Vec<PrinterPaper>, Option<(f64, f64)>);
+
+/// Windows driver paper sizes; empty when unavailable or on other platforms.
+/// Call off the UI thread. Use [`query_paper_info`] for an isolated read.
+pub fn printer_papers(printer: &str) -> Vec<PrinterPaper> {
+    #[cfg(windows)]
+    {
+        windows::printer_papers(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        Vec::new()
+    }
+}
+
+/// Windows paper sizes and configured default dimensions; unknown on other platforms.
+/// Call off the UI thread. Use [`query_paper_info`] for an isolated read.
+pub fn printer_paper_info(printer: &str) -> PaperInfo {
+    #[cfg(windows)]
+    {
+        windows::paper_info(printer)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = printer;
+        (Vec::new(), None)
+    }
+}
+
+/// Selected-printer paper metadata, isolated and cancellable on Windows. Unknown elsewhere.
+/// Windows hosts must dispatch `query_worker` before normal startup.
+pub fn query_paper_info(printer: &str, cancelled: &std::sync::atomic::AtomicBool) -> Option<PaperInfo> {
+    #[cfg(windows)]
+    {
+        windows_query::paper_info(printer, cancelled)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (printer, cancelled);
+        None
+    }
+}
+
+/// Names-only discovery for interactive apps, called off the UI thread. On Windows the host
+/// must dispatch `query_worker` and exit if handled, before normal startup. Elsewhere this
+/// delegates to [`printer_queues`]. Direct library callers can use [`printer_queues`] without worker dispatch.
+pub fn query_printers() -> Vec<Printer> {
+    #[cfg(windows)]
+    {
+        windows_query::printers()
+    }
+    #[cfg(not(windows))]
+    {
+        printer_queues()
+    }
+}
+
+/// Selected-driver capabilities, isolated and cancellable on Windows. Unknown on other targets.
+/// Windows hosts must dispatch `query_worker` and exit if handled, before normal startup.
+pub fn query_two_sided(printer: &str, cancelled: &std::sync::atomic::AtomicBool) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        windows_query::two_sided(printer, cancelled)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (printer, cancelled);
+        None
+    }
+}
+
+/// Open native driver settings and wait for the user to close them. Call off the UI thread,
+/// then invalidate that printer's answer in `DuplexSession`. This interactive window has no query deadline.
+pub fn wait_printer_preferences(printer: &str) -> Result<(), Error> {
+    #[cfg(windows)]
+    {
+        windows_query::preferences(printer).map_err(|error| Error::Spool(error.to_string()))
+    }
+    #[cfg(not(windows))]
+    {
+        open_printer_preferences(printer)
+    }
+}
 
 /// Native Windows driver settings, printable geometry and explicit RGB/GDI transport.
 /// Callers perform ICC conversion and compose page pixels/vector strokes. Other platforms
@@ -51,7 +154,8 @@ pub struct Printer {
     /// `_192_0_2_15` described as `192.0.2.15`. Windows names are already human: empty there.
     pub description: String,
     pub default: bool,
-    /// Whether the Windows driver reports duplex support; None when unknown (CUPS).
+    /// Whether the Windows driver reports duplex support; None when unknown (CUPS, and
+    /// [`printer_queues`] on Windows, which doesn't read it: see [`two_sided`]).
     pub two_sided: Option<bool>,
 }
 
@@ -440,18 +544,8 @@ pub const HAS_PRINTER_PREFERENCES: bool = cfg!(windows);
 pub fn open_printer_preferences(printer: &str) -> Result<(), Error> {
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        // printui takes the name in quotes; Windows printer names can't contain one anyway.
-        if printer.is_empty() || printer.contains('"') {
-            return Err(Error::Spool("not a printer name".into()));
-        }
-        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-        let rundll = std::path::Path::new(&root).join("System32").join("rundll32.exe");
-        std::process::Command::new(rundll)
-            .raw_arg("printui.dll,PrintUIEntry")
-            .raw_arg("/e")
-            .raw_arg("/n")
-            .raw_arg(format!("\"{printer}\""))
+        windows_query::preferences_command(printer)
+            .map_err(|error| Error::Spool(error.to_string()))?
             .spawn()
             .map(|_| ())
             .map_err(|e| Error::Spool(format!("the printer's preferences could not be opened: {e}")))

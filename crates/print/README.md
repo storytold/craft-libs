@@ -1,7 +1,7 @@
 # craft-print
 
-Submit a print-ready PDF to the system spooler. Used by PdfCraft and DesignCraft;
-there are no dependencies on either app or on a UI framework. Requires Rust 1.95.
+Submit a print-ready PDF to the system spooler, independently of any UI framework.
+Requires Rust 1.95.
 
 ```rust,no_run
 let job = craft_print::Job { title: "Report".into(), ..Default::default() };
@@ -44,8 +44,8 @@ submits jobs with copies, collation, duplex and color.
     `/var/run/cups/cups.sock`, so the manifests' wrapper around the tools points CUPS there when
     CUPS' socket is the one Flatpak chose, and fails when it isn't rather than reach another
     server. Server names and `CUPS_SERVER` are left alone.
-- **Windows:** in this process, with no PowerShell, script or other program started, so
-  printing works where App Control for Business or AppLocker enforce script rules. Printers
+- **Windows:** jobs use in-process native APIs without a script runtime, including where
+  App Control for Business or AppLocker enforce script rules. Printers
   come from `EnumPrinters` (local queues and `\\server\queue` connections) and the default from
   `GetDefaultPrinter`. `printers` also reads each driver's PrintCapabilities to report two-sided
   support, which can wait on the device (a networked printer in power save); `printer_queues`
@@ -61,8 +61,7 @@ submits jobs with copies, collation, duplex and color.
   named like the standard size ("ARCH D" over a custom 24 × 36 in entry). Windows' ticket merge
   renames a driver's vendor namespace prefix (`brpsk` to `ns0000`) once the ticket uses one of
   its names, and a Brother driver then fails every page with `0x80040003`; the validated ticket
-  is given the prefixes of the driver's own default ticket back (`ticket::respell`). This backend
-  comes from storytold/pdfcraft#599 and #1132.
+  is given the prefixes of the driver's own default ticket back (`ticket::respell`).
   A job has one ticket, so one paper and orientation. Sheets of the other orientation are
   turned back with `/Rotate`, so portrait and landscape sheets still print as one job. Exact
   size refuses sheets of different sizes and paper the driver lacks. Shrink-to-fit uses the
@@ -83,7 +82,7 @@ submits jobs with copies, collation, duplex and color.
   resolve option names against their in-scope namespaces, including the default namespace. Validation accepts either
   scope and rejects missing, changed or conflicting bindings before submission.
   `duplex: None` leaves duplex out of the ticket. Driver-specific defaults remain in Windows printer
-  preferences (`rundll32 printui.dll`, the one process this crate starts, and only when asked).
+  preferences (`rundll32 printui.dll`, started only when asked).
 - **Browser/other targets:** discovery is empty and submission reports an unsupported
   platform; callers can offer PDF export instead.
 
@@ -204,9 +203,50 @@ It runs formatting, Clippy and this crate's own tests on Windows, Linux and macO
 code changes, and supports manual runs. The Windows job executes the spooler regression above;
 physical printer fidelity still requires hardware verification.
 
-Windows discovery reports driver duplex support in `Printer::two_sided` (a two-sided option in
-the driver's PrintCapabilities); CUPS leaves it unknown. Explicit simplex/duplex choices that the driver
+`printer_queues()` leaves `Printer::two_sided` unknown. On Windows,
+`two_sided(printer)` reads one printer's driver duplex support (a two-sided option in
+its PrintCapabilities); elsewhere it returns `None`. Explicit simplex/duplex choices that the driver
 drops are refused before submission.
+
+## Interactive discovery and capability lifetime
+
+Call `query_printers()` off the UI thread to list queues without querying driver capabilities.
+On Windows, dispatch `query_worker()` before normal application startup. It terminates handled
+queries; if it returns `Some`, exit with that status:
+
+```rust,no_run
+#[cfg(windows)]
+if let Some(success) = craft_print::query_worker() {
+    std::process::exit(i32::from(!success));
+}
+```
+
+These read-only Windows queries run in a separate process with the host's ordinary permissions.
+Discovery allows ten seconds. `query_two_sided()` and `query_paper_info()` allow sixty seconds
+and honor cancellation. Paper information includes supported names and dimensions in points,
+plus the configured default's dimensions when available. Cancel obsolete reads when the
+selection changes or the dialog closes, and discard that printer's cached paper information
+after its preferences window closes.
+Direct synchronous `printers()`, `two_sided()`, `printer_papers()` and `printer_paper_info()`
+do not require worker dispatch. On other platforms `query_printers()` uses existing discovery;
+the capability queries return unknown.
+
+`DuplexSession` owns selected-printer capability reads. Supply `Arc::new(query_two_sided)` as
+its `DuplexSource` and a repaint callback to `select()`, then call `poll()` to receive answers.
+`answer()` returns `None` while unread, `Some(&None)` when unavailable, or `Some(&Some(bool))`.
+Successes are reused within the session; failures retry after reselection. Select `None` when
+the dialog closes, or drop the session, to cancel pending work.
+
+Call `refresh()` on opening Print to cancel old work and forget all answers. Call
+`invalidate(printer)` after that printer's `wait_printer_preferences()` returns, or when the
+host receives a change notification for it. Invalidation leaves other printers' answers and
+pending reads intact. `wait_printer_preferences()` belongs on a background thread and has no timeout while
+the user interacts with the window. Capability answers are advisory; submission validates the
+job independently. Query deadlines never kill or retry submitted jobs.
+
+After refresh or invalidation, call `select()` with the current selection even if it did not
+change. This starts any missing read. Calling `select()` on each UI poll is also supported;
+cached answers do not start another read.
 
 Windows dependencies: the maintained [`winprint` fork](https://github.com/storytold/winprint.rs)
 (BSD-3-Clause, pinned to an immutable Git revision, its PDFium-downloading `pdfium` feature off) and `winsafe` (MIT) hold every Win32 and WinRT call, so the crate keeps `unsafe` forbidden;

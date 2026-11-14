@@ -68,6 +68,48 @@ pub(crate) fn two_sided_named(name: &str) -> Option<bool> {
     PrinterDevice::all().ok()?.iter().find(|d| d.name() == name).and_then(two_sided)
 }
 
+/// Read paper metadata in the query worker, under the same provider guard as other queries.
+pub(super) fn paper_info(name: &str) -> crate::PaperInfo {
+    let _provider = print_ticket_provider();
+    let papers = paper_sizes(name);
+    let settings = crate::rgb::default_settings(name).ok();
+    let default = settings.as_ref().and_then(|s| crate::rgb::page(name, Some(s)).ok()).map(|page| page.paper);
+    (papers, default)
+}
+
+pub(super) fn printer_papers(name: &str) -> Vec<crate::PrinterPaper> {
+    let _provider = print_ticket_provider();
+    paper_sizes(name)
+}
+
+fn paper_sizes(name: &str) -> Vec<crate::PrinterPaper> {
+    let Ok(devices) = PrinterDevice::all() else { return Vec::new() };
+    let Some(device) = devices.into_iter().find(|device| device.name() == name) else { return Vec::new() };
+    let Ok(capabilities) = PrintCapabilities::fetch(&device) else { return Vec::new() };
+    papers_from_capabilities(&capabilities)
+}
+
+fn papers_from_capabilities(capabilities: &PrintCapabilities) -> Vec<crate::PrinterPaper> {
+    use winprint::ticket::FeatureOptionPackWithPredefined as _;
+    let mut papers = Vec::new();
+    for media in capabilities.page_media_sizes() {
+        let size = media.size();
+        let w_pts = (size.width_in_micron() as f64) * 72.0 / 25_400.0;
+        let h_pts = (size.height_in_micron() as f64) * 72.0 / 25_400.0;
+        if w_pts.is_finite() && h_pts.is_finite() && w_pts > 0.0 && h_pts > 0.0 && w_pts <= 14400.0 && h_pts <= 14400.0 {
+            let name = media.display_name().map(str::to_string).unwrap_or_else(|| {
+                if let Some(predefined) = media.as_predefined_name() { format!("{predefined:?}") } else { format!("{w_pts:.1} x {h_pts:.1} pt") }
+            });
+            let w_pts = (w_pts * 100.0).round() / 100.0;
+            let h_pts = (h_pts * 100.0).round() / 100.0;
+            if !papers.iter().any(|(n, (w, h)): &crate::PrinterPaper| n == &name && (*w - w_pts).abs() < 0.1 && (*h - h_pts).abs() < 0.1) {
+                papers.push((name, (w_pts, h_pts)));
+            }
+        }
+    }
+    papers
+}
+
 /// Whether the driver of the queue `name` renders XPS itself (`PRINTER_DRIVER_XPS`); `None`
 /// when no queue has that name or its driver can't be read.
 pub(crate) fn xps_driver_named(name: &str) -> Option<bool> {
@@ -419,6 +461,22 @@ pub(crate) fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnM
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn driver_papers_keep_narrow_labels_and_reject_invalid_dimensions() {
+        use winprint::ticket::document::{PrintCapabilitiesDocument, reader::ParsableXmlDocument};
+        let mut xml = String::from(
+            r#"<psf:PrintCapabilities xmlns:psf="http://schemas.microsoft.com/windows/2003/08/printing/printschemaframework" xmlns:psk="http://schemas.microsoft.com/windows/2003/08/printing/printschemakeywords" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" version="1"><psf:Feature name="psk:PageMediaSize">"#,
+        );
+        for (width, height) in [(15000, 65000), (0, 65000), (-1, 65000), (6000000, 65000), (15000, 0)] {
+            xml.push_str(&format!(r#"<psf:Option name="psk:Custom"><psf:ScoredProperty name="psk:MediaSizeWidth"><psf:Value xsi:type="xsd:integer">{width}</psf:Value></psf:ScoredProperty><psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">{height}</psf:Value></psf:ScoredProperty></psf:Option>"#));
+        }
+        xml.push_str("</psf:Feature></psf:PrintCapabilities>");
+        let capabilities = PrintCapabilities { document: PrintCapabilitiesDocument::parse_from_bytes(xml.into_bytes()).unwrap() };
+        let papers = papers_from_capabilities(&capabilities);
+        assert_eq!(papers.len(), 1);
+        assert_eq!(papers[0].1, (42.52, 184.25));
+    }
 
     /// Exact option support determines scope, including asymmetric duplex and simplex drivers.
     #[test]
