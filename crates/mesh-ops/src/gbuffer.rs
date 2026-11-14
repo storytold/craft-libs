@@ -6,6 +6,7 @@ use glam::{Vec2, Vec3, Vec4};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
+use crate::mesh::unit;
 use crate::{Limits, Mesh, MeshOpsError, Result, check_limit, try_vec};
 
 /// Texel not covered by any triangle.
@@ -239,12 +240,17 @@ pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
     let b0 = 1.0 - b1 - b2;
     let p = |v: &[Vec3]| -> Option<Vec3> { Some(*v.get(a)? * b0 + *v.get(b)? * b1 + *v.get(c)? * b2) };
     let pos = p(&mesh.positions)?;
-    let nrm = p(&mesh.normals)?.try_normalize().unwrap_or(Vec3::Y);
+    // `unit` divides by the largest component first, so a long finite vector keeps its direction.
+    let nrm = unit(p(&mesh.normals)?).unwrap_or(Vec3::Y);
     let (pa, pb, pc) = (*mesh.positions.get(a)?, *mesh.positions.get(b)?, *mesh.positions.get(c)?);
-    let geo_nrm = (pb - pa).cross(pc - pa).try_normalize().unwrap_or(nrm);
+    // The edges are divided by their largest component before the cross product, which can
+    // overflow where the edges themselves do not.
+    let (e1, e2) = (pb - pa, pc - pa);
+    let largest = e1.abs().max(e2.abs()).max_element();
+    let geo_nrm = (largest > 0.0).then(|| unit((e1 / largest).cross(e2 / largest))).flatten().unwrap_or(nrm);
     let tan = *mesh.tangents.get(a)? * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
     let uv = *mesh.uvs.get(a)? * b0 + *mesh.uvs.get(b)? * b1 + *mesh.uvs.get(c)? * b2;
-    let tdir = tan.truncate().try_normalize().unwrap_or_else(|| nrm.any_orthonormal_vector());
+    let tdir = unit(tan.truncate()).unwrap_or_else(|| nrm.any_orthonormal_vector());
     let w = mesh.tangents.get(a).map(|t| if t.w < 0.0 { -1.0 } else { 1.0 }).unwrap_or(1.0);
     Some(Surface { pos, nrm, geo_nrm, tangent: tdir.extend(w), uv, tri: t })
 }
@@ -295,6 +301,25 @@ mod tests {
                 assert!(s.nrm.dot(s.pos.normalize()) > 0.99);
             }
         }
+    }
+
+    #[test]
+    fn surface_keeps_the_direction_of_long_finite_vectors() {
+        // Squaring 1e30 overflows f32: the normal, the tangent and the face normal come out along
+        // the vectors all the same.
+        let s = 1e30;
+        let m = Mesh {
+            positions: vec![Vec3::ZERO, Vec3::X * s, Vec3::Y * s],
+            normals: vec![Vec3::X * s; 3],
+            tangents: vec![Vec4::new(0.0, s, 0.0, -1.0); 3],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 2],
+            ..Mesh::default()
+        };
+        let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
+        assert!((surface.nrm - Vec3::X).length() < 1e-6, "{}", surface.nrm);
+        assert!((surface.tangent - Vec4::new(0.0, 1.0, 0.0, -1.0)).length() < 1e-6, "{}", surface.tangent);
+        assert!((surface.geo_nrm - Vec3::Z).length() < 1e-6, "{}", surface.geo_nrm);
     }
 
     #[test]

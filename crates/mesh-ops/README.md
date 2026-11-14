@@ -14,13 +14,19 @@ crate has no UI, does no file or network I/O and has no `unsafe` code. File form
   glTF 2.0 recommends for meshes without tangents
   (<https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html>): `w` holds the bitangent sign, and
   UVs have `(0, 0)` at the upper-left corner with `v` increasing downward. A mesh MikkTSpace
-  cannot handle (every triangle degenerate, no UV area) gets per-triangle tangents. When the
+  cannot handle (every triangle degenerate, no UV area, more than
+  `mesh::MAX_MIKKTSPACE_VALENCE` (2,048) triangles around one vertex) gets per-vertex tangents.
+  MikkTSpace gives each triangle corner its own frame: `Mesh::compute_tangents` splits a vertex
+  whose corners get different frames (UVs mirrored across it), and `tangents` returns an
+  `Invalid` error for such a vertex, since it returns one tangent per input vertex. When the
   largest coordinate is above 1e6 or below 1e-6 in magnitude, normals and tangents are computed
   from the positions divided by it, and finite input gives finite output. UVs passed to
   `tangents` are divided the same way, and normals when their largest component is above 2 or
   below 0.5. Normals are unit vectors, as glTF 2.0 stores them.
 - **UV unwrapping.** `unwrap_uvs` and `unwrap::auto_unwrap` make a non-overlapping layout per
-  material, splitting vertices where charts meet. The layout is the same at every scale: outside
+  material, splitting vertices where charts meet. A face joins a chart only when its projection
+  onto the chart's plane does not overlap the chart's other faces, and every chart is packed at
+  a scale above zero. The layout is the same at every scale: outside
   1e-6 to 1e6 the charts are made from the positions divided by the largest coordinate. `weld`
   gives vertices at the same position (on a grid of 1e-6 of the bounding diagonal) the same id,
   numbered in order of first appearance.
@@ -76,10 +82,13 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 A BVH holds at most `bvh::MAX_BVH_TRIANGLES` (2^31 − 1) triangles.
 
 `Bvh::from_slices`, `Bvh::try_new`, `UvGBuffer::try_new` and `UvGBuffer::from_slices` reserve all
-their memory before using it, and the other slice functions reserve the arrays they return; each
-returns `MeshOpsError::OutOfMemory` when that fails. `Bvh::new` then returns an empty tree and
-`UvGBuffer::new` a 1 × 1 uncovered buffer. The working memory of normals, tangents (MikkTSpace)
-and unwrapping is a fixed multiple of the input the limits allow and is not reserved that way.
+their memory before using it. The slice functions, `Mesh::try_compute_normals`,
+`Mesh::try_compute_tangents`, `Mesh::try_subdivided`, `unwrap::weld_ids` and
+`unwrap::auto_unwrap` reserve their working memory and their results as they grow. Each returns
+`MeshOpsError::OutOfMemory` when a reservation fails. `Bvh::new` then returns an empty tree,
+`UvGBuffer::new` a 1 × 1 uncovered buffer, and `compute_normals` and `compute_tangents` leave
+the mesh unchanged. The working memory of the `mikktspace` crate is allocated inside it and is
+not reserved this way.
 
 ## Origin
 
@@ -120,3 +129,13 @@ For both apps:
 | `Mesh::normalize_to` leaves a mesh with a radius under 1e-4 too small | the mesh gets the requested radius |
 | `weld_ids` on a grid of 1e-12 when the bounding diagonal is under 1e-6 | a grid of 1e-6 of the diagonal at every size |
 | `OrbitCamera::frame` with a box whose center or distance is not finite | the camera is unchanged |
+| `OrbitCamera::project` in orthographic mode returns points behind the camera | it returns `None` for them |
+| The orthographic projection and `pan` use the field of view as it is | they clamp it to 5° to 150°, as the perspective projection does |
+| `Mesh::compute_tangents` keeps the last corner's frame at a shared vertex | the vertex is split where its corners' frames differ |
+| `Bvh::nearest` misses points inside very thin triangles and near a triangle with a zero-length edge | the nearest point is found |
+| `Bvh::nodes` with no triangles lists one node | it lists none |
+| `surface_at` and the rounded box replace a vector whose squared length overflows `f32` with a fallback direction | they keep its direction |
+| The cylinder's side UVs shrink for a profile shorter than 1e-6, and a profile longer than `f32::MAX` is an error | the side UVs are the same at every size |
+| `auto_unwrap` joins faces whose projections overlap into one chart | such a face starts another chart |
+| `auto_unwrap` accepts a layout that fits only at scale zero | the packing square grows until the charts fit at a positive scale |
+| `weld_ids` returns the ids | it returns `Result`, with `OutOfMemory` when the ids or the grid cannot be reserved |

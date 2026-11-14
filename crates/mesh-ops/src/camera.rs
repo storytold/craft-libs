@@ -48,16 +48,22 @@ impl OrbitCamera {
         Mat4::look_at_rh(self.eye(), self.target, Vec3::Y)
     }
 
+    /// The vertical field of view in radians, with `fov` clamped to 5° to 150°. Perspective and
+    /// orthographic projection, [`OrbitCamera::pan`] and [`OrbitCamera::frame`] all use it.
+    fn fov_radians(&self) -> f32 {
+        self.fov.clamp(5.0, 150.0).to_radians()
+    }
+
     pub fn proj(&self, aspect: f32) -> Mat4 {
         let r = self.scene_radius.max(1e-3);
         let near = (self.distance - r * 4.0).max(r * 0.01).max(1e-4);
         let far = self.distance + r * 50.0;
         let aspect = if aspect.is_finite() && aspect > 1e-4 { aspect } else { 1.0 };
         if self.ortho {
-            let h = self.distance * (self.fov.to_radians() * 0.5).tan();
+            let h = self.distance * (self.fov_radians() * 0.5).tan();
             Mat4::orthographic_rh(-h * aspect, h * aspect, -h, h, near.min(0.01), far)
         } else {
-            Mat4::perspective_rh(self.fov.clamp(5.0, 150.0).to_radians(), aspect, near, far)
+            Mat4::perspective_rh(self.fov_radians(), aspect, near, far)
         }
     }
 
@@ -70,7 +76,7 @@ impl OrbitCamera {
     pub fn frame(&mut self, lo: Vec3, hi: Vec3) {
         let target = (lo + hi) * 0.5;
         let r = ((hi - lo).length() * 0.5).max(1e-3);
-        let distance = r / (self.fov.clamp(5.0, 150.0).to_radians() * 0.5).sin() * 1.1;
+        let distance = r / (self.fov_radians() * 0.5).sin() * 1.1;
         if !(target.is_finite() && distance.is_finite()) {
             return;
         }
@@ -89,7 +95,7 @@ impl OrbitCamera {
         let f = self.forward();
         let right = f.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
         let up = right.cross(f);
-        let scale = self.distance * (self.fov.to_radians() * 0.5).tan() * 2.0;
+        let scale = self.distance * (self.fov_radians() * 0.5).tan() * 2.0;
         self.target += (-right * dx + up * dy) * scale;
     }
 
@@ -109,9 +115,15 @@ impl OrbitCamera {
         Ray { origin: a, dir: (b - a).try_normalize().unwrap_or(self.forward()) }
     }
 
-    /// Project a world point to NDC (x, y in -1..1, y up; z depth). None behind the camera.
+    /// Project a world point to NDC (x, y in -1..1, y up; z depth). None behind the camera, in
+    /// both projections: the point's depth in front of the eye must be over 1e-6.
     pub fn project(&self, p: Vec3, aspect: f32) -> Option<Vec3> {
-        let c = self.view_proj(aspect) * p.extend(1.0);
+        let in_view = self.view() * p.extend(1.0);
+        // The view looks down -Z.
+        if -in_view.z <= 1e-6 {
+            return None;
+        }
+        let c = self.proj(aspect) * in_view;
         (c.w > 1e-6).then(|| c.truncate() / c.w)
     }
 }
@@ -143,6 +155,31 @@ mod tests {
         }
         assert!(c.distance > 0.0 && c.distance.is_finite());
         let _ = c.proj(f32::NAN);
+    }
+
+    #[test]
+    fn orthographic_projection_finds_nothing_behind_the_camera() {
+        for ortho in [false, true] {
+            let c = OrbitCamera { ortho, ..OrbitCamera::default() };
+            assert!(c.project(c.eye() - c.forward(), 1.5).is_none(), "ortho {ortho}");
+            assert!(c.project(c.eye() - c.forward() * 1e-3, 1.5).is_none(), "ortho {ortho}");
+            assert!(c.project(c.target, 1.5).is_some(), "ortho {ortho}");
+        }
+    }
+
+    #[test]
+    fn field_of_view_is_clamped_the_same_way_in_every_mode() {
+        for fov in [0.0, -10.0, 1.0, 179.0, 500.0] {
+            let c = OrbitCamera { fov, ortho: true, ..OrbitCamera::default() };
+            let clamped = OrbitCamera { fov: fov.clamp(5.0, 150.0), ..c };
+            assert!(c.proj(1.5).to_cols_array().iter().all(|v| v.is_finite()), "fov {fov}");
+            assert_eq!(c.proj(1.5), clamped.proj(1.5), "fov {fov}");
+            let (mut panned, mut expected) = (c, clamped);
+            panned.pan(0.25, -0.5);
+            expected.pan(0.25, -0.5);
+            assert_eq!(panned.target, expected.target, "fov {fov}");
+            assert_ne!(panned.target, c.target, "fov {fov}");
+        }
     }
 
     #[test]

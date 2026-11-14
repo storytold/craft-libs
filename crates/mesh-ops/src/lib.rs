@@ -91,6 +91,18 @@ pub(crate) fn try_vec<T>(len: usize, what: &'static str) -> Result<Vec<T>> {
     Ok(v)
 }
 
+/// `len` copies of `value`, or `OutOfMemory`.
+pub(crate) fn try_filled<T: Clone>(len: usize, value: T, what: &'static str) -> Result<Vec<T>> {
+    let mut v = try_vec(len, what)?;
+    v.resize(len, value);
+    Ok(v)
+}
+
+/// `OutOfMemory` for `what` in place of a failed reservation.
+pub(crate) fn reserved(r: std::result::Result<(), std::collections::TryReserveError>, what: &'static str) -> Result<()> {
+    r.map_err(|_| MeshOpsError::OutOfMemory(what))
+}
+
 /// The result of [`unwrap_uvs`]: vertices are split where charts meet, so the output has its own
 /// vertex list.
 #[derive(Clone, Debug, PartialEq)]
@@ -122,7 +134,7 @@ pub fn bounds(positions: &[[f32; 3]]) -> Result<Option<([f32; 3], [f32; 3])>> {
 /// Area-weighted smooth normals, one per vertex. A vertex no triangle uses gets +Y.
 pub fn smooth_normals(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) -> Result<Vec<[f32; 3]>> {
     let mut mesh = Mesh::from_slices(positions, None, None, indices, limits)?;
-    mesh.compute_normals();
+    mesh.try_compute_normals()?;
     let mut out = try_vec(mesh.normals.len(), "normals")?;
     out.extend(mesh.normals.iter().map(|n| n.to_array()));
     Ok(out)
@@ -130,12 +142,21 @@ pub fn smooth_normals(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) 
 
 /// MikkTSpace tangents, one per vertex: xyz tangent and the bitangent sign in `w`, so that
 /// `cross(normal, tangent) * w` points up the image (glTF 2.0). Meshes MikkTSpace cannot handle
-/// (every triangle degenerate, no UV area) get per-triangle tangents instead. The normals are
-/// unit vectors, as glTF 2.0 stores them: each tangent is made perpendicular to its normal with
-/// a projection that is exact only at unit length.
+/// (every triangle degenerate, no UV area, more than [`mesh::MAX_MIKKTSPACE_VALENCE`] triangles
+/// around one vertex) get per-vertex tangents instead. The normals are unit vectors, as glTF
+/// 2.0 stores them: each tangent is made perpendicular to its normal with a projection that is
+/// exact only at unit length.
+///
+/// A vertex whose triangles need different tangent frames (UVs mirrored across it) cannot have
+/// one tangent: that is an `Invalid` error naming the vertex. [`Mesh::compute_tangents`] splits
+/// such vertices instead.
 pub fn tangents(positions: &[[f32; 3]], normals: &[[f32; 3]], uvs: &[[f32; 2]], indices: &[u32], limits: &Limits) -> Result<Vec<[f32; 4]>> {
     let mut mesh = Mesh::from_slices(positions, Some(normals), Some(uvs), indices, limits)?;
-    mesh.compute_tangents();
+    mesh.try_compute_tangents()?;
+    if let Some(k) = mesh.indices.iter().position(|&v| v as usize >= positions.len()) {
+        let vertex = indices.get(k).copied().unwrap_or_default();
+        return Err(MeshOpsError::Invalid(format!("vertex {vertex} is shared by triangles with different tangent frames")));
+    }
     let mut out = try_vec(mesh.tangents.len(), "tangents")?;
     out.extend(mesh.tangents.iter().map(|t| t.to_array()));
     Ok(out)
@@ -152,7 +173,7 @@ pub fn weld(positions: &[[f32; 3]], limits: &Limits) -> Result<Vec<u32>> {
         }
         p.push(q);
     }
-    Ok(unwrap::weld_ids(&p))
+    unwrap::weld_ids(&p)
 }
 
 /// An automatic non-overlapping UV layout for one material, as [`unwrap::auto_unwrap`] makes it.

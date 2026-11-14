@@ -10,7 +10,7 @@
 //! range the products in the triangle test overflow or underflow `f32`, and a ray can miss a
 //! triangle it crosses.
 
-use glam::{Vec3, Vec3A};
+use glam::{DVec3, Vec3, Vec3A};
 
 use crate::{Limits, Mesh, MeshOpsError, Result, check_limit, try_vec};
 
@@ -149,7 +149,11 @@ impl Bvh {
 
     /// Build over `tris`, whose original triangle indices are `ids`; at most
     /// [`MAX_BVH_TRIANGLES`] finite triangles. Every list reserves its memory before it grows.
+    /// Without triangles the tree has no nodes.
     fn build(tris: Vec<[Vec3; 3]>, ids: Vec<u32>) -> Result<Bvh> {
+        if tris.is_empty() {
+            return Ok(Bvh { nodes: Vec::new(), tris, order: Vec::new() });
+        }
         let out_of_memory = |_| MeshOpsError::OutOfMemory("BVH nodes");
         let mut order: Vec<u32> = try_vec(tris.len(), "BVH triangles")?;
         order.extend(0..tris.len() as u32);
@@ -304,7 +308,7 @@ impl Bvh {
 
     /// The flattened tree (for GPU traversal), root first: bounds, then for a leaf the range
     /// `first..first + count` of [`Bvh::triangles`], for an inner node (`count` 0) the children
-    /// `first` and `first + 1`.
+    /// `first` and `first + 1`. A tree without triangles has no nodes.
     pub fn nodes(&self) -> impl ExactSizeIterator<Item = (Vec3, Vec3, u32, u32)> + '_ {
         self.nodes.iter().map(|n| (n.lo.into(), n.hi.into(), n.first, n.count))
     }
@@ -493,10 +497,16 @@ impl Bvh {
 }
 
 /// The point of triangle `t` nearest to `p` and its barycentrics (weights of vertices 1 and 2),
-/// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5). A triangle without area is
-/// measured as the point or segment it is, and can be the nearest.
+/// by Voronoi region (Ericson, Real-Time Collision Detection, 5.1.5), in `f64`: in `f32` the
+/// region tests round to zero inside thin triangles. A triangle without area is measured as the
+/// point or segment it is, and can be the nearest. An edge of zero length is skipped: the
+/// denominator of its parameter is its squared length.
 fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
-    let [a, b, c] = *t;
+    let (q, v, w) = closest_on_triangle_f64(p.as_dvec3(), t.map(|c| c.as_dvec3()));
+    (q.as_vec3(), v as f32, w as f32)
+}
+
+fn closest_on_triangle_f64(p: DVec3, [a, b, c]: [DVec3; 3]) -> (DVec3, f64, f64) {
     let (ab, ac, ap) = (b - a, c - a, p - a);
     let (d1, d2) = (ab.dot(ap), ac.dot(ap));
     if d1 <= 0.0 && d2 <= 0.0 {
@@ -507,8 +517,9 @@ fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
     if d3 >= 0.0 && d4 <= d3 {
         return (b, 1.0, 0.0);
     }
+    // d1 - d3 = |ab|², d2 - d6 = |ac|² and (d4 - d3) + (d5 - d6) = |bc|².
     let vc = d1 * d4 - d3 * d2;
-    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 && d1 - d3 > 0.0 {
         let v = d1 / (d1 - d3);
         return (a + ab * v, v, 0.0);
     }
@@ -518,18 +529,31 @@ fn closest_on_triangle(p: Vec3, t: &[Vec3; 3]) -> (Vec3, f32, f32) {
         return (c, 0.0, 1.0);
     }
     let vb = d5 * d2 - d1 * d6;
-    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 && d2 - d6 > 0.0 {
         let w = d2 / (d2 - d6);
         return (a + ac * w, 0.0, w);
     }
     let va = d3 * d6 - d5 * d4;
-    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
+    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 && (d4 - d3) + (d5 - d6) > 0.0 {
         let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
         return (b + (c - b) * w, 1.0 - w, w);
     }
-    let denom = 1.0 / (va + vb + vc);
-    let (v, w) = (vb * denom, vc * denom);
-    (a + ab * v + ac * w, v, w)
+    let sum = va + vb + vc;
+    if sum > 0.0 {
+        let (v, w) = (vb / sum, vc / sum);
+        return (a + ab * v + ac * w, v, w);
+    }
+    // No area and no region matched: the nearest of the three edges.
+    let on_edge = |from: DVec3, to: DVec3| {
+        let d = to - from;
+        let s = if d.length_squared() > 0.0 { ((p - from).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+        (from + d * s, s)
+    };
+    let ((qab, s), (qac, r), (qbc, k)) = (on_edge(a, b), on_edge(a, c), on_edge(b, c));
+    [(qab, s, 0.0), (qac, 0.0, r), (qbc, 1.0 - k, k)]
+        .into_iter()
+        .min_by(|x, y| (x.0 - p).length_squared().total_cmp(&(y.0 - p).length_squared()))
+        .unwrap_or((a, 0.0, 0.0))
 }
 
 #[cfg(test)]
@@ -562,6 +586,50 @@ mod tests {
         }
         assert!(bvh.nearest(Vec3::splat(100.0), 1.0, &|_| true).is_none(), "out of range");
         assert!(bvh.nearest(Vec3::ZERO, f32::MAX, &|_| false).is_none(), "filtered out");
+    }
+
+    #[test]
+    fn nearest_finds_a_point_inside_a_thin_triangle() {
+        let l = Limits::default();
+        let bvh = Bvh::from_slices(&[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1e-4, 0.0]], &[0, 1, 2], &l).unwrap();
+        // p = a + 0.5 (b - a) + 0.25 (c - a) lies on the triangle.
+        let p = Vec3::new(0.75, 2.5e-5, 0.0);
+        let hit = bvh.nearest(p, 0.0, &|_| true).unwrap();
+        assert_eq!(hit.t, 0.0);
+        assert!((hit.u - 0.5).abs() < 1e-4 && (hit.v - 0.25).abs() < 1e-4, "{hit:?}");
+    }
+
+    #[test]
+    fn nearest_measures_a_triangle_with_a_collapsed_edge() {
+        let l = Limits::default();
+        let p = Vec3::new(0.5, 1.0, 0.0);
+        let (o, x) = ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+        // The surviving segment runs from the origin to +X; its point nearest p is (0.5, 0, 0).
+        for (positions, indices) in [(vec![o, o, x], vec![0, 1, 2]), (vec![x, x, o], vec![0, 1, 2]), (vec![o, x], vec![0, 0, 1])] {
+            let bvh = Bvh::from_slices(&positions, &indices, &l).unwrap();
+            let hit = bvh.nearest(p, 10.0, &|_| true);
+            let hit = hit.unwrap_or_else(|| panic!("{positions:?} {indices:?}: no point found"));
+            assert!((hit.t - 1.0).abs() < 1e-6, "{positions:?} {indices:?}: {hit:?}");
+            let [a, b, c] = [0, 1, 2].map(|k| Vec3::from_array(positions[indices[k] as usize]));
+            let q = a * (1.0 - hit.u - hit.v) + b * hit.u + c * hit.v;
+            assert!((q - Vec3::new(0.5, 0.0, 0.0)).length() < 1e-6, "{positions:?} {indices:?}: {q}");
+        }
+    }
+
+    #[test]
+    fn a_tree_without_triangles_has_no_nodes() {
+        let l = Limits::default();
+        assert_eq!(Bvh::from_slices(&[], &[], &l).unwrap().nodes().len(), 0);
+        // Every triangle is left out: one corner is not finite.
+        let rejected = Mesh { positions: vec![Vec3::ZERO, Vec3::X, Vec3::new(f32::NAN, 0.0, 0.0)], indices: vec![0, 1, 2], ..Mesh::default() };
+        let bvh = Bvh::try_new(&rejected).unwrap();
+        assert_eq!(bvh.nodes().len(), 0);
+        assert!(bvh.is_empty());
+        assert!(bvh.closest(Vec3::Z, Vec3::NEG_Z, 10.0).is_none());
+        assert!(bvh.nearest(Vec3::ZERO, 10.0, &|_| true).is_none());
+        let mut found = 0;
+        bvh.query_box(Vec3::splat(-1.0), Vec3::ONE, |_| found += 1);
+        assert_eq!(found, 0);
     }
 
     #[test]
