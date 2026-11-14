@@ -270,7 +270,10 @@ pub fn read_swatches(bytes: &[u8], file_name: &str) -> Result<(Vec<SwatchGroup>,
             groups.push(SwatchGroup { name: stem, entries });
         }
         SwatchFormat::Act => {
-            let used = act_used(bytes).map_err(|e| malformed(format, e))?;
+            let (used, transparent) = act_used(bytes).map_err(|e| malformed(format, e))?;
+            if let Some(index) = transparent {
+                report.notes.push(SwatchNote::TransparentKept(index + 1));
+            }
             let entries = used
                 .iter()
                 .enumerate()
