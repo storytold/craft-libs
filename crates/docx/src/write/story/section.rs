@@ -89,7 +89,14 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
         );
         paper_source(w, s);
         if let Some(b) = &s.page_borders {
-            borders(w, "w:pgBorders", b, None, &[("w:offsetFrom", "text")]);
+            // `w:display` (ECMA-376 §17.6.10) only when the section has one: a section that names
+            // no pages writes `w:pgBorders` exactly as before, `w:offsetFrom="text"` included.
+            let mut attrs = Vec::new();
+            if let Some(d) = &s.page_borders_display {
+                attrs.push(("w:display", d.as_str()));
+            }
+            attrs.push(("w:offsetFrom", "text"));
+            borders(w, "w:pgBorders", b, None, &attrs);
         }
         if let Some(l) = &s.line_numbers {
             let restart = match l.restart {
