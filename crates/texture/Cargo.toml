@@ -17,3 +17,8 @@ workspace = true
 [dependencies]
 rayon = { workspace = true, optional = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+craft-cms = { workspace = true }
+craft-mesh = { workspace = true }
+craft-psd = { workspace = true }
