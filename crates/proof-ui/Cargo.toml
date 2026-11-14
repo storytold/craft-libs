@@ -1,0 +1,18 @@
+[package]
+name = "craft-proof-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The spelling review for the Craft apps: a panel that steps through a document's issues, and a right-click section"
+
+[lints]
+workspace = true
+
+[dependencies]
+egui = { workspace = true }
+
+[dev-dependencies]
+egui = { workspace = true, features = ["default_fonts"] }
+egui_kittest = "0.37"

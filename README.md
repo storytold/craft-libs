@@ -313,6 +313,8 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   craft-i18n's `language-data/`, embedded at build time from `CRAFT_I18N_DIR`: English and the
   carry-over locales by default, the set `CRAFT_PROOF_EMBED` names otherwise (`en` for English
   only); other languages come from installed Language packs.
+- [`craft-proof-ui`](crates/proof-ui/README.md): the spelling review: a panel that steps through a
+  document's issues, and a section for the right-click menu.
 
 - [`craft-pst`](crates/pst/README.md): Outlook personal folders files (`.pst`, [MS-PST]) read over any
   `Read + Seek`, from MailCraft: the node database, property and table contexts, folders, messages,
