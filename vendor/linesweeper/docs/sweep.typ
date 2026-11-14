@@ -221,7 +221,7 @@ The first observation is that the sweep line invariants are maintained as we inc
 to the next event:
 + For the order invariant, first note that there is an event whenever $y$ leaves the domain of a segment, so $y$ remains in all domains until the next event.
   Moreover, if at any $y' > y$ the ordering breaks, two line segments must have $epsilon$-crossed one another by $y'$.
-  The third invariant guarantees that there's an event before this happens, so by the contra-positive until an event happens the ordering
+  The crossing invariant guarantees that there's an event before this happens, so by the contra-positive until an event happens the ordering
   constraint is maintained.
 + The crossing invariant is maintained because the set of things to check (i.e. the set of line segments that $epsilon$-cross
   one another after $y$) only shrinks as $y$ increases.
@@ -368,13 +368,13 @@ of the other one.
 #figure(
   pseudocode-list([
     + *for* $j = i$ down to $1$
-      + let $w^j$ be the smallest height of any event between $j$ and $i$
+      + let $w^j$ be the smallest height of any event between $j$ and $i+1$
 
-      + *if* $(alpha^j_(-,epsilon), alpha^i)$ cross by $w^j$
-        + choose $z$ before the crossing, such that $alpha^j approx_(z,epsilon) alpha^i$
-        + insert an intersection event for $(alpha^j, alpha^i)$ at $z$
+      + *if* $(alpha^j_(-,epsilon), alpha^(i+1))$ cross by $w^j$
+        + choose $z$ before the crossing, such that $alpha^j approx_(z,epsilon) alpha^(i+1)$
+        + insert an intersection event for $(alpha^j, alpha^(i+1))$ at $z$
 
-      + *if* $alpha^j_+ (z) <= alpha^i (z)$ for all $z in [y, w^j]$
+      + *if* $alpha^j_+ (z) <= alpha^(i+1) (z)$ for all $z in [y, w^j]$
         + *break*
   ]),
   caption: "Intersection scan to the left"
@@ -383,8 +383,8 @@ of the other one.
 We'll skip the proof of the following lemma, because it's basically the same as the last one.
 
 #lemma[
-Suppose that $(alpha^1, ..., alpha^i)$ satisfy the ordering invariant
-at $y$, and suppose also that $(alpha^1, ..., alpha^(i+1))$
+Suppose that $(alpha^1, ..., alpha^(i+1))$ satisfy the ordering invariant
+at $y$, and suppose also that $(alpha^1, ..., alpha^i)$
 satisfy the crossing invariant at $y$.
 After running an intersection scan to the left,
 $(alpha^1, ..., alpha^(i+1))$ satisfy a slightly stronger crossing invariant at $y$: for every $j <= i$,
@@ -555,7 +555,7 @@ height. Note that because the sweep line changes at a discrete set of heights,
 at every important height $y$ we actually have two weakly-ordered sweep line:
 the "old" one from infinitesmally before $y$ height and the "new" one from $y$
 onwards. Because everything is continuous and the weak ordering conditions are
-closed, both the old and new sweep lines satisfy the weak ordering condi0.2tions
+closed, both the old and new sweep lines satisfy the weak ordering conditions
 at $y$.
 
 The algorithm goes like this: at every important height we use
@@ -623,7 +623,7 @@ Let's check that this insertion position is valid: for every $j <= i$ we have
 either $j <= i_-$ or $i_- < j <= i$. In the first case, we already observed
 that $alpha^j_-(y) <= beta(y)$; in the second case, $q(j)$ returned `true` and
 so $alpha^j_-(y) <= beta^j^+ (y)$. In either case, $alpha^j prec.tilde beta$.
-On the other hand, $q(i+i)$ being `false` implies that $alpha^(i+1)_- (y) >=
+On the other hand, $q(i+1)$ being `false` implies that $alpha^(i+1)_- (y) >=
 beta(y)$. This implies that for all $j >= i+1$, $alpha^j_+ (y) >= beta(y)$ and
 so $alpha^j succ.tilde_y beta$.
 
@@ -640,18 +640,23 @@ Now, if the result of floating point addition or subtraction is subnormal then i
 for any floating-point $x$ and $y$, if $x - y$ and $x + y$ don't overflow then after rounding they
 have relative error at most $epsilon_0$.
 
+// Craft patch (ratio lemma): the finite, nonzero denominator assumption and fl(y_1 - y_0) in the proof.
 #lemma[
-  If $y_0 <= y <= y_1$ are floating-point numbers and $epsilon_0 <= 1/2$ then computing $(y - y_0) / (y_1 - y_0)$
+  If $y_0 <= y <= y_1$ are floating-point numbers with $y_0 < y_1$, $fl(y_1 - y_0)$ is finite
+  and $epsilon_0 <= 1/2$ then computing $(y - y_0) / (y_1 - y_0)$
   the naive way gives an absolute error of
   at most $3 epsilon_0 + 4 epsilon_0^2$.
 ]<lem-ratio-error>
 
 #proof[
-The assumption $y_0 <= y <= y_1$ ensures that $y - y_0$ and $y_1 - y_0$ do not overflow. Therefore
+The assumption that $fl(y_1 - y_0)$ is finite ensures that $y_1 - y_0$ does not overflow, and since
+$0 <= y - y_0 <= y_1 - y_0$, neither does $y - y_0$. (The ordering $y_0 <= y <= y_1$ alone is not
+enough: with $y_0 = -10^308$, $y = 0$ and $y_1 = 10^308$, $fl(y_1 - y_0)$ is infinite and the computed
+ratio is $0$ instead of $1/2$.) Therefore
 
 $
 fl(y - y_0) &= (y - y_0) (1 plus.minus epsilon_0) \
-fl(y + y_0) &= (y + y_0) (1 plus.minus epsilon_0)
+fl(y_1 - y_0) &= (y_1 - y_0) (1 plus.minus epsilon_0)
 $
 and so
 $
@@ -719,10 +724,10 @@ and assume that $beta(y_0) - alpha(y_0) >= 0$ and
 $
 alpha(y_1) - beta(y_1) > 16/3 (epsilon + 2 epsilon_0 M).
 $
-Define $t = (alpha(y_1) - beta(y_1)) / (alpha(y_1) - beta(y_1) + beta(y_0) - alpha(y_0)$ and set $y = y_0 + t(y_1 - y_0)$. The
+Define $t = (beta(y_0) - alpha(y_0)) / (beta(y_0) - alpha(y_0) + alpha(y_1) - beta(y_1))$ and set $y = y_0 + t(y_1 - y_0)$. The
 natural way to compute $y$ produces an approximation $hat(y)$ satisfying
 $
-|alpha(hat(y)) - beta(hat(y))| <= 4(epsilon + 2 epsilon_0 M) (1 + max(1/m_alpha, 1/m_beta)),
+|alpha(hat(y)) - beta(hat(y))| <= 4(epsilon + 2 epsilon_0 M) (1 + max(1/abs(m_alpha), 1/abs(m_beta))),
 $
 where $m_alpha$ and $m_beta$ are the slopes of $alpha$ and $beta$.
 ]<lem-intersection-height-error>
@@ -731,18 +736,18 @@ Basically, this says we can find a good approximate crossing height as long as t
 
 #proof[
 First, note that at least one of $alpha(y_0)$ or $beta(y_0)$ is calculated exactly; similarly for $alpha(y_1)$ and $beta(y_1)$.
-Therefore the absolute error in calculating $alpha(y_1) - beta(y_1)$ is at most $epsilon + epsilon_0 M$ (where the $epsilon_0 M$ comes
+Therefore the absolute error in calculating $beta(y_0) - alpha(y_0)$ is at most $epsilon + epsilon_0 M$ (where the $epsilon_0 M$ comes
 from rounding after the summation) and the absolute error in calculating
-$(alpha(y_1) - beta(y_1)) + (beta(y_0) - alpha(y_0))$ is at most $2 epsilon + 3 epsilon_0 M$.
-These errors aren't independent, though, since both terms involve a computation of $alpha(y_1) - beta(y_1)$.
-Specifically, let $c = alpha(y_1) - beta(y_1)$ and let $d = (alpha(y_1) - beta(y_1)) + (beta(y_0) - alpha(y_0))$; suppose
+$(beta(y_0) - alpha(y_0)) + (alpha(y_1) - beta(y_1))$ is at most $2 epsilon + 3 epsilon_0 M$.
+These errors aren't independent, though, since both terms involve a computation of $beta(y_0) - alpha(y_0)$.
+Specifically, let $c = beta(y_0) - alpha(y_0)$ and let $d = (beta(y_0) - alpha(y_0)) + (alpha(y_1) - beta(y_1))$; suppose
 our calculation of $c$ has error $epsilon_c$ and our calculation of $d$ has error $epsilon_d$. Then
 
 $
 |epsilon_c - epsilon_d| <= epsilon + 2 epsilon_0 M,
 $ <eq-error-cancellation>
 
-because this is the *additional* error introduced into $d$ by computing $beta(y_0) - alpha(y_0)$ and adding it to the other term.
+because this is the *additional* error introduced into $d$ by computing $alpha(y_1) - beta(y_1)$ and adding it to the other term.
 
 Now we consider the quotient
 
@@ -789,26 +794,28 @@ abs(alpha(hat(y)) - beta(hat(y))) <= (2 epsilon_0 + epsilon_t) d + (epsilon_0 M)
 $
 
 If we assume that $16 (epsilon + 2 epsilon_0 M) / d <= 3$ then $epsilon_t d <= 4 epsilon + 8 epsilon_0 M$. 
-Since $d/(y_1 - y_1)$ is the difference of the inverse-slopes of $alpha$ and $beta$, it's bounded by twice
-the maximum of these inverse-slopes.
+Since $d/(y_1 - y_0)$ is the difference of the inverse-slopes of $alpha$ and $beta$, it's bounded by twice
+the maximum absolute value of these inverse-slopes.
 ]
 
 Putting all this together (and handling the "chamfers" yet):
+// Craft patch (ratio lemma): M is a floating-point number, and the proof shows the ratio lemma's assumptions hold.
 #lemma[
-Assume all line segments are inside the square $[-M/2, M/2]^2$,
+Assume $M$ is a floating-point number, all line segments are inside the square $[-M/2, M/2]^2$,
 and take $delta = 64 epsilon_0 M$. If $epsilon_0 <= 1/4$ then
 
 - We can compute $x$ coordinates of line segments to additive accuracy $delta/8$.
 - If $alpha$ $(3 delta)/4$-crosses $beta$, we can compute a crossing height $hat(y)$ such
   that
   $
-  |alpha(hat(y)) - beta(hat(y))| <= (9 delta) /16 (1 + max(1/m_alpha, 1/m_beta)).
+  |alpha(hat(y)) - beta(hat(y))| <= (9 delta) /16 (1 + max(1/abs(m_alpha), 1/abs(m_beta))).
   $
 ]
 
 #proof[
 We compute $x$ coordinates by first computing $t = (y - y_0) / (y_1 - y_0)$ (with error at most $3 epsilon_0 + 4 epsilon_0^2$ by
-@lem-ratio-error). Then we apply @lem-convex-combination-error with $epsilon = 3 epsilon_0 + 4 epsilon_0^2$ to see that we
+@lem-ratio-error, which applies because a segment that is not horizontal has $y_0 < y_1$, and $fl(y_1 - y_0)$
+is finite because $0 < y_1 - y_0 <= M$ and $M$ is a floating-point number). Then we apply @lem-convex-combination-error with $epsilon = 3 epsilon_0 + 4 epsilon_0^2$ to see that we
 can compute the horizontal coordinate with error at most $(6 epsilon_0 + 4 epsilon_0^2)M$. If $epsilon_0 <= 1/4$ as we assumed,
 this is at most $7 epsilon_0 M <= delta/8$. This proves the first claim.
 

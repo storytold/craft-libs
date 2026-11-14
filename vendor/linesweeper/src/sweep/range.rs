@@ -229,12 +229,13 @@ impl<'bufs, 'state, 'segs> SweepLineRange<'bufs, 'state, 'segs> {
     /// receive non-overlapping batches of output events.
     pub fn events(&mut self) -> Option<Vec<OutputEvent>> {
         let next_x = self.x()?;
+        self.count_active_horizontals();
 
         let mut ret = Vec::new();
         for h in &self.bufs.active_horizontals {
-            // unwrap: on the first event of this sweep line, active_horizontals is empty. So
-            // we only get here after last_x is populated.
-            let x0 = self.last_x.unwrap();
+            // last_x is unset until this method has run once, and it does not move in
+            // increase_x, so a fragment that increase_x added starts at its own start.
+            let x0 = self.last_x.map_or(h.start, |last_x| last_x.max(h.start));
             let x1 = next_x.min(h.end);
             let connected_end = x1 == h.end && h.connected_at_end;
             let connected_start = x0 == h.start && h.connected_at_start;
@@ -287,12 +288,17 @@ impl<'bufs, 'state, 'segs> SweepLineRange<'bufs, 'state, 'segs> {
             .active_horizontals
             .sort_by_key(|a| CheapOrderedFloat::from(a.end));
         self.last_x = Some(next_x);
+        self.count_active_horizontals();
         Some(ret)
     }
 
     /// Move along to the next horizontal position.
+    ///
+    /// [`SweepLineRange::events`] does not return the point events at the
+    /// position this moves past, or the horizontal fragments that end there.
     pub fn increase_x(&mut self) {
         if let Some(x) = self.x() {
+            self.count_active_horizontals();
             self.drain_active_horizontals(x);
 
             while let Some(ev) = self.output_events.first() {
@@ -309,6 +315,25 @@ impl<'bufs, 'state, 'segs> SweepLineRange<'bufs, 'state, 'segs> {
         self.bufs
             .active_horizontals
             .sort_by_key(|a| CheapOrderedFloat::from(a.end));
+        self.count_active_horizontals();
+    }
+
+    // Craft patch (work limit): every step visits the active horizontal
+    // segments before and after it moves, and a caller visits them again at
+    // each position, so each step counts them toward the sweep's work limit.
+    // Overlapping horizontal segments are split at every position of the
+    // others, which makes about n^2 visits for n of them.
+    fn count_active_horizontals(&self) {
+        self.line.state.count_range_horizontals(self.bufs.active_horizontals.len());
+    }
+
+    /// Returns `true` once the sweep has done more work than the limit given to
+    /// [`Sweeper::set_work_limit`](crate::sweep::Sweeper::set_work_limit), counting
+    /// the horizontal segments that the steps of this range visit.
+    ///
+    /// The caller should then stop processing this range and the sweep.
+    pub fn work_limit_exceeded(&self) -> bool {
+        self.line.state.work_limit_exceeded()
     }
 
     fn drain_active_horizontals(&mut self, x: f64) {
@@ -441,5 +466,61 @@ pub struct SweepLineRangeBuffers {
 impl SweepLineRangeBuffers {
     pub(crate) fn clear(&mut self) {
         self.active_horizontals.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Segments,
+        sweep::{SweepLineBuffers, Sweeper},
+    };
+
+    fn rect(x0: f64, x1: f64) -> [(f64, f64); 4] {
+        [(x0, 0.0), (x1, 0.0), (x1, 2.0), (x0, 2.0)]
+    }
+
+    /// Runs `check` on the first range of the sweep-line at y = 0.
+    fn with_first_range(segs: &Segments, check: impl FnOnce(&mut SweepLineRange<'_, '_, '_>)) {
+        let mut sweeper = Sweeper::new(segs, 0.01);
+        let mut line_bufs = SweepLineBuffers::default();
+        let mut range_bufs = SweepLineRangeBuffers::default();
+        let mut line = sweeper.next_line(&mut line_bufs).unwrap();
+        let mut range = line.next_range(&mut range_bufs, segs).unwrap();
+        check(&mut range);
+    }
+
+    fn fragments(events: &[OutputEvent]) -> Vec<(f64, f64)> {
+        let mut ret: Vec<_> = events
+            .iter()
+            .filter(|ev| ev.x0 != ev.x1)
+            .map(|ev| (ev.smaller_x(), ev.larger_x()))
+            .collect();
+        ret.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        ret
+    }
+
+    #[test]
+    fn events_after_increase_x_at_the_first_position() {
+        let segs = Segments::from_closed_polyline(rect(0.0, 2.0));
+        with_first_range(&segs, |range| {
+            range.increase_x();
+            let events = range.events().unwrap();
+            assert_eq!(fragments(&events), [(0.0, 2.0)]);
+        });
+    }
+
+    #[test]
+    fn events_after_increase_x_start_a_new_fragment_at_its_own_start() {
+        let mut segs = Segments::default();
+        segs.add_closed_polyline(rect(0.0, 3.0));
+        segs.add_closed_polyline(rect(1.0, 4.0));
+        with_first_range(&segs, |range| {
+            range.events().unwrap();
+            range.increase_x();
+            let events = range.events().unwrap();
+            assert_eq!(fragments(&events), [(0.0, 3.0), (1.0, 3.0)]);
+        });
     }
 }

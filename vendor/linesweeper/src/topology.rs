@@ -3,17 +3,18 @@
 //! This consumes the output of the sweep-line algorithm and does things
 //! like winding number computations and boolean operations.
 
-use std::collections::VecDeque;
+use std::sync::Arc;
 
-use kurbo::{BezPath, ParamCurve, Rect, Shape};
+use kurbo::{Affine, BezPath, ParamCurve, PathEl, Rect, Shape};
+use smallvec::SmallVec;
 
 use crate::{
-    FillRule,
+    Error, FillRule,
     curve::{Order, solve_t_for_y, y_subsegment},
     geom::Point,
     order::ComparisonCache,
     position::PositionedOutputSeg,
-    segments::{NonClosedPath, SegIdx, SegVec, Segments},
+    segments::{SegIdx, SegVec, Segments},
     sweep::{
         Correctness, SegmentsConnectedAtX, SweepLineBuffers, SweepLineRange, SweepLineRangeBuffers,
         Sweeper,
@@ -50,6 +51,19 @@ pub trait WindingNumber:
 
     /// What if we restrict this winding number to only look at the set with tag `tag`?
     fn of_tag(&self, tag: Self::Tag) -> Self;
+
+    /// Craft patch (work limit): the units of storage this winding number holds, which
+    /// [`Topology::from_paths_with_limits`] counts toward its output limit. The default is 1;
+    /// a winding number that keeps one entry per tag returns its entry count.
+    fn storage_units(&self) -> usize {
+        1
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The number of scan-west links that `Topology::west_boundary` has followed on this thread.
+    static WEST_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Winding numbers for binary set operations.
@@ -161,11 +175,31 @@ pub struct HalfSegmentWindingNumbers<W: WindingNumber> {
     pub clockwise: W,
 }
 
-impl<W: WindingNumber> HalfSegmentWindingNumbers<W> {
-    /// A half-segment's winding numbers are trivial if they're the same on both sides.
-    /// In this case, the segment is invisible to the topology of the sets.
-    fn is_trivial(&self) -> bool {
-        self.counter_clockwise == self.clockwise
+/// Craft patch (work limit): the output units a topology has used and the most it may use, if
+/// it has a limit. Each output segment takes one unit plus the storage units of its two winding
+/// numbers.
+struct OutputLimit {
+    used: usize,
+    limit: Option<usize>,
+}
+
+impl OutputLimit {
+    /// Takes the units of a new output segment with `windings`, or returns `false` and takes
+    /// nothing if they would pass the limit. Without a limit it counts nothing.
+    fn take<W: WindingNumber>(&mut self, windings: &SegmentWindingNumbers<W>) -> bool {
+        let Some(limit) = self.limit else {
+            return true;
+        };
+        let units = 1usize
+            .saturating_add(windings.clockwise.storage_units())
+            .saturating_add(windings.counter_clockwise.storage_units());
+        match self.used.checked_add(units) {
+            Some(used) if used <= limit => {
+                self.used = used;
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -176,6 +210,52 @@ impl<W: WindingNumber> std::fmt::Debug for HalfSegmentWindingNumbers<W> {
             "cw {:?} | cc {:?}",
             self.clockwise, self.counter_clockwise
         )
+    }
+}
+
+// Craft patch (winding storage).
+/// The winding numbers a topology stores for an output segment: the two sides of
+/// [`HalfSegmentWindingNumbers`], each behind an `Arc`.
+///
+/// The sweep builds each segment's winding numbers from a running winding number,
+/// so a segment's clockwise side is the same value as the counter-clockwise side
+/// of the segment before it. The two segments hold clones of one `Arc`, and each
+/// distinct winding number is stored once.
+#[derive(Clone)]
+struct SegmentWindingNumbers<W: WindingNumber> {
+    counter_clockwise: Arc<W>,
+    clockwise: Arc<W>,
+}
+
+impl<W: WindingNumber> SegmentWindingNumbers<W> {
+    /// A half-segment's winding numbers are trivial if they're the same on both sides.
+    /// In this case, the segment is invisible to the topology of the sets.
+    fn is_trivial(&self) -> bool {
+        Arc::ptr_eq(&self.counter_clockwise, &self.clockwise)
+            || self.counter_clockwise == self.clockwise
+    }
+}
+
+impl<W: WindingNumber> std::fmt::Debug for SegmentWindingNumbers<W> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cw {:?} | cc {:?}",
+            self.clockwise, self.counter_clockwise
+        )
+    }
+}
+
+// Craft patch (winding storage): serialized as a `HalfSegmentWindingNumbers`,
+// which the snapshot tests record.
+#[cfg(test)]
+impl<W: WindingNumber + serde::Serialize> serde::Serialize for SegmentWindingNumbers<W> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("HalfSegmentWindingNumbers", 2)?;
+        s.serialize_field("counter_clockwise", &*self.counter_clockwise)?;
+        s.serialize_field("clockwise", &*self.clockwise)?;
+        s.end()
     }
 }
 
@@ -380,14 +460,45 @@ impl std::fmt::Debug for PointNeighbors {
     }
 }
 
-/// Consumes sweep-line output and computes topology.
-#[cfg_attr(test, derive(serde::Serialize))]
-#[derive(Clone, Debug)]
-pub struct Topology<W: WindingNumber> {
-    eps: f64,
-    correctness: Correctness,
-    /// The user-provided tags for each segment.
-    tag: SegVec<W::Tag>,
+/// The open output segments of one input segment, oldest first.
+///
+/// A segment has at most three of them at a time (see `TopologyBuffers::open_segs`),
+/// so they are stored inline and a segment's queue does not allocate unless
+/// it holds more than three.
+#[derive(Default)]
+struct OpenSegs(SmallVec<[OutputSegIdx; 3]>);
+
+impl OpenSegs {
+    fn front(&self) -> Option<&OutputSegIdx> {
+        self.0.first()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[cfg(test)]
+    fn push_front(&mut self, idx: OutputSegIdx) {
+        self.0.insert(0, idx);
+    }
+
+    fn push_back(&mut self, idx: OutputSegIdx) {
+        self.0.push(idx);
+    }
+
+    fn pop_front(&mut self) -> Option<OutputSegIdx> {
+        if self.0.is_empty() {
+            None
+        } else {
+            Some(self.0.remove(0))
+        }
+    }
+}
+
+/// The state that `Topology::from_segments` keeps while it sweeps, passed to
+/// `Topology::process_sweep_line_range` so that each sweep-line range does not
+/// allocate its own buffers. It is dropped when the sweep ends.
+struct TopologyBuffers {
     /// For each input segment, this is the list of output segments that we've started
     /// recording but haven't finished with. There can be up to three of them, because
     /// consider a segment that passes through a sweep-line like this:
@@ -405,14 +516,67 @@ pub struct Topology<W: WindingNumber> {
     /// first encounter the output segment pointing down and add an unfinished segment
     /// for that. Then we'll add an output segment for the horizontal line and so
     /// at that point there will be three unfinished output segments.
-    open_segs: SegVec<VecDeque<OutputSegIdx>>,
+    open_segs: SegVec<OpenSegs>,
+    /// A buffer for the half-segments that start at the current point. They are
+    /// collected while their output segments are created, and then added around
+    /// the point.
+    seg_buf: Vec<HalfOutputSegIdx>,
+    connected_segs: SegmentsConnectedAtX,
+}
+
+/// Writes the elements of `path.reverse_subpaths()` to `out`, replacing its
+/// contents.
+///
+/// A path made of one `MoveTo` followed by lines and curves (which is what
+/// output segment paths are) is reversed into `out` directly, so a re-used
+/// `out` does not allocate. Any other path goes through `reverse_subpaths`.
+fn reverse_path_into(path: &BezPath, out: &mut Vec<PathEl>) {
+    out.clear();
+    let els = path.elements();
+    let Some((&PathEl::MoveTo(start), rest)) = els.split_first() else {
+        out.extend(path.reverse_subpaths());
+        return;
+    };
+    if rest
+        .iter()
+        .any(|el| matches!(el, PathEl::MoveTo(_) | PathEl::ClosePath))
+    {
+        out.extend(path.reverse_subpaths());
+        return;
+    }
+    let end = rest.last().and_then(PathEl::end_point).unwrap_or(start);
+    out.push(PathEl::MoveTo(end));
+    for (i, el) in rest.iter().enumerate().rev() {
+        let end = i
+            .checked_sub(1)
+            .and_then(|j| rest[j].end_point())
+            .unwrap_or(start);
+        out.push(match *el {
+            PathEl::QuadTo(c0, _) => PathEl::QuadTo(c0, end),
+            PathEl::CurveTo(c0, c1, _) => PathEl::CurveTo(c1, c0, end),
+            _ => PathEl::LineTo(end),
+        });
+    }
+}
+
+/// Consumes sweep-line output and computes topology.
+#[cfg_attr(test, derive(serde::Serialize))]
+#[derive(Clone, Debug)]
+pub struct Topology<W: WindingNumber> {
+    eps: f64,
+    correctness: Correctness,
+    /// The user-provided tags for each segment.
+    tag: SegVec<W::Tag>,
     /// Winding numbers of each segment.
     ///
     /// This is sort of logically indexed by `HalfOutputSegIdx`, because we can look at the
     /// `HalfSegmentWindingNumbers` for each `HalfOutputSegIdx`. But since the two halves of
     /// the winding numbers are determined by one another, we only store the winding numbers
     /// for the start half of the output segment.
-    winding: OutputSegVec<HalfSegmentWindingNumbers<W>>,
+    ///
+    /// Craft patch (winding storage): neighboring segments share each side's
+    /// value through an `Arc` (see [`SegmentWindingNumbers`]).
+    winding: OutputSegVec<SegmentWindingNumbers<W>>,
     /// The output points.
     points: PointVec<Point>,
     /// The segment endpoints, as indices into `points`.
@@ -496,13 +660,28 @@ pub struct Topology<W: WindingNumber> {
     /// In principle, this is redundant with the winding numbers. But since the winding
     /// numbers are generic, that information isn't available to us.
     positively_oriented: OutputSegVec<bool>,
+    // Craft patch (coincident horizontals): a run of coincident horizontal fragments gets
+    // at most one output segment. This marks the input segments with a fragment that got
+    // none and that `has_normal_contours` rejects, judged by the winding numbers on either
+    // side of its run.
+    #[cfg_attr(test, serde(skip))]
+    folded_abnormal: SegVec<bool>,
+    // Craft patch (coincident horizontals): the fragments that got no output segment, for
+    // the continuity check, as (input segment, number of output segments created before it,
+    // start point, end point, orientation).
+    #[cfg(feature = "slow-asserts")]
+    #[cfg_attr(test, serde(skip))]
+    folded_pieces: Vec<(SegIdx, usize, PointIdx, PointIdx, bool)>,
 }
 
 impl<W: WindingNumber> Topology<W> {
     /// Construct a new topology from a collection of paths and tags.
     ///
     /// See [`WindingNumber`] about the tags are for.
-    pub fn from_paths<'a, Iter>(paths: Iter, eps: f64) -> Result<Self, NonClosedPath>
+    ///
+    /// Returns an error if a path is not closed, or if a coordinate is not finite or has a
+    /// magnitude above [`crate::MAX_COORDINATE`].
+    pub fn from_paths<'a, Iter>(paths: Iter, eps: f64) -> Result<Self, Error>
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
     {
@@ -512,13 +691,21 @@ impl<W: WindingNumber> Topology<W> {
     /// Construct a new topology from a collection of paths and tags.
     ///
     /// See [`WindingNumber`] about the tags are for.
-    pub fn from_paths_with_correctness<'a, Iter>(paths: Iter, eps: f64, correctness: Correctness) -> Result<Self, NonClosedPath>
+    ///
+    /// Returns an error if a path is not closed, or if a coordinate is not finite or has a
+    /// magnitude above [`crate::MAX_COORDINATE`].
+    ///
+    /// An `eps` that is NaN, infinite, not positive, or below `64 * f64::EPSILON`
+    /// times the paths' largest coordinate magnitude is replaced by that value. The
+    /// other constructors pass `eps` through here, or follow the same rule.
+    pub fn from_paths_with_correctness<'a, Iter>(paths: Iter, eps: f64, correctness: Correctness) -> Result<Self, Error>
     where
         Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
     {
         let mut segments = Segments::default();
         let mut tag = Vec::new();
         for (p, t) in paths {
+            crate::check_coordinates(p)?;
             segments.add_path_without_updating_enter_exit(p, true)?;
             tag.resize(segments.len(), t);
         }
@@ -529,20 +716,93 @@ impl<W: WindingNumber> Topology<W> {
             SegVec::from_vec(tag),
             eps,
 	    correctness,
-        ))
+            None,
+        )
+        .expect("a sweep without a work limit always finishes"))
     }
 
+    /// Construct a new topology from a collection of paths and tags, doing at most
+    /// `work_limit` units of sweep work.
+    ///
+    /// This is [`Topology::from_paths`], except that it returns
+    /// [`Error::WorkLimitExceeded`](crate::Error::WorkLimitExceeded) once the sweep has done
+    /// more than `work_limit` units, counted as in
+    /// [`Sweeper::set_work_limit`](crate::sweep::Sweeper::set_work_limit): segment comparisons,
+    /// segment position checks, and the segments that linear searches pass. Stacked copies of a shape and nearly coincident segments
+    /// can need billions of comparisons, and the limit bounds the time a caller waits.
+    pub fn from_paths_with_work_limit<'a, Iter>(
+        paths: Iter,
+        eps: f64,
+        work_limit: u64,
+    ) -> Result<Self, crate::Error>
+    where
+        Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
+    {
+        Self::from_paths_with_optional_limits(paths, eps, work_limit, None)
+    }
+
+    /// [`Topology::from_paths_with_work_limit`], which also returns
+    /// [`Error::WorkLimitExceeded`](crate::Error::WorkLimitExceeded) before the topology's
+    /// output passes `output_limit` units.
+    ///
+    /// Each output segment counts as one unit plus the
+    /// [`WindingNumber::storage_units`] of its two winding numbers, so this limit bounds the
+    /// memory the topology uses.
+    pub fn from_paths_with_limits<'a, Iter>(
+        paths: Iter,
+        eps: f64,
+        work_limit: u64,
+        output_limit: usize,
+    ) -> Result<Self, crate::Error>
+    where
+        Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
+    {
+        Self::from_paths_with_optional_limits(paths, eps, work_limit, Some(output_limit))
+    }
+
+    /// Builds the topology with a work limit and, if given, an output limit in units.
+    fn from_paths_with_optional_limits<'a, Iter>(
+        paths: Iter,
+        eps: f64,
+        work_limit: u64,
+        output_limit: Option<usize>,
+    ) -> Result<Self, crate::Error>
+    where
+        Iter: IntoIterator<Item = (&'a BezPath, W::Tag)>,
+    {
+        let mut segments = Segments::default();
+        let mut tag = Vec::new();
+        for (p, t) in paths {
+            crate::check_coordinates(p)?;
+            segments.add_path_without_updating_enter_exit(p, true)?;
+            tag.resize(segments.len(), t);
+        }
+        segments.update_enter_exit(0);
+        segments.check_invariants();
+        Self::from_segments(
+            segments,
+            SegVec::from_vec(tag),
+            eps,
+            Correctness::GoodEnough,
+            Some((work_limit, output_limit)),
+        )
+    }
+
+    /// Returns [`crate::Error::WorkLimitExceeded`] if `limits` is given and the sweep does
+    /// more work than its first value, or its second value is given and the topology's output
+    /// would pass it in units.
     fn from_segments(
         segments: Segments,
         tag: SegVec<W::Tag>,
         eps: f64,
         correctness: Correctness,
-    ) -> Self {
+        limits: Option<(u64, Option<usize>)>,
+    ) -> Result<Self, crate::Error> {
+        let eps = segments.usable_eps(eps);
         let mut ret = Self {
             eps,
             correctness,
             tag,
-            open_segs: SegVec::with_size(segments.len()),
 
             // We have at least as many output segments as input segments, so preallocate enough for them.
             winding: OutputSegVec::with_capacity(segments.len()),
@@ -556,10 +816,23 @@ impl<W: WindingNumber> Topology<W> {
             orig_seg: OutputSegVec::with_capacity(segments.len()),
             positively_oriented: OutputSegVec::with_capacity(segments.len()),
             segments: Segments::default(),
+            folded_abnormal: SegVec::with_size(segments.len()),
+            #[cfg(feature = "slow-asserts")]
+            folded_pieces: Vec::new(),
         };
         let mut sweep_state = Sweeper::new_with_correctness(&segments, eps, correctness);
+        let mut output = OutputLimit { used: 0, limit: None };
+        if let Some((work_limit, output_limit)) = limits {
+            sweep_state.set_work_limit(work_limit);
+            output.limit = output_limit;
+        }
         let mut range_bufs = SweepLineRangeBuffers::default();
         let mut line_bufs = SweepLineBuffers::default();
+        let mut topo_bufs = TopologyBuffers {
+            open_segs: SegVec::with_size(segments.len()),
+            seg_buf: Vec::new(),
+            connected_segs: SegmentsConnectedAtX::default(),
+        };
         while let Some(mut line) = sweep_state.next_line(&mut line_bufs) {
             while let Some(positions) = line.next_range(&mut range_bufs, &segments) {
                 let range = positions.seg_range();
@@ -567,11 +840,16 @@ impl<W: WindingNumber> Topology<W> {
                     None
                 } else {
                     let prev_seg = positions.line().line_segment(range.segs.start - 1).unwrap();
-                    debug_assert!(!ret.open_segs[prev_seg].is_empty());
-                    ret.open_segs[prev_seg].front().copied()
+                    debug_assert!(!topo_bufs.open_segs[prev_seg].is_empty());
+                    topo_bufs.open_segs[prev_seg].front().copied()
                 };
-                ret.process_sweep_line_range(positions, &segments, scan_west_seg);
+                if !ret.process_sweep_line_range(positions, &segments, scan_west_seg, &mut topo_bufs, &mut output) {
+                    return Err(crate::Error::WorkLimitExceeded);
+                }
             }
+        }
+        if sweep_state.work_limit_exceeded() {
+            return Err(crate::Error::WorkLimitExceeded);
         }
         ret.segments = segments;
 
@@ -583,7 +861,7 @@ impl<W: WindingNumber> Topology<W> {
         #[cfg(feature = "slow-asserts")]
         ret.check_invariants();
 
-        ret
+        Ok(ret)
     }
 
     /// We're working on building up a list of half-segments that all meet at a point.
@@ -668,12 +946,12 @@ impl<W: WindingNumber> Topology<W> {
     /// so how do we know which one is ready for its second half? The short
     /// answer is that we use a double-ended queue, and see `new_half_seg`
     /// for how we use it.
-    fn second_half_segs<'a, 'slf: 'a>(
-        &'slf mut self,
+    fn second_half_segs<'a>(
+        open_segs: &'a mut SegVec<OpenSegs>,
         segs: impl Iterator<Item = SegIdx> + 'a,
     ) -> impl Iterator<Item = HalfOutputSegIdx> + 'a {
         segs.map(|s| {
-            self.open_segs[s]
+            open_segs[s]
                 .pop_front()
                 .expect("should be open")
                 .second_half()
@@ -688,23 +966,25 @@ impl<W: WindingNumber> Topology<W> {
     /// horizontal segments will be closed first, followed by segments coming
     /// from an earlier sweep-line, followed by segments extending down from
     /// this sweep-line (which won't be closed until we move on to the next
-    /// sweep-line). Therefore, we push horizontal half-segments to the front
-    /// of the queue so that they can be taken next. We push non-horizontal
-    /// half-segments to the back of the queue, so that the older ones (coming
-    /// from the previous sweep-line) will get taken before the new ones.
+    /// sweep-line). We push non-horizontal half-segments to the back of the
+    /// queue, so that the older ones (coming from the previous sweep-line) will
+    /// get taken before the new ones.
+    ///
+    /// Craft patch (coincident horizontals): horizontal half-segments are not
+    /// queued here. `process_sweep_line_range` keeps them in its own list and
+    /// closes them at the next point.
     fn new_half_seg(
         &mut self,
+        open_segs: &mut SegVec<OpenSegs>,
         idx: SegIdx,
         p: PointIdx,
-        winding: HalfSegmentWindingNumbers<W>,
+        winding: SegmentWindingNumbers<W>,
         horizontal: bool,
         positively_oriented: bool,
     ) -> OutputSegIdx {
         let out_idx = OutputSegIdx(self.winding.inner.len());
-        if horizontal {
-            self.open_segs[idx].push_front(out_idx);
-        } else {
-            self.open_segs[idx].push_back(out_idx);
+        if !horizontal {
+            open_segs[idx].push_back(out_idx);
         }
         self.point_idx.start.push(p);
         self.point_idx
@@ -727,26 +1007,69 @@ impl<W: WindingNumber> Topology<W> {
         out_idx
     }
 
+    /// Craft patch (coincident horizontals): records the horizontal fragments of a run
+    /// that start at `p` and get no output segment, as (input segment, orientation).
+    /// `before` and `after` are the winding numbers on either side of the run.
+    fn note_folded(&mut self, folded: &[(SegIdx, bool)], before: &W, after: &W, p: PointIdx) {
+        for &(seg, positively_oriented) in folded {
+            // The winding number to the right of the fragment, as `has_normal_contours`
+            // reads it from an output segment.
+            let right = if positively_oriented { before } else { after };
+            let tag = self.tag[seg];
+            if !self.folded_abnormal[seg] && right.of_tag(tag) != W::single(tag, true) {
+                self.folded_abnormal[seg] = true;
+            }
+            #[cfg(feature = "slow-asserts")]
+            self.folded_pieces.push((
+                seg,
+                self.winding.inner.len(),
+                p,
+                PointIdx(usize::MAX),
+                positively_oriented,
+            ));
+        }
+        #[cfg(not(feature = "slow-asserts"))]
+        let _ = p;
+    }
+
+    /// Craft patch (work limit): returns `false`, leaving the topology
+    /// incomplete, if the sweep passes its work limit while visiting the
+    /// horizontal segments of this range, or a new output segment would take
+    /// the output past `output`'s limit.
     fn process_sweep_line_range(
         &mut self,
         mut pos: SweepLineRange,
         segments: &Segments,
         mut scan_west: Option<OutputSegIdx>,
-    ) {
+        bufs: &mut TopologyBuffers,
+        output: &mut OutputLimit,
+    ) -> bool {
         let y = pos.line().y();
-        let mut winding = scan_west
-            .map(|idx| self.winding[idx].counter_clockwise.clone())
+        // Craft patch (winding storage): `winding` and `w` below are shared with
+        // the segments that store them, and each step makes a new `Arc` instead
+        // of changing the shared value.
+        let mut winding: Arc<W> = scan_west
+            .map(|idx| Arc::clone(&self.winding[idx].counter_clockwise))
             .unwrap_or_default();
 
-        // A re-usable buffer for holding temporary lists of segment indices. We
-        // need to collect the output of second_half_segments because it holds
-        // a &mut self reference.
-        let mut seg_buf = Vec::new();
-        let mut connected_segs = SegmentsConnectedAtX::default();
+        let TopologyBuffers {
+            open_segs,
+            seg_buf,
+            connected_segs,
+        } = bufs;
         // The last segment we saw that points down from this sweep line.
         let mut last_connected_down_seg: Option<OutputSegIdx> = None;
+        // Craft patch (coincident horizontals): the horizontal output segments started at
+        // the previous point, which the next point closes.
+        let mut open_horizontals: Vec<OutputSegIdx> = Vec::new();
+        // Craft patch (coincident horizontals): the fragments of the current run that get
+        // no output segment.
+        let mut folded: Vec<(SegIdx, bool)> = Vec::new();
 
         while let Some(next_x) = pos.x() {
+            if pos.work_limit_exceeded() {
+                return false;
+            }
             let p = PointIdx(self.points.inner.len());
             self.points.inner.push(Point::new(next_x, y));
             // The first segment at our current point, in clockwise order.
@@ -755,30 +1078,43 @@ impl<W: WindingNumber> Topology<W> {
             let mut last_seg = None;
 
             // Close off the horizontal segments from the previous point in this sweep-line.
-            let hsegs = pos.active_horizontals();
             seg_buf.clear();
-            seg_buf.extend(self.second_half_segs(hsegs));
+            seg_buf.extend(open_horizontals.drain(..).map(OutputSegIdx::second_half));
             self.add_segs_clockwise(&mut first_seg, &mut last_seg, seg_buf.iter().copied(), p);
+            #[cfg(feature = "slow-asserts")]
+            for piece in self
+                .folded_pieces
+                .iter_mut()
+                .rev()
+                .take_while(|piece| piece.3 == PointIdx(usize::MAX))
+            {
+                piece.3 = p;
+            }
 
             // Find all the segments that are connected to something above this sweep-line at next_x.
-            pos.update_segments_at_x(&mut connected_segs);
-            seg_buf.clear();
-            seg_buf.extend(self.second_half_segs(connected_segs.connected_up()));
-            self.add_segs_clockwise(&mut first_seg, &mut last_seg, seg_buf.iter().copied(), p);
+            pos.update_segments_at_x(connected_segs);
+            let closed = Self::second_half_segs(open_segs, connected_segs.connected_up());
+            self.add_segs_clockwise(&mut first_seg, &mut last_seg, closed, p);
 
             // Then: gather the output segments from half-segments starting here and moving
             // to later sweep-lines. Allocate new output segments for them.
             // Also, calculate their winding numbers and update `winding`.
             seg_buf.clear();
             for new_seg in connected_segs.connected_down() {
-                let prev_winding = winding.clone();
+                let prev_winding = Arc::clone(&winding);
                 let orientation = segments.positively_oriented(new_seg);
-                winding += W::single(self.tag[new_seg], !orientation);
-                let windings = HalfSegmentWindingNumbers {
+                let mut next = W::clone(&winding);
+                next += W::single(self.tag[new_seg], !orientation);
+                winding = Arc::new(next);
+                let windings = SegmentWindingNumbers {
                     clockwise: prev_winding,
-                    counter_clockwise: winding.clone(),
+                    counter_clockwise: Arc::clone(&winding),
                 };
-                let half_seg = self.new_half_seg(new_seg, p, windings, false, orientation);
+                if !output.take(&windings) {
+                    return false;
+                }
+                let half_seg =
+                    self.new_half_seg(open_segs, new_seg, p, windings, false, orientation);
                 self.scan_west[half_seg] = scan_west;
                 scan_west = Some(half_seg);
                 seg_buf.push(half_seg.first_half());
@@ -795,27 +1131,67 @@ impl<W: WindingNumber> Topology<W> {
             // Bump the current x position, which will get rid of horizontals ending here
             // and add any horizontals starting here.
             pos.increase_x();
+            if pos.work_limit_exceeded() {
+                return false;
+            }
 
             // Gather the output segments from horizontal segments starting
             // here. Allocate new output segments for them and calculate their
             // winding numbers.
-            let hsegs = pos.active_horizontals_and_orientations();
+            let mut hsegs = pos.active_horizontals_and_orientations().peekable();
+            if hsegs.peek().is_none() {
+                // No horizontal segment starts here, so there is nothing more to
+                // add at this point.
+                continue;
+            }
 
             // We don't want to update our "global" winding number state because that's supposed
             // to keep track of the winding number below the current sweep line.
-            let mut w = winding.clone();
+            let mut w = Arc::clone(&winding);
             seg_buf.clear();
+            // Craft patch (coincident horizontals): every active horizontal runs from this
+            // point to the next one, so they are all coincident, and `merge_coincident`
+            // would merge their output segments. Instead of allocating an output segment per
+            // fragment, this allocates one per run of fragments: the run's first fragment,
+            // with the winding numbers before and after the run. When a run's winding
+            // numbers cancel, it gets no output segment and the next fragment starts a new
+            // run.
+            let mut run: Option<(SegIdx, bool, Arc<W>)> = None;
             for (new_seg, same_orientation) in hsegs {
-                let prev_w = w.clone();
+                let prev_w = Arc::clone(&w);
                 let orientation = same_orientation == segments.positively_oriented(new_seg);
-                w += W::single(self.tag[new_seg], !orientation);
-                let windings = HalfSegmentWindingNumbers {
-                    counter_clockwise: w.clone(),
-                    clockwise: prev_w,
+                let mut next = W::clone(&w);
+                next += W::single(self.tag[new_seg], !orientation);
+                w = Arc::new(next);
+                match &run {
+                    None => run = Some((new_seg, orientation, prev_w)),
+                    Some((first, first_orientation, start)) => {
+                        // This fragment gets no output segment of its own.
+                        folded.push((new_seg, orientation));
+                        if *start == w {
+                            // The run cancels, so its first fragment gets none either.
+                            folded.push((*first, *first_orientation));
+                            self.note_folded(&folded, &w, &w, p);
+                            folded.clear();
+                            run = None;
+                        }
+                    }
+                }
+            }
+            if let Some((first, orientation, start)) = run {
+                self.note_folded(&folded, &start, &w, p);
+                folded.clear();
+                let windings = SegmentWindingNumbers {
+                    counter_clockwise: Arc::clone(&w),
+                    clockwise: start,
                 };
-                let half_seg = self.new_half_seg(new_seg, p, windings, true, orientation);
+                if !output.take(&windings) {
+                    return false;
+                }
+                let half_seg = self.new_half_seg(open_segs, first, p, windings, true, orientation);
                 self.scan_west[half_seg] = scan_west;
                 seg_buf.push(half_seg.first_half());
+                open_horizontals.push(half_seg);
             }
             self.add_segs_counter_clockwise(
                 &mut first_seg,
@@ -829,7 +1205,7 @@ impl<W: WindingNumber> Topology<W> {
             && let Some(east_nbr) = pos.line().line_entry(pos.seg_range().segs.end)
             && !east_nbr.is_in_changed_interval()
         {
-            self.scan_east[seg] = self.open_segs[east_nbr.seg].front().copied()
+            self.scan_east[seg] = open_segs[east_nbr.seg].front().copied()
         }
 
         // If something was connected up but nothing was connected down, let's remember that
@@ -841,12 +1217,13 @@ impl<W: WindingNumber> Topology<W> {
                 .checked_sub(1)
                 .and_then(|idx| pos.line().line_segment(idx));
             let east_nbr = pos.line().line_segment(pos.seg_range().segs.end);
-            let west = west_nbr.map(|idx| *self.open_segs[idx].front().unwrap());
-            let east = east_nbr.map(|idx| *self.open_segs[idx].front().unwrap());
+            let west = west_nbr.map(|idx| *open_segs[idx].front().unwrap());
+            let east = east_nbr.map(|idx| *open_segs[idx].front().unwrap());
             if west.is_some() || east.is_some() {
                 self.scan_after.push((y, west, east));
             }
         }
+        true
     }
 
     fn delete_half(&mut self, half_seg: HalfOutputSegIdx) {
@@ -896,7 +1273,16 @@ impl<W: WindingNumber> Topology<W> {
                 // b and c aren't. Then merging a and d would be bad -- even if they're clockwise
                 // neighbors by going around the way that avoids b and c -- because it would mess up
                 // the winding numbers of b and c.
-                if y0 != y1 && self.scan_west[idx] != Some(cw_nbr.idx) {
+                //
+                // An earlier merge may have deleted the west neighbor, so skip deleted segments
+                // to reach the nearest live one.
+                let mut west = self.scan_west[idx];
+                while let Some(w) = west
+                    && self.deleted[w]
+                {
+                    west = self.scan_west[w];
+                }
+                if y0 != y1 && west != Some(cw_nbr.idx) {
                     continue;
                 }
                 if y0 != y1 {
@@ -917,8 +1303,10 @@ impl<W: WindingNumber> Topology<W> {
                 // coincident then they'd better both be first halves.
                 debug_assert!(cw_nbr.first_half);
                 self.delete(idx);
+                // Craft patch (winding storage): share the value instead of
+                // copying it.
                 self.winding[cw_nbr.idx].counter_clockwise =
-                    self.winding[idx].counter_clockwise.clone();
+                    Arc::clone(&self.winding[idx].counter_clockwise);
 
                 if self.winding[cw_nbr.idx].is_trivial() {
                     self.delete(cw_nbr.idx);
@@ -972,17 +1360,20 @@ impl<W: WindingNumber> Topology<W> {
     /// of [`Topology::contours`] because there are approximations involved.
     /// For example, we might return `true` even when the contours are just
     /// barely overlapping.
+    ///
+    /// Craft patch (coincident horizontals): coincident horizontal pieces that run
+    /// between the same two points share one output segment, so this sees the winding
+    /// numbers on either side of all of them and not the ones between them.
     pub fn is_disjoint_tags(
         &self,
         inside1: impl Fn(&W) -> bool,
         inside2: impl Fn(&W) -> bool,
     ) -> bool {
-        self.winding.indices().all(|out_idx| {
+        self.segment_indices().all(|out_idx| {
             let w = &self.winding[out_idx];
 
             let touches1 = inside1(&w.clockwise) || inside1(&w.counter_clockwise);
             let touches2 = inside2(&w.clockwise) || inside2(&w.counter_clockwise);
-            dbg!(touches1, touches2);
             !(touches1 && touches2)
         })
     }
@@ -1047,7 +1438,19 @@ impl<W: WindingNumber> Topology<W> {
     /// `true`, you can decide that the intersection is just `a`. This isn't
     /// a hard guarantee that `Topology::contours` will return `a` exactly:
     /// it probably won't, because of perturbations and ordering changes.
+    ///
+    /// Craft patch (coincident horizontals): coincident horizontal pieces that run
+    /// between the same two points share at most one output segment. This checks each
+    /// of those pieces with the winding numbers on either side of all of them, not the
+    /// ones between them.
     pub fn has_normal_contours(&self, tag: W::Tag) -> bool {
+        if self
+            .folded_abnormal
+            .iter()
+            .any(|(seg, &abnormal)| abnormal && self.tag[seg] == tag)
+        {
+            return false;
+        }
         self.out_segments_of(tag).all(|out_idx| {
             let w = &self.winding[out_idx];
 
@@ -1074,29 +1477,30 @@ impl<W: WindingNumber> Topology<W> {
         segs: &[HalfOutputSegIdx],
         positions: &OutputSegVec<PositionedOutputSeg>,
     ) -> BezPath {
-        let mut ret = BezPath::default();
+        let mut ret = BezPath::with_capacity(segs.len() + 2);
         let mut unfinished: Option<f64> = None;
+        // A re-usable buffer for the reversed paths of first halves.
+        let mut rev_buf: Vec<PathEl> = Vec::new();
 
-        // Find a segment that can't be merged into the previous one.
+        // Find a segment that can't be merged into the previous one. If every segment can be
+        // merged, start at the first one.
         let start_idx = segs
             .iter()
             .position(|s| self.can_merge(s.other_half(), positions).is_none())
-            .unwrap();
+            .unwrap_or(0);
         ret.move_to(self.point(segs[start_idx].other_half()).to_kurbo());
         for seg in segs[start_idx..].iter().chain(&segs[..start_idx]) {
             let path = &positions[seg.idx];
 
-            // TODO: avoid the allocation in reverse_subpaths
-            let rev_path;
-            let oriented_path = if seg.is_first_half() {
-                rev_path = path.path.reverse_subpaths();
-                &rev_path
+            let oriented_path: &[PathEl] = if seg.is_first_half() {
+                reverse_path_into(&path.path, &mut rev_buf);
+                &rev_buf
             } else {
-                &path.path
+                path.path.elements()
             };
             // skip(1) leaves off the initial MoveTo, which is unnecessary
             // because this path starts where the last one ended.
-            let mut elems = oriented_path.iter().skip(1);
+            let mut elems = oriented_path.iter().copied().skip(1);
             if let (Some(our_t), Some(unfinished_t)) =
                 (self.can_merge(seg.other_half(), positions), unfinished)
             {
@@ -1214,6 +1618,11 @@ impl<W: WindingNumber> Topology<W> {
             return None;
         }
 
+        // Only a simple point can merge, so skip solving for `t` anywhere else.
+        if !self.is_simple_point(seg) {
+            return None;
+        }
+
         let extremal_seg_is_copied = if seg.is_first_half() {
             pos.copied_idx == Some(0)
         } else {
@@ -1256,7 +1665,16 @@ impl<W: WindingNumber> Topology<W> {
                 None
             }
         };
-        if self.is_simple_point(seg) {
+        // The neighbor must be the adjacent piece of the same input element. After coincident
+        // segments are deleted, pieces of two different input elements can meet at a simple
+        // point, and their parameters cannot be combined.
+        let nbr = self.point_neighbors[seg].clockwise;
+        let expected = if has_orig_orientation {
+            self.segments.contour_prev(orig_idx)
+        } else {
+            self.segments.contour_next(orig_idx)
+        };
+        if self.is_simple_point(seg) && nbr != seg && Some(self.orig_seg[nbr.idx]) == expected {
             can_merge
         } else {
             None
@@ -1274,22 +1692,86 @@ impl<W: WindingNumber> Topology<W> {
         ret.clamp(0.0, 1.0)
     }
 
+    /// Returns the nearest segment on `idx`'s scan-west chain (not counting `idx` itself)
+    /// for which `is_bdy` returns true.
+    ///
+    /// `memo[i]` holds the answer for segment `i` once it is known. Every segment passed
+    /// over on the way gets the same answer, so a chain shared by several starting segments
+    /// is walked only once. `stack` is scratch space.
+    fn west_boundary(
+        &self,
+        idx: OutputSegIdx,
+        is_bdy: &mut impl FnMut(OutputSegIdx) -> bool,
+        memo: &mut [Option<Option<OutputSegIdx>>],
+        stack: &mut Vec<OutputSegIdx>,
+    ) -> Option<OutputSegIdx> {
+        stack.clear();
+        let mut cur = idx;
+        let found = loop {
+            if let Some(known) = memo[cur.0] {
+                break known;
+            }
+            #[cfg(test)]
+            WEST_STEPS.with(|n| n.set(n.get() + 1));
+            match self.scan_west[cur] {
+                None => break None,
+                Some(left) if is_bdy(left) => break Some(left),
+                Some(left) => {
+                    stack.push(cur);
+                    cur = left;
+                }
+            }
+        };
+        memo[cur.0] = Some(found);
+        for seg in stack.drain(..) {
+            memo[seg.0] = Some(found);
+        }
+        found
+    }
+
     /// Returns the contours of some set defined by this topology.
     ///
     /// The callback function `inside` takes a winding number and returns `true`
     /// if a point with that winding number should be in the resulting set. For example,
     /// to compute a boolean "and" using the non-zero winding rule, `inside` should be
     /// `|w| w.shape_a != 0 && w.shape_b != 0`.
+    ///
+    /// When the winding numbers disagree around a point, this returns no
+    /// contours. [`Topology::try_contours`] reports that case as an error.
     pub fn contours(&self, inside: impl Fn(&W) -> bool) -> Contours {
-	let positions = self.compute_positions();
+        self.try_contours(inside).unwrap_or_default()
+    }
+
+    /// Returns the contours of some set defined by this topology, as
+    /// [`Topology::contours`] does, or [`Error::InconsistentWindingNumbers`]
+    /// when the winding numbers disagree around a point.
+    pub fn try_contours(&self, inside: impl Fn(&W) -> bool) -> Result<Contours, Error> {
+        let positions = self.contour_positions(&inside);
         self.contours_for_positions(inside, positions)
+    }
+
+    /// Computes paths for the output segments that [`Topology::contours`] reads.
+    ///
+    /// With [`Correctness::GoodEnough`], only the segments on the boundary of
+    /// the set that `inside` defines get a path; the others keep an empty one.
+    /// With [`Correctness::ReallyCorrect`], every segment gets a path, because
+    /// the perturbation of one segment depends on its neighbors.
+    fn contour_positions(&self, inside: &impl Fn(&W) -> bool) -> OutputSegVec<PositionedOutputSeg> {
+        match self.correctness {
+            Correctness::GoodEnough => self.compute_positions_good_enough_where(|idx| {
+                !self.deleted[idx]
+                    && inside(&self.winding[idx].clockwise)
+                        != inside(&self.winding[idx].counter_clockwise)
+            }),
+            Correctness::ReallyCorrect => self.compute_positions_correct(),
+        }
     }
 
     fn contours_for_positions(
         &self,
         inside: impl Fn(&W) -> bool,
         positions: OutputSegVec<PositionedOutputSeg>,
-    ) -> Contours {
+    ) -> Result<Contours, Error> {
         // We walk contours in sweep-line order of their smallest point. This mostly ensures
         // that we visit outer contours before we visit their children. However, when the inner
         // and outer contours share a point, we run into a problem. For example:
@@ -1321,6 +1803,16 @@ impl<W: WindingNumber> Topology<W> {
         let bdy = |idx: OutputSegIdx| -> bool {
             inside(&self.winding[idx].clockwise) != inside(&self.winding[idx].counter_clockwise)
         };
+        // Whether a segment is a live boundary segment, tested the first time it is asked
+        // for, and a memo of the nearest one on each segment's scan-west chain, so that each
+        // link of a chain is followed at most once per call instead of once per contour that
+        // starts east of it.
+        let mut bdy_memo: Vec<Option<bool>> = vec![None; self.winding.inner.len()];
+        let mut is_bdy = |idx: OutputSegIdx| -> bool {
+            *bdy_memo[idx.0].get_or_insert_with(|| !self.deleted[idx] && bdy(idx))
+        };
+        let mut west_bdy: Vec<Option<Option<OutputSegIdx>>> = vec![None; self.winding.inner.len()];
+        let mut west_stack = Vec::new();
 
         let mut visited = vec![false; self.winding.inner.len()];
         // Keep track of the points that were visited on this walk, so that if we re-visit a
@@ -1332,7 +1824,7 @@ impl<W: WindingNumber> Topology<W> {
                 continue;
             }
 
-            if !bdy(idx) {
+            if !is_bdy(idx) {
                 continue;
             }
 
@@ -1340,14 +1832,7 @@ impl<W: WindingNumber> Topology<W> {
             // are relative to existing contours.
             let contour_idx = ContourIdx(ret.contours.len());
             let mut contour = Contour::default();
-            let mut west_seg = self.scan_west[idx];
-            while let Some(left) = west_seg {
-                if self.deleted[left] || !bdy(left) {
-                    west_seg = self.scan_west[left];
-                } else {
-                    break;
-                }
-            }
+            let west_seg = self.west_boundary(idx, &mut is_bdy, &mut west_bdy, &mut west_stack);
             if let Some(west) = west_seg {
                 if let Some(west_contour) = seg_contour[west.0] {
                     // Is the thing just to our west inside or outside the output set?
@@ -1358,7 +1843,9 @@ impl<W: WindingNumber> Topology<W> {
                         // That means they're our sibling.
                         contour.parent = ret.contours[west_contour.0].parent;
                         contour.outer = outside;
-                        debug_assert!(outside || contour.parent.is_some());
+                        if !outside && contour.parent.is_none() {
+                            return Err(Error::InconsistentWindingNumbers);
+                        }
                     } else {
                         // They're an outer contour, and there's interior between us and them,
                         // or they're an inner contour and there's exterior between us.
@@ -1367,7 +1854,8 @@ impl<W: WindingNumber> Topology<W> {
                         contour.outer = !ret.contours[west_contour.0].outer;
                     }
                 } else {
-                    panic!("I'm {idx:?}, west is {west:?}. Y u no have contour?");
+                    // The boundary segment to our west has no contour yet.
+                    return Err(Error::InconsistentWindingNumbers);
                 }
             };
             // Reserve a space for the unfinished outer contour, as described above.
@@ -1384,26 +1872,42 @@ impl<W: WindingNumber> Topology<W> {
             // "endpoint" here means "as we walk the contour;" it could be either a first_half
             // or a second_half as far as `HalfOutputSegIdx` is concerned.
             let mut segs = Vec::new();
+            // The loops split off the walk at repeated points.
+            let mut loops: Vec<Vec<HalfOutputSegIdx>> = Vec::new();
             last_visit[self.point_idx[start]] = Some(0);
 
             debug_assert!(inside(self.winding_clockwise(start)));
             loop {
                 visited[next.idx.0] = true;
 
-                debug_assert!(inside(self.winding_counter_clockwise(next)));
-                debug_assert!(!inside(self.winding_clockwise(next)));
+                if !inside(self.winding_counter_clockwise(next))
+                    || inside(self.winding_clockwise(next))
+                {
+                    return Err(Error::InconsistentWindingNumbers);
+                }
 
                 // Walk counter-clockwise around the point until we find the next segment
                 // that's on the boundary.
                 let mut nbr = self.point_neighbors[next].counter_clockwise;
-                debug_assert!(inside(self.winding_clockwise(nbr)));
+                if !inside(self.winding_clockwise(nbr)) {
+                    return Err(Error::InconsistentWindingNumbers);
+                }
+                let first_nbr = nbr;
                 while inside(self.winding_counter_clockwise(nbr)) {
                     nbr = self.point_neighbors[nbr].counter_clockwise;
+                    if nbr == first_nbr {
+                        // No boundary segment leaves this point.
+                        return Err(Error::InconsistentWindingNumbers);
+                    }
                 }
 
                 segs.push(next);
                 if nbr == start {
                     break;
+                }
+                if visited[nbr.idx.0] {
+                    // The walk re-entered a segment it already walked.
+                    return Err(Error::InconsistentWindingNumbers);
                 }
 
                 let p = self.point_idx[nbr];
@@ -1422,15 +1926,7 @@ impl<W: WindingNumber> Topology<W> {
                     // seg_idx should point to the end of a segment whose start is at p.
                     debug_assert_eq!(self.point_idx[segs[seg_idx].other_half()], p);
 
-                    let loop_contour_idx = ContourIdx(ret.contours.len());
-                    for &seg in &segs[seg_idx..] {
-                        seg_contour[seg.idx.0] = Some(loop_contour_idx);
-                    }
-                    ret.contours.push(Contour {
-                        path: self.segs_to_path(&segs[seg_idx..], &positions),
-                        parent: Some(contour_idx),
-                        outer: !ret.contours[contour_idx.0].outer,
-                    });
+                    loops.push(segs[seg_idx..].to_vec());
                     segs.truncate(seg_idx);
                     // In principle, we should also be unsetting `last_visit`
                     // for all points in the contour we just removed. I *think*
@@ -1443,17 +1939,89 @@ impl<W: WindingNumber> Topology<W> {
 
                 next = nbr.other_half();
             }
-            for &seg in &segs {
-                seg_contour[seg.idx.0] = Some(contour_idx);
+            if loops.is_empty() {
+                for &seg in &segs {
+                    seg_contour[seg.idx.0] = Some(contour_idx);
+                }
+                ret.contours[contour_idx.0].path = self.segs_to_path(&segs, &positions);
+                continue;
             }
-            ret.contours[contour_idx.0].path = self.segs_to_path(&segs, &positions);
+
+            // The walk split into pieces at repeated points. A piece that winds like the
+            // contour being walked (clockwise when it is outer) is a sibling of it, as when
+            // two holes touch at a point. A piece that winds the other way is a child of the
+            // same-kind piece that contains it, as when a hole touches its outer contour. The
+            // first same-kind piece takes `contour_idx`; it need not be the rest of the walk.
+            let walked_outer = ret.contours[contour_idx.0].outer;
+            let walked_parent = ret.contours[contour_idx.0].parent;
+            let mut pieces = loops;
+            pieces.insert(0, segs);
+            let paths: Vec<BezPath> = pieces
+                .iter()
+                .map(|piece| self.segs_to_path(piece, &positions))
+                .collect();
+            // The area is measured from the piece's own corner, so that large coordinates
+            // do not swamp its sign.
+            let clockwise = |path: &BezPath| {
+                let mut local = path.clone();
+                local.apply_affine(Affine::translate(-path.bounding_box().origin().to_vec2()));
+                local.area() > 0.0
+            };
+            let same_kind: Vec<bool> = paths
+                .iter()
+                .map(|path| clockwise(path) == walked_outer)
+                .collect();
+            let keep = same_kind.iter().position(|&s| s).unwrap_or(0);
+            let mut idxs = vec![contour_idx; pieces.len()];
+            for (i, idx) in idxs.iter_mut().enumerate() {
+                if i != keep {
+                    *idx = ContourIdx(ret.contours.len());
+                    ret.contours.push(Contour::default());
+                }
+            }
+            let links: Vec<(Option<ContourIdx>, bool)> = paths
+                .iter()
+                .enumerate()
+                .map(|(i, path)| {
+                    if same_kind[i] || i == keep {
+                        (walked_parent, walked_outer)
+                    } else if !same_kind[keep] {
+                        // No piece winds like the walked contour, so the loops stay
+                        // children of the rest of the walk.
+                        (Some(contour_idx), !walked_outer)
+                    } else {
+                        let probe = path.segments().next().map(|s| s.eval(0.5));
+                        let container = (0..paths.len())
+                            .filter(|&j| same_kind[j])
+                            .find(|&j| probe.is_some_and(|pt| paths[j].winding(pt) != 0))
+                            .unwrap_or(keep);
+                        (Some(idxs[container]), !walked_outer)
+                    }
+                })
+                .collect();
+            for (i, (path, (parent, outer))) in paths.into_iter().zip(links).enumerate() {
+                for &seg in &pieces[i] {
+                    seg_contour[seg.idx.0] = Some(idxs[i]);
+                }
+                ret.contours[idxs[i].0] = Contour {
+                    path,
+                    parent,
+                    outer,
+                };
+            }
         }
 
-        ret
+        Ok(ret)
     }
 
     /// Returns a rectangle bounding all of our segments.
+    ///
+    /// With no segments, it returns `Rect::ZERO`, as kurbo does for an empty path.
     pub fn bounding_box(&self) -> kurbo::Rect {
+        // Craft patch (input rules): an empty topology has a zero rectangle.
+        if self.segments.segments().next().is_none() {
+            return Rect::ZERO;
+        }
         let mut rect = Rect::new(
             f64::INFINITY,
             f64::INFINITY,
@@ -1548,12 +2116,21 @@ impl<W: WindingNumber> Topology<W> {
     }
 
     /// Computes paths for all the output segments.
-    ///
-    /// TODO: We should allow passing in an "inside" callback and then only do
-    /// positioning for the segments that are on the boundary.
     fn compute_positions_good_enough(&self) -> OutputSegVec<PositionedOutputSeg> {
+        self.compute_positions_good_enough_where(|_| true)
+    }
+
+    /// Computes paths for the output segments that `wanted` accepts. The other
+    /// segments keep an empty path.
+    fn compute_positions_good_enough_where(
+        &self,
+        wanted: impl Fn(OutputSegIdx) -> bool,
+    ) -> OutputSegVec<PositionedOutputSeg> {
         let mut output = OutputSegVec::with_size(self.orig_seg.len());
         for idx in self.orig_seg.indices() {
+            if !wanted(idx) {
+                continue;
+            }
             let start = self.points[self.point_idx[idx.first_half()]].to_kurbo();
             let end = self.points[self.point_idx[idx.second_half()]].to_kurbo();
 
@@ -1620,9 +2197,25 @@ impl<W: WindingNumber> Topology<W> {
         }
 
         // Check the continuity of contours.
-        let mut out_segs = SegVec::<Vec<OutputSegIdx>>::with_size(self.segments.len());
+        // Craft patch (coincident horizontals): each piece is (creation order, start point,
+        // end point, orientation), from an output segment or from a fragment that got none.
+        // The pieces start out in the order they were created, as the output segments of
+        // every fragment would be.
+        let mut out_segs =
+            SegVec::<Vec<(usize, PointIdx, PointIdx, bool)>>::with_size(self.segments.len());
         for out_seg in self.winding.indices() {
-            out_segs[self.orig_seg[out_seg]].push(out_seg);
+            out_segs[self.orig_seg[out_seg]].push((
+                2 * out_seg.0 + 1,
+                self.point_idx[out_seg.first_half()],
+                self.point_idx[out_seg.second_half()],
+                self.positively_oriented[out_seg],
+            ));
+        }
+        for &(seg, created_before, start, end, positively_oriented) in &self.folded_pieces {
+            out_segs[seg].push((2 * created_before, start, end, positively_oriented));
+        }
+        for (_, out_segs) in out_segs.iter_mut() {
+            out_segs.sort_by_key(|piece| piece.0);
         }
         // For each segment, figure out the first and last points of its output-segment-polyline,
         // in that segment's natural orientation.
@@ -1642,11 +2235,11 @@ impl<W: WindingNumber> Topology<W> {
             // where there are multiple horizontal out segments on the same sweep line, we
             // need to sort those segments relative to one another depending on the direction
             // in which the input segment traverses that sweep line.
-            out_segs.sort_by(|&o1, &o2| {
-                let p11 = self.point(o1.first_half());
-                let p12 = self.point(o1.second_half());
-                let p21 = self.point(o2.first_half());
-                let p22 = self.point(o2.second_half());
+            out_segs.sort_by(|o1, o2| {
+                let p11 = &self.points[o1.1];
+                let p12 = &self.points[o1.2];
+                let p21 = &self.points[o2.1];
+                let p22 = &self.points[o2.2];
                 let horiz1 = p11.y == p12.y;
                 let horiz2 = p21.y == p22.y;
 
@@ -1658,8 +2251,8 @@ impl<W: WindingNumber> Topology<W> {
                     // We can create multiple horizontal segments for a segment in the same
                     // sweep line, but currently we don't create any backtracking: all the
                     // horizontal segments we create have the same orientation.
-                    debug_assert_eq!(self.positively_oriented[o1], self.positively_oriented[o2]);
-                    if self.positively_oriented[o1] == self.segments.positively_oriented(in_seg) {
+                    debug_assert_eq!(o1.3, o2.3);
+                    if o1.3 == self.segments.positively_oriented(in_seg) {
                         cmp
                     } else {
                         cmp.reverse()
@@ -1672,13 +2265,13 @@ impl<W: WindingNumber> Topology<W> {
             let mut first = None;
             let mut last = None;
 
-            for &out_seg in &*out_segs {
+            for &(_, start, end, positively_oriented) in &*out_segs {
                 let same_orientation =
-                    self.positively_oriented[out_seg] == self.segments.positively_oriented(in_seg);
+                    positively_oriented == self.segments.positively_oriented(in_seg);
                 let (first_endpoint, second_endpoint) = if same_orientation {
-                    (out_seg.first_half(), out_seg.second_half())
+                    (start, end)
                 } else {
-                    (out_seg.second_half(), out_seg.first_half())
+                    (end, start)
                 };
                 if first.is_none() {
                     first = Some(first_endpoint);
@@ -1687,7 +2280,7 @@ impl<W: WindingNumber> Topology<W> {
                 // When walking the output segments in sweep-line order, the last endpoint of
                 // the previous one should be the first endpoint of this one.
                 if let Some(last) = last {
-                    assert_eq!(self.point_idx[first_endpoint], self.point_idx[last]);
+                    assert_eq!(first_endpoint, last);
                 }
                 last = Some(second_endpoint);
             }
@@ -1699,7 +2292,7 @@ impl<W: WindingNumber> Topology<W> {
             } else {
                 (last, first)
             };
-            realized_endpoints.push((self.point_idx[first], self.point_idx[last]));
+            realized_endpoints.push((first, last));
         }
 
         for seg in self.segments.indices() {
@@ -1814,7 +2407,7 @@ impl<W: WindingNumber> Topology<W> {
 
 impl Topology<i32> {
     /// Construct a new topology from a single path.
-    pub fn from_path(path: &BezPath, eps: f64) -> Result<Self, NonClosedPath> {
+    pub fn from_path(path: &BezPath, eps: f64) -> Result<Self, Error> {
         Self::from_paths(std::iter::once((path, ())), eps)
     }
 }
@@ -1841,17 +2434,15 @@ impl Topology<BinaryWindingNumber> {
             SegVec::from_vec(shape_a),
             eps,
             Correctness::GoodEnough,
+            None,
         )
+        .expect("a sweep without a work limit always finishes")
     }
 
     /// Creates a new `Topology` from two Bézier paths.
     ///
     /// The two Bézier paths represent two different sets for the purpose of boolean set operations.
-    pub fn from_paths_binary(
-        set_a: &BezPath,
-        set_b: &BezPath,
-        eps: f64,
-    ) -> Result<Self, NonClosedPath> {
+    pub fn from_paths_binary(set_a: &BezPath, set_b: &BezPath, eps: f64) -> Result<Self, Error> {
         Self::from_paths([(set_a, OneOfTwo::A), (set_b, OneOfTwo::B)], eps)
     }
 
@@ -2194,8 +2785,9 @@ impl Contours {
     pub fn grouped(&self) -> Vec<Vec<ContourIdx>> {
         let mut children = vec![Vec::new(); self.contours.len()];
         let mut top_level = Vec::new();
-        for i in 0..self.contours.len() {
-            if let Some(parent) = self.contours[i].parent {
+        // Craft patch (clippy lints): iterate over the contours instead of indexing them.
+        for (i, contour) in self.contours.iter().enumerate() {
+            if let Some(parent) = contour.parent {
                 children[parent.0].push(ContourIdx(i));
             } else {
                 top_level.push(ContourIdx(i));
@@ -2203,15 +2795,16 @@ impl Contours {
         }
 
         let mut ret = Vec::with_capacity(top_level.len());
+        let mut stack = Vec::new();
         for top in top_level {
             let mut tree = Vec::new();
-            fn visit(idx: ContourIdx, children: &[Vec<ContourIdx>], acc: &mut Vec<ContourIdx>) {
-                acc.push(idx);
-                for &child in &children[idx.0] {
-                    visit(child, children, acc);
-                }
+            // Walk the tree in pre-order with an explicit stack, so that deeply
+            // nested contours do not overflow the call stack.
+            stack.push(top);
+            while let Some(idx) = stack.pop() {
+                tree.push(idx);
+                stack.extend(children[idx.0].iter().rev());
             }
-            visit(top, &children, &mut tree);
             ret.push(tree);
         }
 
@@ -2258,11 +2851,11 @@ impl std::ops::Index<ContourIdx> for Contours {
 
 #[cfg(test)]
 mod tests {
-    use kurbo::BezPath;
+    use kurbo::{BezPath, Shape};
     use proptest::prelude::*;
 
     use crate::{
-        FillRule, SegIdx,
+        Error, FillRule, SegIdx,
         geom::Point,
         order::ComparisonCache,
         perturbation::{
@@ -2270,13 +2863,277 @@ mod tests {
         },
     };
 
-    use super::{OneOfTwo, Topology};
+    use super::{Affine, Contour, ContourIdx, Contours, Correctness, HalfOutputSegVec, OneOfTwo, Topology};
 
     fn p(x: f64, y: f64) -> Point {
         Point::new(x, y)
     }
 
     const EMPTY: [[Point; 0]; 0] = [];
+
+    /// Counts the heap allocations made on each thread, so that a test can
+    /// count its own allocations while other tests run.
+    struct CountingAlloc;
+
+    std::thread_local! {
+        static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    unsafe impl std::alloc::GlobalAlloc for CountingAlloc {
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
+            unsafe { std::alloc::System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+            unsafe { std::alloc::System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(
+            &self,
+            ptr: *mut u8,
+            layout: std::alloc::Layout,
+            new_size: usize,
+        ) -> *mut u8 {
+            let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
+            unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: CountingAlloc = CountingAlloc;
+
+    fn allocations_in<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        let before = ALLOCATIONS.with(|n| n.get());
+        let ret = f();
+        let after = ALLOCATIONS.with(|n| n.get());
+        (ret, after - before)
+    }
+
+    /// `n` squares in a row, each as its own subpath. Every square starts and
+    /// ends its segments on the same two sweep lines.
+    fn squares_in_a_row(n: usize) -> BezPath {
+        let mut path = BezPath::new();
+        for i in 0..n {
+            let x = 3.0 * i as f64;
+            path.move_to((x, 0.0));
+            path.line_to((x + 1.0, 0.0));
+            path.line_to((x + 1.0, 1.0));
+            path.line_to((x, 1.0));
+            path.close_path();
+        }
+        path
+    }
+
+    /// A wavy band whose outline is one contour made of many first and second
+    /// halves of output segments.
+    fn wavy_band(n: usize) -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        for i in 0..n {
+            let x = i as f64;
+            path.curve_to((x + 0.3, 1.0), (x + 0.7, -1.0), (x + 1.0, 0.0));
+        }
+        path.line_to((n as f64, 5.0));
+        for i in (0..n).rev() {
+            let x = i as f64;
+            path.curve_to((x + 0.7, 4.0), (x + 0.3, 6.0), (x, 5.0));
+        }
+        path.close_path();
+        path
+    }
+
+    /// `n` unit squares on a diagonal, each as its own subpath, so that every
+    /// square has its own sweep lines and sweep-line ranges.
+    fn squares_on_a_diagonal(n: usize) -> BezPath {
+        let mut path = BezPath::new();
+        for i in 0..n {
+            let x = 3.0 * i as f64;
+            path.move_to((x, x));
+            path.line_to((x + 1.0, x));
+            path.line_to((x + 1.0, x + 1.0));
+            path.line_to((x, x + 1.0));
+            path.close_path();
+        }
+        path
+    }
+
+    /// The allocations that `Topology::from_path` makes itself: everything it
+    /// allocates minus what building the segments and running the sweep alone
+    /// allocate.
+    fn topology_allocations(path: &BezPath) -> usize {
+        use crate::{
+            segments::Segments,
+            sweep::{Correctness, SweepLineBuffers, SweepLineRangeBuffers, Sweeper},
+        };
+
+        let (_, total) = allocations_in(|| Topology::<i32>::from_path(path, 0.01).unwrap());
+        let (_, sweep) = allocations_in(|| {
+            let mut segments = Segments::default();
+            segments
+                .add_path_without_updating_enter_exit(path, true)
+                .unwrap();
+            segments.update_enter_exit(0);
+            segments.check_invariants();
+            let mut sweeper =
+                Sweeper::new_with_correctness(&segments, 0.01, Correctness::GoodEnough);
+            let mut range_bufs = SweepLineRangeBuffers::default();
+            let mut line_bufs = SweepLineBuffers::default();
+            while let Some(mut line) = sweeper.next_line(&mut line_bufs) {
+                while let Some(mut range) = line.next_range(&mut range_bufs, &segments) {
+                    while range.x().is_some() {
+                        range.increase_x();
+                    }
+                }
+            }
+        });
+        total - sweep
+    }
+
+    #[test]
+    fn building_a_topology_does_not_allocate_per_segment() {
+        // Compare two sizes and look at what the extra squares cost, so that
+        // the few allocations made once per topology do not count.
+        for (name, make) in [
+            ("in a row", squares_in_a_row as fn(usize) -> BezPath),
+            ("on a diagonal", squares_on_a_diagonal),
+        ] {
+            let small_allocs = topology_allocations(&make(500));
+            let large_allocs = topology_allocations(&make(1000));
+            let per_square = large_allocs.saturating_sub(small_allocs) as f64 / 500.0;
+            // Each output segment stores one shared winding number, and each sweep-line
+            // range that starts outside any shape allocates a default one.
+            assert!(
+                per_square < 8.5,
+                "squares {name}: {per_square} allocations per extra square \
+                 ({small_allocs} for 500, {large_allocs} for 1000)"
+            );
+        }
+    }
+
+    #[test]
+    fn contours_do_not_allocate_per_reversed_segment() {
+        let small = wavy_band(500);
+        let large = wavy_band(1000);
+        let small_top = Topology::<i32>::from_path(&small, 0.01).unwrap();
+        let large_top = Topology::<i32>::from_path(&large, 0.01).unwrap();
+        // `compute_positions` makes one path per output segment, which is the
+        // output, so count only what walking the contours allocates.
+        let small_pos = small_top.compute_positions();
+        let large_pos = large_top.compute_positions();
+        let (small_contours, small_allocs) =
+            allocations_in(|| small_top.contours_for_positions(|w| *w != 0, small_pos).unwrap());
+        let (large_contours, large_allocs) =
+            allocations_in(|| large_top.contours_for_positions(|w| *w != 0, large_pos).unwrap());
+        assert_eq!(small_contours.contours().count(), 1);
+        assert_eq!(large_contours.contours().count(), 1);
+        let per_wave = (large_allocs - small_allocs) as f64 / 500.0;
+        assert!(
+            per_wave < 1.0,
+            "{per_wave} allocations per extra wave ({small_allocs} for 500, {large_allocs} for 1000)"
+        );
+    }
+
+    #[test]
+    fn reverse_path_into_matches_reverse_subpaths() {
+        let mut open = BezPath::new();
+        open.move_to((0.0, 0.0));
+        open.line_to((1.0, 2.0));
+        open.quad_to((2.0, 3.0), (3.0, 1.0));
+        open.curve_to((4.0, 0.0), (5.0, 5.0), (6.0, 2.0));
+        let mut only_move = BezPath::new();
+        only_move.move_to((1.0, 1.0));
+        let mut closed = open.clone();
+        closed.close_path();
+        let mut two = open.clone();
+        two.move_to((10.0, 10.0));
+        two.line_to((11.0, 12.0));
+
+        let mut buf = Vec::new();
+        for path in [open, only_move, closed, two, BezPath::new()] {
+            super::reverse_path_into(&path, &mut buf);
+            assert_eq!(buf, path.reverse_subpaths().elements());
+        }
+    }
+
+    #[test]
+    fn open_segs_pop_like_a_deque() {
+        use super::{OpenSegs, OutputSegIdx};
+
+        let mut segs = OpenSegs::default();
+        let mut deque = std::collections::VecDeque::new();
+        let pushes = [(1, false), (2, false), (3, true), (4, false), (5, true)];
+        for (i, front) in pushes {
+            if front {
+                segs.push_front(OutputSegIdx(i));
+                deque.push_front(OutputSegIdx(i));
+            } else {
+                segs.push_back(OutputSegIdx(i));
+                deque.push_back(OutputSegIdx(i));
+            }
+            assert_eq!(segs.front(), deque.front());
+        }
+        while let Some(idx) = deque.pop_front() {
+            assert!(!segs.is_empty());
+            assert_eq!(segs.pop_front(), Some(idx));
+        }
+        assert!(segs.is_empty());
+        assert_eq!(segs.pop_front(), None);
+    }
+
+    /// The elements of the only contour of `path` under the non-zero rule.
+    fn only_contour_elements(path: &BezPath) -> Vec<kurbo::PathEl> {
+        let top = Topology::<i32>::from_path(path, 0.01).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        let mut contours = contours.contours();
+        let contour = contours.next().unwrap();
+        assert!(contours.next().is_none());
+        contour.path.elements().to_vec()
+    }
+
+    #[test]
+    fn contours_keep_their_elements_and_direction() {
+        use kurbo::PathEl::{ClosePath, CurveTo, LineTo, MoveTo};
+
+        let mut notched = BezPath::new();
+        notched.move_to((0.0, 0.0));
+        notched.line_to((4.0, 0.0));
+        notched.line_to((4.0, 4.0));
+        notched.line_to((3.0, 4.0));
+        notched.line_to((2.0, 2.0));
+        notched.line_to((1.0, 4.0));
+        notched.line_to((0.0, 4.0));
+        notched.close_path();
+        assert_eq!(
+            only_contour_elements(&notched),
+            [
+                MoveTo((0.0, 4.0).into()),
+                LineTo((0.0, 0.0).into()),
+                LineTo((4.0, 0.0).into()),
+                LineTo((4.0, 4.0).into()),
+                LineTo((3.0, 4.0).into()),
+                LineTo((2.0, 2.0).into()),
+                LineTo((1.0, 4.0).into()),
+                LineTo((0.0, 4.0).into()),
+                ClosePath,
+            ]
+        );
+
+        let mut lens = BezPath::new();
+        lens.move_to((0.0, 0.0));
+        lens.curve_to((2.0, 1.0), (2.0, 2.0), (0.0, 3.0));
+        lens.curve_to((-2.0, 2.0), (-2.0, 1.0), (0.0, 0.0));
+        lens.close_path();
+        assert_eq!(
+            only_contour_elements(&lens),
+            [
+                MoveTo((0.0, 3.0).into()),
+                CurveTo((-2.0, 2.0).into(), (-2.0, 1.0).into(), (0.0, 0.0).into()),
+                CurveTo((2.0, 1.0).into(), (2.0, 2.0).into(), (0.0, 3.0).into()),
+                ClosePath,
+            ]
+        );
+    }
 
     #[test]
     fn square() {
@@ -2286,6 +3143,69 @@ mod tests {
         //check_intersections(&top);
 
         insta::assert_ron_snapshot!(top);
+    }
+
+    // Craft patch (input rules) test.
+    #[test]
+    fn empty_bounding_box() {
+        let top = Topology::from_polylines_binary(EMPTY, EMPTY, 0.01);
+        assert_eq!(top.bounding_box(), kurbo::Rect::ZERO);
+    }
+
+    // Craft patch (winding storage).
+    /// `n` squares of side `n`, each one step right and down from the last, so the
+    /// edges of every square cross the edges of every other square.
+    fn staggered_squares(n: usize) -> Vec<BezPath> {
+        use kurbo::Shape as _;
+        (0..n)
+            .map(|i| {
+                let (i, n) = (i as f64, n as f64);
+                kurbo::Rect::new(i, i + 0.25, i + n, i + n + 0.25).to_path(0.1)
+            })
+            .collect()
+    }
+
+    // Craft patch (winding storage).
+    #[test]
+    fn neighboring_segments_share_winding_numbers() {
+        let paths = staggered_squares(8);
+        let top = Topology::<i32>::from_paths(paths.iter().map(|p| (p, ())), 1e-6).unwrap();
+        let mut sides = 0;
+        let mut stored = std::collections::HashSet::new();
+        for idx in top.segment_indices() {
+            let w = &top.winding[idx];
+            for side in [&w.clockwise, &w.counter_clockwise] {
+                sides += 1;
+                stored.insert(std::sync::Arc::as_ptr(side));
+            }
+        }
+        // A segment's clockwise side is the counter-clockwise side of the segment
+        // before it in the sweep, so most sides share a stored value.
+        assert!(
+            stored.len() * 3 <= sides * 2,
+            "{} winding numbers stored for {sides} sides",
+            stored.len()
+        );
+    }
+
+    // Craft patch (winding storage).
+    #[test]
+    fn staggered_squares_winding_numbers_count_the_covering_squares() {
+        use kurbo::Shape as _;
+        let paths = staggered_squares(8);
+        let top = Topology::<i32>::from_paths(paths.iter().map(|p| (p, ())), 1e-6).unwrap();
+        for k in 1..=8 {
+            // The points covered by at least `k` squares form `9 - k` squares of
+            // side `9 - k`, each one step from the last.
+            let s = f64::from(9 - k);
+            let expected = s * s + (s - 1.0) * (2.0 * s - 1.0);
+            let contours = top.contours(|w| w.abs() >= k);
+            let area: f64 = contours.contours().map(|c| c.path.area().abs()).sum();
+            assert!(
+                (area - expected).abs() < 1e-9,
+                "k = {k}: {area} != {expected}"
+            );
+        }
     }
 
     #[test]
@@ -2362,6 +3282,59 @@ mod tests {
             orders.east_neighbor_after(out_idx[0], 2.0),
             Some(out_idx[2])
         );
+    }
+
+    fn contours_with_parents(parents: &[Option<usize>]) -> Contours {
+        Contours {
+            contours: parents
+                .iter()
+                .map(|parent| Contour {
+                    parent: parent.map(ContourIdx),
+                    ..Contour::default()
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn grouped_lists_each_tree_in_pre_order() {
+        //   0        5
+        //   ├─ 1     └─ 6
+        //   │  ├─ 3
+        //   │  └─ 4
+        //   └─ 2
+        //      └─ 7
+        let contours = contours_with_parents(&[
+            None,
+            Some(0),
+            Some(0),
+            Some(1),
+            Some(1),
+            None,
+            Some(5),
+            Some(2),
+        ]);
+        let grouped = contours
+            .grouped()
+            .into_iter()
+            .map(|tree| tree.into_iter().map(|idx| idx.0).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(grouped, vec![vec![0, 1, 3, 4, 2, 7], vec![5, 6]]);
+    }
+
+    #[test]
+    fn grouped_handles_deep_nesting_on_a_small_stack() {
+        const DEPTH: usize = 30_000;
+        let parents = (0..DEPTH).map(|i| i.checked_sub(1)).collect::<Vec<_>>();
+        let contours = contours_with_parents(&parents);
+        let grouped = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || contours.grouped())
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(grouped.len(), 1);
+        assert!(grouped[0].iter().map(|idx| idx.0).eq(0..DEPTH));
     }
 
     #[test]
@@ -2481,6 +3454,104 @@ mod tests {
         insta::assert_ron_snapshot!((top, contours));
     }
 
+    // Checks that the contour walk finishes on a path whose winding numbers
+    // come out inconsistent around a point, instead of walking forever:
+    // `try_contours` returns an error and `contours` returns no contours.
+    fn contours_finish(svg: &str) {
+        let bez = BezPath::from_svg(svg).unwrap();
+        let top = Topology::<i32>::from_path(&bez, 1e-6).unwrap();
+        let result = top.try_contours(|w| *w != 0);
+        assert!(matches!(
+            result,
+            Ok(_) | Err(Error::InconsistentWindingNumbers)
+        ));
+        assert_eq!(top.contours(|w| *w != 0), result.unwrap_or_default());
+    }
+
+    #[test]
+    fn contours_finish_with_no_boundary_segment_leaving_a_point() {
+        contours_finish("M4,-1 C8,1 -7,-2 5,8 L-4,-8 L2,1 L1,1 Z");
+    }
+
+    #[test]
+    fn contours_finish_when_the_walk_misses_its_start() {
+        contours_finish(
+            "M6,5 L3,7 L0,7 L3,6 C3,0 7,6 0,4 L4,2 C4,5 7,4 4,6 L3,3 L3,5 C6,7 2,5 3,1 L2,0 Z \
+             M6,6 L4,4 C5,6 2,5 7,6 L7,6 L7,7 Z \
+             M1,4 C5,2 3,3 5,7 L0,6 L0,7 L6,7 C4,5 3,7 2,1 Z \
+             M3,3 C1,2 3,6 5,6 C6,4 2,7 2,0 L1,6 L6,4 L3,4 L6,7 C0,0 7,1 0,7 C0,0 1,1 1,0 Z",
+        );
+    }
+
+    fn rect_bez_path(x0: f64, y0: f64, x1: f64, y1: f64, reversed: bool) -> BezPath {
+        let mut pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)];
+        if reversed {
+            pts.reverse();
+        }
+        let mut bez = BezPath::default();
+        bez.move_to(pts[0]);
+        for pt in &pts[1..] {
+            bez.line_to(*pt);
+        }
+        bez.close_path();
+        bez
+    }
+
+    #[test]
+    fn merge_coincident_runs_longer_than_two() {
+        // Four copies of one square, two in each direction: the winding number is zero
+        // everywhere, so every edge cancels.
+        let mut bez = BezPath::default();
+        for reversed in [false, false, true, true] {
+            bez.extend(rect_bez_path(0.0, 0.0, 10.0, 10.0, reversed));
+        }
+        let top = Topology::from_path(&bez, 1e-6).unwrap();
+        assert_eq!(top.segment_indices().count(), 0);
+        assert_eq!(top.contours(|w| *w != 0).contours().count(), 0);
+
+        // Three copies, two in one direction and one in the other: the square remains.
+        let mut bez = BezPath::default();
+        for reversed in [false, false, true] {
+            bez.extend(rect_bez_path(0.0, 0.0, 10.0, 10.0, reversed));
+        }
+        let top = Topology::from_path(&bez, 1e-6).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        assert_eq!(contours.contours().count(), 1);
+        let square = contours.contours().next().unwrap();
+        assert_eq!(kurbo::Shape::area(&square.path).abs(), 100.0);
+    }
+
+    fn contour_area_sum(path: &str, eps: f64) -> f64 {
+        use kurbo::Shape as _;
+
+        let bez = BezPath::from_svg(path).unwrap();
+        let top = Topology::from_path(&bez, eps).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        contours.contours().map(|c| c.path.area().abs()).sum()
+    }
+
+    #[test]
+    fn merge_only_pieces_of_one_input_curve() {
+        // Two arches whose right legs agree to within about 1e-6. The legs are deleted as
+        // coincident, and the left end of one arch meets a piece of the other at a simple point.
+        // The shape's area is about 0.000962; merging across the two curves gave a contour
+        // of area 900.
+        let path = "M0,100 C20,0 80,0 100,100 \
+                    C79.99999708333333,0 20.000011666666666,0 -0.000026249999999999998,100 Z";
+        let area = contour_area_sum(path, 1e-6);
+        assert!(area < 0.002, "area {area}");
+    }
+
+    #[test]
+    fn path_followed_by_its_reverse() {
+        // Every vertex of this contour used to look mergeable, which panicked in segs_to_path.
+        let path = "M0,6 Q3,4 3,4 Q5,4 3,4 C4,2 0,6 0,1 Z M0,1 C0,6 4,2 3,4 Q5,4 3,4 Q3,4 0,6 Z";
+        for eps in [1e-3, 1e-6] {
+            let area = contour_area_sum(path, eps);
+            assert!(area < 1e-6, "eps {eps}: area {area}");
+        }
+    }
+
     #[test]
     fn disjoint() {
         let s1 = [[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]];
@@ -2507,6 +3578,31 @@ mod tests {
             [p(-0.5, -0.5), p(1.5, -0.5), p(1.5, 1.5), p(-0.5, 1.5)],
         ];
         assert!(Topology::from_polylines_binary(s1, s2, 1e-5).is_disjoint(FillRule::EvenOdd));
+    }
+
+    #[test]
+    fn disjoint_skips_merged_segments() {
+        // The second set draws the same square twice, so its coincident edges are merged
+        // and the duplicates are deleted.
+        let s1 = [[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]];
+        let s2 = [
+            [p(2.0, 0.0), p(3.0, 0.0), p(3.0, 1.0), p(2.0, 1.0)],
+            [p(2.0, 0.0), p(3.0, 0.0), p(3.0, 1.0), p(2.0, 1.0)],
+        ];
+        let top = Topology::from_polylines_binary(s1, s2, 1e-5);
+        assert!(top.is_disjoint(FillRule::NonZero));
+
+        // With `inside1` always false, it is called for both sides of every segment visited.
+        let calls = std::cell::Cell::new(0);
+        let disjoint = top.is_disjoint_tags(
+            |_| {
+                calls.set(calls.get() + 1);
+                false
+            },
+            |w| FillRule::NonZero.is_inside(w.shape_b),
+        );
+        assert!(disjoint);
+        assert_eq!(calls.get(), 2 * top.segment_indices().count());
     }
 
     #[test]
@@ -2537,6 +3633,132 @@ mod tests {
             [p(0.5, 0.5), p(1.5, 0.5), p(1.5, 1.5), p(0.5, 1.5)],
         ];
         assert!(!Topology::from_polylines_binary(s, EMPTY, 1e-5).has_normal_contours(OneOfTwo::A));
+    }
+
+    // Craft patch (coincident horizontals): n overlapping rectangles that share their top
+    // and bottom edges have n active horizontals at most points of those edges. Each run
+    // gets one output segment, so the count grows with n rather than with n * n.
+    #[test]
+    fn coincident_horizontals_get_one_output_segment_per_run() {
+        let n = 200;
+        let mut bez = BezPath::new();
+        for i in 0..n {
+            let rect = kurbo::Rect::new(i as f64, 0.0, (i + n) as f64, 10.0);
+            bez.extend(kurbo::Shape::path_elements(&rect, 0.0));
+        }
+        let top = Topology::<i32>::from_path(&bez, 1e-6).unwrap();
+        assert_eq!(top.orig_seg.len(), 6 * n - 2);
+        assert_eq!(top.segment_indices().count(), 6 * n - 2);
+
+        let area = |contours: &super::Contours| -> f64 {
+            contours
+                .contours()
+                .map(|c| kurbo::Shape::area(&c.path).abs())
+                .sum()
+        };
+        let nonzero = top.contours(|w| *w != 0);
+        assert_eq!(nonzero.contours().count(), 1);
+        assert_eq!(area(&nonzero), 10.0 * (2 * n - 1) as f64);
+        let even_odd = top.contours(|w| w % 2 != 0);
+        assert_eq!(even_odd.contours().count(), n);
+        assert_eq!(area(&even_odd), 10.0 * n as f64);
+
+        // Squares that share a horizontal edge have a normal boundary: each shared piece
+        // has winding number 1 on both sides.
+        let s = [
+            [p(0.0, 0.0), p(2.0, 0.0), p(2.0, 1.0), p(0.0, 1.0)],
+            [p(0.0, 1.0), p(2.0, 1.0), p(2.0, 2.0), p(0.0, 2.0)],
+        ];
+        assert!(Topology::from_polylines_binary(s, EMPTY, 1e-5).has_normal_contours(OneOfTwo::A));
+
+        // A horizontal spur out of a square and back has winding number 0 on both sides.
+        let s = [[
+            p(0.0, 0.0),
+            p(2.0, 0.0),
+            p(2.0, 2.0),
+            p(0.0, 2.0),
+            p(0.0, 1.0),
+            p(-1.0, 1.0),
+            p(0.0, 1.0),
+        ]];
+        assert!(!Topology::from_polylines_binary(s, EMPTY, 1e-5).has_normal_contours(OneOfTwo::A));
+        let s = [[
+            p(0.0, 0.0),
+            p(2.0, 0.0),
+            p(2.0, 1.0),
+            p(3.0, 1.0),
+            p(2.0, 1.0),
+            p(2.0, 2.0),
+            p(0.0, 2.0),
+        ]];
+        assert!(!Topology::from_polylines_binary(s, EMPTY, 1e-5).has_normal_contours(OneOfTwo::A));
+    }
+
+    fn closed_polyline(points: &[(f64, f64)]) -> BezPath {
+        let mut path = BezPath::default();
+        path.move_to(points[0]);
+        for &pt in &points[1..] {
+            path.line_to(pt);
+        }
+        path.close_path();
+        path
+    }
+
+    // Overlapping rectangles with aligned tops, a square with a hole, and a
+    // curve that splits into monotonic pieces, so that some output segments
+    // are interior, some bound a hole and some can be merged.
+    fn contour_position_shapes() -> Vec<BezPath> {
+        let mut curve = BezPath::default();
+        curve.move_to((-1., 0.));
+        curve.curve_to((-1., -1.), (1., 1.), (1., 0.));
+        curve.line_to((2., 4.));
+        curve.line_to((-2., 4.));
+        curve.close_path();
+        vec![
+            closed_polyline(&[(0., 0.), (4., 0.), (4., 3.), (0., 3.)]),
+            closed_polyline(&[(1., 0.), (5., 0.), (5., 2.), (1., 2.)]),
+            closed_polyline(&[(2., 0.), (3., 0.), (3., 5.), (2., 5.)]),
+            closed_polyline(&[(6., 0.), (10., 0.), (10., 4.), (6., 4.)]),
+            closed_polyline(&[(7., 1.), (7., 3.), (9., 3.), (9., 1.)]),
+            curve,
+        ]
+    }
+
+    #[test]
+    fn contour_positions_cover_only_boundary_segments() {
+        let shapes = contour_position_shapes();
+        let top = Topology::<i32>::from_paths(shapes.iter().map(|s| (s, ())), 1e-6).unwrap();
+        let inside = |w: &i32| *w != 0;
+        let positions = top.contour_positions(&inside);
+        let mut interior = 0;
+        for idx in top.segment_indices() {
+            let on_boundary =
+                inside(&top.winding[idx].clockwise) != inside(&top.winding[idx].counter_clockwise);
+            assert_eq!(
+                positions[idx].path.elements().is_empty(),
+                !on_boundary,
+                "{idx:?}"
+            );
+            if !on_boundary {
+                interior += 1;
+            }
+        }
+        assert!(interior > 0);
+    }
+
+    #[test]
+    fn contours_match_contours_from_all_positions() {
+        let shapes = contour_position_shapes();
+        let top = Topology::<i32>::from_paths(shapes.iter().map(|s| (s, ())), 1e-6).unwrap();
+        let predicates: [fn(&i32) -> bool; 4] =
+            [|w| *w != 0, |w| *w >= 2, |w| *w >= 3, |w| *w % 2 != 0];
+        for inside in predicates {
+            let expected = top
+                .contours_for_positions(inside, top.compute_positions())
+                .unwrap();
+            assert!(!expected.contours.is_empty());
+            assert_eq!(top.contours(inside), expected);
+        }
     }
 
     #[test]
@@ -2630,6 +3852,73 @@ mod tests {
         assert!(!contours[2].outer);
     }
 
+    // An axis-aligned rectangle, clockwise (y down) unless `hole`.
+    fn rect_path(x0: f64, y0: f64, x1: f64, y1: f64, hole: bool) -> String {
+        if hole {
+            format!("M{x0},{y0} L{x0},{y1} L{x1},{y1} L{x1},{y0} Z ")
+        } else {
+            format!("M{x0},{y0} L{x1},{y0} L{x1},{y1} L{x0},{y1} Z ")
+        }
+    }
+
+    // The nonzero contours of `svg`, after checking that each one is outer
+    // exactly when it winds clockwise and when its parent is not outer.
+    fn consistent_contours(svg: &str, eps: f64) -> Contours {
+        let bez = BezPath::from_svg(svg).unwrap();
+        let top = Topology::<i32>::from_path(&bez, eps).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        for (i, c) in contours.contours().enumerate() {
+            let parent_outer = c.parent.map(|p| contours[p].outer);
+            assert_eq!(c.outer, parent_outer != Some(true), "contour {i} of {svg}");
+            let mut local = c.path.clone();
+            local.apply_affine(Affine::translate(-c.path.bounding_box().origin().to_vec2()));
+            assert_eq!(c.outer, local.area() > 0.0, "contour {i} of {svg}");
+        }
+        contours
+    }
+
+    #[test]
+    fn holes_touching_at_a_point_are_siblings() {
+        let square = rect_path(0.0, 0.0, 100.0, 100.0, false);
+        for (a, b) in [
+            ((10.0, 30.0, 30.0, 50.0), (30.0, 50.0, 50.0, 70.0)),
+            ((10.0, 50.0, 30.0, 70.0), (30.0, 30.0, 50.0, 50.0)),
+        ] {
+            // Far from the origin, a plain signed area of these squares has the wrong sign.
+            for (o, eps) in [(0.0, 1e-6), (1e11, 1e-3)] {
+                let svg = rect_path(o, o, o + 100.0, o + 100.0, false)
+                    + &rect_path(o + a.0, o + a.1, o + a.2, o + a.3, true)
+                    + &rect_path(o + b.0, o + b.1, o + b.2, o + b.3, true);
+                let contours = consistent_contours(&svg, eps);
+                assert_eq!(contours.len(), 3);
+                for i in 1..3 {
+                    assert!(!contours[ContourIdx(i)].outer);
+                    assert_eq!(contours[ContourIdx(i)].parent, Some(ContourIdx(0)));
+                }
+            }
+        }
+
+        // Three holes in a chain, touching at (30, 50) and (50, 70).
+        let svg = square.clone()
+            + &rect_path(10.0, 30.0, 30.0, 50.0, true)
+            + &rect_path(30.0, 50.0, 50.0, 70.0, true)
+            + &rect_path(50.0, 70.0, 70.0, 90.0, true);
+        let contours = consistent_contours(&svg, 1e-6);
+        assert_eq!(contours.len(), 4);
+        for i in 1..4 {
+            assert_eq!(contours[ContourIdx(i)].parent, Some(ContourIdx(0)));
+        }
+
+        // Two touching holes in an island, inside a hole of the square.
+        let svg = square
+            + &rect_path(5.0, 5.0, 95.0, 95.0, true)
+            + &rect_path(10.0, 10.0, 90.0, 90.0, false)
+            + &rect_path(20.0, 30.0, 40.0, 50.0, true)
+            + &rect_path(40.0, 50.0, 60.0, 70.0, true);
+        let contours = consistent_contours(&svg, 1e-6);
+        assert_eq!(contours.len(), 5);
+    }
+
     // Checks that all output segments intersect one another only at endpoints.
     // fn check_intersections(top: &Topology) {
     //     for i in 0..top.winding.inner.len() {
@@ -2661,6 +3950,243 @@ mod tests {
     //     }
     // }
 
+    // Craft patch (work limit). Stacked copies of a circle make every segment
+    // overlap every other, and the sweep compares each segment with all of them.
+    #[test]
+    fn work_limit() {
+        use kurbo::{Circle, Shape};
+
+        let circle = Circle::new((100.0, 100.0), 50.0).to_path(1e-3);
+        let paths = vec![circle; 20];
+        let tagged = || paths.iter().map(|p| (p, ()));
+
+        let result = Topology::<i32>::from_paths_with_work_limit(tagged(), 1e-6, 1_000);
+        assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
+
+        let expected = Topology::<i32>::from_paths(tagged(), 1e-6)
+            .unwrap()
+            .contours(|w| *w != 0);
+        let actual = Topology::<i32>::from_paths_with_work_limit(tagged(), 1e-6, u64::MAX)
+            .unwrap()
+            .contours(|w| *w != 0);
+        let paths = |c: &super::Contours| c.contours().map(|c| c.path.clone()).collect::<Vec<_>>();
+        assert_eq!(paths(&actual), paths(&expected));
+        assert!(!paths(&actual).is_empty());
+    }
+
+    #[test]
+    fn work_limit_constructor_rejects_coordinates_that_are_too_large() {
+        let huge = f64::MAX / 8.0;
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((huge, 0.0));
+        path.line_to((0.0, huge));
+        path.close_path();
+        let result = Topology::<i32>::from_paths_with_work_limit([(&path, ())], 1e-6, 1_000_000);
+        assert_eq!(result.err(), Some(crate::Error::TooLarge));
+    }
+
+    // `n` tall bars (the second set) west of a column of `m` small squares (the first set).
+    fn bars_and_squares(n: usize, m: usize) -> (Vec<[Point; 4]>, Vec<[Point; 4]>) {
+        let rect =
+            |x0: f64, y0: f64, x1: f64, y1: f64| [p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)];
+        let height = 3.0 * m as f64 + 3.0;
+        let bars = (0..n)
+            .map(|i| {
+                let x = 3.0 * i as f64;
+                rect(x, 0.0, x + 1.0, height)
+            })
+            .collect();
+        let x = 3.0 * n as f64 + 10.0;
+        let squares = (0..m)
+            .map(|j| {
+                let y = 3.0 * j as f64 + 1.0;
+                rect(x, y, x + 1.0, y + 1.0)
+            })
+            .collect();
+        (squares, bars)
+    }
+
+    #[test]
+    fn contour_starts_follow_each_west_chain_once() {
+        let (squares, bars) = bars_and_squares(200, 200);
+        let top = Topology::from_polylines_binary(squares, bars, 1e-6);
+        super::WEST_STEPS.with(|n| n.set(0));
+        let contours = top.contours(|w| w.shape_a != 0 && w.shape_b == 0);
+        // No bar edge is on the boundary of the squares minus the bars, so the west chain of
+        // every square passes all 400 bar edges. Each link is followed at most once; walking
+        // the chain again for each square follows about 400 * 200 links.
+        let steps = super::WEST_STEPS.with(|n| n.get());
+        let segs = top.segment_indices().count();
+        assert!(steps <= segs, "{steps} scan-west links followed for {segs} segments");
+        assert_eq!(contours.contours().count(), 200);
+        assert!(contours.contours().all(|c| c.outer && c.parent.is_none()));
+    }
+
+    #[test]
+    fn contours_of_one_polygon_test_the_boundary_only_where_needed() {
+        // One convex polygon with `k` edges: the walk from its first edge visits every other
+        // edge, so no edge past the first needs its own boundary test.
+        let k = 1000;
+        let poly: Vec<Point> = (0..k)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / k as f64;
+                p(100.0 * a.cos(), 100.0 * a.sin())
+            })
+            .collect();
+        let top = Topology::from_polylines_binary([poly], std::iter::empty::<Vec<Point>>(), 1e-6);
+        let segs = top.segment_indices().count();
+        let calls = std::cell::Cell::new(0usize);
+        let contours = top.contours(|w| {
+            calls.set(calls.get() + 1);
+            w.shape_a != 0
+        });
+        assert_eq!(contours.contours().count(), 1);
+        // The walk calls `inside` four times per edge: once to find the next boundary edge
+        // and three times to check the winding numbers, which it does in release builds too.
+        // `contour_positions` tests each edge for the boundary with two more.
+        let per_seg = 6;
+        assert!(
+            calls.get() <= per_seg * segs + 16,
+            "{} calls to inside for {segs} segments",
+            calls.get()
+        );
+    }
+
+    #[test]
+    fn contour_starts_find_the_boundary_past_non_boundary_segments() {
+        let (mut set_a, bars) = bars_and_squares(20, 20);
+        // A frame around everything: the squares are holes in it, and the bars do not
+        // change the set, so every square's west chain passes the bar edges and ends at the
+        // frame's left edge.
+        set_a.push([
+            p(-5.0, -5.0),
+            p(200.0, -5.0),
+            p(200.0, 200.0),
+            p(-5.0, 200.0),
+        ]);
+        let top = Topology::from_polylines_binary(set_a, bars, 1e-6);
+        let contours = top.contours(|w| w.shape_a % 2 != 0);
+        let count = contours.contours().count();
+        assert_eq!(count, 21);
+        let roots: Vec<ContourIdx> = (0..count)
+            .map(ContourIdx)
+            .filter(|&i| contours[i].parent.is_none())
+            .collect();
+        assert_eq!(roots.len(), 1);
+        let frame = roots[0];
+        assert!(contours[frame].outer);
+        for i in (0..count).map(ContourIdx).filter(|&i| i != frame) {
+            assert_eq!(contours[i].parent, Some(frame));
+            assert!(!contours[i].outer);
+        }
+    }
+
+    // Craft patch (work limit). Closed paths made only of horizontal segments
+    // at one height take little sweep work, but each step of a sweep line
+    // range visits every active horizontal segment, so the topology visits
+    // about n^2 of them. Those visits count toward the limit. Every run of
+    // these coincident segments cancels, so they make no output segments.
+    #[test]
+    fn work_limit_counts_the_horizontal_splits() {
+        let n = 300;
+        let paths: Vec<BezPath> = (0..n)
+            .map(|i| {
+                let i = f64::from(i);
+                let mut path = BezPath::new();
+                path.move_to((i, 0.0));
+                path.line_to((2.0 * f64::from(n) + i, 0.0));
+                path.close_path();
+                path
+            })
+            .collect();
+        let tagged = || paths.iter().map(|p| (p, ()));
+
+        let result = Topology::<i32>::from_paths_with_work_limit(tagged(), 1e-6, 100_000);
+        assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
+
+        let expected = Topology::<i32>::from_paths(tagged(), 1e-6).unwrap();
+        let actual = Topology::<i32>::from_paths_with_work_limit(tagged(), 1e-6, u64::MAX).unwrap();
+        assert_eq!(actual.winding.inner.len(), expected.winding.inner.len());
+    }
+
+    // Craft patch (work limit). 1,200 separate squares make 4,800 output
+    // segments, each holding points, neighbors and winding numbers. The output
+    // limit stops the topology before it allocates them all. An `i32` winding
+    // number takes one storage unit, so each output segment takes three.
+    #[test]
+    fn output_limit() {
+        let paths: Vec<BezPath> = (0..1200)
+            .map(|i| {
+                let x = 3.0 * f64::from(i);
+                let mut path = BezPath::new();
+                path.move_to((x, 0.0));
+                path.line_to((x + 1.0, 0.0));
+                path.line_to((x + 1.0, 1.0));
+                path.line_to((x, 1.0));
+                path.close_path();
+                path
+            })
+            .collect();
+        let tagged = || paths.iter().map(|p| (p, ()));
+
+        let result = Topology::<i32>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, 10_000);
+        assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
+
+        let all = Topology::<i32>::from_paths(tagged(), 1e-6).unwrap().winding.inner.len();
+        let exact = Topology::<i32>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, 3 * all).unwrap();
+        assert_eq!(exact.winding.inner.len(), all);
+        let result = Topology::<i32>::from_paths_with_limits(tagged(), 1e-6, u64::MAX, 3 * all - 1);
+        assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
+    }
+
+    // Craft patch (work limit). A winding number may report any storage size;
+    // constructors without an output limit do not count it.
+    #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+    struct HugeWinding(i32);
+
+    impl std::ops::Add for HugeWinding {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self {
+            HugeWinding(self.0 + rhs.0)
+        }
+    }
+
+    impl std::ops::AddAssign for HugeWinding {
+        fn add_assign(&mut self, rhs: Self) {
+            self.0 += rhs.0;
+        }
+    }
+
+    impl super::WindingNumber for HugeWinding {
+        type Tag = ();
+        fn single((): (), positive: bool) -> Self {
+            HugeWinding(if positive { 1 } else { -1 })
+        }
+        fn of_tag(&self, (): ()) -> Self {
+            self.clone()
+        }
+        fn storage_units(&self) -> usize {
+            usize::MAX
+        }
+    }
+
+    #[test]
+    fn unlimited_constructors_ignore_storage_units() {
+        let mut square = BezPath::new();
+        square.move_to((0.0, 0.0));
+        square.line_to((1.0, 0.0));
+        square.line_to((1.0, 1.0));
+        square.line_to((0.0, 1.0));
+        square.close_path();
+        let paths = [(&square, ())];
+
+        assert!(Topology::<HugeWinding>::from_paths(paths, 1e-6).is_ok());
+        assert!(Topology::<HugeWinding>::from_paths_with_work_limit(paths, 1e-6, u64::MAX).is_ok());
+        let result = Topology::<HugeWinding>::from_paths_with_limits(paths, 1e-6, u64::MAX, usize::MAX);
+        assert_eq!(result.err(), Some(crate::Error::WorkLimitExceeded));
+    }
+
     fn run_perturbation(ps: Vec<Perturbation<F64Perturbation>>) {
         let base = vec![vec![
             p(0.0, 0.0),
@@ -2677,6 +4203,72 @@ mod tests {
         let eps = 0.1;
         let _top = Topology::from_polylines_binary(perturbed_polylines, EMPTY, eps);
         //check_intersections(&top);
+    }
+
+    // A column of shapes, each made of two closed paths whose wavy cubic sides
+    // cross each other twice.
+    fn wavy_column(rows: usize) -> BezPath {
+        let mut path = BezPath::new();
+        for k in 0..rows {
+            let y = 10.0 * k as f64;
+            for offset in [0.0, 0.7] {
+                path.move_to((offset, y));
+                path.curve_to(
+                    (offset + 3.0, y + 2.0),
+                    (offset - 3.0, y + 6.0),
+                    (offset, y + 8.0),
+                );
+                path.line_to((offset + 2.0, y + 8.0));
+                path.line_to((offset + 2.0, y));
+                path.close_path();
+            }
+        }
+        path
+    }
+
+    // The positions that `compute_positions_correct` computes, with a cache
+    // that drops ended pairs or one that keeps every pair.
+    fn correct_positions(top: &Topology<i32>, evict: bool) -> (String, usize) {
+        let mut cmp = ComparisonCache::new(top.eps, top.eps / 2.0);
+        if !evict {
+            cmp.never_evict();
+        }
+        let mut endpoints = HalfOutputSegVec::with_size(top.orig_seg.len());
+        for idx in top.orig_seg.indices() {
+            endpoints[idx.first_half()] = top.points[top.point_idx[idx.first_half()]].to_kurbo();
+            endpoints[idx.second_half()] = top.points[top.point_idx[idx.second_half()]].to_kurbo();
+        }
+        let out = crate::position::compute_positions(
+            &top.segments,
+            &top.orig_seg,
+            &mut cmp,
+            &endpoints,
+            &top.build_scan_line_orders(),
+            top.eps / 4.0,
+        );
+        (format!("{out:?}"), cmp.cached_pairs())
+    }
+
+    #[test]
+    fn evicting_comparisons_keeps_the_correct_positions() {
+        let path = wavy_column(200);
+        for eps in [0.01, 0.25] {
+            let top = Topology::<i32>::from_paths_with_correctness(
+                [(&path, ())],
+                eps,
+                Correctness::ReallyCorrect,
+            )
+            .unwrap();
+            let (kept, kept_pairs) = correct_positions(&top, false);
+            let (evicted, evicted_pairs) = correct_positions(&top, true);
+            assert!(kept == evicted);
+            assert_eq!(format!("{:?}", top.compute_positions()), evicted);
+            assert!(kept_pairs >= 400, "{kept_pairs}");
+            assert!(
+                evicted_pairs * 10 < kept_pairs,
+                "{evicted_pairs} {kept_pairs}"
+            );
+        }
     }
 
     proptest! {

@@ -44,12 +44,16 @@ impl FloatPerturbation for F64Perturbation {
                     }
                     std::num::FpCategory::Subnormal => {
                         let bits = f.abs().to_bits();
+                        // Craft patch (ulp across zero): a step toward zero that is larger
+                        // than `f` ends on the other side of zero.
+                        let crosses_zero = !same_sign && u64::from(n.unsigned_abs()) > bits;
                         let bits = if same_sign {
                             bits + u64::from(n.unsigned_abs())
                         } else {
                             bits.abs_diff(u64::from(n.unsigned_abs()))
                         };
-                        f.signum() * f64::from_bits(bits)
+                        let sign = if crosses_zero { -f.signum() } else { f.signum() };
+                        sign * f64::from_bits(bits)
                     }
                     std::num::FpCategory::Normal => {
                         let delta = if same_sign {
@@ -60,7 +64,10 @@ impl FloatPerturbation for F64Perturbation {
                         // Taking the absolute value sets the sign bit to zero, so the
                         // addition should never overflow.
                         let bits = f.abs().to_bits().checked_add_signed(delta).unwrap();
-                        let x = if bits & sign_bit != 0 {
+                        // Craft patch (ulp overflow): a step past `f64::MAX` reaches the
+                        // infinity and NaN encodings, not the sign bit, so it is clamped to
+                        // infinity there.
+                        let x = if bits >= f64::INFINITY.to_bits() {
                             f64::INFINITY
                         } else {
                             f64::from_bits(bits)
@@ -195,6 +202,48 @@ pub fn realize_perturbation(
             let mut next = realize_perturbation(base_cases, left);
             next.extend(realize_perturbation(base_cases, right));
             next
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subnormal_ulp_step_crosses_zero() {
+        let tiny = f64::from_bits(1);
+
+        assert_eq!(F64Perturbation::Ulp(-2).apply(&tiny), -tiny);
+        assert_eq!(F64Perturbation::Ulp(2).apply(&-tiny), tiny);
+
+        assert_eq!(F64Perturbation::Ulp(-1).apply(&tiny).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(F64Perturbation::Ulp(1).apply(&-tiny).to_bits(), (-0.0_f64).to_bits());
+
+        assert_eq!(F64Perturbation::Ulp(-1).apply(&f64::from_bits(3)), f64::from_bits(2));
+        assert_eq!(F64Perturbation::Ulp(1).apply(&-f64::from_bits(3)), -f64::from_bits(2));
+    }
+}
+
+// Craft patch (ulp overflow).
+#[cfg(test)]
+mod ulp_overflow_tests {
+    use super::*;
+
+    #[test]
+    fn ulp_step_past_f64_max_is_infinite() {
+        for (n, f, expected) in [
+            (2, f64::MAX, f64::INFINITY),
+            (127, f64::MAX, f64::INFINITY),
+            (-2, -f64::MAX, f64::NEG_INFINITY),
+            (1, f64::from_bits(f64::MAX.to_bits() - 1), f64::MAX),
+            (-1, f64::MAX, f64::from_bits(f64::MAX.to_bits() - 1)),
+        ] {
+            assert_eq!(
+                F64Perturbation::Ulp(n).apply(&f),
+                expected,
+                "Ulp({n}) of {f}"
+            );
         }
     }
 }

@@ -30,10 +30,14 @@ impl CurveOrderEntry {
 
 /// Observability for the curve comparison algorithm, recording recursion
 /// depth by y-interval.
+///
+/// Entries are recorded only with the `metrics` feature. Without it,
+/// `entries` is always empty.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Metrics {
+    // Craft patch (inline metrics): a `SmallVec` replaces the package's `Vec`.
     /// Each interval records a single recursion depth measurement.
-    pub entries: Vec<MetricsEntry>,
+    pub entries: SmallVec<[MetricsEntry; 2]>,
 }
 
 /// A single observability entry.
@@ -139,8 +143,21 @@ impl CurveOrder {
         }
     }
 
+    // Craft patch (far-apart comparison).
+    /// A curve order with the same order at all heights between `start` and `end`.
+    pub(crate) fn constant(start: f64, end: f64, order: Order) -> Self {
+        let mut ret = CurveOrder::new(start);
+        ret.push(end, order, MetricsStatus::default());
+        ret
+    }
+
     fn push(&mut self, end: f64, order: Order, status: MetricsStatus) {
-        self.metrics.entries.push(MetricsEntry::new(end, status));
+        // Craft patch (metrics opt-in): an entry is pushed for every interval
+        // of every comparison, and `flip` clones them, so they are recorded
+        // only with the `metrics` feature.
+        if cfg!(feature = "metrics") {
+            self.metrics.entries.push(MetricsEntry::new(end, status));
+        }
         if let Some(last) = self.cmps.last_mut() {
             match (last.order, order) {
                 (Order::Right, Order::Right)
@@ -157,8 +174,10 @@ impl CurveOrder {
                     // What we do is insert a zero-height "ish" interval. Then
                     // adding y-slop will turn it into a taller interval.
                     debug_assert!(end >= last.end);
+                    // Craft patch (zero-height Ish): the package ended this entry at `end`.
+                    let ish_end = last.end;
                     self.cmps.push(CurveOrderEntry {
-                        end,
+                        end: ish_end,
                         order: Order::Ish,
                     });
                     self.cmps.push(CurveOrderEntry { end, order });
@@ -202,33 +221,36 @@ impl CurveOrder {
         &self,
         y: f64,
     ) -> Option<CurveInteraction> {
-        let mut iter = self
-            .iter()
-            .skip_while(|(_start, end, _order)| end <= &y)
-            .skip_while(|(_start, _end, order)| *order == Order::Left);
+        let mut iter = self.iter().skip_while(|(_start, end, _order)| end <= &y);
+        // The height that a crossing found right away is reported at.
+        let mut from = y;
 
-        let (y0, y1, order) = iter.next()?;
-        if order == Order::Right {
-            return Some(CurveInteraction::Cross(y, y));
-        }
-
-        let Some((_, next_y1, next_order)) = iter.next() else {
-            return Some(CurveInteraction::Touch(y0, y1));
-        };
-
-        match next_order {
-            Order::Right => Some(CurveInteraction::Cross(y0, y1)),
-            Order::Left => {
-                if y < y0 {
-                    Some(CurveInteraction::Touch(y0, y1))
-                } else {
-                    self.next_touch_after(next_y1)
-                }
+        loop {
+            let (y0, y1, order) = iter.find(|(_start, _end, order)| *order != Order::Left)?;
+            if order == Order::Right {
+                return Some(CurveInteraction::Cross(from, from));
             }
-            Order::Ish => {
-                // The current order is Ish and adjacent orders get merged,
-                // so the next one isn't Ish.
-                unreachable!();
+
+            let Some((_, next_y1, next_order)) = iter.next() else {
+                return Some(CurveInteraction::Touch(y0, y1));
+            };
+
+            match next_order {
+                Order::Right => return Some(CurveInteraction::Cross(y0, y1)),
+                Order::Left => {
+                    if y < y0 {
+                        return Some(CurveInteraction::Touch(y0, y1));
+                    }
+                    // `y` is inside this Ish interval, so look for the next
+                    // one. It starts after `y`, so it is compared with `y`
+                    // and not with the end of the Left interval before it.
+                    from = next_y1;
+                }
+                Order::Ish => {
+                    // The current order is Ish and adjacent orders get merged,
+                    // so the next one isn't Ish.
+                    unreachable!();
+                }
             }
         }
     }
@@ -263,8 +285,11 @@ impl CurveOrder {
 
         let mut ret = SmallVec::<[CurveOrderEntry; 3]>::new();
 
-        // unwrap: cmps is always non-empty
-        let last_end = self.cmps.last().unwrap().end;
+        // Craft patch (input rules): curves with disjoint vertical ranges have
+        // an empty order.
+        let Some(last_end) = self.cmps.last().map(|e| e.end) else {
+            return self;
+        };
 
         if self.start == last_end || self.cmps.len() <= 1 {
             return self;
@@ -314,14 +339,16 @@ impl CurveOrder {
         CurveOrder {
             start: self.start,
             cmps: ret,
-            metrics: Metrics::default(),
+            metrics: self.metrics,
         }
     }
 
     /// Asserts that we satisfy our internal invariants. For testing only.
     pub fn check_invariants(&self) {
         let mut cmps = self.cmps.iter();
-        let mut last = cmps.next().unwrap();
+        let Some(mut last) = cmps.next() else {
+            return;
+        };
         for cmp in cmps {
             assert!(last.end <= cmp.end);
             assert!(last.order != cmp.order);
@@ -365,8 +392,13 @@ impl CurveOrder {
     /// As a corner case, if this comparison ends exactly at `y` then we return
     /// the ordering exactly at `y`.
     pub fn order_after(&self, y: f64) -> Order {
-        if y == self.cmps.last().unwrap().end {
-            self.cmps.last().unwrap().order
+        // Craft patch (input rules): curves with disjoint vertical ranges have
+        // an empty order.
+        let Some(last) = self.cmps.last() else {
+            return Order::Ish;
+        };
+        if y == last.end {
+            last.order
         } else {
             self.iter()
                 .skip_while(|(_start, end, _order)| end <= &y)
@@ -377,6 +409,17 @@ impl CurveOrder {
 }
 
 /// Find the parameter `t` at which `c` crosses height `y`.
+///
+/// `c` must be y-monotone with `c.p0.y < c.p3.y`, and `y` must be in
+/// `c.p0.y..=c.p3.y`. For other inputs, release builds return a parameter in
+/// `0.0..=1.0` that need not be a crossing.
+///
+/// # Panics
+///
+/// Debug builds panic unless `c.p0.y <= y && y <= c.p3.y && c.p0.y < c.p3.y`.
+/// They do not check whether `c` is y-monotone. For a curve that is not, they
+/// return one of its crossings, or a parameter that is not a crossing, without
+/// a panic.
 pub fn solve_t_for_y(c: CubicBez, y: f64) -> f64 {
     debug_assert!(
         c.p0.y <= y && y <= c.p3.y && c.p0.y < c.p3.y,
@@ -390,13 +433,34 @@ pub fn solve_t_for_y(c: CubicBez, y: f64) -> f64 {
         return 1.0;
     }
 
-    let c3 = c.p3.y - 3.0 * c.p2.y + 3.0 * c.p1.y - c.p0.y;
-    let c2 = 3.0 * (c.p2.y - 2.0 * c.p1.y + c.p0.y);
-    let c1 = 3.0 * (c.p1.y - c.p0.y);
-    let c0 = c.p0.y - y;
+    // The coefficients below, and the derivative and sums that polycool forms from them, reach
+    // about 28 times the largest height. Above `f64::MAX / 32` they can overflow to infinity,
+    // and polycool's critical point search then recurses until the stack overflows. Dividing
+    // every height by 32 is exact and does not move the root.
+    let heights = [c.p0.y, c.p1.y, c.p2.y, c.p3.y, y];
+    let max_height = heights.iter().fold(0.0f64, |m, h| m.max(h.abs()));
+    let scale = if max_height > f64::MAX / 32.0 {
+        1.0 / 32.0
+    } else {
+        1.0
+    };
+    let [p0, p1, p2, p3, target] = heights.map(|h| h * scale);
+
+    let c3 = p3 - 3.0 * p2 + 3.0 * p1 - p0;
+    let c2 = 3.0 * (p2 - 2.0 * p1 + p0);
+    let c1 = 3.0 * (p1 - p0);
+    let c0 = p0 - target;
     let cubic = Cubic::new([c0, c1, c2, c3]);
 
-    let eps = 1e-12;
+    // Craft patch (near-parallel t tolerance): the package asked for `t` to
+    // within 1e-12. A `t` that is off by `dt` moves x by `|dx/dt| * dt`,
+    // which grows with the coordinates while the comparison tolerance does
+    // not, so near 3e7 the pieces that `y_subsegment` cuts moved by tens of
+    // tolerances and `intersect_cubics_rec` split near-parallel curves into
+    // y intervals shorter than the tolerance. With an `x_error` of zero the
+    // root finder stops when its step is zero or its bracket reaches
+    // adjacent floats.
+    let eps = 0.0;
     let roots = cubic.roots_between(0.0, 1.0, eps);
     if !roots.is_empty() {
         return roots[0];
@@ -426,6 +490,15 @@ pub fn solve_x_for_y(c: CubicBez, y: f64) -> f64 {
 ///
 /// The input curve should be monotonic in `y`, and its range should include
 /// `y0` and `y1` (which should be ordered).
+///
+/// For other inputs, release builds return a curve that starts at height `y0`
+/// and ends at height `y1`, but whose ends need not lie on `c`. With `y0 > y1`
+/// it runs from `y0` down to `y1`.
+///
+/// # Panics
+///
+/// Debug builds panic when `y0` is not less than `y1` or when `c` does not
+/// cover `y0..=y1`. They do not check whether `c` is y-monotone.
 pub fn y_subsegment(c: CubicBez, y0: f64, y1: f64) -> CubicBez {
     debug_assert!(y0 < y1);
     debug_assert!(c.p0.y <= y0 && y1 <= c.p3.y);
@@ -632,6 +705,30 @@ impl<const CAP: usize> ApproxComparison<CAP> {
     }
 }
 
+/// Craft patch (quadratic scale): when `b * b` or `a * c` would underflow or
+/// overflow, multiplies `c`, `b` and `a` by one power of two so that the larger
+/// of the two is near 1, keeping every coefficient below `2^1021`. Otherwise it
+/// returns them unchanged. Multiplying all three by the same power of two does
+/// not move the roots.
+fn balance_quadratic(c: f64, b: f64, a: f64) -> (f64, f64, f64) {
+    if !(c.is_finite() && b.is_finite() && a.is_finite()) {
+        return (c, b, a);
+    }
+    let exp = |x: f64| (x != 0.0).then(|| x.abs().log2().floor() as i32);
+    let (ec, eb, ea) = (exp(c), exp(b), exp(a));
+    let square = eb.map(|e| 2 * e);
+    let product = ea.zip(ec).map(|(ea, ec)| ea + ec);
+    let (Some(e), Some(max)) = (square.max(product), ec.max(eb).max(ea)) else {
+        return (c, b, a);
+    };
+    if (-1000..=1000).contains(&e) {
+        return (c, b, a);
+    }
+    let k = (-e.div_euclid(2)).min(1020 - max);
+    let (s1, s2) = (2f64.powi(k / 2), 2f64.powi(k - k / 2));
+    (c * s1 * s2, b * s1 * s2, a * s1 * s2)
+}
+
 /// Partitions the real line according to the sign of `q`. The return value is
 /// `(initially_positive, r0, r1)`, where `r0 < r1`. If `initially_positive`,
 /// the quadratic is positive up to `r0`, then negative up to `r1`, and then
@@ -643,6 +740,7 @@ impl<const CAP: usize> ApproxComparison<CAP> {
 /// and then negative from there until `r1`.
 pub(crate) fn quadratic_signs(q: Quadratic) -> (bool, f64, f64) {
     let &[c, b, a] = q.coeffs();
+    let (c, b, a) = balance_quadratic(c, b, a);
     let disc = b * b - 4.0 * a * c;
     // The handling of b here is a little confusing, and it has to do with how
     // the "roots" come out in the linear case. If a is zero, and b is not we
@@ -702,6 +800,34 @@ pub(crate) fn quadratic_signs(q: Quadratic) -> (bool, f64, f64) {
     let r2 = c / numerator;
     let (r1, r2) = if r1 <= r2 { (r1, r2) } else { (r2, r1) };
     (!initially_negative, r1, r2)
+}
+
+/// Returns true if every coefficient of `q` is finite.
+fn has_finite_coeffs(q: Quadratic) -> bool {
+    q.coeffs().iter().all(|c| c.is_finite())
+}
+
+/// Pushes `Left` to `out` where `q` is negative and `Ish` where it is positive,
+/// restricted to the interval between `y0` and `y1`. If a coefficient of `q`
+/// is not finite, the whole interval is `Ish`.
+fn push_left_or_ish<const CAP: usize>(
+    q: Quadratic,
+    y0: f64,
+    y1: f64,
+    out: &mut ArrayVec<CurveEntry<MaybeOrder>, CAP>,
+) {
+    if has_finite_coeffs(q) {
+        push_quadratic_sign(q, Order::Left, Order::Ish, y0, y1, out);
+    } else if y1 > y0 {
+        let order = Order::Ish.into();
+        if let Some(e) = out.last_mut()
+            && e.order == order
+        {
+            e.end = y1;
+        } else {
+            out.push(CurveEntry { end: y1, order });
+        }
+    }
 }
 
 /// Populates `out` according to the sign of `q`, restricted to
@@ -780,6 +906,13 @@ fn push_two_level_quadratic_signs(
     let lower_q = raise_quadratic(q, -lower);
     let upper_q = raise_quadratic(q, -upper);
 
+    // A coefficient that is NaN or infinite says nothing about the sign, so the
+    // order over the whole interval is unknown.
+    if !has_finite_coeffs(lower_q) || !has_finite_coeffs(upper_q) {
+        push(y1, MaybeOrder::Unknown);
+        return;
+    }
+
     let (lower_initially_positive, r_lower, s_lower) = quadratic_signs(lower_q);
     let (upper_initially_positive, r_upper, s_upper) = quadratic_signs(upper_q);
     // dbg!(r_lower, s_lower, r_upper, s_upper);
@@ -814,7 +947,7 @@ fn push_two_level_quadratic_signs(
 
 /// An axis-aligned quadratic approximation to a cubic Bézier.
 ///
-/// The quadratic here gives `y` as a function of `x`.
+/// The quadratic here gives `x` as a function of `y`.
 #[derive(Clone, Copy, Debug)]
 pub struct QuadraticApprox {
     /// The quadratic approximation.
@@ -882,12 +1015,31 @@ impl QuadraticApprox {
         let x = cubic_from_bez_x(c);
         let [y0, y1, y2, y3] = *y.coeffs();
         let [x0, x1, x2, x3] = *x.coeffs();
+        // A product of two y coefficients overflows once the curve is taller than about
+        // 1e154. `c2` is then small enough that `c2` times the product is finite, so in
+        // that case these multiply by `c2` before the second factor.
+        let c2_times = |a: f64, b: f64| {
+            let prod = a * b;
+            if prod.is_finite() {
+                c2 * prod
+            } else {
+                c2 * a * b
+            }
+        };
+        let c2_times_sum = |k: f64, a: f64, b: f64, c: f64, d: f64| {
+            let sum = a * b + c * d;
+            if sum.is_finite() {
+                c2 * k * sum
+            } else {
+                c2 * k * a * b + c2 * k * c * d
+            }
+        };
         let error = Poly::new([
             c0 + c1 * y0 + c2 * y0 * y0 - x0,
-            c1 * y1 + c2 * (2.0 * y0 * y1) - x1,
-            c1 * y2 + c2 * (2.0 * y0 * y2 + y1 * y1) - x2,
-            c1 * y3 + c2 * 2.0 * (y0 * y3 + y1 * y2) - x3,
-            c2 * (2.0 * y1 * y3 + y2 * y2),
+            c1 * y1 + c2_times(2.0 * y0, y1) - x1,
+            c1 * y2 + c2_times_sum(1.0, 2.0 * y0, y2, y1, y1) - x2,
+            c1 * y3 + c2_times_sum(2.0, y0, y3, y1, y2) - x3,
+            c2_times_sum(1.0, 2.0 * y1, y3, y2, y2),
             c2 * 2.0 * y2 * y3,
             c2 * y3 * y3,
         ]);
@@ -1039,7 +1191,7 @@ impl QuadraticApprox {
             let r = r.unwrap_or_else(|| self.middle_bound(Bound::Right, tolerance, outer_bound));
             let l = l.unwrap_or_else(|| other.middle_bound(Bound::Left, tolerance, outer_bound));
             let end = (y0 + tolerance).min(y1);
-            push_quadratic_sign(r - l, Order::Left, Order::Ish, y0, end, &mut buf.entries);
+            push_left_or_ish(r - l, y0, end, &mut buf.entries);
             y0 = end;
         }
 
@@ -1054,14 +1206,14 @@ impl QuadraticApprox {
         if end > y0 {
             let r = self.middle_bound(Bound::Right, tolerance, outer_bound);
             let l = other.middle_bound(Bound::Left, tolerance, outer_bound);
-            push_quadratic_sign(r - l, Order::Left, Order::Ish, y0, end, &mut buf.entries);
+            push_left_or_ish(r - l, y0, end, &mut buf.entries);
             y0 = end;
         }
 
         if y0 < y1 {
             let r = r.unwrap_or_else(|| self.middle_bound(Bound::Right, tolerance, outer_bound));
             let l = l.unwrap_or_else(|| other.middle_bound(Bound::Left, tolerance, outer_bound));
-            push_quadratic_sign(r - l, Order::Left, Order::Ish, y0, y1, &mut buf.entries);
+            push_left_or_ish(r - l, y0, y1, &mut buf.entries);
         }
 
         buf
@@ -1142,24 +1294,76 @@ fn fit_quadratic(c: CubicBez) -> Quadratic {
     if p1.y - p0.y < 1e-12 || p2.y - p1.y < 1e-12 {
         // p0.x * (y - p3.y) / (p0.y - p3.y)
         // + p3.x * (y - p0.y) / (p3.y - p0.y)
-        return Quadratic::new([
-            (p0.x * p3.y - p3.x * p0.y) / (p3.y - p0.y),
-            (p3.x - p0.x) / (p3.y - p0.y),
-            0.0,
-        ]);
+        let c1 = (p3.x - p0.x) / (p3.y - p0.y);
+        let mut c0 = (p0.x * p3.y - p3.x * p0.y) / (p3.y - p0.y);
+        if !c0.is_finite() {
+            // Craft patch (huge chord): the product of an x coordinate and a
+            // height overflows when the two together pass f64::MAX, for example
+            // x near 1e305 with heights near 1e4, and the difference of the two
+            // products is then NaN. Take the line through p0 with slope c1.
+            c0 = p0.x - c1 * p0.y;
+        }
+        return Quadratic::new([c0, c1, 0.0]);
     }
 
-    let p = interpolate_quadratic(p0.y, p0.x, p1.y, p1.x, p2.y, p2.x);
-    let q = interpolate_quadratic(p0.y, 1.0, p1.y, -1.0, p2.y, 1.0);
+    // The interpolation multiplies two heights together, which overflows once a
+    // height passes about 1.3e154, and the coefficients of `q` below are about
+    // 1 / height^2, which underflows there. When a height is above 2^500, fit in
+    // the heights times the power of two `s` that brings the largest height to
+    // between 2 and 4, and scale the coefficients back at the end. Multiplying
+    // by a power of two is exact for normal numbers, and multiplying by 1
+    // changes nothing. The interpolation divides each x coordinate by a product
+    // of two height differences, which overflows for x coordinates near f64::MAX
+    // once the heights are scaled down, so the x coordinates are scaled the same
+    // way when one of them is above 2^500.
+    let ys = [p0.y, p1.y, p2.y, p3.y];
+    let xs = [p0.x, p1.x, p2.x, p3.x];
+    let k_s = pow2_scale_exponent(&ys);
+    let k_r = pow2_scale_exponent(&xs);
+    let s = pow2(k_s);
+    let r = pow2(k_r);
+    let p = interpolate_quadratic(p0.y * s, p0.x * r, p1.y * s, p1.x * r, p2.y * s, p2.x * r);
+    let q = interpolate_quadratic(p0.y * s, 1.0, p1.y * s, -1.0, p2.y * s, 1.0);
 
     // Note that the denominator won't be small (assuming that p0.y, p1.y, p2.y,
     // p3.y are ordered), because q(p2.y) is 1, and q has already had two sign
     // changes before p2.y, so it can't change sign again.
-    let e = (p.eval(p3.y) - p3.x) / (q.eval(p3.y) + 1.0);
+    let e = (p.eval(p3.y * s) - p3.x * r) / (q.eval(p3.y * s) + 1.0);
 
     let p = p.coeffs();
     let q = q.coeffs();
-    Quadratic::new([p[0] - q[0] * e, p[1] - q[1] * e, p[2] - q[2] * e])
+    Quadratic::new([
+        mul_pow2(p[0] - q[0] * e, -k_r),
+        mul_pow2(p[1] - q[1] * e, k_s - k_r),
+        mul_pow2(p[2] - q[2] * e, 2 * k_s - k_r),
+    ])
+}
+
+/// Returns the exponent `k` for which `2^k` times the largest absolute value in
+/// `vals` is between 2 and 4, if that value is finite and above 2^500, and 0
+/// otherwise. The result is in `-1022..=-500` or is 0.
+fn pow2_scale_exponent(vals: &[f64]) -> i32 {
+    let max = vals.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    if max > f64::from_bits((1023 + 500) << 52) && max.is_finite() {
+        // The biased exponent of max is in 1523..=2046.
+        let biased_exp = ((max.to_bits() >> 52) & 0x7ff) as i32;
+        1024 - biased_exp
+    } else {
+        0
+    }
+}
+
+/// Returns 2^k for k in `-1022..=1023`.
+fn pow2(k: i32) -> f64 {
+    debug_assert!((-1022..=1023).contains(&k));
+    f64::from_bits(((k + 1023) as u64) << 52)
+}
+
+/// Returns `c` times 2^k for k in `-2044..=2046`, in two steps so that no
+/// intermediate value overflows or underflows unless the result does.
+fn mul_pow2(c: f64, k: i32) -> f64 {
+    let half = k / 2;
+    c * pow2(half) * pow2(k - half)
 }
 
 #[allow(dead_code)]
@@ -1194,6 +1398,103 @@ fn max_distance(c0: CubicBez, c1: CubicBez) -> f64 {
         .max(l_infty_distance(c0.p1, c1.p1))
         .max(l_infty_distance(c0.p2, c1.p2))
         .max(l_infty_distance(c0.p3, c1.p3))
+}
+
+/// The largest absolute value of any control point's x coordinate.
+fn max_abs_x(c: CubicBez) -> f64 {
+    [c.p0, c.p1, c.p2, c.p3]
+        .iter()
+        .fold(0.0, |m: f64, p| m.max(p.x.abs()))
+}
+
+/// The spacing of the smallest floats, which is also the spacing of all
+/// subnormal floats.
+const MIN_SPACING: f64 = f64::from_bits(1);
+
+/// The smallest tolerance that tells apart coordinates of magnitude up to
+/// `max_coord`: `64 * f64::EPSILON * max_coord`, the scale [`crate::binary_op`]
+/// uses, and never below 64 times the spacing of subnormal floats.
+pub(crate) fn resolution_floor(max_coord: f64) -> f64 {
+    (max_coord * (f64::EPSILON * 64.0)).max(MIN_SPACING * 64.0)
+}
+
+/// `f64::EPSILON * max_coord`, between one and two ulps of `max_coord`, and
+/// never below the spacing of subnormal floats.
+fn float_spacing(max_coord: f64) -> f64 {
+    (max_coord * f64::EPSILON).max(MIN_SPACING)
+}
+
+// Craft patch (control point order): two y-subsegments that stay more than
+// `ish_tolerance` apart get one order from their control points without
+// recursing. At parameter t the gap `x1(t) - x0(t)` lies between the smallest
+// and largest control point x gaps, and `|y1(t) - y0(t)|` is at most the
+// largest control point y gap `dy`. At one height y = y0(t0) = y1(t1), the gap
+// `x1(t1) - x0(t0)` differs from `x1(t1) - x0(t1)` by at most `slope * dy`,
+// where `slope` bounds `|dx/dy|` on c0 (and symmetrically for c1). When `dy`
+// is zero both curves reach each height at the same t, so no slope is needed.
+fn order_from_control_points(c0: CubicBez, c1: CubicBez, ish_tolerance: f64) -> Option<Order> {
+    let gaps = [
+        c1.p0.x - c0.p0.x,
+        c1.p1.x - c0.p1.x,
+        c1.p2.x - c0.p2.x,
+        c1.p3.x - c0.p3.x,
+    ];
+    if !gaps.iter().all(|g| g.is_finite()) {
+        return None;
+    }
+    let min_gap = gaps.iter().copied().fold(f64::INFINITY, f64::min);
+    let max_gap = gaps.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let dy = (c1.p0.y - c0.p0.y)
+        .abs()
+        .max((c1.p1.y - c0.p1.y).abs())
+        .max((c1.p2.y - c0.p2.y).abs())
+        .max((c1.p3.y - c0.p3.y).abs());
+    let slack = if dy == 0.0 {
+        0.0
+    } else {
+        dy * max_slope(c0).min(max_slope(c1))
+    };
+    if !slack.is_finite() {
+        return None;
+    }
+    if min_gap - slack > ish_tolerance {
+        Some(Order::Left)
+    } else if max_gap + slack < -ish_tolerance {
+        Some(Order::Right)
+    } else {
+        None
+    }
+}
+
+// Craft patch (control point order): an upper bound on `|dx/dy|` along `c`,
+// or infinity unless every leg of the control polygon rises in y. The
+// derivative is a positive combination of the legs, so the largest leg ratio
+// bounds it.
+fn max_slope(c: CubicBez) -> f64 {
+    let mut ret = 0.0f64;
+    for (a, b) in [(c.p0, c.p1), (c.p1, c.p2), (c.p2, c.p3)] {
+        let dy = b.y - a.y;
+        if dy.is_nan() || dy <= 0.0 {
+            return f64::INFINITY;
+        }
+        ret = ret.max((b.x - a.x).abs() / dy);
+    }
+    ret
+}
+
+#[cfg(test)]
+thread_local! {
+    static SKIP_CONTROL_POINT_ORDER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(not(test))]
+fn control_point_order_enabled() -> bool {
+    true
+}
+
+#[cfg(test)]
+fn control_point_order_enabled() -> bool {
+    !SKIP_CONTROL_POINT_ORDER.with(std::cell::Cell::get)
 }
 
 #[derive(Clone, Debug)]
@@ -1241,10 +1542,16 @@ fn intersect_cubics_rec(
         out.push(y1, order, status);
         return;
     }
+    if control_point_order_enabled()
+        && let Some(order) = order_from_control_points(c0, c1, ish_tolerance)
+    {
+        out.push(y1, order, status);
+        return;
+    }
 
     // If the y coordinates are very off-center, the quadratic coefficients become
     // large and cause instability. So we re-center and then compensate afterwards.
-    let y_mid = (y0 + y1) / 2.0;
+    let y_mid = y0.midpoint(y1);
     c0.p0.y -= y_mid;
     c0.p1.y -= y_mid;
     c0.p2.y -= y_mid;
@@ -1256,12 +1563,18 @@ fn intersect_cubics_rec(
 
     // TODO: document the precomputed approximation
     let (ep0, ep1) = if use_precomputed_approx {
-        let orig_y_mid0 = (cubic0.c.p0.y + cubic0.c.p3.y) / 2.0;
-        let orig_y_mid1 = (cubic1.c.p0.y + cubic1.c.p3.y) / 2.0;
-        (
-            cubic0.approx.shift_y(orig_y_mid0 - y_mid),
-            cubic1.approx.shift_y(orig_y_mid1 - y_mid),
-        )
+        let orig_y_mid0 = cubic0.c.p0.y.midpoint(cubic0.c.p3.y);
+        let orig_y_mid1 = cubic1.c.p0.y.midpoint(cubic1.c.p3.y);
+        let mut ep0 = cubic0.approx.shift_y(orig_y_mid0 - y_mid);
+        let mut ep1 = cubic1.approx.shift_y(orig_y_mid1 - y_mid);
+        // Craft patch (cut end bounds): the precomputed approximations carry the
+        // end x values of the whole pieces, which are not the ends of `c0` and
+        // `c1` when the y-range is shorter than a piece. They are replaced by
+        // the end x values of the cut curves, as `QuadraticApprox::from_cubic`
+        // sets them.
+        ep0.almost_horiz = ep0.almost_horiz.map(|(d, _, _)| (d, c0.p0.x, c0.p3.x));
+        ep1.almost_horiz = ep1.almost_horiz.map(|(d, _, _)| (d, c1.p0.x, c1.p3.x));
+        (ep0, ep1)
     } else {
         (
             QuadraticApprox::from_cubic(c0, cubic0.dir),
@@ -1295,6 +1608,11 @@ fn intersect_cubics_rec(
     }
     signs.entries.last_mut().unwrap().end = y1;
 
+    // Craft patch (end order check): re-centering rounds each interval end, and
+    // at coordinates near 1e8 the two curves at a rounded end can be on the
+    // wrong side of the interval's order by up to 69 times `ish_tolerance`.
+    // This exact check runs only with `slow-asserts`.
+    #[cfg(feature = "slow-asserts")]
     for (y0, y1, order) in signs.iter(y0) {
         match order {
             MaybeOrder::Right => {
@@ -1329,7 +1647,7 @@ fn intersect_cubics_rec(
         if let Ok(order) = order.try_into() {
             out.push(new_y1, order, status);
         } else {
-            let mid = 0.5 * (new_y0 + new_y1);
+            let mid = new_y0.midpoint(new_y1);
 
             // We test the difference between y1 and y0, not new_y1 and new_y0.
             // This help reduce false positives where the error in dep is substantial
@@ -1337,7 +1655,14 @@ fn intersect_cubics_rec(
             // "ish" interval that's just an artifact. In this case, new_y0 and new_y1
             // will be very close, but we'll recurse one more time to get a better
             // quadratic approximation.
+            //
+            // When `mid` rounds to one of the ends, the interval is one float
+            // wide and cannot be split, so splitting it would repeat the same
+            // call until the stack overflows. That happens when `ish_tolerance`
+            // is below the spacing of floats at this height.
             if y1 - y0 <= ish_tolerance
+                || mid <= new_y0
+                || mid >= new_y1
                 || (ep0.dmax + ep1.dmax <= 2.0 * ish_tolerance
                     && ep0.dmin + ep1.dmin >= -2.0 * ish_tolerance)
             {
@@ -1390,13 +1715,20 @@ fn intersect_cubics_rec(
 /// A decomposition of a cubic Bezier into almost-horizontal and not-almost-horizontal pieces.
 #[derive(Clone, Debug, Default)]
 pub struct AlmostHorizontalDecomposition {
-    pieces: ArrayVec<CubicParams, 6>,
+    // Craft patch (inline pieces): up to two pieces are stored inline and more
+    // go on the heap. `Segments` stores one decomposition per segment, so this
+    // size is paid for every segment of the input.
+    pieces: SmallVec<[CubicParams; 2]>,
 }
 
 impl AlmostHorizontalDecomposition {
     /// Decompose a cubic into almost-horizontal and not-almost-horizontal pieces.
     ///
     /// The cubic `c` must be (approximately) y-monotone and must not be completely horizontal.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `c` is completely horizontal or if `c.p3.y` is smaller than `c.p0.y`.
     pub fn from_monotone_cubic(c: CubicBez) -> Self {
         const THRESHOLD: f64 = 16.0;
         let dx = cubic_from_bez_x(c).deriv();
@@ -1447,7 +1779,7 @@ impl AlmostHorizontalDecomposition {
         let mut last_y = c.p0.y;
         let mut last_end = 0.0;
         let orig_c = c;
-        let mut ret = ArrayVec::default();
+        let mut ret: SmallVec<[CubicParams; 2]> = SmallVec::new();
         for (_, end, order) in subdivision.iter(0.0) {
             let start = last_end;
             // If there's no actual subdivision, skip the subsegment operation.
@@ -1461,10 +1793,15 @@ impl AlmostHorizontalDecomposition {
 
             // Enforce y-monotonicity, from the previous curve to this one, and
             // also for the initial and final tangents of this subsegment.
+            //
+            // Craft patch (monotone handles): the tangents only need to point
+            // the right way, so p1.y is kept at least p0.y and p2.y at most
+            // p3.y. A monotone cubic can have handles outside its own y-range,
+            // and clamping them into that range moves the curve.
             c.p0.y = c.p0.y.clamp(last_y, orig_c.p3.y);
-            c.p1.y = c.p1.y.clamp(c.p0.y, orig_c.p3.y);
+            c.p1.y = c.p1.y.max(c.p0.y);
             c.p3.y = c.p3.y.clamp(last_y, orig_c.p3.y);
-            c.p2.y = c.p2.y.clamp(last_y, c.p3.y);
+            c.p2.y = c.p2.y.min(c.p3.y);
             last_y = c.p3.y;
             let approx_horiz = match order {
                 Right => {
@@ -1484,7 +1821,7 @@ impl AlmostHorizontalDecomposition {
             };
             if c.p0.y != c.p3.y {
                 let mut recentered_c = c;
-                let y_mid = (c.p0.y + c.p3.y) / 2.0;
+                let y_mid = c.p0.y.midpoint(c.p3.y);
                 recentered_c.p0.y -= y_mid;
                 recentered_c.p1.y -= y_mid;
                 recentered_c.p2.y -= y_mid;
@@ -1538,12 +1875,33 @@ impl AlmostHorizontalDecomposition {
 /// The `ish_tolerance` parameter tells us when we're allowed to say that
 /// the two curves are close: if they're definitely within `ish_tolerance`
 /// of one another, we can say that they're close.
+///
+/// `sure_tolerance` must be positive and no larger than `ish_tolerance`, and
+/// `ish_tolerance` must be finite. Otherwise the returned order says that the
+/// curves are close over their whole common range.
+///
+/// Each curve must be y-monotone. A curve whose `p3.y` is smaller than its
+/// `p0.y` is compared as the same curve with its control points reversed.
+/// When the vertical ranges of the curves do not overlap, the returned order
+/// has no entries.
+///
+/// A positive `ish_tolerance` below `4 * f64::EPSILON` times the largest
+/// x coordinate magnitude of the two curves (two to four ulps of it, and at
+/// least four times the spacing of subnormal floats) is raised to that value,
+/// and a positive `sure_tolerance` below half of it is raised to half of it.
+/// Below that, rounding in the comparison can report the wrong order.
+///
+/// # Panics
+///
+/// Panics if either curve is completely horizontal.
 pub fn intersect_cubics(
     c0: CubicBez,
     c1: CubicBez,
     sure_tolerance: f64,
     ish_tolerance: f64,
 ) -> CurveOrder {
+    let c0 = increasing_in_y(c0);
+    let c1 = increasing_in_y(c1);
     intersect_cubics_with_precomputed_decomp(
         c0,
         &AlmostHorizontalDecomposition::from_monotone_cubic(c0),
@@ -1554,11 +1912,26 @@ pub fn intersect_cubics(
     )
 }
 
+// Craft patch (input rules): `intersect_cubics` compares a curve that runs
+// down in y as the same curve reversed.
+/// Returns `c`, or `c` with its control points reversed if it decreases in y.
+fn increasing_in_y(c: CubicBez) -> CubicBez {
+    if c.p3.y < c.p0.y {
+        CubicBez::new(c.p3, c.p2, c.p1, c.p0)
+    } else {
+        c
+    }
+}
+
 /// A version of [intersect_cubics] that uses a precomputed almost-horizontal
 /// decomposition.
 ///
 /// Pre-computing the almost-horizontal decomposition can be much faster, because
 /// then you can do it per-curve instead of per-comparison.
+///
+/// `c0_div` and `c1_div` must be the decompositions of `c0` and `c1`, so each
+/// curve must have `p0.y < p3.y`. The tolerances follow the same rule as in
+/// [intersect_cubics] and are raised as in [intersect_cubics].
 pub fn intersect_cubics_with_precomputed_decomp(
     c0: CubicBez,
     c0_div: &AlmostHorizontalDecomposition,
@@ -1567,11 +1940,82 @@ pub fn intersect_cubics_with_precomputed_decomp(
     sure_tolerance: f64,
     ish_tolerance: f64,
 ) -> CurveOrder {
+    intersect_decompositions(c0, c0_div, c1, c1_div, sure_tolerance, ish_tolerance, true)
+}
+
+// Craft patch (approximation first): when the precomputed approximations of
+// two pieces are more than `ish_tolerance` apart over the whole shared
+// y-range, the order is decided without cutting either cubic to that range.
+// `intersect_cubics_rec` would cut both cubics first and then compare the same
+// approximations with the smaller `sure_tolerance`.
+fn order_from_precomputed_approx(
+    cubic0: &CubicParams,
+    cubic1: &CubicParams,
+    y0: f64,
+    y1: f64,
+    sure_tolerance: f64,
+    ish_tolerance: f64,
+) -> Option<Order> {
+    // `intersect_cubics_rec` uses bounding boxes for intervals this short.
+    if y1 - y0 < ish_tolerance {
+        return None;
+    }
+    let y_mid = (y0 + y1) / 2.0;
+    let orig_y_mid0 = (cubic0.c.p0.y + cubic0.c.p3.y) / 2.0;
+    let orig_y_mid1 = (cubic1.c.p0.y + cubic1.c.p3.y) / 2.0;
+    let ep0 = cubic0.approx.shift_y(orig_y_mid0 - y_mid);
+    let ep1 = cubic1.approx.shift_y(orig_y_mid1 - y_mid);
+    // An almost-horizontal approximation carries the end x values of its whole
+    // piece, which do not bound a shorter y-range.
+    if ep0.almost_horiz.is_some() || ep1.almost_horiz.is_some() {
+        return None;
+    }
+    let tolerance = sure_tolerance.max(ish_tolerance);
+    let signs = ep0.compare(&ep1, tolerance, tolerance, y0 - y_mid, y1 - y_mid);
+    match signs.entries.as_slice() {
+        [entry] => match entry.order {
+            MaybeOrder::Left => Some(Order::Left),
+            MaybeOrder::Right => Some(Order::Right),
+            MaybeOrder::Ish | MaybeOrder::Unknown => None,
+        },
+        _ => None,
+    }
+}
+
+fn intersect_decompositions(
+    c0: CubicBez,
+    c0_div: &AlmostHorizontalDecomposition,
+    c1: CubicBez,
+    c1_div: &AlmostHorizontalDecomposition,
+    sure_tolerance: f64,
+    ish_tolerance: f64,
+    approx_first: bool,
+) -> CurveOrder {
+    let floor = 4.0 * float_spacing(max_abs_x(c0).max(max_abs_x(c1)));
+    let ish_tolerance = if ish_tolerance > 0.0 && ish_tolerance < floor {
+        floor
+    } else {
+        ish_tolerance
+    };
+    let sure_tolerance = if sure_tolerance > 0.0 && sure_tolerance < floor / 2.0 {
+        floor / 2.0
+    } else {
+        sure_tolerance
+    };
+
     let y0 = c0.p0.y.max(c1.p0.y);
     let y1 = c0.p3.y.min(c1.p3.y);
 
     let mut ret = CurveOrder::new(y0);
-    if y0 < y1 {
+    let valid_tolerances =
+        sure_tolerance > 0.0 && sure_tolerance <= ish_tolerance && ish_tolerance.is_finite();
+    if !valid_tolerances {
+        // Craft patch (input rules): with a negative `ish_tolerance`,
+        // `intersect_cubics_rec` can recurse without end.
+        if y0 <= y1 {
+            ret.push(y1, Order::Ish, MetricsStatus::default());
+        }
+    } else if y0 < y1 {
         let c0_div = c0_div
             .pieces
             .iter()
@@ -1586,17 +2030,26 @@ pub fn intersect_cubics_with_precomputed_decomp(
             let y0 = c0.c.p0.y.max(c1.c.p0.y);
             let y1 = c0.c.p3.y.min(c1.c.p3.y);
             if y0 < y1 {
-                intersect_cubics_rec(
-                    c0,
-                    c1,
-                    true,
-                    y0,
-                    y1,
-                    sure_tolerance,
-                    ish_tolerance,
-                    &mut ret,
-                    MetricsStatus::default(),
-                );
+                let settled = if approx_first {
+                    order_from_precomputed_approx(c0, c1, y0, y1, sure_tolerance, ish_tolerance)
+                } else {
+                    None
+                };
+                if let Some(order) = settled {
+                    ret.push(y1, order, MetricsStatus::default());
+                } else {
+                    intersect_cubics_rec(
+                        c0,
+                        c1,
+                        true,
+                        y0,
+                        y1,
+                        sure_tolerance,
+                        ish_tolerance,
+                        &mut ret,
+                        MetricsStatus::default(),
+                    );
+                }
             }
         }
     } else if y0 == y1 {
@@ -1620,7 +2073,7 @@ pub fn intersect_cubics_with_precomputed_decomp(
         ret.push(y1, order, MetricsStatus::default());
     }
     //fix_up_endpoints(&mut ret, c0, c1, eps);
-    debug_assert_eq!(ret.cmps.last().unwrap().end, y1);
+    debug_assert!(y0 > y1 || ret.cmps.last().map(|e| e.end) == Some(y1));
     ret
 }
 
@@ -1720,6 +2173,44 @@ mod test {
     }
 
     #[test]
+    fn solve_for_t_near_the_float_limit() {
+        let line = |y0: f64, y1: f64| {
+            let a = Point::new(0.0, y0);
+            let b = Point::new(10.0, y1);
+            CubicBez::new(a, a.lerp(b, 1.0 / 3.0), a.lerp(b, 2.0 / 3.0), b)
+        };
+
+        // Without scaling, `3.0 * p1` or `3.0 * p2` overflows to infinity for every line here
+        // except the one from -8e307 to 8e307, whose coefficients stay finite.
+        for (y0, y1) in [
+            (5.5e307, 6.5e307),
+            (-6.5e307, -5.5e307),
+            (-8e307, 8e307),
+            (f64::MAX / 2.0, f64::MAX),
+        ] {
+            let t = solve_t_for_y(line(y0, y1), y0 / 2.0 + y1 / 2.0);
+            assert!((t - 0.5).abs() < 1e-9, "t = {t} from {y0} to {y1}");
+        }
+    }
+
+    #[test]
+    fn compare_near_the_float_limit() {
+        let h = 1e306;
+        // Without `f64::midpoint`, the sum of two heights overflows to infinity for every
+        // start here except 0.0. The comparison then has no entries, and a release build
+        // panics on the empty list.
+        for y in [0.0, 1e308, 1.5e308, 1.7e308] {
+            let a = PathSeg::Line(Line::new((10.0 * h, y + h), (9.0 * h, y + 4.0 * h))).to_cubic();
+            let b = PathSeg::Line(Line::new((0.0, y), (h, y + 3.0 * h))).to_cubic();
+
+            let entries: Vec<_> = intersect_cubics(a, b, 1e-6, 2e-6).iter().collect();
+            assert_eq!(entries.first().map(|e| e.0), Some(y + h), "start {y}");
+            assert_eq!(entries.last().map(|e| e.1), Some(y + 3.0 * h), "start {y}");
+            assert!(entries.iter().all(|e| e.2 == Order::Right), "start {y}: {entries:?}");
+        }
+    }
+
+    #[test]
     fn solve_for_t_arbtest() {
         arbtest::arbtest(arbtests::solve_for_t);
     }
@@ -1738,6 +2229,130 @@ mod test {
     }
 
     #[test]
+    fn far_apart_with_huge_coordinates() {
+        // Two bulging vertical curves a distance s apart, with heights from 0 to s.
+        let curve = |x: f64, s: f64| {
+            CubicBez::new(
+                (x, 0.0),
+                (x + s * 0.01, s / 3.0),
+                (x + s * 0.01, 2.0 * s / 3.0),
+                (x, s),
+            )
+        };
+        for s in [1.0, 1e155, 1e200, 1e300] {
+            let tol = s * 64.0 * f64::EPSILON;
+            let cmp = intersect_cubics(curve(-s / 2.0, s), curve(s / 2.0, s), tol, tol);
+            assert!(
+                cmp.iter().all(|(_, _, order)| order == Order::Left),
+                "s = {s}: {cmp:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn quadratic_approx_error_bounds_on_tall_curves() {
+        // An S-shaped curve from y = -h/2 to y = h/2 and w wide, which no quadratic
+        // in y fits exactly.
+        let approx = |h: f64, w: f64| {
+            let c = CubicBez::new(
+                (0.0, -h / 2.0),
+                (w, -h / 6.0),
+                (-w, h / 6.0),
+                (0.0, h / 2.0),
+            );
+            let a = QuadraticApprox::from_cubic(c, None);
+            assert!(
+                a.q.coeffs().iter().all(|c| c.is_finite()),
+                "h = {h}, w = {w}: {:?}",
+                a.q
+            );
+            (a.dmin / w, a.dmax / w)
+        };
+        let (dmin, dmax) = approx(1.0, 1.0);
+        assert!(dmin < -0.01 && dmax > 0.01, "{dmin} {dmax}");
+        for (h, w) in [
+            (1e154, 1e154),
+            (1e155, 1e155),
+            (1e200, 1e200),
+            (1e300, 1e300),
+            (1e151, 1e300),
+            (1e200, 1.0),
+        ] {
+            let (hmin, hmax) = approx(h, w);
+            assert!(
+                (hmin - dmin).abs() < 1e-9 && (hmax - dmax).abs() < 1e-9,
+                "h = {h}, w = {w}: ({hmin}, {hmax}) != ({dmin}, {dmax})"
+            );
+        }
+    }
+
+    #[test]
+    fn tall_lines_at_any_height() {
+        // A line from (0, 0) to (h, 3h) is left of a line from (10h, h) to (9h, 4h),
+        // with both moved up by `dy`.
+        for h in [1.0f64, 1e154, 1e155, 1e200, 1e300] {
+            for dy in [0.0f64, -2.0 * h, 1e5 * h] {
+                let a = Line::new((0.0, dy), (h, 3.0 * h + dy));
+                let b = Line::new((10.0 * h, h + dy), (9.0 * h, 4.0 * h + dy));
+                let a = PathSeg::Line(a).to_cubic();
+                let b = PathSeg::Line(b).to_cubic();
+                let tol = h.max(dy.abs()) * 64.0 * f64::EPSILON;
+                let cmp = intersect_cubics(a, b, tol, tol);
+                assert!(
+                    !cmp.cmps.is_empty() && cmp.iter().all(|(_, _, order)| order == Order::Left),
+                    "h = {h}, dy = {dy}: {cmp:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn non_finite_quadratics_have_no_definite_order() {
+        for c in [f64::NAN, f64::INFINITY] {
+            let q = Quadratic::new([c, 0.0, 0.0]);
+
+            let mut out = QuadApproxComparison::default();
+            push_two_level_quadratic_signs(q, -1.0, 1.0, 0.0, 1.0, &mut out);
+            assert!(
+                out.entries.iter().all(|e| e.order == MaybeOrder::Unknown),
+                "c = {c}: {:?}",
+                out.entries
+            );
+
+            let mut out = ApproxComparison::<3>::default();
+            push_left_or_ish(q, 0.0, 1.0, &mut out.entries);
+            assert!(
+                out.entries.iter().all(|e| e.order == MaybeOrder::Ish),
+                "c = {c}: {:?}",
+                out.entries
+            );
+        }
+    }
+
+    #[test]
+    fn fit_quadratic_with_huge_x() {
+        // A vertical curve at x with y(t) = h * t^3, which a quadratic in y fits
+        // with the constant x.
+        for x in [1e307, -1e307, 5e307] {
+            for h in [1.0, 2.0f64.powi(501), 1e300] {
+                let c = CubicBez::new((x, 0.0), (x, 0.0), (x, 0.0), (x, h));
+                let q = fit_quadratic(c);
+                assert!(
+                    q.coeffs().iter().all(|c| c.is_finite()),
+                    "x = {x}, h = {h}: {q:?}"
+                );
+                for y in [0.0, 0.25 * h, 0.5 * h, h] {
+                    let fx = q.eval(y);
+                    assert!(
+                        (fx - x).abs() <= 1e-9 * x.abs(),
+                        "x = {x}, h = {h}, y = {y}: {fx}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn almost_touching() {
         let sure_tol = 0.25;
         let ish_tol = 0.3;
@@ -1745,6 +2360,386 @@ mod test {
         let b = CubicBez::new((0.3, 0.0), (0.3, 1.0 / 3.0), (0.3, 2.0 / 3.0), (0.3, 1.0));
         let cmp = intersect_cubics(a, b, sure_tol, ish_tol);
         assert_eq!(cmp.iter().count(), 3);
+    }
+
+    // Craft patch (approximation first) test: deciding the order of two pieces
+    // from their precomputed approximations gives the same `CurveOrder` as
+    // cutting the cubics first, for curves that are far apart, close, touching
+    // and crossing, and for generated pairs.
+    #[test]
+    fn approximation_first_keeps_the_curve_order() {
+        fn orders(
+            c0: CubicBez,
+            c1: CubicBez,
+            sure: f64,
+            ish: f64,
+            approx_first: bool,
+        ) -> Vec<(f64, f64, Order)> {
+            let d0 = AlmostHorizontalDecomposition::from_monotone_cubic(c0);
+            let d1 = AlmostHorizontalDecomposition::from_monotone_cubic(c1);
+            intersect_decompositions(c0, &d0, c1, &d1, sure, ish, approx_first)
+                .iter()
+                .collect()
+        }
+
+        // Counts the pieces whose order the approximations decide.
+        fn settled(c0: CubicBez, c1: CubicBez, sure: f64, ish: f64) -> (usize, usize) {
+            let d0 = AlmostHorizontalDecomposition::from_monotone_cubic(c0);
+            let d1 = AlmostHorizontalDecomposition::from_monotone_cubic(c1);
+            let (mut hits, mut misses) = (0, 0);
+            for p0 in &d0.pieces {
+                for p1 in &d1.pieces {
+                    let y0 = p0.c.p0.y.max(p1.c.p0.y);
+                    let y1 = p0.c.p3.y.min(p1.c.p3.y);
+                    if y0 < y1 {
+                        match order_from_precomputed_approx(p0, p1, y0, y1, sure, ish) {
+                            Some(_) => hits += 1,
+                            None => misses += 1,
+                        }
+                    }
+                }
+            }
+            (hits, misses)
+        }
+
+        fn shifted(c: CubicBez, dx: f64, dy: f64) -> CubicBez {
+            let v = Vec2::new(dx, dy);
+            CubicBez::new(c.p0 + v, c.p1 + v, c.p2 + v, c.p3 + v)
+        }
+
+        let sure = 1e-4;
+        let ish = 1e-3;
+        let curves = [
+            CubicBez::new((0.0, 0.0), (1.0, 0.3), (-1.0, 0.7), (0.0, 1.0)),
+            CubicBez::new((-1.0, 0.0), (0.5, 0.6), (0.5, 0.4), (-1.0, 1.0)),
+            CubicBez::new((0.0, 0.0), (30.0, 0.01), (60.0, 0.02), (90.0, 1.0)),
+            CubicBez::new((90.0, 0.0), (60.0, 0.98), (30.0, 0.99), (0.0, 1.0)),
+            CubicBez::new((0.0, 0.0), (0.0, 1.0 / 3.0), (0.0, 2.0 / 3.0), (0.0, 1.0)),
+        ];
+        let (mut hits, mut misses) = (0, 0);
+        for c0 in curves {
+            for c1 in curves {
+                for k in [
+                    -1000.0, -10.0, -2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 10.0, 1000.0,
+                ] {
+                    for dy in [0.0, 0.25] {
+                        let c1 = shifted(c1, k * ish, dy);
+                        assert_eq!(
+                            orders(c0, c1, sure, ish, true),
+                            orders(c0, c1, sure, ish, false),
+                            "{c0:?} {c1:?}"
+                        );
+                        let (h, m) = settled(c0, c1, sure, ish);
+                        hits += h;
+                        misses += m;
+                    }
+                }
+            }
+        }
+        assert!(
+            hits > 0 && misses > 0,
+            "{hits} settled, {misses} not settled"
+        );
+
+        // Generated pairs, from a fixed sequence of bytes.
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut bytes = vec![0u8; 256];
+        let mut compared = 0;
+        for _ in 0..2000 {
+            for b in &mut bytes {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *b = state as u8;
+            }
+            let mut u = arbitrary::Unstructured::new(&bytes);
+            let Ok(c0) = crate::arbitrary::monotonic_bezier(&mut u) else {
+                continue;
+            };
+            let Ok(c1) = crate::arbitrary::another_monotonic_bezier(&mut u, &c0) else {
+                continue;
+            };
+            // The curves must be y-monotone and share a y-range.
+            if c1.p0.y >= c1.p3.y || c0.p0.y.max(c1.p0.y) >= c0.p3.y.min(c1.p3.y) {
+                continue;
+            }
+            for (sure, ish) in [(1e-3, 1e-2), (0.25, 1.0), (100.0, 1000.0)] {
+                assert_eq!(
+                    orders(c0, c1, sure, ish, true),
+                    orders(c0, c1, sure, ish, false),
+                    "{c0:?} {c1:?} {sure} {ish}"
+                );
+                compared += 1;
+            }
+        }
+        assert!(compared > 3000, "{compared} generated comparisons");
+    }
+
+    #[test]
+    fn next_touch_after_a_touch_that_contains_y() {
+        let mut cmp = CurveOrder::new(0.0);
+        for (end, order) in [
+            (1.0, Order::Ish),
+            (2.0, Order::Left),
+            (3.0, Order::Ish),
+            (4.0, Order::Left),
+        ] {
+            cmp.push(end, order, MetricsStatus::default());
+        }
+
+        let touch = |y: f64| match cmp.next_touch_after(y) {
+            Some(CurveInteraction::Touch(y0, y1)) => (y0, y1),
+            other => panic!("expected a touch after {y}, got {other:?}"),
+        };
+        // `y` inside the first touch or after it: the next one is the touch
+        // from 2 to 3.
+        assert_eq!(touch(0.0), (2.0, 3.0));
+        assert_eq!(touch(0.5), (2.0, 3.0));
+        assert_eq!(touch(1.5), (2.0, 3.0));
+        // `y` inside the second touch, with no touch after it.
+        assert!(cmp.next_touch_after(2.5).is_none());
+        assert!(cmp.next_touch_after(4.0).is_none());
+    }
+
+    #[test]
+    fn next_touch_after_on_two_curves_that_start_together() {
+        // The cubic starts on the line, moves left of it and comes back to
+        // touch it again near y = 2.4.
+        let a = CubicBez::new((0.0, 0.0), (-1.2, 4.0 / 3.0), (1.6, 8.0 / 3.0), (-1.6, 4.0));
+        let b = CubicBez::new((0.0, 0.0), (0.0, 4.0 / 3.0), (0.0, 8.0 / 3.0), (0.0, 4.0));
+        let cmp = intersect_cubics(a, b, 1e-3, 0.02);
+        let orders: Vec<_> = cmp.iter().map(|(_, _, order)| order).collect();
+        assert_eq!(orders, [Order::Ish, Order::Left, Order::Ish, Order::Left]);
+
+        let (touch_y0, touch_y1, _) = cmp.iter().nth(2).unwrap();
+        match cmp.next_touch_after(0.0) {
+            Some(CurveInteraction::Touch(y0, y1)) => assert_eq!((y0, y1), (touch_y0, touch_y1)),
+            other => panic!("expected the second touch, got {other:?}"),
+        }
+    }
+
+    fn shifted(c: CubicBez, dx: f64, dy: f64) -> CubicBez {
+        let v = Vec2::new(dx, dy);
+        CubicBez::new(c.p0 + v, c.p1 + v, c.p2 + v, c.p3 + v)
+    }
+
+    fn without_control_point_order<T>(f: impl FnOnce() -> T) -> T {
+        SKIP_CONTROL_POINT_ORDER.with(|s| s.set(true));
+        let ret = f();
+        SKIP_CONTROL_POINT_ORDER.with(|s| s.set(false));
+        ret
+    }
+
+    // Craft patch (control point order) test: a tall S-shaped cubic and a copy
+    // moved 10 * ish_tolerance sideways are ordered in one step. Without the
+    // patch the recursion splits the range into thousands of pieces.
+    #[test]
+    fn near_parallel_cubics_are_ordered_without_recursing() {
+        let s = 1e6;
+        let ish = 1e-6;
+        let c0 = CubicBez::new((0.0, 0.0), (s, s / 3.0), (-s, 2.0 * s / 3.0), (0.0, s));
+        for (dx, dy, order) in [
+            (10.0 * ish, 0.0, Order::Left),
+            (10.0 * ish, 0.5 * ish, Order::Left),
+            (-10.0 * ish, 0.0, Order::Right),
+            (-10.0 * ish, 0.5 * ish, Order::Right),
+        ] {
+            let c1 = shifted(c0, dx, dy);
+            let cmp = intersect_cubics(c0, c1, ish / 2.0, ish);
+            let y0 = c1.p0.y;
+            assert_eq!(cmp.iter().collect::<Vec<_>>(), vec![(y0, s, order)]);
+            assert!(
+                cmp.metrics.entries.len() <= 4,
+                "{} entries for ({dx}, {dy})",
+                cmp.metrics.entries.len()
+            );
+        }
+    }
+
+    // Craft patch (control point order) test: whenever the control points of
+    // two y-subsegments give an order, the subsegments are more than
+    // `sure_tolerance` apart in that order at sample heights, and a curve and
+    // a copy moved 10 * ish_tolerance or more sideways get the same
+    // `CurveOrder` as without the patch.
+    #[test]
+    fn control_point_order_is_sound() {
+        // Returns how many subsegment pairs the control points ordered.
+        fn check(c0: CubicBez, c1: CubicBez, sure: f64, ish: f64) -> usize {
+            let y0 = c0.p0.y.max(c1.p0.y);
+            let y1 = c0.p3.y.min(c1.p3.y);
+            let mut ordered = 0;
+            for parts in [1u32, 3, 16] {
+                for j in 0..parts {
+                    let a = y0 + (y1 - y0) * f64::from(j) / f64::from(parts);
+                    let b = if j + 1 == parts {
+                        y1
+                    } else {
+                        y0 + (y1 - y0) * f64::from(j + 1) / f64::from(parts)
+                    };
+                    if a >= b {
+                        continue;
+                    }
+                    let s0 = y_subsegment(c0, a, b);
+                    let s1 = y_subsegment(c1, a, b);
+                    let Some(order) = order_from_control_points(s0, s1, ish) else {
+                        continue;
+                    };
+                    ordered += 1;
+                    for i in 0..=8 {
+                        let y = (a + (b - a) * f64::from(i) / 8.0).min(b);
+                        let gap = solve_x_for_y(s1, y) - solve_x_for_y(s0, y);
+                        match order {
+                            Order::Left => assert!(gap > sure, "{s0:?} {s1:?} {y} {gap}"),
+                            Order::Right => assert!(gap < -sure, "{s0:?} {s1:?} {y} {gap}"),
+                            Order::Ish => panic!("control points gave Ish for {s0:?} {s1:?}"),
+                        }
+                    }
+                }
+            }
+            ordered
+        }
+
+        let sure = 1e-4;
+        let ish = 1e-3;
+        let curves = [
+            CubicBez::new((0.0, 0.0), (1.0, 0.3), (-1.0, 0.7), (0.0, 1.0)),
+            CubicBez::new((-1.0, 0.0), (0.5, 0.6), (0.5, 0.4), (-1.0, 1.0)),
+            CubicBez::new((0.0, 0.0), (30.0, 0.01), (60.0, 0.02), (90.0, 1.0)),
+            CubicBez::new((90.0, 0.0), (60.0, 0.98), (30.0, 0.99), (0.0, 1.0)),
+            CubicBez::new((0.0, 0.0), (0.0, 1.0 / 3.0), (0.0, 2.0 / 3.0), (0.0, 1.0)),
+        ];
+        let mut ordered = 0;
+        for (i0, c0) in curves.into_iter().enumerate() {
+            for (i1, c1) in curves.into_iter().enumerate() {
+                for k in [-1000.0, -10.0, -2.0, -1.0, 0.0, 1.0, 2.0, 10.0, 1000.0] {
+                    for dy in [0.0, 0.25 * ish, 0.25] {
+                        let c1 = shifted(c1, k * ish, dy);
+                        ordered += check(c0, c1, sure, ish);
+                        if i0 != i1 || k.abs() < 10.0 || dy >= ish {
+                            continue;
+                        }
+                        let with = intersect_cubics(c0, c1, sure, ish)
+                            .iter()
+                            .collect::<Vec<_>>();
+                        if i0 == 2 || i0 == 3 {
+                            // Almost horizontal: the recursion can report Ish
+                            // near an end, and a sideways copy is now ordered
+                            // over the whole range.
+                            if dy == 0.0 {
+                                let order = if k > 0.0 { Order::Left } else { Order::Right };
+                                assert_eq!(with, vec![(0.0, 1.0, order)], "{c0:?} {c1:?}");
+                            }
+                        } else {
+                            let without = without_control_point_order(|| {
+                                intersect_cubics(c0, c1, sure, ish)
+                                    .iter()
+                                    .collect::<Vec<_>>()
+                            });
+                            assert_eq!(with, without, "{c0:?} {c1:?}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            ordered > 100,
+            "{ordered} hand-built subsegment pairs ordered"
+        );
+
+        // Generated pairs, from a fixed sequence of bytes: a curve and either
+        // another curve or a copy of it moved sideways and up.
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut bytes = vec![0u8; 256];
+        let mut compared = 0;
+        let mut ordered = 0;
+        for n in 0..2000 {
+            for b in &mut bytes {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                *b = state as u8;
+            }
+            let mut u = arbitrary::Unstructured::new(&bytes);
+            let Ok(c0) = crate::arbitrary::monotonic_bezier(&mut u) else {
+                continue;
+            };
+            for (sure, ish) in [(1e-3, 1e-2), (0.25, 1.0), (100.0, 1000.0)] {
+                let c1 = if n % 2 == 0 {
+                    let Ok(c1) = crate::arbitrary::another_monotonic_bezier(&mut u, &c0) else {
+                        continue;
+                    };
+                    c1
+                } else {
+                    let k = f64::from(u.int_in_range(-40..=40).unwrap_or(20));
+                    let dy = f64::from(u.int_in_range(0..=8).unwrap_or(0)) * 0.125 * ish;
+                    shifted(c0, k * ish, dy)
+                };
+                if c1.p0.y >= c1.p3.y || c0.p0.y.max(c1.p0.y) >= c0.p3.y.min(c1.p3.y) {
+                    continue;
+                }
+                ordered += check(c0, c1, sure, ish);
+                compared += 1;
+            }
+        }
+        assert!(compared > 3000, "{compared} generated comparisons");
+        assert!(
+            ordered > 1000,
+            "{ordered} generated subsegment pairs ordered"
+        );
+    }
+
+    // Craft patch (control point order) test: the contours of a tall wavy band
+    // and a copy moved 10 * eps sideways are the same with and without the
+    // patch.
+    #[test]
+    fn control_point_order_keeps_band_contours() {
+        let (n, l) = (50, 1e6);
+        let eps = 1e-6;
+        let amp = l * 0.05;
+        let lam = l / 3.0;
+        let width = l * 0.1;
+        let x = |y: f64| amp * (std::f64::consts::TAU * y / lam).sin();
+        let dx =
+            |y: f64| amp * std::f64::consts::TAU / lam * (std::f64::consts::TAU * y / lam).cos();
+        let h = l / f64::from(n);
+        let mut band = kurbo::BezPath::new();
+        band.move_to((x(0.0), 0.0));
+        for i in 0..n {
+            let (y0, y1) = (f64::from(i) * h, f64::from(i + 1) * h);
+            band.curve_to(
+                (x(y0) + dx(y0) * h / 3.0, y0 + h / 3.0),
+                (x(y1) - dx(y1) * h / 3.0, y1 - h / 3.0),
+                (x(y1), y1),
+            );
+        }
+        band.line_to((x(l) + width, l));
+        for i in (0..n).rev() {
+            let (y0, y1) = (f64::from(i) * h, f64::from(i + 1) * h);
+            band.curve_to(
+                (x(y1) + width - dx(y1) * h / 3.0, y1 - h / 3.0),
+                (x(y0) + width + dx(y0) * h / 3.0, y0 + h / 3.0),
+                (x(y0) + width, y0),
+            );
+        }
+        band.close_path();
+
+        for (kx, ky) in [(10.0, 0.0), (10.0, 1.0), (-10.0, 0.3)] {
+            let mut both = band.clone();
+            let mut copy = band.clone();
+            copy.apply_affine(kurbo::Affine::translate((kx * eps, ky * eps)));
+            both.extend(copy.iter());
+            let contours = || {
+                let top = crate::topology::Topology::<i32>::from_path(&both, eps).unwrap();
+                top.contours(|w| *w != 0)
+                    .contours()
+                    .map(|c| c.path.clone())
+                    .collect::<Vec<_>>()
+            };
+            let with = contours();
+            let without = without_control_point_order(contours);
+            assert!(!with.is_empty());
+            assert_eq!(with, without, "copy moved by ({kx}, {ky}) * eps");
+        }
     }
 
     #[test]
@@ -1771,6 +2766,37 @@ mod test {
         assert!(diff >= ep.dmin);
     }
 
+    // The curve x = y^2 for y in [0, 1]: the quadratic takes y and returns x.
+    #[test]
+    fn quad_approximation_gives_x_of_y() {
+        let c = CubicBez::new((0.0, 0.0), (0.0, 1.0 / 3.0), (1.0 / 3.0, 2.0 / 3.0), (1.0, 1.0));
+        let ep = QuadraticApprox::from_cubic(c, None);
+
+        assert!((ep.q.eval(0.5) - 0.25).abs() < 1e-9);
+        assert!((ep.q.eval(1.0) - 1.0).abs() < 1e-9);
+        assert!(ep.dmin.abs() < 1e-9);
+        assert!(ep.dmax.abs() < 1e-9);
+    }
+
+    #[test]
+    fn short_curve_chord_with_huge_x() {
+        // A vertical curve one ulp tall at y = 1e4, so `fit_quadratic` takes a
+        // chord. The product of an x coordinate and a height is above f64::MAX.
+        let y0 = 1e4f64;
+        let y3 = f64::from_bits(y0.to_bits() + 1);
+        for x in [1e305, -1e305, 5e307] {
+            let c = CubicBez::new((x, y0), (x, y0), (x, y3), (x, y3));
+            let q = fit_quadratic(c);
+            assert!(q.coeffs().iter().all(|c| c.is_finite()), "x = {x:e}: {q:?}");
+            assert_eq!(q.eval(y0), x, "x = {x:e}");
+            assert_eq!(q.eval(y3), x, "x = {x:e}");
+
+            let approx = QuadraticApprox::from_cubic(c, None);
+            assert_eq!(approx.dmin, 0.0, "x = {x:e}");
+            assert_eq!(approx.dmax, 0.0, "x = {x:e}");
+        }
+    }
+
     // At some point, this test case looped infinitely.
     #[test]
     fn test_loop() {
@@ -1788,6 +2814,61 @@ mod test {
         };
 
         dbg!(intersect_cubics(c0, c1, 0.5e-6, 1.5e-6));
+    }
+
+    // Craft patch (input rules) tests: curves that run down in y, tolerances
+    // outside the documented rule, and curves with no common y-range.
+    fn vertical(x: f64, y0: f64, y1: f64) -> CubicBez {
+        PathSeg::Line(Line::new((x, y0), (x, y1))).to_cubic()
+    }
+
+    #[test]
+    fn curves_decreasing_in_y() {
+        let up0 = vertical(0.0, 0.0, 1.0);
+        let up1 = vertical(1.0, 0.0, 1.0);
+        let down0 = vertical(0.0, 1.0, 0.0);
+        let down1 = vertical(1.0, 1.0, 0.0);
+        for (c0, c1) in [(down0, down1), (down0, up1), (up0, down1)] {
+            let cmp = intersect_cubics(c0, c1, 1e-6, 2e-6);
+            assert_eq!(cmp.iter().collect::<Vec<_>>(), [(0.0, 1.0, Order::Left)]);
+        }
+    }
+
+    #[test]
+    fn invalid_tolerances() {
+        let c0 = vertical(0.0, 0.0, 1.0);
+        let parallel = vertical(1.0, 0.0, 1.0);
+        let crossing = CubicBez::new(
+            (1.0, 0.0),
+            (2.0 / 3.0, 1.0 / 3.0),
+            (1.0 / 3.0, 2.0 / 3.0),
+            (0.0, 1.0),
+        );
+        let tolerances = [
+            (-1.0, -1.0),
+            (-1.0, 1e-6),
+            (1e-6, -1.0),
+            (-1e-9, -1e-9),
+            (0.0, 0.0),
+            (2e-6, 1e-6),
+            (1e-6, f64::INFINITY),
+            (f64::NAN, 1e-6),
+        ];
+        for (sure, ish) in tolerances {
+            for c1 in [c0, parallel, crossing] {
+                let cmp = intersect_cubics(c0, c1, sure, ish);
+                assert_eq!(cmp.iter().collect::<Vec<_>>(), [(0.0, 1.0, Order::Ish)]);
+            }
+        }
+    }
+
+    #[test]
+    fn disjoint_vertical_ranges() {
+        let cmp = intersect_cubics(vertical(0.0, 0.0, 1.0), vertical(1.0, 2.0, 3.0), 1e-6, 2e-6);
+        assert_eq!(cmp.iter().count(), 0);
+        cmp.check_invariants();
+        assert_eq!(cmp.order_after(0.5), Order::Ish);
+        assert_eq!(cmp.with_y_slop(0.5).iter().count(), 0);
     }
 
     #[test]
@@ -1820,6 +2901,32 @@ mod test {
         };
 
         assert_eq!(order.clone().with_y_slop(0.5).cmps, order.cmps);
+    }
+
+    // Craft patch (y-slop metrics): the recursion-depth observations survive
+    // the slop, including when it changes the entries.
+    #[test]
+    fn y_slop_keeps_metrics() {
+        let metrics = Metrics {
+            entries: vec![MetricsEntry { end: 1.0, depth: 3 }].into(),
+        };
+        let order = CurveOrder {
+            start: 0.0,
+            cmps: [
+                CurveOrderEntry {
+                    end: 0.5,
+                    order: Order::Left,
+                },
+                CurveOrderEntry {
+                    end: 1.0,
+                    order: Order::Ish,
+                },
+            ]
+            .into_iter()
+            .collect(),
+            metrics: metrics.clone(),
+        };
+        assert_eq!(order.with_y_slop(0.1).metrics, metrics);
     }
 
     #[test]
@@ -1894,6 +3001,33 @@ mod test {
         assert_eq!(order.clone().with_y_slop(0.5).cmps, order.cmps);
     }
 
+    // c0 is almost horizontal and only its first 0.0158 of height overlaps c1.
+    // The curves stay more than 4.4 apart there, so the whole overlap is Left.
+    #[test]
+    fn almost_horizontal_piece_cut_to_the_overlap() {
+        let c0 = CubicBez::new(
+            (311.848, 248.7972),
+            (313.515, 248.9023),
+            (315.181, 248.9698),
+            (316.848, 248.9988),
+        );
+        let c1 = CubicBez::new(
+            (316.909, 243.813),
+            (316.818, 245.48),
+            (316.698, 247.146),
+            (316.549, 248.813),
+        );
+        let order = intersect_cubics(c0, c1, 5e-7, 1e-6);
+        assert_eq!(order.start, 248.7972);
+        assert_eq!(
+            &order.cmps[..],
+            &[CurveOrderEntry {
+                end: 248.813,
+                order: Order::Left
+            }]
+        );
+    }
+
     // Cases where two curves share just a single y coordinate.
     #[test]
     fn curve_order_no_overlap() {
@@ -1911,6 +3045,13 @@ mod test {
         };
         let order = intersect_cubics(c0, c1, 0.125, 0.25);
         assert_eq!(order.start, 1.0);
+        // Craft patch (metrics opt-in): a single-y comparison records one
+        // entry at depth zero.
+        #[cfg(feature = "metrics")]
+        assert_eq!(
+            order.metrics.entries.as_slice(),
+            &[MetricsEntry { end: 1.0, depth: 0 }]
+        );
         assert_eq!(
             &order.cmps[..],
             &[CurveOrderEntry {
@@ -1952,6 +3093,47 @@ mod test {
         );
     }
 
+    // Craft patch (inline pieces) tests: a decomposition is no larger than two
+    // inline pieces, and one with more pieces than that keeps all of them.
+    #[test]
+    fn horizontal_decomposition_stores_two_pieces_inline() {
+        assert!(
+            std::mem::size_of::<AlmostHorizontalDecomposition>()
+                <= 2 * std::mem::size_of::<CubicParams>() + 2 * std::mem::size_of::<usize>()
+        );
+    }
+
+    #[test]
+    fn horizontal_decomposition_keeps_every_piece() {
+        let cases = [
+            (
+                CubicBez::new((0.0, 0.0), (10.0, 10.0), (20.0, 20.0), (30.0, 30.0)),
+                1,
+            ),
+            (
+                CubicBez::new((0.0, 0.0), (10.0, 10.0), (20.0, 20.0), (500.0, 30.0)),
+                2,
+            ),
+            (
+                CubicBez::new((0.0, 0.0), (2000.0, 10.0), (-1000.0, 20.0), (1000.0, 30.0)),
+                5,
+            ),
+            (
+                CubicBez::new((0.0, 0.0), (2000.0, 0.0), (-1000.0, 30.0), (1000.0, 30.0)),
+                5,
+            ),
+        ];
+        for (c, count) in cases {
+            let decomp = AlmostHorizontalDecomposition::from_monotone_cubic(c);
+            assert_eq!(decomp.pieces.len(), count);
+            assert_eq!(decomp.pieces[0].c.p0, c.p0);
+            assert_eq!(decomp.pieces[count - 1].c.p3, c.p3);
+            for pair in decomp.pieces.windows(2) {
+                assert_eq!(pair[0].c.p3.y, pair[1].c.p0.y);
+            }
+        }
+    }
+
     // This test recurses a bit too deeply. The two curves are quite close,
     // and near the end they're just a bit more than eps apart.
     #[test]
@@ -1972,6 +3154,193 @@ mod test {
         );
 
         dbg!(intersect_cubics(c0, c1, sure_tol, ish_tol));
+    }
+
+    // Craft patch (monotone handles) test: after the shape is split into
+    // y-monotone pieces, some pieces have a handle outside their own y-range.
+    // The outline must still follow the input curves, for the shape and for
+    // its mirror image in y.
+    #[test]
+    fn decomposition_keeps_handles_outside_the_y_range() {
+        use kurbo::{BezPath, ParamCurve as _, ParamCurveNearest as _, Shape as _};
+
+        for svg in [
+            "M0,5 C5,0 2,0 1,1 C0,2 4,0 5,5 Z",
+            "M0,0 C5,5 2,5 1,4 C0,3 4,5 5,0 Z",
+        ] {
+            let input = BezPath::from_svg(svg).unwrap();
+            let topology = crate::topology::Topology::<i32>::from_path(&input, 1e-6).unwrap();
+            let contours = topology.contours(|w| *w != 0);
+            let mut output = BezPath::new();
+            for contour in contours.contours() {
+                output.extend(contour.path.iter());
+            }
+
+            let area = output.area().abs();
+            assert!((area - 10.9122).abs() < 1e-3, "{svg}: area {area}");
+
+            let input_segs: Vec<_> = input.segments().collect();
+            for seg in output.segments() {
+                for i in 0..=16 {
+                    let p = seg.eval(i as f64 / 16.0);
+                    let dist = input_segs
+                        .iter()
+                        .map(|s| s.nearest(p, 1e-9).distance_sq)
+                        .fold(f64::INFINITY, f64::min)
+                        .sqrt();
+                    assert!(dist < 1e-6, "{svg}: {p:?} is {dist} from the input");
+                }
+            }
+        }
+    }
+
+    // With `t` found to within 1e-12, x on this curve 1e9 tall was off by up
+    // to 166 times `64 * f64::EPSILON * l`.
+    #[test]
+    fn solve_x_for_y_on_tall_curve() {
+        let l = 1e9;
+        let eps = 64.0 * f64::EPSILON * l;
+        let c = CubicBez::new(
+            (0.0, 0.0),
+            (0.8 * l, 0.33 * l),
+            (-0.8 * l, 0.66 * l),
+            (0.1 * l, l),
+        );
+        for i in 1..200 {
+            let y = l * f64::from(i) / 200.0;
+            let (mut lo, mut hi) = (0.0f64, 1.0f64);
+            loop {
+                let mid = lo + (hi - lo) / 2.0;
+                if mid <= lo || mid >= hi {
+                    break;
+                }
+                if c.eval(mid).y < y {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let exact = c.eval(lo).x;
+            let x = solve_x_for_y(c, y);
+            assert!(
+                (x - exact).abs() <= eps / 4.0,
+                "y {y}: x {x}, bisection {exact}"
+            );
+        }
+    }
+
+    // Two copies of one S-shaped curve 2e7 tall, 1.2 tolerances apart. With
+    // `t` found to within 1e-12 the comparison split them into 16,549
+    // entries; at 3e7 it took 950,130 entries and 9 s, and at 1e8 it ran for
+    // minutes.
+    #[test]
+    fn near_parallel_tall_curves() {
+        let l = 2e7;
+        let eps = (64.0 * f64::EPSILON * l).max(1e-6);
+        let c0 = CubicBez::new(
+            (0.0, 0.0),
+            (0.8 * l, 0.33 * l),
+            (-0.8 * l, 0.66 * l),
+            (0.1 * l, l),
+        );
+        let shift = kurbo::Vec2::new(1.2 * eps, 0.0);
+        let c1 = CubicBez::new(c0.p0 + shift, c0.p1 + shift, c0.p2 + shift, c0.p3 + shift);
+
+        let cmp = intersect_cubics(c0, c1, eps / 2.0, eps);
+        let entries = cmp.iter().count();
+        assert!(entries <= 64, "{entries} entries");
+        assert!(cmp.iter().all(|(_, _, order)| order != Order::Right));
+    }
+
+    // At a height of 1.5e8 one ulp is about 3e-8, more than `ish_tolerance`.
+    // Splitting the close interval around a crossing used to repeat the same
+    // one-ulp interval until the stack overflowed.
+    #[test]
+    fn ish_tolerance_below_float_spacing() {
+        let offset = 1.5e8;
+        let mut segs = crate::Segments::default();
+        segs.add_bez_path(&kurbo::Circle::new((offset, offset), 1.0).to_path(1e-9))
+            .unwrap();
+        segs.add_bez_path(&kurbo::Circle::new((offset + 1.0, offset), 1.0).to_path(1e-9))
+            .unwrap();
+        let cubics: Vec<_> = segs.segments().map(|s| s.to_kurbo_cubic()).collect();
+        let mut compared = 0;
+        for c0 in &cubics {
+            for c1 in &cubics {
+                let y1 = c0.p3.y.min(c1.p3.y);
+                if c0.p0.y.max(c1.p0.y) >= y1 {
+                    continue;
+                }
+                let order = intersect_cubics(*c0, *c1, 5e-11, 1e-10);
+                order.check_invariants();
+                assert_eq!(order.iter().last().map(|(_, end, _)| end), Some(y1));
+                compared += 1;
+            }
+        }
+        assert!(compared > 0);
+    }
+
+    // Raising tiny tolerances must not merge curves that are a few ulps
+    // apart: at 1e15 one ulp is 0.125, and these lines are 1.0 apart.
+    #[test]
+    fn raised_tolerance_keeps_far_curves_apart() {
+        let x = 1e15;
+        let c0 = PathSeg::Line(Line::new((x, 0.0), (x, 1.0))).to_cubic();
+        let c1 = PathSeg::Line(Line::new((x + 1.0, 0.0), (x + 1.0, 1.0))).to_cubic();
+        let order = intersect_cubics(c0, c1, 1e-12, 1e-11);
+        let entries: Vec<_> = order.iter().collect();
+        assert_eq!(entries, vec![(0.0, 1.0, Order::Left)]);
+    }
+
+    // The floor depends on the x coordinates only: large y coordinates do
+    // not make lines 1.0 apart close.
+    #[test]
+    fn raised_tolerance_ignores_large_y() {
+        let y = 2e15;
+        let c0 = PathSeg::Line(Line::new((0.0, y), (0.0, y + 1.0))).to_cubic();
+        let c1 = PathSeg::Line(Line::new((1.0, y), (1.0, y + 1.0))).to_cubic();
+        let order = intersect_cubics(c0, c1, 1e-12, 1e-11);
+        let entries: Vec<_> = order.iter().collect();
+        assert_eq!(entries, vec![(y, y + 1.0, Order::Left)]);
+    }
+
+    // Subnormal coordinates keep their order: the floor goes down to the
+    // spacing of subnormal floats, not to `f64::MIN_POSITIVE`.
+    #[test]
+    fn raised_tolerance_keeps_subnormal_curves_apart() {
+        let x = 1e-310;
+        let c0 = PathSeg::Line(Line::new((x, 0.0), (x, 1.0))).to_cubic();
+        let c1 = PathSeg::Line(Line::new((2.0 * x, 0.0), (2.0 * x, 1.0))).to_cubic();
+        let order = intersect_cubics(c0, c1, 1e-320, 2e-320);
+        let entries: Vec<_> = order.iter().collect();
+        assert_eq!(entries, vec![(0.0, 1.0, Order::Left)]);
+    }
+
+    // Craft patch (end order check): two finite curves near 1e8 that cross
+    // once. Without `slow-asserts`, a debug build compares them without a
+    // panic and gives the order on each side of the crossing.
+    #[cfg(not(feature = "slow-asserts"))]
+    #[test]
+    fn crossing_at_large_coordinates() {
+        let sure_tol = 8.993802161699384e-7;
+        let ish_tol = 1.7987604323398767e-6;
+        let c0 = CubicBez::new(
+            (125383211.83146076, 66386026.504549935),
+            (83601374.51512215, 98950975.47591528),
+            (59801634.505237974, 115174249.23969136),
+            (54096217.42598602, 115174249.23969136),
+        );
+        let c1 = CubicBez::new(
+            (73570041.209444, 57614167.78993744),
+            (90770853.19226673, 60905254.4942346),
+            (107971665.17508946, 64196341.19853177),
+            (125172477.1579122, 67487427.90282893),
+        );
+
+        let cmp = intersect_cubics(c0, c1, sure_tol, ish_tol);
+        assert_eq!(cmp.iter().last().unwrap().1, c1.p3.y);
+        assert_eq!(cmp.order_at(c0.p0.y), Order::Right);
+        assert_eq!(cmp.order_at(c1.p3.y), Order::Left);
     }
 
     #[test]
@@ -2014,6 +3383,60 @@ mod test {
         );
     }
 
+    // Craft patch (metrics opt-in) tests: the order is the same with and
+    // without the `metrics` feature, and entries are recorded only with it.
+    fn crossing_cubics_order() -> CurveOrder {
+        let c0 = CubicBez::new((0.0, 0.0), (0.0, 0.5), (1.0, 0.5), (1.0, 1.0));
+        let c1 = CubicBez::new((1.0, 0.0), (1.0, 0.5), (0.0, 0.5), (0.0, 1.0));
+        intersect_cubics(c0, c1, 1e-6, 1e-4)
+    }
+
+    #[test]
+    fn crossing_cubics_order_does_not_depend_on_metrics() {
+        let order = crossing_cubics_order();
+        let intervals: Vec<_> = order.iter().collect();
+        let expected = [
+            (0.0, 0.4999997495377526, Order::Left),
+            (0.4999997495377526, 0.5000002504622474, Order::Ish),
+            (0.5000002504622474, 1.0, Order::Right),
+        ];
+        assert_eq!(intervals.len(), expected.len());
+        for ((start, end, o), (exp_start, exp_end, exp_o)) in intervals.into_iter().zip(expected) {
+            assert!((start - exp_start).abs() < 1e-12);
+            assert!((end - exp_end).abs() < 1e-12);
+            assert_eq!(o, exp_o);
+        }
+    }
+
+    #[test]
+    fn crossing_cubics_metrics_follow_the_feature() {
+        let order = crossing_cubics_order();
+        assert_eq!(order.metrics.entries.is_empty(), !cfg!(feature = "metrics"));
+        assert_eq!(order.flip().metrics, order.metrics);
+    }
+
+    // The comparison recurses toward the crossing at y = 0.5, and each
+    // interval records the depth it was decided at.
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn crossing_cubics_metrics_record_the_recursion_depth() {
+        let order = crossing_cubics_order();
+        let expected = [
+            (0.41461454805348563, 0),
+            (0.49927444265135257, 1),
+            (0.4999997495377526, 2),
+            (0.5000002504622474, 2),
+            (0.5007255573486473, 2),
+            (0.5853854519465145, 1),
+            (1.0, 0),
+        ];
+        assert_eq!(order.metrics.entries.len(), expected.len());
+        for (entry, (end, depth)) in order.metrics.entries.iter().zip(expected) {
+            assert!((entry.end - end).abs() < 1e-12, "{entry:?}");
+            assert_eq!(entry.depth, depth, "{entry:?}");
+        }
+    }
+
     // TODO: improve this test
     #[test]
     fn break_horizontal() {
@@ -2028,5 +3451,49 @@ mod test {
 
         let c0 = CubicBez::new((0.0, 0.0), (2000.0, 0.0), (-1000.0, 30.0), (1000.0, 30.0));
         dbg!(AlmostHorizontalDecomposition::from_monotone_cubic(c0));
+    }
+
+    #[test]
+    fn opposite_orders_get_a_zero_height_ish() {
+        let mut order = CurveOrder::new(0.0);
+        order.push(1.0, Order::Right, MetricsStatus::default());
+        order.push(2.0, Order::Left, MetricsStatus::default());
+        order.check_invariants();
+
+        let entries: Vec<_> = order.iter().collect();
+        assert_eq!(
+            entries,
+            vec![
+                (0.0, 1.0, Order::Right),
+                (1.0, 1.0, Order::Ish),
+                (1.0, 2.0, Order::Left)
+            ]
+        );
+        assert_eq!(order.order_at(1.5), Order::Left);
+    }
+
+    // Craft patch (quadratic scale) test: the cubic with y = [0, -s, -2s, s]
+    // turns at t = 0.5 for every scale s.
+    #[test]
+    fn quadratic_signs_at_extreme_scales() {
+        for s in [1e-200, 1.0, 1e160] {
+            let q = Quadratic::new([-s, 0.0, 4.0 * s]);
+            assert_eq!(quadratic_signs(q), (true, -0.5, 0.5), "scale {s}");
+
+            let c = CubicBez::new((0.0, 0.0), (1.0, -s), (2.0, -2.0 * s), (3.0, s));
+            let ends: Vec<f64> = crate::geom::monotonic_cubic_pieces(c)
+                .iter()
+                .map(|p| p.end_t)
+                .collect();
+            assert_eq!(ends, [0.5, 1.0], "scale {s}");
+        }
+
+        // Coefficients far apart in size whose products are in range keep
+        // their roots, +-2^-1021.5 (about 3.147e-308).
+        let q = Quadratic::new([-(2f64.powi(-1022)), 0.0, 2f64.powi(1021)]);
+        let (initially_positive, r0, r1) = quadratic_signs(q);
+        assert!(initially_positive);
+        assert!((r0 + r1).abs() <= 1e-15 * r1, "{r0} {r1}");
+        assert!(r1 > 3.14e-308 && r1 < 3.15e-308, "{r1}");
     }
 }

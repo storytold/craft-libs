@@ -2,17 +2,20 @@
 //!
 //! This algorithm is documented in `docs/sweep.typ`.
 
-use std::cell::{RefCell, RefMut};
+use std::cell::{Cell, RefCell, RefMut};
+use std::collections::{BTreeMap, btree_map::Entry};
 
 #[cfg(feature = "slow-asserts")]
 use std::ops::DerefMut;
+
+use rustc_hash::FxHashSet;
 
 use crate::{
     curve::{self, CurveInteraction, CurveOrder, Order},
     geom::Segment,
     num::CheapOrderedFloat,
     order::ComparisonCache,
-    segments::{SegIdx, Segments},
+    segments::{SegIdx, SegVec, Segments},
     treevec::TreeVec,
 };
 
@@ -142,6 +145,10 @@ pub(crate) struct SegmentOrderEntry {
     ///
     /// If this is `Some`, both `enter` and `exit` will be true.
     old_seg: Option<SegIdx>,
+    // Craft patch (sweep position).
+    /// Keys strictly increase along the sweep line. See [`SegmentOrder::keys`].
+    #[cfg_attr(test, serde(skip))]
+    key: u64,
 }
 
 impl std::fmt::Debug for SegmentOrderEntry {
@@ -168,6 +175,7 @@ impl SegmentOrderEntry {
             in_changed_interval: false,
             old_idx: None,
             old_seg: None,
+            key: 0,
         }
     }
 
@@ -202,6 +210,15 @@ impl SegmentOrderEntry {
 #[derive(Clone, Default)]
 pub(crate) struct SegmentOrder {
     pub(crate) segs: TreeVec<SegmentOrderEntry, 128>,
+    // Craft patch (sweep position).
+    /// For each segment, the key of the entry that last held it, or zero if no
+    /// entry has held it. Entries are sorted by key, so this finds a segment on
+    /// a wide sweep line by binary search.
+    ///
+    /// Removing an entry leaves its keys here, and `position` ignores any key
+    /// whose entry no longer holds the segment.
+    #[cfg_attr(test, serde(skip))]
+    keys: SegVec<u64>,
 }
 
 impl std::fmt::Debug for SegmentOrder {
@@ -211,6 +228,14 @@ impl std::fmt::Debug for SegmentOrder {
 }
 
 impl SegmentOrder {
+    // Craft patch (sweep position).
+    fn new(num_segments: usize) -> Self {
+        Self {
+            segs: TreeVec::new(),
+            keys: SegVec::with_size(num_segments),
+        }
+    }
+
     fn seg(&self, i: usize) -> SegIdx {
         self.segs[i].seg
     }
@@ -323,6 +348,30 @@ pub struct SweepLineBuffers {
     output_events: Vec<OutputEvent>,
 }
 
+// Craft patch (work limit): a linear search of the sweep line steps over a
+// segment in under a sixteenth of the time of a segment comparison.
+const SEGMENTS_PASSED_PER_UNIT: u64 = 16;
+
+/// Craft patch (removal scan): the runs of positions on the sweep line whose
+/// segments all end at the current height, found by `scan_for_removal`.
+///
+/// Each run is keyed by `live`, the nearest position to its left whose segment
+/// does not end here (`None` when there is none), and maps to `end`. The run
+/// covers the positions after `live` and before `end`.
+#[derive(Debug, Default)]
+struct EndedRuns(BTreeMap<Option<usize>, usize>);
+
+impl EndedRuns {
+    /// The `live` key of the run that covers `pos`, if a run covers it.
+    fn live_before(&self, pos: usize) -> Option<Option<usize>> {
+        self.0
+            .range(..Some(pos))
+            .next_back()
+            .filter(|&(_, &end)| pos < end)
+            .map(|(&live, _)| live)
+    }
+}
+
 /// Encapsulates the state of the sweep-line algorithm and allows iterating over sweep lines.
 #[derive(Clone, Debug)]
 pub struct Sweeper<'a> {
@@ -350,6 +399,38 @@ pub struct Sweeper<'a> {
 
     comparisons: RefCell<ComparisonCache>,
     conservative_comparisons: RefCell<ComparisonCache>,
+
+    // Craft patch (coincident touch rescan): the (segment, scans right) pairs
+    // whose touch-event scan in `handle_intersection` already ran at the
+    // current `y` with the current sweep-line order. A scan reads only the
+    // order, `y` and the segments, so running it again before the order
+    // changes pushes only events it already pushed. Exact copies of a shape
+    // queue a touch event for every pair of coincident segments, and each one
+    // used to scan the whole bundle in both directions.
+    touch_scans: rustc_hash::FxHashSet<(SegIdx, bool)>,
+    #[cfg(test)]
+    touch_scan_count: usize,
+    // Craft patch (work limit): the most work that `next_line` lets the sweep
+    // do, and whether it stopped there. The work is the segment comparisons,
+    // which the two caches count, plus `position_checks`: the segment positions
+    // checked against horizontal segments and contour endpoints while finding
+    // the changed intervals, with n log2 n more for sorting a sweep line's n
+    // horizontal segments. `segments_passed` counts the segments that linear
+    // searches of the sweep line step over without comparing them; each
+    // `SEGMENTS_PASSED_PER_UNIT` of them counts as one unit of work.
+    // `range_horizontals` counts the horizontal segments that the steps of a
+    // `SweepLineRange` visit; a range borrows the sweeper, so it is a `Cell`.
+    work_limit: Option<u64>,
+    stopped_at_work_limit: bool,
+    position_checks: u64,
+    segments_passed: u64,
+    range_horizontals: Cell<u64>,
+    // Craft patch (removal scan): how many positions `scan_for_removal` looked at,
+    // and how many times it started the intersection scans.
+    #[cfg(test)]
+    removal_scan_steps: usize,
+    #[cfg(test)]
+    removal_scans: usize,
 }
 
 impl<'segs> Sweeper<'segs> {
@@ -359,15 +440,19 @@ impl<'segs> Sweeper<'segs> {
     /// The really correct mode doesn't actually change any of the
     /// output orders, but it does emit extra events whenever lines
     /// touch without crossing.
+    ///
+    /// An `eps` that is NaN, infinite, not positive, or below `64 * f64::EPSILON`
+    /// times the segments' largest coordinate magnitude is replaced by that value.
     pub fn new_with_correctness(
         segments: &'segs Segments,
         eps: f64,
         correctness: Correctness,
     ) -> Self {
+        let eps = segments.usable_eps(eps);
         let events = EventQueue::default();
         Sweeper {
             eps,
-            line: SegmentOrder::default(),
+            line: SegmentOrder::new(segments.len()),
             correctness,
             y: events.next_y(segments).unwrap_or(f64::INFINITY),
             events,
@@ -377,6 +462,18 @@ impl<'segs> Sweeper<'segs> {
             horizontals: Vec::new(),
             comparisons: RefCell::new(ComparisonCache::new(eps, eps / 2.0)),
             conservative_comparisons: RefCell::new(ComparisonCache::new(4.0 * eps, eps / 2.0)),
+            touch_scans: rustc_hash::FxHashSet::default(),
+            #[cfg(test)]
+            touch_scan_count: 0,
+            work_limit: None,
+            stopped_at_work_limit: false,
+            position_checks: 0,
+            segments_passed: 0,
+            range_horizontals: Cell::new(0),
+            #[cfg(test)]
+            removal_scan_steps: 0,
+            #[cfg(test)]
+            removal_scans: 0,
         }
     }
 
@@ -384,6 +481,75 @@ impl<'segs> Sweeper<'segs> {
     /// given tolerance.
     pub fn new(segments: &'segs Segments, eps: f64) -> Self {
         Self::new_with_correctness(segments, eps, Correctness::GoodEnough)
+    }
+
+    /// Limits the work the sweep may do.
+    ///
+    /// The work is the number of segment comparisons plus the number of segment
+    /// positions checked against horizontal segments and contour endpoints while
+    /// finding a sweep line's changed intervals, plus n log2 n for sorting the n
+    /// horizontal segments of a sweep line, plus one unit for every 16 segments
+    /// that linear searches of the sweep line step over without comparing them,
+    /// plus the horizontal segments that each step of a [`SweepLineRange`]
+    /// visits. A caller stops processing a range once
+    /// [`SweepLineRange::work_limit_exceeded`] returns `true`.
+    /// Once the sweep has done more than `limit`,
+    /// [`Sweeper::next_line`] returns `None` and
+    /// [`Sweeper::work_limit_exceeded`] returns `true`. The sweep checks the limit
+    /// between events and between the comparisons and position checks that find a
+    /// sweep line's changed intervals, so it can pass the limit by the comparisons
+    /// and searches of one event, which grow with the number of segments in the
+    /// sweep line. It
+    /// never returns a sweep line once it has passed the limit. It stops partway
+    /// through a sweep line, so its output is incomplete, and it stays stopped if
+    /// the limit is raised afterwards.
+    pub fn set_work_limit(&mut self, limit: u64) {
+        self.work_limit = Some(limit);
+    }
+
+    /// Returns `true` if the sweep has done more work than the limit given to
+    /// [`Sweeper::set_work_limit`], or has stopped at that limit.
+    pub fn work_limit_exceeded(&self) -> bool {
+        self.stopped_at_work_limit || self.work_limit.is_some_and(|limit| self.work() > limit)
+    }
+
+    /// Returns `true`, and keeps the sweep stopped, once the work limit is exceeded.
+    fn stop_at_work_limit(&mut self) -> bool {
+        self.stopped_at_work_limit = self.work_limit_exceeded();
+        self.stopped_at_work_limit
+    }
+
+    /// The work done so far: the segment comparisons, cached or not, the
+    /// position checks, the segments that linear searches passed, and the
+    /// horizontal segments that range steps visited.
+    fn work(&self) -> u64 {
+        let calls = self.comparisons.borrow().calls;
+        calls
+            .saturating_add(self.conservative_comparisons.borrow().calls)
+            .saturating_add(self.position_checks)
+            .saturating_add(self.segments_passed / SEGMENTS_PASSED_PER_UNIT)
+            .saturating_add(self.range_horizontals.get())
+    }
+
+    /// Counts `n` horizontal segments visited by a step of a [`SweepLineRange`].
+    pub(crate) fn count_range_horizontals(&self, n: usize) {
+        let total = self.range_horizontals.get().saturating_add(n as u64);
+        self.range_horizontals.set(total);
+    }
+
+    /// Finds `seg_idx` on the sweep line, counting the segments the search passes.
+    fn find_position(&mut self, seg_idx: SegIdx) -> Option<usize> {
+        let pos = self.line.position(seg_idx);
+        let passed = pos.map_or(self.line.segs.len(), |pos| pos + 1);
+        self.segments_passed = self.segments_passed.saturating_add(passed as u64);
+        pos
+    }
+
+    /// Counts one position check and returns `true`, stopping the sweep, once
+    /// the work limit is exceeded.
+    fn check_position(&mut self) -> bool {
+        self.position_checks = self.position_checks.saturating_add(1);
+        self.stop_at_work_limit()
     }
 
     fn compare_segments(&self, i: SegIdx, j: SegIdx) -> RefMut<'_, CurveOrder> {
@@ -398,6 +564,47 @@ impl<'segs> Sweeper<'segs> {
         })
     }
 
+    /// Returns true if segments `i` and `j` start at the same point and the sweep line is at
+    /// that point.
+    ///
+    /// Every pair of segments that start at one point compares "ish" there, so a scan or an
+    /// insertion search from one of them passes all the others. Comparisons of such pairs made
+    /// at that point are not stored, so `n` segments that start at one point and do not cross
+    /// later store `O(n)` comparisons instead of `O(n^2)`. A comparison made at a later crossing
+    /// is stored as usual.
+    fn start_together_here(&self, i: SegIdx, j: SegIdx, y: f64) -> bool {
+        let start = self.segments[i].start();
+        start.y == y && start == self.segments[j].start()
+    }
+
+    /// Returns the next touch of `i` and `j` after `y`, and the first interval of their
+    /// conservative order that ends after `y`.
+    fn scan_comparison(
+        &self,
+        i: SegIdx,
+        j: SegIdx,
+        y: f64,
+    ) -> (Option<CurveInteraction>, Option<(f64, f64, Order)>) {
+        if self.start_together_here(i, j, y) {
+            let touch = self
+                .comparisons
+                .borrow_mut()
+                .with_order(self.segments, i, j, |c| c.next_touch_after(y));
+            let first =
+                self.conservative_comparisons
+                    .borrow_mut()
+                    .with_order(self.segments, i, j, |c| c.iter().find(|(_, y1, _)| *y1 > y));
+            return (touch, first);
+        }
+
+        let touch = self.compare_segments(i, j).next_touch_after(y);
+        let first = self
+            .compare_segments_conservatively(i, j)
+            .iter()
+            .find(|(_, y1, _)| *y1 > y);
+        (touch, first)
+    }
+
     /// Moves the sweep forward, returning the next sweep line.
     ///
     /// Returns `None` when sweeping is complete.
@@ -405,6 +612,14 @@ impl<'segs> Sweeper<'segs> {
         &'slf mut self,
         bufs: &'buf mut SweepLineBuffers,
     ) -> Option<SweepLine<'buf, 'slf, 'segs>> {
+        // Craft patch (work limit): a sweep past its work limit stops here, and
+        // also partway through a sweep line, since one line of stacked or nearly
+        // coincident segments can take billions of comparisons. The sweep's
+        // state is left half updated, so every later call returns `None` too.
+        if self.stop_at_work_limit() {
+            return None;
+        }
+
         self.check_invariants();
 
         let y = self.events.next_y(self.segments)?;
@@ -417,6 +632,9 @@ impl<'segs> Sweeper<'segs> {
             let enters = self.events.entrances_at_y(&y, self.segments);
             for (enter_y, idx) in enters {
                 debug_assert_eq!(enter_y, &y);
+                if self.stop_at_work_limit() {
+                    return None;
+                }
                 self.handle_enter(*idx);
                 self.check_invariants();
             }
@@ -425,20 +643,74 @@ impl<'segs> Sweeper<'segs> {
         // Process all the exit events.
         {
             let exits = self.events.exits_at_y(&y, self.segments);
+            // Craft patch (removal scan): the sweep line's positions do not
+            // change while exits are handled, so the runs of ended segments
+            // found for one exit also serve the others.
+            let mut ended_runs = EndedRuns::default();
             for (exit_y, idx) in exits {
                 debug_assert_eq!(exit_y, &y);
-                self.handle_exit(*idx);
+                if self.stop_at_work_limit() {
+                    return None;
+                }
+                self.handle_exit(*idx, &mut ended_runs);
                 self.check_invariants();
             }
         }
 
         // Process all the intersection events at this y.
+        //
+        // Craft patch (repeated intersection): when nearly coincident segments
+        // do not compare transitively, handling one pair can queue another
+        // pair at this same y again, and the pairs can cycle forever through
+        // the same positions. A pair is handled at most once per y for each
+        // pair of positions it holds in the sweep line; a repeat is queued
+        // again at the pair's next order change instead, if that comes before
+        // both ends.
+        let mut handled = FxHashSet::default();
+        #[cfg(test)]
+        let mut events_at_y = 0usize;
         while let Some(intersection) = self.events.next_intersection_at_y(y) {
-            self.handle_intersection(intersection.left, intersection.right);
+            if self.stop_at_work_limit() {
+                return None;
+            }
+            #[cfg(test)]
+            {
+                events_at_y += 1;
+                let n = self.segments.len();
+                assert!(
+                    events_at_y <= n.saturating_pow(4),
+                    "{events_at_y} intersection events at y={y:?} for {n} segments"
+                );
+            }
+            let (left, right) = (intersection.left, intersection.right);
+            let positions = (self.line.position(left), self.line.position(right));
+            if !handled.insert((left, right, positions)) {
+                let next_y = self
+                    .compare_segments(left, right)
+                    .iter()
+                    .map(|(_, end, _)| end)
+                    .find(|end| *end > y);
+                if let Some(next_y) = next_y
+                    && next_y < self.segments[left].end().y
+                    && next_y < self.segments[right].end().y
+                {
+                    self.events.push(IntersectionEvent {
+                        y: next_y,
+                        left,
+                        right,
+                    });
+                }
+                continue;
+            }
+            self.handle_intersection(left, right);
             self.check_invariants();
         }
 
-        self.compute_changed_intervals();
+        // Craft patch (work limit): finding the changed intervals compares
+        // segments too, so the sweep can stop before or during it.
+        if self.stop_at_work_limit() || !self.compute_changed_intervals() {
+            return None;
+        }
         Some(SweepLine {
             state: self,
             next_changed_interval: 0,
@@ -467,8 +739,15 @@ impl<'segs> Sweeper<'segs> {
             self.line.segs.remove(idx);
         }
         self.y = y;
+        // Craft patch (comparison cache size): the sweep line holds no
+        // segment that ends above `y`, so their cached pairs are dropped.
+        self.comparisons.get_mut().evict_ended(self.segments, y);
+        self.conservative_comparisons
+            .get_mut()
+            .evict_ended(self.segments, y);
         self.segs_needing_positions.clear();
         self.horizontals.clear();
+        self.touch_scans.clear();
     }
 
     fn intersection_scan_right(&mut self, start_idx: usize, which: WhichTouch) {
@@ -488,12 +767,32 @@ impl<'segs> Sweeper<'segs> {
         }
         let mut height_bound = seg.end().y;
 
-        for j in (start_idx + 1)..self.line.segs.len() {
-            let other_idx = self.line.seg(j);
-            let other = &self.segments[other_idx];
-            if other.end().y == y {
-                continue;
+        // Craft patch (scan runs): when the next segment ends at `y`, the run
+        // of segments that end at `y` is stepped over with one pass of the
+        // tree iterator, instead of one indexed lookup per segment. Such a segment is not a barrier for the
+        // far-apart `break` below, because it leaves the line at `y`.
+        let len = self.line.segs.len();
+        let segments = self.segments;
+        let mut next = start_idx + 1;
+        while next < len {
+            let mut other_idx = self.line.seg(next);
+            if segments[other_idx].end().y == y {
+                let passed = self
+                    .line
+                    .segs
+                    .range(next..)
+                    .take_while(|entry| segments[entry.seg].end().y == y)
+                    .count();
+                self.segments_passed = self.segments_passed.saturating_add(passed as u64);
+                next += passed;
+                if next >= len {
+                    break;
+                }
+                other_idx = self.line.seg(next);
             }
+            let j = next;
+            next += 1;
+            let other = &self.segments[other_idx];
 
             // Our basic comparisons use eps tolerance and eps/2 accuracy, so if
             // our max_x is 1.5 eps less than their min_x then we're guaranteed
@@ -507,9 +806,7 @@ impl<'segs> Sweeper<'segs> {
             // event queue between actual intersections and near-touches? For
             // now, no. We will distinguish them in handle_intersection
 
-            let touch = self
-                .compare_segments(seg_idx, other_idx)
-                .next_touch_after(y);
+            let (touch, first_after_y) = self.scan_comparison(seg_idx, other_idx, y);
             if let Some(int_y) = touch.and_then(|touch| choose_cross_height(touch, y, which)) {
                 let (left_idx, right_idx) = match touch {
                     Some(curve::CurveInteraction::Touch(..)) => (j, start_idx),
@@ -531,8 +828,7 @@ impl<'segs> Sweeper<'segs> {
                 }
             }
 
-            let cmp = self.compare_segments_conservatively(seg_idx, other_idx);
-            if let Some((_y0, y1, order)) = cmp.iter().find(|(_, y1, _)| *y1 > y)
+            if let Some((_y0, y1, order)) = first_after_y
                 && order == Order::Left
                 && y1 >= height_bound
             {
@@ -552,21 +848,35 @@ impl<'segs> Sweeper<'segs> {
         }
         let mut height_bound = seg.end().y;
 
-        for j in (0..start_idx).rev() {
-            let other_idx = self.line.seg(j);
-            let other = &self.segments[other_idx];
-            if other.end().y == y {
-                continue;
+        // Craft patch (scan runs): see `intersection_scan_right`.
+        let segments = self.segments;
+        let mut next = start_idx;
+        while next > 0 {
+            let mut other_idx = self.line.seg(next - 1);
+            if segments[other_idx].end().y == y {
+                let passed = self
+                    .line
+                    .segs
+                    .range_rev_to(next)
+                    .take_while(|entry| segments[entry.seg].end().y == y)
+                    .count();
+                self.segments_passed = self.segments_passed.saturating_add(passed as u64);
+                next -= passed;
+                if next == 0 {
+                    break;
+                }
+                other_idx = self.line.seg(next - 1);
             }
+            next -= 1;
+            let j = next;
+            let other = &self.segments[other_idx];
 
             if seg.min_x() - 2.0 * self.eps > other.max_x() {
                 break;
             }
             height_bound = height_bound.min(other.end().y);
 
-            let touch = self
-                .compare_segments(other_idx, seg_idx)
-                .next_touch_after(y);
+            let (touch, first_after_y) = self.scan_comparison(other_idx, seg_idx, y);
             if let Some(int_y) = touch.and_then(|touch| choose_cross_height(touch, y, which)) {
                 let (left_idx, right_idx) = match touch {
                     Some(curve::CurveInteraction::Touch(..)) => (start_idx, j),
@@ -582,8 +892,7 @@ impl<'segs> Sweeper<'segs> {
                 }
             }
 
-            let cmp = self.compare_segments_conservatively(other_idx, seg_idx);
-            if let Some((_y0, y1, order)) = cmp.iter().find(|(_, y1, _)| *y1 > y)
+            if let Some((_y0, y1, order)) = first_after_y
                 && order == Order::Left
                 && y1 >= height_bound
             {
@@ -592,15 +901,57 @@ impl<'segs> Sweeper<'segs> {
         }
     }
 
-    fn scan_for_removal(&mut self, pos: usize) {
-        if pos > 0 {
-            self.intersection_scan_right(pos - 1, WhichTouch::Mid);
-            self.intersection_scan_left(pos - 1, WhichTouch::Mid);
+    fn scan_for_removal(&mut self, pos: usize, ended_runs: &mut EndedRuns) {
+        // Craft patch (removal scan): segments that end at this y stay in the
+        // sweep line until `advance`, and a scan from one of them returns at
+        // once. The scans start from the nearest segment left of `pos` that
+        // does not end here, so the live segments on both sides of the gap
+        // are compared. When there is none, nothing on the left can cross.
+        //
+        // The scans skip every segment that ends at this y, so while the
+        // positions do not change, a scan from the same segment finds the
+        // same pairs. `ended_runs` records the starts already scanned.
+        let y = self.y;
+        let mut live = None;
+        let mut i = pos;
+        while i > 0 {
+            i -= 1;
+            #[cfg(test)]
+            {
+                self.removal_scan_steps += 1;
+            }
+            if let Some(run_live) = ended_runs.live_before(i) {
+                live = run_live;
+                break;
+            }
+            if self.segments[self.line.seg(i)].end().y != y {
+                live = Some(i);
+                break;
+            }
+        }
+        let scanned = match ended_runs.0.entry(live) {
+            Entry::Occupied(mut run) => {
+                let end = run.get_mut();
+                *end = (*end).max(pos);
+                true
+            }
+            Entry::Vacant(run) => {
+                run.insert(pos);
+                false
+            }
+        };
+        if !scanned && let Some(start) = live {
+            #[cfg(test)]
+            {
+                self.removal_scans += 1;
+            }
+            self.intersection_scan_right(start, WhichTouch::Mid);
+            self.intersection_scan_left(start, WhichTouch::Mid);
         }
     }
 
     fn insert(&mut self, pos: usize, seg: SegmentOrderEntry) {
-        self.line.segs.insert(pos, seg);
+        self.line.insert(pos, seg);
         self.intersection_scan_right(pos, WhichTouch::Mid);
         self.intersection_scan_left(pos, WhichTouch::Mid);
     }
@@ -627,11 +978,11 @@ impl<'segs> Sweeper<'segs> {
         if let Some(contour_prev_idx) = contour_prev_idx {
             let contour_prev = &self.segments[contour_prev_idx];
             if contour_prev.start().y < self.y {
-                let pos = self.line.position(contour_prev_idx).unwrap();
+                let pos = self.find_position(contour_prev_idx).unwrap();
                 debug_assert!(contour_prev.end() == new_seg.start());
                 self.handle_contour_continuation(seg_idx, new_seg, pos);
                 return;
-            } else if let Some(contour_prev_pos) = self.line.position(contour_prev_idx) {
+            } else if let Some(contour_prev_pos) = self.find_position(contour_prev_idx) {
                 // Both of us entered on this sweep-line.
                 debug_assert!(contour_prev.start() == new_seg.start());
                 pos = match self
@@ -711,6 +1062,8 @@ impl<'segs> Sweeper<'segs> {
         let x1 = seg.max_x();
         self.line.segs[pos].old_seg = Some(self.line.segs[pos].seg);
         self.line.segs[pos].seg = seg_idx;
+        // Craft patch (sweep position).
+        self.line.keys[seg_idx] = self.line.segs[pos].key;
         self.line.segs[pos].enter = true;
         self.line.segs[pos].exit = true;
         self.line.segs[pos].lower_bound = x0.min(x1) - self.eps;
@@ -722,8 +1075,8 @@ impl<'segs> Sweeper<'segs> {
 
     /// Marks a segment as needing to exit, but doesn't actually remove it
     /// from the sweep-line. See `SegmentOrderEntry::exit` for an explanation.
-    fn handle_exit(&mut self, seg_idx: SegIdx) {
-        let pos = self.line.position(seg_idx).unwrap();
+    fn handle_exit(&mut self, seg_idx: SegIdx, ended_runs: &mut EndedRuns) {
+        let pos = self.find_position(seg_idx).unwrap();
 
         if self.line.segs[pos].old_seg == Some(seg_idx) {
             return;
@@ -733,13 +1086,13 @@ impl<'segs> Sweeper<'segs> {
         // the scan doesn't get confused by the segment that should be marked
         // for exit.
         self.line.segs[pos].exit = true;
-        self.scan_for_removal(pos);
+        self.scan_for_removal(pos, ended_runs);
         self.segs_needing_positions.push(pos);
     }
 
     fn handle_intersection(&mut self, left: SegIdx, right: SegIdx) {
-        let left_idx = self.line.position(left).unwrap();
-        let right_idx = self.line.position(right).unwrap();
+        let left_idx = self.find_position(left).unwrap();
+        let right_idx = self.find_position(right).unwrap();
         if left_idx < right_idx {
             // We're going to put `left_seg` after `right_seg` in the
             // sweep line, and while doing so we need to "push" along
@@ -749,6 +1102,7 @@ impl<'segs> Sweeper<'segs> {
             for j in (left_idx + 1)..right_idx {
                 let seg_j_entry = &self.line.segs[j];
                 if seg_j_entry.will_really_exit() {
+                    self.segments_passed = self.segments_passed.saturating_add(1);
                     continue;
                 }
 
@@ -765,11 +1119,20 @@ impl<'segs> Sweeper<'segs> {
                     let (_, y2, j_right_order) =
                         self.compare_segments(seg_j_idx, right).entry_at(self.y);
                     if j_right_order == Order::Left {
-                        self.events.push(IntersectionEvent {
-                            y: y1.min(y2),
-                            left,
-                            right,
-                        });
+                        // Craft patch (delayed intersection at an end): the
+                        // delayed event is queued only when it comes before
+                        // both ends, as in the scans that queue intersections.
+                        // An event at an end makes `entry_at` panic.
+                        let delayed_y = y1.min(y2);
+                        if delayed_y < self.segments[left].end().y
+                            && delayed_y < self.segments[right].end().y
+                        {
+                            self.events.push(IntersectionEvent {
+                                y: delayed_y,
+                                left,
+                                right,
+                            });
+                        }
                         return;
                     }
 
@@ -785,11 +1148,14 @@ impl<'segs> Sweeper<'segs> {
                 }
             }
 
+            // The order changes below, so earlier touch scans no longer stand.
+            self.touch_scans.clear();
+
             // Remove them in reverse to make indexing easier.
             let mut removed = Vec::with_capacity(to_move.len());
             for &j in to_move.iter().rev() {
                 removed.push(self.line.segs.remove(j));
-                self.scan_for_removal(j);
+                self.scan_for_removal(j, &mut EndedRuns::default());
             }
 
             // We want to insert them at what was previously `right_idx + 1`, but the
@@ -813,7 +1179,7 @@ impl<'segs> Sweeper<'segs> {
 		// larger `y` than our current `y` (if not, it would
 		// violate the cyclic order property).
                 let which = WhichTouch::Late;
-                self.line.segs.insert(insertion_pos, seg);
+                self.line.insert(insertion_pos, seg);
                 self.intersection_scan_right(insertion_pos, which);
                 self.intersection_scan_left(insertion_pos, which);
             }
@@ -830,9 +1196,21 @@ impl<'segs> Sweeper<'segs> {
 
             // We haven't changed the order of any segments, but the "touch" event
             // we just processed might have been a witness for the crossing invariant.
-            // So we need to scan.
-            self.intersection_scan_right(right_idx, WhichTouch::Mid);
-            self.intersection_scan_left(left_idx, WhichTouch::Mid);
+            // So we need to scan, unless the same scan already ran with this order.
+            if self.touch_scans.insert((right, true)) {
+                #[cfg(test)]
+                {
+                    self.touch_scan_count += 1;
+                }
+                self.intersection_scan_right(right_idx, WhichTouch::Mid);
+            }
+            if self.touch_scans.insert((left, false)) {
+                #[cfg(test)]
+                {
+                    self.touch_scan_count += 1;
+                }
+                self.intersection_scan_left(left_idx, WhichTouch::Mid);
+            }
         }
     }
 
@@ -885,6 +1263,11 @@ impl<'segs> Sweeper<'segs> {
 
     #[cfg(feature = "slow-asserts")]
     fn check_invariants(&self) {
+        // Craft patch (work limit): the comparisons made by these checks do not
+        // count toward the work limit.
+        let calls = self.comparisons.borrow().calls;
+        let conservative_calls = self.conservative_comparisons.borrow().calls;
+
         for seg_entry in self.line.segs.iter() {
             let seg_idx = seg_entry.seg;
             let seg = &self.segments[seg_idx];
@@ -972,7 +1355,8 @@ impl<'segs> Sweeper<'segs> {
                             y_int,
                             self.y,
                             self.events.intersection,
-                            &self.line,
+                            // Craft patch (clippy lints): the format arguments are taken by reference already.
+                            self.line,
                         );
                     }
                 }
@@ -980,29 +1364,53 @@ impl<'segs> Sweeper<'segs> {
         }
 
         self.check_changed_interval_closeness();
+
+        self.comparisons.borrow_mut().calls = calls;
+        self.conservative_comparisons.borrow_mut().calls = conservative_calls;
     }
 
     #[cfg(not(feature = "slow-asserts"))]
     fn check_invariants(&self) {}
 
-    fn compute_horizontal_changed_intervals(&mut self) {
+    /// Craft patch (work limit): returns `false`, leaving the changed intervals
+    /// incomplete, if the sweep passes its work limit.
+    fn compute_horizontal_changed_intervals(&mut self) -> bool {
+        // Sorting the n horizontal segments counts as n log2 n position checks,
+        // and the sweep stops before the sort once that passes the work limit.
+        let n = self.horizontals.len() as u64;
+        let sort_work = n.saturating_mul(n.checked_ilog2().map_or(0, u64::from));
+        self.position_checks = self.position_checks.saturating_add(sort_work);
+        if self.stop_at_work_limit() {
+            return false;
+        }
         self.horizontals
             .sort_by_key(|seg_idx| CheapOrderedFloat::from(self.segments[*seg_idx].start().x));
         let mut last_end = f64::NEG_INFINITY;
 
-        for (idx, &seg_idx) in self.horizontals.iter().enumerate() {
-            let seg = &self.segments[seg_idx];
+        let segments = self.segments;
+        for idx in 0..self.horizontals.len() {
+            let seg_idx = self.horizontals[idx];
+            let seg = &segments[seg_idx];
 
             // Find the index of some segment that might overlap with this
             // horizontal segment, but the index before definitely doesn't.
+            let mut probes = 0u64;
             let start_idx = self.line.segs.partition_point(|other_entry| {
+                probes += 1;
                 let other_seg = &self.segments[other_entry.seg];
 
                 other_seg.upper(self.y, self.eps) + self.eps <= seg.start().x
             });
+            self.position_checks = self.position_checks.saturating_add(probes);
+            if self.stop_at_work_limit() {
+                return false;
+            }
 
             let mut end_idx = start_idx;
             for j in start_idx..self.line.segs.len() {
+                if self.check_position() {
+                    return false;
+                }
                 let other_entry = &mut self.line.segs[j];
                 let other_seg = &self.segments[other_entry.seg];
 
@@ -1036,6 +1444,7 @@ impl<'segs> Sweeper<'segs> {
 
             last_end = last_end.max(seg.end().x);
         }
+        true
     }
 
     /// When a segment enters or exits, we insert a horizontal line from
@@ -1045,8 +1454,12 @@ impl<'segs> Sweeper<'segs> {
     /// interval.
     ///
     /// This method adds all the changed intervals that are needed to handle this case.
-    fn compute_contour_adjacent_changed_intervals(&mut self) {
-        for &j in &self.segs_needing_positions {
+    ///
+    /// Craft patch (work limit): returns `false`, leaving the changed intervals
+    /// incomplete, if the sweep passes its work limit.
+    fn compute_contour_adjacent_changed_intervals(&mut self) -> bool {
+        for n in 0..self.segs_needing_positions.len() {
+            let j = self.segs_needing_positions[n];
             let seg_entry = self.line.segs[j];
 
             if seg_entry.old_seg.is_some() {
@@ -1073,6 +1486,9 @@ impl<'segs> Sweeper<'segs> {
             let mut start_idx = j;
             let mut end_idx = j;
             for i in (0..j).rev() {
+                if self.check_position() {
+                    return false;
+                }
                 let other_entry = &mut self.line.segs[i];
                 let other_seg = &self.segments[other_entry.seg];
 
@@ -1086,6 +1502,9 @@ impl<'segs> Sweeper<'segs> {
                 }
             }
             for k in (j + 1)..self.line.segs.len() {
+                if self.check_position() {
+                    return false;
+                }
                 let other_entry = &mut self.line.segs[k];
                 let other_seg = &self.segments[other_entry.seg];
 
@@ -1106,6 +1525,7 @@ impl<'segs> Sweeper<'segs> {
                 });
             }
         }
+        true
     }
 
     /// Updates our internal `changed_intervals` state based on the segments marked
@@ -1113,10 +1533,16 @@ impl<'segs> Sweeper<'segs> {
     ///
     /// For each segment marked as needing a position, we expand it to a range of
     /// physically nearby segments, and then we deduplicate and merge those ranges.
-    fn compute_changed_intervals(&mut self) {
+    ///
+    /// Craft patch (work limit): returns `false`, leaving the changed intervals
+    /// incomplete, if the sweep passes its work limit.
+    fn compute_changed_intervals(&mut self) -> bool {
         debug_assert!(self.changed_intervals.is_empty());
-        self.compute_horizontal_changed_intervals();
-        self.compute_contour_adjacent_changed_intervals();
+        if !self.compute_horizontal_changed_intervals()
+            || !self.compute_contour_adjacent_changed_intervals()
+        {
+            return false;
+        }
 
         for &idx in &self.segs_needing_positions {
             if self.line.segs[idx].in_changed_interval {
@@ -1137,6 +1563,10 @@ impl<'segs> Sweeper<'segs> {
                 // that we most recently added to the changed interval. Modulo some subtleties
                 // involving conservative/non-conservative comparisons, this will usually be
                 // `i - 1`.
+                if self.work_limit_exceeded() {
+                    self.stopped_at_work_limit = true;
+                    return false;
+                }
                 let seg_idx = self.line.seg(end_idx - 1);
                 let next_seg_idx = self.line.seg(i);
                 let strong_order = self
@@ -1163,6 +1593,10 @@ impl<'segs> Sweeper<'segs> {
             }
 
             for i in (0..start_idx).rev() {
+                if self.work_limit_exceeded() {
+                    self.stopped_at_work_limit = true;
+                    return false;
+                }
                 let prev_seg_idx = self.line.seg(i);
                 // Note that start_idx is mutated in the loop, so this points to the segment
                 // that we most recently added to the changed interval.
@@ -1196,6 +1630,7 @@ impl<'segs> Sweeper<'segs> {
         // cross as needing a position. Any collection of subranges that are crossed by
         // a horizontal segment are therefore adjacent and will be merged here.
         merge_adjacent(&mut self.changed_intervals);
+        !self.stop_at_work_limit()
     }
 }
 
@@ -1305,11 +1740,31 @@ impl SegmentOrder {
             };
         }
 
-        // A predicate that tests whether `other` is definitely to the left of `seg` at `y`.
-        let lower_pred = |other: &SegmentOrderEntry| -> bool {
-            let cmp = comparer.compare_segments(segments, other.seg, seg_idx);
-            cmp.order_at(y) == Order::Left
+        // Every segment that starts where the new one starts compares "ish" to it here, so the
+        // search below can pass all of them. Comparisons with those segments are made without
+        // storing them (see `Sweeper::start_together_here`). `order` returns the order of `other`
+        // relative to the new segment at `y` and, if that is "ish", the order after `y`.
+        let start = seg.start();
+        let order = |comparer: &mut ComparisonCache, other: SegIdx| -> (Order, Order) {
+            let orders = |cmp: &CurveOrder| {
+                let at = cmp.order_at(y);
+                let after = if at == Order::Ish {
+                    cmp.order_after(y)
+                } else {
+                    at
+                };
+                (at, after)
+            };
+            if start.y == y && segments[other].start() == start {
+                comparer.with_order(segments, other, seg_idx, orders)
+            } else {
+                orders(comparer.compare_segments(segments, other, seg_idx))
+            }
         };
+
+        // A predicate that tests whether `other` is definitely to the left of `seg` at `y`.
+        let lower_pred =
+            |other: &SegmentOrderEntry| -> bool { order(comparer, other.seg).0 == Order::Left };
 
         // The rust stdlib docs say that we're not allowed to do this, because
         // our array isn't sorted with respect to `lower_pred`.
@@ -1322,8 +1777,8 @@ impl SegmentOrder {
         let search_start = self.segs.partition_point(lower_pred);
         let mut idx = search_start;
         for i in search_start..self.segs.len() {
-            let cmp = comparer.compare_segments(segments, self.segs[i].seg, seg_idx);
-            match cmp.order_at(y) {
+            let (order_at, order_after) = order(comparer, self.segs[i].seg);
+            match order_at {
                 Order::Right => {
                     // The segment at i is definitely to the right of the new one.
                     break;
@@ -1331,7 +1786,7 @@ impl SegmentOrder {
                 Order::Ish => {
                     // We could go either way, and we'll update our preference based on the
                     // future ordering.
-                    if cmp.order_after(y) == Order::Left {
+                    if order_after == Order::Left {
                         idx = i + 1;
                     }
                 }
@@ -1348,10 +1803,112 @@ impl SegmentOrder {
     //
     // Returns an index pointing to a `SegmentOrderEntry` for which
     // `seg_idx` is either the `seg` or the `old_seg`.
+    //
+    // Craft patch (sweep position): a binary search over the keys replaces
+    // the package's linear scan.
     fn position(&self, seg_idx: SegIdx) -> Option<usize> {
-        self.segs
-            .iter()
-            .position(|x| x.seg == seg_idx || x.old_seg == Some(seg_idx))
+        let key = self.keys[seg_idx];
+        let pos = self.segs.partition_point(|entry| entry.key < key);
+        let ret = self
+            .segs
+            .get(pos)
+            .is_some_and(|x| x.seg == seg_idx || x.old_seg == Some(seg_idx))
+            .then_some(pos);
+
+        #[cfg(any(test, feature = "slow-asserts"))]
+        assert_eq!(
+            ret,
+            self.segs
+                .iter()
+                .position(|x| x.seg == seg_idx || x.old_seg == Some(seg_idx))
+        );
+
+        ret
+    }
+
+    // Craft patch (sweep position): inserts an entry at the given index,
+    // assigning it a key that keeps the keys sorted.
+    fn insert(&mut self, pos: usize, mut entry: SegmentOrderEntry) {
+        let (mut before, mut after) = self.neighbor_keys(pos);
+        if after - before < 2 {
+            self.spread_keys(pos);
+            (before, after) = self.neighbor_keys(pos);
+        }
+        entry.key = before + (after - before) / 2;
+        self.keys[entry.seg] = entry.key;
+        if let Some(old_seg) = entry.old_seg {
+            self.keys[old_seg] = entry.key;
+        }
+        self.segs.insert(pos, entry);
+    }
+
+    // Craft patch (sweep position): the keys of the entries on either side of
+    // the given index, or zero and `u64::MAX` at the ends of the sweep line. No entry has either of those
+    // keys, so there is always a key to give an entry inserted at either end.
+    fn neighbor_keys(&self, pos: usize) -> (u64, u64) {
+        let before = pos.checked_sub(1).map_or(0, |i| self.segs[i].key);
+        let after = self.segs.get(pos).map_or(u64::MAX, |entry| entry.key);
+        (before, after)
+    }
+
+    // Craft patch (sweep position): makes space for inserting an entry at the
+    // given index, by evenly spacing the keys around it.
+    //
+    // This follows the tag-range relabeling of Bender et al., "Two Simplified
+    // Algorithms for Maintaining Order in a List" (ESA 2002): take the smallest
+    // aligned power-of-two range of keys around the index that is sparse enough,
+    // and spread out the keys inside it. The amortized number of keys changed by
+    // an insertion is logarithmic in the length of the sweep line.
+    fn spread_keys(&mut self, pos: usize) {
+        // How quickly the allowed density falls as the range grows. Each doubling
+        // of the range allows `2.0 / OVERFLOW` times as many entries, so a range
+        // of `2^bits` keys holds up to `(2.0 / OVERFLOW)^bits` of them.
+        const OVERFLOW: f64 = 1.4;
+
+        let len = self.segs.len();
+        let center = self.segs[pos.min(len - 1)].key;
+        let mut start = pos;
+        let mut end = pos;
+        let mut max_entries = 1.0;
+        for bits in 1..u64::BITS {
+            let range_len = 1u64 << bits;
+            let first = center & !(range_len - 1);
+            let last = first + (range_len - 1);
+            while start > 0 && self.segs[start - 1].key >= first {
+                start -= 1;
+            }
+            while end < len && self.segs[end].key <= last {
+                end += 1;
+            }
+
+            max_entries *= 2.0 / OVERFLOW;
+            let count = (end - start) as u64;
+            let step = range_len / (count + 1);
+            // A step of 3 leaves a gap of at least 2 after the last key, even if
+            // the range ends at `u64::MAX`.
+            if count as f64 <= max_entries && step >= 3 {
+                self.assign_keys(start..end, first, step);
+                return;
+            }
+        }
+
+        // Even the largest range is too dense for its limit, which takes about
+        // 6 * 10^9 entries. The whole key space still has room for all of them.
+        self.assign_keys(0..len, 0, u64::MAX / (len as u64 + 1));
+    }
+
+    // Craft patch (sweep position): gives the entries in a range of indices the
+    // keys `first + step`, `first + 2 * step`, and so on.
+    fn assign_keys(&mut self, range: std::ops::Range<usize>, first: u64, step: u64) {
+        let mut key = first;
+        for entry in self.segs.range_mut(range) {
+            key += step;
+            entry.key = key;
+            self.keys[entry.seg] = key;
+            if let Some(old_seg) = entry.old_seg {
+                self.keys[old_seg] = key;
+            }
+        }
     }
 }
 
@@ -1592,6 +2149,7 @@ impl<'segs> SweepLine<'_, '_, 'segs> {
             in_changed_interval: false,
             old_idx: None,
             old_seg: None,
+            key: 0,
         };
 
         let buffers = &mut self.bufs;
@@ -1717,7 +2275,9 @@ impl<'segs> SweepLine<'_, '_, 'segs> {
                 });
             }
         }
-        events.sort();
+        // Craft patch (output event order): sort by horizontal range alone, as the
+        // package's `Ord` did, so events with the same range keep their order.
+        events.sort_by(OutputEvent::cmp_x);
         bufs.clear();
 
         Some(SweepLineRange::new(
@@ -1768,7 +2328,7 @@ fn choose_cross_height(
     // We could just emit y0. That would be safe, but give less pretty results
     // in practice.
     let (mid, end) = match interaction {
-        CurveInteraction::Cross(y0, y1) | CurveInteraction::Touch(y0, y1) => ((y0 + y1) / 2.0, y1),
+        CurveInteraction::Cross(y0, y1) | CurveInteraction::Touch(y0, y1) => (y0.midpoint(y1), y1),
     };
     debug_assert!(end >= cur_y);
     match (interaction, which, mid <= cur_y) {
@@ -1835,6 +2395,7 @@ mod tests {
                 segs: (0..xs.len())
                     .map(|i| SegmentOrderEntry::new(SegIdx(i), &segs, eps))
                     .collect(),
+                ..Default::default()
             };
 
             let mut cmp = ComparisonCache::new(eps, eps / 2.0);
@@ -1887,6 +2448,7 @@ mod tests {
                 segs: (0..(xs.len() - 1))
                     .map(|i| SegmentOrderEntry::new(SegIdx(i), &segs, eps))
                     .collect(),
+                ..Default::default()
             };
             let mut comparer = ComparisonCache::new(eps, eps / 2.0);
             let idx = line.insertion_idx(y, &segs, new_idx, &mut comparer);
@@ -1953,6 +2515,167 @@ mod tests {
         });
     }
 
+    fn check_positions(line: &SegmentOrder, num_segs: usize) {
+        let keys: Vec<_> = line.segs.iter().map(|entry| entry.key).collect();
+        assert!(keys.is_sorted_by(|a, b| a < b));
+        assert!(keys.iter().all(|key| 0 < *key && *key < u64::MAX));
+
+        // `position` compares its answer with a linear scan.
+        for seg in (0..num_segs).map(SegIdx) {
+            line.position(seg);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    enum LineEdit {
+        Insert(prop::sample::Index),
+        InsertRepeatedly(prop::sample::Index, usize),
+        Remove(prop::sample::Index),
+        Move(prop::sample::Index, prop::sample::Index),
+        ContinueContour(prop::sample::Index),
+    }
+
+    fn line_edit() -> impl Strategy<Value = LineEdit> {
+        let idx = any::<prop::sample::Index>;
+        prop_oneof![
+            idx().prop_map(LineEdit::Insert),
+            (idx(), 0usize..100).prop_map(|(at, n)| LineEdit::InsertRepeatedly(at, n)),
+            idx().prop_map(LineEdit::Remove),
+            (idx(), idx()).prop_map(|(from, to)| LineEdit::Move(from, to)),
+            idx().prop_map(LineEdit::ContinueContour),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        // Applies the same kinds of edits as `Sweeper`, in any order.
+        #[test]
+        fn position_after_edits(edits in prop::collection::vec(line_edit(), 0..20)) {
+            let num_segs = 2000;
+            let segs = mk_segs(&vec![(0.0, 0.0); num_segs]);
+            let eps = 0.01;
+
+            let mut line = SegmentOrder::new(num_segs);
+            let mut next_seg = 0;
+            let mut new_entry = || {
+                next_seg += 1;
+                SegmentOrderEntry::new(SegIdx(next_seg - 1), &segs, eps)
+            };
+            for edit in edits {
+                let len = line.segs.len();
+                match edit {
+                    LineEdit::Insert(at) => line.insert(at.index(len + 1), new_entry()),
+                    LineEdit::InsertRepeatedly(at, n) => {
+                        let at = at.index(len + 1);
+                        for _ in 0..n {
+                            line.insert(at, new_entry());
+                        }
+                    }
+                    LineEdit::Remove(at) if len > 0 => {
+                        line.segs.remove(at.index(len));
+                    }
+                    LineEdit::Move(from, to) if len > 0 => {
+                        let entry = line.segs.remove(from.index(len));
+                        line.insert(to.index(len), entry);
+                    }
+                    LineEdit::ContinueContour(at) if len > 0 => {
+                        let pos = at.index(len);
+                        let new_seg = new_entry().seg;
+                        line.segs[pos].old_seg = Some(line.segs[pos].seg);
+                        line.segs[pos].seg = new_seg;
+                        line.keys[new_seg] = line.segs[pos].key;
+                    }
+                    _ => {}
+                }
+                check_positions(&line, 10);
+            }
+            check_positions(&line, next_seg);
+        }
+    }
+
+    #[test]
+    fn position_after_repeated_insertion() {
+        let num_segs = 2000;
+        let segs = mk_segs(&vec![(0.0, 0.0); num_segs]);
+        let eps = 0.01;
+        let entry = |i| SegmentOrderEntry::new(SegIdx(i), &segs, eps);
+
+        for insertion_pos in [
+            // Always at the start of the line.
+            |_| 0,
+            // Always at the end of the line.
+            |i| i,
+            // Always in the same gap in the middle of the line.
+            |i: usize| i.min(1),
+            // Alternating on both sides of the most recent entry.
+            |i: usize| i.div_ceil(2),
+        ] {
+            let mut line = SegmentOrder::new(num_segs);
+            for i in 0..num_segs {
+                line.insert(insertion_pos(i), entry(i));
+            }
+            check_positions(&line, num_segs);
+        }
+    }
+
+    #[test]
+    fn position_after_insertion_next_to_the_extreme_keys() {
+        let segs = mk_segs(&[(0.0, 0.0); 2]);
+        let eps = 0.01;
+        for (key, pos) in [(u64::MAX - 1, 1), (1, 0)] {
+            let mut line = SegmentOrder::new(2);
+            line.insert(0, SegmentOrderEntry::new(SegIdx(0), &segs, eps));
+            line.segs[0].key = key;
+            line.keys[SegIdx(0)] = key;
+
+            line.insert(pos, SegmentOrderEntry::new(SegIdx(1), &segs, eps));
+            check_positions(&line, 2);
+        }
+    }
+
+    #[test]
+    fn position_after_moving_a_contour_continuation() {
+        let segs = mk_segs(&[(0.0, 0.0); 3]);
+        let eps = 0.01;
+        let mut line = SegmentOrder::new(3);
+        line.insert(0, SegmentOrderEntry::new(SegIdx(0), &segs, eps));
+        line.insert(1, SegmentOrderEntry::new(SegIdx(1), &segs, eps));
+
+        line.segs[0].old_seg = Some(SegIdx(0));
+        line.segs[0].seg = SegIdx(2);
+        line.keys[SegIdx(2)] = line.segs[0].key;
+
+        let entry = line.segs.remove(0);
+        line.insert(1, entry);
+        assert_eq!(line.position(SegIdx(0)), Some(1));
+        assert_eq!(line.position(SegIdx(2)), Some(1));
+    }
+
+    #[test]
+    fn position_on_a_wide_sweep_line() {
+        // Two overlapping sawtooths. About 160 of their segments are on the sweep
+        // line at one height, more than fit in a `TreeVec` node, and each kink,
+        // exit and crossing looks up a position.
+        let mut path = BezPath::new();
+        for offset in [0.0, 0.25] {
+            path.move_to((offset, 0.0));
+            for i in 0..40 {
+                let i_f = i as f64;
+                let height = 10.0 + (i_f * 0.618).fract();
+                path.line_to((offset + i_f + 0.3, 5.0 + (i_f * 0.5).fract()));
+                path.line_to((offset + i_f + 0.5, height));
+                path.line_to((offset + i_f + 0.8, 5.0 + (i_f * 0.25).fract()));
+                path.line_to((offset + i_f + 1.0, (i_f * 0.755).fract()));
+            }
+            path.close_path();
+        }
+
+        let mut segs = Segments::default();
+        segs.add_bez_path(&path).unwrap();
+        crate::sweep::sweep(&segs, 1e-6, |_, _| {});
+    }
+
     fn p(x: f64, y: f64) -> Point {
         Point::new(x, y)
     }
@@ -2009,6 +2732,81 @@ mod tests {
         insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.01));
     }
 
+    // Craft patch (scan runs).
+    fn closed_polygon(path: &mut BezPath, points: &[(f64, f64)]) {
+        path.move_to(points[0]);
+        for &q in &points[1..] {
+            path.line_to(q);
+        }
+        path.close_path();
+    }
+
+    fn total_area(contours: &crate::topology::Contours) -> f64 {
+        use kurbo::Shape;
+        contours
+            .contours()
+            .map(|c| c.path.area())
+            .sum::<f64>()
+            .abs()
+    }
+
+    // Craft patch (scan runs): a triangle ends at y = 1 between a vertical
+    // edge that starts there and an edge that crosses that vertical lower down.
+    // The right scan from the vertical steps over the ending edges and still
+    // finds the crossing.
+    #[test]
+    fn scans_step_over_segments_that_end() {
+        let mut a = BezPath::new();
+        closed_polygon(&mut a, &[(9.0, 0.0), (11.0, 0.0), (10.0, 1.0)]);
+        closed_polygon(&mut a, &[(0.0, 1.0), (0.0, 3.0), (-1.0, 3.0)]);
+        let mut b = BezPath::new();
+        closed_polygon(&mut b, &[(11.0, 0.9), (12.0, 3.0), (-5.0, 3.0)]);
+
+        let out = crate::binary_op(
+            &a,
+            &b,
+            crate::FillRule::NonZero,
+            crate::BinaryOp::Intersection,
+        )
+        .unwrap();
+        assert_eq!(out.contours().count(), 1);
+        let area = total_area(&out);
+        assert!((area - 0.51688).abs() < 1e-4, "area {area}");
+    }
+
+    // Craft patch (scan runs): 400 edges end and 400 start at y = 1.
+    #[test]
+    fn runs_of_ending_segments_keep_the_output() {
+        let n = 200;
+        let mut points = Vec::new();
+        for i in 0..=2 * n {
+            points.push((i as f64, if i % 2 == 0 { 0.0 } else { 1.0 }));
+        }
+        for i in (0..=2 * n).rev() {
+            points.push((i as f64 + 0.5, if i % 2 == 0 { 2.0 } else { 1.0 }));
+        }
+        let mut wave = BezPath::new();
+        closed_polygon(&mut wave, &points);
+        let expected = {
+            use kurbo::Shape;
+            wave.area().abs()
+        };
+
+        let out = crate::binary_op(
+            &wave,
+            &BezPath::new(),
+            crate::FillRule::NonZero,
+            crate::BinaryOp::Union,
+        )
+        .unwrap();
+        assert_eq!(out.contours().count(), 1);
+        let area = total_area(&out);
+        assert!(
+            (area - expected).abs() < 1e-6,
+            "area {area}, expected {expected}"
+        );
+    }
+
     #[test]
     fn square_and_diamond() {
         let square = [p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)];
@@ -2059,6 +2857,55 @@ mod tests {
         insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.1));
     }
 
+    // Five circles, each moved by (7e-7, 3.5e-7) from the one before, have
+    // nearly coincident curves whose comparisons are not transitive. Their
+    // sweep used to queue the same intersections at one y forever. The event
+    // count check in `next_line` stops a test build at n^4 events on one
+    // sweep line.
+    #[test]
+    fn repeated_intersections_at_one_y() {
+        use kurbo::{Circle, Shape};
+
+        let mut circles = BezPath::new();
+        for i in 0..5 {
+            let center = (500.0 + i as f64 * 7e-7, 500.0 + i as f64 * 3.5e-7);
+            circles.extend(Circle::new(center, 50.0).path_elements(0.1));
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&circles).unwrap();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        let mut lines = 0;
+        while sweep.next_line(&mut bufs).is_some() {
+            lines += 1;
+        }
+        assert!(lines > 0);
+    }
+
+    // Wide, flat shapes (x up to 1e12, y below 1e-3) whose sweep delays an
+    // intersection to exactly the end of one of its segments. Handling the
+    // delayed event there used to panic in `CurveOrder::entry_at`.
+    #[test]
+    fn delayed_intersection_at_a_segment_end() {
+        let path = BezPath::from_svg(
+            "M501064307397.10095,0.0009848607387959033 \
+             L106201373767.89085,0.0006710749289289315 \
+             C417687393573.9515,0.0004160951440753873 304110132978.1276,0.00038371209900965467 283049238030.7473,0.000948649831345387 Z \
+             M198139564203.8839,0.00026113917505891313 \
+             Q925286056821.7639,0.0001263989183887222 706548805870.0378,0.0005146463318510499 \
+             C481577318901.41956,0.000572151300098751 38743762463.54683,0.000935423896736907 333105974166.1391,0.00039093790825889355 \
+             C838434423640.872,0.0005209836434131965 252410595074.9046,0.00021445561842374318 649987299514.814,0.0005284926072103142 Z \
+             M425570790862.5174,0.0002275798137344196 \
+             C643548474934.2626,0.00016915804040910177 896953683318.0679,0.000915403101629657 231887429918.8749,0.0004275752018309249 \
+             Q960890561259.0065,0.0005825265493017958 735584660921.8835,0.000238439768009997 \
+             Q676310419912.8419,0.00003744704696150181 803912734785.0077,0.0008084425285905149 Z",
+        )
+        .unwrap();
+        let top =
+            crate::topology::Topology::<i32>::from_path(&path, 1.3655076163260652e-2).unwrap();
+        assert_eq!(top.contours(|w| *w != 0).contours().count(), 4);
+    }
+
     #[test]
     fn conservative_line_order() {
         // Here's an example where c0 gets "ish" with c1 in the middle, c0 gets "ish" with c2
@@ -2088,12 +2935,692 @@ mod tests {
         insta::assert_ron_snapshot!(snapshot_outputs(segs, 0.25));
     }
 
+    fn closed_polyline(points: &[(f64, f64)]) -> BezPath {
+        let mut path = BezPath::new();
+        path.move_to(points[0]);
+        for &p in &points[1..] {
+            path.line_to(p);
+        }
+        path.close_path();
+        path
+    }
+
+    fn copies(shape: &BezPath, n: usize) -> BezPath {
+        (0..n).flat_map(|_| shape.iter()).collect()
+    }
+
+    // Exact copies of a shape queue a touch event for every pair of coincident
+    // segments. Each touch-event scan runs at most once per segment and
+    // direction for each sweep-line order, so the number of scans stays
+    // linear in the number of segments, and the output is the output for one
+    // copy.
+    #[test]
+    fn coincident_copies_scan_once_per_order() {
+        use crate::topology::Topology;
+
+        let quad = closed_polyline(&[(0.0, 0.0), (100.0, 37.0), (60.0, 90.0), (10.0, 70.0)]);
+        let rect = closed_polyline(&[(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)]);
+        for shape in [quad, rect] {
+            let path = copies(&shape, 60);
+            let mut segs = Segments::default();
+            segs.add_bez_path(&path).unwrap();
+            let mut sweep = Sweeper::new(&segs, 1e-6);
+            let mut bufs = SweepLineBuffers::default();
+            let mut lines = 0;
+            while sweep.next_line(&mut bufs).is_some() {
+                lines += 1;
+            }
+            assert!(
+                sweep.touch_scan_count <= 2 * segs.len() * lines,
+                "{} touch scans for {} segments on {lines} sweep lines",
+                sweep.touch_scan_count,
+                segs.len()
+            );
+
+            let contour_paths = |path: &BezPath| -> Vec<BezPath> {
+                Topology::from_path(path, 1e-6)
+                    .unwrap()
+                    .contours(|w| *w != 0)
+                    .contours()
+                    .map(|c| c.path.clone())
+                    .collect()
+            };
+            assert_eq!(contour_paths(&path), contour_paths(&shape));
+        }
+    }
+
+    // Small polygons on an integer grid, with exact, reversed and
+    // midpoint-split copies of some of them. The nonzero fill of the output
+    // contours matches the nonzero fill of the input.
+    #[test]
+    fn coincident_copies_keep_the_fill() {
+        use crate::topology::Topology;
+        use kurbo::{ParamCurve, ParamCurveNearest, Shape};
+
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        for case in 0..200 {
+            let mut polygons: Vec<Vec<(f64, f64)>> = Vec::new();
+            for _ in 0..1 + next(3) {
+                let len = 3 + next(3);
+                let polygon = (0..len).map(|_| (next(9) as f64, next(9) as f64)).collect();
+                polygons.push(polygon);
+            }
+            for _ in 0..1 + next(3) {
+                let source = polygons[next(polygons.len() as u64) as usize].clone();
+                let copy = match next(3) {
+                    0 => source,
+                    1 => source.into_iter().rev().collect(),
+                    _ => {
+                        let mut split = Vec::new();
+                        for (i, &(x0, y0)) in source.iter().enumerate() {
+                            let (x1, y1) = source[(i + 1) % source.len()];
+                            split.push((x0, y0));
+                            split.push(((x0 + x1) / 2.0, (y0 + y1) / 2.0));
+                        }
+                        split
+                    }
+                };
+                polygons.push(copy);
+            }
+            let input: BezPath = polygons
+                .iter()
+                .flat_map(|p| closed_polyline(p).into_iter())
+                .collect();
+
+            let top = Topology::from_path(&input, 1e-6).unwrap();
+            let contours = top.contours(|w| *w != 0);
+            for i in 0..64 {
+                for j in 0..64 {
+                    let p = kurbo::Point::new(i as f64 / 8.0 + 0.0137, j as f64 / 8.0 + 0.0291);
+                    // Skip points too close to an input edge to say which
+                    // side they are on.
+                    let near_edge = input.segments().any(|seg| {
+                        let line = kurbo::Line::new(seg.start(), seg.end());
+                        let t = line.nearest(p, 0.0).t;
+                        line.eval(t).distance(p) < 1e-3
+                    });
+                    if near_edge {
+                        continue;
+                    }
+                    let expected = input.winding(p) != 0;
+                    let output_winding: i32 = contours
+                        .contours()
+                        .map(|c| c.path.winding(p))
+                        .sum();
+                    assert_eq!(
+                        output_winding != 0,
+                        expected,
+                        "case {case} at {p:?}: {}",
+                        input.to_svg()
+                    );
+                }
+            }
+        }
+    }
+
+    /// `n` thin triangles that share the apex (0, 0), with bases on y = 500, 10 apart.
+    /// No two of them cross. With `curved`, the left edge of each one bows out by 0.5.
+    fn shared_apex_triangles(n: u32, curved: bool) -> BezPath {
+        let mut path = BezPath::new();
+        for i in 0..n {
+            let x = f64::from(i) * 10.0;
+            path.move_to((0.0, 0.0));
+            if curved {
+                path.quad_to(((x - 3.0) / 2.0 - 1.0, 250.0), (x - 3.0, 500.0));
+            } else {
+                path.line_to((x - 3.0, 500.0));
+            }
+            path.line_to((x + 3.0, 500.0));
+            path.close_path();
+        }
+        path
+    }
+
+    /// Sweeps `path` and asserts that each comparison cache stores at most `max` comparisons.
+    ///
+    /// The `slow-asserts` checks compare every pair of segments on the sweep line with the
+    /// regular comparisons, so with that feature only the conservative ones are counted.
+    fn assert_stored_at_most(path: &BezPath, max: usize) {
+        let mut segs = Segments::default();
+        segs.add_bez_path(path).unwrap();
+
+        let mut sweeper = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        while sweeper.next_line(&mut bufs).is_some() {}
+        let regular = sweeper.comparisons.borrow().len();
+        let conservative = sweeper.conservative_comparisons.borrow().len();
+        assert!(
+            (cfg!(feature = "slow-asserts") || regular <= max) && conservative <= max,
+            "{regular} regular and {conservative} conservative comparisons stored"
+        );
+    }
+
+    #[test]
+    fn segments_starting_at_one_point_are_not_stored() {
+        // Storing every pair of the 400 edges that start at the apex gives 79,800 entries.
+        let n: u32 = 200;
+        let path = shared_apex_triangles(n, false);
+        assert_stored_at_most(&path, 2 * n as usize);
+
+        let top = crate::topology::Topology::<i32>::from_path(&path, 1e-6).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        assert_eq!(contours.contours().count(), n as usize);
+        let area: f64 = contours
+            .contours()
+            .map(|c| kurbo::Shape::area(&c.path).abs())
+            .sum();
+        assert!((area - f64::from(n) * 1500.0).abs() < 1e-3, "area {area}");
+    }
+
+    #[test]
+    fn segments_starting_at_one_point_sweep_as_with_stored_comparisons() {
+        // 40 overlapping triangles share the apex (0, 0); their bases cross the neighbors' edges.
+        let frac = |x: f64| x - x.floor();
+        for curved in [false, true] {
+            let mut path = BezPath::new();
+            for i in 0..40 {
+                let i = f64::from(i);
+                let left = (i * 4.0 - 6.0, 500.0 + 50.0 * frac(i * 0.618));
+                let right = (i * 4.0 + 6.0, 500.0 + 50.0 * frac(i * 0.75));
+                path.move_to((0.0, 0.0));
+                if curved {
+                    path.quad_to((left.0 / 2.0 - 3.0, left.1 / 2.0), left);
+                } else {
+                    path.line_to(left);
+                }
+                path.line_to(right);
+                path.close_path();
+            }
+            let mut segs = Segments::default();
+            segs.add_bez_path(&path).unwrap();
+
+            let sweep = |store_first: bool| {
+                let sweeper = Sweeper::new(&segs, 1e-6);
+                if store_first {
+                    // With every comparison of segments that start together already stored, the
+                    // sweep uses the stored ones, as it did when it stored all of them.
+                    for i in segs.indices() {
+                        for j in segs.indices() {
+                            if i.0 < j.0 && segs[i].start() == segs[j].start() {
+                                sweeper.compare_segments(i, j);
+                                sweeper.compare_segments_conservatively(i, j);
+                            }
+                        }
+                    }
+                }
+                let mut sweeper = sweeper;
+                let mut outputs = Vec::new();
+                let mut bufs = SweepLineBuffers::default();
+                while let Some(line) = sweeper.next_line(&mut bufs) {
+                    outputs.push(format!(
+                        "{} {:?} {:?}",
+                        line.y(),
+                        line.state.line,
+                        line.state.changed_intervals
+                    ));
+                }
+                outputs
+            };
+            assert_eq!(sweep(false), sweep(true), "curved: {curved}");
+        }
+    }
+
+    #[test]
+    fn curves_starting_at_one_point_are_not_stored() {
+        // Storing every pair of the 120 edges that start at the apex gives 7,140 entries.
+        let n: u32 = 60;
+        let path = shared_apex_triangles(n, true);
+        assert_stored_at_most(&path, 2 * n as usize);
+
+        let top = crate::topology::Topology::<i32>::from_path(&path, 1e-6).unwrap();
+        let contours = top.contours(|w| *w != 0);
+        assert_eq!(contours.contours().count(), n as usize);
+    }
+
     #[test]
     fn empty_sweep_line() {
         let segs = Segments::default();
         let mut sweep = Sweeper::new(&segs, 1.0);
         let mut bufs = SweepLineBuffers::default();
         assert!(sweep.next_line(&mut bufs).is_none());
+    }
+
+    #[test]
+    fn cross_height_near_f64_max() {
+        let (y0, y1) = (1e308, 1.5e308);
+        assert_eq!(
+            choose_cross_height(CurveInteraction::Cross(y0, y1), 0.0, WhichTouch::Mid),
+            Some(1.25e308)
+        );
+        assert_eq!(
+            choose_cross_height(CurveInteraction::Touch(y0, y1), 0.0, WhichTouch::Late),
+            Some(1.25e308)
+        );
+    }
+
+    // Craft patch (work limit). Disjoint rectangles sharing their top and bottom
+    // heights need almost no comparisons, but each exit searches the whole sweep
+    // line. Those linear searches count toward the work limit.
+    #[test]
+    fn work_limit_counts_linear_searches() {
+        use kurbo::{Rect, Shape};
+
+        let mut path = BezPath::new();
+        for i in 0..2000 {
+            let x = f64::from(i) * 3.0;
+            path.extend(Rect::new(x, 0.0, x + 1.0, 10.0).to_path(0.1).iter());
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&path).unwrap();
+
+        let mut bufs = SweepLineBuffers::default();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        while sweep.next_line(&mut bufs).is_some() {}
+        assert!(!sweep.work_limit_exceeded());
+        let total = sweep.work();
+        // 4,000 exits passing 2,000 segments on average, at one unit per 16.
+        assert!(total > 200_000, "{total} units of work");
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(total / 2);
+        while sweep.next_line(&mut bufs).is_some() {}
+        assert!(sweep.work_limit_exceeded());
+    }
+
+    // Craft patch (work limit). The circles are stacked, so the first sweep
+    // lines handle every segment and compare it with all the others.
+    #[test]
+    fn work_limit_stops_within_a_sweep_line() {
+        use kurbo::{Circle, Shape};
+
+        let circle = Circle::new((100.0, 100.0), 50.0).to_path(1e-3);
+        let mut circles = BezPath::new();
+        for _ in 0..20 {
+            circles.extend(circle.iter());
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&circles).unwrap();
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        let mut range_bufs = SweepLineRangeBuffers::default();
+        let mut most_in_a_line = 0;
+        let mut prev = 0;
+        while let Some(mut line) = sweep.next_line(&mut bufs) {
+            while line.next_range(&mut range_bufs, &segs).is_some() {}
+            let now = line.state.work();
+            most_in_a_line = most_in_a_line.max(now - prev);
+            prev = now;
+        }
+        assert!(!sweep.work_limit_exceeded());
+
+        // One sweep line takes far more comparisons than the limit, so the
+        // sweep has to stop between the events of that line to stay near it.
+        let limit = 1_000;
+        assert!(most_in_a_line > 10 * limit, "{most_in_a_line} comparisons");
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(limit);
+        while let Some(mut line) = sweep.next_line(&mut bufs) {
+            while line.next_range(&mut range_bufs, &segs).is_some() {}
+        }
+        assert!(sweep.work_limit_exceeded());
+        assert!(sweep.next_line(&mut bufs).is_none());
+        let work = sweep.work();
+        assert!(work <= limit + 200, "{work} comparisons");
+
+        // A sweep stopped partway through a line stays stopped.
+        sweep.set_work_limit(u64::MAX);
+        assert!(sweep.work_limit_exceeded());
+        assert!(sweep.next_line(&mut bufs).is_none());
+    }
+
+    // Craft patch (work limit). Comparisons of segments that start at one point
+    // are made without storing them, and they count toward the work limit too.
+    #[test]
+    fn work_limit_counts_comparisons_of_segments_that_start_together() {
+        let path = shared_apex_triangles(200, false);
+        let mut segs = Segments::default();
+        segs.add_bez_path(&path).unwrap();
+
+        // The first sweep line is at the apex, where all 400 edges start and
+        // the scans and insertion searches compare most pairs of them.
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        assert!(sweep.next_line(&mut bufs).is_some());
+        let comparisons =
+            sweep.comparisons.borrow().calls + sweep.conservative_comparisons.borrow().calls;
+        assert!(comparisons > 100_000, "{comparisons} comparisons");
+        while sweep.next_line(&mut bufs).is_some() {}
+        assert!(!sweep.work_limit_exceeded());
+
+        // The sweep stops while the edges enter, before it checks the
+        // positions of the changed intervals.
+        let limit = 10_000;
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(limit);
+        assert!(sweep.next_line(&mut bufs).is_none());
+        assert!(sweep.work_limit_exceeded());
+        assert_eq!(sweep.position_checks, 0);
+        let work = sweep.work();
+        assert!(work <= limit + 200, "{work} units of work");
+    }
+
+    // Craft patch (work limit). Every limit below the sweep's total work stops
+    // it somewhere: in an event, or while finding a line's changed intervals.
+    // Wherever it stops, `next_line` returns no line past the limit.
+    #[test]
+    fn work_limit_returns_no_line_past_the_limit() {
+        use kurbo::{Circle, Shape};
+
+        let circle = Circle::new((100.0, 100.0), 50.0).to_path(0.1);
+        let mut circles = BezPath::new();
+        for _ in 0..3 {
+            circles.extend(circle.iter());
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&circles).unwrap();
+
+        let mut bufs = SweepLineBuffers::default();
+        let mut range_bufs = SweepLineRangeBuffers::default();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        while let Some(mut line) = sweep.next_line(&mut bufs) {
+            while line.next_range(&mut range_bufs, &segs).is_some() {}
+        }
+        let total = sweep.work();
+        assert!(total > 100, "{total} comparisons");
+
+        for limit in 0..total {
+            let mut sweep = Sweeper::new(&segs, 1e-6);
+            sweep.set_work_limit(limit);
+            while let Some(mut line) = sweep.next_line(&mut bufs) {
+                let work = line.state.work();
+                assert!(
+                    work <= limit,
+                    "limit {limit}: a line came back after {work} comparisons"
+                );
+                while line.next_range(&mut range_bufs, &segs).is_some() {}
+            }
+            assert!(sweep.work_limit_exceeded(), "limit {limit}");
+        }
+    }
+
+    // Craft patch (work limit). Wide rectangles whose top and bottom edges
+    // cross many bars: finding the changed intervals at those heights checks
+    // the position of every bar for every horizontal edge, with few segment
+    // comparisons. Those checks count toward the work limit.
+    #[test]
+    fn work_limit_counts_the_horizontal_scans() {
+        use kurbo::{Rect, Shape};
+
+        let bars = 150;
+        let wide = 30;
+        let mut path = BezPath::new();
+        for i in 0..bars {
+            let x = 3.0 * i as f64;
+            path.extend(Rect::new(x, 0.0, x + 1.0, 10.0).to_path(0.1).iter());
+        }
+        let right = 3.0 * bars as f64;
+        for k in 0..wide {
+            let k = k as f64;
+            path.extend(Rect::new(-1.0 - k, 4.0, right + k, 6.0).to_path(0.1).iter());
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&path).unwrap();
+
+        let mut bufs = SweepLineBuffers::default();
+        let mut range_bufs = SweepLineRangeBuffers::default();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        while let Some(mut line) = sweep.next_line(&mut bufs) {
+            while line.next_range(&mut range_bufs, &segs).is_some() {}
+        }
+        // Each of the 60 horizontal edges crosses all 300 bar edges.
+        let total = sweep.work();
+        let crossings = 2 * wide * 2 * bars;
+        assert!(total >= crossings as u64, "{total} units of work");
+
+        let limit = total / 2;
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(limit);
+        while let Some(mut line) = sweep.next_line(&mut bufs) {
+            let work = line.state.work();
+            assert!(work <= limit, "a line came back after {work} units of work");
+            while line.next_range(&mut range_bufs, &segs).is_some() {}
+        }
+        // It stops within the two comparisons or one position check after the limit.
+        assert!(sweep.work_limit_exceeded());
+        let work = sweep.work();
+        assert!(work <= limit + 2, "{work} units of work");
+    }
+
+    // A tall closed band whose sides zigzag: each segment shares heights with
+    // only a few others.
+    fn zigzag_band(rows: usize) -> Segments {
+        let left = (0..=rows).map(|k| p((k % 2) as f64, k as f64));
+        let right = (0..=rows).rev().map(|k| p(10.0 + (k % 2) as f64, k as f64));
+        let mut segs = Segments::default();
+        segs.add_closed_polyline(left.chain(right));
+        segs
+    }
+
+    // A star polygon in which every edge crosses every edge it does not share a
+    // vertex with.
+    fn star(points: usize) -> Segments {
+        let step = (points - 1) / 2;
+        let mut segs = Segments::default();
+        segs.add_closed_polyline((0..points).map(|k| {
+            let angle = std::f64::consts::TAU * ((k * step) % points) as f64 / points as f64 + 0.1;
+            p(1000.0 * angle.cos(), 1000.0 * angle.sin())
+        }));
+        segs
+    }
+
+    // Two wavy closed paths of cubics that cross each other many times.
+    fn wavy_cubics() -> Segments {
+        let mut segs = Segments::default();
+        for offset in [0.0, 0.7] {
+            let mut path = BezPath::new();
+            path.move_to((offset, 0.0));
+            for k in 0..40 {
+                let y = 4.0 * k as f64;
+                let x = offset + (k % 3) as f64 * 0.5;
+                path.curve_to(
+                    (offset + 3.0, y + 1.0),
+                    (offset - 3.0, y + 3.0),
+                    (x, y + 4.0),
+                );
+            }
+            path.line_to((offset + 5.0, 160.0));
+            path.line_to((offset + 5.0, 0.0));
+            path.close_path();
+            segs.add_bez_path(&path).unwrap();
+        }
+        segs
+    }
+
+    // Runs a sweep and records every sweep line, its changed intervals and its
+    // output events. Also returns the largest number of pairs the comparison
+    // caches held after a step.
+    fn sweep_record(segs: &Segments, eps: f64, evict: bool) -> (Vec<String>, usize) {
+        let mut record = Vec::new();
+        let mut most_pairs = 0;
+        let mut sweeper = Sweeper::new(segs, eps);
+        if !evict {
+            sweeper.comparisons.get_mut().never_evict();
+            sweeper.conservative_comparisons.get_mut().never_evict();
+        }
+        let mut line_bufs = SweepLineBuffers::default();
+        let mut range_bufs = crate::sweep::SweepLineRangeBuffers::default();
+        while let Some(mut line) = sweeper.next_line(&mut line_bufs) {
+            record.push(format!(
+                "{} {:?} {:?}",
+                line.y(),
+                line.state.line,
+                line.state.changed_intervals
+            ));
+            while let Some(mut range) = line.next_range(&mut range_bufs, segs) {
+                while let Some(events) = range.events() {
+                    record.extend(events.into_iter().map(|ev| format!("{ev:?}")));
+                }
+            }
+            most_pairs = most_pairs.max(
+                line.state.comparisons.borrow().cached_pairs()
+                    + line.state.conservative_comparisons.borrow().cached_pairs(),
+            );
+        }
+        (record, most_pairs)
+    }
+
+    #[test]
+    fn ended_pairs_leave_the_comparison_cache() {
+        let segs = zigzag_band(400);
+        let (_, kept) = sweep_record(&segs, 0.1, false);
+        let (_, evicted) = sweep_record(&segs, 0.1, true);
+        assert!(kept >= 400, "{kept}");
+        assert!(evicted * 10 < kept, "{evicted} {kept}");
+    }
+
+    #[test]
+    fn evicting_comparisons_keeps_the_sweep_lines() {
+        for (segs, eps) in [
+            (zigzag_band(400), 0.1),
+            (star(31), 1e-6),
+            (star(31), 1.0),
+            (wavy_cubics(), 0.01),
+            (wavy_cubics(), 0.25),
+        ] {
+            let (kept, _) = sweep_record(&segs, eps, false);
+            let (evicted, _) = sweep_record(&segs, eps, true);
+            assert!(kept == evicted);
+        }
+    }
+
+    // Craft patch (removal scan): many segments ending at one height share the
+    // walk to the nearest live segment instead of each repeating it.
+    #[test]
+    fn removal_scans_share_the_run_of_ended_segments() {
+        use kurbo::Shape as _;
+
+        let mut path = BezPath::new();
+        for i in 0..200 {
+            let x = f64::from(i) * 3.0;
+            path.extend(kurbo::Rect::new(x, 0.0, x + 1.0, 10.0).to_path(0.1));
+        }
+        let mut segs = Segments::default();
+        segs.add_bez_path(&path).unwrap();
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        while sweep.next_line(&mut bufs).is_some() {}
+        // Walking the 400 vertical edges for every exit is 80,000 steps.
+        assert!(
+            sweep.removal_scan_steps < 1_600,
+            "{} steps",
+            sweep.removal_scan_steps
+        );
+    }
+
+    // Craft patch (removal scan): two groups of segments end at y = 10, each
+    // beside a taller rectangle whose edges continue, and their exits arrive
+    // interleaved. Each group's walk is shared, and the intersection scans run
+    // once from each taller rectangle instead of once per exit.
+    #[test]
+    fn removal_scans_run_once_from_each_live_segment() {
+        use kurbo::Shape as _;
+
+        let mut path = BezPath::new();
+        for i in 0..100 {
+            let x = f64::from(i) * 3.0;
+            path.extend(kurbo::Rect::new(x, 0.0, x + 1.0, 10.0).to_path(0.1));
+            path.extend(kurbo::Rect::new(x + 320.0, 0.0, x + 321.0, 10.0).to_path(0.1));
+        }
+        path.extend(kurbo::Rect::new(-10.0, 0.0, -5.0, 20.0).to_path(0.1));
+        path.extend(kurbo::Rect::new(305.0, 0.0, 310.0, 20.0).to_path(0.1));
+        let mut segs = Segments::default();
+        segs.add_bez_path(&path).unwrap();
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        let mut bufs = SweepLineBuffers::default();
+        while sweep.next_line(&mut bufs).is_some() {}
+        // One scan per exit is 400 scans, and each walks a whole group.
+        assert!(sweep.removal_scans <= 4, "{} scans", sweep.removal_scans);
+        assert!(
+            sweep.removal_scan_steps < 1_600,
+            "{} steps",
+            sweep.removal_scan_steps
+        );
+    }
+
+    // At y = 1, removing a segment from a swap left a gap whose left
+    // neighbor ended at y = 1, so the removal scans returned at once and a's
+    // edge (0, 1)-(3, 3) and b's edge (3, 0)-(0, 2) became neighbors with no
+    // event queued for their crossing at (0.75, 1.5).
+    #[test]
+    fn removal_scan_skips_segments_that_end() {
+        use crate::{BinaryOp, FillRule, binary_op_with_eps, topology::Topology};
+        use kurbo::Shape as _;
+
+        fn poly(pts: &[(f64, f64)]) -> BezPath {
+            let mut path = BezPath::new();
+            path.move_to(pts[0]);
+            for &q in &pts[1..] {
+                path.line_to(q);
+            }
+            path.close_path();
+            path
+        }
+
+        let a = poly(&[(3.0, 1.0), (3.0, 3.0), (0.0, 1.0)]);
+        let b = poly(&[(3.0, 0.0), (0.0, 2.0), (3.0, 2.0), (0.0, 0.0), (0.0, 1.0)]);
+        let eps = 1e-6;
+
+        let top = Topology::from_paths_binary(&a, &b, eps).unwrap();
+        let has_crossing = top.segment_indices().any(|s| {
+            let h = s.first_half();
+            [top.point(h), top.point(h.other_half())]
+                .iter()
+                .any(|p| (p.x - 0.75).abs() < 1e-4 && (p.y - 1.5).abs() < 1e-4)
+        });
+        assert!(has_crossing, "no output vertex at (0.75, 1.5)");
+
+        let out =
+            binary_op_with_eps(&a, &b, FillRule::NonZero, BinaryOp::Intersection, eps).unwrap();
+        let area: f64 = out.contours().map(|c| c.path.area()).sum();
+        assert!(
+            (area.abs() - 1.125).abs() < 1e-4,
+            "intersection area {area}"
+        );
+    }
+
+    // Craft patch (work limit). Many horizontal segments at one height and no
+    // other segments: the sweep line stays empty, so finding the changed
+    // intervals checks no positions, but sorting the horizontals counts.
+    #[test]
+    fn work_limit_counts_sorting_the_horizontals() {
+        let count: u32 = 4096;
+        let mut segs = Segments::default();
+        for i in 0..count {
+            let x = 3.0 * f64::from(i);
+            segs.add_points([Point::new(x, 0.0), Point::new(x + 1.0, 0.0)]);
+        }
+
+        let mut bufs = SweepLineBuffers::default();
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        while sweep.next_line(&mut bufs).is_some() {}
+        assert!(!sweep.work_limit_exceeded());
+        let n = u64::from(count);
+        let total = sweep.work();
+        assert!(total >= n * u64::from(n.ilog2()), "{total} units of work");
+
+        let mut sweep = Sweeper::new(&segs, 1e-6);
+        sweep.set_work_limit(total / 2);
+        assert!(sweep.next_line(&mut bufs).is_none());
+        assert!(sweep.work_limit_exceeded());
     }
 
     proptest! {

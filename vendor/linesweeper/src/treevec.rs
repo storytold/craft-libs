@@ -541,7 +541,7 @@ impl<T, const B: usize> TreeVec<T, B> {
             Node::Leaf { data } => IterInner::Simple(data.iter()),
             Node::Internal { .. } => {
                 let mut ret = TreeIter {
-                    stack: Vec::new(),
+                    stack: Stack::new(),
                     leaf: [].iter(),
                     remaining: self.len(),
                 };
@@ -560,7 +560,7 @@ impl<T, const B: usize> TreeVec<T, B> {
             Node::Leaf { data } => IterMutInner::Simple(data.iter_mut()),
             root @ Node::Internal { .. } => {
                 let mut ret = TreeIterMut {
-                    stack: Vec::new(),
+                    stack: Stack::new(),
                     leaf: [].iter_mut(),
                     remaining: len,
                 };
@@ -587,18 +587,24 @@ impl<T, const B: usize> TreeVec<T, B> {
 
     /// Turns a generic range bounds into an inclusive start and an exclusive end.
     ///
-    /// This won't work if the range end is inclusive of `usize::MAX`, so don't do that.
+    /// Panics if a bound is past `usize::MAX` or if the start is after the end.
+    // Craft patch (range bounds): checked bounds and a start-after-end check.
     fn normalize_bounds(&self, range: impl std::ops::RangeBounds<usize>) -> (usize, usize) {
         let start = match range.start_bound() {
             std::ops::Bound::Included(x) => *x,
-            std::ops::Bound::Excluded(x) => *x + 1,
+            std::ops::Bound::Excluded(x) => {
+                x.checked_add(1).expect("range start is past usize::MAX")
+            }
             std::ops::Bound::Unbounded => 0,
         };
         let end = match range.end_bound() {
-            std::ops::Bound::Included(x) => *x + 1,
+            std::ops::Bound::Included(x) => x.checked_add(1).expect("range end is past usize::MAX"),
             std::ops::Bound::Excluded(x) => *x,
             std::ops::Bound::Unbounded => self.len(),
         };
+        if start > end {
+            panic!("range starts at {start} but ends at {end}");
+        }
         (start, end)
     }
 
@@ -612,7 +618,7 @@ impl<T, const B: usize> TreeVec<T, B> {
                     panic!("out of bounds");
                 }
                 let mut ret = TreeIter {
-                    stack: Vec::new(),
+                    stack: Stack::new(),
                     leaf: [].iter(),
                     remaining: end - start,
                 };
@@ -635,7 +641,7 @@ impl<T, const B: usize> TreeVec<T, B> {
                     panic!("out of bounds");
                 }
                 let mut ret = TreeIterMut {
-                    stack: Vec::new(),
+                    stack: Stack::new(),
                     leaf: [].iter_mut(),
                     remaining: end - start,
                 };
@@ -644,6 +650,28 @@ impl<T, const B: usize> TreeVec<T, B> {
             }
         };
         IterMut { inner }
+    }
+
+    // Craft patch (scan runs): reverse iteration for `intersection_scan_left`.
+    /// Returns an iterator over the elements before index `end`, from the
+    /// last one to the first. An `end` past the length means the length.
+    pub(crate) fn range_rev_to(&self, end: usize) -> RevIter<'_, T, B> {
+        let end = end.min(self.len());
+        let inner = match &*self.root {
+            Node::Leaf { data } => RevIterInner::Simple(data[..end].iter()),
+            Node::Internal { .. } => {
+                let mut ret = RevTreeIter {
+                    stack: Vec::new(),
+                    leaf: [].iter(),
+                    remaining: end,
+                };
+                if end > 0 {
+                    ret.descend_to(&*self.root, end);
+                }
+                RevIterInner::Tree(ret)
+            }
+        };
+        RevIter { inner }
     }
 }
 
@@ -687,12 +715,53 @@ enum IterInner<'a, T, const B: usize> {
     Tree(TreeIter<'a, T, B>),
 }
 
+// Craft patch (iterator stack): the tree iterators keep their stack in place.
+/// The number of tree levels whose iterators a [`Stack`] holds without
+/// allocating. Every node but the root has at least `B/2` children, so a tree
+/// with `B = 128` needs at least `2 * 64^9` elements to be taller than this.
+const INLINE_HEIGHT: usize = 8;
+
+/// The stack of child iterators in [`TreeIter`] and [`TreeIterMut`]. The first
+/// [`INLINE_HEIGHT`] entries are stored in place and the rest go in `spill`,
+/// which allocates only for a tree taller than that.
+struct Stack<I> {
+    inline: ArrayVec<I, INLINE_HEIGHT>,
+    spill: Vec<I>,
+}
+
+impl<I> Stack<I> {
+    fn new() -> Self {
+        Stack {
+            inline: ArrayVec::new(),
+            spill: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, item: I) {
+        if let Err(full) = self.inline.try_push(item) {
+            self.spill.push(full.element());
+        }
+    }
+
+    fn last_mut(&mut self) -> Option<&mut I> {
+        if self.spill.is_empty() {
+            self.inline.last_mut()
+        } else {
+            self.spill.last_mut()
+        }
+    }
+
+    fn pop(&mut self) -> Option<I> {
+        self.spill.pop().or_else(|| self.inline.pop())
+    }
+}
+
 struct TreeIter<'a, T, const B: usize> {
     // If you imagine how the recursive implementation of a tree iteration
     // works, the local state at each intermediate call consists of a
     // partially-finished iteration over the children of that internal node.
     // This stores the stack of that imaginary recursive implementation.
-    stack: Vec<std::slice::Iter<'a, Box<Node<T, B>>>>,
+    stack: Stack<std::slice::Iter<'a, Box<Node<T, B>>>>,
     leaf: std::slice::Iter<'a, T>,
     // The number of remaining elements; used for iteration over ranges. The
     // full-iteration implementation doesn't need it, but it isn't worth having
@@ -781,6 +850,107 @@ impl<'a, T, const B: usize> Iterator for Iter<'a, T, B> {
     }
 }
 
+// Craft patch (scan runs): reverse iteration for `intersection_scan_left`.
+/// An iterator over elements of a [`TreeVec`], from back to front.
+pub(crate) struct RevIter<'a, T, const B: usize> {
+    inner: RevIterInner<'a, T, B>,
+}
+
+enum RevIterInner<'a, T, const B: usize> {
+    Simple(std::slice::Iter<'a, T>),
+    Tree(RevTreeIter<'a, T, B>),
+}
+
+// The mirror image of `TreeIter`: the stack holds the children still to visit
+// on the left, and elements come off the back of each slice.
+struct RevTreeIter<'a, T, const B: usize> {
+    stack: Vec<std::slice::Iter<'a, Box<Node<T, B>>>>,
+    leaf: std::slice::Iter<'a, T>,
+    remaining: usize,
+}
+
+impl<'a, T, const B: usize> RevTreeIter<'a, T, B> {
+    // Fill out the rest of the stack and the leaf, by descending
+    // to the last descendent of `node`.
+    fn descend(&mut self, mut node: &'a Node<T, B>) {
+        loop {
+            match node {
+                Node::Leaf { data } => {
+                    self.leaf = data.iter();
+                    return;
+                }
+                Node::Internal { children, .. } => {
+                    let mut children = children.iter();
+                    // unwrap: internal nodes are always non-empty
+                    node = children.next_back().unwrap();
+                    self.stack.push(children);
+                }
+            }
+        }
+    }
+
+    // Fill out the rest of the stack and the leaf, so that the next element is
+    // the one at offset `end - 1` in the subtree rooted at `node`. `end` must
+    // be positive.
+    fn descend_to(&mut self, mut node: &'a Node<T, B>, mut end: usize) {
+        loop {
+            match node {
+                Node::Leaf { data } => {
+                    self.leaf = data[..end].iter();
+                    return;
+                }
+                Node::Internal { children, size } => {
+                    let Some((idx, child_offset)) = child_idx(size, end - 1) else {
+                        return;
+                    };
+                    end = child_offset + 1;
+                    let mut children = children[..=idx].iter();
+                    // unwrap: child_idx always returns a valid index into children
+                    node = children.next_back().unwrap();
+                    self.stack.push(children);
+                }
+            }
+        }
+    }
+
+    fn next(&mut self) -> Option<&'a T> {
+        if self.remaining == 0 {
+            None
+        } else {
+            self.remaining -= 1;
+            if let Some(ret) = self.leaf.next_back() {
+                Some(ret)
+            } else {
+                // The current leaf is exhausted. Unwind the stack until we find
+                // a non-exhausted internal node, then descend again.
+                loop {
+                    let stack_top = self.stack.last_mut()?;
+
+                    let Some(next_node) = stack_top.next_back() else {
+                        self.stack.pop();
+                        continue;
+                    };
+
+                    self.descend(next_node);
+                    return self.leaf.next_back();
+                }
+            }
+        }
+    }
+}
+
+impl<'a, T, const B: usize> Iterator for RevIter<'a, T, B> {
+    type Item = &'a T;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            RevIterInner::Simple(it) => it.next_back(),
+            RevIterInner::Tree(it) => it.next(),
+        }
+    }
+}
+
 /// An iterator over mutable references elements of a [`TreeVec`].
 pub struct IterMut<'a, T, const B: usize> {
     inner: IterMutInner<'a, T, B>,
@@ -795,7 +965,7 @@ enum IterMutInner<'a, T, const B: usize> {
 // turned into mut things. Right now there's only the one duplication so
 // is isn't worth trying to build an abstraction.
 struct TreeIterMut<'a, T, const B: usize> {
-    stack: Vec<std::slice::IterMut<'a, Box<Node<T, B>>>>,
+    stack: Stack<std::slice::IterMut<'a, Box<Node<T, B>>>>,
     leaf: std::slice::IterMut<'a, T>,
     remaining: usize,
 }
@@ -907,6 +1077,64 @@ mod tests {
         assert_eq!(*vec.get(7).unwrap(), 1);
     }
 
+    // Craft patch (iterator stack).
+    fn internal_levels<T, const B: usize>(vec: &TreeVec<T, B>) -> usize {
+        let mut node = &*vec.root;
+        let mut levels = 0;
+        while let Node::Internal { children, .. } = node {
+            node = &children[0];
+            levels += 1;
+        }
+        levels
+    }
+
+    // Craft patch (iterator stack).
+    #[test]
+    fn iterators_on_short_and_tall_trees() {
+        for len in [100, 3_000] {
+            let mut vec: TreeVec<usize, 4> = (0..len).collect();
+            let mut expected: Vec<usize> = (0..len).collect();
+            let levels = internal_levels(&vec);
+            if len == 100 {
+                assert!(levels > 2 && levels <= INLINE_HEIGHT, "{levels} levels");
+            } else {
+                assert!(levels > INLINE_HEIGHT, "{levels} levels");
+            }
+
+            assert!(vec.iter().eq(expected.iter()), "iter, len {len}");
+            let ranges = [
+                (0, len),
+                (1, len - 1),
+                (len / 2, len / 2 + 4),
+                (len - 1, len),
+                (len, len),
+            ];
+            for (start, end) in ranges {
+                assert!(
+                    vec.range(start..end).eq(expected[start..end].iter()),
+                    "range {start}..{end}, len {len}"
+                );
+            }
+
+            for x in vec.iter_mut() {
+                *x += 1;
+            }
+            for x in &mut expected {
+                *x += 1;
+            }
+            for (start, end) in ranges {
+                for x in vec.range_mut(start..end) {
+                    *x *= 3;
+                }
+                for x in &mut expected[start..end] {
+                    *x *= 3;
+                }
+            }
+            assert!(vec.iter().eq(expected.iter()), "after edits, len {len}");
+            vec.check_invariants();
+        }
+    }
+
     #[test]
     fn insert_remove() {
         let mut vec = TreeVec::<i32, 4>::default();
@@ -934,6 +1162,22 @@ mod tests {
         assert_eq!(*vec.get(5).unwrap(), 1);
     }
 
+    // Craft patch (scan runs).
+    #[test]
+    fn range_rev_to() {
+        for len in [0, 1, 4, 5, 17, 70] {
+            let vec: TreeVec<usize, 4> = (0..len).collect();
+            for end in 0..=len + 2 {
+                let got: Vec<usize> = vec.range_rev_to(end).copied().collect();
+                let expected: Vec<usize> = (0..end.min(len)).rev().collect();
+                assert_eq!(got, expected, "len {len}, end {end}");
+            }
+            let take: Vec<usize> = vec.range_rev_to(len).take(3).copied().collect();
+            let expected: Vec<usize> = (0..len).rev().take(3).collect();
+            assert_eq!(take, expected, "len {len}");
+        }
+    }
+
     #[test]
     fn iter() {
         let mut vec = TreeVec::<i32, 4>::default();
@@ -951,5 +1195,45 @@ mod tests {
             vec.iter().cloned().collect::<Vec<_>>(),
             vec![1, 1, 1, 1, 1, 1, 2]
         );
+    }
+
+    // Craft patch (range bounds).
+    fn internal_node_vec() -> TreeVec<i32, 4> {
+        let vec: TreeVec<i32, 4> = (0..20).collect();
+        assert!(matches!(&*vec.root, Node::Internal { .. }));
+        vec
+    }
+
+    #[test]
+    #[should_panic(expected = "range starts at 10 but ends at 5")]
+    fn range_reversed() {
+        let vec = internal_node_vec();
+        #[allow(clippy::reversed_empty_ranges)]
+        let _ = vec.range(10..5);
+    }
+
+    #[test]
+    #[should_panic(expected = "range starts at 10 but ends at 5")]
+    fn range_mut_reversed() {
+        let mut vec = internal_node_vec();
+        #[allow(clippy::reversed_empty_ranges)]
+        let _ = vec.range_mut(10..5);
+    }
+
+    #[test]
+    #[should_panic(expected = "range start is past usize::MAX")]
+    fn range_start_past_max() {
+        let vec = internal_node_vec();
+        let _ = vec.range((
+            std::ops::Bound::Excluded(usize::MAX),
+            std::ops::Bound::Unbounded,
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "range end is past usize::MAX")]
+    fn range_end_past_max() {
+        let vec = internal_node_vec();
+        let _ = vec.range(0..=usize::MAX);
     }
 }
