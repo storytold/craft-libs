@@ -4,6 +4,7 @@
 //! It does not construct a consumer's animation model. More detailed payloads remain available
 //! through [`Document::root`] for the application adapter.
 use craft_xml::{Doctype, El, Error as XmlError, Limits, Options, UnknownEntity};
+use std::borrow::Cow;
 
 /// Maximum bytes of XML in one XFL document or library item.
 pub const MAX_XML_BYTES: usize = 256 * 1024 * 1024;
@@ -25,6 +26,14 @@ pub struct Stage<'a> {
     pub height: Option<f32>,
     pub frame_rate: Option<f32>,
     pub background_color: Option<&'a str>,
+}
+
+/// The script-language version and document class selected by an XFL `PublishSettings.xml`.
+/// Values stay in their native string form so each consumer can apply its own domain rules.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PublishSettings<'a> {
+    pub action_script_version: Option<Cow<'a, str>>,
+    pub document_class: Option<Cow<'a, str>>,
 }
 
 /// Bounds used when projecting native schema fields into a compact model.
@@ -128,6 +137,19 @@ fn boolean(element: &El, name: &str) -> Option<bool> {
     attr_last(element, name).map(|value| value.trim() == "true")
 }
 
+fn trimmed_text<'a>(element: &'a El) -> Option<Cow<'a, str>> {
+    match element.text() {
+        Cow::Borrowed(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then_some(Cow::Borrowed(trimmed))
+        }
+        Cow::Owned(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| Cow::Owned(trimmed.to_string()))
+        }
+    }
+}
+
 impl Document {
     /// Parse XFL XML with AniCraft's existing size, depth, element, attribute, entity, doctype
     /// and malformed-end-tag behavior. The shared XML parser owns byte parsing; this crate owns
@@ -156,6 +178,21 @@ impl Document {
     /// The root's local element name (normally `DOMDocument`).
     pub fn root_name(&self) -> &str {
         &self.root.name
+    }
+
+    /// Reads the current publish profile, falling back to the first profile and then the root.
+    /// This is also used for `PublishSettings.xml` files, whose schema is separate from the main
+    /// `DOMDocument` tree.
+    pub fn publish_settings(&self) -> PublishSettings<'_> {
+        let profile = self
+            .root
+            .elements()
+            .find(|element| element.name == "flash_profile" && boolean(element, "current") == Some(true))
+            .or_else(|| self.root.elements().find(|element| element.name == "flash_profile"))
+            .unwrap_or(&self.root);
+        let properties = profile.child("PublishFlashProperties").unwrap_or(profile);
+        let value = |name: &str| properties.child(name).and_then(trimmed_text);
+        PublishSettings { action_script_version: value("ActionScriptVersion"), document_class: value("DocumentClass") }
     }
 
     /// The XFL stage metadata, applying finite-number checks but leaving product defaults and
@@ -410,5 +447,33 @@ mod tests {
         let (model, _) = document.into_parts(ModelLimits { max_timelines: 10, max_layers_per_timeline: 10 });
         assert!(model.timelines.is_empty());
         assert_eq!(model.symbol_timeline.unwrap().layers[0].frames[0].index, Some(1));
+    }
+
+    #[test]
+    fn selects_current_publish_profile_and_uses_native_value_strings() {
+        let document = Document::parse(
+            br#"<PublishSettings><flash_profile><PublishFlashProperties><ActionScriptVersion>2</ActionScriptVersion><DocumentClass>OldClass</DocumentClass></PublishFlashProperties></flash_profile><flash_profile current="true"><PublishFlashProperties><ActionScriptVersion> 3 </ActionScriptVersion><DocumentClass>  com.example.Main  </DocumentClass></PublishFlashProperties></flash_profile></PublishSettings>"#,
+        )
+        .unwrap();
+        let settings = document.publish_settings();
+        assert_eq!(settings.action_script_version.as_deref(), Some("3"));
+        assert_eq!(settings.document_class.as_deref(), Some("com.example.Main"));
+    }
+
+    #[test]
+    fn publish_settings_fall_back_to_first_profile_then_root() {
+        let first = Document::parse(
+            br#"<PublishSettings><flash_profile><PublishFlashProperties><ActionScriptVersion>2</ActionScriptVersion></PublishFlashProperties></flash_profile><flash_profile><PublishFlashProperties><ActionScriptVersion>3</ActionScriptVersion></PublishFlashProperties></flash_profile></PublishSettings>"#,
+        )
+        .unwrap();
+        assert_eq!(first.publish_settings().action_script_version.as_deref(), Some("2"));
+
+        let root = Document::parse(
+            br#"<PublishSettings><ActionScriptVersion> 3 </ActionScriptVersion><DocumentClass>RootClass</DocumentClass></PublishSettings>"#,
+        )
+        .unwrap();
+        let settings = root.publish_settings();
+        assert_eq!(settings.action_script_version.as_deref(), Some("3"));
+        assert_eq!(settings.document_class.as_deref(), Some("RootClass"));
     }
 }
