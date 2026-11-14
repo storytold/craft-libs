@@ -111,6 +111,7 @@ fn package(book: &[u8], sheet: &[u8], strings: &[u8], roots: &str, rels: &str, t
         ("data/two.bin", &worksheet(&[], &[])),
         ("text/strings.bin", strings),
     ])
+    .unwrap()
 }
 fn file(sheet: &[u8]) -> Vec<u8> {
     package(&book(false), sheet, &sst(), ROOT, RELS, TYPES)
@@ -343,6 +344,7 @@ fn two_sheets(one: &[u8], two: &[u8]) -> Vec<u8> {
         ("data/two.bin", two),
         ("text/strings.bin", &sst()),
     ])
+    .unwrap()
 }
 
 #[test]
