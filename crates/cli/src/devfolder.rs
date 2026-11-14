@@ -9,7 +9,7 @@
 //! time and length with what the last scan saw, so a missed event, a network folder with no
 //! inotify, or a half-written file that is finished later all end in a correct reload.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime};
 use notify::{RecursiveMode, Watcher};
 
 use crate::error::{CliError, Result, io_at};
+use crate::gate;
 use crate::run::Installed;
 
 /// What the watcher needs from a plugin host.
@@ -48,8 +49,38 @@ struct Stamp {
 
 struct Known {
     stamp: Stamp,
-    /// Set once the file loaded.
+    /// The plugin this path runs. Set once the file loaded, and kept when a later save is rejected,
+    /// because the host keeps the previous version running.
     plugin_id: Option<String>,
+    /// The plugin id this file asks for while another path owns it. The file is read again on every
+    /// scan, so it loads as soon as the owner is gone.
+    waiting_for: Option<String>,
+}
+
+/// One present file during a scan.
+struct Candidate {
+    path: PathBuf,
+    stamp: Stamp,
+    /// The plugin this path ran before this scan.
+    previous: Option<String>,
+    /// What to do with the file this scan.
+    work: Work,
+    /// The plugin id the file's manifest asks for, when the gate can read one.
+    wanted: Option<String>,
+    /// The plugin id this path owns after the scan, before any install result: what the file
+    /// asks for, else what the path ran before.
+    claim: Option<String>,
+    /// Set when another path owns the id this file asks for. The path keeps its previous plugin.
+    conflict: Option<String>,
+}
+
+enum Work {
+    /// The file and its stamp are as the last scan left them.
+    Keep,
+    /// Install these bytes. `announce` is false when the file only waits for an id to free up again.
+    Install { bytes: Vec<u8>, announce: bool },
+    /// The file could not be read.
+    Unreadable(String),
 }
 
 pub struct DevFolder<T: DevTarget> {
@@ -91,39 +122,97 @@ impl<T: DevTarget> DevFolder<T> {
         Ok(files)
     }
 
-    /// Load every new or changed file and remove the plugins of deleted files.
+    /// Load every new or changed file and remove the plugins nobody owns any more.
+    ///
+    /// The scan first works out which path owns which plugin id, from the whole folder. Then it
+    /// installs, and last it removes the ids that have no owner path left. So a rename that keeps
+    /// the id, or a save that changes the id, never removes a plugin that a path still owns. Paths
+    /// are visited in sorted order, so the result does not depend on directory order.
+    ///
+    /// Two paths cannot own one id. A path that already owns the id keeps it. Otherwise the earlier
+    /// path wins, and the later file is rejected until the id is free.
     pub fn scan(&mut self) -> Result<Vec<DevEvent>> {
+        let mut candidates = self.candidates()?;
+        resolve_claims(&mut candidates);
         let mut events = Vec::new();
-        let files = self.wasm_files()?;
-        for (path, stamp) in &files {
-            if self.known.get(path).is_some_and(|k| k.stamp == *stamp) {
+        let owned_before: Vec<(PathBuf, String)> = self.known.iter().filter_map(|(p, k)| Some((p.clone(), k.plugin_id.clone()?))).collect();
+
+        for c in &candidates {
+            let Candidate { path, stamp, previous, work, wanted, claim, conflict } = c;
+            let (path, stamp) = (path.clone(), *stamp);
+            if let Some(reason) = conflict {
+                // The loser keeps the plugin it ran before, if any. It waits for the id to free up.
+                self.known.insert(path.clone(), Known { stamp, plugin_id: claim.clone(), waiting_for: wanted.clone() });
+                if matches!(work, Work::Install { announce: true, .. }) {
+                    events.push(DevEvent::Rejected { path, reason: reason.clone() });
+                }
                 continue;
             }
-            let previous_id = self.known.get(path).and_then(|k| k.plugin_id.clone());
-            match std::fs::read(path).map_err(|e| io_at(path, e)).and_then(|bytes| self.target.install(&bytes)) {
-                Ok(installed) => {
-                    self.known.insert(path.clone(), Known { stamp: *stamp, plugin_id: Some(installed.plugin_id.clone()) });
-                    events.push(DevEvent::Loaded { path: path.clone(), installed });
+            match work {
+                Work::Keep => {}
+                Work::Unreadable(reason) => {
+                    self.known.insert(path.clone(), Known { stamp, plugin_id: previous.clone(), waiting_for: None });
+                    events.push(DevEvent::Rejected { path, reason: reason.clone() });
                 }
-                Err(e) => {
-                    // Keep the stamp: the same bytes are not retried every scan. The next save changes it.
-                    self.known.insert(path.clone(), Known { stamp: *stamp, plugin_id: previous_id });
-                    events.push(DevEvent::Rejected { path: path.clone(), reason: e.to_string() });
-                }
+                Work::Install { bytes, .. } => match self.target.install(bytes) {
+                    Ok(installed) => {
+                        self.known.insert(path.clone(), Known { stamp, plugin_id: Some(installed.plugin_id.clone()), waiting_for: None });
+                        events.push(DevEvent::Loaded { path, installed });
+                    }
+                    Err(e) => {
+                        // Keep the stamp: the same bytes are not retried every scan. The next save changes it.
+                        // The previous plugin keeps running, unless another path took its id in this scan.
+                        let kept = previous.clone().filter(|id| !candidates.iter().any(|o| o.path != path && o.claim.as_ref() == Some(id)));
+                        self.known.insert(path.clone(), Known { stamp, plugin_id: kept, waiting_for: None });
+                        events.push(DevEvent::Rejected { path, reason: e.to_string() });
+                    }
+                },
             }
         }
-        let present: Vec<&PathBuf> = files.iter().map(|(p, _)| p).collect();
-        let gone: Vec<PathBuf> = self.known.keys().filter(|p| !present.contains(p)).cloned().collect();
-        for path in gone {
-            let Some(known) = self.known.remove(&path) else { continue };
-            if let Some(plugin_id) = known.plugin_id {
-                events.push(match self.target.remove(&plugin_id) {
-                    Ok(()) => DevEvent::Removed { path, plugin_id },
-                    Err(e) => DevEvent::RemoveFailed { path, plugin_id, reason: e.to_string() },
-                });
+
+        let present: BTreeSet<&Path> = candidates.iter().map(|c| c.path.as_path()).collect();
+        self.known.retain(|p, _| present.contains(p.as_path()));
+        let live: BTreeSet<&str> = self.known.values().filter_map(|k| k.plugin_id.as_deref()).collect();
+        let mut removed: BTreeSet<&str> = BTreeSet::new();
+        for (path, plugin_id) in &owned_before {
+            if live.contains(plugin_id.as_str()) || !removed.insert(plugin_id.as_str()) {
+                continue;
             }
+            let (path, plugin_id) = (path.clone(), plugin_id.clone());
+            events.push(match self.target.remove(&plugin_id) {
+                Ok(()) => DevEvent::Removed { path, plugin_id },
+                Err(e) => DevEvent::RemoveFailed { path, plugin_id, reason: e.to_string() },
+            });
         }
         Ok(events)
+    }
+
+    /// Every `.wasm` file in sorted path order, with its bytes when it needs an install.
+    fn candidates(&self) -> Result<Vec<Candidate>> {
+        let mut out = Vec::new();
+        for (path, stamp) in self.wasm_files()? {
+            let known = self.known.get(&path);
+            let previous = known.and_then(|k| k.plugin_id.clone());
+            let changed = known.is_none_or(|k| k.stamp != stamp);
+            let waiting = known.is_some_and(|k| k.waiting_for.is_some());
+            let work = if !changed && !waiting {
+                Work::Keep
+            } else {
+                match std::fs::read(&path) {
+                    Ok(bytes) => Work::Install { bytes, announce: changed },
+                    Err(e) if changed => Work::Unreadable(io_at(&path, e).to_string()),
+                    Err(_) => Work::Keep,
+                }
+            };
+            // A file the gate cannot read has no id to claim. It still goes to the host, which says why it fails.
+            let wanted = match &work {
+                Work::Install { bytes, .. } => gate::check(bytes).manifest.map(|m| m.id),
+                Work::Keep | Work::Unreadable(_) => None,
+            };
+            let claim = wanted.clone().or_else(|| previous.clone());
+            out.push(Candidate { path, stamp, previous, work, claim, wanted, conflict: None });
+        }
+        Ok(out)
     }
 
     /// Scan now, then again on every file system event and every `poll`, until `stop` is set.
@@ -152,6 +241,40 @@ impl<T: DevTarget> DevFolder<T> {
             // Let a burst of writes settle, so a half-written module is read once, whole.
             std::thread::sleep(Duration::from_millis(60));
             while rx.try_recv().is_ok() {}
+        }
+    }
+}
+
+/// Decide which path owns which plugin id. A path that owned the id before keeps it, then the
+/// earlier path wins. A loser gets a `conflict` and falls back to the plugin it ran before. That
+/// fallback is a claim too, so the loop runs again until no id has two claimants. Each pass moves
+/// at least one claim from its new id to its previous id, or from its previous id to none, so it ends.
+fn resolve_claims(candidates: &mut [Candidate]) {
+    loop {
+        let mut order: Vec<usize> = (0..candidates.len()).filter(|&i| candidates[i].claim.is_some()).collect();
+        // `candidates` is in path order, so the index breaks ties by path.
+        order.sort_by_key(|&i| (candidates[i].claim != candidates[i].previous, i));
+        let mut owner: BTreeMap<String, usize> = BTreeMap::new();
+        let mut losers: Vec<(usize, usize)> = Vec::new();
+        for i in order {
+            let Some(id) = candidates[i].claim.clone() else { continue };
+            match owner.get(&id) {
+                Some(&winner) => losers.push((i, winner)),
+                None => {
+                    owner.insert(id, i);
+                }
+            }
+        }
+        if losers.is_empty() {
+            return;
+        }
+        for (i, winner) in losers {
+            let id = candidates[i].claim.take().unwrap_or_default();
+            let owner_path = candidates[winner].path.display().to_string();
+            // Only the id the file asks for falls back. A second loss ends in no claim.
+            let fallback = candidates[i].previous.clone().filter(|prev| candidates[i].wanted.as_ref() == Some(&id) && *prev != id);
+            candidates[i].conflict.get_or_insert_with(|| format!("plugin id {id} is already provided by {owner_path}"));
+            candidates[i].claim = fallback;
         }
     }
 }

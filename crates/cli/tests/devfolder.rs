@@ -4,6 +4,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -194,4 +195,123 @@ fn watch_reloads_on_file_system_events_not_just_on_the_poll() {
     // `watch` checks the flag after each wake-up. A last write wakes it.
     write_at(&dir.path().join("wake.wasm"), b"x", 0);
     handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn a_file_that_changes_its_plugin_id_stops_the_old_plugin() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("ver.wasm");
+    let (mut dev, host) = folder(dir.path());
+    write_at(&file, &plugin("dev.test.a", '1'), 0);
+    dev.scan().unwrap();
+    assert_eq!(host.manager.list(), ["dev.test.a"]);
+
+    // The developer saves plugin B over the path that held A.
+    write_at(&file, &plugin("dev.test.b", '2'), 5);
+    let events = dev.scan().unwrap();
+    assert!(
+        matches!(events.as_slice(), [DevEvent::Loaded { installed, .. }, DevEvent::Removed { plugin_id, .. }]
+            if installed.plugin_id == "dev.test.b" && plugin_id == "dev.test.a"),
+        "{events:?}"
+    );
+    assert_eq!(host.manager.list(), ["dev.test.b"], "A must not stay loaded with no file behind it");
+    assert!(host.invoke("dev.test.a", "ver", &json!({})).is_err());
+    assert_eq!(answer(&host, "dev.test.b"), json!(2));
+
+    // Deleting the path later removes B and leaves nothing behind.
+    std::fs::remove_file(&file).unwrap();
+    dev.scan().unwrap();
+    assert!(host.manager.list().is_empty(), "{:?}", host.manager.list());
+}
+
+#[test]
+fn renaming_a_loaded_file_keeps_its_plugin_loaded() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut dev, host) = folder(dir.path());
+    let a = dir.path().join("a.wasm");
+    let b = dir.path().join("b.wasm");
+    write_at(&a, &plugin("dev.test.ver", '1'), 0);
+    dev.scan().unwrap();
+
+    std::fs::rename(&a, &b).unwrap();
+    let events = dev.scan().unwrap();
+    assert!(matches!(events.as_slice(), [DevEvent::Loaded { path, .. }] if path == &b), "no Removed event: {events:?}");
+    assert_eq!(host.manager.list(), ["dev.test.ver"], "the rename must not remove the plugin");
+    assert_eq!(answer(&host, "dev.test.ver"), json!(1));
+    assert!(dev.scan().unwrap().is_empty());
+
+    // The new name owns the plugin now: deleting it removes it.
+    std::fs::remove_file(&b).unwrap();
+    let events = dev.scan().unwrap();
+    assert!(matches!(events.as_slice(), [DevEvent::Removed { path, plugin_id }] if path == &b && plugin_id == "dev.test.ver"), "{events:?}");
+    assert!(host.manager.list().is_empty());
+}
+
+#[test]
+fn renaming_a_file_and_changing_its_code_reloads_the_new_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut dev, host) = folder(dir.path());
+    write_at(&dir.path().join("a.wasm"), &plugin("dev.test.ver", '1'), 0);
+    dev.scan().unwrap();
+
+    std::fs::remove_file(dir.path().join("a.wasm")).unwrap();
+    write_at(&dir.path().join("b.wasm"), &plugin("dev.test.ver", '2'), 5);
+    let events = dev.scan().unwrap();
+    assert!(matches!(events.as_slice(), [DevEvent::Loaded { installed, .. }] if installed.replaced == Some(1)), "{events:?}");
+    assert_eq!(answer(&host, "dev.test.ver"), json!(2));
+}
+
+#[test]
+fn two_files_with_one_plugin_id_load_one_and_reject_the_other() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut dev, host) = folder(dir.path());
+    write_at(&dir.path().join("a.wasm"), &plugin("dev.test.ver", '1'), 0);
+    write_at(&dir.path().join("b.wasm"), &plugin("dev.test.ver", '2'), 0);
+    let events = dev.scan().unwrap();
+    let [DevEvent::Loaded { path: loaded, .. }, DevEvent::Rejected { path: rejected, reason }] = events.as_slice() else { panic!("{events:?}") };
+    assert_eq!((loaded.file_name().unwrap(), rejected.file_name().unwrap()), (OsStr::new("a.wasm"), OsStr::new("b.wasm")), "the earlier path wins");
+    assert!(reason.contains("dev.test.ver") && reason.contains("a.wasm"), "{reason}");
+    assert_eq!(answer(&host, "dev.test.ver"), json!(1), "the rejected file never ran");
+    assert!(dev.scan().unwrap().is_empty(), "a standing conflict is reported once");
+
+    // The owner goes away, so the waiting file takes the id over.
+    std::fs::remove_file(dir.path().join("a.wasm")).unwrap();
+    let events = dev.scan().unwrap();
+    assert!(matches!(events.as_slice(), [DevEvent::Loaded { path, .. }] if path.ends_with("b.wasm")), "{events:?}");
+    assert_eq!(answer(&host, "dev.test.ver"), json!(2));
+    std::fs::remove_file(dir.path().join("b.wasm")).unwrap();
+    dev.scan().unwrap();
+    assert!(host.manager.list().is_empty());
+}
+
+#[test]
+fn a_new_file_cannot_take_an_id_a_running_file_owns() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut dev, host) = folder(dir.path());
+    write_at(&dir.path().join("z.wasm"), &plugin("dev.test.ver", '1'), 0);
+    dev.scan().unwrap();
+
+    // `a.wasm` sorts first, but `z.wasm` already runs the id, so the newcomer loses.
+    write_at(&dir.path().join("a.wasm"), &plugin("dev.test.ver", '2'), 0);
+    let events = dev.scan().unwrap();
+    assert!(matches!(events.as_slice(), [DevEvent::Rejected { path, .. }] if path.ends_with("a.wasm")), "{events:?}");
+    assert_eq!(answer(&host, "dev.test.ver"), json!(1));
+}
+
+#[test]
+fn files_that_swap_plugin_ids_in_one_scan_both_stay_loaded() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut dev, host) = folder(dir.path());
+    let (a, b) = (dir.path().join("a.wasm"), dir.path().join("b.wasm"));
+    write_at(&a, &plugin("dev.test.x", '1'), 0);
+    write_at(&b, &plugin("dev.test.y", '2'), 0);
+    dev.scan().unwrap();
+
+    write_at(&a, &plugin("dev.test.y", '3'), 5);
+    write_at(&b, &plugin("dev.test.x", '4'), 5);
+    let events = dev.scan().unwrap();
+    assert!(events.iter().all(|e| matches!(e, DevEvent::Loaded { .. })), "{events:?}");
+    assert_eq!(answer(&host, "dev.test.x"), json!(4));
+    assert_eq!(answer(&host, "dev.test.y"), json!(3));
+    assert_eq!(host.manager.list().len(), 2);
 }

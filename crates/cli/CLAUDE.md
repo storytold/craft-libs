@@ -6,7 +6,7 @@ Library `craft_cli` plus the thin `craft` binary. Native only. Read `README.md` 
 - `build.rs`: runs cargo with the package as the working directory, because cargo reads `.cargo/config.toml` from the working directory. The linker flags that declare the memory maximum live there. It finds the artifact in `--message-format=json` output, runs the gate, and writes `target/<name>.wasm` only if the gate accepts.
 - `gate.rs`, `inspect.rs`: `craft_plugin_abi::check_package` plus a `wasmparser` pass for memories, imports, exports and custom sections. `build`, `check` and `inspect` share `gate::summary`, so they print the same verdict.
 - `run.rs`: `Headless` is a real `PluginManager` with `HeadlessServices` (no commands, no document, no linked apps). Commands go through the registry. Hooks and panels go to `Generation::call`. Data plane kinds are refused.
-- `devfolder.rs`: `DevFolder<T: DevTarget>`. A scan compares modified time and length. `notify` events only trigger a scan. `publish_atomic` copies under a hidden name, then renames.
+- `devfolder.rs`: `DevFolder<T: DevTarget>`. A scan compares modified time and length. It first works out which path owns which plugin id, installs, then removes only ids with no owner path (so a rename or an id change never removes a plugin a path still owns). Two paths claiming one id: the path that already owns it, else the earlier path, wins; the other file is rejected and waits. `notify` events only trigger a scan. `publish_atomic` copies under a hidden name, then renames.
 - `watch.rs`: never watches `target/`.
 - `bindgen.rs`: uses `craft_command::schema::from_doc`.
 
