@@ -136,7 +136,7 @@ pub struct Restart {
 
 impl Restart {
     /// Nothing is left to start.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(not(all(test, feature = "ui")), allow(dead_code))]
     pub(crate) fn scheduled() -> Self {
         Self { helper: None }
     }

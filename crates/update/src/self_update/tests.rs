@@ -1,9 +1,14 @@
 //! Tests for launcher self-update.
 
+// The tests use most of these private items, and which ones differ by platform.
+#[allow(clippy::wildcard_imports, reason = "each platform's tests use a different part of these modules")]
 use super::detect::*;
+#[allow(clippy::wildcard_imports, reason = "each platform's tests use a different part of these modules")]
 use super::helper::*;
 #[cfg(unix)]
+#[allow(clippy::wildcard_imports, reason = "each platform's tests use a different part of these modules")]
 use super::relaunch::*;
+#[allow(clippy::wildcard_imports, reason = "each platform's tests use a different part of these modules")]
 use super::replace::*;
 use super::*;
 use craft_ui::testing::trial;
