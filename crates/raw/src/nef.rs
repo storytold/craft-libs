@@ -13,7 +13,7 @@
 //! refused.
 
 use crate::nefc;
-use crate::shared::white_from_data;
+use crate::shared::white_from_data_sourced;
 use crate::tiffraw::{Packing, check_image, read_image};
 use crate::{BlackLevel, Camera, Cfa, ColorData, Limits, Mode, OpcodeLists, Orientation, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use craft_tiff::image::ImageInfo;
@@ -266,14 +266,23 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     // D7500 and Z 50 store 600 / 1008 / 400 / 400 / 1008 while their darkest samples are 150 / ~252 / 99 / 99 / ~250
     // (our measurements on CC0 raw.pixls.us samples; the same bodies' 14-bit files match the tag as is).
     let black_scale = if bits == 12 { 0.25 } else { 1.0 };
-    let black = match mn.as_ref().and_then(|m| m.ifd.f64s(BLACK_LEVEL)).as_deref() {
-        Some([a, b, c, d]) if [a, b, c, d].iter().all(|v| **v < 16384.0) => BlackLevel {
-            repeat_rows: 2,
-            repeat_cols: 2,
-            values: [a, b, c, d].iter().map(|v| (**v * black_scale) as f32).collect(),
-            ..Default::default()
+    let (black, black_source) = match mn.as_ref().and_then(|m| m.ifd.f64s(BLACK_LEVEL)).as_deref() {
+        Some([a, b, c, d]) if [a, b, c, d].iter().all(|v| **v < 16384.0) => (
+            BlackLevel {
+                repeat_rows: 2,
+                repeat_cols: 2,
+                values: [a, b, c, d].iter().map(|v| (**v * black_scale) as f32).collect(),
+                ..Default::default()
+            },
+            crate::LevelSource::Metadata,
+        ),
+        _ => match nrw_black(mn.as_ref(), bits) {
+            Some(value) => (BlackLevel::uniform(value), crate::LevelSource::Metadata),
+            None => {
+                let (value, source) = be16_black(&info, bytes.len() as u64, mn.as_ref(), samples);
+                (BlackLevel::uniform(value), source)
+            }
         },
-        _ => BlackLevel::uniform(nrw_black(mn.as_ref(), bits).unwrap_or_else(|| be16_black(&info, bytes.len() as u64, mn.as_ref(), samples))),
     };
     let wb = mn
         .as_ref()
@@ -291,10 +300,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let active_w = trailing_masked_columns(samples, w, bits);
     // the white level is measured from the whole image (or known for a measured body); the probe (no samples in its
     // result) takes the nominal one
-    let white = match (body.and_then(|b| b.white), mode) {
-        (Some(white), _) => white,
-        (None, Mode::Full) => white_from_data(samples, bits),
-        (None, Mode::Header) => ((1u32 << bits.clamp(1, 16)) - 1) as f32,
+    let (white, white_source) = match (body.and_then(|b| b.white), mode) {
+        (Some(white), _) => (white, crate::LevelSource::Inferred),
+        (None, Mode::Full) => white_from_data_sourced(samples, bits),
+        (None, Mode::Header) => (((1u32 << bits.clamp(1, 16)) - 1) as f32, crate::LevelSource::Fallback),
     };
     let crop = match body {
         Some(&MeasuredBody { crop: (x, y, cw, ch), .. }) if x + cw <= active_w && y + ch <= h => Rect::new(x, y, cw, ch),
@@ -329,7 +338,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
         lens_metadata: Default::default(),
-        level_sources: Default::default(),
+        level_sources: crate::LevelSources { black: black_source, white: white_source },
         notices: crate::RawNotices { assumed_cfa, ..Default::default() },
     };
     img.validate_for(mode)?;
@@ -441,14 +450,14 @@ fn be16_layout(w: usize, h: usize, bits: u32, strip: u64) -> Option<PackedLayout
 /// 223), and the other 12-bit Coolpix NRWs state 200 in their NRW block; so 200, never above the darkest sample.
 const BE16_BLACK: f32 = 200.0;
 
-fn be16_black(info: &ImageInfo, file_len: u64, mn: Option<&makernote::MakerNote>, samples: &[u16]) -> f32 {
+fn be16_black(info: &ImageInfo, file_len: u64, mn: Option<&makernote::MakerNote>, samples: &[u16]) -> (f32, crate::LevelSource) {
     let has_table = mn.is_some_and(|m| m.ifd.bytes(LINEARIZATION_TABLE).is_some());
     let single = matches!(info.chunks(file_len).as_slice(), [c] if be16_layout(info.width as usize, info.height as usize, info.bits() as u32, c.len).is_some());
     if info.compression != t::compression::NIKON || has_table || info.samples_per_pixel != 1 || !single {
-        return 0.0;
+        return (0.0, crate::LevelSource::Fallback);
     }
     let darkest = samples.iter().copied().min().unwrap_or(0);
-    BE16_BLACK.min(f32::from(darkest))
+    (BE16_BLACK.min(f32::from(darkest)), crate::LevelSource::Inferred)
 }
 
 /// Unpack a [`PackedLayout`] strip into `w * h` samples. Short input leaves the missing samples zero.
@@ -729,6 +738,21 @@ mod tests {
         }
         ifd0.add_sub_ifd(raw);
         TiffWriter::new(order, false).write(&[ifd0]).unwrap()
+    }
+
+    #[test]
+    fn level_provenance_distinguishes_missing_black_from_recorded_black() {
+        let strip: Vec<u8> = [1000u16; 16].into_iter().flat_map(u16::to_be_bytes).collect();
+        let fallback = nef(1, 12, vec![strip.clone()], 4, 4, 4);
+        let mut note = IfdBuilder::new();
+        note.set(BLACK_LEVEL, Value::Short(vec![400; 4]));
+        let recorded = nef_with_note(1, 12, vec![strip], 4, 4, 4, Some(note));
+        for mode in [Mode::Header, Mode::Full] {
+            let missing = decode(&fallback, mode, &Limits::default()).unwrap();
+            assert_eq!((missing.black.mean(), missing.level_sources.black), (0.0, crate::LevelSource::Fallback));
+            let stated = decode(&recorded, mode, &Limits::default()).unwrap();
+            assert_eq!((stated.black.mean(), stated.level_sources.black), (100.0, crate::LevelSource::Metadata));
+        }
     }
 
     /// A Z 6II NEF carrying NikonNEFInfo gets Nikon's distortion correction as one warp, in the header probe and

@@ -414,7 +414,8 @@ mod tests {
         let mut co64 = vec![0u8; 4];
         co64.extend(1u32.to_be_bytes());
         co64.extend(offset.to_be_bytes());
-        let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
+        let stsc = [0u32, 1, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>();
+        let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsc", &stsc), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
         box_bytes(b"trak", &box_bytes(b"mdia", &box_bytes(b"minf", &box_bytes(b"stbl", &tables))))
     }
 

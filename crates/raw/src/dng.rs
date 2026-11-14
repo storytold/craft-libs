@@ -178,7 +178,15 @@ pub(crate) fn is_plain_cfa_tiff(tiff: &Tiff, bytes: &[u8]) -> bool {
     if !raw.contains(t::AS_SHOT_NEUTRAL) && !tiff.ifds.first().is_some_and(|i| i.contains(t::AS_SHOT_NEUTRAL)) {
         return false;
     }
-    let Ok(info) = raw.image() else { return false };
+    let Ok(info) = raw.image() else {
+        // Recognition must not turn a damaged, otherwise supported plain CFA
+        // image into an unsupported container. Let decode_as report its layout
+        // error; these tags alone never decompress or allocate pixel samples.
+        return raw.u16(t::COMPRESSION).unwrap_or(1) == t::compression::NONE
+            && raw.u16(t::SAMPLES_PER_PIXEL).unwrap_or(1) == 1
+            && (1..=16).contains(&raw.u16(t::BITS_PER_SAMPLE).unwrap_or(1))
+            && raw.u16(t::SAMPLE_FORMAT).unwrap_or(1) != 3;
+    };
     if info.samples_per_pixel != 1 || !(1..=16).contains(&info.bits()) || info.sample_format == 3 {
         return false;
     }
@@ -656,3 +664,7 @@ mod tests {
         assert!(deinterleave(&mut hostile, 8, 6, 1, 1 << 20, 1).is_err());
     }
 }
+
+#[cfg(all(test, feature = "hasselblad"))]
+#[path = "dng/probe_review_tests.rs"]
+mod probe_review_tests;

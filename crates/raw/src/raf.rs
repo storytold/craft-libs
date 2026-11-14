@@ -203,8 +203,8 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     };
     let mut data = Vec::new();
     if compressed {
-        if cfa.width == 6 && cfa != Cfa::xtrans() {
-            return Err(RawError::Unsupported("Fujifilm compressed RAF with an unknown X-Trans layout".into()));
+        if cfa != if cfa.width == 6 { Cfa::xtrans() } else { Cfa::bayer_static("RGGB") } {
+            return Err(RawError::Unsupported("Fujifilm compressed RAF with an unsupported CFA layout".into()));
         }
         let flag = if compression == 2 { 1 } else { 0 };
         if src.get(2) != Some(&flag) {
@@ -604,6 +604,24 @@ pub(super) mod tests {
         for (tag, data) in [(0x0130, vec![8, 8, 10, 10]), (0x0131, vec![3; 36])] {
             let header = Header { jpeg: None, records: vec![(tag, data.as_slice())], raw: None };
             assert!(matches!(cfa(&header), Err(RawError::Unsupported(_))));
+        }
+    }
+
+    #[test]
+    fn compressed_bayer_requires_the_layout_assumed_by_its_predictor() {
+        let strip = b"IS\x01\x00\x0e\0\x12\x06\0\x03\x0c\x03\0\x02\0\x03".to_vec();
+        let mut bytes = raf(780, 18, 14, strip, None, &[]);
+        let (dir_at, raw_at) = (be32(&bytes, 92).unwrap(), be32(&bytes, 100).unwrap());
+        let mut records = bytes[dir_at..raw_at].to_vec();
+        let n = u32::from_be_bytes(records[..4].try_into().unwrap()) + 1;
+        records[..4].copy_from_slice(&n.to_be_bytes());
+        // Reversed GRBG: a valid Bayer pattern, but not the RGGB order of this codec.
+        records.extend_from_slice(&[0x01, 0x30, 0, 4, 0x0b, 0x0a, 0x08, 0x09]);
+        bytes.splice(dir_at..raw_at, records.clone());
+        bytes[96..100].copy_from_slice(&(records.len() as u32).to_be_bytes());
+        bytes[100..104].copy_from_slice(&((raw_at + 8) as u32).to_be_bytes());
+        for mode in [Mode::Header, Mode::Full] {
+            assert!(matches!(decode(&bytes, mode, &Limits::default()), Err(RawError::Unsupported(why)) if why.contains("layout")));
         }
     }
 

@@ -615,7 +615,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         }
         _ => Rect::new(0, 0, active.width, active.height),
     };
-    if !data.is_empty() {
+    // Packed formats 2/5/7 are lossless sample containers: zero is an ordinary
+    // code, not evidence of a mapped-out photosite. The documented zero repair
+    // applies to the predictive format 4 and older word containers only.
+    if !data.is_empty() && matches!(encoding, Encoding::Words | Encoding::Blocks { kind: Block::Format4, .. }) {
         fill_defects(&mut data, w, active);
     }
 
@@ -1071,17 +1074,32 @@ mod tests {
     }
 
     #[test]
+    fn lossless_packed_formats_preserve_zero_codes_inside_the_active_area() {
+        let (w, h) = (90usize, 12usize);
+        for (format, bits, rotated) in [(5u16, 12u32, true), (5, 14, true), (7, 14, false), (2, 12, false)] {
+            let mut px = vec![1000u16; w * h];
+            px[5 * w + 20] = 0;
+            let payload = pack(&px, bits);
+            let bytes = rw2(w as u16, h as u16, bits as u16, format, 100, &if rotated { rotate(payload) } else { payload });
+            assert_eq!(samples(&crate::decode(&bytes).unwrap()), px, "format {format}/{bits}");
+        }
+    }
+
+    #[test]
     fn levels_crop_defects_and_cfa() {
         let (w, h) = (90usize, 60usize);
         let mut px: Vec<u16> = (0..w * h).map(|i| 300 + (i % 7) as u16).collect();
-        // a saturation plateau sets the white level; zeros inside the active area are defects
+        // A saturation plateau sets the white level. In the older word container,
+        // isolated zeros inside the active area are documented mapped-out defects.
         px[10 * w..20 * w].fill(3900);
         px[30 * w + 40] = 0;
         px[1] = 0; // in the border: left alone
-        let mut tags = vec![short(CFA_PATTERN, 2), short(BITS, 12), short(RAW_FORMAT, 5)];
+        let mut tags = vec![short(CFA_PATTERN, 2), short(BITS, 12), short(COMPRESSION, 34828)];
         tags.extend([0x002f, 0x0030, 0x0031, 0x0032].iter().zip([12u16, 10, 52, 80]).map(|(&tag, v)| short(tag, v)));
         tags.extend(LINEARITY_LIMIT.map(|tag| short(tag, 2000))); // recorded limits are not used
-        let bytes = file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
+        // Compression 34828 stores left-justified samples in little-endian u16 words.
+        let words: Vec<u8> = px.iter().flat_map(|&v| (v << 4).to_le_bytes()).collect();
+        let bytes = file(w as u16, h as u16, &tags, &words, &|off| vec![(t::STRIP_OFFSETS, Value::Long(vec![off]))]);
         let r = crate::decode(&bytes).unwrap();
         let d = samples(&r);
         assert_eq!(d[30 * w + 40], ((px[30 * w + 38] as u32 + px[30 * w + 42] as u32 + px[28 * w + 40] as u32 + px[32 * w + 40] as u32) / 4) as u16);

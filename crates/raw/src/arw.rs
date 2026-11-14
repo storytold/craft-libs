@@ -629,6 +629,19 @@ fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
         .max_by_key(|i| i.u64(t::IMAGE_WIDTH).unwrap_or(0).saturating_mul(i.u64(t::IMAGE_LENGTH).unwrap_or(0)))
 }
 
+fn valid_arw2_curve(curve: &[u64]) -> bool {
+    curve.len() == 4 && curve.iter().all(|&v| v <= 16383) && curve.windows(2).all(|v| (v[0] >> 2) < (v[1] >> 2))
+}
+
+fn declared_arw2_curve(raw: &Ifd, compression: u16, one_byte_per_sample: bool) -> Result<Option<Vec<u64>>> {
+    let curve = raw.u64s(TONE_CURVE);
+    if compression == 32767 && one_byte_per_sample && curve.as_ref().is_some_and(|curve| !valid_arw2_curve(curve)) {
+        // Reordering or clamping malformed breakpoints fabricates a different transfer curve.
+        return Err(RawError::Unsupported("Sony ARW2 with an invalid tone curve".into()));
+    }
+    Ok(curve)
+}
+
 pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = tiff.ifds.first().ok_or_else(|| RawError::Corrupt("TIFF without IFDs".into()))?;
@@ -645,6 +658,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     // archive measure exactly width x height. A200/A230/A350 files carry a strip 4-23 % larger than that (and A290/A390 one
     // smaller), which is a different packing, so they are refused rather than read with the wrong layout.
     let one_byte_per_sample = chunks.len() == 1 && strip_len == samples;
+    let declared_curve = declared_arw2_curve(raw, info.compression, one_byte_per_sample)?;
     let packed12 = info.compression == 32767 && is_packed12(&info, chunks.len(), strip_len);
     let (data, out_bits) = match info.compression {
         7 if linear_rgb => (RawData::U16(read_ycbcr_tiles(bytes, &info, raw, mode, limits)?), 14),
@@ -726,7 +740,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         }
         _ => Cfa::bayer_static("RGGB"),
     };
-    let default_black = if scale_bits >= 14 { 512.0 } else { 128.0 };
+    let curve_black = (info.compression == 32767 && one_byte_per_sample)
+        .then(|| declared_curve.as_ref().and_then(|curve| code_curve(curve).get(256).copied()).map(f32::from))
+        .flatten();
+    let default_black = curve_black.unwrap_or(if scale_bits >= 14 { 512.0 } else { 128.0 });
     // the decrypted SR2SubIFD, read once and only when a plain black level or white balance is missing
     let sr2_cell = std::cell::OnceCell::new();
     let sr2 = || sr2_cell.get_or_init(|| crate::sr2::SubIfd::read(bytes, ifd0, tiff.order)).as_ref();
@@ -741,7 +758,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         _ if linear_rgb => (BlackLevel::uniform(default_black + YCBCR_OFFSET), crate::LevelSource::Fallback),
         _ => match (scale_bits >= 14).then(|| sr2().and_then(sr2_black)).flatten() {
             Some(b) => (BlackLevel::uniform(b), crate::LevelSource::Metadata),
-            None => (BlackLevel::uniform(default_black), crate::LevelSource::Fallback),
+            None => (BlackLevel::uniform(default_black), curve_black.map_or(crate::LevelSource::Fallback, |_| crate::LevelSource::Metadata)),
         },
     };
     // ARW6 samples are in 2 x 14-bit units, so the file's 14-bit levels double; without the tag the white is the
@@ -1109,6 +1126,25 @@ mod tests {
         // degenerate thresholds do not panic
         let _ = code_curve(&[]);
         let _ = code_curve(&[60000, 1, 0, 0]);
+    }
+
+    #[test]
+    fn arw2_rejects_non_increasing_declared_curve_in_header_and_full_decode() {
+        let valid = arw_with_strip(32 * 4);
+        assert!(crate::decode(&valid).is_ok());
+        let mut damaged = valid.clone();
+        let tiff = Tiff::parse(&damaged).unwrap();
+        let curve = raw_ifd(&tiff).unwrap().get(TONE_CURVE).unwrap();
+        let at = curve.offset as usize;
+        for (dst, value) in damaged[at..at + 8].as_chunks_mut::<2>().0.iter_mut().zip([9000u16, 8000, 12000, 13000]) {
+            dst.copy_from_slice(&value.to_le_bytes());
+        }
+        for mode in [Mode::Header, Mode::Full] {
+            assert!(matches!(decode(&damaged, mode, &Limits::default()), Err(RawError::Unsupported(why)) if why.contains("curve")));
+            let image = decode(&valid, mode, &Limits::default()).unwrap();
+            assert_eq!(image.black.mean(), 512.0);
+            assert_eq!(image.level_sources.black, crate::LevelSource::Metadata, "the declared curve maps the black code");
+        }
     }
 
     #[test]

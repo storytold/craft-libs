@@ -351,14 +351,25 @@ fn trak(bytes: &[u8], t: &BoxRef, budget: &mut usize) -> Option<Cr3Track> {
         }
     }
     let stbl = stbl?;
-    let (mut kind, mut size, mut offset) = (None, None, None);
+    let (mut kind, mut size, mut offset, mut mapping, mut sample_count) = (None, None, None, None, 0);
     for b in boxes(bytes, stbl.body, stbl.end, budget) {
         let body = bytes.get(b.body..b.end)?;
         match &b.kind {
             // full box: version/flags, entry count, entries
             b"stsd" if be32(body, 4)? > 0 => kind = boxes(bytes, b.body + 8, b.end, budget).first().map(|e| sample_entry(bytes, e, budget)),
+            b"stsc" => {
+                // Only the first sample is exposed. It must map chunk 1 to
+                // the first sample description; don't trust offsets without
+                // that mapping, or a damaged/raw track could become a JPEG.
+                mapping = None;
+                let count = be32(body, 4)? as usize;
+                if be32(body, 0)? == 0 && count > 0 && count <= body.len().saturating_sub(8) / 12 {
+                    mapping = Some((be32(body, 8)?, be32(body, 12)?, be32(body, 16)?));
+                }
+            }
             // version/flags, sample_size (0 = per-sample table), count, sizes
             b"stsz" => {
+                sample_count = be32(body, 8)?;
                 size = match be32(body, 4)? {
                     0 if be32(body, 8)? > 0 => be32(body, 12),
                     0 => None,
@@ -371,8 +382,12 @@ fn trak(bytes: &[u8], t: &BoxRef, budget: &mut usize) -> Option<Cr3Track> {
             _ => {}
         }
     }
-    let data = match (offset, size) {
-        (Some(o), Some(s)) if o.checked_add(s as usize).is_some_and(|e| e <= bytes.len()) => Some((o, s as usize)),
+    let data = match (offset, size, mapping) {
+        (Some(o), Some(s), Some((1, samples, 1)))
+            if samples > 0 && samples <= sample_count && o.checked_add(s as usize).is_some_and(|e| e <= bytes.len()) =>
+        {
+            Some((o, s as usize))
+        }
         _ => None,
     };
     Some(Cr3Track { kind: kind?, data })
@@ -502,7 +517,8 @@ mod tests {
         stsz.extend(size.to_be_bytes());
         let mut co64 = 1u32.to_be_bytes().to_vec();
         co64.extend(offset.to_be_bytes());
-        let stbl = [full(b"stsd", &stsd), full(b"stsz", &stsz), full(b"co64", &co64)].concat();
+        let stsc = [1u32, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect::<Vec<_>>();
+        let stbl = [full(b"stsd", &stsd), full(b"stsc", &stsc), full(b"stsz", &stsz), full(b"co64", &co64)].concat();
         bx(b"trak", &bx(b"mdia", &bx(b"minf", &bx(b"stbl", &stbl))))
     }
     fn tiff_with(tag: u16, v: craft_tiff::Value) -> Vec<u8> {
@@ -541,6 +557,34 @@ mod tests {
         assert_eq!((width, height, len), (60, 40, 4));
         assert_eq!(&f[at..at + 2], &[0xff, 0x10]);
         assert_eq!(c.tracks[1].data, Some((4112, 32)));
+    }
+
+    #[test]
+    fn first_sample_requires_a_complete_valid_sample_to_chunk_mapping() {
+        let file = |track: Vec<u8>| {
+            let mut file = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+            file.extend(bx(b"moov", &track));
+            file.resize(4112, 0);
+            file
+        };
+        let valid = trak(craw(16, 16, &bx(b"JPEG", &[0; 4])), 4096, 16);
+        assert_eq!(parse_cr3(&file(valid.clone())).unwrap().tracks[0].data, Some((4096, 16)));
+        let at = valid.windows(4).position(|bytes| bytes == b"stsc").unwrap();
+        // Missing table, impossible first chunk, zero samples, a different
+        // description and a count that extends beyond this box all deny data.
+        for (field, value) in [(0, u32::from_be_bytes(*b"xxxx")), (8, 0), (8, 2), (12, 0), (12, 2), (16, 0), (16, 2), (4, u32::MAX)] {
+            let mut damaged = valid.clone();
+            let offset = if field == 0 { at } else { at + 4 + field };
+            damaged[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+            let bytes = file(damaged);
+            let parsed = parse_cr3(&bytes).unwrap();
+            assert!(parsed.tracks.is_empty() || parsed.tracks[0].data.is_none());
+        }
+        for entry in [craw(16, 16, &[]), craw(16, 16, &bx(b"CMP1", &[0xff, 0x10, 0, 0x30]))] {
+            let bytes = file(trak(entry, 4096, 16));
+            let parsed = parse_cr3(&bytes).unwrap();
+            assert!(!matches!(parsed.tracks[0].kind, Cr3TrackKind::Jpeg));
+        }
     }
 
     #[test]
