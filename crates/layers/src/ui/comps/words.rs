@@ -6,6 +6,8 @@ craft_ui::words! {
     pub struct LayerCompsWords {
         last_state: "layerComps.lastDocumentState" = "Last Document State";
         apply_cell: "layerComps.applyCell" = "Apply {row}";
+        apply: "layerComps.apply" = "Apply";
+        name: "layerComps.name" = "Name";
         visibility: "layerComps.visibility" = "Visibility";
         position: "layerComps.position" = "Position";
         appearance: "layerComps.appearance" = "Appearance (Layer Style)";

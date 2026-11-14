@@ -248,8 +248,10 @@ pub(super) fn show_list(ui: &mut Ui, stack: &mut BodyCx<'_>, selected: &RefCell<
     let selection = before.map_or_else(Selection::default, |id| Selection::single(CompKey::Comp(id)));
     let source = CompRows { comps: cx.comps, last_state: words.last_state.as_str(), last_state_applied: cx.last_state_applied };
 
-    let mut columns =
-        vec![ColumnSpec::toggle(APPLY, Label::Empty, ToggleColumn::exclusive()), ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0))];
+    let mut columns = vec![
+        ColumnSpec::toggle(APPLY, words.apply.clone(), ToggleColumn::exclusive()),
+        ColumnSpec::new(NAME, words.name.clone(), ColumnWidth::fill(1.0)),
+    ];
     for option in OPTIONS {
         let (name, _) = words_of(words, option);
         columns.push(ColumnSpec::toggle(column_of(option), name.clone(), ToggleColumn::sweepable()).icon(IconId::new(icons_of(option).0)));
