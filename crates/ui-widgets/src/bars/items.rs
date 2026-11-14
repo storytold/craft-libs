@@ -268,8 +268,10 @@ impl BarItems {
                 }
                 _ => groups.push((present.item.section, Group { items: vec![at], extent: length, keep: FitKeep::Free })),
             }
-            if present.item.keep == FitKeep::Pinned {
-                groups.last_mut().expect("just pushed").1.keep = FitKeep::Pinned;
+            if present.item.keep == FitKeep::Pinned
+                && let Some((_, group)) = groups.last_mut()
+            {
+                group.keep = FitKeep::Pinned;
             }
         }
         groups.into_iter().map(|(_, group)| group).collect()

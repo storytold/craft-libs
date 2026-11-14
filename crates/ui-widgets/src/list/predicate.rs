@@ -22,7 +22,9 @@ impl<K> RowTest<'_, K> {
 }
 
 /// A text for the row of a key, or none: `List::rename_draft`.
-pub struct RowText<'a, K>(Box<dyn Fn(&K) -> Option<String> + 'a>);
+pub struct RowText<'a, K>(RowTextFn<'a, K>);
+
+type RowTextFn<'a, K> = Box<dyn Fn(&K) -> Option<String> + 'a>;
 
 impl<'a, K> RowText<'a, K> {
     /// The text `text` gives.

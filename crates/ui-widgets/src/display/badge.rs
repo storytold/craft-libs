@@ -114,7 +114,7 @@ impl Component for Badge {
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
         let text = cx.layout(&TextRun::new(cx.resolved.label).role(cx.style.text.role)).size();
-        Vec2::new(text.x + self.mark_room(&cx.style, text.y), text.y)
+        Vec2::new(text.x + self.mark_room(cx.style, text.y), text.y)
     }
 
     fn sense(&self) -> Sense {
@@ -126,7 +126,7 @@ impl Component for Badge {
         let text = if self.muted { &cx.style.muted } else { &cx.style.text };
         let run = TextRun::new(cx.resolved.label).role(text.role).color(cx.resolve(&text.color)).wrap(Wrap::Elide);
         let content = cx.content_rect;
-        let room = self.mark_room(&cx.style, content.height());
+        let room = self.mark_room(cx.style, content.height());
         let (label, _) = Flow::new(content, cx.flow.is_rtl()).take_start((content.width() - room).max(0.0));
         let layout = draw.layout(&run, label.width());
         draw.galley(label.center() - layout.size() / 2.0, &layout);

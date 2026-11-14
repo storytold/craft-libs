@@ -381,11 +381,11 @@ impl<'a> Notice<'a> {
 
     /// The sizes of the actions' faces; a centred notice's buttons all take the widest one's width.
     fn action_sizes(&self, cx: &MeasureCx<'_, Self>) -> Vec<Vec2> {
-        let labels = self.action_labels(cx).into_iter().enumerate();
+        let labels = self.action_labels(cx);
         if self.row() {
-            return labels.map(|(_, label)| cx.face(Self::link(cx.style.message.role, label))).collect();
+            return labels.into_iter().map(|label| cx.face(Self::link(cx.style.message.role, label))).collect();
         }
-        let sizes: Vec<Vec2> = labels.map(|(at, label)| cx.face(Self::button(at, label))).collect();
+        let sizes: Vec<Vec2> = labels.into_iter().enumerate().map(|(at, label)| cx.face(Self::button(at, label))).collect();
         let widest = sizes.iter().map(|size| size.x).fold(0.0, f32::max);
         sizes.into_iter().map(|size| Vec2::new(widest, size.y)).collect()
     }

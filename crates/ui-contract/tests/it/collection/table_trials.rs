@@ -250,6 +250,9 @@ impl ItemSource<usize> for WithSubRow {
     }
 }
 
+/// A step of the trial: what it does with the frames, the scene and the table's `show`.
+type Act = dyn Fn(&mut Frames, &Scene, &mut dyn FnMut(&mut Ui));
+
 /// A sub-row's toggle cell lies at the start of its content: a press there flips it, a press in its empty toggle
 /// column does nothing, and a sweep down the column passes it by.
 #[trial]
@@ -260,7 +263,7 @@ fn a_sub_rows_toggle_takes_presses_at_the_start_of_its_content() {
             ColumnSpec::new(NAME, "Name", ColumnWidth::Fixed(2.0 * COL)),
         ])
     };
-    let run = |act: &dyn Fn(&mut Frames, &Scene, &mut dyn FnMut(&mut Ui))| {
+    let run = |act: &Act| {
         let scene = Scene::default();
         let mut frames = Frames::new();
         let mut show = |ui: &mut Ui| show_table(ui, props(), &WithSubRow, &scene);
