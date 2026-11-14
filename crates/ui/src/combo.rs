@@ -16,8 +16,8 @@ use std::ops::Range;
 
 use egui::{
     Align, Align2, AsIdSalt, Atom, AtomExt as _, Atoms, Context, Direction, Frame, Id, IdSalt, InnerResponse, IntoAtoms, LayerId, NumExt as _, Order,
-    Painter, Popup, PopupCloseBehavior, Rect, RectAlign, Response, Role, ScrollArea, Sense, Shape, TextStyle, TextWrapMode, Ui, Vec2, WidgetAtom,
-    WidgetInfo,
+    Painter, PointerButton, Popup, PopupCloseBehavior, Rect, RectAlign, Response, Role, ScrollArea, Sense, SetOpenCommand, Shape, TextStyle,
+    TextWrapMode, Ui, Vec2, WidgetAtom, WidgetInfo,
     class::{ClassName, Classes, HasClasses},
     style::{StyleModifier, WidgetVisuals},
     vec2,
@@ -52,6 +52,7 @@ pub struct ComboBox<'a> {
     close_behavior: Option<PopupCloseBehavior>,
     popup_style: StyleModifier,
     classes: Classes,
+    press_and_browse: bool,
 }
 
 impl<'a> ComboBox<'a> {
@@ -63,6 +64,8 @@ impl<'a> ComboBox<'a> {
     #[expect(clippy::disallowed_types, reason = "egui's class names, so themes style both alike")]
     pub const CLASS_OPEN: ClassName = egui::ComboBox::CLASS_OPEN;
 
+    /// The shared state of every constructor below: an id salt and, by default, a labelled button
+    /// with press-and-browse on.
     fn with(id_salt: IdSalt, label: Option<Atoms<'a>>) -> Self {
         let mut combo = Self {
             id_salt,
@@ -75,6 +78,7 @@ impl<'a> ComboBox<'a> {
             close_behavior: None,
             popup_style: StyleModifier::default(),
             classes: Classes::default(),
+            press_and_browse: true,
         };
         combo.add_class(Self::CLASS);
         combo
@@ -153,6 +157,16 @@ impl<'a> ComboBox<'a> {
         self
     }
 
+    /// Whether a press on the button opens the menu at once and browses it while the button stays
+    /// down, as in After Effects: moving over an entry highlights it, releasing over one chooses
+    /// it, and releasing over the button leaves the menu open. Default: `true`. With `false` the
+    /// menu opens and chooses on release, as egui's combo box does.
+    #[inline]
+    pub fn press_and_browse(mut self, press_and_browse: bool) -> Self {
+        self.press_and_browse = press_and_browse;
+        self
+    }
+
     /// The menu's style. Default: the [`Ui`]'s.
     #[inline]
     pub fn popup_style(mut self, popup_style: StyleModifier) -> Self {
@@ -162,12 +176,30 @@ impl<'a> ComboBox<'a> {
 
     /// Shows the button, and `menu_contents` in the menu while it is open. `inner` is what
     /// `menu_contents` returned, or `None` while the menu is closed.
+    ///
+    /// The menu browses while the button is held ([`Self::press_and_browse`]). Rows that
+    /// `menu_contents` draws itself take part in it with [`browse_hover`] and [`browse_pick`]
+    /// instead of a plain `.clicked()`:
+    ///
+    /// ```
+    /// # egui::__run_test_ui(|ui| {
+    /// use craft_ui::{browse_hover, browse_pick};
+    /// craft_ui::ComboBox::from_label("Size").show_ui(ui, |ui| {
+    ///     let row = ui.selectable_label(false, "Custom");
+    ///     let row = browse_hover(ui, row);
+    ///     if row.clicked() || browse_pick(ui, &row) {
+    ///         // the entry the button came up over is chosen
+    ///     }
+    /// });
+    /// # });
+    /// ```
     pub fn show_ui<R>(self, ui: &mut Ui, menu_contents: impl FnOnce(&mut Ui) -> R) -> InnerResponse<Option<R>> {
         self.show(ui, |menu| menu.show_ui(menu_contents))
     }
 
     /// Like [`Self::show_ui`], with `header` (a search field, filter chips) fixed at the top of
-    /// the menu and only `list` scrolling under it. See [`Menu::show_ui_with_header`].
+    /// the menu and only `list` scrolling under it. See [`Menu::show_ui_with_header`]. The rows in
+    /// `list` browse with [`browse_hover`] and [`browse_pick`] as in [`Self::show_ui`].
     pub fn show_ui_with_header<H, R>(
         self,
         ui: &mut Ui,
@@ -178,7 +210,8 @@ impl<'a> ComboBox<'a> {
     }
 
     /// Like [`Self::show_ui_with_header`], with a list of rows of one height that only lays out
-    /// the rows in view. See [`Menu::show_rows_with_header`].
+    /// the rows in view. See [`Menu::show_rows_with_header`]. The rows in `rows` browse with
+    /// [`browse_hover`] and [`browse_pick`] as in [`Self::show_ui`].
     pub fn show_rows_with_header<H, R>(
         self,
         ui: &mut Ui,
@@ -191,7 +224,8 @@ impl<'a> ComboBox<'a> {
     }
 
     /// Like [`Self::show_ui_with_header`], with `footer` (an "Add…" row) fixed under the list.
-    /// See [`Menu::show_ui_with_header_footer`].
+    /// See [`Menu::show_ui_with_header_footer`]. The rows in `list` browse with [`browse_hover`]
+    /// and [`browse_pick`] as in [`Self::show_ui`].
     pub fn show_ui_with_header_footer<H, R, F>(
         self,
         ui: &mut Ui,
@@ -203,7 +237,8 @@ impl<'a> ComboBox<'a> {
     }
 
     /// Like [`Self::show_rows_with_header`], with `footer` fixed under the list. See
-    /// [`Menu::show_ui_with_header_footer`].
+    /// [`Menu::show_ui_with_header_footer`]. The rows in `rows` browse with [`browse_hover`] and
+    /// [`browse_pick`] as in [`Self::show_ui`].
     pub fn show_rows_with_header_footer<H, R, F>(
         self,
         ui: &mut Ui,
@@ -229,7 +264,9 @@ impl<'a> ComboBox<'a> {
         let mut response = combo
             .show_ui(ui, |ui| {
                 for i in 0..len {
-                    if ui.selectable_label(i == *selected, get(i)).clicked() {
+                    let row = ui.selectable_label(i == *selected, get(i));
+                    let row = browse_hover(ui, row);
+                    if row.clicked() || browse_pick(ui, &row) {
                         *selected = i;
                         changed = true;
                     }
@@ -249,26 +286,89 @@ impl<'a> ComboBox<'a> {
 }
 
 impl HasClasses for ComboBox<'_> {
+    /// The classes a theme styles this combo box with.
     fn classes(&self) -> &Classes {
         &self.classes
     }
 
+    /// The classes a theme styles this combo box with, for a caller that adds one.
     fn classes_mut(&mut self) -> &mut Classes {
         &mut self.classes
     }
 }
 
+/// The popup id of a button: its own id under `"popup"`, so the menu and its button are one pair.
 fn popup_id(button_id: Id) -> Id {
     button_id.with("popup")
 }
 
-// The button is egui 0.37's `combo_box_dyn`, so a combo box looks the same as egui's.
+/// The key of the browse state: the id of the button whose press opened the menu being browsed
+/// while that button is down, so the entries highlight under the pointer and the one it releases
+/// over is chosen (After Effects). The button id doubles as the owner: while the gesture runs only
+/// the combo box it names clears the state, so a closed one drawn first on the release pass cannot
+/// take the browse away before the browsed one's entries see the release; afterwards any combo
+/// box may clear it, so state owned by a button that stopped being drawn cannot linger.
+fn browse_id() -> Id {
+    Id::unique("craft-ui-combo-browsing")
+}
+
+/// Whether a combo box menu is being browsed: a press opened it and its button is still down, or
+/// has just come up over an entry. The pointer state gates the flag so one left set by a release
+/// that happened while no combo box was drawn cannot make the next menu browse on its own.
+fn browsing(ctx: &Context) -> bool {
+    ctx.data(|d| d.get_temp::<Id>(browse_id()).is_some()) && ctx.input(|i| i.pointer.primary_down() || i.pointer.primary_released())
+}
+
+/// `row` with the hover highlight while a held press browses its menu. With a button down egui
+/// reports nothing as hovered, which would leave browsing without feedback, so the row under the
+/// pointer takes the highlight by hand; it reads as the hover look one frame later, exactly egui's
+/// own hover latency. Disabled rows ignore it, as in native menus.
+///
+/// The pair [`browse_hover`] and [`browse_pick`] is how a row a menu draws by hand takes part in
+/// press-and-browse: [`ComboBox::show_index`] uses them, and a custom row in
+/// [`ComboBox::show_ui`]'s menu pairs them instead of a plain `.clicked()`.
+pub fn browse_hover(ui: &Ui, row: Response) -> Response {
+    if browsing(ui.ctx()) && row.enabled() && row.contains_pointer() { row.highlight() } else { row }
+}
+
+/// Whether a held press browses the menu and releases over `row`, which then chooses it as a click
+/// would. egui reports neither a hover nor a click for that release (it is far from the press), so
+/// the row tests the pointer itself. Closes the menu when it picks.
+///
+/// [`browse_hover`]'s pair: `row.clicked() || browse_pick(ui, &row)` on a custom row in
+/// [`ComboBox::show_ui`]'s menu chooses the entry the button comes up over.
+pub fn browse_pick(ui: &Ui, row: &Response) -> bool {
+    let picked = browsing(ui.ctx()) && row.enabled() && row.contains_pointer() && ui.input(|i| i.pointer.button_released(PointerButton::Primary));
+    if picked {
+        ui.close();
+    }
+    picked
+}
+
+/// What the button does to its menu this pass. A primary press opens it at once, or closes it when
+/// it is open, and starts browsing under `button_id`'s ownership; the release of that press does
+/// nothing, so the menu stays up. Keyboard and accessibility activation (`clicked` without the
+/// primary button) still toggles it.
+fn press_command(ui: &Ui, button_id: Id, button: &Response, is_open: bool) -> Option<SetOpenCommand> {
+    let pressed = ui.input(|i| i.pointer.button_pressed(PointerButton::Primary)) && (button.hovered() || button.is_pointer_button_down_on());
+    if pressed {
+        ui.data_mut(|d| d.insert_temp(browse_id(), button_id));
+        Some(SetOpenCommand::Bool(!is_open))
+    } else if button.clicked() && !button.clicked_by(PointerButton::Primary) {
+        Some(SetOpenCommand::Toggle)
+    } else {
+        None
+    }
+}
+
+/// Build the button and its menu: the button is egui 0.37's `combo_box_dyn`, so a combo box looks
+/// the same as egui's; `open` draws the popup's contents and returns the chosen value.
 fn show<R>(ui: &mut Ui, button_id: Id, mut combo: ComboBox<'_>, open: impl FnOnce(Menu<'_>) -> Option<R>) -> InnerResponse<Option<R>> {
     let is_popup_open = Popup::is_id_open(ui.ctx(), popup_id(button_id));
     let wrap_mode = combo.wrap_mode.unwrap_or_else(|| ui.wrap_mode());
     let close_behavior = combo.close_behavior.unwrap_or(PopupCloseBehavior::CloseOnClick);
     combo.set_class(ComboBox::CLASS_OPEN, is_popup_open);
-    let ComboBox { label, selected_text, width, height, icon, popup_style, classes, .. } = combo;
+    let ComboBox { label, selected_text, width, height, icon, popup_style, classes, press_and_browse, .. } = combo;
 
     // Built from the same atoms and style as a `Button`, so the two line up when put side by side.
     let ButtonStyle { atom_layout: atom_layout_style } = ui.widget_style(button_id, &classes);
@@ -331,11 +431,23 @@ fn show<R>(ui: &mut Ui, button_id: Id, mut combo: ComboBox<'_>, open: impl FnOnc
     });
 
     let popup = Popup::menu(&button_response).id(popup_id(button_id));
+    let popup = if press_and_browse { popup.open_memory(press_command(ui, button_id, &button_response, is_popup_open)) } else { popup };
     let mut menu = Menu::with_popup(popup, ui, &button_response).style(popup_style).close_behavior(close_behavior);
     if let Some(height) = height {
         menu = menu.height(height);
     }
     let inner = open(menu);
+    // The entries have drawn: a press that opened the menu is over, so the next one browses afresh.
+    // Only the combo box whose button started the browse clears it on the release pass — a closed
+    // one drawn before it would otherwise take the browse away before its entries see the release.
+    // Once the gesture is entirely over (neither down nor released this pass) that risk is gone, so
+    // any combo box clears a browse whose owner has stopped being drawn, instead of the state
+    // naming a button that no longer exists.
+    let browse_owner = ui.data(|d| d.get_temp::<Id>(browse_id()));
+    let gesture_over = !ui.input(|i| i.pointer.primary_down() || i.pointer.primary_released());
+    if browse_owner.is_some_and(|owner| if owner == button_id { !ui.input(|i| i.pointer.primary_down()) } else { gesture_over }) {
+        ui.data_mut(|d| d.remove::<Id>(browse_id()));
+    }
 
     InnerResponse {
         inner,

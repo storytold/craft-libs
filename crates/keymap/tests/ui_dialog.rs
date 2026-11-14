@@ -811,6 +811,89 @@ fn picking_a_suggestion_replans_and_is_remembered() {
     assert!(h.query_by_label("Command for File > Sve Az").is_none());
 }
 
+/// The suggestion's command list browses like every other combo box menu (#469): the press opens
+/// it and the release over a candidate chooses it, so the candidate never has to be clicked.
+#[test]
+fn a_held_press_over_a_suggestion_list_picks_the_candidate_it_lands_on() {
+    let mut h = with_sets(Profiles::default());
+    review(&mut h);
+    assert!(h.query_by_label_contains("3 commands will change").is_some());
+    let combo = h.get_by_label("Command for File > Sve Az").rect().center();
+    h.event(Event::PointerMoved(combo));
+    h.run();
+    h.event(Event::PointerButton { pos: combo, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    assert!(h.query_by_label("Save As…").is_some(), "the press opens the candidates at once");
+    let row = h.get_all_by_label("Save As…").last().expect("the Save As… candidate").rect().center();
+    h.event(Event::PointerMoved(row));
+    h.run();
+    h.event(Event::PointerButton { pos: row, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    assert!(h.query_by_label_contains("4 commands will change").is_some(), "the release over the candidate chooses it");
+}
+
+/// Press a combo box and release over a row in its menu: the row chooses without ever being
+/// clicked, the press-and-browse contract every menu in this dialog follows (#469).
+fn browse_to(h: &mut Harness<'_, Fx>, combo: &str, row: &str) {
+    let at = h.get_by_role_and_label(Role::ComboBox, combo).rect().center();
+    h.event(Event::PointerMoved(at));
+    h.run();
+    h.event(Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    let to = h.get_all_by_role_and_label(Role::Button, row).last().unwrap_or_else(|| panic!("{row}")).rect().center();
+    h.event(Event::PointerMoved(to));
+    h.run();
+    h.event(Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+}
+
+/// The dialog's own menus choose on release like every other drop-down (#469): the press opens
+/// the menu and the release over a row sets the value, so the row never has to be clicked (#2686).
+#[test]
+fn a_held_press_over_a_dialog_menu_picks_the_row_it_lands_on() {
+    let mut h = mac();
+    browse_to(&mut h, "Filter:", "Conflicts");
+    assert_eq!(
+        h.get_by_role_and_label(Role::ComboBox, "Filter:").accesskit_node().value().as_deref(),
+        Some("Conflicts"),
+        "the release over the Conflicts row filters the table"
+    );
+
+    let mut h = mac();
+    browse_to(&mut h, "Show:", "Tools");
+    assert_eq!(
+        h.get_by_role_and_label(Role::ComboBox, "Show:").accesskit_node().value().as_deref(),
+        Some("Tools"),
+        "the release over the Tools row shows that area"
+    );
+
+    let mut h = mac();
+    h.get_by_label("Save").click();
+    h.run();
+    browse_to(&mut h, "Context:", "Timeline");
+    assert_eq!(
+        h.get_by_role_and_label(Role::ComboBox, "Context:").accesskit_node().value().as_deref(),
+        Some("Timeline"),
+        "the release over the Timeline row scopes the assignment there"
+    );
+}
+
+/// The set form's Based on menu browses the same way (#469): the release over a profile row bases
+/// the new set on it.
+#[test]
+fn a_held_press_over_the_based_on_menu_picks_the_row_it_lands_on() {
+    let mut p = Profiles::default();
+    p.save_as("Mine", Overrides::new(), &[("Fixture Defaults", Overrides::new())]).expect("save_as");
+    let mut h = with_sets(p);
+    click(&mut h, "New Set…");
+    browse_to(&mut h, "Based on:", "Mine");
+    assert_eq!(
+        h.get_by_role_and_label(Role::ComboBox, "Based on:").accesskit_node().value().as_deref(),
+        Some("Mine"),
+        "the release over the Mine row bases the new set on it"
+    );
+}
+
 // ---- Summary ----
 
 #[test]

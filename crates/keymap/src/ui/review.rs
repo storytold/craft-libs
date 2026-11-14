@@ -2,7 +2,7 @@
 //! detail pane: what the set will change, what did not match and why, suggestions to pick from,
 //! and after the import the report of what was skipped, taken or failed.
 
-use craft_ui::ComboBox;
+use craft_ui::{ComboBox, browse_hover, browse_pick};
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Label, Rect, RichText, ScrollArea, TextEdit, TextStyle, Ui};
 
@@ -211,7 +211,11 @@ impl Draw<'_, '_> {
                         let choose = self.ui("Choose a command…");
                         let combo = ComboBox::from_id_salt(self.base.with(("suggestion", si))).selected_text(self.vis(&choose)).show_ui(ui, |ui| {
                             for (ci, c) in s.candidates.iter().enumerate() {
-                                if ui.selectable_label(false, self.vis(&self.label_of(c))).clicked() {
+                                // Press-and-browse: the row under a held press highlights and the
+                                // release over it chooses, as the combo box's own entries do.
+                                let row = ui.selectable_label(false, self.vis(&self.label_of(c)));
+                                let row = browse_hover(ui, row);
+                                if row.clicked() || browse_pick(ui, &row) {
                                     act = Some(Act::Pick(si, ci));
                                 }
                             }
