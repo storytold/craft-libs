@@ -2,31 +2,37 @@
 //! (7.20), show-existing-frame and output (7.18).
 //!
 //! Threading: headers are parsed in order on the calling thread; each frame then becomes a job
-//! that waits for the reference frames it uses and decodes on a frame worker thread, so frames
-//! that do not depend on each other decode concurrently. Within a frame, tiles and the
-//! post-filter row bands run on a shared worker pool. Every result depends only on finished
-//! reference frames, so the output is identical whatever the scheduling. Shown pictures are
-//! returned in order; with frame threads they can come out of a later `decode` call (or
-//! `flush`), each carrying the `pts` of the temporal unit that showed it.
+//! on a frame worker thread. A job first reads the symbols of its tiles (parse), which needs
+//! only the parse results of its references (CDFs, segment ids, saved motion vectors), and
+//! publishes its own; it then reconstructs. A frame is reconstructed superblock row by
+//! superblock row (that row of every tile), each row waiting only for the reference rows its
+//! motion vectors reach, with the in-loop filters following a few bands behind and every final
+//! band published for the frames that predict from it (row wavefront); super-resolution frames
+//! wait for their whole references. So a frame can parse while its references are still being reconstructed, and reconstruct
+//! while their bottom is still being filtered. Within a frame, tiles and the post-filter row
+//! bands run on a shared worker pool; waits happen only on frame worker threads. Every result
+//! depends only on final reference data, so the output is identical whatever the scheduling.
+//! Shown pictures are returned in order; with frame threads they can come out of a later
+//! `decode` call (or `flush`), each carrying the `pts` of the temporal unit that showed it.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::av1::decode::bits::{BitReader, leb128};
 use crate::av1::decode::cdf::Cdfs;
-use crate::av1::decode::frame::FrameBuf;
+use crate::av1::decode::frame::{BandFrame, FrameBuf, PlaneRef};
 use crate::av1::decode::header::{
     ColorConfig, FilmGrainParams, FrameHeader, HeaderState, LoopFilterDeltas, RefInfo, SegmentationFeatures, SequenceHeader, default_gm_params,
 };
 use crate::av1::decode::par::Pool;
 use crate::av1::decode::spec_tables::{
-    ALTREF_FRAME, ALTREF2_FRAME, BWDREF_FRAME, DEFAULT_INTRA_FRAME_Y_MODE_CDF, DIV_MULT, GOLDEN_FRAME, INTRA_FRAME, INTRA_ONLY_FRAME, KEY_FRAME,
-    LAST_FRAME, LAST2_FRAME, MAX_FRAME_DISTANCE, MAX_OFFSET_HEIGHT, MAX_OFFSET_WIDTH, MFMV_STACK_SIZE, NUM_REF_FRAMES, PRIMARY_REF_NONE,
-    REFMVS_LIMIT, REFS_PER_FRAME,
+    ALTREF_FRAME, ALTREF2_FRAME, BWDREF_FRAME, DEFAULT_INTRA_FRAME_Y_MODE_CDF, DIV_MULT, GLOBAL_GLOBALMV, GLOBALMV, GOLDEN_FRAME, INTRA_FRAME,
+    INTRA_ONLY_FRAME, KEY_FRAME, LAST_FRAME, LAST2_FRAME, LOCALWARP, MAX_FRAME_DISTANCE, MAX_OFFSET_HEIGHT, MAX_OFFSET_WIDTH, MFMV_STACK_SIZE,
+    NUM_REF_FRAMES, PRIMARY_REF_NONE, REFMVS_LIMIT, REFS_PER_FRAME, TRANSLATION,
 };
 use crate::av1::decode::state::{FrameShared, FrameState, TileState};
 use crate::av1::decode::stats::{DecodeStats, Stage, Timer};
-use crate::av1::decode::tile::TileDecoder;
+use crate::av1::decode::tile::{Pass, TileDecoder, TileRecord};
 use crate::av1::decode::{Error, Picture, Result};
 
 /// Largest accepted frame: the AV1 level 6.x limits (Annex A: MaxHSize 16384, MaxVSize 8704, MaxPicSize
@@ -49,20 +55,154 @@ const OBU_FRAME_T: u32 = 6;
 const OBU_REDUNDANT_FRAME_HEADER_T: u32 = 7;
 const OBU_TILE_LIST_T: u32 = 8;
 
-/// A stored reference frame (FrameStore plus the saved per-frame state).
+/// The samples of a stored reference frame (FrameStore), after every in-loop filter: a whole
+/// buffer (decoding on one thread) or the bands published while decoding (with worker threads).
 pub(crate) struct RefFrame {
     pub buf: FrameBuf,
-    pub cdfs: Box<Cdfs>,
+    pub bands: Option<Arc<BandFrame>>,
+    pub num_planes: usize,
     pub bit_depth: u8,
     pub subsampling_x: u8,
     pub subsampling_y: u8,
+    pub color: (u8, u8, u8, bool),
+}
+
+impl RefFrame {
+    pub fn plane(&self, p: usize) -> PlaneRef<'_> {
+        match &self.bands {
+            Some(b) => PlaneRef::Bands(&b.planes[p]),
+            None => PlaneRef::Whole(&self.buf.planes[p]),
+        }
+    }
+}
+
+/// The saved per-frame state that later frames read while parsing (CDFs, segment ids and the
+/// motion vectors for motion field estimation). It depends only on the frame's symbols, so it
+/// is published as soon as the tiles are decoded, before the in-loop filters run.
+pub(crate) struct Parsed {
+    pub cdfs: Box<Cdfs>,
     pub segment_ids: Vec<u8>,
     pub mi_cols: usize,
     pub mi_rows: usize,
-    pub color: (u8, u8, u8, bool),
-    /// SavedRefFrames / SavedMvs (MfRefFrames / MfMvs of 7.19), mi units.
+    /// SavedRefFrames / SavedMvs (MfRefFrames / MfMvs of 7.19) at the odd row and column of
+    /// every 8x8 block, the only positions the projection reads.
     pub saved_ref_frames: Vec<i8>,
     pub saved_mvs: Vec<[i32; 2]>,
+}
+
+/// How many luma rows of a frame are final (every in-loop filter applied), or that the frame
+/// failed. Rows only ever grow; a failure wakes every waiter with an error.
+pub(crate) struct Progress {
+    state: Mutex<ProgressState>,
+    cv: Condvar,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ProgressState {
+    rows: usize,
+    failed: bool,
+}
+
+impl Progress {
+    fn new() -> Progress {
+        Progress { state: Mutex::new(ProgressState::default()), cv: Condvar::new() }
+    }
+
+    /// Rows [0, rows) are final. A smaller value than already published is ignored.
+    pub fn publish(&self, rows: usize) {
+        #[cfg(test)]
+        tests::jitter();
+        let mut g = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if rows > g.rows {
+            g.rows = rows;
+            self.cv.notify_all();
+        }
+    }
+
+    /// The frame will publish no more rows.
+    pub fn fail(&self) {
+        let mut g = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        g.failed = true;
+        self.cv.notify_all();
+    }
+
+    /// Rows published so far.
+    #[cfg(test)]
+    fn rows(&self) -> usize {
+        self.state.lock().map(|g| g.rows).unwrap_or(0)
+    }
+
+    /// Blocks until rows [0, rows) are final; an error when the frame failed first.
+    pub fn wait(&self, rows: usize) -> Result<()> {
+        #[cfg(test)]
+        tests::jitter();
+        let mut g = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if g.rows >= rows {
+                return Ok(());
+            }
+            if g.failed {
+                return Err(Error::Invalid("reference frame failed to decode"));
+            }
+            g = self.cv.wait(g).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
+/// Everything a decoding frame publishes for the frames that reference it and for the output:
+/// its parse results, its final rows (bands, then the row progress) and the finished frame. The
+/// parse results and the frame are set exactly once and the progress ends complete or failed,
+/// also when decoding fails, so no waiter blocks forever.
+pub(crate) struct FrameSlot {
+    parsed: Slot<Arc<Parsed>>,
+    pub progress: Progress,
+    /// The final samples, published band by band before the progress covers them (with
+    /// worker threads).
+    pub bands: Arc<BandFrame>,
+    frame: Slot<Arc<RefFrame>>,
+}
+
+impl FrameSlot {
+    fn new(bands: BandFrame) -> Arc<FrameSlot> {
+        Arc::new(FrameSlot { parsed: Slot::new_plain(), progress: Progress::new(), bands: Arc::new(bands), frame: Slot::new_plain() })
+    }
+
+    /// The finished frame.
+    fn wait(&self) -> Result<Arc<RefFrame>> {
+        self.frame.wait()
+    }
+
+    fn is_set(&self) -> bool {
+        self.frame.is_set()
+    }
+
+    /// The frame's parse results (available before its samples are final).
+    fn wait_parsed(&self) -> Result<Arc<Parsed>> {
+        self.parsed.wait()
+    }
+
+    /// Publish the parse results (ignored when already set).
+    fn set_parsed(&self, v: Result<Arc<Parsed>>) {
+        self.parsed.set_once(v);
+    }
+
+    /// Publish the finished frame: every row is final. On an error, the parse results (when
+    /// not yet published) and the progress fail too.
+    fn finish(&self, v: Result<Arc<RefFrame>>, rows: usize) {
+        match &v {
+            Ok(_) => {}
+            Err(e) => {
+                self.parsed.set_once(Err(e.clone()));
+            }
+        }
+        let ok = v.is_ok();
+        self.frame.set(v);
+        if ok {
+            self.progress.publish(rows);
+        } else {
+            self.progress.fail();
+        }
+    }
 }
 
 /// A value produced by a decoding job, waited for by later jobs and by the output.
@@ -73,13 +213,26 @@ pub(crate) struct Slot<T> {
 
 impl<T: Clone> Slot<T> {
     fn new() -> Arc<Slot<T>> {
-        Arc::new(Slot { value: Mutex::new(None), cv: Condvar::new() })
+        Arc::new(Slot::new_plain())
+    }
+
+    fn new_plain() -> Slot<T> {
+        Slot { value: Mutex::new(None), cv: Condvar::new() }
     }
 
     fn set(&self, v: Result<T>) {
         let mut g = self.value.lock().unwrap_or_else(|e| e.into_inner());
         *g = Some(v);
         self.cv.notify_all();
+    }
+
+    /// [`Slot::set`] unless a value is already there.
+    fn set_once(&self, v: Result<T>) {
+        let mut g = self.value.lock().unwrap_or_else(|e| e.into_inner());
+        if g.is_none() {
+            *g = Some(v);
+            self.cv.notify_all();
+        }
     }
 
     fn is_set(&self) -> bool {
@@ -108,8 +261,6 @@ impl<T: Clone> Slot<T> {
     }
 }
 
-type FrameSlot = Slot<Arc<RefFrame>>;
-
 /// Everything needed to decode one frame, captured when its header is parsed.
 struct FrameJob {
     seq: SequenceHeader,
@@ -130,6 +281,15 @@ struct FrameJob {
     draft: bool,
     #[cfg(test)]
     force_panic: bool,
+    /// Panic in the row wavefront at the first superblock row from this one after which rows
+    /// are published (tests).
+    #[cfg(test)]
+    panic_at_row: Option<usize>,
+    /// Overrides [`RECORD_BYTES_PER_SAMPLE`] (tests).
+    #[cfg(test)]
+    record_limit: Option<usize>,
+    /// The decoder's parse record budget.
+    record_budget: Arc<crate::av1::decode::tile::RecordBudget>,
 }
 
 /// A shown picture in output order.
@@ -251,6 +411,8 @@ pub struct Decoder {
     draft: bool,
     stats: Arc<Mutex<DecodeStats>>,
     pool: Pool,
+    /// Parse record bytes all frames in flight may hold together.
+    record_budget: Arc<crate::av1::decode::tile::RecordBudget>,
     #[cfg(all(feature = "threads", not(target_arch = "wasm32")))]
     workers: Option<Workers>,
     /// Frames submitted to the workers and not known to be finished (oldest first).
@@ -265,6 +427,14 @@ pub struct Decoder {
     /// Make every frame job panic (tests of the worker panic handling).
     #[cfg(test)]
     force_panic: bool,
+    /// (frame number, superblock row): that frame panics in the row wavefront after that row,
+    /// once it has published rows that later frames may already be using (tests).
+    #[cfg(test)]
+    panic_at_row: Option<(usize, usize)>,
+    #[cfg(test)]
+    record_limit: Option<usize>,
+    #[cfg(test)]
+    frame_number: usize,
 }
 
 fn default_threads() -> usize {
@@ -278,10 +448,25 @@ fn default_threads() -> usize {
     }
 }
 
-/// Frames decoded concurrently with `threads` threads (each in-flight 1080p frame holds a few
-/// tens of MB of state).
+/// Frame worker threads with `threads` threads. A frame worker spends most of its time waiting
+/// for the parse results and rows of its references, so there is one per thread (at least two,
+/// at most [`MAX_FRAME_THREADS`]); the memory is bounded by `in_flight_limit` instead.
 fn frame_threads(threads: usize) -> usize {
-    if threads <= 1 { 1 } else { threads.div_ceil(2).clamp(2, 8) }
+    if threads <= 1 { 1 } else { threads.clamp(2, MAX_FRAME_THREADS) }
+}
+
+const MAX_FRAME_THREADS: usize = 16;
+
+/// Luma samples of the frames in flight (each in-flight frame holds its state, parse record and
+/// samples, roughly 10 bytes per luma sample): ten 2160p frames.
+#[cfg(all(feature = "threads", not(target_arch = "wasm32")))]
+const IN_FLIGHT_SAMPLES: usize = 10 * 3840 * 2160;
+
+/// Frames submitted to the frame workers that may be unfinished: two more than the workers,
+/// fewer for large frames (at least four).
+#[cfg(all(feature = "threads", not(target_arch = "wasm32")))]
+fn in_flight_limit(frame_threads: usize, luma_samples: usize) -> usize {
+    (frame_threads + 2).min((IN_FLIGHT_SAMPLES / luma_samples.max(1)).max(4))
 }
 
 impl Default for Decoder {
@@ -379,6 +564,7 @@ impl Decoder {
             draft: false,
             stats,
             pool,
+            record_budget: Arc::new(crate::av1::decode::tile::RecordBudget::new(RECORD_BUDGET_BYTES)),
             #[cfg(all(feature = "threads", not(target_arch = "wasm32")))]
             workers,
             in_flight: VecDeque::new(),
@@ -388,6 +574,12 @@ impl Decoder {
             pts: 0,
             #[cfg(test)]
             force_panic: false,
+            #[cfg(test)]
+            panic_at_row: None,
+            #[cfg(test)]
+            record_limit: None,
+            #[cfg(test)]
+            frame_number: 0,
         }
     }
 
@@ -655,6 +847,13 @@ impl Decoder {
         let picture = fh.show_frame.then(Slot::new);
         let draft = self.draft && fh.show_frame && fh.refresh_frame_flags == 0;
         let tile_count = fh.tile_info.cols.checked_mul(fh.tile_info.rows).ok_or(Error::Invalid("tile count overflows"))?;
+        let slot = FrameSlot::new(BandFrame::new(
+            fh.upscaled_width as usize,
+            fh.frame_height as usize,
+            seq.color.num_planes,
+            seq.color.subsampling_x as usize,
+            seq.color.subsampling_y as usize,
+        ));
         self.pending = Some(Box::new(FrameJob {
             seq,
             fh,
@@ -662,14 +861,23 @@ impl Decoder {
             ref_info: self.refs.clone(),
             tiles: Vec::new(),
             tile_covered: vec![false; tile_count],
-            slot: Slot::new(),
+            slot,
             picture,
             pts: self.pts,
             apply_film_grain: self.apply_film_grain,
             draft,
             #[cfg(test)]
             force_panic: self.force_panic,
+            #[cfg(test)]
+            panic_at_row: self.panic_at_row.filter(|&(f, _)| f == self.frame_number).map(|(_, r)| r),
+            #[cfg(test)]
+            record_limit: self.record_limit,
+            record_budget: self.record_budget.clone(),
         }));
+        #[cfg(test)]
+        {
+            self.frame_number += 1;
+        }
         Ok(None)
     }
 
@@ -767,6 +975,8 @@ impl Decoder {
             .clone()
             .map(|p| Output::Decoded(p, picture_bytes(job.fh.upscaled_width as usize, job.fh.frame_height as usize, &job.seq.color)));
         #[cfg(all(feature = "threads", not(target_arch = "wasm32")))]
+        let fh_samples = (fh.upscaled_width as usize).max(fh.frame_width as usize) * fh.frame_height as usize;
+        #[cfg(all(feature = "threads", not(target_arch = "wasm32")))]
         if let Some(w) = &self.workers
             && let Some(tx) = &w.tx
         {
@@ -775,7 +985,8 @@ impl Decoder {
                 Ok(()) => {
                     self.in_flight.push_back(slot);
                     // Bound the frames in flight (memory): wait for the oldest.
-                    while self.in_flight.len() > self.max_in_flight {
+                    let limit = in_flight_limit(w.handles.len(), fh_samples);
+                    while self.in_flight.len() > limit {
                         let Some(s) = self.in_flight.pop_front() else { break };
                         let _ = s.wait();
                     }
@@ -796,18 +1007,19 @@ impl Decoder {
 fn run_job(job: FrameJob, pool: &Pool, stats: &Mutex<DecodeStats>) {
     let mut st = DecodeStats::default();
     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode_frame(&job, pool, &mut st)));
+    let rows = job.fh.frame_height as usize;
     match res.unwrap_or(Err(Error::Invalid("decoder panicked"))) {
         Ok((rf, pic)) => {
             if let Some(ps) = &job.picture {
                 ps.set(pic.ok_or(Error::Invalid("shown frame without picture")));
             }
-            job.slot.set(Ok(rf));
+            job.slot.finish(Ok(rf), rows);
         }
         Err(e) => {
             if let Some(ps) = &job.picture {
                 ps.set(Err(e.clone()));
             }
-            job.slot.set(Err(e));
+            job.slot.finish(Err(e), rows);
         }
     }
     if let Ok(mut s) = stats.lock() {
@@ -832,71 +1044,191 @@ fn decode_frame(job: &FrameJob, pool: &Pool, stats: &mut DecodeStats) -> Result<
     if fh.primary_ref_frame != PRIMARY_REF_NONE {
         used[fh.ref_frame_idx[fh.primary_ref_frame]] = true;
     }
-    let mut refs: [Option<Arc<RefFrame>>; NUM_REF_FRAMES] = Default::default();
-    for i in 0..NUM_REF_FRAMES {
-        if used[i] {
-            let slot = job.refs[i].as_ref().ok_or(Error::Invalid("missing reference frame"))?;
-            refs[i] = Some(slot.wait()?);
+    // Prediction reads the reference planes with this frame's chroma format.
+    if !fh.frame_is_intra {
+        for i in 0..NUM_REF_FRAMES {
+            let Some(slot) = job.refs[i].as_ref().filter(|_| used[i]) else { continue };
+            let b = &slot.bands;
+            let c = &seq.color;
+            if b.num_planes != c.num_planes || b.subsampling_x != c.subsampling_x as usize || b.subsampling_y != c.subsampling_y as usize {
+                return Err(Error::Invalid("reference frame has another chroma format"));
+            }
         }
     }
-    let t = Timer::start();
-    let mut fs = FrameState::new(seq, fh);
-    fs.refs = refs;
-    fs.ref_info = job.ref_info.clone();
+    // Parse dependencies first, then the samples. Parsing reads the CDFs and segment ids of
+    // the primary reference frame, and the saved motion vectors of the inter references only
+    // with use_ref_frame_mvs; the parse results of the other references are not waited for
+    // (their failures still fail this frame through the waits for their samples below).
+    let mut parse_deps = [false; NUM_REF_FRAMES];
     if fh.primary_ref_frame != PRIMARY_REF_NONE {
-        // load_previous_segment_ids( )
-        let (mi_cols, mi_rows) = (fs.mi.cols, fs.mi.rows);
-        let sh = &mut fs.sh;
-        if let Some(rf) = &sh.refs[fh.ref_frame_idx[fh.primary_ref_frame]]
-            && fh.seg.enabled
-            && rf.mi_cols == mi_cols
-            && rf.mi_rows == mi_rows
-        {
-            sh.prev_segment_ids.copy_from_slice(&rf.segment_ids);
-        }
+        parse_deps[fh.ref_frame_idx[fh.primary_ref_frame]] = true;
     }
     if fh.use_ref_frame_mvs {
-        motion_field_estimation(&mut fs);
+        for i in 0..REFS_PER_FRAME {
+            parse_deps[fh.ref_frame_idx[i]] = true;
+        }
     }
-    let mut cdfs = if fh.primary_ref_frame == PRIMARY_REF_NONE {
-        Cdfs::new(fh.quant.base_q_idx)
-    } else {
-        let rf = fs.refs[fh.ref_frame_idx[fh.primary_ref_frame]].as_ref().ok_or(Error::Invalid("primary reference frame missing"))?;
-        let mut c = rf.cdfs.clone();
-        c.clear_counts();
-        c
+    let mut parsed: [Option<Arc<Parsed>>; NUM_REF_FRAMES] = Default::default();
+    for i in 0..NUM_REF_FRAMES {
+        if parse_deps[i] {
+            let slot = job.refs[i].as_ref().ok_or(Error::Invalid("missing reference frame"))?;
+            parsed[i] = Some(slot.wait_parsed()?);
+        }
+    }
+    // The samples of the references predicted from (inter frames only).
+    let wait_samples = || -> Result<[Option<Arc<RefFrame>>; NUM_REF_FRAMES]> {
+        let mut refs: [Option<Arc<RefFrame>>; NUM_REF_FRAMES] = Default::default();
+        if !fh.frame_is_intra {
+            for i in 0..NUM_REF_FRAMES {
+                if used[i] {
+                    let slot = job.refs[i].as_ref().ok_or(Error::Invalid("missing reference frame"))?;
+                    slot.progress.wait(job.ref_info[i].frame_height as usize)?;
+                    refs[i] = Some(slot.wait()?);
+                }
+            }
+        }
+        Ok(refs)
     };
+    // With worker threads, the symbols of every tile are read first, so the parse results
+    // (which the next frames need before they can read their own symbols) are published
+    // before reconstruction, and parsing does not wait for the reference samples; on one
+    // thread each block is reconstructed as it is read.
+    let split = pool.is_parallel();
+    // The frame state before tile decoding (with the reference samples when `with_refs`).
+    let setup = |with_refs: bool| -> Result<(FrameState, Box<Cdfs>)> {
+        let mut fs = FrameState::new(seq, fh);
+        if with_refs {
+            fs.refs = wait_samples()?;
+        }
+        fs.parsed = parsed.clone();
+        fs.ref_info = job.ref_info.clone();
+        if fh.primary_ref_frame != PRIMARY_REF_NONE {
+            // load_previous_segment_ids( )
+            let (mi_cols, mi_rows) = (fs.mi.cols, fs.mi.rows);
+            let sh = &mut fs.sh;
+            if let Some(rf) = &sh.parsed[fh.ref_frame_idx[fh.primary_ref_frame]]
+                && fh.seg.enabled
+                && rf.mi_cols == mi_cols
+                && rf.mi_rows == mi_rows
+            {
+                sh.prev_segment_ids.copy_from_slice(&rf.segment_ids);
+            }
+        }
+        if fh.use_ref_frame_mvs {
+            motion_field_estimation(&mut fs);
+        }
+        let cdfs = if fh.primary_ref_frame == PRIMARY_REF_NONE {
+            Cdfs::new(fh.quant.base_q_idx)
+        } else {
+            let rf = fs.parsed[fh.ref_frame_idx[fh.primary_ref_frame]].as_ref().ok_or(Error::Invalid("primary reference frame missing"))?;
+            let mut c = rf.cdfs.clone();
+            c.clear_counts();
+            c
+        };
+        Ok((fs, cdfs))
+    };
+    let t = Timer::start();
+    let (mut fs, mut cdfs) = setup(!split)?;
     stats.add(Stage::Setup, t.secs());
     let t = Timer::start();
-    let saved = decode_tiles(pool, &mut fs, &cdfs, &job.tiles)?;
+    // Time spent waiting for reference samples is not decoding time.
+    let mut waited = 0.0;
+    #[cfg(not(test))]
+    let record_limit = RECORD_BYTES_PER_SAMPLE;
+    #[cfg(test)]
+    let record_limit = job.record_limit.unwrap_or(RECORD_BYTES_PER_SAMPLE);
+    let mut tiles = parse_tiles(pool, &mut fs, &cdfs, &job.tiles, if split { Pass::Parse } else { Pass::Full }, record_limit, &job.record_budget)?;
+    // A frame whose record would take too much memory (pathological streams) is decoded again
+    // in one pass, as on one thread.
+    let one_pass = split && tiles.records.iter().any(|(_, r)| r.over_limit());
+    if one_pass {
+        // The fallback starts again from the tile data: release the records first.
+        drop(tiles);
+        let wait = Timer::start();
+        (fs, cdfs) = setup(true)?;
+        waited = wait.secs();
+        tiles = parse_tiles(pool, &mut fs, &cdfs, &job.tiles, Pass::Full, record_limit, &job.record_budget)?;
+    }
     stats.tiles += job.tiles.len() as u64;
-    stats.add(Stage::Tiles, t.secs());
     if !fh.disable_frame_end_update_cdf
-        && let Some(s) = saved
+        && let Some(s) = tiles.saved.take()
     {
         cdfs = s;
     }
-    crate::av1::decode::postfilter::apply(&mut fs, stats, pool, job.draft);
+    if split && !one_pass {
+        if tiles.whole {
+            if let Some(state) = tiles.states.pop() {
+                fs.put_tile_state(state);
+                job.slot.set_parsed(Ok(Arc::new(parse_results(&fs, cdfs))));
+                tiles.states.push(fs.take_tile_state());
+            }
+        } else {
+            for state in &tiles.states {
+                fs.merge_tile_modes(state);
+            }
+            job.slot.set_parsed(Ok(Arc::new(parse_results(&fs, cdfs))));
+        }
+        if !fh.use_superres {
+            if !tiles.whole {
+                // The tiles were parsed into private buffers, merged into the frame above:
+                // reconstruct them in the frame's own buffers.
+                tiles.states.clear();
+                tiles.states.push(fs.take_tile_state());
+                tiles.whole = true;
+            }
+            // Reconstruct superblock row by superblock row (every tile of the row), each
+            // waiting only for the reference rows it reads, with the in-loop filters following
+            // behind.
+            waited = reconstruct_wavefront(job, pool, &mut fs, &mut tiles, stats)?;
+        } else {
+            let wait = Timer::start();
+            fs.refs = wait_samples()?;
+            waited = wait.secs();
+            reconstruct_tiles(pool, &fs.sh, &mut tiles)?;
+            tiles.finish(&mut fs);
+            let f = Timer::start();
+            if fh.use_superres {
+                crate::av1::decode::postfilter::apply(&mut fs, stats, pool, job.draft);
+                publish_bands(&job.slot, &fs.cur, 0, usize::MAX, fh.frame_height as usize);
+            } else {
+                let mut pipe = crate::av1::decode::postfilter::Pipeline::new(&fs, job.draft);
+                let done = pipe.advance(&mut fs, stats, pool, usize::MAX);
+                publish_final(&job.slot, done, fh.frame_height as usize);
+            }
+            waited += f.secs();
+        }
+    } else {
+        tiles.finish(&mut fs);
+        job.slot.set_parsed(Ok(Arc::new(parse_results(&fs, cdfs))));
+    }
+    stats.add(Stage::Tiles, t.secs() - waited);
+    if !split || one_pass {
+        crate::av1::decode::postfilter::apply(&mut fs, stats, pool, job.draft);
+    }
+    if one_pass {
+        publish_bands(&job.slot, &fs.cur, 0, usize::MAX, fh.frame_height as usize);
+    }
+    if split {
+        // A frame using a reference only for its parse results (an intra frame's CDFs) still
+        // fails with it, as it does on one thread.
+        for i in 0..NUM_REF_FRAMES {
+            if used[i] {
+                job.refs[i].as_ref().ok_or(Error::Invalid("missing reference frame"))?.wait()?;
+            }
+        }
+    }
     stats.draft_frames += job.draft as u64;
     let t = Timer::start();
     stats.frames += 1;
-    if fh.seg.enabled && !fh.seg.update_map {
-        let prev = std::mem::take(&mut fs.prev_segment_ids);
-        fs.mi.segment_id.copy_from_slice(&prev);
-    }
-    let (mf_refs, mf_mvs) = motion_vector_storage(&fs);
     let rf = Arc::new(RefFrame {
-        buf: std::mem::take(&mut fs.cur),
-        cdfs,
+        // With worker threads the samples are in the published bands.
+        buf: if split { FrameBuf::default() } else { std::mem::take(&mut fs.cur) },
+        bands: split.then(|| job.slot.bands.clone()),
+        num_planes: seq.color.num_planes,
         bit_depth: seq.color.bit_depth,
         subsampling_x: seq.color.subsampling_x,
         subsampling_y: seq.color.subsampling_y,
-        segment_ids: std::mem::take(&mut fs.mi.segment_id),
-        mi_cols: fs.mi.cols,
-        mi_rows: fs.mi.rows,
         color: (seq.color.color_primaries, seq.color.transfer_characteristics, seq.color.matrix_coefficients, seq.color.color_range),
-        saved_ref_frames: mf_refs,
-        saved_mvs: mf_mvs,
     });
     // job.picture is None for a shown frame refused for its size (see tile_group)
     let pic = job.picture.is_some().then(|| {
@@ -908,6 +1240,232 @@ fn decode_frame(job: &FrameJob, pool: &Pool, stats: &mut DecodeStats) -> Result<
     Ok((rf, pic))
 }
 
+/// Publish bands [from, to) copied from the final samples `src`, and the row progress they make
+/// final.
+fn publish_bands(slot: &FrameSlot, src: &FrameBuf, from: usize, to: usize, height: usize) {
+    let to = to.min(slot.bands.bands());
+    for b in from..to {
+        slot.bands.publish(b, src);
+    }
+    slot.progress.publish((to << crate::av1::decode::frame::BAND_LOG2).min(height));
+}
+
+/// Publish the bands that became final (in order, following those published before) and the
+/// row progress they make final.
+fn publish_final(slot: &FrameSlot, bands: crate::av1::decode::postfilter::FinalBands, height: usize) {
+    let mut end = None;
+    for (b, planes) in bands {
+        slot.bands.publish_owned(b, planes);
+        end = Some(b + 1);
+    }
+    if let Some(end) = end {
+        slot.progress.publish((end << crate::av1::decode::frame::BAND_LOG2).min(height));
+    }
+}
+
+/// Extra luma rows waited for below what a motion vector reaches: the 8-tap filters read 4
+/// rows below a block, chroma positions round, and the vertical sub-sample phase adds one.
+const ROW_WAIT_MARGIN: usize = 16;
+
+/// The rows of each reference slot that reconstructing the blocks `blocks` (a superblock row
+/// and the row above it, whose motion overlapped block motion compensation can reuse) reads,
+/// for blocks ending at luma row `bottom`: their reach plus a margin, or everything
+/// (`usize::MAX`) for warped motion and scaled references, whose reach is not bounded by the
+/// motion vector.
+fn rows_needed(
+    fh: &FrameHeader,
+    ref_info: &[RefInfo; NUM_REF_FRAMES],
+    blocks: impl Iterator<Item = crate::av1::decode::tile::BlockMotion>,
+    bottom: usize,
+) -> [usize; NUM_REF_FRAMES] {
+    let mut need = [0usize; NUM_REF_FRAMES];
+    let mut used = [false; NUM_REF_FRAMES];
+    let mut warp = false;
+    let global = (LAST_FRAME..=ALTREF_FRAME).any(|r| fh.gm_type[r] as usize > TRANSLATION);
+    for b in blocks {
+        if !b.inter {
+            continue;
+        }
+        if b.motion_mode as usize == LOCALWARP || (global && (b.y_mode == GLOBALMV || b.y_mode == GLOBAL_GLOBALMV)) {
+            warp = true;
+        }
+        let bottom = bottom.max((b.mi_row + b.bh4) * 4);
+        for list in 0..2 {
+            let rf = b.ref_frame[list];
+            if rf <= INTRA_FRAME as i8 {
+                continue;
+            }
+            let Some(&i) = fh.ref_frame_idx.get(rf as usize - LAST_FRAME) else { continue };
+            used[i] = true;
+            let ri = &ref_info[i];
+            if ri.upscaled_width != fh.frame_width || ri.frame_height != fh.frame_height {
+                need[i] = usize::MAX;
+                continue;
+            }
+            let down = (b.mv[list][0].max(0) as usize).div_ceil(8);
+            need[i] = need[i].max(bottom.saturating_add(down).saturating_add(ROW_WAIT_MARGIN));
+        }
+    }
+    if warp {
+        for i in 0..NUM_REF_FRAMES {
+            if used[i] {
+                need[i] = usize::MAX;
+            }
+        }
+    }
+    need
+}
+
+/// Reconstructed luma rows between two runs of the in-loop filter pipeline in
+/// [`reconstruct_wavefront`] (finer steps publish rows sooner, coarser ones filter more bands in
+/// parallel).
+const FILTER_STEP_ROWS: usize = 128;
+
+/// Reconstruct a frame superblock row by superblock row (row wavefront): before each row, wait
+/// only for the reference rows it reads; then reconstruct that row in every tile it crosses
+/// (tiles share no prediction context, so the order of the tiles within a row does not matter)
+/// and run the in-loop filters on what that allows, publishing the bands that became final.
+/// `tiles` holds the whole frame's buffers. Returns the seconds spent waiting for references
+/// and filtering (not tile decoding).
+fn reconstruct_wavefront(job: &FrameJob, pool: &Pool, fs: &mut FrameState, tiles: &mut FrameTiles, stats: &mut DecodeStats) -> Result<f64> {
+    let fh = &job.fh;
+    let mut other = 0.0;
+    let ti = fh.tile_info.clone();
+    let Some(state) = tiles.states.pop() else {
+        return Err(Error::Invalid("no tile to reconstruct"));
+    };
+    // The record of every tile, by tile number.
+    let mut recs: Vec<Option<TileRecord>> = (0..ti.rows * ti.cols).map(|_| None).collect();
+    for (num, rec) in std::mem::take(&mut tiles.records) {
+        *recs.get_mut(num).ok_or(Error::Invalid("tile number out of range"))? = Some(rec);
+    }
+    let mut used = [false; NUM_REF_FRAMES];
+    if !fh.frame_is_intra {
+        for i in 0..REFS_PER_FRAME {
+            used[fh.ref_frame_idx[i]] = true;
+        }
+    }
+    for i in 0..NUM_REF_FRAMES {
+        if used[i] {
+            let slot = job.refs[i].as_ref().ok_or(Error::Invalid("missing reference frame"))?;
+            fs.ref_rows[i] = Some(slot.bands.clone());
+        }
+    }
+    fs.put_tile_state(state);
+    let mut pipe = crate::av1::decode::postfilter::Pipeline::new(fs, job.draft);
+    let sb4 = if job.seq.use_128x128_superblock { 32 } else { 16 };
+    let mi_rows = fh.mi_rows as usize;
+    let sb_rows = mi_rows.div_ceil(sb4);
+    let mut bufs = (crate::av1::decode::tile::Buffers::new(), Cdfs::new(fh.quant.base_q_idx));
+    let mut filtered = 0;
+    let mut tile_row = 0;
+    for row in 0..sb_rows {
+        // Tile rows start on superblock rows.
+        while tile_row + 1 < ti.rows && row * sb4 >= ti.mi_row_starts[tile_row + 1] as usize {
+            tile_row += 1;
+        }
+        let local = (row * sb4).saturating_sub(ti.mi_row_starts[tile_row] as usize) / sb4;
+        let w = Timer::start();
+        if !fh.frame_is_intra {
+            let mut need = [0usize; NUM_REF_FRAMES];
+            for col in 0..ti.cols {
+                let Some(rec) = &recs[tile_row * ti.cols + col] else { continue };
+                let width = (ti.mi_col_starts[col + 1] as usize).min(fh.mi_cols as usize).saturating_sub(ti.mi_col_starts[col] as usize);
+                let n = rows_needed(fh, &job.ref_info, rec.row_blocks(width.div_ceil(sb4), local.saturating_sub(1), local + 1), (row + 1) * sb4 * 4);
+                for i in 0..NUM_REF_FRAMES {
+                    need[i] = need[i].max(n[i]);
+                }
+            }
+            for i in 0..NUM_REF_FRAMES {
+                if used[i] && need[i] > 0 {
+                    let slot = job.refs[i].as_ref().ok_or(Error::Invalid("missing reference frame"))?;
+                    slot.progress.wait(need[i].min(job.ref_info[i].frame_height as usize))?;
+                }
+            }
+        }
+        other += w.secs();
+        let mut t = fs.take_tile_state();
+        let mut res = Ok(());
+        for col in 0..ti.cols {
+            let Some(rec) = recs[tile_row * ti.cols + col].as_mut() else { continue };
+            let (b, cdf) = bufs;
+            let mut td = TileDecoder::with_buffers(&fs.sh, &mut t, &[], cdf, tile_row, col, b);
+            td.pass = Pass::Reconstruct;
+            td.record = std::mem::take(rec);
+            res = td.reconstruct_sb_rows(1);
+            *rec = std::mem::take(&mut td.record);
+            bufs = td.into_buffers();
+            if res.is_err() {
+                break;
+            }
+        }
+        fs.put_tile_state(t);
+        res?;
+        let f = Timer::start();
+        let recon_rows = ((row + 1) * sb4 * 4).min(mi_rows * 4);
+        // Filter in steps of a few bands, so the bands of a step run in parallel.
+        if recon_rows >= filtered + FILTER_STEP_ROWS || recon_rows == mi_rows * 4 {
+            filtered = recon_rows;
+            let done = pipe.advance(fs, stats, pool, recon_rows);
+            publish_final(&job.slot, done, fh.frame_height as usize);
+        }
+        other += f.secs();
+        #[cfg(test)]
+        assert!(
+            !(job.panic_at_row.is_some_and(|r| row >= r) && job.slot.progress.rows() > 0),
+            "forced panic in the row wavefront after publishing rows"
+        );
+    }
+    // A reference that failed after publishing the rows used here still fails this frame, as
+    // it does when frames are decoded one after another.
+    for i in 0..NUM_REF_FRAMES {
+        if used[i] {
+            let slot = job.refs[i].as_ref().ok_or(Error::Invalid("missing reference frame"))?;
+            slot.wait()?;
+        }
+    }
+    Ok(other)
+}
+
+/// Most bytes a tile's parse record may take per luma sample of the tile. Typical streams need
+/// a fraction of this; past it (pathological streams: tiny blocks, large palettes, every
+/// coefficient coded) the frame is decoded in one pass instead, so memory stays bounded.
+const RECORD_BYTES_PER_SAMPLE: usize = 32;
+
+/// Most parse record bytes all frames of a decoder hold at once. Past it, the frames that
+/// cannot reserve more are decoded in one pass, so the frames in flight together stay bounded
+/// too (typical streams need a few bytes per luma sample: under 100 MB for a 2160p frame).
+const RECORD_BUDGET_BYTES: usize = 1 << 30;
+
+/// The tiles of a frame between parsing and reconstruction.
+struct FrameTiles {
+    /// One state per tile (decoded in parallel into private buffers), or one for the whole
+    /// frame (tiles one after another).
+    states: Vec<TileState>,
+    /// Per tile: (tile number, record of [`Pass::Parse`]).
+    records: Vec<(usize, TileRecord)>,
+    /// The final CDFs of tile context_update_tile_id.
+    saved: Option<Box<Cdfs>>,
+    /// `states` holds the frame's own buffers (taken with [`FrameState::take_tile_state`]).
+    whole: bool,
+}
+
+impl FrameTiles {
+    /// Move the tile buffers (mode info, filter parameters and, after reconstruction, the
+    /// samples) into the frame.
+    fn finish(self, fs: &mut FrameState) {
+        if self.whole {
+            if let Some(t) = self.states.into_iter().next() {
+                fs.put_tile_state(t);
+            }
+        } else {
+            for t in &self.states {
+                fs.merge_tile_state(t);
+            }
+        }
+    }
+}
+
 /// Bytes all parallel tile states may hold of whole-frame CDEF and restoration metadata; past it
 /// the tiles decode one after another on the frame's own metadata.
 const TILE_METADATA_BUDGET: usize = 256 << 20;
@@ -916,16 +1474,30 @@ fn tile_metadata_fits(tiles: usize, per_tile: usize) -> bool {
     tiles.checked_mul(per_tile).is_some_and(|n| n <= TILE_METADATA_BUDGET)
 }
 
-/// Decode the tiles of a frame (tile number, data), in parallel when several; returns the final
-/// CDFs of tile context_update_tile_id.
-fn decode_tiles(pool: &Pool, fs: &mut FrameState, cdfs: &Cdfs, tiles: &[(usize, Vec<u8>)]) -> Result<Option<Box<Cdfs>>> {
+/// Run `pass` (Full or Parse) over the tiles of a frame.
+/// `record_limit`: most record bytes per luma sample of a tile (see [`RECORD_BYTES_PER_SAMPLE`]).
+/// `budget`: the decoder-wide budget the records are reserved from.
+fn parse_tiles(
+    pool: &Pool,
+    fs: &mut FrameState,
+    cdfs: &Cdfs,
+    tiles: &[(usize, Vec<u8>)],
+    pass: Pass,
+    record_limit: usize,
+    budget: &Arc<crate::av1::decode::tile::RecordBudget>,
+) -> Result<FrameTiles> {
     let ti = fs.fh.tile_info.clone();
     let ctx_tile = ti.context_update_tile_id as usize;
-    let run = |sh: &FrameShared, t: &mut TileState, num: usize, data: &[u8]| -> Result<Option<Box<Cdfs>>> {
+    let run = |sh: &FrameShared, t: &mut TileState, num: usize, data: &[u8]| -> Result<(Option<Box<Cdfs>>, TileRecord)> {
         t.intra_frame_y_mode_cdf = DEFAULT_INTRA_FRAME_Y_MODE_CDF;
         let mut td = TileDecoder::new(sh, t, data, Box::new(cdfs.clone()), num / ti.cols, num % ti.cols);
+        td.pass = pass;
+        let (rows, cols) = (td.mi_row_end.saturating_sub(td.mi_row_start), td.mi_col_end.saturating_sub(td.mi_col_start));
+        td.record.limit = rows.saturating_mul(cols).saturating_mul(16 * record_limit);
+        td.record.budget = Some(budget.clone());
         td.decode_tile()?;
-        Ok((num == ctx_tile).then_some(td.cdf))
+        let rec = std::mem::take(&mut td.record);
+        Ok(((num == ctx_tile).then_some(td.cdf), rec))
     };
     // Intra block copy reads the current frame through the tile's own buffer: keep whole-frame
     // buffers (tiles one after another) for it.
@@ -941,42 +1513,75 @@ fn decode_tiles(pool: &Pool, fs: &mut FrameState, cdfs: &Cdfs, tiles: &[(usize, 
             .collect();
         let sh = &fs.sh;
         let results = pool.map_mut(&mut states, |i, t| run(sh, t, tiles[i].0, &tiles[i].1));
-        for t in &states {
-            fs.merge_tile_state(t);
-        }
         let mut saved = None;
-        for r in results {
-            if let Some(c) = r? {
-                saved = Some(c);
+        let mut records = Vec::with_capacity(tiles.len());
+        for (r, (num, _)) in results.into_iter().zip(tiles) {
+            let (c, rec) = r?;
+            if c.is_some() {
+                saved = c;
             }
+            records.push((*num, rec));
         }
-        return Ok(saved);
+        return Ok(FrameTiles { states, records, saved, whole: false });
     }
     let mut t = fs.take_tile_state();
     let mut saved = None;
+    let mut records = Vec::with_capacity(tiles.len());
     let mut res = Ok(());
     for (num, data) in tiles {
         match run(&fs.sh, &mut t, *num, data) {
-            Ok(Some(c)) => saved = Some(c),
-            Ok(None) => {}
+            Ok((c, rec)) => {
+                if c.is_some() {
+                    saved = c;
+                }
+                records.push((*num, rec));
+            }
             Err(e) => {
                 res = Err(e);
                 break;
             }
         }
     }
-    fs.put_tile_state(t);
-    res.map(|_| saved)
+    if let Err(e) = res {
+        fs.put_tile_state(t);
+        return Err(e);
+    }
+    Ok(FrameTiles { states: vec![t], records, saved, whole: true })
+}
+
+/// Reconstruct parsed tiles (in parallel when each has its own state).
+fn reconstruct_tiles(pool: &Pool, fs: &FrameShared, tiles: &mut FrameTiles) -> Result<()> {
+    let ti = fs.fh.tile_info.clone();
+    let run = |t: &mut TileState, num: usize, rec: TileRecord| -> Result<()> {
+        let mut td = TileDecoder::new(fs, t, &[], Cdfs::new(fs.fh.quant.base_q_idx), num / ti.cols, num % ti.cols);
+        td.pass = Pass::Reconstruct;
+        td.record = rec;
+        td.decode_tile()
+    };
+    let records = std::mem::take(&mut tiles.records);
+    if !tiles.whole {
+        let mut items: Vec<(&mut TileState, Option<(usize, TileRecord)>)> = tiles.states.iter_mut().zip(records.into_iter().map(Some)).collect();
+        let results = pool.map_mut(&mut items, |_, (t, rec)| match rec.take() {
+            Some((num, rec)) => run(t, num, rec),
+            None => Ok(()),
+        });
+        return results.into_iter().collect();
+    }
+    let Some(t) = tiles.states.first_mut() else { return Ok(()) };
+    for (num, rec) in records {
+        run(t, num, rec)?;
+    }
+    Ok(())
 }
 
 fn output_picture(seq: &SequenceHeader, rf: &RefFrame, w: usize, h: usize, grain: &FilmGrainParams, apply_film_grain: bool, pts: i64) -> Picture {
     let ssx = rf.subsampling_x as usize;
     let ssy = rf.subsampling_y as usize;
-    let num_planes = rf.buf.num_planes;
+    let num_planes = rf.num_planes;
     let mut planes: [Vec<u16>; 3] = Default::default();
     for p in 0..num_planes {
         let (pw, ph) = if p == 0 { (w, h) } else { ((w + ssx) >> ssx, (h + ssy) >> ssy) };
-        let src = &rf.buf.planes[p];
+        let src = rf.plane(p);
         let mut v = Vec::with_capacity(pw * ph);
         for y in 0..ph {
             v.extend_from_slice(&src.row(y)[..pw]);
@@ -1004,25 +1609,40 @@ fn output_picture(seq: &SequenceHeader, rf: &RefFrame, w: usize, h: usize, grain
     pic
 }
 
-/// Motion field motion vector storage process (7.19): (MfRefFrames, MfMvs).
+/// What later frames read from this one while parsing: the final CDFs, the segment ids (the
+/// previous frame's when the map is not updated) and the stored motion vectors (7.19). The
+/// in-loop filters read the decoded segment ids, so the frame's own map is left alone.
+fn parse_results(fs: &FrameState, cdfs: Box<Cdfs>) -> Parsed {
+    let fh = &fs.fh;
+    let segment_ids = if fh.seg.enabled && !fh.seg.update_map { fs.prev_segment_ids.clone() } else { fs.mi.segment_id.clone() };
+    let (saved_ref_frames, saved_mvs) = motion_vector_storage(fs);
+    Parsed { cdfs, segment_ids, mi_cols: fs.mi.cols, mi_rows: fs.mi.rows, saved_ref_frames, saved_mvs }
+}
+
+/// Motion field motion vector storage process (7.19): (MfRefFrames, MfMvs), kept only where
+/// the projection process (7.9.2) reads them, the odd row and column of every 8x8 block
+/// (index `y8 * (MiCols >> 1) + x8`).
 fn motion_vector_storage(fs: &FrameState) -> (Vec<i8>, Vec<[i32; 2]>) {
     let mi = &fs.mi;
-    let n = mi.rows * mi.cols;
-    let mut refs = vec![-1i8; n];
-    let mut mvs = vec![[0i32; 2]; n];
     let fh = &fs.fh;
-    for i in 0..n {
-        for list in 0..2 {
-            let r = mi.ref_frame[i][list];
-            if r > INTRA_FRAME as i8 {
-                let ref_idx = fh.ref_frame_idx[r as usize - LAST_FRAME];
-                let dist = crate::av1::decode::header::relative_dist(&fs.seq, fs.ref_info[ref_idx].order_hint, fh.order_hint);
-                if dist < 0 {
-                    let m = mi.mv[i][list];
-                    let (row, col) = (m.row as i32, m.col as i32);
-                    if row.abs() <= REFMVS_LIMIT as i32 && col.abs() <= REFMVS_LIMIT as i32 {
-                        refs[i] = r;
-                        mvs[i] = [row, col];
+    let (mi_cols, w8, h8) = (fh.mi_cols as usize, fh.mi_cols as usize >> 1, fh.mi_rows as usize >> 1);
+    let mut refs = vec![-1i8; w8 * h8];
+    let mut mvs = vec![[0i32; 2]; w8 * h8];
+    for y8 in 0..h8 {
+        for x8 in 0..w8 {
+            let (i, o) = ((2 * y8 + 1) * mi_cols + 2 * x8 + 1, y8 * w8 + x8);
+            for list in 0..2 {
+                let r = mi.ref_frame[i][list];
+                if r > INTRA_FRAME as i8 {
+                    let ref_idx = fh.ref_frame_idx[r as usize - LAST_FRAME];
+                    let dist = crate::av1::decode::header::relative_dist(&fs.seq, fs.ref_info[ref_idx].order_hint, fh.order_hint);
+                    if dist < 0 {
+                        let m = mi.mv[i][list];
+                        let (row, col) = (m.row as i32, m.col as i32);
+                        if row.abs() <= REFMVS_LIMIT as i32 && col.abs() <= REFMVS_LIMIT as i32 {
+                            refs[o] = r;
+                            mvs[o] = [row, col];
+                        }
                     }
                 }
             }
@@ -1080,7 +1700,7 @@ fn project_pos(v8: i32, delta: i32, dst_sign: i32, max8: i32, max_off8: i32) -> 
 
 /// Projection process (7.9.2).
 fn project(fs: &mut FrameState, src: usize, dst_sign: i32) -> bool {
-    let FrameShared { seq, fh, refs, ref_info, motion_field, .. } = &mut fs.sh;
+    let FrameShared { seq, fh, parsed, ref_info, motion_field, .. } = &mut fs.sh;
     let src_idx = fh.ref_frame_idx[src - LAST_FRAME];
     let w8 = fh.mi_cols as i32 >> 1;
     let h8 = fh.mi_rows as i32 >> 1;
@@ -1088,20 +1708,18 @@ fn project(fs: &mut FrameState, src: usize, dst_sign: i32) -> bool {
     if ri.mi_rows != fh.mi_rows || ri.mi_cols != fh.mi_cols || ri.frame_type == INTRA_ONLY_FRAME as u8 || ri.frame_type == KEY_FRAME as u8 {
         return false;
     }
-    let Some(rf) = &refs[src_idx] else { return false };
+    let Some(rf) = &parsed[src_idx] else { return false };
     let rd = |a: u32, b: u32| crate::av1::decode::header::relative_dist(seq, a, b);
-    let mi_cols = fh.mi_cols as usize;
     for y8 in 0..h8 {
         for x8 in 0..w8 {
-            let row = (2 * y8 + 1) as usize;
-            let col = (2 * x8 + 1) as usize;
-            let src_ref = rf.saved_ref_frames[row * mi_cols + col];
+            let at = (y8 * w8 + x8) as usize;
+            let src_ref = rf.saved_ref_frames[at];
             if src_ref > INTRA_FRAME as i8 {
                 let ref_to_cur = rd(fh.order_hints[src], fh.order_hint);
                 let ref_offset = rd(fh.order_hints[src], ri.saved_order_hints[src_ref as usize]);
                 let pos_valid = ref_to_cur.abs() <= MAX_FRAME_DISTANCE as i32 && ref_offset.abs() <= MAX_FRAME_DISTANCE as i32 && ref_offset > 0;
                 if pos_valid {
-                    let mv = rf.saved_mvs[row * mi_cols + col];
+                    let mv = rf.saved_mvs[at];
                     let proj = get_mv_projection(mv, ref_to_cur * dst_sign, ref_offset);
                     let py = project_pos(y8, proj[0], dst_sign, h8, MAX_OFFSET_HEIGHT as i32);
                     let px = project_pos(x8, proj[1], dst_sign, w8, MAX_OFFSET_WIDTH as i32);
@@ -1133,13 +1751,18 @@ mod tests {
             ref_info: Default::default(),
             tiles: Vec::new(),
             tile_covered: vec![false; 3],
-            slot: Slot::new(),
+            slot: FrameSlot::new(BandFrame::new(0, 0, 1, 0, 0)),
             picture: None,
             pts: 0,
             apply_film_grain: false,
             draft: false,
             #[cfg(test)]
             force_panic: false,
+            #[cfg(test)]
+            panic_at_row: None,
+            #[cfg(test)]
+            record_limit: None,
+            record_budget: decoder.record_budget.clone(),
         }));
         decoder
     }
@@ -1284,6 +1907,317 @@ mod tests {
         assert!(frame_size_allowed(8192, 4352)); // exactly MaxPicSize
         assert!(frame_size_allowed(7680, 4320)); // 8K UHD
         assert!(frame_size_allowed(1, 1));
+    }
+
+    /// Random short sleeps in row progress publishing and waiting, to shake out scheduling
+    /// orders a quiet machine never produces (enabled by [`JitterGuard`]).
+    static JITTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    pub(super) fn jitter() {
+        use std::cell::Cell;
+        use std::sync::atomic::Ordering;
+        if JITTER.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        static SEED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0x2545_f491_4f6c_dd1d);
+        thread_local!(static RNG: Cell<u64> = Cell::new(SEED.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed) | 1));
+        let r = RNG.with(|c| {
+            let mut x = c.get();
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            c.set(x);
+            x
+        });
+        match r % 4 {
+            0 => std::thread::yield_now(),
+            1 => std::thread::sleep(std::time::Duration::from_micros(r % 300)),
+            _ => {}
+        }
+    }
+
+    struct JitterGuard;
+    impl JitterGuard {
+        fn on() -> JitterGuard {
+            JITTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            JitterGuard
+        }
+    }
+    impl Drop for JitterGuard {
+        fn drop(&mut self) {
+            JITTER.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Inter test streams made with ffmpeg / SVT-AV1 (None, reported, without them): several
+    /// superblock rows and hierarchical references; odd size; super-resolution; 2x2 tiles.
+    const STREAMS: [(&str, &str, &str); 4] = [
+        ("wavefront_unit_352x288", "testsrc2=size=352x288:rate=25", "-preset 8 -crf 35"),
+        ("wavefront_unit_odd", "testsrc2=size=203x117:rate=25,noise=alls=15:allf=t", "-preset 8 -crf 40"),
+        ("wavefront_unit_superres", "testsrc2=size=416x240:rate=25", "-preset 8 -crf 35 -svtav1-params superres-mode=1:superres-denom=12"),
+        ("wavefront_unit_tiles", "mandelbrot=size=650x370:rate=25", "-preset 8 -crf 32 -svtav1-params tile-columns=1:tile-rows=1"),
+    ];
+
+    fn inter_stream((name, src, args): (&str, &str, &str)) -> Option<Vec<Vec<u8>>> {
+        let ff = craft_media_testkit::ffmpeg_or_skip("av1 wavefront")?;
+        if !craft_media_testkit::ffmpeg_has_encoder(&ff, "libsvtav1") {
+            craft_media_testkit::skip_test("av1 wavefront", "this ffmpeg has no libsvtav1 encoder");
+            return None;
+        }
+        let out = craft_media_testkit::fixtures_dir("av1").join(format!("{name}.ivf"));
+        let path = craft_media_testkit::fixtures::generate(&out, |tmp| {
+            std::process::Command::new(&ff)
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    src,
+                    "-frames:v",
+                    "16",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:v",
+                    "libsvtav1",
+                ])
+                .args(args.split_whitespace())
+                .args(["-f", "ivf"])
+                .arg(tmp)
+                .stdin(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        });
+        let path = path.unwrap_or_else(|| panic!("ffmpeg has libsvtav1 but could not encode {name}"));
+        let d = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let mut pos = usize::from(u16::from_le_bytes([d[6], d[7]]));
+        let mut out = Vec::new();
+        while let Some(h) = d.get(pos..pos + 12) {
+            let n = u32::from_le_bytes([h[0], h[1], h[2], h[3]]) as usize;
+            pos += 12;
+            out.push(d[pos..pos + n].to_vec());
+            pos += n;
+        }
+        assert_eq!(out.len(), 16, "{name}: temporal units");
+        Some(out)
+    }
+
+    /// Decode `tus` with `dec`: (pictures, errors).
+    fn decode_tus(mut dec: Decoder, tus: &[Vec<u8>]) -> (Vec<Picture>, usize) {
+        let (mut pics, mut errors) = (Vec::new(), 0);
+        for (i, tu) in tus.iter().enumerate() {
+            match dec.decode_pts(tu, i as i64) {
+                Ok(p) => pics.extend(p),
+                Err(_) => errors += 1,
+            }
+        }
+        match dec.flush_result() {
+            Ok(p) => pics.extend(p),
+            Err(_) => errors += 1,
+        }
+        (pics, errors)
+    }
+
+    #[test]
+    fn jittered_wavefront_gives_the_single_thread_pictures() {
+        for stream in STREAMS {
+            let Some(tus) = inter_stream(stream) else { return };
+            let name = stream.0;
+            let (want, errors) = decode_tus(Decoder::with_threads(1), &tus);
+            assert_eq!(errors, 0, "{name}");
+            let _jitter = JitterGuard::on();
+            for threads in [2, 3, 5, 8] {
+                for round in 0..2 {
+                    let tus = tus.clone();
+                    let (got, errors) = within_a_minute(move || decode_tus(Decoder::with_threads(threads), &tus));
+                    assert_eq!(errors, 0, "{name}: threads {threads} round {round}");
+                    assert!(got == want, "{name}: threads {threads} round {round}: pictures differ");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn frames_over_the_record_limit_decode_in_one_pass() {
+        for stream in [STREAMS[0], STREAMS[3]] {
+            let Some(tus) = inter_stream(stream) else { return };
+            let name = stream.0;
+            let (want, _) = decode_tus(Decoder::with_threads(1), &tus);
+            for (threads, limit) in [(3, 0), (8, 0), (8, 1)] {
+                let tus = tus.clone();
+                let (got, errors) = within_a_minute(move || {
+                    let mut dec = Decoder::with_threads(threads);
+                    dec.record_limit = Some(limit);
+                    decode_tus(dec, &tus)
+                });
+                assert_eq!(errors, 0, "{name}: threads {threads}, limit {limit}");
+                assert!(got == want, "{name}: threads {threads}, limit {limit}: pictures differ");
+            }
+        }
+    }
+
+    #[test]
+    fn the_parse_records_of_all_frames_stay_within_the_decoder_budget() {
+        for stream in [STREAMS[0], STREAMS[3]] {
+            let Some(tus) = inter_stream(stream) else { return };
+            let name = stream.0;
+            let (want, _) = decode_tus(Decoder::with_threads(1), &tus);
+            // Room for about one frame's records: the other frames in flight decode in one pass.
+            for (threads, budget) in [(3, 0), (8, 3 << 20), (16, 1 << 20)] {
+                let tus = tus.clone();
+                let b = Arc::new(crate::av1::decode::tile::RecordBudget::new(budget));
+                let mut dec = Decoder::with_threads(threads);
+                dec.record_budget = b.clone();
+                let (got, errors) = within_a_minute(move || decode_tus(dec, &tus));
+                assert_eq!(errors, 0, "{name}: threads {threads}, budget {budget}");
+                assert!(got == want, "{name}: threads {threads}, budget {budget}: pictures differ");
+                assert!(b.peak.load(std::sync::atomic::Ordering::Acquire) <= budget, "{name}: threads {threads}: over the budget");
+                assert_eq!(b.used(), 0, "{name}: threads {threads}: records not released");
+            }
+        }
+    }
+
+    #[cfg(all(feature = "threads", not(target_arch = "wasm32")))]
+    #[test]
+    fn a_reference_panicking_after_publishing_rows_fails_without_a_hang() {
+        let Some(tus) = inter_stream(STREAMS[0]) else { return };
+        let _jitter = JitterGuard::on();
+        // Frame 1 is the first inter frame; later frames predict from it.
+        for threads in [2, 3, 8] {
+            for frame in [0, 1, 2] {
+                let tus = tus.clone();
+                let (pics, errors) = within_a_minute(move || {
+                    let mut dec = Decoder::with_threads(threads);
+                    dec.panic_at_row = Some((frame, 1));
+                    decode_tus(dec, &tus)
+                });
+                assert!(errors > 0, "threads {threads}, frame {frame}: the panic was not reported ({} pictures)", pics.len());
+            }
+        }
+    }
+
+    #[test]
+    fn dropping_a_busy_decoder_does_not_hang() {
+        let Some(tus) = inter_stream(STREAMS[0]) else { return };
+        for threads in [2, 3, 8, 16] {
+            for cut in [1, 3, tus.len() / 2] {
+                let tus = tus.clone();
+                within_a_minute(move || {
+                    let mut dec = Decoder::with_threads(threads);
+                    for (i, tu) in tus.iter().take(cut).enumerate() {
+                        let _ = dec.decode_pts(tu, i as i64);
+                    }
+                    drop(dec);
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn a_flush_mid_stream_keeps_the_pictures() {
+        let Some(tus) = inter_stream(STREAMS[0]) else { return };
+        let (want, _) = decode_tus(Decoder::with_threads(1), &tus);
+        for threads in [2, 8] {
+            for cut in [2, 5, tus.len() / 2] {
+                let tus = tus.clone();
+                let got = within_a_minute(move || {
+                    let mut dec = Decoder::with_threads(threads);
+                    let mut pics = Vec::new();
+                    for (i, tu) in tus.iter().enumerate() {
+                        if i == cut {
+                            pics.extend(dec.flush_result().expect("flush"));
+                        }
+                        pics.extend(dec.decode_pts(tu, i as i64).expect("decode"));
+                    }
+                    pics.extend(dec.flush_result().expect("flush"));
+                    pics
+                });
+                assert!(got == want, "threads {threads}, flush before unit {cut}");
+            }
+        }
+    }
+
+    #[test]
+    fn progress_wakes_every_waiter_with_the_rows_or_the_failure() {
+        let p = Arc::new(Progress::new());
+        let waiters: Vec<_> = (1..=8)
+            .map(|k| {
+                let p = p.clone();
+                std::thread::spawn(move || p.wait(k * 10))
+            })
+            .collect();
+        p.publish(40);
+        p.publish(20); // never goes back
+        assert_eq!(p.wait(40), Ok(()));
+        p.fail();
+        let res: Vec<_> = waiters.into_iter().map(|w| w.join().expect("waiter")).collect();
+        assert!(res[..4].iter().all(|r| r.is_ok()), "{res:?}");
+        assert!(res[4..].iter().all(|r| r.is_err()), "{res:?}");
+        assert_eq!(p.wait(40), Ok(()), "rows published before a failure stay readable");
+    }
+
+    #[test]
+    fn a_failed_frame_keeps_its_published_parse_results() {
+        let slot = FrameSlot::new(BandFrame::new(16, 16, 1, 0, 0));
+        let parsed = Parsed { cdfs: Cdfs::new(0), segment_ids: vec![], mi_cols: 4, mi_rows: 4, saved_ref_frames: vec![], saved_mvs: vec![] };
+        slot.set_parsed(Ok(Arc::new(parsed)));
+        slot.finish(Err(Error::Invalid("x")), 16);
+        assert!(slot.wait_parsed().is_ok());
+        assert!(slot.wait().is_err());
+        assert!(slot.progress.wait(1).is_err());
+        // A frame failing before its parse results: every waiter gets the error.
+        let slot = FrameSlot::new(BandFrame::new(16, 16, 1, 0, 0));
+        slot.finish(Err(Error::Invalid("y")), 16);
+        assert!(slot.wait_parsed().is_err());
+    }
+
+    fn motion(mi_row: usize, bh4: usize, ref_frame: [i8; 2], mv: [[i32; 2]; 2]) -> crate::av1::decode::tile::BlockMotion {
+        crate::av1::decode::tile::BlockMotion {
+            mi_row,
+            bh4,
+            inter: true,
+            ref_frame,
+            mv,
+            motion_mode: 0,
+            y_mode: crate::av1::decode::spec_tables::NEARESTMV,
+        }
+    }
+
+    #[test]
+    fn rows_needed_follow_the_motion_vectors() {
+        let mut fh = FrameHeader { frame_width: 64, upscaled_width: 64, frame_height: 256, ..Default::default() };
+        fh.ref_frame_idx = [0, 1, 2, 3, 4, 5, 6];
+        let mut ri: [RefInfo; NUM_REF_FRAMES] = Default::default();
+        for r in ri.iter_mut() {
+            (r.upscaled_width, r.frame_height) = (64, 256);
+        }
+        let none = [[0; 2]; 2];
+        // 41/8 rows down rounds up to 6; upward motion needs only the block's own rows.
+        let need = rows_needed(&fh, &ri, [motion(0, 16, [1, -1], [[41, 0], [0, 0]]), motion(0, 16, [2, 3], [[-80, 0], [7, 0]])].into_iter(), 64);
+        assert_eq!(need[0], 64 + 6 + ROW_WAIT_MARGIN);
+        assert_eq!(need[1], 64 + ROW_WAIT_MARGIN);
+        assert_eq!(need[2], 64 + 1 + ROW_WAIT_MARGIN);
+        assert_eq!(need[3], 0);
+        // Intra blocks and intra block copy read no reference.
+        let intra = crate::av1::decode::tile::BlockMotion { inter: false, ..motion(0, 16, [1, -1], none) };
+        assert_eq!(rows_needed(&fh, &ri, [intra].into_iter(), 64), [0; NUM_REF_FRAMES]);
+        // Blocks reaching below the superblock row count from their own bottom.
+        assert_eq!(rows_needed(&fh, &ri, [motion(12, 8, [1, -1], none)].into_iter(), 64)[0], 80 + ROW_WAIT_MARGIN);
+        // Local warp: the whole of every reference the rows use.
+        let warp =
+            crate::av1::decode::tile::BlockMotion { motion_mode: crate::av1::decode::spec_tables::LOCALWARP as u8, ..motion(0, 16, [1, -1], none) };
+        let need = rows_needed(&fh, &ri, [warp, motion(0, 16, [2, -1], none)].into_iter(), 64);
+        assert_eq!((need[0], need[1], need[2]), (usize::MAX, usize::MAX, 0));
+        // Global motion beyond translation for GLOBALMV blocks.
+        fh.gm_type[3] = (TRANSLATION + 1) as u8;
+        let global = crate::av1::decode::tile::BlockMotion { y_mode: GLOBALMV, ..motion(0, 16, [1, -1], none) };
+        assert_eq!(rows_needed(&fh, &ri, [global].into_iter(), 64)[0], usize::MAX);
+        fh.gm_type[3] = 0;
+        // A scaled reference.
+        ri[0].frame_height = 128;
+        assert_eq!(rows_needed(&fh, &ri, [motion(0, 16, [1, -1], none)].into_iter(), 64)[0], usize::MAX);
     }
 
     #[test]
