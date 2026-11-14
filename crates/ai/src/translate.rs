@@ -189,6 +189,9 @@ struct Run<'a> {
     lead: &'a str,
     core: &'a str,
     trail: &'a str,
+    /// False for whitespace-only pieces: never sent to the model, but
+    /// still reassembled into the segment.
+    send: bool,
 }
 
 /// `(leading ws, core, trailing ws)` of `s`, all on char boundaries.
@@ -243,10 +246,9 @@ pub fn translate_segments(provider: &mut dyn Provider, segs: &[Segment], target_
         let Segment::Text(src) = s else { continue };
         for piece in split_run(src, RUN_BYTES) {
             let (lead, core, trail) = ws_edges(piece);
-            if core.is_empty() {
-                continue; // pure whitespace: preserved verbatim already
-            }
-            runs.push(Run { seg: i, lead, core, trail });
+            // Pure-whitespace pieces (possible after a long run is chopped)
+            // keep their bytes in the output but skip the provider.
+            runs.push(Run { seg: i, lead, core, trail, send: !core.is_empty() });
         }
     }
     let run_segs: std::collections::HashSet<usize> = runs.iter().map(|r| r.seg).collect();
@@ -257,15 +259,26 @@ pub fn translate_segments(provider: &mut dyn Provider, segs: &[Segment], target_
     }
     let mut i = 0;
     while i < runs.len() {
+        // Whitespace-only pieces restore verbatim, in order, and never
+        // reach the model.
+        while i < runs.len() && !runs[i].send {
+            let r = &runs[i];
+            out[r.seg].push_str(r.lead);
+            out[r.seg].push_str(r.trail);
+            i += 1;
+        }
         // A batch is bounded by item count *and* total prompt bytes.
         let mut bytes = 0usize;
         let start = i;
-        while i < runs.len() && i - start < BATCH && bytes + runs[i].core.len() <= BATCH_BYTES {
+        while i < runs.len() && runs[i].send && i - start < BATCH && bytes + runs[i].core.len() <= BATCH_BYTES {
             bytes += runs[i].core.len();
             i += 1;
         }
         if i == start {
-            i += 1; // never spin on an oversized single item
+            if i < runs.len() {
+                i += 1; // never spin on an oversized single item
+            }
+            continue;
         }
         let chunk = &runs[start..i];
         let translated = translate_batch(provider, chunk, target_lang)?;
@@ -360,12 +373,12 @@ fn parse_numbered(reply: &str, want: usize) -> Option<Vec<String>> {
 /// number followed by `'.'` or `')'`. Anything else is `None`, so
 /// "Section 2. notes" is a continuation, not item 2.
 fn numbered_line(line: &str) -> Option<usize> {
-    let (num, _) = line.split_once('.').or_else(|| line.split_once(')'))?;
-    let num = num.trim();
-    if num.len() > 3 || num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+    let line = line.trim_start();
+    let digits = line.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits == 0 || digits > 3 || !matches!(line.as_bytes().get(digits), Some(b'.' | b')')) {
         return None;
     }
-    num.parse().ok()
+    line.get(..digits)?.parse().ok()
 }
 
 #[cfg(test)]
@@ -484,6 +497,22 @@ mod tests {
         fn is_local(&self) -> bool {
             true
         }
+    }
+
+    #[test]
+    fn numbered_parse_accepts_paren_markers() {
+        // "1) …" replies contain sentence-ending periods inside items —
+        // the leading delimiter must be picked before inspecting text.
+        let r = "1) Première phrase.\nSuite.\n2) Deuxième élément.";
+        assert_eq!(parse_numbered(r, 2), Some(vec!["Première phrase.\nSuite.".into(), "Deuxième élément.".into()]));
+    }
+
+    #[test]
+    fn whitespace_only_pieces_survive_reconstruction() {
+        let segs = vec![Segment::Text(format!("{}Hello", " ".repeat(RUN_BYTES)))];
+        let mut echo = Echo;
+        let out = translate_segments(&mut echo, &segs, "fr").unwrap_or_default();
+        assert_eq!(out.concat(), format!("{}Hello", " ".repeat(RUN_BYTES)));
     }
 
     #[test]
