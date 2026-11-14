@@ -250,6 +250,26 @@ fn values_set_and_replace_their_properties() {
     assert!(matches!(&page.children[0], PageChild::Other(e) if e.name == "MarginPreference"));
 }
 
+#[test]
+fn spread_rotation_rejects_malformed_transform_coefficients() {
+    let valid = parse_part(br#"<Spread ItemTransform="0 1 -1 0 0 350"/>"#).unwrap();
+    assert_eq!(Spread::from_el(&valid).view_rotation(), 1);
+
+    let malformed = parse_part(br#"<Spread ItemTransform="0 1 x -1 0 0"/>"#).unwrap();
+    assert_eq!(Spread::from_el(&malformed).view_rotation(), 0);
+}
+
+#[test]
+fn text_variable_prefix_and_suffix_come_from_its_preference() {
+    let el = parse_part(
+        br#"<TextVariable Name="Last Page Number" VariableType="LastPageNumberType"><PageNumberVariablePreference TextBefore="of " TextAfter=" pages" Scope="SectionScope"/></TextVariable>"#,
+    )
+    .unwrap();
+    let variable = craft_idml::model::TextVariableValues::from_el(&el);
+    assert_eq!(variable.before, "of ");
+    assert_eq!(variable.after, " pages");
+}
+
 /// Groups nest as deep as the XML reader allows; reading and walking them does not recurse
 /// without bound.
 #[test]
