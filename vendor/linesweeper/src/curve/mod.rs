@@ -1777,6 +1777,29 @@ mod test {
     }
 
     #[test]
+    fn next_touch_after_a_crossing_after_a_touch_that_contains_y() {
+        let mut cmp = CurveOrder::new(0.0);
+        for (end, order) in [
+            (1.0, Order::Ish),
+            (2.0, Order::Left),
+            (3.0, Order::Ish),
+            (4.0, Order::Right),
+        ] {
+            cmp.push(end, order, MetricsStatus::default());
+        }
+
+        let cross = |y: f64| match cmp.next_touch_after(y) {
+            Some(CurveInteraction::Cross(y0, y1)) => (y0, y1),
+            other => panic!("expected a crossing after {y}, got {other:?}"),
+        };
+        // `y` inside the first touch or after it, and the touch from 2 to 3
+        // ends on the right: the curves cross somewhere from 2 to 3.
+        assert_eq!(cross(0.0), (2.0, 3.0));
+        assert_eq!(cross(0.5), (2.0, 3.0));
+        assert_eq!(cross(1.5), (2.0, 3.0));
+    }
+
+    #[test]
     fn next_touch_after_on_two_curves_that_start_together() {
         // The cubic starts on the line, moves left of it and comes back to
         // touch it again near y = 2.4.
