@@ -659,8 +659,8 @@ impl Component for TrackRow<'_> {
         for (at, (key, on_icon, off_icon)) in SWITCHES.iter().enumerate() {
             let (Some(_), Some(on)) = (self.cell(key), self.switch(key)) else { continue };
             let face = ToggleButton::new(switch_name(&words, key), Bind::given(on))
-                .icon(IconSpec::svg(IconId::new(*off_icon)))
-                .on_icon(IconSpec::svg(IconId::new(*on_icon)))
+                .icon(IconSpec::svg(IconId::new(off_icon)))
+                .on_icon(IconSpec::svg(IconId::new(on_icon)))
                 .icon_only()
                 .size(ControlSize::Sm);
             ui.face(SWITCH.at(at as u64), face);

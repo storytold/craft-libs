@@ -551,11 +551,12 @@ impl Outcome for KeyframeLaneOutput {
 
     #[cfg(feature = "screen-testing")]
     fn story_facts(&self) -> craft_ui::testing::StoryOutput {
-        let mut facts = craft_ui::testing::StoryOutput::default();
-        facts.id = Some(self.response.id);
-        facts.clicked = clicked(&self.response);
-        facts.edits = self.delta.iter().filter_map(craft_ui::testing::EditKind::of).collect();
-        facts
+        craft_ui::testing::StoryOutput {
+            id: Some(self.response.id),
+            clicked: clicked(&self.response),
+            edits: self.delta.iter().filter_map(craft_ui::testing::EditKind::of).collect(),
+            ..craft_ui::testing::StoryOutput::default()
+        }
     }
 }
 
