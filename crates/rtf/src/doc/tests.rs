@@ -81,6 +81,20 @@ fn rtl_paragraph_styles_carry_their_direction() {
 }
 
 #[test]
+fn oldpprops_keep_the_old_paragraph_direction() {
+    // A tracked change of direction: now LTR, before RTL (`\rtlpar` in the old properties).
+    let rtf = br"{\rtf1\ansi{\*\revtbl {Unknown;}{Alice;}}
+\pard\ltrpar\prauth1\prdate-2014675576{\*\oldpprops \pard \rtlpar}A\par}";
+    let flow = parse(rtf).unwrap();
+    let Some(FBlock::Para(p)) = flow.blocks.first() else { panic!("no paragraph") };
+    assert!(!p.rtl);
+    assert!(p.fmt_change.as_deref().expect("paragraph change").old.rtl, "old direction is RTL");
+    let doc = import(rtf).unwrap();
+    let c = doc_paras(&doc)[0].props.fmt_change.as_deref().expect("change");
+    assert_eq!(c.old.bidi, Some(true));
+}
+
+#[test]
 fn stylesheet_names_take_unicode_escapes() {
     // \u116?=t \u105?=i \u116?=t \u108?=l \u101?=e — how Word writes a non-Latin style name.
     let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u116?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
