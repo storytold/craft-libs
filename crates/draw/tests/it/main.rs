@@ -2,11 +2,11 @@
 
 // draw-shape
 mod add_beside;
-
-// draw-gradient-a
-mod gradient_bar;
+mod corner;
+mod shape_cells;
 
 // draw-gradient-b
+mod gradient_fill;
 mod gradient_overlay;
 
 // draw-connector
@@ -18,13 +18,17 @@ mod bezier;
 
 // draw-pen-b
 mod pen;
+mod paths_panel;
 
 // draw-crop-b
+mod crop_size;
 mod crop_tool;
 mod perspective_crop;
 
 // draw-bars
+mod artboard;
 mod measure;
+mod slice;
 mod slice_divide;
 
 // draw-stroke
@@ -34,6 +38,8 @@ mod stroke_editor;
 // draw-brush-presets
 mod brush_presets;
 mod brush_size;
+mod paint_bar;
+mod presets;
 
 // draw-transform-a
 mod transform_box;

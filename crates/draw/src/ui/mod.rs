@@ -1,8 +1,9 @@
 //! The draw tools' widgets, for egui.
 //!
-//! - [`gradient`]: the gradient stop bar ([`GradientEditor`]), its palette and swatch, the stop
-//!   rules ([`gradient::stops`]), the on-canvas [`GradientOverlay`] with the geometry of its
-//!   line ([`gradient::gradient_line`]) and the [`GradientMapEditor`].
+//! - [`gradient`]: the gradient palette ([`GradientPalette`]) and swatch, the on-canvas
+//!   [`GradientOverlay`] with the geometry of its line ([`gradient::gradient_line`]), the
+//!   [`GradientMapEditor`] and the [`GradientFillEditor`]. The stop bar and the stop rules are
+//!   craft-color's (`craft_color::ui::gradient`).
 //! - [`pen`]: the `PenDraft` of the Pen tool and the [`BezierOverlay`] that edits paths, with the
 //!   path model they share ([`EditPath`]), and the [`PathOptionsPopover`].
 //! - [`stroke`]: the [`StrokeEditor`], the [`StrokeButton`] that opens it and the [`StrokePreview`].
@@ -22,6 +23,9 @@
 //! - [`pattern`] and [`picture_fill`]: the [`PatternFillEditor`] and [`PictureFillEditor`].
 //! - [`brush_presets`] and [`brush_settings`]: the [`BrushPresetPicker`], `BrushPresetChip` and
 //!   [`BrushSettingsPanel`].
+//! - [`paint_bar`]: the [`PaintBar`] members of the Brush, Pencil, Eraser and Mixer Brush tools.
+//! - [`paths`]: the [`PathsPanel`].
+//! - [`shape_presets`]: the [`ShapeMenu`] of shape presets.
 //!
 //! The main types of each module are also re-exported here.
 
@@ -73,10 +77,10 @@ pub use crop::{
     CropPresetList, CropPresetListOutput, CropSizeTarget, PerspectiveCropBar, PerspectiveCropBarOutput, PerspectiveCropPass, PerspectiveInput,
 };
 pub use crop::{PerspectiveCropQuad, PerspectiveQuad};
+// PLAN: dl.K55 lists GradientRamp among the items that move to craft-color, but writer note 6 keeps it in this line.
 pub use gradient::{
-    ColorStop, GradientEditor, GradientExtent, GradientGroup, GradientItem, GradientLine, GradientMap, GradientMapEditor, GradientMapOutput,
-    GradientOverlay, GradientPalette, GradientRamp, GradientRef, GradientStops, GradientSwatch, LineGradient, LinePart, OpacityStop,
-    Sampler as StopSampler, StopDrop, StopRef, StopRow, StopRows, StopRules, default_sampler,
+    GradientGroup, GradientItem, GradientLine, GradientMap, GradientMapEditor, GradientMapOutput, GradientOverlay, GradientPalette, GradientRamp,
+    GradientRef, GradientSwatch, LineGradient, LinePart,
 };
 pub use gradient::{GradientFill, GradientFillEditor, GradientFillEditorOutput, GradientFillWords, GradientStyle};
 pub use measure::{MIN_LINE, RulerBar, RulerBarOutput, RulerLine, RulerOverlay, RulerPass, RulerTool, RulerWords, box_distances, ruler_line_form};
