@@ -77,7 +77,6 @@ pub(crate) fn gesture_key(id: Id) -> Id {
     crate::runtime::memory::sub(id, "edit")
 }
 
-
 impl<C: Component> Cx<'_, C> {
     fn gesture_slot(&mut self) -> &mut Gesture<ValueOf<C>> {
         let id = gesture_key(self.core.id);

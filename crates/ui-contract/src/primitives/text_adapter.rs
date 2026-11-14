@@ -414,6 +414,15 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
     let typing = shown.focused && state.preedit.is_none() && !input.read_only;
     let at = state.draft.as_deref().filter(|_| typing).map(|text| (text, caret.unwrap_or_else(|| text.chars().count())));
     state.completions.refresh(input.options.complete.as_deref(), at);
+    // An Arrow or Page key on a stepping field (`steps_value`) with an unapplied draft applies the draft in this pass,
+    // so the step the component takes next starts from the committed value, not from the value before the typing.
+    let stepped = shown.focused
+        && !input.read_only
+        && input.options.steps_value
+        && !input.options.multiline()
+        && state.preedit.is_none()
+        && state.draft.is_some()
+        && ctx.input(|i| [egui::Key::ArrowUp, egui::Key::ArrowDown, egui::Key::PageUp, egui::Key::PageDown].into_iter().any(|key| i.key_pressed(key)));
     let submitted =
         (shown.entered && shown.focused).then(|| held_mods(ctx)).filter(|mods| !input.options.multiline() || (input.options.submits && mods.cmd));
     if let Some(mods) = submitted {
@@ -423,6 +432,8 @@ pub(crate) fn run(state: &mut TextState, mut input: AdapterIn<'_>) -> AdapterOut
             input.intents.take(Intent::SubmitForce);
         }
     } else if separated {
+        state.end = Some(End::Separator);
+    } else if stepped && state.end.is_none() {
         state.end = Some(End::Separator);
     } else if shown.lost_focus && !input.held && state.draft.is_some() && state.end.is_none() {
         state.end = Some(End::Blur);
