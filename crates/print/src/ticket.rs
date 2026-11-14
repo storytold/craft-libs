@@ -820,6 +820,19 @@ mod tests {
         assert!(!ticket_xml(&Job { printer: Some("Office \"east\" <1>".into()), ..Job::default() }, false).contains("east"));
     }
 
+    /// storytold/pdfcraft#7207: whatever the job's scaling, the Windows ticket asks the driver for
+    /// no scaling (Print Schema `PageScaling` = `None`), never a fit to the printable area. Shrink
+    /// to fit is done on the sheets themselves (`sheets::Fit::Shrink`), not by the driver.
+    #[test]
+    fn the_ticket_asks_the_driver_for_no_scaling() {
+        let no_scaling = r#"<psf:Feature name="psk:PageScaling"><psf:Option name="psk:None"/></psf:Feature>"#;
+        for scaling in [crate::Scaling::Exact, crate::Scaling::ShrinkToFit] {
+            let xml = ticket_xml(&Job { scaling, ..Job::default() }, false);
+            assert_eq!(xml.matches("PageScaling").count(), 1, "{scaling:?}: one scaling feature");
+            assert!(xml.contains(no_scaling), "{scaling:?}: {xml}");
+        }
+    }
+
     /// A ticket written for these tests in the shape of a converted driver dialog's settings: the
     /// job-scope schema features, a custom paper with its parameters, pages per sheet, binding
     /// and a poster, a media type, a vendor's quality and the driver's private settings.
