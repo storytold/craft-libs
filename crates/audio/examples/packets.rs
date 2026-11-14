@@ -1,7 +1,7 @@
 //! Demux an MP4 with craft-media and decode its audio packets with `TrackDecoder`: what an app
 //! with its own container code (or a network stream) does instead of `decode`.
 //!
-//! `cargo run -p craft-audio --example packets --features decode -- clip.mov`
+//! `cargo run -p craft-audio --example packets --features decode -- clip.m4a`
 
 use craft_audio::TrackDecoder;
 use craft_media::isobmff;
@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let params = t.codec_params();
 
     let packets: Vec<Vec<u8>> = (0..t.samples.len()).map(|i| file.read_sample(bytes.as_slice(), track, i)).collect::<Result<_, _>>()?;
-    // Codecs that find their configuration in the stream read it from the first packets.
+    // The first packets reveal HE-AAC that the configuration does not announce.
     let lookahead: Vec<&[u8]> = packets.iter().take(craft_audio::LOOKAHEAD_PACKETS).map(Vec::as_slice).collect();
     let mut dec = TrackDecoder::new(&params, &lookahead)?;
     println!("{} {} Hz {}", dec.codec().name(), dec.sample_rate(), dec.layout());

@@ -211,7 +211,8 @@ mod tests {
     #[test]
     fn file_sources_read_like_a_buffer() {
         let v: Vec<u8> = (0..=255).collect();
-        let path = std::env::temp_dir().join(format!("craft-media-source-{}.bin", std::process::id()));
+        let dir = craft_media_testkit::private_dir("source");
+        let path = dir.join("source.bin");
         std::fs::write(&path, &v).unwrap();
         let f = std::fs::File::open(&path).unwrap();
         let r = ReadSeekSource::new(std::fs::File::open(&path).unwrap()).unwrap();
@@ -230,7 +231,7 @@ mod tests {
             }
         }
         drop((f, r)); // Windows deletes no open file
-        std::fs::remove_file(&path).ok();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

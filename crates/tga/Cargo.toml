@@ -1,0 +1,14 @@
+[package]
+name = "craft-tga"
+description = "Clean-room Truevision Targa (TGA) reader and run-length writer: true-colour, grayscale and colour-mapped pictures, any origin, packets that end with their scan line."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }

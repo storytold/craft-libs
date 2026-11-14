@@ -21,7 +21,10 @@ fn streamed(buf: &AudioBuffer, opts: &EncodeOptions) -> Vec<u8> {
         enc.write(&block, len).unwrap();
         start += len;
     }
-    enc.finish().unwrap().into_inner()
+    let out = enc.finish().unwrap();
+    // the sink is left at the end of the file
+    assert_eq!(out.position(), out.get_ref().len() as u64);
+    out.into_inner()
 }
 
 #[test]
@@ -33,6 +36,9 @@ fn streamed_files_match_whole_buffer_encodes() {
         (EncodeFormat::Wav, BitDepth::Int16, true, Some(bwf), Some(ChannelLayout::SURROUND_5_1_SIDE)),
         (EncodeFormat::Aiff, BitDepth::Int24, true, None, None),
         (EncodeFormat::Aiff, BitDepth::Float32, false, None, None),
+        (EncodeFormat::Flac, BitDepth::Int16, true, None, None),
+        (EncodeFormat::Flac, BitDepth::Int24, false, None, None),
+        (EncodeFormat::Flac, BitDepth::Int16, false, None, Some(ChannelLayout::SURROUND_5_1_SIDE)),
     ];
     for (format, bit_depth, dither, bwf, layout) in cases {
         let base = EncodeOptions::new(format).with_bit_depth(bit_depth).with_dither(dither);
@@ -84,14 +90,14 @@ impl Seek for FailAfter {
 #[test]
 fn a_failed_write_poisons_the_encoder() {
     let buf = tone(2, 20_001);
-    for format in [EncodeFormat::Wav, EncodeFormat::Aiff] {
+    for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
         let opts = EncodeOptions::new(format).with_bit_depth(BitDepth::Int16).with_dither(false);
         let sink = FailAfter { inner: Cursor::new(Vec::new()), budget: 256 };
         let mut enc = FileEncoder::new(sink, &opts, buf.sample_rate, 2).unwrap();
         // The sink accepts a prefix of the first block, then fails.
         assert!(enc.write(&buf.channels, buf.frames()).is_err(), "{format:?}");
         // Later calls must not claim success: the bytes on the sink no longer match the
-        // encoder's counters.
+        // encoder's counters (and for FLAC the failed frame's samples are already gone).
         assert!(matches!(enc.write(&buf.channels, 16), Err(AudioError::Encode(_))), "{format:?}");
         assert!(matches!(enc.finish(), Err(AudioError::Encode(_))), "{format:?}");
     }
@@ -100,14 +106,17 @@ fn a_failed_write_poisons_the_encoder() {
 #[test]
 fn blocks_past_a_format_limit_are_refused_before_anything_is_written() {
     let buf = tone(2, 100);
-    // AIFF sizes are 32-bit: 4 GiB of 16-bit stereo.
-    {
-        let (format, limit) = (EncodeFormat::Aiff, 1u64 << 30);
+    for (format, limit) in [(EncodeFormat::Aiff, 1u64 << 30), (EncodeFormat::Flac, 1u64 << 36)] {
         let opts = EncodeOptions::new(format).with_bit_depth(BitDepth::Int16).with_dither(false);
         let mut enc = FileEncoder::new(Cursor::new(Vec::new()), &opts, buf.sample_rate, 2).unwrap();
         enc.write(&buf.channels, 100).unwrap();
         assert!(enc.check_room(limit / 2).is_ok(), "{format:?}");
         assert!(matches!(enc.check_room(limit), Err(AudioError::TooLarge(_))), "{format:?}");
+        if format == EncodeFormat::Flac {
+            // 100 frames are in: STREAMINFO counts up to 2^36 - 1 in all.
+            assert!(enc.check_room(limit - 101).is_ok());
+            assert!(matches!(enc.check_room(limit - 100), Err(AudioError::TooLarge(_))));
+        }
         // A block that does not hold the frames it claims is refused before the limit is checked.
         if let Ok(frames) = usize::try_from(limit) {
             assert!(matches!(enc.write::<Vec<f32>>(&[], frames), Err(AudioError::Encode(_))), "{format:?}");
@@ -165,7 +174,7 @@ fn decoder_reads_any_read_seek_source_and_reports_source_failures() {
 fn seeking_to_or_past_the_end_ends_the_stream() {
     use craft_audio::{DecodeOptions, Decoder};
     let buf = tone(2, 4800);
-    for format in [EncodeFormat::Wav, EncodeFormat::Aiff] {
+    for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
         let file = encode(&buf, &EncodeOptions::new(format).with_bit_depth(BitDepth::Int16)).unwrap();
         for target in [4800, 4801, 1_000_000] {
             let mut dec = Decoder::from_bytes(&file, None, &DecodeOptions::default()).unwrap();
@@ -173,8 +182,16 @@ fn seeking_to_or_past_the_end_ends_the_stream() {
             assert!(dec.next_block().unwrap().is_none(), "{format:?} seek({target})");
             // Seeking back still works.
             assert_eq!(dec.seek(4000).unwrap(), 4000, "{format:?}");
-            let left: usize = std::iter::from_fn(|| dec.next_block().unwrap()).map(|b| b.frames()).sum();
-            assert_eq!(left, 800, "{format:?}");
+            let mut left = vec![Vec::new(); buf.channels.len()];
+            while let Some(b) = dec.next_block().unwrap() {
+                for (l, c) in left.iter_mut().zip(b.channels) {
+                    l.extend(c);
+                }
+            }
+            for (l, source) in left.iter().zip(&buf.channels) {
+                assert_eq!(l.len(), 800, "{format:?}");
+                assert!(l.iter().zip(&source[4000..]).all(|(a, b)| (a - b.clamp(-1.0, 1.0)).abs() <= 2.0 / 32768.0), "{format:?}");
+            }
         }
     }
 }

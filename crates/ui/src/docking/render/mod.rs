@@ -163,6 +163,20 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         self.content.logical_label(panel)
     }
 
+    /// The accessible name of the handle that moves the group showing `shown`.
+    pub(super) fn move_group_name(&self, shown: &P) -> String {
+        super::labels::named(&self.style.move_group_label, super::labels::MOVE_GROUP, || self.label_of(shown))
+    }
+
+    /// The accessible name of `column`'s bar: its groups' shown panels that have a title name it.
+    pub(super) fn move_column_name(&self, column: &super::Column<P>) -> String {
+        super::labels::named(&self.style.move_column_label, super::labels::MOVE_COLUMN, || {
+            let shown = column.groups.iter().filter_map(|g| g.active_panel().or(g.panels.first()));
+            let titles: Vec<String> = shown.map(|panel| self.label_of(panel).trim().to_owned()).filter(|title| !title.is_empty()).collect();
+            titles.join(", ")
+        })
+    }
+
     pub(super) fn permissions(&self, panel: &P) -> Permissions {
         let permissions = self.content.permissions(panel);
         if self.locked { permissions.locked() } else { permissions }

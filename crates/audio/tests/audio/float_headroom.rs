@@ -89,7 +89,7 @@ fn float32_keeps_non_finite_sample_handling() {
 fn integer_pcm_still_clips_at_full_scale() {
     let audio = AudioBuffer { sample_rate: 48_000, channels: vec![vec![-2.0, -1.25, -1.0, -0.5, 0.0, 0.5, 1.0, 1.25, 2.0]] };
     for (depth, max) in [(BitDepth::Int16, 32767.0 / 32768.0), (BitDepth::Int24, 8_388_607.0 / 8_388_608.0), (BitDepth::Int32, 1.0)] {
-        for format in [EncodeFormat::Wav, EncodeFormat::Aiff] {
+        for format in [EncodeFormat::Wav, EncodeFormat::Aiff, EncodeFormat::Flac] {
             for streaming in [false, true] {
                 let options = EncodeOptions::new(format).with_bit_depth(depth).with_dither(false);
                 let bytes = encoded(&audio, &options, streaming);

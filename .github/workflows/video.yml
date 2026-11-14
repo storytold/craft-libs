@@ -1,0 +1,80 @@
+name: Shared video
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/video/**", "crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/video.yml"]
+  pull_request:
+    paths: ["crates/video/**", "crates/media/**", "crates/media-testkit/**", "Cargo.toml", "Cargo.lock", ".github/workflows/video.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shared-video-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    timeout-minutes: 20
+    name: Video lint, feature sets, docs, WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: "1.95"
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+        with:
+          key: craft-video-lint
+      - run: cargo fmt -p craft-video --check
+      # Each feature on its own, so code that needs another feature fails here.
+      - name: Clippy, each feature alone
+        run: |
+          for f in "" dnx vp8 prores h264 hevc vp9 vp9-decode vp9-encode av1 threads; do
+            echo "::group::features: ${f:-none}"
+            cargo clippy -p craft-video --all-targets --locked --no-default-features ${f:+--features "$f"} -- -D warnings
+            echo "::endgroup::"
+          done
+      - run: cargo clippy -p craft-video --all-targets --locked --all-features -- -D warnings
+      - run: cargo doc -p craft-video --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+      - run: cargo check -p craft-video --all-features --locked --target wasm32-unknown-unknown
+  test:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    name: Video tests (${{ matrix.os }})
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+        with:
+          toolchain: "1.95"
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+        with:
+          key: craft-video-${{ matrix.os }}
+      - name: Install ffmpeg (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
+      - run: cargo test -p craft-video --all-features --locked

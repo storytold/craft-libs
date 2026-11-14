@@ -1,4 +1,6 @@
-use craft_pcraft_format::{COMPOSITE, Error, FORMAT_VERSION, Limits, Manifest, Step, THUMB, TileRef, read_manifest, read_manifest_with};
+use craft_pcraft_format::{
+    COMPOSITE, Error, FORMAT_VERSION, FULL_COMPOSITE, Limits, Manifest, Step, THUMB, TileRef, read_manifest, read_manifest_with,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -33,6 +35,22 @@ fn a_manifest_reads_with_its_previews_and_document() {
     assert_eq!(m.document.tiles, vec![TileRef::new(0, -1, "x".into())]);
     assert_eq!(m.thumbnail.as_deref(), Some("thumb.png"));
     assert_eq!(m.composite, None);
+}
+
+#[test]
+fn a_full_composite_has_one_fixed_path_and_may_be_absent() {
+    for full in [Value::Null, json!(FULL_COMPOSITE)] {
+        let json = json!({"format_version": 1, "generator": "g", "document": {"name": "a"}, "full_composite": full});
+        assert_eq!(read(json.to_string().as_bytes()).unwrap().full_composite.as_deref(), full.as_str());
+    }
+    for path in ["../full.png", "composite/preview.png", "/composite/full.png", "composite/FULL.png"] {
+        let json = json!({"format_version": 1, "generator": "g", "document": {"name": "a"}, "full_composite": path});
+        assert!(matches!(read(json.to_string().as_bytes()), Err(Error::Corrupt(_))), "{path}");
+    }
+    for full in [json!(1), json!([]), json!({})] {
+        let json = json!({"format_version": 1, "generator": "g", "document": {"name": "a"}, "full_composite": full});
+        assert!(matches!(read(json.to_string().as_bytes()), Err(Error::Json(_))));
+    }
 }
 
 #[test]

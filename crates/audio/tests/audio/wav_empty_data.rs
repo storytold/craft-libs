@@ -85,3 +85,21 @@ fn a_data_chunk_with_audio_is_unchanged() {
     let file = riff(&[chunk(b"fmt ", &fmt16(1, 44_100)), chunk(b"data", &samples), list_info()]);
     assert_eq!(probe(&file, Some("wav")).unwrap().frames, 100);
 }
+/// Whether an empty `data` chunk is followed by chunks alone is decided by walking the rest of the
+/// file. Doing that for every empty `data` chunk made parsing quadratic in their number (minutes
+/// for this 4 MB file); only the first one is used.
+#[test]
+fn many_empty_data_chunks_parse_in_linear_time() {
+    let mut b = b"RIFF\0\0\0\0WAVEfmt \x10\0\0\0".to_vec();
+    b.extend_from_slice(&[1, 0, 1, 0, 0x80, 0xBB, 0, 0, 0, 0x77, 1, 0, 2, 0, 16, 0]);
+    b.extend_from_slice(&b"data\0\0\0\0".repeat(100_000));
+    b.extend_from_slice(&b"junk\0\0\0\0".repeat(400_000));
+    let n = (b.len() - 8) as u32;
+    b[4..8].copy_from_slice(&n.to_le_bytes());
+    let t = std::time::Instant::now();
+    let info = probe(&b, Some("wav")).unwrap();
+    assert!(t.elapsed() < std::time::Duration::from_secs(20), "parse took {:?}", t.elapsed());
+    // The chunks after the first empty `data` chunk are metadata, not samples.
+    assert_eq!(info.frames, 0);
+    assert_eq!(decode(&b, Some("wav")).unwrap().1.frames(), 0);
+}

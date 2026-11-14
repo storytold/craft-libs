@@ -23,6 +23,7 @@ thiserror = { workspace = true }
 
 # The store and the network are native only; the web keeps fonts elsewhere.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cap-primitives = "4.0.3"
 craft-atomic = { workspace = true }
 craft-font-catalog = { workspace = true }
 log = "0.4"

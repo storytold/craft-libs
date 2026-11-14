@@ -17,7 +17,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
 use craft_font_catalog::{Catalog, FontEnv, font_store_dir};
@@ -218,6 +218,8 @@ pub struct FontStore {
     caller: Caller,
     client: Client,
     catalog: Option<Arc<Catalog>>,
+    pub(crate) pack_removal_cursor: AtomicUsize,
+    pub(crate) pack_removal_round_end: AtomicUsize,
 }
 
 impl std::fmt::Debug for FontStore {
@@ -240,7 +242,14 @@ impl FontStore {
 
     /// A store in `dir`.
     pub fn new(dir: PathBuf, caller: Caller) -> Self {
-        Self { dir, caller, client: Client::default(), catalog: None }
+        Self {
+            dir,
+            caller,
+            client: Client::default(),
+            catalog: None,
+            pack_removal_cursor: AtomicUsize::new(0),
+            pack_removal_round_end: AtomicUsize::new(0),
+        }
     }
 
     /// Uses `client` for downloads (other timeouts).
@@ -718,6 +727,7 @@ impl FontStore {
         std::fs::create_dir_all(&self.dir).map_err(io("creating the font store folder"))?;
         let file = File::options().create(true).truncate(false).write(true).open(self.dir.join(LOCK)).map_err(io("locking the font store"))?;
         file.lock().map_err(io("locking the font store"))?;
+        self.sweep_committed_pack_removals();
         Ok(file)
     }
 
@@ -831,29 +841,101 @@ fn host(url: &str) -> &str {
     url.split("://").nth(1).and_then(|r| r.split('/').next()).unwrap_or(url)
 }
 
-/// A folder of downloads under `.staging`, deleted when dropped.
+/// A temporary folder, deleted when dropped unless kept for recovery.
 pub(crate) struct Stage {
     pub(crate) dir: PathBuf,
+    remove_on_drop: bool,
+    recovery_cleanup: Option<crate::language_packs::PackRemovalRoot>,
 }
 
 impl Stage {
     pub(crate) fn new(store: &Path) -> Result<Self, Error> {
+        Self::in_dir(&store.join(STAGING))
+    }
+
+    pub(crate) fn in_dir(staging: &Path) -> Result<Self, Error> {
+        Self::in_dir_excluding(staging, &[])
+    }
+
+    pub(crate) fn in_dir_excluding(staging: &Path, excluded: &[String]) -> Result<Self, Error> {
+        Self::create_in(staging, excluded, Self::names())
+    }
+
+    fn names() -> impl Iterator<Item = String> {
         static N: AtomicU64 = AtomicU64::new(0);
-        let staging = store.join(STAGING);
-        std::fs::create_dir_all(&staging).map_err(io("creating a download folder"))?;
+        std::iter::repeat_with(|| format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
+    }
+
+    /// A Language pack recovery stage, created and opened through the retained recovery folder.
+    /// `staging` is that folder's display path.
+    pub(crate) fn recovery_in(staging: &Path, excluded: &[String], root: crate::language_packs::PackRemovalRoot) -> Result<Self, Error> {
+        let stage = Self::create_with(staging, excluded, Self::names(), |name| root.create_stage(name))?;
+        stage.keep_for_recovery().with_recovery_cleanup(root)
+    }
+
+    pub(crate) fn valid_name(name: &str) -> bool {
+        name.split_once('-').is_some_and(|(pid, counter)| pid.parse::<u32>().is_ok() && counter.parse::<u64>().is_ok())
+    }
+
+    /// Allow distinct receipt exclusions in addition to 1,000 filesystem candidates.
+    /// Bound total iterator reads too, including repeated excluded or malformed names.
+    pub(crate) fn create_in(staging: &Path, excluded: &[String], names: impl Iterator<Item = String>) -> Result<Self, Error> {
+        std::fs::create_dir_all(staging).map_err(io("creating a temporary folder"))?;
+        Self::create_with(staging, excluded, names, |name| std::fs::create_dir(staging.join(name)))
+    }
+
+    /// Take the first free name that `create` makes a folder for; `staging` is the display parent.
+    fn create_with(
+        staging: &Path,
+        excluded: &[String],
+        names: impl Iterator<Item = String>,
+        mut create: impl FnMut(&str) -> std::io::Result<()>,
+    ) -> Result<Self, Error> {
         // A folder of that name may be another process's (PID namespaces in Flatpak or
         // containers repeat ids) or a stale one: never touched here, the next name is taken
-        // (stale ones go in `sweep_staging`).
+        // (`sweep_staging` handles ordinary download staging, not recovery folders).
         let mut last = None;
-        for _ in 0..1000 {
-            let dir = staging.join(format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
-            match std::fs::create_dir(&dir) {
-                Ok(()) => return Ok(Self { dir }),
+        let mut candidates = 0;
+        let excluded: std::collections::HashSet<&str> = excluded.iter().map(String::as_str).collect();
+        for name in names.take(1000usize.saturating_add(excluded.len())) {
+            if !Self::valid_name(&name) || excluded.contains(name.as_str()) {
+                continue;
+            }
+            if candidates == 1000 {
+                break;
+            }
+            candidates += 1;
+            match create(&name) {
+                Ok(()) => return Ok(Self { dir: staging.join(name), remove_on_drop: true, recovery_cleanup: None }),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
-                Err(e) => return Err(io("creating a download folder")(e)),
+                Err(e) => return Err(io("creating a temporary folder")(e)),
             }
         }
-        Err(io("creating a download folder")(last.unwrap_or_else(|| std::io::Error::other("no free name"))))
+        Err(io("creating a temporary folder")(last.unwrap_or_else(|| std::io::Error::other("no free name"))))
+    }
+
+    /// The caller places recovery data outside the ordinary download staging sweep.
+    pub(crate) fn keep_for_recovery(mut self) -> Self {
+        self.remove_on_drop = false;
+        self
+    }
+
+    /// Recovery stages delete through a retained capability, never through their display path.
+    pub(crate) fn with_recovery_cleanup(mut self, root: crate::language_packs::PackRemovalRoot) -> Result<Self, Error> {
+        let id = self
+            .dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| Self::valid_name(name))
+            .ok_or_else(|| io("opening the Language pack recovery stage")(std::io::Error::other("invalid recovery ID")))?;
+        self.recovery_cleanup = Some(root.with_stage(id).map_err(io("opening the Language pack recovery stage"))?);
+        self.remove_on_drop = true;
+        Ok(self)
+    }
+
+    /// Borrow the capability used for recovery moves, rollback, and eventual cleanup.
+    pub(crate) fn recovery_root(&self) -> std::io::Result<&crate::language_packs::PackRemovalRoot> {
+        self.recovery_cleanup.as_ref().ok_or_else(|| std::io::Error::other("missing recovery capability"))
     }
 
     /// Writes a verified download as `<name>.part`, which no font scan picks up.
@@ -870,8 +952,19 @@ impl Stage {
 }
 
 impl Drop for Stage {
+    /// Recovery cleanup uses its retained capability; ordinary download staging keeps its policy.
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        if self.remove_on_drop {
+            if let Some(root) = self.recovery_cleanup.take() {
+                if let Some(id) = self.dir.file_name().and_then(|name| name.to_str()).filter(|name| Self::valid_name(name))
+                    && let Some(parent) = self.dir.parent()
+                {
+                    let _ = root.remove_stage(id, parent);
+                }
+            } else {
+                let _ = std::fs::remove_dir_all(&self.dir);
+            }
+        }
     }
 }
 
