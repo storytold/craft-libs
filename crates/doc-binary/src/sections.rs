@@ -1,7 +1,6 @@
 //! Sections and headers/footers: `PlcfSed` → `Sed` → `Sepx` (grpprls of section sprms) and
 //! the `Plcfhdd` stories of the header subdocument ([MS-DOC] §2.8.25, §2.9.244).
 
-use craft_wordmodel::section::NumFormat;
 use craft_wordmodel::section::{Columns, SectionProps, SectionStart};
 
 use crate::fib::{Fib, pair};
@@ -14,7 +13,10 @@ const MAX_SECTIONS: usize = 1024;
 const S_BKC: u16 = 0x3009;
 const S_TITLE_PAGE: u16 = 0x300A; // sprmSFTitlePage
 const S_CCOLUMNS: u16 = 0x500B;
-const S_PGN_START: u16 = 0x300C; // sprmSPgnStart
+const S_NFC_PGN: u16 = 0x300E; // sprmSNfcPgn
+const S_PGN_RESTART: u16 = 0x3011; // sprmSFPgnRestart
+const S_PGN_START97: u16 = 0x501C; // sprmSPgnStart97
+const S_PGN_START: u16 = 0x7044; // sprmSPgnStart
 const S_ORIENTATION: u16 = 0x301D; // sprmSBOrientation
 const S_HDR_TOP: u16 = 0xB017;
 const S_HDR_BOTTOM: u16 = 0xB018;
@@ -50,6 +52,7 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
         let mut props = SectionProps::default();
         // Sepx: cb u16, then a grpprl of section sprms.
         let mut explicit_orient = false;
+        let mut numbers = PageNumbers::default();
         if let Some(grpprl) =
             word.get(fc_sepx as usize..).and_then(|sepx| sepx.get(..2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)).and_then(|cb| {
                 let at = (fc_sepx as usize).checked_add(2)?;
@@ -62,9 +65,11 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
                 if prl.op == S_ORIENTATION && matches!(prl.operand.first(), Some(1 | 2)) {
                     explicit_orient = true;
                 }
+                numbers.note(&prl);
                 apply_section(&mut props, &prl);
             }
         }
+        props.page_num_start = numbers.start();
         // Without an explicit orientation sprm, infer it from the page shape.
         if !explicit_orient {
             if props.page_w < props.page_h {
@@ -76,6 +81,34 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
         out.push(Section { end_cp, props });
     }
     out
+}
+
+/// A section's page-number restart and start, which are read together: [MS-DOC] counts the start
+/// only when the section restarts its numbering. Word writes the start twice when it restarts, as
+/// `sprmSPgnStart97` (16 bits, capped at 32766) and `sprmSPgnStart` (32 bits), and reads the
+/// 32-bit one: a start of 40000 is stored as 32766 and 40000, and Word shows 40000.
+#[derive(Default)]
+struct PageNumbers {
+    restart: bool,
+    start97: Option<u16>,
+    start: Option<u32>,
+}
+
+impl PageNumbers {
+    fn note(&mut self, prl: &Prl) {
+        match (prl.op, prl.operand) {
+            (S_PGN_RESTART, [v, ..]) => self.restart = *v != 0,
+            (S_PGN_START97, [a, b, ..]) => self.start97 = Some(u16::from_le_bytes([*a, *b])),
+            (S_PGN_START, [a, b, c, d, ..]) => self.start = Some(u32::from_le_bytes([*a, *b, *c, *d])),
+            _ => {}
+        }
+    }
+
+    /// The section's first page number, when it restarts its numbering ([MS-DOC]: 0 when no
+    /// start is given).
+    fn start(&self) -> Option<u32> {
+        self.restart.then(|| self.start.or(self.start97.map(u32::from)).unwrap_or(0))
+    }
 }
 
 /// Apply a section sprm to the model's section properties. All the measurement sprms here
@@ -106,10 +139,10 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
                 s.columns = Columns { count: (c as u32).saturating_add(1).min(44), ..Default::default() };
             }
         }
-        S_PGN_START => {
-            if let Some(v) = s16(prl) {
-                s.page_num_start = Some(v.max(0) as u32);
-                s.page_num_format = NumFormat::Decimal;
+        // An MSONFC ([MS-OSHARED] §2.2.1.3), as in a list level.
+        S_NFC_PGN => {
+            if let Some(&nfc) = prl.operand.first() {
+                s.page_num_format = crate::list::num_format(nfc);
             }
         }
         // SBOrientationOperand ([MS-DOC] §2.9.236): 1 portrait, 2 landscape.

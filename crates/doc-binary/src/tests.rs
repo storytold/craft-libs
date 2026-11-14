@@ -2171,6 +2171,42 @@ fn section_break_kinds_imported() {
     }
 }
 
+/// A one-section document's page-number start and format from its SEPX sprms.
+fn page_numbers(prls: &[(u16, &[u8])]) -> (Option<u32>, craft_wordmodel::section::NumFormat) {
+    let doc = read(&struct_doc(&one_section("Text\r", grpprl(prls), vec![(0, 0, Vec::new())]))).expect("opens");
+    (doc.last_section.page_num_start, doc.last_section.page_num_format)
+}
+
+#[test]
+fn a_section_restarting_its_page_numbers_takes_its_start_and_format() {
+    // The sprms Word 2016 writes in a .doc for "restart at 5, i, ii, iii": sprmSNfcPgn 2 (lower
+    // roman), sprmSFPgnRestart 1, sprmSPgnStart97 5 and sprmSPgnStart 5. Word reads it back as
+    // <w:pgNumType w:fmt="lowerRoman" w:start="5"/>.
+    use craft_wordmodel::section::NumFormat;
+    let prls: &[(u16, &[u8])] = &[(0x300E, &[2]), (0x3011, &[1]), (0x501C, &5u16.to_le_bytes()), (0x7044, &5u32.to_le_bytes())];
+    assert_eq!(page_numbers(prls), (Some(5), NumFormat::LowerRoman));
+}
+
+#[test]
+fn a_page_number_start_past_16_bits_comes_from_the_32_bit_sprm() {
+    // Word stores a start of 40000 as sprmSPgnStart97 32766 (its cap) and sprmSPgnStart 40000, and
+    // shows 40000.
+    let prls: &[(u16, &[u8])] = &[(0x3011, &[1]), (0x501C, &32766u16.to_le_bytes()), (0x7044, &40000u32.to_le_bytes())];
+    assert_eq!(page_numbers(prls).0, Some(40000));
+    // Only the 16-bit one: it is the start.
+    assert_eq!(page_numbers(&[(0x3011, &[1]), (0x501C, &7u16.to_le_bytes())]).0, Some(7));
+}
+
+#[test]
+fn a_page_number_start_counts_only_when_the_section_restarts() {
+    // [MS-DOC]: sprmSPgnStart97/sprmSPgnStart MUST be ignored without sprmSFPgnRestart. Word writes
+    // "continue, A, B, C" as sprmSNfcPgn 3 alone; it reads <w:pgNumType w:fmt="upperLetter"/>.
+    use craft_wordmodel::section::NumFormat;
+    assert_eq!(page_numbers(&[(0x300E, &[3])]), (None, NumFormat::UpperLetter));
+    assert_eq!(page_numbers(&[(0x501C, &5u16.to_le_bytes()), (0x7044, &5u32.to_le_bytes())]).0, None);
+    assert_eq!(page_numbers(&[(0x3011, &[0]), (0x7044, &5u32.to_le_bytes())]).0, None);
+}
+
 #[test]
 fn explicit_section_orientation_imported() {
     // #460. SBOrientationOperand ([MS-DOC] §2.9.236): 1 portrait, 2 landscape.
