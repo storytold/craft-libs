@@ -66,19 +66,23 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 
 | Field | Default | Checked by |
 |---|---|---|
-| `max_vertices` | 20,000,000 | every slice function, `try_subdivided`, the `try_` primitives |
-| `max_triangles` | 20,000,000 | the same, and `Bvh::from_slices` |
+| `max_vertices` | 20,000,000 | every slice function, `try_subdivided`, the `try_` primitives, `UvGBuffer::try_new`, `unwrap::auto_unwrap` (input and output) |
+| `max_triangles` | 20,000,000 | the same except `auto_unwrap`, and `Bvh::from_slices`; the UV G-buffer also counts a triangle again each time another submesh of the material lists it |
 | `max_segments` | 2,048 | the `try_` primitives (segments, rings or subdivisions along one direction, after a count under the primitive's minimum is raised to it; a box face has 12, or 22 with a bevel) |
 | `max_gbuffer_side` | 8,192 | `UvGBuffer::try_new`, `UvGBuffer::from_slices`; `UvGBuffer::new` clamps each side to `1..=8192` |
 | `max_gbuffer_texels` | 2^26 (8,192 × 8,192) | the same |
-| `max_unwrap_triangles` | 4,000,000 | `unwrap_uvs` |
+| `max_gbuffer_work` | 2^32 | the same: the texels the rasterizer visits, summed over each triangle's bounding box clipped to the buffer |
+| `max_gbuffer_bin_entries` | 2^26 | the same: one entry per triangle for each band of 32 rows its clipped box reaches |
+| `max_unwrap_triangles` | 4,000,000 | `unwrap_uvs` and `unwrap::auto_unwrap`, for the mesh's triangles and for the triangles its submeshes list |
 
 A BVH holds at most `bvh::MAX_BVH_TRIANGLES` (2^31 − 1) triangles.
 
 `Bvh::from_slices`, `Bvh::try_new`, `UvGBuffer::try_new` and `UvGBuffer::from_slices` reserve all
 their memory before using it, and the other slice functions reserve the arrays they return; each
-returns `MeshOpsError::OutOfMemory` when that fails. `Bvh::new` then returns an empty tree and
-`UvGBuffer::new` a 1 × 1 uncovered buffer. The working memory of normals, tangents (MikkTSpace)
+returns `MeshOpsError::OutOfMemory` when that fails. The UV G-buffer checks its work and band
+entries in a first pass over the triangles and reserves its band lists in one piece before the
+second. `Bvh::new` then returns an empty tree and `UvGBuffer::new` a 1 × 1 uncovered buffer.
+`UvGBuffer::new` also returns that buffer when the input is over a default limit. The working memory of normals, tangents (MikkTSpace)
 and unwrapping is a fixed multiple of the input the limits allow and is not reserved that way.
 
 ## Origin

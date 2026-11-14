@@ -71,8 +71,9 @@ fn texels(width: u32, height: u32, limits: &Limits) -> Result<usize> {
 
 impl UvGBuffer {
     /// Rasterize the triangles of material `material` at `width × height`, each side clamped to
-    /// `1..=8192` (the default [`Limits::max_gbuffer_side`]). When the memory for that size
-    /// cannot be reserved, the buffer is 1 × 1 and uncovered.
+    /// `1..=8192` (the default [`Limits::max_gbuffer_side`]). When the mesh is over another
+    /// default [`Limits`] field or the memory for that size cannot be reserved, the buffer is
+    /// 1 × 1 and uncovered.
     pub fn new(mesh: &Mesh, material: usize, width: u32, height: u32) -> UvGBuffer {
         let side = Limits::default().max_gbuffer_side;
         let (w, h) = (width.clamp(1, side), height.clamp(1, side));
@@ -86,18 +87,22 @@ impl UvGBuffer {
     }
 
     /// [`UvGBuffer::new`] with the size checked against `limits` instead of clamped: a zero
-    /// side is an error, and the buffers are reserved before rasterizing.
+    /// side is an error. The mesh's vertex and triangle counts are checked before the buffers
+    /// are reserved, and the rasterizer's work and band lists before any texel is written.
     pub fn try_new(mesh: &Mesh, material: usize, width: u32, height: u32, limits: &Limits) -> Result<UvGBuffer> {
         let n = texels(width, height, limits)?;
+        check_limit("vertex count", mesh.positions.len(), limits.max_vertices)?;
+        check_limit("triangle count", mesh.triangle_count(), limits.max_triangles)?;
         let (mut tri, mut bary) = (try_vec(n, "G-buffer")?, try_vec(n, "G-buffer")?);
         tri.resize(n, NO_TRI);
         bary.resize(n, [0.0f32; 2]);
-        let overlaps = rasterize(&mesh.uvs, &mesh.indices, mesh.triangles_of(material), width, height, &mut tri, &mut bary)?;
+        let overlaps = rasterize(&mesh.uvs, &mesh.indices, || mesh.triangles_of(material), (width, height), limits, &mut tri, &mut bary)?;
         Ok(UvGBuffer { width, height, tri, bary, overlaps })
     }
 
     /// Rasterize every triangle of `indices` over `uvs` at `width × height`. The size, the
-    /// triangle count, every index and every UV (finite) are checked first.
+    /// triangle count, every index and every UV (finite) are checked first, and the
+    /// rasterizer's work and band lists before any texel is written.
     pub fn from_slices(uvs: &[[f32; 2]], indices: &[u32], width: u32, height: u32, limits: &Limits) -> Result<UvGBuffer> {
         let n = texels(width, height, limits)?;
         check_limit("vertex count", uvs.len(), limits.max_vertices)?;
@@ -116,7 +121,7 @@ impl UvGBuffer {
         let (mut tri, mut bary) = (try_vec(n, "G-buffer")?, try_vec(n, "G-buffer")?);
         tri.resize(n, NO_TRI);
         bary.resize(n, [0.0f32; 2]);
-        let overlaps = rasterize(&points, indices, 0..indices.len() / 3, width, height, &mut tri, &mut bary)?;
+        let overlaps = rasterize(&points, indices, || 0..indices.len() / 3, (width, height), limits, &mut tri, &mut bary)?;
         Ok(UvGBuffer { width, height, tri, bary, overlaps })
     }
 
@@ -143,35 +148,92 @@ impl UvGBuffer {
     }
 }
 
+/// `total + add`, or `TooLarge` naming `what` when that is over `limit` (`got` is `u64::MAX`
+/// when the sum overflows).
+fn add_within(what: &'static str, total: u64, add: u64, limit: u64) -> Result<u64> {
+    let got = total.saturating_add(add);
+    if got > limit { Err(MeshOpsError::TooLarge { what, got, limit }) } else { Ok(got) }
+}
+
+/// Triangle `t` in the texels of a `size` buffer: its corners, its signed doubled area and its
+/// bounding box clipped to the buffer as `[x0, x1, y0, y1]` (ends exclusive). `None` when a
+/// corner is missing, not finite or farther than [`MAX_TEXEL_COORDINATE`], when the triangle
+/// has no area or when the clipped box is empty.
+fn texel_triangle(uvs: &[Vec2], indices: &[u32], t: usize, size: Vec2) -> Option<([Vec2; 3], f32, [u32; 4])> {
+    let [a, b, c] = corners(indices, t)?;
+    let p = [*uvs.get(a)? * size, *uvs.get(b)? * size, *uvs.get(c)? * size];
+    if !p.iter().all(|q| q.is_finite() && q.abs().max_element() <= MAX_TEXEL_COORDINATE) {
+        return None;
+    }
+    let area = edge(p[0], p[1], p[2]);
+    if area.abs() < 1e-12 {
+        return None;
+    }
+    let lo = p[0].min(p[1]).min(p[2]).floor().clamp(Vec2::ZERO, size);
+    let hi = p[0].max(p[1]).max(p[2]).ceil().clamp(Vec2::ZERO, size);
+    let [x0, x1, y0, y1] = [lo.x as u32, hi.x as u32, lo.y as u32, hi.y as u32];
+    (x1 > x0 && y1 > y0).then_some((p, area, [x0, x1, y0, y1]))
+}
+
 /// Write the triangle and barycentrics under each texel center of `w × h` buffers (`tri` and
-/// `bary` hold `w × h` entries) for `triangles`; returns the overlap count. Each band of rows
-/// lists the triangles that reach it, and the lists reserve their memory as they grow.
-fn rasterize(
+/// `bary` hold `w × h` entries) for the triangles that `triangles` returns, the same ones on
+/// every call; returns the overlap count. Each band of rows lists the triangles whose
+/// clipped boxes reach it. A first pass checks the triangles visited against
+/// [`Limits::max_triangles`], the box texels against [`Limits::max_gbuffer_work`] and the list
+/// entries against [`Limits::max_gbuffer_bin_entries`], and counts the entries, so the lists are
+/// reserved in one piece before a second pass fills them.
+fn rasterize<I: Iterator<Item = usize>>(
     uvs: &[Vec2],
     indices: &[u32],
-    triangles: impl Iterator<Item = usize>,
-    w: u32,
-    h: u32,
+    triangles: impl Fn() -> I,
+    (w, h): (u32, u32),
+    limits: &Limits,
     tri: &mut [u32],
     bary: &mut [[f32; 2]],
 ) -> Result<u32> {
     let size = Vec2::new(w as f32, h as f32);
     let bands = h.div_ceil(BAND) as usize;
-    let mut bins: Vec<Vec<u32>> = vec![Vec::new(); bands];
     // NO_TRI marks an uncovered texel, so it cannot name a triangle.
-    for t in triangles.take_while(|t| *t < NO_TRI as usize) {
-        let Some([a, b, c]) = corners(indices, t) else { continue };
-        let (Some(ua), Some(ub), Some(uc)) = (uvs.get(a), uvs.get(b), uvs.get(c)) else { continue };
-        let y0 = (ua.y.min(ub.y).min(uc.y) * size.y).floor().max(0.0) as i64;
-        let y1 = (ua.y.max(ub.y).max(uc.y) * size.y).ceil().min(size.y) as i64;
-        let in_reach = |uv: &Vec2| uv.is_finite() && (*uv * size).abs().max_element() <= MAX_TEXEL_COORDINATE;
-        if y1 <= y0 || !in_reach(ua) || !in_reach(ub) || !in_reach(uc) {
-            continue;
+    let triangles = || triangles().take_while(|t| *t < NO_TRI as usize);
+    let band_range = |y0: u32, y1: u32| (y0 / BAND) as usize..=((y1 - 1) / BAND) as usize;
+    // offsets[b + 1] counts band b's entries, then becomes the end of its run in `ids`.
+    let mut offsets = try_vec(bands + 1, "G-buffer bands")?;
+    offsets.resize(bands + 1, 0usize);
+    let (mut visited, mut work, mut entries) = (0usize, 0u64, 0u64);
+    // Every entry count and offset below then fits in a usize.
+    let entry_limit = limits.max_gbuffer_bin_entries.min(usize::MAX as u64);
+    for t in triangles() {
+        visited = visited.saturating_add(1);
+        check_limit("triangle count", visited, limits.max_triangles)?;
+        let Some((_, _, [x0, x1, y0, y1])) = texel_triangle(uvs, indices, t, size) else { continue };
+        work = add_within("G-buffer work", work, u64::from(x1 - x0) * u64::from(y1 - y0), limits.max_gbuffer_work)?;
+        let reach = band_range(y0, y1);
+        entries = add_within("G-buffer band entries", entries, (reach.end() - reach.start() + 1) as u64, entry_limit)?;
+        for b in reach {
+            if let Some(n) = offsets.get_mut(b + 1) {
+                *n += 1;
+            }
         }
-        let (b0, b1) = ((y0 / BAND as i64) as usize, ((y1 - 1).max(0) / BAND as i64) as usize);
-        for bin in bins.iter_mut().take(b1 + 1).skip(b0) {
-            bin.try_reserve(1).map_err(|_| MeshOpsError::OutOfMemory("G-buffer bands"))?;
-            bin.push(t as u32);
+    }
+    let mut run = 0;
+    for n in &mut offsets {
+        run += *n;
+        *n = run;
+    }
+    let entries = usize::try_from(entries).map_err(|_| MeshOpsError::OutOfMemory("G-buffer bands"))?;
+    let mut ids = try_vec(entries, "G-buffer bands")?;
+    ids.resize(entries, NO_TRI);
+    let mut next = try_vec(offsets.len(), "G-buffer bands")?;
+    next.extend_from_slice(&offsets);
+    for t in triangles() {
+        let Some((_, _, [_, _, y0, y1])) = texel_triangle(uvs, indices, t, size) else { continue };
+        for b in band_range(y0, y1) {
+            if let Some(at) = next.get_mut(b) {
+                if let Some(id) = ids.get_mut(*at) {
+                    *id = t as u32;
+                }
+                *at += 1;
+            }
         }
     }
     let band_len = BAND as usize * w as usize;
@@ -179,19 +241,14 @@ fn rasterize(
         let mut overlaps = 0u32;
         let row0 = bi as u32 * BAND;
         let rows = (tri.len() / w as usize) as u32;
-        for &t in bins.get(bi).map(Vec::as_slice).unwrap_or(&[]) {
-            let Some([a, b, c]) = corners(indices, t as usize) else { continue };
-            let (Some(&ua), Some(&ub), Some(&uc)) = (uvs.get(a), uvs.get(b), uvs.get(c)) else { continue };
-            let (pa, pb, pc) = (ua * size, ub * size, uc * size);
-            let area = edge(pa, pb, pc);
-            if area.abs() < 1e-12 {
-                continue;
-            }
+        let list = match (offsets.get(bi), offsets.get(bi + 1)) {
+            (Some(&start), Some(&end)) => ids.get(start..end).unwrap_or(&[]),
+            _ => &[],
+        };
+        for &t in list {
+            let Some(([pa, pb, pc], area, [x0, x1, y0, y1])) = texel_triangle(uvs, indices, t as usize, size) else { continue };
             let eps = -1e-6 * area.abs();
-            let x0 = pa.x.min(pb.x).min(pc.x).floor().max(0.0) as u32;
-            let x1 = (pa.x.max(pb.x).max(pc.x).ceil().min(w as f32) as u32).min(w);
-            let y0 = (pa.y.min(pb.y).min(pc.y).floor().max(row0 as f32) as u32).max(row0);
-            let y1 = (pa.y.max(pb.y).max(pc.y).ceil() as u32).min(row0 + rows);
+            let (y0, y1) = (y0.max(row0), y1.min(row0 + rows));
             for y in y0..y1 {
                 for x in x0..x1 {
                     let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
@@ -339,5 +396,91 @@ mod tests {
         let g = UvGBuffer::from_slices(&[[-1e6, -1e6], [1e6, -1e6], [0.0, 1e6]], &[0, 1, 2], 8, 8, &l).unwrap();
         assert_eq!(g.covered_count(), 64);
         assert!(g.bary.iter().all(|[b1, b2]| (0.0..=1.0).contains(b1) && (0.0..=1.0).contains(b2) && b1 + b2 <= 1.0 + 1e-6), "{:?}", g.bary);
+    }
+
+    /// The `what`, `got` and `limit` of a `TooLarge` error, `None` for any other result.
+    fn too_large(r: Result<UvGBuffer>) -> Option<(&'static str, u64, u64)> {
+        match r {
+            Err(MeshOpsError::TooLarge { what, got, limit }) => Some((what, got, limit)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn gbuffer_rejects_overlapping_box_work_before_rasterization() {
+        // Five triangles whose boxes each cover the whole 8 × 8 buffer: 320 texel visits.
+        let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let indices = [0, 1, 2].repeat(5);
+        let l = Limits::default();
+        let four = Limits { max_gbuffer_work: 4 * 64, ..l };
+        assert_eq!(too_large(UvGBuffer::from_slices(&uvs, &indices, 8, 8, &four)), Some(("G-buffer work", 320, 256)));
+        let five = Limits { max_gbuffer_work: 5 * 64, ..l };
+        assert_eq!(UvGBuffer::from_slices(&uvs, &indices, 8, 8, &five).unwrap(), UvGBuffer::from_slices(&uvs, &indices, 8, 8, &l).unwrap());
+    }
+
+    #[test]
+    fn gbuffer_rejects_excess_band_entries() {
+        // Three triangles that each reach the four bands of a 128-row buffer: 12 entries.
+        let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        let indices = [0, 1, 2].repeat(3);
+        let l = Limits::default();
+        let under = Limits { max_gbuffer_bin_entries: 11, ..l };
+        assert_eq!(too_large(UvGBuffer::from_slices(&uvs, &indices, 16, 128, &under)), Some(("G-buffer band entries", 12, 11)));
+        let exact = Limits { max_gbuffer_bin_entries: 12, ..l };
+        let g = UvGBuffer::from_slices(&uvs, &indices, 16, 128, &exact).unwrap();
+        assert_eq!(g, UvGBuffer::from_slices(&uvs, &indices, 16, 128, &l).unwrap());
+        // Every band draws the triangles in order: the last one keeps each texel.
+        let covered = g.covered_count();
+        assert!(covered > 16 * 128 / 3, "{covered}");
+        assert!(g.tri.iter().all(|t| *t == 2 || *t == NO_TRI));
+        assert_eq!(g.overlaps as usize, 2 * covered);
+    }
+
+    #[test]
+    fn gbuffer_mesh_constructor_respects_count_limits() {
+        let m = primitives::plane(1.0, 2);
+        let l = Limits::default();
+        let (v, t) = (m.vertex_count(), m.triangle_count());
+        let few_triangles = Limits { max_triangles: t - 1, ..l };
+        assert_eq!(too_large(UvGBuffer::try_new(&m, 0, 16, 16, &few_triangles)), Some(("triangle count", t as u64, t as u64 - 1)));
+        let few_vertices = Limits { max_vertices: v - 1, ..l };
+        assert_eq!(too_large(UvGBuffer::try_new(&m, 0, 16, 16, &few_vertices)), Some(("vertex count", v as u64, v as u64 - 1)));
+        let exact = Limits { max_vertices: v, max_triangles: t, ..l };
+        assert_eq!(UvGBuffer::try_new(&m, 0, 16, 16, &exact).unwrap(), UvGBuffer::new(&m, 0, 16, 16));
+        // Submeshes that list the same triangles again count every time they are visited.
+        let mut twice = m.clone();
+        twice.submeshes.push(twice.submeshes[0].clone());
+        assert_eq!(too_large(UvGBuffer::try_new(&twice, 0, 16, 16, &exact)), Some(("triangle count", t as u64 + 1, t as u64)));
+    }
+
+    #[test]
+    fn gbuffer_work_counts_clipped_boxes_and_skips_off_image() {
+        let uvs = [
+            // A 2 × 2 texel box.
+            [0.5, 0.5],
+            [0.75, 0.5],
+            [0.5, 0.75],
+            // Entirely past the right and bottom edges.
+            [2.0, 2.0],
+            [3.0, 2.0],
+            [2.0, 3.0],
+            // Infinite once scaled to texels.
+            [1e38, 0.0],
+            [-1e38, 0.0],
+            [0.0, 1e38],
+            // A triangle over the whole image whose box is clipped to its 64 texels.
+            [-1.0, -1.0],
+            [3.0, -1.0],
+            [-1.0, 3.0],
+        ];
+        let indices: Vec<u32> = (0..12).collect();
+        let l = Limits::default();
+        let under = Limits { max_gbuffer_work: 67, ..l };
+        assert_eq!(too_large(UvGBuffer::from_slices(&uvs, &indices, 8, 8, &under)), Some(("G-buffer work", 68, 67)));
+        let exact = Limits { max_gbuffer_work: 68, ..l };
+        let g = UvGBuffer::from_slices(&uvs, &indices, 8, 8, &exact).unwrap();
+        assert_eq!(g, UvGBuffer::from_slices(&uvs, &indices, 8, 8, &l).unwrap());
+        // The small triangle covers 3 texels, which the large one draws over.
+        assert_eq!((g.covered_count(), g.overlaps), (64, 3));
     }
 }

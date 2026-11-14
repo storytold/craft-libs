@@ -6,11 +6,11 @@
 //! and shelf-packed per material into 0..1 with one uniform scale, so texel density is the same
 //! everywhere within a material.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use glam::{Vec2, Vec3};
 
-use crate::{Mesh, MeshOpsError, Result};
+use crate::{Limits, Mesh, MeshOpsError, Result, check_limit};
 
 /// Faces of a chart stay within this angle of the seed face normal (cos 60°).
 const CHART_COS: f32 = 0.5;
@@ -92,18 +92,28 @@ impl Chart {
 /// tangents are recomputed.
 /// Returns the number of charts. A mesh that fails the checks (indices, submesh ranges and
 /// materials, finite positions, finite normals and colors when it has them, at least one
-/// triangle that is not degenerate) is left unchanged.
+/// triangle that is not degenerate, and the default [`Limits`] that [`unwrap_core`] applies) is
+/// left unchanged.
 pub fn auto_unwrap(mesh: &mut Mesh, padding_texels: f32, resolution: u32) -> Result<usize> {
-    let (charts, _) = unwrap_core(mesh, padding_texels, resolution, usize::MAX)?;
+    let (charts, _) = unwrap_core(mesh, padding_texels, resolution, &Limits::default())?;
     mesh.compute_tangents();
     mesh.validate()?;
     Ok(charts)
 }
 
 /// [`auto_unwrap`] without the tangents and the final check: returns the chart count and, per
-/// new vertex, the old vertex it copies. More than `max_vertices` new vertices is an error; the
-/// rebuilt arrays stop growing at most three vertices past it.
-pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32, max_vertices: usize) -> Result<(usize, Vec<u32>)> {
+/// new vertex, the old vertex it copies. The input's vertices over [`Limits::max_vertices`], its
+/// triangles over [`Limits::max_unwrap_triangles`], or the triangles its submeshes list (a
+/// triangle in two submeshes counts twice) over the same limit, are an error before any work.
+/// More than `max_vertices` new vertices is an error too; the rebuilt arrays stop growing at
+/// most three vertices past it.
+pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32, limits: &Limits) -> Result<(usize, Vec<u32>)> {
+    check_limit("vertex count", mesh.positions.len(), limits.max_vertices)?;
+    check_limit("triangle count", mesh.triangle_count(), limits.max_unwrap_triangles)?;
+    let listed = mesh.submeshes.iter().fold(0u64, |sum, s| sum.saturating_add(u64::from(s.count / 3)));
+    if listed > limits.max_unwrap_triangles as u64 {
+        return Err(MeshOpsError::TooLarge { what: "submesh triangle count", got: listed, limit: limits.max_unwrap_triangles as u64 });
+    }
     mesh.validate_indices()?;
     if mesh.positions.iter().any(|p| !p.is_finite()) {
         return Err(MeshOpsError::Invalid("mesh has non-finite positions".into()));
@@ -243,9 +253,7 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     // Pack each material's charts into its own 0..1 square.
     let pad = padding_texels.max(1.0);
     let mut scale = HashMap::new();
-    let mats: std::collections::BTreeSet<usize> = charts.iter().map(|c| c.material).collect();
-    for m in mats {
-        let ids: Vec<usize> = (0..charts.len()).filter(|i| charts[*i].material == m).collect();
+    for (m, ids) in charts_by_material(&charts) {
         let sizes: Vec<Vec2> = ids.iter().map(|i| charts[*i].size()).collect();
         let (s, res, offsets) = pack(&sizes, resolution.max(16) as f32, pad)?;
         for (i, o) in ids.iter().zip(offsets) {
@@ -277,7 +285,7 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
             });
             indices.push(idx);
         }
-        crate::check_limit("vertex count", positions.len(), max_vertices)?;
+        check_limit("vertex count", positions.len(), limits.max_vertices)?;
     }
     mesh.positions = positions;
     mesh.normals = normals;
@@ -285,6 +293,16 @@ pub(crate) fn unwrap_core(mesh: &mut Mesh, padding_texels: f32, resolution: u32,
     mesh.colors = colors;
     mesh.indices = indices;
     Ok((charts.len(), source))
+}
+
+/// The ids of `charts` grouped by material, in material order and in chart order within each,
+/// from one pass over the charts.
+fn charts_by_material(charts: &[Chart]) -> BTreeMap<usize, Vec<usize>> {
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (id, chart) in charts.iter().enumerate() {
+        groups.entry(chart.material).or_default().push(id);
+    }
+    groups
 }
 
 /// Shelf-pack rectangles of world `sizes` (each grown by `pad` texels per side) into a square of
@@ -513,6 +531,73 @@ mod tests {
         assert!(crate::unwrap_uvs(&corners, &faces, 4.0, 256, &exact).is_ok());
         let under = crate::Limits { max_vertices: 23, ..l };
         assert!(matches!(crate::unwrap_uvs(&corners, &faces, 4.0, 256, &under), Err(MeshOpsError::TooLarge { .. })));
+    }
+
+    #[test]
+    fn auto_unwrap_respects_mesh_count_limits() {
+        let base = primitives::plane(1.0, 2);
+        let l = crate::Limits::default();
+        let (v, t) = (base.vertex_count(), base.triangle_count());
+        let too_large = |mut m: Mesh, limits: crate::Limits| {
+            let before = m.clone();
+            let r = unwrap_core(&mut m, 4.0, 256, &limits);
+            assert_eq!(m, before, "the mesh is unchanged");
+            match r {
+                Err(MeshOpsError::TooLarge { what, got, limit }) => Some((what, got, limit)),
+                _ => None,
+            }
+        };
+        let (tv, tt) = (v as u64, t as u64);
+        assert_eq!(too_large(base.clone(), crate::Limits { max_vertices: v - 1, ..l }), Some(("vertex count", tv, tv - 1)));
+        assert_eq!(too_large(base.clone(), crate::Limits { max_unwrap_triangles: t - 1, ..l }), Some(("triangle count", tt, tt - 1)));
+        // A triangle listed by two submeshes is counted twice.
+        let mut twice = base.clone();
+        twice.submeshes.push(twice.submeshes[0].clone());
+        assert_eq!(too_large(twice.clone(), crate::Limits { max_unwrap_triangles: t, ..l }), Some(("submesh triangle count", 2 * tt, tt)));
+        assert!(unwrap_core(&mut twice, 4.0, 256, &crate::Limits { max_unwrap_triangles: 2 * t, ..l }).is_ok());
+        // The mesh form applies the default limits.
+        let mut m = base.clone();
+        let mut sliced = base;
+        assert_eq!(auto_unwrap(&mut m, 4.0, 256).unwrap(), unwrap_core(&mut sliced, 4.0, 256, &l).unwrap().0);
+    }
+
+    #[test]
+    fn unwrap_core_stops_at_output_vertex_limit() {
+        // A cube of 8 shared corners splits into 24 vertices: 6 charts of 4.
+        let corners: Vec<Vec3> = (0..8).map(|i| Vec3::new((i & 1) as f32, (i >> 1 & 1) as f32, (i >> 2) as f32)).collect();
+        let faces = vec![0, 2, 3, 0, 3, 1, 4, 5, 7, 4, 7, 6, 0, 1, 5, 0, 5, 4, 2, 6, 7, 2, 7, 3, 0, 4, 6, 0, 6, 2, 1, 3, 7, 1, 7, 5];
+        let cube = Mesh::from_parts(corners, None, Vec::new(), faces, "m").unwrap();
+        let l = crate::Limits::default();
+        let mut exact = cube.clone();
+        assert_eq!(unwrap_core(&mut exact, 4.0, 256, &crate::Limits { max_vertices: 24, ..l }).unwrap().1.len(), 24);
+        let mut under = cube.clone();
+        let r = unwrap_core(&mut under, 4.0, 256, &crate::Limits { max_vertices: 23, ..l });
+        assert!(matches!(r, Err(MeshOpsError::TooLarge { what: "vertex count", got: 24.., limit: 23 })), "{r:?}");
+        assert_eq!(under, cube);
+    }
+
+    #[test]
+    fn unwrap_many_materials_groups_charts_once() {
+        let chart = |material| Chart { material, t: Vec3::X, b: Vec3::Y, rot: Vec2::X, lo: Vec2::ZERO, hi: Vec2::ONE, offset: Vec2::ZERO };
+        let charts: Vec<Chart> = [3, 0, 3, 1, 0, 3].into_iter().map(chart).collect();
+        let groups: Vec<(usize, Vec<usize>)> = charts_by_material(&charts).into_iter().collect();
+        assert_eq!(groups, vec![(0, vec![1, 4]), (1, vec![3]), (3, vec![0, 2, 5])]);
+        // Many single-chart materials: every chart lands in its own material's 0..1 square.
+        let mut p = Vec::new();
+        let mut idx = Vec::new();
+        for i in 0..64u32 {
+            let o = Vec3::new(i as f32 * 3.0, 0.0, 0.0);
+            p.extend([o, o + Vec3::X, o + Vec3::Y]);
+            idx.extend([i * 3, i * 3 + 1, i * 3 + 2]);
+        }
+        let mut m = Mesh::from_parts(p, None, Vec::new(), idx, "m").unwrap();
+        m.materials = (0..64).map(|i| format!("m{i}")).collect();
+        m.submeshes = (0..64u32).map(|i| crate::SubMesh { name: format!("m{i}"), material: i as usize, start: i * 3, count: 3 }).collect();
+        assert_eq!(auto_unwrap(&mut m, 4.0, 128).unwrap(), 64);
+        for mat in 0..64 {
+            let g = UvGBuffer::new(&m, mat, 64, 64);
+            assert!(g.covered_count() > 64 * 64 / 8, "material {mat}: {}", g.covered_count());
+        }
     }
 
     #[test]

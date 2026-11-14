@@ -48,8 +48,9 @@ pub enum MeshOpsError {
 pub type Result<T> = std::result::Result<T, MeshOpsError>;
 
 /// Caps on the work one call does. Every slice function and `try_` constructor checks its input
-/// against these before allocating. The defaults follow `craft-mesh` for whole meshes and are
-/// this crate's own values for the rest.
+/// against these before allocating. A UV G-buffer has three budgets: the texels it outputs, the
+/// texels its rasterizer visits and the entries of its per-band triangle lists. The defaults
+/// follow `craft-mesh` for whole meshes and are this crate's own values for the rest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     /// Vertices in one input or output mesh. Default 20,000,000.
@@ -62,6 +63,13 @@ pub struct Limits {
     pub max_gbuffer_side: u32,
     /// Texels in a UV G-buffer. Default 2^26 (8,192 × 8,192).
     pub max_gbuffer_texels: u64,
+    /// Texels a UV G-buffer's rasterizer visits: the sum over its triangles of the texels in
+    /// each one's bounding box clipped to the buffer, covered or not. Default 2^32.
+    pub max_gbuffer_work: u64,
+    /// Entries in a UV G-buffer's per-band triangle lists: one per band of 32 rows that a
+    /// triangle's clipped bounding box reaches. Default 2^26; a value over `usize::MAX` counts
+    /// as `usize::MAX`.
+    pub max_gbuffer_bin_entries: u64,
     /// Triangles one UV unwrap processes. Default 4,000,000.
     pub max_unwrap_triangles: usize,
 }
@@ -74,6 +82,8 @@ impl Default for Limits {
             max_segments: 2_048,
             max_gbuffer_side: 8_192,
             max_gbuffer_texels: 1 << 26,
+            max_gbuffer_work: 1 << 32,
+            max_gbuffer_bin_entries: 1 << 26,
             max_unwrap_triangles: 4_000_000,
         }
     }
@@ -164,7 +174,7 @@ pub fn unwrap_uvs(positions: &[[f32; 3]], indices: &[u32], padding_texels: f32, 
     }
     check_limit("triangle count", indices.len() / 3, limits.max_unwrap_triangles)?;
     let mut mesh = Mesh::from_slices(positions, None, None, indices, limits)?;
-    let (charts, source) = unwrap::unwrap_core(&mut mesh, padding_texels, resolution, limits.max_vertices)?;
+    let (charts, source) = unwrap::unwrap_core(&mut mesh, padding_texels, resolution, limits)?;
     let mut uvs = try_vec(mesh.uvs.len(), "UVs")?;
     uvs.extend(mesh.uvs.iter().map(|uv| uv.to_array()));
     Ok(Unwrapped { source, uvs, indices: mesh.indices, charts })
