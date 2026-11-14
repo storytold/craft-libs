@@ -29,7 +29,7 @@ Source guards serve as fast, zero-dependency regression gates in application tes
 
 ## Fixtures
 
-The `fixtures` module (native targets only) generates test fixtures once and shares them between test runs and processes:
+The `fixtures` module (native targets only) generates missing test fixtures and shares them between test runs and processes:
 
 - `fixtures_root(var)` is the nonempty value of `var` (default `CRAFT_FIXTURES_DIR`) or `<workspace>/target/fixtures`. The workspace is the one that holds the package under test, found from the `CARGO_MANIFEST_DIR` that Cargo and nextest set when they run tests; a test binary run without it needs the root variable. `CARGO_TARGET_DIR` does not move the root. `fixtures_dir(sub, var)` creates a folder below the root and rejects an absolute `sub` or one containing `..`.
 - `temp_path(out)` creates a new, empty sibling of `out` with `create_new`, keeping the extension. A name that already exists is never reused.
