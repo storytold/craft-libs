@@ -1991,6 +1991,10 @@ fn intersect_decompositions(
     ish_tolerance: f64,
     approx_first: bool,
 ) -> CurveOrder {
+    // The rule applies to the tolerances as given: raising them to the floor
+    // below can make an invalid pair valid.
+    let valid_tolerances =
+        sure_tolerance > 0.0 && sure_tolerance <= ish_tolerance && ish_tolerance.is_finite();
     let floor = 4.0 * float_spacing(max_abs_x(c0).max(max_abs_x(c1)));
     let ish_tolerance = if ish_tolerance > 0.0 && ish_tolerance < floor {
         floor
@@ -2007,8 +2011,6 @@ fn intersect_decompositions(
     let y1 = c0.p3.y.min(c1.p3.y);
 
     let mut ret = CurveOrder::new(y0);
-    let valid_tolerances =
-        sure_tolerance > 0.0 && sure_tolerance <= ish_tolerance && ish_tolerance.is_finite();
     if !valid_tolerances {
         // Craft patch (input rules): with a negative `ish_tolerance`,
         // `intersect_cubics_rec` can recurse without end.
@@ -2860,6 +2862,16 @@ mod test {
                 assert_eq!(cmp.iter().collect::<Vec<_>>(), [(0.0, 1.0, Order::Ish)]);
             }
         }
+    }
+
+    // Raising the tolerances for large x coordinates must not turn an invalid
+    // pair into a valid one.
+    #[test]
+    fn invalid_tolerances_at_large_x() {
+        let c0 = vertical(1e15, 0.0, 1.0);
+        let c1 = vertical(1e15 + 1e6, 0.0, 1.0);
+        let cmp = intersect_cubics(c0, c1, 2e-6, 1e-6);
+        assert_eq!(cmp.iter().collect::<Vec<_>>(), [(0.0, 1.0, Order::Ish)]);
     }
 
     #[test]
