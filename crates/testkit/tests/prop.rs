@@ -2,6 +2,8 @@
 //! test changes the environment of the process that runs it. The child runs `child_reports_config`,
 //! which prints one `PROPCFG` line describing `config(7)`.
 
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::process::Command;
 
 use craft_testkit::prop::{SEED, config};
