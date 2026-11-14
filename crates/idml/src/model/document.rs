@@ -349,8 +349,8 @@ impl TextVariableValues {
         Self {
             self_id: values.self_id().map(str::to_owned),
             name: values.get("Name").unwrap_or("").to_owned(),
-            before: values.get("TextBefore").unwrap_or("").to_owned(),
-            after: values.get("TextAfter").unwrap_or("").to_owned(),
+            before: attr("TextBefore").to_owned(),
+            after: attr("TextAfter").to_owned(),
             kind,
         }
     }
