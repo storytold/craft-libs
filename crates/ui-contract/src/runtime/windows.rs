@@ -63,6 +63,8 @@ pub(crate) struct Shared {
     #[cfg(feature = "testing")]
     sent: Vec<(ViewportId, WindowAction)>,
     shell: Option<ShellInfo>,
+    /// The app id from `InstallSpec::app_id`, which every OS window carries; empty when the app set none.
+    app_id: String,
     system: Option<Arc<dyn WindowSystem>>,
     store: Option<Arc<Mutex<Store>>>,
     /// The system pointer read in `set_input`.
@@ -179,8 +181,15 @@ pub(crate) fn app_moves(ctx: &Context, viewport: ViewportId) -> bool {
     PerViewport::<Record>::with(ctx, viewport, |record| record.app_drag)
 }
 
-/// Called by `install`: keeps the shell, the OS services and the placement store.
-pub(crate) fn install(ctx: &Context, shell: ShellInfo, system: Arc<dyn WindowSystem>, store: Option<Arc<Mutex<Store>>>, frame: Option<Decision>) {
+/// Called by `install`: keeps the shell, the app id, the OS services and the placement store.
+pub(crate) fn install(
+    ctx: &Context,
+    shell: ShellInfo,
+    system: Arc<dyn WindowSystem>,
+    store: Option<Arc<Mutex<Store>>>,
+    frame: Option<Decision>,
+    app_id: String,
+) {
     let layouts = frame.as_ref().map(LayoutWatch::new);
     let shell = match &frame {
         Some(decision) => {
@@ -191,6 +200,7 @@ pub(crate) fn install(ctx: &Context, shell: ShellInfo, system: Arc<dyn WindowSys
     };
     shared(ctx, |shared| {
         shared.shell = Some(shell);
+        shared.app_id = app_id;
         shared.system = Some(system);
         shared.store = store;
         shared.root_frame = frame.map(|decision| decision.frame);
@@ -263,12 +273,16 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
 }
 
 /// The begin hook (H5), where the viewport is current: refreshes its window info, and raises the modal's window
-/// when the input hook dropped a press under a modal in another viewport.
+/// when the input hook dropped a press under a modal in another viewport, or when this viewport gained focus while
+/// a modal in another viewport blocks it (the modal's window then comes forward with the window the user clicked).
 pub(crate) fn begin(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
-    refresh(ctx, viewport, viewports::current(ctx));
+    let was_focused = PerViewport::<Record>::with(ctx, viewport, |record| record.facts.is_some_and(|facts| facts.focused));
+    let facts = viewports::current(ctx);
+    refresh(ctx, viewport, facts);
     reshow_cursor(ctx, viewport);
-    if overlay::take_dropped_press(ctx, viewport)
+    let gained_focus = facts.focused && !was_focused;
+    if (overlay::take_dropped_press(ctx, viewport) || gained_focus)
         && let Some(modal) = blocking_modal(ctx)
     {
         act(ctx, modal, WindowAction::Focus);
