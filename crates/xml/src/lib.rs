@@ -44,7 +44,7 @@ pub enum Error {
     #[error("the XML is larger than {0} bytes")]
     TooLarge(usize),
     /// Elements nest deeper than [`Limits::max_depth`].
-    #[error("XML elements nest deeper than {0} levels")]
+    #[error("XML elements are nested deeper than {0} levels")]
     TooDeep(usize),
     /// The tree would hold more than [`Limits::max_nodes`] nodes.
     #[error("the XML holds more than {0} nodes")]

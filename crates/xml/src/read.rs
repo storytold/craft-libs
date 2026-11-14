@@ -285,6 +285,9 @@ impl<'a> Options<'a> {
         if bytes.len() > self.limits.max_input {
             return (None, Some(Error::TooLarge(self.limits.max_input).into()));
         }
+        if doctype_refused(bytes, self.doctype) {
+            return (None, Some(Error::Doctype.into()));
+        }
         let text = to_utf8(bytes);
         let mut events = Events::new(*self, &text, false);
         let mut tree = Builder { opts: self, split, stack: Vec::new(), marks: Vec::new(), kept: 0, elements: 0, attrs: 0, root: None, at: 0 };
@@ -327,6 +330,103 @@ impl<'a> Options<'a> {
     pub fn events<'i>(&self, utf8: &'i [u8]) -> Events<'a, 'i> {
         Events::new(*self, utf8, true)
     }
+}
+
+/// Check declarations before handing input to the XML parser. Some parser implementations stop
+/// on malformed XML declarations before reporting a later DOCTYPE; formats that reject internal
+/// subsets need the security decision to take precedence over that unrelated syntax error.
+fn doctype_refused(input: &[u8], policy: Doctype) -> bool {
+    if policy == Doctype::Ignore {
+        return false;
+    }
+    let mut at = 0;
+    while at < input.len() {
+        let Some(rel) = input.get(at..).and_then(|bytes| bytes.iter().position(|b| *b == b'<')) else {
+            break;
+        };
+        at += rel;
+        let Some(rest) = input.get(at..) else { break };
+        if rest.starts_with(b"<!--") {
+            at = after(input, at + 4, b"-->");
+        } else if rest.starts_with(b"<![CDATA[") {
+            at = after(input, at + 9, b"]]>");
+        } else if rest.starts_with(b"<?") {
+            at = after_instruction(input, at + 2);
+        } else if rest.starts_with(b"<!DOCTYPE") && rest.get(9).is_some_and(|b| b.is_ascii_whitespace()) {
+            if policy == Doctype::Reject {
+                return true;
+            }
+            let (end, subset) = doctype_end(input, at + 9);
+            if subset {
+                return true;
+            }
+            at = end;
+        } else {
+            at = after_markup(input, at + 1);
+        }
+    }
+    false
+}
+
+fn after(input: &[u8], start: usize, terminator: &[u8]) -> usize {
+    input
+        .get(start..)
+        .and_then(|rest| rest.windows(terminator.len()).position(|w| w == terminator))
+        .map_or(input.len(), |i| start + i + terminator.len())
+}
+
+fn after_instruction(input: &[u8], mut at: usize) -> usize {
+    let mut quote = None;
+    while let Some(&byte) = input.get(at) {
+        if let Some(q) = quote {
+            if byte == q {
+                quote = None;
+            }
+        } else if matches!(byte, b'\'' | b'"') {
+            quote = Some(byte);
+        } else if input.get(at..).is_some_and(|rest| rest.starts_with(b"?>")) {
+            return at + 2;
+        }
+        at += 1;
+    }
+    input.len()
+}
+
+fn doctype_end(input: &[u8], mut at: usize) -> (usize, bool) {
+    let mut quote = None;
+    let mut subset = false;
+    while let Some(&byte) = input.get(at) {
+        if let Some(q) = quote {
+            if byte == q {
+                quote = None;
+            }
+        } else if matches!(byte, b'\'' | b'"') {
+            quote = Some(byte);
+        } else if byte == b'[' {
+            subset = true;
+        } else if byte == b'>' {
+            return (at + 1, subset);
+        }
+        at += 1;
+    }
+    (input.len(), subset)
+}
+
+fn after_markup(input: &[u8], mut at: usize) -> usize {
+    let mut quote = None;
+    while let Some(&byte) = input.get(at) {
+        if let Some(q) = quote {
+            if byte == q {
+                quote = None;
+            }
+        } else if matches!(byte, b'\'' | b'"') {
+            quote = Some(byte);
+        } else if byte == b'>' {
+            return at + 1;
+        }
+        at += 1;
+    }
+    input.len()
 }
 
 /// One step of a document. See [`Options::events`].
