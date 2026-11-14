@@ -1,5 +1,5 @@
-//! Reads the hostile ZIP package used by an Animate `.fla` (an archive of an XFL folder),
-//! including its XFL-specific path rules and resource limits.
+//! Reads Animate XFL/FLA native documents: the bounded XML tree and the hostile ZIP package
+//! (an archive of an XFL folder), including format-specific path rules and resource limits.
 //!
 //! Implements the parts of the published ZIP format (PKWARE APPNOTE 6.3) that archive tools
 //! write: the end-of-central-directory record (and its ZIP64 form), central directory entries
@@ -15,9 +15,13 @@
 //! its bytes ([`MAX_RATIO`]), more than [`MAX_ENTRY`], or a size or checksum it doesn't have;
 //! and the archive hands out at most [`MAX_TOTAL`] bytes in all. Nothing is ever written to
 //! disk. Never panics.
+
 //!
 //! [`edges`] decodes native shape-edge attributes into neutral points and line/quadratic
 //! segments for consumers to map into their own geometry models.
+
+/// Bounded, neutral XML tree reader used by XFL document and library XML files.
+pub mod xml;
 
 use std::cell::Cell;
 use std::collections::HashMap;

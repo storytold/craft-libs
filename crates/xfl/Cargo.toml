@@ -1,6 +1,6 @@
 [package]
 name = "craft-xfl"
-description = "Bounded XFL/FLA package reader and native shape-edge parser."
+description = "Bounded XML and ZIP readers and native shape-edge parser for XFL/FLA documents."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
