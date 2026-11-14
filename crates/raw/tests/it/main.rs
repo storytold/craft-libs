@@ -2,6 +2,7 @@
 
 #[cfg(feature = "dng")]
 mod dng;
+mod raf_corpus_manifest;
 #[cfg(feature = "dng")]
 mod robust;
 mod vendor_robust;
