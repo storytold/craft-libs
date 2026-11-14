@@ -317,9 +317,21 @@ fn craft_jpeg_error(e: craft_jpeg::Error) -> CodecError {
     }
 }
 
+fn undo_craft_cmyk_inversion_u8(samples: &mut [u8], enabled: bool) {
+    if enabled {
+        samples.iter_mut().for_each(|v| *v = 255 - *v);
+    }
+}
+
+fn undo_craft_cmyk_inversion_u16(samples: &mut [u16], enabled: bool) {
+    if enabled {
+        samples.iter_mut().for_each(|v| *v = 65535 - *v);
+    }
+}
+
 /// Decode a file [`uses_craft_jpeg`] routes away from `zune-jpeg`; `damaged` says entropy-coded
 /// data was cut short or corrupt.
-fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>) -> Result<(Image, bool), CodecError> {
+fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>, adobe_marker: bool) -> Result<(Image, bool), CodecError> {
     let mut lim = craft_jpeg::Limits::default();
     lim.max_pixels = limits.max_pixels;
     lim.max_alloc = limits.max_alloc;
@@ -330,9 +342,19 @@ fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>)
         4 => ChannelLayout::Cmyk,
         n => return Err(err(format!("{n} components"))),
     };
+    // craft-jpeg returns non-YCC CMYK samples with Adobe's inversion already undone,
+    // regardless of whether the file actually has an Adobe marker. Unmarked four-component
+    // streams are also found with direct ink samples, so restore those when using this backend.
+    let restore_unmarked_cmyk = !adobe_marker && matches!(layout, ChannelLayout::Cmyk);
     let img = match d.samples {
-        craft_jpeg::Samples::U8(px) => Image::from_raw(d.width, d.height, layout, SampleType::U8, px)?,
-        craft_jpeg::Samples::U16(px) => Image::from_u16(d.width, d.height, layout, &px)?,
+        craft_jpeg::Samples::U8(mut px) => {
+            undo_craft_cmyk_inversion_u8(&mut px, restore_unmarked_cmyk);
+            Image::from_raw(d.width, d.height, layout, SampleType::U8, px)?
+        }
+        craft_jpeg::Samples::U16(mut px) => {
+            undo_craft_cmyk_inversion_u16(&mut px, restore_unmarked_cmyk);
+            Image::from_u16(d.width, d.height, layout, &px)?
+        }
     };
     Ok((img, d.damaged))
 }
@@ -364,7 +386,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         {
             return Err(err("the truncated scan is too short for the frame it declares"));
         }
-        let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform)?;
+        let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform, meta.adobe_marker)?;
         img.icc = meta.icc;
         img.meta = Metadata { exif: meta.exif, xmp: meta.xmp, dpi: meta.dpi, photoshop_resources: meta.photoshop, ..Default::default() };
         if end == DataEnd::Truncated || damaged {
@@ -1013,6 +1035,23 @@ mod tests {
         let px = img.to_u16_samples().unwrap();
         assert!(px.iter().all(|&v| v.abs_diff(want) <= 1), "{:?} vs {want}", &px[..4]);
         assert!(img.warnings.is_empty());
+    }
+
+    #[test]
+    fn unmarked_cmyk_restores_direct_ink_polarity_on_craft_backend() {
+        // craft-jpeg always returns non-YCC four-component samples with Adobe inversion undone.
+        // The adapter restores direct inks only when no APP14 marker identifies Adobe storage.
+        let mut u8_samples = [0, 32, 200, 255];
+        undo_craft_cmyk_inversion_u8(&mut u8_samples, true);
+        assert_eq!(u8_samples, [255, 223, 55, 0]);
+        undo_craft_cmyk_inversion_u8(&mut u8_samples, false);
+        assert_eq!(u8_samples, [255, 223, 55, 0], "marked samples keep craft-jpeg polarity");
+
+        let mut u16_samples = [0, 8192, 32768, 65535];
+        undo_craft_cmyk_inversion_u16(&mut u16_samples, true);
+        assert_eq!(u16_samples, [65535, 57343, 32767, 0]);
+        undo_craft_cmyk_inversion_u16(&mut u16_samples, false);
+        assert_eq!(u16_samples, [65535, 57343, 32767, 0], "marked samples keep craft-jpeg polarity");
     }
 
     #[test]
