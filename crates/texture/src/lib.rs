@@ -134,9 +134,11 @@ pub struct Image {
     data: Arc<Vec<f32>>,
 }
 
+/// Images are equal when their size, kind and floats are equal. Floats compare as `f32` does, so
+/// an image holding NaN is unequal to every image, its clones included.
 impl PartialEq for Image {
     fn eq(&self, o: &Image) -> bool {
-        self.w == o.w && self.h == o.h && self.kind == o.kind && (Arc::ptr_eq(&self.data, &o.data) || self.data == o.data)
+        self.w == o.w && self.h == o.h && self.kind == o.kind && self.data == o.data
     }
 }
 
@@ -737,6 +739,18 @@ mod tests {
             assert!(max.sample(0.250_012_5, t, tile)[0].is_finite(), "tile = {tile}");
             assert_eq!(max.sample(t, t, tile)[0], f32::MAX, "tile = {tile}");
         }
+    }
+
+    #[test]
+    fn equality_does_not_depend_on_buffer_sharing() {
+        let img = Image::filled(2, 1, Kind::Gray, [f32::NAN; 4]);
+        let rebuilt = Image::filled(2, 1, Kind::Gray, [f32::NAN; 4]);
+        // NaN pixels compare unequal as floats do, whether or not the buffer is shared.
+        assert_ne!(img, rebuilt);
+        assert_ne!(img, img.clone());
+        let finite = Image::filled(2, 1, Kind::Gray, [0.5; 4]);
+        assert_eq!(finite, finite.clone());
+        assert_eq!(finite, Image::filled(2, 1, Kind::Gray, [0.5; 4]));
     }
 
     #[test]
