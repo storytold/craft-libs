@@ -1846,6 +1846,7 @@ dependencies = [
 name = "craft-image-codecs"
 version = "0.1.0"
 dependencies = [
+ "avif-serialize",
  "craft-heif",
  "craft-jpeg",
  "craft-metadata",
@@ -1859,6 +1860,8 @@ dependencies = [
  "jxl-oxide",
  "png 0.18.1",
  "proptest",
+ "rav1e",
+ "ravif",
  "rayon",
  "serde_json",
  "thiserror 2.0.21",
