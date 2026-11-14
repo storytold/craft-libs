@@ -326,7 +326,8 @@ impl Reader<'_> {
             let (Some(id), Some(abs)) = (n.attr("w:numId").and_then(u32_of), n.child_val("w:abstractNumId").and_then(u32_of)) else { continue };
             let (mut start_overrides, mut level_overrides) = (Vec::new(), Vec::new());
             for o in n.children("w:lvlOverride").take(9) {
-                let Some(lvl) = numbering_level_index(o.attr("w:ilvl")) else { continue };
+                let Some(raw_level) = o.attr("w:ilvl") else { continue };
+                let Some(lvl) = numbering_level_index(Some(raw_level)) else { continue };
                 let lvl = lvl as u8;
                 if let Some(s) = o.child_val("w:startOverride").and_then(u32_of) {
                     start_overrides.push((lvl, s));
