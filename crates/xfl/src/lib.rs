@@ -23,6 +23,8 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 
+/// Neutral views of the XFL document, timeline, layer and frame schema.
+pub mod document;
 /// XFL's edge-attribute grammar, independent of any consuming application's geometry types.
 pub mod edges;
 

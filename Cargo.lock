@@ -2799,6 +2799,7 @@ dependencies = [
 name = "craft-xfl"
 version = "0.1.0"
 dependencies = [
+ "craft-xml",
  "miniz_oxide 0.8.9",
  "thiserror 2.0.21",
 ]

@@ -1,0 +1,414 @@
+//! Neutral views of the native XFL document schema.
+//!
+//! This layer recognizes the document, stage, scene, layer and keyframe fields defined by XFL.
+//! It does not construct a consumer's animation model. More detailed payloads remain available
+//! through [`Document::root`] for the application adapter.
+use craft_xml::{Doctype, El, Error as XmlError, Limits, Options, UnknownEntity};
+
+/// Maximum bytes of XML in one XFL document or library item.
+pub const MAX_XML_BYTES: usize = 256 * 1024 * 1024;
+/// Maximum depth accepted by AniCraft's existing XFL XML adapter (root depth is one).
+pub const MAX_XML_DEPTH: usize = 257;
+/// Maximum XFL document elements accepted by the existing adapter.
+pub const MAX_XML_ELEMENTS: usize = 4_000_000;
+
+/// An XFL `DOMDocument.xml` tree plus typed, zero-copy views over its native structure.
+#[derive(Clone, Debug)]
+pub struct Document {
+    root: El,
+}
+
+/// Stage metadata stored on the root `DOMDocument` element.
+#[derive(Clone, Copy, Debug)]
+pub struct Stage<'a> {
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub frame_rate: Option<f32>,
+    pub background_color: Option<&'a str>,
+}
+
+/// Bounds used when projecting native schema fields into a compact model.
+#[derive(Clone, Copy, Debug)]
+pub struct ModelLimits {
+    pub max_timelines: usize,
+    pub max_layers_per_timeline: usize,
+}
+
+/// Compact XFL metadata that does not retain or duplicate the parsed XML tree.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocumentModel {
+    pub stage: StageModel,
+    pub timelines: Vec<TimelineModel>,
+    /// Present for a library `DOMSymbolItem`; absent for normal `DOMDocument` files.
+    pub symbol_timeline: Option<TimelineModel>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StageModel {
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub frame_rate: Option<f32>,
+    pub has_background_color: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TimelineModel {
+    pub layers: Vec<LayerModel>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayerType {
+    #[default]
+    Normal,
+    Folder,
+    Guide,
+    Mask,
+    Other,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LayerModel {
+    pub layer_type: LayerType,
+    pub parent_layer_index: Option<u32>,
+    pub visible: Option<bool>,
+    pub locked: Option<bool>,
+    pub outline: Option<bool>,
+    pub height_multiplier: Option<u32>,
+    pub frames: Vec<FrameModel>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TweenType {
+    Motion,
+    Shape,
+    MotionObject,
+    #[default]
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameModel {
+    pub index: Option<u32>,
+    pub duration: Option<u32>,
+    pub is_comment: bool,
+    pub tween_type: TweenType,
+}
+
+/// A timeline (`DOMTimeline`) listed under `DOMDocument/timelines`.
+#[derive(Clone, Copy, Debug)]
+pub struct Timeline<'a> {
+    element: &'a El,
+}
+
+/// A native `DOMLayer` element.
+#[derive(Clone, Copy, Debug)]
+pub struct Layer<'a> {
+    element: &'a El,
+}
+
+/// A native `DOMFrame` element.
+#[derive(Clone, Copy, Debug)]
+pub struct Frame<'a> {
+    element: &'a El,
+}
+
+fn attr_last<'a>(element: &'a El, name: &str) -> Option<&'a str> {
+    element.attrs.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.as_str())
+}
+
+fn number_f32(element: &El, name: &str) -> Option<f32> {
+    attr_last(element, name).and_then(|value| value.trim().parse::<f32>().ok()).filter(|value| value.is_finite())
+}
+
+fn number_u32(element: &El, name: &str) -> Option<u32> {
+    attr_last(element, name).and_then(|value| value.trim().parse::<u32>().ok())
+}
+
+fn boolean(element: &El, name: &str) -> Option<bool> {
+    attr_last(element, name).map(|value| value.trim() == "true")
+}
+
+impl Document {
+    /// Parse XFL XML with AniCraft's existing size, depth, element, attribute, entity, doctype
+    /// and malformed-end-tag behavior. The shared XML parser owns byte parsing; this crate owns
+    /// the XFL-specific limits and schema views.
+    pub fn parse(bytes: &[u8]) -> Result<Self, XmlError> {
+        let defaults = Limits::DEFAULT;
+        let limits = Limits {
+            max_input: MAX_XML_BYTES,
+            max_depth: MAX_XML_DEPTH,
+            max_nodes: MAX_XML_ELEMENTS.saturating_mul(2).saturating_add(1),
+            max_elements: MAX_XML_ELEMENTS,
+            max_attrs: defaults.max_attrs,
+            max_attrs_total: defaults.max_attrs_total,
+        };
+        let options =
+            Options { limits, strict_end_tags: true, unknown_entity: UnknownEntity::Literal, doctype: Doctype::Ignore, ..Options::default() };
+        Ok(Self { root: options.parse(bytes)? })
+    }
+
+    /// The lossless XML tree used by consumer adapters for schema details this view does not
+    /// interpret. Text and child order come directly from `craft-xml`.
+    pub fn root(&self) -> &El {
+        &self.root
+    }
+
+    /// The root's local element name (normally `DOMDocument`).
+    pub fn root_name(&self) -> &str {
+        &self.root.name
+    }
+
+    /// The XFL stage metadata, applying finite-number checks but leaving product defaults and
+    /// clamping to the consumer.
+    pub fn stage(&self) -> Stage<'_> {
+        Stage {
+            width: number_f32(&self.root, "width"),
+            height: number_f32(&self.root, "height"),
+            frame_rate: number_f32(&self.root, "frameRate"),
+            background_color: attr_last(&self.root, "backgroundColor"),
+        }
+    }
+
+    /// Timelines in document order. Non-`DOMTimeline` extension nodes are skipped.
+    pub fn timelines(&self) -> impl Iterator<Item = Timeline<'_>> {
+        self.root
+            .child("timelines")
+            .into_iter()
+            .flat_map(El::elements)
+            .filter(|element| element.name == "DOMTimeline")
+            .map(|element| Timeline { element })
+    }
+
+    /// The timeline nested under `DOMSymbolItem/timeline`, if this is library symbol XML.
+    pub fn symbol_timeline(&self) -> Option<Timeline<'_>> {
+        self.root.child("timeline")?.child("DOMTimeline").map(|element| Timeline { element })
+    }
+
+    /// Projects bounded schema metadata and returns the XML tree by ownership. Consumers can
+    /// convert that tree into their compatibility representation without keeping two full trees
+    /// alive during import.
+    pub fn into_parts(self, limits: ModelLimits) -> (DocumentModel, El) {
+        let stage = StageModel {
+            width: number_f32(&self.root, "width"),
+            height: number_f32(&self.root, "height"),
+            frame_rate: number_f32(&self.root, "frameRate"),
+            has_background_color: attr_last(&self.root, "backgroundColor").is_some(),
+        };
+        let timelines = self.timelines().take(limits.max_timelines).map(|timeline| timeline.into_model(limits.max_layers_per_timeline)).collect();
+        let symbol_timeline = self.symbol_timeline().map(|timeline| timeline.into_model(limits.max_layers_per_timeline));
+        (DocumentModel { stage, timelines, symbol_timeline }, self.root)
+    }
+}
+
+impl<'a> Timeline<'a> {
+    pub fn name(self) -> Option<&'a str> {
+        attr_last(self.element, "name")
+    }
+
+    /// Raw timeline XML for application-specific payload conversion.
+    pub fn element(self) -> &'a El {
+        self.element
+    }
+
+    /// Layers in native order. Non-`DOMLayer` extension nodes are skipped.
+    pub fn layers(self) -> impl Iterator<Item = Layer<'a>> {
+        self.element.child("layers").into_iter().flat_map(El::elements).filter(|element| element.name == "DOMLayer").map(|element| Layer { element })
+    }
+
+    fn into_model(self, max_layers: usize) -> TimelineModel {
+        TimelineModel { layers: self.layers().take(max_layers).map(Layer::into_model).collect() }
+    }
+}
+
+impl<'a> Layer<'a> {
+    pub fn name(self) -> Option<&'a str> {
+        attr_last(self.element, "name")
+    }
+
+    pub fn layer_type(self) -> Option<&'a str> {
+        attr_last(self.element, "layerType")
+    }
+
+    pub fn parent_layer_index(self) -> Option<u32> {
+        number_u32(self.element, "parentLayerIndex")
+    }
+
+    pub fn visible(self) -> Option<bool> {
+        boolean(self.element, "visible")
+    }
+
+    pub fn locked(self) -> Option<bool> {
+        boolean(self.element, "locked")
+    }
+
+    pub fn outline(self) -> Option<bool> {
+        boolean(self.element, "outline")
+    }
+
+    pub fn color(self) -> Option<&'a str> {
+        attr_last(self.element, "color")
+    }
+
+    pub fn height_multiplier(self) -> Option<u32> {
+        number_u32(self.element, "heightMultiplier")
+    }
+
+    /// Frames in native order. Non-`DOMFrame` extension nodes are skipped.
+    pub fn frames(self) -> impl Iterator<Item = Frame<'a>> {
+        self.element.child("frames").into_iter().flat_map(El::elements).filter(|element| element.name == "DOMFrame").map(|element| Frame { element })
+    }
+
+    fn into_model(self) -> LayerModel {
+        let layer_type = match attr_last(self.element, "layerType") {
+            Some("folder") => LayerType::Folder,
+            Some("guide") => LayerType::Guide,
+            Some("mask") => LayerType::Mask,
+            Some("normal") | None => LayerType::Normal,
+            Some(_) => LayerType::Other,
+        };
+        LayerModel {
+            layer_type,
+            parent_layer_index: number_u32(self.element, "parentLayerIndex"),
+            visible: boolean(self.element, "visible"),
+            locked: boolean(self.element, "locked"),
+            outline: boolean(self.element, "outline"),
+            height_multiplier: number_u32(self.element, "heightMultiplier"),
+            frames: self.frames().map(Frame::into_model).collect(),
+        }
+    }
+}
+
+impl<'a> Frame<'a> {
+    pub fn index(self) -> Option<u32> {
+        number_u32(self.element, "index")
+    }
+
+    pub fn duration(self) -> Option<u32> {
+        number_u32(self.element, "duration")
+    }
+
+    pub fn label_type(self) -> Option<&'a str> {
+        attr_last(self.element, "labelType")
+    }
+
+    pub fn name(self) -> Option<&'a str> {
+        attr_last(self.element, "name")
+    }
+
+    pub fn tween_type(self) -> Option<&'a str> {
+        attr_last(self.element, "tweenType")
+    }
+
+    /// Raw frame XML for application-specific shape, action, sound and tween conversion.
+    pub fn element(self) -> &'a El {
+        self.element
+    }
+
+    fn into_model(self) -> FrameModel {
+        let tween_type = match attr_last(self.element, "tweenType") {
+            Some("motion") => TweenType::Motion,
+            Some("shape") => TweenType::Shape,
+            Some("motion object") => TweenType::MotionObject,
+            _ => TweenType::Other,
+        };
+        FrameModel {
+            index: number_u32(self.element, "index"),
+            duration: number_u32(self.element, "duration"),
+            is_comment: attr_last(self.element, "labelType").is_some_and(|value| value.trim() == "comment"),
+            tween_type,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_stage_scene_layer_and_frame_schema_without_building_an_app_model() {
+        let bytes = br##"<!DOCTYPE DOMDocument [<!ENTITY custom "kept">]>
+<DOMDocument width="640" height="480" frameRate="29.97" backgroundColor="#123456">
+  <timelines>
+    <Extension/>
+    <DOMTimeline name="Scene &custom;"><layers>
+      <Extension/>
+      <DOMLayer name="Background" layerType="normal" visible="false" locked="true" outline="true" color="#abcdef" heightMultiplier="2" parentLayerIndex="0">
+        <frames><DOMFrame index="4" duration="3" name="Intro" labelType="name" tweenType="motion"><elements><Shape/></elements></DOMFrame></frames>
+      </DOMLayer>
+    </layers></DOMTimeline>
+  </timelines>
+</DOMDocument>"##;
+        let document = Document::parse(bytes).unwrap();
+        assert_eq!(document.root_name(), "DOMDocument");
+        let stage = document.stage();
+        assert_eq!((stage.width, stage.height, stage.frame_rate), (Some(640.0), Some(480.0), Some(29.97)));
+        assert_eq!(stage.background_color, Some("#123456"));
+        let mut timelines = document.timelines();
+        let timeline = timelines.next().unwrap();
+        assert_eq!(timeline.name(), Some("Scene &custom;"), "declared entities stay literal");
+        assert!(timelines.next().is_none());
+        let mut layers = timeline.layers();
+        let layer = layers.next().unwrap();
+        assert_eq!(layer.name(), Some("Background"));
+        assert_eq!(layer.layer_type(), Some("normal"));
+        assert_eq!(layer.parent_layer_index(), Some(0));
+        assert_eq!((layer.visible(), layer.locked(), layer.outline()), (Some(false), Some(true), Some(true)));
+        assert_eq!(layer.color(), Some("#abcdef"));
+        assert_eq!(layer.height_multiplier(), Some(2));
+        let frame = layer.frames().next().unwrap();
+        assert_eq!((frame.index(), frame.duration()), (Some(4), Some(3)));
+        assert_eq!((frame.name(), frame.label_type(), frame.tween_type()), (Some("Intro"), Some("name"), Some("motion")));
+        assert_eq!(frame.element().child("elements").unwrap().child("Shape").unwrap().name, "Shape");
+    }
+
+    #[test]
+    fn uses_last_duplicate_attribute_like_the_legacy_xfl_adapter() {
+        let document = Document::parse(br##"<DOMDocument width="1" width="2"><timelines/></DOMDocument>"##).unwrap();
+        assert_eq!(document.stage().width, Some(2.0));
+    }
+
+    #[test]
+    fn preserves_lenient_doctype_entities_and_strict_end_tag_behavior() {
+        let document = Document::parse(br##"<!DOCTYPE DOMDocument><DOMDocument width="&custom;"/>tail"##).unwrap();
+        assert_eq!(document.stage().width, None);
+        assert!(Document::parse(b"<DOMDocument><timelines></DOMDocument>").is_err());
+    }
+
+    #[test]
+    fn applies_the_existing_xfl_depth_and_attribute_budgets() {
+        let too_deep = format!("{}{}", "<x>".repeat(MAX_XML_DEPTH + 1), "</x>".repeat(MAX_XML_DEPTH + 1));
+        assert!(matches!(Document::parse(too_deep.as_bytes()), Err(XmlError::TooDeep(_))));
+
+        let mut too_many_attrs = String::from("<DOMDocument");
+        for _ in 0..=Limits::DEFAULT.max_attrs {
+            too_many_attrs.push_str(" x=''");
+        }
+        too_many_attrs.push_str("/>");
+        assert!(matches!(Document::parse(too_many_attrs.as_bytes()), Err(XmlError::TooManyAttrs(_))));
+    }
+
+    #[test]
+    fn projects_neutral_schema_fields_and_returns_the_xml_tree_by_move() {
+        let document = Document::parse(
+            br##"<DOMDocument width="640" backgroundColor="#fff"><timelines><DOMTimeline name="Scene"><layers><DOMLayer name="Layer" layerType="mask" visible="false"><frames><DOMFrame index="7" duration="2" labelType="comment" tweenType="shape"/></frames></DOMLayer></layers></DOMTimeline></timelines></DOMDocument>"##,
+        )
+        .unwrap();
+        let (model, root) = document.into_parts(ModelLimits { max_timelines: 1, max_layers_per_timeline: 1 });
+        assert_eq!(model.stage, StageModel { width: Some(640.0), height: None, frame_rate: None, has_background_color: true });
+        assert_eq!(model.timelines.len(), 1);
+        let layer = &model.timelines[0].layers[0];
+        assert_eq!(layer.layer_type, LayerType::Mask);
+        assert_eq!(layer.visible, Some(false));
+        assert_eq!(layer.frames[0], FrameModel { index: Some(7), duration: Some(2), is_comment: true, tween_type: TweenType::Shape });
+        assert_eq!(root.attr("width"), Some("640"));
+        assert_eq!(root.child("timelines").unwrap().child("DOMTimeline").unwrap().attr("name"), Some("Scene"));
+    }
+
+    #[test]
+    fn projects_symbol_timeline_under_the_native_symbol_wrapper() {
+        let document = Document::parse(b"<DOMSymbolItem><timeline><DOMTimeline><layers><DOMLayer><frames><DOMFrame index='1'/></frames></DOMLayer></layers></DOMTimeline></timeline></DOMSymbolItem>").unwrap();
+        let (model, _) = document.into_parts(ModelLimits { max_timelines: 10, max_layers_per_timeline: 10 });
+        assert!(model.timelines.is_empty());
+        assert_eq!(model.symbol_timeline.unwrap().layers[0].frames[0].index, Some(1));
+    }
+}
