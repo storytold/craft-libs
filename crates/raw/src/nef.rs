@@ -301,7 +301,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     // the white level is measured from the whole image (or known for a measured body); the probe (no samples in its
     // result) takes the nominal one
     let (white, white_source) = match (body.and_then(|b| b.white), mode) {
-        (Some(white), _) => (white, crate::LevelSource::Inferred),
+        (Some(white), _) => (white, crate::LevelSource::Fallback),
         (None, Mode::Full) => white_from_data_sourced(samples, bits),
         (None, Mode::Header) => (((1u32 << bits.clamp(1, 16)) - 1) as f32, crate::LevelSource::Fallback),
     };

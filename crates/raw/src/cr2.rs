@@ -99,9 +99,9 @@ fn measured_red_row(data: &[u16], width: usize, area: Rect, black: f32, white: f
     }
     let d = [diff[0] / n[0] as f64, diff[1] / n[1] as f64];
     let rel = [0, 1].map(|p| (upper[p] - lower[p]).abs() / (upper[p] + lower[p]).max(1.0));
-    if d[0] < 0.8 * d[1] && rel[0] < rel[1] {
+    if d[0] < 0.8 * d[1] && d[1] - d[0] > 4.0 && rel[0] < rel[1] {
         Some(1)
-    } else if d[1] < 0.8 * d[0] && rel[1] < rel[0] {
+    } else if d[1] < 0.8 * d[0] && d[0] - d[1] > 4.0 && rel[1] < rel[0] {
         Some(0)
     } else {
         None

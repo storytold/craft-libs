@@ -390,18 +390,22 @@ fn trak(bytes: &[u8], t: &BoxRef, budget: &mut usize) -> Option<Cr3Track> {
                     _ => None,
                 }
             }
-            // Missing offset-table counts deny sample access, but the known
+            // Missing or truncated offset-table counts deny sample access, but the known
             // track must remain available to the largest-raw-track selector.
-            b"co64" => match be32(body, 4) {
-                Some(count) if count > 0 => offset = be64(body, 8).and_then(|v| usize::try_from(v).ok()),
-                None => offset = None,
-                _ => {}
-            },
-            b"stco" => match be32(body, 4) {
-                Some(count) if count > 0 => offset = be32(body, 8).map(|v| v as usize),
-                None => offset = None,
-                _ => {}
-            },
+            b"co64" => {
+                offset = match be32(body, 4) {
+                    Some(count) if count > 0 && count as usize <= body.len().saturating_sub(8) / 8 => {
+                        be64(body, 8).and_then(|v| usize::try_from(v).ok())
+                    }
+                    _ => None,
+                };
+            }
+            b"stco" => {
+                offset = match be32(body, 4) {
+                    Some(count) if count > 0 && count as usize <= body.len().saturating_sub(8) / 4 => be32(body, 8).map(|v| v as usize),
+                    _ => None,
+                };
+            }
             _ => {}
         }
     }

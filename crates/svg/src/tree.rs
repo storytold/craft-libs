@@ -480,6 +480,10 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
             used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
             return None;
         }
+        Err(Error::TooDeep(_)) => {
+            used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
         Err(_) => {
             used.invalid_svg.fetch_add(1, Ordering::Relaxed);
             return None;
