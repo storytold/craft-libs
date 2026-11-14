@@ -112,6 +112,7 @@ struct Look {
     original: bool,
     stale: bool,
     sources: bool,
+    pixels: Option<u64>,
 }
 
 fn view(view: ScopeView) -> ScopeSettings {
@@ -131,6 +132,9 @@ fn histogram(ui: &mut Ui, data: &mut StoryData, name: &'static str, mode: Mode, 
     }
     if look.colors {
         set = set.colors(overlay_of(mode));
+    }
+    if let Some(total) = look.pixels {
+        set = set.pixels(total);
     }
     let sources = [ScopeSource { key: "image", label: "Entire Image" }, ScopeSource { key: "layer", label: "Selected Layer" }];
     let sources: &[ScopeSource<'_>] = if look.sources { &sources } else { &[] };
@@ -169,6 +173,12 @@ fn colors_ink(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn stale_with_refresh(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let settings = ScopeSettings { show_channels_in_color: true, ..view(ScopeView::Expanded) };
     histogram(ui, data, "stale", Mode::Rgb, settings, Look { original: true, stale: true, ..Look::default() })
+}
+
+/// A layer with transparent pixels: the host's total is above what the bins count.
+#[story(ScopePanel<'static>, covers = [Default], drive = Drive::Never)]
+fn pixels_of_a_layer_with_transparency(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    histogram(ui, data, "pixels", Mode::Rgb, view(ScopeView::Expanded), Look { pixels: Some(10_000_000), ..Look::default() })
 }
 
 fn zone_text(key: &str, value: f32) -> String {

@@ -1,7 +1,6 @@
-//! The Swatches panel menu, its commands and file import and export.
+//! The Swatches panel menu, its commands and file import and export, and the edits the panel's events make.
 
 use craft_behavior::EditEvent;
-use craft_cms::convert::CmykConverter;
 use craft_theme::Srgba;
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
@@ -10,7 +9,8 @@ use craft_ui::menu::PanelRow;
 use craft_ui::patterns::presets::{PresetCommands, PresetEvent, PresetExport, PresetFileRequest, PresetFiles, PresetFooterEvent};
 use craft_ui::runtime::commands::{CommandRef, CommandState};
 
-use super::{SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesState, SwatchesWords};
+use super::library::{find_swatch, free_name, group_of, reorder_edits, unique_group_name};
+use super::{MAX_GROUPS, MAX_SWATCHES, SwatchEdit, SwatchKey, SwatchesState, SwatchesWords};
 use crate::palette::{SwatchColor, SwatchFormat, SwatchGroup, SwatchReport};
 
 /// The purpose of the swatch file pickers: their folder is remembered under it.
@@ -19,11 +19,9 @@ const PICK_PURPOSE: &str = "swatches";
 /// What `SwatchesPanel::apply_file` did.
 #[derive(Debug)]
 #[non_exhaustive]
-#[must_use = "the host saves a changed library and shows the status message"]
+#[must_use = "the host runs the edit and shows the status message"]
 pub struct SwatchesFileOutput {
-    /// The library changed: the app saves it.
-    pub changed: bool,
-    /// The edit the app runs: a read of a file imports its groups.
+    /// The edit the host runs: a read of a file imports its groups.
     pub edit: Option<SwatchEdit>,
     /// The notes of the swatch file that was read or written, once the panel has handled it.
     pub report: Option<SwatchReport>,
@@ -75,10 +73,8 @@ impl SwatchesCommand {
 /// What [`SwatchesMenu::run_command`] did.
 #[derive(Debug)]
 #[non_exhaustive]
-#[must_use = "the app saves a changed library and answers the file request"]
+#[must_use = "the host runs the edit and answers the file request"]
 pub struct SwatchesMenuOutput {
-    /// The library changed: the app saves it.
-    pub changed: bool,
     /// The edit a command makes, for the host to run (New Swatch: `Add` with the foreground and the next numbered name in
     /// the selected swatch's group).
     pub edit: Option<SwatchEdit>,
@@ -122,9 +118,10 @@ impl SwatchesMenu {
             .collect()
     }
 
-    /// Carries out `command`. New Swatch adds the foreground to the selected swatch's (or group's) group, as the
-    /// footer's New does, and the panel selects it and opens its name for editing in its next pass; New Swatch Group
-    /// and Reset Swatches act on `library`. Import, Replace and the two exports give the file request for the host.
+    /// Carries out `command`. New Swatch reports the foreground added to the selected swatch's (or group's) group, as
+    /// the footer's New does, and the panel selects it and opens its name for editing in its next pass; New Swatch
+    /// Group and Reset Swatches report their edits. Import, Replace and the two exports give the file request for the
+    /// host.
     pub fn run_command(
         groups: &[SwatchGroup],
         state: &mut SwatchesState,
@@ -132,57 +129,24 @@ impl SwatchesMenu {
         foreground: Srgba,
         words: &SwatchesWords,
     ) -> SwatchesMenuOutput {
-        let _ = (groups, state, command, foreground, words);
-        todo!("pn.C28")
-    }
-
-    /// [`run_command`](Self::run_command) over a library it writes.
-    // P3(panels-w6): pn.C28 — the old `run_command(&mut SwatchLibrary, ..)`; phase 3 removes it with its readers.
-    #[allow(dead_code)]
-    pub(crate) fn run_command_on_library(
-        library: &mut SwatchLibrary,
-        state: &mut SwatchesState,
-        command: SwatchesCommand,
-        foreground: Srgba,
-        words: &SwatchesWords,
-    ) -> SwatchesMenuOutput {
-        let mut output = SwatchesMenuOutput { changed: false, edit: None, file: None, status: None };
+        let mut output = SwatchesMenuOutput { edit: None, file: None, status: None };
         let readable: Vec<&str> = SwatchFormat::ALL.iter().filter(|f| f.can_read()).map(|f| f.extension()).collect();
         let import = || PresetFiles::<SwatchKey>::new(PICK_PURPOSE, words.file.as_str(), &readable).replace(true);
         match command {
-            SwatchesCommand::NewSwatch => {
-                let group = state.selected.as_ref().and_then(|key| library.group_of(key));
-                let color = SwatchColor::Rgb(foreground.to_rgb_array().map(|v| v.clamp(0.0, 1.0)));
-                let at = library.add_numbered(color, None, group, words.swatch_n.as_str());
-                output.changed = at.is_some();
-                if let Some(entry) = at.and_then(|at| library.get(at)) {
-                    let key = SwatchKey::Swatch(entry.name.clone());
-                    state.selected = Some(key.clone());
-                    state.rename = Some(key);
-                }
-            }
-            SwatchesCommand::NewGroup => {
-                let at = library.new_group(words.group.as_str());
-                output.changed = at.is_some();
-                if let Some(at) = at {
-                    state.rename = Some(SwatchKey::Group(library.groups[at].name.clone()));
-                }
-            }
-            SwatchesCommand::Reset => {
-                library.groups = crate::palette::default_swatches();
-                output.changed = true;
-            }
+            SwatchesCommand::NewSwatch => output.edit = new_swatch_edit(groups, state, foreground, words),
+            SwatchesCommand::NewGroup => output.edit = new_group_edit(groups, state, words),
+            SwatchesCommand::Reset => output.edit = Some(SwatchEdit::Reset),
             SwatchesCommand::Import => output.file = import().request(PresetCommands::Load, None),
             SwatchesCommand::Replace => output.file = import().request(PresetCommands::Replace, None),
-            SwatchesCommand::Export => Self::export(library, state, SwatchFormat::Aco, words, &mut output),
-            SwatchesCommand::ExportExchange => Self::export(library, state, SwatchFormat::Ase, words, &mut output),
+            SwatchesCommand::Export => Self::export(groups, state, SwatchFormat::Aco, words, &mut output),
+            SwatchesCommand::ExportExchange => Self::export(groups, state, SwatchFormat::Ase, words, &mut output),
         }
         output
     }
 
-    /// The file request that writes the library as `format`; a library the format cannot hold is a status message.
-    fn export(library: &SwatchLibrary, state: &mut SwatchesState, format: SwatchFormat, words: &SwatchesWords, output: &mut SwatchesMenuOutput) {
-        match crate::palette::write_swatches(&library.groups, format) {
+    /// The file request that writes `groups` as `format`; a library the format cannot hold is a status message.
+    fn export(groups: &[SwatchGroup], state: &mut SwatchesState, format: SwatchFormat, words: &SwatchesWords, output: &mut SwatchesMenuOutput) {
+        match crate::palette::write_swatches(groups, format) {
             Ok((bytes, report)) => {
                 let file_name = format!("{}.{}", words.file.as_str(), format.extension());
                 let files = PresetFiles::<SwatchKey>::new(PICK_PURPOSE, words.file.as_str(), &[format.extension()])
@@ -195,111 +159,98 @@ impl SwatchesMenu {
     }
 }
 
-/// The events of one pass applied to the library and the panel's state.
-pub(super) struct Actions<'a> {
-    pub(super) library: &'a mut SwatchLibrary,
-    pub(super) st: &'a mut SwatchesState,
-    pub(super) used: &'a mut Option<(SwatchAt, Srgba, bool)>,
-    pub(super) changed: &'a mut bool,
-    pub(super) foreground: Srgba,
-    pub(super) template: &'a str,
-    pub(super) group_name: &'a str,
-    pub(super) cmyk: &'a CmykConverter,
+/// The foreground colour into the selected swatch's group under the next free numbered name; the swatch is selected and
+/// its name opens for editing. `None` when the library is full.
+fn new_swatch_edit(groups: &[SwatchGroup], st: &mut SwatchesState, foreground: Srgba, words: &SwatchesWords) -> Option<SwatchEdit> {
+    if groups.iter().map(|g| g.entries.len()).sum::<usize>() >= MAX_SWATCHES {
+        return None;
+    }
+    let group = st.selected.as_ref().and_then(|key| group_of(groups, key)).and_then(|index| groups.get(index)).map(|g| g.name.clone());
+    let color = SwatchColor::Rgb(foreground.to_rgb_array().map(|v| v.clamp(0.0, 1.0)));
+    let name = free_name(groups, words.swatch_n.as_str());
+    let key = SwatchKey::Swatch(name.clone());
+    st.selected = Some(key.clone());
+    st.rename = Some(key);
+    Some(SwatchEdit::Add { group, name, color })
 }
 
-impl Actions<'_> {
-    pub(super) fn event(&mut self, event: PresetEvent<SwatchKey>) {
-        match event {
-            PresetEvent::Select { key: SwatchKey::Swatch(name), mods, .. } => {
-                self.st.selected = Some(SwatchKey::Swatch(name.clone()));
-                if let Some(at) = self.library.find(&name)
-                    && let Some(entry) = self.library.get(at)
-                {
-                    let background = mods.alt || mods.cmd || mods.ctrl;
-                    *self.used = Some((at, entry.color.to_srgb(self.cmyk), background));
-                }
-            }
-            PresetEvent::Select { key, .. } | PresetEvent::Activate { key, .. } => {
-                self.st.selected = Some(key).filter(|k| matches!(k, SwatchKey::Swatch(_)))
-            }
-            PresetEvent::Rename { key: SwatchKey::Swatch(old), text, .. } => {
-                if let Some(at) = self.library.find(&old)
-                    && self.library.rename(at, &text)
-                {
-                    *self.changed = true;
-                    if self.st.selected == Some(SwatchKey::Swatch(old)) {
-                        self.st.selected = Some(SwatchKey::Swatch(text.trim().to_owned()));
-                    }
-                }
-            }
-            PresetEvent::Rename { key: SwatchKey::Group(old), text, .. } => {
-                if let Some(group) = self.library.groups.iter().position(|g| g.name == old)
-                    && self.library.rename_group(group, &text)
-                {
-                    *self.changed = true;
-                }
-            }
-            PresetEvent::Delete(key) => self.delete(&key),
-            PresetEvent::MoveTo { key: SwatchKey::Swatch(name), group: SwatchKey::Group(to), .. } => {
-                if let (Some(at), Some(to)) = (self.library.find(&name), self.library.groups.iter().position(|g| g.name == to)) {
-                    self.library.move_to(at, to);
-                    *self.changed = true;
-                }
-            }
-            PresetEvent::Reorder(EditEvent::Commit { after, .. } | EditEvent::Set { after, .. }) => {
-                *self.changed |= self.library.apply_reorder(&after);
-            }
-            PresetEvent::Footer(footer) => self.footer(footer),
-            _ => {}
-        }
+/// An empty group under a unique name, opened for renaming. `None` when the library holds the most groups.
+fn new_group_edit(groups: &[SwatchGroup], st: &mut SwatchesState, words: &SwatchesWords) -> Option<SwatchEdit> {
+    if groups.len() >= MAX_GROUPS {
+        return None;
     }
+    let name = unique_group_name(groups, words.group.as_str().trim());
+    st.rename = Some(SwatchKey::Group(name.clone()));
+    Some(SwatchEdit::NewGroup { name })
+}
 
-    fn footer(&mut self, event: PresetFooterEvent<SwatchKey>) {
-        match event {
-            PresetFooterEvent::New => self.new_swatch(),
-            PresetFooterEvent::NewGroup => {
-                if let Some(at) = self.library.new_group(self.group_name) {
-                    self.st.rename = Some(SwatchKey::Group(self.library.groups[at].name.clone()));
-                    *self.changed = true;
-                }
-            }
-            PresetFooterEvent::Delete => {
-                if let Some(key) = self.st.selected.clone() {
-                    self.delete(&key);
-                }
-            }
-            _ => {}
-        }
+/// The edit that deletes the row `key` names, when the library has it.
+fn delete_edit(groups: &[SwatchGroup], key: &SwatchKey) -> Option<SwatchEdit> {
+    match key {
+        SwatchKey::Swatch(name) => find_swatch(groups, name).map(|_| SwatchEdit::Delete { swatch: name.clone() }),
+        SwatchKey::Group(name) => groups.iter().any(|g| g.name == *name).then(|| SwatchEdit::DeleteGroup { group: name.clone() }),
     }
+}
 
-    /// The foreground colour into the selected swatch's group, named and selected, then renamed in place.
-    fn new_swatch(&mut self) {
-        let group = self.st.selected.as_ref().and_then(|key| self.library.group_of(key));
-        let color = SwatchColor::Rgb(self.foreground.to_rgb_array().map(|v| v.clamp(0.0, 1.0)));
-        let Some(at) = self.library.add_numbered(color, None, group, self.template) else {
-            return;
-        };
-        if let Some(entry) = self.library.get(at) {
-            let key = SwatchKey::Swatch(entry.name.clone());
-            self.st.selected = Some(key.clone());
-            self.st.rename = Some(key);
+/// The edits one event of the browser makes over `groups`, in order; selection and rename requests go to `st`.
+pub(super) fn event_edits(
+    groups: &[SwatchGroup],
+    st: &mut SwatchesState,
+    event: PresetEvent<SwatchKey>,
+    foreground: Srgba,
+    words: &SwatchesWords,
+) -> Vec<SwatchEdit> {
+    match event {
+        PresetEvent::Select { key: SwatchKey::Swatch(name), .. } => {
+            st.selected = Some(SwatchKey::Swatch(name));
+            Vec::new()
         }
-        *self.changed = true;
+        PresetEvent::Select { key, .. } | PresetEvent::Activate { key, .. } => {
+            st.selected = Some(key).filter(|k| matches!(k, SwatchKey::Swatch(_)));
+            Vec::new()
+        }
+        PresetEvent::Rename { key: SwatchKey::Swatch(old), text, .. } => {
+            let name = text.trim();
+            if find_swatch(groups, &old).is_none() || name.is_empty() || name == old || find_swatch(groups, name).is_some() {
+                return Vec::new();
+            }
+            if st.selected == Some(SwatchKey::Swatch(old.clone())) {
+                st.selected = Some(SwatchKey::Swatch(name.to_owned()));
+            }
+            vec![SwatchEdit::Rename { swatch: old, name: name.to_owned() }]
+        }
+        PresetEvent::Rename { key: SwatchKey::Group(old), text, .. } => {
+            let name = text.trim();
+            if !groups.iter().any(|g| g.name == old) || name.is_empty() || name == old || groups.iter().any(|g| g.name == name) {
+                return Vec::new();
+            }
+            vec![SwatchEdit::RenameGroup { group: old, name: name.to_owned() }]
+        }
+        PresetEvent::Delete(key) => delete_edit(groups, &key).into_iter().collect(),
+        PresetEvent::MoveTo { key: SwatchKey::Swatch(name), group: SwatchKey::Group(to), .. } => {
+            let (Some(_), Some(target)) = (find_swatch(groups, &name), groups.iter().find(|g| g.name == to)) else {
+                return Vec::new();
+            };
+            vec![SwatchEdit::MoveTo { swatch: name, group: to.clone(), at: target.entries.len() }]
+        }
+        PresetEvent::Reorder(EditEvent::Commit { after, .. } | EditEvent::Set { after, .. }) => reorder_edits(groups, &after),
+        PresetEvent::Footer(footer) => footer_edits(groups, st, footer, foreground, words),
+        _ => Vec::new(),
     }
+}
 
-    fn delete(&mut self, key: &SwatchKey) {
-        let removed = match key {
-            SwatchKey::Swatch(name) => self.library.find(name).and_then(|at| self.library.remove(at)).is_some(),
-            SwatchKey::Group(name) => match self.library.groups.iter().position(|g| g.name == *name) {
-                Some(group) => {
-                    self.library.groups.remove(group);
-                    true
-                }
-                None => false,
-            },
-        };
-        if removed {
-            *self.changed = true;
-        }
+/// The edit a footer button makes.
+fn footer_edits(
+    groups: &[SwatchGroup],
+    st: &mut SwatchesState,
+    event: PresetFooterEvent<SwatchKey>,
+    foreground: Srgba,
+    words: &SwatchesWords,
+) -> Vec<SwatchEdit> {
+    match event {
+        PresetFooterEvent::New => new_swatch_edit(groups, st, foreground, words).into_iter().collect(),
+        PresetFooterEvent::NewGroup => new_group_edit(groups, st, words).into_iter().collect(),
+        PresetFooterEvent::Delete => st.selected.clone().and_then(|key| delete_edit(groups, &key)).into_iter().collect(),
+        _ => Vec::new(),
     }
 }

@@ -94,8 +94,8 @@ impl<K: Clone> ItemSource<K> for Order<'_, K> {
 /// - **Drag**: alpha and spot rows reorder, before or after another one or before Quick Mask
 ///   ([`Reorder`](ChannelsEvent::Reorder); Cmd/Ctrl+] and [ too). Any row drops on the footer's New and Load buttons,
 ///   and an alpha or spot row on Delete; a drop acts on the row grabbed.
-/// - **Menus**: a right-click or the Menu key opens the row's context menu; [`panel_rows`](super::panel_rows) are the
-///   panel menu's rows.
+/// - **Menus**: a right-click or the Menu key opens the row's context menu; [`panel_rows`](super::panel_rows) is the
+///   panel menu's fixed list, each command greyed by [`states`](super::states).
 /// - **Right to left**: the list and the footer mirror; the chord sits at the trailing end.
 #[must_use = "show the panel with `show`"]
 #[derive(craft_ui::contract::Pattern)]
@@ -161,9 +161,8 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> ChannelsPanel<'a,
                         _ => events.borrow_mut().extend(command.event(rows, mods)),
                     }
                 }
-                let kind = targeted_row(rows).map(|row| row.kind);
-                for command in ChannelsCommands::ALL {
-                    stack.publish(command, CommandState::new().enabled(command.applies_to(kind)));
+                for (command, state) in super::menu::states(rows) {
+                    stack.publish(command, state);
                 }
                 if let Some(key) = rename.clone() {
                     request_rename(&ctx, list, &key);

@@ -1,5 +1,7 @@
-//! `SwatchesPanel`: the Swatches panel on a [`SwatchLibrary`]: groups of flat touching squares, click to use, the panel
-//! menu for new swatches, groups and swatch files.
+//! `SwatchesPanel`: the Swatches panel on the groups of a [`SwatchLibrary`]: groups of flat touching squares, click to
+//! use, the panel menu for new swatches, groups and swatch files. The panel never writes the library: it reports each
+//! change as a resolved [`SwatchEdit`] (new, rename, delete, move, group edits, import) that the host runs, with
+//! [`SwatchLibrary::apply`] for an in-memory host.
 
 mod library;
 mod menu;

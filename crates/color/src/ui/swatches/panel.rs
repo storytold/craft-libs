@@ -10,28 +10,26 @@ use craft_ui::bars::StatusMessage;
 use craft_ui::choice::SwatchFace;
 use craft_ui::contract::{Bind, Held, NoValue, Outcome, Pattern, ShowContainer as _, request_rename};
 use craft_ui::layout_components::Stack;
-use craft_ui::patterns::presets::{PresetBrowser, PresetFileEvent, PresetFooterOptions, PresetReorder, PresetRow, PresetWords, ThumbInfo};
+use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetFileEvent, PresetFooterOptions, PresetReorder, PresetWords, ThumbInfo};
 use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::{Count, Env};
 use egui::{Rect, Response, Ui};
 
-use super::library::value_text;
-use super::menu::Actions;
-use super::{SwatchAt, SwatchEdit, SwatchKey, SwatchLibrary, SwatchesFileOutput, SwatchesState, SwatchesWords};
+use super::library::{find_swatch, has};
+use super::menu::event_edits;
+use super::{SwatchAt, SwatchEdit, SwatchKey, SwatchesFileOutput, SwatchesState, SwatchesWords, swatch_rows};
 use crate::palette::{SwatchColor, SwatchGroup, SwatchNote, SwatchReport};
 
 /// What [`SwatchesPanel::show`] reports.
 #[derive(Debug)]
 #[non_exhaustive]
-#[must_use = "the host applies the swatch"]
+#[must_use = "the host applies the swatch and runs the edits"]
 pub struct SwatchesPanelOutput {
     /// The panel's response.
     pub response: Response,
     /// A swatch was clicked: its colour (through the document's converter) for the foreground, or for the background
     /// when Alt (Ctrl or Cmd too, as PhotoCraft) was held.
     pub used: Option<(SwatchAt, Srgba, bool)>,
-    /// The library changed (new, rename, delete, move, group edits): the app saves it.
-    pub changed: bool,
     /// The edits the user made this pass, in pass order, for the host to run; the panel never writes the library.
     pub edits: Vec<SwatchEdit>,
 }
@@ -44,7 +42,7 @@ impl Outcome for SwatchesPanelOutput {
     }
 }
 
-/// The Swatches panel on a [`SwatchLibrary`], built on `PresetBrowser`: groups as folders, swatches as flat touching
+/// The Swatches panel on the library's groups, built on `PresetBrowser`: groups as folders, swatches as flat touching
 /// squares with no gap or corner radius (Photoshop), the size the browser's zoom chooses.
 ///
 /// - Click uses the swatch for the foreground; Alt-click (or Ctrl or Cmd) for the background. The swatch is selected.
@@ -52,33 +50,31 @@ impl Outcome for SwatchesPanelOutput {
 ///   the canvas.
 /// - The footer's + is New Swatch: the foreground colour into the selected swatch's group, named "Color Swatch N", then
 ///   renamed in place.
+/// - Every change of the library comes back as a [`SwatchEdit`] with resolved names and positions; the host runs it.
 /// - Tooltips name the swatch and its value; AccessKit as the preset browser's grid, each swatch named.
 /// - The files of Import, Replace and Export go out as `PresetFileRequest`s from the panel menu; the host answers
 ///   them with [`SwatchesPanel::apply_file`].
 #[must_use = "show the panel with `show`"]
 #[derive(Pattern)]
 pub struct SwatchesPanel<'a> {
-    library: Bind<'a, SwatchLibrary>,
+    groups: &'a [SwatchGroup],
     state: Bind<'a, SwatchesState>,
     cmyk: Option<&'a CmykConverter>,
     foreground: Srgba,
 }
 
-/// What the body decided; `show` stores it after the real run.
+/// What the body decided; `show` stores the state and reports the rest after the real run.
 struct Settled {
-    before: SwatchLibrary,
-    lib: SwatchLibrary,
     before_state: SwatchesState,
     st: SwatchesState,
     used: Option<(SwatchAt, Srgba, bool)>,
-    changed: bool,
+    edits: Vec<SwatchEdit>,
 }
 
 impl<'a> SwatchesPanel<'a> {
-    /// The panel over `library` and the host-owned `state`; `foreground` is what New Swatch adds.
+    /// The panel over the library's `groups` and the host-owned `state`; `foreground` is what New Swatch adds.
     pub fn new(groups: &'a [SwatchGroup], state: Bind<'a, SwatchesState>, foreground: Srgba) -> Self {
-        // P3(panels-w6): pn.C27 — the groups are copied into a library the body still edits.
-        SwatchesPanel { library: Bind::given(SwatchLibrary::new(groups.to_vec())), state, cmyk: None, foreground }
+        SwatchesPanel { groups, state, cmyk: None, foreground }
     }
 
     /// The document's CMYK converter, which draws CMYK swatches and gives their colours when used; without it they
@@ -90,33 +86,21 @@ impl<'a> SwatchesPanel<'a> {
 
     /// Draws the panel and returns the user's actions this pass.
     pub fn show(self, ui: &mut Ui) -> SwatchesPanelOutput {
-        let SwatchesPanel { library, state, cmyk, foreground } = self;
+        let SwatchesPanel { groups, state, cmyk, foreground } = self;
         let cmyk = cmyk.unwrap_or_else(|| CmykConverter::coated());
         let words = Env::of(ui).words::<SwatchesWords>();
-        let mut held_library = Held::new(library);
         let mut held_state = Held::new(state);
         let ctx = ui.ctx().clone();
         let rename_scope = ui.scope_id().with("browser-rows");
         let mut shown = Stack::new().show(ui, |ui, cx| {
-            let (Some(before), Some(before_state)) = (held_library.read(cx), held_state.read(cx)) else { return None };
-            let (mut used, mut changed) = (None, false);
-            let (mut lib, mut st) = (before.clone(), before_state.clone());
-            if st.selected.as_ref().is_some_and(|k| !lib.has(k)) {
+            let before_state = held_state.read(cx)?;
+            let mut st = before_state.clone();
+            if st.selected.as_ref().is_some_and(|k| !has(groups, k)) {
                 st.selected = None;
             }
-            let mut rows = Vec::with_capacity(lib.total() + lib.groups.len());
-            for group in &lib.groups {
-                rows.push(PresetRow::group(SwatchKey::Group(group.name.clone()), group.name.as_str(), 0).count(group.entries.len()));
-                for entry in &group.entries {
-                    let named = format!("{}, {}", entry.name, value_text(&entry.color, words.book_color.as_str()));
-                    rows.push(
-                        PresetRow::item(SwatchKey::Swatch(entry.name.clone()), entry.name.as_str(), 1).tooltip(named.clone()).accessible_name(named),
-                    );
-                }
-            }
+            let rows = swatch_rows(groups, &words);
             let out = {
-                let colors: HashMap<&str, &SwatchColor> =
-                    lib.groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
+                let colors: HashMap<&str, &SwatchColor> = groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
                 let mut browser = PresetBrowser::new(words.title.clone(), Bind::bound(&mut st.browser), &rows)
                     .toolbar(true)
                     .reorder(PresetReorder::items_and_groups())
@@ -133,44 +117,39 @@ impl<'a> SwatchesPanel<'a> {
                 }
                 browser.show(ui)
             };
-            let mut actions = Actions {
-                library: &mut lib,
-                st: &mut st,
-                used: &mut used,
-                changed: &mut changed,
-                foreground,
-                template: words.swatch_n.as_str(),
-                group_name: words.group.as_str(),
-                cmyk,
-            };
+            let mut used = None;
+            let mut edits = Vec::new();
             for event in out.events {
-                actions.event(event);
+                if let PresetEvent::Select { key: SwatchKey::Swatch(name), mods, .. } = &event
+                    && let Some(at) = find_swatch(groups, name)
+                    && let Some(entry) = groups.get(at.group).and_then(|g| g.entries.get(at.index))
+                {
+                    used = Some((at, entry.color.to_srgb(cmyk), mods.alt || mods.cmd || mods.ctrl));
+                }
+                edits.extend(event_edits(groups, &mut st, event, foreground, &words));
             }
-            Some(Settled { before, lib, before_state, st, used, changed })
+            Some(Settled { before_state, st, used, edits })
         });
-        // Once per pass, after the real run: the rename request and the edited library and state are stored.
-        let (used, changed) = shown
+        // Once per pass, after the real run: the rename request and the edited state are stored, the edits reported.
+        let (used, edits) = shown
             .settle(|cx, settled| {
-                let Settled { before, lib, before_state, mut st, used, changed } = settled.take()?;
+                let Settled { before_state, mut st, used, edits } = settled.take()?;
                 if let Some(key) = st.rename.take() {
                     request_rename(&ctx, rename_scope, &key);
-                }
-                if changed {
-                    held_library.write(cx, &before, lib, words.title.as_str());
                 }
                 if st != before_state {
                     held_state.write(cx, &before_state, st, words.title.as_str());
                 }
-                Some((used, changed))
+                Some((used, edits))
             })
             .flatten()
             .unwrap_or_default();
-        SwatchesPanelOutput { response: shown.output, used, changed, edits: Vec::new() }
+        SwatchesPanelOutput { response: shown.output, used, edits }
     }
 
-    /// Carries out the host's answer to a file request of the panel menu: Import and Replace read the file into
-    /// `library`, a finished export reports the notes it kept, and a failure says why. Returns what changed and the
-    /// status message the host shows, if any.
+    /// Carries out the host's answer to a file request of the panel menu: Import and Replace read the file into an
+    /// `Import` edit for the host (which makes names unique), a finished export reports the notes it kept, and a
+    /// failure says why. Returns the edit, the report and the status message the host shows, if any.
     pub fn apply_file(
         state: &mut SwatchesState,
         event: &PresetFileEvent,
@@ -178,27 +157,11 @@ impl<'a> SwatchesPanel<'a> {
         presets: &PresetWords,
         format: &Format,
     ) -> SwatchesFileOutput {
-        let _ = (state, event, words, presets, format);
-        todo!("pn.C27")
-    }
-
-    /// [`apply_file`](Self::apply_file) over a library it writes.
-    // P3(panels-w6): pn.C27 — the old `apply_file(&mut SwatchLibrary, ..)`; phase 3 removes it with its readers.
-    #[allow(dead_code)]
-    pub(crate) fn apply_file_to_library(
-        library: &mut SwatchLibrary,
-        state: &mut SwatchesState,
-        event: &PresetFileEvent,
-        words: &SwatchesWords,
-        presets: &PresetWords,
-        format: &Format,
-    ) -> SwatchesFileOutput {
-        let mut output = SwatchesFileOutput { changed: false, edit: None, report: None, status: None };
+        let mut output = SwatchesFileOutput { edit: None, report: None, status: None };
         match event {
             PresetFileEvent::Loaded { file_name, bytes, replace, .. } => match crate::palette::read_swatches(bytes, file_name) {
                 Ok((groups, report)) => {
-                    library.import(groups, *replace);
-                    output.changed = true;
+                    output.edit = Some(SwatchEdit::Import { groups, replace: *replace });
                     output.status = Self::notes_status(&report, false, words, format);
                     output.report = Some(report);
                 }

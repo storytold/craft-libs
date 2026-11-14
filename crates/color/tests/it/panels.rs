@@ -5,8 +5,13 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use craft_behavior::{EditEvent, Selection};
-use craft_color::ui::{ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchPalette, SwatchTable};
+use craft_color::palette::{SwatchColor, SwatchGroup};
+use craft_color::ui::{
+    ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchPalette, SwatchesCommand, SwatchesMenu,
+    SwatchesPanel, SwatchesState,
+};
 use craft_theme::Srgba;
+use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Show as _};
@@ -235,6 +240,47 @@ fn the_palette_arrows_walk_the_wrapped_grid() {
         assert_eq!(rig.focused().as_deref(), Some(expected), "{key:?}");
     }
     assert_eq!(rig.events.get(), 0);
+}
+
+/// The Swatches panel over two groups, collecting the edits it reports and never applying them.
+fn swatches_rig(groups: Vec<SwatchGroup>) -> (Fixture, Rc<RefCell<Vec<SwatchEdit>>>) {
+    let edits = Rc::new(RefCell::new(Vec::new()));
+    let state = Rc::new(RefCell::new(SwatchesState::default()));
+    let (seen, held) = (Rc::clone(&edits), state);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut current = held.borrow().clone();
+        let out = SwatchesPanel::new(&groups, Bind::bound(&mut current), RED).show(ui);
+        *held.borrow_mut() = current;
+        seen.borrow_mut().extend(out.edits);
+    });
+    fixture.room(Vec2::new(320.0, 400.0)).settle();
+    (fixture, edits)
+}
+
+/// A swatch selected and deleted reports one `Delete` and leaves the groups it was shown as they were; New Swatch from
+/// the menu reports an `Add` in the selected swatch's group under the next free numbered name.
+#[trial]
+fn swatches_panel_reports_each_edit_and_leaves_the_library() {
+    let red = SwatchColor::Rgb([1.0, 0.0, 0.0]);
+    let blue = SwatchColor::Rgb([0.0, 0.0, 1.0]);
+    let entry = |name: &str, color: SwatchColor| craft_color::palette::SwatchEntry::new(name.to_owned(), color);
+    let groups = vec![SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red", red.clone()), entry("Color Swatch 1", blue)] }];
+    let (mut fixture, edits) = swatches_rig(groups.clone());
+    let row = fixture.by_label("Red, #ff0000").expect("the Red swatch is named with its value");
+    fixture.click(&row).settle();
+    assert!(edits.borrow().is_empty(), "a click selects and uses, it edits nothing: {:?}", edits.borrow());
+    fixture.key(Key::Delete, Modifiers::NONE).settle();
+    assert_eq!(*edits.borrow(), [SwatchEdit::Delete { swatch: "Red".to_owned() }], "one resolved edit, once");
+
+    let mut state = SwatchesState::default();
+    state.selected = Some(SwatchKey::Swatch("Red".to_owned()));
+    let made = SwatchesMenu::run_command(&groups, &mut state, SwatchesCommand::NewSwatch, RED, &Default::default());
+    assert_eq!(
+        made.edit,
+        Some(SwatchEdit::Add { group: Some("Basics".to_owned()), name: "Color Swatch 2".to_owned(), color: red }),
+        "the next free number, in the selected swatch's group, with the foreground"
+    );
+    assert_eq!(state.rename, Some(SwatchKey::Swatch("Color Swatch 2".to_owned())), "the new swatch opens for renaming");
 }
 
 /// `count` entries of a colour table, each named by its index.

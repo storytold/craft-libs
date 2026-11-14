@@ -6,7 +6,7 @@ use craft_behavior::{EditEvent, Mixed};
 use craft_keymap::Mods;
 use craft_ui::contract::{CommandSet, Props as _, ReorderMove, ShowContainer as _};
 use craft_ui::menu::{Menu, MenuItem, PanelRow};
-use craft_ui::runtime::commands::CommandRef;
+use craft_ui::runtime::commands::{CommandRef, CommandState};
 use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 use std::sync::Arc;
@@ -203,7 +203,7 @@ impl ChannelsCommands {
         let Some(kind) = kind else { return any };
         match self {
             C::Duplicate | C::LoadSelection => true,
-            C::Delete => !matches!(kind, ChannelKind::Composite | ChannelKind::Color | ChannelKind::QuickMask(_)),
+            C::Delete => !matches!(kind, ChannelKind::Composite | ChannelKind::Color | ChannelKind::QuickMask(_) | ChannelKind::LayerMask(_)),
             C::RenameChannel | C::MoveUp | C::MoveDown => kind.moves(),
             C::ChannelOptions => kind.has_options(),
             C::MergeSpot | C::ConvertToAlpha => matches!(kind, ChannelKind::Spot(_)),
@@ -326,37 +326,26 @@ fn plan(kind: Option<ChannelKind>) -> Vec<Plan> {
 /// Photoshop's fixed panel menu list: New Channel…, Duplicate Channel, Delete Channel, New Spot Channel…, Merge Spot
 /// Channel, Channel Options…, Split Channels, Merge Channels…, with separators between the groups.
 pub fn panel_rows() -> Vec<PanelRow> {
-    todo!("pn.C30")
+    use ChannelsCommands as C;
+    let row = |c: ChannelsCommands| PanelRow::Command(CommandRef::from(c));
+    vec![
+        row(C::NewChannel),
+        row(C::Duplicate),
+        row(C::Delete),
+        PanelRow::Separator,
+        row(C::NewSpotChannel),
+        row(C::MergeSpot),
+        row(C::ChannelOptions),
+        PanelRow::Separator,
+        row(C::SplitChannels),
+        row(C::MergeChannels),
+    ]
 }
 
 /// Each command greyed by the targeted row's kind, the one rule the panel's publish loop and the dock's panel menu share.
-pub fn states<K>(rows: &[ChannelRow<K>]) -> Vec<(ChannelsCommands, craft_ui::runtime::commands::CommandState)> {
-    let _ = rows;
-    todo!("pn.C30")
-}
-
-/// The rows the panel adds to its panel menu, for the targeted row of `rows`: the commands of its row menu.
-// P3(panels-w6): pn.C30 — the old `panel_rows(rows, words)`; phase 3 removes it with its readers.
-#[allow(dead_code)]
-pub(super) fn panel_rows_for<K>(rows: &[ChannelRow<K>], words: &ChannelsWords) -> Vec<PanelRow> {
-    let command = |c: ChannelsCommands| PanelRow::Command(CommandRef::from(c));
+pub fn states<K>(rows: &[ChannelRow<K>]) -> Vec<(ChannelsCommands, CommandState)> {
     let kind = targeted_row(rows).map(|row| row.kind);
-    let mut out = Vec::new();
-    for line in plan(kind) {
-        match line {
-            Plan::Command(c) => out.push(command(c)),
-            Plan::Separator => out.push(PanelRow::Separator),
-            Plan::Colors => out.push(PanelRow::Submenu(
-                words.overlay_color.clone(),
-                OverlayPreset::ALL.iter().map(|preset| command(ChannelsCommands::of_preset(*preset))).collect(),
-            )),
-            Plan::Opacities => out.push(PanelRow::Submenu(
-                words.overlay_opacity.clone(),
-                OVERLAY_OPACITIES.iter().filter_map(|percent| ChannelsCommands::of_opacity(*percent)).map(command).collect(),
-            )),
-        }
-    }
-    out
+    ChannelsCommands::ALL.into_iter().map(|command| (command, CommandState::new().enabled(command.applies_to(kind)))).collect()
 }
 
 fn label_of(command: ChannelsCommands, kind: Option<ChannelKind>, words: &ChannelsWords) -> Label {

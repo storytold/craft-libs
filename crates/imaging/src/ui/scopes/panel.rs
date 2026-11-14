@@ -252,7 +252,7 @@ impl Pass<'_> {
                 None => self.report.hovered_level.map(|level| [level_of(level); 2]),
             };
             if let Some(stats) = histogram_statistics(shown_bins(set, shown), levels) {
-                self.statistics(ui, &stats, set.cache_level);
+                self.statistics(ui, &stats, set.cache_level, set.pixels);
             }
         }
 
@@ -358,7 +358,9 @@ impl Pass<'_> {
 
     /// The statistics grid: two label and value pairs per row (Mean, Std Dev, Median, Pixels | Level, Count,
     /// Percentile, Cache Level).
-    fn statistics(&self, ui: &mut Ui, stats: &HistogramStatistics, cache_level: u32) {
+    ///
+    /// `pixels` is the host's total for the Pixels row (transparent pixels included); without it the row counts the bins.
+    fn statistics(&self, ui: &mut Ui, stats: &HistogramStatistics, cache_level: u32, pixels: Option<u64>) {
         let words = &self.words;
         // Numbers read left to right in every language.
         let number = |value: f64, decimals: usize| craft_i18n::ltr(&self.env.format().number(value, decimals));
@@ -376,7 +378,7 @@ impl Pass<'_> {
                 stats.count.map(|c| number(c as f64, 0)).unwrap_or_default(),
             ),
             (&words.median, number(f64::from(stats.median), 0), &words.percentile, stats.percentile.map(|p| number(p, 2)).unwrap_or_default()),
-            (&words.pixels, number(stats.pixels as f64, 0), &words.cache_level, number(f64::from(cache_level), 0)),
+            (&words.pixels, number(pixels.unwrap_or(stats.pixels) as f64, 0), &words.cache_level, number(f64::from(cache_level), 0)),
         ];
         Grid::new(&STATISTICS_COLUMNS).gap(Gap::Tight).label(words.statistics.clone()).show(ui, |ui, _| {
             for (first, first_value, second, second_value) in &rows {
