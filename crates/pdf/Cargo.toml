@@ -24,6 +24,8 @@ write-simple-text = ["write", "krilla/simple-text"]
 filters = ["dep:craft-stream-codecs", "dep:flate2", "dep:thiserror"]
 cos = ["crypt", "filters", "dep:chrono", "dep:js-sys", "dep:wasm-bindgen"]
 crypt = ["dep:aes", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
+# `testing`: a builder of small synthetic PDF files, for the tests of crates that read them.
+test-support = ["cos"]
 
 [dependencies]
 hayro-syntax = { workspace = true, optional = true }
@@ -56,6 +58,7 @@ js-sys = { version = "0.3", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 
 [dev-dependencies]
+craft-pdf = { path = ".", features = ["test-support"] }
 serde_json = { workspace = true }
 hayro-syntax = "=0.7.2"
 hayro-interpret = { version = "=0.7.0", default-features = false }
