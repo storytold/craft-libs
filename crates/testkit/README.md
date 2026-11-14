@@ -41,7 +41,7 @@ proptest! {
 
 | Module | Source repository | Path | Revision |
 |---|---|---|---|
-| `prop` | storytold/vectorcraft | `crates/pathops/tests/common/mod.rs:3-19` | `34627134` |
+| `prop` | storytold/vectorcraft | `crates/pathops/tests/common/mod.rs:3-20` | `34627134` |
 
 ### Migration
 
