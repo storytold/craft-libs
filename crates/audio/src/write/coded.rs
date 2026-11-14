@@ -7,13 +7,13 @@
 // other halves of the shared code are unused.
 #![cfg_attr(
     not(all(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode")),
-    allow(dead_code, unused_imports, unused_variables, unused_mut)
+    allow(dead_code, unused_imports, unused_variables)
 )]
 
 use super::failed_write_error;
 use super::pcm::validate_layout;
 use crate::{AudioBuffer, AudioError, ChannelLayout, EncodeFormat, EncodeOptions, RateControl, Result, Speaker};
-use std::io::{Cursor, Seek, SeekFrom, Write};
+use std::io::{Cursor, Seek, Write};
 
 /// Frames handed to the encoder at a time, so its buffers and the packets waiting to be written
 /// stay small however long a block is. Also the frames of an ALAC packet.
@@ -70,12 +70,13 @@ fn fixed_map(name: &str, mask: u32, order: Option<&[usize]>, layout: &ChannelLay
         return Err(AudioError::Unsupported(format!("{name} cannot hold {} channels", layout.channels())));
     }
     channel_map(mask, order, layout).ok_or_else(|| {
-        let given = match layout.mask() {
-            Some(m) => labels(m),
-            None => "no speaker assignment".into(),
-        };
-        AudioError::Unsupported(format!("{name} holds {} channels as {}, not {given}; set `EncodeOptions::layout`", layout.channels(), labels(mask)))
+        AudioError::Unsupported(format!("{name} holds {} channels as {}; the audio is {}", layout.channels(), labels(mask), given(layout)))
     })
+}
+
+/// The speakers of the caller's layout, for an error message.
+fn given(layout: &ChannelLayout) -> String {
+    layout.mask().map_or_else(|| "without speaker assignment".into(), labels)
 }
 
 /// The WAV mask of the speakers an AAC stream of `channels` channels has, as this crate's encoder
@@ -153,11 +154,7 @@ fn ac3_config(
         Some((config, map))
     });
     let Some((mut config, map)) = found else {
-        let given = match layout.mask() {
-            Some(m) => labels(m),
-            None => "no speaker assignment".into(),
-        };
-        return Err(AudioError::Unsupported(format!("{name} has no layout of {} channels as {given}", layout.channels())));
+        return Err(AudioError::Unsupported(format!("{name} has no coding mode for {} channels that are {}", layout.channels(), given(layout))));
     };
     let full = config.mode.channels() as u32;
     let want = constant_kbps(name, rate, DEFAULT_KBPS_PER_CHANNEL * full)?;
@@ -329,44 +326,6 @@ fn mux_error(e: craft_media::isobmff::Error) -> AudioError {
     }
 }
 
-/// A sink seen from where the file starts: position 0 is the sink's position when the file was
-/// begun. The MP4 muxer writes chunk offsets as stream positions, and they count from the first
-/// byte of the file, which need not be the first byte of the sink.
-#[cfg(any(feature = "aac-encode", feature = "alac-encode"))]
-struct FromStart<W> {
-    out: W,
-    start: u64,
-}
-
-#[cfg(any(feature = "aac-encode", feature = "alac-encode"))]
-impl<W: Write> Write for FromStart<W> {
-    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
-        self.out.write(data)
-    }
-
-    fn write_all(&mut self, data: &[u8]) -> std::io::Result<()> {
-        self.out.write_all(data)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.out.flush()
-    }
-}
-
-#[cfg(any(feature = "aac-encode", feature = "alac-encode"))]
-impl<W: Seek> Seek for FromStart<W> {
-    fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
-        let to = match to {
-            SeekFrom::Start(at) => SeekFrom::Start(
-                self.start.checked_add(at).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek past the end of the sink"))?,
-            ),
-            relative => relative,
-        };
-        let at = self.out.seek(to)?;
-        at.checked_sub(self.start).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek to before the start of the file"))
-    }
-}
-
 /// An M4A file being written: one audio track whose samples are the packets.
 ///
 /// The last packet is held back until the length is known: its duration is cut to the audio's
@@ -375,7 +334,7 @@ impl<W: Seek> Seek for FromStart<W> {
 /// keeps that edit exact.
 #[cfg(any(feature = "aac-encode", feature = "alac-encode"))]
 struct M4a<W: Write + Seek> {
-    mux: craft_media::isobmff::Mp4Writer<FromStart<W>>,
+    mux: craft_media::isobmff::Mp4Writer<W>,
     /// The track, added with the first packet: a file with no audio gets a track without an edit.
     track: Option<usize>,
     entry: craft_media::isobmff::SampleEntry,
@@ -390,10 +349,8 @@ struct M4a<W: Write + Seek> {
 
 #[cfg(any(feature = "aac-encode", feature = "alac-encode"))]
 impl<W: Write + Seek> M4a<W> {
-    fn new(mut out: W, codec: &Codec, sample_rate: u32, channels: u32) -> Result<Self> {
+    fn new(out: W, codec: &Codec, sample_rate: u32, channels: u32) -> Result<Self> {
         use craft_media::isobmff::{Brand, Mp4Writer, WriterOptions};
-        let start = out.stream_position()?;
-        let out = FromStart { out, start };
         let entry = codec.sample_entry(sample_rate, channels, 0, 0).ok_or_else(|| AudioError::Unsupported("M4A holds AAC and ALAC".into()))?;
         let mut options = WriterOptions::new(Brand::Mp4);
         options.movie_timescale = sample_rate;
@@ -444,7 +401,7 @@ impl<W: Write + Seek> M4a<W> {
         if let Some(entry) = codec.sample_entry(self.sample_rate, self.channels, self.bytes, self.frames) {
             self.mux.set_sample_entry(track, entry).map_err(mux_error)?;
         }
-        Ok(self.mux.finish().map_err(mux_error)?.out)
+        self.mux.finish().map_err(mux_error)
     }
 }
 
@@ -495,7 +452,7 @@ impl<W: Write + Seek> Writer<W> {
                 };
                 let enc = crate::alac::Encoder::new(crate::alac::EncoderConfig::new(sample_rate, count, bits).with_frame_length(CHUNK as u32))?;
                 let quantizers = super::pcm::Quantizer::per_channel(u32::from(bits), opts.dither, channels);
-                (Codec::Alac { enc: Box::new(enc), quantizers, pending: vec![Vec::with_capacity(CHUNK); channels] }, map)
+                (Codec::Alac { enc: Box::new(enc), quantizers, pending: vec![Vec::new(); channels] }, map)
             }
             #[cfg(feature = "mp3-encode")]
             EncodeFormat::Mp3 => {
@@ -514,7 +471,7 @@ impl<W: Write + Seek> Writer<W> {
             EncodeFormat::Ac3 | EncodeFormat::Eac3 => {
                 let codec = if opts.format == EncodeFormat::Ac3 { crate::ac3::encoder::Codec::Ac3 } else { crate::ac3::encoder::Codec::Eac3 };
                 let (config, map) = ac3_config(codec, sample_rate, &layout, opts.rate_control)?;
-                (Codec::Ac3 { enc: Box::new(crate::ac3::encoder::Encoder::new(config)?), planes: vec![Vec::with_capacity(CHUNK); channels] }, map)
+                (Codec::Ac3 { enc: Box::new(crate::ac3::encoder::Encoder::new(config)?), planes: vec![Vec::new(); channels] }, map)
             }
             #[allow(unreachable_patterns)]
             f => return Err(AudioError::Unsupported(format!("writing {f:?}"))),

@@ -391,8 +391,10 @@ fn the_formats_are_named() {
     }
     assert_eq!(ENCODE_EXTENSIONS.len(), 12);
     for format in CODED {
-        assert!(EncodeFormat::ALL.contains(&format) && format.is_built() && format.feature().ends_with("-encode"));
+        assert!(EncodeFormat::ALL.contains(&format) && format.is_built());
     }
+    let features: Vec<_> = EncodeFormat::ALL.iter().map(|f| f.feature()).collect();
+    assert_eq!(features, ["pcm-encode", "pcm-encode", "flac-encode", "alac-encode", "aac-encode", "mp3-encode", "ac3-encode", "eac3-encode"]);
 }
 
 /// ffmpeg's decode of `file` as interleaved `f32`, split into `channels` channels.

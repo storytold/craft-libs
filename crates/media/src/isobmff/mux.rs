@@ -621,6 +621,9 @@ pub struct Mp4Writer<W: Write + Seek> {
     w: W,
     opts: WriterOptions,
     tracks: Vec<WTrack>,
+    /// The writer's position when the file was begun: chunk offsets count from here, the first
+    /// byte of the file, wherever in the writer that is.
+    start: u64,
     /// Offset of the placeholder box (8 bytes) preceding the mdat header.
     pad_pos: u64,
     mdat_pos: u64,
@@ -631,7 +634,8 @@ pub struct Mp4Writer<W: Write + Seek> {
 }
 
 impl<W: Write + Seek> Mp4Writer<W> {
-    /// Start a file: writes `ftyp`, a placeholder box and the `mdat` header.
+    /// Start a file at the writer's current position: writes `ftyp`, a placeholder box and the
+    /// `mdat` header.
     pub fn new(mut w: W, opts: WriterOptions) -> Result<Self> {
         let start = w.stream_position()?;
         let mut b = BoxBuf::new();
@@ -642,7 +646,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
         b.leaf(b"mdat", &[]);
         w.write_all(&b.buf)?;
         let pos = start + b.len() as u64;
-        Ok(Mp4Writer { w, opts, tracks: Vec::new(), pad_pos, mdat_pos, pos, last_track: None, chapters: Vec::new() })
+        Ok(Mp4Writer { w, opts, tracks: Vec::new(), start, pad_pos, mdat_pos, pos, last_track: None, chapters: Vec::new() })
     }
 
     /// Add a track; returns its index (track ids are index + 1).
@@ -731,7 +735,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
             return Err(too_many_samples());
         }
         self.w.write_all(s.data)?;
-        let offset = self.pos;
+        let offset = self.pos - self.start;
         self.pos += s.data.len() as u64;
         let contiguous = self.last_track == Some(track);
         self.last_track = Some(track);
@@ -772,7 +776,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
             };
             let d = rescale(vd, vts, tts).max(tc_dur as u64).min(u32::MAX as u64) as u32;
             self.w.write_all(&start.to_be_bytes())?;
-            let off = self.pos;
+            let off = self.pos - self.start;
             self.pos += 4;
             self.last_track = None;
             let t = &mut self.tracks[i].t;
@@ -830,7 +834,7 @@ impl<W: Write + Seek> Mp4Writer<W> {
         }
         let id = self.tracks.len() as u32 + 1;
         let mut t = Tables::new();
-        let off = self.pos;
+        let off = self.pos - self.start;
         for (i, c) in self.chapters.iter().enumerate() {
             let end = self.chapters.get(i + 1).map_or(duration, |n| n.start);
             let d = u32::try_from(end.saturating_sub(c.start)).map_err(|_| Error::Mux("chapter longer than 2^32 movie ticks".into()))?;
@@ -1388,6 +1392,45 @@ mod tests {
         assert_eq!(f.tracks[0].samples.len(), 5);
         for out in [file(None, 5), file(Some(-1), 0)] {
             assert!(crate::isobmff::open(out.as_slice()).unwrap().tracks[0].sample_groups.is_empty());
+        }
+        // The boxes as ISO/IEC 14496-12 §8.9 has them (and ffmpeg writes them): `sgpd` version 1
+        // with a default description length of 2, one description; `sbgp` version 0, one run.
+        let sgpd = [&26u32.to_be_bytes()[..], b"sgpd", &[1, 0, 0, 0], b"roll", &[0, 0, 0, 2, 0, 0, 0, 1, 0xFF, 0xFF]].concat();
+        let sbgp = [&28u32.to_be_bytes()[..], b"sbgp", &[0, 0, 0, 0], b"roll", &[0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0, 1]].concat();
+        let both = [sgpd, sbgp].concat();
+        assert!(out.windows(both.len()).any(|w| w == both));
+    }
+
+    /// A file begun in the middle of a writer is a file from there: its chunk offsets count from
+    /// its own first byte, with `moov` at the end or in front, a timecode track and chapters.
+    #[test]
+    fn a_file_begun_mid_writer_has_offsets_from_its_start() {
+        let file = |prefix: usize, faststart: bool| {
+            let mut sink = Cursor::new(vec![0xAA; prefix]);
+            sink.set_position(prefix as u64);
+            let mut opts = WriterOptions::new(Brand::Mov);
+            opts.chapters = vec![Chapter { start: 0, title: "one".into() }];
+            let mut w = Mp4Writer::new(sink, opts).unwrap();
+            let v = w.add_track(TrackConfig::new(avc_entry(), 1000)).unwrap();
+            let tc = TimecodeConfig { timescale: 1000, frame_duration: 40, frames_per_second: 25, ..Default::default() };
+            w.add_timecode_track(v, tc, 7).unwrap();
+            for i in 0..4u8 {
+                w.write_sample(v, WriteSample { data: &[i + 1; 10], duration: 40, composition_offset: 0, is_sync: true }).unwrap();
+            }
+            let out = if faststart { w.finish_faststart() } else { w.finish() }.unwrap();
+            assert_eq!(out.position(), out.get_ref().len() as u64);
+            out.into_inner()
+        };
+        for faststart in [false, true] {
+            let (plain, offset) = (file(0, faststart), file(100, faststart));
+            assert!(offset[..100].iter().all(|&b| b == 0xAA));
+            assert!(offset[100..] == plain, "faststart {faststart}");
+            let f = crate::isobmff::open(plain.as_slice()).unwrap();
+            assert_eq!(f.tracks.len(), 3);
+            for i in 0..4 {
+                assert_eq!(f.read_sample(plain.as_slice(), 0, i).unwrap(), vec![i as u8 + 1; 10]);
+            }
+            assert_eq!(f.read_sample(plain.as_slice(), 1, 0).unwrap(), 7u32.to_be_bytes());
         }
     }
 }

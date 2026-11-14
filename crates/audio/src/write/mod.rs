@@ -22,9 +22,10 @@ use std::io::{Seek, Write};
 /// Encode `buf` as the file `opts.format` names. Integer depths clamp samples to [-1, 1]; float
 /// keeps values above full scale. `opts.layout`, when set, must have `buf`'s channel count.
 ///
-/// The lossy formats take `opts.rate_control`. AAC and ALAC are written as M4A, whose edit list
-/// makes the file decode to exactly `buf`'s frames. MP3, AC-3 and E-AC-3 are raw streams, which
-/// have no place for that: they decode with the codec's delay in front and padded to whole frames.
+/// The lossy formats take `opts.rate_control`. AAC and ALAC are written as M4A, which records the
+/// encoder's priming and the exact length, so the file decodes to `buf`'s frames. MP3, AC-3 and
+/// E-AC-3 are raw streams, which have no place for that: they decode with the codec's delay in
+/// front and padded to whole frames.
 ///
 /// ```
 /// # #[cfg(feature = "pcm-encode")] {
@@ -142,9 +143,10 @@ fn failed_write_error() -> AudioError {
 }
 
 /// Writes a file of any [`EncodeFormat`] block by block, producing the same bytes [`encode`]
-/// would for the whole buffer: a file of any length never has to fit in memory. The file starts at the sink's position, and nothing may follow that
-/// position (a new file, or one truncated there): the encoder cannot truncate a `Write + Seek`,
-/// so the bytes of a longer file already there would stay after the new one.
+/// would for the whole buffer: a file of any length never has to fit in memory. The file starts
+/// at the sink's position, and nothing may follow that position (a new file, or one truncated
+/// there): the encoder cannot truncate a `Write + Seek`, so the bytes of a longer file already
+/// there would stay after the new one.
 ///
 /// ```
 /// # #[cfg(feature = "flac-encode")] {
@@ -316,6 +318,7 @@ mod tests {
         let enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 1);
         assert!(matches!(enc, Err(AudioError::Unsupported(_))));
         assert_eq!(encode_format_for(name), None);
+        assert!(!format.is_built() && EncodeFormat::ALL.iter().any(|f| f.is_built()));
         // Also with a layout it could not use.
         let opts = opts.with_layout(ChannelLayout::STEREO);
         assert!(matches!(encode(&buf, &opts), Err(AudioError::Unsupported(_))));

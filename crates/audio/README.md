@@ -241,8 +241,9 @@ let alac = encode(&buf, &EncodeOptions::new(EncodeFormat::Alac).with_bit_depth(B
 `with_force_rf64` writes RF64 below 4 GiB; both apply to WAV only. `encode_format_for("aiff")`
 maps an extension to an `EncodeFormat`, and `ENCODE_EXTENSIONS` lists the extensions the enabled
 features can write. `EncodeFormat::ALL` lists the formats and `is_built()` says whether this build
-writes one; `extension()` is the extension a new file gets and `mime_type()` its media type. `write` refuses a block without one slice per channel, or with a slice
-shorter than `frames`, and writes nothing. After a write fails for another reason, every later
+writes one; `extension()` is the extension a new file gets and `mime_type()` its media type.
+`write` refuses a block without one slice per channel, or with a slice shorter than `frames`, and
+writes nothing. After a write fails for another reason, every later
 `write` and `finish` returns an error.
 
 | `EncodeFormat` | File | Audio | Options used |
@@ -265,7 +266,7 @@ count when unset) names the speakers, and the channels are reordered into the co
 Each coded format has a fixed set of layouts, and audio with other speakers is `Unsupported`
 rather than written to the wrong ones:
 
-- AAC: C; L R; L R C; L R C Cs; L R C Ls Rs; 5.1; 6.1; and for 8 channels L R C LFE Ls Rs Lc Rc
+- AAC: C; L R; L R C; L R C Cb; L R C Ls Rs; 5.1; 6.1; and for 8 channels L R C LFE Lb Rb Lc Rc
   (a front pair left and right of centre, mask `0xFF`). ALAC: the same, with 6.1's back centre last.
   WAV 7.1 (backs and sides) is not that 7.1, and quad (the usual 4-channel layout) has no centre:
   both need another format.
@@ -465,8 +466,9 @@ match craft_audio::decode(&bytes, None) {
 - `EncodeFormat::Aac` with 8 channels is AAC channel configuration 7 (C, Lc Rc, L R, Ls Rs, LFE),
   which Apple's decoders read as written. ffmpeg assumes such a stream is a mislabelled 7.1 with
   backs and sides and moves the channels accordingly, unless run with `-strict 1`.
-- A file with no audio: MP3, AC-3 and E-AC-3 are then zero bytes, which nothing can probe, and an
-  empty AAC M4A (a track with no samples) is read by ffmpeg but not by this crate's decoder.
+- A file with no audio: MP3, AC-3 and E-AC-3 are then zero bytes, which nothing can probe. An
+  empty AAC M4A (a track with no samples) is read by ffmpeg; this crate's native reader passes it
+  on, so `decode-native` alone refuses it and symphonia reads only some as zero frames.
 - ALAC 32-bit streams: ffmpeg does not decode their uncompressed (escaped) stereo frames, which
   Apple's encoder and this one write for audio that does not compress; Apple's decoder and this
   one do.
