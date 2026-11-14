@@ -276,6 +276,10 @@ impl Reader<'_> {
         if sc.fields.iter().any(|f| f.phase == Phase::Instr) && para.plain_text().is_empty() {
             para.mark.hidden = Some(true);
         }
+        // A cell's paragraphs are marked once their table is read: its style counts.
+        if !sc.in_cell {
+            self.doc.styles.mark_runs_as_word_draws_them(&mut para, None);
+        }
         para.normalize();
         para
     }
@@ -355,8 +359,10 @@ impl Reader<'_> {
                     continue;
                 }
                 let mut blocks = Blocks::new();
+                let outer = std::mem::replace(&mut sc.in_cell, true);
                 self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
                 self.flush_pending(sc, &mut blocks);
+                sc.in_cell = outer;
                 row.cells.push(Cell { props, blocks, controls: cell_controls });
             }
             if !row.cells.is_empty() {
@@ -369,6 +375,20 @@ impl Reader<'_> {
         if table.grid.is_empty() {
             let cols = table.cols().clamp(1, MAX_COLS);
             table.grid = vec![72.0; cols];
+        }
+        // The cells' paragraphs, with the run formatting the table style gives each cell (a
+        // table inside has marked its own).
+        let chrs = self.doc.styles.table_cells_chr(&table);
+        for (ri, row) in table.rows.iter_mut().enumerate() {
+            for (ci, cell) in row.cells.iter_mut().enumerate() {
+                let chr = chrs.as_ref().and_then(|c| c.get(ri)?.get(ci));
+                for b in &mut cell.blocks {
+                    if let Block::Para(p) = Arc::make_mut(b) {
+                        self.doc.styles.mark_runs_as_word_draws_them(p, chr);
+                        p.normalize();
+                    }
+                }
+            }
         }
         Some(table)
     }

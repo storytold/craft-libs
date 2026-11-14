@@ -86,7 +86,9 @@ fn separate_hebrew_font_size_language_and_flags_survive() {
 #[test]
 fn latin_direct_properties_leave_complex_script_defaults_inherited() {
     let defaults = r#"<w:szCs w:val="36"/><w:bCs/><w:iCs/>"#;
-    let run = r#"<w:sz w:val="20"/><w:b w:val="0"/><w:i w:val="0"/>"#;
+    // The run is right to left, so Word draws its Hebrew with the complex-script values (in a run
+    // that says neither `w:rtl` nor `w:cs`, Word draws Hebrew in the ordinary ones).
+    let run = r#"<w:sz w:val="20"/><w:b w:val="0"/><w:i w:val="0"/><w:rtl/>"#;
     check_generations(&package(run, defaults, "", ""), |d| {
         let p = paragraph(d);
         let c = &p.runs[0].props;
@@ -104,7 +106,8 @@ fn latin_style_properties_leave_complex_script_style_chain_inherited() {
 <w:style w:type="paragraph" w:styleId="HebrewBase"><w:name w:val="HebrewBase"/><w:rPr><w:rFonts w:cs="Arial Hebrew"/><w:szCs w:val="36"/><w:bCs/><w:iCs/><w:lang w:bidi="he-IL"/></w:rPr></w:style>
 <w:style w:type="paragraph" w:styleId="MixedChild"><w:name w:val="MixedChild"/><w:basedOn w:val="HebrewBase"/><w:rPr><w:sz w:val="24"/><w:b w:val="0"/><w:i w:val="0"/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="LatinOnly"><w:name w:val="LatinOnly"/><w:rPr><w:sz w:val="20"/><w:b w:val="0"/><w:i w:val="0"/></w:rPr></w:style>"#;
-    let run = r#"<w:rStyle w:val="LatinOnly"/><w:rFonts w:ascii="Source Serif 4" w:hAnsi="Source Serif 4"/>"#;
+    // Right to left: Word draws the Hebrew with the complex-script values.
+    let run = r#"<w:rStyle w:val="LatinOnly"/><w:rFonts w:ascii="Source Serif 4" w:hAnsi="Source Serif 4"/><w:rtl/>"#;
     check_generations(&package(run, "", styles, r#"<w:pStyle w:val="MixedChild"/>"#), |d| {
         let p = paragraph(d);
         let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
@@ -147,7 +150,8 @@ fn complex_script_direct_properties_leave_latin_defaults_inherited() {
 #[test]
 fn tracked_formatting_keeps_independent_complex_script_values() {
     let defaults = r#"<w:szCs w:val="36"/><w:bCs/><w:iCs/>"#;
-    let run = r#"<w:sz w:val="24"/><w:b w:val="0"/><w:i w:val="0"/><w:rPrChange w:id="7" w:author="Synthetic Author" w:date="2026-10-11T00:00:00Z"><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/><w:b w:val="0"/><w:bCs w:val="0"/><w:i w:val="0"/><w:iCs w:val="0"/></w:rPr></w:rPrChange>"#;
+    // Right to left: Word draws the Hebrew with the complex-script values.
+    let run = r#"<w:sz w:val="24"/><w:b w:val="0"/><w:i w:val="0"/><w:rtl/><w:rPrChange w:id="7" w:author="Synthetic Author" w:date="2026-10-11T00:00:00Z"><w:rPr><w:sz w:val="20"/><w:szCs w:val="20"/><w:b w:val="0"/><w:bCs w:val="0"/><w:i w:val="0"/><w:iCs w:val="0"/></w:rPr></w:rPrChange>"#;
     check_generations(&package(run, defaults, "", ""), |d| {
         let p = paragraph(d);
         let c = &p.runs[0].props;
@@ -197,4 +201,21 @@ fn split_runs_add_no_phantom_tracked_formatting() {
         let old = &run.props.fmt_change.as_ref().unwrap().old;
         assert_eq!((old.rtl, old.lang_bidi.as_deref()), (run.props.rtl, run.props.lang_bidi.as_deref()));
     }
+}
+
+#[test]
+fn a_split_pieces_tracked_change_keeps_how_both_versions_were_drawn() {
+    // The writer gives a right-to-left piece the complex-script values it was drawn with (Word
+    // draws a `w:rtl` run with those alone); the "before" copy of its tracked change gets its own,
+    // so accepting or rejecting the change in Word shows what WordCraft showed.
+    let run = r#"<w:b/><w:sz w:val="24"/><w:rPrChange w:id="7" w:author="Synthetic Author" w:date="2026-10-11T00:00:00Z"><w:rPr><w:i/><w:sz w:val="20"/></w:rPr></w:rPrChange>"#;
+    let d = craft_docx::read(&package(run, "", "", "")).unwrap();
+    let bytes = craft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("word/document.xml").unwrap(), &mut xml)
+        .unwrap();
+    let rtl = xml.split("<w:r>").skip(1).map(|r| r.split("</w:r>").next().unwrap()).find(|r| r.contains("<w:rtl/>")).expect("a right-to-left piece");
+    let (now, before) = rtl.split_once("<w:rPrChange").unwrap();
+    assert!(now.contains("<w:bCs/>") && now.contains(r#"<w:szCs w:val="24"/>"#) && !now.contains("<w:iCs"), "{now}");
+    assert!(before.contains("<w:iCs/>") && before.contains(r#"<w:szCs w:val="20"/>"#) && !before.contains("<w:bCs"), "{before}");
 }
