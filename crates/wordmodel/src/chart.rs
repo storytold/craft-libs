@@ -229,7 +229,7 @@ pub fn clean_fmt(s: &str) -> String {
 }
 
 /// A chart the app can edit.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartSpec {
     #[serde(rename = "type")]
@@ -253,6 +253,23 @@ pub struct ChartSpec {
     /// The value axis (scatter charts: the y axis); gridlines on, no axis line, as a new chart has them.
     #[serde(default = "value_axis")]
     pub val_axis: ChartAxis,
+}
+
+impl Default for ChartSpec {
+    /// An empty chart whose value axis is the one a new chart (and a missing JSON field) has:
+    /// gridlines on, no axis line.
+    fn default() -> Self {
+        ChartSpec {
+            kind: ChartType::default(),
+            categories: Vec::new(),
+            series: Vec::new(),
+            title: None,
+            legend: None,
+            data_labels: false,
+            cat_axis: ChartAxis::default(),
+            val_axis: value_axis(),
+        }
+    }
 }
 
 impl ChartSpec {
@@ -380,6 +397,14 @@ mod tests {
         assert_eq!(c.categories, vec!["a".to_string(), String::new()]);
         assert_eq!(ChartType::from_id("BARSTACKED"), Some(ChartType::BarStacked));
         assert_eq!(LegendPos::from_id("top"), Some(LegendPos::Top));
+    }
+
+    #[test]
+    fn default_and_missing_json_axis_fields_agree() {
+        let from_json: ChartSpec = serde_json::from_str(r#"{"type":"column"}"#).unwrap();
+        let d = ChartSpec::default();
+        assert_eq!((d.cat_axis.clone(), d.val_axis.clone()), (from_json.cat_axis, from_json.val_axis));
+        assert!(d.val_axis.gridlines && !d.val_axis.line);
     }
 
     #[test]
