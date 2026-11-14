@@ -102,7 +102,9 @@ fn save_refuses_names_that_leave_the_folder() {
     let dir = temp_dir("names");
     let mut harness = harness(Harness::builder().renderer(Fake::Image));
     let long = "a".repeat(MAX_NAME_LEN + 1);
-    for name in ["", ".", "..", "../up", "a/b", "a\\b", "/abs", "C:x", ".hidden", "con", "NUL", "com1.x", "lpt9", "a b", "é", "a\0", &long] {
+    for name in [
+        "", ".", "..", "../up", "a/b", "a\\b", "/abs", "C:x", ".hidden", "con", "NUL", "com1.x", "lpt9", "COM0", "lpt0.png", "a b", "é", "a\0", &long,
+    ] {
         assert!(matches!(save(&mut harness, &dir, name), Err(SnapshotError::InvalidName(_))), "{name:?}");
     }
     assert!(!dir.exists());
