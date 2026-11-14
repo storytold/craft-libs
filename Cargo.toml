@@ -174,13 +174,14 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-unused_workspace_dependencies = "allow"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
+
+[workspace.lints.cargo]
+unused_workspace_dependencies = "allow"
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
 too_many_arguments = "deny"
-unused_workspace_dependencies = "allow"
 wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
