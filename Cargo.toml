@@ -61,6 +61,7 @@ craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
 craft-flags = { path = "crates/flags" }
 craft-font-catalog = { path = "crates/font-catalog" }
+craft-font-info = { path = "crates/font-info" }
 craft-font-manager = { path = "crates/font-manager" }
 craft-font-store = { path = "crates/font-store" }
 craft-gainmap = { path = "crates/gainmap" }
