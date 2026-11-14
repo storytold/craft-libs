@@ -214,16 +214,28 @@ impl<'a> Package<'a> {
         Ok(items)
     }
 
-    /// The styles part, `None` when the workbook has none (or is binary: its styles are not read).
+    /// The styles part, `None` when the workbook has none. A damaged one is a warning and `None`;
+    /// only a limit is an error.
     pub fn styles(&mut self) -> Result<Option<Styles>, Error> {
-        if self.binary.is_some() {
-            return Ok(None);
-        }
         let rels = self.workbook_rels()?;
         let Some(rel) = rels.first("styles").filter(|r| !r.external) else {
             self.warn("no styles part");
             return Ok(None);
         };
+        if let Some(types) = &self.binary {
+            let read = xlsb::check_type(types, &rel.target, xlsb::STYLES).and_then(|()| {
+                let bytes = self.opc.read(&rel.target)?.ok_or_else(|| xlsb::invalid(format!("missing part {}", rel.target)))?;
+                xlsb::styles(&bytes, &self.limits, &self.budget, &mut self.warnings)
+            });
+            return match read {
+                Ok(styles) => Ok(Some(styles)),
+                Err(Error::TooLarge(m)) => Err(Error::TooLarge(m)),
+                Err(e) => {
+                    self.warn(format!("skipped {}: {e}", rel.target));
+                    Ok(None)
+                }
+            };
+        }
         Ok(self.optional_xml(&rel.target.clone())?.map(Styles::read))
     }
 

@@ -83,8 +83,11 @@ for new pictures (`vm = i + 1`) and the `XLDAPR` dynamic-array metadata (`cm = 1
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 
-A binary workbook gives the same `Workbook`, strings, rows and merged cells. Its styles are not
-read (each cell keeps its format index). Its cell formulas are decoded from their tokens into the
+A binary workbook gives the same `Workbook`, strings, rows and merged cells, and the same
+`Styles`: number formats, fonts, fills, borders, cell and cell style formats, cell styles,
+differential formats and the indexed colours, as Excel writes them in `styles.xml` (default fill
+colours and empty settings left out, a cell style format's `apply*="0"`). Custom table styles and
+recent colours are not read; a damaged styles part is a warning and no styles. Its cell formulas are decoded from their tokens into the
 text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, no implicit `@`), with
 `FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
 metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the

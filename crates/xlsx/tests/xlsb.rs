@@ -5,7 +5,10 @@ mod common;
 
 use common::{read, read_with};
 use craft_xlsx::testing::zip;
-use craft_xlsx::{CellError, CellRef, Error, FormulaKind, Limits, Range, SheetKind, Value, Visibility, is_xlsb};
+use craft_xlsx::{
+    CellError, CellRef, Color, ColorSource, Error, Fill, FormulaKind, Limits, Package, Pattern, PatternFill, Protection, Range, SheetKind, Styles,
+    Value, Visibility, is_xlsb,
+};
 
 const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="book" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="records/book.bin"/></Relationships>"#;
 const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="two" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/two.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/></Relationships>"#;
@@ -929,4 +932,265 @@ fn a_dynamic_array_kept_as_its_value_has_no_cell_metadata() {
     }
     assert_eq!(sheet.cell_metadata.iter().collect::<Vec<_>>(), [(&at("C1"), &1)]);
     assert!(warned(&wb, "missing from the file"), "{:?}", wb.warnings);
+}
+
+// Styles ([MS-XLSB] 2.1.7.50): a styles part assembled from records, and the `styles.xml` Excel
+// writes for the same formats when it saves the workbook as `.xlsx`.
+
+const STYLES_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="two" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/two.bin"/><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="../look/styles.bin"/></Relationships>"#;
+const STYLES_TYPES: &str = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/records/book.bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Override PartName="/data/one.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/data/two.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/look/styles.bin" ContentType="application/vnd.ms-excel.styles"/></Types>"#;
+
+fn styled_file(styles: &[u8], types: &str) -> Vec<u8> {
+    let sheet = worksheet(&[row(0), cell(5, 0, &1.0f64.to_le_bytes())].concat(), &[]);
+    zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", &book(false)),
+        ("records/_rels/book.bin.rels", STYLES_RELS.as_bytes()),
+        ("data/one.bin", &sheet),
+        ("data/two.bin", &worksheet(&[], &[])),
+        ("look/styles.bin", styles),
+    ])
+}
+
+/// The styles part of a package, and the warnings reading it gave.
+fn styles_of(bytes: &[u8]) -> (Option<Styles>, Vec<String>) {
+    let mut p = Package::open(bytes, &Limits::default()).unwrap();
+    let styles = p.styles().unwrap();
+    (styles, p.warnings().to_vec())
+}
+
+/// `BrtColor`: auto 0, indexed 1, RGB 2, theme 3.
+fn color(kind: u8, index: u8, tint: i16, rgba: [u8; 4]) -> Vec<u8> {
+    [&[kind << 1 | 1, index][..], &tint.to_le_bytes(), &rgba].concat()
+}
+fn indexed(i: u8) -> Vec<u8> {
+    color(1, i, 0, [0, 0, 0, 255])
+}
+fn theme(i: u8, tint: i16) -> Vec<u8> {
+    color(3, i, tint, [0, 0, 0, 255])
+}
+fn rgb(r: u8, g: u8, b: u8) -> Vec<u8> {
+    color(2, 255, 0, [r, g, b, 255])
+}
+#[allow(clippy::too_many_arguments)]
+fn font(twips: u16, flags: u16, weight: u16, script: u16, underline: u8, family: u8, charset: u8, c: &[u8], scheme: u8, name: &str) -> Vec<u8> {
+    let head =
+        [&twips.to_le_bytes()[..], &flags.to_le_bytes(), &weight.to_le_bytes(), &script.to_le_bytes(), &[underline, family, charset, 0]].concat();
+    record(43, &[&head[..], c, &[scheme], &wide(name)].concat())
+}
+fn pattern_fill(fls: u32, fg: &[u8], bg: &[u8]) -> Vec<u8> {
+    record(45, &[&fls.to_le_bytes()[..], fg, bg, &[0; 48]].concat())
+}
+fn edge(dg: u8, c: &[u8]) -> Vec<u8> {
+    [&[dg, 0][..], c].concat()
+}
+#[allow(clippy::too_many_arguments)]
+fn brt_xf(parent: u16, fmt: u16, font: u16, fill: u16, border: u16, rotation: u8, indent: u8, flags: u16, apply: u8) -> Vec<u8> {
+    let ids = [parent, fmt, font, fill, border].map(u16::to_le_bytes).concat();
+    record(47, &[&ids[..], &[rotation, indent], &flags.to_le_bytes(), &[apply, 0]].concat())
+}
+fn style(xf: u32, flags: u16, builtin: u8, level: u8, name: &str) -> Vec<u8> {
+    record(48, &[&xf.to_le_bytes()[..], &flags.to_le_bytes(), &[builtin, level], &wide(name)].concat())
+}
+fn prop(kind: u16, data: &[u8]) -> Vec<u8> {
+    [&kind.to_le_bytes()[..], &(data.len() as u16 + 4).to_le_bytes(), data].concat()
+}
+fn short(text: &str) -> Vec<u8> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    [(units.len() as u16).to_le_bytes().to_vec(), units.iter().flat_map(|u| u.to_le_bytes()).collect()].concat()
+}
+fn brt_dxf(props: &[Vec<u8>]) -> Vec<u8> {
+    record(507, &[&[0, 0x80, 0, 0][..], &(props.len() as u16).to_le_bytes(), &props.concat()].concat())
+}
+fn begin(id: u16, count: u32) -> Vec<u8> {
+    record(id, &count.to_le_bytes())
+}
+
+/// Every kind of record the styles part has, as Excel writes them.
+fn styles_bin() -> Vec<u8> {
+    let normal = font(220, 0, 400, 0, 0, 2, 0, &theme(1, 0), 2, "Aptos Narrow");
+    // Bold, italic, struck out, superscript, double accounting underline; family and
+    // character set 0 and scheme "none" are not written in `.xlsx`.
+    let fancy = font(290, 0x0A, 700, 1, 0x22, 0, 2, &rgb(0, 128, 255), 0, "Wingdings");
+    let heading = font(220, 0, 400, 0, 0, 2, 0, &theme(4, 13106), 1, "Aptos Display");
+    let gradient = [
+        &0x28u32.to_le_bytes()[..],
+        &indexed(64),
+        &indexed(65),
+        &1u32.to_le_bytes(),
+        &[0.0f64, 0.5, 0.5, 0.5, 0.5].map(f64::to_le_bytes).concat(),
+        &2u32.to_le_bytes(),
+        &theme(0, 0),
+        &0.0f64.to_le_bytes(),
+        &theme(4, 0),
+        &1.0f64.to_le_bytes(),
+    ]
+    .concat();
+    let none = edge(0, &color(0, 0, 0, [0, 0, 0, 0]));
+    let parts: Vec<Vec<u8>> = vec![
+        record(278, &[]),
+        begin(615, 1),
+        record(44, &[&164u16.to_le_bytes()[..], &wide(r"yyyy\-mm\-dd")].concat()),
+        record(616, &[]),
+        begin(611, 3),
+        normal,
+        fancy,
+        heading,
+        record(612, &[]),
+        begin(603, 5),
+        pattern_fill(0, &indexed(64), &indexed(65)),
+        pattern_fill(17, &indexed(64), &indexed(65)),
+        pattern_fill(1, &rgb(255, 255, 0), &indexed(64)),
+        pattern_fill(9, &theme(5, -8191), &indexed(65)),
+        record(45, &gradient),
+        record(604, &[]),
+        begin(613, 2),
+        record(46, &[&[0][..], &none, &none, &none, &none, &none].concat()),
+        record(
+            46,
+            &[&[3][..], &edge(2, &rgb(200, 0, 0)), &none, &edge(7, &indexed(64)), &edge(13, &color(0, 0, 0, [0, 0, 0, 0])), &edge(1, &theme(4, 0))]
+                .concat(),
+        ),
+        record(614, &[]),
+        begin(626, 3),
+        brt_xf(0xFFFF, 0, 0, 0, 0, 0, 0, 0x1010, 0),
+        brt_xf(0xFFFF, 9, 0, 0, 0, 0, 0, 0x1010, 0x3E),
+        brt_xf(0xFFFF, 0, 2, 0, 0, 0, 0, 0x1010, 0),
+        record(627, &[]),
+        begin(617, 4),
+        brt_xf(0, 0, 0, 0, 0, 0, 0, 0x1010, 0),
+        brt_xf(0, 164, 0, 0, 0, 0, 0, 0x1010, 0x01),
+        // Left, top, wrapped, shrunk, right to left, unlocked, hidden, quote prefix.
+        brt_xf(0, 0, 0, 0, 0, 180, 2, 0x01 | 0x40 | 0x100 | 0x800 | 0x2000 | 0x8000, 0x24),
+        brt_xf(1, 0, 1, 4, 1, 0, 0, 0x1010, 0x1A),
+        record(618, &[]),
+        begin(619, 3),
+        style(0, 1, 0, 0, "Normal"),
+        // Excel wraps each style in alternate content, which is skipped.
+        record(37, &[1, 0, 2, 0x0e, 0, 0x80]),
+        record(3072, &[0; 16]),
+        record(38, &[]),
+        style(1, 1 | 4, 1, 1, "RowLevel_2"),
+        style(2, 2, 0, 0, "Probe Style"),
+        record(620, &[]),
+        begin(505, 2),
+        brt_dxf(&[
+            prop(0x05, &rgb(0x9C, 0, 6)),
+            prop(0x19, &700u16.to_le_bytes()),
+            prop(0x1C, &[0]),
+            prop(0x1A, &0x21u16.to_le_bytes()),
+            prop(0x24, &240u32.to_le_bytes()),
+            prop(0x18, &short("Arial")),
+            prop(0x29, &170u16.to_le_bytes()),
+            prop(0x26, &short("0.0")),
+            prop(0x02, &rgb(0xFF, 0xC7, 0xCE)),
+            prop(0x0F, &[2]),
+            prop(0x14, &[1]),
+            prop(0x2B, &[0]),
+            prop(0x07, &[&color(0, 0, 0, [0, 0, 0, 0])[..], &1u16.to_le_bytes()].concat()),
+        ]),
+        brt_dxf(&[
+            prop(0x03, &[&0u32.to_le_bytes()[..], &[90.0f64, 0.0, 0.0, 0.0, 0.0].map(f64::to_le_bytes).concat()].concat()),
+            prop(0x04, &[&[0, 0][..], &0.0f64.to_le_bytes(), &rgb(255, 255, 255)].concat()),
+            prop(0x04, &[&[0, 0][..], &1.0f64.to_le_bytes(), &theme(4, 0)].concat()),
+        ]),
+        record(506, &[]),
+        record(508, &[&0u32.to_le_bytes()[..], &wide("TableStyleMedium2"), &wide("PivotStyleLight16")].concat()),
+        record(509, &[]),
+        record(473, &[]),
+        record(565, &[]),
+        record(475, &[0x11, 0x22, 0x33, 0]),
+        record(475, &[0xFF, 0xFF, 0xFF, 0]),
+        record(566, &[]),
+        record(474, &[]),
+        record(279, &[]),
+    ];
+    parts.concat()
+}
+
+const STYLES_XML: &str = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy\-mm\-dd"/></numFmts><fonts count="3"><font><sz val="11"/><color theme="1"/><name val="Aptos Narrow"/><family val="2"/><scheme val="minor"/></font><font><b/><i/><strike/><u val="doubleAccounting"/><vertAlign val="superscript"/><sz val="14.5"/><color rgb="FF0080FF"/><name val="Wingdings"/><charset val="2"/></font><font><sz val="11"/><color theme="4" tint="0.39997558519241921"/><name val="Aptos Display"/><family val="2"/><scheme val="major"/></font></fonts><fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="darkGrid"><fgColor theme="5" tint="-0.249977111117893"/></patternFill></fill><fill><gradientFill type="path" left="0.5" right="0.5" top="0.5" bottom="0.5"><stop position="0"><color theme="0"/></stop><stop position="1"><color theme="4"/></stop></gradientFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border diagonalUp="1" diagonalDown="1"><left style="hair"><color indexed="64"/></left><right style="slantDashDot"><color auto="1"/></right><top style="medium"><color rgb="FFC80000"/></top><bottom/><diagonal style="thin"><color theme="4"/></diagonal></border></borders><cellStyleXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" applyFont="0" applyFill="0" applyBorder="0" applyAlignment="0" applyProtection="0"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" quotePrefix="1" applyAlignment="1" applyProtection="1"><alignment horizontal="left" vertical="top" textRotation="180" wrapText="1" indent="2" shrinkToFit="1" readingOrder="2"/><protection locked="0" hidden="1"/></xf><xf numFmtId="0" fontId="1" fillId="4" borderId="1" xfId="1" applyFont="1" applyFill="1" applyBorder="1"/></cellXfs><cellStyles count="3"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="RowLevel_2" xfId="1" builtinId="1" iLevel="1" customBuiltin="1"/><cellStyle name="Probe Style" xfId="2" hidden="1"/></cellStyles><dxfs count="2"><dxf><font><b/><i val="0"/><u val="singleAccounting"/><sz val="12"/><color rgb="FF9C0006"/><name val="Arial"/></font><numFmt numFmtId="170" formatCode="0.0"/><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill><alignment horizontal="center" wrapText="1"/><protection locked="0"/><border><bottom style="thin"><color auto="1"/></bottom></border></dxf><dxf><fill><gradientFill degree="90"><stop position="0"><color rgb="FFFFFFFF"/></stop><stop position="1"><color theme="4"/></stop></gradientFill></fill></dxf></dxfs><colors><indexedColors><rgbColor rgb="00112233"/><rgbColor rgb="00FFFFFF"/></indexedColors></colors></styleSheet>"#;
+
+/// The same styles from a SpreadsheetML package.
+fn xml_styles(xml: &str) -> Styles {
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/></Types>"#;
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+    let bytes = zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", root.as_bytes()),
+        ("xl/workbook.xml", br#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>"#),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/styles.xml", xml.as_bytes()),
+    ]);
+    styles_of(&bytes).0.unwrap()
+}
+
+/// What both readers lift out: an `<xf>`'s element keeps only its `apply*` flags, and the XML
+/// part's own element is dropped.
+fn lifted(mut s: Styles) -> Styles {
+    for xf in s.cell_style_xfs.iter_mut().chain(&mut s.cell_xfs) {
+        let attrs = xf.el.attrs.iter().filter(|(k, _)| k.starts_with("apply")).cloned().collect();
+        xf.el = craft_xml::El::new("xf");
+        xf.el.attrs = attrs;
+    }
+    s.root = craft_xml::El::default();
+    s
+}
+
+#[test]
+fn styles_are_read_as_their_xlsx_spelling() {
+    let (binary, warnings) = styles_of(&styled_file(&styles_bin(), STYLES_TYPES));
+    let binary = binary.expect("styles are read");
+    assert_eq!(lifted(binary.clone()), lifted(xml_styles(STYLES_XML)));
+    // A few of the conversions, spelled out.
+    assert_eq!(binary.fonts[1].size, Some(14.5));
+    assert_eq!(binary.fonts[1].family, None);
+    let solid = Fill::Pattern(PatternFill {
+        pattern: Some(Pattern::Solid),
+        fg: Some(Color { source: ColorSource::Rgb(0xFFFF_FF00), tint: 0.0 }),
+        bg: Some(Color { source: ColorSource::Indexed(64), tint: 0.0 }),
+    });
+    assert_eq!(binary.fills[2], solid);
+    assert_eq!(binary.cell_xfs[2].protection, Some(Protection { locked: Some(false), hidden: Some(true) }));
+    assert_eq!(binary.palette()[0], 0x11_2233);
+    // Written back as SpreadsheetML, a cell style format says what it leaves out, as Excel's does.
+    let written = String::from_utf8(binary.to_xml()).unwrap();
+    assert!(written.contains(r#"applyFont="0" applyFill="0" applyBorder="0" applyAlignment="0" applyProtection="0""#), "{written}");
+    assert!(warnings.iter().any(|w| w.contains("alternate-content")), "{warnings:?}");
+    assert!(!warnings.iter().any(|w| w.contains("table styles")), "{warnings:?}");
+}
+
+#[test]
+fn damaged_styles_are_a_warning_and_the_workbook_opens() {
+    let good = styles_bin();
+    let end = record(279, &[]);
+    let body = &good[..good.len() - end.len()];
+    let with = |extra: &[u8]| [body, extra, &end].concat();
+    let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+        ("truncated", good[..good.len() - 1].to_vec(), STYLES_TYPES),
+        ("no end record", body.to_vec(), STYLES_TYPES),
+        ("unknown fill pattern", with(&pattern_fill(99, &indexed(64), &indexed(65))), STYLES_TYPES),
+        ("unknown border style", with(&record(46, &[&[0][..], &edge(14, &indexed(64)), &[0; 40]].concat())), STYLES_TYPES),
+        ("cell format outside its list", with(&brt_xf(0, 0, 0, 0, 0, 0, 0, 0x1010, 0)), STYLES_TYPES),
+        ("short property", with(&brt_dxf(&[vec![0x19, 0, 2, 0]])), STYLES_TYPES),
+        ("wrong content type", good.clone(), TYPES),
+    ];
+    for (why, part, types) in cases {
+        let bytes = styled_file(&part, types);
+        let (styles, warnings) = styles_of(&bytes);
+        assert!(styles.is_none(), "{why}");
+        assert!(warnings.iter().any(|w| w.contains("look/styles.bin")), "{why}: {warnings:?}");
+        assert_eq!(read(&bytes).unwrap().sheets[0].value(CellRef::new(0, 0)), Value::Number(1.0), "{why}");
+    }
+    // A table past 65,536 entries is refused before it is held.
+    let xfs = brt_xf(0, 0, 0, 0, 0, 0, 0, 0x1010, 0).repeat(65_537);
+    let (styles, warnings) = styles_of(&styled_file(&with(&[&begin(617, 65_537)[..], &xfs, &record(618, &[])].concat()), STYLES_TYPES));
+    assert!(styles.is_none());
+    assert!(warnings.iter().any(|w| w.contains("65536 entries")), "{warnings:?}");
+    // Custom table styles are not read, and say so.
+    let table_styles = [body, &record(508, &[&1u32.to_le_bytes()[..], &wide("Probe Table"), &wide("")].concat()), &end].concat();
+    let (styles, warnings) = styles_of(&styled_file(&table_styles, STYLES_TYPES));
+    assert!(styles.is_some());
+    assert!(warnings.iter().any(|w| w.contains("table styles")), "{warnings:?}");
 }

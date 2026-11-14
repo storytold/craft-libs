@@ -1,11 +1,13 @@
 //! Binary workbooks ([MS-XLSB]): the workbook part, shared strings and worksheet cells, from
 //! their records. Cell formulas are decoded from their tokens ([`formula`]) into the text an
 //! `.xlsx` file holds; one that can't be keeps only its saved result, with a warning saying why.
-//! Styles are not read. A record that does not parse fails the read.
+//! The styles part is read into the same [`crate::styles::Styles`] ([`styles`]). A record that
+//! does not parse fails the read.
 
 mod expr;
 mod formula;
 mod ftab;
+mod styles;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,11 +21,13 @@ use crate::workbook::{SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings};
 pub(crate) use formula::Links;
 use formula::{Book, Mode, Name, Xti};
+pub(crate) use styles::styles;
 
 pub(crate) const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
 pub(crate) const WORKSHEET: &str = "application/vnd.ms-excel.worksheet";
 pub(crate) const STRINGS: &str = "application/vnd.ms-excel.sharedStrings";
+pub(crate) const STYLES: &str = "application/vnd.ms-excel.styles";
 /// Most sheets in the workbook.
 const MAX_SHEETS: usize = 1024;
 /// Most merged ranges in one worksheet.
