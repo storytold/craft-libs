@@ -52,11 +52,33 @@ fn aes_padding_is_added_and_tolerantly_removed() {
 const ID: &[u8] = b"0123456789abcdef";
 
 fn new(alg: Algorithm, user: &str, owner: &str, perms: i32) -> SecurityHandler {
-    create(
+    // These tests read and write every algorithm, RC4 included.
+    create_legacy(
         &NewEncryption { algorithm: alg, user_password: user, owner_password: owner, permissions: perms, encrypt_metadata: true, seed: [42; 32] },
         ID,
     )
     .unwrap()
+}
+
+/// New files are not written with RC4: `create` refuses it, and the explicitly named
+/// `create_legacy` is the only way to write it.
+#[test]
+fn create_refuses_rc4_unless_asked() {
+    let params = |algorithm| NewEncryption {
+        algorithm,
+        user_password: "user",
+        owner_password: "owner",
+        permissions: -1,
+        encrypt_metadata: true,
+        seed: [42; 32],
+    };
+    for (alg, revision) in [(Algorithm::Rc4_40, 2), (Algorithm::Rc4_128, 3)] {
+        assert!(matches!(create(&params(alg), ID), Err(CryptError::Unsupported(_))), "{alg:?}");
+        assert_eq!(create_legacy(&params(alg), ID).unwrap().dict().r, revision, "{alg:?}");
+    }
+    for alg in [Algorithm::Aes128, Algorithm::Aes256] {
+        assert!(create(&params(alg), ID).is_ok(), "AES is not legacy: {alg:?}");
+    }
 }
 
 /// Every verifier check goes through this comparison: it reads both sides in full and a value
