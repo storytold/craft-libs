@@ -210,6 +210,8 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
             let fallback = match t {
                 rt::STYLES => "word/styles.xml",
                 rt::NUMBERING => "word/numbering.xml",
+                rt::FOOTNOTES => "word/footnotes.xml",
+                rt::ENDNOTES => "word/endnotes.xml",
                 _ => return None,
             };
             pkg.get(fallback).map(|_| fallback.to_string())
