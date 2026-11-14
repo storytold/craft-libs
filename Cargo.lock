@@ -2000,6 +2000,9 @@ dependencies = [
 [[package]]
 name = "craft-media-testkit"
 version = "0.1.0"
+dependencies = [
+ "craft-testkit",
+]
 
 [[package]]
 name = "craft-menu"

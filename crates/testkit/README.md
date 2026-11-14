@@ -123,9 +123,9 @@ The variable is read on every call; neither function sets or caches it.
 A zero default, a variable name that is empty or holds `=` or a NUL character, and a limit that ends past
 the latest time the platform's clock can represent also fail the test before any work starts.
 
-`craft-media-testkit`'s `with_deadline` and FilmCraft's `filmcraft-testkit` use the default when the
-variable holds something other than a number. FilmCraft also uses the default for zero, and
-`craft-media-testkit` accepts zero. Both fail the test here.
+FilmCraft's `filmcraft-testkit` uses the default when the variable holds something other than a
+number or holds zero. This module fails the test instead. `craft-media-testkit`'s `with_deadline`
+calls this module's.
 
 ### Limits
 
@@ -251,7 +251,7 @@ Changes from `craft-media-testkit`'s `hammer`:
 | GridCraft | `within` in the tests of its `crates/math` | Pending |
 | PhotoCraft | `wait_until` in the paint thread tests | Pending |
 | EffectCraft | `wait_until` in the footage reload tests | Pending |
-| `craft-media-testkit` | `with_deadline` (`CRAFT_TEST_TIMEOUT_SECS`) | Pending |
+| `craft-media-testkit` | `with_deadline` (`CRAFT_TEST_TIMEOUT_SECS`) | Done |
 
 An adoption keeps the variable name the app uses today.
 
@@ -259,8 +259,8 @@ An adoption keeps the variable name the app uses today.
 
 | Consumer | Code it replaces | State |
 |---|---|---|
-| `craft-media-testkit` | `hostile::hammer` (`CRAFT_MEDIA_HOSTILE_MULT`), called by the ISO BMFF, AVI, Matroska, MXF and MPEG TS hostile tests | Pending |
-| `craft-cfb` | its `hostile_input_never_panics` test, through `craft-media-testkit` | Pending |
+| `craft-media-testkit` | `hostile::hammer` (`CRAFT_MEDIA_HOSTILE_MULT`), called by the ISO BMFF, AVI, Matroska, MXF and MPEG TS hostile tests | Done |
+| `craft-cfb` | its `hostile_input_never_panics` test, through `craft-media-testkit` | Done |
 | CADCraft | the mutation loop of `hostile_files_never_panic` in `crates/fonts/src/shx/tests.rs` | Pending |
 | TextureCraft | the `hammer` of `malformed_meshes_are_errors` in `crates/formats/src/mesh_import/tests.rs` | Pending |
 
