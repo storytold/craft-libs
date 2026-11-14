@@ -641,6 +641,66 @@ fn a_fixture_that_cannot_be_written_returns_the_writer_error() {
     assert_eq!(craft_xls::testing::compound(&long, b"x"), Err(craft_cfb::Error::BadName(long.clone())));
 }
 
+/// A nonempty cell outside rows 0 to 65,535 or columns 0 to 255 is an error naming the cell, and
+/// the last row and column are written where they were asked for.
+#[test]
+fn the_fixture_writer_rejects_a_cell_outside_the_grid() {
+    let mut rows = vec![Vec::new(); 65_537];
+    rows[0] = vec!["first".to_string()];
+    rows[65_536] = vec!["wrapped".into()];
+    match craft_xls::testing::workbook(&[("Tall", rows)]) {
+        Err(craft_cfb::Error::Invalid(m)) => assert!(m.contains("\"Tall\"") && m.contains("row 65536, column 0"), "{m}"),
+        other => panic!("{:?}", other.map(|b| b.len())),
+    }
+    let mut wide = vec![String::new(); 257];
+    wide[0] = "first".into();
+    wide[256] = "dropped".into();
+    match craft_xls::testing::workbook(&[("Wide", vec![wide])]) {
+        Err(craft_cfb::Error::Invalid(m)) => assert!(m.contains("\"Wide\"") && m.contains("row 0, column 256"), "{m}"),
+        other => panic!("{:?}", other.map(|b| b.len())),
+    }
+    // An empty cell past the grid is not written, so it is not an error.
+    let mut rows = vec![Vec::new(); 65_537];
+    rows[0] = vec!["first".to_string(), String::new()];
+    rows[65_535] = vec![String::new(); 257];
+    rows[65_535][255] = "last".into();
+    rows[65_536] = vec![String::new()];
+    let read = craft_xls::read(&craft_xls::testing::workbook(&[("Full", rows)]).unwrap()).unwrap();
+    assert_eq!(read.warnings, []);
+    assert_eq!((v(&read.workbook, 0, "A1"), v(&read.workbook, 0, "IV65536")), (text("first"), text("last")));
+}
+
+/// The SST record's cstTotal and cstUnique fields ([MS-XLS] 2.4.265) in a fixture's Workbook stream.
+fn sst_counts(file: &[u8]) -> (u32, u32) {
+    let stream = craft_cfb::CompoundFile::open(file).unwrap().read_path("Workbook").unwrap();
+    let mut at = 0;
+    while let Some(head) = stream.get(at..at + 4) {
+        let kind = u16::from_le_bytes([head[0], head[1]]);
+        let len = usize::from(u16::from_le_bytes([head[2], head[3]]));
+        if kind == 0x00FC {
+            let d = &stream[at + 4..at + 12];
+            return (u32::from_le_bytes([d[0], d[1], d[2], d[3]]), u32::from_le_bytes([d[4], d[5], d[6], d[7]]));
+        }
+        at += 4 + len;
+    }
+    panic!("no SST record");
+}
+
+/// cstTotal is the number of cells that refer to the shared-string table, and cstUnique is the
+/// number of strings in it.
+#[test]
+fn the_fixture_writer_counts_every_shared_string_reference() {
+    let row = |cells: &[&str]| vec![cells.iter().map(|s| s.to_string()).collect::<Vec<_>>()];
+    let one = craft_xls::testing::workbook(&[("S", row(&["same", "same"]))]).unwrap();
+    assert_eq!(sst_counts(&one), (2, 1));
+    let two = craft_xls::testing::workbook(&[("S", row(&["same"])), ("T", row(&["same"]))]).unwrap();
+    assert_eq!(sst_counts(&two), (2, 1));
+    let none = craft_xls::testing::workbook(&[("S", row(&["1", "", "date:45000"]))]).unwrap();
+    assert_eq!(sst_counts(&none), (0, 0));
+    let wb = craft_xls::read(&two).unwrap().workbook;
+    assert_eq!((v(&wb, 0, "A1"), v(&wb, 1, "A1")), (text("same"), text("same")));
+}
+
 /// A `date:` cell whose serial is not a number is text, whether the shared-string table holds
 /// other text before it, an empty cell, or nothing else.
 #[test]

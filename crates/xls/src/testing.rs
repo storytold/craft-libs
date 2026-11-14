@@ -4,6 +4,10 @@ const BOF: u16 = 0x0809;
 const EOF: u16 = 0x000A;
 /// Characters kept from one string: 4,000 UTF-16 units and the 3-byte header fit one record.
 const MAX_STRING: usize = 4000;
+/// The last zero-based row of the BIFF8 grid ([MS-XLS] 2.2.1).
+const MAX_ROW: usize = 65_535;
+/// The last zero-based column of the BIFF8 grid ([MS-XLS] 2.2.1).
+const MAX_COLUMN: usize = 255;
 
 fn rec(out: &mut Vec<u8>, kind: u16, data: &[u8]) {
     out.extend_from_slice(&kind.to_le_bytes());
@@ -50,12 +54,37 @@ fn number(cell: &str) -> Option<(u16, f64)> {
 /// Number records, a cell `date:<serial>` is a Number with the date format `m/d/yyyy` (built-in
 /// format 14), an empty cell is left out, and everything else, including a `date:` cell whose
 /// serial is not a number, goes through the shared-string table (as UTF-16 when it isn't
-/// Latin-1). A compound file that cannot be written returns the writer's error.
+/// Latin-1). A nonempty cell past row 65,535 or column 255 (zero-based) returns
+/// [`craft_cfb::Error::Invalid`] naming its sheet, row and column, and a compound file that cannot
+/// be written returns the writer's error.
 ///
 /// shortcut: characters outside the Basic Multilingual Plane are dropped, sheet names are cut at
 /// 255 characters and strings at 4,000 (so each fits one record); lift when a fixture needs more.
 pub fn workbook(sheets: &[(&str, Vec<Vec<String>>)]) -> Result<Vec<u8>, craft_cfb::Error> {
     let mut sst: Vec<&str> = Vec::new();
+    let mut references = 0usize;
+    for (name, rows) in sheets {
+        for (r, row) in rows.iter().enumerate() {
+            for (c, v) in row.iter().enumerate() {
+                if v.is_empty() {
+                    continue;
+                }
+                if r > MAX_ROW || c > MAX_COLUMN {
+                    return Err(craft_cfb::Error::Invalid(format!(
+                        "fixture cell on sheet {name:?} at zero-based row {r}, column {c} is outside the BIFF8 grid"
+                    )));
+                }
+                if number(v).is_none() {
+                    references += 1;
+                    if !sst.contains(&v.as_str()) {
+                        sst.push(v);
+                    }
+                }
+            }
+        }
+    }
+    let total = i32::try_from(references)
+        .map_err(|_| craft_cfb::Error::Invalid(format!("{references} shared-string references do not fit the SST record")))?;
     let mut out = Vec::new();
     rec(&mut out, BOF, &bof(0x0005));
     for ifmt in [0u16, 14] {
@@ -73,13 +102,10 @@ pub fn workbook(sheets: &[(&str, Vec<Vec<String>>)]) -> Result<Vec<u8>, craft_cf
         chars(&mut d, &name);
         rec(&mut out, 0x0085, &d);
     }
-    for c in sheets.iter().flat_map(|(_, rows)| rows.iter().flatten()) {
-        if !c.is_empty() && number(c).is_none() && !sst.contains(&c.as_str()) {
-            sst.push(c);
-        }
-    }
+    // cstTotal is the number of LabelSst cells and cstUnique is the number of strings in the table
+    // ([MS-XLS] 2.4.265).
     let mut d = Vec::new();
-    d.extend_from_slice(&(sst.len() as u32).to_le_bytes());
+    d.extend_from_slice(&total.to_le_bytes());
     d.extend_from_slice(&(sst.len() as u32).to_le_bytes());
     let mut sst_records = vec![d];
     for s in &sst {
