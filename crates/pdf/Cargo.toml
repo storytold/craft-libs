@@ -58,7 +58,6 @@ js-sys = { version = "0.3", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 
 [dev-dependencies]
-craft-pdf = { path = ".", features = ["test-support"] }
 serde_json = { workspace = true }
 hayro-syntax = "=0.7.2"
 hayro-interpret = { version = "=0.7.0", default-features = false }
@@ -71,6 +70,10 @@ proptest = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[[test]]
+name = "testing_pdf"
+required-features = ["test-support"]
 
 [[example]]
 name = "cos_info"

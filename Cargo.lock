@@ -2184,7 +2184,6 @@ dependencies = [
  "aes 0.9.4",
  "bytemuck",
  "chrono",
- "craft-pdf 0.1.0",
  "craft-stream-codecs",
  "craft-svg",
  "flate2",
