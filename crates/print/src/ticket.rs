@@ -197,11 +197,24 @@ pub(crate) fn paper_names(width: f64, height: f64) -> &'static [&'static str] {
 }
 
 /// Whether a driver's paper name is `name`: it starts with it, ignoring case, and the name ends
-/// there ("A4 210 x 297 mm", not "A4 Extra" for "A4" or "ARCH E1" for "ARCH E").
+/// there — either nothing follows ("arch d"), or a separator and the sheet's dimensions ("A4
+/// 210 x 297 mm"). After a separator, dimensions are a digit: a word is a modifier, another
+/// paper ("A4 Extra", "A4 (Extra)"), and anything joined to the name without a separator is
+/// another paper too ("A4Extra", "ARCH E1" for "ARCH E").
 pub(crate) fn names_paper(display: Option<&str>, name: &str) -> bool {
     let Some(display) = display else { return false };
-    display.get(..name.len()).is_some_and(|start| start.eq_ignore_ascii_case(name))
-        && display.get(name.len()..).is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_alphanumeric()))
+    let Some(rest) = display.get(name.len()..) else { return false };
+    if !display.get(..name.len()).is_some_and(|start| start.eq_ignore_ascii_case(name)) {
+        return false;
+    }
+    let after = rest.trim_start_matches(|c: char| !c.is_alphanumeric());
+    match after.chars().next() {
+        // The name ends here, or a separator introduces the sheet's dimensions.
+        None => true,
+        Some(c) if !c.is_alphabetic() => after.len() < rest.len(),
+        // A word, directly after the name or after a separator, is a modifier: another paper.
+        Some(_) => false,
+    }
 }
 
 /// A driver paper offered for the job: its size in micrometres (as the driver lists it), its
@@ -222,10 +235,13 @@ pub(crate) struct Paper<'a> {
 /// An entry the driver keeps only one side of (the other reads zero, a legacy host-based driver's
 /// DEVMODE metric, storytold/craft-libs#7230) is a candidate of last resort (INV-4): only when no
 /// full entry matched, only a Print Schema keyword entry, and only while its known side agrees
-/// with the sheet, either way round. Several such entries that all agree (a Letter and a Legal
-/// option share a width) are told apart by name, as full candidates are: the one named like the
-/// requested standard sheet wins, and when that leaves more than one, or none, nothing is chosen —
-/// a guess here would lay the sheets out for the wrong paper.
+/// with the sheet, either way round. A single such entry is still refused when its own name is
+/// known and contradicts the requested standard sheet (INV-4): a known conflicting name is
+/// evidence against the choice, and failing closed is safer than a guess. Without a name there is
+/// nothing contradicting, so the agreement alone is enough. Several such entries that all agree
+/// (a Letter and a Legal option share a width) are told apart by name, as full candidates are:
+/// the one named like the requested standard sheet wins, and when that leaves more than one, or
+/// none, nothing is chosen — a guess here would lay the sheets out for the wrong paper.
 pub(crate) fn matching_paper(papers: &[Paper<'_>], width: f64, height: f64) -> Option<usize> {
     let (w, h) = (micrometres(width.min(height))?, micrometres(width.max(height))?);
     let names = paper_names(width, height);
@@ -250,7 +266,13 @@ pub(crate) fn matching_paper(papers: &[Paper<'_>], width: f64, height: f64) -> O
         .map(|(i, _)| i)
         .collect();
     match partials.as_slice() {
-        [only] => Some(*only),
+        [only] => {
+            // INV-4: a known name that contradicts the requested standard sheet is evidence
+            // against this single partial record — refuse it; without a name, the known side's
+            // agreement is all the evidence there is, and the record stands.
+            let contradicts = papers[*only].name.is_some_and(|name| !names.iter().any(|n| names_paper(Some(name), n)));
+            (!contradicts).then_some(*only)
+        }
         // Ambiguous by agreement alone: a partial named like the requested standard sheet wins.
         _ => {
             let named: Vec<usize> = partials.iter().copied().filter(|i| names.iter().any(|n| names_paper(papers[*i].name, n))).collect();
@@ -1686,6 +1708,10 @@ mod tests {
         assert!(!names_paper(Some("ANSI D"), "ARCH D"));
         assert!(!names_paper(Some("ARCH E1"), "ARCH E"));
         assert!(!names_paper(Some("A4Extra"), "A4"));
+        // storytold/craft-libs#1225: a word after a separator is a modifier, not dimensions.
+        assert!(!names_paper(Some("A4 Extra"), "A4"));
+        assert!(!names_paper(Some("A4 (Extra)"), "A4"));
+        assert!(names_paper(Some("A4 210 x 297 mm"), "A4"));
         assert!(!names_paper(Some("Ä"), "A4"), "never slices inside a character");
         assert!(!names_paper(None, "A4"));
     }
@@ -1711,12 +1737,37 @@ mod tests {
     }
 
     /// One partial paper whose known side agrees is still taken, named like the requested
-    /// standard sheet or not.
+    /// standard sheet or not. The known side agrees only to a quarter of a millimetre: exactly
+    /// the tolerance is taken, one micrometre past it is another paper.
     #[test]
     fn a_single_partially_known_paper_that_agrees_is_still_taken() {
         let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
         assert_eq!(matching_paper(&[paper(215_900, 0, Some("Legal 215.9 x 355.6 mm"), true)], 612.0, 1008.0), Some(0), "named like the sheet");
         assert_eq!(matching_paper(&[paper(215_900, 0, None, true)], 612.0, 1008.0), Some(0), "or without a name at all");
+        assert_eq!(matching_paper(&[paper(0, 297_250, None, true)], 595.28, 841.89), Some(0), "exactly the tolerance");
+        assert_eq!(matching_paper(&[paper(0, 297_251, None, true)], 595.28, 841.89), None, "one µm past the tolerance");
+    }
+
+    /// storytold/craft-libs#1225 (Code Rabbit, second round): a single partial paper whose known
+    /// side agrees is still refused when its own name is known and contradicts the requested
+    /// standard sheet — the width the driver kept is shared by Letter and Legal, and a known
+    /// Letter name is evidence against choosing it for a Legal sheet (INV-4). "Extra" is a
+    /// modifier word, another paper: a known "Letter Extra" name contradicts a Letter sheet too.
+    /// Without a name there is nothing contradicting, and the agreeing entry is taken as before.
+    #[test]
+    fn a_single_partially_known_paper_whose_known_name_contradicts_the_sheet_is_refused() {
+        let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+        assert_eq!(
+            matching_paper(&[paper(215_900, 0, Some("Letter 215.9 x 279.4 mm"), true)], 612.0, 1008.0),
+            None,
+            "a known Letter name is not a Legal sheet"
+        );
+        assert_eq!(
+            matching_paper(&[paper(215_900, 0, Some("Letter Extra 215.9 x 431.8 mm"), true)], 612.0, 792.0),
+            None,
+            "a known \"Letter Extra\" name is not a Letter sheet"
+        );
+        assert_eq!(matching_paper(&[paper(215_900, 0, None, true)], 612.0, 1008.0), Some(0), "an unnamed twin stands, the agreement alone");
     }
 
     /// storytold/craft-libs#1225: two partial papers that both agree (Letter and Legal share a
