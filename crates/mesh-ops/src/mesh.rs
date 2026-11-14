@@ -129,6 +129,21 @@ impl Mesh {
         self.positions.len()
     }
 
+    /// A copy of the mesh in reserved arrays, or `OutOfMemory`.
+    fn try_clone(&self) -> Result<Mesh> {
+        Ok(Mesh {
+            positions: try_copy(&self.positions, "vertices")?,
+            normals: try_copy(&self.normals, "normals")?,
+            tangents: try_copy(&self.tangents, "tangents")?,
+            uvs: try_copy(&self.uvs, "UVs")?,
+            colors: try_copy(&self.colors, "vertex colors")?,
+            indices: try_copy(&self.indices, "indices")?,
+            submeshes: try_copy(&self.submeshes, "submeshes")?,
+            materials: try_copy(&self.materials, "materials")?,
+            diagonals: try_copy(&self.diagonals, "diagonals")?,
+        })
+    }
+
     /// Axis-aligned bounds of the finite positions (zero box when there are none). Non-finite
     /// positions are left out, so one cannot turn the box into NaN or hide a coordinate.
     pub fn bounds(&self) -> (Vec3, Vec3) {
@@ -602,7 +617,7 @@ impl Mesh {
         let unnamed = |m: &Mesh| m.materials.is_empty() && !m.submeshes.is_empty();
         let (self_unnamed, other_unnamed) = (unnamed(self), unnamed(other));
         let mbase = self.materials.len() + usize::from(self_unnamed);
-        let mut submeshes = Vec::with_capacity(other.submeshes.len());
+        let mut submeshes = try_vec(other.submeshes.len(), "submeshes")?;
         for s in &other.submeshes {
             let start = s.start.checked_add(ibase).ok_or(too_large("submeshes"))?;
             start.checked_add(s.count).ok_or(too_large("submeshes"))?;
@@ -610,7 +625,7 @@ impl Mesh {
             submeshes.push(SubMesh { name: s.name.clone(), material, start, count: s.count });
         }
 
-        let mut other = other.clone();
+        let mut other = other.try_clone()?;
         let complete = |m: &Mesh| {
             (
                 per_vertex(m.normals.len(), m.positions.len()),
@@ -641,6 +656,22 @@ impl Mesh {
         }
         // Computing tangents can split vertices, so the base is taken now (checked to fit above).
         let base = self.positions.len() as u32;
+
+        let (vertices, triangles) = (base as usize + other.positions.len(), ibase as usize / 3 + other.triangle_count());
+        let more = |v: usize, len: usize| v.saturating_sub(len);
+        reserved(self.positions.try_reserve(other.positions.len()), "vertices")?;
+        reserved(self.normals.try_reserve(other.normals.len()), "normals")?;
+        reserved(self.tangents.try_reserve(other.tangents.len()), "tangents")?;
+        reserved(self.uvs.try_reserve(other.uvs.len()), "UVs")?;
+        if !(self.colors.is_empty() && other.colors.is_empty()) {
+            reserved(self.colors.try_reserve(more(vertices, self.colors.len())), "vertex colors")?;
+        }
+        if !(self.diagonals.is_empty() && other.diagonals.is_empty()) {
+            reserved(self.diagonals.try_reserve(more(triangles, self.diagonals.len())), "diagonals")?;
+        }
+        reserved(self.indices.try_reserve(other.indices.len()), "indices")?;
+        reserved(self.materials.try_reserve(other.materials.len() + 2), "materials")?;
+        reserved(self.submeshes.try_reserve(submeshes.len()), "submeshes")?;
 
         self.positions.extend_from_slice(&other.positions);
         self.normals.extend_from_slice(&other.normals);
