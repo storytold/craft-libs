@@ -437,6 +437,9 @@ impl PacketEncoder {
     /// Decoded samples before the first input frame: the encoder's delay, which a container
     /// skips (an MP4 edit list's media time, Matroska's CodecDelay, Opus's pre-skip, which
     /// `OpusHead` already holds). 0 for ALAC.
+    ///
+    /// This is the codec's delay and does not depend on the input. An encoder that is given no
+    /// input returns no packets, and this still reports the delay.
     pub fn priming(&self) -> u32 {
         match &self.inner {
             #[cfg(feature = "aac-encode")]
@@ -461,6 +464,10 @@ impl PacketEncoder {
     /// edit, Matroska's DiscardPadding): the packets' durations add up to
     /// [`priming`](Self::priming) + [`frames`](Self::frames) + this. Complete after
     /// [`finish`](Self::finish).
+    ///
+    /// The sum holds once there is input. With none, [`finish`](Self::finish) returns no packets,
+    /// so the durations add up to 0 and this is 0, while `priming` is still the codec's delay: a
+    /// muxer writes an empty track and has no priming to skip.
     pub fn padding(&self) -> u64 {
         self.pts.saturating_sub(u64::from(self.priming()).saturating_add(self.frames))
     }

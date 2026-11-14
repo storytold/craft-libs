@@ -353,7 +353,9 @@ get the error `EncodeOptions::check` gives for the format.
 
 Timing: a packet's `pts` is where its decoded audio starts, counted from the first decoded sample,
 so input frame `n` is at `n + priming()`. `finish` pads the end with silence until a decoder
-returns every input frame, and the durations add up to `priming() + frames() + padding()`. A muxer
+returns every input frame, and the durations add up to `priming() + frames() + padding()`. With no
+input there are no packets: the durations add up to 0 and `padding()` is 0, while `priming()` still
+reports the codec's delay. A muxer
 skips the priming (MP4: `TrackConfig::media_start` or an edit list; Matroska: `CodecDelay`; Opus:
 the pre-skip, which `OpusHead` already holds) and trims the padding (the end of an MP4 edit,
 Matroska's `DiscardPadding`). ALAC's `extradata` records the largest packet and the average bit

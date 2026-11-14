@@ -230,10 +230,15 @@ fn misuse_is_an_error() {
     assert_eq!(enc.finish().unwrap().len(), 2, "5 frames after 1024 of priming fit in two packets");
     assert!(matches!(enc.finish(), Err(AudioError::Encode(_))));
     assert!(matches!(enc.encode(&short, 5), Err(AudioError::Encode(_))));
-    // An encoder given nothing returns nothing.
+    // An encoder given nothing returns nothing: no packets, no frames and no padding. `priming`
+    // is the codec's delay either way, so it equals that of an encoder that was given input.
     for codec in [CodecId::Aac, CodecId::Alac, CodecId::Mp3, CodecId::Ac3, CodecId::Eac3, CodecId::Opus] {
         let mut enc = PacketEncoder::new(codec, &EncodeOptions::default().with_bit_depth(BitDepth::Int16), 48_000, 2).unwrap();
         assert!(enc.finish().unwrap().is_empty(), "{codec:?}");
-        assert_eq!(enc.padding(), 0);
+        assert_eq!((enc.frames(), enc.padding()), (0, 0), "{codec:?}");
+        let mut fed = PacketEncoder::new(codec, &EncodeOptions::default().with_bit_depth(BitDepth::Int16), 48_000, 2).unwrap();
+        fed.encode(&short, 5).unwrap();
+        fed.finish().unwrap();
+        assert_eq!(enc.priming(), fed.priming(), "{codec:?}");
     }
 }
