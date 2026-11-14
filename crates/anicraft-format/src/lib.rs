@@ -14,6 +14,10 @@ use serde::{
 };
 use std::{fmt, marker::PhantomData};
 
+/// The native project envelope's identifying format string.
+pub const FORMAT_NAME: &str = "anicraft";
+/// Current envelope version (v1 inline paths; v2 shared path table; v3 named scene timelines).
+pub const FORMAT_VERSION: u32 = 3;
 /// The largest native project file AniCraft accepts.
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 /// Files below this size are pretty-printed for diffs and manual inspection.
@@ -29,14 +33,8 @@ struct EnvelopeOut<'a, P, T> {
 }
 
 /// Serializes the envelope in its stable wire order and uses AniCraft's compact/pretty threshold.
-pub fn write<P: Serialize, T: Serialize>(
-    format: &str,
-    version: u32,
-    generator: &str,
-    paths: &[P],
-    document: &T,
-) -> Result<String, serde_json::Error> {
-    let envelope = EnvelopeOut { format, version, generator, paths, document };
+pub fn write<P: Serialize, T: Serialize>(generator: &str, paths: &[P], document: &T) -> Result<String, serde_json::Error> {
+    let envelope = EnvelopeOut { format: FORMAT_NAME, version: FORMAT_VERSION, generator, paths, document };
     let compact = serde_json::to_string(&envelope)?;
     if compact.len() < PRETTY_LIMIT { serde_json::to_string_pretty(&envelope) } else { Ok(compact) }
 }
@@ -202,11 +200,13 @@ mod tests {
     fn writer_keeps_the_versioned_field_order_and_pretty_threshold() -> Result<(), Box<dyn std::error::Error>> {
         let paths = ["path-a", "path-b"];
         let document = Document { value: 3 };
-        let json = write("anicraft", 3, "AniCraft 0.1", &paths, &document)?;
+        let json = write("AniCraft 0.1", &paths, &document)?;
         let keys = ["\"format\"", "\"version\"", "\"generator\"", "\"paths\"", "\"document\""];
         let offsets: Vec<usize> = keys.iter().map(|key| json.find(key).unwrap_or(usize::MAX)).collect();
         assert!(offsets.windows(2).all(|pair| pair[0] < pair[1]));
         assert!(json.contains("\n  \"format\""), "small envelopes stay human-readable");
+        assert!(json.contains("\"format\": \"anicraft\""));
+        assert!(json.contains("\"version\": 3"));
         Ok(())
     }
 
