@@ -4,6 +4,8 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
+use crate::{browse_hover, browse_pick};
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Printer {
     /// The spooler's destination: what [`Settings::printer`] and jobs name.
@@ -218,8 +220,15 @@ impl State {
                     .wrap_mode(egui::TextWrapMode::Truncate)
                     .selected_text(if self.settings.printer.is_empty() { labels.select_printer } else { selected.unwrap_or(&self.settings.printer) })
                     .show_ui(ui, |ui| {
+                        // Press-and-browse: the row under a held press highlights and the release
+                        // over it chooses, as a combo box's own entries do; `selectable_value` only
+                        // reacts to a click, so the browse takes the choice itself (#2686).
                         for (printer, text) in self.printers.iter().zip(&shown) {
-                            ui.selectable_value(&mut self.settings.printer, printer.name.clone(), text);
+                            let row = ui.selectable_value(&mut self.settings.printer, printer.name.clone(), text);
+                            let row = browse_hover(ui, row);
+                            if row.clicked() || browse_pick(ui, &row) {
+                                self.settings.printer = printer.name.clone();
+                            }
                         }
                     })
                     .response
@@ -245,8 +254,14 @@ impl State {
                         choices.iter().find(|(value, _)| *value == self.settings.duplex).map(|(_, text)| *text).unwrap_or(labels.printer_default),
                     )
                     .show_ui(ui, |ui| {
+                        // Press-and-browse, as the printer rows above: the release over a row
+                        // chooses it (#2686).
                         for (value, text) in choices {
-                            ui.selectable_value(&mut self.settings.duplex, value, text);
+                            let row = ui.selectable_value(&mut self.settings.duplex, value, text);
+                            let row = browse_hover(ui, row);
+                            if row.clicked() || browse_pick(ui, &row) {
+                                self.settings.duplex = value;
+                            }
                         }
                     })
                     .response

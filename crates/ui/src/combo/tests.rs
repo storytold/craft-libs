@@ -598,3 +598,299 @@ fn a_footer_that_hits_the_remeasure_cap_recovers_once_it_holds_still() {
     let now = h.state().2;
     assert!((now - bottom).abs() < 1.0, "the footer ends at {now}, was {bottom}");
 }
+
+/// A combo box that reports where its button and entries are, so a test can hold the button down,
+/// move onto an entry and release there, as press-and-browse does.
+struct Browsing {
+    selected: usize,
+    button: egui::Rect,
+    rows: Vec<egui::Rect>,
+    popup: egui::Id,
+}
+
+fn browsing(press_and_browse: bool) -> Harness<'static, Browsing> {
+    Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+        move |ui, s: &mut Browsing| {
+            s.rows.clear();
+            let inner = ComboBox::new("size", "Size").selected_text(SIZES[s.selected]).press_and_browse(press_and_browse).show_ui(ui, |ui| {
+                for (i, name) in SIZES.iter().enumerate() {
+                    let row = ui.selectable_label(i == s.selected, *name);
+                    let row = super::browse_hover(ui, row);
+                    s.rows.push(row.rect);
+                    if row.clicked() || super::browse_pick(ui, &row) {
+                        s.selected = i;
+                    }
+                }
+            });
+            s.button = inner.response.rect;
+            s.popup = super::popup_id(inner.response.id);
+        },
+        Browsing { selected: 0, button: egui::Rect::NOTHING, rows: Vec::new(), popup: egui::Id::NULL },
+    )
+}
+
+fn pointer_button<S>(h: &mut Harness<'_, S>, at: egui::Pos2, pressed: bool) {
+    if pressed {
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+    }
+    let event = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::default() };
+    h.event(event);
+    h.step();
+}
+
+fn is_open(h: &Harness<'_, Browsing>) -> bool {
+    egui::Popup::is_id_open(&h.ctx, h.state().popup)
+}
+
+#[test]
+fn a_press_opens_the_menu_and_releasing_over_an_entry_picks_it() {
+    let mut h = browsing(true);
+    h.run();
+    let button = h.state().button.center();
+    pointer_button(&mut h, button, true);
+    assert!(is_open(&h), "the press opens the menu");
+    assert_eq!(h.state().rows.len(), SIZES.len(), "the entries are up while the button is still down");
+
+    // Let the menu settle where it will stay, as it does before the user moves.
+    h.run();
+    let entry = h.state().rows[2].center();
+    h.event(egui::Event::PointerMoved(entry));
+    h.step();
+    assert!(is_open(&h), "moving onto an entry keeps the menu open");
+
+    pointer_button(&mut h, entry, false);
+    assert_eq!(h.state().selected, 2, "the release over the third entry chooses it");
+    assert!(!is_open(&h), "and closes the menu");
+}
+
+#[test]
+fn a_press_released_back_over_the_button_leaves_the_menu_open() {
+    let mut h = browsing(true);
+    h.run();
+    let button = h.state().button.center();
+    pointer_button(&mut h, button, true);
+    pointer_button(&mut h, button, false);
+    assert!(is_open(&h), "released over the button, the menu stays up");
+    assert_eq!(h.state().selected, 0, "and nothing was chosen");
+
+    pointer_button(&mut h, button, true);
+    assert!(!is_open(&h), "pressing the button again closes it");
+}
+
+#[test]
+fn escape_closes_a_menu_opened_by_a_press() {
+    let mut h = browsing(true);
+    h.run();
+    let center = h.state().button.center();
+    pointer_button(&mut h, center, true);
+    assert!(is_open(&h));
+    h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::default() });
+    h.step();
+    assert!(!is_open(&h), "Escape closes it");
+}
+
+#[test]
+fn without_press_and_browse_the_menu_opens_and_chooses_on_release() {
+    let mut h = browsing(false);
+    h.run();
+    let button = h.state().button.center();
+    pointer_button(&mut h, button, true);
+    assert!(!is_open(&h), "the press does not open the menu");
+    pointer_button(&mut h, button, false);
+    assert!(is_open(&h), "egui's click opens it on release");
+    h.run();
+
+    let entry = h.state().rows[2].center();
+    pointer_button(&mut h, entry, true);
+    pointer_button(&mut h, entry, false);
+    assert_eq!(h.state().selected, 2, "a click on an entry still chooses it");
+    assert!(!is_open(&h), "and closes the menu");
+}
+
+/// Two combo boxes drawn one after the other: the first stays closed while the second's menu
+/// browses with the row helpers.
+struct Pair {
+    selected: usize,
+    second_button: egui::Rect,
+    rows: Vec<egui::Rect>,
+    popup: egui::Id,
+}
+
+fn pair() -> Harness<'static, Pair> {
+    Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+        |ui, s: &mut Pair| {
+            // Drawn first: closed, so its end-of-pass cleanup runs before the second's entries.
+            let _ = ComboBox::new("first", "First").selected_text("First").show_ui(ui, |_| {});
+            s.rows.clear();
+            let inner = ComboBox::new("second", "Second").selected_text(SIZES[s.selected]).show_ui(ui, |ui| {
+                for (i, name) in SIZES.iter().enumerate() {
+                    let row = ui.selectable_label(i == s.selected, *name);
+                    let row = super::browse_hover(ui, row);
+                    s.rows.push(row.rect);
+                    if row.clicked() || super::browse_pick(ui, &row) {
+                        s.selected = i;
+                    }
+                }
+            });
+            s.second_button = inner.response.rect;
+            s.popup = super::popup_id(inner.response.id);
+        },
+        Pair { selected: 0, second_button: egui::Rect::NOTHING, rows: Vec::new(), popup: egui::Id::NULL },
+    )
+}
+
+/// The first combo box of a pass is closed while the second browses: its end-of-pass cleanup must
+/// leave the second one's browse state alone, or the release over an entry of the second would
+/// choose nothing — its entries are evaluated after the first one's cleanup.
+#[test]
+fn a_closed_combo_drawn_first_leaves_the_browsed_ones_release_to_choose() {
+    let mut h = pair();
+    h.run();
+    let button = h.state().second_button.center();
+    pointer_button(&mut h, button, true);
+    assert!(egui::Popup::is_id_open(&h.ctx, h.state().popup), "the press opens the second menu");
+    // Let the menu settle where it will stay, as it does before the user moves.
+    h.run();
+    let entry = h.state().rows[2].center();
+    h.event(egui::Event::PointerMoved(entry));
+    h.step();
+    pointer_button(&mut h, entry, false);
+    assert_eq!(h.state().selected, 2, "the release over the third entry chooses it");
+}
+
+/// One menu with an enabled entry and a disabled one, recording what [`super::browse_hover`] did
+/// to each.
+struct Mixed {
+    highlighted: Vec<bool>,
+    rows: Vec<egui::Rect>,
+    button: egui::Rect,
+}
+
+fn mixed() -> Harness<'static, Mixed> {
+    Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+        |ui, s: &mut Mixed| {
+            s.rows.clear();
+            s.highlighted.clear();
+            let inner = ComboBox::new("size", "Size").selected_text(SIZES[0]).show_ui(ui, |ui| {
+                for (i, enabled) in [true, false].into_iter().enumerate() {
+                    let row = ui.add_enabled_ui(enabled, |ui| ui.selectable_label(false, SIZES[i])).inner;
+                    let row = super::browse_hover(ui, row);
+                    s.rows.push(row.rect);
+                    s.highlighted.push(row.highlighted());
+                }
+            });
+            s.button = inner.response.rect;
+        },
+        Mixed { highlighted: Vec::new(), rows: Vec::new(), button: egui::Rect::NOTHING },
+    )
+}
+
+/// The browse highlight is the row's own hover look, taken by hand because egui reports no hover
+/// while a button is held down. A disabled entry stays plain — the docs of [`super::browse_hover`]
+/// promise "Disabled rows ignore it", as in native menus.
+#[test]
+fn a_disabled_entry_ignores_the_browse_highlight() {
+    let mut h = mixed();
+    h.run();
+    let button = h.state().button.center();
+    pointer_button(&mut h, button, true);
+    assert!(super::browsing(&h.ctx), "the press starts a browse");
+    // Let the menu settle where it will stay, as it does before the user moves.
+    h.run();
+
+    let enabled = h.state().rows[0].center();
+    h.event(egui::Event::PointerMoved(enabled));
+    h.step();
+    assert!(h.state().highlighted[0], "the enabled entry under the held press takes the browse highlight");
+
+    let disabled = h.state().rows[1].center();
+    h.event(egui::Event::PointerMoved(disabled));
+    h.step();
+    assert!(!h.state().highlighted[1], "the disabled entry under the held press does not");
+}
+
+/// A combo box that can stop being drawn while its press still owns the browse state.
+struct Vanishing {
+    show_first: bool,
+    selected: usize,
+    first_button: egui::Rect,
+    second_button: egui::Rect,
+    rows: Vec<egui::Rect>,
+    popup: egui::Id,
+}
+
+fn vanishing() -> Harness<'static, Vanishing> {
+    Harness::builder().with_size(egui::vec2(400.0, 400.0)).build_ui_state(
+        |ui, s: &mut Vanishing| {
+            if s.show_first {
+                let first = ComboBox::new("first", "First").selected_text("First").show_ui(ui, |_| {});
+                s.first_button = first.response.rect;
+            }
+            s.rows.clear();
+            let inner = ComboBox::new("second", "Second").selected_text(SIZES[s.selected]).press_and_browse(false).show_ui(ui, |ui| {
+                for (i, name) in SIZES.iter().enumerate() {
+                    let row = ui.selectable_label(i == s.selected, *name);
+                    let row = super::browse_hover(ui, row);
+                    s.rows.push(row.rect);
+                    if row.clicked() || super::browse_pick(ui, &row) {
+                        s.selected = i;
+                    }
+                }
+            });
+            s.second_button = inner.response.rect;
+            s.popup = super::popup_id(inner.response.id);
+        },
+        Vanishing {
+            show_first: true,
+            selected: 0,
+            first_button: egui::Rect::NOTHING,
+            second_button: egui::Rect::NOTHING,
+            rows: Vec::new(),
+            popup: egui::Id::NULL,
+        },
+    )
+}
+
+/// The browse state names the button that owns it, and that button can stop being drawn — the
+/// combo box hides while its press is still down. The release of that press must still leave the
+/// state to its owner alone (another combo box drawing on that pass cannot tell the two apart),
+/// but once the gesture is over an idle pass must let any combo box clear the orphan, or a later
+/// release over another menu's entry would pick one as if the vanished press still browsed.
+#[test]
+fn a_browse_whose_owner_stops_being_drawn_cannot_pick_for_another_combo_box() {
+    let mut h = vanishing();
+    h.run();
+    let first = h.state().first_button.center();
+    pointer_button(&mut h, first, true);
+    assert!(super::browsing(&h.ctx), "the press on the first combo box starts a browse it owns");
+
+    // The owner vanishes while the press is down; the release pass clears nothing but its owner.
+    h.state_mut().show_first = false;
+    pointer_button(&mut h, egui::pos2(390.0, 390.0), false);
+    assert!(super::browsing(&h.ctx), "the release pass leaves the vanished press's browse state alone");
+
+    // The gesture is over and the owner is gone: the next pass clears the orphan.
+    h.run();
+    assert!(!h.ctx.data(|d| d.get_temp::<egui::Id>(super::browse_id()).is_some()), "an idle pass clears the orphaned browse state");
+
+    // The second combo box does not browse itself (its menu opens on a click), so the only browse
+    // state that could pick for it is the orphan.
+    let second = h.state().second_button.center();
+    pointer_button(&mut h, second, true);
+    pointer_button(&mut h, second, false);
+    h.run();
+    assert!(egui::Popup::is_id_open(&h.ctx, h.state().popup), "the click opens the second menu");
+
+    // A press inside that menu, then the release over another entry. With the orphan still set the
+    // stale browse would pick that entry; with it cleared the release chooses nothing.
+    let entry0 = h.state().rows[0].center();
+    pointer_button(&mut h, entry0, true);
+    assert!(egui::Popup::is_id_open(&h.ctx, h.state().popup), "the press inside the menu keeps it up");
+    h.run();
+    let entry2 = h.state().rows[2].center();
+    h.event(egui::Event::PointerMoved(entry2));
+    h.step();
+    pointer_button(&mut h, entry2, false);
+    assert_eq!(h.state().selected, 0, "the release over an entry with no live browse chooses nothing");
+}

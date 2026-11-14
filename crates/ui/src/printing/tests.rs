@@ -262,3 +262,92 @@ fn localized_controls_fit_narrow_ui_and_disable_while_submitting() {
     frame(&mut state, vec![pointer(false)]);
     assert!(state.settings.grayscale, "pending work disables editing its settings");
 }
+
+/// The printer and duplex menus browse like every other combo box menu (#469): the press opens
+/// the menu and the release over a row chooses it, without the row ever being clicked (#2686).
+#[test]
+fn a_held_press_over_a_menu_picks_the_row_it_lands_on() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let mut state = State::default();
+    let discover: Discover = Box::new(|| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(vec![labelled("Office", "Office"), labelled("Lab", "Lab printer")]).expect("send");
+        receiver
+    });
+    let labels = Labels {
+        printer: "Printer",
+        select_printer: "Select",
+        refresh: "Refresh",
+        copies: "Copies",
+        printer_default: "Default",
+        duplex: "Duplex",
+        one_sided: "One-sided",
+        long_edge: "Long edge",
+        short_edge: "Short edge",
+        grayscale: "Grayscale",
+    };
+    let frame = |state: &mut State, events| {
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(220.0, 360.0))), events, ..Default::default() },
+            |ui| state.show(ui, egui::Id::unique("print"), &discover, &labels),
+        );
+        output.textures_delta.clear();
+        output
+    };
+    let pointer = |at: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    // The centre of the combo box currently showing `value`, from a full accesskit tree.
+    let centre = |tree: &egui::accesskit::TreeUpdate, value: &str| {
+        let node = tree
+            .nodes
+            .iter()
+            .find(|(_, n)| n.role() == egui::accesskit::Role::ComboBox && n.value() == Some(value))
+            .map(|(_, n)| n)
+            .unwrap_or_else(|| panic!("no combo box showing {value}"));
+        let b = node.bounds().unwrap_or_else(|| panic!("no bounds for {value}"));
+        egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
+    };
+    // The centre of the menu row labelled `label`, from the update that drew the menu.
+    let row = |tree: &egui::accesskit::TreeUpdate, label: &str| {
+        let node = tree
+            .nodes
+            .iter()
+            .find(|(_, n)| n.role() == egui::accesskit::Role::Button && n.label() == Some(label))
+            .map(|(_, n)| n)
+            .unwrap_or_else(|| panic!("no {label} row"));
+        let b = node.bounds().unwrap_or_else(|| panic!("no bounds for {label}"));
+        egui::pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32)
+    };
+
+    let tree = frame(&mut state, Vec::new()).platform_output.accesskit_update.expect("the first tree");
+    // Discovery picks the first printer on its own; the browse has to move the choice to the
+    // second one for the pick to mean anything.
+    let printer = centre(&tree, "Office");
+    let duplex = centre(&tree, "Default");
+    // Let the UI settle before the presses.
+    frame(&mut state, Vec::new());
+    frame(&mut state, Vec::new());
+
+    // The printer menu: press the combo; its rows land in the following accesskit update.
+    frame(&mut state, vec![egui::Event::PointerMoved(printer)]);
+    frame(&mut state, vec![pointer(printer, true)]);
+    let tree = frame(&mut state, Vec::new()).platform_output.accesskit_update.expect("the printer menu");
+    let at = row(&tree, "Lab printer");
+    frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+    frame(&mut state, vec![pointer(at, false)]);
+    assert_eq!(state.settings.printer, "Lab", "the release over the Lab printer row chooses that queue");
+
+    // The duplex menu: the same press and release over Long edge.
+    frame(&mut state, vec![egui::Event::PointerMoved(duplex)]);
+    frame(&mut state, vec![pointer(duplex, true)]);
+    let tree = frame(&mut state, Vec::new()).platform_output.accesskit_update.expect("the duplex menu");
+    let at = row(&tree, "Long edge");
+    frame(&mut state, vec![egui::Event::PointerMoved(at)]);
+    frame(&mut state, vec![pointer(at, false)]);
+    assert_eq!(state.settings.duplex, Some(Duplex::LongEdge), "the release over the Long edge row chooses it");
+}
