@@ -1,21 +1,23 @@
 # Local linesweeper 0.5.0 copy
 
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
-local patch listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
+local patches listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
 `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
 names, which is archived; its README says development moved off GitHub.
 
-Every file here except this one, `SOURCE.json` and the patched file below is byte for byte the file
+Every file here except this one, `SOURCE.json` and the patched files below is byte for byte the file
 in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
-holds `upstream_revision`. `local_patches` describes the local patch.
+holds `upstream_revision`. `local_patches` describes each local patch.
+Both patches are in `src/sweep/sweep_line.rs`.
 
 ## Local patches
 
 | File | Change |
 |---|---|
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
+| `src/sweep/sweep_line.rs` | `Sweeper::scan_for_removal` starts its intersection scans from the nearest segment left of the removed slot that does not end at the current `y`. Segments that end at `y` stay in the sweep line until `advance`, and a scan from one of them returns at once, so the live segments on both sides of the gap were never compared and their crossing was missed. The `removal_scan_skips_segments_that_end` test sweeps two integer polygons whose crossing at (0.75, 1.5) used to be missed; their Intersection came out with area 1.5 instead of 1.125. Both removal paths call this function: a segment's exit and the removals in `handle_intersection`. During the exits at one height, `EndedRuns` keeps each walk to such a segment and the segments the scans already started from, so many segments ending at one height do not each repeat the walk or the scans. `removal_scans_share_the_run_of_ended_segments` counts the positions visited, and `removal_scans_run_once_from_each_live_segment` counts the scans when two groups of such segments, with interleaved exits, each sit beside a taller rectangle. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
