@@ -219,7 +219,8 @@ pub(super) fn event_edits(
             vec![SwatchEdit::Rename { swatch: old, name }]
         }
         PresetEvent::Rename { key: SwatchKey::Group(old), text, .. } => {
-            let Some(name) = groups.iter().position(|g| g.name == old).and_then(|i| group_rename(groups, i, &text)).filter(|name| *name != old) else {
+            let Some(name) = groups.iter().position(|g| g.name == old).and_then(|i| group_rename(groups, i, &text)).filter(|name| *name != old)
+            else {
                 return Vec::new();
             };
             vec![SwatchEdit::RenameGroup { group: old, name }]

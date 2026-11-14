@@ -7,8 +7,8 @@ use std::rc::Rc;
 use craft_behavior::{EditEvent, Selection};
 use craft_color::palette::{SwatchColor, SwatchGroup};
 use craft_color::ui::{
-    ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchTable, SwatchesCommand,
-    SwatchesMenu, SwatchesPanel, SwatchesState,
+    ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchTable,
+    SwatchesCommand, SwatchesMenu, SwatchesPanel, SwatchesState,
 };
 use craft_theme::Srgba;
 use craft_ui::contract::Role;
