@@ -30,19 +30,31 @@ fn bof(dt: u16) -> Vec<u8> {
     d
 }
 
-/// A compound file whose root holds one stream.
-pub fn compound(stream: &str, data: &[u8]) -> Vec<u8> {
-    craft_cfb::write_streams(craft_cfb::Version::V3, &[(stream, data)]).unwrap_or_default()
+/// A compound file whose root holds one stream. A stream the file cannot hold, such as one with
+/// an empty name or a name longer than 31 characters, returns the writer's error.
+pub fn compound(stream: &str, data: &[u8]) -> Result<Vec<u8>, craft_cfb::Error> {
+    craft_cfb::write_streams(craft_cfb::Version::V3, &[(stream, data)])
+}
+
+/// The XF index and value of a cell written as a Number record, or `None` for a cell written as
+/// text: a cell `date:<serial>` takes the date XF when `<serial>` is a number, and any other cell
+/// that is a number takes the general XF.
+fn number(cell: &str) -> Option<(u16, f64)> {
+    match cell.strip_prefix("date:") {
+        Some(serial) => serial.parse().ok().map(|x| (1, x)),
+        None => cell.parse().ok().map(|x| (0, x)),
+    }
 }
 
 /// A minimal BIFF8 workbook: one worksheet per `(name, rows)`. Cells that read as numbers are
 /// Number records, a cell `date:<serial>` is a Number with the date format `m/d/yyyy` (built-in
-/// format 14), an empty cell is left out, and everything else goes through the shared-string
-/// table (as UTF-16 when it isn't Latin-1).
+/// format 14), an empty cell is left out, and everything else, including a `date:` cell whose
+/// serial is not a number, goes through the shared-string table (as UTF-16 when it isn't
+/// Latin-1). A compound file that cannot be written returns the writer's error.
 ///
 /// shortcut: characters outside the Basic Multilingual Plane are dropped, sheet names are cut at
 /// 255 characters and strings at 4,000 (so each fits one record); lift when a fixture needs more.
-pub fn workbook(sheets: &[(&str, Vec<Vec<String>>)]) -> Vec<u8> {
+pub fn workbook(sheets: &[(&str, Vec<Vec<String>>)]) -> Result<Vec<u8>, craft_cfb::Error> {
     let mut sst: Vec<&str> = Vec::new();
     let mut out = Vec::new();
     rec(&mut out, BOF, &bof(0x0005));
@@ -62,7 +74,7 @@ pub fn workbook(sheets: &[(&str, Vec<Vec<String>>)]) -> Vec<u8> {
         rec(&mut out, 0x0085, &d);
     }
     for c in sheets.iter().flat_map(|(_, rows)| rows.iter().flatten()) {
-        if c.parse::<f64>().is_err() && !c.starts_with("date:") && !sst.contains(&c.as_str()) {
+        if !c.is_empty() && number(c).is_none() && !sst.contains(&c.as_str()) {
             sst.push(c);
         }
     }
@@ -92,18 +104,17 @@ pub fn workbook(sheets: &[(&str, Vec<Vec<String>>)]) -> Vec<u8> {
                 let mut d = Vec::new();
                 d.extend_from_slice(&(r as u16).to_le_bytes());
                 d.extend_from_slice(&(c as u16).to_le_bytes());
-                if let Some(x) = v.strip_prefix("date:").and_then(|x| x.parse::<f64>().ok()) {
-                    d.extend_from_slice(&1u16.to_le_bytes());
-                    d.extend_from_slice(&x.to_le_bytes());
-                    rec(&mut out, 0x0203, &d);
-                } else if let Ok(x) = v.parse::<f64>() {
-                    d.extend_from_slice(&0u16.to_le_bytes());
+                if let Some((xf, x)) = number(v) {
+                    d.extend_from_slice(&xf.to_le_bytes());
                     d.extend_from_slice(&x.to_le_bytes());
                     rec(&mut out, 0x0203, &d);
                 } else {
+                    let i = sst
+                        .iter()
+                        .position(|s| s == v)
+                        .ok_or_else(|| craft_cfb::Error::Invalid(format!("the cell text {v:?} is not in the shared-string table")))?;
                     d.extend_from_slice(&0u16.to_le_bytes());
-                    let i = sst.iter().position(|s| s == v).unwrap_or(0) as u32;
-                    d.extend_from_slice(&i.to_le_bytes());
+                    d.extend_from_slice(&(i as u32).to_le_bytes());
                     rec(&mut out, 0x00FD, &d);
                 }
             }

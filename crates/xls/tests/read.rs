@@ -621,7 +621,7 @@ fn the_fixture_writer_reads_back() {
     let long = "é".repeat(3000);
     let rows =
         vec![vec!["Name".to_string(), "Żółw".into(), String::new(), "2.5".into()], vec!["date:45000".into(), long.clone(), long.clone() + "x"]];
-    let bytes = craft_xls::testing::workbook(&[("Erste", rows), ("Second", vec![vec!["Name".into()]])]);
+    let bytes = craft_xls::testing::workbook(&[("Erste", rows), ("Second", vec![vec!["Name".into()]])]).unwrap();
     assert!(is_xls(&bytes));
     let read = craft_xls::read(&bytes).unwrap();
     assert_eq!(read.warnings, []);
@@ -632,6 +632,26 @@ fn the_fixture_writer_reads_back() {
     // Two 3,000-character strings do not fit one record: the table continues in a Continue record.
     assert_eq!((v(&wb, 0, "B2"), v(&wb, 0, "C2")), (text(&long), text(&(long.clone() + "x"))));
     assert_eq!(v(&wb, 1, "A1"), text("Name"));
+}
+
+#[test]
+fn a_fixture_that_cannot_be_written_returns_the_writer_error() {
+    assert_eq!(craft_xls::testing::compound("", b"x"), Err(craft_cfb::Error::BadName(String::new())));
+    let long = "S".repeat(32);
+    assert_eq!(craft_xls::testing::compound(&long, b"x"), Err(craft_cfb::Error::BadName(long.clone())));
+}
+
+/// A `date:` cell whose serial is not a number is text, whether the shared-string table holds
+/// other text before it, an empty cell, or nothing else.
+#[test]
+fn the_fixture_writer_keeps_a_date_cell_without_a_serial_as_text() {
+    for (first, value) in [("first", text("first")), ("", Value::Empty), ("1", Value::Number(1.0))] {
+        let rows = vec![vec![first.to_string(), "date:abc".into(), "date:".into()]];
+        let read = craft_xls::read(&craft_xls::testing::workbook(&[("S", rows)]).unwrap()).unwrap();
+        assert_eq!(read.warnings, [], "{first:?}");
+        let wb = read.workbook;
+        assert_eq!((v(&wb, 0, "A1"), v(&wb, 0, "B1"), v(&wb, 0, "C1")), (value, text("date:abc"), text("date:")), "{first:?}");
+    }
 }
 
 #[test]
