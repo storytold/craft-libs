@@ -26,6 +26,9 @@ pub(crate) const WORKSHEET: &str = "application/vnd.ms-excel.worksheet";
 pub(crate) const STRINGS: &str = "application/vnd.ms-excel.sharedStrings";
 /// Most sheets in the workbook.
 const MAX_SHEETS: usize = 1024;
+/// Supporting links (this workbook, add-ins, other workbooks) read at most; past it, formulas
+/// keep their saved results.
+const MAX_BOOKS: usize = 65_536;
 /// Most merged ranges in one worksheet.
 const MAX_MERGES: usize = 100_000;
 /// Defined names (Excel's hidden ones for newer functions included) read at most; past it, the
@@ -271,6 +274,9 @@ pub(crate) fn workbook(
     let mut bundle_sheets: Vec<Option<u32>> = vec![];
     let mut bundle = false;
     let mut bundle_seen = false;
+    // Every BrtBundleSh counts toward the cap, a skipped module sheet too: each keeps a place
+    // in the sheet links.
+    let mut bundle_count = 0usize;
     while let Some((id, payload)) = records.next(warnings)? {
         let mut b = Bytes::new(payload);
         match id {
@@ -320,9 +326,10 @@ pub(crate) fn workbook(
                 if !bundle {
                     return Err(invalid("worksheet outside the worksheet list"));
                 }
-                if wb.sheets.len() >= MAX_SHEETS {
+                if bundle_count >= MAX_SHEETS {
                     return Err(Error::TooLarge(format!("XLSB exceeds {MAX_SHEETS} sheets")));
                 }
+                bundle_count += 1;
                 let visibility = match b.u32()? {
                     0 => Visibility::Visible,
                     1 => Visibility::Hidden,
@@ -521,6 +528,9 @@ fn omit(omitted: &mut [bool], i: usize) -> bool {
 /// `pending`.
 fn link_record(id: u16, payload: &[u8], links: &mut Links, pending: &mut Vec<PendingName>) -> Result<(), Error> {
     let mut b = Bytes::new(payload);
+    if matches!(id, 355 | 357 | 358 | 667) && links.books.len() >= MAX_BOOKS {
+        return Err(invalid("too many supporting links"));
+    }
     match id {
         357 | 358 | 667 => {
             b.finish()?;

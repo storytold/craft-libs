@@ -1302,3 +1302,21 @@ fn a_name_using_a_left_out_name_is_left_out_too() {
     assert_eq!((1..=4).map(|c| book.sheets[0].formula(CellRef::new(0, c))).collect::<Vec<_>>(), [None, None, None, Some("Fine")]);
     assert!(book.warnings.iter().any(|w| w.contains("names using a name that was left out")), "{:?}", book.warnings);
 }
+
+#[test]
+fn module_sheets_and_supporting_links_are_bounded() {
+    // 1,025 very hidden module sheets (no relationship) before the worksheets: each keeps a place
+    // in the sheet links, so together they are past the 1,024-sheet cap.
+    let plain = book(false);
+    let at = plain.windows(3).position(|w| w == record(143, &[]).as_slice()).unwrap() + 3;
+    let module = record(156, &[&2u32.to_le_bytes()[..], &9u32.to_le_bytes(), &u32::MAX.to_le_bytes(), &wide("Module")].concat());
+    let modules = [&plain[..at], &module.repeat(1025), &plain[at..]].concat();
+    assert!(matches!(read(&package(&modules, &worksheet(&[], &[]), &sst(), ROOT, RELS, TYPES)), Err(Error::TooLarge(_))));
+    // 65,537 supporting links: past the cap the links aren't read, and formulas keep their values.
+    let end = record(132, &[]);
+    let selves = [&plain[..plain.len() - end.len()], &record(353, &[]), &record(357, &[]).repeat(65_537), &record(354, &[]), &end].concat();
+    let data = [row(0), formula_cell(0, &[0x1E, 1, 0], &[])].concat();
+    let wb = read(&package(&selves, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES)).unwrap();
+    assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), None);
+    assert!(wb.warnings.iter().any(|w| w.contains("sheet links or names could not be read")), "{:?}", wb.warnings);
+}
