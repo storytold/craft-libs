@@ -536,18 +536,26 @@ fn matching_close(toks: &[Token], open: usize) -> usize {
 const BLOCK_KEYWORDS: &[&str] =
     &["fn", "mod", "impl", "trait", "struct", "enum", "union", "extern", "macro_rules", "if", "match", "loop", "while", "for", "unsafe"];
 
+/// Keywords that start an expression statement whose value follows them, so a block keyword after them
+/// is part of that expression.
+const VALUE_KEYWORDS: &[&str] = &["let", "return", "break", "yield", "become"];
+
 /// The index after the item, statement, field or match arm that starts at `start`, or with `inner`, the
 /// index of the bracket that closes the enclosing scope.
 ///
 /// It ends after a `;` or a `,` outside brackets, after the closing brace of a block item (one that
 /// starts with `{` or a keyword in [`BLOCK_KEYWORDS`], or is a macro call with braces) or of a match
-/// arm's block, or before a closing bracket of the enclosing scope. When a `.` or `?` follows the
-/// closing brace of a block item, the item runs on to its `;` or `,`. A `,` inside the angle brackets
-/// of a field's or a `let`'s type ends the item early, which leaves the rest of it checked.
+/// arm's block, or before a closing bracket of the enclosing scope. A block keyword or macro brace
+/// makes a block item only at the head of the item: one after a `=`, a binary operator or a keyword in
+/// [`VALUE_KEYWORDS`] outside brackets is part of an expression, which runs on to its `;` or `,`. When a
+/// `.` or `?` follows the closing brace of a block item, the item runs on to its `;` or `,`. A `,` inside
+/// the angle brackets of a field's or a `let`'s type ends the item early, which leaves the rest of it
+/// checked.
 fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
     let mut depth = 0usize;
     let mut block_item = false;
     let mut arm = false;
+    let mut head = true;
     let mut j = start;
     while j < toks.len() {
         let at_top = depth == 0 && !inner;
@@ -555,9 +563,14 @@ fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
             block_item = true;
         }
         match &toks[j].kind {
-            Kind::Ident(k) if at_top && BLOCK_KEYWORDS.contains(&k.as_str()) => block_item = true,
-            Kind::Punct('!') if at_top && toks.get(j + 1).is_some_and(|t| t.is_punct('{')) => block_item = true,
-            Kind::Punct('=') if at_top && toks.get(j + 1).is_some_and(|t| t.is_punct('>')) => arm = true,
+            Kind::Ident(k) if at_top && head && BLOCK_KEYWORDS.contains(&k.as_str()) => block_item = true,
+            Kind::Ident(k) if at_top && VALUE_KEYWORDS.contains(&k.as_str()) => head = false,
+            Kind::Punct('!') if at_top && head && toks.get(j + 1).is_some_and(|t| t.is_punct('{')) => block_item = true,
+            Kind::Punct('=') if at_top && toks.get(j + 1).is_some_and(|t| t.is_punct('>')) => {
+                arm = true;
+                head = false;
+            }
+            Kind::Punct('=' | '+' | '-' | '*' | '/' | '%' | '^' | '|' | '&' | '<' | '>' | '!') if at_top && !block_item => head = false,
             Kind::Punct('(' | '[' | '{') => depth += 1,
             Kind::Punct(c @ (')' | ']' | '}')) => {
                 if depth == 0 {

@@ -502,6 +502,34 @@ fn run(x: Option<u64>) -> Option<u64> {
 }
 
 #[test]
+fn std_instant_skips_an_operator_after_a_block_inside_a_native_cfg_expression() {
+    let source = r#"
+fn run(flag: bool) -> u64 {
+    #[cfg(unix)]
+    let _ = if flag { 1 } else { 2 } + std::time::Instant::now().elapsed().as_secs();
+    #[cfg(unix)]
+    return if flag { 1 } else { 2 } * std::time::Instant::now().elapsed().as_secs();
+    let t = std::time::Instant::now();
+    0
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![7]);
+}
+
+#[test]
+fn std_instant_skips_a_cast_after_a_match_inside_a_native_cfg_expression() {
+    let source = r#"
+fn run(x: Option<u32>) -> u64 {
+    #[cfg(unix)]
+    let n = match x { Some(v) => v, None => 0 } as u64 + std::time::Instant::now().elapsed().as_secs();
+    let t = std::time::Instant::now();
+    0
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![5]);
+}
+
+#[test]
 fn std_instant_inner_cfg_covers_the_whole_file() {
     let source = r#"
 #![cfg(not(target_arch = "wasm32"))]
