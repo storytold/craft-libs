@@ -1196,11 +1196,11 @@ fn damaged_styles_are_a_warning_and_the_workbook_opens() {
         assert!(warnings.iter().any(|w| w.contains("look/styles.bin")), "{why}: {warnings:?}");
         assert_eq!(read(&bytes).unwrap().sheets[0].value(CellRef::new(0, 0)), Value::Number(1.0), "{why}");
     }
-    // A table past 65,536 entries is refused before it is held.
+    // A table past 65,536 entries is past a fixed cap: refused before it is held, as too large.
     let xfs = brt_xf(0, 0, 0, 0, 0, 0, 0, 0x1010, 0).repeat(65_537);
-    let (styles, warnings) = styles_of(&styled_file(&with(&[&begin(617, 65_537)[..], &xfs, &record(618, &[])].concat()), STYLES_TYPES));
-    assert!(styles.is_none());
-    assert!(warnings.iter().any(|w| w.contains("65536 entries")), "{warnings:?}");
+    let bytes = styled_file(&with(&[&begin(617, 65_537)[..], &xfs, &record(618, &[])].concat()), STYLES_TYPES);
+    let mut p = Package::open(&bytes, &Limits::default()).unwrap();
+    assert!(matches!(p.styles(), Err(Error::TooLarge(m)) if m.contains("65536 entries")));
     // Custom table styles are not read, and say so.
     let table_styles = [body, &record(508, &[&1u32.to_le_bytes()[..], &wide("Probe Table"), &wide("")].concat()), &end].concat();
     let (styles, warnings) = styles_of(&styled_file(&table_styles, STYLES_TYPES));
@@ -1338,4 +1338,14 @@ fn a_spent_formula_allowance_skips_decoding() {
     assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), None);
     assert!(warned(&wb, "more formula text than the limits allow"), "{:?}", wb.warnings);
     assert!(!warned(&wb, "unknown formula token"), "{:?}", wb.warnings);
+}
+
+#[test]
+fn differential_format_strings_are_charged_to_the_text_allowance() {
+    // A DXF's font name and number format are text the styles part keeps, charged like a font's.
+    let dxf = |name: &str| [record(278, &[]), begin(505, 1), brt_dxf(&[prop(0x18, &short(name))]), record(506, &[]), record(279, &[])].concat();
+    let limits = Limits { binary_text: 100, ..Limits::default() };
+    let open = |part: &[u8]| Package::open(&styled_file(part, STYLES_TYPES), &limits).unwrap().styles();
+    assert!(open(&dxf("Arial")).is_ok_and(|s| s.is_some_and(|s| s.dxfs.len() == 1)));
+    assert!(matches!(open(&dxf(&"x".repeat(200))), Err(Error::TooLarge(_))));
 }

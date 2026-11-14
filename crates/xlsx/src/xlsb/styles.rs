@@ -176,7 +176,7 @@ fn fill(b: &mut Bytes<'_>) -> Result<Fill, Error> {
     let count = b.u32()?;
     if fls == 0x28 {
         if count > MAX_STOPS {
-            return Err(invalid("too many gradient stops"));
+            return Err(Error::TooLarge(format!("more than {MAX_STOPS} gradient stops")));
         }
         for _ in 0..count {
             let c = color(b)?.unwrap_or_default();
@@ -330,7 +330,7 @@ fn dxf(b: &mut Bytes<'_>) -> Result<Dxf, Error> {
             0x04 => {
                 let g = gradient_fill.as_mut().ok_or_else(|| invalid("gradient stop without a gradient"))?;
                 if g.stops.len() >= MAX_STOPS as usize {
-                    return Err(invalid("too many gradient stops"));
+                    return Err(Error::TooLarge(format!("more than {MAX_STOPS} gradient stops")));
                 }
                 p.u16()?;
                 let position = p.f64()?;
@@ -418,7 +418,7 @@ pub(crate) fn styles(bytes: &[u8], limits: &Limits, budget: &Budget, warnings: &
             _ => 0,
         };
         if entries >= MAX_ENTRIES {
-            return Err(invalid(format!("more than {MAX_ENTRIES} entries in a styles table")));
+            return Err(Error::TooLarge(format!("more than {MAX_ENTRIES} entries in a styles table")));
         }
         match id {
             279 => {
@@ -451,7 +451,14 @@ pub(crate) fn styles(bytes: &[u8], limits: &Limits, budget: &Budget, warnings: &
                 budget.text(c.name.len(), limits)?;
                 s.cell_styles.push(c);
             }
-            507 => s.dxfs.push(dxf(&mut b)?),
+            507 => {
+                let d = dxf(&mut b)?;
+                // What it keeps of its strings, after a later property has replaced an earlier.
+                let font = d.font.as_ref().and_then(|f| f.name.as_ref()).map_or(0, String::len);
+                let format = d.num_fmt.as_ref().and_then(|n| n.code.as_ref()).map_or(0, String::len);
+                budget.text(font + format, limits)?;
+                s.dxfs.push(d);
+            }
             // BrtBeginIndexedColors, BrtEndIndexedColors.
             565 => palette = true,
             566 => palette = false,
