@@ -44,6 +44,7 @@ use craft_wordmodel::para::Run;
 use craft_wordmodel::props::CharProps;
 use craft_wordmodel::props::NumRef;
 use craft_wordmodel::section::HeaderSet;
+use craft_wordmodel::section::SectionProps;
 use craft_wordmodel::styles::StyleSheet;
 use craft_wordmodel::{Document, PartKind};
 
@@ -349,48 +350,15 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     drawn.sort_by_key(|(cp, _)| *cp);
     let ctx = WalkCtx { drawn: &drawn, ..ctx };
 
-    // Header and footer parts: skip the six separator stories, then six stories per section
-    // in the order even header, odd (default) header, even footer, odd (default) footer,
-    // first header, first footer. Empty stories inherit from the previous section.
-    let mut hf_ids: Vec<(usize, usize, u32)> = Vec::new();
-    for si in 0..sects.len() {
-        for k in 0..6usize {
-            let Some(&ab) = stories.get(6 + si * 6 + k) else { break };
-            let Some((a, b)) = story(hdd_base, fib.ccp.hdd, ab) else { continue };
-            if doc.parts.len() >= MAX_PARTS {
-                continue;
-            }
-            let kind = match k {
-                0 | 1 | 4 => PartKind::Header,
-                _ => PartKind::Footer,
-            };
-            let blocks = header_story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
-            if !blocks.is_empty() {
-                let id = doc.add_part(kind, blocks);
-                hf_ids.push((si, k, id));
-            }
-        }
-    }
+    let hf_ids = header_parts(&ctx, &mut doc, sects.len(), &stories, (hdd_base, fib.ccp.hdd), &mut pics, max_paragraphs)?;
 
     // Footnote and endnote stories: each text range becomes a part; the reference CPs then
     // link to the part ids during the main walk.
     let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
-    for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT) {
-        let Some((a, b)) = story(ftn_base, fib.ccp.ftn, ab) else { continue };
-        let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
-        if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
-            let id = doc.add_part(PartKind::Footnote, blocks);
-            note_links.push((cp, NoteKind::Footnote, id));
-        }
-    }
-    for (cp, ab) in notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT) {
-        let Some((a, b)) = story(edn_base, fib.ccp.edn, ab) else { continue };
-        let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
-        if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
-            let id = doc.add_part(PartKind::Endnote, blocks);
-            note_links.push((cp, NoteKind::Endnote, id));
-        }
-    }
+    let footnotes = notes::parse_notes(&table, &fib, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT);
+    note_parts(&ctx, &mut doc, &footnotes, (ftn_base, fib.ccp.ftn), NoteKind::Footnote, &mut note_links, &mut pics, max_paragraphs)?;
+    let endnotes = notes::parse_notes(&table, &fib, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT);
+    note_parts(&ctx, &mut doc, &endnotes, (edn_base, fib.ccp.edn), NoteKind::Endnote, &mut note_links, &mut pics, max_paragraphs)?;
     // Sorted so the main walk finds each reference by binary search.
     note_links.sort_by_key(|(cp, _, _)| *cp);
     let marks = notes::parse_bookmarks(&table, &fib);
@@ -398,35 +366,8 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     sect_ends.sort_unstable();
     let ctx = WalkCtx { notes: &note_links, marks: &marks, sect_ends: &sect_ends, ..ctx };
 
-    // Sections: each section's properties attach to the paragraph that ends it (its story of
-    // header/footer parts included); the section reaching the end of the text is the final one.
     let mut paras = walk(&ctx, 0, fib.ccp.text, &mut pics);
-    // The first paragraph ending at each CP, found once rather than by a scan per section.
-    let mut ending: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
-    for (i, p) in paras.iter().enumerate() {
-        ending.entry(p.end_cp).or_insert(i);
-    }
-    let last = sects.last().map(|s| s.props.clone());
-    for (si, sec) in sects.iter().enumerate() {
-        let mut props = sec.props.clone();
-        let id_of = |k: usize| hf_ids.iter().find(|(s, kk, _)| *s == si && *kk == k).map(|(_, _, id)| *id);
-        props.headers = HeaderSet { even: id_of(0), default: id_of(1), first: id_of(4) };
-        props.footers = HeaderSet { even: id_of(2), default: id_of(3), first: id_of(5) };
-        let is_final = si + 1 == sects.len() || sec.end_cp >= fib.ccp.text;
-        if is_final {
-            continue; // handled below through `last`
-        }
-        if let Some(p) = ending.get(&sec.end_cp).and_then(|&i| paras.get_mut(i)) {
-            p.para.section = Some(Box::new(props));
-        }
-    }
-    if let Some(mut l) = last {
-        let si = sects.len().saturating_sub(1);
-        let id_of = |k: usize| hf_ids.iter().find(|(s, kk, _)| *s == si && *kk == k).map(|(_, _, id)| *id);
-        l.headers = HeaderSet { even: id_of(0), default: id_of(1), first: id_of(4) };
-        l.footers = HeaderSet { even: id_of(2), default: id_of(3), first: id_of(5) };
-        doc.last_section = l;
-    }
+    attach_sections(&mut doc, &mut paras, &sects, &hf_ids, fib.ccp.text);
 
     if paragraphs.exceeded.get() {
         return Err(paragraph_limit(max_paragraphs));
@@ -438,10 +379,11 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     Ok(doc)
 }
 
-/// Read a Word 6.0/95 file ([`word6`]): its main text, with its character and paragraph
-/// formatting and table rows translated to Word 97 sprms, through the same walk as a Word 97 file.
-/// Its paragraph styles are read too; character styles and the other stories are not yet, and a
-/// section mark reads as a page break.
+/// Read a Word 6.0/95 file ([`word6`]): its text, with its character and paragraph formatting and
+/// table rows translated to Word 97 sprms, through the same walk as a Word 97 file. Its paragraph
+/// styles, sections, headers and footers, footnotes and endnotes are read as a Word 97 file's,
+/// from the structures [`word6`] puts in the Word 97 shape; character styles and comments are not
+/// yet.
 fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: usize) -> Result<Document, DocbinError> {
     let fib = word6::Fib6::parse(word)?;
     let content = word6::content(word, &fib)?;
@@ -477,7 +419,31 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
         paragraphs: &paragraphs,
         work: &work,
     };
-    let paras = walk(&ctx, 0, fib.ccp_text, &mut pics);
+    // The stories follow the main text in this order (macros never seen, but counted).
+    let ftn_base = fib.ccp_text;
+    let hdd_base = ftn_base.saturating_add(fib.ccp_ftn);
+    let edn_base = hdd_base.saturating_add(fib.ccp_hdd).saturating_add(fib.ccp_mcr).saturating_add(fib.ccp_atn);
+    let fib97 = fib.as_word97();
+    // A section's sprms, translated; in a fast-saved file the piece holding its section mark can
+    // add more (Word 95 records a change to the section there), applied after the SEPX's.
+    let sects = sections::parse_with(word, word, &fib97, |grpprl, end_cp| {
+        let mut sprms = word6::translate_sep(grpprl);
+        sprms.extend(prm_sprms(content.pieces.piece_prm(end_cp.saturating_sub(1)), &work, |sgc| sgc == 4));
+        sprms
+    });
+    let stories = word6::header_stories(word, &fib, sects.iter().map(|s| s.grpf_ihdt));
+    let hf_ids = header_parts(&ctx, &mut doc, sects.len(), &stories, (hdd_base, fib.ccp_hdd), &mut pics, max_paragraphs)?;
+    let mut note_links: Vec<(u32, NoteKind, u32)> = Vec::new();
+    let footnotes = notes::parse_notes(word, &fib97, fib::pair::PLCF_FND_REF, fib::pair::PLCF_FND_TXT);
+    note_parts(&ctx, &mut doc, &footnotes, (ftn_base, fib.ccp_ftn), NoteKind::Footnote, &mut note_links, &mut pics, max_paragraphs)?;
+    let endnotes = notes::parse_notes(word, &fib97, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT);
+    note_parts(&ctx, &mut doc, &endnotes, (edn_base, fib.ccp_edn), NoteKind::Endnote, &mut note_links, &mut pics, max_paragraphs)?;
+    note_links.sort_by_key(|(cp, _, _)| *cp);
+    let mut sect_ends: Vec<u32> = sects.iter().map(|s| s.end_cp).collect();
+    sect_ends.sort_unstable();
+    let ctx = WalkCtx { notes: &note_links, sect_ends: &sect_ends, ..ctx };
+    let mut paras = walk(&ctx, 0, fib.ccp_text, &mut pics);
+    attach_sections(&mut doc, &mut paras, &sects, &hf_ids, fib.ccp_text);
     if paragraphs.exceeded.get() {
         return Err(paragraph_limit(max_paragraphs));
     }
@@ -485,6 +451,99 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     doc.ensure_nonempty();
     work.log();
     Ok(doc)
+}
+
+/// Header and footer parts from the header subdocument's stories, `stories` in the shape of
+/// [`sections::header_stories`]: six separator stories (skipped), then six per section in the
+/// order even header, odd (default) header, even footer, odd (default) footer, first header, first
+/// footer. An empty story makes no part, so the section takes the previous section's. `hdd` is the
+/// subdocument's first CP and length. Returns (section, slot, part id) for each part made.
+fn header_parts(
+    ctx: &WalkCtx<'_>,
+    doc: &mut Document,
+    sections: usize,
+    stories: &[(u32, u32)],
+    (hdd_base, ccp_hdd): (u32, u32),
+    pics: &mut media::Pictures,
+    max_paragraphs: usize,
+) -> Result<Vec<(usize, usize, u32)>, DocbinError> {
+    let mut hf_ids = Vec::new();
+    for si in 0..sections {
+        for k in 0..6usize {
+            let Some(&ab) = stories.get(6 + si * 6 + k) else { break };
+            let Some((a, b)) = story(hdd_base, ccp_hdd, ab) else { continue };
+            if doc.parts.len() >= MAX_PARTS {
+                continue;
+            }
+            let kind = match k {
+                0 | 1 | 4 => PartKind::Header,
+                _ => PartKind::Footer,
+            };
+            let blocks = header_story_blocks(ctx, a, b, pics, max_paragraphs)?;
+            if !blocks.is_empty() {
+                let id = doc.add_part(kind, blocks);
+                hf_ids.push((si, k, id));
+            }
+        }
+    }
+    Ok(hf_ids)
+}
+
+/// A part for each footnote or endnote story of `notes` (reference CP, story range within the
+/// subdocument at `base` of `len` CPs), each linked from its reference CP in `links`.
+#[allow(clippy::too_many_arguments)]
+fn note_parts(
+    ctx: &WalkCtx<'_>,
+    doc: &mut Document,
+    notes: &[(u32, (u32, u32))],
+    (base, len): (u32, u32),
+    kind: NoteKind,
+    links: &mut Vec<(u32, NoteKind, u32)>,
+    pics: &mut media::Pictures,
+    max_paragraphs: usize,
+) -> Result<(), DocbinError> {
+    let part = match kind {
+        NoteKind::Footnote => PartKind::Footnote,
+        NoteKind::Endnote => PartKind::Endnote,
+    };
+    for &(cp, ab) in notes {
+        let Some((a, b)) = story(base, len, ab) else { continue };
+        let blocks = story_blocks(ctx, a, b, pics, max_paragraphs)?;
+        if !blocks.is_empty() && doc.parts.len() < MAX_PARTS {
+            let id = doc.add_part(part, blocks);
+            links.push((cp, kind, id));
+        }
+    }
+    Ok(())
+}
+
+/// Each section's properties (its header and footer parts included) go on the paragraph that ends
+/// it; the section reaching the end of the main text (`ccp_text`) is the document's last section.
+fn attach_sections(doc: &mut Document, paras: &mut [table::ParaOut], sects: &[sections::Section], hf_ids: &[(usize, usize, u32)], ccp_text: u32) {
+    // The first paragraph ending at each CP, found once rather than by a scan per section.
+    let mut ending: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for (i, p) in paras.iter().enumerate() {
+        ending.entry(p.end_cp).or_insert(i);
+    }
+    let with_parts = |si: usize, props: &SectionProps| {
+        let mut props = props.clone();
+        let id_of = |k: usize| hf_ids.iter().find(|(s, kk, _)| *s == si && *kk == k).map(|(_, _, id)| *id);
+        props.headers = HeaderSet { even: id_of(0), default: id_of(1), first: id_of(4) };
+        props.footers = HeaderSet { even: id_of(2), default: id_of(3), first: id_of(5) };
+        props
+    };
+    for (si, sec) in sects.iter().enumerate() {
+        let is_final = si + 1 == sects.len() || sec.end_cp >= ccp_text;
+        if is_final {
+            continue; // the last section, below
+        }
+        if let Some(p) = ending.get(&sec.end_cp).and_then(|&i| paras.get_mut(i)) {
+            p.para.section = Some(Box::new(with_parts(si, &sec.props)));
+        }
+    }
+    if let Some(last) = sects.last() {
+        doc.last_section = with_parts(sects.len() - 1, &last.props);
+    }
 }
 
 fn paragraph_limit(max_paragraphs: usize) -> DocbinError {
@@ -1070,14 +1129,19 @@ struct FmtMemo<'a> {
 }
 
 /// The paragraph and table sprms (sgc 1 and 5) of a piece's Prm, as Prls to append to a
-/// paragraph's PAPX: a Prm0's single sprm, or those of the Prm1's grpprl. A Prm1 grpprl is
-/// charged to `work`, as for [`apply_prm`].
+/// paragraph's PAPX (see [`prm_sprms`]).
 fn prm_paragraph_sprms(prm: PrmRef<'_>, work: &Work) -> Vec<u8> {
+    prm_sprms(prm, work, |sgc| matches!(sgc, 1 | 5))
+}
+
+/// The sprms of a piece's Prm whose sgc `wanted` accepts, as Prls: a Prm0's single sprm, or those
+/// of the Prm1's grpprl. A Prm1 grpprl is charged to `work`, as for [`apply_prm`].
+fn prm_sprms(prm: PrmRef<'_>, work: &Work, wanted: impl Fn(u8) -> bool) -> Vec<u8> {
     let mut out = Vec::new();
     match prm {
         PrmRef::Sprm0 { isprm, val } => {
             if let Some(op) = sprm::from_prm0(isprm)
-                && matches!(Prl { op, operand: &[] }.sgc(), 1 | 5)
+                && wanted(Prl { op, operand: &[] }.sgc())
             {
                 out.extend_from_slice(&op.to_le_bytes());
                 out.push(val);
@@ -1087,7 +1151,7 @@ fn prm_paragraph_sprms(prm: PrmRef<'_>, work: &Work) -> Vec<u8> {
             if !work.charge(g.len() as u64, Cost::Formatting) {
                 return out;
             }
-            for prl in sprm::iter(g).filter(|p| matches!(p.sgc(), 1 | 5)) {
+            for prl in sprm::iter(g).filter(|p| wanted(p.sgc())) {
                 out.extend_from_slice(&prl.op.to_le_bytes());
                 out.extend_from_slice(prl.operand);
             }

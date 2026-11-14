@@ -8,7 +8,7 @@ use crate::fib::{Fib, pair};
 use crate::sprm::{self, Prl};
 
 /// Most sections we read.
-const MAX_SECTIONS: usize = 1024;
+pub(crate) const MAX_SECTIONS: usize = 1024;
 
 // Section sprms ([MS-DOC] §2.6.4).
 const S_BKC: u16 = 0x3009;
@@ -25,15 +25,30 @@ const S_DXA_RIGHT: u16 = 0xB022;
 const S_DYA_TOP: u16 = 0x9023;
 const S_DYA_BOTTOM: u16 = 0x9024;
 const S_DXA_GUTTER: u16 = 0xB025;
+/// Which header and footer stories a Word 6.0/95 section has (see
+/// [`crate::word6::header_stories`]): its sprm 0x99, translated to the Word 97 form it would have
+/// (index 0x14, a 1-byte operand). [MS-DOC] lists no sprm at index 0x14, since a Word 97 header
+/// table has a slot for every story, so this one only ever comes from a Word 6.0/95 file.
+const S_GPRF_IHDT: u16 = 0x3014;
 
 /// One section: covers paragraphs up to (excluding) `end_cp`, with its properties.
 pub(crate) struct Section {
     pub(crate) end_cp: u32,
     pub(crate) props: SectionProps,
+    /// The header and footer stories the section names ([`S_GPRF_IHDT`]), 0 when none does: only
+    /// a Word 6.0/95 file's `PlcfHdd` depends on it.
+    pub(crate) grpf_ihdt: u8,
 }
 
 /// Parse `PlcfSed` and each section's `Sepx` grpprl.
 pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
+    parse_with(word, table, fib, |grpprl, _| grpprl.to_vec())
+}
+
+/// [`parse`], with each section's Word 97 grpprl made by `sepx` from the stored one and the
+/// section's end CP (a Word 6.0/95 file's sprms are translated, and its section mark's piece can
+/// add more).
+pub(crate) fn parse_with(word: &[u8], table: &[u8], fib: &Fib, sepx: impl Fn(&[u8], u32) -> Vec<u8>) -> Vec<Section> {
     let Some((fc, lcb)) = fib.pair(pair::PLCF_SED) else { return Vec::new() };
     let Some(plc) = table.get(fc as usize..(fc as usize).saturating_add(lcb as usize)) else { return Vec::new() };
     // PlcSed: aCp[n+1] u32s + aSed[n] (Sed = fn 2, fcSepx 4, fnMpr 2, fcMpr 4).
@@ -48,15 +63,23 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
         let sed_at = (n + 1) * 4 + i * 12;
         let fc_sepx = plc.get(sed_at + 2..sed_at + 6).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).unwrap_or(0xFFFF_FFFF);
         let mut props = SectionProps::default();
+        let mut grpf_ihdt = 0;
         // Sepx: cb u16, then a grpprl of section sprms.
         let mut explicit_orient = false;
-        if let Some(grpprl) =
-            word.get(fc_sepx as usize..).and_then(|sepx| sepx.get(..2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize)).and_then(|cb| {
+        let stored = word
+            .get(fc_sepx as usize..)
+            .and_then(|sepx| sepx.get(..2).map(|b| u16::from_le_bytes([b[0], b[1]]) as usize))
+            .and_then(|cb| {
                 let at = (fc_sepx as usize).checked_add(2)?;
                 word.get(at..at.checked_add(cb)?)
             })
+            .unwrap_or_default();
+        let grpprl = sepx(stored, end_cp);
         {
-            for prl in sprm::iter(grpprl) {
+            for prl in sprm::iter(&grpprl) {
+                if prl.op == S_GPRF_IHDT {
+                    grpf_ihdt = prl.operand.first().copied().unwrap_or(0);
+                }
                 // Only a defined operand counts as explicit; anything else leaves the
                 // orientation to the page shape.
                 if prl.op == S_ORIENTATION && matches!(prl.operand.first(), Some(1 | 2)) {
@@ -73,7 +96,7 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
                 props.landscape = true;
             }
         }
-        out.push(Section { end_cp, props });
+        out.push(Section { end_cp, props, grpf_ihdt });
     }
     out
 }

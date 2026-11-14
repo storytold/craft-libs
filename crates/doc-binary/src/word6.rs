@@ -6,9 +6,9 @@
 //! 97 structures in [MS-DOC] that these files visibly share. Nothing else is assumed.
 //!
 //! What is read: the main text, its paragraphs and fields, the code page of each run, the
-//! character and paragraph formatting listed below, table rows, and the paragraph styles (with
-//! their formatting). Character styles, sections, headers and footers, notes, pictures, borders,
-//! shading and tabs are not read yet.
+//! character and paragraph formatting listed below, table rows, the paragraph styles (with
+//! their formatting), the sections, the headers and footers, and the footnotes and endnotes.
+//! Character styles, comments, pictures, borders, shading and tabs are not read yet.
 //!
 //! The layout as observed:
 //!
@@ -17,9 +17,16 @@
 //! - The FIB is one fixed block. The flags at 0x0A have the Word 97 meaning for bit 2 (fast-saved,
 //!   set exactly in the files that carry a piece table) and, as far as can be told, bit 8
 //!   (encrypted). The text starts at the u32 at 0x18, and the main text's length in characters is
-//!   the u32 at 0x34.
+//!   the u32 at 0x34. The other stories' lengths follow, in Word 97's order: footnotes (0x38),
+//!   headers (0x3C), macros (0x40), comments (0x44) and endnotes (0x48). Their text follows the
+//!   main text's, in that order.
 //! - From 0x58, (u32 fc, u32 lcb) pairs, in the order of Word 97's `FibRgFcLcb97`. Index 12 is the
 //!   character bin table, 13 the paragraph bin table, 15 the font table and 33 the piece table.
+//!   From index 38 on, the pairs sit 10 bytes later: five u16s come between 37 and 38 (the
+//!   endnote tables are at 46 and 47, as in Word 97).
+//! - Sections (pair 6), footnotes (2, 3) and endnotes (46, 47) have the Word 97 shapes, but a
+//!   section's sprms have one-byte opcodes: see [`SEP`]. The header table (pair 11) lists only
+//!   the stories that exist: see [`header_stories`].
 //! - Text is one byte per character, in the code page of the font of its run. The FIB's language
 //!   does not choose it: files marked English hold Russian and Czech text that Word shows as such.
 //! - Both bin tables hold 2-byte page numbers (Word 97: 4 bytes). The FKP pages have the Word 97
@@ -68,14 +75,31 @@ const MAX_BINS: usize = 100_000;
 const MAX_RUNS: usize = 1_000_000;
 const OFF_FC_MIN: usize = 0x18;
 const OFF_CCP_TEXT: usize = 0x34;
+/// The lengths of the footnote, header, macro, comment and endnote stories (u32 each), in the order
+/// their text follows the main text's. Seen non-zero: all but the macros'.
+const OFF_CCP_FTN: usize = 0x38;
+const OFF_CCP_HDD: usize = 0x3C;
+const OFF_CCP_MCR: usize = 0x40;
+const OFF_CCP_ATN: usize = 0x44;
+const OFF_CCP_EDN: usize = 0x48;
 const OFF_PAIRS: usize = 0x58;
-/// Pairs read: up to and including the piece table's.
-const PAIRS: usize = 34;
+/// Pairs read, by Word 97 index: up to and including the endnote tables (46, 47).
+const PAIRS: usize = 48;
+/// Pairs a file must have room for: up to and including the piece table's.
+const MIN_PAIRS: usize = 34;
+/// From this Word 97 index on, a pair sits [`PAIRS_GAP`] bytes later than the plain 8-byte stride
+/// puts it: five u16s (seen as 0, then small page numbers and counts) come between 37 and 38. The
+/// endnote tables were found at 46 and 47 this way, and the list of authors at 71.
+const PAIRS_GAP_FROM: usize = 38;
+const PAIRS_GAP: usize = 10;
 const PAIR_STSH: usize = 1;
 const PAIR_BTE_CHPX: usize = 12;
 const PAIR_BTE_PAPX: usize = 13;
 const PAIR_FONTS: usize = 15;
 const PAIR_CLX: usize = 33;
+const PAIR_DOP: usize = 31;
+/// Header and footer story CPs read: six separators and six for each section read, and the end.
+const MAX_HDD_CPS: usize = 6 + 6 * crate::sections::MAX_SECTIONS + 2;
 /// More characters than Word's own documents get near: the FIB is corrupt (as for Word 97).
 const MAX_CCP: u32 = 100_000_000;
 /// The font table's entries: more than any real file has.
@@ -183,6 +207,12 @@ pub(crate) struct Fib6 {
     fc_mac: u32,
     /// Characters in the main text.
     pub(crate) ccp_text: u32,
+    /// Characters in the footnote, header, macro, comment and endnote stories.
+    pub(crate) ccp_ftn: u32,
+    pub(crate) ccp_hdd: u32,
+    pub(crate) ccp_mcr: u32,
+    pub(crate) ccp_atn: u32,
+    pub(crate) ccp_edn: u32,
     pairs: [(u32, u32); PAIRS],
 }
 
@@ -190,20 +220,24 @@ impl Fib6 {
     pub(crate) fn parse(word: &[u8]) -> Result<Fib6, DocbinError> {
         let u16_at = |at: usize| word.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
         let u32_at = |at: usize| word.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
-        if word.len() < OFF_PAIRS + PAIRS * 8 {
+        if word.len() < OFF_PAIRS + MIN_PAIRS * 8 {
             return Err(DocbinError::NotWord(format!("Word 6.0/95 WordDocument stream is {} bytes", word.len())));
         }
         let flags = u16_at(OFF_FLAGS).unwrap_or(0);
         if flags & F_ENCRYPTED != 0 {
             return Err(DocbinError::Encryption("password-protected Word 6.0/95 files can't be opened".into()));
         }
-        let ccp_text = u32_at(OFF_CCP_TEXT).unwrap_or(0);
-        if ccp_text > MAX_CCP {
-            return Err(DocbinError::Limit(format!("document claims {ccp_text} characters")));
+        let ccp = |at: usize| u32_at(at).unwrap_or(0);
+        let ccp_text = ccp(OFF_CCP_TEXT);
+        let stories = [ccp(OFF_CCP_FTN), ccp(OFF_CCP_HDD), ccp(OFF_CCP_MCR), ccp(OFF_CCP_ATN), ccp(OFF_CCP_EDN)];
+        let total = stories.iter().fold(u64::from(ccp_text), |t, &c| t + u64::from(c));
+        if total > u64::from(MAX_CCP) {
+            return Err(DocbinError::Limit(format!("document claims {total} characters")));
         }
+        let [ccp_ftn, ccp_hdd, ccp_mcr, ccp_atn, ccp_edn] = stories;
         let mut pairs = [(0, 0); PAIRS];
         for (i, p) in pairs.iter_mut().enumerate() {
-            let at = OFF_PAIRS + i * 8;
+            let at = OFF_PAIRS + i * 8 + if i >= PAIRS_GAP_FROM { PAIRS_GAP } else { 0 };
             *p = (u32_at(at).unwrap_or(0), u32_at(at + 4).unwrap_or(0));
         }
         Ok(Fib6 {
@@ -213,8 +247,45 @@ impl Fib6 {
             fc_min: u32_at(OFF_FC_MIN).unwrap_or(0),
             fc_mac: u32_at(OFF_FC_MAC).unwrap_or(0),
             ccp_text,
+            ccp_ftn,
+            ccp_hdd,
+            ccp_mcr,
+            ccp_atn,
+            ccp_edn,
             pairs,
         })
+    }
+
+    /// The characters of every story together.
+    fn ccp_all(&self) -> u32 {
+        [self.ccp_ftn, self.ccp_hdd, self.ccp_mcr, self.ccp_atn, self.ccp_edn].iter().fold(self.ccp_text, |t, &c| t.saturating_add(c))
+    }
+
+    /// A Word 97 FIB holding the pairs whose structures have the Word 97 shape here, the sections'
+    /// and the notes' (all in the WordDocument stream, which takes the Table stream's place), so
+    /// the Word 97 readers of those read them. The rest are left out: the header table has another
+    /// shape ([`header_stories`]), and the bookmarks' names are 8-bit.
+    pub(crate) fn as_word97(&self) -> crate::fib::Fib {
+        use crate::fib::pair;
+        let mut pairs = vec![0; PAIRS * 2];
+        for i in [pair::PLCF_FND_REF, pair::PLCF_FND_TXT, pair::PLCF_SED, pair::PLCF_END_REF, pair::PLCF_END_TXT] {
+            if let (Some(&(fc, lcb)), Some(slot)) = (self.pairs.get(i), pairs.get_mut(i * 2..i * 2 + 2)) {
+                slot.copy_from_slice(&[fc, lcb]);
+            }
+        }
+        crate::fib::Fib {
+            which_tbl_stm: false,
+            ccp: crate::fib::SubDocs {
+                text: self.ccp_text,
+                ftn: self.ccp_ftn,
+                hdd: self.ccp_hdd,
+                atn: self.ccp_atn,
+                edn: self.ccp_edn,
+                txbx: 0,
+                hdr_txbx: 0,
+            },
+            pairs,
+        }
     }
 
     /// The (fc, lcb) pair at index `i`, if it points at anything.
@@ -292,8 +363,9 @@ pub(crate) fn content(word: &[u8], fib: &Fib6) -> Result<Content, DocbinError> {
     } else {
         // Word reads no more characters than the text's byte range (fcMin..fcMac) holds, one byte
         // each or two for UTF-16, whatever the character count says.
+        // The other stories' text follows the main text's in the same range.
         let unit = if fib.wide { 2 } else { 1 };
-        let ccp = fib.ccp_text.min(fib.fc_mac.saturating_sub(fib.fc_min) / unit);
+        let ccp = fib.ccp_all().min(fib.fc_mac.saturating_sub(fib.fc_min) / unit);
         PieceTable::contiguous_word6(fib.fc_min, ccp, text)
     };
     let chpx = Bins::translated(chp_runs.iter().map(|r| TranslatedRun { lo: r.lo, hi: r.hi, istd: 0, grpprl: translate_chp(r.grpprl) }).collect());
@@ -640,6 +712,9 @@ fn sprms(grpprl: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
             // 0x0D, 0x0E, 0x1D, 0x25 and 0x2C are one-byte paragraph sprms of [MS-DOC]'s isprm table
             // too (numbering level, no line numbers, frame anchoring, wrapping, no hyphenation).
             0x05 | 0x08 | 0x0D | 0x0E | 0x18 | 0x19 | 0x1D | 0x25 | 0x2C | 0x33 | 0x55..=0x5C | 0x5E | 0x62 | 0x68 | 0x75 | 0xB7 | 0xB9 => 1,
+            // Section sprms ([`SEP`]): the operand of the Word 97 sprm each stands for.
+            0x8E | 0x8F | 0x93 | 0x96 | 0x97 | 0x99 | 0x9F | 0xA2 => 1,
+            0x8C | 0x8D | 0x90 | 0x91 | 0x9A..=0x9D | 0xA1 | 0xA4..=0xAB => 2,
             // 0x1A/0x1B: a frame's position; 0x6B: kerning in half-points (H1 has 0x0024; Word
             // shows kern=36).
             0x10 | 0x11 | 0x13 | 0x15 | 0x16 | 0x1A | 0x1B | 0x26 | 0x27 | 0x28 | 0x29 | 0x2F | 0x50 | 0x5D | 0x60 | 0x61 | 0x63 | 0x6B | 0xB6
@@ -683,10 +758,98 @@ fn translate_chp(grpprl: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A Word 6.0/95 Prc grpprl as the Word 97 sprms it stands for: character and paragraph sprms
-/// alike (Word 95 records a paragraph change before a fast save as a Prc on the mark's piece).
+/// A Word 6.0/95 Prc grpprl as the Word 97 sprms it stands for: character, paragraph and section
+/// sprms alike (Word 95 records a paragraph or section change before a fast save as a Prc on the
+/// piece of the paragraph or section mark).
 fn translate_prc(grpprl: &[u8]) -> Vec<u8> {
-    [translate_chp(grpprl), translate_pap(grpprl)].concat()
+    [translate_chp(grpprl), translate_pap(grpprl), translate_sep(grpprl)].concat()
+}
+
+/// Section sprms, as (Word 6.0/95 opcode, Word 97 opcode). Each Word 6.0/95 opcode is the Word 97
+/// sprm's index (its low 9 bits) plus 0x85, with the same operand. Each one but the paper trays
+/// (0x8C, 0x8D) and size (0xAB) was matched against Word's reading of a file Word 95 wrote with
+/// that one property set: break kind 0x8E, title page 0x8F, columns 0x90 and their spacing 0x91,
+/// page numbers' format 0x93, restart 0x96 and start 0xA1, header flags 0x99, line numbers 0x9A
+/// and 0x9B, header and footer distances 0x9C and 0x9D, vertical alignment 0x9F, orientation 0xA2,
+/// page size 0xA4 and 0xA5, margins 0xA6-0xA9 and gutter 0xAA.
+const SEP: [(u8, u16); 25] = [
+    (0x8C, 0x5007), // sprmSDmBinFirst
+    (0x8D, 0x5008), // sprmSDmBinOther
+    (0x8E, 0x3009), // sprmSBkc
+    (0x8F, 0x300A), // sprmSFTitlePage
+    (0x90, 0x500B), // sprmSCcolumns
+    (0x91, 0x900C), // sprmSDxaColumns
+    (0x93, 0x300E), // sprmSNfcPgn
+    (0x96, 0x3011), // sprmSFPgnRestart
+    (0x97, 0x3012), // sprmSFEndnote
+    // The header flags (index 0x14). [MS-DOC] lists no Word 97 sprm there; the translation only
+    // carries the flags to `sections::Section::grpf_ihdt` for `header_stories`.
+    (0x99, 0x3014),
+    (0x9A, 0x5015), // sprmSNLnnMod
+    (0x9B, 0x9016), // sprmSDxaLnn
+    (0x9C, 0xB017), // sprmSDyaHdrTop
+    (0x9D, 0xB018), // sprmSDyaHdrBottom
+    (0x9F, 0x301A), // sprmSVjc
+    (0xA1, 0x501C), // sprmSPgnStart97
+    (0xA2, 0x301D), // sprmSBOrientation
+    (0xA4, 0xB01F), // sprmSXaPage
+    (0xA5, 0xB020), // sprmSYaPage
+    (0xA6, 0xB021), // sprmSDxaLeft
+    (0xA7, 0xB022), // sprmSDxaRight
+    (0xA8, 0x9023), // sprmSDyaTop
+    (0xA9, 0x9024), // sprmSDyaBottom
+    (0xAA, 0xB025), // sprmSDzaGutter
+    (0xAB, 0x5026), // sprmSDmPaperReq
+];
+
+/// A Word 6.0/95 SEPX grpprl as the Word 97 section sprms it stands for ([`SEP`]).
+pub(crate) fn translate_sep(grpprl: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (op, v) in sprms(grpprl) {
+        if let Some(&(_, w97)) = SEP.iter().find(|(w6, _)| *w6 == op) {
+            prl(&mut out, w97, v);
+        }
+    }
+    out
+}
+
+/// The header and footer stories, in the shape [`crate::sections::header_stories`] gives for a Word
+/// 97 file: six separator slots, then six for each section (even header, odd header, even footer,
+/// odd footer, first header, first footer), `(0, 0)` where the file has none, so that the section
+/// takes the previous section's.
+///
+/// A Word 6.0/95 header table (pair 11, CPs only) lists just the stories that exist, in that order:
+/// first the separators the Dop's byte 1 names (bit 0 the footnote separator, then the continuation
+/// separator, the continuation notice, and the same three for endnotes), then for each section
+/// those its `grpf_ihdt` names (bit 0 the even header, and on in slot order). Seen in every Word
+/// 6.0/95 file at hand, the corpus's included: the stories are as many as the bits.
+///
+/// As for Word 97 files, a story that starts before the end of the last one kept is left empty,
+/// so a hostile table can't make many parts of the same text.
+pub(crate) fn header_stories(word: &[u8], fib: &Fib6, sections: impl IntoIterator<Item = u8>) -> Vec<(u32, u32)> {
+    let Some((fc, lcb)) = fib.pair(crate::fib::pair::PLCF_HDD) else { return Vec::new() };
+    let Some(plc) = word.get(fc as usize..(fc as usize).saturating_add(lcb as usize)) else { return Vec::new() };
+    let cps: Vec<u32> = plc.as_chunks::<4>().0.iter().take(MAX_HDD_CPS).map(|b| u32::from_le_bytes(*b)).collect();
+    let separators = fib.pair(PAIR_DOP).and_then(|(fc, _)| word.get((fc as usize).checked_add(1)?)).copied().unwrap_or(0);
+    let mut next = 0;
+    let mut kept_to = 0;
+    let mut slot = |present: bool| -> (u32, u32) {
+        if !present {
+            return (0, 0);
+        }
+        let (Some(&a), Some(&b)) = (cps.get(next), cps.get(next + 1)) else { return (0, 0) };
+        next += 1;
+        if a < kept_to || b <= a {
+            return (0, 0);
+        }
+        kept_to = b;
+        (a, b)
+    };
+    let mut out: Vec<(u32, u32)> = (0..6).map(|k| slot(separators >> k & 1 != 0)).collect();
+    for bits in sections.into_iter().take(crate::sections::MAX_SECTIONS) {
+        out.extend((0..6).map(|k| slot(bits >> k & 1 != 0)));
+    }
+    out
 }
 
 /// A Word 6.0/95 PAPX grpprl as the Word 97 sprms it stands for, table rows included. Sprms not

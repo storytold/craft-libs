@@ -92,8 +92,21 @@ struct Doc6<'a> {
     para_styles: &'a [u16],
     /// The stylesheet: one entry per style index, `None` for an empty slot.
     styles: &'a [Option<Std<'a>>],
-    /// The main text's length in characters, when it isn't the stored bytes' (16-bit text).
+    /// The main text's length in characters, when it isn't the stored bytes' (16-bit text) less
+    /// the other stories'.
     ccp: Option<u32>,
+    /// The lengths of the footnote, header, macro, comment and endnote stories, whose text follows
+    /// the main text's in `text`.
+    stories: [u32; 5],
+    /// Sections: (end CP, SEPX grpprl of Word 6 section sprms).
+    sections: &'a [(u32, &'a [u8])],
+    /// The header table's CPs (pair 11).
+    hdd: &'a [u32],
+    /// The Dop's first bytes (pair 31).
+    dop: &'a [u8],
+    /// Footnotes and endnotes: (reference CPs, story CPs within their subdocument).
+    footnotes: (&'a [u32], &'a [u32]),
+    endnotes: (&'a [u32], &'a [u32]),
 }
 
 fn put16(v: &mut [u8], at: usize, x: u16) {
@@ -154,14 +167,58 @@ fn fkp(w: &mut Vec<u8>, runs: &[(u32, u32, &[u8])], papx: bool, istds: &[u16]) -
 fn word_stream(d: &Doc6) -> Vec<u8> {
     let mut w = vec![0u8; TEXT_AT as usize];
     w.extend_from_slice(d.text);
+    let others: u32 = d.stories.iter().sum();
     let ccp = match (d.ccp, d.pieces) {
         (Some(ccp), _) => ccp,
         (None, pieces) => match pieces {
-            Some(p) => p.iter().map(|(len, _)| len).sum(),
-            None => d.text.len() as u32,
+            Some(p) => p.iter().map(|(len, _)| len).sum::<u32>() - others,
+            None => d.text.len() as u32 - others,
         },
     };
     let mut pairs: Vec<(usize, u32, u32)> = Vec::new();
+    if !d.sections.is_empty() {
+        // Each SEPX (u16 size + grpprl), then the PlcfSed: CPs, then 12-byte SEDs.
+        let mut fcs = Vec::new();
+        for (_, sepx) in d.sections {
+            fcs.push(w.len() as u32);
+            w.extend_from_slice(&(sepx.len() as u16).to_le_bytes());
+            w.extend_from_slice(sepx);
+        }
+        let mut plc: Vec<u8> = 0u32.to_le_bytes().to_vec();
+        for (end, _) in d.sections {
+            plc.extend_from_slice(&end.to_le_bytes());
+        }
+        for fc in fcs {
+            plc.extend_from_slice(&[4, 0]);
+            plc.extend_from_slice(&fc.to_le_bytes());
+            plc.extend_from_slice(&[0, 0, 0xFF, 0xFF, 0xFF, 0xFF]);
+        }
+        pairs.push((6, w.len() as u32, plc.len() as u32));
+        w.extend_from_slice(&plc);
+    }
+    let mut plc = |w: &mut Vec<u8>, pair: usize, cps: &[u32], data: &[u8]| {
+        if cps.is_empty() {
+            return;
+        }
+        let at = w.len() as u32;
+        for cp in cps {
+            w.extend_from_slice(&cp.to_le_bytes());
+        }
+        w.extend_from_slice(data);
+        pairs.push((pair, at, w.len() as u32 - at));
+    };
+    plc(&mut w, 11, d.hdd, &[]);
+    plc(&mut w, 31, &[], &[]);
+    // References: CPs, then a 2-byte FRD (1, 2, ...: auto-numbered) each but the limit's.
+    let frds = |n: usize| (1..n as u16).flat_map(|i| i.to_le_bytes()).collect::<Vec<u8>>();
+    plc(&mut w, 2, d.footnotes.0, &frds(d.footnotes.0.len()));
+    plc(&mut w, 3, d.footnotes.1, &[]);
+    plc(&mut w, 46, d.endnotes.0, &frds(d.endnotes.0.len()));
+    plc(&mut w, 47, d.endnotes.1, &[]);
+    if !d.dop.is_empty() {
+        pairs.push((31, w.len() as u32, d.dop.len() as u32));
+        w.extend_from_slice(d.dop);
+    }
     for (pair, runs, papx) in [(12, d.runs, false), (13, d.paras, true)] {
         let (fc, lcb) = fkp(&mut w, runs, papx, d.para_styles);
         if lcb > 0 {
@@ -224,9 +281,14 @@ fn word_stream(d: &Doc6) -> Vec<u8> {
     let len = w.len() as u32;
     put32(&mut w, 0x20, len);
     put32(&mut w, 0x34, ccp);
+    for (k, n) in d.stories.iter().enumerate() {
+        put32(&mut w, 0x38 + 4 * k, *n);
+    }
     for (i, fc, lcb) in pairs {
-        put32(&mut w, 0x58 + i * 8, fc);
-        put32(&mut w, 0x58 + i * 8 + 4, lcb);
+        // From index 38 on, the pairs sit 10 bytes later.
+        let at = 0x58 + i * 8 + if i >= 38 { 10 } else { 0 };
+        put32(&mut w, at, fc);
+        put32(&mut w, at + 4, lcb);
     }
     w
 }
@@ -706,13 +768,19 @@ fn full_stream() -> Vec<u8> {
     ];
     let paras: &[(u32, u32, &[u8])] = &[(0, 6, &[]), (6, 12, &[])];
     word_stream(&Doc6 {
-        text: b"Hello\r\xC4\xE0\rx\r\r",
+        // The main text, then a footnote's story, a header's, and the final mark.
+        text: b"Hello\r\xC4\xE0\rx\x02\r\x02F\rH\r\r\r",
         fonts: FONTS,
         runs,
         paras,
         para_styles: &[2, 0],
         styles,
-        pieces: Some(&[(6, 0), (6, 6)]),
+        pieces: Some(&[(6, 0), (13, 6)]),
+        ccp: Some(12),
+        stories: [3, 3, 0, 0, 0],
+        sections: &[(19, &[0x8E, 0x00, 0x99, 0x02])],
+        hdd: &[0, 3, 4],
+        footnotes: (&[10, 12], &[0, 3, 4]),
         ..Default::default()
     })
 }
@@ -721,8 +789,10 @@ fn full_stream() -> Vec<u8> {
 fn the_full_fixture_reads() {
     let f = cfb_file(&[("WordDocument", &full_stream())]);
     let doc = read(&f).expect("opens");
-    assert_eq!(body_texts(&doc), ["Hello", "Да", "x", ""]);
+    assert_eq!(body_texts(&doc), ["Hello", "Да", "x\u{FFFC}"]);
     assert_eq!(style_names(&doc)[0], "Mine");
+    assert_eq!(part_text(&doc, doc.last_section.headers.default), Some("H".into()));
+    assert_eq!(notes_of(&doc).len(), 1);
 }
 
 proptest! {
@@ -744,4 +814,129 @@ proptest! {
         let w = full_stream();
         let _ = read(&cfb_file(&[("WordDocument", &w[..n.min(w.len())])]));
     }
+}
+
+/// The paragraphs' text and the section each ends, if any.
+fn sections_of(doc: &craft_wordmodel::Document) -> Vec<craft_wordmodel::section::SectionProps> {
+    let mut out: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()?.section.as_deref().cloned()).collect();
+    out.push(doc.last_section.clone());
+    out
+}
+
+/// A part's paragraphs' text.
+fn part_text(doc: &craft_wordmodel::Document, id: Option<u32>) -> Option<String> {
+    let part = doc.parts.get(&id?)?;
+    Some(part.blocks.iter().filter_map(|b| b.as_para().map(|p| p.text.clone())).collect::<Vec<_>>().join("|"))
+}
+
+#[test]
+fn sections_take_their_properties() {
+    // As Word 95 writes them (`secprops`, `sectypes`): section 2 starts on the same page and is
+    // landscape (0x8E 0, 0xA2 2, page 15840 x 12240); section 3 has 3 columns 360 apart and its
+    // own margins (0x90, 0x91, 0xA6-0xA9) and header/footer distances (0x9C, 0x9D), and starts
+    // on an odd page (0x8E 4). Word shows each so.
+    let s2: &[u8] = &[0x8E, 0x00, 0xA2, 0x02, 0xA4, 0xE0, 0x3D, 0xA5, 0xD0, 0x2F];
+    let s3: &[u8] = &[
+        0x8E, 0x04, 0x90, 0x02, 0x00, 0x91, 0x68, 0x01, 0x9C, 0x38, 0x04, 0x9D, 0x84, 0x03, 0xA6, 0x40, 0x0B, 0xA7, 0xD0, 0x02, 0xA8, 0x70, 0x08,
+        0xA9, 0x38, 0x04,
+    ];
+    let d = Doc6 { text: b"One\r\x0cTwo\r\x0cThree\r", sections: &[(5, &[]), (10, s2), (16, s3)], ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert_eq!(body_texts(&doc), ["One", "", "Two", "", "Three"]);
+    let s = sections_of(&doc);
+    assert_eq!(s.len(), 3);
+    use craft_wordmodel::section::SectionStart;
+    assert_eq!((s[0].start, s[0].landscape, s[0].page_w), (SectionStart::NextPage, false, 612.0));
+    assert_eq!((s[1].start, s[1].landscape, s[1].page_w, s[1].page_h), (SectionStart::Continuous, true, 792.0, 612.0));
+    assert_eq!((s[2].start, s[2].columns.count), (SectionStart::OddPage, 3));
+    assert_eq!((s[2].margin_left, s[2].margin_right, s[2].margin_top, s[2].margin_bottom), (144.0, 36.0, 108.0, 54.0));
+    assert_eq!((s[2].header, s[2].footer), (54.0, 45.0));
+}
+
+#[test]
+fn the_header_table_holds_only_the_stories_a_section_names() {
+    // As `hf3`: one section naming all six stories (0x99 = 0x3F), stored in the order even header,
+    // odd header, even footer, odd footer, first header, first footer, each with its guard mark.
+    let text = b"Body\rHE\r\rHO\r\rFE\r\rFO\r\rHF\r\rFF\r\r\r";
+    let hdd: &[u32] = &[0, 4, 8, 12, 16, 20, 24, 25];
+    let d = Doc6 { text, stories: [0, 25, 0, 0, 0], sections: &[(30, &[0x8F, 0x01, 0x99, 0x3F])], hdd, ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let s = &doc.last_section;
+    assert!(s.title_page);
+    let got = [s.headers.even, s.headers.default, s.footers.even, s.footers.default, s.headers.first, s.footers.first].map(|id| part_text(&doc, id));
+    assert_eq!(got, ["HE", "HO", "FE", "FO", "HF", "FF"].map(|t| Some(t.to_string())));
+}
+
+#[test]
+fn a_story_a_section_doesnt_name_is_the_previous_sections() {
+    // As `hfsec`: section 1 names its odd header and footer (0x0A), section 2 only its header
+    // (0x02). The table holds three stories; Word shows section 2's footer linked to section 1's.
+    let text = b"One\r\x0cTwo\rH1\r\rF1\r\rH2\r\r\r";
+    let hdd: &[u32] = &[0, 4, 8, 12, 13];
+    let d = Doc6 { text, stories: [0, 13, 0, 0, 0], sections: &[(5, &[0x99, 0x0A]), (22, &[0x99, 0x02])], hdd, ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let s = sections_of(&doc);
+    assert_eq!((part_text(&doc, s[0].headers.default), part_text(&doc, s[0].footers.default)), (Some("H1".into()), Some("F1".into())));
+    assert_eq!((part_text(&doc, s[1].headers.default), s[1].footers.default), (Some("H2".into()), None));
+}
+
+#[test]
+fn separator_stories_come_first() {
+    // As `seps`: the Dop's byte 1 names a footnote separator (bit 0); it comes before the
+    // section's header in the table, and isn't a header.
+    let text = b"Body\rSEP\r\rHDR\r\r\r";
+    let hdd: &[u32] = &[0, 5, 10, 11];
+    let d = Doc6 { text, stories: [0, 11, 0, 0, 0], sections: &[(16, &[0x99, 0x02])], hdd, dop: &[0x02, 0x01, 0x04, 0x00], ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert_eq!(part_text(&doc, doc.last_section.headers.default), Some("HDR".into()));
+}
+
+#[test]
+fn a_fast_saved_section_mark_adds_its_pieces_sprms() {
+    // As `cn.orthodox…DOC`: the SEPX doesn't name the title page or the header; the Prc of the
+    // piece holding the last section's mark (its last CP, after every story) does (8F 01, 99 02).
+    // Word shows both.
+    let text = b"Body\rHDR\r\r\r";
+    let pieces: &[(u32, u32)] = &[(5, 0), (5, 5), (1, 10)];
+    let d = Doc6 {
+        text,
+        pieces: Some(pieces),
+        prms: &[0, 0, 0x0001],
+        prcs: &[&[0x8F, 0x01, 0x99, 0x02]],
+        ccp: Some(5),
+        stories: [0, 5, 0, 0, 0],
+        sections: &[(11, &[0xA1, 0x01, 0x00])],
+        hdd: &[0, 5, 6],
+        ..Default::default()
+    };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert!(doc.last_section.title_page);
+    assert_eq!(part_text(&doc, doc.last_section.headers.default), Some("HDR".into()));
+}
+
+/// Each note reference's kind and text, in body order.
+fn notes_of(doc: &craft_wordmodel::Document) -> Vec<(craft_wordmodel::para::NoteKind, String)> {
+    let mut out = Vec::new();
+    for p in doc.body.iter().filter_map(|b| b.as_para()) {
+        for o in &p.objects {
+            if let craft_wordmodel::para::InlineObject::NoteRef { kind, id, .. } = o {
+                out.push((*kind, part_text(doc, Some(*id)).unwrap_or_default()));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn footnotes_and_endnotes_are_read() {
+    // As `fnen`: two footnotes (pairs 2 and 3) and an endnote (pairs 46 and 47, after the gap in
+    // the pairs), each story after the main text in its own subdocument.
+    use craft_wordmodel::para::NoteKind;
+    let text = b"A\x02 B\x02 C\x02\r\x02 F1\r\x02 F3\r\r\x02 E2\r\r\r";
+    let d =
+        Doc6 { text, stories: [11, 0, 0, 0, 7], footnotes: (&[1, 7, 12], &[0, 5, 10, 11]), endnotes: (&[4, 12], &[0, 5, 7]), ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    // A note story's own reference mark links to nothing, so only the space after it is kept.
+    let want = [(NoteKind::Footnote, " F1"), (NoteKind::Endnote, " E2"), (NoteKind::Footnote, " F3")].map(|(k, t)| (k, t.to_string()));
+    assert_eq!(notes_of(&doc), want);
 }
