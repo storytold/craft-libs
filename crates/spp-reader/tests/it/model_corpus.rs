@@ -6,7 +6,7 @@
 use texturecraft_import_reader::model::StackSummary;
 use texturecraft_import_reader::project::ProjectFile;
 
-mod common;
+use crate::common;
 
 #[test]
 #[ignore = "needs TC_IMPORT_CORPUS"]

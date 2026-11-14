@@ -1,9 +1,9 @@
-//! The HDF5 reader against `fixtures/small.h5` (made by `fixtures/make_fixture.c` with libhdf5) and,
+//! The HDF5 reader against `tests/fixtures/small.h5` (made by `tests/fixtures/make_fixture.c` with libhdf5) and,
 //! optionally, against the real project files named by `TC_IMPORT_CORPUS`.
 
 use texturecraft_import_reader::container::hdf5::{Entry, EntryKind, Hdf5Error, Hdf5File};
 
-mod common;
+use crate::common;
 use std::path::Path;
 
 fn fixture() -> Hdf5File {

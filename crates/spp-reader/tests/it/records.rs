@@ -1,7 +1,7 @@
 //! Runs the record decoders over real projects named by `TC_IMPORT_CORPUS` (ignored by default; skipped without it).
 //! No bytes from those files are kept in the repository.
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use texturecraft_import_reader::decode::image::ImageHeader;

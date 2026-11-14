@@ -1,5 +1,5 @@
 /*
- * Generates small.h5, the fixture for tests/hdf5_reader.rs.
+ * Generates small.h5, the fixture for tests/it/hdf5_reader.rs.
  *
  * The file uses libhdf5's default (earliest) file format, like the reference app: superblock v0,
  * v1 object headers, symbol-table groups and v1 B-tree chunk indexes. Dataset bytes follow
