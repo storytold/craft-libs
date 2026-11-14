@@ -587,18 +587,24 @@ impl<T, const B: usize> TreeVec<T, B> {
 
     /// Turns a generic range bounds into an inclusive start and an exclusive end.
     ///
-    /// This won't work if the range end is inclusive of `usize::MAX`, so don't do that.
+    /// Panics if a bound is past `usize::MAX` or if the start is after the end.
+    // Craft patch (range bounds): checked bounds and a start-after-end check.
     fn normalize_bounds(&self, range: impl std::ops::RangeBounds<usize>) -> (usize, usize) {
         let start = match range.start_bound() {
             std::ops::Bound::Included(x) => *x,
-            std::ops::Bound::Excluded(x) => *x + 1,
+            std::ops::Bound::Excluded(x) => {
+                x.checked_add(1).expect("range start is past usize::MAX")
+            }
             std::ops::Bound::Unbounded => 0,
         };
         let end = match range.end_bound() {
-            std::ops::Bound::Included(x) => *x + 1,
+            std::ops::Bound::Included(x) => x.checked_add(1).expect("range end is past usize::MAX"),
             std::ops::Bound::Excluded(x) => *x,
             std::ops::Bound::Unbounded => self.len(),
         };
+        if start > end {
+            panic!("range starts at {start} but ends at {end}");
+        }
         (start, end)
     }
 
@@ -951,5 +957,45 @@ mod tests {
             vec.iter().cloned().collect::<Vec<_>>(),
             vec![1, 1, 1, 1, 1, 1, 2]
         );
+    }
+
+    // Craft patch (range bounds).
+    fn internal_node_vec() -> TreeVec<i32, 4> {
+        let vec: TreeVec<i32, 4> = (0..20).collect();
+        assert!(matches!(&*vec.root, Node::Internal { .. }));
+        vec
+    }
+
+    #[test]
+    #[should_panic(expected = "range starts at 10 but ends at 5")]
+    fn range_reversed() {
+        let vec = internal_node_vec();
+        #[allow(clippy::reversed_empty_ranges)]
+        let _ = vec.range(10..5);
+    }
+
+    #[test]
+    #[should_panic(expected = "range starts at 10 but ends at 5")]
+    fn range_mut_reversed() {
+        let mut vec = internal_node_vec();
+        #[allow(clippy::reversed_empty_ranges)]
+        let _ = vec.range_mut(10..5);
+    }
+
+    #[test]
+    #[should_panic(expected = "range start is past usize::MAX")]
+    fn range_start_past_max() {
+        let vec = internal_node_vec();
+        let _ = vec.range((
+            std::ops::Bound::Excluded(usize::MAX),
+            std::ops::Bound::Unbounded,
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "range end is past usize::MAX")]
+    fn range_end_past_max() {
+        let vec = internal_node_vec();
+        let _ = vec.range(0..=usize::MAX);
     }
 }
