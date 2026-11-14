@@ -7,6 +7,10 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 
+[dependencies]
+# Shift_JIS names in files saved by a Japanese-language After Effects (`bytes::legacy_text`).
+encoding_rs = { workspace = true }
+
 [lints]
 workspace = true
 
