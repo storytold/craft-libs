@@ -136,6 +136,85 @@ fn the_index_is_read_and_checked() {
     assert!(matches!(Index::from_json(b"{"), Err(IndexError::Json(_))));
 }
 
+#[test]
+fn format_1_2_adds_tags_and_samples_and_1_1_still_loads() {
+    let f = fixture();
+    let mut v1_1 = f.index.clone();
+    v1_1["version"] = json!("1.1");
+    let old = index_of(&v1_1).unwrap();
+    let sans = old.family("Test Sans").unwrap();
+    assert!(sans.tags.is_empty() && sans.sample_script.is_none() && old.samples().is_empty());
+    assert_eq!(old.sample_text(sans, &sans.files[0]), None);
+
+    let sample = |text: &str| json!({"text": text, "method": "udhr", "language": "xx"});
+    let mut first = f.index.clone();
+    first["version"] = json!("1.2");
+    first["samples"] = json!({"Latn": sample("Hello"), "Thai": sample("first")});
+    first["families"][2]["tags"] = json!(["Sans", "Display/Playful"]);
+    first["families"][2]["sample_script"] = json!("Latn");
+    first["families"][2]["reserved_names"] = json!(["Test"]);
+    first["families"][2]["files"][0]["sample_script"] = json!("Thai");
+    first["families"][2]["files"][1]["sample_text"] = json!("Own text");
+    first["families"][2]["files"][2]["sample_script"] = json!("Zsym");
+    first["families"][3]["files"][0]["instances"] = json!([{"name": "Regular", "coordinates": {"wght": 400.0}}]);
+    first["families"][3]["files"][0]["list_instance"] = json!(0);
+    let mut second = noto_fixture().index;
+    second["samples"] = json!({"Thai": sample("second"), "Jpan": sample("Japanese")});
+    let index = Index::merge([index_of(&first).unwrap(), index_of(&second).unwrap()]);
+
+    let sans = index.family_from(GOOGLE_FONTS, "Test Sans").unwrap();
+    assert_eq!(
+        (sans.tags.as_slice(), sans.reserved_names.as_slice()),
+        (&["Sans".to_string(), "Display/Playful".to_string()][..], &["Test".to_string()][..])
+    );
+    assert_eq!(index.samples().keys().collect::<Vec<_>>(), ["Jpan", "Latn", "Thai"]);
+    assert_eq!(index.sample("Thai").unwrap().text, "first");
+    // Own text, then the file's script, which has no fallback (Zsym has no sample).
+    assert_eq!(index.sample_text(sans, &sans.files[1]), Some("Own text"));
+    assert_eq!(index.sample_text(sans, &sans.files[0]), Some("first"));
+    assert_eq!(index.sample_text(sans, &sans.files[2]), None);
+    let var = index.family_from(GOOGLE_FONTS, "Test Var").unwrap();
+    assert_eq!((var.files[0].instances[0].name.as_str(), var.files[0].list_instance), ("Regular", Some(0)));
+
+    first["families"][3]["files"][0]["list_instance"] = json!(1);
+    assert!(index_of(&first).is_err());
+    first["families"][3]["files"][0]["list_instance"] = json!(0);
+    first["samples"]["Latn"]["text"] = json!("bad\u{7}");
+    assert!(index_of(&first).is_err());
+    first["samples"]["Latn"] = sample("Hello");
+    // An instance gives a coordinate for every axis, and only those.
+    first["families"][3]["files"][0]["instances"] = json!([{"name": "Regular", "coordinates": {"wdth": 100.0}}]);
+    assert!(index_of(&first).is_err());
+    first["families"][3]["files"][0]["instances"] = json!([{"name": "Regular", "coordinates": {"wght": 400.0}}]);
+    assert!(index_of(&first).is_ok());
+    // Named instances belong to variable fonts only.
+    first["families"][2]["files"][0]["instances"] = json!([{"name": "Bold", "coordinates": {}}]);
+    assert!(index_of(&first).is_err());
+
+    // Every 1.2 string a user source can set is checked, one case at a time.
+    let mut check = first.clone();
+    check["families"][2]["files"][0]["instances"] = json!([]);
+    check["families"][2]["copyright"] = json!("Copyright 2020 Test");
+    check["families"][3]["files"][0]["instances"] = json!([{"name": "Regular", "coordinates": {"wght": 400.0}}]);
+    assert!(index_of(&check).is_ok());
+    fn reject(v: &mut serde_json::Value, path: &dyn Fn(&mut serde_json::Value) -> &mut serde_json::Value, bad: serde_json::Value, what: &str) {
+        let good = std::mem::replace(path(v), bad);
+        assert!(index_of(v).is_err(), "{what}");
+        *path(v) = good;
+        assert!(index_of(v).is_ok(), "{what} restored");
+    }
+    reject(&mut check, &|v| &mut v["families"][2]["tags"][0], json!("Sans\u{202e}"), "bidi control in a tag");
+    reject(&mut check, &|v| &mut v["families"][2]["copyright"], json!("Copyright 2020\nTest"), "line break in a copyright");
+    reject(&mut check, &|v| &mut v["families"][2]["files"][1]["sample_text"], json!("x".repeat(61)), "long sample text");
+    reject(&mut check, &|v| &mut v["families"][3]["files"][0]["instances"][0]["coordinates"]["wght"], json!(900.0), "coordinate out of range");
+    check["families"][3]["upstream"] = json!("https://example.org/repo");
+    check["families"][3]["notice_file"] = json!({"path": "apache/testvar/NOTICE", "size": 1, "sha256": sha256_hex(b"x")});
+    assert!(index_of(&check).is_ok());
+    reject(&mut check, &|v| &mut v["families"][3]["upstream"], json!("http://example.org/repo"), "non-https upstream");
+    reject(&mut check, &|v| &mut v["families"][3]["notice_file"]["sha256"], json!("abc"), "bad notice sha256");
+    reject(&mut check, &|v| &mut v["families"][3]["notice_file"]["path"], json!("apache/testvar/TestVar[wght].ttf"), "notice named like a font");
+}
+
 #[cfg(feature = "bundled-index")]
 #[test]
 fn the_bundled_indexes_are_the_pinned_ones() {

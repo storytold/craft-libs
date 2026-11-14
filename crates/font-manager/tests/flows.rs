@@ -24,9 +24,9 @@ fn index() -> Index {
     let file = |path: &str, size: usize| {
         format!(r#"{{"path":"{path}","size":{size},"sha256":"{}","style":"normal","weight":400,"axes":[],"postscript":[]}}"#, "0a".repeat(32))
     };
-    let family = |name: &str, category: &str, languages: &str, scripts: &str, files: String| {
+    let family = |name: &str, category: &str, tags: &str, languages: &str, scripts: &str, files: String| {
         format!(
-            r#"{{"family":"{name}","designer":"","categories":["{category}"],"languages":[{languages}],"scripts":[{scripts}],"license":"OFL","license_path":null,"files":[{files}]}}"#
+            r#"{{"family":"{name}","designer":"","categories":["{category}"],"tags":[{tags}],"languages":[{languages}],"scripts":[{scripts}],"license":"OFL","license_path":null,"files":[{files}]}}"#
         )
     };
     let json = format!(
@@ -37,10 +37,10 @@ fn index() -> Index {
           {{"id":"ja_Jpan","name":"Japanese","autonym":"日本語","script":"Jpan","population":1,"historical":false}}],
         "scripts":[{{"id":"Arab","name":"Arabic"}},{{"id":"Jpan","name":"Japanese"}},{{"id":"Latn","name":"Latin"}}],
         "families":[{},{},{},{}]}}"#,
-        family("Amiri", "SERIF", "0,1", r#""Arab","Latn""#, file("ofl/amiri/Amiri-Regular.ttf", 1000)),
-        family("Hack", "MONOSPACE", "1", r#""Latn""#, file(HACK, epaint_default_fonts::HACK_REGULAR.len())),
-        family("Noto Sans JP", "SANS_SERIF", "1,2", r#""Jpan","Latn""#, file("ofl/notosansjp/NotoSansJP[wght].ttf", 1000)),
-        family("Ubuntu", "SANS_SERIF", "1", r#""Latn""#, file(UBUNTU, epaint_default_fonts::UBUNTU_LIGHT.len())),
+        family("Amiri", "SERIF", "", "0,1", r#""Arab","Latn""#, file("ofl/amiri/Amiri-Regular.ttf", 1000)),
+        family("Hack", "MONOSPACE", "", "1", r#""Latn""#, file(HACK, epaint_default_fonts::HACK_REGULAR.len())),
+        family("Noto Sans JP", "SANS_SERIF", "", "1,2", r#""Jpan","Latn""#, file("ofl/notosansjp/NotoSansJP[wght].ttf", 1000)),
+        family("Ubuntu", "SANS_SERIF", r#""Display/Pixel""#, "1", r#""Latn""#, file(UBUNTU, epaint_default_fonts::UBUNTU_LIGHT.len())),
     );
     Index::from_json(json.as_bytes()).unwrap()
 }
@@ -154,6 +154,11 @@ fn search_and_filters_narrow_the_catalogue() {
 
     click_role(&mut h, Role::RadioButton, "Serif");
     assert_eq!(h.state().results(), ["Amiri"]);
+    // Tags decide the group: Ubuntu's `Display/Pixel` puts it under Display, not Sans serif.
+    click_role(&mut h, Role::RadioButton, "Display");
+    assert_eq!(h.state().results(), ["Ubuntu"]);
+    click_role(&mut h, Role::RadioButton, "Sans serif");
+    assert_eq!(h.state().results(), ["Noto Sans JP"]);
     click_role(&mut h, Role::RadioButton, "All categories");
 
     // Ubuntu Light is installed on the system.
