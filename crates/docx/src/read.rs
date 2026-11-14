@@ -119,6 +119,10 @@ pub(crate) struct Reader<'p> {
     pub theme_fills: shape_style::ThemeFills,
     /// The fill of the group being read (what its members' `a:grpFill` stands for).
     pub group_fill: Option<craft_wordmodel::fill::Fill>,
+    /// The package has no default table style (no styles part, or none marked `w:default`):
+    /// Word then gives tables no cell margins rather than its Normal Table's 0.08". Set by
+    /// `read_styles`, which runs before any story with tables is read.
+    pub no_default_table_style: bool,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -193,6 +197,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         theme_fills: Default::default(),
         group_fill: None,
         chunks,
+        no_default_table_style: true,
     };
     r.doc.missing_pictures.main = main.clone();
     r.pc.major_font = r.doc.settings.major_font.clone();
@@ -210,6 +215,8 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
             let fallback = match t {
                 rt::STYLES => "word/styles.xml",
                 rt::NUMBERING => "word/numbering.xml",
+                rt::FOOTNOTES => "word/footnotes.xml",
+                rt::ENDNOTES => "word/endnotes.xml",
                 _ => return None,
             };
             pkg.get(fallback).map(|_| fallback.to_string())
