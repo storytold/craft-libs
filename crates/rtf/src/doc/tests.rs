@@ -39,6 +39,36 @@ fn basic_reader() {
 }
 
 #[test]
+fn rtl_paragraphs_read_and_write_their_direction() {
+    // Word writes an RTL paragraph as `\rtlpar` (`\ltrpar` for LTR); reading it keeps the
+    // direction as w:bidi on the document paragraph, and export writes it back.
+    let rtf = br#"{\rtf1\ansi\pard\rtlpar RTL\par\pard\ltrpar LTR\par\pard plain\par}"#;
+    let flow = parse(rtf).unwrap();
+    let paras: Vec<&Para> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(paras[0].rtl, "rtlpar sets the direction");
+    assert!(!paras[1].rtl && !paras[2].rtl, "ltrpar and no word: not RTL");
+    // \rtldir and \ltrdir, which some writers used for paragraphs, are read too.
+    let old = parse(br#"{\rtf1\ansi\pard\rtldir RTL\par\pard\ltrdir LTR\par}"#).unwrap();
+    let old: Vec<&Para> = old.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(old[0].rtl && !old[1].rtl, "rtldir and ltrdir are read");
+    // \pard resets the direction.
+    let reset = parse(br#"{\rtf1\ansi\pard\rtlpar A\par\pard B\par}"#).unwrap();
+    let reset: Vec<&Para> = reset.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+    assert!(reset[0].rtl && !reset[1].rtl, "pard resets the direction");
+    // Import keeps it as bidi on the document paragraph.
+    let bidi = |d: &Document| {
+        d.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.props.bidi.unwrap_or(false)) } else { None }).collect::<Vec<_>>()
+    };
+    let doc = import(rtf).unwrap();
+    assert_eq!(bidi(&doc), [true, false, false]);
+    // Export writes \rtlpar once, and not the \rtldir.
+    let out = export(&doc);
+    assert_eq!(out.matches("\\rtlpar").count(), 1, "{out}");
+    assert!(!out.contains("rtldir"), "{out}");
+    assert_eq!(bidi(&import(out.as_bytes()).unwrap()), [true, false, false]);
+}
+
+#[test]
 fn stylesheet_names_take_unicode_escapes() {
     // \u116?=t \u105?=i \u116?=t \u108?=l \u101?=e — how Word writes a non-Latin style name.
     let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u116?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
