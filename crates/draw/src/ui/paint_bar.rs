@@ -6,9 +6,7 @@ use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
 use craft_theme::Srgba;
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{Checkbox, Swatch};
-use craft_ui::contract::{
-    Bind, BodyCx, Entry, Gap, LabelKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, Trigger,
-};
+use craft_ui::contract::{Bind, BodyCx, Entry, Gap, LabelKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, Trigger};
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
@@ -467,12 +465,13 @@ impl<M: Value> Pass<'_, M> {
         }
         let shown = self.values.mixer.combination.min(MIXER_COMBINATIONS.len() - 1);
         let mut pick = None;
-        Field::new(words.combination.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("mixer-combination").sizing(Sizing::Content).show(
-            ui,
-            |ui, _| {
+        Field::new(words.combination.clone())
+            .side(SideLabel::new().kind(LabelKind::Hidden))
+            .id_salt("mixer-combination")
+            .sizing(Sizing::Content)
+            .show(ui, |ui, _| {
                 pick = Select::new(words.combination.clone(), Bind::given(shown), &entries).show(ui).value().copied();
-            },
-        );
+            });
         if let Some(index) = pick {
             self.set_with(&words.combination, |v| {
                 v.mixer.combination = index;
