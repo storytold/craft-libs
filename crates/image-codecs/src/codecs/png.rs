@@ -1751,6 +1751,12 @@ mod hdr_tests {
             assert!((f32::from(sample) / 65535.0 - 0.5807).abs() < 0.001);
         }
     }
+
+    #[test]
+    fn pq_png_rejects_empty_images() {
+        let image = Image::from_f32(0, 1, ChannelLayout::Rgb, &[]).unwrap();
+        assert!(encode_pq(&image, &EncodeOptions::default()).is_err());
+    }
 }
 
 #[cfg(test)]
