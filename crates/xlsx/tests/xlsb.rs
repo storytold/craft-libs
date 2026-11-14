@@ -909,12 +909,24 @@ fn a_dynamic_array_kept_as_its_value_has_no_cell_metadata() {
         part(1, (0, 1)),
         range_formula(426, (0, 1, 1, 1), &[0xFF]),
         // C1: a value with cell metadata keeps it, as the file has it.
-        meta,
+        meta.clone(),
         cell(5, 2, &1.0f64.to_le_bytes()),
+        // D1: the first cell of a dynamic array with no BrtArrFmla after it, then a value, E1.
+        meta.clone(),
+        part(3, (0, 3)),
+        cell(5, 4, &1.0f64.to_le_bytes()),
+        // F1: the same as the last cell of its row.
+        meta,
+        part(5, (0, 5)),
+        row(1),
+        cell(5, 0, &1.0f64.to_le_bytes()),
     ]
     .concat();
     let wb = read(&file(&worksheet(&data, &[]))).unwrap();
     let sheet = &wb.sheets[0];
-    assert_eq!((sheet.formula(at("A1")), sheet.formula(at("B1"))), (None, None));
+    for a in ["A1", "B1", "D1", "F1"] {
+        assert_eq!(sheet.formula(at(a)), None, "{a}");
+    }
     assert_eq!(sheet.cell_metadata.iter().collect::<Vec<_>>(), [(&at("C1"), &1)]);
+    assert!(warned(&wb, "missing from the file"), "{:?}", wb.warnings);
 }

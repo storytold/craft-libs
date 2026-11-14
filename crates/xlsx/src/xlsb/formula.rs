@@ -477,6 +477,15 @@ fn literal_text(e: &Expr) -> bool {
     }
 }
 
+/// How many strings a [`literal_text`] chain joins, or `None` for anything else.
+fn literal_texts(e: &Expr) -> Option<usize> {
+    match e {
+        Expr::Text(_) => Some(1),
+        Expr::Binary(BinOp::Concat, a, b) => literal_texts(a)?.checked_add(literal_texts(b)?),
+        _ => None,
+    }
+}
+
 /// How tightly an expression binds when printed, as the formula parser reads it: binary
 /// operators by [`BinOp::precedence`], prefix `+`/`-` at 60 and `%` at 70 (`-2^2` is `(-2)^2`);
 /// anything else is one operand.
@@ -512,8 +521,13 @@ fn paren(e: Expr) -> Expr {
 fn grouped(e: Expr, in_args: bool) -> Expr {
     match e {
         // Strings joined with `&` are written as one flat chain, however their tokens nest: `&`
-        // is associative, and `PY("…"&"…")` is read as Python code only in that form.
-        e @ Expr::Binary(BinOp::Concat, ..) if literal_text(&e) => {
+        // is associative, and `PY("…"&"…")` is read as Python code only in that form. The chain
+        // nests one level per string, so it is made only up to `MAX_DEPTH` strings, the bound
+        // `push` keeps on the decoded tree (Excel's 8,192 characters hold at most about 33
+        // full-length constants). A longer one prints as its tokens nest, with the parentheses
+        // that needs: a balanced tree of thousands of strings is only a few levels deep, and
+        // printing or dropping a chain of thousands would recurse past the stack.
+        e @ Expr::Binary(BinOp::Concat, ..) if literal_texts(&e).is_some_and(|n| n <= MAX_DEPTH) => {
             let mut texts = vec![];
             flatten_texts(e, &mut texts);
             let mut texts = texts.into_iter();
@@ -574,4 +588,47 @@ fn array_constant(b: &mut Bytes<'_>) -> Result<Expr, Unsupported> {
         out.push(row);
     }
     Ok(Expr::Array(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Postfix tokens for `n` empty strings joined by `&` as a balanced tree.
+    fn balanced_strings(n: usize, out: &mut Vec<u8>) {
+        if n == 1 {
+            out.extend([0x17, 0, 0]);
+        } else {
+            balanced_strings(n / 2, out);
+            balanced_strings(n - n / 2, out);
+            out.push(0x08);
+        }
+    }
+
+    #[test]
+    fn a_long_chain_of_strings_stays_within_the_depth_bound() {
+        // 4,096 strings and 4,095 `&` fill 16,383 token bytes, 13 levels deep as written. Made
+        // into one flat chain they would be 4,096 levels deep, past what printing and dropping
+        // the tree may recurse; on a small stack that overflows. They print as written instead.
+        let mut rgce = vec![];
+        balanced_strings(4096, &mut rgce);
+        assert!(rgce.len() <= MAX_RGCE);
+        let text = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let e = decode(&rgce, &[], &Links::default(), Mode::Cell).unwrap();
+                let text = super::super::expr::print(&e);
+                drop(e);
+                text
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(text.matches("\"\"").count(), 4096);
+        // A short chain, such as Python code split into constants, is still one flat chain.
+        let mut short = vec![];
+        balanced_strings(4, &mut short);
+        let e = decode(&short, &[], &Links::default(), Mode::Cell).unwrap();
+        assert_eq!(super::super::expr::print(&e), "\"\"&\"\"&\"\"&\"\"");
+    }
 }

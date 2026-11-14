@@ -773,6 +773,10 @@ pub(crate) fn worksheet(
                 }
                 continue;
             }
+            // No formula record: the cell stays a value, so its formula's cell metadata goes too.
+            if let Some(cell) = row.as_mut().and_then(|r| r.cells.last_mut()).filter(|c| c.at == at) {
+                cell.cell_metadata = None;
+            }
             kept(warnings, "a shared or array formula that is missing from the file");
         }
         match id {
