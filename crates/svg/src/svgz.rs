@@ -21,7 +21,7 @@ pub enum Error {
     Corrupt(String),
     /// The gzip stream holds gzip data again. A reader that unpacks what it is handed would
     /// unpack that second layer with no limit, so it is refused here.
-    #[error("the compressed SVG holds another compressed file, not a document ({0} decoded bytes)")]
+    #[error("the compressed SVG holds another compressed file, not UTF-8 SVG text ({0} decoded bytes)")]
     Nested(usize),
     /// The text is not valid in its encoding.
     #[error("the SVG is not UTF-8, UTF-16 or ISO 8859-1")]

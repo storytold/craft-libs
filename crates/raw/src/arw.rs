@@ -721,7 +721,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let scale_bits = if info.compression == 1 && out_bits < 14 && strip_len >= (w * h * 2) as u64 { 14 } else { out_bits };
 
     let cfa = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
-        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
+        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
+            Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }
+        }
         _ => Cfa::bayer_static("RGGB"),
     };
     let default_black = if scale_bits >= 14 { 512.0 } else { 128.0 };

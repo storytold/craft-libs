@@ -238,6 +238,10 @@ fn open(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: usize, bits
     }
     let max = match header.metadata.bit_depth {
         BitDepth::IntegerSample { bits_per_sample } if !float && (1..=16).contains(&bits_per_sample) => ((1u32 << bits_per_sample) - 1) as f32,
+        // Some DNG writers label LinearRaw samples as floating point while storing a lossless
+        // integer JPEG XL codestream. JXL exposes decoded pixels as normalized f32 in either
+        // case, so retain them as floats instead of rejecting the otherwise valid IFD/tile pair.
+        BitDepth::IntegerSample { bits_per_sample: 1..=16 } if float => 0.0,
         BitDepth::FloatSample { .. } if float => 0.0,
         d => return Err(RawError::Corrupt(format!("JPEG XL tile sample type {d:?} does not match the IFD"))),
     };

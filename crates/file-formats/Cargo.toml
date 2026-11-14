@@ -9,11 +9,39 @@ rust-version.workspace = true
 
 [dependencies]
 craft-eps = { workspace = true }
+craft-image-codecs = { workspace = true, optional = true }
+craft-raw = { workspace = true, optional = true }
+craft-ora = { workspace = true, optional = true }
+craft-kra = { workspace = true, optional = true }
+craft-pcraft-bundle = { workspace = true, optional = true }
 craft-idml = { workspace = true }
 craft-svg = { workspace = true }
 craft-zip = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[features]
+default = []
+# These flags report which shared parser/codec families a client builds. The application still
+# selects the corresponding shared crates in its dependency graph.
+raster-codecs = ["dep:craft-image-codecs"]
+heif = ["raster-codecs", "craft-image-codecs/heif"]
+avif = ["raster-codecs", "craft-image-codecs/avif"]
+pdf = []
+svg = []
+ora = ["dep:craft-ora"]
+kra = ["dep:craft-kra"]
+xcf = []
+pdn = []
+raw = ["dep:craft-raw"]
+psd = []
+affinity = []
+pcraft = ["dep:craft-pcraft-bundle"]
+ase = []
+office = []
+designcraft = []
+stencilcraft = []
+plotter = []
 
 [lints]
 workspace = true

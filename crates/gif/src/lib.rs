@@ -1,7 +1,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-//! The blocks of a GIF, read without decompressing any pixels (GIF89a specification: Logical
-//! Screen Descriptor, Global and Local Color Tables, Graphic Control Extension, Application
-//! Extension, Image Descriptor).
+//! GIF reading and writing. The block reader reads without decompressing pixels (GIF89a
+//! specification: Logical Screen Descriptor, Global and Local Color Tables, Graphic Control
+//! Extension, Application Extension, Image Descriptor).
 //!
 //! [`scan`] walks the file once and reports what an importer needs before it decodes anything:
 //! the logical screen size, every frame's position, size, delay and transparent colour, whether
@@ -12,6 +12,10 @@
 //!
 //! With feature `frames`, [`frames::read_frames`] decodes every frame through the `image` crate's
 //! GIF decoder, after the checks [`scan`] makes possible, with bounded memory.
+//! [`write::animation`] writes full-canvas RGBA8 animation frames with GIF palette quantization,
+//! timing, loop and disposal metadata. Parallel producers can quantize frames with
+//! [`write::prepare_frame`] and pass the compact results to
+//! [`write::AnimationWriter::write_prepared_frame`].
 //!
 //! Input is treated as hostile: every read is bounds-checked, and the number of frames recorded
 //! is capped by the caller.
@@ -20,6 +24,8 @@
 pub mod frames;
 #[cfg(test)]
 mod tests;
+/// GIF image and animation encoding.
+pub mod write;
 
 /// One frame (image descriptor) of a GIF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
