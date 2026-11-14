@@ -157,6 +157,21 @@ fn deep_fraction_chain_keeps_its_innermost_text() {
     assert!(texts(&mut m).contains(&"innermost".to_string()), "{:?}", texts(&mut m));
 }
 
+/// wordcraft#6071: the reader and the writer mean the same nesting, so a chain the writer writes
+/// comes back as the same tree — at the old limit (`MAX_DEPTH / 2 + 1`, the first depth the reader
+/// used to drop) and at `MAX_DEPTH`. The kept source XML is cleared, so this goes through the
+/// writer instead of being handed back unchanged.
+#[test]
+fn deep_fraction_chains_round_trip_through_the_writer() {
+    for n in [MAX_DEPTH / 2 + 1, MAX_DEPTH] {
+        let m = read_omath(&omath(&frac_chain(n, &t("innermost"))), MathJc::CenterGroup);
+        assert_eq!(frac_depth(&m.nodes), n, "{n} levels read");
+        let written = write_str("", false, &Math { omml: String::new(), ..m.clone() }, None);
+        let again = read_str(&written).unwrap_or_else(|| panic!("{n} levels written as {written}"));
+        assert_eq!(again.nodes, m.nodes, "{n} levels round tripped");
+    }
+}
+
 /// wordcraft#6071: the limit still bounds what it bounded, one structure past `MAX_DEPTH`: the
 /// argument isn't read, and a chain far deeper than the limit stops there all the same.
 #[test]
