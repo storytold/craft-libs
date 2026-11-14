@@ -30,7 +30,15 @@ pub fn nums(s: &str) -> Vec<f64> {
 /// An `ItemTransform`: the six coefficients `a b c d tx ty`, or `None` when the value is not
 /// six finite numbers.
 pub fn matrix(s: &str) -> Option<[f64; 6]> {
-    <[f64; 6]>::try_from(nums(s)).ok()
+    let mut tokens = s.split_whitespace();
+    let mut matrix = [0.0_f64; 6];
+    for value in &mut matrix {
+        *value = tokens.next()?.parse().ok()?;
+        if !value.is_finite() {
+            return None;
+        }
+    }
+    tokens.next().is_none().then_some(matrix)
 }
 
 /// A transform as an `ItemTransform` value.

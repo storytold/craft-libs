@@ -55,6 +55,15 @@ fn animated(delays_cs: &[u32], repeat: Option<image::codecs::gif::Repeat>) -> Ve
 }
 
 #[test]
+fn first_frame_compressed_bytes_exclude_extensions_after_the_image_data() {
+    let mut bytes = gif(&[[1, 2, 3], [4, 5, 6]], None, None);
+    assert_eq!(first_frame_compressed_bytes(&bytes), Some(2));
+    bytes.splice(bytes.len() - 1..bytes.len() - 1, [0x21, 0xFE, 1, b'x', 0]);
+    assert_eq!(first_frame_compressed_bytes(&bytes), Some(2));
+    assert_eq!(first_frame_compressed_bytes(b"not a gif"), None);
+}
+
+#[test]
 fn the_first_frames_table_and_transparent_entry() {
     let g = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
     assert_eq!(palette(&gif(&g, None, None)), Some((g.to_vec(), None)));

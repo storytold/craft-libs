@@ -3,6 +3,7 @@
 //!
 //! - [`decode_text`] turns a file's bytes into a string: byte order marks, UTF-8, else
 //!   Windows-1256 when the bytes read as Arabic and Windows-1252 otherwise.
+//! - [`decode_utf8`] requires valid UTF-8 and strips a leading UTF-8 byte order mark.
 //! - [`sniff_delimiter`] picks comma, semicolon or tab.
 //! - [`parse_records`] splits text into records of fields (RFC 4180 with the usual leniency),
 //!   handing each record to a callback, with a cap on the fields kept per record. [`records`]
@@ -27,7 +28,7 @@
 mod decode;
 pub mod sylk;
 
-pub use decode::decode_text;
+pub use decode::{decode_text, decode_utf8};
 
 /// Picks comma, semicolon or tab by consistent field counts in the first non-blank records.
 /// Quotes start only at a candidate field boundary; candidates with incoherent quoted fields

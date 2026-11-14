@@ -11,11 +11,14 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+acadrust = "=0.6.6"
+log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-ai-core = { path = "crates/ai-core" }
+craft-anicraft-format = { path = "crates/anicraft-format" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
 craft-pdn = { path = "crates/pdn" }
 craft-plate-test = { path = "crates/plate-test" }
@@ -53,6 +56,7 @@ vectorcraft-pathops = { git = "https://github.com/storytold/vectorcraft.git", re
 craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
+craft-dwg = { path = "crates/dwg" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
@@ -76,6 +80,7 @@ craft-indd = { path = "crates/indd" }
 craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
 craft-jpeg = { path = "crates/jpeg" }
+craft-jxl = { path = "crates/jxl" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
@@ -111,6 +116,7 @@ craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
 craft-raster-codecs = { path = "crates/raster-codecs" }
+craft-image-codecs = { path = "crates/image-codecs" }
 craft-psd = { path = "crates/psd" }
 craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
@@ -139,6 +145,7 @@ craft-vcard = { path = "crates/vcard" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-vectordrawable = { path = "crates/vectordrawable" }
 craft-xls = { path = "crates/xls" }
+craft-xfl = { path = "crates/xfl" }
 craft-wordmodel = { path = "crates/wordmodel" }
 craft-xlsx = { path = "crates/xlsx" }
 indd = { git = "https://github.com/storytold/indd-utils", rev = "7f3060e5bce78d21ea70e0d5eacb96edce15dfbe" }
@@ -155,6 +162,8 @@ craft-web-host = { path = "crates/web-host" }
 craft-webp = { path = "crates/webp" }
 egui = { version = "0.37", default-features = false }
 md5 = { package = "md-5", version = "0.10", default-features = false }
+jxl-oxide = { version = "0.12", default-features = false }
+jixel = "=0.3.4"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

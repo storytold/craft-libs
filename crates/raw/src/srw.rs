@@ -134,7 +134,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         .filter(|&(l, tp, r, b)| l < r && tp < b && r <= w && b <= h)
         .map_or(Rect::new(0, 0, w, h), |(l, tp, r, b)| Rect::new(l, tp, r - l, b - tp));
     let cfa = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
-        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
+        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
+            Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }
+        }
         _ => return Err(RawError::Unsupported("Samsung raw without a 2x2 CFAPattern".into())),
     };
     // saturation levels and black levels (R, G1, G2, B), in the file's own words

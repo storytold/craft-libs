@@ -25,6 +25,8 @@ fn transforms_and_points() {
     assert_eq!(matrix("1 0 0 1 36"), None);
     assert_eq!(matrix("1 0 0 1 36 72 9"), None);
     assert_eq!(matrix("1 0 0 1 NaN 0"), None);
+    assert_eq!(matrix("0 1 x -1 0 0 5"), None, "invalid coefficients cannot shift later values");
+    assert_eq!(matrix("1e1000 0 0 1 0 0"), None, "non-finite coefficients are rejected");
     assert_eq!(matrix_str(&[1.0, 0.0, 0.0, 1.0, 36.0, -72.5]), "1 0 0 1 36 -72.5");
     assert_eq!(point("3 4"), Some((3.0, 4.0)));
     assert_eq!(point("3 4 5"), Some((3.0, 4.0)));

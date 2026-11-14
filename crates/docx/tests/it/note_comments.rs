@@ -17,6 +17,10 @@ fn note(tag: &str, mark: &str, comment: u32, text: &str) -> String {
 }
 
 fn read_doc() -> Document {
+    read_doc_with_note_relationships(true)
+}
+
+fn read_doc_with_note_relationships(with_note_relationships: bool) -> Document {
     let doc = format!(
         r#"<w:document {W_NS}><w:body><w:p><w:r><w:t>Body</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r><w:r><w:endnoteReference w:id="1"/></w:r></w:p></w:body></w:document>"#
     );
@@ -25,15 +29,40 @@ fn read_doc() -> Document {
     let comments = format!(
         r#"<w:comments {W_NS}><w:comment w:id="7" w:author="Ann" w:initials="A"><w:p><w:r><w:t>On the footnote</w:t></w:r></w:p></w:comment><w:comment w:id="8" w:author="Bob" w:initials="B"><w:p><w:r><w:t>On the endnote</w:t></w:r></w:p></w:comment></w:comments>"#
     );
+    let doc_rels = if with_note_relationships {
+        DOC_RELS
+    } else {
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>"#
+    };
     let bytes = zip(&[
         ("_rels/.rels", ROOT_RELS.as_bytes()),
         ("word/document.xml", doc.as_bytes()),
-        ("word/_rels/document.xml.rels", DOC_RELS.as_bytes()),
+        ("word/_rels/document.xml.rels", doc_rels.as_bytes()),
         ("word/footnotes.xml", footnotes.as_bytes()),
         ("word/endnotes.xml", endnotes.as_bytes()),
         ("word/comments.xml", comments.as_bytes()),
     ]);
     craft_docx::read(&bytes).unwrap()
+}
+
+#[test]
+fn conventional_note_parts_are_read_without_relationships() {
+    let d = read_doc_with_note_relationships(false);
+    let body = d.body[0].as_para().unwrap();
+    let refs: Vec<(NoteKind, u32)> = body
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::NoteRef { kind, id, .. } => Some((*kind, *id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refs.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(), [NoteKind::Footnote, NoteKind::Endnote]);
+    for ((kind, id), wanted) in refs.into_iter().zip(["Foot.", "End."]) {
+        let part = d.parts.get(&id).unwrap_or_else(|| panic!("missing {kind:?} part {id}"));
+        let text = part.blocks[0].as_para().unwrap().plain_text();
+        assert!(text.contains(wanted), "{kind:?}: {text:?}");
+    }
 }
 
 /// comments.xml has to be read before the notes: a note's `w:commentRangeStart` resolves its id

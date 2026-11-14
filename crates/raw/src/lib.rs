@@ -146,8 +146,8 @@ pub use opcodes::{Opcode, OpcodeLists};
 #[cfg(feature = "arw")]
 pub use preview::embedded_preview_dynamic_range_optimized;
 pub use preview::{
-    PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering,
-    embedded_preview_from_range,
+    DecodedPreview, PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_jpeg_preview, embedded_jpeg_preview_covering,
+    embedded_jxl_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering, embedded_preview_from_range,
 };
 #[cfg(feature = "dng")]
 pub use semantic::{SemanticMask, semantic_masks};
@@ -636,6 +636,19 @@ pub fn probe_info(bytes: &[u8]) -> Result<RawInfo> {
     probe_info_with(bytes, &Limits::default())
 }
 
+/// Orientation of a supported raw, read through the same format parser as [`probe_info`].
+pub fn orientation(bytes: &[u8]) -> Option<u16> {
+    if let Ok(info) = probe_info(bytes) {
+        return Some(info.orientation.to_exif());
+    }
+    // A damaged/unsupported pixel IFD must not hide usable orientation metadata from preview
+    // fallback. CR3 keeps IFD0 in its CMT1 box; TIFF-based raws keep it at the file start.
+    if probe(bytes) == Some(RawFormat::Cr3) {
+        return cr3::orientation(bytes);
+    }
+    craft_tiff::Tiff::parse(bytes).ok()?.ifds.first()?.u16(craft_tiff::tags::ORIENTATION).or(Some(1))
+}
+
 /// [`probe_info`] within `limits`: a file that declares more than they allow fails as [`decode_with`] would.
 pub fn probe_info_with(bytes: &[u8], limits: &Limits) -> Result<RawInfo> {
     decode_in(bytes, Mode::Header, limits).map(RawImage::into_info)
@@ -785,6 +798,11 @@ pub struct Cfa {
     pub height: usize,
     /// `width × height` colour indices, row-major, anchored at image pixel (0, 0).
     pub pattern: Vec<u8>,
+    /// The sensor-space coordinate where this periodic pattern is anchored.
+    #[serde(default)]
+    pub origin_x: usize,
+    #[serde(default)]
+    pub origin_y: usize,
 }
 
 impl Cfa {
@@ -801,13 +819,13 @@ impl Cfa {
                 })
             })
             .collect::<Option<_>>()?;
-        (p.len() == 4).then_some(Cfa { width: 2, height: 2, pattern: p })
+        (p.len() == 4).then_some(Cfa { width: 2, height: 2, pattern: p, origin_x: 0, origin_y: 0 })
     }
     /// A 2×2 Bayer layout named in code (`"RGGB"`, `"BGGR"`, `"GRBG"`, `"GBRG"`). Only for literal
     /// names (tested below); anything else falls back to RGGB instead of failing.
     #[cfg_attr(not(feature = "crw"), allow(dead_code))]
     pub(crate) fn bayer_static(s: &'static str) -> Cfa {
-        Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, pattern: vec![0, 1, 1, 2] })
+        Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, pattern: vec![0, 1, 1, 2], origin_x: 0, origin_y: 0 })
     }
     /// The Fujifilm X-Trans 6×6 layout (as commonly documented), anchored at (0, 0).
     pub fn xtrans() -> Cfa {
@@ -822,16 +840,20 @@ impl Cfa {
                 })
             })
             .collect();
-        Cfa { width: 6, height: 6, pattern }
+        Cfa { width: 6, height: 6, pattern, origin_x: 0, origin_y: 0 }
     }
     #[inline]
     pub fn color_at(&self, x: usize, y: usize) -> u8 {
-        self.pattern[(y % self.height) * self.width + (x % self.width)]
+        let relative = |v: usize, origin: usize, period: usize| {
+            let (v, origin) = (v % period, origin % period);
+            if v >= origin { v - origin } else { period - (origin - v) }
+        };
+        self.pattern[relative(y, self.origin_y, self.height) * self.width + relative(x, self.origin_x, self.width)]
     }
     /// The same pattern anchored at `(dx, dy)` of the current anchor (e.g. after cropping to an active area).
     pub fn shifted(&self, dx: usize, dy: usize) -> Cfa {
         let pattern = (0..self.height).flat_map(|y| (0..self.width).map(move |x| (x, y))).map(|(x, y)| self.color_at(x + dx, y + dy)).collect();
-        Cfa { width: self.width, height: self.height, pattern }
+        Cfa { width: self.width, height: self.height, pattern, origin_x: 0, origin_y: 0 }
     }
     pub fn is_bayer(&self) -> bool {
         if self.width != 2 || self.height != 2 {
@@ -848,7 +870,7 @@ impl Cfa {
     }
     /// Pattern name like `"RGGB"` for 2×2 patterns.
     pub fn name(&self) -> String {
-        self.pattern.iter().map(|&c| ['R', 'G', 'B', '?'][c.min(3) as usize]).collect()
+        self.shifted(0, 0).pattern.iter().map(|&c| ['R', 'G', 'B', '?'][c.min(3) as usize]).collect()
     }
     fn valid(&self) -> bool {
         self.width > 0 && self.height > 0 && self.width <= 16 && self.height <= 16 && self.pattern.len() == self.width * self.height

@@ -31,7 +31,9 @@ jobs:
         git -C "$corpus_fetcher" remote add origin https://github.com/storytold/PhotoCraft.git
         git -C "$corpus_fetcher" fetch --quiet --depth=1 origin 74330157cb601573ae4523a95bb9132822fc3918
         git -C "$corpus_fetcher" checkout --quiet --detach FETCH_HEAD
-        (cd "$corpus_fetcher" && cargo xtask corpus --psd --psd-tools --atn)
+        (cd "$corpus_fetcher" && cargo xtask corpus --psd --psd-tools --atn --exr --heif --pngsuite)
+        mkdir -p corpus
+        cp -a "$corpus_fetcher/corpus/." corpus/
         python scripts/test-fetch-pdf-test-fonts.py
         python scripts/fetch-pdf-test-fonts.py "$RUNNER_TEMP/craft-pdf-test-fonts"
         printf 'CRAFT_PSD_CORPUS=%s\n' "$GITHUB_WORKSPACE/$corpus_fetcher/corpus" >> "$GITHUB_ENV"

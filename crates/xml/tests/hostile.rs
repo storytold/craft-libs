@@ -22,12 +22,38 @@ fn text_len(e: &El) -> usize {
 fn the_defaults_are_the_documented_ones() {
     assert_eq!(
         Limits::default(),
-        Limits { max_input: 256 * 1024 * 1024, max_depth: 256, max_nodes: 2_000_000, max_attrs: 1024, max_attrs_total: 4_000_000 }
+        Limits {
+            max_input: 256 * 1024 * 1024,
+            max_depth: 256,
+            max_nodes: 2_000_000,
+            max_elements: usize::MAX,
+            max_attrs: 1024,
+            max_attrs_total: 4_000_000
+        }
     );
-    for e in [Error::TooLarge(1), Error::TooDeep(1), Error::TooManyNodes(1), Error::TooManyAttrs(1), Error::TooManyAttrsTotal(1)] {
+    for e in [
+        Error::TooLarge(1),
+        Error::TooDeep(1),
+        Error::TooManyNodes(1),
+        Error::TooManyElements(1),
+        Error::TooManyAttrs(1),
+        Error::TooManyAttrsTotal(1),
+    ] {
         assert!(e.is_limit(), "{e}");
     }
     assert!(!Error::NoRoot.is_limit() && !Error::Doctype.is_limit());
+}
+
+#[test]
+fn strict_end_tags_keep_first_root_and_entity_compatibility() {
+    let opts = Options { strict_end_tags: true, unknown_entity: UnknownEntity::Literal, doctype: Doctype::Ignore, ..Options::default() };
+    let root = opts.parse(b"<!DOCTYPE a [<!ENTITY ignored 'x'>]><a>&unknown;<b/></a><tail/>").unwrap();
+    assert_eq!(root.name, "a");
+    assert_eq!(root.text().as_ref(), "&unknown;");
+
+    for malformed in [b"<a><b></a>".as_slice(), b"<a><b/>".as_slice(), b"</a><b/>".as_slice()] {
+        assert!(opts.parse(malformed).is_err(), "{}", String::from_utf8_lossy(malformed));
+    }
 }
 
 #[test]
@@ -410,6 +436,23 @@ fn a_node_count_charges_a_budget_shared_by_several_parts() {
     assert!(exact.parse(part.as_bytes()).is_ok());
     let short = Options::default().with_limits(Limits { max_nodes: 200, ..Limits::DEFAULT });
     assert_eq!(short.parse(part.as_bytes()), Err(Error::TooManyNodes(200)));
+}
+
+#[test]
+fn element_limits_are_independent_and_streamed_rows_release_them() {
+    let limited = Options::default().with_limits(Limits { max_elements: 2, ..Limits::DEFAULT });
+    assert_eq!(limited.parse(b"<r><a/><b/></r>"), Err(Error::TooManyElements(2)));
+
+    let streaming = Options::default().with_limits(Limits { max_elements: 3, ..Limits::DEFAULT });
+    let mut rows = 0;
+    let root = streaming
+        .parse_streaming(b"<s><row><a/></row><row><b/></row></s>", &["row"], |_| {
+            rows += 1;
+            Ok::<(), Error>(())
+        })
+        .unwrap();
+    assert_eq!(rows, 2);
+    assert!(root.children.is_empty());
 }
 
 /// A part that cannot be read to its end still gives what came before the failure.
