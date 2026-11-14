@@ -1,5 +1,21 @@
 use super::*;
 
+#[test]
+fn incremental_zlib_encoder_roundtrips_across_drains() {
+    let expected = (0usize..32_768).map(|n| (n.wrapping_mul(37) % 251) as u8).collect::<Vec<_>>();
+    let mut encoder = ZlibEncoder::new();
+    let mut encoded = Vec::new();
+    for chunk in expected.chunks(997) {
+        encoder.write_all(chunk).unwrap();
+        encoded.extend(encoder.take_output());
+    }
+    encoded.extend(encoder.finish().unwrap());
+
+    let mut decoded = Vec::new();
+    flate2::read::ZlibDecoder::new(encoded.as_slice()).read_to_end(&mut decoded).unwrap();
+    assert_eq!(decoded, expected);
+}
+
 /// The straightforward index-based versions, kept as the oracle for the
 /// register-carried rewrites in [`predict`] and [`unpredict`].
 mod reference {
