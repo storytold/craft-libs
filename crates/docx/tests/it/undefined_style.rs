@@ -3,7 +3,7 @@
 //! `<w:pStyle w:val="Footer"/>` without defining Footer.
 use craft_wordmodel::props::LineSpacing;
 use craft_wordmodel::{Block, Document, PartKind};
-use std::io::Write;
+use std::io::{Read, Write};
 
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -57,6 +57,13 @@ fn an_explicit_body_default_on_prevents_normal_inference() {
     let doc = craft_docx::read(&package_with_body_default("Normal", false, true)).unwrap();
     assert!(doc.styles.styles.iter().any(|style| style.id == "Body" && style.default));
     assert!(!doc.styles.styles.iter().any(|style| style.id == "Normal" && style.default));
+    let saved = craft_docx::write(&doc).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+    let mut file = archive.by_name("word/styles.xml").unwrap();
+    let mut styles = String::new();
+    file.read_to_string(&mut styles).unwrap();
+    assert!(styles.contains(r#"w:styleId="Normal" w:default="0""#) || styles.contains(r#"w:default="0" w:styleId="Normal""#));
+    assert!(styles.contains(r#"w:styleId="Body" w:default="1""#) || styles.contains(r#"w:default="1" w:styleId="Body""#));
 }
 
 fn footer_para(d: &Document) -> &craft_wordmodel::Paragraph {
