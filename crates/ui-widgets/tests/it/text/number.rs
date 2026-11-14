@@ -299,8 +299,7 @@ fn a_value_the_check_calls_an_error_commits_and_shows_invalid_with_its_message()
             _ => Validity::Ok,
         };
         let shown = *held.borrow();
-        let out =
-            Field::new("Number").show(ui, |ui, _| NumberField::new("Number", Bind::given(shown).check(&check)).id_salt("number").show(ui)).inner;
+        let out = Field::new("Number").show(ui, |ui, _| NumberField::new("Number", Bind::given(shown).check(check)).id_salt("number").show(ui)).inner;
         if let Some(out) = out {
             shown_id.set(out.response.id);
             if let Some(typed) = out.value().copied() {

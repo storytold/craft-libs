@@ -385,8 +385,8 @@ pub struct PreviewRange {
 /// [`embedded_preview_from_range`], which returns exactly what [`embedded_preview`] returns for the
 /// whole file.
 ///
-/// Pass a prefix that actually covers the pointer's range (read [`Self::offset`] +
-/// [`Self::window_len`] bytes, or start with [`PREVIEW_PREFIX`] and grow when it is not enough):
+/// Pass a prefix that actually covers the pointer's range (read [`PreviewRange::offset`] +
+/// [`PreviewRange::window_len`] bytes, or start with [`PREVIEW_PREFIX`] and grow when it is not enough):
 /// `raf::header` clamps a slice to the buffer it was given, so a prefix that stops
 /// inside the declared extent yields a shorter `window_len` than the file really holds.
 pub fn bounded_preview(bytes: &[u8]) -> Option<PreviewRange> {

@@ -197,7 +197,7 @@ pub struct FlacConfig {
 }
 
 impl FlacConfig {
-    /// Parses the payload of the `dfLa` full box (version and flags first), keeping the metadata blocks and decoding STREAMINFO when present. Fails with [`Error::Truncated`] when a field runs past the end of `data`.
+    /// Parses the payload of the `dfLa` full box (version and flags first), keeping the metadata blocks and decoding STREAMINFO when present. Fails with [`crate::isobmff::Error::Truncated`] when a field runs past the end of `data`.
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut c = Cur::labeled(data, "dfLa");
         c.full_header()?;

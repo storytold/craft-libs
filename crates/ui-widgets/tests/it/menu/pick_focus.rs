@@ -14,6 +14,9 @@ use egui::Id;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+/// The fixture with the counter and the focused id the scoped trial reads back.
+type ScopedRig = (Fixture, Rc<Cell<u32>>, Rc<Cell<Option<Id>>>);
+
 /// A menu bar with Edit (Undo, Redo) and Help (the search over Undo), then a text field holding "hello" that has
 /// focus and the typed run "abc".
 struct Rig {
@@ -117,7 +120,7 @@ fn a_shortcut_pressed_on_the_focused_bar_runs_once_where_focus_was_and_gives_foc
 
 /// A bar whose Help searches the target scope's Toggle, then the Target button inside that scope; returns the count
 /// of Toggle runs and the button's id.
-fn scoped_rig() -> (Fixture, Rc<Cell<u32>>, Rc<Cell<Option<Id>>>) {
+fn scoped_rig() -> ScopedRig {
     use craft_ui::contract::ShowContainer as _;
     use craft_ui::runtime::commands::Commands as _;
     let count = Rc::new(Cell::new(0));

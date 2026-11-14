@@ -205,7 +205,7 @@ fn a_child_with_a_running_animation_runs_every_frame() {
 #[non_exhaustive]
 enum Shown {
     #[command(label = "Shown", modal = "always")]
-    Shown,
+    Visible,
     #[command(label = "Beside", modal = "always")]
     Beside,
     #[command(label = "Measured", modal = "always")]
@@ -252,7 +252,7 @@ impl CommandScene {
         in_region(ui, Rect::from_min_size(ORIGIN, ROOM), |ui| {
             Lazy::new("reader", 0.0).settles(true).show(ui, |ui| {
                 self.runs[0].set(self.runs[0].get() + 1);
-                self.buttons[0].set(Button::command(Shown::Shown).show(ui).id);
+                self.buttons[0].set(Button::command(Shown::Visible).show(ui).id);
                 self.buttons[2].set(Button::command(Scoped::Published).show(ui).id);
                 Stack::new().sizing(Sizing::Content).id_salt("measured").show(ui, |ui, _| {
                     self.buttons[3].set(Button::command(Shown::Measured).show(ui).id);
@@ -295,7 +295,7 @@ fn an_app_command_state_runs_the_settled_child_that_shows_it() {
     let mut frames = Frames::new();
     scene.settle(&mut frames);
     assert!(!scene.disabled(&mut frames, 0), "Shown starts enabled");
-    let disable = |enabled: bool| CommandInput::new().state(Shown::Shown, CommandState::new().enabled(enabled));
+    let disable = |enabled: bool| CommandInput::new().state(Shown::Visible, CommandState::new().enabled(enabled));
     frames.commands(disable(false));
     let (_, [reader, beside]) = scene.frame(&mut frames);
     assert!(reader > 0 && beside == 0, "only the child that shows Shown runs: {reader}, {beside}");

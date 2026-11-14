@@ -8,6 +8,9 @@ use egui::{Id, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// The events a list rig records.
+type Events = Rc<RefCell<Vec<CollectionEvent<usize, RowEvent>>>>;
+
 const NAMES: [&str; 3] = ["Artboard 1", "Artboard 2", "Artboard 3"];
 
 /// The list's id, which a rename request names.
@@ -16,7 +19,7 @@ fn list_id() -> Id {
 }
 
 /// A list of the three rows whose rename draft is `draft`, and what it reported.
-fn rig(draft: fn(&usize) -> Option<String>) -> (Fixture, Rc<RefCell<Vec<CollectionEvent<usize, RowEvent>>>>) {
+fn rig(draft: fn(&usize) -> Option<String>) -> (Fixture, Events) {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let held = seen.clone();
     let mut fixture = Fixture::new(move |ui| {
@@ -215,7 +218,7 @@ fn a_click_on_a_finding_activates_it() {
 }
 
 /// A list of the three rows built by `row`, in `room`, and what it reported.
-fn rows_rig(room: Vec2, row: fn(usize) -> ListRow<'static>) -> (Fixture, Rc<RefCell<Vec<CollectionEvent<usize, RowEvent>>>>) {
+fn rows_rig(room: Vec2, row: fn(usize) -> ListRow<'static>) -> (Fixture, Events) {
     let seen = Rc::new(RefCell::new(Vec::new()));
     let held = seen.clone();
     let mut fixture = Fixture::new(move |ui| {
@@ -790,7 +793,7 @@ fn a_right_click_below_the_rows_asks_for_the_lists_own_menu() {
 }
 
 /// A list with the edge press `edge` (none without), and what it reported.
-fn edge_rig(edge: bool) -> (Fixture, Rc<RefCell<Vec<CollectionEvent<usize, RowEvent>>>>) {
+fn edge_rig(edge: bool) -> (Fixture, Events) {
     use craft_behavior::{Cursor, CursorIcon};
     use craft_keymap::Mods;
     let seen = Rc::new(RefCell::new(Vec::new()));

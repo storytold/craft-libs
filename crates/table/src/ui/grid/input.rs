@@ -129,7 +129,7 @@ impl ClaimedKeys {
         let escape = cx.take_claimed(ESCAPE);
         let advance = ADVANCES.iter().find_map(|&(chord, along, back)| cx.take_claimed(chord).then_some((along, back)));
         let f2 = cx.take_claimed(F2);
-        let edit_key = EDIT_KEYS.iter().fold(false, |any, &chord| cx.take_claimed(chord) || any);
+        let edit_key = EDIT_KEYS.iter().filter(|&&chord| cx.take_claimed(chord)).count() > 0;
         let mut arrows = Vec::new();
         for shift in [false, true] {
             for (key, direction) in ARROWS {

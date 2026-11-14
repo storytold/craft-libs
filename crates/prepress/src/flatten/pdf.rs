@@ -1333,8 +1333,3 @@ fn closed(path: &BezPath) -> BezPath {
     }
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-}

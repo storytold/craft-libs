@@ -318,7 +318,7 @@ pub(crate) fn record_failure(paths: &Paths, error: &str) {
 }
 
 /// The error of the last update, if it failed, once. A long error is cut short at
-/// [`RECORD_LIMIT`] bytes.
+/// 4096 bytes.
 pub fn take_failure(paths: &Paths) -> Option<String> {
     let file = failure_file(paths);
     let error = read_record(&file);
