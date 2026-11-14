@@ -120,7 +120,7 @@ incrementally (the original bytes untouched) or as a full, garbage-collected rew
 `crypt` and `filters`; the reader (`read`) and writer (`write`) are separate and do not use it.
 
 ```rust
-use craft_pdf::cos::{Document, ObjRef, Object, SaveOptions, write_full, write_incremental};
+use craft_pdf::cos::{Document, ObjRef, Object, SaveOptions, write_full, write_full_to, write_incremental};
 
 let doc = Document::open(bytes)?;                              // Arc<Vec<u8>>
 let doc = Document::open_with_password(bytes, Some("owner"))?; // encrypted files
@@ -130,6 +130,7 @@ doc.set(r, Object::Dict(d));                                   // edits land in 
 let r = doc.add(obj);
 let bytes = write_incremental(&doc, &SaveOptions::default())?; // append a revision
 let bytes = write_full(&doc, &SaveOptions::default())?;        // rewrite what the trailer reaches
+let len = write_full_to(&doc, &SaveOptions::default(), file)?; // the same, streamed to a Write
 ```
 
 - Reads every cross-reference form (tables, streams, hybrid `/XRefStm`) and object streams. A
@@ -141,6 +142,16 @@ let bytes = write_full(&doc, &SaveOptions::default())?;        // rewrite what t
   the file's last one, so earlier revisions and their signatures stay as they were; it falls back
   to `write_full` when an edit cannot be appended. `write_full` renumbers what the trailer
   reaches and, by default, packs objects into object streams. Both return the bytes.
+- `write_full_to` is `write_full` handing each object to a `std::io::Write` sink as it is
+  serialized, so the output is never held whole and a large rewrite does not have to fit in
+  memory twice. Only the output buffer goes away: the writer's own working memory (objects
+  parsed while numbering, kept for the write pass up to 64 MiB, object-stream batches of up to
+  8 MiB, the largest single object, bookkeeping that grows with the number of objects and
+  references, and the cross-reference section, built in full before it is written) is the same
+  as `write_full`'s. A document that asked for a new identifier
+  (`Document::require_full_save_with_new_id`) is the exception: the identifier hashes every
+  byte before the trailer, so that output is held until the trailer is written. A failing sink
+  gives `CosError::Io { kind, message }`, `kind` being its `std::io::ErrorKind`.
 - `Document` is cheap to clone: the bytes, index and caches are shared, so a clone is a
   snapshot for undo or a background job.
 - Images: `ImageBudget::decode` gives an image's samples after its filters, CCITT fax and JBIG2

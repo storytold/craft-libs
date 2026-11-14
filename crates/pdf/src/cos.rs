@@ -31,7 +31,7 @@ pub use bytes::Bytes;
 pub use document::{DECODE_PARMS_KEYS, Document, ReadState, Revision, SourceIdentity, XrefEntry};
 pub use object::{Dict, MAX_DECODED, MAX_JBIG2_GLOBALS, Name, ObjRef, Object, PdfString, Stream, TextChars};
 pub use parser::{Lexer, is_whitespace, parse_indirect};
-pub use writer::{SaveOptions, civil_from_days, new_file_id, pdf_date, reachable_objects, serialize, write_full, write_incremental};
+pub use writer::{SaveOptions, civil_from_days, new_file_id, pdf_date, reachable_objects, serialize, write_full, write_full_to, write_incremental};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum CosError {
@@ -55,4 +55,8 @@ pub enum CosError {
     Poisoned,
     #[error("this document was opened read-only with a decode limit and cannot be saved")]
     ReadOnlyLimit,
+    /// The output sink given to [`write_full_to`] failed. `kind` is the sink's
+    /// [`std::io::ErrorKind`], for callers that branch on it; `message` is the error's text.
+    #[error("writing the output failed: {message}")]
+    Io { kind: std::io::ErrorKind, message: String },
 }
