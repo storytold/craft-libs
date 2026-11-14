@@ -123,6 +123,7 @@ fn check(ff: &Path, c: &Case) -> (Vec<u8>, f64) {
     let path = write(c.name, &es);
     let decoded = ffmpeg_decode(ff, &path, pix_fmt);
     assert_eq!(decoded.len(), c.frames * fsize, "{}: ffmpeg's frame count", c.name);
+    assert_eq!(recon.len(), c.frames, "{}: reconstruction count", c.name);
     let mut all = Stats::default();
     for (i, (r, f)) in recon.iter().zip(decoded.chunks_exact(fsize)).enumerate() {
         let mut s = Stats::default();

@@ -614,11 +614,14 @@ mod tests {
             inter_matrix: &[16; 64],
             nonlinear: true,
             dc_prec: 1,
-            f_code: 2,
-            search: 15,
+            f_code: 3,
+            search: 31,
             mb_qcode: &[4; 3],
         };
         let bad = BPred { dirs: MB_FWD, mvs: [[34, 0], [0, 0]] };
+        // the bitstream can carry the vector (f_code 3: -64..64): only the position rules it out
+        let at = |mbx| Search { reference: &f, src: &[0; 256], mbx, mby: 0, f_code: ctx.f_code, range: ctx.search, pmv: bad.mvs[0], lambda: 1 };
+        assert!(at(0).valid(bad.mvs[0]) && !at(1).valid(bad.mvs[0]));
         // a source that the out-of-range (edge-clamped) prediction would match exactly
         let src = predict_b(&ctx, bad, 1, 0);
         let st = SliceSt { qcode: 4, dc: [256; 3], pmv: bad.mvs, skipped: 0, left_mv: bad.mvs, last_dirs: MB_FWD };

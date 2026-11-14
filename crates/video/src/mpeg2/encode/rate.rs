@@ -50,6 +50,14 @@ impl RateCtl {
         self.nb = nb;
     }
 
+    /// The GOP ends `missing` pictures short of what `start_gop` budgeted (the encoder was
+    /// flushed): their bits are not carried into the next GOP.
+    pub fn end_gop(&mut self, missing: u32) {
+        self.remaining -= self.bps * f64::from(missing) / self.fps;
+        self.np = 0;
+        self.nb = 0;
+    }
+
     /// quantiser_scale for the next picture of type `ptype`.
     pub fn qscale(&self, ptype: PictureType) -> f64 {
         let floor = self.bps / (8.0 * self.fps);
@@ -117,6 +125,22 @@ mod tests {
             let got = run(c, b, 4e6, 20);
             assert!((got / 4e6 - 1.0).abs() < 0.03, "{c:?} b {b}: {got}");
         }
+    }
+
+    #[test]
+    fn a_gop_cut_short_gives_its_budget_back() {
+        let mut rc = RateCtl::new(4e6, 25.0, (1.0, 112.0));
+        for _ in 0..20 {
+            // a GOP of 12 that ends after its I picture and two P pictures
+            rc.start_gop(11, 0);
+            for t in [PictureType::I, PictureType::P, PictureType::P] {
+                let q = rc.qscale(t);
+                rc.update(t, (1e7 / q) as u64, q);
+            }
+            rc.end_gop(9);
+        }
+        // what is left is the three pictures' rounding, not nine pictures' budget per GOP
+        assert!(rc.remaining.abs() < 3.0 * 4e6 / 25.0, "{}", rc.remaining);
     }
 
     #[test]

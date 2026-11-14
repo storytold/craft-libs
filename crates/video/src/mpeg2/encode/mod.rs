@@ -171,7 +171,8 @@ pub struct Packet {
     pub data: Vec<u8>,
     pub pts: i64,
     /// Decoding timestamp: `pts` without B pictures; with them, the presentation times in
-    /// decoding order one picture interval earlier, so `dts <= pts`.
+    /// decoding order one picture interval earlier, so `dts <= pts`. A stream of one picture has
+    /// no interval: its `dts` is `pts - 1`.
     pub dts: i64,
     /// An I picture (random access point; in an open GOP the B pictures after it in decoding
     /// order also need the previous GOP).
@@ -449,6 +450,14 @@ impl Encoder {
         if let Some(last) = self.held.pop() {
             self.code_anchor(last, PictureType::P, &mut out);
         }
+        // the GOP ends here: its budget covered `gop_size` pictures, so take back the share of
+        // those that never came, or every flushed GOP would raise the bitrate of the next
+        if self.latest.is_some() {
+            let missing = u64::from(self.cfg.gop_size).saturating_sub(self.count - self.gop_start);
+            if let Some(rc) = self.rc.as_mut() {
+                rc.end_gop(missing as u32);
+            }
+        }
         self.older = None;
         self.latest = None;
         self.anchor_mvs.clear();
@@ -596,16 +605,22 @@ impl Encoder {
         acts.iter().map(|&a| qcode_for(nl, base * (2.0 * a + avg) / (a + 2.0 * avg))).collect()
     }
 
-    /// With B pictures, presentation times must step by a constant amount. Checked before any
-    /// state changes.
+    /// With B pictures, presentation times must step by a constant amount, and the decoding
+    /// times (one step earlier) must fit in an `i64`. Checked before any state changes.
     fn check_pts(&self, pts: i64) -> Result<Option<i64>, EncodeError> {
         if self.cfg.b_pictures == 0 {
             return Ok(None);
         }
-        let Some(last) = self.last_pts else { return Ok(None) };
+        let no_dts = |pts: i64, step: i64| EncodeError::BadTimestamp(format!("{pts}: no decoding time {step} earlier"));
+        let Some(last) = self.last_pts else {
+            // flushed before a second picture, this one decodes at `pts - 1` (see `release`)
+            return if pts == i64::MIN { Err(no_dts(pts, 1)) } else { Ok(None) };
+        };
         let step = pts.checked_sub(last).filter(|&d| d > 0).ok_or_else(|| EncodeError::BadTimestamp(format!("{pts} after {last}")))?;
         match self.pts_step {
             Some(s) if s != step => Err(EncodeError::BadTimestamp(format!("{pts} after {last}: step {step}, earlier {s}"))),
+            // the earliest decoding time is the earlier picture's time less the step
+            None if last.checked_sub(step).is_none() => Err(no_dts(last, step)),
             _ => Ok(Some(step)),
         }
     }
@@ -756,10 +771,14 @@ impl Encoder {
         if self.pts_step.is_none() && !flushing {
             return Vec::new();
         }
-        let off = self.pts_step.unwrap_or(0);
+        // A lone picture flushed before a second one set the step decodes one unit early, the
+        // smallest step there is: if encoding goes on, the next picture decodes at this one's
+        // presentation time whatever the step turns out to be, and that must be later.
+        let off = self.pts_step.unwrap_or(1);
         let mut res = std::mem::take(&mut self.out);
         for p in &mut res {
-            p.dts -= off;
+            // `check_pts` refused the times this would not fit for
+            p.dts = p.dts.saturating_sub(off);
         }
         res
     }

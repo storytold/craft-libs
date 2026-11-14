@@ -80,6 +80,7 @@ fn assert_decodes_to_recon(name: &str, cfg: EncoderConfig, frames: usize) -> Vec
     assert!(packets.windows(2).all(|w| w[0].dts < w[1].dts) && packets.iter().all(|p| p.dts <= p.pts), "{name}: decoding times");
     let pics = decode(&packets);
     assert_eq!(pics.len(), frames, "{name}: picture count");
+    assert_eq!(recon.len(), frames, "{name}: reconstruction count");
     for (i, (p, r)) in pics.iter().zip(&recon).enumerate() {
         assert_eq!(p.pts, i as i64, "{name}: display order");
         for (plane, (a, b)) in [("Y", (&p.y, &r.y)), ("Cb", (&p.cb, &r.cb)), ("Cr", (&p.cr, &r.cr))] {
@@ -259,6 +260,76 @@ fn presentation_times_must_step_evenly_with_b_pictures() {
     for pts in [5, 3, 9] {
         let p = enc.encode(&f, pts).unwrap().remove(0);
         assert_eq!((p.pts, p.dts), (pts, pts));
+    }
+}
+
+#[test]
+fn decoding_times_increase_after_a_lone_picture_is_flushed() {
+    let mut enc = Encoder::new(EncoderConfig::new(32, 32, 25, 1)).unwrap();
+    let (y, c) = (vec![0u8; 32 * 32], vec![0u8; 16 * 16]);
+    let f = YuvFrame { y: &y, cb: &c, cr: &c, y_stride: 32, c_stride: 16 };
+    // one picture, flushed before a second sets the step: it decodes one unit early
+    assert!(enc.encode(&f, 100).unwrap().is_empty());
+    let mut packets = enc.flush();
+    assert_eq!(packets.iter().map(|p| (p.pts, p.dts)).collect::<Vec<_>>(), [(100, 99)]);
+    // encoding goes on: the next picture decodes at the first one's presentation time
+    for pts in [105, 110] {
+        packets.extend(enc.encode(&f, pts).unwrap());
+    }
+    packets.extend(enc.flush());
+    assert_eq!(packets.iter().map(|p| (p.pts, p.dts)).collect::<Vec<_>>(), [(100, 99), (105, 100), (110, 105)]);
+    assert!(packets[1].keyframe);
+}
+
+#[test]
+fn presentation_times_without_a_decoding_time_are_refused() {
+    let (y, c) = (vec![0u8; 32 * 32], vec![0u8; 16 * 16]);
+    let f = YuvFrame { y: &y, cb: &c, cr: &c, y_stride: 32, c_stride: 16 };
+    // the decoding times are one step earlier: they must fit in an i64
+    for (first, second) in [(i64::MIN + 1, i64::MIN + 3), (i64::MIN + 5, i64::MIN + 20)] {
+        let mut enc = Encoder::new(EncoderConfig::new(32, 32, 25, 1)).unwrap();
+        assert!(matches!(enc.encode(&f, i64::MIN), Err(EncodeError::BadTimestamp(_))));
+        assert!(enc.encode(&f, first).unwrap().is_empty());
+        assert!(matches!(enc.encode(&f, second), Err(EncodeError::BadTimestamp(_))), "{second} after {first}");
+        // a refused time leaves the encoder usable
+        assert_eq!(enc.flush().iter().map(|p| (p.pts, p.dts)).collect::<Vec<_>>(), [(first, first - 1)]);
+    }
+    // the lowest times that have one
+    let mut enc = Encoder::new(EncoderConfig::new(32, 32, 25, 1)).unwrap();
+    let mut packets = enc.encode(&f, i64::MIN + 1).unwrap();
+    packets.extend(enc.encode(&f, i64::MIN + 2).unwrap());
+    packets.extend(enc.flush());
+    assert_eq!(packets.iter().map(|p| p.dts).collect::<Vec<_>>(), [i64::MIN, i64::MIN + 1]);
+    // without B pictures every time passes through
+    let mut enc = Encoder::new(EncoderConfig { b_pictures: 0, ..EncoderConfig::new(32, 32, 25, 1) }).unwrap();
+    assert_eq!(enc.encode(&f, i64::MIN).unwrap()[0].dts, i64::MIN);
+}
+
+/// Average bitrate (bit/s) of the scene coded in groups of `group` pictures, flushed after each.
+fn flushed_bitrate(cfg: EncoderConfig, group: usize, groups: usize) -> f64 {
+    let (w, h) = (cfg.width as usize, cfg.height as usize);
+    let fps = f64::from(cfg.fps_num) / f64::from(cfg.fps_den);
+    let mut enc = Encoder::new(cfg).unwrap();
+    let mut bytes = 0;
+    for t in 0..group * groups {
+        let (y, cb, cr) = scene(w, h, w / 2, h / 2, t);
+        let f = YuvFrame { y: &y, cb: &cb, cr: &cr, y_stride: w, c_stride: w / 2 };
+        bytes += enc.encode(&f, t as i64).unwrap().iter().map(|p| p.data.len()).sum::<usize>();
+        if (t + 1) % group == 0 {
+            bytes += enc.flush().iter().map(|p| p.data.len()).sum::<usize>();
+        }
+    }
+    bytes as f64 * 8.0 * fps / (group * groups) as f64
+}
+
+#[test]
+fn flushing_short_gops_keeps_the_average_bitrate() {
+    // every flush ends a GOP of 12 after 4 pictures: the 8 that never came must not leave their
+    // bits to the next GOP
+    for b in [0, 2] {
+        let cfg = EncoderConfig { gop_size: 12, b_pictures: b, rate: RateControl::Abr { kbps: 600 }, ..EncoderConfig::new(176, 144, 25, 1) };
+        let got = flushed_bitrate(cfg, 4, 15);
+        assert!((got / 600e3 - 1.0).abs() < 0.15, "b {b}: {got:.0} bit/s for 600000");
     }
 }
 

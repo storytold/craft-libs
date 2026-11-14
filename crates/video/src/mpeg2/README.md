@@ -109,6 +109,8 @@ What it does:
   come out in decoding order; a B picture is held until the anchor after it is coded, and
   `flush` codes the last held picture as a P picture. With B pictures, `dts` is the presentation
   times in decoding order one picture interval earlier, so presentation times must step evenly.
+  A single picture flushed before a second one gets `dts = pts - 1`. With average bitrate, a
+  GOP that `flush` cuts short gives back the budget of the pictures it did not get.
   `low_delay` is set only without B pictures.
 - GOPs are closed or open. The B pictures shown before a GOP's I picture (coded after it) predict
   backward only in a closed GOP, and from the previous GOP's last anchor too in an open one.
