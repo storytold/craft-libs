@@ -136,19 +136,16 @@ impl ItemSource<CompKey> for CompRows<'_> {
     }
 }
 
-/// `pattern` with `{row}` replaced by `row`.
-fn named(pattern: &Label, row: &str) -> Label {
-    Label::from(craft_i18n::fmt(pattern.as_str(), &[("row", row)]))
+/// The apply marker cell; the cell fills the `{row}` of its name pattern with the row's label.
+fn apply_cell(words: &LayerCompsWords, on: bool) -> ToggleCell {
+    ToggleCell::new(APPLY, ToggleFace::Check, ToggleState::of(on), words.apply_cell.clone())
 }
 
-fn apply_cell(words: &LayerCompsWords, on: bool, row: &str) -> ToggleCell {
-    ToggleCell::new(APPLY, ToggleFace::Check, ToggleState::of(on), named(&words.apply_cell, row))
-}
-
-fn option_cell(words: &LayerCompsWords, option: CompOption, on: bool, row: &str) -> ToggleCell {
+/// The cell of `option`; the cell fills the `{row}` of its name pattern with the row's label.
+fn option_cell(words: &LayerCompsWords, option: CompOption, on: bool) -> ToggleCell {
     let (column, cell) = words_of(words, option);
     let (on_icon, off_icon) = icons_of(option);
-    ToggleCell::new(column_of(option), ToggleFace::icons(IconId::new(on_icon), IconId::new(off_icon)), ToggleState::of(on), named(cell, row))
+    ToggleCell::new(column_of(option), ToggleFace::icons(IconId::new(on_icon), IconId::new(off_icon)), ToggleState::of(on), cell.clone())
         .tooltip(column.clone())
         .always_visible()
 }
@@ -157,16 +154,16 @@ fn option_cell(words: &LayerCompsWords, option: CompOption, on: bool, row: &str)
 fn build_row(cx: &ListCx<'_>, at: usize) -> ListRow<'static> {
     let words = cx.words;
     let Some(comp) = comp_at(cx.comps, at) else {
-        return ListRow::new(words.last_state.clone()).toggle(apply_cell(words, cx.last_state_applied, words.last_state.as_str()));
+        return ListRow::new(words.last_state.clone()).toggle(apply_cell(words, cx.last_state_applied));
     };
-    let mut row = ListRow::new(comp.name.clone()).toggle(apply_cell(words, comp.applied, &comp.name));
+    let mut row = ListRow::new(comp.name.clone()).toggle(apply_cell(words, comp.applied));
     for option in OPTIONS {
-        row = row.toggle(option_cell(words, option, records(comp, option), &comp.name));
+        row = row.toggle(option_cell(words, option, records(comp, option)));
     }
     if comp.missing > 0 {
         let count = comp.missing as u64;
         let tip = words.missing.text(count, &cx.env.format().integer(count));
-        // PLAN: a row's parts trail its name; production draws the warning before the name.
+
         row = row.trailing_part(TrailingPart::new(WARNING), TrailingFace::Icon(IconSpec::svg(IconId::new("warning"))), Label::from(tip));
     }
     row
@@ -251,12 +248,13 @@ pub(super) fn show_list(ui: &mut Ui, stack: &mut BodyCx<'_>, selected: &RefCell<
     let selection = before.map_or_else(Selection::default, |id| Selection::single(CompKey::Comp(id)));
     let source = CompRows { comps: cx.comps, last_state: words.last_state.as_str(), last_state_applied: cx.last_state_applied };
 
-    let mut columns = vec![ColumnSpec::toggle(APPLY, Label::Empty, ToggleColumn::exclusive()), ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0))];
+    let mut columns =
+        vec![ColumnSpec::toggle(APPLY, Label::Empty, ToggleColumn::exclusive()), ColumnSpec::new(NAME, Label::Empty, ColumnWidth::fill(1.0))];
     for option in OPTIONS {
         let (name, _) = words_of(words, option);
         columns.push(ColumnSpec::toggle(column_of(option), name.clone(), ToggleColumn::sweepable()).icon(IconId::new(icons_of(option).0)));
     }
-    // PLAN: no `accepts` rule: a drop before Last Document State lands at index 0 and the row stays first, so every
+    // No `accepts` rule: a drop before Last Document State lands at index 0 and the row stays first, so every
     // spot is a drop target and `can_drag` keeps the fixed row out of the drag.
     let mut list = List::new(cx.label.clone())
         .id(cx.list)
@@ -291,7 +289,9 @@ pub(super) fn show_list(ui: &mut Ui, stack: &mut BodyCx<'_>, selected: &RefCell<
         map_events(cx, session, out.events, &mut steps);
         session.menu
     };
-    show_menu(ui, &out.response, cx, menu, &mut steps);
+    if show_menu(ui, &out.response, cx, menu, &mut steps) {
+        stack.memory::<Session>().menu = None;
+    }
     if cx.comps.is_empty() {
         let _ = Text::new(words.hint.clone()).shade(Shade::Muted).show(ui);
     }
@@ -342,9 +342,10 @@ fn map_events(cx: &ListCx<'_>, session: &mut Session, list: Vec<CollectionEvent<
                 }
             }
             CollectionEvent::ContextMenu(request) => {
-                if let CompKey::Comp(comp) = request.key {
-                    session.menu = Some(comp);
-                }
+                session.menu = match request.key {
+                    CompKey::Comp(comp) => Some(comp),
+                    CompKey::LastState => None,
+                };
             }
             CollectionEvent::Item(CompKey::Comp(comp), RowEvent::Trailing { part, .. }) if part == TrailingPart::new(WARNING) => {
                 steps.push(LayerCompsEvent::ClearWarning(comp));
@@ -357,7 +358,9 @@ fn map_events(cx: &ListCx<'_>, session: &mut Session, list: Vec<CollectionEvent<
                     EditEvent::Update { value: cell, .. } | EditEvent::Set { after: cell, .. } | EditEvent::Commit { after: cell, .. } => {
                         cell.column.clone()
                     }
-                    EditEvent::Begin { before: Mixed::Same(cell), .. } | EditEvent::Cancel { before: Some(Mixed::Same(cell)), .. } => cell.column.clone(),
+                    EditEvent::Begin { before: Mixed::Same(cell), .. } | EditEvent::Cancel { before: Some(Mixed::Same(cell)), .. } => {
+                        cell.column.clone()
+                    }
                     _ => continue,
                 };
                 if column == APPLY {
@@ -378,22 +381,28 @@ fn map_events(cx: &ListCx<'_>, session: &mut Session, list: Vec<CollectionEvent<
     }
 }
 
-/// The row menu of the comp the last context request named: Move Up and Move Down, each disabled at its end.
-fn show_menu(ui: &mut Ui, opener: &Response, cx: &ListCx<'_>, comp: Option<u64>, steps: &mut Steps) {
-    let Some(comp) = comp else { return };
-    let Some(at) = cx.comps.iter().position(|row| row.id == comp) else { return };
+/// The row menu of the comp the last context request named: Move Up and Move Down, each disabled at its end. Returns
+/// whether the menu is over (it closed this pass, or its comp is gone), so the caller forgets the target.
+fn show_menu(ui: &mut Ui, opener: &Response, cx: &ListCx<'_>, comp: Option<u64>, steps: &mut Steps) -> bool {
+    let Some(comp) = comp else { return false };
+    let Some(at) = cx.comps.iter().position(|row| row.id == comp) else { return true };
     let words = cx.words;
-    let picked = Menu::context(words.row_menu.clone(), opener)
-        .show(ui, |ui, _| {
-            let up = MenuItem::new(words.move_up.clone()).enabled(at > 0).show(ui).ran;
-            let down = MenuItem::new(words.move_down.clone()).enabled(at + 1 < cx.comps.len()).show(ui).ran;
-            if up { at.checked_sub(1) } else if down { Some(at + 1) } else { None }
-        })
-        .inner
-        .flatten();
-    if let Some(index) = picked {
+    let shown = Menu::context(words.row_menu.clone(), opener).show(ui, |ui, _| {
+        let up = MenuItem::new(words.move_up.clone()).enabled(at > 0).show(ui).ran;
+        let down = MenuItem::new(words.move_down.clone()).enabled(at + 1 < cx.comps.len()).show(ui).ran;
+        if up {
+            at.checked_sub(1)
+        } else if down {
+            Some(at + 1)
+        } else {
+            None
+        }
+    });
+    let closed = shown.output.closed.is_some();
+    if let Some(index) = shown.inner.flatten() {
         steps.push(LayerCompsEvent::Reorder { comp, index });
     }
+    closed
 }
 
 /// Shows the footer: previous and next at the start, then update, new and delete at the end.

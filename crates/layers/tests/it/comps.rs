@@ -112,4 +112,14 @@ fn a_rename_left_open_does_not_carry_over_to_another_document() {
     rig.fixture.idle(2);
     let second = renames(&rig.seen);
     assert!(second.is_empty(), "the editor of the first document does not open on the second's comp 1: {second:?}");
+
+    rig.document.set(0);
+    rig.fixture.idle(3);
+    rig.fixture.key(Key::Enter, Modifiers::NONE);
+    rig.fixture.idle(2);
+    let back = renames(&rig.seen);
+    assert!(
+        back.iter().all(|(_, name)| !name.contains('Y') && !name.starts_with("Gamma") && !name.starts_with("Delta")),
+        "a commit back in the first document reports nothing of the second's rows: {back:?}"
+    );
 }

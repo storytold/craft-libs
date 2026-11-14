@@ -150,11 +150,7 @@ fn each_filter_type_lists_its_matches() {
     let cases: Vec<(LayerFilter, Vec<&str>, &str)> = vec![
         (by(&|f| (f.by, f.kinds) = (FilterBy::Kind, vec![FilterKind::Pixel])), vec!["Ink", "Paper"], "Kind Pixel: groups match no kind"),
         (by(&|f| (f.by, f.kinds) = (FilterBy::Kind, vec![FilterKind::Type])), vec!["ink notes"], "Kind Type"),
-        (
-            by(&|f| (f.by, f.name) = (FilterBy::Name, String::from(" INK "))),
-            vec!["ink notes", "Ink"],
-            "Name: part of it, any case, spaces trimmed",
-        ),
+        (by(&|f| (f.by, f.name) = (FilterBy::Name, String::from(" INK "))), vec!["ink notes", "Ink"], "Name: part of it, any case, spaces trimmed"),
         (by(&|f| (f.by, f.name) = (FilterBy::Name, String::from("sheet"))), vec!["Sheets"], "Name: a group matches too"),
         (by(&|f| (f.by, f.name) = (FilterBy::Name, String::from("nothing like it"))), vec![], "Name: no match"),
         (by(&|f| (f.by, f.mode) = (FilterBy::Mode, String::from("multiply"))), vec!["Ink"], "Mode Multiply"),
