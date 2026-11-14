@@ -492,7 +492,7 @@ fn token(name: &str) -> String {
     if t.is_empty() { "material".into() } else { t }
 }
 
-/// The name each material is written with: its [`token`], made unique with `_2`, `_3`… where
+/// The name each material is written with: its `token`, made unique with `_2`, `_3`… where
 /// two would be the same, also ignoring case (the names may become file names).
 pub fn material_names(scene: &Scene) -> Vec<String> {
     let mut seen = std::collections::BTreeSet::new();

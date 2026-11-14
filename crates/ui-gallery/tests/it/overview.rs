@@ -190,7 +190,7 @@ fn a_storys_dialog_starts_closed_opens_over_the_view_and_closes_back_to_the_open
     let (closed, inline) = (openers(&fixture), painted_times(&fixture, "Snap to grid"));
     assert!(closed >= 1, "the picked story shows its opener");
     // The Dialog card's opener: the first under the card's title, in its column.
-    let title = fixture.texts().into_iter().find(|run| run.text == "Dialog").expect("the Dialog card's title").rect;
+    let title = fixture.texts().iter().find(|run| run.text == "Dialog").expect("the Dialog card's title").rect;
     let opener = fixture
         .by_role(Role::BUTTON)
         .into_iter()
