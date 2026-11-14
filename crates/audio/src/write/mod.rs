@@ -1,8 +1,11 @@
-//! Encoding: WAV/BWF/RF64 and AIFF/AIFF-C writers (`pcm-encode`) and the FLAC encoder
-//! (`flac-encode`), whole-buffer and streaming.
+//! Encoding: WAV/BWF/RF64 and AIFF/AIFF-C writers (`pcm-encode`), the FLAC encoder
+//! (`flac-encode`) and the coded formats (AAC and ALAC in M4A, MP3, AC-3 and E-AC-3 streams, each
+//! with its codec's feature), whole-buffer and streaming.
 
 #[cfg(feature = "pcm-encode")]
 mod aiff;
+#[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
+mod coded;
 #[cfg(feature = "flac-encode")]
 pub(crate) mod flac;
 mod pcm;
@@ -16,8 +19,13 @@ use crate::{AudioBuffer, AudioError, ChannelLayout, EncodeFormat, EncodeOptions,
 pub use raw::{pcm_aiff_file, pcm_aiff_header, pcm_wav_file, pcm_wav_header};
 use std::io::{Seek, Write};
 
-/// Encode `buf` as WAV/BWF, AIFF/AIFF-C or FLAC. Integer depths clamp samples to [-1, 1]; float
+/// Encode `buf` as the file `opts.format` names. Integer depths clamp samples to [-1, 1]; float
 /// keeps values above full scale. `opts.layout`, when set, must have `buf`'s channel count.
+///
+/// The lossy formats take `opts.rate_control`. AAC and ALAC are written as M4A, which records the
+/// encoder's priming and the exact length, so the file decodes to `buf`'s frames. MP3, AC-3 and
+/// E-AC-3 are raw streams, which have no place for that: they decode with the codec's delay in
+/// front and padded to whole frames.
 ///
 /// ```
 /// # #[cfg(feature = "pcm-encode")] {
@@ -32,6 +40,7 @@ use std::io::{Seek, Write};
 pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
     check_built(opts.format)?;
     // Checked for every format; WAV and FLAC record it.
+    #[cfg_attr(not(any(feature = "pcm-encode", feature = "flac-encode")), allow(unused_variables))]
     let mask = opts.layout.map(|l| wav_mask(&l, buf.channels.len())).transpose()?;
     match opts.format {
         #[cfg(feature = "pcm-encode")]
@@ -40,6 +49,8 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
         EncodeFormat::Aiff => aiff::encode(buf, opts.bit_depth, opts.dither),
         #[cfg(feature = "flac-encode")]
         EncodeFormat::Flac => flac::encode(buf, opts.bit_depth, opts.dither, mask),
+        #[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
+        EncodeFormat::Aac | EncodeFormat::Alac | EncodeFormat::Mp3 | EncodeFormat::Ac3 | EncodeFormat::Eac3 => coded::encode(buf, opts),
         #[allow(unreachable_patterns)]
         f => Err(AudioError::Unsupported(format!("writing {f:?}"))),
     }
@@ -47,31 +58,48 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
 
 /// Refuses a format whose writer is not built, before anything else about the request is checked.
 fn check_built(format: EncodeFormat) -> Result<()> {
-    let (built, feature) =
-        if format == EncodeFormat::Flac { (cfg!(feature = "flac-encode"), "flac-encode") } else { (cfg!(feature = "pcm-encode"), "pcm-encode") };
-    if built { Ok(()) } else { Err(AudioError::Unsupported(format!("writing {format:?} needs the `{feature}` feature"))) }
+    if format.is_built() { Ok(()) } else { Err(AudioError::Unsupported(format!("writing {format:?} needs the `{}` feature", format.feature()))) }
 }
 
-/// The file extensions of the formats [`encode`] can write (those whose features are on).
-#[cfg(all(feature = "pcm-encode", feature = "flac-encode"))]
-pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc", "flac"];
-/// The file extensions of the formats [`encode`] can write (those whose features are on).
-#[cfg(all(feature = "pcm-encode", not(feature = "flac-encode")))]
-pub const ENCODE_EXTENSIONS: &[&str] = &["wav", "wave", "bwf", "aif", "aiff", "aifc"];
-/// The file extensions of the formats [`encode`] can write (those whose features are on).
-#[cfg(all(feature = "flac-encode", not(feature = "pcm-encode")))]
-pub const ENCODE_EXTENSIONS: &[&str] = &["flac"];
+/// Every extension [`ENCODE_EXTENSIONS`] can list, and how many of them the features built give.
+const fn extensions() -> ([&'static str; 12], usize) {
+    let mut all = [""; 12];
+    let mut n = 0;
+    macro_rules! add {
+        ($built:expr, $($extension:literal),+) => {
+            if $built {
+                $(
+                    all[n] = $extension;
+                    n += 1;
+                )+
+            }
+        };
+    }
+    add!(cfg!(feature = "pcm-encode"), "wav", "wave", "bwf", "aif", "aiff", "aifc");
+    add!(cfg!(feature = "flac-encode"), "flac");
+    add!(cfg!(any(feature = "aac-encode", feature = "alac-encode")), "m4a");
+    add!(cfg!(feature = "mp3-encode"), "mp3");
+    add!(cfg!(feature = "ac3-encode"), "ac3");
+    add!(cfg!(feature = "eac3-encode"), "eac3", "ec3");
+    (all, n)
+}
 
-/// The format [`encode`] writes for a file extension or format name (`wav`, `aiff`, `flac`,
-/// case-insensitive, with or without the dot), or `None` when it cannot write it. `aifc` is
-/// AIFF: float AIFF is written as AIFF-C.
+const EXTENSIONS: ([&str; 12], usize) = extensions();
+
+/// The file extensions of the formats [`encode`] can write (those whose features are on).
+pub const ENCODE_EXTENSIONS: &[&str] = EXTENSIONS.0.split_at(EXTENSIONS.1).0;
+
+/// The format [`encode`] writes for a file extension or format name (`wav`, `aiff`, `flac`, `m4a`,
+/// `mp3`, `ac3`, `eac3`, case-insensitive, with or without the dot), or `None` when it cannot
+/// write it. `aifc` is AIFF: float AIFF is written as AIFF-C. `m4a` is AAC when the AAC encoder
+/// is built and ALAC otherwise; `alac` always names ALAC.
 ///
 /// ```
 /// # #[cfg(feature = "pcm-encode")] {
 /// use craft_audio::{EncodeFormat, encode_format_for};
 ///
 /// assert_eq!(encode_format_for(".AIFF"), Some(EncodeFormat::Aiff));
-/// assert_eq!(encode_format_for("mp3"), None);
+/// assert_eq!(encode_format_for("ogg"), None);
 /// # }
 /// ```
 pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
@@ -82,6 +110,18 @@ pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
         "aif" | "aiff" | "aifc" => Some(EncodeFormat::Aiff),
         #[cfg(feature = "flac-encode")]
         "flac" => Some(EncodeFormat::Flac),
+        #[cfg(feature = "aac-encode")]
+        "m4a" => Some(EncodeFormat::Aac),
+        #[cfg(all(feature = "alac-encode", not(feature = "aac-encode")))]
+        "m4a" => Some(EncodeFormat::Alac),
+        #[cfg(feature = "alac-encode")]
+        "alac" => Some(EncodeFormat::Alac),
+        #[cfg(feature = "mp3-encode")]
+        "mp3" => Some(EncodeFormat::Mp3),
+        #[cfg(feature = "ac3-encode")]
+        "ac3" => Some(EncodeFormat::Ac3),
+        #[cfg(feature = "eac3-encode")]
+        "eac3" | "ec3" => Some(EncodeFormat::Eac3),
         _ => None,
     }
 }
@@ -102,11 +142,11 @@ fn failed_write_error() -> AudioError {
     AudioError::Encode("the stream encoder already failed on an earlier write; its output is incomplete".into())
 }
 
-/// Writes WAV/BWF (RF64 above 4 GiB), AIFF / AIFF-C `fl32` or FLAC block by block, producing
-/// the same bytes [`encode`] would for the whole buffer: a file of any length never
-/// has to fit in memory. The file starts at the sink's position, and nothing may follow that
-/// position (a new file, or one truncated there): the encoder cannot truncate a `Write + Seek`,
-/// so the bytes of a longer file already there would stay after the new one.
+/// Writes a file of any [`EncodeFormat`] block by block, producing the same bytes [`encode`]
+/// would for the whole buffer: a file of any length never has to fit in memory. The file starts
+/// at the sink's position, and nothing may follow that position (a new file, or one truncated
+/// there): the encoder cannot truncate a `Write + Seek`, so the bytes of a longer file already
+/// there would stay after the new one.
 ///
 /// ```
 /// # #[cfg(feature = "flac-encode")] {
@@ -125,30 +165,27 @@ fn failed_write_error() -> AudioError {
 /// ```
 pub struct FileEncoder<W: Write + Seek> {
     writer: Writer<W>,
+    format: EncodeFormat,
     channels: usize,
 }
 
 impl<W: Write + Seek> std::fmt::Debug for FileEncoder<W> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let format = match &self.writer {
-            #[cfg(feature = "pcm-encode")]
-            Writer::Wav(_) => EncodeFormat::Wav,
-            #[cfg(feature = "pcm-encode")]
-            Writer::Aiff(_) => EncodeFormat::Aiff,
-            #[cfg(feature = "flac-encode")]
-            Writer::Flac(_) => EncodeFormat::Flac,
-        };
-        f.debug_struct("FileEncoder").field("format", &format).finish_non_exhaustive()
+        f.debug_struct("FileEncoder").field("format", &self.format).finish_non_exhaustive()
     }
 }
 
-enum Writer<W> {
+// The writers differ in size with the features built; the coded one is boxed for its encoder.
+#[allow(clippy::large_enum_variant)]
+enum Writer<W: Write + Seek> {
     #[cfg(feature = "pcm-encode")]
     Wav(wav::Writer<W>),
     #[cfg(feature = "pcm-encode")]
     Aiff(aiff::Writer<W>),
     #[cfg(feature = "flac-encode")]
     Flac(flac::Writer<W>),
+    #[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
+    Coded(Box<coded::Writer<W>>),
 }
 
 impl<W: Write + Seek> FileEncoder<W> {
@@ -156,7 +193,10 @@ impl<W: Write + Seek> FileEncoder<W> {
     /// `opts.layout`, when set, must have `channels` channels.
     pub fn new(out: W, opts: &EncodeOptions, sample_rate: u32, channels: u16) -> Result<Self> {
         check_built(opts.format)?;
-        let (depth, dither, channels) = (opts.bit_depth, opts.dither, usize::from(channels));
+        let channels = usize::from(channels);
+        #[cfg_attr(not(any(feature = "pcm-encode", feature = "flac-encode")), allow(unused_variables))]
+        let (depth, dither) = (opts.bit_depth, opts.dither);
+        #[cfg_attr(not(any(feature = "pcm-encode", feature = "flac-encode")), allow(unused_variables))]
         let mask = opts.layout.map(|l| wav_mask(&l, channels)).transpose()?;
         let writer = match opts.format {
             #[cfg(feature = "pcm-encode")]
@@ -172,24 +212,45 @@ impl<W: Write + Seek> FileEncoder<W> {
             EncodeFormat::Aiff => Writer::Aiff(aiff::Writer::new(out, channels, sample_rate, depth, dither)?),
             #[cfg(feature = "flac-encode")]
             EncodeFormat::Flac => Writer::Flac(flac::Writer::new(out, channels, sample_rate, depth, dither, mask)?),
+            #[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
+            EncodeFormat::Aac | EncodeFormat::Alac | EncodeFormat::Mp3 | EncodeFormat::Ac3 | EncodeFormat::Eac3 => {
+                Writer::Coded(Box::new(coded::Writer::new(out, opts, sample_rate, channels)?))
+            }
             #[allow(unreachable_patterns)]
             f => return Err(AudioError::Unsupported(format!("writing {f:?}"))),
         };
-        Ok(FileEncoder { writer, channels })
+        Ok(FileEncoder { writer, format: opts.format, channels })
+    }
+
+    /// The constant bit rate the file is written at, in bits per second for all channels
+    /// together: the rate asked for or the format's default, moved to one the stream
+    /// can carry as [`RateControl::Bitrate`](crate::RateControl::Bitrate) describes. `None` for the lossless
+    /// formats and for AAC at a constant quality.
+    pub fn bitrate(&self) -> Option<u32> {
+        match &self.writer {
+            #[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
+            Writer::Coded(w) => w.bitrate(),
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
     }
 
     /// Fails, without writing anything, when `frames` more frames would not fit the format (an
-    /// AIFF holds 4 GiB, a FLAC 2^36 - 1 frames).
+    /// AIFF holds 4 GiB, a FLAC 2^36 - 1 frames). The coded formats have no limit a file reaches.
     pub fn check_room(&self, frames: u64) -> Result<()> {
         match &self.writer {
             #[cfg(feature = "pcm-encode")]
-            Writer::Wav(w) => w.check_room(frames),
+            Writer::Wav(w) => w.check_room(frames).map(drop),
             #[cfg(feature = "pcm-encode")]
-            Writer::Aiff(w) => w.check_room(frames),
+            Writer::Aiff(w) => w.check_room(frames).map(drop),
             #[cfg(feature = "flac-encode")]
-            Writer::Flac(w) => w.check_room(frames),
+            Writer::Flac(w) => w.check_room(frames).map(drop),
+            #[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
+            Writer::Coded(_) => {
+                let _ = frames;
+                Ok(())
+            }
         }
-        .map(drop)
     }
 
     /// Appends the first `frames` frames of `block`, one slice per channel (`&[Vec<f32>]`,
@@ -212,10 +273,13 @@ impl<W: Write + Seek> FileEncoder<W> {
             Writer::Aiff(w) => w.write(block, frames),
             #[cfg(feature = "flac-encode")]
             Writer::Flac(w) => w.write(block, frames),
+            #[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
+            Writer::Coded(w) => w.write(block, frames),
         }
     }
 
-    /// Completes the headers and hands back `out`, positioned at the end of the file.
+    /// Encodes what is still buffered, completes the headers and hands back `out`, positioned at
+    /// the end of the file.
     pub fn finish(self) -> Result<W> {
         match self.writer {
             #[cfg(feature = "pcm-encode")]
@@ -224,7 +288,38 @@ impl<W: Write + Seek> FileEncoder<W> {
             Writer::Aiff(w) => w.finish(),
             #[cfg(feature = "flac-encode")]
             Writer::Flac(w) => w.finish(),
+            #[cfg(any(feature = "aac-encode", feature = "alac-encode", feature = "mp3-encode", feature = "ac3-encode", feature = "eac3-encode"))]
+            Writer::Coded(w) => w.finish(),
         }
+    }
+}
+
+impl EncodeOptions {
+    /// Whether a file of `channels` channels at `sample_rate` can be written with these options:
+    /// `Ok`, or the error [`FileEncoder::new`] and [`encode`] would return, with nothing written.
+    /// For choosing a format before a file is created; [`EncodeFormat::sample_rates`],
+    /// [`EncodeFormat::max_channels`] and [`EncodeFormat::supports_layout`] say what a format takes.
+    ///
+    /// ```
+    /// # #[cfg(feature = "mp3-encode")] {
+    /// use craft_audio::{EncodeFormat, EncodeOptions};
+    ///
+    /// let mp3 = EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(200_000);
+    /// assert!(mp3.check(48_000, 2).is_ok());
+    /// assert!(mp3.check(96_000, 2).is_err()); // not an MP3 sample rate
+    /// assert_eq!(mp3.bitrate(48_000, 2).unwrap(), Some(192_000)); // the table rate below 200 kbit/s
+    /// # }
+    /// ```
+    pub fn check(&self, sample_rate: u32, channels: u16) -> Result<()> {
+        self.bitrate(sample_rate, channels).map(drop)
+    }
+
+    /// The constant bit rate such a file would be written at ([`FileEncoder::bitrate`]), or the
+    /// error [`EncodeOptions::check`] returns.
+    pub fn bitrate(&self, sample_rate: u32, channels: u16) -> Result<Option<u32>> {
+        // The encoder a file would get, on a sink that is thrown away: what it accepts and the
+        // rate it settles on are then the writer's by construction.
+        Ok(FileEncoder::new(std::io::Cursor::new(Vec::new()), self, sample_rate, channels)?.bitrate())
     }
 }
 
@@ -252,7 +347,7 @@ pub fn wav_float_header(sample_rate: u32, channels: u16, frames: u64) -> Result<
 
 // With only one of `pcm-encode` and `flac-encode`, the other's formats are refused, not silently
 // written as something else.
-#[cfg(all(test, not(all(feature = "pcm-encode", feature = "flac-encode"))))]
+#[cfg(all(test, any(feature = "pcm-encode", feature = "flac-encode"), not(all(feature = "pcm-encode", feature = "flac-encode"))))]
 mod tests {
     use super::*;
 
@@ -265,6 +360,7 @@ mod tests {
         let enc = FileEncoder::new(std::io::Cursor::new(Vec::new()), &opts, 48_000, 1);
         assert!(matches!(enc, Err(AudioError::Unsupported(_))));
         assert_eq!(encode_format_for(name), None);
+        assert!(!format.is_built() && EncodeFormat::ALL.iter().any(|f| f.is_built()));
         // Also with a layout it could not use.
         let opts = opts.with_layout(ChannelLayout::STEREO);
         assert!(matches!(encode(&buf, &opts), Err(AudioError::Unsupported(_))));

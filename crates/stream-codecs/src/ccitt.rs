@@ -152,6 +152,76 @@ fn starts_with_end_of_line(data: &[u8]) -> bool {
 
 /// Rows of 1-bit samples filled from a decoder's pixels: `columns` a row, each row on a new byte, at
 /// most `rows` rows. Pixels past a row's end and rows past the last are dropped.
+/// Reason a raw CCITT fax decode stopped or failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CcittErrorKind {
+    UnexpectedEof,
+    Overflow,
+    InvalidData,
+}
+
+impl std::fmt::Display for CcittErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnexpectedEof => f.write_str("unexpected end of CCITT stream"),
+            Self::Overflow => f.write_str("CCITT stream overflow"),
+            Self::InvalidData => f.write_str("invalid CCITT data"),
+        }
+    }
+}
+
+/// Result of [`decode_ccitt_raw`], including any partial rows decoded before an error.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CcittRawOutput {
+    pub data: Vec<u8>,
+    pub rows_decoded: u32,
+    pub bytes_consumed: usize,
+    pub error: Option<CcittErrorKind>,
+}
+
+/// Decodes CCITT Group 3 or Group 4 fax `data` with caller-specified `params` and `max_rows`,
+/// returning packed MSB-first rows, rows decoded, input bytes consumed, and any decode error.
+pub fn decode_ccitt_raw(data: &[u8], p: &CcittParams, max_rows: u32) -> Result<CcittRawOutput, CodecError> {
+    if p.columns <= 0 || p.columns > i64::from(MAX_CCITT_COLUMNS) {
+        return Err(CodecError::Corrupt { filter: "CCITTFaxDecode", detail: format!("CCITT columns {} outside 1..={MAX_CCITT_COLUMNS}", p.columns) });
+    }
+    let columns = u32::try_from(p.columns).map_err(|_| CodecError::Corrupt { filter: "CCITTFaxDecode", detail: "invalid CCITT columns".into() })?;
+    let rows = if p.rows > 0 { u32::try_from(p.rows).unwrap_or(max_rows).min(max_rows) } else { max_rows };
+    let settings = hayro_ccitt::DecodeSettings {
+        columns,
+        rows,
+        end_of_block: p.end_of_block,
+        end_of_line: p.end_of_line,
+        rows_are_byte_aligned: p.encoded_byte_align && (p.k < 0 || !starts_with_end_of_line(data)),
+        encoding: match p.k {
+            ..0 => hayro_ccitt::EncodingMode::Group4,
+            0 => hayro_ccitt::EncodingMode::Group3_1D,
+            k => hayro_ccitt::EncodingMode::Group3_2D { k: u32::try_from(k).unwrap_or(u32::MAX) },
+        },
+        invert_black: false,
+    };
+    let mut out = Rows::new(columns as usize, rows as usize, p.black_is_1);
+    let (bytes_consumed, error) = match hayro_ccitt::decode(data, &mut out, &mut hayro_ccitt::DecoderContext::new(settings)) {
+        Ok(used) => (used, None),
+        Err(e) => {
+            let kind = match e {
+                hayro_ccitt::DecodeError::UnexpectedEof => CcittErrorKind::UnexpectedEof,
+                hayro_ccitt::DecodeError::Overflow => CcittErrorKind::Overflow,
+                _ => CcittErrorKind::InvalidData,
+            };
+            let used = if out.done > 0 {
+                let mut drop_rows = Rows::new(columns as usize, out.done, p.black_is_1);
+                let retry = hayro_ccitt::DecodeSettings { rows: u32::try_from(out.done).unwrap_or(u32::MAX), ..settings };
+                hayro_ccitt::decode(data, &mut drop_rows, &mut hayro_ccitt::DecoderContext::new(retry)).unwrap_or(data.len())
+            } else {
+                0
+            };
+            (used, Some(kind))
+        }
+    };
+    Ok(CcittRawOutput { data: out.out, rows_decoded: u32::try_from(out.done).unwrap_or(u32::MAX), bytes_consumed, error })
+}
+
 pub(crate) struct Rows {
     pub(crate) out: Vec<u8>,
     row: Vec<u8>,

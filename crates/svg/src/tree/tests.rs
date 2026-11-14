@@ -81,7 +81,8 @@ fn every_limit_refuses_the_file_past_it() {
     let chain: String = (0..20).map(|i| format!("<g id='g{i}'><use xlink:href='#g{}'/></g>", i + 1)).collect();
     let uses = svg(&format!("<defs>{chain}<rect id='g20' width='1' height='1'/></defs><use xlink:href='#g0'/>"));
     assert!(!guard::deeper_than(&uses, 24));
-    assert_eq!(try_parse(&uses, &shallow()).err(), Some(Error::TooDeep(24)));
+    let referenced_depth = Limits { tree_depth: 24, ..shallow() };
+    assert_eq!(try_parse(&uses, &referenced_depth).err(), Some(Error::TooDeep(24)));
     // Attributes on one element.
     let wide = svg(&format!("<g{}/>", (0..40).map(|i| format!(" a{i}='1'")).collect::<String>()));
     assert!(try_parse(&wide, &Limits { attributes: 40, ..shallow() }).is_ok());

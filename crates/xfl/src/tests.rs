@@ -1,7 +1,7 @@
 //! The zip reader against the layouts writers produce and the archives an attacker would
 //! (ADR 0054). Archives are made by the independent writer in `tests/support/fla.rs`.
 
-use super::pack::{self, Raw, write};
+use super::pack::{self, Raw, write, write_at};
 use super::*;
 
 fn zip(files: &[(&str, &[u8], bool)]) -> Vec<u8> {
@@ -262,6 +262,47 @@ fn central_directory_must_be_consumed_exactly() {
 }
 
 #[test]
+fn nonempty_comment_eocd_candidate_does_not_mask_valid_archive() {
+    let mut bytes = zip(&[("a.xml", b"x", false)]);
+    let end = bytes.len() - 22;
+    // The fake EOCD sits in the real EOCD's comment and claims the real directory plus the
+    // real EOCD as a shifted directory. Candidate selection must reject its trailing bytes.
+    bytes[end + 20..end + 22].copy_from_slice(&22u16.to_le_bytes());
+    bytes.extend_from_slice(&END.to_le_bytes());
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&73u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+
+    let archive = Archive::open(&bytes).unwrap();
+    assert_eq!(archive.read("a.xml").unwrap().unwrap(), b"x");
+}
+
+#[test]
+fn repeated_eocd_directory_candidates_reuse_entry_validation() {
+    let entries = (0..1024).map(|index| Raw::new(&format!("entry-{index:04}.xml"), b"", false)).collect::<Vec<_>>();
+    let mut bytes = write(&entries, false);
+    let eocd = bytes.len() - 22;
+    bytes[eocd + 20..eocd + 22].copy_from_slice(&1000u16.to_le_bytes());
+    bytes.extend_from_slice(&vec![0; 1000]);
+    let directory_start = u32_at(&bytes, eocd + 16).unwrap() as usize;
+    let directory_size = u64::from(u32_at(&bytes, eocd + 12).unwrap());
+    let count = u64::from(u16_at(&bytes, eocd + 10).unwrap());
+    let mut jumps = std::collections::HashMap::new();
+
+    assert!(directory_is_exact(&bytes, directory_start, directory_size, count, &mut jumps));
+    let indexed_records = jumps.len();
+    // Each size models a fake shifted EOCD in the archive comment that starts at the same
+    // central-directory record but claims additional bytes through the real EOCD.
+    for extra in 1..=1000 {
+        assert!(!directory_is_exact(&bytes, directory_start, directory_size + extra, count, &mut jumps));
+    }
+    assert_eq!(jumps.len(), indexed_records, "repeated candidates must reuse the indexed entry jumps");
+}
+
+#[test]
 fn deeply_nested_folders_are_refused() {
     let ok = format!("{}a.xml", "f/".repeat(MAX_DEPTH));
     assert!(Archive::open(&zip(&[(&ok, b"x", false)])).is_ok());
@@ -317,6 +358,62 @@ fn zip64_archives_open_and_their_damage_is_named() {
     let dir_at = u32_at(&t, t.len() - 6).unwrap() as usize;
     t[dir_at + 24..dir_at + 28].copy_from_slice(&u32::MAX.to_le_bytes());
     assert_eq!(Archive::open(&t).err(), Some(ZipError::DamagedEntry("a.xml".into(), "has no ZIP64 sizes")));
+}
+
+#[test]
+fn zip64_count_sentinel_keeps_a_comment_eocd_from_masking_the_archive() {
+    let mut bytes = write(&[Raw::new("a.xml", b"x", false)], true);
+    let end = bytes.len() - 22;
+    let locator = end - 20;
+    let zip64_end = locator - 56;
+    let directory_size = u64_at(&bytes, zip64_end + 40).unwrap() as u32;
+    let directory_offset = u64_at(&bytes, zip64_end + 48).unwrap() as u32;
+    // Count requires ZIP64, while directory size and offset still fit in the classic fields.
+    bytes[end + 12..end + 16].copy_from_slice(&directory_size.to_le_bytes());
+    bytes[end + 16..end + 20].copy_from_slice(&directory_offset.to_le_bytes());
+    bytes[end + 20..end + 22].copy_from_slice(&22u16.to_le_bytes());
+    // This valid empty EOCD-shaped signature is inside the real end record's comment.
+    bytes.extend_from_slice(&END.to_le_bytes());
+    bytes.extend_from_slice(&[0; 18]);
+
+    let archive = Archive::open(&bytes).unwrap();
+    assert_eq!(archive.read("a.xml").unwrap().unwrap(), b"x");
+}
+
+#[test]
+fn empty_relative_zip64_directory_opens_after_sfx_stub() {
+    let mut bytes = b"MZ self-extracting stub".to_vec();
+    bytes.extend_from_slice(&write_at(&[], true, 0));
+    let archive = Archive::open(&bytes).unwrap();
+    assert_eq!(archive.names().count(), 0);
+}
+
+#[test]
+fn self_extracting_archives_support_relative_and_adjusted_offsets() {
+    let entries = [Raw::new("DOMDocument.xml", b"<DOMDocument/>", true), Raw::new("LIBRARY/a.xml", b"<DOMSymbolItem/>", false)];
+    let stub = b"MZ\x90\0 self-extracting program with no ZIP signatures ".repeat(31);
+    for zip64 in [false, true] {
+        for adjusted in [false, true] {
+            let base = if adjusted { stub.len() as u64 } else { 0 };
+            let mut bytes = stub.clone();
+            bytes.extend_from_slice(&write_at(&entries, zip64, base));
+            let archive = Archive::open(&bytes).unwrap_or_else(|error| panic!("ZIP64 {zip64}, adjusted {adjusted}: {error}"));
+            assert_eq!(archive.read("DOMDocument.xml").unwrap().unwrap(), b"<DOMDocument/>");
+            assert_eq!(archive.read("LIBRARY/a.xml").unwrap().unwrap(), b"<DOMSymbolItem/>");
+            if !zip64 && !adjusted {
+                let eocd = bytes.len() - 22;
+                let stated = u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into().unwrap()) as usize;
+                assert_eq!(&bytes[stated + stub.len()..stated + stub.len() + 4], b"PK\x01\x02");
+            }
+        }
+    }
+
+    // A gap between the directory and end record cannot be guessed as a prefix shift.
+    let mut bytes = stub;
+    bytes.extend_from_slice(&write_at(&entries, false, 0));
+    let eocd = bytes.len() - 22;
+    bytes.splice(eocd..eocd, *b"junk");
+    assert!(Archive::open(&bytes).is_err());
 }
 
 #[test]

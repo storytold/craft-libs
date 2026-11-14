@@ -5,8 +5,9 @@
 //! write: the end-of-central-directory record (and its ZIP64 form), central directory entries
 //! with ZIP64 sizes, local headers, data descriptors, "stored" and "deflate" entries (inflated
 //! by `miniz_oxide`), UTF-8 names (flag bit 11 or the Info-ZIP Unicode path field) and CP437
-//! names. Encryption, other compression methods and split archives are refused with a clear
-//! error.
+//! names. Self-extracting archives with ZIP data after a program stub are supported whether
+//! their offsets count from the ZIP data or from the start of the file. Encryption, other
+//! compression methods and split archives are refused with a clear error.
 //!
 //! The archive is treated as hostile. Every offset and size is checked against the bytes it
 //! comes from; entries may not overlap each other or the central directory; a name that would
@@ -237,11 +238,22 @@ fn method_name(method: u16) -> &'static str {
 }
 
 /// The end of the central directory: (entry count, its size, its offset, where it must end).
+///
+/// For a self-extracting archive, the record's offsets may be relative to the ZIP data rather
+/// than the start of the executable. The returned directory offset stays as written; its real
+/// location is resolved against `dir_limit` when opening the archive.
 fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
     // The end record is in the last 22 + 65535 bytes (it may carry a comment).
     let lo = data.len().saturating_sub(22 + 65_535);
     let mut eocd = None;
+    // A shifted empty SFX archive has no central-directory signature with which to distinguish
+    // it from an empty EOCD-shaped record inside the preceding archive's comment. Keep it as a
+    // last resort while searching for an older, structurally stronger candidate.
+    let mut empty_sfx = None;
     let mut fallback = None;
+    // Fake EOCD records in a comment can all describe the same large directory. Cache binary
+    // directory jumps so checking each candidate does not rescan every entry.
+    let mut directory_jumps = HashMap::new();
     for candidate in (lo..data.len().saturating_sub(21)).rev() {
         if u32_at(data, candidate) != Some(END)
             || !u16_at(data, candidate + 20)
@@ -253,33 +265,41 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
         // consistent candidate is found. This preserves useful damaged-ZIP diagnostics.
         fallback = Some(candidate);
 
+        let count = u16_at(data, candidate + 10).unwrap_or(u16::MAX);
         let size = u32_at(data, candidate + 12).unwrap_or(u32::MAX);
         let offset = u32_at(data, candidate + 16).unwrap_or(u32::MAX);
-        if size == u32::MAX || offset == u32::MAX {
-            // ZIP64's directory must end exactly where the ZIP64 end record starts.
+        if count == u16::MAX || size == u32::MAX || offset == u32::MAX {
             let locator = candidate.checked_sub(20).filter(|&at| u32_at(data, at) == Some(LOCATOR64));
-            let valid = locator
-                .and_then(|at| u64_at(data, at + 8))
-                .and_then(|at| usize::try_from(at).ok())
-                .filter(|&at| u32_at(data, at) == Some(END64))
-                .is_some_and(|at| {
-                    let dir_size = u64_at(data, at + 40).and_then(|n| usize::try_from(n).ok());
-                    let dir_offset = u64_at(data, at + 48).and_then(|n| usize::try_from(n).ok());
-                    dir_size.zip(dir_offset).is_some_and(|(size, offset)| offset.checked_add(size) == Some(at))
-                });
-            if !valid {
+            let valid = locator.and_then(|locator| find_zip64_end(data, locator)).and_then(|at| {
+                let count = u64_at(data, at + 32)?;
+                let dir_size = u64_at(data, at + 40)?;
+                let dir_offset = u64_at(data, at + 48)?;
+                locate_directory(data, count, dir_size, dir_offset, at)
+                    .filter(|&(dir, _)| directory_is_exact(data, dir, dir_size, count, &mut directory_jumps))
+                    .map(|(_, shift)| (at, count == 0 && shift > 0))
+            });
+            let Some((_, shifted_empty)) = valid else {
+                continue;
+            };
+            if shifted_empty {
+                empty_sfx = Some(candidate);
                 continue;
             }
         } else {
-            let end = usize::try_from(offset).ok().and_then(|offset| usize::try_from(size).ok().and_then(|size| offset.checked_add(size)));
-            if end != Some(candidate) {
+            let Some((_, shift)) = locate_directory(data, count.into(), size.into(), offset.into(), candidate)
+                .filter(|&(dir, _)| directory_is_exact(data, dir, size.into(), count.into(), &mut directory_jumps))
+            else {
+                continue;
+            };
+            if count == 0 && shift > 0 {
+                empty_sfx = Some(candidate);
                 continue;
             }
         }
         eocd = Some(candidate);
         break;
     }
-    let eocd = eocd.or(fallback).ok_or(ZipError::NotZip)?;
+    let eocd = eocd.or(empty_sfx).or(fallback).ok_or(ZipError::NotZip)?;
     let field16 = |o: usize| u16_at(data, eocd + o).ok_or(ZipError::Damaged("the end record is cut short"));
     let field32 = |o: usize| u32_at(data, eocd + o).ok_or(ZipError::Damaged("the end record is cut short"));
     let (disk, dir_disk, on_disk, count) = (field16(4)?, field16(6)?, field16(8)?, field16(10)?);
@@ -293,10 +313,7 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
     // ZIP64: a locator just before the end record points at the ZIP64 end record.
     let locator = eocd.checked_sub(20).filter(|&l| u32_at(data, l) == Some(LOCATOR64)).ok_or(ZipError::Damaged("the ZIP64 end record is missing"))?;
     let missing = ZipError::Damaged("the ZIP64 end record is missing");
-    let at = u64_at(data, locator + 8).and_then(|a| usize::try_from(a).ok()).filter(|&a| a < locator).ok_or(missing.clone())?;
-    if u32_at(data, at) != Some(END64) {
-        return Err(missing);
-    }
+    let at = find_zip64_end(data, locator).ok_or(missing)?;
     let cut = ZipError::Damaged("the ZIP64 end record is cut short");
     let (disk, dir_disk) = (u32_at(data, at + 16).ok_or(cut.clone())?, u32_at(data, at + 20).ok_or(cut.clone())?);
     let (on_disk, count) = (u64_at(data, at + 24).ok_or(cut.clone())?, u64_at(data, at + 32).ok_or(cut.clone())?);
@@ -306,11 +323,114 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
     Ok((count, u64_at(data, at + 40).ok_or(cut.clone())?, u64_at(data, at + 48).ok_or(cut)?, at))
 }
 
+/// Finds the ZIP64 end record named by `locator`. For an SFX archive with unadjusted offsets,
+/// the locator points to where that record was before the stub was prepended, so the record
+/// itself immediately before the locator is authoritative. The shifted fallback supports the
+/// no-extensible-data layout; ordinary ZIP64 records continue to use the locator's exact offset.
+fn find_zip64_end(data: &[u8], locator: usize) -> Option<usize> {
+    let stated = usize::try_from(u64_at(data, locator.checked_add(8)?)?).ok()?;
+    let valid = |at: usize, shifted: bool| {
+        if u32_at(data, at) != Some(END64) {
+            return false;
+        }
+        let Some(record_size_at) = at.checked_add(4) else { return false };
+        let Some(record_size) = u64_at(data, record_size_at).and_then(|n| usize::try_from(n).ok()) else { return false };
+        if at.checked_add(12).and_then(|start| start.checked_add(record_size)) != Some(locator) || (shifted && record_size != 44) {
+            return false;
+        }
+        let Some(size_at) = at.checked_add(40) else { return false };
+        let Some(offset_at) = at.checked_add(48) else { return false };
+        let Some(size) = u64_at(data, size_at).and_then(|n| usize::try_from(n).ok()) else { return false };
+        let Some(offset) = u64_at(data, offset_at).and_then(|n| usize::try_from(n).ok()) else { return false };
+        if !shifted {
+            offset.checked_add(size) == Some(at)
+        } else {
+            let empty_directory = size == 0 && u64_at(data, at + 24) == Some(0) && u64_at(data, at + 32) == Some(0);
+            at > stated
+                && offset.checked_add(size) == Some(stated)
+                && at.checked_sub(size).is_some_and(|dir| dir > offset && (empty_directory || u32_at(data, dir) == Some(CENTRAL)))
+        }
+    };
+    if valid(stated, false) {
+        return Some(stated);
+    }
+    let at = locator.checked_sub(56).filter(|&at| at > stated)?;
+    valid(at, true).then_some(at)
+}
+
+/// Resolves a directory offset. If the stated offset already points to a central-directory
+/// header and the directory ends at `limit`, it is used as is. Otherwise the only correction
+/// accepted is a prefix shift that moves the directory to immediately before `limit`.
+fn locate_directory(data: &[u8], count: u64, size: u64, stated: u64, limit: usize) -> Option<(usize, usize)> {
+    let stated = usize::try_from(stated).ok()?;
+    let size = usize::try_from(size).ok()?;
+    if stated.checked_add(size) == Some(limit) && (count == 0 || u32_at(data, stated) == Some(CENTRAL)) {
+        return Some((stated, 0));
+    }
+    let actual = limit.checked_sub(size)?;
+    if actual > stated && (count == 0 || u32_at(data, actual) == Some(CENTRAL)) {
+        return Some((actual, actual - stated));
+    }
+    None
+}
+
+fn central_entry_end(data: &[u8], cursor: usize) -> Option<usize> {
+    if u32_at(data, cursor) != Some(CENTRAL) {
+        return None;
+    }
+    let header_end = cursor.checked_add(46).filter(|&at| at <= data.len())?;
+    let name_len = usize::from(u16_at(data, header_end - 18)?);
+    let extra_len = usize::from(u16_at(data, header_end - 16)?);
+    let comment_len = usize::from(u16_at(data, header_end - 14)?);
+    header_end.checked_add(name_len)?.checked_add(extra_len)?.checked_add(comment_len).filter(|&end| end <= data.len())
+}
+
+/// Return the offset after `2^power` contiguous central-directory records, memoizing offsets
+/// shared by competing EOCD candidates in untrusted comments.
+fn central_directory_jump(data: &[u8], start: usize, power: u8, jumps: &mut HashMap<(usize, u8), Option<usize>>) -> Option<usize> {
+    if let Some(&cached) = jumps.get(&(start, power)) {
+        return cached;
+    }
+    let end = if power == 0 {
+        central_entry_end(data, start)
+    } else {
+        central_directory_jump(data, start, power - 1, jumps).and_then(|middle| central_directory_jump(data, middle, power - 1, jumps))
+    };
+    jumps.insert((start, power), end);
+    end
+}
+
+/// Checks that the declared central-directory entries consume the entire directory. This is
+/// used while choosing among EOCD-shaped signatures, where comments may contain many fake records.
+fn directory_is_exact(data: &[u8], start: usize, size: u64, count: u64, jumps: &mut HashMap<(usize, u8), Option<usize>>) -> bool {
+    let Ok(size) = usize::try_from(size) else { return false };
+    let Some(end) = start.checked_add(size).filter(|&end| end <= data.len()) else { return false };
+    // Preserve the existing TooMany diagnostic in `Archive::open` without walking attacker-sized
+    // entry counts here.
+    if count > MAX_ENTRIES as u64 {
+        return true;
+    }
+    let mut cursor = start;
+    let mut remaining = count;
+    let mut power = 0;
+    while remaining != 0 {
+        if remaining & 1 != 0 {
+            let Some(next) = central_directory_jump(data, cursor, power, jumps) else {
+                return false;
+            };
+            cursor = next;
+        }
+        remaining >>= 1;
+        power += 1;
+    }
+    cursor == end
+}
+
 impl<'a> Archive<'a> {
     pub fn open(data: &'a [u8]) -> Result<Archive<'a>, ZipError> {
         let (count, dir_size, dir_at, dir_limit) = find_end(data)?;
         let past = ZipError::Damaged("the central directory is outside the archive");
-        let dir_at = usize::try_from(dir_at).map_err(|_| past.clone())?;
+        let (dir_at, shift) = locate_directory(data, count, dir_size, dir_at, dir_limit).ok_or(past.clone())?;
         let dir_end = usize::try_from(dir_size).ok().and_then(|s| dir_at.checked_add(s)).filter(|&e| e <= dir_limit).ok_or(past.clone())?;
         let dir = data.get(dir_at..dir_end).ok_or(past)?;
         if count > MAX_ENTRIES as u64 {
@@ -357,7 +477,7 @@ impl<'a> Archive<'a> {
                 }
             }
             let outside = || ZipError::DamagedEntry(shown(), "is outside the archive");
-            let offset = usize::try_from(offset).map_err(|_| outside())?;
+            let offset = usize::try_from(offset).ok().and_then(|offset| offset.checked_add(shift)).ok_or_else(outside)?;
             let comp = usize::try_from(comp).map_err(|_| outside())?;
             // An entry's size is checked when it is read: one too large to read may sit unused.
             let size = usize::try_from(size).unwrap_or(usize::MAX);

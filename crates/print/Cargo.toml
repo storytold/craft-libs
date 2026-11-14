@@ -13,13 +13,13 @@ description = "System PDF print spooler for the Craft apps: CUPS and Windows"
 # downstream GDI values a different Rust type identity even when the code is unchanged.
 # PDF loader updates below are independent of this public transport API.
 craft-winprint-gdi = { git = "https://github.com/storytold/winprint.rs", rev = "64e7afd4d1483512385012c340ecaaaf0f3beb7f" }
+# Says why the printer list is empty when lpstat can't run (e.g. a Flatpak without CUPS tools),
+# and why a job went on with the paper the request names while the driver reported only one side
+# of it (storytold/craft-libs#7230).
+log = "0.4"
 
 [lints]
 workspace = true
-
-[target.'cfg(unix)'.dependencies]
-# Says why the printer list is empty when lpstat can't run (e.g. a Flatpak without CUPS tools).
-log = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 # Printing without starting anything (storytold/pdfcraft#1107): the printer list (EnumPrinters)
