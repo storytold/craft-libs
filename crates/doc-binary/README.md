@@ -14,7 +14,15 @@ assert!(!craft_doc_binary::is_encrypted(b"not a .doc"));
 - Text in pieces (8-bit and UTF-16), paragraph and character formatting, styles, lists,
   tables, sections, headers and footers, notes, comments, fields, bookmarks, pictures and
   OfficeArt shapes, document properties.
+- OfficeArt WordArt text (shape types 136–175) as unfilled, borderless text boxes, including
+  grouped shapes, with the named font and literal fill colour (or line colour when unfilled).
 - XOR obfuscation, RC4 and RC4 CryptoAPI password protection.
+
+WordArt is a text fallback, not a reproduction of its warp, outline or other text effects.
+Font size is estimated from the displayed frame; zero text margins and auto-fit let the box
+expand rather than clip wrapped lines. Empty WordArt is omitted. At most 200 Unicode characters
+and 100 font-name characters are kept per shape; complex strings decode at most 4096 UTF-16
+units. WordArt lines share the document's paragraph budget, and text parts share its part cap.
 
 There is no writer.
 
