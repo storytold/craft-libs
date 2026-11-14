@@ -10,5 +10,8 @@ publish = false
 
 [dependencies]
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

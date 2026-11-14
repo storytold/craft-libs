@@ -15,6 +15,11 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
+//! On native targets, [`fixtures`] locates generated test fixtures under `<workspace>/target/fixtures`,
+//! generates each one once into a claimed temporary sibling, publishes it under a per-output lock that
+//! keeps a complete file another process published first, and prints the `FIXTURE made`, `cached` and
+//! `skipped` lines that FilmCraft's `cargo xtask fixtures` counts.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -25,6 +30,8 @@
 //! under foreign host environments. They are lightweight syntactic regression gates designed to complement,
 //! rather than replace, platform integration tests and CI execution.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod fixtures;
 pub mod guards;
 
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
