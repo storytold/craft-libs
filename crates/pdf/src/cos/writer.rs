@@ -402,8 +402,9 @@ pub fn reachable_objects(doc: &Document) -> Result<HashSet<u32>, CosError> {
 
 /// Write only reachable objects, renumbered from 1, with a table or cross-reference stream.
 pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosError> {
-    let mut out = Vec::new();
-    write_full_to(doc, opts, &mut out)?;
+    // No sink: the writer's own buffer is the result, so the output exists once even when it
+    // has to be held for a new identifier.
+    let (_, mut out) = full_save(doc, opts, None::<std::io::Empty>)?;
     // The size isn't known until the end, and the buffer grew by doubling. The result is often
     // kept as a document's working bytes for as long as it's open: drop the unused capacity.
     out.shrink_to_fit();
@@ -424,6 +425,13 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
 /// held in memory until its trailer is written, because that identifier is a hash of every byte
 /// before it, prefixed by their count.
 pub fn write_full_to<W: Write>(doc: &Document, opts: &SaveOptions, sink: W) -> Result<u64, CosError> {
+    full_save(doc, opts, Some(sink)).map(|(written, _)| written)
+}
+
+/// The full save behind [`write_full`] and [`write_full_to`]. With a sink, the output goes to it
+/// and the length comes back with an empty buffer. Without one, the output is built in memory
+/// and comes back whole, with its length.
+fn full_save<W: Write>(doc: &Document, opts: &SaveOptions, sink: Option<W>) -> Result<(u64, Vec<u8>), CosError> {
     if doc.stream_limited() {
         return Err(CosError::ReadOnlyLimit);
     }
@@ -527,12 +535,13 @@ pub fn write_full_to<W: Write>(doc: &Document, opts: &SaveOptions, sink: W) -> R
 /// Bytes on their way to a full save's sink. Objects are serialized into `buf` and handed on
 /// once it holds [`SINK_CHUNK`] bytes, so offsets come from [`Sink::pos`], not a buffer length.
 struct Sink<W: Write> {
-    inner: W,
+    /// Where the bytes go. `None` when the caller wants them back from [`Sink::finish`].
+    inner: Option<W>,
     /// Bytes already handed to `inner`: the file offset of `buf[0]`.
     written: u64,
     buf: Vec<u8>,
     /// Keep everything in `buf` until [`Sink::finish`]: set when the trailer needs the whole
-    /// file before it (a regenerated identifier).
+    /// file before it (a regenerated identifier), and always when there is no `inner`.
     hold: bool,
 }
 
@@ -549,8 +558,10 @@ thread_local! {
 }
 
 impl<W: Write> Sink<W> {
-    /// A sink at file offset 0 that stages up to [`SINK_CHUNK`] bytes, or everything if `hold`.
-    fn new(inner: W, hold: bool) -> Self {
+    /// A sink at file offset 0 that stages up to [`SINK_CHUNK`] bytes, or everything if `hold`
+    /// or if there is no `inner` to hand them to.
+    fn new(inner: Option<W>, hold: bool) -> Self {
+        let hold = hold || inner.is_none();
         Self { inner, written: 0, buf: Vec::with_capacity(SINK_CHUNK), hold }
     }
 
@@ -565,9 +576,11 @@ impl<W: Write> Sink<W> {
         if !self.hold && self.buf.len() >= SINK_CHUNK { self.drain() } else { Ok(()) }
     }
 
-    /// Writes every staged byte to `inner` and empties the buffer.
+    /// Writes every staged byte to `inner` and empties the buffer. Without an `inner` the bytes
+    /// stay where they are.
     fn drain(&mut self) -> Result<(), CosError> {
-        self.inner.write_all(&self.buf).map_err(|e| sink_error(&e))?;
+        let Some(inner) = self.inner.as_mut() else { return Ok(()) };
+        inner.write_all(&self.buf).map_err(|e| sink_error(&e))?;
         self.written += self.buf.len() as u64;
         self.buf.clear();
         // One large object (an image, a full object stream) must not leave a buffer of its
@@ -578,11 +591,15 @@ impl<W: Write> Sink<W> {
         Ok(())
     }
 
-    /// Writes what is left, flushes `inner` and returns the file's length.
-    fn finish(mut self) -> Result<u64, CosError> {
+    /// Writes what is left, flushes `inner` and returns the file's length with an empty buffer.
+    /// Without an `inner`, returns the length and the file itself: the buffer it was built in,
+    /// not a copy.
+    fn finish(mut self) -> Result<(u64, Vec<u8>), CosError> {
         self.drain()?;
-        self.inner.flush().map_err(|e| sink_error(&e))?;
-        Ok(self.written)
+        if let Some(inner) = self.inner.as_mut() {
+            inner.flush().map_err(|e| sink_error(&e))?;
+        }
+        Ok((self.pos(), self.buf))
     }
 }
 
@@ -1303,6 +1320,21 @@ mod tests {
             assert!(id(&whole).is_some());
             assert_ne!(id(&whole), id(&ordinary), "the identifier was regenerated");
         }
+    }
+
+    /// `write_full` has no sink to copy into: what it returns is the buffer the file was built
+    /// in, so a held save (a new identifier) is not in memory twice.
+    #[test]
+    fn a_save_without_a_sink_returns_its_own_buffer() {
+        let mut out = Sink::<std::io::Empty>::new(None, false);
+        out.buf.resize(SINK_CHUNK * 3, b'x');
+        out.spill().unwrap();
+        assert_eq!(out.buf.len(), SINK_CHUNK * 3, "nothing is handed on without a sink");
+        let built_at = out.buf.as_ptr();
+        let (len, bytes) = out.finish().unwrap();
+        assert_eq!(len, (SINK_CHUNK * 3) as u64);
+        assert_eq!(bytes.len(), SINK_CHUNK * 3);
+        assert_eq!(bytes.as_ptr(), built_at, "the same allocation, not a copy");
     }
 
     /// A sink error fails the save as `CosError::Io`, keeping the sink's `ErrorKind` and text.
