@@ -1123,7 +1123,9 @@ pub fn encode_pq(src: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecErro
         return Err(CodecError::encode(F, "PQ PNG input must be linear-light F32 RGB"));
     }
     let (width, height) = src.dimensions();
-    Limits::default().check(width, height, ChannelLayout::Rgb, SampleType::U16)?;
+    if width == 0 || height == 0 {
+        return Err(CodecError::InvalidImage("cannot encode an empty image".into()));
+    }
     let pixels = usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| CodecError::encode(F, "image is too large"))?;
     let samples = pixels.checked_mul(3).ok_or_else(|| CodecError::encode(F, "image is too large"))?;
     let bytes = samples.checked_mul(2).ok_or_else(|| CodecError::encode(F, "image is too large"))?;
