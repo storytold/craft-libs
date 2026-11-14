@@ -15,9 +15,15 @@
 //! its bytes ([`MAX_RATIO`]), more than [`MAX_ENTRY`], or a size or checksum it doesn't have;
 //! and the archive hands out at most [`MAX_TOTAL`] bytes in all. Nothing is ever written to
 //! disk. Never panics.
+//!
+//! [`edges`] decodes native shape-edge attributes into neutral points and line/quadratic
+//! segments for consumers to map into their own geometry models.
 
 use std::cell::Cell;
 use std::collections::HashMap;
+
+/// XFL's edge-attribute grammar, independent of any consuming application's geometry types.
+pub mod edges;
 
 /// Largest single entry inflated (bytes).
 pub const MAX_ENTRY: usize = 256 * 1024 * 1024;
