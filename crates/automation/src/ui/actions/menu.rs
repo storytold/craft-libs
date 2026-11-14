@@ -141,33 +141,41 @@ fn current_set(state: &ActionsPanelState, list: &ActionList) -> Option<String> {
 
 impl ActionsPanelCommands {
     /// The state of the command for the app's command input: New Action… and New Set… not while
-    /// recording, Set Options… needs a current set, Play and Batch… need an action, Delete follows
-    /// the footer's Delete, Insert Stop… needs a selected action or step, Save needs an action,
-    /// Start Recording is off while recording and Stop Recording only on while it runs, and Button
-    /// Mode is checked with the state's setting and off while recording.
+    /// recording, Set Options… needs a current set, Play needs an action or a selected set, Batch…
+    /// a selected or first action, Delete follows the footer's Delete, Duplicate a deletable
+    /// selection or a set (not while recording), Record Again a selected step (not while
+    /// recording), Insert Menu Item… and Insert Stop… a selected action or step, Insert Path the
+    /// same with a path selected, Save an action or a selected set, Playback Options… not while
+    /// waiting, Allow Tool Recording is checked with the fact, Start Recording is off while
+    /// recording and Stop Recording only on while it runs, and Button Mode is checked with the
+    /// state's setting and off while recording.
     pub fn state(self, panel: &ActionsPanelState, list: &ActionList, facts: ActionsMenuFacts) -> CommandState {
         let recording = facts.recording;
         let any = !list.actions().is_empty();
         let on_row = matches!(panel.selected, Some(ActionSelection::Action(_) | ActionSelection::Step(..)));
+        let set_selected = matches!(&panel.selected, Some(ActionSelection::Set(name)) if list.sets().contains(&name.as_str()));
         let state = CommandState::new();
         match self {
             ActionsPanelCommands::NewAction | ActionsPanelCommands::NewSet | ActionsPanelCommands::StartRecording => state.enabled(!recording),
             ActionsPanelCommands::SetOptions => state.enabled(current_set(panel, list).is_some()),
-            ActionsPanelCommands::Play => state.enabled(any && !recording),
+            ActionsPanelCommands::Play => state.enabled((any || set_selected) && !recording),
             ActionsPanelCommands::StopRecording => state.enabled(recording),
             ActionsPanelCommands::Delete => {
                 state.enabled(panel.selected.as_ref().is_some_and(|selected| delete_event(selected, recording).is_some()))
             }
             ActionsPanelCommands::InsertStop => state.enabled(on_row),
-            ActionsPanelCommands::Batch | ActionsPanelCommands::Save => state.enabled(any),
+            ActionsPanelCommands::Batch => state.enabled(play_target(panel.selected.as_ref(), list).is_some()),
+            ActionsPanelCommands::Save => state.enabled(any || set_selected),
             ActionsPanelCommands::Load => state,
             ActionsPanelCommands::ButtonMode => state.enabled(!recording).checked(panel.settings.button_mode),
-            // P3(panels-w9): pn.C41 the enabling rules.
-            ActionsPanelCommands::Duplicate
-            | ActionsPanelCommands::RecordAgain
-            | ActionsPanelCommands::InsertMenuItem
-            | ActionsPanelCommands::InsertPath
-            | ActionsPanelCommands::PlaybackOptions => state,
+            ActionsPanelCommands::Duplicate => {
+                let deletable = panel.selected.as_ref().is_some_and(|selected| delete_event(selected, false).is_some());
+                state.enabled(!recording && (deletable || set_selected))
+            }
+            ActionsPanelCommands::RecordAgain => state.enabled(!recording && matches!(panel.selected, Some(ActionSelection::Step(..)))),
+            ActionsPanelCommands::InsertMenuItem => state.enabled(on_row),
+            ActionsPanelCommands::InsertPath => state.enabled(on_row && facts.path_selected),
+            ActionsPanelCommands::PlaybackOptions => state.enabled(!facts.waiting),
             ActionsPanelCommands::ToolRecording => state.checked(facts.tool_recording),
         }
     }
@@ -176,7 +184,7 @@ impl ActionsPanelCommands {
     /// [`ActionsMenuAction::SettingsChanged`]; every other command returns its event (New Action…
     /// is [`ActionsEvent::NewAction`]; Play plays the selection as the footer's Play does; Delete
     /// is refused during a recording as the footer's is). `None` when the command has nothing to
-    /// do in this state. `recording` is what [`state`](Self::state) was given.
+    /// do in this state. `facts` is what [`state`](Self::state) was given.
     pub fn run(self, panel: &mut ActionsPanelState, list: &ActionList, facts: ActionsMenuFacts) -> Option<ActionsMenuAction> {
         let recording = facts.recording;
         let selected = panel.selected.as_ref();
@@ -185,8 +193,12 @@ impl ActionsPanelCommands {
             ActionsPanelCommands::NewSet => ActionsEvent::NewSet,
             ActionsPanelCommands::SetOptions => ActionsEvent::SetOptions(current_set(panel, list)?),
             ActionsPanelCommands::Play => {
-                let (action, from) = play_target(selected, list)?;
-                ActionsEvent::Play { action, from }
+                if let Some(ActionSelection::Set(name)) = selected {
+                    ActionsEvent::PlaySet(name.clone())
+                } else {
+                    let (action, from) = play_target(selected, list)?;
+                    ActionsEvent::Play { action, from }
+                }
             }
             ActionsPanelCommands::StartRecording => ActionsEvent::BeginRecording { into: selected_action(selected, list) },
             ActionsPanelCommands::StopRecording => ActionsEvent::StopRecording,
@@ -199,41 +211,47 @@ impl ActionsPanelCommands {
                 panel.settings.button_mode = !panel.settings.button_mode;
                 return Some(ActionsMenuAction::SettingsChanged);
             }
-            ActionsPanelCommands::Duplicate
-            | ActionsPanelCommands::RecordAgain
-            | ActionsPanelCommands::InsertMenuItem
-            | ActionsPanelCommands::InsertPath
-            | ActionsPanelCommands::PlaybackOptions
-            | ActionsPanelCommands::ToolRecording => todo!("pn.C41"),
+            ActionsPanelCommands::Duplicate => ActionsEvent::Duplicate(selected?.clone()),
+            ActionsPanelCommands::RecordAgain => {
+                let &ActionSelection::Step(action, step) = selected? else { return None };
+                ActionsEvent::RecordAgain { action, step }
+            }
+            ActionsPanelCommands::InsertMenuItem => selected_action(selected, list).map(|_| ActionsEvent::InsertMenuItem)?,
+            ActionsPanelCommands::InsertPath => selected_action(selected, list).map(|_| ActionsEvent::InsertPath)?,
+            ActionsPanelCommands::PlaybackOptions => ActionsEvent::PlaybackOptions,
+            ActionsPanelCommands::ToolRecording => ActionsEvent::ToolRecording(!facts.tool_recording),
         };
         Some(ActionsMenuAction::Event(event))
     }
 }
 
-/// The rows of the Actions panel's menu, for the dock's `PanelMenu`: New Action…, New Set…, Set
-/// Options…, Play, Start Recording (Stop Recording while `recording`), Delete, Insert Stop…, Batch…,
-/// Load and Save Actions… and Button Mode, in groups.
+/// The rows of the Actions panel's menu, for the dock's `PanelMenu`, in Photoshop's groups: New
+/// Action…, New Set…, Set Options…, Duplicate, Delete | Play, Start Recording (Stop Recording
+/// while `facts.recording`), Record Again | Insert Menu Item…, Insert Stop…, Insert Path, Batch… |
+/// Playback Options…, Allow Tool Recording, Button Mode | Load and Save Actions…. A row `offered`
+/// refuses is left out, and a group left empty loses its separator.
 pub fn panel_rows(facts: ActionsMenuFacts, offered: &dyn Fn(ActionsPanelCommands) -> bool) -> Vec<PanelRow> {
-    let _ = offered; // P3(panels-w9): pn.C42 leave out the rows `offered` refuses, and the separators they empty.
-    let recording = facts.recording;
-    let command = |command: ActionsPanelCommands| PanelRow::Command(CommandRef::from(command));
-    vec![
-        command(ActionsPanelCommands::NewAction),
-        command(ActionsPanelCommands::NewSet),
-        command(ActionsPanelCommands::SetOptions),
-        PanelRow::Separator,
-        command(ActionsPanelCommands::Play),
-        command(if recording { ActionsPanelCommands::StopRecording } else { ActionsPanelCommands::StartRecording }),
-        command(ActionsPanelCommands::Delete),
-        PanelRow::Separator,
-        command(ActionsPanelCommands::InsertStop),
-        command(ActionsPanelCommands::Batch),
-        PanelRow::Separator,
-        command(ActionsPanelCommands::Load),
-        command(ActionsPanelCommands::Save),
-        PanelRow::Separator,
-        command(ActionsPanelCommands::ButtonMode),
-    ]
+    use ActionsPanelCommands as C;
+    let record = if facts.recording { C::StopRecording } else { C::StartRecording };
+    let groups: [&[C]; 5] = [
+        &[C::NewAction, C::NewSet, C::SetOptions, C::Duplicate, C::Delete],
+        &[C::Play, record, C::RecordAgain],
+        &[C::InsertMenuItem, C::InsertStop, C::InsertPath, C::Batch],
+        &[C::PlaybackOptions, C::ToolRecording, C::ButtonMode],
+        &[C::Load, C::Save],
+    ];
+    let mut rows = Vec::new();
+    for group in groups {
+        let shown: Vec<C> = group.iter().copied().filter(|&command| offered(command)).collect();
+        if shown.is_empty() {
+            continue;
+        }
+        if !rows.is_empty() {
+            rows.push(PanelRow::Separator);
+        }
+        rows.extend(shown.into_iter().map(|command| PanelRow::Command(CommandRef::from(command))));
+    }
+    rows
 }
 
 /// The shortcut as the context menu has made it so far.

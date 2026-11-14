@@ -5,7 +5,7 @@
 //! |---|---|
 //! | The model | [`Action`], [`ActionStep`], [`ActionColor`], [`ActionInclude`] |
 //! | The list and its edits | [`ActionList`], [`ActionListError`], [`moved_index`] |
-//! | The file | [`ActionsFile`] (PhotoCraft's `actions.json`) |
+//! | The file | [`ActionsFile`] (PhotoCraft's `actions.json`), [`ActionsFileError`] |
 //! | Playback | [`ActionPlayer`], [`ActionRunner`], [`StepOutcome`], [`PlaybackBudget`], [`PlaybackReport`], [`StepFailure`], [`PlaybackRefusal`], [`MAX_PLAYBACK_STEPS`], [`MAX_PLAYBACK_DEPTH`] |
 //! | Recording | [`Recording`], [`ActionList::begin_recording`], [`ActionList::append_recorded`] |
 //!

@@ -136,8 +136,8 @@ pub enum ActionInclude {
 }
 
 /// One recorded action, in PhotoCraft's `actions.json` shape: `steps` is the `[[id, params], …]`
-/// list, `disabled` and `dialogs` hold step indices and are left out of the file when empty, `set`
-/// and `color` likewise.
+/// list, `disabled` and `dialogs` hold step indices and are left out of the file when empty, `set`,
+/// `color` and `automation` likewise.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Action {
     /// The name, unique in its [`ActionList`](super::ActionList).

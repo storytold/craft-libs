@@ -26,9 +26,9 @@ const STOP: usize = 6;
 /// |---|---|---|---|
 /// | Stop playing/recording | `square` | `StopRecording` | while recording or playing |
 /// | Begin recording | `circle`, pressed in the alert tone while recording | `BeginRecording { into: selected action }` | not playing; while recording it stays live and ignores the click |
-/// | Play selection | `play` | `Play { action, from }`: the selected action from 0, a selected step's action from that step, else the first action | some action, not recording |
+/// | Play selection | `play` | `Play { action, from }`: the selected action from 0, a selected step's action from that step, else the first action; `PlaySet(name)` for a selected set | some action or a selected set, not recording |
 /// | Create new set | `new_folder` | `NewSet` | not recording |
-/// | Create new action | `plus` | `BeginRecording { into: None }` | not recording |
+/// | Create new action | `plus` | `BeginRecording { into: None }`; a row of the list dropped on it reports `Duplicate(row)` | not recording; a dropped row is accepted on the same rule |
 /// | Delete | `trash` | `Delete(selection)`; a row of the list dropped on it reports `Delete(row)` | a selection, and while recording only a step; a dropped row is accepted on the same rule |
 /// | Button Mode | `toggle_right`, pressed | toggles `ActionsSettings::button_mode` in `state` | not recording |
 pub(super) fn show_footer(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanelState) -> Vec<ActionsEvent> {
@@ -38,6 +38,10 @@ pub(super) fn show_footer(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanel
     let hosted = host.is_some();
     let idle = recording.is_none() && !playing;
     let target = play_target(state.selected.as_ref(), list);
+    let play_set = match state.selected.as_ref() {
+        Some(ActionSelection::Set(name)) => Some(name.clone()),
+        _ => None,
+    };
     let delete = state.selected.as_ref().filter(|_| !playing).and_then(|selected| delete_event(selected, recording.is_some()));
     let record_into = selected_action(state.selected.as_ref(), list);
     let icon = |name: &'static str| IconSpec::svg(IconId::new(name));
@@ -54,7 +58,7 @@ pub(super) fn show_footer(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanel
             .enabled(hosted && idle)
             .accepts_drops(move |drag: &ListDrag<ActionSelection>| !playing && recording.is_none() && drag.list == list_id),
         FooterAction::new(icon("new_folder"), words.new_set.clone()).enabled(idle),
-        FooterAction::new(icon("play"), words.play.clone()).enabled(hosted && idle && target.is_some()),
+        FooterAction::new(icon("play"), words.play.clone()).enabled(hosted && idle && (target.is_some() || play_set.is_some())),
         record,
         FooterAction::new(icon("square"), words.stop.clone()).enabled(hosted && !idle),
     ];
@@ -70,7 +74,9 @@ pub(super) fn show_footer(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanel
         // Record stays live while recording: it shows the alert state and ignores the click.
         Some(RECORD) if idle => events.push(ActionsEvent::BeginRecording { into: record_into }),
         Some(PLAY) => {
-            if let Some((action, from)) = target {
+            if let Some(name) = play_set {
+                events.push(ActionsEvent::PlaySet(name));
+            } else if let Some((action, from)) = target {
                 events.push(ActionsEvent::Play { action, from });
             }
         }
@@ -96,10 +102,12 @@ pub(super) fn show_footer(ui: &mut Ui, body: &Body<'_>, state: &mut ActionsPanel
 }
 
 /// What Play plays: the selected action from its first step, a selected step's action from that
-/// step, else the first action. `None` without actions.
+/// step, else the first action. `None` without actions and for a selected set (Play reports
+/// `PlaySet` for it).
 pub(super) fn play_target(selected: Option<&ActionSelection>, list: &ActionList) -> Option<(usize, usize)> {
     let len = list.actions().len();
     match selected {
+        Some(ActionSelection::Set(_)) => None,
         Some(&ActionSelection::Action(action)) if action < len => Some((action, 0)),
         Some(&ActionSelection::Step(action, step)) if action < len => Some((action, step)),
         _ => (len > 0).then_some((0, 0)),

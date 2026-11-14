@@ -162,6 +162,48 @@ fn actions_panel_button_mode_buttons_span_the_body_and_a_click_plays_once() {
     assert!(matches!(plays.as_slice(), [ActionsEvent::Play { action: 1, from: 0 }]), "one Play of First: {plays:?}");
 }
 
+/// The sets a panel reported duplicating.
+fn duplicates(events: &[ActionsEvent]) -> Vec<ActionSelection> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            ActionsEvent::Duplicate(row) => Some(row.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Drags the row labelled `label` onto the footer's Create new action.
+fn drag_onto_new_action(fixture: &mut Fixture, label: &str) {
+    let (from, to) = (node(fixture, label).center(), node(fixture, "Create new action").center());
+    drag_to(fixture, from, to);
+}
+
+/// An action row and a step row of the panel's own list dropped on Create new action each report one
+/// Duplicate of that row; nothing is taken while recording or playing.
+#[trial]
+fn a_row_dropped_on_new_action_reports_duplicate() {
+    let mut shown = app(two_sets());
+    shown.state.expanded.insert("Loose".into());
+    let (mut fixture, shared) = rig(shown);
+    drag_onto_new_action(&mut fixture, "Loose");
+    assert_eq!(duplicates(&take(&shared)), [ActionSelection::Action(0)]);
+    drag_onto_new_action(&mut fixture, "Run a");
+    assert_eq!(duplicates(&take(&shared)), [ActionSelection::Step(0, 0)]);
+
+    let mut playing = app(two_sets());
+    playing.host.playing = true;
+    let (mut fixture, shared) = rig(playing);
+    drag_onto_new_action(&mut fixture, "Loose");
+    assert_eq!(duplicates(&take(&shared)), [], "no drop is taken while playing");
+
+    let mut recording = app(two_sets());
+    recording.host.recording = Some(1);
+    let (mut fixture, shared) = rig(recording);
+    drag_onto_new_action(&mut fixture, "Loose");
+    assert_eq!(duplicates(&take(&shared)), [], "no drop is taken while recording");
+}
+
 /// A disabled panel reports nothing for a click on a row or a footer button.
 #[trial]
 fn actions_panel_disabled_reports_nothing() {

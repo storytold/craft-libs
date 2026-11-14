@@ -5,7 +5,7 @@
 //! | Part | Names |
 //! |---|---|
 //! | The panel | [`ActionsPanel`], [`ActionsPanelOutput`], [`ActionsEvent`], [`ActionMove`], [`ActionPlace`], [`ActionSelection`], [`ShortcutChoice`] |
-//! | The app's side | [`ActionsHost`], [`ActionsPanelCommands`] and [`panel_rows`] (the panel menu), [`ActionsMenuAction`] |
+//! | The app's side | [`ActionsHost`], [`ActionsPanelCommands`], [`ActionsMenuFacts`] and [`panel_rows`] (the panel menu), [`ActionsMenuAction`] |
 //! | State | [`ActionsPanelState`], [`ActionsSettings`] (persisted) |
 //! | Columns and words | [`INCLUDE_COLUMN`], [`DIALOG_COLUMN`], [`ActionsWords`] |
 

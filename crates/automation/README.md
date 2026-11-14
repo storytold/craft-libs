@@ -5,12 +5,12 @@ Drive a running Craft app from tests, agents and the CLI, and record and play ac
 | Module | What it gives the app |
 | --- | --- |
 | `actions` | Recorded actions (every target): `ActionList` of `Action`s and `ActionStep`s, `ActionsFile`, playback with `ActionPlayer` and `ActionRunner` under a `PlaybackBudget`, and `Recording`. The app keeps the command table. |
-| `ui::actions` | `ActionsPanel` (every target): sets, actions and steps as a tree, include and dialog cells, rename (`start_rename`), drag to move, Button Mode, the footer and the menus (`ActionsPanelCommands` and `panel_rows`). It runs nothing; it reports `ActionsEvent`s. `ActionsPanelState` holds its view state. `ActionsWords` holds its words. |
+| `ui::actions` | `ActionsPanel` (every target): sets, actions and steps as a tree, include and dialog cells, rename (`start_rename`), drag to move, Button Mode, the footer and the menus (`ActionsPanelCommands`, `ActionsMenuFacts` and `panel_rows`, which leaves out the rows the host has no command for). It runs nothing; it reports `ActionsEvent`s. `ActionsPanelState` holds its view state. `ActionsWords` holds its words. |
 | `args` | `ControlOptions`: the `--control <PORT>`, `--control-token`, `--control-token-file` values and their `<APP>_CONTROL_*` environment fallbacks, checked the way the apps' command lines report them (usage errors exit 2). |
 | `security` | Tokens (`generate_token`, `validate_token`, `server_token`, `client_token`), the `auth` handshake, bounded line reads, connection and request limits. |
 | `protocol` | The JSON-lines wire format: one `{"id", "method", "params"}` request per line, one `{"id", "ok", "result" | "error"}` reply per line; `Params` validators that name the bad parameter. |
 | `control` | `ControlRequest`, `Reply`, `Dispatch` and `ControlChannel`: the UI-thread side that drains requests between frames, replies after injected input or a background job settles, and admits screenshots. The app supplies the method table. |
-| `synthetic` | `Click`, `KeyPress` and `move_from_params`: the validated parameters of `ui.click`, `ui.move` and `ui.key`, queued through `WindowHost::inject_*` one step per pass. |
+| `synthetic` | `Click`, `KeyPress` and `move_from_params`: the validated parameters of `ui.click`, `ui.move` and `ui.key`, and `input_method`'s `ui.ime` `{preedit, cursor}` and `{commit}` forms, queued through `WindowHost::inject_*` one step per pass. |
 | `server` | `start`: the loopback TCP listener that authenticates each connection and forwards requests to the channel. |
 | `client` | `ControlClient`: connect, authenticate, call (a screenshot is `call("ui.screenshot", ..)`); for integration tests and CLIs. |
 | `screenshot` | `Captures`: the bounded, cancellable screenshot queue over `WindowHost::screenshot`, with settling, geometry epochs, retries and the PNG reply. |

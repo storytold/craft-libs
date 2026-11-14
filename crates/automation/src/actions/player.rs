@@ -160,11 +160,13 @@ pub struct ActionPlayer;
 
 impl ActionPlayer {
     /// Plays the action at `index` of `list` from step `from`: enters it on `budget` (refusing a
-    /// loop or depth), then for each included step at or after `from`, in order: charges the
-    /// budget (stops with the step-limit failure when spent), asks
+    /// loop or depth), then for each included step at or after `from`, in order: charges it
+    /// through [`ActionRunner::charge`] (stops with the step-limit failure when refused), asks
     /// [`authorize`](ActionRunner::authorize) (a denial stops without running or pausing), counts
-    /// a [no-op](ActionRunner::is_noop) as run, else runs the step; stops at the first `Failed`
-    /// and at `Paused` (reporting `paused_at`). Skipped (disabled) steps are not charged. Leaves
+    /// a [no-op](ActionRunner::is_noop) as run, else runs the step; stops at the first `Failed`,
+    /// at `Paused` (reporting `paused_at`), at `Wait` (counted as run, reporting `paused_at` and
+    /// `waiting`) and at `Stopped` (reporting `stopped_at`, no failure). Skipped (disabled) steps
+    /// are not charged. Leaves
     /// the action on `budget` before returning. An index past the list reports
     /// `failed` with the message "no such action". Playing the action being recorded into is the
     /// app's to refuse (PhotoCraft's `playback_plan` does), since the list holds no recording.

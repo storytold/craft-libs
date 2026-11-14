@@ -59,12 +59,15 @@ fn action_list_moves_follow_the_selection() {
     list.move_action(0, 1).unwrap();
     assert_eq!(list.actions[1].name, "A");
 }
-// PhotoCraft's `actions.json` shape (steps as `[id, params]`, colour names, no `sets`) loads and
-// saves unchanged; empty sets survive in `sets`.
+// PhotoCraft's `actions.json` shape (steps as `[id, params]`, colour names, no `sets`, the
+// `automation` mark only when set) loads and saves unchanged; empty sets survive in `sets`; a file
+// of another version is refused.
 #[trial]
 fn action_list_file_round_trip_keeps_pc_json() {
-    let text = r#"{"version":1,"actions":[{"name":"A","steps":[["image.levels",{"gamma":1.2}]],"disabled":[0],"set":"S","color":"red"},{"name":"B","steps":[]}]}"#;
+    let text = r#"{"version":1,"actions":[{"name":"A","steps":[["image.levels",{"gamma":1.2}]],"disabled":[0],"set":"S","color":"red"},{"name":"B","steps":[],"automation":true}]}"#;
     let file = ActionsFile::from_json(text).unwrap();
+    assert!(!file.actions[0].automation && file.actions[1].automation);
+    assert!(matches!(ActionsFile::from_json(r#"{"version":2,"actions":[]}"#), Err(ActionsFileError::Version(2))));
     assert_eq!(file.actions[0].color, ActionColor::Red);
     assert_eq!(file.actions[0].steps[0], ActionStep::new("image.levels", json!({"gamma": 1.2})));
     let mut list = ActionList::from_file(file);
@@ -76,6 +79,94 @@ fn action_list_file_round_trip_keeps_pc_json() {
     let back = ActionsFile::from_json(&list.to_file().to_json().unwrap()).unwrap();
     assert_eq!(back.sets, ["Empty"]);
     assert_eq!(ActionList::from_file(back).sets(), ["S", "Empty"]);
+}
+/// A runner whose steps are named by what they do: `pause`, `wait`, `stop`, `deny` (refused by the
+/// gate), `noop`; any other is `Done`. Its own `charge` refuses once `charges` are spent.
+struct Scripted {
+    ran: Vec<String>,
+    charges: u64,
+}
+
+impl Scripted {
+    fn new(charges: u64) -> Self {
+        Self { ran: Vec::new(), charges }
+    }
+}
+
+impl ActionRunner for Scripted {
+    fn run_step(&mut self, _: &Action, _: usize, step: &ActionStep, _: bool, _: &mut PlaybackBudget) -> StepOutcome {
+        self.ran.push(step.command.clone());
+        match step.command.as_str() {
+            "pause" => StepOutcome::Paused,
+            "wait" => StepOutcome::Wait(Value::Null),
+            "stop" => StepOutcome::Stopped,
+            _ => StepOutcome::Done(Value::Null),
+        }
+    }
+
+    fn charge(&mut self, _: &mut PlaybackBudget) -> bool {
+        if self.charges == 0 {
+            return false;
+        }
+        self.charges -= 1;
+        true
+    }
+
+    fn authorize(&mut self, step: &ActionStep) -> Result<(), String> {
+        if step.command == "deny" { Err("denied".to_owned()) } else { Ok(()) }
+    }
+
+    fn is_noop(&self, step: &ActionStep) -> bool {
+        step.command == "noop"
+    }
+}
+
+// The runner's `charge` ends playback with the step limit; `Paused` is not counted, `Wait` is; a
+// resume continues after `paused_at`; `Stopped` is no failure; a denial fails before the step runs;
+// a no-op counts without running.
+#[trial]
+fn paused_waiting_and_stopped_steps_end_playback_as_reported() {
+    let list = list_of(vec![
+        action("Limit", &["a", "b"]),
+        action("Pause", &["a", "pause", "b"]),
+        action("Wait", &["a", "wait", "b"]),
+        action("Stop", &["a", "stop", "b"]),
+        action("Deny", &["a", "deny", "b"]),
+        action("Noop", &["noop", "a"]),
+    ]);
+    let play = |index: usize, from: usize, runner: &mut Scripted| ActionPlayer::play(&list, index, from, runner, &mut PlaybackBudget::new());
+
+    let mut runner = Scripted::new(1);
+    let report = play(0, 0, &mut runner);
+    assert_eq!((report.ran, report.refused), (1, Some(PlaybackRefusal::StepLimit)));
+    assert_eq!(report.failed.map(|failure| failure.step), Some(1));
+
+    let mut runner = Scripted::new(99);
+    let report = play(1, 0, &mut runner);
+    assert_eq!((report.ran, report.paused_at, report.waiting), (1, Some(1), false));
+    let resumed = play(1, 2, &mut runner);
+    assert_eq!((resumed.ran, resumed.paused_at), (1, None));
+    assert_eq!(runner.ran, ["a", "pause", "b"]);
+
+    let mut runner = Scripted::new(99);
+    let report = play(2, 0, &mut runner);
+    assert_eq!((report.ran, report.paused_at, report.waiting), (2, Some(1), true));
+    assert_eq!(runner.ran, ["a", "wait"]);
+
+    let mut runner = Scripted::new(99);
+    let report = play(3, 0, &mut runner);
+    assert_eq!((report.ran, report.stopped_at, report.paused_at), (1, Some(1), None));
+    assert!(report.failed.is_none());
+
+    let mut runner = Scripted::new(99);
+    let report = play(4, 0, &mut runner);
+    assert_eq!(report.failed.map(|failure| (failure.step, failure.message)), Some((1, "denied".to_owned())));
+    assert_eq!(runner.ran, ["a"], "the denied step never ran");
+
+    let mut runner = Scripted::new(99);
+    let report = play(5, 0, &mut runner);
+    assert_eq!(report.ran, 2);
+    assert_eq!(runner.ran, ["a"], "the no-op counted without running");
 }
 // One budget is charged across nested plays and stops at the limit; a call back to a running
 // action is refused as `Recursive`.
