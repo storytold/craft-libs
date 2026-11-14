@@ -6,9 +6,8 @@ use std::rc::Rc;
 
 use craft_behavior::{EditEvent, Selection};
 use craft_color::palette::{SwatchColor, SwatchGroup};
-// PLAN: dialogs-w15 moves `SwatchTable` to `craft_ui::choice` (dl.K43); `craft_ui::choice` has no such item until then, so it is imported from `craft_color::ui`.
 use craft_color::ui::{
-    ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchPalette, SwatchTable, SwatchesCommand,
+    ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchTable, SwatchesCommand,
     SwatchesMenu, SwatchesPanel, SwatchesState,
 };
 use craft_theme::Srgba;
@@ -257,20 +256,35 @@ fn swatches_rig(groups: Vec<SwatchGroup>) -> (Fixture, Rc<RefCell<Vec<SwatchEdit
     (fixture, edits)
 }
 
-/// A swatch selected and deleted reports one `Delete` and leaves the groups it was shown as they were; New Swatch from
-/// the menu reports an `Add` in the selected swatch's group under the next free numbered name.
+/// Through the panel, a selected swatch deleted reports one `Delete`, and a swatch dragged onto another group's header
+/// reports one `MoveTo` the host can run; New Swatch from the menu reports an `Add` in the selected swatch's group under
+/// the next free numbered name. The slots of multi-swatch moves are checked in library.rs.
 #[trial]
 fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     let red = SwatchColor::Rgb([1.0, 0.0, 0.0]);
     let blue = SwatchColor::Rgb([0.0, 0.0, 1.0]);
     let entry = |name: &str, color: SwatchColor| craft_color::palette::SwatchEntry::new(name.to_owned(), color);
-    let groups = vec![SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red", red.clone()), entry("Color Swatch 1", blue)] }];
+    let groups = vec![
+        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red", red.clone()), entry("Color Swatch 1", blue.clone())] },
+        SwatchGroup { name: "Other".to_owned(), entries: vec![entry("Blue", blue)] },
+    ];
     let (mut fixture, edits) = swatches_rig(groups.clone());
     let row = fixture.by_label("Red, #ff0000").expect("the Red swatch is named with its value");
     fixture.click(&row).settle();
     assert!(edits.borrow().is_empty(), "a click selects and uses, it edits nothing: {:?}", edits.borrow());
     fixture.key(Key::Delete, Modifiers::NONE).settle();
     assert_eq!(*edits.borrow(), [SwatchEdit::Delete { swatch: "Red".to_owned() }], "one resolved edit, once");
+
+    let (mut fixture, edits) = swatches_rig(groups.clone());
+    let row = fixture.by_label("Red, #ff0000").expect("the Red swatch");
+    let header = fixture.by_label("Other").expect("the Other group's header").center();
+    fixture.drag(&row, header - row.center()).settle();
+    let reported = edits.borrow().clone();
+    assert_eq!(reported.len(), 1, "one edit for one dragged swatch: {reported:?}");
+    assert!(matches!(&reported[0], SwatchEdit::MoveTo { swatch, group, .. } if swatch == "Red" && group == "Other"), "{reported:?}");
+    let mut library = SwatchLibrary::new(groups.clone());
+    assert!(library.apply(&reported[0]), "the host can run it");
+    assert!(library.find("Red").is_some_and(|at| library.groups[at.group].name == "Other"), "Red is in Other");
 
     let mut state = SwatchesState::default();
     state.selected = Some(SwatchKey::Swatch("Red".to_owned()));

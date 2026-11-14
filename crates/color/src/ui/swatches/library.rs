@@ -105,6 +105,27 @@ pub(super) fn has(groups: &[SwatchGroup], key: &SwatchKey) -> bool {
     group_of(groups, key).is_some()
 }
 
+/// Whether the groups hold the most swatches a library may.
+pub(super) fn swatches_full(groups: &[SwatchGroup]) -> bool {
+    groups.iter().map(|g| g.entries.len()).sum::<usize>() >= MAX_SWATCHES
+}
+
+/// The name the swatch at `at` takes when renamed to `text`; `None` when `at` names nothing, the name is empty or
+/// another swatch has it.
+pub(super) fn swatch_rename(groups: &[SwatchGroup], at: SwatchAt, text: &str) -> Option<String> {
+    let name = text.trim();
+    groups.get(at.group)?.entries.get(at.index)?;
+    (!name.is_empty() && find_swatch(groups, name).is_none_or(|other| other == at)).then(|| name.to_owned())
+}
+
+/// The name group `index` takes when renamed to `text`; `None` when there is no such group, the name is empty or
+/// another group has it.
+pub(super) fn group_rename(groups: &[SwatchGroup], index: usize, text: &str) -> Option<String> {
+    let name = text.trim();
+    groups.get(index)?;
+    (!name.is_empty() && !groups.iter().enumerate().any(|(i, g)| i != index && g.name == name)).then(|| name.to_owned())
+}
+
 /// The flat rows of the browser: each group's header, then its swatches.
 fn flat<'a>(groups: impl IntoIterator<Item = &'a SwatchGroup>) -> Vec<SwatchKey> {
     let mut rows = Vec::new();
@@ -142,8 +163,36 @@ fn group_slot(groups: &[SwatchGroup], names: &[&str], to: usize) -> usize {
     remaining[..to.min(remaining.len())].iter().filter(|k| matches!(k, SwatchKey::Group(_))).count()
 }
 
-/// The edits a reorder of the browser makes, one per moved swatch or group in library order; the i-th gets the slot
-/// plus i, so the host keeps their order. Anything the library cannot do gives none.
+/// The `at` of each edit that moves `moved` (in library order) one by one within `order`, so that they end up together
+/// at `slot` among the names that stay. Edits run in turn, so each index treats the moved names still waiting in the
+/// list as absent: only the staying names and the ones already placed count.
+fn move_slots(order: &[&str], moved: &[&str], slot: usize) -> Vec<usize> {
+    let mut list: Vec<&str> = order.to_vec();
+    let mut slots = Vec::with_capacity(moved.len());
+    for (i, name) in moved.iter().enumerate() {
+        list.retain(|n| n != name);
+        let anchors = slot + i;
+        let mut at = if anchors == 0 { 0 } else { list.len() };
+        let mut seen = 0;
+        if anchors > 0 {
+            for (index, n) in list.iter().enumerate() {
+                if !moved[i + 1..].contains(n) {
+                    seen += 1;
+                    if seen == anchors {
+                        at = index + 1;
+                        break;
+                    }
+                }
+            }
+        }
+        list.insert(at, *name);
+        slots.push(at);
+    }
+    slots
+}
+
+/// The edits a reorder of the browser makes, one per moved swatch or group in library order; each `at` counts the
+/// edits before it, so the host keeps their order. Anything the library cannot do gives none.
 pub(super) fn reorder_edits(groups: &[SwatchGroup], mv: &ReorderMove<SwatchKey>) -> Vec<SwatchEdit> {
     if mv.copy {
         return Vec::new();
@@ -152,23 +201,20 @@ pub(super) fn reorder_edits(groups: &[SwatchGroup], mv: &ReorderMove<SwatchKey>)
     let group_names: Option<Vec<&str>> = mv.keys.iter().map(|k| if let SwatchKey::Group(n) = k { Some(n.as_str()) } else { None }).collect();
     if let Some(names) = swatches {
         let Some((group, slot)) = resolve_move(groups, &names, mv.to, mv.parent.as_ref()) else { return Vec::new() };
-        let target = &groups[group].name;
-        return groups
-            .iter()
-            .flat_map(|g| g.entries.iter())
-            .filter(|e| names.contains(&e.name.as_str()))
-            .enumerate()
-            .map(|(i, e)| SwatchEdit::MoveTo { swatch: e.name.clone(), group: target.clone(), at: slot + i })
+        let target = &groups[group];
+        let order: Vec<&str> = target.entries.iter().map(|e| e.name.as_str()).collect();
+        let moved: Vec<&str> = groups.iter().flat_map(|g| g.entries.iter()).map(|e| e.name.as_str()).filter(|n| names.contains(n)).collect();
+        return move_slots(&order, &moved, slot)
+            .into_iter()
+            .zip(&moved)
+            .map(|(at, name)| SwatchEdit::MoveTo { swatch: (*name).to_owned(), group: target.name.clone(), at })
             .collect();
     }
     let Some(names) = group_names else { return Vec::new() };
     let slot = group_slot(groups, &names, mv.to);
-    groups
-        .iter()
-        .filter(|g| names.contains(&g.name.as_str()))
-        .enumerate()
-        .map(|(i, g)| SwatchEdit::MoveGroup { group: g.name.clone(), to: slot + i })
-        .collect()
+    let order: Vec<&str> = groups.iter().map(|g| g.name.as_str()).collect();
+    let moved: Vec<&str> = order.iter().copied().filter(|n| names.contains(n)).collect();
+    move_slots(&order, &moved, slot).into_iter().zip(&moved).map(|(to, name)| SwatchEdit::MoveGroup { group: (*name).to_owned(), to }).collect()
 }
 
 impl SwatchLibrary {
@@ -197,7 +243,7 @@ impl SwatchLibrary {
     /// where it went, or `None` when the library holds [`MAX_SWATCHES`].
     // pc: crates/engine/src/cmd/swatch_cmds.rs:150-171 (`swatches.add`: the cap, the name, group 0).
     pub fn add(&mut self, color: SwatchColor, name: Option<&str>, group: Option<usize>) -> Option<SwatchAt> {
-        if self.total() >= MAX_SWATCHES {
+        if swatches_full(&self.groups) {
             return None;
         }
         let name = name
@@ -227,14 +273,8 @@ impl SwatchLibrary {
 
     /// Renames a swatch; `false` when the name is empty or taken.
     pub fn rename(&mut self, at: SwatchAt, name: &str) -> bool {
-        let name = name.trim();
-        if name.is_empty() || self.get(at).is_none() {
-            return false;
-        }
-        if self.find(name).is_some_and(|other| other != at) {
-            return false;
-        }
-        self.groups[at.group].entries[at.index].name = name.to_owned();
+        let Some(name) = swatch_rename(&self.groups, at, name) else { return false };
+        self.groups[at.group].entries[at.index].name = name;
         true
     }
 
@@ -267,11 +307,8 @@ impl SwatchLibrary {
 
     /// Renames a group; `false` when the name is empty or another group has it.
     fn rename_group(&mut self, group: usize, name: &str) -> bool {
-        let name = name.trim();
-        if name.is_empty() || group >= self.groups.len() || self.groups.iter().enumerate().any(|(i, g)| i != group && g.name == name) {
-            return false;
-        }
-        self.groups[group].name = name.to_owned();
+        let Some(name) = group_rename(&self.groups, group, name) else { return false };
+        self.groups[group].name = name;
         true
     }
 
@@ -503,4 +540,35 @@ pub fn swatch_rows(groups: &[SwatchGroup], words: &SwatchesWords) -> Vec<PresetR
         }
     }
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn group(name: &str, entries: &[&str]) -> SwatchGroup {
+        SwatchGroup { name: name.to_owned(), entries: entries.iter().map(|n| SwatchEntry::new((*n).to_owned(), SwatchColor::Gray(0.5))).collect() }
+    }
+
+    /// Edits that move several items down or up give the order the browser's own reorder gives.
+    #[test]
+    fn multi_item_moves_apply_as_the_reorder_does() {
+        let library = SwatchLibrary::new(vec![group("G", &["A", "B", "C", "D"]), group("H", &["E"])]);
+        let swatch = |n: &str| SwatchKey::Swatch(n.to_owned());
+        let group_key = |n: &str| SwatchKey::Group(n.to_owned());
+        let moves = [
+            ReorderMove::new(swatch("A"), vec![swatch("A"), swatch("B")], 3, false),
+            ReorderMove::new(swatch("C"), vec![swatch("C"), swatch("D")], 1, false),
+            ReorderMove::new(group_key("G"), vec![group_key("G")], 2, false),
+        ];
+        for mv in moves {
+            let mut expected = library.clone();
+            assert!(expected.apply_reorder(&mv));
+            let mut applied = library.clone();
+            for edit in reorder_edits(&library.groups, &mv) {
+                assert!(applied.apply(&edit));
+            }
+            assert_eq!(applied, expected);
+        }
+    }
 }

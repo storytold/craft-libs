@@ -9,8 +9,8 @@ use craft_ui::menu::PanelRow;
 use craft_ui::patterns::presets::{PresetCommands, PresetEvent, PresetExport, PresetFileRequest, PresetFiles, PresetFooterEvent};
 use craft_ui::runtime::commands::{CommandRef, CommandState};
 
-use super::library::{find_swatch, free_name, group_of, reorder_edits, unique_group_name};
-use super::{MAX_GROUPS, MAX_SWATCHES, SwatchEdit, SwatchKey, SwatchesState, SwatchesWords};
+use super::library::{find_swatch, free_name, group_of, group_rename, reorder_edits, swatch_rename, swatches_full, unique_group_name};
+use super::{MAX_GROUPS, SwatchEdit, SwatchKey, SwatchesState, SwatchesWords};
 use crate::palette::{SwatchColor, SwatchFormat, SwatchGroup, SwatchReport};
 
 /// The purpose of the swatch file pickers: their folder is remembered under it.
@@ -162,7 +162,7 @@ impl SwatchesMenu {
 /// The foreground colour into the selected swatch's group under the next free numbered name; the swatch is selected and
 /// its name opens for editing. `None` when the library is full.
 fn new_swatch_edit(groups: &[SwatchGroup], st: &mut SwatchesState, foreground: Srgba, words: &SwatchesWords) -> Option<SwatchEdit> {
-    if groups.iter().map(|g| g.entries.len()).sum::<usize>() >= MAX_SWATCHES {
+    if swatches_full(groups) {
         return None;
     }
     let group = st.selected.as_ref().and_then(|key| group_of(groups, key)).and_then(|index| groups.get(index)).map(|g| g.name.clone());
@@ -210,21 +210,19 @@ pub(super) fn event_edits(
             Vec::new()
         }
         PresetEvent::Rename { key: SwatchKey::Swatch(old), text, .. } => {
-            let name = text.trim();
-            if find_swatch(groups, &old).is_none() || name.is_empty() || name == old || find_swatch(groups, name).is_some() {
+            let Some(name) = find_swatch(groups, &old).and_then(|at| swatch_rename(groups, at, &text)).filter(|name| *name != old) else {
                 return Vec::new();
-            }
+            };
             if st.selected == Some(SwatchKey::Swatch(old.clone())) {
-                st.selected = Some(SwatchKey::Swatch(name.to_owned()));
+                st.selected = Some(SwatchKey::Swatch(name.clone()));
             }
-            vec![SwatchEdit::Rename { swatch: old, name: name.to_owned() }]
+            vec![SwatchEdit::Rename { swatch: old, name }]
         }
         PresetEvent::Rename { key: SwatchKey::Group(old), text, .. } => {
-            let name = text.trim();
-            if !groups.iter().any(|g| g.name == old) || name.is_empty() || name == old || groups.iter().any(|g| g.name == name) {
+            let Some(name) = groups.iter().position(|g| g.name == old).and_then(|i| group_rename(groups, i, &text)).filter(|name| *name != old) else {
                 return Vec::new();
-            }
-            vec![SwatchEdit::RenameGroup { group: old, name: name.to_owned() }]
+            };
+            vec![SwatchEdit::RenameGroup { group: old, name }]
         }
         PresetEvent::Delete(key) => delete_edit(groups, &key).into_iter().collect(),
         PresetEvent::MoveTo { key: SwatchKey::Swatch(name), group: SwatchKey::Group(to), .. } => {
