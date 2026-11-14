@@ -266,3 +266,17 @@ fn deeply_nested_groups_are_read_and_walked() {
     let again = Spread::from_el(&parse_part(&part_xml(&s.to_el())).unwrap());
     assert_eq!(again, s);
 }
+
+#[test]
+fn text_variable_decoration_uses_preference_and_falls_back_to_legacy_root_values() {
+    let preferred = parse_part(
+        br#"<TextVariable Name="Last Page Number" VariableType="LastPageNumberType" TextBefore="legacy " TextAfter=" legacy"><PageNumberVariablePreference TextBefore="of " TextAfter=" pages" Scope="SectionScope"/></TextVariable>"#,
+    )
+    .unwrap();
+    let variable = craft_idml::model::TextVariableValues::from_el(&preferred);
+    assert_eq!((variable.before.as_str(), variable.after.as_str()), ("of ", " pages"));
+
+    let legacy = parse_part(br#"<TextVariable Name="Last Page Number" TextBefore="of " TextAfter=" pages"/>"#).unwrap();
+    let variable = craft_idml::model::TextVariableValues::from_el(&legacy);
+    assert_eq!((variable.before.as_str(), variable.after.as_str()), ("of ", " pages"));
+}
