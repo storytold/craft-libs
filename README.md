@@ -349,7 +349,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   reports source patterns that broke platforms before: muda's predefined Quit item, WGSL float literals
   out of range, and `std::time::Instant` in code the web build runs. Its `deadline` module fails a test
   whose body runs past a limit, or whose condition does not hold in time; a variable the caller names
-  replaces each limit. Not published.
+  replaces each limit. Its `hostile` module runs a parser on every truncation and on seeded damaged
+  copies of a valid input, and fails the test with the case that panicked or did not finish. Not
+  published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).

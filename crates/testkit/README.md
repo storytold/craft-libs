@@ -136,6 +136,71 @@ variable holds something other than a number. FilmCraft also uses the default fo
 - Neither function returns elapsed time. Tests of this crate use channel handshakes, and the only time
   bounds in them are the limits under test.
 
+## hostile
+
+`mutations(seed, rounds)` yields `rounds` damaged copies of a valid seed. Each round makes one to four
+edits: a bit flip, a random byte, a 1, 2, 4 or 8-byte overwrite with an extreme value
+(0, 1, 0x7F, 0x80, 0xFF, 0xFFFF, 0x8000_0000 or `u64::MAX`) in either byte order, a deletion of up to
+16 bytes, or a truncation. Each copy carries a label that lists its edits, such as
+`flip[3].5 del[7..9]`. The xorshift64* generator behind it is seeded from the seed's length, so the
+same seed length and round count give the same edits on every run and every platform. An empty seed
+yields no copies. `mutations` and `Rng` build for `wasm32`.
+
+`hammer(&config, seed, parse)` runs `parse` on the unmodified seed, on every truncation of it
+(lengths 0 to one less than its length), and on `mutations(seed, rounds)`. Each case runs on its own
+thread under `with_deadline`. The test fails on the first case that panics or does not finish, with
+a message that names the config's label, the case (`the unmodified seed`, `truncation to N` or the
+edits), the input's length and the panic's message. `parse` must be `Fn(&[u8]) + Send + Sync + 'static`,
+since a case that does not finish keeps running on its thread after the test fails. `hammer` is not
+built for `wasm32`.
+
+```rust
+use std::time::Duration;
+use craft_testkit::DeadlineLimit;
+use craft_testkit::hostile::{HammerConfig, hammer};
+
+// 2,000 rounds times CRAFT_HOSTILE_MULT; 5 s per case, or CRAFT_TEST_TIMEOUT_SECS.
+hammer(&HammerConfig::new("png seed 3", 2_000), &seed, |data| {
+    let _ = decode(data);
+});
+
+// The app's own variables instead.
+let config = HammerConfig::new("mxf primer", 5_000)
+    .with_multiplier_variable("CRAFT_MEDIA_HOSTILE_MULT")
+    .with_timeout(DeadlineLimit::new(Duration::from_secs(5)).with_variable("FILMCRAFT_HOSTILE_TIMEOUT_SECS"));
+hammer(&config, &primer, |data| {
+    let _ = parse_primer(data);
+});
+```
+
+### The rounds
+
+The rounds are the config's iterations times the multiplier variable, `CRAFT_HOSTILE_MULT` unless
+`with_multiplier_variable` names another. The limit for each case is 5 s, replaced by
+`CRAFT_TEST_TIMEOUT_SECS` or the variable that `with_timeout` names, as in `deadline`.
+`HammerConfig::rounds` returns the rounds or the error that `hammer` would fail with.
+
+| Multiplier value | Result |
+|---|---|
+| Not set | The multiplier is 1. |
+| Decimal digits above zero, such as `10` | The rounds are multiplied by that number. |
+| Empty, signed, fractional, with spaces, zero, larger than a `usize`, or not Unicode | The test fails with the variable's name and value before `parse` is called. |
+
+A product of the iterations and the multiplier that does not fit in a `usize`, and a call that would
+run more than `MAX_CASES` (10,000,000) cases in all, also fail the test before `parse` is called.
+
+Changes from `craft-media-testkit`'s `hammer`:
+
+- A case that does not finish fails the test after its limit with the case's label. Before, a case
+  was timed after it returned and failed only when it took longer than 5 s.
+- A panic's message is part of the failure.
+- Every truncation runs. Before, a seed of 8,192 bytes or more ran every `len / 4096`th truncation.
+- The caller names the multiplier variable. Before, it was always `CRAFT_MEDIA_HOSTILE_MULT`, and a
+  value that was not a number counted as 1.
+- An empty seed runs once. Before, it ran once more for each round.
+- `parse` is owned and shared between threads. A closure that borrows from the test needs its data
+  moved or shared with an `Arc`.
+
 ## Origin
 
 ### guards
@@ -156,6 +221,12 @@ variable holds something other than a number. FilmCraft also uses the default fo
 | `wait_until` | storytold/lightcraft | `crates/engine/src/availability.rs` | `7ebbb17a` |
 | `wait_until` | storytold/effectcraft | `crates/engine/src/footage/footage_reload.rs` | `53576d22` |
 | `wait_until` | storytold/filmcraft | `crates/ui-egui/tests/it/export_ui.rs` | `cff7e144` |
+
+### hostile
+
+| Code | Repository | Path | SHA |
+|---|---|---|---|
+| `Rng`, the edits of `mutations` and `hammer` | storytold/craft-libs | `crates/media-testkit/src/hostile.rs` | `75a654f4` |
 
 ## Migration
 
@@ -178,3 +249,15 @@ variable holds something other than a number. FilmCraft also uses the default fo
 | `craft-media-testkit` | `with_deadline` (`CRAFT_TEST_TIMEOUT_SECS`) | Pending |
 
 An adoption keeps the variable name the app uses today.
+
+### hostile
+
+| Consumer | Code it replaces | State |
+|---|---|---|
+| `craft-media-testkit` | `hostile::hammer` (`CRAFT_MEDIA_HOSTILE_MULT`), called by the ISO BMFF, AVI, Matroska, MXF and MPEG TS hostile tests | Pending |
+| `craft-cfb` | its `hostile_input_never_panics` test, through `craft-media-testkit` | Pending |
+| CADCraft | the mutation loop of `hostile_files_never_panic` in `crates/fonts/src/shx/tests.rs` | Pending |
+| TextureCraft | the `hammer` of `malformed_meshes_are_errors` in `crates/formats/src/mesh_import/tests.rs` | Pending |
+
+CADCraft's and TextureCraft's loops make other edits than `mutations`. Their adoptions say which
+cases change, and keep the test names.

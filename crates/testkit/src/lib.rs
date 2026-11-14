@@ -20,6 +20,11 @@
 //! polls a condition until it holds and fails the test when the limit passes first. Both read an
 //! optional limit variable that the caller names, `CRAFT_TEST_TIMEOUT_SECS` by default.
 //!
+//! [`hostile::mutations`] yields a fixed sequence of damaged copies of a valid seed, on every
+//! target. On targets other than `wasm32`, [`hostile::hammer`] runs a parser on the seed, every
+//! truncation of it and those copies, each under [`deadline::with_deadline`], and fails the test
+//! with the case that panicked or did not finish.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -33,6 +38,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod deadline;
 pub mod guards;
+pub mod hostile;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use deadline::{DeadlineLimit, wait_until, with_deadline};
