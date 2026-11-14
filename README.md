@@ -345,6 +345,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   check for drawing a tree with resvg. Apps take usvg from here, not as their own dependency.
 - [`craft-svg-paths`](crates/svg-paths/src/lib.rs): the former name of `craft-svg`'s `paths`,
   `color` and `write`; re-exports them for existing users.
+- [`craft-testkit`](crates/testkit/README.md): test support for the apps' own tests. Its `guards` module
+  reports source patterns that broke platforms before: muda's predefined Quit item, WGSL float literals
+  out of range, and `std::time::Instant` in code the web build runs. Not published.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).

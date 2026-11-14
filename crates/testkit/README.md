@@ -6,10 +6,10 @@ Source-level platform regression guards and verification utilities for the Craft
 
 `craft-testkit` provides lightweight, non-panicking source guards that prevent applications in the Craft ecosystem from repeating platform defects that were previously diagnosed and resolved in peer applications:
 
-1. **`predefined_quit`**: Flags direct calls to `muda`'s `PredefinedMenuItem::quit` outside comments. On macOS, this predefined menu item routes directly to `NSApplication terminate:`, completely bypassing application dirty document checks and unsaved changes save prompts. Applications should instead wire Quit through `craft-quit` lifecycle interceptors.
-2. **`wgsl_float_literals` / `wgsl_float_literals_in`**: Scans WGSL shader sources using PhotoCraft's decimal float scanner and flags literals whose absolute value exceeds `f32::MAX` (such as `3.40282347e38`). While native compilers (`naga`) round these down, browser WebGPU compilers (`Tint` in Chromium) reject them with fatal pipeline compilation errors, forcing applications into CPU fallback rendering. Exact values equal to `f32::MAX` must be written as exact hex float literals (`0x1.fffffep+127f`).
-3. **`std_instant`**: Flags lines naming `std::time::Instant` outside comments without `web_time`. On `wasm32-unknown-unknown`, `std::time::Instant::now()` panics at runtime with `"time not implemented on this platform"`. Code targeting the web must use `web_time::Instant`.
-4. **`rust_sources`**: Recursively discovers a crate's `.rs` source files while excluding integration tests (`tests/`), test modules (`tests.rs`, `tests_*.rs`, `*_tests.rs`, `*_test.rs`), and build artifacts (`target/`, `.git/`).
+1. **`predefined_quit`**: Flags direct calls to `muda`'s `PredefinedMenuItem::quit` outside comments, strings and character literals, also with whitespace or a line break around `::` and through a `use muda::PredefinedMenuItem as ...` rename. On macOS, this predefined menu item routes directly to `NSApplication terminate:`, completely bypassing application dirty document checks and unsaved changes save prompts. Applications should instead wire Quit through `craft-quit` lifecycle interceptors.
+2. **`wgsl_float_literals` / `wgsl_float_literals_in`**: Scans WGSL shader sources and flags decimal and hexadecimal float literals whose value exceeds `f32::MAX` (such as `3.40282347e38` or `0x1p+500f`), or 65504, the largest finite `f16`, for a literal with an `h` suffix. Integer literals are not checked. Some native compilers round such literals down, but browser WebGPU compilers reject them with pipeline compilation errors, forcing applications into CPU fallback rendering. Exact values equal to `f32::MAX` can be written as `3.4028234663852886e38` or as the hex float `0x1.fffffep+127f`.
+3. **`std_instant`**: Flags `std::time::Instant` outside comments and strings: the full path, `<m>::Instant` where a `use` binds `m` to `std::time`, and each `use` that imports `std::time::Instant` or `std::time::*`. Other crates' `Instant` (such as `web_time::Instant`) is not flagged, and neither is an item whose `cfg` attribute is false on `wasm32-unknown-unknown`. A `mod name;` inside such an item also skips the module's file (`name.rs` or `name/mod.rs`, or the file a `#[path]` attribute names) and the files of the modules declared in it, when they are among the files passed in and no declaration outside such items also reaches them. On that target, `std::time::Instant::now()` panics at runtime with `"time not implemented on this platform"`. Code targeting the web must use `web_time::Instant`.
+4. **`rust_sources`**: Recursively discovers a crate's `.rs` source files while excluding integration tests (`tests/`), test modules (`tests.rs`, `tests_*.rs`, `*_tests.rs`, `*_test.rs`), build artifacts (`target/`, any folder holding a `CACHEDIR.TAG` file, `.git/` and other folders whose name starts with `.`) and symbolic links, which it does not follow. A file over 8 MiB, more than 256 MiB in all or more than 50,000 files returns an error; `rust_sources_with_limits` takes other limits. It is not built for `wasm32`.
 
 ## Log capture: `log`
 
@@ -75,8 +75,8 @@ Source-level guards provide deterministic syntactic evidence about codebase stru
 
 ### What They Cannot Establish
 - **Runtime execution safety**: Syntactic checks do not verify whether code branches actually execute at runtime.
-- **Semantic type resolution**: The scanners do not resolve arbitrary type aliases (e.g. `use std::time as t; t::Instant::now()`) or expand procedural macros.
-- **Complex target predicates**: While `std_instant` recognizes direct item-level non-wasm target conditions (e.g. `#[cfg(not(target_arch = "wasm32"))]`), it does not evaluate arbitrary multi-crate boolean expressions. Applications should scope `std_instant` tests to the specific crates that compile into their web distribution.
+- **Semantic type resolution**: The scanners follow `use` renames within one file only. They do not resolve paths through other modules or re-exports, a rename of `std` itself, or expand macros.
+- **Complex target predicates**: `std_instant` evaluates `cfg` predicates (`all`, `any`, `not`, `unix`, `windows` and the `target_*` keys) for `wasm32-unknown-unknown`, on outer attributes for the item that follows and on inner attributes (`#![cfg(...)]`) for the rest of the module, and on `mod name;` declarations for the module's file and its descendants. It compares file paths as text, so the files must come from one `rust_sources` call or be named the same way. A predicate that depends on a feature or on `test` is not known from the source, so its item is checked. Applications should scope `std_instant` tests to the specific crates that compile into their web distribution.
 - **Driver and host OS behavior**: Syntactic checks do not verify WebGPU driver compatibility or host window manager event dispatch.
 
 Source guards serve as fast, zero-dependency regression gates in application test suites, complementing platform integration tests and CI workflows.
@@ -131,3 +131,16 @@ fn no_std_instant_in_code_the_web_build_runs() {
     );
 }
 ```
+
+## Origin
+
+| Module | Source | Path | Commit |
+|---|---|---|---|
+| `guards` | storytold/craft-libs#163 (zachshallbetter), with the rules of PhotoCraft's shader float test and FilmCraft's web clock test | `crates/testkit/src/guards.rs` | `e92825e427` |
+
+## Migration
+
+| Consumer | Guard | Replaces | State |
+|---|---|---|---|
+| PhotoCraft | `wgsl_float_literals` | `crates/gpu/src/tests.rs` scanner | Not started |
+| FilmCraft | `std_instant` | `crates/engine/src/wasm_clock_tests.rs` search | Not started |

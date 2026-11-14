@@ -8,11 +8,12 @@
 //!
 //! * [`guards::predefined_quit`]: flags direct calls to `muda`'s predefined Quit item that bypass
 //!   dirty document save prompts and window teardown on macOS.
-//! * [`guards::wgsl_float_literals`]: flags decimal float literals exceeding `f32`'s finite range,
-//!   which break browser WebGPU compilers (Tint) and trigger CPU fallbacks.
+//! * [`guards::wgsl_float_literals`]: flags WGSL float literals above the finite range of `f32`
+//!   (or of `f16` for an `h` suffix), which browser WebGPU compilers reject.
 //! * [`guards::std_instant`]: flags uses of `std::time::Instant` in code paths targeting the web,
 //!   where `std::time::Instant::now()` panics on `wasm32`.
-//! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests.
+//! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
+//!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
 //! With the `log` feature, on targets other than `wasm32`, `log::warnings` and `log::records`
 //! capture the records the calling thread logs while a closure runs, and `log::capture_global`
@@ -32,7 +33,7 @@ pub mod guards;
 #[cfg(all(feature = "log", not(target_arch = "wasm32")))]
 pub mod log;
 
-pub use guards::{Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
+pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use guards::rust_sources;
+pub use guards::{SourceLimits, rust_sources, rust_sources_with_limits};

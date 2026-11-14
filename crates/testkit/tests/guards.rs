@@ -1,5 +1,54 @@
 use craft_testkit::{Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 
+/// A scratch folder under the system temporary folder that this test made and removes on drop,
+/// also when the test panics. A folder that already exists is never emptied or reused.
+#[cfg(not(target_arch = "wasm32"))]
+struct ScratchDir(std::path::PathBuf);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ScratchDir {
+    fn new(tag: &str) -> Self {
+        let base = std::env::temp_dir();
+        for n in 0..1000u32 {
+            let path = base.join(format!("craft_testkit_{tag}_{}_{n}", std::process::id()));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("create scratch folder {}: {e}", path.display()),
+            }
+        }
+        panic!("no free scratch folder name for {tag}");
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn write(&self, relative: &str, content: &str) {
+        let path = self.0.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create parent folder");
+        }
+        std::fs::write(path, content).expect("write file");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn file_names(sources: &[(String, String)]) -> Vec<String> {
+    sources.iter().map(|(p, _)| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).collect()
+}
+
+fn lines(findings: &[Finding]) -> Vec<usize> {
+    findings.iter().map(|f| f.line).collect()
+}
+
 #[test]
 fn test_finding_display() {
     let f1 = Finding::new("src/menu.rs", 42, "PredefinedMenuItem::quit()");
@@ -287,44 +336,477 @@ const OVER_NEG: f32 = -3.40282347e38;
     assert_eq!(findings[1].text, "3.40282347e38");
 }
 
+#[test]
+fn character_literals_do_not_hide_the_code_after_them() {
+    let source = r#"
+fn menu<'a>(label: &'a str) {
+    let quote = '"';
+    let quit = PredefinedMenuItem::quit(None);
+    let apostrophe = '\'';
+    let t0 = std::time::Instant::now();
+    let b = b'"';
+    let later = PredefinedMenuItem::quit(Some(label));
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![4, 8]);
+    assert_eq!(lines(&std_instant([("src/menu.rs", source)])), vec![6]);
+}
+
+#[test]
+fn strings_hold_comment_markers_without_hiding_code() {
+    let source = r##"
+fn menu() {
+    let a = "/* not a comment";
+    let quit = PredefinedMenuItem::quit(None);
+    let b = b"// not a comment either";
+    let c = r#"*/ " still a raw string"#;
+    let t0 = std::time::Instant::now();
+    let d = "PredefinedMenuItem::quit std::time::Instant";
+}
+"##;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![4]);
+    assert_eq!(lines(&std_instant([("src/menu.rs", source)])), vec![7]);
+}
+
+#[test]
+fn nested_block_comments_stay_masked() {
+    let source = "/* outer /* inner */ PredefinedMenuItem::quit(None); std::time::Instant::now(); */\nlet q = PredefinedMenuItem::quit(None);\n";
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![2]);
+    assert!(std_instant([("src/menu.rs", source)]).is_empty());
+}
+
+#[test]
+fn predefined_quit_sees_tabs_and_line_breaks_around_the_path_separator() {
+    let source = "fn menu() {\n    let a = PredefinedMenuItem\t::\tquit(None);\n    let b = muda::PredefinedMenuItem\n        ::quit(None);\n}\n";
+    let findings = predefined_quit([("src/menu.rs", source)]);
+    assert_eq!(lines(&findings), vec![2, 3]);
+    assert_eq!(findings[1].text, "let b = muda::PredefinedMenuItem");
+}
+
+#[test]
+fn predefined_quit_matches_whole_names_only() {
+    let other_names = r#"
+fn menu() {
+    let a = MyPredefinedMenuItem::quit(None);
+    let b = PredefinedMenuItem::quitter();
+    let c = PredefinedMenuItem::quit_label();
+}
+"#;
+    assert!(predefined_quit([("src/menu.rs", other_names)]).is_empty());
+
+    let aliased = r#"
+use muda::{PredefinedMenuItem as Item, MenuItem};
+fn menu() {
+    let a = Item::quit(None);
+    let b = other::Item::quit(None);
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", aliased)])), vec![4]);
+
+    let other_crate = r#"
+use other_menu::PredefinedMenuItem as Item;
+fn menu() {
+    let a = Item::quit(None);
+}
+"#;
+    assert!(predefined_quit([("src/menu.rs", other_crate)]).is_empty());
+}
+
+#[test]
+fn std_instant_ignores_an_alias_that_only_a_native_cfg_imports() {
+    let source = r#"
+#[cfg(not(target_arch = "wasm32"))]
+use std::time as clock;
+#[cfg(target_arch = "wasm32")]
+use web_time as clock;
+
+fn now() {
+    let t = clock::Instant::now();
+}
+"#;
+    assert!(std_instant([("src/clock.rs", source)]).is_empty());
+}
+
+#[test]
+fn std_instant_reads_cfg_from_code_not_from_strings_or_comments() {
+    let cfg_in_string = r##"
+fn now() -> u64 { let _s = r#"cfg(target_os = "linux")"#;
+    let t = std::time::Instant::now();
+    0
+}
+"##;
+    assert_eq!(lines(&std_instant([("src/a.rs", cfg_in_string)])), vec![3]);
+
+    let cfg_in_comment = r#"
+fn web() { // cfg(target_os = "linux")
+    let t = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/b.rs", cfg_in_comment)])), vec![3]);
+}
+
+#[test]
+fn std_instant_skips_only_the_item_a_native_cfg_covers() {
+    let source = r#"
+#[cfg(not(target_arch = "wasm32"))]
+fn native() -> std::time::Instant { std::time::Instant::now() }
+fn web() -> std::time::Instant { std::time::Instant::now() }
+
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+#[inline]
+fn unix_only() {
+    let t = std::time::Instant::now();
+}
+
+#[cfg(feature = "native-clock")]
+fn by_feature() { let t = std::time::Instant::now(); }
+
+#[cfg(any(target_arch = "wasm32", windows))]
+fn also_web() { let t = std::time::Instant::now(); }
+
+#[cfg(target_os = "unknown")]
+fn unknown_os() { let t = std::time::Instant::now(); }
+
+#[cfg(target_os = "macos")]
+use std::time::Instant as MacInstant;
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![4, 13, 16, 19]);
+}
+
+#[test]
+fn std_instant_inner_cfg_covers_the_whole_file() {
+    let source = r#"
+#![cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
+fn now() -> Instant {
+    std::time::Instant::now()
+}
+"#;
+    assert!(std_instant([("src/native.rs", source)]).is_empty());
+}
+
+#[test]
+fn std_instant_reports_a_std_use_on_a_line_that_also_names_web_time() {
+    let source = "fn pair() {\n    let p = (web_time::Instant::now(), std::time::Instant::now());\n}\n";
+    assert_eq!(lines(&std_instant([("src/pair.rs", source)])), vec![2]);
+}
+
+#[test]
+fn std_instant_needs_std_behind_a_bare_time_path() {
+    let source = r#"
+use crate::time;
+
+fn tick() {
+    let t = time::Instant::new();
+}
+"#;
+    assert!(std_instant([("src/tick.rs", source)]).is_empty());
+}
+
+#[test]
+fn std_instant_follows_module_and_type_aliases() {
+    let source = r#"
+use std::time as t;
+use std::time::{self as clock, Duration};
+use std::{time::Instant as I, fmt};
+use web_time as wt;
+
+fn run() {
+    let a = t::Instant::now();
+    let b = clock::Instant::now();
+    let c = wt::Instant::now();
+    let d = x::t::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![4, 8, 9]);
+}
+
+fn finding_paths(findings: &[Finding]) -> Vec<&str> {
+    findings.iter().map(|f| f.path.as_str()).collect()
+}
+
+#[test]
+fn std_instant_skips_module_files_a_native_cfg_declares() {
+    let lib = r#"
+#[cfg(not(target_arch = "wasm32"))]
+mod native;
+mod web;
+#[cfg(feature = "extra")]
+mod extra;
+"#;
+    let native = "mod clock;\npub fn now() -> std::time::Instant { std::time::Instant::now() }\n";
+    let native_clock = "use std::time::Instant;\n";
+    let web = "#[cfg(unix)]\nmod imp;\npub fn now() { let _t = std::time::Instant::now(); }\n";
+    let web_imp = "use std::time::Instant;\n";
+    let sibling_imp = "use std::time::Instant;\n";
+    let extra = "use std::time::Instant;\n";
+    let files = [
+        ("src/lib.rs", lib),
+        ("src/native.rs", native),
+        ("src/native/clock.rs", native_clock),
+        ("src/web.rs", web),
+        ("src/web/imp.rs", web_imp),
+        ("src/imp.rs", sibling_imp),
+        ("src/extra.rs", extra),
+    ];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/web.rs", "src/imp.rs", "src/extra.rs"]);
+}
+
+#[test]
+fn std_instant_skips_native_module_files_by_mod_rs_path_attribute_and_inline_module() {
+    let main = r#"
+#[cfg(unix)]
+pub(crate) mod sys;
+#[cfg(target_os = "macos")]
+#[path = "platform/mac_clock.rs"]
+mod mac;
+#[cfg(windows)]
+mod outer {
+    mod inner;
+}
+#[cfg(unix)]
+#[path = "platform/native.rs"]
+pub(in crate) mod native;
+"#;
+    let clock = "use std::time::Instant;\n";
+    let files = [
+        ("C:\\app\\src\\main.rs", main),
+        ("C:\\app\\src\\platform\\native.rs", clock),
+        ("C:\\app\\src\\sys\\mod.rs", "mod detail;\n"),
+        ("C:\\app\\src\\sys\\detail.rs", clock),
+        ("C:\\app\\src\\platform\\mac_clock.rs", clock),
+        ("C:\\app\\src\\outer\\inner.rs", clock),
+        ("C:\\app\\src\\mac.rs", clock),
+    ];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["C:\\app\\src\\mac.rs"]);
+}
+
+#[test]
+fn std_instant_checks_a_module_file_that_a_web_declaration_also_names() {
+    let lib = r#"
+#[cfg(windows)]
+mod imp;
+#[cfg(target_arch = "wasm32")]
+mod imp;
+#[cfg(unix)]
+mod sys;
+"#;
+    let files = [
+        ("src/lib.rs", lib),
+        ("src/imp.rs", "mod detail;\n"),
+        ("src/imp/detail.rs", "use std::time::Instant;\n"),
+        ("src/sys.rs", "#[path = \"imp/detail.rs\"]\nmod shared;\n"),
+    ];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/imp/detail.rs"]);
+}
+
+#[test]
+fn std_instant_reads_an_inline_module_path_attribute_as_the_folder_of_its_modules() {
+    let lib = r#"
+#[cfg(unix)]
+#[path = "native"]
+mod platform {
+    mod clock;
+}
+mod web;
+"#;
+    let web = r#"
+#[path = "shared"]
+mod inner {
+    #[cfg(windows)]
+    mod tick;
+}
+"#;
+    let clock = "use std::time::Instant;\n";
+    let files = [
+        ("src/lib.rs", lib),
+        ("src/native/clock.rs", clock),
+        ("src/platform/clock.rs", clock),
+        ("src/web.rs", web),
+        ("src/shared/tick.rs", clock),
+        ("src/web/shared/tick.rs", clock),
+    ];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/platform/clock.rs", "src/web/shared/tick.rs"]);
+}
+
+#[test]
+fn std_instant_reads_top_level_path_attributes_of_a_non_mod_rs_file_from_its_folder() {
+    let a = r#"
+#[cfg(unix)]
+#[path = "native.rs"]
+mod imp;
+#[cfg(unix)]
+#[path = "native"]
+mod platform {
+    mod clock;
+}
+"#;
+    let clock = "use std::time::Instant;\n";
+    let files = [
+        ("src/lib.rs", "mod a;\n"),
+        ("src/a.rs", a),
+        ("src/native.rs", clock),
+        ("src/native/clock.rs", clock),
+        ("src/a/native.rs", clock),
+        ("src/a/native/clock.rs", clock),
+    ];
+    assert_eq!(finding_paths(&std_instant(files)), vec!["src/a/native.rs", "src/a/native/clock.rs"]);
+}
+
+#[test]
+fn std_instant_checks_module_files_declared_deeper_than_its_nesting_limit() {
+    let lib = format!("{}#[cfg(unix)]\nmod deep;\n{}", "mod m {\n".repeat(70), "}\n".repeat(70));
+    let shallow_lib = format!("{}#[cfg(unix)]\nmod deep;\n{}", "mod m {\n".repeat(3), "}\n".repeat(3));
+    let deep_path = format!("src/{}deep.rs", "m/".repeat(70));
+    let shallow_path = format!("src/{}deep.rs", "m/".repeat(3));
+    let clock = "use std::time::Instant;\n";
+    let files = [("src/lib.rs", lib.as_str()), (deep_path.as_str(), clock)];
+    assert_eq!(finding_paths(&std_instant(files)), vec![deep_path.as_str()]);
+    let files = [("src/lib.rs", shallow_lib.as_str()), (shallow_path.as_str(), clock)];
+    assert!(std_instant(files).is_empty());
+}
+
+#[test]
+fn wgsl_integer_literals_are_not_floats() {
+    let shader = r#"
+const BIG_ABSTRACT = 400000000000000000000000000000000000000000;
+const BIG_U = 1000000000000000000000000000000000000000u;
+const BIG_I = 1000000000000000000000000000000000000000i;
+const HEX_INT = 0xFFFFFFFFu;
+const HEX_F_DIGIT = 0x1f;
+const FLOAT_DOT: f32 = 340282356779733661637539395458142568448.0;
+const FLOAT_SUFFIX: f32 = 400000000000000000000000000000000000000f;
+const NEG_EXP: f32 = -4e38;
+"#;
+    let findings = wgsl_float_literals(shader);
+    assert_eq!(lines(&findings), vec![7, 8, 9]);
+    assert_eq!(findings[0].text, "340282356779733661637539395458142568448.0");
+    assert_eq!(findings[1].text, "400000000000000000000000000000000000000");
+    assert_eq!(findings[2].text, "4e38");
+}
+
+#[test]
+fn wgsl_hex_floats_outside_the_range_are_reported() {
+    let shader = r#"
+const EXACT_MAX: f32 = 0x1.fffffep+127f;
+const HUGE: f32 = 0x1p+500f;
+const JUST_OVER: f32 = 0x1.000002p+128;
+const UPPER: f32 = 0X1P128;
+const TINY: f32 = 0x1p-500;
+const ZERO: f32 = 0x0.0p99999;
+const F16_MAX: f16 = 0x1.ffcp15h;
+const F16_OVER: f16 = 0x1.0p16h;
+"#;
+    let findings = wgsl_float_literals(shader);
+    assert_eq!(lines(&findings), vec![3, 4, 5, 9]);
+    assert_eq!(findings[0].text, "0x1p+500");
+    assert_eq!(findings[3].text, "0x1.0p16");
+}
+
+#[test]
+fn wgsl_block_comment_markers_inside_line_comments_do_not_open_a_comment() {
+    let shader = "// a /* inside a line comment\nconst BAD: f32 = 4e38;\n/* block // with a line marker */ const ALSO_BAD: f32 = 5e38;\n";
+    let findings = wgsl_float_literals(shader);
+    assert_eq!(lines(&findings), vec![2, 3]);
+}
+
+#[test]
+fn wgsl_half_floats_use_the_f16_range() {
+    let shader = "const OK: f16 = 65504.0h;\nconst OVER: f16 = 70000.0h;\nconst F32_OK: f32 = 70000.0f;\n";
+    let findings = wgsl_float_literals(shader);
+    assert_eq!(lines(&findings), vec![2]);
+    assert_eq!(findings[0].text, "70000.0");
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn test_rust_sources_filtering() {
     use craft_testkit::rust_sources;
-    use std::fs::{self, File};
-    use std::io::Write;
 
-    let temp_dir = std::env::temp_dir().join(format!("craft_testkit_test_{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(temp_dir.join("src").join("sub")).expect("create temp sub");
-    fs::create_dir_all(temp_dir.join("tests")).expect("create temp tests");
-    fs::create_dir_all(temp_dir.join("target")).expect("create temp target");
-    fs::create_dir_all(temp_dir.join(".github")).expect("create temp dot-dir");
+    let dir = ScratchDir::new("filtering");
+    dir.write("src/lib.rs", "pub fn lib() {}");
+    dir.write("src/sub/mod.rs", "pub fn sub() {}");
+    dir.write("src/tests.rs", "// should exclude");
+    dir.write("src/tests_foo.rs", "// should exclude");
+    dir.write("src/foo_tests.rs", "// should exclude");
+    dir.write("src/foo_test.rs", "// should exclude");
+    dir.write("tests/integ.rs", "// should exclude");
+    dir.write("target/gen.rs", "// should exclude");
+    dir.write(".github/action.rs", "// should exclude dot-dir");
+    dir.write("src/README.md", "# Not a rust source");
 
-    let create_file = |path: std::path::PathBuf, content: &str| {
-        let mut f = File::create(path).expect("create file");
-        f.write_all(content.as_bytes()).expect("write content");
-    };
+    let sources = rust_sources(dir.path()).expect("rust_sources");
+    assert_eq!(file_names(&sources), vec!["lib.rs", "mod.rs"]);
 
-    create_file(temp_dir.join("src").join("lib.rs"), "pub fn lib() {}");
-    create_file(temp_dir.join("src").join("sub").join("mod.rs"), "pub fn sub() {}");
-    create_file(temp_dir.join("src").join("tests.rs"), "// should exclude");
-    create_file(temp_dir.join("src").join("tests_foo.rs"), "// should exclude");
-    create_file(temp_dir.join("src").join("foo_tests.rs"), "// should exclude");
-    create_file(temp_dir.join("src").join("foo_test.rs"), "// should exclude");
-    create_file(temp_dir.join("tests").join("integ.rs"), "// should exclude");
-    create_file(temp_dir.join("target").join("gen.rs"), "// should exclude");
-    create_file(temp_dir.join(".github").join("action.rs"), "// should exclude dot-dir");
-    create_file(temp_dir.join("src").join("README.md"), "# Not a rust source");
-
-    let sources = rust_sources(&temp_dir).expect("rust_sources");
-    let names: Vec<String> = sources.iter().map(|(p, _)| std::path::Path::new(p).file_name().unwrap().to_string_lossy().into_owned()).collect();
-
-    assert_eq!(names, vec!["lib.rs", "mod.rs"]);
-
-    // Test passing &[(&str, &str)] to guards
+    // Test passing &[(String, String)] to guards
     let findings = predefined_quit(&sources);
     assert!(findings.is_empty());
+}
 
-    let _ = fs::remove_dir_all(&temp_dir);
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn rust_sources_lists_a_root_inside_a_folder_named_tests() {
+    let dir = ScratchDir::new("root_in_tests");
+    dir.write("tests/app/src/lib.rs", "pub fn lib() {}");
+    let sources = craft_testkit::rust_sources(dir.path().join("tests").join("app")).expect("rust_sources");
+    assert_eq!(file_names(&sources), vec!["lib.rs"]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn rust_sources_skips_build_output_folders_marked_with_cachedir_tag() {
+    let dir = ScratchDir::new("cachedir");
+    dir.write("src/lib.rs", "pub fn lib() {}");
+    dir.write("out/CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55\n# build output\n");
+    dir.write("out/debug/build/gen.rs", "pub fn generated() {}");
+    dir.write("notes/CACHEDIR.TAG", "not a cache tag\n");
+    dir.write("notes/kept.rs", "pub fn kept() {}");
+    let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
+    assert_eq!(file_names(&sources), vec!["kept.rs", "lib.rs"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_sources_does_not_follow_a_symlink_out_of_the_root() {
+    let outside = ScratchDir::new("symlink_outside");
+    outside.write("evil.rs", "pub fn evil() {}");
+    let dir = ScratchDir::new("symlink_root");
+    dir.write("src/lib.rs", "pub fn lib() {}");
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("src").join("linked")).expect("symlink folder");
+    std::os::unix::fs::symlink(outside.path().join("evil.rs"), dir.path().join("src").join("evil.rs")).expect("symlink file");
+    let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
+    assert_eq!(file_names(&sources), vec!["lib.rs"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_sources_does_not_loop_on_a_symlink_cycle() {
+    let dir = ScratchDir::new("symlink_cycle");
+    dir.write("src/lib.rs", "pub fn lib() {}");
+    std::os::unix::fs::symlink(dir.path().join("src"), dir.path().join("src").join("again")).expect("symlink cycle");
+    let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
+    assert_eq!(file_names(&sources), vec!["lib.rs"]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn scratch_dirs_leave_existing_folders_alone_and_clean_up_on_panic() {
+    let taken = std::env::temp_dir().join(format!("craft_testkit_sentinel_{}_0", std::process::id()));
+    std::fs::create_dir(&taken).expect("create the folder the helper would pick first");
+    std::fs::write(taken.join("sentinel"), "keep").expect("write sentinel");
+
+    let made = std::panic::catch_unwind(|| {
+        let dir = ScratchDir::new("sentinel");
+        let path = dir.path().to_path_buf();
+        assert!(path.exists());
+        std::panic::panic_any(path);
+    });
+    let payload = made.expect_err("the closure panics");
+    let path = payload.downcast_ref::<std::path::PathBuf>().expect("panic payload is the path").clone();
+
+    assert_ne!(path, taken);
+    assert!(!path.exists(), "the scratch folder is removed when the test panics");
+    assert_eq!(std::fs::read_to_string(taken.join("sentinel")).expect("sentinel survives"), "keep");
+    std::fs::remove_dir_all(&taken).expect("remove the pre-made folder");
 }

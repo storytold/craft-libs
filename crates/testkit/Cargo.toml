@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 repository.workspace = true
 description = "Source-level platform regression guards and verification utilities for the Craft application suite"
+publish = false
 
 [features]
 # `log`: capture of the records a test logs, per thread or process wide.
