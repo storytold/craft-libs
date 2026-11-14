@@ -459,6 +459,7 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   | ends that start together | the fourth power of the segments that start, and of those that end, within 8 tolerances of one another in a grid (across and up, in four grids, each moved half a cell: a cluster of 4 tolerances lies in one cell of one of them) | 0.07 ns | stacks of copies, pies, fans: what the sweep does at a height it does in one step, which nothing counted as the sweep goes can stop in time (a stack of copies of one shape is a dozen steps and nine seconds), so these are counted from the segments before the sweep; copies a unit in the last place or a fraction of a tolerance apart start together as copies one on another do |
   | segments that start at one height | the square of those that start (and of those that end) at one height, wherever they are across | 3 ns | a row of dots on one line: their shapes put their pieces into the sweep line in one step |
   | steps of comparisons | the steps the sweep takes to compare two curves that are next to one another on the sweep line, less the 6 that each curved piece has been paid for (estimated from the curves, below), with 100 ns for each reading of the gap they are estimated from and 40 ns for each place of the line read to find them | 575 ns | smooth shapes that run along one another a few hundredths apart (copies moved a little, shadows, offsets): a pair of circles of a million in radius 0.03 apart takes about 8,000 steps |
+  | crossings (a price of the whole sweep: the time is the greater of it and the sum of the terms above) | the places where segments cross, counted before the sweep as the pricing counts them (`MAX_REAL_CROSSINGS`), once, when the sweep first reaches a crowd (a tangle of 4 million) | 3.5 µs a place for two lines, 1 µs for each unit of the count of those with a curve in them | copies of a shape that other segments cross: the sweep makes one piece of all the places the copies cross at, and the terms above count pieces (a window of the stroke of a path that goes back and forth over one line) |
 
   The star of 1,291 points counts 3.8e9 (91% of the budget), a hatch of 400 and 400 strokes 3.1e9.
 - **The cache of comparisons.** `linesweeper` keeps the order of each pair of segments it compares in two tables that it never clears (`ComparisonCache` in its
@@ -515,6 +516,27 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   inputs that are admitted takes 6.7 s (512 pairs of ellipses 0.003 apart), beside the star's 8.0, and every refusal comes within 4.1 s. Circles that touch, cross or lie far apart are cheap (4,096 pairs a diameter
   apart, touching, take 0.7 s). Beside it the star takes 7.5 to 8.3 s, and the rows of the Costs table the same as before, within 3%, but for a drawing of 40,000 strokes, which takes 9% more (1.59 s for 1.46:
   the dry sweep reads the line beside each range of curves).
+- **The crossings.** The terms above count what the sweep makes (pieces, clusters, steps of comparisons). Where segments lie on one another and other segments
+  cross them, the sweep makes one piece of all the places they cross at, and takes its time by the places. The windows of a stroke of a spine that goes back and forth over one
+  line were priced at a fifth to a third of their sweep, so that the windows of one stroke, held to the budget together, were admitted three to five times as many as the budget meant. The
+  fixture (`back_and_forth_spine` and `stroke_window` in `testutil.rs`): 300 segments between (0, 0) and (100, 20), back and forth, every point moved up by a jitter times its
+  index modulo 7 (a tenth, a thousandth, a ten-thousandth), stroked 6 wide. Its first window is 256 segments, 1,025 elements with miters or bevels and 1,280 with round joins: 14 stacks
+  of 18 copies of a line (a point and the one 14 on are the same), and the stacks cross one another all along their length. Beside the star of 1,291 points (9.2 s, counting 3.8,
+  in the same run; a release build under a load of 8 to 12) the sweep of the window took 0.62, 0.78 and 0.77 s with miters and 0.94, 2.6 and 4.5 s with round joins, and the dry
+  sweep counted 0.06, 0.07 and 0.10, and 0.08, 0.40 and 0.63. Time over work, taking the star's as 1: 4.3, 4.8 and 3.3, and 4.8, 2.7 and 3.0 (against 0.4 to 1.4 for the kinds measured below).
+  The time is in `linesweeper`'s scan of the neighbours of each segment it puts in its line and of the events that scan pushes (an instrumented copy of the sweep, which is not kept: 6.2
+  million neighbours looked at and 1.2 million events for the miter window, 9.1 million and 1.6 million for the round one, a thousandth of jitter) and, with round joins, 1.6 to 3 million steps of the comparison of two
+  cubics at the two finer jitters. The dry sweep sees the ranges and pieces that the sweep returns, and not those.
+  The places the segments cross at are counted by the pricing already (`real_crossings`, the limit `MAX_REAL_CROSSINGS`, 3 microseconds a place) and the meter takes them as a price for
+  the whole sweep: the time is the greater of that and the terms. A place where two lines cross is 3.5 microseconds, and a unit of the pricing's count of those with a curve in them
+  (a bound: nine places for two arcs that cross twice) 1. Counting them is a pass of every pair of bounds that overlap, a quarter to the whole of the sweep of rings, strokes or a circle of
+  100,000 cubics, so it is made once, when the sweep first reaches a crowd (a tangle of 4 million; the windows reach it at 150 segments, whose places are 0.09 s), and not for inputs
+  that never do. It is not made from the density of the input, which other shapes in it would dilute (25,000 squares around the window leave its price as it was). Time over work is now 0.97, 1.22 and 1.22 with miters and 0.36, 0.98
+  and 1.70 with round joins: the price of the round windows is a bound that does not move with the jitter, 2.8 times too high at a tenth and 1.7 times too low at a ten-thousandth, where the steps of
+  the comparisons of the arcs (which grow as the gap falls) are not in it. A stroke of 18,000 segments of the fixture is refused at its 16th window, not at its 62nd (110 s of sweeps). Twenty other fixtures
+  of the suites (stars, hatches, fans, stacks, pies, arcs, rings, meshes, strokes), run to the end, and the star of 1,291 points are priced as they were, for their places are less than their terms count (the star at 0.76 of them, the hatch of 400 and
+  400 strokes at 0.73), and they are what the weight of a place is held to. The fixture lacks what it was not made with: its copies are exact (a spine whose points are moved by a hash of their index has no two
+  segments alike: its miter window of 60 segments is swept in 0.05 s), and every window of it is as the first.
 - **The budget.** The work is held to `MAX_SWEEP_WORK` as it is counted: after each range of each sweep line the sweep stops, refusing the input
   as `TooComplex`, if the work counted so far is past it, so an input that is refused has cost about the budget of sweep at most. The counts made
   before the sweep refuse stacks of copies, fans and pies in 0.3 to 40 ms; the other holes were refused in 0.14 to 1.5 s, and in 3.8 to 5.1 s
@@ -538,7 +560,7 @@ filter (an input they refuse is refused in milliseconds, without sweeping); the 
   operation sweeps (2,000 pies of 30 slices hold 2.4 GB in it, which the cache's term bounds). Every input a review found, and the two classes the scan named, are refused by the meter alone, with the other limits lifted (tests in `tests/it/meter.rs`;
   the table of costs gives the times).
 
-What it does not bound is in Known limits: a step of the sweep is not interrupted, the weights are a fit (near the budget the time is 0.4 to 1.4 of the work, and far under
+What it does not bound is in Known limits: a step of the sweep is not interrupted, the weights are a fit (near the budget the time is 0.4 to 1.4 of the work, 0.4 to 1.7 for the windows of a stroke that goes back and forth over one line ("The crossings"), and far under
 it for the kinds the memory and the stacks of copies are tuned to refuse), the steps of comparisons are an estimate from the curves (0.4 of the work for smooth shapes moved in a random
 direction, 1 for circles and ellipses, up to 2.2 for crossing waves, which the counts before the sweep refuse in numbers), and the stages after the sweep.
 
@@ -633,6 +655,17 @@ or so, measured once in a release build:
   lifted (`real_crossings`, `crossed_work` and the rest), 600 closed loops of two cubics through one point exactly (1,200 cubics, `scurves`) are
   refused by the meter only after 33 s and 1.0 GB, and 800 (1,600 cubics) after 77 s and 1.9 GB (400 take 7.2 s and 0.5 GB, 300 3.8 s): the step in which they cross is
   made before it is counted. By default the counts of crossings refuse them, in 1 to 20 ms.
+- A step of the sweep can fail to end, and the pricing and the meter do not see it. The spine of 40 segments that goes back and forth between (0, 0) and (100, 20), every point moved
+  up by 6e-5 times a hash of its index (`hash01(i, 77)` in `testutil.rs`; the fixture of "The crossings" with its copies broken up), stroked 6 wide with round joins, did not come back from
+  `try_outline_stroke` in 150 s (a release build); at 20 and 30 segments it takes 0.05 and 0.12 s, and at 40 with miters 0.03 s. An instrumented copy of the sweep (not kept) pushed 10 million
+  events a second for 24 s with the pairs of segments it had compared and the steps of their comparison no more at 24 s than at 2 s, in the scans of `Sweeper::next_line`, which is where the
+  meter is not (it counts what a step has made when it returns). Every limit of the pricing is at 16% or less for the window (the limit on crossings at 2%), and its places are too few
+  for the price of "The crossings" to be anything. It is not bounded here: it wants a bound inside the sweep (the copy in `vendor/linesweeper`) or the refusal of round joins whose arcs
+  lie a few tolerances from one another, which this crate has no count for.
+- A debug build is slower than the weights say, and the meter holds it to release nanoseconds. The stroke of "The crossings" with round joins took 18.6, 88 and 178 s in a build with
+  debug assertions (1.9, 5.2 and 9.1 s in a release build; a load of 8 to 12) at the three jitters, most of it in `polycool`, which `linesweeper` calls for the roots of the comparison of two
+  cubics and a debug build compiles unoptimised: the workspace builds it at opt-level 3 now, as it does `linesweeper`, and the strokes take 5.0, 12.0 and 20.2 s (with miters 2.6 and 3.2 s, against
+  1.2 and 1.6). A window priced at 1.1 of the 4.2 billion is admitted, and no price makes a build refuse it: that takes a lower limit on the crossings (the window counts 0.94 of `MAX_REAL_CROSSINGS`).
 - The weights of the metered sweep are a fit to about 180 inputs of 30 kinds, on one machine, under a load of 5 to 25: near the
   budget the time of the operation is 0.4 to 1.4 of the work for the kinds measured (0.4 for an arc fan of 150 pieces, 1.4 for six
   stacks of 128 copies, which take 1.1 times the star, the most the meter admits of the kinds measured), the work is far over the

@@ -749,3 +749,33 @@ pub(crate) fn stacked_arcs(m: usize) -> BezPath {
     }
     bp
 }
+
+/// A spine that goes back and forth between (0, 0) and (100, 20), `n` segments of it, every point moved up by `jitter` times its index modulo 7
+/// (so that a point and the one 14 on are the same, and the segments between them are copies one on another: 18 of each of 14 for a window of
+/// 256). Stroked 6 wide it makes a bundle of long lines that cross all along their length, in stacks of copies.
+pub(crate) fn back_and_forth_spine(n: usize, jitter: f64) -> BezPath {
+    let mut spine = BezPath::new();
+    for i in 0..=n {
+        let end = (i % 2) as f64;
+        let p = (100.0 * end, 20.0 * end + jitter * (i % 7) as f64);
+        if i == 0 {
+            spine.move_to(p);
+        } else {
+            spine.line_to(p);
+        }
+    }
+    spine
+}
+
+/// The outline kurbo makes of the first `segments` segments of `spine`, 6 wide with butt caps at the tolerance the stroke of this crate uses
+/// (1e-3), closed: a window of a stroke, which is what the stroke of a long spine sweeps. 256 segments of [`back_and_forth_spine`] make 1,280
+/// elements with round joins and 1,025 with bevels or miters.
+pub(crate) fn stroke_window(spine: &BezPath, segments: usize, join: kurbo::Join) -> BezPath {
+    let els: Vec<kurbo::PathEl> = spine.elements().iter().copied().take(segments + 1).collect();
+    let style = kurbo::Stroke::new(6.0).with_join(join).with_caps(kurbo::Cap::Butt).with_miter_limit(4.0);
+    let mut outline = kurbo::stroke(els, &style, &kurbo::StrokeOpts::default(), 1e-3);
+    if !matches!(outline.elements().last(), Some(kurbo::PathEl::ClosePath)) {
+        outline.close_path();
+    }
+    outline
+}

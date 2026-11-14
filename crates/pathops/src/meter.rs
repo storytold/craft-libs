@@ -40,6 +40,15 @@
 //!   as it goes can stop in time: a stack of copies of one shape is a dozen steps and nine seconds): [`GROUP_PICOS`] for the fourth power of the
 //!   segments that start at one height within four tolerances of one another across (or end at one), and [`BATCH_WORK`] for the square of those that
 //!   start at one height wherever they are across (a row of dots on one line, whose shapes put their pieces into the line at once).
+//! - **The crossings**, as a price of the whole sweep and not a term in the sum (the time is the greater of the two): the places where segments
+//!   cross, counted as the pricing counts them before it sweeps ([`crate::MAX_REAL_CROSSINGS`]), at [`LINE_PLACE_WORK`] for each place two lines
+//!   cross at and [`CURVE_PLACE_WORK`] for each unit of the count of those with a curve in them. Where segments lie one on another within the
+//!   tolerance and other segments cross them, the sweep makes one piece of all the places the crossings are at, and the terms above (made of
+//!   pieces, and of clusters that are counted a range at a time) see a fifth to a third of what it takes: a stroke of 300 segments that goes back and
+//!   forth along one line is a bundle of lines that cross each other all along, and its windows took 3 to 5 times what the dry sweep counted, against
+//!   the star of 1,291 points. The
+//!   places are counted once, when the sweep first reaches a crowd ([`CROWDED`]), and not for inputs that never do: counting them is a pass of
+//!   every pair of bounds that overlap, a quarter of the sweep of rings or of strokes.
 //! - **Steps of comparisons** ([`COMPARE_NODE_WORK`] each, less what a curved piece is paid for, with [`SAMPLE_WORK`] for each reading of the gap
 //!   and [`LOOKUP_WORK`] for each place of the line read to find the neighbours): the sweep compares two cubics by halving the stretch of height it
 //!   looks at until the error of its approximations is under the gap between them, so that curves that run along one another for most of their
@@ -106,6 +115,27 @@ pub(crate) const GROUP_PICOS: u64 = 70;
 
 /// What the square of the segments that start (or end) at one height is worth, in nanoseconds.
 pub(crate) const BATCH_WORK: u64 = 3;
+
+/// What a place where two lines cross is worth in sweep time, in nanoseconds, in the count of them that the pricing makes before the sweep
+/// ([`crate::budget::crossing_places`]). The pricing's limit on them is set by 3 microseconds a place ([`crate::MAX_REAL_CROSSINGS`]); the windows
+/// of a stroke that goes back and forth over one line took 3 to 5 microseconds for each place counted in them (the sweeps took 0.2 to 0.4
+/// of a second at the load the weights were measured under, for 11,000 to 77,000 places), and the stars and hatches, whose places are all there are,
+/// are priced by this at 0.73 to 0.83 of what the terms above count for them (the star of 1,291 points 0.76 of its 3.8 seconds, the hatch of 400
+/// and 400 strokes 0.73 of its 3.1): the weight is the most that leaves them as they are.
+pub(crate) const LINE_PLACE_WORK: u64 = 3_500;
+
+/// What a unit of the pricing's count of the places where a curve crosses is worth, in nanoseconds: those are counted at the most they can
+/// be (nine places for a pair of arcs that cross at two, each twice), so that a unit is worth under a third of a line's place. Windows of a stroke
+/// of arcs that goes back and forth, whose lines are most of the pairs and whose arcs are most of the units, took 0.5 to 2 of this price for 100 to
+/// 300 segments (the pieces and the steps of comparisons that the dry sweep counts for them came to 0.2 to 0.5 of it).
+pub(crate) const CURVE_PLACE_WORK: u64 = 1_000;
+
+/// The tangle ([`Counts::tangle`]) at which the dry sweep counts the places where segments cross, once: a few ranges of segments within a few
+/// tolerances of one another, as copies of a shape that other segments cross are. Under it the pieces the sweep makes are the places it
+/// crosses at (rings, meshes, strokes, a circle of 100,000 cubics count to 1 million at the most, and the count of the places costs a
+/// quarter to the whole of their sweep); a window of a stroke that goes back and forth reaches it at about 150 segments, whose places are
+/// worth 0.09 of a second, and the star of 1,291 points (which crosses in as many places as it has pieces) at its last tenth.
+pub(crate) const CROWDED: u64 = 4_000_000;
 
 /// What a step of the comparison of two cubics is worth in sweep time, in nanoseconds: the comparison of two curves halves the stretch of
 /// height it looks at until the bounds of the gap between them are tighter than the tolerance, and a step is one such stretch (about 0.56
@@ -200,6 +230,9 @@ pub(crate) struct Counts {
     pub(crate) compared: u64,
     /// The readings of the gap between two curves that the steps were estimated from.
     pub(crate) sampled: u64,
+    /// What the places where the segments cross are worth by themselves ([`LINE_PLACE_WORK`], [`CURVE_PLACE_WORK`]), counted before the sweep: a
+    /// price of its own for the whole sweep, that the other terms are not added to (the time is the greater of the two).
+    pub(crate) crossings: u64,
     /// The places of the sweep line read in the searches for the neighbours of a range.
     pub(crate) probed: u64,
 }
@@ -207,7 +240,8 @@ pub(crate) struct Counts {
 impl Counts {
     /// The time of sweep these counts come to, in nanoseconds.
     pub(crate) fn time(&self) -> u64 {
-        self.pieces
+        let terms = self
+            .pieces
             .saturating_mul(PIECE_WORK)
             .saturating_add(self.curved.saturating_mul(CURVED_WORK))
             .saturating_add(self.scan.saturating_mul(SCAN_PICOS) / 1000)
@@ -216,7 +250,8 @@ impl Counts {
             .saturating_add(self.batch.saturating_mul(BATCH_WORK))
             .saturating_add(self.compared.saturating_sub(self.curved.saturating_mul(FREE_NODES)).saturating_mul(COMPARE_NODE_WORK))
             .saturating_add(self.sampled.saturating_mul(SAMPLE_WORK))
-            .saturating_add(self.probed.saturating_mul(LOOKUP_WORK))
+            .saturating_add(self.probed.saturating_mul(LOOKUP_WORK));
+        terms.max(self.crossings)
     }
 
     /// The memory the sweep would hold, in the nanoseconds the budget is counted in: the topology of the pieces, and the cache of
@@ -736,9 +771,17 @@ impl<'a> Spanning<'a> {
 
 /// Sweeps `segments` at tolerance `eps` as the topology does, counting its work, and stops with the counts so far as soon as
 /// they come to more than `budget` (`Err`).
+#[cfg(test)]
 pub(crate) fn dry_sweep(segments: &Segments, eps: f64, budget: u64) -> Result<Counts, Counts> {
+    dry_sweep_over(segments, eps, budget, &mut || 0)
+}
+
+/// [`dry_sweep`] for an input whose places where segments cross are worth what `crossings` says, in nanoseconds ([`crossing_price`]). It is
+/// asked once, as the sweep first comes to a range of crowded segments ([`CROWDED`]), and holds the time of the sweep to no less from there.
+pub(crate) fn dry_sweep_over(segments: &Segments, eps: f64, budget: u64, crossings: &mut dyn FnMut() -> u64) -> Result<Counts, Counts> {
     let (groups, batch, pairs) = static_counts(segments, eps);
     let mut counts = Counts { segments: segments.len() as u64, groups, batch, pairs, ..Counts::default() };
+    let mut crossings_priced = false;
     work::add(Work::MeterGroups, usize::try_from(counts.groups).unwrap_or(usize::MAX));
     if counts.work() > budget {
         return Err(counts);
@@ -795,6 +838,12 @@ pub(crate) fn dry_sweep(segments: &Segments, eps: f64, budget: u64) -> Result<Co
             counts.curved = counts.curved.saturating_add(curved);
             counts.tangle = counts.tangle.saturating_add(made.saturating_mul(cluster * cluster));
             counts.scan = counts.scan.saturating_add(made.saturating_mul(on_line));
+            if !crossings_priced && counts.tangle >= CROWDED {
+                crossings_priced = true;
+                // Past the budget the input is refused, and what it is counted at is the budget and no more, as where a term takes it past
+                // as the sweep goes: an input that is refused has cost about the budget of sweep at most.
+                counts.crossings = crossings().min(budget.saturating_add(1));
+            }
             if counts.work() > budget {
                 return Err(counts);
             }
@@ -833,19 +882,33 @@ fn within_a_part<'a>(paths: impl IntoIterator<Item = &'a BezPath>, eps: f64, par
         return Ok(());
     }
     let budget = budget as u64 / part;
-    let Some(segments) = segments_of(paths) else { return Ok(()) };
+    let paths: Vec<&BezPath> = paths.into_iter().collect();
+    let Some(segments) = segments_of(paths.iter().copied()) else { return Ok(()) };
     if segments.len() <= GATE_PIECES {
         return Ok(());
     }
-    dry_counted(&segments, eps, budget).map(|_| ())
+    dry_counted(&segments, eps, budget, &mut || crossing_price(&paths)).map(|_| ())
+}
+
+/// What the places where the segments of `paths` cross are worth in sweep time ([`LINE_PLACE_WORK`], [`CURVE_PLACE_WORK`]), in nanoseconds,
+/// counted as the pricing counts them ([`crate::budget::crossing_places`]). The dry sweep asks for it once, when it first reaches a crowd ([`CROWDED`]).
+///
+/// The dry sweep counts what the sweep makes (pieces, clusters, steps of comparisons), and segments that lie on one another, or along one
+/// another to within the tolerance and cross, make pieces of one place between them and no more: a stroke that goes back and forth over one
+/// line (so that its outline is a bundle of long lines that cross all along) was priced at a fifth to a third of what the sweep took, whose
+/// cost goes with the places where they cross and is the unit the pricing's limit on them is made of.
+fn crossing_price(paths: &[&BezPath]) -> u64 {
+    let places = crate::budget::crossing_places(paths.iter().copied());
+    places.lines.saturating_mul(LINE_PLACE_WORK).saturating_add(places.curves.saturating_mul(CURVE_PLACE_WORK))
 }
 
 /// The dry sweep of `segments` held to `budget`: the work it counted (`Ok`), or `Err(TooComplex)` when the count passes the budget. A sweep that
-/// panics counts nothing and is `Ok`: the topology reports the panic.
-fn dry_counted(segments: &Segments, eps: f64, budget: u64) -> Result<u64, PathOpsError> {
+/// panics counts nothing and is `Ok`: the topology reports the panic. `crossings` prices the places where the segments cross
+/// ([`crossing_price`]), when the sweep asks.
+fn dry_counted(segments: &Segments, eps: f64, budget: u64, crossings: &mut dyn FnMut() -> u64) -> Result<u64, PathOpsError> {
     work::add(Work::MeteredSweeps, 1);
     // The sweep panics on a few degenerate inputs, as the topology's does, and the topology reports it.
-    let Ok(verdict) = catch_unwind(AssertUnwindSafe(|| dry_sweep(segments, eps, budget))) else { return Ok(0) };
+    let Ok(verdict) = catch_unwind(AssertUnwindSafe(|| dry_sweep_over(segments, eps, budget, &mut *crossings))) else { return Ok(0) };
     match verdict {
         Ok(counts) => {
             work::add(Work::MeterNanos, usize::try_from(counts.work()).unwrap_or(usize::MAX));
@@ -907,12 +970,13 @@ impl Allowance {
 /// Like [`within`] it is `Ok` where the segments cannot be made, and runs nothing where the limit is lifted to the most.
 pub(crate) fn within_charging<'a>(paths: impl IntoIterator<Item = &'a BezPath>, eps: f64, allowance: &mut Allowance) -> Result<(), PathOpsError> {
     let Some(left) = allowance.left else { return Ok(()) };
-    let Some(segments) = segments_of(paths) else { return Ok(()) };
+    let paths: Vec<&BezPath> = paths.into_iter().collect();
+    let Some(segments) = segments_of(paths.iter().copied()) else { return Ok(()) };
     allowance.pieces = allowance.pieces.saturating_add(segments.len());
     if allowance.pieces <= GATE_PIECES {
         return Ok(());
     }
-    match dry_counted(&segments, eps, left) {
+    match dry_counted(&segments, eps, left, &mut || crossing_price(&paths)) {
         Ok(counted) => {
             allowance.left = Some(left.saturating_sub(counted));
             Ok(())
@@ -932,10 +996,10 @@ mod tests {
     use super::*;
     use crate::boolean::eps_for;
     use crate::testutil::{
-        arc_fan, arc_windows, bars_on_a_baseline, bowed_star, circle_pairs, circle_pairs_apart, circle_pairs_with_blockers,
+        arc_fan, arc_windows, back_and_forth_spine, bars_on_a_baseline, bowed_star, circle_pairs, circle_pairs_apart, circle_pairs_with_blockers,
         circle_pairs_with_blockers_apart, cubic_circle, cubic_fan, curves_beside_a_crowd, diagonals, fan_along_a_line, grid_of_squares,
         groups_of_loops, jittered_pencil, jittered_pies, mesh, nearly_parallel_lines, polygons_a_few_tolerances_apart, polygons_an_ulp_apart,
-        polyline, rect, rings, row_of_lenses, s_strokes, stacked_arcs, stacked_pies, stacked_polygons, stacked_segments, star, wheel,
+        polyline, rect, rings, row_of_lenses, s_strokes, stacked_arcs, stacked_pies, stacked_polygons, stacked_segments, star, stroke_window, wheel,
         windows_sharing_a_tenth,
     };
     use crate::{FillRule, Limits, with_limits};
@@ -2202,5 +2266,139 @@ mod tests {
             fan.close_path();
         }
         assert_eq!(static_counts(&segments_of([&fan]).expect("segments"), 1e-6), (0, 0, 0));
+    }
+
+    /// The first window of the stroke 6 wide of a spine that goes back and forth over one line (300 segments, 256 to a window), as the
+    /// stroke makes it and as it is mirrored left to right. 1,280 elements with round joins, 1,025 with the others.
+    fn window_of_a_stroke_that_goes_back_and_forth(join: kurbo::Join, jitter: f64, mirror: bool) -> BezPath {
+        let spine = back_and_forth_spine(300, jitter);
+        let spine = if mirror { kurbo::Affine::scale_non_uniform(-1.0, 1.0) * spine } else { spine };
+        closed(&stroke_window(&spine, 256, join))
+    }
+
+    /// A window of a stroke that goes back and forth over one line is a bundle of long lines, 18 copies of each of 14, that cross all along
+    /// their length. The sweep makes one piece of the places the copies cross each other at, and the dry sweep counts those pieces and the
+    /// clusters they are made in: a fifth to a third of what the sweep took (0.07 of a second counted for 0.8 of a second of sweep with miters, 0.4 for
+    /// 2.6 with round joins, in a release build under a load of 8 to 12). The pricing counts the places they cross at, and the places are what the
+    /// sweep takes its time by. They are priced at what they cost, for the window and for what it is mirrored to, and the same for every
+    /// jitter that keeps the copies (a tenth to a ten-thousandth).
+    #[test]
+    fn the_places_a_window_that_goes_back_and_forth_crosses_at_are_priced() {
+        use kurbo::Join;
+        let near = |got: u64, measured: u64| got >= measured - measured / 20 && got <= measured + measured / 20;
+        // The join, the jitter, whether it is mirrored; the elements of the window, and the price of its places, as counted.
+        let cases = [
+            (Join::Miter, 0.1, false, 1_025, 268_411_500),
+            (Join::Miter, 1e-3, false, 1_025, 268_411_500),
+            (Join::Miter, 1e-3, true, 1_025, 268_411_500),
+            (Join::Bevel, 1e-3, false, 1_025, 268_411_500),
+            (Join::Miter, 1e-4, false, 1_025, 263_812_500),
+            (Join::Round, 0.1, false, 1_280, 1_107_121_000),
+            (Join::Round, 1e-3, false, 1_280, 1_107_193_000),
+            (Join::Round, 1e-3, true, 1_280, 1_107_193_000),
+            (Join::Round, 1e-4, false, 1_280, 1_107_850_000),
+        ];
+        for (join, jitter, mirror, elements, price) in cases {
+            let path = window_of_a_stroke_that_goes_back_and_forth(join, jitter, mirror);
+            let name = format!("{join:?}, jitter {jitter:e}, mirrored {mirror}");
+            // The window is made of as many elements as the stroke of a spine of 300 segments makes of its first.
+            assert_eq!(path.elements().len(), elements, "{name}");
+            let priced = crossing_price(&[&path]);
+            assert!(near(priced, price), "{name}: the places are priced at {priced}, measured {price}");
+            // Far more than the terms of the dry sweep make of it, and the budget's tenth at the least.
+            assert!(priced > crate::budget::MAX_SWEEP_WORK as u64 / 16, "{name}: {priced}");
+        }
+    }
+
+    /// The time of a sweep is no less than what its places are priced at, and is the greater of the two (the places are not added to the terms).
+    #[test]
+    fn the_price_of_the_crossings_holds_the_time_to_no_less() {
+        let terms = Counts { pieces: 1_000, ..Counts::default() };
+        assert_eq!(terms.time(), 1_000 * PIECE_WORK);
+        assert_eq!(Counts { crossings: 5, ..terms }.time(), terms.time(), "under the terms it adds nothing");
+        assert_eq!(Counts { crossings: 9_000_000, ..terms }.time(), 9_000_000, "past them it is the time");
+        assert_eq!(Counts { crossings: 9_000_000, ..terms }.work(), 9_000_000);
+        assert_eq!(Counts { crossings: u64::MAX, ..terms }.work(), u64::MAX);
+    }
+
+    /// The places are counted once, when the sweep first comes to a crowd (a tangle past [`CROWDED`]), and not for inputs that never do: a hundred
+    /// copies of a segment, one on another, are one; rings, which cross nowhere, and the lines of a mesh are none.
+    #[test]
+    fn the_places_are_counted_once_when_the_sweep_reaches_a_crowd() {
+        let eps = 1e-6;
+        let asked = |path: &BezPath| {
+            let segments = segments_of([&closed(path)]).expect("segments");
+            let mut times = 0u32;
+            let counts = dry_sweep_over(&segments, eps, u64::MAX, &mut || {
+                times += 1;
+                7_000_000_000
+            })
+            .expect("no budget");
+            (times, counts)
+        };
+        let (times, crowd) = asked(&stacked_segments(1, 96));
+        assert!(crowd.tangle >= CROWDED, "{crowd:?}");
+        assert_eq!((times, crowd.crossings), (1, 7_000_000_000));
+        assert_eq!(crowd.work(), 7_000_000_000, "the price of the places is the work");
+        for (name, path) in [("rings", rings(300, 8.5)), ("a mesh", mesh(30))] {
+            let (times, counts) = asked(&path);
+            assert!(counts.tangle < CROWDED, "{name}: {counts:?}");
+            assert_eq!((times, counts.crossings), (0, 0), "{name}");
+        }
+        // An input that passes the budget by its places is refused where they are counted, with the sweep begun and not run through, and
+        // counted at the budget and one more.
+        let segments = segments_of([&closed(&stacked_segments(1, 96))]).expect("segments");
+        let refused = dry_sweep_over(&segments, eps, 5_000_000_000, &mut || 7_000_000_000).expect_err("the places pass the budget");
+        assert!(refused.steps > 0 && refused.crossings == 5_000_000_001, "{refused:?}");
+    }
+
+    /// A window of the stroke that goes back and forth, swept, is held to the price of its places and not to the pieces it makes: the price is
+    /// 2 to 4 times what the terms count for it (0.27 against 0.07 of a second with miters, 1.11 against 0.40 with round joins), and the
+    /// sweep took 0.8 and 2.6 seconds, in a release build under a load of 8 to 12 (the star of 1,291 points, beside it, 8 to 10 seconds, counted
+    /// 3.8). Seconds: in a release build only.
+    #[cfg_attr(debug_assertions, ignore = "seconds: run with cargo test --release")]
+    #[test]
+    fn a_window_that_goes_back_and_forth_is_held_to_the_price_of_its_places() {
+        use kurbo::Join;
+        let near = |got: u64, measured: u64| got >= measured - measured / 10 && got <= measured + measured / 10;
+        for (join, jitter, price, terms) in [(Join::Miter, 1e-3, 268_411_500, 68_000_000), (Join::Round, 1e-3, 1_107_193_000, 398_000_000)] {
+            let path = window_of_a_stroke_that_goes_back_and_forth(join, jitter, false);
+            let paths = [&path];
+            let eps = eps_for(paths).expect("finite");
+            let segments = segments_of(paths).expect("segments");
+            let counts = dry_sweep_over(&segments, eps, u64::MAX, &mut || crossing_price(&paths)).expect("no budget");
+            let name = format!("{join:?}");
+            assert!(counts.tangle >= CROWDED, "{name}: {counts:?}");
+            assert!(near(counts.work(), price), "{name}: the sweep is priced at {}, measured {price}", counts.work());
+            // What the terms alone count for it, which was the price.
+            let alone = Counts { crossings: 0, ..counts }.work();
+            assert!(near(alone, terms) && counts.work() > 2 * alone, "{name}: {alone} for the terms, {} for the places", counts.work());
+        }
+    }
+
+    /// Other shapes in the input do not hide the crowd: 25,000 squares, a few units across and apart from one another and from the window,
+    /// add their pieces (and a hundred thousand segments to its pair counts) and none of its crowd, which is priced as it was alone. Seconds.
+    #[cfg_attr(debug_assertions, ignore = "seconds: run with cargo test --release")]
+    #[test]
+    fn squares_around_a_window_that_goes_back_and_forth_do_not_hide_its_places() {
+        let window = window_of_a_stroke_that_goes_back_and_forth(kurbo::Join::Miter, 1e-3, false);
+        let alone = crossing_price(&[&window]);
+        assert!(alone > 250_000_000, "{alone}");
+        let mut padded = window.clone();
+        for i in 0..25_000 {
+            let (x, y) = (200.0 + 3.0 * f64::from(i % 250), 200.0 + 3.0 * f64::from(i / 250));
+            padded.move_to((x, y));
+            padded.line_to((x + 1.0, y));
+            padded.line_to((x + 1.0, y + 1.0));
+            padded.line_to((x, y + 1.0));
+            padded.close_path();
+        }
+        let paths = [&padded];
+        let eps = eps_for(paths).expect("finite");
+        let segments = segments_of(paths).expect("segments");
+        assert!(segments.len() > 100_000, "{} pieces", segments.len());
+        let counts = dry_sweep_over(&segments, eps, u64::MAX, &mut || crossing_price(&paths)).expect("no budget");
+        assert!(counts.crossings >= alone - alone / 20 && counts.crossings <= alone + alone / 20, "{} against {alone}", counts.crossings);
+        assert!(counts.work() >= counts.crossings, "{counts:?}");
     }
 }
