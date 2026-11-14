@@ -42,8 +42,10 @@ boxes, 1024 items, 1024 extents per item, 32 MiB per item), without heic-rs. A b
 `default-features = false, features = ["metadata"]` has no heic-rs dependency, and its
 `read_metadata` is that reader. With both features, a test checks that the two readers agree.
 
-Feature `testdata` exposes `craft_heif::testdata`: lossless synthetic HEIF files (PCM-coded
-32 × 32 HEVC pictures, grids, every property above) for the tests of the crates above.
+Feature `test-support` exposes `craft_heif::testdata`: lossless synthetic HEIF files (PCM-coded
+32 × 32 HEVC pictures, grids, every property above) for the tests of the crates above. The
+feature's former name, `testdata`, still turns it on until every crate that enables it uses
+`test-support`.
 
 ## Why it is a separate, optional crate
 
