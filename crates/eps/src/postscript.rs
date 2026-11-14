@@ -587,9 +587,9 @@ mod stack_tests {
         stack.clear();
         stack.roll(1, i64::MAX);
         stack.index(usize::MAX);
-        assert_eq!(stack.values(), &[]);
+        assert!(stack.is_empty());
         assert!(stack.copy_top(0));
-        assert_eq!(stack.values(), &[]);
+        assert!(stack.is_empty());
     }
 
     #[test]
