@@ -4,8 +4,7 @@ use super::context::{Cx, CxCore};
 use crate::contract::{Component, EditResponse, Pointer as _, Validity, ValueOf};
 use crate::primitives::Adopted;
 use craft_behavior::{
-    CancelReason, EditEvent, Gesture, GestureId, GesturePhase, Mixed, PartRef, PointerButton, PressCancel, PressPhase, Sense, Value,
-    WheelPhase,
+    CancelReason, EditEvent, Gesture, GestureId, GesturePhase, Mixed, PartRef, PointerButton, PressCancel, PressPhase, Sense, Value, WheelPhase,
 };
 use egui::{Id, Pos2};
 use std::sync::Arc;
