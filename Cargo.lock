@@ -2337,6 +2337,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-press-print"
+version = "0.1.0"
+dependencies = [
+ "craft-cms",
+ "craft-prepress",
+ "craft-print",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 dependencies = [

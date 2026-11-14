@@ -113,6 +113,7 @@ craft-pcraft-bundle = { path = "crates/pcraft-bundle" }
 craft-pkcs7 = { path = "crates/pkcs7" }
 craft-plotter = { path = "crates/plotter" }
 craft-prepress = { path = "crates/prepress" }
+craft-press-print = { path = "crates/press-print" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
 craft-raster-codecs = { path = "crates/raster-codecs" }
