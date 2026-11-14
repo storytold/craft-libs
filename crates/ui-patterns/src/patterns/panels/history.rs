@@ -2,8 +2,8 @@
 
 use super::words::PanelWords;
 use crate::contract::{
-    Bind, CollectionEvent, ColumnSpec, ListDrag, NoValue, Outcome, Pattern, Props as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, Sizing,
-    ToggleColumn, request_rename,
+    Bind, CollectionEvent, ColumnSpec, ListDrag, NoValue, Outcome, Pattern, Props as _, SelectMode, Show as _, ShowCollection as _,
+    ShowContainer as _, Sizing, ToggleColumn, request_rename,
 };
 use crate::layout_components::Stack;
 use crate::list::{List, ListRow, RowInk, ThumbSize, ToggleCell, ToggleState};
