@@ -205,3 +205,58 @@ fn apply_mirrors_egui_chrome_where_egui_can() {
         assert_eq!(style_rtl(&ctx, theme), patched.then_some(false), "{theme:?}");
     }
 }
+
+#[test]
+fn start_x_w_after_x_and_start_align2_mirror_arithmetic() {
+    let r = Rect::from_min_size(pos2(100.0, 50.0), vec2(200.0, 24.0));
+    let (ltr, rtl) = (Direction::Ltr, Direction::Rtl);
+    assert!((start_x_w(&ltr, r, 4.0, 30.0) - 104.0).abs() < 1e-4);
+    assert!((start_x_w(&rtl, r, 4.0, 30.0) - 266.0).abs() < 1e-4, "rtl: right - off - w");
+    assert!((after_x(&ltr, r, 8.0, 20.0) - 308.0).abs() < 1e-4);
+    assert!((after_x(&rtl, r, 8.0, 20.0) - 72.0).abs() < 1e-4, "rtl: left - off - w");
+    assert_eq!(start_align2(&ltr), Align2::LEFT_CENTER);
+    assert_eq!(start_align2(&rtl), Align2::RIGHT_CENTER);
+    assert_eq!(body_layout(&ltr).main_dir, egui::Direction::TopDown);
+    assert!(!body_layout(&ltr).cross_justify);
+    assert_eq!(body_layout(&rtl).cross_align, Align::Max);
+    assert_eq!(text_direction(&ltr), egui::epaint::text::TextDirection::LeftToRight);
+    assert_eq!(text_direction(&rtl), egui::epaint::text::TextDirection::RightToLeft);
+}
+
+#[test]
+fn icon_name_and_icon_flipped_follow_the_one_table() {
+    let (ltr, rtl) = (Direction::Ltr, Direction::Rtl);
+    assert_eq!(icon_name(&ltr, "chevron-left"), "chevron-left");
+    assert_eq!(icon_name(&rtl, "chevron-left"), "chevron-right", "swapped partner");
+    assert_eq!(icon_name(&rtl, "indent-increase"), "indent-increase", "flipped keeps its name");
+    assert!(!icon_flipped(&ltr, "indent-increase"));
+    assert!(icon_flipped(&rtl, "indent-increase"));
+    assert!(!icon_flipped(&rtl, "chevron-left"), "a swapped glyph is not flipped in place");
+    assert!(!icon_flipped(&rtl, "brush"), "a kept glyph neither swaps nor flips");
+    for name in KEPT_ICONS {
+        assert!(!icon_flipped(&rtl, name) && icon_name(&rtl, name) == *name, "{name}");
+    }
+}
+
+/// A `body_label` in a right-to-left interface pins the galley's base direction; left-to-right
+/// keeps egui's auto-detected direction.
+#[test]
+fn body_label_pins_the_galley_direction_only_in_rtl() {
+    use egui::epaint::text::TextDirection as TD;
+    for (dir, want) in [(Direction::Ltr, TD::Auto), (Direction::Rtl, TD::RightToLeft)] {
+        let ctx = context(dir);
+        let mut found = None;
+        let mut out = ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(WIDTH, 400.0))), ..Default::default() }, |ui| {
+            body_label(ui, &dir, "Toolbar");
+        });
+        for shape in &out.shapes {
+            if let egui::Shape::Text(ts) = &shape.shape
+                && ts.galley.text().contains("Toolbar")
+            {
+                found = Some(ts.galley.job.direction);
+            }
+        }
+        out.textures_delta.clear();
+        assert_eq!(found, Some(want), "{dir:?}");
+    }
+}
