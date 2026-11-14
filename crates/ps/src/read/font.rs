@@ -451,6 +451,11 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
             let type3 = leaf.get_name(b"FontType").and_then(|o| o.num()) == Some(3.0);
             let w = match key {
                 crate::read::composite::Key2::Code(c) if type3 => {
+                    // Type 3 glyph procedures paint immediately. Commit any earlier staged
+                    // outlines first so their paint order remains the same as the input string.
+                    for (path, color) in std::mem::take(&mut text_paths) {
+                        ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
+                    }
                     ip.charge(GLYPH_STEPS)?;
                     if draw && ip.gs.cur.is_some() {
                         type3_glyph(ip, &leaf, c)?

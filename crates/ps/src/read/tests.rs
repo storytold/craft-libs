@@ -127,6 +127,34 @@ fn type3_fonts_draw_their_glyphs() {
 }
 
 #[test]
+fn type3_glyph_paints_after_prior_outline_glyphs() {
+    let ttf = tiny_ttf();
+    let sfnts: String = ttf.chunks(64).map(|c| format!("<{}>\n", c.iter().map(|b| format!("{b:02x}")).collect::<String>())).collect();
+    let (c, _) = run(&format!(
+        "/T42 11 dict dup begin /FontType 42 def /FontMatrix [0.001 0 0 0.001 0 0] def /PaintType 0 def /FontBBox [0 0 1 1] def
+         /Encoding 256 array def 0 1 255 {{ Encoding exch /.notdef put }} for Encoding 65 /A put
+         /CharStrings 2 dict dup /.notdef 0 put dup /A 1 put def /sfnts [ {sfnts} ] def end /T42 exch definefont pop
+         /T3 8 dict dup begin /FontType 3 def /FontMatrix [0.001 0 0 0.001 0 0] def /FontBBox [0 0 1000 700] def
+         /Encoding 256 array def 0 1 255 {{ Encoding exch /.notdef put }} for Encoding 65 /A put
+         /BuildChar {{ pop pop 1000 0 0 0 1000 700 setcachedevice 1 setgray 0 0 1000 700 rectfill }} def end /T3 exch definefont pop
+         /T0 6 dict dup begin /FontType 0 def /FMapType 2 def /FontMatrix [1 0 0 1 0 0] def
+         /FDepVector [ /T42 findfont /T3 findfont ] def end /T0 exch definefont pop
+         /T0 findfont 20 scalefont setfont 10 10 moveto <00410141> show"
+    ));
+    let lines: Vec<&str> = c.lines().collect();
+    let first_fill = lines.iter().position(|line| *line == "f").unwrap_or_else(|| panic!("outline fill missing: {c}"));
+    let white_paint = lines.iter().position(|line| *line == "1 g").unwrap_or_else(|| panic!("Type 3 white paint missing: {c}"));
+    let second_fill = lines
+        .iter()
+        .enumerate()
+        .skip(white_paint + 1)
+        .find(|(_, line)| **line == "f")
+        .map(|(index, _)| index)
+        .unwrap_or_else(|| panic!("Type 3 fill missing: {c}"));
+    assert!(first_fill < white_paint && white_paint < second_fill, "glyph paints are out of order: {c}");
+}
+
+#[test]
 fn a_string_made_a_file_runs_as_a_program() {
     // Adobe's idiom: `(code) 0 () /SubFileDecode filter cvx exec`.
     let (c, _) = run("(0.5 setgray 10 20 5 5 rectfill) 0 () /SubFileDecode filter cvx exec");
@@ -177,6 +205,29 @@ fn completed_embedded_type1_fonts_get_a_fid_when_registered() {
     );
     let (content, _) = run(&body);
     assert!(content.contains("1 0 0 rg"), "the recovered font has a FID: {content}");
+}
+
+#[test]
+fn repeated_eexec_font_searches_charge_the_operand_stack_work() {
+    let plain = b"pop end currentfile closefile\n";
+    let mut r: u16 = 55665;
+    let mut hex = String::new();
+    for &p in [1u8, 2, 3, 4].iter().chain(plain.iter()) {
+        let c = p ^ (r >> 8) as u8;
+        r = (u16::from(c).wrapping_add(r)).wrapping_mul(52845).wrapping_add(22719);
+        hex.push_str(&format!("{c:02x}"));
+    }
+    let mut body = format!(
+        "/T 6 dict dup begin /FontName /T def /FontType 1 def /FontMatrix [0.001 0 0 0.001 0 0] def /Private 1 dict def end def\nT begin {} ",
+        "0 ".repeat(4096)
+    );
+    for _ in 0..16 {
+        body.push_str(&format!("currentfile eexec\n{hex}\n"));
+    }
+    let limits = Limits { steps: 20_000, keep_unpainted: true, ..Limits::default() };
+    let converted = eps_to_pdf(&eps(&body), limits).expect("bounded recovery keeps completed output");
+    assert!(converted.warnings.iter().any(|warning| warning == "the program runs too long"), "{:?}", converted.warnings);
+    assert!(converted.steps >= limits.steps, "stack search work was not charged: {}", converted.steps);
 }
 
 #[test]
