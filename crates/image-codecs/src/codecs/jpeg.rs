@@ -37,6 +37,8 @@ pub(crate) struct JpegMeta {
     pub dpi: Option<(f32, f32)>,
     /// The APP13 Photoshop image resource blocks (`8BIM` ...), segments joined, without the header.
     pub photoshop: Option<Vec<u8>>,
+    /// Whether an Adobe APP14 marker identifies the four-component samples as inverted CMYK.
+    pub adobe_marker: bool,
     pub adobe_transform: Option<u8>,
     /// (width, height, components) from the first SOFn.
     pub frame: Option<(u32, u32, u8)>,
@@ -148,8 +150,11 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
                 m.frame = Some((w, h, seg[5]));
                 sof = Some((marker, seg));
             }
-            0xEE if seg.len() >= 12 && seg.starts_with(b"Adobe") => {
-                m.adobe_transform = Some(seg[11]);
+            0xEE if seg.starts_with(b"Adobe") => {
+                m.adobe_marker = true;
+                if seg.len() >= 12 {
+                    m.adobe_transform = Some(seg[11]);
+                }
             }
             _ => {}
         }
@@ -312,9 +317,21 @@ fn craft_jpeg_error(e: craft_jpeg::Error) -> CodecError {
     }
 }
 
+fn undo_craft_cmyk_inversion_u8(samples: &mut [u8], enabled: bool) {
+    if enabled {
+        samples.iter_mut().for_each(|v| *v = 255 - *v);
+    }
+}
+
+fn undo_craft_cmyk_inversion_u16(samples: &mut [u16], enabled: bool) {
+    if enabled {
+        samples.iter_mut().for_each(|v| *v = 65535 - *v);
+    }
+}
+
 /// Decode a file [`uses_craft_jpeg`] routes away from `zune-jpeg`; `damaged` says entropy-coded
 /// data was cut short or corrupt.
-fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>) -> Result<(Image, bool), CodecError> {
+fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>, adobe_marker: bool) -> Result<(Image, bool), CodecError> {
     let mut lim = craft_jpeg::Limits::default();
     lim.max_pixels = limits.max_pixels;
     lim.max_alloc = limits.max_alloc;
@@ -325,9 +342,19 @@ fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>)
         4 => ChannelLayout::Cmyk,
         n => return Err(err(format!("{n} components"))),
     };
+    // craft-jpeg returns non-YCC CMYK samples with Adobe's inversion already undone,
+    // regardless of whether the file actually has an Adobe marker. Unmarked four-component
+    // streams are also found with direct ink samples, so restore those when using this backend.
+    let restore_unmarked_cmyk = !adobe_marker && matches!(layout, ChannelLayout::Cmyk);
     let img = match d.samples {
-        craft_jpeg::Samples::U8(px) => Image::from_raw(d.width, d.height, layout, SampleType::U8, px)?,
-        craft_jpeg::Samples::U16(px) => Image::from_u16(d.width, d.height, layout, &px)?,
+        craft_jpeg::Samples::U8(mut px) => {
+            undo_craft_cmyk_inversion_u8(&mut px, restore_unmarked_cmyk);
+            Image::from_raw(d.width, d.height, layout, SampleType::U8, px)?
+        }
+        craft_jpeg::Samples::U16(mut px) => {
+            undo_craft_cmyk_inversion_u16(&mut px, restore_unmarked_cmyk);
+            Image::from_u16(d.width, d.height, layout, &px)?
+        }
     };
     Ok((img, d.damaged))
 }
@@ -359,7 +386,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         {
             return Err(err("the truncated scan is too short for the frame it declares"));
         }
-        let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform)?;
+        let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform, meta.adobe_marker)?;
         img.icc = meta.icc;
         img.meta = Metadata { exif: meta.exif, xmp: meta.xmp, dpi: meta.dpi, photoshop_resources: meta.photoshop, ..Default::default() };
         if end == DataEnd::Truncated || damaged {
@@ -398,8 +425,9 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     }
     px.truncate(expected);
     match input {
-        // Adobe-style CMYK is stored inverted (255 = no ink).
-        ColorSpace::CMYK => px.iter_mut().for_each(|v| *v = 255 - *v),
+        // Adobe-style CMYK is stored inverted (255 = no ink). Four-component JPEGs without
+        // APP14 are also encountered with their CMYK samples stored as ink values directly.
+        ColorSpace::CMYK if meta.adobe_marker => px.iter_mut().for_each(|v| *v = 255 - *v),
         ColorSpace::YCCK => {
             for p in px.as_chunks_mut::<4>().0 {
                 let (y, cb, cr) = (p[0] as f32, p[1] as f32 - 128.0, p[2] as f32 - 128.0);
@@ -1007,6 +1035,47 @@ mod tests {
         let px = img.to_u16_samples().unwrap();
         assert!(px.iter().all(|&v| v.abs_diff(want) <= 1), "{:?} vs {want}", &px[..4]);
         assert!(img.warnings.is_empty());
+    }
+
+    #[test]
+    fn unmarked_cmyk_restores_direct_ink_polarity_on_craft_backend() {
+        // craft-jpeg always returns non-YCC four-component samples with Adobe inversion undone.
+        // The adapter restores direct inks only when no APP14 marker identifies Adobe storage.
+        let mut u8_samples = [0, 32, 200, 255];
+        undo_craft_cmyk_inversion_u8(&mut u8_samples, true);
+        assert_eq!(u8_samples, [255, 223, 55, 0]);
+        undo_craft_cmyk_inversion_u8(&mut u8_samples, false);
+        assert_eq!(u8_samples, [255, 223, 55, 0], "marked samples keep craft-jpeg polarity");
+
+        let mut u16_samples = [0, 8192, 32768, 65535];
+        undo_craft_cmyk_inversion_u16(&mut u16_samples, true);
+        assert_eq!(u16_samples, [65535, 57343, 32767, 0]);
+        undo_craft_cmyk_inversion_u16(&mut u16_samples, false);
+        assert_eq!(u16_samples, [65535, 57343, 32767, 0], "marked samples keep craft-jpeg polarity");
+    }
+
+    #[test]
+    fn twelve_bit_cmyk_without_app14_keeps_direct_ink_polarity_on_craft_backend() {
+        let image = Image::from_u8(16, 16, ChannelLayout::Cmyk, [10u8, 100, 200, 50].repeat(256)).unwrap();
+        let mut marked = crate::encode(&image, Format::Jpeg, &EncodeOptions { jpeg_quality: 95, ..Default::default() }).unwrap();
+        let sof = marked.windows(2).position(|pair| pair == [0xFF, 0xC0]).expect("baseline SOF0");
+        marked[sof + 1] = 0xC1;
+        marked[sof + 4] = 12;
+        assert!(uses_craft_jpeg(&marked), "12-bit SOF1 routes through craft-jpeg");
+
+        let app14 = b"\xFF\xEE\x00\x0EAdobe";
+        let start = marked.windows(app14.len()).position(|part| part == app14).expect("Adobe APP14 marker");
+        let mut unmarked = Vec::with_capacity(marked.len() - 16);
+        unmarked.extend_from_slice(&marked[..start]);
+        unmarked.extend_from_slice(&marked[start + 16..]);
+        assert!(uses_craft_jpeg(&unmarked));
+
+        let adobe = crate::decode(&marked).unwrap().to_u16_samples().unwrap();
+        let direct_inks = crate::decode(&unmarked).unwrap().to_u16_samples().unwrap();
+        assert_eq!(adobe.len(), direct_inks.len());
+        for (&stored_adobe, &ink) in adobe.iter().zip(&direct_inks) {
+            assert_eq!(ink, 65535 - stored_adobe, "unmarked samples remain direct inks");
+        }
     }
 
     #[test]
