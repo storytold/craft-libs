@@ -653,12 +653,18 @@ fn prepare_home(home: &Path) {
     }
 }
 
+/// The start of the name of the folder [`staging_dir`] makes. Six random letters and digits
+/// follow it.
+#[cfg(target_os = "linux")]
+const STAGING: &str = ".artcraft-launcher-";
+
 /// A new folder of our own inside `dir`, removed when dropped: a predictable name there may be
 /// the user's.
 #[cfg(target_os = "linux")]
 fn staging_dir(dir: &Path) -> Result<tempfile::TempDir, String> {
     tempfile::Builder::new()
-        .prefix(".artcraft-launcher-")
+        .prefix(STAGING)
+        .rand_bytes(6)
         .tempdir_in(dir)
         .map_err(|e| format!("couldn't create a staging folder in {} ({e})", dir.display()))
 }
@@ -1179,6 +1185,7 @@ pub(crate) mod linux {
         if std::fs::symlink_metadata(&dest).is_ok_and(|m| m.is_dir() || !(replace || ours && m.is_file())) {
             return Err(format!("{} already exists and wasn't installed by ArtCraft Launcher", dest.display()));
         }
+        clear_staging(&dir, std::time::SystemTime::now());
         let staging = super::staging_dir(&dir)?;
         let partial = staging.path().join(name);
         std::fs::copy(file, &partial).map_err(|e| format!("couldn't copy the AppImage ({e})"))?;
@@ -1193,6 +1200,53 @@ pub(crate) mod linux {
             removed.push(old.path.clone());
         }
         Ok((dest, removed))
+    }
+
+    /// How long a staging folder stays unchanged before it counts as left by an AppImage install
+    /// that ended partway.
+    const STAGING_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+    /// Removes the staging folders in `dir` of AppImage installs that ended partway, with the
+    /// partial copies in them: folders named as [`super::STAGING`] describes that hold nothing or
+    /// only one regular file named `*.AppImage`, and have not changed for [`STAGING_AGE`] before
+    /// `now`. Other folders, backup folders included, are left alone. Failures are logged and the
+    /// install goes on.
+    pub(crate) fn clear_staging(dir: &Path, now: std::time::SystemTime) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let random = |rest: &str| rest.len() == 6 && rest.bytes().all(|b| b.is_ascii_alphanumeric());
+        for folder in entries.flatten() {
+            let path = folder.path();
+            let ours = folder.file_name().to_str().and_then(|n| n.strip_prefix(super::STAGING)).is_some_and(random);
+            if !ours || !folder.file_type().is_ok_and(|t| t.is_dir()) || !left_by_install(&path, now) {
+                continue;
+            }
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => log::info!("removed {}, left by an install that ended partway", path.display()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => log::warn!("couldn't remove {}, left by an install that ended partway ({e})", path.display()),
+            }
+        }
+    }
+
+    /// Whether `folder` holds nothing or only one regular file named `*.AppImage`, and neither the
+    /// folder nor that file has changed for [`STAGING_AGE`] before `now`.
+    fn left_by_install(folder: &Path, now: std::time::SystemTime) -> bool {
+        let unchanged = |path: &Path| {
+            std::fs::symlink_metadata(path).and_then(|m| m.modified()).is_ok_and(|at| now.duration_since(at).is_ok_and(|age| age >= STAGING_AGE))
+        };
+        let Ok(entries) = std::fs::read_dir(folder) else { return false };
+        let names: Vec<_> = entries.take(2).map(|e| e.map(|e| e.file_name())).collect();
+        let partial = match names.as_slice() {
+            [] => true,
+            [Ok(only)] => {
+                let copy = folder.join(only);
+                Path::new(only).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("AppImage"))
+                    && std::fs::symlink_metadata(&copy).is_ok_and(|m| m.is_file())
+                    && unchanged(&copy)
+            }
+            _ => false,
+        };
+        partial && unchanged(folder)
     }
 
     /// Unpacks a release tarball (`bin/<app>`, `share/…`) into `<data>/apps/<app>`, a folder
@@ -2572,6 +2626,51 @@ mod tests {
         assert_eq!(std::fs::read(&theirs).unwrap(), b"new");
         assert_eq!(std::fs::read(&personal).unwrap(), b"user file");
         assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 2, "staging was left behind");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn appimage_staging_left_by_an_install_that_ended_partway_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path();
+        let staging = |name: &str, files: &[&str]| {
+            let path = folder.join(name);
+            std::fs::create_dir(&path).unwrap();
+            for file in files {
+                std::fs::write(path.join(file), "partial").unwrap();
+            }
+            path
+        };
+        let left = [
+            staging(".artcraft-launcher-Ab12Cd", &["photocraft-0.6.0-linux-x86_64.AppImage"]),
+            staging(".artcraft-launcher-Ef34Gh", &["pdfcraft.appimage"]),
+            staging(".artcraft-launcher-Ij56Kl", &[]),
+        ];
+        let link = staging(".artcraft-launcher-Fg78Hi", &[]);
+        std::os::unix::fs::symlink(folder.join("elsewhere.AppImage"), link.join("linked.AppImage")).unwrap();
+        let file = folder.join(".artcraft-launcher-Jk90Lm");
+        std::fs::write(&file, "the user's").unwrap();
+        let now = std::time::SystemTime::now();
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        // An install still copying: its folder is old, its partial copy changed later.
+        let copying = staging(".artcraft-launcher-No12Pq", &["vectorcraft.AppImage"]);
+        std::fs::File::options().write(true).open(copying.join("vectorcraft.AppImage")).unwrap().set_modified(now + day).unwrap();
+        let kept = [
+            staging(".artcraft-launcher-Mn78Op", &["a.AppImage", "notes.txt"]),
+            staging(".artcraft-launcher-Qr90St", &["notes.txt"]),
+            staging(".artcraft-launcher-backup-Uv12Wx", &["old"]),
+            staging(".artcraft-launcher-Yz34A", &["a.AppImage"]),
+            staging(".artcraft-launcher-Bc56De7", &["a.AppImage"]),
+            staging("Cd78Ef", &["a.AppImage"]),
+            link,
+            file,
+            copying,
+        ];
+        linux::clear_staging(folder, now);
+        assert!(left.iter().chain(&kept).all(|p| p.exists()), "a folder changed within a day was removed");
+        linux::clear_staging(folder, now + day + std::time::Duration::from_secs(60));
+        assert!(left.iter().all(|p| !p.exists()), "a partial copy was left behind");
+        assert!(kept.iter().all(|p| p.exists()), "a folder that isn't a partial install was removed");
     }
 
     #[test]
