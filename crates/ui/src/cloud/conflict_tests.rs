@@ -234,3 +234,82 @@ fn a_late_reply_from_before_sign_out_is_dropped() {
         r["entries"]
     );
 }
+
+/// Save as a copy, then the first click on the Save As page is refused (no name typed yet). The
+/// second click, with a name, must still copy the conflicted document A, not the active tab B.
+#[test]
+fn conflict_copy_survives_a_refused_first_attempt() {
+    let (app, held, log) = conflict_on_a_while_b_is_active();
+    let mut app = click_in_conflict_modal(app, "Save as a copy…");
+    let refused = save_as(&mut app, "", "");
+    assert!(refused.is_err(), "an empty name is refused: {refused:?}");
+    let name = app.cloud.save_name.clone();
+    save_as(&mut app, "", &name).unwrap();
+    let (job, _) = held.take(|j| matches!(j, Job::Create { .. })).unwrap();
+    let Job::Create { uid, bytes, .. } = job else { panic!("expected Job::Create") };
+    assert_eq!(
+        (uid, String::from_utf8_lossy(&bytes).into_owned()),
+        (1, "bytes of 1".to_owned()),
+        "after one refused attempt the copy of A.note encodes uid {uid} (encoded uids {:?})",
+        log.lock().unwrap().encoded
+    );
+}
+
+/// Save as a copy, but the user leaves the Save As page without saving. Later, on tab B, an
+/// ordinary Save As must save B, not the conflicted A from the abandoned copy.
+#[test]
+fn cancelled_conflict_copy_does_not_hijack_a_later_save_as() {
+    let (app, held, log) = conflict_on_a_while_b_is_active();
+    let app = click_in_conflict_modal(app, "Save as a copy…");
+    let mut app = app;
+    cancel_save_as(&mut app); // the host leaves the Save As page without submitting
+    assert!(app.cloud.save_name.is_empty());
+    assert_eq!(app.active, 2);
+    save_as(&mut app, "", "B renamed").unwrap();
+    let (job, _) = held.take(|j| matches!(j, Job::Create { .. })).unwrap();
+    let Job::Create { uid, name, bytes, .. } = job else { panic!("expected Job::Create") };
+    assert_eq!(
+        (uid, String::from_utf8_lossy(&bytes).into_owned()),
+        (2, "bytes of 2".to_owned()),
+        "an ordinary Save As of tab B as {name:?} encoded uid {uid} (encoded uids {:?})",
+        log.lock().unwrap().encoded
+    );
+}
+
+/// A successfully saved conflict copy must not redirect a later ordinary Save As.
+#[test]
+fn successful_conflict_copy_releases_its_document_target() {
+    let (app, held, _log) = conflict_on_a_while_b_is_active();
+    let mut app = click_in_conflict_modal(app, "Save as a copy…");
+    let name = app.cloud.save_name.clone();
+    save_as(&mut app, "", &name).unwrap();
+    let (job, post) = held.take(|job| matches!(job, Job::Create { .. })).unwrap();
+    let Job::Create { uid, .. } = job else { panic!("expected Job::Create") };
+    assert_eq!(uid, 1);
+    assert_eq!(app.cloud.save_as_target, Some(1));
+    post.send(Event::Saved { uid, entry: Ok(entry("/A-copy.note", "a2")) });
+    drain(&mut app, &egui::Context::default());
+    assert_eq!(app.cloud.save_as_target, None);
+    save_as(&mut app, "", "B renamed").unwrap();
+    let (job, _) = held.take(|job| matches!(job, Job::Create { .. })).unwrap();
+    let Job::Create { uid, bytes, .. } = job else { panic!("expected Job::Create") };
+    assert_eq!((uid, bytes), (2, b"bytes of 2".to_vec()));
+}
+
+/// A refused create keeps the same document pinned while the user changes its name.
+#[test]
+fn conflict_copy_survives_a_backend_refusal() {
+    let (app, held, _log) = conflict_on_a_while_b_is_active();
+    let mut app = click_in_conflict_modal(app, "Save as a copy…");
+    let name = app.cloud.save_name.clone();
+    save_as(&mut app, "", &name).unwrap();
+    let (job, post) = held.take(|job| matches!(job, Job::Create { .. })).unwrap();
+    let Job::Create { uid, .. } = job else { panic!("expected Job::Create") };
+    assert_eq!(uid, 1);
+    post.send(Event::Saved { uid, entry: Err(Fault::Refused("exists".to_owned())) });
+    drain(&mut app, &egui::Context::default());
+    save_as(&mut app, "", "A another copy").unwrap();
+    let (job, _) = held.take(|job| matches!(job, Job::Create { .. })).unwrap();
+    let Job::Create { uid, bytes, .. } = job else { panic!("expected Job::Create") };
+    assert_eq!((uid, bytes), (1, b"bytes of 1".to_vec()));
+}
