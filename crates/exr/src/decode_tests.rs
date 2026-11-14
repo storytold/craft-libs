@@ -107,6 +107,27 @@ fn written_files_read_back() {
 }
 
 #[test]
+fn write_preserves_data_and_display_window_offsets() {
+    let channels = [Channel { name: "Y".into(), samples: Samples::F32(vec![1.0, 2.0, 3.0, 4.0]) }];
+    let display = Window { x: 8, y: 18, width: 4, height: 4 };
+    let bytes = write_with_windows(2, 2, &channels, (10, 20), display, Compression::Zip16).unwrap();
+    let parts = parts(&bytes, &Limits::default()).unwrap();
+    assert_eq!(parts[0].data_window, Window { x: 10, y: 20, width: 2, height: 2 });
+    assert_eq!(parts[0].display_window, display);
+    let decoded = decode_display_part(&bytes, 0, &all, &|_| 0.0, &Limits::default()).unwrap();
+    assert_eq!(decoded.channels[0].samples, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 3.0, 4.0,]);
+}
+
+#[test]
+fn write_rejects_window_coordinate_overflow() {
+    let channels = [Channel { name: "Y".into(), samples: Samples::F32(vec![1.0]) }];
+    assert!(matches!(
+        write_with_windows(1, 1, &channels, (i32::MAX, 0), Window { x: 0, y: 0, width: 1, height: 1 }, Compression::None),
+        Err(Error::Encode(_))
+    ));
+}
+
+#[test]
 fn display_window_placement() {
     let data = Window { x: 1, y: -1, width: 2, height: 2 };
     let display = Window { x: 0, y: 0, width: 3, height: 2 };
