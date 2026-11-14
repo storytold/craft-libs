@@ -220,7 +220,7 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         draw_grid(out, &g, &ax.vticks);
     }
     if c.cat.grid {
-        draw_cat_grid(out, &g, &ax.xticks, c.kind == Kind::Scatter);
+        draw_cat_grid(out, &g, &ax.xticks, c.kind);
     }
     let mut labels = Vec::new();
     match c.kind {
@@ -274,11 +274,12 @@ fn draw_grid(out: &mut Vec<GraphicItem>, g: &Frame, ticks: &[(f64, String)]) {
     }
 }
 
-/// Gridlines along the category axis: across the plot at each category's centre, at the x ticks
-/// of a scatter chart.
-fn draw_cat_grid(out: &mut Vec<GraphicItem>, g: &Frame, xticks: &[(f64, String)], scatter: bool) {
+/// Gridlines along the category axis: across the plot at each category's centre (where line and
+/// area points sit, on the tick marks when the axis crosses "midCat"), at the x ticks of a
+/// scatter chart.
+fn draw_cat_grid(out: &mut Vec<GraphicItem>, g: &Frame, xticks: &[(f64, String)], kind: Kind) {
     let plot = g.plot;
-    if scatter {
+    if kind == Kind::Scatter {
         for (t, _) in xticks {
             let p = g.scat_x(*t);
             stroke(out, seg(p, plot.y, p, plot.bottom()), GRID, 0.75);
@@ -286,8 +287,14 @@ fn draw_cat_grid(out: &mut Vec<GraphicItem>, g: &Frame, xticks: &[(f64, String)]
         return;
     }
     for i in 0..g.n {
-        let p = g.band_start(i) + g.band() / 2.0;
-        let segs = if g.horiz { seg(plot.x, p, plot.right(), p) } else { seg(p, plot.y, p, plot.bottom()) };
+        let segs = if g.horiz {
+            let p = g.band_start(i) + g.band() / 2.0;
+            seg(plot.x, p, plot.right(), p)
+        } else {
+            // Bars stay in their bands; only line and area points move onto the ticks.
+            let p = if matches!(kind, Kind::Line | Kind::Area) { g.cat_x(i) } else { g.band_start(i) + g.band() / 2.0 };
+            seg(p, plot.y, p, plot.bottom())
+        };
         stroke(out, segs, GRID, 0.75);
     }
 }

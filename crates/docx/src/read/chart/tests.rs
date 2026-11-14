@@ -618,3 +618,41 @@ fn bar_category_labels_start_after_the_axis_title() {
     assert!(labels.iter().all(|r| r[0] >= strip_end - 1e-3), "labels {labels:?} overlap the title strip ending at {strip_end}");
     assert!(labels.iter().all(|r| r[2] <= 0.4 * 300.0), "{labels:?}");
 }
+
+#[test]
+fn category_gridlines_follow_the_points_when_the_axis_crosses_mid() {
+    let line = |cross: &str| {
+        let plot = format!(
+            r#"<c:lineChart><c:grouping val="standard"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/><c:majorGridlines/></c:catAx><c:valAx><c:axId val="2"/><c:crossBetween val="{cross}"/></c:valAx>"#,
+            ser(0, "L", Some("FF0000"), &["Q1", "Q2", "Q3"], &["1", "5", "3"]),
+        );
+        let items = chart_items(&space(&plot), &theme(), 300.0, 200.0);
+        let grid: Vec<f32> = items
+            .iter()
+            .filter_map(|it| match it {
+                GraphicItem::Path { segs, stroke: Some(c), .. } if *c == GRID => match segs.first() {
+                    Some(PathSeg::Move(x, _)) => Some(*x),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let pts: Vec<f32> = items
+            .iter()
+            .filter_map(|it| match it {
+                GraphicItem::Path { segs, stroke: Some(c), .. } if *c == Rgb(255, 0, 0) => Some(
+                    segs.iter().filter_map(|s| if let PathSeg::Move(x, _) | PathSeg::Line(x, _) = s { Some(*x) } else { None }).collect::<Vec<f32>>(),
+                ),
+                _ => None,
+            })
+            .next()
+            .unwrap_or_default();
+        (grid, pts)
+    };
+    for cross in ["midCat", "between"] {
+        let (grid, pts) = line(cross);
+        assert_eq!(grid.len(), 3, "{cross}");
+        assert_eq!(pts.len(), 3, "{cross}");
+        assert!(grid.iter().zip(&pts).all(|(g, p)| (g - p).abs() < 1e-3), "{cross}: grid {grid:?} points {pts:?}");
+    }
+}
