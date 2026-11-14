@@ -100,6 +100,57 @@ fn submesh_range(s: &SubMesh, len: usize) -> Option<std::ops::Range<usize>> {
     (s.start.is_multiple_of(3) && s.count.is_multiple_of(3) && end <= len as u64).then_some(s.start as usize..end as usize)
 }
 
+/// `listed + add` triangle visits, or `TooLarge` when that is over [`Limits::max_triangles`]
+/// (`got` is `u64::MAX` when the sum overflows).
+fn within_triangle_limit(listed: u64, add: usize, limits: &Limits) -> Result<u64> {
+    let (got, limit) = (listed.saturating_add(add as u64), limits.max_triangles as u64);
+    if got > limit { Err(MeshOpsError::TooLarge { what: "triangle count", got, limit }) } else { Ok(got) }
+}
+
+/// The parts of each of `ranges` that no earlier one holds: in the order of `ranges`, and
+/// ascending within each, so every value the ranges hold comes once, from the first range that
+/// holds it. Memory and time grow with the number of ranges, not with their lengths.
+fn first_listings(ranges: &[std::ops::Range<usize>]) -> Result<Vec<std::ops::Range<usize>>> {
+    use std::cmp::Reverse;
+    let what = "wire edges";
+    // Range starts in ascending order, and every start and end once, ascending.
+    let mut starts = try_vec(ranges.len(), what)?;
+    let mut points = try_vec(ranges.len().saturating_mul(2), what)?;
+    for (i, r) in ranges.iter().enumerate().filter(|(_, r)| r.start < r.end) {
+        starts.push((r.start, i));
+        points.extend([r.start, r.end]);
+    }
+    starts.sort_unstable();
+    points.sort_unstable();
+    points.dedup();
+
+    // Sweep the points, keeping the ranges that hold the current point with the earliest on top.
+    let mut active = std::collections::BinaryHeap::new();
+    reserved(active.try_reserve(starts.len()), what)?;
+    let mut parts: Vec<(usize, std::ops::Range<usize>)> = Vec::new();
+    let mut next = starts.iter().peekable();
+    for (k, &p) in points.iter().enumerate() {
+        while let Some(&(_, i)) = next.next_if(|(s, _)| *s == p) {
+            active.push(Reverse(i));
+        }
+        while active.peek().is_some_and(|Reverse(i)| ranges.get(*i).is_none_or(|r| r.end <= p)) {
+            active.pop();
+        }
+        let (Some(&Reverse(owner)), Some(&end)) = (active.peek(), points.get(k + 1)) else { continue };
+        match parts.last_mut() {
+            Some((last, part)) if *last == owner && part.end == p => part.end = end,
+            _ => {
+                reserved(parts.try_reserve(1), what)?;
+                parts.push((owner, p..end));
+            }
+        }
+    }
+    parts.sort_unstable_by_key(|(owner, part)| (*owner, part.start));
+    let mut out = try_vec(parts.len(), what)?;
+    out.extend(parts.into_iter().map(|(_, part)| part));
+    Ok(out)
+}
+
 /// Whether an array of `len` entries has one per vertex of a mesh with `n` vertices.
 fn per_vertex(len: usize, n: usize) -> bool {
     len == n
@@ -150,43 +201,62 @@ impl Mesh {
 
     /// The edges wireframes draw: each vertex pair once (smaller index first), leaving out
     /// polygon diagonals ([`Mesh::diagonals`]) unless only one triangle has the edge (a UV seam
-    /// split it from its twin), per material in `0..materials.len().max(1)`.
-    pub fn wire_edges(&self) -> Vec<Vec<(u32, u32)>> {
-        (0..self.materials.len().max(1))
-            .map(|m| {
-                // Edge → (real in some triangle, triangles using it), in first-seen order.
-                let mut edges: Vec<((u32, u32), bool, u8)> = Vec::new();
-                let mut at: std::collections::HashMap<(u32, u32), usize> = std::collections::HashMap::new();
-                for t in self.triangles_of(m) {
+    /// split it from its twin), per material in `0..materials.len().max(1)`. A triangle that
+    /// several submeshes of one material list counts once for an edge. The triangles the
+    /// submeshes list (a triangle counts again for each submesh that lists it) over
+    /// [`Limits::max_triangles`] are `TooLarge`.
+    pub fn wire_edges(&self, limits: &Limits) -> Result<Vec<Vec<(u32, u32)>>> {
+        let groups = self.ranges_by_material(limits)?;
+        let mut out = try_vec(groups.len(), "wire edges")?;
+        for ranges in &groups {
+            // Edge → (real in some triangle, triangles using it), in first-seen order.
+            let mut edges: Vec<((u32, u32), bool, u8)> = Vec::new();
+            let mut at: std::collections::HashMap<(u32, u32), usize> = std::collections::HashMap::new();
+            // Each listed triangle once, where its first submesh lists it.
+            for r in first_listings(ranges)? {
+                for t in r {
                     let Some(v) = self.indices.get(t * 3..t * 3 + 3) else { continue };
                     let hidden = self.diagonals.get(t).copied().unwrap_or(0);
                     for (i, (a, b)) in [(v[0], v[1]), (v[1], v[2]), (v[2], v[0])].into_iter().enumerate() {
                         let key = (a.min(b), a.max(b));
                         let real = hidden >> i & 1 == 0;
-                        let e = *at.entry(key).or_insert_with(|| {
-                            edges.push((key, false, 0));
-                            edges.len() - 1
-                        });
+                        let e = match at.get(&key) {
+                            Some(&e) => e,
+                            None => {
+                                reserved(edges.try_reserve(1), "wire edges")?;
+                                reserved(at.try_reserve(1), "wire edges")?;
+                                edges.push((key, false, 0));
+                                at.insert(key, edges.len() - 1);
+                                edges.len() - 1
+                            }
+                        };
                         if let Some((_, r, n)) = edges.get_mut(e) {
                             *r |= real;
                             *n = n.saturating_add(1);
                         }
                     }
                 }
-                edges.into_iter().filter(|(_, real, n)| *real || *n == 1).map(|(k, ..)| k).collect()
-            })
-            .collect()
+            }
+            let mut kept = try_vec(edges.len(), "wire edges")?;
+            kept.extend(edges.into_iter().filter(|(_, real, n)| *real || *n == 1).map(|(k, ..)| k));
+            out.push(kept);
+        }
+        Ok(out)
     }
 
-    /// Edges where the UV layout splits: two triangles meet there in 3D but not in UV space, per material in `0..materials.len().max(1)`
-    pub fn uv_seam_edges(&self) -> Vec<Vec<(u32, u32)>> {
+    /// Edges where the UV layout splits: two triangles meet there in 3D but not in UV space, per
+    /// material in `0..materials.len().max(1)`. The triangles the submeshes list (a triangle
+    /// counts again for each submesh that lists it) over [`Limits::max_triangles`] are
+    /// `TooLarge`.
+    pub fn uv_seam_edges(&self, limits: &Limits) -> Result<Vec<Vec<(u32, u32)>>> {
         // Signed zero denotes the same position on either side of an imported seam
         let bits = |position: Vec3| position.to_array().map(|coordinate| if coordinate == 0.0 { 0 } else { coordinate.to_bits() });
-        let mut seams = vec![Vec::new(); self.materials.len().max(1)];
+        let groups = self.ranges_by_material(limits)?;
+        let mut seams: Vec<Vec<(u32, u32)>> = try_filled(groups.len(), Vec::new(), "UV seams")?;
         // Match across materials before grouping the lines for texture-set visibility
         let mut sides: std::collections::HashMap<EdgePositions, Vec<(u32, u32, usize)>> = std::collections::HashMap::new();
-        for material in 0..seams.len() {
-            for triangle in self.triangles_of(material) {
+        for (material, ranges) in groups.iter().enumerate() {
+            for triangle in ranges.iter().cloned().flatten() {
                 let Some(corners) = self.indices.get(triangle * 3..triangle * 3 + 3) else { continue };
 
                 for (from, to) in [(corners[0], corners[1]), (corners[1], corners[2]), (corners[2], corners[0])] {
@@ -196,7 +266,10 @@ impl Mesh {
 
                     let (from_bits, to_bits) = (bits(*from_position), bits(*to_position));
                     let (edge, pair) = if from_bits <= to_bits { ((from_bits, to_bits), (from, to)) } else { ((to_bits, from_bits), (to, from)) };
-                    sides.entry(edge).or_default().push((pair.0, pair.1, material));
+                    reserved(sides.try_reserve(1), "UV seams")?;
+                    let list = sides.entry(edge).or_default();
+                    reserved(list.try_reserve(1), "UV seams")?;
+                    list.push((pair.0, pair.1, material));
                 }
             }
         }
@@ -208,6 +281,7 @@ impl Mesh {
             if pairs.iter().any(|&(from, to, _)| (uv(from), uv(to)) != (uv(first_from), uv(first_to))) {
                 for (from, to, material) in pairs {
                     if let Some(edges) = seams.get_mut(material) {
+                        reserved(edges.try_reserve(1), "UV seams")?;
                         edges.push((from.min(to), from.max(to)));
                     }
                 }
@@ -218,7 +292,7 @@ impl Mesh {
             edges.dedup();
         }
 
-        seams
+        Ok(seams)
     }
 
     /// Material of triangle `t`.
@@ -230,11 +304,77 @@ impl Mesh {
     /// Triangle index range belonging to material `m` (all submeshes of that material), within
     /// the index buffer.
     pub fn triangles_of(&self, m: usize) -> impl Iterator<Item = usize> + '_ {
-        let len = self.indices.len() as u64;
-        self.submeshes.iter().filter(move |s| s.material == m).flat_map(move |s| {
-            let end = (u64::from(s.start) + u64::from(s.count)).min(len);
-            (s.start / 3) as usize..(end / 3) as usize
-        })
+        self.submeshes.iter().filter(move |s| s.material == m).flat_map(move |s| self.listed(s))
+    }
+
+    /// The triangles of submesh `s` within the index buffer, as [`Mesh::triangles_of`] visits
+    /// them.
+    fn listed(&self, s: &SubMesh) -> std::ops::Range<usize> {
+        let end = (u64::from(s.start) + u64::from(s.count)).min(self.indices.len() as u64);
+        (s.start / 3) as usize..(end / 3) as usize
+    }
+
+    /// How many triangles [`Mesh::triangles_of`] visits for material `m` (a triangle counts again
+    /// for each submesh that lists it), or `TooLarge` when that is over [`Limits::max_triangles`].
+    fn listed_of(&self, m: usize, limits: &Limits) -> Result<usize> {
+        let mut listed = 0u64;
+        for s in self.submeshes.iter().filter(|s| s.material == m) {
+            listed = within_triangle_limit(listed, self.listed(s).len(), limits)?;
+        }
+        // At most `max_triangles`, a usize.
+        Ok(listed as usize)
+    }
+
+    /// Whether a submesh of a material other than `m` lists a triangle that a submesh of `m`
+    /// lists. The memory used grows with the number of `m`'s submeshes, not with the mesh.
+    fn listed_by_other(&self, m: usize) -> Result<bool> {
+        let mut own = Vec::new();
+        for s in self.submeshes.iter().filter(|s| s.material == m) {
+            let r = self.listed(s);
+            if r.start < r.end {
+                reserved(own.try_reserve(1), "material triangles")?;
+                own.push(r);
+            }
+        }
+        if own.is_empty() {
+            return Ok(false);
+        }
+        own.sort_unstable_by_key(|r| r.start);
+        // Merge overlapping and touching ranges, so the ends ascend with the starts.
+        let mut merged: Vec<std::ops::Range<usize>> = try_vec(own.len(), "material triangles")?;
+        for r in own {
+            match merged.last_mut() {
+                Some(last) if r.start <= last.end => last.end = last.end.max(r.end),
+                _ => merged.push(r),
+            }
+        }
+        Ok(self.submeshes.iter().filter(|s| s.material != m).any(|s| {
+            let r = self.listed(s);
+            // The first merged range that ends after `r` starts overlaps `r` when it starts before `r` ends.
+            let i = merged.partition_point(|x| x.end <= r.start);
+            r.start < r.end && merged.get(i).is_some_and(|x| x.start < r.end)
+        }))
+    }
+
+    /// The triangle ranges of each material in `0..materials.len().max(1)`, in submesh order,
+    /// from one pass over the submeshes. The triangles they list (a triangle counts again for
+    /// each submesh that lists it) over [`Limits::max_triangles`] are `TooLarge`, before any
+    /// memory is reserved.
+    fn ranges_by_material(&self, limits: &Limits) -> Result<Vec<Vec<std::ops::Range<usize>>>> {
+        let materials = self.materials.len().max(1);
+        let mut listed = 0u64;
+        for s in self.submeshes.iter().filter(|s| s.material < materials) {
+            listed = within_triangle_limit(listed, self.listed(s).len(), limits)?;
+        }
+        let mut groups = try_vec(materials, "submesh ranges")?;
+        groups.resize_with(materials, Vec::new);
+        for s in &self.submeshes {
+            if let Some(group) = groups.get_mut(s.material) {
+                reserved(group.try_reserve(1), "submesh ranges")?;
+                group.push(self.listed(s));
+            }
+        }
+        Ok(groups)
     }
 
     /// Check that attribute arrays agree, every value is finite, every index is in range and
@@ -451,36 +591,54 @@ impl Mesh {
     }
 
     /// The UV tiles material `m` covers: integer parts of its triangles' UV centroids (v down),
-    /// ascending. Non-finite UVs are skipped.
-    pub fn uv_tiles(&self, m: usize) -> std::collections::BTreeSet<(i32, i32)> {
-        self.triangles_of(m)
+    /// ascending. Non-finite UVs are skipped. The triangles the material's submeshes list (a
+    /// triangle counts again for each submesh that lists it) over [`Limits::max_triangles`] are
+    /// `TooLarge`.
+    pub fn uv_tiles(&self, m: usize, limits: &Limits) -> Result<std::collections::BTreeSet<(i32, i32)>> {
+        self.listed_of(m, limits)?;
+        Ok(self
+            .triangles_of(m)
             .filter_map(|t| {
                 let [a, b, c] = self.tri(t)?;
                 let uv = (*self.uvs.get(a)? + *self.uvs.get(b)? + *self.uvs.get(c)?) / 3.0;
                 uv.is_finite().then(|| (uv.x.floor() as i32, uv.y.floor() as i32))
             })
-            .collect()
+            .collect())
     }
 
     /// Remap the UVs of material `m`'s triangles with `f`. Vertices they share with other
-    /// materials are duplicated first, so the other triangles keep their UVs.
-    pub fn map_material_uvs(&mut self, m: usize, f: impl Fn(Vec2) -> Vec2) {
-        self.map_material_uvs_with(m, |_, uv| f(uv));
+    /// materials are duplicated first, so the other triangles keep their UVs. Errors as
+    /// [`Mesh::map_material_uvs_with`].
+    pub fn map_material_uvs(&mut self, m: usize, f: impl Fn(Vec2) -> Vec2, limits: &Limits) -> Result<()> {
+        self.map_material_uvs_with(m, |_, uv| f(uv), limits)
     }
 
     /// [`Mesh::map_material_uvs`] where `f` also gets the UV centroid of the first of the
     /// material's triangles using the vertex: piecewise maps (UV tiles of different sizes) then
     /// place a vertex on a tile border with its own triangle's tile.
-    pub fn map_material_uvs_with(&mut self, m: usize, f: impl Fn(Vec2, Vec2) -> Vec2) {
-        let material_triangles: Vec<usize> = self.triangles_of(m).collect();
-        let mut in_material = vec![false; self.triangle_count()];
+    ///
+    /// The triangles the material's submeshes list (a triangle counts again for each submesh that
+    /// lists it) over [`Limits::max_triangles`] are `TooLarge`, and a triangle that a submesh of
+    /// another material also lists is `Invalid`. Either leaves the mesh unchanged and does not
+    /// call `f`.
+    pub fn map_material_uvs_with(&mut self, m: usize, f: impl Fn(Vec2, Vec2) -> Vec2, limits: &Limits) -> Result<()> {
+        let listed = self.listed_of(m, limits)?;
+        if self.listed_by_other(m)? {
+            return Err(MeshOpsError::Invalid("triangle belongs to more than one material".into()));
+        }
+        let mut material_triangles = try_vec(listed, "material triangles")?;
+        material_triangles.extend(self.triangles_of(m));
+        let mut in_material = try_filled(self.triangle_count(), false, "material triangles")?;
         for t in &material_triangles {
             if let Some(x) = in_material.get_mut(*t) {
                 *x = true;
             }
         }
 
-        let mut shared = vec![false; self.positions.len()];
+        // (vertex, centroid of its first triangle), each vertex once. Reserved before the mesh
+        // changes.
+        let mut vertices = try_vec(listed.saturating_mul(3), "material vertices")?;
+        let mut shared = try_filled(self.positions.len(), false, "material vertices")?;
         for (_, tri) in self.indices.as_chunks::<3>().0.iter().enumerate().filter(|(t, _)| !in_material.get(*t).copied().unwrap_or(false)) {
             for v in tri {
                 if let Some(s) = shared.get_mut(*v as usize) {
@@ -509,8 +667,6 @@ impl Mesh {
             }
         }
 
-        // (vertex, centroid of its first triangle), each vertex once
-        let mut vertices = Vec::with_capacity(material_triangles.len().saturating_mul(3));
         for t in &material_triangles {
             let Some(tri) = self.tri(*t) else { continue };
             let centroid = tri.iter().map(|v| self.uvs.get(*v).copied().unwrap_or_default()).sum::<Vec2>() / 3.0;
@@ -524,6 +680,7 @@ impl Mesh {
                 *uv = f(centroid, *uv);
             }
         }
+        Ok(())
     }
 
     /// Append a copy of vertex `v`; returns its index, or `None` when the new index would not
@@ -1047,26 +1204,28 @@ mod tests {
 
     #[test]
     fn wire_edges_leave_out_polygon_diagonals() {
+        let l = Limits::default();
         let mut m = quad();
-        assert_eq!(m.wire_edges(), vec![vec![(0, 1), (1, 2), (0, 2), (2, 3), (0, 3)]], "triangles show every edge");
+        assert_eq!(m.wire_edges(&l).unwrap(), vec![vec![(0, 1), (1, 2), (0, 2), (2, 3), (0, 3)]], "triangles show every edge");
         // Edge 2 of (0, 1, 2) and edge 0 of (0, 2, 3) split the quad.
         m.diagonals = vec![0b100, 0b001];
-        assert_eq!(m.wire_edges(), vec![vec![(0, 1), (1, 2), (2, 3), (0, 3)]]);
+        assert_eq!(m.wire_edges(&l).unwrap(), vec![vec![(0, 1), (1, 2), (2, 3), (0, 3)]]);
         // A diagonal whose twin a seam split off (vertex 4 copies vertex 0) stays.
         let mut seam = m.clone();
         seam.indices[3] = 4;
-        assert_eq!(seam.wire_edges()[0].len(), 6);
+        assert_eq!(seam.wire_edges(&l).unwrap()[0].len(), 6);
         // Appending keeps each side's diagonals on its own triangles.
         let mut a = Mesh::from_parts(m.positions.clone(), None, m.uvs.clone(), vec![0, 1, 2], "A").unwrap();
         a.append(&m);
         assert_eq!(a.diagonals, vec![0, 0b100, 0b001]);
-        assert_eq!(crate::primitives::plane(1.0, 2).wire_edges()[0].len(), 12, "a 2×2 grid of quads has 12 edges");
+        assert_eq!(crate::primitives::plane(1.0, 2).wire_edges(&l).unwrap()[0].len(), 12, "a 2×2 grid of quads has 12 edges");
     }
 
     #[test]
     fn uv_seams_are_where_the_uv_layout_splits() {
+        let l = Limits::default();
         let mesh = quad();
-        assert_eq!(mesh.uv_seam_edges(), vec![Vec::<(u32, u32)>::new()], "one UV island has no seam");
+        assert_eq!(mesh.uv_seam_edges(&l).unwrap(), vec![Vec::<(u32, u32)>::new()], "one UV island has no seam");
 
         // Vertex 4 copies vertex 0's position with another UV: the diagonal (0, 2) / (4, 2) is cut
         let mut seam = mesh.clone();
@@ -1075,12 +1234,12 @@ mod tests {
         seam.tangents.push(seam.tangents[0]);
         seam.uvs.push(Vec2::new(0.9, 0.9));
         seam.indices[3] = 4;
-        assert_eq!(seam.uv_seam_edges(), vec![vec![(0, 2), (2, 4)]]);
+        assert_eq!(seam.uv_seam_edges(&l).unwrap(), vec![vec![(0, 2), (2, 4)]]);
 
         // The same split with the same UV is a hard edge, not a seam
         let mut hard = seam.clone();
         hard.uvs[4] = hard.uvs[0];
-        assert_eq!(hard.uv_seam_edges(), vec![Vec::<(u32, u32)>::new()]);
+        assert_eq!(hard.uv_seam_edges(&l).unwrap(), vec![Vec::<(u32, u32)>::new()]);
     }
 
     #[test]
@@ -1092,7 +1251,7 @@ mod tests {
         mesh.uvs.push(Vec2::new(0.9, 0.9));
         mesh.indices[3] = 4;
         assert_eq!(mesh.positions[0], mesh.positions[4]);
-        assert_eq!(mesh.uv_seam_edges(), vec![vec![(0, 2), (2, 4)]]);
+        assert_eq!(mesh.uv_seam_edges(&Limits::default()).unwrap(), vec![vec![(0, 2), (2, 4)]]);
     }
 
     #[test]
@@ -1107,9 +1266,10 @@ mod tests {
         mesh.submeshes[0].count = 3;
         mesh.submeshes.push(SubMesh { name: "second".into(), material: 1, start: 3, count: 3 });
 
-        assert_eq!(mesh.uv_seam_edges(), vec![vec![(0, 2)], vec![(2, 4)]]);
+        let l = Limits::default();
+        assert_eq!(mesh.uv_seam_edges(&l).unwrap(), vec![vec![(0, 2)], vec![(2, 4)]]);
         mesh.uvs[4] = mesh.uvs[0];
-        assert_eq!(mesh.uv_seam_edges(), vec![Vec::<(u32, u32)>::new(); 2], "a material boundary alone is not a UV seam");
+        assert_eq!(mesh.uv_seam_edges(&l).unwrap(), vec![Vec::<(u32, u32)>::new(); 2], "a material boundary alone is not a UV seam");
     }
 
     #[test]
@@ -1121,7 +1281,7 @@ mod tests {
         m.materials = vec!["a".into(), "b".into()];
         m.submeshes =
             vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
-        m.map_material_uvs(1, |uv| uv * 0.5);
+        m.map_material_uvs(1, |uv| uv * 0.5, &Limits::default()).unwrap();
         assert_eq!(m.positions.len(), 6, "vertices 0 and 2 are copied for material 1");
         assert_eq!(m.uvs.len(), 6);
         assert!(m.normals.is_empty() && m.tangents.is_empty() && m.colors.is_empty(), "{m:?}");
@@ -1167,7 +1327,8 @@ mod tests {
         m.submeshes =
             vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
         let before = m.clone();
-        m.map_material_uvs(1, |uv| uv + Vec2::X);
+        let l = Limits::default();
+        m.map_material_uvs(1, |uv| uv + Vec2::X, &l).unwrap();
         m.validate().unwrap();
         assert_eq!(m.vertex_count(), 6, "the two shared vertices are split");
         assert_eq!(&m.indices[..3], &before.indices[..3]);
@@ -1177,8 +1338,150 @@ mod tests {
             let (old, new) = (before.indices[3 + k] as usize, m.indices[3 + k] as usize);
             assert_eq!((m.uvs[new], m.positions[new]), (before.uvs[old] + Vec2::X, before.positions[old]));
         }
-        assert_eq!(m.uv_tiles(1).into_iter().collect::<Vec<_>>(), vec![(1, 0)]);
-        assert_eq!(m.uv_tiles(0).into_iter().collect::<Vec<_>>(), vec![(0, 0)]);
+        assert_eq!(m.uv_tiles(1, &l).unwrap().into_iter().collect::<Vec<_>>(), vec![(1, 0)]);
+        assert_eq!(m.uv_tiles(0, &l).unwrap().into_iter().collect::<Vec<_>>(), vec![(0, 0)]);
+    }
+
+    /// One triangle in UV tile (0, 0) that `listings` submeshes of material 0 all list.
+    fn listed_triangle(listings: usize) -> Mesh {
+        let uvs = vec![Vec2::new(0.1, 0.1), Vec2::new(0.9, 0.1), Vec2::new(0.1, 0.9)];
+        let mut m = Mesh::from_parts(vec![Vec3::ZERO, Vec3::X, Vec3::Y], None, uvs, vec![0, 1, 2], "a").unwrap();
+        m.submeshes = vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }; listings];
+        m
+    }
+
+    fn at_most(triangles: usize) -> Limits {
+        Limits { max_triangles: triangles, ..Limits::default() }
+    }
+
+    fn too_many(got: u64, limit: u64) -> MeshOpsError {
+        MeshOpsError::TooLarge { what: "triangle count", got, limit }
+    }
+
+    #[test]
+    fn listed_triangles_bound_wire_edges() {
+        let m = listed_triangle(5);
+        m.validate().unwrap();
+        assert_eq!(m.wire_edges(&at_most(4)), Err(too_many(5, 4)));
+        assert_eq!(too_many(5, 4).to_string(), "triangle count 5 is over the limit of 4");
+        assert_eq!(m.wire_edges(&at_most(5)).unwrap(), vec![vec![(0, 1), (1, 2), (0, 2)]]);
+    }
+
+    #[test]
+    fn listed_triangles_bound_uv_seams() {
+        let m = listed_triangle(5);
+        assert_eq!(m.uv_seam_edges(&at_most(4)), Err(too_many(5, 4)));
+        assert_eq!(m.uv_seam_edges(&at_most(5)).unwrap(), vec![Vec::<(u32, u32)>::new()]);
+    }
+
+    #[test]
+    fn listed_triangles_bound_uv_tiles() {
+        let m = listed_triangle(5);
+        assert_eq!(m.uv_tiles(0, &at_most(4)), Err(too_many(5, 4)));
+        assert_eq!(m.uv_tiles(0, &at_most(5)).unwrap().into_iter().collect::<Vec<_>>(), vec![(0, 0)]);
+    }
+
+    #[test]
+    fn listed_triangles_bound_material_mapping() {
+        let mut m = listed_triangle(5);
+        let before = m.clone();
+        let calls = std::cell::Cell::new(0);
+        let f = |uv: Vec2| {
+            calls.set(calls.get() + 1);
+            uv + Vec2::X
+        };
+        assert_eq!(m.map_material_uvs(0, f, &at_most(4)), Err(too_many(5, 4)));
+        assert_eq!((calls.get(), &m), (0, &before), "nothing is mapped or changed");
+        m.map_material_uvs(0, f, &at_most(5)).unwrap();
+        assert_eq!(calls.get(), 3, "each vertex is mapped once");
+        m.validate().unwrap();
+        assert_eq!(m.uvs, before.uvs.iter().map(|uv| *uv + Vec2::X).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn repeated_listing_keeps_single_hidden_edge() {
+        let mut once = listed_triangle(1);
+        once.diagonals = vec![0b001];
+        let mut twice = once.clone();
+        twice.submeshes.push(twice.submeshes[0].clone());
+        let edges = once.wire_edges(&at_most(1)).unwrap();
+        assert_eq!(edges, vec![vec![(0, 1), (1, 2), (0, 2)]], "a hidden edge with one triangle stays");
+        assert_eq!(twice.wire_edges(&at_most(2)).unwrap(), edges);
+
+        // A quad whose diagonal a seam split (vertex 4 copies vertex 0): each half keeps its
+        // diagonal, also when a second submesh lists the second half again.
+        let mut seam = quad();
+        seam.positions.push(seam.positions[0]);
+        seam.normals.push(seam.normals[0]);
+        seam.tangents.push(seam.tangents[0]);
+        seam.uvs.push(seam.uvs[0]);
+        seam.indices[3] = 4;
+        seam.diagonals = vec![0b100, 0b001];
+        let edges = seam.wire_edges(&at_most(2)).unwrap();
+        assert_eq!(edges[0].len(), 6, "{edges:?}");
+        seam.submeshes.push(SubMesh { name: "again".into(), material: 0, start: 3, count: 3 });
+        assert_eq!(seam.wire_edges(&at_most(3)).unwrap(), edges);
+    }
+
+    #[test]
+    fn first_listings_of_overlapping_ranges() {
+        // A repeated range, the gaps around and between earlier ranges, a range touching an
+        // earlier one, a range over all of them and an empty range.
+        let ranges = [10..20, 10..20, 30..40, 5..45, 45..50, 0..60, 7..7];
+        assert_eq!(first_listings(&ranges).unwrap(), vec![10..20, 30..40, 5..10, 20..30, 40..45, 45..50, 0..5, 50..60]);
+        // A later range inside an earlier one adds nothing; an earlier range inside a later one
+        // splits it.
+        assert_eq!(first_listings(&[0..10, 2..4]).unwrap(), vec![0..10]);
+        assert_eq!(first_listings(&[2..4, 0..10]).unwrap(), vec![2..4, 0..2, 4..10]);
+        assert_eq!(first_listings(&[]).unwrap(), Vec::<std::ops::Range<usize>>::new());
+    }
+
+    #[test]
+    fn mapping_rejects_cross_material_triangle_overlap() {
+        let mut m = listed_triangle(1);
+        m.materials.push("b".into());
+        m.submeshes.push(SubMesh { name: "b".into(), material: 1, start: 0, count: 3 });
+        m.validate().unwrap();
+        let before = m.clone();
+        let calls = std::cell::Cell::new(0);
+        let result = m.map_material_uvs(
+            0,
+            |uv| {
+                calls.set(calls.get() + 1);
+                uv
+            },
+            &Limits::default(),
+        );
+        assert_eq!(result, Err(MeshOpsError::Invalid("triangle belongs to more than one material".into())));
+        assert_eq!((calls.get(), &m), (0, &before), "nothing is mapped or changed");
+
+        // Material a lists both triangles of a quad; b lists the second one, after a range of a
+        // that ends where b starts.
+        let mut quad2 = quad();
+        quad2.materials = vec!["a".into(), "b".into()];
+        let sub = |material, start| SubMesh { name: String::new(), material, start, count: 3 };
+        quad2.submeshes = vec![sub(0, 0), sub(1, 3)];
+        assert_eq!(quad2.listed_by_other(0), Ok(false), "adjacent ranges do not overlap");
+        quad2.submeshes.push(sub(0, 3));
+        let invalid = Err(MeshOpsError::Invalid("triangle belongs to more than one material".into()));
+        assert_eq!(quad2.map_material_uvs(0, |uv| uv, &Limits::default()), invalid);
+        assert_eq!(quad2.map_material_uvs(1, |uv| uv, &Limits::default()), invalid);
+    }
+
+    #[test]
+    fn edges_group_submesh_ranges_by_material_in_order() {
+        // Material b lists triangle 1, then triangle 0; material c lists none.
+        let mut m = quad();
+        m.materials = vec!["a".into(), "b".into(), "c".into()];
+        m.submeshes = vec![
+            SubMesh { name: "b".into(), material: 1, start: 3, count: 3 },
+            SubMesh { name: "a".into(), material: 0, start: 0, count: 3 },
+            SubMesh { name: "b".into(), material: 1, start: 0, count: 3 },
+        ];
+        assert_eq!(m.ranges_by_material(&at_most(3)).unwrap(), vec![vec![0..1], vec![1..2, 0..1], vec![]]);
+        assert_eq!(m.ranges_by_material(&at_most(2)), Err(too_many(3, 2)));
+        assert_eq!(m.wire_edges(&at_most(3)).unwrap(), vec![vec![(0, 1), (1, 2), (0, 2)], vec![(0, 2), (2, 3), (0, 3), (0, 1), (1, 2)], vec![]]);
+        assert_eq!(m.uv_seam_edges(&at_most(3)).unwrap(), vec![Vec::<(u32, u32)>::new(); 3]);
     }
 
     #[test]
@@ -1412,7 +1715,7 @@ mod tests {
         // 16 edges.
         let whole =
             Mesh { materials: vec!["a".into()], submeshes: vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 24 }], ..s.clone() };
-        let edges = &whole.wire_edges()[0];
+        let edges = &whole.wire_edges(&Limits::default()).unwrap()[0];
         assert!(!edges.contains(&(0, 6)) && !edges.contains(&(2, 6)), "{edges:?}");
         assert_eq!(edges.len(), 16 - 2, "{edges:?}");
 

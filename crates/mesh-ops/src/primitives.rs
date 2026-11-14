@@ -664,7 +664,7 @@ mod tests {
             check(&m, if id == "udim_plane" { 2.0 } else { 1.0 });
         }
         assert!(builtin("nope").is_none());
-        assert_eq!(udim_plane().uv_tiles(0).into_iter().collect::<Vec<_>>(), vec![(0, 0), (1, 0)]);
+        assert_eq!(udim_plane().uv_tiles(0, &Limits::default()).unwrap().into_iter().collect::<Vec<_>>(), vec![(0, 0), (1, 0)]);
     }
 
     #[test]

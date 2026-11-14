@@ -73,7 +73,7 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 | Field | Default | Checked by |
 |---|---|---|
 | `max_vertices` | 20,000,000 | every slice function, `try_subdivided`, the `try_` primitives, `UvGBuffer::try_new`, `unwrap::auto_unwrap` (input and output) |
-| `max_triangles` | 20,000,000 | the same except `auto_unwrap`, and `Bvh::from_slices`; the UV G-buffer also counts a triangle again each time another submesh of the material lists it |
+| `max_triangles` | 20,000,000 | the same except `auto_unwrap`, and `Bvh::from_slices`; the UV G-buffer also counts a triangle again each time another submesh of the material lists it; `Mesh::wire_edges`, `Mesh::uv_seam_edges`, `Mesh::uv_tiles` and `Mesh::map_material_uvs` count the triangles the submeshes list in the same way |
 | `max_segments` | 2,048 | the `try_` primitives (segments, rings or subdivisions along one direction, after a count under the primitive's minimum is raised to it; a box face has 12, or 22 with a bevel) |
 | `max_gbuffer_side` | 8,192 | `UvGBuffer::try_new`, `UvGBuffer::from_slices`; `UvGBuffer::new` clamps each side to `1..=8192` |
 | `max_gbuffer_texels` | 2^26 (8,192 × 8,192) | the same |
