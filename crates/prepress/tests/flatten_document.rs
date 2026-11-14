@@ -116,7 +116,6 @@ fn three_pages(font_bytes: &[u8]) -> Vec<u8> {
         s.pop();
         text(s, &font, &face, (20.0, 110.0), 12.0, "World");
     });
-    drop(page);
     writer.finish().unwrap()
 }
 
