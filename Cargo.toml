@@ -125,6 +125,7 @@ craft-settings = { path = "crates/settings" }
 craft-scraft-format = { path = "crates/scraft-format" }
 craft-time = { path = "crates/time" }
 craft-silhouette-studio = { path = "crates/silhouette-studio" }
+craft-suite-account = { path = "crates/suite-account" }
 craft-svg = { path = "crates/svg" }
 craft-stencilcraft-format = { path = "crates/stencilcraft-format" }
 craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
