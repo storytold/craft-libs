@@ -97,7 +97,9 @@ pub fn download(entry: &ModelEntry, cache_dir: &Path, on: impl Fn(&Event), cance
     let expected = expected_sha256(entry)?;
 
     let get = |range_from: u64| {
-        let mut req = body_agent(entry.size_mb.saturating_mul(1 << 20).saturating_sub(range_from)).get(entry.url);
+        // Budget for the *full* size, not the remainder: a 200 that
+        // ignores Range means we re-download the whole model.
+        let mut req = body_agent(entry.size_mb.saturating_mul(1 << 20)).get(entry.url);
         if range_from > 0 {
             req = req.header("Range", &format!("bytes={range_from}-"));
         }

@@ -54,19 +54,25 @@ impl LocalGguf {
         // Malformed GGUF metadata (e.g. `general.alignment = 0`) makes
         // candle's parser panic on a division — hostile input must come
         // back as an error, not a crash.
-        let content = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gguf_file::Content::read(&mut file)))
-            .map_err(|_| AiError::Inference("GGUF parser panicked on malformed metadata".to_owned()))?
-            .map_err(|e| AiError::Inference(format!("bad GGUF: {e}")))?;
-        let weights = match entry.arch {
-            Arch::Qwen2 => Weights::Qwen2(
-                quantized_qwen2::ModelWeights::from_gguf(content, &mut file, &device)
-                    .map_err(|e| AiError::Inference(format!("cannot load {}: {e}", entry.file)))?,
-            ),
-            Arch::Llama => Weights::Llama(
-                quantized_llama::ModelWeights::from_gguf(content, &mut file, &device)
-                    .map_err(|e| AiError::Inference(format!("cannot load {}: {e}", entry.file)))?,
-            ),
-        };
+        // Malformed GGUF metadata (e.g. `general.alignment = 0`, or a
+        // zero `attention.head_count` reaching a division in the weight
+        // constructors) makes candle panic — hostile input must come
+        // back as an error, not a crash. The guard covers parsing *and*
+        // weight construction.
+        let weights = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let content = gguf_file::Content::read(&mut file).map_err(|e| AiError::Inference(format!("bad GGUF: {e}")))?;
+            match entry.arch {
+                Arch::Qwen2 => Ok(Weights::Qwen2(
+                    quantized_qwen2::ModelWeights::from_gguf(content, &mut file, &device)
+                        .map_err(|e| AiError::Inference(format!("cannot load {}: {e}", entry.file)))?,
+                )),
+                Arch::Llama => Ok(Weights::Llama(
+                    quantized_llama::ModelWeights::from_gguf(content, &mut file, &device)
+                        .map_err(|e| AiError::Inference(format!("cannot load {}: {e}", entry.file)))?,
+                )),
+            }
+        }))
+        .map_err(|_| AiError::Inference("GGUF loader panicked on malformed metadata".to_owned()))??;
         let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|e| AiError::Inference(format!("bad tokenizer.json: {e}")))?;
         let eos = tokenizer.token_to_id("<|im_end|>").ok_or_else(|| AiError::Inference("tokenizer has no EOS token".into()))?;
         Ok(Self { weights, tokenizer, device, eos, entry })
