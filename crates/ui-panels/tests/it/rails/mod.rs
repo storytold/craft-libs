@@ -164,7 +164,9 @@ fn a_click_command_cycles_and_a_hold_lists_the_tools_without_firing_it() {
     dragged.fixture.drag_hold_at(target.center(), away);
     dragged.fixture.idle(2);
     assert!(!dragged.fixture.by_role(Role::MENU).is_empty(), "a drag away lists the tools");
-    dragged.fixture.release_at(target.center() + away).idle(2);
+    // Released on the button itself, not over a flyout row: a row release picks that row's tool by design, which
+    // the drag trial above covers.
+    dragged.fixture.release_at(target.center()).idle(2);
     assert_eq!(fired(&dragged), 0, "the release of a drag fires nothing");
 
     let mut context = build(false, Some(EditCommands::Paste));
