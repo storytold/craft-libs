@@ -594,3 +594,27 @@ fn series_without_a_usable_c_idx_take_their_place() {
     let big = [renumbered(&a, &format!(r#"<c:idx val="{}"/>"#, u32::MAX))];
     assert_eq!(column_colours(&big).0.len(), 1);
 }
+
+#[test]
+fn bar_category_labels_start_after_the_axis_title() {
+    let long = "A category label that is much too long for its column";
+    let title = r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>Region</a:t></a:r></a:p></c:rich></c:tx></c:title>"#;
+    let plot = format!(
+        r#"<c:barChart><c:barDir val="bar"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/>{title}</c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#,
+        ser(0, "S", Some("FF0000"), &[long, "Short"], &["4", "8"]),
+    );
+    let items = chart_items(&space(&plot), &theme(), 300.0, 200.0);
+    let rect_of = |f: &dyn Fn(&str, &TextAlign) -> bool| -> Vec<[f32; 4]> {
+        items
+            .iter()
+            .filter_map(|it| if let GraphicItem::Text { rect, text, align, .. } = it { f(text, align).then_some(*rect) } else { None })
+            .collect()
+    };
+    let title_rect = rect_of(&|t, _| t == "Region");
+    assert_eq!(title_rect.len(), 1);
+    let strip_end = title_rect[0][0] + title_rect[0][2];
+    let labels = rect_of(&|t, a| matches!(a, TextAlign::Right) && t != "Region" && (long.contains(t) || t == "Short"));
+    assert!(!labels.is_empty());
+    assert!(labels.iter().all(|r| r[0] >= strip_end - 1e-3), "labels {labels:?} overlap the title strip ending at {strip_end}");
+    assert!(labels.iter().all(|r| r[2] <= 0.4 * 300.0), "{labels:?}");
+}

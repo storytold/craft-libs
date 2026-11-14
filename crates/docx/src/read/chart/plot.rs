@@ -142,6 +142,8 @@ impl Axes {
 /// The room around the plot for axis labels, and the category labels as they'll be drawn.
 struct Margins {
     left: f32,
+    /// Part of `left` taken by the rotated category-axis title (bars): the labels start after it.
+    title: f32,
     top: f32,
     bottom: f32,
     /// Category labels in lines (none for scatter charts or a deleted category axis).
@@ -159,16 +161,17 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let scatter = c.kind == Kind::Scatter;
     let (cat_on, val_on) = (!c.cat.deleted, !c.val.deleted);
     let (cat_labels, val_labels) = (cat_on && c.cat.labels, val_on && c.val.labels);
+    let title = title_left(c, cat_on, val_on, lh);
     let left = if c.horizontal {
         if cat_labels { widest(&c.cats, fs).min(area.w * 0.4) + GAP } else { 0.0 }
     } else if val_labels {
         ax.vticks.iter().map(|(_, s)| text_w(s, fs)).fold(0.0, f32::max) + GAP
     } else {
         0.0
-    } + title_left(c, cat_on, val_on, lh);
+    } + title;
     let band_w = (area.w - left).max(1.0) / c.n as f32;
     let wrapped: Vec<Vec<String>> = if cat_labels && !scatter {
-        let width = if c.horizontal { left - GAP } else { band_w };
+        let width = if c.horizontal { left - title - GAP } else { band_w };
         c.cats.iter().map(|s| wrap(s, width, fs)).collect()
     } else {
         Vec::new()
@@ -184,7 +187,7 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
         0.0
     }) + title_bottom(c, cat_on, val_on, lh);
     let top = if !c.horizontal && val_labels { lh / 2.0 } else { 0.0 };
-    Margins { left, top, bottom, wrapped, skip }
+    Margins { left, title, top, bottom, wrapped, skip }
 }
 
 /// Room for the vertical axis title on the plot's left: one line when the axis that sits there
@@ -332,7 +335,7 @@ fn draw_category_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, xticks
         for (i, lines) in m.wrapped.iter().enumerate() {
             let top = g.band_start(i) + g.band() / 2.0 - lines.len() as f32 * lh / 2.0;
             for (k, s) in lines.iter().enumerate() {
-                text(out, Rect { x: area.x, y: top + k as f32 * lh, w: m.left - GAP, h: lh }, s, fs, TextAlign::Right, false);
+                text(out, Rect { x: area.x + m.title, y: top + k as f32 * lh, w: m.left - m.title - GAP, h: lh }, s, fs, TextAlign::Right, false);
             }
         }
     } else {
