@@ -361,20 +361,25 @@ impl Nav {
             self.step(level, true);
         } else if press(Key::ArrowUp) {
             self.step(level, false);
-        } else if press(Key::ArrowRight) {
-            match current {
-                Some(Row { widget, enabled: true, command: None, .. }) => self.open_sub(ctx, level, widget),
-                _ => switch(1),
-            }
-        } else if press(Key::ArrowLeft) {
-            if level > 0 {
-                if let Some(&root) = self.roots.get(level - 1) {
-                    MenuState::from_id(ctx, root, |s| s.open_item = None);
+        } else if let Some(step) = [Key::ArrowLeft, Key::ArrowRight].into_iter().find(|&k| press(k)).and_then(|k| craft_ui::direction::step(ctx, k)) {
+            // The lists stay in logical order; only the physical key flips: right to left,
+            // ArrowLeft is "forward" (opens the submenu or the next menu, as the bar reads).
+            match step {
+                craft_ui::direction::Step::Next => match current {
+                    Some(Row { widget, enabled: true, command: None, .. }) => self.open_sub(ctx, level, widget),
+                    _ => switch(1),
+                },
+                craft_ui::direction::Step::Previous => {
+                    if level > 0 {
+                        if let Some(&root) = self.roots.get(level - 1) {
+                            MenuState::from_id(ctx, root, |s| s.open_item = None);
+                        }
+                        self.hi.truncate(level);
+                        self.level = level - 1;
+                    } else {
+                        switch(tops.len() - 1);
+                    }
                 }
-                self.hi.truncate(level);
-                self.level = level - 1;
-            } else {
-                switch(tops.len() - 1);
             }
         } else if press(Key::Enter) || press(Key::Space) {
             match current {
