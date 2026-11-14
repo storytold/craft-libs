@@ -21,7 +21,7 @@ use craft_plugin_host::dispatch::{DispatchConfig, HostDispatcher, PluginContext}
 use craft_plugin_host::engine::wasmi::WasmiEngine;
 use craft_plugin_host::engine::{EngineId, HostError, LoadError};
 use craft_plugin_host::lifecycle::{Decision, InstallOutcome, LifecycleError, PluginState, UpdateRisk};
-use craft_plugin_host::store::{DirStore, MemoryStore, PackageStore, Source, StoredGrant, StoredPlugin};
+use craft_plugin_host::store::{DirStore, MemoryStore, PackageStore, Source, StoredGrant, StoredPlugin, package_sha256};
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------------------------
@@ -467,6 +467,7 @@ fn dir_harness(path: &std::path::Path) -> Harness {
 }
 
 fn stored(id: &str, bytes: Vec<u8>, grant: Option<&str>) -> StoredPlugin {
+    let digest = package_sha256(&bytes);
     StoredPlugin {
         id: id.to_owned(),
         version: "1.0.0".into(),
@@ -478,6 +479,7 @@ fn stored(id: &str, bytes: Vec<u8>, grant: Option<&str>) -> StoredPlugin {
             .map(|g| StoredGrant {
                 plugin_id: id.to_owned(),
                 publisher: None,
+                package_sha256: Some(digest.clone()),
                 permission: g.to_owned(),
                 granted_at_ms: 1,
                 decided_by: craft_plugin_host::store::Decider::User,
@@ -497,9 +499,10 @@ fn start_survives_a_squatter_already_on_disk_and_other_bad_entries() {
     store.save(&stored("org.good", echo_package("org.good", "1.0.0", std_contribs()), Some("commands.run:app.*"))).unwrap();
     // 3. a directory with broken metadata, 4. a directory that holds another id, 5. a package that is not wasm
     let plugins = tmp.0.join("plugins");
-    std::fs::create_dir_all(plugins.join("org.garbage")).unwrap();
-    std::fs::write(plugins.join("org.garbage").join("meta.json"), b"{ not json").unwrap();
-    std::fs::write(plugins.join("org.garbage").join("package.wasm"), b"x").unwrap();
+    std::fs::create_dir_all(plugins.join("org.garbage").join("g1")).unwrap();
+    std::fs::write(plugins.join("org.garbage").join("current"), b"g1").unwrap();
+    std::fs::write(plugins.join("org.garbage").join("g1").join("meta.json"), b"{ not json").unwrap();
+    std::fs::write(plugins.join("org.garbage").join("g1").join("package.wasm"), b"x").unwrap();
     store.save(&stored("org.moved", echo_package("org.moved", "1.0.0", std_contribs()), None)).unwrap();
     std::fs::rename(plugins.join("org.moved"), plugins.join("org.elsewhere")).unwrap();
     store.save(&stored("org.junk", b"not wasm".to_vec(), None)).unwrap();
@@ -538,10 +541,115 @@ fn the_strict_store_call_still_fails_on_a_bad_entry_and_the_lenient_one_does_not
     let tmp = Tmp::new();
     let store = DirStore::new(&tmp.0);
     store.save(&stored("org.good", b"w".to_vec(), None)).unwrap();
+    // `current` names a generation that is not there.
     std::fs::create_dir_all(tmp.0.join("plugins").join("org.bad")).unwrap();
+    std::fs::write(tmp.0.join("plugins").join("org.bad").join("current"), b"g1").unwrap();
     assert!(store.load_all().is_err());
     let lenient = store.load_all_lenient().unwrap();
     assert_eq!(lenient.plugins.len(), 1);
     assert_eq!(lenient.skipped.len(), 1);
     assert_eq!(lenient.skipped[0].name, "org.bad");
+}
+
+// ---------------------------------------------------------------------------------------------
+// A package and its grants persist and restore as one
+// ---------------------------------------------------------------------------------------------
+
+fn alice_v(version: &str, digit: char) -> Vec<u8> {
+    let mut m = echo_manifest(TRUSTED, version, std_contribs());
+    m["author"] = json!("Alice");
+    package_from(&echo_wat_v(digit), &m)
+}
+
+/// Alice's 1.0.0 with the optional `ui.contribute` granted, then Mallory's replacement accepted
+/// without it. The save of the replacement fails at its commit: `current.tmp` is a directory, so
+/// the rename that would point `current` at the new generation cannot happen.
+fn a_failed_replacement(path: &std::path::Path) {
+    let h = dir_harness(path);
+    needs_grant(h.manager.install(&alice_v("1.0.0", '1'), Source::File).unwrap());
+    h.manager.grant(TRUSTED, Decision { accept_required: true, optional: vec![Permission::UiContribute] }).unwrap();
+    needs_grant(h.manager.install(&signed(Some("Mallory"), "0.0.1", '9'), Source::File).unwrap());
+    std::fs::create_dir_all(path.join("plugins").join(TRUSTED).join("current.tmp")).unwrap();
+    assert!(matches!(h.manager.grant(TRUSTED, accept()), Err(LifecycleError::Store(_))));
+    assert_eq!(ver(&h), json!(1), "the old generation keeps running");
+}
+
+#[test]
+fn a_replacement_whose_save_fails_never_restarts_with_the_old_grants() {
+    let tmp = Tmp::new();
+    a_failed_replacement(&tmp.0);
+    // The fault passes, as a crash does. The next app run finds Alice's code with Alice's grants.
+    std::fs::remove_dir(tmp.0.join("plugins").join(TRUSTED).join("current.tmp")).unwrap();
+    let h = dir_harness(&tmp.0);
+    let report = h.manager.restore().unwrap();
+    assert_eq!(report, vec![(TRUSTED.to_string(), PluginState::Active { generation: 1 })]);
+    assert_eq!(ver(&h), json!(1));
+    assert_eq!(h.manager.info(TRUSTED).unwrap().grants, vec!["commands.run:app.*".to_string(), "ui.contribute".into()]);
+}
+
+#[test]
+fn a_save_that_stops_before_its_commit_leaves_the_old_record_and_the_next_save_clears_it() {
+    let tmp = Tmp::new();
+    let dir = tmp.0.join("plugins").join(TRUSTED);
+    {
+        let h = dir_harness(&tmp.0);
+        needs_grant(h.manager.install(&alice_v("1.0.0", '1'), Source::File).unwrap());
+        h.manager.grant(TRUSTED, Decision { accept_required: true, optional: vec![Permission::UiContribute] }).unwrap();
+    }
+    // What a process that stopped part way through a save leaves: a generation `current` does not
+    // name, here the worst one, with Mallory's code beside Alice's record and grants.
+    let live = dir.join(std::fs::read_to_string(dir.join("current")).unwrap());
+    let staged = dir.join("g99");
+    std::fs::create_dir_all(&staged).unwrap();
+    std::fs::copy(live.join("meta.json"), staged.join("meta.json")).unwrap();
+    std::fs::write(staged.join("package.wasm"), signed(Some("Mallory"), "0.0.1", '9')).unwrap();
+
+    let h = dir_harness(&tmp.0);
+    assert_eq!(h.manager.restore().unwrap(), vec![(TRUSTED.to_string(), PluginState::Active { generation: 1 })]);
+    assert_eq!(ver(&h), json!(1));
+    assert_eq!(h.manager.info(TRUSTED).unwrap().grants, vec!["commands.run:app.*".to_string(), "ui.contribute".into()]);
+    // `restore` writes the record back. That save commits above the leftover and deletes every
+    // generation but its own.
+    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    names.sort();
+    assert_eq!(names, vec!["current".to_string(), "g100".into()]);
+}
+
+/// The record a torn write left before the store wrote whole generations: the bytes of `code`
+/// beside the grants the manager gave to `granted`.
+fn torn(store: &dyn PackageStore, code: Vec<u8>, granted: &[u8]) {
+    let h = Harness::new();
+    needs_grant(h.manager.install(granted, Source::File).unwrap());
+    h.manager.grant(TRUSTED, Decision { accept_required: true, optional: vec![Permission::UiContribute] }).unwrap();
+    let mut record = h.store.load_all().unwrap().remove(0);
+    assert_eq!(record.grants.len(), 2);
+    record.bytes = code;
+    store.save(&record).unwrap();
+}
+
+#[test]
+fn restore_drops_grants_that_were_given_to_another_package() {
+    let mallory = signed(Some("Mallory"), "0.0.1", '9');
+    // Another publisher's code, and the same publisher's next version, each beside the grants of
+    // Alice's 1.0.0. Neither may run with them, on either store.
+    for (code, why) in [(mallory, "another publisher"), (alice_v("2.0.0", '2'), "the same publisher, other code")] {
+        let tmp = Tmp::new();
+        let stores: [Arc<dyn PackageStore>; 2] = [Arc::new(MemoryStore::new()), Arc::new(DirStore::new(&tmp.0))];
+        for store in stores {
+            torn(&*store, code.clone(), &alice_v("1.0.0", '1'));
+            let clock = StepClock::new(Duration::ZERO);
+            let engine = Arc::new(WasmiEngine::new(clock.clone()).with_slice_fuel(20_000));
+            let h = Harness::build(engine, clock, BudgetConfig::default(), Arc::clone(&store), Arc::new(MemoryStore::new()));
+            let report = h.manager.restore().unwrap();
+            assert!(
+                matches!(&report[..], [(id, PluginState::Faulted { reason })] if id == TRUSTED && reason.contains("commands.run:app.*")),
+                "{why}: {report:?}"
+            );
+            assert!(h.manager.info(TRUSTED).unwrap().grants.is_empty(), "{why}: the app does not list them either");
+            assert!(store.load_all().unwrap()[0].grants.is_empty(), "{why}: the record is written back without them");
+            // Installing the package again asks the user, who decides from nothing.
+            let req = needs_grant(h.manager.install(&code, Source::File).unwrap());
+            assert_eq!(req.new_required, req.required, "{why}");
+        }
+    }
 }
