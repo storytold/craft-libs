@@ -16,48 +16,48 @@ workspace = true
 [features]
 # Every codec feature turns on one codec module; none is on by default.
 # DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder.
-dnx = []
+dnx = ["dep:craft-media", "dep:thiserror"]
 # APV (Advanced Professional Video, RFC 9924): decoder and encoder; `apv-decode` or `apv-encode` for one of them.
 apv = ["apv-decode", "apv-encode"]
-apv-decode = ["craft-media/bitstream"]
-apv-encode = ["craft-media/bitstream"]
+apv-decode = ["craft-media/bitstream", "dep:thiserror"]
+apv-encode = ["craft-media/bitstream", "dep:thiserror"]
 # VP8 (RFC 6386): decoder and encoder; `vp8-decode` or `vp8-encode` for one of them.
 vp8 = ["vp8-decode", "vp8-encode"]
-vp8-decode = []
-vp8-encode = []
+vp8-decode = ["dep:thiserror"]
+vp8-encode = ["dep:thiserror"]
 # MPEG-2 video (ITU-T H.262) and MPEG-1 video (ISO/IEC 11172-2): decoder (`mpeg2-decode`) and
 # MPEG-2 encoder (`mpeg2-encode`). The encoder reuses the decoder's code tables, IDCT and motion
 # compensation, so it turns on the decoder too.
 mpeg2 = ["mpeg2-decode", "mpeg2-encode"]
-mpeg2-decode = []
+mpeg2-decode = ["dep:thiserror"]
 mpeg2-encode = ["mpeg2-decode"]
 # MPEG-4 Part 2 video (ISO/IEC 14496-2, the Xvid/DivX format): Simple profile encoder.
 mpeg4 = ["mpeg4-encode"]
-mpeg4-encode = ["craft-media/bitstream"]
+mpeg4-encode = ["craft-media/bitstream", "dep:thiserror"]
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
-prores = ["craft-media/bitstream"]
+prores = ["craft-media/bitstream", "dep:thiserror"]
 # H.264 / AVC: decoder and encoder; `h264-decode` or `h264-encode` for one of them.
 h264 = ["h264-decode", "h264-encode"]
-h264-decode = ["craft-media/bitstream"]
-h264-encode = ["craft-media/isobmff"]
+h264-decode = ["craft-media/bitstream", "dep:thiserror"]
+h264-encode = ["craft-media/isobmff", "dep:thiserror"]
 # H.265 / HEVC: decoder and encoder; `hevc-decode` or `hevc-encode` for one of them.
 hevc = ["hevc-decode", "hevc-encode"]
-hevc-decode = ["craft-media/bitstream"]
+hevc-decode = ["craft-media/bitstream", "dep:thiserror"]
 hevc-encode = ["craft-media/isobmff"]
 # VP9: decoder and encoder; `vp9-decode` or `vp9-encode` for one of them.
 vp9 = ["vp9-decode", "vp9-encode"]
-vp9-decode = ["craft-media/bitstream"]
+vp9-decode = ["craft-media/bitstream", "dep:thiserror"]
 vp9-encode = ["craft-media/isobmff"]
 # AV1: decoder and encoder; `av1-decode` or `av1-encode` for one of them.
 av1 = ["av1-decode", "av1-encode"]
-av1-decode = []
+av1-decode = ["dep:thiserror"]
 av1-encode = ["craft-media/isobmff"]
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon"]
 
 [dependencies]
-craft-media = { workspace = true }
-thiserror = { workspace = true }
+craft-media = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
