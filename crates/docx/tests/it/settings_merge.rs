@@ -163,3 +163,50 @@ fn do_not_track_moves_round_trips() {
     assert!(s.contains("<w:doNotTrackMoves/>"), "{s}");
     assert!(!craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
 }
+
+/// Hide spelling errors and Hide grammar errors in this document only (`w:hideSpellingErrors`,
+/// `w:hideGrammaticalErrors`) are read, written once each (before `w:proofState` in a merged
+/// part), written in a generated part, and left out when they are turned off.
+#[test]
+fn hidden_proofing_errors_round_trip() {
+    let original = SETTINGS.replace("<w:proofState", r#"<w:hideSpellingErrors/><w:hideGrammaticalErrors w:val="1"/><w:proofState"#);
+    let mut doc = craft_docx::read(&with_settings(&original)).unwrap();
+    assert!(doc.settings.hide_spelling_errors && doc.settings.hide_grammar_errors);
+    let s = text(&save(&doc), "word/settings.xml");
+    assert_eq!(s.matches("hideSpellingErrors").count(), 1, "{s}");
+    assert_eq!(s.matches("hideGrammaticalErrors").count(), 1, "{s}");
+    assert!(pos(&s, "<w:hideSpellingErrors/>") < pos(&s, "<w:hideGrammaticalErrors/>"));
+    assert!(pos(&s, "<w:hideGrammaticalErrors/>") < pos(&s, "<w:proofState"), "{s}");
+    assert!(s.contains("ClauseSet"), "a merged part: {s}");
+    doc.settings.hide_spelling_errors = false;
+    doc.settings.hide_grammar_errors = false;
+    let s = text(&save(&doc), "word/settings.xml");
+    assert!(!s.contains("hideSpellingErrors") && !s.contains("hideGrammaticalErrors"), "{s}");
+
+    // Turned on in a part that lacks them: inserted once each, before `w:proofState`.
+    let mut doc = craft_docx::read(&with_settings(SETTINGS)).unwrap();
+    assert!(!doc.settings.hide_spelling_errors && !doc.settings.hide_grammar_errors);
+    doc.settings.hide_spelling_errors = true;
+    doc.settings.hide_grammar_errors = true;
+    let s = text(&save(&doc), "word/settings.xml");
+    assert_eq!(s.matches("hideSpellingErrors").count(), 1, "{s}");
+    assert_eq!(s.matches("hideGrammaticalErrors").count(), 1, "{s}");
+    assert!(pos(&s, "removeDateAndTime") < pos(&s, "<w:hideSpellingErrors/>"), "{s}");
+    assert!(pos(&s, "<w:hideGrammaticalErrors/>") < pos(&s, "<w:proofState"), "{s}");
+
+    // `w:val="false"` and `w:val="0"` show them.
+    let off = SETTINGS.replace("<w:proofState", r#"<w:hideSpellingErrors w:val="false"/><w:hideGrammaticalErrors w:val="0"/><w:proofState"#);
+    let read = craft_docx::read(&with_settings(&off)).unwrap();
+    assert!(!read.settings.hide_spelling_errors && !read.settings.hide_grammar_errors);
+    let s = text(&save(&read), "word/settings.xml");
+    assert!(!s.contains("hideSpellingErrors") && !s.contains("hideGrammaticalErrors"), "{s}");
+
+    // A document of our own: absent by default, written when on, and read back.
+    let mut doc = craft_wordmodel::Document::new();
+    assert!(!text(&save(&doc), "word/settings.xml").contains("hideSpellingErrors"));
+    doc.settings.hide_grammar_errors = true;
+    let s = text(&save(&doc), "word/settings.xml");
+    assert!(s.contains("<w:hideGrammaticalErrors/>") && !s.contains("hideSpellingErrors"), "{s}");
+    let back = craft_docx::read(&craft_docx::write(&doc).unwrap()).unwrap();
+    assert!(back.settings.hide_grammar_errors && !back.settings.hide_spelling_errors);
+}
