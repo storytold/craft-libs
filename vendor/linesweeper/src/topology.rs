@@ -977,12 +977,11 @@ impl<W: WindingNumber> Topology<W> {
         inside1: impl Fn(&W) -> bool,
         inside2: impl Fn(&W) -> bool,
     ) -> bool {
-        self.winding.indices().all(|out_idx| {
+        self.segment_indices().all(|out_idx| {
             let w = &self.winding[out_idx];
 
             let touches1 = inside1(&w.clockwise) || inside1(&w.counter_clockwise);
             let touches2 = inside2(&w.clockwise) || inside2(&w.counter_clockwise);
-            dbg!(touches1, touches2);
             !(touches1 && touches2)
         })
     }
@@ -2507,6 +2506,31 @@ mod tests {
             [p(-0.5, -0.5), p(1.5, -0.5), p(1.5, 1.5), p(-0.5, 1.5)],
         ];
         assert!(Topology::from_polylines_binary(s1, s2, 1e-5).is_disjoint(FillRule::EvenOdd));
+    }
+
+    #[test]
+    fn disjoint_skips_merged_segments() {
+        // The second set draws the same square twice, so its coincident edges are merged
+        // and the duplicates are deleted.
+        let s1 = [[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0), p(0.0, 1.0)]];
+        let s2 = [
+            [p(2.0, 0.0), p(3.0, 0.0), p(3.0, 1.0), p(2.0, 1.0)],
+            [p(2.0, 0.0), p(3.0, 0.0), p(3.0, 1.0), p(2.0, 1.0)],
+        ];
+        let top = Topology::from_polylines_binary(s1, s2, 1e-5);
+        assert!(top.is_disjoint(FillRule::NonZero));
+
+        // With `inside1` always false, it is called for both sides of every segment visited.
+        let calls = std::cell::Cell::new(0);
+        let disjoint = top.is_disjoint_tags(
+            |_| {
+                calls.set(calls.get() + 1);
+                false
+            },
+            |w| FillRule::NonZero.is_inside(w.shape_b),
+        );
+        assert!(disjoint);
+        assert_eq!(calls.get(), 2 * top.segment_indices().count());
     }
 
     #[test]
