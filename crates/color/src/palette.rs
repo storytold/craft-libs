@@ -67,7 +67,8 @@ impl SwatchFormat {
     }
 
     /// The format of `bytes`: the `ASEF` signature, `GIMP Palette` on the first line, an `.aco`
-    /// version header that parses; `.act` only by `file_name` (768 or 772 bytes).
+    /// version header that parses; else the name's extension; else `.act` by its length (768 or
+    /// 772 bytes), as the bytes have no signature.
     // inv-vectorcraft: crates/color/src/palette_io.rs:346 `sniff`, :365 `sniff_bytes`; pc:
     // crates/engine/src/cmd/swatch_cmds.rs:394 `ext_format` for the name fallback.
     pub fn sniff(bytes: &[u8], file_name: &str) -> Option<SwatchFormat> {
@@ -90,7 +91,7 @@ impl SwatchFormat {
         {
             return Some(SwatchFormat::Aco);
         }
-        by_name
+        by_name.or(act_length.then_some(SwatchFormat::Act))
     }
 }
 
@@ -270,12 +271,7 @@ pub fn read_swatches(bytes: &[u8], file_name: &str) -> Result<(Vec<SwatchGroup>,
             groups.push(SwatchGroup { name: stem, entries });
         }
         SwatchFormat::Act => {
-            let used = act_used(bytes).map_err(|e| malformed(format, e))?;
-            // The trailer (count, then transparent index) names the transparent colour; 0xFFFF means none.
-            let transparent = bytes
-                .get(ACT_PALETTE_LEN + 2..ACT_PALETTE_LEN + ACT_TRAILER_LEN)
-                .map(|t| usize::from(u16::from_be_bytes([t[0], t[1]])))
-                .filter(|&index| index < used.len());
+            let (used, transparent) = act_used(bytes).map_err(|e| malformed(format, e))?;
             if let Some(index) = transparent {
                 report.notes.push(SwatchNote::TransparentKept(index + 1));
             }

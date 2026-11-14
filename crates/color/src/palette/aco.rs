@@ -154,14 +154,18 @@ pub(super) fn write_aco(entries: &[(String, AcoColor)]) -> Vec<u8> {
 
 // ---------------------------------------------------------------- .act
 
-pub(super) fn act_used(data: &[u8]) -> Result<Vec<[u8; 3]>, String> {
+/// The colours an `.act` file uses and, when its trailer names one, the index of the transparent
+/// colour (`0xFFFF`, or an index not below the colour count, means none).
+pub(super) fn act_used(data: &[u8]) -> Result<(Vec<[u8; 3]>, Option<usize>), String> {
     if data.len() != ACT_PALETTE_LEN && data.len() != ACT_PALETTE_LEN + ACT_TRAILER_LEN {
         return Err("an .act file is 768 bytes, or 772 with the count trailer".into());
     }
     let mut colors: Vec<[u8; 3]> = data[..ACT_PALETTE_LEN].as_chunks::<3>().0.to_vec();
+    let mut transparent = None;
     if data.len() > ACT_PALETTE_LEN {
-        let count = usize::from(u16::from_be_bytes([data[ACT_PALETTE_LEN], data[ACT_PALETTE_LEN + 1]]));
-        colors.truncate(count.min(ACT_COLORS));
+        let word = |at: usize| usize::from(u16::from_be_bytes([data[at], data[at + 1]]));
+        colors.truncate(word(ACT_PALETTE_LEN).min(ACT_COLORS));
+        transparent = Some(word(ACT_PALETTE_LEN + 2)).filter(|&index| index < colors.len());
     }
-    Ok(colors)
+    Ok((colors, transparent))
 }

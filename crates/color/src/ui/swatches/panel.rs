@@ -200,13 +200,7 @@ impl<'a> SwatchesPanel<'a> {
                 SwatchNote::KindsDropped(n) => count(&words.kinds_dropped, n),
                 SwatchNote::Truncated(n) => count(&words.truncated, n),
                 SwatchNote::NamesCut(n) => count(&words.names_cut, n),
-                // PLAN: SwatchesWords (ui/swatches.rs) has no row for this note; a `transparent_kept` count row belongs there.
-                SwatchNote::TransparentKept(n) => {
-                    format!(
-                        "Color {} is the table's transparent color; swatches have no transparency, so it was kept opaque.",
-                        format.integer(n as u64)
-                    )
-                }
+                SwatchNote::TransparentKept(n) => count(&words.transparent_kept, n),
             })
             .collect()
     }
