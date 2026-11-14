@@ -1,22 +1,22 @@
 //! The page widgets, on craft-ui (feature `ui`). Every one reads the document through a small trait or plain values
 //! the app passes, and reports what the user did; none owns pages.
 //!
-//! - [`view`]: [`PageView`] over the app's [`PageSource`]; overlays draw on its [`PlacedPage`]s.
-//! - [`thumbnails`]: [`PageThumbnails`], the Pages panel and slide strip.
-//! - [`access`]: the AccessKit description of the text on the pages.
-//! - [`setup`]: [`PageSetupDialog`] and [`PageLayoutMenus`].
-//! - [`margins`]: [`MarginHandles`] on the rulers.
-//! - [`header_footer`]: [`HeaderFooterZones`].
-//! - [`range`]: [`PageRangeField`] and [`PageRangeOptions`].
-//! - [`text_selection`]: [`TextSelectTool`], a canvas tool over the app's [`PageTexts`].
-//! - [`preview`]: [`PagePreview`].
-//! - [`marks`]: [`TextFrameMarks`], hidden characters and frame extras.
-//! - [`column_bar`]: [`ColumnBar`].
-//! - [`reading`]: [`ReadingView`].
-//! - [`list`]: [`PageList`], pages and artboards.
-//! - [`sync_views`]: [`SyncedViews`].
-//! - [`grid`]: [`PageGrids`], margins, columns and baseline grid.
-//! - [`table`]: [`EdgePicker`], [`TableProperties`], [`TableSizePicker`], [`CellSelectionOverlay`].
+//! - `view`: [`PageView`] over the app's [`PageSource`]; overlays draw on its [`PlacedPage`]s.
+//! - `thumbnails`: [`PageThumbnails`], the Pages panel and slide strip.
+//! - `access`: the AccessKit description of the text on the pages.
+//! - `setup`: [`PageSetupDialog`] and [`PageLayoutMenus`].
+//! - `margins`: [`MarginHandles`] on the rulers.
+//! - `header_footer`: [`HeaderFooterZones`].
+//! - `range`: [`PageRangeField`] and [`PageRangeOptions`].
+//! - `text_selection`: [`TextSelectTool`], a canvas tool over the app's [`PageTexts`].
+//! - `preview`: [`PagePreview`].
+//! - `marks`: [`TextFrameMarks`], hidden characters and frame extras.
+//! - `column_bar`: [`ColumnBar`].
+//! - `reading`: [`ReadingView`].
+//! - `list`: [`PageList`], pages and artboards.
+//! - `sync_views`: [`SyncedViews`].
+//! - `grid`: [`PageGrids`], margins, columns and baseline grid.
+//! - `table`: [`EdgePicker`], [`TableProperties`], [`TableSizePicker`], [`CellSelectionOverlay`].
 
 pub mod access;
 pub mod column_bar;

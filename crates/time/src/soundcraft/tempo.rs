@@ -52,7 +52,7 @@ pub struct TempoMap {
     elapsed: Vec<f64>,
 }
 
-/// The serialized form of [`TempoMap`], without the derived lookup table.
+/// The serialized form of `TempoMap`, without the derived lookup table.
 #[derive(serde::Deserialize)]
 struct TempoMapData {
     tempos: Vec<TempoEvent>,

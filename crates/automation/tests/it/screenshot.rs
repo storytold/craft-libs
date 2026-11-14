@@ -257,7 +257,7 @@ fn out_of_order_completions_keep_their_tokens() {
     admit(&mut captures, 11, now).expect("admitted");
     admit(&mut captures, 12, now).expect("admitted");
     let (_, callbacks) = settle_and_issue(&mut captures, &ctx, now, None);
-    let [first, second] = <[ScreenshotCallback; 2]>::try_from(callbacks).ok().expect("two captures");
+    let Ok([first, second]) = <[ScreenshotCallback; 2]>::try_from(callbacks) else { panic!("two captures") };
     second.complete(filled([800, 600], Color32::RED));
     first.complete(filled([800, 600], Color32::BLUE));
     let mut finished = captures.drain(now, Some(g), None);

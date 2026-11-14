@@ -25,7 +25,6 @@ pub(crate) fn pointer_moved(pos: Pos2) -> Event {
 }
 
 /// `button` going down or up at `pos` with `modifiers`.
-#[cfg(feature = "testing")]
 pub(crate) fn button(pos: Pos2, button: egui::PointerButton, pressed: bool, modifiers: Modifiers) -> Event {
     Event::PointerButton { pos, button, pressed, modifiers }
 }

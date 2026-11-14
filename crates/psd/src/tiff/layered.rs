@@ -1,21 +1,21 @@
 //! Photoshop's layered-TIFF conventions, observed from files Photoshop writes and reads.
 //!
 //! A layered TIFF is an ordinary TIFF whose IFD holds the flattened composite, plus the two tags
-//! [`TAG_IMAGE_SOURCE_DATA`] ([`ImageSourceData`]) and [`TAG_IMAGE_RESOURCES`] (the image
+//! `TAG_IMAGE_SOURCE_DATA` ([`ImageSourceData`]) and `TAG_IMAGE_RESOURCES` (the image
 //! resources). Reading one is: decode the composite, read the two tags, and rebuild a
 //! [`PsdFile`] with [`ImageSourceData::into_psd`], the composite as its merged image
-//! ([`interleaved_to_planar`]). Writing one is the reverse ([`planar_to_interleaved`],
-//! [`ImageSourceData::for_tiff`], [`ifd_channel_resources`]).
+//! (`interleaved_to_planar`). Writing one is the reverse (`planar_to_interleaved`,
+//! [`ImageSourceData::for_tiff`], `ifd_channel_resources`).
 //!
 //! Photoshop is strict about a few things a PSD reader would not notice:
 //!
 //! - `LMsk` must hold its 14-byte record: a zero-length block makes Photoshop report that the
 //!   layer data cannot be read.
 //! - It writes an empty `Patt` first and a default `FMsk` (filter mask) last, and a set of
-//!   blocks on every layer ([`photoshop_layer_blocks`]).
+//!   blocks on every layer (`photoshop_layer_blocks`).
 //! - The IFD's extra samples are paired with the channel-name resources in order, ignoring the
 //!   `ExtraSamples` kind. When the composite's transparency is not stored in the IFD, those
-//!   resources must leave it out too ([`ifd_channel_resources`]).
+//!   resources must leave it out too (`ifd_channel_resources`).
 
 use crate::error::{PsdError, Result};
 use crate::file::{GlobalLayerMask, PsdFile};
