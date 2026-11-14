@@ -27,6 +27,54 @@ Source-level guards provide deterministic syntactic evidence about codebase stru
 
 Source guards serve as fast, zero-dependency regression gates in application test suites, complementing platform integration tests and CI workflows.
 
+## skip
+
+The `skip` module is not built for `wasm32`. A test that needs something a test environment may lack
+(a program, a corpus file, the craft-fonts faces) skips or fails under one rule:
+
+- When the variable the caller names is exactly `1`, the absence fails the test. No skip line is
+  printed.
+- Otherwise, including when the variable is unset, empty, `0`, `true`, ` 1` or `1` followed by a
+  line feed, the helper prints `SKIPPED: <reason>` and one line feed to stderr, and the test
+  returns and passes. Carriage returns and line feeds in the reason are printed as `\r` and `\n`.
+
+The caller passes the name its repository uses today, such as `CRAFT_MEDIA_REQUIRE_ORACLES`,
+`CRAFT_PDF_ORACLES_REQUIRED`, `PDFCRAFT_ORACLES_REQUIRED` or `FILMCRAFT_REQUIRE_ORACLES`.
+`skip::REQUIRED_VAR` (`CRAFT_TEST_REQUIRED`) is the default name.
+
+```rust
+use craft_testkit::skip::{REQUIRED_VAR, craft_fonts, skip};
+
+#[test]
+fn renders_with_qpdf() {
+    let qpdf = craft_testkit::or_skip!(find_qpdf(), REQUIRED_VAR);
+    // ...
+}
+
+#[test]
+fn draws_japanese() {
+    if !craft_fonts(HAS_CRAFT_FONTS, CRAFT_FONTS_REQUIRED) {
+        return;
+    }
+    // ...
+}
+```
+
+`or_skip!` evaluates a `Result` once, binds the `Ok` value, and on `Err` skips with the error's
+`Display` text as the reason. The two-argument form returns `()`; a test that returns a `Result`
+passes the value to return as the third argument, for example `Ok(())`.
+
+`craft_fonts(present, required)` takes both values from the caller's build: a build constant, an
+`option_env!` value, or the table `craft-fonts-build` generates. A required failure names
+`CRAFT_FONTS_REQUIRED=1`.
+
+`craft_fonts_cover(text, faces)` returns `true` when one face maps every character of `text` that
+is not whitespace. Each face is font data with its index in a collection (`0` for a single font). A
+face that does not parse covers nothing, and coverage is not combined across faces.
+
+The module does not change the process environment. Its tests that read a real variable run the
+test binary again as a child process with that variable set.
+
 ## Consumer Adoption Examples
 
 ### 1. PhotoCraft: Adopt `wgsl_float_literals` and `predefined_quit`
@@ -83,6 +131,11 @@ fn no_std_instant_in_code_the_web_build_runs() {
 | Module | Source | Path | Commit |
 |---|---|---|---|
 | `guards` | storytold/craft-libs#163 (zachshallbetter), with the rules of PhotoCraft's shader float test and FilmCraft's web clock test | `crates/testkit/src/guards.rs` | `e92825e427` |
+| `skip` | storytold/lightcraft | `crates/testkit/src/lib.rs` (`skip!`, `record`) | `7ebbb17a82` |
+| `skip` | storytold/pdfcraft | `crates/oracle/src/lib.rs` (`or_skip!`, `REQUIRED_VAR`) | `ee9bf28126` |
+| `skip` | storytold/filmcraft | `crates/testkit/src/lib.rs` (`require_*!`), `crates/testkit/src/oracle.rs` (`skip`) | `cff7e1442e` |
+| `skip` | storytold/craft-libs | `crates/media-testkit/src/lib.rs` (`skip`, `skip_with`) | `75a654f4f8` |
+| `skip` | storytold/gridcraft | `crates/ui-egui/src/theme.rs` (`craft_fonts_cover`) | `06c2b1440b` |
 
 ## Migration
 
@@ -90,3 +143,9 @@ fn no_std_instant_in_code_the_web_build_runs() {
 |---|---|---|---|
 | PhotoCraft | `wgsl_float_literals` | `crates/gpu/src/tests.rs` scanner | Not started |
 | FilmCraft | `std_instant` | `crates/engine/src/wasm_clock_tests.rs` search | Not started |
+| LightCraft | `skip` | `lightcraft-testkit`'s `skip!`, which keeps its JSON skip log on top of `skip` | Not started |
+| PdfCraft | `skip` | `pdfcraft-oracle`'s `or_skip!`, which reads any value of `PDFCRAFT_ORACLES_REQUIRED` | Not started |
+| FilmCraft | `skip` | `filmcraft-testkit`'s `require_*!` and `skip`, which accept `1`, `true`, `yes` and `on` | Not started |
+| GridCraft | `skip` | `craft_fonts_cover`, which reads GridCraft's embedded face table | Not started |
+| craft-libs `craft-media-testkit` | `skip` | `skip` and `skip_with`, which accept `1`, `true`, `yes` and `on` | Not started |
+| craft-libs `pdf` tests | `skip` | `or_skip!` in `crates/pdf/tests/cos/oracle.rs`, which reads any value of `CRAFT_PDF_ORACLES_REQUIRED` | Not started |

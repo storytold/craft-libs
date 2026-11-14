@@ -15,6 +15,10 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
+//! [`skip`] decides what a test does when something it needs is missing (a program, a corpus,
+//! the craft-fonts faces): it prints one `SKIPPED:` line and returns, or fails the test when the
+//! variable the caller names is exactly `1`. It is not built for `wasm32`.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -26,6 +30,8 @@
 //! rather than replace, platform integration tests and CI execution.
 
 pub mod guards;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod skip;
 
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 
