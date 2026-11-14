@@ -2,7 +2,7 @@
 
 use super::channels::{QUANTIZE_CELLS, channel_range, channel_step, quantized, settled, snapped, spoken};
 use crate::AreaMode;
-use craft_behavior::{Metrics, Mixed, Sense};
+use craft_behavior::{Metrics, Mixed, Proposal, Sense};
 use craft_theme::ModelValues;
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, MeasureCx, PaintUi, Props as _, Role, Sizing, WordSetCx as _,
@@ -11,7 +11,7 @@ use craft_ui::primitives::ContentPainterCx;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::value_drag::{PointMark, PointPicker};
-use egui::{Mesh, Rect, Vec2, pos2};
+use egui::{Mesh, Pos2, Rect, Vec2, pos2};
 
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -75,10 +75,32 @@ impl<'a> ColorArea<'a> {
 
     /// The values the pointer at `at` picks in `rect`: the picker's own point-to-value mapping, then the settle and
     /// quantise steps. `ColorHud` drives it with the host's pointer.
-    #[allow(dead_code)] // P3(panels-w7): pn.C32
-    pub(crate) fn value_at(&self, rect: Rect, values: &ModelValues, at: egui::Pos2) -> ModelValues {
-        let _ = (rect, values, at);
-        todo!("pn.C32")
+    pub(crate) fn value_at(&self, rect: Rect, values: &ModelValues, at: Pos2) -> ModelValues {
+        let mut mine = *values;
+        if let Some(point) = self.picker(Some(values), false).value_at(rect, at) {
+            self.settle_into(&mut mine, point.map(Some));
+        }
+        mine
+    }
+
+    /// Where `values` stands in `rect`: the picker's own value-to-point mapping.
+    pub(crate) fn point_in(&self, rect: Rect, values: &ModelValues) -> Pos2 {
+        let [across, down] = self.channels();
+        self.picker(Some(values), false).position([values.values[across], values.values[down]].map(f64::from), rect)
+    }
+
+    /// Writes the area's two components from `point` (an axis that is `None` stays) onto `mine`, settled on the
+    /// channel's step and then on the quantised colour: the one rule for what the area reports.
+    fn settle_into(&self, mine: &mut ModelValues, point: [Option<f64>; 2]) {
+        let model = self.mode.model();
+        for (channel, value) in self.channels().into_iter().zip(point) {
+            if let Some(value) = value {
+                mine.values[channel] = settled(model, channel, value as f32);
+            }
+        }
+        if let Some(levels) = self.levels() {
+            *mine = quantized(model, mine, levels);
+        }
     }
 
     /// The picker over `shown`, whose backdrop paints the field of `base`.
@@ -127,9 +149,14 @@ impl Component for ColorArea<'_> {
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
-        // An area that fills its room (the Color panel's, as tall as its group leaves it) keeps no plot size of its own.
+        // An area that fills its room (the Color panel's, as tall as its group leaves it) is at least a hit target and
+        // square on the width it is offered.
         if cx.resolved.sizing() == Some(Sizing::Fill) {
-            return Vec2::splat(cx.tokens.size.hit.target);
+            return match cx.proposal {
+                Proposal::Min => Vec2::splat(cx.tokens.size.hit.target),
+                Proposal::Width(width) | Proposal::Size(Vec2 { x: width, .. }) => Vec2::splat(width),
+                _ => Vec2::splat(cx.tokens.size.plot.width),
+            };
         }
         let mut picker = self.picker(cx.value(), false);
         cx.child("picker", &mut picker, cx.proposal)
@@ -152,22 +179,10 @@ impl Component for ColorArea<'_> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let model = self.mode.model();
-        let [across, down] = self.channels();
         let picker = self.picker(cx.value(), true).label(cx.label());
         let edit = ui.inner("picker", cx.rect, picker);
-        let levels = self.levels();
-        let start = ModelValues::new(model.id(), &[]);
-        cx.adopt(&edit, &start, |point, mine| {
-            for (channel, axis) in [(across, 0), (down, 1)] {
-                if let Some(value) = point[axis].same() {
-                    mine.values[channel] = settled(model, channel, *value as f32);
-                }
-            }
-            if let Some(levels) = levels {
-                *mine = quantized(model, mine, levels);
-            }
-        });
+        let start = ModelValues::new(self.mode.model().id(), &[]);
+        cx.adopt(&edit, &start, |point, mine| self.settle_into(mine, [0, 1].map(|axis| point[axis].same().copied())));
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> EditResponse<ModelValues> {

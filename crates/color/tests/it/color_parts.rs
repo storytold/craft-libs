@@ -3,12 +3,14 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use craft_behavior::EditEvent;
 use craft_color::AreaMode;
 use craft_color::ui::{
-    ColorArea, ColorDisc, ColorRamp, DiscMove, RampKind, RampPick, WheelGeometry, hue_at, triangle_corners, triangle_point, triangle_sv,
+    ColorArea, ColorDisc, ColorHud, ColorRamp, DiscMove, RampKind, RampPick, WheelGeometry, hue_at, triangle_corners, triangle_point, triangle_sv,
 };
 use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
 use craft_ui::contract::{Bind, Show as _};
+use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Key, Modifiers, Pos2, Rect, Ui, pos2, vec2};
@@ -146,4 +148,113 @@ fn alt_with_enter_on_the_ramp_picks_the_other_colour() {
     press(&mut fixture, Key::Tab, Modifiers::NONE);
     press(&mut fixture, Key::Enter, Modifiers::ALT);
     assert_eq!(*picks.borrow(), [false, true, true], "the white box: Alt+Enter");
+}
+
+/// Where the host's press began.
+const HUD_AT: Pos2 = Pos2::new(300.0, 200.0);
+
+/// A HUD whose host owns the press: it sets the pointer and the held state, and applies the HUD's edits to its colour.
+struct HudRig {
+    fixture: Fixture,
+    pointer: Rc<Cell<Option<Pos2>>>,
+    held: Rc<Cell<bool>>,
+    color: Rc<Cell<Srgba>>,
+    events: Rc<RefCell<Vec<EditEvent<Srgba>>>>,
+    closed: Rc<RefCell<Vec<CloseReason>>>,
+}
+
+impl HudRig {
+    fn new(start: Srgba) -> Self {
+        let pointer = Rc::new(Cell::new(Some(HUD_AT)));
+        let (held, color) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(start)));
+        let (events, closed) = (Rc::new(RefCell::new(Vec::new())), Rc::new(RefCell::new(Vec::new())));
+        let (p, h, c, e, x) = (pointer.clone(), held.clone(), color.clone(), events.clone(), closed.clone());
+        let mut fixture = Fixture::new(move |ui| {
+            let out = ColorHud::new("Color HUD", HUD_AT, Bind::given(c.get())).start(start).pointer(p.get()).held(h.get()).show(ui);
+            for event in out.events {
+                if let EditEvent::Update { value, .. } = &event {
+                    c.set(*value);
+                }
+                e.borrow_mut().push(event);
+            }
+            if let Some(reason) = out.closed {
+                x.borrow_mut().push(reason);
+            }
+        });
+        fixture.room(vec2(600.0, 400.0));
+        fixture.settle();
+        HudRig { fixture, pointer, held, color, events, closed }
+    }
+
+    fn count(&self, which: impl Fn(&EditEvent<Srgba>) -> bool) -> usize {
+        self.events.borrow().iter().filter(|event| which(event)).count()
+    }
+
+    /// Moves the host's pointer to `to` and runs the passes that see it.
+    fn move_to(&mut self, to: Pos2) {
+        self.pointer.set(Some(to));
+        self.fixture.idle(2);
+    }
+
+    fn hsb(&self) -> [f32; 3] {
+        let values = HsbModel.from_srgb(self.color.get()).values;
+        [values[0], values[1], values[2]]
+    }
+}
+
+/// The HUD maps the host's pointer through its own parts: the start colour's point sits under `at`, the pointer resting
+/// at `at` picks nothing, moving over the area and then the strip picks there, one gesture covers the whole open, and
+/// the host's release commits and closes with the colour kept.
+#[trial]
+fn color_hud_follows_the_hosts_press() {
+    // Hue 210, saturation 50, brightness 80.
+    let start = Srgba::rgb(0.4, 0.6, 0.8);
+    let mut rig = HudRig::new(start);
+    let area = rig.fixture.by_label(AreaMode::Hue.name()).expect("the area").rect;
+    let strip = rig.fixture.by_label("Hue").expect("the strip").rect;
+    assert!((area.left() + 0.5 * area.width() - HUD_AT.x).abs() < 2.0, "the start colour's saturation is under `at` across");
+    assert!((area.top() + 0.2 * area.height() - HUD_AT.y).abs() < 2.0, "and its brightness down");
+
+    rig.fixture.idle(2);
+    assert!(rig.events.borrow().is_empty(), "no edit while the pointer rests at `at`");
+
+    rig.move_to(area.center());
+    let [hue, saturation, brightness] = rig.hsb();
+    assert!((hue - 210.0).abs() < 3.0, "the area leaves the hue: {hue}");
+    assert!((saturation - 50.0).abs() < 3.0, "the area's middle across is half saturation: {saturation}");
+    assert!((brightness - 50.0).abs() < 3.0, "the area's middle down is half brightness: {brightness}");
+
+    rig.move_to(strip.center());
+    let [hue, saturation, brightness] = rig.hsb();
+    assert!((hue - 180.0).abs() < 3.0, "the strip's middle is half the hue range: {hue}");
+    assert!((saturation - 50.0).abs() < 3.0 && (brightness - 50.0).abs() < 3.0, "the strip leaves the rest: {saturation}, {brightness}");
+    assert_eq!(rig.count(|event| matches!(event, EditEvent::Begin { .. })), 1, "one gesture per open");
+    assert_eq!(rig.count(|event| matches!(event, EditEvent::Commit { .. })), 0, "it runs while the press is held");
+
+    let picked = rig.color.get();
+    rig.held.set(false);
+    rig.fixture.idle(2);
+    assert_eq!(rig.count(|event| matches!(event, EditEvent::Commit { .. })), 1, "the release commits");
+    assert_eq!(rig.count(|event| matches!(event, EditEvent::Cancel { .. })), 0);
+    assert_eq!(rig.color.get(), picked, "the picked colour stays");
+    assert!(!rig.closed.borrow().is_empty(), "and the HUD reports that it closed");
+}
+
+/// Escape during the gesture keeps what was picked and closes the HUD.
+#[trial]
+fn color_hud_escape_keeps_the_picked_colour() {
+    let start = Srgba::rgb(0.4, 0.6, 0.8);
+    let mut rig = HudRig::new(start);
+    let area = rig.fixture.by_label(AreaMode::Hue.name()).expect("the area").rect;
+    rig.move_to(area.center());
+    let picked = rig.color.get();
+    assert_ne!(picked, start, "the pointer picked a colour");
+
+    rig.fixture.key(Key::Escape, Modifiers::NONE);
+    rig.fixture.idle(2);
+    assert_eq!(rig.count(|event| matches!(event, EditEvent::Begin { .. })), 1);
+    assert_eq!(rig.count(|event| matches!(event, EditEvent::Commit { .. })), 1, "Escape commits");
+    assert_eq!(rig.count(|event| matches!(event, EditEvent::Cancel { .. })), 0, "and does not revert");
+    assert_eq!(rig.color.get(), picked, "the picked colour stays");
+    assert!(!rig.closed.borrow().is_empty(), "and the HUD reports that it closed");
 }

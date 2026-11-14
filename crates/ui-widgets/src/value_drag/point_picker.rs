@@ -135,11 +135,17 @@ pub struct PointPicker<'a> {
 }
 
 impl<'a> PointPicker<'a> {
-    /// The value pair at `pos` in `rect`: the plot, the two `ValueDrag`s and `point_at` in one function, which the drag
-    /// then calls, so the picker and the colour HUD share one mapping. `None` when the picker has no area.
+    /// The value pair at `pos` in `rect`, on the step grid: the plot, the two `ValueDrag`s and the settle in one
+    /// function, which the drag calls, so the picker and a host that maps its own pointer (the colour HUD) share one
+    /// mapping. Modifiers change nothing: the point is where the pointer is. `None` when the picker has no area.
     pub fn value_at(&self, rect: Rect, pos: Pos2) -> Option<[f64; 2]> {
-        let _ = (rect, pos);
-        todo!("pn.C32")
+        let plot = self.plot(rect);
+        let drags = [
+            ValueDrag::absolute(plot.left()..plot.right(), self.along(0)),
+            ValueDrag::absolute(plot.top()..plot.bottom(), self.along(1)).axis(Axis::Y),
+        ];
+        let axis = |axis: usize| drags[axis].at(pos, false).map(|value| self.settle(axis, value, self.grid(axis, false)));
+        Some([axis(0)?, axis(1)?])
     }
 
     /// The well: a press on it moves the point there, and a drag from it follows the pointer.
@@ -285,7 +291,7 @@ impl<'a> PointPicker<'a> {
     }
 
     /// Where `value` stands in `plot`.
-    fn position(&self, value: [f64; 2], plot: Rect) -> Pos2 {
+    pub fn position(&self, value: [f64; 2], plot: Rect) -> Pos2 {
         let at = |axis: usize| {
             let range = self.ranges()[axis];
             let span = range.end() - range.start();
@@ -293,13 +299,6 @@ impl<'a> PointPicker<'a> {
             if self.flipped[axis] { 1.0 - share } else { share }
         };
         pos2(plot.left() + at(0) * plot.width(), plot.top() + at(1) * plot.height())
-    }
-
-    /// The point under the pointer at `pos`, on the step grid. Modifiers change nothing: the point is where the
-    /// pointer is.
-    fn point_at(&self, drags: &[ValueDrag; 2], pos: Pos2) -> Option<[Mixed<f64>; 2]> {
-        let axis = |axis: usize| drags[axis].at(pos, false).map(|value| self.settle(axis, value, self.grid(axis, false)));
-        Some(Mixed::each([axis(0)?, axis(1)?]))
     }
 }
 
@@ -389,13 +388,9 @@ impl Component for PointPicker<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        let plot = self.plot(cx.rect);
-        let drags = [
-            ValueDrag::absolute(plot.left()..plot.right(), self.along(0)),
-            ValueDrag::absolute(plot.top()..plot.bottom(), self.along(1)).axis(Axis::Y),
-        ];
+        let rect = cx.rect;
         for key in [THUMB, Self::WELL] {
-            cx.follow_press(key, |pos| self.point_at(&drags, pos));
+            cx.follow_press(key, |pos| self.value_at(rect, pos).map(Mixed::each));
         }
         let running = cx.gesture().is_some();
         let mut now = cx.value().cloned().unwrap_or(ALL_MIXED);

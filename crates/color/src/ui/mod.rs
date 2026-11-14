@@ -2,8 +2,9 @@
 //!
 //! - Fields and strips of a colour model: [`ColorArea`], [`ColorStrip`], [`ColorRamp`], [`ColorDisc`], [`ColorWheel`].
 //! - The picker: [`ColorPicker`], its popover and dialog, the hex and readout fields, the choice list and the droppers.
-//! - Wells and paints: [`SwatchPair`], [`PaintChip`], [`PaintList`], [`SwatchPalette`], [`SwatchTable`].
-//! - Panels: [`ColorPanel`], [`HarmonyPanel`], [`SwatchesPanel`].
+//! - Wells and paints: [`SwatchPair`], [`PaintChip`], [`PaintList`], [`SwatchPalette`], `craft_ui::choice::SwatchTable`.
+//! - Panels: [`ColorPanel`], [`HarmonyPanel`], [`SwatchesPanel`], [`InfoPanel`]; over a canvas: [`ColorHud`].
+//! - Gradients: the [`gradient`] module (`GradientEditor`, `GradientStops`, the stop rules, `GradientRamp`).
 //! - Sampling: the eyedropper, colour samplers and the screen picker.
 //! - Imaging prompts: [`LutPicker`] and [`ProfileMismatchDialog`].
 //!
@@ -64,7 +65,7 @@ pub use paint_chip::{
     PaintListOptions, PaintListOutput, PaintRow, PaintWords,
 };
 pub use pair::{PairWell, SwatchPair, SwatchPairOutput, Well};
-pub use palette::{SwatchPalette, SwatchPaletteOutput, SwatchRows, SwatchTable, SwatchTableOutput, SwatchTableStyle};
+pub use palette::{SwatchPalette, SwatchPaletteOutput};
 pub use panel::{
     ColorPanel, ColorPanelCommand, ColorPanelMenu, ColorPanelMode, ColorPanelOutput, ColorPanelRamp, ColorPanelState, ColorPanelWords, PanelTarget,
 };

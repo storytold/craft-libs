@@ -82,14 +82,7 @@ impl<'a> ColorStrip<'a> {
 
     /// `values` with the strip's component set to `value`, on its step and the quantised colour.
     fn with(&self, values: &ModelValues, value: f64) -> ModelValues {
-        let model = self.mode.model();
-        let channel = self.mode.strip();
-        let mut out = *values;
-        out.values[channel] = settled(model, channel, value as f32);
-        match self.levels() {
-            Some(levels) => quantized(model, &out, levels),
-            None => out,
-        }
+        with_value(self.mode, self.levels(), values, value)
     }
 
     /// The value after the key `mv` held with `mods`, from `values`; a quantising strip steps again until the colour
@@ -171,13 +164,11 @@ impl Component for ColorStrip<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        let model = self.mode.model();
-        let channel = self.mode.strip();
-        let drag = ValueDrag::absolute(cx.rect.bottom()..cx.rect.top(), channel_range(model, channel)).axis(Axis::Y);
-        let start_values = ModelValues::new(model.id(), &[]);
+        let (rect, mode) = (cx.rect, self.mode);
+        let start_values = ModelValues::new(mode.model().id(), &[]);
         let current = |cx: &Cx<'_, Self>| cx.value().copied().unwrap_or(start_values);
         let base = current(&*cx);
-        cx.follow_press(STRIP, |pos| drag.at(pos, false).map(|value| self.with(&base, value)));
+        cx.follow_press(STRIP, |pos| picked(rect, mode, pos).map(|value| self.with(&base, value)));
         // A running drag is one edit: keys and SetValue wait for it, and are still taken.
         let running = cx.gesture().is_some();
         while let Some((mv, mods)) = cx.intents().take_move() {
@@ -256,10 +247,31 @@ impl Component for ColorStrip<'_> {
     }
 }
 
-/// The values the pointer at `at` picks in the strip's `rect` for `mode`: the `ValueDrag` mapping of `update`, which
+/// The component value under the pointer at `at` in the strip's `rect`: the one point-to-value mapping, which `update`
+/// and `value_at` share.
+fn picked(rect: Rect, mode: AreaMode, at: Pos2) -> Option<f64> {
+    ValueDrag::absolute(rect.bottom()..rect.top(), channel_range(mode.model(), mode.strip())).axis(Axis::Y).at(at, false)
+}
+
+/// `values` with the strip component of `mode` set to `value` on its step, and on the quantised colour when `levels` is
+/// given.
+fn with_value(mode: AreaMode, levels: Option<usize>, values: &ModelValues, value: f64) -> ModelValues {
+    let model = mode.model();
+    let channel = mode.strip();
+    let mut out = *values;
+    out.values[channel] = settled(model, channel, value as f32);
+    match levels {
+        Some(levels) => quantized(model, &out, levels),
+        None => out,
+    }
+}
+
+/// The values the pointer at `at` picks in the strip's `rect` for `mode`, from `values`: the mapping of `update`, which
 /// `ColorHud` drives with the host's pointer.
-#[allow(dead_code)] // P3(panels-w7): pn.C32
+// PLAN: the contract signature has no quantise levels, so this is the unquantised strip; `update` keeps its own levels.
 pub(crate) fn value_at(rect: Rect, mode: AreaMode, values: &ModelValues, at: Pos2) -> ModelValues {
-    let _ = (rect, mode, values, at);
-    todo!("pn.C32")
+    match picked(rect, mode, at) {
+        Some(value) => with_value(mode, None, values, value),
+        None => *values,
+    }
 }
