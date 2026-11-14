@@ -1029,10 +1029,15 @@ mod tests {
         let _guard = crate::spawn_guard();
         let dir = workspace(MANIFEST, Some("old lock\n"));
         let other = base_lock(dir.path(), &test_lock_dir(dir.path())).unwrap().expect("free lock");
-        // A run whose owner-labeled lock directories differ from the holder's still meets its lock.
+        // A run whose owner-labeled lock directories differ from the holder's still meets its lock. On
+        // Windows that lock is `workspace.lock` in the first directory, so only the later ones differ.
         let elsewhere = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        let dirs = [test_lock_dir(dir.path()), elsewhere.path().join("lock")];
+        #[cfg(not(windows))]
+        let dirs = [elsewhere.path().join("lock")];
         let ran = Cell::new(false);
-        let result = run_to(dir.path(), &["set", "2.0.0"], &Limits::default(), Some(&[elsewhere.path().join("lock")]), &mut Vec::new(), || {
+        let result = run_to(dir.path(), &["set", "2.0.0"], &Limits::default(), Some(&dirs), &mut Vec::new(), || {
             ran.set(true);
             Ok(())
         });
