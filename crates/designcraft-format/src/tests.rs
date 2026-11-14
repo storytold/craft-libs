@@ -121,27 +121,49 @@ fn write_to_stops_when_the_writer_fails() {
     struct Failing {
         inner: Cursor<Vec<u8>>,
         budget: usize,
+        failed: bool,
+        calls_after_failure: std::rc::Rc<std::cell::Cell<u32>>,
     }
     impl Write for Failing {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.failed {
+                self.calls_after_failure.set(self.calls_after_failure.get() + 1);
+            }
             if self.budget < buf.len() {
+                self.failed = true;
                 return Err(std::io::Error::other("cancelled"));
             }
             self.budget -= buf.len();
             self.inner.write(buf)
         }
         fn flush(&mut self) -> std::io::Result<()> {
+            if self.failed {
+                self.calls_after_failure.set(self.calls_after_failure.get() + 1);
+            }
             self.inner.flush()
         }
     }
     impl Seek for Failing {
         fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            if self.failed {
+                self.calls_after_failure.set(self.calls_after_failure.get() + 1);
+            }
             self.inner.seek(pos)
         }
     }
     let data = vec![1u8; 4096];
     let assets = [Asset { id: "8", mime: "image/png", data: &data }];
-    let out = Failing { inner: Cursor::new(Vec::new()), budget: 1024 };
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let out = Failing { inner: Cursor::new(Vec::new()), budget: 1024, failed: false, calls_after_failure: calls.clone() };
     let result = write_to(out, &linked_doc(), "t", None, &assets, &[]);
+    assert_eq!(calls.get(), 0, "no write, flush or seek reaches the writer after it failed");
     assert!(matches!(result, Err(Error::Io(message)) if message.contains("cancelled")));
+}
+
+#[test]
+fn bytes_supplied_for_a_linked_asset_are_not_written() -> Result<(), Box<dyn std::error::Error>> {
+    let assets = [Asset { id: "7", mime: "image/png", data: b"linked bytes" }, Asset { id: "8", mime: "image/png", data: b"kept" }];
+    let bytes = save(&linked_doc(), "t", None, &assets, &[])?;
+    assert_eq!(load::<Value>(&bytes)?.assets, [("8".to_owned(), b"kept".to_vec())]);
+    Ok(())
 }

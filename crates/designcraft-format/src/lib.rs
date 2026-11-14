@@ -101,6 +101,8 @@ pub fn write_to<T: Serialize, W: Write + Seek>(
     proxies: &[Asset<'_>],
 ) -> Result<(), Error> {
     let value = serde_json::to_value(document).map_err(|error| Error::Io(error.to_string()))?;
+    let embedded: Vec<Asset<'_>> = assets.iter().filter(|asset| !is_linked(&value, asset.id)).copied().collect();
+    let assets = embedded.as_slice();
     let version = required_version(&value, assets);
     let json = serde_json::to_vec_pretty(&value).map_err(|error| Error::Io(error.to_string()))?;
     craft_document_bundle::write_to(out, &json, version, generator, preview, assets, proxies, BUNDLE).map_err(Into::into)
@@ -128,6 +130,10 @@ pub fn starts_designcraft(prefix: &[u8]) -> bool {
 /// Read the first-page PNG preview from a ZIP package, with a fixed 4 MiB cap.
 pub fn read_preview<R: Read + Seek>(reader: R) -> Option<Vec<u8>> {
     craft_document_bundle::read_preview_from(reader, PREVIEW)
+}
+
+fn is_linked(document: &Value, id: &str) -> bool {
+    document.get("assets").and_then(|assets| assets.get(id)).and_then(|asset| asset.get("storage")).and_then(Value::as_str) == Some("linked")
 }
 
 fn has_linked_asset(document: &Value) -> bool {

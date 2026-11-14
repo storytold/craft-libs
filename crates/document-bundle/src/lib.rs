@@ -122,6 +122,43 @@ pub fn starts_with_mimetype(prefix: &[u8], spec: Spec<'_>) -> bool {
     craft_zip::stored_mimetype(prefix).is_some_and(|mime| mime == spec.mimetype.as_bytes())
 }
 
+/// Refuses every write and seek after the first failure of the wrapped writer. Dropping a
+/// `ZipWriter` after an error finalizes the archive, which must not touch a cancelled target.
+struct Latch<W> {
+    inner: W,
+    failed: bool,
+}
+
+impl<W> Latch<W> {
+    fn latched() -> std::io::Error {
+        std::io::Error::other("writer already failed")
+    }
+}
+
+impl<W: Write> Write for Latch<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.failed {
+            return Err(Self::latched());
+        }
+        self.inner.write(buf).inspect_err(|_| self.failed = true)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.failed {
+            return Err(Self::latched());
+        }
+        self.inner.flush().inspect_err(|_| self.failed = true)
+    }
+}
+
+impl<W: Seek> Seek for Latch<W> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        if self.failed {
+            return Err(Self::latched());
+        }
+        self.inner.seek(pos).inspect_err(|_| self.failed = true)
+    }
+}
+
 fn write_err(e: impl std::fmt::Display) -> Error {
     Error::Write(e.to_string())
 }
@@ -156,7 +193,7 @@ pub fn write_to<W: Write + Seek>(
     spec: Spec<'_>,
 ) -> Result<(), Error> {
     use zip::CompressionMethod::{Deflated, Stored};
-    let mut zip = zip::ZipWriter::new(out);
+    let mut zip = zip::ZipWriter::new(Latch { inner: out, failed: false });
     let mut add = |name: &str, data: &[u8], method: zip::CompressionMethod| -> Result<(), Error> {
         let options = zip::write::SimpleFileOptions::default()
             .compression_method(method)
@@ -253,8 +290,19 @@ fn read_proxies(archive: &mut Archive<'_>, wanted: &std::collections::HashSet<St
         if archive.declared_size(&path).is_none_or(|size| size > PROXY_LIMIT) {
             continue;
         }
-        if let Ok(Some(data)) = archive.read(&path, PROXY_LIMIT) {
-            proxies.push((id.to_owned(), data));
+        let Some(size) = archive.declared_size(&path) else { continue };
+        if archive.budget().remaining() < size {
+            break;
+        }
+        match archive.read(&path, PROXY_LIMIT) {
+            Ok(Some(data)) => proxies.push((id.to_owned(), data)),
+            Ok(None) => {}
+            // A failed read may have decompressed up to `size` bytes without being charged.
+            Err(_) => {
+                if archive.budget_mut().charge(size).is_err() {
+                    break;
+                }
+            }
         }
     }
     proxies
@@ -385,5 +433,25 @@ mod tests {
 
         let compressed = write(document, 4, "test", None, &[Asset { id: "7", mime: "application/octet-stream", data: &bytes }], &[], SPEC).unwrap();
         assert!(read_with_limits(&compressed, 4, SPEC, limits).is_err());
+    }
+
+    #[test]
+    fn failed_proxy_reads_are_charged_and_stop_reading_when_the_budget_is_spent() {
+        let pad = " ".repeat(40_000);
+        let document = format!(r#"{{"assets":{{"1":{{}},"2":{{}},"3":{{}},"4":{{}}}},"pad":"{pad}"}}"#);
+        let blobs: Vec<Vec<u8>> = (1u8..=4).map(|n| vec![n.wrapping_mul(50); 1000]).collect();
+        let ids = ["1", "2", "3", "4"];
+        let proxies: Vec<Asset<'_>> = ids.iter().zip(&blobs).map(|(id, data)| Asset { id, mime: "image/png", data }).collect();
+        let mut bytes = write(document.as_bytes(), 4, "t", None, &[], &proxies, SPEC).unwrap();
+        // Corrupt proxies 1 to 3 so their reads fail their checksum.
+        for blob in &blobs[..3] {
+            let at = bytes.windows(blob.len()).position(|w| w == blob.as_slice()).unwrap();
+            bytes[at + 500] ^= 0xFF;
+        }
+        let source = bytes.len() as u64;
+        let all = read(&bytes, 4, SPEC).unwrap();
+        assert_eq!(all.proxies.len(), 1);
+        let tight = ReadLimits { json_bytes: 1 << 20, compressed_asset_bytes: 1 << 20, expansion_bytes: 40_100 + 2_500 - source };
+        assert!(read_with_limits(&bytes, 4, SPEC, tight).unwrap().proxies.is_empty());
     }
 }
