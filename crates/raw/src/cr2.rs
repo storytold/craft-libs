@@ -274,7 +274,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
             active = Rect::new(l, tp, r - l + 1, b - tp + 1);
             // `AspectInfo` is measured from the image area's origin, so it only applies when that area is known.
             let image = Rect::new(0, 0, active.width, active.height);
-            crop = crate::cr3::aspect_crop(mn.as_ref().map(|m| &m.ifd), image).unwrap_or(image);
+            crop = crate::shared::aspect_crop(mn.as_ref().map(|m| &m.ifd), image).unwrap_or(image);
         }
     }
     let color_data = mn.as_ref().and_then(|m| m.ifd.value(COLOR_BALANCE).map(|v| words(v, m.order)));
@@ -665,7 +665,7 @@ pub(crate) mod tests {
         let si: Vec<u8> = [68u16, 50, 0, 0, 0, 4, 2, 67, 49].iter().flat_map(|v| v.to_le_bytes()).collect();
         let mut entries = vec![(SENSOR_INFO, 3, si)];
         if let Some(a) = aspect {
-            entries.push((crate::cr3::ASPECT_INFO, 4, a.iter().flat_map(|v| v.to_le_bytes()).collect()));
+            entries.push((crate::shared::ASPECT_INFO, 4, a.iter().flat_map(|v| v.to_le_bytes()).collect()));
         }
         decode_sized_with_note(68, 50, &entries)
     }
@@ -695,7 +695,7 @@ pub(crate) mod tests {
             assert_eq!(decode_with_aspect(Some(bad)).crop, Rect::new(0, 0, 64, 48), "{bad:?}");
         }
         let aspect = [0u32, 32, 8, 0, 1].iter().flat_map(|v| v.to_le_bytes()).collect();
-        let image = decode_with_note(&[(crate::cr3::ASPECT_INFO, 4, aspect)]);
+        let image = decode_with_note(&[(crate::shared::ASPECT_INFO, 4, aspect)]);
         assert_eq!((image.active_area, image.crop), (Rect::new(0, 0, 64, 10), Rect::new(0, 0, 64, 10)));
     }
 }
