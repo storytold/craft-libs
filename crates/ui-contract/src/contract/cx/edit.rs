@@ -338,17 +338,28 @@ impl<C: Component> Cx<'_, C> {
 }
 
 impl<C: Component> Cx<'_, C> {
-    /// Advances the component's wheel run, one edit gesture through the gesture slot: a `WheelPhase::End` share commits
-    /// a running run, any other notch with `Some(next)` proposes it.
-    #[allow(dead_code)] // P3(panels-w4): pn.C23
+    /// Advances the component's wheel run, one edit gesture through the gesture slot: a notch with `Some(next)`
+    /// proposes it (the first notch begins the run), and a `WheelPhase::End` share, which the runtime hands a value
+    /// control when the wheel gesture ends, commits a running run. A run a host change or a removal cancelled stays
+    /// cancelled; the end then changes nothing.
     pub fn wheel_run(&mut self, phase: WheelPhase, next: Option<ValueOf<C>>) {
-        let _ = (phase, next);
-        todo!("pn.C23")
+        if let Some(next) = next {
+            let running = self.gesture_slot().is_running();
+            self.propose(next);
+            let slot = self.gesture_slot();
+            // Only a run the wheel began is a wheel run: a notch inside a press-carried gesture joins that gesture.
+            if !running && slot.is_running() {
+                slot.wheel = true;
+            }
+        }
+        if phase == WheelPhase::End && self.in_wheel_run() {
+            self.commit();
+        }
     }
 
     /// Whether the running gesture is a wheel run.
-    #[allow(dead_code)] // P3(panels-w4): pn.C23
     pub fn in_wheel_run(&self) -> bool {
-        todo!("pn.C23")
+        let slot = self.core.memory.recall::<Gesture<ValueOf<C>>>(gesture_key(self.core.id));
+        slot.is_running() && slot.wheel
     }
 }

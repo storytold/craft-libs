@@ -166,18 +166,21 @@ impl<V: NumberValue> Codec for Ruled<V> {
         self.parse_tagged(text, start).map(|(value, _)| value)
     }
 
+    /// The inner codec's note, with `held` set to the number read (in shown units) when it lies outside the range;
+    /// snapping and rounding are not holding. A name or a blank gives the default note.
     fn parse_tagged(&self, text: &str, start: &V) -> Result<(V, ParseNote), NotAValue> {
-        // P3(panels-w4): cw.N5
         if let Some(name) = self.name_of(text) {
             return Ok((name, ParseNote::default()));
         }
         if text.trim().is_empty() && (self.mixed || V::blank().is_none()) {
             return Err(NotAValue);
         }
-        // P3(panels-w4): cw.N5 sets `held` when the number lies outside the rule's range.
-        let (read, tag) = self.inner.parse_tagged(text, &self.shown(start))?;
+        let (read, mut note) = self.inner.parse_tagged(text, &self.shown(start))?;
         match read {
-            Some(number) => Ok((V::of_number(self.held(number) / self.scale), tag)),
+            Some(number) => {
+                note.held = (number < self.rule.low || number > self.rule.high).then_some(number);
+                Ok((V::of_number(self.held(number) / self.scale), note))
+            }
             None => V::blank().map(|blank| (blank, ParseNote::default())).ok_or(NotAValue),
         }
     }

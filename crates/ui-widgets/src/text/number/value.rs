@@ -153,13 +153,11 @@ pub struct RangeAlert {
     pub range: RangeInclusive<f64>,
     /// The field commits whole numbers.
     pub whole: bool,
-    /// The unit the field shows after its number: the field's own `unit` prop.
+    /// The field's own unit label (its `unit` prop); `None` when only a unit kind names the unit.
     pub unit: Option<Label>,
-    /// The field's unit kind, for the one number-with-unit rule (`Units::text`).
-    // P3(panels-w4): pn.C22 `RangeAlert::unit_kind`
+    /// What the number counts, which words the range's ends with their unit.
     pub unit_kind: Option<UnitKind>,
-    /// The decimals the field shows, for the alert's `low` and `high`.
-    // P3(panels-w4): pn.C22 `RangeAlert::decimals`
+    /// The decimals the field shows, which the range's ends are written at.
     pub decimals: RangeInclusive<usize>,
 }
 

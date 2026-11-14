@@ -11,10 +11,6 @@ craft_ui::words! {
         add: "fill.add" = "Add";
         subtract: "fill.subtract" = "Subtract";
         size: "fill.size" = "Size";
-        new_selection: "fill.newSelection" = "New selection";
-        add_to_selection: "fill.addToSelection" = "Add to selection";
-        subtract_from_selection: "fill.subtractFromSelection" = "Subtract from selection";
-        intersect_with_selection: "fill.intersectWithSelection" = "Intersect with selection";
         /// The caption of the Expand and Contract amount in the options bar.
         grow_by: "fill.growBy" = "By";
         expand: "fill.expand" = "Expand";

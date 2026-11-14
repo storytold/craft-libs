@@ -379,6 +379,168 @@ fn the_digits_sit_on_the_field_centre_line() {
     }
 }
 
+/// A typed value past the range commits the range's end and reports it in that pass only, for Enter, Tab and a focus
+/// loss to another control's press; arrows, the wheel and a scrub that run into the end never report it.
+#[trial]
+fn a_typed_value_past_the_range_commits_the_end_and_reports_it_once() {
+    use craft_ui::testing::Fixture;
+    use craft_ui::testing::pointer::{moved, wheel_lines};
+    use craft_ui::text::RangeAlert;
+    use std::rc::Rc;
+    let value = Rc::new(Cell::new(Some(50.0)));
+    let alerts: Rc<RefCell<Vec<RangeAlert>>> = Rc::default();
+    let (held, seen) = (value.clone(), alerts.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = held.get();
+        let out = NumberField::new("Amount", Bind::bound(&mut now))
+            .id_salt("amount")
+            .range(0.0..=100.0)
+            .unit_kind(UnitKind::Percent)
+            .commit_decimals(0)
+            .show(ui);
+        held.set(now);
+        seen.borrow_mut().extend(out.out_of_range.clone());
+        NumberField::new("Other", Bind::bound(&mut Some(1.0))).id_salt("other").show(ui);
+    });
+    fixture.settle();
+    let amount = fixture.by_label("Amount").expect("the field");
+    let other = fixture.by_label("Other").expect("the other field");
+    let type_over = |fixture: &mut Fixture, text: &str| {
+        fixture.click(&amount).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(text);
+    };
+
+    type_over(&mut fixture, "250");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    assert_eq!(value.get(), Some(100.0), "a typed value past the end commits the end");
+    {
+        let alerts = alerts.borrow();
+        assert_eq!(alerts.len(), 1, "Enter reports it in one pass: {alerts:?}");
+        let alert = &alerts[0];
+        assert_eq!((alert.typed, alert.kept, alert.range.clone()), (250.0, 100.0, 0.0..=100.0));
+        assert!(alert.whole, "the field commits whole numbers");
+        assert_eq!(alert.unit, None, "the field sets no unit label of its own");
+        assert_eq!(alert.unit_kind, Some(UnitKind::Percent));
+    }
+
+    type_over(&mut fixture, "-5");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert_eq!(value.get(), Some(0.0), "Tab commits the start");
+    assert_eq!(alerts.borrow().len(), 2, "Tab reports it");
+    assert_eq!(alerts.borrow()[1].typed, -5.0);
+
+    type_over(&mut fixture, "300");
+    fixture.click(&other).settle();
+    assert_eq!(value.get(), Some(100.0), "a press on another control commits the end");
+    assert_eq!(alerts.borrow().len(), 3, "the focus loss reports it");
+
+    type_over(&mut fixture, "95");
+    fixture.key(Key::Enter, Modifiers::NONE).settle();
+    fixture.key(Key::PageUp, Modifiers::NONE).key(Key::PageUp, Modifiers::NONE).settle();
+    assert_eq!(value.get(), Some(100.0), "Page Up runs into the end");
+    fixture.frame(vec![moved(amount.rect.center())]);
+    for _ in 0..3 {
+        fixture.frame(vec![wheel_lines(1.0)]);
+    }
+    fixture.settle();
+    fixture.click(&other).settle();
+    fixture.drag_at(amount.rect.center(), Vec2::new(60.0, 0.0));
+    fixture.settle();
+    assert_eq!(alerts.borrow().len(), 3, "a value in range, keys, the wheel and a scrub report nothing: {:?}", alerts.borrow());
+}
+
+/// The name of an edit event's step.
+fn step_name<V>(event: &craft_behavior::EditEvent<V>) -> &'static str {
+    use craft_behavior::EditEvent;
+    match event {
+        EditEvent::Begin { .. } => "begin",
+        EditEvent::Update { .. } => "update",
+        EditEvent::Commit { .. } => "commit",
+        EditEvent::Cancel { .. } => "cancel",
+        EditEvent::Set { .. } => "set",
+        _ => "other",
+    }
+}
+
+/// Wheel notches over a field are one edit gesture, one undo step: Begin, then Updates, and one Commit when the
+/// wheel gesture ends. A value written from outside while the run is open cancels it, and the end then commits
+/// nothing.
+#[trial]
+fn a_wheel_run_on_a_field_is_one_edit_gesture() {
+    use craft_behavior::GESTURE_GAP;
+    use craft_ui::testing::Fixture;
+    use craft_ui::testing::pointer::{moved, wheel_lines};
+    use std::rc::Rc;
+    let value = Rc::new(RefCell::new(Some(START)));
+    let steps: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let (held, seen) = (value.clone(), steps.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut guard = held.borrow_mut();
+        let out = NumberField::new("Size", Bind::bound(&mut *guard)).id_salt("size").range(0.0..=100.0).show(ui);
+        for event in &out.edit.events {
+            seen.borrow_mut().push(step_name(event));
+        }
+    });
+    fixture.settle();
+    let field = fixture.by_label("Size").expect("the field");
+    fixture.click(&field).settle();
+    fixture.frame(vec![moved(field.rect.center())]);
+    steps.borrow_mut().clear();
+    for _ in 0..3 {
+        fixture.frame(vec![wheel_lines(1.0)]);
+    }
+    assert_ne!(*value.borrow(), Some(START), "the notches moved the value");
+    {
+        let steps = steps.borrow();
+        assert!(steps.len() >= 2 && steps[0] == "begin", "the first notch begins the run: {steps:?}");
+        assert!(steps[1..].iter().all(|step| *step == "update"), "later notches update it, nothing commits yet: {steps:?}");
+    }
+    fixture.advance(GESTURE_GAP * 2.0).idle(3);
+    {
+        let steps = steps.borrow();
+        assert_eq!(steps.iter().filter(|step| **step == "begin").count(), 1, "one run: {steps:?}");
+        assert_eq!(steps.iter().filter(|step| **step == "commit").count(), 1, "the gesture's end commits once: {steps:?}");
+        assert_eq!(steps.last(), Some(&"commit"), "{steps:?}");
+        assert!(!steps.contains(&"set"), "no notch is a one-shot set: {steps:?}");
+    }
+
+    steps.borrow_mut().clear();
+    for _ in 0..2 {
+        fixture.frame(vec![wheel_lines(1.0)]);
+    }
+    *value.borrow_mut() = Some(77.0);
+    fixture.idle(2);
+    assert!(steps.borrow().contains(&"cancel"), "a value written from outside cancels the run: {:?}", steps.borrow());
+    fixture.advance(GESTURE_GAP * 2.0).idle(3);
+    assert!(!steps.borrow().contains(&"commit"), "the end commits no cancelled run: {:?}", steps.borrow());
+    assert_eq!(*value.borrow(), Some(77.0), "the outside value stays");
+}
+
+/// An arrow over a typed sum applies the sum first and steps from it, and the field keeps focus.
+#[trial]
+fn arrow_keys_step_from_a_typed_sum() {
+    use craft_ui::testing::Fixture;
+    use std::rc::Rc;
+    let value = Rc::new(Cell::new(Some(100.0)));
+    let id = Rc::new(Cell::new(egui::Id::NULL));
+    let (held, seen) = (value.clone(), id.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let mut now = held.get();
+        let out = NumberField::new("Size", Bind::bound(&mut now)).id_salt("size").range(0.0..=1000.0).show(ui);
+        held.set(now);
+        seen.set(out.response.id);
+    });
+    fixture.settle();
+    let field = fixture.by_label("Size").expect("the field");
+    fixture.click(&field).settle();
+    fixture.key(Key::A, Modifiers::COMMAND).type_text("5+5").settle();
+    fixture.key(Key::ArrowUp, Modifiers::NONE).settle();
+    assert_eq!(value.get(), Some(11.0), "Arrow Up applies 5+5 and steps from 10");
+    fixture.key(Key::ArrowDown, Modifiers::NONE).settle();
+    assert_eq!(value.get(), Some(10.0), "Arrow Down steps back");
+    assert!(fixture.focused_stop().is_some_and(|(stop, _)| stop == id.get()), "the field keeps focus");
+}
+
 /// A drag on the popup slider of a field whose app applies each update, as the Layers panel's Opacity does, runs each
 /// drag frame once: an edit of a given value reruns the frame only when something read it earlier in the frame.
 #[trial]

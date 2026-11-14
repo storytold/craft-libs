@@ -3,7 +3,6 @@
 use egui::{Response, Ui};
 
 use craft_behavior::IconId;
-use craft_behavior::geometry::selection_op::SelectionOperation;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::choice::Segmented;
@@ -13,6 +12,8 @@ use craft_ui::patterns::form_dialogs::ParamDialogWords;
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, UnitKind};
 use craft_ui::text::NumberField;
+
+use crate::ui::select::operations::{SelectionOpWords, selection_operations};
 
 use super::lasso::FillAreaEdit;
 use super::tool::{FillTool, FillToolOptions};
@@ -80,13 +81,7 @@ impl<'a> FillBar<'a> {
                 }
             }
             FillTool::Lasso => {
-                let icon = |name: &'static str| IconSpec::svg(IconId::new(name));
-                let operations = [
-                    Entry::new(SelectionOperation::New, words.new_selection.clone()).icon(icon("square")),
-                    Entry::new(SelectionOperation::Add, words.add_to_selection.clone()).icon(icon("plus")),
-                    Entry::new(SelectionOperation::Subtract, words.subtract_from_selection.clone()).icon(icon("minus")),
-                    Entry::new(SelectionOperation::Intersect, words.intersect_with_selection.clone()).icon(icon("squares_subtract")),
-                ];
+                let operations = selection_operations(&env.words::<SelectionOpWords>());
                 let picked = Segmented::new(words.options.clone(), Bind::given(options.lasso), &operations).show(ui).value().copied();
                 if let Some(operation) = picked {
                     options.lasso = operation;
@@ -101,7 +96,7 @@ impl<'a> FillBar<'a> {
                 if let Some(by) = number(ui, &words.grow_by, options.grow_by, min..=max) {
                     options.grow_by = by;
                 }
-                if clicked(&IconButton::new(icon("undo")).label(reset.clone()).id_salt("reset").show(ui)) {
+                if clicked(&IconButton::new(IconSpec::svg(IconId::new("undo"))).label(reset.clone()).id_salt("reset").show(ui)) {
                     reset_fill_area = true;
                 }
             }

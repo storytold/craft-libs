@@ -211,9 +211,11 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     }
 
     /// Zoom typing: a Tab rewrites the draft and a press on the field's other parts keeps it unapplied.
-    #[allow(dead_code)] // P3(panels-w4): cw.C59
-    pub(super) fn zoom_typing(self) -> Self {
-        todo!("cw.C59")
+    #[must_use]
+    pub(super) fn zoom_typing(mut self) -> Self {
+        self.options.tab_rewrites = true;
+        self.options.holds_drafts = true;
+        self
     }
 
     /// A drag on the field's side label scrubs the value too, with or without the focus in the field.
@@ -229,17 +231,16 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         Rule::new(range.as_ref(), self.step)
     }
 
-    /// Reads what the field keeps from the env: a length field's scale from stored to shown, and the symbol of its unit
-    /// kind after the number unless the field sets a unit.
+    /// Reads a length field's scale from stored to shown from the env.
     fn settle_lengths(&mut self, units: &Units) {
         if let Some(lengths) = self.lengths {
             self.scale = units.length_scale(lengths).unwrap_or(1.0);
         }
-        if self.unit.is_none()
-            && let Some(kind) = self.unit_kind
-        {
-            self.unit = Some(units.symbol(kind).into());
-        }
+    }
+
+    /// The unit shown after the number: the field's own, else the symbol of its unit kind.
+    fn shown_unit(&self, units: &Units) -> Option<Label> {
+        self.unit.clone().or_else(|| self.unit_kind.map(|kind| units.symbol(kind).into()))
     }
 
     /// `stored` in the shown unit.
@@ -275,12 +276,19 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         })
     }
 
+    /// The decimals the field shows: its codec's, else its fixed decimals, else its unit kind's.
+    fn shown_decimals(&self) -> RangeInclusive<usize> {
+        match (&self.codec, self.fixed_decimals, self.unit_kind) {
+            (Some(codec), _, _) => 0..=codec.decimals(),
+            (None, Some(fixed), _) => fixed..=fixed,
+            (None, None, Some(kind)) => kind.decimals(),
+            (None, None, None) => 0..=DEFAULT_DECIMALS,
+        }
+    }
+
     /// The most decimals the field writes.
     fn decimals(&self) -> usize {
-        self.codec.as_ref().map_or_else(
-            || self.fixed_decimals.unwrap_or_else(|| self.unit_kind.map_or(DEFAULT_DECIMALS, |kind| *kind.decimals().end())),
-            NumberCodec::decimals,
-        )
+        *self.shown_decimals().end()
     }
 
     /// The names the presets list holds that a value of this type can be: the labels of its `Choice` rows.
@@ -324,13 +332,13 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// content-sized field's unit is as wide as the widest of its column group's.
     fn after_text(&self, cx: &MeasureCx<'_, Self>, chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
         let shared = content_sized(cx);
-        let unit = self.unit.iter().map(|unit| {
-            let unit = Adornment::text(unit.clone(), cx.style.unit.role).apart().measured(cx);
+        let unit = self.shown_unit(&cx.env.units()).map(|unit| {
+            let unit = Adornment::text(unit, cx.style.unit.role).apart().measured(cx);
             if shared { unit.in_column(cx.ui.ctx(), &UNITS) } else { unit }
         });
         let chevrons =
             chevrons.iter().map(|(key, name)| Adornment::button(*key, crate::controls::disclosure::DisclosureGlyph::dropdown(), name.clone()));
-        unit.chain(chevrons).collect()
+        unit.into_iter().chain(chevrons).collect()
     }
 
     /// The inside label's glyph, measured: what sits before the text.
@@ -347,6 +355,21 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// The rect of the inside label's glyph, the text, the unit and the chevrons inside `rect`.
     fn laid_out(&self, style: &NumberStyle, rect: Rect, rtl: bool) -> Placed {
         place(rect, &style.field, &self.leading, &self.trailing, rtl)
+    }
+
+    /// The alert for `typed`, a typed number the rule held to its range, in shown units; `kept` is the committed
+    /// value, in shown units too.
+    fn range_alert(&self, typed: f64, kept: Option<f64>) -> RangeAlert {
+        let rule = self.rule();
+        RangeAlert {
+            typed,
+            kept: kept.unwrap_or_else(|| rule.settle(typed)),
+            range: rule.bounds(),
+            whole: self.commit_decimals == Some(0) || self.decimals() == 0,
+            unit: self.unit.clone(),
+            unit_kind: self.unit_kind,
+            decimals: self.shown_decimals(),
+        }
     }
 }
 impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
@@ -488,8 +511,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     /// chevrons open the popups. Up and Down step by the step, with Shift by `LARGE_STEPS` steps and, on a field
     /// without a dropdown, with Alt by a tenth where the decimals show it (else by the step); on a field with presets
     /// or a popup slider Alt+Down opens the dropdown instead, so it has no fine key step, and the wheel keeps its Alt
-    /// fine step. A step starts from the applied value, or from 0 kept in the
-    /// range while the field is blank.
+    /// fine step. A step starts from the applied value (the text part applies a typed draft first), or from 0 kept in
+    /// the range while the field is blank. A wheel run is one edit gesture that the wheel gesture's end commits; a key
+    /// or an AccessKit set during the run commits it first and steps from the value it showed.
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         // A drag from the slider's chevron is one gesture with the slider it opened: its release closes the slider.
         if cx.part_if_declared(SLIDER).is_some_and(|part| matches!(part.press.phase, PressPhase::Release { click: false, .. })) {
@@ -508,6 +532,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
                 NavMove::Back => (-1, 1.0),
                 _ => continue,
             };
+            if cx.in_wheel_run() {
+                cx.commit();
+            }
             let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
             let next = match &self.stepper {
                 Some(stepper) => rule.settle(stepper.next(from, notches)),
@@ -518,15 +545,25 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         if let Some(wheel) = cx.take_wheel() {
             let from = self.shown_number(cx.value()).unwrap_or_else(|| rule.blank());
             let steps = ValueSteps::new(from, rule.low, rule.high, rule.step, rule.step * LARGE_STEPS).fine(rule.step / LARGE_STEPS);
-            if let StepResult::Set(next) = wheel_step(&steps, ValueAxes::Both, &wheel, cx.env.direction().is_rtl()) {
-                let next = match &self.stepper {
-                    Some(stepper) if next != from => stepper.next(from, if next > from { 1 } else { -1 }),
-                    _ => round_to(next, decimals_for_step(rule.step / LARGE_STEPS)),
-                };
-                cx.set(V::of_number(self.to_stored(rule.settle(next))));
-            }
+            // A notch that changes the value proposes it; the runtime's zero-scroll end share changes none and ends
+            // the run.
+            let next = match wheel_step(&steps, ValueAxes::Both, &wheel, cx.env.direction().is_rtl()) {
+                StepResult::Set(next) => {
+                    let next = match &self.stepper {
+                        Some(stepper) if next != from => stepper.next(from, if next > from { 1 } else { -1 }),
+                        _ => round_to(next, decimals_for_step(rule.step / LARGE_STEPS)),
+                    };
+                    let next = rule.settle(next);
+                    (next != from).then(|| V::of_number(self.to_stored(next)))
+                }
+                _ => None,
+            };
+            cx.wheel_run(wheel.phase, next);
         }
         if let Some(next) = cx.intents().take_set_value() {
+            if cx.in_wheel_run() {
+                cx.commit();
+            }
             cx.set(V::of_number(self.to_stored(rule.settle(next))));
         }
     }
@@ -563,7 +600,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         let chevrons = self.chevrons(&cx.words::<TextWords>());
         let placed = self.laid_out(cx.style, cx.content_rect, rtl);
         // A mixed value shows the dash alone: a unit beside it would claim a measure the selection does not have.
-        if self.unit.is_some()
+        if self.shown_unit(&cx.env.units()).is_some()
             && cx.value().is_some_and(|value| !non_finite(Some(value)))
             && let (Some(unit), Some(at)) = (self.trailing.first(), placed.trailing.first())
         {
@@ -577,13 +614,24 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
     }
 
+    /// The value as the field shows it: its ruled codec's text, in the shown unit, a name as its presets row's label.
+    fn word_value(&self, value: &V, cx: &Cx<'_, Self>) -> Option<String> {
+        let names = self.names(|row| cx.env.resolve(&row.label().clone()));
+        Some(self.ruled(&cx.env.units(), false, names).format(value))
+    }
+
+    /// The edit, the preset picked, and what the committed text's parse learned: its unit, whether the range held it
+    /// (only a typed commit carries a note, so steps, the wheel and a scrub never report out of range) and whether
+    /// the text was cut.
     fn finish(self, cx: Cx<'_, Self>) -> NumberOutput<V> {
+        let committed = cx.text(&text_part::<V>()).and_then(|outcome| outcome.committed);
+        let out_of_range = committed.and_then(|note| note.held).map(|typed| self.range_alert(typed, self.shown_number(cx.value())));
         NumberOutput {
             edit: cx.edit_response(),
             preset: self.picked,
-            typed_unit: cx.text(&text_part::<V>()).and_then(|outcome| outcome.committed).and_then(|note| note.unit).and_then(UnitKind::from_tag), // P3(panels-w4): pn.N1
-            out_of_range: None, // P3(panels-w4): pn.C22
-            cut: false,         // P3(panels-w4): cw.C59
+            typed_unit: committed.and_then(|note| note.unit).and_then(UnitKind::from_tag),
+            out_of_range,
+            cut: committed.is_some_and(|note| note.cut),
         }
     }
 }
