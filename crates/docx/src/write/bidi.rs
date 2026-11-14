@@ -124,6 +124,76 @@ pub(super) fn direction_spans<'a>(
     out
 }
 
+/// `spans` with `w:cs` written where Word would draw a run's text in other formatting than
+/// WordCraft does. Word draws a run's characters with the complex-script font, size, bold and
+/// italic only when the run is complex script or right to left by its own properties, its
+/// paragraph style, its table style or the run defaults; a character style saying so doesn't
+/// count. Anywhere else it draws them in the run's other font and `w:sz`, Thai included (measured
+/// in Word for Windows). WordCraft also draws Thai, Lao and Indic characters with the
+/// complex-script formatting, and counts a character style's `w:cs`. So a run that doesn't say
+/// whether it is complex script or right to left, whose two formattings differ, is split where
+/// the two disagree, and those pieces are written `w:cs` (or `w:cs w:val="0"`) as WordCraft draws
+/// them, as Word writes Thai typed on a Thai keyboard. `table` is the run formatting the table
+/// style gives the cell the paragraph is in.
+pub(super) fn complex_script_spans<'a>(
+    text: &str,
+    spans: Vec<(Range<usize>, Cow<'a, CharProps>)>,
+    styles: &StyleSheet,
+    para_style: Option<&str>,
+    table: Option<&CharProps>,
+) -> Vec<(Range<usize>, Cow<'a, CharProps>)> {
+    let mut out = Vec::with_capacity(spans.len());
+    for (range, props) in spans {
+        let Some(run) = text.get(range.clone()).filter(|_| props.cs.is_none() && props.rtl.is_none()) else {
+            out.push((range, props));
+            continue;
+        };
+        let rc = styles.resolve_char_in(para_style, table, &props);
+        let cs = rc.complex();
+        if rc.font == cs.font && rc.size == cs.size && rc.bold == cs.bold && rc.italic == cs.italic {
+            out.push((range, props));
+            continue;
+        }
+        let word = styles.resolve_char_in(para_style, table, &CharProps { style: None, ..props.as_ref().clone() });
+        let word_cs = word.cs || word.rtl;
+        // What a character needs written: `Some(complex)` where Word would draw it otherwise.
+        // A run that is right to left by its styles stays complex script with `w:cs w:val="0"`,
+        // so that isn't written.
+        let need = |c: char| {
+            let draws = rc.uses_complex(c);
+            (draws != word_cs && (draws || !word.rtl)).then_some(draws)
+        };
+        if run.chars().all(|c| need(c).is_none()) {
+            out.push((range, props));
+            continue;
+        }
+        let marked = |cs: bool| {
+            let mut p = props.clone().into_owned();
+            p.cs = Some(cs);
+            if let Some(ch) = p.fmt_change.as_mut() {
+                ch.old.cs.get_or_insert(cs);
+            }
+            Cow::Owned(p)
+        };
+        let piece = |n: Option<bool>| n.map_or_else(|| props.clone(), marked);
+        let mut start = range.start;
+        let mut cur: Option<Option<bool>> = None;
+        for (i, c) in run.char_indices() {
+            let at = range.start.saturating_add(i);
+            let n = need(c);
+            if let Some(was) = cur
+                && was != n
+            {
+                out.push((start..at, piece(was)));
+                start = at;
+            }
+            cur = Some(n);
+        }
+        out.push((start..range.end, piece(cur.flatten())));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

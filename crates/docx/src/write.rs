@@ -131,6 +131,9 @@ pub(crate) struct Writer<'d> {
     /// Text box stories already written: a story shown by many shapes is written once, the other
     /// shapes get an empty box, so the file doesn't grow as shapes × story size.
     written_boxes: std::collections::HashSet<u32>,
+    /// The run formatting the table style gives the cell being written
+    /// ([`craft_wordmodel::StyleSheet::table_cells_chr`]); `None` outside table cells.
+    table_chr: Option<craft_wordmodel::props::CharProps>,
     /// Charts, diagrams and OLE objects kept from a file: the parts they need.
     embeds: embed::EmbedWriter<'d>,
     /// Linked text boxes: part id → (`wps:txbx`/`wps:linkedTxbx` id, seq; 0 for the box holding

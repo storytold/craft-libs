@@ -143,6 +143,8 @@ impl Writer<'_> {
         let spans = crate::write::bidi::direction_spans(&p.text, rtl_para, p.run_ranges(), |c| {
             para_lang || crate::write::bidi::char_style_has_lang_bidi(styles, c)
         });
+        // Runs get `w:cs` where Word would draw them in other formatting than WordCraft does.
+        let spans = crate::write::bidi::complex_script_spans(&p.text, spans, styles, para_style, self.table_chr.as_ref());
         for (range, props) in &spans {
             let props: &CharProps = props;
             let range = range.clone();
