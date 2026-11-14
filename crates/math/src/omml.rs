@@ -58,9 +58,36 @@ fn parse_kept(xml: &str) -> Option<El> {
     Options { ns_decls: false, ..Options::default() }.with_limits(limits).parse(xml.as_bytes()).ok()
 }
 
-/// Is `xml` (kept OMML) well-formed enough to write back as it is?
+/// Whether `xml` (kept OMML) can be written back as it is: exactly one well-formed `m:oMath` (not
+/// `m:oMathPara`), with nothing around it. The writer copies it verbatim into the host document,
+/// and [`Math::omml`] also comes from documents saved as JSON, so anything else (an unclosed or
+/// mismatched tag, an unknown entity, markup or text after the element, an `m:oMathPara` that
+/// would be nested in a second one) is written from the nodes instead (wordcraft#6072).
+///
+/// The strict [`craft_xml`] read bounds the nesting and rejects bad tags, entities and trailing
+/// content, but it is lenient about the rest of XML: names that aren't XML names, undeclared
+/// prefixes, two attributes with one expanded name, a `<` in an attribute value, `]]>` in text,
+/// characters XML 1.0 doesn't allow. A conforming parser rejects all of those, so it runs last,
+/// with only the canonical prefixes of kept OMML declared (`m:`, `w:`, `mc:`, as the host
+/// document's root declares them): any other prefix is undeclared there. The element must be
+/// `m:oMath` by namespace, so an `m:` bound to another URI isn't one.
 fn is_well_formed(xml: &str) -> bool {
-    xml.starts_with("<m:oMath") && Options::default().strict().parse(xml.as_bytes()).is_ok()
+    // The name ends at `>` or XML whitespace (XML 1.0 §2.3 S), not at `/>` (an empty equation) or
+    // a longer name (`m:oMathPara`).
+    let named = xml.strip_prefix("<m:oMath").and_then(|r| r.chars().next()).is_some_and(|c| matches!(c, '>' | ' ' | '\t' | '\r' | '\n'));
+    // Both parses are capped as the reader caps what it keeps ([`parse`]): kept OMML can come from
+    // a hostile JSON document, and a larger one is written from its nodes.
+    let limits = craft_xml::Limits { max_nodes: MAX_ELEMENTS.saturating_mul(2), ..craft_xml::Limits::DEFAULT };
+    if !named || Options::default().strict().with_limits(limits).parse(xml.as_bytes()).is_err() {
+        return false;
+    }
+    let wrapped = format!("<x xmlns:m=\"{MATH_NS}\" xmlns:w=\"{W_NS}\" xmlns:mc=\"{MC_NS}\">{xml}</x>");
+    // The wrapper and the document root are two more nodes.
+    let nodes_limit = u32::try_from(limits.max_nodes.saturating_add(2)).unwrap_or(u32::MAX);
+    let options = roxmltree::ParsingOptions { nodes_limit, ..roxmltree::ParsingOptions::default() };
+    let Ok(doc) = roxmltree::Document::parse_with_options(&wrapped, options) else { return false };
+    let mut nodes = doc.root_element().children();
+    matches!((nodes.next(), nodes.next()), (Some(e), None) if e.tag_name().namespace() == Some(MATH_NS) && e.tag_name().name() == "oMath")
 }
 
 /// An equation from OMML text ([`parse`]): an `m:oMathPara`'s first `m:oMath` with the

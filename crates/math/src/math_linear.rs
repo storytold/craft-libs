@@ -9,7 +9,9 @@
 //! an operator or space; a parenthesised operand loses its parentheses). `^`/`_` with nothing
 //! before them are pre-scripts. A top-level `#` numbers the equation (`E=mc^2#(1)`).
 
-use crate::math::{Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, ScriptKind, any_too_deep, is_nary_char, math_class, merge_runs, too_deep};
+use crate::math::{
+    Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, ScriptKind, WRAP_DEPTH, any_too_deep, is_nary_char, math_class, merge_runs, too_deep,
+};
 
 /// Function names set upright and applied to the following operand.
 pub const FUNCTION_NAMES: &[&str] = &[
@@ -91,7 +93,7 @@ pub fn is_combining(c: char) -> bool {
 }
 
 /// Characters that end an operand.
-fn is_boundary(c: char) -> bool {
+pub(crate) fn is_boundary(c: char) -> bool {
     matches!(c, ' ' | '&' | '@' | '#' | '▒' | '│' | '/' | '⁄' | '∕' | '¦' | '\u{2061}')
         || is_closer(c)
         || matches!(math_class(c), MClass::Bin | MClass::Rel | MClass::Punct)
@@ -115,6 +117,23 @@ impl P {
     }
     fn peek_at(&self, k: usize) -> Option<char> {
         self.c.get(self.i + k).copied()
+    }
+    /// Length of the number at the cursor (0 if none), as Word reads one: digits, where a `.` or `,`
+    /// continues it only when a digit follows (`2.5`, `3.14`, `1,000`), and a leading `.` before a
+    /// digit starts one (`.5`). A trailing point (`2.`) isn't part of it.
+    fn number_len(&self) -> usize {
+        let digit = |k: usize| self.peek_at(k).is_some_and(|c| c.is_ascii_digit());
+        if !digit(0) && !(self.peek() == Some('.') && digit(1)) {
+            return 0;
+        }
+        let mut k = 0;
+        loop {
+            match self.peek_at(k) {
+                Some(c) if c.is_ascii_digit() => k += 1,
+                Some('.' | ',') if digit(k + 1) => k += 1,
+                _ => return k,
+            }
+        }
     }
     fn tired(&mut self) -> bool {
         self.steps += 1;
@@ -171,14 +190,15 @@ impl P {
                     if pre {
                         out.push(self.prescript(stops));
                     } else {
+                        let group = self.after_group();
                         self.i += 1;
-                        let s = self.script_operand(stops);
+                        let s = self.script_chain(c, stops, 0);
                         if out.last().is_some_and(too_deep) {
                             out.push(text(c));
                             out.extend(s);
                         } else {
                             let base = out.pop();
-                            out.push(attach_script(base, c == '^', s));
+                            out.push(attach_script(base, c == '^', s, group));
                         }
                     }
                 }
@@ -242,8 +262,21 @@ impl P {
         if c.is_ascii_alphabetic() {
             return self.word(stops);
         }
+        // A number is one item, so a script or a fraction takes all of it (`10^3`, `2.5/3`), as Word
+        // reads it (#6229).
+        let n = self.number_len();
+        if n > 0 {
+            let t: String = self.c.get(self.i..self.i + n).unwrap_or(&[]).iter().collect();
+            self.i += n;
+            return vec![MNode::Run(MRun::new(t))];
+        }
         self.i += 1;
         vec![text(c)]
+    }
+
+    /// The character just before the cursor closed a `〖…〗` group.
+    fn after_group(&self) -> bool {
+        self.i.checked_sub(1).and_then(|k| self.c.get(k)) == Some(&'〗')
     }
 
     /// A bracket group after its opening character; `closers` end it.
@@ -449,12 +482,15 @@ impl P {
             }
             Some(c @ ('^' | '_')) => {
                 self.i += 1;
-                let s = self.script_operand(stops);
-                let mut n = attach_script(Some(MNode::Run(MRun::plain(word.clone()))), c == '^', s);
-                if let Some(c2 @ ('^' | '_')) = self.peek() {
+                // `sin^2^3` nests to the right like any other script (#6074).
+                let s = self.script_chain(c, stops, 0);
+                let mut n = attach_script(Some(MNode::Run(MRun::plain(word.clone()))), c == '^', s, false);
+                // Only the other script joins it, and it nests the same way (`log_2^3`, `sin^2_a_b`);
+                // the same one again is what the chain left at its depth cap.
+                if let Some(c2 @ ('^' | '_')) = self.peek().filter(|&c2| c2 != c) {
                     self.i += 1;
-                    let s2 = self.script_operand(stops);
-                    n = attach_script(Some(n), c2 == '^', s2);
+                    let s2 = self.script_chain(c2, stops, 0);
+                    n = attach_script(Some(n), c2 == '^', s2, false);
                 }
                 vec![n]
             }
@@ -465,7 +501,10 @@ impl P {
             self.i += 1;
         }
         let next = self.peek();
-        let applies = next.is_some_and(|c| !stops.contains(&c) && !is_closer(c) && (!is_boundary(c) || c == '(' || matches!(c, '−' | '-' | '+')));
+        // A `^`/`_` here is what the script chain left at its depth cap: text for `expr`, not an operand.
+        let applies = next.is_some_and(|c| {
+            !stops.contains(&c) && !is_closer(c) && !matches!(c, '^' | '_') && (!is_boundary(c) || c == '(' || matches!(c, '−' | '-' | '+'))
+        });
         if !applies {
             return name;
         }
@@ -575,6 +614,7 @@ impl P {
             }
             // The base is already deep: the operator is text (see `too_deep`).
             let deep = if whole { any_too_deep(out) } else { out.last().is_some_and(too_deep) };
+            let group = self.after_group();
             self.i += 1;
             if deep {
                 let s = if matches!(c, '^' | '_' | '┬' | '┴') { self.script_operand(stops) } else { Vec::new() };
@@ -584,9 +624,9 @@ impl P {
             }
             match c {
                 '^' | '_' => {
-                    let s = self.script_operand(stops);
+                    let s = self.script_chain(c, stops, 0);
                     let b = base(out);
-                    out.push(attach_script(b, c == '^', s));
+                    out.push(attach_script(b, c == '^', s, group));
                 }
                 '┬' | '┴' => {
                     let lim = self.script_operand(stops);
@@ -599,6 +639,32 @@ impl P {
                 }
             }
         }
+    }
+
+    /// A script operand, with the same script operator after it nested inside: `a^b^c` is
+    /// `a^(b^c)`, as Word builds it (#6074). The chain stops at `WRAP_DEPTH` like every other
+    /// wrap, so `x^1^1^1…` stays shallow (#1456) and the rest is left to the caller as text. The
+    /// cap holds for the whole tree too: when the operands are deep themselves, a level that would
+    /// make it too deep keeps its operator as text, as `expr` does.
+    fn script_chain(&mut self, op: char, stops: &[char], level: usize) -> Arg {
+        let s = self.script_operand(stops);
+        if self.peek() != Some(op) || s.is_empty() || level + 1 >= WRAP_DEPTH || self.tired() || any_too_deep(&s) {
+            return s;
+        }
+        self.i += 1;
+        self.depth += 1;
+        let inner = self.script_chain(op, stops, level + 1);
+        self.depth -= 1;
+        let (kind, sub, sup) = if op == '^' { (ScriptKind::Sup, Vec::new(), inner) } else { (ScriptKind::Sub, inner, Vec::new()) };
+        let node = MNode::Script { kind, base: s, sub, sup };
+        if !too_deep(&node) {
+            return vec![node];
+        }
+        let MNode::Script { base: mut out, sub, sup, .. } = node else { return Vec::new() };
+        out.push(text(op));
+        out.extend(sub);
+        out.extend(sup);
+        out
     }
 
     /// A script or limit: a parenthesised group, a structure, a number, a signed operand, a run of
@@ -624,10 +690,18 @@ impl P {
                 }
             }
             Some(c) if is_prefix(c) || closer(c).is_some() => self.atom(stops),
-            Some(c) if c.is_ascii_digit() => {
+            Some(c) if c.is_ascii_digit() || self.number_len() > 0 => {
+                // A number by `number_len`'s rule (`2.5`, `1,000`, `.5`; `x^2.` keeps the point out),
+                // and letters after it stay in the script (`V_10a`, #1609).
                 let start = self.i;
-                while self.peek().is_some_and(|k| k.is_alphanumeric() || k == '.') {
-                    self.i += 1;
+                while let Some(k) = self.peek() {
+                    if k.is_alphanumeric() {
+                        self.i += 1;
+                    } else if matches!(k, '.' | ',') && self.peek_at(1).is_some_and(|n| n.is_ascii_digit()) {
+                        self.i += 2;
+                    } else {
+                        break;
+                    }
                 }
                 let t: String = self.c.get(start..self.i).unwrap_or(&[]).iter().collect();
                 vec![MNode::Run(MRun::new(t))]
@@ -683,10 +757,21 @@ pub fn strip_parens(mut a: Arg) -> Arg {
     a
 }
 
-fn attach_script(base: Option<MNode>, sup: bool, s: Arg) -> MNode {
+/// `group`: the base was just closed by `〗`, so a characterless delimiter around it is that grouping
+/// (and dropped), not an explicit `├…┤` one (kept).
+fn attach_script(base: Option<MNode>, sup: bool, s: Arg, group: bool) -> MNode {
     match base {
         Some(MNode::Script { kind: ScriptKind::Sub, base, sub, .. }) if sup => MNode::Script { kind: ScriptKind::SubSup, base, sub, sup: s },
         Some(MNode::Script { kind: ScriptKind::Sup, base, sup: sp, .. }) if !sup => MNode::Script { kind: ScriptKind::SubSup, base, sub: s, sup: sp },
+        // `〖…〗` only groups: as a script base it leaves no delimiter, as Word builds it (#6075).
+        Some(MNode::Delim { beg: None, end: None, mut elems, .. }) if group && elems.len() == 1 => {
+            let base = elems.pop().unwrap_or_default();
+            if sup {
+                MNode::Script { kind: ScriptKind::Sup, base, sub: Vec::new(), sup: s }
+            } else {
+                MNode::Script { kind: ScriptKind::Sub, base, sub: s, sup: Vec::new() }
+            }
+        }
         b => {
             let base = b.map(|b| vec![b]).unwrap_or_default();
             if sup {
@@ -760,3 +845,6 @@ pub fn map_args(n: MNode, f: &dyn Fn(Arg) -> Arg) -> MNode {
         MNode::Phant { show, zero_wid, zero_asc, zero_desc, e } => MNode::Phant { show, zero_wid, zero_asc, zero_desc, e: f(e) },
     }
 }
+
+#[cfg(test)]
+mod tests;
