@@ -75,8 +75,8 @@ pub use document::{Document, DrawingPart, KeptPart, PivotCachePart, PivotTablePa
 pub use drawing::{Anchor, Drawing, Item, Marker, ObjectKind, Placement};
 pub use features::{
     Break, CfRule, Cfvo, ColorScale, Comment, Comments, ConditionalFormatting, DataBar, DataValidation, DataValidations, Features, HeaderFooter,
-    Hyperlink, IconSet, NoteShape, PageMargins, PageSetup, Pane, Print, PrintOptions, Selection, SheetView, Table, TableColumn, TableStyleInfo,
-    notes_vml, parse_sqref, range_ref,
+    Hyperlink, IconSet, NoteShape, PageMargins, PageSetup, Pane, Print, PrintOptions, Selection, SheetFormat, SheetView, Table, TableColumn,
+    TableStyleInfo, notes_vml, parse_sqref, range_ref,
 };
 pub use package::{Package, is_xlsb};
 pub use pivot::{

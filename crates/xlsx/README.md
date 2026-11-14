@@ -36,8 +36,9 @@ were. Part names and relationship ids are kept, so a file read and written witho
 where it did, and writing it twice gives the same bytes. The calculation chain is dropped (Excel
 rebuilds it). `XlsxKind` is the workbook part's content type (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`).
 Typed worksheet features (`SheetPart::features`), each mirroring its element with optional
-attributes and the unnamed ones kept: sheet views (panes, selections), print setup (options,
-margins, page setup, header and footer, page breaks), data validation (also read from the `x14`
+attributes and the unnamed ones kept: sheet views (panes, selections), the default sizes
+(`sheetFormatPr`), print setup (options, margins, page setup, header and footer, page breaks),
+data validation (also read from the `x14`
 extension), conditional formats (colour scales, data bars, icon sets, rule extensions kept),
 hyperlinks (with their URLs), the legacy drawing. Comments (`Comments`, from the comments part)
 and the note shapes of the VML drawing (`NoteShape`). A sheet that gains comments and has no VML
@@ -83,8 +84,11 @@ for new pictures (`vm = i + 1`) and the `XLDAPR` dynamic-array metadata (`cm = 1
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 
-A binary workbook gives the same `Workbook`, strings, rows and merged cells. Its styles are not
-read (each cell keeps its format index). Its cell formulas are decoded from their tokens into the
+A binary workbook gives the same `Workbook`, strings, rows (with their heights, outline levels,
+hidden flags and styles), columns, default sizes and merged cells. Its styles are not read (each
+cell keeps its format index). The descent Excel records for rows and the sheet
+(`x14ac:dyDescent`) is in alternate-content blocks, which are skipped. Its cell formulas are
+decoded from their tokens into the
 text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, no implicit `@`), with
 `FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
 metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
@@ -102,8 +106,9 @@ other workbooks, Python code stored outside the cell, data tables. The XLSB func
   (40 million records, 4 million cells and as many shared strings, 256 MiB of text, as
   `craft-xls` allows). `binary_formula_text`: decoded formula text over the workbook (128 MiB);
   past it, formulas keep their saved results. A formula's tokens are bounded at 16 KB, its
-  nesting at 256 levels and an array constant at 65,536 values. Fixed caps: 1024 sheets, 100,000 merged ranges per sheet, 64 nested
-  extension blocks.
+  nesting at 256 levels and an array constant at 65,536 values. Fixed caps: 1024 sheets, 100,000
+  merged ranges and 16,384 column records per sheet, 64 nested extension blocks. A row taller
+  than 8,192 twips keeps the default height.
 - Cells and rows outside the 1,048,576 × 16,384 grid are dropped and counted.
 
 SpreadsheetML is read leniently: a damaged optional part is a warning, a damaged worksheet keeps

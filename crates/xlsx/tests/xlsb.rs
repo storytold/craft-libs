@@ -5,7 +5,7 @@ mod common;
 
 use common::{read, read_with};
 use craft_xlsx::testing::zip;
-use craft_xlsx::{CellError, CellRef, Error, FormulaKind, Limits, Range, SheetKind, Value, Visibility, is_xlsb};
+use craft_xlsx::{CellError, CellRef, Error, FormulaKind, Limits, Package, Range, Row, SheetKind, SheetPart, Value, Visibility, is_xlsb};
 
 const ROOT: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="book" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="records/book.bin"/></Relationships>"#;
 const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="two" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/two.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/></Relationships>"#;
@@ -929,4 +929,131 @@ fn a_dynamic_array_kept_as_its_value_has_no_cell_metadata() {
     }
     assert_eq!(sheet.cell_metadata.iter().collect::<Vec<_>>(), [(&at("C1"), &1)]);
     assert!(warned(&wb, "missing from the file"), "{:?}", wb.warnings);
+}
+
+/// `BrtRowHdr` with its style, height and three flag bytes, and no column spans.
+fn row_hdr(r: u32, ixfe: u32, twips: u16, flags: [u8; 3]) -> Vec<u8> {
+    record(0, &[&r.to_le_bytes()[..], &ixfe.to_le_bytes(), &twips.to_le_bytes(), &flags, &0u32.to_le_bytes()].concat())
+}
+/// `BrtColInfo`.
+fn col_info(first: u32, last: u32, coldx: u32, ixfe: u32, flags: u16) -> Vec<u8> {
+    record(60, &[&first.to_le_bytes()[..], &last.to_le_bytes(), &coldx.to_le_bytes(), &ixfe.to_le_bytes(), &flags.to_le_bytes()].concat())
+}
+/// `BrtWsFmtInfo`.
+fn ws_fmt_info(dx: u32, base: u16, twips: u16, flags: u16, levels: [u8; 2]) -> Vec<u8> {
+    record(485, &[&dx.to_le_bytes()[..], &base.to_le_bytes(), &twips.to_le_bytes(), &flags.to_le_bytes(), &levels].concat())
+}
+/// A worksheet with `head` before its data (the sheet format and columns) and `rows` in it.
+fn sized_sheet(head: &[u8], rows: &[u8]) -> Vec<u8> {
+    [&record(129, &[])[..], head, &record(145, &[]), rows, &record(146, &[]), &record(130, &[])].concat()
+}
+fn sizes_of(bytes: &[u8]) -> Result<(Vec<Row>, SheetPart, Vec<String>), Error> {
+    let mut p = Package::open(bytes, &Limits::default())?;
+    let wb = p.workbook()?;
+    let mut rows = vec![];
+    let part = p.sheet(&wb.sheets[0], |r| {
+        rows.push(r);
+        Ok(())
+    })?;
+    Ok((rows, part, p.warnings().to_vec()))
+}
+fn xml_sheet(xml: &str) -> (Vec<Row>, SheetPart) {
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/sheet.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>"#;
+    let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="s" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="sheet.xml"/></Relationships>"#;
+    let book = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sizes" sheetId="1" r:id="s"/></sheets></workbook>"#;
+    let bytes = zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", root.as_bytes()),
+        ("xl/workbook.xml", book.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/sheet.xml", xml.as_bytes()),
+    ]);
+    let (rows, part, _) = sizes_of(&bytes).unwrap();
+    (rows, part)
+}
+
+/// The binary sheet below as Excel spells it in `.xlsx`. Excel writes `ht` for a row whose
+/// height differs from the default even when it was not set by hand.
+const SIZES_XML: &str = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetFormatPr baseColWidth="10" defaultColWidth="12.59765625" defaultRowHeight="14.25" zeroHeight="1" thickBottom="1" outlineLevelRow="2" outlineLevelCol="1"/><cols><col min="3" max="3" width="20.59765625" customWidth="1"/><col min="4" max="6" width="0" hidden="1" customWidth="1" outlineLevel="1"/><col min="8" max="8" width="9.06640625" style="7"/><col min="9" max="9" width="23.73046875" bestFit="1" customWidth="1"/><col min="10" max="10" width="9.06640625" collapsed="1"/><col min="16384" max="16384" width="30.59765625" customWidth="1"/></cols><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2" ht="30" customHeight="1"/><row r="3" ht="26.65"/><row r="4" hidden="1"/><row r="5" ht="15" thickTop="1" thickBot="1"/><row r="6" outlineLevel="2"/><row r="7" hidden="1" outlineLevel="1"/><row r="8" collapsed="1"/><row r="9" s="3" customFormat="1"/><row r="10"/><row r="11" ph="1"/><row r="12"/></sheetData></worksheet>"#;
+
+fn sizes_bin() -> Vec<u8> {
+    let head = [
+        ws_fmt_info(3225, 10, 285, 0x0A, [2, 1]),
+        record(390, &[]),
+        col_info(2, 2, 5273, 0, 0x0002),
+        col_info(3, 5, 0, 0, 0x0103),
+        col_info(7, 7, 2321, 7, 0),
+        col_info(8, 8, 6075, 0, 0x0006),
+        col_info(9, 9, 2321, 0, 0x1000),
+        col_info(16_383, 16_383, 7833, 0, 0x0002),
+        record(391, &[]),
+    ]
+    .concat();
+    let rows = [
+        row_hdr(0, 0, 285, [0, 0, 0]),
+        cell(2, 0, &((1u32 << 2) | 2).to_le_bytes()),
+        row_hdr(1, 0, 600, [0, 0x20, 0]),
+        row_hdr(2, 0, 533, [0, 0, 0]),
+        row_hdr(3, 0, 285, [0, 0x10, 0]),
+        row_hdr(4, 0, 300, [3, 0, 0]),
+        row_hdr(5, 0, 285, [0, 2, 0]),
+        row_hdr(6, 0, 285, [0, 0x11, 0]),
+        row_hdr(7, 0, 285, [0, 0x08, 0]),
+        row_hdr(8, 3, 285, [0, 0x40, 0]),
+        // A style without fGhostDirty is not applied.
+        row_hdr(9, 5, 285, [0, 0, 0]),
+        row_hdr(10, 0, 285, [0, 0, 1]),
+        // Past 8192 twips the height is ignored, set by hand or not.
+        row_hdr(11, 0, 9000, [0, 0x20, 0]),
+    ]
+    .concat();
+    sized_sheet(&head, &rows)
+}
+
+#[test]
+fn row_heights_and_column_widths_are_read_as_their_xlsx_spelling() {
+    let (rows, part, _) = sizes_of(&file(&sizes_bin())).unwrap();
+    let (xml_rows, xml_part) = xml_sheet(SIZES_XML);
+    assert_eq!(rows, xml_rows);
+    assert_eq!(part.columns, xml_part.columns);
+    assert_eq!(part.features.format, xml_part.features.format);
+    // A few of the conversions, spelled out.
+    assert_eq!((rows[1].height, rows[1].custom_height), (Some(30.0), true));
+    assert_eq!((rows[2].height, rows[2].custom_height), (Some(26.65), false));
+    assert_eq!(rows[8].style, Some(3));
+    assert_eq!(part.columns[0].width, Some(5273.0 / 256.0));
+    let format = part.features.format.clone().unwrap();
+    assert_eq!((format.default_col_width, format.default_row_height), (Some(12.59765625), Some(14.25)));
+    // Written as SpreadsheetML, the binary sheet has its default sizes and columns.
+    let written = String::from_utf8(part.to_xml(&rows)).unwrap();
+    assert!(written.contains(r#"<sheetFormatPr baseColWidth="10" defaultColWidth="12.59765625" defaultRowHeight="14.25""#), "{written}");
+    assert!(written.contains(r#"<cols><col min="3" max="3" width="20.59765625" customWidth="1"/>"#), "{written}");
+    assert!(written.contains(r#"<row r="2" ht="30" customHeight="1"/>"#), "{written}");
+}
+
+#[test]
+fn damaged_sizes_are_skipped_or_refused() {
+    // A column range outside the grid, or backwards, is skipped with a warning.
+    let head = [record(390, &[]), col_info(0, 16_384, 2321, 0, 0), col_info(5, 4, 2321, 0, 0), col_info(1, 1, 512, 0, 2), record(391, &[])].concat();
+    let (_, part, warnings) = sizes_of(&file(&sized_sheet(&head, &row(0)))).unwrap();
+    assert_eq!(part.columns.len(), 1);
+    assert_eq!((part.columns[0].first, part.columns[0].width), (1, Some(2.0)));
+    assert!(warnings.iter().any(|w| w.contains("column ranges")), "{warnings:?}");
+    // Without a sheet format, only a height set by hand is a row's `ht`.
+    let (rows, _, _) = sizes_of(&file(&sized_sheet(&[], &[row_hdr(0, 0, 300, [0, 0, 0]), row_hdr(1, 0, 400, [0, 0x20, 0])].concat()))).unwrap();
+    assert_eq!((rows[0].height, rows[1].height), (None, Some(20.0)));
+    // More column records than columns are refused.
+    let many = [&record(390, &[])[..], &col_info(0, 0, 2321, 0, 0).repeat(16_385), &record(391, &[])].concat();
+    assert!(matches!(sizes_of(&file(&sized_sheet(&many, &[]))), Err(Error::TooLarge(_))));
+    // A sheet format or column after the data, or a record of the wrong size, fails the read.
+    for (why, sheet) in [
+        ("format after data", worksheet(&[], &ws_fmt_info(u32::MAX, 8, 285, 0, [0, 0]))),
+        ("column after data", worksheet(&[], &col_info(0, 0, 2321, 0, 0))),
+        ("short column", sized_sheet(&record(60, &[0; 16]), &[])),
+        ("short format", sized_sheet(&record(485, &[0; 11]), &[])),
+        ("long row header", sized_sheet(&[], &record(0, &[0; 18]))),
+    ] {
+        assert!(matches!(sizes_of(&file(&sheet)), Err(Error::Invalid(_))), "{why}");
+    }
 }
