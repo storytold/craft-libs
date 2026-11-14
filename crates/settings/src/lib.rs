@@ -38,6 +38,7 @@
 pub mod document;
 pub mod error;
 pub mod migrate;
+pub mod overlay;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod paths;
@@ -48,6 +49,7 @@ pub mod store;
 
 pub use error::{LoadReport, MigrateError, ReadOnlyReason, SaveStatus, SectionError, SettingsError, Source, TickResult};
 pub use migrate::LegacyFile;
+pub use overlay::{OVERLAY_ENV, OVERLAY_FILE, load_overlay, merge, overlay_path};
 #[cfg(not(target_arch = "wasm32"))]
 pub use paths::{Location, Portable, Probe, Resolved, Rule};
 #[cfg(not(target_arch = "wasm32"))]

@@ -12,7 +12,9 @@ workspace = true
 
 [dependencies]
 craft-atomic = { workspace = true }
+log = "0.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = { workspace = true }
 toml_edit = { version = "0.25", features = ["serde"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
