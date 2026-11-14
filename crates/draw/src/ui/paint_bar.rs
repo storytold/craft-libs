@@ -6,7 +6,7 @@ use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
 use craft_theme::Srgba;
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{Checkbox, Swatch};
-use craft_ui::contract::{Bind, BodyCx, Entry, Gap, LabelKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, Trigger};
+use craft_ui::contract::{Bind, BodyCx, Entry, Gap, LabelKind, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, Trigger, clicked};
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
@@ -70,7 +70,8 @@ pub struct PaintValues<M> {
 }
 
 impl<M> PaintValues<M> {
-    /// The values of a fresh tool, with `mode` as the blend mode.
+    /// Starting values for a host with no stored tool options, with `mode` as the blend mode; a host with stored
+    /// options overwrites every field.
     pub fn new(mode: M) -> Self {
         PaintValues {
             size: 30.0,
@@ -348,7 +349,8 @@ impl<M: Value> Pass<'_, M> {
     fn size(&mut self, ui: &mut Ui, caption: &Label, max: f64, enabled: bool) {
         let current = self.values.size;
         let mut events = EditEvents::new();
-        ui.add_enabled_ui(enabled, |ui| {
+        // The size field draws its own caption, so the wrapper only carries the enabled state.
+        Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("size").sizing(Sizing::Content).enabled(enabled).show(ui, |ui, _| {
             events = BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone();
         });
         self.emit(events, |v, size| v.size = size);
@@ -422,8 +424,16 @@ impl<M: Value> Pass<'_, M> {
 
     /// The gear and its popover of the four smoothing options, enabled while the amount shows above 0 %.
     fn smoothing_options(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, words: &PaintBarWords) {
-        let gear = IconButton::new(IconId::new("settings")).label(words.smoothing_options.clone()).show(ui).response;
         let mut open = cx.memory::<SmoothingOpen>().0;
+        let gear = IconButton::new(IconId::new("settings"))
+            .label(words.smoothing_options.clone())
+            .popup(PopupKind::Dialog)
+            .expanded(open)
+            .show(ui)
+            .response;
+        if clicked(&gear) {
+            open = !open;
+        }
         let active = (self.values.smoothing.amount * 100.0).round() > 0.0;
         let _ = Popover::new(words.smoothing_options.clone(), Bind::bound(&mut open)).opened_by(&gear).show(ui, |ui, _| {
             let current = self.values.smoothing;
@@ -439,6 +449,7 @@ impl<M: Value> Pass<'_, M> {
     fn mixer_load(&mut self, ui: &mut Ui, words: &PaintBarWords) {
         let color = self.values.mixer.load_color;
         let solid = self.values.mixer.solid_colors_only;
+        // `Swatch` has no empty face, so a brush with no load shows the mixed face.
         let swatch = Swatch::new(words.load_swatch.clone(), color.map_or(Mixed::Mixed, Mixed::Same)).show(ui).response;
         let (mut load, mut clean, mut next_solid) = (false, false, None);
         let _ = Menu::new(words.load_swatch.clone()).opened_by(&swatch, Trigger::Click).show(ui, |ui, _| {

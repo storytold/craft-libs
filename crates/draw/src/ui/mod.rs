@@ -77,10 +77,9 @@ pub use crop::{
     CropPresetList, CropPresetListOutput, CropSizeTarget, PerspectiveCropBar, PerspectiveCropBarOutput, PerspectiveCropPass, PerspectiveInput,
 };
 pub use crop::{PerspectiveCropQuad, PerspectiveQuad};
-// PLAN: dl.K55 lists GradientRamp among the items that move to craft-color, but writer note 6 keeps it in this line.
 pub use gradient::{GradientFill, GradientFillEditor, GradientFillEditorOutput, GradientFillWords, GradientStyle};
 pub use gradient::{
-    GradientGroup, GradientItem, GradientLine, GradientMap, GradientMapEditor, GradientMapOutput, GradientOverlay, GradientPalette, GradientRamp,
+    GradientGroup, GradientItem, GradientLine, GradientMap, GradientMapEditor, GradientMapOutput, GradientOverlay, GradientPalette,
     GradientRef, GradientSwatch, LineGradient, LinePart,
 };
 pub use measure::{MIN_LINE, RulerBar, RulerBarOutput, RulerLine, RulerOverlay, RulerPass, RulerTool, RulerWords, box_distances, ruler_line_form};
