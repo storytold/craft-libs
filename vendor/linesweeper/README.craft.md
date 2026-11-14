@@ -1,21 +1,25 @@
 # Local linesweeper 0.5.0 copy
 
 This is the crates.io linesweeper 0.5.0 package (MIT OR Apache-2.0) with some files left out and the
-local patch listed below. `.cargo_vcs_info.json` names the commit it was packaged from,
-`824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not in the GitHub repository the manifest
-names, which is archived; its README says development moved off GitHub.
+local patches listed below, to `src/sweep/sweep_line.rs` and `docs/sweep.typ`. `.cargo_vcs_info.json`
+names the commit it was packaged from, `824b0791a750f7b27b8edcbb6c6244d0e629875e`. That commit is not
+in the GitHub repository the manifest names, which is archived; its README says development moved off
+GitHub.
 
-Every file here except this one, `SOURCE.json` and the patched file below is byte for byte the file
-in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
+Every file here except this one, `SOURCE.json` and the two patched files below is byte for byte the
+file in the `.crate` archive. `SOURCE.json` records the hash of the `.crate` download
 (`source_archive_sha256`) and, for every file kept, the hash in the package (`source_sha256`) and the
 hash here (`sha256`). `upstream_repository` is null because no public repository this copy can name
-holds `upstream_revision`. `local_patches` describes the local patch.
+holds `upstream_revision`. `local_patches` describes each local patch.
 
 ## Local patches
 
 | File | Change |
 |---|---|
 | `src/sweep/sweep_line.rs` | The doc comment of `SweepLine::line_segment` says it can return a segment that has exited, which `segment_range` leaves out. Code comments label the change `Craft patch (exited slots)`. |
+| `docs/sweep.typ` | The intersection scan to the left compares each segment with `alpha^(i+1)` instead of `alpha^i`. With `alpha^i`, its first pass compared `alpha^i` with itself, and the lemma after it is stated for `alpha^(i+1)`. |
+| `docs/sweep.typ` | Two typos are corrected. "condi0.2tions" reads "conditions", and `q(i+i)` reads `q(i+1)`, the first index for which `q` is false. |
+| `docs/sweep.typ` | The lemma for the intersection scan to the left asks for the ordering invariant on `(alpha^1, ..., alpha^(i+1))` and the crossing invariant on `(alpha^1, ..., alpha^i)`, which is how the bidirectional lemma uses it. The argument for the order invariant cites the crossing invariant instead of a "third invariant"; the document defines two. |
 
 `omitted_files` lists the 43 files of the package left out here, with their hashes:
 
