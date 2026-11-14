@@ -2,7 +2,7 @@
 #![warn(missing_docs)]
 // The docs link items of every feature; built with fewer features, those links have no target.
 // CI and docs.rs build the docs with all features, where every link must resolve.
-#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks")), allow(rustdoc::broken_intra_doc_links))]
+#![cfg_attr(not(all(feature = "decode", feature = "encode", feature = "peaks", feature = "smacker-decode")), allow(rustdoc::broken_intra_doc_links))]
 //! Audio file I/O and codecs for the Craft apps. Input and output are byte slices or a
 //! [`craft_media::ByteSource`] (no filesystem access of its own); builds for
 //! `wasm32-unknown-unknown`.
@@ -28,7 +28,8 @@
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-encode`: the packet encoder), [`qoa`]
-//!   (`qoa-decode`, `qoa-encode`: whole QOA files).
+//!   (`qoa-decode`, `qoa-encode`: whole QOA files), [`smacker`] (`smacker-decode`: the audio
+//!   chunks of a Smacker file).
 //!
 //! The shared types below build with no features.
 
@@ -54,6 +55,8 @@ pub mod peaks;
 pub mod qoa;
 #[cfg(feature = "decode-native")]
 mod read;
+#[cfg(feature = "smacker-decode")]
+pub mod smacker;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
