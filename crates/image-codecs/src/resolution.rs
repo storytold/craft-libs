@@ -46,7 +46,7 @@ pub fn export_xmp(xmp: &str, ppi: Option<(f32, f32)>) -> Cow<'_, str> {
     craft_metadata::edit::export_xmp(xmp, ppi)
 }
 
-/// Resolution recorded by Photoshop ResolutionInfo, XMP or EXIF, in precedence order.
+/// Resolution recorded by XMP or EXIF when a format-specific resolution field is absent.
 pub fn resolution(exif: Option<&[u8]>, xmp: Option<&str>) -> Option<(f32, f32)> {
     craft_metadata::edit::resolution(exif, xmp)
 }
