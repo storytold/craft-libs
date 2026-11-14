@@ -51,8 +51,8 @@ color_fonts = ["epaint/color_fonts"]
 system_fonts = ["dep:fontique", "dep:unicode-script"]
 # `docking::testing`: a headless driver for application docking tests.
 testing = []
-# craft_ui::testing: per-language screenshot tests and IME smoke tests with egui_kittest
-# (desktop only).
+# craft_ui::testing: per-language screenshot tests, IME smoke tests, input steps and review
+# screenshots with egui_kittest (desktop only).
 screen-testing = ["dep:egui_kittest"]
 
 [dev-dependencies]
