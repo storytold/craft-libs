@@ -15,7 +15,7 @@ use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id}
 
 use crate::layout_components::{Grid, Stack};
 
-use crate::patterns::presets::{GroupPath, NamedPresetEvent, PresetId, PresetLibrary, PresetWords as LibraryWords};
+use crate::patterns::presets::{GroupPath, NamedPresetEvent, PresetLibrary, PresetWords as LibraryWords};
 
 use crate::runtime::env::{Env, Label, UnitKind, Units};
 use crate::runtime::memory::{MemoryStage, unique};
@@ -310,7 +310,8 @@ pub struct NewDocumentOutput {
     /// [`NewDocumentDialog::answers`].
     pub requests: HostRequests,
     /// The saved-preset edits the user made this pass (add, rename, delete), for the app to store.
-    pub presets: Vec<NamedPresetEvent<PresetId>>,
+    // P3(dialogs-w14): dl.K39, keyed by the preset's name before the event
+    pub presets: Vec<NamedPresetEvent<String>>,
 }
 
 impl Outcome for NewDocumentOutput {
@@ -638,7 +639,8 @@ impl HostedNewDocument {
     }
 
     /// The saved-preset edits since the last call, for the app to store.
-    pub fn take_preset_events(&mut self) -> Vec<NamedPresetEvent<PresetId>> {
+    // P3(dialogs-w14): dl.K39
+    pub fn take_preset_events(&mut self) -> Vec<NamedPresetEvent<String>> {
         todo!("dl.K39")
     }
 

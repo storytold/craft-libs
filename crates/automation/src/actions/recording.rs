@@ -29,7 +29,7 @@ impl ActionList {
                 index
             }
             None => {
-                let name = self.unique_name("");
+                let name = self.unique_name("", None); // P3(panels-w9): pn.C37, the set
                 self.new_action(&name, set)?
             }
         };

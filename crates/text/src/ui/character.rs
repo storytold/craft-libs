@@ -340,6 +340,16 @@ pub struct CharacterValues {
     pub axes: Option<Vec<([u8; 4], f32)>>,
 }
 
+impl CharacterValues {
+    /// The values of two selections together: each field stays where both are equal and becomes `None` where they
+    /// differ.
+    // P3(panels-w13): tools-w24 decision, `CharacterValues::mixed_with`
+    pub fn mixed_with(&self, other: &Self) -> Self {
+        let _ = other;
+        todo!("panels-w13")
+    }
+}
+
 /// One change from the Character controls.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]

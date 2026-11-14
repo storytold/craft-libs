@@ -61,6 +61,9 @@ pub struct ParamResult {
     pub key: String,
     /// The values the user confirmed, keyed by parameter.
     pub fields: DialogFields,
+    /// The id of the dialog that filed the result, instance ids included; set by `HostedParamDialog`.
+    // P3(dialogs-w1): dl.K20 `ParamResult::id`
+    pub id: DialogId,
     remember: Option<(SaveKey, DialogFields)>,
 }
 
@@ -284,7 +287,7 @@ impl<'a> ParamDialog<'a> {
     /// The answer OK gives with `fields`: with `remember`, it keeps the part of them the dialog saves.
     fn result(key: String, params: &[Param], remember: Option<SaveKey>, fields: DialogFields) -> ParamResult {
         let remember = remember.map(|save| (save, Self::remembered(params, &fields)));
-        ParamResult { key, fields, remember }
+        ParamResult { key, fields, remember, id: DialogId::NULL } // P3(dialogs-w1): dl.K20, the hosted dialog sets its id
     }
 
     /// Opens `values` for `params`: the `saved` values a remembering dialog keeps over them, then the defaults of
@@ -786,6 +789,13 @@ impl HostedParamDialog {
     /// Sets the value under `key` as an edit would; the dialog shows it in its next pass.
     pub fn set_field(&mut self, key: impl Into<String>, value: FieldValue) {
         let _ = (key.into(), value);
+        todo!("dl.K70")
+    }
+
+    /// Removes the value under `key`, as if it had never been set; the dialog shows that in its next pass.
+    // P3(dialogs-w1): dl.K70 `HostedParamDialog::clear_field`
+    pub fn clear_field(&mut self, key: &str) {
+        let _ = key;
         todo!("dl.K70")
     }
 

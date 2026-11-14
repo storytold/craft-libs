@@ -141,7 +141,7 @@ fn handle(words: &CropStoryWords, units: &Units, tool: &mut CropTool, settings: 
                 None => craft_i18n::fmt(words.apply.as_str(), &[("w", w.as_str()), ("h", h.as_str()), ("angle", angle.as_str())]),
             })
         }
-        CropEvent::Discard => Some(words.discard.as_str().to_owned()),
+        CropEvent::Discard(_) => Some(words.discard.as_str().to_owned()), // P3(tools-w13): tools-w45 decision
         CropEvent::Straightened(angle) => Some(craft_i18n::fmt(words.straightened.as_str(), &[("angle", n(angle).as_str())])),
         _ => None,
     }

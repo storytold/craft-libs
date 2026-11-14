@@ -203,3 +203,29 @@ pub(super) fn toggle_row<C>(ui: &mut Ui, label: Option<&Label>, toggles: &[Toggl
     });
     edits
 }
+
+/// What [`family_field`] reports: the family edits, and the family the picker previews and rests on.
+// P3(panels-w13): tools-w5 decision, `FamilyField`
+#[allow(dead_code)] // P3(panels-w13): FamilyField
+pub(crate) struct FamilyField {
+    pub edits: Vec<EditEvent<super::CharacterChange>>,
+    pub preview: Option<String>,
+    pub rested: Option<String>,
+}
+
+/// The family field of the character controls and the type bar: the font picker in a hidden-label field when a
+/// `picker` source is given, else a select over `families`.
+// P3(panels-w13): tools-w5 decision, `family_field`
+#[allow(dead_code)] // P3(panels-w13): family_field
+pub(crate) fn family_field(
+    ui: &mut Ui,
+    words: &super::CharacterWords,
+    values: &super::CharacterValues,
+    families: &[String],
+    #[cfg(feature = "font-picker")] picker: Option<&mut super::FontPickerSource<'_>>,
+) -> FamilyField {
+    let _ = (ui, words, values, families);
+    #[cfg(feature = "font-picker")]
+    let _ = picker;
+    todo!("panels-w13")
+}

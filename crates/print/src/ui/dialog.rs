@@ -4,7 +4,7 @@
 
 use std::sync::mpsc::Receiver;
 
-use craft_behavior::EditEvent;
+use craft_behavior::{EditEvent, EditEvents};
 use craft_ui::contract::{Bind, NoValue, Outcome};
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
 use craft_ui::patterns::form_dialogs::{DialogFields, HostRequests, Param};
@@ -57,6 +57,32 @@ pub struct PrintSheet {
     pub marks: PrintMarks,
     /// The readout under the preview.
     pub readout: Label,
+}
+
+impl PrintSheet {
+    /// A sheet of `paper` with the image box `image` holding `picture`, `readout` under the preview, no printable area
+    /// and no marks.
+    // P3(dialogs-w16): dl.K44 `PrintSheet::new`
+    pub fn new(paper: egui::Vec2, image: egui::Rect, picture: SizedTexture, readout: Label) -> Self {
+        let _ = (paper, image, picture, readout);
+        todo!("dl.K44")
+    }
+
+    /// The printable area of the paper.
+    // P3(dialogs-w16): dl.K44 builder
+    #[must_use]
+    pub fn printable(self, area: egui::Rect) -> Self {
+        let _ = (self, area);
+        todo!("dl.K44")
+    }
+
+    /// The marks to draw.
+    // P3(dialogs-w16): dl.K44 builder
+    #[must_use]
+    pub fn marks(self, marks: PrintMarks) -> Self {
+        let _ = (self, marks);
+        todo!("dl.K44")
+    }
 }
 
 /// One titled section of the app's rows (Color Management, Position and Size, Printing Marks,
@@ -116,7 +142,8 @@ pub struct PrintDialogOutput {
     /// Print or Done was chosen.
     pub finish: Option<PrintFinish>,
     /// The image box drag as total travel in paper points since the press.
-    pub moved: Option<EditEvent<egui::Vec2>>,
+    // P3(dialogs-w16): dl.K44 `EditEvents`
+    pub moved: EditEvents<egui::Vec2>,
     /// The panel's Refresh was pressed.
     pub refresh: bool,
     /// The dialog's requests of the host.
@@ -194,8 +221,9 @@ impl HostedPrint {
     }
 
     /// The image box drags since the last call.
-    pub fn take_moves(&mut self) -> Vec<EditEvent<egui::Vec2>> {
-        std::mem::take(&mut self.moves)
+    // P3(dialogs-w16): dl.K44 `EditEvents`
+    pub fn take_moves(&mut self) -> EditEvents<egui::Vec2> {
+        std::mem::take(&mut self.moves).into_iter().collect()
     }
 
     /// The sections' values, for the app to read and write.

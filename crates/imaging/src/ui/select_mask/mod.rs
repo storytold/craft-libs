@@ -151,6 +151,15 @@ impl SelectMaskOpen {
         }
     }
 
+    /// Remembers the settings under `key`: the stored settings apply at open only when their Remember Settings flag is
+    /// on.
+    // P3(dialogs-w10): dialogs-w41 decision, `SelectMaskOpen::remember`
+    #[must_use]
+    pub fn remember(self, key: craft_ui::runtime::memory::SaveKey) -> Self {
+        let _ = (self, key);
+        todo!("dialogs-w10")
+    }
+
     /// Sets the starting settings.
     #[must_use]
     pub fn settings(mut self, settings: SelectMaskSettings) -> Self {

@@ -35,6 +35,20 @@ pub struct CanvasSpace {
     /// The canvas's id, under which its controls claim keys on the focused canvas.
     canvas: Option<egui::Id>,
     pasteboard: PasteboardColor,
+    /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
+    /// measuring pass.
+    #[allow(dead_code)] // P3(canvas-widgets-w9): cw.C70 `picture`
+    picture: Option<PictureSlot>,
+}
+
+/// The shape the canvas reserved in its paint hook for the picture: its layer and index, which
+/// [`CanvasSpace::paint_picture`] grows into a `Shape::Vec` in show order.
+// P3(canvas-widgets-w9): cw.C70 decision (canvas-widgets-w1), `PictureSlot`
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(dead_code)] // P3(canvas-widgets-w9): cw.C70 `PictureSlot`
+pub(crate) struct PictureSlot {
+    pub(crate) layer: egui::LayerId,
+    pub(crate) idx: egui::layers::ShapeIdx,
 }
 
 impl CanvasSpace {
@@ -53,6 +67,7 @@ impl CanvasSpace {
             background: BackgroundPress::default(),
             canvas: None,
             pasteboard: PasteboardColor::Default,
+            picture: None, // P3(canvas-widgets-w9): cw.C70
         }
     }
 
@@ -127,8 +142,17 @@ impl CanvasSpace {
 
     /// Appends `shapes` to the canvas's picture slot, so they paint under every canvas control of the body, in show
     /// order with the displays that use [`RasterDisplay::picture`](super::RasterDisplay::picture).
-    pub fn paint_picture(&self, shapes: Vec<egui::Shape>) {
-        let _ = shapes;
+    // P3(canvas-widgets-w9): cw.C70 `ctx`
+    pub fn paint_picture(&self, ctx: &egui::Context, shapes: Vec<egui::Shape>) {
+        let _ = (ctx, shapes);
+        todo!("cw.C70")
+    }
+
+    /// This space with the canvas's picture slot of this pass.
+    #[must_use]
+    #[allow(dead_code)] // P3(canvas-widgets-w9): cw.C70 `with_picture`
+    pub(crate) fn with_picture(self, slot: PictureSlot) -> Self {
+        let _ = slot;
         todo!("cw.C70")
     }
 

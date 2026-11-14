@@ -136,6 +136,10 @@ impl RasterSource for Layer {
 }
 
 impl VanishingPointSource for Layer {
+    fn scene(&self) -> &dyn VanishingScene {
+        todo!("dl.K61") // P3(dialogs-w12): dl.K61 `scene`
+    }
+
     fn image(&self) -> &dyn RasterSource {
         self
     }

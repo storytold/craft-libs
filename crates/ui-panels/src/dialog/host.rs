@@ -101,6 +101,13 @@ pub trait StackDialog: Any + Send {
     /// so it can release what it holds: a pick ticket (`Files::forget`), an armed dropper. The
     /// dialog's own Cancel button does this itself before it returns. Does nothing by default.
     fn cancelled(&mut self, _ctx: &Context) {}
+
+    /// Shows `color` live in the dialog's colour row `key` while a child picker edits it (`None` ends the preview).
+    /// Hosted dialogs with colour rows override it; does nothing by default.
+    // P3(dialogs-w4): dl.K77 `StackDialog::preview_color`
+    fn preview_color(&mut self, key: &str, color: Option<craft_theme::Srgba>) {
+        let _ = (key, color);
+    }
 }
 
 /// Why a dialog refused `ui.dialog.set`; each has one wording.
@@ -512,6 +519,14 @@ impl DialogHost {
             Some(at) => self.cancel_at(ctx, at),
             None => false,
         }
+    }
+
+    /// Passes a child picker's live colour to the open dialog `id` names ([`StackDialog::preview_color`]); does
+    /// nothing when no dialog has that id.
+    // P3(dialogs-w4): dl.K77 `DialogHost::preview_color`
+    pub fn preview_color(&mut self, id: DialogId, key: &str, color: Option<craft_theme::Srgba>) {
+        let _ = (id, key, color);
+        todo!("dl.K77")
     }
 
     /// [`cancel`](DialogHost::cancel) for the open dialog `id` names, whatever its type.

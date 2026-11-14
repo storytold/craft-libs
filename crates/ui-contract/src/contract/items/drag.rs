@@ -96,6 +96,12 @@ impl SweepApply {
         SweepApply { run: None, show_only: true }
     }
 
+    /// Whether this is a [`SweepApply::show_only`] column, where Alt plus the first press shows only that cell.
+    // P3(top-w4): framework-01-w2 decision, `SweepApply::shows_only`
+    pub fn shows_only(&self) -> bool {
+        todo!("top-w4")
+    }
+
     /// The first gesture of the running sweep, which a host that groups a sweep's edits as one undo step uses as the
     /// id of all of them. `None` between sweeps.
     pub fn gesture(&self) -> Option<GestureId> {

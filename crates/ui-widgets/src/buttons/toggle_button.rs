@@ -64,6 +64,10 @@ pub struct ToggleButton<'a> {
     /// it closes the dialog. Off, the button keeps no Escape.
     #[prop(flag)]
     escape_disarms: bool,
+    /// The name a screen reader hears when it differs from the face (a modifier key's symbol face).
+    // P3(top-w2): tp.T16 decision, the `spoken` prop
+    #[prop]
+    spoken: Option<Label>,
 }
 
 impl<'a> ToggleButton<'a> {
@@ -78,6 +82,7 @@ impl<'a> ToggleButton<'a> {
             role: None,
             icon_only: false,
             escape_disarms: false,
+            spoken: None, // P3(top-w2): tp.T16
         }
         .label(label)
     }
@@ -93,6 +98,7 @@ impl<'a> ToggleButton<'a> {
             role: None,
             icon_only: false,
             escape_disarms: false,
+            spoken: None, // P3(top-w2): tp.T16
         };
         <ToggleButton as Props>::command(button, command)
     }

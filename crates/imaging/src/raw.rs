@@ -142,3 +142,22 @@ impl Default for RawDevelopSettings {
         todo!("dl.K66")
     }
 }
+
+// P3(dialogs-w17): dl.K66, moved from algo camera_raw.rs:596-665 with `validate_curve` and `wb_neutral`
+impl RawDevelopSettings {
+    /// Refuses settings outside their ranges, naming the first bad field.
+    pub fn validate(&self) -> Result<(), String> {
+        todo!("dl.K66")
+    }
+
+    /// [`validate`](Self::validate) for the fields that differ from `stored`.
+    pub fn validate_changes(&self, stored: &Self) -> Result<(), String> {
+        let _ = stored;
+        todo!("dl.K66")
+    }
+
+    /// Whether the settings leave the picture as it is.
+    pub fn is_identity(&self) -> bool {
+        todo!("dl.K66")
+    }
+}

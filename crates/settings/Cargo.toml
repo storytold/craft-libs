@@ -11,6 +11,10 @@ description = "Shared settings storage for the Craft suite: platform folders, co
 [lints]
 workspace = true
 
+[features]
+# The in-memory `SettingsFiles` for tests in other crates (`craft_settings::testing`).
+testing = []
+
 [dependencies]
 craft-atomic = { workspace = true }
 craft-host = { workspace = true }

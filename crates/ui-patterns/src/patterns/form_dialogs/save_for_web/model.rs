@@ -186,6 +186,15 @@ pub struct SaveForWebOptions {
     /// Which slices of the document the file holds.
     #[serde(default)]
     pub slices: WebSlices,
+    /// Whether the export writes an HTML file beside the images.
+    // P3(dialogs-w15): dl.K43 `SaveForWebOptions::html`
+    #[serde(default = "html_default")]
+    pub html: bool,
+}
+
+/// The serde default of [`SaveForWebOptions::html`]: on.
+fn html_default() -> bool {
+    true
 }
 
 /// Which slices of the document Save for Web writes.
@@ -195,6 +204,9 @@ pub enum WebSlices {
     /// The whole image as one file.
     #[default]
     All,
+    /// The user slices.
+    // P3(dialogs-w15): dl.K43 `WebSlices::User`
+    User,
     /// The slices with these numbers.
     Selected(Vec<u32>),
 }
@@ -233,6 +245,7 @@ impl Default for SaveForWebOptions {
             resample: Resample::Bicubic,
             palette_edits: BTreeMap::new(),
             slices: WebSlices::All,
+            html: true, // P3(dialogs-w15): dl.K43
         }
     }
 }

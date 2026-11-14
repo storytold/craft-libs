@@ -151,6 +151,11 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + 'static> {
     /// Which groups of the browser are open before the user toggles any.
     #[prop]
     default_open: DefaultOpen,
+    /// The browser in the popover (on by default); off, the popover shows only `head`, with no browser, toolbar or
+    /// footer.
+    // P3(panels-w12): pn.C60 `PresetPicker::browser`
+    #[prop]
+    browser: bool,
     /// A row above the presets with the search field.
     #[prop]
     toolbar: bool,
@@ -246,6 +251,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             cell_shape: CellShape::default(),
             view: PresetView::Grid,
             default_open: DefaultOpen::All,
+            browser: true, // P3(panels-w12): pn.C60
             toolbar: false,
             search: true,
             tools: None,
@@ -303,6 +309,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             cell_shape,
             view,
             default_open,
+            browser: _, // P3(panels-w12): pn.C60
             toolbar,
             search,
             mut tools,

@@ -17,7 +17,7 @@ use craft_ui::runtime::env::{Env, Units};
 use egui::{Rect, Ui};
 
 use super::options::{CropFill, CropSettings, CropTarget};
-use super::session::{CropDocument, CropKept, CropSession, LeaveFrame};
+use super::session::{CropDocKey, CropDocument, CropKept, CropSession, LeaveFrame};
 use super::words::CropWords;
 
 /// The key of the Crop To... command form.
@@ -58,7 +58,8 @@ pub enum CropEvent {
     /// leaving the tool with a drawn frame): one document step. The app then calls [`CropTool::applied`].
     Apply(CropCommit),
     /// Esc with no drag, the cancel button, or a frame of another document: the frame is gone.
-    Discard,
+    // P3(tools-w13): tools-w45 decision, `Discard(CropDocKey)`: the frame's own document
+    Discard(CropDocKey),
     /// O, Shift+O, H, P, X or I changed the options: the app stores the new settings.
     Settings(CropSettings),
     /// A Straighten line set the frame's angle (degrees, clockwise on screen) and fitted the frame
@@ -302,8 +303,9 @@ impl CropTool {
     /// default frame); `None` without a frame.
     pub fn discard(&mut self) -> Option<CropEvent> {
         self.session.frame()?;
+        let document = self.session.frame_document()?; // P3(tools-w13): tools-w45 decision
         self.reset();
-        Some(CropEvent::Discard)
+        Some(CropEvent::Discard(document))
     }
 
     /// The app picked another tool (not a held temporary one): drops an untouched default frame and
@@ -518,9 +520,10 @@ impl CanvasTool for CropToolPass<'_> {
         if !nudging {
             self.tool.end_nudges();
         }
-        if self.tool.session.for_document(document.key) {
+        if let Some(dropped) = self.tool.session.for_document(document.key) {
+            // P3(tools-w13): tools-w45 decision
             self.tool.reset();
-            self.push(CropEvent::Discard);
+            self.push(CropEvent::Discard(dropped));
         }
         self.tool.session.straighten_mut().set_held(cx.mods.cmd);
         let dragging = self.tool.dragging;

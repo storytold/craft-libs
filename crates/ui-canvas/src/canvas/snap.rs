@@ -22,12 +22,14 @@ pub struct Snap {
     os: Platform,
 }
 
-/// The gesture's snap options in one argument: whether the gesture reads Control itself.
-// P3(canvas-widgets-w3): cw.C16 `kinds: SnapKinds` is defined by no item (plan error, open).
+/// The gesture's snap options in one argument: whether the gesture reads Control itself, and a kind filter.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GestureSnap {
     /// Whether the gesture reads the Control key itself, so Control does not suspend snapping.
     pub reads_control: bool,
+    /// The kinds of target the gesture snaps to (Distort corners skip layer edges and centres).
+    // P3(canvas-widgets-w3): cw.C16 `kinds`
+    pub kinds: craft_behavior::geometry::SnapKinds,
 }
 
 impl Snap {

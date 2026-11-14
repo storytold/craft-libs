@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 pub enum ColorRangeSelect {
     /// Sampled colours.
     #[default]
+    // P3(dialogs-w9): dl.K54 the engine's name
+    #[serde(rename = "sampledColors")]
     Sampled,
     /// Reds.
     Reds,
@@ -30,10 +32,18 @@ pub enum ColorRangeSelect {
     Midtones,
     /// Shadows.
     Shadows,
+    /// Skin tones.
+    // P3(dialogs-w9): dl.K54 `SkinTones`
+    SkinTones,
+    /// Out-of-gamut colours.
+    // P3(dialogs-w9): dl.K54 `OutOfGamut`
+    OutOfGamut,
 }
 
 /// The sampling tool: the plain eyedropper, Add to Sample or Subtract from Sample.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+// P3(dialogs-w9): dl.K54 serde for the `tool` json key
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum SampleTool {
     /// The eyedropper: replaces the samples.
@@ -120,6 +130,26 @@ pub struct ColorRangeValue {
     pub samples: ColorSamples,
     /// Whether the selection is inverted.
     pub invert: bool,
+    /// Localized Color Clusters.
+    // P3(dialogs-w9): dl.K54 `localized`
+    pub localized: bool,
+    /// The fuzziness of the tonal ranges (Highlights, Midtones, Shadows, Skin Tones).
+    // P3(dialogs-w9): dl.K54 `tone_fuzziness`
+    pub tone_fuzziness: f64,
+    /// The Shadows level.
+    // P3(dialogs-w9): dl.K54 `shadows_level`
+    pub shadows_level: f64,
+    /// The Highlights level.
+    // P3(dialogs-w9): dl.K54 `highlights_level`
+    pub highlights_level: f64,
+}
+
+impl Default for ColorRangeValue {
+    /// Production's opening values (pc color_range_ui.rs:94-110).
+    // P3(dialogs-w9): dl.K54 `impl Default`
+    fn default() -> Self {
+        todo!("dl.K54")
+    }
 }
 
 impl ColorRangeValue {

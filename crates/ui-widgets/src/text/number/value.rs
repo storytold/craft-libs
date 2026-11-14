@@ -153,8 +153,14 @@ pub struct RangeAlert {
     pub range: RangeInclusive<f64>,
     /// The field commits whole numbers.
     pub whole: bool,
-    /// The unit the field shows after its number.
+    /// The unit the field shows after its number: the field's own `unit` prop.
     pub unit: Option<Label>,
+    /// The field's unit kind, for the one number-with-unit rule (`Units::text`).
+    // P3(panels-w4): pn.C22 `RangeAlert::unit_kind`
+    pub unit_kind: Option<UnitKind>,
+    /// The decimals the field shows, for the alert's `low` and `high`.
+    // P3(panels-w4): pn.C22 `RangeAlert::decimals`
+    pub decimals: RangeInclusive<usize>,
 }
 
 impl<V: NumberValue> Deref for NumberOutput<V> {

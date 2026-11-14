@@ -10,5 +10,7 @@ craft_ui::words! {
         range_integer: template "textField.rangeInteger" = "An integer between {low} and {high} is required. Closest value inserted.";
         range_value: template "textField.rangeValue" = "A value between {low} and {high} is required. Closest value inserted.";
         range_number: template "textField.rangeNumber" = "A number between {low} and {high} is required. Closest value inserted.";
+        // P3(canvas-widgets-w11): cw.N6 `range_end`
+        range_end: template "textField.rangeEnd" = "{n} {unit}";
     }
 }

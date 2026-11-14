@@ -224,15 +224,24 @@ impl CropSession {
 
     /// Drops the frame, its history and Straighten when they belong to another document than
     /// `key` (as Photoshop: switching documents discards the pending crop). Returns true when a
-    /// drawn frame was dropped, so the tool reports [`CropEvent::Discard`](super::CropEvent).
-    pub fn for_document(&mut self, key: CropDocKey) -> bool {
+    /// drawn frame was dropped, so the tool reports [`CropEvent::Discard`](super::CropEvent): the document whose
+    /// drawn frame it dropped.
+    // P3(tools-w13): tools-w45 decision, `for_document -> Option<CropDocKey>`
+    pub fn for_document(&mut self, key: CropDocKey) -> Option<CropDocKey> {
         let stale = self.frame_for.is_some_and(|(held, _)| held != key);
         if !stale {
-            return false;
+            return None;
         }
+        let dropped = self.frame_for.map(|(held, _)| held); // P3(tools-w13): tools-w45 decision
         let drawn = self.pending();
         self.clear();
-        drawn
+        dropped.filter(|_| drawn)
+    }
+
+    /// The document the frame was made for.
+    // P3(tools-w13): tools-w45 decision, the document `CropEvent::Discard` names (plan gap, fixed)
+    pub(super) fn frame_document(&self) -> Option<CropDocKey> {
+        self.frame_for.map(|(held, _)| held)
     }
 
     /// Makes the default frame when there is none and no gesture runs (`dragging` false): the

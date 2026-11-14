@@ -184,6 +184,14 @@ impl HostedLayerStyle {
         todo!("dl.K53")
     }
 
+    /// The painter of the preview swatch: `paint` draws the draft's style into the swatch rect.
+    // P3(dialogs-w7): dl.K53 `HostedLayerStyle::preview_thumb`
+    #[must_use]
+    pub fn preview_thumb(self, paint: impl Fn(&ContentPainterCx, Rect, &LayerStyleDraft) + Send + Sync + 'static) -> Self {
+        let _ = (self, paint);
+        todo!("dl.K53")
+    }
+
     /// The draft the dialog shows: the app previews from it.
     pub fn draft(&self) -> &LayerStyleDraft {
         &self.draft

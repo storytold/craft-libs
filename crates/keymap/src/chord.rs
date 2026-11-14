@@ -436,7 +436,8 @@ impl Mods {
 
     /// The held modifiers' names for a screen reader, in the platform's order: `Ctrl Option Shift Cmd` on macOS,
     /// `Ctrl Alt Shift` elsewhere.
-    fn spoken(self, platform: Platform) -> Vec<&'static str> {
+    // P3(top-w2): tp.T16, `Mods::spoken` public for `ToggleButton::spoken` callers
+    pub fn spoken(self, platform: Platform) -> Vec<&'static str> {
         let m = self.effective(platform);
         let table: [(bool, &'static str); 4] = if platform.is_mac() {
             [(m.ctrl, "Ctrl"), (m.alt, "Option"), (m.shift, "Shift"), (m.cmd, "Cmd")]

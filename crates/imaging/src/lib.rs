@@ -11,6 +11,7 @@ pub mod selection;
 pub mod trace;
 #[cfg(feature = "ui")]
 pub mod ui;
+pub mod wide_angle; // P3(dialogs-w12): dl.K60
 
 /// The registered stories and suite cases of the widgets, for `tests/it`.
 #[cfg(feature = "screen-testing")]

@@ -440,6 +440,15 @@ impl HostedFormatOptions {
         self
     }
 
+    /// Offers the TIFF rows of a document, as [`FormatOptionsDialog::tiff_document`]: the hosted dialog keeps the
+    /// three flags and passes them to the dialog it builds.
+    // P3(dialogs-w14): dl.K42 `HostedFormatOptions::tiff_document`
+    #[must_use]
+    pub fn tiff_document(self, layered: bool, transparent: bool, layer_note: bool) -> Self {
+        let _ = (self, layered, transparent, layer_note);
+        todo!("dl.K42")
+    }
+
     /// The format whose options the dialog edits.
     pub fn kind(&self) -> ExportOptionsKind {
         self.kind

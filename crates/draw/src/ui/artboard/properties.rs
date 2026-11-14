@@ -45,6 +45,9 @@ pub struct ArtboardPropertiesOutput {
     /// Other… was chosen, or the swatch of the custom colour was clicked: the app opens its colour picker with this
     /// request (titled "Artboard Background Color") and sets `Custom(color)` from the answer.
     pub pick_color: Option<ColorRequest>,
+    /// The index of the size preset picked from the Size select this pass.
+    // P3(tools-w18): canvas-widgets-w17 decision, `ArtboardPropertiesOutput::preset`
+    pub preset: Option<usize>,
 }
 
 impl Outcome for ArtboardPropertiesOutput {
@@ -157,6 +160,6 @@ impl<'a> ArtboardProperties<'a> {
                 });
             });
         });
-        ArtboardPropertiesOutput { response: section.response.clone(), rect: rect_events, background: picked, pick_color }
+        ArtboardPropertiesOutput { response: section.response.clone(), rect: rect_events, background: picked, pick_color, preset: None } // P3(tools-w18): preset
     }
 }

@@ -58,10 +58,12 @@ pub struct Arrowheads {
 }
 
 impl Arrowheads {
-    /// The range of the width and length fields, in percent.
-    pub const ARROW_SIZE: RangeInclusive<f64> = 10.0..=1000.0;
+    /// The range of the width and length fields, in document pixels (production and engine units).
+    // P3(tools-w8): tl.T27 production units
+    pub const ARROW_SIZE: RangeInclusive<f64> = 1.0..=4096.0;
     /// The range of the concavity field, in percent.
-    pub const ARROW_CONCAVITY: RangeInclusive<f64> = -50.0..=50.0;
+    // P3(tools-w8): tl.T27 production units
+    pub const ARROW_CONCAVITY: RangeInclusive<f64> = 0.0..=100.0;
 
     /// No arrowheads at the default size.
     pub const fn new() -> Self {

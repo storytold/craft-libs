@@ -6,7 +6,7 @@ use std::hash::Hash;
 
 use emath::{Rect, Vec2};
 
-use super::{action::Action, layout::Layout};
+use super::{action::Action, arrange::Arrangement, layout::Layout};
 use crate::placement::cascade_rects;
 
 /// A document group: the documents in one tab strip, one of them shown.
@@ -29,6 +29,10 @@ pub struct DocumentWindows<D> {
     pub docked: Vec<DocumentGroup<D>>,
     /// The floating groups, each with its window rect.
     pub floating: Vec<(DocumentGroup<D>, Rect)>,
+    /// The n-up arrangement the document area shows: set by Window › Arrange, cleared by
+    /// Consolidate and by floating a document.
+    // P3(canvas-widgets-w29): cw.C50 `DocumentWindows::arrangement`
+    pub arrangement: Option<Arrangement>,
     next_id: u64,
 }
 

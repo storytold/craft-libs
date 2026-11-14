@@ -118,7 +118,9 @@ impl ActionList {
 
     /// `base` if no action has it, else `base 2`, `base 3` … the first free one. With an empty
     /// `base`, PhotoCraft's `Action n` from the list's length + 1 up.
-    pub fn unique_name(&self, base: &str) -> String {
+    // P3(panels-w9): pn.C37 names are unique within `set`
+    pub fn unique_name(&self, base: &str, set: Option<&str>) -> String {
+        let _ = set;
         if base.is_empty() {
             let mut n = self.actions.len() + 1;
             loop {

@@ -23,4 +23,6 @@ pub use move_gesture::{ConstrainStyle, MoveGesture, MoveValue, StrokeLock};
 pub use outside::outside_pieces;
 pub use quad::{BoxAllow, BoxDrag, BoxPart, BoxRules, BoxState, Homography, Parts, SKEW_LIMIT, ScaleRule, TransformMode, drag};
 pub use selection_op::SelectionOperation;
-pub use snap::{SNAP_PX, SnapGesture, SnapKind, SnapLine, SnapOptions, SnapTarget, SnapTargets, across_axis, coordinate_across, motion_across};
+pub use snap::{
+    SNAP_PX, SnapGesture, SnapKind, SnapKinds, SnapLine, SnapOptions, SnapTarget, SnapTargets, across_axis, coordinate_across, motion_across,
+};

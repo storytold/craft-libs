@@ -64,8 +64,9 @@ impl<K> PathRow<K> {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum PathsEvent<K> {
-    /// A row was selected.
-    Select(K),
+    /// A row was selected; `None` for a click on the empty area, which deselects.
+    // P3(tools-w10): tl.T34 `Select(Option<K>)`
+    Select(Option<K>),
     /// A rename committed: never empty after trimming, never unchanged.
     #[non_exhaustive]
     Rename {
@@ -82,8 +83,69 @@ pub enum PathsEvent<K> {
         /// New, add, subtract or intersect.
         operation: SelectionOperation,
     },
-    /// A command of the panel menu, the row menu or the footer.
-    Command(super::PathsCommands),
+    /// A command of the panel menu or the row menu, with the row the menu was opened on (`None` for a panel-menu
+    /// command with no target row).
+    // P3(tools-w10): tl.T34 `Command { command, key }`
+    #[non_exhaustive]
+    Command {
+        /// The command.
+        command: super::PathsCommands,
+        /// The row it acts on.
+        key: Option<K>,
+    },
+    /// A footer button was clicked, with the selected rows and the click's modifiers.
+    // P3(tools-w10): tl.T34 `Footer`
+    #[non_exhaustive]
+    Footer {
+        /// The button.
+        button: super::PathsFooterButton,
+        /// The selected rows.
+        rows: Vec<K>,
+        /// The click's modifiers.
+        mods: craft_keymap::Mods,
+    },
+    /// Rows were dropped on a footer button.
+    // P3(tools-w10): tl.T34 `FooterDrop`
+    #[non_exhaustive]
+    FooterDrop {
+        /// The button.
+        button: super::PathsFooterButton,
+        /// The dropped rows.
+        rows: Vec<K>,
+    },
+}
+
+impl<K> PathsEvent<K> {
+    /// A committed rename of `key` to `text`.
+    // P3(tools-w10): tl.T34 constructors
+    pub fn rename(key: K, text: impl Into<String>) -> Self {
+        let _ = (key, text);
+        todo!("tl.T34")
+    }
+
+    /// A load of `key` as a selection with `operation`.
+    pub fn load_selection(key: K, operation: SelectionOperation) -> Self {
+        let _ = (key, operation);
+        todo!("tl.T34")
+    }
+
+    /// `command` on the row `key`.
+    pub fn command(command: super::PathsCommands, key: Option<K>) -> Self {
+        let _ = (command, key);
+        todo!("tl.T34")
+    }
+
+    /// A click on the footer `button` with `rows` selected and `mods` held.
+    pub fn footer(button: super::PathsFooterButton, rows: Vec<K>, mods: craft_keymap::Mods) -> Self {
+        let _ = (button, rows, mods);
+        todo!("tl.T34")
+    }
+
+    /// `rows` dropped on the footer `button`.
+    pub fn footer_drop(button: super::PathsFooterButton, rows: Vec<K>) -> Self {
+        let _ = (button, rows);
+        todo!("tl.T34")
+    }
 }
 
 /// What [`PathsPanel::show`](super::PathsPanel::show) returns.

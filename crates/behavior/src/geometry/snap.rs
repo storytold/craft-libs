@@ -38,6 +38,35 @@ pub enum SnapKind {
     Selection,
 }
 
+/// A set of [`SnapKind`]s, a bit per kind: the kind filter a gesture passes to its snapping.
+// P3(canvas-widgets-w3): cw.C16 `SnapKinds`
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SnapKinds(u8);
+
+impl SnapKinds {
+    /// Every kind.
+    pub const ALL: SnapKinds = SnapKinds(0x7f);
+
+    /// This set without `kind`.
+    pub fn without(self, kind: SnapKind) -> Self {
+        let _ = kind;
+        todo!("cw.C16")
+    }
+
+    /// Whether `kind` is in this set.
+    pub fn contains(self, kind: SnapKind) -> bool {
+        let _ = kind;
+        todo!("cw.C16")
+    }
+}
+
+impl Default for SnapKinds {
+    /// Every kind ([`SnapKinds::ALL`]).
+    fn default() -> Self {
+        SnapKinds::ALL
+    }
+}
+
 impl SnapKind {
     /// Whether the target's lines draw in the smart-guide colour: `LayerEdge`, `LayerCenter` and `Center`.
     pub const fn is_smart(self) -> bool {
@@ -241,6 +270,14 @@ impl SnapTargets {
     /// Whether there is no target.
     pub fn is_empty(&self) -> bool {
         self.targets.is_empty()
+    }
+
+    /// The nearest target of a kind in `kinds` among the lines that run `along` an axis, within `tolerance` of
+    /// `value` across them; [`SnapTargets::nearest`] is this with [`SnapKinds::ALL`].
+    // P3(canvas-widgets-w3): cw.C16 `nearest_of`
+    pub fn nearest_of(&self, along: Axis, value: f64, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget> {
+        let _ = (along, value, tolerance, kinds);
+        todo!("cw.C16")
     }
 
     /// The nearest target among the lines that run `along` an axis, within `tolerance` of `value` across them.

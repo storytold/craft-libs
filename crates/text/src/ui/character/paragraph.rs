@@ -111,6 +111,16 @@ pub struct ParagraphValues {
     pub hyphenate: Option<bool>,
 }
 
+impl ParagraphValues {
+    /// The values of two selections together: each field stays where both are equal and becomes `None` where they
+    /// differ.
+    // P3(panels-w13): tools-w24 decision, `ParagraphValues::mixed_with`
+    pub fn mixed_with(&self, other: &Self) -> Self {
+        let _ = other;
+        todo!("panels-w13")
+    }
+}
+
 /// One change from the Paragraph controls.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]

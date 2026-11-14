@@ -529,6 +529,12 @@ impl Updater {
         Status::Ready
     }
 
+    /// Reads the last update's outcome once per launch, with its guard inside the `Updater`; `check_at_start` calls it.
+    // P3(top-w5): tp.T33 `Updater::read_last_update`
+    pub fn read_last_update(&mut self) {
+        todo!("tp.T33")
+    }
+
     /// Sets the outcome of a check. The check at start leaves the status as it is: nothing, or
     /// the outcome of the last update ([`Self::read_outcome`]).
     fn finish_check(&mut self, answer: Found) {

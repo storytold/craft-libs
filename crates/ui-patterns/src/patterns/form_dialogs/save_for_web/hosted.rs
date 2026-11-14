@@ -51,6 +51,12 @@ impl HostedSaveForWeb {
         todo!("dl.K43")
     }
 
+    /// The options as the user left them.
+    // P3(dialogs-w15): dl.K43 `HostedSaveForWeb::current`
+    pub fn current(&self) -> &SaveForWebOptions {
+        todo!("dl.K43")
+    }
+
     /// A hosted dialog for the document `name` of `size` pixels showing `original` in the Original pane.
     pub fn new(name: impl Into<String>, size: PixelSize, original: SizedTexture) -> Self {
         HostedSaveForWeb {

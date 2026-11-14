@@ -197,6 +197,9 @@ pub enum LiquifyEvent {
     BackdropWanted(Option<u64>),
     /// The settings differ from the last ones reported.
     SettingsChanged(LiquifySettings),
+    /// The Preview checkbox or the `P` key turned the preview on or off.
+    // P3(dialogs-w10): dl.K63 `LiquifyEvent::Preview`
+    Preview(bool),
 }
 
 /// What OK answers: the recorded steps and the settings.

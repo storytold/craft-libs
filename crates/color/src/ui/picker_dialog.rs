@@ -253,6 +253,14 @@ impl ColorPickerDialog {
         self
     }
 
+    /// The dialog for one target among several of the same key: its id is `dialog_id(("color-picker", key,
+    /// instance))`, and [`StackDialog::instance`] returns it, so the host replaces a picker only for the same target.
+    // P3(dialogs-w6): dl.K50 `ColorPickerDialog::instance`
+    pub fn instance(self, instance: impl std::hash::Hash + std::fmt::Debug) -> Self {
+        let _ = (self, instance);
+        todo!("dl.K50")
+    }
+
     /// Whether a screen pick is running; the picker's screen-pick button is disabled meanwhile. The host sets it each
     /// pass from its `ScreenPick`.
     pub fn screen_busy(&mut self, busy: bool) {

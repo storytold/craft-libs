@@ -7,7 +7,7 @@ use super::{
     SizeEstimate, export_file_name, size_error_label,
 };
 use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
-use crate::patterns::presets::{NamedPresetEvent, PresetId, PresetLibrary};
+use crate::patterns::presets::{NamedPresetEvent, PresetLibrary};
 use crate::runtime::requests::{HostAnswer, PathFilter, PathRequest};
 
 use crate::choice::Checkbox;
@@ -110,7 +110,8 @@ pub struct ExportAsOutput {
     /// dialog open.
     pub requests: HostRequests,
     /// The saved-preset edits the user made this pass (add, rename, delete), for the app to store.
-    pub presets: Vec<NamedPresetEvent<PresetId>>,
+    // P3(dialogs-w14): dl.K41, keyed by the preset's name before the event
+    pub presets: Vec<NamedPresetEvent<String>>,
 }
 
 impl Outcome for ExportAsOutput {
@@ -293,7 +294,8 @@ impl HostedExportAs {
     }
 
     /// The saved-preset edits since the last call, for the app to store.
-    pub fn take_preset_events(&mut self) -> Vec<NamedPresetEvent<PresetId>> {
+    // P3(dialogs-w14): dl.K41
+    pub fn take_preset_events(&mut self) -> Vec<NamedPresetEvent<String>> {
         todo!("dl.K41")
     }
 

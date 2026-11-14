@@ -168,8 +168,8 @@ pub(crate) enum MainFill {
 /// `least.max(s)`; on an axis the body scrolls or sizes from its content it is `measured` (`measured.max(share)` in a
 /// scrolled share); a fill child along y in a content-height row line takes `measured.max(line)`.
 #[allow(dead_code)] // P3(framework-01-w8): fx.F40
-pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32) -> f32 {
-    let _ = (ui, id, axis, measured, offered);
+pub(crate) fn fill_size(ui: &Ui, id: Id, axis: Axis, measured: f32, offered: f32, given: bool) -> f32 {
+    let _ = (ui, id, axis, measured, offered, given);
     todo!("fx.F40")
 }
 

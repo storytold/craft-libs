@@ -16,5 +16,6 @@ pub mod mock;
 pub mod options;
 pub mod panel;
 pub mod rows;
+mod sweep; // P3(framework-01-w2): L-95 decision
 pub mod thumbs;
 pub mod tree;

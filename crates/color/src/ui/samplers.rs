@@ -448,13 +448,17 @@ pub struct SamplerReadout {
     pub rgb: [u8; 3],
     /// The colour in CMYK percent through the document's converter.
     pub cmyk: [u8; 4],
+    /// The colour in Lab (L 0 to 100, a and b -128 to 127), rounded, when the host fills it: the RAW samplers while
+    /// Show Lab Color Readouts is on. `None` by default.
+    // P3(tools-w12): pn.C33 `SamplerReadout::lab`
+    pub lab: Option<[i16; 3]>,
 }
 
 impl SamplerReadout {
     /// The readout of point number `number` at `position` with the given 8-bit `rgb` and CMYK percent: how a host whose
     /// colours come from its own engine fills the rows.
     pub fn from_values(number: usize, position: [i64; 2], rgb: [u8; 3], cmyk: [u8; 4]) -> SamplerReadout {
-        SamplerReadout { number, position, rgb, cmyk }
+        SamplerReadout { number, position, rgb, cmyk, lab: None } // P3(tools-w12): pn.C33
     }
 
     /// The readout of point `index` at `position` with `color`, CMYK through `cmyk`. A channel that is not finite
@@ -467,6 +471,7 @@ impl SamplerReadout {
             position: position.map(|v| v.floor() as i64),
             rgb: rgb.map(|v| (v * 255.0).round() as u8),
             cmyk: cmyk.from_srgb(rgb).map(|v| (unit(v) * 100.0).round() as u8),
+            lab: None, // P3(tools-w12): pn.C33
         }
     }
 }

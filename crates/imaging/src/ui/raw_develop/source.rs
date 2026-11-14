@@ -55,12 +55,19 @@ pub trait RawDevelopSource: Send + Sync {
     /// The settings Auto picks for `settings`.
     fn auto(&self, settings: &RawDevelopSettings) -> RawDevelopSettings;
 
-    /// What the scope counted of the picture before or after, of the selected region or the whole picture.
-    fn scope(&self, before: bool, region: bool) -> Option<ScopeFrame<'_>>;
+    /// Shows what the scope counted of the picture before or after, of the selected region or the whole picture,
+    /// with the point `at` marked: `show` gets the frame, `None` while there is none.
+    // P3(dialogs-w17): dl.K66 `scope` reads through a callback
+    fn scope(&self, before: bool, region: bool, at: Option<[f64; 2]>, show: &mut dyn FnMut(Option<ScopeFrame<'_>>));
 
     /// The clipping mask and its revision.
-    fn clipping(&self) -> Option<(&ClippingMask, Revision)>;
+    // P3(dialogs-w17): dl.K66 `clipping` returns an `Arc`
+    fn clipping(&self) -> Option<(std::sync::Arc<ClippingMask>, Revision)>;
 
     /// The sample at `at` in the form `lab` asks for; the host does the colour management.
     fn sample(&self, at: [f64; 2], before: bool, lab: bool) -> Option<ScopeReadout>;
+
+    /// Whether the document has a selection, for the scope's region commands.
+    // P3(dialogs-w17): dl.K66 `has_selection` (dialogs-w51 implements it)
+    fn has_selection(&self) -> bool;
 }

@@ -25,6 +25,8 @@ pub use opener::{Opener, Trigger};
 pub use place::{Anchor, FloatPlace, OverlayFit, Place, Resize, ResizeEdges, SizeLimits, ViewportShare};
 pub use placement::PopupRegion;
 pub(crate) use placement::{measuring_room, region_for, resolve_anchor, screen_for};
+#[allow(unused_imports)] // P3(framework-01-w7): fx.F71 decision, `dwell` for `items/lead.rs`
+pub(crate) use popups::dwell;
 pub use popups::{HOLD, Overlays, PopupHandle};
 pub(crate) use popups::{apply_closes, begin_owner, open_map, popup_shown, popups_shown, write_open};
 pub use props::{Dismiss, Outside, Overlay, PlacementChange, PlacementKind};

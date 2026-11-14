@@ -52,6 +52,8 @@ pub mod profiles;
 pub mod recovery;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
+#[cfg(all(feature = "testing", not(target_arch = "wasm32")))]
+pub mod testing;
 
 pub use error::{LoadReport, MigrateError, ReadOnlyReason, SaveStatus, SectionError, SettingsError, Source, TickResult};
 #[cfg(not(target_arch = "wasm32"))]

@@ -15,7 +15,7 @@ use craft_ui::runtime::env::Label;
 pub use commands::RawDevelopCommands;
 pub use controls::{RawDevelopPanel, RawDevelopPanelOutput};
 pub use filmstrip::{RawFilmItem, RawFilmstrip};
-pub use scopes::{RawFloatingScope, RawScopeStrip};
+pub use scopes::{RawFloatingScope, RawScopeStrip, RawScopeStripOutput};
 pub use source::{Demosaic, RawDevelopSource, RawPreviewRequest};
 
 use crate::raw::RawDevelopSettings;

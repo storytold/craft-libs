@@ -74,6 +74,10 @@ const PASTE_TINT: Color32 = Color32::from_rgba_premultiplied(230, 230, 230, 230)
 
 /// What the app gives the editor to show each pass.
 pub trait VanishingPointSource: Send + Sync {
+    /// The app's perspective scene: its planes and their geometry.
+    // P3(dialogs-w12): dl.K61 `scene` (dialogs-w47 decision)
+    fn scene(&self) -> &dyn VanishingScene;
+
     /// The layer as it is.
     fn image(&self) -> &dyn RasterSource;
 

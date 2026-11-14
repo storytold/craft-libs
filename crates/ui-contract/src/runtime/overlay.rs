@@ -11,7 +11,7 @@ use crate::runtime::pass_state;
 use crate::runtime::pointer;
 use craft_behavior::OwnerClass;
 use craft_behavior::overlay::Side;
-use egui::{Context, Id, Pos2, Rect, ViewportId};
+use egui::{Context, Id, LayerId, Pos2, Rect, ViewportId};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 
@@ -370,6 +370,16 @@ pub fn top(ctx: &Context) -> Option<Id> {
         let families = families(&live, &raised);
         families.iter().rev().find_map(|members| members.iter().rev().find(|entry| entry.takes_keys()).map(|entry| entry.id))
     })
+}
+
+/// Whether `layer` is the layer of a popup open above `below` in last pass's overlay stack: `layer` belongs to a
+/// non-exiting popup entry, and `below` is the window's base layer (no entry's layer) or the layer of an entry
+/// opened before it.
+// P3(canvas-widgets-w11): cw.C57 decision, `popup_above`
+#[allow(dead_code)] // P3(canvas-widgets-w11): popup_above
+pub(crate) fn popup_above(ctx: &Context, layer: LayerId, below: LayerId) -> bool {
+    let _ = (ctx, layer, below);
+    todo!("canvas-widgets-w11")
 }
 
 /// `id` and everything opened from inside it, shown last frame.

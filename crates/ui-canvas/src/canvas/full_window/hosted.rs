@@ -79,12 +79,24 @@ pub struct WorkspacePass<E, R> {
     /// How the workspace finished this pass: OK's answer or Cancel, as its dialog's
     /// [`DialogOutput::result`](crate::dialog::DialogOutput::result) says; `None` while it stays open.
     pub result: Option<DialogResult<R>>,
+    /// The result OK would give, reported in the pass the Accept button is picked under `cx.hold_ok`; `result`
+    /// stays `None` then.
+    // P3(dialogs-w11): dl.K57 `WorkspacePass::held`
+    pub held: Option<R>,
 }
 
 impl<E, R> WorkspacePass<E, R> {
     /// A pass with `events` that leaves the workspace open.
     pub fn new(response: Response, events: Vec<E>) -> Self {
-        WorkspacePass { response, events, result: None }
+        WorkspacePass { response, events, result: None, held: None } // P3(dialogs-w11): dl.K57
+    }
+
+    /// The result a held OK gives this pass.
+    // P3(dialogs-w11): dl.K57 `WorkspacePass::held`
+    #[must_use]
+    pub fn held(self, held: Option<R>) -> Self {
+        let _ = (self, held);
+        todo!("dl.K57")
     }
 
     /// How the workspace finished this pass.
@@ -171,6 +183,12 @@ impl<W: FullWindowWorkspace> HostedWorkspace<W> {
     /// `reason`.
     pub fn answer_ok(&mut self, answer: Result<(), Label>) {
         let _ = answer;
+        todo!("dl.K57")
+    }
+
+    /// The app's source the workspace shows.
+    // P3(dialogs-w11): dl.K57 `HostedWorkspace::source`
+    pub fn source(&self) -> &Arc<W::Source> {
         todo!("dl.K57")
     }
 

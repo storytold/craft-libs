@@ -240,6 +240,12 @@ impl StandardPrompt {
         self.chosen = choice;
     }
 
+    /// The choice Escape and the close action answer, when the prompt has a button that takes it; `None` otherwise.
+    // P3(top-w4): dl.N2 decision, `StandardPrompt::escape_choice`
+    pub fn escape_choice(&self) -> Option<PromptChoice> {
+        todo!("top-w4")
+    }
+
     /// The delete confirmation for `count` items; `names` are the first few display names.
     pub fn confirm_delete(names: impl IntoIterator<Item = impl Into<String>>, count: usize) -> Self {
         Self::new(PromptKind::ConfirmDelete { names: names.into_iter().map(Into::into).collect(), count })

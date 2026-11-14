@@ -3,7 +3,22 @@
 use craft_ui::contract::{Bind, Pattern, Props};
 use egui::Ui;
 
+use craft_ui::contract::EditResponse;
+
+use crate::raw::RawDevelopSettings;
 use crate::ui::scopes::{ScopeFrame, ScopePanelOutput, ScopePanelState};
+
+/// What the docked and the floating scope report: the scope panel's events and the tone-zone edits of the bound
+/// settings.
+// P3(dialogs-w18): dl.K67 `RawScopeStripOutput`
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct RawScopeStripOutput {
+    /// The scope panel's events.
+    pub panel: ScopePanelOutput,
+    /// The edits of the settings' tone zones.
+    pub edit: EditResponse<RawDevelopSettings>,
+}
 
 /// The docked scope above the controls: a `ScopePanel` with Camera Raw's tone zones and typical histogram scale, its
 /// context menu and a Float action in the section header.
@@ -19,14 +34,16 @@ pub struct RawScopeStrip<'a> {
 }
 
 impl<'a> RawScopeStrip<'a> {
-    /// The strip over `state` and the host's `frame`.
-    pub fn new(state: &'a mut ScopePanelState, frame: Option<&'a ScopeFrame<'a>>) -> Self {
-        let _ = (state, frame);
+    /// The strip over `state` and the host's `frame`, showing the zone values of `settings`.
+    // P3(dialogs-w18): dl.K67 `settings`
+    pub fn new(state: &'a mut ScopePanelState, frame: Option<&'a ScopeFrame<'a>>, settings: Bind<'a, RawDevelopSettings>) -> Self {
+        let _ = (state, frame, settings);
         todo!("dl.K67")
     }
 
     /// Draws the scope.
-    pub fn show(self, ui: &mut Ui) -> ScopePanelOutput {
+    // P3(dialogs-w18): dl.K67 `RawScopeStripOutput`
+    pub fn show(self, ui: &mut Ui) -> RawScopeStripOutput {
         let _ = (self, ui);
         todo!("dl.K67")
     }
@@ -44,14 +61,21 @@ pub struct RawFloatingScope<'a> {
 }
 
 impl<'a> RawFloatingScope<'a> {
-    /// The floating scope over `state` and the host's `frame`.
-    pub fn new(state: &'a mut ScopePanelState, frame: Option<&'a ScopeFrame<'a>>, floating: Bind<'a, bool>) -> Self {
-        let _ = (state, frame, floating);
+    /// The floating scope over `state` and the host's `frame`, showing the zone values of `settings`.
+    // P3(dialogs-w18): dl.K67 `settings`
+    pub fn new(
+        state: &'a mut ScopePanelState,
+        frame: Option<&'a ScopeFrame<'a>>,
+        floating: Bind<'a, bool>,
+        settings: Bind<'a, RawDevelopSettings>,
+    ) -> Self {
+        let _ = (state, frame, floating, settings);
         todo!("dl.K67")
     }
 
     /// Draws the scope.
-    pub fn show(self, ui: &mut Ui) -> ScopePanelOutput {
+    // P3(dialogs-w18): dl.K67 `RawScopeStripOutput`
+    pub fn show(self, ui: &mut Ui) -> RawScopeStripOutput {
         let _ = (self, ui);
         todo!("dl.K67")
     }

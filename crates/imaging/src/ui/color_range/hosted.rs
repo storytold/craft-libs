@@ -34,9 +34,29 @@ impl HostedColorRange {
         &self.value
     }
 
-    /// Sets the selection preview the app rendered.
-    pub fn set_preview(&mut self, mask: Option<std::sync::Arc<dyn craft_ui::canvas::RasterSource + Send + Sync>>) {
-        let _ = mask;
+    /// Sets the previews the app rendered: the selection `mask` and the `image`, shown at `picture_scale`, or the
+    /// `error` that kept them from rendering.
+    // P3(dialogs-w9): dl.K54 `set_preview` takes the four arguments
+    pub fn set_preview(
+        &mut self,
+        mask: Option<std::sync::Arc<dyn craft_ui::canvas::RasterSource + Send + Sync>>,
+        image: Option<std::sync::Arc<dyn craft_ui::canvas::RasterSource + Send + Sync>>,
+        picture_scale: u32,
+        error: Option<Label>,
+    ) {
+        let _ = (mask, image, picture_scale, error);
+        todo!("dl.K54")
+    }
+
+    /// The Selection Preview mode the dialog shows on the canvas.
+    // P3(dialogs-w9): dl.K54 `preview_mode`
+    pub fn preview_mode(&self) -> crate::selection::PreviewMode {
+        todo!("dl.K54")
+    }
+
+    /// Whether the dialog's view shows the image rather than the selection.
+    // P3(dialogs-w9): dl.K54 `shows_image`
+    pub fn shows_image(&self) -> bool {
         todo!("dl.K54")
     }
 
