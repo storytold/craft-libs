@@ -42,7 +42,7 @@ pub use crate::codecs::png::{
 pub use crate::codecs::tiff::{
     PhotoshopTags as TiffPhotoshopTags, TiffBands, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian,
 };
-pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
+pub use crate::codecs::tiff_ifd::{ExtraSampleKind, InkSet, TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
 pub use crate::exif_color::{EXIF_COLOR_SPACE_SRGB, exif_color_space};
 pub use crate::fidelity::{FidelityWarning, fidelity_warnings, fidelity_warnings_with};
@@ -210,6 +210,29 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     };
     let o = exif.as_deref().map_or(1, exif_orientation);
     Ok(if (5..=8).contains(&o) { (h, w) } else { (w, h) })
+}
+
+/// A JPEG's frame as its header declares it, read without decoding pixels: the stored size, the
+/// layout [`decode`] returns, whether [`decode`] hands the file to its whole-coefficient
+/// decoder (arithmetic-coded, lossless or 12-bit frames), whose working set is several times the
+/// decoded image, and the coefficients it holds beside its output when it can't decode row by row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JpegInfo {
+    pub width: u32,
+    pub height: u32,
+    pub layout: ChannelLayout,
+    pub whole_coefficients: bool,
+    /// Bytes of DCT coefficients [`decode`] holds at once beside its output when it can't turn
+    /// the frame into rows as it reads: an 8-bit progressive frame (SOF2), whose scans refine
+    /// every block in turn, or an 8-bit Huffman one (SOF0, SOF1) whose first scan lacks some of
+    /// its components. Every block of every component at its own sampling, 64 16-bit values
+    /// each; 0 for the frames it decodes a line of MCUs at a time.
+    pub held_coefficients: u64,
+}
+
+/// [`JpegInfo`] of `bytes`; `None` without a readable frame of 1, 3 or 4 components.
+pub fn jpeg_info(bytes: &[u8]) -> Option<JpegInfo> {
+    jpeg::info(bytes)
 }
 
 /// The colour table of a GIF's first frame (its Local Color Table, else the Global one) and the

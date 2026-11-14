@@ -59,6 +59,16 @@ fn new(alg: Algorithm, user: &str, owner: &str, perms: i32) -> SecurityHandler {
     .unwrap()
 }
 
+/// Every verifier check goes through this comparison: it reads both sides in full and a value
+/// that merely starts the same never matches.
+#[test]
+fn verifier_comparison_reads_every_byte() {
+    assert!(super::same(b"", b""));
+    assert!(super::same(b"0123456789abcdef", b"0123456789abcdef"));
+    assert!(!super::same(b"0123456789abcdef", b"0123456789abcdee"), "difference in the last byte");
+    assert!(!super::same(b"0123456789abcdef", b"0123456789abcde"), "shorter value");
+}
+
 const ALL: [Algorithm; 4] = [Algorithm::Rc4_40, Algorithm::Rc4_128, Algorithm::Aes128, Algorithm::Aes256];
 
 #[test]

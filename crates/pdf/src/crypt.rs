@@ -283,7 +283,7 @@ impl SecurityHandler {
     /// different key is refused too.
     pub fn authenticate_owner(&self, id0: &[u8], password: &str) -> Result<Self, CryptError> {
         let owner = Self::open(self.dict.clone(), id0, Some(password))?;
-        if owner.auth != Auth::Owner || owner.key != self.key {
+        if owner.auth != Auth::Owner || !same(owner.key.as_slice(), self.key.as_slice()) {
             return Err(CryptError::WrongPassword);
         }
         Ok(owner)
@@ -539,6 +539,12 @@ fn u_value_r4(d: &EncryptDict, id0: &[u8], key: &[u8]) -> Vec<u8> {
     x
 }
 
+/// Whether `a` and `b` are equal, in time that depends only on their lengths: password-derived
+/// digests, keys and verifiers are compared without stopping at the first differing byte.
+fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 /// Algorithm 6: authenticate a user password; returns the file key.
 ///
 /// Some producers ignore `/EncryptMetadata false` when deriving the key (they omit the
@@ -549,7 +555,7 @@ fn user_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<Zeroizing<Vec<u
         let key = file_key_r4(d, id0, pw);
         let u = u_value_r4(d, id0, &key);
         let n = if d.r == 2 { 32 } else { 16 };
-        (d.u.len() >= n && u[..n] == d.u[..n]).then_some(key)
+        (d.u.len() >= n && same(&u[..n], &d.u[..n])).then_some(key)
     };
     check(d).or_else(|| (d.r >= 4 && !d.encrypt_metadata).then(|| check(&EncryptDict { encrypt_metadata: true, ..d.clone() })).flatten())
 }
@@ -636,7 +642,8 @@ fn key_r6(d: &EncryptDict, pw: &[u8], owner: bool) -> Result<Option<Zeroizing<Ve
         return Err(CryptError::Malformed("/O and /U must be 48 bytes for R5/R6".into()));
     }
     let (hashed, encrypted, udata) = if owner { (&d.o[..48], &d.oe, &d.u[..48]) } else { (&d.u[..48], &d.ue, &[][..]) };
-    if *hash_r6(d.r, pw, &hashed[32..40], udata) != hashed[..32] {
+    let verifier = hash_r6(d.r, pw, &hashed[32..40], udata);
+    if !same(verifier.as_slice(), &hashed[..32]) {
         return Ok(None);
     }
     if encrypted.len() < 32 {
