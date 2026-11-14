@@ -262,6 +262,25 @@ fn central_directory_must_be_consumed_exactly() {
 }
 
 #[test]
+fn nonempty_comment_eocd_candidate_does_not_mask_valid_archive() {
+    let mut bytes = zip(&[("a.xml", b"x", false)]);
+    let end = bytes.len() - 22;
+    // The fake EOCD sits in the real EOCD's comment and claims the real directory plus the
+    // real EOCD as a shifted directory. Candidate selection must reject its trailing bytes.
+    bytes[end + 20..end + 22].copy_from_slice(&22u16.to_le_bytes());
+    bytes.extend_from_slice(&END.to_le_bytes());
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&73u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+
+    let archive = Archive::open(&bytes).unwrap();
+    assert_eq!(archive.read("a.xml").unwrap().unwrap(), b"x");
+}
+
+#[test]
 fn deeply_nested_folders_are_refused() {
     let ok = format!("{}a.xml", "f/".repeat(MAX_DEPTH));
     assert!(Archive::open(&zip(&[(&ok, b"x", false)])).is_ok());
@@ -337,6 +356,14 @@ fn zip64_count_sentinel_keeps_a_comment_eocd_from_masking_the_archive() {
 
     let archive = Archive::open(&bytes).unwrap();
     assert_eq!(archive.read("a.xml").unwrap().unwrap(), b"x");
+}
+
+#[test]
+fn empty_relative_zip64_directory_opens_after_sfx_stub() {
+    let mut bytes = b"MZ self-extracting stub".to_vec();
+    bytes.extend_from_slice(&write_at(&[], true, 0));
+    let archive = Archive::open(&bytes).unwrap();
+    assert_eq!(archive.names().count(), 0);
 }
 
 #[test]

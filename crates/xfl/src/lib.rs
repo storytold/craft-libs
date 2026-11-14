@@ -271,7 +271,9 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
                 let count = u64_at(data, at + 32)?;
                 let dir_size = u64_at(data, at + 40)?;
                 let dir_offset = u64_at(data, at + 48)?;
-                locate_directory(data, count, dir_size, dir_offset, at).map(|(_, shift)| (at, count == 0 && shift > 0))
+                locate_directory(data, count, dir_size, dir_offset, at)
+                    .filter(|&(dir, _)| directory_is_exact(data, dir, dir_size, count))
+                    .map(|(_, shift)| (at, count == 0 && shift > 0))
             });
             let Some((_, shifted_empty)) = valid else {
                 continue;
@@ -281,7 +283,9 @@ fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
                 continue;
             }
         } else {
-            let Some((_, shift)) = locate_directory(data, count.into(), size.into(), offset.into(), candidate) else {
+            let Some((_, shift)) = locate_directory(data, count.into(), size.into(), offset.into(), candidate)
+                .filter(|&(dir, _)| directory_is_exact(data, dir, size.into(), count.into()))
+            else {
                 continue;
             };
             if count == 0 && shift > 0 {
@@ -338,9 +342,10 @@ fn find_zip64_end(data: &[u8], locator: usize) -> Option<usize> {
         if !shifted {
             offset.checked_add(size) == Some(at)
         } else {
+            let empty_directory = size == 0 && u64_at(data, at + 24) == Some(0) && u64_at(data, at + 32) == Some(0);
             at > stated
                 && offset.checked_add(size) == Some(stated)
-                && at.checked_sub(size).is_some_and(|dir| dir > offset && u32_at(data, dir) == Some(CENTRAL))
+                && at.checked_sub(size).is_some_and(|dir| dir > offset && (empty_directory || u32_at(data, dir) == Some(CENTRAL)))
         }
     };
     if valid(stated, false) {
@@ -364,6 +369,40 @@ fn locate_directory(data: &[u8], count: u64, size: u64, stated: u64, limit: usiz
         return Some((actual, actual - stated));
     }
     None
+}
+
+/// Checks that the declared central-directory entries consume the entire directory. This is
+/// used while choosing among EOCD-shaped signatures, where a comment may resemble an end record.
+fn directory_is_exact(data: &[u8], start: usize, size: u64, count: u64) -> bool {
+    let Ok(size) = usize::try_from(size) else { return false };
+    let Some(end) = start.checked_add(size).filter(|&end| end <= data.len()) else { return false };
+    // Preserve the existing TooMany diagnostic in `Archive::open` without walking attacker-sized
+    // entry counts here.
+    if count > MAX_ENTRIES as u64 {
+        return true;
+    }
+    let mut cursor = start;
+    for _ in 0..count {
+        let Some(header_end) = cursor.checked_add(46).filter(|&at| at <= end) else {
+            return false;
+        };
+        if u32_at(data, cursor) != Some(CENTRAL) {
+            return false;
+        }
+        let Some(name_len) = u16_at(data, header_end - 18).map(usize::from) else { return false };
+        let Some(extra_len) = u16_at(data, header_end - 16).map(usize::from) else { return false };
+        let Some(comment_len) = u16_at(data, header_end - 14).map(usize::from) else { return false };
+        let Some(entry_end) = header_end
+            .checked_add(name_len)
+            .and_then(|at| at.checked_add(extra_len))
+            .and_then(|at| at.checked_add(comment_len))
+            .filter(|&at| at <= end)
+        else {
+            return false;
+        };
+        cursor = entry_end;
+    }
+    cursor == end
 }
 
 impl<'a> Archive<'a> {
