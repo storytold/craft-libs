@@ -29,6 +29,9 @@ pub struct Package<'a> {
     binary: Option<ContentTypes>,
     workbook_rels: Option<Rels>,
     budget: xlsb::Budget,
+    /// What a binary workbook's formulas refer to, once its workbook part is read: `Some(None)`
+    /// when that couldn't be read (every formula keeps its saved result).
+    binary_links: Option<Option<xlsb::Links>>,
     /// Shared strings in a binary workbook, once counted: a cell's index is checked against it.
     binary_strings: Option<usize>,
 }
@@ -67,6 +70,7 @@ impl<'a> Package<'a> {
             binary,
             workbook_rels: None,
             budget: xlsb::Budget::default(),
+            binary_links: None,
             binary_strings: None,
         })
     }
@@ -145,7 +149,9 @@ impl<'a> Package<'a> {
         if self.binary.is_some() {
             let bytes = self.required(&self.workbook_part.clone())?;
             let rels = self.workbook_rels()?;
-            return xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings);
+            let (wb, links) = xlsb::workbook(&bytes, &rels, &self.limits, &self.budget, &mut self.warnings)?;
+            self.binary_links = Some(links);
+            return Ok(wb);
         }
         let options = self.xml_options();
         let root = match self.opc.read_xml(&self.workbook_part, &options)? {
@@ -214,16 +220,28 @@ impl<'a> Package<'a> {
         Ok(items)
     }
 
-    /// The styles part, `None` when the workbook has none (or is binary: its styles are not read).
+    /// The styles part, `None` when the workbook has none. A damaged one is a warning and `None`;
+    /// only a limit is an error.
     pub fn styles(&mut self) -> Result<Option<Styles>, Error> {
-        if self.binary.is_some() {
-            return Ok(None);
-        }
         let rels = self.workbook_rels()?;
         let Some(rel) = rels.first("styles").filter(|r| !r.external) else {
             self.warn("no styles part");
             return Ok(None);
         };
+        if let Some(types) = &self.binary {
+            let read = xlsb::check_type(types, &rel.target, xlsb::STYLES).and_then(|()| {
+                let bytes = self.opc.read(&rel.target)?.ok_or_else(|| xlsb::invalid(format!("missing part {}", rel.target)))?;
+                xlsb::styles(&bytes, &self.limits, &self.budget, &mut self.warnings)
+            });
+            return match read {
+                Ok(styles) => Ok(Some(styles)),
+                Err(Error::TooLarge(m)) => Err(Error::TooLarge(m)),
+                Err(e) => {
+                    self.warn(format!("skipped {}: {e}", rel.target));
+                    Ok(None)
+                }
+            };
+        }
         Ok(self.optional_xml(&rel.target.clone())?.map(Styles::read))
     }
 
@@ -240,8 +258,13 @@ impl<'a> Package<'a> {
                 Some(n) => n,
                 None => self.shared_strings()?.len(),
             };
+            // Formulas name sheets and functions through the workbook part.
+            if self.binary_links.is_none() {
+                self.workbook()?;
+            }
             let bytes = self.required(&part)?;
-            let mut sheet = xlsb::worksheet(&bytes, strings, &self.limits, &self.budget, &mut self.warnings, &mut each)?;
+            let links = self.binary_links.as_ref().and_then(Option::as_ref);
+            let mut sheet = xlsb::worksheet(&bytes, strings, links, &self.limits, &self.budget, &mut self.warnings, &mut each)?;
             sheet.part = part;
             return Ok(sheet);
         }

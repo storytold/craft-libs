@@ -83,9 +83,18 @@ for new pictures (`vm = i + 1`) and the `XLDAPR` dynamic-array metadata (`cm = 1
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 
-A binary workbook gives the same `Workbook`, strings, rows and merged cells, with saved values
-only: its formulas are token streams that are not decoded, and its styles are not read (each
-cell keeps its format index).
+A binary workbook gives the same `Workbook`, strings, rows and merged cells, and the same
+`Styles`: number formats, fonts, fills, borders, cell and cell style formats, cell styles,
+differential formats and the indexed colours, as Excel writes them in `styles.xml` (default fill
+colours and empty settings left out, a cell style format's `apply*="0"`). Custom table styles and
+recent colours are not read; a damaged styles part is a warning and no styles. Its cell formulas are decoded from their tokens into the
+text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, no implicit `@`), with
+`FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
+metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
+file keeps the tokens once. A formula whose decoding needs something the reader does not read
+keeps only its saved result, with a warning saying why: user defined names, table references,
+other workbooks, Python code stored outside the cell, data tables. The XLSB function table
+(`xlsb/ftab.rs`) and the expression printer are this crate's own, apart from `craft-xls`'s.
 
 ## Hostile input
 
@@ -94,7 +103,9 @@ cell keeps its format index).
   string and what is left of a part, not a sheet's length.
 - `Limits.binary_records`, `binary_cells`, `binary_text`: a binary workbook, over all its parts
   (40 million records, 4 million cells and as many shared strings, 256 MiB of text, as
-  `craft-xls` allows). Fixed caps: 1024 sheets, 100,000 merged ranges per sheet, 64 nested
+  `craft-xls` allows). `binary_formula_text`: decoded formula text over the workbook (128 MiB);
+  past it, formulas keep their saved results. A formula's tokens are bounded at 16 KB, its
+  nesting at 256 levels and an array constant at 65,536 values. Fixed caps: 1024 sheets, 100,000 merged ranges per sheet, 64 nested
   extension blocks.
 - Cells and rows outside the 1,048,576 × 16,384 grid are dropped and counted.
 
