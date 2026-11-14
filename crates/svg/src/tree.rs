@@ -302,6 +302,7 @@ struct Used {
     raster_limit: AtomicUsize,
     invalid_svg: AtomicUsize,
     svg_limit: AtomicUsize,
+    svg_resource_limit: AtomicUsize,
 }
 
 /// What resolving one drawing's embedded images used or refused.
@@ -323,6 +324,10 @@ pub struct ImageUsage {
     pub invalid_svg_images: usize,
     /// Embedded SVG data refused by byte or nesting limits.
     pub svg_limit_images: usize,
+    /// Subset of `svg_limit_images` refused by unpacked byte or embedded-document-chain limits.
+    /// XML/tree-depth omissions and invalid or corrupt data do not set this counter. Consumers
+    /// can reject resource overruns while still allowing an optional, over-deep child to be omitted.
+    pub svg_resource_limit_images: usize,
 }
 
 /// A data-URL resolver and the accounting for the one drawing it serves.
@@ -350,6 +355,7 @@ impl ImageResolver {
                 raster_limit: AtomicUsize::new(0),
                 invalid_svg: AtomicUsize::new(0),
                 svg_limit: AtomicUsize::new(0),
+                svg_resource_limit: AtomicUsize::new(0),
             }),
         }
     }
@@ -376,6 +382,7 @@ impl ImageResolver {
             raster_limit_images: self.used.raster_limit.load(Ordering::Relaxed),
             invalid_svg_images: self.used.invalid_svg.load(Ordering::Relaxed),
             svg_limit_images: self.used.svg_limit.load(Ordering::Relaxed),
+            svg_resource_limit_images: self.used.svg_resource_limit.load(Ordering::Relaxed),
         }
     }
 }
@@ -438,6 +445,7 @@ fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: craft_
 fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'_>) -> Option<usvg::ImageKind> {
     if used.depth.load(Ordering::Relaxed) >= limits.embedded_depth {
         used.svg_limit.fetch_add(1, Ordering::Relaxed);
+        used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
         return None;
     }
     let left = limits.embedded_bytes.saturating_sub(used.bytes.load(Ordering::Relaxed));
@@ -445,9 +453,12 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
         Ok(text) => text,
         // What a refused document unpacked before it was refused was work too: it uses up what
         // is left, so the next image can't repeat it.
-        Err(_) => {
+        Err(error) => {
             used.bytes.fetch_add(left, Ordering::Relaxed);
             used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            if matches!(error, svgz::Error::TooLarge(_)) {
+                used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
+            }
             return None;
         }
     };
