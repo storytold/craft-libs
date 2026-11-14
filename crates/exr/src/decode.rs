@@ -29,7 +29,7 @@ use exr::prelude::{
 };
 pub use half::f16;
 
-use crate::channels::color_channels;
+use crate::channels::{color_channels, part_channel_name};
 
 /// Why a file could not be read or written.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -399,6 +399,228 @@ impl Part {
     /// The kept channel called `name`.
     pub fn channel(&self, name: &str) -> Option<&Channel> {
         self.channels.iter().find(|c| c.name == name)
+    }
+}
+
+/// A channel placed in its part's display window. Samples are `f32`; samples outside the data
+/// window are filled with the caller's per-channel value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisplayChannel {
+    pub name: String,
+    pub samples: Vec<f32>,
+}
+
+/// A decoded part whose channels are placed in the display window.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisplayPart {
+    pub info: PartInfo,
+    pub channels: Vec<DisplayChannel>,
+}
+
+/// Decodes the kept flat channels of one part and places them in its display window.
+///
+/// Channels are decoded in their stored sample type, converted to `f32`, and clipped or padded
+/// according to their data and display windows. `keep` and `fill` receive the part-qualified name
+/// from [`part_channel_name`], which is also returned in [`DisplayChannel::name`]. Both decoded
+/// block data and display-window buffers are bounded by `limits` before allocation.
+pub fn decode_display_part(
+    bytes: &[u8],
+    index: usize,
+    keep: &dyn Fn(&str) -> bool,
+    fill: &dyn Fn(&str) -> f32,
+    limits: &Limits,
+) -> Result<DisplayPart> {
+    // Only the caller-selected display planes are allocated here. Keep the shared header and
+    // expansion-ratio checks, but do not charge ignored channel data against the output budget.
+    let mut header_limits = *limits;
+    header_limits.max_width = u32::MAX;
+    header_limits.max_height = u32::MAX;
+    header_limits.max_pixels = u64::MAX;
+    header_limits.max_bytes = u64::MAX;
+    let meta = read_meta(bytes, &header_limits)?;
+    let info = meta.headers.get(index).map(|header| part_info(index, header)).ok_or_else(|| malformed(format!("part {index}")))?;
+    if info.deep {
+        return Err(Error::Unsupported("deep data (use the deep reader)".into()));
+    }
+    let display = info.display_window;
+    let pixels = u64::from(display.width)
+        .checked_mul(u64::from(display.height))
+        .ok_or_else(|| Error::LimitExceeded("display window dimensions overflow".into()))?;
+    if pixels > limits.max_pixels {
+        return Err(Error::LimitExceeded(format!("display window of {pixels} pixels exceeds {}", limits.max_pixels)));
+    }
+    let kept = info.channels.iter().filter(|channel| keep(&part_channel_name(info.name.as_deref(), &channel.name))).count();
+    let bytes_needed = pixels
+        .checked_mul(4)
+        .and_then(|bytes_per_channel| bytes_per_channel.checked_mul(kept as u64))
+        .ok_or_else(|| Error::LimitExceeded("display window byte size overflow".into()))?;
+    if bytes_needed > limits.max_bytes || usize::try_from(bytes_needed).is_err() {
+        return Err(Error::LimitExceeded(format!("{bytes_needed} display-window bytes exceed {}", limits.max_bytes)));
+    }
+    let block_limit = std::cell::Cell::new(None);
+    let select = DisplaySelect { index, keep, fill, limits, seen: std::cell::Cell::new(0), block_limit: &block_limit };
+    let image = ReadImage::new(ReadAllLayers { read_channels: select }, |_| {})
+        .from_buffered(Cursor::new(bytes))
+        .map_err(|error| block_limit.take().map(Error::LimitExceeded).unwrap_or_else(|| map_exr(error)))?;
+    let channels = image
+        .layer_data
+        .into_iter()
+        .nth(index)
+        .ok_or_else(|| malformed("the part was not read"))?
+        .channel_data
+        .into_iter()
+        .flatten()
+        .map(|(name, samples)| DisplayChannel { name, samples })
+        .collect();
+    Ok(DisplayPart { info, channels })
+}
+
+/// Filtered channel reader that writes each decoded block directly into a bounded display plane.
+struct DisplaySelect<'a> {
+    index: usize,
+    keep: &'a dyn Fn(&str) -> bool,
+    fill: &'a dyn Fn(&str) -> f32,
+    limits: &'a Limits,
+    seen: std::cell::Cell<usize>,
+    block_limit: &'a std::cell::Cell<Option<String>>,
+}
+
+struct DisplaySelectReader {
+    planes: Vec<Option<(String, Vec<f32>)>>,
+    offset: (i64, i64),
+    layer: (usize, usize),
+    display: (usize, usize),
+    f16s: Vec<f16>,
+    f32s: Vec<f32>,
+    u32s: Vec<u32>,
+}
+
+impl<'s> ReadChannels<'s> for DisplaySelect<'_> {
+    type Reader = DisplaySelectReader;
+
+    fn create_channels_reader(&'s self, header: &Header) -> exr::error::Result<DisplaySelectReader> {
+        let part = self.seen.get();
+        self.seen.set(part.saturating_add(1));
+        let (layer_w, layer_h) = (header.layer_size.0, header.layer_size.1);
+        let display_window = header.shared_attributes.display_window;
+        let (display_w, display_h) = (display_window.size.0, display_window.size.1);
+        if part != self.index {
+            return Ok(DisplaySelectReader {
+                planes: header.channels.list.iter().map(|_| None).collect(),
+                offset: (0, 0),
+                layer: (layer_w, layer_h),
+                display: (display_w, display_h),
+                f16s: vec![],
+                f32s: vec![],
+                u32s: vec![],
+            });
+        }
+        // The EXR crate decompresses each accepted block before `read_block` can discard ignored
+        // channels. Bound that all-channel input separately from the selected output planes.
+        let Some(block_bytes) = layer_w
+            .checked_mul(layer_h)
+            .and_then(|pixels| pixels.checked_mul(header.channels.list.len().max(1)))
+            .and_then(|samples| samples.checked_mul(std::mem::size_of::<f32>()))
+        else {
+            self.block_limit.set(Some(format!("data-window block size exceeds {}", self.limits.max_bytes)));
+            return Err(exr::error::Error::Invalid("data-window block size overflow".into()));
+        };
+        if u64::try_from(block_bytes).map_or(true, |bytes| bytes > self.limits.max_bytes) || block_bytes > isize::MAX as usize {
+            self.block_limit.set(Some(format!("{block_bytes} data-window bytes exceed {}", self.limits.max_bytes)));
+            return Err(exr::error::Error::Invalid("data-window blocks exceed limit".into()));
+        }
+        let pixels = display_w.checked_mul(display_h).filter(|n| *n > 0).ok_or(exr::error::Error::Invalid("display window".into()))?;
+        let prefix = header.own_attributes.layer_name.as_ref().map(|name| name.to_string()).filter(|name| !name.is_empty());
+        let kept =
+            header.channels.list.iter().filter(|channel| (self.keep)(&part_channel_name(prefix.as_deref(), &channel.name.to_string()))).count();
+        let bytes = pixels
+            .checked_mul(4)
+            .and_then(|n| n.checked_mul(kept))
+            .ok_or_else(|| exr::error::Error::Invalid("display planes exceed limit".into()))?;
+        if pixels as u64 > self.limits.max_pixels || bytes as u64 > self.limits.max_bytes || bytes > isize::MAX as usize {
+            return Err(exr::error::Error::Invalid("display planes exceed limit".into()));
+        }
+        let mut planes = Vec::with_capacity(header.channels.list.len());
+        for channel in header.channels.list.iter() {
+            let name = part_channel_name(prefix.as_deref(), &channel.name.to_string());
+            let plane = if (self.keep)(&name) {
+                if channel.sampling.0 != 1 || channel.sampling.1 != 1 {
+                    return Err(exr::error::Error::NotSupported("subsampled channels".into()));
+                }
+                Some((name.clone(), vec![(self.fill)(&name); pixels]))
+            } else {
+                None
+            };
+            planes.push(plane);
+        }
+        let position = header.own_attributes.layer_position;
+        Ok(DisplaySelectReader {
+            planes,
+            offset: (i64::from(position.0) - i64::from(display_window.position.0), i64::from(position.1) - i64::from(display_window.position.1)),
+            layer: (layer_w, layer_h),
+            display: (display_w, display_h),
+            f16s: vec![],
+            f32s: vec![],
+            u32s: vec![],
+        })
+    }
+}
+
+impl ChannelsReader for DisplaySelectReader {
+    type Channels = Vec<Option<(String, Vec<f32>)>>;
+
+    fn filter_block(&self, tile: TileCoordinates) -> bool {
+        tile.is_largest_resolution_level() && self.planes.iter().any(Option::is_some)
+    }
+
+    fn read_block(&mut self, header: &Header, block: UncompressedBlock) -> exr::error::UnitResult {
+        let ((layer_w, layer_h), (display_w, display_h)) = (self.layer, self.display);
+        for line in block.lines(&header.channels) {
+            let Some(Some((_, dst_plane))) = self.planes.get_mut(line.location.channel) else { continue };
+            let (x, y, count) = (line.location.position.0, line.location.position.1, line.location.sample_count);
+            if y >= layer_h || x.checked_add(count).is_none_or(|end| end > layer_w) {
+                continue;
+            }
+            let Some(ty) = usize::try_from(y as i64 + self.offset.1).ok().filter(|ty| *ty < display_h) else { continue };
+            let tx0 = x as i64 + self.offset.0;
+            let skip = usize::try_from(-tx0).unwrap_or(0).min(count);
+            let tx = usize::try_from(tx0.max(0)).unwrap_or(usize::MAX);
+            let take = (count - skip).min(display_w.saturating_sub(tx));
+            if take == 0 {
+                continue;
+            }
+            let start = ty.checked_mul(display_w).and_then(|row| row.checked_add(tx));
+            let Some(dst) = start.and_then(|s| dst_plane.get_mut(s..s.checked_add(take)?)) else { continue };
+            match header.channels.list.get(line.location.channel).map(|c| c.sample_type) {
+                Some(ExrSample::F16) => {
+                    self.f16s.resize(count, f16::ZERO);
+                    line.read_samples_into_slice(&mut self.f16s)?;
+                    for (d, s) in dst.iter_mut().zip(self.f16s.iter().skip(skip)) {
+                        *d = s.to_f32();
+                    }
+                }
+                Some(ExrSample::F32) => {
+                    self.f32s.resize(count, 0.0);
+                    line.read_samples_into_slice(&mut self.f32s)?;
+                    for (d, s) in dst.iter_mut().zip(self.f32s.iter().skip(skip)) {
+                        *d = *s;
+                    }
+                }
+                Some(ExrSample::U32) => {
+                    self.u32s.resize(count, 0);
+                    line.read_samples_into_slice(&mut self.u32s)?;
+                    for (d, s) in dst.iter_mut().zip(self.u32s.iter().skip(skip)) {
+                        *d = *s as f32;
+                    }
+                }
+                None => continue,
+            }
+        }
+        Ok(())
+    }
+
+    fn into_channels(self) -> Self::Channels {
+        self.planes
     }
 }
 

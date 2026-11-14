@@ -37,14 +37,6 @@ pub(crate) fn check_image(data: &[u8], info: &ImageInfo, limits: &Limits) -> Res
     if total > limits.samples() || total == 0 {
         return Err(RawError::Limit("image too large"));
     }
-    let bits = info.bits() as u32;
-    let float = info.sample_format == 3;
-    if float && !matches!(bits, 16 | 24 | 32) {
-        return Err(RawError::Unsupported(format!("{bits}-bit floating point samples")));
-    }
-    if !float && !(1..=16).contains(&bits) {
-        return Err(RawError::Unsupported(format!("{bits}-bit integer samples")));
-    }
     let chunks = info.chunks(data.len() as u64);
     if chunks.is_empty() {
         return Err(RawError::Corrupt("no image data chunks".into()));
@@ -94,6 +86,17 @@ pub(crate) fn check_image(data: &[u8], info: &ImageInfo, limits: &Limits) -> Res
     let referenced = chunks.iter().fold(0u64, |sum, c| sum.saturating_add(chunk_bytes(data, c).map_or(0, |b| b.len() as u64)));
     if info.compression == comp::JPEG && referenced.saturating_mul(32) < total as u64 {
         return Err(RawError::Corrupt(format!("{referenced} bytes of lossless JPEG data cannot hold {total} samples")));
+    }
+    // Validate that the source actually contains the declared image before reporting a format
+    // limitation. A truncated unsupported float DNG must not be mistaken for a valid raw and
+    // silently replaced by its embedded preview.
+    let bits = info.bits() as u32;
+    let float = info.sample_format == 3;
+    if float && !matches!(bits, 16 | 24 | 32) {
+        return Err(RawError::Unsupported(format!("{bits}-bit floating-point samples")));
+    }
+    if !float && !(1..=16).contains(&bits) {
+        return Err(RawError::Unsupported(format!("{bits}-bit integer samples")));
     }
     Ok(total)
 }

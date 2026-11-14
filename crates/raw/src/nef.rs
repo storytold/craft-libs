@@ -281,7 +281,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         .filter(|v| v.len() >= 2 && v[0] > 0.1 && v[1] > 0.1 && v[0] < 10.0 && v[1] < 10.0)
         .map(|v| [v[0] as f32, 1.0, v[1] as f32]);
     let cfa = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
-        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
+        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
+            Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }
+        }
         _ => Cfa::bayer_static("RGGB"),
     };
     let model = ifd0.string(t::MODEL).unwrap_or_default();
@@ -723,36 +725,38 @@ mod tests {
         TiffWriter::new(order, false).write(&[ifd0]).unwrap()
     }
 
+    /// A small uncompressed NEF with a real NikonNEFInfo TIFF block, without binary fixtures.
+    fn nikon_distortion_file(model: &str, mode: u8) -> Vec<u8> {
+        use crate::nef_lens::tests::{distortion_block, nef_info_blob, offset_block};
+        let (w, h) = (48u32, 32u32);
+        let words: Vec<u8> = (0..w * h).flat_map(|i| (600 + (i % 97) as u16 * 50).to_be_bytes()).collect();
+        let mut raw = IfdBuilder::new();
+        raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
+        raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
+        raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
+        raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![14]));
+        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+        raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
+        raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+        raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
+        let info = nef_info_blob(&[
+            (0x0005, distortion_block(mode, 21.6, 4, [0.039895, 0.019211, -0.127218], -0.025043)),
+            (0x0008, offset_block(1.5, -0.75)),
+        ]);
+        raw.set(0xc7d5, Value::Undefined(info));
+        raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![words] });
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set(t::MAKE, Value::Ascii("NIKON CORPORATION".into()));
+        ifd0.set(t::MODEL, Value::Ascii(model.into()));
+        ifd0.add_sub_ifd(raw);
+        TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+    }
+
     /// A Z 6II NEF carrying NikonNEFInfo gets Nikon's distortion correction as one warp, in the header probe and
     /// the full decode alike, and keeps it through DNG export; another body with the same data gets none.
     #[test]
     fn nikon_in_file_distortion_becomes_a_warp() {
-        use crate::nef_lens::tests::{distortion_block, nef_info_blob, offset_block};
-        let (w, h) = (48u32, 32u32);
-        let file = |model: &str| {
-            let words: Vec<u8> = (0..w * h).flat_map(|i| (600 + (i % 97) as u16 * 50).to_be_bytes()).collect();
-            let mut raw = IfdBuilder::new();
-            raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
-            raw.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
-            raw.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
-            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![14]));
-            raw.set(t::COMPRESSION, Value::Short(vec![1]));
-            raw.set(t::PHOTOMETRIC, Value::Short(vec![photometric::CFA]));
-            raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
-            raw.set(t::CFA_PATTERN_EP, Value::Byte(vec![0, 1, 1, 2]));
-            let info = nef_info_blob(&[
-                (0x0005, distortion_block(3, 21.6, 4, [0.039895, 0.019211, -0.127218], -0.025043)),
-                (0x0008, offset_block(1.5, -0.75)),
-            ]);
-            raw.set(0xc7d5, Value::Undefined(info));
-            raw.set_image(ImageData::Strips { rows_per_strip: h, strips: vec![words] });
-            let mut ifd0 = IfdBuilder::new();
-            ifd0.set(t::MAKE, Value::Ascii("NIKON CORPORATION".into()));
-            ifd0.set(t::MODEL, Value::Ascii(model.into()));
-            ifd0.add_sub_ifd(raw);
-            TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
-        };
-        let bytes = file("NIKON Z 6_2");
+        let bytes = nikon_distortion_file("NIKON Z 6_2", 3);
         let header = decode(&bytes, Mode::Header, &Limits::default()).unwrap();
         let full = decode(&bytes, Mode::Full, &Limits::default()).unwrap();
         assert_eq!(header.info(), full.info());
@@ -765,7 +769,19 @@ mod tests {
             let dng = crate::write_dng(&full, &Default::default()).unwrap();
             assert_eq!(crate::decode(&dng).unwrap().opcodes.list3, full.opcodes.list3);
         }
-        assert!(decode(&file("NIKON D850"), Mode::Full, &Limits::default()).unwrap().opcodes.list3.is_empty());
+        assert!(decode(&nikon_distortion_file("NIKON D850", 3), Mode::Full, &Limits::default()).unwrap().opcodes.list3.is_empty());
+    }
+
+    /// Off, no-lens and unrecognized modes must not create a source correction through either public path.
+    #[test]
+    fn nikon_distortion_modes_are_respected_by_probe_and_full_decode() {
+        for mode in [0, 1, 2, 3, 4, 128, 255] {
+            let bytes = nikon_distortion_file("NIKON Z 6_2", mode);
+            let header = crate::probe_info(&bytes).unwrap();
+            let full = crate::decode(&bytes).unwrap();
+            assert_eq!(header, full.info(), "mode {mode}: header/full agreement");
+            assert_eq!(!header.opcodes.list3.is_empty(), matches!(mode, 1 | 3), "mode {mode}");
+        }
     }
 
     #[test]

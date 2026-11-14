@@ -12,14 +12,20 @@ workspace = true
 
 [dependencies]
 craft-xml = { workspace = true }
+craft-image-codecs = { workspace = true }
 # SVGZ (gzip), pure-Rust backend.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 kurbo = { workspace = true }
 roxmltree = "0.21.2"
 thiserror = { workspace = true }
+vectorcraft-geom = { workspace = true }
+vectorcraft-pathops = { workspace = true }
 # The full SVG parser (Apache-2.0 OR MIT). The one version every Craft app uses: apps depend on
 # craft-svg's `tree` feature and take usvg from its re-export, never directly.
 usvg = { version = "=0.48.1", default-features = false, optional = true }
+# Rendering the parsed tree uses the matching renderer version. Keep it behind an opt-in feature
+# so callers that only need bounded SVG text/tree parsing do not pull in raster backends.
+resvg = { version = "=0.48.1", default-features = false, features = ["text", "raster-images"], optional = true }
 
 [features]
 # `craft_svg::tree`: usvg behind the bounded entry point.
@@ -28,3 +34,6 @@ tree = ["dep:usvg"]
 tree-text = ["tree", "usvg/text"]
 # The system's fonts in `usvg::fontdb`.
 tree-system-fonts = ["tree-text", "usvg/system-fonts"]
+# Bounded rendering of a parsed tree through the matching resvg/tiny-skia versions.
+tree-render = ["tree", "dep:resvg"]
+tree-render-system-fonts = ["tree-render", "resvg/system-fonts"]

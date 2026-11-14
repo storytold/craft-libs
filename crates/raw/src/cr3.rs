@@ -184,6 +184,13 @@ fn black_at_active(levels: [f32; 4], pattern: u8, active: Rect) -> BlackLevel {
     BlackLevel { repeat_rows: 2, repeat_cols: 2, values, delta_h: vec![], delta_v: vec![] }
 }
 
+/// Orientation metadata usable for embedded-preview fallback even when the raw track is unsupported.
+pub(crate) fn orientation(bytes: &[u8]) -> Option<u16> {
+    let container = parse_cr3(bytes)?;
+    let cmt1 = container.cmt.first().and_then(|b| *b).and_then(|b| Tiff::parse(b).ok())?;
+    Some(cmt1.ifds.first()?.u16(craft_tiff::tags::ORIENTATION).unwrap_or(1))
+}
+
 pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawImage> {
     let container = parse_cr3(bytes).ok_or(RawError::NotRaw)?;
     let track = main_track(&container.tracks).ok_or_else(|| RawError::Unsupported("CR3 without a Bayer raw track".into()))?;
