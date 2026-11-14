@@ -2,10 +2,10 @@
 //! Find Layers puts the caret in the Name field.
 
 use craft_behavior::SelectionChange;
-use craft_layers::ui::filter::{FilterBy, LayerAttribute, LayerFilter, SmartKind};
+use craft_layers::ui::filter::{EffectKind, FilterBy, FilterKind, LayerAttribute, LayerFilter, SmartKind};
 use craft_layers::ui::mock::FakeLayers;
 use craft_layers::ui::panel::{LayersEvent, LayersPanel};
-use craft_layers::ui::tree::{LayerPart, LayerSelection};
+use craft_layers::ui::tree::{LayerInfo, LayerKind, LayerPart, LayerSelection};
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
 use egui::Vec2;
@@ -111,6 +111,76 @@ fn the_app_decides_what_only_it_knows() {
         filter.smart = vec![SmartKind::Missing];
     });
     assert_eq!(rig.rows(), ["Linked Logo"]);
+}
+
+/// The layers of the matching table, top first: a type layer, a group, two pixel layers (the lower one hidden and with
+/// a stroke, Multiply) and a Normal group.
+fn matching_layers() -> Vec<LayerInfo> {
+    let mut notes = LayerInfo::new("ink notes", LayerKind::Text);
+    notes.blend_key = String::from("normal");
+    let mut sheets = LayerInfo::new("Sheets", LayerKind::Group);
+    sheets.blend_key = String::from("pass_through");
+    let mut ink = LayerInfo::new("Ink", LayerKind::Pixel);
+    ink.blend_key = String::from("multiply");
+    ink.effect_kinds = vec![EffectKind::Stroke];
+    let mut paper = LayerInfo::new("Paper", LayerKind::Pixel);
+    paper.blend_key = String::from("normal");
+    paper.visible = false;
+    let mut normal = LayerInfo::new("Normal group", LayerKind::Group);
+    normal.blend_key = String::from("normal");
+    vec![notes, sheets, ink, paper, normal]
+}
+
+/// The names `filter` lists among `layers`.
+fn listed<'a>(filter: &LayerFilter, layers: &'a [LayerInfo]) -> Vec<&'a str> {
+    layers.iter().filter(|info| filter.shows(info)).map(|info| info.name.as_str()).collect()
+}
+
+/// Each filter type lists the layers its rule matches: a group matches no kind, a name matches in any case with the
+/// spaces trimmed, a group matches by name, the Mode select offers no Pass Through, and an opposite attribute lists
+/// the rest, groups included.
+#[trial]
+fn each_filter_type_lists_its_matches() {
+    let layers = matching_layers();
+    let by = |edit: &dyn Fn(&mut LayerFilter)| {
+        let mut filter = LayerFilter::default();
+        edit(&mut filter);
+        filter
+    };
+    let cases: Vec<(LayerFilter, Vec<&str>, &str)> = vec![
+        (by(&|f| (f.by, f.kinds) = (FilterBy::Kind, vec![FilterKind::Pixel])), vec!["Ink", "Paper"], "Kind Pixel: groups match no kind"),
+        (by(&|f| (f.by, f.kinds) = (FilterBy::Kind, vec![FilterKind::Type])), vec!["ink notes"], "Kind Type"),
+        (
+            by(&|f| (f.by, f.name) = (FilterBy::Name, String::from(" INK "))),
+            vec!["ink notes", "Ink"],
+            "Name: part of it, any case, spaces trimmed",
+        ),
+        (by(&|f| (f.by, f.name) = (FilterBy::Name, String::from("sheet"))), vec!["Sheets"], "Name: a group matches too"),
+        (by(&|f| (f.by, f.name) = (FilterBy::Name, String::from("nothing like it"))), vec![], "Name: no match"),
+        (by(&|f| (f.by, f.mode) = (FilterBy::Mode, String::from("multiply"))), vec!["Ink"], "Mode Multiply"),
+        (
+            by(&|f| (f.by, f.mode) = (FilterBy::Mode, String::from("normal"))),
+            vec!["ink notes", "Paper", "Normal group"],
+            "Mode Normal lists a Normal group and never a Pass Through one",
+        ),
+        (by(&|f| (f.by, f.effect) = (FilterBy::Effect, EffectKind::Stroke)), vec!["Ink"], "Effect Stroke"),
+        (
+            by(&|f| (f.by, f.attribute) = (FilterBy::Attribute, LayerAttribute::NotVisible)),
+            vec![],
+            "Attribute Not Visible lists what Visible does not",
+        ),
+    ];
+    for (filter, want, case) in cases {
+        if filter.attribute == LayerAttribute::NotVisible && filter.by == FilterBy::Attribute {
+            let visible = by(&|f| (f.by, f.attribute) = (FilterBy::Attribute, LayerAttribute::Visible));
+            let shown = listed(&visible, &layers);
+            let rest: Vec<&str> = layers.iter().map(|info| info.name.as_str()).filter(|name| !shown.contains(name)).collect();
+            assert_eq!(listed(&filter, &layers), rest, "{case}");
+            assert!(rest.contains(&"Paper"), "{case}: the hidden layer is listed");
+            continue;
+        }
+        assert_eq!(listed(&filter, &layers), want, "{case}");
+    }
 }
 
 /// Find Layers switches to Name and selects the field's text, so typing replaces it.

@@ -1,10 +1,22 @@
 //! `LayerCompsPanel`: the Layer Comps panel, a list of recorded layer states with sweepable
 //! option toggles, rename, reorder and the footer actions.
 
-use craft_behavior::EditEvent;
-use craft_ui::contract::{Bind, CommandSet, NoValue, Outcome};
-use craft_ui::runtime::env::Label;
-use egui::{Response, Ui};
+mod body;
+mod events;
+#[cfg(feature = "screen-testing")]
+mod stories;
+mod words;
+
+pub use events::{LayerCompsEvent, LayerCompsOutput, LayerCompsRowCommands};
+pub use words::LayerCompsWords;
+
+use std::cell::RefCell;
+
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _, SweepApply};
+use craft_ui::display::{Shade, Text};
+use craft_ui::layout_components::Stack;
+use craft_ui::runtime::env::{Env, Label};
+use egui::Ui;
 
 /// What a layer comp records of a layer: the options a comp row toggles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -82,65 +94,38 @@ impl LayerCompRow {
     }
 }
 
-/// What the user did in the Layer Comps panel, in order.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum LayerCompsEvent {
-    /// The fixed Last Document State row was activated.
-    RestoreLastDocumentState,
-    /// A row was selected.
-    Select(u64),
-    /// A comp was applied (double click or its apply mark).
-    Apply(u64),
-    /// A rename ended.
-    #[non_exhaustive]
-    Rename {
-        /// The comp.
-        comp: u64,
-        /// The new name.
-        name: String,
-    },
-    /// A comp was dragged or moved by key to `index`.
-    #[non_exhaustive]
-    Reorder {
-        /// The comp.
-        comp: u64,
-        /// Its new place.
-        index: usize,
-    },
-    /// An option toggle of one or more comps, one gesture per sweep (`Update`s, a `Commit` on
-    /// release, a `Cancel` carrying the earlier state).
-    #[non_exhaustive]
-    SetOption {
-        /// The comps the gesture touches.
-        comps: Vec<u64>,
-        /// The option.
-        option: CompOption,
-        /// The edit.
-        edit: EditEvent<bool>,
-    },
-    /// The warning on this comp was cleared.
-    ClearWarning(u64),
-    /// Apply the previous comp.
-    Previous,
-    /// Apply the next comp.
-    Next,
-    /// Update this comp from the document.
-    Update(u64),
-    /// Create a comp.
-    New,
-    /// Delete this comp.
-    Delete(u64),
+/// The sweeps in progress, one reader per option column: the host keeps one `SweepApply` per column.
+#[derive(Clone)]
+struct Sweeps {
+    visibility: SweepApply,
+    position: SweepApply,
+    appearance: SweepApply,
 }
 
-craft_ui::words! {
-    /// The words of the Layer Comps panel.
-    pub struct LayerCompsWords {
-        /// The fixed first row.
-        last_state: "layerComps.lastDocumentState" = "Last Document State";
-        /// The tooltip of the warning on a comp that lost layers.
-        missing: "layerComps.missing" = "Layers of this comp were deleted";
+impl Default for Sweeps {
+    fn default() -> Self {
+        Sweeps { visibility: SweepApply::new(), position: SweepApply::new(), appearance: SweepApply::new() }
     }
+}
+
+impl Sweeps {
+    /// The sweep reader of `option`'s column.
+    fn of(&mut self, option: CompOption) -> &mut SweepApply {
+        match option {
+            CompOption::Visibility => &mut self.visibility,
+            CompOption::Position => &mut self.position,
+            CompOption::Appearance => &mut self.appearance,
+        }
+    }
+}
+
+/// What the panel keeps between passes, in its root slot.
+#[derive(Clone, Default)]
+struct Session {
+    /// The option sweeps in progress.
+    sweeps: Sweeps,
+    /// The comp the last context request named, whose row menu shows.
+    menu: Option<u64>,
 }
 
 /// The Layer Comps panel: a list with three sweepable toggle columns, rename, reorder (Last
@@ -154,25 +139,6 @@ pub struct LayerCompsPanel<'a> {
     last_state_applied: bool,
     document: Option<u64>,
     empty: Option<Label>,
-}
-
-/// What [`LayerCompsPanel::show`] returns.
-#[derive(Debug)]
-#[non_exhaustive]
-#[must_use = "the app applies the panel's events"]
-pub struct LayerCompsOutput {
-    /// The panel.
-    pub response: Response,
-    /// What the user did this pass, in order.
-    pub events: Vec<LayerCompsEvent>,
-}
-
-impl Outcome for LayerCompsOutput {
-    type Value = NoValue;
-
-    fn response(&self) -> &Response {
-        &self.response
-    }
 }
 
 impl<'a> LayerCompsPanel<'a> {
@@ -202,22 +168,32 @@ impl<'a> LayerCompsPanel<'a> {
         self
     }
 
-    /// Draws the panel over the available rect.
+    /// Draws the panel over the available rect: the rows, then the footer. Events are reported in that order.
     pub fn show(self, ui: &mut Ui) -> LayerCompsOutput {
         let Self { label, rows, selected, last_state_applied, document, empty } = self;
-        let _ = (ui, label, rows, selected, last_state_applied, document, empty);
-        todo!("pn.C43")
+        if let Some(text) = empty {
+            let response = Text::new(text).shade(Shade::Muted).show(ui);
+            return LayerCompsOutput { response, events: Vec::new() };
+        }
+        let env = Env::of(ui);
+        let words = env.words::<LayerCompsWords>();
+        // Comp ids restart in every document, so the list's own state (rename, scroll) is keyed by the document.
+        let list = match document {
+            Some(document) => ui.scope_id().with(("layer-comps-rows", document)),
+            None => ui.scope_id().with("layer-comps-rows"),
+        };
+        let cx = body::ListCx { list, label: &label, comps: rows, last_state_applied, words: &words, env: &env };
+        let selected = RefCell::new(selected);
+        let footer_events = RefCell::new(Vec::new());
+        let shown = Stack::new()
+            .fill()
+            .footer(|ui, stack| {
+                let out = body::show_footer(ui, stack, &selected, &cx);
+                footer_events.borrow_mut().extend(out);
+            })
+            .show(ui, |ui, stack| body::show_list(ui, stack, &selected, &cx));
+        let mut events = footer_events.into_inner();
+        events.extend(shown.inner.unwrap_or_default());
+        LayerCompsOutput { response: shown.output, events }
     }
-}
-
-/// The row menu's commands: move the selected comp.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet)]
-#[command(prefix = "layerCompsPanel")]
-pub enum LayerCompsRowCommands {
-    /// Move the comp up.
-    #[command(label = "Move Up")]
-    MoveUp,
-    /// Move the comp down.
-    #[command(label = "Move Down")]
-    MoveDown,
 }
