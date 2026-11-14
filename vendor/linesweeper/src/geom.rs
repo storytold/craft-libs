@@ -368,8 +368,18 @@ impl Segment {
             SegmentInner::Line { p0: q0, p1: q1 } => {
                 let p0 = q0.to_kurbo();
                 let p3 = q1.to_kurbo();
-                let p1 = p0 + (1. / 3.) * (p3 - p0);
-                let p2 = p0 + (2. / 3.) * (p3 - p0);
+                // On an axis where the segment is more than f64::MAX long,
+                // take the weighted sum of the end points instead.
+                let at = |a: f64, b: f64, t: f64| {
+                    let d = b - a;
+                    if d.is_finite() {
+                        a + t * d
+                    } else {
+                        (1. - t) * a + t * b
+                    }
+                };
+                let p1 = kurbo::Point::new(at(p0.x, p3.x, 1. / 3.), at(p0.y, p3.y, 1. / 3.));
+                let p2 = kurbo::Point::new(at(p0.x, p3.x, 2. / 3.), at(p0.y, p3.y, 2. / 3.));
                 kurbo::CubicBez { p0, p1, p2, p3 }
             }
             SegmentInner::Quadratic {
@@ -476,8 +486,21 @@ impl Segment {
                 if self.is_horizontal() {
                     p1.x
                 } else {
-                    let t = (y - p0.y) / (p1.y - p0.y);
-                    p0.x + t * (p1.x - p0.x)
+                    // On an axis where the segment is more than f64::MAX
+                    // long, work with half of each height, and take the
+                    // weighted sum of the x coordinates.
+                    let dy = p1.y - p0.y;
+                    let t = if dy.is_finite() {
+                        (y - p0.y) / dy
+                    } else {
+                        (y * 0.5 - p0.y * 0.5) / (p1.y * 0.5 - p0.y * 0.5)
+                    };
+                    let dx = p1.x - p0.x;
+                    if dx.is_finite() {
+                        p0.x + t * dx
+                    } else {
+                        (1.0 - t) * p0.x + t * p1.x
+                    }
                 }
             }
             // We could have a more optimized implementation for qudratics.
@@ -538,5 +561,46 @@ impl Segment {
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_wider_and_taller_than_f64_max() {
+        let s = 1e308;
+        let seg = Segment::straight(Point::new(-s, -s), Point::new(s, s));
+        assert_eq!(seg.at_y(0.0), 0.0);
+        assert_eq!(seg.at_y(-s), -s);
+        assert_eq!(seg.at_y(s), s);
+
+        let c = seg.to_kurbo_cubic();
+        let third = s / 3.0;
+        for (p, expected) in [(c.p1, -third), (c.p2, third)] {
+            assert!((p.x - expected).abs() <= 1e-15 * s, "{p:?}");
+            assert!((p.y - expected).abs() <= 1e-15 * s, "{p:?}");
+        }
+    }
+
+    #[test]
+    fn line_wider_than_f64_max_and_very_short() {
+        let s = 1e308;
+        let tiny = f64::from_bits(1);
+        let seg = Segment::straight(Point::new(-s, 0.0), Point::new(s, 3.0 * tiny));
+        let x = seg.at_y(tiny);
+        assert!((x + s / 3.0).abs() <= 1e-15 * s, "{x}");
+    }
+
+    #[test]
+    fn line_wider_than_f64_max_with_uneven_ends() {
+        let left = -(2.0f64.powi(1023));
+        let seg = Segment::straight(Point::new(left, 0.0), Point::new(f64::MAX, 1.0));
+        assert_eq!(seg.at_y(0.0), left);
+        assert_eq!(seg.at_y(1.0), f64::MAX);
+        let x = seg.at_y(0.5);
+        let expected = f64::MAX * 0.5 + left * 0.5;
+        assert!((x - expected).abs() <= 1e-15 * f64::MAX, "{x}");
     }
 }
