@@ -10,7 +10,7 @@ use std::f32::consts::{PI, TAU};
 
 use glam::{Vec2, Vec3};
 
-use crate::mesh::{Mesh, SubMesh};
+use crate::mesh::{Mesh, SubMesh, unit};
 use crate::{Limits, MeshOpsError, Result};
 
 /// A UV-space rectangle: origin and size.
@@ -48,8 +48,8 @@ impl Builder {
         Builder { limits: *limits, ..Builder::default() }
     }
 
-    /// Whether `vertices` and `triangles` more fit the limits and `u32` indices; records the
-    /// error when they do not.
+    /// Whether `vertices` and `triangles` more fit the limits and `u32` indices, with the memory
+    /// for them reserved; records the error when they do not.
     fn room(&mut self, vertices: Option<usize>, triangles: Option<usize>) -> bool {
         if self.error.is_some() {
             return false;
@@ -61,7 +61,14 @@ impl Builder {
         } else if total_triangles > self.limits.max_triangles || total_triangles.checked_mul(3).and_then(|i| u32::try_from(i).ok()).is_none() {
             Some(MeshOpsError::TooLarge { what: "triangle count", got: total_triangles as u64, limit: self.limits.max_triangles as u64 })
         } else {
-            None
+            // Both counts fit the limits, so they and three times the triangles are finite.
+            let (v, t) = (vertices.unwrap_or(0), triangles.unwrap_or(0));
+            let reserved = self.p.try_reserve(v).is_ok()
+                && self.n.try_reserve(v).is_ok()
+                && self.uv.try_reserve(v).is_ok()
+                && self.idx.try_reserve(t * 3).is_ok()
+                && self.diag.try_reserve(t).is_ok();
+            (!reserved).then_some(MeshOpsError::OutOfMemory("primitive"))
         };
         self.error = error;
         self.error.is_none()
@@ -102,7 +109,7 @@ impl Builder {
     /// The mesh of one material, with tangents.
     fn finish(self, material: &str) -> Result<Mesh> {
         let mut m = self.into_mesh(material)?;
-        m.compute_tangents();
+        m.try_compute_tangents()?;
         Ok(m)
     }
 
@@ -256,7 +263,9 @@ fn rounded_box_into(b: &mut Builder, center: Vec3, half: Vec3, bevel: f32, r: Uv
             let (a, c) = (cu[j], cv[i]);
             let q = *n * hn + *u * a + *v * c;
             let clamped = q.clamp(-inner, inner);
-            let dir = (q - clamped).try_normalize().unwrap_or(*n);
+            // `unit` gives the same direction where the squared offset overflows, so faces that
+            // share a bevel edge place its vertices at the same positions.
+            let dir = unit(q - clamped).unwrap_or(*n);
             let p = if bevel > 0.0 { clamped + dir * bevel } else { q };
             let nn = if bevel > 0.0 { dir } else { *n };
             (center + p, nn, cell.map((a + hu) / (2.0 * hu), (c + hv) / (2.0 * hv)))
@@ -270,19 +279,24 @@ fn lathe_into(b: &mut Builder, center: Vec3, profile: &[(f32, f32)], segs: usize
     if profile.len() < 2 {
         return;
     }
+    // Arc lengths of the profile divided by its largest coordinate: the UVs of a uniformly scaled
+    // profile stay the same, and the squared steps neither overflow nor round to zero.
+    let largest = profile.iter().map(|(r, y)| r.abs().max(y.abs())).fold(0.0f32, f32::max);
+    let divisor = if largest > 0.0 && largest.is_finite() { largest } else { 1.0 };
     let mut len = vec![0.0f32];
     for w in profile.windows(2) {
-        let d = Vec2::new(w[1].0 - w[0].0, w[1].1 - w[0].1).length();
+        let d = (Vec2::new(w[1].0, w[1].1) / divisor - Vec2::new(w[0].0, w[0].1) / divisor).length();
         len.push(len.last().copied().unwrap_or(0.0) + d);
     }
-    let total = len.last().copied().unwrap_or(1.0).max(1e-6);
+    // A profile of zero length maps every row to the top of `r`.
+    let total = len.last().copied().filter(|t| *t > 0.0).unwrap_or(1.0);
     let rows = profile.len() - 1;
     b.grid(rows, segs, |i, j| {
         let (rad, y) = profile[i];
         // Profile tangent (downwards) → outward normal in the (r, y) plane.
         let prev = profile[i.saturating_sub(1)];
         let next = profile[(i + 1).min(rows)];
-        let t = Vec2::new(next.0 - prev.0, next.1 - prev.1).try_normalize().unwrap_or(Vec2::NEG_Y);
+        let t = (Vec2::new(next.0, next.1) / divisor - Vec2::new(prev.0, prev.1) / divisor).try_normalize().unwrap_or(Vec2::NEG_Y);
         let n2 = Vec2::new(-t.y, t.x);
         let u = j as f32 / segs as f32;
         let phi = u * TAU + PI * 1.5;
@@ -714,12 +728,15 @@ mod tests {
     #[test]
     fn primitives_reject_sizes_that_overflow() {
         let l = Limits::default();
-        // The cylinder's profile length, the torus's two radii and the box's doubled half size
-        // pass f32::MAX.
-        assert!(try_cylinder(1.0, 3e38, 16, &l).is_err());
+        // The torus's two radii and the box's doubled half size pass f32::MAX.
         assert!(try_torus(3e38, 3e38, 16, 8, &l).is_err());
         assert!(try_rounded_box(Vec3::splat(3e38), 0.0, &l).is_err());
-        assert_eq!(cylinder(1.0, 3e38, 16).triangle_count(), 0);
+        assert_eq!(torus(3e38, 3e38, 16, 8).triangle_count(), 0);
+        // The cylinder's profile length is measured on the divided profile, so a height whose
+        // length alone would pass f32::MAX builds.
+        let tall = try_cylinder(1.0, 3e38, 16, &l).unwrap();
+        tall.validate().unwrap();
+        assert!(tall.uvs.iter().all(|uv| (0.0..=1.0).contains(&uv.x) && (0.0..=1.0).contains(&uv.y)));
         // Large sizes that stay finite build.
         let large = [
             try_sphere(1e30, 16, 8, &l).unwrap(),
@@ -732,6 +749,25 @@ mod tests {
             assert!(m.triangle_count() > 0);
             m.validate().unwrap();
         }
+    }
+
+    #[test]
+    fn a_scaled_primitive_is_the_unit_primitive_scaled() {
+        let l = Limits::default();
+        let close = |a: &Mesh, b: &Mesh, scale: f32| {
+            assert_eq!(a.positions.len(), b.positions.len());
+            for (i, (p, q)) in a.positions.iter().zip(&b.positions).enumerate() {
+                assert!((*p / scale - *q).length() < 1e-5, "position {i}: {} vs {q}", *p / scale);
+            }
+            for (i, (u, v)) in a.uvs.iter().zip(&b.uvs).enumerate() {
+                assert!((*u - *v).length() < 1e-5, "UV {i}: {u} vs {v}");
+            }
+        };
+        // Squared bevel offsets overflow at this size: adjacent faces still meet.
+        close(&try_rounded_box(Vec3::splat(1e30), 1e29, &l).unwrap(), &try_rounded_box(Vec3::ONE, 0.1, &l).unwrap(), 1e30);
+        // A profile far shorter than 1e-6 keeps its share of the UV height.
+        close(&try_cylinder(1e-8, 1e-8, 16, &l).unwrap(), &try_cylinder(1.0, 1.0, 16, &l).unwrap(), 1e-8);
+        close(&try_cylinder(1e-30, 2e-30, 16, &l).unwrap(), &try_cylinder(1.0, 2.0, 16, &l).unwrap(), 1e-30);
     }
 
     #[test]

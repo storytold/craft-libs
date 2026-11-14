@@ -1,8 +1,8 @@
 //! The internal triangle mesh.
 
-use glam::{Vec2, Vec3, Vec4};
+use glam::{DVec3, Vec2, Vec3, Vec4};
 
-use crate::{Limits, MeshOpsError, Result, check_limit, try_vec};
+use crate::{Limits, MeshOpsError, Result, check_limit, reserved, try_filled, try_vec};
 
 /// An edge by the bits of its two end positions, the lower one first
 type EdgePositions = ([u32; 3], [u32; 3]);
@@ -53,6 +53,12 @@ const MIN_RADIUS: f32 = 1e-4;
 /// as they are: every unit vector does. MikkTSpace multiplies a normal twice into products of
 /// positions and UVs, so longer normals are divided first.
 const SAFE_NORMAL_MAGNITUDE: f32 = 2.0;
+
+/// Most triangles around one vertex (as MikkTSpace welds vertices) for which tangents come from
+/// MikkTSpace. It visits the triangles around a vertex recursively, one call per triangle, so a
+/// larger fan could exhaust the stack; such meshes get the per-vertex fallback. This crate's own
+/// value, the same as the default [`Limits::max_segments`].
+pub const MAX_MIKKTSPACE_VALENCE: usize = 2_048;
 
 /// `v` at unit length, also when its squared length overflows or rounds to zero. `None` for a
 /// zero or non-finite vector.
@@ -274,61 +280,163 @@ impl Mesh {
         Ok(())
     }
 
-    /// Area-weighted smooth normals over the index buffer.
+    /// Area-weighted smooth normals over the index buffer. Leaves the normals unchanged when the
+    /// memory for them cannot be reserved.
     pub fn compute_normals(&mut self) {
-        self.normals = self.smooth_normals();
+        let _ = self.try_compute_normals();
     }
 
-    /// The normals [`Mesh::compute_normals`] stores.
-    pub(crate) fn smooth_normals(&self) -> Vec<Vec3> {
-        let scale = safe_divisor(largest_abs(self.positions.iter().flat_map(|p| p.to_array())));
-        let mut normals = vec![Vec3::ZERO; self.positions.len()];
+    /// [`Mesh::compute_normals`], or `OutOfMemory` with the mesh unchanged.
+    pub fn try_compute_normals(&mut self) -> Result<()> {
+        self.normals = self.smooth_normals()?;
+        Ok(())
+    }
+
+    /// The normals [`Mesh::compute_normals`] stores. The face products are summed in `f64`, where
+    /// the cross product of any two `f32` edges neither overflows nor rounds to zero, so a small
+    /// face far from the origin keeps its normal.
+    pub(crate) fn smooth_normals(&self) -> Result<Vec<Vec3>> {
+        let mut sums = try_filled(self.positions.len(), DVec3::ZERO, "normals")?;
         for &[a, b, c] in self.indices.as_chunks::<3>().0 {
             let (a, b, c) = (a as usize, b as usize, c as usize);
             let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
-            let (pa, pb, pc) = (*pa / scale, *pb / scale, *pc / scale);
+            let (pa, pb, pc) = (pa.as_dvec3(), pb.as_dvec3(), pc.as_dvec3());
             let face = (pb - pa).cross(pc - pa);
             for v in [a, b, c] {
-                if let Some(x) = normals.get_mut(v) {
+                if let Some(x) = sums.get_mut(v) {
                     *x += face;
                 }
             }
         }
-
-        normals.into_iter().map(|v| unit(v).unwrap_or(Vec3::Y)).collect()
+        let mut normals = try_vec(sums.len(), "normals")?;
+        normals.extend(sums.into_iter().map(|v| v.try_normalize().map_or(Vec3::Y, |n| n.as_vec3())));
+        Ok(normals)
     }
 
     /// MikkTSpace tangents (falls back to per-triangle tangents if generation fails). A mesh with
-    /// an index out of range, a non-finite position, normal or UV, or only degenerate triangles
-    /// does not go to MikkTSpace.
+    /// an index out of range, a non-finite position, normal or UV, only degenerate triangles or
+    /// more than [`MAX_MIKKTSPACE_VALENCE`] triangles around one vertex does not go to MikkTSpace.
+    /// Missing normals are computed and missing UVs are zero.
+    ///
+    /// MikkTSpace gives each triangle corner its own tangent frame. A vertex whose corners get
+    /// different frames (UVs mirrored across it) is split: every further frame gets a copy of
+    /// the vertex, and the corners with that frame use the copy. A copy whose index would not
+    /// fit in `u32` is not made, and those corners keep the first frame.
+    ///
+    /// Leaves the mesh unchanged when the memory for the result cannot be reserved.
     pub fn compute_tangents(&mut self) {
-        self.tangents = vec![Vec4::new(1.0, 0.0, 0.0, 1.0); self.positions.len()];
-        if self.normals.len() != self.positions.len() {
-            self.compute_normals();
-        }
-        if self.uvs.len() != self.positions.len() {
-            self.uvs = vec![Vec2::ZERO; self.positions.len()];
-        }
-        let scales = Scales::of(self);
+        let _ = self.try_compute_tangents();
+    }
+
+    /// [`Mesh::compute_tangents`], or `OutOfMemory` with the mesh unchanged. MikkTSpace's own
+    /// working memory is not reserved this way.
+    pub fn try_compute_tangents(&mut self) -> Result<()> {
+        let n = self.positions.len();
+        let computed_normals = if self.normals.len() != n { Some(self.smooth_normals()?) } else { None };
+        let zero_uvs = if self.uvs.len() != n { Some(try_filled(n, Vec2::ZERO, "UVs")?) } else { None };
+        let normals = computed_normals.as_deref().unwrap_or(&self.normals);
+        let uvs = zero_uvs.as_deref().unwrap_or(&self.uvs);
+        let scales = Scales::of(&self.positions, normals, uvs);
+        let mut corners = try_filled(self.indices.len(), Vec4::ZERO, "tangents")?;
+
         // mikktspace crashes (out-of-bounds) when every triangle is degenerate; skip it then. It
         // reads the divided positions, so the check does too. Its callbacks read a missing vertex
         // as the origin, which the degenerate check cannot see, so an index past the last vertex
         // skips it too.
-        let n = self.positions.len();
-        let usable = scales.finite && self.indices.iter().all(|&i| (i as usize) < n) && !self.all_triangles_degenerate_divided_by(scales.position);
-        let mut g = Mikk { mesh: self, scales };
+        let mut usable =
+            scales.finite && self.indices.iter().all(|&i| (i as usize) < n) && !self.all_triangles_degenerate_divided_by(scales.position);
+        let mut g = Mikk { positions: &self.positions, normals, uvs, indices: &self.indices, scales, corners: &mut corners };
+        // MikkTSpace visits the triangles around a vertex recursively, one call per triangle.
+        usable = usable && g.most_triangles_at_one_vertex()? <= MAX_MIKKTSPACE_VALENCE;
         if !usable || !mikktspace::generate_tangents(&mut g) {
-            self.simple_tangents(scales);
+            let per_vertex = simple_tangents(&self.positions, uvs, &self.indices, scales)?;
+            for (corner, v) in corners.iter_mut().zip(&self.indices) {
+                *corner = per_vertex.get(*v as usize).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0));
+            }
         }
-        for (t, n) in self.tangents.iter_mut().zip(&self.normals) {
+        // Orthonormalize a tangent against the normal of vertex `v`; repair degenerate results.
+        let frame = |v: usize, t: Vec4| {
+            let n = normals.get(v).copied().unwrap_or(Vec3::Y);
             // Normals outside the safe range are brought to unit length first, so the projection
             // below stays finite.
-            let n = if scales.normal == 1.0 { *n } else { (*n / scales.normal).try_normalize().unwrap_or(Vec3::Y) };
-            // Orthonormalize against the normal; repair degenerate results.
-            let v = t.truncate();
-            let o = (v - n * n.dot(v)).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector());
-            *t = o.extend(if t.w < 0.0 { -1.0 } else { 1.0 });
+            let n = if scales.normal == 1.0 { n } else { (n / scales.normal).try_normalize().unwrap_or(Vec3::Y) };
+            let d = t.truncate();
+            let o = (d - n * n.dot(d)).try_normalize().unwrap_or_else(|| n.any_orthonormal_vector());
+            o.extend(if t.w < 0.0 { -1.0 } else { 1.0 })
+        };
+        for (t, v) in corners.iter_mut().zip(&self.indices) {
+            *t = frame(*v as usize, *t);
         }
+
+        // One tangent per vertex: the first corner's frame, and a copy of the vertex for each
+        // other frame its corners have. Corners that share a frame get bit-identical tangents.
+        let bits = |t: Vec4| t.to_array().map(f32::to_bits);
+        let mut tangents = try_filled(n, None::<Vec4>, "tangents")?;
+        let mut copies: Vec<(u32, Vec4)> = Vec::new();
+        let mut copy_of: std::collections::HashMap<(u32, [u32; 4]), u32> = std::collections::HashMap::new();
+        let mut indices = try_vec(self.indices.len(), "indices")?;
+        for (&v, &t) in self.indices.iter().zip(&corners) {
+            let slot = tangents.get_mut(v as usize);
+            let index = match slot {
+                Some(slot @ None) => {
+                    *slot = Some(t);
+                    v
+                }
+                Some(Some(first)) if bits(*first) == bits(t) => v,
+                Some(Some(_)) => match copy_of.get(&(v, bits(t))) {
+                    Some(&copy) => copy,
+                    None => match u32::try_from(n + copies.len()) {
+                        Ok(copy) => {
+                            reserved(copies.try_reserve(1), "tangents")?;
+                            reserved(copy_of.try_reserve(1), "tangents")?;
+                            copies.push((v, t));
+                            copy_of.insert((v, bits(t)), copy);
+                            copy
+                        }
+                        // No index for another copy: the corner keeps the first frame.
+                        Err(_) => v,
+                    },
+                },
+                None => v,
+            };
+            indices.push(index);
+        }
+
+        // Reserve every array before changing any of them: reserving leaves their contents as
+        // they are.
+        let extra = copies.len();
+        let mut out = try_vec(n + extra, "tangents")?;
+        // A vertex no triangle uses gets +X made perpendicular to its normal.
+        out.extend(tangents.iter().enumerate().map(|(v, t)| t.unwrap_or_else(|| frame(v, Vec4::new(1.0, 0.0, 0.0, 1.0)))));
+        out.extend(copies.iter().map(|(_, t)| *t));
+        let (mut normals, mut uvs) = (computed_normals, zero_uvs);
+        let has_colors = self.colors.len() == n;
+        let reserve = |r| reserved(r, "tangents");
+        reserve(self.positions.try_reserve(extra))?;
+        reserve(normals.as_mut().unwrap_or(&mut self.normals).try_reserve(extra))?;
+        reserve(uvs.as_mut().unwrap_or(&mut self.uvs).try_reserve(extra))?;
+        if has_colors {
+            reserve(self.colors.try_reserve(extra))?;
+        }
+
+        if let Some(normals) = normals.take() {
+            self.normals = normals;
+        }
+        if let Some(uvs) = uvs.take() {
+            self.uvs = uvs;
+        }
+        for &(v, _) in &copies {
+            let v = v as usize;
+            self.positions.push(self.positions.get(v).copied().unwrap_or_default());
+            self.normals.push(self.normals.get(v).copied().unwrap_or(Vec3::Y));
+            self.uvs.push(self.uvs.get(v).copied().unwrap_or_default());
+            if has_colors {
+                self.colors.push(self.colors.get(v).copied().unwrap_or(Vec4::ONE));
+            }
+        }
+        self.tangents = out;
+        self.indices = indices;
+        Ok(())
     }
 
     /// True when the mesh has triangles and every one of them has two corners at the same
@@ -340,32 +448,6 @@ impl Mesh {
                 [a, b, c] => p(a) == p(b) || p(a) == p(c) || p(b) == p(c),
                 _ => true,
             })
-    }
-
-    fn simple_tangents(&mut self, scales: Scales) {
-        let mut tangents = vec![Vec3::ZERO; self.positions.len()];
-        for &[a, b, c] in self.indices.as_chunks::<3>().0 {
-            let (a, b, c) = (a as usize, b as usize, c as usize);
-            let (Some(pa), Some(pb), Some(pc)) = (self.positions.get(a), self.positions.get(b), self.positions.get(c)) else { continue };
-            let (Some(ua), Some(ub), Some(uc)) = (self.uvs.get(a), self.uvs.get(b), self.uvs.get(c)) else { continue };
-            let (pa, pb, pc) = (*pa / scales.position, *pb / scales.position, *pc / scales.position);
-            let (ua, ub, uc) = (*ua / scales.uv, *ub / scales.uv, *uc / scales.uv);
-            let (e1, e2) = (pb - pa, pc - pa);
-            let (d1, d2) = (ub - ua, uc - ua);
-            let determinant = d1.x * d2.y - d2.x * d1.y;
-            if determinant.abs() < 1e-12 {
-                continue;
-            }
-
-            let tangent = (e1 * d2.y - e2 * d1.y) / determinant;
-            for v in [a, b, c] {
-                if let Some(x) = tangents.get_mut(v) {
-                    *x += tangent;
-                }
-            }
-        }
-
-        self.tangents = tangents.into_iter().map(|t| unit(t).unwrap_or(Vec3::X).extend(1.0)).collect();
     }
 
     /// The UV tiles material `m` covers: integer parts of its triangles' UV centroids (v down),
@@ -445,21 +527,30 @@ impl Mesh {
     }
 
     /// Append a copy of vertex `v`; returns its index, or `None` when the new index would not
-    /// fit in `u32`.
+    /// fit in `u32`. Normals, tangents, UVs and colors are copied where the mesh has one per
+    /// vertex; an array without one per vertex is left as it is.
     fn duplicate_vertex(&mut self, v: usize) -> Option<u32> {
-        let i = u32::try_from(self.positions.len()).ok()?;
+        let n = self.positions.len();
+        let i = u32::try_from(n).ok()?;
         self.positions.push(self.positions.get(v).copied().unwrap_or_default());
-        self.normals.push(self.normals.get(v).copied().unwrap_or(Vec3::Y));
-        self.tangents.push(self.tangents.get(v).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0)));
-        self.uvs.push(self.uvs.get(v).copied().unwrap_or_default());
-        if !self.colors.is_empty() {
+        if self.normals.len() == n {
+            self.normals.push(self.normals.get(v).copied().unwrap_or(Vec3::Y));
+        }
+        if self.tangents.len() == n {
+            self.tangents.push(self.tangents.get(v).copied().unwrap_or(Vec4::new(1.0, 0.0, 0.0, 1.0)));
+        }
+        if self.uvs.len() == n {
+            self.uvs.push(self.uvs.get(v).copied().unwrap_or_default());
+        }
+        if self.colors.len() == n {
             self.colors.push(self.colors.get(v).copied().unwrap_or(Vec4::ONE));
         }
         Some(i)
     }
 
     /// Append `other`, offsetting indices; its submeshes keep their material indices shifted by
-    /// this mesh's material count. Leaves this mesh unchanged when [`Mesh::try_append`] fails.
+    /// this mesh's material count. Leaves this mesh unchanged when [`Mesh::try_append`] fails on
+    /// a bad index or an overflow.
     pub fn append(&mut self, other: &Mesh) {
         let _ = self.try_append(other);
     }
@@ -467,15 +558,30 @@ impl Mesh {
     /// [`Mesh::append`], or an error when an index of `other` is out of range or a rebased
     /// index or submesh range would not fit in `u32`. When only one side has normals, UVs or
     /// tangents for every vertex, the other side gets them (computed normals and tangents, zero
-    /// UVs), so the attribute arrays stay as long as the positions. A side with submeshes and
-    /// no material list gets one unnamed material.
+    /// UVs), so the attribute arrays stay as long as the positions; computing tangents can split
+    /// vertices ([`Mesh::compute_tangents`]). A side with submeshes and no material list gets
+    /// one unnamed material. After `OutOfMemory` this mesh's normals, UVs or tangents can be
+    /// changed; the other errors leave it unchanged.
     pub fn try_append(&mut self, other: &Mesh) -> Result<()> {
         if let Some(bad) = other.indices.iter().find(|&&i| i as usize >= other.positions.len()) {
             return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", other.positions.len())));
         }
         let too_large = |what| MeshOpsError::Invalid(format!("the appended {what} do not fit in u32"));
-        let base = u32::try_from(self.positions.len()).map_err(|_| too_large("vertices"))?;
-        let vertices = self.positions.len().checked_add(other.positions.len()).ok_or(too_large("vertices"))?;
+        u32::try_from(self.positions.len()).map_err(|_| too_large("vertices"))?;
+        // Splitting adds at most one vertex per triangle corner of a side whose tangents are
+        // computed here.
+        let split = |m: &Mesh, computed: bool| if computed { m.indices.len() } else { 0 };
+        let tangents_needed = |m: &Mesh| !per_vertex(m.tangents.len(), m.positions.len());
+        let any_tangents = per_vertex(self.tangents.len(), self.positions.len()) || per_vertex(other.tangents.len(), other.positions.len());
+        let vertices = [
+            self.positions.len(),
+            other.positions.len(),
+            split(self, any_tangents && tangents_needed(self)),
+            split(other, any_tangents && tangents_needed(other)),
+        ]
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
+        .ok_or(too_large("vertices"))?;
         // The last vertex index is `vertices - 1`.
         if vertices > 0 && u32::try_from(vertices - 1).is_err() {
             return Err(too_large("vertices"));
@@ -507,23 +613,26 @@ impl Mesh {
         let ((sn, su, st), (on, ou, ot)) = (complete(self), complete(&other));
         let need_tangents = st || ot;
         let (need_normals, need_uvs) = (sn || on || need_tangents, su || ou || need_tangents);
-        for (mesh, (has_normals, has_uvs, has_tangents)) in [(&mut *self, (sn, su, st)), (&mut other, (on, ou, ot))] {
+        // `other` first: it is a copy, so an error there leaves this mesh unchanged.
+        for (mesh, (has_normals, has_uvs, has_tangents)) in [(&mut other, (on, ou, ot)), (&mut *self, (sn, su, st))] {
             if !need_normals {
                 mesh.normals.clear();
             } else if !has_normals {
-                mesh.compute_normals();
+                mesh.try_compute_normals()?;
             }
             if !need_uvs {
                 mesh.uvs.clear();
             } else if !has_uvs {
-                mesh.uvs = vec![Vec2::ZERO; mesh.positions.len()];
+                mesh.uvs = try_filled(mesh.positions.len(), Vec2::ZERO, "UVs")?;
             }
             if !need_tangents {
                 mesh.tangents.clear();
             } else if !has_tangents {
-                mesh.compute_tangents();
+                mesh.try_compute_tangents()?;
             }
         }
+        // Computing tangents can split vertices, so the base is taken now (checked to fit above).
+        let base = self.positions.len() as u32;
 
         self.positions.extend_from_slice(&other.positions);
         self.normals.extend_from_slice(&other.normals);
@@ -611,9 +720,9 @@ impl Mesh {
             diagonals: Vec::new(),
         };
         if m.normals.len() != m.positions.len() {
-            m.compute_normals();
+            m.try_compute_normals()?;
         }
-        m.compute_tangents();
+        m.try_compute_tangents()?;
         m.validate()?;
         Ok(m)
     }
@@ -709,7 +818,8 @@ impl Mesh {
             return Err(MeshOpsError::Invalid("the subdivided mesh does not fit in u32 indices".into()));
         }
 
-        // Diagonals stay empty here and are built below when the input has them.
+        // Diagonals stay empty here and are built below when the input has them. The loop below
+        // reserves room for each triangle's midpoints before adding them.
         let mut m = Mesh {
             positions: try_copy(&self.positions, "positions")?,
             normals: try_copy(&self.normals, "normals")?,
@@ -798,10 +908,10 @@ struct Scales {
 }
 
 impl Scales {
-    fn of(mesh: &Mesh) -> Scales {
-        let positions = largest_abs(mesh.positions.iter().flat_map(|p| p.to_array()));
-        let normals = largest_abs(mesh.normals.iter().flat_map(|p| p.to_array()));
-        let uvs = largest_abs(mesh.uvs.iter().flat_map(|p| p.to_array()));
+    fn of(positions: &[Vec3], normals: &[Vec3], uvs: &[Vec2]) -> Scales {
+        let positions = largest_abs(positions.iter().flat_map(|p| p.to_array()));
+        let normals = largest_abs(normals.iter().flat_map(|p| p.to_array()));
+        let uvs = largest_abs(uvs.iter().flat_map(|p| p.to_array()));
         Scales {
             position: safe_divisor(positions),
             normal: divisor_into(normals, SAFE_NORMAL_MAGNITUDE),
@@ -811,39 +921,97 @@ impl Scales {
     }
 }
 
+/// Per-vertex tangents from the UV gradients of the triangles around each vertex, with `w` +1:
+/// the fallback when MikkTSpace does not run or fails.
+fn simple_tangents(positions: &[Vec3], uvs: &[Vec2], indices: &[u32], scales: Scales) -> Result<Vec<Vec4>> {
+    let mut sums = try_filled(positions.len(), Vec3::ZERO, "tangents")?;
+    for &[a, b, c] in indices.as_chunks::<3>().0 {
+        let (a, b, c) = (a as usize, b as usize, c as usize);
+        let (Some(pa), Some(pb), Some(pc)) = (positions.get(a), positions.get(b), positions.get(c)) else { continue };
+        let (Some(ua), Some(ub), Some(uc)) = (uvs.get(a), uvs.get(b), uvs.get(c)) else { continue };
+        let (pa, pb, pc) = (*pa / scales.position, *pb / scales.position, *pc / scales.position);
+        let (ua, ub, uc) = (*ua / scales.uv, *ub / scales.uv, *uc / scales.uv);
+        let (e1, e2) = (pb - pa, pc - pa);
+        let (d1, d2) = (ub - ua, uc - ua);
+        let determinant = d1.x * d2.y - d2.x * d1.y;
+        if determinant.abs() < 1e-12 {
+            continue;
+        }
+
+        let tangent = (e1 * d2.y - e2 * d1.y) / determinant;
+        for v in [a, b, c] {
+            if let Some(x) = sums.get_mut(v) {
+                *x += tangent;
+            }
+        }
+    }
+
+    let mut tangents = try_vec(sums.len(), "tangents")?;
+    tangents.extend(sums.into_iter().map(|t| unit(t).unwrap_or(Vec3::X).extend(1.0)));
+    Ok(tangents)
+}
+
+/// The arrays MikkTSpace reads, and the tangent of every triangle corner it writes.
 struct Mikk<'a> {
-    mesh: &'a mut Mesh,
+    positions: &'a [Vec3],
+    normals: &'a [Vec3],
+    uvs: &'a [Vec2],
+    indices: &'a [u32],
     scales: Scales,
+    corners: &'a mut [Vec4],
 }
 
 impl Mikk<'_> {
     fn vi(&self, face: usize, vert: usize) -> usize {
-        self.mesh.indices.get(face * 3 + vert).copied().unwrap_or(0) as usize
+        self.indices.get(face * 3 + vert).copied().unwrap_or(0) as usize
+    }
+
+    /// The most triangles that share one vertex as MikkTSpace sees it: it welds corners whose
+    /// position, normal and UV, as this type passes them, are equal (0 and -0 alike).
+    fn most_triangles_at_one_vertex(&self) -> Result<usize> {
+        use mikktspace::Geometry;
+        let bits = |x: f32| if x == 0.0 { 0 } else { x.to_bits() };
+        let mut count: std::collections::HashMap<[u32; 8], usize> = std::collections::HashMap::new();
+        reserved(count.try_reserve(self.positions.len().min(self.indices.len())), "tangents")?;
+        let mut most = 0;
+        for face in 0..self.num_faces() {
+            for vert in 0..3 {
+                let ([px, py, pz], [nx, ny, nz], [u, v]) = (self.position(face, vert), self.normal(face, vert), self.tex_coord(face, vert));
+                let key = [px, py, pz, nx, ny, nz, u, v].map(bits);
+                if !count.contains_key(&key) {
+                    reserved(count.try_reserve(1), "tangents")?;
+                }
+                let c = count.entry(key).or_insert(0);
+                *c += 1;
+                most = most.max(*c);
+            }
+        }
+        Ok(most)
     }
 }
 
 impl mikktspace::Geometry for Mikk<'_> {
     fn num_faces(&self) -> usize {
-        self.mesh.indices.len() / 3
+        self.indices.len() / 3
     }
     fn num_vertices_of_face(&self, _face: usize) -> usize {
         3
     }
     fn position(&self, face: usize, vert: usize) -> [f32; 3] {
-        (self.mesh.positions.get(self.vi(face, vert)).copied().unwrap_or_default() / self.scales.position).to_array()
+        (self.positions.get(self.vi(face, vert)).copied().unwrap_or_default() / self.scales.position).to_array()
     }
     fn normal(&self, face: usize, vert: usize) -> [f32; 3] {
-        (self.mesh.normals.get(self.vi(face, vert)).copied().unwrap_or(Vec3::Y) / self.scales.normal).to_array()
+        (self.normals.get(self.vi(face, vert)).copied().unwrap_or(Vec3::Y) / self.scales.normal).to_array()
     }
     fn tex_coord(&self, face: usize, vert: usize) -> [f32; 2] {
         // MikkTSpace expects OpenGL texture coordinates (v up); our UVs are glTF (v down). With
         // v flipped, the bitangent `cross(N, T) * w` points up the image, as glTF requires.
-        let uv = self.mesh.uvs.get(self.vi(face, vert)).copied().unwrap_or_default() / self.scales.uv;
+        let uv = self.uvs.get(self.vi(face, vert)).copied().unwrap_or_default() / self.scales.uv;
         [uv.x, 1.0 - uv.y]
     }
     fn set_tangent_encoded(&mut self, tangent: [f32; 4], face: usize, vert: usize) {
-        let i = self.vi(face, vert);
-        if let Some(t) = self.mesh.tangents.get_mut(i) {
+        // One tangent per corner: corners of a vertex can get different frames.
+        if let Some(t) = self.corners.get_mut(face * 3 + vert) {
             *t = Vec4::from_array(tangent);
         }
     }
@@ -942,6 +1110,21 @@ mod tests {
         assert_eq!(mesh.uv_seam_edges(), vec![vec![(0, 2)], vec![(2, 4)]]);
         mesh.uvs[4] = mesh.uvs[0];
         assert_eq!(mesh.uv_seam_edges(), vec![Vec::<(u32, u32)>::new(); 2], "a material boundary alone is not a UV seam");
+    }
+
+    #[test]
+    fn material_uvs_leave_absent_attributes_absent() {
+        // UVs only, two materials sharing the diagonal's vertices 0 and 2.
+        let uvs = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+        let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]];
+        let mut m = Mesh::from_slices(&positions, None, Some(&uvs), &[0, 1, 2, 0, 2, 3], &Limits::default()).unwrap();
+        m.materials = vec!["a".into(), "b".into()];
+        m.submeshes =
+            vec![SubMesh { name: "a".into(), material: 0, start: 0, count: 3 }, SubMesh { name: "b".into(), material: 1, start: 3, count: 3 }];
+        m.map_material_uvs(1, |uv| uv * 0.5);
+        assert_eq!(m.positions.len(), 6, "vertices 0 and 2 are copied for material 1");
+        assert_eq!(m.uvs.len(), 6);
+        assert!(m.normals.is_empty() && m.tangents.is_empty() && m.colors.is_empty(), "{m:?}");
     }
 
     #[test]
@@ -1348,6 +1531,74 @@ mod tests {
             for t in &t {
                 assert!((Vec4::from_array(*t) - expected).length() < 1e-3, "{length} {size}: {t:?}");
             }
+        }
+    }
+
+    #[test]
+    fn a_small_triangle_far_from_the_origin_keeps_its_normal_and_tangent() {
+        // Unit edges along y and z at x = 1e24: divided by 1e24, their cross product underflows.
+        let positions = [[1e24, 0.0, 0.0], [1e24, 1.0, 0.0], [1e24, 0.0, 1.0]];
+        let l = Limits::default();
+        for n in crate::smooth_normals(&positions, &[0, 1, 2], &l).unwrap() {
+            assert_eq!(n, [1.0, 0.0, 0.0]);
+        }
+        // u grows along +y and v along +z: the bitangent points up the image, along -z, and
+        // cross(+x, +y) = +z, so w is -1.
+        let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]];
+        for t in crate::tangents(&positions, &[[1.0, 0.0, 0.0]; 3], &uvs, &[0, 1, 2], &l).unwrap() {
+            assert!((Vec4::from_array(t) - Vec4::new(0.0, 1.0, 0.0, -1.0)).length() < 1e-5, "{t:?}");
+        }
+    }
+
+    /// Positions, normals, UVs and indices.
+    type Slices = ([[f32; 3]; 4], [[f32; 3]; 4], [[f32; 2]; 4], [u32; 6]);
+
+    /// Two triangles on vertices 0 and 1 whose UVs run in opposite directions: v grows toward +Y
+    /// on the first and toward -Y on the second. Bitangents point up the image (glTF 2.0), so the
+    /// first triangle's tangent frame has w = -1 and the second's w = +1.
+    fn opposite_handedness() -> Slices {
+        let positions = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0]];
+        let uvs = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 1.0]];
+        (positions, [[0.0, 0.0, 1.0]; 4], uvs, [0, 1, 2, 1, 0, 3])
+    }
+
+    #[test]
+    fn tangents_split_vertices_shared_by_opposite_frames() {
+        let (positions, normals, uvs, indices) = opposite_handedness();
+        let mut m = Mesh::from_slices(&positions, Some(&normals), Some(&uvs), &indices, &Limits::default()).unwrap();
+        m.compute_tangents();
+        m.validate().unwrap();
+        // Vertices 0 and 1 get a copy each for the second triangle.
+        assert_eq!(m.positions.len(), 6);
+        for (t, w) in [(0, -1.0), (1, 1.0)] {
+            for (k, v) in m.tri(t).unwrap().into_iter().enumerate() {
+                let tangent = m.tangents[v];
+                assert!((tangent - Vec3::X.extend(w)).length() < 1e-5, "triangle {t}, vertex {v}: {tangent}");
+                let original = indices[t * 3 + k] as usize;
+                assert_eq!((m.positions[v], m.uvs[v]), (Vec3::from_array(positions[original]), Vec2::from_array(uvs[original])));
+            }
+        }
+        // The slice form returns one tangent per input vertex, which cannot hold both frames.
+        assert!(matches!(crate::tangents(&positions, &normals, &uvs, &indices, &Limits::default()), Err(MeshOpsError::Invalid(_))));
+    }
+
+    #[test]
+    fn tangents_of_a_fan_around_one_vertex_do_not_exhaust_the_stack() {
+        // Every triangle shares vertex 0 with the same normal and UV; MikkTSpace would visit
+        // the fan recursively, one call per triangle.
+        let n = 200_000u32;
+        let mut positions = vec![[0.0f32, 0.0, 0.0]];
+        for i in 0..=n {
+            let a = i as f32 / n as f32 * 6.0;
+            positions.push([a.cos(), a.sin(), 0.0]);
+        }
+        let uvs: Vec<[f32; 2]> = positions.iter().map(|p| [p[0] * 0.5 + 0.5, 0.5 - p[1] * 0.5]).collect();
+        let indices: Vec<u32> = (0..n).flat_map(|i| [0, i + 1, i + 2]).collect();
+        let normals = vec![[0.0, 0.0, 1.0]; positions.len()];
+        let t = crate::tangents(&positions, &normals, &uvs, &indices, &Limits::default()).unwrap();
+        assert_eq!(t.len(), positions.len());
+        for t in &t {
+            assert!((Vec4::from_array(*t) - Vec4::new(1.0, 0.0, 0.0, 1.0)).length() < 1e-2, "{t:?}");
         }
     }
 }
