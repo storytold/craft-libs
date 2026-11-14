@@ -1,0 +1,19 @@
+[package]
+name = "craft-cloud-local"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "A reference CloudBackend over a local folder, proving the contract needs no specific provider"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-cloud = { workspace = true }
+craft-ui = { workspace = true, features = ["cloud"] }
+
+[dev-dependencies]
+tempfile = "3"
+egui = { workspace = true }

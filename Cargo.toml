@@ -40,6 +40,8 @@ craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
 craft-codepage = { path = "crates/codepage" }
 craft-cms = { path = "crates/cms" }
+craft-cloud = { path = "crates/cloud" }
+craft-cloud-local = { path = "crates/cloud-local" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
