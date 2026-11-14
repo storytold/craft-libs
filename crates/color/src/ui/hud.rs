@@ -204,6 +204,7 @@ impl HudPickStyle {
 /// commits too, so the colour stays. It is the popover's one focus stop, so Escape reaches it; the area and strip are
 /// the looks of its two parts and take no input.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
+#[component(sample = HudPick::sample)]
 struct HudPick<'a> {
     #[common]
     common: Common,
@@ -217,6 +218,11 @@ struct HudPick<'a> {
 impl<'a> HudPick<'a> {
     fn new(label: impl Into<Label>, color: Bind<'a, Srgba>, at: Pos2, pointer: Option<Pos2>, live: bool) -> Self {
         HudPick { common: Common::new(), color, at, pointer, live }.label(label)
+    }
+
+    /// The component as the style suite measures it when no story shows it on its own: it is shown only inside `ColorHud`.
+    fn sample() -> HudPick<'static> {
+        HudPick::new("Color HUD", Bind::given(BLACK), Pos2::ZERO, None, false)
     }
 }
 
