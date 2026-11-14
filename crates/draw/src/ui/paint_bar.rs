@@ -6,7 +6,9 @@ use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
 use craft_theme::Srgba;
 use craft_ui::buttons::IconButton;
 use craft_ui::choice::{Checkbox, Swatch};
-use craft_ui::contract::{Bind, BodyCx, Entry, Gap, LabelKind, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, Trigger, clicked};
+use craft_ui::contract::{
+    Bind, BodyCx, Entry, Gap, LabelKind, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, Trigger, clicked,
+};
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
@@ -350,9 +352,12 @@ impl<M: Value> Pass<'_, M> {
         let current = self.values.size;
         let mut events = EditEvents::new();
         // The size field draws its own caption, so the wrapper only carries the enabled state.
-        Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("size").sizing(Sizing::Content).enabled(enabled).show(ui, |ui, _| {
-            events = BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone();
-        });
+        Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("size").sizing(Sizing::Content).enabled(enabled).show(
+            ui,
+            |ui, _| {
+                events = BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone();
+            },
+        );
         self.emit(events, |v, size| v.size = size);
     }
 
@@ -425,12 +430,8 @@ impl<M: Value> Pass<'_, M> {
     /// The gear and its popover of the four smoothing options, enabled while the amount shows above 0 %.
     fn smoothing_options(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>, words: &PaintBarWords) {
         let mut open = cx.memory::<SmoothingOpen>().0;
-        let gear = IconButton::new(IconId::new("settings"))
-            .label(words.smoothing_options.clone())
-            .popup(PopupKind::Dialog)
-            .expanded(open)
-            .show(ui)
-            .response;
+        let gear =
+            IconButton::new(IconId::new("settings")).label(words.smoothing_options.clone()).popup(PopupKind::Dialog).expanded(open).show(ui).response;
         if clicked(&gear) {
             open = !open;
         }
