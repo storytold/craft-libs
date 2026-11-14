@@ -250,7 +250,6 @@ pub struct TextStylesPanel<'a> {
     /// Several rows select together: the footer's Duplicate and Delete act on all of them.
     #[prop]
     highlighting: bool,
-    #[allow(dead_code)] // P3(panels-w13): pn.C55
     empty: Option<Label>,
 }
 
@@ -306,7 +305,7 @@ impl<'a> TextStylesPanel<'a> {
 
     /// Shows the panel and returns what the user asked for.
     pub fn show(self, ui: &mut Ui) -> TextStylesPanelOutput {
-        let TextStylesPanel { label, kind, rows, mut selection, current, overridden, target, text_selected, highlighting, empty: _ } = self;
+        let TextStylesPanel { label, kind, rows, mut selection, current, overridden, target, text_selected, highlighting, empty } = self;
         let words = Env::of(ui).words::<TextStylesWords>();
         let paragraph = kind == TextStyleKind::Paragraph;
         let action = Cell::new(None::<TextStyleAction>);
@@ -383,7 +382,7 @@ impl<'a> TextStylesPanel<'a> {
 
             let source = keyed(rows, |row: &TextStyleRow| row.id);
             let mode = if highlighting { SelectMode::Multi } else { SelectMode::Single };
-            let shown_rows = List::new(label.clone())
+            let list = List::new(label.clone())
                 .id(list_id)
                 .select(mode)
                 .activate(ActivateOn::Click)
@@ -392,8 +391,12 @@ impl<'a> TextStylesPanel<'a> {
                 .max_rows(8)
                 .can_drag(move |_| highlighting)
                 .drag_payload(|drag: &ListDrag<u64>| Some(drag.clone()))
-                .selection(selection.reborrowed())
-                .show_items(ui, &source, &mut |id, _| {
+                .selection(selection.reborrowed());
+            let list = match &empty {
+                Some(text) => list.empty(text.clone()),
+                None => list,
+            };
+            let shown_rows = list.show_items(ui, &source, &mut |id, _| {
                     let Some(row) = rows.iter().find(|row| row.id == *id) else { return ListRow::new(Label::Empty) };
                     let is_current = target && current == Some(*id);
                     let marked = is_current && overridden;

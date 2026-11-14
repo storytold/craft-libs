@@ -8,12 +8,14 @@
 #[cfg(feature = "font-picker")]
 use craft_font_manager::Catalog;
 #[cfg(feature = "font-picker")]
-use craft_font_manager::picker::{FontFilters, FontPicker, FontPickerSettings};
+use craft_font_manager::axes::AxisSliders;
+#[cfg(feature = "font-picker")]
+use craft_font_manager::picker::{FontFilters, FontPickerSettings};
 use std::ops::RangeInclusive;
 #[cfg(feature = "font-picker")]
 use std::sync::Arc;
 
-use crate::ui::length::{DocUnit, shown};
+use crate::ui::length::DocUnit;
 use craft_behavior::{ColumnWidth, EditEvent, IconId};
 use craft_theme::{Rgba, Srgba};
 use craft_ui::choice::Swatch;
@@ -40,8 +42,8 @@ pub use paragraph_dialog::{
     SpacingKind, SpecialIndent,
 };
 use rows::{
-    LengthRow, Lengths, PlainRow, Toggle, hidden_side, mark, mixed, number_change, number_presets, picked_event, plain, select_row, string_entries,
-    toggle_row,
+    LengthRow, Lengths, PlainRow, Toggle, family_field, hidden_side, leading_menu, leading_row, mark, mixed, number_change, number_presets,
+    picked_event, plain, select_row, size_menu, string_entries, toggle_row,
 };
 pub use style_options::{
     STYLE_COLOR_KEY, StyleAttribute, StyleOptionValues, StyleOptionsChange, TextStyleOptions, TextStyleOptionsOutput, TextStyleOptionsWords,
@@ -465,9 +467,8 @@ pub struct CharacterControls<'a> {
     #[prop]
     languages: Option<&'a [(String, String)]>,
     #[cfg(feature = "font-picker")]
-    picker: Option<(&'a Arc<Catalog>, Bind<'a, FontPickerSettings>, Bind<'a, FontFilters>)>,
+    picker: Option<FontPickerSource<'a>>,
     #[cfg(feature = "font-picker")]
-    #[allow(dead_code)] // P3(panels-w13): tl.R6
     axes: Option<FaceAxes<'a>>,
 }
 
@@ -489,12 +490,11 @@ impl<'a> CharacterControls<'a> {
         }
     }
 
-    /// The family field is craft-font-manager's font picker over `catalog`, with the app's stars, recents and
-    /// filters.
+    /// The family field is craft-font-manager's font picker over `source`: the catalog, the app's stars, recents and
+    /// filters, the preview text and the served families.
     #[cfg(feature = "font-picker")]
     pub fn font_picker(mut self, source: FontPickerSource<'a>) -> Self {
-        // P3(panels-w13): tl.R6 (preview_text and served are unread)
-        self.picker = Some((source.catalog, source.settings, source.filters));
+        self.picker = Some(source);
         self
     }
 
@@ -512,20 +512,15 @@ impl<'a> CharacterControls<'a> {
         let (unit, superscript) = (self.unit, self.superscript);
         #[cfg(feature = "font-picker")]
         let mut picker = self.picker;
+        #[cfg(feature = "font-picker")]
+        let axes = self.axes;
         let env = Env::of(ui);
         let words = env.words::<CharacterWords>();
         let units = env.units();
         let lengths = Lengths { units: &units, unit };
 
-        let size_presets: Vec<Entry<NumberPick>> = SIZE_PRESETS
-            .iter()
-            .map(|&p| {
-                let points = f64::from(p);
-                Entry::new(NumberPick::Number(points), units.text(unit.kind, shown(&units, unit, points), 0..=PRESET_DECIMALS))
-            })
-            .collect();
-        let auto_row = Entry::new(NumberPick::Choice(AUTO_ROW), words.auto.clone()).checked(values.leading == Some(Leading::Auto));
-        let leading_presets: Vec<Entry<NumberPick>> = [auto_row, Entry::separator()].into_iter().chain(size_presets.iter().cloned()).collect();
+        let size_presets = size_menu(&units, unit);
+        let leading_presets = leading_menu(&words, values.leading, &size_presets);
         let tracking_presets = number_presets(&units, TRACKING_PRESETS.iter().copied());
         let kerning_presets: Vec<Entry<NumberPick>> = [
             Entry::new(NumberPick::Choice(METRICS_ROW), words.metrics.clone()).checked(values.kerning == Some(Kerning::Metrics)),
@@ -539,11 +534,7 @@ impl<'a> CharacterControls<'a> {
         let family_entries = string_entries(families.iter().map(|name| (name.clone(), name.clone())));
         let style_entries = string_entries(styles.iter().map(|name| (name.clone(), name.clone())));
         let language_entries = languages.map(|languages| string_entries(languages.iter().cloned()));
-        let leading_value = match values.leading {
-            Some(Leading::Fixed(points)) => Some(points),
-            Some(Leading::Auto) => values.size.map(|size| size * AUTO_LEADING),
-            None => None,
-        };
+
         let kerning_shown = values.kerning.map(|kerning| match kerning {
             Kerning::Manual(value) => NamedOr::Number(f64::from(value)),
             Kerning::Metrics => NamedOr::Named(KerningName::Metrics),
@@ -551,39 +542,31 @@ impl<'a> CharacterControls<'a> {
         });
 
         let mut edits: Vec<EditEvent<CharacterChange>> = Vec::new();
-        #[cfg(feature = "font-picker")]
         let mut preview_family = None;
-        #[cfg(not(feature = "font-picker"))]
-        let preview_family = None;
+        let mut rested_family = None;
         let mut requests = HostRequests::new();
 
         let shown = Stack::new().label(self.label).show(ui, |ui, _| {
             #[cfg(feature = "font-picker")]
-            let by_picker = if let Some((catalog, settings, filters)) = picker.as_mut() {
-                let family = mixed(values.family.clone());
-                let side = SideLabel::new().kind(LabelKind::Hidden);
-                let shown = Field::new(words.family.clone()).side(side).show(ui, |ui, _| {
-                    let out = FontPicker::new(words.family.clone(), Bind::given(family.clone()), catalog)
-                        .settings(settings.reborrowed())
-                        .filters(filters.reborrowed())
-                        .show(ui);
-                    (out.preview, out.edit.events)
-                });
-                if let Some((preview, events)) = shown.inner {
-                    preview_family = preview;
-                    let kept = events.into_iter().filter(|event| matches!(event, EditEvent::Commit { .. } | EditEvent::Set { .. }));
-                    edits.extend(kept.map(|event| event.map(CharacterChange::Family)));
-                }
-                true
-            } else {
-                false
-            };
+            let family = family_field(ui, &words.family, mixed(values.family.clone()), &family_entries, picker.as_mut());
             #[cfg(not(feature = "font-picker"))]
-            let by_picker = false;
-            if !by_picker {
-                edits.extend(select_row(ui, &words.family, hidden_side(), mixed(values.family.clone()), &family_entries, CharacterChange::Family));
+            let family = family_field(ui, &words.family, mixed(values.family.clone()), &family_entries);
+            preview_family = family.preview;
+            rested_family = family.rested;
+            edits.extend(family.edits.into_iter().map(|event| event.map(CharacterChange::Family)));
+            if let Some(style) = family.picked_style {
+                edits.push(picked_event(CharacterChange::Style(style), words.style.as_str()));
             }
             edits.extend(select_row(ui, &words.style, hidden_side(), mixed(values.style.clone()), &style_entries, CharacterChange::Style));
+            #[cfg(feature = "font-picker")]
+            if let Some(axes) = axes {
+                let held = values.axes.clone().unwrap_or_default();
+                let mut sliders = AxisSliders::new(words.axes.clone(), axes.axes, Bind::given(held)).instances(axes.instances).italic(axes.italic);
+                if let Some(weight) = axes.weight {
+                    sliders = sliders.weight(weight);
+                }
+                edits.extend(sliders.show(ui).edit.into_iter().map(|event| event.map(CharacterChange::Axes)));
+            }
 
             Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
                 let size = LengthRow {
@@ -595,18 +578,8 @@ impl<'a> CharacterControls<'a> {
                 };
                 let (event, _) = lengths.row(ui, size);
                 edits.extend(number_change(event, CharacterChange::Size));
-                let leading = LengthRow {
-                    label: words.leading.clone(),
-                    side: mark(GlyphLabel::text("A↕"), Some(words.leading_hint.clone()), FieldLayout::Inside),
-                    value: leading_value,
-                    range: LEADING_RANGE,
-                    presets: &leading_presets,
-                };
-                let (event, picked) = lengths.row(ui, leading);
-                edits.extend(number_change(event, |points| CharacterChange::Leading(Leading::Fixed(points))));
-                if picked == Some(NumberPick::Choice(AUTO_ROW)) {
-                    edits.push(picked_event(CharacterChange::Leading(Leading::Auto), words.leading.as_str()));
-                }
+                let side = mark(GlyphLabel::text("A↕"), Some(words.leading_hint.clone()), FieldLayout::Inside);
+                edits.extend(leading_row(&lengths, ui, &words, side, values.leading, values.size, &leading_presets));
             });
             Grid::new(&TWO_COLUMNS).fill_width().show(ui, |ui, _| {
                 let event = lengths.kerning(
@@ -731,7 +704,7 @@ impl<'a> CharacterControls<'a> {
                 edits.extend(select_row(ui, &words.language, hidden_side(), mixed(values.language.clone()), entries, CharacterChange::Language));
             }
         });
-        CharacterControlsOutput { response: shown.output, edits, preview_family, rested_family: None, requests }
+        CharacterControlsOutput { response: shown.output, edits, preview_family, rested_family, requests }
     }
 }
 

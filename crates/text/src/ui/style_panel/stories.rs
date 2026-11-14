@@ -38,6 +38,13 @@ fn character_styles_with_highlighted_rows(ui: &mut Ui, data: &mut StoryData) -> 
         .into()
 }
 
+#[story(TextStylesPanel<'static>, covers = [], drive = Drive::Never)]
+fn no_rows_with_empty_text(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rows: Vec<TextStyleRow> = Vec::new();
+    let selection = data.value("empty", Selection::<u64>::default());
+    TextStylesPanel::new("Character Styles", TextStyleKind::Character, &rows, Bind::bound(selection)).empty("No document").show(ui).into()
+}
+
 fn picker_styles() -> Vec<NamedStyleRow> {
     vec![
         NamedStyleRow::new(1, "Primary", StylePreview::Icon(IconId::new("palette"))).meta("#1473E6"),

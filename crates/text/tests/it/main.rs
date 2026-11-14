@@ -4,5 +4,8 @@
 
 mod editor;
 mod notes;
+mod path_text;
 mod ruler;
+mod style_options;
+mod style_panel;
 mod tabs;

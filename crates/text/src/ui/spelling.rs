@@ -39,6 +39,7 @@ use craft_ui::style::SurfaceKind;
 use craft_ui::text::TextField;
 use egui::{Context, Response, Ui};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -72,8 +73,8 @@ enum Press {
     Change,
     ChangeAll,
     Add,
-    /// Check All Layers changed.
-    Relist,
+    /// Check All Layers changed to this.
+    Relist(bool),
 }
 
 /// The user's dictionary, saved under `[spelling]`. Words are kept as added; read them through
@@ -168,7 +169,9 @@ impl Outcome for SpellingOutput {
 /// - Enter is Done unless Change To has focus; Escape and the close action are Done too (nothing to undo: every
 ///   change was made as it was asked for). Tab walks Change To, the suggestions (one stop, arrows inside), the check
 ///   box and the buttons.
-/// - Result: `()`; the dialog always ends with [`DialogResult::Ok`] or, closed from outside, `Cancel`.
+/// - Result: `()`; every close from inside (Done, Escape, the close action, automation's confirm) is
+///   [`DialogResult::Ok`], and a close from outside is `Cancel`.
+/// - Automation fields: `word` and `count` (read only), `changeTo` and `allLayers`.
 #[derive(Clone, Debug, PartialEq, craft_ui::contract::Pattern)]
 pub struct CheckSpellingDialog {
     items: Vec<SpellingItem>,
@@ -217,6 +220,16 @@ impl CheckSpellingDialog {
     /// Whether Check All Layers is on.
     pub fn all_layers_checked(&self) -> bool {
         self.all_layers
+    }
+
+    /// Sets Check All Layers to `on`. A change starts the list again and asks the app to find the misspellings anew;
+    /// the check box and automation both come here.
+    fn relist_all_layers(&mut self, on: bool) {
+        if self.all_layers != on {
+            self.all_layers = on;
+            self.index = 0;
+            self.action = Some(SpellingAction::Relist);
+        }
     }
 
     /// The words Ignore All added during this check, for the app's next search to skip.
@@ -278,10 +291,10 @@ impl CheckSpellingDialog {
                     _ => {}
                 }
             }
-            let before = *all_layers;
-            Checkbox::new(Bind::bound(&mut *all_layers)).label(words.all_layers.clone()).show(ui);
-            if *all_layers != before {
-                body_press.set(Some(Press::Relist));
+            let mut checked = *all_layers;
+            Checkbox::new(Bind::bound(&mut checked)).label(words.all_layers.clone()).show(ui);
+            if checked != *all_layers {
+                body_press.set(Some(Press::Relist(checked)));
             }
             if !has_item {
                 Notice::new(Tone::Neutral, words.complete.clone()).layout(NoticeLayout::Centred).show(ui);
@@ -316,10 +329,7 @@ impl CheckSpellingDialog {
                     self.action = Some(SpellingAction::Add(item.word));
                 }
             }
-            Some(Press::Relist) => {
-                self.index = 0;
-                self.action = Some(SpellingAction::Relist);
-            }
+            Some(Press::Relist(on)) => self.relist_all_layers(on),
             None => {}
         }
         SpellingOutput { response, closed }
@@ -338,15 +348,32 @@ impl StackDialog for CheckSpellingDialog {
         shown.closed.map(|_| DialogResult::Ok(()))
     }
 
-    fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("pn.C54")
+    fn json_fields(&self) -> Option<Value> {
+        let word = self.items.get(self.index).map(|item| item.word.as_str());
+        Some(json!({ "word": word, "changeTo": self.change_to, "allLayers": self.all_layers, "count": self.items.len() }))
     }
 
-    fn set_json_field(&mut self, _: &Context, _field: &str, _value: serde_json::Value) -> Result<(), String> {
-        todo!("pn.C54")
+    fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
+        match field {
+            "changeTo" => {
+                if self.items.is_empty() {
+                    return Err("`changeTo` takes no input: the list of misspellings is empty".to_owned());
+                }
+                let text = value.as_str().ok_or_else(|| "`changeTo` takes a string".to_owned())?;
+                self.change_to = text.to_owned();
+                Ok(())
+            }
+            "allLayers" => {
+                let on = value.as_bool().ok_or_else(|| "`allLayers` takes true or false".to_owned())?;
+                self.relist_all_layers(on);
+                Ok(())
+            }
+            "word" | "count" => Err(format!("`{field}` is read only")),
+            _ => Err(format!("unknown field `{field}`: this dialog has `word`, `changeTo`, `allLayers` and `count`")),
+        }
     }
 
     fn confirm(&mut self, _: &Context) -> Option<()> {
-        todo!("pn.C54")
+        Some(())
     }
 }

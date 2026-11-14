@@ -29,7 +29,7 @@ name = "TextEditorResponse"
 old = "craft_text::ui::editor::TextEditorResponse"
 new = ""
 status = "removed"
-note = "Replaced by `TextEditorOutput` (response, changed, selection_changed, edit)."
+note = "Replaced by `TextEditorOutput` (response, changed, selection_changed, edit, character_panel)."
 
 [[type]]
 name = "TextEditorOutput"

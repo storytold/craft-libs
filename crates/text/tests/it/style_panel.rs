@@ -1,0 +1,43 @@
+//! The styles panel's click rules: a click applies, Alt-click clears overrides, a double click opens Options, except on
+//! the character style None.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use craft_behavior::Selection;
+use craft_text::ui::style_panel::{TextStyleAction, TextStyleKind, TextStyleRow, TextStylesPanel};
+use craft_ui::contract::Bind;
+use craft_ui::testing::{Fixture, trial};
+use egui::Modifiers;
+
+#[trial]
+fn a_click_applies_alt_clears_overrides_and_a_double_click_opens_options_except_on_none() {
+    let state = Rc::new(RefCell::new((Selection::<u64>::default(), Vec::<TextStyleAction>::new())));
+    let shared = state.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let rows = [TextStyleRow::new(0, "None"), TextStyleRow::new(1, "Emphasis"), TextStyleRow::new(2, "Strong")];
+        let mut guard = shared.borrow_mut();
+        let (selection, actions) = &mut *guard;
+        let out = TextStylesPanel::new("Character Styles", TextStyleKind::Character, &rows, Bind::bound(selection)).target(true).show(ui);
+        actions.extend(out.action);
+    });
+    fixture.idle(10);
+    let taken = |state: &Rc<RefCell<(Selection<u64>, Vec<TextStyleAction>)>>| std::mem::take(&mut state.borrow_mut().1);
+
+    let emphasis = fixture.by_label("Emphasis").expect("the Emphasis row is shown");
+    fixture.click(&emphasis).idle(4);
+    assert_eq!(taken(&state), vec![TextStyleAction::apply(1, false)], "a click applies the style");
+
+    let strong = fixture.by_label("Strong").expect("the Strong row is shown");
+    fixture.hold(Modifiers::ALT);
+    fixture.click(&strong).idle(4);
+    fixture.hold(Modifiers::NONE);
+    assert_eq!(taken(&state), vec![TextStyleAction::apply(2, true)], "an Alt-click applies and clears the overrides");
+
+    fixture.click(&strong).click(&strong).idle(4);
+    assert!(taken(&state).contains(&TextStyleAction::Options(2)), "a double click opens Style Options");
+
+    let none = fixture.by_label("None").expect("the None row is shown");
+    fixture.click(&none).click(&none).idle(4);
+    assert!(!taken(&state).contains(&TextStyleAction::Options(0)), "a double click on None opens nothing");
+}

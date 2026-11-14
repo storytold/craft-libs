@@ -159,7 +159,7 @@ note = "Words come from the scope."
 [[setter]]
 type = "CharacterControls"
 old = "font_picker(&Arc<Catalog>, &mut FontPickerSettings, &mut FontFilters)"
-new = "font_picker(&Arc<Catalog>, Bind<FontPickerSettings>, Bind<FontFilters>)"
+new = "font_picker(FontPickerSource)"
 note = "Behind feature `font-picker`. The picker records a pick as recent itself."
 
 [[setter]]

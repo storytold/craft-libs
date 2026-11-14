@@ -44,9 +44,9 @@ craft_ui::words! {
 }
 
 /// The range of the indent fields, points.
-const INDENT_RANGE: RangeInclusive<f64> = -1296.0..=1296.0;
+pub(super) const INDENT_RANGE: RangeInclusive<f64> = -1296.0..=1296.0;
 /// The range of the space fields, points.
-const SPACE_RANGE: RangeInclusive<f64> = 0.0..=1296.0;
+pub(super) const SPACE_RANGE: RangeInclusive<f64> = 0.0..=1296.0;
 
 /// Paragraph alignment, in Photoshop's button order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -196,38 +196,16 @@ impl<'a> ParagraphControls<'a> {
     pub fn show(self, ui: &mut Ui) -> ParagraphControlsOutput {
         let values = self.values;
         let point_text = self.point_text;
-        let _ = self.vertical; // P3(panels-w13): tl.R6
+        let vertical = self.vertical;
         let show_hyphenate = self.hyphenate;
         let env = Env::of(ui);
         let words = env.words::<ParagraphWords>();
         let units = env.units();
         let lengths = Lengths { units: &units, unit: self.unit };
 
-        let aligns: Vec<Toggle<ParagraphChange>> = [
-            (TextAlign::Left, "align_left", &words.left),
-            (TextAlign::Center, "align_center", &words.center),
-            (TextAlign::Right, "align_right", &words.right),
-            (TextAlign::JustifyLeft, "align_justify", &words.justify_left),
-            (TextAlign::JustifyCenter, "align_justify", &words.justify_center),
-            (TextAlign::JustifyRight, "align_justify", &words.justify_right),
-            (TextAlign::JustifyAll, "align_justify", &words.justify_all),
-        ]
-        .into_iter()
-        .map(|(align, icon, name)| {
-            let toggle = Toggle::new(name, icon, Some(values.align == Some(align)), Box::new(move |_| ParagraphChange::Align(align)));
-            if point_text && align.needs_box() { toggle.disabled(&words.justify_needs_box) } else { toggle }
-        })
-        .collect();
-        let directions: Vec<Toggle<ParagraphChange>> = [
-            (ParagraphDirection::Automatic, "pilcrow", &words.direction_auto),
-            (ParagraphDirection::LeftToRight, "pilcrow_right", &words.direction_ltr),
-            (ParagraphDirection::RightToLeft, "pilcrow_left", &words.direction_rtl),
-        ]
-        .into_iter()
-        .map(|(direction, icon, name)| {
-            Toggle::new(name, icon, Some(values.direction == Some(direction)), Box::new(move |_| ParagraphChange::Direction(direction)))
-        })
-        .collect();
+        let aligns: Vec<Toggle<ParagraphChange>> =
+            align_toggles(values, &words, vertical).into_iter().chain(justify_toggles(values, &words, point_text)).collect();
+        let directions = direction_toggles(values, &words);
 
         let mut edits: Vec<EditEvent<ParagraphChange>> = Vec::new();
         let shown = Stack::new().label(self.label).show(ui, |ui, _| {
@@ -290,4 +268,56 @@ impl<'a> ParagraphControls<'a> {
         });
         ParagraphControlsOutput { response: shown.output, edits }
     }
+}
+
+/// The Left, Center and Right toggles; with `vertical` they are the Top, Middle and Bottom ones, which set the same
+/// [`TextAlign`] values.
+pub(crate) fn align_toggles(values: &ParagraphValues, words: &ParagraphWords, vertical: bool) -> Vec<Toggle<ParagraphChange>> {
+    let marks: [(TextAlign, &'static str, &Label); 3] = if vertical {
+        [
+            (TextAlign::Left, "text_align_top", &words.top),
+            (TextAlign::Center, "text_align_middle", &words.middle),
+            (TextAlign::Right, "text_align_bottom", &words.bottom),
+        ]
+    } else {
+        [
+            (TextAlign::Left, "align_left", &words.left),
+            (TextAlign::Center, "align_center", &words.center),
+            (TextAlign::Right, "align_right", &words.right),
+        ]
+    };
+    marks
+        .into_iter()
+        .map(|(align, icon, name)| Toggle::new(name, icon, Some(values.align == Some(align)), Box::new(move |_| ParagraphChange::Align(align))))
+        .collect()
+}
+
+/// The four justify toggles; in point text, which has no box to fill, they are disabled.
+pub(crate) fn justify_toggles(values: &ParagraphValues, words: &ParagraphWords, point_text: bool) -> Vec<Toggle<ParagraphChange>> {
+    [
+        (TextAlign::JustifyLeft, &words.justify_left),
+        (TextAlign::JustifyCenter, &words.justify_center),
+        (TextAlign::JustifyRight, &words.justify_right),
+        (TextAlign::JustifyAll, &words.justify_all),
+    ]
+    .into_iter()
+    .map(|(align, name)| {
+        let toggle = Toggle::new(name, "align_justify", Some(values.align == Some(align)), Box::new(move |_| ParagraphChange::Align(align)));
+        if point_text && align.needs_box() { toggle.disabled(&words.justify_needs_box) } else { toggle }
+    })
+    .collect()
+}
+
+/// The three direction toggles.
+pub(crate) fn direction_toggles(values: &ParagraphValues, words: &ParagraphWords) -> Vec<Toggle<ParagraphChange>> {
+    [
+        (ParagraphDirection::Automatic, "pilcrow", &words.direction_auto),
+        (ParagraphDirection::LeftToRight, "pilcrow_right", &words.direction_ltr),
+        (ParagraphDirection::RightToLeft, "pilcrow_left", &words.direction_rtl),
+    ]
+    .into_iter()
+    .map(|(direction, icon, name)| {
+        Toggle::new(name, icon, Some(values.direction == Some(direction)), Box::new(move |_| ParagraphChange::Direction(direction)))
+    })
+    .collect()
 }
