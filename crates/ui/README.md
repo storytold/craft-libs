@@ -5,6 +5,7 @@ embedded SVG catalogs; `buttons` paints accessible icon buttons; `tabs` handles 
 interaction; `layout` provides toolbar fitting, split geometry and resize handles; `theme` shares widget-state styling.
 `layout::Section` groups dialog or inspector settings in caller-styled frames with optional headings.
 `docking` supplies transactional panel moves and an optional docking surface.
+`pick` supplies hover/current-choice marks, the colour swatch, and list rows with a recent section; `anchor` places a floating bar over a selection.
 `printing` supplies printer/job controls and asynchronous feedback used by WordCraft and GridCraft.
 `fonts` installs the UI font stack, the same fallback order in every app.
 `localized` supplies number fields that write and read the user's region's numbers.
@@ -187,6 +188,12 @@ IDs come from the surrounding UI scope/position, independent of the translated l
 `ui.push_id(stable_id, ...)` when items reorder. Dimensions must be finite, positive and no larger
 than 4096 points; other sizes produce an inert zero-size response. Invalid stroke widths are
 ignored and large strokes are bounded to half the smaller button dimension.
+
+## Pick controls
+
+`pick::swatch_labeled` takes the swatch's accessible name from the app, so screen-reader text can
+use the app's translations. `pick::swatch` keeps compatibility and reports only the hexadecimal
+colour as its accessible name; use the labeled variant for localized colour names.
 
 ## Tabs
 

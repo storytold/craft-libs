@@ -661,5 +661,5 @@ fn room(align: RectAlign, anchor: Rect, screen: Rect) -> f32 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;

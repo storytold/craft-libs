@@ -181,7 +181,9 @@ fn render(ours: bool, hover: Option<&str>, open: Option<&str>) -> image::RgbaIma
         h.get_by_role_and_label(egui::Role::ComboBox, label).hover();
     }
     h.run();
-    h.render().unwrap_or_else(|e| panic!("render: {e}"))
+    let rendered = h.render();
+    assert!(rendered.is_ok(), "render: {:?}", rendered.as_ref().err());
+    rendered.unwrap_or_else(|_| image::RgbaImage::new(0, 0))
 }
 
 #[test]
