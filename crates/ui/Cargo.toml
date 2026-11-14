@@ -18,13 +18,13 @@ epaint = { version = "0.37", default-features = false }
 log = "0.4"
 serde = { version = "1", features = ["derive"], optional = true }
 # Same version as epaint's, for reading a face's character map.
-skrifa = { version = "0.44", default-features = false, features = ["std"] }
+skrifa = { version = "0.48", default-features = false, features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Screenshot and input tests of an app's screens (the screen-testing feature).
 egui_kittest = { version = "0.37", features = ["snapshot", "wgpu"], optional = true }
 # The versions egui_system_font_provider 0.37 uses.
-fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
+fontique = { version = "0.12.0", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
 unicode-script = { version = "0.5.8", optional = true }
 
 # Fetching served fonts (`fonts::UiFonts::served_faces`); already in every eframe web build.

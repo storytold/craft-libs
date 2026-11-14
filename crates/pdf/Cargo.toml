@@ -33,7 +33,7 @@ bytemuck = { workspace = true, optional = true }
 krilla = { workspace = true, optional = true }
 craft-svg = { workspace = true, optional = true }
 krilla-svg = { version = "=0.8.1", optional = true }
-usvg = { version = "=0.47.0", features = ["text"], optional = true }
+usvg = { version = "=0.48.1", features = ["text"], optional = true }
 thiserror = { workspace = true, optional = true }
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
 roxmltree = { version = "0.21", optional = true }

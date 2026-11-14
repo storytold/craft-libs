@@ -12,9 +12,9 @@ workspace = true
 
 [dependencies]
 # CCITT Group 4 encoding (ITU-T T.6). MIT.
-fax = "0.2.7"
+fax = "0.3.0"
 # CCITT fax decoding, the decoder the vendored PDF reader uses. MIT OR Apache-2.0.
-hayro-ccitt = { version = "0.3", default-features = false }
+hayro-ccitt = { version = "0.5", default-features = false }
 # JBIG2 decoding, the decoder the vendored PDF reader uses (the workspace patches it to `vendor/hayro-jbig2`).
 hayro-jbig2 = { version = "=0.3.0", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
