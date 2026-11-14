@@ -234,13 +234,46 @@ fn method_name(method: u16) -> &'static str {
 fn find_end(data: &[u8]) -> Result<(u64, u64, u64, usize), ZipError> {
     // The end record is in the last 22 + 65535 bytes (it may carry a comment).
     let lo = data.len().saturating_sub(22 + 65_535);
-    let eocd = (lo..data.len().saturating_sub(21))
-        .rev()
-        .find(|&i| {
-            u32_at(data, i) == Some(END)
-                && u16_at(data, i + 20).is_some_and(|comment| i.checked_add(22 + usize::from(comment)).is_some_and(|end| end <= data.len()))
-        })
-        .ok_or(ZipError::NotZip)?;
+    let mut eocd = None;
+    let mut fallback = None;
+    for candidate in (lo..data.len().saturating_sub(21)).rev() {
+        if u32_at(data, candidate) != Some(END)
+            || !u16_at(data, candidate + 20)
+                .is_some_and(|comment| candidate.checked_add(22 + usize::from(comment)).is_some_and(|end| end <= data.len()))
+        {
+            continue;
+        }
+        // Keep the earliest bounds-valid candidate's eventual parse error if no structurally
+        // consistent candidate is found. This preserves useful damaged-ZIP diagnostics.
+        fallback = Some(candidate);
+
+        let size = u32_at(data, candidate + 12).unwrap_or(u32::MAX);
+        let offset = u32_at(data, candidate + 16).unwrap_or(u32::MAX);
+        if size == u32::MAX || offset == u32::MAX {
+            // ZIP64's directory must end exactly where the ZIP64 end record starts.
+            let locator = candidate.checked_sub(20).filter(|&at| u32_at(data, at) == Some(LOCATOR64));
+            let valid = locator
+                .and_then(|at| u64_at(data, at + 8))
+                .and_then(|at| usize::try_from(at).ok())
+                .filter(|&at| u32_at(data, at) == Some(END64))
+                .is_some_and(|at| {
+                    let dir_size = u64_at(data, at + 40).and_then(|n| usize::try_from(n).ok());
+                    let dir_offset = u64_at(data, at + 48).and_then(|n| usize::try_from(n).ok());
+                    dir_size.zip(dir_offset).is_some_and(|(size, offset)| offset.checked_add(size) == Some(at))
+                });
+            if !valid {
+                continue;
+            }
+        } else {
+            let end = usize::try_from(offset).ok().and_then(|offset| usize::try_from(size).ok().and_then(|size| offset.checked_add(size)));
+            if end != Some(candidate) {
+                continue;
+            }
+        }
+        eocd = Some(candidate);
+        break;
+    }
+    let eocd = eocd.or(fallback).ok_or(ZipError::NotZip)?;
     let field16 = |o: usize| u16_at(data, eocd + o).ok_or(ZipError::Damaged("the end record is cut short"));
     let field32 = |o: usize| u32_at(data, eocd + o).ok_or(ZipError::Damaged("the end record is cut short"));
     let (disk, dir_disk, on_disk, count) = (field16(4)?, field16(6)?, field16(8)?, field16(10)?);

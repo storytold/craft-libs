@@ -241,6 +241,17 @@ fn invalid_eocd_comment_candidate_does_not_mask_archive_end() {
 }
 
 #[test]
+fn eocd_signature_inside_comment_is_not_an_empty_archive() {
+    let mut z = zip(&[("a.xml", b"x", false)]);
+    let end = z.len() - 22;
+    z[end + 20..end + 22].copy_from_slice(&22u16.to_le_bytes());
+    z.extend_from_slice(&END.to_le_bytes());
+    z.extend_from_slice(&[0; 18]);
+    let archive = Archive::open(&z).unwrap();
+    assert_eq!(archive.names().collect::<Vec<_>>(), ["a.xml"]);
+}
+
+#[test]
 fn central_directory_must_be_consumed_exactly() {
     let mut z = zip(&[("a.xml", b"x", false)]);
     let end = z.len() - 22;
