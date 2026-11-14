@@ -142,6 +142,7 @@ pub mod editor;
 pub mod egui;
 pub mod import;
 pub mod keymap;
+pub mod keytips;
 pub mod layout;
 pub mod profiles;
 pub mod reserved;

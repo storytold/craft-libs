@@ -7,6 +7,8 @@ supplies its command catalog, its file-format readers and its UI.
 
 ## Boundaries
 
+For contextual ribbon/menu letter allocation, see [contextual keytips](docs/contextual-keytips.md).
+
 - Data and logic, plus a shared Keyboard Shortcuts dialog behind the `ui` feature. The apps keep
   the command catalog (ids, labels, menu paths, defaults), the readers for other applications'
   files, file dialogs and running the commands.
