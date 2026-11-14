@@ -249,7 +249,12 @@ impl<'a> Timeline<'a> {
 
     /// Layers in native order. Non-`DOMLayer` extension nodes are skipped.
     pub fn layers(self) -> impl Iterator<Item = Layer<'a>> {
-        self.element.child(Local("layers")).into_iter().flat_map(El::elements).filter(|element| Local("DOMLayer").matches(&element.name)).map(|element| Layer { element })
+        self.element
+            .child(Local("layers"))
+            .into_iter()
+            .flat_map(El::elements)
+            .filter(|element| Local("DOMLayer").matches(&element.name))
+            .map(|element| Layer { element })
     }
 
     fn into_model(self, max_layers: usize) -> TimelineModel {
@@ -457,10 +462,8 @@ mod tests {
         .unwrap();
         assert_eq!(document.timelines().next().unwrap().layers().count(), 1);
 
-        let symbol = Document::parse(
-            b"<x:DOMSymbolItem xmlns:x='urn:adobe:xfl'><x:timeline><x:DOMTimeline/></x:timeline></x:DOMSymbolItem>",
-        )
-        .unwrap();
+        let symbol =
+            Document::parse(b"<x:DOMSymbolItem xmlns:x='urn:adobe:xfl'><x:timeline><x:DOMTimeline/></x:timeline></x:DOMSymbolItem>").unwrap();
         assert!(symbol.symbol_timeline().is_some());
     }
 
