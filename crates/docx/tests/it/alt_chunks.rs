@@ -545,3 +545,23 @@ fn a_chunk_imported_twice_counts_its_dropped_pictures_past_the_list_once() {
     assert_eq!(d.missing_pictures.list.len(), craft_wordmodel::MAX_MISSING_PICTURES);
     assert_eq!(d.missing_pictures.total, n as u64);
 }
+
+/// The chunk's last paragraph keeps its paragraph style's text effects effect by effect: a run's
+/// character style that gives a shadow still leaves the glow its paragraph style gave.
+#[test]
+fn a_match_src_chunks_last_paragraph_keeps_the_effects_its_character_style_leaves() {
+    const W14: &str = r#"xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml""#;
+    let ours = r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:rPr><w:i/></w:rPr></w:style>"#;
+    let theirs = format!(
+        r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:rPr><w14:glow {W14} w14:rad="63500"><w14:srgbClr w14:val="FF0000"/></w14:glow></w:rPr></w:style><w:style w:type="character" w:styleId="Fx"><w:name w:val="Fx"/><w:rPr><w14:shadow {W14} w14:blurRad="38100" w14:dist="19050" w14:dir="2700000"><w14:srgbClr w14:val="000000"/></w14:shadow></w:rPr></w:style>"#
+    );
+    let chunk = r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:rPr><w:rStyle w:val="Fx"/></w:rPr><w:t>Glow and shadow</w:t></w:r></w:p>"#;
+    let inner = package_styled(chunk, None, Some(&theirs));
+    let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>"#, p("Ours"));
+    let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(ours))).unwrap();
+    let Block::Para(last) = &*d.body[1] else { panic!("{:?}", d.body[1]) };
+    assert_eq!(last.props.style.as_deref(), Some("Subtitle"), "on our Subtitle");
+    let fx = last.runs[0].props.text_effects.as_deref().expect("the paragraph style's glow, as direct formatting");
+    assert!(fx.glow.is_some(), "the glow the character style doesn't replace stays: {fx:?}");
+    assert!(fx.shadow.is_none(), "the shadow is the character style's own: {fx:?}");
+}

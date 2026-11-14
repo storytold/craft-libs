@@ -1,5 +1,5 @@
 use super::color::{Rgb, TextColor};
-use super::para_props::Border;
+use super::para_props::{Border, BorderStyle};
 use super::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -478,6 +478,15 @@ pub struct NumChange {
     pub original: String,
 }
 
+// `$out.$f = Some($v)` for each field `$self` leaves unset and `$base` sets to something else.
+macro_rules! unset_as {
+    ($self:ident, $base:ident, $out:ident; $($f:ident = $v:expr),* $(,)?) => {$(
+        if $self.$f.is_none() && $base.$f.is_some() && $base.$f != Some($v) {
+            $out.$f = Some($v);
+        }
+    )*};
+}
+
 impl CharProps {
     /// The same formatting outside a hyperlink: no link target, and no "Hyperlink" character
     /// style that came with it. What a paragraph mark or text typed next to a link gets.
@@ -501,20 +510,22 @@ impl CharProps {
 
     /// Direct formatting that, laid over `base`, gives `self`'s look (both the formatting of a
     /// style chain): the fields that differ, and each that `base` sets and `self` leaves unset at
-    /// the value an unset field resolves to (off, [`DEFAULT_FONT_SIZE`], automatic colour…). What
+    /// the value an unset field resolves to (off, [`DEFAULT_FONT_SIZE`], automatic colour, no border,
+    /// snapped to the grid, standard and contextual ligatures…). What
     /// a run moved from one style to another keeps, as Word does bringing a chunk's last
     /// paragraph in on the document's style of that name. No character style.
     pub fn against(&self, base: &CharProps) -> CharProps {
         let mut out = self.clone().minus(base);
         out.style = None;
-        macro_rules! unset_as {
-            ($($f:ident = $v:expr),* $(,)?) => {$(
-                if self.$f.is_none() && base.$f.is_some() && base.$f != Some($v) {
-                    out.$f = Some($v);
-                }
-            )*};
-        }
-        unset_as!(
+        self.unset_text_as_default(base, &mut out);
+        self.unset_layout_as_default(base, &mut out);
+        out
+    }
+
+    /// For [`CharProps::against`]: each text field `base` sets and `self` leaves unset, at the
+    /// value an unset one resolves to.
+    fn unset_text_as_default(&self, base: &CharProps, out: &mut CharProps) {
+        unset_as!(self, base, out;
             bold = false,
             italic = false,
             strike = false,
@@ -533,22 +544,32 @@ impl CharProps {
             underline = Underline::None,
             color = TextColor::Auto,
             highlight = Highlight::None,
+            font = crate::styles::BODY_FONT.to_string(),
+        );
+        // The complex-script values fall back to the plain ones.
+        unset_as!(self, base, out;
+            size_cs = self.size.unwrap_or(DEFAULT_FONT_SIZE),
+            bold_cs = self.bold.unwrap_or(false),
+            italic_cs = self.italic.unwrap_or(false),
+            font_cs = self.font.clone().unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
+        );
+    }
+
+    /// For [`CharProps::against`]: the same for placement, spacing, border and the run's other
+    /// switches.
+    fn unset_layout_as_default(&self, base: &CharProps, out: &mut CharProps) {
+        unset_as!(self, base, out;
             vert_align = VertAlign::Baseline,
             spacing = 0.0,
             scale = 100.0,
             position = 0.0,
             kern = 0.0,
             emphasis = EmphasisMark::None,
-            font = crate::styles::BODY_FONT.to_string(),
+            web_hidden = false,
+            snap_to_grid = true,
+            ligatures = Ligatures { standard: true, contextual: true, historical: false, discretional: false },
+            border = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 },
         );
-        // The complex-script values fall back to the plain ones.
-        unset_as!(
-            size_cs = self.size.unwrap_or(DEFAULT_FONT_SIZE),
-            bold_cs = self.bold.unwrap_or(false),
-            italic_cs = self.italic.unwrap_or(false),
-            font_cs = self.font.clone().unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
-        );
-        out
     }
 
     fn minus_text_style(&mut self, base: &CharProps) {

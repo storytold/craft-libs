@@ -200,4 +200,28 @@ mod tests {
         assert_eq!(changed.sym_font.as_deref(), Some("Wingdings"));
         assert_eq!(p.cleared().sym_font.as_deref(), Some("Wingdings"));
     }
+
+    /// What a style sets and the other style leaves unset comes back at the value an unset field
+    /// resolves to, the documented defaults included.
+    #[test]
+    fn against_gives_unset_fields_their_defaults() {
+        let base = CharProps {
+            web_hidden: Some(true),
+            snap_to_grid: Some(false),
+            ligatures: Some(Ligatures { standard: false, contextual: false, historical: true, discretional: true }),
+            border: Some(Border::single(0.5)),
+            bold: Some(true),
+            ..Default::default()
+        };
+        let out = CharProps::default().against(&base);
+        assert_eq!(out.web_hidden, Some(false));
+        assert_eq!(out.snap_to_grid, Some(true));
+        assert_eq!(out.ligatures, Some(Ligatures { standard: true, contextual: true, historical: false, discretional: false }));
+        assert_eq!(out.border.map(|b| b.style), Some(BorderStyle::None));
+        assert_eq!(out.bold, Some(false));
+        // Already at the default: nothing to say.
+        let quiet = CharProps { web_hidden: Some(false), snap_to_grid: Some(true), ..Default::default() };
+        let out = CharProps::default().against(&quiet);
+        assert_eq!((out.web_hidden, out.snap_to_grid), (None, None));
+    }
 }

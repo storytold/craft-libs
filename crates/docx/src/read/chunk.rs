@@ -161,7 +161,26 @@ impl Reader<'_> {
             let mut out = look.clone();
             out.overlay(&by_style);
             let mut out = out.minus(&by_style);
-            if by_style.text_effects.is_some() {
+            // Effect by effect, as they overlay: one the character style gives is its own, the
+            // others stay the paragraph style's look.
+            if let (Some(fx), Some(own)) = (out.text_effects.as_deref_mut(), by_style.text_effects.as_deref()) {
+                if own.fill.is_some() {
+                    fx.fill = None;
+                }
+                if own.outline.is_some() {
+                    fx.outline = None;
+                }
+                if own.shadow.is_some() {
+                    fx.shadow = None;
+                }
+                if own.glow.is_some() {
+                    fx.glow = None;
+                }
+                if own.reflection.is_some() {
+                    fx.reflection = None;
+                }
+            }
+            if out.text_effects.as_deref().is_some_and(|fx| *fx == Default::default()) {
                 out.text_effects = None;
             }
             out.overlay(c);
