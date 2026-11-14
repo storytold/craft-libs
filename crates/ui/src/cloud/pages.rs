@@ -351,7 +351,9 @@ fn shared_files<A: CloudApp>(app: &mut A, ui: &mut Ui, pick: &mut Option<(Entry,
 
 /// File › Save As, the cloud destination. Pick a folder, name the file, save.
 /// Returns true when a save started, so a Backstage view can return to the
-/// document.
+/// document. Hosts call [`super::cancel_save_as`] when leaving without saving,
+/// or before opening this page for an ordinary File › Save As, to discard any
+/// abandoned conflict-copy target and suggested name.
 pub fn save_page<A: CloudApp>(app: &mut A, ui: &mut Ui) -> bool {
     let style = app.style(ui);
     let kind = app.kind();

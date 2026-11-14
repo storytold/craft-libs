@@ -222,6 +222,9 @@ pub trait CloudApp {
     /// Take the user to the application's own Save As page, with the name
     /// [`CloudFiles::save_name`](crate::cloud::CloudFiles::save_name) now
     /// holding. Called when a refused save is answered with Save as a copy.
+    /// Hosts call [`cancel_save_as`](crate::cloud::cancel_save_as) when leaving
+    /// that page without submitting, or before opening an ordinary Save As,
+    /// so the abandoned copy's document and suggested name cannot carry over.
     fn go_to_save_as(&mut self) {}
 
     // ---- its words -------------------------------------------------------

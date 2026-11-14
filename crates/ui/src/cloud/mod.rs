@@ -222,7 +222,8 @@ pub struct CloudFiles {
     ///
     /// Set only by the conflict modal's "Save as a copy", so the copy it asks
     /// for is made from the conflicted document even if the user has since
-    /// switched to another tab. Consumed by the next [`save_as`] call.
+    /// switched to another tab. Cleared after a successful save or by
+    /// [`cancel_save_as`] when the interaction is abandoned.
     save_as_target: Option<u64>,
 }
 
@@ -580,6 +581,17 @@ pub fn save<A: CloudApp>(app: &mut A) -> Result<Json, String> {
     Ok(answer)
 }
 
+/// Ends an unsubmitted Save As interaction.
+///
+/// Hosts call this when leaving the Save As page without saving, and before
+/// opening an unrelated Save As. It does not cancel a transfer already sent
+/// to the backend.
+pub fn cancel_save_as<A: CloudApp>(app: &mut A) {
+    let cloud = app.cloud_mut();
+    cloud.save_as_target = None;
+    cloud.save_name.clear();
+}
+
 /// Save As: writes a new document into `folder` under `name`.
 ///
 /// Acts on [`CloudFiles::save_as_target`] when the conflict modal's "Save as
@@ -588,7 +600,7 @@ pub fn save<A: CloudApp>(app: &mut A) -> Result<Json, String> {
 /// active document, same as every other ordinary Save As.
 pub fn save_as<A: CloudApp>(app: &mut A, folder: &str, name: &str) -> Result<Json, String> {
     let kind = app.kind();
-    let uid = app.cloud_mut().save_as_target.take().or_else(|| app.active()).ok_or(format!("no {} open", kind.noun))?;
+    let uid = app.cloud().save_as_target.or_else(|| app.active()).ok_or(format!("no {} open", kind.noun))?;
     let name = document_name(name, kind);
     if name.is_empty() {
         return Err("type a file name".to_owned());
@@ -714,6 +726,9 @@ fn apply<A: CloudApp>(app: &mut A, event: Event) {
             app.cloud_mut().busy = None;
             match entry {
                 Ok(entry) => {
+                    if app.cloud().save_as_target == Some(uid) {
+                        app.cloud_mut().save_as_target = None;
+                    }
                     app.mark_saved(uid);
                     stored(app, uid, entry);
                 }
