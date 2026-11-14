@@ -59,7 +59,7 @@ impl LocalGguf {
         // constructors) makes candle panic — hostile input must come
         // back as an error, not a crash. The guard covers parsing *and*
         // weight construction.
-        let weights = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let weights = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Weights, AiError> {
             let content = gguf_file::Content::read(&mut file).map_err(|e| AiError::Inference(format!("bad GGUF: {e}")))?;
             match entry.arch {
                 Arch::Qwen2 => Ok(Weights::Qwen2(
