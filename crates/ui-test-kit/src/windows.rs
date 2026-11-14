@@ -237,10 +237,20 @@ impl Windows {
         ui: impl FnMut(&mut Ui),
     ) -> Out {
         CHILD_EVENTS.with(|events| *events.borrow_mut() = child);
+        // The root pass starts before the child's and ends an OS-file session it sees no files for, so it sees them too.
+        let root_dropped: Vec<egui::DroppedFileHandle> =
+            dropped.iter().map(|name| Arc::new(DroppedPath(name.into())) as egui::DroppedFileHandle).collect();
+        let root_hovered = hovered.clone();
         CHILD_FILES.with(|files| *files.borrow_mut() = (hovered, dropped));
         TREES.with(|kept| kept.borrow_mut().clear());
         set_input(&self.ctx, FrameInput::new(RootEnv::default()));
-        let mut input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)), events: root, ..RawInput::default() };
+        let mut input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)),
+            events: root,
+            hovered_files: root_hovered,
+            dropped_files: root_dropped,
+            ..RawInput::default()
+        };
         input.time = Some(NOW.with(|now| {
             now.set(now.get() + FRAME_SECONDS);
             now.get()
