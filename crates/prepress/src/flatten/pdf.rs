@@ -320,7 +320,22 @@ struct Reader<'s, 'a> {
 }
 
 fn plain_group(clip: Option<BezPath>) -> GroupItem {
-    GroupItem { opacity: 1.0, blend: BlendMode::Normal, isolated: false, knockout: false, clip, mask: None, actual_text: None, children: Vec::new() }
+    GroupItem {
+        opacity: 1.0,
+        blend: BlendMode::Normal,
+        isolated: false,
+        knockout: false,
+        clip,
+        clip_rule: FillRule::NonZero,
+        mask: None,
+        actual_text: None,
+        children: Vec::new(),
+    }
+}
+
+/// A plain group clipping to `clip` filled by `rule`.
+fn clip_group((clip, rule): (BezPath, FillRule)) -> GroupItem {
+    GroupItem { clip_rule: rule, ..plain_group(Some(clip)) }
 }
 
 impl<'s, 'a> Reader<'s, 'a> {
@@ -601,16 +616,16 @@ impl<'s, 'a> Reader<'s, 'a> {
     fn area_fill(&mut self, path: BezPath, rule: FillRule, paint: &PdfPaint<'a>, stroke: bool) {
         let PdfPaint::Pattern(pattern) = paint else { return };
         self.flush();
-        let clip = nonzero(&path, rule);
+        let (clip, rule) = nonzero(&path, rule);
         let (op, big_op, _) = self.overprint;
         let flag = if stroke { big_op } else { op };
         match pattern.as_ref() {
-            Pattern::Shading(sp) => self.shading_area(clip, sp, flag),
-            Pattern::Tiling(t) => self.tiling_area(clip, t, flag, stroke),
+            Pattern::Shading(sp) => self.shading_area(clip, rule, sp, flag),
+            Pattern::Tiling(t) => self.tiling_area(clip, rule, t, flag, stroke),
         }
     }
 
-    fn shading_area(&mut self, clip: BezPath, sp: &ShadingPattern, flag: bool) {
+    fn shading_area(&mut self, clip: BezPath, rule: FillRule, sp: &ShadingPattern, flag: bool) {
         let look = self.look(sp.opacity);
         let cs = &sp.shading.color_space;
         // Nonzero overprint mode is for colors set in DeviceCMYK, not shadings or images
@@ -625,12 +640,12 @@ impl<'s, 'a> Reader<'s, 'a> {
             if let Some((inks, channels)) = self.space_inks(&space, cs) {
                 let kind = inks.stop_inks();
                 let paint = Paint::Solid(shade::stop_color(&kind, &channels.apply_f32(&values)));
-                children.push(Item::Fill(FillItem { path: clip.clone(), rule: FillRule::NonZero, paint, overprint }));
+                children.push(Item::Fill(FillItem { path: clip.clone(), rule, paint, overprint }));
             }
         }
         let shaded = if matches!(sp.shading.shading_type.as_ref(), ShadingType::RadialAxial { .. }) {
             self.gradient(sp).map(|(paint, extent)| {
-                let fill = Item::Fill(FillItem { path: clip.clone(), rule: FillRule::NonZero, paint, overprint });
+                let fill = Item::Fill(FillItem { path: clip.clone(), rule, paint, overprint });
                 match extent {
                     Some(extent) => Item::Group(GroupItem { children: vec![fill], ..plain_group(Some(extent)) }),
                     None => fill,
@@ -646,7 +661,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             }
         }
         if !children.is_empty() {
-            self.push(Item::Group(GroupItem { children, ..plain_group(Some(clip)) }), &look);
+            self.push(Item::Group(GroupItem { children, ..clip_group((clip, rule)) }), &look);
         }
     }
 
@@ -684,7 +699,7 @@ impl<'s, 'a> Reader<'s, 'a> {
 
     /// A tiling pattern over `clip`: its cells, each read like page content, or an image past
     /// [`MAX_TILING_CELLS`] or [`MAX_TILING_ITEMS`].
-    fn tiling_area(&mut self, clip: BezPath, t: &TilingPattern<'a>, flag: bool, stroke: bool) {
+    fn tiling_area(&mut self, clip: BezPath, rule: FillRule, t: &TilingPattern<'a>, flag: bool, stroke: bool) {
         let area = clip.bounding_box().intersect(self.clip_bounds());
         if !(area.width() > 0.0 && area.height() > 0.0) {
             return;
@@ -757,7 +772,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             self.shared.report.rasterized_tilings += 1;
             vec![Item::Image(image)]
         };
-        self.push(Item::Group(GroupItem { children: child, ..plain_group(Some(clip)) }), &look);
+        self.push(Item::Group(GroupItem { children: child, ..clip_group((clip, rule)) }), &look);
     }
 
     fn raster_image(&mut self, image: &RasterImage<'_>, transform: Affine) {
@@ -948,14 +963,23 @@ impl<'s, 'a> Reader<'s, 'a> {
         let unicode = glyph.as_unicode().map(unicode);
         // A glyph that only fills in the text's paint (`d1`, or `d0` painting that color) is a
         // shape: it joins the run.
+        // Its outline is filled nonzero, so an even-odd fill that can't be rebuilt as nonzero
+        // keeps the glyph a group.
         let shape = items.iter().all(|item| matches!(item, Item::Fill(f) if Some(&f.paint) == run_paint.as_ref()));
-        if let (true, Some(run_paint)) = (shape, run_paint) {
+        let outline = shape.then(|| {
             let mut outline = BezPath::new();
             for item in &items {
                 if let Item::Fill(f) = item {
-                    outline.extend(nonzero(&f.path, f.rule).iter());
+                    let (path, rule) = nonzero(&f.path, f.rule);
+                    if rule != FillRule::NonZero {
+                        return None;
+                    }
+                    outline.extend(path.iter());
                 }
             }
+            Some(outline)
+        });
+        if let (Some(outline), Some(run_paint)) = (outline.flatten(), run_paint) {
             self.add_glyph(None, 0, transform * glyph_transform, outline, unicode, run_paint, look, overprint);
         } else if !items.is_empty() {
             self.flush();
@@ -988,7 +1012,7 @@ impl<'a> Device<'a> for Reader<'_, 'a> {
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
         self.flush();
         let clip = nonzero(&clip_path.path, fill_rule(clip_path.fill));
-        self.frames.push(Frame { kind: FrameKind::Clip, group: plain_group(Some(clip)) });
+        self.frames.push(Frame { kind: FrameKind::Clip, group: clip_group(clip) });
     }
 
     fn push_transparency_group(&mut self, opacity: f32, mask: Option<SoftMask<'a>>, blend_mode: PdfBlend) {
@@ -1287,11 +1311,12 @@ fn dash_pattern(path: &BezPath, dashes: &[f32]) -> Option<Vec<f64>> {
     (pieces.is_finite() && pieces <= MAX_DASHES_PER_STROKE).then(|| dashes.iter().map(|d| f64::from(*d)).collect())
 }
 
-/// `path` filled by `rule`, as a path filled nonzero. An even-odd path is rebuilt from its
-/// boundary; if that fails it is kept as it is.
-fn nonzero(path: &BezPath, rule: FillRule) -> BezPath {
+/// `path` filled by `rule`, as a path and the rule it is filled by. An even-odd path is
+/// rebuilt from its boundary as a path filled nonzero; if that fails it is kept closed and
+/// filled even-odd.
+fn nonzero(path: &BezPath, rule: FillRule) -> (BezPath, FillRule) {
     if rule == FillRule::NonZero {
-        return path.clone();
+        return (path.clone(), FillRule::NonZero);
     }
     let closed = closed(path);
     match linesweeper::binary_op(&closed, &BezPath::new(), linesweeper::FillRule::EvenOdd, linesweeper::BinaryOp::Union) {
@@ -1300,9 +1325,9 @@ fn nonzero(path: &BezPath, rule: FillRule) -> BezPath {
             for contour in contours.contours() {
                 out.extend(contour.path.iter());
             }
-            out
+            (out, FillRule::NonZero)
         }
-        Err(_) => closed,
+        Err(_) => (closed, FillRule::EvenOdd),
     }
 }
 
@@ -1368,5 +1393,25 @@ mod tests {
             overprint: Overprint::default(),
         });
         assert_eq!(item_count(&[fill]), 1 + path.elements().len());
+    }
+
+    #[test]
+    fn even_odd_paths_keep_their_rule_when_the_rebuild_fails() {
+        // Two nested squares drawn in the same direction: even-odd leaves a hole, nonzero fills it.
+        let mut nested = Rect::new(0.0, 0.0, 100.0, 100.0).to_path(0.1);
+        nested.extend(Rect::new(25.0, 25.0, 75.0, 75.0).to_path(0.1));
+        let (rebuilt, rule) = nonzero(&nested, FillRule::EvenOdd);
+        assert_eq!(rule, FillRule::NonZero);
+        assert_eq!(rebuilt.winding(Point::new(50.0, 50.0)), 0, "the hole");
+        assert_ne!(rebuilt.winding(Point::new(10.0, 50.0)), 0);
+
+        // An infinite coordinate makes the rebuild fail.
+        let mut broken = nested.clone();
+        broken.move_to((f64::INFINITY, 0.0));
+        broken.line_to((f64::INFINITY, 10.0));
+        let (kept, rule) = nonzero(&broken, FillRule::EvenOdd);
+        assert_eq!(rule, FillRule::EvenOdd, "the path is still filled even-odd");
+        assert_eq!(kept, closed(&broken));
+        assert_eq!(nonzero(&broken, FillRule::NonZero), (broken.clone(), FillRule::NonZero));
     }
 }
