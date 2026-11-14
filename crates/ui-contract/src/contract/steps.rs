@@ -42,7 +42,7 @@ pub(crate) use settle::settle;
 pub(crate) use state::{register_reset, state, value_flags};
 pub(crate) use stops::{StopsIn, body_group, join_group, member_group, register_stops, takes_focus};
 pub(crate) use style::{style, style_cx};
-pub(crate) use update::{after_update, edit_intents, gesture_gate, key_activation, record_context, takes_activation, update_inputs};
+pub(crate) use update::{after_update, edit_intents, gesture_gate, key_activation, record_context, secondary_click, takes_activation, update_inputs};
 pub(crate) use value::{Shown, ShownState, peek_value, value};
 
 /// The 17 steps of the pipeline, in order.
