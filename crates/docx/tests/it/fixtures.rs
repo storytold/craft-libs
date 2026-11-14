@@ -1241,6 +1241,59 @@ fn char_border_reads_and_nil_resolves_off() {
     assert_eq!(d.styles.resolve_char(None, nil).border, None);
 }
 
+/// storytold/wordcraft#5065: a paragraph, character or page border without `w:sz` is width 0, as
+/// `w:sz="0"` (Word draws both at its thinnest line and gives them no room), and saving writes
+/// `w:sz="0"`. Table and cell borders are read on their own (`PropCtx::table_borders`).
+#[test]
+fn a_border_without_a_size_is_width_0() {
+    let body = |sz: &str| {
+        let b = |side: &str| format!(r#"<w:{side} w:val="single"{sz}/>"#);
+        format!(
+            r#"<w:p><w:pPr><w:pBdr>{}</w:pBdr></w:pPr><w:r><w:rPr><w:bdr w:val="single"{sz}/></w:rPr><w:t>a</w:t></w:r></w:p><w:sectPr><w:pgBorders>{}</w:pgBorders></w:sectPr>"#,
+            b("bottom"),
+            b("left")
+        )
+    };
+    // Paragraph, character and page border widths.
+    let widths = |d: &Document| {
+        let p = paras(d)[0];
+        [
+            p.props.borders.and_then(|b| b.bottom).map(|b| b.width),
+            p.props_of_char(0).border.map(|b| b.width),
+            d.last_section.page_borders.and_then(|b| b.left).map(|b| b.width),
+        ]
+    };
+    for (sz, width) in [("", 0.0), (r#" w:sz="0""#, 0.0), (r#" w:sz="1""#, 0.125), (r#" w:sz="2""#, 0.25), (r#" w:sz="4""#, 0.5)] {
+        assert_eq!(widths(&read_body(&body(sz))), [Some(width); 3], "{sz:?}");
+    }
+    // A width-0 border is still a border: it resolves, to be drawn.
+    let d = read_body(&body(""));
+    let p = paras(&d)[0];
+    assert!(d.styles.resolve_para(&p.props).borders.and_then(|b| b.bottom).is_some());
+    assert!(d.styles.resolve_char(None, p.props_of_char(0)).border.is_some());
+    let saved = craft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&saved), "word/document.xml");
+    assert!(xml.contains(r#"w:val="single" w:sz="0""#) && !xml.contains(r#"w:sz="1""#), "{xml}");
+    assert_eq!(widths(&craft_docx::read(&saved).unwrap()), [Some(0.0); 3]);
+}
+
+/// storytold/wordcraft#5065: a table, cell or table-style border without `w:sz` keeps the half
+/// point it has always been read at, so splitting the paragraph default off leaves them alone
+/// (storytold/wordcraft#5764 covers them).
+#[test]
+fn a_table_border_without_a_size_stays_half_a_point() {
+    let styles = format!(
+        r#"<w:styles {W_NS}><w:style w:type="table" w:styleId="Ruled"><w:name w:val="Ruled"/><w:tblPr><w:tblBorders><w:top w:val="single"/></w:tblBorders></w:tblPr></w:style></w:styles>"#
+    );
+    let body = r#"<w:tbl><w:tblPr><w:tblStyle w:val="Ruled"/><w:tblBorders><w:bottom w:val="single"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders><w:left w:val="single"/></w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"#;
+    let d = craft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
+    assert_eq!(t.props.borders.and_then(|b| b.bottom).map(|b| b.width), Some(0.5));
+    assert_eq!(t.rows[0].cells[0].props.borders.and_then(|b| b.left).map(|b| b.width), Some(0.5));
+    let parts = d.styles.get("Ruled").and_then(|s| s.table.clone()).expect("the style's parts");
+    assert_eq!(parts.borders.and_then(|b| b.top).map(|b| b.width), Some(0.5));
+}
+
 #[test]
 fn anchor_alignment_reference_areas_and_distances() {
     let shape = |pos: &str, dist: &str| {

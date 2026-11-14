@@ -79,7 +79,10 @@ pub(in crate::text) fn props_text(cp: &craft_wordmodel::props::CharProps) -> Str
         },
         size: cp.size,
         font: cp.font.as_deref().map(std::sync::Arc::from),
-        extra: Some(Box::new(cp.clone())),
+        // A style's own properties, with its text border at the width it is drawn at: the flow
+        // model does that for direct formatting, and a style does not go through it
+        // (storytold/wordcraft#5065).
+        extra: Some(Box::new(craft_wordmodel::props::CharProps { border: cp.border.map(|b| b.as_drawn()), ..cp.clone() })),
         ..Default::default()
     };
     text_props(&f)
