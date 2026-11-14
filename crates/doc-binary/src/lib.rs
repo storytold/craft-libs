@@ -272,6 +272,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     // Word opens Word 97-2003 files in compatibility mode 11 (Word 2003); the model's default
     // 15 would apply Word 2013+ justification and line-breaking rules to them.
     doc.settings.compat_mode = 11;
+    doc.settings.do_not_suppress_indentation = ww11_indent_rules(&table, &fib);
     if let Some(core) = metadata::read(&comp) {
         doc.core = core;
     }
@@ -429,6 +430,22 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     doc.ensure_nonempty();
     work.log();
     Ok(doc)
+}
+
+/// Where `copts` starts in a `Dop2000` and later DOPs: after the 500-byte `Dop97`,
+/// `ilvlLastBulletMain`, `ilvlLastNumberMain`, `istdClickParaType` and 32 flag bits ([MS-DOC]
+/// 2.7.5). Older DOPs (a `Dop97` from Word 97) stop before it.
+const DOP2000_COPTS: usize = 508;
+
+/// The DOP's `Copts.fWW11IndentRules` (bit W, 0x40 in byte 6 of `copts`, after `copts80` and the
+/// 16 bits before it, [MS-DOC] 2.7.13): Word 2003's indent rules beside floating objects, which a
+/// `.docx` writes as `w:doNotSuppressIndentation`. Word sets it, with the other Word 2003 layout
+/// options, in a `.doc` it saves; a DOP too short to have it leaves it off.
+fn ww11_indent_rules(table: &[u8], fib: &fib::Fib) -> bool {
+    fib.pair(fib::pair::DOP)
+        .and_then(|(fc, lcb)| table.get(fc as usize..(fc as usize).saturating_add(lcb as usize)))
+        .and_then(|dop| dop.get(DOP2000_COPTS + 6))
+        .is_some_and(|b| b & 0x40 != 0)
 }
 
 fn paragraph_limit(max_paragraphs: usize) -> DocbinError {
