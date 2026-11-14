@@ -3,18 +3,33 @@
 use std::sync::{Arc, OnceLock};
 
 use craft_cms::{Builtin, ColorSpace, Intent, Profile, Transform, TransformOptions, builtin, cached, math};
-use craft_pdf::interpret::color::{CmykConversion, CmykSimulation};
+use craft_pdf::interpret::color::{CmykConversion, CmykSimulation, RenderIntent};
 
-/// Converts process color into a CMYK printing condition with craft-cms: relative
-/// colorimetric, without black point compensation, as the plate renderer expects (see
-/// [`CmykConversion`]). CMYK shows as sRGB relative colorimetric with black point
-/// compensation. Transforms are built on first use and shared through craft-cms's cache.
+/// Converts process color into a CMYK printing condition with craft-cms, without black point
+/// compensation, as the plate renderer expects (see [`CmykConversion`]): relative
+/// colorimetric, or the rendering intent a `_with` method names. An intent the profile can't
+/// convert with converts relative colorimetric. CMYK shows as sRGB relative colorimetric with
+/// black point compensation. Transforms are built on first use and shared through craft-cms's
+/// cache.
 pub struct CmsConversion {
     profile: Profile,
     perceptual: bool,
-    from_srgb: OnceLock<Option<Arc<Transform>>>,
-    from_lab: OnceLock<Option<Arc<Transform>>>,
-    to_srgb: OnceLock<Option<Arc<Transform>>>,
+    /// By [`intent_index`].
+    from_srgb: [Cell; 4],
+    /// By [`intent_index`].
+    from_lab: [Cell; 4],
+    to_srgb: Cell,
+}
+
+type Cell = OnceLock<Option<Arc<Transform>>>;
+
+fn intent_index(intent: RenderIntent) -> (usize, Intent) {
+    match intent {
+        RenderIntent::Perceptual => (0, Intent::Perceptual),
+        RenderIntent::Saturation => (2, Intent::Saturation),
+        RenderIntent::AbsoluteColorimetric => (3, Intent::AbsoluteColorimetric),
+        _ => (1, Intent::RelativeColorimetric),
+    }
 }
 
 /// Why a profile can't be a printing condition.
@@ -45,14 +60,18 @@ impl CmsConversion {
         }
         // Without a colorimetric BToA1 table craft-cms uses BToA0, the perceptual one.
         let perceptual = profile.b2a[1].is_none() && profile.b2a[0].is_some();
-        Ok(Self { profile, perceptual, from_srgb: OnceLock::new(), from_lab: OnceLock::new(), to_srgb: OnceLock::new() })
+        Ok(Self::with_profile(profile, perceptual))
+    }
+
+    fn with_profile(profile: Profile, perceptual: bool) -> Self {
+        Self { profile, perceptual, from_srgb: Default::default(), from_lab: Default::default(), to_srgb: OnceLock::new() }
     }
 
     /// craft-cms's Coated FOGRA39 profile.
     pub fn fogra39() -> Self {
         let profile = Builtin::CoatedFogra39.profile().clone();
         let perceptual = profile.b2a[1].is_none() && profile.b2a[0].is_some();
-        Self { profile, perceptual, from_srgb: OnceLock::new(), from_lab: OnceLock::new(), to_srgb: OnceLock::new() }
+        Self::with_profile(profile, perceptual)
     }
 
     /// The printing condition's profile, the press an [`Output`](crate::Output) converts from.
@@ -67,14 +86,28 @@ impl CmsConversion {
         CmykSimulation::with_conversion(icc, self)
     }
 
-    fn transform(cell: &OnceLock<Option<Arc<Transform>>>, src: &Profile, dst: &Profile, bpc: bool) -> Option<Arc<Transform>> {
+    fn transform(cell: &Cell, src: &Profile, dst: &Profile, bpc: bool) -> Option<Arc<Transform>> {
+        Self::transform_with(cell, Intent::RelativeColorimetric, src, dst, bpc)
+    }
+
+    fn transform_with(cell: &Cell, intent: Intent, src: &Profile, dst: &Profile, bpc: bool) -> Option<Arc<Transform>> {
         cell.get_or_init(|| {
             // The fast path interpolates the same tables that 8-bit buffers use: plates convert
             // images sample by sample through here.
-            let opts = TransformOptions { intent: Intent::RelativeColorimetric, bpc, precise_float: false };
+            let opts = TransformOptions { intent, bpc, precise_float: false };
             cached(src, dst, opts).ok()
         })
         .clone()
+    }
+
+    /// The transform from `src` into the printing condition with `intent`, else relative
+    /// colorimetric.
+    fn press_transform(&self, cells: &[Cell; 4], intent: RenderIntent, src: &Profile) -> Option<Arc<Transform>> {
+        let (index, intent) = intent_index(intent);
+        cells
+            .get(index)
+            .and_then(|cell| Self::transform_with(cell, intent, src, &self.profile, false))
+            .or_else(|| Self::transform(cells.get(1)?, src, &self.profile, false))
     }
 }
 
@@ -90,22 +123,30 @@ fn finite01(cmyk: &mut [f32]) {
 
 impl CmykConversion for CmsConversion {
     fn from_srgb(&self, rgb: &[f32], cmyk: &mut [f32]) -> Option<()> {
+        self.from_srgb_with(RenderIntent::RelativeColorimetric, rgb, cmyk)
+    }
+
+    fn from_pcs_xyz(&self, xyz: &[f32], cmyk: &mut [f32]) -> Option<()> {
+        self.from_pcs_xyz_with(RenderIntent::RelativeColorimetric, xyz, cmyk)
+    }
+
+    fn from_srgb_with(&self, intent: RenderIntent, rgb: &[f32], cmyk: &mut [f32]) -> Option<()> {
         if !whole(rgb, 3, cmyk) {
             return None;
         }
-        let t = Self::transform(&self.from_srgb, builtin::srgb(), &self.profile, false)?;
+        let t = self.press_transform(&self.from_srgb, intent, builtin::srgb())?;
         t.convert_f32(rgb, 3, cmyk, 4, false).ok()?;
         finite01(cmyk);
         Some(())
     }
 
-    fn from_pcs_xyz(&self, xyz: &[f32], cmyk: &mut [f32]) -> Option<()> {
+    fn from_pcs_xyz_with(&self, intent: RenderIntent, xyz: &[f32], cmyk: &mut [f32]) -> Option<()> {
         if !whole(xyz, 3, cmyk) {
             return None;
         }
         // Into the Lab D50 identity profile's device values (ICC v4 Lab encoding).
         let lab: Vec<f32> = xyz.as_chunks::<3>().0.iter().flat_map(|c| encode_lab(math::xyz_to_lab_f32(*c))).collect();
-        let t = Self::transform(&self.from_lab, Builtin::LabD50.profile(), &self.profile, false)?;
+        let t = self.press_transform(&self.from_lab, intent, Builtin::LabD50.profile())?;
         t.convert_f32(&lab, 3, cmyk, 4, false).ok()?;
         finite01(cmyk);
         Some(())

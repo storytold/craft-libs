@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
-use craft_pdf::interpret::color::{CmykSimulation, ColorSpace, Ink as PdfInk, InkPaint, InkSpace, SpotAlternate};
+use craft_pdf::interpret::color::{CmykSimulation, ColorSpace, Ink as PdfInk, InkPaint, InkSpace, RenderIntent, SpotAlternate};
 use craft_pdf::interpret::font::{Glyph, OutlineGlyph};
 use craft_pdf::interpret::hayro_cmap::BfString;
 use craft_pdf::interpret::pattern::{Pattern, ShadingPattern, TilingPattern};
@@ -316,6 +316,8 @@ struct Reader<'s, 'a> {
     blend: BlendMode,
     /// `op`, `OP` and `OPM`.
     overprint: (bool, bool, u8),
+    /// The rendering intent process color converts with.
+    intent: RenderIntent,
     run: Option<Run<'a>>,
 }
 
@@ -333,8 +335,14 @@ impl<'s, 'a> Reader<'s, 'a> {
             soft_mask: None,
             blend: BlendMode::Normal,
             overprint: (false, false, 0),
+            intent: RenderIntent::default(),
             run: None,
         }
+    }
+
+    /// The page's printing condition, converting with the current rendering intent.
+    fn simulation(&self) -> Option<CmykSimulation> {
+        self.shared.simulation.as_ref().map(|s| s.with_intent(self.intent))
     }
 
     /// The items read, with every open clip and group closed.
@@ -476,7 +484,7 @@ impl<'s, 'a> Reader<'s, 'a> {
 
     /// The color as inks; `None` when it paints nothing (the `None` colorant).
     fn ink_color(&mut self, color: &craft_pdf::interpret::color::Color) -> Option<InkColor> {
-        match color.ink_paint(self.shared.simulation.as_ref())? {
+        match color.ink_paint(self.simulation().as_ref())? {
             InkPaint::Tints(tints) => {
                 let mut out = Vec::with_capacity(tints.len());
                 for (ink, tint) in tints {
@@ -555,7 +563,7 @@ impl<'s, 'a> Reader<'s, 'a> {
     fn gradient(&mut self, sp: &ShadingPattern) -> Option<(Paint, Option<BezPath>)> {
         let ShadingType::RadialAxial { coords, domain, function, extend, axial } = sp.shading.shading_type.as_ref() else { return None };
         let cs = &sp.shading.color_space;
-        let simulation = self.shared.simulation.clone();
+        let simulation = self.simulation();
         let space = cs.ink_space(simulation.as_ref());
         let (inks, channels) = self.space_inks(&space, cs)?;
         let stops = shade::sample_stops(space.len(), |s| {
@@ -616,7 +624,7 @@ impl<'s, 'a> Reader<'s, 'a> {
         // Nonzero overprint mode is for colors set in DeviceCMYK, not shadings or images
         // (ISO 32000-2 §8.6.7).
         let overprint = Overprint { fill: flag, stroke: flag, nonzero: false };
-        let simulation = self.shared.simulation.clone();
+        let simulation = self.simulation();
         let mut children = Vec::new();
         if let Some(bg) = &sp.shading.background {
             let mut values = Vec::new();
@@ -660,7 +668,7 @@ impl<'s, 'a> Reader<'s, 'a> {
             return None;
         }
         let scale = self.raster_scale(area);
-        let simulation = self.shared.simulation.clone();
+        let simulation = self.simulation();
         // The background is its own fill, under the image.
         let raster = shade::rasterize_shading(sp, area, scale, false, simulation.as_ref())?;
         let cs = &sp.shading.color_space;
@@ -762,7 +770,7 @@ impl<'s, 'a> Reader<'s, 'a> {
 
     fn raster_image(&mut self, image: &RasterImage<'_>, transform: Affine) {
         let mut decoded = None;
-        image.with_inks(self.shared.simulation.as_ref(), |im| decoded = Some(im));
+        image.with_inks(self.simulation().as_ref(), |im| decoded = Some(im));
         let Some(im) = decoded else {
             self.shared.report.unreadable_images += 1;
             return;
@@ -976,6 +984,10 @@ impl<'a> Device<'a> for Reader<'_, 'a> {
 
     fn set_overprint(&mut self, fill: bool, stroke: bool, mode: u8) {
         self.overprint = (fill, stroke, mode);
+    }
+
+    fn set_rendering_intent(&mut self, intent: RenderIntent) {
+        self.intent = intent;
     }
 
     fn draw_path(&mut self, path: &BezPath, transform: Affine, paint: &PdfPaint<'a>, draw_mode: &PathDrawMode) {

@@ -1681,19 +1681,48 @@ const SIMULATION_CHUNK: usize = 256;
 /// - DeviceCMYK, ICCBased CMYK in this same profile, and DeviceGray stay as they are: gray is a
 ///   device colour, which a CMYK device prints with black ink alone (§10.4.2.2).
 ///
-/// Conversions are relative colorimetric, the initial rendering intent (§8.6.5.8; the
-/// graphics state's `ri` isn't read). A [`CmykConversion`] converts into the profile's CMYK:
-/// [`CmykSimulation::new`] makes one with moxcms, and [`CmykSimulation::with_conversion`]
-/// takes the caller's.
+/// Conversions use the simulation's [`RenderIntent`]: relative colorimetric, the initial
+/// rendering intent (§8.6.5.8), unless [`with_intent`](Self::with_intent) set another. A
+/// [`CmykConversion`] converts into the profile's CMYK: [`CmykSimulation::new`] makes one with
+/// moxcms, and [`CmykSimulation::with_conversion`] takes the caller's.
 #[derive(Clone)]
-pub struct CmykSimulation(Arc<SimulationRepr>);
+pub struct CmykSimulation(Arc<SimulationRepr>, RenderIntent);
+
+/// Craft patch (rendering intent): a PDF rendering intent (ISO 32000-2 §8.6.5.8), set by the
+/// `ri` operator, a graphics state parameter dictionary's `/RI` and an image's `/Intent`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum RenderIntent {
+    /// `/Perceptual`.
+    Perceptual,
+    /// `/RelativeColorimetric`, the initial intent.
+    #[default]
+    RelativeColorimetric,
+    /// `/Saturation`.
+    Saturation,
+    /// `/AbsoluteColorimetric`.
+    AbsoluteColorimetric,
+}
+
+impl RenderIntent {
+    /// The intent `name` names. Any other name is relative colorimetric, which §8.6.5.8 says
+    /// a device uses for an intent it doesn't recognise.
+    pub fn from_name(name: &[u8]) -> Self {
+        match name {
+            b"Perceptual" => Self::Perceptual,
+            b"Saturation" => Self::Saturation,
+            b"AbsoluteColorimetric" => Self::AbsoluteColorimetric,
+            _ => Self::RelativeColorimetric,
+        }
+    }
+}
 
 struct SimulationRepr {
     digest: u128,
     conversion: Box<dyn CmykConversion>,
 }
 
-/// The conversion into a [`CmykSimulation`]'s CMYK, relative colorimetric. Each call converts
+/// The conversion into a [`CmykSimulation`]'s CMYK, relative colorimetric unless a `_with`
+/// method names another intent. Each call converts
 /// whole colors, at most 256 of them; CMYK components are `0.0..=1.0`, four per color. A
 /// method returns `None` when it can't convert, and the color then separates by the device
 /// formulas.
@@ -1704,6 +1733,25 @@ pub trait CmykConversion: Send + Sync {
     /// CIE XYZ colors relative to [`PCS_WHITE`] (the Y of white is 1), three components per
     /// color, to CMYK. The source's white has already been adapted to the PCS white.
     fn from_pcs_xyz(&self, xyz: &[f32], cmyk: &mut [f32]) -> Option<()>;
+
+    /// Craft patch (rendering intent): [`from_srgb`](Self::from_srgb) with `intent`. The
+    /// default converts relative colorimetric, whatever the intent.
+    fn from_srgb_with(&self, intent: RenderIntent, rgb: &[f32], cmyk: &mut [f32]) -> Option<()> {
+        let _ = intent;
+        self.from_srgb(rgb, cmyk)
+    }
+
+    /// Craft patch (rendering intent): [`from_pcs_xyz`](Self::from_pcs_xyz) with `intent`. The
+    /// default converts relative colorimetric, whatever the intent.
+    fn from_pcs_xyz_with(
+        &self,
+        intent: RenderIntent,
+        xyz: &[f32],
+        cmyk: &mut [f32],
+    ) -> Option<()> {
+        let _ = intent;
+        self.from_pcs_xyz(xyz, cmyk)
+    }
 
     /// CMYK bytes, four per pixel, to sRGB bytes, three per pixel, to show what the printing
     /// condition prints.
@@ -1733,14 +1781,15 @@ impl Debug for CmykSimulation {
         f.debug_struct("CmykSimulation")
             .field("description", &self.description())
             .field("perceptual", &self.perceptual())
+            .field("intent", &self.1)
             .finish_non_exhaustive()
     }
 }
 
-/// Two simulations of the same profile are the same.
+/// Two simulations of the same profile with the same intent are the same.
 impl PartialEq for CmykSimulation {
     fn eq(&self, other: &Self) -> bool {
-        self.0.digest == other.0.digest
+        self.0.digest == other.0.digest && self.1 == other.1
     }
 }
 
@@ -1774,7 +1823,17 @@ impl CmykSimulation {
         Self(Arc::new(SimulationRepr {
             digest: hash128(profile),
             conversion: Box::new(conversion),
-        }))
+        }), RenderIntent::default())
+    }
+
+    /// Craft patch (rendering intent): this printing condition, converting with `intent`.
+    pub fn with_intent(&self, intent: RenderIntent) -> Self {
+        Self(self.0.clone(), intent)
+    }
+
+    /// Craft patch (rendering intent): the intent conversions use.
+    pub fn intent(&self) -> RenderIntent {
+        self.1
     }
 
     /// The profile's description; `None` when it has none.
@@ -1788,9 +1847,14 @@ impl CmykSimulation {
         self.0.conversion.perceptual()
     }
 
-    /// A digest of the profile's bytes, for cache keys.
+    /// A digest of the profile's bytes, and of the intent when it isn't the initial one, for
+    /// cache keys.
     pub(crate) fn digest(&self) -> u128 {
-        self.0.digest
+        if self.1 == RenderIntent::default() {
+            self.0.digest
+        } else {
+            hash128(&(self.0.digest, self.1))
+        }
     }
 
     fn conversion(&self) -> &dyn CmykConversion {
@@ -2062,7 +2126,7 @@ impl ColorSpace {
                     for (out, v) in rgb.iter_mut().zip(input) {
                         *out = unit(*v);
                     }
-                    conversion.from_srgb(rgb, cmyk)?;
+                    conversion.from_srgb_with(simulation.1, rgb, cmyk)?;
                 }
                 ColorSpaceType::CalRgb(_) | ColorSpaceType::CalGray(_) => {
                     let srgb = srgb.get_mut(..count * 3)?;
@@ -2070,17 +2134,17 @@ impl ColorSpace {
                     for (out, v) in rgb.iter_mut().zip(srgb.iter()) {
                         *out = u8_to_f32(*v);
                     }
-                    conversion.from_srgb(rgb, cmyk)?;
+                    conversion.from_srgb_with(simulation.1, rgb, cmyk)?;
                 }
                 ColorSpaceType::Lab(lab) => {
                     for (out, colour) in rgb.chunks_exact_mut(3).zip(input.chunks_exact(3)) {
                         out.copy_from_slice(&lab.to_pcs(colour, manual_scale));
                     }
-                    conversion.from_pcs_xyz(rgb, cmyk)?;
+                    conversion.from_pcs_xyz_with(simulation.1, rgb, cmyk)?;
                 }
                 ColorSpaceType::ICCBased(icc) if self.simulated_by(simulation) => {
                     icc.to_pcs(input, manual_scale, rgb)?;
-                    conversion.from_pcs_xyz(rgb, cmyk)?;
+                    conversion.from_pcs_xyz_with(simulation.1, rgb, cmyk)?;
                 }
                 _ => return None,
             }

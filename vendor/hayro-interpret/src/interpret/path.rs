@@ -152,7 +152,8 @@ pub(crate) fn stroke_path_impl<'a>(
     }
 }
 
-/// Craft patch (flatten): passes the graphics state's `op`, `OP` and `OPM` to the device.
+/// Craft patch (flatten): passes the graphics state's `op`, `OP` and `OPM` to the device, and
+/// its rendering intent (Craft patch (rendering intent)).
 pub(crate) fn set_overprint<'a>(context: &Context<'a>, device: &mut impl Device<'a>) {
     let state = &context.get().graphics_state;
     device.set_overprint(
@@ -160,6 +161,7 @@ pub(crate) fn set_overprint<'a>(context: &Context<'a>, device: &mut impl Device<
         state.overprint_stroke,
         state.overprint_mode,
     );
+    device.set_rendering_intent(state.rendering_intent);
 }
 
 pub(crate) fn get_paint<'a>(context: &Context<'a>, is_stroke: bool) -> Paint<'a> {

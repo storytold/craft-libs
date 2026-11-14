@@ -182,7 +182,7 @@
       "path": "src/color.rs",
       "source_sha256": "799ce29bb5e59c8fc94db202873e48c2047dd35962e6f26efd215156c47158c1",
       "source_git_blob": "56bb04f24c04ba33ab6bf99c02a24735670959ad",
-      "sha256": "72935834f00f5f04f1baa418e12040b5a413e8620be7356337605a0ab63f5c7a"
+      "sha256": "f58aa7471c6d03fd7ca49eb548a176964a6bb3d12a63c80f6482045ff333763c"
     },
     {
       "path": "src/context.rs",
@@ -200,7 +200,7 @@
       "path": "src/device.rs",
       "source_sha256": "6f0c1203d1e60724cdd11e9a230249247a70f578c4a7ccb9bf39a23411b32db6",
       "source_git_blob": "36c64a23fd23f6c4abad941077cf93296a67841f",
-      "sha256": "4465153ace47c6893958f187a37579dd87139e04505749483aea139f5f2bac99"
+      "sha256": "9c601ed522d13a774ca53629b8d26e4d6226a7f28157b8c2d06cb8ee181f730e"
     },
     {
       "path": "src/encode.rs",
@@ -362,19 +362,19 @@
       "path": "src/interpret/mod.rs",
       "source_sha256": "2b002323055bc19aa497e92c81ad8e06dc60ee03686cad89366df4ac7c7a06b2",
       "source_git_blob": "fe08fc284ba7c914d1414b68a5a346674a6f910f",
-      "sha256": "3f8958e8d234f00b24478acb8081aa1aaffdca6b8a12b24c4abc6f534ce09a05"
+      "sha256": "ab5c916e831d08119d6a5c7be5493ac107694d94270505af0d695643772593c2"
     },
     {
       "path": "src/interpret/path.rs",
       "source_sha256": "a5defbc4b883b262662f7e7474a00ec1f97dbef8c03b8669859f624f5d02344b",
       "source_git_blob": "838ea099f11d918d6e333e32503368be864689f8",
-      "sha256": "0e4d2dc0a2d5a2c5cdc0d1d9358fcf3b0854e8d24d002ce1830a1b4def786bc8"
+      "sha256": "2608ed14abcf5e4c598689ce4f5f831eda5aebdc520665394e5ed9d52a59a9b8"
     },
     {
       "path": "src/interpret/state.rs",
       "source_sha256": "dce778291b13f6df83c8c13aee22f60edd033ec9f7d89309ef148d46d3ba9814",
       "source_git_blob": "95b773fb5cc434ab8db362d00e4e5180a8b740c9",
-      "sha256": "bc5e73c3b29cdfe9d5f5036ea82beb2cf5a12ccd8a8c93277c15670b5f81ec08"
+      "sha256": "a64c2814f88e2433c1920fdd1bf3acfcf95fe2943dbbcf0262e0265350163cc1"
     },
     {
       "path": "src/interpret/text.rs",
@@ -434,7 +434,7 @@
       "path": "src/x_object.rs",
       "source_sha256": "e1c51e96a335c32c122011b2d05c5020c36a33c2c73342ba173c28a3e2fe0219",
       "source_git_blob": "21b134ce8cd9604399cd0776febf923d69c02673",
-      "sha256": "bc13ae42935851fa0f2117ad74a4e6d4cf5a86aae933fb6362f911b0d6a3ce52"
+      "sha256": "2350d8c21eba5c61f5d905c38af5fecc00a9c763d9a6828fea0f9bac866b3a60"
     }
   ],
   "compatibility_reference": {

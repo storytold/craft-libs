@@ -85,6 +85,19 @@ white (`color::PCS_WHITE`); the moxcms conversion takes them on through #2770's 
 `crates/pdf/tests/plates.rs` adapts #2770's plate tests to the raster path, with its
 synthetic ICC profiles in `crates/pdf/tests/support/synthetic_icc.rs`.
 
+A craft-libs patch, labeled `Craft patch (rendering intent)` in code comments, reads the
+rendering intent (ISO 32000-2 §8.6.5.8): the `ri` operator and a graphics state parameter
+dictionary's `/RI` set it in the graphics state, and an image's `/Intent` applies to that
+image alone (§8.9.5). A name other than the four intents is relative colorimetric, the
+initial intent. The device learns it through `Device::set_rendering_intent`, called after
+each `set_overprint` and again with an image's own intent; the default does nothing.
+`CmykSimulation::with_intent` gives a simulation converting with an intent, and
+`CmykConversion` has `from_srgb_with` and `from_pcs_xyz_with`, which default to the
+relative colorimetric methods; the moxcms conversion keeps that default. A simulation's
+cache digest includes an intent other than relative colorimetric. Tests in
+`crates/prepress/tests/flatten_pdf.rs` check fills, an image and a shading against
+craft-cms's own conversions.
+
 The shared snapshot adds immutable per-document ordinary decode limits, threaded through
 initial xrefs, object streams, fallback and repair. Existing constructors retain their
 previous default. Known-size image budgets and streaming content budgets remain distinct.
