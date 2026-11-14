@@ -345,6 +345,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   check for drawing a tree with resvg. Apps take usvg from here, not as their own dependency.
 - [`craft-svg-paths`](crates/svg-paths/src/lib.rs): the former name of `craft-svg`'s `paths`,
   `color` and `write`; re-exports them for existing users.
+- [`craft-testkit`](crates/testkit/README.md): test support for the apps and the craft-libs crates.
+  `bin` finds a package's binary from its integration tests, also from a relocated nextest archive,
+  and runs it with a limit on its output. SoundCraft and VectorCraft each carry a copy of the lookup
+  today.
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).
