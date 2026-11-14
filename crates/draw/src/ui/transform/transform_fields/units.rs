@@ -2,7 +2,7 @@
 
 use super::{TransformField, TransformRow};
 use craft_behavior::geometry::quad::{BoxState, SKEW_LIMIT};
-use craft_behavior::kurbo::{Rect, Vec2};
+use craft_behavior::kurbo::{Rect, Size, Vec2};
 use craft_behavior::{NumberCodec, RulerUnits};
 use craft_ui::canvas::RulerText;
 use craft_ui::runtime::env::{UnitKind, Units};
@@ -60,8 +60,8 @@ impl Default for SizeUnit {
     }
 }
 
-/// How the fields read and write a box: the box before the transform (`rect`), the units, and whether W and H are
-/// linked.
+/// How the fields read and write a box: the box before the transform (`rect`), the units, whether W and H are
+/// linked, the document a typed X or Y percentage reads against and whether X and Y show the reference point's offset.
 #[derive(Clone, Debug)]
 pub(super) struct Conversion {
     pub(super) rect: Rect,
@@ -69,12 +69,28 @@ pub(super) struct Conversion {
     pub(super) y: RulerText,
     pub(super) size: SizeUnit,
     pub(super) linked: bool,
+    /// The document's size; without it X and Y read a typed percentage against the box's side.
+    pub(super) document: Option<Size>,
+    /// X and Y are the reference point's offset from where the box's origin point maps.
+    pub(super) relative: bool,
 }
 
 impl Conversion {
     /// The length of the box's side before the transform along `axis` (0: W, 1: H).
     fn side(&self, axis: usize) -> f64 {
         (if axis == 0 { self.rect.width() } else { self.rect.height() }).abs()
+    }
+
+    /// The reference point's coordinate along `axis` (0: x, 1: y) in document units: its position, or while
+    /// `relative` its offset from the point the inverse map gives it in the box before the transform.
+    fn position(&self, state: &BoxState, axis: usize) -> f64 {
+        let (pivot, origin) = if self.relative {
+            let origin = state.origin_of_pivot(self.rect);
+            (state.pivot, origin)
+        } else {
+            (state.pivot, craft_behavior::kurbo::Point::ORIGIN)
+        };
+        if axis == 0 { pivot.x - origin.x } else { pivot.y - origin.y }
     }
 
     /// Field units of the size fields per unit of scale factor.
@@ -120,8 +136,8 @@ impl Conversion {
     pub(super) fn shown(&self, state: &BoxState, skew_v: f64, field: TransformField) -> f64 {
         let parts = state.parts(self.rect, skew_v);
         match field {
-            TransformField::X => state.pivot.x * self.x.units.per_doc,
-            TransformField::Y => state.pivot.y * self.y.units.per_doc,
+            TransformField::X => self.position(state, 0) * self.x.units.per_doc,
+            TransformField::Y => self.position(state, 1) * self.y.units.per_doc,
             TransformField::W => parts.w * self.per_factor(0),
             TransformField::H => parts.h * self.per_factor(1),
             TransformField::Angle => parts.angle,
@@ -137,8 +153,8 @@ impl Conversion {
         let now = state.parts(self.rect, skew_v);
         let mut to = now;
         match field {
-            TransformField::X => return (state.moved(Vec2::new(value / self.x.units.per_doc - state.pivot.x, 0.0)), skew_v),
-            TransformField::Y => return (state.moved(Vec2::new(0.0, value / self.y.units.per_doc - state.pivot.y)), skew_v),
+            TransformField::X => return (state.moved(Vec2::new(value / self.x.units.per_doc - self.position(state, 0), 0.0)), skew_v),
+            TransformField::Y => return (state.moved(Vec2::new(0.0, value / self.y.units.per_doc - self.position(state, 1))), skew_v),
             TransformField::W | TransformField::H => {
                 let axis = usize::from(field == TransformField::H);
                 let factor = value / self.per_factor(axis);
@@ -169,14 +185,19 @@ impl Conversion {
 
     /// The reader of typed text for `field`: the field's own unit spellings, and for lengths and percentages every
     /// other pixel and length unit, converted through the document's resolution. A percentage is read against the
-    /// box's side before the transform.
+    /// box's side before the transform; for X and Y against the document's side when it is known.
     pub(super) fn codec(&self, units: &Units, field: TransformField) -> NumberCodec {
         let (kind, decimals) = self.format(field);
         let reader = match field {
             TransformField::Angle | TransformField::SkewH | TransformField::SkewV => units.reader(Some(kind)),
             _ => {
                 let points = units.points_per_inch();
-                let side = self.side(usize::from(matches!(field, TransformField::H | TransformField::Y))).max(NO_SIDE);
+                let axis = usize::from(matches!(field, TransformField::H | TransformField::Y));
+                let side = match (field, self.document) {
+                    (TransformField::X | TransformField::Y, Some(document)) => (if axis == 0 { document.width } else { document.height }).abs(),
+                    _ => self.side(axis),
+                }
+                .max(NO_SIDE);
                 units.document_reader(kind, side, pixels_per_inch(self.x, points), points)
             }
         };

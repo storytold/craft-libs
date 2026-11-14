@@ -161,6 +161,17 @@ fn a_held_enter_that_opened_a_modal_does_not_answer_it() {
     frames.frame(vec![key_press(Key::Enter, Modifiers::NONE)], &mut show);
     frames.idle(3, &mut show);
     assert!(!open.get(), "a fresh Enter answers the alert");
+    // An Enter pressed and released in the pass that opens the alert leaves it open as well: nothing of it is held
+    // when the alert shows, and a fresh press answers it.
+    frames.frame(vec![key_release(Key::Enter, Modifiers::NONE)], &mut show);
+    frames.idle(3, &mut show);
+    focus(&mut frames, "field", &mut show);
+    frames.frame(vec![key_press(Key::Enter, Modifiers::NONE), key_release(Key::Enter, Modifiers::NONE)], &mut show);
+    frames.idle(3, &mut show);
+    assert!(open.get(), "a press and release in the opening pass leaves the alert open");
+    frames.frame(vec![key_press(Key::Enter, Modifiers::NONE)], &mut show);
+    frames.idle(3, &mut show);
+    assert!(!open.get(), "a fresh Enter answers the alert");
 }
 
 /// A search field over a list it drives, inline or in a dialog, and the keys of the rows the list activated.

@@ -8,7 +8,9 @@ use craft_ui::testing::pictures::{SampleTip, paint_tip, paint_wave};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-use super::{BrushCardParts, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushRowPaint, brush_row};
+use craft_ui::patterns::presets::PresetState;
+
+use super::{BrushCardParts, BrushPickerState, BrushPickerValues, BrushPresetPicker, BrushRowPaint, BrushesPanel, brush_row};
 use crate::ui::brush_settings::TipAngle;
 
 const SOFT: u32 = 1;
@@ -62,6 +64,14 @@ fn picker_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         .open_at(at, Bind::bound(open))
         .show(ui)
         .into()
+}
+
+#[story(BrushesPanel<'static, u32>, covers = [Default], drive = Drive::Never)]
+fn panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let env = Env::of(ui);
+    let (state, diameter) = data.value("panel", (PresetState::<u32>::new(), SOFT_SIZE));
+    let rows = rows(&env, BrushCardParts::ALL);
+    BrushesPanel::new("Brushes", &rows, Bind::bound(state), Bind::bound(diameter), MAX_SIZE).selected(SOFT).import(true).show(ui).into()
 }
 
 #[story(BrushPresetPicker<'static, u32>, covers = [Mixed], drive = Drive::Never)]

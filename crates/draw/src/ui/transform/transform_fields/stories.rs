@@ -1,8 +1,8 @@
 //! Stories of the transform fields: the panel form, and the options-bar form in percent and in a length unit.
 
-use super::{TransformFields, TransformRow, size_unit_of};
+use super::{TransformFields, TransformGroups, TransformRow, size_unit_of};
 use craft_behavior::geometry::quad::BoxState;
-use craft_behavior::kurbo::Rect;
+use craft_behavior::kurbo::{Rect, Size};
 use craft_behavior::{RulerUnits, Ticks};
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::canvas::RulerText;
@@ -37,6 +37,36 @@ fn inches() -> RulerText {
 fn panel_form(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let state = data.value("state", sample());
     TransformFields::new("Transform", Bind::bound(&mut state.0), START, Bind::bound(&mut state.1)).show(ui).into()
+}
+
+/// The panel form of a layer's properties: position and size only, percentages read against the document.
+#[story(TransformFields<'static>, covers = [], drive = Drive::Never)]
+fn panel_form_with_document(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let state = data.value("state", sample());
+    let mut groups = TransformGroups::NONE;
+    groups.reference = true;
+    groups.position = true;
+    groups.size = true;
+    TransformFields::new("Transform", Bind::bound(&mut state.0), START, Bind::bound(&mut state.1))
+        .groups(groups)
+        .document(Size::new(1000.0, 400.0))
+        .show(ui)
+        .into()
+}
+
+/// The bar form with the Δ toggle on: X and Y show the reference point's offset.
+#[story(TransformFields<'static>, covers = [], drive = Drive::Never)]
+fn bar_form_relative(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let state = data.value("state", (sample().0, true, true));
+    Bar::new("Options", BarKind::Options)
+        .show(ui, |ui, _| {
+            TransformFields::new("Transform", Bind::bound(&mut state.0), START, Bind::bound(&mut state.1))
+                .bar()
+                .relative(Bind::bound(&mut state.2))
+                .show(ui);
+        })
+        .output
+        .into()
 }
 
 #[story(TransformFields<'static>, covers = [], drive = Drive::Never)]

@@ -576,7 +576,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             columns,
             empty: empty_text,
         } = self;
-        let _ = &empty_text; // P3(panels-w12): pn.C50
+
         let env = Env::of(ui);
         let words = env.words::<PresetWords>();
         let list_id = rows_id(browser_id.unwrap_or_else(|| ui.scope_id()));
@@ -673,7 +673,7 @@ impl<K: Clone + Eq + Hash + Send + Sync + 'static> PresetBrowser<'_, K> {
             };
 
             let (response, displayed, pass) = if shown.is_empty() && actions.is_empty() {
-                let message = if query.is_empty() { words.empty.clone() } else { words.no_match.clone() };
+                let message = if query.is_empty() { empty_text.clone().unwrap_or_else(|| words.empty.clone()) } else { words.no_match.clone() };
                 let response = Notice::new(Tone::Neutral, message).layout(NoticeLayout::Centred).show(ui).response;
                 (response, Vec::new(), Pass { seen: Vec::new(), grid: Vec::new() })
             } else if view == PresetView::Grid {
