@@ -57,16 +57,7 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
 
 /// Refuses a format whose writer is not built, before anything else about the request is checked.
 fn check_built(format: EncodeFormat) -> Result<()> {
-    let (built, feature) = match format {
-        EncodeFormat::Wav | EncodeFormat::Aiff => (cfg!(feature = "pcm-encode"), "pcm-encode"),
-        EncodeFormat::Flac => (cfg!(feature = "flac-encode"), "flac-encode"),
-        EncodeFormat::Aac => (cfg!(feature = "aac-encode"), "aac-encode"),
-        EncodeFormat::Alac => (cfg!(feature = "alac-encode"), "alac-encode"),
-        EncodeFormat::Mp3 => (cfg!(feature = "mp3-encode"), "mp3-encode"),
-        EncodeFormat::Ac3 => (cfg!(feature = "ac3-encode"), "ac3-encode"),
-        EncodeFormat::Eac3 => (cfg!(feature = "eac3-encode"), "eac3-encode"),
-    };
-    if built { Ok(()) } else { Err(AudioError::Unsupported(format!("writing {format:?} needs the `{feature}` feature"))) }
+    if format.is_built() { Ok(()) } else { Err(AudioError::Unsupported(format!("writing {format:?} needs the `{}` feature", format.feature()))) }
 }
 
 /// Every extension [`ENCODE_EXTENSIONS`] can list, and how many of them the features built give.
@@ -182,6 +173,8 @@ impl<W: Write + Seek> std::fmt::Debug for FileEncoder<W> {
     }
 }
 
+// The writers differ in size with the features built; the coded one is boxed for its encoder.
+#[allow(clippy::large_enum_variant)]
 enum Writer<W: Write + Seek> {
     #[cfg(feature = "pcm-encode")]
     Wav(wav::Writer<W>),

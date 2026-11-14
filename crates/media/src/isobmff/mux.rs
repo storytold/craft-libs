@@ -51,11 +51,17 @@ pub struct TrackConfig {
     pub media_start: Option<i64>,
     /// `hdlr` name; a sensible default is used when `None`.
     pub handler_name: Option<String>,
+    /// Audio pre-roll: puts every sample in a `roll` sample group (`sgpd` + `sbgp`, ISO/IEC
+    /// 14496-12 §10.1) with this roll distance, the number of samples a decoder must decode before
+    /// (negative) a sample for its output to be correct; -1 for AAC. Apple's decoders take an AAC
+    /// track's priming from the edit list only when the track has this group. Written by
+    /// [`Mp4Writer`]; [`FragmentedWriter`] ignores it.
+    pub roll_distance: Option<i16>,
 }
 
 impl TrackConfig {
     pub fn new(entry: SampleEntry, timescale: u32) -> Self {
-        TrackConfig { entry, timescale, language: "und".into(), edits: Vec::new(), media_start: None, handler_name: None }
+        TrackConfig { entry, timescale, language: "und".into(), edits: Vec::new(), media_start: None, handler_name: None, roll_distance: None }
     }
 }
 
@@ -543,6 +549,23 @@ fn write_stbl(b: &mut BoxBuf, t: &WTrack, qt: bool, shift: u64, force_co64: bool
         }
     }
     b.end(m);
+    if let Some(distance) = t.cfg.roll_distance
+        && sample_count > 0
+    {
+        // One description, which every sample maps to.
+        let m = b.start_full(b"sgpd", 1, 0);
+        b.bytes(b"roll");
+        b.u32(2);
+        b.u32(1);
+        b.i16(distance);
+        b.end(m);
+        let m = b.start_full(b"sbgp", 0, 0);
+        b.bytes(b"roll");
+        b.u32(1);
+        b.u32(sample_count);
+        b.u32(1);
+        b.end(m);
+    }
     b.end(stbl);
     Ok(())
 }
@@ -1340,5 +1363,31 @@ mod tests {
             assert_eq!(f.read_sample(out.as_slice(), 0, i).unwrap(), vec![i as u8; 10]);
         }
         assert_eq!(t.sync_sample_before(5), 3);
+    }
+
+    /// `roll_distance` puts every sample in one `roll` group; without it, or without samples,
+    /// the track has no sample group.
+    #[test]
+    fn roll_distance_is_a_sample_group_over_every_sample() {
+        let file = |roll: Option<i16>, samples: u32| {
+            let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+            let mut cfg = TrackConfig::new(SampleEntry::aac(vec![0x11, 0x90], 2, 48_000), 48_000);
+            cfg.roll_distance = roll;
+            let t = w.add_track(cfg).unwrap();
+            for _ in 0..samples {
+                w.write_sample(t, WriteSample { data: &[0; 8], duration: 1024, composition_offset: 0, is_sync: true }).unwrap();
+            }
+            w.finish().unwrap().into_inner()
+        };
+        let out = file(Some(-1), 5);
+        let f = crate::isobmff::open(out.as_slice()).unwrap();
+        let groups = &f.tracks[0].sample_groups;
+        assert_eq!(groups.len(), 1);
+        assert_eq!((groups[0].grouping_type, groups[0].runs.as_slice()), (crate::isobmff::FourCc(*b"roll"), [(5, 1)].as_slice()));
+        assert_eq!(groups[0].descriptions, [(-1i16).to_be_bytes().to_vec()]);
+        assert_eq!(f.tracks[0].samples.len(), 5);
+        for out in [file(None, 5), file(Some(-1), 0)] {
+            assert!(crate::isobmff::open(out.as_slice()).unwrap().tracks[0].sample_groups.is_empty());
+        }
     }
 }

@@ -408,6 +408,9 @@ impl<W: Write + Seek> M4a<W> {
         let mut config = craft_media::isobmff::TrackConfig::new(self.entry.clone(), self.sample_rate);
         if has_audio && self.priming > 0 {
             config.media_start = Some(i64::from(self.priming));
+            // AAC's overlap: a packet decodes right only after the one before it. Apple's
+            // decoders take the priming from the edit only when the track says so.
+            config.roll_distance = Some(-1);
         }
         let track = self.mux.add_track(config).map_err(mux_error)?;
         self.track = Some(track);

@@ -260,7 +260,7 @@ pub enum EncodeFormat {
 
 impl EncodeFormat {
     /// Every format, in the order menus list them. Whether [`encode`] writes one depends on its
-    /// feature.
+    /// feature ([`EncodeFormat::is_built`]).
     pub const ALL: &[EncodeFormat] = &[
         EncodeFormat::Wav,
         EncodeFormat::Aiff,
@@ -322,6 +322,33 @@ impl EncodeFormat {
             EncodeFormat::Mp3 => CodecId::Mp3,
             EncodeFormat::Ac3 => CodecId::Ac3,
             EncodeFormat::Eac3 => CodecId::Eac3,
+        }
+    }
+
+    /// The feature that builds this format's writer.
+    pub fn feature(self) -> &'static str {
+        match self {
+            EncodeFormat::Wav | EncodeFormat::Aiff => "pcm-encode",
+            EncodeFormat::Flac => "flac-encode",
+            EncodeFormat::Aac => "aac-encode",
+            EncodeFormat::Alac => "alac-encode",
+            EncodeFormat::Mp3 => "mp3-encode",
+            EncodeFormat::Ac3 => "ac3-encode",
+            EncodeFormat::Eac3 => "eac3-encode",
+        }
+    }
+
+    /// Whether [`encode`] and [`FileEncoder`] write this format in this build (its
+    /// [`feature`](Self::feature) is on): what to filter [`EncodeFormat::ALL`] by for a menu.
+    pub fn is_built(self) -> bool {
+        match self {
+            EncodeFormat::Wav | EncodeFormat::Aiff => cfg!(feature = "pcm-encode"),
+            EncodeFormat::Flac => cfg!(feature = "flac-encode"),
+            EncodeFormat::Aac => cfg!(feature = "aac-encode"),
+            EncodeFormat::Alac => cfg!(feature = "alac-encode"),
+            EncodeFormat::Mp3 => cfg!(feature = "mp3-encode"),
+            EncodeFormat::Ac3 => cfg!(feature = "ac3-encode"),
+            EncodeFormat::Eac3 => cfg!(feature = "eac3-encode"),
         }
     }
 

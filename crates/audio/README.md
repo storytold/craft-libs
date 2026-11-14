@@ -240,8 +240,8 @@ let alac = encode(&buf, &EncodeOptions::new(EncodeFormat::Alac).with_bit_depth(B
 `EncodeOptions::default()` is 24-bit WAV. `with_bwf` adds a BWF `bext` chunk and
 `with_force_rf64` writes RF64 below 4 GiB; both apply to WAV only. `encode_format_for("aiff")`
 maps an extension to an `EncodeFormat`, and `ENCODE_EXTENSIONS` lists the extensions the enabled
-features can write. `EncodeFormat::ALL` lists the formats; `extension()` is the extension a new
-file gets and `mime_type()` its media type. `write` refuses a block without one slice per channel, or with a slice
+features can write. `EncodeFormat::ALL` lists the formats and `is_built()` says whether this build
+writes one; `extension()` is the extension a new file gets and `mime_type()` its media type. `write` refuses a block without one slice per channel, or with a slice
 shorter than `frames`, and writes nothing. After a write fails for another reason, every later
 `write` and `finish` returns an error.
 
@@ -462,6 +462,11 @@ match craft_audio::decode(&bytes, None) {
   metadata. Raw ADTS AAC is not a file format of `encode`; `aac::EncoderConfig::with_adts` gives
   the frames.
 - This crate's file reader plays a raw E-AC-3 7.1 stream as its 5.1 independent substream.
+- `EncodeFormat::Aac` with 8 channels is AAC channel configuration 7 (C, Lc Rc, L R, Ls Rs, LFE),
+  which Apple's decoders read as written. ffmpeg assumes such a stream is a mislabelled 7.1 with
+  backs and sides and moves the channels accordingly, unless run with `-strict 1`.
+- A file with no audio: MP3, AC-3 and E-AC-3 are then zero bytes, which nothing can probe, and an
+  empty AAC M4A (a track with no samples) is read by ffmpeg but not by this crate's decoder.
 - ALAC 32-bit streams: ffmpeg does not decode their uncompressed (escaped) stereo frames, which
   Apple's encoder and this one write for audio that does not compress; Apple's decoder and this
   one do.

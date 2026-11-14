@@ -62,6 +62,41 @@ fn aac_timing_is_in_the_sample_table_and_the_edit_list() {
     assert_eq!(track.samples.iter().map(|s| u64::from(s.duration)).sum::<u64>(), 1024 + 3000);
     assert_eq!(track.edits.len(), 1);
     assert_eq!((track.edits[0].media_time, track.edits[0].segment_duration), (1024, 3000));
+    // Every packet is in a `roll` group of distance -1, which Apple's decoders need to apply the edit.
+    let groups = &track.sample_groups;
+    assert_eq!((groups.len(), groups[0].grouping_type), (1, isobmff::FourCc(*b"roll")));
+    assert_eq!((groups[0].runs.as_slice(), &groups[0].descriptions), ([(track.samples.len() as u32, 1)].as_slice(), &vec![vec![0xFF, 0xFF]]));
+}
+
+/// The sample entry is completed when the file is: AAC's average bit rate, and the largest packet
+/// and average bit rate in ALAC's cookie.
+#[test]
+fn the_sample_entry_describes_the_finished_stream() {
+    use craft_audio::craft_media::isobmff::{self, CodecConfig};
+    let buf = tones(48_000, 2, 48_000);
+    let file = encode(&buf, &EncodeOptions::new(EncodeFormat::Aac).with_bitrate(96_000)).unwrap();
+    let mp4 = isobmff::open(file.as_slice()).unwrap();
+    let CodecConfig::Aac(aac) = &mp4.tracks[0].entries[0].codec else { panic!("not AAC") };
+    assert!((90_000..100_000).contains(&aac.avg_bitrate), "{} bit/s", aac.avg_bitrate);
+
+    let file = encode(&buf, &EncodeOptions::new(EncodeFormat::Alac).with_bit_depth(BitDepth::Int16)).unwrap();
+    let mp4 = isobmff::open(file.as_slice()).unwrap();
+    let CodecConfig::Alac { cookie } = &mp4.tracks[0].entries[0].codec else { panic!("not ALAC") };
+    let config = craft_audio::alac::SpecificConfig::parse(cookie).unwrap();
+    let largest = mp4.tracks[0].samples.iter().map(|s| s.size).max().unwrap();
+    assert_eq!((config.max_frame_bytes, config.bit_depth, config.frame_length), (largest, 16, 4096));
+    assert!(config.avg_bit_rate > 0);
+}
+
+/// Dither reaches ALAC's quantizer: a level below one 16-bit step is silence without it.
+#[test]
+fn alac_dithers_when_asked() {
+    let buf = AudioBuffer { sample_rate: 48_000, channels: vec![vec![0.3 / 32768.0; 4096]] };
+    let opts = EncodeOptions::new(EncodeFormat::Alac).with_bit_depth(BitDepth::Int16);
+    let (_, plain) = decode(&encode(&buf, &opts).unwrap(), Some("m4a")).unwrap();
+    let (_, dithered) = decode(&encode(&buf, &opts.with_dither(true)).unwrap(), Some("m4a")).unwrap();
+    assert!(plain.channels[0].iter().all(|&s| s == 0.0));
+    assert!(dithered.channels[0].iter().any(|&s| s != 0.0));
 }
 
 /// ALAC returns the quantized samples exactly, for every channel count, with each channel where
@@ -356,7 +391,7 @@ fn the_formats_are_named() {
     }
     assert_eq!(ENCODE_EXTENSIONS.len(), 12);
     for format in CODED {
-        assert!(EncodeFormat::ALL.contains(&format));
+        assert!(EncodeFormat::ALL.contains(&format) && format.is_built() && format.feature().ends_with("-encode"));
     }
 }
 
@@ -416,5 +451,19 @@ fn ffmpeg_reads_the_files() {
     assert!(out[7].len() >= 20_256);
     for c in 0..3 {
         assert!(snr(&buf.channels[c], &out[c][256..]) > 12.0, "E-AC-3 7.1, channel {c}: {} dB", snr(&buf.channels[c], &out[c][256..]));
+    }
+}
+
+/// Apple's decoder (macOS `afinfo`; skipped elsewhere) takes the priming and the length of an AAC
+/// file from the edit list, which it does only for a track with a `roll` sample group.
+#[test]
+fn apple_reads_the_aac_priming_and_length() {
+    let Some(afinfo) = crate::testkit::oracle::find_tool("afinfo") else { return };
+    for (frames, remainder) in [(20_000, 480), (1, 1023), (4096, 0)] {
+        let path = crate::testkit::fixtures_dir("file_formats").join(format!("apple_{frames}.m4a"));
+        std::fs::write(&path, encode(&tones(48_000, 2, frames), &EncodeOptions::new(EncodeFormat::Aac)).unwrap()).unwrap();
+        let out = Command::new(&afinfo).arg(&path).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains(&format!("{frames} valid frames + 1024 priming + {remainder} remainder")), "{frames} frames: {text}");
     }
 }
