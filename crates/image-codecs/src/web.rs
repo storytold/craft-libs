@@ -286,8 +286,8 @@ pub fn decode_wbmp(bytes: &[u8]) -> Result<(u32, u32, Vec<bool>), CodecError> {
 
 /// JPEG from 8-bit RGB (`rgb.len() == 3·w·h`): quality 1..=100, optional progressive scans and
 /// optimised Huffman tables (Save for Web's "Optimized"), optional ICC profile, density, EXIF and
-/// XMP. EXIF that doesn't fit in one segment is left out (see [`jpeg_exif_fits`]); XMP that doesn't fit loses its layered-document properties,
-/// else is left out too (see [`jpeg_xmp_fits`]).
+/// XMP. EXIF that doesn't fit in one segment is left out (see [`jpeg_exif_fits`]); XMP that
+/// doesn't fit loses its layered-document properties, else is left out too (see [`jpeg_xmp_fits`]).
 #[allow(clippy::too_many_arguments)]
 pub fn encode_jpeg_rgb8(
     width: u32,
