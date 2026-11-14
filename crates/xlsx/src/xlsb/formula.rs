@@ -147,8 +147,8 @@ pub(super) struct Name {
 /// Workbook-level tables formulas refer to.
 #[derive(Default)]
 pub(crate) struct Links {
-    /// Every sheet's name in `BrtBundleSh` order, `None` for sheets the reader skips or that hold
-    /// no cells (chart, dialog and macro sheets).
+    /// Every sheet's name in `BrtBundleSh` order, `None` for the sheets that hold no cells (chart,
+    /// dialog and module sheets).
     pub(super) sheets: Vec<Option<String>>,
     /// Every `BrtName`, in order: `PtgName` indexes them from 1.
     pub(super) names: Vec<Name>,
@@ -179,14 +179,11 @@ impl Links {
         let (Ok(first), Ok(last)) = (usize::try_from(x.first), usize::try_from(x.last)) else {
             return Err(Unsupported("reference to a missing sheet"));
         };
-        // A span takes every sheet between its ends, so a skipped one anywhere in it changes
-        // what the reference means.
+        // A span is spelled by its ends. A sheet between them with no cells (a chart sheet) adds
+        // nothing to it, and `.xlsx` spells the span the same; an end with no cells can't be named.
         let span = self.sheets.get(first..=last).filter(|s| !s.is_empty()).ok_or(Unsupported("reference to a missing sheet"))?;
-        if span.iter().any(Option::is_none) {
-            return Err(Unsupported("references to sheets the reader skips"));
-        }
         let (Some(Some(a)), Some(Some(b))) = (span.first(), span.last()) else {
-            return Err(Unsupported("reference to a missing sheet"));
+            return Err(Unsupported("references to sheets with no cells"));
         };
         Ok(Some(if first == last { SheetSel::Named(a.clone()) } else { SheetSel::Span(a.clone(), b.clone()) }))
     }

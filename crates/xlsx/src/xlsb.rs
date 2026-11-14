@@ -351,9 +351,10 @@ pub(crate) fn workbook(
                 if let SheetKind::Other(_) = kind {
                     return Err(invalid("unknown sheet relationship type"));
                 }
-                // Only a worksheet has cells a formula can refer to.
+                // Only worksheets and macro sheets have cells a formula can refer to (a macro's
+                // name refers to its macro sheet: `Macro1!$A$1`).
                 if let Some(l) = links.as_mut() {
-                    l.sheets.push((kind == SheetKind::Worksheet).then(|| name.clone()));
+                    l.sheets.push(matches!(kind, SheetKind::Worksheet | SheetKind::Macrosheet).then(|| name.clone()));
                 }
                 wb.sheets.push(SheetEntry { name, sheet_id, visibility, rel_id, kind, part: Some(rel.target.clone()) });
             }

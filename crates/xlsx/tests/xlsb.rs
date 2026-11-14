@@ -1007,3 +1007,31 @@ fn typed_spacing_numbers_and_iso_functions_read_as_in_xlsx() {
     ];
     assert_eq!(got, want.map(Some));
 }
+
+#[test]
+fn references_to_macro_sheets_and_spans_over_chart_sheets_are_named() {
+    // Sheets Data, a chart sheet, an XLM macro sheet, Hidden; sheet links Macro1, Data:Hidden
+    // (over the chart sheet) and Chart1 (no cells).
+    let mut book = record(131, &[]);
+    book.extend(record(153, &[[0u8; 8].as_slice(), &wide("")].concat()));
+    book.extend(record(143, &[]));
+    for (id, rel, name) in [(1u32, "one", "Data"), (3, "c", "Chart1"), (4, "m", "Macro1"), (2, "two", "Hidden")] {
+        book.extend(record(156, &[&0u32.to_le_bytes()[..], &id.to_le_bytes(), &wide(rel), &wide(name)].concat()));
+    }
+    book.extend(record(144, &[]));
+    let mut xti = 3u32.to_le_bytes().to_vec();
+    for (first, last) in [(2i32, 2i32), (0, 3), (1, 1)] {
+        xti.extend([0u32.to_le_bytes(), first.to_le_bytes(), last.to_le_bytes()].concat());
+    }
+    book.extend([record(353, &[]), record(357, &[]), record(362, &xti), record(354, &[]), record(132, &[])].concat());
+    let rels = RELS.replace(
+        "</Relationships>",
+        r#"<Relationship Id="c" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartsheet" Target="../data/c.bin"/><Relationship Id="m" Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="../data/m.bin"/></Relationships>"#,
+    );
+    let ref3d = |ixti: u16| [&[0x5Au8][..], &ixti.to_le_bytes(), &loc(0, 0)].concat();
+    let data = [row(0), formula_cell(1, &ref3d(0), &[]), formula_cell(2, &ref3d(1), &[]), formula_cell(3, &ref3d(2), &[])].concat();
+    let wb = read(&package(&book, &worksheet(&data, &[]), &sst(), ROOT, &rels, TYPES)).unwrap();
+    let got: Vec<_> = (1..=3).map(|c| wb.sheets[0].formula(CellRef::new(0, c))).collect();
+    assert_eq!(got, [Some("Macro1!$A$1"), Some("Data:Hidden!$A$1"), None]);
+    assert!(warned(&wb, "references to sheets with no cells"), "{:?}", wb.warnings);
+}
