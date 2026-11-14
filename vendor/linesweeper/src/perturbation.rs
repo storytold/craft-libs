@@ -60,7 +60,10 @@ impl FloatPerturbation for F64Perturbation {
                         // Taking the absolute value sets the sign bit to zero, so the
                         // addition should never overflow.
                         let bits = f.abs().to_bits().checked_add_signed(delta).unwrap();
-                        let x = if bits & sign_bit != 0 {
+                        // Craft patch (ulp overflow): a step past `f64::MAX` reaches the
+                        // infinity and NaN encodings, not the sign bit, so it is clamped to
+                        // infinity there.
+                        let x = if bits >= f64::INFINITY.to_bits() {
                             f64::INFINITY
                         } else {
                             f64::from_bits(bits)
@@ -195,6 +198,29 @@ pub fn realize_perturbation(
             let mut next = realize_perturbation(base_cases, left);
             next.extend(realize_perturbation(base_cases, right));
             next
+        }
+    }
+}
+
+// Craft patch (ulp overflow).
+#[cfg(test)]
+mod ulp_overflow_tests {
+    use super::*;
+
+    #[test]
+    fn ulp_step_past_f64_max_is_infinite() {
+        for (n, f, expected) in [
+            (2, f64::MAX, f64::INFINITY),
+            (127, f64::MAX, f64::INFINITY),
+            (-2, -f64::MAX, f64::NEG_INFINITY),
+            (1, f64::from_bits(f64::MAX.to_bits() - 1), f64::MAX),
+            (-1, f64::MAX, f64::from_bits(f64::MAX.to_bits() - 1)),
+        ] {
+            assert_eq!(
+                F64Perturbation::Ulp(n).apply(&f),
+                expected,
+                "Ulp({n}) of {f}"
+            );
         }
     }
 }
