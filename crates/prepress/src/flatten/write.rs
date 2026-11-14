@@ -255,10 +255,7 @@ impl<'a> Painter<'a, '_> {
 
     fn fill(&mut self, s: &mut Surface<'_>, f: &FillItem, opacity: f32) -> Result<(), WriteError> {
         let Some(path) = to_path(&f.path) else { return Ok(()) };
-        let rule = match f.rule {
-            FillRule::NonZero => KFillRule::NonZero,
-            FillRule::EvenOdd => KFillRule::EvenOdd,
-        };
+        let rule = k_fill_rule(f.rule);
         let (paint, overprint) = self.paint(&f.paint, f.overprint, Affine::IDENTITY)?;
         with_overprint(s, overprint, |s| {
             s.set_fill(Some(Fill { paint, opacity: normalized(opacity), rule }));
@@ -424,7 +421,7 @@ impl<'a> Painter<'a, '_> {
             None => None,
         };
         if let Some(clip) = clip {
-            s.push_clip_path(&clip, &KFillRule::NonZero);
+            s.push_clip_path(&clip, &k_fill_rule(g.clip_rule));
             pushed += 1;
         }
         let tag = match &g.actual_text {
@@ -692,6 +689,13 @@ fn blend_mode(b: BlendMode) -> kblend::BlendMode {
 fn to_transform(a: Affine) -> Transform {
     let [a, b, c, d, e, f] = a.as_coeffs().map(|v| v as f32);
     Transform::from_row(a, b, c, d, e, f)
+}
+
+fn k_fill_rule(rule: FillRule) -> KFillRule {
+    match rule {
+        FillRule::NonZero => KFillRule::NonZero,
+        FillRule::EvenOdd => KFillRule::EvenOdd,
+    }
 }
 
 /// `None` for an empty path, which paints nothing.
