@@ -45,6 +45,8 @@ pub static OPS: &[(&[u8], OpFn)] = named! {
     "cvn" => basic::cvn, "cvs" => basic::cvs, "cvrs" => basic::cvrs, "bind" => basic::bind,
     // dictionaries
     "dict" => basic::dict, "maxlength" => basic::maxlength, "begin" => basic::begin, "end" => basic::end, "def" => basic::def,
+    // Conventional Type 1 font-prolog aliases.
+    "ND" => basic::def, "NP" => basic::put,
     "load" => basic::load, "store" => basic::store, "get" => basic::get, "put" => basic::put, "known" => basic::known,
     "undef" => basic::undef, "where" => basic::where_, "currentdict" => basic::currentdict,
     "countdictstack" => basic::countdictstack, "dictstack" => basic::dictstack, "cleardictstack" => basic::cleardictstack,

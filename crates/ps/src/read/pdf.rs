@@ -152,6 +152,15 @@ impl Out {
         }
     }
 
+    /// Preserve the semantic text for consumers that group outlined glyphs.
+    pub fn begin_actual_text(&mut self, text: &str) {
+        self.c.begin_marked_content_with_properties(Name(b"Span")).properties().actual_text(pdf_writer::TextStr(text));
+    }
+
+    pub fn end_actual_text(&mut self) {
+        self.c.end_marked_content();
+    }
+
     fn sync_clip(&mut self, clip: &Option<Rc<Clip>>) -> Result<(), String> {
         let target = clip_chain(clip);
         let common = self.applied.iter().zip(&target).take_while(|(a, b)| Rc::ptr_eq(a, b)).count();
@@ -384,8 +393,9 @@ impl Out {
 
     pub fn finish(self, size: (f64, f64)) -> Vec<u8> {
         let mut pdf = Pdf::new();
-        // Nothing newer is used (no transparency groups): PDF/X-1a files can take it.
-        pdf.set_version(1, 4);
+        // ActualText marked content is defined in PDF 1.5; the rest of this output uses basic
+        // page content, without transparency groups.
+        pdf.set_version(1, 5);
         let (catalog, pages, page, content) = (Ref::new(1), Ref::new(2), Ref::new(3), Ref::new(4));
         let mut next = 5;
         let mut alloc = || {

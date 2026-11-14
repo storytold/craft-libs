@@ -85,10 +85,22 @@ impl Frame {
 }
 
 /// How much work and memory one EPS may use.
+pub type FallbackFont = fn(&[u8]) -> Option<&'static [u8]>;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     pub steps: u64,
     pub memory: usize,
+    /// Let hosts that historically ignored excess operands preserve that behavior.
+    pub stack_overflow_noop: bool,
+    /// Consume image data but leave drawing to hosts that historically skipped EPS images.
+    pub skip_images: bool,
+    /// Return an empty page plus a warning when execution fails before painting anything.
+    pub keep_unpainted: bool,
+    /// Match hosts that historically coerce zero divisors to a zero integer result.
+    pub zero_division_zero: bool,
+    /// Optional host font provider for stand-in fonts absent from an EPS file.
+    pub fallback_font: Option<FallbackFont>,
 }
 
 impl Default for Limits {
@@ -96,7 +108,27 @@ impl Default for Limits {
     /// steps and 2 MB, one carrying a 15 MB CJK font 2 million steps and 30 MB. A program that
     /// runs into the step limit ends within a few seconds. Smaller on the web.
     fn default() -> Self {
-        if cfg!(target_arch = "wasm32") { Limits { steps: 20_000_000, memory: 256 << 20 } } else { Limits { steps: 50_000_000, memory: 1 << 30 } }
+        if cfg!(target_arch = "wasm32") {
+            Limits {
+                steps: 20_000_000,
+                memory: 256 << 20,
+                stack_overflow_noop: false,
+                skip_images: false,
+                keep_unpainted: false,
+                zero_division_zero: false,
+                fallback_font: None,
+            }
+        } else {
+            Limits {
+                steps: 50_000_000,
+                memory: 1 << 30,
+                stack_overflow_noop: false,
+                skip_images: false,
+                keep_unpainted: false,
+                zero_division_zero: false,
+                fallback_font: None,
+            }
+        }
     }
 }
 
@@ -113,7 +145,8 @@ pub const SOURCE_BYTES: usize = 128;
 /// Bytes read, copied or scanned per step of work charged.
 pub const BYTES_PER_STEP: u64 = 16;
 
-const MAX_OSTACK: usize = 500_000;
+// Keep the operand limit in line with the EPS reader's established 100,000-value ceiling.
+const MAX_OSTACK: usize = 100_000;
 const MAX_ESTACK: usize = 100_000;
 const MAX_DSTACK: usize = 1_000;
 const MAX_GSTACK: usize = 10_000;
@@ -219,6 +252,9 @@ impl Interp {
 
     pub fn push(&mut self, o: Obj) -> R {
         if self.o.len() >= MAX_OSTACK {
+            if self.limits.stack_overflow_noop {
+                return Ok(());
+            }
             return err("stackoverflow");
         }
         self.o.push(o);
@@ -238,6 +274,11 @@ impl Interp {
         if self.o.len() < n { err("stackunderflow") } else { Ok(()) }
     }
 
+    /// Whether an operator can append `n` values without exceeding the operand stack limit.
+    pub fn has_operand_room(&self, n: usize) -> bool {
+        self.o.len().checked_add(n).is_some_and(|len| len <= MAX_OSTACK)
+    }
+
     pub fn pop_num(&mut self) -> R<f64> {
         match self.pop()? {
             o @ (Obj::Int(_) | Obj::Real(_)) => o.num().ok_or(PsErr::Ps("typecheck")),
@@ -248,7 +289,7 @@ impl Interp {
     pub fn pop_int(&mut self) -> R<i64> {
         match self.pop()? {
             Obj::Int(i) => Ok(i),
-            Obj::Real(r) if r.fract() == 0.0 && r.abs() < 9.0e15 => Ok(r as i64),
+            Obj::Real(r) if r.is_finite() => Ok(r as i64),
             _ => err("typecheck"),
         }
     }

@@ -186,6 +186,10 @@ fn to_8bit(data: Vec<u8>, bpc: usize) -> Vec<u8> {
 fn paint(ip: &mut Interp, p: Params, space: Space) -> R {
     let comps = space.comps();
     let (data, dct) = samples(ip, &p, comps)?;
+    if ip.limits.skip_images {
+        ip.warnings.push("image".into());
+        return Ok(());
+    }
     let cm = placement(ip, &p)?;
     if ip.gs.nulldev {
         return Ok(());
@@ -354,6 +358,10 @@ pub fn imagemask(ip: &mut Interp) -> R {
     };
     let p = Params { bpc: 1, ..p };
     let (data, _) = samples(ip, &p, 1)?;
+    if ip.limits.skip_images {
+        ip.warnings.push("image".into());
+        return Ok(());
+    }
     let cm = placement(ip, &p)?;
     if ip.gs.nulldev {
         return Ok(());

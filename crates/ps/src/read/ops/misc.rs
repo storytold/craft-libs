@@ -2,7 +2,7 @@
 
 use crate::read::interp::{Interp, PsErr, R, err, matrix_of};
 use crate::read::obj::{Key, Obj, PArr, PDict, name};
-use crate::read::source::{FilterParams, Source};
+use crate::read::source::{FilterParams, Kind, Source};
 
 // ----- files -----
 
@@ -118,7 +118,26 @@ pub fn bytesavailable(ip: &mut Interp) -> R {
 
 pub fn closefile(ip: &mut Interp) -> R {
     let f = pop_file(ip)?;
+    let is_eexec = matches!(ip.srcs.list.get(f).map(|source| &source.kind), Some(Kind::Eexec { .. }));
     ip.srcs.close(f);
+    if is_eexec
+        && let Some(font) = ip.d.iter().rev().find(|dict| dict.get_name(b"FontName").is_some()).cloned()
+        && let Some(name) = font.get_name(b"FontName")
+    {
+        // Some embedded programs leave `/CharStrings dict` on the operand stack instead of
+        // installing it with `ND` before closing eexec. Attach that completed table to its font.
+        if font.get_name(b"CharStrings").is_none()
+            && let Some(chars) = ip.o.windows(2).rev().find_map(|pair| match pair {
+                [Obj::Name(key, _), Obj::Dict(chars)] if key.as_ref() == b"CharStrings" => Some(chars.clone()),
+                _ => None,
+            })
+        {
+            font.put_name(b"CharStrings", Obj::Dict(chars));
+        }
+        // Embedded Type 1 programs conventionally leave their completed font dictionary in
+        // the current dictionary stack; closefile marks the end of eexec, so make it findable.
+        ip.fontdir.put(name, Obj::Dict(font));
+    }
     Ok(())
 }
 
@@ -188,6 +207,14 @@ pub fn eexec(ip: &mut Interp) -> R {
         _ => return err("typecheck"),
     };
     let id = ip.srcs.add(Source::eexec(up));
+    // A number of embedded Type 1 programs omit the usual `currentdict end` before eexec;
+    // their encrypted prolog starts with `dup /Private ...` and expects its font dictionary.
+    // Supply it only when the caller has not already left an operand on the stack.
+    if ip.o.is_empty()
+        && let Some(font) = ip.d.last()
+    {
+        ip.push(Obj::Dict(font.clone()))?;
+    }
     // eexec runs with systemdict on top, which its program removes with `end` (`closefile`).
     let sd = ip.systemdict.clone();
     ip.begin(sd)?;
@@ -245,7 +272,23 @@ pub fn filter(ip: &mut Interp) -> R {
         return ip.push(Obj::File(id));
     }
     match ip.srcs.filter(up, &fname, &params) {
-        Ok(id) => ip.push(Obj::File(id)),
+        Ok(mut id) => {
+            if fname == b"SubFileDecode" {
+                // EPS prologs commonly use `currentfile ... SubFileDecode filter pop` to skip
+                // inline data. Materialize the bounded filter so the interpreter resumes after
+                // its end marker rather than treating the payload as PostScript source.
+                let mut data = Vec::new();
+                while let Some(c) = ip.srcs.read(id) {
+                    if data.len() == data.capacity() {
+                        data.try_reserve_exact(4096).map_err(|_| PsErr::Fatal("out of memory".into()))?;
+                    }
+                    ip.alloc(1)?;
+                    data.push(c);
+                }
+                id = ip.srcs.add(Source::bytes(data));
+            }
+            ip.push(Obj::File(id))
+        }
         Err(e) => {
             ip.warnings.push(e);
             err("ioerror")

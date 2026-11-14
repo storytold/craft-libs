@@ -26,8 +26,14 @@ pub fn copy(ip: &mut Interp) -> R {
         Obj::Int(n) => {
             let n = usize::try_from(n).map_err(|_| PsErr::Ps("rangecheck"))?;
             ip.need(n)?;
+            // EPS readers conventionally treat a copy that would exceed the operand limit as a
+            // no-op. Check before cloning or charging so a hostile count cannot partially mutate
+            // the stack or allocate a large temporary.
+            if !ip.has_operand_room(n) {
+                return Ok(());
+            }
             let start = ip.o.len() - n;
-            ip.charge(n as u64)?;
+            ip.charge((n / 8) as u64)?;
             ip.alloc(n.saturating_mul(OBJ_BYTES))?;
             let items: Vec<Obj> = ip.o.get(start..).map(<[Obj]>::to_vec).unwrap_or_default();
             for o in items {
@@ -206,14 +212,28 @@ pub fn div(ip: &mut Interp) -> R {
 pub fn idiv(ip: &mut Interp) -> R {
     let b = ip.pop_int()?;
     let a = ip.pop_int()?;
-    let v = a.checked_div(b).ok_or(PsErr::Ps("undefinedresult"))?;
+    if b == 0 {
+        if ip.limits.zero_division_zero {
+            return ip.push(Obj::Int(0));
+        }
+        return err("undefinedresult");
+    }
+    // The signed minimum divided by -1 overflows the host integer type. PostScript integer
+    // arithmetic wraps this one exceptional result to zero rather than raising an error.
+    let v = a.checked_div(b).unwrap_or(0);
     ip.push(Obj::Int(v))
 }
 
 pub fn mod_(ip: &mut Interp) -> R {
     let b = ip.pop_int()?;
     let a = ip.pop_int()?;
-    let v = a.checked_rem(b).ok_or(PsErr::Ps("undefinedresult"))?;
+    if b == 0 {
+        if ip.limits.zero_division_zero {
+            return ip.push(Obj::Int(0));
+        }
+        return err("undefinedresult");
+    }
+    let v = a.checked_rem(b).unwrap_or(0);
     ip.push(Obj::Int(v))
 }
 
@@ -854,15 +874,15 @@ pub fn cleardictstack(ip: &mut Interp) -> R {
 
 pub fn array(ip: &mut Interp) -> R {
     let n = ip.pop_usize()?;
-    ip.alloc(n.saturating_mul(OBJ_BYTES))?;
     ip.charge(n as u64)?;
+    ip.alloc(n.saturating_mul(OBJ_BYTES))?;
     ip.push(Obj::Array(PArr::new(vec![Obj::Null; n]), false))
 }
 
 pub fn string(ip: &mut Interp) -> R {
     let n = ip.pop_usize()?;
-    ip.alloc(n)?;
     ip.charge_bytes(n)?;
+    ip.alloc(n)?;
     ip.push(Obj::Str(PStr::new(vec![0; n]), false))
 }
 

@@ -76,6 +76,19 @@ fn procedures_loops_and_dictionaries_run() {
 }
 
 #[test]
+fn integer_division_overflow_returns_zero() {
+    let (c, _) = run("-9223372036854775808 -1 idiv 0 eq { 10 20 5 5 rectfill } if
+                      -9223372036854775808 -1 mod 0 eq { 20 20 5 5 rectfill } if");
+    assert_eq!(c.lines().filter(|line| *line == "f").count(), 2, "{c}");
+}
+
+#[test]
+fn copy_past_operand_limit_is_a_noop() {
+    let (c, _) = run("10 20 5 5 rectfill 1 40 { count copy } repeat clear 20 20 5 5 rectfill");
+    assert_eq!(c.lines().filter(|line| *line == "f").count(), 2, "{c}");
+}
+
+#[test]
 fn transforms_curves_and_clips() {
     let (c, _) = run("gsave 60 45 translate 2 2 scale newpath 0 0 10 0 360 arc clip newpath -20 -20 40 40 rectfill grestore 10 20 5 5 rectfill");
     assert!(c.contains(" c"), "arcs become curves: {c}");
@@ -121,6 +134,18 @@ fn a_string_made_a_file_runs_as_a_program() {
 }
 
 #[test]
+fn subfiledecode_materialization_respects_the_memory_budget() {
+    let payload = "x".repeat(8192);
+    let bytes = eps(&format!("0 0 10 10 rectfill currentfile 0 (END) /SubFileDecode filter pop\n{payload}END"));
+    let limits = Limits { memory: 4096, ..Limits::default() };
+    let converted = eps_to_pdf(&bytes, limits).unwrap();
+    assert!(converted.warnings.iter().any(|warning| warning == "out of memory"), "{:?}", converted.warnings);
+    assert!(converted.memory <= limits.memory + 1, "{} bytes", converted.memory);
+    let c = content(&converted.pdf);
+    assert!(c.contains("0 0 m") && c.contains("10 10 l"), "{c}");
+}
+
+#[test]
 fn eexec_sections_run() {
     // `(1 0 0 setrgbcolor 10 20 5 5 rectfill) ` encrypted with the eexec key, as hex.
     let plain = b"1 0 0 setrgbcolor 10 20 5 5 rectfill currentfile closefile\n";
@@ -137,7 +162,15 @@ fn eexec_sections_run() {
 
 #[test]
 fn hostile_programs_end_with_an_error_not_a_hang_or_panic() {
-    let limits = Limits { steps: 200_000, memory: 64 << 20 };
+    let limits = Limits {
+        steps: 200_000,
+        memory: 64 << 20,
+        stack_overflow_noop: false,
+        skip_images: false,
+        keep_unpainted: false,
+        zero_division_zero: false,
+        fallback_font: None,
+    };
     for body in [
         "{ } loop",
         "/f { f } def f",
@@ -289,8 +322,9 @@ fn type42_fonts_draw_their_truetype_glyphs() {
          /CharStrings 2 dict dup /.notdef 0 put dup /A 1 put def /sfnts [ {sfnts} ] def end definefont
          20 scalefont setfont 10 20 moveto (AA) show"
     ));
-    // Two boxes, filled: 1 point (50 units at 20 pt) in, the second 12 points on (600 units).
-    assert_eq!(c.lines().filter(|l| *l == "f").count(), 2, "{c}");
+    // One fill contains both boxes; 1 point (50 units at 20 pt) in, the second 12 points on.
+    assert_eq!(c.lines().filter(|l| *l == "f").count(), 1, "{c}");
+    assert_eq!(c.lines().filter(|l| *l == "EMC").count(), 1, "{c}");
     assert!(c.contains("11 20 m") && c.contains("23 20 m"), "{c}");
 }
 
@@ -395,7 +429,8 @@ fn cff_fonts_from_startdata_draw_their_glyphs() {
     let c = content(
         &eps_to_pdf(&startdata_eps(&tiny_cff(false), "/T findfont 10 scalefont setfont 10 20 moveto (AA) show"), Limits::default()).unwrap().pdf,
     );
-    assert_eq!(c.lines().filter(|l| *l == "f").count(), 2, "{c}");
+    assert_eq!(c.lines().filter(|l| *l == "f").count(), 1, "{c}");
+    assert_eq!(c.lines().filter(|l| *l == "EMC").count(), 1, "{c}");
     // The box starts 0.5 points (50 units) in; the second glyph 6 points (600 units) on.
     assert!(c.contains("10.5 20 m") && c.contains("16.5 20 m"), "{c}");
 }
@@ -408,7 +443,8 @@ fn cid_fonts_draw_through_cmaps() {
                 endcmap CMapName currentdict /CMap defineresource pop end end
                 /U /One-H [/T] composefont pop /U findfont 10 scalefont setfont 10 40 moveto (AA) show";
     let c = content(&eps_to_pdf(&startdata_eps(&tiny_cff(true), body), Limits::default()).unwrap().pdf);
-    assert_eq!(c.lines().filter(|l| *l == "f").count(), 4, "{c}");
+    assert_eq!(c.lines().filter(|l| *l == "f").count(), 2, "{c}");
+    assert_eq!(c.lines().filter(|l| *l == "EMC").count(), 2, "{c}");
     assert!(c.contains("16.5 20 m") && c.contains("16.5 40 m"), "{c}");
     // Broken font data is a warning, not a failure.
     let r = eps_to_pdf(&startdata_eps(b"\x01\x00\x04\x04\xff\xff\xff", "0 0 1 1 rectfill"), Limits::default()).unwrap();
@@ -488,7 +524,15 @@ fn metrics_without_two_numbers_dont_underflow() {
 
 #[test]
 fn work_in_proportion_to_operands_counts_against_the_limits() {
-    let limits = Limits { steps: 200_000, memory: 8 << 20 };
+    let limits = Limits {
+        steps: 200_000,
+        memory: 8 << 20,
+        stack_overflow_noop: false,
+        skip_images: false,
+        keep_unpainted: false,
+        zero_division_zero: false,
+        fallback_font: None,
+    };
     let ends = |body: &str| {
         let r = eps_to_pdf(&eps(&format!("10 20 1 1 rectfill {body}")), limits).expect("what was painted is kept");
         let w = r.warnings.join(" ");

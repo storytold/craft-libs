@@ -318,7 +318,7 @@ pub fn idtransform(ip: &mut Interp) -> R {
 
 fn add_seg(ip: &mut Interp, s: Seg) -> R {
     if ip.gs.path.len() >= MAX_PATH {
-        return err("limitcheck");
+        return Err(PsErr::Fatal("PostScript (path limit)".into()));
     }
     ip.gs.path.push(s);
     Ok(())
@@ -426,7 +426,9 @@ pub fn rcurveto(ip: &mut Interp) -> R {
 }
 
 pub fn closepath(ip: &mut Interp) -> R {
-    if ip.gs.cur.is_some() && !matches!(ip.gs.path.last(), Some(Seg::Close) | None) {
+    // Keep a Close element for every explicit operator call, as existing EPS consumers do.
+    // Consecutive closes paint identically, but each one counts toward bounded path storage.
+    if ip.gs.cur.is_some() {
         add_seg(ip, Seg::Close)?;
         ip.gs.cur = ip.gs.start;
     }
@@ -444,7 +446,8 @@ fn arc_common(ip: &mut Interp, negative: bool) -> R {
         ip.warnings.push("arc (too many turns)".into());
     }
     let start_angle = a0 % 360.0;
-    let (start, curves) = arc_curves(cx, cy, r, start_angle, start_angle + sweep);
+    let available = MAX_PATH.saturating_sub(ip.gs.path.len());
+    let (start, curves, truncated) = arc_curves(cx, cy, r, start_angle, start_angle + sweep, available.saturating_sub(1));
     let m = ip.gs.ctm;
     let s = m.apply(start.0, start.1);
     if ip.gs.cur.is_some() {
@@ -452,8 +455,12 @@ fn arc_common(ip: &mut Interp, negative: bool) -> R {
     } else {
         move_dev(ip, s)?
     }
+    ip.charge(curves.len() as u64)?;
     for c in curves {
         curve_dev(ip, m.apply(c[0], c[1]), m.apply(c[2], c[3]), m.apply(c[4], c[5]))?;
+    }
+    if truncated {
+        return Err(PsErr::Fatal("PostScript (path limit)".into()));
     }
     Ok(())
 }

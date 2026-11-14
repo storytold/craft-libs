@@ -36,14 +36,15 @@ the old composite FMapTypes other than 2 and 9.
 
 ## Limits
 
-`Limits { steps, memory }` bounds one conversion. Every operator charges the work it does in
+`Limits { steps, memory, stack_overflow_noop, skip_images, keep_unpainted, zero_division_zero, fallback_font }` bounds one conversion. The optional font callback supplies host stand-ins for missing fonts; booleans let a host retain prior operand-overflow, image, partial-page, and numeric-coercion behavior. Every operator charges the work it does in
 proportion to its operands (elements copied or searched, path segments, glyphs, samples)
 against `steps` as it goes, and every byte read or decoded at any filter level counts too, so
 the step limit bounds run time. `memory` bounds everything a conversion makes, copies
 included. The defaults are 50 million steps and 1 GiB, or 20 million and 256 MiB on wasm32;
 real EPS files use at most a few million steps and tens of megabytes, and a program that runs
-into the limits ends within seconds. A program that fails or exceeds them before painting
-anything gives `Err`; one that fails later keeps what it painted (with a warning).
+into the limits ends within seconds. By default a program that fails or exceeds them before
+painting anything gives `Err`; setting `keep_unpainted` returns a blank page with the warning.
+One that fails later keeps what it painted (with a warning).
 
 `cargo run -p craft-ps --features read --example eps2pdf -- in.eps out.pdf` converts one file
 and prints the steps and memory it used.

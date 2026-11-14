@@ -75,12 +75,10 @@ impl Seg {
 }
 
 /// The most segments one path may hold.
-pub const MAX_PATH: usize = 4_000_000;
+pub const MAX_PATH: usize = 1 << 20;
 
 /// Maximum number of complete turns an `arc`/`arcn` adds to the path before preserving parity.
 pub const MAX_ARC_TURNS: f64 = 1024.0;
-/// One quarter-circle cubic per turn keeps every retained sweep geometrically accurate.
-const MAX_ARC_SEGMENTS: usize = 4096;
 
 /// The sweep PostScript's `arc` or `arcn` operator selects without iterating over whole turns.
 ///
@@ -108,14 +106,22 @@ pub fn bounded_arc_sweep(a0: f64, a1: f64, negative: bool) -> (f64, bool) {
 
 /// Bézier segments for an arc of the circle at (cx, cy) with radius r, from angle a0 to a1
 /// (degrees), in user space: the first point and the curves.
-pub fn arc_curves(cx: f64, cy: f64, r: f64, a0: f64, a1: f64) -> ((f64, f64), Vec<[f64; 6]>) {
+pub fn arc_curves(cx: f64, cy: f64, r: f64, a0: f64, a1: f64, max_segments: usize) -> ((f64, f64), Vec<[f64; 6]>, bool) {
     let (a0, a1) = (a0.to_radians(), a1.to_radians());
     let start = (cx + r * a0.cos(), cy + r * a0.sin());
     let sweep = a1 - a0;
     if !sweep.is_finite() || sweep == 0.0 {
-        return (start, Vec::new());
+        return (start, Vec::new(), false);
     }
-    let n = ((sweep.abs() / std::f64::consts::FRAC_PI_2).ceil() as usize).clamp(1, MAX_ARC_SEGMENTS);
+    // The established EPS reader uses a 0.1-unit curve tolerance. A quarter-circle cubic has
+    // about 0.00027253*r maximum radial error; subdivision error falls with the sixth power of
+    // the segment angle. Estimate before allocation so huge radii stop at the path bound.
+    let subdivisions = (r.abs() * 0.00027253 / 0.1).max(1.0).powf(1.0 / 6.0).ceil();
+    let required = (sweep.abs() / std::f64::consts::FRAC_PI_2 * subdivisions).ceil().max(1.0);
+    if !required.is_finite() || required > max_segments as f64 {
+        return (start, Vec::new(), true);
+    }
+    let n = required as usize;
     let step = sweep / n as f64;
     let k = 4.0 / 3.0 * (step / 4.0).tan();
     let mut out = Vec::with_capacity(n);
@@ -126,7 +132,7 @@ pub fn arc_curves(cx: f64, cy: f64, r: f64, a0: f64, a1: f64) -> ((f64, f64), Ve
         out.push([cx + r * (ca - k * sa), cy + r * (sa + k * ca), cx + r * (cb + k * sb), cy + r * (sb - k * cb), cx + r * cb, cy + r * sb]);
         a = b;
     }
-    (start, out)
+    (start, out, false)
 }
 
 #[derive(Clone, Debug)]
@@ -361,13 +367,15 @@ mod tests {
 
     #[test]
     fn a_full_circle_is_four_quarter_curves() {
-        let (start, curves) = arc_curves(0.0, 0.0, 10.0, 0.0, 360.0);
+        let (start, curves, truncated) = arc_curves(0.0, 0.0, 10.0, 0.0, 360.0, MAX_PATH);
+        assert!(!truncated);
         assert!((start.0 - 10.0).abs() < 1e-9);
         assert_eq!(curves.len(), 4);
         let last = curves.last().unwrap();
         assert!((last[4] - 10.0).abs() < 1e-9 && last[5].abs() < 1e-9);
-        assert!(arc_curves(0.0, 0.0, 1.0, 0.0, f64::INFINITY).1.is_empty());
-        assert_eq!(arc_curves(0.0, 0.0, 1.0, 0.0, MAX_ARC_TURNS * 360.0).1.len(), MAX_ARC_SEGMENTS);
+        assert!(arc_curves(0.0, 0.0, 1.0, 0.0, f64::INFINITY, MAX_PATH).1.is_empty());
+        assert_eq!(arc_curves(0.0, 0.0, 1.0, 0.0, MAX_ARC_TURNS * 360.0, MAX_PATH).1.len(), 4096);
+        assert!(arc_curves(0.0, 0.0, 2e17, 0.0, 360.0, 100).2);
     }
 
     #[test]

@@ -28,7 +28,7 @@ mod type42;
 
 use craft_eps::{Comments, Kind, MAX_EXTENDED_HEADER, postscript_section as shared_postscript_section};
 
-pub use interp::Limits;
+pub use interp::{FallbackFont, Limits};
 
 /// A converted EPS.
 #[derive(Debug)]
@@ -90,7 +90,7 @@ pub fn cached_pdf(eps: &[u8]) -> Option<std::sync::Arc<Vec<u8>>> {
 }
 
 /// Run an EPS and write what it paints as PDF. `Err` when it isn't an EPS with a bounding box,
-/// when the program fails before painting anything, or when it exceeds `limits`.
+/// or when it fails before painting and `limits.keep_unpainted` is false.
 pub fn eps_to_pdf(bytes: &[u8], limits: Limits) -> Result<Converted, String> {
     let ps = postscript_section(bytes);
     if !ps.starts_with(b"%!") {
@@ -104,7 +104,7 @@ pub fn eps_to_pdf(bytes: &[u8], limits: Limits) -> Result<Converted, String> {
     if let Err(e) = result {
         // What was painted before an error is kept (the rest of the page is lost, as on a
         // printer); with nothing painted, the caller falls back to the preview.
-        if !ip.out.painted {
+        if !ip.out.painted && !limits.keep_unpainted {
             return Err(e);
         }
         warnings.push(e);
