@@ -221,6 +221,37 @@ fn compressed_cp1252_text_extracted() {
     assert_eq!(body_texts(&doc), ["café 100½"]);
 }
 
+/// A DOP with `Dop2000`'s `copts` (from byte 508): `fWW11IndentRules` is byte 6's 0x40 there.
+fn dop_with_copts(byte6: u8) -> Vec<u8> {
+    let mut dop = vec![0u8; 544];
+    dop[508 + 6] = byte6;
+    dop
+}
+
+/// Word 2003's indent rules beside floating objects (`Copts.fWW11IndentRules`, a `.docx`'s
+/// `w:doNotSuppressIndentation`) are read from the DOP; a Word 97 DOP without `copts` leaves them off.
+#[test]
+fn a_doc_reads_word_2003_indent_rules_from_its_dop() {
+    let main = [Piece { compressed: true, text: "Text\r".into() }];
+    let on = text_doc_with(&main, &[], FibSpec::default(), &[(31, &dop_with_copts(0x40))]);
+    assert!(read(&on).expect("opens").settings.do_not_suppress_indentation);
+    // The bits beside it are other options (X, the bit above, is fDontAutofitConstrainedTables).
+    let others = text_doc_with(&main, &[], FibSpec::default(), &[(31, &dop_with_copts(0xBF))]);
+    assert!(!read(&others).expect("opens").settings.do_not_suppress_indentation);
+    let word97 = text_doc_with(&main, &[], FibSpec::default(), &[(31, &[0u8; 500])]);
+    assert!(!read(&word97).expect("opens").settings.do_not_suppress_indentation);
+    // A DOP that ends inside `copts`, before its byte 6 (DOP byte 514), leaves them off whatever
+    // it holds; one that just reaches it reads the bit.
+    for len in 508..=514 {
+        let short = text_doc_with(&main, &[], FibSpec::default(), &[(31, &vec![0xFFu8; len])]);
+        assert!(!read(&short).expect("opens").settings.do_not_suppress_indentation, "a {len}-byte DOP");
+    }
+    let just = text_doc_with(&main, &[], FibSpec::default(), &[(31, &dop_with_copts(0x40)[..515])]);
+    assert!(read(&just).expect("opens").settings.do_not_suppress_indentation);
+    let none = text_doc(&main, &[], 0);
+    assert!(!read(&none).expect("opens").settings.do_not_suppress_indentation);
+}
+
 #[test]
 fn multiple_pieces_and_encodings() {
     let f = text_doc(

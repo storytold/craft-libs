@@ -38,6 +38,8 @@ pub(crate) mod pair {
     pub(crate) const PLC_SPA_HDR: usize = 41;
     pub(crate) const PLCF_END_REF: usize = 46;
     pub(crate) const PLCF_END_TXT: usize = 47;
+    /// `fcDop`: the document properties (DOP).
+    pub(crate) const DOP: usize = 31;
     /// `fcDggInfo`: the OfficeArt drawing content (BLIP store, shapes).
     pub(crate) const DGG_INFO: usize = 50;
     /// `fcPlcftxbxTxt` / `fcPlcfHdrtxbxTxt`: text box stories of the main document / headers.
