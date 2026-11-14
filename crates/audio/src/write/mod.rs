@@ -232,6 +232,15 @@ impl<W: Write + Seek> std::fmt::Debug for FileEncoder<W> {
 
 // The writers differ in size with the features built; the coded one is boxed for its encoder.
 #[allow(clippy::large_enum_variant)]
+#[cfg(any(
+    feature = "pcm-encode",
+    feature = "flac-encode",
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode"
+))]
 enum Writer<W: Write + Seek> {
     #[cfg(feature = "pcm-encode")]
     Wav(wav::Writer<W>),
@@ -390,6 +399,12 @@ impl EncodeOptions {
     /// The constant bit rate such a file would be written at ([`FileEncoder::bitrate`]), or the
     /// error [`EncodeOptions::check`] returns.
     pub fn bitrate(&self, sample_rate: u32, channels: u16) -> Result<Option<u32>> {
+        #[cfg(feature = "vorbis-encode")]
+        if self.format == EncodeFormat::Ogg {
+            // Vorbis is whole-buffer only and VBR has no constant output bitrate.
+            encode(&AudioBuffer::new(sample_rate, channels, 0), self)?;
+            return Ok(None);
+        }
         // The encoder a file would get, on a sink that is thrown away: what it accepts and the
         // rate it settles on are then the writer's by construction.
         Ok(FileEncoder::new(std::io::Cursor::new(Vec::new()), self, sample_rate, channels)?.bitrate())

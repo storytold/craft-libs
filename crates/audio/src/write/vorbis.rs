@@ -71,6 +71,7 @@ pub fn encode(_buf: &AudioBuffer, _kbps: u32) -> Result<Vec<u8>> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

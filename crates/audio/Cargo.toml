@@ -24,7 +24,7 @@ decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-
 symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers and the AAC, ALAC, AC-3/E-AC-3, MP3 and Opus encoders.
 # All but Opus are also file formats of `encode` and `FileEncoder`.
-encode = ["lossless-encode", "aac-encode", "alac-encode", "ac3-encode", "eac3-encode", "mp3-encode", "opus-encode"]
+encode = ["lossless-encode", "aac-encode", "alac-encode", "ac3-encode", "eac3-encode", "mp3-encode", "opus-encode", "vorbis-encode"]
 # Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC files.
 lossless-encode = ["pcm-encode", "flac-encode"]
 # Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
