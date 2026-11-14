@@ -578,6 +578,57 @@ fn run() {
     assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![4, 8, 9]);
 }
 
+#[test]
+fn std_instant_reads_a_use_group_split_over_several_lines() {
+    let source = r#"
+use std::time::{
+    Instant
+};
+use std::time::{
+    Duration,
+    Instant as Clock,
+};
+"#;
+    let findings = std_instant([("src/clock.rs", source)]);
+    assert_eq!(lines(&findings), vec![3, 7]);
+    assert_eq!(findings[0].text, "Instant");
+}
+
+#[test]
+fn std_instant_does_not_count_brace_character_literals_as_braces() {
+    let source = r#"
+#[cfg(unix)]
+fn native() { let open = '{'; let b = b'{'; let t = std::time::Instant::now(); }
+fn web() { let close = '}'; let t = std::time::Instant::now(); }
+#[cfg(unix)]
+fn native_two() { let close = '}'; let t = std::time::Instant::now(); }
+fn web_two() { let t = std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![4, 7]);
+}
+
+#[test]
+fn an_escaped_line_break_in_a_string_keeps_line_numbers() {
+    let source =
+        "fn web() {\n    let s = \"one \\\n        two\";\n    let t = std::time::Instant::now();\n    let q = PredefinedMenuItem::quit(None);\n}\n";
+    assert_eq!(lines(&std_instant([("src/web.rs", source)])), vec![4]);
+    assert_eq!(lines(&predefined_quit([("src/web.rs", source)])), vec![5]);
+}
+
+#[test]
+fn deeply_nested_use_groups_and_cfg_predicates_do_not_exhaust_the_stack() {
+    let depth = 100_000;
+    let use_groups = format!("use std::time::{}Instant{};\nfn f() {{}}\n", "{".repeat(depth), "}".repeat(depth));
+    assert!(std_instant([("src/deep.rs", use_groups.as_str())]).is_empty());
+    assert!(predefined_quit([("src/deep.rs", use_groups.as_str())]).is_empty());
+
+    let cfg = format!("#[cfg({}unix{})]\nfn f() {{ let t = std::time::Instant::now(); }}\n", "not(".repeat(depth), ")".repeat(depth));
+    assert_eq!(lines(&std_instant([("src/deep.rs", cfg.as_str())])), vec![2]);
+
+    let shallow = "use std::time::{{{Instant}}};\n";
+    assert_eq!(lines(&std_instant([("src/shallow.rs", shallow)])), vec![1]);
+}
+
 fn finding_paths(findings: &[Finding]) -> Vec<&str> {
     findings.iter().map(|f| f.path.as_str()).collect()
 }
@@ -761,6 +812,15 @@ const F16_OVER: f16 = 0x1.0p16h;
 }
 
 #[test]
+fn wgsl_literals_after_a_hex_literal_and_an_operator_are_checked() {
+    let shader = "const A = 0x1.0p0+1e39;\nconst B = 0xFF+1e39;\nconst C = 0x1f-4e38;\nconst D = 0xAu*2.0+5e38;\nconst E = 0x1p1-0x1p+500;\n";
+    let findings = wgsl_float_literals(shader);
+    assert_eq!(lines(&findings), vec![1, 2, 3, 4, 5]);
+    let texts: Vec<&str> = findings.iter().map(|f| f.text.as_str()).collect();
+    assert_eq!(texts, vec!["1e39", "1e39", "4e38", "5e38", "0x1p+500"]);
+}
+
+#[test]
 fn wgsl_block_comment_markers_inside_line_comments_do_not_open_a_comment() {
     let shader = "// a /* inside a line comment\nconst BAD: f32 = 4e38;\n/* block // with a line marker */ const ALSO_BAD: f32 = 5e38;\n";
     let findings = wgsl_float_literals(shader);
@@ -841,6 +901,17 @@ fn rust_sources_does_not_loop_on_a_symlink_cycle() {
     let dir = ScratchDir::new("symlink_cycle");
     dir.write("src/lib.rs", "pub fn lib() {}");
     std::os::unix::fs::symlink(dir.path().join("src"), dir.path().join("src").join("again")).expect("symlink cycle");
+    let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
+    assert_eq!(file_names(&sources), vec!["lib.rs"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_sources_skips_a_broken_symlink() {
+    let dir = ScratchDir::new("symlink_broken");
+    dir.write("src/lib.rs", "pub fn lib() {}");
+    std::os::unix::fs::symlink(dir.path().join("missing.rs"), dir.path().join("src").join("gone.rs")).expect("symlink file");
+    std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("src").join("gone")).expect("symlink folder");
     let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
     assert_eq!(file_names(&sources), vec!["lib.rs"]);
 }
