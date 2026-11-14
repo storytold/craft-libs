@@ -169,6 +169,41 @@ fn a_missing_shared_strings_part_is_a_warning() {
 }
 
 #[test]
+fn shared_strings_at_the_conventional_path_work_without_a_relationship() {
+    const REL_NS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
+    const DOC_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    let root_rels =
+        format!(r#"<Relationships xmlns="{REL_NS}"><Relationship Id="w" Type="{DOC_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>"#);
+    let workbook = format!(r#"<workbook xmlns="{MAIN}" xmlns:r="{DOC_REL}"><sheets><sheet name="S" sheetId="1" r:id="s"/></sheets></workbook>"#);
+    let workbook_rels = format!(
+        r#"<Relationships xmlns="{REL_NS}"><Relationship Id="s" Type="{DOC_REL}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#
+    );
+    let worksheet = format!(r#"<worksheet xmlns="{MAIN}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#);
+    let strings = format!(r#"<sst xmlns="{MAIN}"><si><t>Tea</t></si></sst>"#);
+    let bytes = zip(&[
+        ("_rels/.rels", root_rels.as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", workbook_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", worksheet.as_bytes()),
+        ("xl/sharedStrings.xml", strings.as_bytes()),
+    ]);
+
+    let mut package = Package::open(&bytes, &Limits::default()).unwrap();
+    let strings = package.shared_strings().unwrap();
+    assert_eq!(strings.iter().map(|item| item.text.as_ref()).collect::<Vec<_>>(), ["Tea"]);
+    let workbook = package.workbook().unwrap();
+    let mut values = Vec::new();
+    package
+        .sheet(&workbook.sheets[0], |row| {
+            values.extend(row.cells.into_iter().map(|cell| cell.value.resolve(&strings, false)));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(values, [Value::text("Tea")]);
+}
+
+#[test]
 fn limits_are_errors() {
     let rows: String = (1..=2000).map(|r| format!(r#"<row r="{r}"><c r="A{r}"><v>{r}</v></c></row>"#)).collect();
     let bytes = workbook(&[("S", &rows)], &[]);

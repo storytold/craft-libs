@@ -48,6 +48,7 @@ holds `upstream_revision`. `local_patches` describes each local change.
 | `binary_op` returns the new `Error::FeatureBelowTolerance { eps }` when its automatic `eps` is above `MIN_AUTO_EPS` (1e-6) and an input subpath at least `4 * MIN_AUTO_EPS` wide and high is narrower than `FEATURE_EPS_RATIO * eps` (4 * eps) in x or y, measured on the subpath's exact bounding box. Before, one far point raised `eps` for every segment and `binary_op` returned `Ok` without the small subpaths: with a triangle at 3e13 (eps 0.43) a 0.3 x 10 sliver was lost, and at 1e15 (eps 14.2) most of a 10 x 10 square was. The docs of `binary_op` and `binary_op_with_eps` state that `eps` is one absolute tolerance and what the check does not cover | `Craft patch (far-point eps)` | `src/lib.rs` | `tests::far_point_eps` |
 | Adding paths one at a time no longer sorts every entrance and exit in the arena on each call: the new entries are sorted and merged into the sorted ones, in the same order as before. `Segments::add_bez_paths` and `Segments::add_non_closed_bez_paths` add many paths and merge once; on an open subpath, `add_bez_paths` keeps the paths before it and adds nothing of that path or later ones | `Craft patch (batch paths)` | `src/segments.rs` | `segments::tests::add_bez_paths_matches_repeated_add_bez_path`, `segments::tests::add_non_closed_bez_paths_matches_repeated_add_non_closed_bez_path`, `segments::tests::add_bez_paths_stops_at_an_open_path`, `segments::tests::merged_entrances_and_exits_match_a_full_sort`, `segments::tests::paths_added_in_height_order_are_not_sorted_again` |
 | In `intersect_cubics_rec`, the exact check that both curves are on the interval's side at each re-centered interval end runs only with the `slow-asserts` feature. Without the change, debug builds panicked on finite curves near 1e8, where the rounded end puts the curves on the wrong side by up to 69 times `ish_tolerance`; release builds already skipped the check | `Craft patch (end order check)` | `src/curve/mod.rs` | `curve::test::crossing_at_large_coordinates` |
+| Clippy 1.100.0 with `-D warnings` and every feature passes on every registered target: the `slow-asserts` invariant check in `sweep_line.rs` passes `self.line` to `assert!` without a `&` (`useless_borrows_in_formatting`), and `Contours::grouped` iterates over the contours with `enumerate` instead of indexing them (`needless_range_loop`). The behavior does not change | `Craft patch (clippy lints)` | `src/sweep/sweep_line.rs`, `src/topology.rs` | `cargo clippy --locked --all-targets --all-features -- -D warnings` |
 
 | File | Change |
 |---|---|
@@ -157,7 +158,7 @@ tests, the two `paperjs` trials that need no data files, and the tests in the `v
 `curve_metrics` examples, and checks that every registered target compiles with all features. The
 `craft-prepress` tests with the `flatten` feature run against this copy. `pdf.yml`'s path filter
 lists this directory, so a pull request that changes files here starts `pdf.yml`, which runs the
-script. Run the tests from this directory:
+script. No workflow runs clippy on this copy. Run the tests and clippy from this directory:
 
 ```sh
 cargo test --locked --lib --test regression
@@ -168,6 +169,7 @@ cargo test --locked --doc
 cargo test --locked --example visualize_op
 cargo test --locked --example curve_metrics --features metrics
 cargo check --locked --all-targets --all-features
+cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
 `Cargo.toml` leaves out the `kompari`, `linesweeper_util` and `path-bool` dev-dependencies, which
