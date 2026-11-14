@@ -299,6 +299,16 @@ fn rename_keeps_a_style_sharing_the_full_name_suffix() {
 }
 
 #[test]
+fn rename_rejects_a_family_name_in_the_full_name_suffix() {
+    // The full name "A A" is stored once, and the family name (ID 1) is its last "A". Renaming the
+    // family would change the full name's suffix " A".
+    let records =
+        [Rec { platform: 3, encoding: 1, name_id: 4, offset: 0, length: 6 }, Rec { platform: 3, encoding: 1, name_id: 1, offset: 4, length: 2 }];
+    let font = face(&[(b"head", head()), (b"name", name_table(0, &records, &[], &utf16("A A")))]);
+    assert_eq!(rename_family(&font, "A", "B"), Err(FontError::ConflictingNameStorage));
+}
+
+#[test]
 fn rename_updates_name_checksum() {
     let font = family_face(&[win(1, FROM), win(2, "Regular")]);
     let out = rename_family(&font, FROM, TO).unwrap();
@@ -578,5 +588,29 @@ fn collection_rejects_offset_overflow() {
     // 32-bit offsets cannot address. The function refuses before allocating any of it.
     let big = face(&[(b"zzzz", vec![0; 1 << 20])]);
     let faces = vec![&big[..]; 4096];
+    assert_eq!(collection(&faces), Err(FontError::OutputTooLarge));
+}
+
+#[test]
+fn collection_rejects_directories_past_the_offset_limit() {
+    // 65,536 references to one face with 4,096 empty tables: the table directories alone take more
+    // than 4 GiB. The function refuses without keeping a directory for every face.
+    let tables: Vec<(&[u8; 4], Vec<u8>)> = (0..4096).map(|_| (b"zzzz", Vec::new())).collect();
+    let many = face(&tables);
+    let faces = vec![&many[..]; 65536];
+    assert_eq!(collection(&faces), Err(FontError::OutputTooLarge));
+}
+
+#[test]
+fn collection_counts_directories_before_reading_records() {
+    // The same number of directories, each with every table record out of range. The size limit is
+    // found from the faces' table counts before any table record is read.
+    let mut directory = vec![0u8; 12 + 16 * 4096];
+    set32(&mut directory, 0, 0x0001_0000);
+    set16(&mut directory, 4, 4096);
+    for index in 0..4096 {
+        set32(&mut directory, 12 + 16 * index + 8, u32::MAX);
+    }
+    let faces = vec![&directory[..]; 65536];
     assert_eq!(collection(&faces), Err(FontError::OutputTooLarge));
 }

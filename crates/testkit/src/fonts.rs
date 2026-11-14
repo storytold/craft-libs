@@ -143,24 +143,26 @@ pub fn rename_family(bytes: &[u8], from: &str, to: &str) -> Result<Vec<u8>, Font
 /// [`FontError::EmptyCollection`] for no faces, [`FontError::UnsupportedFace`] for a face that is
 /// itself a collection, [`FontError::MalformedFont`] for a face shorter than its table directory or
 /// with a table out of range, and [`FontError::OutputTooLarge`] when the collection would pass the
-/// 4 GiB that its 32-bit offsets reach or cannot be allocated.
+/// 4 GiB that its 32-bit offsets reach or cannot be allocated. The headers and table directories are
+/// counted from each face's `numTables` before any table record is read, so faces whose directories
+/// alone pass 4 GiB return [`FontError::OutputTooLarge`] even when a table record is out of range.
 pub fn collection(faces: &[&[u8]]) -> Result<Vec<u8>, FontError> {
     if faces.is_empty() {
         return Err(FontError::EmptyCollection);
     }
-    let directories = faces.iter().map(|face| directory(face)).collect::<Result<Vec<_>, _>>()?;
     let count = u32::try_from(faces.len()).map_err(|_| FontError::OutputTooLarge)?;
-    let size = collection_size(&directories)?;
+    let size = collection_size(faces)?;
     let mut out = Vec::new();
     out.try_reserve_exact(size).map_err(|_| FontError::OutputTooLarge)?;
     out.extend_from_slice(b"ttcf");
     out.extend_from_slice(&0x0001_0000u32.to_be_bytes());
     out.extend_from_slice(&count.to_be_bytes());
     out.resize(SFNT_HEADER + faces.len() * 4, 0);
-    for (index, (face, tables)) in faces.iter().zip(&directories).enumerate() {
+    for (index, face) in faces.iter().enumerate() {
+        let tables = directory(face)?;
         let directory = offset32(out.len())?;
         put_u32(&mut out, SFNT_HEADER + index * 4, directory)?;
-        write_face(&mut out, face, tables)?;
+        write_face(&mut out, face, &tables)?;
     }
     Ok(out)
 }
@@ -176,11 +178,7 @@ struct Table {
 
 /// Reads a standalone face's table directory, checking that every record and table lies in `face`.
 fn directory(face: &[u8]) -> Result<Vec<Table>, FontError> {
-    let version = bytes_at(face, 0, 4)?;
-    if !matches!(version, [0, 1, 0, 0] | [b'O', b'T', b'T', b'O'] | [b't', b'r', b'u', b'e']) {
-        return Err(FontError::UnsupportedFace);
-    }
-    let count = usize::from(u16_at(face, 4)?);
+    let count = table_count(face)?;
     bytes_at(face, 0, SFNT_HEADER + count * TABLE_RECORD)?;
     let mut tables = Vec::with_capacity(count);
     for index in 0..count {
@@ -194,6 +192,15 @@ fn directory(face: &[u8]) -> Result<Vec<Table>, FontError> {
     Ok(tables)
 }
 
+/// Reads a standalone face's sfnt version and `numTables`, without reading the table records.
+fn table_count(face: &[u8]) -> Result<usize, FontError> {
+    let version = bytes_at(face, 0, 4)?;
+    if !matches!(version, [0, 1, 0, 0] | [b'O', b'T', b'T', b'O'] | [b't', b'r', b'u', b'e']) {
+        return Err(FontError::UnsupportedFace);
+    }
+    Ok(usize::from(u16_at(face, 4)?))
+}
+
 /// Whether `table` shares bytes with the table directory or with another table of the face.
 fn shares_bytes(tables: &[Table], table: &Table) -> bool {
     let end = table.offset + table.length;
@@ -203,18 +210,24 @@ fn shares_bytes(tables: &[Table], table: &Table) -> bool {
 }
 
 /// Bytes a collection of these faces takes, refused past what a 32-bit offset reaches.
-fn collection_size(directories: &[Vec<Table>]) -> Result<usize, FontError> {
-    let mut size = u64::try_from(SFNT_HEADER + directories.len() * 4).map_err(|_| FontError::OutputTooLarge)?;
-    for tables in directories {
-        let directory = SFNT_HEADER + tables.len() * TABLE_RECORD;
-        size = size.checked_add(u64::try_from(directory).map_err(|_| FontError::OutputTooLarge)?).ok_or(FontError::OutputTooLarge)?;
-        for table in tables {
-            let padded = u64::try_from(table.length).map_err(|_| FontError::OutputTooLarge)?.div_ceil(4) * 4;
-            size = size.checked_add(padded).ok_or(FontError::OutputTooLarge)?;
-        }
+///
+/// The headers and table directories are added up first, from each face's `numTables` alone, so that
+/// input whose directories already pass the limit is refused before any table record is read. The
+/// tables are then added one face at a time, and no face's directory is kept.
+fn collection_size(faces: &[&[u8]]) -> Result<usize, FontError> {
+    let add = |size: u64, bytes: usize| -> Result<u64, FontError> {
+        let size = size.checked_add(u64::try_from(bytes).map_err(|_| FontError::OutputTooLarge)?).ok_or(FontError::OutputTooLarge)?;
+        if size > u64::from(u32::MAX) { Err(FontError::OutputTooLarge) } else { Ok(size) }
+    };
+    let mut size = add(0, SFNT_HEADER)?;
+    size = add(size, faces.len().checked_mul(4).ok_or(FontError::OutputTooLarge)?)?;
+    for face in faces {
+        size = add(size, SFNT_HEADER + table_count(face)? * TABLE_RECORD)?;
     }
-    if size > u64::from(u32::MAX) {
-        return Err(FontError::OutputTooLarge);
+    for face in faces {
+        for table in directory(face)? {
+            size = add(size, table.length.div_ceil(4).checked_mul(4).ok_or(FontError::OutputTooLarge)?)?;
+        }
     }
     usize::try_from(size).map_err(|_| FontError::OutputTooLarge)
 }
@@ -342,6 +355,10 @@ fn plan_edits(face: &[u8], strings: &NameStrings, from: &str, to: &str) -> Resul
             None => {
                 let edit = renamed(string, face, from, to)?;
                 let edited = edit.is_some();
+                if let Some(edit) = &edit {
+                    // The rest of a full name, after the family name, must keep its bytes.
+                    kept.push(edit.range.end..string.range.end);
+                }
                 edits.extend(edit);
                 read.insert(key, edited);
                 edited
