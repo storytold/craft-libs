@@ -681,8 +681,8 @@ pub(crate) fn compute_positions(
 #[cfg(test)]
 mod tests {
     use kurbo::{
-        Affine, BezPath, CubicBez, Line, ParamCurve, ParamCurveNearest, PathSeg, Point, QuadBez,
-        Shape,
+        Affine, BezPath, CubicBez, Line, ParamCurve, ParamCurveExtrema, ParamCurveNearest, PathSeg,
+        Point, QuadBez, Shape,
     };
 
     use crate::Segments;
@@ -816,6 +816,8 @@ mod tests {
     // Craft patch (flat-end shear): when both end points are moved along a flat
     // start, past the parameter of the end's height, the piece is cut at the
     // points nearest both ends and runs left to right, as the curve does there.
+    // `x` is checked at the piece's ends and extrema, between which it is
+    // monotonic.
     #[test]
     fn flat_start_piece_past_the_end_height_does_not_turn_back() {
         let origin = Point::new(0.0, 0.0);
@@ -828,9 +830,10 @@ mod tests {
             let out = PositionedOutputSeg::from_seg(seg, p0, p1);
             for piece in out.path.segments() {
                 let mut last = piece.start().x;
-                for k in 1..=200 {
-                    let x = piece.eval(k as f64 / 200.0).x;
-                    assert!(x >= last && x <= p1.x, "{seg:?}: {x} after {last}");
+                let extrema = piece.extrema();
+                for t in extrema.iter().copied().chain([1.0]) {
+                    let x = piece.eval(t).x;
+                    assert!(x >= last && x <= p1.x, "{seg:?}: {x} at {t} after {last}");
                     last = x;
                 }
             }
@@ -838,7 +841,9 @@ mod tests {
     }
 
     // Craft patch (flat-end shear): a piece placed between end points off its
-    // curve stays monotonic in `y`.
+    // curve stays monotonic in `y`. Between two neighboring extrema `y` is
+    // monotonic, so the piece is monotonic in `y` exactly when `y` does not
+    // decrease along its ends and extrema.
     #[test]
     fn flat_end_pieces_stay_monotonic() {
         let (p0, p1, p2) = (
@@ -855,9 +860,10 @@ mod tests {
             let out = PositionedOutputSeg::from_seg(seg, p0, end);
             for piece in out.path.segments() {
                 let mut last = piece.start().y;
-                for k in 1..=200 {
-                    let y = piece.eval(k as f64 / 200.0).y;
-                    assert!(y >= last && y <= end.y, "{seg:?}: {y} after {last}");
+                let extrema = piece.extrema();
+                for t in extrema.iter().copied().chain([1.0]) {
+                    let y = piece.eval(t).y;
+                    assert!(y >= last && y <= end.y, "{seg:?}: {y} at {t} after {last}");
                     last = y;
                 }
             }
