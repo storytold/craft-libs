@@ -155,6 +155,12 @@ fn baseline_exposure(h: &Header) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// The codec fixes the green-site geometry; exchanging the two non-green
+/// planes only exchanges their colour labels, so RGGB and BGGR are both valid.
+fn compressed_layout_supported(cfa: &Cfa) -> bool {
+    *cfa == Cfa::xtrans() || *cfa == Cfa::bayer_static("RGGB") || *cfa == Cfa::bayer_static("BGGR")
+}
+
 /// Unpack one row of `bits`-bit samples in Fujifilm's packing. `words32`: the raw IFD's `0xf006` flag is set, the
 /// samples are MSB-first in little-endian 32-bit words whatever the depth; otherwise 16-bit words, a 12-bit
 /// LSB-first bit stream, or (other depths) the same 32-bit words.
@@ -203,8 +209,13 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     };
     let mut data = Vec::new();
     if compressed {
-        if cfa != if cfa.width == 6 { Cfa::xtrans() } else { Cfa::bayer_static("RGGB") } {
+        if !compressed_layout_supported(&cfa) {
             return Err(RawError::Unsupported("Fujifilm compressed RAF with an unsupported CFA layout".into()));
+        }
+        if !src.starts_with(b"IS") {
+            // A recognized RAF compression mode can wrap an unknown packing. Do not
+            // feed it to the IS codec; damage inside an identified IS stream stays Corrupt.
+            return Err(RawError::Unsupported("Fujifilm compressed RAF without a supported IS signature".into()));
         }
         let flag = if compression == 2 { 1 } else { 0 };
         if src.get(2) != Some(&flag) {
@@ -622,6 +633,37 @@ pub(super) mod tests {
         bytes[100..104].copy_from_slice(&((raw_at + 8) as u32).to_be_bytes());
         for mode in [Mode::Header, Mode::Full] {
             assert!(matches!(decode(&bytes, mode, &Limits::default()), Err(RawError::Unsupported(why)) if why.contains("layout")));
+        }
+    }
+
+    #[test]
+    fn compressed_layout_accepts_both_red_blue_orders_without_accepting_wrong_green_phase() {
+        for name in ["RGGB", "BGGR"] {
+            assert!(compressed_layout_supported(&Cfa::bayer_static(name)), "{name}");
+        }
+        for name in ["GRBG", "GBRG"] {
+            assert!(!compressed_layout_supported(&Cfa::bayer_static(name)), "{name}");
+        }
+        let mut other = Cfa::xtrans();
+        assert!(compressed_layout_supported(&other));
+        other.pattern.swap(0, 2);
+        assert!(!compressed_layout_supported(&other));
+    }
+
+    #[test]
+    fn unknown_compressed_signature_is_unsupported_but_identified_stream_damage_is_corrupt() {
+        let header = b"IS\x01\x00\x0e\0\x12\x06\0\x03\x0c\x03\0\x02\0\x03".to_vec();
+        let known = raf(780, 18, 14, header, None, &[]);
+        let raw_at = be32(&known, 100).unwrap();
+        let strip_at = raw_at + raw_ifd(&known[raw_at..]).unwrap().u64(0xf007).unwrap() as usize;
+        let mut unknown = known.clone();
+        unknown[strip_at..strip_at + 2].copy_from_slice(b"XX");
+        for mode in [Mode::Header, Mode::Full] {
+            assert!(matches!(decode(&unknown, mode, &Limits::default()), Err(RawError::Unsupported(why)) if why.contains("signature")));
+            assert!(
+                matches!(decode(&known, mode, &Limits::default()), Err(RawError::Corrupt(_))),
+                "identified but truncated IS stream must remain corrupt"
+            );
         }
     }
 

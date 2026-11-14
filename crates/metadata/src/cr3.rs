@@ -371,9 +371,13 @@ fn trak(bytes: &[u8], t: &BoxRef, budget: &mut usize) -> Option<Cr3Track> {
             b"stsz" => {
                 sample_count = be32(body, 8)?;
                 size = match be32(body, 4)? {
-                    0 if be32(body, 8)? > 0 => be32(body, 12),
+                    // A first entry cannot justify an incomplete per-sample
+                    // table, nor an impossible constant-size sample count.
+                    0 if sample_count > 0 && sample_count as usize <= body.len().saturating_sub(12) / 4 => be32(body, 12),
                     0 => None,
-                    n if be32(body, 8)? > 0 => Some(n),
+                    n if sample_count > 0 && u64::from(n).checked_mul(u64::from(sample_count)).is_some_and(|total| total <= bytes.len() as u64) => {
+                        Some(n)
+                    }
                     _ => None,
                 }
             }
@@ -584,6 +588,22 @@ mod tests {
             let bytes = file(trak(entry, 4096, 16));
             let parsed = parse_cr3(&bytes).unwrap();
             assert!(!matches!(parsed.tracks[0].kind, Cr3TrackKind::Jpeg));
+        }
+    }
+
+    #[test]
+    fn first_sample_size_requires_a_complete_bounded_sample_table() {
+        let valid = trak(craw(16, 16, &bx(b"JPEG", &[0; 4])), 4096, 16);
+        let at = valid.windows(4).position(|bytes| bytes == b"stsz").unwrap();
+        for (constant, count, accepted) in [(0u32, 1u32, true), (16, 1, true), (0, 2, false), (0, u32::MAX, false), (16, u32::MAX, false)] {
+            let mut track = valid.clone();
+            track[at + 8..at + 12].copy_from_slice(&constant.to_be_bytes());
+            track[at + 12..at + 16].copy_from_slice(&count.to_be_bytes());
+            let mut file = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+            file.extend(bx(b"moov", &track));
+            file.resize(4112, 0);
+            let parsed = parse_cr3(&file).unwrap();
+            assert_eq!(parsed.tracks[0].data, accepted.then_some((4096, 16)), "size {constant}, count {count}");
         }
     }
 
