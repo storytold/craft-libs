@@ -9,6 +9,8 @@
 //! - [`runner`]: the gate's step runner. [`runner::run_steps`] runs the steps in order, stops at the
 //!   first failure and prints the `ok`, `FAIL` and `skip` summary. [`runner::root`],
 //!   [`runner::cargo`], [`runner::run`] and [`runner::nextest_or_test`] build and run the commands.
+//! - [`names`]: the display-name scanner. [`names::scan`] looks for the words an app lists in its
+//!   Rust string literals, `Cargo.toml` descriptions and text files, and returns what it finds.
 //! - `lock` (feature `lock`): a fixed number of slots, held across processes through file locks, so
 //!   that gate runs in several checkouts of one machine take turns.
 //! - `report` (feature `report`): the per-step JSON report, replaced atomically.
@@ -37,6 +39,7 @@
 
 #[cfg(feature = "lock")]
 pub mod lock;
+pub mod names;
 #[cfg(feature = "report")]
 pub mod report;
 pub mod runner;
