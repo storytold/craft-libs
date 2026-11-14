@@ -712,13 +712,26 @@ impl Mesh {
 
     /// A single-material mesh from raw attributes; computes missing normals and tangents.
     pub fn from_parts(positions: Vec<Vec3>, normals: Option<Vec<Vec3>>, uvs: Vec<Vec2>, indices: Vec<u32>, material: &str) -> Result<Mesh> {
+        Self::from_parts_capped(positions, normals, uvs, indices, material, MAX_TRIANGLES)
+    }
+
+    /// [`Mesh::from_parts`] with the triangle cap as a parameter, so a test can reach it with a
+    /// small mesh.
+    fn from_parts_capped(
+        positions: Vec<Vec3>,
+        normals: Option<Vec<Vec3>>,
+        uvs: Vec<Vec2>,
+        indices: Vec<u32>,
+        material: &str,
+        max_triangles: usize,
+    ) -> Result<Mesh> {
         if let Some(bad) = indices.iter().find(|&&i| i as usize >= positions.len()) {
             return Err(MeshOpsError::Invalid(format!("index {bad} out of range ({} vertices)", positions.len())));
         }
         let count = u32::try_from(indices.len()).map_err(|_| MeshOpsError::Invalid("index count does not fit in u32".into()))?;
         // The triangle cap of `validate`, checked before the normals and tangents are computed.
-        if indices.len() / 3 > MAX_TRIANGLES {
-            return Err(MeshOpsError::Invalid(format!("mesh has more than {MAX_TRIANGLES} triangles")));
+        if indices.len() / 3 > max_triangles {
+            return Err(MeshOpsError::Invalid(format!("mesh has more than {max_triangles} triangles")));
         }
         let mut m = Mesh {
             normals: normals.unwrap_or_default(),
@@ -1244,6 +1257,16 @@ mod tests {
         let uvs = vec![Vec2::ZERO, Vec2::X];
         let e = Mesh::from_parts(positions, None, uvs, vec![0, 1, 2], "M").unwrap_err();
         assert!(e.to_string().contains("out of range"), "{e}");
+    }
+
+    /// `from_parts` refuses a mesh over its triangle cap before it computes normals and tangents.
+    /// With a cap of one triangle, a two-triangle mesh is refused, though `validate` passes it.
+    #[test]
+    fn from_parts_checks_the_triangle_cap_before_computing_attributes() {
+        let positions = vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::ONE];
+        let uvs = vec![Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ONE];
+        let e = Mesh::from_parts_capped(positions, None, uvs, vec![0, 1, 2, 1, 3, 2], "M", 1).unwrap_err();
+        assert!(e.to_string().contains("more than 1 triangles"), "{e}");
     }
 
     #[test]
