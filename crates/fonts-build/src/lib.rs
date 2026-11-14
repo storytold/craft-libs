@@ -63,7 +63,7 @@ mod subset;
 mod tests;
 
 pub use embed::{Embed, Error, target_is_wasm};
-pub use manifest::{CJK_SCRIPTS, ManifestEntry, ParseError, UI_ROLE, parse_manifest};
+pub use manifest::{CJK_SCRIPTS, DEFAULT_MANIFEST, HEBREW_MANIFEST, LATIN_MANIFEST, ManifestEntry, ParseError, UI_ROLE, parse_manifest};
 
 /// A craft-fonts face embedded by [`Embed`]: one line of `fonts/manifest.txt`.
 ///
