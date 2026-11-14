@@ -31,9 +31,24 @@ network I/O and has no `unsafe` code.
   `to_rgba8_display` encodes 8-bit sRGB RGBA. `linear_to_srgb`, `srgb_to_linear` and `luminance`
   (Rec. 709) are scalar helpers. `resource_key` and `split_resource_key` tag a bitmap name with
   its color space.
+- **Decoding.** With the `png`, `tiff`, `hdr` and `exr` features, `decode::png`, `decode::tiff`,
+  `decode::hdr` and `decode::exr` turn a file's bytes into a plane. Integer samples are divided
+  by their maximum (255 or 65535), so a 16-bit file keeps all 65536 levels. Float samples are
+  kept as stored, values above 1 and negative values included, and OpenEXR NaN and infinities
+  too. Gray without alpha gives a gray plane, as does an OpenEXR file of exactly one channel
+  whatever its name; every other layout gives RGBA, with alpha 1 when the file has none. The
+  result's `transfer` is `Encoded` for integer code values whose transfer
+  the file does not state, `Linear` for Radiance HDR, OpenEXR and PNG with a linear `cICP`, and
+  `Unknown` otherwise (an ICC profile, another `cICP` transfer, a float TIFF). No transfer
+  function is applied: the caller decodes sRGB color data, such as glTF base color, and leaves
+  linear data, such as normals, as it is. `alpha` is `Premultiplied` for OpenEXR and `Straight`
+  otherwise; TIFF associated alpha is converted to straight. The plane's size is checked against
+  `Limits` before it is reserved, the format decoder's own buffer is limited to `max_bytes` (for
+  OpenEXR, every channel the file declares counts at 4 bytes a sample), and CMYK and Lab TIFF, OpenEXR files with a deep part and files that end early return a
+  `DecodeError`. A Radiance HDR side over `max_side` is refused from the header.
 
-Mirrored repeat, mip chains, height to normal, channel packing, decoding and texture-set
-recognition are not in the crate yet.
+Mirrored repeat, mip chains, height to normal, channel packing and texture-set recognition are not
+in the crate yet.
 
 ## Cargo features
 
@@ -42,8 +57,13 @@ No default features.
 | Feature | Provides | Pulls in |
 |---|---|---|
 | `parallel` | generated images and display conversion fill rows on several threads; the results are the same | `rayon` |
+| `png` | `decode::png` | `craft-image-codecs` |
+| `tiff` | `decode::tiff` | `craft-image-codecs` |
+| `hdr` | `decode::hdr` | `craft-hdr` |
+| `exr` | `decode::exr` | `craft-exr` with its `decode` feature |
+| `decode` | all four decoders | the above |
 
-Without `parallel` the crate builds for `wasm32-unknown-unknown`.
+Without `parallel` the crate builds for `wasm32-unknown-unknown`, the decoding features included.
 
 ## Limits
 
@@ -59,6 +79,7 @@ Without `parallel` the crate builds for `wasm32-unknown-unknown`.
 |---|---|
 | `Image`, `Kind`, sampling, resizing, conversions, sRGB helpers, resource keys and the six tests `sample_survives_huge_coordinates`, `resource_keys_round_trip`, `sample_wraps_and_clamps`, `resize_box_and_bilinear`, `hostile_sizes_are_clamped`, `conversions` | MaterialCraft `crates/image/src/lib.rs` at [3133062](https://github.com/storytold/materialcraft/commit/3133062968b8a1566eda12a357cb06062db16687) |
 | `Limits`, the `try_` constructors, `from_data`, private fields with getters, the `parallel` feature | written here |
+| the `decode` module and its features | written here, on `craft-image-codecs`, `craft-hdr` and `craft-exr` |
 
 ## Migration
 

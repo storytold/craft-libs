@@ -2591,6 +2591,10 @@ dependencies = [
 name = "craft-texture"
 version = "0.1.0"
 dependencies = [
+ "craft-exr",
+ "craft-hdr",
+ "craft-image-codecs",
+ "png 0.18.1",
  "rayon",
  "thiserror 2.0.21",
 ]

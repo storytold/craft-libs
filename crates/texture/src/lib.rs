@@ -26,6 +26,9 @@
 //! resampler of [`Image::try_resize`]. The forms without `try_` allocate like `Vec`. A failed
 //! infallible allocation ends the process. Rows are generated on several threads only with the
 //! `parallel` feature.
+//!
+//! The `png`, `tiff`, `hdr` and `exr` features add the `decode` module, which turns those files'
+//! bytes into planes without reducing 16-bit or float samples to 8 bits.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -33,6 +36,9 @@ use std::sync::Arc;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+
+#[cfg(any(feature = "png", feature = "tiff", feature = "hdr", feature = "exr"))]
+pub mod decode;
 
 /// Largest side the clamping constructors make, and the default [`Limits::max_side`].
 pub const MAX_SIDE: u32 = 8192;
