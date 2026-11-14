@@ -227,6 +227,12 @@ impl Default for Decoder {
 }
 
 /// Positions of the start codes (`00 00 01 xx`) in `data`: (offset, code).
+/// Whether `data` starts with the 22-bit `short_video_start_marker` (§6.2.5.2) of a short video
+/// header picture, which has no MPEG-4 start codes.
+fn is_short_video_header(data: &[u8]) -> bool {
+    matches!(data, [0, 0, b, ..] if b & 0xFC == 0x80)
+}
+
 fn start_codes(data: &[u8]) -> Vec<(usize, u8)> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -384,6 +390,10 @@ impl Decoder {
         if resized {
             self.drop_references();
         }
+        if self.vol.as_ref().is_none_or(|v| (v.time_resolution, v.fixed_increment) != (vol.time_resolution, vol.fixed_increment)) {
+            // The frame period of field direct mode is estimated from the layer's timing.
+            self.t_frame = 0;
+        }
         self.frame_bytes = shape.bytes().unwrap_or(u64::MAX);
         self.layer_budget = self.memory_budget;
         self.refused = None;
@@ -426,9 +436,16 @@ impl Decoder {
     /// many beside the reference pictures. Past that limit the VOPs of the chunk are skipped,
     /// while its configuration headers are still read, so a new VOL takes effect and its VOPs are
     /// decoded as far as they fit. A picture held back for reordering that such a VOL would
-    /// release is dropped instead. Skipped VOPs and a dropped picture count as one error.
+    /// release is dropped instead. Skipped VOPs and a dropped picture count as one error; skipped
+    /// VOPs still advance the time base.
     pub fn decode(&mut self, data: &[u8], pts: i64) -> Result<Vec<Picture>> {
         let codes = start_codes(data);
+        if self.vol.is_none() && codes.is_empty() && is_short_video_header(data) {
+            let e = DecodeError::Unsupported("short video header (H.263 baseline)");
+            self.errors += 1;
+            self.last_error = Some(e.clone());
+            return Err(e);
+        }
         let mut err = None;
         let mut limited = false;
         for (k, &(pos, code)) in codes.iter().enumerate() {
@@ -446,6 +463,7 @@ impl Decoder {
                 self.vop(payload, pts)
             } else {
                 self.dropped = true;
+                self.skip_vop(payload);
                 Ok(())
             };
             if std::mem::take(&mut self.dropped) && !limited {
@@ -519,6 +537,17 @@ impl Decoder {
 
     fn picture(&self, f: &Frame, m: Meta) -> Picture {
         to_picture(self.info.clone().unwrap_or_else(|| Arc::new(empty_info())), f, m)
+    }
+
+    /// A VOP skipped at the limit: no picture, but its seconds carry on like an uncoded VOP's, so
+    /// the times of the pictures after it do not depend on the limit.
+    fn skip_vop(&mut self, payload: &[u8]) {
+        if let Some(vol) = &self.vol
+            && let Ok(vop) = Vop::parse(payload, vol)
+            && vop.kind != VopKind::B
+        {
+            self.time_base = self.time_base.saturating_add(i64::from(vop.modulo));
+        }
     }
 
     /// Update the time base and return the VOP's time (§6.3.5).
