@@ -138,6 +138,7 @@ craft-stencilcraft-format = { path = "crates/stencilcraft-format" }
 craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
 craft-svg-paths = { path = "crates/svg-paths" }
 craft-stream-codecs = { path = "crates/stream-codecs" }
+craft-testkit = { path = "crates/testkit" }
 craft-text = { path = "crates/text" }
 craft-texture = { path = "crates/texture" }
 craft-tga = { path = "crates/tga" }
