@@ -225,7 +225,7 @@ pub fn actual(ui: &mut Ui, case: Case, mutation: Mutation) -> Vec<Response> {
                     axis,
                     split.divider,
                     "Resize panes",
-                    ResizeHandleStyle { hovered: p.hovered, dragged: p.pressed, focused: p.focus },
+                    ResizeHandleStyle { hovered: p.hovered, dragged: p.pressed, focused: p.focus, rest: None },
                 )
                 .hit_margin(0.0)
                 .show(ui)

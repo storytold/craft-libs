@@ -11,6 +11,8 @@ pub struct ResizeHandleStyle {
     pub hovered: Color32,
     pub dragged: Color32,
     pub focused: Color32,
+    /// Some: a 2-point line in this color along the handle's middle while it is idle.
+    pub rest: Option<Color32>,
 }
 
 /// An interaction proposal; the caller applies `delta` using its own minimum-size policy.
@@ -204,6 +206,14 @@ impl<'a> ResizeHandle<'a> {
             };
             if let Some(fill) = fill {
                 ui.painter().rect_filled(self.rect, 0.0, fill);
+            } else if let Some(rest) = self.style.rest {
+                let line = match self.axis {
+                    SplitAxis::Horizontal => {
+                        Rect::from_center_size(self.rect.center(), Vec2::new(2.0_f32.min(self.rect.width()), self.rect.height()))
+                    }
+                    SplitAxis::Vertical => Rect::from_center_size(self.rect.center(), Vec2::new(self.rect.width(), 2.0_f32.min(self.rect.height()))),
+                };
+                ui.painter().rect_filled(line, 0.0, rest);
             }
             if response.hovered() || response.dragged() {
                 ui.ctx().set_cursor_icon(match self.axis {

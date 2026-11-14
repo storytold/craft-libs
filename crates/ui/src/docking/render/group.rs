@@ -74,7 +74,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             return false;
         }
         let movable = panels.iter().all(|p| self.permissions(p).movable);
-        let strip = Rect::from_min_max(rect.min, pos2(rect.right(), (rect.top() + self.style.tab_height).min(rect.bottom())));
+        let lone = self.style.lone_tab_strip.filter(|_| panels.len() == 1 && kind == GroupKind::Dock);
+        let strip_height = lone.unwrap_or(self.style.tab_height);
+        let strip = Rect::from_min_max(rect.min, pos2(rect.right(), (rect.top() + strip_height).min(rect.bottom())));
         ui.painter().rect_filled(strip, 0.0, self.style.tab_background);
         let floating = matches!(kind, GroupKind::Floating { .. });
         // Laid out left to right, then mirrored in a right-to-left layout: tabs from the right
@@ -93,11 +95,14 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             self.host_area(ui, "header", header, selected, |content, ui| content.group_header(ui, panels, selected, floating));
         }
         // The drag bar keeps its reserved width: tabs shrink, then overflow, before it narrows.
-        let bar_width = self.style.drag_bar_width.clamp(0.0, (strip.width() - header_width).max(0.0));
+        let bar_width = if lone.is_some() { 0.0 } else { self.style.drag_bar_width.clamp(0.0, (strip.width() - header_width).max(0.0)) };
         let tabs_width = (strip.width() - header_width - bar_width).max(0.0);
         let widths: Vec<f32> = panels
             .iter()
             .map(|p| {
+                if self.icon_tab(p) {
+                    return self.style.icon_size + TAB_PADDING;
+                }
                 self.content
                     .label(ui, p, &self.label_of(p), &self.style.font, self.style.text)
                     .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, self.style.font.clone())
@@ -117,6 +122,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let mut shown = Vec::new();
         for (index, width) in &fit.shown {
             let Some(panel) = panels.get(*index) else { continue };
+            if lone.is_some() {
+                // No tab: the band is the group's drag bar. The panel's name is its hover text.
+                shown.push((panel.clone(), Rect::NOTHING));
+                continue;
+            }
             let tab = mirror(Rect::from_min_size(pos2(x, strip.top()), vec2(*width, strip.height())));
             self.tab(ui, panel, tab, *index == active, rect, Some(&owner));
             shown.push((panel.clone(), tab));
@@ -149,8 +159,10 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             self.host_area(ui, "extra-tabs", extra, selected, |content, ui| content.group_extra_tabs(ui, panels, selected, floating));
             x += extra_width;
         }
-        let bar =
-            mirror(Rect::from_min_max(pos2(x.min(strip.right() - header_width), strip.top()), pos2(strip.right() - header_width, strip.bottom())));
+        let bar = mirror(Rect::from_min_max(
+            pos2(if lone.is_some() { strip.left() } else { x.min(strip.right() - header_width) }, strip.top()),
+            pos2(strip.right() - header_width, strip.bottom()),
+        ));
         let named = self.group_handle(ui, "drag-bar", bar, &owner, movable, true);
         // Registered last, so the band wins over the tabs below it.
         let border = mirror(Rect::from_min_max(strip.min, pos2(strip.right() - header_width, (strip.top() + BORDER_BAND).min(strip.bottom()))));
@@ -219,6 +231,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         if self.minimizes(owner) && response.double_clicked() {
             self.output.actions.push(Action::SetMinimized { panel: owner.selected.clone(), minimized: !owner.minimized });
         }
+        let response = if self.style.lone_tab_strip.is_some() && owner.panels.len() == 1 && owner.kind == GroupKind::Dock {
+            let name = self.label_of(owner.selected);
+            response.on_hover_text(name)
+        } else {
+            response
+        };
         let modality = self.id.with("keyboard-chrome-focus");
         let keyboard_input = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })));
         let pointer_input = ui.input(|i| i.pointer.any_pressed());
@@ -233,7 +251,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             d.insert_temp(modality, on);
             on
         });
-        let active = response.has_focus() && keyboard_focus;
+        let active = self.style.drag_bar_outline && response.has_focus() && keyboard_focus;
         if active {
             ui.painter().with_clip_rect(hit).rect_stroke(
                 hit.shrink(1.0),
@@ -396,6 +414,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         response
     }
 
+    /// Whether `panel`'s tab shows an icon in place of its label.
+    fn icon_tab(&self, panel: &P) -> bool {
+        self.style.tab_icons && self.content.tab_icon(panel)
+    }
+
     /// A tab's label, cut at the end with '…' to fit `width`.
     pub(super) fn tab_label(&mut self, ui: &Ui, panel: &P, label: &str, color: Color32, width: f32) -> Arc<Galley> {
         let text = self.content.label(ui, panel, label, &self.style.font, color);
@@ -427,8 +450,9 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let label = self.label_of(panel);
         let visual_active = active && !owner.is_some_and(|owner| self.content.group_collapsed(owner.panels));
         let color = if visual_active { self.style.text } else { self.style.inactive_text };
+        let icon_tab = self.icon_tab(panel);
         let galley = self.tab_label(ui, panel, &label, color, (rect.width() - TAB_PADDING).max(0.0));
-        let elided = galley.elided;
+        let elided = galley.elided || icon_tab;
         let tab_id = self.id.with(("tab", panel));
         let pointer_focus = self.pointer_focus(ui, tab_id);
         let response = tabs::Tab::new(tab_id, &label, visual_active)
@@ -441,6 +465,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                     0.0,
                     if visual_active || response.hovered() { self.style.active_background } else { self.style.tab_background },
                 );
+                if icon_tab {
+                    let icon = Rect::from_center_size(rect.center(), vec2(self.style.icon_size, self.style.icon_size));
+                    if self.content.paint_icon(&painter, icon, panel, color) {
+                        return;
+                    }
+                }
                 let at = pos2(rect.left() + TAB_PADDING * 0.5, rect.center().y - galley.size().y * 0.5);
                 painter.galley(at, galley.clone(), color);
             });
