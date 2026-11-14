@@ -1,4 +1,5 @@
 //! Trials of `IconicColumn`: the letter of a panel without an icon, and the names a wide column shows.
+#![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use crate::contract::{Bind, ShowContainer as _};
 use crate::docking::{GroupAt, IconicColumn, PanelSpec};

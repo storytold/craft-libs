@@ -1,4 +1,5 @@
 //! Trials of `PanelRail`: a short window, the content mark and the icons' responses.
+#![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use super::PanelRail;
 use crate::buttons::Button;

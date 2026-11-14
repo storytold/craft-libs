@@ -148,7 +148,6 @@ impl<'a, T: Value + 'static> ToolbarDrawer<'a, T> {
 
     /// The control that opened the drawer, the rail's Edit Toolbar button (`ToolRailOutput::edit_toolbar`): the focus
     /// returns to it when the drawer closes. The drawer still hangs from the rail.
-    #[must_use]
     pub fn opened_by(mut self, opener: &Response) -> Self {
         self.opener = Some(opener.clone());
         self

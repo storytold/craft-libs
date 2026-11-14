@@ -1,4 +1,5 @@
 //! Trials of the dialog shells' layer behaviour: initial focus, Escape and a closed dialog's keys.
+#![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
 use super::{BlockingOverlay, Dialog};
 use crate::buttons::Button;
