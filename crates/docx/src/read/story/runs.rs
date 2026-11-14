@@ -2,7 +2,7 @@ use craft_wordmodel::math::MathJc;
 
 use super::{
     CharProps, El, InlineObject, Item, MAX_FORM, MAX_INSTR, NoteKind, PB, PTabAlign, PTabBase, Phase, Reader, Rels, RevisionKind, RunCtx, StoryCtx,
-    TextColor, children_of_choice, clean_text, int, measure, on_off_attr, placeholder_of, sink,
+    TextColor, children_of_choice, int, measure, on_off_attr, placeholder_of, sink, text_of,
 };
 
 impl Reader<'_> {
@@ -173,7 +173,7 @@ impl Reader<'_> {
         if let Some((_, _, Some(custom))) = note.as_mut()
             && k.name == "w:t"
         {
-            custom.push_str(&clean_text(&k.text()));
+            custom.push_str(&text_of(k));
             return;
         }
         if k.name != "w:rPr"
@@ -183,7 +183,7 @@ impl Reader<'_> {
         }
         match k.name.as_str() {
             "w:t" | "w:delText" => {
-                let t = clean_text(&k.text());
+                let t = text_of(k);
                 self.emit_text(sc, pb, &t, props);
             }
             "w:instrText" | "w:delInstrText" => {
@@ -340,7 +340,7 @@ impl Reader<'_> {
                 }
                 for t in r.els().filter(|t| matches!(t.name.as_str(), "w:t" | "w:delText")) {
                     if text.len() < MAX {
-                        text.push_str(&clean_text(&t.text()).replace('\t', " "));
+                        text.push_str(&text_of(t).replace('\t', " "));
                     }
                 }
             }
