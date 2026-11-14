@@ -7,6 +7,8 @@
 
 use egui::{Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2};
 
+mod content;
+pub use content::{ContentEntry, ContentEntryFrame};
 mod dialog;
 pub use dialog::DialogTabStyle;
 
