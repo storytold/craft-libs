@@ -135,6 +135,11 @@ fn a_click_command_cycles_and_a_hold_lists_the_tools_without_firing_it() {
     clicked.fixture.click(&target);
     clicked.fixture.idle(3);
     assert_eq!(fired(&clicked), 1, "a click fires the click command");
+    // A pointer click need not leave focus on the button; the keys act on the focused one.
+    if clicked.fixture.focused_stop().is_none() {
+        clicked.fixture.key(Key::Tab, Modifiers::NONE);
+    }
+    assert!(clicked.fixture.focused_stop().is_some(), "the button has focus for the keys");
     clicked.fixture.key(Key::Enter, Modifiers::NONE);
     assert_eq!(fired(&clicked), 1, "Enter fires it");
     clicked.fixture.key(Key::Space, Modifiers::NONE);

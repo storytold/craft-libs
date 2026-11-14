@@ -1,8 +1,10 @@
 //! `ScreenModeButton`: the status bar's screen mode button, a flyout of the three modes.
 
 use super::screen_mode::{ScreenMode, ScreenModeCommands};
+use super::words::ShellWords;
 use crate::contract::{NoValue, Outcome, Props as _, Show as _};
 use crate::rails::{FlyoutButton, RailTool};
+use crate::runtime::env::Env;
 use egui::{Response, Ui};
 
 #[cfg(feature = "testing")]
@@ -43,7 +45,9 @@ impl ScreenModeButton {
     pub fn show(self, ui: &mut Ui) -> ScreenModeButtonOutput {
         let modes = [ScreenMode::Standard, ScreenMode::FullScreenWithMenuBar, ScreenMode::FullScreen];
         let tools: Vec<RailTool<ScreenMode>> = modes.iter().map(|mode| RailTool::new(*mode, ScreenModeCommands::of(*mode))).collect();
-        let out = FlyoutButton::new(&tools, &self.mode).hold_selects(false).click(ScreenModeCommands::Cycle).show(ui);
+        // The shell's own word names the button when the Cycle command does not resolve.
+        let name = Env::of(ui).words::<ShellWords>().screen_mode.clone();
+        let out = FlyoutButton::new(&tools, &self.mode).label(name).hold_selects(false).click(ScreenModeCommands::Cycle).show(ui);
         ScreenModeButtonOutput { response: out.response }
     }
 }

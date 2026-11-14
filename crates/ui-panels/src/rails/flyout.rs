@@ -339,14 +339,16 @@ impl<T: Value + 'static> Component for FlyoutButton<'_, T> {
         }
     }
 
-    fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let resolved = self.laid.as_ref().and_then(|laid| self.lead(laid));
-        let name = resolved.map(|resolved| resolved.label.as_ref().to_owned());
-        if let Some(resolved) = resolved {
-            access.name(Name::Text(resolved.label.as_ref().to_owned()));
-            if let Some(hint) = &resolved.hint {
-                access.description(hint.as_ref().to_owned());
-            }
+        // A command that does not resolve leaves the button's own label as its name.
+        let own = (!cx.resolved.label.is_empty()).then(|| cx.resolved.label.to_owned());
+        let name = resolved.map(|resolved| resolved.label.as_ref().to_owned()).or(own);
+        if let Some(name) = &name {
+            access.name(Name::Text(name.clone()));
+        }
+        if let Some(hint) = resolved.and_then(|resolved| resolved.hint.as_ref()) {
+            access.description(hint.as_ref().to_owned());
         }
         // The face covers the whole button, so the button's own node is the face's node.
         access.node(FACE, Role::None);
