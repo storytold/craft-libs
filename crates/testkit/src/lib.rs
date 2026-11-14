@@ -15,6 +15,10 @@
 //! * [`guards::rust_sources`]: directory crawler collecting `.rs` sources while excluding tests, with
 //!   size limits ([`guards::rust_sources_with_limits`]). It is not built for `wasm32`.
 //!
+//! With the `prop` feature, on targets other than `wasm32`, `prop::config` returns a proptest
+//! configuration with a pinned seed and failure persistence off. `PROPTEST_CASES` and
+//! `PROPTEST_RNG_SEED` override the case count and the seed.
+//!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!
 //! Source-level guards provide deterministic syntactic evidence about codebase structure.
@@ -26,6 +30,8 @@
 //! rather than replace, platform integration tests and CI execution.
 
 pub mod guards;
+#[cfg(all(feature = "prop", not(target_arch = "wasm32")))]
+pub mod prop;
 
 pub use guards::{AsFileSource, Finding, predefined_quit, std_instant, wgsl_float_literals, wgsl_float_literals_in};
 

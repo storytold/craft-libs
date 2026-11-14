@@ -11,6 +11,46 @@ Source-level platform regression guards and verification utilities for the Craft
 3. **`std_instant`**: Flags `std::time::Instant` outside comments and strings: the full path, `<m>::Instant` where a `use` binds `m` to `std::time`, and each `use` that imports `std::time::Instant` or `std::time::*`, under any name. The parts of a path may be split by whitespace, comments or line breaks. Other crates' `Instant` (such as `web_time::Instant` or `tokio::time::Instant`) is not flagged, and neither is an item whose `cfg` attribute is false on `wasm32-unknown-unknown`; code before that attribute or after its item on the same line is still checked. A `mod name;` inside such an item also skips the module's file (`name.rs` or `name/mod.rs`, or the file a `#[path]` attribute names) and the files of the modules declared in it, when they are among the files passed in and no declaration outside such items also reaches them. On that target, `std::time::Instant::now()` panics at runtime with `"time not implemented on this platform"`. Code targeting the web must use `web_time::Instant`.
 4. **`rust_sources`**: Recursively discovers a crate's `.rs` source files while excluding integration tests (`tests/`), test modules (`tests.rs`, `tests_*.rs`, `*_tests.rs`, `*_test.rs`), build artifacts (`target/`, any folder holding a `CACHEDIR.TAG` file that starts with the line `Signature: 8a477f597d28d172789f06886806bc55`, `.git/` and other folders whose name starts with `.`) and symbolic links, which it does not follow. A file over 8 MiB, more than 256 MiB in all or more than 50,000 files returns an error; `rust_sources_with_limits` takes other limits. It is not built for `wasm32`.
 
+## Proptest configuration: `prop`
+
+The `prop` feature adds `craft_testkit::prop` and the `proptest` dependency. The module is built on every target except `wasm32`.
+
+`prop::config(cases)` returns a `proptest::test_runner::Config` with failure persistence off. It reads proptest's own variables:
+
+| Variable | Not set | Set |
+|---|---|---|
+| `PROPTEST_CASES` | `cases` | the value proptest parsed as a `u32`; for a value it cannot parse, proptest prints a warning and uses 256 |
+| `PROPTEST_RNG_SEED` | `prop::SEED` (`0x5eed_9a7f`) | the value proptest parsed as a `u64`; for a value it cannot parse, proptest prints a warning and uses a random seed |
+
+A suite under `prop::config` repeats the same cases on every run. To run it with random seeds, set `PROPTEST_RNG_SEED` to a value that is not a number. No file under `proptest-regressions/` is read or written, so a minimal failure found with other seeds or counts is kept as a named regression test in the suite.
+
+```rust
+use proptest::prelude::*;
+
+proptest! {
+    #![proptest_config(craft_testkit::prop::config(64))]
+
+    #[test]
+    fn parse_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..256)) {
+        let _ = my_crate::parse(&bytes);
+    }
+}
+```
+
+### Origin
+
+| Module | Source repository | Path | Revision |
+|---|---|---|---|
+| `prop` | storytold/vectorcraft | `crates/pathops/tests/common/mod.rs:3-19` | `34627134` |
+
+### Migration
+
+| Consumer | Suites | State |
+|---|---|---|
+| VectorCraft `pathops` | `tests/props.rs`, `tests/prop_pathops.rs` | Pending: a separate pull request switches them |
+| craft-libs | the 34 `Config` values that set `cases` directly, and the seven committed `proptest-regressions` files outside `vendor/` | Pending: separate pull requests switch them, name each suite whose seed changes from random to pinned, and turn the committed cases into named tests |
+| LightCraft, FilmCraft | the property suites that set their case count | Pending: a separate pull request in each repository |
+
 ## Epistemic Scope: Syntactic Guards vs Runtime Validation
 
 Source-level guards provide deterministic syntactic evidence about codebase structure:
