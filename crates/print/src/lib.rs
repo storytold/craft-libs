@@ -72,6 +72,11 @@ pub enum Scaling {
     /// Smaller sheets retain their size; the printable area centers the result.
     /// On Windows every sheet of the job goes on that one paper.
     ShrinkToFit,
+    /// Print at 100%, as a word processor does: like `ShrinkToFit`, except that a sheet that fits
+    /// on the paper (its size, or smaller) is not shrunk into the printable area; hardware margins
+    /// clip it, as in `Exact`. Only sheets larger than the paper are shrunk to fit, as in
+    /// `ShrinkToFit`. On CUPS this is `ShrinkToFit`.
+    ActualSize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -235,7 +240,7 @@ fn lp_args_for(job: &Job, apple: bool) -> Vec<String> {
     opt(match job.scaling {
         Scaling::Exact => "fit-to-page=false",
         // PWG 5100.13 §6.2.5: auto-fit fits oversized pages and leaves smaller pages unscaled.
-        Scaling::ShrinkToFit => "print-scaling=auto-fit",
+        Scaling::ShrinkToFit | Scaling::ActualSize => "print-scaling=auto-fit",
     });
     let mut tray_named = false;
     for (key, value) in &job.options {
@@ -1046,6 +1051,7 @@ fn windows_preview(job: &Job, default: Option<&str>) -> Vec<String> {
             match job.scaling {
                 Scaling::Exact => "exact",
                 Scaling::ShrinkToFit => "shrink-to-fit",
+                Scaling::ActualSize => "actual-size",
             }
         ),
         format!(

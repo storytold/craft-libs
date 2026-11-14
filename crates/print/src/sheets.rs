@@ -1073,6 +1073,9 @@ pub(crate) enum Fit {
     /// Sheets are shrunk (never enlarged) to fit inside `margin` points of the paper's edges, and
     /// centred on it.
     Shrink { margin: f64 },
+    /// Sheets that fit on the paper (its size or smaller) print as they are, centred, where
+    /// hardware margins may clip them; larger ones as `Shrink`.
+    ActualSize { margin: f64 },
 }
 
 /// A page's new version: its rotation, and for a page brought to the paper's size, the new
@@ -1097,10 +1100,20 @@ fn close(a: (f64, f64), b: (f64, f64)) -> bool {
     (a.0 - b.0).abs() <= SAME && (a.1 - b.1).abs() <= SAME
 }
 
+/// [`crate::ticket::PAPER_TOLERANCE`] in points: the driver paper chosen for a sheet can differ
+/// from it by this much, and is still the sheet's paper.
+const PAPER_SAME: f64 = crate::ticket::PAPER_TOLERANCE as f64 * 72.0 / 25_400.0;
+
+/// Whether a sheet is the paper the driver chose for it ([`crate::ticket::matching_paper`]).
+fn same_paper(a: (f64, f64), b: (f64, f64)) -> bool {
+    (a.0 - b.0).abs() <= PAPER_SAME && (a.1 - b.1).abs() <= PAPER_SAME
+}
+
 /// The edits that put every sheet on `paper` (width and height as printed, in points; its
 /// orientation is the job's). A sheet of the other orientation turns a quarter: a landscape sheet
 /// in a portrait job anticlockwise, as drivers put a landscape job on the paper, a portrait sheet
-/// in a landscape job clockwise. `Exact` refuses a sheet of another size; `Shrink` reframes it.
+/// in a landscape job clockwise. `Exact` refuses a sheet of another size; `Shrink` and
+/// `ActualSize` reframe it.
 pub(crate) fn plan(sheets: &[Sheet], paper: (f64, f64), fit: Fit) -> Result<Vec<Edit>, Error> {
     let (pw, ph) = paper;
     if !(pw.is_finite() && ph.is_finite() && pw > 0.0 && ph > 0.0) {
@@ -1130,8 +1143,13 @@ pub(crate) fn plan(sheets: &[Sheet], paper: (f64, f64), fit: Fit) -> Result<Vec<
                     ph / 72.0
                 )));
             }
-            Fit::Shrink { margin } => {
-                let margin = if margin.is_finite() && margin > 0.0 && 2.0 * margin < pw.min(ph) { margin } else { 0.0 };
+            Fit::ActualSize { .. } if same_paper((w, h), paper) => None,
+            Fit::Shrink { margin } | Fit::ActualSize { margin } => {
+                // Actual size prints a sheet that fits on the paper at 100%, as a word processor
+                // does: a page a millimetre short of A4 lost about 3% to the printable area, so
+                // its margins printed half a centimetre wider. Only larger sheets shrink.
+                let fits = matches!(fit, Fit::ActualSize { .. }) && w <= pw + PAPER_SAME && h <= ph + PAPER_SAME;
+                let margin = if !fits && margin.is_finite() && margin > 0.0 && 2.0 * margin < pw.min(ph) { margin } else { 0.0 };
                 let scale = ((pw - 2.0 * margin) / w).min((ph - 2.0 * margin) / h).min(1.0);
                 if scale >= 1.0 && close((w, h), paper) {
                     None

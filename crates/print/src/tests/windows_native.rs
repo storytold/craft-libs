@@ -272,6 +272,51 @@ fn shrink_to_fit_reframes_sheets_on_the_paper() {
 }
 
 #[test]
+fn actual_size_prints_paper_sized_sheets_unscaled() {
+    use crate::sheets::{Fit, plan, read};
+    // The paper's own size is left alone even when the printer has margins: hardware margins clip
+    // it, as a word processor's print does, instead of the whole page shrinking.
+    let pdf = test_pdf(&[LETTER], false);
+    let sheets = read(&pdf).unwrap();
+    assert!(plan(&sheets.sheets, (612.0, 792.0), Fit::ActualSize { margin: 12.0 }).unwrap().is_empty());
+    assert_eq!(plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 12.0 }).unwrap().len(), 1, "shrink-to-fit still shrinks it");
+    // A driver's Letter of 215.7 × 279.4 mm is chosen for the sheet (within a quarter of a
+    // millimetre), so it is the sheet's paper here too; 0.3 mm off is another paper.
+    let mm = |v: f64| v * 72.0 / 25.4;
+    assert!(plan(&sheets.sheets, (mm(215.7), mm(279.4)), Fit::ActualSize { margin: 12.0 }).unwrap().is_empty());
+    assert_eq!(plan(&sheets.sheets, (mm(215.6), mm(279.4)), Fit::ActualSize { margin: 12.0 }).unwrap().len(), 1);
+
+    // A landscape sheet of the paper's size turns, unscaled.
+    let pdf = test_pdf(&[LETTER_LANDSCAPE], false);
+    let sheets = read(&pdf).unwrap();
+    let edits = plan(&sheets.sheets, (612.0, 792.0), Fit::ActualSize { margin: 12.0 }).unwrap();
+    assert_eq!(edits.iter().map(|e| (e.sheet, e.rotate, e.frame.is_none())).collect::<Vec<_>>(), [(0, 270, true)]);
+
+    // Other sizes are fitted as in shrink-to-fit: a Tabloid sheet into the printable area, a
+    // smaller sheet centred at its own size.
+    let card = TestPage { media: Some([0.0, 0.0, 360.0, 504.0]), ..LETTER };
+    let pdf = test_pdf(&[TABLOID, card], false);
+    let sheets = read(&pdf).unwrap();
+    let actual = plan(&sheets.sheets, (612.0, 792.0), Fit::ActualSize { margin: 18.0 }).unwrap();
+    let shrink = plan(&sheets.sheets, (612.0, 792.0), Fit::Shrink { margin: 18.0 }).unwrap();
+    assert_eq!(actual, shrink);
+
+    // A sheet just short of the paper (a Word document's 209 × 296 mm page on A4) prints at
+    // 100%, centred, however wide the printer's margins: shrinking it into the printable area
+    // made its margins print about half a centimetre wider.
+    let a4 = (mm(210.0), mm(297.0));
+    let short = TestPage { media: Some([0.0, 0.0, mm(209.0), mm(296.0)]), ..LETTER };
+    let pdf = test_pdf(&[short], false);
+    let sheets = read(&pdf).unwrap();
+    let edits = plan(&sheets.sheets, a4, Fit::ActualSize { margin: 12.0 }).unwrap();
+    let frame = edits[0].frame.as_ref().expect("reframed onto A4");
+    assert_eq!(frame.matrix[0], 1.0, "unscaled");
+    assert!((frame.matrix[4] - mm(0.5)).abs() < 1e-6 && (frame.matrix[5] - mm(0.5)).abs() < 1e-6, "{:?}", frame.matrix);
+    let shrink = plan(&sheets.sheets, a4, Fit::Shrink { margin: 12.0 }).unwrap();
+    assert!(shrink[0].frame.as_ref().unwrap().matrix[0] < 0.98, "shrink-to-fit still shrinks it (to 97.5%)");
+}
+
+#[test]
 fn shrink_to_fit_refuses_to_drop_annotation_appearances() {
     use crate::sheets::{Fit, plan, read};
     for annotations in ["[<< /Subtype /Text /Rect [36 36 72 72] /F 4 >>]", "42 0 R"] {
