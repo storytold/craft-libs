@@ -1,5 +1,6 @@
 //! [`PaintBar`]: the options bar members of the Brush, Pencil, Eraser and Mixer Brush tools after the preset picker.
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
@@ -350,23 +351,29 @@ impl<M: Value> Pass<'_, M> {
     /// The Size row.
     fn size(&mut self, ui: &mut Ui, caption: &Label, max: f64, enabled: bool) {
         let current = self.values.size;
-        // The size field draws its own caption, so the wrapper only carries the enabled state. The body's result is the
-        // field's events: the framework keeps it across the passes the body may run.
-        let events = Field::new(caption.clone())
+        // The size field draws its own caption, so the wrapper only carries the enabled state. The body may run more than
+        // once in a pass and only the run that reads the input reports its events, so every run's events are collected.
+        let collected: RefCell<EditEvents<f64>> = RefCell::new(EditEvents::new());
+        let _ = Field::new(caption.clone())
             .side(SideLabel::new().kind(LabelKind::Hidden))
             .id_salt("size")
             .sizing(Sizing::Content)
             .enabled(enabled)
-            .show(ui, |ui, _| BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone())
-            .inner
-            .unwrap_or_default();
+            .show(ui, |ui, _| {
+                for event in BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone() {
+                    collected.borrow_mut().push(event);
+                }
+            });
+        let events = collected.into_inner();
         self.emit(events, |v, size| v.size = size);
     }
 
     /// A percent field over a fraction 0..1.
     fn percent(&mut self, ui: &mut Ui, salt: &'static str, caption: &Label, enabled: bool, current: f64, set: fn(&mut PaintValues<M>, f64)) {
-        // The body's result is the field's events and alert: the framework keeps it across the passes the body may run.
-        let (events, alert) = Field::new(caption.clone())
+        // The body may run more than once in a pass and only the run that reads the input reports its events, so every
+        // run's events and alert are collected.
+        let collected: RefCell<(EditEvents<Option<f64>>, Option<RangeAlert>)> = RefCell::new((EditEvents::new(), None));
+        let _ = Field::new(caption.clone())
             .side(SideLabel::new().scrub(true))
             .id_salt(salt)
             .sizing(Sizing::Content)
@@ -378,10 +385,15 @@ impl<M: Value> Pass<'_, M> {
                     .commit_decimals(0)
                     .scrub_by_label()
                     .show(ui);
-                (field.edit.events.clone(), field.out_of_range)
-            })
-            .inner
-            .unwrap_or_default();
+                let mut sink = collected.borrow_mut();
+                for event in field.edit.events.clone() {
+                    sink.0.push(event);
+                }
+                if field.out_of_range.is_some() {
+                    sink.1 = field.out_of_range;
+                }
+            });
+        let (events, alert) = collected.into_inner();
         if alert.is_some() {
             self.out_of_range = alert;
         }
