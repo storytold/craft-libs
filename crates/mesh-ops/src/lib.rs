@@ -153,7 +153,9 @@ pub fn smooth_normals(positions: &[[f32; 3]], indices: &[u32], limits: &Limits) 
 /// MikkTSpace tangents, one per vertex: xyz tangent and the bitangent sign in `w`, so that
 /// `cross(normal, tangent) * w` points up the image (glTF 2.0). Meshes MikkTSpace cannot handle
 /// (every triangle degenerate, no UV area, more than [`mesh::MAX_MIKKTSPACE_VALENCE`] triangles
-/// around one vertex) get per-vertex tangents instead. The normals are unit vectors, as glTF
+/// around one vertex, corners at one position whose welding would take more than
+/// [`mesh::MAX_MIKKTSPACE_WELD_WORK`] comparisons) get per-vertex tangents instead, with `w` set
+/// the same way. The normals are unit vectors, as glTF
 /// 2.0 stores them: each tangent is made perpendicular to its normal with a projection that is
 /// exact only at unit length.
 ///

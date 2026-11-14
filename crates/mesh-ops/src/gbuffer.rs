@@ -2,7 +2,7 @@
 //! to. Painting, compositing, baking and padding all work from this one buffer, so they agree
 //! on which texel is which surface point.
 
-use glam::{Vec2, Vec3, Vec4};
+use glam::{DVec2, Vec2, Vec3, Vec4};
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -44,7 +44,7 @@ pub struct Surface {
     pub tri: u32,
 }
 
-fn edge(a: Vec2, b: Vec2, p: Vec2) -> f32 {
+fn edge(a: DVec2, b: DVec2, p: DVec2) -> f64 {
     (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)
 }
 
@@ -166,24 +166,25 @@ fn add_within(what: &'static str, total: u64, add: u64, limit: u64) -> Result<u6
     if got > limit { Err(MeshOpsError::TooLarge { what, got, limit }) } else { Ok(got) }
 }
 
-/// Triangle `t` in the texels of a `size` buffer: its corners, its signed doubled area and its
-/// bounding box clipped to the buffer as `[x0, x1, y0, y1]` (ends exclusive). `None` when a
-/// corner is missing, not finite or farther than [`MAX_TEXEL_COORDINATE`], when the triangle
-/// has no area or when the clipped box is empty.
-fn texel_triangle(uvs: &[Vec2], indices: &[u32], t: usize, size: Vec2) -> Option<([Vec2; 3], f32, [u32; 4])> {
+/// Triangle `t` in the texels of a `size` buffer: its corners (in `f64`), its signed doubled
+/// area and its bounding box clipped to the buffer as `[x0, x1, y0, y1]` (ends exclusive).
+/// `None` when a corner is missing, not finite or farther than [`MAX_TEXEL_COORDINATE`], when
+/// the triangle has no area or when the clipped box is empty.
+fn texel_triangle(uvs: &[Vec2], indices: &[u32], t: usize, size: Vec2) -> Option<([DVec2; 3], f64, [u32; 4])> {
     let [a, b, c] = corners(indices, t)?;
     let p = [*uvs.get(a)? * size, *uvs.get(b)? * size, *uvs.get(c)? * size];
     if !p.iter().all(|q| q.is_finite() && q.abs().max_element() <= MAX_TEXEL_COORDINATE) {
         return None;
     }
-    let area = edge(p[0], p[1], p[2]);
+    let corners = p.map(|q| q.as_dvec2());
+    let area = edge(corners[0], corners[1], corners[2]);
     if area.abs() < 1e-12 {
         return None;
     }
     let lo = p[0].min(p[1]).min(p[2]).floor().clamp(Vec2::ZERO, size);
     let hi = p[0].max(p[1]).max(p[2]).ceil().clamp(Vec2::ZERO, size);
     let [x0, x1, y0, y1] = [lo.x as u32, hi.x as u32, lo.y as u32, hi.y as u32];
-    (x1 > x0 && y1 > y0).then_some((p, area, [x0, x1, y0, y1]))
+    (x1 > x0 && y1 > y0).then_some((corners, area, [x0, x1, y0, y1]))
 }
 
 /// The bands of rows of a G-buffer (each [`BAND`] rows high), each with the triangles whose
@@ -267,13 +268,22 @@ impl Bins {
             };
             for &t in list {
                 let Some(([pa, pb, pc], area, [x0, x1, y0, y1])) = texel_triangle(uvs, indices, t as usize, size) else { continue };
-                let eps = -1e-6 * area.abs();
+                // A texel center within 1e-6 texel of an edge, plus the `f64` rounding of the edge
+                // function at these coordinates, counts as inside: both triangles that share the
+                // edge write it. The slack is at most 1e-3 of the triangle's smallest height, so
+                // far corners do not widen a thin triangle. Each edge function is its distance
+                // times the edge's length.
+                let reach = [pa, pb, pc].iter().map(|q| q.abs().max_element()).fold(f64::from(size.max_element()), f64::max);
+                let lengths = [(pb, pc), (pc, pa), (pa, pb)].map(|(a, b)| (b - a).length());
+                let lowest = area.abs() / lengths.iter().copied().fold(0.0, f64::max);
+                let slack = (1e-6 + 8.0 * f64::EPSILON * reach).min(1e-3 * lowest);
+                let eps = lengths.map(|length| -slack * length);
                 let (y0, y1) = (y0.max(row0), y1.min(row0 + rows));
                 for y in y0..y1 {
                     for x in x0..x1 {
-                        let p = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+                        let p = DVec2::new(f64::from(x) + 0.5, f64::from(y) + 0.5);
                         let (w0, w1, w2) = (edge(pb, pc, p) * area.signum(), edge(pc, pa, p) * area.signum(), edge(pa, pb, p) * area.signum());
-                        if w0 < eps || w1 < eps || w2 < eps {
+                        if w0 < eps[0] || w1 < eps[1] || w2 < eps[2] {
                             continue;
                         }
                         let i = (y - row0) as usize * w as usize + x as usize;
@@ -283,7 +293,7 @@ impl Bins {
                             }
                             *slot = t;
                             let inv = 1.0 / area.abs();
-                            *bw = [w1 * inv, w2 * inv];
+                            *bw = [(w1 * inv) as f32, (w2 * inv) as f32];
                         }
                     }
                 }
@@ -319,12 +329,10 @@ pub fn surface_at(mesh: &Mesh, t: u32, b1: f32, b2: f32) -> Option<Surface> {
     let pos = p(&mesh.positions)?;
     // `unit` divides by the largest component first, so a long finite vector keeps its direction.
     let nrm = unit(p(&mesh.normals)?).unwrap_or(Vec3::Y);
-    let (pa, pb, pc) = (*mesh.positions.get(a)?, *mesh.positions.get(b)?, *mesh.positions.get(c)?);
-    // The edges are divided by their largest component before the cross product, which can
-    // overflow where the edges themselves do not.
-    let (e1, e2) = (pb - pa, pc - pa);
-    let largest = e1.abs().max(e2.abs()).max_element();
-    let geo_nrm = (largest > 0.0).then(|| unit((e1 / largest).cross(e2 / largest))).flatten().unwrap_or(nrm);
+    let (pa, pb, pc) = (mesh.positions.get(a)?.as_dvec3(), mesh.positions.get(b)?.as_dvec3(), mesh.positions.get(c)?.as_dvec3());
+    // The edges and their cross product are taken in `f64`, where the difference and the cross
+    // product of any two finite `f32` positions neither overflow nor round to zero.
+    let geo_nrm = (pb - pa).cross(pc - pa).try_normalize().map_or(nrm, |n| n.as_vec3());
     let tan = *mesh.tangents.get(a)? * b0 + *mesh.tangents.get(b)? * b1 + *mesh.tangents.get(c)? * b2;
     let uv = *mesh.uvs.get(a)? * b0 + *mesh.uvs.get(b)? * b1 + *mesh.uvs.get(c)? * b2;
     let tdir = unit(tan.truncate()).unwrap_or_else(|| nrm.any_orthonormal_vector());
@@ -400,6 +408,21 @@ mod tests {
     }
 
     #[test]
+    fn surface_face_normal_of_corners_whose_differences_overflow_f32() {
+        // pb - pa is 6e38, past f32::MAX: the face normal is still +Z, not the +Y shading normal.
+        let m = Mesh {
+            positions: vec![Vec3::new(-3e38, 0.0, 0.0), Vec3::new(3e38, 0.0, 0.0), Vec3::new(0.0, 3e38, 0.0)],
+            normals: vec![Vec3::Y; 3],
+            tangents: vec![Vec4::new(1.0, 0.0, 0.0, 1.0); 3],
+            uvs: vec![Vec2::ZERO, Vec2::X, Vec2::Y],
+            indices: vec![0, 1, 2],
+            ..Mesh::default()
+        };
+        let surface = surface_at(&m, 0, 0.25, 0.25).unwrap();
+        assert!((surface.geo_nrm - Vec3::Z).length() < 1e-6, "{}", surface.geo_nrm);
+    }
+
+    #[test]
     fn gbuffer_rejects_huge_dimensions() {
         let m = primitives::plane(1.0, 2);
         let l = Limits::default();
@@ -441,6 +464,22 @@ mod tests {
         let g = UvGBuffer::from_slices(&[[-1e6, -1e6], [1e6, -1e6], [0.0, 1e6]], &[0, 1, 2], 8, 8, &l).unwrap();
         assert_eq!(g.covered_count(), 64);
         assert!(g.bary.iter().all(|[b1, b2]| (0.0..=1.0).contains(b1) && (0.0..=1.0).contains(b2) && b1 + b2 <= 1.0 + 1e-6), "{:?}", g.bary);
+    }
+
+    #[test]
+    fn gbuffer_edge_tolerance_is_a_texel_distance() {
+        // The triangle covers u + v <= 0, so no texel center is inside it, while its box covers
+        // every texel of the buffer and its area is about 2.8e14 square texels.
+        let m = 1_048_576.0;
+        let g = UvGBuffer::from_slices(&[[-m, -m], [m, -m], [-m, m]], &[0, 1, 2], 8, 8, &Limits::default()).unwrap();
+        assert_eq!(g.covered_count(), 0);
+        // A sliver 0.1 texel high whose corners lie 8e14 texels to either side: the rounding at
+        // those coordinates does not widen it to the texel centers at y = 0.5.
+        let g = UvGBuffer::from_slices(&[[-1e14, 0.0], [1e14, 0.0], [0.0, 0.0125]], &[0, 1, 2], 8, 8, &Limits::default()).unwrap();
+        assert_eq!(g.covered_count(), 0);
+        // The same triangle mirrored to cover u + v >= 0 covers every texel center.
+        let g = UvGBuffer::from_slices(&[[m, m], [-m, m], [m, -m]], &[0, 1, 2], 8, 8, &Limits::default()).unwrap();
+        assert_eq!(g.covered_count(), 64);
     }
 
     /// The `what`, `got` and `limit` of a `TooLarge` error, `None` for any other result.
