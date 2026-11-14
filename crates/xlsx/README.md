@@ -86,7 +86,8 @@ they were. A binary workbook is not written.
 A binary workbook gives the same `Workbook`, strings, rows and merged cells, and the same
 `Styles`: number formats, fonts, fills, borders, cell and cell style formats, cell styles,
 differential formats and the indexed colours, as Excel writes them in `styles.xml` (default fill
-colours and empty settings left out, a cell style format's `apply*="0"`). Custom table styles and
+colours and empty settings left out, a cell style format's `apply*="0"`, a number format with a
+newer locale tag in its Excel 2007 spelling, as `formatCode` has it). Custom table styles and
 recent colours are not read; a damaged styles part is a warning and no styles. Its cell formulas are decoded from their tokens into the
 text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, no implicit `@`), with
 `FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell

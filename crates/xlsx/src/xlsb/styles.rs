@@ -151,10 +151,11 @@ fn font(b: &mut Bytes<'_>) -> Result<Font, Error> {
         extend: on(0x80),
         underline: (uls != 0).then(|| underline(u32::from(uls))),
         vert_align: (sss != 0).then(|| script(u32::from(sss))),
-        color,
         family: (family != 0).then_some(u32::from(family)),
         charset: (charset != 0).then_some(u32::from(charset)),
         scheme: scheme(u32::from(font_scheme)).filter(|s| *s != FontScheme::None),
+        // An automatic colour is a font with no `<color>` in `.xlsx`.
+        color: color.filter(|c| c.source != ColorSource::Auto),
     })
 }
 
@@ -164,7 +165,8 @@ fn gradient(b: &mut Bytes<'_>, path: bool) -> Result<GradientFill, Error> {
 }
 
 /// `BrtFill`. Excel's `.xlsx` leaves out the default colours: system foreground (indexed 64) as
-/// the pattern colour and system background (indexed 65) as the background.
+/// the pattern colour and system background (indexed 65) as the background, unless the pattern
+/// colour has a tint (as the built-in "20% - Accent1" styles do), when it states the background.
 fn fill(b: &mut Bytes<'_>) -> Result<Fill, Error> {
     let fls = b.u32()?;
     let fg = color(b)?;
@@ -183,7 +185,8 @@ fn fill(b: &mut Bytes<'_>) -> Result<Fill, Error> {
         return Ok(Fill::Gradient(g));
     }
     let system = |c: Color, i: u32| c.source == ColorSource::Indexed(i) && c.tint == 0.0;
-    Ok(Fill::Pattern(PatternFill { pattern: Some(pattern(fls)?), fg: fg.filter(|c| !system(*c, 64)), bg: bg.filter(|c| !system(*c, 65)) }))
+    let tinted = fg.is_some_and(|c| c.tint != 0.0);
+    Ok(Fill::Pattern(PatternFill { pattern: Some(pattern(fls)?), fg: fg.filter(|c| !system(*c, 64)), bg: bg.filter(|c| tinted || !system(*c, 65)) }))
 }
 
 /// `BrtBorder`: the five edges a cell border has, each stated (`<left/>` when it has no line).
@@ -393,6 +396,9 @@ fn dxf(b: &mut Bytes<'_>) -> Result<Dxf, Error> {
 /// The styles part: `BrtBeginStyleSheet` to `BrtEndStyleSheet`.
 pub(crate) fn styles(bytes: &[u8], limits: &Limits, budget: &Budget, warnings: &mut Warnings) -> Result<Styles, Error> {
     let mut records = Records::new(bytes, limits, budget);
+    // Excel keeps a number format with a newer locale tag in two alternate-content blocks: the
+    // newer spelling for itself, and for Excel 2007 the one `.xlsx` has as `formatCode`.
+    records.excel_2007 = true;
     records.first(278, warnings)?;
     let mut s = Styles::default();
     // Inside BrtBeginCellStyleXFs (true) or BrtBeginCellXFs (false).

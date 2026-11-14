@@ -1014,6 +1014,8 @@ fn styles_bin() -> Vec<u8> {
     // character set 0 and scheme "none" are not written in `.xlsx`.
     let fancy = font(290, 0x0A, 700, 1, 0x22, 0, 2, &rgb(0, 128, 255), 0, "Wingdings");
     let heading = font(220, 0, 400, 0, 0, 2, 0, &theme(4, 13106), 1, "Aptos Display");
+    // An automatic colour: no `<color>` in `.xlsx`.
+    let auto = font(220, 0x02, 400, 0, 0, 2, 0, &color(0, 64, 0, [0, 0, 0, 255]), 2, "Aptos Narrow");
     let gradient = [
         &0x28u32.to_le_bytes()[..],
         &indexed(64),
@@ -1030,20 +1032,31 @@ fn styles_bin() -> Vec<u8> {
     let none = edge(0, &color(0, 0, 0, [0, 0, 0, 0]));
     let parts: Vec<Vec<u8>> = vec![
         record(278, &[]),
-        begin(615, 1),
+        begin(615, 2),
         record(44, &[&164u16.to_le_bytes()[..], &wide(r"yyyy\-mm\-dd")].concat()),
+        // A format in two alternate-content blocks: the newer spelling for version 13 and later
+        // (skipped), and the one for versions 12 and 13, which `.xlsx` has as `formatCode`.
+        record(37, &[1, 0, 13, 0, 0, 0x80]),
+        record(44, &[&165u16.to_le_bytes()[..], &wide("[$-ja-JP-x-gannen]ge")].concat()),
+        record(38, &[]),
+        record(37, &[2, 0, 12, 0, 0, 0, 13, 0, 0, 0]),
+        record(44, &[&165u16.to_le_bytes()[..], &wide("[$]ge")].concat()),
+        record(38, &[]),
         record(616, &[]),
-        begin(611, 3),
+        begin(611, 4),
         normal,
         fancy,
         heading,
+        auto,
         record(612, &[]),
-        begin(603, 5),
+        begin(603, 6),
         pattern_fill(0, &indexed(64), &indexed(65)),
         pattern_fill(17, &indexed(64), &indexed(65)),
         pattern_fill(1, &rgb(255, 255, 0), &indexed(64)),
         pattern_fill(9, &theme(5, -8191), &indexed(65)),
         record(45, &gradient),
+        // A tinted pattern colour: `.xlsx` states the system background, as for darkGrid above.
+        pattern_fill(1, &theme(4, 26213), &indexed(65)),
         record(604, &[]),
         begin(613, 2),
         record(46, &[&[0][..], &none, &none, &none, &none, &none].concat()),
@@ -1109,7 +1122,7 @@ fn styles_bin() -> Vec<u8> {
     parts.concat()
 }
 
-const STYLES_XML: &str = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="yyyy\-mm\-dd"/></numFmts><fonts count="3"><font><sz val="11"/><color theme="1"/><name val="Aptos Narrow"/><family val="2"/><scheme val="minor"/></font><font><b/><i/><strike/><u val="doubleAccounting"/><vertAlign val="superscript"/><sz val="14.5"/><color rgb="FF0080FF"/><name val="Wingdings"/><charset val="2"/></font><font><sz val="11"/><color theme="4" tint="0.39997558519241921"/><name val="Aptos Display"/><family val="2"/><scheme val="major"/></font></fonts><fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="darkGrid"><fgColor theme="5" tint="-0.249977111117893"/></patternFill></fill><fill><gradientFill type="path" left="0.5" right="0.5" top="0.5" bottom="0.5"><stop position="0"><color theme="0"/></stop><stop position="1"><color theme="4"/></stop></gradientFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border diagonalUp="1" diagonalDown="1"><left style="hair"><color indexed="64"/></left><right style="slantDashDot"><color auto="1"/></right><top style="medium"><color rgb="FFC80000"/></top><bottom/><diagonal style="thin"><color theme="4"/></diagonal></border></borders><cellStyleXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" applyFont="0" applyFill="0" applyBorder="0" applyAlignment="0" applyProtection="0"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" quotePrefix="1" applyAlignment="1" applyProtection="1"><alignment horizontal="left" vertical="top" textRotation="180" wrapText="1" indent="2" shrinkToFit="1" readingOrder="2"/><protection locked="0" hidden="1"/></xf><xf numFmtId="0" fontId="1" fillId="4" borderId="1" xfId="1" applyFont="1" applyFill="1" applyBorder="1"/></cellXfs><cellStyles count="3"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="RowLevel_2" xfId="1" builtinId="1" iLevel="1" customBuiltin="1"/><cellStyle name="Probe Style" xfId="2" hidden="1"/></cellStyles><dxfs count="2"><dxf><font><b/><i val="0"/><u val="singleAccounting"/><sz val="12"/><color rgb="FF9C0006"/><name val="Arial"/></font><numFmt numFmtId="170" formatCode="0.0"/><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill><alignment horizontal="center" wrapText="1"/><protection locked="0"/><border><bottom style="thin"><color auto="1"/></bottom></border></dxf><dxf><fill><gradientFill degree="90"><stop position="0"><color rgb="FFFFFFFF"/></stop><stop position="1"><color theme="4"/></stop></gradientFill></fill></dxf></dxfs><colors><indexedColors><rgbColor rgb="00112233"/><rgbColor rgb="00FFFFFF"/></indexedColors></colors></styleSheet>"#;
+const STYLES_XML: &str = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="164" formatCode="yyyy\-mm\-dd"/><numFmt numFmtId="165" formatCode="[$]ge"/></numFmts><fonts count="3"><font><sz val="11"/><color theme="1"/><name val="Aptos Narrow"/><family val="2"/><scheme val="minor"/></font><font><b/><i/><strike/><u val="doubleAccounting"/><vertAlign val="superscript"/><sz val="14.5"/><color rgb="FF0080FF"/><name val="Wingdings"/><charset val="2"/></font><font><sz val="11"/><color theme="4" tint="0.39997558519241921"/><name val="Aptos Display"/><family val="2"/><scheme val="major"/></font><font><i/><sz val="11"/><name val="Aptos Narrow"/><family val="2"/><scheme val="minor"/></font></fonts><fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="darkGrid"><fgColor theme="5" tint="-0.249977111117893"/><bgColor indexed="65"/></patternFill></fill><fill><gradientFill type="path" left="0.5" right="0.5" top="0.5" bottom="0.5"><stop position="0"><color theme="0"/></stop><stop position="1"><color theme="4"/></stop></gradientFill></fill><fill><patternFill patternType="solid"><fgColor theme="4" tint="0.79998168889431442"/><bgColor indexed="65"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border diagonalUp="1" diagonalDown="1"><left style="hair"><color indexed="64"/></left><right style="slantDashDot"><color auto="1"/></right><top style="medium"><color rgb="FFC80000"/></top><bottom/><diagonal style="thin"><color theme="4"/></diagonal></border></borders><cellStyleXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="9" fontId="0" fillId="0" borderId="0" applyFont="0" applyFill="0" applyBorder="0" applyAlignment="0" applyProtection="0"/><xf numFmtId="0" fontId="2" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" quotePrefix="1" applyAlignment="1" applyProtection="1"><alignment horizontal="left" vertical="top" textRotation="180" wrapText="1" indent="2" shrinkToFit="1" readingOrder="2"/><protection locked="0" hidden="1"/></xf><xf numFmtId="0" fontId="1" fillId="4" borderId="1" xfId="1" applyFont="1" applyFill="1" applyBorder="1"/></cellXfs><cellStyles count="3"><cellStyle name="Normal" xfId="0" builtinId="0"/><cellStyle name="RowLevel_2" xfId="1" builtinId="1" iLevel="1" customBuiltin="1"/><cellStyle name="Probe Style" xfId="2" hidden="1"/></cellStyles><dxfs count="2"><dxf><font><b/><i val="0"/><u val="singleAccounting"/><sz val="12"/><color rgb="FF9C0006"/><name val="Arial"/></font><numFmt numFmtId="170" formatCode="0.0"/><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill><alignment horizontal="center" wrapText="1"/><protection locked="0"/><border><bottom style="thin"><color auto="1"/></bottom></border></dxf><dxf><fill><gradientFill degree="90"><stop position="0"><color rgb="FFFFFFFF"/></stop><stop position="1"><color theme="4"/></stop></gradientFill></fill></dxf></dxfs><colors><indexedColors><rgbColor rgb="00112233"/><rgbColor rgb="00FFFFFF"/></indexedColors></colors></styleSheet>"#;
 
 /// The same styles from a SpreadsheetML package.
 fn xml_styles(xml: &str) -> Styles {
