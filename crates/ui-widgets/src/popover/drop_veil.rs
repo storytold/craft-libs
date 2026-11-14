@@ -113,9 +113,17 @@ impl Outcome for DropVeilOutput {
     }
 }
 
-/// The accepting side of a veil: any files, anywhere in the window, by any operation.
-struct WholeWindow {
+/// The accepting side of a veil: any files, anywhere in the window, by any operation. Other containers that report
+/// the files nothing else in their window took use it too.
+pub struct WholeWindow {
     rect: Rect,
+}
+
+impl WholeWindow {
+    /// A target over the window, marked with `rect` while files hover.
+    pub fn new(rect: Rect) -> Self {
+        WholeWindow { rect }
+    }
 }
 
 impl WindowDropTarget<OsFiles> for WholeWindow {
@@ -186,7 +194,7 @@ impl Component for DropVeil {
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let held = drag::active::<OsFiles>(&cx.ctx).is_some_and(|files| !files.files.is_empty());
-        let target = WholeWindow { rect: cx.rect };
+        let target = WholeWindow::new(cx.rect);
         let (id, ordinal) = (cx.id, drag::next_ordinal(&cx.ctx, cx.id));
         self.dropped = cx.window_drop_target::<OsFiles, _>(&target);
         // The veil shows only while it is the target that would take the drop.

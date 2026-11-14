@@ -10,7 +10,7 @@ use craft_ui::testing::Frames;
 use craft_ui::testing::access::{AccessTree, tree_of};
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::windows::{FullOutput, RawInput};
-use egui::{Context, Event, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
+use egui::{Context, DroppedFile, Event, HoveredFile, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo};
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
@@ -20,6 +20,8 @@ const CHILD_SIZE: Vec2 = Vec2::new(400.0, 300.0);
 thread_local! {
     /// The events the next child pass receives (the renderer runs on the trial's thread).
     static CHILD_EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
+    /// The files hovering over and dropped on the child's window in the next child pass.
+    static CHILD_FILES: RefCell<(Vec<HoveredFile>, Vec<DroppedFile>)> = const { RefCell::new((Vec::new(), Vec::new())) };
     /// The window facts every child pass reports.
     static CHILD_INFO: RefCell<ViewportInfo> = RefCell::new(ViewportInfo::default());
     /// The window facts the root reports.
@@ -109,10 +111,17 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     patch_window(viewport.ids.this, viewport.builder);
     let mut callback = viewport.viewport_ui_cb;
     let events = CHILD_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
+    let (hovered_files, dropped_files) = CHILD_FILES.with(|files| std::mem::take(&mut *files.borrow_mut()));
     let mut info = CHILD_INFO.with(|info| info.borrow().clone());
     info.parent = Some(viewport.ids.parent);
-    let mut input =
-        RawInput { viewport_id: viewport.ids.this, events, screen_rect: Some(Rect::from_min_size(Pos2::ZERO, CHILD_SIZE)), ..RawInput::default() };
+    let mut input = RawInput {
+        viewport_id: viewport.ids.this,
+        events,
+        hovered_files,
+        dropped_files,
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, CHILD_SIZE)),
+        ..RawInput::default()
+    };
     input.time = Some(NOW.with(Cell::get));
     CHILDREN.with(|children| {
         let mut children = children.borrow_mut();
@@ -171,6 +180,7 @@ impl Windows {
         assert!(craft_ui::install(&ctx, spec).is_ok(), "the context takes the runtime once");
         Context::set_immediate_viewport_renderer(render_child);
         CHILD_EVENTS.with(|events| events.borrow_mut().clear());
+        CHILD_FILES.with(|files| *files.borrow_mut() = Default::default());
         CHILD_INFO.with(|info| *info.borrow_mut() = ViewportInfo::default());
         CHILDREN.with(|children| children.borrow_mut().clear());
         COMMANDS.with(|kept| kept.borrow_mut().clear());
@@ -192,7 +202,21 @@ impl Windows {
     /// One frame: `root` events go to the root viewport, `child` events to the child's next pass. Returns the
     /// window commands of the frame.
     pub fn frame(&self, root: Vec<Event>, child: Vec<Event>, ui: impl FnMut(&mut Ui)) -> Out {
+        self.frame_with_files(root, child, Vec::new(), Vec::new(), ui)
+    }
+
+    /// [`frame`](Self::frame) where the child's next pass also gets the OS files hovering over its window and the
+    /// files dropped on it.
+    pub fn frame_with_files(
+        &self,
+        root: Vec<Event>,
+        child: Vec<Event>,
+        hovered: Vec<HoveredFile>,
+        dropped: Vec<DroppedFile>,
+        ui: impl FnMut(&mut Ui),
+    ) -> Out {
         CHILD_EVENTS.with(|events| *events.borrow_mut() = child);
+        CHILD_FILES.with(|files| *files.borrow_mut() = (hovered, dropped));
         TREES.with(|kept| kept.borrow_mut().clear());
         set_input(&self.ctx, FrameInput::new(RootEnv::default()));
         let mut input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, ROOT_SIZE)), events: root, ..RawInput::default() };

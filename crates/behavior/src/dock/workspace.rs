@@ -85,8 +85,8 @@ impl<P> Workspace<P> {
 }
 
 impl<P: Clone + Eq + Hash> Workspace<P> {
-    /// Check the version, the layout and that every hidden panel is hidden once and absent
-    /// from the layout.
+    /// Check the version, the layout, that every hidden panel is hidden once and absent
+    /// from the layout, and that the floated records are bounded and one per panel.
     pub fn validate(&self) -> Result<(), DockError> {
         if self.version > Self::VERSION {
             return Err(DockError::UnsupportedVersion);
@@ -101,6 +101,13 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             if visible.contains(panel) || !seen.insert(panel) {
                 return Err(DockError::DuplicatePanel);
             }
+        }
+        if self.floated.len() > MAX_PANELS {
+            return Err(DockError::LimitExceeded);
+        }
+        let mut recorded = HashSet::new();
+        if !self.floated.iter().all(|(panel, _)| recorded.insert(panel)) {
+            return Err(DockError::DuplicatePanel);
         }
         Ok(())
     }
@@ -133,7 +140,7 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
             let before = proposed.layout.clone();
             // Opening a hidden panel puts it back where it was.
             let reopened = match &action {
-                Action::Open { panel, .. } if proposed.hidden.iter().any(|(p, _)| p == panel) => proposed.reopen(panel)?,
+                Action::Open { panel, .. } if proposed.hidden.iter().any(|(p, _)| p == panel) => proposed.reopen(panel, &policy)?,
                 _ => false,
             };
             if !reopened {
@@ -191,14 +198,26 @@ impl<P: Clone + Eq + Hash> Workspace<P> {
     }
 
     /// Restore a hidden `panel` to its recorded place and make it the active tab. `Ok(false)` when the record
-    /// cannot be restored, which leaves the workspace as it was.
-    fn reopen(&mut self, panel: &P) -> Result<bool, DockError> {
+    /// cannot be restored, or the place it restores to refuses the panel under `permissions`; the workspace stays
+    /// as it was and the caller opens the panel by the ordinary, checked path.
+    fn reopen(&mut self, panel: &P, permissions: &impl Fn(&P) -> Permissions) -> Result<bool, DockError> {
+        // The restore also rewrites the records of the hidden panels it passed, so it runs on a copy.
+        let mut trial = self.clone();
         let mut layout = self.layout.clone();
-        if self.restore_from_hidden(&mut layout, panel).is_err() {
+        if trial.restore_from_hidden(&mut layout, panel).is_err() {
+            return Ok(false);
+        }
+        let allowed = layout
+            .location(panel)
+            .ok()
+            .and_then(|location| location.anchor.map(|anchor| location.placement.allowed_by(permissions(&anchor), floats(&layout, &anchor))))
+            .unwrap_or(true);
+        if !allowed {
             return Ok(false);
         }
         layout.apply(Action::Activate { panel: panel.clone() })?;
         self.layout = layout;
+        self.hidden = trial.hidden;
         self.hidden.retain(|(p, _)| p != panel);
         Ok(true)
     }

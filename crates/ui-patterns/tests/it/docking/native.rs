@@ -4,9 +4,10 @@
 use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, Workspace};
 use craft_behavior::placement::Placement;
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
-use craft_ui::contract::{Bind, BodyCx};
+use craft_ui::contract::{Bind, BodyCx, Show as _};
 use craft_ui::docking::{DockConfig, DockPanels, PanelSpec};
 use craft_ui::patterns::dock::DockArea;
+use craft_ui::popover::DropVeil;
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::drag;
 use craft_ui::testing::input::key_press;
@@ -14,7 +15,7 @@ use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::trial;
 use craft_ui::testing::windows::FakeSystem;
 use craft_ui_test_kit::windows::Windows;
-use egui::{Event, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
+use egui::{DroppedFile, Event, HoveredFile, Key, Modifiers, Pos2, Rect, Ui, Vec2, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use std::sync::Arc;
 
 /// The root window and the palette overlap; the palette is the larger.
@@ -349,28 +350,53 @@ fn an_app_change_of_a_native_floats_place_moves_its_window_once() {
     assert_eq!(placing, [&ViewportCommand::OuterPosition(to.min), &ViewportCommand::InnerSize(to.size())], "one move and one size");
 }
 
-/// OS files reach `DockAreaOutput::window_files` only from a drop on a native float's own window: with the float's
-/// OS window open and nothing dropped, the dock reports no files.
-// PLAN: the drop itself cannot be driven yet: the `Windows` kit (`crates/ui-test-kit/src/windows.rs`, outside this
-// set) gives a child pass only `Event`s, never `RawInput::dropped_files`. Once the kit lets a frame give the child
-// files, this trial drops one file no target takes and one a target takes, and asserts that only the first arrives.
+/// Palettes whose body is a veil over the window: a target inside the window that takes dropped files.
+struct Veiled;
+
+impl DockPanels<u32> for Veiled {
+    fn spec(&self, _: &u32) -> PanelSpec {
+        PanelSpec::new(PALETTE_TITLE)
+    }
+
+    fn body(&mut self, _: &u32, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        let _ = DropVeil::new("Drop").show(ui, |_, _| {});
+    }
+}
+
+/// Files dropped on a native float's own OS window reach `DockAreaOutput::window_files` once, unless a target inside
+/// that window took them.
 #[trial]
 fn a_file_dropped_on_a_native_float_reaches_window_files_once() {
-    let windows = Windows::new();
-    windows.root_info(info(true, ROOT_AT));
-    windows.child_info(info(true, PALETTE_AT));
-    let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
-    let mut opened = false;
-    let mut files = 0;
-    for _ in 0..4 {
-        let out = windows.frame(vec![], vec![], |ui| {
-            let shown = DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Palettes(Permissions::ALL), DockConfig::default()).show(ui);
-            files += shown.window_files.len();
-        });
-        opened |= out.builders.iter().any(|(viewport, _)| *viewport != ViewportId::ROOT);
-    }
-    assert!(opened, "the float has its own OS window");
-    assert_eq!(files, 0, "no drop, no files");
+    let reached = |veiled: bool| {
+        let windows = Windows::new();
+        windows.root_info(info(true, ROOT_AT));
+        windows.child_info(info(true, PALETTE_AT));
+        let mut workspace = Workspace::new(Layout::new(None, vec![float()]));
+        let mut frame = |hovered: Vec<HoveredFile>, dropped: Vec<DroppedFile>| {
+            let mut files = 0;
+            windows.frame_with_files(vec![], vec![], hovered, dropped, |ui| {
+                let config = DockConfig::default();
+                let shown = if veiled {
+                    DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Veiled, config).show(ui)
+                } else {
+                    DockArea::new("Native dock", Bind::bound(&mut workspace), &mut Palettes(Permissions::ALL), config).show(ui)
+                };
+                files += shown.window_files.len();
+            });
+            files
+        };
+        for _ in 0..4 {
+            frame(vec![], vec![]);
+        }
+        let mut total = frame(vec![HoveredFile::default()], vec![]);
+        total += frame(vec![], vec![DroppedFile { name: "a.png".into(), ..DroppedFile::default() }]);
+        for _ in 0..2 {
+            total += frame(vec![], vec![]);
+        }
+        total
+    };
+    assert_eq!(reached(false), 1, "a file no target took arrives once");
+    assert_eq!(reached(true), 0, "a file a target in the window took does not");
 }
 
 /// A palette float made in the app window.
