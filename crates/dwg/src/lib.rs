@@ -21,6 +21,11 @@
 //! These bound the input- and output-size variants. A small file that declares a huge internal
 //! table or section can still make the dependency allocate before any size is known, so the app
 //! runs both directions in a child process ([`worker`]): what that kills is the child.
+//!
+//! Isolation is not optional for untrusted input. With no worker configured the conversion is
+//! refused rather than run here, and a worker that cannot start is an error, so a missing worker
+//! never turns into decoding a hostile file in the caller's process. [`worker::allow_in_process`]
+//! is the explicit exception, for input the caller knows is trusted.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -65,7 +70,10 @@ fn mb(n: u64) -> String {
 #[cfg(not(no_dwg_bridge))]
 pub mod worker;
 #[cfg(not(no_dwg_bridge))]
-pub use worker::{WORKER_ARG, crash_worker_for_test, decode, encode_as, encode_kept_noted, encode_noted, serve_if_asked, use_own_worker, use_worker};
+pub use worker::{
+    WORKER_ARG, allow_in_process, crash_worker_for_test, decode, encode_as, encode_kept_noted, encode_noted, serve_if_asked, use_own_worker,
+    use_worker,
+};
 #[cfg(not(no_dwg_bridge))]
 mod proxy_transport;
 
@@ -1568,6 +1576,8 @@ pub fn serve_if_asked() -> Option<i32> {
 }
 #[cfg(no_dwg_bridge)]
 pub fn use_own_worker() {}
+#[cfg(no_dwg_bridge)]
+pub fn allow_in_process() {}
 #[cfg(no_dwg_bridge)]
 pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
     dwg_to_dxf_noted(bytes, limits)
