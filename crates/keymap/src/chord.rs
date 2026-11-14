@@ -424,7 +424,7 @@ impl Mods {
     }
 
     /// The held modifiers one by one, in the platform's order: `⌃ ⌥ ⇧ ⌘` on macOS, `Ctrl Alt Shift` elsewhere.
-    pub(crate) fn parts(self, platform: Platform) -> Vec<&'static str> {
+    pub fn parts(self, platform: Platform) -> Vec<&'static str> {
         let m = self.effective(platform);
         let table: [(bool, &'static str); 4] = if platform.is_mac() {
             [(m.ctrl, "⌃"), (m.alt, "⌥"), (m.shift, "⇧"), (m.cmd, "⌘")]

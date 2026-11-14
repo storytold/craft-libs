@@ -17,6 +17,7 @@ pub struct ColorHud<'a> {
     label: Label,
     at: Pos2,
     color: Bind<'a, Srgba>,
+    start: Option<Srgba>,
     pointer: Option<Pos2>,
     held: bool,
 }
@@ -25,6 +26,13 @@ impl<'a> ColorHud<'a> {
     /// A HUD named `label` at `at` over `color`.
     pub fn new(label: impl Into<Label>, at: Pos2, color: Bind<'a, Srgba>) -> Self {
         let _ = (label.into(), at, color);
+        todo!("pn.C31")
+    }
+
+    /// The colour under `at` when the host's press began; the popover is placed so this colour's point sits at `at`.
+    #[must_use]
+    pub fn start(mut self, color: Srgba) -> Self {
+        let _ = (&mut self, color);
         todo!("pn.C31")
     }
 
