@@ -401,7 +401,7 @@ impl<M: Value> Pass<'_, M> {
         let current = self.values.mode.clone();
         let mut pick = None;
         Field::new(caption.clone()).id_salt("mode").sizing(Sizing::Content).show(ui, |ui, _| {
-            pick = Select::new(caption.clone(), Bind::given(current), entries).show(ui).value().cloned();
+            pick = Select::new(caption.clone(), Bind::given(current.clone()), entries).show(ui).value().cloned();
         });
         if let Some(mode) = pick {
             self.set_with(caption, |v| v.mode = mode);
