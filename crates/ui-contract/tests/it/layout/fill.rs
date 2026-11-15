@@ -1,13 +1,16 @@
 //! A leaf's `Sizing::FillWidth`: the leaf takes the room its row leaves after the other members. In a `Stack` body
-//! that scrolls along y the children that fill its height share what the view leaves, at least their content.
+//! that scrolls along y the children that fill its height share what the view leaves, at least their content. A child
+//! that fills a bounded room never takes less than its least; in an unbounded one it keeps its ideal.
 
-use craft_ui::contract::{ContainerProps, Props as _, Scroll, Show as _, ShowContainer as _, Sizing};
+use craft_behavior::{Proposal, Sense};
+use craft_ui::contract::{Common, Component, ContainerProps, Cx, MeasureCx, Props as _, Role, Scroll, Show as _, ShowContainer as _, Sizing};
 use craft_ui::layout::BodyLayout;
+use craft_ui::style::StyleCx;
 use craft_ui::testing::layout::Block;
 use craft_ui::testing::{Fixture, Frames, is_measuring, pointer, trial};
 use craft_ui_test_kit::body::Slab;
-use craft_ui_test_kit::contract::{Panel, Probe, Seen};
-use egui::{Pos2, Rect, Vec2};
+use craft_ui_test_kit::contract::{Panel, PlainStyle, Probe, Seen};
+use egui::{Pos2, Rect, Response, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -108,4 +111,159 @@ fn a_scrolled_stack_gives_its_fill_children_what_the_view_leaves_and_scrolls_pas
     assert!((content.height() - TALL).abs() < 0.5, "a taller container keeps its content height: {dump}");
     assert!((content.bottom() - view.bottom()).abs() < 1.0, "nothing in it is cut: the view scrolls to the content's end: {dump}");
     assert!((held.bottom() - view.bottom()).abs() < 1.0, "the container reaches the view's end: {dump}");
+}
+
+/// A `Stretch`'s ideal width, least width and height.
+const IDEAL: f32 = 300.0;
+const LEAST: f32 = 40.0;
+const LINE: f32 = 20.0;
+
+/// How many measures of each proposal a `Stretch` answered in measuring runs.
+#[derive(Default)]
+struct Asked {
+    ideal: Cell<usize>,
+    min: Cell<usize>,
+}
+
+/// A leaf `IDEAL` wide that narrows to `LEAST`, whatever its room; it counts the measures it answers in measuring runs.
+#[derive(Component)]
+struct Stretch<'a> {
+    #[common]
+    common: Common,
+    seen: &'a RefCell<Seen>,
+    asked: &'a Asked,
+}
+
+impl<'a> Stretch<'a> {
+    fn new(seen: &'a RefCell<Seen>, asked: &'a Asked) -> Self {
+        Stretch { common: Common::new(), seen, asked }
+    }
+}
+
+impl Component for Stretch<'_> {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: StretchStyleKey) -> PlainStyle {
+        PlainStyle::default()
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        let (count, width) = if cx.proposal == Proposal::Min { (&self.asked.min, LEAST) } else { (&self.asked.ideal, IDEAL) };
+        if is_measuring(cx.ui.ctx()) {
+            count.set(count.get() + 1);
+        }
+        Vec2::new(width, LINE)
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        self.seen.borrow_mut().rect = cx.rect;
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+/// The rect of a row that fills a room `width` wide, scrolling along x when `scrolls`, and of the `Stretch` that fills
+/// its width alone in it.
+fn stretched(width: f32, scrolls: bool) -> (Rect, Rect) {
+    let (seen, row) = (Rc::new(RefCell::new(Seen::default())), Rc::new(Cell::new(Rect::NOTHING)));
+    let (shown, shown_row) = (Rc::clone(&seen), Rc::clone(&row));
+    let mut fixture = Fixture::new(move |ui| {
+        let asked = Asked::default();
+        let props = ContainerProps::new().layout(BodyLayout::row()).sizing(Sizing::FillWidth);
+        let props = if scrolls { props.scroll(Scroll::horizontal()) } else { props };
+        let body = Slab::new(props).id_salt("row").show(ui, |ui, _| {
+            Stretch::new(&shown, &asked).sizing(Sizing::FillWidth).id_salt("stretch").show(ui);
+        });
+        shown_row.set(body.output.rect);
+    });
+    fixture.room(Vec2::new(width, 100.0)).settle();
+    let leaf = seen.borrow().rect;
+    (row.get(), leaf)
+}
+
+/// In a content-sized row beside a probe three lines high: the probe's rect, that of a container that fills and that
+/// of a `Stretch` that fills.
+fn in_line() -> [Rect; 3] {
+    let (tall, leaf) = (Rc::new(RefCell::new(Seen::default())), Rc::new(RefCell::new(Seen::default())));
+    let held = Rc::new(Cell::new(Rect::NOTHING));
+    let (shown_tall, shown_leaf, shown_held) = (Rc::clone(&tall), Rc::clone(&leaf), Rc::clone(&held));
+    let mut fixture = Fixture::new(move |ui| {
+        let asked = Asked::default();
+        Panel::new().layout(BodyLayout::row()).id_salt("line").show(ui, |ui, _| {
+            Probe::new(&shown_tall).size(Vec2::new(40.0, 3.0 * LINE)).id_salt("tall").show(ui);
+            let container = Panel::new().sizing(Sizing::Fill).id_salt("held").show(ui, |ui, _| {
+                Block::new(Vec2::new(40.0, LINE)).show(ui);
+            });
+            shown_held.set(container.output.rect);
+            Stretch::new(&shown_leaf, &asked).sizing(Sizing::Fill).id_salt("leaf").show(ui);
+        });
+    });
+    fixture.room(Vec2::splat(800.0)).settle();
+    let rects = [tall.borrow().rect, held.get(), leaf.borrow().rect];
+    rects
+}
+
+#[trial]
+fn a_fill_child_fills_a_bounded_room_down_to_its_least_and_keeps_its_ideal_in_an_unbounded_one() {
+    let (row, leaf) = stretched(200.0, false);
+    assert!((leaf.width() - row.width()).abs() < 0.5 && leaf.width() < IDEAL, "below its ideal it fills the row: {leaf:?} in {row:?}");
+    let (row, leaf) = stretched(30.0, false);
+    assert!((leaf.width() - LEAST).abs() < 0.5, "below its least it keeps its least: {leaf:?} in {row:?}");
+    let (row, leaf) = stretched(200.0, true);
+    assert!((leaf.width() - IDEAL).abs() < 0.5, "in a row that scrolls it keeps its ideal: {leaf:?} in {row:?}");
+    let [tall, held, leaf] = in_line();
+    let dump = format!("tall {tall:?}, container {held:?}, leaf {leaf:?}");
+    assert!((leaf.height() - tall.height()).abs() < 0.5, "the leaf that fills spans the row's line: {dump}");
+    assert!((held.height() - tall.height()).abs() < 0.5, "the container that fills spans the row's line as the leaf does: {dump}");
+}
+
+/// The leaves of the `measured` rig.
+const LEAVES: [&str; 2] = ["first", "second"];
+
+#[trial]
+fn fill_children_measure_once_per_sweep() {
+    for (layout, sizing, name) in [(BodyLayout::stack(), Sizing::Fill, "stack"), (BodyLayout::row(), Sizing::FillWidth, "row")] {
+        let leaves = Rc::new([Asked::default(), Asked::default()]);
+        let sweeps = Rc::new(Cell::new(0_usize));
+        let (shown, swept) = (Rc::clone(&leaves), Rc::clone(&sweeps));
+        let mut fixture = Fixture::new(move |ui| {
+            let sink = RefCell::new(Seen::default());
+            Panel::new().layout(layout.clone()).sizing(Sizing::Fill).id_salt("body").show(ui, |ui, _| {
+                // The body's content runs once per sweep of its measuring runs.
+                if is_measuring(ui.ctx()) {
+                    swept.set(swept.get() + 1);
+                }
+                for (asked, salt) in shown.iter().zip(LEAVES) {
+                    Stretch::new(&sink, asked).sizing(sizing).id_salt(salt).show(ui);
+                }
+                Panel::new().sizing(Sizing::Fill).id_salt("held").show(ui, |ui, _| {
+                    Block::new(Vec2::new(40.0, LINE)).show(ui);
+                });
+            });
+        });
+        fixture.room(Vec2::splat(400.0)).settle();
+        let swept = sweeps.get();
+        for asked in leaves.iter() {
+            let (ideal, min) = (asked.ideal.get(), asked.min.get());
+            assert!(ideal == swept, "{name}: {ideal} ideal measures of a fill leaf over {swept} sweeps");
+            assert!(min >= 1 && 2 * min <= swept, "{name}: a fill leaf's least asked {min} times over {swept} sweeps, not once per first sweep");
+            asked.ideal.set(0);
+            asked.min.set(0);
+        }
+        sweeps.set(0);
+        fixture.idle(3);
+        for asked in leaves.iter() {
+            let (ideal, min) = (asked.ideal.get(), asked.min.get());
+            assert!(ideal == 0 && min == 0, "{name}: unchanged inputs measured a fill leaf again: {ideal} ideal, {min} least");
+        }
+        assert_eq!(sweeps.get(), 0, "{name}: unchanged inputs ran the body's measuring run");
+    }
 }

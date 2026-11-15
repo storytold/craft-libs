@@ -134,6 +134,10 @@ pub struct Scoped {
     /// The shrink step of the unwrapped `Row` or `Stack` body that encloses the scope, as its direct children in flow
     /// take part in it.
     pub(crate) shrink: Option<Shrink>,
+    /// The sweep of the content-sized `Stack` column that encloses the scope, as its direct children in flow see it:
+    /// a held fill-width child reports the width it measured at, and after the column's second sweep measures and
+    /// shows at the width the column settled on (`ColumnSweep`).
+    pub(crate) column: Option<ColumnSweep>,
     /// The scope runs in the least measure of a body (`Shrink::Least`): every leaf in flow takes its least width. It
     /// holds through the bodies nested inside.
     pub(crate) least: bool,
@@ -243,6 +247,17 @@ pub(crate) enum Shrink {
     Fit,
 }
 
+/// The sweep of a content-sized `Stack` column, as its direct children shown in flow see it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ColumnSweep {
+    /// The first sweep of the measuring run of the column `Id`: each held fill-width child reports the width it
+    /// measured at (`layout::report_held`).
+    Count(Id),
+    /// The width the column settled on, in its second sweep and in the real run after one: a held fill-width child
+    /// measures and shows across it.
+    Column(f32),
+}
+
 /// The line of an unwrapped `Row` body, as its direct children placed in flow see it: a child of one line sits with
 /// its centre on the line's centre, and a child of more than one line, or with no line of its own, at its top.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -348,6 +363,7 @@ impl Scoped {
         self.fill_body = None;
         self.fill_share = None;
         self.shrink = None;
+        self.column = None;
         self.offered = None;
     }
 
@@ -470,6 +486,7 @@ impl Env {
                 fill_body: None,
                 fill_share: None,
                 shrink: None,
+                column: None,
                 least: false,
                 offered: None,
                 measure: None,

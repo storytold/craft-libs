@@ -25,7 +25,7 @@ use crate::runtime::access::scope;
 use crate::runtime::access::{self, Politeness, Role};
 use crate::runtime::commands;
 use crate::runtime::egui::{alloc, areas, child, repaint, response, style, viewports};
-use crate::runtime::env::{AppValues, ArenaId, Env};
+use crate::runtime::env::{AppValues, ArenaId, ColumnSweep, Env, RowLine};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::motion::{Driver, Presence, spec};
@@ -165,6 +165,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.mode = stage.session::<WindowMode>(sub(id, "window_mode")).clone();
         self.fixed = match &props.mount {
             Mount::FullWindow => true,
+            // A viewport whose fallback covers the window is fixed in both modes, as a full-window mount is: its body
+            // never sizes as a layer's content.
+            Mount::Viewport { fallback, .. } if fallback.is_full_window() => true,
             Mount::Viewport { .. } if viewports::available(&ctx) => true,
             Mount::Layer(_) | Mount::Viewport { .. } => {
                 let placement = overlay_of(props).map_or_else(Placement::default, |overlay| {
@@ -198,8 +201,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.offset_at_read = held;
         let rtl = env.direction.is_rtl();
         let view = self.last.view.map_or(Vec2::ZERO, |view| self.shown_view(scroll, rect_of(view)).size());
-        // Step 4 applies, in order, the scroll bar and AccessKit moves of the last pass (`scroll_input`), this pass's
-        // wheel share and the reveal request queued last pass.
+        // Step 4 applies, in order, the scroll bar, AccessKit and reveal moves the update step of the last pass queued
+        // (`Jumps`), this pass's wheel share and the scroll moves queued for the body.
         let frame = jump_frame(&ctx);
         let jump = pass_state::with::<Jumps, _>(&ctx, |jumps| {
             jumps.0.retain(|(.., queued)| queued + 1 >= frame);
@@ -215,16 +218,6 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             self.offset.x += f64::from(sign * share.scroll.x);
             self.offset.y -= f64::from(share.scroll.y);
             self.moved = true;
-        }
-        if let (Some(rect), Some(view_rect)) = (
-            if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) },
-            self.last.view.map(|view| self.shown_view(scroll, rect_of(view))),
-        ) {
-            let (by, shown) = crate::contract::steps::reveal_move(rect, view_rect);
-            self.offset.y += f64::from(by.y);
-            self.offset.x += f64::from(if rtl { -by.x } else { by.x });
-            self.moved = true;
-            self.pass_on = (!quiet).then_some(shown);
         }
         for (mv, _) in crate::contract::steps::scroll_moves(&ctx, id, quiet) {
             let (visible, extent, offset, vertical) = if scroll.vertical_on() {
@@ -284,6 +277,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let env = Env::of(ui);
         self.given = self.given_axes(props, &env, at);
         self.passes = self.passes_width(props, &env, at);
+        self.across = self.held(props, &env) && matches!(env.column, Some(ColumnSweep::Column(_)));
         self.in_column = label::in_column(ui);
         self.given.1 |= self.over_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
@@ -339,6 +333,11 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         };
         self.given = self.given_axes(&props, at.env, at.at);
         self.passes = self.passes_width(&props, at.env, at.at);
+        self.across = self.held(&props, at.env) && matches!(at.env.column, Some(ColumnSweep::Column(_)));
+        // A held container across its column measures at the column's width.
+        if let Some(ColumnSweep::Column(width)) = at.env.column.filter(|_| self.across && at.width.is_none()) {
+            self.room.x = width;
+        }
         self.in_column = label::in_column(at.ui);
         // A body that fills the main axis of the body it sits in is measured and shown at its share of it. The first
         // sweep of that body's measuring run only counts it: its contents run in the second sweep, at the share.
@@ -377,7 +376,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         // A record a run of this pass left serves as before; a kept one serves only while the inputs it was measured
         // under hold.
         let key = self.measure_key(at.env, at.width);
-        let reused = (self.reuse || at.ui.is_sizing_pass())
+        // In its column's second sweep a held container measures across the column: its first-sweep record is
+        // content-sized.
+        let reused = ((self.reuse || at.ui.is_sizing_pass()) && !(self.across && at.ui.is_sizing_pass()))
             .then(|| {
                 let found = layout_memory::run_found(&ctx, id);
                 let serves = found || layout_memory::kept_serves(&ctx, id, &key);
@@ -480,52 +481,25 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let props = comp.props(Internal::new());
         match self.sizing(props) {
             Sizing::Fill => {
-                let room = crate::layout::flow_room(ui);
+                use craft_behavior::Axis;
                 // The available rect, not at least it: a fill child that took the whole room in an earlier pass (a
                 // content-sized layer offers its whole room before the footer is known) must not keep its remembered
-                // size once the room is less. Along an axis it is not given it takes its measured size. Along the main
-                // axis of the body it sits in it takes its share of what its siblings leave.
-                // In a `Stack` body that scrolls along y its share there is the least it takes: its content may be
-                // taller, and the view scrolls.
-                let axis = |room: f32, given: bool, along: craft_behavior::Axis, measured: f32| {
-                    let scrolled = along == craft_behavior::Axis::Y
-                        && !room.is_finite()
-                        && crate::layout::shares_y(ui)
-                        && crate::layout::view_room(ui, along).is_some();
-                    if !((room.is_finite() || scrolled) && given) {
-                        return measured;
-                    }
-                    match crate::layout::main_fill(ui, id, along) {
-                        // P3(framework-01-w8): fx.F40
-                        crate::layout::MainFill::Measuring => 0.0,
-                        crate::layout::MainFill::Share(share, _) if scrolled => measured.max(share),
-                        crate::layout::MainFill::Share(share, _) => share,
-                        crate::layout::MainFill::Room(_) if scrolled => measured,
-                        crate::layout::MainFill::Room(_) => room,
-                    }
-                };
-                Vec2::new(axis(room.x, self.given.0, craft_behavior::Axis::X, size.x), axis(room.y, self.given.1, craft_behavior::Axis::Y, size.y))
+                // size once the room is less.
+                let room = crate::layout::flow_room(ui);
+                let (x, y) = (
+                    crate::layout::fill_size(ui, id, Axis::X, size.x, room.x, self.given.0),
+                    crate::layout::fill_size(ui, id, Axis::Y, size.y, room.y, self.given.1),
+                );
+                Vec2::new(x, y)
             }
             Sizing::FillWidth => {
                 let room = crate::layout::flow_fill_room(ui).x;
                 // A fill-width child held in a content column is not given the width (it never sets the column's
-                // width) but shows across the column.
-                // It widens to the column it is held in, never past it, and only where it is shown: its measure never
-                // sets the column's width.
+                // width) but shows across the column. It widens to the column it is held in, never past it, and only
+                // where it is shown: its measure never sets the column's width.
                 let held = !self.given.0 && self.held(props, &Env::of(ui));
                 let room = if held { room.min(crate::layout::flow_room(ui).x) } else { room };
-                let across = self.given.0 || held;
-                let width = if room.is_finite() && across {
-                    match crate::layout::main_fill(ui, id, craft_behavior::Axis::X) {
-                        // P3(framework-01-w8): fx.F40
-                        crate::layout::MainFill::Measuring => 0.0,
-                        crate::layout::MainFill::Share(share, _) => share,
-                        crate::layout::MainFill::Room(_) => size.x.max(room),
-                    }
-                } else {
-                    size.x
-                };
-                Vec2::new(width, size.y)
+                Vec2::new(crate::layout::fill_size(ui, id, craft_behavior::Axis::X, size.x, room, self.given.0 || held), size.y)
             }
             Sizing::Content => size,
         }
@@ -649,7 +623,20 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if scroll.is_some() {
             self.scroll_input(props, cx);
         }
-        if let Some(shown) = self.pass_on.take() {
+        // A reveal queued for the body moves its offset against the view this pass shows, on top of a move
+        // `scroll_input` queued; the next pass takes the offset at step 4, as it takes the scroll bar's, clamps it to the
+        // extent it knows and places by it. The part of the rect the view shows goes on to the scroll owner around.
+        if let Some((scroll, view)) = scroll.zip(self.view)
+            && let Some(rect) = crate::contract::take_reveal(&cx.core.ctx, cx.core.id)
+        {
+            let view = self.shown_view(scroll, view);
+            let (by, shown) = crate::contract::steps::reveal_move(rect, view);
+            let rtl = cx.core.env.direction().is_rtl();
+            let id = cx.core.id;
+            let mut offset = super::scroll::queued_jump(&cx.core.ctx, id).unwrap_or(self.offset);
+            offset.y += f64::from(by.y);
+            offset.x += f64::from(if rtl { -by.x } else { by.x });
+            super::scroll::queue_jump(&cx.core.ctx, id, offset);
             crate::contract::Focus::reveal(cx, shown);
         }
         // AccessKit Expand, Collapse and Click reach a collapsible container as an activation: it folds or unfolds.
@@ -781,7 +768,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             let mut end_cx = BodyCx::new(body_id, line_env.view(), resolved, regions.end, &mut *cx.core.memory, &mut open, gate.as_mut())
                 .with_field_message(field_message.clone())
                 .with_owner(owner);
-            close = close.or(self.end_region(comp, ui, &mut end_cx, &end_frame, &props, regions.end));
+            close = close.or(self.end_region(comp, ui, &mut end_cx, &end_frame, &props, regions.end, None));
         }
         let beside =
             if real { self.measured_sizes() } else { RegionSizes { header: self.header_size, footer: self.measured_footer, end: self.end_size } };
@@ -1040,12 +1027,20 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 let mut end_cx = BodyCx::new(body_id, line_env.view(), resolved, regions.end, &mut *cx.core.memory, &mut open, gate.as_mut())
                     .with_field_message(field_message.clone())
                     .with_owner(owner);
-                // The end region is centred on the line it shares with the body, above a scroll bar under the body.
+                // The end region shares the body's line, above a scroll bar under the body: its children sit on the
+                // members' line, from the body's top (a label may stand above the body).
                 let mut end = regions.end;
+                let mut line = None;
                 if !end_full_height(&props) {
                     end.max.y = (end.max.y - bars_inset.y).max(end.min.y);
+                    let down = body_rect.min.y - end.min.y;
+                    line = layout::members_line(&ctx, layout_id).map(|line| RowLine {
+                        centre: line.centre.map(|centre| centre + down),
+                        height: line.height.map(|height| height + down),
+                        ..line
+                    });
                 }
-                close = close.or(self.end_region(comp, ui, &mut end_cx, &end_frame, &props, end));
+                close = close.or(self.end_region(comp, ui, &mut end_cx, &end_frame, &props, end, line));
             }
         } else {
             // A collapsed body keeps its last full size in layout memory, so opening it again places by that size

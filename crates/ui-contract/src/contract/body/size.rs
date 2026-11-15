@@ -21,6 +21,9 @@ pub(super) struct MeasureKey {
     props: MeasuredProps,
     room: Vec2,
     given: (bool, bool),
+    /// Whether the body is laid out across its room (`wide`): a transcript measured content-sized never serves a
+    /// measure across the same room.
+    wide: bool,
     width: Option<f32>,
     /// Whether the body shows, and how much of it an animated collapse shows.
     shows: (bool, f32),
@@ -86,6 +89,7 @@ impl<'b> BodyHooks<'b> {
             props: MeasuredProps(Arc::clone(&self.props)),
             room: self.room,
             given: self.given,
+            wide: self.wide(),
             width,
             shows: (self.open, self.presence.t),
             extent: self.last_extent,
@@ -130,10 +134,10 @@ impl<'b> BodyHooks<'b> {
         matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline)) && self.sizing(props) == Sizing::Content && env.given_column
     }
 
-    /// Whether the container's body is laid out across the width it is offered: the container is given the width, or
-    /// passes it on.
+    /// Whether the container's body is laid out across the width it is offered: the container is given the width,
+    /// passes it on, or is held across the width its column settled on.
     pub(super) fn wide(&self) -> bool {
-        self.given.0 || self.passes
+        self.given.0 || self.passes || self.across
     }
 
     /// Whether the container fills a height its parent sizes from its content, in a room of finite height: it takes

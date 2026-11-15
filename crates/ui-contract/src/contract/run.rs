@@ -11,7 +11,7 @@ use crate::primitives::sensing::{self, MemberSpec, RootSpec};
 use crate::primitives::{PaintRecord, PartResult};
 use crate::runtime::access::{self, Politeness, Role, SetPosition, scope};
 use crate::runtime::commands::ResolvedCommand;
-use crate::runtime::env::{AppValues, Env, EnvView};
+use crate::runtime::env::{AppValues, ColumnSweep, Env, EnvView};
 use crate::runtime::layout_memory::{Call, Inputs};
 use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::overlay::CloseReason;
@@ -300,42 +300,25 @@ impl<C: Component> ShapeHooks<C> for LeafHooks {
     }
 
     fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
+        use craft_behavior::Axis;
         let room = crate::layout::leaf_fill_room(ui);
-        // Along an axis the enclosing body sizes from its content, a child that fills keeps its measured size, so it
-        // never sets that size. Across an unwrapped row's line it is shown across the line the row settled on in its
-        // measuring run, where the child measured at its own size.
-        let env = Env::of(ui);
-        let (content, line) = (env.content, env.row_line.and_then(|line| line.height));
-        let scrolls = |along: craft_behavior::Axis| if along == craft_behavior::Axis::X { env.unbounded.0 } else { env.unbounded.1 };
-        let fill = |measured: f32, offered: f32, content: bool, along: craft_behavior::Axis| {
-            if content {
-                return match (along, line) {
-                    (craft_behavior::Axis::Y, Some(line)) => measured.max(line),
-                    _ => measured,
-                };
-            }
-            if !offered.is_finite() {
-                return measured;
-            }
-            match crate::layout::main_fill(ui, id, along) {
-                // P3(framework-01-w8): fx.F40
-                crate::layout::MainFill::Measuring => 0.0,
-                // In a body that scrolls along the axis its share never cuts its content: what is past the view scrolls.
-                crate::layout::MainFill::Share(share, _) if scrolls(along) => measured.max(share),
-                crate::layout::MainFill::Share(share, _) => share,
-                crate::layout::MainFill::Room(_) => measured.max(offered),
-            }
+        // A leaf is given an axis its enclosing body does not size from its content: there it fills, elsewhere it keeps
+        // its measured size, so it never sets that size.
+        let content = Env::of(ui).content;
+        let fill = |measured: f32, offered: f32, along: Axis| {
+            let given = if along == Axis::X { !content.0 } else { !content.1 };
+            crate::layout::fill_size(ui, id, along, measured, offered, given)
         };
         // The control beside an inspector's label fills the cell the label leaves, unless its caller sized it to its
         // content.
         let sizing = comp.common(super::Internal::new()).sizing;
         if sizing == Some(super::Sizing::Fill) {
-            return Vec2::new(fill(size.x, room.x, content.0, craft_behavior::Axis::X), fill(size.y, room.y, content.1, craft_behavior::Axis::Y));
+            return Vec2::new(fill(size.x, room.x, Axis::X), fill(size.y, room.y, Axis::Y));
         }
-        let in_cell = env.cell_fills && sizing != Some(super::Sizing::Content);
-        match comp.fills().or(in_cell.then_some(craft_behavior::Axis::X)) {
-            Some(craft_behavior::Axis::X) => Vec2::new(fill(size.x, room.x, content.0, craft_behavior::Axis::X), size.y),
-            Some(craft_behavior::Axis::Y) => Vec2::new(size.x, fill(size.y, room.y, content.1, craft_behavior::Axis::Y)),
+        let in_cell = Env::of(ui).cell_fills && sizing != Some(super::Sizing::Content);
+        match comp.fills().or(in_cell.then_some(Axis::X)) {
+            Some(Axis::X) => Vec2::new(fill(size.x, room.x, Axis::X), size.y),
+            Some(Axis::Y) => Vec2::new(size.x, fill(size.y, room.y, Axis::Y)),
             _ => size,
         }
     }
@@ -407,8 +390,8 @@ fn blank_core<'a>(
         texts: None,
         selections: Vec::new(),
         faded: false,
-        unfaded: None,
         fade: None,
+        focus_shapes: Vec::new(),
         surface_slot: None,
         editor: None,
         editor_inputs: Vec::new(),
@@ -613,7 +596,6 @@ pub(super) fn paint_ui<'a>(ui: &'a mut Ui, env: &'a Env, core: &'a CxCore<'_>, s
         enabled: core.resolved.enabled,
         size: core.resolved.size,
         selections: &core.selections,
-        unfaded: core.unfaded,
         fade: core.fade,
         kids: None,
     }
@@ -685,10 +667,11 @@ fn own_sense(e: &dyn ErasedPass<'_>, resolved: &Resolved, inert: bool) -> Sense 
 }
 
 /// The widget that holds the component's text or editor and the keys it keeps, when it has either.
-fn text_holder(ctx: &Context, id: Id, parts: &PartsStep, base: focus::KeyUse) -> (Option<Id>, Option<focus::KeyUse>) {
+fn text_holder(ctx: &Context, id: Id, parts: &PartsStep, base: focus::KeyUse, memory: &mut MemoryStage) -> (Option<Id>, Option<focus::KeyUse>) {
     let text = parts.text.decl.as_ref().map(|decl| {
         let widget = crate::primitives::text_adapter::text_id(id, decl.key);
-        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, base, &decl.options))
+        let held = crate::contract::text::held_selection(memory, id);
+        (widget, crate::primitives::text_adapter::keys_of(ctx, widget, held, base, &decl.options))
     });
     let editor =
         parts.text.editor.as_ref().map(|decl| (crate::primitives::ImeSurface::of(id, decl.key).widget(), super::editor::keys_of(base, decl.purpose)));
@@ -821,6 +804,10 @@ fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Ve
             .filter(|width| width.is_finite())
             .unwrap_or(0.0);
         let flowed = steps::place(ui, at, Vec2::new(p.measured.x.min(size.x), size.y), InFlow { fill: false, first: first(size.y) });
+        // The column's first sweep learns which of its held children measured narrower than it settles on.
+        if let Some(ColumnSweep::Count(column)) = env.column {
+            crate::layout::report_held(&ctx, column, flowed.width());
+        }
         let across = Vec2::new(size.x.max(flowed.width()).max(column), flowed.height());
         if rtl { Rect::from_min_size(Pos2::new(flowed.max.x - across.x, flowed.min.y), across) } else { Rect::from_min_size(flowed.min, across) }
     } else {
@@ -898,7 +885,8 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     }
     debug_assert!(declares_parts || steps::declares_none(&parts), "`{}` sets `PARTS = false` and declares a part", facts.name);
     steps::check_parts(&ctx, facts.name, &parts);
-    let (holder_widget, text_keys) = text_holder(&ctx, id, &parts, e.keys());
+    let keys = e.keys();
+    let (holder_widget, text_keys) = text_holder(&ctx, id, &parts, keys, &mut *e.core().memory);
     let own = own_sense(e, resolved, inert);
     // An item never senses the whole row for a press: the collection's root takes the click and the focus (17.2). It
     // does sense the pointer over it, so `PartsCx::hovered` and the state step read the row's hover from the same
@@ -979,6 +967,8 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     core.scroll_moves = super::cx::scroll_moves(&parts.scrolls, &results);
     core.value_parts = declared_with(&parts, |extras| extras.value);
     core.state_layer_parts = declared_with(&parts, |extras| extras.state_layer);
+    core.focus_shapes =
+        parts.decls.iter().filter_map(|(decl, extras)| extras.focus_shape.clone().map(|shape| ((decl.key, decl.index), shape))).collect();
     core.toggles = parts
         .decls
         .iter()
@@ -1053,7 +1043,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     // The body's group registers after `update`, which may change its rules from what the component knows now.
     if let Some(roving) = e.roving() {
         let core = e.core_ref();
-        let group = focus::Group::new(steps::body_group(id), roving).rtl(rtl);
+        let group = focus::Group::new(steps::body_group(id), roving).owner(id).rtl(rtl);
         let group = match core.roving_lead {
             Some(lead) => group.lead((lead, None)),
             None => group,
@@ -1099,9 +1089,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     }
     // 13 paint
     p.trace.mark(Step::Paint);
-    let mut values = AppValues::default();
-    e.content_env(&mut values);
-    let unfaded = steps::fade_opacity(ui, e.core());
+    let fade = steps::fade(ui, env, e.core());
     let rule_from = line.filter(|_| facts.rule && !cut).map(|line| (line, steps::next_shape(ui)));
     steps::paint_surface(ui, env, e.core_ref(), style);
     steps::paint_part_layers(ui, env, e.core_ref());
@@ -1110,7 +1098,10 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     let inside = e.core_ref().rect.expand(e.paint_outset(&env.tokens)).intersect(outer_clip);
     ui.set_clip_rect(inside);
     e.paint(ui, env);
-    ui.set_opacity(unfaded);
+    // The content's values may read what `paint` found this pass.
+    let mut values = AppValues::default();
+    e.content_env(&mut values);
+    steps::unfade(ui, e.core(), fade);
     ui.set_clip_rect(outer_clip);
     steps::paint_focus(ui, e.core_ref(), style);
     // A rule a bar's view shows waits for the member after it.
@@ -1144,9 +1135,9 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
     ui.set_clip_rect(outer_clip);
     sensing::place_over_widgets(ui, id, member, decls);
     ui.set_clip_rect(inside);
-    steps::fade_opacity(ui, e.core());
+    let fade = steps::fade(ui, env, e.core());
     e.paint_over(ui, env);
-    ui.set_opacity(unfaded);
+    steps::unfade(ui, e.core(), fade);
     ui.set_clip_rect(outer_clip);
     // 15 settle
     p.trace.mark(Step::Settle);
@@ -1320,10 +1311,13 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
     // 5 measure
     let room = match at {
         ShowAt::Rect(rect) => Some(rect.width()),
-        // A measuring run in a content column asks for what the content needs: nothing there fills the room.
-        ShowAt::Flow => {
-            Some(crate::layout::flow_room(ui).x).filter(|width| width.is_finite() && !(env.content_column && crate::runtime::measure::active(&ctx)))
-        }
+        // A measuring run in a content column asks for what the content needs: nothing there fills the room. Once the
+        // column settled its width, a child that fills its width measures at that width.
+        ShowAt::Flow => match env.column {
+            Some(ColumnSweep::Column(width)) if env.content_column && t.fills_width() => Some(width),
+            _ => Some(crate::layout::flow_room(ui).x)
+                .filter(|width| width.is_finite() && !(env.content_column && crate::runtime::measure::active(&ctx))),
+        },
     };
     // A leaf or body in flow that does not fill takes part in the shrink step of the body around it: in a row that
     // shrinks its children to fit, a leaf shows at most the width the row gave it, and a body takes that width as its
@@ -1362,11 +1356,19 @@ pub(super) fn run(t: &mut dyn Erased, ui: &mut Ui, at: ShowAt, mut tip: Option<T
     let ideal = Call { proposal: Proposal::Ideal, room, inputs, took: size };
     // A control in a label scope reports its narrowest width, in a measuring run too: the real run's label step reads
     // it to decide whether the row fits the label beside it.
-    let min = (shape == ShapeKind::Leaf && scope::in_label(&ctx)).then(|| {
+    let in_label = shape == ShapeKind::Leaf && scope::in_label(&ctx);
+    // A leaf that fills the main axis of its body tells the body its least in the body's first sweep: its share never
+    // cuts it below that (`layout::fill_size`). The call joins the body's transcript, which holds it while the inputs
+    // hold.
+    let fills = |axis: craft_behavior::Axis| t.fills() == Some(axis) || common.sizing == Some(super::Sizing::Fill);
+    let tells_least = shape == ShapeKind::Leaf
+        && matches!(at, ShowAt::Flow)
+        && [craft_behavior::Axis::X, craft_behavior::Axis::Y].into_iter().any(|axis| fills(axis) && crate::layout::counting_fills(ui, axis));
+    let min = (in_label || tells_least).then(|| {
         let (took, inputs) = ask(&mut *t, Proposal::Min, None, Vec2::ZERO);
         Call { proposal: Proposal::Min, room: None, inputs, took }
     });
-    let min_took = min.as_ref().map(|min| min.took);
+    let min_took = min.as_ref().filter(|_| in_label).map(|min| min.took);
     // A leaf's measure calls are what its body's layout takes from it: a measuring run keeps them in the body's
     // transcript, and a real run its kept transcript serves checks them against this run's. A leaf shown at a rect
     // takes no room in the flow: its body's layout takes the rect, and any measure its caller sized the rect by

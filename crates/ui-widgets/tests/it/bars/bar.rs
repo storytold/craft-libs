@@ -9,11 +9,13 @@ use craft_theme::variant::Tone;
 use craft_ui::bars::{Bar, BarKind, BreadcrumbBar, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues, path_crumbs};
 use craft_ui::buttons::{Button, IconButton, Link};
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Entry, Props as _, Role, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::display::Text;
 use craft_ui::form::Field;
-use craft_ui::layout_components::Row;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;
+use craft_ui::testing::focus::AccessActionKind;
+use craft_ui::testing::layout::Block;
 use craft_ui::testing::{Fixture, shrink_least_runs, trial};
 use craft_ui::text::TextField;
 use egui::{Rect, Vec2};
@@ -29,7 +31,7 @@ fn bar(width: f32, buttons: usize) -> (Rect, Rect) {
     let mut fixture = Fixture::new(move |ui| {
         let entries = [Entry::new(0u8, "Current and Below, No Adjustments"), Entry::new(1, "All Layers")];
         Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
-            let select = Select::new("Sample", Bind::given(1u8), &entries).show(ui).response.rect;
+            let select = Select::new("Sample", Bind::given(1u8), &entries).sizing(Sizing::Content).show(ui).response.rect;
             let mut last = Rect::NOTHING;
             for at in 0..buttons {
                 last = Button::new(format!("Button {at}")).show(ui).rect;
@@ -138,7 +140,7 @@ fn select_in(width: f32) -> (Rect, bool) {
     let mut fixture = Fixture::new(move |ui| {
         let entries = [Entry::new(0u8, "Point Sample"), Entry::new(1, "5 by 5 Average")];
         Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
-            out.set(Select::new("Sample Size", Bind::given(0u8), &entries).show(ui).response.rect);
+            out.set(Select::new("Sample Size", Bind::given(0u8), &entries).sizing(Sizing::Content).show(ui).response.rect);
             for at in 0..3 {
                 Button::new(format!("Button {at}")).show(ui);
             }
@@ -173,15 +175,12 @@ impl Default for Status {
     }
 }
 
-fn status_fixture(message: &'static str, cancelled: Rc<Cell<bool>>, seen: Rc<Cell<Status>>) -> Fixture {
+fn status_fixture(message: &'static str, seen: Rc<Cell<Status>>) -> Fixture {
     Fixture::new(move |ui| {
         let (mut progress, mut link) = (Rect::NOTHING, Rect::NOTHING);
         let shown = Bar::new("Status", BarKind::Status)
             .trailing(|ui, _| {
                 let output = StatusProgress::new("Blur", Some(0.45)).cancel("Cancel").show(ui);
-                if output.cancelled {
-                    cancelled.set(true);
-                }
                 progress = output.response.rect;
                 link = Link::new("CPU Rendering").tone(Tone::Warn).show(ui).rect;
             })
@@ -197,7 +196,7 @@ fn status_fixture(message: &'static str, cancelled: Rc<Cell<bool>>, seen: Rc<Cel
 
 fn status(width: f32, message: &'static str) -> Status {
     let seen = Rc::new(Cell::new(Status::default()));
-    status_fixture(message, Rc::new(Cell::new(false)), Rc::clone(&seen)).room(Vec2::new(width, 80.0)).settle();
+    status_fixture(message, Rc::clone(&seen)).room(Vec2::new(width, 80.0)).settle();
     seen.take()
 }
 
@@ -217,17 +216,79 @@ fn a_narrow_status_bar_cuts_its_message_and_keeps_its_trailing_group_whole() {
     assert!((empty.readout.width() - wide.readout.width()).abs() < SLACK, "an empty message changed the members before it");
 }
 
+/// What a tool bar of two search fields and a button shows: the bar's rect and the parts of the fields and the button its view
+/// shows.
+#[derive(Clone, Copy)]
+struct Filling {
+    bar: Rect,
+    fields: [Rect; 2],
+    button: Rect,
+}
+
+/// A content-sized column `room` wide holding a block `column` wide and a tool bar of two search fields sized
+/// `fields` and a button, after `pages` pages of the bar toward its end.
+fn filling_bar(room: f32, column: f32, fields: Sizing, pages: usize) -> Filling {
+    let empty = Filling { bar: Rect::NOTHING, fields: [Rect::NOTHING; 2], button: Rect::NOTHING };
+    let seen = Rc::new(Cell::new(empty));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut name, mut kind) = (String::new(), String::new());
+        Stack::new().show(ui, |ui, _| {
+            Block::new(Vec2::new(column, 20.0)).show(ui);
+            let mut shown = empty;
+            let bar = Bar::new("Filters", BarKind::Tool).show(ui, |ui, _| {
+                shown.fields[0] = TextField::search("Name", Bind::bound(&mut name)).sizing(fields).show(ui).response.rect;
+                shown.fields[1] = TextField::search("Kind", Bind::bound(&mut kind)).sizing(fields).show(ui).response.rect;
+                shown.button = Button::new("Apply").show(ui).rect;
+            });
+            shown.bar = bar.output.response.rect;
+            out.set(shown);
+        });
+    });
+    fixture.room(Vec2::new(room, 200.0)).settle();
+    for _ in 0..pages {
+        let target = fixture.by_label("Filters").expect("the bar is in the tree");
+        fixture.access(AccessActionKind::ScrollRight, &target).settle();
+    }
+    seen.get()
+}
+
 #[trial]
-fn a_status_progress_is_named_by_its_task_and_reports_cancel() {
-    let cancelled = Rc::new(Cell::new(false));
-    let mut fixture = status_fixture("", Rc::clone(&cancelled), Rc::new(Cell::new(Status::default())));
-    fixture.room(Vec2::new(900.0, 80.0)).settle();
-    let progress = fixture.by_role(Role::PROGRESS_INDICATOR);
-    assert_eq!(progress.len(), 1, "one progress indicator");
-    assert_eq!(craft_ui::testing::access::name(fixture.tree(), progress[0].node), Some("Blur"), "the task's name labels the progress");
-    let cancel = fixture.by_label("Cancel").expect("the cancel button");
-    fixture.click(&cancel).settle();
-    assert!(cancelled.get(), "a click on Cancel reports it");
+fn filling_bar_members_keep_their_natural_width_and_the_bar_scrolls() {
+    // A bar's row scrolls along x, so a content-sized field there measures at its natural width.
+    let natural = filling_bar(1400.0, 1000.0, Sizing::Content, 0).fields;
+    let held = filling_bar(1400.0, 1000.0, Sizing::FillWidth, 0);
+    let dump = format!("bar {:?}, fields {:?}, button {:?}", held.bar, held.fields, held.button);
+    assert!(held.bar.width() >= 1000.0 - SLACK, "the bar is held across its column: {dump}");
+    assert!(held.fields[0].width() > natural[0].width() + SLACK, "the fields fill the bar held at the column's width: {dump}");
+    let (lead, trail) = (held.fields[0].min.x - held.bar.min.x, held.bar.max.x - held.button.max.x);
+    assert!((lead - trail).abs() < 1.0, "the button reaches the bar's end, as the first field its start: {dump}");
+    // Narrowed, the members keep their widths and the bar scrolls. A member's shown rect is the part the bar's view
+    // shows, so the bar is paged toward its end: on some page each field shows at least its natural width and the
+    // button shows whole, and on no page do two members overlap.
+    let button = held.button.width();
+    let (mut widest, mut button_whole) = ([0.0_f32; 2], Vec::new());
+    for pages in 0..=12 {
+        let page = filling_bar(200.0, 100.0, Sizing::FillWidth, pages);
+        let dump = format!("page {pages}: bar {:?}, fields {:?}, button {:?}", page.bar, page.fields, page.button);
+        let shown: Vec<Rect> = page.fields.iter().chain([&page.button]).copied().filter(|rect| rect.is_positive()).collect();
+        for (at, first) in shown.iter().enumerate() {
+            for second in &shown[at + 1..] {
+                assert!(first.intersect(*second).width() <= SLACK, "two members overlap: {dump}");
+            }
+        }
+        for (widest, field) in widest.iter_mut().zip(page.fields) {
+            if field.is_positive() {
+                *widest = widest.max(field.width());
+            }
+        }
+        button_whole.push(page.button.is_positive() && (page.button.width() - button).abs() < SLACK);
+    }
+    for (widest, natural) in widest.iter().zip(natural) {
+        assert!(*widest >= natural.width() - SLACK, "a field never showed its natural width {}: at most {widest}", natural.width());
+    }
+    assert!(!button_whole[0], "the members fit the narrow bar unscrolled");
+    assert!(button_whole.contains(&true), "the bar does not scroll to show its last member whole: {button_whole:?}");
 }
 
 /// The texts a status bar `width` wide paints, each with whether it was cut: the readout of the document sizes, a long

@@ -816,6 +816,33 @@ pub(crate) fn leaf_fill(ctx: &Context, id: Id, body: Id, axis: Axis) {
     }
 }
 
+/// The least component `id` takes along `axis` in the body whose main axis it fills: the `Proposal::Min` answer its
+/// body's first sweep asked of it (`layout::counting_fills`), as the transcript of that body holds it. A measuring run
+/// reads the transcript open now; a real run the one its content scope is checked against, or the one this pass's
+/// measuring run left. 0 when the body asked it none. The answer is the transcript's, so it is asked again only when
+/// the body measures again.
+pub(crate) fn fill_least(ctx: &Context, id: Id, axis: Axis) -> f32 {
+    fn least_of(leaf: &Leaf, axis: Axis) -> Option<f32> {
+        let call = leaf.calls.iter().find(|call| call.proposal == Proposal::Min)?;
+        Some(if axis == Axis::X { call.took.x } else { call.took.y })
+    }
+    let moment = Moment::of(ctx);
+    let measuring = !real(ctx);
+    with(ctx, &moment, |memory| {
+        let least = if measuring {
+            match memory.transcript() {
+                Some(Open::Body { leaves, .. }) => leaves.get(&id).and_then(|leaf| least_of(leaf, axis)),
+                _ => None,
+            }
+        } else {
+            let scope = memory.scopes.last();
+            let transcript = scope.and_then(|scope| scope.served.as_ref().or(scope.fresh.as_ref()));
+            transcript.and_then(|transcript| transcript.leaves.get(&id)).and_then(|leaf| least_of(leaf, axis))
+        };
+        least.unwrap_or(0.0)
+    })
+}
+
 /// What a real run found under `id` for the innermost body that does not come from a component: a region's size, a
 /// lazy row's extent. The pass that measured the body keeps it; a pass its kept transcript serves compares.
 pub(crate) fn backstop(ctx: &Context, id: Id, took: Vec2) {
@@ -1151,6 +1178,7 @@ pub(crate) mod guard {
         ("layout::column_group::Open", "column groups: frames the run opens and closes; reports go through contribute"),
         ("access::scope::Stack", "label and merge scopes: opened and closed by the run; control minimums go through contribute"),
         ("layout::body::FillCounts", "fill counts: opened and closed by the body's own measuring sweep"),
+        ("layout::body::HeldWidths", "held widths: opened and closed by the column's own first sweep"),
         ("layout::body::FirstLines", "first lines: opened and closed by the container's own measuring sweep; the line goes through emit_record"),
         ("layout::body::RowLines", "row lines: opened by each sweep of the row and closed after it; the line goes through emit_record"),
         ("layout::body::Cursors", "grid and spread cursors: opened and closed by the body's own run"),

@@ -101,8 +101,6 @@ pub(super) struct BodyHooks<'b> {
     glide_at_read: Option<scroll::Glide>,
     scroll_bound: bool,
     moved: bool,
-    /// The part of a reveal this body showed, passed on to the scroll owner around it.
-    pass_on: Option<Rect>,
     last: BodyView,
     /// The content's extent from the last run that laid it out, kept with the offset it bounds (`ScrollState`).
     last_extent: (f32, f32),
@@ -148,6 +146,10 @@ pub(super) struct BodyHooks<'b> {
     /// A content-sized container that passes the width its column gives it on to its own body (`passes`): it is not
     /// given the width, but its body is laid out as if it were.
     passes: bool,
+    /// A held fill-width container (`held`) whose content column measured its held children across its width
+    /// (`ColumnSweep::Column`): in the column's second sweep and in the real run after one. Its body is laid out
+    /// across that width as if it were given it.
+    across: bool,
     /// The container is a row of a vertical flow, not a member of a row's line (`label::in_column`), as its parent
     /// flow showed it this run: its own measuring run shows its content in a flow of its own.
     in_column: bool,
@@ -192,7 +194,6 @@ impl<'b> BodyHooks<'b> {
             glide_at_read: None,
             scroll_bound: false,
             moved: false,
-            pass_on: None,
             last: BodyView::default(),
             last_extent: (0.0, 0.0),
             strip: 0.0,
@@ -218,6 +219,7 @@ impl<'b> BodyHooks<'b> {
             fixed: false,
             given: (false, false),
             passes: false,
+            across: false,
             in_column: true,
             follows_end: false,
         }

@@ -7,7 +7,7 @@ use crate::layout::{ColumnGroup, Columns, Reached};
 use crate::primitives::{RectSide, Rule};
 use crate::runtime::access::{self};
 use crate::runtime::egui::{alloc, child, style};
-use crate::runtime::env::Env;
+use crate::runtime::env::{Env, RowLine};
 use crate::runtime::memory::sub;
 use crate::runtime::overlay::CloseReason;
 use crate::style::{RuleKind, UiTokens, rule_look};
@@ -309,8 +309,11 @@ impl<'b> BodyHooks<'b> {
     }
 
     /// The end region: its content runs in reading order, so its roving order is its order on the line; the region
-    /// is as wide as it measured, so the last child sits at the end edge. On the line it is centred; a full-height
-    /// region starts at its top. Records the region's size and returns the close it asked for.
+    /// is as wide as it measured, so the last child sits at the end edge. Beside a body with a members' line (`line`,
+    /// from the region's top) each child sits on that line by the rule members follow (`layout::place_in_cell`);
+    /// without one it is centred, and a full-height region starts at its top. Records the region's size and returns
+    /// the close it asked for.
+    #[allow(clippy::too_many_arguments, reason = "the region's own rect and line beside what every region gets")]
     pub(super) fn end_region<C: Container>(
         &mut self,
         comp: &mut C,
@@ -319,12 +322,17 @@ impl<'b> BodyHooks<'b> {
         frame: &RegionFrame<'_>,
         props: &ContainerProps,
         end: Rect,
+        line: Option<RowLine>,
     ) -> Option<CloseReason> {
-        let cross = if end_full_height(props) { Align::Min } else { Align::Center };
+        let cross = if end_full_height(props) || line.is_some() { Align::Min } else { Align::Center };
         let layout = if frame.rtl { Layout::right_to_left(cross) } else { Layout::left_to_right(cross) };
         let builder = UiBuilder::new().max_rect(end).layout(layout).scope_id(sub(frame.id, "end"));
         let mut end_ui = frame.open(ui, builder, frame.gap);
-        let installed = Env::install_for(&end_ui, frame.env.clone());
+        let env = match line {
+            Some(line) => frame.env.derive_local(|scoped| scoped.row_line = Some(line)),
+            None => frame.env.clone(),
+        };
+        let installed = Env::install_for(&end_ui, env);
         comp.end(&mut end_ui, bcx);
         Env::restore(ui.ctx(), installed);
         self.end_size = Some(self.region_size(&end_ui));

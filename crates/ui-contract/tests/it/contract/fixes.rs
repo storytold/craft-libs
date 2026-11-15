@@ -133,7 +133,7 @@ fn hooks_run_in_pipeline_order_with_the_body_between_paint_and_paint_over() {
     });
     assert_eq!(
         *log.borrow(),
-        ["measure", "parts", "update", "overlay", "flags", "content_env", "paint", "body", "paint_over", "activated", "finish"],
+        ["measure", "parts", "update", "overlay", "flags", "paint", "content_env", "body", "paint_over", "activated", "finish"],
         "the real run"
     );
     let mut order = ["content_env", "body", "measure"].into_iter();

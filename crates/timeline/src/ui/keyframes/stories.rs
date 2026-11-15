@@ -70,6 +70,7 @@ fn linear_hold_and_bezier_keys(ui: &mut Ui, data: &mut StoryData) -> StoryOutput
     let mut view = *data.value("view", start);
     let mut animated = *data.value("animated", true);
     let shown = Stack::new()
+        .fill_width()
         .show(ui, |ui, _| {
             Row::new().show(ui, |ui, _| {
                 AnimationToggle::new(Bind::bound(&mut animated)).show(ui);
