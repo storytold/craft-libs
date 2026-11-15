@@ -202,9 +202,12 @@ PDF files. The reader decrypts on its own and does not use it. It covers revisio
   block is ignored and bad padding is left in.
 - `permissions()` gives the `/P` flags; for R5/R6 a permission counts only when `/Perms` grants
   it too. Owners have every permission.
-- `create(&NewEncryption, id0)` builds the `/Encrypt` values for RC4-40, RC4-128, AES-128 or
-  AES-256. The caller supplies 32 bytes of entropy (`seed`), so the module needs no OS access
-  and builds for the web. `file_id` derives a file identifier from the same seed.
+- `create(&NewEncryption, id0)` builds the `/Encrypt` values for AES-128 or AES-256. It refuses
+  the legacy RC4-40 and RC4-128 schemes, because RC4 is broken (RFC 7465); `create_legacy`
+  writes those, for a file that must stay readable by an old reader. `Document::set_encryption`
+  refuses them too, with `set_encryption_legacy` as the explicit way in. The caller supplies 32
+  bytes of entropy (`seed`), so the module needs no OS access and builds for the web. `file_id`
+  derives a file identifier from the same seed.
 - `EncryptDict` holds the dictionary's values. The caller reads them from, and writes them to,
   its own object model; the module does not parse PDF syntax. Keys and prepared passwords are
   zeroized when dropped.

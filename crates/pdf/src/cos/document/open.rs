@@ -414,7 +414,20 @@ impl Document {
 
     /// Protect the document with a password (§7.6.4). Takes effect on the next save, which is
     /// always a full rewrite. Returns the handler (authenticated as owner).
+    ///
+    /// The legacy RC4 schemes are refused (RC4 is broken, `RFC 7465`): [`Self::set_encryption_legacy`]
+    /// writes them for a file an old reader must open.
     pub fn set_encryption(&mut self, params: &crate::crypt::NewEncryption) -> Result<(), CosError> {
+        self.set_encryption_with(params, false)
+    }
+
+    /// [`Self::set_encryption`] with the legacy RC4-40 and RC4-128 schemes allowed. Pass it only
+    /// for a file that must stay readable by a reader without AES.
+    pub fn set_encryption_legacy(&mut self, params: &crate::crypt::NewEncryption) -> Result<(), CosError> {
+        self.set_encryption_with(params, true)
+    }
+
+    fn set_encryption_with(&mut self, params: &crate::crypt::NewEncryption, legacy: bool) -> Result<(), CosError> {
         // The file identifier is part of the key; make sure it exists and keep it.
         let id = self.trailer.get(b"ID").map(|id| self.resolve(id));
         let id0 = match id.as_deref() {
@@ -426,7 +439,8 @@ impl Document {
                 id
             }
         };
-        let h = crate::crypt::create(params, &id0).map_err(|e| CosError::Security(e.to_string()))?;
+        let built = if legacy { crate::crypt::create_legacy(params, &id0) } else { crate::crypt::create(params, &id0) };
+        let h = built.map_err(|e| CosError::Security(e.to_string()))?;
         let d = h.dict();
         let s = |b: &[u8]| Object::String(crate::cos::PdfString { bytes: b.to_vec(), hex: true });
         let mut e = Dict::new();
