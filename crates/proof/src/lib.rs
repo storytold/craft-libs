@@ -73,6 +73,7 @@ pub mod dict;
 pub mod en_variants;
 mod english;
 pub mod es;
+pub mod he;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
@@ -219,7 +220,15 @@ struct Language {
 
 /// Every language proofed against a Hunspell dictionary, in the order File › Options › Proofing
 /// lists them. English has a built-in word list and is handled apart.
-static LANGUAGES: [Language; 12] = [
+static LANGUAGES: [Language; 13] = [
+    Language {
+        lang: ProofLang::He,
+        slot: &he::DICT,
+        message: "שגיאת איות אפשרית",
+        is_correct: |w, _, o| he::is_correct_with_options(w, o),
+        suggest: |w, n, _| he::suggest(w, n),
+        grammar: |t, _, c| he::grammar::check_with(t, c),
+    },
     Language {
         lang: ProofLang::Pl,
         slot: &pl::DICT,
@@ -1254,6 +1263,7 @@ mod tests {
     fn write_test_dictionaries(dir: &std::path::Path) {
         std::fs::create_dir_all(dir).unwrap();
         for (name, aff, dic) in [
+            ("he_IL", he::test_dict::AFF, he::test_dict::DIC),
             ("pl_PL", pl::test_dict::AFF, pl::test_dict::DIC),
             ("pt_BR", pt::test_dict::AFF, pt::test_dict::DIC),
             ("it_IT", it::test_dict::AFF, it::test_dict::DIC),
@@ -1502,10 +1512,11 @@ mod tests {
         // the languages' own tests install theirs concurrently, so an exact path would race them.
         // The folder is searched first whatever is in use.
         let found = installed_dictionaries();
-        let names = ["pl_PL", "pt_BR", "it_IT", "hr_HR", "tr_TR", "ru_RU", "cs_CZ", "id_ID", "es_ES", "es_MX", "es_419", "es_UY"];
+        let names = ["he_IL", "pl_PL", "pt_BR", "it_IT", "hr_HR", "tr_TR", "ru_RU", "cs_CZ", "id_ID", "es_ES", "es_MX", "es_419", "es_UY"];
         assert_eq!(
             found.iter().map(|(lang, _)| *lang).collect::<Vec<_>>(),
             [
+                ProofLang::He,
                 ProofLang::Pl,
                 ProofLang::Pt,
                 ProofLang::It,
