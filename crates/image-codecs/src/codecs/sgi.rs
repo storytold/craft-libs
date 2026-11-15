@@ -120,8 +120,9 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     // Reject inputs that cannot hold the declared pixels before allocating anything for them.
     let table = if h.rle { rows.checked_mul(8).ok_or_else(|| bad("image size overflow"))? } else { 0 };
     let min_len = if h.rle {
-        // Every row needs at least a packet and a terminator.
-        HEADER + table + rows * bps
+        // Both offset tables must fit; rows may share compressed data, so the data itself is
+        // checked row by row against the offsets below.
+        HEADER + table
     } else {
         HEADER + total.checked_mul(bps).ok_or_else(|| bad("image size overflow"))?
     };
@@ -138,7 +139,10 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
             if h.rle {
                 let start = be32(b, HEADER + index * 4) as usize;
                 let len = be32(b, HEADER + rows * 4 + index * 4) as usize;
-                let end = start.checked_add(len).filter(|&e| e <= b.len() && start >= HEADER).ok_or_else(|| bad("RLE row lies outside the file"))?;
+                let end = start
+                    .checked_add(len)
+                    .filter(|&e| e <= b.len() && start >= HEADER + table)
+                    .ok_or_else(|| bad("RLE row lies outside the file"))?;
                 read_rle_row(&b[start..end], h.wide, &mut row)?;
             } else {
                 let start = HEADER + index * w * bps;
@@ -333,6 +337,52 @@ mod tests {
         huge[6..8].copy_from_slice(&u16::MAX.to_be_bytes());
         huge[8..10].copy_from_slice(&u16::MAX.to_be_bytes());
         assert!(decode(&huge, &Limits::default()).is_err());
+    }
+
+    /// A 1-plane, 8-bit RLE file whose `rows` all start where `starts[i]` says, each `len` bytes long.
+    fn rle_file(w: u16, starts: &[u32], len: u32, payload: &[u8]) -> Vec<u8> {
+        let mut f = vec![0u8; HEADER];
+        f[0..2].copy_from_slice(&MAGIC.to_be_bytes());
+        f[2] = 1;
+        f[3] = 1;
+        f[4..6].copy_from_slice(&2u16.to_be_bytes());
+        f[6..8].copy_from_slice(&w.to_be_bytes());
+        f[8..10].copy_from_slice(&(starts.len() as u16).to_be_bytes());
+        f[10..12].copy_from_slice(&1u16.to_be_bytes());
+        for s in starts {
+            f.extend_from_slice(&s.to_be_bytes());
+        }
+        for _ in starts {
+            f.extend_from_slice(&len.to_be_bytes());
+        }
+        f.extend_from_slice(payload);
+        f
+    }
+
+    /// The format lets table entries share one compressed row: eight rows, one payload.
+    #[test]
+    fn rows_may_share_compressed_data() {
+        let table = HEADER + 8 * 8;
+        let f = rle_file(1, &[table as u32; 8], 3, &[0x81, 255, 0]);
+        assert_eq!(f.len(), table + 3);
+        let img = decode(&f, &Limits::default()).unwrap();
+        assert_eq!((img.dimensions(), img.data()), ((1, 8), &[255u8; 8][..]));
+    }
+
+    /// Compressed rows start after both tables: an offset into a table is refused.
+    #[test]
+    fn rows_may_not_start_inside_the_offset_tables() {
+        // 3x1: the tables end at 520; 515 reads the table's own bytes as a packet list.
+        let f = rle_file(3, &[515], 3, &[0, 0, 0, 0, 0]);
+        assert!(decode(&f, &Limits::default()).is_err());
+    }
+
+    /// FFmpeg's decoder, run as an oracle, also reads a row that ends with its last packet and no
+    /// zero terminator; so does this one.
+    #[test]
+    fn a_row_without_its_terminator_still_reads() {
+        let f = rle_file(1, &[520], 2, &[0x81, 42]);
+        assert_eq!(decode(&f, &Limits::default()).unwrap().data(), &[42]);
     }
 
     #[test]
