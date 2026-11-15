@@ -4,17 +4,17 @@
 //! digest of what was signed, their signature over it, and whether their certificate is trusted
 //! and for the message's sender.
 
+use crate::Timestamp;
+use crate::digital_signature::{Coverage, DigitalSignature, SignatureFormat, Signer, Verdict, Why};
 use cms::signed_data::{EncapsulatedContentInfo, SignerIdentifier, SignerInfo};
 use const_oid::ObjectIdentifier;
 use der::asn1::OctetString;
 use der::{Decode, Encode};
-use mailcraft_model::digital_signature::{Coverage, DigitalSignature, SignatureFormat, Signer, Verdict, Why};
-use mailcraft_time::Timestamp;
 
 use crate::algorithms::{self, Fault, Hash};
 use crate::cert::Cert;
 use crate::chain::{self, Anchors};
-use mailcraft_ber::{self as ber, Tlv};
+use craft_ber::{self as ber, Tlv};
 
 /// The most certificates read from one message.
 pub const MAX_CERTS: usize = 32;
@@ -402,7 +402,7 @@ fn one_signer(
     }
     // The signer's address that is the sender's comes first: it is the one said.
     if let (Some(address), Some(signer)) = (cert.address_for(context.from), r.signature.signer.as_mut()) {
-        let shown = mailcraft_model::digital_signature::signer_text(&address);
+        let shown = crate::digital_signature::signer_text(&address);
         signer.addresses.retain(|a| !a.eq_ignore_ascii_case(&shown));
         signer.addresses.insert(0, shown);
     }

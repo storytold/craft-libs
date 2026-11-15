@@ -5,8 +5,9 @@
 //! to import, and goes through File › Options › Security in the window). No I/O; the file is
 //! hostile: sizes and counts are capped, and nothing here panics on any bytes.
 
-use mailcraft_ber as ber;
-use mailcraft_time::Timestamp;
+use crate::Timestamp;
+use base64::Engine as _;
+use craft_ber as ber;
 
 use crate::cert::{Cert, MAX_CERT_BYTES, printable};
 
@@ -89,7 +90,7 @@ fn pem_blocks(bytes: &[u8], label: &str) -> Vec<Vec<u8>> {
             None if line == begin => body = Some(String::new()),
             None => {}
             Some(b) if line == end => {
-                if let Ok(der) = mailcraft_charset::base64::STANDARD.decode(b.as_bytes())
+                if let Ok(der) = base64::engine::general_purpose::STANDARD.decode(b.as_bytes())
                     && der.len() <= MAX_CERT_BYTES
                 {
                     out.push(der);

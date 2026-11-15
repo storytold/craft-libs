@@ -8,6 +8,7 @@
 //! `-keypbe AES-128-CBC -certpbe NONE -macalg sha512` (Bob's), `-passout pass:` (no passphrase)
 //! and `-iter 2000000`.
 
+use base64::Engine as _;
 use proptest::prelude::*;
 
 use crate::pkcs12::{Error, KeyKind, MAX_P12_LEN, looks_like, open};
@@ -15,7 +16,7 @@ use crate::pkcs12::{Error, KeyKind, MAX_P12_LEN, looks_like, open};
 const PASS: &str = "example-pass";
 
 fn bytes(b64: &str) -> Vec<u8> {
-    mailcraft_charset::base64::STANDARD.decode(b64).unwrap()
+    base64::engine::general_purpose::STANDARD.decode(b64).unwrap()
 }
 
 fn der(pem: &str) -> Vec<u8> {

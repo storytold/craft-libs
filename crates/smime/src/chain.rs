@@ -9,8 +9,8 @@
 
 use std::collections::HashMap;
 
-use mailcraft_model::digital_signature::Why;
-use mailcraft_time::Timestamp;
+use crate::Timestamp;
+use crate::digital_signature::Why;
 
 use crate::algorithms::Fault;
 use crate::cert::{Cert, Constraints, dir_within, mail_within};

@@ -67,7 +67,7 @@ pub(crate) fn key_kind(key: &SubjectPublicKeyInfoOwned) -> crate::pkcs12::KeyKin
         return key
             .subject_public_key
             .as_bytes()
-            .and_then(|b| rsa::pkcs1::RsaPublicKey::<der::asn1::UintRef<'_>>::from_der(b).ok())
+            .and_then(|b| pkcs1::RsaPublicKey::<der::asn1::UintRef<'_>>::from_der(b).ok())
             .map_or(KeyKind::Other, |k| KeyKind::Rsa { bits: modulus_bits(k.modulus.as_bytes()) });
     }
     if key.algorithm.oid == EC_KEY {
@@ -173,7 +173,7 @@ fn scheme(algorithm: &AlgorithmIdentifierOwned, digest: Option<Hash>) -> Result<
 fn pss(algorithm: &AlgorithmIdentifierOwned) -> Result<Scheme, Fault> {
     let params = algorithm.parameters.as_ref().ok_or(Fault::Weak)?;
     let der = params.to_der().map_err(|_| Fault::Unknown)?;
-    let params = rsa::pkcs1::RsaPssParams::<der::Any>::from_der(&der).map_err(|_| Fault::Unknown)?;
+    let params = pkcs1::RsaPssParams::<der::Any>::from_der(&der).map_err(|_| Fault::Unknown)?;
     let hash = Hash::by_oid(params.hash.oid)?;
     if params.mask_gen.oid != MGF1 {
         return Err(Fault::Unknown);
@@ -260,9 +260,9 @@ pub fn verify_hashed(
 
 /// The RSA key of `key`: [`Fault::Weak`] under [`MIN_RSA_BITS`], [`Fault::Unknown`] past what
 /// the library takes (8192 bits) or when it can't be read.
-fn rsa_key(key: &SubjectPublicKeyInfoOwned) -> Result<rsa::PublicKey, Fault> {
+fn rsa_key(key: &SubjectPublicKeyInfoOwned) -> Result<rsa::RsaPublicKey, Fault> {
     let bits = key.subject_public_key.as_bytes().ok_or(Fault::Unknown)?;
-    let pkcs1 = rsa::pkcs1::RsaPublicKey::<der::asn1::UintRef<'_>>::from_der(bits).map_err(|_| Fault::Unknown)?;
+    let pkcs1 = pkcs1::RsaPublicKey::<der::asn1::UintRef<'_>>::from_der(bits).map_err(|_| Fault::Unknown)?;
     let bits = modulus_bits(pkcs1.modulus.as_bytes());
     if bits < MIN_RSA_BITS {
         return Err(Fault::Weak);
@@ -270,5 +270,9 @@ fn rsa_key(key: &SubjectPublicKeyInfoOwned) -> Result<rsa::PublicKey, Fault> {
     if bits > MAX_RSA_BITS {
         return Err(Fault::Unknown);
     }
-    rsa::PublicKey::try_from(pkcs1).map_err(|_| Fault::Unknown)
+    rsa::RsaPublicKey::new(
+        rsa::BoxedUint::from_be_slice_vartime(pkcs1.modulus.as_bytes()),
+        rsa::BoxedUint::from_be_slice_vartime(pkcs1.public_exponent.as_bytes()),
+    )
+    .map_err(|_| Fault::Unknown)
 }

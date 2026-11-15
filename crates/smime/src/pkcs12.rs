@@ -21,9 +21,9 @@
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::{BlockModeDecrypt, KeyIvInit};
 use const_oid::ObjectIdentifier;
+use craft_ber::{self as ber, Tlv};
 use der::Decode;
 use hmac::{KeyInit, Mac};
-use mailcraft_ber::{self as ber, Tlv};
 use zeroize::Zeroizing;
 
 /// The largest file opened (the window reads at most as much).

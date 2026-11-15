@@ -3,17 +3,17 @@
 //! An X.509 certificate (RFC 5280) as a Digital signature is checked with: its bytes, what it
 //! says, and the few questions asked of it (who it names, for what, until when, who signed it).
 
+use crate::Timestamp;
+use crate::digital_signature::{MAX_SIGNER_ADDRESSES, signer_text};
 use const_oid::ObjectIdentifier;
 use der::{Decode, Encode};
-use mailcraft_model::digital_signature::{MAX_SIGNER_ADDRESSES, signer_text};
-use mailcraft_time::Timestamp;
 use x509_cert::Certificate;
 use x509_cert::ext::pkix::constraints::name::GeneralSubtrees;
 use x509_cert::ext::pkix::name::GeneralName;
 use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage, NameConstraints, SubjectAltName, SubjectKeyIdentifier};
 
 use crate::algorithms::{self, Fault};
-use mailcraft_ber as ber;
+use craft_ber as ber;
 
 /// The largest certificate read.
 pub const MAX_CERT_BYTES: usize = 64 * 1024;
@@ -78,6 +78,10 @@ impl Cert {
         let start = outer.whole.len().checked_sub(outer.value.len())?;
         let end = start.checked_add(tbs.whole.len())?;
         let parsed = Certificate::from_der(der).ok()?;
+        // RFC 5280 4.1.1.2: the outer and signed algorithm identifiers must agree.
+        if parsed.signature_algorithm() != parsed.tbs_certificate().signature() {
+            return None;
+        }
         let subject = parsed.tbs_certificate().subject().to_der().ok()?;
         let issuer = parsed.tbs_certificate().issuer().to_der().ok()?;
         Some(Cert { der: der.to_vec(), tbs: start..end, parsed, subject, issuer })

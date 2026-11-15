@@ -4,7 +4,7 @@
 //! specifications (RFC 5652 for CMS, RFC 5280 for X.509, RFC 5754, RFC 4055 and RFC 5480 for
 //! the algorithms). No I/O: the host hands in the certificates it trusts ([`Anchors`]), the
 //! message's halves come from `mailcraft-mime`, and the result is
-//! [`mailcraft_model::digital_signature::DigitalSignature`], which OpenPGP shares.
+//! [`crate::digital_signature::DigitalSignature`], which OpenPGP shares.
 //!
 //! [`check`] reads the CMS SignedData of a detached or an opaque Digital signature, finds the
 //! signer's certificate, compares the signer's digest with the message's, checks the signature
@@ -18,18 +18,26 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
+/// Seconds since the Unix epoch, UTC.
+pub type Timestamp = i64;
+
 mod algorithms;
 mod cert;
 mod chain;
+pub mod digital_signature;
 pub mod import;
+mod names;
 pub mod pkcs12;
 mod verify;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod import_tests;
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod pkcs12_tests;
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests;
 
 pub use chain::{Anchors, MAX_ANCHORS};
@@ -37,7 +45,7 @@ pub use verify::{Checked, Context, MAX_CERTS, MAX_SIGNERS, MAX_VERIFICATIONS, Si
 
 /// The fingerprint and addresses of a certificate in DER, as a Digital signature's details show
 /// them: `None` when it isn't one.
-pub fn certificate_summary(der: &[u8]) -> Option<(String, Vec<String>, mailcraft_time::Timestamp)> {
+pub fn certificate_summary(der: &[u8]) -> Option<(String, Vec<String>, crate::Timestamp)> {
     let cert = cert::Cert::from_der(der)?;
     Some((cert.fingerprint(), cert.addresses(), cert.validity().1))
 }
