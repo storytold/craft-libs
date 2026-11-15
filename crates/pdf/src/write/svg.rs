@@ -112,6 +112,7 @@ fn shared_limits(bytes: usize, limits: Limits) -> craft_svg::tree::Limits {
     craft_svg::tree::Limits {
         bytes,
         depth: limits.depth,
+        tree_depth: limits.depth,
         refuse_entity_markup: true,
         xml_nodes: limits.xml_nodes,
         embedded_bytes: limits.embedded_svg_bytes,
@@ -159,5 +160,17 @@ fn image_resolver(limits: Limits) -> usvg::ImageHrefResolver<'static> {
             default_data(mime, bytes, options)
         }),
         resolve_string: Box::new(|_, _| None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Limits, shared_limits};
+
+    #[test]
+    fn shared_depth_limit_also_bounds_svg_references() {
+        let limits = shared_limits(1024, Limits { depth: 7, ..Limits::default() });
+        assert_eq!(limits.depth, 7);
+        assert_eq!(limits.tree_depth, 7);
     }
 }

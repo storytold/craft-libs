@@ -123,6 +123,7 @@ mod tests {
 
     #[test]
     fn selected_tab_erases_a_baseline_centered_on_its_bottom_edge() {
+        let _gpu = crate::gpu_test_lock();
         let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(120.0, 80.0)).wgpu().build_ui(|ui| {
             ui.painter().rect_filled(ui.max_rect(), 0.0, Color32::WHITE);
             let rect = Rect::from_min_size(egui::pos2(10.0, 10.0), Vec2::new(100.0, 26.0));
