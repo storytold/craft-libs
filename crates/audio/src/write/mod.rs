@@ -155,7 +155,7 @@ pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
         "ac3" => Some(EncodeFormat::Ac3),
         #[cfg(feature = "eac3-encode")]
         "eac3" | "ec3" => Some(EncodeFormat::Eac3),
-        #[cfg(all(feature = "vorbis-encode", not(target_arch = "wasm32")))]
+        #[cfg(feature = "vorbis-encode")]
         "ogg" => Some(EncodeFormat::Ogg),
         _ => None,
     }
