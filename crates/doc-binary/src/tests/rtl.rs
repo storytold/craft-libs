@@ -63,14 +63,19 @@ fn a_logical_table_justification_wins_over_the_physical_one() {
 }
 
 #[test]
-fn a_later_table_direction_sprm_overrides_an_earlier_one() {
-    // sprmTFBiDi and sprmTFBiDi90 set the same property: the last one wins, false included.
+fn either_table_direction_sprm_makes_the_table_right_to_left() {
+    // [MS-DOC] §2.6.3: a table is right-to-left if either sprmTFBiDi or sprmTFBiDi90 is true.
+    // Each sprm keeps its own last value, so a later false clears an earlier true of the same
+    // sprm, but not of the other one.
     let row = |prls: &[(u16, &[u8])]| table_props_from_sprms(prls).bidi_visual;
     let (on, off) = (1u16.to_le_bytes(), 0u16.to_le_bytes());
-    assert!(!row(&[(0x5664, &on), (0x560B, &off)]), "an explicit false after a true");
-    assert!(!row(&[(0x560B, &on), (0x5664, &off)]));
+    assert!(row(&[(0x5664, &on), (0x560B, &off)]), "sprmTFBiDi90 stays true");
+    assert!(row(&[(0x560B, &on), (0x5664, &off)]), "sprmTFBiDi stays true");
     assert!(row(&[(0x560B, &off), (0x5664, &on)]));
     assert!(row(&[(0x5664, &on)]));
+    assert!(!row(&[(0x560B, &on), (0x560B, &off)]), "a later false clears the same sprm");
+    assert!(!row(&[(0x5664, &on), (0x5664, &off)]));
+    assert!(!row(&[(0x560B, &off), (0x5664, &off)]));
 }
 
 #[test]
