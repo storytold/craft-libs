@@ -1,6 +1,14 @@
 //! Borrowed, merged-only PSD reader that skips layer records and decodes selected planes.
 use crate::{Head, PsdError, Result};
 
+/// Dimensions in the fixed header fields, for reporting a preflight limit error.
+/// This does not validate the PSD signature or remaining header.
+pub fn declared_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let h = bytes.get(14..18)?;
+    let w = bytes.get(18..22)?;
+    Some((u32::from_be_bytes([w[0], w[1], w[2], w[3]]), u32::from_be_bytes([h[0], h[1], h[2], h[3]])))
+}
+
 /// The file head and merged-composite location. Layer records are not parsed or allocated.
 pub struct Merged<'a> {
     /// Header, color-mode data, and image resources.
@@ -37,12 +45,10 @@ impl<'a> Merged<'a> {
     /// to read a composite when its layer data is not understood. No image planes are allocated.
     pub fn open(bytes: &'a [u8], max_pixels: u64) -> Result<Self> {
         // Refuse a declared oversized canvas before copying color-mode data or resources.
-        if let (Some(h), Some(w)) = (bytes.get(14..18), bytes.get(18..22)) {
-            let h = u32::from_be_bytes([h[0], h[1], h[2], h[3]]);
-            let w = u32::from_be_bytes([w[0], w[1], w[2], w[3]]);
-            if u64::from(w) * u64::from(h) > max_pixels {
-                return Err(PsdError::LimitExceeded("pixel count"));
-            }
+        if let Some((w, h)) = declared_dimensions(bytes)
+            && u64::from(w) * u64::from(h) > max_pixels
+        {
+            return Err(PsdError::LimitExceeded("pixel count"));
         }
         let head = Head::from_bytes(bytes)?;
         let h = &head.header;
