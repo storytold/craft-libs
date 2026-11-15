@@ -1202,7 +1202,9 @@ pub(crate) fn begin(ctx: &Context) {
                 let target = if app { resolved.instance } else { instance };
                 let key = shortcut.input.physical.or(shortcut.input.typed);
                 with(ctx, |board| {
-                    if let Some(key) = key.filter(|_| board.def(&hit.command.id).is_some_and(|def| def.kind == CommandKind::Momentary)) {
+                    if let Some(key) = key.filter(|_| {
+                        board.def(&hit.command.id).is_some_and(|def| matches!(def.kind, CommandKind::Momentary | CommandKind::Tool { .. }))
+                    }) {
                         board.held.retain(|held| held.key != key);
                         board.held.push(Held { key, command: hit.command.clone(), target });
                     }

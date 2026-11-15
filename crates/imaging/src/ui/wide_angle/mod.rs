@@ -47,7 +47,7 @@ use craft_ui::layout_components::Row;
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::form_dialogs::{Param, ParamDialog, ParamKind};
 use craft_ui::rails::{LastUsed, RailTool, ToolRail, ToolSlot};
-use craft_ui::runtime::commands::{CommandSet as _, Commands as _, Fired};
+use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase, Fired};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::pending::Job;
 use craft_ui::runtime::words::CommonWords;
@@ -553,8 +553,11 @@ fn edit_name<'a>(words: &'a WideAngleWords, edit: &WideAngleConstraintEdit) -> &
     }
 }
 
-/// The tool a fired tool command picks, through its slot's pick rule.
+/// The tool a fired tool command picks, through its slot's pick rule; a tool key's release picks nothing.
 fn pick(slots: &[ToolSlot<WideAngleTool>], command: WideAngleCommands, fired: &Fired, body: &Body) -> Option<WideAngleTool> {
+    if fired.phase == FirePhase::Release {
+        return None;
+    }
     let tool = TOOL_SLOT.iter().find(|(_, c)| *c == command)?.0;
     let slot = slots.iter().find(|slot| slot.tools.iter().any(|t| t.id == tool))?;
     let visible: Vec<&RailTool<WideAngleTool>> = slot.tools.iter().collect();

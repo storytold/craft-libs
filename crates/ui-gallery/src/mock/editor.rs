@@ -111,8 +111,11 @@ fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
         }
     }
 
-    while let Some((command, _)) = cx.take_command::<Tool>() {
-        select(ui, state, command);
+    while let Some((command, fired)) = cx.take_command::<Tool>() {
+        // A tool key's release picks nothing.
+        if fired.phase != commands::FirePhase::Release {
+            select(ui, state, command);
+        }
     }
     while let Some((key, _)) = cx.take_command::<ToolKey>() {
         match key {

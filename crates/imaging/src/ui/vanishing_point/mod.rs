@@ -60,7 +60,7 @@ use craft_ui::dialog::{
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::Checker;
 use craft_ui::rails::{LastUsed, RailTool, ToolRail, ToolSlot};
-use craft_ui::runtime::commands::{CommandSet as _, Commands as _};
+use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::windows::WindowSpec;
 use craft_ui::runtime::words::CommonWords;
@@ -410,7 +410,8 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
                         work.new_plane.open = true;
                         continue;
                     }
-                    let Some(pick) = command.pick() else { continue };
+                    // A tool key's release picks nothing.
+                    let Some(pick) = command.pick().filter(|_| fired.phase != FirePhase::Release) else { continue };
                     let slot = slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == pick));
                     let tools: Vec<_> = slot.into_iter().flat_map(|slot| slot.tools.iter()).collect();
                     let current = Pick::of(work.strip, work.editor.tool());

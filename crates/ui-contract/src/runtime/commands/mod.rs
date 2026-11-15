@@ -157,7 +157,8 @@ pub enum FirePhase {
     Press,
     /// A repeat of a held key.
     Repeat,
-    /// The release; momentary tools act here.
+    /// The release of a momentary command's or a tool's key: a momentary command ends here, and a spring-loaded tool
+    /// gives back the previous one.
     Release,
 }
 

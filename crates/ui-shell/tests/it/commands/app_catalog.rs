@@ -20,6 +20,7 @@ use std::cell::{Cell, RefCell};
 const EXPORT: &str = "trialCatalog.export";
 const PEEK: &str = "trialCatalog.peek";
 const QUICK: &str = "trialCatalog.quick";
+const BRUSH: &str = "trialCatalog.brush";
 const RENAME: &str = "trialCatalog.rename";
 
 /// An app-scope definition of `id` bound to `chord`.
@@ -29,7 +30,12 @@ fn def(id: &str, label: &str, chord: &str) -> CommandDef {
 
 /// The app's catalog at `generation`: from generation 2 on it also holds Rename.
 fn catalog(generation: u64) -> CommandInput {
-    let mut defs = vec![def(EXPORT, "Export", "Cmd+Alt+U"), def(PEEK, "Peek", "F9").with_kind(CommandKind::Momentary), def(QUICK, "Quick Mask", "Q")];
+    let mut defs = vec![
+        def(EXPORT, "Export", "Cmd+Alt+U"),
+        def(PEEK, "Peek", "F9").with_kind(CommandKind::Momentary),
+        def(QUICK, "Quick Mask", "Q"),
+        def(BRUSH, "Brush", "J").with_kind(CommandKind::Tool { group: None }),
+    ];
     if generation >= 2 {
         defs.push(def(RENAME, "Rename", "Cmd+Alt+P"));
     }
@@ -45,8 +51,8 @@ fn hit(id: &str, phase: FirePhase) -> (String, Option<Id>, FirePhase) {
     (id.to_owned(), None, phase)
 }
 
-/// A catalog command's chord fires it as an app command, with no target; a momentary catalog command fires again on
-/// its key's release; a plain-letter chord fires with nothing focused, and waits for the text while a text field has
+/// A catalog command's chord fires it as an app command, with no target; a momentary or tool catalog command fires
+/// again on its key's release; a plain-letter chord fires with nothing focused, and waits for the text while a text field has
 /// the focus, which types the letter.
 #[trial]
 fn an_app_catalog_command_fires_by_its_chord_and_a_focused_text_field_keeps_a_typing_chord() {
@@ -76,6 +82,9 @@ fn an_app_catalog_command_fires_by_its_chord_and_a_focused_text_field_keeps_a_ty
     frames.frame(vec![key_press(Key::Q, Modifiers::NONE)], &mut show);
     frames.frame(vec![key_release(Key::Q, Modifiers::NONE)], &mut show);
     assert_eq!(fired(&frames), [hit(QUICK, FirePhase::Press)], "with nothing focused the plain chord fires");
+    frames.frame(vec![key_press(Key::J, Modifiers::NONE)], &mut show);
+    frames.frame(vec![key_release(Key::J, Modifiers::NONE)], &mut show);
+    assert_eq!(fired(&frames), [hit(BRUSH, FirePhase::Press), hit(BRUSH, FirePhase::Release)], "a tool's key fires on press and release");
 
     let at = field.get().center();
     frames.frame(vec![moved(at)], &mut show);

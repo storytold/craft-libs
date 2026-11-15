@@ -11,7 +11,8 @@ pub enum CommandKind {
     /// Runs the command.
     Command,
     /// Selects a tool. Tools of one group share keys and cycle; tools without a group name form one
-    /// group together.
+    /// group together. The key's release fires the command again in the release phase, so an app can give back
+    /// the previous tool when the key was only held (a spring-loaded tool).
     Tool {
         /// The group the tool belongs to; `None` joins the group of tools without one.
         group: Option<String>,

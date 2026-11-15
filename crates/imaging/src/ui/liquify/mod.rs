@@ -80,7 +80,7 @@ use craft_ui::dialog::{
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::Checker;
 use craft_ui::rails::{LastUsed, ToolRail};
-use craft_ui::runtime::commands::{CommandSet as _, Commands as _};
+use craft_ui::runtime::commands::{CommandSet as _, Commands as _, FirePhase};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use craft_ui::runtime::words::CommonWords;
@@ -495,6 +495,10 @@ impl LiquifyWorkspace {
                 {
                     while let Some((command, fired)) = cx.take_command::<LiquifyCommands>() {
                         if let Some(tool) = command.tool() {
+                            // A tool key's release picks nothing.
+                            if fired.phase == FirePhase::Release {
+                                continue;
+                            }
                             let slot = slots.iter().find(|slot| slot.tools.iter().any(|entry| entry.id == tool));
                             let tools: Vec<_> = slot.into_iter().flat_map(|slot| slot.tools.iter()).collect();
                             let picked = slot.and_then(|slot| {
