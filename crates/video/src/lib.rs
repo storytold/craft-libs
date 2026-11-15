@@ -11,6 +11,7 @@
 //! | `mpeg2` | [`mpeg2`] | MPEG-2 video (ITU-T H.262) and MPEG-1 video: decoder (`mpeg2-decode`) and MPEG-2 I/P/B encoder (`mpeg2-encode`) |
 //! | `mpeg4` | [`mpeg4`] | MPEG-4 Part 2 video (ISO/IEC 14496-2, Xvid/DivX): Simple profile encoder (`mpeg4-encode`) |
 //! | `ffv1` | [`ffv1`] | FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder |
+//! | `rawvideo` | [`rawvideo`] | Uncompressed packed pictures: UYVY, YUYV, YVYU, v210, r210, R10k |
 //! | `prores` | [`prores`] | Apple ProRes (SMPTE RDD 36): decoder and encoder |
 //! | `h264` | [`h264`] | ITU-T H.264 / AVC: decoder (`h264-decode`) and encoder (`h264-encode`) |
 //! | `hevc` | [`hevc`] | ITU-T H.265 / HEVC: decoder (`hevc-decode`) and encoder (`hevc-encode`) |
@@ -44,6 +45,9 @@ pub mod mpeg4;
 
 #[cfg(feature = "ffv1")]
 pub mod ffv1;
+
+#[cfg(feature = "rawvideo")]
+pub mod rawvideo;
 
 #[cfg(feature = "prores")]
 pub mod prores;
