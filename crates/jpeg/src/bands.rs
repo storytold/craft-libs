@@ -266,6 +266,15 @@ impl<'a> Bands<'a> {
         planes.saturating_add(lines).saturating_add(self.band_bytes() as u64)
     }
 
+    /// Bytes of the sampling maps kept here, which every [`Reader`] shares: one entry per output
+    /// column (or row) of each component subsampled across (or down). [`Bands::new`] checks them
+    /// with [`Bands::reader_bytes`] against `limits.max_alloc`.
+    pub fn map_bytes(&self) -> u64 {
+        let entry = std::mem::size_of::<(usize, usize, f32)>() as u64;
+        let entries: usize = self.comps.iter().map(|c| c.xs.as_ref().map_or(0, Vec::len) + c.ys.as_ref().map_or(0, Vec::len)).sum();
+        (entries as u64).saturating_mul(entry)
+    }
+
     /// Finds the restart markers in the scan, so that every band a restart interval begins with
     /// becomes a seek point. One pass over the entropy-coded data. The k-th restart marker in the
     /// data begins interval k, whatever its number: as a reader that reads in order pairs them,

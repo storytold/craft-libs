@@ -671,6 +671,17 @@ fn limits_are_checked_from_the_headers() {
     assert!(b.reader_bytes() < 64 << 20);
 }
 
+/// The sampling maps are reported as kept: none at 4:4:4, a column map per chroma component
+/// halved across, and a row map too when it is halved down.
+#[test]
+fn map_bytes_are_the_sampling_maps_kept() {
+    let entry = std::mem::size_of::<(usize, usize, f32)>() as u64;
+    for (comps, entries) in [([(1, 1), (1, 1), (1, 1)], 0), ([(2, 1), (1, 1), (1, 1)], 2 * 40), ([(2, 2), (1, 1), (1, 1)], 2 * (40 + 30))] {
+        let s = Stream::new(40, 30, &comps, 0, 2).encode();
+        assert_eq!(Bands::new(&s, &Limits::default(), None).unwrap().map_bytes(), entries * entry, "{comps:?}");
+    }
+}
+
 #[test]
 fn readers_seek_only_to_seek_points() {
     let s = Stream { restart: 5, ..Stream::new(40, 40, &[(1, 1), (1, 1), (1, 1)], 0, 4) }.encode();
