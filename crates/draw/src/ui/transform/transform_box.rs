@@ -304,12 +304,14 @@ impl<'a> TransformBox<'a> {
         self.move_reach > 0.0 && self.rules.allows(BoxPart::Inside)
     }
 
-    /// The parts the keyboard walks, in order.
+    /// The parts the keyboard walks, in order. A box whose inside does not move has no inside part, so a press or drag
+    /// over its body reaches what lies beneath (a type editor under a paragraph frame).
     fn keyboard_parts(&self) -> Vec<BoxPart> {
         let corners = (0..4u8).map(BoxPart::Corner);
         let edges = (0..4u8).map(BoxPart::Edge);
         let pivot = self.reference_point.then_some(BoxPart::Pivot);
-        [BoxPart::Inside].into_iter().chain(corners).chain(edges).chain(pivot).filter(|&part| self.rules.allows(part)).collect()
+        let inside = self.inside_moves.then_some(BoxPart::Inside);
+        inside.into_iter().chain(corners).chain(edges).chain(pivot).filter(|&part| self.rules.allows(part)).collect()
     }
 
     /// The box after an arrow key moves `part` by `by`: as a plain drag of the part would.
@@ -587,7 +589,7 @@ impl Component for TransformBox<'_> {
         for part in self.keyboard_parts() {
             let (shape, sense, priority, focus) = match part {
                 BoxPart::Inside => {
-                    let sense = if self.inside_moves { Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS } else { Sense::TAKE_FOCUS };
+                    let sense = Sense::DRAG | Sense::CLICK | Sense::TAKE_FOCUS;
                     (HitShape::Polygon(quad.to_vec()), sense, HitPriority::new(HitLevel::Body, 0), FocusShape::Rect)
                 }
                 BoxPart::Pivot => (
