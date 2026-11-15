@@ -578,7 +578,7 @@ fn rgba_component_depth(layout: &[u8]) -> u32 {
         return 0;
     }
     let mut depths = [0u8; 3];
-    for pair in layout.chunks_exact(2) {
+    for pair in layout.as_chunks::<2>().0 {
         let index = match pair[0] {
             b'R' => 0,
             b'G' => 1,
