@@ -91,7 +91,15 @@ pub fn write(doc: &Document) -> String {
         }
         let end = if clock(c.end) == clock(c.start) { Tick(c.end.0.saturating_add(crate::TICKS_PER_MS * 10)) } else { c.end };
         out.push_str(&format!("{},{}\n", clock(c.start), clock(end)));
-        let lines: Vec<String> = lines.iter().map(|l| l.replace("[br]", "\u{ff3b}br\u{ff3d}").replace("[BR]", "\u{ff3b}BR\u{ff3d}")).collect();
+        let lines: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                l.replace("[br]", "\u{ff3b}br\u{ff3d}")
+                    .replace("[BR]", "\u{ff3b}BR\u{ff3d}")
+                    .replace("[Br]", "\u{ff3b}Br\u{ff3d}")
+                    .replace("[bR]", "\u{ff3b}bR\u{ff3d}")
+            })
+            .collect();
         out.push_str(&lines.join("[br]"));
         out.push_str("\n\n");
     }
@@ -107,6 +115,16 @@ mod tests {
         let d = parse("[INFORMATION]\n[TITLE]x\n[END INFORMATION]\n[SUBTITLE]\n00:00:01.00,00:00:03.50\nHello[BR]world\n\n").unwrap();
         assert_eq!(d.cues[0].text, "Hello\nworld");
         assert_eq!(d.cues[0].end, crate::text::ms_to_tick(3500));
+    }
+
+    #[test]
+    fn writer_escapes_every_case_of_literal_break_tokens() {
+        let doc = Document {
+            cues: vec![Cue { start: Tick(0), end: crate::text::ms_to_tick(1000), text: "a[br]b[BR]c[Br]d[bR]é".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let decoded = parse(&write(&doc)).unwrap();
+        assert_eq!(decoded.cues[0].text, "a［br］b［BR］c［Br］d［bR］é");
     }
 
     #[test]
