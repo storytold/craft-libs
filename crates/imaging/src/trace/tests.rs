@@ -76,5 +76,35 @@ fn trace_coarse_cells_keep_one_pixel_selections() {
     }
 }
 
+// A 6 × 6 block with a 2 × 2 hole traces the outer square and the hole's own square; bounds of
+// zero or negative size trace nothing.
+#[trial]
+fn a_hole_traces_its_own_loop_and_a_hostile_view_traces_nothing() {
+    let mut mask = Plane::blank(6, 6);
+    mask.fill(0, 0, 6, 6);
+    for y in 2..4 {
+        for x in 2..4 {
+            mask.data[y * 6 + x] = 0.0;
+        }
+    }
+    let mut segments = outline(&mask, MaskRect::of_size([6, 6]), 1);
+    segments.sort_unstable();
+    let mut expected = vec![
+        ([0, 0], [6, 0]),
+        ([0, 6], [6, 6]),
+        ([0, 0], [0, 6]),
+        ([6, 0], [6, 6]),
+        ([2, 2], [4, 2]),
+        ([2, 4], [4, 4]),
+        ([2, 2], [2, 4]),
+        ([4, 2], [4, 4]),
+    ];
+    expected.sort_unstable();
+    assert_eq!(segments, expected);
+    for hostile in [MaskRect::new(3, 0, 3, 6), MaskRect::new(0, 3, 6, 3), MaskRect::new(6, 6, 0, 0), MaskRect::new(i32::MAX, i32::MAX, i32::MIN, i32::MIN)] {
+        assert!(outline(&mask, hostile, 1).is_empty(), "{hostile:?} traces nothing");
+    }
+}
+
 // `edges_of_grid` gives PhotoCraft's Content-Aware Fill unit edges for an L-shaped grid, and
 // `None` past the limit.

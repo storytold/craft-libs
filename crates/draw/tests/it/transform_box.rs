@@ -7,7 +7,7 @@ use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, EditEvent, RulerUnits, Ticks};
 use craft_draw::ui::transform::{RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformSession, TransformSettings};
 use craft_keymap::{Mods, Platform};
-use craft_ui::canvas::{Canvas, RulerText, Snap};
+use craft_ui::canvas::{Canvas, RulerText, Snap, canvas_space};
 use craft_ui::canvas::{Guide, GuideKey};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
@@ -133,7 +133,8 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
         let canvas = canvas.show(ui, |ui, body| {
             let mut guide_edits = 0;
             if config.guides {
-                let output = Guides::new("Guides", Bind::bound(&mut guides)).interactive(true).show_at(ui, body.rect);
+                let canvas = canvas_space(&body.env).and_then(|space| space.canvas()).expect("the canvas publishes its space");
+                let output = Guides::new("Guides", canvas, Bind::bound(&mut guides)).interactive(true).show_at(ui, body.rect);
                 guide_edits = usize::from(!output.edit.events.is_empty());
             }
             let mut control = if config.text_frame {

@@ -4,7 +4,7 @@ use super::context::{Cx, CxCore};
 use crate::contract::{Component, EditResponse, Pointer as _, Validity, ValueOf};
 use crate::primitives::Adopted;
 use craft_behavior::{
-    CancelReason, EditEvent, Gesture, GesturePhase, Mixed, PartRef, PointerButton, PressCancel, PressPhase, Sense, Value, WheelPhase,
+    CancelReason, EditEvent, Gesture, GestureNote, GesturePhase, Mixed, PartRef, PointerButton, PressCancel, PressPhase, Sense, Value, WheelPhase,
 };
 use egui::{Id, Pos2};
 use std::sync::Arc;
@@ -367,6 +367,18 @@ impl<C: Component> Cx<'_, C> {
         }
         if phase == WheelPhase::End && self.in_wheel_run() {
             self.commit();
+        }
+    }
+
+    /// [`propose`](Edit::propose)s `v` and sets `note` on the running gesture, for readers outside the pass
+    /// ([`gesture_note`](crate::runtime::edit::gesture_note)): what the gesture is doing beyond its value, such as which
+    /// guide a guides drag moves. The note replaces the last one and goes when the gesture ends; a proposal the
+    /// component refuses sets none.
+    pub fn propose_with<N: Send + Sync + 'static>(&mut self, v: ValueOf<C>, note: N) {
+        self.propose(v);
+        let slot = self.gesture_slot();
+        if slot.is_running() {
+            slot.note = Some(GestureNote::new(note));
         }
     }
 

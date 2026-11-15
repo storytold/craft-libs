@@ -473,9 +473,10 @@ impl Scene for CanvasViewScene {
         // The scene's motion: a pan every frame, as a user's drag would make.
         pan(view, vec2(3.0, 2.0));
         let text = RulerText::new(RulerUnits::pixels(), UnitKind::Pixels);
-        let shown = Canvas::new("Document").view(*view).rulers(text, text, *zero).show_rulers(true).show(ui, |ui, body| {
+        let canvas = ui.id().with("canvas scene");
+        let shown = Canvas::new("Document").id(canvas).view(*view).rulers(text, text, *zero).show_rulers(true).show(ui, |ui, body| {
             let _ = RasterDisplay::new("Picture", &SOURCE).show_at(ui, body.rect);
-            let _ = Guides::new("Guides", Bind::bound(&mut *guides)).show_at(ui, body.rect);
+            let _ = Guides::new("Guides", canvas, Bind::bound(&mut *guides)).show_at(ui, body.rect);
             let _ = Rulers::new("Rulers", Bind::bound(&mut *zero)).show_at(ui, body.rect);
         });
         if let Some(next) = ToolHost::new().run(ui, &shown.output, hand).view {

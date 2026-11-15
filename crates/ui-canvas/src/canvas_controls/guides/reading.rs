@@ -1,5 +1,6 @@
 //! `GuideReading`: the guide a drag is moving or creating, read from the running gesture.
 
+use crate::canvas::Guide;
 use craft_behavior::Axis;
 use egui::{Context, Id};
 
@@ -12,9 +13,9 @@ pub struct GuideReading {
     pub position: f64,
 }
 
-/// The guide a drag is moving or creating on the canvas `canvas`, read from the framework's running gesture of the
-/// guide parts, so a panel drawn before or after the canvas reads the same value; `None` when no guide drag runs.
+/// The guide a drag is moving or creating on the canvas `canvas`, read from the note the guides set on their running
+/// gesture, so a panel drawn before or after the canvas reads the same value; `None` when no guide drag runs or the
+/// dragged guide lies off the canvas.
 pub fn running(ctx: &Context, canvas: Id) -> Option<GuideReading> {
-    let _ = (ctx, canvas);
-    todo!("cw.C74")
+    crate::runtime::edit::gesture_note::<Vec<Guide>, Option<GuideReading>>(ctx, super::guides_id(canvas)).flatten()
 }

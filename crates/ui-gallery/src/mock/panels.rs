@@ -13,7 +13,7 @@ use craft_ui::canvas::{
 use craft_ui::canvas_controls::{Guides, Marquee};
 use craft_ui::contract::SizeLimits;
 use craft_ui::contract::{
-    Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SweepApply,
+    Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SweepApply,
     SweepStep, ToggleColumn, WordSetCx as _,
 };
 use craft_ui::docking::{DockPanels, GroupAt, PanelSpec};
@@ -175,9 +175,10 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     let pixels = document.pixel_size();
     let (view, show_rulers) = (document.view, document.rulers);
     let editing = matches!(tool, Tool::Move | Tool::Marquee);
+    let canvas_id = ui.id().with("mock document canvas");
     let shown = {
         let Document { layers, guides, guide, marquee, zero, units: unit, .. } = &mut *document;
-        Canvas::new("Document").view(view).document(page.size()).show_rulers(show_rulers).rulers(units, units, *zero).show(ui, |ui, body| {
+        Canvas::new("Document").id(canvas_id).view(view).document(page.size()).show_rulers(show_rulers).rulers(units, units, *zero).show(ui, |ui, body| {
             let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
             show_layers(ui, body.rect, layers, pixels);
             if let Some(rect) = *marquee {
@@ -193,7 +194,7 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
                     *unit = picked;
                 }
             }
-            let mut controls = Guides::new("Guides", Bind::bound(guides)).interactive(editing);
+            let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
             if let Some(selected) = *guide {
                 controls = controls.selected_guide(selected);
             }

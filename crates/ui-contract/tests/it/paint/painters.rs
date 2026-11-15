@@ -129,3 +129,55 @@ fn an_edge_rule_lies_on_the_pixels_just_inside_its_side_at_any_scale() {
         }
     }
 }
+
+#[trial]
+fn ant_edges_are_whole_device_pixels_at_a_fractional_scale() {
+    use craft_theme::{Contrast, Mode};
+    use egui::{Rect, Shape};
+    use std::collections::BTreeSet;
+
+    let tokens = craft_ui::testing::style::tokens(Mode::Dark, Contrast::Standard);
+    let ppp = 1.5;
+    // Corners off the device pixel grid, as a zoomed selection puts them.
+    let corners = [pos2(10.3, 10.7), pos2(60.2, 10.7), pos2(60.2, 40.1), pos2(10.3, 40.1)];
+    let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 100.0));
+    let shapes = craft_ui::primitives::marching_ants(&tokens, &corners, true, 0.0, clip, ppp);
+    let [Shape::Mesh(mesh)] = shapes.as_slice() else { panic!("an axis-aligned outline is one mesh, got {shapes:?}") };
+    // Every quad in device pixels: (x0, y0, x1, y1) and its colour; the first quad of each edge is its light band.
+    let quads: Vec<([f32; 4], egui::Color32)> = mesh
+        .vertices
+        .chunks(4)
+        .map(|quad| {
+            let rect = Rect::from_points(&quad.iter().map(|vertex| vertex.pos).collect::<Vec<_>>());
+            ([rect.min.x * ppp, rect.min.y * ppp, rect.max.x * ppp, rect.max.y * ppp], quad[0].color)
+        })
+        .collect();
+    for (quad, _) in &quads {
+        assert!(quad.iter().all(|v| (v - v.round()).abs() < EPS), "{quad:?} lies on whole device pixels");
+    }
+    let light = quads[0].1;
+    let bands: Vec<[f32; 4]> = quads.iter().filter(|(_, color)| *color == light).map(|(quad, _)| *quad).collect();
+    assert_eq!(bands.len(), 4, "one band per edge");
+    let thickness: Vec<f32> = bands.iter().map(|b| (b[2] - b[0]).min(b[3] - b[1]).round()).collect();
+    assert!(thickness.iter().all(|t| *t == thickness[0] && *t >= 2.0), "every edge is as thick as the others, two device pixels at 1.5x: {thickness:?}");
+
+    // The top band's two pixel rows: each row's dashes start one band width earlier than the row above, so a dash ends
+    // on a slant.
+    let top = bands.iter().copied().min_by(|a, b| a[1].total_cmp(&b[1])).expect("a top band");
+    let width = thickness[0] as i64;
+    // The corners belong to the side bands too: only the columns strictly between them count.
+    let (left, right) = (top[0].round() as i64, top[2].round() as i64 - width);
+    let starts = |row: f32| -> BTreeSet<i64> {
+        quads
+            .iter()
+            .filter(|(quad, color)| *color != light && quad[1].round() == row && quad[3] - quad[1] < 1.5)
+            .map(|(quad, _)| quad[0].round() as i64)
+            .filter(|s| *s > left && *s < right)
+            .collect()
+    };
+    let (upper, lower) = (starts(top[1].round()), starts(top[1].round() + 1.0));
+    assert!(!upper.is_empty(), "the top band has dashes");
+    for s in upper.iter().filter(|s| **s - width > left) {
+        assert!(lower.contains(&(s - width)), "the dash at {s} continues {width} pixels earlier one row down: {lower:?}");
+    }
+}

@@ -1,9 +1,10 @@
 //! The pass's edit events and edit-command routing: the context-free calls an app makes around edits.
 
 use super::egui::repaint;
+use crate::runtime::memory::MemoryStage;
 use crate::runtime::pass_state;
-use craft_behavior::{CancelReason, GestureId};
-use egui::Context;
+use craft_behavior::{CancelReason, Gesture, GestureId, Value};
+use egui::{Context, Id};
 
 /// The latest `cancel_all`: a serial that grows with each call, and why.
 #[derive(Clone, Copy, Default)]
@@ -26,6 +27,17 @@ pub fn cancel_all(ctx: &Context, reason: CancelReason) {
 /// The serial and reason of the latest `cancel_all`; serial 0 before the first.
 pub(crate) fn latest(ctx: &Context) -> (u64, Option<CancelReason>) {
     pass_state::with::<CancelAll, _>(ctx, |all| (all.serial, all.reason))
+}
+
+/// The note the component `id` set on its running gesture with [`Cx::propose_with`](crate::contract::Cx::propose_with),
+/// when it is an `N`; `None` while no gesture of the component runs. `V` is the component's value type, under which
+/// its gesture is kept. A reader outside the component's pass, drawn before or after it, reads the same note.
+pub fn gesture_note<V: Value, N: Clone + 'static>(ctx: &Context, id: Id) -> Option<N> {
+    let gesture = MemoryStage::peek::<Gesture<V>>(ctx, crate::contract::gesture_key(id));
+    if !gesture.is_running() {
+        return None;
+    }
+    gesture.note.as_ref()?.get::<N>().cloned()
 }
 
 /// The newest gesture id handed out in this context, and how many times a component has reported its gesture running

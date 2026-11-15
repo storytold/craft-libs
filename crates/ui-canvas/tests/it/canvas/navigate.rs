@@ -5,7 +5,7 @@ use craft_behavior::{Axis, CanvasView, GESTURE_GAP, MotionMode, Wheel, WheelPhas
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasSpace, Guide, GuideKey, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide, ViewCommands,
-    WheelNavigation,
+    WheelNavigation, canvas_space,
 };
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
@@ -95,7 +95,10 @@ fn cmd_or_ctrl_with_page_down_on_a_focused_canvas_control_scrolls_the_canvas_sid
         let canvas = Canvas::new("Document")
             .document(Size::new(4000.0, 4000.0))
             .view(given)
-            .show(ui, |ui, body| Guides::new("Guides", Bind::bound(&mut guides)).interactive(true).show_at(ui, body.rect));
+            .show(ui, |ui, body| {
+                let canvas = canvas_space(&body.env).and_then(|space| space.canvas()).expect("the canvas publishes its space");
+                Guides::new("Guides", canvas, Bind::bound(&mut guides)).interactive(true).show_at(ui, body.rect)
+            });
         shown.set(canvas.output.view.unwrap_or(given));
     });
     fixture.settle();

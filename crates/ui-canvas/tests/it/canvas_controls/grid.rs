@@ -44,3 +44,24 @@ fn redrawing_a_damaged_part_of_the_pixel_grid_matches_drawing_the_region_again()
     let again = PixelGrid::segments(&pixels(region, inside), region);
     assert_eq!(edges(&patched), edges(&again));
 }
+
+#[trial]
+fn the_grid_colour_follows_the_pixel_below() {
+    let grey = |v: f32, alpha: f32| [v, v, v, alpha];
+    let row = [grey(0.0, 1.0), grey(1.0, 1.0), grey(0.0, 0.0), grey(0.54, 1.0), grey(0.56, 1.0), grey(0.0, 0.5)];
+    let edges = edges(&PixelGrid::segments(&row, PixelRect::new(0, 0, 6, 1)));
+    // Each pixel owns its left edge: the vertical edge at its x, as unmultiplied grey and alpha.
+    let line = |x: i32| edges.get(&(true, x, 0)).map(|color| color.to_srgba_unmultiplied()).map(|[grey, _, _, alpha]| (grey, alpha));
+    let (dark, light) = (line(0).expect("a black pixel has a line"), line(1).expect("a white pixel has a line"));
+    assert_eq!(dark, (255, 64), "a dark pixel gets a quarter white");
+    assert_eq!(light.0, 0, "a light pixel gets a black line: {light:?}");
+    assert!(light.1 < dark.1, "the black line is weaker than the white one: {light:?} against {dark:?}");
+    assert_eq!(line(2), None, "a transparent pixel gets no line");
+    let (below, above) = (line(3).expect("a mid-tone has a line"), line(4).expect("a mid-tone has a line"));
+    for mid in [below, above] {
+        assert!((32..=223).contains(&mid.0), "a mid-tone blends white and black: {mid:?}");
+    }
+    assert!(below.0.abs_diff(above.0) <= 40, "neighbouring mid-tones do not flip: {below:?} against {above:?}");
+    let faint = line(5).expect("a half see-through dark pixel has a line");
+    assert!(faint.1 < dark.1, "the line follows the pixel's alpha: {faint:?} against {dark:?}");
+}

@@ -6,7 +6,7 @@ use craft_draw::ui::{
     AnchorDelete, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef, PathEdit, PathSelection,
     SegmentMark,
 };
-use craft_ui::canvas::{Canvas, Guide};
+use craft_ui::canvas::{Canvas, Guide, canvas_space};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -253,7 +253,8 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         let canvas = canvas.show(ui, |ui, body| {
             // The guides lie under the paths: a stack position hides the levels of the ones below it.
             if !st.guides.is_empty() {
-                Guides::new("Guides", Bind::bound(&mut st.guides)).interactive(true).show_at(ui, body.rect);
+                let canvas = canvas_space(&body.env).and_then(|space| space.canvas()).expect("the canvas publishes its space");
+                Guides::new("Guides", canvas, Bind::bound(&mut st.guides)).interactive(true).show_at(ui, body.rect);
             }
             BezierOverlay::new("Paths", Bind::bound(&mut st.paths), &selection)
                 .tool(st.tool)

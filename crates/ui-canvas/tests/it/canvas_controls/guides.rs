@@ -3,12 +3,13 @@
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{Axis, CancelReason, CanvasView};
-use craft_ui::canvas::{CanvasTool, Guide, GuideKey, Rulers, Snap, ToolAction, ToolContext, ToolPath, ToolPointer};
+use craft_ui::canvas::{CanvasTool, Guide, GuideKey, Rulers, Snap, ToolAction, ToolContext, ToolPath, ToolPointer, canvas_space};
 use craft_ui::canvas_controls::Guides;
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::canvas_controls::reading::{GuideReading, running};
+use craft_ui::contract::{Bind, BodyCx, Show as _};
 use craft_ui::primitives::Draw;
 use craft_ui::testing::{ToolFixture, pointer, trial};
-use egui::{Modifiers, Pos2, Rect, Vec2, pos2, vec2};
+use egui::{Id, Key, Modifiers, Pos2, Rect, Vec2, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -53,6 +54,11 @@ fn guide(key: u64, along: Axis, position: f64) -> Guide {
     Guide::new(GuideKey::new(key), along, position)
 }
 
+/// The id of the canvas whose body `cx` is, which the guides are keyed by.
+fn canvas_of(cx: &BodyCx<'_>) -> Id {
+    canvas_space(&cx.env).and_then(|space| space.canvas()).expect("the fixture's canvas publishes its space")
+}
+
 /// The guide at `position` running `along`, if there is one.
 fn at(guides: &Shared<Vec<Guide>>, along: Axis, position: f64) -> Option<Guide> {
     guides.borrow().iter().find(|guide| guide.along == along && (guide.position - position).abs() < 1e-9).cloned()
@@ -67,7 +73,7 @@ fn a_command_press_takes_a_guide_when_the_guides_are_not_interactive() {
     let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(vec![guide(1, Axis::Y, 200.0), locked]));
     let shown = Rc::clone(&guides);
     let mut fixture = ToolFixture::with_view("Document", Recorder::default(), view_at(1.0), move |ui, cx| {
-        let _ = Guides::new("Guides", Bind::bound(&mut *shown.borrow_mut())).moves_with_command(true).show_at(ui, cx.rect);
+        let _ = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *shown.borrow_mut())).moves_with_command(true).show_at(ui, cx.rect);
     });
 
     fixture.fixture().hold(Modifiers::COMMAND);
@@ -93,6 +99,40 @@ fn a_command_press_takes_a_guide_when_the_guides_are_not_interactive() {
     assert_eq!(fixture.tool().presses, 3, "the press reaches the tool");
 }
 
+// A guide drag's reading comes from the note on the guides' running gesture, read by the canvas id outside the pass:
+// the dragged guide's axis and position while the drag runs, nothing once the release commits it or Escape cancels it.
+#[trial]
+fn the_running_guide_reading_follows_the_drag_and_goes_when_it_ends() {
+    let guides: Shared<Vec<Guide>> = Rc::new(RefCell::new(vec![guide(1, Axis::Y, 200.0)]));
+    let shown = Rc::clone(&guides);
+    let mut fixture = ToolFixture::with_view("Document", Recorder::default(), view_at(1.0), move |ui, cx| {
+        let _ = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *shown.borrow_mut())).interactive(true).show_at(ui, cx.rect);
+    });
+    let canvas = fixture.canvas_id();
+    let reading = |fixture: &mut ToolFixture<Recorder>| running(fixture.fixture().ctx(), canvas);
+    let vertical = |position: f64| Some(GuideReading { along: Axis::Y, position });
+    assert_eq!(reading(&mut fixture), None, "no drag, no reading");
+
+    fixture.fixture().frame(vec![pointer::moved(pos2(200.0, 300.0))]);
+    fixture.fixture().frame(vec![pointer::press(pos2(200.0, 300.0))]);
+    fixture.fixture().frame(vec![pointer::moved(pos2(220.0, 300.0))]);
+    fixture.fixture().frame(vec![pointer::moved(pos2(240.0, 300.0))]);
+    assert_eq!(reading(&mut fixture), vertical(240.0), "the dragged guide's axis and position");
+    fixture.fixture().frame(vec![pointer::release(pos2(240.0, 300.0))]);
+    fixture.fixture().frame(Vec::new());
+    assert!(at(&guides, Axis::Y, 240.0).is_some(), "the release commits the drag: {:?}", guides.borrow());
+    assert_eq!(reading(&mut fixture), None, "a committed drag leaves no reading");
+
+    fixture.fixture().frame(vec![pointer::press(pos2(240.0, 300.0))]);
+    fixture.fixture().frame(vec![pointer::moved(pos2(260.0, 300.0))]);
+    fixture.fixture().frame(vec![pointer::moved(pos2(280.0, 300.0))]);
+    assert_eq!(reading(&mut fixture), vertical(280.0));
+    fixture.fixture().key(Key::Escape, Modifiers::NONE).settle();
+    assert_eq!(reading(&mut fixture), None, "a cancelled drag leaves no reading");
+    assert!(at(&guides, Axis::Y, 240.0).is_some(), "Escape puts the guide back: {:?}", guides.borrow());
+    fixture.fixture().frame(vec![pointer::release(pos2(280.0, 300.0))]);
+}
+
 /// Where guides may live, in document units.
 const BOUNDS: DocRect = DocRect::new(100.0, 100.0, 600.0, 400.0);
 
@@ -111,7 +151,7 @@ fn ruled(zoom: f64, guides: &Shared<Vec<Guide>>) -> (ToolFixture<Recorder>, Rc<C
         seen.set(cx.rect);
         let rulers = Rulers::new("Rulers", Bind::bound(&mut *zero.borrow_mut())).show_at(ui, cx.rect);
         let mut guides = shown.borrow_mut();
-        let mut control = Guides::new("Guides", Bind::bound(&mut *guides)).interactive(true).bounds(BOUNDS);
+        let mut control = Guides::new("Guides", canvas_of(cx), Bind::bound(&mut *guides)).interactive(true).bounds(BOUNDS);
         if let Some(drag) = rulers.guide {
             control = control.pending(drag);
         }

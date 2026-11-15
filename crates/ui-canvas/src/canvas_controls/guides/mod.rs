@@ -133,6 +133,8 @@ struct PendingKey(Option<GuideKey>);
 ///   ([`Canvas::rulers`](crate::canvas::Canvas::rulers)).
 /// - [`pending`](Guides::pending) shows the guide a ruler drag is creating. Show the `Rulers` before the guides in
 ///   the canvas body: the guides read the drag the rulers reported in the same pass.
+/// - While a drag moves or creates a guide, [`running`] reads that guide's axis and position by the canvas id, from
+///   the note the drag sets on its gesture.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(canvas_control, content_painter)]
 pub struct Guides<'a> {
@@ -164,9 +166,17 @@ pub struct Guides<'a> {
     report: Report,
 }
 
+/// The id of the guides of the canvas `canvas`: [`Guides::new`] shows them under it and [`running`] reads their drag
+/// by it.
+pub(crate) fn guides_id(canvas: egui::Id) -> egui::Id {
+    crate::runtime::memory::sub(canvas, "guides")
+}
+
 impl<'a> Guides<'a> {
-    /// The guides named `label` over `guides`, in document units.
-    pub fn new(label: impl Into<Label>, guides: Bind<'a, Vec<Guide>>) -> Self {
+    /// The guides named `label` over `guides`, in document units, on the canvas `canvas` (the id of the `Canvas` whose
+    /// body shows them, [`CanvasSpace::canvas`](crate::canvas::CanvasSpace::canvas)): they take their id from it, so
+    /// [`running`] finds their drag by the canvas.
+    pub fn new(label: impl Into<Label>, canvas: egui::Id, guides: Bind<'a, Vec<Guide>>) -> Self {
         Guides {
             common: Common::new(),
             guides,
@@ -180,6 +190,7 @@ impl<'a> Guides<'a> {
             report: Report::default(),
         }
         .label(label)
+        .id(guides_id(canvas))
     }
 
     /// `position` snapped: to the ruler's minor ticks with Shift, otherwise by the canvas's snap.
@@ -247,18 +258,19 @@ impl<'a> Guides<'a> {
             Some(position) => place::with_guide(guides, Guide::new(key, drag.along, position)),
             None => place::removed(guides, key),
         };
+        let reading = position.map(|position| GuideReading { along: drag.along, position });
         match drag.phase {
             GesturePhase::Begin => {
                 cx.begin();
-                cx.propose(shown(position));
+                cx.propose_with(shown(position), reading);
             }
-            GesturePhase::Update => cx.propose(shown(position)),
+            GesturePhase::Update => cx.propose_with(shown(position), reading),
             GesturePhase::Commit => {
                 if outside {
                     cx.cancel(CancelReason::Dismissed);
                 } else {
                     cx.begin();
-                    cx.propose(shown(position));
+                    cx.propose_with(shown(position), reading);
                     cx.commit();
                     self.report.select = Some(Some(key));
                 }
@@ -292,7 +304,7 @@ impl<'a> Guides<'a> {
                     }
                     let (lo, hi) = self.drag_range(space, guide.along);
                     let position = place::clamped(Self::pointer_position(space, snap.as_ref(), guide.along, pos, press.mods), (lo, hi));
-                    cx.propose(place::moved(guides, guide.key, position));
+                    cx.propose_with(place::moved(guides, guide.key, position), Some(GuideReading { along: guide.along, position }));
                     self.show_readout(cx, space, pos, guide.along, position);
                 }
                 PressPhase::Release { start, pos, click, .. } => match (start.button, click) {
@@ -304,10 +316,10 @@ impl<'a> Guides<'a> {
                         let position = Self::pointer_position(space, snap.as_ref(), guide.along, pos, press.mods);
                         if area.contains(pos) && self.inside_bounds(guide.along, position) {
                             let live = place::clamped(position, self.drag_range(space, guide.along));
-                            cx.propose(place::moved(guides, guide.key, live));
+                            cx.propose_with(place::moved(guides, guide.key, live), Some(GuideReading { along: guide.along, position: live }));
                             self.report.select = Some(Some(guide.key));
                         } else {
-                            cx.propose(place::removed(guides, guide.key));
+                            cx.propose_with(place::removed(guides, guide.key), None::<GuideReading>);
                         }
                         cx.commit();
                     }

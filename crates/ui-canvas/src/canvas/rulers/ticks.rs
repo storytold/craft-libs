@@ -141,3 +141,6 @@ pub fn ticks(units: &RulerUnits, rule: TickRule<'_>, zoom: f64, values: RangeInc
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
