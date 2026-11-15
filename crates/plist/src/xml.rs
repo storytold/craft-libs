@@ -1,5 +1,18 @@
 //! XML property-list reader ported from Craft Anything at 8f3b7751.
 use crate::{DateValue, FormatError, Limits, Value};
+
+/// XML-specific representation policy, separate from resource allowances.
+#[derive(Clone, Copy, Debug)]
+pub struct XmlOptions {
+    /// Trim surrounding whitespace in date text, as the original Craft Anything reader does.
+    /// Disable for consumers that retain dates as opaque strings, such as Luminar presets.
+    pub trim_date_text: bool,
+}
+impl Default for XmlOptions {
+    fn default() -> Self {
+        Self { trim_date_text: true }
+    }
+}
 fn decode_base64(text: &str, url_safe: bool) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() / 4 * 3);
     let mut acc = 0u32;
@@ -216,6 +229,7 @@ struct Xml {
     nodes: usize,
     limits: Limits,
     bytes_left: usize,
+    options: XmlOptions,
 }
 
 impl Xml {
@@ -288,7 +302,10 @@ impl Xml {
                         .map(Value::Real)
                         .ok_or_else(|| FormatError::Malformed(format!("bad real {t:?}")))
                 }
-                "date" => Ok(Value::Date(DateValue::Text(self.text_until("date")?.trim().to_string()))),
+                "date" => {
+                    let text = self.text_until("date")?;
+                    Ok(Value::Date(DateValue::Text(if self.options.trim_date_text { text.trim().to_string() } else { text })))
+                }
                 "data" => {
                     let t = self.text_until("data")?;
                     base64_decode(&t).map(Value::Data).ok_or_else(|| FormatError::Malformed("bad base64 in <data>".into()))
@@ -364,6 +381,11 @@ pub fn parse_xml(data: &[u8]) -> Result<Value, FormatError> {
 /// `max_nodes` both cap values. Nesting never exceeds 256 even with a larger caller limit.
 /// Data text consumes its encoded size, conservatively including whitespace.
 pub fn parse_xml_with_limits(data: &[u8], limits: Limits) -> Result<Value, FormatError> {
+    parse_xml_with_options(data, limits, XmlOptions::default())
+}
+
+/// Parse bounded XML using an explicit date-text representation policy.
+pub fn parse_xml_with_options(data: &[u8], limits: Limits, options: XmlOptions) -> Result<Value, FormatError> {
     if data.len() > limits.max_input_bytes {
         return Err(FormatError::TooLarge("input bytes".into()));
     }
@@ -385,7 +407,7 @@ pub fn parse_xml_with_limits(data: &[u8], limits: Limits) -> Result<Value, Forma
     // &#13; must still decode to a carriage return afterwards.
     let text = if text.contains('\r') { text.replace("\r\n", "\n").replace('\r', "\n") } else { text };
     let toks = tokenize(&text, limits.max_nodes.min(limits.max_objects).saturating_mul(8).saturating_add(8))?;
-    let mut x = Xml { toks, pos: 0, nodes: 0, limits, bytes_left: limits.max_expanded_bytes };
+    let mut x = Xml { toks, pos: 0, nodes: 0, limits, bytes_left: limits.max_expanded_bytes, options };
     x.skip_space();
     let wrapped = matches!(x.peek(), Some(Tok::Open(n)) if n == "plist");
     if wrapped {
@@ -509,5 +531,14 @@ mod tests {
     fn small_node_allowance_accepts_one_dictionary_entry() {
         let limits = Limits { max_nodes: 2, max_objects: 2, ..Limits::default() };
         assert!(parse_xml_with_limits(b"<dict><key>k</key><string>v</string></dict>", limits).is_ok());
+    }
+    #[test]
+    fn callers_can_preserve_opaque_date_whitespace() {
+        let xml = b"<date> 2026-01-01T00:00:00Z </date>";
+        assert_eq!(parse_xml(xml).unwrap(), Value::Date(DateValue::Text("2026-01-01T00:00:00Z".into())));
+        assert_eq!(
+            parse_xml_with_options(xml, Limits::default(), XmlOptions { trim_date_text: false }).unwrap(),
+            Value::Date(DateValue::Text(" 2026-01-01T00:00:00Z ".into()))
+        );
     }
 }
