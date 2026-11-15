@@ -225,4 +225,57 @@ mod tests {
         }
         assert_eq!(decode(RawFormat::Gray8, u32::MAX, 1, false, &[]), Err(Error::UnsupportedDimensions));
     }
+
+    #[test]
+    fn every_fourcc_and_label_is_mapped() {
+        for (cc, want) in [
+            (*b"UYVY", RawFormat::Uyvy),
+            (*b"hdyc", RawFormat::Uyvy),
+            (*b"I420", RawFormat::I420),
+            (*b"iyuv", RawFormat::I420),
+            (*b"YV12", RawFormat::Yv12),
+            (*b"nv12", RawFormat::Nv12),
+            (*b"Y800", RawFormat::Gray8),
+            (*b"grey", RawFormat::Gray8),
+            (*b"Y8  ", RawFormat::Gray8),
+        ] {
+            assert_eq!(RawFormat::from_avi(cc, 0), Some(want));
+        }
+        assert_eq!(RawFormat::from_avi(3u32.to_le_bytes(), 32), Some(RawFormat::Bgrx32));
+        assert_eq!(RawFormat::from_avi([0; 4], 16), None);
+        assert_eq!(RawFormat::from_avi(*b"H264", 0), None);
+        assert_eq!(RawFormat::from_mov(*b"raw ", 24), Some(RawFormat::Rgb24));
+        assert_eq!(RawFormat::from_mov(*b"raw ", 32), None);
+        assert_eq!(RawFormat::from_mov(*b"2vuy", 0), Some(RawFormat::Uyvy));
+        let labels = [
+            (RawFormat::Bgr24, "Uncompressed RGB 24-bit"),
+            (RawFormat::Rgb24, "Uncompressed RGB 24-bit"),
+            (RawFormat::Bgrx32, "Uncompressed RGB 32-bit"),
+            (RawFormat::Yuy2, "Uncompressed YUV 4:2:2"),
+            (RawFormat::Nv12, "Uncompressed YUV 4:2:0"),
+            (RawFormat::Gray8, "Uncompressed greyscale"),
+            (RawFormat::V210, "Uncompressed YUV 4:2:2 10-bit"),
+        ];
+        for (format, label) in labels {
+            assert_eq!(format.label(), label);
+        }
+    }
+
+    #[test]
+    fn rgb_v210_and_planar_layouts_decode() -> Result<(), Error> {
+        assert_eq!(decode(RawFormat::Rgb24, 1, 1, false, &[1, 2, 3])?, RawPixels::Rgba(vec![1, 2, 3, 255]));
+        assert_eq!(decode(RawFormat::Bgrx32, 1, 1, false, &[1, 2, 3, 9])?, RawPixels::Rgba(vec![3, 2, 1, 255]));
+        // v210: Cb, Y0, Cr in the first word, Y1 in the low bits of the second; rows are 128 bytes.
+        let mut row = vec![0u8; 128];
+        row[..4].copy_from_slice(&(0x100u32 | (0x200 << 10) | (0x300 << 20)).to_le_bytes());
+        row[4..8].copy_from_slice(&0x0FCu32.to_le_bytes());
+        assert_eq!(decode(RawFormat::V210, 2, 1, false, &row)?, RawPixels::Yuv422([vec![128, 63], vec![64], vec![192]]));
+        assert_eq!(decode(RawFormat::V210, 1, 1, false, &row)?, RawPixels::Yuv422([vec![128], vec![64], vec![192]]));
+        let planar = [1, 2, 3, 4, 10, 20];
+        assert_eq!(decode(RawFormat::I420, 2, 2, false, &planar)?, RawPixels::Yuv420([vec![1, 2, 3, 4], vec![10], vec![20]]));
+        assert_eq!(decode(RawFormat::Yv12, 2, 2, false, &planar)?, RawPixels::Yuv420([vec![1, 2, 3, 4], vec![20], vec![10]]));
+        assert_eq!(decode(RawFormat::Gray8, 2, 2, false, &planar[..4])?, RawPixels::Yuv420([vec![1, 2, 3, 4], vec![128], vec![128]]));
+        assert_eq!(decode(RawFormat::Uyvy, 2, 1, false, &[20, 10, 30, 11])?, RawPixels::Yuv422([vec![10, 11], vec![20], vec![30]]));
+        Ok(())
+    }
 }
