@@ -627,3 +627,17 @@ fn fbx6_model_holds_its_mesh() {
         assert_eq!(d.unit_scale(), Some(100.0));
     }
 }
+
+#[test]
+fn ascii_budget_applies_while_reading_values_and_records() {
+    let limits = Limits { max_data_bytes: 512, ..Limits::default() };
+    let many_values = format!("Objects: {{\n A: {}\n}}", "1,".repeat(1000));
+    assert!(matches!(read_document(many_values.as_bytes(), &limits), Err(Error::TooLarge(_))));
+    let many_records = format!("Objects: {{\n{}\n}}", "A: {}\n".repeat(1000));
+    assert!(matches!(read_document(many_records.as_bytes(), &limits), Err(Error::TooLarge(_))));
+    let giant_string = format!("Objects: {{ A: \"{}\" }}", "x".repeat(1024));
+    assert!(matches!(read_document(giant_string.as_bytes(), &limits), Err(Error::TooLarge(_))));
+    // Empty punctuation and comments do not consume memory in proportion to their length.
+    let ignored = format!(";{}\nObjects: {{}}", ",".repeat(10_000));
+    assert!(read_document(ignored.as_bytes(), &limits).is_ok());
+}
