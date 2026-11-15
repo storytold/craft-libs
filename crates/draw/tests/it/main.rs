@@ -4,6 +4,7 @@
 mod add_beside;
 
 // draw-gradient-b
+mod gradient_fill;
 mod gradient_overlay;
 
 // draw-connector

@@ -11,8 +11,9 @@ use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 
 use super::GradientOverlay;
 use super::parts::END;
-use crate::ui::gradient::stops::sample;
-use crate::ui::gradient::{ColorStop, GradientEditor, GradientExtent, GradientLine, GradientStops, LineGradient, StopRef, StopRows, gradient_line};
+use crate::ui::gradient::{GradientLine, GradientStyle, LineGradient, gradient_line};
+use craft_color::ui::gradient::stops::sample;
+use craft_color::ui::gradient::{ColorStop, GradientEditor, GradientStops, StopRef, StopRows};
 
 fn gradient() -> LineGradient {
     LineGradient {
@@ -85,7 +86,7 @@ fn gradient_overlay_extent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let value = data.value("gradient", gradient());
     let picture = ramp(value, true);
     on_canvas(ui, &picture, |ui, at| {
-        GradientOverlay::new("Gradient", Bind::bound(&mut *value)).extent(GradientExtent::Circle).reverse().show_at(ui, at).edit
+        GradientOverlay::new("Gradient", Bind::bound(&mut *value)).style(GradientStyle::Radial).reverse().show_at(ui, at).edit
     })
 }
 
@@ -93,7 +94,14 @@ fn gradient_overlay_extent(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn gradient_overlay_mirror(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let value = data.value("gradient", gradient());
     let picture = ramp(value, false);
-    on_canvas(ui, &picture, |ui, at| GradientOverlay::new("Gradient", Bind::bound(&mut *value)).extent(GradientExtent::Mirror).show_at(ui, at).edit)
+    on_canvas(ui, &picture, |ui, at| GradientOverlay::new("Gradient", Bind::bound(&mut *value)).style(GradientStyle::Reflected).show_at(ui, at).edit)
+}
+
+#[story(GradientOverlay<'static>, covers = [Default], drive = Drive::Drag(Grip::new(END).toward(vec2(0.0, 1.0))))]
+fn gradient_overlay_diamond(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let value = data.value("gradient", gradient());
+    let picture = ramp(value, false);
+    on_canvas(ui, &picture, |ui, at| GradientOverlay::new("Gradient", Bind::bound(&mut *value)).style(GradientStyle::Diamond).show_at(ui, at).edit)
 }
 
 #[story(GradientOverlay<'static>, covers = [Default], drive = Drive::Drag(Grip::new(END).toward(vec2(0.0, 1.0))))]

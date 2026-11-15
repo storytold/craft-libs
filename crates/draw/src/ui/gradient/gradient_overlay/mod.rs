@@ -25,8 +25,8 @@ use craft_ui::style::{ComponentStyle, HandleLook, MarkerLook, StyleColor, StyleC
 use egui::{Color32, Pos2, Rect, Response, Vec2, vec2};
 
 use super::gradient_line::{at_screen, midpoint_location};
-use super::marker_texts;
-use super::{GradientExtent, GradientWords, LineGradient, LinePart, Sampler, StopColor, StopRef, StopRow, StopRows, StopRules};
+use super::{GradientStyle, LineGradient, LinePart};
+use craft_color::ui::gradient::{GradientWords, Sampler, StopColor, StopRef, StopRow, StopRows, StopRules, marker_texts};
 use parts::{END, LINE, MIDPOINT, START, STOP, line_part};
 
 craft_ui::words! {
@@ -65,15 +65,15 @@ pub struct GradientOverlayStyle {
     handle: HandleLook,
     /// The end rings and the colour stops.
     marker: MarkerLook,
-    /// The line and the extent.
+    /// The line and the style shape.
     line: StyleColor,
-    /// The outline beside the line and the extent, and round the diamonds.
+    /// The outline beside the line and the style shape, and round the diamonds.
     halo: StyleColor,
     /// The selected diamond's fill.
     selected: StyleColor,
-    /// Length of a dash of the mirrored extent.
+    /// Length of a dash of the mirrored style shape.
     dash: f32,
-    /// Length of the gap between dashes of the mirrored extent.
+    /// Length of the gap between dashes of the mirrored style shape.
     gap: f32,
     /// Radius of a midpoint's diamond.
     diamond_radius: f32,
@@ -88,7 +88,7 @@ const TEAR_OFF: f32 = 36.0;
 /// and the colour stops and midpoint diamonds on it, as the live Gradient tool draws them. The host holds the
 /// gradient and passes the line and stops as the value.
 ///
-/// - Look: the line over its halo, the extent in the line's style (the mirrored half dashed, no halo), rings at the ends,
+/// - Look: the line over its halo, the style shape in the line's style (the mirrored half dashed, no halo), rings at the ends,
 ///   a disc in each stop's colour with a ring round it, and a diamond between stops. Points go through the canvas's
 ///   view, so a rotated, flipped or stretched view draws the line where the document has it. Under
 ///   [`StopRows::Split`] and [`StopRows::ColorOnly`] a stop's disc is opaque; under [`StopRows::Combined`] its colour
@@ -108,7 +108,7 @@ const TEAR_OFF: f32 = 36.0;
 ///   or the line by 1 document unit, 10 with Shift. Delete and Backspace remove a stop, Insert and Cmd/Ctrl+Enter add one
 ///   halfway after the picked stop. Enter and Space on a colour stop or an end set `color_requested`. Each change is one
 ///   Set.
-/// - With [`shared_selection`](Self::shared_selection) the overlay and a [`GradientEditor`](super::GradientEditor) share one selected stop.
+/// - With [`shared_selection`](Self::shared_selection) the overlay and a [`GradientEditor`](craft_color::ui::gradient::GradientEditor) share one selected stop.
 #[derive(Component, Props)]
 #[component(canvas_control)]
 pub struct GradientOverlay<'a> {
@@ -127,12 +127,9 @@ pub struct GradientOverlay<'a> {
     /// Whether the gradient runs from the end to the start.
     #[prop(flag)]
     reverse: bool,
-    /// The shape the gradient's style adds round the line; decoration only.
-    #[prop]
-    extent: GradientExtent,
     /// The gradient's style, which draws its shape round the line (SG-66).
     #[prop]
-    style: super::GradientStyle,
+    style: GradientStyle,
     /// Whether an Alt-drag on a stop drags a copy of it; off, Alt is the tool's.
     #[prop(flag)]
     alt_copies: bool,
@@ -170,8 +167,7 @@ impl<'a> GradientOverlay<'a> {
             sampler: None,
             midpoints: true,
             reverse: false,
-            extent: GradientExtent::None,
-            style: super::GradientStyle::Linear, // P3(tools-w11): tl.T36 replaces `extent`.
+            style: GradientStyle::Linear,
             alt_copies: false,
             location_decimals: 0,
             shared_selection: None,
@@ -226,7 +222,7 @@ impl<'a> GradientOverlay<'a> {
         };
         let stop = value.stops.color.get(index)?;
         let request = craft_ui::runtime::requests::ColorRequest::new("gradient.stop", stop.color);
-        Some(StopColor { index, tag: stop.tag, request })
+        Some(StopColor::new(index, stop.tag, request))
     }
 
     /// The group's accessible value.
@@ -382,14 +378,14 @@ impl GradientOverlay<'_> {
                 draw.stroke(shape, StrokeWidth::Medium, style.line);
             };
             let d = end - start;
-            match self.extent {
-                GradientExtent::None => {}
-                GradientExtent::Circle => outlined(&PaintShape::Circle(start, d.length())),
-                GradientExtent::Square => {
+            match self.style {
+                GradientStyle::Linear => {}
+                GradientStyle::Radial | GradientStyle::Angle => outlined(&PaintShape::Circle(start, d.length())),
+                GradientStyle::Diamond => {
                     let turned = vec2(-d.y, d.x);
                     outlined(&PaintShape::Polygon(vec![start + d, start + turned, start - d, start - turned]));
                 }
-                GradientExtent::Mirror => draw.dashed(&[start, start - d], Dashes::new(style.dash, style.gap), StrokeWidth::Medium, style.line),
+                GradientStyle::Reflected => draw.dashed(&[start, start - d], Dashes::new(style.dash, style.gap), StrokeWidth::Medium, style.line),
             }
             outlined(&PaintShape::Path(vec![start, end]));
             if self.midpoints {

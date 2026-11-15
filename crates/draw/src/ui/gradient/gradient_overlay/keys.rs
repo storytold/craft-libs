@@ -8,8 +8,9 @@ use craft_ui::contract::{Cx, Edit as _, Focus as _};
 use super::parts::line_part;
 use super::parts::{part_ref, selection_of};
 use super::{CMD_ENTER, ENTER, GradientOverlay, INSERT, SPACE};
-use crate::ui::gradient::stops::{self, STOP_STEP, STOP_STEP_FAR, round_location};
-use crate::ui::gradient::{GradientLine, LineGradient, LinePart, Sampler, StopRow, default_sampler};
+use crate::ui::gradient::{GradientLine, LineGradient, LinePart};
+use craft_color::ui::gradient::stops::{self, STOP_STEP, STOP_STEP_FAR, round_location};
+use craft_color::ui::gradient::{Sampler, StopRow, default_sampler};
 
 impl GradientOverlay<'_> {
     /// Selection follows the focus. While focused: the keys of the picked part (the line when none is picked).

@@ -9,7 +9,7 @@
 use egui::Pos2;
 use kurbo::Point;
 
-use crate::ui::gradient::{GradientStops, StopRef, StopRow};
+use craft_color::ui::gradient::{GradientStops, StopRef, StopRow};
 
 /// Midpoint diamonds show only between stops farther apart than this, as the stop bar's do.
 pub const MIN_MIDPOINT_GAP: f32 = 0.001;
@@ -68,20 +68,6 @@ impl LineGradient {
     }
 }
 
-/// The shape a gradient's style adds round the line.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum GradientExtent {
-    /// Only the line (linear).
-    #[default]
-    None,
-    /// A circle of the line's length round the start (radial, angle).
-    Circle,
-    /// A square with the end as one corner, centred on the start (diamond).
-    Square,
-    /// The line mirrored through the start, dashed (reflected).
-    Mirror,
-}
 
 /// A part of the line a pointer or key takes. Indices are into the colour row's stops.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

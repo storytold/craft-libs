@@ -30,14 +30,14 @@ note = "A canvas control: `new(label, Bind<LineGradient>)` over the canvas's vie
 [[type]]
 name = "STOP_STEP"
 old = ""
-new = "craft_draw::ui::gradient::stops::STOP_STEP"
+new = "craft_color::ui::gradient::stops::STOP_STEP"
 status = "replaced"
 note = "New documented const: the share of the bar or line one Left or Right press moves a stop or midpoint."
 
 [[type]]
 name = "STOP_STEP_FAR"
 old = ""
-new = "craft_draw::ui::gradient::stops::STOP_STEP_FAR"
+new = "craft_color::ui::gradient::stops::STOP_STEP_FAR"
 status = "replaced"
 note = "New documented const: the share one Shift+arrow press moves a stop or midpoint."
 
@@ -509,9 +509,9 @@ note = "`#[non_exhaustive]`: match with a wildcard arm."
 [[type]]
 name = "GradientExtent"
 old = "craft_draw::ui::GradientExtent"
-new = "craft_draw::ui::gradient::GradientExtent"
-status = "moved"
-note = "`#[non_exhaustive]`: match with a wildcard arm."
+new = ""
+status = "removed"
+note = "Replaced by `craft_draw::ui::gradient::GradientStyle` and `GradientOverlay::style`: the overlay draws each style's shape from the style."
 
 [[setter]]
 type = "GradientOverlay"

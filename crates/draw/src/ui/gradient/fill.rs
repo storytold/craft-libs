@@ -31,8 +31,13 @@ impl GradientStyle {
 
     /// The style's name.
     pub fn label(self, words: &GradientFillWords) -> Label {
-        let _ = (self, words);
-        todo!("tl.N2")
+        match self {
+            GradientStyle::Linear => words.linear.clone().into(),
+            GradientStyle::Radial => words.radial.clone().into(),
+            GradientStyle::Angle => words.angle_style.clone().into(),
+            GradientStyle::Reflected => words.reflected.clone().into(),
+            GradientStyle::Diamond => words.diamond.clone().into(),
+        }
     }
 
     /// The style's icon: `gradient_linear`, `gradient_radial`, `gradient_angle`, `gradient_reflected`
