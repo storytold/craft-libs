@@ -375,6 +375,11 @@ carbon = "circle--outline"
 tabler = "circle"
 
 [[icon]]
+name = "circle_filled"
+directional = false
+phosphor = "circle-filled"
+
+[[icon]]
 name = "move"
 directional = false
 lucide = "move"

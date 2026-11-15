@@ -206,8 +206,8 @@ impl OpenEntry {
 pub(crate) struct Pass {
     current: Vec<OpenEntry>,
     last: Vec<OpenEntry>,
-    /// The layers whose bodies are running, innermost last.
-    drawing: Vec<Id>,
+    /// The layers whose bodies are running and the tier each shows in, innermost last.
+    drawing: Vec<(Id, Tier)>,
     /// The side of its anchor each anchored layer was placed on this pass, set before its body runs.
     sides: Vec<(Id, Side)>,
     /// The map from its parent's layer space to screen space of each layer container shown this pass, set by its host
@@ -444,7 +444,15 @@ pub(crate) fn parent_space(ctx: &Context, id: Id) -> TSTransform {
 /// The parent a layer opened now has: the layer whose body is running.
 #[doc(hidden)]
 pub fn drawing_parent(ctx: &Context) -> Option<Id> {
-    with_pass(ctx, |pass| pass.drawing.last().copied())
+    with_pass(ctx, |pass| pass.drawing.last().map(|(id, _)| *id))
+}
+
+/// The tier a layer of `rank` opened now shows in: the higher of its rank's and that of the layer whose body is
+/// running. egui sorts layers by tier before the family order, so a floating window opened inside a modal's family
+/// shows in the modal's tier, above its parent, and takes input.
+pub(crate) fn layer_tier(ctx: &Context, rank: Rank) -> Tier {
+    let parent = with_pass(ctx, |pass| pass.drawing.last().map(|(_, tier)| *tier));
+    parent.map_or(rank.tier(), |parent| parent.max(rank.tier()))
 }
 
 /// Whether the layer `id`, open in this pass, faded out in the last one: it opens anew.
@@ -461,11 +469,11 @@ pub(crate) fn appears(ctx: &Context, id: Id, exiting: bool) -> bool {
 
 /// Marks the layer `id`'s body as running, so layers opened from inside it become its children, with the `side` of
 /// its anchor it was placed on. A layer shown again while it fades out opens anew: it appears in this frame and pass.
-pub(crate) fn begin_layer(ctx: &Context, id: Id, exiting: bool, side: Option<Side>) {
+pub(crate) fn begin_layer(ctx: &Context, id: Id, tier: Tier, exiting: bool, side: Option<Side>) {
     crate::runtime::replay::block(ctx);
     let reopened = reopened(ctx, id, exiting);
     with_pass(ctx, |pass| {
-        pass.drawing.push(id);
+        pass.drawing.push((id, tier));
         if let Some(side) = side {
             pass.sides.push((id, side));
         }
@@ -542,7 +550,7 @@ pub(crate) fn note_dragged_release(ctx: &Context, popup: Id, at: Pos2) {
 
 /// Whether a press that opened the layer whose body is running ended inside `rect` (screen space) in this pass.
 pub(crate) fn released_inside(ctx: &Context, rect: Rect) -> bool {
-    with_pass(ctx, |pass| pass.dragged_release.is_some_and(|(popup, at)| pass.drawing.contains(&popup) && rect.contains(at)))
+    with_pass(ctx, |pass| pass.dragged_release.is_some_and(|(popup, at)| pass.drawing.iter().any(|(id, _)| *id == popup) && rect.contains(at)))
 }
 
 /// Ends the body `begin_layer` started.
@@ -557,7 +565,7 @@ pub(crate) fn end_layer(ctx: &Context) {
 /// close on it (`Dismiss.on_activate`). An activation in a popup opened from a field inside a menu leaves that menu
 /// open.
 pub(crate) fn note_activated(ctx: &Context, id: Id) {
-    let Some(layer) = with_pass(ctx, |pass| pass.drawing.iter().rev().copied().find(|layer| *layer != id)) else {
+    let Some(layer) = with_pass(ctx, |pass| pass.drawing.iter().rev().map(|(layer, _)| *layer).find(|layer| *layer != id)) else {
         return;
     };
     let closes = crate::runtime::focus::menus_closed_from(ctx, layer);
@@ -896,6 +904,10 @@ pub(crate) fn popup_over_modal(ctx: &Context) -> bool {
 /// The modal layer whose body is running, the innermost one when layers nest: the layer a control inside it belongs to.
 pub(crate) fn modal_drawing(ctx: &Context) -> Option<Id> {
     with_pass(ctx, |pass| {
-        pass.drawing.iter().rev().copied().find(|id| pass.current.iter().chain(&pass.last).any(|entry| entry.id == *id && entry.rank.is_modal()))
+        pass.drawing
+            .iter()
+            .rev()
+            .map(|(id, _)| *id)
+            .find(|id| pass.current.iter().chain(&pass.last).any(|entry| entry.id == *id && entry.rank.is_modal()))
     })
 }

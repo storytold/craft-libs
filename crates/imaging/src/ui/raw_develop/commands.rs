@@ -8,7 +8,7 @@ use craft_ui::contract::CommandSet;
 #[non_exhaustive]
 pub enum RawDevelopCommands {
     /// Shows the picture before the settings while held.
-    #[command(modal = "in_dialogs", label = "Before", default = "Y")]
+    #[command(modal = "in_dialogs", label = "Before", kind = "momentary", default = "Y")]
     Before,
     /// The sampler tool.
     #[command(modal = "in_dialogs", label = "Color Sampler Tool", default = "S")]

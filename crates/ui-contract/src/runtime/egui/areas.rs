@@ -174,8 +174,8 @@ pub(crate) fn body_map(at: Pos2, scale: f32, offset: Vec2) -> LayerMap {
 /// An egui layer, as the runtime's shape records name it.
 pub type LayerKey = egui::LayerId;
 
-/// How an overlay layer ranks among egui's orders: the one place the runtime chooses an `Order`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// How an overlay layer ranks among egui's orders, bottom to top: the one place the runtime chooses an `Order`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Tier {
     /// Floating windows and panels.
     Window,

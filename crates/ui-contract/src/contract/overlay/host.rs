@@ -148,7 +148,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
     }
     let size = layer.size.or_else(|| areas::layer_rect(ctx, area).map(|rect| rect.size()));
     let placed = placement(ctx, layer, size, bounds, anchor);
-    let tier = overlay.rank.tier();
+    let tier = overlay::layer_tier(ctx, overlay.rank);
     if sized && areas::layer_rect(ctx, area).is_none() {
         areas::seed_area(ctx, areas::layer_of(tier, area), placed.at, placed.room);
     }
@@ -181,7 +181,7 @@ pub(crate) fn host(ctx: &Context, layer: &Layer<'_>, body: &mut dyn FnMut(&mut U
         let recorded = overlay.opener.as_ref().and_then(|first| focus::stop_rec(ctx, (first.id, None))).map(|rec| rec.stop.key());
         owned.map(|rec| rec.stop.key()).or(pressed).or(recorded).or_else(|| focus::focused_stop(ctx))
     });
-    overlay::begin_layer(ctx, layer.id, layer.exiting, placed.side);
+    overlay::begin_layer(ctx, layer.id, tier, layer.exiting, placed.side);
     let shown = areas::show_layer(ctx, &spec, |ui| {
         if let Some(region) = layer.region {
             ui.set_clip_rect(ui.clip_rect().intersect(region));
@@ -235,7 +235,8 @@ pub(crate) fn host_window(ctx: &Context, layer: &Layer<'_>, rect: Rect) -> Layer
     let overlay = layer.overlay;
     let mut memory = recall(layer, ctx);
     let scope = (overlay.focus != FocusPolicy::NONE).then_some(overlay.focus);
-    let mut entry = OpenEntry::new(layer.id, overlay.rank, overlay.keys, rect, areas::layer_of(overlay.rank.tier(), area_id(layer.id)));
+    let mut entry =
+        OpenEntry::new(layer.id, overlay.rank, overlay.keys, rect, areas::layer_of(overlay::layer_tier(ctx, overlay.rank), area_id(layer.id)));
     entry.scoped = scope.is_some();
     entry.window = true;
     overlay::record(ctx, entry);

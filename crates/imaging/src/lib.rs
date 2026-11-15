@@ -1,6 +1,6 @@
 //! Raster image editing for Craft apps: warps, adjustments, layer styles, selection tools and masks, the full-window editors, channels and scopes.
 //!
-//! [`scopes`], [`selection`], [`trace`] and [`layer_style`] work without egui and build on every target. The widgets are behind the `ui` feature.
+//! [`scopes`], [`selection`], [`trace`], [`layer_style`], [`raw`] (the RAW Develop settings) and [`fold_order`] work without egui and build on every target. The widgets are behind the `ui` feature.
 #![warn(missing_docs)]
 
 pub mod fold_order;

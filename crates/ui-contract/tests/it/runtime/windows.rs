@@ -5,18 +5,19 @@
 use craft_behavior::{Cursor, CursorIcon, PointerButton};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
 use craft_keymap::{Key, Mods};
-use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, ShowContainer as _};
+use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::focus::FocusPolicy;
 use craft_ui::runtime::windows::{WindowHost, WindowSpec};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::pointer::{moved, press};
-use craft_ui::testing::trial;
 use craft_ui::testing::windows::{FakeSystem, NoWindows};
-use craft_ui_test_kit::contract::PlainStyle;
+use craft_ui::testing::{Fixture, trial};
+use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
 use craft_ui_test_kit::windows::{Out, Windows};
 use egui::{Event, Pos2, Rect, Response, UserAttentionType, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 
 fn child() -> ViewportId {
@@ -165,6 +166,16 @@ impl Palette {
     fn full_window(title: &'static str) -> Self {
         let mount = Mount::viewport_with(Overlay::full_window(FocusPolicy::DIALOG), WindowSpec::dialog());
         Palette { common: Common::new(), props: ContainerProps::new().mount(mount) }.label(title).id_salt(title)
+    }
+
+    /// A container that covers the main window, as a workspace without a window of its own mounts.
+    fn covering(title: &'static str) -> Self {
+        Palette { common: Common::new(), props: ContainerProps::new().mount(Mount::FullWindow) }.label(title).id_salt(title)
+    }
+
+    /// A floating panel in a layer of the main window.
+    fn floating(title: &'static str) -> Self {
+        Palette { common: Common::new(), props: ContainerProps::new().mount(Mount::Layer(Overlay::floating())) }.label(title).id_salt(title)
     }
 }
 
@@ -342,4 +353,23 @@ fn a_window_focus_loss_releases_injected_held_keys() {
     }
     assert!(shift_click.get(), "the click after the focus loss holds its own Shift");
     assert_eq!(held.get(), (false, false), "nothing stays held after the click");
+}
+
+/// A floating panel opened from the body of a full-window container lies above the container, in its family's tier,
+/// and takes a click.
+#[trial]
+fn a_floating_panel_opened_from_a_full_window_container_takes_input() {
+    let seen = Rc::new(RefCell::new(Seen::default()));
+    let shown = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        Palette::covering("Workspace").show(ui, |ui, _| {
+            Palette::floating("Scope").show(ui, |ui, _| {
+                Probe::new(&shown).show(ui);
+            });
+        });
+    });
+    fixture.settle();
+    let probe = fixture.by_label("Probe").expect("the panel's probe is in the access tree");
+    fixture.click(&probe).idle(2);
+    assert_eq!(seen.borrow().activations, 1, "the click reaches the panel above the full-window container");
 }

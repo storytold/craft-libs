@@ -14,6 +14,7 @@ mod liquify;
 mod live_preview;
 mod perspective_warp;
 mod pin_warp;
+mod raw_develop;
 mod scopes;
 mod select;
 mod select_mask;
