@@ -1,6 +1,6 @@
 //! The "Control:" row of a brush dynamic ([`DynamicControlRow`]).
 
-use craft_behavior::{IconId, Mixed, Value};
+use craft_behavior::{EditEvents, IconId, Mixed, Value};
 use craft_ui::buttons::ToggleButton;
 use craft_ui::contract::{Bind, Entry, Outcome, Show as _, ShowContainer as _};
 use craft_ui::form::Field;
@@ -61,6 +61,9 @@ pub struct DynamicControlRowOutput {
     pub response: Response,
     /// The curve toggle was pressed: the app opens or closes its curve editor.
     pub curve_toggled: bool,
+    /// The edit events of the Fade steps field in this pass (whole steps, 1 to 9999), as the row also wrote them
+    /// to its binding; empty while the field is hidden or unedited. A host files them under one history key.
+    pub steps: EditEvents<f64>,
 }
 
 impl Outcome for DynamicControlRowOutput {
@@ -113,6 +116,7 @@ impl<'a, C: Value> DynamicControlRow<'a, C> {
         let words = Env::of(ui).words::<BrushSettingsWords>();
         let entries: Vec<Entry<C>> = controls.iter().map(|entry| Entry::new(entry.value.clone(), Label::from(entry.label.clone()))).collect();
         let mut curve_toggled = false;
+        let mut steps_events = EditEvents::new();
         let shown = Field::new(words.control.clone()).show(ui, |ui, _| {
             Row::new().show(ui, |ui, cx| {
                 let held = match current.reborrow().read(cx) {
@@ -136,6 +140,7 @@ impl<'a, C: Value> DynamicControlRow<'a, C> {
                     for event in field.edit.events.iter().cloned() {
                         let event = event.map(|value| value.unwrap_or(steps).clamp(FADE_STEPS.0, FADE_STEPS.1));
                         fade_steps.reborrow().write(cx, &event);
+                        steps_events.push(event);
                     }
                 }
                 if curve {
@@ -148,6 +153,6 @@ impl<'a, C: Value> DynamicControlRow<'a, C> {
                 }
             })
         });
-        DynamicControlRowOutput { response: shown.output, curve_toggled }
+        DynamicControlRowOutput { response: shown.output, curve_toggled, steps: steps_events }
     }
 }
