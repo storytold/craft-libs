@@ -474,7 +474,10 @@ impl MemoryStage {
 
     /// Like `peek`, but `f` reads the slot in place and only its result is copied; a missing slot reads as the default.
     pub(crate) fn peek_with<T: Slot, R>(ctx: &Context, id: Id, f: impl FnOnce(&T) -> R) -> R {
-        store::peek_with::<Wrapped<SHOWN, T>, R>(ctx, id, |wrapped| f(&wrapped.0)).unwrap_or_else(|| f(&T::default()))
+        store::peek_with::<Wrapped<SHOWN, T>, R>(ctx, id, |wrapped| match wrapped {
+            Some(wrapped) => f(&wrapped.0),
+            None => f(&T::default()),
+        })
     }
 
     /// Read-only access to a session slot, as `peek` does for a shown one.

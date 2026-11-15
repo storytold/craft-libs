@@ -61,18 +61,18 @@ pub(crate) fn put_boxed<T: Any + Clone + Send + Sync>(data: &mut Map, id: Id, va
     data.insert_temp_boxed(id, value)
 }
 
-/// Runs `f` on the slot under `id` without running slot code under the data lock: the entry moves out, `f` reads
-/// it in place and it moves back. `None` when no slot of type `T` is stored.
-pub(crate) fn peek_with<T: Any + Clone + Send + Sync, R>(ctx: &Context, id: Id, f: impl FnOnce(&T) -> R) -> Option<R> {
-    let moved = take::<T>(ctx, id)?;
-    let out = f(&moved);
+/// Runs `f` on the slot under `id` (`None` when no slot of type `T` is stored) without running slot code under the
+/// data lock: the entry moves out, `f` reads it in place and it moves back.
+pub(crate) fn peek_with<T: Any + Clone + Send + Sync, R>(ctx: &Context, id: Id, f: impl FnOnce(Option<&T>) -> R) -> R {
+    let Some(moved) = take::<T>(ctx, id) else { return f(None) };
+    let out = f(Some(&moved));
     ctx.data_mut(|data| data.insert_temp(id, moved));
-    Some(out)
+    out
 }
 
 /// A copy of the slot under `id`, read as [`peek_with`] reads it.
 pub(crate) fn peek_clone<T: Any + Clone + Send + Sync>(ctx: &Context, id: Id) -> Option<T> {
-    peek_with(ctx, id, T::clone)
+    peek_with(ctx, id, |slot: Option<&T>| slot.cloned())
 }
 
 /// Whether a slot of type `T` is stored under `id`.
