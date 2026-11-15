@@ -146,6 +146,40 @@ pub enum LayersEvent<K> {
     },
 }
 
+// `#[non_exhaustive]` variants have no struct literal outside the crate: these constructors are what the
+// app's event tests build events with.
+impl<K> LayersEvent<K> {
+    /// A thumbnail click that isn't a select, with the modifiers held.
+    pub fn thumb_click(layer: K, part: LayerPart, mods: Mods) -> Self {
+        Self::ThumbClick { layer, part, mods }
+    }
+
+    /// A click on the chain before a mask thumbnail: link (`true`) or unlink the mask.
+    pub fn mask_link(layer: K, part: LayerPart, linked: bool) -> Self {
+        Self::MaskLink { layer, part, linked }
+    }
+
+    /// A double click or Enter on `row` that isn't a rename.
+    pub fn activate(row: LayerRowKey<K>, on: ActivateOn) -> Self {
+        Self::Activate { row, on }
+    }
+
+    /// A layer's effects and Smart Filter rows asked to open or close.
+    pub fn fx_open(layer: K, open: bool, all: bool) -> Self {
+        Self::FxOpen { layer, open, all }
+    }
+
+    /// `rows` dropped on footer `button`.
+    pub fn footer_drop(button: LayersFooterButton, rows: Vec<LayerRowKey<K>>) -> Self {
+        Self::FooterDrop { button, rows }
+    }
+
+    /// A pick of the host's `command` in the row menu opened at `target`.
+    pub fn menu(target: MenuTarget<K>, command: impl Into<String>) -> Self {
+        Self::Menu { target, command: command.into() }
+    }
+}
+
 /// A selection change, in layers.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -288,6 +322,13 @@ pub struct SubRowMove<Id> {
     pub copy: bool,
 }
 
+impl<Id> SubRowMove<Id> {
+    /// The sub-row at `from` of `layer`'s `group` lands at `to`.
+    pub fn new(layer: Id, group: SubRowGroup, from: usize, to: usize, copy: bool) -> Self {
+        Self { layer, group, from, to, copy }
+    }
+}
+
 /// Effects or Smart Filters dropped on another layer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -298,6 +339,13 @@ pub struct RowTransfer<Id> {
     pub to: Id,
     /// Alt: copy instead of move.
     pub copy: bool,
+}
+
+impl<Id> RowTransfer<Id> {
+    /// `rows` land on layer `to`.
+    pub fn new(rows: Vec<LayerRowKey<Id>>, to: Id, copy: bool) -> Self {
+        Self { rows, to, copy }
+    }
 }
 
 /// A mask moved or copied onto another layer.
@@ -332,4 +380,11 @@ pub struct MenuTarget<Id> {
     pub part: Option<LayerPart>,
     /// The row is one of several selected rows: the command applies to all of them.
     pub on_selection: bool,
+}
+
+impl<Id> MenuTarget<Id> {
+    /// A menu opened on `row` (`None`: the empty space), on no thumbnail and no multi-selection.
+    pub fn new(row: Option<LayerRowKey<Id>>) -> Self {
+        Self { row, part: None, on_selection: false }
+    }
 }

@@ -67,6 +67,13 @@ pub enum LayersFooterAction {
     Style(String),
 }
 
+impl LayersFooterAction {
+    /// A press on Delete; `confirm` asks first (Alt not held).
+    pub fn delete(confirm: bool) -> Self {
+        Self::Delete { confirm }
+    }
+}
+
 // The footer's buttons from the end edge, as Photoshop's.
 const DELETE: usize = 0;
 const LAYER: usize = 1;

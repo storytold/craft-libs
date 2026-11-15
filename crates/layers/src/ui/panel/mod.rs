@@ -14,7 +14,7 @@ mod row;
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-pub use drag::LayersDrag;
+pub use drag::{LayersDrag, document_hash};
 pub use events::{
     ActivateOn, LayerColumn, LayerDrop, LayerMove, LayerPosition, LayerSelect, LayerToggle, LayersEvent, MaskMove, MenuTarget, RowTransfer,
     SubRowMove,
@@ -323,10 +323,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
     /// The document the panel shows: the rows keep their scroll position and lead per document, so each document
     /// shows again where it was left. Without it every document shares one.
     pub fn document(mut self, key: impl std::hash::Hash) -> Self {
-        use std::hash::Hasher as _;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        key.hash(&mut hasher);
-        self.document = Some(hasher.finish());
+        self.document = Some(drag::document_hash(key));
         self
     }
 
@@ -368,6 +365,7 @@ impl<'a, T: LayerTree> LayersPanel<'a, T> {
         };
         let cx = PanelContext {
             list,
+            document,
             tree,
             selection: tree.selection(),
             options: &settings.options,

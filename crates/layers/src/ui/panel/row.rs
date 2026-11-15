@@ -302,7 +302,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
             let pattern = if mask.linked { &words.unlink_mask } else { &words.link_mask };
             row = row.thumb_link(mask.linked, craft_i18n::fmt(pattern.as_str(), &[("mask", word.as_str()), ("layer", info.name.as_str())]));
             let target = ThumbTarget::Extra(masks_from + at);
-            row = row.part_drag(RowDragSpot::Thumb(target), LayersDrag::new(cx.list, vec![LayerRowKey::Mask(id.clone(), part)]));
+            row = row.part_drag(RowDragSpot::Thumb(target), LayersDrag::new(cx.list, cx.document, vec![LayerRowKey::Mask(id.clone(), part)]));
             row = with_load_cursor(row, cx.held, target, part, &info);
         }
         if active {
@@ -338,7 +338,7 @@ fn layer_row<'r, T: LayerTree>(cx: &'r PanelContext<'r, T>, id: &T::Id) -> ListR
         let badge = TrailingPart::new(FX_BADGE);
         row = row
             .trailing_part(badge, TrailingFace::Icon(IconSpec::svg(IconId::new("fx"))), words.has_effects.clone())
-            .part_drag(RowDragSpot::Trailing(badge), LayersDrag::new(cx.list, vec![LayerRowKey::Effects(id.clone(), None)]));
+            .part_drag(RowDragSpot::Trailing(badge), LayersDrag::new(cx.list, cx.document, vec![LayerRowKey::Effects(id.clone(), None)]));
     }
     if info.linked {
         row = row.trailing_icon(IconSpec::svg(IconId::new("link_layers")), words.linked.clone());

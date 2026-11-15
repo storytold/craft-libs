@@ -21,24 +21,41 @@ pub struct LayersDrag<K> {
     pub(super) list: egui::Id,
     /// The dragged rows, or the one mask thumbnail.
     pub(super) keys: Vec<LayerRowKey<K>>,
+    /// The hash of the document the panel showed when the drag started ([`document_hash`]).
+    document: Option<u64>,
+}
+
+/// The one hash of a document key: [`LayersPanel::document`](super::LayersPanel::document) stores it and
+/// [`LayersDrag::document`] returns it, so an app compares a drag's source document with its own key.
+pub fn document_hash(key: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher as _;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl<K> LayersDrag<K> {
+    /// The hash ([`document_hash`]) of the document the drag started in; `None` when the panel was given no
+    /// [`LayersPanel::document`](super::LayersPanel::document).
+    pub fn document(&self) -> Option<u64> {
+        self.document
+    }
+
     /// The dragged layers, top first; empty when the drag carries effects, Smart Filter rows or a mask.
     pub fn layers(&self) -> Vec<&K> {
         if self.keys.iter().all(LayerRowKey::is_layer) { self.keys.iter().map(LayerRowKey::layer).collect() } else { Vec::new() }
     }
 
-    pub(super) fn new(list: egui::Id, keys: Vec<LayerRowKey<K>>) -> Self {
-        Self { list, keys }
+    pub(super) fn new(list: egui::Id, document: Option<u64>, keys: Vec<LayerRowKey<K>>) -> Self {
+        Self { list, keys, document }
     }
 
     /// The payload a row drag carries.
-    pub(super) fn of_rows(drag: &ListDrag<LayerRowKey<K>>) -> Self
+    pub(super) fn of_rows(drag: &ListDrag<LayerRowKey<K>>, document: Option<u64>) -> Self
     where
         K: Clone,
     {
-        Self { list: drag.list, keys: drag.keys.clone() }
+        Self { list: drag.list, keys: drag.keys.clone(), document }
     }
 }
 

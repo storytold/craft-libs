@@ -50,6 +50,8 @@ impl<Id: Clone + 'static, C: Show, B: Fn(&Id, &LayerInfo) -> C, O: FnMut(&Id, C:
 pub(super) struct PanelContext<'a, T: LayerTree> {
     /// The rows' list, which drags name.
     pub(super) list: Id,
+    /// The hash of the document the panel shows, which the drags it starts carry.
+    pub(super) document: Option<u64>,
     pub(super) tree: &'a T,
     pub(super) selection: LayerSelection<T::Id>,
     pub(super) options: &'a LayersOptions,

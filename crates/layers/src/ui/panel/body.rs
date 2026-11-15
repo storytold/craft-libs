@@ -79,7 +79,10 @@ pub(super) fn show_body<T: LayerTree>(
         .accepts(|drag: &ListDrag<LayerRowKey<T::Id>>, _over, insert| {
             accepts_drop(tree, drag, &order, insert, craft_ui::runtime::pointer::frame(&ctx).mods)
         })
-        .drag_payload(|drag: &ListDrag<LayerRowKey<T::Id>>| Some(LayersDrag::of_rows(drag)))
+        .drag_payload({
+            let document = cx.document;
+            move |drag: &ListDrag<LayerRowKey<T::Id>>| Some(LayersDrag::of_rows(drag, document))
+        })
         .takes_drop(DropKind::new(DropPlace::Onto, move |drag: &LayersDrag<T::Id>, at: &DropAt<LayerRowKey<T::Id>>| {
             accepts_part_drop(tree, list_id, drag, at)
         }))
