@@ -1466,3 +1466,52 @@ LUT_3D_SIZE 2
         assert_eq!(back.data, [0.0, 0.25, 1.0].repeat(8));
     }
 }
+
+#[cfg(test)]
+mod profile_cube_tests {
+    use super::*;
+
+    fn cube(prefix: &str) -> String {
+        format!("{prefix}\nLUT_3D_SIZE 2\n{}", "0.25 0.5 0.75\n".repeat(8))
+    }
+
+    #[test]
+    fn profile_preserves_optional_literal_title_and_domains() {
+        let no_title = parse_cube_3d(&cube(""), 256).unwrap();
+        assert_eq!(no_title.title, None);
+        let value = parse_cube_3d(&cube("TITLE \"look # literal\"\nDOMAIN_MIN 1 0 2\nDOMAIN_MAX 0 0 1"), 256).unwrap();
+        assert_eq!(value.title.as_deref(), Some("look # literal"));
+        assert_eq!(value.domain_min, [1.0, 0.0, 2.0]);
+        assert_eq!(value.domain_max, [0.0, 0.0, 1.0]);
+        assert_eq!(value.data, vec![[0.25, 0.5, 0.75]; 8]);
+        assert_eq!(parse_cube_3d(&cube("TITLE \"\""), 256).unwrap().title.as_deref(), Some(""));
+        assert!(parse_cube(&cube("DOMAIN_MIN 1 0 2\nDOMAIN_MAX 0 0 1")).is_err());
+    }
+
+    #[test]
+    fn profile_limits_are_checked_without_large_allocations() {
+        assert!(parse_cube_3d("LUT_3D_SIZE 256", 256).unwrap_err().0.contains("16777216"));
+        assert!(parse_cube_3d("LUT_3D_SIZE 257", 256).unwrap_err().0.contains("out of range"));
+        assert!(parse_cube_3d("LUT_3D_SIZE 256", 129).unwrap_err().0.contains("out of range"));
+        assert!(parse_cube_3d(&cube(""), usize::MAX).is_err());
+        assert!(parse_cube_3d(&cube(""), 1).is_err());
+        assert!(parse_cube_3d(&format!("{}0 0 0\n", cube("")), 2).unwrap_err().0.contains("budget"));
+        assert!(parse_cube_3d("LUT_1D_SIZE 2\n0 0 0\n1 1 1", 256).is_err());
+    }
+
+    #[test]
+    fn every_numeric_token_must_be_valid_and_finite() {
+        for row in ["0 ignored 0 0", "0 0 0 ignored", "NaN 0 0", "inf 0 0", "0 0 -inf", "1e39 0 0", "0 0", "0 0 0 0"] {
+            assert!(parse_cube_3d(&format!("LUT_3D_SIZE 2\n{row}\n{}", "0 0 0\n".repeat(7)), 256).is_err(), "{row}");
+            assert!(parse_cube_3d(&cube(&format!("DOMAIN_MIN {row}")), 256).is_err(), "{row}");
+        }
+    }
+
+    #[test]
+    fn standard_reader_keeps_quoted_comments_and_1d_expansion() {
+        assert_eq!(parse_cube(&cube("TITLE \"look # preserved\" # comment")).unwrap().title, "look # preserved");
+        let value = parse_cube("LUT_1D_SIZE 2\n0 0 0\n1 1 1").unwrap();
+        assert_eq!(value.size, 33);
+        assert!(parse_cube_3d(&cube("DOMAIN_MIN 0 0 0 # not a whole-line comment"), 256).is_err());
+    }
+}
