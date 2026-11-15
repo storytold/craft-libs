@@ -1134,10 +1134,10 @@ impl<'a> Build<'a, '_> {
                                     positions.push(original);
                                     vertex_colors.push([1.0; 4]);
                                 }
-                                if let Some(dst) = vertex_colors.get_mut(position as usize) {
-                                    if let [r, g, b, a] = rgba {
-                                        *dst = [finite(*r) as f32, finite(*g) as f32, finite(*b) as f32, finite(*a) as f32];
-                                    }
+                                if let Some(dst) = vertex_colors.get_mut(position as usize)
+                                    && let [r, g, b, a] = rgba
+                                {
+                                    *dst = [finite(*r) as f32, finite(*g) as f32, finite(*b) as f32, finite(*a) as f32];
                                 }
                                 color_indices.insert((p, color), position);
                             }
