@@ -746,7 +746,7 @@ fn optional_inactive_pre_rotation_keeps_legacy_placements() {
     let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" { Properties70: { P: \"PreRotation\", \"\", \"\", \"\", 0,0,90 } } }";
     let doc = document(text.as_bytes());
     let normal = doc.scene(&Limits::default(), &mut no_external).unwrap();
-    let options = crate::fbx::SceneOptions { apply_inactive_rotation: true };
+    let options = crate::fbx::SceneOptions { apply_inactive_rotation: true, ..Default::default() };
     let legacy = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
     let p = [1.0, 0.0, 0.0];
     assert_eq!(transform_point(&normal.nodes[0].transform, p), p);
@@ -762,4 +762,15 @@ fn layer_zero_takes_precedence_and_an_indexed_layer_needs_indices() {
     assert_eq!(scene.meshes[0].uv_sets[0][0], [0.0, 1.0]);
     let missing = ASCII.replace("UVIndex: *7", "UnusedIndex: *7");
     assert!(parse(missing.as_bytes()).unwrap().meshes[0].uv_sets.is_empty());
+}
+
+#[test]
+fn strict_geometry_rejects_bad_arrays_and_keeps_final_polygon() {
+    let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
+    let read_strict = |s: &str| document(s.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options);
+    let unterminated = ASCII.replace("a: 0,1,2,-4,0,1,-5", "a: 0,1,2,-4,0,1,4");
+    assert_eq!(read_strict(&unterminated).unwrap().meshes[0].triangle_count(), 3);
+    for bad in ["a: 0,1,2,-4,0,1,200", "a: 0,1,2,-4,0,1,1.5", "a: 0,1,2,-4,0,1,NaN"] {
+        assert!(read_strict(&ASCII.replace("a: 0,1,2,-4,0,1,-5", bad)).is_err());
+    }
 }

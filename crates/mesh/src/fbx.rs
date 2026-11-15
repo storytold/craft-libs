@@ -701,6 +701,8 @@ pub struct SceneOptions {
     /// Apply pre/post rotations even when `RotationActive` is missing or zero. Some importers
     /// retain these values regardless of the flag.
     pub apply_inactive_rotation: bool,
+    /// Refuse malformed geometry arrays and accept an unterminated final polygon.
+    pub strict_geometry: bool,
 }
 
 impl Document {
@@ -767,6 +769,7 @@ impl Document {
         let objects = self.top("Objects").ok_or_else(|| malformed(KIND, "no Objects section"))?;
         let mut b = Build {
             limits,
+            strict_geometry: options.strict_geometry,
             budget: Budget { left: Cell::new(self.left), limit: limits.max_data_bytes },
             resolve,
             by_key: objects.children.iter().filter_map(|o| Some((key(o.props.first())?, o))).collect(),
@@ -1170,6 +1173,7 @@ fn material(name: &str, record: &Record) -> Material {
 /// A scene under construction.
 struct Build<'a, 'r> {
     limits: &'a Limits,
+    strict_geometry: bool,
     budget: Budget,
     resolve: Resolver<'r>,
     by_key: HashMap<Key<'a>, &'a Record>,
@@ -1306,6 +1310,32 @@ impl<'a> Build<'a, '_> {
     fn mesh(&mut self, name: &str, geom: &Record, materials: &[usize]) -> Result<Option<Mesh>> {
         let limits = self.limits;
         let (Some(vertices), Some(pvi)) = (geom.child("Vertices"), geom.child("PolygonVertexIndex")) else { return Ok(None) };
+        if self.strict_geometry {
+            let valid = |record: &Record, integers: bool| {
+                let values = record.child("a").unwrap_or(record);
+                values.props.iter().all(|p| match p {
+                    Prop::Int(_) | Prop::Ints(_) => true,
+                    Prop::Float(f) => f.is_finite() && (!integers || f.fract() == 0.0),
+                    Prop::Floats(a) => a.iter().all(|f| f.is_finite() && (!integers || f.fract() == 0.0)),
+                    _ => false,
+                })
+            };
+            if !valid(vertices, false) || !valid(pvi, true) {
+                return Err(malformed(KIND, "mesh array contains a non-numeric, non-finite or fractional index value"));
+            }
+            for (element, names) in [
+                ("LayerElementNormal", &["Normals", "NormalsIndex"][..]),
+                ("LayerElementUV", &["UV", "UVIndex"][..]),
+                ("LayerElementMaterial", &["Materials"][..]),
+                ("LayerElementColor", &["Colors", "ColorIndex"][..]),
+            ] {
+                if let Some(layer) = geom.children_named(element).min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0)) {
+                    if names.iter().filter_map(|n| layer.child(n)).any(|r| !valid(r, false)) {
+                        return Err(malformed(KIND, "mesh array contains a non-numeric or non-finite value"));
+                    }
+                }
+            }
+        }
         let pool = |what: &str, n: usize| {
             if n > limits.max_vertices { Err(too_large(KIND, format!("more than {} {what}", limits.max_vertices))) } else { Ok(()) }
         };
@@ -1332,9 +1362,11 @@ impl<'a> Build<'a, '_> {
         let mut part_of: HashMap<Option<usize>, usize> = HashMap::new();
         let mut face: Vec<Corner> = vec![];
         let (mut broken, mut poly) = (false, 0usize);
-        for (pv, raw) in pvi.ints().into_iter().enumerate() {
+        let polygon_indices = pvi.ints();
+        let index_count = polygon_indices.len();
+        for (pv, raw) in polygon_indices.into_iter().enumerate() {
             // The last corner of a polygon is stored as `-index - 1`.
-            let (v, last) = if raw < 0 { (!raw, true) } else { (raw, false) };
+            let (v, last) = if raw < 0 { (!raw, true) } else { (raw, self.strict_geometry && pv + 1 == index_count) };
             match u32::try_from(v).ok().filter(|v| (*v as usize) < original_positions) {
                 Some(p) => {
                     let normal = Layer::at(normal_layer, pv, p as usize, poly);
@@ -1373,6 +1405,7 @@ impl<'a> Build<'a, '_> {
                     }
                     face.push(Corner { position, normal, uv });
                 }
+                None if self.strict_geometry => return Err(malformed(KIND, format!("polygon vertex index {raw} out of range"))),
                 None => broken = true,
             }
             if face.len() > limits.max_face_corners {
