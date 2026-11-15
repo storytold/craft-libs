@@ -678,6 +678,32 @@ fn std_instant_checks_code_before_and_after_a_native_cfg_item_on_the_same_line()
 }
 
 #[test]
+fn std_instant_checks_an_item_after_a_native_cfg_item_on_the_same_line() {
+    let source = r#"#[cfg(target_os="linux")] fn native() {} fn web() { std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![1]);
+}
+
+#[test]
+fn std_instant_skips_gated_code_that_follows_a_native_cfg_item_on_the_same_line() {
+    let source = r#"#[cfg(target_os = "linux")] fn a() {} #[cfg(target_os = "macos")] fn b() { std::time::Instant::now(); }
+#[cfg(unix)] fn c() {} #[cfg(windows)] use std::time::Instant as Native;
+"#;
+    assert!(std_instant([("src/clock.rs", source)]).is_empty());
+}
+
+#[test]
+fn std_instant_ends_native_cfg_impl_mod_and_struct_items_where_they_end_on_the_line() {
+    let source = r#"struct S; #[cfg(unix)] impl S { fn now() { std::time::Instant::now(); } } fn web() { std::time::Instant::now(); }
+#[cfg(unix)] mod native { fn now() { std::time::Instant::now(); } } fn web_two() { std::time::Instant::now(); }
+#[cfg(unix)] struct P { at: std::time::Instant } struct Q { at: std::time::Instant }
+#[cfg(unix)] struct T(std::time::Instant); struct U(std::time::Instant);
+#[cfg(unix)] impl S { fn a() {} } #[cfg(unix)] mod m { fn b() { std::time::Instant::now(); } }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![1, 2, 3, 4]);
+}
+
+#[test]
 fn std_instant_reads_paths_split_over_lines_and_comments_with_crlf() {
     let source = "use std::time::\r\n    Instant;\r\nfn run() {\r\n    let t = std::time\r\n        ::Instant::now();\r\n    let u = std /* a */ :: time // b\r\n        :: Instant::now();\r\n}\r\n";
     assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![1, 4, 6]);
