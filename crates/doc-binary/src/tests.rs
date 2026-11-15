@@ -1282,12 +1282,19 @@ fn table_assembled_from_marks() {
 /// with `sprmPFInnerTtp`, at `sprmPItap` 2, as Word and LibreOffice write them.
 #[test]
 fn nested_table_stays_a_table_in_its_cell() {
-    let two = 2i32.to_le_bytes();
+    check_nested_table(&grpprl(&[(0x6649, &2i32.to_le_bytes())]));
+}
+
+#[test]
+fn nested_table_with_relative_depth_stays_a_table_in_its_cell() {
+    check_nested_table(&grpprl(&[(0x6649, &1i32.to_le_bytes()), (0x664A, &1i32.to_le_bytes())]));
+}
+
+fn check_nested_table(depth: &[u8]) {
     let outer = grpprl(&[(0x2416, &[0x01])]);
     let outer_ttp: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), t_def_table(&[0, 2880, 5760])].concat();
-    let inner_cell = grpprl(&[(0x2416, &[0x01]), (0x6649, &two), (0x244B, &[0x01])]);
-    let inner_ttp: Vec<u8> =
-        [grpprl(&[(0x2416, &[0x01]), (0x6649, &two), (0x244B, &[0x01]), (0x244C, &[0x01])]), t_def_table(&[0, 1440, 2880])].concat();
+    let inner_cell = [grpprl(&[(0x2416, &[0x01])]), depth.to_vec(), grpprl(&[(0x244B, &[0x01])])].concat();
+    let inner_ttp: Vec<u8> = [inner_cell.clone(), grpprl(&[(0x244C, &[0x01])]), t_def_table(&[0, 1440, 2880])].concat();
     // Outer cell 0: "p", then a two-row nested table "i" | "j" and "k" | "l", each row ended
     // by its own `sprmPFInnerTtp` mark, then the cell's last paragraph and its 0x07; outer
     // cell 1: "b"; the outer row end; then "tail".

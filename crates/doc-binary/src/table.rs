@@ -21,6 +21,8 @@ const P_INNER_CELL: u16 = 0x244B;
 const P_INNER_TTP: u16 = 0x244C;
 /// `sprmPItap`: table depth (1 = an outermost table, 2 = one in its cell, …).
 const P_ITAP: u16 = 0x6649;
+/// `sprmPDtap`: signed adjustment to the depth set by earlier depth sprms.
+const P_DTAP: u16 = 0x664A;
 /// Deepest table nesting we build, as the .docx reader's; deeper rows stay paragraphs in the
 /// cell of the deepest table built.
 const MAX_TABLE_DEPTH: u32 = 24;
@@ -63,7 +65,7 @@ pub(crate) struct RowInfo {
     pub(crate) ttp: bool,
     /// The mark itself was 0x07 (a cell end), set by the walker.
     pub(crate) cell_mark: bool,
-    /// Table depth from `sprmPItap` (0 when absent, read as 1 for a table mark).
+    /// Table depth from `sprmPItap` / `sprmPDtap` (0 when absent, read as 1 for a table mark).
     pub(crate) depth: u32,
     /// `sprmPFInnerTableCell`: the mark ends a cell of a nested table.
     inner_cell: bool,
@@ -163,6 +165,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             P_INNER_CELL => r.inner_cell = prl.operand.first().copied().unwrap_or(0) != 0,
             P_INNER_TTP => r.inner_ttp = prl.operand.first().copied().unwrap_or(0) != 0,
             P_ITAP => r.depth = i32_of(&prl).unwrap_or(0).max(0) as u32,
+            // Apply in sprm order; malformed adjustments must not underflow or overflow.
+            P_DTAP => r.depth = r.depth.saturating_add_signed(i32_of(&prl).unwrap_or(0)),
             T_DEF_TABLE => r.edges = def_table_edges(prl.operand),
             T_TABLE_HEADER => r.header = prl.operand.first().copied().unwrap_or(0) != 0,
             T_CANT_SPLIT | T_CANT_SPLIT_90 => r.cant_split = prl.operand.first().copied().unwrap_or(0) != 0,
@@ -300,12 +304,13 @@ pub(crate) struct ParaOut {
 /// table nested in a cell (`sprmPItap` above the table's own depth) becomes a table inside
 /// that cell, to [`MAX_TABLE_DEPTH`]; deeper rows stay paragraphs so no text is lost.
 pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
-    assemble_at(paras, 1)
+    assemble_at(&mut paras.into_iter().peekable(), 1)
 }
 
-/// [`assemble`] for the tables at depth `level`: marks deeper than `level` are gathered and
-/// assembled one level down, into the cell they stand in.
-fn assemble_at(paras: Vec<ParaOut>, level: u32) -> Blocks {
+/// Assemble one depth from a shared consuming cursor. A nested call stops before the first
+/// shallower mark, leaving it for its parent. Keeping one input allocation avoids retaining
+/// a near-full paragraph buffer per depth on large, deeply nested documents.
+fn assemble_at(paras: &mut std::iter::Peekable<impl Iterator<Item = ParaOut>>, level: u32) -> Blocks {
     let mut out: Blocks = Vec::new();
     let mut rows: Vec<Row> = Vec::new();
     let mut cells: Vec<Cell> = Vec::new();
@@ -313,8 +318,6 @@ fn assemble_at(paras: Vec<ParaOut>, level: u32) -> Blocks {
     let mut grid: Vec<f32> = Vec::new();
     let mut props = TableProps::default();
     let mut open = false;
-    // Marks of a table nested in the current cell, until a mark at this level ends it.
-    let mut inner: Vec<ParaOut> = Vec::new();
 
     fn flush_cell(cells: &mut Vec<Cell>, cell: &mut Blocks) {
         let mut blocks = std::mem::take(cell);
@@ -394,18 +397,22 @@ fn assemble_at(paras: Vec<ParaOut>, level: u32) -> Blocks {
         })));
     }
 
-    for p in paras {
-        if p.row.as_ref().is_some_and(|r| r.level() > level) {
+    while let Some(next) = paras.peek() {
+        let next_level = next.row.as_ref().map_or(0, |r| r.level());
+        if level > 1 && next_level < level {
+            break;
+        }
+        if next_level > level && level < MAX_TABLE_DEPTH {
             open = true;
-            if level < MAX_TABLE_DEPTH {
-                inner.push(p);
-            } else {
-                cell.push(para_block(p.para));
-            }
+            cell.extend(assemble_at(paras, level + 1));
             continue;
         }
-        if !inner.is_empty() {
-            cell.extend(assemble_at(std::mem::take(&mut inner), level + 1));
+        let Some(p) = paras.next() else { break };
+        if next_level > level {
+            // Beyond the depth cap, preserve the text in the deepest cell we build.
+            open = true;
+            cell.push(para_block(p.para));
+            continue;
         }
         let Some(info) = p.row else {
             if open {
@@ -464,9 +471,6 @@ fn assemble_at(paras: Vec<ParaOut>, level: u32) -> Blocks {
         } else {
             cell.push(para_block(p.para));
         }
-    }
-    if !inner.is_empty() {
-        cell.extend(assemble_at(inner, level + 1));
     }
     if open {
         flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props);
@@ -548,5 +552,66 @@ fn i32_of(p: &Prl) -> Option<i32> {
     match p.operand {
         [b0, b1, b2, b3, ..] => Some(i32::from_le_bytes([*b0, *b1, *b2, *b3])),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_depth_is_signed_ordered_and_bounded() {
+        let depth = |ops: &[(u16, i32)]| {
+            let bytes: Vec<u8> = ops.iter().flat_map(|(op, value)| op.to_le_bytes().into_iter().chain(value.to_le_bytes())).collect();
+            decode(&bytes).depth
+        };
+        assert_eq!(depth(&[(P_ITAP, 1), (P_DTAP, 1)]), 2);
+        assert_eq!(depth(&[(P_ITAP, 3), (P_DTAP, -1)]), 2);
+        assert_eq!(depth(&[(P_DTAP, 4), (P_ITAP, 1), (P_DTAP, 1)]), 2);
+        assert_eq!(depth(&[(P_DTAP, 1), (P_DTAP, 1)]), 2);
+        assert_eq!(depth(&[(P_ITAP, 1), (P_DTAP, i32::MIN)]), 0);
+        assert_eq!(depth(&[(P_ITAP, i32::MAX), (P_DTAP, i32::MAX), (P_DTAP, 2)]), u32::MAX);
+    }
+
+    /// Text beyond the depth cap stays in the deepest cell; returning to an outer
+    /// sibling cell or body paragraph must neither consume it early nor lose it.
+    #[test]
+    fn deep_tables_preserve_text_at_the_cap_and_after_unwinding() {
+        let para = |text: &str, row: Option<RowInfo>| {
+            let mut p = Paragraph::new();
+            p.text = text.into();
+            ParaOut { para: p, end_cp: 0, row: row.map(Box::new) }
+        };
+        let mut input = Vec::new();
+        // Start directly at a depth beyond the cap, without intermediate marks.
+        for _ in 0..1024 {
+            input.push(para("deep", Some(RowInfo { in_table: true, depth: MAX_TABLE_DEPTH + 1, ..Default::default() })));
+        }
+        for depth in (2..=MAX_TABLE_DEPTH).rev() {
+            input.push(para("", Some(RowInfo { in_table: true, depth, inner_ttp: true, ..Default::default() })));
+        }
+        input.push(para("", Some(RowInfo { in_table: true, depth: 1, cell_mark: true, ..Default::default() })));
+        input.push(para("sibling", Some(RowInfo { in_table: true, depth: 1, cell_mark: true, ..Default::default() })));
+        input.push(para(
+            "",
+            Some(RowInfo { in_table: true, depth: 1, cell_mark: true, ttp: true, edges: vec![0.0, 72.0, 144.0], ..Default::default() }),
+        ));
+        input.push(para("tail", None));
+        let blocks = assemble(input);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[1].as_para().expect("tail").text, "tail");
+        let outer = blocks[0].as_table().expect("outer table");
+        assert_eq!(outer.rows.len(), 1);
+        assert_eq!(outer.rows[0].cells.len(), 2);
+        assert_eq!(outer.rows[0].cells[1].blocks[0].as_para().expect("sibling").text, "sibling");
+        let mut cell = &outer.rows[0].cells[0];
+        for _ in 2..=MAX_TABLE_DEPTH {
+            let table = cell.blocks[0].as_table().expect("nested table");
+            assert_eq!(table.rows.len(), 1);
+            assert_eq!(table.rows[0].cells.len(), 1);
+            cell = &table.rows[0].cells[0];
+        }
+        assert_eq!(cell.blocks.len(), 1024);
+        assert!(cell.blocks.iter().all(|b| b.as_para().is_some_and(|p| p.text == "deep")));
     }
 }
