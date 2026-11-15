@@ -38,6 +38,8 @@ pub mod aac;
 pub mod ac3;
 #[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
 pub mod alac;
+/// Bounded WAV/RF64 cue, adtl and XMP marker metadata, without audio decoding.
+pub mod wav_markers;
 mod buffer;
 mod layout;
 #[cfg(any(feature = "mp3-encode", feature = "mp3-decode"))]
