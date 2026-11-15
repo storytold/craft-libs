@@ -209,6 +209,23 @@ pub enum SliceEvent {
     Refused(SliceRefusal),
 }
 
+impl SliceEvent {
+    /// [`Move`](Self::Move) of slice `number`.
+    pub fn moved(number: usize, event: EditEvent<Rect>) -> Self {
+        Self::Move { number, event }
+    }
+
+    /// [`Resize`](Self::Resize) of slice `number`.
+    pub fn resized(number: usize, event: EditEvent<Rect>) -> Self {
+        Self::Resize { number, event }
+    }
+
+    /// [`Select`](Self::Select) of `number` (`None`: nothing), adding with `add`, at a click with `mods` held.
+    pub fn selected(number: Option<usize>, add: bool, mods: Mods) -> Self {
+        Self::Select { number, add, mods }
+    }
+}
+
 /// The Slice tool's persisted options: its Style, Width and Height (a marquee's [`Constraint`], pixels for Fixed
 /// Size) and Hide Auto Slices.
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
