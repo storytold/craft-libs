@@ -18,8 +18,8 @@ mod pages;
 mod rules;
 mod texts;
 
-use draft::{insert, lookup, remove};
 pub use draft::SettingsDraft;
+use draft::{insert, lookup, remove};
 pub use pages::{PageInfo, StandardPage};
 pub use rules::{RuleKind, SettingRule};
 use texts::Texts;

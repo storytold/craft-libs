@@ -74,7 +74,10 @@ fn paint_chip_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 fn paint_chip_open_with_recents_and_swatches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let entry = |name: &str, rgb: [f32; 3]| SwatchEntry::new(name, SwatchColor::Rgb(rgb));
     let groups = vec![
-        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red", [1.0, 0.0, 0.0]), entry("Green", [0.0, 0.7, 0.2]), entry("Blue", [0.1, 0.2, 0.9])] },
+        SwatchGroup {
+            name: "Basics".to_owned(),
+            entries: vec![entry("Red", [1.0, 0.0, 0.0]), entry("Green", [0.0, 0.7, 0.2]), entry("Blue", [0.1, 0.2, 0.9])],
+        },
         SwatchGroup { name: "Pastels".to_owned(), entries: vec![entry("Rose", [1.0, 0.8, 0.85]), entry("Mint", [0.75, 1.0, 0.85])] },
     ];
     let recent = [BLUE, Srgba::rgb(0.9, 0.5, 0.1), Srgba::rgb(0.1, 0.6, 0.3)];

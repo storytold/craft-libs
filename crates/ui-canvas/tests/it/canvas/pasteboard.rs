@@ -69,7 +69,10 @@ fn uncovered_rects_stay_open_in_a_turned_view() {
                 assert!(!quads.iter().any(|quad| holds(quad, p, 1e-3)), "{rotation}°: {p:?} (document {doc:?}) lies in a hole and in the pasteboard");
             } else {
                 covered += 1;
-                assert!(quads.iter().any(|quad| holds(quad, p, -1e-3)), "{rotation}°: {p:?} (document {doc:?}) lies outside every hole and every quad");
+                assert!(
+                    quads.iter().any(|quad| holds(quad, p, -1e-3)),
+                    "{rotation}°: {p:?} (document {doc:?}) lies outside every hole and every quad"
+                );
             }
         }
         assert!(open > 0 && covered > 0, "{rotation}°: the samples reach both the holes and the pasteboard");
@@ -95,7 +98,8 @@ enum PressOn {
 /// whether the typed zoom applied (the row committed it; a plain typed number already shows as a proposal) and whether
 /// focus stayed in the field.
 fn press_after_typing(rotation: f64, on: PressOn) -> (bool, bool) {
-    let zoom_view = Rc::new(Cell::new(CanvasView::new(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0)), Point::new(1000.0, 750.0), 1.0)));
+    let zoom_view =
+        Rc::new(Cell::new(CanvasView::new(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0)), Point::new(1000.0, 750.0), 1.0)));
     let canvas_view: Rc<Cell<Option<CanvasView>>> = Rc::new(Cell::new(None));
     let committed = Rc::new(Cell::new(false));
     let (zoom_shown, canvas_shown, seen) = (Rc::clone(&zoom_view), Rc::clone(&canvas_view), Rc::clone(&committed));

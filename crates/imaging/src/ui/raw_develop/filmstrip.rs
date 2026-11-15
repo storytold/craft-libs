@@ -4,11 +4,11 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use craft_behavior::{DisplayOrder, EditEvent, IconId, ItemSource, Mixed, Selection};
+use craft_ui::contract::Pattern;
 use craft_ui::contract::{ActivateOn, Bind, CollectionEvent, Props as _, SelectMode, ShowCollection as _, ShowContainer as _, Sizing};
 use craft_ui::layout_components::Stack;
 use craft_ui::list::{ThumbAspect, ThumbSize};
 use craft_ui::runtime::env::Env;
-use craft_ui::contract::Pattern;
 use craft_ui::tile_grid::{Tile, TileGrid, TileMark};
 use egui::{Rect, Response, Ui, load::SizedTexture, pos2};
 

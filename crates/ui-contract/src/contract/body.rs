@@ -35,8 +35,8 @@ pub use reorder::REORDER_BAND;
 pub use scroll::{STRIP_BACK, STRIP_FORWARD};
 #[cfg(feature = "testing")]
 pub(crate) use window::MOVE_BAND;
-pub(crate) use window::keep_inside;
 use window::WindowMode;
+pub(crate) use window::keep_inside;
 
 /// The scroll region's view in the last pass that showed it.
 #[derive(Clone, Default)]

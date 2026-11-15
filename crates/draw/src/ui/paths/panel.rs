@@ -7,7 +7,9 @@ use std::hash::Hash;
 
 use craft_behavior::geometry::selection_op::SelectionOperation;
 use craft_behavior::{ColumnWidth, DisplayOrder, EditEvent, ItemSource, Selection, SelectionChange};
-use craft_ui::contract::{Bind, CollectionEvent, ColumnSpec, ListDrag, Props as _, SelectMode, ShowCollection as _, ShowContainer as _, request_rename};
+use craft_ui::contract::{
+    Bind, CollectionEvent, ColumnSpec, ListDrag, Props as _, SelectMode, ShowCollection as _, ShowContainer as _, request_rename,
+};
 use craft_ui::layout_components::Stack;
 use craft_ui::list::{List, RowEvent};
 use craft_ui::runtime::commands::{CommandState, Commands as _};
@@ -190,7 +192,12 @@ impl<'a, K: Clone + Eq + Hash + Debug + Send + Sync + 'static> PathsPanel<'a, K>
 ///
 /// A Cmd/Ctrl-click on a thumbnail arrives as a thumbnail click and, in either order, as a selection of that row; the
 /// batch is scanned first so the selection that only picks a loaded row is dropped.
-fn map_events<K: Clone + PartialEq>(rows: &[PathRow<K>], list: Vec<CollectionEvent<K, RowEvent>>, events: &mut Vec<PathsEvent<K>>, session: &mut Session<K>) {
+fn map_events<K: Clone + PartialEq>(
+    rows: &[PathRow<K>],
+    list: Vec<CollectionEvent<K, RowEvent>>,
+    events: &mut Vec<PathsEvent<K>>,
+    session: &mut Session<K>,
+) {
     let loaded: Vec<K> = list
         .iter()
         .filter_map(|event| match event {

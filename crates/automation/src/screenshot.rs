@@ -318,12 +318,7 @@ impl Captures {
     }
 
     /// Queues `request` at `geometry` and `epoch`, what its viewport's window recorded.
-    fn admit_with_geometry(
-        &mut self,
-        request: WaitingAdmit,
-        geometry: CaptureGeometry,
-        epoch: u64,
-    ) -> Result<(), (Sender<ControlResponse>, String)> {
+    fn admit_with_geometry(&mut self, request: WaitingAdmit, geometry: CaptureGeometry, epoch: u64) -> Result<(), (Sender<ControlResponse>, String)> {
         let WaitingAdmit { token, viewport, path, reply, deadline, settle_ms, document } = request;
         // The request's clock started when it arrived.
         let arrived = deadline - DEADLINE;

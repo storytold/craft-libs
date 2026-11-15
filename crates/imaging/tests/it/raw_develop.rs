@@ -281,7 +281,12 @@ fn the_scope_floats_and_docks_back_with_its_settings() {
 
     let probe: &dyn RawDevelopSource = &*source;
     let settings = serde_json::json!({ "shadowWarning": true, "vectorscope": true, "selectedRegion": true, "view": "expanded" });
-    host.borrow_mut().get_mut::<Hosted>().expect("open").workspace_mut().set_json_field(fixture.ctx(), probe, "scope", settings).expect("scope field");
+    host.borrow_mut()
+        .get_mut::<Hosted>()
+        .expect("open")
+        .workspace_mut()
+        .set_json_field(fixture.ctx(), probe, "scope", settings)
+        .expect("scope field");
     fixture.idle(4);
     fixture.key(Key::Escape, Modifiers::NONE).idle(4);
     assert_eq!(host.borrow_mut().take::<Hosted>(), Some(DialogResult::Cancel));

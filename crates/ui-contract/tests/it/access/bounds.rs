@@ -1,8 +1,6 @@
 //! `runtime::access::bounds`: the rect automation clicks hides what the access tree hides.
 
-use craft_ui::contract::{
-    Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _,
-};
+use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _};
 use craft_ui::runtime::access::bounds;
 use craft_ui::style::StyleCx;
 use craft_ui::testing::{Frames, trial};

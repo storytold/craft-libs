@@ -136,7 +136,8 @@ impl<'a> SymmetryMenu<'a> {
         let current = self.current;
         let is_off = matches!(current, SymmetryChoice::Off);
 
-        let mut entries: Vec<Entry<SymmetryCommand>> = vec![Entry::new(SymmetryCommand::Off, words.off.clone()).checked(is_off).enabled(!is_off && self.can_set)];
+        let mut entries: Vec<Entry<SymmetryCommand>> =
+            vec![Entry::new(SymmetryCommand::Off, words.off.clone()).checked(is_off).enabled(!is_off && self.can_set)];
         entries.push(Entry::separator());
         for mode in SymmetryMode::ALL {
             let (label, icon) = match mode {
@@ -153,7 +154,8 @@ impl<'a> SymmetryMenu<'a> {
         }
         for row in self.paths {
             let chosen = matches!(current, SymmetryChoice::Path(key) if *key == row.key);
-            entries.push(Entry::new(SymmetryCommand::FromPath(row.key.clone()), Label::from(row.label.clone())).checked(chosen).enabled(self.can_set));
+            entries
+                .push(Entry::new(SymmetryCommand::FromPath(row.key.clone()), Label::from(row.label.clone())).checked(chosen).enabled(self.can_set));
         }
         entries.push(Entry::separator());
         entries.push(Entry::new(SymmetryCommand::Transform, words.transform.clone()).enabled(self.can_transform));

@@ -85,7 +85,11 @@ fn action_list_file_round_trip_keeps_pc_json() {
 #[trial]
 fn action_names_in_a_file_keep_their_own_names_and_rename_only_repeats() {
     let names = |list: &ActionList| list.actions.iter().map(|action| action.name.clone()).collect::<Vec<_>>();
-    let file = || ActionsFile { version: ActionsFile::VERSION, actions: vec![action("Foo", &[]), action("Foo", &[]), action("Foo 2", &[])], sets: Vec::new() };
+    let file = || ActionsFile {
+        version: ActionsFile::VERSION,
+        actions: vec![action("Foo", &[]), action("Foo", &[]), action("Foo 2", &[])],
+        sets: Vec::new(),
+    };
     assert_eq!(names(&ActionList::from_file(file())), ["Foo", "Foo 3", "Foo 2"]);
 
     let mut list = list_of(vec![action("Foo", &[])]);

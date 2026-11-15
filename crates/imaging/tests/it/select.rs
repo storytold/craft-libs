@@ -521,7 +521,11 @@ fn lasso_alt_clicks_make_straight_segments_that_retract_and_close() {
     assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 3 }, "a secondary press retracts");
     click(&mut rig, (200.0, 200.0), Mods::ALT);
     let events = rig.tool_mut().events();
-    assert_eq!(events, [polygon(&[(100.0, 100.0), (200.0, 100.0), (200.0, 200.0)], SelectionOperation::New)], "a click on the last point closes, New");
+    assert_eq!(
+        events,
+        [polygon(&[(100.0, 100.0), (200.0, 100.0), (200.0, 200.0)], SelectionOperation::New)],
+        "a click on the last point closes, New"
+    );
     hold(&mut rig, Modifiers::NONE);
     assert!(rig.tool_mut().events().is_empty(), "nothing is left to close");
 }

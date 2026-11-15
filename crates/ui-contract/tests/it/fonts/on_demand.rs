@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use craft_i18n::Han;
 use craft_ui::fonts::{
-    FontCandidates, FontRef, I18nScripts, MAX_SCRIPT_READS, SystemCandidates, SystemFonts, UiFonts, deflated_default_definitions, han_for_locale, set_weight,
+    FontCandidates, FontRef, I18nScripts, MAX_SCRIPT_READS, SystemCandidates, SystemFonts, UiFonts, deflated_default_definitions, han_for_locale,
+    set_weight,
 };
 use craft_ui::testing::{Frames, trial};
 use egui::FontId;
@@ -301,7 +302,8 @@ fn registered_names(frames: &Frames) -> Vec<(String, PathBuf, u32)> {
 
 #[trial]
 fn the_han_preference_follows_the_ui_language_then_the_os_locale() {
-    let is = |ui: &str, os: Option<&str>, want: Option<Han>| assert_eq!(format!("{:?}", han_for_locale(ui, os)), format!("{want:?}"), "{ui} on {os:?}");
+    let is =
+        |ui: &str, os: Option<&str>, want: Option<Han>| assert_eq!(format!("{:?}", han_for_locale(ui, os)), format!("{want:?}"), "{ui} on {os:?}");
     is("ja", Some("en_US"), Some(Han::Japanese));
     is("zh-hant", Some("ja_JP"), Some(Han::Traditional));
     is("zh-hans", Some("ko_KR"), Some(Han::Simplified));

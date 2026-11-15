@@ -329,7 +329,8 @@ fn a_remembered_value_its_row_refuses_opens_as_the_default() {
 
     host.borrow_mut().open(HostedParamDialog::new("filter", DialogFields::new(), wide_filter));
     fixture.idle(4);
-    let values = [("radius", json!(80.0)), ("method", json!("twist")), ("edge", json!("repeat")), ("pattern", json!("stripes")), ("smooth", json!(true))];
+    let values =
+        [("radius", json!(80.0)), ("method", json!("twist")), ("edge", json!("repeat")), ("pattern", json!("stripes")), ("smooth", json!(true))];
     for (field, value) in values {
         host.borrow_mut().set_json_field(&ctx, dialog_id("filter"), field, value).expect("the first version takes each value");
     }

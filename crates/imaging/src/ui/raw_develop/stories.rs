@@ -198,7 +198,8 @@ fn scope_strip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut state = data.value("scope", scope_state()).clone();
     let mut output = StoryOutput::default();
     Pictures { after: MockImage::new([IMAGE.width, IMAGE.height]), before: Flat }.scope(false, false, None, &mut |frame| {
-        output = RawScopeStrip::new(&mut state, frame.as_ref(), Bind::given(settings.clone())).show(ui).panel.map(StoryOutput::from).unwrap_or_default();
+        output =
+            RawScopeStrip::new(&mut state, frame.as_ref(), Bind::given(settings.clone())).show(ui).panel.map(StoryOutput::from).unwrap_or_default();
     });
     *data.value("scope", scope_state()) = state;
     output
@@ -211,7 +212,11 @@ fn floating_scope_window(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut floating = true;
     let mut output = StoryOutput::default();
     Pictures { after: MockImage::new([IMAGE.width, IMAGE.height]), before: Flat }.scope(false, false, None, &mut |frame| {
-        output = RawFloatingScope::new(&mut state, frame.as_ref(), Bind::bound(&mut floating), Bind::given(settings.clone())).show(ui).panel.map(StoryOutput::from).unwrap_or_default();
+        output = RawFloatingScope::new(&mut state, frame.as_ref(), Bind::bound(&mut floating), Bind::given(settings.clone()))
+            .show(ui)
+            .panel
+            .map(StoryOutput::from)
+            .unwrap_or_default();
     });
     *data.value("scope", scope_state()) = state;
     output

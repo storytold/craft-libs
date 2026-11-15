@@ -387,7 +387,8 @@ fn the_command_writes_and_reads_the_engines_planes_and_strokes() {
     };
 
     assert_eq!(set("planes", drawn_and_torn()), Ok(()));
-    let stroke = serde_json::json!([{"source": [10.0, 10.0], "points": [[20.0, 20.0], [30.0, 30.0]], "size": 50.0, "hardness": 25.0, "opacity": 75.0}]);
+    let stroke =
+        serde_json::json!([{"source": [10.0, 10.0], "points": [[20.0, 20.0], [30.0, 30.0]], "size": 50.0, "hardness": 25.0, "opacity": 75.0}]);
     assert_eq!(set("clone", stroke), Ok(()));
     assert_eq!(set("paste", serde_json::json!(true)), Ok(()));
 

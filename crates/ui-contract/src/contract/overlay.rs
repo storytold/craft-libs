@@ -18,8 +18,8 @@ mod ui;
 
 pub use container_open::Popup;
 pub(crate) use container_open::{opener_open, set_opener_open};
-pub(crate) use host::{Layer, floor_width, forget_layer, host, host_window};
 pub use host::paint_frame_layers;
+pub(crate) use host::{Layer, floor_width, forget_layer, host, host_window};
 pub(crate) use opener::opener_floor;
 pub use opener::{Opener, Trigger};
 pub use place::{Anchor, FloatPlace, OverlayFit, Place, Resize, ResizeEdges, SizeLimits, ViewportShare};

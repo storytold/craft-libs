@@ -1,7 +1,7 @@
 //! The Color Mixer and Color Grading sections of the control column.
 
-use craft_ui::contract::{Bind, Entry, Show as _, ShowContainer as _};
 use craft_ui::choice::Segmented;
+use craft_ui::contract::{Bind, Entry, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Label;
 use craft_ui::sections::{HeaderStrength, Section};
 use craft_ui::style::DataColor;

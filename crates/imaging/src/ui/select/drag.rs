@@ -55,11 +55,7 @@ pub fn drag_kind(probe: &dyn SelectionProbe, at: Point, mods: Mods, bar: Selecti
         if cut {
             return Some(DragKind::Pixels { copy });
         }
-        let plain = !clicky
-            && !mods.cmd
-            && !mods.shift
-            && !mods.alt
-            && SelectionOperation::resolve(bar, mods, true) == SelectionOperation::New;
+        let plain = !clicky && !mods.cmd && !mods.shift && !mods.alt && SelectionOperation::resolve(bar, mods, true) == SelectionOperation::New;
         return plain.then_some(DragKind::Outline);
     }
     if !probe.inside_selection(at) {

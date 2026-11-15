@@ -207,7 +207,8 @@ impl ShapePreset {
             let path = heart();
             return PresetOutline { fill: Some(path.clone()), strokes: vec![path] };
         }
-        let (from, to) = if self.is_connector() { (Point::new(4.0, 15.0), Point::new(16.0, 5.0)) } else { (Point::new(4.0, 16.0), Point::new(16.0, 4.0)) };
+        let (from, to) =
+            if self.is_connector() { (Point::new(4.0, 15.0), Point::new(16.0, 5.0)) } else { (Point::new(4.0, 16.0), Point::new(16.0, 4.0)) };
         let routing = self.routing().unwrap_or(Routing::Straight);
         let Some(points) = route(RouteEnd::Point(from), RouteEnd::Point(to), routing) else {
             return PresetOutline::default();

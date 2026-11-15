@@ -1,6 +1,6 @@
 //! Stories of the type-on-a-path markers: an open path, a closed one, text that overflows and locked markers.
 
-use super::{PathRange, PathTextMarkers, PathTrack, MARK};
+use super::{MARK, PathRange, PathTextMarkers, PathTrack};
 use craft_behavior::kurbo::{BezPath, Circle, ParamCurve, ParamCurveArclen, ParamCurveNearest, PathSeg, Point, Shape as _, Vec2 as PathVec};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::testing::canvas_story::{self, OUTLINE, StoryPicture, StoryShape, paint_shapes};

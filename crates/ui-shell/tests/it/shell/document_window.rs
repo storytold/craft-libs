@@ -53,14 +53,14 @@ fn wrap_frame(windows: &Windows, info: ViewportInfo, ask: Option<(Rect, Vec2)>) 
     windows.child_info(info);
     let mut wrapped = None;
     let out = windows.frame(vec![], vec![], |ui| {
-        let shown = DocumentWindow::new("Landscape.psd")
-            .id_salt("landscape")
-            .overlay(|overlay| overlay.size_limits(SizeLimits::at_least(MIN)))
-            .show(ui, |_, body| {
+        let shown = DocumentWindow::new("Landscape.psd").id_salt("landscape").overlay(|overlay| overlay.size_limits(SizeLimits::at_least(MIN))).show(
+            ui,
+            |_, body| {
                 if let Some((canvas, wanted)) = ask {
                     DocumentWindow::wrap_in(body, canvas, wanted);
                 }
-            });
+            },
+        );
         wrapped = shown.output.wrapped;
     });
     let sent = || out.commands.iter().rev().filter(|(id, _)| *id != ViewportId::ROOT).map(|(_, command)| command);

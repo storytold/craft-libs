@@ -158,7 +158,11 @@ fn perspective_box_and_corner_modifiers_and_clicks() {
     assert_eq!(rig.placing(), 3);
     assert!(rig.preview_reaches((120.0, 180.0)), "after three clicks the preview's last corner sits at the pointer");
     rig.click((100.0, 200.0));
-    assert!(near(rig.quad(), [(100.0, 50.0), (300.0, 50.0), (300.0, 200.0), (100.0, 200.0)]), "the fourth click puts the corners in order: {:?}", rig.quad());
+    assert!(
+        near(rig.quad(), [(100.0, 50.0), (300.0, 50.0), (300.0, 200.0), (100.0, 200.0)]),
+        "the fourth click puts the corners in order: {:?}",
+        rig.quad()
+    );
     assert_eq!(rig.placing(), 0);
     rig.tool.borrow_mut().clear();
     rig.click((100.0, 50.0));
@@ -170,13 +174,21 @@ fn perspective_box_and_corner_modifiers_and_clicks() {
     let by = (340.0, 230.0);
     rig.set(upright);
     rig.drag((300.0, 220.0), by, SHIFT);
-    assert!(near(rig.quad(), [(100.0, 80.0), (300.0, 80.0), (340.0, 220.0), (100.0, 220.0)]), "Shift locks the axis moved less along: {:?}", rig.quad());
+    assert!(
+        near(rig.quad(), [(100.0, 80.0), (300.0, 80.0), (340.0, 220.0), (100.0, 220.0)]),
+        "Shift locks the axis moved less along: {:?}",
+        rig.quad()
+    );
     rig.set(upright);
     rig.drag((300.0, 220.0), by, ALT);
     assert!(near(rig.quad(), [(100.0, 80.0), (340.0, 80.0), (340.0, 230.0), (100.0, 230.0)]), "Alt keeps the rectangle: {:?}", rig.quad());
     rig.set(upright);
     rig.drag_with((300.0, 220.0), by, ALT, Modifiers::NONE);
-    assert!(near(rig.quad(), [(100.0, 80.0), (300.0, 80.0), (340.0, 230.0), (100.0, 220.0)]), "releasing Alt mid-drag puts the neighbours back: {:?}", rig.quad());
+    assert!(
+        near(rig.quad(), [(100.0, 80.0), (300.0, 80.0), (340.0, 230.0), (100.0, 220.0)]),
+        "releasing Alt mid-drag puts the neighbours back: {:?}",
+        rig.quad()
+    );
     rig.set([(120.0, 80.0), (300.0, 80.0), (300.0, 220.0), (100.0, 220.0)]);
     rig.drag((300.0, 220.0), (320.0, 230.0), ALT);
     assert!(near(rig.quad(), [(120.0, 80.0), (300.0, 80.0), (320.0, 230.0), (100.0, 220.0)]), "a skewed quad's corner moves alone: {:?}", rig.quad());

@@ -14,6 +14,7 @@ use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, WordSetCx as _,
 };
+use crate::runtime::env::EnvView;
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, StyleColor, StyleCx};
@@ -23,7 +24,6 @@ use craft_behavior::{
     Axis, CancelReason, CanvasView, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PaintedCursor, PartKey,
     PointerButton, PressPhase, Roving, Sense, resize_cursor,
 };
-use crate::runtime::env::EnvView;
 use craft_keymap::{Chord, Key, Mods};
 use egui::{Pos2, Rect, Response, Vec2};
 use gesture::{Drag, Kind, Rules};
@@ -681,7 +681,8 @@ impl Component for CropOverlay<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CropOverlayOutput {
         let picked = cx.active_part().filter(|part| part.key == FRAME).and_then(|part| part.index).and_then(frame_part);
-        let Report { apply, discard, straightened, view, snapped, hovered, dragging, nudged, turning, sizing, scrolls_at, straighten_ended } = self.report;
+        let Report { apply, discard, straightened, view, snapped, hovered, dragging, nudged, turning, sizing, scrolls_at, straighten_ended } =
+            self.report;
         CropOverlayOutput {
             edit: cx.edit_response(),
             apply,

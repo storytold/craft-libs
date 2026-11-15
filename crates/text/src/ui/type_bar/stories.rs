@@ -64,11 +64,7 @@ fn editing(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn vertical(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let (character, paragraph) = single();
     let (families, styles) = (families(), styles());
-    TypeBar::new(&character, &paragraph, &families, &styles)
-        .orientation(TextOrientation::Vertical)
-        .anti_alias(TextAntiAlias::Sharp)
-        .show(ui)
-        .into()
+    TypeBar::new(&character, &paragraph, &families, &styles).orientation(TextOrientation::Vertical).anti_alias(TextAntiAlias::Sharp).show(ui).into()
 }
 
 /// A selection that mixes orientation, anti-aliasing and character values: both props stay unset.

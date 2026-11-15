@@ -135,10 +135,8 @@ fn a_blend_row_steps_and_picks_by_its_keys_inside_the_dialog() {
         if ui.ctx().current_pass_index() == 0 {
             ui.ctx().request_discard("a second pass in the frame");
         }
-        let params = vec![
-            Param::new("mode", "Mode", ParamKind::blend(modes(), None)),
-            Param::new("other", "Other Mode", ParamKind::blend(modes(), None)),
-        ];
+        let params =
+            vec![Param::new("mode", "Mode", ParamKind::blend(modes(), None)), Param::new("other", "Other Mode", ParamKind::blend(modes(), None))];
         let _ = ParamDialog::new("blend", "Blend", params).values(Bind::bound(&mut *shown.borrow_mut())).show(ui);
     });
     fixture.settle();

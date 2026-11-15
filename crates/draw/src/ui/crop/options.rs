@@ -378,7 +378,6 @@ impl CropSettings {
             }
             CropPresetChoice::FrontImage => self.front_image(document),
             CropPresetChoice::NewPreset | CropPresetChoice::DeletePreset => {}
-
         }
         *self != before
     }

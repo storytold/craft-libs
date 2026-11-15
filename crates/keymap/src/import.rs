@@ -1080,11 +1080,8 @@ impl Index {
     /// Aliases such as `history.undo` thus lose to the command users know from the menu.
     fn pick(&self, list: Option<&Vec<usize>>, tool: bool, keys: &[ForeignKey]) -> Found {
         let mut fits: Vec<usize> = list.into_iter().flatten().copied().filter(|i| self.tool.get(*i) == Some(&tool)).collect();
-        let carried = |i: &usize| {
-            self.defaults
-                .get(*i)
-                .is_some_and(|d| d.iter().any(|t| keys.iter().any(|k| k.trigger.as_ref().is_ok_and(|kt| kt == t))))
-        };
+        let carried =
+            |i: &usize| self.defaults.get(*i).is_some_and(|d| d.iter().any(|t| keys.iter().any(|k| k.trigger.as_ref().is_ok_and(|kt| kt == t))));
         if fits.len() > 1 && fits.iter().any(carried) {
             fits.retain(carried);
         }

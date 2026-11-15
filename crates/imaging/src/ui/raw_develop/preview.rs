@@ -35,7 +35,9 @@ pub(super) fn sampler_readouts(
     for readout in &mut with_lab {
         let at = readout.position.map(|v| v as f64);
         readout.lab = match source.sample(at, before, true) {
-            Some(ScopeReadout::Lab([l, a, b])) => Some([l.round().clamp(0.0, 100.0) as i16, a.round().clamp(-128.0, 127.0) as i16, b.round().clamp(-128.0, 127.0) as i16]),
+            Some(ScopeReadout::Lab([l, a, b])) => {
+                Some([l.round().clamp(0.0, 100.0) as i16, a.round().clamp(-128.0, 127.0) as i16, b.round().clamp(-128.0, 127.0) as i16])
+            }
             _ => None,
         };
     }

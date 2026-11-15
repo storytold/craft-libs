@@ -448,8 +448,7 @@ impl StackDialog for ColorPickerDialog {
         let screen = self.eyedropper && env.view().shell().caps.contains(Caps::SCREEN_CAPTURE);
         let Self { current, opening, compare, memory, screen_busy, sample, pending_screen, open, .. } = self;
         let mut held: Mixed<PickedColor> = current.map_or(Mixed::Mixed, Mixed::Same);
-        let (sampled, busy, compare_with) =
-            (sample.take(), *screen_busy, compare.then(|| opening.map_or(Mixed::Mixed, Mixed::Same)));
+        let (sampled, busy, compare_with) = (sample.take(), *screen_busy, compare.then(|| opening.map_or(Mixed::Mixed, Mixed::Same)));
         let color = current.map(|current| current.color);
         let web_only = memory.web_colors;
         let shown = Dialog::new(title.clone())

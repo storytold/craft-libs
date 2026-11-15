@@ -13,8 +13,8 @@ use craft_ui::canvas::{
 use craft_ui::canvas_controls::{Guides, Marquee};
 use craft_ui::contract::SizeLimits;
 use craft_ui::contract::{
-    Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _, SweepApply,
-    SweepStep, ToggleColumn, WordSetCx as _,
+    Bind, BodyCx, CollectionEvent, ColumnKind, ColumnSpec, Props as _, Remember as _, SelectMode, Show as _, ShowCollection as _, ShowContainer as _,
+    SweepApply, SweepStep, ToggleColumn, WordSetCx as _,
 };
 use craft_ui::docking::{DockPanels, GroupAt, PanelSpec};
 use craft_ui::list::{ListRow, ToggleCell};
@@ -178,35 +178,38 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     let canvas_id = ui.id().with("mock document canvas");
     let shown = {
         let Document { layers, guides, guide, marquee, zero, units: unit, .. } = &mut *document;
-        Canvas::new("Document").id(canvas_id).view(view).document(page.size()).show_rulers(show_rulers).rulers(units, units, *zero).show(ui, |ui, body| {
-            let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
-            show_layers(ui, body.rect, layers, pixels);
-            if let Some(rect) = *marquee {
-                let _ = Marquee::rect("Selection", rect).show_at(ui, body.rect);
-            }
-            let mut content = body.rect;
-            let mut pending = None;
-            if show_rulers {
-                let rulers = Rulers::new("Rulers", Bind::bound(zero)).units(&UNITS).show_at(ui, body.rect);
-                content = rulers.content_rect();
-                pending = rulers.guide;
-                if let Some(picked) = rulers.unit_picked {
-                    *unit = picked;
+        Canvas::new("Document").id(canvas_id).view(view).document(page.size()).show_rulers(show_rulers).rulers(units, units, *zero).show(
+            ui,
+            |ui, body| {
+                let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
+                show_layers(ui, body.rect, layers, pixels);
+                if let Some(rect) = *marquee {
+                    let _ = Marquee::rect("Selection", rect).show_at(ui, body.rect);
                 }
-            }
-            let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
-            if let Some(selected) = *guide {
-                controls = controls.selected_guide(selected);
-            }
-            if let Some(drag) = pending {
-                controls = controls.pending(drag);
-            }
-            if let Some(select) = controls.show_at(ui, body.rect).select {
-                *guide = select;
-            }
-            let bars = CanvasScrollbars::new("Scroll bars", Bind::given(view), page).show_at(ui, content);
-            BodyResult { scrolled: bars.view.value().copied(), over_bars: bars.over }
-        })
+                let mut content = body.rect;
+                let mut pending = None;
+                if show_rulers {
+                    let rulers = Rulers::new("Rulers", Bind::bound(zero)).units(&UNITS).show_at(ui, body.rect);
+                    content = rulers.content_rect();
+                    pending = rulers.guide;
+                    if let Some(picked) = rulers.unit_picked {
+                        *unit = picked;
+                    }
+                }
+                let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
+                if let Some(selected) = *guide {
+                    controls = controls.selected_guide(selected);
+                }
+                if let Some(drag) = pending {
+                    controls = controls.pending(drag);
+                }
+                if let Some(select) = controls.show_at(ui, body.rect).select {
+                    *guide = select;
+                }
+                let bars = CanvasScrollbars::new("Scroll bars", Bind::given(view), page).show_at(ui, content);
+                BodyResult { scrolled: bars.view.value().copied(), over_bars: bars.over }
+            },
+        )
     };
     let result = shown.inner;
     let host = ToolHost::new().momentary(&mut tools.momentary).enabled(!result.as_ref().is_some_and(|result| result.over_bars));

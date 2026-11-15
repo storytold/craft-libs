@@ -10,8 +10,8 @@ use craft_color::ui::{
     ColorPanel, ColorPanelMode, ColorPanelState, PanelTarget, PickedColor, SwatchEdit, SwatchKey, SwatchLibrary, SwatchPalette, SwatchesCommand,
     SwatchesMenu, SwatchesPanel, SwatchesState,
 };
-use craft_ui::choice::SwatchTable;
 use craft_theme::Srgba;
+use craft_ui::choice::SwatchTable;
 use craft_ui::contract::Role;
 use craft_ui::contract::tooltip::DELAY;
 use craft_ui::contract::{Bind, Show as _};

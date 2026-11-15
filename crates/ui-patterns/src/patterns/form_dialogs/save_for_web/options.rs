@@ -2,8 +2,8 @@
 //! Image Size.
 
 use super::{
-    ColorTable, Dither, MATTE_COLOR_KEY, MAX_PERCENT, PALETTE_COLOR_KEY, RESAMPLE_METHODS, SaveForWebOptions, SaveForWebWords, SizingWords, WebFormat,
-    WebMetadata, WebPreset, WebSlices, percent_of,
+    ColorTable, Dither, MATTE_COLOR_KEY, MAX_PERCENT, PALETTE_COLOR_KEY, RESAMPLE_METHODS, SaveForWebOptions, SaveForWebWords, SizingWords,
+    WebFormat, WebMetadata, WebPreset, WebSlices, percent_of,
 };
 use crate::runtime::requests::ColorRequest;
 

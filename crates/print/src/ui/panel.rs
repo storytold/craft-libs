@@ -3,8 +3,8 @@
 use super::{Duplex, Printer, Settings, shown_names};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
-use craft_ui::display::Text;
 use craft_ui::contract::{Bind, Entry, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::display::Text;
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;

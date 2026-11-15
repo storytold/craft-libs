@@ -323,7 +323,6 @@ impl CropSession {
     /// canvas gets none. A default frame made for another size is replaced. A new default frame
     /// starts a new box history, upright. Returns true when it made one.
     pub fn ensure_frame(&mut self, document: &CropDocument, dragging: bool, ratio: Option<f64>) -> bool {
-
         let made_for = Some((document.key, document.size));
         if self.default_frame && self.frame_for != made_for && !dragging {
             self.frame = None;
@@ -597,11 +596,8 @@ impl CropSession {
     /// to 16 : 3 does not shrink the frame first. The untouched selection frame fits from the
     /// canvas, not from the selection. `None` without a frame.
     pub fn ratio_base(&mut self, editing: bool) -> Option<CropBox> {
-        let start = if self.default_frame && self.from_selection {
-            self.frame_for.map(|(_, size)| CropBox::upright(size.to_rect()))
-        } else {
-            self.frame
-        };
+        let start =
+            if self.default_frame && self.from_selection { self.frame_for.map(|(_, size)| CropBox::upright(size.to_rect())) } else { self.frame };
         if editing {
             if self.ratio_base.is_none() {
                 self.ratio_base = start;

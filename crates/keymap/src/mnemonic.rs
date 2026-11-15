@@ -71,11 +71,7 @@ fn first_unused(text: &str, used: &[char], turkic: bool) -> Option<(char, usize)
         previous_alnum = c.is_alphanumeric();
     }
     let all = text.chars().enumerate().map(|(at, c)| (c, at));
-    starts
-        .into_iter()
-        .chain(all)
-        .filter_map(|(c, at)| Some((letter(c, turkic)?, at)))
-        .find(|(c, _)| !used.contains(c))
+    starts.into_iter().chain(all).filter_map(|(c, at)| Some((letter(c, turkic)?, at))).find(|(c, _)| !used.contains(c))
 }
 
 /// The key that types `c`, as a mnemonic letter: its upper case, which must be an ASCII letter or digit. In Turkish

@@ -14,7 +14,6 @@ use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{Env, Units};
 use egui::{Response, Ui};
 
-
 /// The arrowhead popover: which ends carry a head and the head's width, length and concavity. Its `open` flag is read
 /// and written through the binding, so give it `Bind::bound`.
 #[must_use = "show the popover with `show`"]
@@ -90,12 +89,10 @@ pub(super) fn arrow_rows(
     edits.extend(end.map(|on| Arrowheads { end: on, ..value }));
     let width = NumberCell::pixels(units, pixels_per_inch, "arrow-width", &words.arrow_width, value.width, Arrowheads::ARROW_SIZE).labelled(ui);
     edits.extend(width.map(|width| Arrowheads { width, ..value }));
-    let length =
-        NumberCell::pixels(units, pixels_per_inch, "arrow-length", &words.arrow_length, value.length, Arrowheads::ARROW_SIZE).labelled(ui);
+    let length = NumberCell::pixels(units, pixels_per_inch, "arrow-length", &words.arrow_length, value.length, Arrowheads::ARROW_SIZE).labelled(ui);
     edits.extend(length.map(|length| Arrowheads { length, ..value }));
     after_length(ui);
-    let concavity =
-        NumberCell::percent(units, "arrow-concavity", &words.arrow_concavity, value.concavity, Arrowheads::ARROW_CONCAVITY).labelled(ui);
+    let concavity = NumberCell::percent(units, "arrow-concavity", &words.arrow_concavity, value.concavity, Arrowheads::ARROW_CONCAVITY).labelled(ui);
     edits.extend(concavity.map(|concavity| Arrowheads { concavity, ..value }));
     edits
 }

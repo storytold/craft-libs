@@ -89,11 +89,9 @@ fn a_bare_plus_key_is_written_and_read() {
     assert_eq!(by_id(&back), [("view.zoomIn".to_string(), vec![trigger("Cmd++")]), ("tool.zoom".to_string(), vec![trigger("+")])]);
 
     // A Windows set: its Ctrl row makes Ctrl the command key, and the `+` row stays the bare key.
-    let windows = kys::read(&set(
-        "<command name=\"Copy\"><shortcut>Ctrl+C</shortcut></command><command name=\"Zoom In\"><shortcut>+</shortcut></command>",
-        "",
-    ))
-    .unwrap();
+    let windows =
+        kys::read(&set("<command name=\"Copy\"><shortcut>Ctrl+C</shortcut></command><command name=\"Zoom In\"><shortcut>+</shortcut></command>", ""))
+            .unwrap();
     assert_eq!(keys(&windows.entries[0]), [trigger("Cmd+C")]);
     assert_eq!(keys(&windows.entries[1]), [trigger("+")]);
 }

@@ -506,7 +506,8 @@ impl Component for PaintChip<'_> {
                     if let Some((groups, state)) = swatches.as_mut() {
                         let groups: &[SwatchGroup] = *groups;
                         let rows = swatch_rows(groups, &swatch_words);
-                        let colors: HashMap<&str, &SwatchColor> = groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
+                        let colors: HashMap<&str, &SwatchColor> =
+                            groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
                         let out = PresetBrowser::new(words.swatches.clone(), state.reborrowed(), &rows)
                             .toolbar(false)
                             .row_menu(false)

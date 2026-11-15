@@ -6,8 +6,8 @@ use craft_quit::{CloseAnswer, CloseScope};
 use craft_ui::contract::{Common, Component, Cx, MeasureCx, PartsCx, Props as _, Role, Show as _};
 use craft_ui::dialog::stories::hosted;
 use craft_ui::dialog::{
-    Alert, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage,
-    UnsavedChangesDialog, dialog_id,
+    Alert, DialogHost, DialogId, DialogResult, DialogStack, HostedAlert, PromptKind, StackDialog, StandardPrompt, StartupStage, UnsavedChangesDialog,
+    dialog_id,
 };
 use craft_ui::runtime::windows::{WindowHit, WindowHost};
 use craft_ui::style::{ComponentStyle, StyleCx};
@@ -228,7 +228,8 @@ fn cmd_d_answers_dont_save_on_macos() {
         let app_saw_d = Rc::new(Cell::new(false));
         let (shown, saw) = (Rc::clone(&host), Rc::clone(&app_saw_d));
         let mut fixture = Fixture::new(move |ui| {
-            let pressed = ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::D, pressed: true, .. })));
+            let pressed =
+                ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Key { key: egui::Key::D, pressed: true, .. })));
             saw.set(saw.get() || pressed);
             shown.borrow_mut().run(ui);
         });
@@ -238,7 +239,11 @@ fn cmd_d_answers_dont_save_on_macos() {
         fixture.key(egui::Key::D, Modifiers::COMMAND).idle(4);
         let result = host.borrow_mut().take::<UnsavedChangesDialog>();
         if answers {
-            assert_eq!(result.and_then(DialogResult::ok).map(|answer| answer.answer), Some(CloseAnswer::DontSave), "{os:?}: Cmd+D answers Don't Save");
+            assert_eq!(
+                result.and_then(DialogResult::ok).map(|answer| answer.answer),
+                Some(CloseAnswer::DontSave),
+                "{os:?}: Cmd+D answers Don't Save"
+            );
             assert!(!app_saw_d.get(), "{os:?}: the press reaches nothing but the question");
         } else {
             assert!(result.is_none() && host.borrow().is_open::<UnsavedChangesDialog>(), "{os:?}: Ctrl+D leaves the question open");

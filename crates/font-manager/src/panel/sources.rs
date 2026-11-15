@@ -150,7 +150,11 @@ impl<'a> FontSources<'a> {
 
                 Text::new(words.add_a_source.clone()).shade(Shade::Faint).show(ui);
                 Row::new().show(ui, |ui, _| {
-                    let field = TextField::new(words.index_address.clone(), Bind::bound(&mut url)).limit(None).placeholder(ADDRESS_EXAMPLE).submits().show(ui);
+                    let field = TextField::new(words.index_address.clone(), Bind::bound(&mut url))
+                        .limit(None)
+                        .placeholder(ADDRESS_EXAMPLE)
+                        .submits()
+                        .show(ui);
                     let ready = !url.trim().is_empty();
                     let button = Button::new(words.add.clone()).enabled(ready).show(ui);
                     add = ready && (field.submitted || clicked(&button));

@@ -27,11 +27,7 @@ fn def(id: &str, label: &str, chord: &str) -> CommandDef {
 
 /// The app's catalog at `generation`: from generation 2 on it also holds Rename.
 fn catalog(generation: u64) -> CommandInput {
-    let mut defs = vec![
-        def(EXPORT, "Export", "Cmd+Alt+U"),
-        def(PEEK, "Peek", "F9").with_kind(CommandKind::Momentary),
-        def(QUICK, "Quick Mask", "Q"),
-    ];
+    let mut defs = vec![def(EXPORT, "Export", "Cmd+Alt+U"), def(PEEK, "Peek", "F9").with_kind(CommandKind::Momentary), def(QUICK, "Quick Mask", "Q")];
     if generation >= 2 {
         defs.push(def(RENAME, "Rename", "Cmd+Alt+P"));
     }
@@ -70,7 +66,11 @@ fn an_app_catalog_command_fires_by_its_chord_and_a_focused_text_field_keeps_a_ty
     assert_eq!(fired(&frames), [hit(EXPORT, FirePhase::Press)], "the catalog command's chord fires it into the output");
     frames.frame(vec![key_press(Key::F9, Modifiers::NONE)], &mut show);
     frames.frame(vec![key_release(Key::F9, Modifiers::NONE)], &mut show);
-    assert_eq!(fired(&frames), [hit(PEEK, FirePhase::Press), hit(PEEK, FirePhase::Release)], "a momentary catalog command fires on press and release");
+    assert_eq!(
+        fired(&frames),
+        [hit(PEEK, FirePhase::Press), hit(PEEK, FirePhase::Release)],
+        "a momentary catalog command fires on press and release"
+    );
     frames.frame(vec![key_press(Key::Q, Modifiers::NONE)], &mut show);
     frames.frame(vec![key_release(Key::Q, Modifiers::NONE)], &mut show);
     assert_eq!(fired(&frames), [hit(QUICK, FirePhase::Press)], "with nothing focused the plain chord fires");

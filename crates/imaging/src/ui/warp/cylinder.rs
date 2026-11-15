@@ -314,7 +314,8 @@ impl<'a> CylinderWarp<'a> {
     /// The arrows move the picked handle by one unit (Shift ten) as one `Set`. The nudge is taken from the intents, so
     /// a second pass finds none.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, values: CylinderValues) {
-        let focused = cx.active_part().filter(|part| part.key == HANDLE).and_then(|part| part.index).and_then(|index| HANDLES.get(index as usize).copied());
+        let focused =
+            cx.active_part().filter(|part| part.key == HANDLE).and_then(|part| part.index).and_then(|index| HANDLES.get(index as usize).copied());
         let Some(handle) = focused else { return };
         if let Some((direction, mods)) = cx.intents().take_nudge() {
             let step = if mods.shift { NUDGE_FAR } else { NUDGE };
@@ -431,9 +432,8 @@ impl Component for CylinderWarp<'_> {
         let (Some(space), Some(values)) = (canvas_space(&cx.env), cx.value().copied()) else { return };
         let (draw, style, view) = (ui.draw(), &cx.style, &space.view);
         if self.mesh.is_valid() {
-            let curve = |at: &dyn Fn(f64) -> Point| -> Vec<Pos2> {
-                (0..=CURVE_STEPS).map(|i| view.to_screen(at(i as f64 / CURVE_STEPS as f64))).collect()
-            };
+            let curve =
+                |at: &dyn Fn(f64) -> Point| -> Vec<Pos2> { (0..=CURVE_STEPS).map(|i| view.to_screen(at(i as f64 / CURVE_STEPS as f64))).collect() };
             let mut lines = Vec::new();
             for s in [0.0, 0.5, 1.0] {
                 lines.push(curve(&|t| self.mesh.eval(s, t)));

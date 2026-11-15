@@ -136,16 +136,16 @@ impl StackDialog for SliceOptionsDialog {
         if options.background_row
             && let Some(map) = fields.as_object_mut()
         {
-            let background = options.background.map_or(serde_json::Value::Null, |color| {
-                serde_json::Value::String(Srgba::rgb(color.r, color.g, color.b).to_hex())
-            });
+            let background =
+                options.background.map_or(serde_json::Value::Null, |color| serde_json::Value::String(Srgba::rgb(color.r, color.g, color.b).to_hex()));
             map.insert("background".into(), background);
         }
         Some(fields)
     }
 
     fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let text = |value: &serde_json::Value| value.as_str().map(str::to_owned).ok_or_else(|| format!("field `{field}` takes a string, got {value}"));
+        let text =
+            |value: &serde_json::Value| value.as_str().map(str::to_owned).ok_or_else(|| format!("field `{field}` takes a string, got {value}"));
         match field {
             "kind" => {
                 let name = text(&value)?;

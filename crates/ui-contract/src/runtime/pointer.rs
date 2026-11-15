@@ -118,7 +118,6 @@ pub(crate) struct Shapes {
 
 /// The begin hook (H5): converts the pass's pointer input.
 pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
-
     let viewport = pass::current_viewport(ctx);
     let pass_nr = pass::pass_nr(ctx, viewport);
     let mut read = input::pointer_read(ctx);

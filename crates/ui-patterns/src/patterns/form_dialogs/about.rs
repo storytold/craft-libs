@@ -295,11 +295,10 @@ impl Shown<'_> {
         let source = keyed(&tabs[..], |tab: &(AboutTab, Label)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
         let shown = view.borrow().tab;
         // The strip sits in the stack's header, which is as tall as what it holds: it takes its tabs' height.
-        let out = TabStrip::new(title.clone())
-            .kind(TabKind::Text)
-            .shown(shown)
-            .natural_height(true)
-            .show_items(ui, &source, &mut |key, _| Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(Label::default, |tab| tab.1.clone())));
+        let out =
+            TabStrip::new(title.clone()).kind(TabKind::Text).shown(shown).natural_height(true).show_items(ui, &source, &mut |key, _| {
+                Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(Label::default, |tab| tab.1.clone()))
+            });
         for event in out.response.events {
             if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
                 && let Some(picked) = keys.last()

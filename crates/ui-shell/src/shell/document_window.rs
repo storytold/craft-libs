@@ -252,7 +252,14 @@ impl Component for DocumentWindow<'_> {
         let body = sub(cx.core.id, "body");
         let ask = std::mem::take(cx.core.memory.shown::<WrapAsk>(body)).0;
         let wrapped = ask.zip(viewport).and_then(|((canvas, wanted), viewport)| self.wrap(&host, viewport, canvas, wanted));
-        DocumentWindowOutput { response: cx.response.clone(), close_requested: self.closed, focused, cascade: cx.style.cascade, focus_gained, wrapped }
+        DocumentWindowOutput {
+            response: cx.response.clone(),
+            close_requested: self.closed,
+            focused,
+            cascade: cx.style.cascade,
+            focus_gained,
+            wrapped,
+        }
     }
 }
 

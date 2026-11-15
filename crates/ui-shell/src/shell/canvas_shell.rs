@@ -130,13 +130,14 @@ impl<'a> CanvasPanel<'a> {
             tabs_rect = Some(out.response.rect);
         }
         let mut empty_double = false;
-        let out = ShellRegion::pane(ShellPane::new("document")).id_salt("document").label(words.document.clone()).senses_surface().show(ui, |ui, cx| {
-            // Painted first, so a document the closure shows covers it.
-            let look = SurroundLook::of(&env.tokens).shown(cx.env.canvas_pattern());
-            paint_surround(ui.painter(), CheckerArea::Rect(cx.rect, CornerRadius::ZERO), &look);
-            empty_double |= cx.surface_double_pressed();
-            document(ui, cx);
-        });
+        let out =
+            ShellRegion::pane(ShellPane::new("document")).id_salt("document").label(words.document.clone()).senses_surface().show(ui, |ui, cx| {
+                // Painted first, so a document the closure shows covers it.
+                let look = SurroundLook::of(&env.tokens).shown(cx.env.canvas_pattern());
+                paint_surround(ui.painter(), CheckerArea::Rect(cx.rect, CornerRadius::ZERO), &look);
+                empty_double |= cx.surface_double_pressed();
+                document(ui, cx);
+            });
         CanvasPanelOutput { document: out.response.rect, response: out.output.response, rail: rail_rect, tabs: tabs_rect, empty_double }
     }
 }

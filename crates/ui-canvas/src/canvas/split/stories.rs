@@ -55,7 +55,8 @@ fn drag_divider(fixture: &mut Fixture) {
 /// lines come first, so in 3-up Stacked the row line is divider 1.
 fn drag_row_divider(fixture: &mut Fixture) {
     let Some(id) = fixture.root_id() else { return };
-    let row = (0..).map_while(|index| fixture.part(id, DIVIDER.at(index)).map(|part| (index, part.rect))).find(|(_, rect)| rect.width() > rect.height());
+    let row =
+        (0..).map_while(|index| fixture.part(id, DIVIDER.at(index)).map(|part| (index, part.rect))).find(|(_, rect)| rect.width() > rect.height());
     if let Some((index, _)) = row {
         drag_divider_at(fixture, index, Vec2::new(0.0, 1.0));
     }

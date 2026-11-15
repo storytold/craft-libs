@@ -23,8 +23,8 @@ mod bezier;
 mod pen;
 
 // draw-crop-b
-mod crop_tool;
 mod crop_size;
+mod crop_tool;
 mod perspective_crop;
 
 // draw-artboard

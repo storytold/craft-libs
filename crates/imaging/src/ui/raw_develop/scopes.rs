@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, Mixed};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{BodyCx, Bind, EditResponse, Pattern, Props, SaveKey, Show as _, ShowContainer as _, clicked};
+use craft_ui::contract::{Bind, BodyCx, EditResponse, Pattern, Props, SaveKey, Show as _, ShowContainer as _, clicked};
+use craft_ui::dialog::Dialog;
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::sections::HeaderAction;
-use craft_ui::dialog::Dialog;
 use egui::Ui;
 
 use super::controls::{LIGHT, Slider, section};
@@ -182,18 +182,17 @@ impl<'a> RawFloatingScope<'a> {
         let env = Env::of(ui);
         let words = env.words::<RawDevelopWords>();
         let title = env.words::<ScopeWords>().histogram.clone();
-        let shown = Dialog::new(title)
-            .modeless()
-            .resizable(true)
-            .remember(SaveKey::new("craft_imaging.raw_develop.scope_window"))
-            .opened(floating)
-            .show(ui, |ui, cx| {
-                let out = zone_panel(ui, cx, &mut *state, frame, &mut settings, has_selection);
-                if clicked(&Button::new(words.dock.clone()).id_salt("dock").show(ui)) {
-                    cx.request_close();
-                }
-                out
-            });
+        let shown =
+            Dialog::new(title).modeless().resizable(true).remember(SaveKey::new("craft_imaging.raw_develop.scope_window")).opened(floating).show(
+                ui,
+                |ui, cx| {
+                    let out = zone_panel(ui, cx, &mut *state, frame, &mut settings, has_selection);
+                    if clicked(&Button::new(words.dock.clone()).id_salt("dock").show(ui)) {
+                        cx.request_close();
+                    }
+                    out
+                },
+            );
         match shown.inner {
             Some(out) => out,
             None => unshown(&shown.output.response),

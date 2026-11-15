@@ -962,7 +962,8 @@ impl Homography {
     pub fn apply_in_front(&self, p: Point, within: Rect) -> Option<Point> {
         let [g, k, i] = self.row(2);
         let w = |q: Point| g * q.x + k * q.y + i;
-        let corners = [Point::new(within.x0, within.y0), Point::new(within.x1, within.y0), Point::new(within.x1, within.y1), Point::new(within.x0, within.y1)];
+        let corners =
+            [Point::new(within.x0, within.y0), Point::new(within.x1, within.y0), Point::new(within.x1, within.y1), Point::new(within.x0, within.y1)];
         let front = match corners.iter().filter(|&&c| w(c) > 0.0).count() {
             3 | 4 => 1.0,
             0 | 1 => -1.0,

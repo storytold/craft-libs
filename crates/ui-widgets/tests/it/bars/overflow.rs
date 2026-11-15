@@ -154,7 +154,6 @@ fn a_member_the_bar_shows_in_part_is_not_shown_until_it_is_whole() {
     assert!(checked > 0, "no width put a button across the bar's end");
 }
 
-
 /// A bar `width` wide holding an icon button, a rule and a second icon button; `rects` gets the two buttons' rects.
 /// Icon buttons keep their width, so nothing in the line narrows to make room.
 fn rule_bar(ui: &mut Ui, width: f32, rects: &std::cell::Cell<(Rect, Rect)>) {

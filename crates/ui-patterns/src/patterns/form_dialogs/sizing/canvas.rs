@@ -4,12 +4,12 @@ use super::{CanvasExtension, Kit, LinkedSize, SizeForm, SizingOutput, set_size_j
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
-use serde_json::json;
 use crate::form::Field;
 use crate::pickers::{Anchor9, ReferencePoint, Select};
 use crate::runtime::env::{ColumnSize, UnitKind};
 use craft_behavior::PixelSize;
 use egui::Ui;
+use serde_json::json;
 
 /// What Canvas Size answers with at OK.
 #[derive(Clone, Debug, PartialEq)]

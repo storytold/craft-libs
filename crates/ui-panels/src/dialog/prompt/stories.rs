@@ -1,13 +1,15 @@
 //! Stories of the prompts.
 
 use super::super::stories::hosted;
-use super::super::{Alert, DialogHost, HostedAlert, Prompt, RecoveredDocument, RecoveryDialog, StackDialog as _, StandardPrompt, UnsavedChangesDialog};
+use super::super::{
+    Alert, DialogHost, HostedAlert, Prompt, RecoveredDocument, RecoveryDialog, StackDialog as _, StandardPrompt, UnsavedChangesDialog,
+};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _};
 use crate::runtime::env::Env;
-use crate::text::NumberField;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
+use crate::text::NumberField;
 use craft_quit::CloseScope;
 use craft_theme::variant::Tone;
 use egui::Ui;

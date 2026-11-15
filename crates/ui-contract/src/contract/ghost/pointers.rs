@@ -293,11 +293,7 @@ fn icon_on_halo(pen: &Pen, rect: Rect, icon: SvgIcon) {
 /// The I-beam centred on the pointer: its stem and two serifs.
 fn i_beam() -> [Line; 3] {
     let (b, s) = (BEAM_HALF, SERIF_HALF);
-    [
-        Line::Segment(v([0.0, -b]), v([0.0, b])),
-        Line::Segment(v([-s, -b]), v([s, -b])),
-        Line::Segment(v([-s, b]), v([s, b])),
-    ]
+    [Line::Segment(v([0.0, -b]), v([0.0, b])), Line::Segment(v([-s, -b]), v([s, -b])), Line::Segment(v([-s, b]), v([s, b]))]
 }
 
 /// The type tool's pointer: the I-beam inside a dotted ellipse, or crossed by a dotted wave when `path`.
@@ -384,13 +380,7 @@ fn minus(center: Vec2, half: f32) -> Line {
 /// badges use, for interface icons that show the same mark. The hairline and the reading direction are those of the
 /// component that paints the icon: `tokens` and `direction`.
 pub(crate) fn paint_badge(painter: &egui::Painter, tokens: &UiTokens, direction: Direction, rect: Rect, badge: CursorBadge, ink: Color32) {
-    let pen = Pen {
-        art: RefCell::new(Art::default()),
-        fill: ink,
-        halo: Color32::TRANSPARENT,
-        thin: tokens.stroke.thin,
-        rtl: direction.is_rtl(),
-    };
+    let pen = Pen { art: RefCell::new(Art::default()), fill: ink, halo: Color32::TRANSPARENT, thin: tokens.stroke.thin, rtl: direction.is_rtl() };
     self::badge(&pen, Vec2::ZERO, badge);
     pen.art.into_inner().paint(painter, rect.center());
 }

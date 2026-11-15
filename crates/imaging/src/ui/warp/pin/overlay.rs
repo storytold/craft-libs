@@ -273,8 +273,13 @@ impl PinWarp<'_> {
         if now != self.selection() {
             self.report.select = Some(now);
         }
-        *cx.press_slot::<Drag>() =
-            moved.map(|moved| Drag { kind: Kind::Move(moved), origin: space.view.to_doc(origin), base: pins.to_vec(), began: false, latest: space.view.to_doc(origin) });
+        *cx.press_slot::<Drag>() = moved.map(|moved| Drag {
+            kind: Kind::Move(moved),
+            origin: space.view.to_doc(origin),
+            base: pins.to_vec(),
+            began: false,
+            latest: space.view.to_doc(origin),
+        });
     }
 
     /// A press on the mesh: Alt near a selected pin turns it; otherwise a pin is placed under the press.
@@ -284,7 +289,13 @@ impl PinWarp<'_> {
             let turn = nearest_selected(&space.view, pins, self.selection(), origin, cx.style.turn_reach).and_then(|i| {
                 let pin = pins[i];
                 let base = pin.angle.or_else(|| self.mesh.turn_at(pin.rest))?;
-                Some(Drag { kind: Kind::Turn { pin: i, base, from: angle_of(at - pin.at)? }, origin: at, base: pins.to_vec(), began: false, latest: at })
+                Some(Drag {
+                    kind: Kind::Turn { pin: i, base, from: angle_of(at - pin.at)? },
+                    origin: at,
+                    base: pins.to_vec(),
+                    began: false,
+                    latest: at,
+                })
             });
             *cx.press_slot::<Drag>() = turn;
         } else if let Some(rest) = self.mesh.rest_of(at) {

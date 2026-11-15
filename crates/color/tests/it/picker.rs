@@ -97,7 +97,8 @@ fn a_dialog_reopened_keeps_only_web_colors_and_recalls_the_values_kept_on_ok() {
     assert_eq!(current.and_then(|picked| picked.model), Some(values), "and so does the current colour");
 
     // Current (the compare swatch's current half) and Reset return to the opening colour with its typed values.
-    let edited = |dialogs: &Rc<RefCell<DialogHost>>| dialogs.borrow().get::<ColorPickerDialog>().and_then(|d| d.current()).and_then(|picked| picked.model);
+    let edited =
+        |dialogs: &Rc<RefCell<DialogHost>>| dialogs.borrow().get::<ColorPickerDialog>().and_then(|d| d.current()).and_then(|picked| picked.model);
     let set = dialogs.borrow_mut().set_json_field(&ctx, id, "color", serde_json::json!("#ff0000"));
     assert_eq!(set, Ok(()), "the colour is a field of the dialog");
     fixture.idle(4);

@@ -1,12 +1,12 @@
 //! The shape menu: the preset glyphs, their words and [`ShapeMenu`].
 
 use crate::geometry::presets::{PRESETS, ShapePreset};
+use craft_theme::Opacity;
 use craft_ui::contract::{Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::Divider;
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::primitives::{Glyph, IconSpec};
 use craft_ui::runtime::env::{Env, Label};
-use craft_theme::Opacity;
 use craft_ui::style::UiTokens;
 use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, Stroke, Ui, pos2};
 use kurbo::{BezPath, PathEl};
@@ -16,7 +16,6 @@ mod stories;
 
 /// The error bound, in points, when the glyph's curves are flattened.
 const FLATTEN_TOLERANCE: f64 = 0.1;
-
 
 /// The widest a stroke is, as a share of the glyph's shorter side.
 const STROKE_SHARE: f32 = 0.25;

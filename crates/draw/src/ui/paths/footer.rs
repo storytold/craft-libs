@@ -88,7 +88,11 @@ pub(super) fn show_footer<K: Clone + Eq + Hash + Debug + Send + Sync + 'static>(
             PathsFooterButton::Delete => words.delete_path.clone(),
         };
         let action = FooterAction::new(IconSpec::svg(IconId::new(icon_name(button))), tip);
-        if button == PathsFooterButton::Delete { action.accepts_drops(move |drag: &PathDrag<K>| drag.list == list && drag.kind.drags()) } else { action }
+        if button == PathsFooterButton::Delete {
+            action.accepts_drops(move |drag: &PathDrag<K>| drag.list == list && drag.kind.drags())
+        } else {
+            action
+        }
     });
     let out = FooterBar::actions(actions).show_footer(ui);
     let mut events = Vec::new();

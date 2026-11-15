@@ -1,8 +1,8 @@
 //! HostedSaveForWeb: the Save for Web dialog owned by a DialogHost.
 
-use super::model::{Animation, SaveForWebOptions, SaveForWebResult, WantedVariant, WebPreset, WebVariant};
 #[cfg(doc)]
 use super::MATTE_COLOR_KEY;
+use super::model::{Animation, SaveForWebOptions, SaveForWebResult, WantedVariant, WebPreset, WebVariant};
 use super::{SaveForWebDialog, WebPictures, WebSlice, WebView, result_of};
 use crate::contract::Bind;
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};

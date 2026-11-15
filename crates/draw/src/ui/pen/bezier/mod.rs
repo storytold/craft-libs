@@ -508,10 +508,7 @@ impl<'a> BezierOverlay<'a> {
 
     /// The point of `path`'s segment leaving `segment` at `t`.
     fn segment_point(paths: &[EditPath], path: u64, segment: KnotRef, t: f64) -> Point {
-        Self::path(paths, path)
-            .and_then(|p| p.subpaths.get(segment.subpath))
-            .and_then(|s| s.segment(segment.knot))
-            .map_or(Point::ZERO, |c| c.eval(t))
+        Self::path(paths, path).and_then(|p| p.subpaths.get(segment.subpath)).and_then(|s| s.segment(segment.knot)).map_or(Point::ZERO, |c| c.eval(t))
     }
 
     /// The selection that has only the anchor a segment insert adds.

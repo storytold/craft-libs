@@ -152,11 +152,8 @@ fn spans(
 /// on an inner line moved to where `at` puts that line. A line spans the panes whose edges lie on it, so the row line
 /// of 3-up Stacked spans only the second column.
 fn lay_out(layout: SplitLayout, count: usize, at: &SplitAt, full: Rect) -> Laid {
-    let cells = layout
-        .group_count(count)
-        .and_then(|n| arrange_rects(layout, full, n))
-        .filter(|cells| !cells.is_empty())
-        .unwrap_or_else(|| vec![full]);
+    let cells =
+        layout.group_count(count).and_then(|n| arrange_rects(layout, full, n)).filter(|cells| !cells.is_empty()).unwrap_or_else(|| vec![full]);
     let (tol_x, tol_y) = (tolerance(full.width()), tolerance(full.height()));
     let even_columns = interior(cells.iter().flat_map(|cell| [cell.left(), cell.right()]), full.left(), full.right(), tol_x);
     let even_rows = interior(cells.iter().flat_map(|cell| [cell.top(), cell.bottom()]), full.top(), full.bottom(), tol_y);
@@ -166,8 +163,7 @@ fn lay_out(layout: SplitLayout, count: usize, at: &SplitAt, full: Rect) -> Laid 
     let y = |edge: f32| snapped(edge, &even_rows, &rows, tol_y);
     let panes: Vec<Rect> =
         cells.iter().map(|cell| Rect::from_min_max(Pos2::new(x(cell.left()), y(cell.top())), Pos2::new(x(cell.right()), y(cell.bottom())))).collect();
-    let column_lines =
-        spans(&even_columns, &columns, &cells, &panes, tol_x, |cell| [cell.left(), cell.right()], |pane| (pane.top(), pane.bottom()));
+    let column_lines = spans(&even_columns, &columns, &cells, &panes, tol_x, |cell| [cell.left(), cell.right()], |pane| (pane.top(), pane.bottom()));
     let row_lines = spans(&even_rows, &rows, &cells, &panes, tol_y, |cell| [cell.top(), cell.bottom()], |pane| (pane.left(), pane.right()));
     Laid { panes, columns: column_lines, rows: row_lines }
 }

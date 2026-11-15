@@ -14,9 +14,9 @@ use craft_ui::style::DataColor;
 use craft_ui::value_drag::TrackFace;
 use egui::{Color32, Response, Ui};
 
+use super::Demosaic;
 use super::mixer;
 use super::words::RawDevelopWords;
-use super::Demosaic;
 use crate::raw::{RawDevelopSettings, VignetteStyle};
 use crate::ui::curve::{Curve, CurveEditor, ToneRamp};
 

@@ -64,12 +64,7 @@ impl Component for StraightLinePreview {
 
     fn style(cx: &StyleCx<'_>, _: StraightLinePreviewStyleKey) -> LineGuideStyle {
         let overlay = &cx.tokens.color.overlay;
-        LineGuideStyle {
-            metrics: Metrics::new(),
-            line: cx.color(overlay.stroke),
-            halo: cx.color(overlay.halo),
-            dot: cx.tokens.stroke.thick,
-        }
+        LineGuideStyle { metrics: Metrics::new(), line: cx.color(overlay.stroke), halo: cx.color(overlay.halo), dot: cx.tokens.stroke.thick }
     }
 
     fn measure(&mut self, _: &MeasureCx<'_, Self>) -> egui::Vec2 {

@@ -99,7 +99,10 @@ impl Rows {
 }
 
 fn sorts(events: &[CollectionEvent<usize, Dismissed>]) -> Vec<ColumnKey> {
-    events.iter().filter_map(|event| if let CollectionEvent::Column(ColumnEvent::Sort { key, .. }) = event { Some(key.clone()) } else { None }).collect()
+    events
+        .iter()
+        .filter_map(|event| if let CollectionEvent::Column(ColumnEvent::Sort { key, .. }) = event { Some(key.clone()) } else { None })
+        .collect()
 }
 
 fn press(frames: &mut Frames, key: Key, mods: Modifiers, show: &mut impl FnMut(&mut Ui)) {
@@ -213,7 +216,9 @@ fn a_bound_column_layout_is_restored_and_receives_changes() {
     let widths: Vec<f32> = events
         .borrow()
         .iter()
-        .filter_map(|event| if let CollectionEvent::Column(ColumnEvent::Resized { key, width, .. }) = event { (*key == NAME).then_some(*width) } else { None })
+        .filter_map(|event| {
+            if let CollectionEvent::Column(ColumnEvent::Resized { key, width, .. }) = event { (*key == NAME).then_some(*width) } else { None }
+        })
         .collect();
     let width = widths.last().copied().expect("the edge drag resizes the Name column");
     assert!(width < VIEW.x - COL, "the column narrowed: {width}");

@@ -502,15 +502,14 @@ impl<'p> Pass<'p> {
     fn blend(&mut self, ui: &mut Ui, line: &Line<'_>, modes: &[(BlendKeyEntry<String>, Label)]) {
         let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
         let keys = blend_key_entries(modes);
-        let entries: Vec<Entry<String>> = blend_entries(&keys, |entry| {
-            modes.iter().find(|(mode, _)| mode.key == entry.key).map_or(Label::Empty, |(_, label)| label.clone())
-        })
-        .into_iter()
-        .map(|entry| {
-            let enabled = entry.value().is_none_or(|id| line.param.option_enabled(id));
-            entry.enabled(enabled)
-        })
-        .collect();
+        let entries: Vec<Entry<String>> =
+            blend_entries(&keys, |entry| modes.iter().find(|(mode, _)| mode.key == entry.key).map_or(Label::Empty, |(_, label)| label.clone()))
+                .into_iter()
+                .map(|entry| {
+                    let enabled = entry.value().is_none_or(|id| line.param.option_enabled(id));
+                    entry.enabled(enabled)
+                })
+                .collect();
         line.show(ui, |ui| {
             if let Some(v) = Select::new(line.name.clone(), Bind::given(value.clone()), &entries).show(ui).value().cloned() {
                 self.work.set(line.key, FieldValue::Text(v));

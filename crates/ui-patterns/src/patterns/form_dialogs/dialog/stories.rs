@@ -85,9 +85,10 @@ const REFUSAL: &str = "The radius is too large for this layer.";
 fn hosted_param_dialog_with_a_refused_ok(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let ctx = ui.ctx().clone();
     let open = move || {
-        let mut dialog =
-            HostedParamDialog::new("blur", DialogFields::new(), |fields| ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).values(Bind::bound(fields)))
-                .held_ok();
+        let mut dialog = HostedParamDialog::new("blur", DialogFields::new(), |fields| {
+            ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).values(Bind::bound(fields))
+        })
+        .held_ok();
         // The story opens with an OK already refused, so the notice shows under the rows.
         let _ = dialog.confirm(&ctx);
         dialog.answer_ok(Err(Label::from(REFUSAL)));

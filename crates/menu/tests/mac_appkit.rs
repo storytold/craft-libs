@@ -99,7 +99,8 @@ fn main() {
         let mut bar = sample::sample(false, true);
         if let Some(view) = bar.menus.iter_mut().find(|m| m.role == MenuRole::View) {
             view.children.push(Node::Item(Item::new("view.rulers", "Rulers").shortcut(sample::chord("Cmd+R"))));
-            view.children.push(Node::Item(Item::new("layer.mergeVisible", "Merge Visible").alternate(Alternate::new(Mods::ALT, "layer.stampVisible"))));
+            view.children
+                .push(Node::Item(Item::new("layer.mergeVisible", "Merge Visible").alternate(Alternate::new(Mods::ALT, "layer.stampVisible"))));
         }
         for n in 1..documents {
             bar.documents.push(Document::new(format!("doc.{n}"), format!("Untitled-{}", n + 1)));
@@ -159,8 +160,10 @@ fn main() {
     let press = dequeue(&key_down("r", 15, NSEventModifierFlags::Command));
     assert!(main_menu().performKeyEquivalent(&press), "⌘R is View › Rulers' key equivalent");
     let (seen, clicks) = pass(&mut menu, &mut frames);
-    let keys: Vec<_> =
-        seen.iter().filter_map(|e| if let egui::Event::Key { key, pressed, modifiers, .. } = e { Some((*key, *pressed, modifiers.command)) } else { None }).collect();
+    let keys: Vec<_> = seen
+        .iter()
+        .filter_map(|e| if let egui::Event::Key { key, pressed, modifiers, .. } = e { Some((*key, *pressed, modifiers.command)) } else { None })
+        .collect();
     // AppKit took only the key-down; winit delivers the key-up itself.
     assert_eq!(keys, [(egui::Key::R, true, true)], "the key press");
     assert!(clicks.is_empty(), "a key equivalent is no click: {clicks:?}");

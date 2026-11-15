@@ -5,8 +5,8 @@ mod stories;
 
 use craft_behavior::kurbo::{Point, Vec2 as PathVec};
 use craft_behavior::{
-    CanvasView, Cursor, CursorPriority, HitLevel, HitPriority, HitShape, Metrics, NavShape, PaintedCursor, PartKey, PartRef, PointerButton, PressPhase,
-    Roving, Sense,
+    CanvasView, Cursor, CursorPriority, HitLevel, HitPriority, HitShape, Metrics, NavShape, PaintedCursor, PartKey, PartRef, PointerButton,
+    PressPhase, Roving, Sense,
 };
 use craft_ui::canvas::{CanvasSpace, canvas_space};
 use craft_ui::contract::{
@@ -290,7 +290,8 @@ impl<'a> PathTextMarkers<'a> {
         if part == PathGrab::Body {
             return (Some(part), false);
         }
-        let (Some((start, tangent)), Some((end, _))) = (self.screen_at(view, range.start, range.flip), self.screen_at(view, range.end, range.flip)) else {
+        let (Some((start, tangent)), Some((end, _))) = (self.screen_at(view, range.start, range.flip), self.screen_at(view, range.end, range.flip))
+        else {
             return (Some(part), false);
         };
         if start.distance(end) >= COINCIDENT {

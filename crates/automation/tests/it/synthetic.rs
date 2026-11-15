@@ -306,11 +306,7 @@ fn ui_ime_reaches_a_focused_text_field_as_a_preedit_then_a_commit_in_order() {
     assert!(rig.fx.focused().is_some(), "the click focused the field");
 
     let (host, ctx) = (rig.host(), rig.fx.ctx().clone());
-    let queued = [
-        ("ui.type", json!({"text": "ab"})),
-        ("ui.ime", json!({"preedit": "kzk", "cursor": [1, 2]})),
-        ("ui.ime", json!({"commit": "漢"})),
-    ];
+    let queued = [("ui.type", json!({"text": "ab"})), ("ui.ime", json!({"preedit": "kzk", "cursor": [1, 2]})), ("ui.ime", json!({"commit": "漢"}))];
     for (method, params) in queued {
         input_method(method, &params, &host, ViewportId::ROOT, &map).expect("an input method").expect("valid params");
     }

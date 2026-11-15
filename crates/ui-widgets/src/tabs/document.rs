@@ -307,7 +307,8 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                     // The gap's `key` is the tab under the pointer; `insert` is the display position the files land
                     // before, so the tab at `insert` is the one they go before.
                     if let Some(files) = payload.get::<OsFiles>() {
-                        events.push(DocumentTabsEvent::FilesDropped { files: files.files.clone(), before: tabs.get(insert).map(|tab| tab.id.clone()) });
+                        events
+                            .push(DocumentTabsEvent::FilesDropped { files: files.files.clone(), before: tabs.get(insert).map(|tab| tab.id.clone()) });
                     } else if let (Some(drag), Some(over)) = (payload.get::<ListDrag<D>>(), key) {
                         events.push(DocumentTabsEvent::DroppedInto { documents: drag.keys.clone(), over });
                     }

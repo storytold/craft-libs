@@ -93,7 +93,6 @@ impl<'a> StrokePreview<'a> {
         (right > left).then(|| (Point::new(left, y), Point::new(right, y)))
     }
 
-
     /// Fills [`shapes`](Self::shapes) for `rect` in the painter's ink at the style's opacity.
     pub fn paint(&self, cx: &ContentPainterCx, rect: Rect) {
         let ink = cx.ink();

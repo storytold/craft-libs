@@ -4,12 +4,12 @@ use super::{Kit, LinkedSize, Resample, SizeForm, SizingOutput, set_size_json, sh
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
-use serde_json::json;
 use crate::form::Field;
 use crate::pickers::Select;
 use crate::runtime::env::{ColumnSize, UnitKind};
 use craft_behavior::PixelSize;
 use egui::Ui;
+use serde_json::json;
 
 /// What Image Size answers with at OK.
 #[derive(Clone, Debug, PartialEq)]

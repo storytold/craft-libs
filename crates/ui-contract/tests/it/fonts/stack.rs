@@ -108,9 +108,17 @@ fn face_list_prefers_a_face_with_the_whole_cluster() {
 /// egui's default monospace face leads.
 #[trial]
 fn a_craft_face_with_the_mono_role_leads_the_monospace_family() {
-    const MONO: EmbeddedFace =
-        EmbeddedFace { family: "JetBrains Mono", style: "Regular", scripts: &["Latn"], bytes: &[], index: 0, role: Some(craft_fonts_build::MONO_ROLE) };
-    let build = |faces: &[EmbeddedFace]| UiFonts::new(&I18nScripts).craft_faces(faces).languages(&["en"]).ui_language("en").system_fonts(SystemFonts::Off).stack();
+    const MONO: EmbeddedFace = EmbeddedFace {
+        family: "JetBrains Mono",
+        style: "Regular",
+        scripts: &["Latn"],
+        bytes: &[],
+        index: 0,
+        role: Some(craft_fonts_build::MONO_ROLE),
+    };
+    let build = |faces: &[EmbeddedFace]| {
+        UiFonts::new(&I18nScripts).craft_faces(faces).languages(&["en"]).ui_language("en").system_fonts(SystemFonts::Off).stack()
+    };
     let defaults = craft_ui::fonts::deflated_default_definitions();
     let default_head = defaults.families.get(&FontFamily::Monospace).and_then(|chain| chain.first()).cloned();
     assert!(default_head.is_some(), "egui has a default monospace face");
@@ -120,7 +128,11 @@ fn a_craft_face_with_the_mono_role_leads_the_monospace_family() {
     let mono = head(&stack, &FontRef::monospace(), 2);
     assert_eq!(mono.first().map(String::as_str), Some("JetBrains Mono Regular"), "the mono face leads Monospace");
     assert_eq!(mono.get(1), default_head.as_ref(), "the default monospace face follows as the fallback");
-    assert_ne!(stack.chain(&FontRef::proportional()).first().map(String::as_str), Some("JetBrains Mono Regular"), "the proportional family keeps its own head");
+    assert_ne!(
+        stack.chain(&FontRef::proportional()).first().map(String::as_str),
+        Some("JetBrains Mono Regular"),
+        "the proportional family keeps its own head"
+    );
 
     let without = build(CRAFT);
     assert_eq!(without.chain(&FontRef::monospace()).first(), default_head.as_ref(), "without the mono face the default monospace face leads");

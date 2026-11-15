@@ -17,18 +17,18 @@ pub use registry::{SetEntry, sets};
 
 #[doc(hidden)]
 pub use board::declare_child;
+#[doc(hidden)]
+pub use board::focus_within;
 #[cfg(feature = "testing")]
 #[doc(hidden)]
 pub use board::keymap_builds;
-#[doc(hidden)]
-pub use board::focus_within;
 pub(crate) use board::publish as publish_for;
 pub(crate) use board::take as take_for_instance;
-#[doc(hidden)]
-pub use board::{bound_around, take_around};
 pub(crate) use board::{
     begin, binds_scoped, edit_chords, end, install, note_focus, platform, register_instance, set_input, take_delivered, take_fired, window_shortcuts,
 };
+#[doc(hidden)]
+pub use board::{bound_around, take_around};
 pub(crate) use board::{fire_bound, fire_resolved, resolve_bound, resolve_scoped};
 
 use craft_behavior::CommandFlags;

@@ -123,7 +123,17 @@ pub struct CropBar<'a> {
 impl<'a> CropBar<'a> {
     /// The bar editing `settings`, over `document` (Original Ratio's numbers and Front Image).
     pub fn new(settings: &'a mut CropSettings, document: &'a CropDocument) -> Self {
-        Self { settings, document, user_presets: &[], straighten: false, angle: None, help: None, can_reset: false, selection_entry: false, selection_chosen: false }
+        Self {
+            settings,
+            document,
+            user_presets: &[],
+            straighten: false,
+            angle: None,
+            help: None,
+            can_reset: false,
+            selection_entry: false,
+            selection_chosen: false,
+        }
     }
 
     /// Shows the bar's children.
@@ -138,7 +148,11 @@ impl<'a> CropBar<'a> {
         let (mut help_pressed, mut reset_pressed) = (false, false);
         // The options are the bar's members, spaced as the bar spaces them.
         let shown = Row::new().gap(Gap::Item).show(ui, |ui, cx| {
-            let list = CropPresetList::new(settings, document).user_presets(user_presets).selection_entry(selection_entry).selection_chosen(selection_chosen).show(ui);
+            let list = CropPresetList::new(settings, document)
+                .user_presets(user_presets)
+                .selection_entry(selection_entry)
+                .selection_chosen(selection_chosen)
+                .show(ui);
             report.ratio = list.ratio;
             report.new_preset = list.new_preset;
             report.delete_preset = list.delete_preset;

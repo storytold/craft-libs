@@ -104,7 +104,10 @@ impl<'a> VanishingPointBar<'a> {
                 );
                 Divider::vertical().show(ui);
             }
-            edit.extend(number(ui, "grid-size", &words.grid_size, settings.grid_size, VanishingPointSettings::GRID_SIZE, UnitKind::Pixels).map(set(|s, v| s.grid_size = v)));
+            edit.extend(
+                number(ui, "grid-size", &words.grid_size, settings.grid_size, VanishingPointSettings::GRID_SIZE, UnitKind::Pixels)
+                    .map(set(|s, v| s.grid_size = v)),
+            );
             if has_clip {
                 Divider::vertical().show(ui);
                 let pasted = Checkbox::new(Bind::given(settings.paste)).label(words.paste.clone()).show(ui);

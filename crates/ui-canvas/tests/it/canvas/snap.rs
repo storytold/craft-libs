@@ -94,7 +94,11 @@ fn snap_targets_snap_points_and_boxes_unless_control_suspends() {
     // macOS: Control suspends, Cmd does not.
     assert_eq!(snap.apply(Axis::Y, 103.0, Mods::CTRL), 103.0);
     assert_eq!(snap.apply(Axis::Y, 103.0, Mods::CMD), 100.0);
-    assert_eq!(snap.point(NEAR, Mods::CTRL, GestureSnap { reads_control: true, ..GestureSnap::default() }).0, Point::new(100.0, 200.0), "a gesture that reads Control keeps snapping");
+    assert_eq!(
+        snap.point(NEAR, Mods::CTRL, GestureSnap { reads_control: true, ..GestureSnap::default() }).0,
+        Point::new(100.0, 200.0),
+        "a gesture that reads Control keeps snapping"
+    );
     assert_eq!(snap.rect(DocRect::new(60.0, 10.0, 97.0, 40.0), Mods::CTRL), (Vec2::ZERO, Vec::new()));
     assert_eq!(snapped_with(&mut fixture, Modifiers::CTRL), NEAR, "Control held suspends the tool's snap");
 

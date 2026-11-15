@@ -27,7 +27,8 @@ impl<'a> SampleSizeSelect<'a> {
     pub fn show(mut self, ui: &mut Ui) -> EditResponse<SampleSize> {
         let words = Env::of(ui).words::<EyedropperWords>();
         let entries: Vec<Entry<SampleSize>> = SampleSize::ALL.iter().map(|size| Entry::new(*size, size.label(&words))).collect();
-        let field = Field::new(words.sample_size.clone()).show(ui, |ui, _| Select::new(words.size.clone(), self.size.reborrowed(), &entries).show(ui));
+        let field =
+            Field::new(words.sample_size.clone()).show(ui, |ui, _| Select::new(words.size.clone(), self.size.reborrowed(), &entries).show(ui));
         // A parent's sizing pass places a field without running its body: that run reports no edit.
         let response = field.response().clone();
         field.inner.unwrap_or_else(|| EditResponse::lifted(response, EditEvents::new(), None))

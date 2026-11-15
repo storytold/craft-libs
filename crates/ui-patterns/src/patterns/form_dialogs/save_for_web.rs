@@ -466,14 +466,8 @@ impl<'a> SaveForWebDialog<'a> {
                     panes::show(ui, &reads, &mut live, &mut slice_click)
                 });
                 Stack::new().id_salt("settings").show(ui, |ui, _| {
-                    let kit = options::Kit {
-                        words: &words,
-                        sizing: &sizing,
-                        units: &units,
-                        presets: &presets,
-                        palette,
-                        has_slices: !slices.is_empty(),
-                    };
+                    let kit =
+                        options::Kit { words: &words, sizing: &sizing, units: &units, presets: &presets, palette, has_slices: !slices.is_empty() };
                     options::show(ui, &kit, options, &mut live.link, &mut live.table, &mut live.editing, &mut ask)
                 });
             });

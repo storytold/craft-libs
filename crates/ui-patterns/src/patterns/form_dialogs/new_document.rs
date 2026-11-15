@@ -798,7 +798,8 @@ impl StackDialog for HostedNewDocument {
             }
             "preset" => {
                 let name = value.as_str().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
-                let item = self.saved.items().into_iter().find(|item| item.name == name).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                let item =
+                    self.saved.items().into_iter().find(|item| item.name == name).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
                 restore_all(&mut self.options, &item.value);
                 Ok(())
             }

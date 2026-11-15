@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, Mixed};
 use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, CommandSet as _, Commands as _, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Show as _, ShowContainer as _, Sizing, clicked};
+use craft_ui::contract::{
+    Bind, CommandSet as _, Commands as _, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Show as _, ShowContainer as _, Sizing, clicked,
+};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::pickers::Select;

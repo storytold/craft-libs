@@ -7,7 +7,9 @@ use craft_behavior::{Metrics, Sense};
 use craft_color::gradient::GradientStops;
 use craft_theme::Srgba;
 use craft_ui::choice::SwatchMetrics;
-use craft_ui::contract::{Bind, CanvasGesture, Common, Component, Cx, DisabledLook, Entry, MeasureCx, PaintUi, Props as _, Role, Sampler as _, Show as _};
+use craft_ui::contract::{
+    Bind, CanvasGesture, Common, Component, Cx, DisabledLook, Entry, MeasureCx, PaintUi, Props as _, Role, Sampler as _, Show as _,
+};
 use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::patterns::presets::{PresetRow, ThumbInfo};

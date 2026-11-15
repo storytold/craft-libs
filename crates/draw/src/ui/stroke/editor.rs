@@ -22,8 +22,8 @@ use egui::{Rect, Response, Ui};
 use std::sync::Arc;
 
 use super::{
-    DashAlign, DashUnit, LineCap, LineJoin, LineStyle, StrokeAlign, StrokeChoiceRow, StrokeField, StrokeMixed, StrokePreview, StrokeSections, StrokeStyle,
-    StrokeWords,
+    DashAlign, DashUnit, LineCap, LineJoin, LineStyle, StrokeAlign, StrokeChoiceRow, StrokeField, StrokeMixed, StrokePreview, StrokeSections,
+    StrokeStyle, StrokeWords,
 };
 
 /// The width of a preset row's line sample as a multiple of its height.
@@ -450,10 +450,7 @@ impl Body<'_> {
             found.push(StrokeField::DashOffset, event.map(|v| StrokeStyle { dash_offset: v as f32, ..style.clone() }));
         });
         if self.sections.contains(StrokeSections::DASH_ALIGN) {
-            let align = [
-                (DashAlign::Exact, "dash_align_exact", &words.dash_exact),
-                (DashAlign::Corners, "dash_align_corners", &words.dash_corners),
-            ];
+            let align = [(DashAlign::Exact, "dash_align_exact", &words.dash_exact), (DashAlign::Corners, "dash_align_corners", &words.dash_corners)];
             let icons = self.sections.contains(StrokeSections::ICONS);
             let event = choice(ui, &words.dash_align, "dash-align", held(self.mixed.dash_align, style.dash_align), &align, true, icons);
             found.push(StrokeField::DashAlign, event.map(|dash_align| StrokeStyle { dash_align, ..style.clone() }));

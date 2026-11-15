@@ -197,10 +197,7 @@ fn a_format_estimate_shows_only_the_answer_for_the_current_values() {
     let answered = painted(&fixture);
     assert_ne!(answered, waiting, "the answer replaces the footer note that waited for it");
 
-    let sent = host
-        .borrow_mut()
-        .get_mut::<HostedFormatOptions>()
-        .map(|dialog| dialog.set_json_field(fixture.ctx(), "format", "progressive".into()));
+    let sent = host.borrow_mut().get_mut::<HostedFormatOptions>().map(|dialog| dialog.set_json_field(fixture.ctx(), "format", "progressive".into()));
     assert_eq!(sent, Some(Ok(())), "the encoding is a field of the form");
     fixture.idle(4);
     let second = wanted(&host).expect("a changed value asks again").revision;

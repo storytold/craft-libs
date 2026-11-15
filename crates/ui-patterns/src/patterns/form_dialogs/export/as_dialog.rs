@@ -577,7 +577,8 @@ impl Pass<'_> {
         };
         for event in shown.events {
             let mut presets = library.borrow_mut();
-            let id_of = |presets: &PresetLibrary<ExportOptions>, name: &str| presets.items().iter().find(|item| item.name == name).map(|item| item.id);
+            let id_of =
+                |presets: &PresetLibrary<ExportOptions>, name: &str| presets.items().iter().find(|item| item.name == name).map(|item| item.id);
             match event {
                 NamedPresetEvent::Apply(name) => {
                     if let Some(item) = presets.items().into_iter().find(|item| item.name == name) {

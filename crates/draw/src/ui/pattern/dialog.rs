@@ -120,7 +120,9 @@ impl StackDialog for PatternFillDialog {
                 let pattern = value.as_str().filter(|id| self.swatches.iter().any(|swatch| swatch.id == *id)).ok_or_else(rejects)?;
                 options.pattern = pattern.to_owned();
             }
-            "scale" => options.scale = value.as_f64().ok_or_else(rejects)?.clamp(*PatternFillOptions::SCALE.start(), *PatternFillOptions::SCALE.end()),
+            "scale" => {
+                options.scale = value.as_f64().ok_or_else(rejects)?.clamp(*PatternFillOptions::SCALE.start(), *PatternFillOptions::SCALE.end())
+            }
             "angle" => options.angle = value.as_f64().ok_or_else(rejects)?.clamp(*ANGLE_RANGE.start(), *ANGLE_RANGE.end()),
             "link" => options.link = value.as_bool().ok_or_else(rejects)?,
             "phase" => options.phase = serde_json::from_value::<[f64; 2]>(value.clone()).map_err(|_| rejects())?,

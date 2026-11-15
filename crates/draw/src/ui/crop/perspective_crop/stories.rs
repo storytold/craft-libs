@@ -39,9 +39,7 @@ fn on_canvas<R: Into<StoryOutput>>(ui: &mut Ui, mut quad: impl FnMut(&mut Ui, eg
 #[story(PerspectiveCropQuad<'static>, covers = [Default], drive = Drive::Drag(Grip::part(CORNER.at(0))))]
 fn skewed_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let quad = data.value("quad", Some(PAGE));
-    on_canvas(ui, |ui, at| {
-        PerspectiveCropQuad::new("Perspective crop", Bind::bound(&mut *quad)).shield(CropShield::PERSPECTIVE).show_at(ui, at).edit
-    })
+    on_canvas(ui, |ui, at| PerspectiveCropQuad::new("Perspective crop", Bind::bound(&mut *quad)).shield(CropShield::PERSPECTIVE).show_at(ui, at).edit)
 }
 
 #[story(PerspectiveCropQuad<'static>, covers = [Invalid], drive = Drive::Drag(Grip::part(CORNER.at(0))))]

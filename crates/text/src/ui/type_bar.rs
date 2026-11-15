@@ -16,9 +16,13 @@ use craft_ui::pickers::Select;
 use craft_ui::runtime::env::Env;
 use egui::{Response, Ui};
 
-use crate::ui::character::rows::{LengthRow, Lengths, family_field, hidden_side, mixed, number_change, select_row, size_menu, string_entries, toggle_row};
 use crate::ui::character::paragraph::{align_toggles, direction_toggles};
-use crate::ui::character::{COLOR_KEY, SIZE_RANGE, CharacterChange, CharacterValues, CharacterWords, ParagraphChange, ParagraphValues, ParagraphWords};
+use crate::ui::character::rows::{
+    LengthRow, Lengths, family_field, hidden_side, mixed, number_change, select_row, size_menu, string_entries, toggle_row,
+};
+use crate::ui::character::{
+    COLOR_KEY, CharacterChange, CharacterValues, CharacterWords, ParagraphChange, ParagraphValues, ParagraphWords, SIZE_RANGE,
+};
 use crate::ui::length::DocUnit;
 use crate::ui::type_options::{TextAntiAlias, TextOrientation, TypeOptionWords};
 
@@ -27,7 +31,6 @@ use crate::ui::character::FontPickerSource;
 
 #[cfg(feature = "screen-testing")]
 mod stories;
-
 
 craft_ui::words! {
     /// The type bar's tooltips, English by default (PhotoCraft's). Family, alignment and direction names are
@@ -171,10 +174,12 @@ impl<'a> TypeBar<'a> {
 
         let row = Row::new().gap(Gap::Item).show(ui, |ui, _| {
             let shown_vertical = orientation.map(|o| o == TextOrientation::Vertical);
-            let toggle = ToggleButton::new(bar_words.orientation.clone(), Bind::given(mixed(shown_vertical))).icon(IconId::new("text_cursor")).icon_only().show(ui);
-            edits.extend(
-                toggle.events.map(|on| TypeBarChange::Orientation(if on { TextOrientation::Vertical } else { TextOrientation::Horizontal })),
-            );
+            let toggle = ToggleButton::new(bar_words.orientation.clone(), Bind::given(mixed(shown_vertical)))
+                .icon(IconId::new("text_cursor"))
+                .icon_only()
+                .show(ui);
+            edits
+                .extend(toggle.events.map(|on| TypeBarChange::Orientation(if on { TextOrientation::Vertical } else { TextOrientation::Horizontal })));
 
             #[cfg(feature = "font-picker")]
             let family = family_field(ui, &character_words, character, families, picker.as_mut());
@@ -187,7 +192,8 @@ impl<'a> TypeBar<'a> {
             let style = select_row(ui, &bar_words.style, hidden_side(), mixed(character.style.clone()), &style_entries, CharacterChange::Style);
             edits.extend(style.into_iter().map(|event| event.map(TypeBarChange::Character)));
 
-            let size = LengthRow { label: bar_words.size.clone(), side: hidden_side(), value: character.size, range: SIZE_RANGE, presets: &size_presets };
+            let size =
+                LengthRow { label: bar_words.size.clone(), side: hidden_side(), value: character.size, range: SIZE_RANGE, presets: &size_presets };
             let (event, _) = lengths.row(ui, size);
             edits.extend(number_change(event, CharacterChange::Size).into_iter().map(|event| event.map(TypeBarChange::Character)));
 

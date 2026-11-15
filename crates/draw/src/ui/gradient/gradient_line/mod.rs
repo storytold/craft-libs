@@ -68,7 +68,6 @@ impl LineGradient {
     }
 }
 
-
 /// A part of the line a pointer or key takes. Indices are into the colour row's stops.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]

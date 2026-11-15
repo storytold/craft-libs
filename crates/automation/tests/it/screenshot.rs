@@ -15,7 +15,8 @@ use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
 use craft_ui::testing::trial;
 use egui::{
-    Color32, ColorImage, Context, FullOutput, Pos2, RawInput, Rect, ScreenshotCallback, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportIdMap, ViewportInfo,
+    Color32, ColorImage, Context, FullOutput, Pos2, RawInput, Rect, ScreenshotCallback, Vec2, ViewportBuilder, ViewportCommand, ViewportId,
+    ViewportIdMap, ViewportInfo,
 };
 
 const DOC: Option<DocumentId> = Some(DocumentId::new(1, 1));
@@ -415,12 +416,8 @@ fn render_child(ctx: &Context, viewport: egui::ImmediateViewport<'_>) {
     let mut show = viewport.viewport_ui_cb;
     let mut viewports = ViewportIdMap::default();
     viewports.insert(viewport.ids.this, ViewportInfo { parent: Some(viewport.ids.parent), ..window_info(CHILD_SIZE) });
-    let input = RawInput {
-        viewport_id: viewport.ids.this,
-        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, CHILD_SIZE)),
-        viewports,
-        ..RawInput::default()
-    };
+    let input =
+        RawInput { viewport_id: viewport.ids.this, screen_rect: Some(Rect::from_min_size(Pos2::ZERO, CHILD_SIZE)), viewports, ..RawInput::default() };
     let mut output = ctx.run_ui(input, |ui| show(ui));
     output.textures_delta.clear();
     CHILD_SHOTS.with(|shots| shots.borrow_mut().extend(screenshots(&output, viewport.ids.this)));

@@ -2,8 +2,8 @@
 
 use craft_behavior::CanvasView;
 use craft_behavior::canvas::zoom;
-use craft_behavior::kurbo::{Point, Rect, Size};
 use craft_behavior::kurbo::Vec2 as DocVec;
+use craft_behavior::kurbo::{Point, Rect, Size};
 use craft_ui::canvas::{Canvas, CanvasTool, HandTool, NavigationOptions, RotateViewTool, ToolHost, ViewCommands, ViewTarget, ZoomTool};
 use craft_ui::contract::ShowContainer as _;
 use craft_ui::testing::{Fixture, ToolFixture, pointer, trial};
@@ -219,7 +219,10 @@ fn zoom_drag_keeps_the_press_point_and_fits_the_rectangle() {
                     assert!(pinned(&before, &after, a), "{label}: stepping out keeps the press point");
                 } else {
                     assert!(rig.device() > device, "{label}: the rectangle zooms in");
-                    assert!((after.to_screen(before.to_doc(centre)) - after.rect.center()).length() < 0.5, "{label}: the rectangle's centre is the view centre");
+                    assert!(
+                        (after.to_screen(before.to_doc(centre)) - after.rect.center()).length() < 0.5,
+                        "{label}: the rectangle's centre is the view centre"
+                    );
                 }
             }
         }

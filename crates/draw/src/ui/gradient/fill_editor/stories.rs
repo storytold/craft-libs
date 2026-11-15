@@ -17,10 +17,7 @@ fn pair(from: [f32; 3], to: [f32; 3]) -> GradientStops {
 fn groups() -> Vec<GradientGroup> {
     vec![GradientGroup::new(
         "Basics",
-        vec![
-            GradientItem::new("Black to white", pair([0.0; 3], [1.0; 3])),
-            GradientItem::new("Red to blue", pair([0.9, 0.1, 0.1], [0.1, 0.1, 0.9])),
-        ],
+        vec![GradientItem::new("Black to white", pair([0.0; 3], [1.0; 3])), GradientItem::new("Red to blue", pair([0.9, 0.1, 0.1], [0.1, 0.1, 0.9]))],
     )]
 }
 

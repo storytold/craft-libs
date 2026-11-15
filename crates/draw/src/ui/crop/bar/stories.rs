@@ -2,8 +2,8 @@
 
 use super::super::menus::{CropOptionsMenu, CropOverlayMenu};
 use super::super::options::{CropLength, CropRatio, CropSettings, CropSizeFields, CropUserPreset};
-use super::super::session::{CropDocKey, CropDocument};
 use super::super::preset_list::CropPresetList;
+use super::super::session::{CropDocKey, CropDocument};
 use super::CropBar;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::contract::ShowContainer as _;
@@ -80,7 +80,12 @@ fn crop_bar_selection_and_reset(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     let settings = data.value("selection", CropSettings::default());
     let mut output = None;
     Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
-        let bar = CropBar::new(settings, &document).angle(0.0).selection_entry(true).selection_chosen(true).can_reset(true).help(Label::from("About the Fill options"));
+        let bar = CropBar::new(settings, &document)
+            .angle(0.0)
+            .selection_entry(true)
+            .selection_chosen(true)
+            .can_reset(true)
+            .help(Label::from("About the Fill options"));
         output = Some(bar.show(ui));
     });
     output.map(StoryOutput::from).unwrap_or_default()

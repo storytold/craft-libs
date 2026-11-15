@@ -132,7 +132,10 @@ fn harness(config: Config) -> Harness {
         };
         let track = shown_config.track(&shown_near);
         let canvas = Canvas::new("Document").view(view).show(ui, |ui, body| {
-            PathTextMarkers::new("Text on path", Bind::given(range), &track).anchor(shown_config.anchor).body(&shown_config.boxes).show_at(ui, body.rect)
+            PathTextMarkers::new("Text on path", Bind::given(range), &track)
+                .anchor(shown_config.anchor)
+                .body(&shown_config.boxes)
+                .show_at(ui, body.rect)
         });
         if let Some(output) = canvas.inner {
             let mut host = shown_host.borrow_mut();

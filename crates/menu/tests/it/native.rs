@@ -7,7 +7,10 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use craft_keymap::Mods;
-use craft_menu::{Alternate, Backend, Builtin, Chord, ClipboardKeys, CommandRef, Dispatch, Event, Gate, LayoutOptions, MenuBar, NativeMenu, mac_layout, structure_key};
+use craft_menu::{
+    Alternate, Backend, Builtin, Chord, ClipboardKeys, CommandRef, Dispatch, Event, Gate, LayoutOptions, MenuBar, NativeMenu, mac_layout,
+    structure_key,
+};
 use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;

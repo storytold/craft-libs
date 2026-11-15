@@ -86,7 +86,14 @@ fn a_gesture_note_is_set_by_accepted_proposals_and_ends_with_the_gesture() {
         let mut before = None;
         let mut id = None;
         frames.frame(vec![], |ui| {
-            id = Some(Dragger { common: Common::new(), value: Bind::bound(&mut *value), step, before: &mut before }.enabled(enabled).id_salt("dragger").show(ui).response.id);
+            id = Some(
+                Dragger { common: Common::new(), value: Bind::bound(&mut *value), step, before: &mut before }
+                    .enabled(enabled)
+                    .id_salt("dragger")
+                    .show(ui)
+                    .response
+                    .id,
+            );
         });
         (frames.ctx.clone(), id.unwrap())
     };

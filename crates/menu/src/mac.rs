@@ -35,7 +35,9 @@ use craft_keymap::{Chord, CommandRef, Key, Mods};
 use craft_window::native_menu as native;
 
 use crate::driver::{Backend, Dispatch, Event, NativeMenu, native_ok};
-use crate::model::{Alternate, Builtin, Item, ItemKind, Menu, MenuBar, MenuRole, Node, Standard, label_or_system, native_id, structure_key, window_key};
+use crate::model::{
+    Alternate, Builtin, Item, ItemKind, Menu, MenuBar, MenuRole, Node, Standard, label_or_system, native_id, structure_key, window_key,
+};
 
 /// Install the native menu bar for `bar` (a [`crate::mac_layout`] result) and return the driver
 /// for it. Call it once, on the main thread, in eframe's creator closure, so winit's default menu
@@ -191,7 +193,10 @@ fn lower_nodes(nodes: &[Node], targets: &mut HashMap<String, Target>) -> Vec<nat
                     ItemKind::Plain => None,
                 };
                 let item = native::Item::new(id.clone(), native_label(it)).enabled(it.enabled).checked(checked).shortcut(shortcut);
-                targets.insert(id, Target { command: it.command.clone(), chord: it.shortcut, layout_shortcut: it.layout_shortcut, alternate: it.alternate.clone() });
+                targets.insert(
+                    id,
+                    Target { command: it.command.clone(), chord: it.shortcut, layout_shortcut: it.layout_shortcut, alternate: it.alternate.clone() },
+                );
                 native::Node::Item(item)
             }
         })

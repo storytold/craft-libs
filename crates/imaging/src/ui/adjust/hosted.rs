@@ -266,16 +266,15 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
         // The request to select a point is this pass's alone: a rerun of the pass in the frame finds none.
         let (canvas, select_point) = (*canvas, select_point.take());
         let (context, resizable, remember) = (*context, *resizable, remember.clone());
-        let form = FormDialog::new(title.clone(), Bind::bound(value))
-            .opened(Bind::bound(open))
-            .preview(Some(Bind::bound(&mut *preview)))
-            .shaped(move |dialog| {
+        let form = FormDialog::new(title.clone(), Bind::bound(value)).opened(Bind::bound(open)).preview(Some(Bind::bound(&mut *preview))).shaped(
+            move |dialog| {
                 let dialog = dialog.resizable(resizable);
                 match remember {
                     Some(key) => dialog.remember(key),
                     None => dialog,
                 }
-            });
+            },
+        );
         let form = match reset_with.as_deref() {
             Some(target) => form.reset_with(target),
             None => form,
@@ -284,7 +283,8 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             if let Some(canvas) = canvas {
                 form.keep_view_open(canvas);
             }
-            let mut cx = AdjustDialogCx { context, canvas, picker: &mut *picker, channel: &mut *channel, select_point, clipping: &mut *clipping, edit: None };
+            let mut cx =
+                AdjustDialogCx { context, canvas, picker: &mut *picker, channel: &mut *channel, select_point, clipping: &mut *clipping, edit: None };
             asks.extend(editor(ui, value, &mut cx));
             true
         });

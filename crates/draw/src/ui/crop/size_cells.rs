@@ -45,8 +45,7 @@ impl SizeLimits {
     /// The crop bar's ranges, in the field's own unit; its fields never alert.
     pub(super) const CROP: Self = Self { length: (LENGTH_MIN, FIELD_MAX), resolution: (0.0, FIELD_MAX), in_pixels: false, resolution_decimals: 2 };
     /// The perspective bar's ranges: 1 to 300 000 px and 1 to 29 999.999 px/in.
-    pub(super) const PERSPECTIVE: Self =
-        Self { length: (1.0, 300_000.0), resolution: (1.0, 29_999.999), in_pixels: true, resolution_decimals: 3 };
+    pub(super) const PERSPECTIVE: Self = Self { length: (1.0, 300_000.0), resolution: (1.0, 29_999.999), in_pixels: true, resolution_decimals: 3 };
 
     /// The length range in `unit`, at `pixels_per_inch` and `points_per_inch`.
     fn length_range(&self, unit: UnitKind, pixels_per_inch: f64, points_per_inch: f64) -> RangeInclusive<f64> {

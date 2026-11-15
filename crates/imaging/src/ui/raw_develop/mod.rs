@@ -35,8 +35,8 @@ use craft_theme::TypeRole;
 use craft_ui::canvas::{NavigationOptions, PixelRect, RasterSource, ToolHost, ViewCommands, ZoomTool};
 use craft_ui::contract::{Bind, Pattern, Remember as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::{
-    DialogResult, FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
-    FullWindowZoomBar, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
+    DialogResult, FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView,
+    FullWindowWorkspace, FullWindowZoomBar, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
 };
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
@@ -635,9 +635,9 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
                     w.last_done.as_ref().map(|(timing, backend)| {
                         let milliseconds = timing.as_millis().to_string();
                         match backend {
-                            Some(backend) => Label::from(
-                                words.preview_ms_backend.fill(&[("n", milliseconds.as_str()), ("backend", backend.as_str())]),
-                            ),
+                            Some(backend) => {
+                                Label::from(words.preview_ms_backend.fill(&[("n", milliseconds.as_str()), ("backend", backend.as_str())]))
+                            }
                             None => Label::from(words.preview_ms.fill(&[("n", milliseconds.as_str())])),
                         }
                     })

@@ -471,16 +471,16 @@ fn split_at<O: Copy + PartialEq>(
     };
     let vertical = (wheel.scroll.y != 0.0)
         .then(|| {
-            zone_view.or(held_vertical.map(|t| t.owner)).or_else(|| {
-                under.iter().find(|t| t.vertical && free(t) && t.has_room(true, wheel.scroll.y)).map(|t| t.owner)
-            })
+            zone_view
+                .or(held_vertical.map(|t| t.owner))
+                .or_else(|| under.iter().find(|t| t.vertical && free(t) && t.has_room(true, wheel.scroll.y)).map(|t| t.owner))
         })
         .flatten();
     let horizontal = (wheel.scroll.x != 0.0)
         .then(|| {
-            held.filter(|t| t.horizontal).map(|t| t.owner).or_else(|| {
-                under.iter().find(|t| t.horizontal && free(t) && t.has_room(false, wheel.scroll.x)).map(|t| t.owner)
-            })
+            held.filter(|t| t.horizontal)
+                .map(|t| t.owner)
+                .or_else(|| under.iter().find(|t| t.horizontal && free(t) && t.has_room(false, wheel.scroll.x)).map(|t| t.owner))
         })
         .flatten();
     let zoom = pinches(&wheel).then(|| under.iter().find(|t| t.zoom && open(t))).flatten().map(|t| t.owner);

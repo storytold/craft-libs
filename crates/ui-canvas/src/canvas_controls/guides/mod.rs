@@ -475,8 +475,7 @@ impl Component for Guides<'_> {
     /// with the key keeps its part when the key is let go mid-drag; `run_pointer` reads only declared parts, so this
     /// is the one gate of the pointer.
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
-        let takes = self.interactive
-            || (self.moves_with_command && (crate::runtime::pointer::frame(cx.ui.ctx()).mods.cmd || cx.gesture_running()));
+        let takes = self.interactive || (self.moves_with_command && (crate::runtime::pointer::frame(cx.ui.ctx()).mods.cmd || cx.gesture_running()));
         let (Some(space), Some(guides), true) = (canvas_space(&cx.env), cx.value(), takes) else { return };
         let mut any = false;
         for &at in &place::keyboard_order(guides) {

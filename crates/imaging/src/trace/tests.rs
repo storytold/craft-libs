@@ -101,7 +101,9 @@ fn a_hole_traces_its_own_loop_and_a_hostile_view_traces_nothing() {
     ];
     expected.sort_unstable();
     assert_eq!(segments, expected);
-    for hostile in [MaskRect::new(3, 0, 3, 6), MaskRect::new(0, 3, 6, 3), MaskRect::new(6, 6, 0, 0), MaskRect::new(i32::MAX, i32::MAX, i32::MIN, i32::MIN)] {
+    for hostile in
+        [MaskRect::new(3, 0, 3, 6), MaskRect::new(0, 3, 6, 3), MaskRect::new(6, 6, 0, 0), MaskRect::new(i32::MAX, i32::MAX, i32::MIN, i32::MIN)]
+    {
         assert!(outline(&mask, hostile, 1).is_empty(), "{hostile:?} traces nothing");
     }
 }

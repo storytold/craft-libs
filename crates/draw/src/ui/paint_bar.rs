@@ -354,16 +354,15 @@ impl<M: Value> Pass<'_, M> {
         // The size field draws its own caption, so the wrapper only carries the enabled state. The body may run more than
         // once in a pass and only the run that reads the input reports its events, so every run's events are collected.
         let collected: RefCell<EditEvents<f64>> = RefCell::new(EditEvents::new());
-        let _ = Field::new(caption.clone())
-            .side(SideLabel::new().kind(LabelKind::Hidden))
-            .id_salt("size")
-            .sizing(Sizing::Content)
-            .enabled(enabled)
-            .show(ui, |ui, _| {
-                for event in BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone() {
-                    collected.borrow_mut().push(event);
-                }
-            });
+        let _ =
+            Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("size").sizing(Sizing::Content).enabled(enabled).show(
+                ui,
+                |ui, _| {
+                    for event in BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone() {
+                        collected.borrow_mut().push(event);
+                    }
+                },
+            );
         let events = collected.into_inner();
         self.emit(events, |v, size| v.size = size);
     }
@@ -373,12 +372,9 @@ impl<M: Value> Pass<'_, M> {
         // The body may run more than once in a pass and only the run that reads the input reports its events, so every
         // run's events and alert are collected.
         let collected: RefCell<(EditEvents<Option<f64>>, Option<RangeAlert>)> = RefCell::new((EditEvents::new(), None));
-        let _ = Field::new(caption.clone())
-            .side(SideLabel::new().scrub(true))
-            .id_salt(salt)
-            .sizing(Sizing::Content)
-            .enabled(enabled)
-            .show(ui, |ui, _| {
+        let _ = Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).sizing(Sizing::Content).enabled(enabled).show(
+            ui,
+            |ui, _| {
                 let field = NumberField::new(caption.clone(), Bind::given(Some(current * 100.0)))
                     .unit_kind(UnitKind::Percent)
                     .range(0.0..=100.0)
@@ -392,7 +388,8 @@ impl<M: Value> Pass<'_, M> {
                 if field.out_of_range.is_some() {
                     sink.1 = field.out_of_range;
                 }
-            });
+            },
+        );
         let (events, alert) = collected.into_inner();
         if alert.is_some() {
             self.out_of_range = alert;

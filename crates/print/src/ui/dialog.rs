@@ -271,9 +271,15 @@ impl Component for PrintPreview<'_> {
         outline(RuleKind::DropMark, image);
 
         let marks = sheet.marks;
-        let sides = [(image.center_top(), vec2(0.0, -1.0)), (image.center_bottom(), vec2(0.0, 1.0)), (image.left_center(), vec2(-1.0, 0.0)), (image.right_center(), vec2(1.0, 0.0))];
+        let sides = [
+            (image.center_top(), vec2(0.0, -1.0)),
+            (image.center_bottom(), vec2(0.0, 1.0)),
+            (image.left_center(), vec2(-1.0, 0.0)),
+            (image.right_center(), vec2(1.0, 0.0)),
+        ];
         if marks.corner_crop {
-            let corners = [(image.left_top(), -1.0, -1.0), (image.right_top(), 1.0, -1.0), (image.left_bottom(), -1.0, 1.0), (image.right_bottom(), 1.0, 1.0)];
+            let corners =
+                [(image.left_top(), -1.0, -1.0), (image.right_top(), 1.0, -1.0), (image.left_bottom(), -1.0, 1.0), (image.right_bottom(), 1.0, 1.0)];
             for (corner, sx, sy) in corners {
                 rule(RuleKind::Edge, corner + vec2(sx * MARK_GAP, 0.0), corner + vec2(sx * (MARK_GAP + MARK_LEN), 0.0));
                 rule(RuleKind::Edge, corner + vec2(0.0, sy * MARK_GAP), corner + vec2(0.0, sy * (MARK_GAP + MARK_LEN)));
@@ -390,7 +396,18 @@ impl<'a> PrintDialog<'a> {
     /// The dialog over `settings`, the `printers` found, the sections' `fields` and this pass's
     /// `sheet`.
     pub fn new(settings: Bind<'a, Settings>, printers: &'a [Printer], fields: Bind<'a, DialogFields>, sheet: &'a PrintSheet) -> Self {
-        PrintDialog { settings, printers, fields, sheet, sections: &[], opened: None, busy: false, discovering: false, ready: false, answers: Vec::new() }
+        PrintDialog {
+            settings,
+            printers,
+            fields,
+            sheet,
+            sections: &[],
+            opened: None,
+            busy: false,
+            discovering: false,
+            ready: false,
+            answers: Vec::new(),
+        }
     }
 
     /// Draws the dialog. The body reports the drag events and the Refresh press of its last run only, so a measuring run
@@ -622,7 +639,8 @@ impl StackDialog for HostedPrint {
             "duplex" => self.state.settings.duplex = duplex_from_json(&value).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
             "grayscale" => self.state.settings.grayscale = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?,
             _ => {
-                let section = self.sections.iter().find(|section| section.params.iter().any(|param| param.key == field || param.unit_key() == Some(field)));
+                let section =
+                    self.sections.iter().find(|section| section.params.iter().any(|param| param.key == field || param.unit_key() == Some(field)));
                 let section = section.ok_or_else(|| FieldRefusal::Unknown.message(field))?;
                 return set_param_field(&section.params, &mut self.fields, field, value);
             }

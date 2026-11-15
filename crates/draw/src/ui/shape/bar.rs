@@ -159,8 +159,13 @@ impl<'a> ShapeBar<'a> {
             if let Some((cell, change)) = cell {
                 Divider::vertical().show(ui);
                 let side = SideLabel::new().scrub(true);
-                let (events, alert) =
-                    Field::new(cell.caption.clone()).id_salt(cell.key).side(side).sizing(Sizing::Content).show(ui, |ui, _| cell.show(ui)).inner.unwrap_or_default();
+                let (events, alert) = Field::new(cell.caption.clone())
+                    .id_salt(cell.key)
+                    .side(side)
+                    .sizing(Sizing::Content)
+                    .show(ui, |ui, _| cell.show(ui))
+                    .inner
+                    .unwrap_or_default();
                 pass.events.extend(events.map(change));
                 out_of_range = alert;
             }

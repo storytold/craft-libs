@@ -13,7 +13,8 @@ use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
 use craft_ui::buttons::{Button, ToggleButton};
 use craft_ui::contract::{
-    Bind, CanvasGesture, CommandSet as _, Commands as _, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked,
+    Bind, CanvasGesture, CommandSet as _, Commands as _, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Sampler as _, Show as _,
+    ShowContainer as _, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};

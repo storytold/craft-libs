@@ -244,13 +244,7 @@ fn rejected(field: &str, value: &serde_json::Value) -> String {
 impl<P: Clone> HostedNewWorkspace<P> {
     /// New Workspace over a copy of `set`, whose names it checks.
     pub fn new(set: &WorkspaceSet<P>) -> Self {
-        HostedNewWorkspace {
-            id: dialog_id(NEW_KEY),
-            set: set.clone(),
-            offered: WorkspaceKeeps::ALL,
-            value: NewWorkspace::default(),
-            open: true,
-        }
+        HostedNewWorkspace { id: dialog_id(NEW_KEY), set: set.clone(), offered: WorkspaceKeeps::ALL, value: NewWorkspace::default(), open: true }
     }
 
     /// The Capture boxes the dialog shows; the default shows all three.
@@ -274,11 +268,8 @@ impl<P: Clone + Eq + Hash + Send + 'static> StackDialog for HostedNewWorkspace<P
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<NewWorkspace>> {
-        let shown = NewWorkspaceDialog::new(&self.set)
-            .offered(self.offered)
-            .value(Bind::bound(&mut self.value))
-            .opened(Bind::bound(&mut self.open))
-            .show(ui);
+        let shown =
+            NewWorkspaceDialog::new(&self.set).offered(self.offered).value(Bind::bound(&mut self.value)).opened(Bind::bound(&mut self.open)).show(ui);
         match (shown.accepted, shown.closed) {
             (Some(value), _) => Some(DialogResult::Ok(value)),
             (None, Some(_)) => Some(DialogResult::Cancel),
@@ -339,12 +330,7 @@ pub struct HostedDeleteWorkspace<P> {
 impl<P: Clone> HostedDeleteWorkspace<P> {
     /// Delete Workspace over a copy of the saved workspaces of `set`.
     pub fn new(set: &WorkspaceSet<P>) -> Self {
-        HostedDeleteWorkspace {
-            id: dialog_id(DELETE_KEY),
-            value: first_deletable(set).cloned().unwrap_or_default(),
-            set: set.clone(),
-            open: true,
-        }
+        HostedDeleteWorkspace { id: dialog_id(DELETE_KEY), value: first_deletable(set).cloned().unwrap_or_default(), set: set.clone(), open: true }
     }
 }
 
@@ -356,8 +342,7 @@ impl<P: Clone + Eq + Hash + Send + 'static> StackDialog for HostedDeleteWorkspac
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<String>> {
-        let shown =
-            DeleteWorkspaceDialog::new(&self.set).value(Bind::bound(&mut self.value)).opened(Bind::bound(&mut self.open)).show(ui);
+        let shown = DeleteWorkspaceDialog::new(&self.set).value(Bind::bound(&mut self.value)).opened(Bind::bound(&mut self.open)).show(ui);
         match (shown.accepted, shown.closed) {
             (Some(id), _) => Some(DialogResult::Ok(id)),
             (None, Some(_)) => Some(DialogResult::Cancel),

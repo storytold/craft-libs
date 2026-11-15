@@ -53,7 +53,8 @@ fn size_targets_convert_units_and_perspective_limits_round_inward() {
     assert!(near(untyped.width, 144.0) && near(untyped.height, 72.0) && untyped.resolution.is_none(), "{untyped:?}");
 
     // Pixels ignore the resolution; centimetres and the px/cm resolution convert through 2.54.
-    let pixels = fields(Some((100.0, UnitKind::Pixels)), Some((50.0, UnitKind::Pixels)), "300", ResolutionUnit::PixelsPerInch).target(&doc, &postscript);
+    let pixels =
+        fields(Some((100.0, UnitKind::Pixels)), Some((50.0, UnitKind::Pixels)), "300", ResolutionUnit::PixelsPerInch).target(&doc, &postscript);
     assert!(near(pixels.width, 100.0) && near(pixels.height, 50.0), "{pixels:?}");
     let centimetres = fields(Some((2.54, UnitKind::Centimetres)), inch(1.0), "10", ResolutionUnit::PixelsPerCentimetre).target(&doc, &postscript);
     assert!(near(centimetres.resolution, 25.4) && near(centimetres.width, 25.4) && near(centimetres.height, 25.4), "{centimetres:?}");

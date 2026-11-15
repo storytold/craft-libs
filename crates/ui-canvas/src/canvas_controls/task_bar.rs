@@ -9,8 +9,8 @@ use crate::buttons::IconButton;
 use crate::canvas::canvas_space;
 use crate::contract::overlay::{Anchor, Place, PlacementChange, PlacementKind};
 use crate::contract::{
-    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, Mount, NoValue, Outcome, Overlay,
-    Pad, PopupKind, Props as _, Role, Show as _, ShowContainer as _, Sizing, Trigger,
+    Bind, BindMut, BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Inner, Mount, NoValue, Outcome, Overlay, Pad,
+    PopupKind, Props as _, Role, Show as _, ShowContainer as _, Sizing, Trigger,
 };
 use crate::display::Icon;
 use crate::menu::{Menu, MenuItem};

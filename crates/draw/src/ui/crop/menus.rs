@@ -109,7 +109,8 @@ impl<'a> CropOverlayMenu<'a> {
             }
             Menu::new(words.overlay.clone()).open(Bind::bound(open)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
                 for guide in CropGuide::ALL {
-                    let row = MenuItem::new(guide_name(&words, guide).to_owned()).icon(guide_icon(guide)).radio_mark(settings.guide == guide).show(ui);
+                    let row =
+                        MenuItem::new(guide_name(&words, guide).to_owned()).icon(guide_icon(guide)).radio_mark(settings.guide == guide).show(ui);
                     if row.ran {
                         settings.set_guide(guide);
                     }

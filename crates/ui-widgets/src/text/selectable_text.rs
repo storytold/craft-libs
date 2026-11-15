@@ -78,10 +78,7 @@ impl Component for SelectableText {
         let color = cx.color(text.normal);
         let off = States::new(color, color, color, cx.color(text.disabled));
         let metrics = if key.field_inset { Metrics::new().padding(Insets::horizontal(cx.control().pad_x)) } else { Metrics::new() };
-        SelectableStyle {
-            metrics,
-            text: TextLook::new(TypeRole::Body, Stateful::new(color).off(off)),
-        }
+        SelectableStyle { metrics, text: TextLook::new(TypeRole::Body, Stateful::new(color).off(off)) }
     }
 
     fn sense(&self) -> Sense {

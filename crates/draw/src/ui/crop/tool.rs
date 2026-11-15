@@ -26,18 +26,11 @@ const CROP_TO_KEY: &str = "draw.crop.cropTo";
 
 /// The chords the tool takes while a finite frame stands and no drag runs: Front Image, Swap, the
 /// overlay and its orientation. Every other key stays the app's.
-const FRAME_KEYS: &[Chord] =
-    &[Chord::plain(Key::I), Chord::plain(Key::X), Chord::plain(Key::O), Chord::new(Mods::SHIFT, Key::O)];
+const FRAME_KEYS: &[Chord] = &[Chord::plain(Key::I), Chord::plain(Key::X), Chord::plain(Key::O), Chord::new(Mods::SHIFT, Key::O)];
 
 /// [`FRAME_KEYS`] and Show Cropped Area and Classic Mode, which act only while a crop is pending.
-const PENDING_KEYS: &[Chord] = &[
-    Chord::plain(Key::I),
-    Chord::plain(Key::X),
-    Chord::plain(Key::O),
-    Chord::new(Mods::SHIFT, Key::O),
-    Chord::plain(Key::H),
-    Chord::plain(Key::P),
-];
+const PENDING_KEYS: &[Chord] =
+    &[Chord::plain(Key::I), Chord::plain(Key::X), Chord::plain(Key::O), Chord::new(Mods::SHIFT, Key::O), Chord::plain(Key::H), Chord::plain(Key::P)];
 
 /// What the app crops with: the frame (its rect before the turn, and `angle`, the turn in degrees
 /// clockwise on screen), the size to resample to, Delete Cropped Pixels and Fill. The app maps it

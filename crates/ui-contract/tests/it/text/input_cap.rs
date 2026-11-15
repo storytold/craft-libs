@@ -165,8 +165,14 @@ fn oversized_text_events_are_cut_before_components_see_them() {
     let (first_pastes, second_pastes) = (RefCell::new(Vec::new()), RefCell::new(Vec::new()));
     let (first_at, second_at) = (AT, AT.translate(egui::vec2(0.0, 100.0)));
     let mut fields = |ui: &mut egui::Ui| {
-        Probe { purpose: EditorPurpose::Text, pastes: Some(&first_pastes), ..Probe::new(&first) }.label("First").id_salt("first").show_at(ui, first_at);
-        Probe { purpose: EditorPurpose::Text, pastes: Some(&second_pastes), ..Probe::new(&second) }.label("Second").id_salt("second").show_at(ui, second_at);
+        Probe { purpose: EditorPurpose::Text, pastes: Some(&first_pastes), ..Probe::new(&first) }
+            .label("First")
+            .id_salt("first")
+            .show_at(ui, first_at);
+        Probe { purpose: EditorPurpose::Text, pastes: Some(&second_pastes), ..Probe::new(&second) }
+            .label("Second")
+            .id_salt("second")
+            .show_at(ui, second_at);
     };
     let mut frames = Frames::new();
     frames.idle(3, &mut fields);

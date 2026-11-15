@@ -1,9 +1,9 @@
 //! `FocusRing`: rings and halos around a rect, circle, polygon or path.
 
 use super::draw::PaintShape;
+use crate::runtime::focus::FocusShape;
 use crate::style::{Flags, FocusLook};
 use egui::emath::GuiRounding as _;
-use crate::runtime::focus::FocusShape;
 use egui::{CornerRadius, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2};
 
 /// How a focus indication is drawn.

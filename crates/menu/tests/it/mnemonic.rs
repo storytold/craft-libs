@@ -37,7 +37,8 @@ fn turkish() -> Arc<Host> {
 /// The rows shown after Alt with `key` on a Linux bar titled `ix` and `ı` under a Turkish host: `One` is `ix`'s, `Two`
 /// is `ı`'s.
 fn opened_by(key: Key) -> (bool, bool) {
-    let bar = from_items(&["ix", "ı"], &[Row::new(&["ix"], CommandRef::new("menu.one"), "One"), Row::new(&["ı"], CommandRef::new("menu.two"), "Two")]);
+    let bar =
+        from_items(&["ix", "ı"], &[Row::new(&["ix"], CommandRef::new("menu.one"), "One"), Row::new(&["ı"], CommandRef::new("menu.two"), "Two")]);
     let mut fixture = Fixture::new(move |ui| {
         MenuBarUi::new(&bar).show(ui);
     });

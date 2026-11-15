@@ -159,7 +159,10 @@ fn ant_edges_are_whole_device_pixels_at_a_fractional_scale() {
     let bands: Vec<[f32; 4]> = quads.iter().filter(|(_, color)| *color == light).map(|(quad, _)| *quad).collect();
     assert_eq!(bands.len(), 4, "one band per edge");
     let thickness: Vec<f32> = bands.iter().map(|b| (b[2] - b[0]).min(b[3] - b[1]).round()).collect();
-    assert!(thickness.iter().all(|t| *t == thickness[0] && *t >= 2.0), "every edge is as thick as the others, two device pixels at 1.5x: {thickness:?}");
+    assert!(
+        thickness.iter().all(|t| *t == thickness[0] && *t >= 2.0),
+        "every edge is as thick as the others, two device pixels at 1.5x: {thickness:?}"
+    );
 
     // The top band's two pixel rows: each row's dashes start one band width earlier than the row above, so a dash ends
     // on a slant.

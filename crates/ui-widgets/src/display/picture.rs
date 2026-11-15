@@ -81,8 +81,7 @@ impl<'a> Picture<'a> {
     }
 
     fn from_source(label: impl Into<Label>, source: Source<'a>) -> Self {
-        Picture { common: Common::new(), revision: Revision::default(), source, aspect: ThumbAspect::SQUARE, extent: PictureSize::Icon }
-            .label(label)
+        Picture { common: Common::new(), revision: Revision::default(), source, aspect: ThumbAspect::SQUARE, extent: PictureSize::Icon }.label(label)
     }
 }
 

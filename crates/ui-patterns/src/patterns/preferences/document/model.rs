@@ -44,7 +44,6 @@ pub(super) fn changed_keys(from: &toml::Table, to: &toml::Table) -> Vec<(String,
     changed
 }
 
-
 impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSettings<T>> PreferencesModel for SettingsDocument<T, C> {
     fn pages(&self) -> Vec<PageSpec<'_>> {
         self.texts()

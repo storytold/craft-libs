@@ -57,9 +57,7 @@ fn shift_click_line(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 
 #[story(StraightLinePreview, covers = [Default], drive = Drive::Never)]
 fn smoothing_string(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    on_canvas(ui, |ui, at, _| {
-        StraightLinePreview::new("Smoothing string", Point::new(240.0, 235.0), Point::new(400.0, 155.0)).dot().show_at(ui, at)
-    })
+    on_canvas(ui, |ui, at, _| StraightLinePreview::new("Smoothing string", Point::new(240.0, 235.0), Point::new(400.0, 155.0)).dot().show_at(ui, at))
 }
 
 /// The strokes the stroke story painted, each its points in document units.

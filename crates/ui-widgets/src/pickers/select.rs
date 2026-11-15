@@ -25,8 +25,7 @@ use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, Ink, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps};
 use craft_behavior::{
-    CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Metrics, NavMove, PartKey, Selection, Sense, TypeAhead, Value, WheelPhase,
-    wheel_step,
+    CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Metrics, NavMove, PartKey, Selection, Sense, TypeAhead, Value, WheelPhase, wheel_step,
 };
 use craft_theme::{Stateful, States};
 use egui::{Rect, Ui, Vec2};

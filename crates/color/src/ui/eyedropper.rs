@@ -242,11 +242,7 @@ impl<'a> EyedropperBar<'a> {
         Text::new(Label::from(words.hint.fill(&[("key", key)]))).shade(Shade::Faint).elide(Elide::End).show(ui);
         // A parent's sizing pass places a field without running its body: that run reports no edit.
         let source_response = source.response().clone();
-        EyedropperBarOutput {
-            size,
-            source: source.inner.unwrap_or_else(|| EditResponse::lifted(source_response, EditEvents::new(), None)),
-            ring,
-        }
+        EyedropperBarOutput { size, source: source.inner.unwrap_or_else(|| EditResponse::lifted(source_response, EditEvents::new(), None)), ring }
     }
 }
 

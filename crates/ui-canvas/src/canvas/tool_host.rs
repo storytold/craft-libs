@@ -84,9 +84,10 @@ use crate::runtime::commands;
 use crate::runtime::edit::next_gesture_id;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::{global, with_session};
-use crate::runtime::pointer::{self, PointerFrame};
 use crate::runtime::overlay::{self, OpenFilter};
+use crate::runtime::pointer::{self, PointerFrame};
 use crate::runtime::sampler::{self, CanvasGesture};
+use crate::runtime::windows::WindowHost;
 use crate::runtime::{cursor, frame, keys, lock_keys, measure};
 use crate::style::{DataColor, StyleCx, resolve_style};
 use craft_behavior::geometry::SnapLine;
@@ -97,7 +98,6 @@ use craft_behavior::{
 };
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Variant;
-use crate::runtime::windows::WindowHost;
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2, ViewportId};
 use std::cell::RefCell;
 
@@ -467,9 +467,10 @@ impl<'m> ToolHost<'m> {
                     let mut keys = down.clone();
                     keys.extend(state.injected_held.iter().filter(|key| !down.contains(key)));
                     let held = match *input {
-                        ToolInput::Down { mods, .. } => {
-                            state.injected_held.iter().find_map(|key| queued_momentary(&ctx, canvas.response.id, env.view().command_chain(), *key, mods))
-                        }
+                        ToolInput::Down { mods, .. } => state
+                            .injected_held
+                            .iter()
+                            .find_map(|key| queued_momentary(&ctx, canvas.response.id, env.view().command_chain(), *key, mods)),
                         _ => None,
                     };
                     (keys, held)
@@ -1139,7 +1140,9 @@ impl<'a, 't: 'a> Run<'a, 't> {
             || self.lent.is_some()
             || self.momentary.is_some()
             || press.phase.is_press()
-            || pointer::shapes_at(self.ctx, pos).iter().any(|(owner, part)| *owner != canvas && part.is_some_and(|part| part.key == super::BACKGROUND))
+            || pointer::shapes_at(self.ctx, pos)
+                .iter()
+                .any(|(owner, part)| *owner != canvas && part.is_some_and(|part| part.key == super::BACKGROUND))
             || !self.rect.is_positive()
             || self.rect.contains(pos)
             || !frame.buttons.is_empty()
@@ -1148,9 +1151,8 @@ impl<'a, 't: 'a> Run<'a, 't> {
         {
             return;
         }
-        let pointer = ToolPointer::new(pos, PointerButton::Primary, frame.time)
-            .mods(frame.mods)
-            .sample(frame.sample.unwrap_or(PointerSample::new(1.0)));
+        let pointer =
+            ToolPointer::new(pos, PointerButton::Primary, frame.time).mods(frame.mods).sample(frame.sample.unwrap_or(PointerSample::new(1.0)));
         self.call(Some(pointer), |tool, cx| tool.hover(&pointer, cx));
         self.scroll_past(pos);
     }

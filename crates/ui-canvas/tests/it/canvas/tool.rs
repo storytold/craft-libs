@@ -6,15 +6,15 @@ use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GesturePhase, PointerButton};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
-    Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, NavigationOptions,
-    Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer,
+    Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, NavigationOptions, Snap,
+    StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer,
 };
-use craft_ui::runtime::commands::{CommandGate, CommandSet as _};
 use craft_ui::contract::{Bind, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
+use craft_ui::runtime::commands::{CommandGate, CommandSet as _};
 use craft_ui::runtime::frame;
 use craft_ui::style::DataColor;
 use craft_ui::testing::input::key_press;
@@ -524,8 +524,10 @@ impl Rig {
             let shown = shown.show(ui, |_, _| {});
             shown_canvas.set(shown.output.response.id);
             let (mut command, mut alt) = (shown_command.borrow_mut(), shown_alt.borrow_mut());
-            let mut host =
-                ToolHost::new().stand_in(StandInKey::Command, &mut *command).stand_in(StandInKey::Alt, &mut *alt).smart_guide_color(setup.smart_color);
+            let mut host = ToolHost::new()
+                .stand_in(StandInKey::Command, &mut *command)
+                .stand_in(StandInKey::Alt, &mut *alt)
+                .smart_guide_color(setup.smart_color);
             if let Some(momentary) = setup.momentary.as_mut() {
                 host = host.momentary(momentary);
             }
@@ -923,10 +925,7 @@ fn a_secondary_click_the_tool_did_not_take_asks_for_the_menu() {
 
 /// A canvas with the Hand selected, with the momentary set when `momentary` and scroll bars in its body when `bars`.
 /// Returns the fixture, the menu requests, the app's view and the canvas's rect.
-fn menu_canvas(
-    momentary: bool,
-    bars: bool,
-) -> (Fixture, Rc<RefCell<Vec<ContextRequest>>>, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Rect>>) {
+fn menu_canvas(momentary: bool, bars: bool) -> (Fixture, Rc<RefCell<Vec<ContextRequest>>>, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Rect>>) {
     let (contexts, view, rect) = (Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(None::<CanvasView>)), Rc::new(Cell::new(Rect::NOTHING)));
     let (shown_contexts, shown_view, shown_rect) = (Rc::clone(&contexts), Rc::clone(&view), Rc::clone(&rect));
     let mut hand = HandTool::new(NavigationOptions::default());
@@ -938,7 +937,12 @@ fn menu_canvas(
         let shown = Canvas::new("Document").document(DOCUMENT).view(current).show_at(ui, room, |ui, body| {
             if bars {
                 let mut bar_view = current;
-                CanvasScrollbars::new("Scroll bars", Bind::bound(&mut bar_view), craft_behavior::kurbo::Rect::from_origin_size(Point::ZERO, DOCUMENT)).show_at(ui, body.rect);
+                CanvasScrollbars::new(
+                    "Scroll bars",
+                    Bind::bound(&mut bar_view),
+                    craft_behavior::kurbo::Rect::from_origin_size(Point::ZERO, DOCUMENT),
+                )
+                .show_at(ui, body.rect);
             }
         });
         let mut host = ToolHost::new();

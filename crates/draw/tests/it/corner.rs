@@ -21,9 +21,8 @@ struct Host {
 
 fn square() -> CornerTarget {
     let vertices = [Point::new(130.0, 150.0), Point::new(290.0, 150.0), Point::new(290.0, 250.0), Point::new(130.0, 250.0)];
-    let corners = (0..4)
-        .map(|i| CornerPoint::new(vertices[i], vertices[(i + 3) % 4], vertices[(i + 1) % 4], START_RADIUS, CornerKind::Round))
-        .collect();
+    let corners =
+        (0..4).map(|i| CornerPoint::new(vertices[i], vertices[(i + 3) % 4], vertices[(i + 1) % 4], START_RADIUS, CornerKind::Round)).collect();
     CornerTarget::new(1, corners, true)
 }
 

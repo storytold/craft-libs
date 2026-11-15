@@ -1119,7 +1119,9 @@ impl StackDialog for HostedParamDialog {
                 result.id = self.id;
                 Some(DialogResult::Ok(result))
             }
-            (None, Some(CloseReason::Activated)) if finish => Some(self.held.take().map_or(DialogResult::Cancel, |held| DialogResult::Ok(held.result))),
+            (None, Some(CloseReason::Activated)) if finish => {
+                Some(self.held.take().map_or(DialogResult::Cancel, |held| DialogResult::Ok(held.result)))
+            }
             (None, Some(_)) => Some(DialogResult::Cancel),
             (None, None) => None,
         }

@@ -1,7 +1,7 @@
 //! [`VectorModeSelect`]: the Shape, Path and Pixels mode choice of the vector tools.
 
 use super::{ShapeWords, VectorMode};
-use craft_ui::contract::{Bind, Entry, EditResponse, Show as _};
+use craft_ui::contract::{Bind, EditResponse, Entry, Show as _};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::Env;
 use egui::Ui;
