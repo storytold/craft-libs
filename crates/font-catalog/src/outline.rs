@@ -14,6 +14,40 @@ pub struct FontOutline<'a> {
     location: Location,
 }
 
+/// Receives unhinted glyph commands in design units (y up). Implementations own their
+/// storage and resource policy; drawing writes directly to the sink without an intermediate path.
+pub trait GlyphPen {
+    /// Start a contour.
+    fn move_to(&mut self, x: f32, y: f32);
+    /// Add a straight segment.
+    fn line_to(&mut self, x: f32, y: f32);
+    /// Add a quadratic segment.
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32);
+    /// Add a cubic segment.
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32);
+    /// Close the current contour.
+    fn close(&mut self);
+}
+
+struct Sink<'a>(&'a mut dyn GlyphPen);
+impl OutlinePen for Sink<'_> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.0.move_to(x, y);
+    }
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.0.line_to(x, y);
+    }
+    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+        self.0.quad_to(x1, y1, x, y);
+    }
+    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+        self.0.curve_to(x1, y1, x2, y2, x, y);
+    }
+    fn close(&mut self) {
+        self.0.close();
+    }
+}
+
 /// Why a font or glyph outline could not be read.
 #[derive(Debug, thiserror::Error)]
 pub enum OutlineError {
@@ -61,6 +95,14 @@ impl<'a> FontOutline<'a> {
     /// Resolve a Unicode scalar to a glyph identifier.
     pub fn glyph_for(&self, character: char) -> Option<u32> {
         self.font.charmap().map(character).map(|id| id.to_u32())
+    }
+
+    /// Stream an unhinted glyph into the caller's sink. On an error, commands already sent
+    /// remain in the sink. The sink owns any allocation and enforces its own resource limit.
+    pub fn draw_to(&self, glyph: u32, pen: &mut dyn GlyphPen) -> Result<(), OutlineError> {
+        let outline = self.font.outline_glyphs().get(GlyphId::new(glyph)).ok_or(OutlineError::MissingGlyph)?;
+        outline.draw(DrawSettings::unhinted(Size::unscaled(), &self.location), &mut Sink(pen))?;
+        Ok(())
     }
 
     /// Draw a glyph in design units. Empty glyphs such as spaces can produce an empty path.
@@ -150,6 +192,24 @@ mod tests {
     use kurbo::PathEl;
     use std::sync::Arc;
 
+    impl GlyphPen for PathPen {
+        fn move_to(&mut self, x: f32, y: f32) {
+            OutlinePen::move_to(self, x, y);
+        }
+        fn line_to(&mut self, x: f32, y: f32) {
+            OutlinePen::line_to(self, x, y);
+        }
+        fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+            OutlinePen::quad_to(self, x1, y1, x, y);
+        }
+        fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+            OutlinePen::curve_to(self, x1, y1, x2, y2, x, y);
+        }
+        fn close(&mut self) {
+            OutlinePen::close(self);
+        }
+    }
+
     #[test]
     fn rejects_invalid_face_and_collection_index() {
         let data = FontData { bytes: Arc::from(&b"not a font"[..]), index: 0 };
@@ -159,11 +219,11 @@ mod tests {
     #[test]
     fn pen_preserves_geometry_and_upward_y() {
         let mut pen = PathPen::new();
-        pen.move_to(1.0, 2.0);
-        pen.line_to(3.0, 4.0);
-        pen.quad_to(5.0, 6.0, 7.0, 8.0);
-        pen.curve_to(9.0, 10.0, 11.0, 12.0, 13.0, 14.0);
-        pen.close();
+        OutlinePen::move_to(&mut pen, 1.0, 2.0);
+        OutlinePen::line_to(&mut pen, 3.0, 4.0);
+        OutlinePen::quad_to(&mut pen, 5.0, 6.0, 7.0, 8.0);
+        OutlinePen::curve_to(&mut pen, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0);
+        OutlinePen::close(&mut pen);
         assert_eq!(
             pen.path.elements(),
             &[
@@ -179,9 +239,9 @@ mod tests {
     #[test]
     fn pen_caps_path_growth() {
         let mut pen = PathPen::new();
-        pen.move_to(0.0, 0.0);
+        OutlinePen::move_to(&mut pen, 0.0, 0.0);
         for _ in 0..MAX_OUTLINE_ELEMENTS {
-            pen.line_to(1.0, 2.0);
+            OutlinePen::line_to(&mut pen, 1.0, 2.0);
         }
         assert_eq!(pen.path.elements().len(), MAX_OUTLINE_ELEMENTS);
         assert!(pen.truncated);
@@ -246,6 +306,84 @@ mod tests {
         let (prefix, status) = shared.outline_recovering(gid).unwrap();
         assert!(matches!(status, Err(OutlineError::Draw(_))));
         assert_eq!(prefix, old.path);
+        let mut streamed = PathPen::new();
+        assert!(matches!(shared.draw_to(gid, &mut streamed), Err(OutlineError::Draw(_))));
+        assert_eq!(streamed.path, old.path);
         assert!(matches!(shared.outline(gid), Err(OutlineError::Draw(_))));
+    }
+
+    #[test]
+    fn streaming_preserves_a_large_valid_cff_outline() {
+        let Ok(dir) = std::env::var("CRAFT_FONTS_DIR") else { return };
+        let source = std::fs::read(std::path::Path::new(&dir).join("fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf")).unwrap();
+        let source = FontRef::new(&source).unwrap();
+        // Minimal CFF with a single generated Type 2 charstring. The glyph has over 100,000
+        // valid line segments; no binary fixture is copied into this repository.
+        let mut program = vec![139, 139, 21]; // rmoveto 0,0
+        for _ in 0..100_001 {
+            program.extend_from_slice(&[140, 6]);
+        } // hlineto 1
+        program.push(14); // endchar
+        let mut cff = vec![1, 0, 4, 4, 0, 1, 1, 1, 2, b'X', 0, 1, 1, 1, 7, 29, 0, 0, 0, 25, 17, 0, 0, 0, 0];
+        cff.extend_from_slice(&[0, 1, 4]);
+        cff.extend_from_slice(&1u32.to_be_bytes());
+        cff.extend_from_slice(&((program.len() as u32) + 1).to_be_bytes());
+        cff.extend_from_slice(&program);
+        let mut builder = write_fonts::FontBuilder::new();
+        for tag in [b"head", b"maxp", b"hhea", b"hmtx"] {
+            builder.add_raw(write_fonts::types::Tag::new(tag), source.table_data(Tag::new(tag)).unwrap().as_bytes().to_vec());
+        }
+        assert!(skrifa::raw::ps::cff::CffFontRef::new(&cff, 0, None).is_ok(), "synthetic CFF parses");
+        builder.add_raw(write_fonts::types::Tag::new(b"CFF "), cff);
+        let bytes = builder.build();
+        let shared = FontOutline::from_bytes(&bytes, 0, &[]).unwrap();
+        struct Count(usize);
+        impl GlyphPen for Count {
+            fn move_to(&mut self, _: f32, _: f32) {
+                self.0 += 1;
+            }
+            fn line_to(&mut self, _: f32, _: f32) {
+                self.0 += 1;
+            }
+            fn quad_to(&mut self, _: f32, _: f32, _: f32, _: f32) {
+                self.0 += 1;
+            }
+            fn curve_to(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: f32) {
+                self.0 += 1;
+            }
+            fn close(&mut self) {
+                self.0 += 1;
+            }
+        }
+        impl OutlinePen for Count {
+            fn move_to(&mut self, x: f32, y: f32) {
+                GlyphPen::move_to(self, x, y);
+            }
+            fn line_to(&mut self, x: f32, y: f32) {
+                GlyphPen::line_to(self, x, y);
+            }
+            fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
+                GlyphPen::quad_to(self, x1, y1, x, y);
+            }
+            fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
+                GlyphPen::curve_to(self, x1, y1, x2, y2, x, y);
+            }
+            fn close(&mut self) {
+                GlyphPen::close(self);
+            }
+        }
+        let mut old = Count(0);
+        FontRef::new(&bytes)
+            .unwrap()
+            .outline_glyphs()
+            .get(GlyphId::new(0))
+            .unwrap()
+            .draw(DrawSettings::unhinted(Size::unscaled(), &Location::default()), &mut old)
+            .unwrap();
+        let mut count = Count(0);
+        shared.draw_to(0, &mut count).unwrap();
+        assert_eq!(count.0, old.0);
+        assert!(count.0 > MAX_OUTLINE_ELEMENTS);
+        assert!(matches!(shared.outline(0), Err(OutlineError::TooComplex)));
     }
 }
