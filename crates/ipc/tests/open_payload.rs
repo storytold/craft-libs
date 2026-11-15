@@ -17,8 +17,10 @@ struct Tmp(PathBuf);
 
 impl Tmp {
     fn new() -> Self {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("cl-open-{}-{nanos:x}", std::process::id()));
+        // Clock ticks need not be distinct across parallel tests.
+        static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let serial = NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("cl-open-{}-{serial}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         Self(path)
     }
@@ -65,8 +67,17 @@ impl Frames for NoFrames {
     fn close_ticket(&self, _ticket: &str) {}
 }
 
+fn native_path(name: &str) -> String {
+    std::env::temp_dir().join(name).to_str().unwrap().to_owned()
+}
+
+fn file_url(path: &std::path::Path) -> String {
+    let text = path.to_str().unwrap().replace('\\', "/");
+    if text.starts_with('/') { format!("file://{text}") } else { format!("file:///{text}") }
+}
+
 fn open_params(payload: Value) -> Value {
-    json!({"link_id": LINK, "payload": payload, "result_path": "/tmp/x.png"})
+    json!({"link_id": LINK, "payload": payload, "result_path": native_path("x.png")})
 }
 
 #[test]
@@ -106,8 +117,8 @@ fn bad_payloads_get_payload_invalid_and_good_ones_reach_the_sink() {
         ("otio empty data", json!({"format": "otio-json", "data": ""})),
         ("image-doc relative path", json!({"format": "image-doc", "path": "rel.png", "asset": ASSET})),
         ("image-doc no path", json!({"format": "image-doc", "asset": ASSET})),
-        ("image-doc bad moniker", json!({"format": "image-doc", "path": "/tmp/a.png", "asset": "craft://bad"})),
-        ("image-doc no asset", json!({"format": "image-doc", "path": "/tmp/a.png"})),
+        ("image-doc bad moniker", json!({"format": "image-doc", "path": native_path("a.png"), "asset": "craft://bad"})),
+        ("image-doc no asset", json!({"format": "image-doc", "path": native_path("a.png")})),
     ];
     for (name, payload) in bad {
         let err = client.call("link.open", open_params(payload)).unwrap_err();
@@ -116,9 +127,10 @@ fn bad_payloads_get_payload_invalid_and_good_ones_reach_the_sink() {
     let err = client.call("link.open", json!({"link_id": LINK})).unwrap_err();
     assert!(matches!(err, LinkError::PayloadInvalid(_)), "missing payload: {err:?}");
     // A payload that names a file that is not there gets media_missing with the paths.
-    let missing = json!({"OTIO_SCHEMA": "ExternalReference.1", "target_url": "file:///nowhere/clip.mov"}).to_string();
+    let missing_path = tmp.0.join("missing-clip.mov");
+    let missing = json!({"OTIO_SCHEMA": "ExternalReference.1", "target_url": file_url(&missing_path)}).to_string();
     let err = client.call("link.open", open_params(json!({"format": "otio-json", "data": missing}))).unwrap_err();
-    assert_eq!(err, LinkError::MediaMissing { paths: vec!["/nowhere/clip.mov".to_string()] });
+    assert_eq!(err, LinkError::MediaMissing { paths: vec![missing_path.to_str().unwrap().replace('\\', "/")] });
     // A path that climbs, is relative or is not a string never reaches the app.
     let good = json!({"format": "otio-json", "data": "{}"});
     for result_path in [json!("../x.mov"), json!("/tmp/../etc/x.mov"), json!("rel/x.mov"), json!(7), json!("/tmp/a\u{0}b")] {
@@ -126,7 +138,7 @@ fn bad_payloads_get_payload_invalid_and_good_ones_reach_the_sink() {
         let err = client.call("link.open", params).unwrap_err();
         assert!(matches!(err, LinkError::PayloadInvalid(_)), "{result_path}: {err:?}");
     }
-    let climbing = json!({"OTIO_SCHEMA": "ExternalReference.1", "target_url": "file:///tmp/../etc/passwd"}).to_string();
+    let climbing = json!({"OTIO_SCHEMA": "ExternalReference.1", "target_url": file_url(&tmp.0.join("..").join("outside.mov"))}).to_string();
     let err = client.call("link.open", open_params(json!({"format": "otio-json", "data": climbing}))).unwrap_err();
     assert!(matches!(err, LinkError::PayloadInvalid(_)), "{err:?}");
     // Params that are not an object are still bad_params.
@@ -135,7 +147,7 @@ fn bad_payloads_get_payload_invalid_and_good_ones_reach_the_sink() {
     assert!(sink.seen.lock().unwrap().is_empty(), "a bad payload must not reach the app: {:?}", sink.seen.lock().unwrap());
 
     let otio = open_params(json!({"format": "otio-json", "data": "{\"OTIO_SCHEMA\":\"Timeline.1\"}"}));
-    let still = open_params(json!({"format": "image-doc", "path": "/tmp/a.photocraft", "asset": ASSET}));
+    let still = open_params(json!({"format": "image-doc", "path": native_path("a.photocraft"), "asset": ASSET}));
     for params in [otio, still] {
         let reply = client.call("link.open", params.clone()).unwrap();
         assert_eq!(reply, json!({"comp": "c1"}));

@@ -257,8 +257,9 @@ fn a_bad_magic_and_a_bad_header_do_not_panic_the_server() {
 
 /// A one-shot fake server. Answers auth and attach, then sends `bytes` and closes.
 fn fake_server(bytes: Vec<u8>) -> (InstanceRecord, std::thread::JoinHandle<()>, Tmp) {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("cl-fk-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x51)));
+    static NEXT_FAKE: AtomicU64 = AtomicU64::new(0);
+    let serial = NEXT_FAKE.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("cl-fk-{}-{serial}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("s.sock");
     let listener = UnixListener::bind(&path).unwrap();

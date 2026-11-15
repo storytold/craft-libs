@@ -22,8 +22,10 @@ struct Tmp(PathBuf);
 
 impl Tmp {
     fn new(label: &str) -> Self {
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("cl-watch-{label}-{}-{nanos:x}", std::process::id()));
+        // Clock ticks need not be distinct across parallel tests.
+        static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let serial = NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("cl-watch-{label}-{}-{serial}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         Self(path)
     }

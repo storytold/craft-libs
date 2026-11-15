@@ -64,9 +64,10 @@ fn boot() -> Running {
 }
 
 fn boot_with(tcp_port: Option<u16>) -> Running {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let mixed = (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x9E37_79B9);
-    let path = std::env::temp_dir().join(format!("cl-srv-{mixed:08x}"));
+    // Clock ticks need not be distinct across parallel tests.
+    static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let serial = NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("cl-sec-{}-{serial}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     let runtime = RuntimeDir::at(&path).unwrap();
     let server = Server::start(ServerConfig {

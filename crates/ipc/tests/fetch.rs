@@ -89,8 +89,10 @@ struct Rig {
 }
 
 fn boot() -> Rig {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let path = std::env::temp_dir().join(format!("cl-fch-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x9E37)));
+    // Clock ticks need not be distinct across parallel tests.
+    static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let serial = NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("cl-fch-{}-{serial}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     let fake = Arc::new(Fake {
         epoch: AtomicU64::new(1),
