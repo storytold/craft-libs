@@ -719,14 +719,15 @@ fn jpeg_params(words: &FormatOptionsWords, options: JpegOptions) -> Vec<Param> {
     vec![
         Param::section(words.image_options.clone()),
         Param::custom(QUALITY, words.quality.clone(), move |ui, fields, _| quality_rows(ui, fields, &quality_name, &preset_name, &presets, start))
+            .opens_with(FieldValue::Int(i64::from(start)))
             .full_width(),
         Param::new(FORMAT, words.format_options.clone(), ParamKind::radio(formats, Some(options.format.id().to_owned()))),
     ]
 }
 
-/// The quality in `fields`, else `start`, the quality the dialog opened with.
+/// The quality in `fields`, in whatever form it was set, else `start`, the quality the dialog opened with.
 fn quality_of(fields: &DialogFields, start: u8) -> u8 {
-    fields.int(QUALITY).map_or(start, |quality| quality.clamp(0, i64::from(MAX_QUALITY)) as u8)
+    fields.number(QUALITY).filter(|quality| quality.is_finite()).map_or(start, |quality| quality.round().clamp(0.0, f64::from(MAX_QUALITY)) as u8)
 }
 
 /// The quality rows: the field named `name` and the preset list on one line, the slider across the form under them.

@@ -145,7 +145,7 @@ pub enum ParamKind {
         /// The text shown; line breaks start new lines.
         text: Label,
     },
-    /// A row the host draws: see [`Param::custom`]. It has no value of its own.
+    /// A row the host draws: see [`Param::custom`]. Its value and its companions' are what `draw` keeps.
     Custom(CustomRow),
     /// A select of blend modes, each with the Shift+Alt key that picks it.
     #[non_exhaustive]
@@ -288,7 +288,8 @@ impl ParamKind {
             }
             ParamKind::Pattern { default } => FieldValue::Text(default.clone()?),
             ParamKind::Files { open_files, .. } => path_list(open_files),
-            ParamKind::ReadOnlyText { .. } | ParamKind::Custom(_) | ParamKind::Section => return None,
+            ParamKind::Custom(row) => row.opens_with.clone()?,
+            ParamKind::ReadOnlyText { .. } | ParamKind::Section => return None,
         })
     }
 
@@ -316,7 +317,8 @@ impl ParamKind {
             (ParamKind::Channel { names, .. }, FieldValue::Int(i)) => usize::try_from(*i).is_ok_and(|i| i < names.len()),
             (ParamKind::Text { .. }, FieldValue::Text(_)) => true,
             (ParamKind::OptionalNumber { min, max, .. }, v) => number(v).is_some_and(|n| n.is_finite() && n >= *min && n <= *max),
-            (ParamKind::Custom(_), FieldValue::Json(_)) => true,
+            // A custom row keeps whatever its `draw` writes.
+            (ParamKind::Custom(_), _) => true,
             (ParamKind::Blend { modes, .. }, FieldValue::Text(id)) => modes.iter().any(|(entry, _)| entry.key == *id),
             (ParamKind::Pattern { .. }, FieldValue::Text(_)) => true,
             (ParamKind::Files { .. }, v) => is_path_list(v),
@@ -328,31 +330,43 @@ impl ParamKind {
 type CustomDraw = dyn Fn(&mut Ui, &mut DialogFields, &mut CustomContext) -> Response + Send + Sync;
 
 /// What draws a [`ParamKind::Custom`] row: it gets the row's control cell, the form's values and the row's
-/// [`CustomContext`], and returns the response the row label names. Equal only to itself.
+/// [`CustomContext`], and returns the response the row label names. Besides the row's own key, `draw` may keep values
+/// under its companion keys ([`Param::companions`]). Equal only to a clone of itself with the same value and companions.
 #[derive(Clone)]
-pub struct CustomRow(Arc<CustomDraw>);
+pub struct CustomRow {
+    draw: Arc<CustomDraw>,
+    /// The value the row's key opens with ([`Param::opens_with`]).
+    opens_with: Option<FieldValue>,
+    /// The other keys `draw` keeps values under.
+    companions: Vec<String>,
+}
 
 impl CustomRow {
     /// Wraps `draw`, which draws the row and edits the values it owns through the [`DialogFields`].
     pub fn new(draw: impl Fn(&mut Ui, &mut DialogFields, &mut CustomContext) -> Response + Send + Sync + 'static) -> Self {
-        Self(Arc::new(draw))
+        Self { draw: Arc::new(draw), opens_with: None, companions: Vec::new() }
     }
 
     /// Draws the row.
     pub(crate) fn draw(&self, ui: &mut Ui, fields: &mut DialogFields, context: &mut CustomContext) -> Response {
-        (self.0)(ui, fields, context)
+        (self.draw)(ui, fields, context)
+    }
+
+    /// Whether `key` is one of the row's companion keys.
+    pub(crate) fn has_companion(&self, key: &str) -> bool {
+        self.companions.iter().any(|companion| companion == key)
     }
 }
 
 impl fmt::Debug for CustomRow {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("CustomRow")
+        f.debug_struct("CustomRow").field("opens_with", &self.opens_with).field("companions", &self.companions).finish_non_exhaustive()
     }
 }
 
 impl PartialEq for CustomRow {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Arc::ptr_eq(&self.draw, &other.draw) && self.opens_with == other.opens_with && self.companions == other.companions
     }
 }
 
@@ -591,14 +605,35 @@ impl Param {
     }
 
     /// A row the host draws. `draw` gets the control cell, the form's values and the row's [`CustomContext`] (to ask
-    /// for the host's colour picker); the row label names the response it returns. The row has no default and
-    /// nothing remembered; `draw` reads and writes [`DialogFields`] under whatever keys it likes.
+    /// for the host's colour picker); the row label names the response it returns. Nothing of the row is remembered;
+    /// it opens with no value unless [`opens_with`](Param::opens_with) gives one. `draw` reads and writes the
+    /// [`DialogFields`] under its key and the keys [`companions`](Param::companions) declares; automation
+    /// (`set_json_field`) sets any of those keys to a JSON value, kept as [`FieldValue::Json`] (`null` removes it).
     pub fn custom(
         key: impl Into<String>,
         label: impl Into<Label>,
         draw: impl Fn(&mut Ui, &mut DialogFields, &mut CustomContext) -> Response + Send + Sync + 'static,
     ) -> Self {
         Self::new(key, label, ParamKind::Custom(CustomRow::new(draw)))
+    }
+
+    /// The value a [`Param::custom`] row's key opens with, as another row opens with its default. Other rows ignore it.
+    #[must_use]
+    pub fn opens_with(mut self, value: impl Into<FieldValue>) -> Self {
+        if let ParamKind::Custom(row) = &mut self.kind {
+            row.opens_with = Some(value.into());
+        }
+        self
+    }
+
+    /// The other keys a [`Param::custom`] row keeps values under (Color Lookup's `file` beside its `lut`), so automation
+    /// sets them as it sets the row's own key. Other rows ignore it.
+    #[must_use]
+    pub fn companions(mut self, keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        if let ParamKind::Custom(row) = &mut self.kind {
+            row.companions.extend(keys.into_iter().map(Into::into));
+        }
+        self
     }
 
     /// A row of read-only `text` beside the label, wrapped to the form's width: the user can select and copy it, and
@@ -792,11 +827,14 @@ impl Param {
         !self.option().not_remembered
     }
 
-    /// Whether `value` is one the field `key` of this row can hold: the row's own value, or the unit id of a row with
-    /// units.
+    /// Whether `value` is one the field `key` of this row can hold: the row's own value, the unit id of a row with
+    /// units, a Files row's companions, or a custom row's companion.
     pub fn accepts(&self, key: &str, value: &FieldValue) -> bool {
         if self.key == key {
             return self.kind.fits(value) && self.option_allowed(value);
+        }
+        if let ParamKind::Custom(row) = &self.kind {
+            return row.has_companion(key);
         }
         if matches!(self.kind, ParamKind::Files { .. }) {
             return match value {

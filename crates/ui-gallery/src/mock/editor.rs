@@ -148,7 +148,7 @@ fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
             for command in dialogs {
                 match command {
                     AppCommand::GaussianBlur => {
-                        host.open(HostedParamDialog::new(BLUR_KEY, DialogFields::new(), |fields| {
+                        host.open(HostedParamDialog::new(ui.ctx(), BLUR_KEY, DialogFields::new(), |fields| {
                             ParamDialog::new(BLUR_KEY, "Gaussian Blur", Param::parse_list(BLUR)).values(Bind::bound(fields)).remember(BLUR_MEMORY)
                         }));
                     }

@@ -741,7 +741,7 @@ type Build = dyn for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send;
 ///   [`answer_ok`](HostedParamDialog::answer_ok).
 ///
 /// ```ignore
-/// host.open(HostedParamDialog::new("radial-blur", DialogFields::new(), |fields| {
+/// host.open(HostedParamDialog::new(ctx, "radial-blur", DialogFields::new(), |fields| {
 ///     ParamDialog::new("radial-blur", "Radial Blur", params.clone()).values(Bind::bound(fields))
 /// }));
 /// // each pass: if dialog.is_previewing() { dialog.set_preview(Some(render(dialog.fields()))) }
@@ -751,8 +751,6 @@ pub struct HostedParamDialog {
     key: String,
     instance: Option<DialogId>,
     fields: DialogFields,
-    /// The values were opened (remembered values and defaults loaded) by the first show, OK or set.
-    opened: bool,
     build: Box<Build>,
     requests: HostRequests,
     /// Whether the dialog is open: bound to the dialog's `opened` prop, so the dialog's own open state, kept under
@@ -799,20 +797,26 @@ struct Refused {
 }
 
 impl HostedParamDialog {
-    /// A hosted dialog for the command `key`, opening with `fields`; `build` makes the dialog over the values.
+    /// A hosted dialog for the command `key`, opening with `fields`; `build` makes the dialog over the values. The
+    /// values open now, as a `ParamDialog`'s first pass opens its own: the remembered values `ctx` keeps over
+    /// `fields`, then the defaults of the keys still missing. Automation reads and sets these values before any pass.
     pub fn new(
+        ctx: &Context,
         key: impl Into<String>,
-        fields: DialogFields,
+        mut fields: DialogFields,
         build: impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static,
     ) -> Self {
         let key = key.into();
+        let ParamDialog { params, remember, patterns, .. } = build(&mut fields);
+        let (params, patterns) = (params.into_owned(), patterns.into_owned());
+        let saved = remember.and_then(|key| MemoryStage::peek_saved::<Option<DialogFields>>(ctx, &key));
+        ParamDialog::open_values(&params, &patterns, saved.as_ref(), &mut fields);
         HostedParamDialog {
             id: dialog_id(key.as_str()),
             key,
             instance: None,
+            opening: fields.clone(),
             fields,
-            opened: false,
-            opening: DialogFields::default(),
             build: Box::new(build),
             requests: HostRequests::new(),
             open: true,
@@ -828,11 +832,12 @@ impl HostedParamDialog {
     /// A hosted command form: the same as [`new`](HostedParamDialog::new), with `build` making a
     /// [`ParamDialog::command`].
     pub fn command(
+        ctx: &Context,
         key: impl Into<String>,
         fields: DialogFields,
         build: impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static,
     ) -> Self {
-        Self::new(key, fields, build)
+        Self::new(ctx, key, fields, build)
     }
 
     /// Names this dialog among others made with the same key (one per document, say), so they keep separate state.
@@ -989,32 +994,23 @@ impl HostedParamDialog {
     pub fn cancel_requests(&mut self) {
         self.requests.cancel();
     }
-
-    /// Opens the values once, as a `ParamDialog`'s first pass does, before the first show, OK or set reads them.
-    fn open(&mut self, ctx: &Context) {
-        if std::mem::replace(&mut self.opened, true) {
-            return;
-        }
-        let ParamDialog { params, remember, patterns, .. } = (self.build)(&mut self.fields);
-        let (params, patterns) = (params.into_owned(), patterns.into_owned());
-        let saved = remember.and_then(|key| MemoryStage::peek_saved::<Option<DialogFields>>(ctx, &key));
-        ParamDialog::open_values(&params, &patterns, saved.as_ref(), &mut self.fields);
-        self.opening = self.fields.clone();
-    }
 }
 
 /// Checks `value` against the row `field` of `params` and sets it in `fields`, as the user editing the row would; `Err`
-/// says why the row refused (`FieldRefusal`). The field is a row's key or its unit key; a Files row takes a
-/// `{files, folder, useFolder}` object and sets its two companion keys with it. Every dialog built on `Param`s sets
-/// its fields through this one rule.
+/// says why the row refused (`FieldRefusal`). The field is a row's key, its unit key or a custom row's companion key
+/// ([`Param::companions`]); a Files row takes a `{files, folder, useFolder}` object and sets its two companion keys with
+/// it. Every dialog built on `Param`s sets its fields through this one rule.
 pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str, value: Value) -> Result<(), String> {
-    let Some(param) = params.iter().find(|param| param.key == field || param.unit_key() == Some(field)) else {
+    let companion = |param: &Param| matches!(&param.kind, ParamKind::Custom(row) if row.has_companion(field));
+    let Some(param) = params.iter().find(|param| param.key == field || param.unit_key() == Some(field) || companion(param)) else {
         return Err(FieldRefusal::Unknown.message(field));
     };
     if !param.visible(fields) || !param.enabled(fields) {
         return Err(FieldRefusal::Inactive.message(field));
     }
-    let writes = if param.key != field {
+    let writes = if companion(param) {
+        Some(vec![(field.to_owned(), Some(FieldValue::Json(value.clone())).filter(|_| !value.is_null()))])
+    } else if param.key != field {
         value.as_str().map(|unit| vec![(field.to_owned(), Some(FieldValue::Text(unit.to_owned())))])
     } else if matches!(param.kind, ParamKind::Files { .. }) {
         read_files(param, &value)
@@ -1081,7 +1077,6 @@ impl StackDialog for HostedParamDialog {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ParamResult>> {
         let measuring = crate::runtime::measure::active(ui.ctx());
         let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
-        self.open(ui.ctx());
         let finish = self.held.as_ref().is_some_and(|held| held.accepted);
         // A measuring run keeps the centre: the real run of the pass takes it.
         let centre = if measuring { self.centre } else { self.centre.take() };
@@ -1152,8 +1147,7 @@ impl StackDialog for HostedParamDialog {
     /// Answers OK as the button does: none while OK is disabled. The result keeps what a remembering dialog saves. A
     /// held dialog files the answer for the host, as its button does, and answers none; once the host accepted the
     /// held answer, it answers that.
-    fn confirm(&mut self, ctx: &Context) -> Option<ParamResult> {
-        self.open(ctx);
+    fn confirm(&mut self, _: &Context) -> Option<ParamResult> {
         if self.held.as_ref().is_some_and(|held| held.accepted) {
             return self.held.take().map(|held| held.result);
         }
@@ -1181,8 +1175,7 @@ impl StackDialog for HostedParamDialog {
 
     /// Keeps `value` when the row `field` names (a parameter or its unit choice) is shown, takes input, and takes
     /// the value ([`set_param_field`]).
-    fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String> {
-        self.open(ctx);
+    fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
         let params = (self.build)(&mut self.fields).params.into_owned();
         let before = self.fields.clone();
         set_param_field(&params, &mut self.fields, field, value)?;

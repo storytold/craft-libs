@@ -141,7 +141,7 @@ const REFUSED: &str = "The radius is too large for this layer.";
 fn a_held_ok_refused_keeps_the_dialog_open_and_an_accepted_one_closes() {
     let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
     let mut fixture = host_fixture(&host, &twice);
-    host.borrow_mut().open(HostedParamDialog::new("blur", DialogFields::new(), blur).held_ok());
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur).held_ok());
     fixture.idle(10);
 
     twice.set(true);
@@ -190,14 +190,14 @@ fn a_hosted_dialog_reopened_under_the_same_key_opens() {
         host.run(ui);
         if let Some(result) = host.take::<HostedParamDialog>() {
             if again.replace(false) {
-                host.open(HostedParamDialog::new("blur", DialogFields::new(), blur));
+                host.open(HostedParamDialog::new(ui.ctx(), "blur", DialogFields::new(), blur));
             } else {
                 *out.borrow_mut() = Some(result);
             }
         }
     });
     fixture.room(Vec2::new(1200.0, 900.0));
-    host.borrow_mut().open(HostedParamDialog::new("blur", DialogFields::new(), blur));
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur));
     fixture.idle(10);
     fixture.key(Key::Escape, Modifiers::NONE).idle(10);
     assert!(!reopen.get(), "Escape closed the first dialog");
@@ -224,7 +224,7 @@ fn folder_value(folder: &str) -> serde_json::Value {
 fn a_hosted_dialogs_new_requests_come_once_and_a_cancel_drops_them() {
     let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
     let mut fixture = host_fixture(&host, &twice);
-    host.borrow_mut().open(HostedParamDialog::new("stack", DialogFields::new(), stack_dialog));
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "stack", DialogFields::new(), stack_dialog));
     fixture.idle(10);
 
     let save = fixture.by_label("Save…").expect("the Save… button");
@@ -264,7 +264,7 @@ fn brush_tip(fields: &mut DialogFields) -> ParamDialog<'_> {
 fn a_disabled_radio_option_is_greyed_and_refused() {
     let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
     let mut fixture = host_fixture(&host, &twice);
-    host.borrow_mut().open(HostedParamDialog::new("brush", DialogFields::new(), brush_tip));
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "brush", DialogFields::new(), brush_tip));
     fixture.idle(10);
     let shape = || on_dialog(&host, |dialog| dialog.fields().text("shape").map(str::to_owned)).flatten();
 
@@ -330,7 +330,7 @@ fn a_remembered_value_its_row_refuses_opens_as_the_default() {
     fixture.room(Vec2::new(1200.0, 900.0));
     let ctx = fixture.ctx().clone();
 
-    host.borrow_mut().open(HostedParamDialog::new("filter", DialogFields::new(), wide_filter));
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "filter", DialogFields::new(), wide_filter));
     fixture.idle(4);
     let values =
         [("radius", json!(80.0)), ("method", json!("twist")), ("edge", json!("repeat")), ("pattern", json!("stripes")), ("smooth", json!(true))];
@@ -340,7 +340,7 @@ fn a_remembered_value_its_row_refuses_opens_as_the_default() {
     assert!(host.borrow_mut().confirm::<HostedParamDialog>(&ctx), "OK answers");
     fixture.idle(2);
 
-    host.borrow_mut().open(HostedParamDialog::new("filter", DialogFields::new(), narrow_filter));
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "filter", DialogFields::new(), narrow_filter));
     fixture.idle(4);
     let fields = host.borrow().get::<HostedParamDialog>().map(|dialog| dialog.fields().clone()).expect("the next version is open");
     assert_eq!(fields.bool("smooth"), Some(true), "a value its row still takes opens as remembered");
@@ -422,7 +422,12 @@ fn a_previewed_colour_shows_in_its_row_and_leaves_the_fields() {
     let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
     let mut fixture = host_fixture(&host, &twice);
     let (red, blue) = (craft_theme::Srgba::new(1.0, 0.0, 0.0, 1.0), craft_theme::Srgba::new(0.0, 0.0, 1.0, 1.0));
-    host.borrow_mut().open(HostedParamDialog::new("tint", DialogFields::from_pairs([("tint", FieldValue::Color([0.0, 0.0, 1.0]))]), tint));
+    host.borrow_mut().open(HostedParamDialog::new(
+        fixture.ctx(),
+        "tint",
+        DialogFields::from_pairs([("tint", FieldValue::Color([0.0, 0.0, 1.0]))]),
+        tint,
+    ));
     fixture.idle(10);
     let before = on_dialog(&host, |dialog| dialog.fields().clone()).expect("the dialog is open");
     assert!(paints(&fixture.frame_shapes(), blue.into()), "the swatch shows the stored colour");
@@ -443,7 +448,7 @@ fn a_previewed_colour_shows_in_its_row_and_leaves_the_fields() {
 fn a_field_set_before_the_first_show_resets_to_the_opening_value() {
     let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
     let mut fixture = host_fixture(&host, &twice);
-    host.borrow_mut().open(HostedParamDialog::new("blur", DialogFields::new(), blur));
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur));
     let ctx = fixture.ctx().clone();
     host.borrow_mut().set_json_field(&ctx, dialog_id("blur"), "radius", json!(60.0)).expect("the radius row takes a number");
     fixture.idle(10);

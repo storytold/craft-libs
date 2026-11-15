@@ -129,10 +129,14 @@ impl DialogFields {
         self.values.contains_key(key)
     }
 
+    // The scalar readers also read the `Json` form of their value, which automation stores for a custom row's keys
+    // (`Param::custom`): one read whatever form the value was set in.
+
     /// `Bool`, else `None`.
     pub fn bool(&self, key: &str) -> Option<bool> {
         match self.values.get(key)? {
             FieldValue::Bool(b) => Some(*b),
+            FieldValue::Json(value) => value.as_bool(),
             _ => None,
         }
     }
@@ -142,15 +146,18 @@ impl DialogFields {
         match self.values.get(key)? {
             FieldValue::Number(n) => Some(*n),
             FieldValue::Int(i) => Some(*i as f64),
+            FieldValue::Json(value) => value.as_f64(),
             _ => None,
         }
     }
 
     /// `Int`, or a whole `Number`.
     pub fn int(&self, key: &str) -> Option<i64> {
+        let whole = |n: f64| (n.fract() == 0.0 && n.abs() < 9.0e15).then_some(n as i64);
         match self.values.get(key)? {
             FieldValue::Int(i) => Some(*i),
-            FieldValue::Number(n) if n.fract() == 0.0 && n.abs() < 9.0e15 => Some(*n as i64),
+            FieldValue::Number(n) => whole(*n),
+            FieldValue::Json(value) => value.as_i64().or_else(|| value.as_f64().and_then(whole)),
             _ => None,
         }
     }
@@ -159,6 +166,7 @@ impl DialogFields {
     pub fn text(&self, key: &str) -> Option<&str> {
         match self.values.get(key)? {
             FieldValue::Text(s) => Some(s),
+            FieldValue::Json(value) => value.as_str(),
             _ => None,
         }
     }
@@ -188,14 +196,18 @@ impl DialogFields {
     }
 
     /// A `List`, or a `Grid`, `Point` or `Color` as the list of its numbers (the shapes an
-    /// untagged read gives a stored list of numbers, and an empty list). The key may have no
-    /// parameter row: a host keeps its own data under it (a key without a row is not remembered).
+    /// untagged read gives a stored list of numbers, and an empty list), or a `Json` array read as
+    /// those values. The key may have no parameter row: a host keeps its own data under it (a key
+    /// without a row is not remembered).
     pub fn list(&self, key: &str) -> Option<Cow<'_, [FieldValue]>> {
         Some(match self.values.get(key)? {
             FieldValue::List(items) => Cow::Borrowed(items.as_slice()),
             FieldValue::Grid(cells) => Cow::Owned(cells.iter().map(|c| FieldValue::Int(*c)).collect()),
             FieldValue::Point(p) => Cow::Owned(p.iter().map(|n| FieldValue::Number(*n)).collect()),
             FieldValue::Color(c) => Cow::Owned(c.iter().map(|n| FieldValue::Number(f64::from(*n))).collect()),
+            FieldValue::Json(serde_json::Value::Array(items)) => {
+                Cow::Owned(items.iter().map(|item| serde_json::from_value(item.clone())).collect::<Result<_, _>>().ok()?)
+            }
             _ => return None,
         })
     }

@@ -18,13 +18,13 @@ fn call(host: &mut DialogHost, ctx: &Context, method: &str, params: Value) -> Re
 fn dialog_methods_read_set_and_answer_typed_dialogs() {
     let ctx = Context::default();
     let mut host = DialogHost::new();
-    host.open(HostedParamDialog::new("gaussianBlur", DialogFields::from_pairs([("radius", 1.0)]), |fields| {
+    host.open(HostedParamDialog::new(&ctx, "gaussianBlur", DialogFields::from_pairs([("radius", 1.0)]), |fields| {
         ParamDialog::new("gaussianBlur", "Gaussian Blur", Param::parse_list(r#"{"radius":0.1..1000=1,"method":"spin|zoom"}"#))
             .values(Bind::bound(fields))
     }));
     let listed = inspect(&host);
     assert_eq!(listed[0]["key"], "gaussianBlur");
-    assert_eq!(listed[0]["fields"], json!({"radius": 1.0}));
+    assert_eq!(listed[0]["fields"], json!({"radius": 1.0, "method": "spin"}), "the dialog lists its defaults from its open");
     let blur = listed[0]["id"].clone();
 
     assert_eq!(call(&mut host, &ctx, "ui.dialog.set", json!({"dialog": blur, "field": "radius", "value": 4.5})), Ok(Value::Null));
@@ -72,14 +72,14 @@ fn dialog_methods_read_set_and_answer_typed_dialogs() {
 const REMEMBERED: SaveKey = SaveKey::new("craft_automation.blur");
 
 /// A hosted parameter dialog's automation follows its rows as a user meets them: OK is refused while disabled, a
-/// disabled row takes no value, a value is read as its row's kind (three integers for a three-cell grid), and OK
-/// before the first pass answers with the remembered values the first pass would have loaded.
+/// disabled row takes no value, a value is read as its row's kind (three integers for a three-cell grid), and from its
+/// open, before any pass, the dialog lists and answers with the remembered values over the defaults.
 #[trial]
 fn param_dialog_automation_follows_its_rows() {
     let ctx = Context::default();
     let mut host = DialogHost::new();
     let blur = |ok: bool| {
-        HostedParamDialog::new("blur", DialogFields::new(), move |fields| {
+        HostedParamDialog::new(&ctx, "blur", DialogFields::new(), move |fields| {
             let mut params = Param::parse_list(r#"{"radius":0.1..1000=1,"method":"spin|zoom"}"#);
             params.push(Param::new("amount", "Amount", ParamKind::range(0.0, 100.0, 10.0, Default::default())).enabled_when("method", "zoom"));
             params.push(Param::new("cells", "Cells", ParamKind::grid(3, 0)));
@@ -109,7 +109,10 @@ fn param_dialog_automation_follows_its_rows() {
     result.remember(&ctx);
 
     host.open(blur(true));
-    let id = inspect(&host)[0]["id"].clone();
+    let listed = inspect(&host);
+    let id = listed[0]["id"].clone();
+    let fields = &listed[0]["fields"];
+    assert_eq!((fields["radius"].as_f64(), &fields["method"], &fields["cells"]), (Some(7.0), &json!("zoom"), &json!([0, 1, 0])), "{fields}");
     assert_eq!(call(&mut host, &ctx, "ui.dialog.confirm", json!({"dialog": id})), Ok(Value::Null));
     let Some(DialogResult::Ok(reopened)) = host.take::<HostedParamDialog>() else { panic!("the reopened dialog answers OK") };
     assert_eq!((reopened.fields.number("radius"), reopened.fields.text("method")), (Some(7.0), Some("zoom")));
