@@ -997,6 +997,20 @@ pub struct ColorData {
     pub kelvin_presets: Option<kelvin::KelvinPresets>,
 }
 
+/// Bounded diagnostics for decisions actually made by a raw decoder. An absent optional tag
+/// does not itself set a notice; hosts can translate these flags into their own warning text
+/// without inferring a fallback from missing metadata or retaining source-controlled strings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RawNotices {
+    /// Explicit default-crop metadata needed correction or a fallback to the active area.
+    pub default_crop_adjusted: bool,
+    /// A source profile gain table could not be used and was omitted from the decoded image.
+    pub gain_table_omitted: bool,
+    /// The CFA layout was selected by a decoder fallback instead of usable source metadata.
+    pub assumed_cfa: bool,
+}
+
 /// A decoded raw image.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawImage {
@@ -1041,6 +1055,9 @@ pub struct RawImage {
     /// measured levels are placeholders.
     #[serde(default)]
     pub level_sources: LevelSources,
+    /// Fixed-size decoder decisions, separate from ordinary missing optional metadata.
+    #[serde(default)]
+    pub notices: RawNotices,
 }
 
 impl RawImage {
@@ -1171,5 +1188,23 @@ mod checked_arithmetic_tests {
         }
         assert_eq!(Orientation::from_exif(0), Orientation::Normal);
         assert_eq!(Orientation::from_exif(9), Orientation::Normal);
+    }
+}
+
+#[cfg(test)]
+mod raw_notices_tests {
+    use super::*;
+
+    #[test]
+    fn missing_notices_default_to_no_claims_and_explicit_flags_are_independent() {
+        type Error = serde::de::value::Error;
+        let empty = serde::de::value::MapDeserializer::<_, Error>::new(std::iter::empty::<(&str, bool)>());
+        assert_eq!(RawNotices::deserialize(empty).unwrap(), RawNotices::default());
+        let one = serde::de::value::MapDeserializer::<_, Error>::new([("assumed_cfa", true)].into_iter());
+        let notices = RawNotices::deserialize(one).unwrap();
+        let copied = notices;
+        assert_eq!(notices, copied);
+        assert_eq!(notices, RawNotices { assumed_cfa: true, default_crop_adjusted: false, gain_table_omitted: false });
+        assert!(!std::mem::needs_drop::<RawNotices>(), "decoder notices own no allocated strings");
     }
 }
