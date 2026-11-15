@@ -95,6 +95,9 @@ pub struct Writer {
     tracked: Option<TrackedParts>,
 }
 
+/// A tracking closure and the part digests collected so far.
+type TrackedParts = (fn(&str) -> bool, Vec<PartDigest>);
+
 impl Writer {
     pub fn new(limits: Limits) -> Writer {
         Writer { zip: craft_zip::Writer::new(), names: BTreeSet::new(), expanded: 0, resolved: 0, limits, tracked: None }
