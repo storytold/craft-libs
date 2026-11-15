@@ -91,10 +91,6 @@ pub struct Color {
 impl Matrix {
     /// The matrix used when an XFL element omits its transform.
     pub const IDENTITY: Matrix = Matrix { a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0 };
-
-    fn finite(self) -> bool {
-        [self.a, self.b, self.c, self.d, self.tx, self.ty].into_iter().all(f32::is_finite)
-    }
 }
 
 fn number(element: &impl XflElement, name: &str) -> Option<f32> {
@@ -117,21 +113,23 @@ pub fn color(element: &impl XflElement, color_attribute: &str, alpha_attribute: 
     Color { rgb, alpha }
 }
 
-/// Reads the native `<matrix><Matrix .../></matrix>` transform, using XFL's identity defaults.
-/// A non-finite coefficient makes the entire transform identity, matching the previous reader.
+/// Reads the native `<matrix><Matrix .../></matrix>` transform.
+///
+/// Each absent, malformed, or non-finite coefficient uses its identity default independently.
+/// This preserves the prior AniCraft reader's `Element::f32` behavior, including retaining other
+/// valid coefficients when one coefficient is invalid.
 pub fn matrix(element: &impl XflElement) -> Matrix {
     let Some(matrix) = element.child("matrix").and_then(|wrapper| wrapper.child("Matrix")) else {
         return Matrix::IDENTITY;
     };
-    let parsed = Matrix {
+    Matrix {
         a: number(matrix, "a").unwrap_or(1.0),
         b: number(matrix, "b").unwrap_or(0.0),
         c: number(matrix, "c").unwrap_or(0.0),
         d: number(matrix, "d").unwrap_or(1.0),
         tx: number(matrix, "tx").unwrap_or(0.0),
         ty: number(matrix, "ty").unwrap_or(0.0),
-    };
-    if parsed.finite() { parsed } else { Matrix::IDENTITY }
+    }
 }
 
 /// A native `DOMShape` or drawing shape and its XFL style tables.
@@ -525,10 +523,10 @@ mod tests {
 
     #[test]
     fn duplicate_attributes_use_last_value_and_invalid_numbers_are_absent() {
-        let root = parse(b"<DOMShape isDrawingObject='false' isDrawingObject='true'><matrix><Matrix a='NaN'/></matrix><fills><FillStyle index='1' index='4'><SolidColor alpha='Infinity'/></FillStyle></fills></DOMShape>");
+        let root = parse(b"<DOMShape isDrawingObject='false' isDrawingObject='true'><matrix><Matrix a='NaN' tx='12'/></matrix><fills><FillStyle index='1' index='4'><SolidColor alpha='Infinity'/></FillStyle></fills></DOMShape>");
         let shape = Shape::new(&root).unwrap();
         assert_eq!(shape.is_drawing_object(), Some(true));
-        assert_eq!(shape.matrix(), Matrix::IDENTITY);
+        assert_eq!(shape.matrix(), Matrix { tx: 12.0, ..Matrix::IDENTITY });
         let fill = shape.fills().next().unwrap();
         assert_eq!(fill.index(), Some(4));
         let fill = fill.definition().unwrap();
