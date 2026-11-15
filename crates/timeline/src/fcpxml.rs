@@ -125,6 +125,16 @@ struct Asset {
     has_audio: bool,
 }
 
+// Bound semantic resource chains separately from XML syntax: flat media resources can
+// reference one another without adding any XML nesting.
+const MAX_MEDIA_DEPTH: usize = 64;
+const MAX_XML_DEPTH: usize = 128;
+// Retrying truncated resources is useful at shallower depths, but must remain bounded.
+const MAX_REIMPORTS: usize = 4096;
+// A hostile document may reference the same large cached graph repeatedly. Bound total
+// reachability work, not just one walk, and refuse reuse when safety cannot be established.
+const MAX_CACHE_EDGES: usize = 1_000_000;
+
 struct Imp<'a, 'c, 'r> {
     b: Builder<'c>,
     opts: &'a ImportOptions<'a>,
@@ -135,6 +145,13 @@ struct Imp<'a, 'c, 'r> {
     media_nodes: HashMap<String, Node<'a>>,
     media_items: HashMap<String, ItemId>,
     media_active: HashSet<String>,
+    depth_hits: usize,
+    // Depths at which a cached resource was truncated. A retry may improve neither limit
+    // at the expense of the other, and reuses the same item so earlier references stay valid.
+    media_truncated_at: HashMap<String, (usize, usize)>,
+    reimports_left: usize,
+    cache_edges_left: usize,
+    depth: usize,
     effects: HashMap<String, String>,
 }
 
@@ -186,6 +203,11 @@ pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<I
         media_nodes: HashMap::new(),
         media_items: HashMap::new(),
         media_active: HashSet::new(),
+        depth_hits: 0,
+        media_truncated_at: HashMap::new(),
+        reimports_left: MAX_REIMPORTS,
+        cache_edges_left: MAX_CACHE_EDGES,
+        depth: 0,
         effects: HashMap::new(),
     };
     if let Some(res) = child(root, "resources") {
@@ -229,7 +251,7 @@ pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<I
                 "project" => {
                     if let Some(s) = child(c, "sequence") {
                         let name = c.attribute("name").unwrap_or("Project");
-                        let id = imp.sequence(s, name, Some(bin));
+                        let id = imp.sequence(s, name, Some(bin), None);
                         imp.b.top.push(id);
                     }
                 }
@@ -244,7 +266,7 @@ pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<I
     }
     for p in children(root, "project") {
         if let Some(s) = child(p, "sequence") {
-            let id = imp.sequence(s, p.attribute("name").unwrap_or("Project"), None);
+            let id = imp.sequence(s, p.attribute("name").unwrap_or("Project"), None, None);
             imp.b.top.push(id);
         }
     }
@@ -308,34 +330,100 @@ impl<'a> Imp<'a, '_, '_> {
         Some(a)
     }
 
+    /// A rebuilt item retains its ID. A cached ancestor that already points to it must
+    /// not be inserted underneath it, even when the resource names are not directly active.
+    fn cache_reaches_active(&mut self, root: ItemId) -> bool {
+        let active: HashSet<ItemId> = self.media_active.iter().filter_map(|id| self.media_items.get(id).copied()).collect();
+        if active.is_empty() {
+            return false;
+        }
+        let mut seen = HashSet::from([root]);
+        let mut pending = vec![root];
+        while let Some(id) = pending.pop() {
+            if active.contains(&id) {
+                return true;
+            }
+            let Some(seq) = self.b.p.sequence(id) else { continue };
+            for item in seq.all_tracks().flat_map(|track| &track.items) {
+                if self.cache_edges_left == 0 {
+                    return true;
+                }
+                self.cache_edges_left -= 1;
+                if active.contains(&item.item) {
+                    return true;
+                }
+                if seen.insert(item.item) {
+                    pending.push(item.item);
+                }
+            }
+        }
+        false
+    }
+
     /// Nested sequence from a `<media>` resource.
     fn media(&mut self, id: &str) -> Option<ItemId> {
-        if let Some(i) = self.media_items.get(id) {
-            return Some(*i);
-        }
-        let n = *self.media_nodes.get(id)?;
-        let s = child(n, "sequence")?;
-        if !self.media_active.insert(id.into()) {
+        // Check before the cache: a truncated resource may already have an item while it
+        // is being rebuilt, but a back-edge must never turn that item into a self-cycle.
+        if self.media_active.contains(id) {
             self.report.warn(format!("recursive FCPXML media resource {id:?} ignored"));
             return None;
         }
+        let depth = self.media_active.len();
+        let mut again = None;
+        if let Some(i) = self.media_items.get(id).copied() {
+            // Imported with a nested one cut off: import it again (into the same item) where that
+            // one now fits.
+            let shallower = self
+                .media_truncated_at
+                .get(id)
+                .is_some_and(|&(media, xml)| depth <= media && self.depth <= xml && (depth < media || self.depth < xml))
+                && !self.media_active.contains(id);
+            if !shallower || self.reimports_left == 0 {
+                if self.cache_reaches_active(i) {
+                    self.depth_hits += 1;
+                    self.report.warn(format!(
+                        "FCPXML cached media {id:?} could form a recursive graph or exceeds the cache traversal budget; imported as a gap"
+                    ));
+                    return None;
+                }
+                return Some(i);
+            }
+            self.reimports_left -= 1;
+            again = Some(i);
+        }
+        let n = *self.media_nodes.get(id)?;
+        let s = child(n, "sequence")?;
+        // The active set is the current nesting chain: a long acyclic chain of compound clips
+        // would otherwise recurse once per resource.
+        if depth >= MAX_MEDIA_DEPTH {
+            self.depth_hits += 1;
+            self.report.warn(format!("FCPXML media resource {id:?} is nested too deeply; imported as a gap"));
+            return None;
+        }
+        self.media_active.insert(id.into());
         // Mark the resource before descending: a compound clip can reference itself through a
         // ref-clip before a completed sequence is available to cache.
         let name = n.attribute("name").unwrap_or("Compound Clip").to_string();
-        let item = self.sequence(s, &name, None);
+        let hits_before = self.depth_hits;
+        let item = self.sequence(s, &name, None, again);
         self.media_active.remove(id);
         self.media_items.insert(id.into(), item);
+        if self.depth_hits > hits_before {
+            self.media_truncated_at.insert(id.into(), (depth, self.depth));
+        } else {
+            self.media_truncated_at.remove(id);
+        }
         Some(item)
     }
 
-    fn sequence(&mut self, s: Node<'a>, name: &str, bin: Option<BinId>) -> ItemId {
+    fn sequence(&mut self, s: Node<'a>, name: &str, bin: Option<BinId>, reuse: Option<ItemId>) -> ItemId {
         let (rate, w, h) = s.attribute("format").and_then(|f| self.formats.get(f)).copied().unwrap_or((FrameRate::default(), 1920, 1080));
         let df = s.attribute("tcFormat") == Some("DF");
         let mut settings = settings_for(rate, w, h, df);
         if let Some(sr) = s.attribute("audioRate").and_then(parse_audio_rate) {
             settings.sample_rate = sr;
         }
-        let id = self.b.reserve_sequence(name, settings.clone(), bin);
+        let id = reuse.unwrap_or_else(|| self.b.reserve_sequence(name, settings.clone(), bin));
         let mut seq = empty_sequence(settings);
         let tc_start = attr_time(s, "tcStart").unwrap_or(Tick::ZERO);
         seq.start_timecode = rate.frame_at(tc_start);
@@ -353,7 +441,19 @@ impl<'a> Imp<'a, '_, '_> {
 
     /// Lay out a storyline. `origin` maps the storyline's offsets to timeline time
     /// (`timeline = origin + offset`). `lane` is the storyline's lane (0 = primary).
+    /// Refuses nesting past [`MAX_XML_DEPTH`].
     fn storyline(&mut self, seq: &mut Sequence, ctx: &Ctx, spine: Node<'a>, origin: Tick, lane: i32, primary: bool) {
+        if self.depth >= MAX_XML_DEPTH {
+            self.depth_hits += 1;
+            self.report.warn(format!("XML storylines are nested too deeply (more than {MAX_XML_DEPTH}); deeper clips were skipped"));
+            return;
+        }
+        self.depth += 1;
+        self.storyline_inner(seq, ctx, spine, origin, lane, primary);
+        self.depth -= 1;
+    }
+
+    fn storyline_inner(&mut self, seq: &mut Sequence, ctx: &Ctx, spine: Node<'a>, origin: Tick, lane: i32, primary: bool) {
         // (timeline start, timeline end, video clip on this storyline's track)
         let mut laid: Vec<(Tick, Tick, Option<ClipId>)> = Vec::new();
         let mut transitions: Vec<(usize, Node)> = Vec::new();
@@ -421,7 +521,20 @@ impl<'a> Imp<'a, '_, '_> {
     }
 
     /// Lay out one storyline element at timeline time `t0`. Returns (timeline end, video clip).
+    /// Refuses nesting past [`MAX_XML_DEPTH`].
     fn element(&mut self, seq: &mut Sequence, ctx: &Ctx, el: Node<'a>, t0: Tick, lane: i32, primary: bool) -> (Tick, Option<ClipId>) {
+        if self.depth >= MAX_XML_DEPTH {
+            self.depth_hits += 1;
+            self.report.warn(format!("XML elements are nested too deeply (more than {MAX_XML_DEPTH}); deeper clips were skipped"));
+            return (t0, None);
+        }
+        self.depth += 1;
+        let out = self.element_inner(seq, ctx, el, t0, lane, primary);
+        self.depth -= 1;
+        out
+    }
+
+    fn element_inner(&mut self, seq: &mut Sequence, ctx: &Ctx, el: Node<'a>, t0: Tick, lane: i32, primary: bool) -> (Tick, Option<ClipId>) {
         let tag = el.name();
         let dur = attr_time(el, "duration").unwrap_or(Tick::ZERO);
         let local_start = attr_time(el, "start").unwrap_or(Tick::ZERO);

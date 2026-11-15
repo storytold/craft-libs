@@ -1,3 +1,4 @@
+pub(crate) mod avif;
 pub(crate) mod dds;
 pub(crate) mod dds_bc;
 pub(crate) mod deep_exr;
@@ -10,6 +11,7 @@ pub(crate) mod gif_frames;
 pub(crate) mod gif_palette;
 pub(crate) mod heif;
 pub(crate) mod iff;
+pub(crate) mod jp2;
 pub(crate) mod jpeg;
 pub(crate) mod jxl;
 pub(crate) mod pcx;

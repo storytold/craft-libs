@@ -8,6 +8,10 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Direct local-CUPS transport, independent of command-line spooler selection.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cups;
+
 #[cfg(any(test, windows))]
 mod progress;
 #[cfg(any(test, windows))]
