@@ -243,10 +243,13 @@ pub struct HostedImageSize {
 }
 
 impl HostedImageSize {
+    /// The dialog's key: its [`DialogId`] is `dialog_id(KEY)`, so an app finds the open dialog by it.
+    pub const KEY: &'static str = "sizing.imageSize";
+
     /// A dialog opening with `values`; `build` makes it over the values (`ImageSize::new` with its settings).
     pub fn new(values: ImageSizeValues, build: impl for<'b> Fn(Bind<'b, ImageSizeValues>) -> ImageSize<'b> + Send + 'static) -> Self {
         HostedImageSize {
-            id: dialog_id(KEY),
+            id: dialog_id(Self::KEY),
             open: true,
             values,
             build: Box::new(build),
@@ -260,9 +263,6 @@ impl HostedImageSize {
         &self.values
     }
 }
-
-/// The key of the hosted dialog.
-const KEY: &str = "sizing.imageSize";
 
 impl StackDialog for HostedImageSize {
     type Result = ImageSizeResult;
@@ -347,7 +347,7 @@ impl StackDialog for HostedImageSize {
     }
 
     fn key(&self) -> Option<&str> {
-        Some(KEY)
+        Some(Self::KEY)
     }
 
     #[cfg(feature = "testing")]
