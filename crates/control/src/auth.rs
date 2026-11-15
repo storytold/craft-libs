@@ -490,7 +490,7 @@ mod tests {
     /// the error goes to the caller. A restricted one gets its token.
     #[test]
     fn a_token_file_that_could_not_be_restricted_is_removed() {
-        let dir = std::env::temp_dir().join(format!("solidcraft-control-restrict-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("craft-control-restrict-{}", std::process::id()));
         let path = dir.join("7879.token");
         let e = write_token_file_with(&path, "secret-token", |p| {
             assert_eq!(std::fs::read(p).unwrap(), b"", "restricted before the token goes in");
@@ -550,7 +550,7 @@ mod tests {
     /// A one-line token file (and one with no process file) still reads.
     #[test]
     fn a_token_file_reads_with_and_without_its_process_file() {
-        let dir = std::env::temp_dir().join(format!("solidcraft-control-read-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("craft-control-read-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("7879.token");
         std::fs::write(&path, "legacy-token\n").unwrap();
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn the_token_file_is_private_to_the_user() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("solidcraft-control-auth-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("craft-control-auth-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("control/7878.token");
         std::fs::create_dir_all(dir.join("control")).unwrap();
@@ -641,7 +641,7 @@ mod tests {
     /// and discovery files; the last one takes them all away, `current.pid` too.
     #[test]
     fn a_closing_launch_leaves_another_launchs_files() {
-        let dir = std::env::temp_dir().join(format!("solidcraft-control-two-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("craft-control-two-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (file, current) = (dir.join("27878.token"), dir.join("current.port"));
         let (first, second) = ("a".repeat(64), "b".repeat(64));
