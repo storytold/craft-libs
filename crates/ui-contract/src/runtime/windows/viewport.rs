@@ -2,7 +2,7 @@
 
 use super::native::{WindowAction, act, route_hit_test};
 use super::placement::{record_placement, saved_placement};
-use super::shell::{os_of, refresh};
+use super::shell::{app_id, os_of, refresh};
 use super::spec::{WindowSpec, frame_of_spec};
 use super::{Record, refuse_close_under_modal, shared};
 use crate::runtime::egui::viewports;
@@ -18,6 +18,9 @@ pub(crate) struct ViewportOpen<'a> {
     pub title: &'a str,
     /// The size to open with when nothing is saved.
     pub size: Option<Vec2>,
+    /// Whether the caller keeps the window at `size` once it opened: a placed window or one sized by its content does;
+    /// a resizable window's size is the user's.
+    pub follows_size: bool,
     /// The key the placement is saved under.
     pub save: Option<&'a str>,
     /// How the window opens.
@@ -36,7 +39,8 @@ pub(crate) struct ViewportOpen<'a> {
 /// The window opens at the caller's place (saved, placed or measured). From then on the window has two writers, the
 /// OS and the caller, and only one writes at a time: a caller's place goes out as a command only where it differs
 /// from the place the window is known at ([`keep_placed`]), and the OS's moves and resizes become the known place
-/// that the caller records. A caller that follows the window so never sends it its own place back a pass late.
+/// that the caller records. A caller that follows the window so never sends it its own place back a pass late. A
+/// resizable window's size goes out only to open it (`ViewportOpen::follows_size`).
 pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: impl FnMut(&mut Ui)) {
     let viewport = viewports::viewport_id(open.id);
     let saved = open.save.and_then(|key| saved_placement(ctx, key));
@@ -47,7 +51,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
     let pos = pos.or(open.position);
     let opened = PerViewport::<Record>::with(ctx, viewport, |record| record.seen.is_some());
     if opened {
-        keep_placed(ctx, viewport, pos, size);
+        keep_placed(ctx, viewport, pos, size.filter(|_| open.follows_size));
     }
     let spec = open.spec;
     let active = !shared(ctx, |shared| shared.away);
@@ -69,6 +73,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         }
         record.level.get_or_insert(spec.level).for_egui(active, os)
     });
+    let app = app_id(ctx);
     let opens = viewports::Spec {
         title: open.title,
         // The builder carries the place only until the window opens: egui would send each change of it as a command.
@@ -83,7 +88,7 @@ pub(crate) fn show_viewport(ctx: &Context, open: &ViewportOpen<'_>, mut body: im
         resizable: open.resizable,
         taskbar: spec.taskbar,
         hidden: PerViewport::<Record>::with(ctx, viewport, |record| record.awaiting_first_paint),
-        app_id: "", // P3(dialogs-w11): dl.K76, `shell::app_id(ctx)`
+        app_id: &app,
     };
     viewports::show_immediate(ctx, viewport, &opens, |ui| {
         let ctx = ui.ctx().clone();
@@ -118,6 +123,13 @@ pub(crate) fn take_close_request(ctx: &Context, id: Id) -> bool {
         shared.close_requests.retain(|requested| *requested != id);
         shared.close_requests.len() != before
     })
+}
+
+/// Whether container `id` shows in an OS window that has not reported its place yet: its body lays out in room the OS
+/// has not given, so what it takes there is no size of its content.
+pub(crate) fn unplaced(ctx: &Context, id: Id) -> bool {
+    super::WindowHost::of(ctx).viewports_available()
+        && PerViewport::<Record>::with(ctx, viewports::viewport_id(id), |record| record.kind.is_some() && record.seen.is_none())
 }
 
 /// How far a caller's place may differ from the known place before it is a change: the OS rounds to pixels, and a

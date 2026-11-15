@@ -9,15 +9,16 @@ use std::time::Duration;
 use craft_behavior::PixelSize;
 use craft_host::{AppInfo, Host};
 use craft_imaging::ui::filter_gallery::{
-    EffectChange, EffectLayer, FilterCatalog, FilterCategory, FilterGalleryEvent, FilterGalleryOpen, FilterGalleryOutput, FilterGallerySession,
-    FilterGallerySource, FilterGalleryWorkspace, GalleryFilter, GalleryThumb,
+    EffectChange, EffectLayer, FilterCatalog, FilterCategory, FilterGalleryEvent, FilterGalleryOpen, FilterGallerySession, FilterGallerySource,
+    FilterGalleryWorkspace, GalleryFilter, GalleryThumb,
 };
 use craft_imaging::ui::wide_angle::PreviewDone;
 use craft_ui::canvas::{PixelRect, RasterSource};
-use craft_ui::contract::Job;
+use craft_ui::contract::{Bind, Job};
+use craft_ui::dialog::{FullWindowWorkspace as _, WorkspaceCx};
 use craft_ui::patterns::form_dialogs::{Param, ParamKind};
 use craft_ui::primitives::Revision;
-use craft_ui::primitives::textures::{FakeThumbSource, ThumbnailOptions, Thumbnails};
+use craft_ui::primitives::textures::{FakeThumbSource, ThumbSource};
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::value_drag::SliderScale;
 use egui::{Color32, ColorImage, Key, Modifiers, Vec2};
@@ -91,8 +92,11 @@ fn gallery_stack_new_delete_reorder_and_eye() {
 
 // Undo of a Delete gives the layer back and clamps the selection.
 
-/// A flat picture the size of the layer, whose render finishes only when `done`.
+/// The app's side: the catalog, the thumbnails, and a flat picture the size of the layer, whose render finishes only
+/// when `done`.
 struct Flat {
+    catalog: Catalog,
+    thumbs: FakeThumbSource<GalleryThumb>,
     done: bool,
 }
 
@@ -115,6 +119,14 @@ impl RasterSource for Flat {
 }
 
 impl FilterGallerySource for Flat {
+    fn catalog(&self) -> &dyn FilterCatalog {
+        &self.catalog
+    }
+
+    fn thumb_source(&self) -> &dyn ThumbSource<GalleryThumb> {
+        &self.thumbs
+    }
+
     fn preview(&self) -> &dyn RasterSource {
         self
     }
@@ -133,31 +145,33 @@ impl FilterGallerySource for Flat {
     }
 }
 
-/// A workspace in a fixture and what its passes reported.
+/// A workspace in a fixture and the events its passes reported.
 struct Rig {
     fixture: Fixture,
     workspace: Rc<RefCell<FilterGalleryWorkspace>>,
-    outputs: Rc<RefCell<Vec<FilterGalleryOutput>>>,
+    events: Rc<RefCell<Vec<FilterGalleryEvent>>>,
 }
 
+/// Shows the workspace through its trait `show`, as a host does, with the open state kept across passes.
 fn rig(session: FilterGallerySession, done: bool) -> Rig {
     let workspace = Rc::new(RefCell::new(FilterGalleryWorkspace::new(FilterGalleryOpen::new(LAYER, "Layer 1", session))));
-    let outputs = Rc::new(RefCell::new(Vec::new()));
-    let (shown, sink) = (workspace.clone(), outputs.clone());
-    let source = Flat { done };
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let (shown, sink) = (workspace.clone(), events.clone());
+    let source = Flat { catalog: Catalog, thumbs: FakeThumbSource::new(), done };
+    let mut open = true;
     let mut fixture = Fixture::new(move |ui| {
-        let thumbs = Thumbnails::<GalleryThumb>::in_context(ui.ctx(), "gallery-test-thumbs", ThumbnailOptions::default());
-        let out = shown.borrow_mut().show(ui, &Catalog, &thumbs, &FakeThumbSource::<GalleryThumb>::new(), &source);
-        sink.borrow_mut().push(out);
+        let source: &dyn FilterGallerySource = &source;
+        let pass = shown.borrow_mut().show(ui, WorkspaceCx::new(source, Bind::bound(&mut open)));
+        sink.borrow_mut().extend(pass.events);
     });
     fixture.host(Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).build()));
     fixture.room(WINDOW).settle();
-    Rig { fixture, workspace, outputs }
+    Rig { fixture, workspace, events }
 }
 
 impl Rig {
     fn events(&self) -> Vec<FilterGalleryEvent> {
-        self.outputs.borrow().iter().flat_map(|out| out.events.clone()).collect()
+        self.events.borrow().clone()
     }
 }
 

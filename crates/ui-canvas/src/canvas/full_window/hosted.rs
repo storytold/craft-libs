@@ -14,6 +14,15 @@ use crate::runtime::env::Label;
 ///
 /// The events of the pass that finishes the workspace go with it: a workspace whose app needs them folds them into
 /// its [`Result`](FullWindowWorkspace::Result).
+///
+/// - Automation: [`json_fields`](FullWindowWorkspace::json_fields), [`set_json_field`](FullWindowWorkspace::set_json_field)
+///   and [`confirm`](FullWindowWorkspace::confirm) are what the host's `ui.dialog` surface reaches. Each key applies or
+///   is refused on its own; the events a set produces are queued by the workspace and reported by its next pass.
+/// - Source revision: [`WorkspaceCx::revision`] moves with each new source; the workspace adds it to its pending key.
+/// - Held OK: under [`WorkspaceCx::hold_ok`] the workspace makes its Accept button `stays_open`, disables it while
+///   [`WorkspaceCx::ok_waits`], and reports the answer OK would give in [`WorkspacePass::held`]. The app takes it
+///   ([`HostedWorkspace::take_ok`]) and answers ([`HostedWorkspace::answer_ok`]); a refusal reaches
+///   [`ok_failed`](FullWindowWorkspace::ok_failed).
 pub trait FullWindowWorkspace: Send + 'static {
     /// What the workspace reads from the app each pass, usually a `dyn` trait of the workspace's crate.
     type Source: ?Sized + Send + Sync;
@@ -69,6 +78,14 @@ pub struct WorkspaceCx<'a, S: ?Sized> {
     pub ok_waits: bool,
 }
 
+impl<'a, S: ?Sized> WorkspaceCx<'a, S> {
+    /// A pass over `source` with the open state bound to `open`, at the first revision, with OK not held: what a
+    /// workspace shown outside a [`HostedWorkspace`] gets. The host's stories and trials build it.
+    pub fn new(source: &'a S, open: Bind<'a, bool>) -> Self {
+        WorkspaceCx { source, revision: 0, open, hold_ok: false, ok_waits: false }
+    }
+}
+
 /// What one pass of a [`FullWindowWorkspace`] reports.
 #[non_exhaustive]
 pub struct WorkspacePass<E, R> {
@@ -81,22 +98,20 @@ pub struct WorkspacePass<E, R> {
     pub result: Option<DialogResult<R>>,
     /// The result OK would give, reported in the pass the Accept button is picked under `cx.hold_ok`; `result`
     /// stays `None` then.
-    // P3(dialogs-w11): dl.K57 `WorkspacePass::held`
     pub held: Option<R>,
 }
 
 impl<E, R> WorkspacePass<E, R> {
     /// A pass with `events` that leaves the workspace open.
     pub fn new(response: Response, events: Vec<E>) -> Self {
-        WorkspacePass { response, events, result: None, held: None } // P3(dialogs-w11): dl.K57
+        WorkspacePass { response, events, result: None, held: None }
     }
 
     /// The result a held OK gives this pass.
-    // P3(dialogs-w11): dl.K57 `WorkspacePass::held`
     #[must_use]
-    pub fn held(self, held: Option<R>) -> Self {
-        let _ = (self, held);
-        todo!("dl.K57")
+    pub fn held(mut self, held: Option<R>) -> Self {
+        self.held = held;
+        self
     }
 
     /// How the workspace finished this pass.
@@ -109,6 +124,8 @@ impl<E, R> WorkspacePass<E, R> {
 
 /// A [`FullWindowWorkspace`] the [`DialogHost`](crate::dialog::DialogHost) owns, with the app's source. It keeps the
 /// events of each pass until the app takes them, and finishes as the workspace's pass says: OK's answer, or Cancel.
+/// It forwards the host's automation calls (`json_fields`, `set_json_field`, `confirm`) to the workspace with its
+/// source.
 ///
 /// ```ignore
 /// dialogs.open(HostedWorkspace::new(LiquifyWorkspace::new(open), Arc::new(source)));
@@ -121,6 +138,19 @@ impl<E, R> WorkspacePass<E, R> {
 ///     doc.run("filter.liquify", steps);
 /// }
 /// ```
+///
+/// A workspace whose OK the app checks first opens [`held_ok`](HostedWorkspace::held_ok): OK files its answer and
+/// the workspace stays shown until the app answers.
+///
+/// ```ignore
+/// dialogs.open(HostedWorkspace::new(FillWorkspace::new(open), Arc::new(source)).held_ok());
+/// dialogs.run(ui);
+/// if let Some(fill) = dialogs.get_mut::<HostedWorkspace<FillWorkspace>>()
+///     && let Some(session) = fill.take_ok()
+/// {
+///     fill.answer_ok(doc.run("edit.contentAwareFill", session).map_err(|error| error.label()));
+/// }
+/// ```
 pub struct HostedWorkspace<W: FullWindowWorkspace> {
     id: DialogId,
     workspace: W,
@@ -129,7 +159,14 @@ pub struct HostedWorkspace<W: FullWindowWorkspace> {
     open: bool,
     revision: u64,
     hold_ok: bool,
+    /// From the filed OK until the app's answer: the workspace disables its OK.
     ok_waits: bool,
+    /// The held OK's answer, kept until the app answers it.
+    filed: Option<W::Result>,
+    /// `take_ok` has not handed out `filed` yet.
+    untaken: bool,
+    /// The app accepted the held OK: the next pass finishes with `filed`.
+    finish: bool,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -146,6 +183,9 @@ impl<W: FullWindowWorkspace> HostedWorkspace<W> {
             revision: 0,
             hold_ok: false,
             ok_waits: false,
+            filed: None,
+            untaken: false,
+            finish: false,
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
@@ -175,26 +215,49 @@ impl<W: FullWindowWorkspace> HostedWorkspace<W> {
     }
 
     /// The OK the workspace is holding for the app to act on, once; `None` when none is held.
-    pub fn take_ok(&mut self) -> Option<W::Result> {
-        todo!("dl.K57")
+    pub fn take_ok(&mut self) -> Option<W::Result>
+    where
+        W::Result: Clone,
+    {
+        if !std::mem::take(&mut self.untaken) {
+            return None;
+        }
+        self.filed.clone()
     }
 
-    /// The app's answer to a held OK: `Ok` closes the workspace with it, `Err(reason)` keeps it open and shows
-    /// `reason`.
+    /// The app's answer to a held OK: `Ok` closes the workspace with it in the next pass, `Err(reason)` keeps it
+    /// open with OK enabled again and hands `reason` to [`FullWindowWorkspace::ok_failed`]. Does nothing while no OK
+    /// is held.
     pub fn answer_ok(&mut self, answer: Result<(), Label>) {
-        let _ = answer;
-        todo!("dl.K57")
+        if self.filed.is_none() {
+            return;
+        }
+        match answer {
+            Ok(()) => self.finish = true,
+            Err(reason) => {
+                self.filed = None;
+                self.untaken = false;
+                self.ok_waits = false;
+                self.workspace.ok_failed(reason);
+            }
+        }
     }
 
     /// The app's source the workspace shows.
-    // P3(dialogs-w11): dl.K57 `HostedWorkspace::source`
     pub fn source(&self) -> &Arc<W::Source> {
-        todo!("dl.K57")
+        &self.source
     }
 
     /// The events of the passes since the last call, in order.
     pub fn take_events(&mut self) -> Vec<W::Event> {
         std::mem::take(&mut self.events)
+    }
+
+    /// Files a held OK's `result` for the app; OK waits for the answer.
+    fn file(&mut self, result: W::Result) {
+        self.filed = Some(result);
+        self.untaken = true;
+        self.ok_waits = true;
     }
 }
 
@@ -206,6 +269,12 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<W::Result>> {
+        // The app accepted the held OK: the first pass after the answer finishes, whichever pass of a frame it is.
+        if std::mem::take(&mut self.finish)
+            && let Some(result) = self.filed.take()
+        {
+            return Some(DialogResult::Ok(result));
+        }
         let cx = WorkspaceCx {
             source: &*self.source,
             revision: self.revision,
@@ -219,6 +288,11 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
             self.facts = crate::contract::Outcome::story_facts(&pass.response);
         }
         self.events.extend(pass.events);
+        // A pick reaches only the pass whose input held it; a later pass of the frame finds OK waiting and files
+        // nothing more.
+        if let Some(result) = pass.held.filter(|_| self.hold_ok && !self.ok_waits) {
+            self.file(result);
+        }
         pass.result
     }
 
@@ -227,7 +301,15 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
     }
 
     fn confirm(&mut self, ctx: &Context) -> Option<W::Result> {
-        self.workspace.confirm(ctx, &*self.source)
+        if self.ok_waits {
+            return None;
+        }
+        let result = self.workspace.confirm(ctx, &*self.source)?;
+        if self.hold_ok {
+            self.file(result);
+            return None;
+        }
+        Some(result)
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {

@@ -37,6 +37,10 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
         (presence.visible.then_some(presence.t), !open)
     };
     let closed = || Mounted { host: Box::new(ClosedHost), exiting: false };
+    let full_window = |focus: FocusPolicy| match layer(&Overlay::full_window(focus)) {
+        (Some(fade), exiting) => Mounted { host: Box::new(FullWindowHost { focus, exiting, fade, dismissed: None }), exiting },
+        (None, _) => closed(),
+    };
     let mounted = match &props.mount {
         Mount::Inline => Mounted { host: Box::new(Inline), exiting: false },
         Mount::Pane(pane) => Mounted { host: Box::new(PaneHost(*pane)), exiting: false },
@@ -45,12 +49,13 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
             (Some(fade), exiting) => Mounted { host: Box::new(LayerHost::new(overlay.clone(), props.save.clone(), exiting, fade, at.size)), exiting },
             (None, _) => closed(),
         },
-        Mount::FullWindow => match layer(&full_window_overlay(props.focus)) {
-            (Some(fade), exiting) => Mounted { host: Box::new(FullWindowHost { focus: props.focus, exiting, fade, dismissed: None }), exiting },
-            (None, _) => closed(),
-        },
+        Mount::FullWindow => full_window(props.focus),
         Mount::Viewport { fallback, spec } => {
-            if !WindowHost::of(ctx).viewports_available() {
+            let viewports = WindowHost::of(ctx).viewports_available();
+            // A full-window container without OS windows covers the main window, as `Mount::FullWindow` does.
+            if !viewports && fallback.is_full_window() {
+                full_window(fallback.focus)
+            } else if !viewports {
                 match layer(fallback) {
                     (Some(fade), exiting) => {
                         Mounted { host: Box::new(LayerHost::new(fallback.clone(), props.save.clone(), exiting, fade, at.size)), exiting }
@@ -267,14 +272,8 @@ impl Host for LayerHost {
     }
 }
 
-/// The overlay of a full-window mount: a modal rank with no backdrop (the dialog covers the window) and the
-/// container's focus policy as its scope, so the layer stack gives it the key class, blocking and dismissal rules
-/// of a modal.
-pub(super) fn full_window_overlay(focus: FocusPolicy) -> Overlay {
-    Overlay::full_window(focus) // P3(dialogs-w11): dl.K15
-}
-
-/// Over the whole window, on a layer of its own.
+/// Over the whole window, on a layer of its own: [`Overlay::full_window`] of the container's focus policy, so the
+/// layer stack gives it the key class, blocking and dismissal rules of a modal.
 struct FullWindowHost {
     focus: FocusPolicy,
     exiting: bool,
@@ -289,9 +288,10 @@ impl Host for FullWindowHost {
         }
         let ctx = parent.ctx().clone();
         // Opened in an embedded shell, the full-window layer fills the shell's region, as a modal there does.
-        let region = overlay::region_for(env, &full_window_overlay(self.focus));
+        let overlay = Overlay::full_window(self.focus);
+        let region = overlay::region_for(env, &overlay);
         let window = region.unwrap_or_else(|| ctx.content_rect());
-        let overlay = full_window_overlay(self.focus).place(Place::Float(FloatPlace::at(window.min)));
+        let overlay = overlay.place(Place::Float(FloatPlace::at(window.min)));
         let layer = Layer { id, owner: id, overlay: &overlay, anchor: Rect::ZERO, env, exiting: self.exiting, fade: self.fade, size: None, region };
         // The body is shown at the window's rect, which takes no room in the layer; the layer claims the window, so its
         // recorded rect is the window's.
@@ -336,20 +336,31 @@ impl Host for ViewportHost {
         let by_rank = || if self.overlay.rank.is_modal() { WindowSpec::dialog() } else { WindowSpec::tool() };
         let spec = self.spec.clone().unwrap_or_else(by_rank);
         let placed = self.overlay.placed;
+        let full_window = self.overlay.is_full_window();
+        // A full-window container fills its window, so the window's own layout memory holds the size the user gave
+        // it; before it has one the window opens at the opener's content size, large enough for a workspace.
+        let measured = || {
+            let remembered = layout_memory::read(&ctx, id);
+            if full_window { remembered.or_else(|| Some(ctx.content_rect().size())) } else { remembered }
+        };
         let open = ViewportOpen {
             id,
             title: title.as_str(),
             // A placed rect is the caller's size for the window, then a resizable fallback's default size, as the layer
-            // takes it; the measured size is for a window sized by content.
+            // takes it; the measured size is for a window sized by content: what its body took in the window, recorded
+            // once the window reported its place (`steps::record_body_size`).
             size: placed
                 .map(|rect| rect.size())
                 .or(self.overlay.size.filter(|_| self.overlay.fit == overlay::OverlayFit::Resizable))
-                .or_else(|| layout_memory::read(&ctx, id)),
+                .or_else(measured),
+            // A resizable window takes its default or content size to open; from then on its size is the user's.
+            follows_size: placed.is_some() || self.overlay.fit != overlay::OverlayFit::Resizable,
             save: self.save.as_deref(),
             spec: &spec,
             limits: (Some(self.overlay.size_limits.min), self.overlay.size_limits.max),
             position: placed.map(|rect| rect.min),
-            resizable: self.overlay.resize.edges != ResizeEdges::NONE,
+            // The full-window overlay has no grips (it covers the window), but its OS window is one the user sizes.
+            resizable: full_window || self.overlay.resize.edges != ResizeEdges::NONE,
         };
         let dismissed = &mut self.dismissed;
         windows::show_viewport(&ctx, &open, |ui| {

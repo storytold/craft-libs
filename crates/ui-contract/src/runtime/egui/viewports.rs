@@ -1,7 +1,7 @@
 //! `show_viewport_immediate`, viewport-builder conversion, viewport facts and window commands.
 
-use craft_host::target::WindowChrome;
-use egui::{Context, Pos2, Rect, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo, WindowLevel};
+use craft_host::target::{Backend, WindowChrome};
+use egui::{Context, Pos2, Rect, Ui, UserAttentionType, Vec2, ViewportBuilder, ViewportCommand, ViewportId, ViewportInfo, WindowLevel};
 
 /// Whether the integration opens OS viewports: false where egui embeds them in the root (web, tests).
 pub(crate) fn available(ctx: &Context) -> bool {
@@ -142,9 +142,15 @@ pub(crate) fn command(ctx: &Context, viewport: ViewportId, command: ViewportComm
     ctx.send_viewport_cmd_to(viewport, command);
 }
 
-/// Raises `viewport` and gives it OS focus.
+/// Raises `viewport` and gives it OS focus. A minimized window ignores `Focus`, so it is restored first. A Wayland
+/// compositor lets no client focus an existing window: there the window asks for the user's attention instead.
 pub(crate) fn raise(ctx: &Context, viewport: ViewportId) {
-    command(ctx, viewport, ViewportCommand::Focus);
+    command(ctx, viewport, ViewportCommand::Minimized(false));
+    if crate::runtime::windows::shell_of(ctx, viewport).backend == Backend::Wayland {
+        command(ctx, viewport, ViewportCommand::RequestUserAttention(UserAttentionType::Informational));
+    } else {
+        command(ctx, viewport, ViewportCommand::Focus);
+    }
     ctx.request_repaint_of(viewport);
 }
 

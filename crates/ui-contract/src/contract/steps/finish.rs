@@ -1,9 +1,10 @@
 //! Step 17, finish: the response's click flags and the recorded size.
 
+use crate::contract::Mount;
 use crate::contract::cx::CxCore;
 use crate::runtime::commands::{self, FireSource};
 use crate::runtime::egui::response;
-use crate::runtime::layout_memory;
+use crate::runtime::{layout_memory, windows};
 use craft_behavior::{EditEvent, Mixed};
 use egui::{Context, Id, Response, Ui, Vec2};
 
@@ -38,6 +39,16 @@ pub(crate) fn value_changed<V: PartialEq>(events: &[EditEvent<V>]) -> bool {
 /// The sizes a body or collection records at step 17.
 pub(crate) fn record_size(ctx: &Context, id: Id, real: Vec2) {
     layout_memory::record(ctx, id, real);
+}
+
+/// The size the body of container `id`, mounted by `mount`, records at step 17 under the container's id: what it took.
+/// A body in an OS window that has not reported its place records nothing, since it laid out in room the OS has not
+/// given; a content-sized window opens by this record once its content measured in it (`ViewportHost`).
+pub(crate) fn record_body_size(ctx: &Context, mount: &Mount, id: Id, took: Vec2) {
+    if matches!(mount, Mount::Viewport { .. }) && windows::unplaced(ctx, id) {
+        return;
+    }
+    record_size(ctx, id, took);
 }
 
 /// The response of a component before any pass has created its root widget: inert, for the component's own id.

@@ -137,7 +137,7 @@ pub(super) fn measure_layer(props: &ContainerProps, id: Id, ui: &Ui) -> areas::L
     match &props.mount {
         Mount::Viewport { .. } if windows::WindowHost::of(ui.ctx()).viewports_available() => ui.layer_id(),
         Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => areas::layer_of(overlay.rank.tier(), area),
-        Mount::FullWindow => areas::layer_of(crate::contract::mount::full_window_overlay(props.focus).rank.tier(), area),
+        Mount::FullWindow => areas::layer_of(crate::contract::Overlay::full_window(props.focus).rank.tier(), area),
         _ => ui.layer_id(),
     }
 }

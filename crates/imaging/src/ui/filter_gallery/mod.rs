@@ -7,11 +7,12 @@
 //! effect-layer stack ([`EffectStack`]) and the preview's status. No tool strip and no options bar; a drag on
 //! the preview pans (the Hand tool is the canvas's only tool).
 //!
-//! The session is the stack ([`FilterGallerySession`]) with [`EditHistory`] undo. The app's catalog
-//! ([`FilterCatalog`]) names the filters and their parameters, its thumbnail source renders the folders'
-//! pictures, and its [`FilterGallerySource`] renders the preview of the visible part
-//! ([`FilterGalleryWorkspace::visible`]) as a job whenever the stack, the zoom or the visible part change. OK
-//! runs `filter.filterGallery` with the effects; a smart filter opened again passes its recorded effects.
+//! The session is the stack ([`FilterGallerySession`]) with [`EditHistory`] undo. The app's
+//! [`FilterGallerySource`] holds its catalog ([`FilterCatalog`]), which names the filters and their parameters,
+//! the thumbnail source that renders the folders' pictures, and the preview of the visible part
+//! ([`FilterGalleryWorkspace::visible`]), rendered as a job whenever the stack, the zoom, the visible part or the
+//! source change. The app hosts the workspace as a `HostedWorkspace`; OK runs `filter.filterGallery` with the
+//! effects; a smart filter opened again passes its recorded effects.
 //!
 //! Files: `catalog` and `session`; `tree`, `stack`, `parameters` and this file's body.
 //!
@@ -45,17 +46,18 @@ use craft_theme::Srgba;
 use craft_ui::canvas::{NavigationOptions, PixelRect, ViewCommands};
 use craft_ui::contract::{Bind, Commands as _, Pattern, Pending, Remember as _, ShowContainer as _};
 use craft_ui::dialog::{
-    DialogOutput, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowZoomBar,
-    SideFooter,
+    FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
+    FullWindowZoomBar, SideFooter, WorkspaceCx, WorkspacePass,
 };
-use craft_ui::patterns::form_dialogs::FieldValue;
+use craft_ui::patterns::form_dialogs::{FieldValue, set_param_field};
 use craft_ui::primitives::Checker;
-use craft_ui::primitives::textures::{ThumbSource, Thumbnails};
+use craft_ui::primitives::textures::{ThumbnailOptions, Thumbnails};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
-use egui::Ui;
+use egui::{Context, Ui};
+use serde_json::{Value, json};
 
 use crate::ui::wide_angle::PreviewDone;
 
@@ -109,40 +111,22 @@ pub enum FilterGalleryEvent {
     PickColor(ColorRequest),
 }
 
-/// What [`FilterGalleryWorkspace::show`] reports.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct FilterGalleryOutput {
-    /// What happened this pass, in order.
-    pub events: Vec<FilterGalleryEvent>,
-    /// A color parameter's swatch pressed: the app opens its picker and answers into the selected
-    /// effect's fields ([`FilterGalleryWorkspace::set_color`]).
-    pub pick_color: Option<ColorRequest>,
-    /// The dialog: its response, why it closed and which footer button was picked (0 is OK, 1 is Cancel).
-    pub dialog: DialogOutput,
+/// The undo step name of every stack change: the workspace's name.
+fn history_name(words: &FilterGalleryWords) -> Arc<str> {
+    words.name.clone().as_str().into()
 }
 
-impl FilterGalleryOutput {
-    /// OK was chosen.
-    pub fn accepted(&self) -> bool {
-        self.dialog.picked == Some(OK)
-    }
-}
-
-/// The footer button that accepts.
-const OK: usize = 0;
-
-/// What one pass of the two closures shares.
-struct Pass<'w> {
-    workspace: &'w mut FilterGalleryWorkspace,
-    events: Vec<FilterGalleryEvent>,
-    pick_color: Option<ColorRequest>,
-}
-
-/// The Filter Gallery workspace.
+/// The Filter Gallery workspace, hosted as a [`FullWindowWorkspace`] over the app's [`FilterGallerySource`]: its
+/// pass reports [`FilterGalleryEvent`]s, and OK answers the session.
 ///
 /// Keys: the zoom commands zoom the preview, never the canvas behind; ⌘Z and ⇧⌘Z step the stack's history (a field
 /// being edited steps its own text first); Enter OK, Esc Cancel.
+///
+/// Automation fields: `effects` (the stack as `[{filter, params, visible}]`), `select` (the selected layer's
+/// index) and `zoom` (`"fit"` or the zoom, 1 = 100 %), which it lists and sets; and the actions `add` and `delete`
+/// (`true`), `toggle` (a layer's index: its eye flips), `move` (`{from, to}`), `filter` (a filter key for the
+/// selected layer) and `params` (values merged into the selected layer's parameters). Each change is one undo step
+/// and is reported by the next pass.
 #[derive(Pattern)]
 pub struct FilterGalleryWorkspace {
     session: FilterGallerySession,
@@ -194,122 +178,6 @@ impl FilterGalleryWorkspace {
         }
     }
 
-    /// Shows the workspace for this pass: the title (the selected effect's filter name as the subject's prefix,
-    /// PhotoCraft's "{effect} (layer, 66%)"), the side columns at the end edge (settings with the top footer
-    /// outermost, then the folders), the zoom bar (progress while the preview renders, else the render's time),
-    /// and the canvas over `source`'s preview with the Hand tool. Changes go through
-    /// [`FilterGallerySession::apply`] and are recorded in the history; a change, a zoom or a pan starts a new
-    /// preview job of `source`.
-    ///
-    /// `thumb_source` renders the pictures `thumbs` asks for (one per filter, the filter applied to a small
-    /// crop of the layer).
-    pub fn show(
-        &mut self,
-        ui: &mut Ui,
-        catalog: &dyn FilterCatalog,
-        thumbs: &Thumbnails<GalleryThumb>,
-        thumb_source: &dyn ThumbSource<GalleryThumb>,
-        source: &dyn FilterGallerySource,
-    ) -> FilterGalleryOutput {
-        let env = Env::of(ui);
-        let words = env.words::<FilterGalleryWords>();
-        let common = env.words::<CommonWords>();
-        let index = FilterIndex::of(catalog);
-        let events = std::mem::take(&mut self.queued);
-        self.selected = self.selected.min(self.session.effects.len().saturating_sub(1));
-        let name = self.session.effects.get(self.selected).map_or_else(|| words.name.clone(), |effect| index.label(&effect.filter));
-        let title = FullWindowTitle::new(name).subject(self.subject.clone()).zoom(self.percent).label(&env);
-        let buttons = [FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
-        let history_name: Arc<str> = words.name.clone().as_str().into();
-        let navigation = self.navigation;
-        let checkerboard = self.checkerboard;
-        let pass = RefCell::new(Pass { workspace: self, events, pick_color: None });
-
-        let mut dialog = FullWindowDialog::new(title)
-            .buttons(buttons)
-            .side_footer(SideFooter::top())
-            .sides(|ui, _| {
-                let mut pass = pass.borrow_mut();
-                let current = pass.workspace.selected;
-                let mut changes = Vec::new();
-                let mut stack_pick = None;
-                let mut pick_color = None;
-                FullWindowSide::new(words.settings.clone()).headerless().show(ui, |ui, _| {
-                    if let Some(effect) = pass.workspace.session.effects.get(current) {
-                        let parameters = EffectParameters::new(current, effect, &index).show(ui);
-                        changes.extend(parameters.change);
-                        pick_color = parameters.pick_color;
-                    }
-                    let stack = EffectStack::new(&pass.workspace.session.effects, current, &index).show(ui);
-                    stack_pick = stack.selected;
-                    changes.extend(stack.change);
-                    FullWindowStatus::of(&pass.workspace.status).show(ui);
-                });
-                pass.pick_color = pick_color;
-                for change in changes {
-                    pass.apply(change, catalog, &history_name);
-                }
-                if let Some(pick) = stack_pick {
-                    pass.workspace.selected = pick.min(pass.workspace.session.effects.len().saturating_sub(1));
-                }
-                let current_filter =
-                    pass.workspace.session.effects.get(pass.workspace.selected).map(|effect| effect.filter.clone()).unwrap_or_default();
-                let mut tree_pick = None;
-                FullWindowSide::new(words.filters.clone()).headerless().show(ui, |ui, _| {
-                    tree_pick = FilterTree::new(&index, &current_filter, thumbs, thumb_source).show(ui).picked;
-                });
-                if let Some(filter) = tree_pick {
-                    let at = pass.workspace.selected;
-                    pass.apply(EffectChange::set_filter(at, filter), catalog, &history_name);
-                }
-            })
-            .show(ui, |ui, cx| {
-                let mut pass = pass.borrow_mut();
-                let workspace = &mut *pass.workspace;
-                while let Some(step) = cx.take_step(workspace.history.can_undo(), workspace.history.can_redo()) {
-                    workspace.step(step);
-                }
-                let mut view = workspace.view;
-                while let Some((command, _)) = cx.take_command::<ViewCommands>() {
-                    view.apply(command);
-                }
-                let (visible, zoom) = workspace.visible();
-                let key = (workspace.revision, visible, zoom.to_bits());
-                let effects = &workspace.session.effects;
-                let status = cx.pending(key, || source.render(effects, visible, zoom)).clone();
-                let mut bar = FullWindowZoomBar::new(Bind::bound(&mut view)).progress(FullWindowStatus::of(&status).progress());
-                if let Pending::Ready(done) = &status {
-                    let milliseconds = done.timing.as_millis().to_string();
-                    bar = bar.note(Label::from(words.preview_ms.fill(&[("n", milliseconds.as_str())])));
-                }
-                bar.show(ui);
-                let mut canvas = FullWindowCanvas::new(Bind::bound(&mut view), source.preview()).navigation(navigation);
-                if let Some(checker) = checkerboard {
-                    canvas = canvas.checkerboard(checker);
-                }
-                canvas.show(ui);
-                (view, status)
-            });
-        // Once per pass, after the real run: the view it settled and the render status are stored.
-        dialog.settle(|_, (view, status)| {
-            let view = std::mem::take(view);
-            let workspace = &mut *pass.borrow_mut().workspace;
-            workspace.status = status.clone();
-            workspace.shown = Some(view.view());
-            workspace.percent = view.zoom_percent();
-            workspace.zoom = view.device_zoom();
-            workspace.view = view;
-        });
-
-        let Pass { workspace, mut events, pick_color } = pass.into_inner();
-        events.append(&mut workspace.queued);
-        if workspace.selected != workspace.reported {
-            workspace.reported = workspace.selected;
-            events.push(FilterGalleryEvent::Select(workspace.selected));
-        }
-        FilterGalleryOutput { events, pick_color, dialog: dialog.output }
-    }
-
     /// The effect-layer stack as it is now.
     pub fn session(&self) -> &FilterGallerySession {
         &self.session
@@ -328,7 +196,7 @@ impl FilterGalleryWorkspace {
         (PixelRect::new(part.x0 as i32, part.y0 as i32, part.x1 as i32, part.y1 as i32), self.zoom)
     }
 
-    /// The color the app picked for a [`FilterGalleryOutput::pick_color`] request: written into the request's
+    /// The color the app picked for a [`FilterGalleryEvent::PickColor`] request: written into the request's
     /// `key` of the selected effect (one undo step).
     pub fn set_color(&mut self, key: &str, color: Srgba) {
         let index = self.selected.min(self.session.effects.len().saturating_sub(1));
@@ -358,50 +226,228 @@ impl FilterGalleryWorkspace {
         self.revision += 1;
         self.history.record(&EditEvent::set(Mixed::Same(before), self.session.clone(), name.clone(), None));
     }
-}
 
-impl Pass<'_> {
-    /// Applies `change` through the catalog, records it and reports it.
-    fn apply(&mut self, change: EffectChange, catalog: &dyn FilterCatalog, name: &Arc<str>) {
-        let workspace = &mut *self.workspace;
-        let before = workspace.session.clone();
-        let mut selected = workspace.selected;
-        if workspace.session.apply(change.clone(), catalog, &mut selected) {
-            workspace.selected = selected;
-            workspace.record(before, name);
-            self.events.push(FilterGalleryEvent::Stack(change));
+    /// Applies `change` through `catalog`, records it as one undo step named `name` and queues its report for the
+    /// next pass to give: the one path of every stack change, from the columns and from automation. Returns whether
+    /// the stack changed.
+    fn change(&mut self, change: EffectChange, catalog: &dyn FilterCatalog, name: &Arc<str>) -> bool {
+        let before = self.session.clone();
+        let mut selected = self.selected;
+        if !self.session.apply(change.clone(), catalog, &mut selected) {
+            return false;
         }
+        self.selected = selected;
+        self.record(before, name);
+        self.queued.push(FilterGalleryEvent::Stack(change));
+        true
+    }
+
+    /// The selected layer's index, kept on a layer that exists.
+    fn clamped_selection(&self) -> usize {
+        self.selected.min(self.session.effects.len().saturating_sub(1))
+    }
+
+    /// Sets the automation field `field` to `value` over `catalog`; `Err` says why it refused.
+    fn set_field(&mut self, catalog: &dyn FilterCatalog, name: &Arc<str>, field: &str, value: Value) -> Result<(), String> {
+        let rejects = |value: &Value| FieldRefusal::Rejects(value).message(field);
+        let index = |value: &Value| value.as_u64().and_then(|at| usize::try_from(at).ok());
+        let selected = self.clamped_selection();
+        let change = match field {
+            "effects" => {
+                let effects: Vec<EffectLayer> = serde_json::from_value(value.clone()).map_err(|_| rejects(&value))?;
+                if effects.is_empty() || effects.iter().any(|effect| catalog.filter(&effect.filter).is_none()) {
+                    return Err(rejects(&value));
+                }
+                EffectChange::Replace { effects }
+            }
+            "select" => {
+                let at = index(&value).ok_or_else(|| rejects(&value))?;
+                self.selected = at.min(self.session.effects.len().saturating_sub(1));
+                return Ok(());
+            }
+            "zoom" => {
+                match (value.as_str(), value.as_f64()) {
+                    (Some("fit"), _) => self.view.apply(ViewCommands::FitOnScreen),
+                    (_, Some(zoom)) if zoom.is_finite() && zoom > 0.0 => self.view.set_device_zoom(zoom),
+                    _ => return Err(rejects(&value)),
+                };
+                return Ok(());
+            }
+            "add" | "delete" => match value.as_bool() {
+                Some(true) if field == "add" => EffectChange::Add,
+                Some(true) => EffectChange::Delete,
+                Some(false) => return Ok(()),
+                None => return Err(rejects(&value)),
+            },
+            "toggle" => {
+                let at = index(&value).ok_or_else(|| rejects(&value))?;
+                let effect = self.session.effects.get(at).ok_or_else(|| rejects(&value))?;
+                EffectChange::set_visible(at, !effect.visible)
+            }
+            "move" => {
+                let count = self.session.effects.len();
+                let (from, to) = (value.get("from").and_then(index), value.get("to").and_then(index));
+                let (Some(from), Some(to)) = (from, to) else { return Err(rejects(&value)) };
+                if from >= count || to >= count {
+                    return Err(rejects(&value));
+                }
+                EffectChange::move_to(from, to)
+            }
+            "filter" => {
+                let key = value.as_str().filter(|key| catalog.filter(key).is_some()).ok_or_else(|| rejects(&value))?;
+                EffectChange::set_filter(selected, key)
+            }
+            "params" => {
+                let (Some(effect), Some(entries)) = (self.session.effects.get(selected), value.as_object()) else { return Err(rejects(&value)) };
+                let filter = catalog.filter(&effect.filter).ok_or_else(|| FieldRefusal::Inactive.message(field))?;
+                let mut fields = effect.fields.clone();
+                for (key, entry) in entries {
+                    set_param_field(&filter.params, &mut fields, key, entry.clone())?;
+                }
+                EffectChange::with_fields(selected, fields)
+            }
+            _ => return Err(FieldRefusal::Unknown.message(field)),
+        };
+        self.change(change, catalog, name);
+        Ok(())
     }
 }
 
-// P3(dialogs-w11): dl.K59 — the workspace's trait surface; `show` and the automation fields are written in phase 3.
-impl craft_ui::dialog::FullWindowWorkspace for FilterGalleryWorkspace {
+impl FullWindowWorkspace for FilterGalleryWorkspace {
     type Source = dyn FilterGallerySource;
     type Event = FilterGalleryEvent;
     type Result = FilterGallerySession;
 
     const KEY: &'static str = "filter.filterGallery";
 
-    fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        cx: craft_ui::dialog::WorkspaceCx<'_, Self::Source>,
-    ) -> craft_ui::dialog::WorkspacePass<Self::Event, Self::Result> {
-        let _ = (ui, cx);
-        todo!("dl.K59")
+    /// Shows the workspace for this pass: the title (the selected effect's filter name as the subject's prefix,
+    /// PhotoCraft's "{effect} (layer, 66%)"), the side columns at the end edge (settings with the top footer
+    /// outermost, then the folders with the source's thumbnails), the zoom bar (progress while the preview renders,
+    /// else the render's time), and the canvas over the source's preview with the Hand tool. Changes go through
+    /// [`FilterGallerySession::apply`] and are recorded in the history; a change, a zoom, a pan or a new source
+    /// starts a new preview job. A swatch press reports [`FilterGalleryEvent::PickColor`].
+    ///
+    /// OK closes at once: the gallery never holds its OK (`cx.hold_ok` is not read).
+    fn show(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, Self::Source>) -> WorkspacePass<FilterGalleryEvent, FilterGallerySession> {
+        let WorkspaceCx { source, revision: source_revision, open, .. } = cx;
+        let (catalog, thumb_source) = (source.catalog(), source.thumb_source());
+        let thumbs = Thumbnails::<GalleryThumb>::in_context(ui.ctx(), "filterGallery.thumbs", ThumbnailOptions::default());
+        let env = Env::of(ui);
+        let words = env.words::<FilterGalleryWords>();
+        let common = env.words::<CommonWords>();
+        let index = FilterIndex::of(catalog);
+        let mut events = std::mem::take(&mut self.queued);
+        self.selected = self.clamped_selection();
+        let name = self.session.effects.get(self.selected).map_or_else(|| words.name.clone(), |effect| index.label(&effect.filter));
+        let title = FullWindowTitle::new(name).subject(self.subject.clone()).zoom(self.percent).label(&env);
+        let buttons = [FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
+        let history_name = history_name(&words);
+        let navigation = self.navigation;
+        let checkerboard = self.checkerboard;
+        let shared = RefCell::new(&mut *self);
+
+        let mut dialog = FullWindowDialog::new(title)
+            .opened(open)
+            .buttons(buttons)
+            .side_footer(SideFooter::top())
+            .sides(|ui, _| {
+                let mut workspace = shared.borrow_mut();
+                let current = workspace.selected;
+                let mut changes = Vec::new();
+                let mut stack_pick = None;
+                let mut pick_color = None;
+                FullWindowSide::new(words.settings.clone()).headerless().show(ui, |ui, _| {
+                    if let Some(effect) = workspace.session.effects.get(current) {
+                        let parameters = EffectParameters::new(current, effect, &index).show(ui);
+                        changes.extend(parameters.change);
+                        pick_color = parameters.pick_color;
+                    }
+                    let stack = EffectStack::new(&workspace.session.effects, current, &index).show(ui);
+                    stack_pick = stack.selected;
+                    changes.extend(stack.change);
+                    FullWindowStatus::of(&workspace.status).show(ui);
+                });
+                if let Some(request) = pick_color {
+                    workspace.queued.push(FilterGalleryEvent::PickColor(request));
+                }
+                for change in changes {
+                    workspace.change(change, catalog, &history_name);
+                }
+                if let Some(pick) = stack_pick {
+                    workspace.selected = pick.min(workspace.session.effects.len().saturating_sub(1));
+                }
+                let current_filter = workspace.session.effects.get(workspace.selected).map(|effect| effect.filter.clone()).unwrap_or_default();
+                let mut tree_pick = None;
+                FullWindowSide::new(words.filters.clone()).headerless().show(ui, |ui, _| {
+                    tree_pick = FilterTree::new(&index, &current_filter, &thumbs, thumb_source).show(ui).picked;
+                });
+                if let Some(filter) = tree_pick {
+                    let at = workspace.selected;
+                    workspace.change(EffectChange::set_filter(at, filter), catalog, &history_name);
+                }
+            })
+            .show(ui, |ui, cx| {
+                let mut workspace = shared.borrow_mut();
+                let workspace = &mut **workspace;
+                while let Some(step) = cx.take_step(workspace.history.can_undo(), workspace.history.can_redo()) {
+                    workspace.step(step);
+                }
+                let mut view = workspace.view;
+                while let Some((command, _)) = cx.take_command::<ViewCommands>() {
+                    view.apply(command);
+                }
+                let (visible, zoom) = workspace.visible();
+                // A new source (a document edit under the open gallery) previews again, and a late preview of the old
+                // pixels lands under a key no pass asks for.
+                let key = (workspace.revision, source_revision, visible, zoom.to_bits());
+                let effects = &workspace.session.effects;
+                let status = cx.pending(key, || source.render(effects, visible, zoom)).clone();
+                let mut bar = FullWindowZoomBar::new(Bind::bound(&mut view)).progress(FullWindowStatus::of(&status).progress());
+                if let Pending::Ready(done) = &status {
+                    let milliseconds = done.timing.as_millis().to_string();
+                    bar = bar.note(Label::from(words.preview_ms.fill(&[("n", milliseconds.as_str())])));
+                }
+                bar.show(ui);
+                let mut canvas = FullWindowCanvas::new(Bind::bound(&mut view), source.preview()).navigation(navigation);
+                if let Some(checker) = checkerboard {
+                    canvas = canvas.checkerboard(checker);
+                }
+                canvas.show(ui);
+                (view, status)
+            });
+        // Once per pass, after the real run: the view it settled and the render status are stored.
+        dialog.settle(|_, (view, status)| {
+            let view = std::mem::take(view);
+            let mut workspace = shared.borrow_mut();
+            workspace.status = status.clone();
+            workspace.shown = Some(view.view());
+            workspace.percent = view.zoom_percent();
+            workspace.zoom = view.device_zoom();
+            workspace.view = view;
+        });
+
+        let workspace = shared.into_inner();
+        events.append(&mut workspace.queued);
+        if workspace.selected != workspace.reported {
+            workspace.reported = workspace.selected;
+            events.push(FilterGalleryEvent::Select(workspace.selected));
+        }
+        let result = dialog.output.result(|| workspace.session.clone());
+        WorkspacePass::new(dialog.output.response, events).result(result)
     }
 
-    fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K59")
+    fn json_fields(&self) -> Option<Value> {
+        let zoom = if self.view.is_fit() { json!("fit") } else { json!(self.view.device_zoom()) };
+        let effects = serde_json::to_value(&self.session.effects).unwrap_or_default();
+        Some(json!({ "effects": effects, "select": self.clamped_selection(), "zoom": zoom }))
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, source: &Self::Source, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, source, field, value);
-        todo!("dl.K59")
+    fn set_json_field(&mut self, ctx: &Context, source: &Self::Source, field: &str, value: Value) -> Result<(), String> {
+        let name = history_name(&Env::of_root(ctx).words::<FilterGalleryWords>());
+        self.set_field(source.catalog(), &name, field, value)
     }
 
-    fn confirm(&mut self, ctx: &egui::Context, source: &Self::Source) -> Option<Self::Result> {
-        let _ = (ctx, source);
-        todo!("dl.K59")
+    fn confirm(&mut self, _: &Context, _: &Self::Source) -> Option<FilterGallerySession> {
+        Some(self.session.clone())
     }
 }

@@ -4,6 +4,7 @@
 use craft_ui::canvas::{PixelRect, RasterSource};
 use craft_ui::contract::Entry;
 use craft_ui::patterns::form_dialogs::{DialogFields, Param, ParamKind};
+use craft_ui::primitives::textures::ThumbSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::pending::Job;
 
@@ -108,13 +109,11 @@ impl GalleryThumb {
 /// `preview` is the picture the canvas shows; its revision moves when a render lands. `render` starts the
 /// job that renders `effects` over `visible` (document pixels, widened by the filters' reach) at `zoom`
 /// (screen pixels per document pixel): the workspace asks again when the effects, the visible part or the
-/// zoom change, and a newer request replaces the one running.
+/// zoom change, and a newer request replaces the one running. `catalog` and `thumb_source` are what the
+/// columns list and the automation surface checks keys against.
 pub trait FilterGallerySource: Send + Sync {
     /// The catalog the gallery lists and the effects name their filters in.
-    // P3(dialogs-w11): dl.K59 — default body until the app's sources implement it.
-    fn catalog(&self) -> &dyn FilterCatalog {
-        todo!("dl.K59")
-    }
+    fn catalog(&self) -> &dyn FilterCatalog;
 
     /// The rendered preview.
     fn preview(&self) -> &dyn RasterSource;
@@ -122,11 +121,8 @@ pub trait FilterGallerySource: Send + Sync {
     /// The job that renders `effects` over `visible` at `zoom` into the preview.
     fn render(&self, effects: &[EffectLayer], visible: PixelRect, zoom: f64) -> Job<PreviewDone, String>;
 
-    /// The thumbnails the filter tree shows.
-    // P3(dialogs-w11): dl.K59 — default body until the app's sources implement it.
-    fn thumb_source(&self) -> &dyn craft_ui::primitives::textures::ThumbSource<GalleryThumb> {
-        todo!("dl.K59")
-    }
+    /// The thumbnails the filter tree shows: each filter applied to a small crop of the layer.
+    fn thumb_source(&self) -> &dyn ThumbSource<GalleryThumb>;
 }
 
 /// The catalog as one pass reads it: the folders and every filter in them, looked up by key.

@@ -1,18 +1,21 @@
 //! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
-//! resize (H4), the raise of a modal's window, and `act`.
+//! resize (H4), the raise of a modal's window, the mount of a full-window container, the size of a content-sized
+//! window, the app id of child windows, injected keys across a focus loss, and `act`.
 
-use craft_behavior::{Cursor, CursorIcon};
-use craft_host::target::{Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
+use craft_behavior::{Cursor, CursorIcon, PointerButton};
+use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
+use craft_keymap::{Key, Mods};
 use craft_ui::contract::{Common, Component, Container, ContainerProps, Cx, Mount, Overlay, Props as _, Role, ShowContainer as _};
 use craft_ui::runtime::InstallSpec;
-use craft_ui::runtime::windows::WindowSpec;
+use craft_ui::runtime::focus::FocusPolicy;
+use craft_ui::runtime::windows::{WindowHost, WindowSpec};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::pointer::{moved, press};
 use craft_ui::testing::trial;
-use craft_ui::testing::windows::NoWindows;
+use craft_ui::testing::windows::{FakeSystem, NoWindows};
 use craft_ui_test_kit::contract::PlainStyle;
-use craft_ui_test_kit::windows::Windows;
-use egui::{Event, Pos2, Rect, Response, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
+use craft_ui_test_kit::windows::{Out, Windows};
+use egui::{Event, Pos2, Rect, Response, UserAttentionType, Vec2, ViewportBuilder, ViewportCommand, ViewportEvent, ViewportId, ViewportInfo};
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -74,31 +77,68 @@ fn a_press_is_released_after_an_os_resize_of_an_undecorated_window() {
     }
 }
 
+/// One frame of `windows` with the `Modal` open in the child viewport.
+fn modal_frame(windows: &Windows) -> Out {
+    windows.frame(vec![], vec![], |ui| {
+        ui.ctx().show_viewport_immediate(child(), ViewportBuilder::default(), |cui, _| {
+            let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+            Modal { common: Common::new(), props }.id_salt("modal").show(cui, |_, _| {});
+        });
+    })
+}
+
+/// Whether `out` raised the child's window: restored it from the Dock or taskbar, then focused it (or, on Wayland,
+/// asked for attention).
+fn raised_child(out: &Out) -> bool {
+    out.commands.iter().any(|(id, command)| *id == child() && *command == ViewportCommand::Minimized(false))
+}
+
 /// A modal in one window blocks the others: the pointer over them shows the blocked cursor, and a close request on
-/// them is refused and raises the modal's window.
+/// them is refused and raises the modal's window. A minimized window ignores focus, so the raise restores it first;
+/// a Wayland compositor lets no client focus a window, so there the raise asks for attention.
 #[trial]
 fn an_app_modal_in_one_window_blocks_the_cursor_and_the_close_of_the_others() {
-    let windows = Windows::new();
-    let frame = || {
-        windows.frame(vec![], vec![], |ui| {
-            ui.ctx().show_viewport_immediate(child(), ViewportBuilder::default(), |cui, _| {
-                let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
-                Modal { common: Common::new(), props }.id_salt("modal").show(cui, |_, _| {});
-            });
-        })
-    };
-    for _ in 0..4 {
-        frame();
-    }
-    assert_eq!(craft_ui::runtime::cursor::current(&windows.ctx), Some(Cursor::System(CursorIcon::NotAllowed)), "the root window is blocked");
+    let attention = ViewportCommand::RequestUserAttention(UserAttentionType::Informational);
+    for (backend, focus) in [(Backend::X11, ViewportCommand::Focus), (Backend::Wayland, attention.clone())] {
+        let windows = Windows::with(InstallSpec::new(ShellInfo::default().backend(backend), Arc::new(FakeSystem::new())));
+        for _ in 0..4 {
+            modal_frame(&windows);
+        }
+        let blocked = Some(Cursor::System(CursorIcon::NotAllowed));
+        assert_eq!(craft_ui::runtime::cursor::current(&windows.ctx), blocked, "{backend:?}: the root window is blocked");
 
-    windows.root_info(ViewportInfo { events: vec![ViewportEvent::Close], ..ViewportInfo::default() });
-    let out = frame();
-    craft_ui::runtime::windows::logic(&windows.ctx);
-    let out_after = frame();
-    let sent: Vec<_> = out.commands.iter().chain(&out_after.commands).collect();
-    assert!(sent.contains(&&(ViewportId::ROOT, ViewportCommand::CancelClose)), "the close is refused: {sent:?}");
-    assert!(sent.contains(&&(child(), ViewportCommand::Focus)), "the modal's window is raised: {sent:?}");
+        windows.root_info(ViewportInfo { events: vec![ViewportEvent::Close], ..ViewportInfo::default() });
+        let out = modal_frame(&windows);
+        craft_ui::runtime::windows::logic(&windows.ctx);
+        let out_after = modal_frame(&windows);
+        let sent: Vec<_> = out.commands.iter().chain(&out_after.commands).collect();
+        assert!(sent.contains(&&(ViewportId::ROOT, ViewportCommand::CancelClose)), "{backend:?}: the close is refused: {sent:?}");
+        let at = |wanted: &ViewportCommand| sent.iter().position(|(id, command)| *id == child() && command == wanted);
+        let (restored, raised) = (at(&ViewportCommand::Minimized(false)), at(&focus));
+        assert!(raised.is_some(), "{backend:?}: the modal's window is raised: {sent:?}");
+        assert!(
+            matches!((restored, raised), (Some(restored), Some(raised)) if restored < raised),
+            "{backend:?}: the window is restored before it is raised: {sent:?}"
+        );
+        let other = if backend == Backend::Wayland { ViewportCommand::Focus } else { attention.clone() };
+        assert_eq!(at(&other), None, "{backend:?}: one way of raising: {sent:?}");
+    }
+}
+
+/// L-17: the user clicking the main window while a modal in another window blocks it brings the modal's window
+/// forward with it, in the pass the main window gains focus; a pass without a focus change sends nothing.
+#[trial]
+fn a_blocking_modal_is_raised_when_the_main_window_gains_focus() {
+    let windows = Windows::new();
+    let focus = |on| ViewportInfo { focused: Some(on), ..ViewportInfo::default() };
+    windows.root_info(focus(false));
+    for _ in 0..4 {
+        modal_frame(&windows);
+    }
+    assert!(!raised_child(&modal_frame(&windows)), "the main window stays unfocused: nothing is raised");
+    windows.root_info(focus(true));
+    assert!(raised_child(&modal_frame(&windows)), "the main window gained focus: the modal's window is raised");
+    assert!(!raised_child(&modal_frame(&windows)), "the main window keeps focus: nothing more is raised");
 }
 
 /// A container mounted in an OS viewport that opens as `spec`, with a body the trial gives it.
@@ -118,6 +158,12 @@ impl Palette {
             Some(spec) => Mount::viewport_with(overlay, spec),
             None => Mount::viewport(overlay),
         };
+        Palette { common: Common::new(), props: ContainerProps::new().mount(mount) }.label(title).id_salt(title)
+    }
+
+    /// A full-window container in a dialog window of its own, as a workspace that opens its own window mounts.
+    fn full_window(title: &'static str) -> Self {
+        let mount = Mount::viewport_with(Overlay::full_window(FocusPolicy::DIALOG), WindowSpec::dialog());
         Palette { common: Common::new(), props: ContainerProps::new().mount(mount) }.label(title).id_salt(title)
     }
 }
@@ -172,4 +218,128 @@ fn a_palette_drops_its_level_while_the_app_is_inactive() {
     assert_eq!(frame(false, false), Some(egui::WindowLevel::Normal), "the frame after focus left every window");
     frame(true, false);
     assert_eq!(frame(true, false), on_top, "the frame after the main window took focus again");
+}
+
+/// A full-window container mounted in its own window opens a resizable OS window titled as the container where
+/// viewports are available, and covers the main window's content where they are not.
+#[trial]
+fn a_full_window_viewport_fills_the_main_window_without_viewports_and_opens_its_own_with_them() {
+    let windows = Windows::new();
+    let mut out = None;
+    for _ in 0..4 {
+        out = Some(windows.frame(vec![], vec![], |ui| {
+            Palette::full_window("Workspace").show(ui, |_, _| {});
+        }));
+    }
+    let out = out.expect("the frames ran");
+    let (_, builder) = builder_titled(&out, "Workspace");
+    assert_eq!(builder.resizable, Some(true), "the user sizes the workspace's window");
+
+    let without = ShellInfo::default().caps(Caps::native(Os::Linux).difference(Caps::VIEWPORTS));
+    let windows = Windows::with(InstallSpec::new(without, Arc::new(FakeSystem::new())));
+    let content = Cell::new(Rect::NOTHING);
+    let mut out = None;
+    for _ in 0..4 {
+        out = Some(windows.frame(vec![], vec![], |ui| {
+            content.set(ui.ctx().content_rect());
+            Palette::full_window("Workspace").show(ui, |_, _| {});
+        }));
+    }
+    let out = out.expect("the frames ran");
+    assert!(out.builders.iter().all(|(_, builder)| builder.title.as_deref() != Some("Workspace")), "no OS window opens");
+    let (_, tree) = out.trees.iter().rfind(|(id, _)| *id == ViewportId::ROOT).expect("the root's tree");
+    let shown = tree.keys().into_iter().find(|key| tree.role_of(*key) == Some(Role::GROUP) && tree.name_of(*key) == Some("Workspace"));
+    assert_eq!(shown.and_then(|key| tree.bounds_of(key)), Some(content.get()), "the workspace covers the main window");
+}
+
+/// A window sized by its content sends no size before it has reported its place, so it never opens at what its body
+/// took in room the OS has not given; once it has reported, it takes its content's size.
+#[trial]
+fn a_content_sized_window_takes_its_content_size_once_it_reported_its_place() {
+    const CONTENT: Vec2 = Vec2::new(200.0, 100.0);
+    const GIVEN: Vec2 = Vec2::new(400.0, 300.0);
+    let windows = Windows::new();
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::new("tool", Some(WindowSpec::tool())).show(ui, |ui, _| {
+                ui.allocate_exact_size(CONTENT, egui::Sense::hover());
+            });
+        })
+    };
+    let sizes = |out: &Out| -> Vec<Vec2> {
+        let sent = out.commands.iter().filter(|(id, _)| *id != ViewportId::ROOT);
+        sent.filter_map(|(_, command)| match command {
+            ViewportCommand::InnerSize(size) => Some(*size),
+            _ => None,
+        })
+        .collect()
+    };
+
+    let first = frame();
+    let opened = first.builders.iter().filter(|(_, builder)| builder.title.as_deref() == Some("tool"));
+    assert!(opened.clone().count() > 0, "the window asked to open");
+    assert!(opened.clone().all(|(_, builder)| builder.inner_size.is_none()), "the window opens with no size of its own");
+    assert_eq!(sizes(&first), Vec::<Vec2>::new(), "no size goes out before the window reports its place");
+
+    let given = Rect::from_min_size(Pos2::new(100.0, 100.0), GIVEN);
+    let reported = ViewportInfo { inner_rect: Some(given), outer_rect: Some(given), native_pixels_per_point: Some(1.0), ..ViewportInfo::default() };
+    windows.child_info(reported);
+    let sent: Vec<Vec2> = (0..3).flat_map(|_| sizes(&frame())).collect();
+    let taken = sent.last().copied().expect("the window takes a size once it reported its place");
+    assert!(
+        taken.x >= CONTENT.x && taken.y >= CONTENT.y && taken.x < GIVEN.x && taken.y < GIVEN.y,
+        "the window takes its content's size, not the room the OS gave it: {taken:?}"
+    );
+}
+
+/// The OS windows the runtime opens carry the app id the app installed, as its main window does: docks and Wayland
+/// compositors find the app's icon and rules by it.
+#[trial]
+fn a_viewport_opened_through_a_mount_carries_the_installed_app_id() {
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), Arc::new(FakeSystem::new())).app_id("org.example.Craft"));
+    let out = windows.frame(vec![], vec![], |ui| {
+        Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+    });
+    assert_eq!(builder_titled(&out, "tool").1.app_id.as_deref(), Some("org.example.Craft"), "the child window carries the app id");
+
+    let windows = Windows::new();
+    let out = windows.frame(vec![], vec![], |ui| {
+        Palette::new("tool", Some(WindowSpec::tool())).show(ui, |_, _| {});
+    });
+    assert_eq!(builder_titled(&out, "tool").1.app_id, None, "without an app id the window carries none");
+}
+
+/// fx.F20: a key and a modifier injected as held are let go when the window loses focus, as the platform lets its
+/// own go. Otherwise the next injected input, written against the stale state, would not announce its own Shift.
+#[trial]
+fn a_window_focus_loss_releases_injected_held_keys() {
+    let windows = Windows::new();
+    let host = WindowHost::of(&windows.ctx);
+    let held = Cell::new((false, false));
+    let shift_click = Cell::new(false);
+    let frame = |events: Vec<Event>| {
+        windows.frame(events, vec![], |ui| {
+            ui.ctx().input(|input| {
+                held.set((input.key_down(egui::Key::A), input.modifiers.shift));
+                if input.pointer.primary_pressed() && input.modifiers.shift {
+                    shift_click.set(true);
+                }
+            });
+        });
+    };
+    frame(vec![]);
+    host.inject_key(ViewportId::ROOT, Key::A, Mods::SHIFT, true);
+    for _ in 0..4 {
+        frame(vec![]);
+    }
+    assert_eq!(held.get(), (true, true), "the injected key and Shift are held");
+
+    frame(vec![Event::WindowFocused(false)]);
+    frame(vec![Event::WindowFocused(true)]);
+    host.inject_click(ViewportId::ROOT, Pos2::new(40.0, 40.0), PointerButton::Primary, 1, Mods::SHIFT, false);
+    for _ in 0..8 {
+        frame(vec![]);
+    }
+    assert!(shift_click.get(), "the click after the focus loss holds its own Shift");
+    assert_eq!(held.get(), (false, false), "nothing stays held after the click");
 }

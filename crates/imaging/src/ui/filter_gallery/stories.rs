@@ -8,16 +8,17 @@ use std::time::Duration;
 
 use craft_theme::Srgba;
 use craft_ui::canvas::{PixelRect, RasterSource};
-use craft_ui::contract::Job;
+use craft_ui::contract::{Bind, Job};
+use craft_ui::dialog::{FullWindowWorkspace as _, WorkspaceCx};
 use craft_ui::patterns::form_dialogs::{Param, ParamKind};
-use craft_ui::primitives::textures::{FakeThumbSource, ThumbnailOptions, Thumbnails};
+use craft_ui::primitives::textures::{FakeThumbSource, ThumbSource, ThumbnailOptions, Thumbnails};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use craft_ui::value_drag::SliderScale;
 use egui::Ui;
 
 use super::{
-    EffectChange, EffectLayer, EffectParameters, EffectStack, FilterCatalog, FilterCategory, FilterGalleryOpen, FilterGallerySession,
-    FilterGallerySource, FilterGalleryWorkspace, FilterIndex, FilterTree, GalleryFilter, GalleryThumb,
+    EffectChange, EffectLayer, EffectParameters, EffectStack, FilterCatalog, FilterCategory, FilterGalleryEvent, FilterGalleryOpen,
+    FilterGallerySession, FilterGallerySource, FilterGalleryWorkspace, FilterIndex, FilterTree, GalleryFilter, GalleryThumb,
 };
 use crate::ui::mock_image::MockImage;
 use crate::ui::wide_angle::PreviewDone;
@@ -110,13 +111,23 @@ fn start() -> FilterGallerySession {
     session
 }
 
-/// The picture under the effects, with a render that is done at once or never finishes.
+/// The app's side of the workspace: the catalog, the thumbnails, and the picture under the effects, with a render
+/// that is done at once or never finishes.
 struct MockSource {
     image: MockImage,
     rendering: bool,
+    thumbs: FakeThumbSource<GalleryThumb>,
 }
 
 impl FilterGallerySource for MockSource {
+    fn catalog(&self) -> &dyn FilterCatalog {
+        &MockGallery
+    }
+
+    fn thumb_source(&self) -> &dyn ThumbSource<GalleryThumb> {
+        &self.thumbs
+    }
+
     fn preview(&self) -> &dyn RasterSource {
         &self.image
     }
@@ -136,19 +147,21 @@ impl FilterGallerySource for MockSource {
     }
 }
 
-/// Shows the workspace over the session the story keeps.
+/// Shows the workspace over the session the story keeps, its open state bound to the story's.
 fn workspace(ui: &mut Ui, data: &mut StoryData, rendering: bool) -> StoryOutput {
     let image = MockImage::default();
     let session = data.value("session", start()).clone();
     let mut workspace = FilterGalleryWorkspace::new(FilterGalleryOpen::new(image.size(), "Photo", session));
-    let thumbs = Thumbnails::<GalleryThumb>::in_context(ui.ctx(), "gallery-story-thumbs", ThumbnailOptions::default());
-    let out = workspace.show(ui, &MockGallery, &thumbs, &FakeThumbSource::<GalleryThumb>::new(), &MockSource { image, rendering });
+    let source: &dyn FilterGallerySource = &MockSource { image, rendering, thumbs: FakeThumbSource::new() };
+    let pass = workspace.show(ui, WorkspaceCx::new(source, Bind::bound(data.value("open", true))));
     // A swatch press asks the app for a color; the story has no picker.
-    if let Some(request) = out.pick_color {
-        workspace.set_color(&request.key, Srgba::from_rgb_array([0.2, 0.7, 0.9]));
+    for event in &pass.events {
+        if let FilterGalleryEvent::PickColor(request) = event {
+            workspace.set_color(&request.key, Srgba::from_rgb_array([0.2, 0.7, 0.9]));
+        }
     }
     *data.value("session", start()) = workspace.session().clone();
-    out.dialog.into()
+    StoryOutput::from(pass.response)
 }
 
 #[story(FilterGalleryWorkspace, covers = [Default], drive = Drive::Never)]

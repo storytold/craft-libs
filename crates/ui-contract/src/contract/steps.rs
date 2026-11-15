@@ -25,7 +25,7 @@ mod value;
 
 pub(crate) use apply::{ValueEdit, apply_values, rerun_after_edit};
 pub(crate) use env::{EnvStep, env, resolved, variants};
-pub(crate) use finish::{before_finish, inert_response, record_size, value_changed};
+pub(crate) use finish::{before_finish, inert_response, record_body_size, record_size, value_changed};
 pub(super) use id::measuring;
 pub(crate) use id::{draft, id, keeping_ids};
 pub(crate) use label::scrub_by_label;

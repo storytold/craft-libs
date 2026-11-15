@@ -1186,7 +1186,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
 
     fn record(&mut self, stage: &mut MemoryStage, ctx: &Context, id: Id) {
         if let Some(size) = self.body_size {
-            crate::contract::steps::record_size(ctx, id, size);
+            crate::contract::steps::record_body_size(ctx, &self.props.mount, id, size);
         }
         if let Some(size) = self.header_size {
             crate::contract::steps::record_size(ctx, sub(id, "header"), size);

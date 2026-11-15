@@ -52,7 +52,7 @@ use shell::{refresh, window_info};
 pub(crate) use shell::{set_chrome, set_os};
 use spec::chrome_of;
 pub use spec::{WindowLevel, WindowSpec};
-pub(crate) use viewport::{ViewportOpen, show_viewport, take_close_request};
+pub(crate) use viewport::{ViewportOpen, show_viewport, take_close_request, unplaced};
 
 /// Seconds between writes of a changed placement store.
 const FLUSH_SECONDS: f64 = 1.0;

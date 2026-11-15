@@ -125,23 +125,36 @@ impl<'a> FullWindowDialog<'a> {
     /// viewports are unavailable it fills the main window. The dialog's focus policy moves into the fallback overlay.
     #[must_use]
     pub fn own_window(mut self, spec: WindowSpec) -> Self {
-        self.props.mount = Mount::viewport_with(Overlay::full_window(self.props.focus), spec);
-        self.props.focus = FocusPolicy::NONE;
+        // A viewport mount takes its scope from the fallback overlay and holds `props.focus` at none.
+        let focus = std::mem::replace(self.focus_mut(), FocusPolicy::NONE);
+        self.props.mount = Mount::viewport_with(Overlay::full_window(focus), spec);
         self
     }
 
     /// Who gets Enter: the dialog's submit, or the body.
     #[must_use]
     pub fn enter(mut self, rule: EnterRule) -> Self {
-        self.props.focus = FocusPolicy { enter: rule, ..self.props.focus };
+        let focus = self.focus_mut();
+        *focus = FocusPolicy { enter: rule, ..*focus };
         self
     }
 
     /// What takes the keyboard focus when the dialog opens.
     #[must_use]
     pub fn initial_focus(mut self, initial: Initial) -> Self {
-        self.props.focus = self.props.focus.initial(initial);
+        let focus = self.focus_mut();
+        *focus = focus.initial(initial);
         self
+    }
+
+    /// The dialog's focus policy, wherever its mount keeps it: the fallback overlay's in its own window, else the
+    /// container's. Every builder and the footer go through it, so the order of `own_window` and the others does not
+    /// matter.
+    fn focus_mut(&mut self) -> &mut FocusPolicy {
+        match &mut self.props.mount {
+            Mount::Viewport { fallback, .. } => &mut fallback.focus,
+            _ => &mut self.props.focus,
+        }
     }
 
     /// The dialog's own command scope, a child of [`ViewCommands::SCOPE`]: the dialog is an instance of `scope` and still
@@ -275,7 +288,7 @@ impl Container for FullWindowDialog<'_> {
     }
 
     fn footer(&mut self, ui: &mut Ui, cx: &mut BodyCx<'_>) {
-        let enter = self.props.focus.enter == EnterRule::Submit;
+        let enter = self.focus_mut().enter == EnterRule::Submit;
         let (content, buttons) = (&mut self.footer, &self.buttons);
         let (picked, guard, on_pick, settle) = (&mut self.picked, &mut self.guard, &mut self.on_pick, &mut self.settle);
         if self.sides.is_some() {

@@ -4,8 +4,10 @@ use craft_ui::patterns::form_dialogs::DialogFields;
 
 use super::catalog::FilterCatalog;
 
-/// One effect layer: a filter, its fields (the catalog's parameters) and its eye.
+/// One effect layer: a filter, its fields (the catalog's parameters) and its eye. It serialises as
+/// `{filter, params, visible}`, with a choice by its option's name, as the engine's effects do.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct EffectLayer {
     /// The filter's key in the catalog.
@@ -135,6 +137,11 @@ impl FilterGallerySession {
                 }
                 _ => false,
             },
+            // The stack never empties: a gallery always has one layer to show.
+            EffectChange::Replace { effects } if !effects.is_empty() && effects != self.effects => {
+                self.effects = effects;
+                true
+            }
             EffectChange::Add => {
                 let copy = self.effects[current].clone();
                 self.effects.insert(current + 1, copy);
