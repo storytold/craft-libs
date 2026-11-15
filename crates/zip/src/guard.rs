@@ -46,7 +46,7 @@ pub fn check_entry_count(bytes: &[u8], max_entries: u64) -> Result<(), Error> {
             continue;
         }
         let (Some(on_disk), Some(total), Some(cd_offset)) = (u16_at(at + 8), u16_at(at + 10), u32_at(at + 16)) else { continue };
-        let zip64 = total == u16::MAX || cd_offset == u32::MAX;
+        let zip64 = total == u16::MAX || u32_at(at + 12) == Some(u32::MAX) || cd_offset == u32::MAX;
         if zip64
             && let Some(locator) = at.checked_sub(20)
             && bytes.get(locator..locator + 4) == Some(EOCD64_LOCATOR.as_slice())
@@ -153,6 +153,17 @@ mod tests {
         let mut prefixed = vec![0x55u8; 4096];
         prefixed.extend_from_slice(&sample);
         assert!(check(&prefixed, 20_000).is_err());
+    }
+
+    #[test]
+    fn zip64_directory_size_sentinel_alone_cannot_bypass_the_count_limit() {
+        let mut bytes = zip64_entry_count_sample(21);
+        let eocd = bytes.len() - 22;
+        // zip recognizes ZIP64 when only the directory size is a sentinel.
+        bytes[eocd + 8..eocd + 12].copy_from_slice(&[1, 0, 1, 0]);
+        bytes[eocd + 16..eocd + 20].copy_from_slice(&0u32.to_le_bytes());
+        assert!(zip::ZipArchive::new(std::io::Cursor::new(&bytes)).is_ok());
+        assert_eq!(check(&bytes, 20), Err(Error::TooManyEntries { declared: 21, limit: 20 }));
     }
 
     #[test]

@@ -113,8 +113,10 @@ pub enum FormulaKind {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CellFormula {
     pub kind: FormulaKind,
-    /// The formula as the file spells it (`_xlfn.` prefixes and all), trimmed. Empty for a
-    /// cell that shares the formula of its group's first cell.
+    /// The formula as the file spells it (`_xlfn.` prefixes and all), trimmed. In `.xlsx`, empty
+    /// for a cell that shares the formula of its group's first cell. A binary workbook (`.xlsb`)
+    /// stores a shared formula's tokens once, so every cell of the group gets its own text,
+    /// decoded at the cell.
     pub text: String,
     /// `si`: the shared formula group.
     pub shared_index: Option<u32>,

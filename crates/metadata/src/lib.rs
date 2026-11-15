@@ -19,6 +19,7 @@
 //! HEIF, PSD and MRW files are read by their own crates. Put the blocks they return into an
 //! [`Embedded`] and call [`from_embedded`].
 
+pub mod camera_fields;
 mod container;
 pub mod cr3;
 mod datetime;

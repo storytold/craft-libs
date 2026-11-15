@@ -1,3 +1,4 @@
+pub(crate) mod avif;
 pub(crate) mod dds;
 pub(crate) mod dds_bc;
 pub(crate) mod deep_exr;
