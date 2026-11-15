@@ -47,7 +47,7 @@ impl LargeEncoder {
         ec.quantizer = quality.max(1) as usize;
         ec.min_quantizer = ec.quantizer.min(255) as u8;
         ec.min_key_frame_interval = 1;
-        ec.max_key_frame_interval = cfg.keyint.max(1).min(120) as u64;
+        ec.max_key_frame_interval = cfg.keyint.clamp(1, 120) as u64;
         ec.tiles = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 16);
         let ctx = Config::new().with_encoder_config(ec).new_context().map_err(|e| Error::InvalidConfig(format!("rav1e: {e}")))?;
         Ok(Self { ctx, width: cfg.width as usize, height: cfg.height as usize, seq_header: None })
