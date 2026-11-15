@@ -36,7 +36,7 @@ pub enum Error {
 
 /// Neutral top-level project schema. Nested app-domain values and unknown fields remain JSON
 /// so they round-trip without requiring TextureCraft's in-memory model.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct ProjectDocument {
     pub format_version: u32,
     pub name: String,
@@ -50,6 +50,30 @@ pub struct ProjectDocument {
     pub cameras: Vec<Value>,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+impl Serialize for ProjectDocument {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error as _, SerializeMap as _};
+        const RESERVED: &[&str] = &["format_version", "name", "mesh", "normal_format", "texture_sets", "layers", "next_id", "display", "cameras"];
+        if self.extra.keys().any(|key| RESERVED.contains(&key.as_str())) {
+            return Err(S::Error::custom("an extra project field duplicates a known field"));
+        }
+        let mut map = serializer.serialize_map(Some(9 + self.extra.len()))?;
+        map.serialize_entry("format_version", &self.format_version)?;
+        map.serialize_entry("name", &self.name)?;
+        map.serialize_entry("mesh", &self.mesh)?;
+        map.serialize_entry("normal_format", &self.normal_format)?;
+        map.serialize_entry("texture_sets", &self.texture_sets)?;
+        map.serialize_entry("layers", &self.layers)?;
+        map.serialize_entry("next_id", &self.next_id)?;
+        map.serialize_entry("display", &self.display)?;
+        map.serialize_entry("cameras", &self.cameras)?;
+        for (key, value) in &self.extra {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
 }
 
 /// Read only the version before an application applies its own recovery policy. Serde's
@@ -286,7 +310,10 @@ mod tests {
         let document: ProjectDocument = serde_json::from_slice(&bytes).unwrap();
         let mut expected = json;
         expected["cameras"] = serde_json::json!([]);
-        assert_eq!(serde_json::to_value(document).unwrap(), expected);
+        assert_eq!(serde_json::to_value(&document).unwrap(), expected);
+        let mut duplicate = document;
+        duplicate.extra.insert("mesh".into(), serde_json::json!("other.obj"));
+        assert!(serde_json::to_vec(&duplicate).is_err());
         assert!(project_version(br#"{"format_version":1,"format_version":2}"#).is_err());
         assert!(project_version(br#"{"format_version":-1}"#).is_err());
     }
