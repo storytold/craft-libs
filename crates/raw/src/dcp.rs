@@ -298,3 +298,35 @@ mod tests {
         assert!(a.iter().flatten().zip(b.iter().flatten()).all(|(x, y)| (x - y).abs() < 1e-6));
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod boundary_tests {
+    use super::*;
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+
+    fn profile_bytes(offset: f64, matrix: bool) -> Vec<u8> {
+        let mut ifd = IfdBuilder::new();
+        if matrix {
+            ifd.set(t::COLOR_MATRIX_1, Value::SRational(vec![(1, 1), (0, 1), (0, 1), (0, 1), (1, 1), (0, 1), (0, 1), (0, 1), (1, 1)]));
+        }
+        ifd.set(t::BASELINE_EXPOSURE_OFFSET, Value::Double(vec![offset]));
+        ifd.set(t::BASELINE_EXPOSURE, Value::Double(vec![10.0]));
+        ifd.set(t::AS_SHOT_NEUTRAL, Value::Double(vec![0.5, 1.0, 0.7]));
+        let mut bytes = TiffWriter::new(ByteOrder::Little, false).write(&[ifd]).unwrap();
+        bytes[2..4].copy_from_slice(&DCP_MAGIC.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn profile_requires_matrix_and_never_keeps_shot_exposure_or_white_balance() {
+        assert_eq!(parse_dcp(&profile_bytes(0.0, false)), Err(DcpError::NoMatrix));
+        for (offset, expected) in [(9.0, 4.0), (-9.0, -4.0), (f64::INFINITY, 0.0), (f64::NAN, 0.0)] {
+            let profile = parse_dcp(&profile_bytes(offset, true)).unwrap();
+            assert_eq!(profile.color.baseline_exposure, expected);
+            assert_eq!(profile.color.as_shot_neutral, None);
+            assert_eq!(profile.color.camera_calibration, [None, None]);
+            assert_eq!(profile.color.profile.gain_table_map, None);
+        }
+    }
+}
