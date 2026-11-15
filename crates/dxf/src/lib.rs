@@ -11,6 +11,7 @@
 use std::io::Write as _;
 
 pub mod model;
+pub mod paths;
 mod version;
 pub use version::Version;
 
@@ -768,7 +769,7 @@ fn ascii(tags: &[Tag], strings: Strings) -> Vec<u8> {
 /// Write tags as binary DXF (DXF Reference, "Binary DXF Files", R13+ layout): the sentinel,
 /// then per tag a 2-byte little-endian group code and the value in the binary form of the code's
 /// [`Kind`]: a zero-terminated string, an 8-byte real, a 2-, 4- or 8-byte integer, a 1-byte
-/// boolean, or a binary chunk (one length byte, then up to 255 bytes; longer data is split into
+/// boolean, or a binary chunk (one length byte, then up to 127 bytes; longer data is split into
 /// several groups of the same code). Strings are UTF-8 when `utf8` (R2007+), otherwise escaped as
 /// in [`write_ascii`]. A tag's value is converted to its code's kind, so a number written as text
 /// is stored as a number; a code outside the 16-bit range is skipped.
@@ -822,8 +823,8 @@ fn binary(tags: &[Tag], strings: Strings) -> Vec<u8> {
             }
             Kind::Hex => {
                 let bytes = hex_bytes(&t.value.as_str());
-                // An empty chunk is still one group, as in ASCII.
-                let mut chunks: Vec<&[u8]> = bytes.chunks(255).collect();
+                // At most 127 bytes per group, as in ASCII; an empty chunk is still one group.
+                let mut chunks: Vec<&[u8]> = bytes.chunks(127).collect();
                 if chunks.is_empty() {
                     chunks.push(&[]);
                 }

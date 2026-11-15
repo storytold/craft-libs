@@ -184,6 +184,9 @@ impl Default for PictureMode {
 #[serde(default, rename_all = "camelCase")]
 pub struct PictureFill {
     pub media: MediaId,
+    /// Optional vector SVG version of `media`; the regular media remains the bitmap fallback.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub svg: Option<MediaId>,
     /// Source crop as fractions of the image (left, top, right, bottom); negative values pad.
     pub crop: [f64; 4],
     pub mode: PictureMode,

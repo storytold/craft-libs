@@ -462,39 +462,42 @@ impl PocState {
                 let (prev_msb, prev_lsb) = if sh.idr { (0, 0) } else { (self.prev_ref_msb, self.prev_ref_lsb) };
                 let max_lsb = 1i32 << sps.log2_max_poc_lsb;
                 let lsb = sh.pic_order_cnt_lsb as i32;
-                let msb = if lsb < prev_lsb && prev_lsb.wrapping_sub(lsb) >= max_lsb / 2 {
-                    prev_msb.wrapping_add(max_lsb)
-                } else if lsb > prev_lsb && lsb.wrapping_sub(prev_lsb) > max_lsb / 2 {
-                    prev_msb.wrapping_sub(max_lsb)
+                let msb = if lsb < prev_lsb && prev_lsb.saturating_sub(lsb) >= max_lsb / 2 {
+                    prev_msb.saturating_add(max_lsb)
+                } else if lsb > prev_lsb && lsb.saturating_sub(prev_lsb) > max_lsb / 2 {
+                    prev_msb.saturating_sub(max_lsb)
                 } else {
                     prev_msb
                 };
-                let top = msb.wrapping_add(lsb);
-                let bottom = top.wrapping_add(sh.delta_pic_order_cnt_bottom);
+                let top = msb.saturating_add(lsb);
+                let bottom = top.saturating_add(sh.delta_pic_order_cnt_bottom);
                 Poc { top, bottom, msb, frame_num_offset: 0 }
             }
             1 => {
                 let frame_num_offset = self.frame_num_offset(sh.idr, sh.frame_num, sps);
-                let n = sps.offset_for_ref_frame.len() as i32;
-                let mut abs_frame_num = if n != 0 { frame_num_offset.wrapping_add(sh.frame_num as i32) } else { 0 };
+                let n = sps.offset_for_ref_frame.len() as i64;
+                let mut abs_frame_num = if n != 0 { i64::from(frame_num_offset) + i64::from(sh.frame_num) } else { 0 };
                 if sh.nal_ref_idc == 0 && abs_frame_num > 0 {
                     abs_frame_num -= 1;
                 }
-                let mut expected = 0i32;
+                let mut expected = 0i64;
                 if abs_frame_num > 0 {
                     let cycle_cnt = (abs_frame_num - 1) / n;
                     let in_cycle = (abs_frame_num - 1) % n;
-                    let delta_cycle = sps.offset_for_ref_frame.iter().fold(0i32, |a, &o| a.wrapping_add(o));
-                    expected = cycle_cnt.wrapping_mul(delta_cycle);
+                    let delta_cycle = sps.offset_for_ref_frame.iter().map(|&o| i64::from(o)).sum::<i64>();
+                    expected = cycle_cnt.saturating_mul(delta_cycle);
                     for &o in &sps.offset_for_ref_frame[..=in_cycle as usize] {
-                        expected = expected.wrapping_add(o);
+                        expected = expected.saturating_add(i64::from(o));
                     }
                 }
                 if sh.nal_ref_idc == 0 {
-                    expected = expected.wrapping_add(sps.offset_for_non_ref_pic);
+                    expected = expected.saturating_add(i64::from(sps.offset_for_non_ref_pic));
                 }
-                let top = expected.wrapping_add(sh.delta_pic_order_cnt[0]);
-                let bottom = top.wrapping_add(sps.offset_for_top_to_bottom_field).wrapping_add(sh.delta_pic_order_cnt[1]);
+                let top = expected.saturating_add(i64::from(sh.delta_pic_order_cnt[0])).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+                let bottom = i64::from(top)
+                    .saturating_add(i64::from(sps.offset_for_top_to_bottom_field))
+                    .saturating_add(i64::from(sh.delta_pic_order_cnt[1]))
+                    .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
                 Poc { top, bottom, msb: 0, frame_num_offset }
             }
             _ => {
@@ -502,9 +505,9 @@ impl PocState {
                 let temp = if sh.idr {
                     0
                 } else if sh.nal_ref_idc == 0 {
-                    2i32.wrapping_mul(frame_num_offset.wrapping_add(sh.frame_num as i32)).wrapping_sub(1)
+                    2i32.saturating_mul(frame_num_offset.saturating_add(sh.frame_num as i32)).saturating_sub(1)
                 } else {
-                    2i32.wrapping_mul(frame_num_offset.wrapping_add(sh.frame_num as i32))
+                    2i32.saturating_mul(frame_num_offset.saturating_add(sh.frame_num as i32))
                 };
                 Poc { top: temp, bottom: temp, msb: 0, frame_num_offset }
             }
@@ -515,7 +518,7 @@ impl PocState {
         if idr {
             0
         } else if self.prev_frame_num > frame_num {
-            self.prev_frame_num_offset.wrapping_add(sps.max_frame_num() as i32)
+            self.prev_frame_num_offset.saturating_add(sps.max_frame_num() as i32)
         } else {
             self.prev_frame_num_offset
         }
@@ -528,7 +531,7 @@ impl PocState {
         if sh.nal_ref_idc != 0 {
             if mmco5 {
                 self.prev_ref_msb = 0;
-                self.prev_ref_lsb = poc.top.wrapping_sub(poc.frame());
+                self.prev_ref_lsb = poc.top.saturating_sub(poc.frame());
             } else {
                 self.prev_ref_msb = poc.msb;
                 self.prev_ref_lsb = sh.pic_order_cnt_lsb as i32;
@@ -624,6 +627,14 @@ mod poc_tests {
         }
     }
 
+    #[test]
+    fn extreme_bottom_delta_saturates_instead_of_reversing_picture_order() {
+        let sps = sps(0);
+        let sh = header(0, 1, i32::MAX, [0, 0], 1);
+        let poc = PocState::default().compute(&sh, &sps);
+        assert_eq!((poc.top, poc.bottom), (1, i32::MAX));
+    }
+
     /// Offsets and deltas are se(v) values that a stream may set anywhere in the i32 range.
     #[test]
     fn poc_does_not_overflow_on_extreme_deltas() {
@@ -653,5 +664,24 @@ mod poc_tests {
         let poc = state.compute(&sh, &sps);
         let _ = poc.frame();
         state.update(&sh, &poc);
+    }
+
+    #[test]
+    fn poc_type1_cancellation_happens_before_clamping() {
+        let sps = sps(1);
+        let sh = header(0, 0, 0, [-i32::MAX, 0], 1);
+        let state = PocState { prev_frame_num_offset: 2, ..PocState::default() };
+        let poc = state.compute(&sh, &sps);
+        assert_eq!(poc.top, i32::MAX);
+    }
+
+    #[test]
+    fn poc_type1_saturates_only_after_wide_cycle_arithmetic_exceeds_i64() {
+        let mut sps = sps(1);
+        sps.offset_for_ref_frame = vec![i32::MAX; 255];
+        let sh = header(u32::MAX, 0, 0, [0, 0], 1);
+        let state = PocState { prev_frame_num_offset: i32::MAX, ..PocState::default() };
+        let poc = state.compute(&sh, &sps);
+        assert_eq!(poc.top, i32::MAX);
     }
 }
