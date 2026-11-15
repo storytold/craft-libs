@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn real_profile_preserves_color_tags_and_legacy_bytes() {
-        let encoded = crate::Builtin::Srgb.profile().with_encoded_bytes();
+        let encoded = crate::Builtin::Srgb.profile().clone().with_encoded_bytes();
         let input = encoded.to_bytes().to_vec();
         let normalized = normalize_for_embedding(input.clone());
         assert_eq!(normalized, legacy::align_tags(&legacy::fixed_date(input)));
