@@ -21,6 +21,29 @@ fn emphasis() {
     assert!(matches!(&s[0], Inline::Text(t, f) if t == "gone" && f.strike));
 }
 
+/// An empty `<a id>` or `<a name>` is an anchor whatever the case of its `</a>` (wordcraft#3715).
+#[test]
+fn empty_html_anchor() {
+    let anchors = |s: &str| inl(s).into_iter().filter_map(|i| if let Inline::Anchor(a) = i { Some(a) } else { None }).collect::<Vec<_>>();
+    assert_eq!(anchors(r#"x <a id="n"></a> y"#), vec!["n"]);
+    assert_eq!(anchors(r#"x <a name="m"></A> y"#), vec!["m"]);
+    assert_eq!(anchors(r#"<A id="p"></a>"#), vec!["p"]);
+    assert!(anchors(r#"<a id="n">text</a>"#).is_empty());
+    assert!(anchors(r#"<a id="n"></"#).is_empty());
+    assert!(anchors(r#"<a id="n"></aé"#).is_empty());
+}
+
+/// Every `<a …>` tag lower-cased a copy of the rest of its paragraph to look for `</a>`
+/// (wordcraft#3715): quadratic on a paragraph of tags.
+#[test]
+fn a_paragraph_of_anchor_tags_parses_in_linear_time() {
+    let src = "<a x>".repeat(1_000_000);
+    let t = std::time::Instant::now();
+    inl(&src);
+    // Well under a second now; the per-tag copy took 40 s in a release build.
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+}
+
 #[test]
 fn links_code_escapes() {
     let s = inl("see [the *site*](http://x.org \"T\") and `a*b*` \\*lit\\* &amp; <https://y.com>");
