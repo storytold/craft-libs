@@ -355,8 +355,11 @@ fn bad_parameters_and_trees_are_errors() {
         let p = good.clone().with_extradata(&good.extradata[..n]);
         assert_eq!(Decoder::new(&p).err(), Some(Error::Truncated), "{n} bytes");
     }
-    // a tree with more nodes than its declared size allows (the first tree has five nodes)
+    // a tree may have four nodes more than its declared size gives (four bytes a node), and no
+    // more: the first tree has five nodes
     let mut p = good.clone();
+    p.extradata[..4].copy_from_slice(&4u32.to_le_bytes());
+    assert!(Decoder::new(&p).is_ok());
     p.extradata[..4].fill(0);
     assert_eq!(Decoder::new(&p).err(), Some(Error::Invalid("tree has too many nodes")));
     // a hostile size is bounded by the data: branches without end
