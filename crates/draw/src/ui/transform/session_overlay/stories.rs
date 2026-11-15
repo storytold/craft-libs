@@ -6,7 +6,7 @@ use craft_behavior::CanvasView;
 use craft_behavior::geometry::quad::BoxState;
 use craft_behavior::kurbo::{Line, Rect as DocRect};
 use craft_ui::canvas::RasterSource as _;
-use craft_ui::contract::Bind;
+use craft_ui::contract::{Bind, Entry};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::pointer;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, paint_shapes};
@@ -29,7 +29,21 @@ craft_ui::words! {
         closed: "transformStory.closed" = "Closed without changes";
         /// The last session was discarded.
         discarded: "transformStory.discarded" = "Discarded";
+        /// The app's first menu row.
+        content_aware_scale: "transformStory.contentAwareScale" = "Content-Aware Scale";
+        /// The app's second menu row, disabled.
+        puppet_warp: "transformStory.puppetWarp" = "Puppet Warp";
+        /// Why Puppet Warp is disabled.
+        puppet_warp_why: "transformStory.puppetWarpWhy" = "Commit or cancel the transform first";
     }
+}
+
+/// The app's two rows after Warp: Content-Aware Scale, and Puppet Warp disabled while the box is open.
+fn app_rows(words: &TransformStoryWords) -> Vec<Entry<String>> {
+    vec![
+        Entry::new("content-aware-scale".to_owned(), words.content_aware_scale.clone()),
+        Entry::new("puppet-warp".to_owned(), words.puppet_warp.clone()).enabled(false).disabled_reason(words.puppet_warp_why.clone()),
+    ]
 }
 
 /// The layer's source frame, in document units: the story shows the layer as a box in the accent with a diagonal.
@@ -71,7 +85,19 @@ fn open(state: BoxState, settings: &TransformSettings) -> TransformSession<()> {
 /// the story's document.
 #[story(TransformOverlay<'static, ()>, covers = [Default])]
 fn transform_phase(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    run_session(ui, data, false)
+}
+
+/// The same session with the app's two menu rows after Warp in the box's right-click menu.
+#[story(TransformOverlay<'static, ()>, covers = [Default])]
+fn transform_app_rows(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    run_session(ui, data, true)
+}
+
+/// Runs the session story, with the app's menu rows when `with_rows`.
+fn run_session(ui: &mut Ui, data: &mut StoryData, with_rows: bool) -> StoryOutput {
     let words = Env::of(ui).words::<TransformStoryWords>();
+    let rows = if with_rows { app_rows(&words) } else { Vec::new() };
     let first = data.value("settings", sample_settings()).clone();
     let kept = story_tool(data, || TransformKept::new(&first));
     let settings = data.value("settings", sample_settings());
@@ -87,7 +113,7 @@ fn transform_phase(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let size = document.size();
     let picture = StoryPicture::new(size.width, size.height, move |p| paint_shapes(&layer, Color32::TRANSPARENT, p));
     let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, kept: &mut TransformKept, _: &BoxState| {
-        TransformOverlay::new("Free Transform", &kept.session, &settings).show_at(ui, at)
+        TransformOverlay::new("Free Transform", &kept.session, &settings).menu_rows(&rows).show_at(ui, at)
     };
     let frame = pointer::frame(ui.ctx());
     let story = ToolStory::new("Document", &picture);

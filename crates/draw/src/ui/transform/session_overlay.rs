@@ -5,7 +5,6 @@
 mod stories;
 
 use craft_behavior::CancelReason;
-use craft_behavior::geometry::SnapTargets;
 use craft_behavior::geometry::quad::{BoxPart, BoxRules};
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
@@ -59,27 +58,28 @@ pub struct TransformOverlay<'a, W> {
     settings: &'a TransformSettings,
     rules: Option<BoxRules>,
     pixel_grid: bool,
-    snap: Option<&'a SnapTargets>,
     mods: Option<Mods>,
-    #[allow(dead_code)] // P3(tools-w2): cw.C38
     menu_rows: &'a [Entry<String>],
-    #[allow(dead_code)] // P3(tools-w2): tl.T62
     move_reach: f32,
 }
 
 impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
     /// The overlay of `session` named `label`, with the box rules `settings` give.
     pub fn new(label: impl Into<Label>, session: &'a TransformSession<W>, settings: &'a TransformSettings) -> Self {
-        Self { label: label.into(), session, settings, rules: None, pixel_grid: false, snap: None, mods: None, menu_rows: &[], move_reach: 0.0 }
+        Self { label: label.into(), session, settings, rules: None, pixel_grid: false, mods: None, menu_rows: &[], move_reach: 0.0 }
     }
 
     /// The app's rows after Warp in the box menu; a pick is reported as [`TransformOverlayOutput::menu_row`].
+    #[must_use]
     pub fn menu_rows(mut self, rows: &'a [Entry<String>]) -> Self {
         self.menu_rows = rows;
         self
     }
 
-    /// While a session is open, a plain press within `points` screen points outside the frame moves the box (0: off).
+    /// While a session is open, a plain press within `points` screen points outside the frame moves the box (0: off),
+    /// unless it hits a handle. The press is the box's own move, so it reaches [`TransformOverlayOutput::edits`] as a
+    /// [`TransformEdit::Box`].
+    #[must_use]
     pub fn move_reach(mut self, points: f32) -> Self {
         self.move_reach = points;
         self
@@ -98,13 +98,6 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
     #[must_use]
     pub fn pixel_grid(mut self, on: bool) -> Self {
         self.pixel_grid = on;
-        self
-    }
-
-    /// The app's snapping of a dragged point.
-    #[must_use]
-    pub fn snap(mut self, snap: Option<&'a SnapTargets>) -> Self {
-        self.snap = snap;
         self
     }
 
@@ -130,8 +123,8 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             .rules(rules)
             .reference_point(session.reference_point())
             .pixel_grid(self.pixel_grid);
-        if let Some(snap) = self.snap {
-            tbox = tbox.snap(snap);
+        if self.move_reach > 0.0 {
+            tbox = tbox.move_reach(self.move_reach);
         }
         if let Some(mods) = self.mods {
             tbox = tbox.mods(mods);
@@ -141,18 +134,43 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         out.apply = shown.apply;
         out.discard = shown.discard;
         out.picked = shown.picked;
+        out.snapped = shown.snapped;
         let words = Env::of(ui).words::<TransformMenuWords>();
-        let entries = session.menu(&words);
+        let entries = splice_rows(session.menu(&words), self.menu_rows);
         if let Some(choice) = Menu::context(self.label, &shown.edit.response).pick(ui, &entries).picked {
-            out.edits.push(match choice {
-                TransformChoice::Mode(mode) => TransformEdit::Mode(mode),
-                TransformChoice::Warp => TransformEdit::WarpRequested,
-                TransformChoice::Preset(preset) => TransformEdit::Preset(preset),
-                TransformChoice::Row(_) => todo!("cw.C38"),
-            });
+            match choice {
+                TransformChoice::Mode(mode) => out.edits.push(TransformEdit::Mode(mode)),
+                TransformChoice::Warp => out.edits.push(TransformEdit::WarpRequested),
+                TransformChoice::Preset(preset) => out.edits.push(TransformEdit::Preset(preset)),
+                TransformChoice::Row(i) => out.menu_row = self.menu_rows.get(i).and_then(|row| row.value().cloned()),
+            }
         }
         out
     }
+}
+
+/// `entries` (the session's menu) with the app's `rows` after the Warp entry, set off by a separator; the presets
+/// group that follows starts with its own separator. Row `i` picks as [`TransformChoice::Row`]`(i)`.
+fn splice_rows(mut entries: Vec<Entry<TransformChoice>>, rows: &[Entry<String>]) -> Vec<Entry<TransformChoice>> {
+    if rows.is_empty() {
+        return entries;
+    }
+    let after_warp = entries.iter().position(|entry| entry.value() == Some(&TransformChoice::Warp)).map_or(entries.len(), |at| at + 1);
+    let app_rows = std::iter::once(Entry::separator()).chain(rows.iter().enumerate().map(|(i, row)| {
+        if row.is_separator() {
+            return Entry::separator();
+        }
+        if row.is_heading() {
+            return Entry::heading(row.label().clone());
+        }
+        let entry = Entry::new(TransformChoice::Row(i), row.label().clone()).checked(row.is_checked()).enabled(row.is_enabled());
+        match row.why_disabled() {
+            Some(reason) => entry.disabled_reason(reason.clone()),
+            None => entry,
+        }
+    }));
+    entries.splice(after_warp..after_warp, app_rows);
+    entries
 }
 
 /// The canvas tool while a session is open. Presses are the box's parts', so the tool ignores them. In the Box phase

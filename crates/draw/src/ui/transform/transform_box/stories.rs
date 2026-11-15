@@ -19,8 +19,13 @@ fn layer() -> StoryPicture<impl Fn(Point) -> Color32> {
     StoryPicture::new(width as u32, height as u32, move |p| paint_shapes(std::slice::from_ref(&edge), fill, p))
 }
 
-/// Shows the box `configure` builds over the story's box as the only canvas control of a canvas.
-fn on_canvas(ui: &mut Ui, data: &mut StoryData, configure: impl for<'a> Fn(TransformBox<'a>) -> TransformBox<'a>) -> StoryOutput {
+/// A box over `state` with the story's picture as its start rect.
+fn free_box(state: Bind<'_, BoxState>) -> TransformBox<'_> {
+    TransformBox::new("Free Transform", state, PICTURE, 0.0)
+}
+
+/// Shows the box `make` builds over the story's box as the only canvas control of a canvas.
+fn on_canvas(ui: &mut Ui, data: &mut StoryData, make: impl for<'a> Fn(Bind<'a, BoxState>) -> TransformBox<'a>) -> StoryOutput {
     let state = data.value("box", BoxState::from_rect(PICTURE));
     let room = craft_ui::testing::stage(ui);
     let view = craft_ui::testing::canvas_story::story_view(room, ui.pixels_per_point(), PICTURE.center(), 100.0);
@@ -28,22 +33,34 @@ fn on_canvas(ui: &mut Ui, data: &mut StoryData, configure: impl for<'a> Fn(Trans
     let shown = Canvas::new("Document").view(view).show_at(ui, room, |ui, body| {
         show_document(ui, body.rect, &StoryDocument::STANDARD);
         show_quad(ui, body.rect, "Layer", state.quad, &layer);
-        configure(TransformBox::new("Free Transform", Bind::bound(&mut *state), PICTURE, 0.0)).show_at(ui, body.rect)
+        make(Bind::bound(&mut *state)).show_at(ui, body.rect)
     });
     shown.inner.map(|output| StoryOutput::from(output.edit)).unwrap_or_default()
 }
 
 #[story(TransformBox<'static>, covers = [Default], drive = Drive::Drag(Grip::part(BOX.at(BoxPart::Corner(2).index())).toward(vec2(1.0, 1.0))))]
 fn free_transform(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    on_canvas(ui, data, |control| control.reference_point(true))
+    on_canvas(ui, data, |state| free_box(state).reference_point(true))
 }
 
 #[story(TransformBox<'static>, covers = [Default])]
 fn move_tool_controls(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    on_canvas(ui, data, |control| control.rotate_zone(RotateZone::Band).inside_moves(false).reference_point(false))
+    on_canvas(ui, data, |state| free_box(state).rotate_zone(RotateZone::Band).inside_moves(false).reference_point(false))
 }
 
 #[story(TransformBox<'static>, covers = [Default])]
 fn distort(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    on_canvas(ui, data, |control| control.rules(BoxRules::in_mode(TransformMode::Distort)))
+    on_canvas(ui, data, |state| free_box(state).rules(BoxRules::in_mode(TransformMode::Distort)))
+}
+
+/// The box of an upright paragraph frame: free sides, no rotation, no reference point.
+#[story(TransformBox<'static>, covers = [Default])]
+fn text_frame(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    on_canvas(ui, data, |state| TransformBox::text_frame("Text frame", state, PICTURE))
+}
+
+/// The same frame with its text overflowing: the lower right handle is enlarged and carries the plus.
+#[story(TransformBox<'static>, covers = [Default])]
+fn text_frame_overflow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    on_canvas(ui, data, |state| TransformBox::text_frame("Text frame", state, PICTURE).overflow(true))
 }

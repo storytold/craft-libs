@@ -410,7 +410,7 @@ impl<W: TransformWarp> TransformSession<W> {
             TransformEdit::ReferencePoint(show) => self.reference_point = show,
             TransformEdit::Pivot(anchor) => self.draft.state.pivot = self.draft.state.point_at(anchor),
             TransformEdit::WarpRequested => {
-                if self.draft.warp.is_none() {
+                if self.allow.warp && self.draft.warp.is_none() {
                     return Some(TransformRequest::NeedWarp { rect: self.rect, state: self.draft.state });
                 }
             }
@@ -488,8 +488,9 @@ impl<W: TransformWarp> TransformSession<W> {
     /// a separator, Rotate 180°, Rotate 90° Clockwise, Rotate 90° Counter Clockwise, a separator,
     /// Flip Horizontal, Flip Vertical. The current mode is checked (Scale counts as Free
     /// Transform, LC10); modes the content refuses (Distort, Perspective under
-    /// `allow.distort == false`) and every preset in the Warp phase are disabled. Puppet Warp and
-    /// Content-Aware Scale rows are the app's to add, greyed while a box is open.
+    /// `allow.distort == false`), Warp when the content refuses it (`allow.warp == false`) and every
+    /// preset in the Warp phase are disabled. Puppet Warp and Content-Aware Scale rows are the app's to
+    /// add, after Warp, with [`TransformOverlay::menu_rows`](super::TransformOverlay::menu_rows).
     pub fn menu(&self, words: &TransformMenuWords) -> Vec<Entry<TransformChoice>> {
         // pc: crates/ui-egui/src/canvas/canvas_tool_menu.rs:75 (`TRANSFORM_MENU`).
         let warping = self.phase() == TransformPhase::Warp;
@@ -506,7 +507,7 @@ impl<W: TransformWarp> TransformSession<W> {
             mode(&words.skew, TransformMode::Skew, allow.skew, self.mode == TransformMode::Skew),
             mode(&words.distort, TransformMode::Distort, allow.distort, self.mode == TransformMode::Distort),
             mode(&words.perspective, TransformMode::Perspective, allow.distort, self.mode == TransformMode::Perspective),
-            Entry::new(TransformChoice::Warp, words.warp.clone()).checked(warping),
+            Entry::new(TransformChoice::Warp, words.warp.clone()).checked(warping).enabled(allow.warp),
             Entry::separator(),
             preset(&words.rotate_180, TransformPreset::Rotate180),
             preset(&words.rotate_90_clockwise, TransformPreset::Rotate90Clockwise),

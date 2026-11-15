@@ -111,7 +111,8 @@ pub struct TransformSettings {
     /// The W and H fields' link (the chain button), kept between sessions.
     pub aspect_linked: bool,
     /// Show Reference Point: off by default (Photoshop CC 2019 and later, LC2). Hidden, the point
-    /// is not drawn, hit or picked; its stored position still pivots ⌥ scaling and rotating.
+    /// is not hit or picked and is drawn only while it is dragged; an ⌥ press away from the handles still moves it, and
+    /// its stored position pivots ⌥ scaling and rotating.
     pub show_reference_point: bool,
     /// The interpolation a new session starts with; `None` follows the General preference until one is picked.
     pub interpolation: Option<Interpolation>,

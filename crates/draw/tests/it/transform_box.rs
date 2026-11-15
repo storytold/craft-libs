@@ -1,20 +1,22 @@
 //! `TransformBox`, `TransformOverlay` and `TransformTool`: the parts the pointer takes, what each drag does, the
 //! keys, the readout and the overlay's edits.
 
-use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState};
-use craft_behavior::geometry::{SnapKind, SnapTarget, SnapTargets};
+use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, ScaleRule};
+use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect};
-use craft_behavior::{CanvasView, EditEvent};
-use craft_draw::ui::transform::{RotateZone, TransformBox};
+use craft_behavior::{CanvasView, EditEvent, RulerUnits, Ticks};
+use craft_draw::ui::transform::{RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformSession, TransformSettings};
 use craft_keymap::{Mods, Platform};
-use craft_ui::canvas::Canvas;
+use craft_ui::canvas::{Canvas, RulerText, Snap};
 use craft_ui::canvas::{Guide, GuideKey};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Pos2, Vec2};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// The box before any drag, in document units.
 const RECT: Rect = Rect::new(100.0, 80.0, 300.0, 220.0);
@@ -40,6 +42,11 @@ struct Config {
     flip: bool,
     guides: bool,
     snap: bool,
+    /// The box is `TransformBox::text_frame`; `rules`, `zone`, `inside_moves` and `reference_point` are then unused.
+    text_frame: bool,
+    overflow: bool,
+    /// The canvas's rulers on both axes.
+    rulers: Option<RulerText>,
 }
 
 /// What the host keeps of the box and what the passes reported.
@@ -59,6 +66,8 @@ struct Host {
 struct Harness {
     fixture: Fixture,
     host: Rc<RefCell<Host>>,
+    /// What the next pass shows; a trial changes it between frames (a modifier pressed mid-drag).
+    config: Rc<RefCell<Config>>,
 }
 
 fn defaults() -> Config {
@@ -73,6 +82,9 @@ fn defaults() -> Config {
         flip: false,
         guides: false,
         snap: false,
+        text_frame: false,
+        overflow: false,
+        rulers: None,
     }
 }
 
@@ -80,6 +92,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
     let mut config = defaults();
     setup(&mut config);
     let shown_config = Rc::new(RefCell::new(config));
+    let kept_config = Rc::clone(&shown_config);
     let host = Rc::new(RefCell::new(Host {
         state,
         before: None,
@@ -98,6 +111,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
     for x in SNAP_XS {
         targets.add(SnapTarget::new(craft_behavior::Axis::Y, x, SnapKind::Guide));
     }
+    let snap = Snap::new(Arc::new(targets), SnapOptions::default());
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let config = shown_config.borrow().clone();
@@ -109,23 +123,31 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             host.view = view;
             host.state
         };
-        let canvas = Canvas::new("Document").view(view).show(ui, |ui, body| {
+        let mut canvas = Canvas::new("Document").view(view);
+        if config.snap {
+            canvas = canvas.snap(snap.clone());
+        }
+        if let Some(ruler) = config.rulers {
+            canvas = canvas.rulers(ruler, ruler, Point::ZERO);
+        }
+        let canvas = canvas.show(ui, |ui, body| {
             let mut guide_edits = 0;
             if config.guides {
                 let output = Guides::new("Guides", Bind::bound(&mut guides)).interactive(true).show_at(ui, body.rect);
                 guide_edits = usize::from(!output.edit.events.is_empty());
             }
-            let mut control = TransformBox::new("Free Transform", Bind::given(state), RECT, 0.0)
-                .rules(config.rules)
-                .rotate_zone(config.zone)
-                .inside_moves(config.inside_moves)
-                .reference_point(config.reference_point)
-                .pixel_grid(config.pixel_grid);
+            let mut control = if config.text_frame {
+                TransformBox::text_frame("Free Transform", Bind::given(state), RECT).overflow(config.overflow)
+            } else {
+                TransformBox::new("Free Transform", Bind::given(state), RECT, 0.0)
+                    .rules(config.rules)
+                    .rotate_zone(config.zone)
+                    .inside_moves(config.inside_moves)
+                    .reference_point(config.reference_point)
+            }
+            .pixel_grid(config.pixel_grid);
             if let Some(mods) = config.mods {
                 control = control.mods(mods);
-            }
-            if config.snap {
-                control = control.snap(&targets);
             }
             (control.show_at(ui, body.rect), guide_edits)
         });
@@ -164,7 +186,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
         }
     });
     fixture.settle();
-    Harness { fixture, host }
+    Harness { fixture, host, config: kept_config }
 }
 
 fn upright() -> Harness {
@@ -237,6 +259,8 @@ fn the_control_key_turns_snapping_off_unless_it_distorts_the_dragged_corner() {
             let mut h = harness(BoxState::from_rect(RECT), |config| {
                 config.snap = true;
                 config.mods = held;
+                // Unlinked, so a plain corner drag follows the pointer exactly and the snapped corner lands on 310.
+                config.rules = BoxRules::default().with_aspect_linked(false);
             });
             h.fixture.os(os);
             let from = h.screen(at);
@@ -251,4 +275,208 @@ fn the_control_key_turns_snapping_off_unless_it_distorts_the_dragged_corner() {
             assert!((moved - expected).abs() < 1e-6, "{os:?} {held:?} at {at:?}: moved {moved}, expected {expected}");
         }
     }
+}
+
+/// The box's rules with a plain corner or edge drag following the pointer exactly.
+fn free_rules() -> BoxRules {
+    BoxRules::default().with_scale(ScaleRule::Free).with_aspect_linked(false)
+}
+
+/// Moves the pointer to `at` and lets the pass settle, so the hovered part is the one under `at`.
+fn hover(h: &mut Harness, at: Point) {
+    let to = h.screen(at);
+    frame(h, vec![pointer::moved(to)]);
+    frame(h, Vec::new());
+}
+
+/// Presses at `from`, moves in two steps (the first starts the drag) to `to`, and releases there.
+fn drag(h: &mut Harness, from: Point, to: Point) {
+    let (start, end) = (h.screen(from), h.screen(to));
+    frame(h, vec![pointer::moved(start)]);
+    frame(h, vec![pointer::press(start)]);
+    frame(h, vec![pointer::moved(start + (end - start) * 0.5)]);
+    frame(h, vec![pointer::moved(end)]);
+    frame(h, vec![pointer::release(end)]);
+    frame(h, Vec::new());
+}
+
+#[trial]
+fn an_edge_takes_a_press_along_its_side_and_a_corner_wins_where_both_reach() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.rules = free_rules());
+    // The right edge runs from (300, 80) to (300, 220); its middle is (300, 150).
+    hover(&mut h, Point::new(300.0, 110.0));
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(1)), "a press along the side, away from its middle and from the corners");
+    hover(&mut h, Point::new(300.0, 84.0));
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(1)), "where a corner and the side both reach, the corner");
+    hover(&mut h, Point::new(300.0, 150.0));
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(1)), "the middle still takes the edge");
+    drag(&mut h, Point::new(300.0, 110.0), Point::new(320.0, 110.0));
+    let quad = h.state().quad;
+    assert!((quad[1].x - 320.0).abs() < 1e-6 && (quad[2].x - 320.0).abs() < 1e-6, "the dragged side moved: {quad:?}");
+    assert!((quad[0].x - RECT.x0).abs() < 1e-6 && (quad[3].x - RECT.x0).abs() < 1e-6, "the far side stayed: {quad:?}");
+}
+
+#[trial]
+fn a_hidden_reference_point_still_follows_alt_and_the_centre_moves_a_small_box() {
+    // An Alt press inside moves the hidden point to the press, and a drag moves it on.
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.reference_point = false;
+        config.mods = Some(Mods::ALT);
+    });
+    drag(&mut h, Point::new(150.0, 120.0), Point::new(170.0, 130.0));
+    let pivot = h.state().pivot;
+    assert!((pivot.x - 170.0).abs() < 0.5 && (pivot.y - 130.0).abs() < 0.5, "the pivot follows the Alt drag: {pivot:?}");
+    assert_eq!(h.state().quad, BoxState::from_rect(RECT).quad, "the box itself did not move");
+
+    // A box smaller than two handle reaches: its middle is the whole box's.
+    let small = Rect::new(100.0, 80.0, 110.0, 90.0);
+    let mut h = harness(BoxState::from_rect(small), |config| config.reference_point = false);
+    drag(&mut h, Point::new(105.0, 85.0), Point::new(135.0, 105.0));
+    let corner = h.state().quad[0];
+    assert!((corner.x - 130.0).abs() < 1.0 && (corner.y - 100.0).abs() < 1.0, "the small box moved by the drag: {corner:?}");
+}
+
+#[trial]
+fn a_text_frame_edge_drag_stops_at_its_minimum_side_and_alt_mirrors_about_the_centre_also_mid_drag() {
+    let edge = Point::new(300.0, 110.0);
+    let past = Point::new(50.0, 110.0);
+    let text = |mods: Option<Mods>| {
+        harness(BoxState::from_rect(RECT), |config| {
+            config.text_frame = true;
+            config.mods = mods;
+        })
+    };
+
+    let mut h = text(None);
+    drag(&mut h, edge, past);
+    let quad = h.state().quad;
+    assert!((quad[1].x - quad[0].x - 4.0).abs() < 1e-6, "the dragged side stops 4 units from the opposite one: {quad:?}");
+
+    let mut h = text(Some(Mods::ALT));
+    drag(&mut h, edge, past);
+    let quad = h.state().quad;
+    assert!((quad[0].x - 198.0).abs() < 1e-6 && (quad[1].x - 202.0).abs() < 1e-6, "both sides stop 2 units from the centre: {quad:?}");
+
+    // Alt pressed during the drag: the next move mirrors.
+    let mut h = text(None);
+    let (start, mid, end) = (h.screen(edge), h.screen(Point::new(290.0, 110.0)), h.screen(past));
+    frame(&mut h, vec![pointer::moved(start)]);
+    frame(&mut h, vec![pointer::press(start)]);
+    frame(&mut h, vec![pointer::moved(mid)]);
+    frame(&mut h, vec![pointer::moved(mid + by(-4.0, 0.0))]);
+    h.config.borrow_mut().mods = Some(Mods::ALT);
+    frame(&mut h, vec![pointer::moved(end)]);
+    frame(&mut h, vec![pointer::release(end)]);
+    let quad = h.state().quad;
+    assert!((quad[0].x - 198.0).abs() < 1e-6 && (quad[1].x - 202.0).abs() < 1e-6, "Alt pressed mid-drag mirrors on the next move: {quad:?}");
+}
+
+#[trial]
+fn a_scale_drag_reads_its_size_in_the_ruler_unit_and_percent_only_in_percent_rulers() {
+    // A corner drag from 200 x 140 to 300 x 210 document units; the box follows the pointer.
+    let held = |ruler: RulerText| {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.rules = free_rules();
+            config.rulers = Some(ruler);
+        });
+        let start = h.screen(Point::new(300.0, 220.0));
+        frame(&mut h, vec![pointer::moved(start)]);
+        frame(&mut h, vec![pointer::press(start)]);
+        frame(&mut h, vec![pointer::moved(start + by(50.0, 35.0))]);
+        frame(&mut h, vec![pointer::moved(start + by(100.0, 70.0))]);
+        h.fixture.texts().iter().map(|run| run.text.clone()).collect::<Vec<_>>()
+    };
+    // The readout paints each row as the label's run and then the value's run.
+    let value_after = |texts: &[String], label: &str| -> String {
+        let at = texts.iter().position(|text| text == label).unwrap_or_else(|| panic!("no {label:?} row: {texts:?}"));
+        texts.get(at + 1).cloned().unwrap_or_default()
+    };
+    let inches = RulerText::new(RulerUnits::new(0.01, Ticks::decimal(false)), UnitKind::Inches);
+    let texts = held(inches);
+    let (width, height) = (value_after(&texts, "W:"), value_after(&texts, "H:"));
+    assert!(width.contains("3.0"), "the width in inches: {width:?} in {texts:?}");
+    assert!(height.contains("2.1"), "the height in inches: {height:?} in {texts:?}");
+    assert!(!texts.iter().any(|text| text.contains('%')), "no percent in an inch ruler: {texts:?}");
+
+    let percent = RulerText::new(RulerUnits::pixels(), UnitKind::Percent);
+    let texts = held(percent);
+    let width = value_after(&texts, "W:");
+    assert!(width.contains("150.0") && width.contains('%'), "the scale in percent: {width:?} in {texts:?}");
+}
+
+#[trial]
+fn the_whole_enlarged_overflow_handle_grabs_in_a_turned_view_and_a_short_box_keeps_its_middle_handles() {
+    let turned = |state: BoxState| {
+        harness(state, |config| {
+            config.text_frame = true;
+            config.overflow = true;
+            config.rotation = 30.0;
+        })
+    };
+    let mut h = turned(BoxState::from_rect(RECT));
+    let corner = h.screen(Point::new(RECT.x1, RECT.y1));
+    // The enlarged square is drawn upright on the screen: every part of it takes corner 2.
+    for (dx, dy) in [(-5.0, -5.0), (5.0, -5.0), (-5.0, 5.0), (5.0, 5.0), (0.0, 0.0)] {
+        frame(&mut h, vec![pointer::moved(corner + by(dx, dy))]);
+        frame(&mut h, Vec::new());
+        assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(2)), "offset ({dx}, {dy}) on the enlarged handle");
+    }
+
+    let short = Rect::new(100.0, 80.0, 300.0, 90.0);
+    let mut h = turned(BoxState::from_rect(short));
+    hover(&mut h, Point::new(200.0, 80.0));
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(0)), "the top middle handle of a short box");
+    hover(&mut h, Point::new(200.0, 90.0));
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(2)), "the bottom middle handle of a short box");
+}
+
+#[trial]
+fn a_press_in_the_move_reach_moves_the_box_and_a_handle_still_scales() {
+    // The overlay's own zone is `RotateZone::Outside`; the band's order against the ring is not reachable from here
+    // (`TransformBox::move_reach` is crate-private). The reach is the type tool's (38 points): a side's segment takes a
+    // press up to half the hit target (at most 16 points) from it, and the ring the rest of the reach.
+    let session = Rc::new(RefCell::new(TransformSession::<()>::new(RECT)));
+    let view = Rc::new(RefCell::new(CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0)));
+    let (shown_session, shown_view) = (Rc::clone(&session), Rc::clone(&view));
+    let settings = TransformSettings::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
+        *shown_view.borrow_mut() = at;
+        let edits = Canvas::new("Document").view(at).show(ui, |ui, body| {
+            let session = shown_session.borrow();
+            TransformOverlay::new("Free Transform", &session, &settings).move_reach(38.0).show_at(ui, body.rect).edits
+        });
+        let mut session = shown_session.borrow_mut();
+        for edit in edits.inner.unwrap_or_default() {
+            let edit: TransformEdit<()> = edit;
+            session.apply(edit, 0.0);
+        }
+    });
+    fixture.settle();
+    let screen = |p: Point| view.borrow().to_screen(p);
+    let mut drag = |from: Point, to: Point| {
+        let (start, end) = (screen(from), screen(to));
+        fixture.frame(vec![pointer::moved(start)]);
+        fixture.frame(vec![pointer::press(start)]);
+        fixture.frame(vec![pointer::moved(start + (end - start) * 0.5)]);
+        fixture.frame(vec![pointer::moved(end)]);
+        fixture.frame(vec![pointer::release(end)]);
+        fixture.frame(Vec::new());
+    };
+    let size = |quad: [Point; 4]| (quad[1] - quad[0]).hypot() * (quad[3] - quad[0]).hypot();
+
+    // 24 points outside the right side, past the side's segment and away from its handles: the box moves and keeps its
+    // size.
+    let before = session.borrow().quad();
+    drag(Point::new(324.0, 100.0), Point::new(354.0, 120.0));
+    let after = session.borrow().quad();
+    assert!(((after[0].x - before[0].x) - 30.0).abs() < 1e-6 && ((after[0].y - before[0].y) - 20.0).abs() < 1e-6, "the box translates: {before:?} -> {after:?}");
+    assert!((size(after) - size(before)).abs() < 1e-6, "the move keeps the size");
+
+    // A corner handle inside the same reach still scales.
+    let corner = after[2];
+    drag(corner, Point::new(corner.x + 40.0, corner.y + 28.0));
+    let scaled = session.borrow().quad();
+    assert!(size(scaled) > size(after) + 1.0, "a corner drag scales: {after:?} -> {scaled:?}");
 }
