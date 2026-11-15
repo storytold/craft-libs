@@ -60,6 +60,7 @@ pub mod asl;
 pub mod atn;
 pub mod blend;
 pub mod builder;
+pub mod channel_resources;
 mod codepage;
 pub mod compression;
 pub mod csh;
@@ -102,6 +103,7 @@ pub mod testgen;
 pub mod text;
 pub mod tiff;
 pub mod tree;
+pub mod unicode_names;
 
 pub use blend::BlendMode;
 pub use builder::{GroupSpec, LayerSpec, MaskSpec, PixelData, PsdBuilder};
