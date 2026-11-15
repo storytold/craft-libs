@@ -511,7 +511,7 @@ fn parse_use_tree(
     pos: &mut usize,
     prefix: &mut Vec<Rc<str>>,
     // The index of the `use` keyword, the alias of `std::time` that `prefix` was read through, and whether
-    // `prefix` started with `::`.
+    // the path starts with `::`.
     (start, mut via, mut absolute): (usize, Option<usize>, bool),
     out: &mut Vec<UseLeaf>,
     time_aliases: &BTreeSet<String>,
@@ -519,10 +519,8 @@ fn parse_use_tree(
 ) {
     let base = prefix.len();
     if toks.get(*pos).is_some_and(|t| t.is_punct(':')) && toks.get(*pos + 1).is_some_and(|t| t.is_punct(':')) {
+        absolute |= prefix.is_empty();
         *pos += 2;
-        if base == 0 {
-            absolute = true;
-        }
     }
     // A leaf is reported on the line where its path starts in this tree, not where its last name is.
     let line = toks.get(*pos).map_or(0, |t| t.line);
@@ -750,6 +748,20 @@ fn starts_block(toks: &[Token], j: usize) -> bool {
     }
 }
 
+/// Whether the `{` at `toks[j]`, in the condition, scrutinee or iterator of an `if`, `while`, `match` or
+/// `for`, stands where an operand is still needed, so it opens a block expression rather than the body:
+/// right after the keyword, after `in`, after the `=` of a `let`, after an operator or `!`, after
+/// `unsafe`, `const`, `loop`, `async` or `async move`, or after a loop label's `:`.
+fn operand_expected(toks: &[Token], j: usize) -> bool {
+    let Some(k) = j.checked_sub(1) else { return false };
+    match &toks[k].kind {
+        Kind::Ident(prev) => matches!(prev.as_str(), "if" | "while" | "match" | "in" | "unsafe" | "const" | "loop" | "async" | "move"),
+        Kind::Punct('=' | '+' | '-' | '*' | '/' | '%' | '^' | '|' | '&' | '<' | '>' | '!') => true,
+        Kind::Punct(':') => k.checked_sub(1).is_some_and(|l| toks[l].kind == Kind::Other),
+        _ => false,
+    }
+}
+
 /// The index after the item, statement, field or match arm that starts at `start`, or with `inner`, the
 /// index of the bracket that closes the enclosing scope.
 ///
@@ -763,7 +775,9 @@ fn starts_block(toks: &[Token], j: usize) -> bool {
 /// brackets of a field's or a `let`'s type ends the item early, which leaves the rest of it checked.
 ///
 /// The body of an `if`, `while`, `match` or `for` at the head is the first `{` outside brackets after its
-/// condition, scrutinee or iterator. A `{` in the pattern of a `let` (`if let S { .. } = s`, also after
+/// condition, scrutinee or iterator. A `{` where the condition still needs an operand (see
+/// [`operand_expected`]) opens a block expression in it, as in `if { ready() } { ... }`, and the body is
+/// the next `{` after that block. A `{` in the pattern of a `let` (`if let S { .. } = s`, also after
 /// `&&` in a chain) or of a `for` opens a struct pattern and does not end the item. An `else` chain ends
 /// at its last block.
 ///
@@ -807,7 +821,11 @@ fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
             Kind::Ident(k) if at_top && condition == Condition::Pattern && k == "in" => condition = Condition::Expression,
             Kind::Punct('=') if at_top && condition == Condition::Pattern && lone_equals(toks, j) => condition = Condition::Expression,
             Kind::Punct('{') if at_top && condition == Condition::Expression => {
-                condition = Condition::Done;
+                // A `{` where the condition still needs an operand opens a block expression inside it
+                // (`if { ready() } { ... }`); the body's `{` comes after the condition's last operand.
+                if !operand_expected(toks, j) {
+                    condition = Condition::Done;
+                }
                 depth += 1;
             }
             Kind::Ident(k) if at_top && VALUE_KEYWORDS.contains(&k.as_str()) => head = false,
@@ -916,6 +934,48 @@ fn cfg_covered(toks: &[Token], any: bool) -> Vec<bool> {
         i = end.max(i + 1);
     }
     skip
+}
+
+/// The index of the keyword of every item that carries an outer `cfg` attribute of its own whose predicate
+/// is not known to be true on `wasm32-unknown-unknown`, so the item may be absent from the web build: the
+/// token after the item's outer attributes and its visibility (`pub`, `pub(...)`).
+fn cfg_items(toks: &[Token]) -> BTreeSet<usize> {
+    let mut items = BTreeSet::new();
+    let mut i = 0;
+    while i < toks.len() {
+        let cfg = toks[i].is_punct('#')
+            && toks.get(i + 1).is_some_and(|t| t.is_punct('['))
+            && toks.get(i + 2).is_some_and(|t| t.is_ident("cfg"))
+            && toks.get(i + 3).is_some_and(|t| t.is_punct('('));
+        if !cfg {
+            i += 1;
+            continue;
+        }
+        let close = matching_close(toks, i + 1);
+        if close >= toks.len() {
+            break;
+        }
+        let mut pos = i + 4;
+        if eval_cfg(&toks[..close], &mut pos, 0) == Tri::True {
+            i = close + 1;
+            continue;
+        }
+        let mut item = close + 1;
+        while item < toks.len() && toks[item].is_punct('#') && toks.get(item + 1).is_some_and(|t| t.is_punct('[')) {
+            item = matching_close(toks, item + 1).saturating_add(1);
+        }
+        if toks.get(item).is_some_and(|t| t.is_ident("pub")) {
+            item += 1;
+            if toks.get(item).is_some_and(|t| t.is_punct('(')) {
+                item = matching_close(toks, item).saturating_add(1);
+            }
+        }
+        if item < toks.len() {
+            items.insert(item);
+        }
+        i = item.max(i + 1);
+    }
+    items
 }
 
 /// A module declaration, `mod name;` or the head of `mod name { ... }`.
@@ -1451,7 +1511,9 @@ fn muda_crate_bindings<'a>(
 /// imported under (`use muda as menu;`, `use muda::{self as menu};`, `extern crate muda as menu;`) is read
 /// like `muda` in the braces that bind it, so `menu::PredefinedMenuItem::quit` is reported there. It also
 /// follows a `use` or a `type` alias that renames muda's type (`use muda::PredefinedMenuItem as Item;` then
-/// `Item::quit`); a rename of another crate's `PredefinedMenuItem` is not followed.
+/// `Item::quit`); a rename of another crate's `PredefinedMenuItem` is not followed, including one through a
+/// name `muda` that the braces around the `use` or `type` bind to something else, read as for a qualified
+/// path.
 ///
 /// A name used on its own (`PredefinedMenuItem::quit`, `Item::quit`) is read in the innermost braces
 /// around it, within its module, or the file, that bind the name. It is reported when those braces
@@ -1691,7 +1753,9 @@ where
 /// * **Limitations**: This is a lexical source guard. It does not expand macros, resolve paths through other
 ///   modules or re-exports, or rename `std` itself (`use std as s;`). An alias of `std::time` counts inside the
 ///   braces of its `use` (or the file), down to but not into the body of a nested `mod`; nearer braces whose
-///   `use` or `mod` binds the same name to something else hide it.
+///   `use` or `mod` binds the same name to something else hide it, unless that `use` or `mod` carries a `cfg`
+///   attribute of its own that is not known to be true on `wasm32-unknown-unknown`, which may leave it out of
+///   the web build.
 pub fn std_instant<I>(files: I) -> Vec<Finding>
 where
     I: IntoIterator,
@@ -1725,14 +1789,19 @@ where
             .filter_map(|leaf| leaf.binding().map(str::to_owned))
             .collect();
         // For each alias name and each pair of braces (`None` for the file), whether a `use` in it binds
-        // the name to `std::time`, and whether a `use` or a `mod` in it binds the name to something else.
+        // the name to `std::time`, and whether a `use` or a `mod` binds the name to something else, unless
+        // its own `cfg` attribute may be false on the web.
         let (around, _) = brace_scopes(&toks);
+        let gated = cfg_items(&toks);
         let mut bound: BTreeMap<(&str, Option<usize>), (bool, bool)> = BTreeMap::new();
         for leaf in &leaves {
             let Some(name) = leaf.binding().filter(|name| modules.contains(*name)) else { continue };
-            if !skip.get(leaf.start).copied().unwrap_or(false) {
+            let time = leaf.path == ["std", "time"];
+            // A `use` of something else that carries a `cfg` attribute of its own that may be false on the
+            // web may be absent from the web build, so it does not hide an outer alias.
+            if !skip.get(leaf.start).copied().unwrap_or(false) && (time || !gated.contains(&leaf.start)) {
                 let entry = bound.entry((name, around.get(leaf.start).copied().flatten())).or_default();
-                if leaf.path == ["std", "time"] {
+                if time {
                     entry.0 = true;
                 } else {
                     entry.1 = true;
@@ -1743,7 +1812,7 @@ where
             if let Kind::Ident(name) = &t.kind
                 && modules.contains(name)
                 && !skip[i]
-                && i.checked_sub(1).is_some_and(|k| toks[k].is_ident("mod"))
+                && i.checked_sub(1).is_some_and(|k| toks[k].is_ident("mod") && !gated.contains(&k))
             {
                 bound.entry((name.as_str(), around[i])).or_default().1 = true;
             }
