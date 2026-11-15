@@ -214,6 +214,14 @@ impl ToneChannels {
         Self { channels: vec![channel], gray: false, isolated: true }
     }
 
+    /// The channels of a colour set the host isolated (Image › Curves with several Channels-panel targets
+    /// selected, storytold/photocraft#5335), in Channel-select order: a combined entry (a neutral
+    /// [`Named`](ToneChannel::Named) channel) and then the selected components. No entry is a composite, so Curves
+    /// overlays no other channel.
+    pub fn listed(channels: Vec<ToneChannel>) -> Self {
+        Self { channels, gray: false, isolated: false }
+    }
+
     /// The channels in order.
     pub fn as_slice(&self) -> &[ToneChannel] {
         &self.channels
@@ -224,7 +232,7 @@ impl ToneChannels {
         self.channels.len()
     }
 
-    /// Whether the list is empty (never for [`of`](Self::of)).
+    /// Whether the list is empty (never for [`of`](Self::of) and [`isolated`](Self::isolated)).
     pub fn is_empty(&self) -> bool {
         self.channels.is_empty()
     }
