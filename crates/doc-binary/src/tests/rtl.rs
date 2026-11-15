@@ -364,3 +364,30 @@ fn direction_split_on_a_row_without_a_def_table() {
     // Without a sprmTDefTable the row-end mark always ends a cell (the column count is unknown).
     assert_eq!(table_cell_texts(&doc), vec![vec![vec!["a".to_string()]], vec![vec!["b".to_string(), String::new()]]]);
 }
+
+#[test]
+fn a_run_toggle_inverts_its_paragraph_styles_value() {
+    // [MS-DOC] §2.6.1: a ToggleOperand of 0x81 is the opposite of the style's value. The text
+    // runs of a paragraph were formatted before its style was known (the style comes from the
+    // PAPX at the paragraph mark), so 0x81 inverted the default instead: a run inverting the
+    // direction of a right-to-left style came out right to left, and a run inverting a bold
+    // style came out bold. The runs keep only their own formatting; the style stays the style.
+    let style_chpx = grpprl(&[(0x085A, &[0x01]), (0x0835, &[0x01])]);
+    let spec = RichSpec {
+        text: "ab\rcd\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new()), (1, 0, "Arabic Bold", grpprl(&[(0x2441, &[0x01])]), style_chpx)],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, grpprl(&[(0x085A, &[0x81]), (0x0835, &[0x81])])), (1, Vec::new()), (3, grpprl(&[(0x085A, &[0x81])]))],
+        papx_entries: vec![(2, 1, Vec::new()), (5, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    let [styled, normal] = &paras[..] else { panic!("{paras:?}") };
+    assert_eq!(styled.props.style.as_deref(), Some("Arabic Bold"));
+    let first = &styled.runs[0].props;
+    assert_eq!((first.rtl, first.bold), (Some(false), Some(false)), "0x81 inverts the style's right to left and bold");
+    let second = &styled.runs[1].props;
+    assert_eq!((second.rtl, second.bold, second.font.as_deref()), (None, None, None), "a run without sprms keeps only its own formatting");
+    // Under Normal (left to right), 0x81 still makes the run right to left.
+    assert_eq!(normal.runs[0].props.rtl, Some(true));
+}

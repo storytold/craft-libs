@@ -677,7 +677,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     // Field assembly state: instruction characters are swallowed, the result is kept until
     // the end character, then emitted as one object (hyperlinks keep their result text).
     let mut field: Option<FieldBuild> = None;
-    let mut fmt = FmtState::default();
+    let mut fmt = FmtState { cp_end, ..FmtState::default() };
     while cp < cp_end {
         // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
         // an empty table and `cp` never matches the main-document CPs).
@@ -765,7 +765,9 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     pb.props.numbering = Some(NumRef { num, level: ilvl });
                 }
                 let fc = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
-                pb.mark = char_props(ctx.chpx_bins.chpx(ctx.word, fc), ctx.fonts, &CharProps::default());
+                let default = CharProps::default();
+                let base = pb.props.style.as_deref().and_then(|id| ctx.sheet.get(id)).map_or(&default, |s| &s.chr);
+                pb.mark = char_props(ctx.chpx_bins.chpx(ctx.word, fc), ctx.fonts, base);
                 let done = std::mem::take(&mut pb);
                 out.push(ParaOut {
                     para: Paragraph {
@@ -1017,7 +1019,12 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
     };
     let grpprl = run.grpprl;
     let prm = span.map_or(0, |s| s.prm());
-    let style = pb.props.style.as_deref();
+    // The paragraph's style is read at its mark, after its text: look ahead to the mark once per
+    // paragraph so toggle sprms resolve against the style ([MS-DOC] §2.6.1).
+    if st.para_style.as_ref().is_none_or(|(end, _)| cp > *end) {
+        st.para_style = Some(paragraph_style_ahead(ctx, cp, st.cp_end));
+    }
+    let style = st.para_style.as_ref().and_then(|(_, s)| s.as_deref());
     let hit = st.memo.as_ref().is_some_and(|m| std::ptr::eq(m.chpx, grpprl) && m.prm == prm && m.style.as_deref() == style);
     if !hit {
         let default;
@@ -1072,6 +1079,39 @@ struct FmtState<'a> {
     memo: Option<FmtMemo<'a>>,
     /// Counts the memo's replacements, so equal values mean the same properties.
     generation: u64,
+    /// The end of the walked story, where [`paragraph_style_ahead`] stops.
+    cp_end: u32,
+    /// The current paragraph's mark CP (or `cp_end` when no mark follows) and its style id, from
+    /// [`paragraph_style_ahead`]: valid for every CP up to that one.
+    para_style: Option<(u32, Option<String>)>,
+}
+
+/// The style id of the paragraph `cp` is in, as the walk reads it at the paragraph's mark (the
+/// PAPX at the mark's FC, [MS-DOC] §2.4.2), and that mark's CP; `(cp_end, None)` when the story
+/// has no further mark. The marks are found as [`walk`] finds them.
+///
+/// Cost: it reads up to the next mark, characters the walk then reads and charges to the
+/// character budget itself; a walk with no budget left stops before formatting anything. So the
+/// look-ahead only reads past what the budget pays for in the one paragraph where the budget runs
+/// out, and repeated story ranges over the same text can't multiply it.
+fn paragraph_style_ahead(ctx: &WalkCtx<'_>, cp: u32, cp_end: u32) -> (u32, Option<String>) {
+    let mut at = cp;
+    while at < cp_end {
+        match ctx.pieces.char_at(ctx.word, at) {
+            Ok((c, units)) => {
+                let section_mark = c == '\u{C}' && ctx.sect_ends.binary_search(&at.saturating_add(1)).is_ok();
+                if matches!(c, '\r' | '\u{7}') || section_mark {
+                    let fc = ctx.pieces.fc_of_cp(at).unwrap_or(0);
+                    let (istd, _) = ctx.papx_bins.papx(ctx.word, fc);
+                    let style = ctx.raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()).map(|s| fmt::style_id(&s.name));
+                    return (at, style);
+                }
+                at = at.saturating_add(units);
+            }
+            Err(next) => at = next,
+        }
+    }
+    (cp_end, None)
 }
 
 /// The last character formatting resolved, reused while the CHPX, the piece's Prm and the
@@ -1142,9 +1182,10 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
     }
 }
 
-/// Character props from a CHPX grpprl applied over `base`.
+/// The character properties a CHPX grpprl sets itself: the style's stay with the style. `base` is
+/// the style's formatting, against which toggle operands (0x80, 0x81) resolve.
 fn char_props(grpprl: &[u8], fonts: &[String], base: &CharProps) -> CharProps {
-    let mut p = base.clone();
+    let mut p = CharProps::default();
     for prl in sprm::iter(grpprl) {
         if prl.sgc() == 2 {
             fmt::apply_char(&mut p, &prl, base, fonts);
