@@ -1,9 +1,3 @@
-<!--
-tags: [flip-vertical, mirror, reflect, flip, symmetry, image-edit, transform, vertical]
-category: Design
-version: "1.0"
-unicode: "eaa8"
--->
 <svg
   xmlns="http://www.w3.org/2000/svg"
   width="24"
@@ -14,7 +8,9 @@ unicode: "eaa8"
   stroke-width="2"
   stroke-linecap="round"
   stroke-linejoin="round"
+  class="icon icon-tabler icons-tabler-outline icon-tabler-flip-vertical"
 >
+  <path stroke="none" d="M0 0h24v24H0z" fill="none" />
   <path d="M3 12l18 0" />
   <path d="M7 16l10 0l-10 5l0 -5" />
   <path d="M7 8l10 0l-10 -5l0 5" />

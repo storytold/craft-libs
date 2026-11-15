@@ -44,7 +44,7 @@ stroke_drawings = [
     "mark-out", "marquee-column", "marquee-row", "overwrite-clip", "padding-bottom", "padding-left", "padding-right",
     "padding-top", "painting-symmetry", "pen-add-anchor",
     "pen-curvature", "pen-delete-anchor", "pen-freeform", "protractor", "quick-selection", "route-curved", "route-elbow",
-    "route-straight", "scale-horizontal", "scale-vertical", "shear-horizontal", "stroke-align-center",
+    "route-straight", "shear-horizontal", "stroke-align-center",
     "stroke-align-inside", "stroke-align-outside", "stroke-cap-butt",
     "stroke-cap-round", "stroke-cap-square", "stroke-join-bevel", "stroke-join-miter", "stroke-join-round",
     "symmetry-diagonal", "symmetry-dual", "symmetry-horizontal", "symmetry-vertical", "sync-lock",
@@ -592,32 +592,37 @@ phosphor = "arrows-down-up"
 carbon = "arrows--vertical"
 tabler = "arrows-down-up"
 
-# The transform panels' flip, scale and shear glyphs. Phosphor 2.0.8 draws none of them, so the base set draws its
-# own (ATTRIBUTION.md); Tabler's `flip-horizontal`, `flip-vertical` and `skew-x` mean the same. Shear is the skew along
-# the x axis only: the transform panel has one shear value (its "Shear X Angle"), so there is no `shear_vertical`
-# until a surface shows a y-shear.
+# The transform panels' flip, scale and shear glyphs. Each name is the axis the change runs along:
+# `flip_horizontal` mirrors left and right, so the axis it mirrors about is the vertical one the drawing shows.
+# The `symmetry_*` names read the other way round, naming the line the drawing shows. Phosphor 2.0.8 draws no
+# flip and no skew, so the base set draws those (ATTRIBUTION.md); its `arrows-out-line-horizontal` and
+# `-vertical` are the axis-of-scale marks, and Lucide and Tabler draw the same flips, Tabler the same skew.
+# Shear is the skew along the x axis only: the transform panel has one shear value (its "Shear X Angle"), so
+# there is no `shear_vertical` until a surface shows a y-shear.
 
 [[icon]]
 name = "flip_horizontal"
 directional = false
+lucide = "flip-horizontal"
 phosphor = "flip-horizontal"
 tabler = "flip-horizontal"
 
 [[icon]]
 name = "flip_vertical"
 directional = false
+lucide = "flip-vertical"
 phosphor = "flip-vertical"
 tabler = "flip-vertical"
 
 [[icon]]
 name = "scale_horizontal"
 directional = false
-phosphor = "scale-horizontal"
+phosphor = "arrows-out-line-horizontal"
 
 [[icon]]
 name = "scale_vertical"
 directional = false
-phosphor = "scale-vertical"
+phosphor = "arrows-out-line-vertical"
 
 [[icon]]
 name = "shear_horizontal"
@@ -799,20 +804,24 @@ name = "distribute_vertical"
 directional = false
 phosphor = "distribute-vertical"
 
-# The layout panels' spacing glyphs: a frame with the space on one side, and the gap between two items. Phosphor
-# 2.0.8 draws neither; Lucide's `gap-horizontal` and `gap-vertical` mean the same as the base set's.
+# The layout panels' spacing glyphs: a frame with the space on one side, and the gap between two items. Each gap
+# name is the axis the gap runs along, as the flip, scale and shear names are. Phosphor 2.0.8 draws neither, so
+# the base set draws its own (ATTRIBUTION.md); Lucide's `gap-horizontal` and `gap-vertical` and Tabler's
+# `spacing-horizontal` and `spacing-vertical` are the same meanings.
 
 [[icon]]
 name = "gap_horizontal"
 directional = false
 lucide = "gap-horizontal"
 phosphor = "gap-horizontal"
+tabler = "spacing-horizontal"
 
 [[icon]]
 name = "gap_vertical"
 directional = false
 lucide = "gap-vertical"
 phosphor = "gap-vertical"
+tabler = "spacing-vertical"
 
 [[icon]]
 name = "padding_bottom"
