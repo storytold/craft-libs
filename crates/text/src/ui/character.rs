@@ -29,7 +29,7 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::text::{NamedOr, NumberName, NumberPick, NumberValue as _};
 use egui::{Response, Ui};
 
-mod paragraph;
+pub(crate) mod paragraph;
 mod paragraph_dialog;
 pub(crate) mod rows;
 #[cfg(feature = "screen-testing")]
@@ -125,7 +125,7 @@ const METRICS_ROW: u32 = 0;
 const OPTICAL_ROW: u32 = 1;
 
 /// The range of the size field, points.
-const SIZE_RANGE: RangeInclusive<f64> = 0.1..=1296.0;
+pub(crate) const SIZE_RANGE: RangeInclusive<f64> = 0.1..=1296.0;
 /// The range of the leading field, points.
 const LEADING_RANGE: RangeInclusive<f64> = 0.1..=5000.0;
 /// The range of the baseline shift field, points.

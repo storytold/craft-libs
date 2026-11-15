@@ -6,7 +6,7 @@ craft_ui::words! {
     /// The words of the type options, English by default.
     #[non_exhaustive]
     pub struct TypeOptionWords {
-        anti_alias: "typeOptions.antiAlias" = "Anti-aliasing";
+        anti_alias: "typeOptions.antiAlias" = "Anti-aliasing method";
         orientation: "typeOptions.orientation" = "Text orientation";
         none: "typeOptions.antiAliasNone" = "None";
         sharp: "typeOptions.antiAliasSharp" = "Sharp";
@@ -15,8 +15,8 @@ craft_ui::words! {
         smooth: "typeOptions.antiAliasSmooth" = "Smooth";
         windows_lcd: "typeOptions.antiAliasWindowsLcd" = "Windows LCD";
         windows: "typeOptions.antiAliasWindows" = "Windows";
-        horizontal: "typeOptions.horizontal" = "Horizontal";
-        vertical: "typeOptions.vertical" = "Vertical";
+        horizontal: "typeOptions.horizontal" = "Horizontal type";
+        vertical: "typeOptions.vertical" = "Vertical type";
     }
 }
 

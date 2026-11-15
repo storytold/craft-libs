@@ -23,6 +23,9 @@
 //! - [`columns`] (N3.27): [`TextColumnsDialog`](columns::TextColumnsDialog) and the Columns menu.
 //! - [`hyperlink`] (N3.28): [`HyperlinkDialog`](hyperlink::HyperlinkDialog).
 //! - `find` (N3.03, with the `find` feature): `FindBar` and `FindReplaceDialog`.
+//! - [`type_bar`]: [`TypeBar`](type_bar::TypeBar), the Type tool's options-bar strip.
+//! - [`type_options`]: anti-aliasing methods and text orientation.
+//! - [`path_text`]: text on a path.
 
 pub mod character;
 pub mod columns;
