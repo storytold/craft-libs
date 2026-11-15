@@ -55,12 +55,7 @@ fn ffmpeg_decodes_our_files_to_the_same_samples() {
             .expect("run ffmpeg");
         assert!(out.status.success(), "ffmpeg failed on {}: {}", file.display(), String::from_utf8_lossy(&out.stderr));
         let theirs: Vec<i16> = out.stdout.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect();
-        let mut interleaved = Vec::with_capacity(frames * channels);
-        for i in 0..frames {
-            for c in 0..channels {
-                interleaved.push(ours.channels[c][i]);
-            }
-        }
+        let interleaved: Vec<i16> = (0..frames).flat_map(|i| ours.channels.iter().map(move |ch| ch[i])).collect();
         assert_eq!(theirs.len(), interleaved.len(), "{rate} Hz, {channels} ch, {frames} frames: sample count");
         assert!(theirs == interleaved, "{rate} Hz, {channels} ch, {frames} frames: samples differ");
     }
