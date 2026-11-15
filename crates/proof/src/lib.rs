@@ -874,23 +874,30 @@ fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(us
     if !text.chars().any(crate::he::is_hebrew_letter) {
         return words(text);
     }
+    // Check if character at index i can join adjacent characters into a Hebrew word (quotes/gershayim/maqaf)
+    let is_hebrew_joiner = |idx: usize, c: char| -> bool {
+        match c {
+            '״' | '־' => true,
+            '"' | '”' | '“' => {
+                // Only join ASCII/curly double quotes if immediately bordered by Hebrew letters
+                let prev_he = text.get(..idx).and_then(|s| s.chars().next_back()).is_some_and(crate::he::is_hebrew_letter);
+                let next_he = text.get(idx + c.len_utf8()..).and_then(|s| s.chars().next()).is_some_and(crate::he::is_hebrew_letter);
+                prev_he && next_he
+            }
+            '\'' | '’' | '׳' => {
+                // Geresh/apostrophe can join or follow Hebrew letters
+                let prev_he = text.get(..idx).and_then(|s| s.chars().next_back()).is_some_and(crate::he::is_hebrew_letter);
+                prev_he
+            }
+            _ => false,
+        }
+    };
+
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
-    let is_w = |c: char| {
-        c.is_alphanumeric()
-            || c == '\''
-            || c == '’'
-            || c == '-'
-            || c == '"'
-            || c == '״'
-            || c == '”'
-            || c == '“'
-            || c == '׳'
-            || c == '־'
-            || unicode_normalization::char::is_combining_mark(c)
-    };
     for (i, c) in text.char_indices() {
-        match (start, is_w(c)) {
+        let is_w = c.is_alphanumeric() || unicode_normalization::char::is_combining_mark(c) || is_hebrew_joiner(i, c);
+        match (start, is_w) {
             (None, true) => start = Some(i),
             (Some(s), false) => {
                 out.push((s, i));
@@ -908,15 +915,15 @@ fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(us
             let is_he = lang(a) == ProofLang::He || w.chars().any(crate::he::is_hebrew_letter);
             if is_he {
                 // For Hebrew, trim only leading apostrophes/quotes/hyphens, and trailing quotes/hyphens,
-                // but preserve trailing geresh/apostrophe (e.g. וכו', פרופ').
-                let lead = w.len() - w.trim_start_matches(['\'', '’', '-', '"', '״', '׳', '־']).len();
+                // including curly quotes (“ ”), but preserve trailing geresh/apostrophe (e.g. וכו', פרופ').
+                let lead = w.len() - w.trim_start_matches(['\'', '’', '-', '"', '״', '׳', '־', '“', '”']).len();
                 let trimmed_lead = &w[lead..];
-                let trail = trimmed_lead.len() - trimmed_lead.trim_end_matches(['-', '"', '״', '־']).len();
+                let trail = trimmed_lead.len() - trimmed_lead.trim_end_matches(['-', '"', '״', '־', '“', '”']).len();
                 let final_w = &trimmed_lead[..trimmed_lead.len() - trail];
                 if final_w.is_empty() { None } else { Some((a + lead, a + lead + final_w.len())) }
             } else {
-                let lead = w.len() - w.trim_start_matches(['\'', '’', '-', '"', '״', '׳', '־']).len();
-                let trail = w.len() - w.trim_end_matches(['\'', '’', '-', '"', '״', '׳', '־']).len();
+                let lead = w.len() - w.trim_start_matches(['\'', '’', '-', '"', '״', '׳', '־', '“', '”']).len();
+                let trail = w.len() - w.trim_end_matches(['\'', '’', '-', '"', '״', '׳', '־', '“', '”']).len();
                 (a + lead < b - trail).then_some((a + lead, b - trail))
             }
         })
@@ -3117,6 +3124,24 @@ mod tests {
     /// byte range of what was typed, and it is checked as its composed form in every language.
     #[test]
     #[test]
+    fn hebrew_spelling_tokenizer_mixed_quotes_and_curly_quotes() {
+        crate::he::test_dict::install();
+        // Point 1: Quotes joining across language spans (xx"שלום should not swallow the Hebrew word)
+        let words_mixed = words_for_spelling("xx\"שלום", &|_| ProofLang::He);
+        let texts: Vec<&str> = words_mixed.iter().map(|&(a, b)| &"xx\"שלום"[a..b]).collect();
+        assert!(texts.contains(&"שלום"), "xx\"שלום should tokenize 'שלום' as Hebrew: {texts:?}");
+
+        // Point 2: Curly quotes “שלומ” trimmed properly
+        let words_curly = words_for_spelling("“שלום”", &|_| ProofLang::He);
+        let texts_curly: Vec<&str> = words_curly.iter().map(|&(a, b)| &"“שלום”"[a..b]).collect();
+        assert_eq!(texts_curly, ["שלום"], "Curly quotes should be trimmed: {texts_curly:?}");
+
+        // Internal curly quotes in צה”ל stay intact
+        let words_idf = words_for_spelling("צה”ל", &|_| ProofLang::He);
+        let texts_idf: Vec<&str> = words_idf.iter().map(|&(a, b)| &"צה”ל"[a..b]).collect();
+        assert_eq!(texts_idf, ["צה”ל"], "Internal curly quotes stay intact: {texts_idf:?}");
+    }
+
     fn hebrew_spelling_tokenizer_preserves_acronyms_and_abbreviations() {
         crate::he::test_dict::install();
         let issues = check_spelling_in("החייל משרת בצה״ל וכו׳.", ProofLang::He);
