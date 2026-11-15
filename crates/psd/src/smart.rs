@@ -574,6 +574,23 @@ impl<'a> LinkedRecord<'a> {
         framed_record(self.raw).map(|(item, _)| item)
     }
 
+    /// Copy this complete record under a new ID, leaving the payload byte-identical.
+    /// Selection policy belongs to the caller; malformed tails cannot be copied.
+    pub fn copy_with_uuid(&self, new_uuid: &str) -> Option<Vec<u8>> {
+        let item = self.item()?;
+        let old_end = 9usize.checked_add(usize::from(*item.get(8)?))?;
+        let new_len = u8::try_from(new_uuid.len()).ok()?;
+        let mut copy = item.get(..8)?.to_vec();
+        copy.push(new_len);
+        copy.extend_from_slice(new_uuid.as_bytes());
+        copy.extend_from_slice(item.get(old_end..)?);
+        let mut out = Vec::with_capacity(copy.len() + 11);
+        out.put_u64(copy.len() as u64);
+        out.extend(copy);
+        out.resize(out.len().next_multiple_of(4), 0);
+        Some(out)
+    }
+
     /// The unique id as text, when it is readable and valid UTF-8.
     pub fn uuid_str(&self) -> Option<&str> {
         std::str::from_utf8(self.uuid?).ok()
@@ -716,18 +733,7 @@ pub fn contains_linked_record(data: &[u8], record: &[u8]) -> bool {
 /// field and padding; the rest of the record (embedded, external or alias data) is kept.
 pub fn copy_linked_record(data: &[u8], uuid: &str, new_uuid: &str) -> Option<Vec<u8>> {
     let record = linked_records(data).into_iter().find(|r| r.uuid == Some(uuid.as_bytes()))?;
-    let (item, _) = framed_record(record.raw)?;
-    let old_end = 9usize.checked_add(usize::from(*item.get(8)?))?;
-    let new_len = u8::try_from(new_uuid.len()).ok()?;
-    let mut copy = item.get(..8)?.to_vec();
-    copy.push(new_len);
-    copy.extend_from_slice(new_uuid.as_bytes());
-    copy.extend_from_slice(item.get(old_end..)?);
-    let mut out = Vec::with_capacity(copy.len() + 11);
-    out.put_u64(copy.len() as u64);
-    out.extend(copy);
-    out.resize(out.len().next_multiple_of(4), 0);
-    Some(out)
+    record.copy_with_uuid(new_uuid)
 }
 
 impl PsdFile {
