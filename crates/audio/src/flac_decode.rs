@@ -225,6 +225,11 @@ impl Decoder {
 
     /// Decode the frame at the start of `data`.
     pub fn decode_frame(&self, data: &[u8]) -> Result<Frame> {
+        // StreamInfo has public fields: container callers can construct it without
+        // parse(), so validate before it can control shifts and sample reads.
+        if self.info.is_some_and(|i| !(4..=32).contains(&i.bits_per_sample) || !(1..=8).contains(&i.channels) || i.sample_rate == 0) {
+            return Err(DecodeError::Invalid("invalid decoder STREAMINFO"));
+        }
         let mut r = Bits::new(data);
         if r.bits(15)? != 0x7FFC {
             return Err(DecodeError::Invalid("missing frame sync code"));
@@ -315,8 +320,7 @@ impl Decoder {
         }
         let mut chans = Vec::with_capacity(channels);
         for c in out {
-            let v: Result<Vec<i32>> =
-                c.into_iter().map(|s| i32::try_from(s).map_err(|_| DecodeError::Invalid("sample outside the bit depth"))).collect();
+            let v: Result<Vec<i32>> = c.into_iter().map(|s| checked_sample(s, bits)).collect();
             chans.push(v?);
         }
         Ok(Frame { sample_rate, bits_per_sample: bits as u8, variable_block_size: variable, number, block_size, channels: chans, size })
@@ -542,6 +546,11 @@ pub fn decode_with_limit(bytes: &[u8], max_values: u64) -> Result<Decoded> {
         if frame.channels.len() != channels.len() {
             return Err(DecodeError::Invalid("the channel count changes inside the stream"));
         }
+        // One file has one sample rate and depth. Otherwise callers would play
+        // samples under incompatible STREAMINFO metadata.
+        if frame.sample_rate != info.sample_rate || frame.bits_per_sample != info.bits_per_sample {
+            return Err(DecodeError::Invalid("frame format differs from STREAMINFO"));
+        }
         total += frame.block_size as u64;
         if total.saturating_mul(channels.len() as u64) > max_values {
             return Err(DecodeError::TooLarge);
@@ -551,8 +560,44 @@ pub fn decode_with_limit(bytes: &[u8], max_values: u64) -> Result<Decoded> {
         }
         pos += frame.size;
     }
+    // Unknown total_samples must not turn a corrupt/truncated next frame into
+    // a successfully decoded shorter recording.
+    if pos != bytes.len() {
+        return Err(DecodeError::Invalid("trailing data or missing frame sync"));
+    }
     if info.total_samples != 0 && total != info.total_samples {
         return Err(DecodeError::Truncated);
     }
     Ok(Decoded { info, channels })
+}
+
+// Validate the advertised precision, not just the storage type. Malformed
+// predictors may produce an i32 that is still invalid for 4–24-bit audio.
+fn checked_sample(sample: i64, bits: u32) -> Result<i32> {
+    if !(4..=32).contains(&bits) {
+        return Err(DecodeError::Invalid("invalid sample bit depth"));
+    }
+    let bound = 1i64 << (bits - 1);
+    if !(-bound..bound).contains(&sample) {
+        return Err(DecodeError::Invalid("sample outside the bit depth"));
+    }
+    i32::try_from(sample).map_err(|_| DecodeError::Invalid("sample outside the bit depth"))
+}
+
+#[cfg(test)]
+mod sample_bounds_tests {
+    use super::checked_sample;
+
+    #[test]
+    fn samples_must_fit_declared_precision() {
+        for bits in 4..=32 {
+            let bound = 1i64 << (bits - 1);
+            assert_eq!(checked_sample(-bound, bits).map(i64::from), Ok(-bound));
+            assert_eq!(checked_sample(bound - 1, bits).map(i64::from), Ok(bound - 1));
+            assert!(checked_sample(-bound - 1, bits).is_err());
+            assert!(checked_sample(bound, bits).is_err());
+        }
+        assert!(checked_sample(0, 0).is_err());
+        assert!(checked_sample(0, 255).is_err());
+    }
 }

@@ -172,3 +172,40 @@ fn ffmpeg_decodes_our_files_to_our_samples() {
         assert!(interleave(&got.channels) == want, "{channels}ch {bits}-bit: samples differ from ffmpeg's decode");
     }
 }
+
+#[test]
+fn rejects_unknown_length_corruption_and_streaminfo_format_mismatch() {
+    let src = signal(1, 100, 16, 7);
+    let original = encode(&src, 44_100, 16, 4096, 5);
+    let at = STREAMINFO_OFFSET as usize;
+    // STREAMINFO is not CRC-covered. Clear only the 36-bit total sample count.
+    let mut unknown = original.clone();
+    unknown[at + 13] &= 0xf0;
+    unknown[at + 14..at + 18].fill(0);
+    assert_eq!(decode(&unknown).unwrap().channels, src);
+    for tail in [vec![0xff], vec![0x00, 0x00]] {
+        let mut broken = unknown.clone();
+        broken.extend(tail);
+        assert!(decode(&broken).is_err());
+    }
+    // The encoder spells these in frame headers, independent of STREAMINFO.
+    let mut wrong_rate = original.clone();
+    let mut packed = u64::from_be_bytes(wrong_rate[at + 10..at + 18].try_into().unwrap());
+    packed = (packed & ((1u64 << 44) - 1)) | (48_000u64 << 44);
+    wrong_rate[at + 10..at + 18].copy_from_slice(&packed.to_be_bytes());
+    assert!(decode(&wrong_rate).is_err());
+    let mut wrong_depth = original;
+    wrong_depth[at + 12] = (wrong_depth[at + 12] & !1) | 1;
+    wrong_depth[at + 13] = (wrong_depth[at + 13] & 0x0f) | 0x70;
+    assert!(decode(&wrong_depth).is_err());
+}
+
+#[test]
+fn caller_constructed_streaminfo_is_validated_before_decoding() {
+    let file = encode(&signal(1, 100, 16, 9), 44_100, 16, 4096, 5);
+    let info = StreamInfo::parse(&file[STREAMINFO_OFFSET as usize..]).unwrap();
+    for bits in [0, 1, 3, 33, 64, 255] {
+        let invalid = StreamInfo { bits_per_sample: bits, ..info };
+        assert!(matches!(Decoder::new(invalid).decode_frame(&[]), Err(DecodeError::Invalid(_))));
+    }
+}
