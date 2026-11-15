@@ -163,7 +163,7 @@ mod tests {
         let mut bytes = minimal_exif(6);
         bytes[14..18].fill(0);
         assert_eq!(orientation(&bytes), 6);
-        bytes.truncate(21);
+        bytes.truncate(19);
         assert_eq!(orientation(&bytes), 1);
     }
 
