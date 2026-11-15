@@ -113,11 +113,11 @@ impl PlaybackClock {
         from + Tick::from_seconds_f64((now - since) * self.speed)
     }
 
-    /// Stop at `at` without asking where the playhead is.
-    fn halt(&mut self, now: f64, at: Tick) {
+    /// Stop with the playhead at `at`. Needs no time: a stopped clock never reads `anchor_time`,
+    /// and `play` and `seek` set it again.
+    pub fn halt(&mut self, at: Tick) {
         self.state = PlaybackState::Stopped;
         self.anchor = at;
-        self.anchor_time = now;
         self.external = None;
         self.stop_at = None;
     }
@@ -151,11 +151,7 @@ impl PlaybackClock {
     // filmcraft: crates/ui-egui/src/app/playback.rs:97 `stop`.
     pub fn stop(&mut self, now: f64) -> Tick {
         let at = self.position(now);
-        self.state = PlaybackState::Stopped;
-        self.anchor = at;
-        self.anchor_time = now;
-        self.external = None;
-        self.stop_at = None;
+        self.halt(at);
         at
     }
 
@@ -226,10 +222,10 @@ impl PlaybackClock {
                 events.push(ClockEvent::Looped);
             }
         } else if let Some(at) = self.stop_at.filter(|at| self.speed > 0.0 && raw >= *at) {
-            self.halt(now, at);
+            self.halt(at);
             events.push(ClockEvent::Stopped(at));
         } else if self.speed < 0.0 && raw <= Tick::ZERO {
-            self.halt(now, Tick::ZERO);
+            self.halt(Tick::ZERO);
             events.push(ClockEvent::Stopped(Tick::ZERO));
         }
         events

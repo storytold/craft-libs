@@ -4,7 +4,7 @@ use craft_behavior::Axis;
 use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, SplitSize, Workspace};
 use craft_ui::contract::{Bind, BodyCx, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
-use craft_ui::docking::{DockConfig, DockPanels, GroupDrag, PanelSpec};
+use craft_ui::docking::{DockConfig, DockPanels, GroupDrag, PanelSpec, request_actions};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::runtime::drag::{self, DropMark};
@@ -153,7 +153,46 @@ fn a_replaced_workspace_ends_the_drag_that_the_areas_own_edits_keep() {
     assert!(!dragging(&bed), "the replacement ended the drag");
     bed.fixture.frame(vec![release(window_title() + by * 1.25)]);
     bed.fixture.settle();
-    assert!(bed.actions.borrow().is_empty(), "nothing dropped: {:?}", bed.actions.borrow());
+    let dropped = bed.actions.borrow().iter().any(|action| !matches!(action, Action::MoveFloating { .. }));
+    assert!(!dropped, "nothing dropped, only the window moved: {:?}", bed.actions.borrow());
+}
+
+/// A body that asks the running pass to bring its own panel forward, every pass.
+struct Requesting;
+
+impl DockPanels<usize> for Requesting {
+    fn spec(&self, panel: &usize) -> PanelSpec {
+        PanelSpec::new(title(*panel))
+    }
+
+    fn body(&mut self, panel: &usize, ui: &mut Ui, _: &mut BodyCx<'_>) {
+        assert!(request_actions(ui.ctx(), vec![Action::activate(*panel)]).is_ok(), "the running pass takes the request");
+    }
+}
+
+/// A given workspace is never written: the host gets every change of the pass as actions, a window's move included,
+/// and its bodies' requests unapplied beside them.
+#[trial]
+fn a_given_workspace_gets_the_window_move_and_the_bodies_requests_as_actions() {
+    let workspace = Rc::new(RefCell::new(Workspace::new(with_window(Some(Node::tabs(vec![DOCKED], 0))))));
+    let requested: Rc<RefCell<Vec<Action<usize>>>> = Rc::default();
+    let (held, seen) = (Rc::clone(&workspace), Rc::clone(&requested));
+    let mut fixture = Fixture::new(move |ui| {
+        let given = held.borrow().clone();
+        let mut panels = Requesting;
+        let out = DockArea::new("Given dock", Bind::given(given), &mut panels, DockConfig::default()).show(ui);
+        held.borrow_mut().apply_all(out.actions, false, |_| Permissions::ALL).expect("the area's actions apply");
+        seen.borrow_mut().extend(out.requested);
+    });
+    fixture.settle();
+    assert!(request_actions(fixture.ctx(), vec![Action::activate(DOCKED)]).is_err(), "no pass runs between frames");
+    let asked = requested.borrow().clone();
+    let own = |action: &Action<usize>| *action == Action::activate(DOCKED) || *action == Action::activate(WINDOW);
+    assert!(!asked.is_empty() && asked.iter().all(own), "each body's request came back: {asked:?}");
+    assert_eq!(workspace.borrow().layout.floating[0].rect, WINDOW_AT, "nothing moved yet");
+    press_and_move(&mut fixture, window_title(), Vec2::new(-40.0, 30.0));
+    let moved_to = workspace.borrow().layout.floating[0].rect;
+    assert!(moved_to != WINDOW_AT, "the host's copy took the window's move: {moved_to:?}");
 }
 
 /// A dock area's first pass leaves a drag running in another area alone.

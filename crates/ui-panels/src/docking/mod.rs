@@ -38,7 +38,9 @@ pub use event::{DockEvent, FloatSpace, HidePanels};
 pub use group::{DockGroup, DockGroupOutput, DockGroupStyle, GroupGrip, GroupGripOutput, GroupGripStyle, HeaderHook};
 
 pub use floating::{FloatingGroup, FloatingGroupOutput, FloatingGroupStyle};
-pub use panels::DockPanels;
+pub use panels::{DockPanels, request_actions};
+#[doc(hidden)]
+pub use panels::{close_requests, open_requests};
 pub use root::{DockRoot, DockRootOutput, DockRootStyle};
 pub use spec::{DockHeights, PanelSpec};
 pub use splitter::{Splitter, SplitterStyle};

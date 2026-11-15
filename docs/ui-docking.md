@@ -59,11 +59,13 @@ The host implements `DockPanels<P>`:
 | `group_header` | The host's controls in a group header, before the tab strip. |
 | `panel_rows` | The host's rows of a panel's menu, before the dock's own. |
 
-The binding decides who applies the edits. With `Bind::bound` the area writes every action to the workspace itself. With `Bind::given` it writes nothing, and the host applies `DockAreaOutput::actions` (or `edit`, the same changes as edit events) to its own copy. `DockArea::read_only` shows a layout locked.
+The binding decides who applies the edits. With `Bind::bound` the area writes every action to the workspace itself. With `Bind::given` it writes nothing, and the host applies `DockAreaOutput::actions` (or `edit`, the same changes as edit events) to its own copy: the actions hold every change of the pass, divider sizes and window moves included. `DockArea::read_only` shows a layout locked.
+
+A panel body, or code a body calls, changes the workspace during the pass with `docking::request_actions(ctx, actions)`, never by writing the workspace the area shows. The running area takes them unapplied and returns them in `DockAreaOutput::requested`, in order, for the host to apply after `actions` in the same frame. With no area over that panel type running, `request_actions` hands the actions back for the caller to apply.
 
 Props: `hide` (`HidePanels::None`, `All` or `Except`), `maximized`, `auto_collapse`, `locked`, and `flyout`, which binds the open flyout to the host's value (the area keeps it otherwise). A hidden panel keeps its place for restore.
 
-`DockAreaOutput` holds the `actions` taken, the `events` for the host, the `focused` and `picked` panels, `edit`, `float_space`, and `error`: an `InvalidGeometry` when the workspace fails `validate`, in which case the area draws nothing.
+`DockAreaOutput` holds the `actions` taken, the bodies' `requested` actions, the `events` for the host, the `focused` and `picked` panels, `edit`, `float_space`, `columns`, the OS `windows` the floating windows showed in (by a panel of each), `window_files`, and `error`: an `InvalidGeometry` when the workspace fails `validate`, in which case the area draws nothing.
 
 The host handles these `DockEvent`s:
 
