@@ -976,6 +976,20 @@ mod jpeg_inspection_tests {
         out.extend_from_slice(data);
     }
     #[test]
+    fn reports_mpf_gainmap_and_adobe_transform() {
+        let mut b = vec![0xff, 0xd8];
+        segment(&mut b, 0xe2, b"MPF\0IIabc");
+        segment(&mut b, 0xe2, b"urn:iso:std:iso:ts:21496:-1\0abcde");
+        segment(&mut b, 0xee, b"Adobe\0\0\0\0\0\0\x02");
+        b.extend_from_slice(&[0xff, 0xd9]);
+        let info = inspect_jpeg(&b).unwrap();
+        let (offset, data) = info.mpf.unwrap();
+        assert_eq!(&b[offset..offset + data.len()], data);
+        assert_eq!(info.iso_gainmap.as_deref(), Some(&b"abcde"[..]));
+        assert_eq!(info.adobe_transform, Some(2));
+    }
+
+    #[test]
     fn tolerant_walk_keeps_offsets_frame_and_icc_chunks() {
         let mut b = vec![0xff, 0xd8, 0x44];
         segment(&mut b, 0xe1, b"Exif\0\0II");
