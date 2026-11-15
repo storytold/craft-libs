@@ -354,7 +354,7 @@ mod tests {
         let xml = format!(r#"<r xmlns:a="a" xmlns:p="p">{}</r>"#, w.finish());
         let back = crate::read::text_body(&mut Part::new(), parse(xml.as_bytes()).unwrap().child(craft_xml::Local("txBody")).unwrap());
         assert_eq!(back.list_style, ls);
-        let empty = ListStyle { default_level: Some(Default::default()), ..Default::default() };
+        let empty = ListStyle { default_level: Some(Box::default()), ..Default::default() };
         assert!(!empty.is_empty());
         let mut w = craft_xml::Writer::new();
         crate::write::list_style(&mut w, &mut Part::new(), "p:defaultTextStyle", &empty);
