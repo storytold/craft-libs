@@ -686,9 +686,9 @@ mod tests {
         let encoder = |pixels: Vec<u8>, tile: u32, quality: u8| {
             called.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             assert_eq!((tile, quality), (16, 100));
-            for row in pixels.chunks_exact(16 * 3) {
+            for row in pixels.as_chunks::<{ 16 * 3 }>().0 {
                 assert_eq!(&row[..3], &[1, 2, 3]);
-                assert!(row[3..].chunks_exact(3).all(|p| p == [250, 251, 252]));
+                assert!(row[3..].as_chunks::<3>().0.iter().all(|p| *p == [250, 251, 252]));
             }
             let mut output = Vec::new();
             jpeg_encoder::Encoder::new(&mut output, quality)
