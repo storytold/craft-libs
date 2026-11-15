@@ -80,6 +80,72 @@ pub fn decode(data: &[u8], count: usize, width: Width, max_output_bytes: usize) 
     Ok(output)
 }
 
+/// Encode integers with their original signed wrapping and largest-delta tie-break policy.
+///
+/// `max_bytes` bounds the combined worst-case output reservation and sorted delta scratch.
+/// Both reservations are fallible. Sorting uses no extra heap storage; input storage and
+/// allocator bookkeeping are outside this budget. Empty input emits no bytes.
+pub fn encode(values: &[i64], width: Width, max_bytes: usize) -> Result<Vec<u8>, Error> {
+    if values.is_empty() {
+        return Ok(Vec::new());
+    }
+    let size = width.bytes();
+    let codes_len = values.len().div_ceil(4);
+    let capacity = values.len().checked_mul(size).and_then(|n| n.checked_add(size)).and_then(|n| n.checked_add(codes_len)).ok_or(Error::Limit)?;
+    let scratch = values.len().checked_mul(8).ok_or(Error::Limit)?;
+    if capacity > isize::MAX as usize || scratch > isize::MAX as usize || capacity.checked_add(scratch).is_none_or(|n| n > max_bytes) {
+        return Err(Error::Limit);
+    }
+    let wrap = |v: i64| match width {
+        Width::I32 => i64::from(v as i32),
+        Width::I64 => v,
+    };
+    let mut deltas = Vec::new();
+    deltas.try_reserve_exact(values.len()).map_err(|_| Error::Allocation)?;
+    let mut previous = 0i64;
+    for &value in values {
+        deltas.push(wrap(value.wrapping_sub(previous)));
+        previous = value;
+    }
+    deltas.sort_unstable();
+    let mut best = (0usize, 0i64);
+    let mut at = 0;
+    while at < deltas.len() {
+        let value = deltas[at];
+        let start = at;
+        while at < deltas.len() && deltas[at] == value {
+            at += 1;
+        }
+        best = best.max((at - start, value));
+    }
+    let common = best.1;
+    let mut output = Vec::new();
+    output.try_reserve_exact(capacity).map_err(|_| Error::Allocation)?;
+    output.extend_from_slice(&common.to_le_bytes()[..size]);
+    output.resize(size + codes_len, 0);
+    previous = 0;
+    for (i, &value) in values.iter().enumerate() {
+        let delta = wrap(value.wrapping_sub(previous));
+        previous = value;
+        let small = |bits: u32| delta >= -(1i64 << (bits - 1)) && delta < (1i64 << (bits - 1));
+        let code: u8 = if delta == common {
+            0
+        } else if small(size as u32 * 2) {
+            1
+        } else if small(size as u32 * 4) {
+            2
+        } else {
+            3
+        };
+        if code != 0 {
+            let bytes = (size >> (3 - usize::from(code))).max(1);
+            output.extend_from_slice(&delta.to_le_bytes()[..bytes]);
+        }
+        output[size + i / 4] |= code << (2 * (i % 4));
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -123,5 +189,83 @@ mod tests {
             data.extend(b"ignored tail");
             assert_eq!(decode(&data, 2, width, 16).unwrap(), [maximum, minimum]);
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod encode_tests {
+    use super::*;
+    fn oracle(values: &[i64], width: usize) -> Vec<u8> {
+        if values.is_empty() {
+            return Vec::new();
+        }
+        let wrap = |v: i64| if width == 4 { i64::from(v as i32) } else { v };
+        let mut prev = 0i64;
+        let deltas: Vec<i64> = values
+            .iter()
+            .map(|&v| {
+                let d = wrap(v.wrapping_sub(prev));
+                prev = v;
+                d
+            })
+            .collect();
+        let mut counts = std::collections::HashMap::new();
+        for d in &deltas {
+            *counts.entry(*d).or_insert(0usize) += 1;
+        }
+        let common = counts.into_iter().max_by_key(|&(v, c)| (c, v)).map_or(0, |(v, _)| v);
+        let mut out = Vec::with_capacity(width + values.len().div_ceil(4) + values.len() * width);
+        out.extend_from_slice(&common.to_le_bytes()[..width]);
+        let codes_at = out.len();
+        out.resize(codes_at + values.len().div_ceil(4), 0);
+        for (i, &d) in deltas.iter().enumerate() {
+            let small = |bits: u32| d >= -(1i64 << (bits - 1)) && d < (1i64 << (bits - 1));
+            let code: u8 = if d == common {
+                0
+            } else if small(width as u32 * 2) {
+                1
+            } else if small(width as u32 * 4) {
+                2
+            } else {
+                3
+            };
+            if code > 0 {
+                let w = (width >> (3 - code as usize)).max(1);
+                out.extend_from_slice(&d.to_le_bytes()[..w]);
+            }
+            if let Some(b) = out.get_mut(codes_at + i / 4) {
+                *b |= code << (2 * (i % 4));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn matches_original_bytes_and_wrapping() {
+        for width in [Width::I32, Width::I64] {
+            for n in [0, 1, 2, 3, 4, 5, 127, 1024] {
+                let mut seed = 17u64;
+                let values: Vec<i64> = (0..n)
+                    .map(|_| {
+                        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        seed as i64
+                    })
+                    .collect();
+                let bytes = encode(&values, width, 32768).unwrap();
+                assert_eq!(bytes, oracle(&values, width.bytes()));
+                let expected: Vec<i64> = values.iter().map(|&v| if width == Width::I32 { i64::from(v as i32) } else { v }).collect();
+                assert_eq!(decode(&bytes, n, width, 32768).unwrap(), expected);
+            }
+            for values in [vec![1, 3, 4, 6], vec![i64::MAX, i64::MIN, 0], vec![7; 32]] {
+                assert_eq!(encode(&values, width, 4096).unwrap(), oracle(&values, width.bytes()));
+            }
+        }
+    }
+    #[test]
+    fn combined_reservation_budget_is_enforced() {
+        assert_eq!(encode(&[], Width::I64, 0).unwrap(), Vec::<u8>::new());
+        assert!(matches!(encode(&[1], Width::I32, 16), Err(Error::Limit)));
+        assert!(encode(&[1], Width::I32, 17).is_ok());
     }
 }
