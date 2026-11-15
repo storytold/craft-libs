@@ -40,7 +40,7 @@ impl Area {
 pub struct PointRecords<'a>(&'a [u8]);
 impl PointRecords<'_> {
     pub fn iter(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
-        self.0.chunks_exact(8).map(|b| (u32::from_be_bytes([b[0], b[1], b[2], b[3]]), u32::from_be_bytes([b[4], b[5], b[6], b[7]])))
+        self.0.as_chunks::<8>().0.iter().map(|b| (u32::from_be_bytes([b[0], b[1], b[2], b[3]]), u32::from_be_bytes([b[4], b[5], b[6], b[7]])))
     }
 }
 /// Borrowed bad-pixel rectangles, decoded lazily without copying the payload.
@@ -48,7 +48,7 @@ impl PointRecords<'_> {
 pub struct RectangleRecords<'a>(&'a [u8]);
 impl RectangleRecords<'_> {
     pub fn iter(&self) -> impl Iterator<Item = [u32; 4]> + '_ {
-        self.0.chunks_exact(16).map(|b| {
+        self.0.as_chunks::<16>().0.iter().map(|b| {
             [
                 u32::from_be_bytes([b[0], b[1], b[2], b[3]]),
                 u32::from_be_bytes([b[4], b[5], b[6], b[7]]),
