@@ -15,6 +15,9 @@
 //! Language features (`spanish`, `german`, …, `all-languages`) add data for that language and
 //! turn on the modules that use it.
 
+#[cfg(feature = "positioned")]
+pub mod positioned;
+
 #[cfg(feature = "bidi")]
 pub mod bidi;
 #[cfg(feature = "hyphen")]
