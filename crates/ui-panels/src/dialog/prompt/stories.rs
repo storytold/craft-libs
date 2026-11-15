@@ -1,9 +1,11 @@
 //! Stories of the prompts.
 
 use super::super::stories::hosted;
-use super::super::{Alert, HostedAlert, Prompt, RecoveredDocument, RecoveryDialog, StandardPrompt, UnsavedChangesDialog};
+use super::super::{Alert, DialogHost, HostedAlert, Prompt, RecoveredDocument, RecoveryDialog, StackDialog as _, StandardPrompt, UnsavedChangesDialog};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _};
+use crate::runtime::env::Env;
+use crate::text::NumberField;
 use crate::sections::{DialogRole, FooterButton};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_quit::CloseScope;
@@ -57,6 +59,26 @@ fn prompt_with_extras(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(Alert<'static>, covers = [], drive = Drive::Never)]
 fn alert(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     hosted(ui, data, (), || HostedAlert::new(Alert::new("About", "Version 1.0").tone(Tone::Info, "A newer version is available.")))
+}
+
+/// A size field that holds typed values to 1–100 %: a value typed past the range commits the nearest end and opens
+/// the hosted alert that says so.
+#[story(Alert<'static>, covers = [], drive = Drive::Never)]
+fn range_alert(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    // `RangeAlert` is `#[non_exhaustive]` with no constructor outside craft-ui-widgets, so the story raises one
+    // through a real field commit instead of building it.
+    let mut size = *data.value("size", Some(50.0));
+    let field = NumberField::new("Size", Bind::bound(&mut size)).range(1.0..=100.0).unit("%").show(ui);
+    *data.value("size", Some(50.0)) = size;
+    let host = data.note("host", DialogHost::new());
+    if let Some(alert) = &field.out_of_range {
+        host.open(HostedAlert::new(Alert::range("Size", alert, &Env::of(ui))));
+    }
+    host.run(ui);
+    match host.get::<HostedAlert>() {
+        Some(alert) => alert.story_facts(),
+        None => field.into(),
+    }
 }
 
 #[story(StandardPrompt, covers = [], drive = Drive::Never)]

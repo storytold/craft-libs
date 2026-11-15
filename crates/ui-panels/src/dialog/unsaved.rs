@@ -1,7 +1,7 @@
 //! `UnsavedChangesDialog` (24.4): the Save, Don't Save and Cancel question for one document, a configuration of
 //! `Prompt`.
 
-use super::host::{DialogResult, StackDialog};
+use super::host::{DialogResult, FieldRefusal, StackDialog};
 use super::prompt::{Prompt, Reply, buttons};
 use super::stack::{DialogId, DialogStack, dialog_id};
 use super::words::DialogWords;
@@ -13,6 +13,7 @@ use crate::runtime::words::CommonWords;
 use crate::sections::DialogRole;
 use craft_behavior::Mixed;
 use craft_host::target::Os;
+use craft_keymap::{Chord, Key, Mods};
 use craft_quit::{CloseAnswer, CloseScope};
 use egui::{Context, Response, Ui};
 use serde_json::{Value, json};
@@ -96,7 +97,8 @@ impl UnsavedChangesDialog {
         self
     }
 
-    /// The answers in the order the buttons are given: what each means and how it is asked.
+    /// The answers in the order the buttons are given: what each means and how it is asked. On macOS Cmd+D also
+    /// answers Don't Save, as the platform's own save sheets do; Revert has no such chord.
     fn replies(&self, words: &DialogWords, cancel: Label, os: Os) -> Vec<(CloseAnswer, Reply)> {
         let mac = os == Os::Mac;
         self.offered()
@@ -105,7 +107,10 @@ impl UnsavedChangesDialog {
                 let reply = match answer {
                     CloseAnswer::Save => Reply::new(if mac { &words.unsaved_save } else { &words.unsaved_yes }.clone(), DialogRole::Accept),
                     CloseAnswer::DontSave if self.scope == CloseScope::Revert => Reply::new(words.unsaved_revert.clone(), DialogRole::Accept),
-                    CloseAnswer::DontSave => Reply::new(if mac { &words.unsaved_dont_save } else { &words.unsaved_no }.clone(), DialogRole::Other),
+                    CloseAnswer::DontSave if mac => {
+                        Reply::new(words.unsaved_dont_save.clone(), DialogRole::Other).chord(Chord::new(Mods::CMD, Key::D))
+                    }
+                    CloseAnswer::DontSave => Reply::new(words.unsaved_no.clone(), DialogRole::Other),
                     CloseAnswer::Cancel => Reply::new(cancel.clone(), DialogRole::Cancel),
                 };
                 (answer, reply)
@@ -200,14 +205,14 @@ impl StackDialog for UnsavedChangesDialog {
         match field {
             "choice" => {
                 let answer = self.offered().iter().copied().find(|answer| value.as_str() == Some(answer_name(*answer)));
-                let Some(answer) = answer else {
-                    let taken: Vec<&str> = self.offered().iter().map(|answer| answer_name(*answer)).collect();
-                    return Err(format!("`choice` can't take {value}: the question answers {}", json!(taken)));
-                };
+                let Some(answer) = answer else { return Err(FieldRefusal::Rejects(&value).message(field)) };
                 self.set_answer(answer);
             }
-            "applyToAll" if self.offers_apply_to_all() => self.apply_to_all = value.as_bool().ok_or("`applyToAll` takes true or false")?,
-            _ => return Err(format!("unknown field `{field}`")),
+            "applyToAll" if self.offers_apply_to_all() => match value.as_bool() {
+                Some(on) => self.apply_to_all = on,
+                None => return Err(FieldRefusal::Rejects(&value).message(field)),
+            },
+            _ => return Err(FieldRefusal::Unknown.message(field)),
         }
         Ok(())
     }

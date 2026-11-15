@@ -10,7 +10,7 @@ use crate::runtime::words::CommonWords;
 use crate::sections::DialogRole;
 use craft_theme::variant::Tone;
 use egui::{Context, Response, Ui};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// What an alert reports: its response and how it closed in this pass.
 #[derive(Debug)]
@@ -72,9 +72,29 @@ impl<'a> Alert<'a> {
 
     /// The alert that reports a typed value clamped to its range, worded by the text family's range sentences: the
     /// whole-number one when `alert.whole`, the value one when it has a unit, else the number one.
+    /// The ends are written at the field's own decimals and carry its unit: a unit label through the `range_end`
+    /// sentence, a unit kind through the scope's unit template.
     pub fn range(title: impl Into<Label>, alert: &crate::text::RangeAlert, env: &Env) -> Alert<'static> {
-        let _ = (title.into(), alert, env);
-        todo!("dl.N1")
+        let words = env.words::<crate::text::TextWords>();
+        let units = env.units();
+        let unit = alert.unit.as_ref().map(|unit| env.view().resolve(unit));
+        let end = |n: f64| match (&unit, alert.unit_kind) {
+            (Some(unit), _) => {
+                let number = units.number(n, alert.decimals.clone());
+                words.range_end.fill(&[("n", number.as_str()), ("unit", unit.as_str())])
+            }
+            (None, Some(kind)) => units.text(kind, n, alert.decimals.clone()),
+            (None, None) => units.number(n, alert.decimals.clone()),
+        };
+        let (low, high) = (end(*alert.range.start()), end(*alert.range.end()));
+        let sentence = if alert.whole {
+            &words.range_integer
+        } else if unit.is_some() || alert.unit_kind.is_some() {
+            &words.range_value
+        } else {
+            &words.range_number
+        };
+        Alert::new(title, sentence.fill(&[("low", low.as_str()), ("high", high.as_str())]))
     }
 
     /// Shows the alert.
@@ -164,12 +184,14 @@ impl StackDialog for HostedAlert {
         shown.closed.map(|_| DialogResult::Ok(()))
     }
 
+    /// An alert's one answer is OK, so a programmatic OK always closes it.
     fn confirm(&mut self, _: &Context) -> Option<()> {
-        todo!("dl.K5")
+        Some(())
     }
 
+    /// `message`: the text the alert tells.
     fn json_fields(&self) -> Option<Value> {
-        todo!("dl.K5")
+        Some(json!({ "message": self.content.message.as_str() }))
     }
 
     fn key(&self) -> Option<&str> {

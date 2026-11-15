@@ -16,7 +16,7 @@ use crate::contract::{
     Bind, CollectionEvent, ColumnEvent, ColumnSort, ColumnSpec, Entry, NoValue, Outcome, Props as _, Remember as _, Scroll, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _, clicked,
 };
-use crate::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, StackDialog, dialog_id};
+use crate::dialog::{Dialog, DialogId, DialogOutput, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use crate::display::{Divider, Shade, Text};
 use crate::layout::RowAlign;
 use crate::layout_components::{Row, Stack};
@@ -30,11 +30,13 @@ use crate::style::TypeRole;
 use crate::table::Table;
 use crate::tabs::{Tab, TabKind, TabStrip};
 use contributors::{Writer, sorted_indices};
-use craft_behavior::{ColumnKey, ColumnWidth, IconId, SelectionChange, keyed};
+use craft_behavior::{ColumnKey, ColumnWidth, EditEvent, IconId, Mixed, SelectionChange, keyed};
 use craft_theme::Variant;
 use egui::{Response, Ui};
+use serde_json::{Value, json};
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::sync::Arc;
 
 craft_ui::words! {
     /// The words of the About dialog. `{app}` is the application's name. The counted words give "1 PR" and "3 PRs".
@@ -200,7 +202,8 @@ impl Outcome for AboutOutput {
 ///   row's tooltip is the summary.
 /// - **Models.** A table of the credited models with their commits, share of all commits and lines.
 ///
-/// The tab, the name mode, the sort order and the view are kept in the dialog's container while it is open. Links are reported
+/// The name mode, the sort order and the view are kept in the dialog's container while it is open, and so is the tab
+/// unless [`tab`](AboutDialog::tab) binds it. Links are reported
 /// in [`AboutOutput::link`] and never opened from here. Enter and Escape close the dialog.
 #[must_use = "show the dialog with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
@@ -232,7 +235,7 @@ impl<'a> AboutDialog<'a> {
         let title = Label::from(words.title.fill(&[("app", info.app_name.as_str())]));
         let shown = Shown { words: &words, writer: &writer, info, credits };
 
-        let _ = &tab; // P3(dialogs-w4): dl.K11, the bound tab
+        let mut tab = tab;
         let view = RefCell::new(View::default());
         let link = RefCell::new(None);
         let mut dialog =
@@ -241,7 +244,15 @@ impl<'a> AboutDialog<'a> {
             dialog = dialog.opened(open);
         }
         let shown_dialog = dialog.show(ui, |ui, cx| {
-            *view.borrow_mut() = if cx.appeared() { View { tab: AboutTab::default(), ..View::default() } } else { cx.memory::<View>().clone() };
+            let mut kept = if cx.appeared() { View::default() } else { cx.memory::<View>().clone() };
+            // A bound tab is the caller's each pass, so a tab set from outside shows on the next pass.
+            if let Some(bind) = tab.as_mut()
+                && let Some(Mixed::Same(held)) = bind.reborrow().read(cx)
+            {
+                kept.tab = held;
+            }
+            let before = kept.tab;
+            *view.borrow_mut() = kept;
             Stack::new().header(|ui, _| shown.tabs(ui, &title, &view)).show(ui, |ui, _| {
                 let tab = view.borrow().tab;
                 match tab {
@@ -250,6 +261,13 @@ impl<'a> AboutDialog<'a> {
                     AboutTab::Models => shown.models(ui),
                 }
             });
+            let picked = view.borrow().tab;
+            if picked != before
+                && let Some(bind) = tab.as_mut()
+            {
+                let name: Arc<str> = Arc::from(title.as_str());
+                let _ = bind.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), picked, name, None));
+            }
             *cx.memory::<View>() = view.borrow().clone();
         });
         let DialogOutput { response, closed, .. } = shown_dialog.output;
@@ -276,9 +294,11 @@ impl Shown<'_> {
         ];
         let source = keyed(&tabs[..], |tab: &(AboutTab, Label)| tab.0).with_text(|tab| Cow::Borrowed(tab.1.as_str()));
         let shown = view.borrow().tab;
+        // The strip sits in the stack's header, which is as tall as what it holds: it takes its tabs' height.
         let out = TabStrip::new(title.clone())
             .kind(TabKind::Text)
             .shown(shown)
+            .natural_height(true)
             .show_items(ui, &source, &mut |key, _| Tab::new(tabs.iter().find(|tab| tab.0 == *key).map_or_else(Label::default, |tab| tab.1.clone())));
         for event in out.response.events {
             if let CollectionEvent::Selection(SelectionChange::Set(keys)) = event
@@ -505,21 +525,32 @@ impl HostedAbout {
 /// The key of the hosted About dialog.
 const ABOUT_KEY: &str = "help.about";
 
+/// The tabs' names in the hosted dialog's `tab` field.
+const TAB_NAMES: [(AboutTab, &str); 3] = [(AboutTab::About, "about"), (AboutTab::Contributors, "contributors"), (AboutTab::Models, "models")];
+
+fn tab_name(tab: AboutTab) -> &'static str {
+    TAB_NAMES.iter().find(|(known, _)| *known == tab).map_or("about", |(_, name)| *name)
+}
+
 impl StackDialog for HostedAbout {
     type Result = ();
 
-    fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        let _ = ctx;
-        todo!("dl.K11")
+    fn confirm(&mut self, _: &egui::Context) -> Option<Self::Result> {
+        Some(())
     }
 
-    fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K11")
+    fn json_fields(&self) -> Option<Value> {
+        Some(json!({ "tab": tab_name(self.tab) }))
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K11")
+    fn set_json_field(&mut self, _: &egui::Context, field: &str, value: Value) -> Result<(), String> {
+        if field != "tab" {
+            return Err(FieldRefusal::Unknown.message(field));
+        }
+        let picked = value.as_str().and_then(|name| TAB_NAMES.iter().find(|(_, known)| *known == name)).map(|(tab, _)| *tab);
+        let Some(picked) = picked else { return Err(FieldRefusal::Rejects(&value).message(field)) };
+        self.tab = picked;
+        Ok(())
     }
 
     fn id(&self) -> DialogId {

@@ -69,7 +69,7 @@ name = "AboutTab"
 old = "craft_ui::dialog::about::AboutTab"
 new = "craft_ui::patterns::form_dialogs::AboutTab"
 status = "moved"
-note = "The opening tab is `AboutDialog::tab(AboutTab)`; the shown tab is kept by the dialog, so `current_tab` and `set_tab` are gone."
+note = "The shown tab is the binding `AboutDialog::tab(Bind<AboutTab>)`: the dialog shows it and writes a tab pick back. `HostedAbout::tab(AboutTab)` opens the hosted dialog on a tab, and its `tab` field reads and sets it."
 
 [[type]]
 name = "AboutLabels"
@@ -115,8 +115,8 @@ note = "The app owns the data and lends it for the pass."
 [[setter]]
 type = "AboutDialog"
 old = "tab(AboutTab)"
-new = "tab(AboutTab)"
-note = "Sets the tab the dialog opens on."
+new = "tab(Bind<AboutTab>)"
+note = "Binds the shown tab: the dialog opens on it and writes a tab pick back. Hosted: `HostedAbout::tab(AboutTab)`."
 
 [[setter]]
 type = "AboutDialog"
@@ -127,11 +127,11 @@ note = "The clicked URL comes back in the output of the pass that clicked it."
 [[setter]]
 type = "AboutDialog"
 old = "current_tab()"
-new = ""
-note = "The tab is kept inside the dialog."
+new = "tab(Bind<AboutTab>)"
+note = "The bound value is the shown tab; on a hosted dialog, the `tab` field of `json_fields`."
 
 [[setter]]
 type = "AboutDialog"
 old = "set_tab(AboutTab)"
-new = "tab(AboutTab)"
-note = "Only at opening."
+new = "tab(Bind<AboutTab>)"
+note = "Writing the bound value shows that tab on the next pass; on a hosted dialog, `set_json_field(\"tab\", ..)`."

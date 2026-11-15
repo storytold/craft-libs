@@ -11,8 +11,10 @@ use crate::runtime::overlay::CloseReason;
 use crate::runtime::words::CommonWords;
 use crate::sections::{DialogRole, FooterButton};
 use crate::style::TypeRole;
+use crate::text::SelectableText;
 use craft_theme::variant::Tone;
 use egui::{Response, Ui};
+use serde_json::{Value, json};
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -77,6 +79,7 @@ pub struct ReportDialog<'a> {
     title: Label,
     summary: Label,
     notes: Vec<ReportNote>,
+    lines: Vec<Label>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
@@ -85,20 +88,25 @@ pub struct ReportDialog<'a> {
 impl<'a> ReportDialog<'a> {
     /// A report titled `title` with one `summary` line and the `notes`.
     pub fn new(title: impl Into<Label>, summary: impl Into<Label>, notes: Vec<ReportNote>) -> Self {
-        ReportDialog { title: title.into(), summary: summary.into(), notes, open: None }
+        ReportDialog { title: title.into(), summary: summary.into(), notes, lines: Vec::new(), open: None }
     }
 
-    /// Plain `lines` shown as the notes, in place of ones built with [`ReportNote`].
+    /// Plain `lines` shown as the notes, in place of ones built with [`ReportNote`]: each line is selectable text,
+    /// and Copy hands them back as they are.
     #[must_use]
     pub fn lines(mut self, lines: Vec<Label>) -> Self {
-        let _ = (&mut self, lines);
-        todo!("dl.K12")
+        self.lines = lines;
+        self
     }
 
-    /// The notes as the Copy button hands them back, one per line with the tone's word first.
+    /// The notes as the Copy button hands them back, one per line with the tone's word first; plain
+    /// [`lines`](ReportDialog::lines) one per line as they are.
     pub fn as_text(&self, env: &Env) -> String {
-        let words = env.words::<ReportWords>();
         let view = env.view();
+        if !self.lines.is_empty() {
+            return self.lines.iter().map(|line| view.resolve(line).as_str().to_owned()).collect::<Vec<_>>().join("\n");
+        }
+        let words = env.words::<ReportWords>();
         self.notes
             .iter()
             .map(|note| {
@@ -121,25 +129,33 @@ impl<'a> ReportDialog<'a> {
         let words = env.words::<ReportWords>();
         let common = env.words::<CommonWords>();
         let text = self.as_text(&env);
-        let ReportDialog { title, summary, notes, open } = self;
+        let ReportDialog { title, summary, notes, lines, open } = self;
         let accept = FooterButton::new(common.ok.clone(), DialogRole::Accept);
         let copy = FooterButton::new(words.copy.clone(), DialogRole::Other).stays_open(true);
         let mut dialog = Dialog::new(title).buttons([accept, copy]);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
-        let count = (!notes.is_empty()).then(|| {
-            let n = notes.len() as u64;
+        let shown_count = if lines.is_empty() { notes.len() } else { lines.len() };
+        let count = (shown_count > 0).then(|| {
+            let n = shown_count as u64;
             words.count.text(n, &env.format().integer(n))
         });
+        let view = env.view();
+        let lines: Vec<String> = lines.iter().map(|line| view.resolve(line).as_str().to_owned()).collect();
         let shown = dialog.show(ui, |ui, _| {
             Stack::new().show(ui, |ui, _| {
                 Text::new(summary.clone()).show(ui);
                 if let Some(count) = &count {
                     Text::new(count.clone()).role(TypeRole::Caption).shade(Shade::Muted).show(ui);
                 }
-                for (at, note) in notes.iter().enumerate() {
-                    Notice::new(note.tone, note.text.clone()).layout(NoticeLayout::Inline).id_salt(at).show(ui);
+                if lines.is_empty() {
+                    for (at, note) in notes.iter().enumerate() {
+                        Notice::new(note.tone, note.text.clone()).layout(NoticeLayout::Inline).id_salt(at).show(ui);
+                    }
+                }
+                for (at, line) in lines.iter().enumerate() {
+                    SelectableText::new(words.note.clone(), line).multiline().id_salt(("line", at)).show(ui);
                 }
             });
         });
@@ -155,13 +171,14 @@ pub struct HostedReport {
     title: Label,
     summary: Label,
     lines: Vec<String>,
+    open: bool,
     copied: Option<String>,
 }
 
 impl HostedReport {
     /// A report titled `title` with one `summary` line and the `lines`.
     pub fn new(title: impl Into<Label>, summary: impl Into<Label>, lines: Vec<String>) -> Self {
-        HostedReport { id: crate::dialog::dialog_id("report"), title: title.into(), summary: summary.into(), lines, copied: None }
+        HostedReport { id: crate::dialog::dialog_id("report"), title: title.into(), summary: summary.into(), lines, open: true, copied: None }
     }
 
     /// The text the Copy button copied since the last call, once. The app puts it on the clipboard.
@@ -177,18 +194,28 @@ impl crate::dialog::StackDialog for HostedReport {
         self.id
     }
 
-    fn show(&mut self, ui: &mut Ui, stack: &crate::dialog::DialogStack) -> Option<crate::dialog::DialogResult<()>> {
-        let _ = (ui, stack, &self.title, &self.summary, &self.lines);
-        todo!("dl.K12")
+    fn show(&mut self, ui: &mut Ui, _: &crate::dialog::DialogStack) -> Option<crate::dialog::DialogResult<()>> {
+        let lines = self.lines.iter().map(|line| Label::from(line.clone())).collect();
+        let shown = ReportDialog {
+            title: self.title.clone(),
+            summary: self.summary.clone(),
+            notes: Vec::new(),
+            lines,
+            open: Some(Bind::bound(&mut self.open)),
+        }
+        .show(ui);
+        if let Some(text) = shown.copied {
+            self.copied = Some(text);
+        }
+        shown.closed.map(|_| crate::dialog::DialogResult::Ok(()))
     }
 
-    fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        let _ = ctx;
-        todo!("dl.K12")
+    fn confirm(&mut self, _: &egui::Context) -> Option<Self::Result> {
+        Some(())
     }
 
-    fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K12")
+    fn json_fields(&self) -> Option<Value> {
+        Some(json!({ "lines": self.lines }))
     }
 }
 

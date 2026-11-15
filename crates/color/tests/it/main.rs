@@ -6,5 +6,5 @@ mod paint_list;
 mod pair;
 mod panels;
 mod picker;
-// integration: dialogs-w4 adds the file. mod profile_prompts;
+mod profile_prompts;
 mod sampling;

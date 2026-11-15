@@ -404,7 +404,6 @@ pub struct FooterButton {
     label: Label,
     role: DialogRole,
     letter: Option<char>,
-    #[allow(dead_code)] // P3(dialogs-w4): dl.K6
     chord: Option<Chord>,
     enabled: bool,
     disabled_reason: Option<Label>,
@@ -495,6 +494,12 @@ impl FooterButton {
 fn letters_reach_footer(ctx: &Context) -> bool {
     let Some(scope) = focus::open_scope(ctx) else { return false };
     focus::focus_in_scope(ctx, scope) == Some(true) && focus::focused_rec(ctx).is_some_and(|rec| rec.stop.keys.owner == OwnerClass::Widget)
+}
+
+/// Whether a button's modified chord reaches the footer being shown: the dialog the footer sits in is the top modal,
+/// wherever the focus is. A text part does not own modified chords, so a focused field does not stop it.
+fn chords_reach_footer(ctx: &Context) -> bool {
+    focus::open_scope(ctx).is_some_and(|scope| crate::runtime::overlay::is_top_modal(ctx, scope))
 }
 
 /// Whether an Enter reaches the default button of the footer being shown: focus is inside the focus scope the footer
@@ -642,6 +647,7 @@ impl FooterBar {
                 let mut shown = Shown::default();
                 let (ctx, owner) = (ui.ctx().clone(), ui.scope_id());
                 let lettered = letters_reach_footer(&ctx);
+                let chorded = chords_reach_footer(&ctx);
                 // Labels are resolved in the scope's language before the letters decorate them.
                 let env = Env::of(ui);
                 let resolved: Vec<Label> = buttons.iter().map(|button| env.view().resolve(&button.label)).collect();
@@ -676,8 +682,12 @@ impl FooterBar {
                     if crate::contract::clicked(&widget.show(ui)) {
                         shown.picked = Some(at);
                     }
-                    let chord = button.letter.and_then(Key::from_char).map(Chord::plain);
-                    if let Some(chord) = chord.filter(|_| lettered && button.enabled && !ui.is_sizing_pass()) {
+                    // The capture, renewed each pass, holds the chord from every other component from the next input
+                    // hook on; `take_claimed` consumes the held press, so a second pass of the frame finds nothing
+                    // left and does not press the button again.
+                    let letter = button.letter.and_then(Key::from_char).map(Chord::plain).filter(|_| lettered);
+                    let modified = button.chord.filter(|_| chorded);
+                    for chord in letter.into_iter().chain(modified).filter(|_| button.enabled && !ui.is_sizing_pass()) {
                         keys::capture(&ctx, owner, chord);
                         if keys::take_claimed(&ctx, owner, chord) {
                             shown.picked = Some(at);

@@ -9,11 +9,12 @@ use craft_cms::ColorSpace;
 use craft_cms::profile::Profile;
 use craft_ui::choice::{Checkbox, Radio, RadioGroup};
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, Prompt, StackDialog, dialog_id};
+use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, Prompt, StackDialog, dialog_id};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
 use egui::{Context, Ui};
+use serde_json::{Value, json};
 
 use crate::display::MonitorProblem;
 
@@ -250,6 +251,30 @@ impl ProfileMismatchDialog {
         self.rememberable = on;
         self
     }
+
+    /// The actions the question offers, in radio order.
+    fn offered(&self) -> &'static [ProfileAction] {
+        match self.question {
+            ProfileQuestion::Mismatch { .. } => &[ProfileAction::UseEmbedded, ProfileAction::ConvertToWorking, ProfileAction::Discard],
+            ProfileQuestion::Missing { .. } => &[ProfileAction::LeaveAsIs, ProfileAction::AssignWorking],
+        }
+    }
+
+    /// Whether "Remember this choice" shows: a mismatch the app made rememberable.
+    fn can_remember(&self) -> bool {
+        self.rememberable && matches!(self.question, ProfileQuestion::Mismatch { .. })
+    }
+}
+
+/// What automation calls `action`.
+fn action_name(action: ProfileAction) -> &'static str {
+    match action {
+        ProfileAction::UseEmbedded => "useEmbedded",
+        ProfileAction::ConvertToWorking => "convertToWorking",
+        ProfileAction::Discard => "discard",
+        ProfileAction::LeaveAsIs => "leaveAsIs",
+        ProfileAction::AssignWorking => "assignWorking",
+    }
 }
 
 impl StackDialog for ProfileMismatchDialog {
@@ -259,43 +284,67 @@ impl StackDialog for ProfileMismatchDialog {
         self.id
     }
 
-    fn confirm(&mut self, ctx: &Context) -> Option<ProfileAnswer> {
-        let _ = ctx;
-        todo!("dl.K10")
+    /// The chosen action, as OK gives it; `None` for an action the question does not offer.
+    fn confirm(&mut self, _: &Context) -> Option<ProfileAnswer> {
+        self.offered().contains(&self.action).then(|| ProfileAnswer { action: self.action, remember: self.remember && self.can_remember() })
     }
 
+    /// `action`, the chosen one of the question's actions, and `remember` while the box shows.
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K10")
+        let mut fields = json!({ "action": action_name(self.action) });
+        if self.can_remember() {
+            fields["remember"] = Value::Bool(self.remember);
+        }
+        Some(fields)
     }
 
-    fn set_json_field(&mut self, ctx: &Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K10")
+    fn set_json_field(&mut self, _: &Context, field: &str, value: Value) -> Result<(), String> {
+        match field {
+            "action" => {
+                let picked = self.offered().iter().copied().find(|action| value.as_str() == Some(action_name(*action)));
+                let Some(picked) = picked else { return Err(FieldRefusal::Rejects(&value).message(field)) };
+                self.action = picked;
+            }
+            "remember" if self.can_remember() => match value.as_bool() {
+                Some(on) => self.remember = on,
+                None => return Err(FieldRefusal::Rejects(&value).message(field)),
+            },
+            _ => return Err(FieldRefusal::Unknown.message(field)),
+        }
+        Ok(())
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ProfileAnswer>> {
         let env = Env::of(ui);
         let (words, common) = (env.words::<ProfileWords>(), env.words::<CommonWords>());
-        let Self { file_name, mode, question, action, rememberable, remember, open, .. } = self;
+        let (offered, can_remember) = (self.offered(), self.can_remember());
+        let Self { file_name, mode, question, action, remember, open, .. } = self;
         let mode_word = mode.word(&words);
         let name = file_name.as_str();
-        let (title, message, choices, can_remember) = match &*question {
+        let (title, message, embedded, working) = match &*question {
             ProfileQuestion::Mismatch { embedded, working } => {
                 let message = words.mismatch_message.fill(&[("mode", mode_word), ("name", name)]);
-                let choices = vec![
-                    (ProfileAction::UseEmbedded, Label::from(words.use_embedded.fill(&[("profile", embedded)]))),
-                    (ProfileAction::ConvertToWorking, Label::from(words.convert.fill(&[("profile", working)]))),
-                    (ProfileAction::Discard, words.discard.clone()),
-                ];
-                (words.mismatch_title.clone(), message, choices, *rememberable)
+                (words.mismatch_title.clone(), message, embedded.as_str(), working.as_str())
             }
             ProfileQuestion::Missing { working } => {
                 let what = words.missing_message.fill(&[("mode", mode_word), ("name", name)]);
                 let message = format!("{what}\n{}", words.working.fill(&[("working", working)]));
-                let choices = vec![(ProfileAction::LeaveAsIs, words.leave.clone()), (ProfileAction::AssignWorking, words.assign_working.clone())];
-                (words.missing_title.clone(), message, choices, false)
+                (words.missing_title.clone(), message, "", working.as_str())
             }
         };
+        let choices: Vec<(ProfileAction, Label)> = offered
+            .iter()
+            .map(|&choice| {
+                let text = match choice {
+                    ProfileAction::UseEmbedded => Label::from(words.use_embedded.fill(&[("profile", embedded)])),
+                    ProfileAction::ConvertToWorking => Label::from(words.convert.fill(&[("profile", working)])),
+                    ProfileAction::Discard => words.discard.clone(),
+                    ProfileAction::LeaveAsIs => words.leave.clone(),
+                    ProfileAction::AssignWorking => words.assign_working.clone(),
+                };
+                (choice, text)
+            })
+            .collect();
         let group_label = title.clone();
         let (remember_label, remember_tip) = (words.remember.clone(), words.remember_tip.clone());
         let answers = [FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];

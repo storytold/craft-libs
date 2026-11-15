@@ -39,8 +39,8 @@ impl Reply {
         Reply { lettered: false, ..Reply::new(label, role) }
     }
 
-    /// The chord that answers the prompt.
-    #[allow(dead_code)] // P3(dialogs-w4): dl.K7
+    /// A modified chord that also gives this answer while the prompt is the top modal (Cmd+D for Don't Save on
+    /// macOS), whatever control has the focus.
     pub(super) fn chord(mut self, chord: Chord) -> Self {
         self.chord = Some(chord);
         self
@@ -54,13 +54,14 @@ impl Reply {
     }
 }
 
-/// The buttons of `replies`, in the given order. The letters are assigned over the labels in the scope's language
-/// (`craft_keymap::mnemonic::assign`), so every language gets letters from its own words; the footer shows them.
+/// The buttons of `replies`, in the given order. The letters are assigned over the labels in the scope's language and
+/// compared under its text folding (`craft_keymap::mnemonic::assign` with [`Env::folder`]), so every language gets
+/// letters from its own words; the footer shows them.
 pub(super) fn buttons(env: &Env, replies: Vec<Reply>) -> Vec<FooterButton> {
     let view = env.view();
     let labels: Vec<Label> = replies.iter().map(|reply| view.resolve(&reply.label)).collect();
     let lettered: Vec<&str> = replies.iter().zip(&labels).filter(|(reply, _)| reply.lettered).map(|(_, label)| label.as_str()).collect();
-    let mut letters = mnemonic::assign(&lettered, &env.folder()).into_iter(); // P3(dialogs-w4): tp.T11
+    let mut letters = mnemonic::assign(&lettered, &env.folder()).into_iter();
     replies
         .into_iter()
         .zip(labels)

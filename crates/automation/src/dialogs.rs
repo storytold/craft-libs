@@ -1,12 +1,12 @@
 //! `ui.dialog.set`, `ui.dialog.confirm` and `ui.dialog.cancel` on an app's [`DialogHost`], for every dialog type.
 //!
 //! The app's method table hands these methods to [`dialog_method`] and lists [`inspect`] under `ui.inspect`'s
-//! `dialogs`, or [`inspect_stack`] when it shows dialogs of its own beside the host's. A dialog is named by the `id` `inspect` lists; its fields are its
+//! `dialogs`. A dialog is named by the `id` `inspect` lists, or `"top"` for the top one; its fields are its
 //! [`StackDialog::json_fields`](craft_ui::dialog::StackDialog::json_fields). Opening a dialog (`ui.dialog.open`) and
 //! running the command its answer is for stay the app's: an answer waits for the app's `DialogHost::take` as a
 //! click's would.
 
-use craft_ui::dialog::{DialogHost, DialogId};
+use craft_ui::dialog::{DialogHost, DialogId, StandardPrompt};
 use egui::Context;
 use serde_json::{Value, json};
 
@@ -15,34 +15,17 @@ use crate::protocol::Params;
 /// The open dialogs, the top one last: `{id, parent, key, fields}`, `null` for a missing parent, key or fields. Ids
 /// are 64-bit hashes, so they are listed as decimal strings, which every JSON reader keeps exact.
 pub fn inspect(host: &DialogHost) -> Value {
-    inspect_stack(host, |_| None)
-}
-
-/// The whole stack, the top dialog last: the host's dialogs as [`inspect`] lists them, and each dialog the app shows
-/// beside them ([`DialogHost::open_beside`]) as `beside` describes it (`None` leaves it out).
-pub fn inspect_stack(host: &DialogHost, mut beside: impl FnMut(DialogId) -> Option<Value>) -> Value {
-    let mut hosted = host.open_dialogs();
-    host.stack()
-        .ids()
-        .filter_map(|id| match hosted.iter().position(|dialog| dialog.id == id) {
-            Some(at) => {
-                let dialog = hosted.swap_remove(at);
-                Some(json!({
-                    "id": dialog.id.value().to_string(),
-                    "parent": dialog.parent.map(|id| id.value().to_string()),
-                    "key": dialog.key,
-                    "fields": dialog.fields,
-                }))
-            }
-            None => beside(id),
+    host.open_dialogs()
+        .into_iter()
+        .map(|dialog| {
+            json!({
+                "id": dialog.id.value().to_string(),
+                "parent": dialog.parent.map(|id| id.value().to_string()),
+                "key": dialog.key,
+                "fields": dialog.fields,
+            })
         })
         .collect()
-}
-
-/// Whether `params.dialog` names an open dialog of `host`, so an app that lists dialogs of its own beside the host's
-/// knows which of them a `ui.dialog.*` request is for.
-pub fn names_open_dialog(host: &DialogHost, params: &Value) -> bool {
-    dialog_id(host, params).is_ok()
 }
 
 /// Runs a `ui.dialog.*` method on `host`; `None` when `method` is not one of them.
@@ -50,7 +33,8 @@ pub fn names_open_dialog(host: &DialogHost, params: &Value) -> bool {
 /// - `ui.dialog.set {dialog, field, value}` sets one field ([`DialogHost::set_json_field`]).
 /// - `ui.dialog.confirm {dialog, choice?}` answers OK, as the default button would, after setting the `choice` field
 ///   when one is given (which button of a prompt).
-/// - `ui.dialog.cancel {dialog}` closes the dialog and its children with Cancel.
+/// - `ui.dialog.cancel {dialog}` closes the dialog as Escape would: a standard prompt with a button for its Escape
+///   answer gives that answer, with its tag; any other dialog closes with its children with Cancel.
 pub fn dialog_method(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value) -> Option<Result<Value, String>> {
     let fields: &[&str] = match method {
         "ui.dialog.set" => &["dialog", "field", "value"],
@@ -81,22 +65,29 @@ fn run(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value, field
             }
         }
         _ => {
-            host.cancel_by_id(ctx, id);
+            // A prompt's Escape is an answer the app reads with the prompt's tag, so it goes through the prompt's
+            // own OK path rather than the host's outside close.
+            let escape = host.get_dyn_mut(id).and_then(|dialog| dialog.downcast_mut::<StandardPrompt>()).and_then(|prompt| {
+                let choice = prompt.escape_choice()?;
+                prompt.set_choice(choice);
+                Some(choice)
+            });
+            if escape.is_none() || !host.confirm_by_id(ctx, id) {
+                host.cancel_by_id(ctx, id);
+            }
         }
     }
     Ok(Value::Null)
 }
 
 /// The open dialog `params.dialog` names: the id `inspect` lists, as a decimal string or a number, or `"top"` for the
-/// top hosted dialog. A dialog the app shows beside the host is on the stack but not the host's, so it is no dialog here.
+/// top dialog of the stack.
 pub fn dialog_id(host: &DialogHost, params: &Value) -> Result<DialogId, String> {
     let params = Params(params);
     let value = match params.0.get("dialog") {
-        Some(Value::String(id)) if id == "top" => {
-            return host.stack().ids().filter(|id| host.get_dyn(*id).is_some()).last().ok_or_else(|| "no hosted dialog is open".to_owned());
-        }
+        Some(Value::String(id)) if id == "top" => return host.stack().top().ok_or_else(|| "no hosted dialog is open".to_owned()),
         Some(Value::String(id)) => id.parse().map_err(|_| format!("`dialog` {id:?} is not an id `ui.inspect` lists"))?,
         _ => params.uint_field("dialog")?.ok_or("missing `dialog`")?,
     };
-    host.stack().ids().find(|id| id.value() == value && host.get_dyn(*id).is_some()).ok_or_else(|| format!("no dialog {value}"))
+    host.stack().ids().find(|id| id.value() == value).ok_or_else(|| format!("no dialog {value}"))
 }
