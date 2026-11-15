@@ -241,6 +241,67 @@ fn expansion_bounds_stop_small_repeat_bombs() {
 }
 
 #[test]
+fn text_past_the_limit_can_be_cut_short_instead_of_refused() {
+    let cut = Options { truncate_text: true, ..Options::default() };
+    // A repeated row past 64 MiB keeps the copies that fit.
+    let cell = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "y".repeat(1024));
+    let rows =
+        ods(&format!(r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="65537">{cell}</table:table-row></table:table>"#));
+    assert!(matches!(open(&rows), Err(Error::TooLarge(_))));
+    let wb = read(&rows, &cut).unwrap();
+    assert!(wb.text_truncated);
+    assert_eq!(wb.sheets[0].cells.len(), 65_536);
+    assert!(wb.sheets[0].cells.contains_key(&CellRef::new(65_535, 0)));
+    assert!(
+        !open(&ods(&format!(r#"<table:table table:name="Data"><table:table-row>{cell}</table:table-row></table:table>"#))).unwrap().text_truncated
+    );
+    // Repeated columns keep the copies that fit, and nothing after them is kept: not a later
+    // cell that would fit, not the row's further copies, not later rows or sheets.
+    let small = Options { max_text: 10, ..cut };
+    let bytes = ods(r#"
+      <table:table table:name="A">
+        <table:table-row table:number-rows-repeated="2"><table:table-cell table:number-columns-repeated="3" office:value-type="string" office:string-value="abcd"/><table:table-cell office:value-type="string" office:string-value="z"/><table:table-cell table:number-columns-spanned="2"/></table:table-row>
+        <table:table-row><table:table-cell office:value-type="float" office:value="1"/></table:table-row>
+      </table:table>
+      <table:table table:name="B"><table:table-row><table:table-cell table:formula="of:=1"/></table:table-row></table:table>"#);
+    assert!(matches!(read(&bytes, &Options { max_text: 10, ..Options::default() }), Err(Error::TooLarge(_))));
+    let wb = read(&bytes, &small).unwrap();
+    assert!(wb.text_truncated);
+    assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+    assert_eq!(wb.sheets[0].cells.keys().copied().collect::<Vec<_>>(), [CellRef::new(0, 0), CellRef::new(0, 1)]);
+    assert_eq!(shown(&wb.sheets[0], CellRef::new(0, 1)), text("abcd"));
+    assert!(wb.sheets[0].merges.is_empty() && wb.sheets[1].cells.is_empty());
+    // A repeated row keeps the cells of its next copy that fit.
+    let bytes = ods(
+        r#"<table:table table:name="A"><table:table-row table:number-rows-repeated="3"><table:table-cell office:value-type="string" office:string-value="abcd"/><table:table-cell office:value-type="string" office:string-value="efgh"/></table:table-row></table:table>"#,
+    );
+    let wb = read(&bytes, &Options { max_text: 12, ..cut }).unwrap();
+    assert!(wb.text_truncated);
+    assert_eq!(wb.sheets[0].cells.keys().copied().collect::<Vec<_>>(), [CellRef::new(0, 0), CellRef::new(0, 1), CellRef::new(1, 0)]);
+    // Cells after the cut are not read, so their own size limit does not refuse the document.
+    let small = Options { max_text: 4, max_cell_text: 10, ..cut };
+    let bytes = ods(r#"<table:table table:name="A">
+        <table:table-row><table:table-cell office:value-type="string" office:string-value="abcd"/><table:table-cell office:value-type="string" office:string-value="x"/><table:table-cell office:value-type="string" office:string-value="eleven char"/></table:table-row>
+        <table:table-row><table:table-cell><text:p>more than ten bytes</text:p></table:table-cell></table:table-row>
+      </table:table>"#);
+    assert!(matches!(read(&bytes, &Options { truncate_text: false, ..small }), Err(Error::TooLarge(_))));
+    assert_eq!(read(&bytes, &small).unwrap().sheets[0].cells.keys().copied().collect::<Vec<_>>(), [CellRef::new(0, 0)]);
+    // The cell that passes the limit is read whole first, so its own size limit still applies.
+    let over = row(r#"<table:table-cell office:value-type="string" office:string-value="eleven char"/>"#);
+    assert!(matches!(read(&over, &small), Err(Error::TooLarge(_))));
+    // The other limits refuse the cells kept, and do not count the cells left out.
+    let few = Options { max_cells: 1, ..cut };
+    let after = row(
+        r#"<table:table-cell office:value-type="string" office:string-value="ab"/><table:table-cell table:number-columns-repeated="2" office:value-type="float" office:value="1"/>"#,
+    );
+    assert!(read(&after, &Options { max_text: 1, ..few }).unwrap().sheets[0].cells.is_empty());
+    assert!(matches!(
+        read(&row(r#"<table:table-cell table:number-columns-repeated="2" office:value-type="float" office:value="1"/>"#), &few),
+        Err(Error::TooLarge(_))
+    ));
+}
+
+#[test]
 fn an_error_result_never_reads_as_its_placeholder_zero() {
     let wb = open(&row(
         r#"<table:table-cell calcext:value-type="error" office:value-type="float" office:value="0" table:formula="of:=1/0"><text:p>#DIV/0!</text:p></table:table-cell>"#,

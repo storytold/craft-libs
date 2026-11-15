@@ -73,6 +73,11 @@ pub struct Options {
     pub max_merges: u64,
     /// Bytes of cell text, repeats expanded, over all sheets.
     pub max_text: u64,
+    /// When the text would pass `max_text`, keep the cells read before that point and stop
+    /// keeping cells, with [`Workbook::text_truncated`] set, instead of refusing the document.
+    /// Rows and cells after the cell that passes it are not read. `max_cell_text` still applies
+    /// to every cell read, that cell included; `max_cells` and `max_merges` count the cells kept.
+    pub truncate_text: bool,
     /// Bytes of one cell's text, and of one attribute value.
     pub max_cell_text: usize,
     /// Keep the cells of this sheet only (by position); the others are listed by name, empty.
@@ -86,6 +91,7 @@ impl Default for Options {
             max_cells: 1_000_000,
             max_merges: 100_000,
             max_text: 64 << 20,
+            truncate_text: false,
             max_cell_text: 1 << 20,
             only_sheet: None,
         }
