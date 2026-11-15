@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
 acadrust = "=0.6.6"
 log = "0.4"
