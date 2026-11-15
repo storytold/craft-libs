@@ -188,7 +188,7 @@ fn alt_ima_decode(data: &[u8], channels: usize, block_align: usize) -> Vec<i16> 
             out[base + ch] = pred[ch] as i16;
         }
         for (g, group) in block[4 * channels..].chunks_exact(4 * channels).enumerate() {
-            for (ch, bytes) in group.chunks_exact(4).enumerate() {
+            for (ch, bytes) in group.as_chunks::<4>().0.iter().enumerate() {
                 for (k, b) in bytes.iter().enumerate() {
                     for (half, nib) in [b & 0xF, b >> 4].into_iter().enumerate() {
                         let step = STEPS[idx[ch] as usize];
@@ -247,6 +247,9 @@ fn same_as_either(what: &str, ours: &[i16], alt: &[i16], theirs: &[i16]) {
     println!("{what}: largest difference from ours {a}, from the other rounding {b}");
     assert!(a == 0 || b == 0, "{what}: ffmpeg's decode is neither ours ({a}) nor the other rounding ({b})");
 }
+
+/// A name, the WAV file around our stream, our decode of it and the other rounding's.
+type Stream = (&'static str, Vec<u8>, Vec<i16>, Vec<i16>);
 
 // ---- ffmpeg as the reference
 
@@ -375,7 +378,7 @@ fn ffmpeg_decodes_what_we_encode_to_the_samples_we_decode() {
     for channels in [1usize, 2] {
         let x = signal(channels, 12_000);
         let coefs: Vec<u8> = ms::COEFFICIENTS.iter().flat_map(|&(a, b)| [a as i16, b as i16].into_iter().flat_map(i16::to_le_bytes)).collect();
-        let streams: Vec<(&str, Vec<u8>, Vec<i16>, Vec<i16>)> = {
+        let streams: Vec<Stream> = {
             let e = ima::encode(&x, channels, 512).unwrap();
             let per = ima::samples_per_block(512, channels).unwrap() as u16;
             let d = ima::decode(&e, channels, 512).unwrap();
