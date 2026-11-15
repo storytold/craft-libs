@@ -127,6 +127,7 @@ impl PreviewTextures {
     }
 
     /// The preview over `levels` already built, level 0 first, covering the source with `base_uv`.
+    #[cfg(feature = "screen-testing")]
     pub(crate) fn from_levels(name: impl Into<String>, levels: Vec<Arc<ColorImage>>, base_uv: [f32; 2]) -> Self {
         Self { name: name.into(), images: Mutex::new(levels), base_uv }
     }

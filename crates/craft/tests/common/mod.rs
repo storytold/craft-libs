@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 /// Crates the facade leaves out, by directory, with the reason. Everything else under `crates/` is a member.
 pub const NOT_IN_FACADE: &[(&str, &str)] = &[
-    ("behavior", "layer 1: pure behaviours with no egui, below craft-ui"),
     ("design-lint", "a lint template and checker for apps' clippy.toml, run from xtask"),
     ("feature-root", "a build tool: the dependency set tools/cl resolves every local build's features with; never built"),
     ("fonts-build", "a build-script helper; apps call it from build.rs"),
@@ -20,7 +19,7 @@ pub const NOT_IN_FACADE: &[(&str, &str)] = &[
 ];
 
 /// Crates every app gets without a feature.
-pub const ALWAYS_ON: &[&str] = &["host", "i18n", "theme"];
+pub const ALWAYS_ON: &[&str] = &["behavior", "host", "i18n", "theme"];
 
 pub struct Member {
     /// The facade name; the package the facade depends on is `craft-<dir>`.

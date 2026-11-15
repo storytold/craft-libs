@@ -3,9 +3,9 @@ name: Shared UI
 on:
   push:
     branches: [main, next]
-    paths: ["crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/ui-macros/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
+    paths: ["crates/craft/**", "crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/ui-macros/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
   pull_request:
-    paths: ["crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/ui-macros/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
+    paths: ["crates/craft/**", "crates/ui/**", "crates/ui-contract/**", "crates/ui-widgets/**", "crates/ui-panels/**", "crates/ui-canvas/**", "crates/ui-patterns/**", "crates/ui-shell/**", "crates/ui-macros/**", "crates/i18n/**", "Cargo.toml", "Cargo.lock", ".github/workflows/ui.yml"]
   workflow_dispatch:
 
 permissions:
@@ -51,6 +51,11 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy -p craft-ui -p craft-ui-contract -p craft-ui-widgets -p craft-ui-panels -p craft-ui-canvas -p craft-ui-patterns -p craft-ui-shell --all-targets --locked -- -D warnings
       - run: cargo clippy -p craft-ui -p craft-ui-contract -p craft-ui-widgets -p craft-ui-panels -p craft-ui-canvas -p craft-ui-patterns -p craft-ui-shell --all-targets --all-features --locked -- -D warnings
+      # A lib build selects no dev-dependency, so craft-ui's `testing` stays off as in an app's build: warnings that
+      # show only without it fail here.
+      - name: Facade as an app builds it
+        if: runner.os == 'Linux'
+        run: cargo clippy -p craft --lib --locked --features ui,layers,color,draw,imaging -- -D warnings
       - name: Docs (links and missing docs)
         if: runner.os == 'Linux'
         run: cargo doc -p craft-ui -p craft-ui-contract -p craft-ui-widgets -p craft-ui-panels -p craft-ui-canvas -p craft-ui-patterns -p craft-ui-shell --all-features --no-deps --locked

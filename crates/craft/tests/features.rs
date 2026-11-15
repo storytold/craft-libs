@@ -12,7 +12,6 @@ const SHARED: &[&str] = &["ui", "screen-testing"];
 /// Facade features that do not build for `wasm32-unknown-unknown`, noted on their line.
 const NATIVE_ONLY: &[(&str, &str)] = &[
     ("dialogs", "native only: rfd's folder picker and file paths"),
-    ("font-manager", "native only: needs craft-font-store's store and network client"),
     ("font-subset", "native only: HarfBuzz's C++ builds with the target's C++ compiler"),
     ("update", "native only: downloads and installs through getrandom without wasm support"),
 ];

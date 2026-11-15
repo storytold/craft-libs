@@ -60,7 +60,6 @@ impl<'a> TimecodeReadout<'a> {
 
 impl TimecodeReadout<'static> {
     /// The first row of a panel, for the suite.
-    #[cfg(feature = "screen-testing")]
     fn sample() -> Self {
         TimecodeReadout::new("Current Time \u{b7} Program: 00:01:02:03", "00:01:02:03", "Current Time \u{b7} Program").accent(true)
     }

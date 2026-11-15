@@ -97,7 +97,7 @@ struct ButtonGridStyle {
 /// The wrapping row of buttons, one roving group. A container's group steps over its members, which carry no row
 /// lengths, so the group is a wrapped grid of the column count the caller works out from the width it gives.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
-#[component(container)]
+#[component(container, unregistered)]
 struct ButtonGrid {
     #[common]
     common: Common,

@@ -461,5 +461,8 @@ macro_rules! __register_pattern {
 #[macro_export]
 #[cfg(not(feature = "testing"))]
 macro_rules! __register_contract {
-    ($ty:ty, $shape:ident, $overlay:expr, [$(($case:expr, $reason:expr)),*], [$($sample:path)?], $purpose:expr) => {};
+    ($ty:ty, $shape:ident, $overlay:expr, [$(($case:expr, $reason:expr)),*], [$($sample:path)?], $purpose:expr) => {
+        // Keeps the sample referenced, so it is never dead code when `testing` is off.
+        $(const _: () = { let _ = $sample; };)?
+    };
 }

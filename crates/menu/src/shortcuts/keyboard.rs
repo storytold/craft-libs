@@ -345,7 +345,6 @@ struct KeyCaps {
 
 impl KeyCaps {
     /// The keycaps of an empty layout, for the registry's style measurements.
-    #[cfg(feature = "screen-testing")]
     fn sample() -> Self {
         KeyCaps { common: craft_ui::contract::Common::new(), caps: Vec::new(), key: None, toggled: None }
     }
