@@ -37,6 +37,8 @@ pub mod shape;
 pub mod shape_hints;
 /// Borrowed views of native XFL frame-sound and envelope records.
 pub mod sound;
+/// Borrowed views of native XFL text-field and text-run schema.
+pub mod text;
 /// Borrowed views of native XFL tween and custom-ease records.
 pub mod tween;
 
