@@ -84,6 +84,9 @@ impl Server {
         }
         let (host, port) = if let Some(rest) = value.strip_prefix('[') {
             let (host, tail) = rest.split_once(']').ok_or_else(|| Error::Spool("invalid CUPS IPv6 host".into()))?;
+            if !host.contains(':') {
+                return Err(Error::Spool("bracketed CUPS host must be IPv6".into()));
+            }
             let port = if tail.is_empty() {
                 631
             } else {
@@ -94,9 +97,16 @@ impl Server {
             };
             (host, port)
         } else if value.matches(':').count() > 1 {
-            // A bare IPv6 address is a host, never an implicit final port. Scoped
-            // literals use brackets when specifying a port to avoid ambiguity.
-            (value, 631)
+            // A bare IPv6 address is a host. A colon after its scope name may
+            // specify a port without cutting an address hextet in half.
+            if let Some((_, zone)) = value.split_once('%')
+                && zone.contains(':')
+            {
+                let (host, port) = value.rsplit_once(':').ok_or_else(|| Error::Spool("invalid CUPS endpoint".into()))?;
+                (host, port.parse::<u16>().ok().filter(|p| *p != 0).ok_or_else(|| Error::Spool("invalid CUPS port".into()))?)
+            } else {
+                (value, 631)
+            }
         } else {
             match value.rsplit_once(':') {
                 Some((host, port)) => (host, port.parse::<u16>().ok().filter(|p| *p != 0).ok_or_else(|| Error::Spool("invalid CUPS port".into()))?),
@@ -172,7 +182,10 @@ fn connect(server: &Server) -> std::io::Result<Stream> {
         Server::Named(host, port) => {
             // Validate even directly constructed public variants before resolving or writing headers.
             let endpoint = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
-            Server::parse(&endpoint).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+            let parsed = Server::parse(&endpoint).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+            if matches!(parsed, Server::Unix(_)) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "a named CUPS host cannot be a Unix path"));
+            }
             let addr = (host.as_str(), *port)
                 .to_socket_addrs()?
                 .next()

@@ -532,6 +532,10 @@ fn ipv6_endpoint_keeps_scope_for_resolution_and_escapes_wire_authority() {
     let scoped = Server::parse("[fe80::1%en0]:8631").unwrap();
     assert!(matches!(&scoped, Server::Named(host, 8631) if host == "fe80::1%en0"));
     assert_eq!(scoped.authority(), "[fe80::1%25en0]:8631");
+    assert_eq!(Server::parse("fe80::1%en0:8631").unwrap().authority(), scoped.authority());
+    assert_eq!(Server::parse("fe80::1%en0").unwrap().authority(), "[fe80::1%25en0]:631");
+    assert!(Server::parse("[host]:631").is_err());
+    assert_eq!(super::connect(&Server::Named("/invalid".into(), 631)).err().unwrap().kind(), std::io::ErrorKind::InvalidInput);
     for bad in ["[::1]junk", "[::1]:0", "[::1]:abc", "[fe80::1%]:631", "[fe80::1%x%y]:631", "host%zone"] {
         assert!(Server::parse(bad).is_err(), "{bad}");
     }
