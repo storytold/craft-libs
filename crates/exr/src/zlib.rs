@@ -501,9 +501,8 @@ mod tests {
             }
             let mut sorted: Vec<usize> = (0..lens.len()).filter(|&s| lens[s] > 0).collect();
             sorted.sort_by_key(|&s| (lens[s], s));
-            for len in 1..16 {
+            for &c in count.iter().skip(1) {
                 code |= bit(pos)? as i32;
-                let c = count[len];
                 if code - c < first {
                     return sorted.get((index + code - first) as usize).copied();
                 }
