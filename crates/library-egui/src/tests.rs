@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Value, json};
 
 use super::*;
@@ -23,6 +23,12 @@ struct Pages {
     /// Show every word as «word», and remember the words asked for.
     translate: bool,
     words: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// The app takes dropped pages.
+    drags: bool,
+    /// The app has an insert of its own in the context menu.
+    inserts: bool,
+    /// There is nowhere to put a page.
+    nowhere: bool,
 }
 
 impl Host for Pages {
@@ -54,7 +60,7 @@ impl Host for Pages {
         self.picker.then(|| Some("/picked".to_string()))
     }
     fn can_place(&self) -> bool {
-        true
+        !self.nowhere
     }
     fn report(&mut self, _message: String) {}
     fn tab(&mut self, ui: &mut Ui, id: &str) {
@@ -64,7 +70,16 @@ impl Host for Pages {
         self.words.borrow_mut().insert(english.to_string());
         if self.translate { Cow::Owned(format!("«{english}»")) } else { Cow::Borrowed(english) }
     }
+    fn menu_inserts(&self) -> Vec<MenuInsert> {
+        if self.inserts { vec![MenuInsert { label: PLACE_IN_MARGIN, params: json!({"placement": "margin"}) }] } else { vec![] }
+    }
+    fn drag_hint(&self) -> Option<&'static str> {
+        self.drags.then_some(DRAG_HINT)
+    }
 }
+
+const PLACE_IN_MARGIN: &str = "Place in margin";
+const DRAG_HINT: &str = "Drag onto a page to put it there";
 
 const LABELS: Labels = Labels {
     nouns: Nouns { one: "page", many: "pages" },
@@ -170,12 +185,13 @@ fn label_words() -> Vec<&'static str> {
     let mut w: Vec<&str> = LABELS.tabs.iter().map(|(_, l)| *l).collect();
     w.extend([LABELS.item, LABELS.insert_item, LABELS.search_hint, LABELS.add_folder_tip, LABELS.empty, LABELS.not_in_browser]);
     w.extend(LABELS.insert_shapes.into_iter().chain(LABELS.insert_element));
+    w.extend([PLACE_IN_MARGIN, DRAG_HINT]);
     w
 }
 
 #[test]
 fn every_word_shown_comes_through_the_host() {
-    let mut h = harness(Pages { folders: vec!["/lib".into()], translate: true, ..Default::default() });
+    let mut h = harness(Pages { folders: vec!["/lib".into()], translate: true, drags: true, inserts: true, ..Default::default() });
     // The pane's words and the app's, translated; the English isn't shown.
     for shown in ["«Add Folder…»", "«Remove»", "«Refresh»", "«Pages»", "«Stamps»"] {
         assert!(h.query_by_label(shown).is_some(), "{shown}");
@@ -193,6 +209,8 @@ fn every_word_shown_comes_through_the_host() {
     }
     h.run_steps(2);
     assert!(h.query_by_label("«Insert page»").is_some() && h.query_by_label("«Insert element»").is_some());
+    assert!(h.query_by_label("«Place in margin»").is_some(), "the app's own insert");
+    assert!(h.state().1.words.borrow().contains(DRAG_HINT), "the drag hint in the tooltip");
     h.state_mut().0.query = "nothing like it".into();
     h.state_mut().1.asked.clear();
     for _ in 0..30 {
@@ -217,6 +235,8 @@ fn templates_fill_in_once_and_keep_other_braces() {
 struct Pics {
     n: usize,
     titled: bool,
+    /// The app takes dropped pictures.
+    drags: bool,
 }
 
 impl Host for Pics {
@@ -248,13 +268,21 @@ impl Host for Pics {
         true
     }
     fn report(&mut self, _message: String) {}
+    fn drag_hint(&self) -> Option<&'static str> {
+        self.drags.then_some(DRAG_HINT)
+    }
 }
 
 fn pics(n: usize, titled: bool, labels: Labels, scrolled: bool) -> Harness<'static, State> {
+    pics_with(Pics { n, titled, drags: false }, labels, scrolled)
+}
+
+fn pics_with(host: Pics, labels: Labels, scrolled: bool) -> Harness<'static, State> {
+    let Pics { n, titled, drags } = host;
     let mut h = Harness::builder().with_size(egui::vec2(320.0, 480.0)).build_ui_state(
         move |ui, st: &mut State| {
             let pal = Palette::from_visuals(ui.visuals());
-            let mut host = Pics { n, titled };
+            let mut host = Pics { n, titled, drags };
             // Some apps put their panes in a scroll area of their own.
             if scrolled {
                 egui::ScrollArea::vertical().show(ui, |ui| show(ui, st, &mut host, &labels, &pal));
@@ -286,20 +314,163 @@ fn files_of_one_item_each_share_one_grid() {
 
 #[test]
 fn the_controls_stay_in_view_when_the_grid_scrolls() {
-    let mut h = pics(40, true, LABELS, true);
-    let controls = h.get_by_label("Library folder").rect().top();
+    // The wheel scrolls the grid whether or not its items can be dragged out.
+    for drags in [false, true] {
+        let mut h = pics_with(Pics { n: 40, titled: true, drags }, LABELS, true);
+        let controls = h.get_by_label("Library folder").rect().top();
+        let item = || "Page 1: p0";
+        let before = h.get_by_label(item()).rect().top();
+        let over = h.get_by_label(item()).rect().center();
+        h.event(egui::Event::PointerMoved(over));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(8);
+        assert!(h.get_by_label(item()).rect().top() < before - 100.0, "the grid scrolled (drags: {drags})");
+        assert_eq!(h.get_by_label("Library folder").rect().top(), controls, "the folder and search controls didn't");
+    }
+}
+
+/// Press the primary button at `from`, move to `to` in a few steps, and hold it there.
+fn press_and_move<S>(h: &mut Harness<'_, S>, from: egui::Pos2, to: egui::Pos2) {
+    h.event(egui::Event::PointerMoved(from));
+    h.step();
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 4.0)));
+        h.step();
+    }
+}
+
+fn release<S>(h: &mut Harness<'_, S>, at: egui::Pos2) {
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+    h.step();
+}
+
+fn carried<S>(h: &Harness<'_, S>) -> Option<Dragged> {
+    egui::DragAndDrop::payload::<Dragged>(&h.ctx).map(|d| (*d).clone())
+}
+
+#[test]
+fn an_app_that_takes_drops_drags_items_out_and_a_click_still_inserts() {
+    let mut h = harness(Pages { folders: vec!["/lib".into()], drags: true, ..Default::default() });
+    // A click inserts, as without dragging.
+    h.get_by_label("Page 2: Terms").click();
+    h.run_steps(2);
+    assert_eq!(h.state().1.acted.last(), Some(&("library.insert".to_string(), json!({"file": "/lib/contract.doc", "page": 1}))));
+    let acted = h.state().1.acted.len();
+    // A drag carries the item, keyed as `library.insert` takes it.
+    let at = h.get_by_label("Page 2: Terms").rect().center();
+    press_and_move(&mut h, at, at + egui::vec2(-150.0, 300.0));
+    let item = Dragged { file: "/lib/contract.doc".into(), item: 1 };
+    assert_eq!(carried(&h), Some(item.clone()));
+    assert_eq!(item.params(LABELS.nouns), json!({"file": "/lib/contract.doc", "page": 1}));
+    // Let go where nothing takes it: nothing is inserted, and the drag is over.
+    release(&mut h, at + egui::vec2(-150.0, 300.0));
+    assert_eq!(h.state().1.acted.len(), acted, "the pane inserts nothing itself");
+    assert_eq!(carried(&h), None);
+    // A drag the app takes where it is let go.
+    press_and_move(&mut h, at, at + egui::vec2(-150.0, 300.0));
+    let dropped = egui::DragAndDrop::take_payload::<Dragged>(&h.ctx).map(|d| (*d).clone());
+    assert_eq!(dropped, Some(item));
+    release(&mut h, at + egui::vec2(-150.0, 300.0));
+    // Escape gives one up.
+    press_and_move(&mut h, at, at + egui::vec2(0.0, 200.0));
+    assert!(carried(&h).is_some());
+    h.key_press(egui::Key::Escape);
+    h.step();
+    assert_eq!(carried(&h), None);
+    release(&mut h, at + egui::vec2(0.0, 200.0));
+    assert_eq!(h.state().1.acted.len(), acted);
+}
+
+#[test]
+fn an_app_without_drops_keeps_its_items_in_the_pane() {
+    let mut h = harness(Pages { folders: vec!["/lib".into()], ..Default::default() });
+    let at = h.get_by_label("Page 2: Terms").rect().center();
+    press_and_move(&mut h, at, at + egui::vec2(-150.0, 300.0));
+    assert_eq!(carried(&h), None);
+    release(&mut h, at + egui::vec2(-150.0, 300.0));
+    assert!(h.state().1.acted.is_empty());
+}
+
+#[test]
+fn a_right_drag_doesnt_carry_the_item() {
+    let mut h = harness(Pages { folders: vec!["/lib".into()], drags: true, ..Default::default() });
+    let at = h.get_by_label("Page 1: Cover").rect().center();
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(at + egui::vec2(0.0, 30.0 * k as f32)));
+        h.step();
+    }
+    assert_eq!(carried(&h), None);
+}
+
+#[test]
+fn a_finger_still_scrolls_the_grid_over_items_that_drag() {
+    let mut h = pics_with(Pics { n: 40, titled: true, drags: true }, LABELS, true);
     let item = || "Page 1: p0";
     let before = h.get_by_label(item()).rect().top();
-    let over = h.get_by_label(item()).rect().center();
-    h.event(egui::Event::PointerMoved(over));
-    h.event(egui::Event::MouseWheel {
-        unit: egui::MouseWheelUnit::Point,
-        delta: egui::vec2(0.0, -400.0),
-        phase: egui::TouchPhase::Move,
-        source: egui::MouseWheelSource::Wheel,
-        modifiers: egui::Modifiers::NONE,
-    });
-    h.run_steps(8);
-    assert!(h.get_by_label(item()).rect().top() < before - 100.0, "the grid scrolled");
-    assert_eq!(h.get_by_label("Library folder").rect().top(), controls, "the folder and search controls didn't");
+    let from = h.get_by_label(item()).rect().center();
+    let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(0), phase, pos, force: None };
+    // A touch screen sends the touch and the pointer events it stands for.
+    h.event(touch(egui::TouchPhase::Start, from));
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.step();
+    let mut to = from;
+    for _ in 0..6 {
+        to += egui::vec2(0.0, -40.0);
+        h.event(touch(egui::TouchPhase::Move, to));
+        h.event(egui::Event::PointerMoved(to));
+        h.step();
+    }
+    assert_eq!(carried(&h), None, "a finger doesn't carry the item");
+    h.event(touch(egui::TouchPhase::End, to));
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::PointerGone);
+    h.run_steps(4);
+    assert!(h.get_by_label(item()).rect().top() < before - 100.0, "the grid followed the finger");
+}
+
+#[test]
+fn the_apps_own_inserts_follow_the_panes_in_the_menu() {
+    let open_menu = |h: &mut Harness<'static, (State, Pages)>| {
+        let at = h.get_by_label("Page 1: Cover").rect().center();
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(2);
+    };
+    let mut h = harness(Pages { folders: vec!["/lib".into()], inserts: true, ..Default::default() });
+    open_menu(&mut h);
+    let ours = h.get_by_label("Insert page").rect().top();
+    assert!(h.get_by_label(PLACE_IN_MARGIN).rect().top() > ours, "after the pane's own");
+    h.get_by_label(PLACE_IN_MARGIN).click();
+    h.run_steps(2);
+    let placed = json!({"file": "/lib/contract.doc", "page": 0, "placement": "margin"});
+    assert_eq!(h.state().1.acted.last(), Some(&("library.insert".to_string(), placed)));
+    // With nowhere to put the item, it is offered but can't be chosen.
+    let mut h = harness(Pages { folders: vec!["/lib".into()], inserts: true, nowhere: true, ..Default::default() });
+    open_menu(&mut h);
+    assert!(h.get_by_label(PLACE_IN_MARGIN).accesskit_node().is_disabled());
+    h.get_by_label(PLACE_IN_MARGIN).click();
+    h.run_steps(2);
+    assert!(h.state().1.acted.is_empty());
+    // Without inserts of its own, the menu has only the pane's.
+    let mut h = harness(Pages { folders: vec!["/lib".into()], ..Default::default() });
+    open_menu(&mut h);
+    assert!(h.query_by_label("Insert page").is_some() && h.query_by_label(PLACE_IN_MARGIN).is_none());
 }

@@ -19,11 +19,24 @@ inserts it. Its context menu can insert it as a whole item, as shapes, or one na
   under its thumbnail, instead of each file having its own heading.
 - **`Palette`**: colours from the app's theme, or `Palette::from_visuals`.
 
+Two `Host` methods are optional, and do nothing by default:
+
+- **`menu_inserts`**: inserts of the app's own, after the pane's in an item's context menu. Each is a
+  label and the params it adds to `library.insert`: GridCraft's Place in Cell is
+  `{"placement": "cell"}`. They are offered when the app can place an item now.
+- **`drag_hint`**: the app takes items dropped on it. An item's cell can then be dragged with a
+  mouse or pen, carrying a `Dragged { file, item }` as egui's drag-and-drop payload, with its
+  thumbnail beside the pointer, and its tooltip says what the hint says. A click still inserts,
+  the wheel and the scroll bar still scroll the grid, and a finger's drag scrolls it as before.
+  The app takes the payload where it is let go (`Response::dnd_release_payload::<Dragged>()`) and
+  inserts it with `Dragged::params` and where it landed. Escape, or letting go anywhere else,
+  drops nothing.
+
 ## Translation
 
 Every word the pane shows goes through `Host::text`, which gets the English and gives back the
-person's language; the default shows English. The words are the app's `Labels` and the pane's
-own, which `words::ALL` lists for an app's catalog and its checks. A `{name}` placeholder
+person's language; the default shows English. The words are the app's (its `Labels`,
+`menu_inserts` labels and `drag_hint`) and the pane's own, which `words::ALL` lists for an app's catalog and its checks. A `{name}` placeholder
 (`"Reading {read} of {total} files…"`) stays in the translation and the pane fills it in, so word
 order can change. The `Labels` stay English constants: nothing has to be built per language.
 

@@ -2,7 +2,9 @@
 //! the items of the documents in the user's Library folders (slides, pages, sheets) as thumbnails
 //! grouped by file, with a folder drop-down (Add Folder…, Remove, Refresh) and a search box.
 //! Clicking an item inserts it; its context menu can also put its shapes, or one named element,
-//! where the person is working.
+//! where the person is working, and holds the app's own inserts ([`Host::menu_inserts`]). An app
+//! that takes dropped items ([`Host::drag_hint`]) lets the person drag one out of the pane: the
+//! drag carries a [`Dragged`], which the app inserts where it is let go.
 //!
 //! The pane holds no document and reads no file: it speaks only the `library.*` commands, through
 //! the app's [`Host`]. The app also gives its words ([`Labels`], whose nouns are the commands'
@@ -46,6 +48,8 @@ const MAX_ELEMENT_LISTS: usize = 64;
 const MAX_THUMB_PIXELS: u64 = 512 * 2048;
 /// The grid's least height, when the pane is barely in view.
 const MIN_GRID_HEIGHT: f32 = 120.0;
+/// The widest thumbnail that follows the pointer while an item is dragged, in points.
+const GHOST_WIDTH: f32 = 72.0;
 /// The narrowest cell of a one-item-per-file grid, which fits as many columns as this allows.
 const FLAT_CELL: f32 = 96.0;
 const MAX_FLAT_COLUMNS: usize = 6;
@@ -163,11 +167,54 @@ pub trait Host {
     fn report(&mut self, message: String);
     /// Draw the app's own tab `id` (one of [`Labels::tabs`] other than [`ITEMS`]).
     fn tab(&mut self, _ui: &mut Ui, _id: &str) {}
-    /// `english` in the person's language: one of [`words::ALL`] or a word of the app's
-    /// [`Labels`]. A `{name}` placeholder stays in the answer; the pane fills it in. The default
-    /// shows English.
+    /// `english` in the person's language: one of [`words::ALL`], a word of the app's [`Labels`],
+    /// or a word of the app's own [`Host::menu_inserts`] and [`Host::drag_hint`]. A `{name}`
+    /// placeholder stays in the answer; the pane fills it in. The default shows English.
     fn text<'a>(&self, english: &'a str) -> Cow<'a, str> {
         Cow::Borrowed(english)
+    }
+    /// Inserts of the app's own, after the pane's in an item's context menu ("Place in Cell"),
+    /// in order. Each puts the item where the person is working, so it is offered when
+    /// [`Host::can_place`]. The default: none.
+    fn menu_inserts(&self) -> Vec<MenuInsert> {
+        Vec::new()
+    }
+    /// The app takes an item dropped on it ([`Dragged`]): what an item's tooltip says about
+    /// dragging, in English ("Drag onto a cell to put it there"). With a mouse or pen, an item's
+    /// cell is then dragged rather than the grid scrolled; a finger still scrolls the grid. The
+    /// default, `None`: items aren't dragged out of the pane.
+    fn drag_hint(&self) -> Option<&'static str> {
+        None
+    }
+}
+
+/// An insert of the app's own in an item's context menu ([`Host::menu_inserts`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct MenuInsert {
+    /// The menu item, in English (through [`Host::text`]).
+    pub label: &'static str,
+    /// What it adds to `library.insert`'s params, such as `{"placement": "cell"}`.
+    pub params: Value,
+}
+
+/// The item being dragged out of the pane: egui's drag-and-drop payload
+/// ([`egui::DragAndDrop`]), set when a drag starts on an item's cell in an app that takes drops
+/// ([`Host::drag_hint`]). The app takes it where the pointer is let go
+/// ([`egui::Response::dnd_release_payload`]) and inserts it there with [`Dragged::params`]. Escape,
+/// or letting go anywhere else, drops nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dragged {
+    pub file: String,
+    /// The item's index in its file, as `library.list` numbers it.
+    pub item: usize,
+}
+
+impl Dragged {
+    /// `library.insert`'s params for the item, keyed with the app's noun: `{"file", "slide": 2}`.
+    pub fn params(&self, nouns: Nouns) -> Value {
+        let mut p = json!({"file": self.file});
+        p[nouns.one] = json!(self.item);
+        p
     }
 }
 
@@ -723,7 +770,9 @@ fn cell(
     };
     let h = w * aspect;
     let label_h = 16.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, h + label_h), Sense::click());
+    let drag_hint = host.drag_hint();
+    let sense = if drag_hint.is_some() { Sense::click_and_drag() } else { Sense::click() };
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, h + label_h), sense);
     let label = cell_label(host, labels, row);
     resp.widget_info(|| WidgetInfo::labeled(Role::Button, true, &label));
     let img = Rect::from_min_size(rect.min, vec2(w, h));
@@ -757,13 +806,21 @@ fn cell(
         let at = egui::pos2(rect.left(), img.bottom() + 2.0);
         p.with_clip_rect(Rect::from_min_max(at, rect.max)).galley(at, galley, pal.text_dim);
     }
-    let click = tr(host, words::CLICK_TO_INSERT);
-    let hint = if row.hidden { format!("{label}\n{}\n{click}", tr(host, words::HIDDEN)) } else { format!("{label}\n{click}") };
+    let mut hint = label.clone();
+    if row.hidden {
+        hint = format!("{hint}\n{}", tr(host, words::HIDDEN));
+    }
+    hint = format!("{hint}\n{}", tr(host, words::CLICK_TO_INSERT));
+    if let Some(drag) = drag_hint {
+        hint = format!("{hint}\n{}", tr(host, drag));
+    }
     let resp = resp.on_hover_text(hint);
-    let one = labels.nouns.one;
+    let dragged = Dragged { file: file.to_string(), item: row.index };
+    if drag_hint.is_some() {
+        drag(ui, st, &resp, &dragged, &key, pal);
+    }
     let target = |extra: Value| {
-        let mut p = json!({"file": file});
-        p[one] = json!(row.index);
+        let mut p = dragged.params(labels.nouns);
         if let (Some(p), Some(extra)) = (p.as_object_mut(), extra.as_object()) {
             p.extend(extra.clone());
         }
@@ -814,7 +871,50 @@ fn cell(
                 });
             });
         }
+        for extra in host.menu_inserts() {
+            let label = tr(host, extra.label);
+            if ui.add_enabled(place, egui::Button::new(label)).clicked() {
+                let _ = host.act("library.insert", target(extra.params));
+                ui.close();
+            }
+        }
     });
+}
+
+/// An item's cell, in an app that takes drops: a drag with a mouse or pen carries the item
+/// ([`Dragged`]) and shows its thumbnail beside the pointer; a finger's drag scrolls the grid, as
+/// it does over the gaps between cells.
+fn drag(ui: &Ui, st: &State, resp: &egui::Response, dragged: &Dragged, key: &ThumbKey, pal: &Palette) {
+    let ctx = ui.ctx();
+    let touch = ui.input(|i| i.any_touches());
+    if touch {
+        if resp.dragged() {
+            ui.scroll_with_delta(resp.drag_delta());
+        }
+        return;
+    }
+    // Only the primary button carries the item: a right-click that wobbles still opens its menu.
+    let primary = egui::PointerButton::Primary;
+    if resp.drag_started_by(primary) {
+        egui::DragAndDrop::set_payload(ctx, dragged.clone());
+    }
+    let carried = egui::DragAndDrop::payload::<Dragged>(ctx).is_some_and(|d| *d == *dragged);
+    let Some(at) = ctx.pointer_latest_pos().filter(|_| resp.dragged_by(primary) && carried) else { return };
+    let (size, tex) = match st.thumbs.get(key) {
+        Some(Thumb::Ready(tex)) => {
+            let s = tex.size_vec2();
+            let w = s.x.clamp(1.0, GHOST_WIDTH);
+            (vec2(w, (w * s.y / s.x.max(1.0)).clamp(8.0, GHOST_WIDTH * 2.0)), Some(tex.id()))
+        }
+        _ => (vec2(GHOST_WIDTH, GHOST_WIDTH * 0.75), None),
+    };
+    let rect = Rect::from_min_size(at + vec2(12.0, 8.0), size);
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, resp.id.with("library_drag")));
+    match tex {
+        Some(tex) => p.image(tex, rect, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::from_white_alpha(220)),
+        None => p.rect_filled(rect, CornerRadius::same(2), pal.control),
+    };
+    p.rect_stroke(rect, CornerRadius::same(2), Stroke::new(1.0, pal.accent), StrokeKind::Inside);
 }
 
 /// The names of an item's top-level shapes that Insert Element offers (not empty placeholders),
