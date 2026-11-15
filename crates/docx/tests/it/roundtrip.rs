@@ -23,18 +23,14 @@ fn paras(doc: &Document) -> Vec<&Paragraph> {
     doc.body.iter().filter_map(|b| b.as_para()).collect()
 }
 
-/// `doc` with the stacking order of its body's floating objects cleared: saving gives objects
-/// without one an order (`relativeHeight`), so tests about other properties compare without it.
+/// `doc` without the stacking order a save gives objects made in the app (`relativeHeight`,
+/// read back as `Float::z`), to compare them with the objects as made.
 fn unstacked(mut doc: Document) -> Document {
-    for b in &mut doc.body {
-        if let Block::Para(p) = std::sync::Arc::make_mut(b) {
-            for o in &mut p.objects {
-                if let Some(f) = o.float_mut() {
-                    f.z = 0;
-                }
-            }
+    doc.objects_mut(&|_| true, &mut |o| {
+        if let Some(f) = o.float_mut() {
+            f.z = 0;
         }
-    }
+    });
     doc
 }
 
