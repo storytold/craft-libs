@@ -415,11 +415,23 @@ pub fn run_cancelable(mut cmd: Command, label: &str, cancel: &Cancel) -> Result<
     wait_cancelable(&mut child, label, cancel)
 }
 
-/// Waits for `child`, ending its group or tree when `cancel` is set. The flag is checked before each
-/// look at the child's status, so a child that exits after `cancel` was set still has its group or
-/// tree ended, and the run counts as canceled.
+/// Waits for `child`, ending its group or tree when `cancel` is set. The flag is checked before and
+/// after each look at the child's status, so a child that exits before or while `cancel` is set still
+/// has its group or tree ended, and the run counts as canceled.
 fn wait_cancelable(child: &mut Child, label: &str, cancel: &Cancel) -> Result<(), String> {
+    wait_cancelable_with(child, label, cancel, Child::try_wait)
+}
+
+/// [`wait_cancelable`] that reads the child's status with `status`.
+fn wait_cancelable_with(
+    child: &mut Child,
+    label: &str,
+    cancel: &Cancel,
+    mut status: impl FnMut(&mut Child) -> io::Result<Option<ExitStatus>>,
+) -> Result<(), String> {
     loop {
+        // The status is not read once `cancel` is set, so the tree is ended while the child still runs.
+        let exited = if cancel.is_canceled() { Ok(None) } else { status(child) };
         if cancel.is_canceled() {
             let killed = end_tree(child);
             let reaped = child.wait();
@@ -429,7 +441,7 @@ fn wait_cancelable(child: &mut Child, label: &str, cancel: &Cancel) -> Result<()
                 (Ok(()), Err(w)) => Err(format!("{label}: canceled, but waiting for the child failed ({w})")),
             };
         }
-        if let Some(status) = child.try_wait().map_err(|e| format!("{label}: {e}"))? {
+        if let Some(status) = exited.map_err(|e| format!("{label}: {e}"))? {
             return exit_result(label, status);
         }
         std::thread::sleep(CHILD_POLL);
@@ -827,6 +839,72 @@ mod tests {
         let cancel = Cancel::new();
         cancel.cancel();
         assert_eq!(wait_cancelable(&mut child, "exited", &cancel), Err("exited: canceled".to_owned()));
+    }
+
+    #[test]
+    fn a_child_that_exits_as_cancel_is_set_counts_as_canceled() {
+        let _guard = crate::spawn_guard();
+        let mut cmd = test_child("runner::tests::no_such_test", "CRAFT_XTASK_EXITED_CHILD");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let mut child = spawn(&mut cmd, "exited").expect("child");
+        let cancel = Cancel::new();
+        // `cancel` is set while the status is read, after the flag's last check before the read.
+        let result = wait_cancelable_with(&mut child, "exited", &cancel, |c| {
+            cancel.cancel();
+            c.wait().map(Some)
+        });
+        assert_eq!(result, Err("exited: canceled".to_owned()));
+    }
+
+    #[test]
+    fn the_status_is_not_read_once_cancel_is_set() {
+        let _guard = crate::spawn_guard();
+        let mut cmd = test_child("runner::tests::no_such_test", "CRAFT_XTASK_EXITED_CHILD");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let mut child = spawn(&mut cmd, "exited").expect("child");
+        let cancel = Cancel::new();
+        cancel.cancel();
+        let mut reads = 0;
+        let result = wait_cancelable_with(&mut child, "exited", &cancel, |c| {
+            reads += 1;
+            c.try_wait()
+        });
+        assert_eq!(result, Err("exited: canceled".to_owned()));
+        assert_eq!(reads, 0, "the status was read after cancel was set");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_exits_as_cancel_is_set_has_its_group_ended() {
+        use io::BufRead;
+        let _guard = crate::spawn_guard();
+        let (reader, writer) = io::pipe().expect("pipe");
+        let mut cmd = test_child("runner::tests::tree_child", TREE_CHILD);
+        cmd.stdout(writer).stderr(Stdio::null());
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+        let mut child = spawn(&mut cmd, "tree").expect("child");
+        drop(cmd);
+        // The child prints `ready` once it has started its own child, which shares the pipe.
+        let mut lines = io::BufReader::new(reader);
+        let mut line = String::new();
+        while !line.trim_end().ends_with("ready") {
+            line.clear();
+            assert_ne!(lines.read_line(&mut line).expect("child output"), 0, "the child ended before it was ready");
+        }
+        let cancel = Cancel::new();
+        // The direct child is killed while `cancel` is set, and its own child keeps running.
+        let result = wait_cancelable_with(&mut child, "tree", &cancel, |c| {
+            cancel.cancel();
+            c.kill()?;
+            c.wait().map(Some)
+        });
+        if result != Err("tree: canceled".to_owned()) {
+            // A failed check still ends the group, so the test leaves no process behind.
+            let _ = end_tree(&mut child);
+        }
+        assert_eq!(result, Err("tree: canceled".to_owned()));
+        // The pipe ends only when every process holding it has ended, the child's child included.
+        io::Read::read_to_end(&mut lines, &mut Vec::new()).expect("pipe end");
     }
 
     #[test]
