@@ -73,6 +73,7 @@ use craft_ui::primitives::{Checker, IconSpec};
 use craft_ui::rails::{LastUsed, RailTool, ToolRail, ToolSlot};
 use craft_ui::runtime::commands::{CommandSet as _, Commands as _};
 use craft_ui::runtime::env::{Env, Label};
+use craft_ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use craft_ui::runtime::pending::{Job, Pending};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::runtime::words::CommonWords;
@@ -263,6 +264,10 @@ pub struct ContentAwareFillWorkspace {
     ants: Option<Ants>,
     /// The events the next pass reports first: what the methods between passes queued, then the pass's own.
     events: Vec<FillEvent>,
+    /// Where the settings are remembered ([`remember`](ContentAwareFillWorkspace::remember)).
+    remember: Option<SaveKey>,
+    /// The first pass has read the remembered settings.
+    recalled: bool,
 }
 
 impl ContentAwareFillWorkspace {
@@ -305,6 +310,37 @@ impl ContentAwareFillWorkspace {
             settings_gesture: false,
             ants: None,
             events: Vec::new(),
+            remember: None,
+            recalled: false,
+        }
+    }
+
+    /// Remembers the fill settings under `key`: the first pass opens with the stored settings when there are any, in
+    /// place of [`FillOpen::settings`], and Apply, OK and Cancel store them, as production did.
+    #[must_use]
+    pub fn remember(mut self, key: SaveKey) -> Self {
+        self.remember = Some(key);
+        self
+    }
+
+    /// The first pass: the stored settings replace the opening ones, with the sampling option they carry as the
+    /// session's starting point (not a step to undo). The pass reports the change as `SettingsChanged`.
+    fn recall(&mut self, ctx: &Context) {
+        if std::mem::replace(&mut self.recalled, true) {
+            return;
+        }
+        let Some(key) = &self.remember else { return };
+        let Some(stored) = saved_value::<Option<FillSettings>>(ctx, key) else { return };
+        self.settings = stored;
+        self.session.sampling = self.settings.sampling;
+        self.options.brush_add = self.settings.sampling.brush_adds();
+        self.history = EditHistory::new(&self.session);
+    }
+
+    /// Stores the settings under the remembered key, if any.
+    fn store(&self, ctx: &Context) {
+        if let Some(key) = &self.remember {
+            set_saved_value(ctx, key, Some(self.settings.clone()));
         }
     }
 
@@ -344,6 +380,7 @@ impl ContentAwareFillWorkspace {
     fn pass(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, dyn FillSource>) -> WorkspacePass<FillEvent, FillCommand> {
         // pc: crates/ui-egui/src/dialogs/caf_ui/view.rs:265 `show`; caf_ui/controls.rs:151 `keys`.
         let WorkspaceCx { source, open, hold_ok, ok_waits, .. } = cx;
+        self.recall(ui.ctx());
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
         let dialog = env.words::<DialogWords>();
@@ -393,6 +430,9 @@ impl ContentAwareFillWorkspace {
         } else {
             (shown.output.result(|| work.command()), None)
         };
+        if picked == Some(PICK_APPLY) || held.is_some() || result.is_some() {
+            work.store(ui.ctx());
+        }
         let events = std::mem::take(&mut work.events);
         WorkspacePass::new(shown.output.response, events).held(held).result(result)
     }

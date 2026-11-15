@@ -6,12 +6,14 @@ use std::sync::Arc;
 
 use craft_behavior::{CancelReason, PixelSize};
 use craft_imaging::ui::liquify::{
-    LiquifyBrush, LiquifyEvent, LiquifyMesh, LiquifyOpen, LiquifySource, LiquifyTool, LiquifyWorkspace, MeshSize, StrokeEvent, StrokeRecorder,
+    LiquifyBrush, LiquifyEvent, LiquifyMesh, LiquifyOpen, LiquifySettings, LiquifySource, LiquifyTool, LiquifyWorkspace, MeshSize, StrokeEvent,
+    StrokeRecorder,
 };
 use craft_ui::canvas::{PixelRect, RasterSource};
 use craft_ui::dialog::{DialogHost, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
+use craft_ui::runtime::memory::{SaveKey, saved_value};
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Color32, ColorImage, Event, Key, Modifiers, Pos2, Vec2};
@@ -86,10 +88,19 @@ impl App {
 /// The workspace over a solid picture, settled.
 // A pass's `WorkspaceCx` is built by the host only, so this runs the workspace on a `DialogHost`.
 fn open() -> (Fixture, Rc<RefCell<App>>) {
+    open_workspace(LiquifyWorkspace::new(LiquifyOpen::new(DOCUMENT, "Photo")))
+}
+
+/// The app's source: a solid picture of the document's size.
+fn source() -> Arc<dyn LiquifySource> {
     let size = PixelSize::new(DOCUMENT[0], DOCUMENT[1]);
-    let source: Arc<dyn LiquifySource> = Arc::new(Source { image: Solid { size, colour: Color32::from_rgb(40, 120, 200) } });
+    Arc::new(Source { image: Solid { size, colour: Color32::from_rgb(40, 120, 200) } })
+}
+
+/// `workspace` over a solid picture, settled.
+fn open_workspace(workspace: LiquifyWorkspace) -> (Fixture, Rc<RefCell<App>>) {
     let mut host = DialogHost::new();
-    host.open(HostedWorkspace::new(LiquifyWorkspace::new(LiquifyOpen::new(DOCUMENT, "Photo")), source));
+    host.open(HostedWorkspace::new(workspace, source()));
     let app = Rc::new(RefCell::new(App { host, events: Vec::new() }));
     let shown = Rc::clone(&app);
     let mut fixture = Fixture::new(move |ui| {
@@ -212,3 +223,27 @@ fn liquify_preview_key_and_box_each_toggle_the_preview_once() {
 }
 
 // Cmd+I and Cmd+D record the global step in the order pressed; Restore All empties the session.
+
+const REMEMBERED: SaveKey = SaveKey::new("trial.liquify");
+
+/// With `remember`, a settings change is stored at once and the next Liquify opens with the stored settings.
+#[trial]
+fn liquify_remembers_its_settings_on_every_change() {
+    let remembered = || LiquifyWorkspace::new(LiquifyOpen::new(DOCUMENT, "Photo")).remember(REMEMBERED);
+    let (mut fixture, app) = open_workspace(remembered());
+    let stored = |fixture: &Fixture| saved_value::<Option<LiquifySettings>>(fixture.ctx(), &REMEMBERED);
+    assert_eq!(stored(&fixture), None, "nothing changed, nothing stored");
+    if let Some(hosted) = app.borrow_mut().host.get_mut::<HostedWorkspace<LiquifyWorkspace>>() {
+        hosted.workspace_mut().settings_mut().show_mesh = true;
+    }
+    fixture.frame(Vec::new());
+    assert!(stored(&fixture).is_some_and(|settings| settings.show_mesh), "the change is stored by the pass that reports it");
+
+    let ctx = fixture.ctx().clone();
+    assert!(app.borrow_mut().host.cancel::<HostedWorkspace<LiquifyWorkspace>>(&ctx), "the workspace was open");
+    fixture.settle();
+    let _ = app.borrow_mut().host.take::<HostedWorkspace<LiquifyWorkspace>>();
+    app.borrow_mut().host.open(HostedWorkspace::new(remembered(), source()));
+    fixture.settle();
+    assert!(app.borrow().hosted().workspace().settings().show_mesh, "the next opening takes the stored settings");
+}

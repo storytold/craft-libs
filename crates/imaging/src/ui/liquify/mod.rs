@@ -11,11 +11,11 @@
 //! displacement field and its preview: it applies each [`LiquifyEvent`] to the field as it comes,
 //! replays the list after undo, redo and Restore All, and shows the result through
 //! [`LiquifySource`]. The workspace is a [`FullWindowWorkspace`] that the app's dialog host owns as a
-//! `HostedWorkspace`: OK answers [`LiquifyDone`] (the steps `filter.liquify` runs and the settings to
-//! remember); Cancel changes nothing.
+//! `HostedWorkspace`: OK answers [`LiquifyDone`] (the steps `filter.liquify` runs and the settings);
+//! Cancel changes nothing. With [`LiquifyWorkspace::remember`] the workspace stores its settings itself.
 //!
 //! ```ignore
-//! dialogs.open(HostedWorkspace::new(LiquifyWorkspace::new(open), Arc::new(source)));
+//! dialogs.open(HostedWorkspace::new(LiquifyWorkspace::new(open).remember(SETTINGS), Arc::new(source)));
 //! dialogs.run(ui);
 //! if let Some(liquify) = dialogs.get_mut::<HostedWorkspace<LiquifyWorkspace>>() {
 //!     for event in liquify.take_events() {
@@ -25,14 +25,12 @@
 //!             LiquifyEvent::Replay(steps) => app.liquify_engine.replay(&steps),
 //!             LiquifyEvent::BackdropWanted(of) => app.load_backdrop(of),
 //!             LiquifyEvent::Preview(on) => app.liquify_engine.show_preview(on),
-//!             LiquifyEvent::SettingsChanged(settings) => app.prefs.liquify = settings,
 //!             _ => {}
 //!         }
 //!     }
 //! }
 //! if let Some(DialogResult::Ok(done)) = dialogs.take::<HostedWorkspace<LiquifyWorkspace>>() {
 //!     app.run("filter.liquify", done.steps);
-//!     app.prefs.liquify = done.settings;
 //! }
 //! ```
 //!
@@ -84,6 +82,7 @@ use craft_ui::primitives::Checker;
 use craft_ui::rails::{LastUsed, ToolRail};
 use craft_ui::runtime::commands::{CommandSet as _, Commands as _};
 use craft_ui::runtime::env::Env;
+use craft_ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
 
@@ -129,8 +128,8 @@ pub struct LiquifyOpen {
     pub size: [u32; 2],
     /// The layer's name: the title's subject.
     pub subject: String,
-    /// The remembered settings, the SAVED tier (PhotoCraft: `prefs.dialogs["filter.liquify"]`). The Preview check box
-    /// is not among them: it is on at each opening.
+    /// The settings the workspace opens with; stored settings under [`LiquifyWorkspace::remember`]'s key replace them.
+    /// The Preview check box is not among them: it is on at each opening.
     pub settings: LiquifySettings,
     /// The recorded steps of a smart filter opened again; empty for a new Liquify.
     pub steps: Vec<LiquifyStep>,
@@ -148,7 +147,7 @@ impl LiquifyOpen {
         Self { size, subject: subject.into(), ..Self::default() }
     }
 
-    /// The remembered settings.
+    /// The settings the workspace opens with.
     #[must_use]
     pub fn settings(mut self, settings: LiquifySettings) -> Self {
         self.settings = settings;
@@ -266,6 +265,10 @@ pub struct LiquifyWorkspace {
     /// The settings as the app last heard them, so a change made between passes (a control request, a colour answer)
     /// is reported once by the next pass.
     reported: LiquifySettings,
+    /// Where the settings are remembered ([`remember`](LiquifyWorkspace::remember)).
+    remember: Option<SaveKey>,
+    /// The first pass has read the remembered settings.
+    recalled: bool,
 }
 
 /// The parts of the workspace the canvas tool's gestures and the history change together: kept apart from the view so a
@@ -302,7 +305,23 @@ impl LiquifyWorkspace {
             timing: None,
             cursor: None,
             preview: true,
+            remember: None,
+            recalled: false,
         }
+    }
+
+    /// Remembers the settings under `key` (PhotoCraft's Liquify settings, kept across openings and restarts): the first
+    /// pass opens with the stored settings when there are any, in place of [`LiquifyOpen::settings`], and every
+    /// settings change is stored, as production stored them on every change.
+    #[must_use]
+    pub fn remember(mut self, key: SaveKey) -> Self {
+        self.remember = Some(key);
+        self
+    }
+
+    /// How many steps Redo can go forward.
+    pub fn redo_len(&self) -> usize {
+        self.edit.history.redo_len()
     }
 
     /// The cursor the canvas tool asked for in the last pass.
@@ -401,6 +420,13 @@ impl LiquifyWorkspace {
     fn pass(&mut self, ui: &mut Ui, source: &dyn LiquifySource, open: Bind<'_, bool>) -> WorkspacePass<LiquifyEvent, LiquifyDone> {
         // pc: crates/ui-egui/src/dialogs/liquify_ui.rs:950 `show` (title, strip, panel, footer,
         // preview, brush circle); :730 `history_keys`; :740 `keys`.
+        if !std::mem::replace(&mut self.recalled, true)
+            && let Some(key) = &self.remember
+            && let Some(stored) = saved_value::<Option<LiquifySettings>>(ui.ctx(), key)
+        {
+            // The pass reports the change as `SettingsChanged`, as it does for any other change before it.
+            self.edit.settings = stored;
+        }
         let env = Env::of(ui);
         let words = env.words::<LiquifyWords>();
         let common = env.words::<CommonWords>();
@@ -568,6 +594,9 @@ impl LiquifyWorkspace {
         if this.edit.settings != this.reported {
             this.reported = this.edit.settings.clone();
             this.edit.events.push(LiquifyEvent::SettingsChanged(this.reported.clone()));
+            if let Some(key) = &this.remember {
+                set_saved_value(ui.ctx(), key, Some(this.reported.clone()));
+            }
         }
         let result = shown.output.result(|| this.done());
         let events = std::mem::take(&mut this.edit.events);
@@ -579,7 +608,7 @@ impl LiquifyWorkspace {
         &self.edit.session
     }
 
-    /// What the app persists (always: PhotoCraft remembers Liquify's settings on every close).
+    /// The current settings.
     pub fn settings(&self) -> &LiquifySettings {
         &self.edit.settings
     }

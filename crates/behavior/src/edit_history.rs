@@ -117,6 +117,11 @@ impl<T: Value> EditHistory<T> {
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
     }
+
+    /// How many steps a redo can go forward.
+    pub fn redo_len(&self) -> usize {
+        self.redo.len()
+    }
 }
 
 #[cfg(test)]
@@ -144,5 +149,20 @@ mod tests {
         let mut now = 1;
         assert!(history.step(&mut now, Step::Undo));
         assert_eq!(now, 0, "the undo takes the step before the one taken back");
+    }
+
+    #[test]
+    fn redo_len_counts_the_undone_steps_until_a_new_step() {
+        let mut history = EditHistory::new(&0);
+        history.record(&set(0, 1));
+        history.record(&set(1, 2));
+        let mut now = 2;
+        assert!(history.step(&mut now, Step::Undo));
+        assert!(history.step(&mut now, Step::Undo));
+        assert_eq!(history.redo_len(), 2);
+        assert!(history.step(&mut now, Step::Redo));
+        assert_eq!(history.redo_len(), 1);
+        history.record(&set(1, 7));
+        assert_eq!(history.redo_len(), 0, "a new step drops the redo steps");
     }
 }

@@ -19,6 +19,7 @@ use craft_ui::canvas::{PixelRect, RasterSource};
 use craft_ui::dialog::{DialogHost, DialogResult, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
+use craft_ui::runtime::memory::{SaveKey, saved_value};
 use craft_ui::runtime::pending::Job;
 use craft_ui::testing::{Fixture, pointer, trial};
 
@@ -95,9 +96,14 @@ struct Rig {
 impl Rig {
     fn new(settings: FillSettings, limits: FillLimits) -> Rig {
         let open = FillOpen::new([LAYER.width, LAYER.height], "Layer 1", limits).settings(settings);
+        Rig::over(ContentAwareFillWorkspace::new(open))
+    }
+
+    /// `workspace` on the host, settled.
+    fn over(workspace: ContentAwareFillWorkspace) -> Rig {
         let source: Arc<dyn FillSource> = Arc::new(Source);
         let mut host = DialogHost::new();
-        host.open(HostedWorkspace::new(ContentAwareFillWorkspace::new(open), source));
+        host.open(HostedWorkspace::new(workspace, source));
         let host = Rc::new(RefCell::new(host));
         let events = Rc::new(RefCell::new(Vec::new()));
         let (shown, kept) = (Rc::clone(&host), Rc::clone(&events));
@@ -260,4 +266,27 @@ fn fill_overlay_tints_the_sampling_area_or_the_excluded_area() {
     assert_eq!(tinted(false), [true, false, false, true, false, false]);
     // Excluded Area: the cells inside the plane that are not sampled and not filled.
     assert_eq!(tinted(true), [false, false, true, false, false, false]);
+}
+
+const REMEMBERED: SaveKey = SaveKey::new("trial.fill");
+
+/// With `remember`, Cancel stores the settings and the next Content-Aware Fill opens with them.
+#[trial]
+fn fill_remembers_its_settings_at_cancel() {
+    let remembered = || ContentAwareFillWorkspace::new(FillOpen::new([LAYER.width, LAYER.height], "Layer 1", FillLimits::new(10, 1000))).remember(REMEMBERED);
+    let mut rig = Rig::over(remembered());
+    rig.with(|work| work.settings_mut().opacity = 10.0);
+    rig.fixture.idle(2);
+    assert_eq!(saved_value::<Option<FillSettings>>(rig.fixture.ctx(), &REMEMBERED), None, "a change alone stores nothing");
+
+    let cancel = rig.fixture.by_label("Cancel").expect("the footer has Cancel");
+    rig.fixture.click(&cancel);
+    let stored = saved_value::<Option<FillSettings>>(rig.fixture.ctx(), &REMEMBERED);
+    assert!(stored.is_some_and(|settings| settings.opacity == 10.0), "Cancel stores the settings");
+
+    let _ = rig.host.borrow_mut().take::<Hosted>();
+    let source: Arc<dyn FillSource> = Arc::new(Source);
+    rig.host.borrow_mut().open(HostedWorkspace::new(remembered(), source));
+    rig.fixture.idle(3);
+    assert_eq!(rig.with(|work| work.settings().opacity), 10.0, "the next opening takes the stored settings");
 }
