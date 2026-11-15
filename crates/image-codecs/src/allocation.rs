@@ -311,8 +311,7 @@ mod stored_size_tests {
         let mut out = Cursor::new(Vec::new());
         image::write_buffer_with_format(&mut out, &[10; 18], 3, 2, image::ExtendedColorType::Rgb8, image::ImageFormat::Jpeg).unwrap();
         let bytes = out.into_inner();
-        let mut limits = crate::Limits::default();
-        limits.max_alloc = bytes.len() as u64;
+        let mut limits = crate::Limits { max_alloc: bytes.len() as u64, ..Default::default() };
         assert_eq!(probe_stored_size(&bytes, &limits).unwrap(), (3, 2));
         limits.max_alloc -= 1;
         assert!(probe_stored_size(&bytes, &limits).is_err());
