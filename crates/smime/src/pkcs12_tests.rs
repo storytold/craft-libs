@@ -513,3 +513,56 @@ fn ec_key_pairing_is_derived_not_claimed_by_metadata() {
         assert_eq!(open(&plain_p12(&forged, wrong.der(), b"same-id"), PASS).err(), Some(Error::NoCertificate));
     }
 }
+
+#[test]
+fn legacy_decryption_uses_the_empty_password_representation_verified_by_the_mac() {
+    use aes::cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
+    use hmac::{KeyInit, Mac};
+    use pkcs12::kdf::{Pkcs12KeyType, derive_key};
+    let salt = b"empty password fixture salt";
+    let key = rsa_key();
+    let certificate = der(ALICE_PEM);
+    for password in [b"".as_slice(), &[0, 0][..]] {
+        for encrypt_safe in [false, true] {
+            let encrypt = |plain: &[u8]| {
+                let key = derive_key::<sha1::Sha1>(password, salt, Pkcs12KeyType::EncryptionKey, 2048, 24).unwrap();
+                let iv = derive_key::<sha1::Sha1>(password, salt, Pkcs12KeyType::Iv, 2048, 8).unwrap();
+                let mut buffer = plain.to_vec();
+                buffer.resize(plain.len() + 8, 0);
+                cbc::Encryptor::<des::TdesEde3>::new_from_slices(&key, &iv)
+                    .unwrap()
+                    .encrypt_padded::<Pkcs7>(&mut buffer, plain.len())
+                    .unwrap()
+                    .to_vec()
+            };
+            let algorithm = seq(&[oid("1.2.840.113549.1.12.1.3"), seq(&[tlv(0x04, salt), tlv(0x02, &[0x08, 0x00])])]);
+            let key_bag = if encrypt_safe {
+                bag("1.2.840.113549.1.12.10.1.1", key.clone(), b"id")
+            } else {
+                bag("1.2.840.113549.1.12.10.1.2", seq(&[algorithm.clone(), tlv(0x04, &encrypt(&key))]), b"id")
+            };
+            let cert = seq(&[oid("1.2.840.113549.1.9.22.1"), tlv(0xa0, &tlv(0x04, &certificate))]);
+            let safe = seq(&[key_bag, bag("1.2.840.113549.1.12.10.1.3", cert, b"id")]);
+            let data = |content: &[u8]| seq(&[oid("1.2.840.113549.1.7.1"), tlv(0xa0, &tlv(0x04, content))]);
+            let content = if encrypt_safe {
+                let encrypted_info = seq(&[oid("1.2.840.113549.1.7.1"), algorithm, tlv(0x80, &encrypt(&safe))]);
+                seq(&[oid("1.2.840.113549.1.7.6"), tlv(0xa0, &seq(&[tlv(0x02, &[0]), encrypted_info]))])
+            } else {
+                data(&safe)
+            };
+            let auth_safe = seq(&[content]);
+            let mac_key = derive_key::<sha2::Sha256>(password, salt, Pkcs12KeyType::Mac, 2048, 32).unwrap();
+            let mut mac = <hmac::Hmac<sha2::Sha256> as KeyInit>::new_from_slice(&mac_key).unwrap();
+            mac.update(&auth_safe);
+            let digest = mac.finalize().into_bytes();
+            let sha256 = seq(&[oid("2.16.840.1.101.3.4.2.1"), vec![0x05, 0]]);
+            let mac_data = seq(&[seq(&[sha256, tlv(0x04, &digest)]), tlv(0x04, salt), tlv(0x02, &[0x08, 0x00])]);
+            let p12 = seq(&[tlv(0x02, &[3]), data(&auth_safe), mac_data]);
+            let opened = open(&p12, "").unwrap();
+            assert_eq!(&*opened.private_key, &key);
+            assert_eq!(opened.certificate, certificate);
+            assert!(opened.key_encrypted);
+            assert_eq!(open(&p12, "wrong").err(), Some(Error::WrongPassphrase));
+        }
+    }
+}

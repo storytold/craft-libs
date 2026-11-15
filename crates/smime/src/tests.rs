@@ -1068,3 +1068,37 @@ fn unsupported_name_constraints_fail_closed_for_dns_ip_and_uri() {
         assert_eq!(path_verdict(&signer, &[&ca], &root, "ada@example.org"), (Verdict::NotVerified, Some(Why::Constrained)));
     }
 }
+
+#[test]
+fn later_matching_certificates_are_checked_for_trust_usage_and_address() {
+    let root = root("Renewal Root");
+    let id = b"same-key-after-renewal";
+    let with_id = |mut params: rcgen::CertificateParams| {
+        params.custom_extensions.push(rcgen::CustomExtension::from_oid_content(&[2, 5, 29, 14], tlv(0x04, id)));
+        params
+    };
+    let current = issued(with_id(signer_params("Ada", "ada@example.org")), key(&rcgen::PKCS_ECDSA_P256_SHA256), &root);
+    let cms = sign_with(CONTENT, &current, &[], false, |info| {
+        info.version = CmsVersion::V3;
+        info.sid = SignerIdentifier::SubjectKeyIdentifier(x509_cert::ext::pkix::SubjectKeyIdentifier(OctetString::new(id.to_vec()).unwrap()));
+    });
+    let anchors = Anchors::new([&root.der]);
+    for kind in 0..3 {
+        let mut params = signer_params("Ada", "ada@example.org");
+        match kind {
+            0 => params.not_after = rcgen::date_time_ymd(2021, 1, 1),
+            1 => params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth],
+            _ => params.subject_alt_names = vec![rcgen::SanType::Rfc822Name("other@example.org".try_into().unwrap())],
+        }
+        let issuer = rcgen::Issuer::new(root.params.clone(), &root.key);
+        let first = with_id(params).signed_by(&current.key, &issuer).unwrap();
+        let known: &[&[u8]] = &[first.der().as_ref(), &current.der];
+        let context = Context { anchors: &anchors, from: "ada@example.org", now: NOW, known, coverage: Coverage::Whole };
+        let checked = check(Signed::Detached { content: CONTENT, signature: &cms }, &context).unwrap();
+        assert_eq!((checked.signature.verdict, checked.signature.why), (Verdict::Verified, None));
+        assert_eq!(checked.certificate.as_deref(), Some(current.der.as_slice()));
+        // A later trusted certificate never excuses changed signed content.
+        let changed = check(Signed::Detached { content: b"changed", signature: &cms }, &context).unwrap();
+        assert_eq!(changed.signature.verdict, Verdict::Changed);
+    }
+}

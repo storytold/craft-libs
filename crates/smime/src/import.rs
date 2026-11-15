@@ -102,10 +102,8 @@ fn pem_blocks(bytes: &[u8], label: &str) -> Vec<Vec<u8>> {
             }
             Some(b) => {
                 // (A header line of RFC 1421's kind is no base64: such a block won't decode.)
-                if b.len() > MAX_CERT_BYTES.saturating_mul(2) {
+                if !append_pem_line(b, line) {
                     body = None;
-                } else {
-                    b.push_str(line);
                 }
             }
         }
@@ -144,4 +142,30 @@ pub fn holds_private_key(bytes: &[u8]) -> bool {
     // SEC 1 ECPrivateKey: version 1, the key in an OCTET STRING.
     let ec = matches!(tags.as_slice(), [0x02, 0x04, ..]) && first_int(&[1]);
     pkcs8 || encrypted || rsa || ec
+}
+
+// Check the prospective length before allocation, including a single oversized line.
+fn append_pem_line(body: &mut String, line: &str) -> bool {
+    if body.len().checked_add(line.len()).is_none_or(|len| len > MAX_CERT_BYTES.saturating_mul(2)) {
+        return false;
+    }
+    body.push_str(line);
+    true
+}
+
+#[cfg(test)]
+mod bounded_pem_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_pem_lines_are_refused_before_accumulation() {
+        let cap = MAX_CERT_BYTES * 2;
+        let mut body = String::new();
+        assert!(!append_pem_line(&mut body, &"A".repeat(cap + 1)));
+        assert!(body.is_empty());
+        assert!(append_pem_line(&mut body, &"A".repeat(cap - 1)));
+        assert!(append_pem_line(&mut body, "A"));
+        assert!(!append_pem_line(&mut body, "A"));
+        assert_eq!(body.len(), cap);
+    }
 }

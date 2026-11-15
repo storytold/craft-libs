@@ -159,7 +159,7 @@ impl std::fmt::Debug for Opened {
 /// Whether `bytes` look like a PKCS #12 file (a version 3 PFX), without opening it: so that a
 /// private key is never taken for a Public key to import.
 pub fn looks_like(bytes: &[u8]) -> bool {
-    let Some(der) = ber::to_der(bytes.get(..bytes.len().min(MAX_P12_LEN)).unwrap_or_default()) else { return false };
+    let Some(der) = ber::to_der(bytes.get(..bytes.len().min(MAX_P12_LEN)).unwrap_or_default()).map(Zeroizing::new) else { return false };
     let Some((pfx, _)) = ber::read(&der) else { return false };
     let Some(fields) = ber::children(pfx.value) else { return false };
     matches!(fields.as_slice(), [version, info, ..] if version.tag == 0x02 && version.value == [3] && info.tag == 0x30)
@@ -170,7 +170,7 @@ pub fn open(p12: &[u8], passphrase: &str) -> Result<Opened, Error> {
     if p12.len() > MAX_P12_LEN {
         return Err(Error::TooLarge);
     }
-    let der = ber::to_der(p12).ok_or(Error::Unreadable)?;
+    let der = Zeroizing::new(ber::to_der(p12).ok_or(Error::Unreadable)?);
     let (pfx, rest) = ber::read(&der).ok_or(Error::Unreadable)?;
     if pfx.tag != 0x30 || !rest.is_empty() {
         return Err(Error::Unreadable);
@@ -190,10 +190,10 @@ pub fn open(p12: &[u8], passphrase: &str) -> Result<Opened, Error> {
     if content_type != DATA {
         return Err(Error::NoMac);
     }
-    let safe = octets(content)?;
+    let safe = Zeroizing::new(octets(content)?);
     let mac = mac.ok_or(Error::NoMac)?;
-    check_mac(mac, &safe, passphrase, &mut work)?;
-    let safe = ber::to_der(&safe).ok_or(Error::Unreadable)?;
+    let legacy_password = check_mac(mac, &safe, passphrase, &mut work)?;
+    let safe = Zeroizing::new(ber::to_der(&safe).ok_or(Error::Unreadable)?);
     let mut found = Found::default();
     let (list, rest) = ber::read(&safe).ok_or(Error::Unreadable)?;
     if list.tag != 0x30 || !rest.is_empty() {
@@ -202,15 +202,14 @@ pub fn open(p12: &[u8], passphrase: &str) -> Result<Opened, Error> {
     for info in ber::children(list.value).ok_or(Error::Unreadable)? {
         let (kind, content) = content_info(&info)?;
         let (contents, encrypted) = if kind == DATA {
-            (octets(content)?, false)
+            (Zeroizing::new(octets(content)?), false)
         } else if kind == ENCRYPTED_DATA {
-            (Zeroizing::new(encrypted_data(content, passphrase, &mut work)?).to_vec(), true)
+            (encrypted_data(content, passphrase, &legacy_password, &mut work)?, true)
         } else {
             // (Enveloped data, which needs a key of the owner's to open: not a file to import.)
             return Err(Error::UnknownAlgorithm);
         };
-        let contents = Zeroizing::new(contents);
-        safe_contents(&contents, Safe { passphrase, encrypted, depth: 0 }, &mut work, &mut found)?;
+        safe_contents(&contents, Safe { passphrase, legacy_password: &legacy_password, encrypted, depth: 0 }, &mut work, &mut found)?;
     }
     found.finish()
 }
@@ -477,7 +476,7 @@ fn passwords(passphrase: &str) -> Vec<Zeroizing<Vec<u8>>> {
 }
 
 /// Check the file's MAC (RFC 7292 §5.1, Appendix B.4) over `safe`.
-fn check_mac(mac: &Tlv<'_>, safe: &[u8], passphrase: &str, work: &mut Work) -> Result<(), Error> {
+fn check_mac(mac: &Tlv<'_>, safe: &[u8], passphrase: &str, work: &mut Work) -> Result<Zeroizing<Vec<u8>>, Error> {
     if mac.tag != 0x30 {
         return Err(Error::Unreadable);
     }
@@ -504,14 +503,14 @@ fn check_mac(mac: &Tlv<'_>, safe: &[u8], passphrase: &str, work: &mut Work) -> R
         work.derive(iterations)?;
         let key = hash.pkcs12_kdf(&password, salt.value, Purpose::Mac, iterations, hash.len())?;
         if hash.hmac_checks(&key, safe, digest.value) {
-            return Ok(());
+            return Ok(password);
         }
     }
     Err(Error::WrongPassphrase)
 }
 
 /// The contents of an EncryptedData (RFC 5652 §8), decrypted.
-fn encrypted_data(content: Tlv<'_>, passphrase: &str, work: &mut Work) -> Result<Vec<u8>, Error> {
+fn encrypted_data(content: Tlv<'_>, passphrase: &str, legacy_password: &[u8], work: &mut Work) -> Result<Zeroizing<Vec<u8>>, Error> {
     if content.tag != 0x30 {
         return Err(Error::Unreadable);
     }
@@ -526,11 +525,11 @@ fn encrypted_data(content: Tlv<'_>, passphrase: &str, work: &mut Work) -> Result
         return Err(Error::Unreadable);
     }
     let ciphertext = octets(*encrypted)?;
-    decrypt(alg, &ciphertext, passphrase, work).map(|z| z.to_vec())
+    decrypt(alg, &ciphertext, passphrase, legacy_password, work)
 }
 
 /// `ciphertext` decrypted with the passphrase as the algorithm identifier `alg` says.
-fn decrypt(alg: &Tlv<'_>, ciphertext: &[u8], passphrase: &str, work: &mut Work) -> Result<Zeroizing<Vec<u8>>, Error> {
+fn decrypt(alg: &Tlv<'_>, ciphertext: &[u8], passphrase: &str, legacy_password: &[u8], work: &mut Work) -> Result<Zeroizing<Vec<u8>>, Error> {
     let (oid, params) = algorithm(alg)?;
     if WEAK.iter().any(|w| oid.to_string() == *w) {
         return Err(Error::WeakEncryption);
@@ -544,11 +543,12 @@ fn decrypt(alg: &Tlv<'_>, ciphertext: &[u8], passphrase: &str, work: &mut Work) 
             return Err(Error::Unreadable);
         }
         let iterations = uint(iterations)?;
-        let password = bmp(passphrase).ok_or(Error::WrongPassphrase)?;
+        // Reuse the exact representation authenticated by the MAC, including empty bytes.
+        let password = legacy_password;
         work.derive(iterations)?;
-        let key = Hash::Sha1.pkcs12_kdf(&password, salt.value, Purpose::Key, iterations, 24)?;
+        let key = Hash::Sha1.pkcs12_kdf(password, salt.value, Purpose::Key, iterations, 24)?;
         work.derive(iterations)?;
-        let iv = Hash::Sha1.pkcs12_kdf(&password, salt.value, Purpose::Iv, iterations, 8)?;
+        let iv = Hash::Sha1.pkcs12_kdf(password, salt.value, Purpose::Iv, iterations, 8)?;
         return cbc_decrypt::<des::TdesEde3>(&key, &iv, ciphertext);
     }
     if oid != PBES2 {
@@ -617,13 +617,14 @@ where
 #[derive(Clone, Copy)]
 struct Safe<'a> {
     passphrase: &'a str,
+    legacy_password: &'a [u8],
     encrypted: bool,
     depth: usize,
 }
 
 /// The bags of a SafeContents, into `found`.
 fn safe_contents(bytes: &[u8], safe: Safe<'_>, work: &mut Work, found: &mut Found) -> Result<(), Error> {
-    let Safe { passphrase, encrypted, depth } = safe;
+    let Safe { passphrase, legacy_password, encrypted, depth } = safe;
     if depth > MAX_NESTING {
         return Err(Error::Unreasonable);
     }
@@ -664,7 +665,7 @@ fn safe_contents(bytes: &[u8], safe: Safe<'_>, work: &mut Work, found: &mut Foun
                 let parts = ber::children(value.value).ok_or(Error::Unreadable)?;
                 let [alg, data] = parts.as_slice() else { return Err(Error::Unreadable) };
                 let ciphertext = octets(*data)?;
-                let key = decrypt(alg, &ciphertext, passphrase, work)?;
+                let key = decrypt(alg, &ciphertext, passphrase, legacy_password, work)?;
                 if ber::read(&key).is_none_or(|(k, rest)| k.tag != 0x30 || !rest.is_empty()) {
                     return Err(Error::WrongPassphrase);
                 }

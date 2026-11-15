@@ -311,7 +311,7 @@ fn one_signer(
     // The signer is the certificate whose key made the signature, of those its identifier names:
     // another one of the same name (any can be put in a message) makes no difference.
     let mut fault: Option<Fault> = None;
-    let mut signer: Option<&Cert> = None;
+    let mut signer: Option<(&Cert, Result<(), Why>)> = None;
     let mut ran_out = false;
     for cert in candidates {
         let Some(left) = budget.checked_sub(1) else {
@@ -344,15 +344,30 @@ fn one_signer(
         };
         match verified {
             Ok(()) => {
-                signer = Some(cert);
-                break;
+                // Matching keys can occur in expired or renewed certificates. A valid
+                // signature alone does not select the certificate we can trust for mail.
+                let for_email = cert.for_email() && !cert.is_authority();
+                let trust = chain::trust(cert, pool, context.anchors, context.now, budget)
+                    .and_then(|()| for_email.then_some(()).ok_or(Why::NotForEmail))
+                    .and_then(|()| if cert.is_for(context.from) { Ok(()) } else { Err(Why::AddressMismatch) });
+                if trust.is_ok() {
+                    signer = Some((cert, trust));
+                    break;
+                }
+                if signer.is_none() {
+                    signer = Some((cert, trust));
+                }
+                if trust == Err(Why::TooMuch) {
+                    ran_out = true;
+                    break;
+                }
             }
             // (Of several faults, what says most: an algorithm, then a malformed key, then no
             // match.)
             Err(f) => fault = Some(fault.map_or(f, |g| worse(g, f))),
         }
     }
-    let Some(cert) = signer else {
+    let Some((cert, mut trust)) = signer else {
         return match fault {
             // (A certificate not tried may have made it: no answer.)
             _ if ran_out => unchecked(Why::TooMuch),
@@ -389,11 +404,11 @@ fn one_signer(
             return result(Verdict::Changed, Some(Why::Altered));
         }
     }
-    // (An authority's certificate never signs mail, whatever else it allows.)
-    let for_email = cert.for_email() && !cert.is_authority();
-    let trust = chain::trust(cert, pool, context.anchors, context.now, budget)
-        .and_then(|()| for_email.then_some(()).ok_or(Why::NotForEmail))
-        .and_then(|()| if cert.is_for(context.from) { Ok(()) } else { Err(Why::AddressMismatch) });
+    // A candidate left untried may be acceptable. Do not report the first
+    // refusal as definitive when the shared verification budget was exhausted.
+    if ran_out {
+        trust = Err(Why::TooMuch);
+    }
     let mut r = match trust {
         Ok(()) => result(Verdict::Verified, None),
         Err(Why::TooMuch) => result(Verdict::Unchecked, Some(Why::TooMuch)),
