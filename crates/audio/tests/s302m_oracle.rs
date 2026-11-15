@@ -99,7 +99,7 @@ fn s(p: &Path) -> String {
 /// the list of (offset in the file, length) pieces it is spread over.
 fn pes_pieces(ts: &[u8]) -> Vec<Vec<(usize, usize)>> {
     let mut out: Vec<Vec<(usize, usize)>> = Vec::new();
-    for (i, p) in ts.chunks_exact(188).enumerate() {
+    for (i, p) in ts.as_chunks::<188>().0.iter().enumerate() {
         if p[0] != 0x47 || ((usize::from(p[1] & 0x1F) << 8) | usize::from(p[2])) != 0x100 {
             continue;
         }

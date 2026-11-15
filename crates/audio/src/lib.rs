@@ -28,7 +28,8 @@
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-encode`: the packet encoder), [`qoa`]
-//!   (`qoa-decode`, `qoa-encode`: whole QOA files).
+//!   (`qoa-decode`, `qoa-encode`: whole QOA files) and [`s302m`] (`s302m`:
+//!   SMPTE 302M packets).
 //!
 //! The shared types below build with no features.
 
