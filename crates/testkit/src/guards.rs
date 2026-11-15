@@ -114,8 +114,19 @@ impl AsFileSource for &(&str, String) {
 /// read as far as this depth, so hostile nesting cannot exhaust the stack.
 const MAX_NESTING: usize = 64;
 
+/// The most segments of a `use` path that [`use_leaves`] keeps. The guards compare paths of at most
+/// three segments, so a leaf with a longer path is left out, and a long prefix shared by many leaves
+/// is not copied into each of them.
+const MAX_USE_PATH: usize = 8;
+
+/// The longest segment, in bytes, of a `use` path that [`use_leaves`] keeps. The longest segment the
+/// guards compare is `PredefinedMenuItem`, so a leaf with a longer segment is left out, and a long name
+/// shared by many leaves is not copied into each of them.
+const MAX_USE_SEGMENT: usize = 32;
+
 /// The kind of a Rust token. Comments are dropped; string, character and number literals keep no text
-/// except string contents, which `cfg` predicates compare.
+/// except the decoded contents of strings, which `cfg` predicates compare. A string with an escape
+/// that is not valid is `Other`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Kind {
     Ident(String),
@@ -214,14 +225,14 @@ fn lex_rust(code: &str) -> Vec<Token> {
                     while j < len && is_ident_continue(chars[j]) {
                         j += 1;
                     }
-                    tokens.push(Token { kind: Kind::Ident(chars[name_start..j].iter().collect()), line: token_line });
+                    tokens.push(Token { kind: Kind::Ident(raw_identifier(&chars[name_start..j])), line: token_line });
                     i = j;
                     continue;
                 }
             }
             if matches!(word.as_str(), "b" | "c") && at(i) == Some('"') {
-                let (end, text) = scan_string(&chars, i + 1, &mut line);
-                tokens.push(Token { kind: Kind::Str(text), line: token_line });
+                let (end, kind) = scan_string(&chars, i + 1, &mut line);
+                tokens.push(Token { kind, line: token_line });
                 i = end;
                 continue;
             }
@@ -241,8 +252,8 @@ fn lex_rust(code: &str) -> Vec<Token> {
             tokens.push(Token { kind: Kind::Other, line });
         } else if c == '"' {
             let token_line = line;
-            let (end, text) = scan_string(&chars, i + 1, &mut line);
-            tokens.push(Token { kind: Kind::Str(text), line: token_line });
+            let (end, kind) = scan_string(&chars, i + 1, &mut line);
+            tokens.push(Token { kind, line: token_line });
             i = end;
         } else if c == '\'' {
             if let Some(end) = char_literal_end(&chars, i) {
@@ -263,27 +274,101 @@ fn lex_rust(code: &str) -> Vec<Token> {
     tokens
 }
 
+/// The name of a raw identifier written after `r#`. `r#true` and `r#false` keep their prefix, so a `cfg`
+/// predicate does not read them as the literals `true` and `false`.
+fn raw_identifier(name: &[char]) -> String {
+    let name: String = name.iter().collect();
+    if matches!(name.as_str(), "true" | "false") { format!("r#{name}") } else { name }
+}
+
 /// Read a normal string body starting after its opening quote. Returns the index after the closing
-/// quote and the body as written, escapes included.
-fn scan_string(chars: &[char], mut i: usize, line: &mut usize) -> (usize, String) {
-    let start = i;
+/// quote and the token for the body: `Str` with its escapes decoded, or `Other` when an escape is not
+/// valid in a string.
+fn scan_string(chars: &[char], mut i: usize, line: &mut usize) -> (usize, Kind) {
+    let mut text = Some(String::new());
     while i < chars.len() {
         match chars[i] {
             '\\' => {
-                if chars.get(i + 1) == Some(&'\n') {
+                let (next, decoded) = string_escape(chars, i + 1, line);
+                match decoded {
+                    Ok(Some(c)) => text.iter_mut().for_each(|t| t.push(c)),
+                    Ok(None) => {}
+                    Err(()) => text = None,
+                }
+                i = next;
+            }
+            '"' => return (i + 1, text.map_or(Kind::Other, Kind::Str)),
+            c => {
+                if c == '\n' {
                     *line += 1;
                 }
-                i += 2;
-            }
-            '"' => return (i + 1, chars[start..i].iter().collect()),
-            '\n' => {
-                *line += 1;
+                text.iter_mut().for_each(|t| t.push(c));
                 i += 1;
             }
-            _ => i += 1,
         }
     }
-    (chars.len(), chars[start.min(chars.len())..].iter().collect())
+    (chars.len(), text.map_or(Kind::Other, Kind::Str))
+}
+
+/// Decode the string escape whose `\` is right before `chars[i]`
+/// (<https://doc.rust-lang.org/reference/tokens.html#string-literals>). Returns the index after the
+/// escape and the character it stands for, `None` for a line continuation, or an error when it is not
+/// a valid escape.
+fn string_escape(chars: &[char], i: usize, line: &mut usize) -> (usize, Result<Option<char>, ()>) {
+    let hex = |k: usize| chars.get(k).and_then(|c| c.to_digit(16));
+    match chars.get(i) {
+        Some('n') => (i + 1, Ok(Some('\n'))),
+        Some('r') => (i + 1, Ok(Some('\r'))),
+        Some('t') => (i + 1, Ok(Some('\t'))),
+        Some('0') => (i + 1, Ok(Some('\0'))),
+        Some(&c @ ('\\' | '\'' | '"')) => (i + 1, Ok(Some(c))),
+        Some('x') => match (hex(i + 1), hex(i + 2)) {
+            (Some(high), Some(low)) if high < 8 => (i + 3, Ok(char::from_u32(high * 16 + low))),
+            _ => (i + 1, Err(())),
+        },
+        Some('u') if chars.get(i + 1) == Some(&'{') => {
+            // At most six hex digits, with underscores, before the closing brace.
+            let mut value = 0u32;
+            let mut digits = 0;
+            let mut j = i + 2;
+            while let Some(&c) = chars.get(j) {
+                if c == '}' {
+                    break;
+                }
+                if c != '_' {
+                    match c.to_digit(16) {
+                        Some(d) if digits < 6 => {
+                            value = value * 16 + d;
+                            digits += 1;
+                        }
+                        _ => return (j, Err(())),
+                    }
+                }
+                j += 1;
+            }
+            match (chars.get(j), char::from_u32(value)) {
+                (Some('}'), Some(c)) if digits > 0 && chars.get(i + 2) != Some(&'_') => (j + 1, Ok(Some(c))),
+                _ => (j.min(chars.len()), Err(())),
+            }
+        }
+        Some('\n') => {
+            // A line continuation skips the line break and the whitespace after it.
+            let mut j = i;
+            while let Some(&c) = chars.get(j).filter(|c| matches!(c, ' ' | '\t' | '\n' | '\r')) {
+                if c == '\n' {
+                    *line += 1;
+                }
+                j += 1;
+            }
+            (j, Ok(None))
+        }
+        Some('\r') if chars.get(i + 1) == Some(&'\n') => {
+            let (j, _) = string_escape(chars, i + 1, line);
+            (j, Ok(None))
+        }
+        Some(_) => (i + 1, Err(())),
+        None => (i, Err(())),
+    }
 }
 
 /// Read a raw string body starting after its opening quote; it ends at a quote followed by `hashes` `#`.
@@ -344,6 +429,29 @@ fn then_path(toks: &[Token], i: usize, name: impl Fn(&str) -> bool) -> bool {
         && toks.get(i + 2).is_some_and(|t| matches!(&t.kind, Kind::Ident(s) if name(s)))
 }
 
+/// Whether the path that ends at `toks[i]` starts right after the `<` of a qualified path, as in
+/// `<muda::PredefinedMenuItem>::quit`, rather than after the `<` of generic arguments (`Vec<T>::new`,
+/// `f::<T>`).
+fn opens_qualified_path(toks: &[Token], i: usize) -> bool {
+    let mut start = i;
+    while start >= 2 && toks[start - 1].is_punct(':') && toks[start - 2].is_punct(':') {
+        if start >= 3 && matches!(toks[start - 3].kind, Kind::Ident(_)) {
+            start -= 3;
+        } else {
+            start -= 2;
+            break;
+        }
+    }
+    start >= 1
+        && toks[start - 1].is_punct('<')
+        && match start.checked_sub(2).map(|j| &toks[j].kind) {
+            None => true,
+            Some(Kind::Ident(s)) => KEYWORDS.contains(&s.as_str()),
+            Some(Kind::Punct(c)) => !matches!(*c, ':' | '>'),
+            Some(_) => false,
+        }
+}
+
 /// One name a `use` declaration brings into scope.
 #[derive(Debug)]
 struct UseLeaf {
@@ -361,7 +469,8 @@ fn use_leaves(toks: &[Token]) -> Vec<UseLeaf> {
     let mut leaves = Vec::new();
     let mut i = 0;
     while i < toks.len() {
-        if toks[i].is_ident("use") && !continues_a_path(toks, i) {
+        // `use<...>` is a precise capturing bound on `impl Trait`, not a `use` declaration.
+        if toks[i].is_ident("use") && !continues_a_path(toks, i) && !toks.get(i + 1).is_some_and(|t| t.is_punct('<')) {
             let start = i;
             let end = (i + 1..toks.len()).find(|&j| toks[j].is_punct(';')).unwrap_or(toks.len());
             let mut pos = i + 1;
@@ -380,6 +489,8 @@ fn parse_use_tree(toks: &[Token], pos: &mut usize, prefix: &mut Vec<String>, sta
     if toks.get(*pos).is_some_and(|t| t.is_punct(':')) && toks.get(*pos + 1).is_some_and(|t| t.is_punct(':')) {
         *pos += 2;
     }
+    // A leaf is reported on the line where its path starts in this tree, not where its last name is.
+    let line = toks.get(*pos).map_or(0, |t| t.line);
     while let Some(tok) = toks.get(*pos) {
         match &tok.kind {
             Kind::Ident(name) => {
@@ -389,24 +500,30 @@ fn parse_use_tree(toks: &[Token], pos: &mut usize, prefix: &mut Vec<String>, sta
                     *pos += 2;
                     continue;
                 }
-                let mut path = prefix.clone();
-                if name != "self" {
-                    path.push(name.clone());
-                }
-                let mut bound = path.last().cloned();
-                if toks.get(*pos).is_some_and(|t| t.is_ident("as"))
-                    && let Some(Kind::Ident(alias)) = toks.get(*pos + 1).map(|t| &t.kind)
-                {
-                    bound = Some(alias.clone());
-                    *pos += 2;
-                }
-                if let Some(bound) = bound.filter(|b| b != "_") {
-                    out.push(UseLeaf { path, name: Some(bound), line: tok.line, start });
+                let length = prefix.len() + usize::from(name != "self");
+                let alias = match (toks.get(*pos), toks.get(*pos + 1).map(|t| &t.kind)) {
+                    (Some(t), Some(Kind::Ident(alias))) if t.is_ident("as") => {
+                        *pos += 2;
+                        Some(alias)
+                    }
+                    _ => None,
+                };
+                if length <= MAX_USE_PATH && short_segments(prefix) && name.len() <= MAX_USE_SEGMENT {
+                    let mut path = prefix.clone();
+                    if name != "self" {
+                        path.push(name.clone());
+                    }
+                    let bound = alias.cloned().or_else(|| path.last().cloned());
+                    if let Some(bound) = bound.filter(|b| b != "_") {
+                        out.push(UseLeaf { path, name: Some(bound), line, start });
+                    }
                 }
                 break;
             }
             Kind::Punct('*') => {
-                out.push(UseLeaf { path: prefix.clone(), name: None, line: tok.line, start });
+                if prefix.len() <= MAX_USE_PATH && short_segments(prefix) {
+                    out.push(UseLeaf { path: prefix.clone(), name: None, line, start });
+                }
                 *pos += 1;
                 break;
             }
@@ -431,6 +548,11 @@ fn parse_use_tree(toks: &[Token], pos: &mut usize, prefix: &mut Vec<String>, sta
         }
     }
     prefix.truncate(base);
+}
+
+/// Whether every segment of `path` is at most [`MAX_USE_SEGMENT`] bytes long.
+fn short_segments(path: &[String]) -> bool {
+    path.iter().all(|segment| segment.len() <= MAX_USE_SEGMENT)
 }
 
 /// A value of a `cfg` predicate on `wasm32-unknown-unknown`, where the value of a feature or of
@@ -480,6 +602,11 @@ fn eval_cfg(toks: &[Token], pos: &mut usize, depth: usize) -> Tri {
         return Tri::from_bool(value == expected);
     }
     if toks.get(*pos).is_some_and(|t| t.is_punct('(')) {
+        if depth >= MAX_NESTING {
+            // Too deep to read: the predicate is skipped as a whole, and its value is not known.
+            *pos = matching_close(toks, *pos).saturating_add(1);
+            return Tri::Unknown;
+        }
         *pos += 1;
         let mut values = Vec::new();
         while let Some(t) = toks.get(*pos) {
@@ -487,7 +614,7 @@ fn eval_cfg(toks: &[Token], pos: &mut usize, depth: usize) -> Tri {
                 *pos += 1;
                 break;
             }
-            if t.is_punct(',') || depth >= MAX_NESTING {
+            if t.is_punct(',') {
                 *pos += 1;
                 continue;
             }
@@ -509,7 +636,8 @@ fn eval_cfg(toks: &[Token], pos: &mut usize, depth: usize) -> Tri {
         };
     }
     match name.as_str() {
-        "unix" | "windows" => Tri::False,
+        "unix" | "windows" | "false" => Tri::False,
+        "true" => Tri::True,
         _ => Tri::Unknown,
     }
 }
@@ -536,21 +664,32 @@ fn matching_close(toks: &[Token], open: usize) -> usize {
 const BLOCK_KEYWORDS: &[&str] =
     &["fn", "mod", "impl", "trait", "struct", "enum", "union", "extern", "macro_rules", "if", "match", "loop", "while", "for", "unsafe"];
 
-/// Keywords that start an expression statement whose value follows them, so a block keyword after them
-/// is part of that expression.
+/// Keywords that start a statement whose value follows them, so a block keyword after them is part of
+/// that value.
 const VALUE_KEYWORDS: &[&str] = &["let", "return", "break", "yield", "become"];
+
+/// Whether a block expression starts at `j`: `{`, a labeled block (`'label: {`) or a `const` block.
+fn starts_block(toks: &[Token], j: usize) -> bool {
+    let punct = |k: usize, c: char| toks.get(k).is_some_and(|t| t.is_punct(c));
+    match toks.get(j).map(|t| &t.kind) {
+        Some(Kind::Punct('{')) => true,
+        Some(Kind::Other) => punct(j + 1, ':') && punct(j + 2, '{'),
+        Some(Kind::Ident(k)) => k == "const" && punct(j + 1, '{'),
+        _ => false,
+    }
+}
 
 /// The index after the item, statement, field or match arm that starts at `start`, or with `inner`, the
 /// index of the bracket that closes the enclosing scope.
 ///
-/// It ends after a `;` or a `,` outside brackets, after the closing brace of a block item (one that
-/// starts with `{` or a keyword in [`BLOCK_KEYWORDS`], or is a macro call with braces) or of a match
-/// arm's block, or before a closing bracket of the enclosing scope. A block keyword or macro brace
-/// makes a block item only at the head of the item: one after a `=`, a binary operator or a keyword in
-/// [`VALUE_KEYWORDS`] outside brackets is part of an expression, which runs on to its `;` or `,`. When a
-/// `.` or `?` follows the closing brace of a block item, the item runs on to its `;` or `,`. A `,` inside
-/// the angle brackets of a field's or a `let`'s type ends the item early, which leaves the rest of it
-/// checked.
+/// It ends after a `;` or a `,` outside brackets, after the closing brace of a block item, or before a
+/// closing bracket of the enclosing scope. A block item starts with `{`, a labeled block, a `const`
+/// block, a keyword in [`BLOCK_KEYWORDS`] or a macro call with braces, at the head of the item or of a
+/// match arm's body (after its `=>`). An `async` block is not a block item: it runs on to its `;`. A
+/// block keyword or macro brace after a `=`, a binary operator or a keyword in [`VALUE_KEYWORDS`]
+/// outside brackets is part of an expression, which runs on to its `;` or `,`. When a `.` or `?`
+/// follows the closing brace of a block item, the item runs on to its `;` or `,`. A `,` inside the angle
+/// brackets of a field's or a `let`'s type ends the item early, which leaves the rest of it checked.
 fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
     let mut depth = 0usize;
     let mut block_item = false;
@@ -559,15 +698,29 @@ fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
     let mut j = start;
     while j < toks.len() {
         let at_top = depth == 0 && !inner;
-        if j == start && at_top && toks[j].is_punct('{') {
+        if j == start && at_top && starts_block(toks, j) {
             block_item = true;
         }
         match &toks[j].kind {
-            Kind::Ident(k) if at_top && head && BLOCK_KEYWORDS.contains(&k.as_str()) => block_item = true,
+            Kind::Ident(k) if at_top && head && (BLOCK_KEYWORDS.contains(&k.as_str()) || starts_block(toks, j)) => block_item = true,
             Kind::Ident(k) if at_top && VALUE_KEYWORDS.contains(&k.as_str()) => head = false,
             Kind::Punct('!') if at_top && head && toks.get(j + 1).is_some_and(|t| t.is_punct('{')) => block_item = true,
             Kind::Punct('=') if at_top && toks.get(j + 1).is_some_and(|t| t.is_punct('>')) => {
+                // A match arm's body has a head of its own: a block or block keyword there ends the arm.
                 arm = true;
+                head = true;
+                block_item = starts_block(toks, j + 2);
+                j += 2;
+                continue;
+            }
+            // The `:` after a field's or a static's name starts its type, where `fn` is a function pointer
+            // type rather than an item. The `:` of a path (`::`) and the one after a loop label are not.
+            Kind::Punct(':')
+                if at_top
+                    && !block_item
+                    && !toks.get(j + 1).is_some_and(|t| t.is_punct(':'))
+                    && j.checked_sub(1).is_none_or(|k| !toks[k].is_punct(':') && toks[k].kind != Kind::Other) =>
+            {
                 head = false;
             }
             Kind::Punct('=' | '+' | '-' | '*' | '/' | '%' | '^' | '|' | '&' | '<' | '>' | '!') if at_top && !block_item => head = false,
@@ -577,7 +730,7 @@ fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
                     return j;
                 }
                 depth -= 1;
-                if depth == 0 && *c == '}' && (block_item || arm) && !inner {
+                if depth == 0 && *c == '}' && block_item && !inner {
                     if toks.get(j + 1).is_some_and(|t| t.is_ident("else")) {
                         j += 1;
                         continue;
@@ -585,6 +738,7 @@ fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
                     if toks.get(j + 1).is_some_and(|t| t.is_punct('.') || t.is_punct('?')) {
                         // A method call, field or `?` after the block continues the expression to its `;` or `,`.
                         block_item = false;
+                        head = false;
                         j += 1;
                         continue;
                     }
@@ -810,19 +964,20 @@ fn join_path(parent: &str, child: &str) -> String {
 
 /// The paths, normalized, where the module `decl` declared in the file at `parent` (normalized) can be.
 ///
-/// The modules of `lib.rs`, `main.rs` and `mod.rs` are in the file's folder, and those of any other file
-/// are in the folder named after its stem. Each inline module around the declaration adds a folder named
+/// The modules of `lib.rs`, `main.rs` and `mod.rs`, and with `path_loaded`, of a file that a `#[path]`
+/// attribute names, are in the file's folder, and those of any other file are in the folder named after
+/// its stem. Each inline module around the declaration adds a folder named
 /// after it, or with a `path` attribute, moves to that path relative to the current folder (without the
 /// stem folder). The module is then `<name>.rs` or `<name>/mod.rs` there, or with a `path` attribute, that
 /// path relative to the current folder, again without the stem folder.
-fn module_files(parent: &str, decl: &ModDecl) -> Vec<String> {
+fn module_files(parent: &str, decl: &ModDecl, path_loaded: bool) -> Vec<String> {
     let (dir, file) = match parent.rsplit_once('/') {
         Some(("", file)) => ("/", file),
         Some(split) => split,
         None => ("", parent),
     };
     let mut folder = dir.to_string();
-    let mut stem = (!matches!(file, "lib.rs" | "main.rs" | "mod.rs")).then(|| file.strip_suffix(".rs").unwrap_or(file));
+    let mut stem = (!path_loaded && !matches!(file, "lib.rs" | "main.rs" | "mod.rs")).then(|| file.strip_suffix(".rs").unwrap_or(file));
     for inline in &decl.inline {
         if let Some(attr) = &inline.path_attribute {
             folder = join_path(&folder, attr);
@@ -852,66 +1007,87 @@ fn native_only_files(paths: &[String], decls: &[Vec<ModDecl>]) -> Vec<bool> {
     for (i, path) in paths.iter().enumerate() {
         index.entry(path.as_str()).or_default().push(i);
     }
-    // The files each declaration names, in the order of `decls`.
-    let children: Vec<Vec<(bool, Vec<usize>)>> = decls
-        .iter()
-        .enumerate()
-        .map(|(parent, file_decls)| {
-            file_decls
-                .iter()
-                .map(|decl| {
-                    let files =
-                        module_files(&paths[parent], decl).iter().flat_map(|c| index.get(c.as_str()).into_iter().flatten().copied()).collect();
-                    (decl.native, files)
-                })
-                .collect()
+    // rustc reads a file that a `#[path]` attribute names as if it were a `mod.rs`, so the modules it
+    // declares are in its own folder rather than its stem folder. Each file is therefore two nodes: node
+    // `2 * file` for the file loaded by a plain `mod name;` (or as a crate root), and node `2 * file + 1`
+    // for the file loaded through a `#[path]` attribute. Each node lists the nodes its declarations name,
+    // with whether the declaration is in a native-only item.
+    let edges: Vec<Vec<(bool, usize)>> = (0..paths.len() * 2)
+        .map(|node| {
+            let (parent, path_loaded) = (node / 2, node % 2 == 1);
+            let mut targets = Vec::new();
+            for decl in &decls[parent] {
+                let by_path = usize::from(decl.module.path_attribute.is_some());
+                for candidate in module_files(&paths[parent], decl, path_loaded) {
+                    for &j in index.get(candidate.as_str()).into_iter().flatten() {
+                        targets.push((decl.native, 2 * j + by_path));
+                    }
+                }
+            }
+            targets
         })
         .collect();
 
+    // The nodes that are loaded: a file that no loaded node names is a crate root, loaded plainly, and a
+    // node is loaded when a loaded node names it. Every file starts out loaded plainly, and the set is
+    // narrowed until it stops changing, or after `MAX_MODULE_ROUNDS` rounds.
+    let mut loaded: Vec<bool> = (0..paths.len() * 2).map(|node| node % 2 == 0).collect();
+    let mut named = vec![false; paths.len()];
+    for _ in 0..MAX_MODULE_ROUNDS {
+        let mut reached = vec![false; paths.len() * 2];
+        for (node, targets) in edges.iter().enumerate() {
+            if loaded[node] {
+                for &(_, target) in targets {
+                    reached[target] = true;
+                }
+            }
+        }
+        named = (0..paths.len()).map(|j| reached[2 * j] || reached[2 * j + 1]).collect();
+        let next: Vec<bool> = (0..paths.len() * 2).map(|node| reached[node] || (node % 2 == 0 && !named[node / 2])).collect();
+        if next == loaded {
+            break;
+        }
+        loaded = next;
+    }
+
     // Files the web build compiles: crate roots, and every file a declaration outside a native-only item
     // of such a file names.
-    let mut named = vec![false; paths.len()];
-    for (_, files) in children.iter().flatten() {
-        for &j in files {
-            named[j] = true;
-        }
-    }
-    let mut web = vec![false; paths.len()];
-    let mut queue: Vec<usize> = (0..paths.len()).filter(|&j| !named[j]).collect();
-    for &j in &queue {
-        web[j] = true;
+    let mut web = vec![false; paths.len() * 2];
+    let mut queue: Vec<usize> = (0..paths.len()).filter(|&j| !named[j]).map(|j| 2 * j).collect();
+    for &node in &queue {
+        web[node] = true;
     }
     while let Some(parent) = queue.pop() {
-        for (_, files) in children[parent].iter().filter(|(is_native, _)| !is_native) {
-            for &j in files {
-                if !web[j] {
-                    web[j] = true;
-                    queue.push(j);
-                }
+        for &(_, target) in edges[parent].iter().filter(|(is_native, _)| !is_native) {
+            if !web[target] {
+                web[target] = true;
+                queue.push(target);
             }
         }
     }
 
-    // Files a native-only declaration names, and their descendants.
-    let mut native = vec![false; paths.len()];
-    let mut mark = |files: &[usize], queue: &mut Vec<usize>| {
-        for &j in files {
-            if !native[j] {
-                native[j] = true;
-                queue.push(j);
-            }
+    // Files a native-only declaration of a loaded node names, and their descendants.
+    let mut native = vec![false; paths.len() * 2];
+    let starts = edges.iter().enumerate().filter(|&(node, _)| loaded[node]).flat_map(|(_, targets)| targets.iter());
+    for &(_, target) in starts.filter(|(is_native, _)| *is_native) {
+        if !native[target] {
+            native[target] = true;
+            queue.push(target);
         }
-    };
-    for (_, files) in children.iter().flatten().filter(|(is_native, _)| *is_native) {
-        mark(files, &mut queue);
     }
     while let Some(parent) = queue.pop() {
-        for (_, files) in &children[parent] {
-            mark(files, &mut queue);
+        for &(_, target) in &edges[parent] {
+            if !native[target] {
+                native[target] = true;
+                queue.push(target);
+            }
         }
     }
-    native.iter().zip(&web).map(|(&n, &w)| n && !w).collect()
+    (0..paths.len()).map(|j| (native[2 * j] || native[2 * j + 1]) && !web[2 * j] && !web[2 * j + 1]).collect()
 }
+
+/// The most rounds [`native_only_files`] spends narrowing the set of loaded files.
+const MAX_MODULE_ROUNDS: usize = 16;
 
 /// Add one finding for each line in `lines`, in line order, with the trimmed text of that line.
 fn report(findings: &mut Vec<Finding>, path: &str, content: &str, lines: &BTreeSet<usize>) {
@@ -932,7 +1108,8 @@ fn report(findings: &mut Vec<Finding>, path: &str, content: &str, lines: &BTreeS
 /// Applications should route Quit through custom menu items or interceptors connected to `craft-quit`.
 ///
 /// The guard reads Rust tokens, so comments, strings and character literals are ignored, and whitespace
-/// or line breaks around `::` do not hide a call. It also follows a `use` that renames muda's type
+/// or line breaks around `::` do not hide a call. A qualified path such as `<muda::PredefinedMenuItem>::quit`
+/// is reported too. It also follows a `use` that renames muda's type
 /// (`use muda::PredefinedMenuItem as Item;` then `Item::quit`); a rename of another crate's
 /// `PredefinedMenuItem` is not followed. Each finding names the line where the
 /// type's name starts, once per line, in line order.
@@ -956,7 +1133,10 @@ where
         for (i, tok) in toks.iter().enumerate() {
             let Kind::Ident(name) = &tok.kind else { continue };
             let named = name == "PredefinedMenuItem" || (aliases.contains(name) && !continues_a_path(&toks, i));
-            if named && then_path(&toks, i + 1, |s| s == "quit" || s == "Quit") {
+            let quit = |at: usize| then_path(&toks, at, |s| s == "quit" || s == "Quit");
+            // `<muda::PredefinedMenuItem>::quit`, a qualified path to the same function.
+            let qualified = || toks.get(i + 1).is_some_and(|t| t.is_punct('>')) && quit(i + 2) && opens_qualified_path(&toks, i);
+            if named && (quit(i + 1) || qualified()) {
                 lines.insert(tok.line);
             }
         }
@@ -977,18 +1157,22 @@ where
 /// * **What is reported**: the paths `std::time::Instant` and `::std::time::Instant`; `<m>::Instant` where a
 ///   `use` outside a native-only item binds `m` to `std::time` (`use std::time;`, `use std::time as t;`,
 ///   `use std::time::{self as t}`);
-///   and every `use` that imports `std::time::Instant` or `std::time::*`, under any name. Each finding names
-///   the line where the path starts, once per line, in line order.
+///   and every `use` that imports `std::time::Instant` or `std::time::*`, under any name. Whitespace, comments
+///   and line breaks may separate the parts of a path. Each finding names the line where the path starts (in a
+///   `use` group, the line where the name's part of the group starts), once per line, in line order.
 /// * **What is skipped**: comments, string and character literals, other crates' `Instant` (`web_time::Instant`,
 ///   a `time` module that is not `std::time`), and items whose `cfg` attribute is false on `wasm32-unknown-unknown`
 ///   (for example `#[cfg(not(target_arch = "wasm32"))]`, `#[cfg(all(unix, ...))]`, `#[cfg(target_os = "macos")]`,
-///   or `#![cfg(...)]` for the rest of a module). A predicate that depends on a feature or on `test` is not
-///   known from the source, so the item is checked.
+///   or `#![cfg(...)]` for the rest of a module). Such an attribute covers only its item: code before the
+///   attribute or after the item on the same line is checked. A statement whose value holds a block, such as
+///   `let n = match x { ... } as u64 + ...;`, is covered up to its `;`. `cfg(false)` is false and `cfg(true)`
+///   is true. A predicate that depends on a feature or on `test`, or that is nested more than 64 levels deep,
+///   is not known from the source, so the item is checked. Escapes in a predicate's string values are decoded.
 /// * **Module files**: a `mod name;` inside such an item makes the module's file native-only, and so are the
 ///   files of the modules declared in it, when they are among `files`, unless a chain of declarations outside
 ///   such items also reaches the file from a crate root (a file that no declaration names). The module's file is `name.rs` or
-///   `name/mod.rs` next to `lib.rs`, `main.rs` or `mod.rs`, and in the folder named after any other file's
-///   stem, below the folders of enclosing inline modules; a `#[path = "..."]` attribute on the declaration
+///   `name/mod.rs` next to `lib.rs`, `main.rs`, `mod.rs` or a file that a `#[path]` attribute names, and in
+///   the folder named after any other file's stem, below the folders of enclosing inline modules; a `#[path = "..."]` attribute on the declaration
 ///   or on an enclosing inline module is followed. Paths are compared as text with `\` read as `/`, so the files must be named the same way
 ///   (for example all from one `rust_sources` call), and a crate root other than `lib.rs` or `main.rs`
 ///   (such as `src/bin/tool.rs`) is read as an ordinary module file. A declaration inside more than 64 inline
@@ -1063,7 +1247,11 @@ where
     findings
 }
 
-/// Replace WGSL comments (`//` and nested `/* ... */`) with spaces, keeping line breaks.
+/// Replace WGSL comments (`//` and nested `/* ... */`) with spaces, and write each WGSL line break as
+/// `\n`: line feed, vertical tab, form feed, carriage return, carriage return and line feed as one
+/// break, next line (U+0085), line separator (U+2028) and paragraph separator (U+2029)
+/// (<https://www.w3.org/TR/WGSL/#line-break>). A line comment ends at any of them, and `str::lines`
+/// then counts lines the way WGSL does.
 fn mask_wgsl_comments(code: &str) -> String {
     let chars: Vec<char> = code.chars().collect();
     let len = chars.len();
@@ -1074,10 +1262,15 @@ fn mask_wgsl_comments(code: &str) -> String {
     while i < len {
         let c = chars[i];
         let next = chars.get(i + 1).copied();
-        if c == '\n' {
+        let line_break = match c {
+            '\r' if next == Some('\n') => 2,
+            '\n' | '\u{000B}' | '\u{000C}' | '\r' | '\u{0085}' | '\u{2028}' | '\u{2029}' => 1,
+            _ => 0,
+        };
+        if line_break > 0 {
             in_line = false;
             out.push('\n');
-            i += 1;
+            i += line_break;
         } else if in_line {
             out.push(' ');
             i += 1;
@@ -1196,7 +1389,9 @@ fn scan_wgsl_hex(code: &[u8], start: usize) -> (usize, usize, bool) {
 /// * **Which literals**: decimal floats (with a `.`, an exponent or an `f`/`h` suffix) and hexadecimal floats
 ///   (`0x` with a `.` or a `p` exponent). Integer literals (`123`, `123u`, `0xFFi`, `0x1f`) are not floats and
 ///   are not reported. A `-` in front is not part of the literal, so `-1e39` is reported as `1e39`.
-/// * **Comments**: Comments (`//` and nested `/* ... */`) are masked out prior to scanning.
+/// * **Comments**: Comments (`//` and nested `/* ... */`) are masked out prior to scanning. A `//` comment
+///   ends at any WGSL line break, a lone carriage return included, and finding lines count every one of them.
+/// * **Identifiers**: digits inside an identifier, `π1e39` included, are not a literal.
 pub fn wgsl_float_literals(wgsl: &str) -> Vec<Finding> {
     wgsl_float_literals_in([("", wgsl)])
 }
@@ -1218,7 +1413,14 @@ where
             let mut i = 0;
             while i < code.len() {
                 let digit_or_dot = code[i].is_ascii_digit() || (code[i] == b'.' && code.get(i + 1).is_some_and(u8::is_ascii_digit));
-                let word_before = i > 0 && (code[i - 1].is_ascii_alphanumeric() || code[i - 1] == b'_' || code[i - 1] == b'.');
+                // Outside comments, a character that is not ASCII and not blankspace (U+200E, U+200F) is part of an
+                // identifier, as in `π1e39`.
+                let word_before = digit_or_dot
+                    && i > 0
+                    && (code[i - 1].is_ascii_alphanumeric()
+                        || code[i - 1] == b'_'
+                        || code[i - 1] == b'.'
+                        || (!code[i - 1].is_ascii() && !line[..i].ends_with(['\u{200E}', '\u{200F}'])));
                 if !digit_or_dot || word_before {
                     i += 1;
                     continue;
@@ -1404,4 +1606,26 @@ pub fn rust_sources_with_limits(dir: impl AsRef<Path>, limits: SourceLimits) -> 
 
     files.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_USE_PATH, MAX_USE_SEGMENT, lex_rust, use_leaves};
+
+    #[test]
+    fn use_leaves_keep_no_path_longer_than_the_limit() {
+        let source = format!("use {}{{x, y::z, *}};\nuse std::time::{{Instant, self as t}};\n", "a::".repeat(MAX_USE_PATH));
+        let paths: Vec<Vec<String>> = use_leaves(&lex_rust(&source)).into_iter().map(|leaf| leaf.path).collect();
+        assert_eq!(paths, vec![vec!["a"; MAX_USE_PATH], vec!["std", "time", "Instant"], vec!["std", "time"]]);
+    }
+
+    #[test]
+    fn use_leaves_keep_no_segment_longer_than_the_limit() {
+        let long = "n".repeat(MAX_USE_SEGMENT + 1);
+        let fits = "n".repeat(MAX_USE_SEGMENT);
+        let source = format!("use {long}::{{self, x, *}};\nuse a::{long};\nuse {fits}::{{self as b, *}};\n");
+        let leaves = use_leaves(&lex_rust(&source));
+        let paths: Vec<(Vec<String>, Option<String>)> = leaves.into_iter().map(|leaf| (leaf.path, leaf.name)).collect();
+        assert_eq!(paths, vec![(vec![fits.clone()], Some("b".to_string())), (vec![fits], None)]);
+    }
 }
