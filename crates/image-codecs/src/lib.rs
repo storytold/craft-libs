@@ -29,6 +29,7 @@ pub mod jpeg_sef;
 mod lab;
 mod options;
 pub mod orientation;
+pub mod raw_metadata;
 pub mod resolution;
 pub mod source_settings;
 pub mod web;
