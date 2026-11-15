@@ -567,12 +567,19 @@ fn key_code(code: u32) -> Option<u8> {
 fn show_string(ip: &mut Interp, s: &[u8], draw: bool, per_char: &mut PerGlyph<'_>) -> R<(f64, f64)> {
     // Whitespace-only shows advance the text position but emit no painted glyphs; avoid bloating
     // the content stream with an empty semantic marked-content wrapper for them.
-    let text = ip.gs.font.as_ref().and_then(|font| actual_text(font, s));
+    // Type 3 glyph programs can paint and change clipping inside a show. Composite fonts may
+    // select Type 3 descendants. Do not wrap their arbitrary output in a synthetic text span.
+    let text = ip
+        .gs
+        .font
+        .as_ref()
+        .filter(|font| !matches!(font.get_name(b"FontType").and_then(|v| v.num()), Some(0.0 | 3.0)))
+        .and_then(|font| actual_text(font, s));
     if draw
         && !ip.charpath
         && let Some(text) = text.filter(|text| text.chars().any(|c| !c.is_whitespace()))
     {
-        ip.out.begin_actual_text(&text);
+        ip.out.begin_actual_text(&text, &ip.gs.clip).map_err(PsErr::Fatal)?;
         let result = show_glyphs(ip, s, draw, false, per_char);
         ip.out.end_actual_text();
         result

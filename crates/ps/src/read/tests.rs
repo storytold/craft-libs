@@ -137,6 +137,7 @@ fn type3_fonts_draw_their_glyphs() {
          /T3 T3 definefont pop /T3 findfont 20 scalefont setfont 10 20 moveto (AA) show");
     // Two glyphs, the second 12 points (600 units at 20 pt) to the right.
     assert_eq!(c.lines().filter(|l| *l == "f").count(), 2, "{c}");
+    assert!(!c.contains("/ActualText"), "Type 3 procedures are not synthetic text spans: {c}");
     assert!(c.contains("22 20 m"), "{c}");
 }
 
@@ -469,6 +470,18 @@ fn actual_text_uses_the_selected_encoding_and_omits_unknown_names() {
 
     let (content, _) = run("/F /Helvetica findfont def F /Encoding get 65 /customGlyph put F 10 scalefont setfont 10 20 moveto (A) show");
     assert!(!content.contains("/ActualText"), "{content}");
+}
+
+#[test]
+fn actual_text_starts_after_persistent_clip() {
+    let (content, _) = run(
+        "newpath 0 0 moveto 50 0 lineto 50 50 lineto closepath clip newpath /Helvetica findfont 12 scalefont setfont 10 10 moveto (Hi) show 0 0 100 100 rectfill",
+    );
+    let clip = content.find("\nW\n").unwrap();
+    let span = content.find("/ActualText (Hi)").unwrap();
+    let end = content.find("EMC").unwrap();
+    let restore = content.rfind("\nQ").unwrap();
+    assert!(clip < span && span < end && end < restore, "{content}");
 }
 
 #[test]
