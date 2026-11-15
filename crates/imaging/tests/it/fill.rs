@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use egui::{Color32, ColorImage, Modifiers, Pos2, vec2};
 
@@ -9,12 +10,13 @@ use craft_behavior::PixelSize;
 use craft_behavior::geometry::selection_op::SelectionOperation;
 use craft_behavior::kurbo::Rect;
 use craft_imaging::ui::fill::{
-    ContentAwareFillWorkspace, FillAreaEdit, FillEvent, FillLimit, FillLimits, FillOpen, FillOutput, FillOverlay, FillPreviewRequest, FillSession,
-    FillSettings, FillSource, FillStrokeEvent, SamplingPlane, SamplingStroke,
+    ContentAwareFillWorkspace, FillAreaEdit, FillEvent, FillLimit, FillLimits, FillOpen, FillOverlay, FillPreviewRequest, FillSession, FillSettings,
+    FillSource, FillStrokeEvent, SamplingPlane, SamplingStroke,
 };
 use craft_imaging::ui::select_mask::EditMode;
 use craft_imaging::ui::wide_angle::PreviewDone;
 use craft_ui::canvas::{PixelRect, RasterSource};
+use craft_ui::dialog::{DialogHost, DialogResult, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::pending::Job;
@@ -79,25 +81,35 @@ impl FillSource for Source {
     }
 }
 
-/// The workspace shown in a fixture, with every pass's output kept.
+/// The hosted workspace.
+type Hosted = HostedWorkspace<ContentAwareFillWorkspace>;
+
+/// The workspace on a dialog host shown in a fixture, with every pass's events kept.
+// A pass's `WorkspaceCx` is built by the host only, so this runs the workspace on a `DialogHost`.
 struct Rig {
     fixture: Fixture,
-    outputs: Rc<RefCell<Vec<FillOutput>>>,
+    host: Rc<RefCell<DialogHost>>,
+    events: Rc<RefCell<Vec<FillEvent>>>,
 }
 
 impl Rig {
     fn new(settings: FillSettings, limits: FillLimits) -> Rig {
         let open = FillOpen::new([LAYER.width, LAYER.height], "Layer 1", limits).settings(settings);
-        let work = Rc::new(RefCell::new(ContentAwareFillWorkspace::new(open)));
-        let outputs = Rc::new(RefCell::new(Vec::new()));
-        let (shown, kept) = (Rc::clone(&work), Rc::clone(&outputs));
+        let source: Arc<dyn FillSource> = Arc::new(Source);
+        let mut host = DialogHost::new();
+        host.open(HostedWorkspace::new(ContentAwareFillWorkspace::new(open), source));
+        let host = Rc::new(RefCell::new(host));
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let (shown, kept) = (Rc::clone(&host), Rc::clone(&events));
         let mut fixture = Fixture::new(move |ui| {
-            let output = shown.borrow_mut().show(ui, &Source);
-            kept.borrow_mut().push(output);
+            let mut host = shown.borrow_mut();
+            host.run(ui);
+            let taken = host.get_mut::<Hosted>().map(Hosted::take_events).unwrap_or_default();
+            kept.borrow_mut().extend(taken);
         });
         fixture.room(ROOM).settle();
-        let rig = Rig { fixture, outputs };
-        rig.take();
+        let rig = Rig { fixture, host, events };
+        rig.events();
         rig
     }
 
@@ -106,14 +118,15 @@ impl Rig {
         self.fixture.by_role(Role::CANVAS).into_iter().next().expect("the workspace shows a canvas").center()
     }
 
-    /// The outputs since the last call.
-    fn take(&self) -> Vec<FillOutput> {
-        std::mem::take(&mut *self.outputs.borrow_mut())
-    }
-
     /// The events since the last call.
     fn events(&self) -> Vec<FillEvent> {
-        self.take().into_iter().flat_map(|output| output.events).collect()
+        std::mem::take(&mut *self.events.borrow_mut())
+    }
+
+    /// Runs `answer` on the workspace, as the app does between passes.
+    fn with<R>(&self, answer: impl FnOnce(&mut ContentAwareFillWorkspace) -> R) -> R {
+        let mut host = self.host.borrow_mut();
+        answer(host.get_mut::<Hosted>().expect("the workspace is open").workspace_mut())
     }
 
     /// Presses at `from`, moves through `through` and releases at the last point, with `modifiers` held.
@@ -189,6 +202,45 @@ fn fill_limits_refuse_at_the_brush() {
     let refusals = events.iter().filter(|event| matches!(event, FillEvent::Refused(FillLimit::Vertices(3)))).count();
     assert_eq!(refusals, 1, "{events:?}");
     assert_eq!(committed(&events).map(|stroke| stroke.points.len()), Some(3));
+}
+
+// The Apply button reports one `Apply` and the workspace stays open; the app's answer shows its message or clears the
+// history; OK is not held by it. A change made between passes is reported once, however many passes the frames run.
+#[trial]
+fn answer_apply_answers_the_apply_button() {
+    let mut rig = Rig::new(FillSettings::default(), FillLimits::new(10, 1000));
+    rig.line(2);
+    rig.events();
+
+    let apply = rig.fixture.by_label("Apply").expect("the footer has Apply");
+    rig.fixture.click(&apply);
+    let events = rig.events();
+    let applied: Vec<_> = events.iter().filter_map(|event| if let FillEvent::Apply(command) = event { Some(command) } else { None }).collect();
+    assert_eq!(applied.len(), 1, "{events:?}");
+    assert_eq!(applied[0].strokes.len(), 1, "the command carries the stroke");
+    assert!(rig.host.borrow().is_open::<Hosted>(), "Apply keeps the workspace open");
+
+    rig.with(|work| work.answer_apply(Err("the fill failed".to_owned())));
+    rig.fixture.idle(2);
+    assert!(rig.fixture.by_label("the fill failed").is_some(), "the message shows under the panel");
+
+    rig.with(|work| {
+        work.answer_apply(Ok(()));
+        work.undo();
+        assert_eq!(work.session().strokes.len(), 1, "an applied fill is one document step: undo cannot take the stroke back");
+    });
+    rig.fixture.idle(2);
+    assert!(rig.fixture.by_label("the fill failed").is_none(), "the answer clears the message");
+
+    rig.with(|work| work.settings_mut().opacity = 10.0);
+    rig.fixture.idle(3);
+    let changed = rig.events().into_iter().filter(|event| matches!(event, FillEvent::SettingsChanged(settings) if settings.opacity == 10.0)).count();
+    assert_eq!(changed, 1, "a change between passes is reported once");
+
+    let ok = rig.fixture.by_label("OK").expect("the footer has OK");
+    rig.fixture.click(&ok);
+    let result = rig.host.borrow_mut().take::<Hosted>();
+    assert!(matches!(result, Some(DialogResult::Ok(command)) if command.strokes.len() == 1), "OK answers the command");
 }
 
 #[trial]

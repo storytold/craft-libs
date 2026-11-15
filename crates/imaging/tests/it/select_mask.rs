@@ -11,10 +11,12 @@ use craft_host::{AppInfo, Host, InlineJobs};
 use craft_imaging::trace::MaskSource;
 use craft_imaging::ui::mask_view::MaskViewMode;
 use craft_imaging::ui::select_mask::{
-    SelectMaskEvent, SelectMaskLimits, SelectMaskOpen, SelectMaskPreviewRequest, SelectMaskSource, SelectMaskWorkspace,
+    EditMode, LimitRefused, RefineStroke, SelectMaskEdit, SelectMaskEvent, SelectMaskLimits, SelectMaskOp, SelectMaskOpen, SelectMaskPreviewRequest,
+    SelectMaskSession, SelectMaskSource, SelectMaskWorkspace,
 };
 use craft_imaging::ui::wide_angle::PreviewDone;
 use craft_ui::canvas::{PixelRect, RasterSource};
+use craft_ui::dialog::{DialogHost, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::pending::Job;
@@ -79,28 +81,34 @@ impl SelectMaskSource for Source {
     }
 }
 
-/// What the app keeps of the workspace and what it saw.
+/// What the app keeps: the dialog host that owns the workspace, and the events it took from it.
 struct App {
-    workspace: SelectMaskWorkspace,
-    source: Source,
+    host: DialogHost,
     events: Vec<SelectMaskEvent>,
 }
 
+impl App {
+    /// The hosted workspace.
+    fn hosted(&self) -> &HostedWorkspace<SelectMaskWorkspace> {
+        self.host.get::<HostedWorkspace<SelectMaskWorkspace>>().expect("the workspace is open")
+    }
+}
+
 /// The workspace over a solid picture, settled.
+// A pass's `WorkspaceCx` is built by the host only, so this runs the workspace on a `DialogHost`.
 fn open() -> (Fixture, Rc<RefCell<App>>, Arc<AtomicUsize>) {
     let jobs = Arc::new(AtomicUsize::new(0));
     let size = PixelSize::new(DOCUMENT[0], DOCUMENT[1]);
-    let app = Rc::new(RefCell::new(App {
-        workspace: SelectMaskWorkspace::new(SelectMaskOpen::new(DOCUMENT, "Photo", LIMITS)),
-        source: Source { image: Solid { size }, jobs: Arc::clone(&jobs) },
-        events: Vec::new(),
-    }));
+    let source: Arc<dyn SelectMaskSource> = Arc::new(Source { image: Solid { size }, jobs: Arc::clone(&jobs) });
+    let mut host = DialogHost::new();
+    host.open(HostedWorkspace::new(SelectMaskWorkspace::new(SelectMaskOpen::new(DOCUMENT, "Photo", LIMITS)), source));
+    let app = Rc::new(RefCell::new(App { host, events: Vec::new() }));
     let shown = Rc::clone(&app);
     let mut fixture = Fixture::new(move |ui| {
         let mut app = shown.borrow_mut();
-        let App { workspace, source, .. } = &mut *app;
-        let out = workspace.show(ui, source);
-        app.events.extend(out.events);
+        app.host.run(ui);
+        let taken = app.host.get_mut::<HostedWorkspace<SelectMaskWorkspace>>().map(HostedWorkspace::take_events).unwrap_or_default();
+        app.events.extend(taken);
     });
     fixture.host(Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(Arc::new(InlineJobs)).build()));
     fixture.room(Vec2::new(1200.0, 900.0));
@@ -138,12 +146,47 @@ fn select_mask_view_keys_pick_the_view_and_x_held_hides_it() {
     let (mut fixture, app, _) = open();
     fixture.key(Key::Tab, Modifiers::NONE).settle();
     fixture.key(Key::K, Modifiers::NONE).settle();
-    assert_eq!(app.borrow().workspace.recipe().mode, MaskViewMode::BlackAndWhite);
+    assert_eq!(app.borrow().hosted().workspace().recipe().mode, MaskViewMode::BlackAndWhite);
 
     fixture.frame(vec![key_press(Key::X, Modifiers::NONE)]);
     fixture.settle();
-    assert!(app.borrow().workspace.recipe().hidden, "X held hides the view");
+    assert!(app.borrow().hosted().workspace().recipe().hidden, "X held hides the view");
     fixture.frame(vec![key_release(Key::X, Modifiers::NONE)]);
     fixture.settle();
-    assert!(!app.borrow().workspace.recipe().hidden, "the release shows it again");
+    assert!(!app.borrow().hosted().workspace().recipe().hidden, "the release shows it again");
+}
+
+// The limits count edits and points over the whole session: a total equal to a limit passes, an edit past it is
+// refused with the limit's number and records nothing, and `perform` gives the same refusal.
+#[trial]
+fn select_mask_limits_refuse_at_the_brush() {
+    let lasso = |points: usize| SelectMaskEdit::lasso(vec![[1.0, 2.0]; points], EditMode::Add);
+    let refine = |points: usize| RefineStroke::new(vec![[1.0, 2.0]; points], 20.0, EditMode::Add);
+
+    let mut session = SelectMaskSession::default();
+    for _ in 0..3 {
+        assert_eq!(session.add_edit(lasso(1), &LIMITS), Ok(()));
+    }
+    assert_eq!(session.add_edit(lasso(1), &LIMITS), Err(LimitRefused::Edits(3)), "three edits are the limit");
+    assert_eq!(session.edits.len(), 3, "a refused edit records nothing");
+
+    let mut session = SelectMaskSession::default();
+    assert_eq!(session.add_edit(lasso(6), &LIMITS), Ok(()));
+    assert_eq!(session.add_edit(lasso(5), &LIMITS), Err(LimitRefused::EditPoints(10)), "6 and 5 points pass the 10-point limit");
+    assert_eq!(session.edits.len(), 1);
+    assert_eq!(session.add_edit(lasso(4), &LIMITS), Ok(()), "a total equal to the limit passes");
+
+    let mut session = SelectMaskSession::default();
+    assert_eq!(session.add_stroke(refine(3), &LIMITS), Ok(()));
+    assert_eq!(session.add_stroke(refine(2), &LIMITS), Err(LimitRefused::StrokePoints(4)));
+    assert_eq!(session.strokes.len(), 1, "a refused stroke records nothing");
+    assert_eq!(session.add_stroke(refine(1), &LIMITS), Ok(()));
+    assert_eq!(session.add_stroke(refine(0), &LIMITS), Err(LimitRefused::Strokes(2)), "two strokes are the limit");
+
+    let mut workspace = SelectMaskWorkspace::new(SelectMaskOpen::new(DOCUMENT, "Photo", LIMITS));
+    for _ in 0..3 {
+        assert_eq!(workspace.perform(SelectMaskOp::Edit(lasso(1))), Ok(()));
+    }
+    assert_eq!(workspace.perform(SelectMaskOp::Edit(lasso(1))), Err(LimitRefused::Edits(3)));
+    assert_eq!(workspace.session().edits.len(), 3, "a refused request records nothing");
 }

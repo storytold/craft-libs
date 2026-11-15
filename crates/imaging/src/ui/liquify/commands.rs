@@ -58,6 +58,9 @@ pub enum LiquifyCommands {
     /// Zoom.
     #[command(modal = "in_dialogs", label = "Zoom Tool", icon = "zoom_in", kind = "tool", default = "Z")]
     Zoom,
+    /// Turns the preview on or off.
+    #[command(modal = "in_dialogs", label = "Preview", default = "P")]
+    Preview,
     /// Makes the brush smaller.
     #[command(modal = "in_dialogs", label = "Smaller Brush", default = "[")]
     Smaller,

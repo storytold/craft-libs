@@ -8,6 +8,8 @@ craft_ui::words! {
     pub struct LiquifyWords {
         /// The title's name: "Liquify (layer, 66%)".
         name: "liquify.name" = "Liquify";
+        /// The footer's Preview check box.
+        preview: "liquify.preview" = "Preview";
         /// The strip's accessible name.
         tools: "liquify.tools" = "Tools";
         /// The side column's header (Photoshop heads Liquify's panel "Properties") and accessible name.

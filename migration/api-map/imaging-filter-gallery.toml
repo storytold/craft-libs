@@ -25,9 +25,9 @@ status = "same"
 [[type]]
 name = "FilterGalleryOutput"
 old = "craft_imaging::ui::filter_gallery::FilterGalleryOutput"
-new = "craft_imaging::ui::filter_gallery::FilterGalleryOutput"
-status = "replaced"
-note = "`preview_wanted`, `outcome` and `rect` are removed: the preview is requested through `FilterGallerySource::render`, and the dialog's result is `dialog: DialogOutput` (`accepted()` for OK)."
+new = ""
+status = "removed"
+note = "Removed: a pass returns `WorkspacePass`; its `events`, `response` and `result` replace the output's fields, and the preview is requested through `FilterGallerySource::render`."
 
 [[type]]
 name = "FilterGallerySession"

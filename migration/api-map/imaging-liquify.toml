@@ -75,9 +75,9 @@ note = "`Stroke` carries a `StrokeEvent` (`Begin`, `Update`, `Commit` with the s
 [[type]]
 name = "LiquifyOutput"
 old = "craft_imaging::ui::liquify::LiquifyOutput"
-new = "craft_imaging::ui::liquify::LiquifyOutput"
-status = "replaced"
-note = "`closed: Option<DialogRole>` replaces `outcome`, `response` replaces `rect`, and `cursor` is new."
+new = ""
+status = "removed"
+note = "Removed: a pass returns `WorkspacePass`; its `events`, `response` and `result` replace the output's fields, and `LiquifyWorkspace::cursor` and `timing` give the cursor and the stroke timing."
 
 [[type]]
 name = "LiquifyOpen"

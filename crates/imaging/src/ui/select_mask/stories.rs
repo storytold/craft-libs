@@ -4,12 +4,14 @@
 //! engine's composite is the app's), the house is the refined selection. The stroke trail, the open polygon, the
 //! brush outline and the Alt + right-drag resize are the pointer's: draw on the picture to see them.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use egui::Ui;
 
 use craft_ui::canvas::RasterSource;
+use craft_ui::dialog::HostedWorkspace;
+use craft_ui::dialog::stories::hosted;
 use craft_ui::runtime::pending::Job;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 
@@ -63,24 +65,16 @@ impl SelectMaskSource for StorySource {
     }
 }
 
-/// The workspace a story keeps between passes, compared by identity.
-#[derive(Clone)]
-struct Kept(Arc<Mutex<SelectMaskWorkspace>>);
-
-impl PartialEq for Kept {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-/// Shows the workspace over the mock picture with `settings`; `loading` leaves the preview unfinished.
+/// Shows the workspace over the mock picture with `settings`; `loading` leaves the preview unfinished. It runs on the
+/// story's dialog host with the open flag the story keeps.
 fn show_workspace(ui: &mut Ui, data: &mut StoryData, settings: SelectMaskSettings, loading: bool) -> StoryOutput {
-    let image = MockImage::default();
-    let size = image.size();
-    let open = SelectMaskOpen::new([size.width, size.height], "House", LIMITS).settings(settings);
-    let kept = data.value("workspace", Kept(Arc::new(Mutex::new(SelectMaskWorkspace::new(open))))).clone();
-    let mut workspace = kept.0.lock().unwrap_or_else(PoisonError::into_inner);
-    workspace.show(ui, &StorySource { image, subject: MockSubject(image), loading }).into()
+    // A pass's `WorkspaceCx` is built by the host only, so this runs the workspace on a `DialogHost`.
+    hosted(ui, data, (settings.clone(), loading), || {
+        let image = MockImage::default();
+        let size = image.size();
+        let open = SelectMaskOpen::new([size.width, size.height], "House", LIMITS).settings(settings);
+        HostedWorkspace::new(SelectMaskWorkspace::new(open), Arc::new(StorySource { image, subject: MockSubject(image), loading }))
+    })
 }
 
 fn viewing(view: MaskViewMode) -> SelectMaskSettings {

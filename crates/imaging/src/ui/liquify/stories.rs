@@ -5,7 +5,7 @@
 //! gently displaced mesh. The stroke in progress, the brush outline and the Alt + right-drag resize with its readout
 //! are the pointer's: draw on the picture to see them.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use egui::{Color32, ColorImage, Ui};
 
@@ -13,6 +13,8 @@ use craft_behavior::PixelSize;
 use craft_behavior::kurbo::Point;
 use craft_ui::canvas::{PixelRect, RasterSource};
 use craft_ui::contract::Bind;
+use craft_ui::dialog::HostedWorkspace;
+use craft_ui::dialog::stories::hosted;
 use craft_ui::primitives::Revision;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 
@@ -149,24 +151,17 @@ impl LiquifySource for StorySource {
     }
 }
 
-/// The workspace a story keeps between passes, compared by identity.
-#[derive(Clone)]
-struct Kept(Arc<Mutex<LiquifyWorkspace>>);
-
-impl PartialEq for Kept {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-/// Shows the workspace over the mock picture with `settings`.
+/// Shows the workspace over the mock picture with `settings`, on the story's dialog host with the open flag the story
+/// keeps. A hosted workspace is the only way outside `craft-ui` to give a pass its context (`WorkspaceCx` is
+/// non-exhaustive).
 fn show_workspace(ui: &mut Ui, data: &mut StoryData, settings: &LiquifySettings) -> StoryOutput {
-    let image = MockImage::default();
-    let size = image.size();
-    let open = LiquifyOpen::new([size.width, size.height], "House").settings(settings.clone());
-    let kept = data.value("workspace", Kept(Arc::new(Mutex::new(LiquifyWorkspace::new(open))))).clone();
-    let mut workspace = kept.0.lock().unwrap_or_else(PoisonError::into_inner);
-    workspace.show(ui, &StorySource::new(image)).into()
+    // A pass's `WorkspaceCx` is built by the host only, so this runs the workspace on a `DialogHost`.
+    hosted(ui, data, settings.clone(), || {
+        let image = MockImage::default();
+        let size = image.size();
+        let open = LiquifyOpen::new([size.width, size.height], "House").settings(settings.clone());
+        HostedWorkspace::new(LiquifyWorkspace::new(open), Arc::new(StorySource::new(image)))
+    })
 }
 
 #[story(LiquifyWorkspace, covers = [Default], drive = Drive::Never)]

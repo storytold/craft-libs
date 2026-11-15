@@ -136,9 +136,9 @@ note = "`Edit` and `Refine` carry an `EditPhase<T>` (Begin, Update, Commit, Canc
 [[type]]
 name = "SelectMaskOutput"
 old = "craft_imaging::ui::select_mask::SelectMaskOutput"
-new = "craft_imaging::ui::select_mask::SelectMaskOutput"
-status = "replaced"
-note = "`closed: Option<DialogRole>` replaces `outcome`; `response` replaces `rect`; `preview_wanted` is gone (the workspace asks for the preview itself through `preview_job`)."
+new = ""
+status = "removed"
+note = "Removed: a pass returns `WorkspacePass`; its `events`, `response` and `result` replace the output's fields, and the workspace asks for the preview itself through `preview_job`."
 
 [[type]]
 name = "SelectMaskWorkspace"
@@ -388,8 +388,9 @@ status = "same"
 [[type]]
 name = "FillOutput"
 old = "craft_imaging::ui::fill::FillOutput"
-new = "craft_imaging::ui::fill::FillOutput"
-status = "same"
+new = ""
+status = "removed"
+note = "Removed: a pass returns `WorkspacePass`; its `events` (`Apply`, `PickColor`, `SettingsChanged`), `response` and `result` replace the output's fields."
 
 [[type]]
 name = "FillLabels"
@@ -498,9 +499,9 @@ note = "Loses `cursor_options`; `checkerboard` is a `craft_ui::primitives::Check
 [[type]]
 name = "VanishingPointOutput"
 old = "craft_imaging::ui::vanishing_point::VanishingPointOutput"
-new = "craft_imaging::ui::vanishing_point::VanishingPointOutput"
-status = "replaced"
-note = "`closed` replaces `outcome`, `response` replaces `rect`; `preview_wanted` is gone (the workspace starts the preview job itself)."
+new = ""
+status = "removed"
+note = "Removed: a pass returns `WorkspacePass`; its `events`, `response` and `result` replace the output's fields, and the workspace starts the preview job itself."
 
 [[type]]
 name = "VanishingPointStripTool"
@@ -666,13 +667,13 @@ note = "Removed: a failed job shows through FullWindowStatus."
 type = "FillOutput"
 old = "preview_wanted"
 new = ""
-note = "Replaced by FillSource::preview_job."
+note = "Removed with `FillOutput` (`WorkspacePass`); the preview is `FillSource::preview_job`."
 
 [[setter]]
 type = "FillOutput"
 old = "outcome"
-new = "closed, apply"
-note = "closed: Option<DialogRole> (Accept, Cancel) and apply: bool."
+new = ""
+note = "Removed with `FillOutput` (`WorkspacePass`): `result` is OK's or Cancel's answer, and Apply is `FillEvent::Apply`."
 
 [[setter]]
 type = "FillCanvas"

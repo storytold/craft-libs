@@ -10,8 +10,11 @@
 //! is plain data ([`FillSession`]: the sampling option, the brush strokes, the lasso edits) with
 //! [`EditHistory`] undo; the app's engine plans the fill (`content_aware_plan`), gives the
 //! sampling and fill-area planes and the preview through [`FillSource`], and fills on Apply and
-//! OK with [`FillCommand`]. Apply keeps the workspace open: the app fills, then calls
-//! [`ContentAwareFillWorkspace::rebase`]. Cancel closes, keeping what Apply did.
+//! OK with [`FillCommand`]. The workspace is a [`FullWindowWorkspace`] on the app's dialog host.
+//! Apply keeps the workspace open: the app fills with the [`FillEvent::Apply`] command, then
+//! calls [`ContentAwareFillWorkspace::answer_apply`]. OK is the host's held OK: the app takes the
+//! command with `take_ok`, fills and answers with `answer_ok`, and a failed fill keeps the workspace
+//! open. Cancel closes, keeping what Apply did.
 //!
 //! Files: `session`, `lasso` and `tool`; `overlay`, `panel`, `preview_pane`, `bar`, `commands`,
 //! `words` and this file's bodies.
@@ -47,7 +50,8 @@ pub use words::FillWords;
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use egui::{Color32, Context, Id, Response, Ui};
+use egui::{Color32, Context, Id, Ui};
+use serde::Deserialize;
 
 use craft_behavior::edit_history::Step;
 use craft_behavior::geometry::selection_op::SelectionOperation;
@@ -58,8 +62,11 @@ use craft_ui::buttons::IconButton;
 use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::canvas_controls::brush::{BrushCursorOptions, TipFalloff};
 use craft_ui::canvas_controls::{Marquee, MarqueeLook};
-use craft_ui::contract::{Bind, BodyCx, NoValue, Outcome, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
-use craft_ui::dialog::{DialogWords, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowTitle, FullWindowView, RasterOverlay, SideFooter};
+use craft_ui::contract::{Bind, BodyCx, Pattern, Props as _, Remember as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::dialog::{
+    DialogResult, DialogWords, FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowTitle, FullWindowView,
+    FullWindowWorkspace, RasterOverlay, SideFooter, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
+};
 use craft_ui::layout_components::Row;
 use craft_ui::patterns::form_dialogs::{FormDialogWords, ParamDialogWords};
 use craft_ui::primitives::{Checker, IconSpec};
@@ -73,17 +80,17 @@ use craft_ui::sections::{DialogRole, FooterButton};
 
 use crate::ui::wide_angle::PreviewDone;
 
-/// The key of the colour request for the sampling tint (`FillOutput::pick_color`,
+/// The key of the colour request for the sampling tint ([`FillEvent::PickColor`],
 /// [`ContentAwareFillWorkspace::set_color`]).
 pub const OVERLAY_COLOR_KEY: &str = "fill.overlayColor";
 
 /// The name the history gives its steps.
 const HISTORY_NAME: &str = "Content-Aware Fill";
 
-/// The footer's buttons in the order the workspace gives them, by the index the dialog reports a pick with.
+/// The footer's OK and Apply buttons, by the index the dialog reports a pick with (Cancel is the third, and closes the
+/// dialog by itself).
 const PICK_OK: usize = 0;
 const PICK_APPLY: usize = 1;
-const PICK_CANCEL: usize = 2;
 
 /// What the app gives the workspace to show each pass.
 pub trait FillSource: Send + Sync {
@@ -174,61 +181,36 @@ pub enum FillEvent {
     SettingsChanged(FillSettings),
 }
 
-/// An edit the control requests make of the workspace through [`ContentAwareFillWorkspace::perform`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// An edit the control requests make of the workspace through [`ContentAwareFillWorkspace::perform`]. Each carries what
+/// the user would have drawn or chosen.
+// PLAN: the stub's `FillOp` was a unit enum, which cannot say which stroke or polygon to record; the variants carry
+// their value. dialogs-w20's `control/dialogs.rs` and dialogs-w9's re-export read the new shape.
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum FillOp {
     /// A Sampling Brush stroke.
-    Stroke,
+    Stroke(SamplingStroke),
     /// A lasso edit of the fill area.
-    FillArea,
+    FillArea(FillAreaEdit),
     /// A Reset.
-    Reset,
-    /// A change of the sampling options.
-    Sampling,
-}
-
-/// What [`ContentAwareFillWorkspace::show`] reports.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct FillOutput {
-    /// What happened this pass, in order.
-    pub events: Vec<FillEvent>,
-    /// OK (`Accept`) or Cancel this pass.
-    pub closed: Option<DialogRole>,
-    /// Apply was pressed (the workspace stays open): the app fills with [`ContentAwareFillWorkspace::command`],
-    /// then calls [`rebase`](ContentAwareFillWorkspace::rebase).
-    pub apply: bool,
-    /// The dialog's response: its rect is the workspace's.
-    pub response: Response,
-    /// A fill setting changed this pass.
-    pub settings_changed: bool,
-    /// The Color swatch was pressed: the app opens its colour picker and answers with
-    /// [`ContentAwareFillWorkspace::set_color`].
-    pub pick_color: Option<ColorRequest>,
-}
-
-impl Outcome for FillOutput {
-    type Value = NoValue;
-
-    fn response(&self) -> &Response {
-        &self.response
-    }
+    Reset(FillReset),
+    /// A change of the sampling option.
+    Sampling(SamplingMode),
 }
 
 /// What shows under the panel: the limit a stroke or edit ran into, or the app's message (a failed
-/// Apply, an edit that emptied the fill area).
+/// Apply or OK, an edit that emptied the fill area).
 #[derive(Clone, Debug, PartialEq)]
 enum FillIssue {
     Limit(FillLimit),
-    Message(String),
+    Message(Label),
 }
 
 impl FillIssue {
     fn text(&self, env: &Env) -> String {
         match self {
             FillIssue::Limit(limit) => limit.message(env),
-            FillIssue::Message(message) => message.clone(),
+            FillIssue::Message(message) => env.view().resolve(message).as_str().to_owned(),
         }
     }
 }
@@ -250,7 +232,6 @@ pub struct ContentAwareFillWorkspace {
     limits: FillLimits,
     subject: String,
     size: PixelSize,
-    open: bool,
     // View state outside the history.
     view: FullWindowView,
     preview_view: FullWindowView,
@@ -275,14 +256,13 @@ pub struct ContentAwareFillWorkspace {
     error: Option<FillIssue>,
     /// A setting is being dragged (the Opacity slider): the preview waits for its end.
     settings_gesture: bool,
-    /// [`set_color`](Self::set_color) changed the color since the last pass: the next
-    /// [`FillOutput::settings_changed`] says so.
-    color_owed: bool,
+    /// The settings as the app last heard them, so a change made between passes (a control request, a colour answer)
+    /// is reported once by the next pass.
+    reported: FillSettings,
     /// The outline of the fill area's covered cells, kept for as long as the plane is the same.
     ants: Option<Ants>,
-    /// This pass's events and colour request.
+    /// The events the next pass reports first: what the methods between passes queued, then the pass's own.
     events: Vec<FillEvent>,
-    pick_color: Option<ColorRequest>,
 }
 
 impl ContentAwareFillWorkspace {
@@ -300,11 +280,11 @@ impl ContentAwareFillWorkspace {
                 grow_by: FillToolOptions::GROW_BY,
             },
             session,
+            reported: open.settings.clone(),
             settings: open.settings,
             limits: open.limits,
             subject: open.subject,
             size: PixelSize::new(width, height),
-            open: true,
             view: FullWindowView::new(),
             preview_view: FullWindowView::new(),
             framing: PreviewFraming::default(),
@@ -323,10 +303,8 @@ impl ContentAwareFillWorkspace {
             preview: Pending::default(),
             error: None,
             settings_gesture: false,
-            color_owed: false,
             ants: None,
             events: Vec::new(),
-            pick_color: None,
         }
     }
 
@@ -360,28 +338,27 @@ impl ContentAwareFillWorkspace {
     /// sampling option or Reset from the panel goes through [`FillSession::set_sampling`] and
     /// [`FillSession::reset`] (Custom makes the brush add, the others subtract). Then a change of the
     /// fill, once no stroke, lasso or slider drag is under way, starts a preview job through
-    /// [`FillSource::preview_job`]. An Apply or OK the app reports failing ([`Self::apply_failed`])
-    /// keeps the workspace open.
-    pub fn show(&mut self, ui: &mut Ui, source: &dyn FillSource) -> FillOutput {
+    /// [`FillSource::preview_job`]. OK is the host's held OK when the app asks for one (`hold_ok`): the pass reports the
+    /// command as `held`, and the app answers it. A second pass of a frame reports only what its own input did: the
+    /// frame's steps and commands went to the first pass.
+    fn pass(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, dyn FillSource>) -> WorkspacePass<FillEvent, FillCommand> {
         // pc: crates/ui-egui/src/dialogs/caf_ui/view.rs:265 `show`; caf_ui/controls.rs:151 `keys`.
+        let WorkspaceCx { source, open, hold_ok, ok_waits, .. } = cx;
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
         let dialog = env.words::<DialogWords>();
         let params = env.words::<ParamDialogWords>();
         let title =
             FullWindowTitle::new(env.words::<FillWords>().name.clone()).subject(self.subject.clone()).zoom(self.view.zoom_percent()).label(&env);
-        let settings_before = self.settings.clone();
-        self.pick_color = None;
         let slots = FillTool::slots();
-        let mut open = self.open;
         let mut reset_all = false;
         let this = RefCell::new(&mut *self);
 
         let shown = FullWindowDialog::new(title)
             .command_scope(FillCommands::SCOPE)
-            .opened(Bind::bound(&mut open))
+            .opened(open)
             .buttons([
-                FooterButton::new(common.ok.clone(), DialogRole::Accept),
+                FooterButton::new(common.ok.clone(), DialogRole::Accept).stays_open(hold_ok).enabled(!ok_waits),
                 FooterButton::new(dialog.apply.clone(), DialogRole::Other).stays_open(true),
                 FooterButton::new(common.cancel.clone(), DialogRole::Cancel),
             ])
@@ -399,42 +376,33 @@ impl ContentAwareFillWorkspace {
             });
 
         let work = this.into_inner();
-        work.open = open;
         if reset_all {
-            // The footer's Reset sets the session and every setting back, whether or not the session was already
-            // at its defaults.
-            let before = work.session.clone();
-            work.session.reset(FillReset::All, &mut work.settings);
-            work.synced();
-            work.record_history(before);
-            work.events.push(FillEvent::Reset(FillReset::All));
+            work.apply_reset(FillReset::All);
         }
         let picked = shown.output.picked;
-        let closed = match picked {
-            Some(PICK_OK) => Some(DialogRole::Accept),
-            Some(PICK_CANCEL) => Some(DialogRole::Cancel),
-            _ => shown.output.closed.map(|_| DialogRole::Cancel),
-        };
-        let color_owed = std::mem::take(&mut work.color_owed);
-        FillOutput {
-            events: std::mem::take(&mut work.events),
-            closed,
-            apply: picked == Some(PICK_APPLY),
-            response: shown.output.response.clone(),
-            settings_changed: work.settings != settings_before || color_owed,
-            pick_color: work.pick_color.take(),
+        if picked == Some(PICK_APPLY) {
+            work.events.push(FillEvent::Apply(work.command()));
         }
+        if work.settings != work.reported {
+            work.reported = work.settings.clone();
+            work.events.push(FillEvent::SettingsChanged(work.reported.clone()));
+        }
+        // A held OK files the command and keeps the dialog open; Esc and Cancel close it either way.
+        let (result, held) = if hold_ok {
+            (shown.output.closed.map(|_| DialogResult::Cancel), (picked == Some(PICK_OK)).then(|| work.command()))
+        } else {
+            (shown.output.result(|| work.command()), None)
+        };
+        let events = std::mem::take(&mut work.events);
+        WorkspacePass::new(shown.output.response, events).held(held).result(result)
     }
 
-    /// The app's colour picker answered a [`FillOutput::pick_color`] request. A key this workspace
-    /// did not ask for is ignored.
+    /// The app's colour picker answered a [`FillEvent::PickColor`] request. A key this workspace
+    /// did not ask for is ignored. The next pass reports the new colour as [`FillEvent::SettingsChanged`].
     pub fn set_color(&mut self, key: &str, color: Srgba) {
         if key == OVERLAY_COLOR_KEY {
             let [r, g, b, _] = Color32::from(color).to_array();
-            if self.settings.color != [r, g, b] {
-                self.settings.color = [r, g, b];
-                self.color_owed = true;
-            }
+            self.settings.color = [r, g, b];
         }
     }
 
@@ -448,65 +416,73 @@ impl ContentAwareFillWorkspace {
         &self.settings
     }
 
-    /// Answers the Apply: `Ok` clears the history, `Err` shows the message.
+    /// Answers the [`FillEvent::Apply`]: `Ok` means the app filled, so the session's history clears (Apply is one
+    /// document step), the strokes and edits stay, and a preview is asked for over the new document. `Err` shows the
+    /// message under the panel; OK stays enabled either way.
     pub fn answer_apply(&mut self, answer: Result<(), String>) {
-        let _ = answer;
-        todo!("dl.K64")
+        // pc: crates/ui-egui/src/dialogs/caf_ui/lifecycle.rs:80 `apply` (refresh), caf_ui/preview.rs:135 `rebase`.
+        match answer {
+            Ok(()) => {
+                self.history = EditHistory::new(&self.session);
+                self.error = None;
+                self.job = None;
+            }
+            Err(message) => self.error = Some(FillIssue::Message(message.into())),
+        }
     }
 
-    /// The fill settings, for the control requests that change them.
+    /// The fill settings, for the control requests that change them. The next pass reports a change as
+    /// [`FillEvent::SettingsChanged`].
     pub fn settings_mut(&mut self) -> &mut FillSettings {
-        todo!("dl.K64")
+        &mut self.settings
     }
 
-    /// Runs `op` as the user would; its events come out of the next pass. `Err` when a limit refuses it.
+    /// Runs `op` as the user would; its events come out of the next pass. `Err` when a limit refuses it: nothing is
+    /// recorded, the panel shows the limit and the next pass reports [`FillEvent::Refused`]. The caller asks for the
+    /// repaint that runs the next pass (this method has no context).
     pub fn perform(&mut self, op: FillOp) -> Result<(), FillLimit> {
-        let _ = op;
-        todo!("dl.K64")
+        match op {
+            FillOp::Stroke(stroke) => self.record_stroke(stroke),
+            FillOp::FillArea(edit) => self.add_edit(edit),
+            FillOp::Reset(what) => {
+                self.apply_reset(what);
+                Ok(())
+            }
+            FillOp::Sampling(mode) => {
+                self.apply_sampling(mode);
+                Ok(())
+            }
+        }
     }
 
-    /// Undoes the last edit; its events come out of the next pass.
+    /// Undoes the last edit, abandoning a stroke still open first. The session changes at once; the app reads it
+    /// after its next pass.
     pub fn undo(&mut self) {
-        todo!("dl.K64")
+        self.cancel_gesture(None, CancelReason::UndoDuringGesture);
+        self.step_now(Step::Undo);
     }
 
-    /// Redoes the last undone edit; its events come out of the next pass.
+    /// Redoes the last undone edit, abandoning a stroke still open first.
     pub fn redo(&mut self) {
-        todo!("dl.K64")
+        self.cancel_gesture(None, CancelReason::UndoDuringGesture);
+        self.step_now(Step::Redo);
     }
 
     /// Picks the canvas tool.
     pub fn set_tool(&mut self, tool: FillTool) {
-        let _ = tool;
-        todo!("dl.K64")
+        self.pick(None, tool);
     }
 
-    /// Sets the Sampling Brush size.
+    /// Sets the Sampling Brush size, in 1..=[`FillToolOptions::SIZE_MAX`] pixels; a non-finite size changes nothing.
     pub fn set_brush(&mut self, size: f64) {
-        let _ = size;
-        todo!("dl.K64")
+        if size.is_finite() {
+            self.options.brush_size = size.round().clamp(1.0, FillToolOptions::SIZE_MAX);
+        }
     }
 
     /// Apply's and OK's parameters.
     pub fn command(&self) -> FillCommand {
         FillCommand::new(&self.session, &self.settings)
-    }
-
-    /// The app applied the fill: the session's history clears (Apply is one document step), the
-    /// strokes and edits stay, and a preview is asked for over the new document.
-    pub fn rebase(&mut self) {
-        // pc: crates/ui-egui/src/dialogs/caf_ui/lifecycle.rs:80 `apply` (refresh), caf_ui/preview.rs:135
-        // `rebase`.
-        self.history = EditHistory::new(&self.session);
-        self.error = None;
-        self.job = None;
-    }
-
-    /// The app's Apply or OK failed: the message shows under the panel and the workspace stays (it opens again if
-    /// OK had closed it).
-    pub fn apply_failed(&mut self, message: String) {
-        self.error = Some(FillIssue::Message(message));
-        self.open = true;
     }
 
     /// The app found that the last fill-area edit empties the fill area: the edit is taken back
@@ -520,7 +496,7 @@ impl ContentAwareFillWorkspace {
             }
         }
         self.synced();
-        self.error = Some(FillIssue::Message(message));
+        self.error = Some(FillIssue::Message(message.into()));
     }
 }
 
@@ -555,23 +531,37 @@ impl ContentAwareFillWorkspace {
             None => {}
         }
         if let Some(mode) = panel.sampling {
-            let before = self.session.clone();
-            if self.session.set_sampling(mode) {
-                self.synced();
-                self.record_history(before);
-                self.events.push(FillEvent::Reset(FillReset::Sampling));
-            }
+            self.apply_sampling(mode);
         }
         if let Some(what) = panel.reset {
-            let before = self.session.clone();
-            if self.session.reset(what, &mut self.settings) || what == FillReset::Fill {
-                self.synced();
-                self.record_history(before);
-                self.events.push(FillEvent::Reset(what));
-            }
+            self.apply_reset(what);
         }
-        if panel.pick_color.is_some() {
-            self.pick_color = panel.pick_color;
+        if let Some(request) = panel.pick_color {
+            self.events.push(FillEvent::PickColor(request));
+        }
+    }
+
+    /// A Reset: the session and the settings it covers go back, the step is recorded and the app hears of it. A Reset of
+    /// the fill settings or of everything is reported whether or not the session was already at its defaults.
+    fn apply_reset(&mut self, what: FillReset) {
+        let before = self.session.clone();
+        let changed = self.session.reset(what, &mut self.settings);
+        if changed || matches!(what, FillReset::Fill | FillReset::All) {
+            self.synced();
+            self.record_history(before);
+            self.error = None;
+            self.events.push(FillEvent::Reset(what));
+        }
+    }
+
+    /// A new sampling option: the strokes start over, the step is recorded and the app hears of it. The same option
+    /// with no strokes changes nothing.
+    fn apply_sampling(&mut self, mode: SamplingMode) {
+        let before = self.session.clone();
+        if self.session.set_sampling(mode) {
+            self.synced();
+            self.record_history(before);
+            self.events.push(FillEvent::Reset(FillReset::Sampling));
         }
     }
 
@@ -585,7 +575,7 @@ impl ContentAwareFillWorkspace {
         // An open stroke is cancelled first; the step follows.
         while let Some(step) = cx.take_step(self.history.can_undo(), self.history.can_redo()) {
             // pc: crates/ui-egui/src/dialogs/caf_ui/controls.rs:151-159 (⌘Z, ⇧⌘Z).
-            self.cancel_gesture(&ctx, CancelReason::UndoDuringGesture);
+            self.cancel_gesture(Some(&ctx), CancelReason::UndoDuringGesture);
             self.step_now(step);
         }
         {
@@ -597,7 +587,7 @@ impl ContentAwareFillWorkspace {
                         tool_pick(&tools, slot.id, &self.tool, &self.last_used, PickStep::of(&fired), |_| true).map(|entry| (slot.id, entry.id))
                     });
                     if let Some((slot_id, tool)) = picked {
-                        self.pick(&ctx, tool);
+                        self.pick(Some(&ctx), tool);
                         self.last_used.set(slot_id, tool);
                     }
                     continue;
@@ -612,15 +602,11 @@ impl ContentAwareFillWorkspace {
 
             let bar = FillBar::new(self.tool, &mut self.options).show(ui);
             if let Some(edit) = bar.edit {
-                self.add_edit(edit);
+                // A refusal is already shown and reported by `add_edit`.
+                let _ = self.add_edit(edit);
             }
             if bar.reset_fill_area {
-                let before = self.session.clone();
-                if self.session.reset(FillReset::FillArea, &mut self.settings) {
-                    self.error = None;
-                    self.record_history(before);
-                    self.events.push(FillEvent::Reset(FillReset::FillArea));
-                }
+                self.apply_reset(FillReset::FillArea);
             }
 
             Row::new().fill().show(ui, |ui, _| {
@@ -629,7 +615,7 @@ impl ContentAwareFillWorkspace {
                     self.last_used = next;
                 }
                 if let Some(tool) = rail.select {
-                    self.pick(&ctx, tool);
+                    self.pick(Some(&ctx), tool);
                 }
                 self.show_canvas(ui, source, &words);
             });
@@ -720,15 +706,11 @@ impl ContentAwareFillWorkspace {
     fn absorb(&mut self, event: FillEvent) {
         match event {
             FillEvent::FillArea(edit) => {
-                self.add_edit(edit);
+                // A refusal is already shown and reported by `add_edit`.
+                let _ = self.add_edit(edit);
             }
-            FillEvent::Stroke(FillStrokeEvent::Commit(stroke)) => {
-                let before = self.session.clone();
-                self.session.add_stroke(stroke.clone());
-                self.error = None;
-                self.record_history(before);
-                self.events.push(FillEvent::Stroke(FillStrokeEvent::Commit(stroke)));
-            }
+            // The tool checked the limits as the stroke grew.
+            FillEvent::Stroke(FillStrokeEvent::Commit(stroke)) => self.commit_stroke(stroke),
             FillEvent::Refused(limit) => {
                 self.error = Some(FillIssue::Limit(limit));
                 self.events.push(FillEvent::Refused(limit));
@@ -737,23 +719,47 @@ impl ContentAwareFillWorkspace {
         }
     }
 
-    /// Records a fill-area edit within the limits, or sets the reason as the error and reports it. Whether it
-    /// was recorded.
-    fn add_edit(&mut self, edit: FillAreaEdit) -> bool {
+    /// Records a finished stroke in the session and reports it.
+    fn commit_stroke(&mut self, stroke: SamplingStroke) {
         let before = self.session.clone();
-        match self.session.add_fill_edit(edit.clone(), &self.limits) {
+        self.session.add_stroke(stroke.clone());
+        self.error = None;
+        self.record_history(before);
+        self.events.push(FillEvent::Stroke(FillStrokeEvent::Commit(stroke)));
+    }
+
+    /// Records a whole stroke that did not come from the canvas (a control request) within the limits: the stroke
+    /// limit and the points limit, a total equal to the limit passing, as the brush and `add_fill_edit` count them. A
+    /// refusal records nothing, shows under the panel and is reported.
+    fn record_stroke(&mut self, stroke: SamplingStroke) -> Result<(), FillLimit> {
+        let fits = match self.session.may_begin_stroke(&self.limits) {
+            Ok(()) if self.session.points_used(Some(&stroke)) > self.limits.points => Err(FillLimit::Vertices(self.limits.points)),
+            other => other,
+        };
+        match fits {
             Ok(()) => {
-                self.error = None;
-                self.record_history(before);
-                self.events.push(FillEvent::FillArea(edit));
-                true
+                self.commit_stroke(stroke);
+                Ok(())
             }
-            Err(limit) => {
-                self.error = Some(FillIssue::Limit(limit));
-                self.events.push(FillEvent::Refused(limit));
-                false
-            }
+            Err(limit) => Err(self.refuse(limit)),
         }
+    }
+
+    /// Records a fill-area edit within the limits, or refuses it.
+    fn add_edit(&mut self, edit: FillAreaEdit) -> Result<(), FillLimit> {
+        let before = self.session.clone();
+        self.session.add_fill_edit(edit.clone(), &self.limits).map_err(|limit| self.refuse(limit))?;
+        self.error = None;
+        self.record_history(before);
+        self.events.push(FillEvent::FillArea(edit));
+        Ok(())
+    }
+
+    /// Shows `limit` under the panel and reports it; the limit, for the caller to return.
+    fn refuse(&mut self, limit: FillLimit) -> FillLimit {
+        self.error = Some(FillIssue::Limit(limit));
+        self.events.push(FillEvent::Refused(limit));
+        limit
     }
 
     /// Records the session as one history step when it differs from `before`.
@@ -780,7 +786,7 @@ impl ContentAwareFillWorkspace {
     }
 
     /// Switches to `tool`, cancelling the old tool's gesture first.
-    fn pick(&mut self, ctx: &Context, tool: FillTool) {
+    fn pick(&mut self, ctx: Option<&Context>, tool: FillTool) {
         if tool != self.tool {
             self.cancel_gesture(ctx, CancelReason::Removed);
             self.tool = tool;
@@ -788,9 +794,10 @@ impl ContentAwareFillWorkspace {
     }
 
     /// Cancels the gesture the current tool holds (a stroke, a lasso or a resize, or the Hand's or Zoom's drag)
-    /// through the host, and the canvas's own state if the host held none.
-    fn cancel_gesture(&mut self, ctx: &Context, reason: CancelReason) {
-        if let Some(id) = self.canvas_id {
+    /// through the host, and the canvas's own state if the host held none. Without a context (a request between
+    /// passes) only the canvas's own state is dropped.
+    fn cancel_gesture(&mut self, ctx: Option<&Context>, reason: CancelReason) {
+        if let (Some(ctx), Some(id)) = (ctx, self.canvas_id) {
             match self.tool {
                 FillTool::Hand => ToolHost::cancel(ctx, id, &mut self.hand, reason),
                 FillTool::Zoom => ToolHost::cancel(ctx, id, &mut self.zoom, reason),
@@ -807,34 +814,159 @@ impl ContentAwareFillWorkspace {
     }
 }
 
-// P3(dialogs-w10): dl.K64 — the workspace's trait surface; `show` and the automation fields are written in phase 3.
-impl craft_ui::dialog::FullWindowWorkspace for ContentAwareFillWorkspace {
+/// The names the automation surface gives the tools.
+const TOOL_KEYS: [(&str, FillTool); 4] =
+    [("samplingBrush", FillTool::SamplingBrush), ("lasso", FillTool::Lasso), ("hand", FillTool::Hand), ("zoom", FillTool::Zoom)];
+
+/// The names the automation surface gives the lasso's operations.
+const LASSO_KEYS: [(&str, SelectionOperation); 4] = [
+    ("new", SelectionOperation::New),
+    ("add", SelectionOperation::Add),
+    ("subtract", SelectionOperation::Subtract),
+    ("intersect", SelectionOperation::Intersect),
+];
+
+/// The name `table` gives `item`; empty for an item it does not list.
+fn key_of<T: Copy + PartialEq>(table: &[(&'static str, T)], item: T) -> &'static str {
+    table.iter().find(|(_, listed)| *listed == item).map_or("", |(key, _)| *key)
+}
+
+/// The item `table` lists under `key`.
+fn item_of<T: Copy>(table: &[(&str, T)], key: &str) -> Option<T> {
+    table.iter().find(|(listed, _)| *listed == key).map(|(_, item)| *item)
+}
+
+/// The value of the `stroke` action key.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StrokeArg {
+    points: Vec<[f64; 2]>,
+    size: Option<f64>,
+    #[serde(default)]
+    alt: bool,
+}
+
+/// The value of the `lasso` action key.
+#[derive(Deserialize)]
+struct LassoArg {
+    points: Vec<[f64; 2]>,
+    op: String,
+}
+
+/// Whether every coordinate is a finite number.
+fn finite(points: &[[f64; 2]]) -> bool {
+    points.iter().flatten().all(|coordinate| coordinate.is_finite())
+}
+
+/// The workspace on the app's dialog host. OK is the host's held OK (`HostedWorkspace::held_ok`): the app takes the
+/// command with `take_ok`, fills and answers with `answer_ok`. Apply is the footer's own button, answered by
+/// [`ContentAwareFillWorkspace::answer_apply`].
+impl FullWindowWorkspace for ContentAwareFillWorkspace {
     type Source = dyn FillSource;
     type Event = FillEvent;
     type Result = FillCommand;
 
     const KEY: &'static str = "edit.contentAwareFill";
 
-    fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        cx: craft_ui::dialog::WorkspaceCx<'_, Self::Source>,
-    ) -> craft_ui::dialog::WorkspacePass<Self::Event, Self::Result> {
-        let _ = (ui, cx);
-        todo!("dl.K64")
+    fn show(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, Self::Source>) -> WorkspacePass<Self::Event, Self::Result> {
+        self.pass(ui, cx)
     }
 
+    /// The settings, and the bar's `tool`, `brushSize`, `brushMode` (`"add"`, `"subtract"`), `lassoMode` (`"new"`,
+    /// `"add"`, `"subtract"`, `"intersect"`) and `expandBy`.
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K64")
+        let mut fields = serde_fields(&self.settings)?;
+        let bar = fields.as_object_mut()?;
+        let brush_mode = if self.options.brush_add { "add" } else { "subtract" };
+        bar.insert("tool".to_owned(), key_of(&TOOL_KEYS, self.tool).into());
+        bar.insert("brushSize".to_owned(), self.options.brush_size.into());
+        bar.insert("brushMode".to_owned(), brush_mode.into());
+        bar.insert("lassoMode".to_owned(), key_of(&LASSO_KEYS, self.options.lasso).into());
+        bar.insert("expandBy".to_owned(), self.options.grow_by.into());
+        Some(fields)
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, source: &Self::Source, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, source, field, value);
-        todo!("dl.K64")
+    /// A settings key, a bar key of [`json_fields`](Self::json_fields), or an action: `stroke` (`{points, size?, alt?}`),
+    /// `lasso` (`{points, op}`), `reset` (`"all"`, `"fillArea"`, `"sampling"`), `undo`, `redo` and `apply` (each `true`).
+    /// A stroke or lasso edit goes through the limits like the canvas's; one a limit refuses is rejected and the panel
+    /// shows the limit.
+    fn set_json_field(&mut self, ctx: &Context, _source: &Self::Source, field: &str, value: serde_json::Value) -> Result<(), String> {
+        let rejects = |value: &serde_json::Value| FieldRefusal::Rejects(value).message(field);
+        match field {
+            "tool" => {
+                let tool = value.as_str().and_then(|key| item_of(&TOOL_KEYS, key)).ok_or_else(|| rejects(&value))?;
+                self.pick(Some(ctx), tool);
+            }
+            "brushSize" => self.set_brush(value.as_f64().ok_or_else(|| rejects(&value))?),
+            "brushMode" => {
+                self.options.brush_add = match value.as_str() {
+                    Some("add") => true,
+                    Some("subtract") => false,
+                    _ => return Err(rejects(&value)),
+                };
+            }
+            "lassoMode" => {
+                self.options.lasso = value.as_str().and_then(|key| item_of(&LASSO_KEYS, key)).ok_or_else(|| rejects(&value))?;
+            }
+            "expandBy" => {
+                let by = value.as_f64().ok_or_else(|| rejects(&value))?;
+                self.options.grow_by = by.clamp(FillAreaEdit::GROW_RANGE.0, FillAreaEdit::GROW_RANGE.1);
+            }
+            "sampling" => {
+                let mode = serde_json::from_value::<SamplingMode>(value.clone()).map_err(|_| rejects(&value))?;
+                self.perform(FillOp::Sampling(mode)).map_err(|limit| limit.message(&Env::of_root(ctx)))?;
+            }
+            "stroke" => {
+                let arg = serde_json::from_value::<StrokeArg>(value.clone()).map_err(|_| rejects(&value))?;
+                if arg.points.is_empty() || !finite(&arg.points) {
+                    return Err(rejects(&value));
+                }
+                let size = arg.size.filter(|size| size.is_finite()).unwrap_or(self.options.brush_size).clamp(1.0, FillToolOptions::SIZE_MAX);
+                let mode = FillToolOptions::stroke_mode(self.options.brush_add, arg.alt);
+                self.perform(FillOp::Stroke(SamplingStroke::new(mode, size, arg.points))).map_err(|limit| limit.message(&Env::of_root(ctx)))?;
+            }
+            "lasso" => {
+                let arg = serde_json::from_value::<LassoArg>(value.clone()).map_err(|_| rejects(&value))?;
+                let operation = item_of(&LASSO_KEYS, &arg.op).ok_or_else(|| rejects(&value))?;
+                if !finite(&arg.points) {
+                    return Err(rejects(&value));
+                }
+                let edit = FillAreaEdit::lasso(operation, arg.points).ok_or_else(|| rejects(&value))?;
+                self.perform(FillOp::FillArea(edit)).map_err(|limit| limit.message(&Env::of_root(ctx)))?;
+            }
+            "reset" => {
+                let what = match value.as_str() {
+                    Some("all") => FillReset::All,
+                    Some("fillArea") => FillReset::FillArea,
+                    Some("sampling") => FillReset::Sampling,
+                    _ => return Err(rejects(&value)),
+                };
+                self.perform(FillOp::Reset(what)).map_err(|limit| limit.message(&Env::of_root(ctx)))?;
+            }
+            "undo" | "redo" | "apply" => {
+                if value != serde_json::Value::Bool(true) {
+                    return Err(rejects(&value));
+                }
+                match field {
+                    "undo" => self.undo(),
+                    "redo" => self.redo(),
+                    _ => {
+                        let command = self.command();
+                        self.events.push(FillEvent::Apply(command));
+                    }
+                }
+            }
+            _ => set_serde_field(&mut self.settings, field, value)?,
+        }
+        Ok(())
     }
 
-    fn confirm(&mut self, ctx: &egui::Context, source: &Self::Source) -> Option<Self::Result> {
-        let _ = (ctx, source);
-        todo!("dl.K64")
+    fn confirm(&mut self, _ctx: &Context, _source: &Self::Source) -> Option<Self::Result> {
+        Some(self.command())
+    }
+
+    /// The app's fill failed: the reason shows under the panel and the workspace stays open.
+    fn ok_failed(&mut self, reason: Label) {
+        self.error = Some(FillIssue::Message(reason));
     }
 }

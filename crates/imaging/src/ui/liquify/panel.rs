@@ -47,7 +47,7 @@ pub struct LiquifyPanelOutput {
 ///   Behind, Blend), Opacity (0..=100).
 ///
 /// PhotoCraft's stats line ("N stroke(s) · field … · dab … ms · preview … ms") is not drawn (lead
-/// call 14); [`LiquifyOutput::timing`](super::LiquifyOutput::timing) carries the timing the library
+/// call 14); [`LiquifyWorkspace::timing`](super::LiquifyWorkspace::timing) carries the timing the library
 /// can measure. Every control is a Tab stop in that order. The panel writes the new values to the
 /// bound settings and reports the pass's change as [`LiquifyPanelOutput::edit`]. The sections remember their
 /// open state.

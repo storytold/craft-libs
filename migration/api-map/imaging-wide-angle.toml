@@ -13,9 +13,9 @@ note = "`show(ui, geometry, source)` takes the `Ui` and returns the output with 
 [[type]]
 name = "WideAngleOutput"
 old = "craft_imaging::ui::wide_angle::WideAngleOutput"
-new = "craft_imaging::ui::wide_angle::WideAngleOutput"
-status = "replaced"
-note = "`preview_wanted` and `outcome` are removed; `closed` and `accepted()` say how the dialog closed, `timing` is the finished job's."
+new = ""
+status = "removed"
+note = "Removed: a pass returns `WorkspacePass`; its `events`, `response` and `result` replace the output's fields."
 
 [[type]]
 name = "WideAngleSource"

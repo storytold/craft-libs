@@ -5,7 +5,7 @@
 //! the lasso in progress, the brush outline and the Alt + right-drag resize with its readout are the pointer's: draw
 //! on the picture to see them.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use egui::Ui;
@@ -13,7 +13,8 @@ use egui::Ui;
 use craft_behavior::kurbo::Rect;
 use craft_ui::canvas::RasterSource;
 use craft_ui::contract::Bind;
-use craft_ui::dialog::FullWindowView;
+use craft_ui::dialog::stories::hosted;
+use craft_ui::dialog::{FullWindowView, HostedWorkspace};
 use craft_ui::runtime::pending::{Job, Pending};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 
@@ -115,24 +116,16 @@ impl FillSource for StorySource {
     }
 }
 
-/// The workspace a story keeps between passes, compared by identity.
-#[derive(Clone)]
-struct Kept(Arc<Mutex<ContentAwareFillWorkspace>>);
-
-impl PartialEq for Kept {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-/// Shows the workspace over the mock picture with `settings` and a preview job that `preview` says how it ends.
+/// Shows the workspace over the mock picture with `settings` and a preview job that `preview` says how it ends, on the
+/// story's dialog host with the open flag the story keeps.
 fn show_workspace(ui: &mut Ui, data: &mut StoryData, settings: FillSettings, preview: Preview) -> StoryOutput {
-    let image = MockImage::default();
-    let size = image.size();
-    let open = FillOpen::new([size.width, size.height], "House", LIMITS).settings(settings);
-    let kept = data.value("workspace", Kept(Arc::new(Mutex::new(ContentAwareFillWorkspace::new(open))))).clone();
-    let mut workspace = kept.0.lock().unwrap_or_else(PoisonError::into_inner);
-    workspace.show(ui, &StorySource::new(image, preview)).into()
+    // A pass's `WorkspaceCx` is built by the host only, so this runs the workspace on a `DialogHost`.
+    hosted(ui, data, (settings.clone(), preview), || {
+        let image = MockImage::default();
+        let size = image.size();
+        let open = FillOpen::new([size.width, size.height], "House", LIMITS).settings(settings);
+        HostedWorkspace::new(ContentAwareFillWorkspace::new(open), Arc::new(StorySource::new(image, preview)))
+    })
 }
 
 #[story(ContentAwareFillWorkspace, covers = [Default], drive = Drive::Never)]
