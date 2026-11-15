@@ -152,7 +152,7 @@ fn ipp_body(request: &[u8]) -> &[u8] {
 }
 
 fn entry(name: &str, default: bool) -> spool::Printer {
-    spool::Printer { name: name.into(), default, two_sided: None }
+    spool::Printer { description: String::new(), name: name.into(), default, two_sided: None }
 }
 
 #[test]
@@ -363,4 +363,49 @@ fn explicit_server_rejects_header_injection_and_malformed_port() {
     }
     assert_eq!(Server::parse("[::1]:631").unwrap().authority(), "[::1]:631");
     assert_eq!(Server::parse("print.example:8631").unwrap().authority(), "print.example:8631");
+}
+
+#[test]
+fn class_submission_preserves_authority_user_and_numeric_job_id() {
+    let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0, &[&group(2), &attr(0x21, "job-id", &42u32.to_be_bytes())]))]);
+    let destination = super::Destination { name: "Studio".into(), is_class: true };
+    assert_eq!(super::submit_as_at(fake.endpoint(), &destination, b"pdf", &Job::default(), "artist").unwrap(), 42);
+    let request = fake.request();
+    assert!(has(&request, b"POST /classes/Studio HTTP/1.1"));
+    assert!(has(&request, format!("Host: {}", fake.server.authority()).as_bytes()));
+    assert!(has(ipp_body(&request), format!("ipp://{}/classes/Studio", fake.server.authority()).as_bytes()));
+    assert!(has(ipp_body(&request), &attr(0x42, "requesting-user-name", b"artist")));
+}
+
+#[test]
+fn uncertain_submission_never_tries_the_second_endpoint() {
+    let first = FakeCups::on_tcp(vec![]);
+    let second = FakeCups::on_tcp(vec![]);
+    let destination = super::Destination { name: "Studio".into(), is_class: false };
+    assert!(super::submit_at(&[first.server.clone(), second.server.clone()], &destination, b"pdf", &Job::default()).is_err());
+    let _ = first.request();
+    assert!(second.requests.recv_timeout(Duration::from_millis(100)).is_err());
+}
+
+#[test]
+fn queue_metadata_stays_with_its_printer_group() {
+    let bytes = ipp_reply(
+        0,
+        &[
+            &group(4),
+            &attr(0x41, "printer-info", b"Studio printer"),
+            &printer_name("First"),
+            &attr(0x23, "printer-state", &5u32.to_be_bytes()),
+            &attr(0x22, "printer-is-accepting-jobs", &[0]),
+            &group(4),
+            &printer_name("Second"),
+        ],
+    );
+    let reply = super::parse_reply(&bytes).unwrap();
+    assert_eq!(reply.queues.len(), 2);
+    assert_eq!(reply.queues[0].info, "Studio printer");
+    assert_eq!(reply.queues[0].state, 5);
+    assert!(!reply.queues[0].accepting_jobs);
+    assert!(reply.queues[1].info.is_empty());
+    assert!(reply.queues[1].accepting_jobs);
 }

@@ -271,37 +271,104 @@ pub struct Destination {
 
 /// List both printer queues and classes from caller-selected CUPS endpoints.
 /// The caller owns endpoint selection/authorization; this API does not discover network hosts.
-pub fn destinations_at(endpoints: &[Server]) -> Result<Vec<Destination>, Error> {
-    let mut out: Vec<_> = discover(endpoints, OPERATION_CUPS_GET_PRINTERS)?.into_iter().map(|name| Destination { name, is_class: false }).collect();
-    // Not-found and operation-not-supported mean there are no classes to list.
-    let reply = post(endpoints, "/", &discovery_request(0x4005), DISCOVERY_TIMEOUT, true)?;
-    let parsed = parse_reply(&reply)?;
-    if status_ok(parsed.status) {
-        if out.len().saturating_add(parsed.names.len()) > MAX_PRINTERS {
-            return Err(Error::Spool("too many CUPS destinations".into()));
+pub fn destinations_at(endpoints: &[Server]) -> Result<Vec<Queue>, Error> {
+    let mut out = Vec::new();
+    for (operation, is_class) in [(OPERATION_CUPS_GET_PRINTERS, false), (0x4005, true)] {
+        let reply = post(endpoints, "/", &discovery_request(operation), DISCOVERY_TIMEOUT, true)?;
+        let parsed = parse_reply(&reply)?;
+        if !status_ok(parsed.status) {
+            if parsed.status == 0x0406 || (is_class && parsed.status == 0x0501) {
+                continue;
+            }
+            return Err(refused(parsed.status));
         }
-        out.extend(parsed.names.into_iter().map(|name| Destination { name, is_class: true }));
-    } else if !matches!(parsed.status, 0x0406 | 0x0501) {
-        return Err(refused(parsed.status));
+        for mut queue in parsed.queues {
+            queue.is_class = is_class;
+            if out.len() >= MAX_PRINTERS {
+                return Err(Error::Spool("too many CUPS destinations".into()));
+            }
+            out.push(queue);
+        }
+    }
+    let default = default_at(endpoints)?;
+    for queue in &mut out {
+        queue.is_default = default.as_deref() == Some(queue.name.as_str());
     }
     Ok(out)
+}
+
+/// The scheduler's default queue; not-found means no default has been configured.
+pub fn default_at(endpoints: &[Server]) -> Result<Option<String>, Error> {
+    let reply = post(endpoints, "/", &discovery_request(OPERATION_CUPS_GET_DEFAULT), DISCOVERY_TIMEOUT, true)?;
+    let parsed = parse_reply(&reply)?;
+    if parsed.status == 0x0406 {
+        return Ok(None);
+    }
+    if !status_ok(parsed.status) {
+        return Err(refused(parsed.status));
+    }
+    Ok(parsed.names.into_iter().next())
+}
+
+/// Metadata from one CUPS printer group, without losing which fields belong together.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Queue {
+    pub name: String,
+    pub info: String,
+    pub state: u32,
+    pub accepting_jobs: bool,
+    pub is_default: bool,
+    pub is_class: bool,
+}
+impl Default for Queue {
+    fn default() -> Self {
+        Self { name: String::new(), info: String::new(), state: 3, accepting_jobs: true, is_default: false, is_class: false }
+    }
 }
 
 /// Submit once to an explicitly selected queue/class, returning the numeric server job id.
 /// An absent id is an uncertain accepted outcome, not permission to retry the document.
 pub fn submit_at(endpoints: &[Server], destination: &Destination, pdf: &[u8], job: &Job) -> Result<u32, Error> {
+    submit_as_at(endpoints, destination, pdf, job, "")
+}
+
+/// As [`submit_at`], with the user name supplied by the application, never inferred from
+/// process credentials. Once any request bytes may have been sent, no other endpoint is tried.
+pub fn submit_as_at(endpoints: &[Server], destination: &Destination, pdf: &[u8], job: &Job, user: &str) -> Result<u32, Error> {
     if !is_queue_name(&destination.name) {
         return Err(Error::Spool("invalid CUPS destination name".into()));
     }
+    if user.len() > MAX_JOB_NAME || user.chars().any(char::is_control) {
+        return Err(Error::Spool("invalid CUPS user name".into()));
+    }
+    if job.copies == 0 || job.copies > 999 {
+        return Err(Error::Spool("copies must be between 1 and 999".into()));
+    }
     let kind = if destination.is_class { "classes" } else { "printers" };
     let path = format!("/{kind}/{}", destination.name);
-    let request = print_job_request_path(&path, pdf, job);
-    let reply = post(endpoints, &path, &request, JOB_TIMEOUT, false)?;
-    let parsed = parse_reply(&reply)?;
-    if !status_ok(parsed.status) {
-        return Err(refused(parsed.status));
+    let mut last = Error::Spool("no CUPS endpoint selected".into());
+    for endpoint in endpoints {
+        let mut stream = match connect(endpoint) {
+            Ok(stream) => stream,
+            Err(error) => {
+                last = Error::Spool(format!("CUPS connection failed: {error}"));
+                continue;
+            }
+        };
+        let authority = endpoint.authority();
+        let request = print_job_request_for(&authority, &path, pdf, job, user);
+        // Never retry exchange errors: the scheduler may already have accepted the job.
+        let reply = exchange(&mut stream, &authority, &path, &request, JOB_TIMEOUT)?;
+        let parsed = parse_reply(&reply)?;
+        if !status_ok(parsed.status) {
+            return Err(refused(parsed.status));
+        }
+        return parsed
+            .job_id
+            .filter(|id| *id != 0 && *id <= i32::MAX as u32)
+            .ok_or_else(|| Error::Spool("CUPS accepted the job without a usable job id; do not resubmit".into()));
     }
-    parsed.job_id.filter(|id| *id != 0).ok_or_else(|| Error::Spool("CUPS accepted the job without a usable job id; do not resubmit".into()))
+    Err(last)
 }
 
 /// A CUPS queue name: ASCII letters, digits and `_`, `-`, `.` — what the scheduler accepts, and
@@ -555,11 +622,18 @@ fn print_job_request(queue: &str, pdf: &[u8], job: &Job) -> Vec<u8> {
 }
 
 fn print_job_request_path(path: &str, pdf: &[u8], job: &Job) -> Vec<u8> {
+    print_job_request_for("localhost", path, pdf, job, "")
+}
+
+fn print_job_request_for(authority: &str, path: &str, pdf: &[u8], job: &Job, user: &str) -> Vec<u8> {
     let mut r = Request::new(OPERATION_PRINT_JOB);
     r.group(GROUP_OPERATION);
     r.attribute(TAG_CHARSET, "attributes-charset", b"utf-8");
     r.attribute(TAG_LANGUAGE, "attributes-natural-language", b"en");
-    r.attribute(TAG_URI, "printer-uri", format!("ipp://localhost{path}").as_bytes());
+    r.attribute(TAG_URI, "printer-uri", format!("ipp://{authority}{path}").as_bytes());
+    if !user.is_empty() {
+        r.attribute(TAG_NAME, "requesting-user-name", user.as_bytes());
+    }
     r.attribute(TAG_NAME, "job-name", truncate_utf8(&job.title, MAX_JOB_NAME).as_bytes());
     r.attribute(TAG_MIME, "document-format", b"application/pdf");
     r.group(GROUP_JOB);
@@ -614,6 +688,7 @@ fn truncate_utf8(s: &str, max: usize) -> &str {
 struct Reply {
     status: u16,
     names: Vec<String>,
+    queues: Vec<Queue>,
     job_id: Option<u32>,
 }
 
@@ -647,11 +722,26 @@ fn parse_reply(reply: &[u8]) -> Result<Reply, Error> {
     let status = r.u16().ok_or_else(malformed)?;
     let _request_id = r.array::<4>().ok_or_else(malformed)?;
     let (mut names, mut job_id, mut group) = (Vec::new(), None, 0u8);
+    let mut queues = Vec::new();
+    let mut queue = Queue::default();
     loop {
         let Some(tag) = r.array::<1>().map(|t| t[0]) else { return Err(malformed()) };
         match tag {
-            GROUP_END => break,
+            GROUP_END => {
+                if !queue.name.is_empty() {
+                    queues.push(queue);
+                }
+                break;
+            }
             GROUP_OPERATION | GROUP_JOB | GROUP_PRINTER | 0x05 => {
+                if !queue.name.is_empty() {
+                    if queues.len() >= MAX_PRINTERS {
+                        return Err(malformed());
+                    }
+                    queues.push(std::mem::take(&mut queue));
+                } else {
+                    queue = Queue::default();
+                }
                 group = tag;
             }
             // An attribute: name and value, each u16-length. An empty name is an additional
@@ -672,8 +762,28 @@ fn parse_reply(reply: &[u8]) -> Result<Reply, Error> {
                         if names.len() < MAX_PRINTERS
                             && let Some(printer) = std::str::from_utf8(value).ok().filter(|n| !n.is_empty() && n.len() <= MAX_NAME)
                         {
+                            if !queue.name.is_empty() {
+                                return Err(malformed());
+                            }
+                            queue.name = printer.to_string();
                             names.push(printer.to_string());
                         }
+                    }
+                    (GROUP_PRINTER, "printer-info", 0x41 | TAG_NAME) => {
+                        if value.len() > MAX_NAME {
+                            return Err(malformed());
+                        }
+                        queue.info = std::str::from_utf8(value).map_err(|_| malformed())?.to_owned();
+                    }
+                    (GROUP_PRINTER, "printer-state", 0x23 | TAG_INTEGER) => {
+                        queue.state = u32::from_be_bytes(value.try_into().map_err(|_| malformed())?);
+                    }
+                    (GROUP_PRINTER, "printer-is-accepting-jobs", TAG_BOOLEAN) => {
+                        queue.accepting_jobs = match value {
+                            [0] => false,
+                            [1] => true,
+                            _ => return Err(malformed()),
+                        };
                     }
                     (GROUP_JOB, "job-id", TAG_INTEGER) => {
                         if let Ok(id) = <[u8; 4]>::try_from(value) {
@@ -686,7 +796,7 @@ fn parse_reply(reply: &[u8]) -> Result<Reply, Error> {
             _ => return Err(malformed()),
         }
     }
-    Ok(Reply { status, names, job_id })
+    Ok(Reply { status, names, queues, job_id })
 }
 
 /// Successful IPP status codes are `0x00xx` (RFC 8011 Appendix B).
