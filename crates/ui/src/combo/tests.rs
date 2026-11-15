@@ -170,6 +170,7 @@ fn scene(ui: &mut egui::Ui, ours: bool) {
 }
 
 fn render(ours: bool, hover: Option<&str>, open: Option<&str>) -> image::RgbaImage {
+    let _gpu = crate::gpu_test_lock();
     // Two of the combo boxes have no label: the scene compares looks, not names.
     let mut h = Harness::builder().with_size(egui::vec2(480.0, 700.0)).with_accessibility_check(false).build_ui(move |ui| scene(ui, ours));
     h.run();
