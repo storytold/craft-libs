@@ -4,8 +4,10 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
-use craft_menu::{Backend, Builtin, ClipboardKeys, CommandRef, Dispatch, Event, Gate, LayoutOptions, MenuBar, NativeMenu, mac_layout, structure_key};
+use craft_keymap::Mods;
+use craft_menu::{Alternate, Backend, Builtin, Chord, ClipboardKeys, CommandRef, Dispatch, Event, Gate, LayoutOptions, MenuBar, NativeMenu, mac_layout, structure_key};
 use craft_ui::contract::{Props as _, Show as _};
 use craft_ui::testing::focus::key_release;
 use craft_ui::testing::input::key_press;
@@ -261,31 +263,46 @@ fn shortcuts_the_layout_assigns_come_back_as_clicks() {
 
     let cmd_q = chord("Cmd+Q");
     let cmd_held = held([true, false, false, false]);
-    assert_eq!(chosen_held(&dispatch, &cmd("file.exit"), Some(&cmd_q), true, cmd_held), Event::Click("file.exit".into()));
-    assert_eq!(chosen_held(&dispatch, &cmd("file.quit"), Some(&cmd_q), false, cmd_held), Event::Key(cmd_q));
+    let chosen = |command: &CommandRef, chord: Option<&Chord>, layout_shortcut: bool, key_down: bool, mods: Mods| {
+        dispatch.chosen(command, chord, layout_shortcut, key_down, mods, None)
+    };
+    assert_eq!(chosen(&cmd("file.exit"), Some(&cmd_q), true, true, cmd_held), Event::Click("file.exit".into()));
+    assert_eq!(chosen(&cmd("file.quit"), Some(&cmd_q), false, true, cmd_held), Event::Key(cmd_q));
     // ⇧ held on a ⌘R item: the key press that was made.
+    assert_eq!(chosen(&cmd("view.reload"), Some(&chord("Cmd+R")), false, true, held([true, false, false, true])), Event::Key(chord("Cmd+Shift+R")));
+    assert_eq!(chosen(&cmd("file.quit"), Some(&cmd_q), false, false, Mods::default()), Event::Click("file.quit".into()), "a mouse click");
     assert_eq!(
-        chosen_held(&dispatch, &cmd("view.reload"), Some(&chord("Cmd+R")), false, held([true, false, false, true])),
-        Event::Key(chord("Cmd+Shift+R"))
-    );
-    assert_eq!(chosen_held(&dispatch, &cmd("file.quit"), Some(&cmd_q), false, None), Event::Click("file.quit".into()), "a mouse click");
-    assert_eq!(
-        chosen_held(&dispatch, &Builtin::Minimize.command(), Some(&chord("Ctrl+Cmd+M")), false, held([true, true, false, false])),
+        chosen(&Builtin::Minimize.command(), Some(&chord("Ctrl+Cmd+M")), false, true, held([true, true, false, false])),
         Event::Click(Builtin::Minimize.command())
     );
     // ↩ inside the open menu: on a ⌘ item without ⌘ held, and on a bare tool key.
     let enter = held([false; 4]);
-    assert_eq!(chosen_held(&dispatch, &cmd("file.quit"), Some(&cmd_q), false, enter), Event::Click("file.quit".into()));
-    assert_eq!(chosen_held(&dispatch, &cmd("tool.brush"), Some(&chord("B")), false, enter), Event::Click("tool.brush".into()));
+    assert_eq!(chosen(&cmd("file.quit"), Some(&cmd_q), false, true, enter), Event::Click("file.quit".into()));
+    assert_eq!(chosen(&cmd("tool.brush"), Some(&chord("B")), false, true, enter), Event::Click("tool.brush".into()));
 }
 
-// P3(top-w1): tp.T5 — the tests still speak the old `held` argument; phase 3 rewrites them for `key_down`, `mods` and `alternate`.
-fn chosen_held(
-    dispatch: &craft_menu::Dispatch,
-    command: &CommandRef,
-    chord: Option<&craft_menu::Chord>,
-    layout_shortcut: bool,
-    held: Option<craft_keymap::Mods>,
-) -> Event {
-    dispatch.chosen(command, chord, layout_shortcut, held.is_some(), held.unwrap_or_default(), None)
+/// ⌥ on a row with an alternate runs the alternate, for a click only: the row's key equivalent
+/// keeps its own command, so the app's key handling still sees the key that was made.
+#[trial]
+fn an_option_click_runs_the_rows_alternate() {
+    let (mut menu, _, _, dispatch) = driver();
+    let seen: Arc<Mutex<Vec<CommandRef>>> = Arc::default();
+    let hook_seen = seen.clone();
+    menu.on_command(Box::new(move |c| {
+        hook_seen.lock().unwrap().push(c.clone());
+        false
+    }));
+    let merge = cmd("layer.mergeVisible");
+    let stamp = cmd("layer.stampVisible");
+    let alternate = Alternate::new(Mods::ALT, stamp.clone());
+    let shortcut = chord("Cmd+Shift+E");
+
+    let click = |mods: Mods| dispatch.chosen(&merge, Some(&shortcut), false, false, mods, Some(&alternate));
+    assert_eq!(click(held([false, false, true, false])), Event::Click(stamp.clone()));
+    assert_eq!(*seen.lock().unwrap(), [stamp.clone()], "the hook sees the alternate");
+    assert_eq!(click(Mods::default()), Event::Click(merge.clone()), "no ⌥: the row's own command");
+    assert_eq!(click(held([false, false, false, true])), Event::Click(merge.clone()), "another modifier is not the alternate's");
+
+    let key = dispatch.chosen(&merge, Some(&shortcut), false, true, held([true, false, true, true]), Some(&alternate));
+    assert_eq!(key, Event::Key(chord("Cmd+Alt+Shift+E")), "a key equivalent is never swapped");
 }

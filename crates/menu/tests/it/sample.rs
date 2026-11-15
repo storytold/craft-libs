@@ -7,9 +7,9 @@ pub fn chord(s: &str) -> Chord {
     Chord::parse(s).unwrap()
 }
 
-/// The modifiers held for a key-down: ⌘, ⌃, ⌥, ⇧.
-pub fn held([cmd, ctrl, alt, shift]: [bool; 4]) -> Option<Mods> {
-    Some(Mods { cmd, ctrl, alt, shift })
+/// The modifiers held: ⌘, ⌃, ⌥, ⇧.
+pub fn held([cmd, ctrl, alt, shift]: [bool; 4]) -> Mods {
+    Mods { cmd, ctrl, alt, shift }
 }
 
 pub fn typing(text_editing: bool) -> Gate {

@@ -25,7 +25,11 @@ impl Customization {
     /// Drops the rows whose command id is hidden and sets the tint of the rows whose id has a
     /// colour. Separators stay; `from_items` tidies them.
     pub fn apply(&self, rows: &mut Vec<Row>) {
-        let _ = rows;
-        todo!("tp.T53")
+        rows.retain(|row| !self.hidden.contains(&row.command.id));
+        for row in rows.iter_mut() {
+            if let Some(color) = self.colors.get(&row.command.id) {
+                row.tint = Some(*color);
+            }
+        }
     }
 }

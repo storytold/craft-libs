@@ -11,6 +11,7 @@ use craft_ui::display::Divider;
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::runtime::commands;
 use craft_ui::runtime::env::Env;
+use craft_ui::runtime::pointer;
 use craft_ui::runtime::windows::{WindowAction, WindowHost};
 use egui::{Ui, ViewportId};
 
@@ -63,7 +64,7 @@ impl<'a> Rows<'a> {
     ) -> Vec<String> {
         let english: Vec<String> = siblings.iter().map(|sibling| english(sibling).unwrap_or_default()).collect();
         let english_refs: Vec<&str> = english.iter().map(String::as_str).collect();
-        let letters = mnemonic::assign(&english_refs, &craft_i18n::Folder::new("en")); // P3(top-w1): tp.T4, tp.T9
+        let letters = mnemonic::assign(&english_refs, &craft_i18n::Folder::new("en"));
         siblings
             .iter()
             .zip(letters)
@@ -177,7 +178,14 @@ fn local(ui: &mut Ui, item: &Item, label: String, shortcut: Option<String>) -> c
 
 /// The command row of `item`: the label and mnemonic come from the model, the state from the command.
 fn command_row<'a>(ui: &Ui, item: &Item, label: String, shortcut: Option<String>) -> MenuItem<'a> {
-    let mut row = MenuItem::command(item.command.clone()).label(label).enabled(item.enabled);
+    // The alternate swaps the command only; the label, kind, shortcut, tint and tooltip stay the
+    // item's. The salt is the item's own command, so hover and focus stay on the row through the swap.
+    let held = pointer::frame(ui.ctx()).mods;
+    let command = match &item.alternate {
+        Some(alternate) if alternate.selected_by(held) => alternate.command.clone(),
+        _ => item.command.clone(),
+    };
+    let mut row = MenuItem::command(command).label(label).enabled(item.enabled).id_salt(item.command.key());
     row = match item.kind {
         ItemKind::Plain => row,
         ItemKind::Check(on) => row.check(checked(ui, &item.command).unwrap_or(on)),

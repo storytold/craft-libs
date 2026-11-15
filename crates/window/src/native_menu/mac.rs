@@ -6,7 +6,8 @@
 //!   A change of the windows key rebuilds only the Windows menu: AppKit adds its own items to that
 //!   menu (window tiling, the window list), so muda can't insert rows there by position.
 //! - A chosen item is a click or a key equivalent: AppKit's current event says which, and the
-//!   handler gets the modifiers held for a key-down (AppKit may match ⌘R to a ⇧⌘R item).
+//!   handler gets whether a key press chose it and the modifiers held, for a click too (⌥ on a
+//!   row with an alternate; AppKit may match ⌘R to a ⇧⌘R item).
 //! - The process has one muda menu event handler, set by the first [`Installed::set_handler`] or
 //!   [`install_app_menu`]; each call points it at its own handler.
 //! - A check or radio item: AppKit (muda) flips its state when it is chosen. The next `apply` sets
@@ -55,24 +56,25 @@ fn route_events(handler: Handler) {
 /// The menu event handler. AppKit calls it on the main thread, from the event that chose the
 /// item: a key equivalent is a key-down, a click a mouse-up (or ↩ inside the open menu).
 fn handle_event(e: MenuEvent) {
-    let held = MainThreadMarker::new()
+    // Without a current event the item was chosen by a call, not by the user: a click, no modifiers.
+    let chosen = MainThreadMarker::new()
         .and_then(|mtm| NSApplication::sharedApplication(mtm).currentEvent())
-        .filter(|ev| ev.r#type() == NSEventType::KeyDown)
         .map(|ev| {
             let flags = ev.modifierFlags();
-            Held {
-                command: flags.contains(NSEventModifierFlags::Command),
-                control: flags.contains(NSEventModifierFlags::Control),
-                option: flags.contains(NSEventModifierFlags::Option),
-                shift: flags.contains(NSEventModifierFlags::Shift),
+            Chosen {
+                key_down: ev.r#type() == NSEventType::KeyDown,
+                held: Held {
+                    command: flags.contains(NSEventModifierFlags::Command),
+                    control: flags.contains(NSEventModifierFlags::Control),
+                    option: flags.contains(NSEventModifierFlags::Option),
+                    shift: flags.contains(NSEventModifierFlags::Shift),
+                },
             }
-        });
+        })
+        .unwrap_or_default();
     // A copy, so nothing is locked while the app's handler runs.
     let handler = lock(&ROUTE).clone();
     if let Some(handler) = handler {
-        let mut chosen = Chosen::default(); // P3(top-w1): tp.T6
-        chosen.key_down = held.is_some();
-        chosen.held = held.unwrap_or_default();
         handler(e.id.as_ref(), chosen);
     }
 }

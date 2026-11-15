@@ -1,6 +1,10 @@
 //! The table's model through the dialog: which rows are listed and which count as conflicts.
 
-use craft_keymap::{Binding, CommandRef, Platform, Policy};
+use std::sync::Arc;
+
+use craft_host::{AppInfo, Host};
+use craft_keymap::{Binding, CommandDef, CommandRef, Keymap, Platform, Policy, Scope, Scopes};
+use craft_ui::contract::Role;
 use craft_ui::testing::trial;
 
 use super::fixture::{self, Rig};
@@ -28,4 +32,29 @@ fn every_row_that_can_take_a_shortcut_has_its_add_button() {
         let add = format!("Add a shortcut to {label}");
         assert!(rig.has(&add), "{label:?} has no add button; buttons {:?}", rig.names_with(craft_ui::contract::Role::BUTTON, "Add a shortcut"));
     }
+}
+
+/// A query typed in capitals finds the row: the search folds the dotted capital İ to `i`, where a lowercase fold
+/// gives `i` plus a combining dot and finds nothing. The English alias finds it too.
+#[trial]
+fn the_search_folds_dotted_capitals() {
+    let (i18n, _) = craft_i18n::I18n::from_owned([("az".to_owned(), String::new(), String::new())], &["az"]);
+    let lang = i18n.from_code("az").expect("az is offered");
+    let host = Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(Arc::new(i18n)).lang(lang).build());
+    let path: Vec<String> = ["Image", "Image Size…"].iter().map(|s| (*s).to_owned()).collect();
+    let size = CommandDef::new("image.size", "Şəkil ölçüsü…", Scope::app()).with_path(path).with_alias("Image Size");
+    let other = CommandDef::new("file.save", "Saxla", Scope::app());
+    let listed = |query: &str| {
+        let keymap = Keymap::new(vec![size.clone(), other.clone()], Scopes::new(), Platform::Mac);
+        let mut rig = Rig::new(keymap, fixture::options(), None);
+        rig.fixture.host(host.clone());
+        rig.pass();
+        let field = rig.find("Search:");
+        rig.fixture.click(&field);
+        rig.fixture.type_text(query);
+        rig.fixture.idle(2);
+        (!rig.names_with(Role::ROW, "Şəkil ölçüsü").is_empty(), !rig.names_with(Role::ROW, "Saxla").is_empty())
+    };
+    assert_eq!(listed("ŞƏKİL ÖLÇÜSÜ"), (true, false), "capitals with the dotted İ");
+    assert_eq!(listed("IMAGE SIZE"), (true, false), "the English alias");
 }

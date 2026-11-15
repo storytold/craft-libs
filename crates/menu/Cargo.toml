@@ -8,7 +8,7 @@ rust-version.workspace = true
 repository.workspace = true
 
 [lib]
-# Every test lives in the `it` integration binary, so `cargo test` builds the library once.
+# Every test lives in the `it` integration binary, except the AppKit one (`mac_appkit`, no harness), so `cargo test` builds the library once.
 test = false
 
 [dependencies]
@@ -36,6 +36,19 @@ name = "it"
 path = "tests/it/main.rs"
 harness = false
 required-features = ["screen-testing"]
+
+# AppKit end to end: runs on the main thread, so no harness; on other platforms it does nothing.
+[[test]]
+name = "mac_appkit"
+path = "tests/mac_appkit.rs"
+harness = false
+required-features = ["screen-testing"]
+
+# The test reads AppKit's menu bar back and feeds it real events, through safe objc2 calls.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSControl", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDate", "NSGeometry", "NSRunLoop", "NSString"] }
 
 [lints]
 workspace = true

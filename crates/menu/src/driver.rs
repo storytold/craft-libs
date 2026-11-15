@@ -137,8 +137,10 @@ struct Shared {
 
 impl Dispatch {
     /// The event for an item with `command`, its `shortcut` and [`Item::layout_shortcut`],
-    /// chosen with the modifiers `held` for a key-down (⌘, ⌃, ⌥, ⇧ as AppKit reports them) or
-    /// `None` for a mouse click, under the current gate. A click the gate allows on an app command
+    /// chosen by a key press (`key_down`) or a click, with the modifiers `mods` held (⌘, ⌃, ⌥, ⇧ as
+    /// AppKit reports them), under the current gate. A click whose `mods` include the
+    /// `alternate`'s runs the alternate's command instead; a key press never does. A click the
+    /// gate allows on an app command
     /// (not a [`Builtin`]) also goes to the app's [`NativeMenu::on_command`] hook, before this
     /// returns; when the hook ran it, the event is [`Event::Handled`].
     pub fn chosen(
@@ -150,8 +152,12 @@ impl Dispatch {
         mods: Mods,
         alternate: Option<&Alternate>,
     ) -> Event {
-        let _ = alternate; // P3(top-w1): tp.T5
-        // P3(top-w1): tp.T5 — the old `held` argument: `Some` for a key-down, `None` for a click.
+        // Only a click swaps: a key equivalent belongs to the row's own command, so ⌥⇧⌘E on
+        // Merge Visible's ⇧⌘E stays the key the app's key handling sees.
+        let command = match alternate {
+            Some(alternate) if !key_down && alternate.selected_by(mods) => &alternate.command,
+            _ => command,
+        };
         let held = key_down.then_some(mods);
         let (gate, rules, hook) = {
             let shared = self.lock();
@@ -206,6 +212,8 @@ pub struct NativeMenu {
     paste: bool,
     gate: Gate,
     rules: ModalRules,
+    /// The revision of the rules last set; `None` before the first call.
+    rules_revision: Option<u64>,
     dispatch: Dispatch,
     /// The menus last laid out, before the gate greyed anything, and the gate they were last
     /// synced with: a gate change re-syncs them without laying them out again.
@@ -231,6 +239,7 @@ impl NativeMenu {
             paste: false,
             gate: Gate::default(),
             rules: ModalRules::default(),
+            rules_revision: None,
             dispatch,
             bar: None,
             synced_gate: None,
@@ -247,10 +256,17 @@ impl NativeMenu {
     /// The per-command rules under the gate ([`Gate::allows_under`]), set beside
     /// [`NativeMenu::set_gate`] when they change: the items they forbid are greyed, and their
     /// clicks and key equivalents dropped, as for the gate.
+    ///
+    /// Rules hold a closure and can't be compared: the caller bumps [`ModalRules::revision`] when
+    /// they change, and a call with the revision it last set does nothing.
     pub fn set_modal_rules(&mut self, rules: ModalRules) {
+        if self.rules_revision == Some(rules.revision) {
+            return;
+        }
+        self.rules_revision = Some(rules.revision);
         self.dispatch.lock().rules = rules.clone();
         self.rules = rules;
-        // Rules hold a closure and can't be compared: sync the greying again without laying out.
+        // Sync the greying again without laying out.
         self.synced_gate = None;
     }
 

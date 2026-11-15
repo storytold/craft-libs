@@ -50,6 +50,16 @@
 //!   the others go without a shortcut. Shortcuts the app binds outside its menus count too
 //!   ([`LayoutOptions::extra_shortcuts`]).
 //!
+//! **Alternates.** An [`Item`] or [`Row`] can carry an [`Alternate`]: while its modifiers are held
+//! as the row is clicked, the row runs the alternate's command, in the in-window bar and the native
+//! menu. Key equivalents are never swapped.
+//!
+//! **Customization.** [`Customization`] drops the rows the user hid and tints the ones they
+//! coloured, before [`from_items`].
+//!
+//! **Appearance.** [`ThemeMenu`] builds the Appearance submenu and the quick favourites rows, as
+//! [`LanguageMenu`] does for languages.
+//!
 //! The labels the layout writes itself are English unless the app passes its translations in
 //! [`LayoutOptions::label`].
 //!
@@ -96,6 +106,7 @@ mod layout;
 mod modal;
 mod model;
 mod palette;
+mod theme;
 
 pub mod mac;
 
@@ -115,6 +126,7 @@ pub use model::{
     Alternate, Builtin, Document, Item, ItemKind, ItemRole, Menu, MenuBar, MenuRole, Node, Platforms, Row, Standard, from_items, structure_key, tidy,
     window_key,
 };
+pub use theme::{THEME_COMMAND, ThemeChoice, ThemeLabels, ThemeMenu, ThemeRow};
 
 #[cfg(feature = "screen-testing")]
 /// The stories and words this crate registers, for the story tests.

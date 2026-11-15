@@ -212,6 +212,13 @@ impl Alternate {
     pub fn new(mods: Mods, command: impl Into<CommandRef>) -> Alternate {
         Alternate { mods, command: command.into() }
     }
+
+    /// Whether `held` includes every modifier of the alternate. The one rule the in-window row and
+    /// the native dispatch share.
+    pub(crate) fn selected_by(&self, held: Mods) -> bool {
+        let m = self.mods;
+        (!m.cmd || held.cmd) && (!m.ctrl || held.ctrl) && (!m.alt || held.alt) && (!m.shift || held.shift)
+    }
 }
 
 /// A plain item, or one with a checked state.
@@ -751,7 +758,11 @@ pub fn window_key(bar: &MenuBar) -> u64 {
 fn hash_nodes(nodes: &[Node], h: &mut DefaultHasher) {
     for n in nodes {
         match n {
-            Node::Item(it) => ('i', it.command.key(), std::mem::discriminant(&it.kind), &it.shortcut, it.role, it.layout_shortcut).hash(h),
+            Node::Item(it) => {
+                ('i', it.command.key(), std::mem::discriminant(&it.kind), &it.shortcut, it.role, it.layout_shortcut).hash(h);
+                // The native target table is swapped only on a rebuild, so the alternate is structure.
+                it.alternate.as_ref().map(|a| (a.command.key(), a.mods)).hash(h);
+            }
             Node::Separator => '-'.hash(h),
             Node::Submenu { label, children, role, .. } => {
                 ('[', label, role).hash(h);

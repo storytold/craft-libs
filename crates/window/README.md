@@ -37,7 +37,8 @@ reads the platform once and calls it.
 
 ### Override
 
-`<PREFIX>_TITLEBAR` wins over the setting. With the default prefix `CRAFT`: `CRAFT_TITLEBAR=app`
+`<PREFIX>_TITLEBAR` wins over the setting; `<PREFIX>_CAPTION_STYLE` and `<PREFIX>_CAPTION_LAYOUT` do the
+same for the caption buttons' style and layout. With the default prefix `CRAFT`: `CRAFT_TITLEBAR=app`
 forces the app's bar (also on tiling compositors), `=system` or `=desktop` forces the native frame.
 Apps pass their own prefix (`Prefix::new("PDFCRAFT")` reads `PDFCRAFT_TITLEBAR`).
 When `<PREFIX>_TITLEBAR` is unset, `CRAFT_TITLEBAR` applies, so one variable covers every app. `Decision::overridden` reports `Some(true)` or `Some(false)` when the variable decided.
@@ -138,7 +139,7 @@ description: `Bar` of `Menu`s of `Node`s (`Item { id, label, enabled, checked, s
 separators, and the platform's own items such as Services and Zoom). `NativeBar::install` makes it the
 application's menu bar, `NativeBar::apply` keeps it in step (a changed `structure` key rebuilds, a changed
 `windows` key rebuilds only the Windows menu, anything else updates in place), and the `Handler` set with
-`NativeBar::set_handler` receives each chosen item's `id` and, for a key equivalent, the modifiers held.
+`NativeBar::set_handler` receives each chosen item's `id`, the modifiers held and whether a key press chose it.
 `install_app_menu` installs a minimal app menu whose Quit reports to a handler. Off macOS (and without the
 feature) every call does nothing, so callers need no platform check. craft-menu lowers its menu model to
 this description.
