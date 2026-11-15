@@ -4,5 +4,8 @@
 //! Font discovery, glyph execution and text layout remain consumer responsibilities.
 mod compile;
 mod error;
+pub mod parse;
+pub mod program;
 pub use compile::compile;
 pub use error::ShxError;
+pub use parse::{ParsedFont, Record, ShxKind};
