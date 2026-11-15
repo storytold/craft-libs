@@ -2,8 +2,8 @@
 //! 16, 24 or 32-bit integer or 32-bit float ([`SampleFormat`]), for streaming export.
 //! Float WAV is `WAVE_FORMAT_IEEE_FLOAT` with a `fact` chunk; float AIFF is AIFF-C (`fl32`).
 //!
-//! The header is written first from the known length ([`header`]), then the samples in chunks
-//! ([`encode`]) and the pad byte ([`pad`]), so an export streams to disk instead of building the
+//! The header is written first from the known length (`header`), then the samples in chunks
+//! (`encode`) and the pad byte (`pad`), so an export streams to disk instead of building the
 //! file in memory.
 
 /// PCM representation in an exported file.
