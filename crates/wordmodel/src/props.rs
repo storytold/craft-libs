@@ -31,8 +31,8 @@ pub use para_props::{
     TextAlignment, TextFrame,
 };
 pub use table_props::{
-    CellPicture, CellProps, HeightRule, PictureRepeat, RowProps, TableFloat, TableLook, TableProps, TextDirection, TextVert, VAlign, VMerge,
-    anchor_ooxml, valign_from_anchor,
+    CellPicture, CellProps, CellSpacing, CellSpacingKind, HeightRule, PictureRepeat, RowProps, TableFloat, TableLook, TableProps, TextDirection,
+    TextVert, VAlign, VMerge, anchor_ooxml, valign_from_anchor,
 };
 
 #[cfg(test)]

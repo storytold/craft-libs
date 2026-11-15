@@ -2,6 +2,15 @@ use super::{Level, LevelSuffix, ParaProps, Style, StyleKind, TablePart, VAlign, 
 use crate::write::props::open_change;
 use craft_wordmodel::Document;
 
+/// `w:tcFitText` for a conditional table-style part: on, off, or absent (inherit).
+fn tc_fit_text(w: &mut W, fit_text: Option<bool>) {
+    match fit_text {
+        Some(true) => w.empty("w:tcFitText", &[]),
+        Some(false) => w.val("w:tcFitText", "0"),
+        None => {}
+    }
+}
+
 /// Built-in names Word keeps in lower case in styles.xml.
 fn file_style_name(name: &str) -> String {
     if let Some((f, _)) = crate::read::LOWER_NAMES.iter().find(|(_, ui)| ui.eq_ignore_ascii_case(name)) {
@@ -139,7 +148,7 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
             let has_rpr = props::has_rpr(&f.chr);
             // The whole table's borders are its table borders (`w:tblPr` above).
             let borders = f.borders.filter(|_| part != TablePart::WholeTable);
-            let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some();
+            let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some() || f.fit_text.is_some();
             if !has_rpr && !has_tc && f.align.is_none() {
                 continue;
             }
@@ -162,6 +171,7 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
                 if let Some(c) = f.fill {
                     w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
                 }
+                tc_fit_text(w, f.fit_text);
                 if let Some(v) = f.v_align {
                     w.val(
                         "w:vAlign",

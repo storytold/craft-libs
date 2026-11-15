@@ -450,6 +450,10 @@ pub struct ParaProps {
     pub suppress_hyphens: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppress_line_numbers: Option<bool>,
+    /// Suppress overlap with floating objects (`w:suppressOverlap`, ECMA-376 §17.3.1.29): the
+    /// paragraph does not shorten to make room for a floating table or shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suppress_overlap: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bidi: Option<bool>,
     /// Paragraph text direction (`w:textDirection`); `None` inherits from the paragraph style.
@@ -521,7 +525,7 @@ impl ParaProps {
     }
 
     fn overlay_pagination(&mut self, patch: &ParaProps) {
-        overlay_fields!(self, patch; keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, suppress_hyphens, suppress_line_numbers,
+        overlay_fields!(self, patch; keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, suppress_hyphens, suppress_line_numbers, suppress_overlap,
             drop_cap, drop_cap_margin, drop_cap_distance, drop_cap_font, frame, snap_to_grid);
     }
 

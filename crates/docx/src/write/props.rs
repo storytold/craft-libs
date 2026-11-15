@@ -1,8 +1,8 @@
 //! Property writers, in ECMA-376 schema element order.
 
 use craft_wordmodel::props::{
-    Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
-    TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CellProps, CellSpacing, CellSpacingKind, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing,
+    ParaProps, RowProps, TabAlign, TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
 };
 
 use crate::units::{n, twips};
@@ -19,6 +19,15 @@ fn toggle(w: &mut W, name: &str, v: Option<bool>) {
 fn round(v: f32) -> i64 {
     let v = craft_wordmodel::geom::finite(v);
     v.round().clamp(-1e9, 1e9) as i64
+}
+
+/// Writes a bounded `w:tblCellSpacing` width while preserving its measurement type.
+fn cell_spacing(w: &mut W, spacing: CellSpacing) {
+    let max = match spacing.kind {
+        CellSpacingKind::Pct => 50_000,
+        CellSpacingKind::Dxa | CellSpacingKind::Auto | CellSpacingKind::Nil => 31_680,
+    };
+    w.empty("w:tblCellSpacing", &[("w:w", &spacing.width.min(max).to_string()), ("w:type", spacing.kind.ooxml())]);
 }
 
 /// `w:rPr` content (without the wrapper). Link and revision marks are not run properties.
@@ -284,6 +293,7 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     write_indentation(w, p);
     toggle(w, "w:contextualSpacing", p.contextual_spacing);
     toggle(w, "w:mirrorIndents", p.mirror_indents);
+    toggle(w, "w:suppressOverlap", p.suppress_overlap);
     if let Some(a) = p.align {
         w.val("w:jc", align_val(a));
     }
@@ -526,6 +536,9 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     if let Some(a) = t.align {
         w.val("w:jc", align_val(if a == Align::Justify || a == Align::Distribute { Align::Left } else { a }));
     }
+    if let Some(v) = t.cell_spacing {
+        cell_spacing(w, v);
+    }
     if let Some(i) = t.indent {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);
     }
@@ -580,6 +593,9 @@ fn tblprex(w: &mut W, t: &TableProps) {
     }
     if let Some(a) = t.align {
         w.val("w:jc", align_val(if a == Align::Justify || a == Align::Distribute { Align::Left } else { a }));
+    }
+    if let Some(v) = t.cell_spacing {
+        cell_spacing(w, v);
     }
     if let Some(i) = t.indent {
         w.empty("w:tblInd", &[("w:w", &twips(i)), ("w:type", "dxa")]);
@@ -669,6 +685,7 @@ fn tcpr_inner(w: &mut W, c: &CellProps) {
     if c.text_direction.is_turned() || c.text_direction_set {
         w.val("w:textDirection", c.text_direction.ooxml());
     }
+    toggle(w, "w:tcFitText", c.fit_text);
     match c.valign {
         None => {}
         Some(VAlign::Top) => w.val("w:vAlign", "top"),
