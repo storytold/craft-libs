@@ -10,6 +10,11 @@
 //!   rebuilds the menu bar; labels, enabled and checked are updated in place. Opening or closing a
 //!   document ([`crate::window_key`]) rebuilds only the Window menu: AppKit adds its own items to
 //!   that menu (window tiling, the window list), so muda can't insert rows there by position.
+//! - With [`MacOptions::disabled_key_equivalents`] off, a disabled item has no key equivalent, and
+//!   enabling or disabling it changes its key equivalent in place. muda 0.21's `set_accelerator(None)`
+//!   leaves the old key equivalent on the `NSMenuItem`, so a disabled item is taken out and put back
+//!   at its index, which gives it a new `NSMenuItem` without one. In the Window and Help menus, where
+//!   AppKit adds rows of its own, that menu or the menu bar is rebuilt instead.
 //! - A chosen item is a click or a key equivalent: AppKit's current event says which. A key
 //!   equivalent goes back to egui as the key press that was made (the event's modifiers, not the
 //!   item's: AppKit may match ⌘R to a ⇧⌘R item), so the app's key rules still apply. A shortcut
@@ -39,7 +44,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use muda::accelerator::{Accelerator, Code, Modifiers};
-use muda::{CheckMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{CheckMenuItem, IsMenuItem, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSEventType};
 
@@ -85,17 +90,28 @@ pub struct MacOptions {
     /// in the Window menu ([`MenuBar::documents`]) and keeps them in one window turns it off: AppKit
     /// would list that window as well.
     pub window_list: bool,
+    /// Give a disabled item its key equivalent. On by default. AppKit matches a disabled item's key
+    /// equivalent and drops the key-down, so its chord never reaches the window or egui. Off, a
+    /// disabled item has none, and its chord reaches egui as a key press, for an app that answers a
+    /// greyed command's chord itself. The [`MenuBar`] keeps the item's shortcut either way, so
+    /// enabling or disabling an item never rebuilds the menu bar.
+    pub disabled_key_equivalents: bool,
 }
 
 impl Default for MacOptions {
     fn default() -> MacOptions {
-        MacOptions { window_list: true }
+        MacOptions { window_list: true, disabled_key_equivalents: true }
     }
 }
 
 impl MacOptions {
     pub fn window_list(mut self, on: bool) -> MacOptions {
         self.window_list = on;
+        self
+    }
+
+    pub fn disabled_key_equivalents(mut self, on: bool) -> MacOptions {
+        self.disabled_key_equivalents = on;
         self
     }
 }
@@ -237,6 +253,65 @@ struct Entry {
     target: Target,
     label: String,
     enabled: bool,
+    /// The item's key equivalent while it is enabled.
+    accel: Option<Accelerator>,
+    /// The menu that holds the item.
+    parent: Submenu,
+    place: Place,
+}
+
+/// Where an item is, for changing its key equivalent in place
+/// ([`MacOptions::disabled_key_equivalents`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// In a menu AppKit adds no rows to, so muda's index of the item is AppKit's.
+    Own,
+    /// A row of the Window menu.
+    Window,
+    /// A row of the Help menu.
+    Help,
+}
+
+/// What a key equivalent change in place could not do, and the rebuild that does it instead.
+enum Rebuild {
+    Window,
+    Bar,
+}
+
+impl Entry {
+    /// Give the item its key equivalent when `enabled`, and take it away when not.
+    fn show_key(&self, id: &str, enabled: bool) -> Result<(), Rebuild> {
+        let key = if enabled { self.accel } else { None };
+        let fallback = || if self.place == Place::Window { Rebuild::Window } else { Rebuild::Bar };
+        let done = catch_unwind(AssertUnwindSafe(|| -> muda::Result<bool> {
+            let item: &dyn IsMenuItem = match &self.handle {
+                Handle::Plain(h) => {
+                    h.set_accelerator(key)?;
+                    h
+                }
+                Handle::Check(h) => {
+                    h.set_accelerator(key)?;
+                    h
+                }
+            };
+            if enabled {
+                return Ok(true);
+            }
+            // muda kept `None`, but the `NSMenuItem` still has the old key equivalent: the item gets
+            // a new one, without it, when it is inserted again.
+            if self.place != Place::Own {
+                return Ok(false);
+            }
+            let Some(at) = self.parent.items().iter().position(|k| *k.id() == id) else { return Ok(false) };
+            self.parent.remove(item)?;
+            self.parent.insert(item, at)?;
+            Ok(true)
+        }));
+        match done {
+            Ok(Ok(true)) => Ok(()),
+            _ => Err(fallback()),
+        }
+    }
 }
 
 /// What choosing an item reports.
@@ -300,7 +375,7 @@ impl MacMenu {
             let menu = muda::Menu::new();
             let mut special = Vec::new();
             for m in &bar.menus {
-                let (sub, ids) = submenu(&mut entries, m)?;
+                let (sub, ids) = submenu(&mut entries, m, self.options)?;
                 menu.append(&sub)?;
                 if m.role == MenuRole::Window {
                     window = Some((sub.clone(), ids, window_key(bar)));
@@ -361,7 +436,7 @@ impl MacMenu {
             entries.remove(id);
         }
         let replaced = catch_unwind(AssertUnwindSafe(|| -> muda::Result<WindowMenu> {
-            let (sub, ids) = submenu(&mut entries, spec)?;
+            let (sub, ids) = submenu(&mut entries, spec, self.options)?;
             menu.remove(&old)?;
             if let Err(e) = menu.insert(&sub, at) {
                 let _ = menu.insert(&old, at);
@@ -398,6 +473,7 @@ impl MacMenu {
             let id = native_id(&it.command, |id| items.contains_key(id));
             items.insert(id, it);
         }
+        let mut rebuild = None;
         for (id, e) in &mut self.entries {
             let Some(it) = items.get(id) else { continue };
             if e.label != it.label {
@@ -414,6 +490,15 @@ impl MacMenu {
                     Handle::Check(h) => h.set_enabled(it.enabled),
                 }
                 e.enabled = it.enabled;
+                if !self.options.disabled_key_equivalents
+                    && e.accel.is_some()
+                    && let Err(r) = e.show_key(id, it.enabled)
+                {
+                    rebuild = match (rebuild, r) {
+                        (Some(Rebuild::Bar), _) | (_, Rebuild::Bar) => Some(Rebuild::Bar),
+                        _ => Some(Rebuild::Window),
+                    };
+                }
             }
             // Compare with AppKit's own state: muda flips a check item when it's chosen, and the
             // app's state wins (a radio item chosen again stays selected).
@@ -422,6 +507,13 @@ impl MacMenu {
             {
                 h.set_checked(c);
             }
+        }
+        match rebuild {
+            Some(Rebuild::Bar) => {
+                self.build(bar);
+            }
+            Some(Rebuild::Window) => self.rebuild_window(bar),
+            None => {}
         }
     }
 
@@ -433,21 +525,27 @@ impl MacMenu {
 }
 
 /// A top-level menu, and the muda ids of the items it added to `entries`.
-fn submenu(entries: &mut Entries, m: &Menu) -> muda::Result<(Submenu, Vec<String>)> {
+fn submenu(entries: &mut Entries, m: &Menu, options: MacOptions) -> muda::Result<(Submenu, Vec<String>)> {
     let before: HashSet<String> = entries.keys().cloned().collect();
     let sub = Submenu::new(escape(&m.title), true);
-    append(entries, &sub, &m.children)?;
+    let place = match m.role {
+        MenuRole::Window => Place::Window,
+        MenuRole::Help => Place::Help,
+        _ => Place::Own,
+    };
+    append(entries, &sub, &m.children, place, options)?;
     let ids = entries.keys().filter(|id| !before.contains(*id)).cloned().collect();
     Ok((sub, ids))
 }
 
-fn append(entries: &mut Entries, sub: &Submenu, nodes: &[Node]) -> muda::Result<()> {
+/// `place` is where `sub` is: a submenu of it is a menu of its own, which AppKit adds no rows to.
+fn append(entries: &mut Entries, sub: &Submenu, nodes: &[Node], place: Place, options: MacOptions) -> muda::Result<()> {
     for n in nodes {
         match n {
             Node::Separator => sub.append(&PredefinedMenuItem::separator())?,
             Node::Submenu { label, children, .. } => {
                 let s = Submenu::new(escape(label), !children.is_empty());
-                append(entries, &s, children)?;
+                append(entries, &s, children, Place::Own, options)?;
                 sub.append(&s)?;
             }
             Node::Standard { kind, label } => {
@@ -466,20 +564,21 @@ fn append(entries: &mut Entries, sub: &Submenu, nodes: &[Node]) -> muda::Result<
                 let id = native_id(&it.command, |id| entries.contains_key(id));
                 let chord = it.shortcut;
                 let accel = chord.as_ref().filter(|c| native_ok(c)).and_then(accelerator);
+                let shown = if it.enabled || options.disabled_key_equivalents { accel } else { None };
                 let handle = match it.kind {
                     ItemKind::Check(c) | ItemKind::Radio(c) => {
-                        let h = CheckMenuItem::with_id(id.clone(), escape(&it.label), it.enabled, c, accel);
+                        let h = CheckMenuItem::with_id(id.clone(), escape(&it.label), it.enabled, c, shown);
                         sub.append(&h)?;
                         Handle::Check(h)
                     }
                     ItemKind::Plain => {
-                        let h = MenuItem::with_id(id.clone(), escape(&it.label), it.enabled, accel);
+                        let h = MenuItem::with_id(id.clone(), escape(&it.label), it.enabled, shown);
                         sub.append(&h)?;
                         Handle::Plain(h)
                     }
                 };
                 let target = Target { command: it.command.clone(), chord, layout_shortcut: it.layout_shortcut };
-                let entry = Entry { handle, target, label: it.label.clone(), enabled: it.enabled };
+                let entry = Entry { handle, target, label: it.label.clone(), enabled: it.enabled, accel, parent: sub.clone(), place };
                 entries.insert(id, entry);
             }
         }
