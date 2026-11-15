@@ -1919,6 +1919,7 @@ dependencies = [
  "avif-serialize",
  "craft-heif",
  "craft-jpeg",
+ "craft-media-testkit",
  "craft-metadata",
  "exr",
  "flate2",
