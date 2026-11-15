@@ -267,7 +267,7 @@ impl Xml {
                 }
                 "real" => {
                     let t = self.text_until("real")?;
-                    t.trim().parse::<f64>().map(Value::Real).map_err(|_| FormatError::Malformed(format!("bad real {t:?}")))
+                    t.trim().parse::<f64>().ok().filter(|v| v.is_finite()).map(Value::Real).ok_or_else(|| FormatError::Malformed(format!("bad real {t:?}")))
                 }
                 "date" => Ok(Value::Date(DateValue::Text(self.text_until("date")?.trim().to_string()))),
                 "data" => {
@@ -429,4 +429,16 @@ use super::*;
         assert_eq!(text("&#;&#x;").as_deref(), Some("&#;&#x;"));
     }
 
+    #[test]
+    fn xml_real_must_be_finite() {
+        for bad in ["NaN", "1e999"] {
+            let doc = format!("<dict><key>k</key><real>{bad}</real></dict>");
+            assert!(parse_xml(doc.as_bytes()).is_err(), "{bad}");
+        }
+        for (text, want) in [("1.5", 1.5), ("-2", -2.0), ("0", 0.0)] {
+            let doc = format!("<dict><key>k</key><real>{text}</real></dict>");
+            let v = parse_xml(doc.as_bytes()).unwrap_or_else(|e| panic!("{text} should parse: {e}"));
+            assert_eq!(v.get("k"), Some(&Value::Real(want)), "{text}");
+        }
+    }
 }
