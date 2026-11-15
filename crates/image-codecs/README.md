@@ -1,9 +1,10 @@
 # craft-image-codecs
 
 Codecs for flat raster image formats, written in pure Rust. This crate defines its own `Image`
-type and shares its baseline and extended JPEG decoders through `craft-jpeg`, and its optional
-HEIF decoder through `craft-heif`. It builds for `wasm32-unknown-unknown` and does no filesystem
-I/O: decoders take `&[u8]` and encoders return `Vec<u8>`.
+type and shares its baseline and extended JPEG decoders through `craft-jpeg`, its optional HEIF
+decoder through `craft-heif`, and its optional AVIF decoder through `craft-video`'s AV1 decoder.
+It builds for `wasm32-unknown-unknown` and does no filesystem I/O: decoders take `&[u8]` and
+encoders return `Vec<u8>`.
 
 It follows the "Avoiding GIMP's hole" rules in `docs/architecture.md` §1.1:
 
@@ -57,7 +58,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
 | Amiga IFF (ILBM/PBM) | yes | yes (24-bit ILBM) | U8 | RGB, RGBA | yes (1-bit mask plane on write) | no | no | no | no | no | no | built in |
 | JPEG-LS (`.jls`) | yes (any NEAR; one scan per component) | yes (lossless) | U8, U16 | Gray, RGB | no | no | no | no | no | no | no | built in |
-| AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
+| AVIF | with feature `avif-decode` (native only) | only with feature `avif` | U8, U16 (10/12-bit decodes to U16; PQ/HLG to linear F32) | RGB, RGBA | yes (auxiliary alpha) | read (`colr` prof/rICC) | read | read | no | no | yes | `craft-video` AV1 decoder; `image` + `ravif` to write |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
 
 "Native" means the data is stored and read back without conversion. Anything else is converted by
@@ -178,10 +179,20 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   decodes to RGB. Image sequences, overlays and identity derivations, multilayer HEVC and some
   4:2:2/4:4:4 streams return `CodecError::Unsupported` or `Malformed`, never wrong pixels. Writing
   needs an HEVC encoder and every mature one is C, so HEIF is listed in `ASYMMETRIC_EXCEPTIONS`.
-* **AVIF.** Encoding uses `ravif`, which is pure Rust. Decoding
-  needs `dav1d`, which is C. AVIF is therefore read-unsupported, and write support is gated
-  behind the non-default `avif` feature. In a default build it is neither readable nor writable,
-  so the symmetric guarantee holds. It is listed in `ASYMMETRIC_EXCEPTIONS`.
+* **AVIF.** Encoding uses `ravif`, which is pure Rust, behind the non-default `avif` feature.
+  Decoding (`codecs::avif_decode`, behind the non-default `avif-decode` feature) reads the HEIF
+  boxes itself and decodes the AV1 pictures with `craft-video`'s clean-room pure-Rust AV1 decoder:
+  one `av01` image or a `grid`, 8/10/12-bit, 4:2:0/4:2:2/4:4:4/monochrome, the `nclx` colour (or
+  the sequence header's) and an ICC profile, an `auxl` alpha plane (`prem` too), the Exif and XMP
+  items, and `clap`/`irot`/`imir`, which are applied unless `keep_orientation` is set, as for HEIF.
+  PQ and HLG open as linear light in F32, as HEIF does. Image sequences (animated AVIF), depth and
+  gain-map auxiliary images and layered progressive images aren't read. It is bounded like the
+  other decoders: the `Limits` are checked against the declared size before any picture decodes,
+  against every picture and every output buffer, `max_alloc` caps the AV1 decoder's picture store,
+  box, item and extent counts are capped, item data can't exceed the file, and a decoder panic is
+  `CodecError::Malformed`. wasm32 builds leave AVIF unreadable, since a panic there aborts. In a
+  default build AVIF is neither readable nor writable, so the symmetric guarantee holds; a build
+  with only one of the two features is listed in `ASYMMETRIC_EXCEPTIONS`.
 * **Lossy WebP.** Lossless (VP8L, via `image-webp`) is the default. `webp_lossless: false`
   writes a lossy file with our own clean-room VP8 key-frame encoder (`codecs::vp8`, from
   RFC 6386; `webp_quality` 0–100 on libwebp's scale sets the quantizer). Alpha travels losslessly
