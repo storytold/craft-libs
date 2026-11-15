@@ -975,6 +975,64 @@ fn a_long_name_shared_by_many_use_leaves_is_read_without_copying_it_to_each() {
     assert!(predefined_quit([("src/wide.rs", source.as_str())]).is_empty());
 }
 
+#[test]
+fn std_instant_reports_a_grouped_import_through_a_long_alias_of_std_time() {
+    let source = r#"
+use std::time as standard_time_module_with_a_long_name;
+use standard_time_module_with_a_long_name::{Instant as Clock};
+fn now() {
+    let _ = Clock::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3]);
+}
+
+#[test]
+fn std_instant_reports_a_glob_through_a_long_alias_of_std_time() {
+    let source = r#"
+use std::time as standard_time_module_with_a_long_name;
+use standard_time_module_with_a_long_name::*;
+use standard_time_module_with_a_long_name::{Duration, *};
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3, 4]);
+}
+
+#[test]
+fn std_instant_reports_a_path_of_nine_or_more_segments_that_starts_at_std_time() {
+    let source = r#"
+use std::time as standard_time_module_with_a_long_name;
+use std::time::Instant::a::b::c::d::e::f;
+use standard_time_module_with_a_long_name::Instant::a::b::c::d::e::f::g;
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3, 4]);
+}
+
+#[test]
+fn the_guards_read_an_absolute_path_after_a_return_arrow_or_a_match_arrow() {
+    let clock = r#"
+fn now() -> ::std::time::Instant {
+    match 0 { _ => ::std::time::Instant::now() }
+}
+fn closure() { let _ = || -> ::std::time::Instant { todo() }; }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", clock)])), vec![2, 3, 5]);
+
+    let menu = r#"
+fn item() -> Item {
+    match 0 { _ => ::muda::PredefinedMenuItem::quit(None) }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", menu)])), vec![3]);
+}
+
+#[test]
+fn a_long_alias_of_std_time_shared_by_many_use_leaves_is_read_without_copying_it_to_each() {
+    // A 40,000-byte alias of `std::time` shared by 10,000 leaves.
+    let alias = "n".repeat(40_000);
+    let source = format!("use std::time as {alias};\nuse {alias}::{{{}}};\n", ["Instant"; 10_000].join(", "));
+    assert_eq!(lines(&std_instant([("src/wide.rs", source.as_str())])), vec![2]);
+}
+
 fn finding_paths(findings: &[Finding]) -> Vec<&str> {
     findings.iter().map(|f| f.path.as_str()).collect()
 }
