@@ -826,8 +826,9 @@ mod differential {
         Ok(output)
     }
 
-    /// Deterministic bytes: uniform, or mostly zero (long unary prefixes and escapes).
-    fn bytes(seed: u64, len: usize, sparse: bool) -> Vec<u8> {
+    /// Deterministic bytes: uniform (0), mostly zero (1: long unary prefixes and escapes) or one-heavy (2: short
+    /// prefixes and small residuals, which stay inside the range of every quantizer so the stream decodes to the end).
+    fn bytes(seed: u64, len: usize, kind: u8) -> Vec<u8> {
         let mut x = seed | 1;
         (0..len)
             .map(|_| {
@@ -835,7 +836,11 @@ mod differential {
                 x ^= x >> 7;
                 x ^= x << 17;
                 let b = (x >> 24) as u8;
-                if sparse && x & 0b11 != 0 { 0 } else { b }
+                match kind {
+                    1 if x & 0b11 != 0 => 0,
+                    2 => b | (x >> 40) as u8,
+                    _ => b,
+                }
             })
             .collect()
     }
@@ -855,29 +860,32 @@ mod differential {
     }
 
     /// Every variant the stripe decoder handles (lossless and lossy, Bayer and X-Trans, 12/14/16 bits, full and
-    /// partial stripes, quantizer changes, fine contexts) gives the oracle's samples, or its error, on dense
-    /// pseudo-random entropy streams that reach all contexts, and on sparse ones that reach the escapes.
+    /// partial stripes, quantizer changes, fine contexts) gives the oracle's samples, or its error, on
+    /// uniform pseudo-random entropy streams that reach all contexts, one-heavy ones that every quantizer table decodes
+    /// to the end, and sparse ones that reach the escapes. Each quantizer table must have streams that finish.
     #[test]
     fn stripe_decoder_matches_the_straightforward_one() {
         let quantizers: [Option<&[u8]>; 4] =
             [None, Some([0, 1, 2, 3].as_slice()), Some([2, 2, 7, 0, 40, 255].as_slice()), Some([1, 1, 0, 5, 5, 9, 2].as_slice())];
-        let mut decoded = 0;
+        // uniform and one-heavy streams that decode to the end, per quantizer table
+        let mut finished = [0usize; 4];
         for bits in [12, 14, 16] {
             for xtrans in [false, true] {
-                for q in quantizers {
-                    for (seed, width, sparse) in [(1, BLOCK, false), (2, 301, false), (3, 12, false), (4, BLOCK, true)] {
-                        let data = bytes(seed * 31 + u64::from(bits), 24 << 10, sparse);
+                for (table, q) in quantizers.into_iter().enumerate() {
+                    for (seed, width, kind) in [(1, BLOCK, 0), (2, 301, 0), (3, 12, 0), (4, BLOCK, 1), (5, BLOCK, 2), (6, 301, 2)] {
+                        let data = bytes(seed * 31 + u64::from(bits), 32 << 10, kind);
                         let groups = q.map_or(3, <[u8]>::len);
                         let stripe = Stripe { bytes: &data, quantizers: q, width };
                         let want = reference_stripe(&stripe, groups * 6, bits, xtrans).map_err(|e| e.to_string());
                         let got = decode_stripe(&stripe, groups * 6, bits, xtrans).map_err(|e| e.to_string());
-                        assert_eq!(got, want, "bits {bits}, xtrans {xtrans}, quantizers {q:?}, width {width}, sparse {sparse}");
-                        decoded += usize::from(want.is_ok());
+                        assert_eq!(got, want, "bits {bits}, xtrans {xtrans}, quantizers {q:?}, width {width}, stream kind {kind}");
+                        finished[table] += usize::from(want.is_ok() && kind != 1);
                     }
                 }
             }
         }
-        assert!(decoded >= 24, "only {decoded} of 96 streams decoded to the end, the comparison reaches too little");
+        eprintln!("dense streams decoded to the end per quantizer table (of 30): {finished:?}");
+        assert!(finished.iter().all(|&n| n > 0), "some quantizer table never decodes to the end: {finished:?}");
     }
 
     /// Optional: the CC0 files of docs/raf-corpus.sha256 in the directory named by `LIGHTCRAFT_RAF_CORPUS` (file
@@ -903,5 +911,23 @@ mod differential {
     }
 
     /// FNV-1a over the little-endian decoded samples, recorded from `upstream/main` before the change.
-    const RECORDED: &[(&str, u64)] = &[];
+    const RECORDED: &[(&str, u64)] = &[
+        ("raf-fuji-gfx100-3773.raf", 0x1195d3ab70da7cb4),
+        ("raf-fuji-gfx100-3775.raf", 0xb7c7c1a7717ef93c),
+        ("raf-fuji-gfx100rf-8091.raf", 0x49110f1b80eefe2e),
+        ("raf-fuji-gfx100s-4495.raf", 0x84ab46122f72796c),
+        ("raf-fuji-gfx100s-4503.raf", 0x63debf0afde73e2e),
+        ("raf-fuji-gfx50s-1435.raf", 0xb3e570a6c88455f5),
+        ("raf-fuji-xe5-8509.raf", 0x6a7d5cde2832d4f3),
+        ("raf-fuji-xh2-6001.raf", 0x466a5707ea484f9c),
+        ("raf-fuji-xh2-6002.raf", 0xbbf043676476925a),
+        ("raf-fuji-xm5-7748.raf", 0xedd17960a117a553),
+        ("raf-fuji-xt2-865.raf", 0xe020816ec114436f),
+        ("raf-fuji-xt20-compressed.raf", 0x85014025edc2cebd),
+        ("raf-fuji-xt4-3914.raf", 0x7c98e527dbe01f23),
+        ("raf-fuji-xt4-3918.raf", 0xfb4ba0df34c1c904),
+        ("raf-fuji-xt5-6122.raf", 0x8f76abd57de79a94),
+        ("raf-fuji-xt5-6123.raf", 0x0b2784853c31278d),
+        ("raf-fuji-xt50-7807.raf", 0xa8e2be9cac387ebc),
+    ];
 }
