@@ -13,7 +13,7 @@ use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
-use egui::{Key, Modifiers, Pos2, Rect, Ui, pos2, vec2};
+use egui::{Event, Key, Modifiers, Pos2, Rect, Ui, pos2, vec2};
 
 fn within(a: f32, b: f32) -> bool {
     (a - b).abs() < 1e-3
@@ -153,10 +153,9 @@ fn alt_with_enter_on_the_ramp_picks_the_other_colour() {
 /// Where the host's press began.
 const HUD_AT: Pos2 = Pos2::new(300.0, 200.0);
 
-/// A HUD whose host owns the press: it sets the pointer and the held state, and applies the HUD's edits to its colour.
+/// A HUD whose host owns the press: it sets the held state and the test moves the pointer, and applies the HUD's edits to its colour.
 struct HudRig {
     fixture: Fixture,
-    pointer: Rc<Cell<Option<Pos2>>>,
     held: Rc<Cell<bool>>,
     color: Rc<Cell<Srgba>>,
     events: Rc<RefCell<Vec<EditEvent<Srgba>>>>,
@@ -165,12 +164,11 @@ struct HudRig {
 
 impl HudRig {
     fn new(start: Srgba) -> Self {
-        let pointer = Rc::new(Cell::new(Some(HUD_AT)));
         let (held, color) = (Rc::new(Cell::new(true)), Rc::new(Cell::new(start)));
         let (events, closed) = (Rc::new(RefCell::new(Vec::new())), Rc::new(RefCell::new(Vec::new())));
-        let (p, h, c, e, x) = (pointer.clone(), held.clone(), color.clone(), events.clone(), closed.clone());
+        let (h, c, e, x) = (held.clone(), color.clone(), events.clone(), closed.clone());
         let mut fixture = Fixture::new(move |ui| {
-            let out = ColorHud::new("Color HUD", HUD_AT, Bind::given(c.get())).start(start).pointer(p.get()).held(h.get()).show(ui);
+            let out = ColorHud::new("Color HUD", HUD_AT, Bind::given(c.get())).start(start).held(h.get()).show(ui);
             for event in out.events {
                 if let EditEvent::Update { value, .. } = &event {
                     c.set(*value);
@@ -183,16 +181,16 @@ impl HudRig {
         });
         fixture.room(vec2(600.0, 400.0));
         fixture.settle();
-        HudRig { fixture, pointer, held, color, events, closed }
+        HudRig { fixture, held, color, events, closed }
     }
 
     fn count(&self, which: impl Fn(&EditEvent<Srgba>) -> bool) -> usize {
         self.events.borrow().iter().filter(|event| which(event)).count()
     }
 
-    /// Moves the host's pointer to `to` and runs the passes that see it.
+    /// Moves the pointer to `to` in one frame, then runs two more frames without a move: the pick is made once.
     fn move_to(&mut self, to: Pos2) {
-        self.pointer.set(Some(to));
+        self.fixture.frame(vec![Event::PointerMoved(to)]);
         self.fixture.idle(2);
     }
 

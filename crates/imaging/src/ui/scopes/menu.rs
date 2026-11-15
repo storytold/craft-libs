@@ -79,7 +79,7 @@ impl ScopeCommand {
     }
 
     /// The state of every command: radio and check marks from the settings.
-    pub(super) fn states(state: &ScopePanelState, has_selection: bool) -> Vec<(ScopeCommand, CommandState)> {
+    pub fn states(state: &ScopePanelState, has_selection: bool) -> Vec<(ScopeCommand, CommandState)> {
         let settings = &state.settings;
         let checked = |on: bool| CommandState::new().checked(on);
         vec![

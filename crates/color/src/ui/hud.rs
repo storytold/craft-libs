@@ -13,6 +13,7 @@ use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::Initial;
 use craft_ui::runtime::overlay::CloseReason;
+use craft_ui::runtime::pointer;
 use craft_ui::style::{ComponentStyle, StyleCx, UiTokens};
 use egui::{Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
 
@@ -80,17 +81,10 @@ fn origin(tokens: &UiTokens, at: Pos2, start: Option<Srgba>) -> Pos2 {
     pos2(at.x - pad - point.x, at.y - pad - point.y)
 }
 
-/// The centre of the strip when the start colour sits at `at`: where a story puts the pointer.
-#[cfg(feature = "screen-testing")]
-fn strip_center(tokens: &UiTokens, at: Pos2, start: Option<Srgba>) -> Pos2 {
-    let geometry = Geometry::of(tokens);
-    let point = start_point(geometry, start);
-    geometry.strip(pos2(at.x - point.x, at.y - point.y)).center()
-}
-
 /// The area and hue strip in a popover at `at`, with the start colour under it, driven by the host's press: the pick
-/// maps `pointer` through `ColorArea` and the strip's `value_at`; no pick while `pointer` is still `at`; one gesture
-/// per open; Escape or `held(false)` commits and closes. Every input is a prop of the pass; the HUD keeps no state.
+/// maps the runtime's pass pointer through `ColorArea` and the strip's `value_at`, on a pass the pointer moved in
+/// (a rerun pass of the frame has no move and picks nothing); no pick while the pointer is still `at`; one gesture
+/// per open; Escape or `held(false)` commits and closes. The HUD keeps no state.
 ///
 /// The host shows the HUD while its press is held and stops showing it once `closed` is reported.
 #[must_use = "show the HUD with `show`"]
@@ -100,14 +94,13 @@ pub struct ColorHud<'a> {
     at: Pos2,
     color: Bind<'a, Srgba>,
     start: Option<Srgba>,
-    pointer: Option<Pos2>,
     held: bool,
 }
 
 impl<'a> ColorHud<'a> {
     /// A HUD named `label` at `at` over `color`.
     pub fn new(label: impl Into<Label>, at: Pos2, color: Bind<'a, Srgba>) -> Self {
-        ColorHud { label: label.into(), at, color, start: None, pointer: None, held: true }
+        ColorHud { label: label.into(), at, color, start: None, held: true }
     }
 
     /// The colour under `at` when the host's press began; the popover is placed so this colour's point sits at `at`.
@@ -115,13 +108,6 @@ impl<'a> ColorHud<'a> {
     #[must_use]
     pub fn start(mut self, color: Srgba) -> Self {
         self.start = Some(color);
-        self
-    }
-
-    /// The host's pointer, or `None` while it has none.
-    #[must_use]
-    pub fn pointer(mut self, at: Option<Pos2>) -> Self {
-        self.pointer = at;
         self
     }
 
@@ -134,7 +120,7 @@ impl<'a> ColorHud<'a> {
 
     /// Draws the HUD.
     pub fn show(self, ui: &mut Ui) -> ColorHudOutput {
-        let ColorHud { label, at, mut color, start, pointer, held } = self;
+        let ColorHud { label, at, mut color, start, held } = self;
         let origin = origin(&Env::of(ui).tokens, at, start);
         let shown = Popover::new(label.clone(), Bind::given(true)).at_point(origin).initial_focus(Initial::First).show(ui, |ui, body| {
             // A released press closes the HUD; the pick below commits in this same pass.
@@ -142,7 +128,7 @@ impl<'a> ColorHud<'a> {
                 body.request_close();
             }
             let live = held && body.is_open();
-            let edit = HudPick::new(label.clone(), color.reborrowed(), at, pointer, live).show(ui);
+            let edit = HudPick::new(label.clone(), color.reborrowed(), at, live).show(ui);
             // A commit while the press is held is Escape's: the picked colour stays and the popover closes.
             if held && (&edit.events).into_iter().any(|event| matches!(event, EditEvent::Commit { .. })) {
                 body.request_close_as(CloseReason::Escape);
@@ -199,13 +185,13 @@ impl HudPickStyle {
 }
 
 /// The HUD's value component: it shows the area and the strip and owns the colour's gesture. The gesture slot belongs
-/// to a value component, which drives it from its props (the host's pointer and press) instead of a press of its own:
+/// to a value component, which drives it from the pass pointer and its props (the host's press) instead of a press of its own:
 /// the first pick begins it, later picks update it, and the host's release or the popover's close commits it. Escape
 /// commits too, so the colour stays. It is the popover's one focus stop, so Escape reaches it; the area and strip are
 /// the looks of its two parts and take no input.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 // Unregistered: the component suite drives a component through its own keys, presses and assistive actions, and this one
-// takes its input only from `ColorHud`'s props (the host's pointer and press). `ColorHud`'s stories and the HUD trials
+// takes its input only from the pass pointer and `ColorHud`'s props (the host's press). `ColorHud`'s story and the HUD trials
 // in `tests/it/color_parts.rs` cover it, and its faces are the registered `ColorArea` and `ColorStrip`.
 #[component(unregistered)]
 struct HudPick<'a> {
@@ -213,14 +199,13 @@ struct HudPick<'a> {
     common: Common,
     color: Bind<'a, Srgba>,
     at: Pos2,
-    pointer: Option<Pos2>,
     /// Whether the press is held and the popover open.
     live: bool,
 }
 
 impl<'a> HudPick<'a> {
-    fn new(label: impl Into<Label>, color: Bind<'a, Srgba>, at: Pos2, pointer: Option<Pos2>, live: bool) -> Self {
-        HudPick { common: Common::new(), color, at, pointer, live }.label(label)
+    fn new(label: impl Into<Label>, color: Bind<'a, Srgba>, at: Pos2, live: bool) -> Self {
+        HudPick { common: Common::new(), color, at, live }.label(label)
     }
 }
 
@@ -264,8 +249,11 @@ impl Component for HudPick<'_> {
             }
             return;
         }
+        // Only a pass the pointer moved in picks: a rerun pass of the frame has no move. Injected pointer events (the
+        // control channel's `ToolHost::inject` queue) are raw events of the pass, so they stir it like a real move.
         // The press that opened the HUD picks nothing until the pointer leaves `at`, unless a gesture already runs.
-        let Some(pointer) = self.pointer.filter(|pointer| *pointer != self.at || running) else { return };
+        let moved = pointer::with_pass_pointer(&cx.ctx, |pass| pass.stirred.then_some(pass.hover).flatten());
+        let Some(pointer) = moved.filter(|pointer| *pointer != self.at || running) else { return };
         let geometry = cx.style.geometry();
         let (area, strip) = (geometry.area(cx.rect.min), geometry.strip(cx.rect.min));
         let current = cx.value().copied().unwrap_or(BLACK);
