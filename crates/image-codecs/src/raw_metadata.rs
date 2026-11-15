@@ -228,5 +228,10 @@ mod tests {
         assert_eq!(parts.iter().map(|v| v.0).collect::<Vec<_>>(), [0xe0, 0xe1, 0xe1, 0xe2]);
         assert!(jpeg_segments(JpegMetadata { exif: Some(&vec![0; 65_528]), ..Default::default() }).is_err());
         assert!(jpeg_xmp(&"x".repeat(65_533)).is_err());
+        let profile = vec![42; 65_520];
+        let chunks = jpeg_segments(JpegMetadata { icc: Some(&profile), ..Default::default() }).unwrap();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(&chunks[1].1[12..14], &[1, 2]);
+        assert_eq!(&chunks[2].1[12..14], &[2, 2]);
     }
 }
