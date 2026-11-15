@@ -7,6 +7,7 @@ use craft_behavior::EditEvent;
 use craft_draw::ui::{EraserMode, MIXER_COMBINATIONS, PaintBar, PaintTool, PaintValues};
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::contract::{Entry, Show as _, ShowContainer as _};
+use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Room, trial};
 use egui::{Key, Modifiers};
 
@@ -33,10 +34,15 @@ fn harness(tool: PaintTool, eraser: EraserMode, prepare: impl FnOnce(&mut PaintV
             edits.extend(bar.show(ui).edits);
         });
     });
-    // The options bar spans an application window; in a narrower room its later members scroll out of view, where a
-    // click cannot reach them.
+    // The options bar spans an application window; its members still run past it, and the bar scrolls.
     fixture.in_room(Room::Window).settle();
     (fixture, host)
+}
+
+/// Pages the options bar to its end, so its last members are in view where a click reaches them.
+fn page_to_end(fixture: &mut Fixture) {
+    let bar = fixture.by_label("Options").expect("the options bar");
+    fixture.access(AccessActionKind::ScrollRight, &bar).settle();
 }
 
 fn disabled(fixture: &Fixture, label: &str) -> bool {
@@ -72,6 +78,7 @@ fn paint_bar_rules() {
             v.smoothing.pulled_string = true;
             v.smoothing.adjust_for_zoom = true;
         });
+        page_to_end(&mut fixture);
         let gear = fixture.by_label("Smoothing options").expect("the bar shows the smoothing gear");
         fixture.click(&gear);
         fixture.idle(3);
