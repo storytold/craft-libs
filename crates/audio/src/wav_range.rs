@@ -188,7 +188,7 @@ mod tests {
             self.bytes.len() as u64
         }
         fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
-            self.reads.lock().unwrap().push((offset, buf.len()));
+            self.reads.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push((offset, buf.len()));
             self.bytes.read_at(offset, buf)
         }
     }
@@ -214,7 +214,7 @@ mod tests {
         bytes.extend_from_slice(b"iXML");
         bytes.extend_from_slice(&(xml.len() as u32).to_le_bytes());
         bytes.extend_from_slice(xml);
-        if xml.len() % 2 != 0 {
+        if xml.len() & 1 != 0 {
             bytes.push(0);
         }
         bytes.extend_from_slice(&base[36..]);
