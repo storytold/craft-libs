@@ -203,30 +203,7 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool, inspect: bool) -> (Embed
         let end = declared_end.min(b.len());
         let Some(payload) = b.get(start..end) else { break };
         if inspect {
-            if (0xc0..=0xcf).contains(&marker) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) && payload.len() >= 6 && inspection.components == 0 {
-                inspection.precision = payload[0];
-                inspection.sof = marker;
-                inspection.height = u32::from(u16::from_be_bytes([payload[1], payload[2]]));
-                inspection.width = u32::from(u16::from_be_bytes([payload[3], payload[4]]));
-                inspection.components = payload[5];
-            }
-            if marker == 0xe1 {
-                inspection.app1 = inspection.app1.saturating_add(1);
-            }
-            if marker == 0xe1 && payload.starts_with(b"Exif\0\0") && out.exif.is_none() {
-                inspection.exif_offset = start + 6;
-            }
-            if marker == 0xe2 && payload.starts_with(b"MPF\0") && inspection.mpf.is_none() {
-                inspection.mpf = Some((start + 4, payload[4..].to_vec()));
-            }
-            if marker == 0xe2 && inspection.iso_gainmap.is_none() {
-                if let Some(data) = payload.strip_prefix(b"urn:iso:std:iso:ts:21496:-1\0") {
-                    inspection.iso_gainmap = Some(data.to_vec());
-                }
-            }
-            if marker == 0xee && payload.starts_with(b"Adobe") && payload.len() >= 12 {
-                inspection.adobe_transform = Some(payload[11]);
-            }
+            inspect_marker(&mut inspection, marker, payload, start, out.exif.is_none());
         }
         match marker {
             0xe1 if payload.starts_with(if inspect { b"Exif\0\0" } else { b"Exif\0" }) && out.exif.is_none() => {
@@ -316,6 +293,34 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool, inspect: bool) -> (Embed
         attach_extension(&mut out, b, ext, &ext_headers);
     }
     (out, xmp_packets, inspection)
+}
+
+fn inspect_marker(info: &mut JpegInspection, marker: u8, payload: &[u8], start: usize, needs_exif: bool) {
+    if (0xc0..=0xcf).contains(&marker) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) && payload.len() >= 6 && info.components == 0 {
+        info.precision = payload[0];
+        info.sof = marker;
+        info.height = u32::from(u16::from_be_bytes([payload[1], payload[2]]));
+        info.width = u32::from(u16::from_be_bytes([payload[3], payload[4]]));
+        info.components = payload[5];
+    }
+    if marker == 0xe1 {
+        info.app1 = info.app1.saturating_add(1);
+    }
+    if marker == 0xe1 && payload.starts_with(b"Exif\0\0") && needs_exif {
+        info.exif_offset = start + 6;
+    }
+    if marker == 0xe2 && payload.starts_with(b"MPF\0") && info.mpf.is_none() {
+        info.mpf = Some((start + 4, payload[4..].to_vec()));
+    }
+    if marker == 0xe2
+        && info.iso_gainmap.is_none()
+        && let Some(data) = payload.strip_prefix(b"urn:iso:std:iso:ts:21496:-1\0")
+    {
+        info.iso_gainmap = Some(data.to_vec());
+    }
+    if marker == 0xee && payload.starts_with(b"Adobe") && payload.len() >= 12 {
+        info.adobe_transform = Some(payload[11]);
+    }
 }
 
 /// Put the Extended XMP of JPEG `b` into `out`: when the standard packet links one, only that GUID's
