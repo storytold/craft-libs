@@ -15,7 +15,7 @@ test = false
 default = []
 # `FontsPanel`: the whole interface as one egui panel (it builds for the web too), with the picker, the Glyphs panel, the axis sliders and the
 # Missing Fonts dialog.
-ui = ["dep:craft-behavior", "dep:craft-theme", "dep:egui", "dep:craft-ui", "dep:craft-host", "dep:serde", "dep:log", "dep:skrifa"]
+ui = ["dep:craft-behavior", "dep:craft-theme", "dep:egui", "dep:craft-ui", "dep:craft-host", "dep:serde", "dep:log"]
 # The widgets' stories and trials (`tests/it`).
 screen-testing = ["ui", "craft-ui/testing", "dep:epaint_default_fonts", "egui/default_fonts"]
 
@@ -36,8 +36,8 @@ craft-behavior = { workspace = true, optional = true }
 craft-theme = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
-# Variation axes and named instances of a face (`axes`).
-skrifa = { version = "0.44", default-features = false, features = ["std"], optional = true }
+# Variation axes and named instances of a face (`axes`), on every feature set.
+skrifa = { version = "0.44", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 craft-font-manager = { path = ".", features = ["screen-testing"] }

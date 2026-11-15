@@ -16,8 +16,6 @@ use egui::{Response, Ui};
 
 use crate::picker::{read_bind, write_event};
 use skrifa::raw::types::Tag;
-use skrifa::string::StringId;
-use skrifa::{FontRef, MetadataProvider as _};
 
 craft_ui::words! {
     /// The words of the axis sliders, English by default.
@@ -32,34 +30,6 @@ craft_ui::words! {
     }
 }
 
-/// The axes of the face at `index` in `data`, in font order; empty for a static font.
-pub fn read_axes(data: &[u8], index: u32) -> Vec<FontAxis> {
-    let Ok(font) = FontRef::from_index(data, index) else { return Vec::new() };
-    font.axes()
-        .iter()
-        .map(|axis| {
-            let label = name(&font, axis.name_id()).unwrap_or_default();
-            FontAxis::new(axis.tag().to_be_bytes(), label, axis.min_value(), axis.default_value(), axis.max_value()).hidden(axis.is_hidden())
-        })
-        .collect()
-}
-
-/// The named instances of the face at `index` in `data`, in font order.
-pub fn read_named_instances(data: &[u8], index: u32) -> Vec<NamedInstance> {
-    let Ok(font) = FontRef::from_index(data, index) else { return Vec::new() };
-    let tags: Vec<[u8; 4]> = font.axes().iter().map(|axis| axis.tag().to_be_bytes()).collect();
-    font.named_instances()
-        .iter()
-        .map(|instance| {
-            let label = name(&font, instance.subfamily_name_id()).unwrap_or_default();
-            NamedInstance::new(label, tags.iter().copied().zip(instance.user_coords()).collect())
-        })
-        .collect()
-}
-
-fn name(font: &FontRef, id: StringId) -> Option<String> {
-    font.localized_strings(id).english_or_first().map(|s| s.to_string()).filter(|s| !s.is_empty())
-}
 
 /// The label of an axis: its name when the font gives one, else the registered tag's
 /// (`Weight`, `Width`, `Slant`, `Italic`), else the tag itself.

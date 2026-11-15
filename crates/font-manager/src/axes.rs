@@ -1,11 +1,14 @@
 //! Variable font axes (F14.09): the axes and named instances of a face, and the row of sliders
 //! that edits them (Photoshop's Properties › Character axis sliders; FigCraft's axis panel). The data types
-//! are always available; reading a font and the sliders are on `ui`.
+//! and reading them from a font are always available; the sliders are on `ui`.
 
 #[cfg(feature = "ui")]
 mod sliders;
 #[cfg(feature = "ui")]
 pub use sliders::*;
+
+use skrifa::string::StringId;
+use skrifa::{FontRef, MetadataProvider as _};
 
 /// One variation axis of a face.
 #[derive(Clone, Debug, PartialEq)]
@@ -67,4 +70,33 @@ pub fn matching_instance<'a>(instances: &'a [NamedInstance], values: &[([u8; 4],
         !instance.coordinates.is_empty()
             && instance.coordinates.iter().all(|(tag, at)| values.iter().any(|(t, v)| t == tag && (v - at).abs() <= SAME))
     })
+}
+
+/// The axes of the face at `index` in `data`, in font order; empty for a static font.
+pub fn read_axes(data: &[u8], index: u32) -> Vec<FontAxis> {
+    let Ok(font) = FontRef::from_index(data, index) else { return Vec::new() };
+    font.axes()
+        .iter()
+        .map(|axis| {
+            let label = name(&font, axis.name_id()).unwrap_or_default();
+            FontAxis::new(axis.tag().to_be_bytes(), label, axis.min_value(), axis.default_value(), axis.max_value()).hidden(axis.is_hidden())
+        })
+        .collect()
+}
+
+/// The named instances of the face at `index` in `data`, in font order.
+pub fn read_named_instances(data: &[u8], index: u32) -> Vec<NamedInstance> {
+    let Ok(font) = FontRef::from_index(data, index) else { return Vec::new() };
+    let tags: Vec<[u8; 4]> = font.axes().iter().map(|axis| axis.tag().to_be_bytes()).collect();
+    font.named_instances()
+        .iter()
+        .map(|instance| {
+            let label = name(&font, instance.subfamily_name_id()).unwrap_or_default();
+            NamedInstance::new(label, tags.iter().copied().zip(instance.user_coords()).collect())
+        })
+        .collect()
+}
+
+fn name(font: &FontRef, id: StringId) -> Option<String> {
+    font.localized_strings(id).english_or_first().map(|s| s.to_string()).filter(|s| !s.is_empty())
 }
