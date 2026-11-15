@@ -434,6 +434,38 @@ impl<K: Clone + Eq + Hash + Send + 'static, R: Send + 'static> JobQueue<K, R> {
         ran
     }
 
+    /// Finishes the queue's work now: runs the waiting jobs on the calling thread, best first, and waits up to
+    /// `timeout` for the ones running on lanes (and for the jobs of their keys that wait behind them). Returns whether
+    /// nothing is left waiting or running; each result waits for [`try_recv`](Self::try_recv) as from a lane. For an
+    /// owner that must show finished work at once (automation's "wait for the preview", tests). Never waits for a
+    /// job running on the calling thread.
+    pub fn finish(&self, timeout: Duration) -> bool {
+        let me = thread::current().id();
+        let deadline = Instant::now().checked_add(timeout);
+        loop {
+            let ran = self.run_inline(usize::MAX);
+            let state = self.shared.lock();
+            let elsewhere = state.running.iter().any(|r| r.thread != me);
+            if !elsewhere {
+                // Nothing runs elsewhere: done, or the waiting jobs cannot start here (a stopped queue, or a key
+                // whose job runs on this thread).
+                if state.queued.is_empty() || ran == 0 {
+                    return state.queued.is_empty();
+                }
+                continue;
+            }
+            let left = match deadline {
+                Some(deadline) => deadline.saturating_duration_since(Instant::now()),
+                None => timeout,
+            };
+            if left.is_zero() {
+                return false;
+            }
+            // A lane's job ending may free a key whose next job waits: run it on the next turn.
+            drop(self.shared.ended.wait_timeout(state, left).unwrap_or_else(|e| e.into_inner()));
+        }
+    }
+
     /// Gives waiting work a lane when none is alive: a lane the host dropped unrun (a refused spawn) left jobs
     /// waiting that no later [`submit`](Self::submit) may come to start. An owner that keeps polling a
     /// waiting job calls it each pass; it does nothing while a lane is alive or nothing waits.

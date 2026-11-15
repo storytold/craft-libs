@@ -12,6 +12,7 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 /// A result that may not have arrived.
 #[derive(Clone, Debug, PartialEq)]
@@ -212,6 +213,16 @@ fn queue_of(ctx: &Context, jobs: &Arc<dyn Jobs>) -> Arc<JobQueue<Id, ()>> {
             queue
         }
     })
+}
+
+/// Finishes the jobs of every pending result on `ctx` now: the waiting ones run on the calling thread, and the call
+/// waits up to `timeout` for the ones running on lanes. Returns whether none is left. The results show from the next
+/// pass, which takes them into their slots. This is the queue every `cx.pending` job runs on, the full-window
+/// workspaces' previews included: an app that must reply with a finished preview (automation's `waitPreview`) runs
+/// the pass that asks for it, then this, then one pass more.
+pub fn finish_jobs(ctx: &Context, timeout: Duration) -> bool {
+    let queue = Service::<PendingState>::run(ctx, |state| state.queue.as_ref().map(|(_, queue)| queue.clone()));
+    queue.is_none_or(|queue| queue.finish(timeout))
 }
 
 /// Notes that `id` was asked for in this pass of the running viewport.

@@ -98,3 +98,18 @@ fn queue_gives_back_a_lane_the_host_dropped() {
 }
 
 // `ManualJobs::run_next` runs the oldest job only; a job spawned while it runs waits behind the others.
+
+// `finish` runs every waiting job on the calling thread, the next job of a key included, and reports the queue done;
+// the lanes the host was handed find nothing left.
+#[test]
+fn queue_finish_runs_the_waiting_jobs_inline() {
+    let (queue, jobs, _) = queue(1);
+    queue.submit("a", Priority::VISIBLE, |_| "a");
+    queue.submit("b", Priority::BACKGROUND, |_| "b");
+    assert!(queue.finish(std::time::Duration::ZERO), "nothing runs elsewhere, so nothing is left");
+    assert_eq!(queue.counts().queued + queue.counts().running, 0);
+    jobs.run_all();
+    let mut done = drain(&queue);
+    done.sort_unstable();
+    assert_eq!(done, ["a", "b"], "each job ran once");
+}
