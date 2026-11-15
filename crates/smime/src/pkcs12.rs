@@ -731,7 +731,10 @@ fn public_of(pkcs8: &[u8]) -> Option<Vec<u8>> {
     let scalar = parts.get(1).filter(|p| p.tag == 0x04)?.value;
     let supplied = parts.iter().find(|p| p.tag == 0xa1).map(|p| {
         let (bits, rest) = ber::read(p.value)?;
-        (rest.is_empty() && bits.tag == 0x03 && bits.value.first() == Some(&0)).then(|| &bits.value[1..])
+        if !rest.is_empty() || bits.tag != 0x03 || bits.value.first() != Some(&0) {
+            return None;
+        }
+        bits.value.get(1..)
     });
     use p256::elliptic_curve::sec1::ToSec1Point;
     let point = match private_key_kind(pkcs8) {
