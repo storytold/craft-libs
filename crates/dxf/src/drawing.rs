@@ -749,8 +749,9 @@ mod tests {
             drawing.images.push(ImageDef { name: name.into(), size: (10, 20), handle: Handle(fixed::FIRST_FREE + index as u32), reactors: vec![] });
         }
         drawing.next = fixed::FIRST_FREE + 2;
+        let images = drawing.images.clone();
         let output = drawing.write();
-        for image in &drawing.images {
+        for image in &images {
             assert!(output.contains(&format!("  3\nIMAGE_{:X}\n350\n{:X}\n", image.handle.0, image.handle.0)));
             assert!(output.contains(&format!("  1\n{}\n", image.name)));
             assert!(!output.contains(&format!("  3\n{}\n", image.name)));
