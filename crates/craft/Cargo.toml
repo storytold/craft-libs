@@ -99,6 +99,7 @@ screen-testing = [
     "craft-menu?/screen-testing",
     "craft-pages?/screen-testing",
     "craft-print?/screen-testing",
+    "craft-settings?/testing",
     "craft-review?/screen-testing",
     "craft-table?/screen-testing",
     "craft-text?/screen-testing",
