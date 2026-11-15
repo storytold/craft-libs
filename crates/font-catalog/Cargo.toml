@@ -15,6 +15,7 @@ default = ["system"]
 system = ["dep:fontique"]
 
 [dependencies]
+harfrust = "0.13"
 kurbo = { workspace = true }
 skrifa = { version = "0.47", default-features = false, features = ["std"] }
 thiserror = { workspace = true }

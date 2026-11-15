@@ -26,6 +26,7 @@ mod fontconfig;
 mod outline;
 mod registry;
 mod scan;
+mod shape;
 mod suitcase;
 pub mod system;
 
@@ -34,6 +35,7 @@ pub use env::{FontEnv, Os, font_dirs, font_store_dir, office_font_dirs};
 pub use fontconfig::fontconfig_dirs;
 pub use outline::{FontOutline, OutlineError};
 pub use scan::{FaceInfo, LocalizedName, Source, is_font_file, style_italic, style_weight, style_width};
+pub use shape::{RunGlyph, RunInput, ShapeRunError, shape_run};
 
 #[cfg(test)]
 mod tests;
