@@ -125,6 +125,94 @@ fn roundtrip_extremes_and_restarts() {
     }
 }
 
+/// Re-label an encoded stream as `precision` bits with point transform `pt`: the encoder codes the samples at
+/// `precision - pt` bits, which is what a transformed scan holds.
+fn with_point_transform(mut enc: Vec<u8>, precision: u8, pt: u8) -> Vec<u8> {
+    enc[6] = precision; // SOF3 precision follows SOI, marker and length
+    let sos = enc.windows(2).position(|w| w == [0xff, 0xda]).unwrap();
+    let seg_len = u16::from_be_bytes([enc[sos + 2], enc[sos + 3]]) as usize;
+    enc[sos + 2 + seg_len - 1] = pt;
+    enc
+}
+
+#[test]
+fn roundtrip_point_transform_all_predictors() {
+    for pred in 1..=7u8 {
+        for comps in [1usize, 2, 3] {
+            for (bits, pt) in [(12u8, 1u8), (14, 2), (16, 4), (8, 3)] {
+                let (w, h) = (11, 6);
+                let data = noise(w * h * comps, (bits - pt) as u32, pred as u64 * 17 + comps as u64);
+                let enc = with_point_transform(encode(&data, w, h, comps, bits - pt, pred, 0), bits, pt);
+                let f = decode(&enc, usize::MAX).unwrap();
+                assert_eq!((f.precision, f.point_transform, f.predictor), (bits, pt, pred));
+                let want: Vec<u16> = data.iter().map(|&v| v << pt).collect();
+                assert_eq!(f.data, want, "pred {pred} comps {comps} bits {bits} pt {pt}");
+            }
+        }
+    }
+    // with restart intervals that end mid-row
+    let data = noise(20 * 9 * 2, 10, 9);
+    for rst in [3usize, 7, 20] {
+        let enc = with_point_transform(encode(&data, 20, 9, 2, 10, 4, rst), 12, 2);
+        let want: Vec<u16> = data.iter().map(|&v| v << 2).collect();
+        assert_eq!(decode(&enc, usize::MAX).unwrap().data, want, "restart {rst}");
+    }
+}
+
+#[test]
+fn roundtrip_skewed_categories_with_long_codes() {
+    // category k with probability 2^-(k+1): the table gets codes longer than the lookup, rare 16-bit differences
+    let mut s = 0x9e37_79b9_7f4a_7c15u64;
+    let mut last = 0u32;
+    let data: Vec<u16> = (0..256 * 256)
+        .map(|_| {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let r = (s >> 32) as u32;
+            let cat = r.trailing_zeros().min(16);
+            let mag = (((s >> 8) as u32) & ((1u32 << cat) - 1)) | (1 << cat) >> 1;
+            let d = if s & 1 == 0 { mag } else { 0u32.wrapping_sub(mag) };
+            last = last.wrapping_add(d) & 0xffff;
+            last as u16
+        })
+        .collect();
+    for pred in [1u8, 4, 7] {
+        let enc = encode(&data, 256, 256, 1, 16, pred, 0);
+        assert_eq!(decode(&enc, usize::MAX).unwrap().data, data, "pred {pred}");
+    }
+}
+
+/// `decode_diff` is `decode` followed by `diff_value`, for tables with codes inside and beyond the lookup.
+#[test]
+fn decode_diff_matches_decode_and_diff_value() {
+    for lens in [[2u8, 2, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12], [2, 2, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 16]] {
+        let mut counts = [0u8; 16];
+        for &l in &lens {
+            counts[l as usize - 1] += 1;
+        }
+        let values: Vec<u8> = (0..17).collect(); // lengths are already ascending
+        let t = Huffman::new(&counts, &values).unwrap();
+        let mut s = 77u64;
+        let src: Vec<u8> = (0..6000)
+            .map(|_| {
+                s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((s >> 40) as u8).min(0xfe)
+            })
+            .collect();
+        let (mut a, mut b) = (BitReader::new(&src), BitReader::new(&src));
+        for n in 0..8000 {
+            let want = t.decode(&mut a).map(|ssss| diff_value(&mut a, ssss));
+            let got = t.decode_diff(&mut b, false);
+            assert_eq!(got.ok(), want.ok(), "symbol {n}");
+            assert_eq!(a.peek(32), b.peek(32), "symbol {n}");
+            if want.is_err() {
+                // step past the invalid code so the walk goes on
+                a.consume(1);
+                b.consume(1);
+            }
+        }
+    }
+}
+
 #[test]
 fn constant_image_single_symbol_table() {
     let data = vec![1234u16; 16 * 4];
