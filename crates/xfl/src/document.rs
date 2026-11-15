@@ -454,11 +454,74 @@ mod tests {
 
     #[test]
     fn borrowed_timeline_views_accept_compatible_element_adapters() {
-        let root = craft_xml::parse(
-            br##"<x:DOMDocument xmlns:x="urn:xfl"><x:timelines><x:DOMTimeline name="Old" name="Scene"><x:layers><x:DOMLayer name="Old" name="Layer" color="#abcdef" visible="false"><x:frames><x:DOMFrame index="999" index="3" duration="2" name="Intro" labelType="name" tweenType="motion"/></x:frames></x:DOMLayer></x:layers></x:DOMTimeline></x:timelines></x:DOMDocument>"##,
-        )
-        .unwrap();
-        let timeline_element = root.child(Local("timelines")).unwrap().child(Local("DOMTimeline")).unwrap();
+        #[derive(Debug)]
+        struct AppElement {
+            name: String,
+            attributes: Vec<(String, String)>,
+            children: Vec<AppElement>,
+        }
+
+        impl XflElement for AppElement {
+            type Elements<'a> = std::slice::Iter<'a, Self>;
+
+            fn local_name(&self) -> &str {
+                self.name.rsplit(':').next().unwrap_or(&self.name)
+            }
+
+            fn attr(&self, name: &str) -> Option<&str> {
+                self.attributes.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.as_str())
+            }
+
+            fn elements(&self) -> Self::Elements<'_> {
+                self.children.iter()
+            }
+        }
+
+        fn element(name: &str, attributes: &[(&str, &str)], children: Vec<AppElement>) -> AppElement {
+            AppElement {
+                name: name.to_string(),
+                attributes: attributes.iter().map(|(key, value)| ((*key).to_string(), (*value).to_string())).collect(),
+                children,
+            }
+        }
+
+        let root = element(
+            "x:DOMDocument",
+            &[],
+            vec![element(
+                "x:timelines",
+                &[],
+                vec![element(
+                    "x:DOMTimeline",
+                    &[("name", "Old"), ("name", "Scene")],
+                    vec![element(
+                        "x:layers",
+                        &[],
+                        vec![element(
+                            "x:DOMLayer",
+                            &[("name", "Old"), ("name", "Layer"), ("color", "#abcdef"), ("visible", "false")],
+                            vec![element(
+                                "x:frames",
+                                &[],
+                                vec![element(
+                                    "x:DOMFrame",
+                                    &[
+                                        ("index", "999"),
+                                        ("index", "3"),
+                                        ("duration", "2"),
+                                        ("name", "Intro"),
+                                        ("labelType", "name"),
+                                        ("tweenType", "motion"),
+                                    ],
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+        let timeline_element = root.child("timelines").unwrap().child("DOMTimeline").unwrap();
         let timeline = Timeline::new(timeline_element);
         assert_eq!(timeline.name(), Some("Scene"));
         let layer = timeline.layers().next().unwrap();
