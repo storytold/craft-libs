@@ -40,8 +40,20 @@ pub fn parse_map(data: &[u8]) -> Option<EmbeddedMap<'_>> {
 /// Returns `None` for empty/oversized dimensions, mismatched planes or allocation failure.
 /// Callers retain their own (possibly lower) embedding and image-conversion budgets.
 pub fn write_map(width: usize, height: usize, horizontal: &[u8], vertical: &[u8]) -> Option<Vec<u8>> {
+    write_map_iter(width, height, horizontal.iter().copied(), vertical.iter().copied())
+}
+
+/// Writes exact-sized sample iterators without allocating intermediate planes.
+/// Iterators must terminate after exactly width times height samples; extra or missing
+/// samples are rejected. At most that many samples plus one are consumed per plane.
+pub fn write_map_iter(
+    width: usize,
+    height: usize,
+    mut horizontal: impl Iterator<Item = u8>,
+    mut vertical: impl Iterator<Item = u8>,
+) -> Option<Vec<u8>> {
     let n = width.checked_mul(height)?;
-    if n == 0 || n > MAX_MAP_PIXELS || horizontal.len() != n || vertical.len() != n {
+    if n == 0 || n > MAX_MAP_PIXELS {
         return None;
     }
     let width = u32::try_from(width).ok()?;
@@ -52,8 +64,14 @@ pub fn write_map(width: usize, height: usize, horizontal: &[u8], vertical: &[u8]
     out.extend_from_slice(&height.to_le_bytes());
     out.extend_from_slice(&width.to_le_bytes());
     out.extend_from_slice(&MODE_TWO_PLANES.to_le_bytes());
-    out.extend_from_slice(horizontal);
-    out.extend_from_slice(vertical);
+    for samples in [&mut horizontal as &mut dyn Iterator<Item = u8>, &mut vertical] {
+        for _ in 0..n {
+            out.push(samples.next()?);
+        }
+        if samples.next().is_some() {
+            return None;
+        }
+    }
     Some(out)
 }
 
