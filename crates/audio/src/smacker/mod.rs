@@ -137,6 +137,10 @@ pub struct Chunk {
 /// no limit of the caller's. [`MAX_DECODED_SIZE`] applies in every case. A chunk larger than a
 /// header value that is too small is an error ([`Error::TooLarge`]); pass 0 to decode such a
 /// file.
+///
+/// With no limit of the caller's, a chunk of a few bytes can decode to the full
+/// [`MAX_DECODED_SIZE`], and a file can hold one such chunk for each frame and track. A caller
+/// that reads files it does not trust and keeps what it decodes bounds the total itself.
 pub fn decode(chunk: &[u8], max_decoded_size: u32) -> Result<Chunk> {
     let (size, data) = chunk.split_first_chunk::<4>().ok_or(Error::Truncated)?;
     let size = u32::from_le_bytes(*size);
