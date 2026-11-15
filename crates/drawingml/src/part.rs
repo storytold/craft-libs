@@ -239,4 +239,84 @@ mod tests {
         assert_eq!(back.extra.len(), MAX_EXTRA_COLORS);
         assert_eq!(back.extra[0].tints.as_deref(), Some(&long[..MAX_TINT_ROWS]));
     }
+
+    const THEME_FILE: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme"><a:themeElements>
+<a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="4472C4"/></a:accent1><a:accent2><a:srgbClr val="ED7D31"/></a:accent2><a:accent3><a:srgbClr val="A5A5A5"/></a:accent3><a:accent4><a:srgbClr val="FFC000"/></a:accent4><a:accent5><a:srgbClr val="5B9BD5"/></a:accent5><a:accent6><a:srgbClr val="70AD47"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme>
+<a:fontScheme name="Office"><a:majorFont><a:latin typeface="Calibri Light" panose="020F0302020204030204" pitchFamily="34" charset="0"/><a:ea typeface="" panose="02010600030101010101" charset="-122"/><a:cs typeface="" panose="020B0604020202020204"/></a:majorFont><a:minorFont><a:latin typeface="Calibri" panose="020F0502020204030204"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme>
+<a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:fillStyleLst><a:lnStyleLst><a:ln w="6350"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln><a:ln w="12700"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln><a:ln w="19050"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements>
+<a:objectDefaults/><a:extraClrSchemeLst/><a:custClrLst><a:custClr name="Brand red"><a:srgbClr val="C00000"/></a:custClr><a:custClr name="Brand teal"><a:srgbClr val="008080"/></a:custClr></a:custClrLst>
+<a:extLst><a:ext uri="{05A4C25C-085E-4340-85A3-A5531E510DB2}"><thm15:themeFamily xmlns:thm15="http://schemas.microsoft.com/office/thememl/2012/main" name="Office Theme" id="{62F939B6-93AF-4DB8-9C6B-D6C7DFDC589F}" vid="{4A3C46E8-61CC-4603-A589-7422A47A8E4A}"/></a:ext></a:extLst></a:theme>"#;
+
+    fn theme_round_trip(t: &Theme) -> (String, Theme) {
+        let xml = String::from_utf8(crate::theme::theme_xml(&mut Part::new(), t)).unwrap();
+        let back = crate::theme::read_theme(&mut Part::new(), &parse(xml.as_bytes()).unwrap());
+        (xml, back)
+    }
+
+    #[test]
+    fn a_theme_keeps_system_colours_custom_colours_family_id_and_font_panose() {
+        let t = crate::theme::read_theme(&mut Part::new(), &parse(THEME_FILE.as_bytes()).unwrap());
+        assert_eq!(t.sys_colors.len(), 2);
+        let (xml, back) = theme_round_trip(&t);
+        assert!(xml.contains(r#"<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>"#), "{xml}");
+        assert!(xml.contains(r#"<a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>"#), "{xml}");
+        assert!(xml.contains(r#"<a:dk2><a:srgbClr val="44546A"/></a:dk2>"#), "{xml}");
+        assert!(xml.contains("Brand red") && xml.contains("C00000") && xml.contains("Brand teal") && xml.contains("008080"), "{xml}");
+        assert!(xml.contains("thm15:themeFamily") && xml.contains("{62F939B6-93AF-4DB8-9C6B-D6C7DFDC589F}") && xml.contains("{4A3C46E8-61CC-4603-A589-7422A47A8E4A}"), "{xml}");
+        assert!(xml.contains(r#"<a:latin typeface="Calibri Light" panose="020F0302020204030204" pitchFamily="34" charset="0"/>"#), "{xml}");
+        assert!(xml.contains(r#"<a:ea typeface="" panose="02010600030101010101" charset="-122"/>"#), "{xml}");
+        assert!(xml.contains(r#"<a:cs typeface="" panose="020B0604020202020204"/>"#), "{xml}");
+        assert!(xml.contains(r#"<a:latin typeface="Calibri" panose="020F0502020204030204"/>"#), "{xml}");
+        assert_eq!((&back.sys_colors, &back.colors.colors, &back.fonts, &back.raw_extra), (&t.sys_colors, &t.colors.colors, &t.fonts, &t.raw_extra), "read, write, read changes nothing");
+        // Order: the colour list comes before the extension list, both after the theme elements.
+        let at = |n: &str| xml.find(n).unwrap_or_else(|| panic!("{n} in {xml}"));
+        assert!(at("</a:themeElements>") < at("<a:custClrLst>") && at("<a:custClrLst>") < at("<a:extLst><a:ext uri=\"{05A4"), "{xml}");
+    }
+
+    #[test]
+    fn a_system_colour_slot_that_was_changed_is_written_as_srgb_and_absent_parts_stay_absent() {
+        let mut t = crate::theme::read_theme(&mut Part::new(), &parse(THEME_FILE.as_bytes()).unwrap());
+        t.colors.set(SchemeSlot::Dk1, crate::color::Rgba::rgb(0x11, 0x22, 0x33));
+        let (xml, _) = theme_round_trip(&t);
+        assert!(xml.contains(r#"<a:dk1><a:srgbClr val="112233"/></a:dk1>"#), "{xml}");
+        assert!(xml.contains(r#"<a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>"#), "{xml}");
+        let (plain, back) = theme_round_trip(&Theme::default());
+        assert!(!plain.contains("sysClr") && !plain.contains("custClrLst") && !plain.contains("themeFamily") && !plain.contains("panose"), "{plain}");
+        assert!(back.sys_colors.is_empty() && back.fonts.minor.latin_attrs.is_empty());
+    }
+
+    #[test]
+    fn list_styles_keep_def_ppr_in_every_place_they_are_written() {
+        use crate::text::{ListStyle, TextBody};
+        let src = r#"<p:x xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><a:defPPr marL="457200" algn="ctr"><a:defRPr lang="de-DE" sz="1800"/></a:defPPr><a:lvl1pPr marL="0"><a:defRPr sz="4400"/></a:lvl1pPr></p:x>"#;
+        let ls = crate::read::list_style(&mut Part::new(), &parse(src.as_bytes()).unwrap());
+        let d = ls.default_level.as_ref().expect("defPPr read");
+        assert_eq!((d.para.margin_left, d.para.align, d.run.lang.as_deref(), d.run.size), (Some(36.0), Some(crate::text::Align::Center), Some("de-DE"), Some(18.0)));
+        assert_eq!(ls.level(0).and_then(|l| l.run.size), Some(44.0));
+        for tag in ["p:defaultTextStyle", "p:titleStyle", "p:bodyStyle", "p:otherStyle", "p:notesStyle", "a:lstStyle"] {
+            let mut w = craft_xml::Writer::new();
+            crate::write::list_style(&mut w, &mut Part::new(), tag, &ls);
+            let xml = format!(r#"<p:x xmlns:a="a" xmlns:p="p">{}</p:x>"#, w.finish());
+            assert!(xml.find("<a:defPPr").unwrap() < xml.find("<a:lvl1pPr").unwrap(), "{tag}: {xml}");
+            let back = crate::read::list_style(&mut Part::new(), parse(xml.as_bytes()).unwrap().child(craft_xml::Local(&tag[2..])).unwrap());
+            assert_eq!(back, ls, "{tag}");
+        }
+        // A text body's own list style, and an explicit but empty `a:defPPr`.
+        let tb = TextBody { list_style: ls.clone(), ..TextBody::from_text("x") };
+        let mut w = craft_xml::Writer::new();
+        crate::write::text_body(&mut w, &mut Part::new(), "p:txBody", &tb, false);
+        let xml = format!(r#"<r xmlns:a="a" xmlns:p="p">{}</r>"#, w.finish());
+        let back = crate::read::text_body(&mut Part::new(), parse(xml.as_bytes()).unwrap().child(craft_xml::Local("txBody")).unwrap());
+        assert_eq!(back.list_style, ls);
+        let empty = ListStyle { default_level: Some(Default::default()), ..Default::default() };
+        assert!(!empty.is_empty());
+        let mut w = craft_xml::Writer::new();
+        crate::write::list_style(&mut w, &mut Part::new(), "p:defaultTextStyle", &empty);
+        assert_eq!(w.finish(), "<p:defaultTextStyle><a:defPPr/></p:defaultTextStyle>");
+        // Without `a:defPPr` none is written.
+        let mut w = craft_xml::Writer::new();
+        crate::write::list_style(&mut w, &mut Part::new(), "p:defaultTextStyle", &ListStyle { default_level: None, ..ls });
+        assert!(!w.finish().contains("defPPr"));
+    }
 }

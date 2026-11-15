@@ -706,6 +706,10 @@ pub struct LevelStyle {
 pub struct ListStyle {
     /// Levels 1–9 (index 0–8); `None` = not specified.
     pub levels: Vec<Option<LevelStyle>>,
+    /// The default paragraph style (`a:defPPr`) that sits under levels 1–9; `None` = the list
+    /// style has no `a:defPPr`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_level: Option<LevelStyle>,
 }
 
 impl ListStyle {
@@ -722,7 +726,7 @@ impl ListStyle {
         }
     }
     pub fn is_empty(&self) -> bool {
-        self.levels.iter().all(Option::is_none)
+        self.default_level.is_none() && self.levels.iter().all(Option::is_none)
     }
 }
 

@@ -2,7 +2,7 @@
 
 use crate::color::{ColorScheme, Rgba, SchemeSlot};
 use crate::style::{ColorRef, Effects, Fill};
-use crate::theme::{FontSet, Theme, default_format};
+use crate::theme::{FontSet, Theme, TypefaceAttrs, default_format};
 
 use craft_xml::Writer;
 
@@ -12,9 +12,17 @@ use crate::write as dml;
 
 fn font_set(w: &mut Writer, tag: &str, f: &FontSet) {
     w.open(tag, &[]);
-    w.tag("a:latin").attr("typeface", if f.latin.is_empty() { "Arial" } else { &f.latin }).empty();
-    w.tag("a:ea").attr("typeface", &f.ea).empty();
-    w.tag("a:cs").attr("typeface", &f.cs).empty();
+    let face = |w: &mut Writer, tag: &str, name: &str, a: &TypefaceAttrs| {
+        w.tag(tag)
+            .attr("typeface", name)
+            .attr_opt("panose", a.panose.as_deref())
+            .attr_opt("pitchFamily", a.pitch_family.as_deref())
+            .attr_opt("charset", a.charset.as_deref())
+            .empty();
+    };
+    face(w, "a:latin", if f.latin.is_empty() { "Arial" } else { &f.latin }, &f.latin_attrs);
+    face(w, "a:ea", &f.ea, &f.ea_attrs);
+    face(w, "a:cs", &f.cs, &f.cs_attrs);
     for sf in &f.scripts {
         w.tag("a:font").attr("script", &sf.script).attr("typeface", &sf.typeface).empty();
     }
@@ -74,7 +82,11 @@ pub fn theme_xml(out: &mut dyn Sink, t: &Theme) -> Vec<u8> {
     for slot in SchemeSlot::THEME {
         let tag = format!("a:{}", slot.xml_name());
         w.open(&tag, &[]);
-        w.tag("a:srgbClr").attr("val", t.colors.get(slot).hex()).empty();
+        let rgb = t.colors.get(slot);
+        match t.sys_colors.iter().find(|s| s.slot == slot && s.last == rgb && crate::color::is_system_name(&s.name)) {
+            Some(s) => w.tag("a:sysClr").attr("val", &s.name).attr("lastClr", rgb.hex()).empty(),
+            None => w.tag("a:srgbClr").attr("val", rgb.hex()).empty(),
+        }
         w.close();
     }
     extra_colors(&mut w, &t.colors);
