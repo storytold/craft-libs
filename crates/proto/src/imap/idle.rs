@@ -37,7 +37,7 @@ pub enum IdleEvent {
 }
 
 /// From the text after `* `: `3 EXISTS`.
-fn event_from(rest: &[u8]) -> Result<IdleEvent, ProtoError> {
+fn event_from(rest: &[u8], secrets: &crate::Secrets) -> Result<IdleEvent, ProtoError> {
     let text = String::from_utf8_lossy(rest);
     let mut words = text.split_whitespace();
     let (first, second) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
@@ -47,7 +47,7 @@ fn event_from(rest: &[u8]) -> Result<IdleEvent, ProtoError> {
         (Some(n), "EXPUNGE") => IdleEvent::Expunge(n),
         (Some(n), "RECENT") => IdleEvent::Recent(n),
         _ if first.eq_ignore_ascii_case("BYE") => {
-            return Err(ProtoError::Io(said!("the server ended the session: {reason}", reason = crate::tidy(&text))));
+            return Err(ProtoError::Io(said!("the server ended the session: {reason}", reason = crate::tidy(&secrets.hide(&text)))));
         }
         _ => IdleEvent::Other,
     })
@@ -58,6 +58,10 @@ impl<S: Read + Write> Imap<S> {
     /// a server that refuses (NO, BAD) is an error. While idle, the only commands that may follow
     /// are [`Imap::idle_poll`] and [`Imap::idle_end`].
     pub fn idle_begin(&mut self) -> Result<(), ProtoError> {
+        if self.idle_tag.is_some() {
+            return Err(ProtoError::Protocol(said!("the server is already idling")));
+        }
+        self.idle_pending.clear();
         let tag = self.tag();
         self.text_seen = 0;
         log::trace!("C: {tag} IDLE");
@@ -82,19 +86,31 @@ impl<S: Read + Write> Imap<S> {
                     }
                     self.note_status(&line);
                 }
-                super::Response::Data(values) => self.note_data(&values),
+                super::Response::Data(values) => {
+                    self.note_data(&values);
+                    let event = match (values.first().and_then(parse::Value::number), values.get(1).and_then(parse::Value::atom)) {
+                        (Some(n), Some(word)) if word.eq_ignore_ascii_case("EXISTS") => IdleEvent::Exists(n),
+                        (Some(n), Some(word)) if word.eq_ignore_ascii_case("EXPUNGE") => IdleEvent::Expunge(n),
+                        (Some(n), Some(word)) if word.eq_ignore_ascii_case("RECENT") => IdleEvent::Recent(n),
+                        _ => IdleEvent::Other,
+                    };
+                    self.idle_pending.push_back(event);
+                }
             }
         }
         self.idle_tag = None;
         Err(ProtoError::Protocol(said!("the server sent too many responses to one command")))
     }
 
-    /// The next thing the server says while idle, or `None` when it said nothing in the time the
-    /// stream waits for one read (see [`crate::MAX_LINE`] for the bound on a line).
+    /// The next thing the server says while idle, or `None` after one read if the line is
+    /// incomplete or no bytes arrived (see [`crate::MAX_LINE`] for the bound on a line).
     pub fn idle_poll(&mut self) -> Result<Option<IdleEvent>, ProtoError> {
         let Some(tag) = self.idle_tag.clone() else {
             return Err(ProtoError::Protocol(said!("the server isn't idling")));
         };
+        if let Some(event) = self.idle_pending.pop_front() {
+            return Ok(Some(event));
+        }
         let Some(line) = self.wire.poll_line()? else { return Ok(None) };
         if log::log_enabled!(log::Level::Trace) {
             log::trace!("S: {}", for_trace(&self.secrets.hide(&String::from_utf8_lossy(&line))));
@@ -104,13 +120,18 @@ impl<S: Read + Write> Imap<S> {
             if parse::literal_marker(rest).is_some() {
                 return Err(ProtoError::Protocol(said!("the server sent data it has no reason to send while idle")));
             }
-            return event_from(rest).map(Some);
+            return event_from(rest, &self.secrets).map(Some);
         }
         let text = String::from_utf8_lossy(&line);
         if text.strip_prefix(tag.as_str()).is_some_and(|rest| rest.starts_with(' ')) {
             // The server ended IDLE by itself (a timeout of its own, say).
             self.idle_tag = None;
-            return Ok(Some(IdleEvent::Ended));
+            let status = text.split_ascii_whitespace().nth(1).and_then(parse::Status::parse);
+            return match status {
+                Some(parse::Status::Ok) => Ok(Some(IdleEvent::Ended)),
+                Some(parse::Status::No | parse::Status::Bad) => Err(ProtoError::Rejected(said!("the server didn't end IDLE properly"))),
+                _ => Err(ProtoError::Protocol(said!("the server returned an invalid IDLE completion"))),
+            };
         }
         Err(ProtoError::Protocol(said!("the server said something that is no news while idle")))
     }
@@ -125,7 +146,7 @@ impl<S: Read + Write> Imap<S> {
         log::trace!("C: DONE");
         self.wire.write(b"DONE\r\n")?;
         self.wire.flush()?;
-        let mut events = Vec::new();
+        let mut events: Vec<_> = self.idle_pending.drain(..).collect();
         for _ in 0..MAX_ENDING {
             // The server may take a moment to answer: a few polls of the stream's own wait.
             let mut polled = None;
@@ -140,7 +161,7 @@ impl<S: Read + Write> Imap<S> {
                 if parse::literal_marker(rest).is_some() {
                     return Err(ProtoError::Protocol(said!("the server sent data it has no reason to send while idle")));
                 }
-                events.push(event_from(rest)?);
+                events.push(event_from(rest, &self.secrets)?);
                 continue;
             }
             let text = String::from_utf8_lossy(&line);

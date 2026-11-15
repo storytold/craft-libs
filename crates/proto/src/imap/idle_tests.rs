@@ -6,16 +6,27 @@ use proptest::prelude::*;
 use super::*;
 use crate::script::Script;
 
+// Polling now yields after each underlying read, including partial lines.
+fn next_event(imap: &mut Imap<&mut Script>) -> Result<Option<IdleEvent>, ProtoError> {
+    for _ in 0..crate::MAX_LINE + 2 {
+        match imap.idle_poll() {
+            Ok(None) => continue,
+            result => return result,
+        }
+    }
+    panic!("script failed to produce an event within its bounded input");
+}
+
 #[test]
 fn idle_goes_ahead_hears_news_and_ends() {
     // The go-ahead is the first line; the rest is heard by polling.
     let mut s2 = Script::new("+ idling\r\n* 4 EXISTS\r\n* 1 RECENT\r\n* 2 FETCH (FLAGS (\\Seen))\r\n* 3 EXPUNGE\r\n");
     let mut imap2 = Imap::resume(&mut s2);
     imap2.idle_begin().unwrap();
-    assert_eq!(imap2.idle_poll().unwrap(), Some(IdleEvent::Exists(4)));
-    assert_eq!(imap2.idle_poll().unwrap(), Some(IdleEvent::Recent(1)));
-    assert_eq!(imap2.idle_poll().unwrap(), Some(IdleEvent::Other));
-    assert_eq!(imap2.idle_poll().unwrap(), Some(IdleEvent::Expunge(3)));
+    assert_eq!(next_event(&mut imap2).unwrap(), Some(IdleEvent::Exists(4)));
+    assert_eq!(next_event(&mut imap2).unwrap(), Some(IdleEvent::Recent(1)));
+    assert_eq!(next_event(&mut imap2).unwrap(), Some(IdleEvent::Other));
+    assert_eq!(next_event(&mut imap2).unwrap(), Some(IdleEvent::Expunge(3)));
     assert_eq!(s2.sent(), "A0001 IDLE\r\n");
 
     let mut s3 = Script::new("+ idling\r\n* 5 EXISTS\r\nA0001 OK IDLE terminated\r\n");
@@ -32,14 +43,14 @@ fn a_refusal_or_an_early_end_or_a_goodbye_is_said() {
     let mut s = Script::new("+ idling\r\nA0001 OK the server gave up waiting\r\n");
     let mut imap = Imap::resume(&mut s);
     imap.idle_begin().unwrap();
-    assert_eq!(imap.idle_poll().unwrap(), Some(IdleEvent::Ended));
+    assert_eq!(next_event(&mut imap).unwrap(), Some(IdleEvent::Ended));
     // Not idling any more: nothing to poll or to end.
-    assert!(matches!(imap.idle_poll(), Err(ProtoError::Protocol(_))));
+    assert!(matches!(next_event(&mut imap), Err(ProtoError::Protocol(_))));
     assert!(matches!(imap.idle_end(), Err(ProtoError::Protocol(_))));
     let mut s = Script::new("+ idling\r\n* BYE going away\r\n");
     let mut imap = Imap::resume(&mut s);
     imap.idle_begin().unwrap();
-    assert!(matches!(imap.idle_poll(), Err(ProtoError::Io(_))));
+    assert!(matches!(next_event(&mut imap), Err(ProtoError::Io(_))));
 }
 
 #[test]
@@ -48,7 +59,7 @@ fn what_a_server_has_no_reason_to_send_while_idle_ends_the_session() {
         let mut s = Script::new(format!("+ idling\r\n{hostile}"));
         let mut imap = Imap::resume(&mut s);
         imap.idle_begin().unwrap();
-        let got = imap.idle_poll();
+        let got = next_event(&mut imap);
         assert!(got.is_err() || hostile.is_empty(), "{hostile:?}: {got:?}");
     }
     // A line longer than any a server is allowed.
@@ -58,7 +69,7 @@ fn what_a_server_has_no_reason_to_send_while_idle_ends_the_session() {
     let mut s = Script::whole(long);
     let mut imap = Imap::resume(&mut s);
     imap.idle_begin().unwrap();
-    assert!(matches!(imap.idle_poll(), Err(ProtoError::Protocol(_))));
+    assert!(matches!(next_event(&mut imap), Err(ProtoError::Protocol(_))));
 }
 
 proptest! {
@@ -71,7 +82,7 @@ proptest! {
         if imap.idle_begin().is_ok() {
             // However much is said, polling ends (the script runs out) and nothing is kept without bound.
             for _ in 0..2_000 {
-                match imap.idle_poll() {
+                match next_event(&mut imap) {
                     Ok(Some(_)) => {}
                     Ok(None) | Err(_) => break,
                 }
@@ -86,11 +97,43 @@ proptest! {
         let mut imap = Imap::resume(&mut s);
         if imap.idle_begin().is_ok() {
             for _ in 0..200 {
-                if !matches!(imap.idle_poll(), Ok(Some(_))) {
+                if !matches!(next_event(&mut imap), Ok(Some(_))) {
                     break;
                 }
             }
             let _ = imap.idle_end();
         }
+    }
+}
+
+#[test]
+fn notifications_before_continuation_are_delivered() {
+    let mut s = Script::new("* 4 EXISTS\r\n* 2 EXPUNGE\r\n+ idling\r\nA0001 OK done\r\n");
+    let mut imap = Imap::resume(&mut s);
+    imap.idle_begin().unwrap();
+    assert_eq!(imap.idle_poll().unwrap(), Some(IdleEvent::Exists(4)));
+    assert_eq!(imap.idle_end().unwrap(), vec![IdleEvent::Expunge(2)]);
+}
+
+#[test]
+fn idle_bye_errors_hide_registered_secrets() {
+    for ending in [false, true] {
+        let mut s = Script::new("+ idling\r\n* BYE test-token\r\n");
+        let mut imap = Imap::resume(&mut s);
+        imap.secrets.add("test-token");
+        imap.idle_begin().unwrap();
+        let error = if ending { imap.idle_end().unwrap_err() } else { next_event(&mut imap).unwrap_err() };
+        assert!(!error.to_string().contains("test-token"));
+    }
+}
+
+#[test]
+fn idle_completion_requires_a_valid_success_status() {
+    for (status, rejected) in [("NO", true), ("BAD", true), ("nonsense", false)] {
+        let mut s = Script::new(format!("+ idling\r\nA0001 {status} failed\r\n"));
+        let mut imap = Imap::resume(&mut s);
+        imap.idle_begin().unwrap();
+        let error = next_event(&mut imap).unwrap_err();
+        assert!(if rejected { matches!(error, ProtoError::Rejected(_)) } else { matches!(error, ProtoError::Protocol(_)) });
     }
 }

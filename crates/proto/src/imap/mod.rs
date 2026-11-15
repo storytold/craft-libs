@@ -133,6 +133,7 @@ pub struct Imap<S> {
     skipped: bool,
     /// The tag of the IDLE command the server is waiting in, if it is ([`Imap::idle_begin`]).
     idle_tag: Option<String>,
+    idle_pending: std::collections::VecDeque<IdleEvent>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -403,7 +404,7 @@ fn short_flags(flags: Vec<Value>) -> Vec<String> {
                 while !flag.is_char_boundary(end) {
                     end = end.saturating_sub(1);
                 }
-                flag.truncate(end);
+                flag = flag.get(..end).unwrap_or_default().to_owned();
             }
             flag
         })
@@ -438,6 +439,10 @@ fn set_ranges(set: &str, top: u32) -> Option<Vec<(u32, u32)>> {
     let bound = |text: &str| if text == "*" { Some(top) } else { number(text) };
     set.split(',')
         .map(|part| {
+            // A wildcard-only fetch is resolved by the server, not a stale client snapshot.
+            if part == "*" || part == "*:*" {
+                return Some((1, top));
+            }
             let (a, b) = match part.split_once(':') {
                 Some((a, b)) => (bound(a)?, bound(b)?),
                 None => (bound(part)?, bound(part)?),
@@ -447,21 +452,20 @@ fn set_ranges(set: &str, top: u32) -> Option<Vec<(u32, u32)>> {
         .collect()
 }
 
-/// What a FETCH of a set may report: only UIDs in the set and below UIDNEXT, and not more distinct
+/// What a FETCH of a set may report: only UIDs in the set, and not more distinct
 /// ones than a mailbox of this size can hold.
 struct Wanted {
     ranges: Vec<(u32, u32)>,
-    below: u32,
     cap: usize,
     over: bool,
 }
 
 impl Wanted {
     fn new(set: &str, selected: &Selected) -> Option<Wanted> {
-        let below = if selected.uid_next == 0 { u32::MAX } else { selected.uid_next };
-        let ranges = set_ranges(set, below.saturating_sub(1))?;
+        // UIDNEXT is a SELECT-time snapshot; new deliveries can have larger UIDs.
+        let ranges = set_ranges(set, u32::MAX)?;
         let cap = usize::try_from(selected.exists).unwrap_or(usize::MAX).saturating_mul(2).saturating_add(FETCH_SLACK);
-        Some(Wanted { ranges, below, cap, over: false })
+        Some(Wanted { ranges, cap, over: false })
     }
 
     /// Most responses a fetch of this mailbox may bring: one for each message it may report, but
@@ -471,7 +475,7 @@ impl Wanted {
     }
 
     fn wants(&self, uid: u32) -> bool {
-        uid != 0 && uid < self.below && self.ranges.iter().any(|(from, to)| (*from..=*to).contains(&uid))
+        uid != 0 && self.ranges.iter().any(|(from, to)| (*from..=*to).contains(&uid))
     }
 
     /// Whether one more distinct UID fits after `count`; if not, the command fails.
@@ -690,6 +694,7 @@ impl<S: Read + Write> Imap<S> {
             skip_long: false,
             skipped: false,
             idle_tag: None,
+            idle_pending: std::collections::VecDeque::new(),
         }
     }
 

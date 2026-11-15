@@ -20,6 +20,8 @@ pub(crate) struct Wire<S> {
     /// Bytes read from the stream and not handed out yet (from `start`).
     buf: Vec<u8>,
     start: usize,
+    // Bytes already searched for a newline in the current pending polling line.
+    poll_scanned: usize,
 }
 
 fn closed() -> ProtoError {
@@ -37,7 +39,7 @@ fn io_error(e: &std::io::Error) -> ProtoError {
 
 impl<S> Wire<S> {
     pub(crate) fn new(stream: S) -> Self {
-        Wire { stream, buf: Vec::new(), start: 0 }
+        Wire { stream, buf: Vec::new(), start: 0, poll_scanned: 0 }
     }
 
     /// Whether the server sent more than has been read so far.
@@ -59,6 +61,7 @@ impl<S> Wire<S> {
 impl<S: Read + Write> Wire<S> {
     /// Read some more into the buffer; the end of the stream is an error.
     fn fill(&mut self) -> Result<(), ProtoError> {
+        self.poll_scanned = 0;
         if self.start > 0 {
             self.buf.drain(..self.start.min(self.buf.len()));
             self.start = 0;
@@ -82,6 +85,7 @@ impl<S: Read + Write> Wire<S> {
     }
 
     fn next_line(&mut self, skip: bool) -> Result<Option<Vec<u8>>, ProtoError> {
+        self.poll_scanned = 0;
         // How much of the pending bytes has been searched for a line feed already.
         let mut scanned = 0usize;
         // Bytes of an over-long line dropped so far, when one is being read past.
@@ -126,15 +130,17 @@ impl<S: Read + Write> Wire<S> {
         }
     }
 
-    /// The next line if one arrives before the stream's own read timeout, `None` when the stream
-    /// had nothing for that long (IDLE waits like this, a second at a time, so that its owner can
+    /// The next line after at most one underlying read; `None` for a partial line or when
+    /// the stream times out (IDLE waits like this, a second at a time, so that its owner can
     /// look at the clock and at whether it was told to stop). Bytes of a line that came so far are
     /// kept for the next call. A line over [`MAX_LINE`] is an error, as for [`Wire::read_line`].
     pub(crate) fn poll_line(&mut self) -> Result<Option<Vec<u8>>, ProtoError> {
-        let mut interrupts = 0;
+        let mut read_once = false;
         loop {
             let pending = self.buf.get(self.start..).unwrap_or(&[]);
-            if let Some(end) = pending.iter().position(|b| *b == b'\n') {
+            let scanned = self.poll_scanned.min(pending.len());
+            if let Some(offset) = pending.get(scanned..).unwrap_or(&[]).iter().position(|b| *b == b'\n') {
+                let end = scanned.saturating_add(offset);
                 let line = pending.get(..end).unwrap_or(&[]);
                 let line = line.strip_suffix(b"\r").unwrap_or(line);
                 if line.len() > MAX_LINE {
@@ -142,23 +148,28 @@ impl<S: Read + Write> Wire<S> {
                 }
                 let line = line.to_vec();
                 self.start = self.start.saturating_add(end).saturating_add(1);
+                self.poll_scanned = 0;
                 return Ok(Some(line));
             }
-            // The limit is on the line itself; a CR may still come on top.
             if pending.len() > MAX_LINE + 1 {
                 return Err(too_long());
+            }
+            self.poll_scanned = pending.len();
+            // One underlying read per poll lets the caller check cancellation even when
+            // a hostile peer trickles bytes without ever triggering the read timeout.
+            if read_once {
+                return Ok(None);
             }
             if self.start > 0 {
                 self.buf.drain(..self.start.min(self.buf.len()));
                 self.start = 0;
             }
             let mut tmp = vec![0u8; CHUNK];
+            read_once = true;
             match self.stream.read(&mut tmp) {
                 Ok(0) => return Err(closed()),
-                // A stream that claims more than the buffer holds is lying.
                 Ok(n) => self.buf.extend_from_slice(tmp.get(..n.min(tmp.len())).unwrap_or(&[])),
-                Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => return Ok(None),
-                Err(e) if e.kind() == ErrorKind::Interrupted && interrupts < MAX_INTERRUPTS => interrupts += 1,
+                Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock | ErrorKind::Interrupted) => return Ok(None),
                 Err(e) => return Err(io_error(&e)),
             }
         }
@@ -166,6 +177,7 @@ impl<S: Read + Write> Wire<S> {
 
     /// Exactly `n` bytes (at most [`MAX_LITERAL`]).
     pub(crate) fn read_block(&mut self, n: usize) -> Result<Vec<u8>, ProtoError> {
+        self.poll_scanned = 0;
         if n > MAX_LITERAL {
             return Err(ProtoError::Protocol(said!("the server sent {n} bytes in one piece, more than MailCraft accepts", n)));
         }
@@ -226,6 +238,37 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use crate::script::{Broken, Script};
+
+    #[test]
+    fn polling_reads_once_and_retains_linear_scan_progress() {
+        struct ByteAtATime {
+            bytes: std::io::Cursor<Vec<u8>>,
+            reads: usize,
+        }
+        impl Read for ByteAtATime {
+            fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                self.bytes.read(&mut out[..1])
+            }
+        }
+        impl Write for ByteAtATime {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut wire = Wire::new(ByteAtATime { bytes: std::io::Cursor::new(b"abc\n".to_vec()), reads: 0 });
+        for scanned in 1..=3 {
+            assert_eq!(wire.poll_line().unwrap(), None);
+            assert_eq!(wire.poll_scanned, scanned);
+            assert_eq!(wire.get_mut().reads, scanned);
+        }
+        assert_eq!(wire.poll_line().unwrap(), Some(b"abc".to_vec()));
+        assert_eq!(wire.get_mut().reads, 4);
+        assert_eq!(wire.poll_scanned, 0);
+    }
 
     #[test]
     fn lines_and_blocks_arrive_in_pieces() {

@@ -104,11 +104,11 @@ fn only_uids_that_were_asked_for_and_exist_are_kept() {
     let mut s = Script::new(server);
     let got = opened(&mut s, 5, 11).uid_fetch_flags("3,8:9").unwrap();
     assert_eq!(got.iter().map(|f| f.uid).collect::<Vec<_>>(), [3, 9]);
-    // Not below UIDNEXT: 10 isn't, so `*` stops short of it.
+    // UIDNEXT is only a snapshot: later deliveries must not be discarded.
     let sizes = server.replace("FLAGS (\\Seen)", "RFC822.SIZE 5").replace("FLAGS ()", "RFC822.SIZE 6");
     let mut s = Script::new(sizes);
     let got = opened(&mut s, 5, 10).uid_fetch_sizes("1:*").unwrap();
-    assert_eq!(got, [(3, 5), (7, 6), (9, 6)]);
+    assert_eq!(got, [(3, 5), (7, 6), (9, 6), (10, 6), (4000000000, 6)]);
 }
 
 #[test]
@@ -183,4 +183,26 @@ fn a_folder_with_more_messages_than_other_commands_may_answer_still_reads() {
     let mut imap = opened(&mut s, exists, exists + 1);
     assert!(matches!(imap.uid_fetch_flags("1:*"), Err(ProtoError::Protocol(_))));
     assert_eq!(imap.response_cap, MAX_RESPONSES);
+}
+
+#[test]
+fn short_flags_release_large_backing_allocations() {
+    let flags = short_flags(vec![Value::Atom("A".repeat(1024 * 1024))]);
+    assert_eq!(flags[0].len(), MAX_FLAG_LEN);
+    assert!(flags[0].capacity() <= MAX_FLAG_LEN);
+}
+
+#[test]
+fn wildcard_fetch_accepts_deliveries_after_select() {
+    let server = "* 1 FETCH (UID 10 FLAGS ())\r\nA0001 OK done\r\n";
+    let mut s = Script::new(server);
+    assert_eq!(opened(&mut s, 1, 10).uid_fetch_flags("*").unwrap()[0].uid, 10);
+}
+
+#[test]
+fn brackets_in_flag_keywords_do_not_consume_body_sections() {
+    for flag in ["x[", "BODY["] {
+        let mut s = Script::new(format!("* 1 FETCH (UID 3 FLAGS ({flag}) BODY[] {{2}}\r\nok)\r\nA0001 OK done\r\n"));
+        assert_eq!(opened(&mut s, 1, 4).uid_fetch_message(3).unwrap().unwrap().body, Some(b"ok".to_vec()));
+    }
 }

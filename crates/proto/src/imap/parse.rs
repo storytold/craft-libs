@@ -139,7 +139,9 @@ fn scan(text: &[u8], stack: &mut Vec<Vec<Value>>) -> Result<(), ProtoError> {
                 i = next;
             }
             _ => {
-                let end = atom_end(text, i, last_close);
+                let fetch_attribute = stack.len() == 2
+                    && stack.first().and_then(|root| root.get(1)).and_then(Value::atom).is_some_and(|word| word.eq_ignore_ascii_case("FETCH"));
+                let end = atom_end(text, i, if fetch_attribute { last_close } else { None });
                 push(stack, Value::Atom(String::from_utf8_lossy(text.get(i..end).unwrap_or(&[])).into_owned()));
                 i = end;
             }
@@ -175,7 +177,9 @@ fn atom_end(text: &[u8], start: usize, last_close: Option<usize>) -> usize {
     while let Some(&b) = text.get(i) {
         match b {
             b' ' | b'\t' | b'(' | b')' if i > start => break,
-            b'[' if last_close.is_some_and(|close| close > i) => {
+            b'[' if last_close.is_some_and(|close| close > i)
+                && text.get(start..i).is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"BODY") || prefix.eq_ignore_ascii_case(b"BODY.PEEK")) =>
+            {
                 let close = text.get(i..).and_then(|rest| rest.iter().position(|b| *b == b']')).unwrap_or(0);
                 i += close + 1;
             }
