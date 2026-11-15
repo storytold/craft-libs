@@ -221,6 +221,23 @@ fn auto_mask_paints_the_same_shape_at_preview_and_full_size() {
                 differ += f32::from(u8::from(s != b));
             }
         }
+        if let Ok(dir) = std::env::var("CRAFT_SCENE_OUT") {
+            let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+            for y in 0..h {
+                for x in 0..w {
+                    let (bx, by) = (((x as f64 + 0.5) * 2.5) as usize, ((y as f64 + 0.5) * 2.5) as usize);
+                    let p = img.data[by * bw + bx].map(|v| (v.max(0.0).powf(1.0 / 2.2) * 200.0).min(255.0) as u8);
+                    let (s, b) = (small.data[y * w + x] >= 0.5, big.data[by * bw + bx] >= 0.5);
+                    out.extend_from_slice(&match (s, b) {
+                        (true, true) => [200, 0, 0],
+                        (true, false) => [0, 255, 0],
+                        (false, true) => [0, 0, 255],
+                        _ => p,
+                    });
+                }
+            }
+            let _ = std::fs::write(format!("{dir}/scene-{}.ppm", pts.len()), out);
+        }
         let share = differ / painted_px.max(1.0);
         eprintln!("preview vs full size: {:.1} % of the painted pixels differ", 100.0 * share);
         assert!(share < 0.04, "the shapes differ over {share}");

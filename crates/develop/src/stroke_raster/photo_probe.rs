@@ -12,6 +12,10 @@
 //! costs and memberships), `CRAFT_AUTOMASK_PIXEL=x,y` (which dabs paint that pixel, and why),
 //! `CRAFT_AUTOMASK_POINTS` (JSON: name → `[x, y]`; prints the photo there, and dumps the planes).
 //!
+//! `CRAFT_AUTOMASK_WINDOW=x,y,w,h` (fractions of the photo) renders only that window of the
+//! output, as a zoomed view does, and compares its mask with the whole frame's there. The overlay
+//! draws each stroke's path in yellow.
+//!
 //! `cargo test -p craft-develop --lib photo_probe -- --nocapture`
 
 use super::*;
@@ -29,6 +33,8 @@ fn ppm(path: &std::path::Path, w: usize, h: usize, px: impl Fn(usize, usize) -> 
 }
 
 #[test]
+// (a diagnostic with many optional parts, each a few lines)
+#[allow(clippy::cognitive_complexity)]
 fn photo_probe() {
     let Ok(path) = std::env::var("CRAFT_AUTOMASK_RAW") else { return };
     let out = std::path::PathBuf::from(std::env::var("CRAFT_AUTOMASK_OUT").unwrap_or_else(|_| ".".into()));
@@ -53,10 +59,24 @@ fn photo_probe() {
     if let Some(p) = process {
         base = base.merged(&serde_json::json!({"process": p})).unwrap();
     }
-    let req = RenderRequest::exact(rw, rh);
+    let full_req = RenderRequest::exact(rw, rh);
+    let mut req = full_req;
+    let window = std::env::var("CRAFT_AUTOMASK_WINDOW").ok().map(|s| {
+        let v: Vec<f64> = s.split(',').map(|t| t.parse().unwrap()).collect();
+        crate::PixelWindow {
+            x: (v[0] * rw as f64) as usize,
+            y: (v[1] * rh as f64) as usize,
+            w: (v[2] * rw as f64) as usize,
+            h: (v[3] * rh as f64) as usize,
+        }
+    });
+    req.window = window;
     let cache = StageCache::default();
     let plain = render_cached(&src, &info, &base, &req, &cache).image;
     let (w, h) = (plain.width, plain.height);
+    // the whole output's size (a window's pixels are those of an output this big)
+    let (fw, fh) = if window.is_some() { (rw, rh) } else { (w, h) };
+    let (wx, wy) = window.map_or((0, 0), |k| (k.x, k.y));
     eprintln!("rendered {w}×{h}, process {:?}", base.process.process());
     for (case, strokes) in cases.as_object().unwrap() {
         let strokes: Vec<BrushStroke> = strokes
@@ -82,6 +102,20 @@ fn photo_probe() {
         let t = std::time::Instant::now();
         let alpha = crate::mask_alpha_cached(&src, &info, &s, &req, &StageCache::default(), 1).unwrap();
         eprintln!("{case}: mask in {:?}", t.elapsed());
+        if let Some(k) = window {
+            // the zoomed view against the whole frame, over the view
+            let whole = crate::mask_alpha_cached(&src, &info, &s, &full_req, &StageCache::default(), 1).unwrap();
+            let (mut d, mut differ, mut painted_px) = (0f32, 0f32, 0f32);
+            for y in 0..alpha.height.min(k.h) {
+                for x in 0..alpha.width.min(k.w) {
+                    let (a, b) = (alpha.data[y * alpha.width + x], whole.data[(y + k.y) * whole.width + x + k.x]);
+                    d = d.max((a - b).abs());
+                    painted_px += f32::from(u8::from(a >= 0.5 || b >= 0.5));
+                    differ += f32::from(u8::from((a >= 0.5) != (b >= 0.5)));
+                }
+            }
+            eprintln!("{case}: window vs whole frame max difference {d:.4}, {:.2} % of painted pixels differ", 100.0 * differ / painted_px.max(1.0));
+        }
         if std::env::var("CRAFT_AUTOMASK_LIVE").is_ok() {
             // painted as a UI paints it: the stroke growing a few points at a time, each render
             // from the same cache (the live path), the last compared with the one-shot render
@@ -119,10 +153,55 @@ fn photo_probe() {
                 later.last()
             );
         }
+        // the strokes' paths, in output pixels of the view
+        let mut path = vec![false; w * h];
+        for st in &strokes {
+            for seg in st.points.windows(2) {
+                let (a, b) = (seg[0], seg[1]);
+                let n = ((b.x - a.x) * fw as f64).hypot((b.y - a.y) * fh as f64).ceil() as usize * 2 + 1;
+                for t in 0..=n {
+                    let t = t as f64 / n as f64;
+                    let (x, y) = ((a.x + (b.x - a.x) * t) * fw as f64 - wx as f64, (a.y + (b.y - a.y) * t) * fh as f64 - wy as f64);
+                    if x >= 0.0 && y >= 0.0 && (x as usize) < w && (y as usize) < h {
+                        path[y as usize * w + x as usize] = true;
+                    }
+                }
+            }
+        }
         ppm(&out.join(format!("{case}-overlay.ppm")), w, h, |x, y| {
+            if path[y * w + x] {
+                return [255, 230, 0];
+            }
             let p = plain.data[y * w + x];
             let a = alpha.data[y * w + x] * 0.55;
             [(p[0] as f32 * (1.0 - a) + 255.0 * a) as u8, (p[1] as f32 * (1.0 - a)) as u8, (p[2] as f32 * (1.0 - a)) as u8]
+        });
+        // where the plain brush (no Auto Mask) would paint but this stroke doesn't: cyan
+        let mut ps = s.clone();
+        if let MaskShape::Brush { strokes } = &mut ps.masks[0].components[0].shape {
+            for st in strokes {
+                st.auto_mask = false;
+            }
+        }
+        let reach = crate::mask_alpha_cached(&src, &info, &ps, &req, &StageCache::default(), 1).unwrap();
+        let (mut inreach, mut got) = (0f32, 0f32);
+        for (a, r) in alpha.data.iter().zip(&reach.data) {
+            if *r >= 0.95 {
+                inreach += 1.0;
+                got += f32::from(u8::from(*a >= 0.9));
+            }
+        }
+        eprintln!("{case}: of the plain brush's solid footprint {:.1} % painted ≥ 0.9", 100.0 * got / inreach.max(1.0));
+        ppm(&out.join(format!("{case}-reach.ppm")), w, h, |x, y| {
+            if path[y * w + x] {
+                return [255, 230, 0];
+            }
+            let p = plain.data[y * w + x];
+            let a = alpha.data[y * w + x] * 0.55;
+            let gap = (reach.data[y * w + x] - alpha.data[y * w + x]).max(0.0) * 0.6;
+            let mix = |c: u8, t: f32, v: f32| (c as f32 * (1.0 - t) + v * t) as u8;
+            let q = [mix(p[0], a, 255.0), mix(p[1], a, 0.0), mix(p[2], a, 0.0)];
+            [mix(q[0], gap, 0.0), mix(q[1], gap, 255.0), mix(q[2], gap, 255.0)]
         });
         ppm(&out.join(format!("{case}-alpha.ppm")), w, h, |x, y| [(alpha.data[y * w + x] * 255.0) as u8; 3]);
         s.masks[0].adjust.exposure = 1.5;
@@ -143,10 +222,40 @@ fn photo_probe() {
                 let refc = reference(&bd, k, &cells, &prep.img, &prep.log_l).unwrap();
                 let g = grow(&bd, k, bd.r, &cells, &prep.img, &prep.log_l, refc).unwrap();
                 eprintln!("dab {k} at {:?} cell {} ref {refc:?} grid at cell ({}, {}) free {:?}", bd.dabs[k], cells.size, g.i0, g.j0, g.free);
+                // the grid over the photo: each cell's path cost (green free, yellow partial, red
+                // past PATH_NONE, dark unreached), membership as brightness
+                let cs = cells.size;
+                ppm(&out.join(format!("{case}-dab{k}.ppm")), w, h, |x, y| {
+                    let p = plain.data[y * w + x];
+                    let (ci, cj) = cells.of_pixel(x, y);
+                    if ci < g.i0 || cj < g.j0 || ci >= g.i0 + g.n || cj >= g.j0 + g.m {
+                        return [p[0] / 3, p[1] / 3, p[2] / 3];
+                    }
+                    let q = (cj - g.j0) * g.n + (ci - g.i0);
+                    let c = g.cost[q];
+                    let col = if !c.is_finite() {
+                        [0.0, 0.0, 0.0]
+                    } else if c <= PATH_FULL {
+                        [0.0, 255.0, 0.0]
+                    } else if c <= PATH_NONE {
+                        [255.0, 220.0, 0.0]
+                    } else {
+                        [255.0, 0.0, 0.0]
+                    };
+                    let border = (x + cells.ox).is_multiple_of(cs) || (y + cells.oy).is_multiple_of(cs);
+                    let t = if border { 0.6 } else { 0.3 };
+                    let mb = g.member[q] * g.uniform[q];
+                    let dot = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(bd.dabs[k]) < 2.0;
+                    if dot {
+                        return [255, 255, 255];
+                    }
+                    std::array::from_fn(|i| ((p[i] as f32 * (1.0 - t) + col[i] * t) * (0.4 + 0.6 * mb)) as u8)
+                });
                 for j in 0..g.m {
                     let row: String = (0..g.n).map(|i| format!("{:>5.2}", g.cost[j * g.n + i].min(9.99))).collect();
-                    let ls: String = (0..g.n).map(|i| format!("{:>5.2}", g.member[j * g.n + i] * g.uniform[j * g.n + i])).collect();
-                    eprintln!("{row}  {ls}");
+                    let ls: String = (0..g.n).map(|i| format!("{:>5.2}", g.member[j * g.n + i])).collect();
+                    let us: String = (0..g.n).map(|i| format!("{:>5.2}", g.uniform[j * g.n + i])).collect();
+                    eprintln!("{row}  {ls}  {us}");
                 }
             }
             if let Some((px, py)) = std::env::var("CRAFT_AUTOMASK_PIXEL")
@@ -170,7 +279,7 @@ fn photo_probe() {
                     let mut near = Vec::new();
                     for j in cj.saturating_sub(2)..=cj + 2 {
                         for i in ci.saturating_sub(2)..=ci + 2 {
-                            if let Some((m, f)) = g.get(i, j)
+                            if let Some((m, f, _)) = g.get(i, j)
                                 && m > 0.05
                             {
                                 near.push(format!(

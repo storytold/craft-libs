@@ -236,7 +236,7 @@ impl Smoothing {
             eps: SMOOTH_EPS,
             reach: guided_reach(sigma, w, h),
             chroma_box: (r / (4.0 * CELLS_PER_RADIUS)).round() as usize,
-            close: (r / 8.0).round().max(1.0) as usize,
+            close: (r / 6.0).round().max(1.0) as usize,
             refine_sigma,
             refine_eps: refine_eps * 0.5,
             refine_reach: guided_reach(refine_sigma, w, h),
@@ -253,36 +253,55 @@ struct Smoothed {
     ch: Rgb32f,
 }
 
-/// The mean of `img` over squares `r` px from each pixel (separable, edges clamped).
-fn box_mean(img: &Rgb32f, r: usize) -> Rgb32f {
+/// The colour difference [`chroma_mean`] averages up to, at least, and how many times the
+/// typical difference to the pixels around (their lower quartile: noise) it averages up to more.
+const CHROMA_MEAN_RANGE: f32 = 0.04;
+const CHROMA_MEAN_NOISE: f32 = 4.0;
+
+/// The chromaticity `ch` averaged over a square `r` px from each pixel (25 samples across it,
+/// edges clamped), taking only the samples of much its colour: noise is averaged away, but a
+/// pixel beside an edge only the colour marks (a warm white against a grey wall) keeps its own
+/// side's colour rather than taking some of its neighbour's.
+fn chroma_mean(ch: &Rgb32f, r: usize) -> Rgb32f {
     if r == 0 {
-        return img.clone();
+        return ch.clone();
     }
-    let (w, h) = (img.width, img.height);
-    let pass = |src: &Rgb32f, horizontal: bool| {
-        let mut out = Rgb32f::new(w, h);
-        for y in 0..h {
-            for x in 0..w {
-                let (c, n) = if horizontal { (x, w) } else { (y, h) };
-                let (a, b) = (c.saturating_sub(r), (c + r).min(n.saturating_sub(1)));
-                let mut acc = [0f32; 3];
-                for t in a..=b {
-                    let k = if horizontal { y * w + t } else { t * w + x };
-                    if let Some(v) = src.data.get(k) {
-                        for (s, q) in acc.iter_mut().zip(v) {
-                            *s += q;
-                        }
+    let (w, h) = (ch.width, ch.height);
+    let mut offs: Vec<i64> = [-(r as i64), -(r as i64 / 2), 0, r as i64 / 2, r as i64].to_vec();
+    offs.dedup();
+    let mut out = Rgb32f::new(w, h);
+    let mut d = Vec::with_capacity(offs.len() * offs.len());
+    for y in 0..h {
+        for x in 0..w {
+            let Some(c) = ch.data.get(y * w + x).copied() else { continue };
+            d.clear();
+            for &oy in &offs {
+                let sy = (y as i64 + oy).clamp(0, h as i64 - 1) as usize;
+                for &ox in &offs {
+                    let sx = (x as i64 + ox).clamp(0, w as i64 - 1) as usize;
+                    if let Some(s) = ch.data.get(sy * w + sx) {
+                        d.push((chroma_distance(*s, c), *s));
                     }
                 }
-                let cnt = (b + 1 - a) as f32;
-                if let Some(o) = out.data.get_mut(y * w + x) {
-                    *o = acc.map(|s| s / cnt);
+            }
+            let mut ds: Vec<f32> = d.iter().map(|e| e.0).collect();
+            ds.sort_by(f32::total_cmp);
+            let q = ds.get(ds.len() / 4).copied().unwrap_or(0.0);
+            let t = CHROMA_MEAN_RANGE.max(CHROMA_MEAN_NOISE * q);
+            let (mut acc, mut wsum) = ([0f32; 3], 0f32);
+            for (dist, s) in &d {
+                let wt = 1.0 - masks_smooth(t, 2.0 * t, *dist);
+                for (a, v) in acc.iter_mut().zip(s) {
+                    *a += wt * v;
                 }
+                wsum += wt;
+            }
+            if let Some(o) = out.data.get_mut(y * w + x) {
+                *o = if wsum > 0.0 { acc.map(|a| a / wsum) } else { c };
             }
         }
-        out
-    };
-    pass(&pass(img, true), false)
+    }
+    out
 }
 
 /// Index of output pixel `(x, y)` in a plane over `r`.
@@ -303,7 +322,7 @@ impl Smoothed {
         // marks (a warm white against a grey wall as bright), a few pixels into its neighbour
         let (cw, chh) = (cwin.width(), cwin.height());
         let ch = img.crop(cwin.x0, cwin.y0, cw, chh).map(chromaticity);
-        Smoothed { win, l: ls, cwin, ch: box_mean(&ch, k.chroma_box) }
+        Smoothed { win, l: ls, cwin, ch: chroma_mean(&ch, k.chroma_box) }
     }
 
     /// The smoothed (luminance, chromaticity) at output pixel `(x, y)` (inside the windows).
@@ -325,17 +344,26 @@ const REFERENCE_DABS: usize = 7;
 const CELLS_PER_RADIUS: f64 = 10.0;
 
 /// Steps between neighbouring cells change luminance up to this much (EV) for free: shading over
-/// a curved surface. A larger change costs what it exceeds over [`STEP_EV`]. (More where the
-/// cells are noisier: [`Grown`] raises it to a multiple of the typical step.)
-const STEP_FREE_EV: f32 = 0.125;
-const STEP_EV: f32 = 0.4;
+/// a curved surface, however steep (3 EV over a radius). A larger change costs what it exceeds
+/// over [`STEP_EV`]. (More where the cells are noisier: [`Grown`] raises it to a multiple of the
+/// typical step.) A path's luminance cost is its steepest step's, not the sum of its steps': the
+/// shading and soft creases of a face add up to no edge, however many there are on the way.
+const STEP_FREE_EV: f32 = 0.3;
+const STEP_EV: f32 = 0.5;
 
 /// Chromaticity changes up to this much between neighbouring cells are free, and more costs what
-/// it exceeds over [`STEP_CHROMA`]. Much stricter than luminance: shading darkens a surface but
+/// it exceeds over [`STEP_CHROMA`], adding up along the path (a gradual drift of colour is free,
+/// a step of it is not). Much stricter than luminance: shading darkens a surface but
 /// leaves its colour, so where the colour changes is where one surface meets another (a warm,
 /// shaded white against a neutral grey wall of the same brightness).
 const STEP_FREE_CHROMA: f32 = 0.03;
 const STEP_CHROMA: f32 = 0.03;
+
+/// How many cells a path may jump over to a cell like the one it leaves (a thin line across a
+/// surface: a crease, a fold, the shadow under a ledge), when what it jumps over is no further
+/// than [`JUMP_CHROMA`] in colour from either side.
+const JUMP_CELLS: usize = 2;
+const JUMP_CHROMA: f32 = 0.15;
 
 /// How many times the difference noise alone makes between neighbouring cells' means is still
 /// free (that noise measured inside the flattest cells around a dab, [`grow`]).
@@ -354,6 +382,10 @@ const REF_CHROMA: f32 = 0.15;
 const UNIFORM_EV: f32 = 0.1;
 const UNIFORM_CHROMA: f32 = 0.02;
 
+/// A cell spreading up to this many times as far as the typical cell the dab grew over is uniform
+/// too (a textured surface's cells all spread).
+const UNIFORM_TYPICAL: f32 = 1.5;
+
 /// Chromaticity distance at which a pixel is no longer like a cell ([`pixel_member`]); at least
 /// this, more in noisier cells.
 const PIXEL_CHROMA: f32 = 0.08;
@@ -364,12 +396,15 @@ const PATH_FULL: f32 = 0.35;
 const PATH_NONE: f32 = 0.6;
 
 /// However smooth the way, a cell this far ([`feature_distance`]) from the reference is not the
-/// dab's (2 to 3 EV): a long, gentle gradient into a different surface.
-const FAR_FULL: f32 = 4.0;
-const FAR_NONE: f32 = 6.0;
+/// dab's (2.5 to 3.75 EV): a long, gentle gradient into a different surface.
+const FAR_FULL: f32 = 5.0;
+const FAR_NONE: f32 = 7.5;
 
 /// A colour as Auto Mask compares it: log luminance and chromaticity.
 type Feature = (f32, [f32; 3]);
+
+/// A cell's slope of log luminance (EV per px across and down) and its centre (output pixels).
+type CellPlane = ((f32, f32), (f32, f32));
 
 /// The distance between two chromaticities.
 #[inline]
@@ -433,12 +468,6 @@ impl Cells {
         (c(x, self.ox, self.cols()), c(y, self.oy, self.rows()))
     }
 
-    /// The centre of cell `(i, j)` in output pixels.
-    fn centre(&self, i: usize, j: usize) -> (f32, f32) {
-        let s = self.size as f32;
-        ((i as f32 + 0.5) * s - self.ox as f32, (j as f32 + 0.5) * s - self.oy as f32)
-    }
-
     /// Cell `(i, j)`'s mean log luminance and chromaticity, from the photo itself (`None` outside).
     fn feature(&self, i: usize, j: usize, img: &Rgb32f, log_l: &Plane) -> Option<(f32, [f32; 3])> {
         self.feature_spread(i, j, img, log_l).map(|(f, _)| f)
@@ -447,35 +476,89 @@ impl Cells {
     /// [`Self::feature`] and how far its pixels spread about it (standard deviations of log
     /// luminance and chromaticity): a cell straddling an edge spreads far.
     fn feature_spread(&self, i: usize, j: usize, img: &Rgb32f, log_l: &Plane) -> Option<(Feature, (f32, f32))> {
+        self.cell_stats(i, j, img, log_l).map(|c| (c.mean, c.spread))
+    }
+
+    /// Cell `(i, j)`'s [`CellStats`] (`None` outside the output).
+    fn cell_stats(&self, i: usize, j: usize, img: &Rgb32f, log_l: &Plane) -> Option<CellStats> {
         let (sx, sy) = (i.checked_mul(self.size)?, j.checked_mul(self.size)?);
         let (x0, y0) = (sx.saturating_sub(self.ox), sy.saturating_sub(self.oy));
         let (x1, y1) = ((sx + self.size).saturating_sub(self.ox).min(self.w), (sy + self.size).saturating_sub(self.oy).min(self.h));
         if x0 >= x1 || y0 >= y1 {
             return None;
         }
+        // (the pixels' offsets from the middle of the cell's pixels: a rectangle of them, so the
+        // two directions' slopes fit apart)
+        let (cx, cy) = ((x0 + x1 - 1) as f32 / 2.0, (y0 + y1 - 1) as f32 / 2.0);
         let (mut l, mut ch, mut n) = (0f32, [0f32; 3], 0f32);
+        let (mut lu, mut lv, mut cu, mut cv, mut uu, mut vv) = (0f32, 0f32, [0f32; 3], [0f32; 3], 0f32, 0f32);
         for y in y0..y1 {
+            let v = y as f32 - cy;
             for x in x0..x1 {
+                let u = x as f32 - cx;
                 let k = y * self.w + x;
-                l += *log_l.data.get(k)?;
+                let lk = *log_l.data.get(k)?;
+                l += lk;
+                lu += lk * u;
+                lv += lk * v;
                 let c = masks::chromaticity(*img.data.get(k)?);
-                for (a, v) in ch.iter_mut().zip(c) {
-                    *a += v;
+                for q in 0..3 {
+                    ch[q] += c[q];
+                    cu[q] += c[q] * u;
+                    cv[q] += c[q] * v;
                 }
+                uu += u * u;
+                vv += v * v;
                 n += 1.0;
             }
         }
         let mean = (l / n, ch.map(|v| v / n));
+        let slope = |s: f32, d: f32| if d > 0.0 { s / d } else { 0.0 };
+        let (gx, gy) = (slope(lu, uu), slope(lv, vv));
+        // the luminance's spread about the plane through the cell (its shading taken out: a
+        // steeply shaded cell of one surface is still uniform; how steep is judged apart), the
+        // colour's about its mean (shading leaves the colour, so a cell whose colour changes
+        // across it straddles an edge)
         let (mut vl, mut vc) = (0f32, 0f32);
         for y in y0..y1 {
+            let v = y as f32 - cy;
             for x in x0..x1 {
+                let u = x as f32 - cx;
                 let k = y * self.w + x;
-                vl += (log_l.data.get(k)? - mean.0).powi(2);
+                vl += (log_l.data.get(k)? - mean.0 - gx * u - gy * v).powi(2);
                 vc += chroma_distance(masks::chromaticity(*img.data.get(k)?), mean.1).powi(2);
             }
         }
-        Some((mean, ((vl / n).sqrt(), (vc / n).sqrt())))
+        // (the fits took degrees of freedom from the pixels: what is left spreads by the rest,
+        // so a small cell's spread is not understated)
+        let (vl, vc) = (vl / (n - 3.0).max(1.0), vc / (n - 1.0).max(1.0));
+        // (the slope as far as it stands out of the noise: a small, noisy cell's fitted slope is
+        // mostly noise, and carried a cell on it would be a guess)
+        let shrink = |g: f32, d: f32| {
+            let var = if d > 0.0 { vl / d } else { f32::INFINITY };
+            if g * g + var > 0.0 && var.is_finite() { g * g * g / (g * g + var) } else { 0.0 }
+        };
+        Some(CellStats {
+            mean,
+            spread: (vl.sqrt(), vc.sqrt()),
+            change: gx.hypot(gy) * self.size as f32,
+            grad: (shrink(gx, uu), shrink(gy, vv)),
+            centre: (cx + 0.5, cy + 0.5),
+        })
     }
+}
+
+/// A cell's colour as [`AutoMaskModel::Smoothed`] grows over it: its mean, how far its pixels
+/// spread (log luminance about the plane through it, chromaticity about its mean), how far the
+/// plane's luminance changes across the cell (EV), the plane's slope (EV per px across and down,
+/// as far as it stands out of the noise) and the cell's centre (output pixels).
+#[derive(Clone, Copy, Debug)]
+struct CellStats {
+    mean: Feature,
+    spread: (f32, f32),
+    change: f32,
+    grad: (f32, f32),
+    centre: (f32, f32),
 }
 
 /// The reference of dab `k` of `bd`: the median, channel by channel, of the cells under its centre
@@ -506,7 +589,8 @@ fn reference(bd: &BrushDabs, k: usize, cells: &Cells, img: &Rgb32f, log_l: &Plan
 /// cells under its centre and the centres before it (each starting at the cost of how unlike the
 /// reference it is, so a centre that strays over an edge seeds nothing) by the cheapest path,
 /// a step costing the change across it beyond what is free ([`STEP_FREE_EV`],
-/// [`STEP_FREE_CHROMA`]).
+/// [`STEP_FREE_CHROMA`]): the path's steepest step in luminance plus the sum of its steps in
+/// colour. A path may jump over a thin line ([`JUMP_CELLS`]).
 struct Grown {
     /// [`pixel_member`]'s chromaticity tolerance here.
     chroma_tol: f32,
@@ -516,7 +600,9 @@ struct Grown {
     m: usize,
     member: Vec<f32>,
     feature: Vec<(f32, [f32; 3])>,
-    /// How uniform each cell is ([`Cells::feature_spread`]).
+    /// Each cell's slope of log luminance and centre ([`CellStats`]).
+    plane: Vec<CellPlane>,
+    /// How uniform each cell is ([`Cells::cell_stats`]).
     uniform: Vec<f32>,
     #[cfg(test)]
     cost: Vec<f32>,
@@ -525,13 +611,14 @@ struct Grown {
 }
 
 impl Grown {
-    /// Cell `(i, j)`: how much it belongs, weighted by how uniform it is, and its colour.
-    fn get(&self, i: usize, j: usize) -> Option<(f32, (f32, [f32; 3]))> {
+    /// Cell `(i, j)`: how much it belongs, weighted by how uniform it is, its colour, and its
+    /// luminance's slope and centre.
+    fn get(&self, i: usize, j: usize) -> Option<(f32, Feature, CellPlane)> {
         if i < self.i0 || j < self.j0 || i >= self.i0 + self.n || j >= self.j0 + self.m {
             return None;
         }
         let k = (j - self.j0) * self.n + (i - self.i0);
-        Some((*self.member.get(k)? * *self.uniform.get(k)?, *self.feature.get(k)?))
+        Some((*self.member.get(k)? * *self.uniform.get(k)?, *self.feature.get(k)?, *self.plane.get(k)?))
     }
 }
 
@@ -544,16 +631,21 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
     let (n, m) = (i1 + 1 - i0, j1 + 1 - j0);
     let mut feature = Vec::with_capacity(n * m);
     let mut spread = Vec::with_capacity(n * m);
+    let mut plane = Vec::with_capacity(n * m);
+    let mut change = Vec::with_capacity(n * m);
     let mut inside = Vec::with_capacity(n * m);
     for j in j0..=j1 {
         for i in i0..=i1 {
             // (a cell past the output's edge is no way through: a zoomed window and the whole
             // frame must agree)
-            let got = cells.feature_spread(i, j, img, log_l);
+            let got = cells.cell_stats(i, j, img, log_l);
             inside.push(got.is_some());
-            let (f, sd) = got.unwrap_or((refc, (f32::INFINITY, f32::INFINITY)));
-            feature.push(f);
-            spread.push(sd);
+            let st =
+                got.unwrap_or(CellStats { mean: refc, spread: (f32::INFINITY, f32::INFINITY), change: 0.0, grad: (0.0, 0.0), centre: (0.0, 0.0) });
+            feature.push(st.mean);
+            spread.push(st.spread);
+            change.push(st.change);
+            plane.push((st.grad, st.centre));
         }
     }
     // the noise: how far pixels spread inside the flattest cells around (a low percentile, so
@@ -567,14 +659,24 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
     let per_step = std::f32::consts::SQRT_2 / cells.size as f32;
     let (nl, nc) = (ql * per_step, qc * per_step);
     let (free_l, free_c) = (STEP_FREE_EV.max(STEP_NOISE * nl), STEP_FREE_CHROMA.max(STEP_NOISE * nc));
-    // (a cell is uniform for its neighbourhood: noise spreads every cell alike, an edge more)
-    let (ul, uc) = (UNIFORM_EV.max(2.0 * ql), UNIFORM_CHROMA.max(2.0 * qc));
-    let uniform: Vec<f32> = spread.iter().map(|&(sl, sc)| (1.0 - masks_smooth(ul, 2.0 * ul, sl)) * (1.0 - masks_smooth(uc, 2.0 * uc, sc))).collect();
+    // (a cell whose luminance changes across it by more than a free step holds an edge, however
+    // well a plane fits it: its spread counts that)
+    for (s, c) in spread.iter_mut().zip(&change) {
+        s.0 = s.0.hypot((c - free_l).max(0.0));
+    }
     let ref_c = REF_CHROMA.max(STEP_NOISE * nc);
+    // a step's cost in luminance and in colour, apart: a path's luminance cost is its steepest
+    // step's, its colour cost the sum of its steps' ([`grow`])
+    let step_lc = |a: (f32, [f32; 3]), b: (f32, [f32; 3])| {
+        (((a.0 - b.0).abs() - free_l).max(0.0) / STEP_EV, (chroma_distance(a.1, b.1) - free_c).max(0.0) / STEP_CHROMA)
+    };
     let step_cost = |a: (f32, [f32; 3]), b: (f32, [f32; 3])| {
-        ((a.0 - b.0).abs() - free_l).max(0.0) / STEP_EV + (chroma_distance(a.1, b.1) - free_c).max(0.0) / STEP_CHROMA
+        let (l, c) = step_lc(a, b);
+        l + c
     };
     let mut cost = vec![f32::INFINITY; n * m];
+    // (the path's luminance and colour costs so far, apart)
+    let mut parts = vec![(f32::INFINITY, f32::INFINITY); n * m];
     // (costs as ordered integers: millionths)
     let key = |c: f32| (c * 1e6) as u64;
     let mut heap = BinaryHeap::new();
@@ -590,6 +692,7 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
         let seed = (step_cost(refc, feature[at]) - PATH_FULL).max(0.0);
         if seed < cost[at] {
             cost[at] = seed;
+            parts[at] = (0.0, seed);
             heap.push(Reverse((key(seed), at)));
         }
     }
@@ -598,24 +701,53 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
         if key(c) < kc || c > PATH_NONE {
             continue;
         }
+        let (pl, pc) = parts[at];
         let (x, y) = (at % n, at / n);
         for (dx, dy) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
-            let (nx, ny) = (x as i64 + dx, y as i64 + dy);
-            if nx < 0 || ny < 0 || nx >= n as i64 || ny >= m as i64 {
-                continue;
-            }
-            let to = ny as usize * n + nx as usize;
-            if !inside[to] {
-                continue;
-            }
-            let step = step_cost(feature[at], feature[to]);
-            let next = c + step;
-            if next < cost[to] {
-                cost[to] = next;
-                heap.push(Reverse((key(next), to)));
+            // a step to the next cell, or a jump over one or two to a cell like this one: over a
+            // thin line (a crease, a fold, the shadow under a ledge) of much the same colour
+            for len in 1..=1 + JUMP_CELLS {
+                let (nx, ny) = (x as i64 + dx * len as i64, y as i64 + dy * len as i64);
+                if nx < 0 || ny < 0 || nx >= n as i64 || ny >= m as i64 {
+                    break;
+                }
+                let to = ny as usize * n + nx as usize;
+                if !inside[to] {
+                    break;
+                }
+                let (sl, sc) = if len == 1 {
+                    step_lc(feature[at], feature[to])
+                } else {
+                    let (a, b) = (feature[at], feature[to]);
+                    // (what is jumped over is a line on the surface, not another surface: its
+                    // colour close to both sides'; and the two sides alike as neighbours are, or
+                    // a jump over a cell straddling an edge would cross it as freely as shading)
+                    let mid = (1..len).map(|t| feature[(y as i64 + dy * t as i64) as usize * n + (x as i64 + dx * t as i64) as usize]);
+                    if mid.into_iter().any(|f| chroma_distance(f.1, a.1).min(chroma_distance(f.1, b.1)) > JUMP_CHROMA) {
+                        continue;
+                    }
+                    step_lc(a, b)
+                };
+                let (nl, nc) = (pl.max(sl), pc + sc);
+                let next = nl + nc;
+                if next < cost[to] {
+                    cost[to] = next;
+                    parts[to] = (nl, nc);
+                    heap.push(Reverse((key(next), to)));
+                }
             }
         }
     }
+    // a cell is uniform for the surface the dab grew over: its texture and noise spread every
+    // cell of it alike (the typical spread of the cells reached), an edge through one further
+    let typical = |f: &dyn Fn(&(f32, f32)) -> f32| {
+        let mut v: Vec<f32> = spread.iter().zip(&cost).filter(|(_, c)| **c <= PATH_FULL).map(|(s, _)| f(s)).filter(|x| x.is_finite()).collect();
+        v.sort_by(f32::total_cmp);
+        v.get(v.len() / 2).copied().unwrap_or(0.0)
+    };
+    let (tl, tc) = (typical(&|s| s.0), typical(&|s| s.1));
+    let (ul, uc) = (UNIFORM_EV.max(2.0 * ql).max(UNIFORM_TYPICAL * tl), UNIFORM_CHROMA.max(2.0 * qc).max(UNIFORM_TYPICAL * tc));
+    let uniform: Vec<f32> = spread.iter().map(|&(sl, sc)| (1.0 - masks_smooth(ul, 2.0 * ul, sl)) * (1.0 - masks_smooth(uc, 2.0 * uc, sc))).collect();
     let member = cost
         .iter()
         .zip(&feature)
@@ -633,6 +765,7 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
         m,
         member,
         feature,
+        plane,
         uniform,
         #[cfg(test)]
         cost,
@@ -661,15 +794,17 @@ fn pixel_member(g: &Grown, cells: &Cells, x: usize, y: usize, p: (f32, [f32; 3])
     let mut best = 0f32;
     for j in cj.saturating_sub(2)..=cj + 2 {
         for i in ci.saturating_sub(2)..=ci + 2 {
-            if let Some((m, f)) = g.get(i, j)
+            if let Some((m, f, ((gx, gy), (cx, cy)))) = g.get(i, j)
                 && m > best
             {
                 // (nearer cells count for more: a pixel's membership blends between the cells'
                 // centres rather than stepping at their borders)
-                let (cx, cy) = cells.centre(i, j);
                 let d = (cx - px).hypot(cy - py) / cs;
                 let near = 1.0 - masks_smooth(1.0, 2.5, d);
-                let dl = (p.0 - f.0) / masks::AUTO_TOL_EV;
+                // (the cell's luminance carried on along its slope, up to a cell past its centre:
+                // shading continues past it, but no further than it was measured)
+                let at = f.0 + gx * (px - cx).clamp(-cs, cs) + gy * (py - cy).clamp(-cs, cs);
+                let dl = (p.0 - at) / masks::AUTO_TOL_EV;
                 let dc = chroma_distance(p.1, f.1) / g.chroma_tol;
                 best = best.max(m * near * (1.0 - masks_smooth(0.5, 1.0, (dl * dl + dc * dc).sqrt())));
             }
@@ -1215,3 +1350,6 @@ mod photo_probe;
 mod quality_tests;
 #[cfg(test)]
 mod scene_tests;
+
+#[cfg(test)]
+mod surface_tests;
