@@ -16,6 +16,7 @@
 
 mod allocation;
 pub mod apng;
+pub mod bmp_probe;
 pub mod cicp;
 mod codecs;
 mod error;
