@@ -122,3 +122,24 @@ fn image_mode(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rect = data.value("crop", crop());
     on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).image_mode().auto_center().show_at(ui, at))
 }
+
+/// The default frame over the whole picture before any drag changed it: a dashed outline, no shield, no guide.
+#[story(CropOverlay<'static>, covers = [Default], drive = Drive::Custom(drag_top_left))]
+fn untouched(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rect = data.value("crop", CropBox::upright(StoryDocument::STANDARD.rect()));
+    on_landscape(ui, 0.0, |ui, at| {
+        CropOverlay::new("Crop", Bind::bound(&mut *rect))
+            .default_frame()
+            .image_mode()
+            .guide((CropGuide::Thirds, 0))
+            .guide_show(GuideShow::Always)
+            .show_at(ui, at)
+    })
+}
+
+/// The frame hidden: nothing shows over the picture, and a press anywhere draws a new frame.
+#[story(CropOverlay<'static>, covers = [Default])]
+fn hidden(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rect = data.value("crop", CropBox::upright(StoryDocument::STANDARD.rect()));
+    on_landscape(ui, 0.0, |ui, at| CropOverlay::new("Crop", Bind::bound(&mut *rect)).default_frame().image_mode().hidden().show_at(ui, at))
+}

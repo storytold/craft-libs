@@ -1,6 +1,7 @@
 //! Pure canvas geometry in document units: the transform box ([`quad`]), snapping ([`snap`]), the
 //! outline being drawn by a lasso ([`draft`]), how a selection combines with the current one
-//! ([`selection_op`]), the marquee drag rules ([`marquee`]), direction locking ([`lock`]), the move gesture and stroke lock ([`move_gesture`]) and
+//! ([`selection_op`]), the marquee drag rules ([`marquee`]), direction locking ([`lock`]), the move gesture and stroke lock ([`move_gesture`]),
+//! the crop frame ([`crop`]), the area outside a crop frame as convex pieces ([`outside`]) and
 //! plane helpers ([`geom`]). Nothing here reads a `Ui`; modifier keys arrive as
 //! [`craft_keymap::Mods`].
 

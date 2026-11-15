@@ -1,5 +1,6 @@
 //! The crop shield: the options that dim the area outside the frame.
 
+use crate::canvas::CanvasSpace;
 use crate::primitives::{Draw, PaintShape};
 use crate::style::DataColor;
 use craft_behavior::geometry::outside_pieces;
@@ -95,6 +96,13 @@ impl CropShield {
     pub fn opacity(&self) -> f32 {
         let o = if self.opacity.is_finite() { self.opacity } else { SHIELD_OPACITY };
         o.clamp(0.0, 100.0) / 100.0
+    }
+
+    /// [`fill`](Self::fill) over the canvas colour of `space`: its pasteboard's colour when it has one, else
+    /// `theme_canvas`. The one rule both crops use to pick the Match Canvas colour.
+    pub fn fill_on(&self, space: &CanvasSpace, theme_canvas: Color32, editing: bool) -> Option<Color32> {
+        let canvas = space.pasteboard().fill().map_or(theme_canvas, |fill| fill.0);
+        self.fill(canvas, editing)
     }
 
     /// What to paint over the area outside the frame, `canvas` being the canvas colour and `editing` a crop drag in

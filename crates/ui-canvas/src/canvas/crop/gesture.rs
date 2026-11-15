@@ -1,14 +1,14 @@
 //! What a pointer drag does to the crop frame: the kinds of drag, the frame each step gives, and how image mode moves
 //! the view with it.
 
-use craft_behavior::CanvasView;
 use craft_behavior::geometry::crop::{direction, drawn, image_turn, normalized_angle};
-use craft_behavior::geometry::{BoxPart, CropBox, SnapLine, SnapTargets, crop_view_about, screen_step};
+use craft_behavior::geometry::{AspectHold, BoxPart, CropBox, SnapLine, crop_view_about, screen_step};
 use craft_behavior::kurbo::{Point, Rect, Vec2};
+use craft_behavior::{Axis, CanvasView};
 use craft_keymap::{Mods, Platform};
 use egui::Pos2;
 
-use crate::canvas::snap_tolerance;
+use crate::canvas::{GestureSnap, Snap, snap_tolerance};
 
 /// What a drag does to the frame.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,21 +39,51 @@ pub(super) struct Drag {
     pub press_view: Option<CanvasView>,
     /// The frame the drag last produced.
     pub last: CropBox,
+    /// A step of this drag has proposed a frame other than the press frame. It stays set until the drag ends, so a
+    /// drag that brings the frame back keeps the started look.
+    pub changed: bool,
+    /// The pointer of the last step, in screen points.
+    pub pointer: Pos2,
+}
+
+impl Drag {
+    /// The pointer that asks to scroll the view past the canvas edge: a draw, a classic move, and a resize the view
+    /// does not keep centred. A turn, an image-mode move (the view follows the frame) and a Straighten line never
+    /// scroll. Read from the running drag, not this pass's input, so every pass of a frame reports the same.
+    pub fn scrolls_at(&self, image: bool, auto_center: bool) -> Option<Pos2> {
+        let scrolls = match self.kind {
+            Kind::Draw { .. } => true,
+            Kind::Move => !image,
+            Kind::Resize(_) => !(image && auto_center),
+            Kind::Turn { .. } | Kind::Line { .. } => false,
+        };
+        scrolls.then_some(self.pointer)
+    }
 }
 
 /// The rules every step of a drag follows.
-#[derive(Clone, Copy)]
-pub(super) struct Rules<'a> {
+#[derive(Clone)]
+pub(super) struct Rules {
     pub ratio: Option<f64>,
     pub bounds: Option<Rect>,
     pub turn_step: f64,
     pub image: bool,
     pub auto_center: bool,
-    pub snap: Option<&'a SnapTargets>,
+    /// The canvas's snapping, with this pass's tolerance.
+    pub snap: Option<Snap>,
     pub os: Platform,
 }
 
-impl Rules<'_> {
+impl Rules {
+    /// What a resize holds: the set ratio; else, with Shift, the frame's own proportions along its diagonal.
+    fn hold(&self, mods: Mods) -> AspectHold {
+        match self.ratio {
+            Some(k) => AspectHold::Ratio(k),
+            None if mods.shift => AspectHold::Diagonal,
+            None => AspectHold::Free,
+        }
+    }
+
     /// The frame a drag gives with the pointer at document point `to`, kept inside the bounds; `None` when the frame is
     /// as it was (a draw not yet sized) or cannot be kept inside.
     pub fn proposal(&self, drag: &mut Drag, to: Point, mods: Mods, space: bool) -> Option<CropBox> {
@@ -77,22 +107,29 @@ impl Rules<'_> {
             Kind::Move if self.image => (at.moved(drag.from - to), false, false),
             Kind::Move => (at.moved(to - drag.from), false, false),
             Kind::Resize(part) => {
-                let r = at.rect.abs();
-                let keep = (r.width() > 0.0 && r.height() > 0.0).then(|| r.width() / r.height());
-                let ratio = self.ratio.or(if mods.shift { keep } else { None });
                 let by = to - drag.from;
-                // P3(tools-w15): tl.T41
-                let hold = ratio.map_or(craft_behavior::geometry::AspectHold::Free, craft_behavior::geometry::AspectHold::Ratio);
+                let hold = self.hold(mods);
                 let next = if self.image && self.auto_center {
                     at.resized_centred(*part, by, hold, mods.alt)?
                 } else {
                     at.resized(*part, by, hold, mods.alt)
                 };
-                (next, true, ratio.is_some())
+                (next, true, self.ratio.is_some() || mods.shift)
             }
             Kind::Turn { grab } => {
                 let step = mods.shift.then_some(self.turn_step);
-                (at.turned_to(*grab, to, step, self.image), true, false)
+                let turned = at.turned_to(*grab, to, step, self.image);
+                match self.bounds.filter(|_| self.image) {
+                    // An image-mode turn keeps the frame inside the turned image (#10869), each step from the press
+                    // frame so turning back gives it back. ⌘ keeps the press frame, and so does a press frame that
+                    // was already past the bounds.
+                    Some(bounds) => {
+                        let keeps_press = mods.cmd || at.kept_inside(bounds) != Some(at);
+                        let kept = if keeps_press { Some(turned) } else { turned.kept_inside(bounds) };
+                        return kept.filter(CropBox::is_finite).or(Some(drag.last));
+                    }
+                    None => (turned, true, false),
+                }
             }
             Kind::Line { .. } => return None,
         };
@@ -105,39 +142,80 @@ impl Rules<'_> {
         }
     }
 
-    /// The screen point of `pos` after the snap targets: an end of the Straighten line.
+    /// The screen point of `pos` after the canvas's snapping: an end of the Straighten line.
     pub fn snap_screen(&self, view: &CanvasView, pos: Pos2, mods: Mods) -> Pos2 {
-        let (Some(targets), Some(tolerance)) = (self.snap, snap_tolerance(view, mods, self.os, false)) else { return pos };
-        let (point, _) = targets.snap_point(view.to_doc(pos), tolerance);
-        view.to_screen(point)
+        let Some(snap) = &self.snap else { return pos };
+        let (point, lines) = snap.point(view.to_doc(pos), mods, GestureSnap::default());
+        if lines.is_empty() { pos } else { view.to_screen(point) }
     }
 
-    /// The drag's document point for the pointer at `to` after the host's snap targets, with the lines that snapped. In
+    /// The drag's document point for the pointer at `to` after the canvas's snapping, with the lines that snapped. In
     /// image mode the point is in the view of the press, which the moving view never feeds back into: the correction
-    /// is turned back into pointer travel.
+    /// is turned back into pointer travel. A corner that holds its proportions (a ratio, or Shift) slides along its
+    /// diagonal onto the line it snapped to, so the handle lands on the line with the proportions kept.
     pub fn snapped(&self, drag: &Drag, view: &CanvasView, to: Point, mods: Mods, space: bool) -> (Point, Vec<SnapLine>) {
-        let tolerance = snap_tolerance(drag.press_view.as_ref().unwrap_or(view), mods, self.os, false);
-        let (Some(targets), Some(tolerance)) = (self.snap, tolerance) else { return (to, Vec::new()) };
+        let Some(snap) = &self.snap else { return (to, Vec::new()) };
         let mut probe = drag.clone();
         let Some(candidate) = self.proposal(&mut probe, to, mods, space) else { return (to, Vec::new()) };
         let (by, lines, travel_per_unit) = match probe.kind {
             Kind::Draw { cur, .. } => {
-                let (snapped, lines) = targets.snap_point(cur, tolerance);
+                let (snapped, lines) = snap.point(cur, mods, GestureSnap::default());
                 (snapped - cur, lines, 1.0)
             }
             Kind::Move => {
-                let (by, lines) = targets.snap_rect(candidate.turned_bounds(), tolerance);
+                let (by, lines) = snap.rect(candidate.turned_bounds(), mods);
                 (by, lines, if self.image { -1.0 } else { 1.0 })
             }
             Kind::Resize(part) => {
                 let Some(point) = candidate.part_point(part) else { return (to, Vec::new()) };
-                let (snapped, lines) = targets.snap_point(point, tolerance);
-                (snapped - point, lines, if self.image && self.auto_center && !mods.alt { 0.5 } else { 1.0 })
+                let (snapped, lines) = snap.point(point, mods, GestureSnap::default());
+                let travel = if self.image && self.auto_center && !mods.alt { 0.5 } else { 1.0 };
+                let corner = matches!(part, BoxPart::Corner(_));
+                if corner && !lines.is_empty() && self.hold(mods) != AspectHold::Free {
+                    // The reach at the press view: the rule `Snap::at` sets the tolerance with; a crop drag never
+                    // changes the zoom.
+                    let Some(reach) = snap_tolerance(drag.press_view.as_ref().unwrap_or(view), mods, self.os, false) else {
+                        return (to, Vec::new());
+                    };
+                    match slid_along(point, point - candidate.center(), lines, reach) {
+                        Some((by, lines)) => (by, lines, travel),
+                        // The diagonal meets no snapped line within reach: the handle stays where the drag put it.
+                        None => return (to, Vec::new()),
+                    }
+                } else {
+                    (snapped - point, lines, travel)
+                }
             }
             Kind::Turn { .. } | Kind::Line { .. } => return (to, Vec::new()),
         };
         if by.x.is_finite() && by.y.is_finite() { (to + by * travel_per_unit, lines) } else { (to, Vec::new()) }
     }
+}
+
+/// The move that slides corner `point` along direction `along` (its diagonal) onto the nearest of `lines` it crosses
+/// within `reach` of `point` on each axis, the box the snap read the handle in, with the lines the slid corner lies
+/// on. `None` when the diagonal meets none of them that near: a diagonal nearly parallel to a line meets it far along.
+fn slid_along(point: Point, along: Vec2, lines: Vec<SnapLine>, reach: f64) -> Option<(Vec2, Vec<SnapLine>)> {
+    // A vertical line (along y) is met where x reaches it, a horizontal one where y does.
+    let gap = |line: &SnapLine| if matches!(line.along, Axis::Y) { (line.position - point.x, along.x) } else { (line.position - point.y, along.y) };
+    let s = lines
+        .iter()
+        .filter_map(|line| {
+            let (gap, step) = gap(line);
+            (step.abs() > 1e-9).then(|| gap / step)
+        })
+        .filter(|s| s.is_finite() && (s * along.x).abs() <= reach && (s * along.y).abs() <= reach)
+        .min_by(|a, b| a.abs().total_cmp(&b.abs()))?;
+    let by = along * s;
+    let at = point + by;
+    let on = lines
+        .into_iter()
+        .filter(|line| {
+            let v = if matches!(line.along, Axis::Y) { at.x } else { at.y };
+            (v - line.position).abs() < 1e-6
+        })
+        .collect();
+    Some((by, on))
 }
 
 /// The view after a drag step that gave frame `next`, from the view of the press, so the view moving with the image
@@ -152,7 +230,9 @@ pub(super) fn followed(drag: &Drag, auto_center: bool, next: &CropBox) -> Option
     Some(match drag.kind {
         Kind::Move => slid(),
         Kind::Resize(_) if auto_center => slid(),
-        Kind::Turn { .. } => crop_view_about(next, &press, drag.at_press.center()),
+        // The view first follows the frame's centre, which a turn kept inside the image may move, then turns about
+        // it: the box stays put on screen.
+        Kind::Turn { .. } => crop_view_about(next, &slid(), next.center()),
         Kind::Draw { .. } | Kind::Resize(_) | Kind::Line { .. } => press,
     })
 }
@@ -171,7 +251,7 @@ pub(super) fn centred(drag: &Drag, auto_center: bool, view: &CanvasView, shown: 
 
 /// The frame after an arrow key moved `part` by the screen vector `by`, or X swapped it, with the view image mode
 /// moves along. `None` when the key changes nothing.
-pub(super) fn nudged(frame: &CropBox, part: BoxPart, by: Vec2, view: &CanvasView, rules: &Rules<'_>) -> (CropBox, Option<CanvasView>) {
+pub(super) fn nudged(frame: &CropBox, part: BoxPart, by: Vec2, view: &CanvasView, rules: &Rules) -> (CropBox, Option<CanvasView>) {
     let step = screen_step(view, by);
     if part == BoxPart::Inside && rules.image {
         // The image moves under the frame: the frame goes the other way and the view follows it.

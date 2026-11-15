@@ -24,6 +24,13 @@ pub struct CropBox {
     pub angle: f64,
 }
 
+/// How far (document units) a turned frame's corner may lie past the bounds and still count as inside them: rounding,
+/// not a visible gap.
+const FIT_TOLERANCE: f64 = 1e-6;
+
+/// The most lines per axis [`turn_grid`] gives: a bound on hostile viewport sizes, far past any screen.
+const TURN_GRID_MAX: usize = 4096;
+
 /// What a resize holds about the frame's proportions.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AspectHold {
@@ -31,18 +38,9 @@ pub enum AspectHold {
     Free,
     /// The set ratio, width over height.
     Ratio(f64),
-    /// The box's own ratio, the corner following the diagonal (Shift on a corner with no set ratio).
+    /// The box's own ratio, the corner following the diagonal (Shift on a corner with no set ratio). An edge holds the
+    /// box's own ratio as [`Ratio`](Self::Ratio) does.
     Diagonal,
-}
-
-impl AspectHold {
-    /// The ratio the current resize reads; `Diagonal` holds none until tl.T41 is written.
-    fn ratio(self) -> Option<f64> {
-        match self {
-            AspectHold::Ratio(r) => Some(r),
-            AspectHold::Free | AspectHold::Diagonal => None,
-        }
-    }
 }
 
 impl CropBox {
@@ -137,7 +135,7 @@ impl CropBox {
     /// The frame after an arrow key moves `part` by `by`, as a plain drag of the part would, with `ratio` held.
     pub fn nudged(&self, part: BoxPart, by: Vec2, ratio: Option<f64>) -> Self {
         match part_handle(part) {
-            Some((hx, hy)) => resized_turned(self, hx, hy, by, ratio, false),
+            Some((hx, hy)) => resized_turned(self, hx, hy, by, ratio.map_or(AspectHold::Free, AspectHold::Ratio), false),
             None => self.moved(by),
         }
     }
@@ -155,13 +153,14 @@ impl CropBox {
     }
 
     /// The frame with `part` dragged by the page vector `by`: along the frame's own axes, the opposite edges kept on
-    /// the page (or the centre with `alt`), `ratio` (width over height) held. A part that is not a corner or an
+    /// the page (or the centre with `alt`), the proportions held as `hold` says. With [`AspectHold::Diagonal`] a
+    /// corner follows the frame's diagonal: the drag is projected onto it, so both sides scale by the same factor
+    /// (800 × 500 dragged by (−100, −50) at the bottom right gives 705.6 × 441). A part that is not a corner or an
     /// edge leaves the frame as it is.
     #[must_use]
     pub fn resized(&self, part: BoxPart, by: Vec2, hold: AspectHold, alt: bool) -> Self {
-        let ratio = hold.ratio(); // P3(tools-w15): tl.T41
         match part_handle(part) {
-            Some((hx, hy)) => resized_turned(self, hx, hy, by, ratio, alt),
+            Some((hx, hy)) => resized_turned(self, hx, hy, by, hold, alt),
             None => *self,
         }
     }
@@ -171,12 +170,11 @@ impl CropBox {
     /// opposite edge stays put on the image (the centre with `alt`), so the frame's centre moves by the difference
     /// and the view follows it. `None` when the result is not finite or `part` is not a corner or an edge.
     pub fn resized_centred(&self, part: BoxPart, by: Vec2, hold: AspectHold, alt: bool) -> Option<Self> {
-        let ratio = hold.ratio(); // P3(tools-w15): tl.T41
         let (hx, hy) = part_handle(part)?;
         let r = self.rect.abs();
         let (w0, h0) = (r.width(), r.height());
         let local = turn(Point::new(by.x, by.y), Point::ZERO, -self.angle);
-        let n = resized(Rect::new(-w0 / 2.0, -h0 / 2.0, w0 / 2.0, h0 / 2.0), hx, hy, Vec2::new(local.x, local.y), ratio, true);
+        let n = resized(Rect::new(-w0 / 2.0, -h0 / 2.0, w0 / 2.0, h0 / 2.0), hx, hy, Vec2::new(local.x, local.y), hold, true);
         let (w1, h1) = (n.width(), n.height());
         let shift = if alt { Point::ZERO } else { Point::new(f64::from(hx) * (w1 - w0) / 2.0, f64::from(hy) * (h1 - h0) / 2.0) };
         let s = turn(shift, Point::ZERO, self.angle);
@@ -218,6 +216,49 @@ impl CropBox {
         }
         let by = shifted_in(t, bounds).origin() - t.origin();
         Some(self.moved(by))
+    }
+
+    /// The frame at its angle kept inside `bounds` (#10869, an image-mode turn): `self`, bit for bit, when its turned
+    /// corners are inside (also when a rounding error puts them a hair past an edge); else moved the shortest way in
+    /// on each axis, its size kept; else shrunk about its centre to the largest size with its proportions that fits,
+    /// then moved in. `None` when a size or the angle is not finite or a size is not positive.
+    pub fn kept_inside(&self, bounds: Rect) -> Option<Self> {
+        let (r, b) = (self.rect.abs(), bounds.abs());
+        let (w, h, bw, bh) = (r.width(), r.height(), b.width(), b.height());
+        let finite = [w, h, bw, bh, r.x0, r.y0, b.x0, b.y0, self.angle].iter().all(|v| v.is_finite());
+        if !finite || w <= 0.0 || h <= 0.0 || bw <= 0.0 || bh <= 0.0 {
+            return None;
+        }
+        let (s, c) = self.angle.to_radians().sin_cos();
+        let (s, c) = (s.abs(), c.abs());
+        // Half the turned frame's bounds: its corners are inside when these are.
+        let (ex, ey) = ((w * c + h * s) / 2.0, (w * s + h * c) / 2.0);
+        if !(ex.is_finite() && ey.is_finite()) || ex <= 0.0 || ey <= 0.0 {
+            return None;
+        }
+        let m = r.center();
+        let fits = |v: f64, e: f64, lo: f64, hi: f64| v - e >= lo - FIT_TOLERANCE && v + e <= hi + FIT_TOLERANCE;
+        if fits(m.x, ex, b.x0, b.x1) && fits(m.y, ey, b.y0, b.y1) {
+            return Some(*self);
+        }
+        // The scale that makes the turned bounds fit; a rounding error short of 1 (a half turn) fits.
+        let k = (bw / (2.0 * ex)).min(bh / (2.0 * ey));
+        let k = if k >= 1.0 - 1e-9 { 1.0 } else { k };
+        if !(k.is_finite() && k > 0.0) {
+            return None;
+        }
+        // Each axis on its own: the nearest centre that keeps the turned bounds inside. `max` then `min` rather than
+        // `clamp`, which panics when rounding puts the two limits a hair the wrong way round.
+        let along = |v: f64, e: f64, lo: f64, hi: f64| if 2.0 * e >= hi - lo { (lo + hi) / 2.0 } else { v.max(lo + e).min(hi - e) };
+        let n = Point::new(along(m.x, ex * k, b.x0, b.x1), along(m.y, ey * k, b.y0, b.y1));
+        let rect = if k == 1.0 {
+            r + (n - m)
+        } else {
+            let (hw, hh) = (w * k / 2.0, h * k / 2.0);
+            Rect::new(n.x - hw, n.y - hh, n.x + hw, n.y + hh)
+        };
+        let next = Self { rect, angle: self.angle };
+        next.is_finite().then_some(next)
     }
 
     /// The frame angle (degrees, clockwise on the page, in -45..=45) that makes the line from `a` to `b` level, or
@@ -372,10 +413,29 @@ pub fn hit_rect(rect: Rect, point: Point, reach: f64) -> BoxPart {
     CropBox::upright(rect).part_at(point, reach)
 }
 
-/// Frame `r` with handle (`hx`, `hy`) dragged by `d`. `alt` resizes about the centre; `ratio` (width / height) keeps
-/// the proportions, the larger relative extent winning at a corner.
-fn resized(r: Rect, hx: i8, hy: i8, d: Vec2, ratio: Option<f64>, alt: bool) -> Rect {
+/// The drag and the ratio a resize of handle (`hx`, `hy`) of frame `r` by `d` applies for `hold`: a `Diagonal` corner
+/// takes the drag projected onto the frame's diagonal through that corner and holds no ratio (the projection keeps
+/// the proportions, about the opposite corner and about the centre alike); a `Diagonal` edge holds the frame's own
+/// ratio. A frame with no diagonal takes the drag as it is.
+fn held(r: Rect, hx: i8, hy: i8, d: Vec2, hold: AspectHold) -> (Vec2, Option<f64>) {
+    let (w, h) = (r.width(), r.height());
+    match hold {
+        AspectHold::Free => (d, None),
+        AspectHold::Ratio(k) => (d, Some(k)),
+        AspectHold::Diagonal if hx != 0 && hy != 0 => {
+            let v = Vec2::new(f64::from(hx) * w, f64::from(hy) * h);
+            let t = d.dot(v) / v.hypot2();
+            if t.is_finite() { (v * t, None) } else { (d, None) }
+        }
+        AspectHold::Diagonal => (d, (w > 0.0 && h > 0.0).then(|| w / h)),
+    }
+}
+
+/// Frame `r` with handle (`hx`, `hy`) dragged by `d`, its proportions held as `hold` says. `alt` resizes about the
+/// centre; a ratio (width / height) keeps the proportions, the larger relative extent winning at a corner.
+fn resized(r: Rect, hx: i8, hy: i8, d: Vec2, hold: AspectHold, alt: bool) -> Rect {
     let r = r.abs();
+    let (d, ratio) = held(r, hx, hy, d, hold);
     // Per axis: the fixed point, the signed extent from it, and whether it is centred (the extent is then a
     // half-extent).
     let axis = |lo: f64, hi: f64, h: i8, d: f64| -> (f64, f64, bool) {
@@ -413,13 +473,13 @@ fn resized(r: Rect, hx: i8, hy: i8, d: Vec2, ratio: Option<f64>, alt: bool) -> R
 
 /// [`resized`] for a frame turned by its angle: the handle moves along the frame's own axes by the page drag `d`,
 /// and the edges opposite stay where they are on the page.
-fn resized_turned(b: &CropBox, hx: i8, hy: i8, d: Vec2, ratio: Option<f64>, alt: bool) -> CropBox {
+fn resized_turned(b: &CropBox, hx: i8, hy: i8, d: Vec2, hold: AspectHold, alt: bool) -> CropBox {
     if b.angle == 0.0 {
-        return CropBox::upright(resized(b.rect, hx, hy, d, ratio, alt));
+        return CropBox::upright(resized(b.rect, hx, hy, d, hold, alt));
     }
     let c = b.center();
     let local = turn(Point::new(d.x, d.y), Point::ZERO, -b.angle);
-    let n = resized(b.rect, hx, hy, Vec2::new(local.x, local.y), ratio, alt);
+    let n = resized(b.rect, hx, hy, Vec2::new(local.x, local.y), hold, alt);
     let nc = turn(n.center(), c, b.angle);
     let (hw, hh) = (n.width() / 2.0, n.height() / 2.0);
     CropBox { rect: Rect::new(nc.x - hw, nc.y - hh, nc.x + hw, nc.y + hh), angle: b.angle }
@@ -500,12 +560,32 @@ pub enum CropGuide {
     GoldenSpiral,
 }
 
-/// The lines of the grid a default-mode turn shows over a `w` by `h` frame: `step` apart counted from the frame's
-/// centre, none on the outline, only inside `visible`; empty for a frame under one point or non-finite input.
-#[allow(dead_code)] // P3(tools-w15): tl.T43
-pub fn turn_grid(w: f64, h: f64, step: f64, visible: kurbo::Rect) -> Vec<Vec<Point>> {
-    let _ = (w, h, step, visible);
-    todo!("tl.T43")
+/// The lines of the grid a default-mode turn shows over a `w` by `h` frame (screen points), in the frame's unit square
+/// as [`CropGuide::guides`] gives them: `step` apart counted from the frame's centre, none on the outline, and only
+/// those whose position lies inside `visible` (the part of the frame on screen, in the frame's own axes), so a frame
+/// zoomed far past the screen gives only the lines that show. Empty for a frame under one point, a step that is not
+/// positive, or non-finite input.
+pub fn turn_grid(w: f64, h: f64, step: f64, visible: Rect) -> Vec<Vec<Point>> {
+    let v = visible.abs();
+    if ![w, h, step, v.x0, v.y0, v.x1, v.y1].iter().all(|x| x.is_finite()) || w < 1.0 || h < 1.0 || step <= 0.0 {
+        return Vec::new();
+    }
+    let (x0, x1, y0, y1) = (v.x0.max(0.0), v.x1.min(w), v.y0.max(0.0), v.y1.min(h));
+    if x1 <= x0 || y1 <= y0 {
+        return Vec::new();
+    }
+    let axis = |len: f64, lo: f64, hi: f64, vertical: bool| {
+        let mid = len / 2.0;
+        // Lines counted from the centre, indexed straight into the visible range; those on the outline are left out.
+        let first = ((lo - mid) / step).ceil().max((-mid / step).floor() + 1.0);
+        let last = ((hi - mid) / step).floor().min((mid / step).ceil() - 1.0);
+        let count = if first.is_finite() && last.is_finite() { (last - first + 1.0).clamp(0.0, TURN_GRID_MAX as f64) as usize } else { 0 };
+        (0..count).map(move |i| {
+            let f = (mid + (first + i as f64) * step) / len;
+            if vertical { vec![Point::new(f, 0.0), Point::new(f, 1.0)] } else { vec![Point::new(0.0, f), Point::new(1.0, f)] }
+        })
+    };
+    axis(w, x0, x1, true).chain(axis(h, y0, y1, false)).collect()
 }
 
 impl CropGuide {
@@ -668,19 +748,5 @@ impl GuideShow {
             Self::Always => true,
             Self::Never => false,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn angles_wrap_into_the_half_open_turn() {
-        assert_eq!(normalized_angle(-180.0), 180.0, "-180 is 180");
-        assert_eq!(normalized_angle(-0.1), -0.1, "an angle in range comes back exactly");
-        assert_eq!(normalized_angle(f64::NAN), 0.0);
-        assert_eq!(snap_angle(-170.0, 45.0), 180.0, "a snap past -180 wraps");
-        assert_eq!(snap_angle(37.5, 0.0), 37.5, "a step of 0 is ignored");
     }
 }

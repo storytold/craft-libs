@@ -9,7 +9,7 @@ mod shield;
 mod stories;
 
 use super::words::CanvasWords;
-use super::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_space, readout};
+use super::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_snap, canvas_space, readout};
 use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, WordSetCx as _,
@@ -17,13 +17,14 @@ use crate::contract::{
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, StyleColor, StyleCx};
-use craft_behavior::geometry::{BoxPart, CropBox, CropGuide, GuideShow, SnapLine, SnapTargets};
+use craft_behavior::geometry::{BoxPart, CropBox, CropGuide, GuideShow, SnapLine};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
     Axis, CancelReason, CanvasView, CursorIcon, CursorPriority, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PaintedCursor, PartKey,
     PointerButton, PressPhase, Roving, Sense, resize_cursor,
 };
-use craft_keymap::{Chord, Key, Mods, Platform};
+use crate::runtime::env::EnvView;
+use craft_keymap::{Chord, Key, Mods};
 use egui::{Pos2, Rect, Response, Vec2};
 use gesture::{Drag, Kind, Rules};
 
@@ -58,7 +59,8 @@ pub struct CropStyle {
     halo: StyleColor,
     /// The composition guide lines.
     guide: StyleColor,
-    /// The canvas colour the shield matches.
+    /// The theme's canvas colour: the guide fades toward it, and the shield matches it on a canvas whose pasteboard
+    /// takes the theme's colour.
     canvas: StyleColor,
     /// The line of a frame the binding refuses.
     invalid: StyleColor,
@@ -94,6 +96,8 @@ struct Report {
     nudged: bool,
     turning: Option<f64>,
     sizing: Option<(f64, f64)>,
+    scrolls_at: Option<Pos2>,
+    straighten_ended: bool,
 }
 
 /// What a pass leaves for the next and for paint.
@@ -105,11 +109,15 @@ struct Live {
 /// The crop frame of a document, edited by dragging it as Photoshop's Classic crop does (or moving and turning the image
 /// behind it in image mode) and by the keyboard.
 ///
-/// - Pointer: a corner or an edge resizes along the frame's own axes (Shift keeps the ratio, Alt resizes about the
-///   centre); inside moves; outside turns the frame about its centre (Shift in steps). Inside the
-///   [default frame](CropOverlay::default_frame) a drag draws a new frame (Shift square, Alt from the centre, Space moves
-///   it while it is drawn). A [ratio](CropOverlay::ratio) is held by every gesture. A drag begins on the first move; a
-///   press released without moving changes nothing, and a drag that leaves a side under one document unit is cancelled.
+/// - Pointer: a corner or an edge resizes along the frame's own axes (Shift keeps the proportions, a corner following
+///   the frame's diagonal; Alt resizes about the centre); inside moves; outside turns the frame about its centre (Shift
+///   in steps). Inside the [default frame](CropOverlay::default_frame) a drag draws a new frame (Shift square, Alt from
+///   the centre, Space moves it while it is drawn). A [ratio](CropOverlay::ratio) is held by every gesture. A drag
+///   begins on the first move; a press released without moving changes nothing, and a drag that leaves a side under
+///   one document unit is cancelled. The canvas's snapping ([`canvas_snap`]) applies to draws, moves, resizes and the
+///   Straighten line.
+/// - Look: until a drag changes the untouched default frame in image mode, the outline is dashed and no shield or
+///   guide shows. While an image-mode turn runs, a turn grid replaces the chosen guide.
 /// - Keys, on a focused part, on the focused canvas or with nothing focused (the overlay holds the canvas's session,
 ///   `KeyUse::session`, before the canvas's tool): Enter applies; Escape cancels a drag, else discards; the arrows
 ///   nudge the picked part, the whole frame when no part has focus (Shift by ten). On a focused part X swaps portrait
@@ -144,7 +152,8 @@ pub struct CropOverlay<'a> {
     /// angle that levels it.
     #[prop(flag)]
     straighten: bool,
-    /// The area the frame may not leave, in document units.
+    /// The area the frame may not leave, in document units. An image-mode turn moves or shrinks the frame to keep it
+    /// inside (Command keeps it as it was at the press).
     #[prop]
     bounds: Option<DocRect>,
     /// Image mode: the frame stays upright on screen and a move or turn moves or turns the view instead.
@@ -157,9 +166,6 @@ pub struct CropOverlay<'a> {
     /// Nothing is painted and a press anywhere on the canvas draws a new frame.
     #[prop(flag)]
     hidden: bool,
-    /// The snap targets a dragged part snaps to.
-    #[prop]
-    snap: Option<&'a SnapTargets>,
     report: Report,
 }
 
@@ -180,22 +186,34 @@ impl<'a> CropOverlay<'a> {
             image_mode: false,
             auto_center: false,
             hidden: false,
-            snap: None,
             report: Report::default(),
         }
         .label(label)
     }
 
-    fn rules(&self, os: Platform) -> Rules<'a> {
+    /// The rules of a drag step, with the canvas's snapping as this pass has it.
+    fn rules(&self, env: &EnvView<'_>) -> Rules {
         Rules {
             ratio: self.ratio.filter(|k| k.is_finite() && *k > 0.0),
             bounds: self.bounds,
             turn_step: self.turn_step,
             image: self.image_mode,
             auto_center: self.auto_center,
-            snap: self.snap,
-            os,
+            snap: canvas_snap(env),
+            os: env.shell().os,
         }
+    }
+
+    /// Whether the crop has started: anything but the untouched default frame in image mode, or a drag that changed
+    /// the frame, or a turn or Straighten line running (their guides aim the gesture). Until then no shield and no
+    /// guide show and the outline is dashed (#10930).
+    fn started(&self, drag: Option<&Drag>) -> bool {
+        !self.default_frame || !self.image_mode || drag.is_some_and(|drag| drag.changed || matches!(drag.kind, Kind::Turn { .. } | Kind::Line { .. }))
+    }
+
+    /// A press inside the frame draws a new one: on the default frame, and anywhere while the overlay is hidden.
+    fn draws(&self) -> bool {
+        self.default_frame || self.hidden
     }
 
     /// The frame to show: the value, or the whole document while the value is mixed.
@@ -270,24 +288,25 @@ impl CropOverlay<'_> {
         let from = view.to_doc(origin);
         let kind = match grab {
             Grab::Line => {
-                let from = self.rules(cx.env.shell().os).snap_screen(&view, origin, mods);
+                let from = self.rules(&cx.env).snap_screen(&view, origin, mods);
                 Kind::Line { from, to: from }
             }
             Grab::Turn => Kind::Turn { grab: gesture::grab(frame, from) },
-            Grab::Part(BoxPart::Inside) if !self.default_frame => Kind::Move,
+            Grab::Part(BoxPart::Inside) if !self.draws() => Kind::Move,
             Grab::Part(BoxPart::Inside) => Kind::Draw { anchor: from, cur: from, last: from },
             Grab::Part(part) => Kind::Resize(part),
         };
         if !matches!(kind, Kind::Line { .. }) {
             cx.begin();
         }
-        Drag { kind, at_press: *frame, from, press_view: self.image_mode.then_some(view), last: *frame }
+        Drag { kind, at_press: *frame, from, press_view: self.image_mode.then_some(view), last: *frame, changed: false, pointer: origin }
     }
 
     /// One step of the drag with the pointer at screen point `pos`.
     fn step(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, drag: &mut Drag, pos: Pos2, mods: Mods) {
         let view = space.view;
-        let rules = self.rules(cx.env.shell().os);
+        let rules = self.rules(&cx.env);
+        drag.pointer = pos;
         if let Kind::Line { from, to } = &mut drag.kind {
             *to = rules.snap_screen(&view, pos, mods);
             self.report.dragging = true;
@@ -302,6 +321,7 @@ impl CropOverlay<'_> {
         self.report.snapped = lines;
         if let Some(next) = rules.proposal(drag, to, mods, held_space) {
             drag.last = next;
+            drag.changed |= next != drag.at_press;
             // A frame with no extent on screen declares no parts, which would end the press with the edit still open: it
             // is remembered (the release cancels the edit) but not proposed.
             if !degenerate(&screen_corners(&view, &next)) {
@@ -325,15 +345,14 @@ impl CropOverlay<'_> {
         readout(cx, pos, &rows);
     }
 
-    /// The button released after a drag at screen point `pos`.
-    fn finish(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, drag: Drag, pos: Pos2) {
+    /// The button released after a drag.
+    fn finish(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, drag: Drag) {
         if let Kind::Line { from, to } = drag.kind {
             if f64::from((to - from).length()) >= STRAIGHTEN_MIN {
                 self.report.straightened = CropBox::level_angle(space.view.to_doc(from), space.view.to_doc(to));
             }
             return;
         }
-        let _ = pos;
         if drag.last.is_finite() && drag.last.size_ok() {
             if let Some(view) = gesture::centred(&drag, self.auto_center, &space.view, &drag.last) {
                 self.report.view = Some(view);
@@ -362,7 +381,11 @@ impl CropOverlay<'_> {
         if cx.intents().take(Intent::Cancel) {
             self.report.discard = true;
         }
-        let rules = self.rules(cx.env.shell().os);
+        // A hidden frame is not shown to move.
+        if self.hidden {
+            return;
+        }
+        let rules = self.rules(&cx.env);
         let mut next = None;
         if let Some((direction, mods)) = cx.intents().take_nudge() {
             let step = if mods.shift { NUDGE_FAR } else { NUDGE };
@@ -421,8 +444,9 @@ pub struct CropOverlayOutput {
     pub turning: Option<f64>,
     /// The size Enter would crop to while the frame is drawn or resized.
     pub sizing: Option<(f64, f64)>,
-    /// The pointer of a draw, a classic move or a resize that is not live-centred: the crop tool hands it to
-    /// `ToolContext::autoscroll_at`; `None` for a turn, an image-mode move and a Straighten line.
+    /// The pointer of a draw, a classic move or a resize that is not live-centred, in every pass while the drag runs:
+    /// the crop tool hands it to `ToolContext::autoscroll_at`; `None` for a turn, an image-mode move and a Straighten
+    /// line.
     pub scrolls_at: Option<Pos2>,
     /// True in the pass a Straighten press is released or cancelled, whatever its length.
     pub straighten_ended: bool,
@@ -488,6 +512,15 @@ impl Component for CropOverlay<'_> {
                 .priority(HitPriority::new(HitLevel::Handle, u8::MAX))
                 .cursor(CursorIcon::Crosshair)
                 .pointer_only("the options bar's angle field sets the straightened angle");
+        }
+        if self.hidden {
+            // No frame to grab: the whole canvas is the default frame's inside, where a press draws a new frame.
+            cx.part(FRAME.at(BoxPart::Inside.index()), HitShape::Rect(rect))
+                .sense(Sense::DRAG)
+                .priority(HitPriority::BODY)
+                .cursor(CursorIcon::Crosshair)
+                .pointer_only("the options bar's size fields set the frame while it is hidden");
+            return;
         }
         let q = screen_corners(&view, &frame);
         if !frame.is_finite() || degenerate(&q) {
@@ -557,7 +590,7 @@ impl Component for CropOverlay<'_> {
             let mods = press.mods;
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
-                    if grab == Grab::Part(BoxPart::Inside) && press.double_pressed() && !self.default_frame {
+                    if grab == Grab::Part(BoxPart::Inside) && press.double_pressed() && !self.draws() {
                         self.report.apply = true;
                     }
                 }
@@ -572,12 +605,16 @@ impl Component for CropOverlay<'_> {
                         live.drag = Some(drag);
                     }
                 }
-                PressPhase::Release { pos, click: false, .. } => {
-                    if let Some(drag) = live.drag.take() {
-                        self.finish(cx, &space, drag, pos);
+                // The press phases reach only the pass that has the frame's input, so a second pass of the frame
+                // reports no Straighten end and finishes no drag a second time.
+                PressPhase::Release { start, click, .. } => {
+                    self.report.straighten_ended |= grab == Grab::Line && start.button == PointerButton::Primary;
+                    if !click && let Some(drag) = live.drag.take() {
+                        self.finish(cx, &space, drag);
                     }
                 }
                 PressPhase::Cancel { .. } => {
+                    self.report.straighten_ended |= grab == Grab::Line;
                     if let Some(drag) = live.drag.take() {
                         self.report.view = drag.press_view;
                     }
@@ -597,6 +634,7 @@ impl Component for CropOverlay<'_> {
             .find(|part| cx.hover_pos(craft_behavior::PartRef { key: FRAME, index: Some(part.index()) }).is_some())
             .or_else(|| cx.hover_pos(TURN).map(|_| BoxPart::Outside));
         self.run_keys(cx, &space, &frame, live.drag.is_some());
+        self.report.scrolls_at = live.drag.as_ref().and_then(|drag| drag.scrolls_at(self.image_mode, self.auto_center));
         *cx.memory::<Live>() = live;
     }
 
@@ -607,7 +645,9 @@ impl Component for CropOverlay<'_> {
         let picked =
             cx.focus_visible().then(|| cx.active_part()).flatten().filter(|part| part.key == FRAME).and_then(|part| part.index).and_then(frame_part);
         let refused = matches!(cx.validity(), crate::contract::Validity::Refuse(_) | crate::contract::Validity::Error(_));
-        paint::paint(ui, cx, &paint::Scene { space: &space, frame, drag: live.drag.as_ref(), picked, refused, overlay: self });
+        let drag = live.drag.as_ref();
+        let started = self.started(drag);
+        paint::paint(ui, cx, &paint::Scene { space: &space, frame, drag, picked, refused, started, overlay: self });
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
@@ -620,6 +660,9 @@ impl Component for CropOverlay<'_> {
         let (w, h) = (frame.rect.width(), frame.rect.height());
         let angle = units.number_ungrouped(gesture::turn_degrees(&frame, false), 1..=1);
         access.value(format!("{} × {}, {angle}°", x.format_value(&units, w, 0.0), y.format_value(&units, h, 0.0)));
+        if self.hidden {
+            return;
+        }
         let names = [
             (BoxPart::Inside, &words.crop_whole),
             (BoxPart::Corner(0), &words.crop_top_left),
@@ -638,7 +681,7 @@ impl Component for CropOverlay<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CropOverlayOutput {
         let picked = cx.active_part().filter(|part| part.key == FRAME).and_then(|part| part.index).and_then(frame_part);
-        let Report { apply, discard, straightened, view, snapped, hovered, dragging, nudged, turning, sizing } = self.report;
+        let Report { apply, discard, straightened, view, snapped, hovered, dragging, nudged, turning, sizing, scrolls_at, straighten_ended } = self.report;
         CropOverlayOutput {
             edit: cx.edit_response(),
             apply,
@@ -652,8 +695,8 @@ impl Component for CropOverlay<'_> {
             nudged,
             turning,
             sizing,
-            scrolls_at: None,        // P3(tools-w15): tl.T43
-            straighten_ended: false, // P3(tools-w15): tl.T43
+            scrolls_at,
+            straighten_ended,
         }
     }
 }
