@@ -91,6 +91,7 @@ craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-jsonrpc = { path = "crates/jsonrpc" }
+craft-mcp = { path = "crates/mcp" }
 craft-jxl = { path = "crates/jxl" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
