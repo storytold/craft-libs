@@ -1,6 +1,5 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-//! Clean-room decoder for the JPEG processes most Rust JPEG decoders don't handle, written from
-//! ITU-T T.81 (ISO/IEC 10918-1).
+//! Clean-room JPEG decoding and baseline encoding, written from ITU-T T.81 (ISO/IEC 10918-1).
 //!
 //! [`decode`] supports these frames:
 //!
@@ -1703,3 +1702,7 @@ pub use bands::{Band, Bands, Reader};
 
 #[cfg(test)]
 mod tests;
+
+/// Baseline JPEG encoder (8-bit, Huffman-coded sequential DCT).
+mod encode;
+pub use encode::{ChromaSubsampling, EncodeError, encode_baseline};
