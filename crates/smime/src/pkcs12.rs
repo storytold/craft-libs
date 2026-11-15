@@ -232,27 +232,24 @@ impl Work {
     }
 }
 
-/// A private-key bag and the metadata used to pair it with its certificate.
+/// A private-key bag and whether it was encrypted.
 struct KeyBag {
     key: Zeroizing<Vec<u8>>,
-    key_id: Option<Vec<u8>>,
     encrypted: bool,
 }
 
 /// The bags found.
 #[derive(Default)]
 struct Found {
-    /// Each private key, its local key id, and whether it was encrypted in the file.
+    /// Each private key and whether it was encrypted in the file.
     keys: Vec<KeyBag>,
     certificates: Vec<(Vec<u8>, Option<Vec<u8>>)>,
 }
 
 impl Found {
-    /// The one private key and its certificate: the one whose public key is the key's, else
-    /// (a key that doesn't carry its public half) the one with the key's local key id, when it
-    /// is of the very kind the key is (algorithm and curve). The kind said is the private key's.
+    /// Pair only by verified public key, never by untrusted bag metadata.
     fn finish(mut self) -> Result<Opened, Error> {
-        let KeyBag { key, key_id, encrypted: key_encrypted } = match self.keys.len() {
+        let KeyBag { key, encrypted: key_encrypted } = match self.keys.len() {
             1 => self.keys.pop().ok_or(Error::NoPrivateKey)?,
             _ => return Err(Error::NoPrivateKey),
         };
@@ -260,10 +257,8 @@ impl Found {
         let kind_of = |c: &[u8]| crate::cert::Cert::from_der(c).map_or(KeyKind::Other, |c| crate::algorithms::key_kind(c.public_key()));
         let public = public_of(&key);
         let by_key = public.as_ref().and_then(|p| self.certificates.iter().position(|(c, _)| certificate_key(c).as_ref() == Some(p)));
-        let by_id = key_id.as_ref().and_then(|id| self.certificates.iter().position(|(c, cid)| cid.as_ref() == Some(id) && kind_of(c) == key_kind));
-        // A localKeyId is only a hint when the private key omits its public half.
-        // It must never override an available public key that matches no certificate.
-        let at = if public.is_some() { by_key } else { by_id }.ok_or(Error::NoCertificate)?;
+        // localKeyId is untrusted metadata, not proof of key ownership.
+        let at = by_key.ok_or(Error::NoCertificate)?;
         let (certificate, _) = self.certificates.remove(at);
         if kind_of(&certificate) != key_kind {
             return Err(Error::NoCertificate);
@@ -660,7 +655,7 @@ fn safe_contents(bytes: &[u8], safe: Safe<'_>, work: &mut Work, found: &mut Foun
         }
         let key_id = attributes.and_then(local_key_id);
         match oid_of(kind)? {
-            KEY_BAG => found.keys.push(KeyBag { key: Zeroizing::new(value.whole.to_vec()), key_id, encrypted }),
+            KEY_BAG => found.keys.push(KeyBag { key: Zeroizing::new(value.whole.to_vec()), encrypted }),
             SHROUDED_KEY_BAG => {
                 // EncryptedPrivateKeyInfo (RFC 5958 §3).
                 if value.tag != 0x30 {
@@ -673,7 +668,7 @@ fn safe_contents(bytes: &[u8], safe: Safe<'_>, work: &mut Work, found: &mut Foun
                 if ber::read(&key).is_none_or(|(k, rest)| k.tag != 0x30 || !rest.is_empty()) {
                     return Err(Error::WrongPassphrase);
                 }
-                found.keys.push(KeyBag { key, key_id, encrypted: true });
+                found.keys.push(KeyBag { key, encrypted: true });
             }
             CERT_BAG => {
                 if value.tag != 0x30 {
@@ -713,7 +708,7 @@ fn local_key_id(attributes: &Tlv<'_>) -> Option<Vec<u8>> {
 }
 
 /// What of a private key (PKCS #8) its certificate's public key must match: an RSA key's modulus
-/// and exponent as `RSAPublicKey`, an EC key's public point as written in it.
+/// and exponent as `RSAPublicKey`, an EC key's public point derived from its scalar.
 fn public_of(pkcs8: &[u8]) -> Option<Vec<u8>> {
     let (info, _) = ber::read(pkcs8)?;
     let fields = ber::children(info.value)?;
@@ -731,10 +726,38 @@ fn public_of(pkcs8: &[u8]) -> Option<Vec<u8>> {
         body.extend_from_slice(e.whole);
         return Some(rsa_public(&body));
     }
-    // ECPrivateKey (RFC 5915): version, privateKey, [0] parameters, [1] publicKey BIT STRING.
-    let public = parts.iter().find(|p| p.tag == 0xa1)?;
-    let (bits, _) = ber::read(public.value)?;
-    (bits.tag == 0x03).then(|| bits.value.to_vec())
+    // RFC 5915 makes the public point optional. Derive it from the private scalar,
+    // and refuse an inconsistent supplied point rather than trusting bag metadata.
+    let scalar = parts.get(1).filter(|p| p.tag == 0x04)?.value;
+    let supplied = parts.iter().find(|p| p.tag == 0xa1).map(|p| {
+        let (bits, rest) = ber::read(p.value)?;
+        (rest.is_empty() && bits.tag == 0x03 && bits.value.first() == Some(&0)).then(|| &bits.value[1..])
+    });
+    use p256::elliptic_curve::sec1::ToSec1Point;
+    let point = match private_key_kind(pkcs8) {
+        KeyKind::P256 => {
+            let public = p256::SecretKey::from_slice(scalar).ok()?.public_key();
+            if let Some(encoded) = supplied {
+                if p256::PublicKey::from_sec1_bytes(encoded?).ok()? != public {
+                    return None;
+                }
+            }
+            public.to_sec1_point(false).as_bytes().to_vec()
+        }
+        KeyKind::P384 => {
+            let public = p384::SecretKey::from_slice(scalar).ok()?.public_key();
+            if let Some(encoded) = supplied {
+                if p384::PublicKey::from_sec1_bytes(encoded?).ok()? != public {
+                    return None;
+                }
+            }
+            public.to_sec1_point(false).as_bytes().to_vec()
+        }
+        _ => return None,
+    };
+    let mut bits = vec![0];
+    bits.extend(point);
+    Some(bits)
 }
 
 /// `RSAPublicKey ::= SEQUENCE { modulus, publicExponent }` around `body`.

@@ -482,3 +482,34 @@ fn matching_local_id_cannot_override_a_different_public_key() {
     assert!(open(&plain_p12(&key, &alice, b"same-id"), PASS).is_ok());
     assert_eq!(open(&plain_p12(&key, &other, b"same-id"), PASS).err(), Some(Error::NoCertificate));
 }
+
+#[test]
+fn ec_key_pairing_is_derived_not_claimed_by_metadata() {
+    for algorithm in [&rcgen::PKCS_ECDSA_P256_SHA256, &rcgen::PKCS_ECDSA_P384_SHA384] {
+        let key = rcgen::KeyPair::generate_for(algorithm).unwrap();
+        let other = rcgen::KeyPair::generate_for(algorithm).unwrap();
+        let params = rcgen::CertificateParams::new(vec!["example.org".into()]).unwrap();
+        let certificate = params.self_signed(&key).unwrap();
+        let wrong = params.self_signed(&other).unwrap();
+        let pkcs8 = key.serialize_der();
+        let (info, _) = craft_ber::read(&pkcs8).unwrap();
+        let fields = craft_ber::children(info.value).unwrap();
+        let (inner, _) = craft_ber::read(fields[2].value).unwrap();
+        let parts = craft_ber::children(inner.value).unwrap();
+        let without_point: Vec<Vec<u8>> = parts.iter().filter(|p| p.tag != 0xa1).map(|p| p.whole.to_vec()).collect();
+        let omitted = seq(&[fields[0].whole.to_vec(), fields[1].whole.to_vec(), tlv(0x04, &seq(&without_point))]);
+        assert!(open(&plain_p12(&omitted, certificate.der(), b"same-id"), PASS).is_ok());
+        assert_eq!(open(&plain_p12(&omitted, wrong.der(), b"same-id"), PASS).err(), Some(Error::NoCertificate));
+
+        let other_der = other.serialize_der();
+        let (other_info, _) = craft_ber::read(&other_der).unwrap();
+        let other_fields = craft_ber::children(other_info.value).unwrap();
+        let (other_inner, _) = craft_ber::read(other_fields[2].value).unwrap();
+        let other_parts = craft_ber::children(other_inner.value).unwrap();
+        let point = other_parts.iter().find(|p| p.tag == 0xa1).unwrap();
+        let mut forged_parts = without_point;
+        forged_parts.push(point.whole.to_vec());
+        let forged = seq(&[fields[0].whole.to_vec(), fields[1].whole.to_vec(), tlv(0x04, &seq(&forged_parts))]);
+        assert_eq!(open(&plain_p12(&forged, wrong.der(), b"same-id"), PASS).err(), Some(Error::NoCertificate));
+    }
+}

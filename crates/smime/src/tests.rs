@@ -1043,3 +1043,28 @@ fn opaque_binary_content_is_verified_as_exact_octets_with_or_without_attributes(
         assert_eq!(check(Signed::Opaque(&changed), &context).unwrap().signature.verdict, Verdict::Changed);
     }
 }
+
+#[test]
+fn unsupported_name_constraints_fail_closed_for_dns_ip_and_uri() {
+    // Critical excludedSubtrees for each unsupported form, alongside valid email identity.
+    for (tag, excluded, presented) in [
+        (0x82, b"blocked.example".as_slice(), b"blocked.example".as_slice()),
+        (0x87, &[192, 0, 2, 0, 255, 255, 255, 0][..], &[192, 0, 2, 1][..]),
+        (0x86, b"blocked.example".as_slice(), b"https://blocked.example/path".as_slice()),
+    ] {
+        let root = root("Root");
+        let ca = authority("Constrained CA", &root, |params| {
+            let subtree = tlv(0x30, &tlv(tag, excluded));
+            let mut extension = rcgen::CustomExtension::from_oid_content(&[2, 5, 29, 30], tlv(0x30, &tlv(0xa1, &subtree)));
+            extension.set_criticality(true);
+            params.custom_extensions.push(extension);
+        });
+        let mut params = signer_params("Ada", "ada@example.org");
+        params.subject_alt_names.clear();
+        let mut names = tlv(0x81, b"ada@example.org");
+        names.extend(tlv(tag, presented));
+        params.custom_extensions.push(rcgen::CustomExtension::from_oid_content(&[2, 5, 29, 17], tlv(0x30, &names)));
+        let signer = issued(params, key(&rcgen::PKCS_ECDSA_P256_SHA256), &ca);
+        assert_eq!(path_verdict(&signer, &[&ca], &root, "ada@example.org"), (Verdict::NotVerified, Some(Why::Constrained)));
+    }
+}

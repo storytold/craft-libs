@@ -369,7 +369,9 @@ fn subtrees(subtrees: &GeneralSubtrees) -> Result<Subtrees, ()> {
         match &s.base {
             GeneralName::Rfc822Name(a) => mail.get_or_insert_with(Vec::new).push(a.as_str().to_string()),
             GeneralName::DirectoryName(n) => dirs.get_or_insert_with(Vec::new).push(n.iter_rdn().filter_map(|r| r.to_der().ok()).collect()),
-            _ => {}
+            // RFC 5280 4.2.1.10: constraints cannot be treated as processed when
+            // this validator does not implement their name form. Fail closed.
+            _ => return Err(()),
         }
     }
     if subtrees.len() > 64 {
