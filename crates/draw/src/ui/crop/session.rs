@@ -70,6 +70,9 @@ pub struct CropStep {
     pub frame: Option<CropBox>,
     /// Whether the frame is the untouched default.
     pub default_frame: bool,
+    /// Whether the untouched default frame is the document's selection (the Selection entry of the
+    /// preset list is then the chosen one). Always false once the frame is not the default.
+    pub from_selection: bool,
 }
 
 /// Straighten: armed by the bar's button for one line, or held with ⌘ (Ctrl) for as long as the
@@ -119,8 +122,8 @@ pub enum LeaveFrame {
     /// [`CropSession::clear`] (or [`restore`](CropSession::restore) when the crop is refused, and
     /// then clear, so the next tool does not retry it).
     Apply(CropBox),
-    /// A gesture on the frame still runs, or the pen's eraser end stands in for the tool: the frame
-    /// stays pending.
+    /// The pen's eraser end stands in for the tool: the frame stays pending. A running gesture does
+    /// not keep it: [`CropTool::leave`](super::CropTool::leave) ends the gesture first.
     Kept,
 }
 
@@ -134,6 +137,15 @@ pub struct CropKept {
     view: Option<CanvasView>,
     frame_for: Option<(CropDocKey, Size)>,
     editing: bool,
+    /// The size the document has once the crop is made.
+    crops_to: Size,
+}
+
+impl CropKept {
+    /// The size the document has once the crop is made.
+    pub(super) fn crops_to(&self) -> Size {
+        self.crops_to
+    }
 }
 
 /// The pending frame of the Crop tool. The tool ([`CropTool`](super::CropTool)) owns one and drives it.
@@ -148,6 +160,9 @@ pub struct CropKept {
 ///   The view is not in the steps: Undo never moves it.
 /// - Leaving the tool ([`leave`](Self::leave)) drops an untouched default frame and applies a
 ///   drawn one.
+/// - Dismissal ([`dismiss`](Self::dismiss)): after Discard or an accepted crop the default frame
+///   is still made but stays hidden until the next press, ratio change or size change
+///   ([`show`](Self::show)), for that document and size only.
 /// - [`CropTool`](super::CropTool) is the one writer: the session has no edit type of its own.
 #[derive(Clone, Debug, Default)]
 pub struct CropSession {
@@ -165,16 +180,77 @@ pub struct CropSession {
     straighten: StraightenState,
     /// The frame a ratio-field edit began with.
     ratio_base: Option<CropBox>,
+    /// The default frame is the selection's bounds.
+    from_selection: bool,
+    /// The document and size whose default frame was dismissed (Discard, an accepted crop).
+    dismissed: Option<(CropDocKey, Size)>,
+    /// The frame the last Reset made, to tell a frame that is back at its default from one that
+    /// was edited.
+    reset_to: Option<CropBox>,
+    /// The overlay gesture that runs and the frame of its last update, for
+    /// [`finish_drag`](Self::finish_drag).
+    drag: Option<(GestureId, CropBox)>,
+}
+
+/// The default frame of `document`: the selection's bounds clipped to the canvas, else the
+/// canvas, fitted to `ratio` about its centre. The flag is true when the selection's bounds were
+/// used. `None` for a canvas without area.
+pub(super) fn default_box(document: &CropDocument, ratio: Option<f64>) -> Option<(CropBox, bool)> {
+    let canvas = document.canvas();
+    let usable = |r: &Rect| r.width() > 0.0 && r.height() > 0.0;
+    if !usable(&canvas) {
+        return None;
+    }
+    let selection = document.selection.map(|s| s.intersect(canvas)).filter(usable);
+    let rect = selection.unwrap_or(canvas);
+    let rect = ratio.and_then(|k| fitted_ratio(rect, k)).unwrap_or(rect);
+    Some((CropBox::upright(rect), selection.is_some()))
+}
+
+/// Largest centred rectangle of `ratio` (width over height) contained in `rect`; never adds
+/// area. `None` for a rect or a ratio that is not a positive finite number.
+pub(super) fn fitted_ratio(rect: Rect, ratio: f64) -> Option<Rect> {
+    let r = rect.abs();
+    let (w, h) = (r.width(), r.height());
+    let finite = [r.x0, r.y0, r.x1, r.y1, ratio].iter().all(|v| v.is_finite());
+    if !finite || w <= 0.0 || h <= 0.0 || ratio <= 0.0 {
+        return None;
+    }
+    if ((w / h) / ratio - 1.0).abs() < 1e-12 {
+        return Some(r);
+    }
+    let c = r.center();
+    let (w, h) = if w / h > ratio { (h * ratio, h) } else { (w, w / ratio) };
+    let fitted = Rect::new(c.x - w / 2.0, c.y - h / 2.0, c.x + w / 2.0, c.y + h / 2.0);
+    (fitted.x1 > fitted.x0 && fitted.y1 > fitted.y0 && [fitted.x0, fitted.y0, fitted.x1, fitted.y1].iter().all(|v| v.is_finite())).then_some(fitted)
 }
 
 impl CropSession {
     fn current(&self) -> CropStep {
-        CropStep { frame: self.frame, default_frame: self.default_frame }
+        CropStep { frame: self.frame, default_frame: self.default_frame, from_selection: self.from_selection }
     }
 
     fn adopt(&mut self, step: CropStep) {
         self.frame = step.frame;
         self.default_frame = step.default_frame;
+        self.from_selection = step.from_selection;
+    }
+
+    /// The step a gesture or `Set` that leaves the frame at `after` settles: the last step when
+    /// nothing changed (a click keeps the default mark), else a drawn frame.
+    fn step_after(&self, after: &CropBox) -> CropStep {
+        if self.settled.frame.as_ref() == Some(after) {
+            self.settled
+        } else {
+            CropStep { frame: Some(*after), default_frame: false, from_selection: false }
+        }
+    }
+
+    /// Records the end of gesture `id` at `after` as one box step.
+    fn commit(&mut self, id: GestureId, after: &CropBox) {
+        let step = self.step_after(after);
+        self.adopt(step);
+        self.record(EditEvent::commit(id, Mixed::Same(self.settled), step));
     }
 
     fn history(&mut self) -> &mut EditHistory<CropStep> {
@@ -226,20 +302,18 @@ impl CropSession {
     /// `key` (as Photoshop: switching documents discards the pending crop). Returns true when a
     /// drawn frame was dropped, so the tool reports [`CropEvent::Discard`](super::CropEvent): the document whose
     /// drawn frame it dropped.
-    // P3(tools-w13): tools-w45 decision, `for_document -> Option<CropDocKey>`
     pub fn for_document(&mut self, key: CropDocKey) -> Option<CropDocKey> {
         let stale = self.frame_for.is_some_and(|(held, _)| held != key);
         if !stale {
             return None;
         }
-        let dropped = self.frame_for.map(|(held, _)| held); // P3(tools-w13): tools-w45 decision
+        let dropped = self.frame_for.map(|(held, _)| held);
         let drawn = self.pending();
         self.clear();
         dropped.filter(|_| drawn)
     }
 
     /// The document the frame was made for.
-    // P3(tools-w13): tools-w45 decision, the document `CropEvent::Discard` names (plan gap, fixed)
     pub(super) fn frame_document(&self) -> Option<CropDocKey> {
         self.frame_for.map(|(held, _)| held)
     }
@@ -249,7 +323,7 @@ impl CropSession {
     /// canvas gets none. A default frame made for another size is replaced. A new default frame
     /// starts a new box history, upright. Returns true when it made one.
     pub fn ensure_frame(&mut self, document: &CropDocument, dragging: bool, ratio: Option<f64>) -> bool {
-        let _ = ratio; // P3(tools-w13): tl.T45 the default frame follows the ratio.
+
         let made_for = Some((document.key, document.size));
         if self.default_frame && self.frame_for != made_for && !dragging {
             self.frame = None;
@@ -258,13 +332,12 @@ impl CropSession {
         if self.frame.is_some() || dragging {
             return false;
         }
-        let canvas = document.canvas();
-        let usable = |r: &Rect| r.width() > 0.0 && r.height() > 0.0;
-        if !usable(&canvas) {
-            return false;
+        if self.dismissed.is_some_and(|held| Some(held) != made_for) {
+            self.dismissed = None;
         }
-        let rect = document.selection.map(|s| s.intersect(canvas)).filter(usable).unwrap_or(canvas);
-        self.frame = Some(CropBox::upright(rect));
+        let Some((frame, from_selection)) = default_box(document, ratio) else { return false };
+        self.frame = Some(frame);
+        self.from_selection = from_selection;
         self.default_frame = true;
         self.frame_for = made_for;
         self.editing = false;
@@ -280,28 +353,32 @@ impl CropSession {
     /// box step.
     pub fn mirror(&mut self, event: &EditEvent<CropBox>) {
         self.settle();
-        let drawn = |frame: &CropBox| CropStep { frame: Some(*frame), default_frame: false };
-        let unchanged = |settled: &CropStep, frame: &CropBox| settled.frame.as_ref() == Some(frame);
         match event {
             EditEvent::Begin { id, label, .. } => {
-                if self.frame.is_some() {
+                if let Some(frame) = self.frame {
                     self.editing = true;
                     self.default_frame = false;
+                    self.from_selection = false;
+                    self.drag = Some((*id, frame));
                 }
                 self.record(EditEvent::begin(*id, Mixed::Same(self.settled), Arc::clone(label), None));
             }
-            EditEvent::Update { .. } => {}
+            EditEvent::Update { value, .. } => {
+                if let Some((_, last)) = self.drag.as_mut() {
+                    *last = *value;
+                }
+            }
             EditEvent::Commit { id, after, .. } => {
-                let step = if unchanged(&self.settled, after) { self.settled } else { drawn(after) };
-                self.adopt(step);
-                self.record(EditEvent::commit(*id, Mixed::Same(self.settled), step));
+                self.drag = None;
+                self.commit(*id, after);
             }
             EditEvent::Cancel { id, reason, .. } => {
+                self.drag = None;
                 self.adopt(self.settled);
                 self.record(EditEvent::cancel(*id, *reason, None));
             }
             EditEvent::Set { after, label, .. } => {
-                let step = if unchanged(&self.settled, after) { self.settled } else { drawn(after) };
+                let step = self.step_after(after);
                 self.adopt(step);
                 self.editing |= !step.default_frame;
                 self.record(EditEvent::set(Mixed::Same(self.settled), step, Arc::clone(label), None));
@@ -312,11 +389,12 @@ impl CropSession {
 
     /// A key, refit or Straighten set the frame: one box step named `label`, reported as the `Set` the
     /// tool mirrors. The frame is no longer the default unless `keep_default` (a refit of the untouched
-    /// default frame to a ratio alone).
+    /// default frame to a ratio alone). Either way it is no longer the selection's bounds.
     pub fn set(&mut self, frame: CropBox, keep_default: bool, label: &str) -> EditEvent<CropBox> {
         self.settle();
         let before = self.frame.map_or(Mixed::Mixed, Mixed::Same);
         self.frame = Some(frame);
+        self.from_selection = false;
         if !keep_default {
             self.default_frame = false;
         }
@@ -332,6 +410,7 @@ impl CropSession {
         let before = self.frame.map_or(Mixed::Mixed, Mixed::Same);
         self.frame = Some(frame);
         self.default_frame = false;
+        self.from_selection = false;
         self.editing = true;
         if self.nudging.is_none() {
             let id = next_gesture_id(ctx);
@@ -339,6 +418,69 @@ impl CropSession {
             self.record(EditEvent::begin(id, Mixed::Same(self.settled), label.into(), None));
         }
         EditEvent::set(before, frame, label.into(), None)
+    }
+
+    /// Ends the overlay gesture that still runs (the tool was left mid-drag) at the frame of its
+    /// last update, as one box step: the step the release would have recorded. False when no
+    /// gesture runs.
+    pub(super) fn finish_drag(&mut self) -> bool {
+        let Some((id, after)) = self.drag.take() else { return false };
+        self.settle();
+        self.commit(id, &after);
+        true
+    }
+
+    /// The frame is the untouched default and is the selection's bounds.
+    pub fn from_selection(&self) -> bool {
+        self.from_selection
+    }
+
+    /// Enter, the check mark and Image > Crop have a crop to make: a pending frame, or the
+    /// untouched default frame that is the selection's bounds (not dismissed).
+    pub fn applies(&self) -> bool {
+        self.pending() || (self.frame.is_some() && self.default_frame && self.from_selection && self.dismissed.is_none())
+    }
+
+    /// The default frame was dismissed (Discard, an accepted crop) and stays hidden.
+    pub fn dismissed(&self) -> bool {
+        self.dismissed.is_some()
+    }
+
+    /// Discard or an accepted crop: the session is cleared and the document's default frame stays
+    /// hidden until [`show`](Self::show). The next [`ensure_frame`](Self::ensure_frame) still makes
+    /// the frame, so the hidden overlay has one to show.
+    pub fn dismiss(&mut self) {
+        let made_for = self.frame_for;
+        self.clear();
+        self.dismissed = made_for;
+    }
+
+    /// An accepted crop: like [`dismiss`](Self::dismiss), for the document at the size the crop
+    /// makes (`crops_to`), so the frame stays hidden on the cropped document and a later size change
+    /// shows it.
+    pub fn dismiss_cropped(&mut self, crops_to: Size) {
+        let made_for = self.frame_for;
+        self.clear();
+        self.dismissed = made_for.map(|(key, _)| (key, crops_to));
+    }
+
+    /// The first frame edit from the hidden overlay, a ratio or size change or a Straighten press:
+    /// the default frame shows again.
+    pub fn show(&mut self) {
+        self.dismissed = None;
+    }
+
+    /// The frame the last [`reset`](Self::reset) made, while no other step replaced it.
+    pub fn reset_to(&self) -> Option<CropBox> {
+        self.reset_to
+    }
+
+    /// Reset: `frame` (the default frame at angle 0) as one box step, Straighten disarmed.
+    pub(super) fn reset(&mut self, frame: CropBox, label: &str) -> EditEvent<CropBox> {
+        self.straighten.disarm();
+        let event = self.set(frame, false, label);
+        self.reset_to = Some(frame);
+        event
     }
 
     /// Ends a run of arrow nudges: records them as one box step.
@@ -424,8 +566,8 @@ impl CropSession {
     }
 
     /// Keeps the frame, the box history and `view` (an image-mode view) before the app runs its
-    /// crop command.
-    pub fn keep(&self, view: Option<CanvasView>) -> CropKept {
+    /// crop command, with the size `crops_to` the crop makes.
+    pub fn keep(&self, view: Option<CanvasView>, crops_to: Size) -> CropKept {
         CropKept {
             step: self.current(),
             history: self.history.clone(),
@@ -433,6 +575,7 @@ impl CropSession {
             view,
             frame_for: self.frame_for,
             editing: self.editing,
+            crops_to,
         }
     }
 
@@ -443,6 +586,7 @@ impl CropSession {
         self.history = kept.history;
         self.settled = kept.settled;
         self.nudging = None;
+        self.drag = None;
         self.frame_for = kept.frame_for;
         self.editing = kept.editing;
         kept.view
@@ -450,16 +594,22 @@ impl CropSession {
 
     /// The frame a ratio-field edit fits from: the frame when the edit began (`editing` true on
     /// the first change of the run), kept until the run ends (`editing` false), so 1 : 3 on the way
-    /// to 16 : 3 does not shrink the frame first. `None` without a frame.
+    /// to 16 : 3 does not shrink the frame first. The untouched selection frame fits from the
+    /// canvas, not from the selection. `None` without a frame.
     pub fn ratio_base(&mut self, editing: bool) -> Option<CropBox> {
+        let start = if self.default_frame && self.from_selection {
+            self.frame_for.map(|(_, size)| CropBox::upright(size.to_rect()))
+        } else {
+            self.frame
+        };
         if editing {
             if self.ratio_base.is_none() {
-                self.ratio_base = self.frame;
+                self.ratio_base = start;
             }
             self.ratio_base
         } else {
             self.ratio_base = None;
-            self.frame
+            start
         }
     }
 

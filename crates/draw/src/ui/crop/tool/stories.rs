@@ -44,6 +44,8 @@ craft_ui::words! {
         free_crop: "cropStory.freeCrop" = "Free crop";
         /// The target, then the frame.
         ratio: template "cropStory.ratio" = "{target} · {frame}";
+        /// The default frame is dismissed and hidden until the next press.
+        hidden: "cropStory.hidden" = "Frame hidden";
     }
 }
 
@@ -56,6 +58,8 @@ const RESOLUTION: f64 = 300.0;
 
 const PICK_OTHER: &str = "Pick another tool";
 const PICK_CROP: &str = "Pick Crop tool";
+const DISCARD: &str = "Discard";
+const RESET: &str = "Reset";
 const UNDO: &str = "Undo";
 const REDO: &str = "Redo";
 
@@ -141,7 +145,7 @@ fn handle(words: &CropStoryWords, units: &Units, tool: &mut CropTool, settings: 
                 None => craft_i18n::fmt(words.apply.as_str(), &[("w", w.as_str()), ("h", h.as_str()), ("angle", angle.as_str())]),
             })
         }
-        CropEvent::Discard(_) => Some(words.discard.as_str().to_owned()), // P3(tools-w13): tools-w45 decision
+        CropEvent::Discard(_) => Some(words.discard.as_str().to_owned()),
         CropEvent::Straightened(angle) => Some(craft_i18n::fmt(words.straightened.as_str(), &[("angle", n(angle).as_str())])),
         _ => None,
     }
@@ -165,7 +169,8 @@ fn status(words: &CropStoryWords, shown: &str, last: Option<&str>) -> String {
 
 /// The tool picked: a frame is there at once, the selection's bounds or the page. A drag inside the untouched default
 /// frame draws a new one, a drag inside a drawn frame moves it. "Pick another tool" drops an untouched default frame
-/// and applies a drawn one; "Pick Crop tool" picks it again.
+/// and applies a drawn one; "Pick Crop tool" picks it again. "Discard" hides the default frame until the next press;
+/// "Reset" returns an edited frame to the default frame.
 #[story(CropOverlay<'static>, covers = [], drive = Drive::Never)]
 fn default_frame(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let env = Env::of(ui);
@@ -175,7 +180,12 @@ fn default_frame(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut picked = *data.note("picked", true);
     let mut last = data.note::<Option<String>>("last", None).clone();
     let picture = landscape();
-    let buttons = [StoryButton::new(if picked { PICK_OTHER } else { PICK_CROP })];
+    let modified = story_tool(data, CropTool::new).borrow().modified();
+    let mut buttons = vec![StoryButton::new(if picked { PICK_OTHER } else { PICK_CROP })];
+    if picked {
+        buttons.push(StoryButton::new(DISCARD));
+        buttons.push(StoryButton::new(RESET).enabled(modified));
+    }
     let showing = picked;
     let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &CropSettings| {
         if showing { show_frame(ui, at, tool, settings, &document) } else { Vec::new() }
@@ -193,14 +203,26 @@ fn default_frame(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                 last = Some(words.left.as_str().to_owned());
             }
             Some(PICK_CROP) => picked = true,
+            Some(DISCARD) => events.extend(run.tool.discard()),
+            Some(RESET) => events.extend(run.tool.reset_frame(run.document, &document, &units)),
             _ => {}
+        }
+        if matches!(run.pressed, Some(DISCARD | RESET)) {
+            // The buttons showed before this pass's step: they show its answer on the next pass.
+            frame::request_repaint(&ctx);
         }
         for event in events {
             if let Some(text) = handle(&words, &units, run.tool, run.document, event) {
                 last = Some(text);
             }
         }
-        let frame = if picked { frame_line(&words, &units, run.tool.frame()) } else { String::new() };
+        let frame = if !picked {
+            String::new()
+        } else if run.tool.session().dismissed() {
+            words.hidden.as_str().to_owned()
+        } else {
+            frame_line(&words, &units, run.tool.frame())
+        };
         let mut output = StoryOutput::default().readout(status(&words, &frame, last.as_deref()));
         output.clicked = run.pressed.is_some();
         output
