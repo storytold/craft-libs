@@ -1929,6 +1929,7 @@ dependencies = [
  "craft-jpeg",
  "craft-media-testkit",
  "craft-metadata",
+ "craft-tiff",
  "craft-video",
  "crc32fast",
  "exr",

@@ -33,6 +33,7 @@ pub mod orientation;
 pub mod png_probe;
 pub mod resolution;
 pub mod source_settings;
+pub mod tiff_probe;
 pub mod web;
 pub use crate::allocation::{probe_allocation_size, probe_stored_size};
 pub use crate::cicp::Cicp;
