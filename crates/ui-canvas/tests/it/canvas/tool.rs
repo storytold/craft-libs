@@ -6,8 +6,8 @@ use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GesturePhase, PointerButton, PointerSample};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
-    Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, NavigationOptions, Snap,
-    StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer,
+    Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, MomentaryTool,
+    NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer,
 };
 use craft_ui::contract::{Bind, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
@@ -1050,6 +1050,19 @@ fn a_secondary_click_the_tool_did_not_take_asks_for_the_menu() {
     let at = rect.get().center();
     fixture.frame(vec![pointer::secondary(at, true)]).frame(vec![pointer::secondary(at, false)]);
     assert_eq!(contexts.borrow().len(), 1, "{:?}", contexts.borrow());
+}
+
+/// With Space held a secondary click asks for the menu with the momentary Hand, whose secondary drag pans.
+#[trial]
+fn a_secondary_click_with_the_momentary_hand_asks_for_its_menu() {
+    let (mut fixture, contexts, _, rect) = menu_canvas(true, false);
+    let at = rect.get().center();
+    fixture.frame(vec![pointer::moved(at), key_press(Key::Space, Modifiers::NONE)]);
+    fixture.frame(vec![pointer::secondary(at, true)]).frame(vec![pointer::secondary(at, false)]);
+    let asked = contexts.borrow().clone();
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert_eq!(asked[0].at, at);
+    assert_eq!(asked[0].momentary, Some(MomentaryTool::Hand), "the request names the momentary Hand: {asked:?}");
 }
 
 /// A canvas with the Hand selected, with the momentary set when `momentary` and scroll bars in its body when `bars`.

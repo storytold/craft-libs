@@ -60,7 +60,8 @@
 //!
 //! Readouts: a tool's [`ToolContext::readout`] rows paint only while the root env's `ShowReadouts` holds; its
 //! [`ToolContext::hud`] rows always paint. A secondary press the tool did not take is reported in
-//! [`ToolHostResponse::context`], and so is the Menu key.
+//! [`ToolHostResponse::context`], and so are a secondary click with the momentary Hand (whose drag pans) and the Menu
+//! key.
 //!
 //! ```no_run
 //! # extern crate craft_ui_canvas as craft_ui;
@@ -248,8 +249,8 @@ pub struct ToolHostResponse {
     pub view: Option<CanvasView>,
     /// The snap lines of this pass from `snap_rect` and `add_snapped`.
     pub snapped: Vec<SnapLine>,
-    /// Where the app opens its canvas menu: a secondary press on the background the running tool did not take, or the
-    /// Menu key or Shift+F10.
+    /// Where the app opens its canvas menu: a secondary press on the background the running tool did not take, a
+    /// secondary click with the momentary Hand (its secondary drag pans), or the Menu key or Shift+F10.
     pub context: Option<ContextRequest>,
     /// The document distance the view centre moved this pass from a `pan_view`, after the Overscroll clamp.
     pub pan: Option<ViewPan>,
@@ -305,13 +306,16 @@ struct Active {
     stand_in: Option<StandInKey>,
 }
 
-/// A secondary press the selected tool refused: what its menu request carries when the button comes up.
+/// A secondary press the selected tool refused, or the momentary Hand took: what its menu request carries when the
+/// button comes up.
 #[derive(Clone, Copy, Debug)]
 struct SecondaryPress {
     /// The modifiers held when the button went down.
     mods: Mods,
     /// The momentary tool in effect at the press.
     momentary: Option<MomentaryTool>,
+    /// The momentary Hand took the press: it asks for the menu only when its release is a click.
+    taken: bool,
 }
 
 /// What the host keeps between passes, in a session slot keyed by the canvas's id.
@@ -331,7 +335,7 @@ struct HostState {
     viewport: ViewportId,
     /// The pass clock of the last pass that was not a measuring pass: an autoscroll moves by the time since.
     time: Option<f64>,
-    /// The open secondary press the tool refused: its release asks for the canvas menu.
+    /// The open secondary press the tool refused or the momentary Hand took: its release asks for the canvas menu.
     secondary: Option<SecondaryPress>,
 }
 
@@ -669,6 +673,10 @@ impl<'m> ToolHost<'m> {
         let taken = with_session(ctx, state_id(canvas), |slot: &mut HostState| {
             let taken = slot.gesture.take().map(|active| (active, slot.rect, slot.space, slot.viewport));
             slot.spent |= taken.is_some();
+            // A cancelled press of the momentary Hand is no click: its release opens no menu.
+            if taken.is_some() {
+                slot.secondary = None;
+            }
             taken
         });
         let Some((active, rect, space, viewport)) = taken else { return false };
@@ -1024,7 +1032,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
             if who.is_none() {
                 self.state.spent = true;
                 if pointer.button == PointerButton::Secondary {
-                    self.state.secondary = Some(SecondaryPress { mods: pointer.mods, momentary: self.momentary });
+                    self.state.secondary = Some(SecondaryPress { mods: pointer.mods, momentary: self.momentary, taken: false });
                 }
                 return;
             }
@@ -1043,6 +1051,9 @@ impl<'a, 't: 'a> Run<'a, 't> {
         match action {
             ToolAction::Claimed => {
                 self.state.gesture = Some(Active { id, last: pointer, dragged: false, stand_in: who });
+                if pointer.button == PointerButton::Secondary && who.is_none() && self.momentary == Some(MomentaryTool::Hand) {
+                    self.state.secondary = Some(SecondaryPress { mods: pointer.mods, momentary: self.momentary, taken: true });
+                }
                 self.report(GesturePhase::Begin);
             }
             ToolAction::Done => {
@@ -1226,8 +1237,11 @@ impl<'a, 't: 'a> Run<'a, 't> {
                 }
                 self.end(pointer);
                 self.state.spent = false;
-                // A secondary press the tool refused asks for the menu when its button comes up.
-                if let (Some(asked), Some(at)) = (self.state.secondary.take(), context_click(press)) {
+                // A secondary press the tool refused asks for the menu when its button comes up; one the momentary
+                // Hand took asks only as a click, so its drag pans.
+                if let (Some(asked), Some(at)) = (self.state.secondary.take(), context_click(press))
+                    && (!asked.taken || press.phase.is_click())
+                {
                     self.response.context = Some(ContextRequest { at, mods: asked.mods, momentary: asked.momentary });
                 }
             }

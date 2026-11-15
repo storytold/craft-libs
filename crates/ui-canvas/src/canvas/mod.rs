@@ -509,11 +509,11 @@ impl CanvasOutput {
         clamped(view, self.document, &self.navigation)
     }
 
-    /// Where a press on the background was released without a drag. A tool that creates geometry opens its command
-    /// form at this point.
+    /// Where a primary press on the background was released without a drag. A tool that creates geometry opens its
+    /// command form at this point.
     pub fn click_at(&self) -> Option<Pos2> {
         match self.press.phase {
-            PressPhase::Release { pos, click: true, .. } => Some(pos),
+            PressPhase::Release { start, pos, click: true, .. } if start.button == PointerButton::Primary => Some(pos),
             _ => None,
         }
     }
@@ -583,11 +583,12 @@ impl Component for Canvas<'_> {
     }
 
     /// The background part the active tool gets. It sits in the canvas root's space, the parent layer's. A press on it
-    /// focuses the canvas, so the keys the tool reads reach it.
+    /// focuses the canvas, so the keys the tool reads reach it. It has a context menu, so the press machine tells a
+    /// secondary click from a secondary drag on it as it does for the primary button.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         cx.part(BACKGROUND, rect)
             .priority(HitPriority::new(HitLevel::Background, 0))
-            .sense(Sense::CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
+            .sense(Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
             .pointer_only(TOOL_PATH);
     }
 
