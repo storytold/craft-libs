@@ -10,6 +10,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Pull requests share one group per branch, so a newer push cancels the older run. Every other
+  # run (push to main, a release tag, a manual run) gets a group of its own: it is neither
+  # cancelled nor replaced while queued, so a main run always finishes and saves the dependency
+  # cache, and a release run is never cancelled.
+  group: workspace-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   native:
     name: Workspace
@@ -39,6 +47,7 @@ jobs:
         printf 'CRAFT_PSD_CORPUS=%s\n' "$GITHUB_WORKSPACE/$corpus_fetcher/corpus" >> "$GITHUB_ENV"
         printf 'CRAFT_PDF_TEST_FONT_DIR=%s\n' "$RUNNER_TEMP/craft-pdf-test-fonts" >> "$GITHUB_ENV"
       command: |
+        python3 scripts/test-workspace-concurrency.py
         cargo fmt --check
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
