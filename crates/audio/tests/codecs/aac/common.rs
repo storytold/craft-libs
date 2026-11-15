@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use craft_audio::aac::{Decoder, split_adts};
+use craft_audio::aac::{Decoder, Encoder, EncoderConfig, EncoderStats, split_adts};
 
 /// ffmpeg (see `crate::testkit::oracle`); `None` after printing `SKIPPED`.
 pub fn ffmpeg() -> Option<PathBuf> {
@@ -117,6 +117,45 @@ pub fn clicks(rate: u32, n: usize) -> Vec<f32> {
             0.02 * (2.0 * PI * 330.0 * t).sin() + click
         })
         .collect()
+}
+
+pub struct Encoded {
+    pub adts: Vec<u8>,
+    pub raw_bytes: usize,
+    pub frames: usize,
+    pub stats: EncoderStats,
+    pub asc: Vec<u8>,
+    pub bandwidth: u32,
+}
+
+pub fn encode(cfg: EncoderConfig, planar: &[Vec<f32>]) -> Encoded {
+    let mut enc = Encoder::new(cfg.with_adts(true)).unwrap();
+    let mut adts = Vec::new();
+    // feed in uneven chunks
+    let n = planar[0].len();
+    let mut pos = 0;
+    let mut step = 700;
+    while pos < n {
+        let end = (pos + step).min(n);
+        let chunk: Vec<&[f32]> = planar.iter().map(|c| &c[pos..end]).collect();
+        for au in enc.encode(&chunk) {
+            adts.extend(au);
+        }
+        pos = end;
+        step = step * 7 % 3001 + 100;
+    }
+    for au in enc.flush() {
+        adts.extend(au);
+    }
+    let stats = enc.stats();
+    Encoded {
+        raw_bytes: stats.bytes as usize,
+        frames: stats.frames as usize,
+        stats,
+        asc: enc.audio_specific_config(),
+        bandwidth: enc.bandwidth(),
+        adts,
+    }
 }
 
 /// Decode with ffmpeg → planar f32 (ffmpeg's own channel order), plus stderr.
