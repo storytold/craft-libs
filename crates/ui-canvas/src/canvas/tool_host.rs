@@ -298,7 +298,6 @@ pub enum StandInKey {
 struct Active {
     /// The gesture's id, from `runtime::edit::next_gesture_id` when the tool claimed the press.
     id: GestureId,
-    button: PointerButton,
     last: ToolPointer,
     /// The tool has had a `drag` call in this gesture.
     dragged: bool,
@@ -1035,7 +1034,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
         self.ending = None;
         match action {
             ToolAction::Claimed => {
-                self.state.gesture = Some(Active { id, button: pointer.button, last: pointer, dragged: false, stand_in: who });
+                self.state.gesture = Some(Active { id, last: pointer, dragged: false, stand_in: who });
                 self.report(GesturePhase::Begin);
             }
             ToolAction::Done => {
