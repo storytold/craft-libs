@@ -5,8 +5,11 @@
 //! Smacker's own audio coding is DPCM with Huffman-coded differences: each chunk carries its
 //! Huffman trees (one for each byte of a sample, for each channel), the first sample of each
 //! channel, and then the differences. Samples are unsigned 8-bit or signed 16-bit, mono or
-//! stereo. [`decode`] decodes one such chunk and [`pcm`] reads a chunk of an uncompressed track;
+//! stereo. [`decode`] decodes one such chunk, up to a size the caller gives, and [`pcm`] reads a chunk of an uncompressed track;
 //! the chunks come from `craft_media::smacker::split_frame`.
+//!
+//! A tree whose flag bit is clear is read as the format description gives it: no tree follows, and
+//! every difference is 0. No real file with such a chunk was available to check this against.
 //!
 //! Smacker tracks that carry Bink audio are not decoded.
 
@@ -18,8 +21,9 @@ mod tests;
 use craft_media::bitstream::{BitError, LsbBitReader};
 use craft_media::smacker::{ByteTree, TreeError};
 
-/// The most bytes of samples one chunk may decode to (16 MiB). A chunk can declare any size and
-/// code a sample in no bits at all, so its own size does not bound the output.
+/// The most bytes of samples one chunk may decode to, whatever limit the caller passes (16 MiB).
+/// A chunk can declare any size and code a sample in no bits at all, so its own size does not
+/// bound the output.
 pub const MAX_DECODED_SIZE: usize = 1 << 24;
 
 /// Decoder errors.
@@ -31,7 +35,8 @@ pub enum Error {
     /// Structurally invalid data.
     #[error("invalid Smacker audio chunk: {0}")]
     Invalid(&'static str),
-    /// The chunk declares more than [`MAX_DECODED_SIZE`] bytes of samples.
+    /// The chunk declares more bytes of samples than the limit passed to [`decode`], or than
+    /// [`MAX_DECODED_SIZE`].
     #[error("Smacker audio chunk declares {0} bytes of samples")]
     TooLarge(u32),
 }
@@ -89,7 +94,7 @@ impl Samples {
 /// The samples of one audio chunk.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Chunk {
-    /// 1 or 2.
+    /// 1 or 2. A DPCM chunk flagged as holding no data does not say, and reports 1.
     pub channels: u16,
     /// The samples, interleaved.
     pub samples: Samples,
@@ -100,7 +105,11 @@ pub struct Chunk {
 ///
 /// The chunk says itself whether it is stereo and 16-bit. A chunk flagged as holding no data
 /// decodes to no samples.
-pub fn decode(chunk: &[u8]) -> Result<Chunk> {
+///
+/// `max_decoded_size` is the most bytes of samples the chunk may decode to: the track's
+/// `AudioTrack::max_decoded_size` from the file header, which a hostile chunk would otherwise
+/// exceed at no cost in data. [`MAX_DECODED_SIZE`] caps it.
+pub fn decode(chunk: &[u8], max_decoded_size: u32) -> Result<Chunk> {
     let (size, data) = chunk.split_first_chunk::<4>().ok_or(Error::Truncated)?;
     let size = u32::from_le_bytes(*size);
     let mut r = LsbBitReader::new(data);
@@ -110,7 +119,7 @@ pub fn decode(chunk: &[u8]) -> Result<Chunk> {
     let stereo = r.read_bit()?;
     let sixteen_bit = r.read_bit()?;
     let channels = if stereo { 2usize } else { 1 };
-    if size as usize > MAX_DECODED_SIZE {
+    if size > max_decoded_size || size as usize > MAX_DECODED_SIZE {
         return Err(Error::TooLarge(size));
     }
     let count = size as usize / if sixteen_bit { 2 } else { 1 };
@@ -129,6 +138,8 @@ pub fn decode(chunk: &[u8]) -> Result<Chunk> {
         Ok(tree.decode(r)?)
     };
 
+    // room for the samples the data can hold at a bit each; samples of no bits grow the buffer
+    let capacity = capacity_for(count, r.bits_left(), channels);
     let samples = if sixteen_bit {
         // the first samples: the last channel first, each high byte first
         let mut pred = [0i16; 2];
@@ -137,7 +148,7 @@ pub fn decode(chunk: &[u8]) -> Result<Chunk> {
             let low = r.read_bits(8)?;
             *p = (high << 8 | low) as u16 as i16;
         }
-        let mut out = Vec::with_capacity(count);
+        let mut out = Vec::with_capacity(capacity);
         out.extend_from_slice(&pred[..channels]);
         for i in channels..count {
             let ch = i % channels;
@@ -152,7 +163,7 @@ pub fn decode(chunk: &[u8]) -> Result<Chunk> {
         for p in pred.iter_mut().take(channels).rev() {
             *p = r.read_bits(8)? as u8;
         }
-        let mut out = Vec::with_capacity(count);
+        let mut out = Vec::with_capacity(capacity);
         out.extend_from_slice(&pred[..channels]);
         for i in channels..count {
             let ch = i % channels;
@@ -174,4 +185,10 @@ pub fn pcm(chunk: &[u8], sixteen_bit: bool, stereo: bool) -> Chunk {
         Samples::U8(chunk.to_vec())
     };
     Chunk { channels, samples }
+}
+
+/// The buffer to reserve for `count` samples when `bits` bits of data are left: room for the
+/// first sample of each channel and a sample for each bit.
+fn capacity_for(count: usize, bits: usize, channels: usize) -> usize {
+    count.min(bits.saturating_add(channels))
 }

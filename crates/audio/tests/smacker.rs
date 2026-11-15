@@ -50,10 +50,13 @@ fn samples_match_ffmpeg() {
                 let parts = split_frame(&data, frame).unwrap();
                 let Some(chunk) = parts.audio[slot] else { continue };
                 let decoded = match track.coding {
-                    AudioCoding::Dpcm => decode(chunk).unwrap_or_else(|e| panic!("{} frame {i}: {e}", path.display())),
+                    AudioCoding::Dpcm => decode(chunk, track.max_decoded_size).unwrap_or_else(|e| panic!("{} frame {i}: {e}", path.display())),
                     _ => pcm(chunk, track.sixteen_bit, track.stereo),
                 };
-                assert_eq!(decoded.channels, track.channels(), "{} frame {i}", path.display());
+                // a chunk without data does not say how many channels it has
+                if !decoded.samples.is_empty() {
+                    assert_eq!(decoded.channels, track.channels(), "{} frame {i}", path.display());
+                }
                 got.extend(decoded.samples.to_i16());
             }
             let out = Command::new(&ffmpeg)

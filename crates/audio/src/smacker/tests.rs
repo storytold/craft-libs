@@ -1,6 +1,9 @@
 use super::*;
 use craft_media_testkit::smacker::{BitWriter, Tree};
 
+/// No limit below the module's own.
+const LIMIT: u32 = MAX_DECODED_SIZE as u32;
+
 /// Encodes interleaved 8-bit samples as a DPCM chunk.
 fn encode_u8(samples: &[u8], channels: usize) -> Vec<u8> {
     let mut w = BitWriter::new();
@@ -75,42 +78,42 @@ fn wave(n: usize, step: i32) -> Vec<i16> {
 #[test]
 fn decodes_eight_bit_mono_and_stereo() {
     let mono: Vec<u8> = (0..200u32).map(|i| (128 + (i * 7 % 50)) as u8).collect();
-    let got = decode(&encode_u8(&mono, 1)).unwrap();
+    let got = decode(&encode_u8(&mono, 1), LIMIT).unwrap();
     assert_eq!((got.channels, &got.samples), (1, &Samples::U8(mono)));
 
     // the channels differ, and the differences wrap around
     let stereo: Vec<u8> = (0..200u32).map(|i| if i % 2 == 0 { (i * 3) as u8 } else { 255 - (i * 5) as u8 }).collect();
-    let got = decode(&encode_u8(&stereo, 2)).unwrap();
+    let got = decode(&encode_u8(&stereo, 2), LIMIT).unwrap();
     assert_eq!((got.channels, &got.samples), (2, &Samples::U8(stereo)));
 }
 
 #[test]
 fn decodes_sixteen_bit_mono_and_stereo() {
     let mono = wave(300, 1237);
-    let got = decode(&encode_s16(&mono, 1)).unwrap();
+    let got = decode(&encode_s16(&mono, 1), LIMIT).unwrap();
     assert_eq!((got.channels, &got.samples), (1, &Samples::S16(mono)));
 
     let mut stereo = wave(300, 911);
     stereo.iter_mut().skip(1).step_by(2).for_each(|s| *s = s.wrapping_mul(-3));
     stereo[0] = i16::MIN;
     stereo[1] = 0x1234;
-    let got = decode(&encode_s16(&stereo, 2)).unwrap();
+    let got = decode(&encode_s16(&stereo, 2), LIMIT).unwrap();
     assert_eq!((got.channels, &got.samples), (2, &Samples::S16(stereo)));
 }
 
 #[test]
 fn a_constant_signal_takes_no_bits_a_sample() {
     // one-symbol trees: every difference is 0
-    let got = decode(&encode_u8(&[77; 1000], 1)).unwrap();
+    let got = decode(&encode_u8(&[77; 1000], 1), LIMIT).unwrap();
     assert_eq!(got.samples, Samples::U8(vec![77; 1000]));
     // only the first sample of each channel
-    let got = decode(&encode_s16(&[-5, 9], 2)).unwrap();
+    let got = decode(&encode_s16(&[-5, 9], 2), LIMIT).unwrap();
     assert_eq!(got.samples, Samples::S16(vec![-5, 9]));
 }
 
 #[test]
 fn a_chunk_without_data_is_empty() {
-    let got = decode(&[8, 0, 0, 0, 0]).unwrap();
+    let got = decode(&[8, 0, 0, 0, 0], LIMIT).unwrap();
     assert!(got.samples.is_empty());
     assert_eq!(got.samples.len(), 0);
 }
@@ -131,23 +134,23 @@ fn reads_uncompressed_chunks() {
 
 #[test]
 fn bad_chunks_are_errors() {
-    assert_eq!(decode(&[1, 0, 0]), Err(Error::Truncated));
-    assert_eq!(decode(&[1, 0, 0, 0]), Err(Error::Truncated));
+    assert_eq!(decode(&[1, 0, 0], LIMIT), Err(Error::Truncated));
+    assert_eq!(decode(&[1, 0, 0, 0], LIMIT), Err(Error::Truncated));
     let good = encode_s16(&wave(64, 999), 2);
     for n in 4..good.len() {
-        assert_eq!(decode(&good[..n]), Err(Error::Truncated), "{n} bytes");
+        assert_eq!(decode(&good[..n], LIMIT), Err(Error::Truncated), "{n} bytes");
     }
     // a size over the limit, however little data follows
     let mut big = good.clone();
     big[..4].copy_from_slice(&u32::MAX.to_le_bytes());
-    assert_eq!(decode(&big), Err(Error::TooLarge(u32::MAX)));
+    assert_eq!(decode(&big, u32::MAX), Err(Error::TooLarge(u32::MAX)));
     // a size that is not a whole number of stereo frames, and one with no first sample
     let mut odd = good.clone();
     odd[..4].copy_from_slice(&6u32.to_le_bytes());
-    assert_eq!(decode(&odd), Err(Error::Invalid("sample count")));
+    assert_eq!(decode(&odd, LIMIT), Err(Error::Invalid("sample count")));
     let mut none = good;
     none[..4].copy_from_slice(&0u32.to_le_bytes());
-    assert_eq!(decode(&none), Err(Error::Invalid("sample count")));
+    assert_eq!(decode(&none, LIMIT), Err(Error::Invalid("sample count")));
 }
 
 #[test]
@@ -155,9 +158,24 @@ fn a_declared_size_is_bounded_whatever_the_data_holds() {
     // one-symbol trees code a sample in no bits, so the size field alone sets the output
     let mut chunk = encode_u8(&[1; 4], 1);
     chunk[..4].copy_from_slice(&(MAX_DECODED_SIZE as u32).to_le_bytes());
-    assert_eq!(decode(&chunk).unwrap().samples.len(), MAX_DECODED_SIZE);
+    assert_eq!(decode(&chunk, LIMIT).unwrap().samples.len(), MAX_DECODED_SIZE);
     chunk[..4].copy_from_slice(&(MAX_DECODED_SIZE as u32 + 1).to_le_bytes());
-    assert_eq!(decode(&chunk), Err(Error::TooLarge(MAX_DECODED_SIZE as u32 + 1)));
+    assert_eq!(decode(&chunk, u32::MAX), Err(Error::TooLarge(MAX_DECODED_SIZE as u32 + 1)));
+    // the caller's limit, to the byte
+    chunk[..4].copy_from_slice(&1000u32.to_le_bytes());
+    assert_eq!(decode(&chunk, 1000).unwrap().samples.len(), 1000);
+    assert_eq!(decode(&chunk, 999), Err(Error::TooLarge(1000)));
+}
+
+#[test]
+fn a_chunk_cut_short_does_not_reserve_its_declared_size() {
+    // real trees, so every sample takes at least a bit: the buffer follows the data, not the size
+    let mut chunk = encode_s16(&wave(64, 999), 1);
+    chunk.truncate(40);
+    chunk[..4].copy_from_slice(&LIMIT.to_le_bytes());
+    assert_eq!(decode(&chunk, LIMIT), Err(Error::Truncated));
+    let bits = (chunk.len() - 4) * 8;
+    assert!(super::capacity_for(LIMIT as usize / 2, bits, 1) <= bits + 1);
 }
 
 #[test]
@@ -167,7 +185,7 @@ fn hostile_input_never_panics() {
     let mono: Vec<u8> = (0..400u32).map(|i| (i * 7 % 50) as u8).collect();
     for (name, seed) in [("smacker audio s16", encode_s16(&stereo, 2)), ("smacker audio u8", encode_u8(&mono, 1))] {
         craft_media_testkit::hostile::hammer(name, &seed, 20_000, |d| {
-            let _ = decode(d);
+            let _ = decode(d, LIMIT);
             let _ = pcm(d, true, true);
         });
     }
