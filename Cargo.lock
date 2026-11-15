@@ -3073,6 +3073,7 @@ dependencies = [
  "craft-keymap",
  "craft-platform",
  "craft-quit",
+ "craft-settings",
  "craft-theme",
  "craft-ui-contract",
  "craft-ui-macros",

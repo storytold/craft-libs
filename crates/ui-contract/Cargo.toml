@@ -34,6 +34,8 @@ accesskit = "0.25"
 craft-keymap = { workspace = true, features = ["egui"] }
 craft-theme = { workspace = true }
 craft-ui-macros = { workspace = true }
+craft-settings = { workspace = true }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
 egui = { workspace = true }
 libtest-mimic = { version = "0.8", optional = true }
 craft-host = { workspace = true }

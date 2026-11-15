@@ -3,7 +3,7 @@
 use super::CommandPalette;
 use crate::contract::Bind;
 use crate::menu::search::HelpEntry;
-use crate::runtime::commands::{CommandRef, EditCommands};
+use crate::runtime::commands::{CommandInput, CommandRef, CommandState, EditCommands};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use std::sync::LazyLock;
@@ -68,12 +68,17 @@ fn palette(ui: &mut Ui, data: &mut StoryData, recents: Vec<CommandRef>) -> Story
     StoryOutput::from(out).readout(readout)
 }
 
-#[story(CommandPalette<'static>, covers = [], drive = Drive::Never, title = "PhotoCraft")]
+/// The command states the stories run under: Redo is disabled, as the entries list it.
+fn commands(input: CommandInput) -> CommandInput {
+    input.state(EditCommands::Redo, CommandState::new().enabled(false))
+}
+
+#[story(CommandPalette<'static>, covers = [], drive = Drive::Never, title = "PhotoCraft", commands = commands)]
 fn command_palette(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     palette(ui, data, Vec::new())
 }
 
-#[story(CommandPalette<'static>, covers = [], drive = Drive::Never, title = "Recent commands")]
+#[story(CommandPalette<'static>, covers = [], drive = Drive::Never, title = "Recent commands", commands = commands)]
 fn command_palette_recents(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let recents = [PhotoCraftCommand::Levels, PhotoCraftCommand::Brush, PhotoCraftCommand::Search].map(CommandRef::from).to_vec();
     palette(ui, data, recents)

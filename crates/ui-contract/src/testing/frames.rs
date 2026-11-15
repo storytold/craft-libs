@@ -24,6 +24,8 @@ pub struct Frames {
     repaint_delay: Duration,
     host: Option<Arc<Host>>,
     commands: CommandInput,
+    /// The modifiers the app holds down for the user in every following frame.
+    latched: craft_keymap::Mods,
     tree: Option<AccessTree>,
     ime: Option<fixture::ImeSeen>,
     copied: Vec<String>,
@@ -94,6 +96,7 @@ impl Frames {
             repaint_delay: Duration::MAX,
             host: None,
             commands: CommandInput::new(),
+            latched: craft_keymap::Mods::NONE,
             tree: None,
             ime: None,
             copied: Vec::new(),
@@ -122,7 +125,7 @@ impl Frames {
     }
 
     fn input(&self) -> FrameInput {
-        let input = FrameInput::new(self.root.clone()).commands(self.commands.clone());
+        let input = FrameInput::new(self.root.clone()).commands(self.commands.clone()).latched(self.latched);
         match &self.host {
             Some(host) => input.host(host.clone()),
             None => input,
@@ -132,6 +135,11 @@ impl Frames {
     /// The root values every following frame is given.
     pub fn root(&mut self, root: RootEnv) {
         self.root = root;
+    }
+
+    /// The modifiers the app holds down for the user in every following frame.
+    pub fn latched(&mut self, mods: craft_keymap::Mods) {
+        self.latched = mods;
     }
 
     /// The command input every following frame is given.

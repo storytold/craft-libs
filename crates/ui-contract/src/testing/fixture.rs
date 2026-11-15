@@ -200,6 +200,8 @@ impl Fixture {
         fixture.data = data;
         fixture.outputs = outputs;
         fixture.root_id = root_id;
+        fixture.commands = Story::command_input([story]);
+        fixture.frames.commands(fixture.commands.clone());
         fixture
     }
 

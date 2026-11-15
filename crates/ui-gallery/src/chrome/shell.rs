@@ -75,18 +75,24 @@ fn read_dropped(file: &OsFile) -> Result<AppSizes, String> {
     parse_sizes(&file.name, &bytes)
 }
 
+/// The registered name of the component whose tab is in front and selected in the shown workspace's dock.
+fn front_component(viewer: &Viewer) -> Option<&'static str> {
+    let dock = if viewer.workspace == Workspace::Theme { &viewer.theme_dock } else { &viewer.browser.dock };
+    viewer.browser.selection.items.iter().rev().find_map(|key| match key {
+        TreeKey::Component(type_name) => Some(*type_name),
+        _ => None,
+    }).filter(|type_name| dock.layout.panel_state(&PanelId::Component(type_name)) == PanelState::Front)
+}
+
 /// The dock of the shown workspace over the viewer's state.
 fn body(ui: &mut Ui, _: &mut BodyCx<'_>, viewer: &mut Viewer) {
+    let selected = front_component(viewer).map(PanelId::Component);
     let Viewer { env, workspace, preview, browser, themes, theme_dock, mock, variants, variants_tab, inspect_layers, .. } = viewer;
     let subject = ThemeSubject::new(theme_of(env.theme_id()), env.appearance(ui.ctx()));
     let in_theme = *workspace == Workspace::Theme;
     let Browser { catalog, filter, selection, open, dock, story_of, generation, cells, open_request, followed, tree_seen, level, .. } = browser;
     let dock: &mut Dock<_> = if in_theme { theme_dock } else { dock };
     let front = |panel: PanelId| dock.layout.panel_state(&panel) == PanelState::Front;
-    let selected = selection.items.iter().rev().find_map(|key| match key {
-        TreeKey::Component(type_name) => Some(PanelId::Component(type_name)),
-        _ => None,
-    });
     let inspect = Inspect {
         on: !in_theme && variants.is_none() && front(PanelId::Inspect),
         front: [Some(PanelId::Overview), selected].into_iter().flatten().filter(|panel| front(*panel)).collect(),
@@ -127,7 +133,13 @@ fn body(ui: &mut Ui, _: &mut BodyCx<'_>, viewer: &mut Viewer) {
 
 impl ShellApp for Gallery {
     fn frame_input(&mut self) -> FrameInput {
-        FrameInput::new(self.viewer.env.clone())
+        // App-scope command states are one input per frame, so only the stories of the component shown reach it; the
+        // Overview, the Theme dock and a frame with no such tab give none.
+        let browser = &self.viewer.browser;
+        let stories = front_component(&self.viewer)
+            .into_iter()
+            .flat_map(|type_name| browser.catalog.stories_of(type_name).iter().map(|&at| &browser.catalog.entries[at].registration.story));
+        FrameInput::new(self.viewer.env.clone()).commands(craft_ui::testing::Story::command_input(stories))
     }
 
     fn output(&mut self, output: FrameOutput) {

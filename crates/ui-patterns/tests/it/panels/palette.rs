@@ -8,7 +8,7 @@ use craft_ui::patterns::panels::CommandPalette;
 use craft_ui::popover::Popover;
 use craft_ui::runtime::commands::{CommandRef, CommandState, EditCommands, FireSource};
 use craft_ui::runtime::frame::take_output;
-use craft_ui::testing::{Fixture, trial};
+use craft_ui::testing::{Fixture, stories, trial};
 use egui::{Key, Modifiers, Ui};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -93,6 +93,17 @@ fn a_picked_command_runs_from_the_palette_and_comes_first_when_it_opens_again() 
     open.set(true);
     fixture.settle();
     assert!(rows(&fixture)[0].0.starts_with("Flip"), "the command just run leads the empty query");
+}
+
+/// The palette story's `commands` function reaches its first frame: Redo lists disabled, a command it does not name
+/// lists enabled.
+#[trial]
+fn the_palette_story_runs_under_its_command_states() {
+    let entry = stories().into_iter().find(|entry| entry.story.name == "command_palette").expect("the palette story");
+    let mut fixture = Fixture::story(&entry.story);
+    fixture.settle();
+    assert!(disabled(&fixture, "Redo"), "the story's Redo lists disabled");
+    assert!(!disabled(&fixture, "Search"), "a command the story does not name lists enabled");
 }
 
 #[trial]

@@ -124,6 +124,12 @@ impl Story {
         self
     }
 
+    /// The command input of `stories` shown together: each story's command function applied in order over an empty
+    /// input, so a later story's state for a command replaces an earlier one's. Runners call this before the first frame.
+    pub fn command_input<'a>(stories: impl IntoIterator<Item = &'a Story>) -> CommandInput {
+        stories.into_iter().filter_map(|story| story.commands).fold(CommandInput::new(), |input, add| add(input))
+    }
+
     /// The caption a viewer shows over the story.
     pub const fn title(mut self, title: &'static str) -> Self {
         self.title = Some(title);
