@@ -5,8 +5,33 @@
 //! Smacker's own audio coding is DPCM with Huffman-coded differences: each chunk carries its
 //! Huffman trees (one for each byte of a sample, for each channel), the first sample of each
 //! channel, and then the differences. Samples are unsigned 8-bit or signed 16-bit, mono or
-//! stereo. [`decode`] decodes one such chunk, up to a size the caller gives, and [`pcm`] reads a chunk of an uncompressed track;
-//! the chunks come from `craft_media::smacker::split_frame`.
+//! stereo. [`decode`] decodes one such chunk, up to a size the caller gives, and [`pcm`] reads a
+//! chunk of an uncompressed track; the chunks come from `craft_media::smacker::split_frame`.
+//!
+//! ```no_run
+//! use craft_audio::smacker::{decode, pcm};
+//! use craft_media::smacker::{AudioCoding, open, split_frame};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let bytes = std::fs::read("intro.smk")?;
+//! let file = open(&bytes)?;
+//! // the first of the seven track slots
+//! let track = &file.header.audio[0];
+//! let mut samples: Vec<i16> = Vec::new();
+//! for frame in &file.frames {
+//!     let data = file.read(&bytes, frame)?;
+//!     // a frame has a chunk of a track only when the track has data in it
+//!     let Some(chunk) = split_frame(&data, frame)?.audio[0] else { continue };
+//!     let decoded = match track.coding {
+//!         AudioCoding::Dpcm => decode(chunk, track.max_decoded_size)?,
+//!         AudioCoding::Pcm => pcm(chunk, track.sixteen_bit, track.stereo),
+//!         _ => break, // Bink audio
+//!     };
+//!     samples.extend(decoded.samples.to_i16());
+//! }
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! A tree whose flag bit is clear is read as the format description gives it: no tree follows, and
 //! every difference is 0. No real file with such a chunk was available to check this against.
@@ -108,7 +133,10 @@ pub struct Chunk {
 ///
 /// `max_decoded_size` is the most bytes of samples the chunk may decode to: the track's
 /// `AudioTrack::max_decoded_size` from the file header, which a hostile chunk would otherwise
-/// exceed at no cost in data. [`MAX_DECODED_SIZE`] caps it.
+/// exceed at no cost in data. 0, which is what a header that leaves the field empty gives, sets
+/// no limit of the caller's. [`MAX_DECODED_SIZE`] applies in every case. A chunk larger than a
+/// header value that is too small is an error ([`Error::TooLarge`]); pass 0 to decode such a
+/// file.
 pub fn decode(chunk: &[u8], max_decoded_size: u32) -> Result<Chunk> {
     let (size, data) = chunk.split_first_chunk::<4>().ok_or(Error::Truncated)?;
     let size = u32::from_le_bytes(*size);
@@ -119,7 +147,7 @@ pub fn decode(chunk: &[u8], max_decoded_size: u32) -> Result<Chunk> {
     let stereo = r.read_bit()?;
     let sixteen_bit = r.read_bit()?;
     let channels = if stereo { 2usize } else { 1 };
-    if size > max_decoded_size || size as usize > MAX_DECODED_SIZE {
+    if (max_decoded_size != 0 && size > max_decoded_size) || size as usize > MAX_DECODED_SIZE {
         return Err(Error::TooLarge(size));
     }
     let count = size as usize / if sixteen_bit { 2 } else { 1 };
@@ -176,15 +204,18 @@ pub fn decode(chunk: &[u8], max_decoded_size: u32) -> Result<Chunk> {
 }
 
 /// Reads one chunk of an uncompressed track (`AudioCoding::Pcm`): unsigned 8-bit or signed
-/// 16-bit little-endian samples, interleaved. A trailing partial sample is dropped.
+/// 16-bit little-endian samples, interleaved. Trailing bytes that do not make up a sample of
+/// every channel are dropped.
 pub fn pcm(chunk: &[u8], sixteen_bit: bool, stereo: bool) -> Chunk {
     let channels = if stereo { 2 } else { 1 };
+    let frame = channels * if sixteen_bit { 2 } else { 1 };
+    let whole = chunk.get(..chunk.len() - chunk.len() % frame).unwrap_or(chunk);
     let samples = if sixteen_bit {
-        Samples::S16(chunk.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect())
+        Samples::S16(whole.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect())
     } else {
-        Samples::U8(chunk.to_vec())
+        Samples::U8(whole.to_vec())
     };
-    Chunk { channels, samples }
+    Chunk { channels: channels as u16, samples }
 }
 
 /// The buffer to reserve for `count` samples when `bits` bits of data are left: room for the

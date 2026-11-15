@@ -130,6 +130,11 @@ fn reads_uncompressed_chunks() {
     assert_eq!((c.channels, c.samples), (2, Samples::S16(vec![0x0201, 0x0403])));
     let c = pcm(&[1, 2, 3], false, false);
     assert_eq!((c.channels, c.samples), (1, Samples::U8(vec![1, 2, 3])));
+    // a trailing part of a stereo frame is dropped, as half a 16-bit sample is
+    assert_eq!(pcm(&[1, 2, 3], false, true).samples, Samples::U8(vec![1, 2]));
+    assert_eq!(pcm(&[1, 2, 3, 4, 5, 6, 7], true, true).samples, Samples::S16(vec![0x0201, 0x0403]));
+    assert_eq!(pcm(&[1, 2, 3], true, false).samples, Samples::S16(vec![0x0201]));
+    assert!(pcm(&[], true, true).samples.is_empty());
 }
 
 #[test]
@@ -165,6 +170,10 @@ fn a_declared_size_is_bounded_whatever_the_data_holds() {
     chunk[..4].copy_from_slice(&1000u32.to_le_bytes());
     assert_eq!(decode(&chunk, 1000).unwrap().samples.len(), 1000);
     assert_eq!(decode(&chunk, 999), Err(Error::TooLarge(1000)));
+    // 0 is a header that does not say: no limit but the module's own
+    assert_eq!(decode(&chunk, 0).unwrap().samples.len(), 1000);
+    chunk[..4].copy_from_slice(&(MAX_DECODED_SIZE as u32 + 1).to_le_bytes());
+    assert_eq!(decode(&chunk, 0), Err(Error::TooLarge(MAX_DECODED_SIZE as u32 + 1)));
 }
 
 #[test]
