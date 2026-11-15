@@ -811,10 +811,11 @@ impl HostedParamDialog {
         let (params, patterns) = (params.into_owned(), patterns.into_owned());
         let saved = remember.and_then(|key| MemoryStage::peek_saved::<Option<DialogFields>>(ctx, &key));
         ParamDialog::open_values(&params, &patterns, saved.as_ref(), &mut fields);
+        let id = dialog_id(key.as_str());
         HostedParamDialog {
-            id: dialog_id(key.as_str()),
+            id,
             key,
-            instance: None,
+            instance: Some(id),
             opening: fields.clone(),
             fields,
             build: Box::new(build),
@@ -841,6 +842,9 @@ impl HostedParamDialog {
     }
 
     /// Names this dialog among others made with the same key (one per document, say), so they keep separate state.
+    /// Without it the dialog is the one of its key: dialogs of different keys stay open together, and the same key
+    /// opened again replaces it. Its result is taken with [`DialogHost::take_keyed`](crate::dialog::DialogHost::take_keyed)
+    /// or by id.
     #[must_use]
     pub fn instance(mut self, instance: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.id = dialog_id((self.key.as_str(), instance));

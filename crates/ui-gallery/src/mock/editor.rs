@@ -163,7 +163,7 @@ fn body(ui: &mut Ui, cx: &mut BodyCx<'_>, state: &mut MockState) {
                     _ => {}
                 }
             }
-            if let Some(result) = host.take::<HostedParamDialog>().and_then(DialogResult::<ParamResult>::ok) {
+            if let Some(result) = host.take_keyed::<HostedParamDialog>().map(|(result, _)| result).and_then(DialogResult::<ParamResult>::ok) {
                 result.remember(ui);
                 state.document.dirty = true;
             }

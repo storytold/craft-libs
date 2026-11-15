@@ -421,16 +421,18 @@ impl DialogHost {
     /// of the type; if that `open` replaced a `D` that was still open, the replaced one's
     /// `Cancel` waits instead. Results are per type, so the app tells two `D` apart by what the
     /// result carries (a key, a tag). A `D` opened with an instance ([`StackDialog::instance`])
-    /// keeps its result apart, for [`take_by_id`](DialogHost::take_by_id) only.
+    /// keeps its result apart, for [`take_keyed`](DialogHost::take_keyed) and
+    /// [`take_by_id`](DialogHost::take_by_id).
     pub fn take<D: StackDialog>(&mut self) -> Option<DialogResult<D::Result>> {
-        self.take_keyed::<D>().map(|(result, _)| result)
+        let at = self.results.iter().rposition(|stored| stored.type_id == TypeId::of::<D>() && stored.instance.is_none())?;
+        self.take_at::<D>(at).map(|(result, _)| result)
     }
 
-    /// [`take`](DialogHost::take) with the key the dialog had ([`StackDialog::key`]): what a
-    /// `Cancel` after a replace-by-open needs to tell which command it was. `None` key for a
-    /// dialog without one.
+    /// The result of the last `D` that finished or was cancelled, whatever its instance, with the
+    /// key the dialog had ([`StackDialog::key`]), once: the key tells which command it was, a
+    /// `Cancel` after a replace-by-open included. `None` key for a dialog without one.
     pub fn take_keyed<D: StackDialog>(&mut self) -> Option<(DialogResult<D::Result>, Option<String>)> {
-        let at = self.results.iter().rposition(|stored| stored.type_id == TypeId::of::<D>() && stored.instance.is_none())?;
+        let at = self.results.iter().rposition(|stored| stored.type_id == TypeId::of::<D>())?;
         self.take_at::<D>(at)
     }
 
