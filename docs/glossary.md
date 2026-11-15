@@ -232,8 +232,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `RootEnv` | The app's root values each frame | `craft_ui::runtime::env` | 2.3 |
 | `Roving` | A roving group | craft-behavior | 9.5 |
 | `RowState` | An item's row facts from the collection; the row's id scope is its key | `craft_ui::contract` | 17.2, 17.5 |
-| Row shape | The theme's row drawing shape, `RowStyle` | craft-theme | 4.6 |
-| `ListRowStyle` | `ListRow`'s style struct; it reads the theme's `RowStyle` | `craft_ui::list` | 17.7 |
+| `ListRowStyle` | `ListRow`'s style struct | `craft_ui::list` | 17.7 |
 | `runtime::toast::post` | Posts a toast to a window's queue from any code with a `Context`; the window's shell shows it at its body's end-bottom corner | `craft_ui::runtime::toast` | 15.5 |
 | `SaveKey` | A crate-prefixed key for the saved lifetime, never derived from an id | `craft_ui::runtime::memory` | 7.2 |
 | `ScopeKind`, `CancelRule`, `Initial`, `EnterRule` | A focus scope's kind, Escape rule, initial focus and Enter rule | craft-behavior (`ScopeKind`, `CancelRule`), `craft_ui::runtime::focus` (`Initial`, `EnterRule`) | 9.4 |

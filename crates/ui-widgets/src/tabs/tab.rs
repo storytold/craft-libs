@@ -15,9 +15,9 @@ use crate::contract::{
 use crate::display::Progress;
 use crate::primitives::{IconSpec, PaintShape, RectSide, StrokeWidth, TextRun};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, Corners, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook, UiTokens};
+use crate::style::{ComponentStyle, Flags, IconLook, RuleKind, StyleColor, StyleCx, SurfaceLook, TextLook};
 use craft_behavior::{Flow, IconId, Insets, Metrics, PartKey, PointerButton, PressPhase, Proposal, Sense};
-use craft_theme::{Contrast, Rgba, RowStyle, Stateful, States, TypeRole};
+use craft_theme::{Contrast, Rgba, Stateful, States, TypeRole};
 use egui::{Pos2, Rect, Response, Vec2};
 
 #[cfg(feature = "testing")]
@@ -104,7 +104,7 @@ pub struct TabStyle {
     underline: StyleColor,
     /// The bar along the selected tab's top edge: the accent in high contrast, none otherwise and on text tabs.
     indicator: Option<StyleColor>,
-    /// A divider at the tab's trailing edge, in a theme that divides rows.
+    /// A divider at the tab's trailing edge.
     divider: bool,
     close_side: CloseSide,
     sizes: Sizes,
@@ -242,11 +242,7 @@ impl Component for Tab<'_> {
         } else {
             Stateful::new(c(clear)).off(States::new(c(clear), c(panel), c(panel), c(clear))).on(States::new(c(panel), c(panel), c(panel), c(panel)))
         };
-        let rounded = !text_only && tokens.shape.rows == RowStyle::Rounded;
-        let mut surface = SurfaceLook::new(fill);
-        if rounded {
-            surface = surface.radius(UiTokens::corner(tokens.shape.radius.control)).corners(Corners::Top);
-        }
+        let surface = SurfaceLook::new(fill);
         let disabled = c(colors.text.disabled);
         let ink = |off: Rgba, on: Rgba| {
             Stateful::new(c(off)).off(States::new(c(off), c(off), c(off), disabled)).on(States::new(c(on), c(on), c(on), disabled))
@@ -271,7 +267,7 @@ impl Component for Tab<'_> {
             icon: IconLook::new(sizes.icon, ink(colors.text.muted, colors.text.normal)),
             underline: c(colors.text.normal),
             indicator: (!text_only && cx.contrast() == Contrast::High).then(|| c(colors.accent.solid)),
-            divider: key.kind.compact_dividers() && tokens.shape.rows == RowStyle::Divided,
+            divider: key.kind.trailing_divider(),
             close_side: close_side(cx.os, cx.direction.is_rtl()),
             sizes,
         }

@@ -46,7 +46,6 @@ pub struct ListRowStyle {
     pub(super) thumb_frame: StyleColor,
     pub(super) thumb_frame_width: f32,
     pub(super) sizes: Sizes,
-    pub(super) dividers: bool,
 }
 
 /// Which rules a row's fill and ink follow.

@@ -242,7 +242,6 @@ fn size_origins(resolved: &Resolved, size: Size, app: &AppSizes) -> Vec<SizeOrig
         space: tokens.space,
         radius: tokens.shape.radius,
         edge: tokens.shape.edge,
-        rows: tokens.shape.rows,
         stroke: tokens.stroke,
         typography: tokens.typography,
     };

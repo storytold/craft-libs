@@ -203,7 +203,6 @@ fn resolve_concrete(theme: &ThemeDef, appearance: Appearance, app: Option<&AppId
     let shape = ShapeTokens {
         radius,
         edge,
-        rows: seed.and_then(|s| s.rows).unwrap_or(preset.rows),
         knob: seed.and_then(|s| s.knob).unwrap_or_default(),
         wells: seed.and_then(|s| s.wells).unwrap_or_default(),
     };

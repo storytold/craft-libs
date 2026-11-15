@@ -52,16 +52,6 @@ impl Edge {
     }
 }
 
-/// How list and tab rows are drawn.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RowStyle {
-    /// Square rows separated by dividers.
-    #[default]
-    Divided,
-    /// Rounded rows without dividers.
-    Rounded,
-}
-
 /// The shape of the knob a value track's thumb is drawn as (a slider's, a range slider's).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum KnobShape {
@@ -82,15 +72,13 @@ pub enum WellShape {
     Round,
 }
 
-/// Corner radii, edge style, row style, knob shape and well shape.
+/// Corner radii, edge style, knob shape and well shape.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShapeTokens {
     /// Corner radii.
     pub radius: RadiusSet,
     /// Edge style.
     pub edge: Edge,
-    /// How list and tab rows are drawn.
-    pub rows: RowStyle,
     /// How the thumbs of value tracks are drawn.
     pub knob: KnobShape,
     /// How colour wells that stand on their own are drawn.

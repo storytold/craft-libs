@@ -1,8 +1,8 @@
 //! Maps the list's events to the panel's events.
 
-use craft_behavior::{ColumnKey, EditEvent, GestureId, Mixed, SelectionChange};
+use craft_behavior::{ColumnKey, EditEvent, Mixed, SelectionChange};
 use craft_keymap::Mods;
-use craft_ui::contract::{CollectionEvent, OpenChange, SweepStep, request_rename};
+use craft_ui::contract::{CollectionEvent, OpenChange, request_rename};
 use craft_ui::list::{RowEvent, ThumbTarget};
 use craft_ui::runtime::env::Label;
 use egui::Ui;
@@ -15,6 +15,7 @@ use super::super::events::{ActivateOn, LayerColumn, LayerSelect, LayerToggle, La
 use super::super::menu::{OpenMenu, shared_label};
 use super::super::row::{EYE, FX_PART, LOCK_PART, NAME, OPTIONS_PART};
 use super::rows::{ToggleSweeps, thumb_click_replaces_select, thumb_part};
+use crate::ui::sweep::{SweepOut, sweep_events};
 use crate::ui::tree::{LayerRowKey, LayerTree};
 
 #[allow(clippy::too_many_arguments)]
@@ -203,98 +204,42 @@ fn column_of(column: &ColumnKey) -> LayerColumn {
     if *column == EYE { LayerColumn::Visibility } else { LayerColumn::Lock }
 }
 
-/// The cells of an eye or lock sweep as events. The cells of one sweep are `Update`s of the gesture of its first, opened by a
-/// `Begin` and closed by one `Commit` on release; the cells of one pass share one event, in the order crossed. An Escape reports the cells
-/// as one `Cancel` of that gesture with the state each had before. A plain press is a `Set`. Alt on the first press of
-/// an eye sweep shows only that layer and drops the rest of the sweep.
+/// The layers panel's toggle events, as [`sweep_events`] groups them: the eye and lock columns are sweeps of one
+/// column each.
+impl<Id: Clone + PartialEq> SweepOut<LayerRowKey<Id>, LayerColumn> for Vec<LayersEvent<Id>> {
+    fn last_toggle(&mut self) -> Option<(LayerColumn, &EditEvent<bool>, &mut Vec<LayerRowKey<Id>>)> {
+        match self.last_mut() {
+            Some(LayersEvent::Toggle(toggle)) => Some((toggle.column, &toggle.edit, &mut toggle.rows)),
+            _ => None,
+        }
+    }
+
+    fn push_toggle(&mut self, rows: Vec<LayerRowKey<Id>>, column: LayerColumn, edit: EditEvent<bool>) {
+        self.push(LayersEvent::Toggle(LayerToggle::new(rows, column, edit)));
+    }
+
+    fn show_only(&mut self, key: LayerRowKey<Id>) {
+        self.push(LayersEvent::ShowOnly(key));
+    }
+
+    fn undo_show_only(&mut self, key: LayerRowKey<Id>) {
+        self.push(LayersEvent::UndoShowOnly(key));
+    }
+}
+
+/// The cells of an eye or lock sweep as events: the column the edit names, then [`sweep_events`] for the rules.
 fn toggle_events<Id: Clone + PartialEq>(
     edit: EditEvent<craft_ui::contract::ToggleEdit<LayerRowKey<Id>>>,
     sweeps: &mut ToggleSweeps,
     label: &mut Arc<str>,
     events: &mut Vec<LayersEvent<Id>>,
 ) {
-    if let EditEvent::Begin { label: named, .. } = &edit {
-        *label = named.clone();
-    }
     let column = match &edit {
         EditEvent::Update { value: cell, .. } | EditEvent::Set { after: cell, .. } | EditEvent::Commit { after: cell, .. } => column_of(&cell.column),
         EditEvent::Begin { before: Mixed::Same(cell), .. } | EditEvent::Cancel { before: Some(Mixed::Same(cell)), .. } => column_of(&cell.column),
         _ => return,
     };
-    // The sweep ends with its first Commit or Cancel of a pass; the cells after it still belong to its gesture.
-    let running = sweeps.of(column).gesture();
-    let ending = matches!(edit, EditEvent::Commit { .. } | EditEvent::Cancel { .. });
-    let Some(step) = sweeps.of(column).feed(&edit) else {
-        // The first cell of a sweep opens its gesture; the cells after it join that one.
-        // An Alt eye sweep only shows one layer: it has no gesture to report.
-        let shows_only = column == LayerColumn::Visibility;
-        if let EditEvent::Begin { before: Mixed::Same(before), .. } = &edit
-            && !(shows_only && before.mods.alt)
-            && running.is_none()
-            && let Some(gesture) = sweeps.of(column).gesture()
-        {
-            let begin = EditEvent::begin(gesture, Mixed::Same(before.on), label.clone(), None);
-            push_cell(events, Some(gesture), before.key.clone(), column, begin);
-        }
-        if let EditEvent::Commit { before: Mixed::Same(before), after, .. } = &edit
-            && !(shows_only && after.mods.alt)
-            && let Some(gesture) = running
-        {
-            let commit = EditEvent::commit(gesture, Mixed::Same(before.on), after.on);
-            push_cell(events, Some(gesture), after.key.clone(), column, commit);
-        }
-        return;
-    };
-    let gesture = if ending { running.or_else(|| closing_gesture(events, column)) } else { sweeps.of(column).gesture() };
-    match step {
-        // Only the eye column shows one layer; the lock column is plain and never gives `ShowOnly`.
-        SweepStep::ShowOnly(cell) => events.push(LayersEvent::ShowOnly(cell.key)),
-        SweepStep::Flip(cell) => {
-            let edit = match gesture {
-                Some(id) => EditEvent::update(id, cell.on),
-                None => EditEvent::set(Mixed::Same(!cell.on), cell.on, label.clone(), None),
-            };
-            push_cell(events, gesture, cell.key, column, edit);
-        }
-        SweepStep::Restore(cell) => {
-            let EditEvent::Cancel { reason, .. } = edit else { return };
-            let Some(gesture) = gesture else { return };
-            let edit = EditEvent::cancel(gesture, reason, Some(Mixed::Same(cell.on)));
-            push_cell(events, Some(gesture), cell.key, column, edit);
-        }
-        SweepStep::UndoShowOnly(cell) => events.push(LayersEvent::UndoShowOnly(cell.key)),
-        _ => {}
-    }
-}
-
-/// The gesture of the sweep of `column` that this pass already closed, for the cells of its release or cancel that come
-/// after the first.
-fn closing_gesture<Id>(events: &[LayersEvent<Id>], column: LayerColumn) -> Option<GestureId> {
-    events.iter().rev().find_map(|event| match event {
-        LayersEvent::Toggle(toggle) if toggle.column == column => toggle.edit.id(),
-        _ => None,
-    })
-}
-
-/// Adds `key` to the last toggle event when it is the same kind of the same gesture, and starts a new event otherwise.
-/// Events with no gesture (a plain press) never merge.
-fn push_cell<Id: Clone + PartialEq>(
-    events: &mut Vec<LayersEvent<Id>>,
-    gesture: Option<GestureId>,
-    key: LayerRowKey<Id>,
-    column: LayerColumn,
-    edit: EditEvent<bool>,
-) {
-    if let Some(LayersEvent::Toggle(last)) = events.last_mut()
-        && gesture.is_some()
-        && last.column == column
-        && last.edit.id() == gesture
-        && std::mem::discriminant(&last.edit) == std::mem::discriminant(&edit)
-    {
-        last.rows.push(key);
-        return;
-    }
-    events.push(LayersEvent::Toggle(LayerToggle::new(vec![key], column, edit)));
+    sweep_events(sweeps.of(column), column, edit, label, events);
 }
 
 /// Opens the rename field of `layer`'s row in the list `list`.

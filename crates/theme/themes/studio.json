@@ -17,8 +17,7 @@
     }
   },
   "shape": {
-    "button_radius": 6.0,
-    "rows": "rounded"
+    "button_radius": 6.0
   },
   "light": {
     "accent.border": "#6c5ce778",

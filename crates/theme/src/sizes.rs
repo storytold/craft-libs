@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use super::format;
 use super::scale::Radius;
 use super::theme::Size;
-use super::tokens::{Edge, FontSlot, RadiusSet, RowStyle, SizeTokens, SpaceTokens, StrokeTokens, TypeTokens};
+use super::tokens::{Edge, FontSlot, RadiusSet, SizeTokens, SpaceTokens, StrokeTokens, TypeTokens};
 
 /// The Size-dependent semantic values: sizes, spacing, default shape and type roles.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -20,8 +20,6 @@ pub struct Preset {
     pub radius: RadiusSet,
     /// Default edge.
     pub edge: Edge,
-    /// Default row style.
-    pub rows: RowStyle,
     /// Line widths and dashes.
     pub stroke: StrokeTokens,
     /// Type roles.
@@ -68,8 +66,6 @@ pub(crate) enum Slot<'a> {
     Font(&'a mut FontSlot),
     /// `"flat"`.
     Edge(&'a mut Edge),
-    /// `"divided"` or `"rounded"`.
-    Rows(&'a mut RowStyle),
 }
 
 /// One value of a set: its path in the file, the range it must lie in, and where it is stored.
@@ -183,7 +179,6 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
     }
     leaves! { out;
         "base.edge" Edge 0.0..=0.0 => b.edge;
-        "base.rows" Rows 0.0..=0.0 => b.rows;
     }
     let st = &mut b.stroke;
     leaves! { out;

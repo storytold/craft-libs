@@ -11,7 +11,7 @@ use crate::choice::Checkbox;
 use crate::contract::{Bind, Cx, PaintUi, Pointer as _, Props as _, Styled as _, item_part_open};
 use crate::controls::disclosure::Disclosure;
 use crate::list::toggle::{ToggleFace, ToggleState};
-use crate::primitives::{Draw, HAlign, IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
+use crate::primitives::{Draw, IconSpec, PaintShape, Span, StrokeWidth, TextRun, Wrap};
 use crate::style::{Flags, Ink, StateMix, StateSet, StyleColor};
 use craft_behavior::{Flow, IconId, Mixed, PartRef};
 use craft_theme::ControlSize;
@@ -222,7 +222,6 @@ impl ListRow<'_> {
             if self.cell_fields.iter().any(|(column, _)| *column == text.column) {
                 continue;
             }
-            let (align, _) = self.align_of(&text.column);
             let look = self.cell_look(cx.style, &text.column);
             let cell = Rect::from_x_y_ranges(cell.x_range(), cx.rect.y_range());
             let room = Flow::new(cell, rtl).span(sizes.cell_inset, sizes.cell_room(cell.width()));
@@ -230,13 +229,7 @@ impl ListRow<'_> {
             let layout = ui.draw().layout(&run, room.width());
             let top =
                 if text.wrap { room.top() + ((room.height() - layout.size().y) / 2.0).max(0.0) } else { room.center().y - sizes.label_line / 2.0 };
-            let free = (room.width() - layout.size().x).max(0.0);
-            let inset = match align {
-                HAlign::Start => 0.0,
-                HAlign::Center => free / 2.0,
-                HAlign::End => free,
-            };
-            let x = if rtl { room.right() - layout.size().x - inset } else { room.left() + inset };
+            let x = ui.draw().text_x(room, &run, &layout);
             if self.cell_selects(*at) {
                 ui.selectable_text(TEXT_CELL.at(*position as u64), Rect::from_min_size(Pos2::new(x, top), layout.size()), &run);
             } else {

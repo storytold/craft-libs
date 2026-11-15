@@ -112,7 +112,6 @@ shape.radius.panel = 0
 shape.radius.button = 6
 shape.radius.pill = 999
 shape.edge = flat
-shape.rows = rounded
 shape.knob = round
 shape.wells = square
 space.gap.tight = 2

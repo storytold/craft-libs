@@ -97,9 +97,8 @@ impl SweepApply {
     }
 
     /// Whether this is a [`SweepApply::show_only`] column, where Alt plus the first press shows only that cell.
-    // P3(top-w4): framework-01-w2 decision, `SweepApply::shows_only`
     pub fn shows_only(&self) -> bool {
-        todo!("top-w4")
+        self.show_only
     }
 
     /// The first gesture of the running sweep, which a host that groups a sweep's edits as one undo step uses as the
@@ -469,7 +468,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let nav = layout.nav();
         let hit = layout.hit(Self::logical(layout, rect, rtl, at), offset);
         let across = !matches!(nav, NavShape::Flat | NavShape::Tree);
-        let past = hit.is_none() && !across;
+        // With no item under the pointer, a point after the last item in reading order is over the last item. Across a
+        // row-wise layout that is beyond the last item's end edge on its row, or below its row.
+        let past = hit.is_none() && {
+            let last = self.screen(layout, rect, self.source.len() - 1, offset, rtl);
+            let beyond = if rtl { at.x < last.min.x } else { at.x > last.max.x };
+            !across || at.y > last.max.y || (at.y >= last.min.y && beyond)
+        };
         let over = hit.or_else(|| past.then(|| self.source.len() - 1))?;
         let row = self.screen(layout, rect, over, offset, rtl);
         if matches!(nav, NavShape::Spatial) {
@@ -483,6 +488,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
         // The gap around the one row the layout hit. `gap_at` works in physical coordinates, so across a row under
         // right-to-left the physical end is the earlier place in reading order.
+        let at = if past && across { Pos2::new(if rtl { row.min.x } else { row.max.x }, row.center().y) } else { at };
         let gap = reorder::gap_at(&[row], if across { Axis::X } else { Axis::Y }, at)?;
         let after = (gap.insert == 1) != (across && rtl);
         Some(Spot { over, insert: over + usize::from(after), parent: None, mark: gap.mark.mapped(|point| self.on_screen(point)) })

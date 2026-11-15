@@ -1,7 +1,7 @@
 //! `LayersPanel` rows the app reads back: the hovered layer, a Smart Filter row selected on its own, its Blending
 //! Options button, and a frame's masks after its content thumbnail: linked and dragged by their own index.
 
-use craft_behavior::{EditEvent, SelectionChange};
+use craft_behavior::{EditEvent, Mixed, SelectionChange};
 use craft_layers::testing;
 use craft_layers::ui::mock::{FakeLayers, sub_row};
 use craft_layers::ui::panel::{ActivateOn, LayerDrop, LayersEvent, LayersPanel, MaskMove};
@@ -81,6 +81,45 @@ fn take(app: &Shared) -> Vec<LayersEvent<u32>> {
 
 fn node(fixture: &Fixture, label: &str) -> Target {
     fixture.by_label(label).unwrap_or_else(|| panic!("no node named {label:?}"))
+}
+
+/// An eye sweep from a visible layer across a hidden one to another visible one, cancelled with Escape, puts each eye
+/// back as it was: the sweep turns off only the eyes that were on, so the restore names those two and the hidden layer
+/// it crossed gets no event at all.
+#[trial]
+fn an_escaped_sweep_restores_the_eyes_it_switched_and_leaves_the_rest() {
+    let mut tree = FakeLayers::default();
+    tree.add(None, LayerInfo::new("Title", LayerKind::Text), false);
+    let mut hidden = LayerInfo::new("Background", LayerKind::Pixel);
+    hidden.visible = false;
+    tree.add(None, hidden, false);
+    tree.add(None, LayerInfo::new("Shape", LayerKind::Pixel), false);
+    let (mut fixture, app) = rig(tree);
+    let (start, end) = (node(&fixture, "Visibility Title").center(), node(&fixture, "Visibility Shape").center());
+    take(&app);
+    fixture.frame(vec![pointer::moved(start)]);
+    fixture.frame(vec![pointer::press(start)]);
+    let mut events = Vec::new();
+    for step in [0.25, 0.5, 0.75, 1.0] {
+        fixture.frame(vec![pointer::moved(start + (end - start) * step)]);
+        events.extend(take(&app));
+    }
+    fixture.key(Key::Escape, Modifiers::NONE).idle(2);
+    let cancelled = take(&app);
+    let names = |events: &[LayersEvent<u32>], layer: u32| {
+        events.iter().any(|event| matches!(event, LayersEvent::Toggle(toggle) if toggle.rows.iter().any(|row| *row.layer() == layer)))
+    };
+    assert!(!names(&events, 2) && !names(&cancelled, 2), "the hidden eye the sweep crossed is left as it is");
+    let mut restored = Vec::new();
+    for event in cancelled {
+        if let LayersEvent::Toggle(toggle) = event
+            && let EditEvent::Cancel { before: Some(Mixed::Same(before)), .. } = toggle.edit
+        {
+            restored.extend(toggle.rows.iter().map(|row| (*row.layer(), before)));
+        }
+    }
+    restored.sort();
+    assert_eq!(restored, [(1, true), (3, true)], "each switched eye goes back to visible");
 }
 
 /// The sub-rows the selections among `events` name.

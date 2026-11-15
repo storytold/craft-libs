@@ -4,13 +4,13 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-use super::{EDGE, ErrorKind, FormatError, FormatErrors, KNOB, LENGTH, MAX_THEME_BYTES, OFFSET, ROWS, SCHEMA, SCHEMA_VERSION, ThemeFile, WELLS};
+use super::{EDGE, ErrorKind, FormatError, FormatErrors, KNOB, LENGTH, MAX_THEME_BYTES, OFFSET, SCHEMA, SCHEMA_VERSION, ThemeFile, WELLS};
 use crate::color::Rgba;
 use crate::scale::Radius;
 use crate::theme::{
     AppOverrides, ContrastIntent, EdgeSeed, ModePins, ModeSeeds, Pins, RadiusOffset, SeedOverrides, Seeds, ShapeSeed, ThemeDef, Variants,
 };
-use crate::tokens::{ColorToken, KnobShape, RadiusSet, RowStyle, Status, WellShape};
+use crate::tokens::{ColorToken, KnobShape, RadiusSet, Status, WellShape};
 use crate::{AppId, ThemeId};
 
 /// Parses and validates a theme file. Unknown keys are allowed anywhere except in colour maps, and
@@ -231,15 +231,6 @@ impl Parser {
                 None | Some(Value::Null) => Some(None),
                 Some(v) => p.edge(v).map(Some),
             });
-            let rows = p.at("rows", |p| match shape.get("rows") {
-                None | Some(Value::Null) => Some(None),
-                Some(Value::String(s)) if s == "divided" => Some(Some(RowStyle::Divided)),
-                Some(Value::String(s)) if s == "rounded" => Some(Some(RowStyle::Rounded)),
-                Some(_) => {
-                    p.fail(ErrorKind::BadValue { expected: ROWS });
-                    None
-                }
-            });
             let knob = p.at("knob", |p| match shape.get("knob") {
                 None | Some(Value::Null) => Some(None),
                 Some(Value::String(s)) if s == "round" => Some(Some(KnobShape::Round)),
@@ -263,7 +254,6 @@ impl Parser {
                 radius_offset: radius_offset?,
                 button_radius: button_radius?,
                 edge: edge?,
-                rows: rows?,
                 knob: knob?,
                 wells: wells?,
             }))

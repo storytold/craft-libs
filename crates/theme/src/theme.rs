@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use super::color::Rgba;
 use super::ramp::Mode;
-use super::tokens::{ColorToken, ColorTokens, Edge, KnobShape, RadiusSet, RowStyle, Status, WellShape};
+use super::tokens::{ColorToken, ColorTokens, Edge, KnobShape, RadiusSet, Status, WellShape};
 use crate::{AppId, ThemeId};
 
 /// A theme: seeds to derive from, values that override the derivation, and an optional shape.
@@ -186,8 +186,6 @@ pub struct ShapeSeed {
     pub button_radius: Option<f32>,
     /// Replaces the preset's edge style.
     pub edge: Option<EdgeSeed>,
-    /// Replaces the preset's row style.
-    pub rows: Option<RowStyle>,
     /// The knob shape; round when unset.
     pub knob: Option<KnobShape>,
     /// The shape of colour wells that stand on their own; square when unset.

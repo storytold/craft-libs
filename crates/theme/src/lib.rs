@@ -95,7 +95,7 @@ pub use token_group::{GroupValues, TokenGroup};
 pub use tokens::{
     AccentColors, BarSizes, CaptionColors, ColorToken, ColorTokens, ControlSizes, DataColors, DialogSizes, DockColumnSizes, Edge, EdgeColors,
     ElevationTokens, FloatSizes, FontSlot, Gaps, HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, LineColors, Motion, MotionTokens,
-    NoticeSizes, OverlayColors, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, RowSizes, RowStyle, RulerSizes, RulerTickSizes,
+    NoticeSizes, OverlayColors, Pads, PaneSizes, PlotSizes, RadiusSet, RailSizes, RampSizes, RowSizes, RulerSizes, RulerTickSizes,
     ShapeTokens, SizeTokens, SpaceTokens, StateColors, Status, StatusColors, StatusKind, StorySizes, StrokeTokens, SurfaceColors, TextColors,
     ThumbSamples, ThumbSizes, Tokens, TypeRole, TypeStyle, TypeTokens, WellShape, WindowSizes,
 };

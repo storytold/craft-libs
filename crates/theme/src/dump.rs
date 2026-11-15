@@ -8,8 +8,8 @@ use std::fmt::Write as _;
 use crate::{
     BarSizes, ColorToken, ControlSizes, DialogSizes, DockColumnSizes, Easing, Edge, Elevation, ElevationTokens, FloatSizes, FontSlot, Gaps,
     HandleSizes, HitSizes, IconSizes, Insets, KnobShape, LengthSizes, Motion, MotionTokens, NoticeSizes, Pads, PaneSizes, PlotSizes, RadiusSet,
-    RailSizes, RampSizes, Rgba, RowSizes, RowStyle, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens,
-    ThumbSamples, ThumbSizes, Tokens, TypeStyle, TypeTokens, WellShape, WindowSizes,
+    RailSizes, RampSizes, Rgba, RowSizes, RulerSizes, RulerTickSizes, ShapeTokens, SizeTokens, SpaceTokens, StorySizes, StrokeTokens, ThumbSamples,
+    ThumbSizes, Tokens, TypeStyle, TypeTokens, WellShape, WindowSizes,
 };
 
 /// The text of every token, one `key = value` line each, in a fixed order.
@@ -66,13 +66,13 @@ fn edge(e: Edge) -> String {
 }
 
 fn shape_lines(out: &mut Lines, shape: &ShapeTokens) {
-    let ShapeTokens { radius, edge: e, rows, knob, wells } = shape;
+    let ShapeTokens { radius, edge: e, knob, wells } = shape;
     let RadiusSet { sm, control, surface, window, panel, button, pill } = radius;
     for (k, v) in [("sm", sm), ("control", control), ("surface", surface), ("window", window), ("panel", panel), ("button", button), ("pill", pill)] {
         out.line(&format!("shape.radius.{k}"), len(*v));
     }
     out.line("shape.edge", edge(*e));
-    out.line("shape.rows", if *rows == RowStyle::Divided { "divided" } else { "rounded" });
+
     out.line("shape.knob", if *knob == KnobShape::Round { "round" } else { "tab" });
     out.line("shape.wells", if *wells == WellShape::Square { "square" } else { "round" });
 }

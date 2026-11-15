@@ -112,7 +112,6 @@ shape.radius.panel = 0
 shape.radius.button = 0
 shape.radius.pill = 0
 shape.edge = bevel #ffffffff #404040ff 1
-shape.rows = rounded
 shape.knob = tab
 shape.wells = square
 space.gap.tight = 3

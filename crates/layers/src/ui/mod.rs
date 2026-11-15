@@ -7,6 +7,7 @@
 //! - `filter`: `LayerFilter` and the filter bar.
 //! - `options`: `LayersSettings`, `LayersOptions` and the Layers Panel Options dialog.
 //! - `thumbs`: `LayerThumb`, the thumbnail key of a row.
+//! - `sweep`: the toggle sweep helper the Layers and Layer Comps panels share.
 //! - `mock`: `FakeLayers`, a `LayerTree` for stories and tests (with the `screen-testing` feature).
 
 pub mod comps;
@@ -16,6 +17,6 @@ pub mod mock;
 pub mod options;
 pub mod panel;
 pub mod rows;
-mod sweep; // P3(framework-01-w2): L-95 decision
+mod sweep;
 pub mod thumbs;
 pub mod tree;

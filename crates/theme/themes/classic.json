@@ -30,8 +30,7 @@
       "surface": 0.0,
       "window": 0.0
     },
-    "knob": "tab",
-    "rows": "rounded"
+    "knob": "tab"
   },
   "light": {
     "accent.soft": "{accent.solid}",

@@ -135,3 +135,22 @@ fn rows_from_another_list_drop_into_a_gap_only_where_a_kind_takes_them() {
         target.drops::<ListDrag<usize>>().into_iter().map(|(at, drag)| (at, drag.map(|drag| drag.keys))).collect();
     assert_eq!(keys, vec![(DropAt::gap(Some(2), 2), Some(vec![0]))]);
 }
+
+/// Rows dropped in the empty room below the last row land after it, as at the last row's lower half.
+#[trial]
+fn a_drop_below_the_last_row_lands_at_the_end() {
+    let words = Words::flat(&["a", "b"]);
+    let (source, target) = (Run::default(), Run::default());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        show(ui, List::new(SelectMode::Single).reorder(), "source", Pos2::new(10.0, 10.0), &words, &source);
+        let between = DropKind::new(DropPlace::Between, |_: &ListDrag<usize>, _: &DropAt<usize>| true);
+        show(ui, List::new(SelectMode::Single).takes_drop(between), "target", Pos2::new(200.0, 10.0), &words, &target);
+    };
+    frames.idle(3, &mut show);
+    let room = Pos2::new(target.row(1).center().x, target.row(1).max.y + 20.0);
+    drag_to(&mut frames, source.row(0).center(), room, &mut show);
+    release_at(&mut frames, room, &mut show);
+    let places: Vec<DropAt<usize>> = target.drops::<ListDrag<usize>>().into_iter().map(|(at, _)| at).collect();
+    assert_eq!(places, vec![DropAt::gap(Some(1), 2)]);
+}

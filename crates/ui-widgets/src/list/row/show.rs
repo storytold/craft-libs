@@ -23,7 +23,7 @@ use crate::style::{Flags, IconLook, StyleCx, SurfaceLook, TextLook, UiTokens};
 use craft_behavior::{ColumnKey, Metrics, NavShape, PartKey, PartRef, PressPhase, Proposal, Roving, Sense};
 use craft_keymap::Mods;
 use craft_theme::variant::Tone;
-use craft_theme::{Rgba, RowStyle, Stateful, TypeRole};
+use craft_theme::{Rgba, Stateful, TypeRole};
 use egui::{CornerRadius, Pos2, Rect, Vec2};
 
 pub(super) const TOGGLE: PartKey = PartKey::new("toggle");
@@ -65,9 +65,8 @@ impl Component for ListRow<'_> {
             _ => RowForm::List,
         };
         let fill = fill_of(cx, FillKey { striped: key.striped, layer: key.layer, form });
-        // An option sits inset in its popup with rounded corners whatever the theme's row form.
-        let rounded = key.option || tokens.shape.rows == RowStyle::Rounded;
-        let radius = if rounded { UiTokens::corner(tokens.shape.radius.control) } else { CornerRadius::ZERO };
+        // An option sits inset in its popup with rounded corners; every other row is square.
+        let radius = if key.option { UiTokens::corner(tokens.shape.radius.control) } else { CornerRadius::ZERO };
         let mut surface = SurfaceLook::new(fill).radius(radius);
         if key.layer {
             surface = surface.border(Stateful::new(c(clear)).when(Flags::SELECTED, c(selected_outline(cx))), tokens.stroke.thin);
@@ -111,7 +110,6 @@ impl Component for ListRow<'_> {
             thumb_frame: c(colors.line.frame),
             thumb_frame_width: tokens.stroke.thin,
             sizes,
-            dividers: tokens.shape.rows == RowStyle::Divided,
         }
     }
 
@@ -497,10 +495,10 @@ impl Component for ListRow<'_> {
         self.label_rect = placed.label;
         {
             let draw = ui.draw();
-            if self.rule || (self.layer && style.dividers && self.divider_below) {
+            if self.rule || (self.layer && self.divider_below) {
                 draw.edge_rule(RuleKind::Divider, rect, RectSide::Bottom);
             }
-            if self.layer && style.dividers {
+            if self.layer {
                 // Each toggle cell's rule lies just past the cell, where a cell's fill never covers it.
                 for &x in &placed.dividers {
                     let after = if rtl { rect.left()..=x } else { x..=rect.right() };
