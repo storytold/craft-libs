@@ -1,0 +1,44 @@
+[package]
+name = "craft-smime"
+description = "S/MIME (RFC 8551): Digital signatures checked from CMS (RFC 5652) and X.509 (RFC 5280), no I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-ber = { workspace = true }
+serde = { workspace = true }
+base64 = "0.23"
+# RustCrypto: CMS, X.509, DER, SPKI, OID, RSA, P256, P384, SHA2.
+cms = { version = "=0.3.0-rc.2", default-features = false }
+x509-cert = { version = "0.3", default-features = false }
+der = { version = "0.8", default-features = false, features = ["alloc", "oid"] }
+spki = { version = "0.8", default-features = false, features = ["alloc"] }
+const-oid = { version = "0.10", default-features = false, features = ["db"] }
+# Match craft-pkcs7's RSA pin; parse PKCS #1 separately to avoid incompatible RC encoding APIs.
+rsa = { version = "=0.10.0-rc.18", default-features = false }
+pkcs1 = { version = "0.8", default-features = false, features = ["alloc"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "alloc"] }
+p384 = { version = "0.14", default-features = false, features = ["ecdsa", "alloc"] }
+sha2 = { version = "0.11", default-features = false, features = ["oid"] }
+# PKCS #12 file handling (RFC 7292 Appendix B): PBES2, triple-DES key derivation.
+pkcs12 = { version = "=0.2.0-rc.0", default-features = false, features = ["kdf"] }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+hmac = { version = "0.13", default-features = false }
+sha1 = { version = "0.11", default-features = false }
+aes = { version = "0.9", default-features = false }
+des = { version = "0.9", default-features = false }
+cbc = { version = "0.2", default-features = false, features = ["block-padding"] }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+# Error handling.
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring"] }
+ring = "0.17"

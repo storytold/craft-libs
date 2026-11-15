@@ -120,6 +120,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   pages and version detection, and written back; and `model`, the drawing above the tags (header
   variables, tables, blocks, layouts, entities) and its writer (R12 to 2018), merged from CADCraft's and VectorCraft's readers. Bounded
   on hostile input. Mapping the model onto a document stays in each app.
+- [`craft-dwg`](crates/dwg/README.md): bounded byte-level DWG↔DXF conversion with diagnostics,
+  capped output and an optional child-process worker; the `acadrust` dependency remains isolated
+  behind bytes and is unavailable on wasm32 and FreeBSD/aarch64.
 - [`craft-ecproj-format`](crates/ecproj-format/README.md): the envelope of EffectCraft `.ecproj`
   project files: `savedBy`, the schema version and its check, and the file object with the
   project and its saved view as type parameters. The project model stays in EffectCraft.
@@ -203,6 +206,8 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   decoder is bounded and returns its partial output on damage. From PdfCraft; a PDF filter chain
   is built on it in `craft-pdf`.
 - [`craft-timeline`](crates/timeline/README.md): editorial timeline interchange: exact media time and SMPTE timecode, import/export reports, media path and `file://` URL handling, Avid Log Exchange (ALE) and CMX 3600 EDL documents, format detection. From FilmCraft.
+- [`craft-time`](crates/time/README.md): exact rational ticks and SMPTE time across media, with a `soundcraft` compatibility module retaining SoundCraft's sample-index timebase, tempo maps, grids and session serialization semantics.
+- [`craft-scraft-format`](crates/scraft-format/README.md): SoundCraft's typed `.scraft` session schema, versioned reader/writer, hostile-input validation, and `.scraftz` bundle reader/writer. Engine and UI mapping stays in SoundCraft.
 - [`craft-metadata`](crates/metadata/README.md): photo metadata, from LightCraft: EXIF (read and write,
   maker-note lens and focus point, every tag by name), IPTC-IIM, XMP packets (read, write, and a merge
   that keeps what another program wrote), GPX track logs, and the blocks that carry them in JPEG, PNG,
@@ -226,9 +231,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   sockets: session, requests of method calls with back-references, responses, ids, address
   templates, credentials and the judgement of HTTP answers, over any HTTP implementation. Bounded
   on hostile answers; what a program asks and makes of the answers stays in it.
-- [`craft-jpeg`](crates/jpeg/README.md): clean-room decoder for 12-bit and arithmetic-coded
-  JPEG (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), from PhotoCraft, and a frame probe for routing.
-  Metadata stays in each app.
+- [`craft-jpeg`](crates/jpeg/README.md): clean-room JPEG decoder for 12-bit and arithmetic-coded
+  frames (T.81 SOF0/SOF1 at 12 bits, SOF9, SOF10), band decoding, and an optimized 8-bit baseline
+  encoder, from PhotoCraft; includes a frame probe for routing. Metadata interpretation stays in
+  each app.
 - [`craft-raster-codecs`](crates/raster-codecs/README.md): small raster formats, one module each,
   from PhotoCraft: DDS (BC1 to BC3, read and write), DICOM, FITS (read and write), IFF/ILBM (read
   and write), PCX, PNM/PAM/PFM (read and write) and XPM, into one flat image type. Bounded and
@@ -325,6 +331,8 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-sheet`](crates/sheet/README.md): spreadsheet vocabulary shared by `craft-xls`, `craft-xlsx` and `craft-ods`: cell positions and A1 text, cell values and error values, sheet-name quoting, Excel's built-in number formats and indexed colour palette. Not a file format; no dependencies.
 - [`craft-sf2`](crates/sf2/README.md): SoundFont 2 (`.sf2`) reader: the sample pool and, per preset, the key and velocity regions a note sounds, with tuning, loop points, pan, level and volume envelope resolved from the preset and instrument zones. Bounded on hostile input. From LoopCraft.
 - [`craft-silhouette-studio`](crates/silhouette-studio/src/lib.rs): bounded, fail-closed reader for Silhouette Studio `.studio` and `.studio3` documents: outlines, line colours and page size in millimetres. Protected designs are refused.
+- [`craft-stencilcraft-format`](crates/stencilcraft-format/README.md): the versioned `.stencilcraft` JSON wire schema and envelope: required members, version 1 defaults, optional fields, and header checks.
+- `craft-stencilcraft-document`: StencilCraft's typed document model, geometry helpers, validation, and native `.stencilcraft` codec.
 - [`craft-sketch`](crates/sketch/README.md): clean-room reader for the `.sketch` container (Sketch 48 and newer): the ZIP archive, the version cut, `document.json`, the pages in document order and images, as the JSON the file holds. Bounded on hostile input. Carved from FigCraft.
 - [`craft-svg`](crates/svg/src/lib.rs): SVG. `sniff` recognises SVG and SVGZ data; `svgz` unpacks
   SVGZ within a byte limit, decodes UTF-8, UTF-16 and ISO 8859-1, and compresses; `guard` bounds
@@ -340,6 +348,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
 - [`craft-text`](crates/text/README.md): text processing below the composer. Its `hyphen` module finds
   hyphenation points, with a bundled US English dictionary and patterns and optional hypher patterns
   for 47 more languages (one cargo feature each).
+- [`craft-texture`](crates/texture/README.md): linear float image planes, gray or RGBA, with
+  nearest and bilinear sampling that repeats or clamps, resizing and display conversion. Sizes are
+  bounded by `Limits`. From MaterialCraft.
 - [`craft-ui`](crates/ui/README.md): SVG catalogs, icon buttons, tabs, pane controls, transactional docking, print settings and theme helpers for egui frontends;
   assets, themes, localization and command handling stay in each app. Requires Rust 1.95 or later.
 - [`craft-vcard`](crates/vcard/README.md): vCard contacts, from MailCraft: vCard 2.1, 3.0 and 4.0 read

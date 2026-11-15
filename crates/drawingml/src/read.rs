@@ -166,6 +166,12 @@ pub fn blip_fill(src: &mut dyn Source, bf: &El) -> Option<PictureFill> {
     {
         pf.artistic = Some(crate::style::Artistic { effect, original });
     }
+    pf.svg = blip.and_then(|b| b.child(Local("extLst"))).and_then(|extensions| {
+        extensions
+            .elements()
+            .filter(|extension| extension.local() == "ext" && extension.attr_local("uri") == Some("{96DAC541-7B7A-43D3-8B79-37D633B846F1}"))
+            .find_map(|extension| extension.child(Local("svgBlip")).and_then(|svg| media_ref(src, svg)))
+    });
     if let Some(b) = blip {
         for e in b.elements() {
             match e.local() {
