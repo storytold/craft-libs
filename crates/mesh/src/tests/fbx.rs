@@ -783,3 +783,23 @@ fn ascii_budget_applies_while_reading_values_and_records() {
     let ignored = format!(";{}\nObjects: {{}}", ",".repeat(10_000));
     assert!(read_document(ignored.as_bytes(), &limits).is_ok());
 }
+
+#[test]
+fn strict_ascii_reports_unbalanced_and_unterminated_records() {
+    let strict = |s: &str| crate::fbx::read_document_strict(s.as_bytes(), &Limits::default());
+    assert!(strict(ASCII).is_ok());
+    for s in ["Objects: { A: 1", "Objects: { } }", "Objects: { A: \"unterminated", "Objects: { A: 1 2 }"] {
+        assert!(strict(s).is_err(), "{s}");
+    }
+    assert!(read_document(b"Objects: { A: 1", &Limits::default()).is_ok());
+}
+
+#[test]
+fn strict_binary_requires_a_closing_record() {
+    let doc = document(ASCII.as_bytes());
+    let bytes = write_binary(&doc.records, 7400, false);
+    assert!(crate::fbx::read_document_strict(&bytes, &Limits::default()).is_ok());
+    let truncated = &bytes[..bytes.len() - 29];
+    assert!(read_document(truncated, &Limits::default()).is_ok());
+    assert!(crate::fbx::read_document_strict(truncated, &Limits::default()).is_err());
+}
