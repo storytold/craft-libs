@@ -231,6 +231,12 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     Ok(if (5..=8).contains(&o) { (h, w) } else { (w, h) })
 }
 
+/// Classify classic TIFF camera RAWs using LightCraft's historical bounded heuristic.
+/// This compatibility policy differs from the decoder's own RAW rejection policy.
+pub fn legacy_tiff_raw_hint(bytes: &[u8]) -> bool {
+    tiff::legacy_camera_raw(bytes)
+}
+
 /// A JPEG's frame as its header declares it, read without decoding pixels: the stored size, the
 /// layout [`decode`] returns, whether [`decode`] hands the file to its whole-coefficient
 /// decoder (arithmetic-coded, lossless or 12-bit frames), whose working set is several times the
