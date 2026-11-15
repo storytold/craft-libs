@@ -91,6 +91,9 @@ pub struct HostedAdjustDialog<V, E = ()> {
     title: Label,
     open: bool,
     value: V,
+    /// Whether the value was edited since the dialog opened: by the editor, Reset, a field set or
+    /// [`value_mut`](HostedAdjustDialog::value_mut). A [`seed`](HostedAdjustDialog::seed) is not an edit.
+    edited: bool,
     preview: bool,
     comparing: bool,
     context: AdjustContext,
@@ -129,6 +132,7 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Hoste
             title: title.into(),
             open: true,
             value,
+            edited: false,
             preview: true,
             comparing: false,
             context: AdjustContext::dialog(true),
@@ -246,9 +250,24 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Hoste
         &self.value
     }
 
-    /// The value, for the app's answers to the editor's asks (Auto's levels).
+    /// The value, for the app's edits of it (Auto's levels, a picked colour, an automation set): the dialog counts
+    /// as [`edited`](HostedAdjustDialog::edited) from then on.
     pub fn value_mut(&mut self) -> &mut V {
+        self.edited = true;
         &mut self.value
+    }
+
+    /// Replaces the value with the one the dialog opens at (the app seeds it after opening, or again once its target
+    /// resolves or changes), without counting as an edit.
+    pub fn seed(&mut self, value: V) {
+        self.value = value;
+    }
+
+    /// Whether the value was edited since the dialog opened: by the editor, Reset, a field set or
+    /// [`value_mut`](HostedAdjustDialog::value_mut). Preview, the picker, the channel and the clipping display are not
+    /// the value; seeds are not edits.
+    pub fn edited(&self) -> bool {
+        self.edited
     }
 
     /// Whether the Preview box is ticked.
@@ -279,6 +298,7 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             title,
             open,
             value,
+            edited,
             preview,
             comparing,
             context,
@@ -302,6 +322,8 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
         // The request to select a point is this pass's alone: a rerun of the pass in the frame finds none.
         let (canvas, select_point) = (*canvas, select_point.take());
         let (context, resizable, remember) = (*context, *resizable, remember.clone());
+        // What the editor, Reset and the form's undo change in this pass is the dialog's edit.
+        let before = value.clone();
         let form = FormDialog::new(title.clone(), Bind::bound(value))
             .opened(Bind::bound(open))
             .preview(Some(Bind::bound(&mut *preview)))
@@ -334,6 +356,7 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             true
         });
         *comparing = shown.comparing;
+        *edited |= *value != before;
         if held.refusal().is_some_and(|(_, refused)| refused != value) {
             held.clear_refusal();
         }
@@ -403,7 +426,10 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
                 let clip = clipping_from_json(&value).ok_or_else(|| rejected(&value))?;
                 self.set_clipping(clip);
             }
-            _ => return set_serde_field(&mut self.value, field, value),
+            _ => {
+                set_serde_field(&mut self.value, field, value)?;
+                self.edited = true;
+            }
         }
         Ok(())
     }

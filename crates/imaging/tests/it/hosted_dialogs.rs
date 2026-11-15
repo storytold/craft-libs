@@ -100,6 +100,36 @@ fn a_hosted_adjustment_dialog_previews_and_answers_with_its_value() {
     assert_eq!(host.borrow_mut().take::<Adjust>(), Some(DialogResult::Cancel), "Escape cancels a reopened dialog");
 }
 
+// The dialog's own edited signal: false at open, after a preview toggle and after a seed; true after an editor change,
+// and after a field set of the value.
+#[trial]
+fn an_adjustment_dialog_counts_editor_changes_and_sets_as_edits_but_not_seeds_or_preview() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let id = host.borrow_mut().open(brightness_contrast());
+    fixture.idle(10);
+    let edited = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<Adjust>().map(Adjust::edited);
+    assert_eq!(edited(&host), Some(false), "a dialog opens unedited");
+    let preview = fixture.by_label("Preview").expect("the Preview box");
+    fixture.click(&preview).idle(4);
+    if let Some(dialog) = host.borrow_mut().get_mut::<Adjust>() {
+        dialog.seed(BrightnessContrast { brightness: 0.0, contrast: 0.0, legacy: false });
+    }
+    fixture.idle(4);
+    assert_eq!(edited(&host), Some(false), "a preview toggle and a seed are not edits");
+    let slider = fixture.by_role(craft_ui::contract::Role::SLIDER).first().cloned().expect("the Brightness slider");
+    fixture.drag(&slider, Vec2::new(slider.rect.width() / 4.0, 0.0)).settle();
+    assert_eq!(edited(&host), Some(true), "an editor change is an edit");
+
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut again = self::fixture(&host);
+    host.borrow_mut().open(brightness_contrast());
+    again.idle(10);
+    let ctx = again.ctx().clone();
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "contrast", serde_json::json!(0.0)), Ok(()));
+    assert_eq!(edited(&host), Some(true), "a field set of the value is an edit");
+}
+
 /// Why the app refuses the held OK.
 const REFUSED: &str = "The layer is locked.";
 
