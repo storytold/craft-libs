@@ -2580,6 +2580,7 @@ version = "0.1.0"
 dependencies = [
  "craft-image-codecs",
  "craft-xml",
+ "data-url",
  "flate2",
  "kurbo 0.13.1",
  "resvg 0.48.1",

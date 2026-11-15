@@ -492,3 +492,57 @@ mod draw_checks {
         assert!(!refusal.memory && refusal.message.contains("clip-paths"), "{refusal:?}");
     }
 }
+
+mod invalid_image_accounting {
+    use super::*;
+
+    fn usage(body: &str, limits: Limits) -> (Vec<bool>, ImageUsage) {
+        let text = svg(body);
+        let resolver = ImageResolver::new(limits);
+        resolver.check_document(&text).unwrap();
+        let options = usvg::Options { image_href_resolver: resolver.resolver(), ..Default::default() };
+        let tree = parse_text(&text, &limits, &options).unwrap();
+        let mut found = Vec::new();
+        images(tree.root(), &mut found);
+        (found, resolver.usage())
+    }
+
+    fn png() -> Vec<u8> {
+        use craft_image_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType, encode};
+        let image = Image::new(1, 1, ChannelLayout::Rgba, SampleType::U8).unwrap();
+        encode(&image, Format::Png, &EncodeOptions::default()).unwrap()
+    }
+
+    fn image(data: &[u8]) -> String {
+        let encoded: String = data.iter().map(|b| format!("%{b:02X}")).collect();
+        format!(r#"<image width="1" height="1" xlink:href="data:image/png,{encoded}"/>"#)
+    }
+
+    #[test]
+    fn malformed_base64_is_counted_before_usvg_discards_it() {
+        let bad = r#"<image width="1" height="1" xlink:href="data:image/png;base64,A"/>"#;
+        let (found, report) = usage(bad, shallow());
+        assert!(found.is_empty());
+        assert_eq!(report.invalid_raster_images, 1);
+        let (found, report) = usage(&embed(&svg(bad)), shallow());
+        assert_eq!(found, [true]);
+        assert_eq!(report.invalid_raster_images, 1);
+    }
+
+    #[test]
+    fn corrupt_pixels_do_not_pass_a_valid_header_probe() {
+        let valid = png();
+        let (found, report) = usage(&image(&valid), shallow());
+        assert_eq!(found, [false]);
+        assert_eq!(report.invalid_raster_images, 0);
+        let idat = valid.windows(4).position(|b| b == b"IDAT").unwrap();
+        let corrupt = &valid[..idat + 4];
+        assert_eq!(craft_image_codecs::probe_allocation_size(corrupt).unwrap(), (1, 1));
+        let (found, report) = usage(&image(corrupt), shallow());
+        assert!(found.is_empty());
+        assert_eq!(report.invalid_raster_images, 1);
+        let (found, report) = usage(&image(&valid), Limits { embedded_raster_pixels: 0, ..shallow() });
+        assert!(found.is_empty());
+        assert_eq!(report.raster_limit_images, 1);
+    }
+}
