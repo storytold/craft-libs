@@ -359,7 +359,12 @@ impl VmdFile {
         if f.offset.checked_add(u64::from(f.size)).is_none_or(|end| end > src.len()) {
             return Err(Error::Invalid(format!("frame {index} reaches past the end of the file")));
         }
-        let mut data = vec![0u8; f.size as usize];
+        // fallibly: a size the address space cannot hold (above 2 GiB on a 32-bit target) is an
+        // error, not a capacity-overflow panic
+        let size = f.size as usize;
+        let mut data = Vec::new();
+        data.try_reserve_exact(size).map_err(|_| Error::Invalid(format!("frame {index} is too large to load")))?;
+        data.resize(size, 0);
         src.read_at(f.offset, &mut data)?;
         Ok(data)
     }

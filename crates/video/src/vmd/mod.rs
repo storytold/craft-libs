@@ -25,8 +25,13 @@
 //! let mut decoder = Decoder::new(file.header_bytes())?;
 //! for (i, frame) in file.frames.iter().enumerate() {
 //!     let FrameKind::Video { new_palette, .. } = frame.kind else { continue };
-//!     let Some(rect) = file.picture_rect(i) else { continue };
-//!     decoder.decode(Rect::from(rect), new_palette, &file.read_frame(&bytes, i)?)?;
+//!     let data = file.read_frame(&bytes, i)?;
+//!     match file.picture_rect(i) {
+//!         Some(rect) => decoder.decode(Rect::from(rect), new_palette, &data)?,
+//!         // a frame that paints nothing in the picture can still bring a palette
+//!         None if new_palette => decoder.decode_palette(&data)?,
+//!         None => {}
+//!     }
 //!     let rgb = decoder.rgb24(); // the picture after this block
 //! }
 //! # Ok(())
@@ -188,13 +193,8 @@ impl Decoder {
     /// frames still decode against it.
     pub fn decode(&mut self, rect: Rect, new_palette: bool, data: &[u8]) -> Result<()> {
         let mut data = data;
-        if data.is_empty() {
-            return Ok(());
-        }
-        if new_palette {
-            // first index and count (ignored, see the module documentation), then 256 entries
-            let chunk = data.get(..770).ok_or(Error::Invalid("the palette is cut short"))?;
-            self.load_palette(&chunk[2..]);
+        if new_palette && !data.is_empty() {
+            self.decode_palette(data)?;
             data = &data[770..];
         }
         let Some((&method, body)) = data.split_first() else { return Ok(()) };
@@ -212,6 +212,20 @@ impl Decoder {
         let result = lz_unpack(body, self.unpack_limit, useful, &mut unpacked).and_then(|()| self.render(rect, method & 0x7F, &unpacked));
         self.unpacked = unpacked;
         result
+    }
+
+    /// Take the palette that the data of a frame with a new palette begins with, and paint
+    /// nothing: for a video frame that has no rectangle in the picture (an empty one, as ffmpeg
+    /// was seen to accept, or one outside the picture). [`Decoder::decode`] does this itself for
+    /// the frames it is given. An empty frame changes nothing.
+    pub fn decode_palette(&mut self, data: &[u8]) -> Result<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+        // first index and count (ignored, see the module documentation), then 256 entries
+        let chunk = data.get(..770).ok_or(Error::Invalid("the palette is cut short"))?;
+        self.load_palette(&chunk[2..]);
+        Ok(())
     }
 
     fn load_palette(&mut self, vga: &[u8]) {

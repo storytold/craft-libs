@@ -112,8 +112,12 @@ fn decode_all(bytes: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut out = Vec::new();
     for (i, frame) in file.frames.iter().enumerate() {
         let FrameKind::Video { new_palette, .. } = frame.kind else { continue };
-        let rect = Rect::from(file.picture_rect(i).unwrap());
-        decoder.decode(rect, new_palette, &file.read_frame(bytes, i).unwrap()).unwrap();
+        let data = file.read_frame(bytes, i).unwrap();
+        match file.picture_rect(i) {
+            Some(rect) => decoder.decode(rect.into(), new_palette, &data).unwrap(),
+            None if new_palette => decoder.decode_palette(&data).unwrap(),
+            None => {}
+        }
         out.push((decoder.indices().to_vec(), decoder.rgb24()));
     }
     out
@@ -327,6 +331,38 @@ fn palette_changes() {
     assert_eq!(d.decode(FULL, true, &[0; 769]), Err(Error::Invalid("the palette is cut short")));
 }
 
+/// A frame whose rectangle is empty paints nothing, but its palette counts: the pictures after
+/// it use it. ffmpeg was seen to do the same with such a frame.
+#[test]
+fn palette_of_a_frame_without_a_rectangle() {
+    let spec = Spec::new(4, 2);
+    let picture = |fill: u8| [vec![2], vec![fill; 8]].concat();
+    let mut palette = [0u8; 768];
+    palette[5 * 3..][..3].copy_from_slice(&[63, 0, 63]);
+    palette[6 * 3..][..3].copy_from_slice(&[0, 63, 0]);
+    let bytes = build(
+        &spec,
+        &[
+            vec![Frame::video([0, 0, 3, 1], false, picture(5))],
+            // right is one less than left: no pixels, a palette and a picture that is not painted
+            vec![Frame::video([1, 1, 0, 1], true, [palette_chunk(&palette), picture(6)].concat())],
+            vec![Frame::video([0, 0, 1, 0], false, picture(6)[..3].to_vec())],
+        ],
+    );
+    assert_eq!(open(&bytes).unwrap().picture_rect(1), None);
+    let pictures = decode_all(&bytes);
+    // index 5 is dark grey in the header's palette
+    assert_eq!(pictures[0], (vec![5; 8], [4u8; 24].to_vec()));
+    assert_eq!(pictures[1], (vec![5; 8], [255, 0, 255].repeat(8)));
+    assert_eq!(pictures[2].0, [6, 6, 5, 5, 5, 5, 5, 5]);
+    assert_eq!(pictures[2].1[..9], [0, 255, 0, 0, 255, 0, 255, 0, 255]);
+
+    let mut d = flat();
+    d.decode_palette(&[]).unwrap();
+    assert_eq!(d.palette()[0x40], [0x41; 3]);
+    assert_eq!(d.decode_palette(&[0; 769]), Err(Error::Invalid("the palette is cut short")));
+}
+
 #[test]
 fn partial_updates_and_empty_frames() {
     let mut d = flat();
@@ -390,6 +426,7 @@ fn hostile_input_never_panics() {
                 if let Some(rect) = file.picture_rect(i) {
                     let _ = decoder.decode(rect.into(), new_palette, &data);
                 }
+                let _ = decoder.decode_palette(&data);
             }
             let _ = decoder.rgb24();
         });

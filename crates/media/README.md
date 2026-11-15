@@ -840,7 +840,8 @@ for (i, frame) in file.frames.iter().enumerate() {
   `header_bytes()` is the same header.
 - `picture_rect(index)` places a video frame's update in the picture. Frame coordinates are
   screen coordinates; a frame as large as the picture that is not at the screen's corner gives
-  the picture's position from then on, as ffmpeg was seen to do.
+  the picture's position from then on, as ffmpeg was seen to do. A frame with no rectangle in
+  the picture can still carry a palette (`craft_video::vmd::Decoder::decode_palette`).
 
 Gaps: only the 816-byte header is read. The later Coktel Vision revisions with a longer header
 or one without a palette are refused (`Error::NotVmd`). Files with 16-bit, 24-bit or Indeo 3
