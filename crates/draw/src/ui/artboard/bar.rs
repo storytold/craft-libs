@@ -1,13 +1,16 @@
 //! [`ArtboardBar`]: the members the Artboard tool adds to the app's options `Bar`.
 
+use super::background::background_cells;
 use super::{ArtboardBackground, ArtboardItem, ArtboardPreset, ArtboardWords};
+use craft_behavior::IconId;
 use craft_behavior::kurbo::Size;
 use craft_behavior::{EditEvent, EditEvents, Mixed};
-use craft_ui::bars::{BarItem, BarItems, ItemDisplay};
-use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
+use craft_ui::bars::{AlignAction, BarItem, BarItems, ItemDisplay};
+use craft_ui::buttons::{Button, IconButton};
+use craft_ui::contract::{Bind, Entry, NoValue, Outcome, PopupKind, Props as _, Show as _, ShowContainer as _, Trigger, clicked};
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
+use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, UnitKind};
 use craft_ui::runtime::requests::ColorRequest;
@@ -34,8 +37,8 @@ pub enum ArtboardCommand {
 pub struct ArtboardBarOutput {
     /// The members' response.
     pub response: Response,
-    /// The selected board's new size: a preset pick, Make Portrait or Make Landscape, or a typed W or H is a `Set`; a
-    /// scrub of a caption is a gesture. The app resizes the board (contents stay).
+    /// The target's new size: a preset pick, Make Portrait or Make Landscape, or a typed W or H is a `Set`; a
+    /// scrub of a caption is a gesture. The app resizes the board (contents stay) or the next board's size.
     pub size: EditEvents<Size>,
     /// The background picked.
     pub background: Option<ArtboardBackground>,
@@ -52,13 +55,14 @@ impl Outcome for ArtboardBarOutput {
 }
 
 /// The members the Artboard tool adds to the options bar, in PhotoCraft's order: the Size preset (Custom, then the
-/// app's presets), W and H (1 to 300,000 px), Make Portrait (shown only while the board is wider than tall), Make
-/// Landscape (only while taller than wide), a rule and Add New Artboard ([`ArtboardCommand::AddNew`]). Without a
-/// selected board the size members are off. Each member is a Tab stop in the bar's order.
+/// app's presets), W and H (1 to 300,000 px), Make Portrait (shown only while the size is wider than tall), Make
+/// Landscape (only while taller than wide; both are off for the next board), the Background cells, a rule, Add New
+/// Artboard ([`ArtboardCommand::AddNew`]), a rule and the Align menu button. Each member is a Tab stop in the bar's
+/// order.
 #[must_use = "show the members with `show`"]
 #[derive(craft_ui::contract::Pattern)]
 pub struct ArtboardBar<'a> {
-    selected: Option<&'a ArtboardItem>,
+    target: ArtboardBarTarget<'a>,
     presets: &'a [ArtboardPreset],
 }
 
@@ -80,27 +84,23 @@ pub enum ArtboardBarTarget<'a> {
 impl<'a> ArtboardBar<'a> {
     /// The members for `target` with the app's `presets`.
     pub fn new(target: ArtboardBarTarget<'a>, presets: &'a [ArtboardPreset]) -> Self {
-        // P3(tools-w18): tl.T56 the `Next` target edits the next board's size and background.
-        let selected = match target {
-            ArtboardBarTarget::Board(board) => Some(board),
-            ArtboardBarTarget::Next { .. } => None,
-        };
-        ArtboardBar { selected, presets }
+        ArtboardBar { target, presets }
     }
 
     /// Adds the members to the bar's row.
     pub fn show(self, ui: &mut Ui) -> ArtboardBarOutput {
         let words = Env::of(ui).words::<ArtboardWords>();
-        let size = self.selected.map(|board| Size::new(board.rect.width().abs(), board.rect.height().abs()));
-        let shown = size.unwrap_or(Size::ZERO);
-        let on = size.is_some();
+        let (shown, background, has_board) = match self.target {
+            ArtboardBarTarget::Board(board) => (Size::new(board.rect.width().abs(), board.rect.height().abs()), board.background, true),
+            ArtboardBarTarget::Next { size, background } => (size, background, false),
+        };
         let mut out = EditEvents::new();
-        // The preset the board's size matches, else Custom.
+        // The preset the size matches, else Custom.
         let mut entries = vec![Entry::new(None, words.custom.clone())];
         entries.extend(self.presets.iter().enumerate().map(|(i, preset)| Entry::new(Some(i), preset.name.clone())));
         let current = self.presets.iter().position(|preset| preset.size == shown);
-        Field::new(words.size.clone()).enabled(on).show(ui, |ui, _| {
-            let pick = Select::new(words.size.clone(), Bind::given(current), &entries).enabled(on).show(ui);
+        Field::new(words.size.clone()).show(ui, |ui, _| {
+            let pick = Select::new(words.size.clone(), Bind::given(current), &entries).show(ui);
             if let Some(Some(i)) = pick.value().copied()
                 && let Some(preset) = self.presets.get(i)
             {
@@ -109,9 +109,8 @@ impl<'a> ArtboardBar<'a> {
         });
         let side = |ui: &mut Ui, caption: &craft_ui::runtime::env::Label, name: &craft_ui::runtime::env::Label, value: f64, width: bool| {
             Field::new(caption.clone())
-                .enabled(on)
                 .show(ui, |ui, _| {
-                    let field = NumberField::new(name.clone(), Bind::given(Some(value))).range(SIDE).unit_kind(UnitKind::Pixels).enabled(on).show(ui);
+                    let field = NumberField::new(name.clone(), Bind::given(Some(value))).range(SIDE).unit_kind(UnitKind::Pixels).show(ui);
                     field.edit.events.map(|v| {
                         if width { Size::new(v.unwrap_or(shown.width), shown.height) } else { Size::new(shown.width, v.unwrap_or(shown.height)) }
                     })
@@ -124,10 +123,10 @@ impl<'a> ArtboardBar<'a> {
         let mut size_events = out;
         size_events.extend(width);
         size_events.extend(height);
-        // Make Portrait is for a board wider than tall, Make Landscape for one taller than wide.
+        // Make Portrait is for a size wider than tall, Make Landscape for one taller than wide.
         let swapped = Size::new(shown.height, shown.width);
         let swap = |ui: &mut Ui, label: &craft_ui::runtime::env::Label| {
-            clicked(&Button::new(label.clone()).show(ui)).then(|| EditEvent::set(Mixed::Same(shown), swapped, label.as_str().into(), None))
+            clicked(&Button::new(label.clone()).enabled(has_board).show(ui)).then(|| EditEvent::set(Mixed::Same(shown), swapped, label.as_str().into(), None))
         };
         if shown.width > shown.height {
             size_events.extend(swap(ui, &words.make_portrait));
@@ -135,8 +134,23 @@ impl<'a> ArtboardBar<'a> {
         if shown.height > shown.width {
             size_events.extend(swap(ui, &words.make_landscape));
         }
+        let mut cells = None;
+        Field::new(words.background.clone()).show(ui, |ui, _| {
+            cells = Some(background_cells(ui, &words, background));
+        });
         Divider::vertical().show(ui);
         let response = BarItems::new(vec![BarItem::new(ArtboardCommand::AddNew).display(ItemDisplay::Text)]).label(words.commands.clone()).show(ui);
-        ArtboardBarOutput { response, size: size_events, background: None, pick_color: None }
+        Divider::vertical().show(ui);
+        let button = IconButton::new(IconId::new("align_edge_left")).label(words.align.clone()).popup(PopupKind::Menu).show(ui);
+        Menu::new(words.align.clone()).opened_by(&button.response, Trigger::Press).show(ui, |ui, _| {
+            for action in AlignAction::ALIGN {
+                MenuItem::command(action).show(ui);
+            }
+            Divider::horizontal().show(ui);
+            MenuItem::new(words.distribute_widths.clone()).enabled(false).show(ui);
+            MenuItem::new(words.distribute_heights.clone()).enabled(false).show(ui);
+        });
+        let cells = cells.unwrap_or_default();
+        ArtboardBarOutput { response, size: size_events, background: cells.picked, pick_color: cells.pick_color }
     }
 }

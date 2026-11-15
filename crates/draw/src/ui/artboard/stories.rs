@@ -96,6 +96,31 @@ fn bar_for_a_landscape_board(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     output.readout(craft_i18n::fmt(words.size.as_str(), &[("width", number(size.width).as_str()), ("height", number(size.height).as_str())]))
 }
 
+/// The bar with no board selected: it edits the size and background of the next board, which the story keeps.
+#[story(ArtboardBar<'static>, covers = [], drive = Drive::Never)]
+fn bar_with_no_board(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let env = Env::of(ui);
+    let (words, units) = (env.words::<ArtboardStoryWords>(), env.units());
+    let (size, background) = data.value("next", (Size::new(1080.0, 1920.0), ArtboardBackground::White));
+    let presets = presets();
+    let mut members = None;
+    let bar = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+        members = Some(ArtboardBar::new(super::ArtboardBarTarget::Next { size: *size, background: *background }, &presets).show(ui))
+    });
+    let mut output = StoryOutput::from(bar.output);
+    if let Some(members) = members {
+        output.edits = members.size.iter().filter_map(EditKind::of).collect();
+        if let Some(landed) = members.size.landed() {
+            *size = *landed;
+        }
+        if let Some(picked) = members.background {
+            *background = picked;
+        }
+    }
+    let number = |value: f64| units.number(value, 0..=0);
+    output.readout(craft_i18n::fmt(words.size.as_str(), &[("width", number(size.width).as_str()), ("height", number(size.height).as_str())]))
+}
+
 #[story(ArtboardProperties<'static>, covers = [Default], drive = Drive::Never)]
 fn properties_with_a_custom_background(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let mut board = ArtboardItem::new("Artboard 1", Rect::new(0.0, 0.0, 390.0, 844.0));
@@ -155,7 +180,6 @@ impl Boards {
         let added = |name: String| craft_i18n::fmt(words.added.as_str(), &[("name", name.as_str())]);
         match event {
             ArtboardEvent::Draw(event) => return done(&event).map(|rect| added(self.push(rect.abs(), words))),
-            // P3(tools-w18): tl.T56 the story places the board.
             ArtboardEvent::Place { rect, .. } => return Some(added(self.push(rect, words))),
             ArtboardEvent::Move { indices, event, copy, .. } => {
                 let by = done(&event)?;
@@ -249,6 +273,7 @@ fn artboard_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rules =
         *data.choice("rules", ArtboardRules::PHOTOSHOP, &[("Photoshop", ArtboardRules::PHOTOSHOP), ("Illustrator", ArtboardRules::ILLUSTRATOR)]);
     let locked = *data.value("locked board", true);
+    let placing = *data.value("placing", false);
     let boards = data.value("document", Boards::new(&words));
     if let Some(third) = boards.items.get_mut(2) {
         third.locked = locked;
@@ -272,7 +297,7 @@ fn artboard_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     tool_story(ui, data, story, ArtboardKept::default, first, body, |run| {
         let (boards, kept) = (run.document, run.tool);
         let (named, mut events, added) = run.shown.unwrap_or_default();
-        kept.tool.items(&boards.items).selected(&boards.selected).rules(rules);
+        kept.tool.items(&boards.items).selected(&boards.selected).rules(rules).placing(placing.then_some(BOARD));
         if let Some((side, copy)) = added {
             kept.tool.add_beside(side, copy);
         }

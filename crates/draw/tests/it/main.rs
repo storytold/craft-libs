@@ -25,6 +25,9 @@ mod crop_tool;
 mod crop_size;
 mod perspective_crop;
 
+// draw-artboard
+mod artboard;
+
 // draw-bars
 mod measure;
 mod slice_divide;

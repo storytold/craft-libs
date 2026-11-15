@@ -12,7 +12,7 @@ mod status_readout;
 mod stories;
 mod words;
 
-pub use align::{AlignAction, AlignBar, AlignBarOutput, DistributeButtons};
+pub use align::{AlignAction, AlignBar, AlignBarOutput};
 pub use bar::{Bar, BarCommands, BarKind, BarOutput, BarStyle};
 pub use breadcrumb::{BreadcrumbBar, BreadcrumbBarStyle, BreadcrumbOutput, path_crumbs};
 pub use constraint_fields::{ConstraintFields, ConstraintFieldsOutput};

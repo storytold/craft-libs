@@ -1,11 +1,10 @@
 //! [`ArtboardProperties`]: an artboard's section in the Properties panel.
 
+use super::background::background_cells;
 use super::bar::SIDE;
 use super::{ArtboardBackground, ArtboardItem, ArtboardPreset, ArtboardWords};
 use craft_behavior::EditEvents;
 use craft_behavior::kurbo::Rect;
-use craft_theme::Srgba;
-use craft_ui::choice::Swatch;
 use craft_ui::contract::{Bind, Entry, GlyphLabel, LabelKind, LabelScheme, NoValue, Outcome, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
@@ -19,18 +18,6 @@ use std::ops::RangeInclusive;
 
 /// The range of X and Y, in pixels.
 const OFFSET: RangeInclusive<f64> = -300_000.0..=300_000.0;
-
-/// The key of the [`ColorRequest`] Other… files.
-const BACKGROUND_KEY: &str = "artboard.background";
-
-/// The background select's rows.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Choice {
-    White,
-    Black,
-    Transparent,
-    Other,
-}
 
 /// What [`ArtboardProperties::show`] reports.
 #[derive(Debug)]
@@ -46,7 +33,6 @@ pub struct ArtboardPropertiesOutput {
     /// request (titled "Artboard Background Color") and sets `Custom(color)` from the answer.
     pub pick_color: Option<ColorRequest>,
     /// The index of the size preset picked from the Size select this pass.
-    // P3(tools-w18): canvas-widgets-w17 decision, `ArtboardPropertiesOutput::preset`
     pub preset: Option<usize>,
 }
 
@@ -80,24 +66,12 @@ impl<'a> ArtboardProperties<'a> {
         let rect = self.board.rect.abs();
         let (width, height) = (rect.width(), rect.height());
         let background = self.board.background;
-        let custom = match background {
-            ArtboardBackground::Custom(color) => Some(color),
-            _ => None,
-        };
         let mut rect_events = EditEvents::new();
         let mut picked = None;
         let mut pick_color = None;
-        let request = |color: Option<Srgba>| {
-            ColorRequest::new(BACKGROUND_KEY, color.unwrap_or(Srgba::rgb(1.0, 1.0, 1.0))).title(words.background_color.clone())
-        };
+        let mut preset_picked = None;
         let mut presets = vec![Entry::new(None, words.custom.clone())];
         presets.extend(self.presets.iter().enumerate().map(|(i, preset)| Entry::new(Some(i), preset.name.clone())));
-        let backgrounds = [
-            Entry::new(Choice::White, words.white.clone()),
-            Entry::new(Choice::Black, words.black.clone()),
-            Entry::new(Choice::Transparent, words.transparent.clone()),
-            Entry::new(Choice::Other, words.other.clone()),
-        ];
         let section = Section::new(words.artboard.clone()).show(ui, |ui, _| {
             FieldGroup::new(words.artboard.clone()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
                 let current = self.presets.iter().position(|preset| preset.size.width == width && preset.size.height == height);
@@ -108,6 +82,7 @@ impl<'a> ArtboardProperties<'a> {
                     {
                         let moved = Rect::new(rect.x0, rect.y0, rect.x0 + preset.size.width, rect.y0 + preset.size.height);
                         rect_events.extend(pick.events.map(|_| moved));
+                        preset_picked = Some(i);
                     }
                 });
                 // A glyph-labelled number field; the pairs share a row, as W and H in the shape panel.
@@ -137,29 +112,12 @@ impl<'a> ArtboardProperties<'a> {
                     rect_events.extend(field(ui, &words.y, &words.y, rect.y0, &OFFSET).map(|v| moved((rect.x0, v.unwrap_or(rect.y0)))));
                 });
                 Field::new(words.background.clone()).show(ui, |ui, _| {
-                    Row::new().show(ui, |ui, _| {
-                        let now = match background {
-                            ArtboardBackground::White => Choice::White,
-                            ArtboardBackground::Black => Choice::Black,
-                            ArtboardBackground::Transparent => Choice::Transparent,
-                            _ => Choice::Other,
-                        };
-                        match Select::new(words.background.clone(), Bind::given(now), &backgrounds).show(ui).value().copied() {
-                            Some(Choice::White) => picked = Some(ArtboardBackground::White),
-                            Some(Choice::Black) => picked = Some(ArtboardBackground::Black),
-                            Some(Choice::Transparent) => picked = Some(ArtboardBackground::Transparent),
-                            Some(Choice::Other) => pick_color = Some(request(custom)),
-                            None => {}
-                        }
-                        if let Some(color) = custom
-                            && let Some(asked) = Swatch::new(words.background_color.clone(), color).picker(BACKGROUND_KEY).show(ui).pick_color
-                        {
-                            pick_color = Some(asked);
-                        }
-                    });
+                    let cells = background_cells(ui, &words, background);
+                    picked = cells.picked;
+                    pick_color = cells.pick_color;
                 });
             });
         });
-        ArtboardPropertiesOutput { response: section.response.clone(), rect: rect_events, background: picked, pick_color, preset: None } // P3(tools-w18): preset
+        ArtboardPropertiesOutput { response: section.response.clone(), rect: rect_events, background: picked, pick_color, preset: preset_picked }
     }
 }

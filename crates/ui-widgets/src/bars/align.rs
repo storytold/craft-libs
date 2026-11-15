@@ -1,6 +1,6 @@
-//! `AlignBar`: the Align and Distribute controls of the Move tool's options bar. A pattern over `BarItems`: the six
-//! align commands, then the eight distribute commands after a rule or only in the "More" menu, which lists all
-//! fourteen.
+//! `AlignBar`: the Align and Distribute controls of the Move tool's options bar. A pattern over `BarItems`: two
+//! sections of four buttons ([`AlignAction::BAR`]), then the six edge and centre distribute commands, which sit in
+//! the "More" menu only. The menu lists every item in item order with a rule between sections.
 
 use super::items::{BarItem, BarItems, MoreMenu};
 use super::words::BarWords;
@@ -94,17 +94,6 @@ impl AlignAction {
     ];
 }
 
-/// Where the distribute commands sit.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum DistributeButtons {
-    /// In the menu only.
-    #[default]
-    Menu,
-    /// Also as a second group of buttons after a rule; they move into the menu when the room runs out.
-    Row,
-}
-
 /// What the bar reports.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -121,34 +110,28 @@ impl Outcome for AlignBarOutput {
     }
 }
 
-/// The align buttons, the optional distribute buttons and the menu button, shown as children of a `Bar`. The menu
-/// lists every command, the align commands, a rule, then the distribute commands. The buttons show their icons at the
-/// tool size (`GlyphRole::Tool`).
+/// The two sections of four align and distribute buttons, then the menu button, shown as children of a `Bar`. The
+/// remaining six distribute commands are in the menu only. The buttons show their icons at the tool size
+/// (`GlyphRole::Tool`).
 #[derive(crate::contract::Pattern)]
-pub struct AlignBar {
-    distribute: DistributeButtons,
-}
+pub struct AlignBar {}
 
 impl AlignBar {
-    /// An align bar with the distribute commands in the menu.
+    /// The align bar.
     pub fn new() -> Self {
-        AlignBar { distribute: DistributeButtons::Menu }
-    }
-
-    /// Where the distribute commands sit.
-    #[must_use]
-    pub fn distribute(mut self, distribute: DistributeButtons) -> Self {
-        self.distribute = distribute;
-        self
+        AlignBar {}
     }
 
     /// Shows the bar. Each command's enabled state is the app's command state.
     pub fn show(self, ui: &mut Ui) -> AlignBarOutput {
         let name = Env::of(ui).words::<BarWords>().align_bar.clone();
-        let distribute_keep = if self.distribute == DistributeButtons::Row { FitKeep::Free } else { FitKeep::Menu };
-        let align = AlignAction::ALIGN.into_iter().map(BarItem::new);
-        let distribute = AlignAction::DISTRIBUTE.into_iter().map(|action| BarItem::new(action).section(1).keep(distribute_keep));
-        let response = BarItems::new(align.chain(distribute).collect()).label(name).more(MoreMenu::Every).glyphs(GlyphRole::Tool).show(ui);
+        // `BAR` already holds two of the eight distribute commands, so the menu-only tail is the first six.
+        let buttons = AlignAction::BAR
+            .into_iter()
+            .enumerate()
+            .flat_map(|(section, row)| row.into_iter().map(move |action| BarItem::new(action).section(section as _)));
+        let menu_only = AlignAction::DISTRIBUTE[..6].iter().copied().map(|action| BarItem::new(action).section(2).keep(FitKeep::Menu));
+        let response = BarItems::new(buttons.chain(menu_only).collect()).label(name).more(MoreMenu::Every).glyphs(GlyphRole::Tool).show(ui);
         AlignBarOutput { response }
     }
 }

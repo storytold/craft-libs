@@ -29,6 +29,7 @@ pub struct ArtboardTool {
     items: Vec<ArtboardItem>,
     selected: Vec<usize>,
     rules: ArtboardRules,
+    placing: Option<craft_behavior::kurbo::Size>,
     events: Vec<ArtboardEvent>,
     drag: Option<Drag>,
     ids: GestureId,
@@ -73,7 +74,7 @@ impl ArtboardTool {
     /// While `size` is `Some`, a click on the pasteboard places a board of that size (reports
     /// [`ArtboardEvent::Place`]); a drag still draws.
     pub fn placing(&mut self, size: Option<craft_behavior::kurbo::Size>) -> &mut Self {
-        let _ = size; // P3(tools-w18): tl.T56
+        self.placing = size;
         self
     }
 
@@ -151,6 +152,8 @@ impl CanvasTool for ArtboardTool {
         let to = Self::point(pointer, cx).unwrap_or(drag.at);
         let moved = pointer.pos.distance(drag.press) > cx.slop;
         let mods: Mods = pointer.mods;
+        // A marquee press (no run) never places.
+        let on_board_press = drag.run.is_some();
         match drag.run {
             None if moved => {
                 let touched = Rect::from_points(drag.start, to);
@@ -167,7 +170,10 @@ impl CanvasTool for ArtboardTool {
                 }
             }
             _ => {
-                if self.rules.fit_object {
+                // A click with no drag: place a board while placing, else the product's fit rule.
+                if let (Some(size), true) = (self.placing, on_board_press) {
+                    self.events.push(ArtboardEvent::Place { rect: Rect::from_origin_size(drag.start.round(), size) });
+                } else if self.rules.fit_object {
                     self.events.push(ArtboardEvent::FitObject { at: drag.start });
                 }
             }
