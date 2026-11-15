@@ -7,10 +7,13 @@
 
 use crate::{ImageError, Kind, Limits};
 
+/// A malformed DDS/backend failure or rejected output allocation.
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
+    /// Output size or allocation failed shared image limits.
     #[error(transparent)]
     Image(#[from] ImageError),
+    /// The decoder rejected input or output geometry.
     #[error("DDS decode failed: {0}")]
     Decode(String),
 }
@@ -18,8 +21,11 @@ pub enum DecodeError {
 /// Unmodified backend output. Alpha and out-of-range float values are not clamped.
 #[derive(Debug)]
 pub struct Surface {
+    /// Width of the first surface in pixels.
     pub width: u32,
+    /// Height of the first surface in pixels.
     pub height: u32,
+    /// Row-major RGBA float samples without transfer conversion.
     pub rgba: Vec<f32>,
     /// Exactly the backend's `Precision::F32` classification, as used by MaterialCraft.
     pub source_precision_is_f32: bool,
