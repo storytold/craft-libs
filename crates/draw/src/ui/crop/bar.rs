@@ -57,8 +57,12 @@ pub struct CropBarOutput {
     pub pick_color: Option<ColorRequest>,
     /// Any option of the settings changed this pass: the app persists them.
     pub settings_changed: bool,
-    /// The help button was pressed this pass: the host opens a `HostedAlert`.
+    /// The help button was pressed this pass: the host opens a `HostedAlert` (the `fill_help_*` words of
+    /// [`CropBarWords`]).
     pub help: bool,
+    /// A value typed into W x H x Resolution outside its range: the cell keeps the limit and the host raises the
+    /// range alert.
+    pub out_of_range: Option<craft_ui::text::RangeAlert>,
     /// Reset was pressed this pass.
     pub reset: bool,
     /// Selection was picked in the preset list: the app calls `CropTool::take_selection_frame`.
@@ -146,6 +150,7 @@ impl<'a> CropBar<'a> {
         let before = settings.clone();
         let mut report = Report::default();
         let (mut help_pressed, mut reset_pressed) = (false, false);
+        let mut out_of_range = None;
         // The options are the bar's members, spaced as the bar spaces them.
         let shown = Row::new().gap(Gap::Item).show(ui, |ui, cx| {
             let list = CropPresetList::new(settings, document)
@@ -158,8 +163,13 @@ impl<'a> CropBar<'a> {
             report.delete_preset = list.delete_preset;
             report.selection = list.selection;
             if settings.ratio == CropRatio::Size {
-                if size_cells::show(ui, &mut settings.size, SizeLimits::CROP, document, &units, &words).changed {
+                let cells = size_cells::show(ui, &mut settings.size, SizeLimits::CROP, document, &units, &words);
+                if cells.changed {
                     report.ratio = Some(CropRatioChange { editing: false });
+                }
+                // The body can run more than once in a pass: a later run does not drop an alert an earlier one raised.
+                if cells.out_of_range.is_some() {
+                    out_of_range = cells.out_of_range;
                 }
             } else {
                 ratio_fields(ui, cx, settings, &words, document, has_document, &units, &mut report);
@@ -204,6 +214,7 @@ impl<'a> CropBar<'a> {
             pick_color: report.pick_color,
             settings_changed: changed,
             help: help_pressed,
+            out_of_range,
             reset: reset_pressed,
             selection: report.selection,
         }

@@ -68,6 +68,13 @@ craft_ui::words! {
         fill_transparent: "cropBar.fillTransparent" = "Transparent (default)";
         /// The Reset button's name and tooltip.
         reset_tip: "cropBar.resetTip" = "Reset the crop box, image rotation, and aspect ratio settings";
+        /// The Fill help button's name, and the help it opens: a title, then each fill method's name and what it does.
+        fill_help: "cropBar.fillHelp" = "Displays pop-up help for the fill methods";
+        fill_help_title: "cropBar.fillHelpTitle" = "Fill options";
+        fill_help_background: "cropBar.fillHelpBackground" = "Background (default):";
+        fill_help_background_text: "cropBar.fillHelpBackgroundText" = "Fill the expanded area with your background color or transparent pixels";
+        fill_help_content_aware: "cropBar.fillHelpContentAware" = "Content-aware fill";
+        fill_help_content_aware_text: "cropBar.fillHelpContentAwareText" = "Sample content from part of the image and use it to fill a small area";
         /// The perspective bar's Show Grid check box.
         show_grid: "cropBar.showGrid" = "Show Grid";
         commit: "cropBar.commit" = "Commit current crop operation";
