@@ -226,16 +226,26 @@ fn a_script_without_a_covering_file_blocks_no_other_script() {
     assert_eq!(registered(&frames), [(arabic, 0)]);
 }
 
+/// Removes its file when dropped, so a failed assertion leaves no sparse file behind.
+struct Removing(PathBuf);
+
+impl Drop for Removing {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 #[trial]
 fn unreadable_candidates_are_skipped_and_use_up_no_read_bound() {
     let dir = std::env::temp_dir();
     let empty = write("skip-empty.ttf", b"");
     let garbage = write("skip-garbage.ttf", b"this is not a font");
     let oversized = write("skip-oversized.ttf", b"");
+    let _removing = Removing(oversized.clone());
     std::fs::File::options().write(true).open(&oversized).and_then(|file| file.set_len((128 << 20) + 1)).expect("make a sparse oversized file");
     let arabic = write("skip-arabic.ttf", ARABIC);
     let mut candidates: Vec<PathBuf> = (0..MAX_SCRIPT_READS).map(|i| dir.join(format!("craft-on-demand-missing-{i}.ttf"))).collect();
-    candidates.extend([dir, empty, oversized.clone(), garbage, arabic.clone()]);
+    candidates.extend([dir, empty, oversized, garbage, arabic.clone()]);
     let files = Files::new(vec![("Arab", candidates)]);
     let mut frames = Frames::new();
     install(&frames, &files);
@@ -244,7 +254,6 @@ fn unreadable_candidates_are_skipped_and_use_up_no_read_bound() {
     assert!(draws(&frames, 'ع'), "the candidate after the missing, empty, oversized, directory and non-font ones is reached");
     assert_eq!(registered(&frames), [(arabic, 0)]);
     assert_eq!(files.checks(), 1, "only a file that parses is checked for the character");
-    std::fs::remove_file(oversized).expect("remove the sparse file");
 }
 
 #[trial]
