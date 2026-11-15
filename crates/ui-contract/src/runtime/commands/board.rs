@@ -467,8 +467,9 @@ pub fn keymap_builds() -> u64 {
 }
 
 /// The keymap of `registry` and the app catalog `app` on `platform` under `overrides`, and the chords it binds to the
-/// edit commands and to the window's keys. A catalog command whose id the registry has stays out: the registry's
-/// definition is the command's.
+/// edit commands and to the window's keys. A catalog command whose id the registry has keeps the registry's
+/// definition, and the catalog's default bindings join the registry's after them (an app's alternate keys, such as
+/// F2/F3/F4 for Cut/Copy/Paste).
 ///
 /// A window shortcut's default chord that another command also binds is that command's: the window shortcut loses it, so the
 /// app's binding beats the framework's default. A window shortcut the overrides name keeps what they give it.
@@ -486,6 +487,17 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
     // The window-shortcut yield and the edit chords below read the registry's definitions only.
     let joined = |defs: &[CommandDef]| -> Vec<CommandDef> { defs.iter().chain(&app_defs).cloned().collect() };
     let mut defs = registry.defs_for(platform);
+    if let Some(app) = app {
+        for extra in app.defs() {
+            if let Some(def) = defs.iter_mut().find(|def| def.command == extra.command) {
+                for binding in &extra.defaults {
+                    if !def.defaults.contains(binding) {
+                        def.defaults.push(binding.clone());
+                    }
+                }
+            }
+        }
+    }
     let mut keymap = keymap_of(joined(defs.as_slice()), scopes.clone(), platform, overrides);
     let overridden = |def: &CommandDef| overrides.is_some_and(|overrides| overrides.get(&def.command.id).is_some());
     let yielded: Vec<(CommandRef, Trigger)> = defs

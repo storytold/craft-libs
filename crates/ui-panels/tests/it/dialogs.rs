@@ -43,6 +43,10 @@ impl<const N: usize> StackDialog for Probe<N> {
         self.shows += 1;
         self.finish.take()
     }
+
+    fn confirm(&mut self, _: &egui::Context) -> Option<u32> {
+        Some(N as u32)
+    }
 }
 
 fn run(host: &mut DialogHost, frames: &mut Frames) {
@@ -73,6 +77,21 @@ fn cancelling_a_parent_cancels_its_children() {
     assert!(host.is_empty() && host.stack().is_empty());
     assert_eq!(host.take::<Probe<1>>(), Some(DialogResult::Cancel));
     assert_eq!(host.take::<Probe<2>>(), Some(DialogResult::Cancel));
+}
+
+/// OK on a dialog waits for the child open over it: the host refuses the parent's confirm until the child closes.
+#[trial]
+fn a_parent_with_an_open_child_refuses_confirm() {
+    let mut frames = Frames::new();
+    let mut host = DialogHost::new();
+    let parent = host.open(Probe::<1>::new("parent"));
+    let child = host.open_child(Probe::<2>::new("child"), parent);
+    run(&mut host, &mut frames);
+    assert!(!host.confirm_by_id(&frames.ctx, parent), "the parent's OK waits for its child");
+    assert!(host.is_open::<Probe<1>>() && host.is_open::<Probe<2>>());
+    assert!(host.confirm_by_id(&frames.ctx, child));
+    assert!(host.confirm_by_id(&frames.ctx, parent), "with the child closed, the parent confirms");
+    assert_eq!(host.take::<Probe<1>>(), Some(DialogResult::Ok(1)));
 }
 
 /// A story of a hosted alert whose title is the story's `title` knob.

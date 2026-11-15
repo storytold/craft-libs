@@ -56,7 +56,7 @@ impl PenSource {
     }
 
     /// The latest reading, if the pen is on the tablet.
-    pub(crate) fn current(&self) -> Option<PointerSample> {
+    pub fn current(&self) -> Option<PointerSample> {
         self.lock().current
     }
 

@@ -40,7 +40,7 @@ pub(super) fn style_button(
 ) {
     let off = appearance.stroke_width <= 0.0;
     let style = Bind::given(appearance.stroke_style.clone());
-    let button = StrokeButton::new(words.stroke_style.clone(), style, open.reborrowed()).corners(corners).stroked(!off).enabled(!off);
+    let button = StrokeButton::new(words.stroke_style.clone(), style, open.reborrowed()).corners(corners).stroked(!off);
     for event in button.show(ui).events {
         let width = (off && matches!(event, EditEvent::Set { .. } | EditEvent::Begin { .. })).then_some(ShapeChange::ENABLED_STROKE_WIDTH);
         out.push(event.map(|style| ShapeChange::StrokeStyle { style, width }));

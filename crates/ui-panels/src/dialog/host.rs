@@ -474,7 +474,12 @@ impl DialogHost {
         }
     }
 
+    /// Refuses (returns `false`) while a child is open over the dialog: the child's answer comes first, as the
+    /// disabled parent shows on screen.
     fn confirm_at(&mut self, ctx: &Context, at: usize) -> bool {
+        if self.stack.has_child(self.open[at].id()) {
+            return false;
+        }
         let Some(result) = self.open[at].confirm_erased(ctx) else { return false };
         let id = self.open[at].id();
         self.remove_tree(id);
