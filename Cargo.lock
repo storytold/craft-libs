@@ -1766,6 +1766,7 @@ dependencies = [
  "skrifa 0.47.0",
  "thiserror 2.0.21",
  "unicode-bidi",
+ "unicode-segmentation",
  "windows-registry",
  "write-fonts 0.54.1",
 ]
