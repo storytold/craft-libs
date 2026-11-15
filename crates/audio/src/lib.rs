@@ -66,6 +66,9 @@ mod wav;
     feature = "vorbis-encode"
 ))]
 mod write;
+
+/// Interleaved PCM packet decoding.
+pub mod pcm_interleaved;
 #[cfg(feature = "vorbis-encode")]
 pub use write::{OGG_BITRATES, encode_ogg};
 
