@@ -66,6 +66,10 @@ mod wav;
     feature = "vorbis-encode"
 ))]
 mod write;
+
+/// PCM WAVE and AIFF wrappers for interchange essence.
+#[cfg(feature = "pcm-encode")]
+pub mod essence_pcm;
 #[cfg(feature = "vorbis-encode")]
 pub use write::{OGG_BITRATES, encode_ogg};
 
