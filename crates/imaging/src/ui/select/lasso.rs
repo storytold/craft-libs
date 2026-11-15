@@ -252,6 +252,11 @@ impl LassoTool {
     pub fn phase(&self) -> SelectPhase {
         phase(&self.draft, self.inside.as_ref())
     }
+
+    /// An outline with the operation New is open: the app hides the selection's ants.
+    pub fn replaces_selection(&self) -> bool {
+        self.draft.is_open() && self.operation == SelectionOperation::New
+    }
 }
 
 impl CanvasTool for SelectToolPass<'_, LassoTool> {

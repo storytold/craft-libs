@@ -505,6 +505,18 @@ fn delete_keys_report_segments_and_only_deleting_tools_take_them() {
     assert_eq!(h.state.borrow().deletes, [AnchorDelete::new(1, vec![kr(1)], false)]);
 }
 
+// Delete Anchor on a segment: a drag bends it as Direct does and deletes nothing.
+#[trial]
+fn a_delete_anchor_drag_on_a_segment_bends_it() {
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::DeleteAnchor);
+    let segment = h.screen(p(110.0, 60.0));
+    h.drag(segment, vec2(0.0, FAR));
+    let st = h.state.borrow();
+    assert!(matches!(st.changes.last(), Some(PathEdit::BendSegment { path: 1, .. })), "{:?}", st.changes);
+    assert!(st.deletes.is_empty(), "{:?}", st.deletes);
+}
+
 // ⌥ with Delete Anchor on an anchor: a click picks the anchor's whole subpath and edits nothing; a drag selects
 // nothing.
 #[trial]

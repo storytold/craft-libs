@@ -302,11 +302,32 @@ impl VanishingPointWorkspace {
     }
 
     /// Runs `write` on the session with the history it needs: a gesture in progress is cancelled first, and what the
-    /// write changed is one history step named `step`. The events wait for the next pass.
+    /// write changed is one history step named `step`. The events wait for the next pass: the editor's, and a `Set` for
+    /// the planes or the strokes when the write changed them, as an edit by pointer reports them.
     fn write_session(&mut self, step: &str, write: impl FnOnce(&mut Self)) {
         self.editor.cancel(&mut self.session, CancelReason::Removed);
+        let before = self.session.clone();
         write(self);
-        let events = self.editor.take_events();
+        let mut events = self.editor.take_events();
+        let label: Arc<str> = Arc::from(step);
+        if (before.planes.as_slice(), before.torn.as_slice()) != (self.session.planes.as_slice(), self.session.torn.as_slice()) {
+            let was = PlaneEdit::new(before.planes.clone(), before.torn.clone());
+            let now = PlaneEdit::new(self.session.planes.clone(), self.session.torn.clone());
+            events.push(VanishingPointEvent::Planes(EditEvent::set(Mixed::Same(was), now, label.clone(), None)));
+        }
+        if before.strokes != self.session.strokes {
+            // A stroke is the event's value: the last one, or the last one emptied when the write cleared them.
+            let was = before.strokes.last().cloned();
+            let now = self.session.strokes.last().cloned().or_else(|| {
+                was.clone().map(|mut stroke| {
+                    stroke.points.clear();
+                    stroke
+                })
+            });
+            if let Some(now) = now {
+                events.push(VanishingPointEvent::Stamp(EditEvent::set(was.map_or(Mixed::Mixed, Mixed::Same), now, label, None)));
+            }
+        }
         self.record(&events, step);
         self.queued.extend(events);
     }

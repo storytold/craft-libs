@@ -492,6 +492,20 @@ fn a_marquee_corner_and_a_dragged_selection_snap_to_a_guide() {
 
 // ---- the Lasso ----
 
+// An open New outline hides the selection it will replace: the lasso reports it from the Alt-click on, not before or after.
+#[trial]
+fn an_open_new_lasso_outline_replaces_the_selection() {
+    let mut rig = rig("Lasso", LassoTool::new(), Fake::empty());
+    focus(&mut rig);
+    assert!(!rig.tool_mut().tool().replaces_selection());
+    rig.press_at(at((100.0, 100.0))).move_to(at((140.0, 100.0)));
+    hold(&mut rig, Modifiers::ALT);
+    rig.release_at(at((140.0, 100.0)));
+    assert!(rig.tool_mut().tool().replaces_selection(), "the outline is open with the operation New");
+    hold(&mut rig, Modifiers::NONE);
+    assert!(!rig.tool_mut().tool().replaces_selection(), "closing it ends the replacement");
+}
+
 // Alt pressed during a freehand drag turns on straight segments, Alt-clicks add vertices and releasing Alt closes. A
 // first press with Alt and nothing selected starts straight segments and stays New; Backspace and a secondary press
 // each retract one vertex, and a click on the last point closes. Alt stays down across presses and releases, as a

@@ -517,7 +517,7 @@ impl<'a> BezierOverlay<'a> {
     }
 
     /// The target a press drags: for the tools that act on the press ([`BezierTool::clicks`]) an insert into a
-    /// segment they add to, or the ⌥ pick of a subpath, else nothing; for the others [`target`](Self::target).
+    /// segment they add to, a segment Delete Anchor drags, or the ⌥ pick of a subpath, else nothing; for the others [`target`](Self::target).
     fn press_target(&mut self, hit: BezierHit, start: PressStart, mods: Mods, paths: &[EditPath]) -> Target {
         if !self.tool.clicks() {
             return self.target(hit, start, mods, paths);
@@ -526,6 +526,8 @@ impl<'a> BezierOverlay<'a> {
             BezierHit::Segment { path, segment, t } if self.tool.adds(mods) => {
                 Target::Insert { path, segment, t, from: Self::segment_point(paths, path, segment, t) }
             }
+            // Delete Anchor drags a segment as Direct does; only a press on an anchor is its click.
+            BezierHit::Segment { .. } if self.tool == BezierTool::DeleteAnchor => self.target(hit, start, mods, paths),
             BezierHit::Anchor { path, knot } if self.tool.picks_subpath(mods) => Target::Pick { path, knot },
             _ => Target::Nothing,
         }

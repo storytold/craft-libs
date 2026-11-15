@@ -236,6 +236,16 @@ impl WideAngleWorkspace {
         &self.session
     }
 
+    /// Undoes the last step; `false` when there is none.
+    pub fn undo(&mut self) -> bool {
+        self.history.step(&mut self.session, Step::Undo)
+    }
+
+    /// Redoes the last undone step; `false` when there is none.
+    pub fn redo(&mut self) -> bool {
+        self.history.step(&mut self.session, Step::Redo)
+    }
+
     /// Applies a constraint edit to the session and records it as one history step named by `edit_name`. `None` when
     /// the edit changed nothing (an index past the list, an orientation it already has).
     fn edit_constraints(&mut self, words: &WideAngleWords, edit: WideAngleConstraintEdit) -> Option<WideAngleEvent> {
@@ -467,7 +477,11 @@ impl FullWindowWorkspace for WideAngleWorkspace {
         self.add_requested = add.get();
         self.zoom_percent = zoom_percent.get();
         for step in steps.into_inner() {
-            self.history.step(&mut self.session, step);
+            match step {
+                Step::Undo => self.undo(),
+                Step::Redo => self.redo(),
+                _ => false,
+            };
         }
         let mut events = std::mem::take(&mut self.queued);
         let queued = actions.into_inner();
