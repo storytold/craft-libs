@@ -271,6 +271,14 @@ impl DialogState {
         }
     }
 
+    /// Opens on the app tab whose [`DialogTab`](super::DialogTab) id is `tab`; an id no tab has opens on Keyboard
+    /// Shortcuts.
+    #[must_use]
+    pub fn with_tab(mut self, tab: &'static str) -> DialogState {
+        self.tab = Some(tab);
+        self
+    }
+
     /// Whether the first frame has run.
     pub(crate) fn begun(&self) -> bool {
         self.phase != Phase::New
