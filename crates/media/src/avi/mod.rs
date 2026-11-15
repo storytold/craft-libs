@@ -263,6 +263,7 @@ impl Stream {
                 b"AV01" => Id::Av1,
                 [b'A', b'P', b'C' | b'4', _] => Id::ProRes,
                 b"AVDN" | b"AVDH" => Id::Dnxhd,
+                b"CVID" => Id::Cinepak,
                 _ => Id::Unknown,
             };
             return crate::CodecParams::new(id)

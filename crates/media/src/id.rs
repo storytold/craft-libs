@@ -139,6 +139,8 @@ pub enum CodecId {
     VmdVideo,
     /// Sierra VMD audio (8-bit PCM or 16-bit DPCM).
     VmdAudio,
+    /// Cinepak video.
+    Cinepak,
     /// A codec this crate has no identifier for.
     Unknown,
 }
@@ -177,6 +179,7 @@ impl CodecId {
             CodecId::Apv => "APV",
             CodecId::VmdVideo => "VMD video",
             CodecId::VmdAudio => "VMD audio",
+            CodecId::Cinepak => "Cinepak",
             CodecId::Unknown => "unknown",
         }
     }
@@ -222,6 +225,7 @@ impl CodecId {
                 | CodecId::Dnxhd
                 | CodecId::Apv
                 | CodecId::VmdVideo
+                | CodecId::Cinepak
         )
     }
 }
@@ -374,7 +378,7 @@ mod tests {
         for c in [CodecId::Aac, CodecId::Opus, CodecId::Pcm, CodecId::Eac3, CodecId::Speex, CodecId::VmdAudio] {
             assert!(c.is_audio() && !c.is_video(), "{c:?}");
         }
-        for c in [CodecId::H264, CodecId::Av1, CodecId::ProRes, CodecId::Theora, CodecId::Dnxhd, CodecId::Apv, CodecId::VmdVideo] {
+        for c in [CodecId::H264, CodecId::Av1, CodecId::ProRes, CodecId::Theora, CodecId::Dnxhd, CodecId::Apv, CodecId::VmdVideo, CodecId::Cinepak] {
             assert!(c.is_video() && !c.is_audio(), "{c:?}");
         }
         assert!(!CodecId::Unknown.is_audio() && !CodecId::Unknown.is_video());

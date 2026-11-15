@@ -185,6 +185,10 @@ pub enum CodecConfig {
     },
     /// Advanced Professional Video (`apv1` + `apvC`).
     Apv(ApvConfig),
+    /// Cinepak (`cvid`).
+    Cinepak {
+        fourcc: FourCc,
+    },
     Aac(AacConfig),
     /// MPEG-1/2 audio (esds object type 0x69/0x6B, or QuickTime `.mp3` / `.mp2`). Usually layer
     /// III, but these name no layer: ffmpeg stores MP2 as `mp4a` + 0x6B. Each frame header has it,
@@ -235,6 +239,7 @@ impl CodecConfig {
             CodecConfig::Eac3 { .. } => CodecId::Eac3,
             CodecConfig::Dnx { .. } => CodecId::Dnxhd,
             CodecConfig::Apv(_) => CodecId::Apv,
+            CodecConfig::Cinepak { .. } => CodecId::Cinepak,
             CodecConfig::Timecode(_) | CodecConfig::Unknown { .. } => CodecId::Unknown,
         }
     }
@@ -270,6 +275,7 @@ impl CodecConfig {
             CodecConfig::Jpeg { .. } => "mjpeg",
             CodecConfig::Dnx { .. } => "dnxhd",
             CodecConfig::Apv(_) => "apv",
+            CodecConfig::Cinepak { .. } => "cinepak",
             CodecConfig::Aac(_) => "aac",
             CodecConfig::Mp3 => "mp3",
             CodecConfig::Pcm(_) => "pcm",
@@ -1064,6 +1070,7 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
                 b"jpeg" | b"mjpa" | b"mjpb" => CodecConfig::Jpeg { fourcc: format },
                 b"AVdn" | b"AVdh" => CodecConfig::Dnx { fourcc: format },
                 b"apv1" => CodecConfig::Apv(ApvConfig::default()),
+                b"cvid" | b"CVID" => CodecConfig::Cinepak { fourcc: format },
                 _ => unknown(),
             },
         };

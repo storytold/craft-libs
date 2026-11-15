@@ -1,0 +1,272 @@
+//! Clean-room pure-Rust Cinepak (Compact Video / CVID) video decoder.
+//!
+//! Implemented from public community specifications (Dr. Tim Ferguson, 2001) and observed
+//! bitstream behavior using FFmpeg as a black-box verification oracle.
+//!
+//! Cinepak is an adaptive vector quantization (VQ) video codec operating on 4×4 pixel macroblocks.
+//! Each frame is divided into one or more horizontal strips, where each strip maintains its own
+//! pair of V1 (1 vector per 4×4 block) and V4 (4 vectors per 4×4 block) codebooks of up to 256
+//! entries.
+//!
+//! Both 12 bpp color (YUV 4:2:0) and 8 bpp grayscale or paletted variants are supported, as well
+//! as keyframes and inter-frames with skip bitmasks.
+
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+mod codebook;
+mod decode;
+mod error;
+mod strip;
+
+pub use error::{Error, Result};
+pub use strip::StripHeader;
+
+use decode::{FrameBuffer, decode_vector_chunk};
+use strip::StripState;
+
+/// A decoded Cinepak picture.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Frame {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Packed RGB24 samples (3 bytes per pixel in raster order: R, G, B), length `width * height * 3`.
+    pub rgb: Vec<u8>,
+    /// Planar Y (luminance or palette index) samples, length `width * height`.
+    pub y: Vec<u8>,
+    /// Planar U samples (present for 12 bpp color frames), length `((width + 1) / 2) * ((height + 1) / 2)`.
+    pub u: Option<Vec<u8>>,
+    /// Planar V samples (present for 12 bpp color frames), length `((width + 1) / 2) * ((height + 1) / 2)`.
+    pub v: Option<Vec<u8>>,
+    /// Whether this was an intra-coded frame (keyframe).
+    pub key: bool,
+    /// Whether color codebooks (12 bpp) were decoded.
+    pub is_color: bool,
+}
+
+impl Frame {
+    /// Allocate a new, blank frame with the given dimensions, checking the memory budget.
+    pub fn new(width: u32, height: u32, is_color: bool) -> Result<Self> {
+        let w = width as u64;
+        let h = height as u64;
+        let area = w.checked_mul(h).ok_or(Error::MemoryBudget { width, height })?;
+        let rgb_bytes = area.checked_mul(3).ok_or(Error::MemoryBudget { width, height })?;
+
+        let total_est = rgb_bytes.checked_add(area.checked_mul(2).unwrap_or(0)).ok_or(Error::MemoryBudget { width, height })?;
+        if total_est > crate::budget::DECODE_MEMORY_BUDGET {
+            return Err(Error::MemoryBudget { width, height });
+        }
+
+        let rgb_len = usize::try_from(rgb_bytes).map_err(|_| Error::MemoryBudget { width, height })?;
+        let y_len = usize::try_from(area).map_err(|_| Error::MemoryBudget { width, height })?;
+
+        let (u, v) = if is_color {
+            let cw = w.div_ceil(2);
+            let ch = h.div_ceil(2);
+            let chroma_len = usize::try_from(cw.checked_mul(ch).ok_or(Error::MemoryBudget { width, height })?)
+                .map_err(|_| Error::MemoryBudget { width, height })?;
+            (Some(vec![128; chroma_len]), Some(vec![128; chroma_len]))
+        } else {
+            (None, None)
+        };
+
+        Ok(Self { width, height, rgb: vec![0; rgb_len], y: vec![0; y_len], u, v, key: true, is_color })
+    }
+
+    /// Read an RGB pixel at `(x, y)`. Returns `None` if out of bounds.
+    pub fn pixel_rgb(&self, x: u32, y: u32) -> Option<[u8; 3]> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let idx = ((y as usize) * (self.width as usize) + (x as usize)) * 3;
+        let slice = self.rgb.get(idx..idx + 3)?;
+        Some([slice[0], slice[1], slice[2]])
+    }
+}
+
+/// State of a Cinepak decoder across sequential frames.
+#[derive(Clone, Debug, Default)]
+pub struct Decoder {
+    last_frame: Option<Frame>,
+    strips: Vec<StripState>,
+    palette: Option<[u8; 768]>,
+}
+
+impl Decoder {
+    /// Create a new Cinepak decoder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a new Cinepak decoder with an 8-bit palette (256 RGB triplets = 768 bytes).
+    pub fn with_palette(palette: [u8; 768]) -> Self {
+        Self { last_frame: None, strips: Vec::new(), palette: Some(palette) }
+    }
+
+    /// Set or clear the 8-bit color palette.
+    pub fn set_palette(&mut self, palette: Option<[u8; 768]>) {
+        self.palette = palette;
+    }
+
+    /// Reset internal state, clearing references and codebooks.
+    pub fn reset(&mut self) {
+        self.last_frame = None;
+        self.strips.clear();
+    }
+
+    /// Decode one Cinepak frame.
+    pub fn decode(&mut self, data: &[u8]) -> Result<Frame> {
+        if data.len() < 10 {
+            return Err(Error::Truncated);
+        }
+
+        let flags = data[0];
+        let is_key = (flags & 0x01) == 0;
+        let total_len = ((data[1] as usize) << 16) | ((data[2] as usize) << 8) | (data[3] as usize);
+        let width = u16::from_be_bytes([data[4], data[5]]) as u32;
+        let height = u16::from_be_bytes([data[6], data[7]]) as u32;
+        let num_strips = u16::from_be_bytes([data[8], data[9]]) as usize;
+
+        if width == 0 || height == 0 {
+            return Err(Error::InvalidHeader("width and height must be non-zero"));
+        }
+        if num_strips == 0 {
+            return Err(Error::InvalidHeader("strip count must be greater than zero"));
+        }
+        if num_strips > 64 {
+            return Err(Error::InvalidHeader("excessive strip count"));
+        }
+        if data.len() < total_len {
+            return Err(Error::Truncated);
+        }
+
+        let mut frame = if is_key {
+            Frame::new(width, height, false)?
+        } else {
+            let last = self.last_frame.as_ref().ok_or(Error::MissingReference)?;
+            if last.width != width || last.height != height {
+                return Err(Error::InvalidHeader("inter frame dimensions mismatch"));
+            }
+            last.clone()
+        };
+        frame.key = is_key;
+
+        if is_key || self.strips.len() < num_strips {
+            self.strips.resize_with(num_strips, StripState::default);
+        }
+
+        let mut offset = 10;
+        let mut prev_bottom_y = 0;
+        let mut any_color = if is_key { false } else { frame.is_color };
+
+        for s_idx in 0..num_strips {
+            let strip_hdr_data = data.get(offset..).ok_or(Error::Truncated)?;
+            let hdr = StripHeader::parse(strip_hdr_data)?;
+
+            let strip_end = offset.checked_add(hdr.size).ok_or(Error::Truncated)?;
+            if strip_end > total_len {
+                return Err(Error::Truncated);
+            }
+
+            let bounds = hdr.resolve_bounds(s_idx == 0, prev_bottom_y, width, height)?;
+            prev_bottom_y = bounds.3;
+
+            let strip_slice = &data[offset + 12..strip_end];
+            let strip = match self.strips.get_mut(s_idx) {
+                Some(s) => s,
+                None => return Err(Error::InvalidStrip("strip index out of bounds")),
+            };
+
+            let mut c_offset = 0;
+            while c_offset < strip_slice.len() {
+                let chunk_head = strip_slice.get(c_offset..).ok_or(Error::Truncated)?;
+                if chunk_head.len() < 4 {
+                    break;
+                }
+                let chunk_type = chunk_head[0];
+                let chunk_size = ((chunk_head[1] as usize) << 16) | ((chunk_head[2] as usize) << 8) | (chunk_head[3] as usize);
+                if chunk_size < 4 {
+                    return Err(Error::InvalidChunk("chunk size less than 4"));
+                }
+                let chunk_end = c_offset.checked_add(chunk_size).ok_or(Error::Truncated)?;
+                if chunk_end > strip_slice.len() {
+                    return Err(Error::Truncated);
+                }
+
+                let payload = &strip_slice[c_offset + 4..chunk_end];
+                match chunk_type {
+                    0x20 => {
+                        strip.v4_codebook.update_full_color(payload)?;
+                        any_color = true;
+                    }
+                    0x21 => {
+                        strip.v4_codebook.update_partial_color(payload)?;
+                        any_color = true;
+                    }
+                    0x22 => {
+                        strip.v1_codebook.update_full_color(payload)?;
+                        any_color = true;
+                    }
+                    0x23 => {
+                        strip.v1_codebook.update_partial_color(payload)?;
+                        any_color = true;
+                    }
+                    0x24 => {
+                        strip.v4_codebook.update_full_gray(payload)?;
+                    }
+                    0x25 => {
+                        strip.v4_codebook.update_partial_gray(payload)?;
+                    }
+                    0x26 => {
+                        strip.v1_codebook.update_full_gray(payload)?;
+                    }
+                    0x27 => {
+                        strip.v1_codebook.update_partial_gray(payload)?;
+                    }
+                    0x30..=0x32 => {
+                        if any_color && frame.u.is_none() {
+                            let cw = ((width as usize).div_ceil(2)).max(1);
+                            let ch = ((height as usize).div_ceil(2)).max(1);
+                            frame.u = Some(vec![128; cw * ch]);
+                            frame.v = Some(vec![128; cw * ch]);
+                        }
+                        let mut fb = FrameBuffer {
+                            width,
+                            height,
+                            rgb: &mut frame.rgb,
+                            y: &mut frame.y,
+                            u: frame.u.as_deref_mut(),
+                            v: frame.v.as_deref_mut(),
+                            palette: self.palette.as_ref(),
+                            is_color: any_color,
+                        };
+                        decode_vector_chunk(&mut fb, strip, chunk_type, payload, bounds)?;
+                    }
+                    _ => {
+                        // Skip unrecognized non-critical subchunks
+                    }
+                }
+                c_offset = chunk_end;
+            }
+
+            offset = strip_end;
+        }
+
+        frame.is_color = any_color;
+        self.last_frame = Some(frame.clone());
+        Ok(frame)
+    }
+}
+
+/// Convenience function to decode a single self-contained Cinepak keyframe.
+pub fn decode_frame(data: &[u8]) -> Result<Frame> {
+    let mut decoder = Decoder::new();
+    decoder.decode(data)
+}
+
+/// Convenience function to decode a single Cinepak frame with an 8-bit palette.
+pub fn decode_frame_with_palette(data: &[u8], palette: &[u8; 768]) -> Result<Frame> {
+    let mut decoder = Decoder::with_palette(*palette);
+    decoder.decode(data)
+}
