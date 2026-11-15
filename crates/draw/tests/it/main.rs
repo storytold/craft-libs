@@ -1,7 +1,5 @@
 //! The screen tests of craft-draw, folded into the lib's test target.
 
-// PLAN: the sheet (writer note 7) registers `corner`, `shape_cells`, `gradient_fill`, `paths_panel`, `crop_size`, `artboard`, `slice` and `presets`, but their files belong to other sets (tools-w8, w10, w11, w14, w18, w19, framework-01-w11) and do not exist in this tree, so the lines would not compile. Each owning set adds its own `mod` line under the group comment below with its file.
-
 // draw-shape
 mod add_beside;
 
@@ -42,3 +40,6 @@ mod transform_session;
 // draw-transform-b
 mod symmetry;
 mod transform_fields;
+
+// draw-presets
+mod presets;

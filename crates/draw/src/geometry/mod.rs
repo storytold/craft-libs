@@ -16,4 +16,5 @@ pub mod presets;
 pub mod shape;
 pub mod slice;
 
+pub use presets::{PRESETS, ShapePreset};
 pub use shape::ShapeGeometry;
