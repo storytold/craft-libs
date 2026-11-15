@@ -231,6 +231,23 @@ mod tests {
     }
 
     #[test]
+    fn lossy_container_keeps_alpha_payload_padding_and_xmp() {
+        // Container-only fixture: the writer must not reinterpret an encoder's VP8 bytes.
+        let vp8 = [11, 22, 33];
+        let alpha = [128];
+        let f = frame(Payload::Lossy { vp8: &vp8, alpha: Some(&alpha) }, 0, 0, 1, 1, 17);
+        let file = animation(1, 1, &[f], &AnimOptions { xmp: Some(b"xmp"), ..Default::default() }).unwrap();
+        let info = scan(&file, 10).unwrap();
+        assert!(info.alpha && info.complete);
+        assert_eq!(info.frames[0].duration_ms, 17);
+        let at = file.windows(4).position(|c| c == b"ANMF").unwrap();
+        let payload = at + 8 + 16;
+        assert_eq!(&file[payload..payload + 10], &[b'A', b'L', b'P', b'H', 2, 0, 0, 0, 0, 128]);
+        assert_eq!(&file[payload + 10..payload + 22], &[b'V', b'P', b'8', b' ', 3, 0, 0, 0, 11, 22, 33, 0]);
+        assert_eq!(&file[file.len() - 12..], &[b'X', b'M', b'P', b' ', 3, 0, 0, 0, b'x', b'm', b'p', 0]);
+    }
+
+    #[test]
     fn what_does_not_fit_is_refused() {
         let px = vp8l(2, 2, [0; 4]);
         let ok = frame(Payload::Lossless { vp8l: &px }, 0, 0, 2, 2, 10);
