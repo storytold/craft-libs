@@ -1920,6 +1920,7 @@ dependencies = [
  "craft-heif",
  "craft-jpeg",
  "craft-metadata",
+ "craft-video",
  "crc32fast",
  "exr",
  "flate2",
@@ -1967,6 +1968,13 @@ dependencies = [
  "rayon",
  "thiserror 2.0.21",
  "zune-jpeg",
+]
+
+[[package]]
+name = "craft-jsonrpc"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -2055,6 +2063,16 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-mcmat"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
