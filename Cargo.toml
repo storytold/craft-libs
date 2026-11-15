@@ -55,6 +55,7 @@ craft-doc-binary = { path = "crates/doc-binary" }
 craft-docx = { path = "crates/docx" }
 craft-document-bundle = { path = "crates/document-bundle" }
 craft-mcmat = { path = "crates/mcmat" }
+craft-deckcraft-format = { path = "crates/deckcraft-format" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
