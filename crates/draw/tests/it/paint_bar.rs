@@ -1,4 +1,5 @@
-//! `PaintBar`: which members each tool disables, the smoothing options, the gestures and the combinations list.
+//! `PaintBar`: which members each tool disables, the smoothing options, the gestures, the combinations list and a
+//! click on the load swatch menu.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -8,30 +9,35 @@ use craft_draw::ui::{EraserMode, MIXER_COMBINATIONS, PaintBar, PaintTool, PaintV
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::contract::{Entry, Show as _, ShowContainer as _};
 use craft_ui::testing::focus::AccessActionKind;
+use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, Room, trial};
-use egui::{Key, Modifiers};
+use egui::{Key, Modifiers, Pos2};
 
 struct Host {
     values: PaintValues<u32>,
     eraser: EraserMode,
     edits: Vec<EditEvent<PaintValues<u32>>>,
+    /// How many passes reported Clean Brush.
+    cleans: u32,
 }
 
 fn harness(tool: PaintTool, eraser: EraserMode, prepare: impl FnOnce(&mut PaintValues<u32>)) -> (Fixture, Rc<RefCell<Host>>) {
     let mut values = PaintValues::new(0u32);
     prepare(&mut values);
-    let host = Rc::new(RefCell::new(Host { values, eraser, edits: Vec::new() }));
+    let host = Rc::new(RefCell::new(Host { values, eraser, edits: Vec::new(), cleans: 0 }));
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| {
         let mut host = shown.borrow_mut();
-        let Host { values, eraser, edits } = &mut *host;
+        let Host { values, eraser, edits, cleans } = &mut *host;
         let modes = [Entry::new(0u32, "Normal"), Entry::new(1u32, "Multiply")];
         Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
             let mut bar = PaintBar::new(tool, &mut *values).modes(&modes);
             if tool == PaintTool::Eraser {
                 bar = bar.eraser_mode(&mut *eraser);
             }
-            edits.extend(bar.show(ui).edits);
+            let out = bar.show(ui);
+            edits.extend(out.edits);
+            *cleans += u32::from(out.mixer_clean);
         });
     });
     // The options bar spans an application window; its members still run past it, and the bar scrolls.
@@ -119,4 +125,28 @@ fn paint_bar_rules() {
     assert_eq!(host.values.mixer.flow, 0.42, "Flow stays");
     assert_eq!(host.values.mixer.combination, 5);
     assert!(matches!(host.edits.as_slice(), [EditEvent::Set { .. }]), "one Set for the pick: {} events", host.edits.len());
+}
+
+/// A click at `at`: hover, press and release in one pass, as egui_kittest's `click` sends them, or in separate passes.
+fn click_at(fixture: &mut Fixture, at: Pos2, one_pass: bool) {
+    if one_pass {
+        fixture.frame(vec![moved(at), press(at), release(at)]).frame(Vec::new());
+    } else {
+        fixture.click_at(at);
+    }
+}
+
+/// A pointer click on the load swatch's menu row Clean Brush reports it once, also when the click comes in one pass.
+#[trial]
+fn a_click_on_the_load_swatch_menus_clean_brush_row_reports_it_once() {
+    for one_pass in [true, false] {
+        let (mut fixture, host) = harness(PaintTool::MixerBrush, EraserMode::Brush, |_| {});
+        let swatch = fixture.by_label("Current brush load").expect("the bar shows the load swatch");
+        click_at(&mut fixture, swatch.center(), one_pass);
+        fixture.idle(3);
+        let row = fixture.by_label("Clean Brush").expect("the click opens the load swatch's menu");
+        click_at(&mut fixture, row.center(), one_pass);
+        fixture.idle(3);
+        assert_eq!(host.borrow().cleans, 1, "one pass: {one_pass}");
+    }
 }

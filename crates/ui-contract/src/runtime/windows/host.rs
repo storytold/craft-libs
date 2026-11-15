@@ -110,10 +110,11 @@ impl WindowHost {
         screenshot::facts(&self.ctx, viewport)
     }
 
-    /// Queues a pointer move to `at` in `viewport`; `at` is finite (the request that carries it refuses a NaN or infinite
-    /// position) and the same holds for every `inject_*` position below with `mods` held, delivered on a pass of its own; the modifiers
-    /// stay held after it, and a button held by earlier injected input stays down, so the move drags. With `rest`
-    /// (seconds) the input counts as processed only once the pointer has rested that long.
+    /// Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers stay
+    /// held after it, and a button held by earlier injected input stays down, so the move drags. With `rest` (seconds)
+    /// the input counts as processed only once the pointer has rested that long. As a window never reports a NaN or
+    /// infinite pointer, a non-finite `at` here and in every `inject_*` below queues nothing; a release there releases
+    /// where the injected pointer is.
     pub fn inject_move(&self, viewport: ViewportId, at: Pos2, mods: Mods, rest: f64) {
         injected::inject_move(&self.ctx, viewport, at, mods, rest);
     }
@@ -130,7 +131,7 @@ impl WindowHost {
         injected::inject_key(&self.ctx, viewport, key, mods, hold);
     }
 
-    /// Queues a move to `at`, then a wheel turn of `delta` points with `mods` held.
+    /// Queues a move to `at`, then a wheel turn of `delta` points with `mods` held. A non-finite `delta` queues nothing.
     pub fn inject_wheel(&self, viewport: ViewportId, at: Pos2, delta: Vec2, mods: Mods) {
         injected::inject_wheel(&self.ctx, viewport, at, delta, mods);
     }
@@ -267,6 +268,18 @@ impl WindowHost {
         let facts = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.facts)?;
         let info = window_info(&self.ctx, viewport, &base_shell(&self.ctx));
         Some(WindowFacts { inner: facts.inner?, outer: facts.outer, scale: scale_of(&self.ctx, &facts), state: info.state, focused: facts.focused })
+    }
+
+    /// The window that has the keys: the one the platform reports focused, else the main window. A key the platform
+    /// takes from the windows (a native menu's key equivalent) belongs to it.
+    pub fn key_window(&self) -> ViewportId {
+        viewports::key_window(&self.ctx)
+    }
+
+    /// Whether a text field has the keys in [`key_window`](Self::key_window), as its last pass ended: the focused
+    /// stop types text, or egui focus is on a text edit the app drew itself.
+    pub fn typing(&self) -> bool {
+        crate::runtime::focus::typing(&self.ctx, self.key_window())
     }
 
     /// `previous` (or a new record) updated to where `viewport`'s window is, recorded as an app window's saved

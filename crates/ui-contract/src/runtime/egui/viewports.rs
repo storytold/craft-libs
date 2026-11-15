@@ -129,6 +129,15 @@ pub(crate) fn reported(ctx: &Context) -> Vec<(ViewportId, Facts)> {
     ctx.input(|input| input.raw.viewports.iter().map(|(id, info)| (*id, facts_of(info))).collect())
 }
 
+/// The window that has the keys: the one the running pass's input reports focused, else the root. Where it reports
+/// more than one focused, the root wins.
+pub(crate) fn key_window(ctx: &Context) -> ViewportId {
+    ctx.input(|input| {
+        input.raw.viewports.iter().filter(|(_, info)| info.focused == Some(true)).map(|(id, _)| *id).min_by_key(|id| *id != ViewportId::ROOT)
+    })
+    .unwrap_or(ViewportId::ROOT)
+}
+
 /// The window's facts in the raw input of `viewport`, for the input hook: where `ctx.input` addresses the parent.
 pub(crate) fn inner_size_in(input: &egui::RawInput, viewport: ViewportId) -> Option<Vec2> {
     input.viewports.get(&viewport).and_then(|info| info.inner_rect).map(|rect| rect.size())

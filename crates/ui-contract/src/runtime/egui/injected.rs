@@ -426,19 +426,26 @@ fn platform_modifiers(ctx: &Context, mods: Mods) -> Modifiers {
     egui_modifiers(mods, craft_keymap::egui::platform(ctx))
 }
 
+/// `at` when it is a point a window could report: a window never delivers a NaN or infinite pointer, so injected
+/// input never passes one to egui.
+fn finite(at: Pos2) -> Option<Pos2> {
+    at.is_finite().then_some(at)
+}
+
 /// Queues a pointer move to `at` with `mods` held; the modifiers stay held after it. A button held by earlier
 /// injected input stays down, so the move drags. With `rest` (seconds) the move's step stays in flight until the
-/// pointer has rested that long: a hover that rests before the reply.
+/// pointer has rested that long: a hover that rests before the reply. A non-finite `at` queues nothing.
 pub(crate) fn inject_move(ctx: &Context, viewport: ViewportId, at: Pos2, mods: Mods, rest: f64) {
+    let Some(at) = finite(at) else { return };
     let mods = platform_modifiers(ctx, mods);
     queue(ctx, viewport, |request| request.step(mods, [pointer_moved(at)]).rest = rest.max(0.0));
 }
 
 /// Queues a move to `at`, then `count` presses and releases of `button`, one frame each, with `mods` held. With
 /// `hold` the last press stays down (and the modifiers held) until a release; otherwise the modifiers are let go
-/// after the last release. A button egui has no counterpart for queues nothing.
+/// after the last release. A button egui has no counterpart, or a non-finite `at`, queues nothing.
 pub(crate) fn inject_click(ctx: &Context, viewport: ViewportId, at: Pos2, button: PointerButton, count: u32, mods: Mods, hold: bool) {
-    let Some(pressed_button) = egui_button(button) else { return };
+    let (Some(pressed_button), Some(at)) = (egui_button(button), finite(at)) else { return };
     let mods = platform_modifiers(ctx, mods);
     queue(ctx, viewport, |request| {
         request.move_to(at, mods, None);
@@ -465,8 +472,10 @@ pub(crate) fn inject_key(ctx: &Context, viewport: ViewportId, key: Key, mods: Mo
     });
 }
 
-/// Queues a move to `at`, then a wheel turn of `delta` points, with `mods` held; the modifiers stay held after it.
+/// Queues a move to `at`, then a wheel turn of `delta` points, with `mods` held; the modifiers stay held after it. A
+/// non-finite `at` or `delta` queues nothing.
 pub(crate) fn inject_wheel(ctx: &Context, viewport: ViewportId, at: Pos2, delta: Vec2, mods: Mods) {
+    let Some(at) = finite(at).filter(|_| delta.is_finite()) else { return };
     let mods = platform_modifiers(ctx, mods);
     queue(ctx, viewport, |request| {
         request.move_to(at, mods, None);
@@ -475,7 +484,7 @@ pub(crate) fn inject_wheel(ctx: &Context, viewport: ViewportId, at: Pos2, delta:
 }
 
 /// Queues the release of what `released` names, at `at` (a move there first) or where the pointer is. Releasing
-/// everything lets the modifiers go too. Nothing held queues nothing.
+/// everything lets the modifiers go too. Nothing held queues nothing. A non-finite `at` releases where the pointer is.
 pub(crate) fn inject_release(ctx: &Context, viewport: ViewportId, at: Option<Pos2>, released: Released) {
     queue(ctx, viewport, |request| {
         let mods = request.held.mods;
@@ -489,7 +498,7 @@ pub(crate) fn inject_release(ctx: &Context, viewport: ViewportId, at: Option<Pos
             Released::All => request.held.keys.clone(),
             Released::Button(_) => Vec::new(),
         };
-        let at = at.or(request.held.pos);
+        let at = at.and_then(finite).or(request.held.pos);
         if let Some(at) = at
             && !buttons.is_empty()
         {
@@ -548,11 +557,12 @@ pub enum InjectedPointer {
     },
 }
 
-/// Queues `step` for `viewport`, one pass per event. A button egui has no counterpart for queues nothing.
+/// Queues `step` for `viewport`, one pass per event. A button egui has no counterpart, or a non-finite point of a
+/// press or move, queues nothing; a release at a non-finite point releases where the pointer is.
 pub(crate) fn inject_pointer(ctx: &Context, viewport: ViewportId, step: InjectedPointer) {
     match step {
         InjectedPointer::Down { button, at, mods, pen } => {
-            let Some(pressed_button) = egui_button(button) else { return };
+            let (Some(pressed_button), Some(at)) = (egui_button(button), finite(at)) else { return };
             let mods = platform_modifiers(ctx, mods);
             queue(ctx, viewport, |request| {
                 request.move_to(at, mods, pen);
@@ -560,6 +570,7 @@ pub(crate) fn inject_pointer(ctx: &Context, viewport: ViewportId, step: Injected
             });
         }
         InjectedPointer::Move { at, mods, pen } => {
+            let Some(at) = finite(at) else { return };
             let mods = platform_modifiers(ctx, mods);
             queue(ctx, viewport, |request| request.step(mods, [pointer_moved(at)]).pen = pen);
         }
@@ -570,9 +581,12 @@ pub(crate) fn inject_pointer(ctx: &Context, viewport: ViewportId, step: Injected
                 if buttons.is_empty() {
                     return;
                 }
-                request.move_to(at, mods, None);
+                let at = finite(at).or(request.held.pos);
+                if let Some(at) = at {
+                    request.move_to(at, mods, None);
+                }
                 for pressed_button in buttons {
-                    request.step(mods, [self::button(at, pressed_button, false, mods)]);
+                    request.step(mods, [self::button(at.unwrap_or_default(), pressed_button, false, mods)]);
                 }
                 request.release_mods_unless_holding();
             });

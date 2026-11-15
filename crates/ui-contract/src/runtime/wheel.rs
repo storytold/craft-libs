@@ -56,7 +56,7 @@ pub(crate) fn begin(ctx: &Context) {
     let now = crate::runtime::frame::clock(ctx);
     let focused = focus::focused_stop(ctx).map(|(owner, _)| owner);
     // A text field the app drew itself holds key focus: it reads its own wheel.
-    let app_field = wheel_in.is_some() && focus::record(ctx, viewport).host_focus && ctx.text_edit_focused();
+    let app_field = wheel_in.is_some() && focus::record(ctx, viewport).host_text;
     let hover = pass_pointer.hover.or(frame.as_ref().and_then(|frame| frame.pos));
     let pressed_on = pass_pointer
         .events

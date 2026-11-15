@@ -1,6 +1,7 @@
 //! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
 //! resize (H4), the raise of a modal's window, the mount of a full-window container, the size of a content-sized
-//! window, the app id of child windows, injected keys across a focus loss, and `act`.
+//! window, the app id of child windows, injected keys across a focus loss, non-finite injected points, the window
+//! that has the keys, and `act`.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
@@ -353,6 +354,106 @@ fn a_window_focus_loss_releases_injected_held_keys() {
     }
     assert!(shift_click.get(), "the click after the focus loss holds its own Shift");
     assert_eq!(held.get(), (false, false), "nothing stays held after the click");
+}
+
+/// Injected input with a NaN or infinite point queues nothing, as a window never reports one, and a release at such a
+/// point still lets the held button go.
+#[trial]
+fn non_finite_injected_points_queue_nothing_and_a_release_there_lets_go() {
+    use craft_ui::runtime::windows::InjectedPointer;
+
+    let windows = Windows::new();
+    let host = WindowHost::of(&windows.ctx);
+    let presses = Cell::new(0);
+    let down = Cell::new(false);
+    let frames = |count| {
+        for _ in 0..count {
+            windows.frame(vec![], vec![], |ui| {
+                ui.ctx().input(|input| {
+                    presses.set(presses.get() + u32::from(input.pointer.primary_pressed()));
+                    down.set(input.pointer.primary_down());
+                });
+            });
+        }
+    };
+    frames(1);
+    let nan = Pos2::new(f32::NAN, 10.0);
+    host.inject_click(ViewportId::ROOT, nan, PointerButton::Primary, 1, Mods::NONE, false);
+    host.inject_move(ViewportId::ROOT, Pos2::new(f32::INFINITY, 0.0), Mods::NONE, 0.0);
+    host.inject_wheel(ViewportId::ROOT, Pos2::new(20.0, 20.0), Vec2::new(0.0, f32::NAN), Mods::NONE);
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::Down { button: PointerButton::Primary, at: nan, mods: Mods::NONE, pen: None });
+    frames(6);
+    assert_eq!(presses.get(), 0, "no non-finite press reaches egui");
+    assert!(!down.get(), "nothing is held");
+
+    host.inject_click(ViewportId::ROOT, Pos2::new(40.0, 40.0), PointerButton::Primary, 1, Mods::NONE, true);
+    frames(4);
+    assert!(down.get(), "the finite press is held");
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::Up { at: nan, mods: Mods::NONE });
+    frames(4);
+    assert!(!down.get(), "a release at a non-finite point lets the button go");
+    assert_eq!(presses.get(), 1);
+}
+
+/// The window the platform reports focused has the keys: `typing` reads its text field, and a key equivalent queued
+/// for it reaches that field, not the main window. With no window reported focused, the main window has them.
+#[trial]
+fn the_focused_window_has_the_keys_and_its_text_field_types() {
+    use craft_behavior::{EditCommand, Input, Intent};
+    use craft_ui::runtime::focus::{FocusTarget, KeyUse};
+    use craft_ui::runtime::keys::intents_of;
+    use craft_ui::runtime::windows::KeyEquivalent;
+    use craft_ui::testing::focus::{Stop, named_id, register_stop, widget};
+
+    let windows = Windows::new();
+    let host = WindowHost::of(&windows.ctx);
+    let field = named_id("child_field");
+    let focus_field = Cell::new(false);
+    let copied = Cell::new((false, false));
+    let frame = || {
+        copied.set((false, false));
+        windows.frame(vec![], vec![], |ui| {
+            let copy = Intent::Edit(EditCommand::Copy);
+            let root_copy = intents_of(ui.ctx(), None, false).take(copy.clone());
+            ui.ctx().show_viewport_immediate(child(), ViewportBuilder::default(), |cui, _| {
+                let ctx = cui.ctx().clone();
+                widget(cui, field);
+                register_stop(&ctx, Stop::new(field, KeyUse::of(Input::Text)));
+                if focus_field.take() {
+                    craft_ui::runtime::focus::request(&ctx, FocusTarget::Id(field));
+                }
+                copied.set((root_copy, intents_of(&ctx, Some(field), false).take(copy.clone())));
+            });
+        });
+    };
+    let focused = |on| ViewportInfo { focused: Some(on), ..ViewportInfo::default() };
+    windows.root_info(focused(false));
+    windows.child_info(focused(true));
+    for _ in 0..2 {
+        frame();
+    }
+    assert_eq!(host.key_window(), child(), "the focused child window has the keys");
+    assert!(!host.typing(), "nothing is focused in it yet");
+    focus_field.set(true);
+    for _ in 0..3 {
+        frame();
+    }
+    assert!(host.typing(), "the child's text field has the keys");
+
+    host.key_equivalent(host.key_window(), KeyEquivalent::Copy);
+    frame();
+    assert_eq!(copied.get(), (false, true), "the key equivalent reaches the child's field only");
+
+    windows.root_info(focused(true));
+    windows.child_info(focused(false));
+    frame();
+    assert_eq!(host.key_window(), ViewportId::ROOT, "focus back on the main window gives it the keys");
+    assert!(!host.typing(), "the main window has no text field");
+
+    windows.root_info(ViewportInfo::default());
+    windows.child_info(ViewportInfo::default());
+    frame();
+    assert_eq!(host.key_window(), ViewportId::ROOT, "with no window reported focused, the main window has the keys");
 }
 
 /// A floating panel opened from the body of a full-window container lies above the container, in its family's tier,

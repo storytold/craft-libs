@@ -683,6 +683,7 @@ pub(super) fn end(state: &mut State, focused: Option<Id>, on_app_widget: bool, f
         menu_bar: std::mem::take(&mut state.menu_bar),
         foreign: false,
         host_focus: false,
+        host_text: false,
         label_selection: false,
     };
     acts
