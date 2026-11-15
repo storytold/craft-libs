@@ -604,7 +604,7 @@ fn fleet_discovery_opt_in_preserves_all_257_queues_and_default_limit() {
     assert_eq!(parse_reply_with_limit(&body, 257).unwrap().queues.len(), 257);
     assert!(parse_reply_with_limit(&body, 256).is_err());
     for is_class in [false, true] {
-        let server = FakeCups::on_tcp(vec![body.clone()]).unwrap();
+        let server = FakeCups::on_tcp(vec![http_reply(&body)]).unwrap();
         let queues = queues_at_with_limit(server.endpoint(), is_class, 257).unwrap();
         assert_eq!(queues.len(), 257);
         assert_eq!(queues[256].name, "Printer256");
