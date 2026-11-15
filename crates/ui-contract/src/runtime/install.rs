@@ -149,6 +149,22 @@ impl std::fmt::Display for InstallError {
 
 impl std::error::Error for InstallError {}
 
+/// The shell with what the running browser offers: a browser build captures a screen colour only where the browser
+/// has the EyeDropper, so `Caps::SCREEN_CAPTURE` is read here, once for every app. Native capabilities are the
+/// build's own (`Caps::native`).
+fn with_browser_caps(shell: ShellInfo) -> ShellInfo {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut shell = shell;
+        if craft_platform::screen::available() {
+            shell.caps.insert(craft_host::target::Caps::SCREEN_CAPTURE);
+        }
+        shell
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    shell
+}
+
 /// Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: interface scale is a command, quit goes
 /// through the close guard, and the wheel's modifiers are the spec's. A second call on the same context is an error,
 /// checked first so an app that installs again (a language change) gets that answer; a call inside a pass is one too.
@@ -167,7 +183,7 @@ pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     input::set_wheel_modifiers(ctx, spec.wheel.zoom, spec.wheel.sideways);
     system::install(ctx, spec.system);
     pen::install(ctx, spec.pen);
-    windows::install(ctx, spec.shell_info, spec.window_system, spec.placement, spec.frame, spec.app_id);
+    windows::install(ctx, with_browser_caps(spec.shell_info), spec.window_system, spec.placement, spec.frame, spec.app_id);
     frame::set_frame_layers(ctx, spec.frame_layers);
     frame::seed_hooked_passes(ctx);
     plugin::register(ctx);

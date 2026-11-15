@@ -103,10 +103,9 @@ pub fn capture(scale: f32, wake: Wake) -> CaptureHandle {
     }
 }
 
-/// Whether the browser has the EyeDropper API. A web host sets `Caps::SCREEN_CAPTURE` from it at
-/// startup, so the picker's button shows only where a pick can work. Native builds take the
-/// capability from `Caps::native`; a session without a display answers [`ScreenError::Unsupported`]
-/// at its first capture.
+/// Whether the browser has the EyeDropper API. The runtime's install sets `Caps::SCREEN_CAPTURE` from it, so the
+/// picker's button shows only where a pick can work. Native builds take the capability from `Caps::native`; a session
+/// without a display answers [`ScreenError::Unsupported`] at its first capture.
 #[cfg(target_arch = "wasm32")]
 pub fn available() -> bool {
     web::available()
