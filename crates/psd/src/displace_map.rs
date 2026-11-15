@@ -35,3 +35,59 @@ pub fn parse_map(data: &[u8]) -> Option<EmbeddedMap<'_>> {
     let vertical = data.get(HEADER + n..HEADER.checked_add(n.checked_mul(2)?)?)?;
     Some(EmbeddedMap { width, height, horizontal, vertical })
 }
+
+/// Writes a mode-3 payload from exact-sized 8-bit planes, without padding.
+/// Returns `None` for empty/oversized dimensions, mismatched planes or allocation failure.
+/// Callers retain their own (possibly lower) embedding and image-conversion budgets.
+pub fn write_map(width: usize, height: usize, horizontal: &[u8], vertical: &[u8]) -> Option<Vec<u8>> {
+    let n = width.checked_mul(height)?;
+    if n == 0 || n > MAX_MAP_PIXELS || horizontal.len() != n || vertical.len() != n {
+        return None;
+    }
+    let width = u32::try_from(width).ok()?;
+    let height = u32::try_from(height).ok()?;
+    let len = HEADER.checked_add(n.checked_mul(2)?)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).ok()?;
+    out.extend_from_slice(&height.to_le_bytes());
+    out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&MODE_TWO_PLANES.to_le_bytes());
+    out.extend_from_slice(horizontal);
+    out.extend_from_slice(vertical);
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_planes_roundtrip_and_padding_is_ignored() {
+        let mut bytes = write_map(2, 1, &[0, 255], &[128, 64]).unwrap();
+        assert_eq!(bytes, [1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 255, 128, 64]);
+        bytes.extend_from_slice(&[99, 88]);
+        let m = parse_map(&bytes).unwrap();
+        assert_eq!((m.width, m.height), (2, 1));
+        assert_eq!(m.horizontal, &[0, 255]);
+        assert_eq!(m.vertical, &[128, 64]);
+    }
+
+    #[test]
+    fn truncated_unsupported_and_overflow_are_rejected() {
+        let bytes = write_map(2, 1, &[0, 255], &[128, 64]).unwrap();
+        for end in 0..bytes.len() {
+            assert!(parse_map(&bytes[..end]).is_none());
+        }
+        let mut invalid = bytes.clone();
+        invalid[8] = 4;
+        assert!(parse_map(&invalid).is_none());
+        invalid[..8].fill(255);
+        assert!(parse_map(&invalid).is_none());
+        invalid[..8].fill(0);
+        assert!(parse_map(&invalid).is_none());
+        assert!(write_map(usize::MAX, 2, &[], &[]).is_none());
+        assert!(write_map(MAX_MAP_PIXELS + 1, 1, &[], &[]).is_none());
+        assert!(write_map(2, 1, &[0], &[0, 0]).is_none());
+        assert!(write_map(2, 1, &[0, 0], &[0, 0, 0]).is_none());
+    }
+}
