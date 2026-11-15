@@ -3,7 +3,7 @@
 //! This parses the native attributes and point lists. Interpreting easing curves and applying
 //! them to an application's timeline model remain consumer responsibilities.
 
-use crate::shape::XflElement;
+use crate::shape::{XflElement, boolean, number};
 
 /// Native motion/shape tween settings on a `DOMFrame`.
 #[derive(Clone, Copy, Debug)]
@@ -76,14 +76,6 @@ impl<E: XflElement> EasePoint<'_, E> {
     pub fn y(&self) -> Option<f32> {
         number(self.element, "y")
     }
-}
-
-fn number(element: &impl XflElement, name: &str) -> Option<f32> {
-    element.attr(name)?.trim().parse::<f32>().ok().filter(|value| value.is_finite())
-}
-
-fn boolean(element: &impl XflElement, name: &str) -> Option<bool> {
-    element.attr(name).map(|value| value.trim() == "true")
 }
 
 #[cfg(test)]
