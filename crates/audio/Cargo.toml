@@ -29,6 +29,8 @@ encode = ["lossless-encode", "aac-encode", "alac-encode", "ac3-encode", "eac3-en
 lossless-encode = ["pcm-encode", "flac-encode"]
 # Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
 pcm-encode = []
+# Decode FLAC files and frames natively (`flac::decode`, `flac::Decoder`).
+flac-decode = []
 # Encode FLAC files.
 flac-encode = ["craft-media/bitstream"]
 # Encode Ogg Vorbis files (desktop only: builds the reference libvorbis from its C sources).
@@ -83,6 +85,10 @@ required-features = ["decode", "lossless-encode", "peaks"]
 [[test]]
 name = "codecs"
 required-features = ["decode", "encode"]
+
+[[test]]
+name = "flac_decode"
+required-features = ["flac-decode", "flac-encode"]
 
 [[example]]
 name = "info"
