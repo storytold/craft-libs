@@ -1032,12 +1032,12 @@ fn opaque_binary_content_is_verified_as_exact_octets_with_or_without_attributes(
                     info.signature = OctetString::new(pair.sign(&rng, BINARY).unwrap().as_ref().to_vec()).unwrap();
                 }
             },
-            |data| data.encap_content_info.econtent = Some(OctetString::new(BINARY.to_vec()).unwrap()),
+            |data| data.encap_content_info.econtent = Some(Any::encode_from(&OctetString::new(BINARY.to_vec()).unwrap()).unwrap()),
         );
         assert_eq!(check(Signed::Opaque(&cms), &context).unwrap().signature.verdict, Verdict::Verified);
         let info = ContentInfo::from_der(&cms).unwrap();
         let mut data = info.content.decode_as::<SignedData>().unwrap();
-        data.encap_content_info.econtent = Some(OctetString::new(CHANGED.to_vec()).unwrap());
+        data.encap_content_info.econtent = Some(Any::encode_from(&OctetString::new(CHANGED.to_vec()).unwrap()).unwrap());
         let changed = ContentInfo { content_type: info.content_type, content: Any::encode_from(&data).unwrap() }.to_der().unwrap();
         assert_eq!(craft_ber::signed_content(&changed).unwrap(), CHANGED);
         assert_eq!(check(Signed::Opaque(&changed), &context).unwrap().signature.verdict, Verdict::Changed);
