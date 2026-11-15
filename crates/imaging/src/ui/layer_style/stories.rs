@@ -2,8 +2,11 @@
 //! document, one story per effect page and the Styles page. Each opens a [`HostedLayerStyle`] on the story's dialog
 //! host from a button.
 
+use craft_color::gradient::{ColorStop, GradientStops};
+use craft_theme::Srgba;
 use craft_ui::contract::Entry;
 use craft_ui::dialog::stories::hosted;
+use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut, blend_entries};
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
@@ -25,7 +28,9 @@ craft_ui::words! {
         black: "layerStyleStory.black" = "K";
         mode_normal: "layerStyleStory.modeNormal" = "Normal";
         mode_dissolve: "layerStyleStory.modeDissolve" = "Dissolve";
+        mode_darken: "layerStyleStory.modeDarken" = "Darken";
         mode_multiply: "layerStyleStory.modeMultiply" = "Multiply";
+        mode_lighten: "layerStyleStory.modeLighten" = "Lighten";
         mode_screen: "layerStyleStory.modeScreen" = "Screen";
         mode_overlay: "layerStyleStory.modeOverlay" = "Overlay";
         mode_soft_light: "layerStyleStory.modeSoftLight" = "Soft Light";
@@ -35,21 +40,34 @@ craft_ui::words! {
         style_group: "layerStyleStory.styleGroup" = "Basics";
         style_soft: "layerStyleStory.styleSoft" = "Soft";
         style_hard: "layerStyleStory.styleHard" = "Hard";
+        gradient_sunset: "layerStyleStory.gradientSunset" = "Sunset";
+        gradient_sky: "layerStyleStory.gradientSky" = "Sky";
     }
 }
 
-/// The blend modes the story host offers, with a separator between groups.
+/// The blend modes the story host offers; the separators between groups come from the modes' positions.
 fn blend_modes(words: &LayerStyleStoryWords) -> Vec<Entry<String>> {
-    let entry = |label: &Label| Entry::new(label.as_str().to_owned(), label.clone());
+    let modes = [
+        (&words.mode_normal, BlendShortcut::Normal),
+        (&words.mode_dissolve, BlendShortcut::Dissolve),
+        (&words.mode_darken, BlendShortcut::Darken),
+        (&words.mode_multiply, BlendShortcut::Multiply),
+        (&words.mode_lighten, BlendShortcut::Lighten),
+        (&words.mode_screen, BlendShortcut::Screen),
+        (&words.mode_overlay, BlendShortcut::Overlay),
+        (&words.mode_soft_light, BlendShortcut::SoftLight),
+    ];
+    // A mode's key is its shown name, as before.
+    let keys: Vec<BlendKeyEntry<String>> = modes.iter().map(|(label, shortcut)| BlendKeyEntry::new(label.as_str().to_owned(), *shortcut)).collect();
+    blend_entries(&keys, |entry| Label::from(entry.key.clone()))
+}
+
+/// Two gradient presets for the Gradient Overlay story's select.
+fn gradient_presets(words: &LayerStyleStoryWords) -> Vec<(String, GradientStops)> {
+    let stop = |location: f32, hex: &str| ColorStop::new(location, Srgba::from_hex(hex).unwrap_or(Srgba::BLACK));
     vec![
-        entry(&words.mode_normal),
-        entry(&words.mode_dissolve),
-        Entry::separator(),
-        entry(&words.mode_multiply),
-        Entry::separator(),
-        entry(&words.mode_screen),
-        entry(&words.mode_overlay),
-        entry(&words.mode_soft_light),
+        (words.gradient_sunset.as_str().to_owned(), GradientStops::new(vec![stop(0.0, "#ff7a18"), stop(1.0, "#af002d")])),
+        (words.gradient_sky.as_str().to_owned(), GradientStops::new(vec![stop(0.0, "#ffffff"), stop(1.0, "#2a7bde")])),
     ]
 }
 
@@ -88,6 +106,7 @@ fn host(ui: &mut Ui, data: &mut StoryData, start: impl FnOnce() -> LayerStyleDra
         HostedLayerStyle::new("Layer Style", start(), names)
             .blend_modes(blend_modes(&words))
             .patterns(patterns(&words))
+            .gradient_presets(gradient_presets(&words))
             .style_presets(style_rows(&words), |cx, rect, _| cx.checker(rect))
     })
 }

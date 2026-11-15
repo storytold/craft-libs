@@ -1,12 +1,12 @@
 //! The Styles page: the host's style presets in a [`PresetBrowser`] grid.
 
-use craft_ui::buttons::Button;
-use craft_ui::contract::{Bind, Props as _, Show as _, clicked};
+use craft_theme::TypeRole;
+use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::display::Text;
 use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetRow, PresetState, ThumbInfo};
 use craft_ui::primitives::ContentPainterCx;
 use egui::{Rect, Ui};
 
-use super::dialog::title_row;
 use super::labels::LayerStyleWords;
 
 /// The rows of styles the Styles page shows before the grid scrolls: the user's style library can grow long, and the
@@ -37,18 +37,12 @@ pub(super) struct StylesOutput {
     /// [`LayerStyleDraft::apply_preset`](crate::layer_style::LayerStyleDraft::apply_preset); the document is untouched
     /// until OK).
     pub apply_style: Option<String>,
-    /// New Style… was pressed.
-    pub new_style: bool,
 }
 
-/// Draws the page: the title with the "New Style…" button at its end, then the browser. Without presets the page
-/// shows only the button.
+/// Draws the page: the title, then the browser. Without presets the page shows only the title.
 pub(super) fn styles_page(ui: &mut Ui, presets: Option<&StylePresets<'_>>, words: &LayerStyleWords) -> StylesOutput {
-    let mut new_style = false;
-    title_row(ui, words.styles.clone(), |ui| {
-        new_style = clicked(&Button::new(words.new_style.clone()).id_salt("new-style").show(ui));
-    });
-    let mut out = StylesOutput { apply_style: None, new_style };
+    Text::new(words.styles.clone()).role(TypeRole::Title).show(ui);
+    let mut out = StylesOutput { apply_style: None };
     if let Some(StylePresets { rows, thumb }) = presets {
         let browser = PresetBrowser::new(words.styles.clone(), Bind::<PresetState<String>>::kept(), rows)
             .thumb(move |cx, rect, info| thumb(cx, rect, info))

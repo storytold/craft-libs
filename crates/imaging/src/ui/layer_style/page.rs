@@ -1,6 +1,8 @@
 //! The effect page: one field per entry of the effect's [`EffectSpec`], drawn by kind.
 
 use craft_behavior::{EditEvent, EditEvents, Mixed, NumberCodec};
+use craft_color::gradient::GradientStops;
+use craft_color::ui::gradient::GradientEditor;
 use craft_theme::variant::Tone;
 use craft_theme::{Srgba, TypeRole};
 use craft_ui::buttons::Button;
@@ -9,7 +11,7 @@ use craft_ui::contract::{Bind, EditResponse, Entry, Props as _, Show as _, ShowC
 use craft_ui::display::Text;
 use craft_ui::form::{Field, FieldGroup, SliderField};
 use craft_ui::layout::RowAlign;
-use craft_ui::layout_components::Row;
+use craft_ui::layout_components::{Row, Stack};
 use craft_ui::patterns::presets::{PresetPicker, PresetRow, PresetState};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Label, UnitKind, Units};
@@ -87,6 +89,7 @@ pub(super) struct PageInput<'a> {
     pub patterns: &'a [PresetRow<String>],
     pub user_contours: &'a [Contour],
     pub sampler: Option<&'a SharedSampler>,
+    pub gradient_presets: &'a [(String, GradientStops)],
     pub words: &'a LayerStyleWords,
     pub contour_words: &'a ContourWords,
     pub units: &'a Units,
@@ -123,6 +126,9 @@ pub(super) struct PageOutput {
 /// - `Color`: a `Swatch`; a click or Space reports `pick_color`.
 /// - `Blend`: a `Select` over `blend_modes`; a value missing from the list shows as its key.
 /// - `Choice`: a `Select` over the options; a missing value shows the first.
+/// - `Gradient`: a `GradientEditor` under a `Select` of the host's gradient presets (none without presets), with Custom
+///   first while the stops match no preset; a pick is one edit of the stops, an editor click on a stop's colour reports
+///   `pick_color` keyed `"{instance id}/{parameter key}/{stop index}"`.
 /// - `GradientMethod`: Smooth, Perceptual, Linear, Classic, with Custom first while the value names none of them.
 /// - `Pattern`: a `PresetPicker` over `patterns`; an empty value shows the first pattern and reports it as
 ///   `fill_default`, not as an edit.
@@ -257,8 +263,47 @@ fn field_row(ui: &mut Ui, input: &PageInput<'_>, field: &EffectField, shown: &St
                 push_edit(&mut out.edit, style_edit(&response, input.style, |v| param(StyleValue::Text(v.clone()))));
             }
         }
-        // P3(dialogs-w7): dl.K53 — the preset select over the stop bar.
-        FieldKind::Gradient => todo!("dl.K53"),
+        FieldKind::Gradient => {
+            let stops = match shown.get(key) {
+                Some(StyleValue::Gradient(stops)) => stops.clone(),
+                _ => GradientStops::default(),
+            };
+            let presets = input.gradient_presets;
+            let matching = presets.iter().find(|(_, preset)| *preset == stops).map(|(name, _)| name.as_str());
+            let shown_field = Field::new(label.clone())
+                .id_salt(key)
+                .show(ui, |ui, _| {
+                    Stack::new()
+                        .show(ui, |ui, _| {
+                            // The select offers a choice only with presets; "Custom" stands for stops that match none.
+                            let preset = (!presets.is_empty()).then(|| {
+                                let mut entries = Vec::new();
+                                if matching.is_none() {
+                                    entries.push(Entry::new(String::new(), words.custom.clone()));
+                                }
+                                entries.extend(presets.iter().map(|(name, _)| Entry::new(name.clone(), Label::from(name.clone()))));
+                                Select::new(label.clone(), Bind::given(matching.unwrap_or_default().to_owned()), &entries).show(ui)
+                            });
+                            let editor = GradientEditor::new(label.clone(), Bind::given(stops.clone())).show(ui);
+                            (preset, editor)
+                        })
+                        .inner
+                })
+                .inner
+                .flatten();
+            if let Some((preset, editor)) = shown_field {
+                if let Some(preset) = preset {
+                    let chosen = |name: &String| presets.iter().find(|(n, _)| n == name).map_or_else(|| stops.clone(), |(_, preset)| preset.clone());
+                    push_edit(&mut out.edit, style_edit(&preset, input.style, |name| param(StyleValue::Gradient(chosen(name)))));
+                }
+                push_edit(&mut out.edit, style_edit(&editor.edit, input.style, |v| param(StyleValue::Gradient(v.clone()))));
+                if let Some(stop) = editor.color_requested {
+                    let mut request = stop.request;
+                    request.key = format!("{}/{key}/{}", id.key(), stop.index);
+                    out.pick_color = Some(request.title(words.color_picker_title.clone()));
+                }
+            }
+        }
         FieldKind::GradientMethod => {
             const METHODS: [&str; 4] = ["smooth", "perceptual", "linear", "classic"];
             let stored = text_of(shown.get(key)).unwrap_or("custom");
@@ -345,7 +390,7 @@ fn first_invalid<'s>(spec: &'s EffectSpec, params: &StyleParams) -> Option<&'s E
         FieldKind::Slider { .. } | FieldKind::Angle => wrong(&field.key, |v| matches!(v, StyleValue::Number(_))),
         FieldKind::Check => wrong(&field.key, |v| matches!(v, StyleValue::Bool(_))),
         FieldKind::Color => wrong(&field.key, |v| matches!(v, StyleValue::Color(_))),
-        FieldKind::Gradient => wrong(&field.key, |v| matches!(v, StyleValue::Gradient(_))), // P3(dialogs-w7): dl.K53
+        FieldKind::Gradient => wrong(&field.key, |v| matches!(v, StyleValue::Gradient(_))),
         FieldKind::Blend | FieldKind::Choice(_) | FieldKind::GradientMethod | FieldKind::Pattern => {
             wrong(&field.key, |v| matches!(v, StyleValue::Text(_)))
         }

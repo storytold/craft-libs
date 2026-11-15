@@ -1,6 +1,6 @@
 //! The drags on the image: moving a Drop Shadow or Inner Shadow (#5701), and a Gradient Overlay's offset.
 
-use super::model::EffectId;
+use super::model::{EffectId, StyleValue};
 
 /// A shadow drag in progress: the shadow's angle and distance when the press came. The offset of
 /// a shadow is (−cos angle, sin angle) × distance (the light sits opposite the shadow; y down).
@@ -35,8 +35,11 @@ impl ShadowDrag {
     }
 }
 
-/// A Gradient Overlay offset drag in progress: the effect instance, the pointer's origin and the
-/// offset it started from.
+/// The largest offset a Gradient Overlay drag writes, in layer sizes, either way.
+const OFFSET_LIMIT: f64 = 4.0;
+
+/// A Gradient Overlay offset drag in progress: the effect instance, the offset it started from
+/// and the pointer's travel when it started.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GradientOffsetDrag {
     instance: EffectId,
@@ -45,17 +48,37 @@ pub struct GradientOffsetDrag {
 }
 
 impl GradientOffsetDrag {
-    /// A drag on `instance` that starts at `origin` from the hidden `offset` `base`.
+    /// A drag on `instance` from the shown offset `origin`, begun when the pointer's travel since
+    /// the press was `base` (zero at the press; the travel so far when the drag moves to another
+    /// instance mid-press, so the offset does not jump).
     pub fn begin(instance: EffectId, origin: [f64; 2], base: [f64; 2]) -> Self {
-        let _ = (instance, origin, base);
-        todo!("dl.K52")
+        GradientOffsetDrag { instance, origin, base }
     }
 
-    /// The offset after the pointer travelled `total` over a layer of `layer_size`, clamped to
-    /// plus or minus 4 and rounded to 0.001.
+    /// The offset after the pointer travelled `total` over a layer of `layer_size`: the origin plus
+    /// the travel since `base`, in layer sizes (a size under 1 counts as 1), clamped to plus or
+    /// minus 4 and rounded to 0.001. A result that is not finite is the origin.
     pub fn moved(&self, total: [f64; 2], layer_size: [f64; 2]) -> [f64; 2] {
-        let _ = (total, layer_size);
-        todo!("dl.K52")
+        // The result is not an `Option`, so a non-finite result falls back to the origin.
+        let axis = |i: usize| {
+            let v = self.origin[i] + (total[i] - self.base[i]) / layer_size[i].max(1.0);
+            if v.is_finite() { (v.clamp(-OFFSET_LIMIT, OFFSET_LIMIT) * 1000.0).round() / 1000.0 } else { self.origin[i] }
+        };
+        [axis(0), axis(1)]
+    }
+
+    /// The offset a page shows for the stored `value`: its parts clamped to plus or minus 4, or
+    /// `default` when it is no point or a part is not finite.
+    pub(super) fn shown(value: Option<&StyleValue>, default: [f64; 2]) -> [f64; 2] {
+        match value {
+            Some(StyleValue::Point(p)) if p.iter().all(|x| x.is_finite()) => p.map(|x| x.clamp(-OFFSET_LIMIT, OFFSET_LIMIT)),
+            _ => default,
+        }
+    }
+
+    /// The offset the drag started from.
+    pub(super) fn origin(&self) -> [f64; 2] {
+        self.origin
     }
 
     /// The effect instance the drag moves.

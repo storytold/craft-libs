@@ -2,7 +2,7 @@
 //! ten effect tables ([`EffectSpec::photoshop`]) with their defaults, the Blending Options
 //! ([`Blending`], [`BlendIf`]), contours ([`Contour`]), and the dialog's draft logic
 //! ([`LayerStyleDraft`]: the page, adding and removing instances, the shared light angle, the
-//! shadow drag).
+//! shadow drag and the Gradient Overlay offset drag).
 //!
 //! Everything here is plain data and pure functions, testable without a window. The dialog that
 //! edits a draft is `craft_imaging::ui::layer_style` (the `ui` feature); the engine that renders

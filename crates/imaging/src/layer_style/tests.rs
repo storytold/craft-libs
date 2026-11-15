@@ -9,6 +9,12 @@ fn style_with(kinds: &[(u32, EffectKind)]) -> LayerStyle {
     LayerStyle { effects, ..LayerStyle::default() }
 }
 
+fn set_offset(draft: &mut LayerStyleDraft, n: u32, offset: [f64; 2]) {
+    if let Some(e) = draft.style.effect_mut(EffectId(n)) {
+        e.params.set("offset", StyleValue::Point(offset));
+    }
+}
+
 // Per effect, the field keys in order with their kinds and ranges match the table in
 // `EffectSpec::photoshop`'s doc (Outer Glow: Technique before Spread, Range after Contour).
 
@@ -76,10 +82,58 @@ fn shadow_drag_uses_whole_degrees_and_pixels_and_moves_the_global_angle() {
 // The blend defaults of a spec become the host's keys; unknown names stay. Bevel & Emboss has two
 // Blend fields: only the one defaulting to Multiply is renamed.
 
-// `BlendIfRange::ordered` raises each value to at least the one before it.
+// A press writes nothing; a drag moves the offset by travel over the layer size from the shown
+// offset; an out-of-range or non-finite stored offset starts from the clamp or the default;
+// selecting the other instance mid-press rebases on the travel so far; the result is clamped to
+// ±4 and rounded to 0.001; `end_drag` clears the drag.
 #[trial]
-fn blend_if_ranges_read_ordered() {
-    assert_eq!(BlendIfRange::ordered([10, 5, 200, 100]), BlendIfRange([10, 10, 200, 200]));
+fn a_gradient_offset_drag_starts_from_the_shown_offset_and_rebases_on_another_instance() {
+    let offset = |draft: &LayerStyleDraft, n: u32| draft.style.effect(EffectId(n)).and_then(|e| e.params.get("offset").cloned());
+    let size = [200.0, 100.0];
+    let mut draft = LayerStyleDraft::new(style_with(&[(1, EffectKind::GradientOverlay), (2, EffectKind::GradientOverlay)]));
+    draft.page = LayerStylePage::Effect(EffectId(1));
+    assert!(draft.drags_gradient());
+
+    // A press writes nothing; the default offset is shown.
+    assert!(!draft.drag_gradient(true, [0.0, 0.0], size));
+    assert!(draft.gradient_drag.is_some());
+    assert_eq!(offset(&draft, 1), Some(StyleValue::Point([0.0, 0.0])));
+
+    // 50 px over 200 and 10 px over 100.
+    assert!(draft.drag_gradient(false, [50.0, 10.0], size));
+    assert_eq!(offset(&draft, 1), Some(StyleValue::Point([0.25, 0.1])));
+
+    // Another instance, selected mid-press, starts from its own shown offset at the travel so far.
+    set_offset(&mut draft, 2, [1.0, -1.0]);
+    draft.page = LayerStylePage::Effect(EffectId(2));
+    assert!(!draft.drag_gradient(false, [50.0, 10.0], size));
+    assert_eq!(draft.gradient_drag.map(|d| d.instance()), Some(EffectId(2)));
+    assert!(draft.drag_gradient(false, [70.0, 10.0], size));
+    assert_eq!(offset(&draft, 2), Some(StyleValue::Point([1.1, -1.0])));
+    assert_eq!(offset(&draft, 1), Some(StyleValue::Point([0.25, 0.1])));
+
+    // Clamped to ±4 and rounded to 0.001.
+    assert!(draft.drag_gradient(false, [100_000.0, -1.0 / 3.0 * 100.0 + 10.0], size));
+    assert_eq!(offset(&draft, 2), Some(StyleValue::Point([4.0, -1.333])));
+
+    draft.end_drag();
+    assert!(draft.gradient_drag.is_none());
+
+    // A stored offset beyond ±4 starts from the clamp; one that is not finite from the default.
+    set_offset(&mut draft, 2, [9.0, 0.0]);
+    assert!(!draft.drag_gradient(true, [0.0, 0.0], size));
+    assert!(draft.drag_gradient(false, [-20.0, 0.0], size));
+    assert_eq!(offset(&draft, 2), Some(StyleValue::Point([3.9, 0.0])));
+    draft.end_drag();
+    set_offset(&mut draft, 2, [f64::NAN, 0.0]);
+    assert!(!draft.drag_gradient(true, [0.0, 0.0], size));
+    assert!(matches!(offset(&draft, 2), Some(StyleValue::Point([x, _])) if x.is_nan()));
+    assert!(draft.drag_gradient(false, [20.0, 0.0], size));
+    assert_eq!(offset(&draft, 2), Some(StyleValue::Point([0.1, 0.0])));
+
+    // Other pages are not dragged.
+    draft.page = LayerStylePage::Blending;
+    assert!(!draft.drag_gradient(true, [10.0, 10.0], size));
 }
 
 // A `StyleValue::Other` key no field shows survives `set_param`, `toggle` and

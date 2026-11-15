@@ -3,10 +3,10 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use craft_color::gradient::GradientStops;
 use craft_theme::{Srgba, TypeRole};
 use craft_ui::contract::{CommandSet as _, Entry, NoValue, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Divider, Text};
-use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::{Env, Label};
@@ -48,9 +48,6 @@ pub struct LayerStyleOutput {
     /// A style preset was picked on the Styles page (its key): the host looks it up and calls
     /// [`LayerStyleDraft::apply_preset`].
     pub apply_style: Option<String>,
-    /// New Style… was pressed: the host asks for a name and saves the enabled instances and the blend mode and
-    /// opacities as a preset.
-    pub new_style: bool,
     /// Make Default on an effect page: the kind and the page's shown values, to keep as the user's default for new
     /// instances of the kind.
     pub make_default: Option<(EffectKind, StyleParams)>,
@@ -103,8 +100,8 @@ impl LayerStyleOutput {
 /// - A page change is reported in [`LayerStyleOutput::page`] and drawn once the host has applied it. The page drawn in
 ///   the pass of a click is the one the click left, so its fields see their focus loss and commit what was typed
 ///   before the page changes.
-/// - The page title is the effect's name, plain (the Styles page's title carries New Style…). The Preview check box
-///   is the host's, in the button column under OK and Cancel (Photoshop's place), over [`LayerStyleDraft::preview`].
+/// - The page title is the effect's name, plain. New Style… and the Preview check box are the host's, in the button
+///   column under OK and Cancel (Photoshop's place), the check over [`LayerStyleDraft::preview`].
 /// - The Styles page ([`StylePresets`]), the Blending Options page, or an effect page drawn from the kind's
 ///   [`EffectSpec`].
 /// - Use Global Light: on an effect that uses it, the Angle edits the shared light angle of every such effect
@@ -130,7 +127,7 @@ pub struct LayerStyleDialog<'a> {
     user_contours: &'a [Contour],
     sampler: Option<SharedSampler>,
     style_presets: Option<StylePresets<'a>>,
-    gradient_presets: &'a [(String, craft_color::gradient::GradientStops)],
+    gradient_presets: &'a [(String, GradientStops)],
 }
 
 impl<'a> LayerStyleDialog<'a> {
@@ -152,8 +149,8 @@ impl<'a> LayerStyleDialog<'a> {
         }
     }
 
-    /// The gradient presets a Gradient field's select offers, by name.
-    pub fn gradient_presets(mut self, presets: &'a [(String, craft_color::gradient::GradientStops)]) -> Self {
+    /// The gradient presets a Gradient field's select offers, by name. Without presets the field shows only the editor.
+    pub fn gradient_presets(mut self, presets: &'a [(String, GradientStops)]) -> Self {
         self.gradient_presets = presets;
         self
     }
@@ -204,7 +201,7 @@ impl<'a> LayerStyleDialog<'a> {
         self
     }
 
-    /// The Styles page's presets; without them the page shows only New Style….
+    /// The Styles page's presets; without them the page shows only its title.
     pub fn style_presets(mut self, presets: StylePresets<'a>) -> Self {
         self.style_presets = Some(presets);
         self
@@ -224,8 +221,8 @@ impl<'a> LayerStyleDialog<'a> {
             user_contours,
             sampler,
             style_presets,
-            gradient_presets: _,
-        } = self; // P3(dialogs-w7): dl.K53
+            gradient_presets,
+        } = self;
         let env = Env::of(ui);
         let words = env.words::<LayerStyleWords>();
         let contour_words = env.words::<ContourWords>();
@@ -259,6 +256,7 @@ impl<'a> LayerStyleDialog<'a> {
                     patterns,
                     user_contours,
                     sampler: sampler.as_ref(),
+                    gradient_presets,
                     channel_names,
                     words: &words,
                     contour_words: &contour_words,
@@ -275,7 +273,6 @@ impl<'a> LayerStyleDialog<'a> {
             blend_if_channel: (next.blend_if_channel != draft.blend_if_channel).then_some(next.blend_if_channel),
             pick_color: extras.pick_color,
             apply_style: extras.apply_style,
-            new_style: extras.new_style,
             make_default: extras.make_default,
             reset_to_default: extras.reset_to_default,
             contour_action: extras.contour_action,
@@ -287,8 +284,30 @@ impl<'a> LayerStyleDialog<'a> {
     /// Answers a [`ColorRequest`] the dialog made: sets the colour parameter its key names (`"fx2/color"`; the instance
     /// id, a slash, the parameter key) to `color`. Returns false, changing nothing, for a key that names no instance of
     /// `draft`.
+    ///
+    /// A key `"fx2/stops/1"` names colour stop 1 of the gradient `stops` of instance `fx2`: the stop takes the
+    /// colour's red, green and blue and keeps its alpha, location, midpoint and tag. The instance's shown gradient is
+    /// its own `stops`, else the spec default. A bad index changes nothing and returns false.
     pub fn set_color(draft: &mut LayerStyleDraft, key: &str, color: Srgba) -> bool {
-        Self::set_param_by_key(draft, key, StyleValue::Color(color))
+        match key.split_once('/').and_then(|(id, field)| Some((id, field.strip_prefix("stops/")?))) {
+            Some((id, index)) => Self::set_stop_color(draft, id, index, color),
+            None => Self::set_param_by_key(draft, key, StyleValue::Color(color)),
+        }
+    }
+
+    fn set_stop_color(draft: &mut LayerStyleDraft, id: &str, index: &str, color: Srgba) -> bool {
+        let Some(id) = EffectId::from_key(id) else { return false };
+        let Some(instance) = draft.style.effect(id) else { return false };
+        let Ok(index) = index.parse::<usize>() else { return false };
+        let shown = instance.params.over(&EffectSpec::photoshop(instance.kind).defaults);
+        let Some(StyleValue::Gradient(stops)) = shown.get("stops") else { return false };
+        let mut stops = stops.clone();
+        let Some(stop) = stops.color.get_mut(index) else { return false };
+        stop.color.r = color.r;
+        stop.color.g = color.g;
+        stop.color.b = color.b;
+        draft.set_param(id, "stops", StyleValue::Gradient(stops));
+        true
     }
 
     /// Answers a [`ContourRequest`] the dialog made: sets the contour parameter its key names to `contour` (the editor's
@@ -317,6 +336,7 @@ struct PageEnv<'a> {
     patterns: &'a [PresetRow<String>],
     user_contours: &'a [Contour],
     sampler: Option<&'a SharedSampler>,
+    gradient_presets: &'a [(String, GradientStops)],
     channel_names: &'a [String],
     words: &'a LayerStyleWords,
     contour_words: &'a ContourWords,
@@ -328,7 +348,6 @@ struct PageEnv<'a> {
 struct Extras {
     pick_color: Option<ColorRequest>,
     apply_style: Option<String>,
-    new_style: bool,
     make_default: Option<(EffectKind, StyleParams)>,
     reset_to_default: Option<EffectId>,
     contour_action: Option<ContourAction>,
@@ -402,6 +421,7 @@ impl Work {
                     patterns: env.patterns,
                     user_contours: env.user_contours,
                     sampler: env.sampler,
+                    gradient_presets: env.gradient_presets,
                     words,
                     contour_words: env.contour_words,
                     units: env.units,
@@ -419,7 +439,6 @@ impl Work {
             (LayerStylePage::Styles, _) => {
                 let out = styles_page(ui, presets, words);
                 self.extras.apply_style = out.apply_style;
-                self.extras.new_style = out.new_style;
             }
         }
     }
@@ -435,12 +454,4 @@ fn page_title(page: LayerStylePage, draft: &LayerStyleDraft, words: &LayerStyleW
         },
         LayerStylePage::Styles => words.styles.clone(),
     }
-}
-
-/// A page title in the title role with `end` at the row's end.
-pub(super) fn title_row(ui: &mut Ui, title: Label, mut end: impl FnMut(&mut Ui)) {
-    Row::new().fill_width().align(RowAlign::SpaceBetween).show(ui, |ui, _| {
-        Text::new(title.clone()).role(TypeRole::Title).show(ui);
-        end(ui);
-    });
 }

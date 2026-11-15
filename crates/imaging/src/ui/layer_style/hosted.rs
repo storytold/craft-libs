@@ -1,21 +1,29 @@
 //! [`HostedLayerStyle`]: the Layer Style dialog on the dialog host, framed with its buttons and Preview box.
 
 use std::collections::HashMap;
+use std::sync::{Arc, LazyLock};
 
+use craft_behavior::{Metrics, Sense};
 use craft_color::gradient::GradientStops;
 use craft_theme::Srgba;
-use craft_ui::contract::{Bind, Entry};
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::choice::SwatchMetrics;
+use craft_ui::contract::{Bind, CanvasGesture, Common, Component, Cx, DisabledLook, Entry, MeasureCx, PaintUi, Props as _, Role, Sampler as _, Show as _};
+use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::patterns::presets::{PresetRow, ThumbInfo};
 use craft_ui::primitives::ContentPainterCx;
-use craft_ui::runtime::env::Label;
+use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::requests::ColorRequest;
-use egui::{Context, Rect, Ui};
+use craft_ui::sections::{DialogRole, FooterButton};
+use craft_ui::style::{ComponentStyle, StyleCx};
+use egui::{Context, Rect, Response, Ui, Vec2};
 
 use super::contour::SharedSampler;
+use super::labels::LayerStyleWords;
 use super::{ContourAction, ContourRequest, LayerStyleDialog, LayerStyleOutput, StylePresets};
-use crate::layer_style::{Contour, EffectId, EffectKind, EffectSpec, LayerStyle, LayerStyleDraft, StyleParams};
+use crate::layer_style::{
+    Contour, EffectId, EffectKind, EffectSpec, FieldKind, LayerStyle, LayerStyleDraft, LayerStylePage, StyleParams, StyleValue,
+};
 
 /// What the open Layer Style dialog asks of the app in a pass; [`HostedLayerStyle::take_asks`] hands them over in the
 /// order they came.
@@ -42,11 +50,10 @@ pub enum LayerStyleAsk {
 impl LayerStyleOutput {
     /// The asks of this pass, in the order [`LayerStyleAsk`] lists them.
     fn asks(self) -> impl Iterator<Item = LayerStyleAsk> {
-        let LayerStyleOutput { pick_color, apply_style, new_style, make_default, reset_to_default, contour_action, edit_contour, .. } = self;
+        let LayerStyleOutput { pick_color, apply_style, make_default, reset_to_default, contour_action, edit_contour, .. } = self;
         [
             pick_color.map(LayerStyleAsk::PickColor),
             apply_style.map(LayerStyleAsk::ApplyStyle),
-            new_style.then_some(LayerStyleAsk::NewStyle),
             make_default.map(|(kind, params)| LayerStyleAsk::MakeDefault(kind, params)),
             reset_to_default.map(LayerStyleAsk::ResetToDefault),
             contour_action.map(LayerStyleAsk::Contour),
@@ -59,6 +66,75 @@ impl LayerStyleOutput {
 
 /// Paints a style preset's thumbnail.
 type Thumb = dyn Fn(&ContentPainterCx, Rect, ThumbInfo<'_, String>) + Send;
+
+/// Paints the preview swatch beside the footer buttons from the draft.
+type PreviewPaint = dyn Fn(&ContentPainterCx, Rect, &LayerStyleDraft) + Send + Sync;
+
+/// The style of the preview swatch: a square as tall as a colour swatch.
+#[derive(Clone, Debug, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct PreviewSwatchStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+    /// The side of the square.
+    side: f32,
+}
+
+/// The preview swatch: the host's painting of the draft's style, in a square. It shows a picture and takes no input.
+#[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
+#[component(content_painter, sample = PreviewSwatch::sample)]
+struct PreviewSwatch<'a> {
+    #[common]
+    common: Common,
+    paint: &'a PreviewPaint,
+    draft: &'a LayerStyleDraft,
+}
+
+impl<'a> PreviewSwatch<'a> {
+    /// A swatch named `label` that `paint` fills from `draft`.
+    fn new(label: impl Into<Label>, paint: &'a PreviewPaint, draft: &'a LayerStyleDraft) -> Self {
+        PreviewSwatch { common: Common::new(), paint, draft }.label(label)
+    }
+}
+
+impl PreviewSwatch<'static> {
+    /// A swatch of the default style, for the suite.
+    fn sample() -> Self {
+        static DRAFT: LazyLock<LayerStyleDraft> = LazyLock::new(LayerStyleDraft::default);
+        static PAINT: LazyLock<Box<PreviewPaint>> = LazyLock::new(|| Box::new(|cx, rect, _| cx.checker(rect)));
+        PreviewSwatch::new("Preview", &**PAINT, &DRAFT)
+    }
+}
+
+impl Component for PreviewSwatch<'_> {
+    const DISABLED: DisabledLook = DisabledLook::Faded;
+    const ROLE: Role = Role::IMAGE;
+    const OVERLAYS: bool = false;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    type Style = PreviewSwatchStyle;
+    type Output = Response;
+
+    fn style(cx: &StyleCx<'_>, _: PreviewSwatchStyleKey) -> PreviewSwatchStyle {
+        PreviewSwatchStyle { metrics: Metrics::new(), side: SwatchMetrics::of(cx).side }
+    }
+
+    fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
+        Vec2::splat(cx.style.side)
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        (self.paint)(&ui.content_painter(cx), cx.rect, self.draft);
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
 
 /// The Layer Style dialog the [`DialogHost`](craft_ui::dialog::DialogHost) owns: the [`LayerStyleDialog`] body over a
 /// draft the host keeps, in a form dialog with OK and Cancel beside the body (Alt turns Cancel into Reset) and the
@@ -84,6 +160,9 @@ pub struct HostedLayerStyle {
     user_contours: Vec<Contour>,
     sampler: Option<SharedSampler>,
     styles: Option<(Vec<PresetRow<String>>, Box<Thumb>)>,
+    gradient_presets: Vec<(String, GradientStops)>,
+    canvas: Option<egui::Id>,
+    preview_thumb: Option<Arc<PreviewPaint>>,
     asks: Vec<LayerStyleAsk>,
     comparing: bool,
     #[cfg(feature = "screen-testing")]
@@ -110,6 +189,9 @@ impl HostedLayerStyle {
             user_contours: Vec::new(),
             sampler: None,
             styles: None,
+            gradient_presets: Vec::new(),
+            canvas: None,
+            preview_thumb: None,
             asks: Vec::new(),
             comparing: false,
             #[cfg(feature = "screen-testing")]
@@ -172,24 +254,24 @@ impl HostedLayerStyle {
 
     /// The canvas the dialog's offset drag works on: while the dialog is modal its pointer presses keep their canvas.
     #[must_use]
-    pub fn canvas(self, canvas: egui::Id) -> Self {
-        let _ = canvas;
-        todo!("dl.K53")
+    pub fn canvas(mut self, canvas: egui::Id) -> Self {
+        self.canvas = Some(canvas);
+        self
     }
 
     /// [`LayerStyleDialog::gradient_presets`].
     #[must_use]
-    pub fn gradient_presets(self, presets: Vec<(String, GradientStops)>) -> Self {
-        let _ = presets;
-        todo!("dl.K53")
+    pub fn gradient_presets(mut self, presets: Vec<(String, GradientStops)>) -> Self {
+        self.gradient_presets = presets;
+        self
     }
 
-    /// The painter of the preview swatch: `paint` draws the draft's style into the swatch rect.
-    // P3(dialogs-w7): dl.K53 `HostedLayerStyle::preview_thumb`
+    /// The painter of the preview swatch: `paint` draws the draft's style into the swatch rect. Without one the footer
+    /// has no swatch.
     #[must_use]
-    pub fn preview_thumb(self, paint: impl Fn(&ContentPainterCx, Rect, &LayerStyleDraft) + Send + Sync + 'static) -> Self {
-        let _ = (self, paint);
-        todo!("dl.K53")
+    pub fn preview_thumb(mut self, paint: impl Fn(&ContentPainterCx, Rect, &LayerStyleDraft) + Send + Sync + 'static) -> Self {
+        self.preview_thumb = Some(Arc::new(paint));
+        self
     }
 
     /// The draft the dialog shows: the app previews from it.
@@ -248,24 +330,45 @@ impl StackDialog for HostedLayerStyle {
             user_contours,
             sampler,
             styles,
+            gradient_presets,
+            canvas,
+            preview_thumb,
             asks,
             comparing,
             #[cfg(feature = "screen-testing")]
             facts,
             ..
         } = self;
+        let new_style = Env::of(ui).words::<LayerStyleWords>().new_style.clone();
+        // The footer paints beside the form's `&mut` draft, so it reads a copy taken at the start of the pass.
+        let snapshot = preview_thumb.as_ref().map(|_| draft.clone());
+        let swatch_label = label.clone();
         // The draft holds Preview: the box edits a copy, written back only when the box changed it, so a Reset that
         // restores the draft keeps the restored Preview.
         let previewing = draft.preview;
         let mut preview = previewing;
-        let shown = FormDialog::new(label.clone(), Bind::bound(&mut *draft)).opened(Bind::bound(open)).preview(Some(Bind::bound(&mut preview))).show(
-            ui,
-            |ui, _, draft| {
+        let shown = FormDialog::new(label.clone(), Bind::bound(&mut *draft))
+            .opened(Bind::bound(open))
+            .preview(Some(Bind::bound(&mut preview)))
+            .extra_buttons([FooterButton::new(new_style, DialogRole::Other)])
+            .footer_extra(|ui| {
+                if let (Some(paint), Some(draft)) = (preview_thumb.as_deref(), snapshot.as_ref()) {
+                    PreviewSwatch::new(swatch_label.clone(), paint, draft).show(ui);
+                }
+            })
+            .show(ui, |ui, cx, draft| {
+                if let Some(canvas) = *canvas {
+                    cx.keep_view_open(canvas);
+                    if draft.drags_shadow() || draft.drags_gradient() {
+                        cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
+                    }
+                }
                 let mut body = LayerStyleDialog::new(label.clone(), draft, channel_names.as_slice())
                     .blend_modes(blend_modes.as_slice())
                     .patterns(patterns.as_slice())
                     .user_contours(user_contours.as_slice())
-                    .shared_sampler(sampler.clone());
+                    .shared_sampler(sampler.clone())
+                    .gradient_presets(gradient_presets.as_slice());
                 if let Some(specs) = specs.as_deref() {
                     body = body.specs(specs);
                 }
@@ -286,8 +389,11 @@ impl StackDialog for HostedLayerStyle {
                 }
                 asks.extend(out.asks());
                 true
-            },
-        );
+            });
+        // `picked` is this pass's own press: a second pass in the same frame sees none and queues nothing.
+        if shown.picked == Some(2) {
+            asks.push(LayerStyleAsk::NewStyle);
+        }
         if preview != previewing {
             draft.preview = preview;
         }
@@ -300,23 +406,77 @@ impl StackDialog for HostedLayerStyle {
         Some(KEY)
     }
 
-    fn confirm(&mut self, ctx: &Context) -> Option<LayerStyle> {
-        let _ = ctx;
-        todo!("dl.K53")
+    fn confirm(&mut self, _: &Context) -> Option<LayerStyle> {
+        Some(self.draft.style.clone())
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K53")
+        let page = match self.draft.page {
+            LayerStylePage::Styles => "styles".to_owned(),
+            LayerStylePage::Blending => "blendingOptions".to_owned(),
+            LayerStylePage::Effect(id) => id.key(),
+        };
+        let effects: Vec<_> =
+            self.draft.style.effects.iter().map(|e| serde_json::json!({ "id": e.id.key(), "kind": e.kind.key(), "on": e.on })).collect();
+        Some(serde_json::json!({ "page": page, "preview": self.draft.preview, "effects": effects }))
     }
 
-    fn set_json_field(&mut self, ctx: &Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K53")
+    fn set_json_field(&mut self, _: &Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        let rejected = || Err(FieldRefusal::Rejects(&value).message(field));
+        match field {
+            "page" => {
+                let Some(name) = value.as_str() else { return rejected() };
+                match name {
+                    "styles" => self.draft.page = LayerStylePage::Styles,
+                    "blendingOptions" => self.draft.page = LayerStylePage::Blending,
+                    _ => {
+                        if let Some(id) = EffectId::from_key(name).filter(|id| self.draft.style.effect(*id).is_some()) {
+                            self.draft.page = LayerStylePage::Effect(id);
+                        } else if let Some(kind) = EffectKind::from_key(name) {
+                            self.draft.open_on(kind);
+                        } else {
+                            return rejected();
+                        }
+                    }
+                }
+                Ok(())
+            }
+            "preview" => {
+                let Some(on) = value.as_bool() else { return rejected() };
+                self.draft.preview = on;
+                Ok(())
+            }
+            "editContour" => {
+                let id = value.get("effect").and_then(serde_json::Value::as_str).and_then(EffectId::from_key);
+                let key = value.get("key").and_then(serde_json::Value::as_str);
+                let (Some(id), Some(key)) = (id, key) else { return rejected() };
+                let Some(instance) = self.draft.style.effect(id) else { return rejected() };
+                let owned;
+                let spec = match self.specs.as_ref().and_then(|specs| specs.iter().find(|spec| spec.kind == instance.kind)) {
+                    Some(spec) => spec,
+                    None => {
+                        owned = EffectSpec::photoshop(instance.kind);
+                        &owned
+                    }
+                };
+                if !spec.field(key).is_some_and(|f| matches!(f.kind, FieldKind::Contour { .. })) {
+                    return rejected();
+                }
+                let shown = instance.params.over(&spec.defaults);
+                let contour = match shown.get(key) {
+                    Some(StyleValue::Contour(contour)) => contour.clone(),
+                    _ => Contour::linear(),
+                };
+                self.asks.push(LayerStyleAsk::EditContour(ContourRequest::new(format!("{}/{key}", id.key()), contour)));
+                Ok(())
+            }
+            "effects" => Err(FieldRefusal::ReadOnly.message(field)),
+            _ => Err(FieldRefusal::Unknown.message(field)),
+        }
     }
 
-    fn cancelled(&mut self, ctx: &Context) {
-        let _ = ctx;
-        todo!("dl.K53")
+    fn cancelled(&mut self, _: &Context) {
+        self.draft.end_drag();
     }
 
     #[cfg(feature = "screen-testing")]

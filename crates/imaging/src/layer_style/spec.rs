@@ -134,10 +134,11 @@ impl EffectSpec {
     ///   Center); blend; opacity 0..100 %; overprint Overprint; color. Defaults: 1, inside,
     ///   Normal, 100, false, #000000.
     /// - Color Overlay: blend; color; opacity 0..100 %. Defaults: Normal, #ff0000, 100.
-    /// - Gradient Overlay: blend; opacity; from From (Color); to To (Color); reverse Reverse; style
+    /// - Gradient Overlay: blend; opacity; stops Gradient (Gradient); reverse Reverse; style
     ///   Style (linear Linear, radial Radial, angle Angle, reflected Reflected, diamond Diamond);
     ///   angle; scale Scale 10..150 %; method Method (GradientMethod). Defaults: Normal, 100,
-    ///   #000000, #ffffff, false, linear, 90, 100, custom.
+    ///   black to white, false, linear, 90, 100, custom, and `offset` (0, 0), a point with no
+    ///   field that the drag on the image moves.
     /// - Pattern Overlay: blend; opacity; pattern Pattern; angle; scale Scale 1..1000 %; link Link
     ///   with Layer. Defaults: Normal, 100, "", 0, 100, true.
     /// - Bevel & Emboss: style Style (inner Inner Bevel, outer Outer Bevel, emboss Emboss, pillow
@@ -311,8 +312,7 @@ impl EffectSpec {
                 vec![
                     field("blend", "Blend Mode", FieldKind::Blend),
                     field("opacity", "Opacity", percent()),
-                    field("from", "From", FieldKind::Color),
-                    field("to", "To", FieldKind::Color),
+                    field("stops", "Gradient", FieldKind::Gradient),
                     field("reverse", "Reverse", FieldKind::Check),
                     field(
                         "style",
@@ -326,8 +326,8 @@ impl EffectSpec {
                 vec![
                     ("blend", text("Normal")),
                     ("opacity", num(100.0)),
-                    ("from", hex("#000000")),
-                    ("to", hex("#ffffff")),
+                    ("stops", black_to_white()),
+                    ("offset", StyleValue::Point([0.0, 0.0])),
                     ("reverse", StyleValue::Bool(false)),
                     ("style", text("linear")),
                     ("angle", num(90.0)),
@@ -463,6 +463,12 @@ fn text(s: &str) -> StyleValue {
 
 fn hex(s: &str) -> StyleValue {
     StyleValue::Color(Srgba::from_hex(s).unwrap_or(Srgba::BLACK))
+}
+
+fn black_to_white() -> StyleValue {
+    use craft_color::gradient::{ColorStop, GradientStops};
+    let color = |s: &str| Srgba::from_hex(s).unwrap_or(Srgba::BLACK);
+    StyleValue::Gradient(GradientStops::new(vec![ColorStop::new(0.0, color("#000000")), ColorStop::new(1.0, color("#ffffff"))]))
 }
 
 fn linear() -> StyleValue {

@@ -56,8 +56,7 @@ craft_ui::words! {
         range: "layerStyle.fieldRange" = "Range";
         position: "layerStyle.fieldPosition" = "Position";
         overprint: "layerStyle.fieldOverprint" = "Overprint";
-        from: "layerStyle.fieldFrom" = "From";
-        to: "layerStyle.fieldTo" = "To";
+        gradient: "layerStyle.fieldGradient" = "Gradient";
         reverse: "layerStyle.fieldReverse" = "Reverse";
         style: "layerStyle.fieldStyle" = "Style";
         scale: "layerStyle.fieldScale" = "Scale";
@@ -160,8 +159,7 @@ impl LayerStyleWords {
             "range" | "contourRange" => &self.range,
             "position" => &self.position,
             "overprint" => &self.overprint,
-            "from" => &self.from,
-            "to" => &self.to,
+            "stops" => &self.gradient,
             "reverse" => &self.reverse,
             "style" => &self.style,
             "scale" => &self.scale,

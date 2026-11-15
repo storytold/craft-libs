@@ -48,16 +48,48 @@ impl LayerStyleDraft {
         LayerStyleDraft { style, page, blend_if_channel: 0, preview: true, shadow_drag: None, gradient_drag: None }
     }
 
-    /// Whether a Gradient Overlay offset drag is in progress.
+    /// Whether a drag on the image moves the selected effect's gradient offset now: a Gradient
+    /// Overlay page is selected.
     pub fn drags_gradient(&self) -> bool {
-        self.gradient_drag.is_some()
+        self.selected_kind() == Some(EffectKind::GradientOverlay)
     }
 
     /// A drag on the image moves the selected Gradient Overlay's hidden `offset` by the pointer's travel over the layer
     /// size. `start` is the press; `total` the movement since it. Whether the offset changed.
+    ///
+    /// The drag starts from the offset the page shows (the stored one clamped, else the spec
+    /// default) on the press, and again when another instance became the selected one mid-press,
+    /// counting the travel so far as its zero. A press that moved nothing writes nothing. Only
+    /// the pass's own `total` is read, so a second pass in the same frame repeats the write.
     pub fn drag_gradient(&mut self, start: bool, total: [f64; 2], layer_size: [f64; 2]) -> bool {
-        let _ = (start, total, layer_size);
-        todo!("dl.K52")
+        let LayerStylePage::Effect(id) = self.page else {
+            return false;
+        };
+        if !self.drags_gradient() {
+            return false;
+        }
+        let default = match EffectSpec::photoshop(EffectKind::GradientOverlay).defaults.get("offset") {
+            Some(StyleValue::Point(p)) => *p,
+            _ => [0.0, 0.0],
+        };
+        let stored = self.style.effect(id).and_then(|e| e.params.get("offset"));
+        let shown = GradientOffsetDrag::shown(stored, default);
+        let drag = match self.gradient_drag {
+            Some(drag) if !start && drag.instance() == id => drag,
+            _ => GradientOffsetDrag::begin(id, shown, total),
+        };
+        self.gradient_drag = Some(drag);
+        let moved = drag.moved(total, layer_size);
+        let value = StyleValue::Point(moved);
+        // A press that moved nothing leaves the stored value (or its absence) alone.
+        if moved == drag.origin() && shown == drag.origin() {
+            return false;
+        }
+        if stored == Some(&value) {
+            return false;
+        }
+        self.set_param(id, "offset", value);
+        true
     }
 
     /// The host's release: clears the shadow and gradient drags.
