@@ -64,6 +64,20 @@ impl<V> Default for Opened<V> {
 #[derive(Clone, Default)]
 struct PreviewOff(bool);
 
+/// The value a binding holds this pass; `None` while it holds none (a kept or mixed binding).
+pub(crate) fn read_bind<T: Value>(bind: &mut Bind<'_, T>) -> Option<T> {
+    match bind.reborrow().get() {
+        Some(Mixed::Same(value)) => Some(value),
+        _ => None,
+    }
+}
+
+/// Writes `value` through a binding as one step. A given binding keeps its value: the app takes the dialog's reports.
+pub(crate) fn write_bind<T: Value>(bind: &mut Bind<'_, T>, value: T) {
+    let before = bind.reborrow().get().unwrap_or(Mixed::Mixed);
+    let _ = bind.reborrow().apply(&EditEvent::set(before, value, Arc::from(""), None));
+}
+
 /// What a form body sees: the dialog's body context, whether this is the pass the dialog opened in, the answers the
 /// host gave since the last pass and the requests the body files for the host.
 pub struct FormCx<'a, 'b> {

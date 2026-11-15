@@ -7,23 +7,24 @@ mod presets;
 #[cfg(feature = "testing")]
 mod stories;
 
+use super::form::{read_bind, write_bind};
 use super::{FormCx, FormDialog, HostRequests, LinkedSize};
 use crate::contract::{Bind, NoValue, Outcome, Remember as _, SaveKey, Scroll, ShowContainer as _};
 use crate::runtime::requests::{ColorRequest, HostAnswer};
 
-use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
 
 use crate::layout_components::{Grid, Stack};
 
 use crate::patterns::presets::{GroupPath, NamedPresetEvent, PresetLibrary, PresetWords as LibraryWords};
 
 use crate::runtime::env::{Env, Label, UnitKind, Units};
-use crate::runtime::memory::{MemoryStage, unique};
 use crate::runtime::overlay::CloseReason;
 use craft_behavior::{ColumnWidth, PixelSize};
 
 use craft_theme::Srgba;
 use egui::{Context, Response, Ui};
+use std::cell::RefCell;
 
 use cards::{Left, TabId};
 
@@ -136,9 +137,22 @@ struct Read<'a> {
     units: &'a Units,
 }
 
+/// The values the app binds, as the body works on them during one frame. A frame can run the body twice; the cells
+/// carry what the first pass did into the second, and `events` collects the edits of both passes.
+#[derive(Clone, Copy)]
+struct Bound<'a> {
+    /// The bound saved presets; `None` keeps them in the form memory.
+    saved: Option<&'a RefCell<PresetLibrary<DocumentOptions>>>,
+    /// The bound tab id.
+    tab: Option<&'a RefCell<String>>,
+    /// Each save and delete of the frame.
+    events: &'a RefCell<Vec<NamedPresetEvent<String>>>,
+}
+
 /// What the body reads besides its form: the setup, the words and the units.
 #[derive(Clone, Copy)]
 struct Shared<'a> {
+    bound: Bound<'a>,
     setup: &'a Setup,
     words: &'a NewDocumentWords,
     preset_words: &'a NewDocumentPresetWords,
@@ -199,8 +213,7 @@ impl Session {
     /// size and unit.
     fn apply_card(&mut self, values: &mut DocumentOptions, card: &cards::Card, points_per_inch: f64) {
         if card.restores_all {
-            let name = std::mem::take(&mut values.name);
-            *values = DocumentOptions { name, ..card.settings.clone() };
+            restore_all(values, &card.settings);
         } else {
             values.size = card.settings.size;
             values.pixels_per_inch = card.settings.pixels_per_inch;
@@ -209,6 +222,13 @@ impl Session {
         self.size = values.linked(points_per_inch);
         self.gesture = None;
     }
+}
+
+/// Sets everything of `values` but the name to `settings`: what a recent document, a saved preset and the hosted
+/// `preset` field restore. The fields that show the size follow on the next pass.
+fn restore_all(values: &mut DocumentOptions, settings: &DocumentOptions) {
+    let name = std::mem::take(&mut values.name);
+    *values = DocumentOptions { name, ..settings.clone() };
 }
 
 /// The settings a Create answers with: the name trimmed, "Untitled" when empty.
@@ -223,11 +243,18 @@ fn finish(mut settings: DocumentOptions, untitled: &str) -> DocumentOptions {
 /// Fills what the dialog adds on the pass it opens in: the clipboard's size (the dialog opens on its card) and the
 /// default name.
 fn open_values(values: &mut DocumentOptions, session: &mut Session, setup: &Setup, untitled: &str) {
+    open_options(values, setup, untitled);
+    if setup.clipboard.is_some() {
+        session.card = Some(0);
+    }
+}
+
+/// The settings part of [`open_values`]: what the opening settings are on the pass the dialog opens in.
+fn open_options(values: &mut DocumentOptions, setup: &Setup, untitled: &str) {
     if let Some(size) = setup.clipboard {
         values.size = size;
         values.unit = UnitKind::Pixels;
         values.pixels_per_inch = setup.screen_ppi;
-        session.card = Some(0);
     }
     if values.name.is_empty() {
         untitled.clone_into(&mut values.name);
@@ -287,9 +314,7 @@ impl NewDocumentResult {
     /// it was; without a key it does nothing.
     pub fn remember(&self, ctx: &Context) {
         if let Some((key, list)) = &self.remember {
-            let mut stage = MemoryStage::open(ctx, unique(("craft_ui::new_document_recent", key.as_str())));
-            *stage.saved::<Vec<DocumentOptions>>(key) = list.clone();
-            stage.write_back();
+            crate::runtime::memory::set_saved_value::<Vec<DocumentOptions>>(ctx, key, list.clone());
         }
     }
 }
@@ -309,8 +334,8 @@ pub struct NewDocumentOutput {
     /// chosen or the colour button pressed), keyed `BACKGROUND_COLOR_KEY`. The app answers with
     /// [`NewDocumentDialog::answers`].
     pub requests: HostRequests,
-    /// The saved-preset edits the user made this pass (add, rename, delete), for the app to store.
-    // P3(dialogs-w14): dl.K39, keyed by the preset's name before the event
+    /// The saved-preset edits the user made this pass (create, delete), for the app to store, keyed by the preset's
+    /// name before the event.
     pub presets: Vec<NamedPresetEvent<String>>,
 }
 
@@ -327,7 +352,7 @@ static COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::Content
 
 /// The body of the dialog: the columns, then what they asked for.
 fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, shared: &Shared<'_>) -> bool {
-    let Shared { setup, words, preset_words, library_words, units, untitled } = *shared;
+    let Shared { bound, setup, words, preset_words, library_words, units, untitled } = *shared;
     let points = units.points_per_inch();
     let mut session = form.memory::<Session>().clone();
     if form.first() {
@@ -344,8 +369,18 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
         session.size = values.linked(points);
         session.gesture = None;
     }
+    if let Some(cell) = bound.tab
+        && let Some(tab) = TabId::from_key(cell.borrow().as_str(), &setup.categories)
+        && tab != session.tab
+    {
+        session.tab = tab;
+        session.card = None;
+    }
     let recents: Vec<DocumentOptions> = setup.recent.iter().filter(|recent| recent.fits()).cloned().collect();
-    let mut library = form.saved::<PresetLibrary<DocumentOptions>>(&PRESETS_KEY).clone();
+    let mut library = match bound.saved {
+        Some(cell) => cell.borrow().clone(),
+        None => form.saved::<PresetLibrary<DocumentOptions>>(&PRESETS_KEY).clone(),
+    };
     let mut changed = false;
 
     let read = Read { setup, recents: &recents, library: &library, words, preset_words, library_words, units };
@@ -376,17 +411,23 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
         form.requests().request_color(ColorRequest::new(BACKGROUND_COLOR_KEY, Srgba::from_rgb_array(current)).title(words.custom_swatch.clone()));
     }
     for id in left.delete {
+        let name = library.get(id).map(|item| item.name.clone());
         if library.delete(id).is_ok() {
             changed = true;
             session.card = None;
+            if let Some(name) = name {
+                bound.events.borrow_mut().push(NamedPresetEvent::Delete(name));
+            }
         }
     }
     if right.save {
         let name = session.naming.clone().unwrap_or_default();
         if details::refusal(&library, &name).is_none() {
             let preset = DocumentOptions { name: name.trim().to_owned(), ..values.clone() };
-            if library.add(&GroupPath::root(), &name, preset).is_ok() {
+            if let Ok(id) = library.add(&GroupPath::root(), &name, preset) {
                 changed = true;
+                let stored = library.get(id).map_or_else(|| name.trim().to_owned(), |item| item.name.clone());
+                bound.events.borrow_mut().push(NamedPresetEvent::Create { name: stored });
                 session.tab = TabId::Saved;
                 session.card = Some(library.items().iter().filter(|item| item.value.fits()).count().saturating_sub(1));
                 session.naming = None;
@@ -397,7 +438,16 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
         }
     }
     if changed {
-        *form.saved::<PresetLibrary<DocumentOptions>>(&PRESETS_KEY) = library;
+        match bound.saved {
+            Some(cell) => *cell.borrow_mut() = library,
+            None => *form.saved::<PresetLibrary<DocumentOptions>>(&PRESETS_KEY) = library,
+        }
+    }
+    if let Some(cell) = bound.tab {
+        let key = session.tab.key(&setup.categories);
+        if *cell.borrow() != key {
+            *cell.borrow_mut() = key;
+        }
     }
     *form.memory::<Session>() = session;
     true
@@ -455,10 +505,12 @@ pub struct NewDocumentDialog<'a> {
     /// The colour profiles each mode offers.
     #[prop]
     profiles: Vec<ColorProfiles>,
-    /// Binds the saved presets of the Saved tab to `saved`.
+    /// Binds the saved presets of the Saved tab to `saved`, in place of the list the dialog keeps across runs. Each
+    /// save and delete is also reported in [`NewDocumentOutput::presets`] for the app to store.
     #[prop]
     saved: Option<Bind<'a, PresetLibrary<DocumentOptions>>>,
-    /// Binds the recent documents of the Recent tab to `recent`.
+    /// Binds the recent documents of the Recent tab to `recent`, in place of the list of `remember_recent`. The dialog
+    /// only reads it: the app adds the created document itself.
     #[prop]
     recent: Option<Bind<'a, Vec<DocumentOptions>>>,
     /// Binds the shown tab's id (`recent`, `saved` or a category's id) to `tab`.
@@ -473,6 +525,10 @@ pub struct NewDocumentDialog<'a> {
     /// The host's answers to the requests of earlier passes.
     #[prop]
     answers: Vec<HostAnswer>,
+    /// The settings the host opened the dialog with: what Reset restores, in place of the bound settings of the first
+    /// pass (a field edited before the dialog was first shown is not the Reset target).
+    #[prop]
+    opening: Option<DocumentOptions>,
 }
 
 impl<'a> NewDocumentDialog<'a> {
@@ -496,6 +552,7 @@ impl<'a> NewDocumentDialog<'a> {
             app_name: None,
             remember: None,
             answers: Vec::new(),
+            opening: None,
         }
     }
 
@@ -512,15 +569,22 @@ impl<'a> NewDocumentDialog<'a> {
             print_resolution,
             screen_resolution,
             profiles,
-            saved,
-            recent: recent_bound,
-            tab,
+            mut saved,
+            recent: mut recent_bound,
+            mut tab,
             app_name,
             remember,
             answers,
+            opening,
         } = self;
-        let _ = (&saved, &recent_bound, &tab); // P3(dialogs-w14): dl.K39
-        let recent: Vec<DocumentOptions> = remember_recent.as_ref().map_or_else(Vec::new, |key| MemoryStage::peek_saved(ui.ctx(), key));
+        let recent_is_bound = recent_bound.is_some();
+        let recent: Vec<DocumentOptions> = match recent_bound.as_mut() {
+            Some(bind) => read_bind(bind).unwrap_or_default(),
+            None => remember_recent.as_ref().map_or_else(Vec::new, |key| crate::runtime::memory::saved_value::<Vec<DocumentOptions>>(ui.ctx(), key)),
+        };
+        let saved_cell = saved.as_mut().map(|bind| RefCell::new(read_bind(bind).unwrap_or_default()));
+        let tab_cell = tab.as_mut().map(|bind| RefCell::new(read_bind(bind).unwrap_or_default()));
+        let events = RefCell::new(Vec::new());
         let env = Env::of(ui);
         let words = env.words::<NewDocumentWords>();
         let preset_words = env.words::<NewDocumentPresetWords>();
@@ -538,8 +602,15 @@ impl<'a> NewDocumentDialog<'a> {
             app_name,
         };
         let untitled = words.untitled.as_str().to_owned();
-        let shared =
-            Shared { setup: &setup, words: &words, preset_words: &preset_words, library_words: &library_words, units: &units, untitled: &untitled };
+        let shared = Shared {
+            bound: Bound { saved: saved_cell.as_ref(), tab: tab_cell.as_ref(), events: &events },
+            setup: &setup,
+            words: &words,
+            preset_words: &preset_words,
+            library_words: &library_words,
+            units: &units,
+            untitled: &untitled,
+        };
 
         let mut dialog = FormDialog::new(words.title.clone(), bound)
             .ok_label(words.create.clone())
@@ -551,16 +622,32 @@ impl<'a> NewDocumentDialog<'a> {
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
+        if let Some(mut opening) = opening {
+            open_options(&mut opening, &setup, &untitled);
+            dialog = dialog.opening(opening);
+        }
         if let Some(key) = remember {
             dialog = dialog.shaped(move |dialog| dialog.remember(key));
         }
         let shown = dialog.show(ui, |ui, form, values| body(ui, form, values, &shared));
+        let events = events.into_inner();
+        if !events.is_empty()
+            && let (Some(bind), Some(cell)) = (saved.as_mut(), saved_cell)
+        {
+            write_bind(bind, cell.into_inner());
+        }
+        if let (Some(bind), Some(cell)) = (tab.as_mut(), tab_cell) {
+            let now = cell.into_inner();
+            if read_bind(bind).as_ref() != Some(&now) {
+                write_bind(bind, now);
+            }
+        }
         NewDocumentOutput {
             response: shown.response,
             closed: shown.closed,
             result: shown.accepted.map(|options| {
                 let options = finish(options, &untitled);
-                let remember = remember_recent.map(|key| {
+                let remember = remember_recent.filter(|_| !recent_is_bound).map(|key| {
                     let mut list = setup.recent.clone();
                     push_recent(&mut list, DocumentOptions { name: String::new(), ..options.clone() }, presets::MAX_RECENT);
                     (key, list)
@@ -568,7 +655,7 @@ impl<'a> NewDocumentDialog<'a> {
                 NewDocumentResult { options, remember }
             }),
             requests: shown.requests,
-            presets: Vec::new(), // P3(dialogs-w14): dl.K39
+            presets: events,
         }
     }
 }
@@ -592,15 +679,35 @@ pub struct HostedNewDocument {
     build: Box<Build>,
     requests: HostRequests,
     /// Whether the dialog is open: bound to the dialog's `opened` prop.
-    #[allow(dead_code)] // P3(dialogs-w14): dl.K39
     open: bool,
+    /// The saved presets the app gave, as the user left them.
+    saved: PresetLibrary<DocumentOptions>,
+    /// The recent documents the app gave; the app adds the created one itself.
+    recent: Vec<DocumentOptions>,
+    /// The shown tab's id.
+    tab: String,
+    /// The saved-preset edits the app has not taken yet.
+    events: Vec<NamedPresetEvent<String>>,
+    /// The settings the dialog was made with: what Reset restores, whatever automation sets before the first show.
+    opening: DocumentOptions,
 }
 
 impl HostedNewDocument {
     /// A hosted dialog opening on `options`; `build` makes the dialog over them (the clipboard, the profiles, the
     /// app's name).
     pub fn new(options: DocumentOptions, build: impl for<'b> Fn(&'b mut DocumentOptions) -> NewDocumentDialog<'b> + Send + 'static) -> Self {
-        HostedNewDocument { id: dialog_id("new-document"), options, build: Box::new(build), requests: HostRequests::new(), open: true }
+        HostedNewDocument {
+            id: dialog_id("new-document"),
+            opening: options.clone(),
+            options,
+            build: Box::new(build),
+            requests: HostRequests::new(),
+            open: true,
+            saved: PresetLibrary::new(),
+            recent: Vec::new(),
+            tab: TabId::Recent.key(&[]),
+            events: Vec::new(),
+        }
     }
 
     /// The settings the details column shows.
@@ -622,26 +729,26 @@ impl HostedNewDocument {
     /// Opens with `library` as the saved presets.
     #[must_use]
     pub fn saved(mut self, library: PresetLibrary<DocumentOptions>) -> Self {
-        let _ = (&mut self, library);
-        todo!("dl.K39")
+        self.saved = library;
+        self
     }
 
     /// Opens with `list` as the recent documents.
     #[must_use]
     pub fn recent(mut self, list: Vec<DocumentOptions>) -> Self {
-        let _ = (&mut self, list);
-        todo!("dl.K39")
+        self.recent = list;
+        self
     }
 
     /// The saved presets as the user left them.
     pub fn saved_presets(&self) -> &PresetLibrary<DocumentOptions> {
-        todo!("dl.K39")
+        &self.saved
     }
 
-    /// The saved-preset edits since the last call, for the app to store.
-    // P3(dialogs-w14): dl.K39
+    /// The saved-preset edits since the last call, for the app to store. A created preset's value is in
+    /// [`saved_presets`](Self::saved_presets) under its name.
     pub fn take_preset_events(&mut self) -> Vec<NamedPresetEvent<String>> {
-        todo!("dl.K39")
+        std::mem::take(&mut self.events)
     }
 
     /// The picker was cancelled: the request is dropped and Background Contents stays as it was.
@@ -653,18 +760,50 @@ impl HostedNewDocument {
 impl StackDialog for HostedNewDocument {
     type Result = NewDocumentResult;
 
+    /// Answers what Create answers. The recent list is bound, so the app adds the document itself (`remember` is
+    /// empty, as in a pass).
     fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        let _ = ctx;
-        todo!("dl.K39")
+        let words = Env::of_root(ctx).words::<NewDocumentWords>();
+        Some(NewDocumentResult { options: finish(self.options.clone(), words.untitled.as_str()), remember: None })
     }
 
+    /// The settings by their serde keys, the shown tab's id (`tab`) and the name of the saved preset the settings
+    /// equal but for the name (`preset`, null when none).
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K39")
+        let mut fields = serde_fields(&self.options)?;
+        let preset = self.saved.items().into_iter().find(|item| {
+            let mut restored = self.options.clone();
+            restore_all(&mut restored, &item.value);
+            restored == self.options
+        });
+        if let serde_json::Value::Object(map) = &mut fields {
+            map.insert("tab".to_owned(), serde_json::Value::String(self.tab.clone()));
+            map.insert("preset".to_owned(), preset.map_or(serde_json::Value::Null, |item| serde_json::Value::String(item.name.clone())));
+        }
+        Some(fields)
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K39")
+    /// Sets a settings key as the serde round trip takes it, `tab` to a tab the dialog has, or `preset` to a saved
+    /// preset's name, which restores everything but the name as picking its card does.
+    fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        match field {
+            "tab" => {
+                let key = value.as_str().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                let categories = (self.build)(&mut self.options).categories;
+                if TabId::from_key(key, &categories).is_none() {
+                    return Err(FieldRefusal::Rejects(&value).message(field));
+                }
+                self.tab = key.to_owned();
+                Ok(())
+            }
+            "preset" => {
+                let name = value.as_str().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                let item = self.saved.items().into_iter().find(|item| item.name == name).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                restore_all(&mut self.options, &item.value);
+                Ok(())
+            }
+            _ => set_serde_field(&mut self.options, field, value),
+        }
     }
 
     fn id(&self) -> DialogId {
@@ -672,8 +811,16 @@ impl StackDialog for HostedNewDocument {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<NewDocumentResult>> {
-        let shown = (self.build)(&mut self.options).answers(self.requests.take_answers()).show(ui);
+        let shown = (self.build)(&mut self.options)
+            .opened(Bind::bound(&mut self.open))
+            .saved(Bind::bound(&mut self.saved))
+            .recent(Bind::bound(&mut self.recent))
+            .tab(Bind::bound(&mut self.tab))
+            .answers(self.requests.take_answers())
+            .opening(self.opening.clone())
+            .show(ui);
         self.requests.extend(shown.requests);
+        self.events.extend(shown.presets);
         match (shown.result, shown.closed) {
             (Some(result), _) => Some(DialogResult::Ok(result)),
             (None, Some(_)) => {

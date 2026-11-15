@@ -11,6 +11,7 @@ mod path_row;
 #[cfg(feature = "testing")]
 mod stories;
 
+use super::PreviewRequest;
 use crate::contract::SaveKey;
 use crate::runtime::env::Label;
 use craft_behavior::PixelSize;
@@ -55,7 +56,10 @@ craft_ui::words! {
         scale_range: "export.scaleRange" = "Scale must be within 1–1000 percent";
         pixel_range: "export.pixelRange" = "Export size must be within 1–300,000 pixels";
         no_estimate: "export.noEstimate" = "—";
+        estimating: "export.estimating" = "…";
         untitled: "export.untitled" = "Untitled";
+        preset: "export.preset" = "Preset";
+        new_preset_name: "export.newPresetName" = "Export Preset";
         /// `{size}`: the estimated file size, shown while the exact one is computed.
         estimate: template "export.estimate" = "≈ {size}";
         /// `{width}` and `{height}`: the output size in pixels.
@@ -333,8 +337,47 @@ impl ExportAsResult {
     /// Stores the settings of a dialog built with [`ExportAsDialog::remember`] for the next open. The app calls it
     /// after its export succeeds, so a failed export leaves the previous settings; without a key it does nothing.
     pub fn remember(&self, ctx: &egui::Context) {
-        let _ = (ctx, &self.remember);
-        todo!("dl.K41")
+        if let Some((key, options)) = &self.remember {
+            crate::runtime::memory::set_saved_value::<Option<ExportOptions>>(ctx, key, Some(options.clone()));
+        }
+    }
+}
+
+/// The numbering of the settings an app computes something for (a preview, a size estimate): a new revision for each
+/// change of the settings, reported once, and the rule that decides whether an answer is still wanted.
+#[derive(Clone)]
+struct Revisions<T> {
+    /// The newest revision of the settings.
+    revision: u64,
+    /// The settings `revision` numbers.
+    requested: Option<T>,
+    /// The newest revision reported by [`request`](Revisions::request).
+    taken: u64,
+}
+
+impl<T> Default for Revisions<T> {
+    fn default() -> Self {
+        Revisions { revision: 0, requested: None, taken: 0 }
+    }
+}
+
+impl<T: Clone + PartialEq> Revisions<T> {
+    /// Numbers the settings anew when they differ from the ones the newest revision stands for, and returns the request
+    /// when the revision was not reported yet.
+    fn request(&mut self, settings: &T) -> Option<PreviewRequest<T>> {
+        if self.requested.as_ref() != Some(settings) {
+            self.revision += 1;
+            self.requested = Some(settings.clone());
+        }
+        (self.revision != self.taken).then(|| {
+            self.taken = self.revision;
+            PreviewRequest::new(self.revision, settings.clone())
+        })
+    }
+
+    /// Whether an answer for `revision` is not older than the newest one reported.
+    fn adopts(&self, revision: u64) -> bool {
+        revision >= self.taken
     }
 }
 

@@ -7,6 +7,7 @@ use super::{
 use crate::contract::Bind;
 use crate::dialog::stories::{hosted, hosted_with};
 use crate::patterns::form_dialogs::PreviewState;
+use crate::patterns::presets::{GroupPath, PresetLibrary};
 use crate::primitives::TextureCache;
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -86,12 +87,43 @@ fn export_as_rendering(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(FormatOptionsDialog<'static>, covers = [], drive = Drive::Never)]
 fn jpeg_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let quality = *data.ranged("quality", 6_u8, 0.0..=12.0);
-    hosted(ui, data, quality, || HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(quality))))
+    let answer = (*data.choice("estimate", "exact", &ESTIMATES)).to_owned();
+    let open = || HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(quality)));
+    hosted_with(ui, data, (quality, answer.clone()), open, |host| {
+        let Some(dialog) = host.get_mut::<HostedFormatOptions>() else { return };
+        let Some(wanted) = dialog.wanted_estimate() else { return };
+        match answer.as_str() {
+            "none" => dialog.set_estimate(wanted.revision, None),
+            "proxy" => dialog.set_estimate(wanted.revision, Some(SizeEstimate::Proxy(ESTIMATE))),
+            "exact" => dialog.set_estimate(wanted.revision, Some(SizeEstimate::Exact(ESTIMATE))),
+            _ => {}
+        }
+    })
 }
+
+/// What the story's app answers to an estimate request: nothing yet, no estimate, one from a proxy, or the exact one.
+const ESTIMATES: [(&str, &str); 4] = [("Pending", "pending"), ("None", "none"), ("Proxy", "proxy"), ("Exact", "exact")];
 
 #[story(FormatOptionsDialog<'static>, covers = [], drive = Drive::Never)]
 fn tiff_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    hosted(ui, data, (), || HostedFormatOptions::new(ExportOptionsKind::Tiff))
+    let layered = *data.value("layered", true);
+    let transparent = *data.value("transparent", true);
+    let layer_note = *data.value("layer_note", true);
+    hosted(ui, data, (layered, transparent, layer_note), || {
+        HostedFormatOptions::new(ExportOptionsKind::Tiff).tiff_document(layered, transparent, layer_note)
+    })
+}
+
+#[story(ExportAsDialog<'static>, covers = [], drive = Drive::Never)]
+fn export_as_with_presets(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted(ui, data, (), || {
+        let mut library = PresetLibrary::new();
+        for (name, format, quality) in [("Web", "jpg", 70), ("Archive", "png", 100)] {
+            let options = ExportOptions { format: format.to_owned(), quality, ..ExportOptions::default() };
+            let _ = library.add(&GroupPath::root(), name, options);
+        }
+        HostedExportAs::new("Poster", DOCUMENT, ExportOptions::default()).presets(library)
+    })
 }
 
 #[story(FormatOptionsDialog<'static>, covers = [], drive = Drive::Never)]

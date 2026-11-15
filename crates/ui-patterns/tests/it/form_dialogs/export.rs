@@ -1,14 +1,17 @@
 //! The export dialogs' own logic: the settings a document can take and what Export As answers.
 
 use craft_behavior::PixelSize;
-use craft_ui::contract::{Bind, Role};
+use craft_ui::contract::{Bind, Role, SaveKey};
+use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
-    ExportAsDialog, ExportOptions, ExportOptionsKind, ExportSize, FormatOptions, FormatOptionsDialog, JpegOptions, OutputPathRow,
+    ExportAsDialog, ExportAsResult, ExportOptions, ExportOptionsKind, ExportSize, FormatOptions, FormatOptionsDialog, HostedExportAs,
+    HostedFormatOptions, JpegOptions, OutputPathRow, SizeEstimate,
 };
 use craft_ui::runtime::requests::PathRequest;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Key, Modifiers};
+use egui::{Key, Modifiers, Vec2};
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 fn document() -> PixelSize {
@@ -161,4 +164,115 @@ fn a_radio_row_shows_its_name_once_as_the_title_of_its_group() {
     let groups = fixture.by_role(Role::RADIO_GROUP);
     let [group] = groups.as_slice() else { panic!("one radio group") };
     assert_eq!(fixture.tree().name_of(group.node), Some("Resolution"), "the group is named by the title");
+}
+
+fn painted(fixture: &Fixture) -> Vec<String> {
+    fixture.texts().iter().map(|run| run.text.clone()).collect()
+}
+
+/// The footer note follows the answers for the current values: a request per revision, a stale answer dropped, and the
+/// last answer kept while a newer revision is pending.
+#[trial]
+fn a_format_estimate_shows_only_the_answer_for_the_current_values() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    host.borrow_mut().open(HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(6))));
+    fixture.idle(10);
+    let waiting = painted(&fixture);
+
+    let wanted = |host: &Rc<RefCell<DialogHost>>| host.borrow_mut().get_mut::<HostedFormatOptions>().and_then(HostedFormatOptions::wanted_estimate);
+    let answer = |host: &Rc<RefCell<DialogHost>>, revision: u64, estimate: Option<SizeEstimate>| {
+        if let Some(dialog) = host.borrow_mut().get_mut::<HostedFormatOptions>() {
+            dialog.set_estimate(revision, estimate);
+        }
+    };
+    let first = wanted(&host).expect("the dialog asks for an estimate of its opening values").revision;
+    fixture.idle(6);
+    assert!(wanted(&host).is_none(), "the same values are asked for once");
+
+    answer(&host, first, Some(SizeEstimate::Exact(5_000_000)));
+    fixture.idle(4);
+    let answered = painted(&fixture);
+    assert_ne!(answered, waiting, "the answer replaces the footer note that waited for it");
+
+    let sent = host
+        .borrow_mut()
+        .get_mut::<HostedFormatOptions>()
+        .map(|dialog| dialog.set_json_field(fixture.ctx(), "format", "progressive".into()));
+    assert_eq!(sent, Some(Ok(())), "the encoding is a field of the form");
+    fixture.idle(4);
+    let second = wanted(&host).expect("a changed value asks again").revision;
+    assert!(second > first, "the new request has a newer revision");
+    assert_eq!(painted(&fixture), answered, "while the new revision is pending, the last answer stays");
+
+    answer(&host, first, Some(SizeEstimate::Exact(9_000_000_000)));
+    fixture.idle(4);
+    assert_eq!(painted(&fixture), answered, "an answer for an older revision is dropped");
+
+    answer(&host, second, None);
+    fixture.idle(4);
+    let none = painted(&fixture);
+    assert_ne!(none, answered, "the answer for the current values shows");
+
+    answer(&host, first, Some(SizeEstimate::Exact(1)));
+    fixture.idle(4);
+    assert_eq!(painted(&fixture), none, "an older answer does not replace a newer one");
+}
+
+const REMEMBERED: SaveKey = SaveKey::new("test.export.remembered");
+
+/// Opens Export As over `start` with the remembered key and exports to a path.
+fn export_from(host: &Rc<RefCell<DialogHost>>, fixture: &mut Fixture, start: ExportOptions) -> ExportAsResult {
+    host.borrow_mut().open(HostedExportAs::new("Poster", document(), start).remember(REMEMBERED));
+    fixture.idle(10);
+    let export = fixture.by_label("Export…").expect("the Export button");
+    fixture.click(&export).idle(4);
+    let request = host.borrow_mut().get_mut::<HostedExportAs>().and_then(HostedExportAs::pick_path).expect("Export asks for a path");
+    if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {
+        dialog.answer_path(request.key.clone(), PathBuf::from("/tmp/poster"));
+    }
+    fixture.idle(6);
+    host.borrow_mut().take::<HostedExportAs>().and_then(DialogResult::ok).expect("the answered path finishes the dialog")
+}
+
+/// The options Export As opens with when the app gave `start`, then cancelled.
+fn opened_with(host: &Rc<RefCell<DialogHost>>, fixture: &mut Fixture, start: ExportOptions) -> ExportOptions {
+    host.borrow_mut().open(HostedExportAs::new("Poster", document(), start).remember(REMEMBERED));
+    fixture.idle(10);
+    let options = host.borrow_mut().get_mut::<HostedExportAs>().map(|dialog| dialog.options().clone()).expect("the dialog is open");
+    fixture.key(Key::Escape, Modifiers::NONE).idle(4);
+    assert!(host.borrow().is_empty(), "Escape closes the dialog");
+    options
+}
+
+/// The default options with `format` at `quality`.
+fn options(format: &str, quality: u8) -> ExportOptions {
+    let mut options = ExportOptions::default();
+    options.format = format.to_owned();
+    options.quality = quality;
+    options
+}
+
+#[trial]
+fn export_as_starts_from_its_remembered_options_and_stores_the_confirmed_ones() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    let jpeg = options("jpg", 40);
+
+    let first = export_from(&host, &mut fixture, jpeg.clone());
+    assert_eq!(first.options.format, "jpg", "nothing stored: the dialog exports what it was given");
+    assert_eq!(opened_with(&host, &mut fixture, ExportOptions::default()).format, "png", "an export not stored leaves the next open as given");
+
+    first.remember(fixture.ctx());
+    let reopened = opened_with(&host, &mut fixture, ExportOptions::default());
+    assert_eq!((reopened.format.as_str(), reopened.quality), ("jpg", 40), "the stored options replace the given ones at open");
+
+    let webp = options("webp", 55);
+    let _unstored = export_from(&host, &mut fixture, webp);
+    let again = opened_with(&host, &mut fixture, ExportOptions::default());
+    assert_eq!((again.format.as_str(), again.quality), ("jpg", 40), "a result not stored leaves the stored options as they were");
 }

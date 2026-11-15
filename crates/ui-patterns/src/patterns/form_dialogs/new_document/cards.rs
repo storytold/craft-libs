@@ -1,6 +1,6 @@
 //! The left column of New Document: the category tabs over the grid of preset cards, or the list of saved presets.
 
-use super::presets::{DEFAULT_ID, DocumentOptions, DocumentPreset, NewDocumentPresetWords, size_line};
+use super::presets::{DEFAULT_ID, DocumentOptions, DocumentPreset, NewDocumentPresetWords, PresetCategory, size_line};
 use super::{NewDocumentWords, Read, Session, Setup, background_label, depth_label, mode_label};
 use crate::buttons::{Button, ButtonOutput};
 use crate::contract::{Bind, CollectionEvent, Props as _, SelectMode, Show as _, ShowCollection as _, clicked};
@@ -28,6 +28,29 @@ pub(super) enum TabId {
     /// The presets the user saved.
     Saved,
 }
+
+impl TabId {
+    /// The id of the `tab` binding: `"recent"`, the category's id, or `"saved"`.
+    pub(super) fn key(self, categories: &[PresetCategory]) -> String {
+        match self {
+            TabId::Recent => RECENT_KEY.to_owned(),
+            TabId::Saved => SAVED_KEY.to_owned(),
+            TabId::Category(at) => categories.get(at).map_or_else(|| RECENT_KEY.to_owned(), |category| category.id.to_owned()),
+        }
+    }
+
+    /// The tab a [`key`](Self::key) names; `None` for an id no tab has.
+    pub(super) fn from_key(key: &str, categories: &[PresetCategory]) -> Option<TabId> {
+        match key {
+            RECENT_KEY => Some(TabId::Recent),
+            SAVED_KEY => Some(TabId::Saved),
+            _ => categories.iter().position(|category| category.id == key).map(TabId::Category),
+        }
+    }
+}
+
+const RECENT_KEY: &str = "recent";
+const SAVED_KEY: &str = "saved";
 
 /// A card of the grid, or a saved preset's row, ready to show and to apply.
 #[derive(Clone)]

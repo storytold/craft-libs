@@ -4,10 +4,11 @@
 
 use super::{
     ExportAsResult, ExportFormat, ExportFormatDefaults, ExportMetadata, ExportOptions, ExportPreview, ExportProfile, ExportSize, ExportWords,
-    SizeEstimate, export_file_name, size_error_label,
+    Revisions, SizeEstimate, export_file_name, size_error_label,
 };
-use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
-use crate::patterns::presets::{NamedPresetEvent, PresetLibrary};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
+use crate::patterns::form_dialogs::form::{read_bind, write_bind};
+use crate::patterns::presets::{GroupPath, NamedPresetEvent, NamedPresetRow, PickerField, PresetLibrary, PresetPicker, PresetRow, PresetState};
 use crate::runtime::requests::{HostAnswer, PathFilter, PathRequest};
 
 use crate::choice::Checkbox;
@@ -50,20 +51,18 @@ const SAVE_KEY: &str = "export";
 /// gave, the preview view and the scale edit the last pass refused.
 #[derive(Clone)]
 struct Held {
-    /// The newest revision of the settings.
-    revision: u64,
-    /// The settings `revision` numbers.
-    requested: Option<ExportOptions>,
-    /// The newest revision reported in `wanted_preview`.
-    taken: u64,
+    /// The numbering of the settings and the newest revision reported in `wanted_preview`.
+    revisions: Revisions<ExportOptions>,
     shown: Option<ExportPreview>,
     view: PreviewView,
     error: Option<SizeError>,
+    /// The view of the preset picker.
+    picker: PresetState<String>,
 }
 
 impl Default for Held {
     fn default() -> Self {
-        Held { revision: 0, requested: None, taken: 0, shown: None, view: PreviewView::fitting(), error: None }
+        Held { revisions: Revisions::default(), shown: None, view: PreviewView::fitting(), error: None, picker: PresetState::default() }
     }
 }
 
@@ -73,22 +72,9 @@ impl Held {
     fn adopt(&mut self, given: Option<&ExportPreview>) {
         let Some(given) = given else { return };
         let newest = self.shown.as_ref().map_or(0, |shown| shown.revision);
-        if given.revision >= self.taken && given.revision >= newest {
+        if self.revisions.adopts(given.revision) && given.revision >= newest {
             self.shown = Some(given.clone());
         }
-    }
-
-    /// Numbers the settings anew when they differ from the ones the newest revision stands for, and returns the request
-    /// when the revision was not reported yet.
-    fn request(&mut self, options: &ExportOptions) -> Option<PreviewRequest<ExportOptions>> {
-        if self.requested.as_ref() != Some(options) {
-            self.revision += 1;
-            self.requested = Some(options.clone());
-        }
-        (self.revision != self.taken).then(|| {
-            self.taken = self.revision;
-            PreviewRequest::new(self.revision, options.clone())
-        })
     }
 }
 
@@ -109,8 +95,8 @@ pub struct ExportAsOutput {
     /// app opens its file dialog for it, then answers with [`ExportAsDialog::answers`]. A cancelled pick leaves the
     /// dialog open.
     pub requests: HostRequests,
-    /// The saved-preset edits the user made this pass (add, rename, delete), for the app to store.
-    // P3(dialogs-w14): dl.K41, keyed by the preset's name before the event
+    /// The saved-preset edits the user made this pass (create, rename, delete), for the app to store, keyed by the
+    /// preset's name before the event.
     pub presets: Vec<NamedPresetEvent<String>>,
 }
 
@@ -164,6 +150,10 @@ pub struct ExportAsDialog<'a> {
     /// Saves the settings under `key` when the app calls [`ExportAsResult::remember`], and opens with them.
     #[prop]
     remember: Option<SaveKey>,
+    /// The settings the host opened the dialog with: what Reset restores, in place of the bound settings of the first
+    /// pass (a field edited before the dialog was first shown is not the Reset target).
+    #[prop]
+    opening: Option<ExportOptions>,
 }
 
 impl<'a> ExportAsDialog<'a> {
@@ -181,16 +171,29 @@ impl<'a> ExportAsDialog<'a> {
             saving: false,
             presets: None,
             remember: None,
+            opening: None,
         }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> ExportAsOutput {
-        let ExportAsDialog { file_name, source, bound, formats, open, defaults, preview, answers, saving, presets, remember } = self;
-        let _ = (&presets, &remember); // P3(dialogs-w14): dl.K41
+        let ExportAsDialog { file_name, source, bound, formats, open, defaults, preview, answers, saving, mut presets, remember, opening } = self;
         let env = Env::of(ui);
         let words = env.words::<ExportWords>();
-        let pass = Pass { formats: &formats, source, words: &words, sizing: env.words::<SizingWords>(), units: env.units(), defaults };
+        // A frame can run the body twice: the library lives in a cell the passes share, and `events` collects the edits
+        // of both passes (the first pass alone gets the frame's input).
+        let library = presets.as_mut().map(|bind| RefCell::new(read_bind(bind).unwrap_or_default()));
+        let events = RefCell::new(Vec::new());
+        let pass = Pass {
+            formats: &formats,
+            source,
+            words: &words,
+            sizing: env.words::<SizingWords>(),
+            units: env.units(),
+            defaults,
+            library: library.as_ref(),
+            events: &events,
+        };
 
         let reset = ResetFooter::new(ui, None, true);
         let wanted = RefCell::new(None::<PreviewRequest<ExportOptions>>);
@@ -201,9 +204,14 @@ impl<'a> ExportAsDialog<'a> {
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
+        if let Some(opening) = opening {
+            let last = remember.as_ref().and_then(|key| crate::runtime::memory::saved_value::<Option<ExportOptions>>(ui.ctx(), key));
+            dialog = dialog.opening(opened_options(opening, last, &formats, source));
+        }
         let shown = dialog.show(ui, |ui, form, values| {
             if form.first() {
-                *values = values.clone().fitted(&formats, source);
+                let last = remember.as_ref().and_then(|key| form.saved::<Option<ExportOptions>>(key).clone());
+                *values = opened_options(values.clone(), last, &formats, source);
             }
             for answer in form.take_answers() {
                 if let HostAnswer::Path { key, path } = answer
@@ -221,7 +229,7 @@ impl<'a> ExportAsDialog<'a> {
                 });
                 Stack::new().show(ui, |ui, _| pass.preview(ui, values, &mut held));
             });
-            *wanted.borrow_mut() = held.request(values);
+            *wanted.borrow_mut() = held.revisions.request(values);
             *form.memory::<Held>() = held;
             *latest.borrow_mut() = Some(values.clone());
             true
@@ -238,14 +246,21 @@ impl<'a> ExportAsDialog<'a> {
             let filters = format.map(|format| PathFilter::new(format.name, &[format.extension]));
             requests.request_path(PathRequest::save(SAVE_KEY, name, filters));
         }
-        let result = accepted.zip(answered.into_inner()).map(|(options, path)| ExportAsResult {
-            size: options.output_size(source),
-            options,
-            path,
-            remember: None,
-        });
-        ExportAsOutput { response, closed, result, wanted_preview: wanted.into_inner(), requests, presets: Vec::new() }
+        let result = accepted.zip(answered.into_inner()).map(|(options, path)| answer_of(options, source, path, remember));
+        let events = events.into_inner();
+        if !events.is_empty()
+            && let (Some(bind), Some(cell)) = (presets.as_mut(), library)
+        {
+            write_bind(bind, cell.into_inner());
+        }
+        ExportAsOutput { response, closed, result, wanted_preview: wanted.into_inner(), requests, presets: events }
     }
+}
+
+/// What Export answers with: the confirmed options, the chosen path, the output size, and the options to remember when
+/// the dialog has a key.
+fn answer_of(options: ExportOptions, source: PixelSize, path: PathBuf, remember: Option<SaveKey>) -> ExportAsResult {
+    ExportAsResult { size: options.output_size(source), remember: remember.map(|key| (key, options.clone())), options, path }
 }
 
 /// An [`ExportAsDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns. It keeps the settings and the app's
@@ -262,6 +277,8 @@ pub struct HostedExportAs {
     file_name: String,
     source: PixelSize,
     options: ExportOptions,
+    /// The settings the dialog was made with: what Reset restores, whatever automation sets before the first show.
+    opening: ExportOptions,
     formats: Vec<ExportFormat>,
     defaults: ExportFormatDefaults,
     preview: Option<ExportPreview>,
@@ -269,34 +286,44 @@ pub struct HostedExportAs {
     requests: HostRequests,
     saving: bool,
     open: bool,
+    /// The saved presets the app gave, as the user left them.
+    presets: PresetLibrary<ExportOptions>,
+    /// Whether the app gave a library: the preset row shows only then.
+    with_presets: bool,
+    /// The saved-preset edits the app has not taken yet.
+    events: Vec<NamedPresetEvent<String>>,
+    remember: Option<SaveKey>,
+    /// The path the host's save dialog answered, or automation set; Export finishes with it.
+    path: Option<PathBuf>,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
 
 impl HostedExportAs {
-    /// Opens with `library` as the saved presets.
+    /// Opens with `library` as the saved presets, which shows the preset row under Image Size.
     #[must_use]
     pub fn presets(mut self, library: PresetLibrary<ExportOptions>) -> Self {
-        let _ = (&mut self, library);
-        todo!("dl.K41")
+        self.presets = library;
+        self.with_presets = true;
+        self
     }
 
     /// Saves the settings under `key` when the app calls [`ExportAsResult::remember`], and opens with them.
     #[must_use]
     pub fn remember(mut self, key: SaveKey) -> Self {
-        let _ = (&mut self, key);
-        todo!("dl.K41")
+        self.remember = Some(key);
+        self
     }
 
     /// The saved presets as the user left them.
     pub fn saved_presets(&self) -> &PresetLibrary<ExportOptions> {
-        todo!("dl.K41")
+        &self.presets
     }
 
-    /// The saved-preset edits since the last call, for the app to store.
-    // P3(dialogs-w14): dl.K41
+    /// The saved-preset edits since the last call, for the app to store. A created preset's value is in
+    /// [`saved_presets`](Self::saved_presets) under its name.
     pub fn take_preset_events(&mut self) -> Vec<NamedPresetEvent<String>> {
-        todo!("dl.K41")
+        std::mem::take(&mut self.events)
     }
 
     /// A hosted dialog for the document named `file_name` (no extension) of size `source`, opening with `options`.
@@ -305,6 +332,7 @@ impl HostedExportAs {
             id: dialog_id(EXPORT_KEY),
             file_name: file_name.into(),
             source,
+            opening: options.clone(),
             options,
             formats: ExportFormat::standard(),
             defaults: ExportFormatDefaults::default(),
@@ -313,6 +341,11 @@ impl HostedExportAs {
             requests: HostRequests::new(),
             saving: false,
             open: true,
+            presets: PresetLibrary::new(),
+            with_presets: false,
+            events: Vec::new(),
+            remember: None,
+            path: None,
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
@@ -356,6 +389,7 @@ impl HostedExportAs {
     /// Answers the save request `key` with the chosen path, which finishes the dialog.
     pub fn answer_path(&mut self, key: impl Into<String>, path: PathBuf) {
         self.saving = false;
+        self.path = Some(path.clone());
         self.requests.answer_path(key, path);
     }
 
@@ -372,18 +406,30 @@ const EXPORT_KEY: &str = "file.exportAs";
 impl StackDialog for HostedExportAs {
     type Result = ExportAsResult;
 
-    fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        let _ = ctx;
-        todo!("dl.K41")
+    /// Answers what the save answer answers: none until a path was answered or set.
+    fn confirm(&mut self, _: &egui::Context) -> Option<Self::Result> {
+        let path = self.path.clone()?;
+        Some(answer_of(self.options.clone(), self.source, path, self.remember.clone()))
     }
 
+    /// The options by their serde keys, and the path (`path`, null until one was answered or set).
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K41")
+        let mut fields = serde_fields(&self.options)?;
+        if let serde_json::Value::Object(map) = &mut fields {
+            let path = self.path.as_ref().map_or(serde_json::Value::Null, |path| serde_json::Value::String(path.to_string_lossy().into_owned()));
+            map.insert("path".to_owned(), path);
+        }
+        Some(fields)
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K41")
+    /// Sets an option as the serde round trip takes it, or the path to a string.
+    fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        if field == "path" {
+            let path = value.as_str().filter(|path| !path.is_empty()).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+            self.path = Some(PathBuf::from(path));
+            return Ok(());
+        }
+        set_serde_field(&mut self.options, field, value)
     }
 
     fn id(&self) -> DialogId {
@@ -398,6 +444,9 @@ impl StackDialog for HostedExportAs {
             answers: self.requests.take_answers(),
             saving: self.saving,
             open: Some(Bind::bound(&mut self.open)),
+            presets: self.with_presets.then(|| Bind::bound(&mut self.presets)),
+            remember: self.remember.clone(),
+            opening: Some(self.opening.clone()),
             ..ExportAsDialog::new(self.file_name.clone(), self.source, Bind::bound(&mut self.options))
         };
         let mut shown = dialog.show(ui);
@@ -405,6 +454,7 @@ impl StackDialog for HostedExportAs {
         {
             self.facts = crate::contract::Outcome::story_facts(&shown);
         }
+        self.events.extend(std::mem::take(&mut shown.presets));
         if let Some(wanted) = shown.wanted_preview {
             self.wanted = Some(wanted);
         }
@@ -436,6 +486,12 @@ impl StackDialog for HostedExportAs {
     }
 }
 
+/// The settings the dialog opens with: the remembered ones when there are any, else `base`, fitted to the formats and
+/// the source.
+fn opened_options(base: ExportOptions, last: Option<ExportOptions>, formats: &[ExportFormat], source: PixelSize) -> ExportOptions {
+    last.unwrap_or(base).fitted(formats, source)
+}
+
 /// What the rows read besides the dialog's state.
 struct Pass<'p> {
     formats: &'p [ExportFormat],
@@ -444,6 +500,10 @@ struct Pass<'p> {
     sizing: std::sync::Arc<SizingWords>,
     units: Units,
     defaults: ExportFormatDefaults,
+    /// The bound saved presets; `None` shows no preset row.
+    library: Option<&'p RefCell<PresetLibrary<ExportOptions>>>,
+    /// Each preset edit of the frame.
+    events: &'p RefCell<Vec<NamedPresetEvent<String>>>,
 }
 
 impl Pass<'_> {
@@ -496,6 +556,58 @@ impl Pass<'_> {
             .strength(HeaderStrength::Caption)
             .id_salt("size")
             .show(ui, |ui, _| self.size(ui, options, held, format));
+        if let Some(library) = self.library {
+            self.preset_row(ui, options, held, library);
+        }
+    }
+
+    /// The preset row under Image Size: a pick applies the preset's options, and each new, renamed or deleted preset
+    /// is made in the library and reported in `events`, keyed by the preset's name before the event.
+    fn preset_row(&self, ui: &mut Ui, options: &mut ExportOptions, held: &mut Held, library: &RefCell<PresetLibrary<ExportOptions>>) {
+        let words = self.words;
+        let shown = {
+            let presets = library.borrow();
+            let rows: Vec<PresetRow<String>> = presets.items().iter().map(|item| PresetRow::item(item.name.clone(), item.name.clone(), 0)).collect();
+            let current = presets.items().iter().find(|item| item.value == *options).map(|item| item.name.clone());
+            let picker = PresetPicker::new(words.preset.clone(), Bind::given(current), &rows, Bind::bound(&mut held.picker)).field(PickerField::Name);
+            NamedPresetRow::new(words.preset.clone(), picker)
+                .suggest_name(words.new_preset_name.as_str().to_owned())
+                .check_name(|typed| presets.name_error(typed))
+                .show(ui)
+        };
+        for event in shown.events {
+            let mut presets = library.borrow_mut();
+            let id_of = |presets: &PresetLibrary<ExportOptions>, name: &str| presets.items().iter().find(|item| item.name == name).map(|item| item.id);
+            match event {
+                NamedPresetEvent::Apply(name) => {
+                    if let Some(item) = presets.items().into_iter().find(|item| item.name == name) {
+                        *options = item.value.clone().fitted(self.formats, self.source);
+                        held.error = None;
+                    }
+                }
+                NamedPresetEvent::Create { name } => {
+                    if let Ok(id) = presets.add(&GroupPath::root(), &name, options.clone()) {
+                        let stored = presets.get(id).map_or(name, |item| item.name.clone());
+                        self.events.borrow_mut().push(NamedPresetEvent::Create { name: stored });
+                    }
+                }
+                NamedPresetEvent::Rename { key, text } => {
+                    if let Some(id) = id_of(&presets, &key)
+                        && presets.rename(id, &text).is_ok()
+                    {
+                        self.events.borrow_mut().push(NamedPresetEvent::Rename { key, text });
+                    }
+                }
+                NamedPresetEvent::Delete(name) => {
+                    if let Some(id) = id_of(&presets, &name)
+                        && presets.delete(id).is_ok()
+                    {
+                        self.events.borrow_mut().push(NamedPresetEvent::Delete(name));
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// The format list picked `index`: the format takes the app's default quality (and WebP mode).
