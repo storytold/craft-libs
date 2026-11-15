@@ -613,6 +613,11 @@ pub(crate) fn edit_chords(ctx: &Context) -> Arc<[(EditCommand, Chord)]> {
     with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.edit_chords)).unwrap_or_default())
 }
 
+/// The bindings the window's keymap gives `command`; none before the first frame builds one.
+pub(crate) fn bindings(ctx: &Context, command: &CommandRef) -> Vec<craft_keymap::Binding> {
+    with(ctx, |board| board.keymap.as_ref().map(|cache| cache.keymap.bindings(command)).unwrap_or_default())
+}
+
 /// The chords bound to the window's keys, which the input hook takes before any component.
 pub(crate) fn window_shortcuts(ctx: &Context) -> Arc<[(WindowShortcut, Chord)]> {
     with(ctx, |board| board.keymap.as_ref().map(|cache| Arc::clone(&cache.window_shortcuts)).unwrap_or_default())

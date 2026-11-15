@@ -442,6 +442,12 @@ pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand
     board::resolve_global(ctx, &command.into())
 }
 
+/// The keys `command` has in the runtime's keymap: its defaults under the user's overrides (`CommandInput`), on the
+/// window's platform, double presses included. Empty before the first frame.
+pub fn bindings(ctx: &Context, command: &CommandRef) -> Vec<Binding> {
+    board::bindings(ctx, command)
+}
+
 /// `command` as [`resolve`] shows it, from the window under the modal layer whose body is running, as that window is
 /// once the layer closes: for a surface that closes before its command runs (the command palette), whose own layer
 /// does not block the command. Outside a modal layer it is [`resolve`].
