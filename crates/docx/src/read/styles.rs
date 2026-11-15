@@ -321,9 +321,9 @@ impl Reader<'_> {
                 // Word counts a part for the table's bands by anything in these, even what isn't
                 // kept here: an empty one or a `w:tblPr` doesn't make it count.
                 let stated = ["w:pPr", "w:rPr", "w:trPr", "w:tcPr"].iter().any(|n| c.child(n).is_some_and(|e| e.els().next().is_some()));
-                let bare = f.is_empty();
+                // What's left once stored: a total row's empty borders aren't kept.
                 t.set_part(part, f);
-                if stated && bare {
+                if stated && t.part(part).is_empty() {
                     t.parts_present.insert(part);
                 }
             }
