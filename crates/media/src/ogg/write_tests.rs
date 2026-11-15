@@ -128,6 +128,16 @@ fn page_targets_bound_page_size_and_finish_marks_the_end_once() {
     let mut f = w.header(&opus_head(0));
     f.extend(w.finish(Some(0)));
     assert!(open(&f).unwrap().streams[0].saw_eos);
+    // A flushed last packet cannot be trimmed: the empty end page keeps its granule.
+    let mut w = PageWriter::new(1);
+    let mut f = w.header(&opus_head(312));
+    f.extend(w.header(&opus_tags("t", &[])));
+    f.extend(w.packet(&[0xFC; 40], 960));
+    f.extend(w.flush());
+    f.extend(w.finish(Some(500)));
+    let s = &open(&f).unwrap().streams[0];
+    assert!(s.saw_eos);
+    assert_eq!(s.last_granule, Some(960));
 }
 
 #[test]

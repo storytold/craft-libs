@@ -128,8 +128,10 @@ pub struct Encoder {
     floor: Floor1,
     mdct: Mdct,
     window: Vec<f32>,
-    /// Input not yet past a block, per channel, starting at the next block's first sample.
+    /// Input not yet past a block, per channel; the next block starts at `start`.
     pending: Vec<Vec<f32>>,
+    /// Read cursor into `pending`: consumed hops are dropped once per call, not per block.
+    start: usize,
     samples_in: u64,
     blocks: u64,
     finished: bool,
@@ -171,6 +173,7 @@ impl Encoder {
             window: mdct::window(BLOCK),
             // the first block is centred on sample 0: the decoder's first output is input sample 0
             pending: vec![vec![0.0; HOP]; cfg.channels],
+            start: 0,
             samples_in: 0,
             blocks: 0,
             finished: false,
@@ -301,6 +304,7 @@ impl Encoder {
         // block k ends output at k·HOP: blocks 0..=ceil(len / HOP)
         let blocks = self.samples_in.div_ceil(HOP as u64) + 1;
         let missing = blocks.saturating_sub(self.blocks) as usize;
+        self.compact();
         let need = (missing + 1) * HOP;
         for b in self.pending.iter_mut() {
             if b.len() < need {
@@ -316,13 +320,22 @@ impl Encoder {
 
     fn drain(&mut self) -> Result<Vec<(Vec<u8>, i64)>> {
         let mut out = Vec::new();
-        while self.pending.first().is_some_and(|b| b.len() >= BLOCK) {
+        while self.pending.first().is_some_and(|b| b.len().saturating_sub(self.start) >= BLOCK) {
             out.push(self.block()?);
         }
+        self.compact();
         Ok(out)
     }
 
-    /// Encodes the block at the front of `pending` and advances by a hop.
+    /// Drops the hops already encoded from the front of every channel buffer.
+    fn compact(&mut self) {
+        for b in self.pending.iter_mut() {
+            b.drain(..self.start.min(b.len()));
+        }
+        self.start = 0;
+    }
+
+    /// Encodes the block at `start` in `pending` and advances by a hop.
     fn block(&mut self) -> Result<(Vec<u8>, i64)> {
         let ch = self.cfg.channels;
         let mut w = BitWriter::new();
@@ -334,7 +347,7 @@ impl Encoder {
         let mut x = vec![0f32; BLOCK];
         let mut coeffs = vec![0f32; HOP];
         for c in 0..ch {
-            let src = self.pending.get(c).ok_or(Error::Internal("channel buffer"))?;
+            let src = self.pending.get(c).and_then(|b| b.get(self.start..)).ok_or(Error::Internal("channel buffer"))?;
             for (i, v) in x.iter_mut().enumerate() {
                 *v = src.get(i).copied().unwrap_or(0.0).clamp(-8.0, 8.0) * self.window[i];
             }
@@ -365,9 +378,7 @@ impl Encoder {
             let natural = self.blocks.saturating_mul(HOP as u64);
             if self.finished { natural.min(self.samples_in) } else { natural }
         };
-        for b in self.pending.iter_mut() {
-            b.drain(..HOP.min(b.len()));
-        }
+        self.start += HOP;
         self.blocks += 1;
         Ok((w.finish(), i64::try_from(granule).unwrap_or(i64::MAX)))
     }

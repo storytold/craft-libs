@@ -2,6 +2,9 @@
 
 #![allow(clippy::unwrap_used)]
 
+use std::path::Path;
+use std::process::Command;
+
 use super::book::{BitWriter, assign_codewords, float32_pack};
 use super::{BLOCK, Encoder, EncoderConfig, HOP, partition_size};
 
@@ -104,6 +107,18 @@ fn comment() -> Vec<u8> {
 }
 
 /// Encodes `input` (planar) and decodes it with ffmpeg's `decoder`; returns the planar output.
+/// ffmpeg's decoders to check: its own `vorbis` always, and `libvorbis` when ffmpeg has it.
+fn decoders(ff: &Path) -> Vec<&'static str> {
+    let list =
+        Command::new(ff).args(["-hide_banner", "-decoders"]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    if list.lines().any(|l| l.split_whitespace().nth(1) == Some("libvorbis")) {
+        vec!["vorbis", "libvorbis"]
+    } else {
+        eprintln!("SKIPPED (libvorbis decoder): this ffmpeg has no libvorbis; checking its own decoder only");
+        vec!["vorbis"]
+    }
+}
+
 fn round_trip(input: &[Vec<f32>], rate: u32, quality: f32, decoder: &str, name: &str) -> Option<(Vec<Vec<f32>>, usize)> {
     let ff = craft_media_testkit::ffmpeg_or_skip("vorbis oracle")?;
     let mut e = Encoder::new(EncoderConfig::new(rate, input.len(), quality)).unwrap();
@@ -121,7 +136,7 @@ fn round_trip(input: &[Vec<f32>], rate: u32, quality: f32, decoder: &str, name: 
     let dir = craft_media_testkit::fixtures_dir("audio/vorbis-encoder");
     let path = dir.join(format!("{name}.ogg"));
     std::fs::write(&path, ogg(&packets)).unwrap();
-    let out = std::process::Command::new(ff)
+    let out = Command::new(ff)
         .args(["-v", "error", "-xerror", "-c:a", decoder, "-i"])
         .arg(&path)
         .args(["-f", "f32le", "-c:a", "pcm_f32le", "-"])
@@ -189,6 +204,7 @@ type Case = (&'static str, Vec<Vec<f32>>, [(f32, f64, std::ops::Range<usize>); 5
 
 #[test]
 fn ffmpeg_decodes_every_quality() {
+    let Some(ff) = craft_media_testkit::ffmpeg_or_skip("vorbis oracle") else { return };
     let n = 48_000 * 3;
     let cases: [Case; 2] = [
         (
@@ -204,7 +220,7 @@ fn ffmpeg_decodes_every_quality() {
     ];
     for (name, input, levels) in &cases {
         for (q, floor, kbps) in levels {
-            for decoder in ["vorbis", "libvorbis"] {
+            for decoder in decoders(&ff) {
                 let Some((out, bytes)) = round_trip(input, 48_000, *q, decoder, &format!("{name}{q}")) else { return };
                 assert!(out.iter().all(|c| c.len() == n), "{name} q{q} {decoder}: length {}", out[0].len());
                 let snr = snr_db(&input[0][4096..], &out[0][4096..]);
@@ -220,13 +236,14 @@ fn ffmpeg_decodes_every_quality() {
 /// residue partition from channel 0); a silent channel costs one bit per block.
 #[test]
 fn channel_counts_and_rates() {
+    let Some(ff) = craft_media_testkit::ffmpeg_or_skip("vorbis oracle") else { return };
     let n = 44_100;
     for (rate, ch) in [(44_100u32, 1usize), (22_050, 2), (48_000, 3), (48_000, 6), (48_000, 7)] {
         let mut input: Vec<Vec<f32>> = (0..ch).map(|c| chords(n, c as u32 + 1).iter().map(|v| v * (1.0 - 0.1 * c as f32)).collect()).collect();
         if ch == 6 {
             input[3] = vec![0.0; n];
         }
-        for decoder in ["vorbis", "libvorbis"] {
+        for decoder in decoders(&ff) {
             let Some((mut out, _)) = round_trip(&input, rate, 5.0, decoder, &format!("ch{ch}_{rate}_{decoder}")) else { return };
             if decoder == "vorbis" {
                 // ffmpeg's decoder gives WAV order (5.1: FL FR FC LFE BL BR); the stream is in Vorbis

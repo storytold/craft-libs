@@ -359,8 +359,9 @@ The encoder takes 48 kHz only, and craft-audio has no resampler.
 Opus goes into Ogg, Matroska/WebM or MP4:
 
 - **Ogg (`.opus`):** `craft_media::ogg::PageWriter` with `head` and `opus_tags` as the two header
-  packets, each packet's granule position the samples so far plus the pre-skip, and
-  `finish(Some(pre_skip + length))` to trim the end (RFC 7845 §4).
+  packets, each packet's granule position the samples decoded so far (pre-skip included, as
+  the input above starts with it), and `finish(Some(pre_skip + length))` to trim the end
+  (RFC 7845 §4).
 
 - **Matroska/WebM:** `head` is the track's `CodecPrivate`, and the pre-skip goes in
   `TrackSpec::codec_delay_ns` (in nanoseconds at 48 kHz). The Matroska muxer cannot write

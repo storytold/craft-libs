@@ -96,13 +96,17 @@ impl PageWriter {
 
     /// Ends the stream: the pending page (or an empty page when nothing is pending) with the
     /// end-of-stream flag. `last_granule` replaces the granule position of the final page (Ogg
-    /// Opus end trimming); `None` keeps the last packet's.
+    /// Opus end trimming) when a packet is pending; `None` keeps the last packet's. End trimming
+    /// applies only to packets completed on the last page (RFC 7845 §4.4), so do not
+    /// [`Self::flush`] the last packet before finishing.
     pub fn finish(&mut self, last_granule: Option<i64>) -> Vec<u8> {
         let mut out = Vec::new();
         if self.finished {
             return out;
         }
-        if let Some(g) = last_granule {
+        if let Some(g) = last_granule
+            && !self.lacing.is_empty()
+        {
             self.granule = Some(g);
         }
         self.emit(&mut out, true);

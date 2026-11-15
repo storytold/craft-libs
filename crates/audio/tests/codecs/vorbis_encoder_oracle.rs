@@ -33,6 +33,18 @@ fn ffmpeg_decode(ff: &Path, decoder: &str, file: &[u8], channels: usize, tag: &s
     (0..channels).map(|c| pcm.iter().skip(c).step_by(channels).copied().collect()).collect()
 }
 
+/// ffmpeg's decoders to check: its own `vorbis` always, and `libvorbis` when ffmpeg has it.
+fn decoders(ff: &Path) -> Vec<&'static str> {
+    let list =
+        Command::new(ff).args(["-hide_banner", "-decoders"]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    if list.lines().any(|l| l.split_whitespace().nth(1) == Some("libvorbis")) {
+        vec!["vorbis", "libvorbis"]
+    } else {
+        eprintln!("SKIPPED (libvorbis decoder): this ffmpeg has no libvorbis; checking its own decoder only");
+        vec!["vorbis"]
+    }
+}
+
 fn correlation(a: &[f32], b: &[f32]) -> f64 {
     let (mut ab, mut aa, mut bb) = (0f64, 0f64, 0f64);
     for (&x, &y) in a.iter().zip(b) {
@@ -58,7 +70,7 @@ fn every_channel_count_decodes_on_the_right_speakers() {
         let buf = tones(48_000, channels.into(), 24_000 + 77);
         let opts = EncodeOptions::new(EncodeFormat::Ogg).with_layout(layout).with_quality(0.6);
         let file = encode(&buf, &opts).unwrap();
-        for decoder in ["vorbis", "libvorbis"] {
+        for decoder in decoders(&ff) {
             let out = ffmpeg_decode(&ff, decoder, &file, channels.into(), &format!("tones{channels}-{decoder}"));
             for (j, got) in out.iter().enumerate() {
                 let c = if decoder == "libvorbis" { VORBIS_ORDER[usize::from(channels) - 1][j] } else { j };
@@ -106,7 +118,7 @@ fn quality_extremes_and_rates_decode_exactly() {
     for (rate, channels, quality) in [(44_100u32, 1usize, -1.0f32), (44_100, 1, 10.0), (22_050, 2, -1.0), (22_050, 2, 10.0), (96_000, 2, 5.0)] {
         let buf = tones(rate, channels, rate as usize / 2 + 13);
         let file = encode_ogg_vorbis(&buf, &OggVorbisOptions::new(quality)).unwrap();
-        for decoder in ["vorbis", "libvorbis"] {
+        for decoder in decoders(&ff) {
             let out = ffmpeg_decode(&ff, decoder, &file, channels, &format!("q{quality}-{rate}-{channels}-{decoder}"));
             assert!(out.iter().all(|c| c.len() == buf.frames()), "q{quality} {rate} Hz {decoder}: {}", out[0].len());
             let r = correlation(&buf.channels[0][2048..], &out[0][2048..]);
