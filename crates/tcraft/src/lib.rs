@@ -24,6 +24,8 @@ pub enum Error {
     Invalid(String),
     #[error("TCTX version {0} is newer than supported")]
     NewerVersion(u32),
+    #[error("TCTX budget: {0}")]
+    Budget(#[from] craft_zip::Exceeded),
     #[error("TCTX limit: {0}")]
     Limit(String),
     #[error("TCTX I/O: {0}")]
@@ -45,10 +47,10 @@ struct Header {
 }
 
 fn charge(budget: &mut Budget, n: u64) -> Result<(), Error> {
-    budget.charge(n).map_err(|e| Error::Limit(e.to_string()))
+    budget.charge(n).map_err(Error::from)
 }
 
-fn read_header(reader: &mut impl Read, budget: &mut Budget) -> Result<Header, Error> {
+fn read_header(reader: &mut (impl Read + ?Sized), budget: &mut Budget) -> Result<Header, Error> {
     charge(budget, HEADER_BYTES)?;
     let mut bytes = [0u8; HEADER_BYTES as usize];
     reader.read_exact(&mut bytes)?;
@@ -63,7 +65,7 @@ fn read_header(reader: &mut impl Read, budget: &mut Budget) -> Result<Header, Er
     Ok(Header { layout: Layout { width: word(2), height: word(3), components: word(4) as usize }, count: word(5) })
 }
 
-fn write_header(writer: &mut impl Write, layout: Layout, count: u32) -> Result<(), Error> {
+fn write_header(writer: &mut (impl Write + ?Sized), layout: Layout, count: u32) -> Result<(), Error> {
     let components = u32::try_from(layout.components).map_err(|_| Error::Limit("too many components".into()))?;
     writer.write_all(MAGIC)?;
     for value in [VERSION, layout.width, layout.height, components, count] {
@@ -72,7 +74,7 @@ fn write_header(writer: &mut impl Write, layout: Layout, count: u32) -> Result<(
     Ok(())
 }
 
-fn expect_end(reader: &mut impl Read) -> Result<(), Error> {
+fn expect_end(reader: &mut (impl Read + ?Sized)) -> Result<(), Error> {
     let mut byte = [0u8; 1];
     if reader.read(&mut byte)? != 0 {
         return Err(Error::Invalid("trailing data".into()));
@@ -93,12 +95,17 @@ fn tile_dimensions(layout: Layout) -> Result<(u32, u32, usize), Error> {
 /// Decode tiles one at a time, transferring each tile to the callback.
 /// Positions and duplicate tiles are checked before delivery; the entry must end exactly.
 pub fn read_tiles(
-    reader: &mut impl Read,
+    reader: &mut (impl Read + ?Sized),
     expected: Layout,
+    max_texels: u64,
     budget: &mut Budget,
     mut tile: impl FnMut(u32, u32, Vec<u16>) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let header = read_header(reader, budget)?;
+    let texels = u64::from(expected.width) * u64::from(expected.height);
+    if texels == 0 || texels > max_texels {
+        return Err(Error::Limit("tile image exceeds its texel limit".into()));
+    }
     if header.layout != expected {
         return Err(Error::Invalid("tile layout differs from the project".into()));
     }
@@ -136,7 +143,7 @@ pub fn read_tiles(
 /// Write tiles in caller order, without buffering the image. A failure may leave a partial
 /// entry; callers writing a project should discard the incomplete output.
 pub fn write_tiles<'a>(
-    writer: &mut impl Write,
+    writer: &mut (impl Write + ?Sized),
     layout: Layout,
     count: u32,
     tiles: impl IntoIterator<Item = (u32, u32, &'a [u16])>,
@@ -173,7 +180,7 @@ pub fn write_tiles<'a>(
 
 /// Read a dense f32 map, validating declared size and charging its shared budget first.
 pub fn read_baked(
-    reader: &mut impl Read,
+    reader: &mut (impl Read + ?Sized),
     declared_bytes: u64,
     components: usize,
     max_texels: u64,
@@ -188,7 +195,7 @@ pub fn read_baked(
     let count = texels.checked_mul(components as u64).ok_or_else(|| Error::Limit("too many map values".into()))?;
     let payload = count.checked_mul(4).ok_or_else(|| Error::Limit("map is too large".into()))?;
     if declared_bytes != HEADER_BYTES.checked_add(payload).ok_or_else(|| Error::Limit("map is too large".into()))? {
-        return Err(Error::Invalid("declared map size differs from its dimensions".into()));
+        return Err(Error::Invalid(format!("{declared_bytes} bytes for a {}×{}×{} map", layout.width, layout.height, layout.components)));
     }
     charge(budget, payload)?;
     let count = usize::try_from(count).map_err(|_| Error::Limit("too many map values".into()))?;
@@ -209,7 +216,7 @@ pub fn read_baked(
 }
 
 /// Write a dense f32 map in bounded chunks without constructing a second copy of its payload.
-pub fn write_baked(writer: &mut impl Write, layout: Layout, values: &[f32]) -> Result<(), Error> {
+pub fn write_baked(writer: &mut (impl Write + ?Sized), layout: Layout, values: &[f32]) -> Result<(), Error> {
     let count = u64::from(layout.width).checked_mul(u64::from(layout.height)).and_then(|n| n.checked_mul(layout.components as u64));
     if layout.width == 0 || layout.height == 0 || layout.components == 0 || count != Some(values.len() as u64) {
         return Err(Error::Invalid("map dimensions differ from its data".into()));
@@ -277,7 +284,7 @@ mod tests {
         let mut budget = Budget::new("project", 100);
         assert!(read_baked(&mut Cursor::new(&bytes), 999, 1, 4, &mut budget).is_err());
         let mut budget = Budget::new("project", 39);
-        assert!(matches!(read_baked(&mut Cursor::new(&bytes), 40, 1, 4, &mut budget), Err(Error::Limit(_))));
+        assert!(matches!(read_baked(&mut Cursor::new(&bytes), 40, 1, 4, &mut budget), Err(Error::Budget(_))));
         let mut extra = bytes.clone();
         extra.push(0);
         let mut budget = Budget::new("project", 100);
@@ -287,22 +294,26 @@ mod tests {
     #[test]
     fn hostile_headers_and_tiles_are_rejected_without_trusting_counts() {
         let layout = Layout { width: 64, height: 64, components: 1 };
+        assert!(matches!(
+            read_tiles(&mut Cursor::new(header(layout, 0)), layout, 4095, &mut Budget::new("project", 100), |_, _, _| Ok(())),
+            Err(Error::Limit(_))
+        ));
         let mut bad_magic = header(layout, 0);
         bad_magic[0] = b'X';
-        assert!(read_tiles(&mut Cursor::new(bad_magic), layout, &mut Budget::new("project", 100), |_, _, _| Ok(())).is_err());
-        assert!(read_tiles(&mut Cursor::new(header(layout, 2)), layout, &mut Budget::new("project", 100), |_, _, _| Ok(())).is_err());
+        assert!(read_tiles(&mut Cursor::new(bad_magic), layout, u64::MAX, &mut Budget::new("project", 100), |_, _, _| Ok(())).is_err());
+        assert!(read_tiles(&mut Cursor::new(header(layout, 2)), layout, u64::MAX, &mut Budget::new("project", 100), |_, _, _| Ok(())).is_err());
         let other = Layout { width: 65, ..layout };
-        assert!(read_tiles(&mut Cursor::new(header(layout, 0)), other, &mut Budget::new("project", 100), |_, _, _| Ok(())).is_err());
+        assert!(read_tiles(&mut Cursor::new(header(layout, 0)), other, u64::MAX, &mut Budget::new("project", 100), |_, _, _| Ok(())).is_err());
         let mut outside = header(layout, 1);
         outside.extend_from_slice(&1u32.to_le_bytes());
         outside.extend_from_slice(&0u32.to_le_bytes());
-        assert!(read_tiles(&mut Cursor::new(outside), layout, &mut Budget::new("project", 10_000), |_, _, _| Ok(())).is_err());
+        assert!(read_tiles(&mut Cursor::new(outside), layout, u64::MAX, &mut Budget::new("project", 10_000), |_, _, _| Ok(())).is_err());
         let mut truncated = header(layout, 1);
         truncated.extend_from_slice(&[0; 8]);
-        assert!(read_tiles(&mut Cursor::new(truncated), layout, &mut Budget::new("project", 10_000), |_, _, _| Ok(())).is_err());
+        assert!(read_tiles(&mut Cursor::new(truncated), layout, u64::MAX, &mut Budget::new("project", 10_000), |_, _, _| Ok(())).is_err());
         let mut extra = header(layout, 0);
         extra.push(1);
-        assert!(read_tiles(&mut Cursor::new(extra), layout, &mut Budget::new("project", 100), |_, _, _| Ok(())).is_err());
+        assert!(read_tiles(&mut Cursor::new(extra), layout, u64::MAX, &mut Budget::new("project", 100), |_, _, _| Ok(())).is_err());
     }
 
     #[test]
@@ -324,7 +335,7 @@ mod tests {
         assert!(write_tiles(&mut Vec::new(), layout, 2, [(0, 0, first.as_slice())]).is_err());
         let mut seen = Vec::new();
         let mut budget = Budget::new("project", bytes.len() as u64);
-        read_tiles(&mut Cursor::new(&bytes), layout, &mut budget, |x, y, tile| {
+        read_tiles(&mut Cursor::new(&bytes), layout, u64::MAX, &mut budget, |x, y, tile| {
             seen.push((x, y, tile.first().copied()));
             Ok(())
         })
@@ -333,10 +344,10 @@ mod tests {
         let mut duplicate = bytes.clone();
         let second = HEADER_BYTES as usize + 8 + TILE_AREA * 2;
         duplicate[second..second + 4].copy_from_slice(&0u32.to_le_bytes());
-        assert!(read_tiles(&mut Cursor::new(duplicate), layout, &mut Budget::new("project", u64::MAX), |_, _, _| Ok(())).is_err());
+        assert!(read_tiles(&mut Cursor::new(duplicate), layout, u64::MAX, &mut Budget::new("project", u64::MAX), |_, _, _| Ok(())).is_err());
         assert!(matches!(
-            read_tiles(&mut Cursor::new(bytes), layout, &mut Budget::new("project", HEADER_BYTES), |_, _, _| Ok(())),
-            Err(Error::Limit(_))
+            read_tiles(&mut Cursor::new(bytes), layout, u64::MAX, &mut Budget::new("project", HEADER_BYTES), |_, _, _| Ok(())),
+            Err(Error::Budget(_))
         ));
     }
 }
