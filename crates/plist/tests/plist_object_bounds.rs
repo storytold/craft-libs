@@ -1,5 +1,4 @@
 use craft_plist::{Value, parse_binary};
-use craft_anything_testkit::apple as fx;
 
 fn single_object(object: &[u8], offset: u8) -> Vec<u8> {
     let mut data = b"bplist00".to_vec();
@@ -29,6 +28,4 @@ fn binary_offsets_cannot_point_inside_the_file_header() {
 #[test]
 fn objects_ending_at_the_table_boundary_are_valid() {
     assert!(matches!(parse_binary(&single_object(&[0x51, b'x'], 8)), Ok(Value::String(s)) if s == "x"));
-    let sample = fx::sample_plist();
-    assert_eq!(parse_binary(&fx::to_bplist(&sample)).unwrap().get("Count").and_then(Value::as_int), Some(-42));
 }

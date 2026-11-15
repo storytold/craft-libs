@@ -1,8 +1,4 @@
-use crate::{FormatError, bytes::Reader};
-
-pub const MAX_DEPTH: usize = 256;
-pub const MAX_NODES: usize = 2_000_000;
-pub const MAX_EXPANDED_BYTES: usize = 64 << 20;
+use crate::{FormatError, Limits, bytes::Reader};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -61,7 +57,6 @@ impl Value {
             _ => None,
         }
     }
-
 }
 struct Bin<'a> {
     r: Reader<'a>,
@@ -70,19 +65,23 @@ struct Bin<'a> {
     nodes: usize,
     /// Data and text bytes still allowed to be copied out.
     bytes_left: usize,
+    limits: Limits,
 }
 
 /// Parse a `bplist00` binary property list.
 pub fn parse_binary(data: &[u8]) -> Result<Value, FormatError> {
-    parse_binary_within(data, MAX_EXPANDED_BYTES.max(data.len().saturating_mul(3)))
+    parse_binary_with_limits(data, Limits::default())
 }
 
-/// Parse a binary property list, producing at most `byte_budget` bytes of data and decoded text.
-fn parse_binary_within(data: &[u8], byte_budget: usize) -> Result<Value, FormatError> {
+/// Parse a binary property list, with caller-selected input, object, expansion and nesting limits.
+pub fn parse_binary_with_limits(data: &[u8], limits: Limits) -> Result<Value, FormatError> {
+    if data.len() > limits.max_input_bytes {
+        return Err(FormatError::TooLarge("input bytes".into()));
+    }
     if !data.starts_with(b"bplist") {
         return Err(FormatError::Malformed("not a binary plist".into()));
     }
-    if !data.starts_with(b"bplist0") {
+    if !data.starts_with(b"bplist00") {
         return Err(FormatError::Unsupported("unknown binary plist version".into()));
     }
     let len = data.len();
@@ -104,11 +103,14 @@ fn parse_binary_within(data: &[u8], byte_budget: usize) -> Result<Value, FormatE
     if num == 0 || num > len {
         return Err(FormatError::Malformed(format!("{num} objects in a {len}-byte file")));
     }
+    if num > limits.max_objects {
+        return Err(FormatError::TooLarge("object count".into()));
+    }
     let need = num.checked_mul(off_size).and_then(|n| n.checked_add(table)).ok_or_else(|| FormatError::Malformed("offset table".into()))?;
     if need > t || table < 8 {
         return Err(FormatError::Truncated("offset table runs past the trailer".into()));
     }
-    let mut offsets = Vec::with_capacity(num);
+    let mut offsets = reserved(num)?;
     for i in 0..num {
         let o = read_be(&r, table + i * off_size, off_size).ok_or_else(|| FormatError::Truncated("offset table".into()))?;
         let o = usize::try_from(o).map_err(|_| FormatError::Malformed("object offset".into()))?;
@@ -120,8 +122,8 @@ fn parse_binary_within(data: &[u8], byte_budget: usize) -> Result<Value, FormatE
     let top = usize::try_from(top).map_err(|_| FormatError::Malformed("top object".into()))?;
     // Object payloads and references must not borrow bytes from the offset table or trailer.
     let objects = data.get(..table).ok_or_else(|| FormatError::Truncated("object area".into()))?;
-    let mut b = Bin { r: Reader::new(objects), offsets, ref_size, nodes: 0, bytes_left: byte_budget };
-    let mut stack = Vec::new();
+    let mut b = Bin { r: Reader::new(objects), offsets, ref_size, nodes: 0, bytes_left: limits.max_expanded_bytes, limits };
+    let mut stack = reserved(limits.max_depth.min(256))?;
     b.object(top, &mut stack)
 }
 
@@ -169,10 +171,10 @@ impl Bin<'_> {
         usize::try_from(v).map_err(|_| FormatError::Malformed("reference".into()))
     }
 
-    /// Refuse a container whose `children` would pass MAX_NODES, before space is reserved for them.
+    /// Refuse a container whose `children` would pass the node limit, before space is reserved for them.
     fn room_for_nodes(&self, children: usize) -> Result<(), FormatError> {
-        if children > MAX_NODES.saturating_sub(self.nodes) {
-            return Err(FormatError::TooLarge(format!("more than {MAX_NODES} plist nodes")));
+        if children > self.limits.max_nodes.saturating_sub(self.nodes) {
+            return Err(FormatError::TooLarge("expanded node count".into()));
         }
         Ok(())
     }
@@ -187,10 +189,10 @@ impl Bin<'_> {
     /// Read object `idx`. `stack` holds the containers on the current path, so a cycle is refused.
     fn object(&mut self, idx: usize, stack: &mut Vec<usize>) -> Result<Value, FormatError> {
         self.nodes += 1;
-        if self.nodes > MAX_NODES {
-            return Err(FormatError::TooLarge(format!("more than {MAX_NODES} plist nodes")));
+        if self.nodes > self.limits.max_nodes {
+            return Err(FormatError::TooLarge("expanded node count".into()));
         }
-        if stack.len() >= MAX_DEPTH {
+        if stack.len() >= self.limits.max_depth.min(256) {
             return Err(FormatError::Malformed("nesting too deep".into()));
         }
         if stack.contains(&idx) {
@@ -227,18 +229,32 @@ impl Bin<'_> {
                 };
                 Value::Real(v.ok_or_else(|| FormatError::Truncated("real".into()))?)
             }
-            0x3 if lo == 3 => Value::Date(DateValue::Seconds(self.r.u64_be(at + 1).map(f64::from_bits).ok_or_else(|| FormatError::Truncated("date".into()))?)),
+            0x3 if lo == 3 => {
+                Value::Date(DateValue::Seconds(self.r.u64_be(at + 1).map(f64::from_bits).ok_or_else(|| FormatError::Truncated("date".into()))?))
+            }
             0x4 => {
                 let (n, s) = self.count(at, lo)?;
                 let bytes = self.r.slice(s, n).ok_or_else(|| FormatError::Truncated("data".into()))?;
                 self.spend(bytes.len())?;
-                Value::Data(bytes.to_vec())
+                {
+                    let mut out = reserved(bytes.len())?;
+                    out.extend_from_slice(bytes);
+                    Value::Data(out)
+                }
             }
             0x5 => {
                 let (n, s) = self.count(at, lo)?;
                 let bytes = self.r.slice(s, n).ok_or_else(|| FormatError::Truncated("string".into()))?;
-                self.spend(lossy_utf8_len(bytes))?;
-                Value::String(String::from_utf8_lossy(bytes).into_owned())
+                let size = lossy_utf8_len(bytes);
+                self.spend(size)?;
+                let mut out = reserved_string(size)?;
+                for chunk in bytes.utf8_chunks() {
+                    out.push_str(chunk.valid());
+                    if !chunk.invalid().is_empty() {
+                        out.push(char::REPLACEMENT_CHARACTER);
+                    }
+                }
+                Value::String(out)
             }
             0x6 => {
                 let (n, s) = self.count(at, lo)?;
@@ -246,9 +262,14 @@ impl Bin<'_> {
                     .r
                     .slice(s, n.checked_mul(2).ok_or_else(|| FormatError::Malformed("string".into()))?)
                     .ok_or_else(|| FormatError::Truncated("string".into()))?;
-                self.spend(lossy_utf16_len(bytes))?;
-                let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c)).collect();
-                Value::String(String::from_utf16_lossy(&units))
+                let size = lossy_utf16_len(bytes);
+                self.spend(size)?;
+                let mut out = reserved_string(size)?;
+                let units = bytes.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes(*c));
+                for ch in char::decode_utf16(units) {
+                    out.push(ch.unwrap_or(char::REPLACEMENT_CHARACTER));
+                }
+                Value::String(out)
             }
             0x8 => {
                 if lo > 7 {
@@ -260,14 +281,14 @@ impl Bin<'_> {
             0xa | 0xc => {
                 let (n, s) = self.count(at, lo)?;
                 // Writers store equal values once, so an array may name one object many times:
-                // only its references have to fit in the file. MAX_NODES and the byte budget bound
+                // only its references have to fit in the file. the node limit and the byte budget bound
                 // the expansion.
                 if s.saturating_add(n.saturating_mul(self.ref_size)) > self.r.len() {
                     return Err(FormatError::Malformed("array larger than the file".into()));
                 }
                 self.room_for_nodes(n)?;
                 stack.push(idx);
-                let mut out = Vec::with_capacity(n);
+                let mut out = reserved(n)?;
                 for i in 0..n {
                     let child = self.reference(s, i)?;
                     out.push(self.object(child, stack)?);
@@ -282,7 +303,7 @@ impl Bin<'_> {
                 }
                 self.room_for_nodes(n.saturating_mul(2))?;
                 stack.push(idx);
-                let mut out = Vec::with_capacity(n);
+                let mut out = reserved(n)?;
                 for i in 0..n {
                     let k = self.reference(s, i)?;
                     let v = self.reference(s, i + n)?;
@@ -301,3 +322,14 @@ impl Bin<'_> {
     }
 }
 
+fn reserved<T>(n: usize) -> Result<Vec<T>, FormatError> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| FormatError::TooLarge("allocation".into()))?;
+    Ok(v)
+}
+
+fn reserved_string(n: usize) -> Result<String, FormatError> {
+    let mut s = String::new();
+    s.try_reserve_exact(n).map_err(|_| FormatError::TooLarge("string allocation".into()))?;
+    Ok(s)
+}
