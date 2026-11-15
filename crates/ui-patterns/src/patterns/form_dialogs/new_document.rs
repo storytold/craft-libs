@@ -159,6 +159,8 @@ struct Shared<'a> {
     library_words: &'a LibraryWords,
     units: &'a Units,
     untitled: &'a str,
+    /// The host opened the settings ([`NewDocumentDialog::opening`]).
+    host_opened: bool,
 }
 
 /// What the dialog keeps while it is open besides the settings: the fields that show the size, the open tab and card,
@@ -240,21 +242,13 @@ fn finish(mut settings: DocumentOptions, untitled: &str) -> DocumentOptions {
     settings
 }
 
-/// Fills what the dialog adds on the pass it opens in: the clipboard's size (the dialog opens on its card) and the
+/// Fills what the dialog adds to the settings it opens on: the clipboard's size at the screen resolution and the
 /// default name.
-fn open_values(values: &mut DocumentOptions, session: &mut Session, setup: &Setup, untitled: &str) {
-    open_options(values, setup, untitled);
-    if setup.clipboard.is_some() {
-        session.card = Some(0);
-    }
-}
-
-/// The settings part of [`open_values`]: what the opening settings are on the pass the dialog opens in.
-fn open_options(values: &mut DocumentOptions, setup: &Setup, untitled: &str) {
-    if let Some(size) = setup.clipboard {
+fn open_options(values: &mut DocumentOptions, clipboard: Option<PixelSize>, screen_ppi: f64, untitled: &str) {
+    if let Some(size) = clipboard {
         values.size = size;
         values.unit = UnitKind::Pixels;
-        values.pixels_per_inch = setup.screen_ppi;
+        values.pixels_per_inch = screen_ppi;
     }
     if values.name.is_empty() {
         untitled.clone_into(&mut values.name);
@@ -352,11 +346,17 @@ static COLUMNS: [ColumnWidth; 2] = [ColumnWidth::fill(1.0), ColumnWidth::Content
 
 /// The body of the dialog: the columns, then what they asked for.
 fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, shared: &Shared<'_>) -> bool {
-    let Shared { bound, setup, words, preset_words, library_words, units, untitled } = *shared;
+    let Shared { bound, setup, words, preset_words, library_words, units, untitled, host_opened } = *shared;
     let points = units.points_per_inch();
     let mut session = form.memory::<Session>().clone();
+    // The dialog opens on the clipboard's card; settings the host opened already hold its size.
     if form.first() {
-        open_values(values, &mut session, setup, untitled);
+        if !host_opened {
+            open_options(values, setup.clipboard, setup.screen_ppi, untitled);
+        }
+        if setup.clipboard.is_some() {
+            session.card = Some(0);
+        }
     }
     for answer in form.take_answers() {
         if let HostAnswer::Color { key, color } = answer
@@ -525,8 +525,9 @@ pub struct NewDocumentDialog<'a> {
     /// The host's answers to the requests of earlier passes.
     #[prop]
     answers: Vec<HostAnswer>,
-    /// The settings the host opened the dialog with: what Reset restores, in place of the bound settings of the first
-    /// pass (a field edited before the dialog was first shown is not the Reset target).
+    /// The settings the host opened the dialog with, the clipboard's size and the default name filled in (as
+    /// `HostedNewDocument` does when it is made): the first pass keeps the bound settings as they are, and Reset
+    /// restores these (a field edited before the dialog was first shown is not the Reset target).
     #[prop]
     opening: Option<DocumentOptions>,
 }
@@ -610,6 +611,7 @@ impl<'a> NewDocumentDialog<'a> {
             library_words: &library_words,
             units: &units,
             untitled: &untitled,
+            host_opened: opening.is_some(),
         };
 
         let mut dialog = FormDialog::new(words.title.clone(), bound)
@@ -622,8 +624,7 @@ impl<'a> NewDocumentDialog<'a> {
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
-        if let Some(mut opening) = opening {
-            open_options(&mut opening, &setup, &untitled);
+        if let Some(opening) = opening {
             dialog = dialog.opening(opening);
         }
         if let Some(key) = remember {
@@ -665,7 +666,7 @@ type Build = dyn for<'b> Fn(&'b mut DocumentOptions) -> NewDocumentDialog<'b> + 
 /// A [`NewDocumentDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns: the host keeps the settings and the colour request, and `build` makes the dialog over the settings each pass.
 ///
 /// ```ignore
-/// host.open(HostedNewDocument::new(last_created, |options| {
+/// host.open(HostedNewDocument::new(ctx, last_created, |options| {
 ///     NewDocumentDialog::new(Bind::bound(options)).clipboard(size).app_name("PhotoCraft")
 /// }));
 /// // each pass, for a colour request:
@@ -688,14 +689,24 @@ pub struct HostedNewDocument {
     tab: String,
     /// The saved-preset edits the app has not taken yet.
     events: Vec<NamedPresetEvent<String>>,
-    /// The settings the dialog was made with: what Reset restores, whatever automation sets before the first show.
+    /// The settings the dialog opened on, the clipboard's size and the default name filled in: what Reset restores,
+    /// whatever automation sets before the first show.
     opening: DocumentOptions,
 }
 
 impl HostedNewDocument {
     /// A hosted dialog opening on `options`; `build` makes the dialog over them (the clipboard, the profiles, the
-    /// app's name).
-    pub fn new(options: DocumentOptions, build: impl for<'b> Fn(&'b mut DocumentOptions) -> NewDocumentDialog<'b> + Send + 'static) -> Self {
+    /// app's name). The settings open at once (the clipboard's size, the default name from the root's words), so
+    /// automation lists and sets them before the first pass.
+    pub fn new(
+        ctx: &egui::Context,
+        mut options: DocumentOptions,
+        build: impl for<'b> Fn(&'b mut DocumentOptions) -> NewDocumentDialog<'b> + Send + 'static,
+    ) -> Self {
+        let built = build(&mut options);
+        let (clipboard, screen_ppi) = (built.clipboard, built.screen_resolution);
+        drop(built);
+        open_options(&mut options, clipboard, screen_ppi, Env::of_root(ctx).words::<NewDocumentWords>().untitled.as_str());
         HostedNewDocument {
             id: dialog_id("new-document"),
             opening: options.clone(),
