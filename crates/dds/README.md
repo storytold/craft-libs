@@ -39,5 +39,5 @@ under half opacity into its transparent black, and BC3 picks whichever alpha mod
 
 ## Features
 
-- `parallel`: encodes rows of blocks and mip levels on several threads with rayon.
+- `parallel`: encodes and decodes rows of blocks (and mip levels) on several threads with rayon.
   `craft-image-codecs` turns it on for native targets.

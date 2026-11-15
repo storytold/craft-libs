@@ -69,7 +69,8 @@ pub(crate) fn encode_bc2(block: &Block, inside: Mask) -> [u8; 16] {
 
 /// A BC3 block: an interpolated alpha block, then a four-colour block.
 pub(crate) fn encode_bc3(block: &Block, inside: Mask) -> [u8; 16] {
-    join(alpha_block(block, inside), colour_block(block, inside, 0, false))
+    let alphas = std::array::from_fn(|t| block[t][3]);
+    join(value_block(&alphas, inside), colour_block(block, inside, 0, false))
 }
 
 fn join(a: [u8; 8], b: [u8; 8]) -> [u8; 16] {
@@ -92,21 +93,56 @@ fn to565(c: [f32; 3]) -> u16 {
 }
 
 fn distance(a: &[u8; 4], b: &[u8; 4]) -> u32 {
-    (0..3).map(|i| u32::from(a[i].abs_diff(b[i])).pow(2)).sum()
+    let d = |i: usize| u32::from(a[i].abs_diff(b[i])).pow(2);
+    d(0) + d(1) + d(2)
+}
+
+/// The index of the first of `palette`'s entries nearest by `distance`, and that distance: the
+/// entry `Iterator::min_by_key` picks, found without the iterator (a texel equal to an entry
+/// stops the search, as no later entry can be nearer and an equal one doesn't win).
+fn nearest<T>(palette: &[T], distance: impl Fn(&T) -> u32) -> (usize, u32) {
+    let mut best = (0, u32::MAX);
+    for (i, p) in palette.iter().enumerate() {
+        let d = distance(p);
+        if d < best.1 {
+            best = (i, d);
+            if d == 0 {
+                break;
+            }
+        }
+    }
+    if palette.is_empty() { (0, 0) } else { best }
 }
 
 /// A colour block (endpoints, then 2-bit indices) for the `opaque` texels' colours, with the
 /// `transparent` ones on BC1's transparent index. `bc1` allows the three-colour mode; BC2 and
 /// BC3 always decode four colours.
 fn colour_block(block: &Block, opaque: Mask, transparent: Mask, bc1: bool) -> [u8; 8] {
-    let colours: Vec<[f32; 3]> = block.iter().enumerate().filter(|(t, _)| opaque >> t & 1 != 0).map(|(_, texel)| rgb_of(texel)).collect();
-    if colours.is_empty() {
+    // The opaque texels' colours in texel order, on the stack (after storytold/photocraft#10669,
+    // which took the per-block allocations out of PhotoCraft's copy of this encoder).
+    let mut buffer = [[0f32; 3]; 16];
+    let mut n = 0;
+    for (t, texel) in block.iter().enumerate() {
+        if opaque >> t & 1 != 0
+            && let Some(slot) = buffer.get_mut(n)
+        {
+            *slot = rgb_of(texel);
+            n += 1;
+        }
+    }
+    let colours = buffer.get(..n).unwrap_or_default();
+    let Some((first, rest)) = colours.split_first() else {
         // Nothing visible: every texel on the transparent index (or index 0 of black).
         let indices = if transparent != 0 { u32::MAX } else { 0 };
         return pack(0, 0, indices);
-    }
-    let (lo, hi) = principal_endpoints(&colours);
-    let mut candidates = vec![(to565(lo), to565(hi))];
+    };
+    // One colour has no axis: `principal_endpoints` returns that colour (their mean) for both
+    // ends, so it is skipped. Everything after it runs as for any block.
+    let (lo, hi) = if rest.iter().all(|c| c == first) { (*first, *first) } else { principal_endpoints(colours) };
+    let mut candidate = (to565(lo), to565(hi));
+    // The endpoint pairs fitted so far: at most one per round.
+    let mut fitted = [candidate; 3];
+    let mut count = 1;
     let modes: &[bool] = if transparent != 0 {
         &[false]
     } else if bc1 {
@@ -118,22 +154,30 @@ fn colour_block(block: &Block, opaque: Mask, transparent: Mask, bc1: bool) -> [u
     // Each refinement starts from the best block so far: its indices give the least-squares
     // endpoints, which become one more candidate.
     for round in 0..3 {
-        for &(e0, e1) in &candidates {
-            for &four in modes {
-                let (bytes, error) = fit(block, opaque, transparent, e0, e1, four);
-                if best.is_none_or(|(e, _)| error < e) {
-                    best = Some((error, bytes));
-                }
+        let (e0, e1) = candidate;
+        for &four in modes {
+            let (bytes, error) = fit(block, opaque, transparent, e0, e1, four);
+            if best.is_none_or(|(e, _)| error < e) {
+                best = Some((error, bytes));
             }
         }
         let Some((error, bytes)) = best else { break };
         if error == 0 || round == 2 {
             break;
         }
-        candidates = least_squares(block, opaque, &bytes).into_iter().collect();
-        if candidates.is_empty() {
+        let Some(next) = least_squares(block, opaque, &bytes) else { break };
+        // A pair fitted before (in either order: `fit` orders the endpoints itself) fits the same
+        // again and can't beat the best block, which then gives the same pair again: the rounds
+        // left would change nothing.
+        let seen = fitted.get(..count).unwrap_or_default();
+        if seen.iter().any(|&(a, b)| (a, b) == next || (b, a) == next) {
             break;
         }
+        if let Some(slot) = fitted.get_mut(count) {
+            *slot = next;
+            count += 1;
+        }
+        candidate = next;
     }
     best.map_or([0; 8], |(_, bytes)| bytes)
 }
@@ -151,7 +195,7 @@ fn fit(block: &Block, opaque: Mask, transparent: Mask, e0: u16, e1: u16, four: b
         let index = if transparent >> t & 1 != 0 {
             3
         } else if opaque >> t & 1 != 0 {
-            let (i, d) = palette.iter().take(choices).enumerate().map(|(i, p)| (i, distance(texel, p))).min_by_key(|&(_, d)| d).unwrap_or((0, 0));
+            let (i, d) = nearest(palette.get(..choices).unwrap_or_default(), |p| distance(texel, p));
             error += d;
             i as u32
         } else {
@@ -248,29 +292,39 @@ fn least_squares(block: &Block, opaque: Mask, bytes: &[u8; 8]) -> Option<(u16, u
     Some((to565(e0), to565(e1)))
 }
 
-/// A BC3 alpha block: whichever of the two modes (eight values between the extremes, or six
-/// between the extremes other than 0 and 255, plus exact 0 and 255) fits better.
-fn alpha_block(block: &Block, inside: Mask) -> [u8; 8] {
-    let alphas = || block.iter().enumerate().filter(move |(t, _)| inside >> t & 1 != 0).map(|(_, texel)| texel[3]);
-    let range =
-        |values: &mut dyn Iterator<Item = u8>| values.fold(None, |r: Option<(u8, u8)>, a| Some(r.map_or((a, a), |(lo, hi)| (lo.min(a), hi.max(a)))));
-    let (lo, hi) = range(&mut alphas()).unwrap_or((0, 0));
+/// An interpolated block of 16 single-channel values (BC3's alpha): whichever of the two modes
+/// (eight values between the extremes, or six between the extremes other than 0 and 255, plus
+/// exact 0 and 255) fits better. Only the values of `inside` count.
+pub(crate) fn value_block(values: &[u8; 16], inside: Mask) -> [u8; 8] {
+    // Both ranges in one pass: of all values, and of those other than 0 and 255.
+    let mut all: Option<(u8, u8)> = None;
+    let mut mid = all;
+    let widen = |r: Option<(u8, u8)>, v: u8| Some(r.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))));
+    for (t, &v) in values.iter().enumerate() {
+        if inside >> t & 1 != 0 {
+            all = widen(all, v);
+            if !matches!(v, 0 | 255) {
+                mid = widen(mid, v);
+            }
+        }
+    }
+    let (lo, hi) = all.unwrap_or((0, 0));
     // Eight values need a0 > a1; equal ends fall to the six-value mode, which starts with a0 too.
-    let eight = alpha_fit(block, inside, hi, lo);
-    let (mid_lo, mid_hi) = range(&mut alphas().filter(|a| !matches!(a, 0 | 255))).unwrap_or((0, 0));
-    let six = alpha_fit(block, inside, mid_lo, mid_hi);
+    let eight = value_fit(values, inside, hi, lo);
+    let (mid_lo, mid_hi) = mid.unwrap_or((0, 0));
+    let six = value_fit(values, inside, mid_lo, mid_hi);
     if six.1 < eight.1 { six.0 } else { eight.0 }
 }
 
-fn alpha_fit(block: &Block, inside: Mask, a0: u8, a1: u8) -> ([u8; 8], u32) {
+fn value_fit(values: &[u8; 16], inside: Mask, a0: u8, a1: u8) -> ([u8; 8], u32) {
     let palette = alpha_palette(a0, a1);
     let mut bits = 0u64;
     let mut error = 0u32;
-    for (t, texel) in block.iter().enumerate() {
+    for (t, &v) in values.iter().enumerate() {
         if inside >> t & 1 == 0 {
             continue;
         }
-        let (i, d) = palette.iter().enumerate().map(|(i, &p)| (i, u32::from(p.abs_diff(texel[3])).pow(2))).min_by_key(|&(_, d)| d).unwrap_or((0, 0));
+        let (i, d) = nearest(&palette, |&p| u32::from(p.abs_diff(v)).pow(2));
         error += d;
         bits |= (i as u64) << (3 * t);
     }
@@ -333,7 +387,7 @@ mod tests {
     fn alpha_blocks_pick_the_mode_that_keeps_0_and_255() {
         // 0, 255 and a cluster in between: the six-value mode stores 0 and 255 exactly.
         let block: Block = std::array::from_fn(|t| [0, 0, 0, [0, 255, 100, 110][t % 4]]);
-        let bytes = alpha_block(&block, u16::MAX);
+        let bytes = value_block(&block.map(|t| t[3]), u16::MAX);
         assert!(bytes[0] <= bytes[1], "six-value mode");
         let palette = alpha_palette(bytes[0], bytes[1]);
         let bits = u64::from_le_bytes([bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], 0, 0]);
@@ -356,6 +410,23 @@ mod tests {
         let (_, bounding_box) = fit(&block, u16::MAX, 0, to565([120.0, 121.0, 121.0]), to565([136.0, 135.0, 135.0]), true);
         let ours = error(&colour_block(&block, u16::MAX, 0, false));
         assert!(ours < bounding_box, "{ours} vs the bounding box's {bounding_box}");
+    }
+
+    #[test]
+    fn nearest_picks_what_min_by_key_picks() {
+        // Ties (equal entries, entries equally far on both sides) and exact hits included.
+        let mut seed = 0x2545_f491u32;
+        for _ in 0..2000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            let palette = [seed as u8 & 0xf0, (seed >> 8) as u8 & 0xf0, (seed >> 16) as u8 & 0xf0, (seed >> 24) as u8 & 0xf0];
+            let v = (seed >> 4) as u8 & 0xf8;
+            let d = |p: &u8| u32::from(p.abs_diff(v)).pow(2);
+            let want = palette.iter().enumerate().map(|(i, p)| (i, d(p))).min_by_key(|&(_, d)| d).unwrap();
+            assert_eq!(nearest(&palette, d), want, "{palette:?} {v}");
+        }
+        assert_eq!(nearest::<u8>(&[], |_| 7), (0, 0));
     }
 
     #[test]

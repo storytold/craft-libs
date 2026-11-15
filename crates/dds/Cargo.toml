@@ -12,7 +12,7 @@ workspace = true
 
 [features]
 default = []
-# Encode rows of blocks and mip levels on several threads.
+# Encode and decode rows of blocks (and mip levels) on several threads.
 parallel = ["dep:rayon"]
 
 [dependencies]

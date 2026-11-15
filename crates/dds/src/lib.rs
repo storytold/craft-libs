@@ -11,8 +11,8 @@
 //! so no DX10 header is written; formats only DXGI can name (BC4–BC7, sRGB) aren't written.
 //!
 //! Pixels are 8 bits per channel, interleaved, top row first, in one of the [`Layout`]s. The
-//! crate has no dependencies; the `parallel` feature encodes rows of blocks on several threads
-//! with rayon.
+//! crate has no dependencies; the `parallel` feature encodes and decodes rows of blocks (and mip
+//! levels) on several threads with rayon.
 //!
 //! ```
 //! use craft_dds::{DdsCompression, DdsOptions, Layout};
@@ -385,41 +385,104 @@ impl<'a> Texture<'a> {
         let total = row_size.checked_mul(h).ok_or_else(|| bad("pixel size overflow"))?;
         let mut pixels = vec![0u8; total];
         match encoding {
-            Encoding::Masks { bytes, gray, fields } => {
-                for (src_row, dst_row) in data.chunks_exact(row_pitch).zip(pixels.chunks_exact_mut(row_size)) {
-                    // Stop at the output width, leaving any stored row padding unread.
-                    for (src, dst) in src_row.chunks_exact(bytes).zip(dst_row.chunks_exact_mut(channels)) {
-                        let pixel = src.iter().rev().fold(0u32, |v, &byte| v << 8 | u32::from(byte));
-                        let channel = |i: usize| fields[i].map_or(0, |f| f.get(pixel));
-                        let values = if gray { [channel(0), channel(3), 0, 0] } else { [channel(0), channel(1), channel(2), channel(3)] };
-                        dst.copy_from_slice(&values[..channels]);
-                    }
+            Encoding::Masks { bytes, gray, fields } => decode_masks(Masks { bytes, gray, fields }, data, row_pitch, &mut pixels, row_size),
+            Encoding::Bc1 | Encoding::Bc2 | Encoding::Bc3 => decode_blocks(encoding, data, (w, channels), &mut pixels),
+        }
+        Ok(pixels)
+    }
+}
+
+/// An uncompressed pixel format: bytes per pixel, luminance or RGB, and the red (or
+/// luminance), green, blue and alpha fields.
+struct Masks {
+    bytes: usize,
+    gray: bool,
+    fields: [Option<Field>; 4],
+}
+
+/// Uncompressed rows `row_pitch` apart into `pixels` (rows of `row_size` bytes), one row of
+/// pixels per task.
+fn decode_masks(m: Masks, data: &[u8], row_pitch: usize, pixels: &mut [u8], row_size: usize) {
+    let Masks { bytes, gray, fields } = m;
+    let channels = if gray { 1 + usize::from(fields[3].is_some()) } else { 3 + usize::from(fields[3].is_some()) };
+    // The field each output channel comes from.
+    let picks = if gray { [0, 3, 0, 0] } else { [0, 1, 2, 3] };
+    // An 8-bit field on a byte boundary scales to itself, so when every channel is one (or
+    // absent, and 0) the pixels are a byte shuffle: the byte each channel copies.
+    let mut at: [Option<usize>; 4] = [None; 4];
+    let mut whole_bytes = true;
+    for (slot, &pick) in at.iter_mut().zip(&picks).take(channels) {
+        match fields.get(pick).copied().flatten() {
+            None => {}
+            Some(f) if f.max == 255 && f.shift % 8 == 0 => *slot = Some(f.shift as usize / 8),
+            Some(_) => whole_bytes = false,
+        }
+    }
+    // Four bytes to four channels, each present: RGBA, BGRA and the like.
+    let four = (whole_bytes && bytes == 4 && channels == 4 && at.iter().all(Option::is_some)).then(|| at.map(|i| i.unwrap_or(0) & 3));
+    rows(pixels, row_size, |y, dst_row| {
+        // Stop at the output width, leaving any stored row padding unread.
+        let src_row = data.get(y * row_pitch..).unwrap_or_default();
+        if let Some(order) = four {
+            let (src, dst) = (src_row.as_chunks::<4>().0, dst_row.as_chunks_mut::<4>().0);
+            if order == [0, 1, 2, 3] {
+                for (d, s) in dst.iter_mut().zip(src) {
+                    *d = *s;
+                }
+            } else {
+                for (d, s) in dst.iter_mut().zip(src) {
+                    *d = order.map(|i| s[i]);
                 }
             }
-            Encoding::Bc1 | Encoding::Bc2 | Encoding::Bc3 => {
-                let block_size = if matches!(encoding, Encoding::Bc1) { 8 } else { 16 };
-                let blocks_x = w.div_ceil(4);
-                for (i, block) in data.chunks_exact(block_size).enumerate() {
-                    let texels = match encoding {
-                        Encoding::Bc1 => bc1(block, true),
-                        Encoding::Bc2 => with_alpha(bc1(block.get(8..).unwrap_or_default(), false), bc2_alpha(block)),
-                        _ => with_alpha(bc1(block.get(8..).unwrap_or_default(), false), bc3_alpha(block)),
-                    };
-                    let (bx, by) = ((i % blocks_x) * 4, (i / blocks_x) * 4);
-                    for (t, texel) in texels.iter().enumerate() {
-                        let (x, y) = (bx + t % 4, by + t / 4);
-                        if x < w && y < h {
-                            let at = (y * w + x) * 4;
-                            if let Some(dst) = pixels.get_mut(at..at + 4) {
-                                dst.copy_from_slice(texel);
-                            }
-                        }
+        } else if whole_bytes {
+            for (src, dst) in src_row.chunks_exact(bytes).zip(dst_row.chunks_exact_mut(channels)) {
+                for (v, i) in dst.iter_mut().zip(at) {
+                    *v = i.and_then(|i| src.get(i)).copied().unwrap_or(0);
+                }
+            }
+        } else {
+            for (src, dst) in src_row.chunks_exact(bytes).zip(dst_row.chunks_exact_mut(channels)) {
+                let pixel = src.iter().rev().fold(0u32, |v, &byte| v << 8 | u32::from(byte));
+                let channel = |i: usize| fields[i].map_or(0, |f| f.get(pixel));
+                let values = if gray { [channel(0), channel(3), 0, 0] } else { [channel(0), channel(1), channel(2), channel(3)] };
+                dst.copy_from_slice(&values[..channels]);
+            }
+        }
+    });
+}
+
+/// Block-compressed data into `pixels` of `width` × `channels` bytes a row, one row of blocks
+/// per task. Blocks wholly inside the image copy whole rows of texels; only those on the right
+/// edge check each texel.
+fn decode_blocks(encoding: Encoding, data: &[u8], (width, channels): (usize, usize), pixels: &mut [u8]) {
+    let block_size = if matches!(encoding, Encoding::Bc1) { 8 } else { 16 };
+    let blocks_x = width.div_ceil(4);
+    let row_size = width * channels;
+    rows(pixels, row_size.saturating_mul(4), |by, band| {
+        let src = data.get(by * blocks_x * block_size..).unwrap_or_default();
+        for (bx, block) in src.chunks_exact(block_size).take(blocks_x).enumerate() {
+            let texels = match encoding {
+                Encoding::Bc1 => bc1(block, true),
+                Encoding::Bc2 => with_alpha(bc1(block.get(8..).unwrap_or_default(), false), bc2_alpha(block)),
+                _ => with_alpha(bc1(block.get(8..).unwrap_or_default(), false), bc3_alpha(block)),
+            };
+            let x0 = bx * 4;
+            // The band holds the block's rows that lie inside the image (fewer than four in the
+            // last band of a height that isn't a multiple of four).
+            for (line, row) in band.chunks_exact_mut(row_size).zip(texels.as_chunks::<4>().0) {
+                if x0 + 4 <= width && channels == 4 {
+                    if let Some(dst) = line.get_mut(x0 * 4..x0 * 4 + 16) {
+                        dst.copy_from_slice(row.as_flattened());
+                    }
+                } else {
+                    let dst = line.get_mut(x0 * channels..).unwrap_or_default();
+                    for (d, texel) in dst.chunks_exact_mut(channels).zip(row) {
+                        d.copy_from_slice(texel.get(..channels).unwrap_or_default());
                     }
                 }
             }
         }
-        Ok(pixels)
-    }
+    });
 }
 
 /// A BC1 colour block. BC2 and BC3 colour blocks always have four colours; only BC1's
@@ -683,6 +746,20 @@ fn write_level(store: Store, pixels: &[u8], (width, height): (usize, usize), dst
 /// Block (`bx`, `by`)'s texels, and which of them lie inside the image.
 fn gather(texels: &[[u8; 4]], (width, height): (usize, usize), bx: usize, by: usize) -> (Block, Mask) {
     let mut block = [[0u8; 4]; 16];
+    // A block wholly inside the image: four rows of four texels.
+    let (x0, y0) = (bx * 4, by * 4);
+    if x0 + 4 <= width && y0 + 4 <= height {
+        let mut copied = 0;
+        for (ty, row) in block.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            if let Some(src) = texels.get((y0 + ty) * width + x0..).and_then(|s| s.first_chunk::<4>()) {
+                *row = *src;
+                copied += 1;
+            }
+        }
+        if copied == 4 {
+            return (block, Mask::MAX);
+        }
+    }
     let mut inside: Mask = 0;
     for (t, texel) in block.iter_mut().enumerate() {
         let (x, y) = (bx * 4 + t % 4, by * 4 + t / 4);
@@ -703,9 +780,26 @@ fn downsample(src: &[u8], (w, h): (usize, usize), (nw, nh): (usize, usize), chan
     let len = nw.checked_mul(nh).and_then(|n| n.checked_mul(channels)).ok_or_else(|| encode_err("mip level size overflow"))?;
     let mut dst = alloc_zeroed(len)?;
     let span = |i: usize, n: usize, size: usize| 2 * i..=if i + 1 == n { size.saturating_sub(1) } else { 2 * i + 1 };
+    let ch = channels.max(1);
+    let line = w * ch;
     rows(&mut dst, nw * channels, |y, row| {
         let ys = span(y, nh, h);
-        for (x, px) in row.chunks_exact_mut(channels.max(1)).enumerate() {
+        // Every pixel but those of the last column and row averages exactly 2×2: the same sum
+        // and rounding as below, from two source rows read in step.
+        let mut edge = 0;
+        if y + 1 < nh
+            && let (Some(r0), Some(r1)) = (src.get(2 * y * line..(2 * y + 1) * line), src.get((2 * y + 1) * line..(2 * y + 2) * line))
+        {
+            let interior = nw.saturating_sub(1);
+            for ((px, a), b) in row.chunks_exact_mut(ch).zip(r0.chunks_exact(2 * ch)).zip(r1.chunks_exact(2 * ch)).take(interior) {
+                for (c, v) in px.iter_mut().enumerate() {
+                    let sum = u32::from(a[c]) + u32::from(a[ch + c]) + u32::from(b[c]) + u32::from(b[ch + c]);
+                    *v = ((sum + 2) / 4) as u8;
+                }
+            }
+            edge = interior;
+        }
+        for (x, px) in row.chunks_exact_mut(ch).enumerate().skip(edge) {
             let xs = span(x, nw, w);
             for (c, v) in px.iter_mut().enumerate() {
                 let (mut sum, mut n) = (0u32, 0u32);
