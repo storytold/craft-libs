@@ -341,3 +341,14 @@ fn a_library_named_again_is_read_once() {
     assert_eq!((s.materials.len(), s.images.len()), (1, 1));
     assert_eq!(s.external, ["m.mtl", "red.png"]);
 }
+
+#[test]
+fn face_tokens_and_continued_lines_are_bounded_before_collection() {
+    let limits = Limits { max_face_corners: 3, max_data_bytes: 1024, ..Limits::default() };
+    let face = format!("v 0 0 0\nf {}\n", "1 ".repeat(100));
+    assert!(matches!(read(face.as_bytes(), &limits, &mut no_external), Err(Error::TooLarge(_))));
+    let long_line = format!("v {}\\\n{}\n", "1 ".repeat(300), "1 ".repeat(300));
+    assert!(matches!(read(long_line.as_bytes(), &limits, &mut no_external), Err(Error::TooLarge(_))));
+    let invalid = b"v 0 0 0\nf 1 1 1\n\xff";
+    assert!(matches!(read(invalid, &Limits { max_data_bytes: 4, ..Limits::default() }, &mut no_external), Err(Error::TooLarge(_))));
+}
