@@ -108,3 +108,19 @@ fn objects_nested_too_deeply_are_an_error() {
     let e = store::read(&chain(250)).unwrap_err();
     assert!(e.contains("nested too deeply"), "{e}");
 }
+
+/// Many distinct property IDs still reject a duplicate without quadratic scanning.
+#[test]
+fn duplicate_after_many_distinct_properties_is_rejected() {
+    let mut props = vec![0x4C, 0x20];
+    props.extend_from_slice(&8193u16.to_le_bytes());
+    for id in (0..8192u16).chain(std::iter::once(7)) {
+        props.extend_from_slice(&id.to_le_bytes());
+        props.extend_from_slice(&0x82u16.to_le_bytes());
+        props.extend_from_slice(&0u16.to_le_bytes());
+    }
+    let mut writer = Writer::new(Version::V3);
+    writer.stream(Writer::ROOT, "properties", props).unwrap();
+    let e = store::read(&writer.finish()).unwrap_err();
+    assert!(e.contains("duplicate property id"), "{e}");
+}
