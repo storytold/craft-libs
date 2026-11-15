@@ -145,7 +145,7 @@ pub enum BoxDrag {
     Move,
     /// Moves the reference point.
     Pivot,
-    /// Turns the box about its reference point (⇧ snaps the angle).
+    /// Turns the box about its reference point (⇧ snaps the turn to the rotate step).
     Rotate,
     /// Scales the box from a corner or an edge.
     Scale,
@@ -196,7 +196,9 @@ pub struct BoxRules {
     /// The angle ⇧ snaps a rotation to, in degrees (PhotoCraft 15; DesignCraft and VectorCraft
     /// 45).
     pub rotate_step: f64,
-    /// The smallest side a scale drag leaves, in document units.
+    /// The smallest side a scale drag leaves, in document units; 0 sets no minimum. A positive
+    /// minimum keeps a scale drag from flipping the box, and a side already shorter than it at
+    /// the press keeps its length as its floor, so a click changes nothing.
     pub min_side: f64,
 }
 
@@ -239,9 +241,9 @@ impl BoxRules {
     }
 
     /// The rules with `side` as the minimum side of a scaled box, in document units.
-    pub fn with_min_side(self, side: f64) -> BoxRules {
-        let _ = side;
-        todo!("tl.T2")
+    pub fn with_min_side(mut self, side: f64) -> BoxRules {
+        self.min_side = side;
+        self
     }
 
     /// The mode drags follow: a mode the content refuses scales as Free Transform does.
@@ -268,10 +270,11 @@ impl BoxRules {
     }
 
     /// The modifiers a drag of `part` acts on, from the keys held: ⌘ is dropped on a corner or
-    /// edge the content refuses to distort or skew, and the legacy scale rule
-    /// ([`ScaleRule::Free`]) or an unlinked aspect ratio turns ⇧ over on corners and edges. Mode
-    /// keys ([`TransformMode::Distort`], [`TransformMode::Perspective`]) are not added here: they
-    /// are part of [`drag_kind`](Self::drag_kind). [`drag`] acts on these modifiers.
+    /// edge the content refuses to distort or skew, the legacy scale rule ([`ScaleRule::Free`])
+    /// or an unlinked aspect ratio turns ⇧ over on corners and edges, and the shape rule
+    /// ([`ScaleRule::Shape`]) sets ⇧ by the part alone. Mode keys ([`TransformMode::Distort`],
+    /// [`TransformMode::Perspective`]) are not added here: they are part of
+    /// [`drag_kind`](Self::drag_kind). [`drag`] acts on these modifiers.
     fn drag_modifiers(&self, part: BoxPart, mods: Mods) -> Mods {
         let mut mods = mods;
         // ⌘-drags the content refuses scale like plain drags, ⌥ and ⇧ keeping their meaning.
@@ -280,8 +283,13 @@ impl BoxRules {
             BoxPart::Edge(_) if !self.allow.skew => mods.cmd = false,
             _ => {}
         }
-        let legacy = self.scale == ScaleRule::Free;
-        legacy_mods(legacy, part, unlinked_mods(!self.aspect_linked, legacy, part, mods))
+        match self.scale {
+            ScaleRule::Shape => shape_mods(part, mods),
+            scale => {
+                let legacy = scale == ScaleRule::Free;
+                legacy_mods(legacy, part, unlinked_mods(!self.aspect_linked, legacy, part, mods))
+            }
+        }
     }
 
     /// What a drag of `part` with `mods` held (as the host has them, before
@@ -302,7 +310,20 @@ pub fn drag(start: &BoxState, last: &BoxState, part: BoxPart, from: Point, to: P
     }
     let mods = rules.drag_modifiers(part, mods);
     let g = Gesture { part, start: from, quad0: start.quad, pivot0: start.pivot, last: last.quad[0] - start.quad[0] };
-    apply_mode_drag(&g, to, rules.effective_mode(), !rules.allow.distort, mods, rules.rotate_step)
+    apply_mode_drag(&g, to, rules, mods)
+}
+
+/// The shape bounds box's rule: a corner keeps the proportions along the diagonal and an edge
+/// stretches its one axis, whatever ⇧ and the aspect link say. ⌘ gestures are left alone.
+fn shape_mods(part: BoxPart, mut mods: Mods) -> Mods {
+    if !mods.cmd {
+        match part {
+            BoxPart::Corner(_) => mods.shift = false,
+            BoxPart::Edge(_) => mods.shift = true,
+            _ => {}
+        }
+    }
+    mods
 }
 
 /// The legacy rule: corner drags stretch freely and ⇧ keeps the proportions, edge drags stretch
@@ -351,9 +372,10 @@ struct Gesture {
     last: Vec2,
 }
 
-/// A drag in `mode`. `parallel`: the content stays a parallelogram (editable type), so a Skew
-/// corner slides its whole edge.
-fn apply_mode_drag(g: &Gesture, p: Point, mode: TransformMode, parallel: bool, mut mods: Mods, rotate_step: f64) -> BoxState {
+/// A drag in the rules' effective mode. Content that refuses distorting stays a parallelogram
+/// (editable type), so a Skew corner slides its whole edge.
+fn apply_mode_drag(g: &Gesture, p: Point, rules: &BoxRules, mut mods: Mods) -> BoxState {
+    let (mode, parallel) = (rules.effective_mode(), !rules.allow.distort);
     match (resolve_kind(mode, g.part, mods), g.part) {
         // A corner moves alone along one of its two edges, whichever the drag mostly follows; ⌥
         // moves the opposite corner the other way.
@@ -387,19 +409,19 @@ fn apply_mode_drag(g: &Gesture, p: Point, mode: TransformMode, parallel: bool, m
         // Corners and edges turn the box as the outside does.
         (BoxDrag::Rotate, BoxPart::Corner(_) | BoxPart::Edge(_)) => {
             let g = Gesture { part: BoxPart::Outside, ..*g };
-            apply_drag(&g, p, mods, rotate_step)
+            apply_drag(&g, p, mods, rules)
         }
         // An edge slides only along itself.
         (BoxDrag::Skew, BoxPart::Edge(_)) if mode == TransformMode::Skew => {
             mods.cmd = true;
             mods.shift = true;
-            apply_drag(g, p, mods, rotate_step)
+            apply_drag(g, p, mods, rules)
         }
-        _ => apply_drag(g, p, mode_mods(mode, g.part, mods), rotate_step),
+        _ => apply_drag(g, p, mode_mods(mode, g.part, mods), rules),
     }
 }
 
-fn apply_drag(g: &Gesture, p: Point, mods: Mods, rotate_step: f64) -> BoxState {
+fn apply_drag(g: &Gesture, p: Point, mods: Mods, rules: &BoxRules) -> BoxState {
     let d = p - g.start;
     let (q0, c) = (g.quad0, g.pivot0);
     match g.part {
@@ -412,11 +434,10 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rotate_step: f64) -> BoxState {
             let a0 = (g.start - c).atan2();
             let a1 = (p - c).atan2();
             let mut da = a1 - a0;
-            if mods.shift && rotate_step > 0.0 {
-                // Snap the resulting angle, not the turn.
-                let base = (q0[1] - q0[0]).atan2();
-                let step = rotate_step.to_radians();
-                da = ((base + da) / step).round() * step - base;
+            if mods.shift && rules.rotate_step > 0.0 {
+                // Snap the turn of this drag; the angle the box started at is kept.
+                let step = rules.rotate_step.to_radians();
+                da = (da / step).round() * step;
             }
             let turn = Affine::rotate_about(da, c);
             BoxState { quad: q0.map(|q| turn * q), pivot: c }
@@ -469,13 +490,16 @@ fn apply_drag(g: &Gesture, p: Point, mods: Mods, rotate_step: f64) -> BoxState {
             }
             BoxState { quad, pivot: carry_pivot(q0, quad, c) }
         }
-        BoxPart::Corner(_) | BoxPart::Edge(_) => scale_drag(g, p, mods).unwrap_or(BoxState { quad: q0, pivot: c }),
+        BoxPart::Corner(_) | BoxPart::Edge(_) => scale_drag(g, p, mods, rules.min_side).unwrap_or(BoxState { quad: q0, pivot: c }),
     }
 }
 
 /// A plain corner or edge drag: scaling in the box's own frame (the unit square through the
-/// homography), so rotated and skewed boxes scale along their axes. `None` for a collapsed box.
-fn scale_drag(g: &Gesture, p: Point, mods: Mods) -> Option<BoxState> {
+/// homography), so rotated and skewed boxes scale along their axes. A proportional corner follows
+/// the pointer's projection on the line from the anchor to the corner, so a distorted box scales
+/// along its own diagonal; past the anchor the factor turns negative and the box flips. Each
+/// scaled side keeps at least `min_side` ([`scale_floor`]). `None` for a collapsed box.
+fn scale_drag(g: &Gesture, p: Point, mods: Mods, min_side: f64) -> Option<BoxState> {
     let h = Homography::unit_to_quad(g.quad0)?;
     let inv = h.inverse()?;
     let Point { x: u, y: v } = inv.apply(p);
@@ -506,20 +530,45 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods) -> Option<BoxState> {
     };
     let (mut au, mut ku) = axis(mu, u, pu);
     let (mut av, mut kv) = axis(mv, v, pv);
+    let (lo_u, lo_v) = (scale_floor(&g.quad0, 0, min_side), scale_floor(&g.quad0, 1, min_side));
     let corner = matches!(g.part, BoxPart::Corner(_));
-    if !corner && !mods.shift {
+    let moves_u = mu.0 || mu.1;
+    if mods.shift {
+        // The axes move independently, so each moved one keeps the minimum on its own.
+        if moves_u {
+            ku = ku.max(lo_u);
+        }
+        if mv.0 || mv.1 {
+            kv = kv.max(lo_v);
+        }
+    } else if corner {
+        // The corner follows the pointer's projection on the line from the anchor to the dragged
+        // corner in document space. That line maps back onto the unit square's line through the
+        // same two points, so the factor read on one unit axis holds for both, also on a
+        // distorted box. One factor scales both axes, so it is clamped once, to the stricter
+        // axis' floor, and the box keeps its proportions.
+        let (hu, hv) = (if mu.0 { 0.0 } else { 1.0 }, if mv.0 { 0.0 } else { 1.0 });
+        let a = h.apply(Point::new(au, av));
+        let d = h.apply(Point::new(hu, hv)) - a;
+        let len2 = d.hypot2();
+        let k = if len2 > 1e-12 {
+            let q = inv.apply(a + d * ((p - a).dot(d) / len2));
+            if (hu - au).abs() >= (hv - av).abs() { (q.x - au) / (hu - au) } else { (q.y - av) / (hv - av) }
+        } else {
+            1.0
+        };
+        let k = if k.is_finite() { k } else { 1.0 };
+        let k = k.max(lo_u.max(lo_v));
+        (ku, kv) = (k, k);
+    } else if moves_u {
         // An edge sets its own axis' scale and the other axis follows by the same factor about
         // the middle of the box (⌥: the reference point). Past the opposite edge only the dragged
-        // axis flips.
-        if mu.0 || mu.1 {
-            (av, kv) = (if mods.alt { pv } else { 0.5 }, ku.abs());
-        } else {
-            (au, ku) = (if mods.alt { pu } else { 0.5 }, kv.abs());
-        }
-    }
-    if corner && !mods.shift {
-        let k = ku.abs().max(kv.abs());
-        (ku, kv) = (k * ku.signum(), k * kv.signum());
+        // axis flips. The follower takes the factor too, so both floors bound it.
+        ku = ku.max(lo_u.max(lo_v));
+        (av, kv) = (if mods.alt { pv } else { 0.5 }, ku.abs());
+    } else {
+        kv = kv.max(lo_u.max(lo_v));
+        (au, ku) = (if mods.alt { pu } else { 0.5 }, kv.abs());
     }
     let r = [au - au * ku, av - av * kv, au + (1.0 - au) * ku, av + (1.0 - av) * kv];
     let at = |a: f64, b: f64| h.apply(Point::new(a, b));
@@ -527,6 +576,23 @@ fn scale_drag(g: &Gesture, p: Point, mods: Mods) -> Option<BoxState> {
     // ⌥ scales about the reference point, so it stays put; otherwise it rides along.
     let pivot = if mods.alt { g.pivot0 } else { carry_pivot(g.quad0, quad, g.pivot0) };
     Some(BoxState { quad, pivot })
+}
+
+/// The smallest factor a scale drag may give `quad`'s `axis` (0: u, 1: v) so its sides along that
+/// axis keep `min_side`: `min_side` over the shorter of the two (for u the edges 0–1 and 3–2, for
+/// v 1–2 and 0–3), since the shorter one reaches the minimum first. At most 1, so a side already
+/// shorter than the minimum keeps its length and a click changes nothing; −∞ with no minimum.
+fn scale_floor(quad: &[Point; 4], axis: usize, min_side: f64) -> f64 {
+    if min_side > 0.0 {
+        let ((a0, a1), (b0, b1)) = if axis == 0 { ((0, 1), (3, 2)) } else { ((1, 2), (0, 3)) };
+        let (a, b) = ((quad[a1] - quad[a0]).hypot(), (quad[b1] - quad[b0]).hypot());
+        // A side collapsed to a point can never reach the minimum: the other side stands in.
+        let side = if a.min(b) > 1e-12 { a.min(b) } else { a.max(b) };
+        if side > 1e-12 {
+            return (min_side / side).min(1.0);
+        }
+    }
+    f64::NEG_INFINITY
 }
 
 /// The turn at each corner of a quad: all of one sign for a convex quad, mixed for a concave or
@@ -639,10 +705,44 @@ fn unturn(c: Vec2, angle: f64) -> Vec2 {
 }
 
 impl BoxState {
-    /// The pivot through the inverse homography, in `rect`'s coordinates; least squares for a flat box.
+    /// The reference point's place within the box, carried to `rect`: the pivot through the
+    /// inverse homography onto the unit square, then onto `rect` (the relative X and Y fields'
+    /// origin). A flattened box with no inverse is read through the affine map that fits its
+    /// four corners best; an empty `rect` gives its origin.
     pub fn origin_of_pivot(&self, rect: Rect) -> Point {
-        let _ = rect;
-        todo!("tl.T3")
+        if rect.is_zero_area() {
+            return rect.origin();
+        }
+        let unit = Homography::unit_to_quad(self.quad)
+            .and_then(|h| h.inverse())
+            .map(|inv| inv.apply(self.pivot))
+            .filter(|u| u.is_finite())
+            .unwrap_or_else(|| self.unit_by_least_squares());
+        Point::new(rect.x0 + unit.x * rect.width(), rect.y0 + unit.y * rect.height())
+    }
+
+    /// The pivot in the unit square through the least-squares affine fit of the unit square's
+    /// corners to the box's, solved with the pseudo-inverse where the fit is singular.
+    fn unit_by_least_squares(&self) -> Point {
+        let q = self.quad.map(|c| c.to_vec2());
+        let centre = (q[0] + q[1] + q[2] + q[3]) / 4.0;
+        // The unit corners centred on (0.5, 0.5) are (±0.5, ±0.5), whose scatter is the identity,
+        // so the fit's columns are these corner sums.
+        let cu = ((q[1] + q[2]) - (q[0] + q[3])) / 2.0;
+        let cv = ((q[2] + q[3]) - (q[0] + q[1])) / 2.0;
+        let r = self.pivot.to_vec2() - centre;
+        let det = cu.cross(cv);
+        let norm2 = cu.hypot2() + cv.hypot2();
+        let (du, dv) = if det.abs() > 1e-12 * norm2 {
+            (r.cross(cv) / det, cu.cross(r) / det)
+        } else if norm2 > 1e-24 {
+            // Rank one: the pseudo-inverse is the transpose over the squared norm.
+            (cu.dot(r) / norm2, cv.dot(r) / norm2)
+        } else {
+            (0.0, 0.0)
+        };
+        let unit = Point::new(0.5 + du, 0.5 + dv);
+        if unit.is_finite() { unit } else { Point::new(0.5, 0.5) }
     }
 
     /// A box with the corners `quad`, clockwise from the top left, and the reference point `pivot`.
@@ -854,11 +954,26 @@ impl BoxState {
 pub struct Homography([f64; 9]);
 
 impl Homography {
-    /// [`Homography::apply`] for a point on the front side of the horizon, the side most of `within`'s corners lie
-    /// on; `None` for a point behind it.
+    /// [`Homography::apply`] for a point on the front side of the horizon, the side most of
+    /// `within`'s corners lie on (its centre's side on a two–two split); `None` for a point on
+    /// the horizon or behind it. The side is read from `within` rather than from `w > 0` because
+    /// [`unit_to_quad`](Self::unit_to_quad) fixes `w = 1` at corner 0, which a dart whose reflex
+    /// corner is corner 0 puts behind the horizon.
     pub fn apply_in_front(&self, p: Point, within: Rect) -> Option<Point> {
-        let _ = (p, within);
-        todo!("tl.T4")
+        let [g, k, i] = self.row(2);
+        let w = |q: Point| g * q.x + k * q.y + i;
+        let corners = [Point::new(within.x0, within.y0), Point::new(within.x1, within.y0), Point::new(within.x1, within.y1), Point::new(within.x0, within.y1)];
+        let front = match corners.iter().filter(|&&c| w(c) > 0.0).count() {
+            3 | 4 => 1.0,
+            0 | 1 => -1.0,
+            _ if w(within.center()) >= 0.0 => 1.0,
+            _ => -1.0,
+        };
+        if front * w(p) <= 1e-9 {
+            return None;
+        }
+        let out = self.apply(p);
+        out.is_finite().then_some(out)
     }
 
     /// The map with these rows of (x, y, w) coefficients, applied to (x, y, 1).
