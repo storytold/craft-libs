@@ -235,7 +235,14 @@ fn principal_endpoints(colours: &[[f32; 3]]) -> ([f32; 3], [f32; 3]) {
             if !len.is_normal() {
                 break;
             }
-            axis = next.map(|v| v / len);
+            let normalised = next.map(|v| v / len);
+            // A step that returns the same axis, bit for bit, returns it on every later step too:
+            // stopping there gives the very axis the remaining steps would. Kept only if timing
+            // shows the comparison pays for itself.
+            if normalised.map(f32::to_bits) == axis.map(f32::to_bits) {
+                break;
+            }
+            axis = normalised;
         }
         axis
     };
