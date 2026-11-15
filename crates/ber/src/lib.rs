@@ -49,6 +49,10 @@ pub fn signed_content(cms: &[u8]) -> Option<Vec<u8>> {
 /// How deep elements may nest.
 pub const MAX_DEPTH: usize = 48;
 
+/// Maximum elements materialized or indexed in one parsing operation. This bounds the
+/// allocation amplification from hostile, shallow input containing many empty TLVs.
+pub const MAX_ELEMENTS: usize = 65_536;
+
 /// The universal tag of an OCTET STRING, and of one in pieces.
 const OCTET_STRING: u8 = 0x04;
 const OCTET_STRING_PIECES: u8 = 0x24;
@@ -116,6 +120,9 @@ pub fn read(bytes: &[u8]) -> Option<(Tlv<'_>, &[u8])> {
 pub fn children(mut value: &[u8]) -> Option<Vec<Tlv<'_>>> {
     let mut out = Vec::new();
     while !value.is_empty() {
+        if out.len() >= MAX_ELEMENTS {
+            return None;
+        }
         let (tlv, rest) = read(value)?;
         out.push(tlv);
         value = rest;
@@ -172,7 +179,7 @@ type Sizes = std::collections::HashMap<usize, Size>;
 
 /// The element at `at` in `input`: how many bytes it was, and its length as DER, header and all.
 fn measure(input: &[u8], at: usize, depth: usize, sizes: &mut Sizes) -> Option<(usize, usize)> {
-    if depth > MAX_DEPTH {
+    if depth > MAX_DEPTH || sizes.len() >= MAX_ELEMENTS {
         return None;
     }
     let bytes = input.get(at..)?;
@@ -222,6 +229,9 @@ fn measure(input: &[u8], at: usize, depth: usize, sizes: &mut Sizes) -> Option<(
     if let Some(end) = end
         && pos != end
     {
+        return None;
+    }
+    if sizes.len() >= MAX_ELEMENTS {
         return None;
     }
     sizes.insert(at, Size { used: pos, content, verbatim: false });
@@ -367,6 +377,16 @@ mod tests {
     #[test]
     fn rejects_extra_signed_data_inside_explicit_container() {
         assert_eq!(signed_content(&cms(0x30, 0x30, 0x06, false, true)), None);
+    }
+
+    #[test]
+    fn rejects_wide_inputs_before_unbounded_metadata_allocation() {
+        let children_bytes = [0x05, 0].repeat(MAX_ELEMENTS + 1);
+        assert!(children(&children_bytes).is_none());
+        let mut indefinite = vec![0x30, 0x80];
+        indefinite.extend_from_slice(&children_bytes);
+        indefinite.extend_from_slice(&[0, 0]);
+        assert!(to_der(&indefinite).is_none());
     }
 
     #[test]
