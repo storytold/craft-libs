@@ -34,7 +34,9 @@ fn dialog_methods_read_set_and_answer_typed_dialogs() {
     );
     assert_eq!(inspect(&host)[0]["fields"]["radius"], 4.5);
     assert_eq!(call(&mut host, &ctx, "ui.dialog.confirm", json!({"dialog": blur})), Ok(Value::Null));
-    let Some(DialogResult::Ok(result)) = host.take_keyed::<HostedParamDialog>().map(|(result, _)| result) else { panic!("the blur dialog answers OK") };
+    let Some(DialogResult::Ok(result)) = host.take_keyed::<HostedParamDialog>().map(|(result, _)| result) else {
+        panic!("the blur dialog answers OK")
+    };
     assert_eq!((result.fields.number("radius"), result.fields.text("method")), (Some(4.5), Some("spin")));
     assert_eq!(inspect(&host), json!([]));
 
@@ -104,7 +106,9 @@ fn param_dialog_automation_follows_its_rows() {
     assert_eq!(set(&mut host, "radius", json!(7)), Ok(Value::Null));
     assert_eq!(inspect(&host)[0]["fields"]["cells"], json!([1, 2, 3]));
     assert_eq!(call(&mut host, &ctx, "ui.dialog.confirm", json!({"dialog": id})), Ok(Value::Null));
-    let Some(DialogResult::Ok(result)) = host.take_keyed::<HostedParamDialog>().map(|(result, _)| result) else { panic!("the blur dialog answers OK") };
+    let Some(DialogResult::Ok(result)) = host.take_keyed::<HostedParamDialog>().map(|(result, _)| result) else {
+        panic!("the blur dialog answers OK")
+    };
     assert_eq!(result.fields.grid("cells"), Some(&[1, 2, 3][..]));
     result.remember(&ctx);
 
@@ -114,7 +118,9 @@ fn param_dialog_automation_follows_its_rows() {
     let fields = &listed[0]["fields"];
     assert_eq!((fields["radius"].as_f64(), &fields["method"], &fields["cells"]), (Some(7.0), &json!("zoom"), &json!([0, 1, 0])), "{fields}");
     assert_eq!(call(&mut host, &ctx, "ui.dialog.confirm", json!({"dialog": id})), Ok(Value::Null));
-    let Some(DialogResult::Ok(reopened)) = host.take_keyed::<HostedParamDialog>().map(|(result, _)| result) else { panic!("the reopened dialog answers OK") };
+    let Some(DialogResult::Ok(reopened)) = host.take_keyed::<HostedParamDialog>().map(|(result, _)| result) else {
+        panic!("the reopened dialog answers OK")
+    };
     assert_eq!((reopened.fields.number("radius"), reopened.fields.text("method")), (Some(7.0), Some("zoom")));
 }
 

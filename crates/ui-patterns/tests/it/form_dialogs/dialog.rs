@@ -487,6 +487,9 @@ fn hosted_dialogs_of_two_commands_stay_open_together() {
     for key in ["blur", "sharpen"] {
         assert!(host.borrow_mut().confirm_by_id(&ctx, dialog_id(key)), "{key}: OK answers");
         let answered = host.borrow_mut().take_keyed::<HostedParamDialog>();
-        assert!(matches!(answered, Some((DialogResult::Ok(ref result), Some(ref named))) if named == key && result.key == key), "{key}: its OK comes back by its key");
+        assert!(
+            matches!(answered, Some((DialogResult::Ok(ref result), Some(ref named))) if named == key && result.key == key),
+            "{key}: its OK comes back by its key"
+        );
     }
 }

@@ -1,8 +1,8 @@
 //! [`HostedAdjustDialog`]: an Image › Adjustments dialog on the dialog host, around any adjustment editor.
 
 use craft_behavior::{GestureId, Value};
-use craft_ui::contract::{Bind, Sampler as _, Show as _};
 use craft_theme::variant::Tone;
+use craft_ui::contract::{Bind, Sampler as _, Show as _};
 use craft_ui::dialog::{
     DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field,
 };
@@ -307,15 +307,13 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             .preview(Some(Bind::bound(&mut *preview)))
             .accept_stays_open(*hold)
             .ok_enabled(!held.is_waiting())
-            .shaped(
-            move |dialog| {
+            .shaped(move |dialog| {
                 let dialog = dialog.resizable(resizable);
                 match remember {
                     Some(key) => dialog.remember(key),
                     None => dialog,
                 }
-            },
-        );
+            });
         let form = match reset_with.as_deref() {
             Some(target) => form.reset_with(target),
             None => form,
