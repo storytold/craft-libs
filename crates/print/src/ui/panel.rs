@@ -3,6 +3,7 @@
 use super::{Duplex, Printer, Settings, shown_names};
 use craft_ui::buttons::Button;
 use craft_ui::choice::Checkbox;
+use craft_ui::display::Text;
 use craft_ui::contract::{Bind, Entry, Held, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
@@ -12,7 +13,7 @@ use craft_ui::text::NumberField;
 use egui::{Response, Ui};
 
 /// The most copies one job may ask for.
-const MOST_COPIES: u32 = 999;
+pub(super) const MOST_COPIES: u32 = 999;
 
 craft_ui::words! {
     /// The words of the print panel.
@@ -28,6 +29,11 @@ craft_ui::words! {
         long_edge: "printPanel.longEdge" = "Long edge";
         short_edge: "printPanel.shortEdge" = "Short edge";
         grayscale: "printPanel.grayscale" = "Grayscale";
+        print_settings: "printPanel.printSettings" = "Print Settings…";
+        orientation: "printPanel.orientation" = "Orientation";
+        portrait: "printPanel.portrait" = "Portrait";
+        landscape: "printPanel.landscape" = "Landscape";
+        page_in_driver: "printPanel.pageInDriver" = "set in Print Settings…";
     }
 }
 
@@ -39,6 +45,12 @@ pub struct PrintPanelOutput {
     pub response: Response,
     /// The Refresh button was pressed this pass: the caller starts printer discovery again.
     pub refresh: bool,
+    /// A printer was chosen this pass: its name. The caller takes the paper from the new printer's driver.
+    pub printer_chosen: Option<String>,
+    /// Print Settings… was pressed this pass: the caller opens the driver's own dialog.
+    pub settings_clicked: bool,
+    /// Portrait (`false`) or Landscape (`true`) was pressed this pass: the caller turns the driver settings.
+    pub turned: Option<bool>,
 }
 
 impl Outcome for PrintPanelOutput {
@@ -55,6 +67,8 @@ impl Outcome for PrintPanelOutput {
 /// - The printer list shows each printer's label, or its name, and edits the printer's name.
 /// - Refresh is disabled while printers are being found, and the whole panel while a job runs.
 /// - Copies step with the arrow keys, by ten with Shift.
+/// - With `driver`, Print Settings… and Portrait/Landscape press into the output; the page line shows `page` and
+///   `page_error`, which the caller keeps.
 #[must_use = "show the panel with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct PrintPanel<'a> {
@@ -66,17 +80,27 @@ pub struct PrintPanel<'a> {
     /// A job is running: the panel is disabled.
     #[prop]
     busy: bool,
+    /// The driver controls (Print Settings…, Portrait and Landscape, the page line) are shown: the caller can ask a
+    /// printer driver for its page.
+    #[prop]
+    driver: bool,
+    /// The driver's paper in points, as the caller last took it.
+    #[prop]
+    page: Option<egui::Vec2>,
+    /// Why the driver gave no page.
+    #[prop]
+    page_error: Option<String>,
 }
 
 impl<'a> PrintPanel<'a> {
     /// The panel over `settings`, offering `printers`.
     pub fn new(settings: Bind<'a, Settings>, printers: &'a [Printer]) -> Self {
-        PrintPanel { settings, printers, discovering: false, busy: false }
+        PrintPanel { settings, printers, discovering: false, busy: false, driver: false, page: None, page_error: None }
     }
 
     /// Shows the panel.
     pub fn show(self, ui: &mut Ui) -> PrintPanelOutput {
-        let PrintPanel { settings, printers, discovering, busy } = self;
+        let PrintPanel { settings, printers, discovering, busy, driver, page, page_error } = self;
         let env = Env::of(ui);
         let words = env.words::<PrintWords>();
         let queues: Vec<Entry<String>> =
@@ -89,6 +113,9 @@ impl<'a> PrintPanel<'a> {
         ];
         let mut held = Held::new(settings);
         let mut refresh = false;
+        let mut printer_chosen = None;
+        let mut settings_clicked = false;
+        let mut turned = None;
         let mut shown = FieldGroup::new(words.title.clone()).enabled(!busy).show(ui, |ui, cx| {
             let before = held.read(cx)?;
             let mut now = before.clone();
@@ -99,6 +126,9 @@ impl<'a> PrintPanel<'a> {
                         .id_salt("queue")
                         .show(ui);
                     if let Some(name) = picked.value() {
+                        if *name != now.printer {
+                            printer_chosen = Some(name.clone());
+                        }
                         now.printer.clone_from(name);
                     }
                     let button = Button::new(words.refresh.clone()).enabled(!discovering).id_salt("refresh").show(ui);
@@ -117,6 +147,31 @@ impl<'a> PrintPanel<'a> {
                     now.duplex = duplex;
                 }
             });
+            if driver {
+                Field::new(words.print_settings.clone()).id_salt("driver").show(ui, |ui, _| {
+                    let button = Button::new(words.print_settings.clone()).id_salt("print-settings").show(ui);
+                    settings_clicked |= clicked(&button);
+                });
+                Field::new(words.orientation.clone()).id_salt("orientation").show(ui, |ui, _| {
+                    Row::new().show(ui, |ui, _| {
+                        let wide = page.is_some_and(|paper| paper.x > paper.y);
+                        for (landscape, word) in [(false, &words.portrait), (true, &words.landscape)] {
+                            let button = Button::new(word.clone()).enabled(wide != landscape).id_salt(word.as_str()).show(ui);
+                            if clicked(&button) {
+                                turned = Some(landscape);
+                            }
+                        }
+                    });
+                    if let Some(paper) = page {
+                        let mm = |points: f32| points / 72.0 * 25.4;
+                        let line = format!("{:.0} × {:.0} mm · {}", mm(paper.x), mm(paper.y), words.page_in_driver.as_str());
+                        Text::new(line).show(ui);
+                    }
+                    if let Some(error) = &page_error {
+                        Text::new(error.clone()).show(ui);
+                    }
+                });
+            }
             Field::new(words.grayscale.clone()).id_salt("grayscale").show(ui, |ui, _| {
                 if let Some(on) =
                     Checkbox::new(Bind::given(now.grayscale)).label(words.grayscale.clone()).id_salt("grayscale").show(ui).value().copied()
@@ -132,7 +187,7 @@ impl<'a> PrintPanel<'a> {
                 held.write(cx, &before, now, words.title.as_str());
             }
         });
-        PrintPanelOutput { response: shown.output, refresh }
+        PrintPanelOutput { response: shown.output, refresh, printer_chosen, settings_clicked, turned }
     }
 }
 

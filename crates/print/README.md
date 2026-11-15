@@ -234,8 +234,16 @@ plus discovery and submission receivers. Hosts supply `Discover` and `Submit` wo
 the state nor the controls invokes an OS spooler or generates PDF content. Apps map `Settings`
 to ``Job`` and own the Print action, page selection, preview and export behavior.
 
-`State::show` takes a stable `egui::Id` and app-localized `Labels`. It draws the settings only;
-apps render typed `Feedback` using their own translations. `poll` requests occasional repaints
+`State::run` polls the workers and draws `PrintPanel` over the settings, starting discovery on the first pass; apps
+that draw their own dialog around the panel use it. `PrintDialog` is Photoshop's Print Settings: a preview of the
+paper, printable area, image box and marks, the panel, and the app's `PrintSection` rows (`ParamRows`), with Print,
+Cancel and Done in the footer. Dragging the image box reports its total travel from the press in paper points as
+`EditEvents`. `HostedPrint` is the same dialog owned by a `DialogHost`. It holds no discovery closure: it asks with
+`take_refresh` (the first pass and each Refresh) and the app answers with `listen`, passing `discover()` or its own
+receiver, so a list that needs the app's session works too. `State::listen` takes the receiver and refuses while a
+discovery or a job runs.
+
+Apps render typed `Feedback` using their own translations. `poll` requests occasional repaints
 while work is pending. Refresh disables submission until the new printer list arrives, preserves
 a still-present selection, and otherwise chooses the system default or first available printer.
 An empty or failed discovery cannot leave a stale printer ready to submit.
