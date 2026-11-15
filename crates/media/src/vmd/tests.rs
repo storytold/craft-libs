@@ -128,6 +128,8 @@ fn picture_rect_follows_the_picture_position() {
     );
     // as wide as the picture but not as high is an ordinary frame
     assert_eq!(rects((0, 0), &[([3, 2, 22, 8], 1), ([3, 2, 5, 5], 1)]), [None, at(3, 2, 5, 5)]);
+    // and so is one as high but not as wide
+    assert_eq!(rects((0, 0), &[([3, 2, 10, 11], 1), ([3, 2, 5, 5], 1)]), [None, at(3, 2, 5, 5)]);
     // inverted and oversized frames are outside
     assert_eq!(
         rects((0, 0), &[([2, 0, 5, 0], 1), ([5, 0, 4, 0], 1), ([0, 1, 0, 0], 1), ([0, 0, 20, 9], 1), ([0, 0, 19, 10], 1)]),
