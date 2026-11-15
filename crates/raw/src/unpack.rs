@@ -46,12 +46,18 @@ pub fn unpack_lsb(src: &[u8], bits: u32, out: &mut [u16]) {
 /// data, which is not the byte-wise MSB stream of [`unpack_msb`] unless `order` is big-endian. A short last word
 /// is padded with zeros.
 pub fn unpack_words32_msb(src: &[u8], order: ByteOrder, bits: u32, out: &mut [u16]) {
-    let words = src.chunks(4).flat_map(|c| {
+    unpack_words32_msb_with(src, order, bits, out, &mut Vec::new());
+}
+
+/// [`unpack_words32_msb`] with the byte-swapped copy of `src` kept in `scratch` (reused across rows).
+pub fn unpack_words32_msb_with(src: &[u8], order: ByteOrder, bits: u32, out: &mut [u16], scratch: &mut Vec<u8>) {
+    scratch.clear();
+    scratch.extend(src.chunks(4).flat_map(|c| {
         let mut w = [0u8; 4];
         w[..c.len()].copy_from_slice(c);
         order.u32(w).to_be_bytes()
-    });
-    unpack_msb(&words.collect::<Vec<u8>>(), bits, out);
+    }));
+    unpack_msb(scratch, bits, out);
 }
 
 pub fn read_u16s(src: &[u8], order: ByteOrder, out: &mut [u16]) {
@@ -126,10 +132,12 @@ pub fn undo_diff_u8(row: &mut [u8], stride: usize) {
 
 /// Undo the floating-point predictor on one row: `row` holds `n` samples of `bytes_per` bytes, byte-differenced
 /// with stride `stride` samples, then stored as byte planes (most significant first). Returns the samples as
-/// big-endian byte groups in place.
-pub fn undo_float_predictor(row: &mut [u8], n: usize, bytes_per: usize, stride: usize) {
+/// big-endian byte groups in place. `scratch` holds the byte planes (reused across rows).
+pub fn undo_float_predictor(row: &mut [u8], n: usize, bytes_per: usize, stride: usize, scratch: &mut Vec<u8>) {
     undo_diff_u8(row, stride);
-    let tmp = row.to_vec();
+    scratch.clear();
+    scratch.extend_from_slice(row);
+    let tmp = &scratch[..];
     for i in 0..n {
         for b in 0..bytes_per {
             if let (Some(dst), Some(&s)) = (row.get_mut(i * bytes_per + b), tmp.get(b * n + i)) {
@@ -210,7 +218,7 @@ mod tests {
         for i in (1..row.len()).rev() {
             row[i] = row[i].wrapping_sub(row[i - 1]);
         }
-        undo_float_predictor(&mut row, 2, 4, 1);
+        undo_float_predictor(&mut row, 2, 4, 1, &mut Vec::new());
         assert_eq!(f32::from_be_bytes([row[0], row[1], row[2], row[3]]), 1.0);
         assert_eq!(f32::from_be_bytes([row[4], row[5], row[6], row[7]]), 2.0);
     }
