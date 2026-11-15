@@ -147,18 +147,19 @@ impl BrushResize {
 
     /// Whether a press of `button` with `mods` is a resize: Alt with the secondary button (Photoshop on Windows and
     /// Linux), or Control and Alt with the primary button (Control and Option on a Mac). Alt with the primary button
-    /// alone is not (the painting tools' eyedropper). [`takes`](Self::takes) lets the secondary button through.
+    /// alone is not (the painting tools' eyedropper), and Shift+Alt with the secondary button is not (the HUD colour
+    /// picker's chord). [`takes`](Self::takes) lets the secondary button through.
     pub fn chord(button: PointerButton, mods: Mods) -> bool {
-        let alt_secondary = button == PointerButton::Secondary && mods.alt;
+        let alt_secondary = button == PointerButton::Secondary && mods.alt && !mods.shift;
         let control_alt_primary = button == PointerButton::Primary && mods.alt && mods.ctrl;
         alt_secondary || control_alt_primary
     }
 
     /// Whether a brush tool takes a press of `button` with `mods`: the primary button always, the secondary only with
-    /// Alt (Photoshop's Alt + right-drag resize), so a plain right click stays the canvas menu's. Pass it to
-    /// `CanvasTool::takes` beside [`chord`](Self::chord).
+    /// Alt and without Shift (Photoshop's Alt + right-drag resize), so a plain right click stays the canvas menu's and
+    /// Shift+Alt + right click the HUD colour picker's. Pass it to `CanvasTool::takes` beside [`chord`](Self::chord).
     pub fn takes(button: PointerButton, mods: Mods) -> bool {
-        button == PointerButton::Primary || (button == PointerButton::Secondary && mods.alt)
+        button == PointerButton::Primary || (button == PointerButton::Secondary && mods.alt && !mods.shift)
     }
 
     /// Starts a resize at the screen point `at` from the brush's `start` values. A resize whose release was lost is
