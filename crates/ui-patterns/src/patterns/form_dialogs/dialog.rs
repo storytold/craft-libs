@@ -980,6 +980,11 @@ impl HostedParamDialog {
         self.requests.preview_color(key, color);
     }
 
+    /// The colours the colour rows preview in place of their values, by row key ([`preview_color`](Self::preview_color)).
+    pub fn previewed_colors(&self) -> &[(String, Srgba)] {
+        self.requests.previewed_colors()
+    }
+
     /// The host cancelled its picker, file dialog or dropper: the requests not taken yet are dropped.
     pub fn cancel_requests(&mut self) {
         self.requests.cancel();
