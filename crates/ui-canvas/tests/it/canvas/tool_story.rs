@@ -111,8 +111,9 @@ fn a_drag_over_several_frames_edits_the_kept_document_and_reset_puts_it_back() {
     assert_eq!(lines(&fixture).len(), 1, "the kept tool draws again after Reset");
 }
 
-/// Where Play's line starts and ends, in document points.
-const PLAYED: (Point, Point) = (Point::new(100.0, 100.0), Point::new(300.0, 100.0));
+/// Where Play's line starts and ends, in document points: inside the part of the document the canvas shows, where a
+/// hand's press reaches the canvas.
+const PLAYED: (Point, Point) = (Point::new(220.0, 150.0), Point::new(420.0, 150.0));
 
 fn played(ui: &mut egui::Ui, data: &mut StoryData) -> StoryOutput {
     let script = ToolScript::new(1.0).stroke(PointerButton::Primary, &[PLAYED.0, PLAYED.1], craft_keymap::Mods::NONE, craft_keymap::Mods::NONE);
@@ -126,9 +127,9 @@ fn play_draws_the_scripted_line_over_the_script_time() {
     fixture.settle();
     let play = fixture.by_label("Play").expect("the Play button");
     fixture.click(&play);
-    fixture.advance(0.5).idle(1);
+    fixture.advance(0.5).idle(1).run_injected();
     assert!(lines(&fixture).is_empty(), "half way through, the line is still being drawn");
-    fixture.advance(1.0).idle(3);
+    fixture.advance(1.0).idle(1).run_injected().idle(1);
     let drawn = lines(&fixture);
     assert_eq!(drawn.len(), 1, "the script draws one line: {drawn:?}");
     assert!(drawn[0].0.distance(from) < 1.0 && drawn[0].1.distance(to) < 1.0, "the line runs along the script: {drawn:?}");
