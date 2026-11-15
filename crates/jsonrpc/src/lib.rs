@@ -10,6 +10,7 @@
 
 #[cfg(feature = "async-lines")]
 pub mod async_lines;
+pub mod control;
 
 use serde_json::{Value, json};
 use std::io::BufRead;

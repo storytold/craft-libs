@@ -153,8 +153,12 @@ impl Out {
     }
 
     /// Preserve the semantic text for consumers that group outlined glyphs.
-    pub fn begin_actual_text(&mut self, text: &str) {
+    pub fn begin_actual_text(&mut self, text: &str, clip: &Option<Rc<Clip>>) -> Result<(), String> {
+        // A clip can outlive the show. Establish it before the marked span so EMC does not
+        // accidentally close the graphics state that later painting still needs.
+        self.sync_clip(clip)?;
         self.c.begin_marked_content_with_properties(Name(b"Span")).properties().actual_text(pdf_writer::TextStr(text));
+        Ok(())
     }
 
     pub fn end_actual_text(&mut self) {
