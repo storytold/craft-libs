@@ -1,7 +1,7 @@
 //! Decoding lossless synthetic HEIF files ([`crate::testdata`]): every expected sample is known.
 
-use crate::testdata::{Prop, Spec, build};
-use crate::{Error, Options, decode, decode_thumbnail, probe, read_metadata};
+use crate::testdata::{Aux, Prop, Spec, build};
+use crate::{AuxKind, Error, Options, auxiliary_images, decode, decode_auxiliary, decode_thumbnail, probe, read_metadata};
 
 /// A luma value unique enough to identify its position; chroma neutral.
 fn luma(x: u32, y: u32) -> u16 {
@@ -399,4 +399,98 @@ fn a_stereo_pair_decodes_its_primary_image() {
     assert!(!plain.windows(4).any(|w| w == b"grpl"));
     let (a, b) = (decode(&plain, &Options::default()).unwrap(), decode(&stereo, &Options::default()).unwrap());
     assert_eq!((a.width, a.height, &a.data), (b.width, b.height, &b.data));
+}
+
+/// An iPhone Portrait photo's auxiliary images, reduced: a quarter-size depth map and a full-size matte, each turned
+/// like the photo (`irot`), each with its own XMP packet; plus an HDR gain map without one.
+fn portrait<'a>(depth: &'a dyn Fn(u32, u32) -> u16, matte: &'a dyn Fn(u32, u32) -> u16, turn: Vec<Prop>) -> Spec<'a> {
+    Spec {
+        props: [vec![FULL_601], turn.clone()].concat(),
+        ignored_aux: vec!["urn:com:apple:photo:2020:aux:hdrgainmap"],
+        aux: vec![
+            Aux { urn: "urn:mpeg:hevc:2015:auxid:2", width: 32, height: 16, sample: depth, props: turn.clone(), xmp: Some(DEPTH_XMP.into()) },
+            Aux {
+                urn: "urn:com:apple:photo:2018:aux:portraiteffectsmatte",
+                width: 64,
+                height: 32,
+                sample: matte,
+                props: turn,
+                xmp: Some("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".into()),
+            },
+        ],
+        ..Spec::new(128, 64, &grey)
+    }
+}
+
+const DEPTH_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:apdi="http://ns.apple.com/pixeldatainfo/1.0/"><apdi:AuxiliaryImageType>disparity</apdi:AuxiliaryImageType></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+
+/// Issue craft-libs#1760: the primary image's auxiliary images are listed with their type, size after their own
+/// transforms, bit depth and the XMP packet tied to each; nothing is decoded and the photo decodes as before.
+#[test]
+fn auxiliary_images_are_listed_with_their_type_size_and_xmp() {
+    let depth = |x: u32, y: u32| (x * 5 + y) as u16;
+    let matte = |x: u32, _: u32| (x * 3) as u16;
+    let bytes = build(&portrait(&depth, &matte, vec![Prop::Irot(1)]));
+    let aux = auxiliary_images(&bytes).unwrap();
+    let kinds: Vec<(AuxKind, &str, u32, u32)> = aux.iter().map(|a| (a.kind, a.urn.as_str(), a.width, a.height)).collect();
+    assert_eq!(
+        kinds,
+        [
+            // written without a rotation of its own: as coded
+            (AuxKind::Other, "urn:com:apple:photo:2020:aux:hdrgainmap", 128, 64),
+            (AuxKind::Depth, "urn:mpeg:hevc:2015:auxid:2", 16, 32),
+            (AuxKind::Other, "urn:com:apple:photo:2018:aux:portraiteffectsmatte", 32, 64),
+        ],
+        "the depth map and matte turned a quarter, like the photo"
+    );
+    assert_eq!(aux[1].xmp.as_deref(), Some(DEPTH_XMP));
+    assert_eq!(aux[0].xmp, None, "no packet of its own");
+    // the photo itself is unchanged by them
+    let d = decode(&bytes, &Options::default()).unwrap();
+    assert_eq!((d.width, d.height, d.has_alpha), (64, 128, false));
+}
+
+/// A depth map decodes to its samples as coded, turned and cropped by its own properties, so it lines up with the
+/// decoded photo; with `apply_transforms` off it comes back as coded.
+#[test]
+fn an_auxiliary_image_decodes_to_its_samples_as_coded() {
+    let depth = |x: u32, y: u32| (x * 5 + y) as u16;
+    let matte = |x: u32, _: u32| (x * 3) as u16;
+    let bytes = build(&portrait(&depth, &matte, vec![Prop::Irot(1)]));
+    let id = auxiliary_images(&bytes).unwrap().iter().find(|a| a.kind == AuxKind::Depth).unwrap().id;
+    let p = decode_auxiliary(&bytes, id, &Options::default()).unwrap();
+    assert_eq!((p.width, p.height, p.bit_depth, p.data.len()), (16, 32, 8, 16 * 32));
+    // a quarter turn counter-clockwise: the coded right column is the top row
+    for (x, y) in [(0, 0), (5, 0), (15, 31), (3, 17)] {
+        assert_eq!(p.data[(y * 16 + x) as usize], depth(31 - y, x), "({x}, {y})");
+    }
+    let raw = decode_auxiliary(&bytes, id, &Options { apply_transforms: false, ..Options::default() }).unwrap();
+    assert_eq!((raw.width, raw.height), (32, 16));
+    assert!((0..16).all(|y| (0..32).all(|x| raw.data[(y * 32 + x) as usize] == depth(x, y))));
+}
+
+/// Only auxiliary images of the primary image decode here, under the same pixel limit as the photo; a malformed
+/// file is an error, never a panic.
+#[test]
+fn decode_auxiliary_refuses_what_it_should() {
+    let depth = |x: u32, y: u32| (x + y) as u16;
+    let matte = |_: u32, _: u32| 0;
+    let bytes = build(&portrait(&depth, &matte, Vec::new()));
+    let aux = auxiliary_images(&bytes).unwrap();
+    let id = aux.iter().find(|a| a.kind == AuxKind::Depth).unwrap().id;
+    // item 1 is the photo's first tile, not an auxiliary image
+    assert!(matches!(decode_auxiliary(&bytes, 1, &Options::default()), Err(Error::Unsupported(_))));
+    let small = Options { max_pixels: 32 * 16 - 1, ..Options::default() };
+    assert!(matches!(decode_auxiliary(&bytes, id, &small), Err(Error::Limit(_))));
+    for end in (0..bytes.len()).step_by(7) {
+        let cut = &bytes[..end];
+        let _ = auxiliary_images(cut);
+        let _ = decode_auxiliary(cut, id, &Options::default());
+    }
+}
+
+/// A file without auxiliary images lists none.
+#[test]
+fn a_photo_without_auxiliary_images_lists_none() {
+    assert_eq!(auxiliary_images(&build(&Spec::new(64, 32, &grey))).unwrap(), Vec::new());
 }

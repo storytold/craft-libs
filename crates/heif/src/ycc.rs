@@ -246,6 +246,20 @@ pub fn to_rgb16(planes: &Planes<'_>, signal: Signal, alpha: bool, mode: Upsampli
 /// coded larger than its `ispe` (see [`crate::orient::to_declared`]); its top-left `width`
 /// columns are the ones that line up, so the rest of each row is skipped rather than shifting
 /// the alpha across the picture.
+/// The luma plane as coded (no range or scale conversion: a depth map's or matte's samples are its values),
+/// row-major, no padding. `None` for an empty picture or one whose rows don't cover its size.
+pub fn luma(planes: &Planes<'_>) -> Option<Vec<u16>> {
+    let (w, h) = planes.size();
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let mut out = vec![0u16; w.checked_mul(h)?];
+    for (y, row) in out.chunks_exact_mut(w).enumerate() {
+        planes.luma_row(y, row)?;
+    }
+    Some(out)
+}
+
 pub fn put_alpha(planes: &Planes<'_>, rgba: &mut [u16], width: usize) -> Option<()> {
     let (w, h) = planes.size();
     if width == 0 || w < width || !rgba.len().is_multiple_of(width * 4) || h < rgba.len() / (width * 4) {
