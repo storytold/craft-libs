@@ -157,7 +157,9 @@ const CARGO_CACHE_MARKER: &str = "CACHEDIR.TAG";
 /// `build.build-dir` set, `.rustc_info.json` and those subdirectories live elsewhere and the
 /// profile directory has only Cargo's `.cargo-lock` file, which is accepted too.
 /// `CACHEDIR.TAG` alone isn't Cargo-specific (the same signature marks any cache directory), so
-/// it only corroborates that profile layout.
+/// it only corroborates that profile layout. Extracted nextest archives retain their
+/// `nextest/binaries-metadata.json` inventory rather than Cargo cache files; those are
+/// also build trees, even when the archive is unpacked outside its original target directory.
 fn is_development_build(exe: &Path, opted_in: bool) -> bool {
     !opted_in && exe.ancestors().skip(1).any(is_cargo_build_dir)
 }
@@ -165,7 +167,7 @@ fn is_development_build(exe: &Path, opted_in: bool) -> bool {
 /// Whether `dir` is a Cargo target root (by its rustc-info cache marker) or a profile output
 /// directory inside one (by the cache-disabled fallback).
 fn is_cargo_build_dir(dir: &Path) -> bool {
-    if dir.join(".rustc_info.json").is_file() {
+    if dir.join(".rustc_info.json").is_file() || dir.join("nextest/binaries-metadata.json").is_file() {
         return true;
     }
     let Some(profile_parent) = dir.parent() else { return false };
@@ -3784,6 +3786,28 @@ mod tests {
             let exe = cargo_build_tree(dir.path(), "builds/egui037-craft-libs", exe);
             assert!(is_development_build(&exe, false), "{}", exe.display());
         }
+    }
+
+    #[test]
+    fn nextest_archive_binaries_do_not_update_themselves() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("relocated-artifacts");
+        let exe = root.join("debug/build/artcraft-launcher-native/hash/out/artcraft_launcher_native-hash");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "ELF").unwrap();
+        let metadata = root.join("nextest/binaries-metadata.json");
+        std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+        // Names alone are not evidence of a Cargo build tree.
+        assert!(!is_development_build(&exe, false));
+        std::fs::write(&metadata, "{}").unwrap();
+        assert!(is_development_build(&exe, false));
+        assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+        assert!(!is_development_build(&exe, true), "explicit developer opt-in remains available");
+        let installed = dir.path().join("bin/artcraft-launcher");
+        assert!(!is_development_build(&installed, false), "a sibling installation is not part of the archive");
+        std::fs::remove_file(&metadata).unwrap();
+        std::fs::create_dir(&metadata).unwrap();
+        assert!(!is_development_build(&exe, false), "metadata must be a file");
     }
 
     /// A Cargo build tree is not recognised by names: an installed copy in a folder literally
