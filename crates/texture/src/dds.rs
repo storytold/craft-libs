@@ -74,10 +74,33 @@ mod tests {
     }
 
     #[test]
+    fn half_float_and_compressed_pixels_preserve_backend_values() {
+        let half: Vec<u8> = [0xb800u16, 0x4000, 0x3400, 0x3a00].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let image = decode_first(&bytes(::dds::Format::R16G16B16A16_FLOAT, &half), &Limits::default()).unwrap();
+        assert_eq!(image.rgba, [-0.5, 2.0, 0.25, 0.75]);
+        assert_eq!(image.source_precision_is_f32, ::dds::Format::R16G16B16A16_FLOAT.precision() == ::dds::Precision::F32);
+        let mut compressed = Vec::new();
+        ::dds::Header::new_image(4, 4, ::dds::Format::BC1_UNORM).write(&mut compressed).unwrap();
+        compressed.extend_from_slice(&[0, 0xf8, 0, 0, 0, 0, 0, 0]);
+        let image = decode_first(&compressed, &Limits::default()).unwrap();
+        assert!(!image.source_precision_is_f32);
+        assert!(image.rgba.as_chunks::<4>().0.iter().all(|p| *p == [1.0, 0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn cube_keeps_first_surface_only_like_materialcraft() {
+        let mut data = Vec::new();
+        ::dds::Header::new_cube_map(1, 1, ::dds::Format::R8G8B8A8_UNORM).write(&mut data).unwrap();
+        data.extend_from_slice(&[255, 0, 0, 255]);
+        data.extend_from_slice(&[0; 20]);
+        let image = decode_first(&data, &Limits::default()).unwrap();
+        assert_eq!(image.rgba, [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
     fn checks_output_budget_and_truncation() {
         let data = bytes(::dds::Format::R8G8B8A8_UNORM, &[1, 2, 3, 4]);
-        let mut limits = Limits::default();
-        limits.max_bytes = 15;
+        let mut limits = Limits { max_bytes: 15, ..Limits::default() };
         assert!(matches!(decode_first(&data, &limits), Err(DecodeError::Image(ImageError::TooLarge(1, 1)))));
         limits.max_bytes = 16;
         assert!(decode_first(&data, &limits).is_ok());
