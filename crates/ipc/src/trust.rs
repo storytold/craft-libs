@@ -19,7 +19,9 @@ use crate::error::LinkError;
 /// `Ok` when `path` is an absolute path to a regular, executable file, owned by this user or root
 /// and not writable by every user, in a directory with the same owner and mode rules.
 ///
-/// Symlinks are followed, and both the link's directory and the target's directory are checked.
+/// Symlinks are followed, and the ancestors of both the supplied and resolved paths are checked.
+/// A sticky, trusted-owner directory may appear above the immediate directory: it cannot let
+/// another user replace the next trusted-owner path component (as with a private folder in /tmp).
 /// A group-writable file or directory passes, and the other members of its group can replace it.
 /// Most Linux distributions give each user a private group, and the check cannot see group
 /// members. A file or directory that every user can write fails.
@@ -54,6 +56,7 @@ mod unix {
 
     const WORLD_WRITE: u32 = 0o002;
     const ANY_EXEC: u32 = 0o111;
+    const STICKY: u32 = 0o1000;
 
     pub(super) fn check(path: &Path) -> Result<(), LinkError> {
         let euid = crate::discovery::current_euid()?;
@@ -67,9 +70,26 @@ mod unix {
         owner_and_mode(path, &meta, euid, "file")?;
         let real = std::fs::canonicalize(path).map_err(|err| refused(path, &format!("cannot resolve: {err}")))?;
         for candidate in [path, real.as_path()] {
-            let Some(parent) = candidate.parent() else { continue };
-            let dir = std::fs::metadata(parent).map_err(|err| refused(parent, &format!("cannot stat: {err}")))?;
-            owner_and_mode(parent, &dir, euid, "directory")?;
+            // Check each named component as well as its resolved directory. In particular a
+            // foreign-owned symlink in a sticky ancestor can be replaced by that symlink's owner.
+            for component in candidate.ancestors() {
+                let named = std::fs::symlink_metadata(component).map_err(|err| refused(component, &format!("cannot stat: {err}")))?;
+                if named.file_type().is_symlink() && named.uid() != euid && named.uid() != 0 {
+                    return Err(refused(component, "symlink is owned by another user"));
+                }
+            }
+            for (depth, parent) in candidate.ancestors().skip(1).enumerate() {
+                let dir = std::fs::metadata(parent).map_err(|err| refused(parent, &format!("cannot stat: {err}")))?;
+                // Sticky ancestors protect the trusted-owned child checked on the preceding
+                // iteration. The immediate directory still must not be world-writable.
+                if depth > 0 && dir.mode() & STICKY != 0 {
+                    if dir.uid() != euid && dir.uid() != 0 {
+                        return Err(refused(parent, "sticky ancestor is owned by another user"));
+                    }
+                } else {
+                    owner_and_mode(parent, &dir, euid, "directory")?;
+                }
+            }
         }
         Ok(())
     }
@@ -96,7 +116,7 @@ mod tests {
     fn scratch(label: &str) -> PathBuf {
         let mut bytes = [0u8; 4];
         getrandom::getrandom(&mut bytes).unwrap();
-        let path = PathBuf::from(format!("/tmp/cl-trust-{label}-{}", crate::auth::encode_hex(&bytes)));
+        let path = std::env::temp_dir().join(format!("cl-trust-{label}-{}", crate::auth::encode_hex(&bytes)));
         std::fs::create_dir_all(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
@@ -160,5 +180,36 @@ mod tests {
     #[test]
     fn system_programs_pass() {
         assert!(check_executable(Path::new("/usr/bin/env")).is_ok() || check_executable(Path::new("/bin/sh")).is_ok());
+    }
+
+    #[test]
+    fn writable_ancestor_cannot_replace_a_private_program_directory() {
+        let ancestor = scratch("ancestor");
+        let bin = ancestor.join("install/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let app = program(&bin, 0o755);
+        assert!(check_executable(&app).is_ok());
+        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(check_executable(&app).is_err(), "a safe immediate parent does not protect its ancestors");
+        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o1777)).unwrap();
+        assert!(check_executable(&app).is_ok(), "sticky ancestor protects the owned install directory");
+        std::fs::remove_dir_all(&ancestor).unwrap();
+    }
+
+    #[test]
+    fn symlink_target_ancestors_are_checked_too() {
+        let good = scratch("ancestor-link");
+        let ancestor = scratch("ancestor-target");
+        let bin = ancestor.join("install/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let target = program(&bin, 0o755);
+        let link = good.join("app");
+        std::os::unix::fs::symlink(target, &link).unwrap();
+        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(check_executable(&link).is_err());
+        std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(check_executable(&link).is_ok());
+        std::fs::remove_dir_all(good).unwrap();
+        std::fs::remove_dir_all(ancestor).unwrap();
     }
 }
