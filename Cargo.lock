@@ -2740,6 +2740,9 @@ dependencies = [
 [[package]]
 name = "craft-testkit"
 version = "0.1.0"
+dependencies = [
+ "rustix 1.1.5",
+]
 
 [[package]]
 name = "craft-text"

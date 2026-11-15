@@ -2129,16 +2129,44 @@ impl Default for SourceLimits {
 #[cfg(not(target_arch = "wasm32"))]
 const CACHEDIR_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
 
+/// Open `path` for reading when it is a regular file. Returns `Ok(None)` when `path` is a symbolic
+/// link, a folder, a FIFO or another special file.
+///
+/// On Unix the open does not follow a symbolic link (`O_NOFOLLOW`) and does not wait for a writer on a
+/// FIFO (`O_NONBLOCK`), and the type is then read from the opened file, so a file replaced between a
+/// directory listing and the open is checked as it is when opened. On other platforms a path that is a
+/// symbolic link is skipped before the open, and the opened file must be a regular file.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_regular_file(path: &Path) -> std::io::Result<Option<std::fs::File>> {
+    #[cfg(unix)]
+    let opened = {
+        use rustix::fs::{Mode, OFlags};
+        rustix::fs::open(path, OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC, Mode::empty())
+            .map(std::fs::File::from)
+            .map_err(std::io::Error::from)
+    };
+    #[cfg(not(unix))]
+    let opened = {
+        if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+            return Ok(None);
+        }
+        std::fs::File::open(path)
+    };
+    let file = match opened {
+        Ok(file) => file,
+        // `O_NOFOLLOW` fails on a symbolic link (ELOOP on Linux and macOS, EMLINK on FreeBSD).
+        Err(_) if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    Ok(file.metadata()?.file_type().is_file().then_some(file))
+}
+
 /// Whether `dir` holds a `CACHEDIR.TAG` regular file that starts with [`CACHEDIR_SIGNATURE`]. A marker
-/// that is a symbolic link, a folder, a FIFO or another special file is not opened and does not count.
+/// that is a symbolic link, a folder, a FIFO or another special file is not read and does not count.
 #[cfg(not(target_arch = "wasm32"))]
 fn is_cache_dir(dir: &Path) -> bool {
     use std::io::Read;
-    let marker = dir.join("CACHEDIR.TAG");
-    if !std::fs::symlink_metadata(&marker).is_ok_and(|m| m.file_type().is_file()) {
-        return false;
-    }
-    let Ok(file) = std::fs::File::open(&marker) else {
+    let Ok(Some(file)) = open_regular_file(&dir.join("CACHEDIR.TAG")) else {
         return false;
     };
     let mut head = Vec::with_capacity(CACHEDIR_SIGNATURE.len());
@@ -2208,12 +2236,15 @@ pub fn rust_sources_with_limits(dir: impl AsRef<Path>, limits: SourceLimits) -> 
                         format!("more than {} Rust source files under {}", limits.max_files, root.display()),
                     ));
                 }
+                let Some(file) = open_regular_file(&p)? else {
+                    continue;
+                };
                 let over_file = || Error::new(ErrorKind::FileTooLarge, format!("{} is larger than {} bytes", p.display(), limits.max_file_bytes));
-                if entry.metadata()?.len() > limits.max_file_bytes {
+                if file.metadata()?.len() > limits.max_file_bytes {
                     return Err(over_file());
                 }
                 let mut content = String::new();
-                std::fs::File::open(&p)?.take(limits.max_file_bytes.saturating_add(1)).read_to_string(&mut content)?;
+                file.take(limits.max_file_bytes.saturating_add(1)).read_to_string(&mut content)?;
                 let size = content.len() as u64;
                 if size > limits.max_file_bytes {
                     return Err(over_file());
@@ -2242,6 +2273,66 @@ mod tests {
 
     fn paths_and_names(source: &str) -> Vec<(Vec<String>, Option<String>)> {
         use_leaves(&lex_rust(source), &BTreeSet::new()).into_iter().map(|leaf| (leaf.path, leaf.name.map(|name| name.to_string()))).collect()
+    }
+
+    /// A new empty folder under the system temporary folder, removed when dropped.
+    #[cfg(unix)]
+    struct TempDir(std::path::PathBuf);
+
+    #[cfg(unix)]
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let path = std::env::temp_dir().join(format!("craft-testkit-unit-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            Self(path)
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_regular_file_opens_a_regular_file() {
+        let dir = TempDir::new("open_regular");
+        let tag = dir.0.join("CACHEDIR.TAG");
+        std::fs::write(&tag, super::CACHEDIR_SIGNATURE).expect("write tag");
+        assert!(super::open_regular_file(&tag).expect("open").is_some());
+        assert!(super::is_cache_dir(&dir.0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_regular_file_does_not_follow_a_symlink() {
+        let dir = TempDir::new("open_symlink");
+        let target = dir.0.join("target.tag");
+        std::fs::write(&target, super::CACHEDIR_SIGNATURE).expect("write target");
+        let link = dir.0.join("CACHEDIR.TAG");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        assert!(super::open_regular_file(&link).expect("open").is_none());
+        assert!(!super::is_cache_dir(&dir.0));
+    }
+
+    /// The FIFO has no writer, so an open that waited for one would not return.
+    #[cfg(unix)]
+    #[test]
+    fn open_regular_file_does_not_wait_on_a_fifo() {
+        let dir = TempDir::new("open_fifo");
+        let fifo = dir.0.join("CACHEDIR.TAG");
+        match std::process::Command::new("mkfifo").arg(&fifo).status() {
+            Ok(status) if status.success() => {}
+            other => {
+                eprintln!("skipped: mkfifo is not available here ({other:?})");
+                return;
+            }
+        }
+        assert!(super::open_regular_file(&fifo).expect("open").is_none());
+        assert!(!super::is_cache_dir(&dir.0));
     }
 
     #[test]
