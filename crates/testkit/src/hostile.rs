@@ -8,15 +8,15 @@
 //! included.
 //!
 //! [`hammer`] runs a parser on the unmodified seed, on every truncation of it and on the
-//! mutations, each case on its own thread under [`with_deadline`]. It fails the test, naming the
-//! case and the input length, when the parser panics or does not finish in time. The number of
-//! rounds is a count the caller gives, multiplied by a variable the caller names. [`hammer`] and
-//! [`HammerConfig`] are not built for `wasm32`.
+//! mutations, one case after another on a worker thread, with a time limit for each case. It fails
+//! the test, naming the case and the input length, when the parser panics or does not finish in
+//! time. The number of rounds is a count the caller gives, multiplied by a variable the caller
+//! names. [`hammer`] and [`HammerConfig`] are not built for `wasm32`.
 
 use std::fmt::Write as _;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::deadline::{DeadlineLimit, with_deadline};
+use crate::deadline::{DeadlineLimit, Resolved, resolve};
 #[cfg(not(target_arch = "wasm32"))]
 use std::any::Any;
 #[cfg(not(target_arch = "wasm32"))]
@@ -26,9 +26,15 @@ use std::fmt;
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 #[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
+use std::thread;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, Instant};
+
+/// The name of the thread [`hammer`] runs its cases on.
+#[cfg(not(target_arch = "wasm32"))]
+const WORKER_NAME: &str = "craft-testkit hostile";
 
 /// The variable that multiplies a [`HammerConfig`]'s rounds unless
 /// [`HammerConfig::with_multiplier_variable`] names another.
@@ -343,12 +349,14 @@ fn read_variable(name: &str) -> Option<OsString> {
 /// on [`mutations`] of it for the config's rounds, failing the calling test on the first case
 /// that panics or does not finish within the config's limit.
 ///
-/// Each case runs on its own thread under [`with_deadline`]. A failure starts with the config's
-/// label and names the case (`the unmodified seed`, `truncation to N` or the mutation's edits), the
-/// input's length and the panic's message. A case that does not finish fails the test while its
-/// thread is left running, so `parse` must be owned and shareable between threads. The
-/// multiplier variable is read before any case runs; a value that cannot be used, or a call that
-/// would run more than [`MAX_CASES`] cases, fails the test before `parse` is called.
+/// The cases run one after another on one worker thread, while the calling thread fails the test
+/// when a case runs past the config's limit. A case that finishes after the limit also fails it. A
+/// failure starts with the config's label and names the case (`the unmodified seed`,
+/// `truncation to N` or the mutation's edits), the input's length and the panic's message. A case
+/// that does not finish fails the test while the worker thread is left running, so `parse` must be
+/// owned and able to move to another thread. The multiplier and limit variables are read before
+/// any case runs; a value that cannot be used, or a call that would run more than [`MAX_CASES`]
+/// cases, fails the test before `parse` is called.
 ///
 /// ```
 /// use craft_testkit::hostile::{HammerConfig, hammer};
@@ -374,37 +382,156 @@ where
 
 /// [`hammer`] with the variable lookup passed in, returning the failure's message.
 #[cfg(not(target_arch = "wasm32"))]
-fn hammer_with<F>(config: &HammerConfig<'_>, seed: &[u8], parse: F, lookup: impl FnOnce(&str) -> Option<OsString>) -> Result<(), String>
+fn hammer_with<F>(config: &HammerConfig<'_>, seed: &[u8], parse: F, lookup: impl Fn(&str) -> Option<OsString>) -> Result<(), String>
 where
     F: Fn(&[u8]) + Send + Sync + 'static,
 {
     let label = config.label;
-    let rounds = config.rounds_with(lookup).map_err(|error| format!("{label}: {error}"))?;
+    let rounds = config.rounds_with(&lookup).map_err(|error| format!("{label}: {error}"))?;
     let rounds = if seed.is_empty() { 0 } else { rounds };
     let cases = 1 + seed.len() as u128 + rounds as u128;
     if cases > MAX_CASES as u128 {
         return Err(format!("{label}: {}", HammerError::TooManyCases { cases }));
     }
-    let parse = Arc::new(parse);
-    let shared: Arc<[u8]> = Arc::from(seed);
+    let start = Instant::now();
+    let limit = resolve(&config.timeout, &lookup, start).map(Limit::from).map_err(|error| format!("{label}: {error}"))?;
+    let clock: Clock = Arc::new(move || start.elapsed());
+    run_cases(label.to_owned(), limit, Arc::from(seed), rounds, parse, clock)
+}
+
+/// A clock that returns the time since a [`hammer`] call started.
+#[cfg(not(target_arch = "wasm32"))]
+type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
+
+/// The limit for each case, and how failures describe it.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug)]
+struct Limit {
+    limit: Duration,
+    text: String,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<Resolved<'_>> for Limit {
+    fn from(resolved: Resolved<'_>) -> Self {
+        Self { limit: resolved.limit, text: resolved.to_string() }
+    }
+}
+
+/// The case the worker is running, shared with the calling thread that watches it.
+#[cfg(not(target_arch = "wasm32"))]
+struct Progress {
+    /// The case's description: `the unmodified seed`, `truncation to N` or the mutation's edits.
+    case: String,
+    /// The length of the case's input.
+    len: usize,
+    /// The clock reading when the case started.
+    started: Duration,
+    /// Whether the case is still running.
+    running: bool,
+    /// Set when the worker stops: `Ok` after the last case, or the failure's message.
+    outcome: Option<Result<(), String>>,
+}
+
+/// [`Progress`] under a lock, with a signal for when the worker stops.
+#[cfg(not(target_arch = "wasm32"))]
+struct Watch {
+    state: Mutex<Progress>,
+    stopped: Condvar,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Watch {
+    fn lock(&self) -> MutexGuard<'_, Progress> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Hands the worker's outcome to the calling thread when the worker stops, including when it
+/// unwinds outside a case.
+#[cfg(not(target_arch = "wasm32"))]
+struct Report {
+    watch: Arc<Watch>,
+    outcome: Result<(), String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Report {
+    fn drop(&mut self) {
+        let mut state = self.watch.lock();
+        state.outcome = Some(std::mem::replace(&mut self.outcome, Ok(())));
+        self.watch.stopped.notify_all();
+    }
+}
+
+/// Starts the worker that runs every case, then waits for it, failing when a case runs past the
+/// limit.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_cases<F>(label: String, limit: Limit, seed: Arc<[u8]>, rounds: usize, parse: F, clock: Clock) -> Result<(), String>
+where
+    F: Fn(&[u8]) + Send + Sync + 'static,
+{
+    let first = Progress { case: "the unmodified seed".to_owned(), len: seed.len(), started: clock(), running: true, outcome: None };
+    let watch = Arc::new(Watch { state: Mutex::new(first), stopped: Condvar::new() });
+    let (worker_watch, worker_clock, worker_label, worker_limit) = (Arc::clone(&watch), Arc::clone(&clock), label.clone(), limit.clone());
+    thread::Builder::new()
+        .name(WORKER_NAME.to_owned())
+        .spawn(move || {
+            let mut report = Report { watch: worker_watch, outcome: Err(format!("{worker_label}: the worker thread stopped without a result")) };
+            report.outcome = run_all(&report.watch, &worker_clock, &worker_label, &worker_limit, &seed, rounds, &parse);
+        })
+        .map_err(|error| format!("{label}: could not start the worker thread: {error}"))?;
+    let mut state = watch.lock();
+    loop {
+        if let Some(outcome) = state.outcome.take() {
+            return outcome;
+        }
+        let deadline = state.started.saturating_add(limit.limit);
+        let now = clock();
+        if state.running && now >= deadline {
+            return Err(format!("{label}: {} (len {}) did not finish within {}; its thread is left running", state.case, state.len, limit.text));
+        }
+        let wait = if state.running { deadline.saturating_sub(now) } else { limit.limit };
+        state = watch.stopped.wait_timeout(state, wait).unwrap_or_else(PoisonError::into_inner).0;
+    }
+}
+
+/// Runs the unmodified seed, its truncations and its mutations in order, stopping at the first
+/// failure.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_all<F: Fn(&[u8])>(watch: &Watch, clock: &Clock, label: &str, limit: &Limit, seed: &[u8], rounds: usize, parse: &F) -> Result<(), String> {
     for n in std::iter::once(seed.len()).chain(0..seed.len()) {
         let case = if n == seed.len() { "the unmodified seed".to_owned() } else { format!("truncation to {n}") };
-        let (parse, shared) = (Arc::clone(&parse), Arc::clone(&shared));
-        run_case(config, &case, n, move || (*parse)(shared.get(..n).unwrap_or_default()))?;
+        run_one(watch, clock, label, limit, case, seed.get(..n).unwrap_or_default(), parse)?;
     }
     for mutation in mutations(seed, rounds) {
-        let (parse, bytes) = (Arc::clone(&parse), mutation.bytes);
-        run_case(config, &mutation.label, bytes.len(), move || (*parse)(&bytes))?;
+        run_one(watch, clock, label, limit, mutation.label, &mutation.bytes, parse)?;
     }
     Ok(())
 }
 
-/// Runs one case under the config's limit, returning the failure's message when it panics.
+/// Runs one case, recording it in `watch` while it runs, and returns the failure's message when it
+/// panics or finishes after the limit.
 #[cfg(not(target_arch = "wasm32"))]
-fn run_case(config: &HammerConfig<'_>, case: &str, len: usize, f: impl FnOnce() + Send + 'static) -> Result<(), String> {
-    let label = format!("{}: {case} (len {len})", config.label);
-    let outcome = with_deadline(config.timeout, &label, move || catch_unwind(AssertUnwindSafe(f)).map_err(|payload| panic_text(payload.as_ref())));
-    outcome.map_err(|text| format!("{label}: the parser panicked: {text}"))
+fn run_one<F: Fn(&[u8])>(watch: &Watch, clock: &Clock, label: &str, limit: &Limit, case: String, data: &[u8], parse: &F) -> Result<(), String> {
+    let started = clock();
+    {
+        let mut state = watch.lock();
+        (state.case, state.len, state.started, state.running) = (case, data.len(), started, true);
+    }
+    let outcome = catch_unwind(AssertUnwindSafe(|| parse(data)));
+    let spent = clock().saturating_sub(started);
+    let mut state = watch.lock();
+    state.running = false;
+    let name = || format!("{label}: {} (len {})", state.case, state.len);
+    if spent > limit.limit {
+        let panicked = match &outcome {
+            Ok(()) => String::new(),
+            Err(payload) => format!(" (it panicked: {})", panic_text(payload.as_ref())),
+        };
+        return Err(format!("{} finished only after its limit of {}{panicked}", name(), limit.text));
+    }
+    outcome.map_err(|payload| format!("{}: the parser panicked: {}", name(), panic_text(payload.as_ref())))
 }
 
 /// The text of a panic payload.
@@ -465,21 +592,60 @@ mod tests {
         let (release, wait) = mpsc::channel::<()>();
         let wait = Mutex::new(wait);
         let short = config("stuck demo", 0).with_timeout(DeadlineLimit::new(Duration::from_millis(50)).with_variable(UNSET));
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            hammer_with(
-                &short,
-                &[1, 2, 3],
-                move |d| {
-                    if d.len() == 3 {
-                        let _ = wait.lock().unwrap().recv();
-                    }
-                },
-                unset,
-            )
-        }));
-        let message = panic_text(result.unwrap_err().as_ref());
+        let result = hammer_with(
+            &short,
+            &[1, 2, 3],
+            move |d| {
+                if d.len() == 3 {
+                    let _ = wait.lock().unwrap().recv();
+                }
+            },
+            unset,
+        );
         release.send(()).unwrap();
+        let message = result.unwrap_err();
         assert!(message.contains("stuck demo: the unmodified seed (len 3) did not finish within 50ms"), "{message}");
+    }
+
+    #[test]
+    fn a_case_that_finishes_after_the_limit_fails() {
+        let readings = Arc::new(Mutex::new(vec![Duration::from_secs(6), Duration::ZERO]));
+        let clock: Clock = Arc::new(move || readings.lock().unwrap().pop().unwrap_or(Duration::MAX));
+        let watch = Watch {
+            state: Mutex::new(Progress { case: String::new(), len: 0, started: Duration::ZERO, running: true, outcome: None }),
+            stopped: Condvar::new(),
+        };
+        let limit = Limit { limit: Duration::from_secs(5), text: "5s".to_owned() };
+        let message = run_one(&watch, &clock, "late", &limit, "the unmodified seed".to_owned(), &[1], &|_: &[u8]| {}).unwrap_err();
+        assert_eq!(message, "late: the unmodified seed (len 1) finished only after its limit of 5s");
+        assert!(!watch.lock().running);
+    }
+
+    #[test]
+    fn every_case_runs_on_one_worker_thread() {
+        let threads = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+        let record = Arc::clone(&threads);
+        let parse = move |_: &[u8]| {
+            record.lock().unwrap().insert(format!("{:?}", thread::current().id()));
+        };
+        hammer_with(&config("one thread", 50), &[1, 2, 3, 4], parse, unset).unwrap();
+        let threads = threads.lock().unwrap();
+        assert_eq!(threads.len(), 1, "{threads:?}");
+        assert!(!threads.contains(&format!("{:?}", thread::current().id())));
+    }
+
+    #[test]
+    fn invalid_limit_variable_fails_before_any_parse() {
+        let called = Arc::new(Mutex::new(false));
+        let flag = Arc::clone(&called);
+        let config = config("bad limit", 3).with_timeout(DeadlineLimit::new(Duration::from_secs(5)).with_variable("MY_LIMIT"));
+        let lookup = |name: &str| (name == "MY_LIMIT").then(|| OsString::from("soon"));
+        let message = hammer_with(&config, &[1, 2], move |_| *flag.lock().unwrap() = true, lookup).unwrap_err();
+        assert_eq!(
+            message,
+            r#"bad limit: MY_LIMIT="soon" is not a whole number of seconds written in digits; set it to a whole number of seconds above zero"#
+        );
+        assert!(!*called.lock().unwrap());
     }
 
     #[test]

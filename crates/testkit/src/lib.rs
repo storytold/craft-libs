@@ -22,8 +22,8 @@
 //!
 //! [`hostile::mutations`] yields a fixed sequence of damaged copies of a valid seed, on every
 //! target. On targets other than `wasm32`, [`hostile::hammer`] runs a parser on the seed, every
-//! truncation of it and those copies, each under [`deadline::with_deadline`], and fails the test
-//! with the case that panicked or did not finish.
+//! truncation of it and those copies, one after another on a worker thread with a time limit for
+//! each, and fails the test with the case that panicked or did not finish.
 //!
 //! ### Epistemic Scope: What Source Guards Establish vs What They Cannot
 //!

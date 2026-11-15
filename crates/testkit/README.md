@@ -147,12 +147,13 @@ same seed length and round count give the same edits on every run and every plat
 yields no copies. `mutations` and `Rng` build for `wasm32`.
 
 `hammer(&config, seed, parse)` runs `parse` on the unmodified seed, on every truncation of it
-(lengths 0 to one less than its length), and on `mutations(seed, rounds)`. Each case runs on its own
-thread under `with_deadline`. The test fails on the first case that panics or does not finish, with
-a message that names the config's label, the case (`the unmodified seed`, `truncation to N` or the
-edits), the input's length and the panic's message. `parse` must be `Fn(&[u8]) + Send + Sync + 'static`,
-since a case that does not finish keeps running on its thread after the test fails. `hammer` is not
-built for `wasm32`.
+(lengths 0 to one less than its length), and on `mutations(seed, rounds)`. The cases run one after
+another on one worker thread, and the test's thread fails the test when a case runs past its limit.
+A case that finishes after its limit also fails the test. The test fails on the first case that
+panics or does not finish, with a message that names the config's label, the case
+(`the unmodified seed`, `truncation to N` or the edits), the input's length and the panic's message.
+`parse` must be `Fn(&[u8]) + Send + Sync + 'static`, since a case that does not finish keeps running
+on the worker thread after the test fails. `hammer` is not built for `wasm32`.
 
 ```rust
 use std::time::Duration;
@@ -177,8 +178,8 @@ hammer(&config, &primer, |data| {
 
 The rounds are the config's iterations times the multiplier variable, `CRAFT_HOSTILE_MULT` unless
 `with_multiplier_variable` names another. The limit for each case is 5 s, replaced by
-`CRAFT_TEST_TIMEOUT_SECS` or the variable that `with_timeout` names, as in `deadline`.
-`HammerConfig::rounds` returns the rounds or the error that `hammer` would fail with.
+`CRAFT_TEST_TIMEOUT_SECS` or the variable that `with_timeout` names, as in `deadline`. Both variables
+are read once, before any case runs. `HammerConfig::rounds` returns the rounds or the error that `hammer` would fail with.
 
 | Multiplier value | Result |
 |---|---|
@@ -187,8 +188,9 @@ The rounds are the config's iterations times the multiplier variable, `CRAFT_HOS
 | Empty, signed, fractional, with spaces, zero, or larger than a `usize` | The test fails with the variable's name and value before `parse` is called. |
 | Not Unicode | The test fails with the variable's name before `parse` is called. |
 
-A product of the iterations and the multiplier that does not fit in a `usize`, and a call that would
-run more than `MAX_CASES` (10,000,000) cases in all, also fail the test before `parse` is called.
+A product of the iterations and the multiplier that does not fit in a `usize`, a call that would run
+more than `MAX_CASES` (10,000,000) cases in all, and a limit variable that `deadline` would reject
+also fail the test before `parse` is called.
 
 Changes from `craft-media-testkit`'s `hammer`:
 
@@ -201,7 +203,7 @@ Changes from `craft-media-testkit`'s `hammer`:
 - An empty seed runs once. Before, it ran once more for each round.
 - A mutation's label joins its edits with single spaces. Before, every edit ended with a space, so
   each label ended with one.
-- `parse` is owned and shared between threads. A closure that borrows from the test needs its data
+- `parse` is owned and runs on a worker thread. A closure that borrows from the test needs its data
   moved or shared with an `Arc`.
 
 ## Origin

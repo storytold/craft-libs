@@ -158,8 +158,8 @@ pub fn wait_until<'a>(limit: impl Into<DeadlineLimit<'a>>, what: &str, mut cond:
 
 /// A limit after reading its variable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Resolved<'a> {
-    limit: Duration,
+pub(crate) struct Resolved<'a> {
+    pub(crate) limit: Duration,
     variable: &'a str,
     from_variable: bool,
 }
@@ -176,7 +176,7 @@ impl fmt::Display for Resolved<'_> {
 
 /// Why a limit cannot be used.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum LimitError<'a> {
+pub(crate) enum LimitError<'a> {
     /// The variable name is empty or holds `=` or a NUL character.
     BadName { variable: &'a str },
     /// The variable's value is not Unicode.
@@ -205,7 +205,11 @@ impl fmt::Display for LimitError<'_> {
 
 /// Reads and checks `limit`: the variable's value when `lookup` finds one, otherwise the default.
 /// `now` is the time the limit starts from.
-fn resolve<'a>(limit: &DeadlineLimit<'a>, lookup: impl FnOnce(&str) -> Option<OsString>, now: Instant) -> Result<Resolved<'a>, LimitError<'a>> {
+pub(crate) fn resolve<'a>(
+    limit: &DeadlineLimit<'a>,
+    lookup: impl FnOnce(&str) -> Option<OsString>,
+    now: Instant,
+) -> Result<Resolved<'a>, LimitError<'a>> {
     let variable = limit.variable;
     if variable.is_empty() || variable.contains(['=', '\0']) {
         return Err(LimitError::BadName { variable });
