@@ -272,6 +272,7 @@ pub struct PartsCx<'a, C: Component> {
     pub(crate) scrolls: &'a mut Vec<ScrollDecl>,
     pub(crate) text: &'a mut crate::contract::text::TextStep,
     pub(crate) last_state: (bool, bool),
+    pub(crate) gesture_running: bool,
     pub(crate) measure: MeasureCx<'a, C>,
     /// What the shape laid out before `parts`: a collection's rows as the item step places them this pass, a
     /// container's header slots.
@@ -339,6 +340,12 @@ impl<C: Component> PartsCx<'_, C> {
     /// Last pass's focus-visible state of this component.
     pub fn focus_visible(&self) -> bool {
         self.last_state.1
+    }
+
+    /// The component's value gesture runs: begun in an earlier pass and not yet committed or cancelled. A part that
+    /// only a gesture keeps declared reads it.
+    pub fn gesture_running(&self) -> bool {
+        self.gesture_running
     }
 
     /// Declares a part; a repeated part is named with its index: `cx.part(POINT.at(id), shape)`.

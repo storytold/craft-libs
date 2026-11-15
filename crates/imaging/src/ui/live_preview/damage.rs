@@ -11,9 +11,10 @@ impl LivePreview {
     /// `visible` the document pixels the view shows (`PixelRect::visible`).
     ///
     /// - Both keys [`owns`](Self::owns) and not both [`PreviewKey::NONE`]: to a preview, the
-    ///   region's visible part (remembered as covered for `to`, so [`uncovered`](Self::uncovered)
-    ///   catches up as the view moves); back to `NONE`, the whole region (and nothing stays
-    ///   covered).
+    ///   changed area's visible part (remembered as covered for `to`, so
+    ///   [`uncovered`](Self::uncovered) catches up as the view moves); back to `NONE`, the whole
+    ///   changed area (and nothing stays covered). The changed area is [`changed`](Self::changed)
+    ///   when both keys were keyed with an area, else the region.
     /// - Either key foreign, both `NONE`, or no session: `None`, and the host recomposites
     ///   everything.
     ///
@@ -26,11 +27,12 @@ impl LivePreview {
         if !(self.owns(from) && self.owns(to) && (!from.is_none() || !to.is_none())) {
             return None;
         }
+        let area = self.changed(from, to).unwrap_or(self.region);
         if to.is_none() {
             self.covered = None;
-            return Some(self.region);
+            return Some(area);
         }
-        let shown = self.region.intersect(&visible);
+        let shown = area.intersect(&visible);
         self.covered = Some((to, shown));
         Some(shown)
     }

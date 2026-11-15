@@ -39,7 +39,6 @@ pub enum SnapKind {
 }
 
 /// A set of [`SnapKind`]s, a bit per kind: the kind filter a gesture passes to its snapping.
-// P3(canvas-widgets-w3): cw.C16 `SnapKinds`
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SnapKinds(u8);
 
@@ -47,16 +46,27 @@ impl SnapKinds {
     /// Every kind.
     pub const ALL: SnapKinds = SnapKinds(0x7f);
 
+    /// The bit of `kind`; [`SnapKinds::ALL`] holds the seven.
+    const fn bit(kind: SnapKind) -> u8 {
+        1 << match kind {
+            SnapKind::Guide => 0,
+            SnapKind::Grid => 1,
+            SnapKind::Bounds => 2,
+            SnapKind::Center => 3,
+            SnapKind::LayerEdge => 4,
+            SnapKind::LayerCenter => 5,
+            SnapKind::Selection => 6,
+        }
+    }
+
     /// This set without `kind`.
     pub fn without(self, kind: SnapKind) -> Self {
-        let _ = kind;
-        todo!("cw.C16")
+        SnapKinds(self.0 & !Self::bit(kind))
     }
 
     /// Whether `kind` is in this set.
     pub fn contains(self, kind: SnapKind) -> bool {
-        let _ = kind;
-        todo!("cw.C16")
+        self.0 & Self::bit(kind) != 0
     }
 }
 
@@ -201,8 +211,9 @@ impl SnapTargets {
     }
 
     /// Add a rectangle's four edges as `edge` targets and its two centre lines as `center`
-    /// targets, each spanning the rectangle.
-    fn add_rect(&mut self, rect: Rect, edge: SnapKind, center: SnapKind) {
+    /// targets, each spanning the rectangle: how the app adds each layer (`LayerEdge`, `LayerCenter`) and the
+    /// selection (`Selection` for both) to the targets [`with_document`](Self::with_document) built.
+    pub fn add_rect(&mut self, rect: Rect, edge: SnapKind, center: SnapKind) {
         let r = rect.abs();
         let (xs, ys) = ((r.y0, r.y1), (r.x0, r.x1));
         for (along, position, kind, span) in [
@@ -219,7 +230,7 @@ impl SnapTargets {
 
     /// Guides as full-height targets, grid lines of `spacing` from `origin` over `bounds`, the
     /// document bounds and centre: what every app has. Layers and the selection are added by
-    /// the app with `add_rect`.
+    /// the app with [`add_rect`](Self::add_rect).
     pub fn with_document(
         self,
         options: &SnapOptions,
@@ -274,16 +285,9 @@ impl SnapTargets {
 
     /// The nearest target of a kind in `kinds` among the lines that run `along` an axis, within `tolerance` of
     /// `value` across them; [`SnapTargets::nearest`] is this with [`SnapKinds::ALL`].
-    // P3(canvas-widgets-w3): cw.C16 `nearest_of`
     pub fn nearest_of(&self, along: Axis, value: f64, tolerance: f64, kinds: SnapKinds) -> Option<SnapTarget> {
-        let _ = (along, value, tolerance, kinds);
-        todo!("cw.C16")
-    }
-
-    /// The nearest target among the lines that run `along` an axis, within `tolerance` of `value` across them.
-    pub fn nearest(&self, along: Axis, value: f64, tolerance: f64) -> Option<SnapTarget> {
         let mut best: Option<(f64, SnapTarget)> = None;
-        for target in self.targets.iter().filter(|t| t.along == along) {
+        for target in self.targets.iter().filter(|t| t.along == along && kinds.contains(t.kind)) {
             let distance = (target.position - value).abs();
             if distance > tolerance {
                 continue;
@@ -299,15 +303,28 @@ impl SnapTargets {
         best.map(|(_, target)| target)
     }
 
+    /// The nearest target among the lines that run `along` an axis, within `tolerance` of `value` across them.
+    pub fn nearest(&self, along: Axis, value: f64, tolerance: f64) -> Option<SnapTarget> {
+        self.nearest_of(along, value, tolerance, SnapKinds::ALL)
+    }
+
     /// `point` snapped on each axis independently, with the lines to draw.
     pub fn snap_point(&self, point: Point, tolerance: f64) -> (Point, Vec<SnapLine>) {
+        self.snap_point_of(point, tolerance, SnapKinds::ALL)
+    }
+
+    /// [`snap_point`](Self::snap_point) to the targets of a kind in `kinds` only (a Distort corner skips layer edges
+    /// and centres).
+    ///
+    /// Public: craft-ui-canvas's `Snap::point` filters through it.
+    pub fn snap_point_of(&self, point: Point, tolerance: f64, kinds: SnapKinds) -> (Point, Vec<SnapLine>) {
         let mut out = point;
         let mut lines = Vec::new();
-        if let Some(t) = self.nearest(Axis::Y, point.x, tolerance) {
+        if let Some(t) = self.nearest_of(Axis::Y, point.x, tolerance, kinds) {
             out.x = t.position;
             lines.push(line(&t, point.y, point.y));
         }
-        if let Some(t) = self.nearest(Axis::X, point.y, tolerance) {
+        if let Some(t) = self.nearest_of(Axis::X, point.y, tolerance, kinds) {
             out.y = t.position;
             lines.push(line(&t, out.x, out.x));
         }

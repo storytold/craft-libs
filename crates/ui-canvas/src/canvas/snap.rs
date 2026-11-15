@@ -28,7 +28,6 @@ pub struct GestureSnap {
     /// Whether the gesture reads the Control key itself, so Control does not suspend snapping.
     pub reads_control: bool,
     /// The kinds of target the gesture snaps to (Distort corners skip layer edges and centres).
-    // P3(canvas-widgets-w3): cw.C16 `kinds`
     pub kinds: craft_behavior::geometry::SnapKinds,
 }
 
@@ -40,22 +39,32 @@ impl Snap {
 
     /// `position` across a guide running `along`, snapped.
     pub fn apply(&self, along: Axis, position: f64, mods: Mods) -> f64 {
-        let Some(tolerance) = self.tolerance.filter(|_| self.options.on && !snap_suspended(mods, self.os, false)) else {
-            return position;
-        };
+        let Some(tolerance) = self.reach(mods, false) else { return position };
         self.targets.nearest(along, position, tolerance).map_or(position, |target| target.position)
     }
 
-    /// `point` snapped on both axes, with the lines to draw; the input and no lines when snapping is off.
+    /// `point` snapped on both axes to the targets of `gesture.kinds`, with the lines to draw; the input and no lines
+    /// when snapping is off.
     pub fn point(&self, point: Point, mods: Mods, gesture: GestureSnap) -> (Point, Vec<SnapLine>) {
-        let _ = (point, mods, gesture);
-        todo!("cw.C16")
+        match self.reach(mods, gesture.reads_control) {
+            Some(tolerance) => self.targets.snap_point_of(point, tolerance, gesture.kinds),
+            None => (point, Vec::new()),
+        }
     }
 
     /// The offset that moves `rect` onto a snap target, with the lines to draw; zero when snapping is off.
     pub fn rect(&self, rect: craft_behavior::kurbo::Rect, mods: Mods) -> (Vec2, Vec<SnapLine>) {
-        let _ = (rect, mods);
-        todo!("cw.C16")
+        match self.reach(mods, false) {
+            Some(tolerance) => self.targets.snap_rect(rect, tolerance),
+            None => (Vec2::ZERO, Vec::new()),
+        }
+    }
+
+    /// The snapping distance in document units for this pass, or `None` when snapping is off, the canvas has not given
+    /// this snap its pass ([`at`](Self::at)) or the Control key suspends it (unless `reads_control`): the one gate of
+    /// `apply`, `point` and `rect`, and the reach a gesture's snapped lines were found with.
+    pub fn reach(&self, mods: Mods, reads_control: bool) -> Option<f64> {
+        self.tolerance.filter(|_| self.options.on && !snap_suspended(mods, self.os, reads_control))
     }
 
     /// The View > Snap To options this snap was built with.
@@ -64,7 +73,6 @@ impl Snap {
     }
 
     /// This snap with its tolerance for `view` and the OS set.
-    #[allow(dead_code)] // P3(canvas-widgets-w3): cw.C16
     pub(super) fn at(mut self, view: &CanvasView, os: Platform) -> Self {
         self.tolerance = Some(view.doc_len(SNAP_PX as f32));
         self.os = os;
@@ -80,7 +88,8 @@ impl PartialEq for Snap {
 
 impl std::fmt::Debug for Snap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Snap")
+        // The targets can number thousands of grid lines, so they are left out.
+        f.debug_struct("Snap").field("options", &self.options).field("tolerance", &self.tolerance).field("os", &self.os).finish_non_exhaustive()
     }
 }
 

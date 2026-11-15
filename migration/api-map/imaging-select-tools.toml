@@ -155,8 +155,20 @@ new = "size() -> craft_behavior::PixelSize"
 [[setter]]
 type = "InsideDrag"
 old = "begin(&ConstrainStyle, DragKind, Point, Modifiers)"
-new = "begin(&ConstrainStyle, DragKind, Point, Mods, GestureId, Arc<str>)"
-note = "The id and the undo step's name come from the caller; the Begin event carries the zero delta as its value before."
+new = "begin(&ConstrainStyle, DragKind, Point, Mods, GestureId, Arc<str>, Option<kurbo::Rect>)"
+note = "The id and the undo step's name come from the caller; the Begin event carries the zero delta as its value before. The last argument is the selection's bounds at the press (SelectionProbe::bounds), which snap as the drag moves; None leaves the drag unsnapped. The point is the raw document point."
+
+[[setter]]
+type = "InsideDrag"
+old = "drag(Point, Modifiers, f64)"
+new = "drag(Point, Mods, f64, &mut dyn FnMut(kurbo::Rect) -> Vec2)"
+note = "The raw document point; the closure is the tool's ToolContext::snap_rect, called with the press bounds moved by the drag before the delta rounds to whole pixels."
+
+[[setter]]
+type = "InsideDrag"
+old = "end(Point, Modifiers, f64)"
+new = "end(Point, Mods, f64, &mut dyn FnMut(kurbo::Rect) -> Vec2)"
+note = "Snaps as drag does; the Commit carries the whole-pixel delta."
 
 [[setter]]
 type = "InsideDrag"

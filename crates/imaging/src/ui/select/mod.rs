@@ -32,8 +32,9 @@
 //! the app needs no call for the right click.
 //!
 //! A press inside the selection drags it instead of drawing: the outline with a plain press and the operation New,
-//! the selected pixels with Cmd (Cmd+Alt a copy), a floating piece with a plain press. Click-driven tools (the
-//! Polygonal Lasso) need Cmd for any of it, and never while an outline is open. A Cmd press outside the selection is
+//! the selected pixels with Cmd (Cmd+Alt a copy). On a floating piece Cmd drags the piece and a plain press of a drag
+//! tool the outline (the app drops the piece first). Click-driven tools (the Polygonal Lasso) need Cmd for any of it,
+//! and never while an outline is open. A dragged selection snaps by its bounds ([`SelectionProbe::bounds`]). A Cmd press outside the selection is
 //! [`ToolAction::Ignored`](craft_ui::canvas::ToolAction) so the app's Move tool takes it.
 //!
 //! [`CanvasTool`]: craft_ui::canvas::CanvasTool
@@ -57,6 +58,7 @@ pub use drag::{InsideDrag, PressRule, cursor_over, drag_kind};
 pub use lasso::{LassoTool, paint_outline};
 pub use magnetic::{EdgeSearch, EdgeTracer, MagneticLassoTool, MagneticSettings};
 pub use marquee::{MarqueeKind, MarqueeTool};
+pub use operations::{SelectionOpWords, selection_operations};
 pub use polygon::PolygonLassoTool;
 
 craft_ui::words! {
@@ -99,8 +101,8 @@ pub enum SelectionShape {
 pub enum DragKind {
     /// The outline alone.
     Outline,
-    /// The selected pixels, or the floating piece: Cmd cuts them out first, Cmd+Alt (`copy`) lifts a copy, a floating
-    /// piece moves with a plain press.
+    /// The selected pixels, or the floating piece: Cmd cuts them out first, Cmd+Alt (`copy`) lifts a copy, and Cmd
+    /// moves a floating piece.
     #[non_exhaustive]
     Pixels {
         /// Lift a copy instead of cutting.
@@ -180,8 +182,9 @@ pub enum SelectPhase {
         /// The point count.
         points: usize,
     },
-    /// The selection being dragged.
-    Dragging(DragKind),
+    /// The selection being dragged: what moves and its whole-pixel offset so far, from which the app offsets the
+    /// marching ants and the floating piece while the drag runs.
+    Dragging(SelectionDrag),
 }
 
 impl SelectPhase {

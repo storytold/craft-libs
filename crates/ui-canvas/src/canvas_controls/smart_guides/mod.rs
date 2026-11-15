@@ -11,7 +11,7 @@ use crate::runtime::env::Units;
 use crate::style::{ComponentStyle, DataColor, RuleLook, RuleWidth, StyleColor, StyleCx, TypeRole, UiTokens};
 use craft_behavior::geometry::SnapLine;
 use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_behavior::{CanvasView, Metrics, Sense};
+use craft_behavior::{Axis, CanvasView, Metrics, Sense};
 use craft_theme::{Rgba, contrast_ratio};
 use egui::emath::GuiRounding as _;
 use egui::{Color32, CornerRadius, Pos2, Response, Vec2};
@@ -36,8 +36,14 @@ impl SmartLine {
 
     /// The line of `line` the host draws for a snap: a line with no span runs across `visible`.
     pub fn of(line: &SnapLine, visible: DocRect) -> SmartLine {
-        let _ = (line, visible);
-        todo!("cw.C18")
+        let visible = visible.abs();
+        if line.along == Axis::Y {
+            let (y0, y1) = line.span.unwrap_or((visible.y0, visible.y1));
+            SmartLine::new(Point::new(line.position, y0), Point::new(line.position, y1))
+        } else {
+            let (x0, x1) = line.span.unwrap_or((visible.x0, visible.x1));
+            SmartLine::new(Point::new(x0, line.position), Point::new(x1, line.position))
+        }
     }
 
     /// The same line as a dashed extension.

@@ -16,6 +16,8 @@ mod raster;
 
 mod scrollbars;
 
+mod snap;
+
 mod split;
 
 mod story_canvas;

@@ -27,7 +27,8 @@ pub enum PreviewLane {
 }
 
 impl PreviewLane {
-    /// The lane's tag bit (59 or 58) and the session's width in bits (19 or 18).
+    /// The lane's tag bit (59, 58 or 57) and the session's width in bits (19, 18 or 17). A key sets only its own
+    /// lane's tag bit and its session ends below it, so the keys of two lanes never meet.
     pub(crate) fn bits(self) -> (u32, u32) {
         // pc: crates/ui-egui/src/dialogs/adjust_preview.rs:52 `TAG` (1 << 59), :55 `SESSION_SHIFT`
         // (40), :272 (`session & 0x7_ffff`); :476 `LIVE_TAG` (1 << 58), :479, :481
@@ -51,8 +52,10 @@ impl PreviewLane {
 pub struct PreviewKey(u64);
 
 impl PreviewKey {
-    /// The display key of progressive stage `n` (1..=7) of a result of the same settings: bit 0 cleared and `n` in bits
-    /// 1..=3, so it never equals a settings key.
+    /// The display key of progressive stage `n` (1..=7) of a result of the same settings (Content-Aware Move shows a
+    /// scaled-down solve as stage 1, then the exact one under the key itself): bit 0 cleared and `n` in bits 1..=3.
+    /// Every [`settings_hash`] sets bit 0, so a stage key never equals a settings key; it keeps the lane and session
+    /// bits, so [`LivePreview::owns`](super::LivePreview::owns) accepts it.
     #[must_use]
     pub fn stage(self, n: u8) -> PreviewKey {
         PreviewKey((self.0 & !0xF) | (u64::from(n & 7) << 1))

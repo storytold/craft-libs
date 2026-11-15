@@ -3,7 +3,7 @@
 use craft_ui::canvas::PixelRect;
 use craft_ui::testing::trial;
 
-use craft_imaging::ui::live_preview::{DraftScale, LivePreview, PreviewKey, PreviewLane, PreviewSession};
+use craft_imaging::ui::live_preview::{DraftScale, LivePreview, PreviewKey, PreviewLane, PreviewSession, settings_hash};
 
 const REGION: PixelRect = PixelRect::new(0, 0, 100, 100);
 const VIEW: PixelRect = PixelRect::new(0, 0, 50, 50);
@@ -61,6 +61,40 @@ fn live_preview_uncovered_returns_the_newly_visible_part_once() {
     assert_eq!(live.uncovered(key, panned), None);
     assert_eq!(live.uncovered(key, PixelRect::new(30, 0, 60, 40)), None);
     assert_eq!(live.uncovered(other, PixelRect::new(0, 0, 100, 100)), None);
+}
+
+// A tool preview keyed with the area each key changes: a switch damages the union of the two areas (the visible part
+// to a preview, the whole area back to NONE, which changes nothing itself); a key without an area gives the region.
+// A stage key differs from its settings key and from other stages and stays the session's; a Tool key is foreign to
+// the Dialog and Properties lanes.
+#[trial]
+fn a_key_in_an_area_damages_the_union_of_its_areas_and_a_stage_key_belongs_to_the_session() {
+    let mut live = started(PreviewLane::Tool, 1);
+    let left = PixelRect::new(10, 10, 20, 20);
+    let a = live.key_in(settings_hash(&[b"a"]), 0.0, left);
+    let b = live.key_in(settings_hash(&[b"b"]), 0.0, PixelRect::new(30, 10, 40, 20));
+    let c = live.key_in(settings_hash(&[b"c"]), 0.0, PixelRect::new(40, 40, 60, 60));
+    let plain = live.key(settings_hash(&[b"d"]), 0.0);
+
+    assert_eq!(live.changed(a, b), Some(PixelRect::new(10, 10, 40, 20)));
+    assert_eq!(live.changed(a, plain), None);
+    assert_eq!(live.switch(PreviewKey::NONE, a, VIEW), Some(left));
+    assert_eq!(live.switch(a, b, VIEW), Some(PixelRect::new(10, 10, 40, 20)));
+    assert_eq!(live.switch(b, c, VIEW), Some(PixelRect::new(30, 10, 50, 50)), "only the visible part of the union");
+    assert_eq!(live.switch(c, PreviewKey::NONE, VIEW), Some(PixelRect::new(40, 40, 60, 60)), "back to NONE: the whole area");
+    assert_eq!(live.switch(a, plain, VIEW), Some(REGION.intersect(&VIEW)));
+
+    let stage = a.stage(1);
+    assert_ne!(stage, a);
+    assert_ne!(stage, a.stage(2));
+    assert!(live.owns(stage));
+
+    let mut dialog = started(PreviewLane::Dialog, 1);
+    let mut props = started(PreviewLane::Properties, 1);
+    let (dialog_key, props_key) = (dialog.key(settings_hash(&[b"a"]), 0.0), props.key(settings_hash(&[b"a"]), 0.0));
+    assert!(a != dialog_key && a != props_key);
+    assert!(!live.owns(dialog_key) && !live.owns(props_key));
+    assert!(!dialog.owns(a) && !props.owns(a));
 }
 
 /// One drag of `control` on `item`: `drafts` full-size renders of `ms` each, started at `start`

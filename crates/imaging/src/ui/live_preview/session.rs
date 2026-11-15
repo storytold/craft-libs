@@ -4,6 +4,9 @@ use craft_ui::canvas::PixelRect;
 
 use super::key::{PreviewKey, PreviewLane, PreviewSession};
 
+/// How many keys keep the area they change: as far back as a display's shown key can lag behind the last key given.
+const AREA_KEYS: usize = 8;
+
 /// The live preview of one flow (an adjustment dialog, or a Properties-panel drag): the keys of
 /// its current session, the area a preview can change, what the canvas has composited of it, and
 /// when the settings last changed.
@@ -12,8 +15,10 @@ use super::key::{PreviewKey, PreviewLane, PreviewSession};
 /// - Keys: [`key`](Self::key) gives equal keys for equal settings hashes within one session;
 ///   [`PreviewKey::NONE`] is the committed document. [`begin`](Self::begin) with another session
 ///   starts empty, so keys of the old one become foreign.
-/// - Damage: [`switch`](Self::switch) is the area to recomposite when the shown key changes;
-///   [`uncovered`](Self::uncovered) catches up as the view moves (`damage.rs`).
+/// - Damage: [`switch`](Self::switch) is the area to recomposite when the shown key changes: the
+///   region, or the areas the two keys change when both were keyed with one
+///   ([`key_in`](Self::key_in)); [`uncovered`](Self::uncovered) catches up as the view moves
+///   (`damage.rs`).
 /// - Settle: [`settling`](Self::settling) is true for `within` seconds after the last key change
 ///   while a preview shows; secondary views (the Navigator) wait for it.
 ///
@@ -28,6 +33,8 @@ pub struct LivePreview {
     pub(super) last: Option<(PreviewKey, f64)>,
     /// The canvas shows this key only within this rect; elsewhere in the region it is older.
     pub(super) covered: Option<(PreviewKey, PixelRect)>,
+    /// The area each of the last [`AREA_KEYS`] keys given by [`key_in`](Self::key_in) changes, oldest first.
+    pub(super) areas: Vec<(PreviewKey, PixelRect)>,
 }
 
 impl LivePreview {
@@ -50,7 +57,7 @@ impl LivePreview {
         if self.session == Some(session) {
             return;
         }
-        *self = Self { lane: self.lane, session: Some(session), region, last: None, covered: None };
+        *self = Self { lane: self.lane, session: Some(session), region, last: None, covered: None, areas: Vec::new() };
     }
 
     /// Forgets the session (the document closed or the dialog's flow ended for good): every key
@@ -87,6 +94,43 @@ impl LivePreview {
             self.last = Some((key, now));
         }
         key
+    }
+
+    /// [`key`](Self::key), recording `area` (document pixels) as what the preview of this key changes, so
+    /// [`switch`](Self::switch) recomposites only that: a tool's preview that changes a small part of the region
+    /// (Patch heals around one offset). The last [`AREA_KEYS`] keys keep their area; an older key falls back to the
+    /// region, which damages more, never less.
+    pub fn key_in(&mut self, settings: u64, now: f64, area: PixelRect) -> PreviewKey {
+        let key = self.key(settings, now);
+        if key.is_none() {
+            return key;
+        }
+        self.areas.retain(|(known, _)| *known != key);
+        if self.areas.len() >= AREA_KEYS {
+            self.areas.remove(0);
+        }
+        self.areas.push((key, area));
+        key
+    }
+
+    /// The area [`key_in`](Self::key_in) recorded for `key`; [`PreviewKey::NONE`] changes nothing (an empty rect).
+    /// `None` for a key keyed without an area or evicted since.
+    fn area(&self, key: PreviewKey) -> Option<PixelRect> {
+        if key.is_none() {
+            return Some(PixelRect::default());
+        }
+        self.areas.iter().find(|(known, _)| *known == key).map(|(_, area)| *area)
+    }
+
+    /// The pixels that differ between showing `from` and showing `to`: the union of the areas the two keys were
+    /// keyed with ([`key_in`](Self::key_in); `NONE` adds nothing). `None` unless both keys are owned and not both
+    /// `NONE`, or when a key other than `NONE` has no recorded area. Read-only, for a host that computes its damage
+    /// from shared state.
+    pub fn changed(&self, from: PreviewKey, to: PreviewKey) -> Option<PixelRect> {
+        if !(self.owns(from) && self.owns(to) && (!from.is_none() || !to.is_none())) {
+            return None;
+        }
+        Some(self.area(from)?.union(&self.area(to)?))
     }
 
     /// Whether `key` is [`PreviewKey::NONE`] or one of the current session's keys.

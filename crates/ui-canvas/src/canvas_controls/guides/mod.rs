@@ -6,6 +6,8 @@ pub mod reading;
 #[cfg(feature = "testing")]
 mod stories;
 
+pub use reading::{GuideReading, running};
+
 use super::words::CanvasControlWords;
 use crate::canvas::{
     CanvasSpace, Guide, GuideDrag, GuideKey, GuideLine, LABEL_STEP_MIN, NUDGE, NUDGE_FAR, Snap, canvas_snap, canvas_space, context_menu, readout,
@@ -115,7 +117,8 @@ struct PendingKey(Option<GuideKey>);
 
 /// The ruler guides of a canvas: drawn, taken by the pointer and moved with the keyboard.
 ///
-/// - The pointer takes an unlocked guide while the guides are [`interactive`](Guides::interactive). A drag moves it;
+/// - The pointer takes an unlocked guide while the guides are [`interactive`](Guides::interactive), or with the
+///   platform command key held at the press when they [`move with command`](Guides::moves_with_command). A drag moves it;
 ///   the release commits where it is, or removes the guide outside the [`bounds`](Guides::bounds) or the canvas.
 ///   Escape cancels the drag.
 /// - Shift snaps to the ruler's ticks; otherwise the canvas's [`Snap`] places the guide and gets the
@@ -145,7 +148,6 @@ pub struct Guides<'a> {
     interactive: bool,
     /// With `interactive` off, a press on an unlocked guide with the platform command key held takes the guide.
     #[prop]
-    #[allow(dead_code)] // P3(canvas-widgets-w2): cw.C22
     moves_with_command: bool,
     /// Where guides may live, in document units; a guide released outside is removed. Without bounds, the canvas.
     #[prop]
@@ -456,9 +458,14 @@ impl Component for Guides<'_> {
     }
 
     /// The unlocked guides in view: edge-level drag parts in one roving group, in keyboard order. Page Up and Page
-    /// Down move the group's arrival; the arrows are the guide's nudge.
+    /// Down move the group's arrival; the arrows are the guide's nudge. With `interactive` off they are declared only
+    /// for `moves_with_command`, while the command key is held or the guides' own drag runs, so a guide drag begun
+    /// with the key keeps its part when the key is let go mid-drag; `run_pointer` reads only declared parts, so this
+    /// is the one gate of the pointer.
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
-        let (Some(space), Some(guides), true) = (canvas_space(&cx.env), cx.value(), self.interactive) else { return };
+        let takes = self.interactive
+            || (self.moves_with_command && (crate::runtime::pointer::frame(cx.ui.ctx()).mods.cmd || cx.gesture_running()));
+        let (Some(space), Some(guides), true) = (canvas_space(&cx.env), cx.value(), takes) else { return };
         let mut any = false;
         for &at in &place::keyboard_order(guides) {
             let guide = &guides[at];
@@ -485,8 +492,9 @@ impl Component for Guides<'_> {
         if let Some(drag) = self.pending {
             self.run_pending(cx, &space, &guides, drag);
         }
+        // `parts` declares the guides only when the pointer may take them, and `run_pointer` reads declared parts only.
+        self.run_pointer(cx, &space, &guides);
         if self.interactive {
-            self.run_pointer(cx, &space, &guides);
             self.run_keys(cx, &space, &guides);
             self.run_canvas_delete(cx, &space, &guides);
             if space.background().pressed.is_some() && self.selected.is_some() && self.report.select.is_none() {

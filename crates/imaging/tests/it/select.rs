@@ -1,28 +1,30 @@
 //! The selection tools on the tool host: each test drives one tool through a `ToolFixture` with injected pointer input
 //! and a fake `SelectionProbe`, then reads the events the tool reports.
 
-use craft_behavior::geometry::{Constraint, SelectionOperation};
-use craft_behavior::{CancelReason, EditEvent, PixelSize, PointerButton};
+use craft_behavior::geometry::{Constraint, SelectionOperation, SnapKind, SnapOptions, SnapTarget, SnapTargets};
+use craft_behavior::{Axis, CancelReason, EditEvent, PixelSize, PointerButton};
 use craft_imaging::ui::select::{
-    EdgeSearch, EdgeTracer, MagneticLassoTool, MarqueeKind, MarqueeTool, PolygonLassoTool, SelectEvent, SelectPhase, SelectToolPass, SelectionProbe,
-    SelectionShape,
+    DragKind, EdgeSearch, EdgeTracer, LassoTool, MagneticLassoTool, MarqueeKind, MarqueeTool, PolygonLassoTool, SelectEvent, SelectPhase,
+    SelectToolPass, SelectionDrag, SelectionProbe, SelectionShape,
 };
-use craft_keymap::Mods;
-use craft_ui::canvas::{CanvasTool, ToolAccess, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer};
+use craft_keymap::{Mods, Platform};
+use craft_ui::canvas::{CanvasTool, Snap, ToolAccess, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::Draw;
 use craft_ui::testing::{ToolFixture, pointer, trial};
 use egui::{Key, Modifiers, Pos2, Rect as ScreenRect, pos2};
 use kurbo::{Point, Rect, Vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 const SIZE: PixelSize = PixelSize::new(400, 300);
 const NONE: Mods = Mods::NONE;
 
-/// A document with an optional rectangle selection.
+/// A document with an optional rectangle selection and an optional floating piece where it is shown.
 #[derive(Default)]
 struct Fake {
     selection: Option<Rect>,
+    floating: Option<Rect>,
     document: u64,
 }
 
@@ -33,6 +35,11 @@ impl Fake {
 
     fn selected(selection: Rect) -> Self {
         Fake { selection: Some(selection), ..Fake::empty() }
+    }
+
+    /// A selection whose pixels float, shown at `piece`.
+    fn floating(selection: Rect, piece: Rect) -> Self {
+        Fake { floating: Some(piece), ..Fake::selected(selection) }
     }
 }
 
@@ -51,6 +58,18 @@ impl SelectionProbe for Fake {
 
     fn inside_selection(&self, at: Point) -> bool {
         self.selection.is_some_and(|rect| rect.contains(at))
+    }
+
+    fn bounds(&self) -> Option<Rect> {
+        self.selection
+    }
+
+    fn floating(&self) -> bool {
+        self.floating.is_some()
+    }
+
+    fn on_floating(&self, at: Point) -> bool {
+        self.floating.is_some_and(|piece| piece.contains(at))
     }
 }
 
@@ -80,6 +99,7 @@ macro_rules! reports {
 }
 
 reports!(MarqueeTool);
+reports!(LassoTool);
 reports!(PolygonLassoTool);
 reports!(MagneticLassoTool<T>, T: EdgeTracer);
 
@@ -166,16 +186,32 @@ where
 
 type Rig<T> = ToolFixture<Owned<T>>;
 
+/// The view in which a canvas's document point and screen point coincide.
+fn same_points(room: ScreenRect) -> craft_behavior::CanvasView {
+    let centre = room.center();
+    craft_behavior::CanvasView::new(room, Point::new(f64::from(centre.x), f64::from(centre.y)), 1.0)
+}
+
 /// A canvas whose document point and screen point coincide.
 fn rig<T: Reports + 'static>(label: &'static str, tool: T, probe: Fake) -> Rig<T>
 where
     for<'a> SelectToolPass<'a, T>: CanvasTool,
 {
-    let view = |room: ScreenRect| {
-        let centre = room.center();
-        craft_behavior::CanvasView::new(room, Point::new(f64::from(centre.x), f64::from(centre.y)), 1.0)
-    };
-    ToolFixture::with_view(label, Owned::new(tool, probe), view, |_, _| {})
+    ToolFixture::with_view(label, Owned::new(tool, probe), same_points, |_, _| {})
+}
+
+/// [`rig`] on a canvas that snaps to a vertical guide at x = 100, on macOS, where Control alone suspends snapping.
+fn snapped_rig<T: Reports + 'static>(label: &'static str, tool: T, probe: Fake) -> Rig<T>
+where
+    for<'a> SelectToolPass<'a, T>: CanvasTool,
+{
+    let mut targets = SnapTargets::new();
+    targets.add(SnapTarget::new(Axis::Y, 100.0, SnapKind::Guide));
+    let snap = Snap::new(Arc::new(targets), SnapOptions::default());
+    let mut rig = ToolFixture::with_snap(label, Owned::new(tool, probe), same_points, snap, |_, _| {});
+    rig.fixture().os(Platform::Mac);
+    rig.fixture().frame(Vec::new());
+    rig
 }
 
 fn at(point: (f64, f64)) -> Pos2 {
@@ -262,6 +298,10 @@ fn commit(rect: (f64, f64, f64, f64), operation: SelectionOperation) -> SelectEv
     SelectEvent::commit(SelectionShape::Rectangle(Rect::new(rect.0, rect.1, rect.2, rect.3)), operation)
 }
 
+fn polygon(points: &[(f64, f64)], operation: SelectionOperation) -> SelectEvent {
+    SelectEvent::commit(SelectionShape::Polygon(points.iter().map(|&(x, y)| Point::new(x, y)).collect()), operation)
+}
+
 /// "begin", "update 1,0", "commit 2,0", "cancel"; other events as `Debug`.
 fn tags(events: &[SelectEvent]) -> Vec<String> {
     events
@@ -290,30 +330,96 @@ where
 
 // ---- the marquees ----
 
-// Normal style: Shift pressed after the press squares, Alt pressed after it centres, Shift held at the press does not
-// (it is Add); Fixed Ratio and Fixed Size give whole-pixel rectangles.
+/// The rectangle of the one `Commit` in `events`.
+fn committed_rect(events: &[SelectEvent]) -> Rect {
+    match events {
+        [SelectEvent::Commit { shape: SelectionShape::Rectangle(rect), .. }] => *rect,
+        _ => panic!("one rectangle commit: {events:?}"),
+    }
+}
+
+// Normal style: Shift pressed after the press squares, Alt pressed after it centres. With nothing selected Shift and
+// Alt held at the press square and centre from the first move; with a selection they pick the operation only. Fixed
+// Ratio and Fixed Size give whole-pixel rectangles, and a Shift square pressed between pixels has equal sides. The
+// Single Row and Single Column Marquees keep a one-pixel drag. On a floating piece a plain press drags the outline and
+// Cmd the piece; a Single Row press inside the selection drags the outline, and one released where it was pressed
+// selects the row under it.
 #[trial]
 fn marquee_corners_follow_constraint_and_modifiers() {
-    let mut rig = rig("Marquee", MarqueeTool::new(MarqueeKind::Rectangle), Fake::empty());
-    let events = stroke(&mut rig, (10.5, 10.5), (50.5, 30.5), NONE, NONE);
+    let mut marquee = rig("Marquee", MarqueeTool::new(MarqueeKind::Rectangle), Fake::empty());
+    let events = stroke(&mut marquee, (10.5, 10.5), (50.5, 30.5), NONE, NONE);
     assert_eq!(events, [commit((10.0, 10.0, 51.0, 31.0), SelectionOperation::New)]);
 
-    let events = stroke(&mut rig, (10.5, 10.5), (50.5, 30.5), NONE, Mods::SHIFT);
+    let events = stroke(&mut marquee, (10.5, 10.5), (50.5, 30.5), NONE, Mods::SHIFT);
     assert_eq!(events, [commit((10.0, 10.0, 51.0, 51.0), SelectionOperation::New)], "Shift after the press squares");
 
-    let events = stroke(&mut rig, (10.5, 10.5), (50.5, 30.5), Mods::SHIFT, Mods::SHIFT);
-    assert_eq!(events, [commit((10.0, 10.0, 51.0, 31.0), SelectionOperation::Add)], "Shift at the press is Add, not square");
-
-    let events = stroke(&mut rig, (100.0, 100.0), (110.0, 120.0), NONE, Mods::ALT);
+    let events = stroke(&mut marquee, (100.0, 100.0), (110.0, 120.0), NONE, Mods::ALT);
     assert_eq!(events, [commit((90.0, 80.0, 110.0, 120.0), SelectionOperation::New)], "Alt after the press centres");
 
-    rig.tool_mut().tool().constraint(Constraint::Ratio(2.0, 1.0));
-    let events = stroke(&mut rig, (10.0, 10.0), (50.0, 12.0), NONE, NONE);
+    // #11389: with nothing selected the press modifiers count from the first move.
+    let events = stroke(&mut marquee, (10.5, 10.5), (50.5, 30.5), Mods::SHIFT, Mods::SHIFT);
+    assert_eq!(events, [commit((10.0, 10.0, 51.0, 51.0), SelectionOperation::Add)], "Shift at the press squares with nothing selected");
+    let events = stroke(&mut marquee, (100.0, 100.0), (110.0, 120.0), Mods::ALT, Mods::ALT);
+    assert_eq!(events, [commit((90.0, 80.0, 110.0, 120.0), SelectionOperation::New)], "Alt at the press centres with nothing selected");
+
+    // #5472: a square pressed between pixels.
+    let square = committed_rect(&stroke(&mut marquee, (10.3, 10.7), (50.6, 30.2), NONE, Mods::SHIFT));
+    assert!(square.width() > 0.0 && square.width() == square.height(), "{square:?}");
+
+    marquee.tool_mut().tool().constraint(Constraint::Ratio(2.0, 1.0));
+    let events = stroke(&mut marquee, (10.0, 10.0), (50.0, 12.0), NONE, NONE);
     assert_eq!(events, [commit((10.0, 10.0, 50.0, 30.0), SelectionOperation::New)]);
 
-    rig.tool_mut().tool().constraint(Constraint::Size(10.0, 10.0));
-    let events = stroke(&mut rig, (20.0, 20.0), (40.4, 60.4), NONE, NONE);
+    marquee.tool_mut().tool().constraint(Constraint::Size(10.0, 10.0));
+    let events = stroke(&mut marquee, (20.0, 20.0), (40.4, 60.4), NONE, NONE);
     assert_eq!(events, [commit((40.0, 60.0, 50.0, 70.0), SelectionOperation::New)], "the box follows the pointer");
+    // #6015: Fixed Size between pixels is exactly its size.
+    let fixed = committed_rect(&stroke(&mut marquee, (20.3, 20.6), (40.7, 60.2), NONE, NONE));
+    assert_eq!((fixed.width(), fixed.height()), (10.0, 10.0), "{fixed:?}");
+
+    // With a selection the press modifiers pick the operation and neither square nor centre.
+    let mut marquee = rig("Marquee", MarqueeTool::new(MarqueeKind::Rectangle), Fake::selected(Rect::new(300.0, 250.0, 350.0, 290.0)));
+    let events = stroke(&mut marquee, (10.5, 10.5), (50.5, 30.5), Mods::SHIFT, Mods::SHIFT);
+    assert_eq!(events, [commit((10.0, 10.0, 51.0, 31.0), SelectionOperation::Add)], "Shift at the press is Add, not square");
+    let events = stroke(&mut marquee, (100.0, 100.0), (110.0, 120.0), Mods::ALT, Mods::ALT);
+    assert_eq!(events, [commit((100.0, 100.0, 110.0, 120.0), SelectionOperation::Subtract)], "Alt at the press is Subtract, not centred");
+
+    // #2391: a one-pixel line drag is a selection.
+    let mut marquee = rig("Marquee", MarqueeTool::new(MarqueeKind::SingleRow), Fake::empty());
+    let events = stroke(&mut marquee, (30.5, 20.5), (31.5, 20.5), NONE, NONE);
+    assert_eq!(events, [commit((0.0, 20.0, 400.0, 21.0), SelectionOperation::New)]);
+    marquee.tool_mut().tool().kind(MarqueeKind::SingleColumn);
+    let events = stroke(&mut marquee, (30.5, 20.5), (30.5, 21.5), NONE, NONE);
+    assert_eq!(events, [commit((30.0, 0.0, 31.0, 300.0), SelectionOperation::New)]);
+
+    // #11368: on a floating piece (the selection shown 20 pixels to the right) a plain press drags the outline and Cmd
+    // the piece; a press beside the piece, still inside the selection, starts a new marquee.
+    let piece = Rect::new(120.0, 100.0, 220.0, 200.0);
+    let mut marquee = rig("Marquee", MarqueeTool::new(MarqueeKind::Rectangle), Fake::floating(Rect::new(100.0, 100.0, 200.0, 200.0), piece));
+    down(&mut marquee, (210.0, 150.0), NONE);
+    assert_eq!(marquee.tool().phase(), SelectPhase::Dragging(SelectionDrag::new(DragKind::Outline, [0, 0])), "a plain press on the piece");
+    up(&mut marquee, (210.0, 150.0), NONE);
+    assert_eq!(tags(&marquee.tool_mut().events()), ["begin", "commit 0,0"]);
+    down(&mut marquee, (210.0, 150.0), Mods::CMD);
+    assert_eq!(marquee.tool().phase(), SelectPhase::Dragging(SelectionDrag::new(DragKind::pixels(false), [0, 0])), "a Cmd press on the piece");
+    up(&mut marquee, (210.0, 150.0), Mods::CMD);
+    marquee.tool_mut().events();
+    down(&mut marquee, (110.0, 150.0), NONE);
+    assert!(matches!(marquee.tool().phase(), SelectPhase::Marquee { .. }), "beside the piece: {:?}", marquee.tool().phase());
+    up(&mut marquee, (110.0, 150.0), NONE);
+    marquee.tool_mut().events();
+
+    // #11392: a Single Row press inside the selection drags the outline; released where it was pressed it selects the
+    // row under the press (the drag's Cancel, then the Commit).
+    let mut marquee = rig("Marquee", MarqueeTool::new(MarqueeKind::SingleRow), Fake::selected(Rect::new(100.0, 100.0, 200.0, 200.0)));
+    down(&mut marquee, (150.0, 150.5), NONE);
+    drag_to(&mut marquee, (170.0, 150.5), NONE);
+    up(&mut marquee, (170.0, 150.5), NONE);
+    assert_eq!(tags(&marquee.tool_mut().events()), ["begin", "update 20,0", "commit 20,0"]);
+    click(&mut marquee, (150.0, 120.5), NONE);
+    let events = marquee.tool_mut().events();
+    assert_eq!(tags(&events[..2]), ["begin", "cancel"], "{events:?}");
+    assert_eq!(events[2..], [commit((0.0, 120.0, 400.0, 121.0), SelectionOperation::New)]);
 }
 
 // Cmd inside the selection drags pixels, Cmd+Alt a copy; Cmd outside it is the Move tool's, so the host starts no
@@ -343,7 +449,82 @@ fn marquee_selection_drag_reports_whole_pixel_deltas_and_cancel() {
     assert_eq!(rig.tool().phase(), SelectPhase::Idle);
 }
 
+// A marquee corner snaps to the guide at x = 100. A dragged selection snaps by its bounds, once and before the delta
+// rounds: from (35, 45) to (93, 45) its centre lands on the guide (55 pixels), where a second snap of the pointer
+// itself would have moved it 70. Control suspends both.
+#[trial]
+fn a_marquee_corner_and_a_dragged_selection_snap_to_a_guide() {
+    let mut rig = snapped_rig("Marquee", MarqueeTool::new(MarqueeKind::Rectangle), Fake::empty());
+    let events = stroke(&mut rig, (20.0, 20.0), (96.0, 60.0), NONE, NONE);
+    assert_eq!(events, [commit((20.0, 20.0, 100.0, 60.0), SelectionOperation::New)], "the corner snaps to the guide");
+    down(&mut rig, (20.0, 20.0), NONE);
+    hold(&mut rig, Modifiers::CTRL);
+    drag_to(&mut rig, (96.0, 60.0), Mods::CTRL);
+    up(&mut rig, (96.0, 60.0), Mods::CTRL);
+    hold(&mut rig, Modifiers::NONE);
+    assert_eq!(rig.tool_mut().events(), [commit((20.0, 20.0, 96.0, 60.0), SelectionOperation::New)], "Control suspends the corner snap");
+
+    let mut rig = snapped_rig("Marquee", MarqueeTool::new(MarqueeKind::Rectangle), Fake::selected(Rect::new(30.0, 30.0, 60.0, 60.0)));
+    down(&mut rig, (35.0, 45.0), NONE);
+    drag_to(&mut rig, (93.0, 45.0), NONE);
+    up(&mut rig, (93.0, 45.0), NONE);
+    assert_eq!(tags(&rig.tool_mut().events()), ["begin", "update 55,0", "commit 55,0"], "the bounds snap once");
+    down(&mut rig, (35.0, 45.0), NONE);
+    hold(&mut rig, Modifiers::CTRL);
+    drag_to(&mut rig, (93.0, 45.0), Mods::CTRL);
+    up(&mut rig, (93.0, 45.0), Mods::CTRL);
+    hold(&mut rig, Modifiers::NONE);
+    assert_eq!(tags(&rig.tool_mut().events()), ["begin", "update 58,0", "commit 58,0"], "Control suspends the box snap");
+
+    // A click inside a selection whose edge lies within the tolerance of the guide moves nothing and calls no snap.
+    let near = Rect::new(72.0, 30.0, 97.0, 60.0);
+    let mut rig = snapped_rig("Marquee", MarqueeTool::new(MarqueeKind::Rectangle), Fake::selected(near));
+    click(&mut rig, (80.0, 45.0), NONE);
+    assert_eq!(tags(&rig.tool_mut().events()), ["begin", "commit 0,0"], "a click commits a zero delta");
+    let mut rig = snapped_rig("Marquee", MarqueeTool::new(MarqueeKind::SingleRow), Fake::selected(near));
+    click(&mut rig, (80.0, 45.5), NONE);
+    let events = rig.tool_mut().events();
+    assert_eq!(tags(&events[..2]), ["begin", "cancel"], "{events:?}");
+    assert_eq!(events[2..], [commit((0.0, 45.0, 400.0, 46.0), SelectionOperation::New)], "the click selects the row");
+}
+
 // ---- the Lasso ----
+
+// Alt pressed during a freehand drag turns on straight segments, Alt-clicks add vertices and releasing Alt closes. A
+// first press with Alt and nothing selected starts straight segments and stays New; Backspace and a secondary press
+// each retract one vertex, and a click on the last point closes.
+#[trial]
+fn lasso_alt_clicks_make_straight_segments_that_retract_and_close() {
+    let mut rig = rig("Lasso", LassoTool::new(), Fake::empty());
+    focus(&mut rig);
+    down(&mut rig, (100.0, 100.0), NONE);
+    drag_to(&mut rig, (140.0, 100.0), NONE);
+    hold(&mut rig, Modifiers::ALT);
+    up(&mut rig, (140.0, 100.0), Mods::ALT);
+    assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 2 }, "with Alt down the release keeps the outline open");
+    click(&mut rig, (140.0, 140.0), Mods::ALT);
+    click(&mut rig, (100.0, 140.0), Mods::ALT);
+    assert!(rig.tool_mut().events().is_empty(), "Alt-clicks add vertices");
+    hold(&mut rig, Modifiers::NONE);
+    let events = rig.tool_mut().events();
+    assert_eq!(events, [polygon(&[(100.0, 100.0), (140.0, 100.0), (140.0, 140.0), (100.0, 140.0)], SelectionOperation::New)], "releasing Alt closes");
+
+    hold(&mut rig, Modifiers::ALT);
+    for point in [(100.0, 100.0), (200.0, 100.0), (200.0, 200.0), (100.0, 200.0), (150.0, 250.0)] {
+        click(&mut rig, point, Mods::ALT);
+    }
+    assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 5 }, "a first Alt press with nothing selected starts straight segments");
+    press_key(&mut rig, Key::Backspace, Modifiers::ALT);
+    assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 4 }, "Backspace retracts");
+    inject(&mut rig, ToolInput::down(PointerButton::Secondary, at((300.0, 300.0))).mods(Mods::ALT));
+    inject(&mut rig, ToolInput::up(at((300.0, 300.0))).mods(Mods::ALT));
+    assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 3 }, "a secondary press retracts");
+    click(&mut rig, (200.0, 200.0), Mods::ALT);
+    let events = rig.tool_mut().events();
+    assert_eq!(events, [polygon(&[(100.0, 100.0), (200.0, 100.0), (200.0, 200.0)], SelectionOperation::New)], "a click on the last point closes, New");
+    hold(&mut rig, Modifiers::NONE);
+    assert!(rig.tool_mut().events().is_empty(), "nothing is left to close");
+}
 
 // A plain press inside the selection drags the outline instead of drawing.
 
@@ -372,6 +553,43 @@ fn polygon_shift_constrains_to_45_degrees() {
     assert_eq!(points[0], Point::new(50.0, 50.0), "the first vertex is never turned");
     assert!((points[1] - turned).hypot() < 1e-9, "{:?}", points[1]);
     assert_eq!(points[2], Point::new(140.0, 170.0), "Shift with Alt keeps the point");
+}
+
+// One outline: Alt at the first click with a selection latches Subtract for every later click; Backspace and a
+// secondary press each retract a vertex; an Alt drag adds freehand points; a double click closes. A second outline
+// closes on a click on its start, with the operation New.
+#[trial]
+fn a_polygonal_lasso_closes_by_double_click_or_its_start_and_retracts_by_backspace_or_secondary_press() {
+    let mut rig = rig("Polygonal Lasso", PolygonLassoTool::new(), Fake::selected(Rect::new(300.0, 250.0, 350.0, 290.0)));
+    focus(&mut rig);
+    hold(&mut rig, Modifiers::ALT);
+    click(&mut rig, (100.0, 100.0), Mods::ALT);
+    hold(&mut rig, Modifiers::NONE);
+    for point in [(200.0, 100.0), (250.0, 150.0), (260.0, 160.0)] {
+        click(&mut rig, point, NONE);
+    }
+    press_key(&mut rig, Key::Backspace, Modifiers::NONE);
+    assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 3 }, "Backspace retracts");
+    inject(&mut rig, ToolInput::down(PointerButton::Secondary, at((300.0, 50.0))));
+    inject(&mut rig, ToolInput::up(at((300.0, 50.0))));
+    assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 2 }, "a secondary press retracts");
+    hold(&mut rig, Modifiers::ALT);
+    down(&mut rig, (200.0, 200.0), Mods::ALT);
+    drag_to(&mut rig, (180.0, 220.0), Mods::ALT);
+    drag_to(&mut rig, (160.0, 230.0), Mods::ALT);
+    up(&mut rig, (160.0, 230.0), Mods::ALT);
+    hold(&mut rig, Modifiers::NONE);
+    assert!(rig.tool_mut().events().is_empty(), "the outline stays open");
+    rig.double_press_at(at((120.0, 200.0)));
+    let events = rig.tool_mut().events();
+    let drawn = [(100.0, 100.0), (200.0, 100.0), (200.0, 200.0), (180.0, 220.0), (160.0, 230.0), (120.0, 200.0)];
+    assert_eq!(events, [polygon(&drawn, SelectionOperation::Subtract)], "a double click closes; the Alt drag is freehand");
+
+    for point in [(100.0, 100.0), (200.0, 100.0), (200.0, 200.0), (100.0, 100.0)] {
+        click(&mut rig, point, NONE);
+    }
+    let events = rig.tool_mut().events();
+    assert_eq!(events, [polygon(&[(100.0, 100.0), (200.0, 100.0), (200.0, 200.0)], SelectionOperation::New)], "a click on the start closes");
 }
 
 // A new outline replaces the selection while it is open: true only for the operation New.
@@ -508,6 +726,64 @@ fn magnetic_fastens_every_spacing_and_walks_jumps() {
     click(&mut rig, pt(start), NONE);
     glide(&mut rig, Point::new(5000.0, 150.0), NONE);
     assert_eq!(log.snaps.get(), 1 + 256, "the start, then 256 steps");
+}
+
+/// The points of the one `Commit` with the operation New in `events`.
+fn committed_polygon(events: &[SelectEvent]) -> Vec<Point> {
+    match events {
+        [SelectEvent::Commit { shape: SelectionShape::Polygon(points), operation: SelectionOperation::New, .. }] => points.clone(),
+        _ => panic!("one New polygon commit: {events:?}"),
+    }
+}
+
+// An outline traced along the circle closes on a click on its start, on a double click and on Enter, each into a
+// polygon on the circle's edge. Backspace removes the fastening points one by one, the first one last: one press per
+// fastening point drops the outline, and nothing is committed.
+#[trial]
+fn magnetic_closes_by_start_click_double_click_or_enter_and_retracts_to_the_first() {
+    let on_edge = |points: &[Point]| points.len() >= 3 && points.iter().all(|&p| on_circle(p));
+
+    let (mut rig, _) = magnetic();
+    click(&mut rig, pt(on(0.0)), NONE);
+    glide_along(&mut rig, 0.0, 5.0);
+    // A second apart, so the click on the start is not a double click.
+    rig.fixture().advance(1.0);
+    click(&mut rig, pt(on(0.0)), NONE);
+    let points = committed_polygon(&rig.tool_mut().events());
+    assert!(on_edge(&points), "a click on the start closes: {points:?}");
+    assert_eq!(rig.tool().phase(), SelectPhase::Idle);
+
+    let (mut rig, _) = magnetic();
+    click(&mut rig, pt(on(0.0)), NONE);
+    glide_along(&mut rig, 0.0, 1.5);
+    rig.double_press_at(at(pt(on(1.5))));
+    let points = committed_polygon(&rig.tool_mut().events());
+    assert!(on_edge(&points), "a double click closes: {points:?}");
+
+    let (mut rig, _) = magnetic();
+    click(&mut rig, pt(on(0.0)), NONE);
+    glide_along(&mut rig, 0.0, 1.5);
+    press_key(&mut rig, Key::Enter, Modifiers::NONE);
+    let points = committed_polygon(&rig.tool_mut().events());
+    assert!(on_edge(&points), "Enter closes: {points:?}");
+
+    let (mut rig, log) = magnetic();
+    click(&mut rig, pt(on(0.0)), NONE);
+    glide_along(&mut rig, 0.0, 2.5);
+    let fastened = log.starts();
+    assert!(fastened >= 3, "{fastened}");
+    let mut presses = 0;
+    loop {
+        let phase = rig.tool().phase();
+        if phase == SelectPhase::Idle || presses > fastened {
+            break;
+        }
+        assert!(matches!(phase, SelectPhase::Outline { .. }), "{phase:?}");
+        press_key(&mut rig, Key::Backspace, Modifiers::NONE);
+        presses += 1;
+    }
+    assert_eq!(presses, fastened, "one Backspace per fastening point, the first one last");
+    assert!(rig.tool_mut().events().is_empty(), "retracting commits nothing");
 }
 
 // `[` and `]` change the width by 1 within 1..=256 while an outline is open.

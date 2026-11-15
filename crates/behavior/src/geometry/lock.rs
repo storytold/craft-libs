@@ -1,4 +1,5 @@
-//! Direction locking for ⇧ drags: [`Directions`], [`lock_direction`], [`round_to_direction`] and [`turn_to_45`].
+//! Direction locking for ⇧ drags: [`Directions`], [`lock_direction`], [`round_to_direction`], [`turn_to_45`] and
+//! [`polygon_step`].
 
 use kurbo::{Point, Vec2};
 
@@ -40,12 +41,24 @@ pub fn round_to_direction(angle: f64, directions: Directions) -> f64 {
 /// segment's length, a diagonal keeps the shorter offset on both axes. `point` itself for a zero-length or
 /// non-finite offset.
 pub fn polygon_step(from: Point, point: Point) -> Point {
-    let _ = (from, point);
-    todo!("cw.C23")
+    let delta = point - from;
+    let length = delta.hypot();
+    if !length.is_finite() || length == 0.0 {
+        return point;
+    }
+    let direction = Vec2::from_angle(round_to_direction(delta.atan2(), Directions::Eight));
+    let (x, y) = (direction.x.round(), direction.y.round());
+    if x == 0.0 || y == 0.0 {
+        return from + Vec2::new(x, y) * length;
+    }
+    // Inside a diagonal's sector both offsets have the diagonal's signs.
+    let shorter = delta.x.abs().min(delta.y.abs());
+    from + Vec2::new(shorter.copysign(delta.x), shorter.copysign(delta.y))
 }
 
-/// `point` turned about `from` to the nearest multiple of 45°, keeping its distance: the one ⇧ rule for a line, a
-/// handle or a segment drawn from a fixed point. `point` itself when it is on `from` or not finite.
+/// `point` turned about `from` to the nearest multiple of 45°, keeping its distance: the ⇧ rule for a line, a handle
+/// or a segment drawn from a fixed point. A polygon's vertex takes [`polygon_step`] instead. `point` itself when it
+/// is on `from` or not finite.
 pub fn turn_to_45(from: Point, point: Point) -> Point {
     let delta = point - from;
     let length = delta.hypot();

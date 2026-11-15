@@ -1,8 +1,8 @@
 //! A press inside the selection: which drag it starts, the cursor over the selection, and the drag itself (the lasso
-//! tools use it unchanged). Public for the app's own click tools: the Magic Wand takes the same rule as the Polygonal
-//! Lasso ([`PressRule::Clicks`]).
+//! tools use it unchanged). Public for the app's own tools: the Magic Wand in New mode drags the outline like a
+//! marquee, so it takes [`PressRule::Drags`].
 
-use craft_behavior::geometry::{ConstrainStyle, Directions, MoveGesture, SelectionOperation};
+use craft_behavior::geometry::{ConstrainStyle, Directions, MoveGesture, MoveValue, SelectionOperation};
 use craft_behavior::{CancelReason, Cursor, CursorBadge, CursorIcon, EditEvent, GestureId, Mixed, PaintedCursor};
 use craft_keymap::Mods;
 use kurbo::{Point, Vec2};
@@ -14,10 +14,10 @@ use super::{DragKind, SelectEvent, SelectionDrag, SelectionProbe};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PressRule {
-    /// A drag tool (the marquees, the Lasso): a plain press with the operation New drags the outline, Cmd the pixels.
+    /// A drag tool (the marquees, the Lasso, the app's Magic Wand): a plain press with the operation New drags the
+    /// outline, Cmd the pixels.
     Drags,
-    /// A click-driven tool (the Polygonal Lasso, the app's Magic Wand): only Cmd drags, and never while
-    /// `outline_open`.
+    /// A click-driven tool (the Polygonal Lasso): only Cmd drags, and never while `outline_open`.
     #[non_exhaustive]
     Clicks {
         /// The tool has an outline open (the Polygonal Lasso between clicks).
@@ -34,11 +34,12 @@ impl PressRule {
 
 /// What a press at `at` with `mods` drags, or `None` when it draws (or is not the tool's).
 ///
-/// With a floating piece: a press on it (`probe.on_floating`) drags it as `Pixels` unless Shift is held, or Alt
-/// without Cmd; a click-driven tool needs Cmd; elsewhere the press draws a new selection. Without one, a press outside
-/// the selection draws; inside, Cmd without Shift is `Pixels { copy: Alt }` (Cmd+Alt copies), and a drag tool with no
-/// Cmd whose resolved operation (`SelectionOperation::resolve(bar, mods, has_selection)`) is New drags the `Outline`.
-/// A click-driven tool returns `None` for everything while its outline is open.
+/// With a floating piece: on it (`probe.on_floating`), Cmd without Shift drags the piece as `Pixels { copy: Alt }`,
+/// and a plain press (no Cmd, Shift or Alt) of a drag tool whose resolved operation is New drags the `Outline` (the
+/// app drops the piece before the outline moves); elsewhere the press draws a new selection. Without one, a press
+/// outside the selection draws; inside, Cmd without Shift is `Pixels { copy: Alt }` (Cmd+Alt copies), and a drag tool
+/// with no Cmd whose resolved operation (`SelectionOperation::resolve(bar, mods, has_selection)`) is New drags the
+/// `Outline`. A click-driven tool needs Cmd, and returns `None` for everything while its outline is open.
 pub fn drag_kind(probe: &dyn SelectionProbe, at: Point, mods: Mods, bar: SelectionOperation, rule: PressRule) -> Option<DragKind> {
     let clicky = match rule {
         PressRule::Drags => false,
@@ -48,8 +49,18 @@ pub fn drag_kind(probe: &dyn SelectionProbe, at: Point, mods: Mods, bar: Selecti
     let cut = mods.cmd && !mods.shift;
     let copy = mods.alt && mods.cmd;
     if probe.floating() {
-        let on = probe.on_floating(at) && !mods.shift && (!mods.alt || mods.cmd) && (cut || !clicky);
-        return on.then_some(DragKind::Pixels { copy });
+        if !probe.on_floating(at) {
+            return None;
+        }
+        if cut {
+            return Some(DragKind::Pixels { copy });
+        }
+        let plain = !clicky
+            && !mods.cmd
+            && !mods.shift
+            && !mods.alt
+            && SelectionOperation::resolve(bar, mods, true) == SelectionOperation::New;
+        return plain.then_some(DragKind::Outline);
     }
     if !probe.inside_selection(at) {
         return None;
@@ -62,8 +73,9 @@ pub fn drag_kind(probe: &dyn SelectionProbe, at: Point, mods: Mods, bar: Selecti
 }
 
 /// The cursor over the selection for a press with `mods`, or `None` for the tool's own: `Outline` shows the move
-/// cursor, `Pixels` the arrow (with the copy badge for Cmd+Alt), a floating piece the plain arrow. While `dragging`,
-/// `Outline` keeps the move cursor and `Pixels` shows the plain arrow.
+/// cursor, `Pixels` the arrow with the scissors badge (the copy badge for Cmd+Alt), a floating piece the plain arrow
+/// (the copy badge for Cmd+Alt). While `dragging`, `Outline` keeps the move cursor and `Pixels` shows the hollow
+/// arrowhead.
 pub fn cursor_over(
     probe: &dyn SelectionProbe,
     at: Point,
@@ -74,13 +86,16 @@ pub fn cursor_over(
 ) -> Option<Cursor> {
     match dragging {
         Some(DragKind::Outline) => return Some(CursorIcon::Move.into()),
-        Some(DragKind::Pixels { .. }) => return Some(CursorIcon::Default.into()),
+        Some(DragKind::Pixels { .. }) => return Some(PaintedCursor::arrow(true).into()),
         None => {}
     }
+    // `drag_kind` answers over a floating piece only on the piece.
+    let on_piece = probe.floating();
     Some(match drag_kind(probe, at, mods, bar, rule)? {
-        DragKind::Outline => CursorIcon::Move.into(),
         DragKind::Pixels { copy: true } => PaintedCursor::badged(CursorIcon::Default, CursorBadge::Copy).into(),
-        DragKind::Pixels { copy: false } => CursorIcon::Default.into(),
+        _ if on_piece => CursorIcon::Default.into(),
+        DragKind::Outline => CursorIcon::Move.into(),
+        DragKind::Pixels { copy: false } => PaintedCursor::badged(CursorIcon::Default, CursorBadge::Scissors).into(),
     })
 }
 
@@ -92,13 +107,15 @@ pub struct InsideDrag {
     kind: DragKind,
     id: GestureId,
     gesture: MoveGesture,
+    /// The selection's bounds at the press, which snap as they move; `None` leaves the drag unsnapped.
+    bounds: Option<kurbo::Rect>,
     /// The whole-pixel delta of the last event.
     last: [i32; 2],
 }
 
 impl InsideDrag {
-    /// Starts a `kind` drag named `id` at `at` (document units): the gesture and the `Begin` event, which names the
-    /// undo step `label`.
+    /// Starts a `kind` drag named `id` at `at` (document units, unsnapped): the gesture and the `Begin` event, which
+    /// names the undo step `label`. `bounds` are the selection's at the press ([`SelectionProbe::bounds`]).
     pub fn begin(
         style: &ConstrainStyle,
         kind: DragKind,
@@ -108,10 +125,9 @@ impl InsideDrag {
         label: Arc<str>,
         bounds: Option<kurbo::Rect>,
     ) -> (InsideDrag, SelectEvent) {
-        let _ = bounds; // P3(canvas-widgets-w3): cw.C20
         let gesture = MoveGesture::press(style, at, mods, Directions::Eight);
         let event = SelectEvent::DragSelection(EditEvent::begin(id, Mixed::Same(SelectionDrag { kind, delta: [0, 0] }), label, None));
-        (InsideDrag { kind, id, gesture, last: [0, 0] }, event)
+        (InsideDrag { kind, id, gesture, bounds, last: [0, 0] }, event)
     }
 
     /// The kind of drag.
@@ -119,12 +135,18 @@ impl InsideDrag {
         self.kind
     }
 
-    /// The pointer moved to `at` at `zoom` screen points per document unit: an `Update` when the whole-pixel delta
-    /// changed. The delta is the gesture's offset rounded per axis and clamped to 10^7; the gesture's own Alt copy is
-    /// ignored (the copy is latched in `kind`).
+    /// What moves and the whole-pixel offset of the last event, for [`SelectPhase::Dragging`](super::SelectPhase).
+    pub fn selection_drag(&self) -> SelectionDrag {
+        SelectionDrag { kind: self.kind, delta: self.last }
+    }
+
+    /// The pointer moved to `at` (document units, unsnapped) at `zoom` screen points per document unit: an `Update`
+    /// when the whole-pixel delta changed. The gesture's offset moves the press bounds, which `snap` (the tool's
+    /// `ToolContext::snap_rect`) moves onto a snap target; the sum is rounded per axis and clamped to 10^7. The
+    /// gesture's own Alt copy is ignored (the copy is latched in `kind`).
     pub fn drag(&mut self, at: Point, mods: Mods, zoom: f64, snap: &mut dyn FnMut(kurbo::Rect) -> Vec2) -> Option<SelectEvent> {
-        let _ = snap; // P3(canvas-widgets-w3): cw.C20
-        let delta = whole_pixels(self.gesture.follow(at, mods, zoom)?.delta);
+        let value = self.gesture.follow(at, mods, zoom)?;
+        let delta = whole_pixels(snapped(self.bounds, &value, snap));
         if delta == self.last {
             return None;
         }
@@ -132,10 +154,11 @@ impl InsideDrag {
         Some(SelectEvent::DragSelection(EditEvent::update(self.id, SelectionDrag { kind: self.kind, delta })))
     }
 
-    /// The release: the `Commit`. A delta of 0 means nothing moved.
+    /// The release at `at` (document units, unsnapped), snapped as [`drag`](Self::drag) is: the `Commit`. A delta of
+    /// 0 means nothing moved.
     pub fn end(self, at: Point, mods: Mods, zoom: f64, snap: &mut dyn FnMut(kurbo::Rect) -> Vec2) -> SelectEvent {
-        let _ = snap; // P3(canvas-widgets-w3): cw.C20
-        let after = SelectionDrag { kind: self.kind, delta: whole_pixels(self.gesture.release(at, mods, zoom).delta) };
+        let value = self.gesture.release(at, mods, zoom);
+        let after = SelectionDrag { kind: self.kind, delta: whole_pixels(snapped(self.bounds, &value, snap)) };
         let before = SelectionDrag { kind: self.kind, delta: [0, 0] };
         SelectEvent::DragSelection(EditEvent::commit(self.id, Mixed::Same(before), after))
     }
@@ -144,6 +167,18 @@ impl InsideDrag {
     pub fn cancel(self, reason: CancelReason) -> SelectEvent {
         let before = SelectionDrag { kind: self.kind, delta: [0, 0] };
         SelectEvent::DragSelection(EditEvent::cancel(self.id, reason, Some(Mixed::Same(before))))
+    }
+}
+
+/// The value's offset plus the snap of the press `bounds` moved by it; the offset itself without bounds. A value that
+/// changed nothing (a click) is `Vec2::ZERO` and calls no `snap`.
+fn snapped(bounds: Option<kurbo::Rect>, value: &MoveValue, snap: &mut dyn FnMut(kurbo::Rect) -> Vec2) -> Vec2 {
+    if !value.changed() {
+        return Vec2::ZERO;
+    }
+    match bounds {
+        Some(bounds) => value.delta + snap(bounds + value.delta),
+        None => value.delta,
     }
 }
 

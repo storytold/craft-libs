@@ -4,4 +4,6 @@ mod brush;
 
 mod grid;
 
+mod guides;
+
 mod marquee;

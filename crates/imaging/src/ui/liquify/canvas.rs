@@ -199,7 +199,7 @@ impl LiquifyCanvasTool<'_> {
     fn show_readout(&self, cx: &mut ToolContext<'_>) {
         let rows = self.canvas.resize.readout_rows(&cx.units(), &cx.words::<CanvasControlWords>());
         if !rows.is_empty() {
-            cx.readout(rows);
+            cx.hud(rows);
         }
     }
 

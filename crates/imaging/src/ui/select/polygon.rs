@@ -1,6 +1,5 @@
 //! [`PolygonLassoTool`]: the Polygonal Lasso, click by click.
 
-use craft_behavior::geometry::turn_to_45;
 use craft_behavior::geometry::{DraftKind, DraftPoint, DraftReach, OutlineDraft, SelectionOperation};
 use craft_behavior::{CancelReason, Cursor, PointerButton};
 use craft_keymap::Mods;
@@ -13,8 +12,8 @@ use super::{Place, Report, SelectEvent, SelectPhase, SelectToolPass, SelectionPr
 
 /// The Polygonal Lasso: each click adds a vertex; the outline closes into a selection.
 ///
-/// The drawing rules are [`OutlineDraft`]'s with [`DraftKind::Polygonal`]: Shift (without Alt) turns the new segment
-/// to a multiple of 45 degrees from the last vertex (not the first vertex), an Alt drag draws freehand. The first
+/// The drawing rules are [`OutlineDraft`]'s with [`DraftKind::Polygonal`]: Shift (without Alt) puts the new vertex in
+/// the nearest of eight directions from the last vertex (not the first vertex), an Alt drag draws freehand. The first
 /// click latches the operation (Alt with nothing selected is New). The outline closes on a click near the first
 /// vertex (3 or more), on a click at the last, on Enter or a double-click. Backspace, Delete or a secondary click
 /// retract the last vertex (the last one cancels): the tool takes the secondary button while an outline is open, so
@@ -145,7 +144,7 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
         }
         let open = tool.draft.is_open();
         if let Some(kind) = drag_kind(probe, place.doc(pointer.pos), pointer.mods, tool.bar, PressRule::Clicks { outline_open: open }) {
-            begin_inside(kind, pointer, &place, cx, &mut tool.inside, &mut tool.report);
+            begin_inside(kind, pointer, &place, cx, probe.bounds(), &mut tool.inside, &mut tool.report);
             return ToolAction::Claimed;
         }
         if pointer.mods.cmd && !open {
@@ -161,7 +160,7 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
         let (tool, probe) = (&mut *self.tool, self.probe);
         let Some(place) = Place::of(cx) else { return };
         if let Some(inside) = tool.inside.as_mut() {
-            if let Some(event) = inside.drag(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |_| kurbo::Vec2::ZERO) {
+            if let Some(event) = inside.drag(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| cx.snap_rect(rect)) {
                 tool.report.push(event);
             }
             return;
@@ -175,24 +174,18 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
         let (tool, probe) = (&mut *self.tool, self.probe);
         let Some(place) = Place::of(cx) else { return };
         if let Some(inside) = tool.inside.take() {
-            tool.report.push(inside.end(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |_| kurbo::Vec2::ZERO));
+            tool.report.push(inside.end(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| cx.snap_rect(rect)));
             return;
         }
         let event = tool.draft.release(sample(pointer, &place));
         apply(event, tool.bar, probe.has_selection(), &mut tool.operation, &mut tool.report);
     }
 
-    /// The rubber band follows the pointer, constrained to 45 degrees with Shift.
+    /// The rubber band follows the pointer; it ends where a click would place the vertex.
     fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let tool = &mut *self.tool;
         let Some(place) = Place::of(cx) else { return };
-        let mut at = sample(pointer, &place);
-        if pointer.mods.shift
-            && !pointer.mods.alt
-            && let Some(&last) = tool.draft.points().last()
-        {
-            at.at = turn_to_45(last, at.at);
-        }
+        let at = sample(pointer, &place);
         if tool.draft.hover(at).is_some() {
             cx.request_repaint();
         }

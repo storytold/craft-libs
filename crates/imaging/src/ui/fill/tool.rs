@@ -211,7 +211,7 @@ impl FillCanvasTool<'_> {
         let Some(dimensions) = self.canvas.resize.dimensions() else { return };
         let words = cx.words::<CanvasControlWords>();
         let pixels = cx.units().pixels(dimensions.diameter.round().max(0.0));
-        cx.readout(vec![(words.diameter.clone(), pixels)]);
+        cx.hud(vec![(words.diameter.clone(), pixels)]);
     }
 
     fn begin_resize(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {

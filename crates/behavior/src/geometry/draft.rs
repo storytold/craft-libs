@@ -8,7 +8,10 @@
 use craft_keymap::Mods;
 use kurbo::Point;
 
-use super::lock::turn_to_45;
+use super::lock::polygon_step;
+
+/// The most points [`OutlineDraft`]'s close reach measures the outline's box from.
+const BOX_SAMPLES: usize = 64;
 
 /// Which tool's rules an [`OutlineDraft`] follows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -21,11 +24,12 @@ pub enum DraftKind {
     /// switches to straight segments, where each click adds a vertex and a drag draws freehand
     /// again; releasing ⌥ with the button up closes. ⌥ held at the press means subtract (the
     /// tool's operation), not straight segments, until it is released and pressed again; with
-    /// nothing selected it starts straight segments at once.
+    /// nothing selected it starts straight segments at once. ⇧ puts each new point on the
+    /// horizontal, vertical or 45° line through the previous one.
     #[default]
     Mixed,
-    /// The Polygonal Lasso: each click adds a vertex, ⇧ (without ⌥) turns the new segment to a
-    /// multiple of 45° from the last vertex, and a drag with ⌥ held draws freehand.
+    /// The Polygonal Lasso: each click adds a vertex, ⇧ (without ⌥) puts it in the nearest of
+    /// eight directions from the last vertex, and a drag with ⌥ held draws freehand.
     Polygonal,
 }
 
@@ -191,14 +195,16 @@ impl OutlineDraft {
     ///   with a selection stays in the intent (subtract) and the outline is freehand.
     ///   [`DraftKind::Polygonal`]: the press is the first vertex, and ⌥ with `has_selection`
     ///   false is dropped from the intent too.
-    /// - An open outline of 3 or more points: a press within `reach.close / zoom` of the first
-    ///   point, or within `reach.same_point / zoom` of the last, closes it
-    ///   ([`DraftEvent::Closed`]).
+    /// - An open outline of 3 or more points: a press near the first point, or within
+    ///   `reach.same_point / zoom` of the last, closes it ([`DraftEvent::Closed`]). Near the first
+    ///   point is within a quarter of the narrower side of the outline's box on screen, at least 1
+    ///   and at most `reach.close` screen points, so a small outline's corners stay vertices.
     /// - Otherwise, in straight-segment mode (Mixed with ⌥ latched, Polygonal): the press adds a
     ///   vertex and its index goes into [`straight`](Self::straight) ([`DraftEvent::Changed`]).
-    ///   Polygonal with ⇧ and not ⌥: the vertex is turned to the nearest multiple of 45° about the
-    ///   last vertex, keeping its distance (in document space, so view rotation and mirroring do
-    ///   not skew it); the first vertex is never turned.
+    ///   With ⇧ (Polygonal: without ⌥) the vertex goes to the nearest of eight directions from the
+    ///   last vertex ([`polygon_step`]; in document space, so view rotation and mirroring do not
+    ///   skew it); the first vertex is never moved. A Mixed draft's freehand points follow the same
+    ///   ⇧ rule ([`drag`](Self::drag)).
     ///
     /// A point that isn't finite is ignored (`None`).
     pub fn press(&mut self, at: DraftPoint, has_selection: bool) -> Option<DraftEvent> {
@@ -230,14 +236,7 @@ impl OutlineDraft {
         if !self.polygonal {
             return None;
         }
-        let mut vertex = at.at;
-        if self.kind == DraftKind::Polygonal
-            && at.mods.shift
-            && !at.mods.alt
-            && let Some(&last) = self.points.last()
-        {
-            vertex = turn_to_45(last, vertex);
-        }
+        let vertex = self.shift_step(at);
         self.cursor = Some(vertex);
         self.down = true;
         if self.append(vertex) {
@@ -247,7 +246,8 @@ impl OutlineDraft {
     }
 
     /// The pointer moved to `at` with the button down. Freehand and Mixed: the point is added
-    /// (a freehand point, not in [`straight`](Self::straight)). Polygonal: added only while ⌥
+    /// (a freehand point, not in [`straight`](Self::straight)); Mixed with ⇧ places it on the
+    /// horizontal, vertical or 45° line through the previous point. Polygonal: added only while ⌥
     /// is held (an ⌥-drag draws freehand); otherwise only the rubber band follows. Returns
     /// [`DraftEvent::Changed`] when the outline or the rubber band moved.
     pub fn drag(&mut self, at: DraftPoint) -> Option<DraftEvent> {
@@ -257,20 +257,40 @@ impl OutlineDraft {
         if !self.is_open() || !at.at.x.is_finite() || !at.at.y.is_finite() {
             return None;
         }
-        if self.kind != DraftKind::Polygonal || at.mods.alt {
-            self.append(at.at);
-        }
-        self.cursor = Some(at.at);
+        let point = if self.kind != DraftKind::Polygonal || at.mods.alt {
+            let point = self.shift_step(at);
+            self.append(point);
+            point
+        } else {
+            at.at
+        };
+        self.cursor = Some(point);
         Some(DraftEvent::Changed)
     }
 
-    /// The pointer moved to `at` with the button up: only the rubber band follows (hover moves
-    /// never become vertices). [`DraftEvent::Changed`] while an outline is open.
+    /// Where a new point of `at` goes: with ⇧, on the horizontal, vertical or 45° line through the previous point
+    /// ([`polygon_step`]), for a Mixed draft's every point and a Polygonal vertex placed without ⌥; `at` itself
+    /// otherwise, and for the first point.
+    fn shift_step(&self, at: DraftPoint) -> Point {
+        let shifted = at.mods.shift
+            && match self.kind {
+                DraftKind::Freehand => false,
+                DraftKind::Mixed => true,
+                DraftKind::Polygonal => !at.mods.alt,
+            };
+        match self.points.last() {
+            Some(&last) if shifted => polygon_step(last, at.at),
+            _ => at.at,
+        }
+    }
+
+    /// The pointer moved to `at` with the button up: only the rubber band follows, to where a click would place the
+    /// point ([`shift_step`](Self::shift_step)); hover moves never become vertices. [`DraftEvent::Changed`] while an outline is open.
     pub fn hover(&mut self, at: DraftPoint) -> Option<DraftEvent> {
         if !self.is_open() || !at.at.x.is_finite() || !at.at.y.is_finite() {
             return None;
         }
-        self.cursor = Some(at.at);
+        self.cursor = Some(self.shift_step(at));
         Some(DraftEvent::Changed)
     }
 
@@ -383,7 +403,19 @@ impl OutlineDraft {
         }
         let zoom = at.zoom.max(0.01);
         let near = |q: Point, reach: f64| (q - at.at).hypot() < reach / zoom;
-        near(self.points[0], self.reach.close) || self.points.last().is_some_and(|&last| near(last, self.reach.same_point))
+        near(self.points[0], self.close_reach(zoom)) || self.points.last().is_some_and(|&last| near(last, self.reach.same_point))
+    }
+
+    /// The reach of a press on the first point, in screen points: a quarter of the narrower side of the outline's
+    /// box on screen, at least 1 and at most `reach.close`, so the corners of a small outline stay vertices. The box
+    /// is measured from at most [`BOX_SAMPLES`] of the points.
+    fn close_reach(&self, zoom: f64) -> f64 {
+        let step = self.points.len().div_ceil(BOX_SAMPLES).max(1);
+        let Some(&first) = self.points.first() else { return self.reach.close };
+        let bounds = self.points.iter().step_by(step).fold(kurbo::Rect::from_points(first, first), |rect, &p| rect.union_pt(p));
+        let narrow = bounds.width().min(bounds.height()) * zoom;
+        // `max` then `min`, not `clamp`: a reach under 1 point would make `clamp` panic.
+        (narrow / 4.0).max(1.0).min(self.reach.close)
     }
 
     /// Whether an outline is open.

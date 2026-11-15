@@ -4,7 +4,7 @@
 
 use super::{Erased, ErasedPass, Host, HostCx, LeafHooks, Measuring, ShapeHooks, ShowAt, TypeFacts, blank_core, paint_ui};
 use crate::contract::PaintUi;
-use crate::contract::cx::{CxCore, PartsCx};
+use crate::contract::cx::{CxCore, PartsCx, gesture_key};
 use crate::contract::steps::{self, MeasureIn, PartsStep, ShapeKind};
 use crate::contract::{
     Access, BodyCx, Collection, Common, Component, Container, Cx, Inner, Internal, ItemFn, Meta, OverlayUi, Resolved, Show, TipFn, Validity, ValueOf,
@@ -19,7 +19,7 @@ use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::overlay::CloseReason;
 use crate::runtime::reads::{self, BindKey};
 use crate::style::{Flags, StateSet, StyleCx, StyleView, UiTokens};
-use craft_behavior::{EditEvent, Flow, ItemSource, KeyRole, PartRef, Proposal, Roving, Sense};
+use craft_behavior::{EditEvent, Flow, Gesture, ItemSource, KeyRole, PartRef, Proposal, Roving, Sense};
 use craft_theme::Variant;
 use egui::{Context, Id, Rect, Ui, Vec2};
 use std::collections::HashMap;
@@ -283,6 +283,7 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
             scrolls: &mut parts.scrolls,
             text: &mut parts.text,
             last_state: last,
+            gesture_running: self.cx.core.memory.recall::<Gesture<ValueOf<C>>>(gesture_key(id)).is_running(),
             measure,
             items: geometry,
         };
@@ -740,6 +741,7 @@ pub(crate) fn member_prepare<C: Show>(ui: &Ui, env: &Env, id: Id, row: Rect, hov
             scrolls: &mut parts.scrolls,
             text: &mut parts.text,
             last_state: (hovered, false),
+            gesture_running: false,
             measure: steps::measure_cx::<C>(&input, &style, &resolved, shown.as_deref()),
             items: None,
         };

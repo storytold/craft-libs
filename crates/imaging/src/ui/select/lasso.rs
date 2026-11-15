@@ -1,7 +1,7 @@
 //! [`LassoTool`]: the freehand Lasso with Alt-latched straight segments, and the pieces the Polygonal Lasso shares.
 
 use craft_behavior::geometry::{ConstrainStyle, DraftEvent, DraftKind, DraftPoint, DraftReach, OutlineDraft, SelectionOperation};
-use craft_behavior::{CancelReason, Cursor, PaintedCursor};
+use craft_behavior::{CancelReason, Cursor, PaintedCursor, PointerButton};
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth, ToolIcon};
@@ -39,7 +39,7 @@ pub(super) fn apply(
 /// What a lasso is doing: a selection drag, an outline with its point count, or nothing.
 pub(super) fn phase(draft: &OutlineDraft, inside: Option<&InsideDrag>) -> SelectPhase {
     if let Some(inside) = inside {
-        return SelectPhase::Dragging(inside.kind());
+        return SelectPhase::Dragging(inside.selection_drag());
     }
     if draft.is_open() { SelectPhase::Outline { points: draft.points().len() } } else { SelectPhase::Idle }
 }
@@ -74,7 +74,8 @@ pub(super) fn cursor(shown: &LassoCursor<'_>, probe: &dyn SelectionProbe, cx: &T
     PaintedCursor::tool(icon.icon(), ICON_HOTSPOT, badge).into()
 }
 
-/// The outline as marching ants and, between straight segments, the rubber band.
+/// The outline as marching ants and, between straight segments, the rubber band: the one painter of an
+/// [`OutlineDraft`], for the lassos and the app's Freeform Pen.
 pub fn paint_outline(draft: &OutlineDraft, draw: &Draw<'_>, cx: &ToolContext<'_>) {
     let Some(place) = Place::of(cx) else { return };
     let points: Vec<Pos2> = draft.points().iter().map(|&at| place.screen(at)).collect();
@@ -100,19 +101,20 @@ pub(super) fn outline_access(points: &[kurbo::Point], cx: &ToolContext<'_>) -> O
     Some(ToolAccess::new(words.outline.as_str()).value(words.outline_points.text(count, &count.to_string())).bounds(bounds))
 }
 
-/// Starts the selection drag for `kind` at the press.
+/// Starts the selection drag for `kind` at the press, snapping by the selection's `bounds`.
 pub(super) fn begin_inside(
     kind: DragKind,
     pointer: &ToolPointer,
     place: &Place,
     cx: &ToolContext<'_>,
+    bounds: Option<Rect>,
     inside: &mut Option<InsideDrag>,
     report: &mut Report,
 ) {
     let id = report.gesture();
     let label = cx.words::<SelectWords>().move_selection.as_str().into();
     let style = ConstrainStyle::new(f64::from(cx.slop), f64::from(cx.slop));
-    let (drag, event) = InsideDrag::begin(&style, kind, place.doc(pointer.pos), pointer.mods, id, label, None);
+    let (drag, event) = InsideDrag::begin(&style, kind, place.doc(pointer.pos), pointer.mods, id, label, bounds);
     *inside = Some(drag);
     report.push(event);
 }
@@ -182,9 +184,10 @@ pub(super) fn draft_key(
 /// straight segments (each click adds a vertex, a drag draws freehand again), and releasing Alt with the button up
 /// closes; Alt held at the press subtracts (the operation) until it is released and pressed again, except with nothing
 /// selected, where it starts straight segments. Between clicks the outline closes on a click near the first point (3
-/// or more points), on a click at the last, on Enter or on a double-click. Backspace or Delete retract the last
-/// vertex (the last one cancels); the tool claims those keys from Edit > Clear (`CanvasTool::claims`) while
-/// [`OutlineDraft::takes_retract`]. Escape cancels. The outline is dropped when the document changes
+/// or more points), on a click at the last, on Enter or on a double-click. Backspace, Delete or a secondary click
+/// retract the last vertex (the last one cancels); the tool claims those keys from Edit > Clear
+/// (`CanvasTool::claims`) and takes the secondary button while [`OutlineDraft::takes_retract`], so the app shows no
+/// context menu then. Escape cancels. The outline is dropped when the document changes
 /// ([`SelectionProbe::document`]) and on [`reset`](Self::reset).
 ///
 /// A press inside the selection drags it (module docs) instead of drawing; a Cmd press outside it is
@@ -272,6 +275,11 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
         if self.tool.draft.takes_retract() { ToolClaims::NONE.keyboard().deletes() } else { ToolClaims::NONE }
     }
 
+    /// The primary button always, the secondary between straight-segment clicks (it retracts the last vertex).
+    fn takes(&self, button: PointerButton, _mods: Mods) -> bool {
+        button == PointerButton::Primary || (button == PointerButton::Secondary && self.tool.draft.takes_retract())
+    }
+
     fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
         let tool = &*self.tool;
         let shown = LassoCursor {
@@ -285,16 +293,22 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
         cursor(&shown, self.probe, cx)
     }
 
-    /// With no outline open: a selection drag inside the selection, `Ignored` for Cmd outside, else the outline begins
-    /// (`OutlineDraft::press`; the operation resolves from the `Started` intent). With one open: the press goes to
-    /// the draft (a vertex, or a close). A second click of a run closes (`OutlineDraft::close`).
+    /// A secondary press retracts the last vertex (`ToolAction::Done`: no drag follows; the last one cancels the
+    /// outline with no event). With no outline open: a selection drag inside the selection, `Ignored` for Cmd
+    /// outside, else the outline begins (`OutlineDraft::press`; the operation resolves from the `Started` intent).
+    /// With one open: the press goes to the draft (a vertex, or a close). A second click of a run closes
+    /// (`OutlineDraft::close`).
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
         let (tool, probe) = (&mut *self.tool, self.probe);
+        if pointer.button == PointerButton::Secondary {
+            tool.draft.retract();
+            return ToolAction::Done;
+        }
         let Some(place) = Place::of(cx) else { return ToolAction::Ignored };
         let open = tool.draft.is_open();
         if !open {
             if let Some(kind) = drag_kind(probe, place.doc(pointer.pos), pointer.mods, tool.bar, PressRule::Drags) {
-                begin_inside(kind, pointer, &place, cx, &mut tool.inside, &mut tool.report);
+                begin_inside(kind, pointer, &place, cx, probe.bounds(), &mut tool.inside, &mut tool.report);
                 return ToolAction::Claimed;
             }
             if pointer.mods.cmd {
@@ -311,7 +325,7 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
         let (tool, probe) = (&mut *self.tool, self.probe);
         let Some(place) = Place::of(cx) else { return };
         if let Some(inside) = tool.inside.as_mut() {
-            if let Some(event) = inside.drag(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |_| kurbo::Vec2::ZERO) {
+            if let Some(event) = inside.drag(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| cx.snap_rect(rect)) {
                 tool.report.push(event);
             }
             return;
@@ -326,7 +340,7 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
         let (tool, probe) = (&mut *self.tool, self.probe);
         let Some(place) = Place::of(cx) else { return };
         if let Some(inside) = tool.inside.take() {
-            tool.report.push(inside.end(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |_| kurbo::Vec2::ZERO));
+            tool.report.push(inside.end(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| cx.snap_rect(rect)));
             return;
         }
         let event = tool.draft.release(sample(pointer, &place));
