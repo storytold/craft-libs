@@ -1,7 +1,7 @@
 //! [`ActionList`]: the flat list of actions with an optional set each, and every edit the panel
 //! and the app's commands need.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::file::ActionsFile;
 use super::model::{Action, ActionColor, ActionInclude, ActionStep};
@@ -62,7 +62,12 @@ pub struct MergedFile {
 /// The list is app data shared by the panel, the app's commands, the CLI and the control channel:
 /// the panel only reads it and reports events, and the app applies each event with these calls
 /// (owner question 1, recommended answer). Every successful edit bumps [`revision`](Self::revision),
-/// so a store can skip unchanged writes. Indices are into [`actions`](Self::actions).
+/// so a store can skip unchanged writes; the revision only moves forward, also when the whole list
+/// is [replaced](Self::replace). Indices are into [`actions`](Self::actions).
+///
+/// Action names are unique across the whole list, whatever their sets: the app finds an action
+/// by its name (calls, function keys, scripts). An edit that would repeat a name is refused, and
+/// a loaded file's repeated names are renamed (`Foo`, `Foo 2`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ActionList {
     pub(super) actions: Vec<Action>,
@@ -119,21 +124,21 @@ impl ActionList {
         self.actions.get(index).map_or(0, |action| action.steps.len())
     }
 
-    /// `base` if no action of `set` has it, else `base 2`, `base 3` … the first free one. With an
-    /// empty `base`, PhotoCraft's `Action n` from the list's length + 1 up.
-
-    pub fn unique_name(&self, base: &str, set: Option<&str>) -> String {
+    /// `base` if no action has it, else `base 2`, `base 3` … the first free one. With an empty
+    /// `base`, PhotoCraft's `Action n` from the list's length + 1 up.
+    pub fn unique_name(&self, base: &str) -> String {
+        let mut names = Names::of(&self.actions);
         if base.is_empty() {
             let mut n = self.actions.len() + 1;
             loop {
                 let name = format!("Action {n}");
-                if !self.name_in_use(set, &name) {
+                if !names.taken.contains(&name) {
                     return name;
                 }
                 n += 1;
             }
         }
-        first_free(base, |name| self.name_in_use(set, name))
+        names.claim(base)
     }
 
     /// Adds an empty action named `name` at the end (in `set` when given); returns its index.
@@ -143,7 +148,7 @@ impl ActionList {
             return Err(ActionListError::EmptyName);
         }
         let set = set.map(|set| set.trim().to_owned()).filter(|set| !set.is_empty());
-        if self.name_in_use(set.as_deref(), name) {
+        if self.name_in_use(name) {
             return Err(ActionListError::NameTaken(name.to_owned()));
         }
         self.actions.push(Action { set, ..Action::new(name, Vec::new()) });
@@ -172,15 +177,14 @@ impl ActionList {
     /// rewrites its pending journal itself.
     pub fn rename(&mut self, index: usize, name: &str, mut calls: impl FnMut(&mut ActionStep, &str, &str)) -> Result<(), ActionListError> {
         let name = name.trim();
-        let target = self.actions.get(index).ok_or(ActionListError::NoSuchAction(index))?;
-        let (old, set) = (target.name.clone(), target.set.clone());
+        let old = self.actions.get(index).ok_or(ActionListError::NoSuchAction(index))?.name.clone();
         if name.is_empty() {
             return Err(ActionListError::EmptyName);
         }
         if old == name {
             return Ok(());
         }
-        if self.name_in_use(set.as_deref(), name) {
+        if self.name_in_use(name) {
             return Err(ActionListError::NameTaken(name.to_owned()));
         }
         self.actions[index].name = name.to_owned();
@@ -364,13 +368,12 @@ impl ActionList {
         Ok(())
     }
 
-    /// Appends a whole action and returns its index; an empty name, or one taken in its set, is
-    /// refused.
+    /// Appends a whole action and returns its index; an empty or taken name is refused.
     pub fn push(&mut self, action: Action) -> Result<usize, ActionListError> {
         if action.name.trim().is_empty() {
             return Err(ActionListError::EmptyName);
         }
-        if self.name_in_use(action.set.as_deref(), &action.name) {
+        if self.name_in_use(&action.name) {
             return Err(ActionListError::NameTaken(action.name));
         }
         self.actions.push(action);
@@ -396,7 +399,7 @@ impl ActionList {
     /// index.
     pub fn duplicate_action(&mut self, index: usize, mut shift: impl FnMut(&mut ActionStep, usize, usize)) -> Result<usize, ActionListError> {
         let mut copy = self.actions.get(index).ok_or(ActionListError::NoSuchAction(index))?.clone();
-        copy.name = self.unique_name(&format!("{} copy", copy.name), copy.set.as_deref());
+        copy.name = self.unique_name(&format!("{} copy", copy.name));
         let at = index + 1;
         self.actions.insert(at, copy);
         self.shift_calls(at, 1, &mut shift);
@@ -427,24 +430,22 @@ impl ActionList {
     /// action; a set with none becomes an empty set after it.
     pub fn duplicate_set(&mut self, set: &str, mut shift: impl FnMut(&mut ActionStep, usize, usize)) -> Result<String, ActionListError> {
         let members: Vec<usize> = (0..self.actions.len()).filter(|&i| self.actions[i].set.as_deref() == Some(set)).collect();
-        let name = if members.is_empty() {
+        let name = Names::new(self.sets().into_iter().map(str::to_owned)).claim(&format!("{set} copy"));
+        if members.is_empty() {
             let position = self.sets.iter().position(|each| each == set).ok_or_else(|| ActionListError::NoSuchSet(set.to_owned()))?;
-            let name = first_free(&format!("{set} copy"), |name| self.sets().contains(&name));
             self.sets.insert(position + 1, name.clone());
-            name
         } else {
-            let name = first_free(&format!("{set} copy"), |name| self.sets().contains(&name));
             let at = members[members.len() - 1] + 1;
-            // One at a time, so each copy's name sees the copies before it.
+            // Each copy's name is claimed before the next, so the copies never repeat one.
+            let mut names = Names::of(&self.actions);
             for (offset, &source) in members.iter().enumerate() {
                 let mut copy = self.actions[source].clone();
                 copy.set = Some(name.clone());
-                copy.name = self.unique_name(&format!("{} copy", copy.name), Some(&name));
+                copy.name = names.claim(&format!("{} copy", copy.name));
                 self.actions.insert(at + offset, copy);
             }
             self.shift_calls(at, members.len(), &mut shift);
-            name
-        };
+        }
         self.touch();
         Ok(name)
     }
@@ -458,17 +459,21 @@ impl ActionList {
         Ok(replaced)
     }
 
-    /// Marks action `index` as written (or not) by an automation client.
+    /// Marks action `index` as written (or not) by an automation client. Marking it as it already
+    /// is changes nothing, so the revision stays.
     pub fn set_automation(&mut self, index: usize, on: bool) -> Result<(), ActionListError> {
-        self.actions.get_mut(index).ok_or(ActionListError::NoSuchAction(index))?.automation = on;
-        self.touch();
+        let action = self.actions.get_mut(index).ok_or(ActionListError::NoSuchAction(index))?;
+        if action.automation != on {
+            action.automation = on;
+            self.touch();
+        }
         Ok(())
     }
 
-    /// Adds the actions of `file`, each under a unique name in its set; with `replace`, the actions
-    /// of every set the file names are dropped first. The file's empty sets are added when absent.
-    /// `calls(step, &renames)` runs once on every step of every action just added, after all
-    /// renames are known (also when there are none).
+    /// Adds the actions of `file`, each under a name unique in the list; with `replace`, the
+    /// actions of every set the file names are dropped first. The file's empty sets are added when
+    /// absent. `calls(step, &renames)` runs once on every step of every action just added, after
+    /// all renames are known (also when there are none).
     pub fn merge_file(&mut self, file: ActionsFile, replace: bool, mut calls: impl FnMut(&mut ActionStep, &[(String, String)])) -> MergedFile {
         let ActionsFile { actions, sets, .. } = file;
         if replace {
@@ -476,8 +481,9 @@ impl ActionList {
             self.actions.retain(|action| !action.set.as_deref().is_some_and(|set| named.contains(set)));
         }
         let mut merged = MergedFile::default();
+        let mut names = Names::of(&self.actions);
         for mut action in actions {
-            let name = self.unique_name(&action.name, action.set.as_deref());
+            let name = names.claim(&action.name);
             if name != action.name {
                 merged.renames.push((action.name.clone(), name.clone()));
             }
@@ -499,9 +505,25 @@ impl ActionList {
         merged
     }
 
-    /// The list a file holds (its empty sets included).
+    /// The list a file holds (its empty sets included). A name the file repeats is renamed as
+    /// [`merge_file`](Self::merge_file) renames a clash (`Foo`, `Foo 2`); a call by that name
+    /// keeps reaching the first action that has it.
     pub fn from_file(file: ActionsFile) -> Self {
-        Self { actions: file.actions, sets: file.sets, revision: 0 }
+        let ActionsFile { mut actions, sets, .. } = file;
+        let mut names = Names::default();
+        for action in &mut actions {
+            action.name = names.claim(&action.name);
+        }
+        Self { actions, sets, revision: 0 }
+    }
+
+    /// Replaces the whole list with `with` (a list loaded or restored from elsewhere): its actions
+    /// and sets, under this list's revision bumped once, so the revision only moves forward and a
+    /// store that compares revisions sees the change.
+    pub fn replace(&mut self, with: ActionList) {
+        let revision = self.revision;
+        *self = Self { revision, ..with };
+        self.touch();
     }
 
     /// The list as a file (version [`ActionsFile::VERSION`]; the empty sets in `sets`).
@@ -510,9 +532,9 @@ impl ActionList {
         ActionsFile { version: ActionsFile::VERSION, actions: self.actions.clone(), sets: empty.map(str::to_owned).collect() }
     }
 
-    /// Whether an action of `set` (`None`: the loose ones) has `name`.
-    fn name_in_use(&self, set: Option<&str>, name: &str) -> bool {
-        self.actions.iter().any(|action| action.set.as_deref() == set && action.name == name)
+    /// Whether an action has `name`.
+    fn name_in_use(&self, name: &str) -> bool {
+        self.actions.iter().any(|action| action.name == name)
     }
 
     /// Calls `shift(step, at, count)` on every step of every action, after `count` actions were
@@ -535,12 +557,40 @@ impl ActionList {
     }
 }
 
-/// `base` if `taken` refuses it, else `base 2`, `base 3` … the first one it does not.
-fn first_free(base: &str, taken: impl Fn(&str) -> bool) -> String {
-    if !taken(base) {
-        return base.to_owned();
+/// The names taken so far and, per base name, the next suffix to try, so claiming one base many
+/// times (a file that repeats a name) stays linear.
+#[derive(Default)]
+struct Names {
+    taken: HashSet<String>,
+    next: HashMap<String, u32>,
+}
+
+impl Names {
+    fn new(taken: impl IntoIterator<Item = String>) -> Self {
+        Self { taken: taken.into_iter().collect(), next: HashMap::new() }
     }
-    (2u32..).map(|n| format!("{base} {n}")).find(|name| !taken(name)).unwrap_or_else(|| base.to_owned())
+
+    /// The names of `actions`.
+    fn of(actions: &[Action]) -> Self {
+        Self::new(actions.iter().map(|action| action.name.clone()))
+    }
+
+    /// `base` if it is free, else `base 2`, `base 3` … the first free one; the name returned is
+    /// taken from then on.
+    fn claim(&mut self, base: &str) -> String {
+        if self.taken.insert(base.to_owned()) {
+            return base.to_owned();
+        }
+        let mut n = self.next.get(base).copied().unwrap_or(2);
+        loop {
+            let name = format!("{base} {n}");
+            n += 1;
+            if self.taken.insert(name.clone()) {
+                self.next.insert(base.to_owned(), n);
+                return name;
+            }
+        }
+    }
 }
 
 /// Where the item at `index` ends up after the item at `from` moved to `to`: the moved item goes

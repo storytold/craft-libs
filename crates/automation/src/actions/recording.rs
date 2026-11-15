@@ -29,7 +29,7 @@ impl ActionList {
                 index
             }
             None => {
-                let name = self.unique_name("", set.as_deref().map(str::trim).filter(|set| !set.is_empty()));
+                let name = self.unique_name("");
                 self.new_action(&name, set)?
             }
         };
