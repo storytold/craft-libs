@@ -167,8 +167,20 @@ struct Object {
     slots: HashMap<(String, Option<usize>, u32), usize>,
 }
 
+/// Options for callers that need strict parsing or original face-run order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReadOptions {
+    /// Return an error when a vertex or face line cannot be read.
+    pub strict: bool,
+    /// Keep separate runs when groups, materials or smoothing change.
+    pub preserve_runs: bool,
+    /// Do not resolve or report material libraries; `usemtl` names remain available.
+    pub ignore_material_libraries: bool,
+}
+
 struct Reader<'a> {
     limits: &'a Limits,
+    options: ReadOptions,
     v: Vec<[f64; 3]>,
     colors: Vec<[f32; 4]>,
     vt: Vec<[f32; 2]>,
@@ -314,7 +326,7 @@ impl Reader<'_> {
         let Some(object) = self.objects.last_mut() else { return Ok(None) };
         let slot = match self.slot {
             Some(s) => s,
-            None => match object.slots.get(&(self.group.clone(), self.material, self.smoothing)) {
+            None => match (!self.options.preserve_runs).then(|| object.slots.get(&(self.group.clone(), self.material, self.smoothing))).flatten() {
                 Some(s) => *s,
                 None => {
                     if self.parts >= self.limits.max_parts {
@@ -400,7 +412,7 @@ impl Reader<'_> {
                 self.group = after.to_string();
             }
             "usemtl" => self.use_material(after)?,
-            "mtllib" => self.library(after, resolve)?,
+            "mtllib" if !self.options.ignore_material_libraries => self.library(after, resolve)?,
             "f" => self.face(it)?,
             _ => {}
         }
@@ -456,6 +468,11 @@ impl Reader<'_> {
 /// writes; every name asked, and every image a library names, is listed in
 /// [`Scene::external`].
 pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
+    read_with_options(bytes, limits, resolve, &ReadOptions::default())
+}
+
+/// Read an OBJ using the selected compatibility behavior.
+pub fn read_with_options(bytes: &[u8], limits: &Limits, resolve: Resolver, options: &ReadOptions) -> Result<Scene> {
     // Lossy UTF-8 conversion can allocate, so bound it before copying invalid input.
     if std::str::from_utf8(bytes).is_err() && bytes.len() > limits.max_data_bytes {
         return Err(too_large(KIND, "invalid UTF-8 text exceeds the memory limit"));
@@ -463,6 +480,7 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
     let text = String::from_utf8_lossy(bytes);
     let mut r = Reader {
         limits,
+        options: *options,
         v: vec![],
         colors: vec![],
         vt: vec![],
@@ -482,7 +500,8 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
     };
     // A line ending in `\` continues on the next.
     let mut joined = String::new();
-    for raw in text.lines() {
+    for (i, raw) in text.lines().enumerate() {
+        let raw = if i == 0 { raw.trim_start_matches('\u{feff}') } else { raw };
         let line = raw.split('#').next().unwrap_or("");
         if line.len() > limits.max_data_bytes || joined.len().checked_add(line.len()).is_none_or(|n| n > limits.max_data_bytes) {
             return Err(too_large(KIND, "a continued line exceeds the memory limit"));
@@ -501,6 +520,9 @@ pub fn read(bytes: &[u8], limits: &Limits, resolve: Resolver) -> Result<Scene> {
         }
     }
     r.line(joined.trim(), resolve)?;
+    if options.strict && r.bad_lines > 0 {
+        return Err(malformed(KIND, "invalid vertex or face line"));
+    }
     r.finish()
 }
 
