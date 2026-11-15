@@ -69,6 +69,9 @@ mod wav;
     feature = "vorbis-encode"
 ))]
 mod write;
+
+/// Range-backed PCM WAVE access and a 16-bit PCM writer.
+pub mod wav_range;
 #[cfg(feature = "vorbis-encode")]
 pub use write::{OGG_BITRATES, encode_ogg};
 
