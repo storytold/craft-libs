@@ -2,10 +2,13 @@
 
 use crate::runtime::egui::memory::{self as store, FastMap, Map, Removed, take_raw};
 use crate::runtime::egui::pass;
+use crate::runtime::env::Env;
 use crate::runtime::frame::{self, PassStep, PerViewport, Stamped, Stored};
 use crate::runtime::pass_state;
 use crate::runtime::pending::{self, Job, Pending};
 use craft_behavior::eviction::owner_due;
+use craft_host::Host;
+use craft_settings::Remembered;
 use egui::{Context, Id, ViewportId};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -88,7 +91,8 @@ pub trait Remember {
     fn press_slot<T: Slot>(&mut self) -> &mut Option<T>;
     /// The session slot: it goes only through `forget`.
     fn keep<T: Slot>(&mut self) -> &mut T;
-    /// The saved slot of `key`: it goes only through `forget_saved`.
+    /// The saved slot of `key`: it goes only through `forget_saved`. With a host in the frame it is loaded from the
+    /// host's settings on first use and stored there when a pass changes it.
     fn saved<T: Savable>(&mut self, key: &SaveKey) -> &mut T;
     /// A read-only copy of the shown slot, for paint.
     fn recall<T: Slot>(&self) -> T;
@@ -128,6 +132,70 @@ struct Entry {
     ended: Option<fn(&(dyn Any + Send + Sync)) -> bool>,
     /// The slot was in context data when the stage took it: the registry holds its record.
     recorded: bool,
+    /// A SAVED entry of a real stage on a viewport with a host: what write-back needs to store a changed value.
+    persist: Option<Persist>,
+}
+
+/// How a SAVED entry reaches the host's store. The fn pointers are monomorphised where `T: Savable` is known, so
+/// write-back can serialize and store an entry whose type it does not name.
+struct Persist {
+    key: SaveKey,
+    host: Arc<Host>,
+    /// The serialized form of the value the stage took; `None` when it does not serialize.
+    before: Option<toml::Value>,
+    form: fn(&(dyn Any + Send + Sync)) -> Option<toml::Value>,
+    store: fn(&(dyn Any + Send + Sync), &Host, &SaveKey),
+}
+
+/// The serialized form of a SAVED entry's value, the one the store keeps: TOML has no null, so an `Option` set to
+/// `None` has none.
+fn saved_form<T: Savable>(value: &(dyn Any + Send + Sync)) -> Option<toml::Value> {
+    value.downcast_ref::<Wrapped<SAVED, T>>().and_then(|wrapped| toml::Value::try_from(&wrapped.0).ok())
+}
+
+fn store_saved<T: Savable>(value: &(dyn Any + Send + Sync), host: &Host, key: &SaveKey) {
+    if let Some(wrapped) = value.downcast_ref::<Wrapped<SAVED, T>>() {
+        Remembered::<T>::new(key.as_str()).store(host, &wrapped.0);
+    }
+}
+
+/// Removes the stored value of `key`, whatever its type: `Remembered::forget` reads no value.
+fn forget_stored(host: &Host, key: &SaveKey) {
+    Remembered::<toml::Value>::new(key.as_str()).forget(host);
+}
+
+/// The SAVED tier's one load: when the slot of `key` is not in context data and the running viewport has a host, the
+/// stored value enters context data with its registry record, so later passes take it from there and `forget_saved`
+/// finds it. A stored value that no longer fits `T`, or none, loads as `T::default()`. Without a host the tier is
+/// session only.
+fn load_saved<T: Savable>(ctx: &Context, key: &SaveKey) {
+    let id = key.id();
+    if store::exists::<Wrapped<SAVED, T>>(ctx, id) {
+        return;
+    }
+    let Some(host) = Env::host_of(ctx) else { return };
+    let value = Remembered::<T>::new(key.as_str()).recall(&host).unwrap_or_default();
+    store::put(ctx, id, Wrapped::<SAVED, T>(value));
+    pass_state::with::<Registry, _>(ctx, |reg| {
+        reg.slots.insert((id, SAVED, TypeId::of::<T>()), SlotRecord { owner: id, remove: remove_slot::<SAVED, T> });
+    });
+}
+
+/// Stores every SAVED entry whose serialized form changed since the stage took it, and forgets the stored value of
+/// one that no longer serializes (`Remembered::store` skips such a value and would keep the old one). An unchanged
+/// value writes nothing. Called outside every lock: a host's `SectionStore` takes its own.
+fn persist_changed(entries: &[Entry]) {
+    for entry in entries {
+        let Some(persist) = &entry.persist else { continue };
+        let after = (persist.form)(&*entry.value);
+        if after == persist.before {
+            continue;
+        }
+        match after {
+            Some(_) => (persist.store)(&*entry.value, &persist.host, &persist.key),
+            None => forget_stored(&persist.host, &persist.key),
+        }
+    }
 }
 
 /// The last registration of an owner: the component id registered at step 3 whose pipeline opened a stage.
@@ -183,17 +251,33 @@ pub(crate) fn evict(ctx: &Context) {
             return;
         }
         reg.owners.retain(|id, _| !dead.contains(id));
-        let gone: Vec<(Id, u8, TypeId)> =
-            reg.slots.iter().filter(|(k, r)| dead.contains(&r.owner) && matches!(k.1, SHOWN | PRESS)).map(|(k, _)| *k).collect();
-        let mut moved: Vec<Removed> = Vec::new();
-        for key in gone {
-            if let Some(rec) = reg.slots.remove(&key) {
-                moved.extend(store::locked(ctx, |data| (rec.remove)(data, key.0)));
-            }
-        }
+        let moved = take_shown(ctx, reg, |owner| dead.contains(&owner));
         QUEUED.fetch_add(moved.len(), Ordering::Release);
         reg.graveyard.extend(moved);
     });
+}
+
+/// Ends the shown life of `owner` at once, as eviction does once its grace ran out: its shown and press entries go
+/// with its record. A container that shows nothing ends its own (`run::typed::unshown`), and a dialog host the one of
+/// a dialog it removes (`overlay::end_stack_dialog`), so a reopen is a first pass. Both run outside every lock and
+/// hook, so the slots drop here and their dispose hooks (a running gesture's removal) report in this pass. False when
+/// `owner` has no record: its life ended already, or it never ran.
+pub(crate) fn end_shown(ctx: &Context, owner: Id) -> bool {
+    let moved = pass_state::with::<Registry, _>(ctx, |reg| reg.owners.remove(&owner).map(|_| take_shown(ctx, reg, |of| of == owner)));
+    moved.is_some()
+}
+
+/// Takes the shown and press slots of the owners `ended` picks out of context data (a press entry whose press never
+/// ended goes with its owner).
+fn take_shown(ctx: &Context, reg: &mut Registry, ended: impl Fn(Id) -> bool) -> Vec<Removed> {
+    let gone: Vec<(Id, u8, TypeId)> = reg.slots.iter().filter(|(k, r)| ended(r.owner) && matches!(k.1, SHOWN | PRESS)).map(|(k, _)| *k).collect();
+    let mut moved: Vec<Removed> = Vec::new();
+    for key in gone {
+        if let Some(rec) = reg.slots.remove(&key) {
+            moved.extend(store::locked(ctx, |data| (rec.remove)(data, key.0)));
+        }
+    }
+    moved
 }
 
 /// Slots queued for disposal across all contexts, so a run with nothing queued takes no lock.
@@ -208,20 +292,27 @@ pub(crate) fn forget(ctx: &Context, id: Id) {
 /// The saved value under `key`, outside a dialog: an app reads one SAVED value through the same store the dialogs'
 /// remembered fields use.
 pub fn saved_value<T: Savable>(ctx: &Context, key: &SaveKey) -> T {
-    let _ = (ctx, key);
-    todo!("dl.K13")
+    MemoryStage::peek_saved(ctx, key)
 }
 
-/// Writes `value` as the saved value under `key`, outside a dialog.
+/// Writes `value` as the saved value under `key`, outside a dialog. It is stored through the host when its
+/// serialized form differs from the saved one.
 pub fn set_saved_value<T: Savable>(ctx: &Context, key: &SaveKey, value: T) {
-    let _ = (ctx, key, value);
-    todo!("dl.K13")
+    let id = key.id();
+    let mut stage = MemoryStage::new(ctx, id, id, false);
+    // No component shows under the key's id, so the stage stamps no `Seen` for it.
+    stage.touched.get_mut().clear();
+    *stage.saved::<T>(key) = value;
+    stage.write_back();
 }
 
-/// Removes the saved slots of `key`. The only way a saved slot goes.
+/// Removes the saved slots of `key` and the value stored under it. The only way a saved slot goes.
 #[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "used by the commands (F3)"))]
 pub(crate) fn forget_saved(ctx: &Context, key: &SaveKey) {
     forget_tier(ctx, key.id(), SAVED);
+    if let Some(host) = Env::host_of(ctx) {
+        forget_stored(&host, key);
+    }
 }
 
 fn forget_tier(ctx: &Context, id: Id, tier: u8) {
@@ -330,9 +421,9 @@ impl MemoryStage {
         stage
     }
 
-    /// A stage over `base` opened after the pass's real run wrote its own back: it claims nothing and stamps no
-    /// `Seen` for `base` (`appeared()` is unchanged), and the slots it creates are recorded under `owner`, so they
-    /// are evicted with the container.
+    /// A stage over `base` that claims nothing and stamps no `Seen` for `base` (`appeared()` is unchanged): opened
+    /// after the pass's real run wrote its own back, by a container that shows nothing, or for a slot of another
+    /// component (a hold opener's dwell). The slots it creates are recorded under `owner`, so they are evicted with it.
     pub(crate) fn open_after(ctx: &Context, base: Id, owner: Id) -> Self {
         let stage = Self::new(ctx, base, owner, false);
         stage.touched.borrow_mut().clear();
@@ -389,6 +480,7 @@ impl MemoryStage {
     /// Read-only access to a saved slot, as `peek` does for a shown one.
     #[doc(hidden)]
     pub fn peek_saved<T: Savable>(ctx: &Context, key: &SaveKey) -> T {
+        load_saved::<T>(ctx, key);
         store::peek_clone::<Wrapped<SAVED, T>>(ctx, key.id()).map(|wrapped| wrapped.0).unwrap_or_default()
     }
 
@@ -429,7 +521,15 @@ impl MemoryStage {
                         _ => (Box::new(Wrapped::<TIER, T>::default()), false),
                     }
                 };
-                self.entries.push(Entry { key, value, write_back: write_back::<TIER, T>, remove: remove_slot::<TIER, T>, ended: None, recorded });
+                self.entries.push(Entry {
+                    key,
+                    value,
+                    write_back: write_back::<TIER, T>,
+                    remove: remove_slot::<TIER, T>,
+                    ended: None,
+                    recorded,
+                    persist: None,
+                });
                 self.entries.len() - 1
             }
         };
@@ -458,7 +558,21 @@ impl MemoryStage {
 
     #[doc(hidden)]
     pub fn saved<T: Savable>(&mut self, key: &SaveKey) -> &mut T {
-        self.slot::<SAVED, T>(key.id())
+        let id = key.id();
+        let entry_key = (SAVED, TypeId::of::<T>(), id);
+        if !self.entries.iter().any(|entry| entry.key == entry_key) {
+            load_saved::<T>(&self.ctx, key);
+            self.slot::<SAVED, T>(id);
+            // A peek stage writes nothing back, so it never stores.
+            let host = if self.peek_only { None } else { Env::host_of(&self.ctx) };
+            if let Some(host) = host
+                && let Some(entry) = self.entries.iter_mut().find(|entry| entry.key == entry_key)
+            {
+                let before = saved_form::<T>(&*entry.value);
+                entry.persist = Some(Persist { key: key.clone(), host, before, form: saved_form::<T>, store: store_saved::<T> });
+            }
+        }
+        self.slot::<SAVED, T>(id)
     }
 
     /// The shown slot of `id`, moved out: it is read once. `None` when nothing was written under it.
@@ -501,6 +615,7 @@ impl MemoryStage {
         let (owner, retags) = (self.owner, self.retags);
         let touched = self.touched.into_inner();
         let ctx = self.ctx.clone();
+        persist_changed(&self.entries);
         let mut ended: Vec<(Id, u8, TypeId)> = Vec::new();
         let mut record: Vec<((Id, u8, TypeId), Remover)> = Vec::new();
         // One data lock for every slot; the values they replace and the ended presses drop outside it.

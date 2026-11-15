@@ -61,7 +61,8 @@ pub(crate) fn keeping_ids<R>(ctx: &Context, f: impl FnOnce() -> (R, bool)) -> R 
 
 /// Step 3, id.
 ///
-/// `register` is false for `measure_in`, which peeks, and in a sizing pass. `advance` is false only for
+/// `register` is false for `measure_in`, which peeks, in a sizing pass, and for a container that shows nothing, which
+/// claims its id with `claim_id`. `advance` is false only for
 /// `measure_in`: a sizing pass advances the ordinals, so its ids equal those of the pass that follows it.
 /// `ty` is the component's style key type and `name` its type name.
 pub(crate) fn id(ui: &Ui, source: &IdSource, register: bool, advance: bool, ty: TypeId, name: &'static str) -> Id {
@@ -92,12 +93,21 @@ pub(crate) fn id(ui: &Ui, source: &IdSource, register: bool, advance: bool, ty: 
     };
     if register {
         crate::runtime::memory::register_owner(ctx, id);
-        let repeated =
-            PerViewport::<Stamped<IdPass>>::with_pass(ctx, viewport, pass_nr, |pass, _| *pass = IdPass::default(), |pass| !pass.seen.insert(id));
-        if repeated {
-            log::warn!("{name} was shown twice with the id {id:?} in one pass");
-            inspect::finding(ctx, inspect::Finding { rule: "duplicate-id", component: name, subject: format!("{id:?}") });
-        }
+        claim_id(ui, id, name);
     }
     id
+}
+
+/// Records `id` as taken in this pass and reports a second taker as a duplicate. Step 3 claims every id it registers;
+/// a container that shows nothing claims its id without registering it.
+pub(crate) fn claim_id(ui: &Ui, id: Id, name: &'static str) {
+    let ctx = ui.ctx();
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    let repeated =
+        PerViewport::<Stamped<IdPass>>::with_pass(ctx, viewport, pass_nr, |pass, _| *pass = IdPass::default(), |pass| !pass.seen.insert(id));
+    if repeated {
+        log::warn!("{name} was shown twice with the id {id:?} in one pass");
+        inspect::finding(ctx, inspect::Finding { rule: "duplicate-id", component: name, subject: format!("{id:?}") });
+    }
 }

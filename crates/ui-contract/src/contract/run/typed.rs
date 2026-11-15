@@ -536,8 +536,10 @@ pub(crate) fn show_container<C: Container, R>(
     Inner { output, inner, settle }
 }
 
-/// A layer-like container that shows nothing this pass runs no pipeline: it takes its id as step 3 would, forgets
-/// its layer and returns its output's unshown form. `None` when it shows, or when its output has no unshown form.
+/// A layer-like container that shows nothing this pass runs no pipeline: it takes its id as step 3 would, without
+/// registering it, and returns its output's unshown form. Its shown life ends at once: the first pass it shows
+/// nothing forgets its layer and drops its shown and press entries, so a reopen is a first pass. `None` when it
+/// shows, or when its output has no unshown form.
 fn unshown<C: Container>(comp: &mut C, ui: &Ui) -> Option<C::Output> {
     let props = comp.props(Internal::new());
     if matches!(props.mount, crate::contract::Mount::Inline | crate::contract::Mount::Pane(_) | crate::contract::Mount::Window { .. }) {
@@ -552,9 +554,13 @@ fn unshown<C: Container>(comp: &mut C, ui: &Ui) -> Option<C::Output> {
     if !crate::contract::body::unshown(comp, ui.ctx(), id, &props, sizing) {
         return None;
     }
-    steps::id(ui, &source, !sizing, true, facts.style_key, facts.name);
+    steps::id(ui, &source, false, true, facts.style_key, facts.name);
     if !sizing {
+        steps::claim_id(ui, id, facts.name);
+    }
+    if !sizing && crate::runtime::memory::owner_pass(ui.ctx(), id).is_some() {
         crate::contract::overlay::forget_layer(ui.ctx(), id, id);
+        crate::runtime::memory::end_shown(ui.ctx(), id);
     }
     Some(output)
 }

@@ -32,6 +32,11 @@ impl Outcome for DialogOutput {
     fn response(&self) -> &Response {
         &self.response
     }
+
+    /// A closed dialog runs no pipeline: it neither closed nor picked in this pass.
+    fn unshown(response: Response) -> Option<Self> {
+        Some(DialogOutput { response, closed: None, picked: None })
+    }
 }
 
 impl DialogOutput {

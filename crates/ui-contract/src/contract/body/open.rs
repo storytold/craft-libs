@@ -38,7 +38,7 @@ pub(super) fn open_now<C: Container>(comp: &mut C, stage: &mut MemoryStage, id: 
 /// Whether the layer-like container `id` shows nothing this pass: closed, past its exit fade, with no close waiting
 /// for it. The read step and the mount host would decide the same; a peek stage decides it, so a container found open
 /// runs with nothing applied twice. A closed one writes what deciding changed (a hold's dwell, its slot's first value)
-/// as its read step would have, outside a sizing pass.
+/// as its read step would have, outside a sizing pass, and stamps no `Seen`: it is not shown.
 pub(crate) fn unshown<C: Container>(comp: &mut C, ctx: &Context, id: Id, props: &ContainerProps, sizing: bool) -> bool {
     if !matches!(props.mount, Mount::Layer(_) | Mount::FullWindow | Mount::Viewport { .. }) {
         return false;
@@ -50,7 +50,7 @@ pub(crate) fn unshown<C: Container>(comp: &mut C, ctx: &Context, id: Id, props: 
         return false;
     }
     if !sizing {
-        let mut stage = MemoryStage::open(ctx, id);
+        let mut stage = MemoryStage::open_after(ctx, id, id);
         let open = open_now(comp, &mut stage, id, props);
         debug_assert!(!open, "a peek and a real stage decide the same open state");
         stage.write_back();

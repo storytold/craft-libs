@@ -24,7 +24,11 @@ pub(crate) fn opener_open(stage: &mut MemoryStage, first: &Opener) -> bool {
     let ctx = stage.ctx().clone();
     let frame = crate::runtime::egui::pass::root_frame_nr(&ctx);
     let held = first.all().find(|opener| opener.trigger == Trigger::Hold).map(|opener| {
-        let started = dwell(&ctx, stage, opener.id, "dwell", opener.pressed, HOLD);
+        // The dwell is the opener's: recorded under its id, it goes with the opener's eviction whether the container
+        // shows or not.
+        let mut own = if stage.is_peek() { MemoryStage::open_peek(&ctx, opener.id) } else { MemoryStage::open_after(&ctx, opener.id, opener.id) };
+        let started = dwell(&ctx, &mut own, opener.id, "dwell", opener.pressed, HOLD);
+        own.write_back();
         (opener, started)
     });
     let slot = stage.session::<OpenerOpen>(sub(first.id, "opens"));

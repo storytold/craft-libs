@@ -157,6 +157,8 @@ pub struct OpenEntry {
     pub(crate) region: Option<Rect>,
     /// The layer's place on its dialog stack (`stack_place`): the modal families of one stack stack in its order.
     pub(crate) place: Option<usize>,
+    /// The dialog of a dialog host the layer shows for (`stack_place`).
+    dialog: Option<Id>,
 }
 
 impl OpenEntry {
@@ -179,6 +181,7 @@ impl OpenEntry {
             window: false,
             region: None,
             place: None,
+            dialog: None,
         }
     }
 
@@ -218,8 +221,9 @@ pub(crate) struct Pass {
     pressed_outside: Vec<Id>,
     /// The popup a press that opened it ended on, and where, this pass.
     dragged_release: Option<(Id, Pos2)>,
-    /// The dialog stack place of the layers recorded now (`stack_place`).
+    /// The dialog stack place of the layers recorded now, and the dialog they show for (`stack_place`).
     place: Option<usize>,
+    dialog: Option<Id>,
 }
 
 /// The top modal layer of a viewport: its id and the scrim under it.
@@ -277,6 +281,7 @@ fn with_pass<R>(ctx: &Context, f: impl FnOnce(&mut Pass) -> R) -> R {
             pass.pressed_outside.clear();
             pass.dragged_release = None;
             pass.place = None;
+            pass.dialog = None;
         },
         f,
     )
@@ -610,15 +615,27 @@ pub(crate) fn note_peers(ctx: &Context, id: Id, peers: Vec<Rect>) {
     });
 }
 
-/// Runs `show` with the layers it records at `place` on the dialog stack: a dialog host shows each open dialog
-/// inside its stack place, bottom first, and the modal families of the stack then stack in that order whatever
-/// opened, appeared or was pressed last. Families without a place keep their raise order.
+/// Runs `show` with the layers it records at `place` on the dialog stack, for the host's `dialog`: a dialog host shows
+/// each open dialog inside its stack place, bottom first, and the modal families of the stack then stack in that order
+/// whatever opened, appeared or was pressed last. Families without a place keep their raise order.
 #[doc(hidden)]
-pub fn stack_place<R>(ctx: &Context, place: usize, show: impl FnOnce() -> R) -> R {
-    let outer = with_pass(ctx, |pass| pass.place.replace(place));
+pub fn stack_place<R>(ctx: &Context, place: usize, dialog: Id, show: impl FnOnce() -> R) -> R {
+    let outer = with_pass(ctx, |pass| (pass.place.replace(place), pass.dialog.replace(dialog)));
     let out = show();
-    with_pass(ctx, |pass| pass.place = outer);
+    with_pass(ctx, |pass| (pass.place, pass.dialog) = outer);
     out
+}
+
+/// A dialog host removed `dialog`: the layers it showed for it (`stack_place`) in the running or the last pass end
+/// their shown life at once (`memory::end_shown`), as a container that shows nothing does, so the next open of the
+/// dialog is a first pass.
+#[doc(hidden)]
+pub fn end_stack_dialog(ctx: &Context, dialog: Id) {
+    let shown: Vec<Id> =
+        with_pass(ctx, |pass| pass.current.iter().chain(&pass.last).filter(|entry| entry.dialog == Some(dialog)).map(|entry| entry.id).collect());
+    for id in shown {
+        crate::runtime::memory::end_shown(ctx, id);
+    }
 }
 
 /// Records the layer shown in this pass, parent first: a layer is recorded once its body ran, after the layers opened
@@ -628,6 +645,7 @@ pub(crate) fn record(ctx: &Context, mut entry: OpenEntry) {
     crate::runtime::replay::block(ctx);
     with_pass(ctx, |pass| {
         entry.place = entry.place.or(pass.place);
+        entry.dialog = entry.dialog.or(pass.dialog);
         if let Some(at) = pass.current.iter().position(|recorded| recorded.id == entry.id) {
             pass.current[at] = entry;
             return;

@@ -187,3 +187,19 @@ fn cancel_or_escape_takes_the_dialogs_field_edits_back() {
         assert!(matches!(app.outer[..], [OuterEdit::Begin { id: first, .. }, _, OuterEdit::Begin { id: second, .. }] if first != second));
     }
 }
+
+/// The app closing the dialog through its open binding takes the field edits back, as Cancel does.
+#[trial]
+fn a_close_through_the_open_binding_takes_the_dialogs_field_edits_back() {
+    let (mut fixture, app) = dialog();
+    edit_both(&mut fixture, &app);
+    app.borrow_mut().open = false;
+    // Past its exit fade the dialog shows nothing.
+    fixture.settle();
+    fixture.advance(1.0).idle(4);
+    let mut app = app.borrow_mut();
+    app.drain(fixture.ctx());
+    assert!(!app.host.is_active(), "the close ends the dialog's gesture");
+    assert!(app.doc.steps.is_empty(), "the close leaves no undo step: {:?}", app.doc.steps);
+    assert_eq!(app.doc.values, Values::default(), "the close restores both values");
+}
