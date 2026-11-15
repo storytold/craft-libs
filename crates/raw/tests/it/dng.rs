@@ -403,6 +403,172 @@ fn floating_point_dngs() {
     assert_eq!(decode(&dng(raw, ByteOrder::Big)).unwrap().data, RawData::F32(vals));
 }
 
+/// The chunks (tiles of `tw` x `th`, or strips when `tw == w`) of an image of `cpp` interleaved samples per pixel, each
+/// nominal-sized (strips: clipped to the image height) with zero padding past the image edge: one chunk per tile, and for `planar` one set of chunks per
+/// plane (one sample per pixel), plane after plane.
+fn chunk_samples<T: Copy + Default>(px: &[T], w: usize, h: usize, cpp: usize, tw: usize, th: usize, planar: bool) -> Vec<Vec<T>> {
+    let planes = if planar { cpp } else { 1 };
+    let ccpp = if planar { 1 } else { cpp };
+    let mut out = Vec::new();
+    for plane in 0..planes {
+        for ty in 0..h.div_ceil(th) {
+            for tx in 0..w.div_ceil(tw) {
+                // a strip holds only the rows inside the image, a tile its nominal size
+                let rows = if tw == w { th.min(h - ty * th) } else { th };
+                let mut c = vec![T::default(); tw * rows * ccpp];
+                for y in 0..th.min(h - ty * th) {
+                    for x in 0..tw.min(w - tx * tw) {
+                        for s in 0..ccpp {
+                            let src = ((ty * th + y) * w + tx * tw + x) * cpp + if planar { plane } else { s };
+                            c[(y * tw + x) * ccpp + s] = px[src];
+                        }
+                    }
+                }
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+fn layout_image(raw: &mut IfdBuilder, chunks: Vec<Vec<u8>>, w: usize, tile: (usize, usize)) {
+    raw.set_image(if tile.0 == w {
+        ImageData::Strips { rows_per_strip: tile.1 as u32, strips: chunks }
+    } else {
+        ImageData::Tiles { tile_width: tile.0 as u32, tile_height: tile.1 as u32, tiles: chunks }
+    });
+}
+
+/// Uncompressed integer DNGs in every chunk layout (chunky and planar, tiles and strips with edge chunks, several chunks
+/// per image) at several bit depths and byte orders decode to the samples they were built from.
+#[test]
+fn uncompressed_chunk_layouts_place_every_sample() {
+    let (w, h) = (37, 23);
+    for cpp in [1usize, 3] {
+        for bits in [8u32, 12, 16] {
+            let px = pattern(w, h, cpp, bits);
+            // tiles overhanging both edges, strips with a shorter last strip
+            for tile in [(16, 16), (w, 5), (w, h), (16, 32)] {
+                for planar in [false, true] {
+                    if planar && cpp == 1 {
+                        continue;
+                    }
+                    for order in [ByteOrder::Little, ByteOrder::Big] {
+                        let ccpp = if planar { 1 } else { cpp };
+                        let chunks: Vec<Vec<u8>> = chunk_samples(&px, w, h, cpp, tile.0, tile.1, planar)
+                            .iter()
+                            .map(|c| match bits {
+                                8 => c.iter().map(|&v| v as u8).collect(),
+                                16 => u16_bytes(c, order),
+                                _ => pack_msb(c, bits, tile.0 * ccpp),
+                            })
+                            .collect();
+                        let mut raw = base_ifd(w, h, bits as u16, cpp, cpp == 1);
+                        raw.set(t::COMPRESSION, Value::Short(vec![1]));
+                        if planar {
+                            raw.set(t::PLANAR_CONFIGURATION, Value::Short(vec![2]));
+                        }
+                        layout_image(&mut raw, chunks, w, tile);
+                        let img = decode(&dng(raw, order)).unwrap();
+                        assert_eq!(img.cpp, cpp);
+                        assert_eq!(img.data, RawData::U16(px.clone()), "cpp {cpp} bits {bits} tile {tile:?} planar {planar} {order:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Deflate with the integer and floating-point predictors, chunky and planar tiles and strips.
+#[test]
+fn deflate_chunk_layouts_place_every_sample() {
+    let (w, h) = (37, 23);
+    for planar in [false, true] {
+        let cpp = 3;
+        let ccpp = if planar { 1 } else { cpp };
+        let px = pattern(w, h, cpp, 16);
+        for tile in [(16, 16), (w, 5)] {
+            // integer predictor 2 on 16-bit samples
+            let chunks: Vec<Vec<u8>> = chunk_samples(&px, w, h, cpp, tile.0, tile.1, planar)
+                .into_iter()
+                .map(|mut c| {
+                    for row in c.chunks_mut(tile.0 * ccpp) {
+                        for i in (ccpp..row.len()).rev() {
+                            row[i] = row[i].wrapping_sub(row[i - ccpp]);
+                        }
+                    }
+                    miniz_oxide::deflate::compress_to_vec_zlib(&u16_bytes(&c, ByteOrder::Little), 6)
+                })
+                .collect();
+            let mut raw = base_ifd(w, h, 16, cpp, false);
+            raw.set(t::COMPRESSION, Value::Short(vec![compression::ADOBE_DEFLATE]));
+            raw.set(t::PREDICTOR, Value::Short(vec![2]));
+            if planar {
+                raw.set(t::PLANAR_CONFIGURATION, Value::Short(vec![2]));
+            }
+            layout_image(&mut raw, chunks, w, tile);
+            let img = decode(&dng(raw, ByteOrder::Little)).unwrap();
+            assert_eq!(img.data, RawData::U16(px.clone()), "integer predictor, tile {tile:?} planar {planar}");
+        }
+    }
+}
+
+/// Floating-point DNGs (uncompressed and with the floating-point predictor) in tiled and strip, chunky and planar
+/// layouts with several chunks and edge chunks.
+#[test]
+fn float_chunk_layouts_place_every_sample() {
+    let (w, h) = (37, 23);
+    for cpp in [1usize, 3] {
+        let vals: Vec<f32> = (0..w * h * cpp).map(|i| ((i * 37) % 200) as f32 / 64.0).collect();
+        for tile in [(16, 16), (w, 5)] {
+            for planar in [false, true] {
+                if planar && cpp == 1 {
+                    continue;
+                }
+                let ccpp = if planar { 1 } else { cpp };
+                let parts = chunk_samples(&vals, w, h, cpp, tile.0, tile.1, planar);
+                for bits in [16u16, 24, 32] {
+                    let bp = bits as usize / 8;
+                    for (pred, order) in [(1u16, ByteOrder::Little), (1, ByteOrder::Big), (3, ByteOrder::Little)] {
+                        if pred == 1 && bits != 16 && bits != 32 {
+                            continue; // uncompressed 24-bit floats are not written by this test
+                        }
+                        let chunks: Vec<Vec<u8>> = parts
+                            .iter()
+                            .map(|c| {
+                                if pred == 3 {
+                                    let enc = fp_encode(c, bp, ccpp, tile.0 * ccpp);
+                                    miniz_oxide::deflate::compress_to_vec_zlib(&enc, 6)
+                                } else if bits == 16 {
+                                    c.iter()
+                                        .flat_map(
+                                            |&v| if order == ByteOrder::Big { f32_to_f16(v).to_be_bytes() } else { f32_to_f16(v).to_le_bytes() },
+                                        )
+                                        .collect()
+                                } else {
+                                    c.iter().flat_map(|&v| if order == ByteOrder::Big { v.to_be_bytes() } else { v.to_le_bytes() }).collect()
+                                }
+                            })
+                            .collect();
+                        let mut raw = base_ifd(w, h, bits, cpp, cpp == 1);
+                        raw.set(t::SAMPLE_FORMAT, Value::Short(vec![3; cpp]));
+                        raw.set(t::COMPRESSION, Value::Short(vec![if pred == 3 { compression::DEFLATE } else { 1 }]));
+                        if pred == 3 {
+                            raw.set(t::PREDICTOR, Value::Short(vec![3]));
+                        }
+                        if planar {
+                            raw.set(t::PLANAR_CONFIGURATION, Value::Short(vec![2]));
+                        }
+                        layout_image(&mut raw, chunks, w, tile);
+                        let img = decode(&dng(raw, order)).unwrap();
+                        assert_eq!(img.data, RawData::F32(vals.clone()), "cpp {cpp} {bits}-bit pred {pred} tile {tile:?} planar {planar} {order:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn non_finite_float_samples_decode_as_levels() {
     // NaN samples in a float CFA DNG spread through any arithmetic downstream: the decoder hands on numbers only
