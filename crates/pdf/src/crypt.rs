@@ -283,7 +283,7 @@ impl SecurityHandler {
     /// different key is refused too.
     pub fn authenticate_owner(&self, id0: &[u8], password: &str) -> Result<Self, CryptError> {
         let owner = Self::open(self.dict.clone(), id0, Some(password))?;
-        if owner.auth != Auth::Owner || owner.key != self.key {
+        if owner.auth != Auth::Owner || !same(owner.key.as_slice(), self.key.as_slice()) {
             return Err(CryptError::WrongPassword);
         }
         Ok(owner)
@@ -539,6 +539,12 @@ fn u_value_r4(d: &EncryptDict, id0: &[u8], key: &[u8]) -> Vec<u8> {
     x
 }
 
+/// Whether `a` and `b` are equal, in time that depends only on their lengths: password-derived
+/// digests, keys and verifiers are compared without stopping at the first differing byte.
+fn same(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 /// Algorithm 6: authenticate a user password; returns the file key.
 ///
 /// Some producers ignore `/EncryptMetadata false` when deriving the key (they omit the
@@ -549,7 +555,7 @@ fn user_key_r4(d: &EncryptDict, id0: &[u8], pw: &[u8]) -> Option<Zeroizing<Vec<u
         let key = file_key_r4(d, id0, pw);
         let u = u_value_r4(d, id0, &key);
         let n = if d.r == 2 { 32 } else { 16 };
-        (d.u.len() >= n && u[..n] == d.u[..n]).then_some(key)
+        (d.u.len() >= n && same(&u[..n], &d.u[..n])).then_some(key)
     };
     check(d).or_else(|| (d.r >= 4 && !d.encrypt_metadata).then(|| check(&EncryptDict { encrypt_metadata: true, ..d.clone() })).flatten())
 }
@@ -636,7 +642,8 @@ fn key_r6(d: &EncryptDict, pw: &[u8], owner: bool) -> Result<Option<Zeroizing<Ve
         return Err(CryptError::Malformed("/O and /U must be 48 bytes for R5/R6".into()));
     }
     let (hashed, encrypted, udata) = if owner { (&d.o[..48], &d.oe, &d.u[..48]) } else { (&d.u[..48], &d.ue, &[][..]) };
-    if *hash_r6(d.r, pw, &hashed[32..40], udata) != hashed[..32] {
+    let verifier = hash_r6(d.r, pw, &hashed[32..40], udata);
+    if !same(verifier.as_slice(), &hashed[..32]) {
         return Ok(None);
     }
     if encrypted.len() < 32 {
@@ -651,14 +658,22 @@ fn key_r6(d: &EncryptDict, pw: &[u8], owner: bool) -> Result<Option<Zeroizing<Ve
 /// Which encryption to create.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Algorithm {
-    /// R2, 40-bit RC4 (legacy; for tests and compatibility only).
+    /// R2, 40-bit RC4 (legacy: [`create`] refuses it, [`create_legacy`] writes it).
     Rc4_40,
-    /// R3, 128-bit RC4.
+    /// R3, 128-bit RC4 (legacy: [`create`] refuses it, [`create_legacy`] writes it).
     Rc4_128,
     /// R4, AES-128 crypt filters.
     Aes128,
     /// R6, AES-256 (PDF 2.0; the default for new documents).
     Aes256,
+}
+
+impl Algorithm {
+    /// Whether this is one of the broken legacy ciphers: read for compatibility, and refused for
+    /// new encryption by [`create`].
+    pub fn is_legacy(self) -> bool {
+        matches!(self, Algorithm::Rc4_40 | Algorithm::Rc4_128)
+    }
 }
 
 /// A password as [`create`] prepares it: for R2–R4 its PDFDocEncoding (characters it lacks
@@ -725,7 +740,23 @@ pub fn file_id(seed: &[u8; 32]) -> Vec<u8> {
 }
 
 /// Build the `/Encrypt` values and an authenticated (owner) handler for a new encryption.
+///
+/// The legacy RC4 schemes are refused, because RC4 is broken (`RFC 7465`) and a file written with
+/// it protects nothing: [`create_legacy`] is the explicit way to write them.
 pub fn create(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
+    if params.algorithm.is_legacy() {
+        return Err(CryptError::Unsupported("RC4 encryption is legacy (RFC 7465); use create_legacy for a file an old reader must open".into()));
+    }
+    create_any(params, id0)
+}
+
+/// [`create`] without the RC4 gate: writes RC4-40 and RC4-128 too. For a file that must stay
+/// readable by a reader without AES, and for tests that read and write every algorithm.
+pub fn create_legacy(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
+    create_any(params, id0)
+}
+
+fn create_any(params: &NewEncryption, id0: &[u8]) -> Result<SecurityHandler, CryptError> {
     // R2 reserves bits 7-32; later revisions reserve bits 7-8 and 13-32.
     // Reserved bits must be 1, and bits 1-2 must be 0 (§7.6.4.2).
     let reserved = if params.algorithm == Algorithm::Rc4_40 { !0x3F } else { !0xFFF | 0xC0 };

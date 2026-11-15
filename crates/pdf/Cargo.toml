@@ -17,7 +17,9 @@ interpret = ["read", "dep:hayro-interpret"]
 paths = ["interpret", "dep:kurbo"]
 raster = ["interpret", "dep:hayro", "dep:bytemuck"]
 write = ["dep:krilla", "dep:thiserror"]
+write-svg = ["write", "dep:craft-svg", "dep:krilla-svg", "dep:usvg", "craft-svg/tree-text"]
 write-pdf = ["write", "krilla/pdf"]
+write-raster = ["dep:flate2", "dep:roxmltree"]
 write-simple-text = ["write", "krilla/simple-text"]
 filters = ["dep:craft-stream-codecs", "dep:flate2", "dep:thiserror"]
 cos = ["crypt", "filters", "dep:chrono", "dep:js-sys", "dep:wasm-bindgen"]
@@ -29,10 +31,14 @@ hayro-interpret = { workspace = true, optional = true }
 hayro = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }
 krilla = { workspace = true, optional = true }
+craft-svg = { workspace = true, optional = true }
+krilla-svg = { version = "=0.8.1", optional = true }
+usvg = { version = "=0.47.0", features = ["text"], optional = true }
 thiserror = { workspace = true, optional = true }
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
+roxmltree = { version = "0.21", optional = true }
 # The filter chain (`filters`). flate2 with zlib-rs, the backend the chain's Flate prices were measured on.
 craft-stream-codecs = { workspace = true, optional = true }
-flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
 # The standard security handler (`crypt`): pure Rust, MIT OR Apache-2.0, builds for wasm.
 aes = { version = "0.9", optional = true }
 md-5 = { version = "0.11", optional = true }

@@ -11,16 +11,26 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-smime = { path = "crates/smime" }
+craft-ber = { path = "crates/ber" }
+craft-proto = { path = "crates/proto" }
 acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
+craft-plist = { path = "crates/plist" }
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
 craft-ai-core = { path = "crates/ai-core" }
+craft-anicraft-format = { path = "crates/anicraft-format" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
+craft-ps = { path = "crates/ps", version = "=0.1.0" }
 craft-pdn = { path = "crates/pdn" }
 craft-plate-test = { path = "crates/plate-test" }
+pdf-writer = "0.15"
+miniz_oxide = "0.8"
+weezl = "0.1"
+skrifa = "0.47"
 krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
 hayro = { version = "=0.7.1", default-features = false }
 hayro-interpret = { version = "=0.7.0", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
@@ -42,6 +52,7 @@ craft-dialogs = { path = "crates/dialogs" }
 craft-doc-binary = { path = "crates/doc-binary" }
 craft-docx = { path = "crates/docx" }
 craft-document-bundle = { path = "crates/document-bundle" }
+craft-mcmat = { path = "crates/mcmat" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
@@ -80,16 +91,18 @@ craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
 craft-ipc = { path = "crates/ipc" }
 craft-jpeg = { path = "crates/jpeg" }
+craft-jsonrpc = { path = "crates/jsonrpc" }
+craft-mcp = { path = "crates/mcp" }
 craft-jxl = { path = "crates/jxl" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
 craft-assuan = { path = "crates/assuan" }
 craft-kra = { path = "crates/kra" }
 craft-audio = { path = "crates/audio" }
-# No default features, so craft-audio's `encode` builds craft-media without `isobmff`.
 craft-latex = { path = "crates/latex" }
 craft-markdown = { path = "crates/markdown" }
 craft-math = { path = "crates/math" }
+# No default features: craft-audio turns on the craft-media modules each of its features needs.
 craft-media = { path = "crates/media", default-features = false }
 craft-materialx = { path = "crates/materialx" }
 craft-media-testkit = { path = "crates/media-testkit" }
@@ -116,6 +129,7 @@ craft-prepress = { path = "crates/prepress" }
 craft-print = { path = "crates/print" }
 craft-proof = { path = "crates/proof" }
 craft-raster-codecs = { path = "crates/raster-codecs" }
+craft-image-codecs = { path = "crates/image-codecs" }
 craft-psd = { path = "crates/psd" }
 craft-pst = { path = "crates/pst" }
 craft-quit = { path = "crates/quit" }
@@ -133,6 +147,7 @@ craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
 craft-svg-paths = { path = "crates/svg-paths" }
 craft-stream-codecs = { path = "crates/stream-codecs" }
 craft-text = { path = "crates/text" }
+craft-texture = { path = "crates/texture" }
 craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
 craft-tiff = { path = "crates/tiff" }
@@ -143,6 +158,7 @@ craft-vcard = { path = "crates/vcard" }
 craft-vectorcraft-format = { path = "crates/vectorcraft-format" }
 craft-vectordrawable = { path = "crates/vectordrawable" }
 craft-xls = { path = "crates/xls" }
+craft-xfl = { path = "crates/xfl" }
 craft-wordmodel = { path = "crates/wordmodel" }
 craft-xlsx = { path = "crates/xlsx" }
 indd = { git = "https://github.com/storytold/indd-utils", rev = "7f3060e5bce78d21ea70e0d5eacb96edce15dfbe" }
