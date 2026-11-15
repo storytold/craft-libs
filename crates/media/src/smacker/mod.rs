@@ -334,7 +334,7 @@ pub fn open<S: ByteSource + ?Sized>(src: &S) -> Result<SmackerFile> {
         return Err(Error::Invalid("frame tables or tree data run past the end of the file"));
     }
     let total = usize::try_from(total).map_err(|_| Error::Invalid("frame count"))?;
-    let mut sizes = vec![0u8; total.saturating_mul(4)];
+    let mut sizes = vec![0u8; total.checked_mul(4).ok_or(Error::Invalid("frame count"))?];
     src.read_at(HEADER_LEN as u64, &mut sizes)?;
     let mut types = vec![0u8; total];
     src.read_at(HEADER_LEN as u64 + sizes.len() as u64, &mut types)?;

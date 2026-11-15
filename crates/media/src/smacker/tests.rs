@@ -98,6 +98,30 @@ fn split_frame_rejects_chunks_that_overrun_the_frame() {
 }
 
 #[test]
+fn the_size_table_carries_the_key_frame_flag_in_its_low_bits() {
+    let mut bytes = sample();
+    let plain = open(&bytes).unwrap();
+    // bit 0 on the first frame, bit 1 (not a key frame) on the third
+    bytes[HEADER_LEN] |= 1;
+    bytes[HEADER_LEN + 8] |= 2;
+    let f = open(&bytes).unwrap();
+    assert_eq!(f.frames.iter().map(|x| x.keyframe).collect::<Vec<_>>(), [true, false, false]);
+    for (a, b) in f.frames.iter().zip(&plain.frames) {
+        assert_eq!((a.offset, a.size), (b.offset, b.size));
+    }
+    assert_eq!(f.ring_frame.map(|r| r.offset), plain.ring_frame.map(|r| r.offset));
+}
+
+#[test]
+fn audio_tracks_carry_their_largest_decoded_size() {
+    let mut bytes = sample();
+    bytes[24..28].copy_from_slice(&1234u32.to_le_bytes());
+    bytes[32..36].copy_from_slice(&77u32.to_le_bytes());
+    let h = open(&bytes).unwrap().header;
+    assert_eq!(h.audio.map(|a| a.max_decoded_size), [1234, 0, 77, 0, 0, 0, 0]);
+}
+
+#[test]
 fn frame_period_forms() {
     let mut h = open(&sample()).unwrap().header;
     for (raw, want) in [(0, (1, 10)), (100, (100, 1000)), (-3333, (3333, 100_000)), (i32::MIN, (1 << 31, 100_000))] {
