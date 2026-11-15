@@ -131,6 +131,9 @@ const MAX_MEDIA_DEPTH: usize = 64;
 const MAX_XML_DEPTH: usize = 128;
 // Retrying truncated resources is useful at shallower depths, but must remain bounded.
 const MAX_REIMPORTS: usize = 4096;
+// A hostile document may reference the same large cached graph repeatedly. Bound total
+// reachability work, not just one walk, and refuse reuse when safety cannot be established.
+const MAX_CACHE_EDGES: usize = 1_000_000;
 
 struct Imp<'a, 'c, 'r> {
     b: Builder<'c>,
@@ -147,6 +150,7 @@ struct Imp<'a, 'c, 'r> {
     // at the expense of the other, and reuses the same item so earlier references stay valid.
     media_truncated_at: HashMap<String, (usize, usize)>,
     reimports_left: usize,
+    cache_edges_left: usize,
     depth: usize,
     effects: HashMap<String, String>,
 }
@@ -202,6 +206,7 @@ pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<I
         depth_hits: 0,
         media_truncated_at: HashMap::new(),
         reimports_left: MAX_REIMPORTS,
+        cache_edges_left: MAX_CACHE_EDGES,
         depth: 0,
         effects: HashMap::new(),
     };
@@ -325,6 +330,36 @@ impl<'a> Imp<'a, '_, '_> {
         Some(a)
     }
 
+    /// A rebuilt item retains its ID. A cached ancestor that already points to it must
+    /// not be inserted underneath it, even when the resource names are not directly active.
+    fn cache_reaches_active(&mut self, root: ItemId) -> bool {
+        let active: HashSet<ItemId> = self.media_active.iter().filter_map(|id| self.media_items.get(id).copied()).collect();
+        if active.is_empty() {
+            return false;
+        }
+        let mut seen = HashSet::from([root]);
+        let mut pending = vec![root];
+        while let Some(id) = pending.pop() {
+            if active.contains(&id) {
+                return true;
+            }
+            let Some(seq) = self.b.p.sequence(id) else { continue };
+            for item in seq.all_tracks().flat_map(|track| &track.items) {
+                if self.cache_edges_left == 0 {
+                    return true;
+                }
+                self.cache_edges_left -= 1;
+                if active.contains(&item.item) {
+                    return true;
+                }
+                if seen.insert(item.item) {
+                    pending.push(item.item);
+                }
+            }
+        }
+        false
+    }
+
     /// Nested sequence from a `<media>` resource.
     fn media(&mut self, id: &str) -> Option<ItemId> {
         // Check before the cache: a truncated resource may already have an item while it
@@ -335,7 +370,7 @@ impl<'a> Imp<'a, '_, '_> {
         }
         let depth = self.media_active.len();
         let mut again = None;
-        if let Some(i) = self.media_items.get(id) {
+        if let Some(i) = self.media_items.get(id).copied() {
             // Imported with a nested one cut off: import it again (into the same item) where that
             // one now fits.
             let shallower = self
@@ -344,10 +379,17 @@ impl<'a> Imp<'a, '_, '_> {
                 .is_some_and(|&(media, xml)| depth <= media && self.depth <= xml && (depth < media || self.depth < xml))
                 && !self.media_active.contains(id);
             if !shallower || self.reimports_left == 0 {
-                return Some(*i);
+                if self.cache_reaches_active(i) {
+                    self.depth_hits += 1;
+                    self.report.warn(format!(
+                        "FCPXML cached media {id:?} could form a recursive graph or exceeds the cache traversal budget; imported as a gap"
+                    ));
+                    return None;
+                }
+                return Some(i);
             }
             self.reimports_left -= 1;
-            again = Some(*i);
+            again = Some(i);
         }
         let n = *self.media_nodes.get(id)?;
         let s = child(n, "sequence")?;

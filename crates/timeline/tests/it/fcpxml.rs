@@ -577,3 +577,40 @@ fn flat_resource_chain_is_bounded_even_when_xml_is_shallow() {
     assert!(rep.mentions("nested too deeply"), "{rep:?}");
     assert!(imp.project.items.len() <= 65, "the flat resource graph is not expanded beyond the semantic limit");
 }
+
+#[test]
+fn shallower_retry_does_not_link_a_cached_ancestor_back_to_the_rebuilt_item() {
+    let mut media = String::new();
+    for i in 0..64 {
+        media.push_str(&format!(
+            r#"<media id="m{i}" name="M{i}"><sequence><spine><ref-clip ref="m{}" duration="1s"/></spine></sequence></media>"#,
+            (i + 1) % 64
+        ));
+    }
+    let xml = format!(
+        r#"<fcpxml version="1.10"><resources>{media}</resources>
+        <project name="A"><sequence><spine><ref-clip ref="m0" duration="1s"/></spine></sequence></project>
+        <project name="B"><sequence><spine><ref-clip ref="m62" duration="1s"/></spine></sequence></project></fcpxml>"#
+    );
+    let (imp, rep) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(rep.mentions("cached media"), "{rep:?}");
+    // Check the final graph, not just the resource-name recursion stack during import.
+    fn visit(p: &Project, id: ItemId, active: &mut std::collections::HashSet<ItemId>, done: &mut std::collections::HashSet<ItemId>) {
+        if done.contains(&id) {
+            return;
+        }
+        assert!(active.insert(id), "cached media introduced a cycle at {id:?}");
+        if let Some(seq) = p.sequence(id) {
+            for item in seq.all_tracks().flat_map(|track| &track.items) {
+                visit(p, item.item, active, done);
+            }
+        }
+        active.remove(&id);
+        done.insert(id);
+    }
+    let mut active = std::collections::HashSet::new();
+    let mut done = std::collections::HashSet::new();
+    for id in imp.project.items.keys() {
+        visit(&imp.project, *id, &mut active, &mut done);
+    }
+}
