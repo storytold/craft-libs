@@ -737,19 +737,19 @@ fn public_of(pkcs8: &[u8]) -> Option<Vec<u8>> {
     let point = match private_key_kind(pkcs8) {
         KeyKind::P256 => {
             let public = p256::SecretKey::from_slice(scalar).ok()?.public_key();
-            if let Some(encoded) = supplied {
-                if p256::PublicKey::from_sec1_bytes(encoded?).ok()? != public {
-                    return None;
-                }
+            if let Some(encoded) = supplied
+                && p256::PublicKey::from_sec1_bytes(encoded?).ok()? != public
+            {
+                return None;
             }
             public.to_sec1_point(false).as_bytes().to_vec()
         }
         KeyKind::P384 => {
             let public = p384::SecretKey::from_slice(scalar).ok()?.public_key();
-            if let Some(encoded) = supplied {
-                if p384::PublicKey::from_sec1_bytes(encoded?).ok()? != public {
-                    return None;
-                }
+            if let Some(encoded) = supplied
+                && p384::PublicKey::from_sec1_bytes(encoded?).ok()? != public
+            {
+                return None;
             }
             public.to_sec1_point(false).as_bytes().to_vec()
         }
