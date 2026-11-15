@@ -54,7 +54,7 @@ mod tests {
 
     fn bytes(format: ::dds::Format, payload: &[u8]) -> Vec<u8> {
         let mut bytes = Vec::new();
-        ::dds::Header::new_image(1, 1, format).write(&mut bytes).unwrap();
+        ::dds::header::Header::new_image(1, 1, format).write(&mut bytes).unwrap();
         bytes.extend_from_slice(payload);
         bytes
     }
@@ -86,7 +86,7 @@ mod tests {
         assert_eq!(image.rgba, [-0.5, 2.0, 0.25, 0.75]);
         assert_eq!(image.source_precision_is_f32, ::dds::Format::R16G16B16A16_FLOAT.precision() == ::dds::Precision::F32);
         let mut compressed = Vec::new();
-        ::dds::Header::new_image(4, 4, ::dds::Format::BC1_UNORM).write(&mut compressed).unwrap();
+        ::dds::header::Header::new_image(4, 4, ::dds::Format::BC1_UNORM).write(&mut compressed).unwrap();
         compressed.extend_from_slice(&[0, 0xf8, 0, 0, 0, 0, 0, 0]);
         let image = decode_first(&compressed, &Limits::default()).unwrap();
         assert!(!image.source_precision_is_f32);
@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn cube_keeps_first_surface_only_like_materialcraft() {
         let mut data = Vec::new();
-        ::dds::Header::new_cube_map(1, 1, ::dds::Format::R8G8B8A8_UNORM).write(&mut data).unwrap();
+        ::dds::header::Header::new_cube_map(1, 1, ::dds::Format::R8G8B8A8_UNORM).write(&mut data).unwrap();
         data.extend_from_slice(&[255, 0, 0, 255]);
         data.extend_from_slice(&[0; 20]);
         let image = decode_first(&data, &Limits::default()).unwrap();
