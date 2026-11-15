@@ -8,4 +8,6 @@ mod guides;
 
 mod marquee;
 
+mod outline;
+
 mod task_bar;

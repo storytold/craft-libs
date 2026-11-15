@@ -28,6 +28,10 @@ const EDGE_ALPHA: f32 = 0.95;
 /// How far, in screen points, a flattened curve may leave the path.
 const FLATTEN_TOLERANCE: f64 = 0.25;
 
+/// About how many points one flattened segment may have (the tolerance stays at `FLATTEN_TOLERANCE` for segments
+/// up to about 250k screen points across).
+const MAX_SEGMENT_POINTS: f64 = 1000.0;
+
 /// What a click under the pointer would pick, in document units.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -88,23 +92,61 @@ pub fn path_runs(view: &CanvasView, path: &BezPath) -> Vec<(Vec<Pos2>, bool)> {
     let screen = view.affine() * path.clone();
     let mut out = Vec::new();
     let mut points = Vec::new();
-    let mut end = |points: &mut Vec<Pos2>, closed: bool| {
+    let end = |out: &mut Vec<_>, points: &mut Vec<Pos2>, closed: bool| {
         let run = std::mem::take(points);
         if run.len() > 1 {
             out.push((run, closed));
         }
     };
-    kurbo::flatten(screen.elements().iter().copied(), FLATTEN_TOLERANCE, |element| match element {
-        PathEl::MoveTo(p) => {
-            end(&mut points, false);
-            points.push(pos2(p.x as f32, p.y as f32));
+    let (mut start, mut current) = (kurbo::Point::ZERO, kurbo::Point::ZERO);
+    for element in screen.elements().iter().copied() {
+        match element {
+            PathEl::MoveTo(p) => {
+                end(&mut out, &mut points, false);
+                points.push(pos2(p.x as f32, p.y as f32));
+                (start, current) = (p, p);
+            }
+            PathEl::ClosePath => {
+                end(&mut out, &mut points, true);
+                current = start;
+            }
+            segment => {
+                let Some(to) = segment.end_point() else { continue };
+                let hull = segment_hull(current, segment);
+                current = to;
+                if !hull.iter().all(|p| p.is_finite()) {
+                    // A segment with a non-finite point has no drawable shape; the run breaks there and the next
+                    // one starts at its end.
+                    end(&mut out, &mut points, false);
+                    if to.is_finite() {
+                        points.push(pos2(to.x as f32, to.y as f32));
+                    }
+                    continue;
+                }
+                let extent = hull.iter().fold(Rect::from_points(hull[0], hull[0]), |r, p| r.union_pt(*p));
+                // The point count of a flattened curve grows with the square root of its size over the tolerance;
+                // a segment far larger than any screen keeps a bounded count at a coarser tolerance.
+                let tolerance = FLATTEN_TOLERANCE.max(extent.width().max(extent.height()) / MAX_SEGMENT_POINTS.powi(2));
+                kurbo::flatten([PathEl::MoveTo(hull[0]), segment], tolerance, |flat| {
+                    if let PathEl::LineTo(p) = flat {
+                        points.push(pos2(p.x as f32, p.y as f32));
+                    }
+                });
+            }
         }
-        PathEl::LineTo(p) => points.push(pos2(p.x as f32, p.y as f32)),
-        PathEl::ClosePath => end(&mut points, true),
-        _ => {}
-    });
-    end(&mut points, false);
+    }
+    end(&mut out, &mut points, false);
     out
+}
+
+/// The start point and every point of one drawing segment.
+fn segment_hull(from: kurbo::Point, segment: PathEl) -> Vec<kurbo::Point> {
+    match segment {
+        PathEl::LineTo(p) => vec![from, p],
+        PathEl::QuadTo(a, p) => vec![from, a, p],
+        PathEl::CurveTo(a, b, p) => vec![from, a, b, p],
+        PathEl::MoveTo(_) | PathEl::ClosePath => vec![from],
+    }
 }
 
 /// Strokes one run: the kit's halo-and-line outline in the overlay colours, or a line of the host's `color` alone.
