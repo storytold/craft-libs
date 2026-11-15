@@ -1,5 +1,5 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
-use super::model::{Axis, Grouping, Kind, Pos, Series, Symbol};
+use super::model::{Axis, Grouping, Kind, LabelPos, Pos, Series, Symbol};
 use super::plot::label;
 use super::{Chart, El, FONT, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, fill_colour, int, measure, slot};
 
@@ -100,6 +100,13 @@ impl Chart {
     pub(super) fn series_colour(&self, j: usize) -> Rgb {
         let s = self.series.get(j);
         s.and_then(|s| s.color).unwrap_or_else(|| self.accent(s.and_then(|s| s.idx).unwrap_or(j)))
+    }
+
+    /// Colour of series `j`'s markers: the marker's own fill, else the automatic colour of the
+    /// series index (not the series' explicit line colour, as Word draws them).
+    pub(super) fn marker_colour(&self, j: usize) -> Rgb {
+        let s = self.series.get(j);
+        s.and_then(|s| s.marker_color).unwrap_or_else(|| self.accent(s.and_then(|s| s.idx).unwrap_or(j)))
     }
 
     /// Colour of point `i` of series `j`: its `c:dPt` override, else the varied accent (pie) or
@@ -219,6 +226,7 @@ impl Series {
         let sp = ser.child("c:spPr");
         let ln = sp.and_then(|p| p.child("a:ln"));
         let marker = ser.child("c:marker").and_then(|m| m.child("c:spPr")).and_then(|p| fill_colour(p, theme));
+        let marker_color = marker;
         let color = sp.and_then(|p| fill_colour(p, theme)).or_else(|| ln.and_then(|l| fill_colour(l, theme))).or(marker);
         let no_fill = sp.and_then(|p| p.child("a:noFill")).is_some();
         let line_w = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).map(|w| w.clamp(0.0, 20.0));
@@ -251,6 +259,7 @@ impl Series {
         }
         let labels = show_values(ser.child("c:dLbls"));
         let label_fmt = label_format(ser.child("c:dLbls"));
+        let label_pos = ser.child("c:dLbls").and_then(|d| d.child("c:dLblPos")).and_then(|p| p.attr("val")).and_then(LabelPos::parse);
         Series {
             name,
             idx,
@@ -269,6 +278,8 @@ impl Series {
             x_fmt,
             labels,
             label_fmt,
+            label_pos,
+            marker_color,
             raw: Vec::new(),
         }
     }

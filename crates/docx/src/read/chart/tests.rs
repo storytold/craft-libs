@@ -743,9 +743,90 @@ fn value_axis_title_turns_counter_clockwise_like_word() {
     assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="-5400000" vert="horz"/>"#))), Some(-90.0));
     assert_eq!(angle(&line_with("", &title("<a:bodyPr/>"))), Some(-90.0));
     assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="5400000" vert="horz"/>"#))), Some(90.0));
-    // A horizontal title has no room beside the plot: it stays turned up.
-    assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="0" vert="horz"/>"#))), Some(-90.0));
+    // A horizontal title (`rot="0"`) stays horizontal: the plot makes room for it (see below).
+    assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="0" vert="horz"/>"#))), Some(0.0));
     // Hostile values stay finite.
     let odd = angle(&line_with("", &title(r#"<a:bodyPr rot="99999999999999999999"/>"#)));
     assert!(odd.is_some_and(f32::is_finite));
+}
+
+fn first_ellipse(items: &[GraphicItem]) -> Option<([f32; 4], Rgb)> {
+    items.iter().find_map(|it| match it {
+        GraphicItem::Shape { kind: ShapeKind::Ellipse, rect, fill: Some(c), .. } if rect[2] > 3.0 && rect[2] < 20.0 => Some((*rect, *c)),
+        _ => None,
+    })
+}
+
+#[test]
+fn markers_use_the_automatic_series_colour_not_the_line_colour() {
+    // The series has an explicit red line/fill but no marker fill: Word draws the markers in the
+    // palette colour of the series index (accent 1 here).
+    let items = line_with(&marker_xml("circle", 9), "");
+    assert_eq!(first_ellipse(&items).map(|e| e.1), Some(theme()[4]));
+    // A marker's own fill wins.
+    let own =
+        r#"<c:marker><c:symbol val="circle"/><c:size val="9"/><c:spPr><a:solidFill><a:srgbClr val="00AA00"/></a:solidFill></c:spPr></c:marker>"#;
+    assert_eq!(first_ellipse(&line_with(own, "")).map(|e| e.1), Some(Rgb(0, 0xAA, 0)));
+}
+
+#[test]
+fn line_data_labels_default_to_the_right_and_honour_dlblpos() {
+    let dl = |pos: &str| format!(r#"{}<c:dLbls>{pos}<c:showVal val="1"/></c:dLbls>"#, marker_xml("circle", 9));
+    let text_rect = |items: &[GraphicItem]| {
+        items.iter().find_map(|it| if let GraphicItem::Text { text, rect, .. } = it { (text == "3.2").then_some(*rect) } else { None })
+    };
+    let at = |pos: &str| {
+        let items = line_with(&dl(pos), "");
+        let (m, _) = first_ellipse(&items).unwrap();
+        let t = text_rect(&items).unwrap();
+        // Centre of the marker and of the label box.
+        ((t[0] + t[2] / 2.0) - (m[0] + m[2] / 2.0), (t[1] + t[3] / 2.0) - (m[1] + m[3] / 2.0), t, m)
+    };
+    let (dx, dy, t, m) = at("");
+    assert!(t[0] >= m[0] + m[2] && dy.abs() < 1.0, "default is right of the marker: {dx} {dy}");
+    let (dx, dy, t, m) = at(r#"<c:dLblPos val="r"/>"#);
+    assert!(t[0] >= m[0] + m[2] && dy.abs() < 1.0, "{dx} {dy}");
+    let (dx, dy, _, _) = at(r#"<c:dLblPos val="t"/>"#);
+    assert!(dx.abs() < 1.0 && dy < -4.0, "{dx} {dy}");
+    let (dx, dy, _, _) = at(r#"<c:dLblPos val="b"/>"#);
+    assert!(dx.abs() < 1.0 && dy > 4.0, "{dx} {dy}");
+    let (dx, dy, t, m) = at(r#"<c:dLblPos val="l"/>"#);
+    assert!(t[0] + t[2] <= m[0] && dy.abs() < 1.0, "{dx} {dy}");
+    let (dx, dy, _, _) = at(r#"<c:dLblPos val="ctr"/>"#);
+    assert!(dx.abs() < 1.0 && dy.abs() < 1.0, "{dx} {dy}");
+    // Unknown positions fall back to the default.
+    let (_, _, t, m) = at(r#"<c:dLblPos val="wibble"/>"#);
+    assert!(t[0] >= m[0] + m[2]);
+}
+
+#[test]
+fn horizontal_value_axis_title_gets_its_own_strip() {
+    let title = |rot: &str, name: &str| {
+        format!(r#"<c:title><c:tx><c:rich><a:bodyPr{rot}/><a:p><a:r><a:t>{name}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#)
+    };
+    let plot_left = |items: &[GraphicItem]| {
+        // The first gridline's start is the plot's left edge.
+        items.iter().find_map(|it| match it {
+            GraphicItem::Path { segs, stroke: Some(_), fill: None, .. } if segs.len() == 2 => match segs.first() {
+                Some(PathSeg::Move(x, _)) => Some(*x),
+                _ => None,
+            },
+            _ => None,
+        })
+    };
+    let rect_of = |items: &[GraphicItem], name: &str| {
+        items.iter().find_map(|it| if let GraphicItem::Text { text, rect, .. } = it { text.starts_with(name).then_some(*rect) } else { None })
+    };
+    let turned = line_with("", &title(r#" rot="-5400000" vert="horz""#, "Revenue"));
+    let flat = line_with("", &title(r#" rot="0" vert="horz""#, "Revenue"));
+    let (a, b) = (plot_left(&turned).unwrap(), plot_left(&flat).unwrap());
+    assert!(b > a + 10.0, "a horizontal title takes more room than a turned one: {a} {b}");
+    // The title box lies left of the plot and inside the chart.
+    let r = rect_of(&flat, "Revenue").unwrap();
+    assert!(r[0] >= 0.0 && r[0] + r[2] <= b + 0.5, "{r:?} {b}");
+    // A hostile title never takes more than a quarter of the width and stays finite.
+    let long = "Wibble ".repeat(500);
+    let items = line_with("", &title(r#" rot="0""#, &long));
+    let p = plot_left(&items).unwrap();
+    assert!(p.is_finite() && p <= 300.0 * 0.3, "{p}");
 }

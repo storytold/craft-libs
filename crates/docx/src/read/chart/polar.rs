@@ -1,6 +1,6 @@
 use super::canvas::{Rect, clip_text, fill, stroke, text, text_w, widest};
 use super::format::format_value;
-use super::model::{DataLabel, Kind, Series};
+use super::model::{DataLabel, Kind, LabelPos, Series};
 use super::plot::{Axes, has_values};
 use super::{Chart, FRAC_PI_2, GAP, GRID, GraphicItem, LINE, LINE_W, PathSeg, Rgb, ShapeKind, TAU, TEXT, TextAlign};
 
@@ -38,7 +38,7 @@ pub(super) fn pie(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
             // Halfway across the ring (pie: two thirds out from the centre).
             let at = if inner > 0.0 { (r + inner) / 2.0 } else { r * 0.65 };
             let (x, y) = polar(cx, cy, at, (a + b) / 2.0);
-            labels.push(DataLabel { x: x as f32, y: y as f32, text, inside: true });
+            labels.push(DataLabel { x: x as f32, y: y as f32, text, inside: true, pos: LabelPos::Above, off: 0.0 });
         }
         a = b;
     }
@@ -99,7 +99,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
                 out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(col), stroke: None, stroke_width: 0.0 });
             }
             if let Some(text) = label_of(s, i) {
-                labels.push(DataLabel { x: p.0 as f32, y: p.1 as f32, text, inside: false });
+                labels.push(DataLabel { x: p.0 as f32, y: p.1 as f32, text, inside: false, pos: LabelPos::Above, off: 0.0 });
             }
         }
     }
@@ -165,6 +165,15 @@ pub(super) fn draw_data_labels(out: &mut Vec<GraphicItem>, labels: &[DataLabel],
         let w = text_w(&l.text, fs) + 4.0;
         let (rect, align) = if l.inside {
             (Rect { x: l.x - w / 2.0, y: l.y - lh / 2.0, w, h: lh }, TextAlign::Center)
+        } else if l.off > 0.0 || l.pos != LabelPos::Above {
+            let o = l.off;
+            match l.pos {
+                LabelPos::Right => (Rect { x: l.x + o, y: l.y - lh / 2.0, w, h: lh }, TextAlign::Left),
+                LabelPos::Left => (Rect { x: l.x - o - w, y: l.y - lh / 2.0, w, h: lh }, TextAlign::Right),
+                LabelPos::Below => (Rect { x: l.x - w / 2.0, y: l.y + o, w, h: lh }, TextAlign::Center),
+                LabelPos::Center => (Rect { x: l.x - w / 2.0, y: l.y - lh / 2.0, w, h: lh }, TextAlign::Center),
+                LabelPos::Above => (Rect { x: l.x - w / 2.0, y: l.y - o - lh, w, h: lh }, TextAlign::Center),
+            }
         } else if beside_right {
             (Rect { x: l.x + GAP / 2.0, y: l.y - lh / 2.0, w, h: lh }, TextAlign::Left)
         } else {

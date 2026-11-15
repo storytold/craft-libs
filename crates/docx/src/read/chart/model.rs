@@ -7,6 +7,33 @@ pub(super) struct DataLabel {
     pub(super) y: f32,
     pub(super) text: String,
     pub(super) inside: bool,
+    /// Where a label that is not `inside` sits relative to (`x`, `y`).
+    pub(super) pos: LabelPos,
+    /// Distance from (`x`, `y`) to the label for `pos` other than `Center`, points (half the marker).
+    pub(super) off: f32,
+}
+
+/// Where a data label sits beside its point (`c:dLblPos`: `t`, `b`, `l`, `r`, `ctr`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LabelPos {
+    Above,
+    Below,
+    Left,
+    Right,
+    Center,
+}
+
+impl LabelPos {
+    pub(super) fn parse(v: &str) -> Option<LabelPos> {
+        Some(match v.trim() {
+            "t" => LabelPos::Above,
+            "b" => LabelPos::Below,
+            "l" => LabelPos::Left,
+            "r" => LabelPos::Right,
+            "ctr" => LabelPos::Center,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,6 +164,10 @@ pub(super) struct Series {
     pub(super) labels: Option<bool>,
     /// The labels' own number format (`c:dLbls/c:numFmt` not linked to the source), if any.
     pub(super) label_fmt: Option<String>,
+    /// The data labels' `c:dLblPos`, when the file gives a known one.
+    pub(super) label_pos: Option<LabelPos>,
+    /// The marker's own fill (`c:marker/c:spPr`); without it markers take the automatic colour.
+    pub(super) marker_color: Option<Rgb>,
     /// The values as the file has them, for data labels (`values` become shares in a 100%
     /// stacked chart); empty when the series shows no labels.
     pub(super) raw: Vec<Option<f64>>,
