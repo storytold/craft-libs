@@ -30,8 +30,8 @@ kind = "fill"
 base = true
 drawing_stroke_width = 16.0
 stroke_drawings = [
-    "adjustment-layer", "bandage-sparkle", "brush-replace", "clip-below", "clip-release", "convert-point",
-    "direct-select", "distribute-bottom", "distribute-hcenter", "distribute-horizontal", "distribute-left",
+    "adjustment-layer", "bandage-sparkle", "brush-replace", "clip-below", "clip-release", "convert-point", "dash-align-corners",
+    "dash-align-exact", "direct-select", "distribute-bottom", "distribute-hcenter", "distribute-horizontal", "distribute-left",
     "distribute-right", "distribute-top", "distribute-vcenter", "distribute-vertical", "eraser-background",
     "eraser-magic", "extract-clip", "font-similar", "fx", "gradient-angle", "gradient-diamond", "gradient-linear",
     "gradient-radial", "gradient-reflected", "insert-clip", "key-auto-bezier", "key-bezier", "key-continuous-bezier",
@@ -1525,6 +1525,16 @@ phosphor = "stroke-align-center"
 name = "stroke_align_outside"
 directional = false
 phosphor = "stroke-align-outside"
+
+[[icon]]
+name = "dash_align_exact"
+directional = false
+phosphor = "dash-align-exact"
+
+[[icon]]
+name = "dash_align_corners"
+directional = false
+phosphor = "dash-align-corners"
 
 [[icon]]
 name = "stroke_cap_butt"

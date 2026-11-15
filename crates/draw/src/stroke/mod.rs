@@ -8,7 +8,22 @@
 use std::fmt;
 use std::ops::RangeInclusive;
 
+use kurbo::{BezPath, CubicBez, Line, ParamCurve, ParamCurveArclen, PathEl, PathSeg, Point, QuadBez, Vec2};
 use serde::{Deserialize, Serialize};
+
+#[cfg(test)]
+mod dash_tests;
+
+/// The shortest run (between corners and path ends) and the smallest pattern total `Corners` fits.
+const MIN_RUN: f64 = 1e-6;
+/// The length and sine below which segments and tangents count as degenerate.
+const EPS: f64 = 1e-9;
+/// The accuracy of arc lengths, in document units.
+const ARCLEN_ACCURACY: f64 = 1e-6;
+/// The distance within which two dash ends count as the same point, so a dash across a corner joins.
+const JOIN_EPS: f64 = 1e-6;
+/// The most dashes one call produces; a path that would need more stays solid.
+const MAX_OUTPUT_DASHES: usize = 200_000;
 
 /// Where the stroke sits on the path. Only a closed path aligns; an open one is always centred.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -301,10 +316,28 @@ impl StrokeStyle {
 
     /// The path cut into its dashes, lengths in document units as [`to_kurbo`](Self::to_kurbo)
     /// scales them times `length_scale` (1 for a document; a preview passes its sample-to-style
-    /// width ratio). A solid style returns the path.
+    /// width ratio). A solid style returns the path, as does a style that fails
+    /// [`validate`](Self::validate) and a pattern that would give more than 200,000 dashes.
+    ///
+    /// [`DashAlign::Exact`] dashes from the dash offset. [`DashAlign::Corners`] ignores the
+    /// offset: each run between corners and path ends is fitted to a whole number of periods and
+    /// starts and ends in the middle of a dash, so a dash is centred on each corner and each end
+    /// of an open path.
     pub fn dashed(&self, path: &kurbo::BezPath, length_scale: f64) -> kurbo::BezPath {
-        let _ = (path, length_scale);
-        todo!("fx.F59")
+        if self.dashes.is_empty() || self.validate().is_err() {
+            return path.clone();
+        }
+        let scale = self.dash_scale() * length_scale;
+        let pattern: Vec<f64> = self.dashes.iter().map(|&d| f64::from(d) * scale).collect();
+        // `!(x > y)` also refuses a NaN total.
+        if !(pattern.iter().sum::<f64>() > MIN_RUN) {
+            return path.clone();
+        }
+        let cut = match self.dash_align {
+            DashAlign::Exact => dash_exact(path, f64::from(self.dash_offset) * scale, &pattern),
+            DashAlign::Corners => dash_corners(path, &pattern),
+        };
+        cut.unwrap_or_else(|| path.clone())
     }
 
     /// The style as a kurbo stroke, for an engine and the editor's line samples: width, join,
@@ -312,15 +345,14 @@ impl StrokeStyle {
     /// width under [`DashUnit::Widths`], taken as they are under [`DashUnit::Document`]. Alignment
     /// and opacity are not part of a kurbo stroke: an engine strokes an aligned closed path twice
     /// as wide and clips to its inside ([`StrokeAlign::Inside`]) or outside
-    /// ([`StrokeAlign::Outside`]), and applies the opacity itself.
+    /// ([`StrokeAlign::Outside`]), and applies the opacity itself. The pattern is the
+    /// [`DashAlign::Exact`] one: a [`DashAlign::Corners`] caller strokes the path of
+    /// [`dashed`](Self::dashed) solid.
     pub fn to_kurbo(&self) -> kurbo::Stroke {
         // new: kurbo `Stroke::new(width).with_join(..).with_miter_limit(..).with_caps(..)
         // .with_dashes(offset, pattern)`. PhotoCraft strokes with its own engine
         // (crates/ui-egui/src/tools/shape_stroke_ui/editor.rs:329-343 renders through it).
-        let scale = match self.dash_unit {
-            DashUnit::Widths => f64::from(self.width),
-            DashUnit::Document => 1.0,
-        };
+        let scale = self.dash_scale();
         let cap = match self.cap {
             LineCap::Butt => kurbo::Cap::Butt,
             LineCap::Round => kurbo::Cap::Round,
@@ -337,4 +369,209 @@ impl StrokeStyle {
             .with_caps(cap)
             .with_dashes(f64::from(self.dash_offset) * scale, self.dashes.iter().map(|&d| f64::from(d) * scale))
     }
+
+    /// What one stored dash length is in document units.
+    fn dash_scale(&self) -> f64 {
+        match self.dash_unit {
+            DashUnit::Widths => f64::from(self.width),
+            DashUnit::Document => 1.0,
+        }
+    }
+}
+
+/// `path` dashed by `pattern` from `offset`; `None` when it would give too many dashes.
+fn dash_exact(path: &BezPath, offset: f64, pattern: &[f64]) -> Option<BezPath> {
+    let mut out = BezPath::new();
+    let mut count = 0usize;
+    for el in kurbo::dash(path.iter(), offset, pattern) {
+        if matches!(el, PathEl::MoveTo(_)) {
+            count += 1;
+            if count > MAX_OUTPUT_DASHES {
+                return None;
+            }
+        }
+        out.push(el);
+    }
+    Some(out)
+}
+
+/// `path` dashed with every run between corners and path ends fitted to whole periods; `None` when
+/// it would give too many dashes.
+fn dash_corners(path: &BezPath, pattern: &[f64]) -> Option<BezPath> {
+    let mut pattern = pattern.to_vec();
+    // An odd pattern repeats with its roles swapped, as kurbo reads it.
+    if pattern.len() % 2 == 1 {
+        pattern.extend_from_within(..);
+    }
+    let period: f64 = pattern.iter().sum();
+    let mut out = BezPath::new();
+    let mut count = 0usize;
+    for (segs, closed) in subpaths(path) {
+        for dash in fit_subpath(segs, closed, &pattern, period, &mut count)? {
+            for el in dash {
+                out.push(el);
+            }
+        }
+    }
+    Some(out)
+}
+
+/// The subpaths of `path` as segments, each with whether it closes.
+fn subpaths(path: &BezPath) -> Vec<(Vec<PathSeg>, bool)> {
+    let mut out = Vec::new();
+    let mut segs: Vec<PathSeg> = Vec::new();
+    let (mut start, mut cur) = (Point::ZERO, Point::ZERO);
+    for el in path.elements() {
+        match *el {
+            PathEl::MoveTo(p) => {
+                if !segs.is_empty() {
+                    out.push((std::mem::take(&mut segs), false));
+                }
+                (start, cur) = (p, p);
+            }
+            PathEl::LineTo(p) => {
+                segs.push(PathSeg::Line(Line::new(cur, p)));
+                cur = p;
+            }
+            PathEl::QuadTo(a, p) => {
+                segs.push(PathSeg::Quad(QuadBez::new(cur, a, p)));
+                cur = p;
+            }
+            PathEl::CurveTo(a, b, p) => {
+                segs.push(PathSeg::Cubic(CubicBez::new(cur, a, b, p)));
+                cur = p;
+            }
+            PathEl::ClosePath => {
+                if cur.distance(start) > EPS {
+                    segs.push(PathSeg::Line(Line::new(cur, start)));
+                }
+                if !segs.is_empty() {
+                    out.push((std::mem::take(&mut segs), true));
+                }
+                cur = start;
+            }
+        }
+    }
+    if !segs.is_empty() {
+        out.push((segs, false));
+    }
+    out
+}
+
+/// The unit direction of `seg` at its end or start; zero for a degenerate segment.
+fn tangent(seg: &PathSeg, at_end: bool) -> Vec2 {
+    let pts: Vec<Point> = match seg {
+        PathSeg::Line(l) => vec![l.p0, l.p1],
+        PathSeg::Quad(q) => vec![q.p0, q.p1, q.p2],
+        PathSeg::Cubic(c) => vec![c.p0, c.p1, c.p2, c.p3],
+    };
+    let direction = if at_end {
+        let anchor = pts[pts.len() - 1];
+        pts[..pts.len() - 1].iter().rev().map(|p| anchor - *p).find(|d| d.hypot() > EPS)
+    } else {
+        let anchor = pts[0];
+        pts[1..].iter().map(|p| *p - anchor).find(|d| d.hypot() > EPS)
+    };
+    direction.map_or(Vec2::ZERO, Vec2::normalize)
+}
+
+/// Whether the path turns where `a` ends and `b` starts.
+fn is_kink(a: &PathSeg, b: &PathSeg) -> bool {
+    let (ta, tb) = (tangent(a, true), tangent(b, false));
+    if ta.hypot() < EPS || tb.hypot() < EPS {
+        return false;
+    }
+    ta.cross(tb).abs() > EPS || ta.dot(tb) < 0.0
+}
+
+fn end_point(el: &PathEl) -> Option<Point> {
+    match *el {
+        PathEl::MoveTo(p) | PathEl::LineTo(p) | PathEl::QuadTo(_, p) | PathEl::CurveTo(_, _, p) => Some(p),
+        PathEl::ClosePath => None,
+    }
+}
+
+fn ends_at(dash: &[PathEl], p: Point) -> bool {
+    dash.last().and_then(end_point).is_some_and(|q| q.distance(p) < JOIN_EPS)
+}
+
+fn starts_at(dash: &[PathEl], p: Point) -> bool {
+    dash.first().and_then(end_point).is_some_and(|q| q.distance(p) < JOIN_EPS)
+}
+
+/// The dashes of one subpath, each as path elements from a `MoveTo`. Every run between kinks (and
+/// the path's ends) is stretched to whole periods and dashed from the middle of the first dash, so
+/// the two half dashes that meet at a corner are joined into one dash; a closed subpath joins its
+/// last dash to its first the same way. A closed subpath without a kink is one run starting at its
+/// first point. `None` when `count` passes [`MAX_OUTPUT_DASHES`].
+fn fit_subpath(segs: Vec<PathSeg>, closed: bool, pattern: &[f64], period: f64, count: &mut usize) -> Option<Vec<Vec<PathEl>>> {
+    let segs: Vec<PathSeg> = segs.into_iter().filter(|s| s.arclen(ARCLEN_ACCURACY) > EPS).collect();
+    let n = segs.len();
+    if n == 0 {
+        return Some(Vec::new());
+    }
+    let kink_after = |i: usize| (closed || i + 1 < n) && is_kink(&segs[i], &segs[(i + 1) % n]);
+    let first = if closed { (0..n).find(|&i| kink_after(i)).map_or(0, |i| (i + 1) % n) } else { 0 };
+    let origin = segs[first].start();
+
+    let mut runs: Vec<Vec<PathSeg>> = Vec::new();
+    let mut current: Vec<PathSeg> = Vec::new();
+    for step in 0..n {
+        let i = (first + step) % n;
+        current.push(segs[i]);
+        if step + 1 < n && kink_after(i) {
+            runs.push(std::mem::take(&mut current));
+        }
+    }
+    runs.push(current);
+
+    let mut dashes: Vec<Vec<PathEl>> = Vec::new();
+    for run in &runs {
+        let length: f64 = run.iter().map(|s| s.arclen(ARCLEN_ACCURACY)).sum();
+        if length <= MIN_RUN {
+            continue;
+        }
+        let periods = (length / period).round().max(1.0);
+        let fit = length / (periods * period);
+        let scaled: Vec<f64> = pattern.iter().map(|p| p * fit).collect();
+        let begin = run[0].start();
+        let mut path = BezPath::new();
+        path.move_to(begin);
+        for seg in run {
+            path.push(seg.as_path_el());
+        }
+        let mut fresh: Vec<Vec<PathEl>> = Vec::new();
+        for el in kurbo::dash(path.iter(), scaled[0] / 2.0, &scaled) {
+            if matches!(el, PathEl::MoveTo(_)) {
+                *count += 1;
+                if *count > MAX_OUTPUT_DASHES {
+                    return None;
+                }
+                fresh.push(vec![el]);
+            } else if let Some(dash) = fresh.last_mut() {
+                dash.push(el);
+            }
+        }
+        // `kurbo::dash` holds back a subpath's first dash, to join it with a dash that wraps through a `ClosePath`,
+        // and emits it last. A run never closes, so its first dash goes back to the front.
+        if fresh.len() > 1 && fresh.last().is_some_and(|dash| starts_at(dash, begin)) {
+            fresh.rotate_right(1);
+        }
+        let mut fresh = fresh.into_iter().peekable();
+        if let Some(prev) = dashes.last_mut()
+            && ends_at(prev, begin)
+            && fresh.peek().is_some_and(|d| starts_at(d, begin))
+            && let Some(head) = fresh.next()
+        {
+            prev.extend(head.into_iter().skip(1));
+        }
+        dashes.extend(fresh);
+    }
+    if closed && dashes.len() > 1 && dashes.last().is_some_and(|d| ends_at(d, origin)) && starts_at(&dashes[0], origin) {
+        let head = dashes.remove(0);
+        if let Some(last) = dashes.last_mut() {
+            last.extend(head.into_iter().skip(1));
+        }
+    }
+    Some(dashes)
 }

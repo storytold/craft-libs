@@ -22,7 +22,7 @@ use egui::{Rect, Response, Ui};
 use std::sync::Arc;
 
 use super::{
-    DashUnit, LineCap, LineJoin, LineStyle, StrokeAlign, StrokeChoiceRow, StrokeField, StrokeMixed, StrokePreview, StrokeSections, StrokeStyle,
+    DashAlign, DashUnit, LineCap, LineJoin, LineStyle, StrokeAlign, StrokeChoiceRow, StrokeField, StrokeMixed, StrokePreview, StrokeSections, StrokeStyle,
     StrokeWords,
 };
 
@@ -45,10 +45,9 @@ const PRESETS: [LineStyle; 3] = [LineStyle::Solid, LineStyle::Dashed, LineStyle:
 pub struct StrokeEditorOutput {
     /// The editor's whole area.
     pub response: Response,
-    /// The valid changes, in order, each the whole new style: a preset row, a select, a segmented button, the check,
-    /// Add pair and Remove pair are `Set`s; a number field's typed value is a `Set` and its scrub a gesture (Escape
-    /// cancels). A style that fails [`StrokeStyle::validate`] is never reported. A binding that writes through has
-    /// them already.
+    /// The valid changes, in order, each the whole new style: a preset row, a select, a segmented button and the check
+    /// are `Set`s; a number field's typed value is a `Set` and its scrub a gesture (Escape cancels). A style that fails
+    /// [`StrokeStyle::validate`] is never reported. A binding that writes through has them already.
     pub events: EditEvents<StrokeStyle>,
     /// The control the events came from, so the host coalesces one field's edits into one undo step.
     pub field: Option<StrokeField>,
@@ -81,7 +80,8 @@ impl Outcome for StrokeEditorOutput {
 ///   three, dash, gap, dash / gap, dash, gap (0–10000, `×`, or `pt` for document units), each with its word under
 ///   it. A field shows its entry of [`StrokeStyle::dashes`] or is blank; typing in the blank after the pattern adds
 ///   an entry, the blanks after it are off, and clearing a field after the first ends the pattern there. A pattern
-///   longer than six continues in further rows of three. Then "Dash offset" (±1,000,000).
+///   longer than six continues in further rows of three. Then "Dash offset" (±1,000,000) and, with
+///   [`StrokeSections::DASH_ALIGN`], "Align dashes" (Exact, Corners).
 /// - While the style fails [`StrokeStyle::validate`], the invalid word shows at the end and nothing is reported.
 /// - [`mixed`](Self::mixed): a mixed field shows the mixed state and lights no button or preset; the first edit sets it
 ///   for all.
@@ -449,6 +449,15 @@ impl Body<'_> {
                 number(ui, &words.dash_offset, "dash-offset", f64::from(style.dash_offset), self.mixed.dash_offset, range, self.dash_unit(), true);
             found.push(StrokeField::DashOffset, event.map(|v| StrokeStyle { dash_offset: v as f32, ..style.clone() }));
         });
+        if self.sections.contains(StrokeSections::DASH_ALIGN) {
+            let align = [
+                (DashAlign::Exact, "dash_align_exact", &words.dash_exact),
+                (DashAlign::Corners, "dash_align_corners", &words.dash_corners),
+            ];
+            let icons = self.sections.contains(StrokeSections::ICONS);
+            let event = choice(ui, &words.dash_align, "dash-align", held(self.mixed.dash_align, style.dash_align), &align, true, icons);
+            found.push(StrokeField::DashAlign, event.map(|dash_align| StrokeStyle { dash_align, ..style.clone() }));
+        }
     }
 }
 

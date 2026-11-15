@@ -17,9 +17,10 @@ const MARGIN_SHARE: f32 = 0.15;
 
 /// A line sample of a [`StrokeStyle`] in a rect: a horizontal line through the rect's centre, drawn
 /// left to right in every reading direction and centred whatever the style's alignment. The line
-/// is dashed with `kurbo::dash` from [`StrokeStyle::to_kurbo`] (the dashes scaled to the sample's
-/// width), then each dash is filled as convex pieces: a quad for the dash, a fan for round caps, a
-/// quad for square caps.
+/// is dashed with [`StrokeStyle::dashed`] (the dashes scaled to the sample's width, so
+/// [`DashAlign::Corners`](crate::stroke::DashAlign::Corners) shows as a dash at both ends), then
+/// each dash is filled as convex pieces: a quad for the dash, a fan for round caps, a quad for
+/// square caps.
 ///
 /// It is a helper of content painters, not a component: [`paint`](Self::paint) fills
 /// [`shapes`](Self::shapes) in the text ink of the painter's surface.
@@ -63,27 +64,24 @@ impl<'a> StrokePreview<'a> {
         let Some((start, end)) = self.line(rect) else {
             return Vec::new();
         };
-        let stroke = self.sample_stroke();
-        if stroke.dash_pattern.is_empty() {
-            pieces.run(&[start, end]);
-        } else {
-            let mut path = BezPath::new();
-            path.move_to(start);
-            path.line_to(end);
-            let mut run: Vec<Point> = Vec::new();
-            for el in kurbo::dash(path.iter(), stroke.dash_offset, &stroke.dash_pattern) {
-                match el {
-                    PathEl::MoveTo(p) => {
-                        pieces.run(&run);
-                        run.clear();
-                        run.push(p);
-                    }
-                    PathEl::LineTo(p) => run.push(p),
-                    _ => {}
+        let mut path = BezPath::new();
+        path.move_to(start);
+        path.line_to(end);
+        // A solid style comes back as the one line, which is a single run.
+        let dashed = self.value.dashed(&path, f64::from(self.width / self.value.width));
+        let mut run: Vec<Point> = Vec::new();
+        for el in dashed.elements() {
+            match *el {
+                PathEl::MoveTo(p) => {
+                    pieces.run(&run);
+                    run.clear();
+                    run.push(p);
                 }
+                PathEl::LineTo(p) => run.push(p),
+                _ => {}
             }
-            pieces.run(&run);
         }
+        pieces.run(&run);
         pieces.out.into_iter().map(|points| PaintShape::Polygon(points.into_iter().map(to_pos).collect())).collect()
     }
 
@@ -95,17 +93,6 @@ impl<'a> StrokePreview<'a> {
         (right > left).then(|| (Point::new(left, y), Point::new(right, y)))
     }
 
-    /// The style's kurbo stroke with the dashes rescaled from the style's width to the sample's, so
-    /// the sample keeps the pattern's proportions.
-    fn sample_stroke(&self) -> kurbo::Stroke {
-        let mut stroke = self.value.to_kurbo();
-        let scale = f64::from(self.width / self.value.width);
-        stroke.dash_offset *= scale;
-        for d in &mut stroke.dash_pattern {
-            *d *= scale;
-        }
-        stroke
-    }
 
     /// Fills [`shapes`](Self::shapes) for `rect` in the painter's ink at the style's opacity.
     pub fn paint(&self, cx: &ContentPainterCx, rect: Rect) {

@@ -2,7 +2,7 @@
 //! selection and the app's choice rows.
 
 use super::{
-    ChoicePainter, LineCap, LineJoin, StrokeAlign, StrokeButton, StrokeChoice, StrokeChoiceRow, StrokeEditor, StrokeMixed, StrokeSections,
+    ChoicePainter, DashAlign, LineCap, LineJoin, StrokeAlign, StrokeButton, StrokeChoice, StrokeChoiceRow, StrokeEditor, StrokeMixed, StrokeSections,
     StrokeStyle,
 };
 use craft_behavior::Mixed;
@@ -36,6 +36,7 @@ fn other_than(base: &StrokeStyle) -> StrokeStyle {
         miter_limit: base.miter_limit / 2.0,
         dashes: StrokeStyle::DASHED.to_vec(),
         dash_offset: 3.0,
+        dash_align: DashAlign::Corners,
         opacity: base.opacity / 2.0,
         ..base.clone()
     }
@@ -54,7 +55,15 @@ fn with_readout(data: &mut StoryData, output: impl Into<StoryOutput>, latest: Op
 #[story(StrokeEditor<'static>, covers = [Default], drive = Drive::Never)]
 fn stroke_editor_panel(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let style = data.value("panel", StrokeStyle::default());
-    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::PANEL).show(ui);
+    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::PANEL | StrokeSections::DASH_ALIGN).show(ui);
+    let latest = out.events.last().map(|event| format!("{event:?}"));
+    with_readout(data, out, latest)
+}
+
+#[story(StrokeEditor<'static>, covers = [], drive = Drive::Never)]
+fn stroke_editor_popover_dash_align(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let style = data.value("popover-align", StrokeStyle::default().with_line_style(super::LineStyle::Dashed));
+    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::POPOVER | StrokeSections::DASH_ALIGN).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
@@ -89,7 +98,7 @@ fn stroke_editor_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         let base = StrokeStyle::default();
         StrokeMixed::of([&base, &other_than(&base)]).expect("two styles")
     });
-    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::POPOVER).mixed(mixed).show(ui);
+    let out = StrokeEditor::new("Stroke", Bind::bound(style)).sections(StrokeSections::POPOVER | StrokeSections::DASH_ALIGN).mixed(mixed).show(ui);
     let latest = out.events.last().map(|event| format!("{event:?}"));
     with_readout(data, out, latest)
 }
