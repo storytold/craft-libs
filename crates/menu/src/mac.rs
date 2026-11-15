@@ -338,6 +338,9 @@ struct MacMenu {
     tx: Sender<Event>,
     rx: Receiver<Event>,
     structure: u64,
+    /// The last build failed: the menus may not show the latest [`MenuBar`] (an item enabled or
+    /// disabled with its key equivalent kept), so the next update builds again.
+    stale: bool,
     window: Option<WindowMenu>,
     /// The latest menus, waiting for the open menu to close.
     pending: Option<MenuBar>,
@@ -355,6 +358,7 @@ impl MacMenu {
             tx,
             rx,
             structure: 0,
+            stale: false,
             window: None,
             pending: None,
             options,
@@ -400,10 +404,12 @@ impl MacMenu {
                 self.entries = entries;
                 self.window = window;
                 self.structure = structure_key(bar);
+                self.stale = false;
                 self.publish();
                 true
             }
             _ => {
+                self.stale = true;
                 // The new menu may have been made NSApp's before the failure.
                 if let Some(old) = &self.menu {
                     let _ = catch_unwind(AssertUnwindSafe(|| {
@@ -460,7 +466,7 @@ impl MacMenu {
     }
 
     fn update(&mut self, bar: &MenuBar) {
-        if self.menu.is_none() || structure_key(bar) != self.structure {
+        if self.menu.is_none() || self.stale || structure_key(bar) != self.structure {
             self.build(bar);
             return;
         }
