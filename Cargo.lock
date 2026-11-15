@@ -1861,6 +1861,7 @@ dependencies = [
  "craft-heif",
  "craft-jpeg",
  "craft-metadata",
+ "craft-video",
  "exr",
  "flate2",
  "half",

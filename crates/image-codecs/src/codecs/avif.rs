@@ -281,4 +281,31 @@ mod tests {
         assert_eq!(&color[4..6], &[0, 9], "BT.2020 non-constant luminance matrix");
         assert!(!avif.windows(4).any(|window| window == b"clli"), "HLG does not signal PQ content-light metadata");
     }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn hlg_encoded_pixels_preserve_reference_white_and_peak() {
+        let mut rgb = Vec::new();
+        for _ in 0..32 {
+            for x in 0..64 {
+                let level = if x < 32 { 1.0 } else { crate::cicp::HLG_PEAK_NITS / super::HDR_REFERENCE_WHITE_NITS };
+                rgb.extend_from_slice(&[level; 3]);
+            }
+        }
+        let avif = super::encode_avif_hdr(64, 32, &rgb, 100, 10, None, super::HdrTransfer::Hlg).unwrap();
+        let mut offset = 0;
+        let payload = loop {
+            let header = avif.get(offset..offset + 8).expect("complete AVIF box header");
+            let size = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
+            assert!(size >= 8 && offset + size <= avif.len(), "valid AVIF box size");
+            if &header[4..] == b"mdat" {
+                break &avif[offset + 8..offset + size];
+            }
+            offset += size;
+        };
+        let frames = craft_video::av1::decode::Decoder::new().decode(payload).unwrap();
+        let luma = &frames.first().expect("encoded AV1 frame").planes[0];
+        assert!((i32::from(luma[16 * 64 + 16]) - 767).abs() <= 5, "diffuse white");
+        assert!((i32::from(luma[16 * 64 + 48]) - 1023).abs() <= 5, "peak white");
+    }
 }
