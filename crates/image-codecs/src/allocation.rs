@@ -277,12 +277,11 @@ mod stored_size_tests {
     #[test]
     fn stored_probe_uses_caller_limits_without_decoding() {
         let mut bmp = Cursor::new(Vec::new());
-        image::write_buffer_with_format(&mut bmp, &vec![0; 300_000 * 3], 1, 300_000, image::ExtendedColorType::Rgb8, image::ImageFormat::Bmp)
-            .unwrap();
+        image::write_buffer_with_format(&mut bmp, &vec![0; 60_000 * 3], 1, 60_000, image::ExtendedColorType::Rgb8, image::ImageFormat::Bmp).unwrap();
         let bytes = bmp.into_inner();
         let limits = crate::Limits::new(u32::MAX, u32::MAX, 128_000_000, 2_048_000_000);
-        assert_eq!(probe_stored_size(&bytes, &limits).unwrap(), (1, 300_000));
-        assert!(probe_stored_size(&bytes, &crate::Limits::default()).is_err());
+        assert_eq!(probe_stored_size(&bytes, &limits).unwrap(), (1, 60_000));
+        assert!(probe_stored_size(&bytes, &crate::Limits::new(u32::MAX, 50_000, u64::MAX, 2_048_000_000)).is_err());
         assert!(probe_stored_size(&bytes[..20], &limits).is_err());
     }
 
