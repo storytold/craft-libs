@@ -759,7 +759,8 @@ fn tables_start(bytes: &[u8]) -> Result<u64> {
 /// selected part's chunks are read. Each chunk must start past the last offset table and inside
 /// the file, carry the selected part's number, and hold one of the part's blocks that no other
 /// chunk of the part holds, so the part's chunks hold every one of its blocks. A scan-line
-/// chunk's y must be the first line of its block.
+/// chunk's y must be the first line of its block, and no chunk may declare more bytes than the
+/// file has left after it.
 fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &mut impl ChannelsReader) -> Result<()> {
     let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
     let multipart = meta.requirements.is_multilayer();
@@ -795,6 +796,17 @@ fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &m
             if usize::try_from(part).ok() != Some(index) {
                 return Err(malformed(format!("the chunk at offset {offset} belongs to part {part}, not part {index}")));
             }
+        }
+        // The crate allocates a chunk's declared payload before it reads it, so the payload must
+        // fit in the rest of the file. The length follows the part number and the block's y, or
+        // its four tile coordinates.
+        let fields = if matches!(header.blocks, exr::meta::BlockDescription::Tiles(_)) { 16 } else { 4 };
+        let size_at = if multipart { 4 } else { 0 } + fields;
+        let size = chunk.get(size_at..size_at + 4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(i32::from_le_bytes);
+        let size = size.ok_or_else(|| malformed(format!("the chunk at offset {offset} is cut off")))?;
+        let left = chunk.len() - (size_at + 4);
+        if usize::try_from(size).is_ok_and(|size| size > left) {
+            return Err(malformed(format!("the chunk at offset {offset} declares {size} bytes, but {left} remain in the file")));
         }
         let chunk = Chunk::read(&mut Cursor::new(chunk), meta).map_err(map_exr)?;
         let tile = header.get_block_data_indices(&chunk.compressed_block).map_err(map_exr)?;

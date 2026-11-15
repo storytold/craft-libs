@@ -522,6 +522,38 @@ fn a_scan_line_chunk_beside_a_deep_part_must_start_at_its_block_s_first_line() {
     }
 }
 
+/// A mixed file whose flat part, first, is one pixel of these float channels (each 1.0) in one
+/// `tile` × `tile` tile, held by a chunk that declares `size` payload bytes.
+fn mixed_one_tile(channels: &[&str], tile: u32, size: i32) -> Vec<u8> {
+    let (plain, offsets) = mixed_file(false, false);
+    let mut out = mixed_headers_with(false, true, (1, 1), 0, channels, tile);
+    let mut chunk = Vec::new();
+    [0i32, 0, 0, 0, 0, size].iter().for_each(|v| chunk.extend_from_slice(&v.to_le_bytes()));
+    channels.iter().for_each(|_| chunk.extend_from_slice(&1f32.to_le_bytes()));
+    let flat_at = out.len() + 3 * 8;
+    let deep_at = flat_at + chunk.len();
+    for at in [flat_at, deep_at, deep_at + offsets[1][1] - offsets[1][0]] {
+        out.extend_from_slice(&(at as u64).to_le_bytes());
+    }
+    out.extend_from_slice(&chunk);
+    out.extend_from_slice(&plain[offsets[1][0]..]);
+    out
+}
+
+#[test]
+fn a_chunk_beside_a_deep_part_must_fit_the_rest_of_the_file() {
+    // 2^15 × 2^15 tiles of three floats let a chunk hold up to 12 GiB, so the crate would
+    // allocate the 2 GiB this chunk declares before it found the file too short.
+    let limits = Limits::default();
+    let channels = ["B", "G", "R"];
+    let good = mixed_one_tile(&channels, 1 << 15, 12);
+    assert_eq!(decode_part(&good, 0, &all, &limits).unwrap().channel("R").unwrap().samples, Samples::F32(vec![1.0]));
+    let b = mixed_one_tile(&channels, 1 << 15, i32::MAX);
+    for r in [decode_part(&b, 0, &all, &limits).map(|_| ()), decode_display_part(&b, 0, &all, &|_| 0.0, &limits).map(|_| ())] {
+        assert!(matches!(&r, Err(Error::Malformed(m)) if m.contains("remain in the file")), "{r:?}");
+    }
+}
+
 #[test]
 fn a_tile_too_large_to_address_is_refused_before_a_chunk_is_read() {
     // Five float channels in 10^9 × 10^9 tiles: 20 bytes a pixel times 10^18 pixels does not fit
@@ -529,19 +561,7 @@ fn a_tile_too_large_to_address_is_refused_before_a_chunk_is_read() {
     let limits = Limits::default();
     let channels = ["A", "B", "C", "D", "E"];
     let tile = 1_000_000_000u32;
-
-    let (plain, offsets) = mixed_file(false, false);
-    let mut mixed = mixed_headers_with(false, true, (1, 1), 0, &channels, tile);
-    let mut chunk = Vec::new();
-    [0i32, 0, 0, 0, 0, 20].iter().for_each(|v| chunk.extend_from_slice(&v.to_le_bytes()));
-    channels.iter().for_each(|_| chunk.extend_from_slice(&1f32.to_le_bytes()));
-    let flat_at = mixed.len() + 3 * 8;
-    let deep_at = flat_at + chunk.len();
-    for at in [flat_at, deep_at, deep_at + offsets[1][1] - offsets[1][0]] {
-        mixed.extend_from_slice(&(at as u64).to_le_bytes());
-    }
-    mixed.extend_from_slice(&chunk);
-    mixed.extend_from_slice(&plain[offsets[1][0]..]);
+    let mixed = mixed_one_tile(&channels, tile, 20);
 
     // A file of flat parts only, read by the crate's own reader, with its 4 × 4 tiles widened.
     let mut flat_only = file(vec![layer(None, 1, 1, &channels, true, exr::prelude::Compression::Uncompressed)], (1, 1));
