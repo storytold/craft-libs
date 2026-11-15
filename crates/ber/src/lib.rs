@@ -4,7 +4,7 @@
 //! what CMS writers use: indefinite lengths (which streaming signers write) and OCTET STRINGs in
 //! pieces (constructed). What is DER already is kept byte for byte, an element with a definite
 //! length inside an indefinite one too, so that the bytes a signature covers (signed attributes,
-//! a certificate's body) are those the signer wrote. For S/MIME (#30): `mailcraft-smime` checks
+//! a certificate's body) are those the signer wrote. For S/MIME: `craft-smime` checks
 //! signatures with it, and a message's reader takes out what an opaque signed one holds
 //! ([`signed_content`]).
 //!
@@ -12,28 +12,34 @@
 //! ([`MAX_DEPTH`]), and the work is linear in the input (times the bounded depth).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-/// CMS's id-signedData and id-data (RFC 5652 §5.1, §4), as DER.
-const SIGNED_DATA: &[u8] = &[0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02];
-const DATA: &[u8] = &[0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
+/// CMS's id-signedData and id-data (RFC 5652 §5.1, §4), as OBJECT IDENTIFIER values.
+const SIGNED_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02];
+const DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
 
 /// What the CMS `cms` holds when it is SignedData with its content inside, of type id-data: the
 /// MIME entity an opaque signed message (`application/pkcs7-mime`, RFC 8551 §3.5) signed, for
-/// reading as the message. Nothing is checked here (`mailcraft-smime` checks it); `None` for any
+/// reading as the message. Nothing is checked here (`craft-smime` checks it); `None` for any
 /// other CMS (an Encrypted message's enveloped data) or bytes that aren't one.
 pub fn signed_content(cms: &[u8]) -> Option<Vec<u8>> {
     let der = to_der(cms)?;
-    let (info, _) = read(&der)?;
-    let info = children(info.value)?;
-    let [oid, explicit] = info.as_slice() else { return None };
-    if oid.whole != SIGNED_DATA || explicit.tag != 0xa0 {
+    let (info, rest) = read(&der)?;
+    if info.tag != 0x30 || !rest.is_empty() {
         return None;
     }
-    let (signed, _) = read(explicit.value)?;
+    let info = children(info.value)?;
+    let [oid, explicit] = info.as_slice() else { return None };
+    if oid.tag != 0x06 || oid.value != SIGNED_DATA || explicit.tag != 0xa0 {
+        return None;
+    }
+    let (signed, rest) = read(explicit.value)?;
+    if signed.tag != 0x30 || !rest.is_empty() {
+        return None;
+    }
     let signed = children(signed.value)?;
     let encap = signed.get(2).filter(|e| e.tag == 0x30)?;
     let encap = children(encap.value)?;
     let [kind, content] = encap.as_slice() else { return None };
-    if kind.whole != DATA || content.tag != 0xa0 {
+    if kind.tag != 0x06 || kind.value != DATA || content.tag != 0xa0 {
         return None;
     }
     let (octets, rest) = read(content.value)?;
@@ -306,4 +312,75 @@ fn put_length(out: &mut Vec<u8>, len: usize) {
     let digits = bytes.get(skip..).unwrap_or_default();
     out.push(0x80 | digits.len() as u8);
     out.extend_from_slice(digits);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        put_length(&mut out, value.len());
+        out.extend_from_slice(value);
+        out
+    }
+
+    fn cms(outer_tag: u8, signed_tag: u8, oid_tag: u8, long_oid: bool, trailing: bool) -> Vec<u8> {
+        let oid = |value: &[u8]| {
+            if long_oid {
+                let mut out = vec![oid_tag, 0x81, 9];
+                out.extend_from_slice(value);
+                out
+            } else {
+                tlv(oid_tag, value)
+            }
+        };
+        let mut encap = oid(DATA);
+        encap.extend(tlv(0xa0, &tlv(0x04, b"hello")));
+        let mut signed = tlv(0x02, &[1]);
+        signed.extend(tlv(0x31, &[]));
+        signed.extend(tlv(0x30, &encap));
+        signed.extend(tlv(0x31, &[]));
+        let mut signed = tlv(signed_tag, &signed);
+        if trailing {
+            signed.extend(tlv(0x05, &[]));
+        }
+        let mut info = oid(SIGNED_DATA);
+        info.extend(tlv(0xa0, &signed));
+        tlv(outer_tag, &info)
+    }
+
+    #[test]
+    fn extracts_content_with_der_and_ber_oid_lengths() {
+        for long_oid in [false, true] {
+            assert_eq!(signed_content(&cms(0x30, 0x30, 0x06, long_oid, false)), Some(b"hello".to_vec()));
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_cms_container_and_oid_tags() {
+        for (outer, signed, oid) in [(0x31, 0x30, 0x06), (0x30, 0x31, 0x06), (0x30, 0x30, 0x04)] {
+            assert_eq!(signed_content(&cms(outer, signed, oid, false, false)), None);
+        }
+    }
+
+    #[test]
+    fn rejects_extra_signed_data_inside_explicit_container() {
+        assert_eq!(signed_content(&cms(0x30, 0x30, 0x06, false, true)), None);
+    }
+
+    #[test]
+    fn joins_indefinite_octet_string_pieces() {
+        assert_eq!(to_der(&[0x24, 0x80, 0x04, 1, b'a', 0x04, 1, b'b', 0, 0]), Some(vec![0x04, 2, b'a', b'b']));
+    }
+
+    #[test]
+    fn rejects_truncated_and_over_nested_input() {
+        assert_eq!(to_der(&[0x04, 2, b'a']), None);
+        let mut nested = tlv(0x04, &[]);
+        for _ in 0..=MAX_DEPTH {
+            nested = tlv(0x30, &nested);
+        }
+        assert_eq!(to_der(&nested), None);
+    }
 }
