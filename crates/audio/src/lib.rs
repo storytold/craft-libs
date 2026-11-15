@@ -27,7 +27,8 @@
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`]
-//!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-encode`: the packet encoder).
+//!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-encode`: the packet encoder), [`qoa`]
+//!   (`qoa-decode`, `qoa-encode`: whole QOA files).
 //!
 //! The shared types below build with no features.
 
@@ -49,6 +50,8 @@ pub mod opus;
 mod pcm;
 #[cfg(feature = "peaks")]
 pub mod peaks;
+#[cfg(any(feature = "qoa-decode", feature = "qoa-encode"))]
+pub mod qoa;
 #[cfg(feature = "decode-native")]
 mod read;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
@@ -66,6 +69,9 @@ mod wav;
     feature = "vorbis-encode"
 ))]
 mod write;
+
+/// Range-backed PCM WAVE access and a 16-bit PCM writer.
+pub mod wav_range;
 #[cfg(feature = "vorbis-encode")]
 pub use write::{OGG_BITRATES, encode_ogg};
 
