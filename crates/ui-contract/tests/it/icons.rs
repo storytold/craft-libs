@@ -248,7 +248,7 @@ fn shapes(group: &Group) -> Vec<Shape> {
 /// larger number into the other axis.
 fn spread(painted: &[Shape]) -> (i64, i64) {
     let mut ranked: Vec<&Shape> = painted.iter().collect();
-    ranked.sort_by(|a, b| b.area().cmp(&a.area()));
+    ranked.sort_by_key(|shape| std::cmp::Reverse(shape.area()));
     match ranked.as_slice() {
         [first, second, ..] => {
             let ((ax, ay), (bx, by)) = (first.centre(), second.centre());
