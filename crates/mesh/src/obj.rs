@@ -400,6 +400,7 @@ impl Reader<'_> {
                 self.vn.push(n.unwrap_or(NAN3));
                 self.bad_lines += usize::from(n.is_none());
             }
+            "s" if self.options.groups_as_objects => {}
             "s" => {
                 self.slot = None;
                 self.smoothing = match it.next() {
