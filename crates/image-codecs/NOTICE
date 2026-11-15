@@ -5,7 +5,8 @@ Declared license: (MIT OR Apache-2.0) AND IJG.
 This software is based in part on the work of the Independent JPEG Group.
 
 The MIT license and unaltered upstream IJG and SIMD notices follow. The Apache-2.0
-alternative is also retained in licenses/jpeg-encoder-0.6.1 at the repository root.
+alternative is also retained in licenses/jpeg-encoder-0.6.1 at the repository root
+(https://github.com/storytold/craft-libs/tree/main/licenses/jpeg-encoder-0.6.1).
 The dependency is used unmodified; no encoder implementation is vendored here.
 
 LICENSE-MIT

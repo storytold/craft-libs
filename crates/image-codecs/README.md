@@ -346,4 +346,5 @@ JPEG encoding uses `jpeg-encoder` 0.6.1, including work from the Independent JPE
 Retain this crate's [NOTICE](NOTICE) with binary distributions using that encoder. It includes
 its MIT license, the IJG acknowledgement and original IJG/SIMD notices. Both upstream license
 alternatives and source checksums are retained in
-[`licenses/jpeg-encoder-0.6.1`](../../licenses/jpeg-encoder-0.6.1) at the repository root.
+[`licenses/jpeg-encoder-0.6.1`](https://github.com/storytold/craft-libs/tree/main/licenses/jpeg-encoder-0.6.1)
+at the repository root.
