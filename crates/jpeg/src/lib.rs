@@ -1709,3 +1709,6 @@ pub use encode::{ChromaSubsampling, EncodeError, encode_baseline};
 
 mod app14;
 pub use app14::adobe_transform;
+
+mod rgba;
+pub use rgba::{UnsupportedComponents, to_rgba8};
