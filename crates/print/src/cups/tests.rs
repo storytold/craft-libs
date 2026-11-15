@@ -509,3 +509,18 @@ fn destination_path_rejects_routing_syntax_before_connecting() {
     let destination = super::Destination { name: "x".repeat(257), is_class: false };
     assert!(super::destination_path(&destination).is_err());
 }
+
+#[test]
+fn separate_queue_query_preserves_optional_discovery_errors() {
+    let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0x0403, &[&group(1)]))]).unwrap();
+    assert!(super::queues_at(fake.endpoint(), true).is_err(), "authorization refusal is not an empty class list");
+    let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0x0501, &[&group(1)]))]).unwrap();
+    assert!(super::queues_at(fake.endpoint(), true).unwrap().is_empty(), "unsupported class operation is absent");
+    let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0, &[&group(1), &group(4), &printer_name("Pool")]))]).unwrap();
+    let queues = super::queues_at(fake.endpoint(), true).unwrap();
+    assert_eq!(queues.len(), 1);
+    assert!(queues[0].is_class);
+    assert!(!queues[0].is_default, "default resolution is caller-owned for this API");
+    let request = fake.request().unwrap();
+    assert_eq!(&ipp_body(&request).unwrap()[..4], &[1, 1, 0x40, 0x05]);
+}

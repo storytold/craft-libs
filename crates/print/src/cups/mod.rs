@@ -131,7 +131,9 @@ pub fn cups_reachable() -> bool {
     endpoints().iter().any(reachable)
 }
 
-pub(crate) fn reachable(server: &Server) -> bool {
+/// Probe a caller-authorized endpoint without sending a print request.
+/// DNS and Unix connect have the blocking limitations documented on this module.
+pub fn reachable(server: &Server) -> bool {
     connect(server).is_ok()
 }
 
@@ -280,29 +282,36 @@ pub struct Destination {
 /// List both printer queues and classes from caller-selected CUPS endpoints.
 /// The caller owns endpoint selection/authorization; this API does not discover network hosts.
 pub fn destinations_at(endpoints: &[Server]) -> Result<Vec<Queue>, Error> {
-    let mut out = Vec::new();
-    for (operation, is_class) in [(OPERATION_CUPS_GET_PRINTERS, false), (0x4005, true)] {
-        let reply = post(endpoints, "/", &discovery_request(operation), DISCOVERY_TIMEOUT, true)?;
-        let parsed = parse_reply(&reply)?;
-        if !status_ok(parsed.status) {
-            if parsed.status == 0x0406 || (is_class && parsed.status == 0x0501) {
-                continue;
-            }
-            return Err(refused(parsed.status));
-        }
-        for mut queue in parsed.queues {
-            queue.is_class = is_class;
-            if out.len() >= MAX_PRINTERS {
-                return Err(Error::Spool("too many CUPS destinations".into()));
-            }
-            out.push(queue);
-        }
+    let mut out = queues_at(endpoints, false)?;
+    out.extend(queues_at(endpoints, true)?);
+    if out.len() > MAX_PRINTERS {
+        return Err(Error::Spool("too many CUPS destinations".into()));
     }
     let default = default_at(endpoints)?;
     for queue in &mut out {
         queue.is_default = default.as_deref() == Some(queue.name.as_str());
     }
     Ok(out)
+}
+
+/// List either printer queues or classes, without resolving defaults. Applications can
+/// explicitly choose whether an optional class/default query failure should hide otherwise
+/// usable printer queues. No error is swallowed here except CUPS's absent/unsupported list.
+pub fn queues_at(endpoints: &[Server], is_class: bool) -> Result<Vec<Queue>, Error> {
+    let operation = if is_class { 0x4005 } else { OPERATION_CUPS_GET_PRINTERS };
+    let reply = post(endpoints, "/", &discovery_request(operation), DISCOVERY_TIMEOUT, true)?;
+    let parsed = parse_reply(&reply)?;
+    if !status_ok(parsed.status) {
+        if parsed.status == 0x0406 || (is_class && parsed.status == 0x0501) {
+            return Ok(Vec::new());
+        }
+        return Err(refused(parsed.status));
+    }
+    let mut queues = parsed.queues;
+    for queue in &mut queues {
+        queue.is_class = is_class;
+    }
+    Ok(queues)
 }
 
 /// The scheduler's default queue; not-found means no default has been configured.
