@@ -97,9 +97,18 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
         for x in 0..wu {
             match depth {
                 1 => {
-                    // A set bit is black.
                     let bit = (row[x / 8] >> (7 - x % 8)) & 1;
-                    out.push(if bit == 1 { 0 } else { 255 });
+                    if map_type == 1 {
+                        // The bit is an index into the (two-entry or longer) colour map.
+                        let i = usize::from(bit);
+                        if i >= entries {
+                            return Err(bad("pixel index is outside the colour map"));
+                        }
+                        out.extend_from_slice(&[map[i], map[entries + i], map[2 * entries + i]]);
+                    } else {
+                        // A set bit is black.
+                        out.push(if bit == 1 { 0 } else { 255 });
+                    }
                 }
                 8 if map_type == 1 => {
                     let i = usize::from(row[x]);
@@ -115,12 +124,20 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
                 }
                 _ => {
                     let p = &row[4 * x..4 * x + 4];
-                    out.extend_from_slice(&if kind == 3 { [p[1], p[2], p[3], p[0]] } else { [p[3], p[2], p[1], p[0]] });
+                    // In the standard types the first byte (X in XBGR) is unused, not alpha.
+                    out.extend_from_slice(&if kind == 3 { [p[1], p[2], p[3], p[0]] } else { [p[3], p[2], p[1], 255] });
                 }
             }
         }
     }
     Image::from_u8(w, h, layout, out)
+}
+
+/// A buffer of `cap` bytes, or an error instead of an abort when the allocation cannot be made.
+fn reserve(cap: usize) -> std::result::Result<Vec<u8>, std::collections::TryReserveError> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(cap)?;
+    Ok(v)
 }
 
 /// Writes an uncompressed rasterfile: 8-bit gray, 24-bit RGB or 32-bit RGBA, in the RGB-ordered type.
@@ -145,7 +162,8 @@ pub(crate) fn encode(src: &Image, plan: Plan) -> Result<Vec<u8>, CodecError> {
     if data.len() != wu * hu * bytes {
         return Err(enc("the image has the wrong number of samples".into()));
     }
-    let mut out = Vec::with_capacity(HEADER + len as usize);
+    let mut out = reserve(HEADER.checked_add(len as usize).ok_or_else(|| enc("image too large".into()))?)
+        .map_err(|_| enc("the image is too large to encode".into()))?;
     for v in [MAGIC, w, h, depth as u32, len, 3, 0, 0] {
         out.extend_from_slice(&v.to_be_bytes());
     }
@@ -216,6 +234,32 @@ mod tests {
         assert!(decode(&f, &Limits::default()).is_err());
         let f = file(1, 1, &[], 0, 3, 1, &[0b1010_0000, 0]);
         assert_eq!(decode(&f, &Limits::default()).unwrap().data(), &[0, 255, 0]);
+    }
+
+    #[test]
+    fn one_bit_files_with_a_colour_map_read_as_colour() {
+        // Two entries: red plane, green plane, blue plane; bit 0 is entry 0.
+        let map = [10, 20, 30, 40, 50, 60];
+        let f = file(1, 1, &map, 1, 3, 1, &[0b0100_0000, 0]);
+        let img = decode(&f, &Limits::default()).unwrap();
+        assert_eq!((img.layout(), img.data()), (ChannelLayout::Rgb, &[10, 30, 50, 20, 40, 60, 10, 30, 50][..]));
+        // A one-entry map has no entry for a set bit.
+        assert!(decode(&file(1, 1, &[1, 2, 3], 1, 1, 1, &[0b1000_0000, 0]), &Limits::default()).is_err());
+    }
+
+    #[test]
+    fn the_unused_first_byte_of_standard_32_bit_pixels_is_not_alpha() {
+        let img = decode(&file(32, 1, &[], 0, 1, 1, &[0, 30, 20, 10]), &Limits::default()).unwrap();
+        assert_eq!((img.layout(), img.data()), (ChannelLayout::Rgba, &[10, 20, 30, 255][..]));
+        // In the RGB-ordered type the first byte is the alpha the writer stores there.
+        let img = decode(&file(32, 3, &[], 0, 1, 1, &[7, 10, 20, 30]), &Limits::default()).unwrap();
+        assert_eq!(img.data(), &[10, 20, 30, 7]);
+    }
+
+    #[test]
+    fn an_output_buffer_too_large_to_allocate_is_an_error() {
+        assert!(reserve(usize::MAX).is_err());
+        assert!(reserve(16).is_ok());
     }
 
     #[test]

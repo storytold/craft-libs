@@ -56,7 +56,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | Cineon | yes | yes | U16 (10-bit code values read and written exactly through U16) | Gray, RGB | no | no | no | no | no | no | no | built in |
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
 | Amiga IFF (ILBM/PBM) | yes | yes (24-bit ILBM) | U8 | RGB, RGBA | yes (1-bit mask plane on write) | no | no | no | no | no | no | built in |
-| Sun Raster (`.ras`) | yes (incl. RLE and colour maps) | yes (uncompressed) | U8 | Gray, Gray+A, RGB, RGBA | yes | no | no | no | no | no | no | built in |
+| Sun Raster (`.ras`) | yes (incl. RLE and colour maps) | yes (uncompressed) | U8 | Gray, RGB, RGBA | yes | no | no | no | no | no | no | built in |
 | AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
 
