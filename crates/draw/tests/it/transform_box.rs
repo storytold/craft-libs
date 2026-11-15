@@ -10,7 +10,7 @@ use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{Canvas, RulerText, Snap};
 use craft_ui::canvas::{Guide, GuideKey};
 use craft_ui::canvas_controls::Guides;
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Pos2, Vec2};

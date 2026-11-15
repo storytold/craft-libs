@@ -8,7 +8,7 @@ use craft_draw::ui::{
 };
 use craft_ui::canvas::{Canvas, Guide};
 use craft_ui::canvas_controls::Guides;
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Id, Pos2, Vec2 as ScreenVec, vec2};
 use std::cell::RefCell;

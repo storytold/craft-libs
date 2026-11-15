@@ -2,7 +2,7 @@
 //! Escape, and checks what every tool owes the canvas.
 
 use crate::canvas::{Canvas, CanvasTool, Snap, ToolHost, ToolPath};
-use crate::contract::{BodyCx, ShowContainer as _};
+use crate::contract::{BodyCx, Props as _, ShowContainer as _};
 use crate::runtime::access::Role;
 use crate::testing::{Fixture, Target, pointer};
 use craft_behavior::kurbo::Size;

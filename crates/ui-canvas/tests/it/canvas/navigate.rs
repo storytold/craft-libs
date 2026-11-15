@@ -8,7 +8,7 @@ use craft_ui::canvas::{
     WheelNavigation,
 };
 use craft_ui::canvas_controls::Guides;
-use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::commands::{self, CommandRef, FirePhase, FireSource};
 use craft_ui::runtime::frame;
