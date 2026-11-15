@@ -28,6 +28,7 @@ fn sample(comp: DngCompression) -> Vec<u8> {
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: craft_raw::RawNotices::default(),
     };
     craft_raw::write_dng(&raw, &DngWriteOptions { compression: comp, ..Default::default() }).unwrap()
 }
