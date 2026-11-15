@@ -568,7 +568,12 @@ pub struct LinkedRecord<'a> {
     pub raw: &'a [u8],
 }
 
-impl LinkedRecord<'_> {
+impl<'a> LinkedRecord<'a> {
+    /// The complete item, excluding framing and padding; absent for a damaged tail.
+    pub fn item(&self) -> Option<&'a [u8]> {
+        framed_record(self.raw).map(|(item, _)| item)
+    }
+
     /// The unique id as text, when it is readable and valid UTF-8.
     pub fn uuid_str(&self) -> Option<&str> {
         std::str::from_utf8(self.uuid?).ok()
@@ -594,17 +599,26 @@ fn record_uuid(item: &[u8]) -> Option<&[u8]> {
 /// The records of a linked layer block's data, in order, each with its unique id when its header
 /// is readable. A tail that is no complete record is returned as one record without an id.
 pub fn linked_records(data: &[u8]) -> Vec<LinkedRecord<'_>> {
-    let mut out = Vec::new();
+    iter_linked_records(data).collect()
+}
+
+/// Stream the same raw views as [`linked_records`] without allocating a record list.
+/// Complete frames with malformed inner headers do not hide subsequent frames;
+/// an incomplete tail is yielded once with no identifier.
+pub fn iter_linked_records(data: &[u8]) -> impl Iterator<Item = LinkedRecord<'_>> {
     let mut rest = data;
-    while !rest.is_empty() {
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
         let Some((item, raw)) = framed_record(rest) else {
-            out.push(LinkedRecord { uuid: None, raw: rest });
-            break;
+            let tail = rest;
+            rest = &[];
+            return Some(LinkedRecord { uuid: None, raw: tail });
         };
-        out.push(LinkedRecord { uuid: record_uuid(item), raw });
         rest = rest.get(raw.len()..).unwrap_or_default();
-    }
-    out
+        Some(LinkedRecord { uuid: record_uuid(item), raw })
+    })
 }
 
 /// The unique ids of every record of a linked layer block's data that has a readable one.
@@ -1158,5 +1172,58 @@ mod tests {
         let s = SmartObject { uuid: "x".into(), quad: [[f64::NAN; 2]; 4], size: None, warp: None };
         let (_, (w, h)) = s.bake_scale(100.0, 100.0, 4.0, doc);
         assert!(u64::from(w) * u64::from(h) <= MAX_BAKE_PIXELS);
+    }
+}
+
+#[cfg(test)]
+mod embedded_header_tests {
+    use super::*;
+
+    #[test]
+    fn headers_do_not_require_resident_payload() {
+        let data = encode_embedded_file("id", "a.psd", b"payload");
+        let record = iter_linked_records(&data).next().unwrap();
+        let item = record.item().unwrap();
+        let header = embedded_file_header(item).unwrap();
+        assert_eq!(header.uuid, "id");
+        assert_eq!(header.name, "a.psd");
+        assert_eq!(header.payload(item), Some(&b"payload"[..]));
+        assert_eq!(embedded_file_header(&item[..header.data_offset]).unwrap(), header);
+        assert_eq!(header.payload(&item[..header.data_offset]), None);
+        for n in 0..header.data_offset {
+            assert!(embedded_file_header(&item[..n]).is_err());
+        }
+    }
+
+    #[test]
+    fn filename_limits_and_lossy_metadata_are_preserved() {
+        let data = encode_embedded_file("x", &"a".repeat(32767), b"");
+        let item = iter_linked_records(&data).next().unwrap().item().unwrap();
+        assert_eq!(embedded_file_header(item).unwrap().name.len(), 32767);
+        let data = encode_embedded_file("x", &"a".repeat(32768), b"");
+        assert!(embedded_file_header(iter_linked_records(&data).next().unwrap().item().unwrap()).is_err());
+        let data = encode_embedded_file("x", "y", b"payload");
+        let mut item = iter_linked_records(&data).next().unwrap().item().unwrap().to_vec();
+        item[9] = 0xff;
+        item[14..16].copy_from_slice(&0xd800u16.to_be_bytes());
+        let h = embedded_file_header(&item).unwrap();
+        assert_eq!(h.uuid, "\u{fffd}");
+        assert_eq!(h.name, "\u{fffd}");
+        item[0..4].copy_from_slice(b"liFE");
+        assert!(embedded_file_header(&item).is_err());
+    }
+
+    #[test]
+    fn malformed_inner_records_do_not_hide_later_files() {
+        let mut data = vec![0; 8]; // A complete empty item, not a truncated frame.
+        data.extend(encode_embedded_file("wanted", "x", b"ok"));
+        data.extend([1, 2, 3]); // Incomplete tail retained, never interpreted as an item.
+        let records: Vec<_> = iter_linked_records(&data).collect();
+        assert_eq!(records, linked_records(&data));
+        assert!(embedded_file_header(records[0].item().unwrap()).is_err());
+        let item = records[1].item().unwrap();
+        assert_eq!(embedded_file_header(item).unwrap().payload(item), Some(&b"ok"[..]));
+        assert_eq!(records[2].item(), None);
+        assert_eq!(records[2].raw, &[1, 2, 3]);
     }
 }
