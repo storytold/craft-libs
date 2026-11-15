@@ -64,6 +64,7 @@ fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: craft_raw::RawNotices::default(),
     }
 }
 
@@ -948,18 +949,31 @@ fn malformed_semantic_masks_are_skipped() {
         let mut zero = mask_ifd(2, 2, "zero size", vec![0; 4]);
         zero.set(t::IMAGE_WIDTH, Value::Long(vec![0]));
         ifd0.add_sub_ifd(zero);
+        // A 4x4 8-bit mask needs 16 visible samples; three bytes must not be
+        // accepted as a synthetic mask with thirteen zero-filled samples.
         let mut short = mask_ifd(4, 4, "short strip", vec![200; 3]);
         short.set(t::MASK_SUB_AREA, Value::Long(vec![u32::MAX, u32::MAX, u32::MAX, u32::MAX]));
         ifd0.add_sub_ifd(short);
+        let mut valid = mask_ifd(4, 2, "valid crop", vec![10, 20, 30, 40, 50, 60, 70, 255]);
+        valid.set(t::MASK_SUB_AREA, Value::Long(vec![1, 2, 8, 4]));
+        ifd0.add_sub_ifd(valid);
         let mut outside = mask_ifd(2, 2, "sub area too small", vec![255; 4]);
         outside.set(t::MASK_SUB_AREA, Value::Long(vec![3, 0, 2, 4]));
         ifd0.add_sub_ifd(outside);
     });
-    assert_eq!(decode(&bytes).unwrap().cpp, 3);
+    let raw = decode(&bytes).unwrap();
+    let baseline = decode(&profile_dng(ByteOrder::Little, |_| {})).unwrap();
+    assert_eq!((raw.width, raw.height, raw.cpp), (8, 6, 3));
+    assert_eq!(raw.data, baseline.data, "optional damaged masks must not change base image samples");
     let masks = craft_raw::semantic_masks(&bytes);
     let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(names, ["short strip", "sub area too small"]);
-    assert!(masks.iter().all(|m| m.sub_area.is_none()), "sub areas the mask doesn't fit are ignored");
+    assert_eq!(names, ["valid crop", "sub area too small"], "the truncated mask is omitted, and later usable masks survive");
+    assert_eq!(masks[0].data, [10u16, 20, 30, 40, 50, 60, 70, 255].map(|sample| sample * 257));
+    assert_eq!(masks[0].sub_area, Some(craft_raw::semantic::MaskSubArea { top: 1, left: 2, full_width: 8, full_height: 4 }));
+    assert!((masks[0].value_at(2.5, 1.5) - 10. / 255.).abs() < 1e-4);
+    assert_eq!(masks[0].value_at(1.5, 1.5), 0.);
+    assert!(masks[1].sub_area.is_none(), "the complete mask survives while a sub area it doesn't fit is ignored");
+    assert_eq!(masks[1].data, vec![65535; 4]);
     for m in &masks {
         assert_eq!(m.data.len(), m.width * m.height);
     }
