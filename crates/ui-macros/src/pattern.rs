@@ -1,5 +1,6 @@
 //! `#[derive(Pattern)]`: the marker impl and the registration.
 
+use crate::util::ui_crate;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Attribute, DeriveInput, Type};
@@ -12,17 +13,17 @@ struct Options {
     probe: TokenStream,
 }
 
-fn options(attrs: &[Attribute]) -> syn::Result<Options> {
+fn options(k: &TokenStream, attrs: &[Attribute]) -> syn::Result<Options> {
     let mut types = Vec::new();
-    let mut probe = quote!(::craft_ui::contract::PatternProbe::of);
+    let mut probe = quote!(#k::contract::PatternProbe::of);
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("pattern")) {
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("tool") {
-                probe = quote!(::craft_ui::canvas::tool_probe);
+                probe = quote!(#k::canvas::tool_probe);
                 return Ok(());
             }
             if meta.path.is_ident("dialog") {
-                probe = quote!(::craft_ui::dialog::dialog_probe);
+                probe = quote!(#k::dialog::dialog_probe);
                 return Ok(());
             }
             if !meta.path.is_ident("probe") {
@@ -42,18 +43,19 @@ fn options(attrs: &[Attribute]) -> syn::Result<Options> {
 }
 
 pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
+    let k = ui_crate();
     let input: DeriveInput = syn::parse2(input)?;
     if !matches!(input.data, syn::Data::Struct(_)) {
         return Err(syn::Error::new_spanned(&input.ident, "`#[derive(Pattern)]` needs a struct"));
     }
     let ident = &input.ident;
-    let Options { types, probe } = options(&input.attrs)?;
+    let Options { types, probe } = options(&k, &input.attrs)?;
     let types = crate::component::instantiations(ident, &input.generics, types, "pattern")?;
     let purpose = crate::component::purpose_of(&input.attrs);
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
-    let registration = crate::component::pattern_registrations(&types, &purpose, &probe);
+    let registration = crate::component::pattern_registrations(&k, &types, &purpose, &probe);
     Ok(quote! {
-        impl #impl_generics ::craft_ui::contract::Pattern for #ident #type_generics #where_clause {}
+        impl #impl_generics #k::contract::Pattern for #ident #type_generics #where_clause {}
         #registration
     })
 }

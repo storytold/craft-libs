@@ -3,6 +3,7 @@
 //! `edit = ".."` links the command to the `EditCommand` a focused component takes it as.
 //! `default(mac = "..")` (or `windows`, `linux`) is a default of one platform: it replaces the unqualified defaults there.
 
+use crate::util::ui_crate;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Attribute, Data, DeriveInput, Fields, LitStr, Variant};
@@ -50,7 +51,7 @@ fn snake(name: &str) -> String {
     out
 }
 
-fn kind_tokens(kind: &LitStr, group: Option<&LitStr>) -> syn::Result<TokenStream> {
+fn kind_tokens(k: &TokenStream, kind: &LitStr, group: Option<&LitStr>) -> syn::Result<TokenStream> {
     let group_tokens =
         group.map_or_else(|| quote!(::core::option::Option::None), |group| quote!(::core::option::Option::Some(::std::string::String::from(#group))));
     let plain = |tokens: TokenStream| match group {
@@ -58,11 +59,11 @@ fn kind_tokens(kind: &LitStr, group: Option<&LitStr>) -> syn::Result<TokenStream
         Some(group) => Err(syn::Error::new(group.span(), "`group` belongs to `kind = \"radio\"` and `kind = \"tool\"`")),
     };
     match kind.value().as_str() {
-        "command" => plain(quote!(::craft_ui::runtime::commands::CommandKind::Command)),
-        "toggle" => plain(quote!(::craft_ui::runtime::commands::CommandKind::Toggle)),
-        "momentary" => plain(quote!(::craft_ui::runtime::commands::CommandKind::Momentary)),
-        "radio" => Ok(quote!(::craft_ui::runtime::commands::CommandKind::Radio { group: #group_tokens })),
-        "tool" => Ok(quote!(::craft_ui::runtime::commands::CommandKind::Tool { group: #group_tokens })),
+        "command" => plain(quote!(#k::runtime::commands::CommandKind::Command)),
+        "toggle" => plain(quote!(#k::runtime::commands::CommandKind::Toggle)),
+        "momentary" => plain(quote!(#k::runtime::commands::CommandKind::Momentary)),
+        "radio" => Ok(quote!(#k::runtime::commands::CommandKind::Radio { group: #group_tokens })),
+        "tool" => Ok(quote!(#k::runtime::commands::CommandKind::Tool { group: #group_tokens })),
         _ => Err(syn::Error::new(kind.span(), "`kind` is `\"command\"`, `\"toggle\"`, `\"radio\"`, `\"tool\"` or `\"momentary\"`")),
     }
 }
@@ -92,26 +93,26 @@ fn check_prefix(prefix: &LitStr) -> syn::Result<()> {
     Ok(())
 }
 
-fn platform_tokens(platform: &LitStr) -> syn::Result<TokenStream> {
+fn platform_tokens(k: &TokenStream, platform: &LitStr) -> syn::Result<TokenStream> {
     Ok(match platform.value().as_str() {
-        "mac" => quote!(::craft_ui::runtime::commands::Platform::Mac),
-        "windows" => quote!(::craft_ui::runtime::commands::Platform::Windows),
-        "linux" => quote!(::craft_ui::runtime::commands::Platform::Linux),
+        "mac" => quote!(#k::runtime::commands::Platform::Mac),
+        "windows" => quote!(#k::runtime::commands::Platform::Windows),
+        "linux" => quote!(#k::runtime::commands::Platform::Linux),
         _ => return Err(syn::Error::new(platform.span(), "`no_default_on` is `\"mac\"`, `\"windows\"` or `\"linux\"`")),
     })
 }
 
-fn modal_tokens(modal: &LitStr) -> syn::Result<TokenStream> {
+fn modal_tokens(k: &TokenStream, modal: &LitStr) -> syn::Result<TokenStream> {
     Ok(match modal.value().as_str() {
-        "blocked" => quote!(::craft_ui::runtime::commands::ModalRule::Blocked),
-        "in_dialogs" => quote!(::craft_ui::runtime::commands::ModalRule::InDialogs),
-        "always" => quote!(::craft_ui::runtime::commands::ModalRule::Always),
-        "declared" => quote!(::craft_ui::runtime::commands::ModalRule::Declared),
+        "blocked" => quote!(#k::runtime::commands::ModalRule::Blocked),
+        "in_dialogs" => quote!(#k::runtime::commands::ModalRule::InDialogs),
+        "always" => quote!(#k::runtime::commands::ModalRule::Always),
+        "declared" => quote!(#k::runtime::commands::ModalRule::Declared),
         _ => return Err(syn::Error::new(modal.span(), "`modal` is `\"blocked\"`, `\"in_dialogs\"`, `\"always\"` or `\"declared\"`")),
     })
 }
 
-fn edit_tokens(edit: &LitStr) -> syn::Result<TokenStream> {
+fn edit_tokens(k: &TokenStream, edit: &LitStr) -> syn::Result<TokenStream> {
     let name = match edit.value().as_str() {
         "cut" => "Cut",
         "copy" => "Copy",
@@ -128,7 +129,7 @@ fn edit_tokens(edit: &LitStr) -> syn::Result<TokenStream> {
         }
     };
     let name = syn::Ident::new(name, edit.span());
-    Ok(quote!(::craft_ui::runtime::commands::EditCommand::#name))
+    Ok(quote!(#k::runtime::commands::EditCommand::#name))
 }
 
 fn variant(variant: &Variant) -> syn::Result<VariantAttrs> {
@@ -167,21 +168,21 @@ fn variant(variant: &Variant) -> syn::Result<VariantAttrs> {
 }
 
 /// The builder calls that carry a variant's icon, kind, modal, paths and aliases.
-fn command_chain(attrs: &VariantAttrs) -> syn::Result<TokenStream> {
+fn command_chain(k: &TokenStream, attrs: &VariantAttrs) -> syn::Result<TokenStream> {
     let mut chain = quote!();
     if let Some(icon) = &attrs.icon {
         chain.extend(quote!(.with_icon(#icon)));
     }
     match (&attrs.kind, &attrs.group) {
         (Some(kind), group) => {
-            let kind = kind_tokens(kind, group.as_ref())?;
+            let kind = kind_tokens(k, kind, group.as_ref())?;
             chain.extend(quote!(.with_kind(#kind)));
         }
         (None, Some(group)) => return Err(syn::Error::new(group.span(), "`group` needs `kind = \"radio\"` or `kind = \"tool\"`")),
         (None, None) => {}
     }
     if let Some(modal) = &attrs.modal {
-        let modal = modal_tokens(modal)?;
+        let modal = modal_tokens(k, modal)?;
         chain.extend(quote!(.with_modal(#modal)));
     }
     for path in &attrs.paths {
@@ -195,6 +196,7 @@ fn command_chain(attrs: &VariantAttrs) -> syn::Result<TokenStream> {
 }
 
 pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
+    let k = ui_crate();
     let input: DeriveInput = syn::parse2(input)?;
     let ident = &input.ident;
     let Data::Enum(data) = &input.data else {
@@ -220,8 +222,8 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         check_scope(scope)?;
     }
     let scope = match &set.scope {
-        Some(scope) => quote!(::craft_ui::runtime::commands::CommandScope::new(#scope)),
-        None => quote!(::craft_ui::runtime::commands::CommandScope::APP),
+        Some(scope) => quote!(#k::runtime::commands::CommandScope::new(#scope)),
+        None => quote!(#k::runtime::commands::CommandScope::APP),
     };
     let (mut ids, mut arms, mut defs, mut bare, mut per_platform, mut edits) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -232,33 +234,33 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         if ids.contains(&id) {
             return Err(syn::Error::new_spanned(v, format!("two variants make the command id `{id}`")));
         }
-        let chain = command_chain(&attrs)?;
+        let chain = command_chain(&k, &attrs)?;
         let label = attrs.label.ok_or_else(|| syn::Error::new_spanned(v, "a command has a label: `#[command(label = \"..\")]`"))?;
         let mut defaults = Vec::new();
         for text in &attrs.defaults {
             defaults.push(quote! {
-                def = def.with_default(::craft_ui::runtime::commands::Binding::parse(#text).map_err(|error| ::craft_ui::runtime::commands::CommandDefError::binding(#id, error))?);
+                def = def.with_default(#k::runtime::commands::Binding::parse(#text).map_err(|error| #k::runtime::commands::CommandDefError::binding(#id, error))?);
             });
         }
         for platform in &attrs.no_default_on {
-            let platform = platform_tokens(platform)?;
+            let platform = platform_tokens(&k, platform)?;
             bare.push(quote!((#id, #platform)));
         }
         for (platform, text) in &attrs.platform_defaults {
-            let platform = platform_tokens(platform)?;
+            let platform = platform_tokens(&k, platform)?;
             per_platform.push(quote! {
-                out.push((#id, #platform, ::craft_ui::runtime::commands::Binding::parse(#text).map_err(|error| ::craft_ui::runtime::commands::CommandDefError::binding(#id, error))?));
+                out.push((#id, #platform, #k::runtime::commands::Binding::parse(#text).map_err(|error| #k::runtime::commands::CommandDefError::binding(#id, error))?));
             });
         }
         if let Some(edit) = &attrs.edit {
-            let edit = edit_tokens(edit)?;
+            let edit = edit_tokens(&k, edit)?;
             edits.push(quote!((#id, #edit)));
         }
         arms.push(quote!(#id => ::core::option::Option::Some(Self::#name)));
         defs.push(quote! {
             {
-                let scope = Self::SCOPE.scope().ok_or_else(|| ::craft_ui::runtime::commands::CommandDefError::scope(#id))?;
-                let mut def = ::craft_ui::runtime::commands::CommandDef::new(::craft_ui::runtime::commands::CommandRef::new(#id), #label, scope) #chain;
+                let scope = Self::SCOPE.scope().ok_or_else(|| #k::runtime::commands::CommandDefError::scope(#id))?;
+                let mut def = #k::runtime::commands::CommandDef::new(#k::runtime::commands::CommandRef::new(#id), #label, scope) #chain;
                 #(#defaults)*
                 out.push(def);
             }
@@ -267,10 +269,10 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     }
     let names: Vec<_> = data.variants.iter().map(|v| &v.ident).collect();
     Ok(quote! {
-        impl ::craft_ui::runtime::commands::CommandSet for #ident {
-            const SCOPE: ::craft_ui::runtime::commands::CommandScope = #scope;
+        impl #k::runtime::commands::CommandSet for #ident {
+            const SCOPE: #k::runtime::commands::CommandScope = #scope;
 
-            fn from_ref(command: &::craft_ui::runtime::commands::CommandRef) -> ::core::option::Option<Self> {
+            fn from_ref(command: &#k::runtime::commands::CommandRef) -> ::core::option::Option<Self> {
                 match command.id.as_str() {
                     #(#arms,)*
                     _ => ::core::option::Option::None,
@@ -283,23 +285,23 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
                 }
             }
 
-            fn defs() -> ::core::result::Result<::std::vec::Vec<::craft_ui::runtime::commands::CommandDef>, ::craft_ui::runtime::commands::CommandDefError> {
+            fn defs() -> ::core::result::Result<::std::vec::Vec<#k::runtime::commands::CommandDef>, #k::runtime::commands::CommandDefError> {
                 let mut out = ::std::vec::Vec::new();
                 #(#defs)*
                 ::core::result::Result::Ok(out)
             }
 
-            fn no_default_on() -> ::std::vec::Vec<(&'static str, ::craft_ui::runtime::commands::Platform)> {
+            fn no_default_on() -> ::std::vec::Vec<(&'static str, #k::runtime::commands::Platform)> {
                 ::std::vec![#(#bare),*]
             }
 
-            fn edits() -> ::std::vec::Vec<(&'static str, ::craft_ui::runtime::commands::EditCommand)> {
+            fn edits() -> ::std::vec::Vec<(&'static str, #k::runtime::commands::EditCommand)> {
                 ::std::vec![#(#edits),*]
             }
 
             fn platform_defaults() -> ::core::result::Result<
-                ::std::vec::Vec<(&'static str, ::craft_ui::runtime::commands::Platform, ::craft_ui::runtime::commands::Binding)>,
-                ::craft_ui::runtime::commands::CommandDefError,
+                ::std::vec::Vec<(&'static str, #k::runtime::commands::Platform, #k::runtime::commands::Binding)>,
+                #k::runtime::commands::CommandDefError,
             > {
                 let mut out = ::std::vec::Vec::new();
                 #(#per_platform)*
@@ -307,14 +309,14 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             }
         }
 
-        impl ::core::convert::From<#ident> for ::craft_ui::runtime::commands::CommandRef {
+        impl ::core::convert::From<#ident> for #k::runtime::commands::CommandRef {
             fn from(command: #ident) -> Self {
-                ::craft_ui::runtime::commands::CommandRef::new(::craft_ui::runtime::commands::CommandSet::id(command))
+                #k::runtime::commands::CommandRef::new(#k::runtime::commands::CommandSet::id(command))
             }
         }
 
         const _: () = {
-            ::craft_ui::__register_command_set!(#ident);
+            #k::__register_command_set!(#ident);
         };
     })
 }

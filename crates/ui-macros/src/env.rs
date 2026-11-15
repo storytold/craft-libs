@@ -1,10 +1,12 @@
 //! `#[derive(EnvValue)]` with `#[env(style)]` and `#[env(root = ..)]`.
 
+use crate::util::ui_crate;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{DeriveInput, Expr};
 
 pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
+    let k = ui_crate();
     let input: DeriveInput = syn::parse2(input)?;
     let (mut style, mut root) = (false, None::<Expr>);
     for attr in input.attrs.iter().filter(|attr| attr.path().is_ident("env")) {
@@ -37,9 +39,9 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             }
         }
     });
-    let marker = style.then(|| quote!(impl #impl_generics ::craft_ui::runtime::env::StyleValue for #ident #type_generics #where_clause {}));
+    let marker = style.then(|| quote!(impl #impl_generics #k::runtime::env::StyleValue for #ident #type_generics #where_clause {}));
     Ok(quote! {
-        impl #impl_generics ::craft_ui::runtime::env::EnvValue for #ident #type_generics #where_clause {
+        impl #impl_generics #k::runtime::env::EnvValue for #ident #type_generics #where_clause {
             #affects
 
             fn root() -> Self {

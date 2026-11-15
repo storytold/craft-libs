@@ -1,7 +1,7 @@
 //! `#[derive(Props)]`: one setter per `#[prop]` field, and the forwarding setters of a `#[collection]` or
 //! `#[container]` field.
 
-use crate::util::{is_named, named_fields, wrapped};
+use crate::util::{is_named, named_fields, ui_crate, wrapped};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Attribute, DeriveInput, Field, GenericArgument, Ident, LitStr, Meta, PathArguments, Type, TypeParamBound};
@@ -144,31 +144,31 @@ fn setter(field: &Field, attr: &Attribute) -> syn::Result<TokenStream> {
 }
 
 /// A forwarded builder: its name, its parameter type as written in the expansion (empty for a builder with no
-/// parameter), and its doc line.
+/// parameter; `$ui` stands for the path of the framework crate), and its doc line.
 type Forwarded = (&'static str, &'static str, &'static str);
 
 /// The public `CollectionProps` builders a `#[collection]` field forwards. A new `CollectionProps` builder is added
 /// here.
 const COLLECTION: &[Forwarded] = &[
-    ("select", "::craft_ui::contract::SelectMode", "What the user can select."),
-    ("reorder", "::craft_ui::contract::ReorderRule", "Rows reorder by dragging and by the stacking keys (Cmd/Ctrl+[ and ])."),
+    ("select", "$ui::contract::SelectMode", "What the user can select."),
+    ("reorder", "$ui::contract::ReorderRule", "Rows reorder by dragging and by the stacking keys (Cmd/Ctrl+[ and ])."),
     ("rename", "bool", "Rows rename in place: a double click on the label, F2 or the rename command opens the editor."),
     (
         "rename_column",
-        "::craft_ui::contract::ColumnKey",
+        "$ui::contract::ColumnKey",
         "A double click on this column of a renamable row opens its rename editor; elsewhere on the row it activates.",
     ),
     ("slow_click_rename", "bool", "A plain click on the label of the only selected row, with no second click following, opens its rename editor."),
-    ("columns", "::std::vec::Vec<::craft_ui::contract::ColumnSpec>", "The columns."),
+    ("columns", "::std::vec::Vec<$ui::contract::ColumnSpec>", "The columns."),
     (
         "sort",
-        "impl ::core::convert::Into<::core::option::Option<::craft_ui::contract::ColumnSort>>",
+        "impl ::core::convert::Into<::core::option::Option<$ui::contract::ColumnSort>>",
         "The order the app sorted the rows in, drawn on the column's header.",
     ),
-    ("activate", "::craft_ui::contract::ActivateOn", "Which gesture activates a row."),
+    ("activate", "$ui::contract::ActivateOn", "Which gesture activates a row."),
     ("striped", "bool", "Odd rows are tinted: the item reads `ItemCx::row.striped`."),
     ("allow_empty", "bool", "A press on the empty space below the rows empties the selection."),
-    ("lead_on_open", "::craft_ui::contract::LeadOnOpen", "Where the lead lands when rows first show."),
+    ("lead_on_open", "$ui::contract::LeadOnOpen", "Where the lead lands when rows first show."),
     ("lead_follows_hover", "bool", "The lead, and the selection with it, moves to the row under the pointer when the pointer moves."),
     ("arrows_select", "bool", "The arrow keys select the row they move the lead to; off, they move the lead only."),
     ("arrows_wrap", "bool", "The arrow keys wrap from the last item to the first and back."),
@@ -179,24 +179,24 @@ const COLLECTION: &[Forwarded] = &[
         "The rows are the set `stamp` names (a filtered set, for example); the lead and selection start over when the stamp changes.",
     ),
     ("focus_on_press", "bool", "A primary press moves key focus to the collection; off, it picks and activates and focus stays where it is."),
-    ("empty", "impl ::core::convert::Into<::craft_ui::runtime::env::Label>", "The text of the empty state."),
-    ("space", "::craft_ui::contract::SpaceAction", "What Space does on the lead row."),
+    ("empty", "impl ::core::convert::Into<$ui::runtime::env::Label>", "The text of the empty state."),
+    ("space", "$ui::contract::SpaceAction", "What Space does on the lead row."),
     ("header", "bool", "The header row over the columns is shown."),
     ("digit_keys", "bool", "Digit keys arrive as digit intents instead of type-ahead."),
     ("menu_on_click", "bool", "A plain click on a row asks for its menu, as a secondary click does."),
-    ("item_keys", "::craft_ui::contract::ItemKeys", "Who takes the arrow keys: the collection (moves the lead) or the component around it."),
+    ("item_keys", "$ui::contract::ItemKeys", "Who takes the arrow keys: the collection (moves the lead) or the component around it."),
     ("marquee", "bool", "A drag on the background selects the rows it covers."),
     ("deletable", "bool", "Delete and Backspace at the lead report the items to delete."),
-    ("drag_count", "::craft_ui::runtime::env::Counted", "The drag badge reads this count word for the dragged items, one included."),
+    ("drag_count", "$ui::runtime::env::Counted", "The drag badge reads this count word for the dragged items, one included."),
     ("natural_height", "bool", "The collection takes its full content height and owns no scroll: for a short collection inside a scrolling page."),
     ("min_rows", "u16", "The collection is at least this many rows tall; rows it does not have count the row height."),
     ("max_rows", "u16", "The collection shows at most this many rows and scrolls the rest, inside a scrolling body too."),
     (
         "row_height",
-        "::craft_ui::contract::RowHeight",
+        "$ui::contract::RowHeight",
         "How tall the rows are: text rows for a read-only display table, control-high rows for a list the user picks from.",
     ),
-    ("notch", "::craft_ui::contract::Notch", "The distance one wheel notch scrolls the rows."),
+    ("notch", "$ui::contract::Notch", "The distance one wheel notch scrolls the rows."),
     ("command_click", "bool", "A Cmd/Ctrl click on an item is a command (`CollectionEvent::CommandClick`), not a pick."),
     (
         "current",
@@ -209,12 +209,12 @@ const COLLECTION: &[Forwarded] = &[
 /// caller under the builder's own name. A new `ContainerProps` builder of that kind is added here. Builders whose name
 /// a component writes itself (`label`, `header`, `footer`, `scroll`) stay off the list.
 const CONTAINER: &[Forwarded] = &[
-    ("command_scope", "::craft_ui::runtime::commands::CommandScope", "Commands of `scope` reach the component while focus is in it."),
-    ("surface", "::craft_ui::style::SurfaceKind", "The surface painted behind the body."),
-    ("pad", "::craft_ui::contract::Pad", "The padding tier between the edge and the content."),
-    ("live", "::craft_ui::contract::Politeness", "The body is a live region announced with this politeness."),
-    ("end", "::craft_ui::contract::EndRegion", "The region at the line's end edge, outside the body scroll."),
-    ("position", "::craft_ui::contract::SetPosition", "The component's place in its set, for assistive technology."),
+    ("command_scope", "$ui::runtime::commands::CommandScope", "Commands of `scope` reach the component while focus is in it."),
+    ("surface", "$ui::style::SurfaceKind", "The surface painted behind the body."),
+    ("pad", "$ui::contract::Pad", "The padding tier between the edge and the content."),
+    ("live", "$ui::contract::Politeness", "The body is a live region announced with this politeness."),
+    ("end", "$ui::contract::EndRegion", "The region at the line's end edge, outside the body scroll."),
+    ("position", "$ui::contract::SetPosition", "The component's place in its set, for assistive technology."),
     ("collection_body", "", "The body holds one collection that owns the scroll: a layer's own body scroll is off."),
 ];
 
@@ -229,7 +229,7 @@ fn forwarded_names(attr: &Attribute) -> syn::Result<Option<Vec<syn::Path>>> {
     }
 }
 
-fn forwarders(field: &Field, attr: &Attribute, owner: &str, list: &[Forwarded]) -> syn::Result<Vec<TokenStream>> {
+fn forwarders(k: &TokenStream, field: &Field, attr: &Attribute, owner: &str, list: &[Forwarded]) -> syn::Result<Vec<TokenStream>> {
     let Some(field_name) = &field.ident else {
         return Err(syn::Error::new_spanned(field, "`#[collection]` and `#[container]` need a named field"));
     };
@@ -259,7 +259,7 @@ fn forwarders(field: &Field, attr: &Attribute, owner: &str, list: &[Forwarded]) 
                     }
                 });
             }
-            let ty: Type = syn::parse_str(ty)?;
+            let ty: Type = syn::parse_str(&ty.replace("$ui", &k.to_string()))?;
             Ok(quote! {
                 #[doc = #doc]
                 #[must_use]
@@ -273,6 +273,7 @@ fn forwarders(field: &Field, attr: &Attribute, owner: &str, list: &[Forwarded]) 
 }
 
 pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
+    let k = ui_crate();
     let input: DeriveInput = syn::parse2(input)?;
     let mut setters = Vec::new();
     for field in named_fields(&input, "Props")? {
@@ -281,9 +282,9 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         }
         for attr in &field.attrs {
             if attr.path().is_ident("collection") {
-                setters.extend(forwarders(&field, attr, "CollectionProps", COLLECTION)?);
+                setters.extend(forwarders(&k, &field, attr, "CollectionProps", COLLECTION)?);
             } else if attr.path().is_ident("container") {
-                setters.extend(forwarders(&field, attr, "ContainerProps", CONTAINER)?);
+                setters.extend(forwarders(&k, &field, attr, "ContainerProps", CONTAINER)?);
             }
         }
     }

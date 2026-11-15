@@ -1,6 +1,6 @@
 //! `#[derive(ComponentStyle)]`: the trait from field attributes.
 
-use crate::util::{named_fields, wrapped};
+use crate::util::{named_fields, ui_crate, wrapped};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::punctuated::Punctuated;
@@ -78,6 +78,7 @@ fn collector(fields: &[&Field], name: &str, ty: TokenStream) -> Option<TokenStre
 }
 
 pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
+    let k = ui_crate();
     let input: DeriveInput = syn::parse2(input)?;
     let fields = named_fields(&input, "ComponentStyle")?;
     let (mut surface, mut focus, mut metrics): (Option<&Field>, Option<&Field>, Option<&Field>) = (None, None, None);
@@ -115,25 +116,25 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             }
         })
     };
-    let surface = accessor(surface, "surface", quote!(::craft_ui::style::SurfaceLook));
-    let focus = accessor(focus, "focus", quote!(::craft_ui::style::FocusLook));
-    let texts = collector(&texts, "texts", quote!(::craft_ui::style::TextLook));
-    let icons = collector(&icons, "icons", quote!(::craft_ui::style::IconLook));
+    let surface = accessor(surface, "surface", quote!(#k::style::SurfaceLook));
+    let focus = accessor(focus, "focus", quote!(#k::style::FocusLook));
+    let texts = collector(&texts, "texts", quote!(#k::style::TextLook));
+    let icons = collector(&icons, "icons", quote!(#k::style::IconLook));
     let metrics_field = &metrics.ident;
     let variants = variants(&input.attrs)?.map(|list| {
         let list = Punctuated::<Expr, Token![,]>::from_iter(list);
-        quote!(const VARIANTS: &'static [::craft_ui::style::Variant] = &[#list];)
+        quote!(const VARIANTS: &'static [#k::style::Variant] = &[#list];)
     });
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
     Ok(quote! {
-        impl #impl_generics ::craft_ui::style::ComponentStyle for #ident #type_generics #where_clause {
+        impl #impl_generics #k::style::ComponentStyle for #ident #type_generics #where_clause {
             #variants
             #surface
             #focus
             #texts
             #icons
 
-            fn metrics(&self) -> ::craft_ui::style::Metrics {
+            fn metrics(&self) -> #k::style::Metrics {
                 self.#metrics_field
             }
         }

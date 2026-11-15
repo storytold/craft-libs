@@ -20,4 +20,5 @@ workspace = true
 # every build, whichever crates it links.
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
+proc-macro-crate = "3.5"
 syn = { version = "2", features = ["full", "visit", "visit-mut", "fold", "extra-traits"] }

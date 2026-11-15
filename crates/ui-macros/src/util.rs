@@ -1,5 +1,8 @@
 //! Parsing helpers the derives share.
 
+use proc_macro_crate::{FoundCrate, crate_name};
+use proc_macro2::TokenStream;
+use quote::quote;
 use syn::{Data, DeriveInput, Field, Fields, GenericArgument, PathArguments, Type};
 
 /// The named fields of a struct, or an error naming `derive`.
@@ -38,4 +41,19 @@ pub(crate) fn wrapped<'a>(ty: &'a Type, wrapper: &str) -> Option<&'a Type> {
 /// Whether `ty` is a path whose last segment is `name`.
 pub(crate) fn is_named(ty: &Type, name: &str) -> bool {
     matches!(ty, Type::Path(path) if path.qself.is_none() && path.path.segments.last().is_some_and(|segment| segment.ident == name))
+}
+
+/// The path of the framework crate (`craft-ui-contract`, lib name `craft_ui`) as the crate being compiled reaches it.
+///
+/// Apps depend on the `craft` facade only, which re-exports it as `craft::ui`, so a hardcoded `::craft_ui` fails
+/// there. A direct dependency on `craft-ui-contract` (or being it) gives `::craft_ui`; otherwise the facade gives
+/// `::craft::ui`. With neither, `::craft_ui` is used so the error names the missing crate.
+pub(crate) fn ui_crate() -> TokenStream {
+    if crate_name("craft-ui-contract").is_ok() {
+        return quote!(::craft_ui);
+    }
+    match crate_name("craft") {
+        Ok(FoundCrate::Itself | FoundCrate::Name(_)) => quote!(::craft::ui),
+        Err(_) => quote!(::craft_ui),
+    }
 }

@@ -1,6 +1,6 @@
 //! `#[derive(Component)]` and `register_contract!`.
 
-use crate::util::named_fields;
+use crate::util::{named_fields, ui_crate};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream, Parser};
@@ -198,7 +198,7 @@ pub(crate) fn gate_for(manifest: &str) -> TokenStream {
     if declares { quote!(#[cfg(feature = "screen-testing")]) } else { quote!() }
 }
 
-fn registrations(types: &[Type], declared: &Declared, shape: Shape) -> syn::Result<TokenStream> {
+fn registrations(k: &TokenStream, types: &[Type], declared: &Declared, shape: Shape) -> syn::Result<TokenStream> {
     if let Some(sample) = &declared.sample {
         if shape != Shape::Leaf {
             return Err(syn::Error::new_spanned(sample, "`sample` is for a leaf: a container or collection needs a body or a source"));
@@ -216,7 +216,7 @@ fn registrations(types: &[Type], declared: &Declared, shape: Shape) -> syn::Resu
         Shape::Collection => quote!(collection),
     };
     let purpose = &declared.purpose;
-    let each = types.iter().map(|ty| quote!(::craft_ui::__register_contract!(#ty, #shape, #overlay, [#(#exempt),*], [#(#sample)*], #purpose);));
+    let each = types.iter().map(|ty| quote!(#k::__register_contract!(#ty, #shape, #overlay, [#(#exempt),*], [#(#sample)*], #purpose);));
     let gate = registration_gate();
     Ok(quote! {
         #gate
@@ -229,8 +229,8 @@ fn registrations(types: &[Type], declared: &Declared, shape: Shape) -> syn::Resu
 /// The registration of each pattern type in `types`, with the `purpose` line of its doc comment.
 ///
 /// `probe` is the path of the `PatternProbe` constructor of the pattern's kind.
-pub(crate) fn pattern_registrations(types: &[Type], purpose: &str, probe: &TokenStream) -> TokenStream {
-    let each = types.iter().map(|ty| quote!(::craft_ui::__register_pattern!(#ty, #purpose, #probe);));
+pub(crate) fn pattern_registrations(k: &TokenStream, types: &[Type], purpose: &str, probe: &TokenStream) -> TokenStream {
+    let each = types.iter().map(|ty| quote!(#k::__register_pattern!(#ty, #purpose, #probe);));
     let gate = registration_gate();
     quote! {
         #gate
@@ -285,7 +285,7 @@ impl KeyType {
         KeyType { ident: format_ident!("{ident}StyleKey"), declaration: wrap(declared), arguments: wrap(arguments), marker, fields }
     }
 
-    fn tokens(&self, vis: &syn::Visibility) -> TokenStream {
+    fn tokens(&self, k: &TokenStream, vis: &syn::Visibility) -> TokenStream {
         let (name, declaration, arguments) = (&self.ident, &self.declaration, &self.arguments);
         let names: Vec<_> = self.fields.iter().map(|(field, _, _)| field).collect();
         let types: Vec<_> = self.fields.iter().map(|(_, ty, _)| ty).collect();
@@ -332,7 +332,7 @@ impl KeyType {
                     #debug
                 }
             }
-            impl #declaration ::craft_ui::style::StyleKey for #name #arguments {}
+            impl #declaration #k::style::StyleKey for #name #arguments {}
         }
     }
 
@@ -459,6 +459,7 @@ fn marked<'a>(ident: &Ident, fields: &'a [Field], shape: Shape) -> syn::Result<M
 }
 
 pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
+    let k = ui_crate();
     let input: DeriveInput = syn::parse2(input)?;
     let mut options = parse_options(&input.attrs)?;
     let shape = options.shape.unwrap_or(Shape::Leaf);
@@ -477,12 +478,12 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     check_key_fields(&input.generics, &marked.style_key)?;
     let key = KeyType::new(ident, &input.generics, key_fields);
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
-    let key_tokens = key.tokens(&input.vis);
+    let key_tokens = key.tokens(&k, &input.vis);
     let (key_name, key_arguments, key_value) = (&key.ident, &key.arguments, key.value());
     let shape_type = match shape {
-        Shape::Leaf => quote!(::craft_ui::contract::shape::Leaf),
-        Shape::Container => quote!(::craft_ui::contract::shape::Body),
-        Shape::Collection => quote!(::craft_ui::contract::shape::Items),
+        Shape::Leaf => quote!(#k::contract::shape::Leaf),
+        Shape::Container => quote!(#k::contract::shape::Body),
+        Shape::Collection => quote!(#k::contract::shape::Items),
     };
     let canvas = options.canvas_control.then(|| {
         quote!(
@@ -495,33 +496,33 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     };
     let set_sizing = marked.container.and_then(|field| field.ident.as_ref()).map(|field| {
         quote! {
-            fn set_sizing(&mut self, sizing: ::craft_ui::contract::Sizing, _: ::craft_ui::contract::Internal) {
+            fn set_sizing(&mut self, sizing: #k::contract::Sizing, _: #k::contract::Internal) {
                 self.#field.sizing = sizing;
             }
         }
     });
     let has_props = marked.container.and_then(|field| field.ident.as_ref()).map(|field| {
         quote! {
-            impl #impl_generics ::craft_ui::contract::HasProps for #ident #type_generics #where_clause {
-                fn props(&self, _: ::craft_ui::contract::Internal) -> &::craft_ui::contract::ContainerProps {
+            impl #impl_generics #k::contract::HasProps for #ident #type_generics #where_clause {
+                fn props(&self, _: #k::contract::Internal) -> &#k::contract::ContainerProps {
                     &self.#field
                 }
             }
         }
     });
     let content_painter =
-        options.content_painter.then(|| quote!(impl #impl_generics ::craft_ui::contract::ContentPainter for #ident #type_generics #where_clause {}));
+        options.content_painter.then(|| quote!(impl #impl_generics #k::contract::ContentPainter for #ident #type_generics #where_clause {}));
     let widget = options.widget.then(|| {
         let mut generics = input.generics.clone();
         generics
             .make_where_clause()
             .predicates
-            .push(syn::parse_quote!(#ident #type_generics: ::craft_ui::contract::Component<Output = ::craft_ui::__private::egui::Response>));
+            .push(syn::parse_quote!(#ident #type_generics: #k::contract::Component<Output = #k::__private::egui::Response>));
         let (widget_generics, _, widget_where) = generics.split_for_impl();
         quote! {
-            impl #widget_generics ::craft_ui::__private::egui::Widget for #ident #type_generics #widget_where {
-                fn ui(self, ui: &mut ::craft_ui::__private::egui::Ui) -> ::craft_ui::__private::egui::Response {
-                    ::craft_ui::contract::Show::show(self, ui)
+            impl #widget_generics #k::__private::egui::Widget for #ident #type_generics #widget_where {
+                fn ui(self, ui: &mut #k::__private::egui::Ui) -> #k::__private::egui::Response {
+                    #k::contract::Show::show(self, ui)
                 }
             }
         }
@@ -538,11 +539,11 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     } else {
         let types = instantiations(ident, &input.generics, options.probe, "component")?;
         options.declared.purpose = purpose_of(&input.attrs);
-        registrations(&types, &options.declared, shape)?
+        registrations(&k, &types, &options.declared, shape)?
     };
     Ok(quote! {
         #key_tokens
-        impl #impl_generics ::craft_ui::contract::Meta for #ident #type_generics #where_clause {
+        impl #impl_generics #k::contract::Meta for #ident #type_generics #where_clause {
             type Shape = #shape_type;
             type StyleKey = #key_name #key_arguments;
             #canvas
@@ -551,11 +552,11 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
                 #key_value
             }
 
-            fn common(&self, _: ::craft_ui::contract::Internal) -> &::craft_ui::contract::Common {
+            fn common(&self, _: #k::contract::Internal) -> &#k::contract::Common {
                 #common
             }
 
-            fn common_mut(&mut self, _: ::craft_ui::contract::Internal) -> &mut ::craft_ui::contract::Common {
+            fn common_mut(&mut self, _: #k::contract::Internal) -> &mut #k::contract::Common {
                 #common_mut
             }
             #set_sizing
@@ -615,6 +616,7 @@ impl Parse for Registered {
 }
 
 pub(crate) fn register(input: TokenStream) -> syn::Result<TokenStream> {
+    let k = ui_crate();
     let registered: Registered = syn::parse2(input)?;
     for ty in &registered.types {
         let mut check = StaticOnly(None);
@@ -624,7 +626,7 @@ pub(crate) fn register(input: TokenStream) -> syn::Result<TokenStream> {
         }
     }
     if registered.pattern {
-        return Ok(pattern_registrations(&registered.types, "", &quote!(::craft_ui::contract::PatternProbe::of)));
+        return Ok(pattern_registrations(&k, &registered.types, "", &quote!(#k::contract::PatternProbe::of)));
     }
-    registrations(&registered.types, &registered.declared, registered.shape)
+    registrations(&k, &registered.types, &registered.declared, registered.shape)
 }

@@ -4,6 +4,7 @@
 //! `{name}` template), `unit` and `count` (they contain `{n}`), `array` (one id and text per element), `context`
 //! (a word translated only in its catalog context) and `plain` (a word with no id, looked up by its English text).
 
+use crate::util::ui_crate;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
@@ -165,10 +166,7 @@ struct Expanded {
     rows: TokenStream,
 }
 
-const ENV: &str = "::craft_ui::runtime::env";
-
-fn expand(row: &Row) -> syn::Result<Expanded> {
-    let env: TokenStream = ENV.parse().unwrap_or_default();
+fn expand(env: &TokenStream, row: &Row) -> syn::Result<Expanded> {
     let field = &row.field;
     let word = |row: &Row| -> syn::Result<TokenStream> {
         let english = row.english.clone().ok_or_else(|| syn::Error::new(row.field.span(), "a row has its English text"))?;
@@ -274,11 +272,12 @@ impl<I: Iterator<Item = (A, B, C)>, A, B, C> Unzip3<A, B, C> for I {}
 
 pub(crate) fn expand_words(input: TokenStream) -> syn::Result<TokenStream> {
     let Words { attrs, vis, name, rows } = syn::parse2(input)?;
-    let env: TokenStream = ENV.parse().unwrap_or_default();
+    let k = ui_crate();
+    let env = quote!(#k::runtime::env);
     let mut fields = Vec::new();
     let (mut words, mut counts, mut english, mut localized, mut set_rows) = (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for row in &rows {
-        let expanded = expand(row)?;
+        let expanded = expand(&env, row)?;
         let (field, ty, row_attrs) = (&row.field, &expanded.ty, &row.attrs);
         fields.push(quote!(#(#row_attrs)* #[allow(missing_docs)] pub #field: #ty));
         words.extend(expanded.words);

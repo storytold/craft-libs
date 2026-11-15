@@ -118,6 +118,7 @@ pub fn words(input: TokenStream) -> TokenStream {
 /// makes it run only under `--ignored`.
 #[proc_macro_attribute]
 pub fn trial(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let k = util::ui_crate();
     if !attr.is_empty() {
         return syn::Error::new(proc_macro2::Span::call_site(), "`trial` takes no arguments").to_compile_error().into();
     }
@@ -136,8 +137,8 @@ pub fn trial(attr: TokenStream, item: TokenStream) -> TokenStream {
     quote! {
         #func
 
-        ::craft_ui::testing::__private::inventory::submit! {
-            ::craft_ui::testing::Trial::#register(module_path!(), #name, #ident)
+        #k::testing::__private::inventory::submit! {
+            #k::testing::Trial::#register(module_path!(), #name, #ident)
         }
     }
     .into()
@@ -199,6 +200,7 @@ impl Parse for StoryArgs {
 /// The type's registration and the story meet by the type's registered name.
 #[proc_macro_attribute]
 pub fn story(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let k = util::ui_crate();
     let args = parse_macro_input!(attr as StoryArgs);
     let func = parse_macro_input!(item as ItemFn);
     let ident = &func.sig.ident;
@@ -213,12 +215,12 @@ pub fn story(attr: TokenStream, item: TokenStream) -> TokenStream {
     quote! {
         #func
 
-        ::craft_ui::testing::__private::inventory::submit! {
-            ::craft_ui::testing::StoryRegistration::new(
+        #k::testing::__private::inventory::submit! {
+            #k::testing::StoryRegistration::new(
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_CRATE_NAME"),
                 ::std::any::type_name::<#ty>,
-                ::craft_ui::testing::Story::new(#name, #ident).covers(&[#(::craft_ui::testing::Required::#covers),*]) #drive #disabled_text #title #group #commands,
+                #k::testing::Story::new(#name, #ident).covers(&[#(#k::testing::Required::#covers),*]) #drive #disabled_text #title #group #commands,
             )
             .at(file!(), line!())
         }

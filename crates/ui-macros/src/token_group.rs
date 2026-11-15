@@ -1,5 +1,6 @@
 //! `#[derive(TokenGroup)]` with `#[group(path = "..")]`.
 
+use crate::util::ui_crate;
 use crate::util::{fields_or_unit, is_named};
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -20,6 +21,7 @@ fn valid_path(path: &str) -> bool {
 }
 
 pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
+    let k = ui_crate();
     let input: DeriveInput = syn::parse2(input)?;
     let mut path: Option<LitStr> = None;
     for attr in input.attrs.iter().filter(|attr| attr.path().is_ident("group")) {
@@ -55,16 +57,16 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
     let body = if overlays.is_empty() { quote!(let _ = values;) } else { quote!(#(#overlays)*) };
     Ok(quote! {
-        impl #impl_generics ::craft_ui::style::TokenGroup for #ident #type_generics #where_clause {
+        impl #impl_generics #k::style::TokenGroup for #ident #type_generics #where_clause {
             const PATH: &'static str = #path;
 
             // Without an inherent `derive` on the type this call resolves to the trait method itself.
             #[deny(unconditional_recursion)]
-            fn derive(tokens: &::craft_ui::style::Tokens) -> Self {
+            fn derive(tokens: &#k::style::Tokens) -> Self {
                 <Self>::derive(tokens)
             }
 
-            fn overlay(&mut self, values: &::craft_ui::style::GroupValues) {
+            fn overlay(&mut self, values: &#k::style::GroupValues) {
                 #body
             }
         }
