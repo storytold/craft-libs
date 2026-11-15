@@ -502,6 +502,7 @@ mod tests {
         let mut n = 0u32;
         loop {
             let dir = std::env::temp_dir().join(format!("craft-xtask-stats-{tag}-{}-{n}", std::process::id()));
+            #[cfg_attr(not(unix), allow(unused_mut))]
             let mut b = std::fs::DirBuilder::new();
             #[cfg(unix)]
             std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
