@@ -57,14 +57,15 @@ for frame in &file.frames {
   The decoder keeps the picture and the palette between frames, so frames are decoded in order
   from the first.
 - Block types: mono, full, void and solid, with runs; the `SMK4` double and half full-block
-  modes; palette chunks (set, keep and copy records).
+  modes; palette chunks (set, keep and copy records; a chunk that ends early keeps the other
+  entries).
 - The header's row doubling and interlacing flags (`Header::Y_DOUBLED`, `Header::Y_INTERLACED`
   in `craft_media::smacker`) describe how to show the picture and are left to the caller.
-- Bounds: the picture is checked against the decoder memory budget, the trees against their
-  declared sizes and the tree data, and a frame that ends early is an error that keeps the
+- Bounds: a picture has at most `MAX_PIXELS` pixels (4096x4096), a tree at most its declared
+  size and the 131071 nodes a tree over 16-bit values can have, and a frame that ends early is an error that keeps the
   blocks decoded before it.
-- Verified: `tests/smacker` compares every picture with ffmpeg on a directory of real files
-  (`CRAFT_SMACKER_SAMPLES`; skipped when it is not set, since real files come from commercial
+- Verified: `tests/smacker` compares pictures with ffmpeg on a directory of real files
+  (`CRAFT_SMACKER_SAMPLES`, the first 150 frames of each file, or all with `CRAFT_SMACKER_FRAMES=0`; skipped when it is not set, since real files come from commercial
   games and are not in the repository). 67 `SMK2` files from four games match on every frame.
   No `SMK4` file was available: its two extra full-block modes are tested only against
   streams built from the format description.

@@ -198,12 +198,116 @@ fn palette_chunks_set_keep_and_copy_entries() {
     assert_eq!(dec.to_rgba()[..4], [255, 0, 0x41, 255]);
 
     let before = *dec.palette();
-    // a copy that runs past the last entry, as source and as destination; a chunk cut short
+    // a copy that runs past the last entry, as source and as destination
     assert_eq!(dec.decode(Some(&[0x40 | 9, 250]), &[]), Err(Error::Invalid("palette copy runs past entry 255")));
     assert_eq!(dec.decode(Some(&[0x80 | 127, 0x80 | 120, 0x40 | 9, 0]), &[]), Err(Error::Invalid("palette copy runs past entry 255")));
-    assert_eq!(dec.decode(Some(&[0x01, 0x02]), &[]), Err(Error::Truncated));
-    assert_eq!(dec.decode(Some(&[0x80]), &[]), Err(Error::Truncated));
     assert_eq!(*dec.palette(), before);
+}
+
+#[test]
+fn a_palette_copy_reads_the_previous_palette() {
+    let s = Stream::new(&[0], &[0], &[0], &[code(VOID, 0, 0)]);
+    let mut dec = s.decoder(4, 4, b"SMK2");
+    dec.decode(Some(&[0x3F, 0x00, 0x00]), &[]).unwrap();
+    // entry 0 is set anew, then copied to entry 1: the copy takes the old entry 0
+    dec.decode(Some(&[0x00, 0x3F, 0x00, 0x40, 0]), &[]).unwrap();
+    assert_eq!(dec.palette()[..2], [[0, 255, 0], [255, 0, 0]]);
+}
+
+#[test]
+fn a_palette_chunk_that_ends_early_keeps_the_other_entries() {
+    let s = Stream::new(&[0], &[0], &[0], &[code(SOLID, 0, 6)]);
+    let mut dec = s.decoder(4, 4, b"SMK2");
+    dec.decode(Some(&[0x3F, 0x00, 0x00, 0x00, 0x3F, 0x00]), &[]).unwrap();
+    // one entry and no more: the rest stay, and the frame's video data is still applied
+    dec.decode(Some(&[0x01, 0x01, 0x01]), &[0]).unwrap();
+    assert_eq!(dec.palette()[..3], [[4, 4, 4], [0, 255, 0], [0, 0, 0]]);
+    assert_eq!(dec.pixels(), [6; 16]);
+    // a record cut short by the end of the chunk is dropped: a colour, a copy, nothing at all
+    let before = *dec.palette();
+    for chunk in [&[0x80, 0x02, 0x03][..], &[0x80, 0x40], &[]] {
+        dec.decode(Some(chunk), &[]).unwrap();
+        assert_eq!(*dec.palette(), before);
+    }
+}
+
+#[test]
+fn a_long_run_covers_its_whole_length() {
+    let types = [code(SOLID, 58, 5), code(VOID, 4, 0)];
+    let s = Stream::new(&[0], &[0], &[0], &types);
+    // 64 blocks: 59 solid ones, then 5 left alone
+    let mut dec = s.decoder(64, 16, b"SMK2");
+    let mut w = BitWriter::new();
+    s.types.put(&mut w, types[0]);
+    s.types.put(&mut w, types[1]);
+    dec.decode(None, &w.finish()).unwrap();
+    let last_row = rows(&dec)[12];
+    assert_eq!(last_row[..44], [5; 44]);
+    assert_eq!(last_row[44..], [0; 20]);
+}
+
+#[test]
+fn the_cache_holds_three_values() {
+    let (a, b, c) = (code(SOLID, 0, 1), code(SOLID, 0, 2), code(SOLID, 0, 3));
+    let escapes = [0xE000, 0xE001, 0xE002];
+    let types = TreeWriter::new(&[a, b, c, code(VOID, 2, 0), escapes[0], escapes[1], escapes[2]], escapes);
+    let plain = TreeWriter::new(&[0], NO_ESCAPES);
+    let s = Stream { maps: plain.clone(), colours: plain.clone(), full: plain, types };
+    let mut dec = s.decoder(32, 4, b"SMK2");
+    let mut w = BitWriter::new();
+    // a, b, c, then twice the third most recent value: a (the cache is then a, c, b), and b
+    for sym in [a, b, c, escapes[2], escapes[2], code(VOID, 2, 0)] {
+        s.types.put(&mut w, sym);
+    }
+    dec.decode(None, &w.finish()).unwrap();
+    let got: Vec<u8> = dec.pixels()[..32].iter().step_by(4).copied().collect();
+    assert_eq!(got, [1, 2, 3, 1, 2, 0, 0, 0]);
+}
+
+#[test]
+fn a_leaf_is_a_cache_leaf_for_the_first_escape_that_names_it_only() {
+    // the second escape is 0. The leaf of the first escape holds 0 once it is a cache leaf,
+    // and must not take the second slot from the leaf whose value is 0.
+    let (a, b) = (code(SOLID, 0, 1), code(SOLID, 0, 2));
+    let escapes = [0xE000, 0x0000, 0xE002];
+    let types = TreeWriter::new(&[0x0000, escapes[0], a, b, code(VOID, 0, 0)], escapes);
+    let plain = TreeWriter::new(&[0], NO_ESCAPES);
+    let s = Stream { maps: plain.clone(), colours: plain.clone(), full: plain, types };
+    let mut dec = s.decoder(16, 4, b"SMK2");
+    let mut w = BitWriter::new();
+    // a, b, the second most recent value (a), and a void block
+    for sym in [a, b, 0x0000, code(VOID, 0, 0)] {
+        s.types.put(&mut w, sym);
+    }
+    dec.decode(None, &w.finish()).unwrap();
+    let got: Vec<u8> = dec.pixels()[..16].iter().step_by(4).copied().collect();
+    assert_eq!(got, [1, 2, 1, 0]);
+}
+
+#[test]
+fn a_tree_is_bounded_whatever_size_the_header_declares() {
+    // a present tree with no byte trees and zero escapes, then branches without end
+    let mut w = BitWriter::new();
+    w.bit(true);
+    w.bits(0, 2);
+    for _ in 0..3 {
+        w.bits(0, 16);
+    }
+    for _ in 0..(MAX_TREE_NODES + 1000) {
+        w.bit(true);
+    }
+    let mut extradata = [u32::MAX.to_le_bytes(); 4].concat();
+    extradata.extend(w.finish());
+    let params = CodecParams::new(CodecId::SmackerVideo).with_tag(*b"SMK2").with_size(8, 8).with_extradata(extradata);
+    assert_eq!(Decoder::new(&params).err(), Some(Error::Invalid("tree has too many nodes")));
+}
+
+#[test]
+fn the_picture_size_is_limited() {
+    let s = Stream::new(&[0], &[0], &[0], &[code(VOID, 0, 0)]);
+    assert!(Decoder::new(&s.params(4096, 4096, b"SMK2")).is_ok());
+    assert_eq!(Decoder::new(&s.params(4097, 4096, b"SMK2")).err(), Some(Error::TooLarge(4097, 4096)));
+    assert_eq!(Decoder::new(&s.params(1 << 20, 17, b"SMK2")).err(), Some(Error::TooLarge(1 << 20, 17)));
 }
 
 #[test]
@@ -238,7 +342,7 @@ fn bad_parameters_and_trees_are_errors() {
     // a tree with more nodes than its declared size allows (the first tree has five nodes)
     let mut p = good.clone();
     p.extradata[..4].fill(0);
-    assert_eq!(Decoder::new(&p).err(), Some(Error::Invalid("tree is larger than its declared size")));
+    assert_eq!(Decoder::new(&p).err(), Some(Error::Invalid("tree has too many nodes")));
     // a hostile size is bounded by the data: branches without end
     let mut data = vec![0xFF; 16];
     data.extend([0xFF; 64]);
