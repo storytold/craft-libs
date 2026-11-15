@@ -398,9 +398,9 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         }
     }
 
-    /// A drag on the body scrubs a field that is not in edit.
+    /// A drag on the body scrubs a field that is not in edit; the wheel steps the value.
     fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::DRAG | Sense::FOCUS | Sense::TAKE_FOCUS
+        Sense::CLICK | Sense::DRAG | Sense::FOCUS | Sense::TAKE_FOCUS | Sense::WHEEL_Y
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {

@@ -507,8 +507,9 @@ impl Component for FontPicker<'_> {
         craft_ui::text::FieldStyle::at(cx)
     }
 
+    /// The wheel steps the family through the list.
     fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS
+        Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS | Sense::WHEEL_Y
     }
 
     /// The width of the longest family names in common use, so the field keeps its size whichever family is picked.

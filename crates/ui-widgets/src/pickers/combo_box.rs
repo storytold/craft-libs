@@ -111,8 +111,9 @@ impl Component for ComboBox<'_> {
         crate::text::FieldStyle::at(cx)
     }
 
+    /// The wheel steps the text through the options.
     fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS
+        Sense::CLICK | Sense::FOCUS | Sense::TAKE_FOCUS | Sense::WHEEL_Y
     }
 
     /// The widest of the current text, the placeholder and the options, and the room of the chevron: the field keeps

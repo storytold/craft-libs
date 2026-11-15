@@ -185,6 +185,11 @@ impl<T: Value + 'static> Component for Select<'_, T> {
         }
     }
 
+    /// The face senses the pointer; the wheel steps the pick.
+    fn sense(&self) -> Sense {
+        Sense::CLICK | Sense::FOCUS | Sense::WHEEL_Y
+    }
+
     /// The widest face of an entry (its closed label, or its picture), the placeholder and the mixed word, so the field
     /// keeps its size whichever is shown.
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
