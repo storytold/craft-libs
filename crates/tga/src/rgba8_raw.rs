@@ -6,6 +6,8 @@ pub enum Rgba8EncodeError {
     FrameSize,
     /// A dimension cannot fit the 16-bit Targa header.
     Dimensions,
+    /// The output buffer could not be allocated.
+    OutOfMemory,
 }
 fn checked_len(rgba: &[u8], w: u32, h: u32) -> std::result::Result<usize, Rgba8EncodeError> {
     let n = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4)).ok_or(Rgba8EncodeError::FrameSize)?;
@@ -24,7 +26,11 @@ pub fn encode_rgba8_raw(rgba: &[u8], w: u32, h: u32, alpha: bool) -> std::result
     };
     let bpp: usize = if alpha { 4 } else { 3 };
     let row = w as usize * 4;
-    let mut out = Vec::with_capacity(18 + w as usize * h as usize * bpp + 26);
+    // The caller already holds the frame; reserve the second, output-sized buffer fallibly so a
+    // large export reports an error instead of aborting the process.
+    let len = (w as usize * h as usize).checked_mul(bpp).and_then(|n| n.checked_add(18 + 26)).ok_or(Rgba8EncodeError::FrameSize)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(|_| Rgba8EncodeError::OutOfMemory)?;
     out.extend_from_slice(&[0, 0, 2]); // no ID, no colour map, uncompressed true-colour
     out.extend_from_slice(&[0; 5]); // colour map specification (unused)
     out.extend_from_slice(&[0, 0, 0, 0]); // x / y origin

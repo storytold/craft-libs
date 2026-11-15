@@ -6,6 +6,8 @@ pub enum Rgba8EncodeError {
     FrameSize,
     /// A dimension cannot fit the output format.
     TooLarge,
+    /// The output buffer could not be allocated.
+    OutOfMemory,
 }
 fn checked_len(rgba: &[u8], w: u32, h: u32) -> std::result::Result<usize, Rgba8EncodeError> {
     let n = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4)).ok_or(Rgba8EncodeError::FrameSize)?;
@@ -82,7 +84,10 @@ pub fn encode_rgba8_dpx10(rgba: &[u8], w: u32, h: u32, creator: &str) -> std::re
     put32(&mut hd, 1632, 1);
     // television header: progressive
     hd[1928] = 0;
-    let mut out = Vec::with_capacity(size);
+    // The caller already holds the frame; reserve the output fallibly so a large export reports
+    // an error instead of aborting the process.
+    let mut out = Vec::new();
+    out.try_reserve_exact(size).map_err(|_| Rgba8EncodeError::OutOfMemory)?;
     out.extend_from_slice(&hd);
     let ten = |v: u8| (u32::from(v) << 2) | (u32::from(v) >> 6);
     for &[r, g, b, _] in rgba.as_chunks::<4>().0 {
