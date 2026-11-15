@@ -121,7 +121,8 @@ pub fn input_for(data: &[u8], output: usize, max: usize) -> (Option<usize>, usiz
 /// [`input_for`] of raw deflate. The input is fed as many bytes at a time as can't give the bytes
 /// still wanted (a byte of deflate gives at most 258 bytes for each of its bits, and the bits held
 /// from bytes already fed a few matches more), then a byte at a time, so what is taken in when the
-/// output is reached is the least that reaches it.
+/// output is reached is the least that reaches it. Once it is all fed, steps go on with none while
+/// they give more.
 fn least_input(input: &[u8], output: usize, max: usize) -> (Option<usize>, usize) {
     const MOST_PER_BYTE: usize = 258 * 8;
     const HELD: usize = 16 << 10;
@@ -140,14 +141,14 @@ fn least_input(input: &[u8], output: usize, max: usize) -> (Option<usize>, usize
         let feed = (left.saturating_sub(HELD) / MOST_PER_BYTE).max(1);
         let room = left.min(max - made).min(scratch.len());
         let Some(rest) = input.get(taken..) else { return (None, made) };
-        if rest.is_empty() {
-            return (Some(input.len()), made);
-        }
         let (Some(fed), Some(out)) = (rest.get(..feed.min(rest.len())), scratch.get_mut(..room)) else { return (None, made) };
         let Ok(status) = d.decompress(fed, out, FlushDecompress::None) else { return (None, counts(&d).1) };
         let (now_taken, now_made) = counts(&d);
         match status {
             Status::StreamEnd => return (Some(now_taken), now_made),
+            // With the data all taken in, zlib may still hold what a step had no room for; the data
+            // ends once a step gives nothing more.
+            _ if rest.is_empty() && now_made == made => return (Some(input.len()), made),
             // A step that takes and gives nothing would be repeated forever.
             _ if now_taken == taken && now_made == made => return (None, made),
             _ => {}
@@ -421,5 +422,24 @@ mod tests {
             }
             Ok(out) => panic!("read as {out:?}"),
         }
+    }
+
+    /// A run of copies can be all taken in before what it gives has room: what zlib holds of it is
+    /// still inflated, and counts toward the limit, once the data is all taken in.
+    #[test]
+    fn what_is_held_once_the_data_is_taken_in_is_still_inflated() {
+        let mut bits = Bits::default();
+        bits.put(1, 1); // the final block,
+        bits.put(1, 2); // fixed Huffman codes (§3.2.6)
+        bits.code(0x30 + u32::from(b'A'), 8);
+        for _ in 0..255 {
+            bits.code(0xc5, 8); // length 258
+            bits.code(0, 5); // distance 1
+        }
+        // No end of block: the data ends first. It gives 65,791 bytes, more than a step has room for.
+        let mut data = vec![0x78, 0x9c];
+        data.extend(bits.finish());
+        assert_eq!(input_for(&data, 1 << 20, 1 << 20), (Some(data.len()), 65_791), "ends first: all taken in");
+        assert_eq!(input_for(&data, 1 << 20, 65_537), (None, 65_537), "past what may be inflated");
     }
 }
