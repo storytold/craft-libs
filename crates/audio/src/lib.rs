@@ -58,6 +58,8 @@ mod read;
 mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
+/// Bounded WAV/RF64 cue, adtl and XMP marker metadata, without audio decoding.
+pub mod wav_markers;
 #[cfg(any(
     feature = "pcm-encode",
     feature = "flac-encode",
