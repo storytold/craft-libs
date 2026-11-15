@@ -626,6 +626,9 @@ fn transform(a: &AtomicNode, cx: &mut NodeCx<'_>) -> String {
     l
 }
 
+/// The sfnt version of a font with OpenType (CFF) outlines.
+const OPENTYPE_CFF: &[u8] = b"OTTO";
+
 /// Text drawn with the font stored in the graph: the text from the graph input it names, position (an offset from the
 /// middle, y up), size and alignment as the graph runtime's `text` node takes them.
 fn text(a: &AtomicNode, cx: &mut NodeCx<'_>) -> String {
@@ -637,6 +640,11 @@ fn text(a: &AtomicNode, cx: &mut NodeCx<'_>) -> String {
         _ => None,
     };
     match font.and_then(|off| asm.embedded_font(off).map(|ttf| (off, ttf))) {
+        // the graph runtime reads TrueType outlines only: an OpenType (CFF) face draws with the built-in one instead of
+        // failing the render (font_segment14)
+        Some((_, ttf)) if ttf.starts_with(OPENTYPE_CFF) => {
+            cx.warnings.push(format!("node {}: the text's font has OpenType (CFF) outlines (the built-in face draws it)", a.index));
+        }
         Some((off, ttf)) => {
             let file = format!("font_{off:x}.ttf");
             if !cx.embedded.iter().any(|(name, _)| *name == file) {

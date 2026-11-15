@@ -299,3 +299,80 @@ fn the_code_tables_name_every_code_once() {
         assert_eq!(rand_mode::site_name(mode).is_some(), matches!(mode, 1 | 2 | 3 | 5 | 10..=18), "generator {mode}");
     }
 }
+
+/// One text node (0x22) whose font starts with `sfnt` (the layout of the font graphs; see the decoder's test).
+fn one_text(sfnt: [u8; 4]) -> Vec<u8> {
+    let section: Vec<u32> = vec![
+        0,
+        0,
+        4,
+        u32::from_le_bytes(sfnt),
+        0x18,
+        0,
+        0x0001_8822,
+        0x3282,
+        0,
+        0xdddd,
+        0x04,
+        0x3c,
+        0x44,
+        0x4c,
+        0x54,
+        0x0a42_0001,
+        0xbbbb,
+        0x0942_0001,
+        0xeeee,
+        0x0902_0001,
+        0xffff,
+        0x0a02_0001,
+        0x1111,
+        8,
+        8,
+        0x0005_0001,
+        0xcccc,
+        8,
+        0xbbbb,
+        6,
+        0xdddd,
+        1,
+        0xeeee,
+        0,
+        0xffff,
+        4,
+        0x1111,
+        1,
+        0x10,
+        0x14,
+        0x5c,
+    ];
+    let total = (0x34 + 4 * section.len()) as u32;
+    let header = [u32::from_le_bytes(*b"SBAM"), 4 << 16, 11, 22, total, 0x1c, 0, total - 0x1c, 0x10002, 0, 1, 0x64, 2];
+    header.iter().chain(&section).flat_map(|w| w.to_le_bytes()).collect()
+}
+
+fn text_description() -> Description {
+    Description::parse(
+        root_xml(
+            r#"<ROOT><graphs><graph pkgurl="pkg://font_t" label="Font T"><outputs><output uid="52428" identifier="output"/></outputs><inputs>
+        <input uid="48059" identifier="$outputsize" type="8" default="8,8"/>
+        <input uid="56797" identifier="text" type="6" default="Ab"/>
+        <input uid="61166" identifier="position" type="1" default="0,0.05"/>
+        <input uid="65535" identifier="fontsize" type="0" default="0.2"/>
+        <input uid="4369" identifier="alignment" type="4" default="1"/></inputs></graph></graphs></ROOT>"#,
+        )
+        .as_bytes(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_text_node_draws_its_text_input_with_the_stored_truetype_font_or_else_the_built_in_face() {
+    let d = super::decompile(&text_description(), &Assembly::parse(&one_text([0, 1, 0, 0])).unwrap(), 64);
+    assert!(d.text.contains("node 1 text y_up=1 font=\"font_4.ttf\" fn.text="), "{}", d.text);
+    assert!(d.text.contains("resource font_4.ttf ") && d.text.contains("input_value name=\"text\" type=9 v=\"Ab\""), "{}", d.text);
+    assert!(!d.text.contains("expose \"text\""), "a text has no slider");
+    // OpenType (CFF) outlines, which the runtime cannot read: the built-in face, with a warning, instead of a failed render
+    let d = super::decompile(&text_description(), &Assembly::parse(&one_text(*b"OTTO")).unwrap(), 64);
+    assert!(d.text.contains("node 1 text y_up=1 fn.text=") && !d.text.contains("resource font_"), "{}", d.text);
+    assert!(d.warnings.iter().any(|w| w.contains("CFF")), "{:?}", d.warnings);
+}
