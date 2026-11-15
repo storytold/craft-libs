@@ -29,10 +29,11 @@ impl fmt::Display for MigrateError {
 
 impl std::error::Error for MigrateError {}
 
-/// A `[section]` that parsed as TOML but did not fit the settings type; its defaults were used.
+/// A `[section]` that parsed as TOML but did not fit the settings type, or a value a
+/// [`LegacyFile`](crate::LegacyFile) parse could not read; its defaults were used.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionError {
-    /// The top-level key.
+    /// The top-level key; for a legacy import, the dotted key path (`interface.uiScale`).
     pub section: String,
     /// The deserialization error.
     pub message: String,

@@ -183,10 +183,11 @@ impl<T: Settings> SettingsStore<T> {
         match store.files.read(&path) {
             Ok(Some(text)) => store.load_text(&path, &text, &mut report),
             Ok(None) => {
-                if let Some((value, from)) = migrate::import_legacy(&options.legacy) {
+                if let Some((value, errors, from)) = migrate::import_legacy(&options.legacy) {
                     store.value = value;
                     store.dirty = true;
                     report.source = Source::Legacy(from);
+                    report.section_errors = errors;
                 }
             }
             Err(e) => store.set_read_only(&mut report, ReadOnlyReason::Unreadable(e)),
