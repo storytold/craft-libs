@@ -66,6 +66,9 @@ mod wav;
     feature = "vorbis-encode"
 ))]
 mod write;
+
+/// Streaming WAVE and AIFF headers and sample packing.
+pub mod pcm_export;
 #[cfg(feature = "vorbis-encode")]
 pub use write::{OGG_BITRATES, encode_ogg};
 
