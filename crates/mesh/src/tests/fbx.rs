@@ -627,3 +627,13 @@ fn fbx6_model_holds_its_mesh() {
         assert_eq!(d.unit_scale(), Some(100.0));
     }
 }
+
+#[test]
+fn fbx_invalid_material_slot_is_unassigned_and_unnamed_material_has_id() {
+    let text = ASCII.replace("a: 0,1\n", "a: 0,99\n").replace("\"Material::Red\"", "\"\"");
+    let scene = parse(text.as_bytes()).unwrap();
+    assert!(scene.materials.iter().any(|m| m.name == "Material_400"));
+    let parts = &scene.meshes[0].parts;
+    assert!(parts.iter().any(|p| p.material.is_none()));
+    assert!(parts.iter().any(|p| p.material.is_some()));
+}
