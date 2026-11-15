@@ -82,8 +82,6 @@ pub struct PartDigest {
     pub digest: [u8; 32],
 }
 
-type TrackedParts = (fn(&str) -> bool, Vec<PartDigest>);
-
 /// A container being written.
 pub struct Writer {
     zip: craft_zip::Writer,
