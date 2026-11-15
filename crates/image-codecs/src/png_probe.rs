@@ -17,6 +17,11 @@ pub fn declared_dimensions(b: &[u8]) -> Option<(u32, u32)> {
 
 /// Stored dimensions and EXIF orientation. This does not validate CRCs or compressed pixels.
 pub fn header(b: &[u8]) -> Result<(u32, u32, u16), CodecError> {
+    header_with_max_pixels(b, u64::MAX)
+}
+
+/// As [`header`], refusing images over `max_pixels` before scanning their chunks.
+pub fn header_with_max_pixels(b: &[u8], max_pixels: u64) -> Result<(u32, u32, u16), CodecError> {
     if !b.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err(err("bad signature"));
     }
@@ -32,6 +37,9 @@ pub fn header(b: &[u8]) -> Result<(u32, u32, u16), CodecError> {
     }
     if w == 0 || h == 0 {
         return Err(err("zero dimension"));
+    }
+    if u64::from(w) * u64::from(h) > max_pixels {
+        return Err(CodecError::LimitExceeded("PNG pixel count".into()));
     }
     let depth_ok = match color {
         0 => matches!(depth, 1 | 2 | 4 | 8 | 16),
