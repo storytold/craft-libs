@@ -30,6 +30,7 @@ mod options;
 pub mod orientation;
 pub mod resolution;
 pub mod source_settings;
+pub mod tiff_probe;
 pub mod web;
 pub use crate::allocation::probe_allocation_size;
 pub use crate::cicp::Cicp;
