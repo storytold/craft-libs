@@ -2430,7 +2430,6 @@ dependencies = [
  "base64 0.23.1",
  "craft-image-codecs",
  "image",
- "rayon",
  "thiserror 2.0.21",
 ]
 
