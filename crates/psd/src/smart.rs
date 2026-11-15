@@ -1182,6 +1182,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod embedded_header_tests {
     use super::*;
 
