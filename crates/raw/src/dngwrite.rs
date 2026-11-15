@@ -605,6 +605,10 @@ fn write_opcode_tags(ifd: &mut IfdBuilder, raw: &DngImage<'_>) {
 }
 
 #[cfg(test)]
+#[path = "dngwrite_legacy_tests.rs"]
+mod legacy;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{BlackLevel, OpcodeLists, RawData, RawFormat, RawImage, Rect};
@@ -636,6 +640,79 @@ mod tests {
             level_sources: Default::default(),
             notices: crate::RawNotices::default(),
         }
+    }
+
+    #[test]
+    fn borrowed_writer_preserves_owned_output() {
+        let mut raw = tiny_raw();
+        for floating in [false, true] {
+            if floating {
+                raw.data = RawData::F32((0..64).map(|v| v as f32 / 64.0).collect());
+                raw.white = vec![1.0];
+            }
+            for order in [ByteOrder::Little, ByteOrder::Big] {
+                for (compression, old_compression) in [
+                    (DngCompression::Uncompressed, legacy::DngCompression::Uncompressed),
+                    (DngCompression::Lj92 { tile: 16 }, legacy::DngCompression::Lj92 { tile: 16 }),
+                    (DngCompression::Deflate { tile: 16, half: false }, legacy::DngCompression::Deflate { tile: 16, half: false }),
+                    (DngCompression::Deflate { tile: 16, half: true }, legacy::DngCompression::Deflate { tile: 16, half: true }),
+                ] {
+                    let xmp = Some("<xmp>retained</xmp>".to_string());
+                    let options = DngWriteOptions { compression, order, xmp: xmp.clone(), software: "Test writer".into() };
+                    let old_options = legacy::DngWriteOptions { compression: old_compression, order, xmp, software: "Test writer".into() };
+                    let expected = legacy::write_dng(&raw, &old_options).unwrap();
+                    assert_eq!(expected, write_dng_view(&DngImage::from(&raw), &options).unwrap());
+                    assert_eq!(expected, write_dng(&raw, &options).unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lossy_tiles_preserve_prepared_codes_padding_and_tags() {
+        let mut raw = tiny_raw();
+        raw.width = 2;
+        raw.height = 1;
+        raw.cpp = 3;
+        raw.bits = 8;
+        raw.data = RawData::U16(vec![1, 2, 3, 250, 251, 252]);
+        raw.active_area = Rect::new(0, 0, 2, 1);
+        raw.crop = raw.active_area;
+        let linearization: Vec<u16> = (0..256).map(|v| v * 257).collect();
+        let called = std::sync::atomic::AtomicUsize::new(0);
+        let encoder = |pixels: Vec<u8>, tile: u32, quality: u8| {
+            called.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            assert_eq!((tile, quality), (16, 100));
+            for row in pixels.chunks_exact(16 * 3) {
+                assert_eq!(&row[..3], &[1, 2, 3]);
+                assert!(row[3..].chunks_exact(3).all(|p| p == [250, 251, 252]));
+            }
+            let mut output = Vec::new();
+            jpeg_encoder::Encoder::new(&mut output, quality)
+                .encode(&pixels, tile as u16, tile as u16, jpeg_encoder::ColorType::Rgb)
+                .map_err(|e| RawError::Corrupt(e.to_string()))?;
+            Ok(output)
+        };
+        let bytes = write_lossy_dng(&DngImage::from(&raw), &DngWriteOptions::default(), 17, 255, &linearization, &encoder).unwrap();
+        assert_eq!(called.load(std::sync::atomic::Ordering::Relaxed), 1);
+        let tiff = craft_tiff::Tiff::parse(&bytes).unwrap();
+        let ifd = tiff.all_ifds()[0];
+        assert_eq!(ifd.u16(t::COMPRESSION), Some(compression::LOSSY_JPEG));
+        assert_eq!(ifd.u64s(t::LINEARIZATION_TABLE).unwrap(), linearization.iter().map(|&v| u64::from(v)).collect::<Vec<_>>());
+        assert_eq!((crate::decode(&bytes).unwrap().width, crate::decode(&bytes).unwrap().height), (2, 1));
+        assert_eq!(lossy_tile_edge(u32::MAX), 4096);
+        assert_eq!(lossy_tile_edge(0), 16);
+        let failing = |_: Vec<u8>, _: u32, _: u8| Err(RawError::Limit("test encoder failure"));
+        assert!(matches!(
+            write_lossy_dng(&DngImage::from(&raw), &DngWriteOptions::default(), 16, 90, &linearization, &failing),
+            Err(RawError::Limit("test encoder failure"))
+        ));
+        let never = |_: Vec<u8>, _: u32, _: u8| -> Result<Vec<u8>> { panic!("malformed input reached encoder") };
+        assert!(write_lossy_dng(&DngImage::from(&raw), &DngWriteOptions::default(), 16, 90, &linearization[..255], &never).is_err());
+        raw.data = RawData::U16(vec![256; 6]);
+        assert!(write_lossy_dng(&DngImage::from(&raw), &DngWriteOptions::default(), 16, 90, &linearization, &never).is_err());
+        raw.data = RawData::U16(vec![1; 5]);
+        assert!(write_lossy_dng(&DngImage::from(&raw), &DngWriteOptions::default(), 16, 90, &linearization, &never).is_err());
     }
 
     #[test]
