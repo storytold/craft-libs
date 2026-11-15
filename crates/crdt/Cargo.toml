@@ -1,0 +1,20 @@
+[package]
+name = "craft-crdt"
+description = "Conflict-free replicated types for Craft documents: fractional keys, RGA text, a replica, and a memory-link simulator. CollabCraft remains the live relay; this crate never opens a socket."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+thiserror = "2"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true
