@@ -21,6 +21,7 @@
 //! ```
 
 mod catalog;
+mod embedding;
 mod env;
 mod fallback;
 mod fontconfig;
@@ -31,11 +32,14 @@ mod registry;
 mod scan;
 mod segments;
 mod shape;
+/// Bounded SFNT face metadata discovery over caller-provided random-access readers.
+pub mod sfnt;
 mod suitcase;
 pub mod system;
 mod visual_order;
 
 pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch};
+pub use embedding::{SubsetEmbedding, subset_embedding};
 pub use env::{FontEnv, Os, font_dirs, font_store_dir, office_font_dirs};
 pub use fallback::{cluster_face, drawable_characters};
 pub use fontconfig::fontconfig_dirs;

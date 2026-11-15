@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-usd = { path = "crates/usd" }
 craft-smime = { path = "crates/smime" }
 craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
@@ -54,6 +55,7 @@ craft-doc-binary = { path = "crates/doc-binary" }
 craft-docx = { path = "crates/docx" }
 craft-document-bundle = { path = "crates/document-bundle" }
 craft-mcmat = { path = "crates/mcmat" }
+craft-deckcraft-format = { path = "crates/deckcraft-format" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
@@ -68,6 +70,7 @@ craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
 craft-dwg = { path = "crates/dwg" }
+craft-fcproj-format = { path = "crates/fcproj-format" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
@@ -91,6 +94,7 @@ craft-indd = { path = "crates/indd" }
 craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
 craft-jpeg = { path = "crates/jpeg" }
+craft-control-protocol = { path = "crates/control-protocol" }
 craft-jsonrpc = { path = "crates/jsonrpc" }
 craft-mcp = { path = "crates/mcp" }
 craft-jxl = { path = "crates/jxl" }
@@ -147,6 +151,7 @@ craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
 craft-svg-paths = { path = "crates/svg-paths" }
 craft-stream-codecs = { path = "crates/stream-codecs" }
 craft-text = { path = "crates/text" }
+craft-tcraft = { path = "crates/tcraft" }
 craft-texture = { path = "crates/texture" }
 craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }
