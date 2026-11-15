@@ -101,6 +101,7 @@ pub mod testgen;
 pub mod text;
 pub mod tiff;
 pub mod tree;
+pub mod unicode_names;
 
 pub use blend::BlendMode;
 pub use builder::{GroupSpec, LayerSpec, MaskSpec, PixelData, PsdBuilder};
