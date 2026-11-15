@@ -6,6 +6,7 @@ mod alert;
 mod blocking;
 #[doc(hidden)]
 pub mod frame;
+mod held;
 mod host;
 mod modal;
 mod prompt;
@@ -26,7 +27,8 @@ pub use blocking::{BlockingOverlay, BlockingOverlayStyle};
 pub use frame::{DialogFrame, DialogFrameStyle, DialogOutput, FooterCx, FooterHooks};
 #[doc(hidden)]
 pub use host::dialog_probe;
-pub use host::{DialogHost, DialogResult, FieldRefusal, HeldOk, OpenDialog, StackDialog, StartupStage};
+pub use held::{HeldAnswer, HeldOk};
+pub use host::{DialogHost, DialogResult, FieldRefusal, OpenDialog, StackDialog, StartupStage};
 pub use modal::{Dialog, DialogStyle};
 pub use prompt::{Prompt, PromptOutput};
 pub use prompts::{PromptAnswer, PromptChoice, PromptKind, StandardPrompt, StandardPromptOutput};

@@ -10,9 +10,9 @@ use std::fmt;
 use egui::{Context, Ui};
 use serde_json::Value;
 
+use super::held::HeldOk;
 use super::stack::{DialogId, DialogStack};
 use crate::contract::{Pattern, PatternKind, PatternProbe};
-use crate::runtime::env::Label;
 
 /// How a dialog on the [`DialogHost`] finished. `T` is the dialog's own answer type: a struct of
 /// values for a form, an enum for a prompt with three buttons.
@@ -23,19 +23,6 @@ pub enum DialogResult<T> {
     Ok(T),
     /// Cancel, Esc, the close box, or a parent that closed over it.
     Cancel,
-}
-
-/// Where a dialog's held OK stands ([`StackDialog::held_state`]): an OK that files its answer for the app, which answers
-/// it before the dialog closes (a check the app runs, a save path it picks).
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum HeldOk {
-    /// OK filed its answer; the app has not answered it yet.
-    Waiting,
-    /// The app accepted the held OK: the dialog finishes with it at its next pass or [`DialogHost::confirm`].
-    Accepted,
-    /// The app refused the last held OK for this reason; OK is enabled again.
-    Refused(Label),
 }
 
 impl<T> DialogResult<T> {
