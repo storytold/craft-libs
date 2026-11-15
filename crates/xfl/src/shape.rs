@@ -220,12 +220,12 @@ impl<'a, E: XflElement> Shape<'a, E> {
 
     /// Fill styles, preserving their native order and index values.
     pub fn fills(&self) -> impl Iterator<Item = FillStyle<'_, E>> + '_ {
-        self.element.child("fills").into_iter().flat_map(|table| table.elements_named("FillStyle")).map(|element| FillStyle { element })
+        self.element.child("fills").into_iter().flat_map(|table| table.elements()).map(|element| FillStyle { element })
     }
 
     /// Stroke styles, preserving their native order and index values.
     pub fn strokes(&self) -> impl Iterator<Item = StrokeStyle<'_, E>> + '_ {
-        self.element.child("strokes").into_iter().flat_map(|table| table.elements_named("StrokeStyle")).map(|element| StrokeStyle { element })
+        self.element.child("strokes").into_iter().flat_map(|table| table.elements()).map(|element| StrokeStyle { element })
     }
 
     /// Native edge records, preserving malformed and unknown data for consumer policy.
@@ -245,7 +245,7 @@ impl<'a, E: XflElement> FillStyle<'a, E> {
         integer(self.element, "index")
     }
 
-    /// The first recognized fill definition inside this table entry.
+    /// The first native definition element inside this table entry.
     pub fn definition(&self) -> Option<Fill<'_, E>> {
         self.element.elements().next().map(|element| Fill { element })
     }
@@ -377,7 +377,7 @@ impl<'a, E: XflElement> StrokeStyle<'a, E> {
         integer(self.element, "index")
     }
 
-    /// The first stroke definition inside this table entry.
+    /// The first native definition element inside this table entry.
     pub fn definition(&self) -> Option<Stroke<'_, E>> {
         self.element.elements().next().map(|element| Stroke { element })
     }
@@ -534,6 +534,18 @@ mod tests {
         let fill = fill.definition().unwrap();
         assert_eq!(fill.alpha(), None);
         assert_eq!(fill.color_value(), Color { rgb: 0, alpha: 1.0 });
+    }
+
+    #[test]
+    fn style_table_views_keep_the_legacy_first_child_and_index_behavior() {
+        let root = parse(b"<DOMShape><fills><LegacyFill index='5'><SolidColor color='#123456'/></LegacyFill></fills><strokes><LegacyStroke index='6'><SolidStroke weight='2'/></LegacyStroke></strokes></DOMShape>");
+        let shape = Shape::new(&root).unwrap();
+        let fill_style = shape.fills().next().unwrap();
+        assert_eq!(fill_style.index(), Some(5));
+        assert_eq!(fill_style.definition().map(|fill| fill.kind()), Some(FillKind::SolidColor));
+        let stroke_style = shape.strokes().next().unwrap();
+        assert_eq!(stroke_style.index(), Some(6));
+        assert_eq!(stroke_style.definition().map(|stroke| stroke.kind()), Some(StrokeKind::Solid));
     }
 
     #[test]
