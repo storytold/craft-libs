@@ -441,3 +441,96 @@ mod tests {
         assert!(outline(&font, 1, false).is_err());
     }
 }
+
+#[cfg(test)]
+mod instruction_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    struct Fixture {
+        kind: ShxKind,
+        programs: Vec<Vec<u8>>,
+    }
+    impl Font for Fixture {
+        fn kind(&self) -> ShxKind {
+            self.kind
+        }
+        fn dual(&self) -> bool {
+            true
+        }
+        fn above(&self) -> f64 {
+            10.0
+        }
+        fn char_width(&self) -> f64 {
+            10.0
+        }
+        fn program(&self, number: u16) -> Option<&[u8]> {
+            self.programs.get(usize::from(number)).map(Vec::as_slice)
+        }
+    }
+    fn fixture(program: Vec<u8>) -> Fixture {
+        Fixture { kind: ShxKind::Shapes, programs: vec![program] }
+    }
+
+    #[test]
+    fn pen_state_scaling_and_location_stack_keep_separate_strokes() {
+        let font = fixture(vec![4, 4, 0x10, 5, 2, 8, 2, 3, 6, 1, 3, 2, 0x14, 0]);
+        let g = outline(&font, 0, false).unwrap();
+        assert_eq!(g.strokes, vec![vec![Point::ZERO, Point::new(4.0, 0.0)], vec![Point::new(4.0, 0.0), Point::new(4.0, 2.0)]]);
+        assert_eq!(g.advance, Point::new(4.0, 2.0));
+    }
+
+    #[test]
+    fn vertical_only_commands_consume_operands_without_affecting_horizontal_text() {
+        let font = fixture(vec![14, 8, 10, 20, 0x10, 0]);
+        assert_eq!(outline(&font, 0, false).unwrap().advance, Point::new(1.0, 0.0));
+        assert_eq!(outline(&font, 0, true).unwrap().advance, Point::new(11.0, 20.0));
+    }
+
+    #[test]
+    fn displacement_and_bulge_sequences_end_at_their_chord_endpoint() {
+        for (program, end_x) in
+            [(vec![9, 3, 4, 253, 252, 0, 0, 0], 0.0), (vec![12, 10, 0, 127, 0], 10.0), (vec![13, 10, 0, 129, 246, 0, 0, 0, 0, 0], 0.0)]
+        {
+            let g = outline(&fixture(program), 0, false).unwrap();
+            assert!(g.advance.y.abs() < 1e-10);
+            assert!((g.advance.x - end_x).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn full_octant_arcs_close_and_fractional_arcs_keep_radius() {
+        for program in [vec![10, 10, 0, 0], vec![10, 10, 128, 0], vec![11, 0, 0, 0, 10, 0, 0]] {
+            let g = outline(&fixture(program), 0, false).unwrap();
+            assert!(g.advance.len() < 1e-10);
+            assert_eq!(g.strokes[0].len(), 65);
+        }
+    }
+
+    #[test]
+    fn subshape_operands_follow_font_kind_and_bigfont_restores_parent_position() {
+        for kind in [ShxKind::Shapes, ShxKind::Unifont, ShxKind::BigFont] {
+            let call = match kind {
+                ShxKind::Unifont => vec![7, 0, 1, 0],
+                ShxKind::BigFont => vec![7, 0, 0, 1, 2, 3, 20, 30, 0],
+                _ => vec![7, 1, 0],
+            };
+            let font = Fixture { kind, programs: vec![call, vec![0x10, 0]] };
+            let g = outline(&font, 0, false).unwrap();
+            if kind == ShxKind::BigFont {
+                assert_eq!(g.advance, Point::ZERO);
+                assert_eq!(g.strokes[0], vec![Point::new(2.0, 3.0), Point::new(4.0, 3.0)]);
+            } else {
+                assert_eq!(g.advance, Point::new(1.0, 0.0));
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_operands_and_resource_exhaustion_return_errors() {
+        for program in [vec![8, 1], vec![7, 99], vec![5; MAX_STACK + 1], vec![0x10; MAX_POINTS + 1], vec![4, 255, 4, 255, 4, 255]] {
+            assert!(outline(&fixture(program), 0, false).is_err());
+        }
+        assert!(outline(&fixture(vec![0]), 1, false).is_err());
+    }
+}
