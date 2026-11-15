@@ -746,6 +746,8 @@ pub struct SceneOptions {
     pub strict_geometry: bool,
     /// If a model names several parents, use the last connection.
     pub prefer_last_parent: bool,
+    /// Restrict model hierarchy, geometry and material links to object connections.
+    pub only_object_connections: bool,
 }
 
 impl Document {
@@ -813,10 +815,12 @@ impl Document {
         let mut b = Build {
             limits,
             strict_geometry: options.strict_geometry,
+            only_object_connections: options.only_object_connections,
             budget: Budget { left: Cell::new(self.left), limit: limits.max_data_bytes },
             resolve,
             by_key: objects.children.iter().filter_map(|o| Some((key(o.props.first())?, o))).collect(),
             children: HashMap::new(),
+            object_children: HashMap::new(),
             scene: Scene::default(),
             material_of: HashMap::new(),
             texture_of: HashMap::new(),
@@ -829,8 +833,14 @@ impl Document {
         let mut links: Vec<(Key, Key)> = vec![];
         for e in self.top("Connections").into_iter().flat_map(|c| c.children.iter()).filter(|e| e.name == "C" || e.name == "Connect") {
             let (Some(child), Some(parent)) = (key(e.props.get(1)), key(e.props.get(2))) else { continue };
-            links.push((child, parent));
+            let object = e.str_at(0) == Some("OO");
+            if !options.only_object_connections || object {
+                links.push((child, parent));
+            }
             b.children.entry(parent).or_default().push((child, e.str_at(3)));
+            if options.only_object_connections && object {
+                b.object_children.entry(parent).or_default().push((child, e.str_at(3)));
+            }
         }
 
         let models: Vec<(Key, &Record)> =
@@ -1221,10 +1231,12 @@ fn material(name: &str, record: &Record) -> Material {
 struct Build<'a, 'r> {
     limits: &'a Limits,
     strict_geometry: bool,
+    only_object_connections: bool,
     budget: Budget,
     resolve: Resolver<'r>,
     by_key: HashMap<Key<'a>, &'a Record>,
     children: HashMap<Key<'a>, Vec<(Key<'a>, Option<&'a str>)>>,
+    object_children: HashMap<Key<'a>, Vec<(Key<'a>, Option<&'a str>)>>,
     scene: Scene,
     material_of: HashMap<Key<'a>, usize>,
     texture_of: HashMap<Key<'a>, Option<usize>>,
@@ -1239,7 +1251,12 @@ struct Build<'a, 'r> {
 impl<'a> Build<'a, '_> {
     /// The objects of `kind` connected under `id`, with the property each connects to.
     fn children_of(&self, id: Key<'a>, kind: &str) -> Vec<(Key<'a>, Option<&'a str>)> {
-        let all = self.children.get(&id).map(Vec::as_slice).unwrap_or_default();
+        let source = if self.only_object_connections && matches!(kind, "Geometry" | "Material" | "NodeAttribute") {
+            &self.object_children
+        } else {
+            &self.children
+        };
+        let all = source.get(&id).map(Vec::as_slice).unwrap_or_default();
         all.iter().filter(|l| self.by_key.get(&l.0).is_some_and(|o| o.name == kind)).copied().collect()
     }
 
