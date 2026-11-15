@@ -20,6 +20,7 @@
 //! [`Embedded`] and call [`from_embedded`].
 
 pub mod camera_fields;
+pub mod compat_orientation;
 mod container;
 pub mod cr3;
 mod datetime;
