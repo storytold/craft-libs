@@ -44,7 +44,7 @@ pub enum ArrangeCommands {
     /// Floating windows stepped from the top left.
     #[command(label = "Cascade")]
     Cascade,
-    /// Floating windows in an even grid.
+    /// Every document in an even grid of split panes, floating windows docked first.
     #[command(label = "Tile")]
     Tile,
     /// The active document into a floating window.
@@ -154,7 +154,7 @@ impl<D> ArrangeSpace<D> {
 #[non_exhaustive]
 pub enum Arranged {
     /// The document windows changed: the host applies `DocumentWindows::to_actions`, and lays the docked groups out
-    /// with `arrange_rects` for an n-up arrangement.
+    /// with `arrange_rects` for an n-up or Tile arrangement.
     Windows,
     /// Every document view takes the active view's zoom, location and rotation, as flagged.
     #[non_exhaustive]
@@ -178,7 +178,12 @@ pub fn arrange<D: Clone + Eq + Hash>(windows: &mut DocumentWindows<D>, command: 
             windows.float_all(*area, *size, *step);
             tile_floating(windows, arrangement, *area);
         }
-        Arrangement::Tile => tile_floating(windows, arrangement, *area),
+        Arrangement::Tile => {
+            windows.consolidate(active.as_ref());
+            let documents = windows.docked.first().map_or(0, |group| group.documents.len());
+            windows.split_into(documents);
+            windows.arrangement = Some(arrangement);
+        }
         Arrangement::TwoUpVertical
         | Arrangement::TwoUpHorizontal
         | Arrangement::ThreeUpVertical
@@ -188,6 +193,7 @@ pub fn arrange<D: Clone + Eq + Hash>(windows: &mut DocumentWindows<D>, command: 
         | Arrangement::SixUp => {
             windows.consolidate(active.as_ref());
             windows.split_into(arrangement.group_count(0).unwrap_or(0));
+            windows.arrangement = Some(arrangement);
         }
         Arrangement::ConsolidateAllToTabs => windows.consolidate(active.as_ref()),
         Arrangement::Cascade => {

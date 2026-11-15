@@ -4,8 +4,10 @@
 use emath::{Rect, vec2};
 
 /// One Window › Arrange entry. The n-up entries split the document area into that many
-/// cells and put one document group in each; the rest act on windows and views.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// cells and put one document group in each, and Tile one cell per document; the rest act on
+/// windows and views. Saved under the command names (`"twoUpVertical"`, `"tile"`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum Arrangement {
     /// Tiles every document window across the document area, side by side.
@@ -30,7 +32,7 @@ pub enum Arrangement {
     ConsolidateAllToTabs,
     /// Floating windows stepped from the top left ([`cascade_rects`](crate::placement::cascade_rects)).
     Cascade,
-    /// Floating windows in an even grid.
+    /// Every document in an even grid of cells, floating windows docked first.
     Tile,
     /// The active document into a floating window.
     FloatInWindow,

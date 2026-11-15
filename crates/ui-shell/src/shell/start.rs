@@ -579,7 +579,9 @@ fn recent_section(
                     let _ = MenuItem::command(StartRecentCommands::Open).show(ui);
                     let _ = MenuItem::command(StartRecentCommands::Remove).show(ui);
                     let _ = MenuItem::command(StartRecentCommands::Clear).show(ui);
-                    let _ = MenuItem::command(StartRecentCommands::Reveal).show(ui);
+                    if craft_platform::open::CAN_REVEAL {
+                        let _ = MenuItem::command(StartRecentCommands::Reveal).show(ui);
+                    }
                 });
             }
             cx.keep::<Leads>().recent = lead;

@@ -1,7 +1,8 @@
-//! `StartScreen`: which part of the page takes a double click.
+//! `StartScreen`: which part of the page takes a double click, and what a recent file's menu offers.
 
 use craft_ui::contract::Bind;
 use craft_ui::shell::{RecentFile, RecentSort, RecentView, StartAction, StartLink, StartScreen};
+use craft_ui::testing::pointer::{moved, secondary};
 use craft_ui::testing::{Fixture, Target, trial};
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -73,4 +74,19 @@ fn a_double_click_on_the_empty_room_opens_and_one_on_a_card_opens_only_its_file(
     let link = fixture.by_label("Docs").expect("the rail link shows");
     double_click(&mut fixture, &link);
     assert_eq!(opens(&log), 0, "a double click on a rail link opens no file: {:?}", log.borrow());
+}
+
+/// A recent file's menu offers Show in Folder exactly where the platform can reveal a file.
+#[trial]
+fn the_recent_menu_offers_show_in_folder_where_the_platform_can_reveal() {
+    let (mut fixture, _log) = screen();
+    let card = fixture.by_label("Poster.psd").expect("the card shows");
+    fixture.click(&card).idle(2);
+    let at = card.center();
+    fixture.frame(vec![moved(at)]);
+    fixture.frame(vec![secondary(at, true)]);
+    fixture.frame(vec![secondary(at, false)]);
+    fixture.idle(3);
+    assert!(fixture.by_label("Remove from Recent").is_some(), "a right click on a recent file opens its menu");
+    assert_eq!(fixture.by_label("Show in Folder").is_some(), craft_platform::open::CAN_REVEAL);
 }

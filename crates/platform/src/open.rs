@@ -202,6 +202,9 @@ pub fn path_text(path: &Path, saving: bool) -> Result<String, String> {
     })
 }
 
+/// Whether `reveal` can show a file on this platform.
+pub const CAN_REVEAL: bool = cfg!(not(target_arch = "wasm32"));
+
 /// Shows `path` selected in the system file manager: `open -R` on macOS, Explorer's
 /// `/select,"<path>"` on Windows (raw arguments; a path containing `"` is refused), and on Linux
 /// and FreeBSD the FileManager1 D-Bus call through `dbus-send` on a thread of its own, falling back

@@ -24,6 +24,8 @@ testing = ["craft-ui-panels/testing"]
 [dependencies]
 craft-ui-panels = { workspace = true }
 craft-behavior = { workspace = true }
+# `open::CAN_REVEAL`: whether the start screen offers Show in Folder.
+craft-platform = { workspace = true }
 craft-theme = { workspace = true }
 craft-ui-macros = { workspace = true }
 egui = { workspace = true }

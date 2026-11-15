@@ -3194,6 +3194,7 @@ dependencies = [
  "craft-behavior",
  "craft-host",
  "craft-i18n",
+ "craft-platform",
  "craft-theme",
  "craft-ui-macros",
  "craft-ui-panels",
