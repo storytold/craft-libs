@@ -28,6 +28,16 @@ fn invalid(message: &str) -> CodecError {
     CodecError::InvalidImage(message.into())
 }
 
+// PNG 3 §7.1 restricts unsigned integers to 31 bits. The last fdAT sequence
+// is 2 * count - 2; validate arithmetically without allocating frame headers.
+fn animation_count(len: usize, plays: u32) -> Result<u32, CodecError> {
+    let count = u32::try_from(len).map_err(|_| invalid("too many APNG frames"))?;
+    if plays > 0x7fff_ffff || count == 0 || count > (0x7fff_ffff / 2) + 1 {
+        return Err(invalid("APNG play count or sequence exceeds PNG integer range"));
+    }
+    Ok(count)
+}
+
 /// Assemble an RGBA8 APNG with dispose-none frames and the first frame as default image.
 /// `plays == 0` means infinite looping. `max_bytes` bounds the returned encoded file,
 /// not caller-owned inputs or decoded pixels. Checked sizing precedes allocation;
@@ -36,11 +46,7 @@ pub fn encode(width: u32, height: u32, plays: u32, frames: &[Frame<'_>], max_byt
     if width == 0 || height == 0 || width > 0x7fff_ffff || height > 0x7fff_ffff || frames.is_empty() {
         return Err(invalid("APNG needs a nonempty canvas and frames"));
     }
-    // Each frame after the first consumes two sequence numbers; all must fit u32.
-    let count = u32::try_from(frames.len()).map_err(|_| invalid("too many APNG frames"))?;
-    if count > (u32::MAX / 2) + 1 {
-        return Err(invalid("APNG sequence numbers exhausted"));
-    }
+    let count = animation_count(frames.len(), plays)?;
     let mut size = 8usize + 25 + 20 + 12; // signature, IHDR, acTL, IEND
     for (index, f) in frames.iter().enumerate() {
         if f.width == 0
@@ -77,7 +83,7 @@ pub fn encode(width: u32, height: u32, plays: u32, frames: &[Frame<'_>], max_byt
     let mut sequence = 0u32;
     for (index, f) in frames.iter().enumerate() {
         let mut control = [0u8; 26];
-        for (target, value) in control[..20].chunks_exact_mut(4).zip([sequence, f.width, f.height, f.x, f.y]) {
+        for (target, value) in control[..20].as_chunks_mut::<4>().0.iter_mut().zip([sequence, f.width, f.height, f.x, f.y]) {
             target.copy_from_slice(&value.to_be_bytes());
         }
         control[20..22].copy_from_slice(&f.delay_num.to_be_bytes());
@@ -132,6 +138,17 @@ mod tests {
             pos = end + 4;
         }
         result
+    }
+
+    #[test]
+    fn png_integer_boundaries_without_giant_allocations() {
+        assert_eq!(animation_count(1, 0).unwrap(), 1);
+        assert_eq!(animation_count(0x4000_0000, 0x7fff_ffff).unwrap(), 0x4000_0000);
+        assert!(animation_count(0x4000_0001, 0).is_err());
+        assert!(animation_count(0, 0).is_err());
+        assert!(animation_count(1, 0x8000_0000).is_err());
+        assert!(animation_count(1, u32::MAX).is_err());
+        assert!(encode(1, 1, 0x8000_0000, &[frame(&[1])], 1000).is_err());
     }
 
     #[test]
