@@ -1,0 +1,21 @@
+[package]
+name = "craft-guide"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Interactive onboarding walkthroughs, step-by-step guides, feature spotlight and tooltips for Craft apps"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-i18n = { workspace = true }
+egui = { workspace = true }
+serde = { version = "1", features = ["derive"], optional = true }
+log = "0.4"
+
+[features]
+default = []
+serde = ["dep:serde"]
