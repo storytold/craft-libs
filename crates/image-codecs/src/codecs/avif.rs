@@ -248,16 +248,13 @@ mod tests {
 
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     #[test]
-    fn hlg_encoded_output_decodes_to_reference_white_and_peak() {
-        let decode_gray = |linear: f32| {
-            let avif = super::encode_avif_hdr(1, 1, &[linear; 3], 100, 10, None, super::HdrTransfer::Hlg).unwrap();
-            image::load_from_memory_with_format(&avif, image::ImageFormat::Avif).unwrap().to_rgb32f().get_pixel(0, 0)[0]
-        };
-
-        let white = decode_gray(1.0);
-        assert!((white - 0.75).abs() < 0.02, "decoded HLG SDR white: {white}");
-
-        let peak = decode_gray(crate::cicp::HLG_PEAK_NITS / super::HDR_REFERENCE_WHITE_NITS);
-        assert!((peak - 1.0).abs() < 0.02, "decoded HLG peak: {peak}");
+    fn hlg_encoded_output_signals_bt2020_hlg() {
+        let avif = super::encode_avif_hdr(1, 1, &[1.0; 3], 100, 10, None, super::HdrTransfer::Hlg).unwrap();
+        let nclx = avif.windows(4).position(|window| window == b"nclx").expect("the AVIF has nclx color metadata");
+        let color = avif.get(nclx + 4..nclx + 11).expect("complete nclx color metadata");
+        assert_eq!(&color[..2], &[0, 9], "BT.2020 primaries");
+        assert_eq!(&color[2..4], &[0, 18], "BT.2100 HLG transfer");
+        assert_eq!(&color[4..6], &[0, 9], "BT.2020 non-constant luminance matrix");
+        assert!(!avif.windows(4).any(|window| window == b"clli"), "HLG does not signal PQ content-light metadata");
     }
 }
