@@ -210,6 +210,8 @@ mod tests {
         image.meta.exif = Some(EXIF.to_vec());
         for format in [Format::Jpeg, Format::Png, Format::WebP] {
             let mut bytes = crate::encode(&image, format, &crate::EncodeOptions::default()).unwrap();
+            let normal = crate::decode_as_with(format, &bytes, &crate::DecodeOptions { keep_orientation: true, ..Default::default() }).unwrap();
+            assert_eq!(normal.meta.exif.as_deref().map(crate::exif_orientation), Some(1), "default {format:?}");
             match format {
                 Format::Jpeg => replace_jpeg_exif(&mut bytes, EXIF),
                 Format::Png => replace_png_exif(&mut bytes, EXIF).unwrap(),
