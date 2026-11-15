@@ -125,6 +125,32 @@ fn a_press_on_a_canvas_control_never_reaches_the_tool_and_one_away_from_it_does(
 }
 
 #[trial]
+fn controls_pressing_reads_a_canvas_control_drag_not_the_tool() {
+    let crop = Rc::new(RefCell::new(craft_behavior::geometry::CropBox::upright(craft_behavior::kurbo::Rect::new(20.0, 20.0, 100.0, 80.0))));
+    let shown = Rc::clone(&crop);
+    let mut fixture = ToolFixture::with_body("Document", Recorder::default(), move |ui, body| {
+        let room = Rect::from_min_size(body.rect.min, Vec2::new(160.0, 120.0));
+        let _ = CropOverlay::new("Crop", Bind::bound(&mut *shown.borrow_mut())).show_at(ui, room);
+    });
+    let canvas = fixture.canvas_id();
+    let pressing = |fixture: &mut ToolFixture<Recorder>| ToolHost::controls_pressing(fixture.fixture().ctx(), canvas);
+    let tool_held = |fixture: &mut ToolFixture<Recorder>| ToolHost::in_gesture(fixture.fixture().ctx(), canvas);
+
+    let corner = fixture.fixture().by_label("Crop corner, top left").expect("the crop shows its corners").rect.center();
+    fixture.press_at(corner).move_to(corner + Vec2::new(15.0, 10.0)).move_to(corner + Vec2::new(30.0, 20.0));
+    assert!(pressing(&mut fixture), "a corner drag is a control's gesture");
+    assert!(!tool_held(&mut fixture), "the tool holds no gesture under a control's drag");
+    fixture.release_at(corner + Vec2::new(30.0, 20.0));
+    assert!(!pressing(&mut fixture), "the release ends the control's gesture");
+
+    let away = fixture.canvas().rect.right_bottom() - Vec2::splat(20.0);
+    fixture.press_at(away).move_to(away - Vec2::new(30.0, 20.0));
+    assert!(tool_held(&mut fixture), "a press away from the overlay is the tool's");
+    assert!(!pressing(&mut fixture), "the tool's gesture is no control's");
+    fixture.release_at(away - Vec2::new(30.0, 20.0));
+}
+
+#[trial]
 fn a_gesture_cancelled_by_the_app_starts_no_new_one_while_the_button_stays_down() {
     let mut fixture = ToolFixture::new("Document", Recorder::default());
     let from = fixture.canvas().center();

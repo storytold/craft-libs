@@ -4,7 +4,7 @@ use super::egui::repaint;
 use crate::runtime::memory::MemoryStage;
 use crate::runtime::pass_state;
 use craft_behavior::{CancelReason, Gesture, GestureId, Value};
-use egui::{Context, Id};
+use egui::{Context, Id, ViewportId};
 
 /// The latest `cancel_all`: a serial that grows with each call, and why.
 #[derive(Clone, Copy, Default)]
@@ -39,6 +39,15 @@ pub fn gesture_note<V: Value, N: Clone + 'static>(ctx: &Context, id: Id) -> Opti
         }
         gesture.note.as_ref()?.get::<N>().cloned()
     })
+}
+
+/// Whether a member of the arena root `arena` (a canvas control in a canvas, say) has a running gesture, in
+/// `viewport`: begun and not yet committed, cancelled or removed. It reads each member's own gesture record, so a
+/// reader before or after the arena's pass reads the same fact.
+pub fn member_gesture_running(ctx: &Context, viewport: ViewportId, arena: Id) -> bool {
+    crate::primitives::sensing::members(ctx, viewport, crate::runtime::env::ArenaId::new(arena))
+        .into_iter()
+        .any(|member| MemoryStage::peek_with::<RemovalWatch, _>(ctx, crate::contract::gesture_key(member), RemovalWatch::armed))
 }
 
 /// The newest gesture id handed out in this context, and how many times a component has reported its gesture running
@@ -103,6 +112,11 @@ impl RemovalWatch {
     #[doc(hidden)]
     pub fn disarm(&mut self) {
         self.armed = None;
+    }
+
+    /// The gesture it watches runs.
+    pub(crate) fn armed(&self) -> bool {
+        self.armed.is_some()
     }
 }
 

@@ -355,6 +355,20 @@ fn member_widget(member: Id) -> Id {
     sub(member, "member")
 }
 
+/// The members of `arena` in `viewport` as of its latest run: while the root's run of this pass is under way, the
+/// members of last pass and those registered so far; empty for an arena that has not run. A read creates no arena.
+pub(crate) fn members(ctx: &Context, viewport: ViewportId, arena: ArenaId) -> SmallVec<[Id; 8]> {
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Arenas>::with(ctx, viewport, |arenas| {
+        let Some(state) = arenas.by_root.get(&arena.0) else { return SmallVec::new() };
+        let mut ids: SmallVec<[Id; 8]> = state.members.iter().map(|member| member.id).collect();
+        if state.pass == pass_nr {
+            ids.extend(state.previous.iter().map(|member| member.id).filter(|id| !state.members.iter().any(|member| member.id == *id)));
+        }
+        ids
+    })
+}
+
 /// Notes a root shown in the body of `arena` that is not one of its members and takes a press, over `rect`: the
 /// members shown after it over that rect stack above it.
 pub(crate) fn note_nested(ctx: &Context, arena: ArenaId, rect: Rect) {

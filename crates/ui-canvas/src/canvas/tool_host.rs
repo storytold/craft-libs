@@ -703,6 +703,14 @@ impl<'m> ToolHost<'m> {
         with_session(ctx, state_id(canvas), |state: &mut HostState| state.gesture.is_some())
     }
 
+    /// Whether a control the body of the canvas `canvas` shows (a canvas control, a box, a handle set) has a gesture
+    /// in progress: a drag of one of them, not the tool's (that is [`in_gesture`](Self::in_gesture)). It reads the
+    /// controls' own gesture records in the viewport the canvas last ran in; false before the canvas's first pass.
+    pub fn controls_pressing(ctx: &Context, canvas: Id) -> bool {
+        let viewport = with_session(ctx, state_id(canvas), |state: &mut HostState| state.viewport);
+        crate::runtime::edit::member_gesture_running(ctx, viewport, canvas)
+    }
+
     /// The canvas space the host of `canvas` used in its last pass, `None` before its first.
     pub fn shown_space(ctx: &Context, canvas: Id) -> Option<CanvasSpace> {
         with_session(ctx, state_id(canvas), |state: &mut HostState| state.space)
