@@ -254,7 +254,9 @@ impl Found {
         let public = public_of(&key);
         let by_key = public.as_ref().and_then(|p| self.certificates.iter().position(|(c, _)| certificate_key(c).as_ref() == Some(p)));
         let by_id = key_id.as_ref().and_then(|id| self.certificates.iter().position(|(c, cid)| cid.as_ref() == Some(id) && kind_of(c) == key_kind));
-        let at = by_key.or(by_id).ok_or(Error::NoCertificate)?;
+        // A localKeyId is only a hint when the private key omits its public half.
+        // It must never override an available public key that matches no certificate.
+        let at = if public.is_some() { by_key } else { by_id }.ok_or(Error::NoCertificate)?;
         let (certificate, _) = self.certificates.remove(at);
         if kind_of(&certificate) != key_kind {
             return Err(Error::NoCertificate);

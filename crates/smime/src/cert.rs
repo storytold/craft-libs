@@ -171,20 +171,16 @@ impl Cert {
     }
 
     /// The mail addresses it names, exactly as written (its alternative names of that kind and
-    /// the `emailAddress` in its subject), at most [`MAX_SIGNER_ADDRESSES`] of each: for comparing
-    /// and for name constraints, never for showing.
+    /// the `emailAddress` in its subject), all of them: for comparing
+    /// and for name constraints, never for showing. The certificate byte cap bounds this list; display truncation
+    /// must not hide names from certification-authority constraints.
     pub fn raw_addresses(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Ok(Some((_, san))) = self.parsed.tbs_certificate().get_extension::<SubjectAltName>() {
-            out.extend(
-                san.0
-                    .iter()
-                    .filter_map(|n| match n {
-                        GeneralName::Rfc822Name(a) => Some(a.as_str().to_string()),
-                        _ => None,
-                    })
-                    .take(MAX_SIGNER_ADDRESSES),
-            );
+            out.extend(san.0.iter().filter_map(|n| match n {
+                GeneralName::Rfc822Name(a) => Some(a.as_str().to_string()),
+                _ => None,
+            }));
         }
         out.extend(
             self.parsed
@@ -193,8 +189,7 @@ impl Cert {
                 .iter()
                 .filter(|atv| atv.oid == EMAIL_ADDRESS)
                 .filter_map(|atv| atv.value.decode_as::<der::asn1::Ia5String>().ok())
-                .map(|a| a.as_str().to_string())
-                .take(MAX_SIGNER_ADDRESSES),
+                .map(|a| a.as_str().to_string()),
         );
         out
     }

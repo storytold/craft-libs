@@ -206,10 +206,15 @@ pub fn verify_hashed(
     hashed: &mut dyn FnMut(Hash) -> Vec<u8>,
     signature: &[u8],
 ) -> Result<(), Fault> {
+    // RFC 4055 3.3: an id-RSASSA-PSS SPKI restricts schemes and parameters.
+    // Those restrictions are not implemented here; do not treat it as rsaEncryption.
+    if key.algorithm.oid == PSS {
+        return Err(Fault::Unknown);
+    }
     let scheme = scheme(algorithm, digest)?;
     match scheme {
         Scheme::Pkcs1(hash) | Scheme::Pss(hash, _) => {
-            if key.algorithm.oid != RSA && key.algorithm.oid != PSS {
+            if key.algorithm.oid != RSA {
                 return Err(Fault::Malformed);
             }
             let public = rsa_key(key)?;

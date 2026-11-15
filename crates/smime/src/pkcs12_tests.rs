@@ -468,3 +468,17 @@ oRpM+476CU35vPBZAg7uDRQ2W0rxuwQQlBfL7bD0DVRjC7ff7DCBfgIDHoSA";
 pub(crate) const ALICE_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIDfDCCAmSgAwIBAgITBZjuab1kWRuw6iskHm6GfE5XrjANBgkqhkiG9w0BAQsF\nADAsMRgwFgYDVQQDDA9FeGFtcGxlIFRlc3QgQ0ExEDAOBgNVBAoMB0V4YW1wbGUw\nIBcNMjYxMTEwMjM1NzM0WhgPMjEyNjEwMTcyMzU3MzRaMDoxFjAUBgNVBAMMDUFs\naWNlIEV4YW1wbGUxIDAeBgkqhkiG9w0BCQEWEWFsaWNlQGV4YW1wbGUub3JnMIIB\nIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxQrWVfKXXVZryeb/vXPHnjxv\nQs0CL+YA3iCrERXXKQdPaul+Ysc4F7/2PM22JvjEU6robJAQjm6HJGK2fCy/ZzJD\npDgEx1fOUZ3uReGFfQJScb9rngD32q7UrDCfluzG+/W+IDQW3AQ2T9FlB8ABkih/\nkyVnFOZSKZHvj/B+lKmUDa1WvWXbsliROVzAQTvmhMYeeAxVwv6yiZ1WJXAvxbyD\nReatJH6C5IXiUtp3ETV0i/SSJbmE0hTl5NyP/lf9KQYOC+27sryxcaTlzNMuA90j\nO1WFY0lSAEXsNbwi8j1sW4cEip765ra9Y08MKce8dqtuXM/wjwrn70NSp3HW4wID\nAQABo4GGMIGDMBwGA1UdEQQVMBOBEWFsaWNlQGV4YW1wbGUub3JnMA4GA1UdDwEB\n/wQEAwIFoDATBgNVHSUEDDAKBggrBgEFBQcDBDAdBgNVHQ4EFgQUzgoHCBtIIUUf\n0pUEHAOVQUQ3oOQwHwYDVR0jBBgwFoAUA1dgSumWAOSyoT0IokPfLUhr+yYwDQYJ\nKoZIhvcNAQELBQADggEBAHhlqgdhOJdXxg2JANwLzQvXXeEzXxu4yKGnJG9Zi99r\nohF5smEkNXT0qYjWEM/XHyynR5ozGsN4shlkezmAPkjqR1SYixYa0TgiCjlSYlQ+\ntxiNy4TtW2ZD23PBMGAUvixzCR9lsBrjf59l78Gqd3IyzYIzEApwxXuPPD8tussQ\njoE/QxepD8H3CPRVzBXSmuz0zGVgNtNtLQWv4D61f7RVETf0gUqjn1ezu3/0ih1M\nGkzEhaFVntSRuHw3KETY1Ez/LpzNM+w70UIL/M8XZTnbfzXa/5+RzQKcZLraQS6O\nZEPpVOU/V4dDTj04SPMJT9Ydh0v1UUWhazBvzsb4B7g=\n-----END CERTIFICATE-----\n";
 
 pub(crate) const CA_PEM: &str = "-----BEGIN CERTIFICATE-----\nMIIDSzCCAjOgAwIBAgIUQiksTfPBn790EMSMwNs3Jn0jaiUwDQYJKoZIhvcNAQEL\nBQAwLDEYMBYGA1UEAwwPRXhhbXBsZSBUZXN0IENBMRAwDgYDVQQKDAdFeGFtcGxl\nMCAXDTI2MTExMDIzNTczNFoYDzIxMjYxMDE3MjM1NzM0WjAsMRgwFgYDVQQDDA9F\neGFtcGxlIFRlc3QgQ0ExEDAOBgNVBAoMB0V4YW1wbGUwggEiMA0GCSqGSIb3DQEB\nAQUAA4IBDwAwggEKAoIBAQCLZYmAht/KhFBvK9uNCHWCQ0viLErOUqeX1aXmT1gD\nK7pnO17kenetbfhEY1tBB8bvhkLYcW+A10RZslY/ZMJsf8PTHA+B+gZB5GdIDtAC\nASHTmiBJIr9bdJiD+eZ1hDNfSvXm2dlF7qEnaaUj+GoowKnyqkGQ4EbfFcVT1rJR\n09Gx1yu1Ti5gKG4/BoAZ9Q/Ho/TGKXhCOLbecWzFzFHMbwLU+oY5rVjibp/FVbwT\nC54cuuqmwS1z+t/ABBvIUv5cVZloWXcoe1Sw2KSN7IaGGM3ziCSDBM6RZiUsD/Fr\n6CkW5m2c+XPOSTwfHPz8h39bCITS0DbB86fXDy7kZQTTAgMBAAGjYzBhMB0GA1Ud\nDgQWBBQDV2BK6ZYA5LKhPQiiQ98tSGv7JjAfBgNVHSMEGDAWgBQDV2BK6ZYA5LKh\nPQiiQ98tSGv7JjAPBgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBBjANBgkq\nhkiG9w0BAQsFAAOCAQEAaT1BKjztiC5bgQ3hT0zRsqSLXlzGGRYAMC49eLPAAPvO\n6CL+ZPvNByZKTRy6pt+Tr06nbj7YH92z4xO601vILQBmBwwhsQNMotKDZ/Qedb8t\ng6maxc83l5rKOR/XHze6nIoFQR1uYWrvLT/JpwTZ9SfDk5pbMVCRyExACSAQL3NF\nS1boSb2RndOIHAcwKUF7uEYm+uoMbttCFcFZTcNcO1swL43/562cJ8w2AWwCBv4j\nz0Kcna6idZx/eTZxkHizZwMGzJL9Hzbvui0gPBu0RNAbBUTeJawC/1IOEFQq43Fj\nMxttmH5D5Ax3nffhFlrAH2IgjiHTI+IbzIzNR1J0Xw==\n-----END CERTIFICATE-----\n";
+
+#[test]
+fn matching_local_id_cannot_override_a_different_public_key() {
+    // Both are 2048-bit RSA, but the CA certificate does not belong to Alice's key.
+    let key = rsa_key();
+    let alice = der(ALICE_PEM);
+    let other = der(CA_PEM);
+    let alice_key = crate::cert::Cert::from_der(&alice).unwrap();
+    let other_key = crate::cert::Cert::from_der(&other).unwrap();
+    assert_eq!(crate::algorithms::key_kind(alice_key.public_key()), crate::algorithms::key_kind(other_key.public_key()));
+    assert_ne!(alice_key.public_key(), other_key.public_key());
+    assert!(open(&plain_p12(&key, &alice, b"same-id"), PASS).is_ok());
+    assert_eq!(open(&plain_p12(&key, &other, b"same-id"), PASS).err(), Some(Error::NoCertificate));
+}

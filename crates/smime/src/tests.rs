@@ -908,3 +908,40 @@ fn shared_result_preserves_partial_coverage_and_name_bounds() {
     assert_eq!(signer_text("Alice\u{202e}\u{200b}\nBob"), "Alice Bob");
     assert_eq!(signer_text(&"A".repeat(1000)).chars().count(), MAX_SIGNER_TEXT);
 }
+
+#[test]
+fn name_constraints_cover_addresses_beyond_the_display_limit() {
+    let root = root("Example Root");
+    let corp = authority("Corp CA", &root, |p| {
+        p.name_constraints = Some(rcgen::NameConstraints {
+            permitted_subtrees: vec![rcgen::GeneralSubtree::Rfc822Name("corp.example".into())],
+            excluded_subtrees: vec![],
+        });
+    });
+    let mut params = signer_params("Many names", "ada@corp.example");
+    for n in 1..crate::digital_signature::MAX_SIGNER_ADDRESSES {
+        params.subject_alt_names.push(rcgen::SanType::Rfc822Name(format!("alias{n}@corp.example").try_into().unwrap()));
+    }
+    params.subject_alt_names.push(rcgen::SanType::Rfc822Name("ceo@bank.example".try_into().unwrap()));
+    let signer = issued(params, key(&rcgen::PKCS_ECDSA_P256_SHA256), &corp);
+    assert_eq!(path_verdict(&signer, &[&corp], &root, "ada@corp.example"), (Verdict::NotVerified, Some(Why::Constrained)));
+}
+
+#[test]
+fn pss_restricted_public_keys_are_not_treated_as_unrestricted_rsa() {
+    use crate::algorithms::{Fault, Hash};
+    let certificate = crate::cert::Cert::from_der(ALICE).unwrap();
+    for message in [NO_ATTRIBUTES, PSS] {
+        let (content, cms) = halves(message);
+        let info = SignerInfo::from_der(&first_signer(&cms)).unwrap();
+        let signed = info.signed_attrs.as_ref().map(|a| a.to_der().unwrap()).unwrap_or(content);
+        let hash = Hash::of(&info.digest_alg).unwrap();
+        let mut key = certificate.public_key().clone();
+        assert_eq!(crate::algorithms::verify(&key, &info.signature_algorithm, Some(hash), &signed, info.signature.as_bytes()), Ok(()));
+        key.algorithm.oid = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.10");
+        // An empty PSS parameter sequence restricts the key to SHA-1 defaults, not
+        // the SHA-256 signature above. PKCS#1 v1.5 is never allowed for a PSS key.
+        key.algorithm.parameters = Some(Any::from_der(&[0x30, 0]).unwrap());
+        assert_eq!(crate::algorithms::verify(&key, &info.signature_algorithm, Some(hash), &signed, info.signature.as_bytes()), Err(Fault::Unknown));
+    }
+}
