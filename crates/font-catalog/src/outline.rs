@@ -130,4 +130,18 @@ mod tests {
         let invalid_index = FontData { bytes: data.bytes.clone(), index: u32::MAX };
         assert!(matches!(FontOutline::new(&invalid_index, &[]), Err(OutlineError::InvalidFace)));
     }
+
+    #[test]
+    fn variation_changes_glyph_geometry() {
+        let Ok(dir) = std::env::var("CRAFT_FONTS_DIR") else { return };
+        let bytes = std::fs::read(std::path::Path::new(&dir).join("fonts/noto-sans-arabic/NotoSansArabic.ttf")).unwrap();
+        let data = FontData { bytes: bytes.into(), index: 0 };
+        let light = FontOutline::new(&data, &[(*b"wght", 100.0)]).unwrap();
+        let bold = FontOutline::new(&data, &[(*b"wght", 900.0)]).unwrap();
+        let glyph = light.glyph_for('ب').unwrap();
+        let light_path = light.outline(glyph).unwrap();
+        let bold_path = bold.outline(glyph).unwrap();
+        assert!(!light_path.elements().is_empty());
+        assert_ne!(light_path, bold_path);
+    }
 }
