@@ -641,3 +641,13 @@ fn ascii_budget_applies_while_reading_values_and_records() {
     let ignored = format!(";{}\nObjects: {{}}", ",".repeat(10_000));
     assert!(read_document(ignored.as_bytes(), &limits).is_ok());
 }
+
+#[test]
+fn strict_ascii_reports_unbalanced_and_unterminated_records() {
+    let strict = |s: &str| crate::fbx::read_document_strict(s.as_bytes(), &Limits::default());
+    assert!(strict(ASCII).is_ok());
+    for s in ["Objects: { A: 1", "Objects: { } }", "Objects: { A: \"unterminated", "Objects: { A: 1 2 }"] {
+        assert!(strict(s).is_err(), "{s}");
+    }
+    assert!(read_document(b"Objects: { A: 1", &Limits::default()).is_ok());
+}
