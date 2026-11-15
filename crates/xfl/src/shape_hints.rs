@@ -3,7 +3,7 @@
 //! These parse the native point encodings and hint ordering. Snapping points onto consumer
 //! geometry and pairing start/end keyframes remain application responsibilities.
 
-use crate::shape::XflElement;
+use crate::shape::{XflElement, integer, number};
 
 /// A native XFL point in document coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -75,14 +75,6 @@ fn read_point(element: &impl XflElement, joined: &str, x: &str, y: &str) -> Opti
         None => Point { x: number(element, x)?, y: number(element, y)? },
     };
     (point.x.is_finite() && point.y.is_finite()).then_some(point)
-}
-
-fn number(element: &impl XflElement, name: &str) -> Option<f32> {
-    element.attr(name)?.trim().parse::<f32>().ok().filter(|value| value.is_finite())
-}
-
-fn integer(element: &impl XflElement, name: &str) -> Option<u32> {
-    element.attr(name)?.trim().parse::<u32>().ok()
 }
 
 #[cfg(test)]
