@@ -231,10 +231,11 @@ impl Walker<'_> {
         if !CONTAINERS.contains(&name) {
             return self.element(name, e);
         }
-        if name == b"svg" && self.stack.len() == 1 {
-            if let Some(root) = self.stack.first_mut() {
-                *root = viewport(e);
-            }
+        if name == b"svg"
+            && self.stack.len() == 1
+            && let Some(root) = self.stack.first_mut()
+        {
+            *root = viewport(e);
         }
         if name == b"g"
             && attr(e, b"inkscape:groupmode").as_deref() == Some("layer")
