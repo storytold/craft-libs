@@ -767,3 +767,47 @@ fn hostile_style_sheets_never_panic() {
         let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
     }
 }
+
+fn inline_text(s: &str) -> Inline {
+    Inline::Text(s.to_string(), Fmt::default())
+}
+
+fn bookmark(name: &str) -> Inline {
+    Inline::Anchor(name.to_string())
+}
+
+/// #4811: a space that ends the paragraph's visible text collapses in HTML unless it is `&nbsp;`.
+/// The bookmarks after it show nothing, so it is still the end.
+#[test]
+fn a_trailing_space_before_bookmarks_is_kept() {
+    let one = inlines_html(&[inline_text("Total: "), bookmark("a1")]);
+    assert_eq!(one, "Total:&nbsp;<a id=\"a1\"></a>");
+
+    // The same with many bookmarks after it: exactly one kept space. No time assertion — this
+    // documents the shape of the fix (the last visible inline found once), not a benchmark.
+    let mut many = vec![inline_text("Total: ")];
+    many.extend((0..10_000).map(|i| bookmark(&format!("a{i}"))));
+    let long = inlines_html(&many);
+    assert_eq!(long.matches("&nbsp;").count(), 1, "{}", &long[..40.min(long.len())]);
+    assert!(long.starts_with("Total:&nbsp;<a id=\"a0\"></a>"), "{}", &long[..40.min(long.len())]);
+}
+
+/// The other end: a bookmark at the start shows nothing, so the space after it starts the text.
+#[test]
+fn a_leading_space_after_bookmarks_is_kept() {
+    assert_eq!(inlines_html(&[bookmark("top"), inline_text(" next")]), "<a id=\"top\"></a>&nbsp;next");
+}
+
+/// A text of only spaces is visible content: the space starts the paragraph and is kept, and the
+/// text after it is not treated as the first.
+#[test]
+fn spaces_only_text_is_visible() {
+    assert_eq!(inlines_html(&[bookmark("a"), inline_text(" "), inline_text("b")]), "<a id=\"a\"></a>&nbsp;b");
+}
+
+/// An image is visible, so the space after it is interior and stays a plain one (as before).
+#[test]
+fn image_before_text_keeps_the_space() {
+    let html = inlines_html(&[Inline::Figure("chart".to_string()), inline_text(" next")]);
+    assert_eq!(html, "<img alt=\"chart\"> next");
+}
