@@ -1194,6 +1194,9 @@ mod tests {
             let src = Image::from_u8(w as u32, h as u32, ChannelLayout::Rgb, card(w, h, 3)).unwrap();
             let file = encode_avif_with_speed(&src, 95, 10).unwrap();
             let img = crate::decode(&file).unwrap();
+            let (with_depth, depth) = crate::decode_avif_with_depth(&file, &crate::DecodeOptions::default()).unwrap();
+            assert_eq!(depth, 10);
+            assert_eq!(with_depth, img);
             assert_eq!((img.width(), img.height(), img.layout(), img.sample_type()), (48, 32, ChannelLayout::Rgb, SampleType::U16));
             let diff = mean_abs_diff(&rgb8(&img), &card(w, h, 3));
             assert!(diff < 2.5, "mean difference {diff}");
