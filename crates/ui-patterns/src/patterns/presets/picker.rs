@@ -235,8 +235,7 @@ struct Session {
 impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
     /// A picker of patterns, built as [`new`](PresetPicker::new) is: the face shows the picked pattern's tile.
     pub fn pattern(label: impl Into<Label>, value: Bind<'a, Option<K>>, rows: &'a [PresetRow<K>], state: Bind<'a, PresetState<K>>) -> Self {
-        let _ = (label.into(), value, rows, state);
-        todo!("dl.K35")
+        Self::new(label, value, rows, state).field(PickerField::Thumbnail).cell_shape(CellShape::Square)
     }
 
     /// A picker named `label` over `value`, choosing among the presets of `rows`.

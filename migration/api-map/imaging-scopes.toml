@@ -50,19 +50,19 @@ status = "same"
 [[type]]
 name = "BlendKeys"
 old = "craft_imaging::ui::blend_keys::BlendKeys"
-new = "craft_imaging::ui::blend_keys::BlendKeys"
-status = "same"
+new = "craft_ui::patterns::blend_keys::BlendKeys"
+status = "moved"
 
 [[type]]
 name = "BlendShortcut"
 old = "craft_imaging::ui::blend_keys::BlendShortcut"
-new = "craft_imaging::ui::blend_keys::BlendShortcut"
-status = "same"
+new = "craft_ui::patterns::blend_keys::BlendShortcut"
+status = "moved"
 
 [[type]]
 name = "BlendStep"
 old = ""
-new = "craft_imaging::ui::blend_keys::BlendStep"
+new = "craft_ui::patterns::blend_keys::BlendStep"
 status = "replaced"
 note = "Shift+= and Shift+- as a command set"
 

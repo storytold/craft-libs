@@ -4,6 +4,8 @@ use std::cell::Cell;
 
 use craft_theme::LabelColor;
 use craft_ui::contract::Entry;
+use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut as S, blend_entries};
+use craft_ui::runtime::env::Label;
 
 use super::filter::{EffectKind, FilterBy, LayerAttribute, LayerFilter, SmartKind, SmartSource};
 use super::tree::LayerRowKey;
@@ -412,47 +414,47 @@ impl LayerTree for FakeLayers {
     /// Photoshop's modes in its groups (Normal, Dissolve | Darken, Multiply, … ), Pass Through first
     /// for a group.
     fn blend_modes(&self, group: bool, _current: &str) -> Vec<Entry<String>> {
-        const GROUPS: [&[(&str, &str)]; 6] = [
-            &[("normal", "Normal"), ("dissolve", "Dissolve")],
-            &[
-                ("darken", "Darken"),
-                ("multiply", "Multiply"),
-                ("colorBurn", "Color Burn"),
-                ("linearBurn", "Linear Burn"),
-                ("darkerColor", "Darker Color"),
-            ],
-            &[
-                ("lighten", "Lighten"),
-                ("screen", "Screen"),
-                ("colorDodge", "Color Dodge"),
-                ("linearDodge", "Linear Dodge (Add)"),
-                ("lighterColor", "Lighter Color"),
-            ],
-            &[
-                ("overlay", "Overlay"),
-                ("softLight", "Soft Light"),
-                ("hardLight", "Hard Light"),
-                ("vividLight", "Vivid Light"),
-                ("linearLight", "Linear Light"),
-                ("pinLight", "Pin Light"),
-                ("hardMix", "Hard Mix"),
-            ],
-            &[("difference", "Difference"), ("exclusion", "Exclusion"), ("subtract", "Subtract"), ("divide", "Divide")],
-            &[("hue", "Hue"), ("saturation", "Saturation"), ("color", "Color"), ("luminosity", "Luminosity")],
+        const MODES: [(&str, &str, Option<S>); 27] = [
+            ("normal", "Normal", Some(S::Normal)),
+            ("dissolve", "Dissolve", Some(S::Dissolve)),
+            ("darken", "Darken", Some(S::Darken)),
+            ("multiply", "Multiply", Some(S::Multiply)),
+            ("colorBurn", "Color Burn", Some(S::ColorBurn)),
+            ("linearBurn", "Linear Burn", Some(S::LinearBurn)),
+            ("darkerColor", "Darker Color", None),
+            ("lighten", "Lighten", Some(S::Lighten)),
+            ("screen", "Screen", Some(S::Screen)),
+            ("colorDodge", "Color Dodge", Some(S::ColorDodge)),
+            ("linearDodge", "Linear Dodge (Add)", Some(S::LinearDodge)),
+            ("lighterColor", "Lighter Color", None),
+            ("overlay", "Overlay", Some(S::Overlay)),
+            ("softLight", "Soft Light", Some(S::SoftLight)),
+            ("hardLight", "Hard Light", Some(S::HardLight)),
+            ("vividLight", "Vivid Light", Some(S::VividLight)),
+            ("linearLight", "Linear Light", Some(S::LinearLight)),
+            ("pinLight", "Pin Light", Some(S::PinLight)),
+            ("hardMix", "Hard Mix", Some(S::HardMix)),
+            ("difference", "Difference", Some(S::Difference)),
+            ("exclusion", "Exclusion", Some(S::Exclusion)),
+            ("subtract", "Subtract", None),
+            ("divide", "Divide", None),
+            ("hue", "Hue", Some(S::Hue)),
+            ("saturation", "Saturation", Some(S::Saturation)),
+            ("color", "Color", Some(S::Color)),
+            ("luminosity", "Luminosity", Some(S::Luminosity)),
         ];
-        let mut choices = Vec::new();
+        let mut modes = Vec::new();
         if group {
-            choices.push(Entry::new(String::from("passThrough"), "Pass Through"));
+            modes.push(BlendKeyEntry::new(String::from("passThrough"), S::PassThrough));
         }
-        for (n, modes) in GROUPS.iter().enumerate() {
-            for (m, (key, label)) in modes.iter().enumerate() {
-                if n > 0 && m == 0 {
-                    choices.push(Entry::separator());
-                }
-                choices.push(Entry::new((*key).to_owned(), *label));
-            }
-        }
-        choices
+        modes.extend(MODES.iter().map(|(key, _, shortcut)| match shortcut {
+            Some(shortcut) => BlendKeyEntry::new((*key).to_owned(), *shortcut),
+            None => BlendKeyEntry::unlettered((*key).to_owned()),
+        }));
+        blend_entries(&modes, |mode| match MODES.iter().find(|(key, ..)| *key == mode.key) {
+            Some((_, label, _)) => Label::from(*label),
+            None => Label::from("Pass Through"),
+        })
     }
 
     fn hovered(&self) -> Option<u32> {

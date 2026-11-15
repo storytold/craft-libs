@@ -3,6 +3,7 @@
 // The test files name the library as `craft_ui`, as the crates that use it do.
 extern crate craft_ui_patterns as craft_ui;
 
+mod blend_keys;
 mod docking;
 mod form_dialogs;
 

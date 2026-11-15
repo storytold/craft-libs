@@ -13,8 +13,9 @@
 //! }
 //! ```
 
-use craft_ui::contract::CommandSet;
+use craft_ui::contract::{CommandSet, Entry};
 use craft_ui::runtime::commands::{CommandRef, FirePhase, Fired};
+use craft_ui::runtime::env::Label;
 
 /// Photoshop's Shift+Alt letter positions: the 26 lettered blend modes. Darker Color, Lighter Color, Subtract and
 /// Divide have no letter; list them with [`BlendKeyEntry::unlettered`].
@@ -132,6 +133,26 @@ impl BlendShortcut {
         BlendShortcut::Color,
         BlendShortcut::Luminosity,
     ];
+
+    /// Whether Photoshop's blend menu starts a new group at this mode: Darken, Lighten, Overlay, Difference and
+    /// Hue. Behind, Clear and Pass Through belong to the first group.
+    pub const fn starts_group(self) -> bool {
+        matches!(self, BlendShortcut::Darken | BlendShortcut::Lighten | BlendShortcut::Overlay | BlendShortcut::Difference | BlendShortcut::Hue)
+    }
+}
+
+/// The entries of a blend mode list, with a separator above each group head ([`BlendShortcut::starts_group`]) and
+/// none first. An unlettered mode never heads a group. `label` gives each mode's text. One rule for every blend
+/// list: the Layers panel, tool modes, parameter dialogs and Layer Style.
+pub fn blend_entries<K: Clone>(modes: &[BlendKeyEntry<K>], label: impl Fn(&BlendKeyEntry<K>) -> Label) -> Vec<Entry<K>> {
+    let mut entries = Vec::with_capacity(modes.len() + 5);
+    for (at, mode) in modes.iter().enumerate() {
+        if at > 0 && mode.shortcut.is_some_and(BlendShortcut::starts_group) {
+            entries.push(Entry::separator());
+        }
+        entries.push(Entry::new(mode.key.clone(), label(mode)));
+    }
+    entries
 }
 
 /// Shift+= and Shift+-: the next and the previous mode of the target's list.
