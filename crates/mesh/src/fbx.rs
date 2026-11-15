@@ -241,7 +241,7 @@ pub fn read_document(bytes: &[u8], limits: &Limits) -> Result<Document> {
     read_document_impl(bytes, limits, false)
 }
 
-/// Read records with strict ASCII syntax checking for malformed strings and record delimiters.
+/// Read records strictly, checking ASCII delimiters and the binary closing record.
 pub fn read_document_strict(bytes: &[u8], limits: &Limits) -> Result<Document> {
     read_document_impl(bytes, limits, true)
 }
@@ -249,7 +249,7 @@ pub fn read_document_strict(bytes: &[u8], limits: &Limits) -> Result<Document> {
 fn read_document_impl(bytes: &[u8], limits: &Limits, strict: bool) -> Result<Document> {
     let budget = Budget::new(limits.max_data_bytes);
     let (version, records) = if is_binary(bytes) {
-        read_binary(bytes, &budget)?
+        read_binary(bytes, &budget, strict)?
     } else {
         let text = match std::str::from_utf8(bytes) {
             Ok(text) => std::borrow::Cow::Borrowed(text),
@@ -435,20 +435,27 @@ fn object_name(b: &[u8]) -> String {
     }
 }
 
-fn read_binary(bytes: &[u8], budget: &Budget) -> Result<(u32, Vec<Record>)> {
+fn read_binary(bytes: &[u8], budget: &Budget, strict: bool) -> Result<(u32, Vec<Record>)> {
     let mut pos = BINARY_MAGIC.len();
     let records_budget = Budget::new(budget.limit);
     let version = Bin { d: bytes, wide: false, budget, records_budget: &records_budget }.u32(&mut pos)?;
     let bin = Bin { d: bytes, wide: version >= 7500, budget, records_budget: &records_budget };
     let mut records = vec![];
+    let mut closed = false;
     while pos < bytes.len() {
         match bin.record(&mut pos, bytes.len(), 0) {
             Ok(Some(n)) => records.push(n),
-            Ok(None) => break,
+            Ok(None) => {
+                closed = true;
+                break;
+            }
             // A damaged tail (footer, padding) after complete sections is ignored.
-            Err(crate::Error::Malformed(_)) if records.iter().any(|n| n.name == "Objects") => break,
+            Err(crate::Error::Malformed(_)) if !strict && records.iter().any(|n| n.name == "Objects") => break,
             Err(e) => return Err(e),
         }
+    }
+    if strict && !closed {
+        return Err(malformed(KIND, "missing binary closing record"));
     }
     Ok((version, records))
 }
