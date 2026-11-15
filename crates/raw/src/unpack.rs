@@ -176,6 +176,22 @@ mod tests {
     }
 
     #[test]
+    fn words32_scratch_is_reusable() {
+        let long: Vec<u8> = (0u8..24).map(|i| i.wrapping_mul(37).wrapping_add(5)).collect();
+        let short = &long[3..10];
+        let mut scratch = Vec::new();
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            for (src, n) in [(&long[..], 16usize), (short, 4)] {
+                let mut want = vec![0u16; n];
+                unpack_words32_msb(src, order, 12, &mut want);
+                let mut got = vec![0u16; n];
+                unpack_words32_msb_with(src, order, 12, &mut got, &mut scratch);
+                assert_eq!(got, want);
+            }
+        }
+    }
+
+    #[test]
     fn packing() {
         // 12-bit MSB: 0xABC, 0xDEF -> AB CD EF
         let mut o = [0u16; 2];

@@ -404,7 +404,7 @@ fn floating_point_dngs() {
 }
 
 /// The chunks (tiles of `tw` x `th`, or strips when `tw == w`) of an image of `cpp` interleaved samples per pixel, each
-/// nominal-sized with zero padding past the image edge: one chunk per tile, and for `planar` one set of chunks per
+/// nominal-sized (strips: clipped to the image height) with zero padding past the image edge: one chunk per tile, and for `planar` one set of chunks per
 /// plane (one sample per pixel), plane after plane.
 fn chunk_samples<T: Copy + Default>(px: &[T], w: usize, h: usize, cpp: usize, tw: usize, th: usize, planar: bool) -> Vec<Vec<T>> {
     let planes = if planar { cpp } else { 1 };
@@ -413,7 +413,9 @@ fn chunk_samples<T: Copy + Default>(px: &[T], w: usize, h: usize, cpp: usize, tw
     for plane in 0..planes {
         for ty in 0..h.div_ceil(th) {
             for tx in 0..w.div_ceil(tw) {
-                let mut c = vec![T::default(); tw * th * ccpp];
+                // a strip holds only the rows inside the image, a tile its nominal size
+                let rows = if tw == w { th.min(h - ty * th) } else { th };
+                let mut c = vec![T::default(); tw * rows * ccpp];
                 for y in 0..th.min(h - ty * th) {
                     for x in 0..tw.min(w - tx * tw) {
                         for s in 0..ccpp {

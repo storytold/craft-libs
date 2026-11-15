@@ -609,6 +609,86 @@ fn unpack_chunk(
 }
 
 #[cfg(test)]
+mod place_tests {
+    use super::*;
+
+    /// The serial per-sample copy `place_chunk` replaced: the oracle.
+    #[allow(clippy::too_many_arguments)]
+    fn reference(out: &mut [u16], c: &Chunk, v: &[u16], w: usize, h: usize, cpp: usize, planar: bool) {
+        let ccpp = if planar { 1 } else { cpp };
+        let (cw, ch) = (c.width as usize, c.height as usize);
+        let (x0, y0) = (c.x as usize, c.y as usize);
+        if x0 >= w || y0 >= h {
+            return;
+        }
+        for y in 0..ch.min(h - y0) {
+            for x in 0..cw.min(w - x0) {
+                for s in 0..ccpp {
+                    let src = (y * cw + x) * ccpp + s;
+                    let dst_s = if planar { c.plane as usize } else { s };
+                    if dst_s >= cpp {
+                        continue;
+                    }
+                    let dst = ((y0 + y) * w + x0 + x) * cpp + dst_s;
+                    if let (Some(o), Some(&s)) = (out.get_mut(dst), v.get(src)) {
+                        *o = s;
+                    }
+                }
+            }
+        }
+    }
+
+    fn chunk(x: u32, y: u32, width: u32, height: u32, plane: u16) -> Chunk {
+        Chunk { index: 0, x, y, width, height, plane, offset: 0, len: 0 }
+    }
+
+    /// Chunks that overlap (the later one wins), run past the image edge, hold fewer samples than their size, or name a
+    /// plane the image does not have, placed through bands of several heights, equal the serial copy.
+    #[test]
+    fn place_chunk_matches_the_serial_copy_for_odd_chunks() {
+        let (w, h) = (11, 9);
+        for cpp in [1usize, 3] {
+            for planar in [false, true] {
+                let ccpp = if planar { 1 } else { cpp };
+                let specs = [
+                    (0, 0, 8, 6, 0, 1u16),
+                    (4, 3, 8, 8, 0, 2), // overlaps the first and runs past both edges
+                    (4, 3, 8, 8, 0, 3), // the same place again, later wins
+                    (0, 5, 5, 4, 1, 4),
+                    (2, 2, 6, 6, 2, 5),
+                    (0, 0, 4, 4, 3, 6),  // plane 3: not an image plane for cpp <= 3
+                    (9, 0, 6, 12, 0, 7), // only two columns inside
+                    (20, 0, 4, 4, 0, 8), // right of the image
+                    (0, 0, 11, 9, 0, 9), // whole image, short source below
+                ];
+                let chunks: Vec<(Chunk, Vec<u16>)> = specs
+                    .iter()
+                    .map(|&(x, y, cw, ch, plane, val)| {
+                        let n = (cw * ch) as usize * ccpp;
+                        // the last chunk holds only 40 samples
+                        let n = if val == 9 { 40 } else { n };
+                        (chunk(x, y, cw, ch, plane), (0..n).map(|i| val * 100 + i as u16).collect())
+                    })
+                    .collect();
+                let mut want = vec![0u16; w * h * cpp];
+                for (c, v) in &chunks {
+                    reference(&mut want, c, v, w, h, cpp, planar);
+                }
+                for band_rows in [1usize, 2, 4, 9, 20] {
+                    let mut got = vec![0u16; w * h * cpp];
+                    for (bi, band) in got.chunks_mut(band_rows * w * cpp).enumerate() {
+                        for (c, v) in &chunks {
+                            place_chunk(band, bi * band_rows, c, v, w, h, cpp, planar);
+                        }
+                    }
+                    assert_eq!(got, want, "cpp {cpp} planar {planar} band rows {band_rows}");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 #[cfg(feature = "dng")]
 mod lossy_tests {
     use super::*;
