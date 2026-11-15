@@ -14,7 +14,7 @@ impl ResetMark {
         if differs {
             vec![Shape::circle_filled(center, radius, look.color.egui())]
         } else {
-            vec![Shape::circle_stroke(center, radius - look.ring_width / 2.0, egui::Stroke::new(look.ring_width, look.ring.egui()))]
+            vec![Shape::circle_stroke(center, radius - look.ring_width, egui::Stroke::new(look.ring_width, look.ring.egui()))]
         }
     }
 }

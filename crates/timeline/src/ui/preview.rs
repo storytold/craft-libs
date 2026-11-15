@@ -116,8 +116,7 @@ impl Component for FramePreview {
             (Some((texture, size)), run, line) => {
                 let strip = line.map_or(0.0, |line| line.y);
                 let area = Rect::from_min_max(rect.min, pos2(rect.max.x, (rect.max.y - strip).max(rect.min.y)));
-                // The bars belong to the picture, as in a video player, so they are black in every theme.
-                // design: allow[raw-colour/const](letterbox bars belong to the picture)
+                // design: allow[raw-colour/const](the bars belong to the picture, as in a video player, so they are black in every theme)
                 ui.draw().data_fill(&PaintShape::Rect(area, CornerRadius::ZERO), DataColor::new(Color32::BLACK));
                 let (target, uv) = frame_rect(area, size, self.fit);
                 ui.content_painter(cx).picture(texture, target, uv, 0.0);

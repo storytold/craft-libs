@@ -1,0 +1,8 @@
+config_version = 1
+
+[[exception]]
+name = "timeline-preview-letterbox"
+kind = "marker"
+rule = "raw-colour/const"
+path = "crates/timeline/src/ui/preview.rs"
+reason = "The letterbox bars belong to the picture, as in a video player, so they are black in every theme."
