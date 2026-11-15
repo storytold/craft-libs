@@ -109,29 +109,84 @@ macro_rules! said {
     };
 }
 
-/// What the wire trace shows of a protocol line, either way: its leading keywords (a tag, a
-/// reply code, a command or status word, a sequence set, an extension's name) and how long the
-/// rest is. Whatever follows the first character that is no keyword's (lower case, `@`, a
-/// quote, a bracket of a list) is left out: a user name, an address in `MAIL FROM` or `RCPT TO`,
-/// a folder's name, a server's "ada@example.org authenticated" or "<bob@example.org> unknown",
-/// the flags and headers of a message. Secrets are hidden before this (before calling this function).
+/// Trace only recognized protocol structure, never arbitrary reply text or command arguments.
+/// Uppercase text can be private too; capitalization must not determine what is safe to log.
 pub fn for_trace(line: &str) -> String {
-    const MAX_KEPT: usize = 120;
     let line = line.trim_end();
-    let keyword = |c: char| c.is_ascii_uppercase() || c.is_ascii_digit() || matches!(c, '*' | '+' | '-' | '.' | ':' | ',' | '=' | '_' | '[' | ']');
-    let end = line.char_indices().find(|(_, c)| !keyword(*c) && *c != ' ').map_or(line.len(), |(at, _)| at);
-    let mut kept = line.get(..end).unwrap_or_default();
-    let opens = line.get(end..).is_some_and(|rest| rest.starts_with(['<', '(', '"', '{', '\\']));
-    if end < line.len() && !kept.ends_with(' ') && !opens {
-        // A word cut short is left out, unless it is the first one (`250-` of `250-mx.example`).
-        if let Some(space) = kept.trim_end().rfind(' ') {
-            kept = kept.get(..space).unwrap_or_default();
-        }
-    }
-    let kept: String = kept.trim_end().chars().take(MAX_KEPT).collect();
-    let left = line.get(kept.len()..).unwrap_or_default().trim_start().len();
+    let mut words = line.split_ascii_whitespace();
+    let first = words.next().unwrap_or_default();
+    let known = |word: &str| {
+        matches!(
+            word,
+            "OK" | "NO"
+                | "BAD"
+                | "BYE"
+                | "PREAUTH"
+                | "CAPABILITY"
+                | "LOGIN"
+                | "LOGOUT"
+                | "AUTHENTICATE"
+                | "SELECT"
+                | "EXAMINE"
+                | "CREATE"
+                | "DELETE"
+                | "RENAME"
+                | "SUBSCRIBE"
+                | "UNSUBSCRIBE"
+                | "LIST"
+                | "LSUB"
+                | "STATUS"
+                | "APPEND"
+                | "CHECK"
+                | "CLOSE"
+                | "EXPUNGE"
+                | "SEARCH"
+                | "FETCH"
+                | "STORE"
+                | "COPY"
+                | "MOVE"
+                | "UID"
+                | "IDLE"
+                | "DONE"
+                | "NOOP"
+                | "EHLO"
+                | "HELO"
+                | "STARTTLS"
+                | "AUTH"
+                | "MAIL"
+                | "RCPT"
+                | "DATA"
+                | "RSET"
+                | "QUIT"
+                | "EXISTS"
+                | "RECENT"
+                | "FLAGS"
+        )
+    };
+    let smtp_code = first.get(..3).is_some_and(|code| code.bytes().all(|b| b.is_ascii_digit()))
+        && first.as_bytes().first().is_some_and(|b| matches!(b, b'1'..=b'5'));
+    let tag = first.strip_prefix('A').is_some_and(|digits| !digits.is_empty() && digits.len() <= 16 && digits.bytes().all(|b| b.is_ascii_digit()));
+    let end = if smtp_code && (first.len() == 3 || first.get(3..4) == Some("-")) {
+        if first.len() > 3 { 4 } else { 3 }
+    } else if known(first) {
+        first.len()
+    } else if first == "*" || tag {
+        let second = words.next().unwrap_or_default();
+        let last = if first == "*" && !second.is_empty() && second.bytes().all(|b| b.is_ascii_digit()) {
+            words.next().filter(|word| known(word))
+        } else {
+            known(second).then_some(second)
+        };
+        last.and_then(|word| line.find(word)?.checked_add(word.len())).unwrap_or(first.len())
+    } else if first == "+" {
+        1
+    } else {
+        0
+    };
+    let kept = line.get(..end).unwrap_or_default();
+    let left = line.get(end..).unwrap_or_default().trim_start().len();
     match (kept.is_empty(), left) {
-        (_, 0) => kept,
+        (_, 0) => kept.to_owned(),
         (true, _) => format!("({left} bytes)"),
         (false, _) => format!("{kept} … ({left} bytes)"),
     }

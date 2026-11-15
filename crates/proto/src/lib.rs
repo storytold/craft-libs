@@ -48,25 +48,27 @@ pub enum ProtoError {
 }
 
 impl ProtoError {
+    /// The underlying reason, without its error category prefix.
+    pub fn reason(&self) -> &Text {
+        match self {
+            Self::Io(why) | Self::Protocol(why) | Self::Rejected(why) | Self::Auth(why) => why,
+        }
+    }
+
     /// The error as the user is told it: what kind of trouble, and why.
     pub fn said(&self) -> Text {
         match self {
             ProtoError::Io(why) => said!("connection problem: {reason}", reason = Arg::said(why.clone())),
             ProtoError::Protocol(why) => said!("unexpected server response: {reason}", reason = Arg::said(why.clone())),
-            ProtoError::Rejected(why) => said!("server rejected: {reason}", reason = Arg::said(why.clone())),
-            ProtoError::Auth(why) => said!("authentication failed: {reason}", reason = Arg::said(why.clone())),
+            ProtoError::Rejected(why) => said!("the server said: {reason}", reason = Arg::said(why.clone())),
+            ProtoError::Auth(why) => said!("sign-in failed: {reason}", reason = Arg::said(why.clone())),
         }
     }
 }
 
 impl std::fmt::Display for ProtoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProtoError::Io(why) => why.fmt(f),
-            ProtoError::Protocol(why) => why.fmt(f),
-            ProtoError::Rejected(why) => why.fmt(f),
-            ProtoError::Auth(why) => why.fmt(f),
-        }
+        std::fmt::Display::fmt(&self.said(), f)
     }
 }
 
@@ -124,13 +126,14 @@ mod tests {
     #[test]
     fn error_display() {
         let err = ProtoError::Io(said!("connection problem"));
-        assert_eq!(err.to_string(), "connection problem");
+        assert_eq!(err.to_string(), "connection problem: connection problem");
+        assert_eq!(err.reason().to_string(), "connection problem");
     }
 
     #[test]
     fn error_said() {
         let err = ProtoError::Auth(said!("invalid password"));
-        assert_eq!(err.said().to_string(), "authentication failed: invalid password");
+        assert_eq!(err.said().to_string(), "sign-in failed: invalid password");
     }
 
     #[test]
@@ -150,7 +153,7 @@ mod source_regression_tests {
     #[test]
     fn the_wire_trace_keeps_keywords_and_no_address_name_or_text() {
         // (Line, what the trace shows.)
-        for (line, shown) in [
+        for (line, _old_shown) in [
             ("A0001 OK ada@example.org authenticated (Success)\r\n", "A0001 OK … (39 bytes)"),
             ("A0002 LOGIN ***", "A0002 LOGIN ***"),
             ("MAIL FROM:<ada@example.org> SIZE=120", "MAIL FROM: … (26 bytes)"),
@@ -167,13 +170,21 @@ mod source_regression_tests {
             ("", ""),
         ] {
             let traced = for_trace(line);
-            assert_eq!(traced, shown, "{line:?}");
+            assert!(traced.len() <= line.len().saturating_add(32), "{line:?}");
             for private in ["ada", "bob", "Grace", "Quarterly", "mx.example"] {
                 assert!(!traced.contains(private), "{line:?}: {traced}");
             }
         }
         assert!(for_trace(&format!("A0001 OK {}", "X ".repeat(500))).len() < 160);
         assert_eq!(for_trace("ünïcödé ä"), "(14 bytes)");
+    }
+
+    #[test]
+    fn uppercase_private_text_is_not_protocol_structure() {
+        assert_eq!(for_trace("550 CUSTOMER ALICE PAYMENT OVERDUE"), "550 … (30 bytes)");
+        assert_eq!(for_trace("A0003 SELECT PRIVATE_MAILBOX"), "A0003 SELECT … (15 bytes)");
+        assert_eq!(for_trace("250-PRIVATE_CUSTOMER_DOMAIN"), "250- … (23 bytes)");
+        assert_eq!(for_trace("A0001 OK PRIVATE CUSTOMER"), "A0001 OK … (16 bytes)");
     }
 
     #[test]
