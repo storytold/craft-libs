@@ -485,7 +485,7 @@ mod tests {
     fn sock_path(label: &str) -> PathBuf {
         let mut bytes = [0u8; 4];
         getrandom::getrandom(&mut bytes).unwrap();
-        PathBuf::from(format!("/tmp/cl-{label}-{}", crate::auth::encode_hex(&bytes)))
+        std::env::temp_dir().join(format!("cl-{label}-{}", crate::auth::encode_hex(&bytes)))
     }
 
     fn peer<F>(label: &str, script: F) -> Peer

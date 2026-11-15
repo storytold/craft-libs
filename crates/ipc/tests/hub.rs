@@ -26,7 +26,7 @@ impl Tmp {
     fn new() -> Self {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let mixed = (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x51ED);
-        let path = PathBuf::from(format!("/tmp/cl-hub-{mixed:08x}"));
+        let path = std::env::temp_dir().join(format!("cl-hub-{mixed:08x}"));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         Self(path)

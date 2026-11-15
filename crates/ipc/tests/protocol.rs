@@ -91,7 +91,7 @@ struct Harness {
 fn boot() -> Harness {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let mixed = (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x51ED);
-    let path = PathBuf::from(format!("/tmp/cl-srv-{mixed:08x}"));
+    let path = std::env::temp_dir().join(format!("cl-srv-{mixed:08x}"));
     let _ = std::fs::remove_dir_all(&path);
     let runtime = RuntimeDir::at(&path).unwrap();
     let sink = Arc::new(ReplySink { result: Mutex::new(json!({"commands": ["cut"]})), seen: Mutex::new(Vec::new()) });

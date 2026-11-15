@@ -22,6 +22,19 @@ const MAX_SCAN_READ: u64 = 256 << 20;
 /// The largest font file loaded.
 const MAX_LOAD: u64 = 512 << 20;
 
+/// The bytes of the file at `path`, at most `max`: the size was checked before, but a file can
+/// grow between that check and the read, so the read itself stops one byte past the limit.
+pub(crate) fn read_capped(path: &Path, max: u64) -> Result<Vec<u8>, FontFileError> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?.take(max.saturating_add(1)).read_to_end(&mut bytes)?;
+    let size = bytes.len() as u64;
+    if size > max {
+        return Err(FontFileError::TooLarge { size, max });
+    }
+    Ok(bytes)
+}
+
 /// Why a font file or font data wasn't added or loaded.
 #[derive(Debug, thiserror::Error)]
 pub enum FontFileError {
@@ -544,7 +557,7 @@ impl Catalog {
         if size > MAX_LOAD {
             return Err(FontFileError::TooLarge { size, max: MAX_LOAD });
         }
-        let bytes: Arc<[u8]> = std::fs::read(path)?.into();
+        let bytes: Arc<[u8]> = read_capped(path, MAX_LOAD)?.into();
         let mut files = lock(&self.files);
         files.retain(|_, w| w.strong_count() > 0);
         files.insert(path.to_path_buf(), Arc::downgrade(&bytes));

@@ -1,0 +1,19 @@
+[package]
+name = "craft-texture"
+description = "Bounded linear float image planes and texture sampling"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+parallel = ["dep:rayon"]
+
+[lints]
+workspace = true
+
+[dependencies]
+rayon = { workspace = true, optional = true }
+thiserror = { workspace = true }

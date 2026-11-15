@@ -23,7 +23,7 @@ struct Tmp(PathBuf);
 impl Tmp {
     fn new(label: &str) -> Self {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let path = PathBuf::from(format!("/tmp/cl-watch-{label}-{}-{nanos:x}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("cl-watch-{label}-{}-{nanos:x}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         Self(path)
     }

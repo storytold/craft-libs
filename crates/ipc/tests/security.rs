@@ -66,7 +66,7 @@ fn boot() -> Running {
 fn boot_with(tcp_port: Option<u16>) -> Running {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let mixed = (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x9E37_79B9);
-    let path = PathBuf::from(format!("/tmp/cl-srv-{mixed:08x}"));
+    let path = std::env::temp_dir().join(format!("cl-srv-{mixed:08x}"));
     let _ = std::fs::remove_dir_all(&path);
     let runtime = RuntimeDir::at(&path).unwrap();
     let server = Server::start(ServerConfig {

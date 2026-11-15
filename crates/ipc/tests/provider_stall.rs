@@ -109,7 +109,7 @@ struct Rig {
 
 impl Rig {
     fn boot(label: &str, deadline: Duration) -> Self {
-        let dir = PathBuf::from(format!("/tmp/cl-stall-{label}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cl-stall-{label}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let gate = Arc::new(Gate { release: AtomicBool::new(false), entered: AtomicUsize::new(0) });
         let server = Server::start_with_limits(

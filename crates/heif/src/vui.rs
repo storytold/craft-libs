@@ -49,6 +49,55 @@ pub fn coded_sizes(parameter_sets: &[&[u8]]) -> Option<Vec<(u32, u32)>> {
         .collect()
 }
 
+/// NAL unit type of a picture parameter set.
+const PPS_NUT: u8 = 34;
+
+/// What [`pps_layouts`] reads of a picture parameter set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PpsLayout {
+    /// `pps_pic_parameter_set_id`.
+    pub id: u32,
+    /// `num_tile_columns_minus1 + 1` (1 without tiles).
+    pub tile_cols: u32,
+    /// `num_tile_rows_minus1 + 1` (1 without tiles).
+    pub tile_rows: u32,
+}
+
+/// The id and tile layout of every PPS among `parameter_sets`, read up to the tile counts
+/// (H.265 7.3.2.3.1). `None`: a PPS this reader can't follow.
+pub fn pps_layouts(parameter_sets: &[&[u8]]) -> Option<Vec<PpsLayout>> {
+    parameter_sets
+        .iter()
+        .filter(|n| n.first().is_some_and(|b| (b >> 1) & 0x3f == PPS_NUT))
+        .map(|pps| {
+            let rbsp = unescape(pps.get(2..)?);
+            pps_layout(&mut Bits { data: &rbsp, pos: 0 })
+        })
+        .collect()
+}
+
+fn pps_layout(r: &mut Bits) -> Option<PpsLayout> {
+    let id = r.ue()?; // pps_pic_parameter_set_id
+    r.ue()?; // pps_seq_parameter_set_id
+    // dependent slices, output flag, 3 extra slice header bits, sign hiding, cabac_init_present
+    r.skip(7)?;
+    r.ue()?; // num_ref_idx_l0_default_active_minus1
+    r.ue()?; // num_ref_idx_l1_default_active_minus1
+    r.se()?; // init_qp_minus26
+    r.skip(2)?; // constrained_intra_pred_flag, transform_skip_enabled_flag
+    if r.flag()? {
+        r.ue()?; // diff_cu_qp_delta_depth
+    }
+    r.se()?; // pps_cb_qp_offset
+    r.se()?; // pps_cr_qp_offset
+    // slice chroma qp offsets present, weighted pred, weighted bipred, transquant bypass
+    r.skip(4)?;
+    let tiles = r.flag()?; // tiles_enabled_flag
+    r.skip(1)?; // entropy_coding_sync_enabled_flag
+    let (tile_cols, tile_rows) = if tiles { (r.ue()?.checked_add(1)?, r.ue()?.checked_add(1)?) } else { (1, 1) };
+    Some(PpsLayout { id, tile_cols, tile_rows })
+}
+
 /// Reads an SPS up to and including the picture size, leaving `r` after it: width, height and
 /// `sps_max_sub_layers_minus1`.
 fn sps_size(r: &mut Bits) -> Option<(u32, u32, u32)> {
@@ -455,5 +504,64 @@ mod tests {
             let _ = signal(&[nal.get(..cut).unwrap_or_default()]);
         }
         assert_eq!(signal(&[&[SPS_NUT << 1, 1, 0xff, 0xff, 0xff]]), None);
+    }
+
+    /// A PPS NAL as encoders write it, with `tiles` (columns, rows) when tiles are enabled.
+    fn pps(id: u32, cu_qp_delta: bool, tiles: Option<(u32, u32)>) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.ue(id);
+        w.ue(0); // sps id
+        w.u(0, 7);
+        w.ue(0);
+        w.ue(0);
+        w.ue(3); // init_qp_minus26 = -2
+        w.u(0, 2);
+        w.u(u32::from(cu_qp_delta), 1);
+        if cu_qp_delta {
+            w.ue(1);
+        }
+        w.ue(1); // cb offset +1
+        w.ue(2); // cr offset -1
+        w.u(0, 4);
+        w.u(u32::from(tiles.is_some()), 1);
+        w.u(0, 1);
+        if let Some((c, r)) = tiles {
+            w.ue(c - 1);
+            w.ue(r - 1);
+            w.u(1, 1); // uniform spacing
+            w.u(1, 1);
+        }
+        w.u(0, 3);
+        [vec![PPS_NUT << 1, 1], w.bytes()].concat()
+    }
+
+    #[test]
+    fn reads_pps_ids_and_tile_counts() {
+        let plain = pps(5, true, None);
+        let tiled = pps(63, false, Some((4, 3)));
+        let sps_nal = sps(|w| w.u(0, 1), |w| w.ue(0));
+        assert_eq!(
+            pps_layouts(&[&sps_nal, &plain, &tiled]),
+            Some(vec![PpsLayout { id: 5, tile_cols: 1, tile_rows: 1 }, PpsLayout { id: 63, tile_cols: 4, tile_rows: 3 }])
+        );
+        assert_eq!(pps_layouts(&[&[PPS_NUT << 1, 1]]), None);
+        assert!(crate::check_parameter_sets(&[&sps_nal, &plain, &tiled]).is_ok());
+        assert!(crate::check_parameter_sets(&[&pps(0, false, Some((20, 22)))]).is_ok());
+    }
+
+    #[test]
+    fn refuses_parameter_sets_that_multiply_decoder_work() {
+        // a PPS id past 63: heic-rs would keep every distinct one and rescan them all for each
+        let r = crate::check_parameter_sets(&[&pps(64, false, None)]);
+        assert!(matches!(r, Err(crate::Error::Malformed(_))), "{r:?}");
+        // thousands of PPS records (even with valid, repeated ids): quadratic collection
+        let one = pps(1, false, None);
+        let many: Vec<&[u8]> = vec![&one; 5000];
+        assert!(matches!(crate::check_parameter_sets(&many), Err(crate::Error::Limit(_))));
+        // more tiles than any H.265 level allows: tile tables cost blocks × tiles
+        for (c, r) in [(21, 1), (1, 23), (1024, 1024)] {
+            let r = crate::check_parameter_sets(&[&pps(0, false, Some((c, r)))]);
+            assert!(matches!(r, Err(crate::Error::Limit(_))), "{r:?}");
+        }
     }
 }

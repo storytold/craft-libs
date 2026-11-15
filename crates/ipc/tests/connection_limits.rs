@@ -40,7 +40,7 @@ impl Frames for NoFrames {
 }
 
 fn boot_with(label: &str, limits: Limits) -> (Server, PathBuf, String, PathBuf) {
-    let dir = PathBuf::from(format!("/tmp/cl-ipc-{label}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("cl-ipc-{label}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let runtime = RuntimeDir::at(&dir).unwrap();
     let server = Server::start_with_limits(

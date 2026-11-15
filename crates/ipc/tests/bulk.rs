@@ -95,7 +95,7 @@ struct Rig {
 
 fn boot(epoch: u64) -> Rig {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let path = PathBuf::from(format!("/tmp/cl-blk-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x9E37)));
+    let path = std::env::temp_dir().join(format!("cl-blk-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x9E37)));
     let _ = std::fs::remove_dir_all(&path);
     let source = Arc::new(FakeSource { epoch: AtomicU64::new(epoch), closed: Mutex::new(Vec::new()) });
     let tickets = Arc::new(FrameTickets::new(Arc::clone(&source) as Arc<dyn FrameSource>));
@@ -256,7 +256,7 @@ fn a_bad_magic_and_a_bad_header_do_not_panic_the_server() {
 /// A one-shot fake server. Answers auth and attach, then sends `bytes` and closes.
 fn fake_server(bytes: Vec<u8>) -> (InstanceRecord, std::thread::JoinHandle<()>, Tmp) {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = PathBuf::from(format!("/tmp/cl-fk-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x51)));
+    let dir = std::env::temp_dir().join(format!("cl-fk-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x51)));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("s.sock");
     let listener = UnixListener::bind(&path).unwrap();

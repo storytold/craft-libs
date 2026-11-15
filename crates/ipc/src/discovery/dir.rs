@@ -230,7 +230,7 @@ mod tests {
     fn scratch(label: &str) -> PathBuf {
         let mut bytes = [0u8; 4];
         getrandom::getrandom(&mut bytes).unwrap();
-        let path = PathBuf::from(format!("/tmp/cl-{label}-{}", crate::auth::encode_hex(&bytes)));
+        let path = std::env::temp_dir().join(format!("cl-{label}-{}", crate::auth::encode_hex(&bytes)));
         let _ = std::fs::remove_dir_all(&path);
         path
     }

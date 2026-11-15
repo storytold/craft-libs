@@ -392,7 +392,7 @@ mod tests {
         fn new(label: &str) -> Self {
             let mut bytes = [0u8; 4];
             getrandom::getrandom(&mut bytes).unwrap();
-            let path = PathBuf::from(format!("/tmp/cl-{label}-{}", crate::auth::encode_hex(&bytes)));
+            let path = std::env::temp_dir().join(format!("cl-{label}-{}", crate::auth::encode_hex(&bytes)));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).unwrap();
             Self { path }
@@ -693,7 +693,7 @@ mod tests {
         let _spawning = crate::SPAWN_GUARD.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut bytes = [0u8; 4];
         getrandom::getrandom(&mut bytes).unwrap();
-        let path = PathBuf::from(format!("/tmp/cl-launch-{}", crate::auth::encode_hex(&bytes)));
+        let path = std::env::temp_dir().join(format!("cl-launch-{}", crate::auth::encode_hex(&bytes)));
         let _ = std::fs::remove_dir_all(&path);
         let runtime = RuntimeDir::at(&path).unwrap();
         let _cleanup = LaunchCleanup { dir: path.clone() };

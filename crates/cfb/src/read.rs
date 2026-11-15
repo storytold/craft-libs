@@ -424,6 +424,19 @@ impl<'a> CompoundFile<'a> {
         self.entries.first().unwrap_or(&EMPTY)
     }
 
+    /// Reject a cycle or invalid link anywhere in the root mini-stream sector chain.
+    /// Opening remains tolerant so other streams can still be salvaged.
+    pub fn validate_root_chain(&self) -> Result<()> {
+        let root = self.root();
+        if root.size > 0 {
+            if root.start == ENDOFCHAIN {
+                return Err(invalid("nonempty root mini stream has no sector chain"));
+            }
+            self.chain_ids(root.start, None)?;
+        }
+        Ok(())
+    }
+
     pub fn entry(&self, id: usize) -> Option<&Entry> {
         self.entries.get(id)
     }

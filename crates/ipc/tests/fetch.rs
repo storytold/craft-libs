@@ -90,7 +90,7 @@ struct Rig {
 
 fn boot() -> Rig {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let path = PathBuf::from(format!("/tmp/cl-fch-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x9E37)));
+    let path = std::env::temp_dir().join(format!("cl-fch-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x9E37)));
     let _ = std::fs::remove_dir_all(&path);
     let fake = Arc::new(Fake {
         epoch: AtomicU64::new(1),

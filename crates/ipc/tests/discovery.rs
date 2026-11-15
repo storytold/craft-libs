@@ -94,5 +94,5 @@ fn hold_dir() -> PathBuf {
     let mut file = std::fs::File::open("/dev/urandom").unwrap();
     std::io::Read::read_exact(&mut file, &mut bytes).unwrap();
     let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-    PathBuf::from(format!("/tmp/cl-hold-{hex}"))
+    std::env::temp_dir().join(format!("cl-hold-{hex}"))
 }
