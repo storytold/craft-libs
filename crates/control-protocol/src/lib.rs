@@ -3,6 +3,11 @@ use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use subtle::ConstantTimeEq;
 
+/// Whether a session token has the control protocol's 64 hexadecimal character form.
+pub fn valid_token(token: &str) -> bool {
+    token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// One parsed line.
 enum Line {
     Request {
@@ -115,6 +120,12 @@ pub fn serve_lines<R: Read, W: Write>(read: R, mut out: W, token: &str, max_line
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn validates_session_token_shape() {
+        assert!(valid_token(&"aB09".repeat(16)));
+        assert!(!valid_token(&"a".repeat(63)));
+        assert!(!valid_token(&"g".repeat(64)));
+    }
     #[test]
     fn authenticates_each_request_and_closes_after_failure() {
         let input =
