@@ -45,26 +45,32 @@ pub use words::VanishingPointWords;
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use egui::{Color32, Id, Response, Ui};
+use egui::{Color32, Id, Ui};
+use serde_json::Value;
 
 use craft_behavior::edit_history::Step;
 use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed};
 use craft_ui::bars::StatusMessage;
 use craft_ui::canvas::{HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
-use craft_ui::contract::{Bind, Job, NoValue, Outcome, Pending, Remember as _, Show as _, ShowContainer as _};
-use craft_ui::dialog::{FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, RasterOverlay};
+use craft_ui::contract::{Bind, Job, Pending, Remember as _, Show as _, ShowContainer as _};
+use craft_ui::dialog::{
+    FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
+    RasterOverlay, WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
+};
 use craft_ui::layout_components::Row;
 use craft_ui::primitives::Checker;
 use craft_ui::rails::{LastUsed, RailTool, ToolRail, ToolSlot};
 use craft_ui::runtime::commands::{CommandSet as _, Commands as _};
 use craft_ui::runtime::env::Env;
+use craft_ui::runtime::windows::WindowSpec;
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
 
+use command::{command_planes, command_strokes, point, read_paste_at, read_paste_width, read_planes, read_strokes};
 use commands::Pick;
-use editor::PASTE_CELLS;
+use editor::{PASTE_CELLS, is_unset};
 
-pub use command::VanishingPointCommand;
+pub use command::{VanishingCommandPaste, VanishingCommandPlane, VanishingCommandStroke, VanishingPointCommand};
 
 use crate::ui::wide_angle::PreviewDone;
 
@@ -75,7 +81,6 @@ const PASTE_TINT: Color32 = Color32::from_rgba_premultiplied(230, 230, 230, 230)
 /// What the app gives the editor to show each pass.
 pub trait VanishingPointSource: Send + Sync {
     /// The app's perspective scene: its planes and their geometry.
-    // P3(dialogs-w12): dl.K61 `scene` (dialogs-w47 decision)
     fn scene(&self) -> &dyn VanishingScene;
 
     /// The layer as it is.
@@ -181,30 +186,6 @@ pub enum VanishingPointEvent {
     Refused(StatusMessage),
 }
 
-/// What [`VanishingPointWorkspace::show`] reports.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct VanishingPointOutput {
-    /// What happened this pass, in order.
-    pub events: Vec<VanishingPointEvent>,
-    /// The bar changed a setting (the app stores the settings).
-    pub settings_changed: bool,
-    /// The message of a refused Stamp press, translated, for the app's status bar.
-    pub status: Option<StatusMessage>,
-    /// OK (`Accept`) or Cancel, once chosen.
-    pub closed: Option<DialogRole>,
-    /// The dialog's response: its rect is the workspace's.
-    pub response: Response,
-}
-
-impl Outcome for VanishingPointOutput {
-    type Value = NoValue;
-
-    fn response(&self) -> &Response {
-        &self.response
-    }
-}
-
 /// What the dialog's body keeps between passes: the view, the strip's memory and the canvas the tools run under.
 #[derive(Clone, Default)]
 struct VanishingView {
@@ -239,6 +220,10 @@ pub struct VanishingPointWorkspace {
     /// Counts the sessions the history has seen: the key of the preview job.
     revision: u64,
     settings: VanishingPointSettings,
+    /// The settings as the last [`Settings`](VanishingPointEvent::Settings) event reported them.
+    reported: VanishingPointSettings,
+    /// Events from calls outside `show`; the next pass reports them first.
+    queued: Vec<VanishingPointEvent>,
     editor: VanishingPointEditor,
     subject: String,
     size: [u32; 2],
@@ -261,6 +246,8 @@ impl VanishingPointWorkspace {
             session: open.session,
             revision: 0,
             settings: open.settings,
+            reported: open.settings,
+            queued: Vec::new(),
             editor: VanishingPointEditor::new(open.limits),
             subject: open.subject,
             size: open.size,
@@ -288,30 +275,92 @@ impl VanishingPointWorkspace {
         self
     }
 
+    /// The planes, paste and strokes recorded so far.
+    pub fn session(&self) -> &VanishingPointSession {
+        &self.session
+    }
+
+    /// The editor: the selected tool and plane, and the corners Create Plane has clicked.
+    pub fn editor(&self) -> &VanishingPointEditor {
+        &self.editor
+    }
+
+    /// The engine command OK answers: the session's planes, paste and strokes with the bar's options. The paste is
+    /// left out when `has_paste` is false.
+    pub fn command(&self, has_paste: bool) -> VanishingPointCommand {
+        VanishingPointCommand::new(&self.session, &self.settings, self.editor.selected(), has_paste)
+    }
+
+    /// The options bar's current values.
+    pub fn settings(&self) -> &VanishingPointSettings {
+        &self.settings
+    }
+
+    /// Whether a plane the scene calls invalid blocks OK: the corners of a plane that is set must form a convex quad.
+    fn blocked(&self, scene: &dyn VanishingScene) -> bool {
+        (0..self.session.planes.len()).any(|i| !is_unset(&self.session.planes[i]) && scene.check(&self.session.planes, i) == PlaneCheck::Invalid)
+    }
+
+    /// Runs `write` on the session with the history it needs: a gesture in progress is cancelled first, and what the
+    /// write changed is one history step named `step`. The events wait for the next pass.
+    fn write_session(&mut self, step: &str, write: impl FnOnce(&mut Self)) {
+        self.editor.cancel(&mut self.session, CancelReason::Removed);
+        write(self);
+        let events = self.editor.take_events();
+        self.record(&events, step);
+        self.queued.extend(events);
+    }
+}
+
+/// Why a field value was refused, with what is wrong in `detail`.
+fn rejects(field: &str, value: &Value, detail: &str) -> String {
+    format!("{} ({detail})", FieldRefusal::Rejects(value).message(field))
+}
+
+impl FullWindowWorkspace for VanishingPointWorkspace {
+    type Source = dyn VanishingPointSource;
+    type Event = VanishingPointEvent;
+    type Result = VanishingPointCommand;
+
+    const KEY: &'static str = "filter.vanishingPoint";
+
     /// Shows the workspace for this pass.
     ///
-    /// A [`FullWindowDialog`] titled by [`FullWindowTitle`] (the subject and the zoom), in the scope of
+    /// A [`FullWindowDialog`] in its own window (the main window's full-window layer where the platform has no
+    /// viewports), titled by [`FullWindowTitle`] (the subject and the zoom), in the scope of
     /// [`VanishingPointCommands`], with the narrow side column (the preview's status, OK and Cancel at its bottom). The
     /// body, in order: the commands; [`VanishingPointBar`]; the tool strip (a `ToolRail`; a pick cancels the old tool's
     /// gesture with `Removed`); the canvas ([`FullWindowCanvas`]) with the source's image (the stamp preview while
     /// strokes exist), the paste as an overlay mapped through the selected plane, the planes control over it, and the
-    /// editor's tool (or Hand, Zoom). The New Plane form shows while open.
-    pub fn show(&mut self, ui: &mut Ui, scene: &dyn VanishingScene, source: &dyn VanishingPointSource) -> VanishingPointOutput {
+    /// editor's tool (or Hand, Zoom). The New Plane form shows while open. OK is refused while a plane is invalid and
+    /// answers the command for the session as it is after this pass's edits. A second pass in one frame reports only
+    /// the events of its own input: the first pass drains the queue of calls made outside a pass.
+    fn show(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, Self::Source>) -> WorkspacePass<VanishingPointEvent, VanishingPointCommand> {
         // pc: crates/ui-egui/src/dialogs/vp_ui.rs:1230 `options_bar`, :1045 `keys`, :1068 `escape`;
         // distort_ui.rs:352-368 (the mode on the main canvas, replaced by the frame).
+        let WorkspaceCx { source, revision: source_revision, open, .. } = cx;
+        let scene = source.scene();
         let env = Env::of(ui);
         let words = env.words::<VanishingPointWords>();
         let common = env.words::<CommonWords>();
         let title = FullWindowTitle::new(words.name.clone()).subject(self.subject.clone()).zoom(self.zoom_percent).label(&env);
-        let settings_before = self.settings;
         let slots = slots();
         let status: RefCell<Option<Pending<PreviewDone, String>>> = RefCell::new(None);
         let events = RefCell::new(Vec::<VanishingPointEvent>::new());
         let this = RefCell::new(&mut *self);
 
         let shown = FullWindowDialog::new(title)
+            .own_window(WindowSpec::dialog())
+            .opened(open)
             .command_scope(VanishingPointCommands::SCOPE)
             .buttons([FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
+            .settle_buttons(|_, buttons| {
+                // Read after this pass's edits: OK is disabled while a plane is invalid.
+                let blocked = this.borrow().blocked(scene);
+                for button in buttons.iter_mut().filter(|button| button.role() == DialogRole::Accept) {
+                    button.set_enabled(!blocked);
+                }
+            })
             .sides(|ui, _| {
                 FullWindowSide::new(words.planes.clone()).headerless().show(ui, |ui, _| {
                     if let Some(status) = status.borrow().as_ref() {
@@ -370,7 +419,7 @@ impl VanishingPointWorkspace {
                 let strokes = !work.session.strokes.is_empty();
                 let preview = strokes.then(|| {
                     let request = VanishingPreviewRequest { session: work.session.clone() };
-                    cx.pending((work.revision, "vanishing-point-preview"), || source.preview_job(&request)).clone()
+                    cx.pending((work.revision, source_revision, "vanishing-point-preview"), || source.preview_job(&request)).clone()
                 });
                 *status.borrow_mut() = preview;
 
@@ -427,39 +476,107 @@ impl VanishingPointWorkspace {
                 *cx.keep::<VanishingView>() = state;
             });
         let this = this.into_inner();
-        let picked = shown.output.picked.and_then(|at| [DialogRole::Accept, DialogRole::Cancel].get(at).copied());
-        let closed = picked.or(shown.output.closed.map(|_| DialogRole::Cancel));
-        let events = events.into_inner();
-        this.record(&events, words.source_step.as_str());
-        VanishingPointOutput {
-            events,
-            settings_changed: this.settings != settings_before,
-            status: this.editor.take_status(),
-            closed,
-            response: shown.output.response,
+        let passed = events.into_inner();
+        this.record(&passed, words.source_step.as_str());
+        let mut events = std::mem::take(&mut this.queued);
+        events.extend(passed);
+        if this.settings != this.reported {
+            this.reported = this.settings;
+            events.push(VanishingPointEvent::Settings(this.settings));
         }
+        events.extend(this.editor.take_status().map(VanishingPointEvent::Refused));
+        let result = shown.output.result(|| this.command(source.paste().is_some()));
+        WorkspacePass::new(shown.output.response.clone(), events).result(result)
     }
 
-    /// The planes, paste and strokes recorded so far.
-    pub fn session(&self) -> &VanishingPointSession {
-        &self.session
+    fn json_fields(&self) -> Option<Value> {
+        let mut fields = serde_fields(&self.settings)?;
+        let map = fields.as_object_mut()?;
+        let selected = self.editor.selected().map_or(Value::Null, Value::from);
+        let source = self.session.source.map_or(Value::Null, |at| Value::from(at.to_vec()));
+        map.insert("tool".to_owned(), serde_json::to_value(self.editor.tool()).ok()?);
+        map.insert("select".to_owned(), selected);
+        map.insert("planes".to_owned(), serde_json::to_value(command_planes(&self.session)).ok()?);
+        map.insert("pasteAt".to_owned(), Value::from(self.session.paste.at.to_vec()));
+        map.insert("pasteWidth".to_owned(), Value::from(self.session.paste.width));
+        map.insert("source".to_owned(), source);
+        map.insert("clone".to_owned(), serde_json::to_value(command_strokes(&self.session)).ok()?);
+        Some(fields)
     }
 
-    /// The editor: the selected tool and plane, and the corners Create Plane has clicked.
-    pub fn editor(&self) -> &VanishingPointEditor {
-        &self.editor
+    fn set_json_field(&mut self, ctx: &egui::Context, source: &Self::Source, field: &str, value: Value) -> Result<(), String> {
+        let words = Env::of_root(ctx).words::<VanishingPointWords>();
+        match field {
+            "tool" => {
+                let tool = serde_json::from_value::<VanishingTool>(value.clone()).map_err(|_| rejects(field, &value, "edit|create|stamp"))?;
+                self.tool(tool);
+            }
+            "select" => {
+                let index = match &value {
+                    Value::Null => None,
+                    other => Some(other.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| rejects(field, &value, "a plane index"))?),
+                };
+                self.editor.select(index, &self.session);
+            }
+            "planes" => {
+                let (planes, torn) = read_planes(&value).map_err(|detail| rejects(field, &value, &detail))?;
+                self.write_session(words.edit_planes_step.as_str(), |work| {
+                    work.session.planes = if planes.is_empty() { planes } else { source.scene().resolve(&planes, &torn) };
+                    work.session.torn = torn;
+                    work.editor.select(work.session.planes.len().checked_sub(1), &work.session);
+                });
+            }
+            "pasteAt" => {
+                let at = read_paste_at(&value).ok_or_else(|| rejects(field, &value, "[x, y]"))?;
+                self.write_session(words.paste_step.as_str(), |work| work.session.paste.at = at);
+            }
+            "pasteWidth" => {
+                let width = read_paste_width(&value).ok_or_else(|| rejects(field, &value, "a number"))?;
+                self.write_session(words.paste_width_step.as_str(), |work| work.session.paste.width = width);
+            }
+            "source" => {
+                let at = match &value {
+                    Value::Null => None,
+                    other => Some(point(other).ok_or_else(|| rejects(field, &value, "[x, y]"))?),
+                };
+                self.write_session(words.source_step.as_str(), |work| {
+                    work.session.source = at;
+                    work.session.aligned_from = None;
+                });
+            }
+            "clone" => {
+                let strokes = read_strokes(&value, self.editor.limits).map_err(|detail| rejects(field, &value, &detail))?;
+                self.write_session(words.stamp_step.as_str(), |work| work.session.strokes = strokes);
+            }
+            _ => {
+                // The stamp options merge into the current ones, as the bar edits one at a time.
+                let value = match (field == "stamp", value) {
+                    (true, Value::Object(patch)) => {
+                        let mut merged = serde_json::to_value(self.settings.stamp).map_err(|e| e.to_string())?;
+                        if let Some(map) = merged.as_object_mut() {
+                            map.extend(patch);
+                        }
+                        merged
+                    }
+                    (_, value) => value,
+                };
+                let mut next = self.settings;
+                set_serde_field(&mut next, field, value)?;
+                if next != self.settings {
+                    self.settings = next;
+                    self.reported = next;
+                    self.queued.push(VanishingPointEvent::Settings(next));
+                }
+            }
+        }
+        Ok(())
     }
 
-    /// The engine command OK answers: the session's planes, paste and strokes with the bar's options. The paste is
-    /// left out when `has_paste` is false.
-    pub fn command(&self, has_paste: bool) -> VanishingPointCommand {
-        let _ = has_paste;
-        todo!("dl.K61")
-    }
-
-    /// The options bar's current values.
-    pub fn settings(&self) -> &VanishingPointSettings {
-        &self.settings
+    fn confirm(&mut self, _ctx: &egui::Context, source: &Self::Source) -> Option<VanishingPointCommand> {
+        if self.blocked(source.scene()) {
+            return None;
+        }
+        Some(self.command(source.paste().is_some()))
     }
 }
 
@@ -522,7 +639,7 @@ impl VanishingPointWorkspace {
                 VanishingPointEvent::Planes(event) => self.record_event(event),
                 VanishingPointEvent::Paste(event) => self.record_event(event),
                 VanishingPointEvent::Stamp(event) => self.record_event(event),
-                // P3(dialogs-w12): dl.K61 — settings and refusals are not history steps.
+                // Settings and refusals are not history steps.
                 VanishingPointEvent::Settings(_) | VanishingPointEvent::Refused(_) => {}
             }
         }
@@ -553,37 +670,5 @@ impl VanishingPointWorkspace {
             }
             _ => {}
         }
-    }
-}
-
-// P3(dialogs-w12): dl.K61 — the workspace's trait surface; `show` and the automation fields are written in phase 3.
-impl craft_ui::dialog::FullWindowWorkspace for VanishingPointWorkspace {
-    type Source = dyn VanishingPointSource;
-    type Event = VanishingPointEvent;
-    type Result = VanishingPointCommand;
-
-    const KEY: &'static str = "filter.vanishingPoint";
-
-    fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        cx: craft_ui::dialog::WorkspaceCx<'_, Self::Source>,
-    ) -> craft_ui::dialog::WorkspacePass<Self::Event, Self::Result> {
-        let _ = (ui, cx);
-        todo!("dl.K61")
-    }
-
-    fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K61")
-    }
-
-    fn set_json_field(&mut self, ctx: &egui::Context, source: &Self::Source, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, source, field, value);
-        todo!("dl.K61")
-    }
-
-    fn confirm(&mut self, ctx: &egui::Context, source: &Self::Source) -> Option<Self::Result> {
-        let _ = (ctx, source);
-        todo!("dl.K61")
     }
 }

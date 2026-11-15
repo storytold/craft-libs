@@ -14,16 +14,10 @@ use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::text::NumberField;
 
 use super::words::VanishingPointWords;
-use super::{PasteImage, VanishingPointSettings, VanishingTool};
+use super::{PasteImage, StampSettings, VanishingPointSettings, VanishingTool};
 
-/// Diameter, in pixels.
-const DIAMETER: RangeInclusive<f64> = 1.0..=5000.0;
-/// Hardness and Opacity, in percent.
-const PERCENT: RangeInclusive<f64> = 0.0..=100.0;
-/// Grid Size, in pixels (PhotoCraft's range).
-const GRID_SIZE: RangeInclusive<f64> = 2.0..=2000.0;
 /// The paste's Width, in percent of the plane's width (PhotoCraft's range).
-const PASTE_WIDTH: RangeInclusive<f64> = 1.0..=1000.0;
+pub(super) const PASTE_WIDTH: RangeInclusive<f64> = 1.0..=1000.0;
 
 /// What [`VanishingPointBar::show`] reports.
 #[derive(Debug)]
@@ -47,7 +41,7 @@ impl Outcome for VanishingPointBarOutput {
     }
 }
 
-/// The options bar, full width under the title: for Stamp Diameter (1..=5000 px), Hardness, Opacity (0..=100 %),
+/// The options bar, full width under the title: for Stamp Diameter (1..=2000 px), Hardness, Opacity (0..=100 %),
 /// Aligned; for every tool Grid Size (px); with an image on the clipboard Paste and Width (percent of the plane); New
 /// Layer. PhotoCraft's tool pills and its check and ban buttons go: the strip holds the tools and the side column's
 /// footer OK and Cancel.
@@ -97,9 +91,9 @@ impl<'a> VanishingPointBar<'a> {
             if tool == VanishingTool::Stamp {
                 type StampCell<'a> = (&'static str, &'a Label, f64, RangeInclusive<f64>, UnitKind, fn(&mut VanishingPointSettings, f64));
                 let cells: [StampCell<'_>; 3] = [
-                    ("diameter", &words.diameter, settings.stamp.diameter, DIAMETER, UnitKind::Pixels, |s, v| s.stamp.diameter = v),
-                    ("hardness", &words.hardness, settings.stamp.hardness, PERCENT, UnitKind::Percent, |s, v| s.stamp.hardness = v),
-                    ("opacity", &words.opacity, settings.stamp.opacity, PERCENT, UnitKind::Percent, |s, v| s.stamp.opacity = v),
+                    ("diameter", &words.diameter, settings.stamp.diameter, StampSettings::DIAMETER, UnitKind::Pixels, |s, v| s.stamp.diameter = v),
+                    ("hardness", &words.hardness, settings.stamp.hardness, StampSettings::PERCENT, UnitKind::Percent, |s, v| s.stamp.hardness = v),
+                    ("opacity", &words.opacity, settings.stamp.opacity, StampSettings::PERCENT, UnitKind::Percent, |s, v| s.stamp.opacity = v),
                 ];
                 for (key, caption, value, range, kind, change) in cells {
                     edit.extend(number(ui, key, caption, value, range, kind).map(set(change)));
@@ -110,7 +104,7 @@ impl<'a> VanishingPointBar<'a> {
                 );
                 Divider::vertical().show(ui);
             }
-            edit.extend(number(ui, "grid-size", &words.grid_size, settings.grid_size, GRID_SIZE, UnitKind::Pixels).map(set(|s, v| s.grid_size = v)));
+            edit.extend(number(ui, "grid-size", &words.grid_size, settings.grid_size, VanishingPointSettings::GRID_SIZE, UnitKind::Pixels).map(set(|s, v| s.grid_size = v)));
             if has_clip {
                 Divider::vertical().show(ui);
                 let pasted = Checkbox::new(Bind::given(settings.paste)).label(words.paste.clone()).show(ui);

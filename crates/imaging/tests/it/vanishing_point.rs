@@ -3,21 +3,22 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use craft_behavior::geometry::quad::Homography;
 use craft_behavior::kurbo::Point;
 use craft_behavior::{EditEvent, PixelSize};
 use craft_imaging::ui::vanishing_point::{
-    PlaneCheck, PlaneEdge, StampLimits, TornPlane, VanishingPlane, VanishingPointEvent, VanishingPointOpen, VanishingPointSession,
-    VanishingPointSource, VanishingPointWorkspace, VanishingPreviewRequest, VanishingScene, VanishingTool, slide_edge,
+    PlaneCheck, PlaneEdge, StampLimits, TornPlane, VanishingPlane, VanishingPointCommand, VanishingPointEvent, VanishingPointOpen,
+    VanishingPointSession, VanishingPointSource, VanishingPointWorkspace, VanishingPreviewRequest, VanishingScene, VanishingTool, slide_edge,
 };
 use craft_imaging::ui::wide_angle::PreviewDone;
 use craft_ui::canvas::{PixelRect, RasterSource};
 use craft_ui::contract::Job;
+use craft_ui::dialog::{DialogHost, DialogResult, FullWindowWorkspace, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
-use craft_ui::sections::DialogRole;
 use craft_ui::testing::{Fixture, pointer, trial};
 use egui::{Color32, ColorImage, Key, Modifiers, Pos2, Vec2};
 
@@ -114,8 +115,10 @@ impl VanishingScene for Flat {
     }
 }
 
-/// A solid layer.
-struct Layer;
+/// A solid layer with the scene its planes live in.
+struct Layer {
+    scene: Flat,
+}
 
 impl RasterSource for Layer {
     fn size(&self) -> PixelSize {
@@ -137,7 +140,7 @@ impl RasterSource for Layer {
 
 impl VanishingPointSource for Layer {
     fn scene(&self) -> &dyn VanishingScene {
-        todo!("dl.K61") // P3(dialogs-w12): dl.K61 `scene`
+        &self.scene
     }
 
     fn image(&self) -> &dyn RasterSource {
@@ -157,26 +160,42 @@ impl VanishingPointSource for Layer {
     }
 }
 
+type Hosted = HostedWorkspace<VanishingPointWorkspace>;
+
 /// What the app keeps of the workspace and what it saw.
 struct App {
-    workspace: VanishingPointWorkspace,
-    scene: Flat,
+    host: DialogHost,
     events: Vec<VanishingPointEvent>,
-    closed: Option<DialogRole>,
+    closed: Option<DialogResult<VanishingPointCommand>>,
+    /// Every frame runs its pass twice.
+    rerun: bool,
+}
+
+/// Runs `f` on the workspace the host holds.
+fn with_workspace<T>(app: &Rc<RefCell<App>>, f: impl FnOnce(&VanishingPointWorkspace) -> T) -> T {
+    let app = app.borrow();
+    f(app.host.get::<Hosted>().expect("the workspace is open").workspace())
 }
 
 /// The workspace over `session` with `tool` picked and `verdicts` for the planes, settled.
 fn open_with(tool: VanishingTool, session: VanishingPointSession, verdicts: Vec<PlaneCheck>, limits: StampLimits) -> (Fixture, Rc<RefCell<App>>) {
     let mut workspace = VanishingPointWorkspace::new(VanishingPointOpen::new(LAYER, "Photo", limits).session(session));
     workspace.tool(tool);
-    let app = Rc::new(RefCell::new(App { workspace, scene: Flat { verdicts }, events: Vec::new(), closed: None }));
+    let mut host = DialogHost::new();
+    host.open(HostedWorkspace::new(workspace, Arc::new(Layer { scene: Flat { verdicts } })));
+    let app = Rc::new(RefCell::new(App { host, events: Vec::new(), closed: None, rerun: false }));
     let shown = Rc::clone(&app);
     let mut fixture = Fixture::new(move |ui| {
         let mut app = shown.borrow_mut();
-        let App { workspace, scene, .. } = &mut *app;
-        let out = workspace.show(ui, scene, &Layer);
-        app.events.extend(out.events);
-        app.closed = app.closed.or(out.closed);
+        if app.rerun && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the trial runs a second pass");
+        }
+        app.host.run(ui);
+        let taken = app.host.get_mut::<Hosted>().map(HostedWorkspace::take_events).unwrap_or_default();
+        app.events.extend(taken);
+        if let Some(result) = app.host.take::<Hosted>() {
+            app.closed = Some(result);
+        }
     });
     fixture.room(Vec2::new(1000.0, 900.0));
     fixture.settle();
@@ -224,7 +243,7 @@ fn draw_plane(fixture: &mut Fixture) {
 }
 
 fn session(app: &Rc<RefCell<App>>) -> VanishingPointSession {
-    app.borrow().workspace.session().clone()
+    with_workspace(app, |workspace| workspace.session().clone())
 }
 
 fn near(a: [f64; 2], b: [f64; 2]) -> bool {
@@ -249,7 +268,7 @@ fn phase(event: &VanishingPointEvent) -> &'static str {
         VanishingPointEvent::Planes(e) => of("planes", e),
         VanishingPointEvent::Paste(e) => of("paste", e),
         VanishingPointEvent::Stamp(e) => of("stamp", e),
-        VanishingPointEvent::Settings(_) | VanishingPointEvent::Refused(_) => "other", // P3(dialogs-w12): dl.K61
+        VanishingPointEvent::Settings(_) | VanishingPointEvent::Refused(_) => "other",
     }
 }
 
@@ -289,8 +308,8 @@ fn a_command_drag_tears_off_a_plane_and_the_far_edge_sets_depth_or_angle() {
     let Some(t) = kept.torn.get(1).copied().flatten() else { panic!("plane 1 was torn off: {:?}", kept.torn) };
     assert_eq!((t.from, t.edge, t.angle), (0, PlaneEdge::Bottom, 90.0));
     assert!((t.depth - 1.0).abs() < 0.05, "depth {}", t.depth);
-    let tool = app.borrow().workspace.editor().tool();
-    assert_eq!((app.borrow().workspace.editor().selected(), tool), (Some(1), VanishingTool::EditPlane));
+    let (selected, tool) = with_workspace(&app, |workspace| (workspace.editor().selected(), workspace.editor().tool()));
+    assert_eq!((selected, tool), (Some(1), VanishingTool::EditPlane));
     let seen = phases(&app);
     assert_eq!((seen.get(1).copied(), seen.last().copied()), (Some("planes begin"), Some("planes commit")), "{seen:?}");
 
@@ -321,7 +340,7 @@ fn delete_removes_the_plane_and_escape_drops_a_half_plane_first() {
     let layer_middle = Vec2::new(LAYER[0] as f32, LAYER[1] as f32) / 2.0;
     let inside_first_plane = at(&fixture, Vec2::new(200.0, 75.0) - layer_middle);
     click(&mut fixture, inside_first_plane);
-    assert_eq!(app.borrow().workspace.editor().selected(), Some(0));
+    assert_eq!(with_workspace(&app, |workspace| workspace.editor().selected()), Some(0));
     fixture.key(Key::Delete, Modifiers::NONE).settle();
     let after = session(&app);
     assert_eq!(after.planes, planes[1..], "the children keep their place");
@@ -330,7 +349,7 @@ fn delete_removes_the_plane_and_escape_drops_a_half_plane_first() {
         [None, torn[2].map(|child| TornPlane::new(0, child.edge, child.angle, child.depth))],
         "the child is drawn, its child follows it"
     );
-    assert_eq!(app.borrow().workspace.editor().selected(), None);
+    assert_eq!(with_workspace(&app, |workspace| workspace.editor().selected()), None);
 
     // Escape: the half plane first, then the dialog's Cancel.
     let (mut fixture, app) = open(VanishingTool::CreatePlane);
@@ -338,9 +357,74 @@ fn delete_removes_the_plane_and_escape_drops_a_half_plane_first() {
         let to = at(&fixture, *offset);
         click(&mut fixture, to);
     }
-    assert_eq!(app.borrow().workspace.editor().pending().len(), 2);
+    assert_eq!(with_workspace(&app, |workspace| workspace.editor().pending().len()), 2);
     fixture.key(Key::Escape, Modifiers::NONE).settle();
-    assert!(app.borrow().workspace.editor().pending().is_empty() && app.borrow().closed.is_none(), "Escape drops the corners and keeps the dialog");
+    assert!(
+        with_workspace(&app, |workspace| workspace.editor().pending().is_empty()) && app.borrow().closed.is_none(),
+        "Escape drops the corners and keeps the dialog"
+    );
     fixture.key(Key::Escape, Modifiers::NONE).settle();
-    assert_eq!(app.borrow().closed, Some(DialogRole::Cancel), "with nothing pending Escape cancels");
+    assert_eq!(app.borrow().closed, Some(DialogResult::Cancel), "with nothing pending Escape cancels");
+}
+
+/// The first four corners of the planes the command trial writes: a drawn plane, and a plane torn off its bottom edge.
+fn drawn_and_torn() -> serde_json::Value {
+    serde_json::json!([
+        {"corners": [[100.0, 50.0], [300.0, 50.0], [300.0, 100.0], [100.0, 100.0]]},
+        {"from": 0, "edge": "bottom", "angle": 90.0, "depth": 1.0},
+    ])
+}
+
+#[trial]
+fn the_command_writes_and_reads_the_engines_planes_and_strokes() {
+    let (mut fixture, app) = open(VanishingTool::EditPlane);
+    let layer = Layer { scene: Flat { verdicts: Vec::new() } };
+    let ctx = fixture.ctx().clone();
+    let set = |field: &str, value: serde_json::Value| {
+        let mut app = app.borrow_mut();
+        let workspace = app.host.get_mut::<Hosted>().expect("the workspace is open").workspace_mut();
+        workspace.set_json_field(&ctx, &layer, field, value)
+    };
+
+    assert_eq!(set("planes", drawn_and_torn()), Ok(()));
+    let stroke = serde_json::json!([{"source": [10.0, 10.0], "points": [[20.0, 20.0], [30.0, 30.0]], "size": 50.0, "hardness": 25.0, "opacity": 75.0}]);
+    assert_eq!(set("clone", stroke), Ok(()));
+    assert_eq!(set("paste", serde_json::json!(true)), Ok(()));
+
+    // Reading `planes` refuses a torn plane whose `from` is not below its own index, and a depth outside (0, 1000].
+    let refused = [
+        serde_json::json!([{"from": 0}]),
+        serde_json::json!([{"corners": [[0, 0], [1, 0], [1, 1], [0, 1]]}, {"from": 1}]),
+        serde_json::json!([{"corners": [[0, 0], [1, 0], [1, 1], [0, 1]]}, {"from": 0, "depth": 0.0}]),
+        serde_json::json!([{"corners": [[0, 0], [1, 0], [1, 1], [0, 1]]}, {"from": 0, "depth": 1000.5}]),
+    ];
+    for planes in refused {
+        assert!(set("planes", planes.clone()).is_err(), "{planes} is refused");
+    }
+    assert_eq!(with_workspace(&app, |workspace| workspace.session().planes.len()), 2, "a refused write changes nothing");
+
+    let written = with_workspace(&app, |workspace| (workspace.command(false), workspace.command(true)));
+    let without_clipboard = serde_json::to_value(&written.0).expect("the command serialises");
+    assert_eq!(without_clipboard["planes"][0], serde_json::json!({"corners": [[100.0, 50.0], [300.0, 50.0], [300.0, 100.0], [100.0, 100.0]]}));
+    assert_eq!(without_clipboard["planes"][1], serde_json::json!({"from": 0, "edge": "bottom", "angle": 90.0, "depth": 1.0}));
+    assert_eq!(without_clipboard["clone"][0]["hardness"], 25.0, "hardness is in percent");
+    assert_eq!(without_clipboard["clone"][0]["opacity"], 75.0, "opacity is in percent");
+    assert!(without_clipboard.get("paste").is_none(), "Paste on without a clipboard image pastes nothing: {without_clipboard}");
+    assert!(without_clipboard.get("newLayer").is_none(), "New Layer is written only when on");
+    let with_clipboard = serde_json::to_value(&written.1).expect("the command serialises");
+    assert_eq!(with_clipboard["paste"][0]["plane"], 1, "the paste lands on the selected plane, which `planes` left on the last one");
+
+    // The setting reaches the app once, though the frame runs its pass twice.
+    fixture.frame(Vec::new());
+    assert_eq!(set("newLayer", serde_json::json!(true)), Ok(()));
+    {
+        let mut app = app.borrow_mut();
+        app.events.clear();
+        app.rerun = true;
+    }
+    fixture.frame(Vec::new());
+    assert_eq!(fixture.passes(), 2, "the frame ran a second pass");
+    let settings = app.borrow().events.iter().filter(|event| matches!(event, VanishingPointEvent::Settings(_))).count();
+    assert_eq!(settings, 1, "the first pass reports the queued setting, the second pass has none");
+    assert!(with_workspace(&app, |workspace| workspace.settings().new_layer));
 }

@@ -109,7 +109,7 @@ impl FillSource for StorySource {
                     }
                     std::thread::sleep(Duration::from_secs(1));
                 }
-                Ok(PreviewDone::new(Duration::ZERO) /* P3(dialogs-w12): dl.K60 */)
+                Ok(PreviewDone::new(Duration::ZERO))
             }),
             Preview::Failed => Job::new(|_, _| Err("nothing to sample from: the sampling area has no pixels outside the fill area".to_owned())),
         }

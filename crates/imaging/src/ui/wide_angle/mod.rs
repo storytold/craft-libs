@@ -38,7 +38,10 @@ use craft_behavior::edit_history::Step;
 use craft_behavior::{CancelReason, EditEvent, EditHistory, Mixed};
 use craft_ui::canvas::{CanvasTool, HandTool, NavigationOptions, PickStep, RasterSource, ToolHost, ViewCommands, ZoomTool, tool_pick};
 use craft_ui::contract::{Bind, Pattern, Remember as _, Show as _, ShowContainer as _};
-use craft_ui::dialog::{FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView};
+use craft_ui::dialog::{
+    FieldRefusal, FullWindowCanvas, FullWindowDialog, FullWindowSide, FullWindowStatus, FullWindowTitle, FullWindowView, FullWindowWorkspace,
+    WorkspaceCx, WorkspacePass, serde_fields, set_serde_field,
+};
 use craft_ui::display::Divider;
 use craft_ui::layout_components::Row;
 use craft_ui::menu::{Menu, MenuItem};
@@ -46,11 +49,11 @@ use craft_ui::patterns::form_dialogs::{Param, ParamDialog, ParamKind};
 use craft_ui::rails::{LastUsed, RailTool, ToolRail, ToolSlot};
 use craft_ui::runtime::commands::{CommandSet as _, Commands as _, Fired};
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::runtime::overlay::CloseReason;
-use craft_ui::runtime::pending::{Job, Pending};
+use craft_ui::runtime::pending::Job;
 use craft_ui::runtime::words::CommonWords;
 use craft_ui::sections::{DialogRole, FooterButton};
-use egui::{Id, Rect, Ui};
+use egui::{Id, Ui};
+use serde_json::Value;
 
 use crate::ui::live_preview::settings_hash;
 
@@ -95,10 +98,7 @@ impl PreviewDone {
 /// What the app gives the workspace to show each pass.
 pub trait WideAngleSource: Send + Sync {
     /// The lens model the constraints curve by.
-    // P3(dialogs-w12): dl.K60 — default body until the app's sources implement it.
-    fn geometry(&self) -> &dyn WideAngleGeometry {
-        todo!("dl.K60")
-    }
+    fn geometry(&self) -> &dyn WideAngleGeometry;
 
     /// The layer as it is (a proxy of at most 800 px in PhotoCraft).
     fn source(&self) -> &dyn RasterSource;
@@ -143,28 +143,6 @@ impl WideAngleOpen {
 pub enum WideAngleEvent {
     /// A constraint added, oriented, deleted or moved; already applied to the session and recorded in its history.
     Constraints(WideAngleConstraintEdit),
-}
-
-/// What [`WideAngleWorkspace::show`] reports.
-#[derive(Clone, Debug)]
-#[non_exhaustive]
-pub struct WideAngleOutput {
-    /// What happened this pass, in order.
-    pub events: Vec<WideAngleEvent>,
-    /// How the dialog closed this pass: OK is [`CloseReason::Activated`] or [`CloseReason::Enter`]; Cancel and Escape
-    /// are the other reasons.
-    pub closed: Option<CloseReason>,
-    /// The workspace's screen rectangle.
-    pub rect: Rect,
-    /// How long the solve and warp of the preview now shown took; the app may show it in its status bar.
-    pub timing: Option<Duration>,
-}
-
-impl WideAngleOutput {
-    /// Whether the dialog closed with OK.
-    pub fn accepted(&self) -> bool {
-        matches!(self.closed, Some(CloseReason::Activated | CloseReason::Enter))
-    }
 }
 
 /// The state the dialog body keeps between passes: what the app does not read.
@@ -212,14 +190,14 @@ pub struct WideAngleWorkspace {
     size: [u32; 2],
     /// Preview: the corrected image (on) or the source (off); the source shows while a drag runs.
     preview_on: bool,
-    /// What the preview job reported for the session now shown.
-    timing: Option<Duration>,
     /// The title's zoom as of the last pass.
     zoom_percent: f64,
     /// The user's navigation options for the canvas, Hand and Zoom.
     navigation: NavigationOptions,
     /// The panel's Add button was pressed and the form is not open yet.
     add_requested: bool,
+    /// Events from calls outside `show`; the next pass reports them first.
+    queued: Vec<WideAngleEvent>,
 }
 
 impl WideAngleWorkspace {
@@ -231,10 +209,10 @@ impl WideAngleWorkspace {
             subject: open.subject,
             size: open.size,
             preview_on: true,
-            timing: None,
             zoom_percent: 100.0,
             navigation: NavigationOptions::default(),
             add_requested: false,
+            queued: Vec::new(),
         }
     }
 
@@ -258,14 +236,57 @@ impl WideAngleWorkspace {
         &self.session
     }
 
+    /// Applies a constraint edit to the session and records it as one history step named by `edit_name`. `None` when
+    /// the edit changed nothing (an index past the list, an orientation it already has).
+    fn edit_constraints(&mut self, words: &WideAngleWords, edit: WideAngleConstraintEdit) -> Option<WideAngleEvent> {
+        let before = self.session.clone();
+        if !self.session.apply(edit.clone()) {
+            return None;
+        }
+        let name = Arc::<str>::from(edit_name(words, &edit));
+        self.history.record(&EditEvent::set(Mixed::Same(before), self.session.clone(), name, None));
+        Some(WideAngleEvent::Constraints(edit))
+    }
+}
+
+/// An index a json value holds.
+fn json_index(value: &Value) -> Option<usize> {
+    value.as_u64().and_then(|index| usize::try_from(index).ok())
+}
+
+/// The constraint edit the action key `field` names, from its json `value`; `None` when the value does not fit.
+fn json_edit(field: &str, value: &Value) -> Option<WideAngleConstraintEdit> {
+    match field {
+        "add" => serde_json::from_value(value.clone()).ok().map(WideAngleConstraintEdit::Add),
+        "remove" => json_index(value).map(WideAngleConstraintEdit::Delete),
+        "orient" => {
+            let index = json_index(value.get("index")?)?;
+            let orientation = serde_json::from_value(value.get("orientation")?.clone()).ok()?;
+            Some(WideAngleConstraintEdit::Orient { index, orientation })
+        }
+        _ => None,
+    }
+}
+
+impl FullWindowWorkspace for WideAngleWorkspace {
+    type Source = dyn WideAngleSource;
+    type Event = WideAngleEvent;
+    type Result = WideAngleSession;
+
+    const KEY: &'static str = "filter.adaptiveWideAngle";
+
     /// Shows the workspace for this pass: the title, the strip, the side column ([`WideAnglePanel`], OK and Cancel),
     /// the canvas (the corrected preview while Preview is on and no drag runs, else the source) with the Constraint
     /// tool (or Hand, Zoom) and the [`ConstraintLines`], and the constraint menu while a constraint asked for it.
-    /// Edits go through [`WideAngleSession::apply`]; a session the preview job has not seen starts one.
+    /// Edits go through [`WideAngleSession::apply`]; a session the preview job has not seen starts one. OK answers
+    /// the session as it is after this pass's edits.
     ///
     /// The canvas is in the source's pixels and the constraints in document pixels (`open.size`); the tool and the
-    /// lines convert between them, so the source may be a proxy of the layer.
-    pub fn show(&mut self, ui: &mut Ui, geometry: &dyn WideAngleGeometry, source: &dyn WideAngleSource) -> WideAngleOutput {
+    /// lines convert between them, so the source may be a proxy of the layer. A second pass in one frame reports
+    /// only the events of its own input: the first pass drains the queue of calls made outside a pass.
+    fn show(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, Self::Source>) -> WorkspacePass<WideAngleEvent, WideAngleSession> {
+        let WorkspaceCx { source, revision, open, .. } = cx;
+        let geometry = source.geometry();
         let env = Env::of(ui);
         let words = env.words::<WideAngleWords>();
         let title: Label = FullWindowTitle::new(words.name.clone()).subject(self.subject.clone()).zoom(self.zoom_percent).label(&env);
@@ -277,18 +298,19 @@ impl WideAngleWorkspace {
         let steps = RefCell::new(Vec::<Step>::new());
         let preview_on = Cell::new(self.preview_on);
         let actions = RefCell::new(Vec::<Action>::new());
-        let timing = Cell::new(self.timing);
         let zoom_percent = Cell::new(self.zoom_percent);
         let add = Cell::new(self.add_requested);
         let common = env.words::<CommonWords>();
         let ctx = ui.ctx().clone();
 
         let shown = FullWindowDialog::new(title)
+            .opened(open)
             .command_scope(WideAngleCommands::SCOPE)
             .buttons([FooterButton::new(common.ok.clone(), DialogRole::Accept), FooterButton::new(common.cancel.clone(), DialogRole::Cancel)])
             .sides(|ui, cx| {
                 let mut preview = preview_on.get();
-                let status = cx.pending(settings_hash(&[format!("{snapshot:?}").as_bytes()]), || source.preview_job(&snapshot)).clone();
+                let key = settings_hash(&[format!("{snapshot:?}").as_bytes(), &revision.to_le_bytes()]);
+                let status = cx.pending(key, || source.preview_job(&snapshot)).clone();
                 FullWindowSide::new(words.settings.clone()).show(ui, |ui, _| {
                     let panel = WideAnglePanel::new(&snapshot, Bind::bound(&mut preview)).show(ui);
                     let mut queued = actions.borrow_mut();
@@ -300,9 +322,6 @@ impl WideAngleWorkspace {
                     FullWindowStatus::of(&status).show(ui);
                 });
                 preview_on.set(preview);
-                if let Pending::Ready(done) = &status {
-                    timing.set(Some(done.timing));
-                }
             })
             .show(ui, |ui, cx| {
                 let mut body = cx.keep::<Body>().clone();
@@ -446,12 +465,11 @@ impl WideAngleWorkspace {
 
         self.preview_on = preview_on.get();
         self.add_requested = add.get();
-        self.timing = timing.get();
         self.zoom_percent = zoom_percent.get();
         for step in steps.into_inner() {
             self.history.step(&mut self.session, step);
         }
-        let mut events = Vec::new();
+        let mut events = std::mem::take(&mut self.queued);
         let queued = actions.into_inner();
         if !queued.is_empty() {
             ui.ctx().request_repaint();
@@ -468,17 +486,46 @@ impl WideAngleWorkspace {
                         _ => {}
                     }
                 }
-                Action::Constraint(edit) => {
-                    let before = self.session.clone();
-                    if self.session.apply(edit.clone()) {
-                        let name = Arc::<str>::from(edit_name(&words, &edit));
-                        self.history.record(&EditEvent::set(Mixed::Same(before), self.session.clone(), name, None));
-                        events.push(WideAngleEvent::Constraints(edit));
-                    }
+                Action::Constraint(edit) => events.extend(self.edit_constraints(&words, edit)),
+            }
+        }
+        let result = shown.output.result(|| self.session.clone());
+        WorkspacePass::new(shown.output.response.clone(), events).result(result)
+    }
+
+    fn json_fields(&self) -> Option<Value> {
+        let mut fields = serde_fields(&self.session)?;
+        fields.as_object_mut()?.insert("preview".to_owned(), Value::Bool(self.preview_on));
+        Some(fields)
+    }
+
+    fn set_json_field(&mut self, ctx: &egui::Context, _source: &Self::Source, field: &str, value: Value) -> Result<(), String> {
+        let words = Env::of_root(ctx).words::<WideAngleWords>();
+        match field {
+            "preview" => {
+                let on = value.as_bool().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                self.preview(on);
+            }
+            "add" | "orient" | "remove" => {
+                let edit = json_edit(field, &value).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                let event = self.edit_constraints(&words, edit).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                self.queued.push(event);
+            }
+            _ => {
+                let mut next = self.session.clone();
+                set_serde_field(&mut next, field, value)?;
+                if next != self.session {
+                    let name = Arc::<str>::from(words.settings.as_str());
+                    self.history.record(&EditEvent::set(Mixed::Same(self.session.clone()), next.clone(), name, None));
+                    self.session = next;
                 }
             }
         }
-        WideAngleOutput { events, closed: shown.output.closed, rect: shown.output.response.rect, timing: self.timing }
+        Ok(())
+    }
+
+    fn confirm(&mut self, _ctx: &egui::Context, _source: &Self::Source) -> Option<WideAngleSession> {
+        Some(self.session.clone())
     }
 }
 
@@ -529,36 +576,4 @@ fn add_constraint_params(words: &WideAngleWords) -> Vec<Param> {
             ),
         ),
     ]
-}
-
-// P3(dialogs-w12): dl.K60 — the workspace's trait surface; `show` and the automation fields are written in phase 3.
-impl craft_ui::dialog::FullWindowWorkspace for WideAngleWorkspace {
-    type Source = dyn WideAngleSource;
-    type Event = WideAngleEvent;
-    type Result = WideAngleSession;
-
-    const KEY: &'static str = "filter.adaptiveWideAngle";
-
-    fn show(
-        &mut self,
-        ui: &mut egui::Ui,
-        cx: craft_ui::dialog::WorkspaceCx<'_, Self::Source>,
-    ) -> craft_ui::dialog::WorkspacePass<Self::Event, Self::Result> {
-        let _ = (ui, cx);
-        todo!("dl.K60")
-    }
-
-    fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K60")
-    }
-
-    fn set_json_field(&mut self, ctx: &egui::Context, source: &Self::Source, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, source, field, value);
-        todo!("dl.K60")
-    }
-
-    fn confirm(&mut self, ctx: &egui::Context, source: &Self::Source) -> Option<Self::Result> {
-        let _ = (ctx, source);
-        todo!("dl.K60")
-    }
 }

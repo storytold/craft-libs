@@ -1,7 +1,5 @@
 //! Adaptive Wide Angle's session, egui-free: the lens model, the constraints and what OK applies. The app's develop
 //! reads it without craft-imaging's `ui`; `ui::wide_angle` re-exports it.
-// P3(dialogs-w12): dl.K60, moved from `ui/wide_angle/session.rs`; `WideAngleModel` and `ConstraintOrientation` are
-// not `#[non_exhaustive]`
 
 use serde::{Deserialize, Serialize};
 

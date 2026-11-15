@@ -10,6 +10,7 @@ pub use control::{VanishingPlanes, VanishingPlanesOutput};
 pub use tool::VanishingPointTool;
 
 use std::cell::RefCell;
+use std::ops::RangeInclusive;
 
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +22,6 @@ use craft_ui::bars::StatusMessage;
 use super::planes::{TornPlane, VanishingPlane, VanishingScene};
 use super::{VanishingPointEvent, VanishingPointSource};
 pub(super) use work::{PASTE_CELLS, Work, is_unset};
-
 /// The engine's limits on the clone strokes, given by the app (PhotoCraft `MAX_CLONE_STROKES` 4096 and
 /// `MAX_CLONE_DABS` 200 000, engine `vp_cmds.rs:19-20`). The Stamp tool stops there, so OK and the preview never fail
 /// on what was painted.
@@ -43,20 +43,28 @@ impl StampLimits {
 
 /// The editor's tools: Edit Plane (V), Create Plane (C), Stamp (S). The workspace's strip adds Hand and Zoom.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum VanishingTool {
     /// Drag corner and edge nodes, select a plane.
+    #[serde(alias = "edit")]
     EditPlane,
     /// Click four corners to make a plane.
     #[default]
+    #[serde(alias = "create")]
     CreatePlane,
     /// Clone from a source onto the planes.
     Stamp,
 }
 
-/// The Stamp tool's options.
+/// `value` limited to `range`.
+pub(super) fn clamp_in(range: &RangeInclusive<f64>, value: f64) -> f64 {
+    value.clamp(*range.start(), *range.end())
+}
+
+/// The Stamp tool's options. Reading them (the control channel, a saved value) limits each number to its range.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", from = "StampFields")]
 #[non_exhaustive]
 pub struct StampSettings {
     /// The brush's diameter in pixels where a stroke starts.
@@ -69,7 +77,40 @@ pub struct StampSettings {
     pub aligned: bool,
 }
 
+/// [`StampSettings`] as it is read, before the ranges apply.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct StampFields {
+    diameter: f64,
+    hardness: f64,
+    opacity: f64,
+    aligned: bool,
+}
+
+impl Default for StampFields {
+    fn default() -> Self {
+        let StampSettings { diameter, hardness, opacity, aligned } = StampSettings::default();
+        Self { diameter, hardness, opacity, aligned }
+    }
+}
+
+impl From<StampFields> for StampSettings {
+    fn from(fields: StampFields) -> Self {
+        Self {
+            diameter: clamp_in(&Self::DIAMETER, fields.diameter),
+            hardness: clamp_in(&Self::PERCENT, fields.hardness),
+            opacity: clamp_in(&Self::PERCENT, fields.opacity),
+            aligned: fields.aligned,
+        }
+    }
+}
+
 impl StampSettings {
+    /// The brush diameter's range in pixels (PhotoCraft's field and its control channel).
+    pub const DIAMETER: RangeInclusive<f64> = 1.0..=2000.0;
+    /// The range of hardness and opacity, in percent.
+    pub const PERCENT: RangeInclusive<f64> = 0.0..=100.0;
+
     /// The hardness as a share of 1, as the engine takes it.
     pub fn hardness_share(&self) -> f64 {
         self.hardness / 100.0
@@ -182,9 +223,10 @@ impl Default for VanishingPointSession {
 }
 
 /// The options bar's values that are not undone: the grid's cell size (100), whether to paste the clipboard (on when it
-/// holds an image; the app sets it), whether the result goes to a new layer (off), the stamp options.
+/// holds an image; the app sets it), whether the result goes to a new layer (off), the stamp options. Reading them
+/// limits the grid size to [`GRID_SIZE`](Self::GRID_SIZE).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+#[serde(rename_all = "camelCase", from = "SettingsFields")]
 #[non_exhaustive]
 pub struct VanishingPointSettings {
     /// Grid cell size in pixels at the plane's nearest edge.
@@ -195,6 +237,34 @@ pub struct VanishingPointSettings {
     pub new_layer: bool,
     /// The Stamp tool's options.
     pub stamp: StampSettings,
+}
+
+/// [`VanishingPointSettings`] as it is read, before the ranges apply.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct SettingsFields {
+    grid_size: f64,
+    paste: bool,
+    new_layer: bool,
+    stamp: StampSettings,
+}
+
+impl Default for SettingsFields {
+    fn default() -> Self {
+        let VanishingPointSettings { grid_size, paste, new_layer, stamp } = VanishingPointSettings::default();
+        Self { grid_size, paste, new_layer, stamp }
+    }
+}
+
+impl From<SettingsFields> for VanishingPointSettings {
+    fn from(fields: SettingsFields) -> Self {
+        Self { grid_size: clamp_in(&Self::GRID_SIZE, fields.grid_size), paste: fields.paste, new_layer: fields.new_layer, stamp: fields.stamp }
+    }
+}
+
+impl VanishingPointSettings {
+    /// The grid cell size's range in pixels (PhotoCraft's range).
+    pub const GRID_SIZE: RangeInclusive<f64> = 2.0..=2000.0;
 }
 
 impl Default for VanishingPointSettings {

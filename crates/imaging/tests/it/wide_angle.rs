@@ -13,6 +13,7 @@ use craft_imaging::ui::wide_angle::{
     ConstraintOrientation, PreviewDone, WideAngleConstraint, WideAngleGeometry, WideAngleOpen, WideAngleSession, WideAngleSource, WideAngleWorkspace,
 };
 use craft_ui::canvas::{PixelRect, RasterSource};
+use craft_ui::dialog::{DialogHost, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::pending::Job;
 use craft_ui::testing::{Fixture, trial};
@@ -72,9 +73,14 @@ impl WideAngleGeometry for Lines {
 struct Sources {
     source: Grey,
     corrected: Grey,
+    lens: Lines,
 }
 
 impl WideAngleSource for Sources {
+    fn geometry(&self) -> &dyn WideAngleGeometry {
+        &self.lens
+    }
+
     fn source(&self) -> &dyn RasterSource {
         &self.source
     }
@@ -88,37 +94,34 @@ impl WideAngleSource for Sources {
     }
 }
 
-struct App {
-    workspace: WideAngleWorkspace,
-    sources: Sources,
-    /// The preview job waits here until a trial runs it.
-    jobs: Arc<ManualJobs>,
+/// The app's side: the dialog host that owns the workspace.
+type App = Rc<RefCell<DialogHost>>;
+
+/// Runs `f` on the workspace the host holds.
+fn with_workspace<T>(app: &App, f: impl FnOnce(&WideAngleWorkspace) -> T) -> T {
+    let host = app.borrow();
+    f(host.get::<HostedWorkspace<WideAngleWorkspace>>().expect("the workspace is open").workspace())
 }
 
-fn fixture(constraints: Vec<WideAngleConstraint>) -> (Fixture, Rc<RefCell<App>>) {
+fn fixture(constraints: Vec<WideAngleConstraint>) -> (Fixture, App) {
     let session = WideAngleSession::default().with_constraints(constraints);
-    let app = Rc::new(RefCell::new(App {
-        workspace: WideAngleWorkspace::new(WideAngleOpen::new(IMAGE, "Layer 1").session(session)),
-        sources: Sources { source: Grey(1), corrected: Grey(2) },
-        jobs: Arc::new(ManualJobs::new()),
-    }));
+    let sources = Sources { source: Grey(1), corrected: Grey(2), lens: Lines };
+    let workspace = WideAngleWorkspace::new(WideAngleOpen::new(IMAGE, "Layer 1").session(session));
+    let app: App = Rc::new(RefCell::new(DialogHost::new()));
+    app.borrow_mut().open(HostedWorkspace::new(workspace, Arc::new(sources)));
     let shared = app.clone();
-    let jobs = app.borrow().jobs.clone();
-    let mut fixture = Fixture::new(move |ui| {
-        let mut app = shared.borrow_mut();
-        let App { workspace, sources, .. } = &mut *app;
-        workspace.show(ui, &Lines, sources);
-    });
-    fixture.host(Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs).build()));
+    let mut fixture = Fixture::new(move |ui| shared.borrow_mut().run(ui));
+    // The preview job waits here until a trial runs it.
+    fixture.host(Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(Arc::new(ManualJobs::new())).build()));
     fixture.room(along(900.0, 600.0));
     fixture.settle();
     (fixture, app)
 }
 
 /// Where the image pixel `at` is on screen: the fitted image is centred in the canvas.
-fn screen(fixture: &Fixture, app: &Rc<RefCell<App>>, at: [f64; 2]) -> Pos2 {
+fn screen(fixture: &Fixture, app: &App, at: [f64; 2]) -> Pos2 {
     let canvas = fixture.by_label("Image").map(|target| target.center()).expect("the Image canvas");
-    let zoom = (app.borrow().workspace.zoom_percent() / 100.0) as f32;
+    let zoom = (with_workspace(app, WideAngleWorkspace::zoom_percent) / 100.0) as f32;
     canvas + Vec2::new((at[0] - f64::from(IMAGE[0]) / 2.0) as f32 * zoom, (at[1] - f64::from(IMAGE[1]) / 2.0) as f32 * zoom)
 }
 
@@ -133,8 +136,8 @@ fn drag(fixture: &mut Fixture, from: Pos2, by: Vec2, modifiers: Modifiers) {
     fixture.idle(2);
 }
 
-fn constraints(app: &Rc<RefCell<App>>) -> Vec<WideAngleConstraint> {
-    app.borrow().workspace.session().constraints.clone()
+fn constraints(app: &App) -> Vec<WideAngleConstraint> {
+    with_workspace(app, |workspace| workspace.session().constraints.clone())
 }
 
 #[trial]

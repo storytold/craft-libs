@@ -1,7 +1,7 @@
 //! [`BlurPinsPanel`]: the selected pin's rows in the Blur Gallery dialog.
 
 use craft_behavior::EditEvents;
-use craft_ui::contract::{Bind, Outcome as _, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CanvasGesture, Outcome as _, Props as _, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::form::SliderField;
 use craft_ui::layout_components::Stack;
@@ -29,30 +29,35 @@ pub struct BlurPinsPanelOutput {
 #[derive(craft_ui::contract::Pattern)]
 pub struct BlurPinsPanel<'a> {
     pins: &'a mut BlurPins,
+    canvas: Option<egui::Id>,
 }
 
 impl<'a> BlurPinsPanel<'a> {
     /// The panel over `pins`, which it edits in place.
     pub fn new(pins: &'a mut BlurPins) -> Self {
-        Self { pins }
+        Self { pins, canvas: None }
     }
 
     /// Inside a modal body, declares the canvas gesture each pass, so the pins on the canvas keep their presses while
-    /// the Blur Gallery dialog is modal.
+    /// the Blur Gallery dialog is modal. The pins take presses and drags at any time, so the pass-through is
+    /// [`CanvasGesture::PRIMARY`] whenever the panel is shown.
     #[must_use]
-    pub fn canvas(self, canvas: egui::Id) -> Self {
-        let _ = canvas;
-        todo!("dl.K62")
+    pub fn canvas(mut self, canvas: egui::Id) -> Self {
+        self.canvas = Some(canvas);
+        self
     }
 
     /// Draws the rows and returns the response and any amount edit.
     pub fn show(self, ui: &mut Ui) -> BlurPinsPanelOutput {
         // pc: crates/ui-egui/src/dialogs/blur_pins.rs:398 `body` (the slider, the hints).
-        let Self { pins } = self;
+        let Self { pins, canvas } = self;
         let words = Env::of(ui).words::<BlurPinsWords>();
         let kind = pins.kind;
         let mut edit = EditEvents::new();
-        let group = Stack::new().label(words.pins.clone()).show(ui, |ui, _| {
+        let group = Stack::new().label(words.pins.clone()).show(ui, |ui, cx| {
+            if let Some(canvas) = canvas {
+                cx.pass_canvas_gesture(canvas, CanvasGesture::PRIMARY);
+            }
             edit = EditEvents::new();
             match pins.selected.and_then(|index| pins.pins.get(index).map(|pin| (index, pin.amount))) {
                 Some((index, amount)) => {

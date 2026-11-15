@@ -3,13 +3,15 @@
 //! The source and the corrected preview are the stories' generated picture; the geometry bows every line outward from
 //! the picture's centre, so the curves show, and the corrected preview's mapping is the identity.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use craft_behavior::PixelSize;
 use craft_behavior::kurbo::Point;
 use craft_ui::canvas::RasterSource;
 use craft_ui::contract::{Bind, Show as _};
-use craft_ui::dialog::{FullWindowCanvas, FullWindowView};
+use craft_ui::dialog::stories::hosted;
+use craft_ui::dialog::{FullWindowCanvas, FullWindowView, HostedWorkspace};
 use craft_ui::runtime::pending::Job;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
@@ -50,13 +52,18 @@ impl WideAngleGeometry for Bowed {
     }
 }
 
-/// The two pictures.
+/// The two pictures and the lens that curves the lines over them.
 struct Pictures {
     source: MockImage,
     corrected: MockImage,
+    lens: Bowed,
 }
 
 impl WideAngleSource for Pictures {
+    fn geometry(&self) -> &dyn WideAngleGeometry {
+        &self.lens
+    }
+
     fn source(&self) -> &dyn RasterSource {
         &self.source
     }
@@ -72,7 +79,7 @@ impl WideAngleSource for Pictures {
 
 fn pictures() -> Pictures {
     let picture = MockImage::new([IMAGE.width, IMAGE.height]);
-    Pictures { source: picture, corrected: picture }
+    Pictures { source: picture, corrected: picture, lens: Bowed }
 }
 
 /// One constraint of each orientation, near the picture's edges where the bow shows.
@@ -89,19 +96,23 @@ fn session() -> WideAngleSession {
     WideAngleSession::default().with_constraints(constraints())
 }
 
+/// The workspace on the story's dialog host, opened as an app opens one.
+fn hosted_workspace(ui: &mut Ui, data: &mut StoryData, preview: bool) -> StoryOutput {
+    hosted(ui, data, preview, || {
+        let mut workspace = WideAngleWorkspace::new(WideAngleOpen::new([IMAGE.width, IMAGE.height], "Layer 1").session(session()));
+        workspace.preview(preview);
+        HostedWorkspace::new(workspace, Arc::new(pictures()))
+    })
+}
+
 #[story(WideAngleWorkspace, covers = [Default], drive = Drive::Never)]
-fn workspace_source(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let mut workspace = WideAngleWorkspace::new(WideAngleOpen::new([IMAGE.width, IMAGE.height], "Layer 1").session(session()));
-    workspace.preview(false);
-    workspace.show(ui, &Bowed, &pictures());
-    StoryOutput::default()
+fn workspace_source(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted_workspace(ui, data, false)
 }
 
 #[story(WideAngleWorkspace, covers = [], drive = Drive::Never)]
-fn workspace_corrected(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let mut workspace = WideAngleWorkspace::new(WideAngleOpen::new([IMAGE.width, IMAGE.height], "Layer 1").session(session()));
-    workspace.show(ui, &Bowed, &pictures());
-    StoryOutput::default()
+fn workspace_corrected(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    hosted_workspace(ui, data, true)
 }
 
 #[story(ConstraintLines<'static>, covers = [Default], drive = Drive::Never)]

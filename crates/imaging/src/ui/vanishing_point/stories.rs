@@ -13,6 +13,8 @@ use craft_behavior::geometry::quad::Homography;
 use craft_behavior::kurbo::Point;
 use craft_ui::canvas::RasterSource;
 use craft_ui::contract::{Job, Show as _};
+use craft_ui::dialog::HostedWorkspace;
+use craft_ui::dialog::stories::hosted;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 
 use super::{
@@ -112,11 +114,12 @@ impl VanishingScene for StoryScene {
 struct StorySource {
     image: MockImage,
     clipboard: Option<MockImage>,
+    scene: StoryScene,
 }
 
 impl VanishingPointSource for StorySource {
     fn scene(&self) -> &dyn VanishingScene {
-        todo!("dl.K61") // P3(dialogs-w12): dl.K61 `scene`
+        &self.scene
     }
 
     fn image(&self) -> &dyn RasterSource {
@@ -150,30 +153,17 @@ fn session() -> VanishingPointSession {
     session
 }
 
-/// The workspace a story keeps between passes, compared by identity.
-#[derive(Clone)]
-struct Kept(Arc<Mutex<VanishingPointWorkspace>>);
-
-impl PartialEq for Kept {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-/// Shows the workspace over the mock picture; `setup` puts it in the state of the story.
+/// Shows the workspace over the mock picture on the story's dialog host, opened as an app opens one; `setup` puts it in
+/// the state of the story.
 fn show_workspace(ui: &mut Ui, data: &mut StoryData, clipboard: bool, setup: impl FnOnce(&mut VanishingPointWorkspace)) -> StoryOutput {
-    let image = MockImage::default();
-    let size = image.size();
-    let kept = data
-        .value("workspace", {
-            let mut workspace = VanishingPointWorkspace::new(VanishingPointOpen::new([size.width, size.height], "House", LIMITS).session(session()));
-            setup(&mut workspace);
-            Kept(Arc::new(Mutex::new(workspace)))
-        })
-        .clone();
-    let mut workspace = kept.0.lock().unwrap_or_else(PoisonError::into_inner);
-    let clipboard = clipboard.then(|| MockImage::new([size.width / 4, size.height / 4]));
-    workspace.show(ui, &StoryScene, &StorySource { image, clipboard }).into()
+    hosted(ui, data, clipboard, || {
+        let image = MockImage::default();
+        let size = image.size();
+        let mut workspace = VanishingPointWorkspace::new(VanishingPointOpen::new([size.width, size.height], "House", LIMITS).session(session()));
+        setup(&mut workspace);
+        let clipboard = clipboard.then(|| MockImage::new([size.width / 4, size.height / 4]));
+        HostedWorkspace::new(workspace, Arc::new(StorySource { image, clipboard, scene: StoryScene }))
+    })
 }
 
 #[story(VanishingPointWorkspace, covers = [Default], drive = Drive::Never)]
@@ -234,7 +224,7 @@ fn planes_alone_on_a_canvas(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut guard = demo.0.lock().unwrap_or_else(PoisonError::into_inner);
     let (editor, session, settings) = &mut *guard;
     let image = MockImage::default();
-    let source = StorySource { image, clipboard: None };
+    let source = StorySource { image, clipboard: None, scene: StoryScene };
     let ctx = ui.ctx().clone();
     let pass = editor.pass(&ctx, session, settings, &StoryScene, &source);
     story_canvas(ui, Some(&image), StoryView::Fit, |ui, rect| pass.planes().show_at(ui, rect).into())

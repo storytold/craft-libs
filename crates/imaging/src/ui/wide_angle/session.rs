@@ -2,7 +2,6 @@
 
 use craft_behavior::kurbo::Point;
 
-// P3(dialogs-w12): dl.K60, the four types live in the egui-free `crate::wide_angle`
 pub use crate::wide_angle::{ConstraintOrientation, WideAngleConstraint, WideAngleModel, WideAngleSession};
 
 impl WideAngleConstraint {
