@@ -74,6 +74,8 @@ pub struct NewGuideOutput {
     pub result: Option<Guide>,
     /// What the dialog asks of the host in this pass (the Custom colour).
     pub requests: HostRequests,
+    /// OK takes the values: `false` while the Position text does not parse, which disables OK.
+    pub ok_enabled: bool,
 }
 
 impl Outcome for NewGuideOutput {
@@ -164,6 +166,7 @@ impl<'a> NewGuideDialog<'a> {
             dialog = dialog.opened(open);
         }
         let orientations = [Entry::new(Axis::X, words.horizontal.clone()), Entry::new(Axis::Y, words.vertical.clone())];
+        let mut ok_enabled = true;
         let shown = dialog.show(ui, |ui, form, values| {
             let first = form.first();
             if let (true, Some((guide, preference))) = (first, &edit) {
@@ -187,6 +190,7 @@ impl<'a> NewGuideDialog<'a> {
                 parsed = position_row(ui, &words, &number_units, &units, values, first);
                 color_row(ui, &words, &mut values.color, NEW_GUIDE_COLOR_KEY, form.requests());
             });
+            ok_enabled = parsed;
             parsed
         });
         let result = shown.accepted.map(|values| {
@@ -195,7 +199,7 @@ impl<'a> NewGuideDialog<'a> {
             }
             guide_of(&values, edit.as_ref(), key)
         });
-        NewGuideOutput { response: shown.response, closed: shown.closed, result, requests: shown.requests }
+        NewGuideOutput { response: shown.response, closed: shown.closed, result, requests: shown.requests, ok_enabled }
     }
 }
 
@@ -301,6 +305,8 @@ pub struct HostedNewGuideDialog {
     error: Option<Label>,
     /// Whether the remembered values were recalled into `values`: once, before the first show, OK or set reads them.
     recalled: bool,
+    /// Whether the last pass's OK took the values: `false` while the Position text did not parse.
+    ok_enabled: bool,
 }
 
 impl HostedNewGuideDialog {
@@ -314,6 +320,7 @@ impl HostedNewGuideDialog {
             open: true,
             error: None,
             recalled: false,
+            ok_enabled: true,
         }
     }
 
@@ -349,8 +356,12 @@ impl HostedNewGuideDialog {
 impl StackDialog for HostedNewGuideDialog {
     type Result = Guide;
 
-    /// Answers the guide OK makes, and stores a new guide's values under its `remember` key as OK does.
+    /// Answers the guide OK makes, and stores a new guide's values under its `remember` key as OK does. None while OK is
+    /// disabled: the Position text the last pass showed does not parse, so the last good position is not the answer.
     fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
+        if !self.ok_enabled {
+            return None;
+        }
         self.recall(ctx);
         let (memory, edit, key) = {
             let dialog = (self.build)(Bind::bound(&mut self.values));
@@ -394,6 +405,8 @@ impl StackDialog for HostedNewGuideDialog {
                 if !set_ruler_position(&units, values, typed) {
                     return Err(rejects());
                 }
+                // The set position replaces the text the field held.
+                self.ok_enabled = true;
             }
             "color" => values.color = read_color(&value).ok_or_else(rejects)?,
             _ => return Err(FieldRefusal::Unknown.message(field)),
@@ -414,6 +427,7 @@ impl StackDialog for HostedNewGuideDialog {
         }
         let shown = dialog.show(ui);
         self.requests.extend(shown.requests);
+        self.ok_enabled = shown.ok_enabled;
         match (shown.result, shown.closed) {
             (Some(guide), _) => Some(DialogResult::Ok(guide)),
             (None, Some(_)) => {
