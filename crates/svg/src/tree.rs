@@ -302,6 +302,7 @@ struct Used {
     raster_limit: AtomicUsize,
     invalid_svg: AtomicUsize,
     svg_limit: AtomicUsize,
+    svg_resource_limit: AtomicUsize,
 }
 
 /// What resolving one drawing's embedded images used or refused.
@@ -323,6 +324,10 @@ pub struct ImageUsage {
     pub invalid_svg_images: usize,
     /// Embedded SVG data refused by byte or nesting limits.
     pub svg_limit_images: usize,
+    /// Subset of `svg_limit_images` refused by unpacked byte or embedded-document-chain limits.
+    /// XML/tree-depth omissions and invalid or corrupt data do not set this counter. Consumers
+    /// can reject resource overruns while still allowing an optional, over-deep child to be omitted.
+    pub svg_resource_limit_images: usize,
 }
 
 /// A data-URL resolver and the accounting for the one drawing it serves.
@@ -350,6 +355,7 @@ impl ImageResolver {
                 raster_limit: AtomicUsize::new(0),
                 invalid_svg: AtomicUsize::new(0),
                 svg_limit: AtomicUsize::new(0),
+                svg_resource_limit: AtomicUsize::new(0),
             }),
         }
     }
@@ -365,6 +371,16 @@ impl ImageResolver {
         self.used.xml_depth.store(depth, Ordering::Relaxed);
     }
 
+    /// Account for malformed image data URLs before usvg discards them without calling
+    /// its image resolver. Call once for the outer document, before `parse_text`.
+    /// Nested SVGs are checked automatically. The scan shares the normal XML limits and
+    /// streaming-validates URL encoding without allocating another decoded image buffer.
+    pub fn check_document(&self, svg: &str) -> Result<(), Error> {
+        let xml = checked(svg, &self.limits)?;
+        account_invalid_data_urls(&xml, &self.used);
+        Ok(())
+    }
+
     /// Snapshot accounting after parsing has finished.
     pub fn usage(&self) -> ImageUsage {
         ImageUsage {
@@ -376,6 +392,28 @@ impl ImageResolver {
             raster_limit_images: self.used.raster_limit.load(Ordering::Relaxed),
             invalid_svg_images: self.used.invalid_svg.load(Ordering::Relaxed),
             svg_limit_images: self.used.svg_limit.load(Ordering::Relaxed),
+            svg_resource_limit_images: self.used.svg_resource_limit.load(Ordering::Relaxed),
+        }
+    }
+}
+
+// usvg's data-URL decoder returns before resolve_data for invalid base64. Count
+// these omissions separately, including feImage, without reading linked resources.
+fn account_invalid_data_urls(xml: &roxmltree::Document<'_>, used: &Used) {
+    for node in xml.descendants().filter(|n| n.is_element() && matches!(n.tag_name().name(), "image" | "feImage")) {
+        let href = node.attribute(("http://www.w3.org/1999/xlink", "href")).or_else(|| node.attribute("href"));
+        let Some(href) = href else { continue };
+        let url = match data_url::DataUrl::process(href) {
+            Ok(url) => url,
+            // Use the parser's normalized scheme recognition, including whitespace.
+            Err(data_url::DataUrlError::NoComma) => {
+                used.invalid_raster.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            Err(data_url::DataUrlError::NotADataUrl) => continue,
+        };
+        if url.decode(|_| Ok::<(), std::convert::Infallible>(())).is_err() {
+            used.invalid_raster.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -425,6 +463,24 @@ fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: craft_
         }
     }
     drop(seen);
+    // A valid header is not proof of valid pixels. resvg can silently omit a damaged
+    // image later; decode now under explicit limits so omission accounting is honest.
+    let decode_limits = craft_image_codecs::Limits::new(width, height, pixels, limits.embedded_raster_pixels.saturating_mul(8));
+    let options = craft_image_codecs::DecodeOptions { limits: decode_limits, keep_orientation: true };
+    if let Err(error) = craft_image_codecs::decode_as_with(format, &data, &options) {
+        // No tree retains this allocation on failure. Forget its address before it
+        // can be reused, but keep the pixel charge for the decode work already spent.
+        used.raster_data.lock().unwrap_or_else(PoisonError::into_inner).remove(&pointer);
+        match error {
+            craft_image_codecs::CodecError::LimitExceeded(_) => {
+                used.raster_limit.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {
+                used.invalid_raster.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        return None;
+    }
     Some(match format {
         craft_image_codecs::Format::Png => usvg::ImageKind::PNG(data),
         craft_image_codecs::Format::Jpeg => usvg::ImageKind::JPEG(data),
@@ -438,6 +494,7 @@ fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: craft_
 fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'_>) -> Option<usvg::ImageKind> {
     if used.depth.load(Ordering::Relaxed) >= limits.embedded_depth {
         used.svg_limit.fetch_add(1, Ordering::Relaxed);
+        used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
         return None;
     }
     let left = limits.embedded_bytes.saturating_sub(used.bytes.load(Ordering::Relaxed));
@@ -445,15 +502,37 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
         Ok(text) => text,
         // What a refused document unpacked before it was refused was work too: it uses up what
         // is left, so the next image can't repeat it.
-        Err(_) => {
+        Err(error) => {
             used.bytes.fetch_add(left, Ordering::Relaxed);
             used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            if matches!(error, svgz::Error::TooLarge(_)) {
+                used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
+            }
             return None;
         }
     };
+    // The raw/inflated bytes can fit while UTF-16/Latin-1 decoding expands
+    // beyond the aggregate allowance. A refusal consumes the remaining work.
+    if text.len() > left {
+        used.bytes.fetch_add(left, Ordering::Relaxed);
+        used.svg_limit.fetch_add(1, Ordering::Relaxed);
+        used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
     used.bytes.fetch_add(text.len(), Ordering::Relaxed);
     let xml = match checked(&text, limits) {
         Ok(xml) => xml,
+        // Decoding UTF-16 or Latin-1 can exceed the text cap after the
+        // raw/inflated bytes fitted. This is a resource refusal, not invalid XML.
+        Err(Error::Text(svgz::Error::TooLarge(_))) => {
+            used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        Err(Error::TooDeep(_)) => {
+            used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
         Err(_) => {
             used.invalid_svg.fetch_add(1, Ordering::Relaxed);
             return None;
@@ -471,6 +550,7 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
     let previous_depth = used.xml_depth.swap(total_depth, Ordering::Relaxed);
     let depth = used.depth.fetch_add(1, Ordering::Relaxed).saturating_add(1);
     used.svg_depth.fetch_max(depth, Ordering::Relaxed);
+    account_invalid_data_urls(&xml, used);
     let tree = usvg::Tree::from_xmltree(&xml, options);
     used.xml_depth.store(previous_depth, Ordering::Relaxed);
     used.depth.fetch_sub(1, Ordering::Relaxed);
