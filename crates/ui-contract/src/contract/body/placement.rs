@@ -28,7 +28,8 @@ impl Placement {
 
     /// The placement the caller of `overlay` gives, when it places the layer.
     fn given(overlay: &crate::contract::Overlay) -> Option<Placement> {
-        overlay.placed.map(Placement::at).or_else(|| overlay.placed_at.map(Placement::at_pos))
+        let kept = |rect: Rect| overlay.bounds.map_or(rect, |bounds| super::window::keep_inside(rect, bounds));
+        overlay.placed.map(|rect| Placement::at(kept(rect))).or_else(|| overlay.placed_at.map(Placement::at_pos))
     }
 
     /// The rect it names, taking the position and size it lacks from `rect`.
@@ -43,8 +44,9 @@ pub(crate) fn placement_id(id: Id) -> Id {
 
 /// The one store of a layer's placement: the saved tier when `save` is set, else shown memory. A layer whose overlay
 /// is `placed` has the caller's rect instead: the slot reads it and writes nothing, since the caller owns the
-/// placement and learns of the user's changes from `PlacementChange` reports. A layer hung from its anchor that the
-/// user cannot move keeps only its size: each opening places it from its anchor at that size.
+/// placement and learns of the user's changes from `PlacementChange` reports. A layer hung from its anchor keeps only
+/// its size, whether or not the user can move it: each opening places it from its anchor at that size, and a caller
+/// that keeps a moved layer where it was dropped places it (`placed_at`) from the change it was told of.
 pub(super) struct PlacementSlot<'s> {
     stage: &'s mut MemoryStage,
     id: Id,
@@ -55,7 +57,7 @@ pub(super) struct PlacementSlot<'s> {
 
 impl<'s> PlacementSlot<'s> {
     pub(super) fn new(stage: &'s mut MemoryStage, id: Id, save: Option<&'s SaveKey>, overlay: &crate::contract::Overlay) -> Self {
-        let anchored = matches!(overlay.place, Place::Anchored { .. }) && !overlay.movable;
+        let anchored = matches!(overlay.place, Place::Anchored { .. });
         PlacementSlot { stage, id, save, controlled: Placement::given(overlay), anchored }
     }
 
@@ -115,8 +117,10 @@ pub(crate) fn shown_placement(
     let room = (screen.size() - Vec2::splat(2.0 * screen_inset)).max(Vec2::ZERO);
     let least = overlay.size_limits.min.min(room);
     let size = default.max(least).min(overlay.size_limits.max.unwrap_or(Vec2::INFINITY)).min(room);
-    let pos = placement.pos.map(Pos2::from).or(float.pos).unwrap_or_else(|| screen.center() - size / 2.0);
-    let pos = Pos2::new(pos.x.min(screen.right() - size.x).max(screen.left()), pos.y.min(screen.bottom() - size.y).max(screen.top()));
+    // The layer centres, and is kept, inside the screen cut to `bounds`; bounds that miss the screen leave it whole.
+    let region = overlay.bounds.map(|bounds| screen.intersect(bounds)).filter(|region| region.is_positive()).unwrap_or(screen);
+    let pos = placement.pos.map(Pos2::from).or(float.pos).unwrap_or_else(|| region.center() - size / 2.0);
+    let pos = super::window::keep_inside(Rect::from_min_size(pos, size), region).min;
     placement.pos = Some(pos.into());
     placement.size = Some(size.into());
     placement
@@ -140,7 +144,7 @@ pub(super) fn measure_layer(props: &ContainerProps, id: Id, ui: &Ui) -> areas::L
             areas::layer_of(crate::runtime::overlay::layer_tier(ui.ctx(), overlay.rank), area)
         }
         Mount::FullWindow => {
-            areas::layer_of(crate::runtime::overlay::layer_tier(ui.ctx(), crate::contract::mount::full_window_overlay(props.focus).rank), area)
+            areas::layer_of(crate::runtime::overlay::layer_tier(ui.ctx(), crate::contract::Overlay::full_window(props.focus).rank), area)
         }
         _ => ui.layer_id(),
     }

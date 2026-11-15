@@ -1,4 +1,5 @@
-//! The canvas controls: leaves a `Canvas` body shows (`#[component(canvas_control)]`).
+//! The canvas controls: leaves a `Canvas` body shows (`#[component(canvas_control)]`), and the contextual task bar
+//! (`TaskBar`), a pattern a canvas body shows over its document.
 
 mod words;
 

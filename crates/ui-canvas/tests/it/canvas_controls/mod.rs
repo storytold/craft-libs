@@ -7,3 +7,5 @@ mod grid;
 mod guides;
 
 mod marquee;
+
+mod task_bar;

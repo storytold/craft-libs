@@ -30,8 +30,10 @@ kind = "fill"
 base = true
 drawing_stroke_width = 16.0
 stroke_drawings = [
-    "adjustment-layer", "bandage-sparkle", "brush-replace", "clip-below", "clip-release", "convert-point", "dash-align-corners",
-    "dash-align-exact", "direct-select", "distribute-bottom", "distribute-hcenter", "distribute-horizontal", "distribute-left",
+    "adjustment-layer", "bandage-sparkle", "brush-replace", "clip-below", "clip-release", "convert-point",
+    "crop-overlay-diagonal", "crop-overlay-golden-ratio", "crop-overlay-golden-spiral", "crop-overlay-grid",
+    "crop-overlay-thirds", "crop-overlay-triangle", "dash-align-corners", "dash-align-exact",
+    "direct-select", "distribute-bottom", "distribute-hcenter", "distribute-horizontal", "distribute-left",
     "distribute-right", "distribute-top", "distribute-vcenter", "distribute-vertical", "eraser-background",
     "eraser-magic", "extract-clip", "font-similar", "fx", "gradient-angle", "gradient-diamond", "gradient-linear",
     "gradient-radial", "gradient-reflected", "insert-clip", "key-auto-bezier", "key-bezier", "key-continuous-bezier",
@@ -42,7 +44,8 @@ stroke_drawings = [
     "pen-curvature", "pen-delete-anchor", "pen-freeform", "quick-selection", "route-curved", "route-elbow",
     "route-straight", "stroke-align-center", "stroke-align-inside", "stroke-align-outside", "stroke-cap-butt",
     "stroke-cap-round", "stroke-cap-square", "stroke-join-bevel", "stroke-join-miter", "stroke-join-round",
-    "symmetry-diagonal", "symmetry-dual", "symmetry-horizontal", "symmetry-vertical", "sync-lock"
+    "symmetry-diagonal", "symmetry-dual", "symmetry-horizontal", "symmetry-vertical", "sync-lock",
+    "text-align-bottom", "text-align-middle", "text-align-top"
 ]
 
 [[set]]
@@ -667,6 +670,52 @@ carbon = "crop"
 tabler = "crop"
 
 [[icon]]
+name = "crop_overlay_thirds"
+directional = false
+phosphor = "crop-overlay-thirds"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "crop_overlay_grid"
+directional = false
+phosphor = "crop-overlay-grid"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "crop_overlay_diagonal"
+directional = false
+phosphor = "crop-overlay-diagonal"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "crop_overlay_triangle"
+directional = false
+phosphor = "crop-overlay-triangle"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "crop_overlay_golden_ratio"
+directional = false
+phosphor = "crop-overlay-golden-ratio"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "crop_overlay_golden_spiral"
+directional = false
+phosphor = "crop-overlay-golden-spiral"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "pin"
+directional = false
+lucide = "pin"
+phosphor = "push-pin"
+carbon = "pin"
+tabler = "pin"
+
+[[icon]]
+name = "grip"
+directional = false
+lucide = "grip-vertical"
+phosphor = "dots-six-vertical"
+carbon = "draggable"
+tabler = "grip-vertical"
+
+[[icon]]
 name = "diamond"
 directional = false
 lucide = "diamond"
@@ -1041,6 +1090,14 @@ lucide = "panel-right"
 phosphor = "panel-right"
 carbon = "open-panel--right"
 tabler = "layout-sidebar-right"
+
+[[icon]]
+name = "panel_left"
+directional = false
+lucide = "panel-left"
+phosphor = "panel-left"
+carbon = "open-panel--left"
+tabler = "layout-sidebar"
 
 [[icon]]
 name = "pen_add_anchor"
@@ -1439,6 +1496,21 @@ directional = false
 lucide = "case-sensitive"
 phosphor = "text-t"  # near: no capitals mark in Phosphor
 tabler = "letter-case"
+
+[[icon]]
+name = "text_align_top"
+directional = false
+phosphor = "text-align-top"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "text_align_middle"
+directional = false
+phosphor = "text-align-middle"  # drawn in Phosphor's style: no match in any set
+
+[[icon]]
+name = "text_align_bottom"
+directional = false
+phosphor = "text-align-bottom"  # drawn in Phosphor's style: no match in any set
 
 [[icon]]
 name = "ligature"
