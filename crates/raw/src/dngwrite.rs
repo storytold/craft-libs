@@ -215,7 +215,71 @@ impl DngImage<'_> {
 
 /// Write an image without taking ownership of its pixels or application metadata.
 pub fn write_dng_view(raw: &DngImage<'_>, opts: &DngWriteOptions) -> Result<Vec<u8>> {
-    write_image(raw, opts)
+    write_image(raw, opts, None)
+}
+
+/// Encode prepared 8-bit RGB codes as lossy DNG JPEG tiles. Rendering, scaling and the
+/// transfer curve are application policy; `linearization` supplies exactly 256 code values.
+/// The callback receives one bounded RGB tile and must return its JPEG encoding or an error.
+/// It can be invoked concurrently. The callback is a trusted encoder: it owns its output
+/// allocation and JPEG-validity contract; this API does not impose an aggregate output budget.
+/// Only the byte order, XMP and Software fields of `opts`
+/// apply here; `tile` and `quality` select the compression instead of `opts.compression`.
+pub fn write_lossy_dng(
+    raw: &DngImage<'_>,
+    opts: &DngWriteOptions,
+    tile: u32,
+    quality: u8,
+    linearization: &[u16],
+    encode: &(impl Fn(Vec<u8>, u32, u8) -> Result<Vec<u8>> + Sync),
+) -> Result<Vec<u8>> {
+    write_image(raw, opts, Some(LossyTiles { tile, quality, linearization, encode }))
+}
+
+type JpegTileEncoder<'a> = dyn Fn(Vec<u8>, u32, u8) -> Result<Vec<u8>> + Sync + 'a;
+struct LossyTiles<'a> {
+    tile: u32,
+    quality: u8,
+    linearization: &'a [u16],
+    encode: &'a JpegTileEncoder<'a>,
+}
+
+fn lossy_tile_edge(tile: u32) -> usize {
+    (tile.clamp(16, 4096) & !15) as usize
+}
+
+fn set_lossy_tiles(ifd: &mut IfdBuilder, raw: &DngImage<'_>, options: LossyTiles<'_>) -> Result<()> {
+    let RawData::U16(samples) = raw.data else { return Err(RawError::Unsupported("lossy DNG requires prepared 8-bit RGB codes".into())) };
+    if raw.cpp != 3 || raw.cfa.is_some() || options.linearization.len() != 256 || samples.iter().any(|&v| v > 255) {
+        return Err(RawError::Unsupported("lossy DNG requires prepared 8-bit RGB codes and a 256-entry linearization table".into()));
+    }
+    // Preserve the existing profile-export limit: <=4096² RGB bytes per worker, never
+    // a caller-supplied unbounded square. Existing codec output/worker budgets still apply.
+    let tile = lossy_tile_edge(options.tile);
+    let (across, down) = (raw.width.div_ceil(tile), raw.height.div_ceil(tile));
+    let count = across.checked_mul(down).ok_or(RawError::Limit("too many DNG tiles"))?;
+    let mut tiles = Vec::new();
+    tiles.try_reserve_exact(count).map_err(|_| RawError::Limit("DNG tile table allocation failed"))?;
+    tiles.resize_with(count, Vec::new);
+    tiles.par_iter_mut().enumerate().try_for_each(|(i, output)| -> Result<()> {
+        let (tx, ty) = (i % across * tile, i / across * tile);
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(tile * tile * 3).map_err(|_| RawError::Limit("DNG tile allocation failed"))?;
+        for y in 0..tile {
+            let sy = (ty + y).min(raw.height - 1);
+            for x in 0..tile {
+                let sx = (tx + x).min(raw.width - 1);
+                pixels.extend(samples[(sy * raw.width + sx) * 3..][..3].iter().map(|&v| v as u8));
+            }
+        }
+        *output = (options.encode)(pixels, tile as u32, options.quality.clamp(1, 100))?;
+        Ok(())
+    })?;
+    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![8; 3]));
+    ifd.set(t::COMPRESSION, Value::Short(vec![compression::LOSSY_JPEG]));
+    ifd.set(t::LINEARIZATION_TABLE, Value::Short(options.linearization.to_vec()));
+    ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
+    Ok(())
 }
 
 /// Serialise `raw` as a DNG.
@@ -223,7 +287,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     write_dng_view(&DngImage::from(raw), opts)
 }
 
-fn write_image(raw: &DngImage<'_>, opts: &DngWriteOptions) -> Result<Vec<u8>> {
+fn write_image(raw: &DngImage<'_>, opts: &DngWriteOptions, lossy: Option<LossyTiles<'_>>) -> Result<Vec<u8>> {
     raw.validate()?;
     if opts.software.trim() == "LightCraft" {
         return Err(RawError::Unsupported("the Software tag `LightCraft` marks files with a sensor-anchored CFAPattern".into()));
@@ -277,135 +341,139 @@ fn write_image(raw: &DngImage<'_>, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     write_profile_tags(&mut ifd, raw, opts.order);
     write_opcode_tags(&mut ifd, raw);
 
-    match (raw.data, opts.compression) {
-        (RawData::F32(v), DngCompression::Deflate { tile, half }) => {
-            let tile = deflate_tile(tile);
-            let bp = if half { 2 } else { 4 };
-            ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![(bp * 8) as u16; cpp]));
-            ifd.set(t::SAMPLE_FORMAT, Value::Short(vec![3; cpp]));
-            ifd.set(t::COMPRESSION, Value::Short(vec![compression::ADOBE_DEFLATE]));
-            ifd.set(t::PREDICTOR, Value::Short(vec![3]));
-            let (ta, td) = (w.div_ceil(tile), h.div_ceil(tile));
-            let tiles: Vec<Vec<u8>> = (0..ta * td)
-                .into_par_iter()
-                .map(|i| {
-                    let (tx, ty) = (i % ta * tile, i / ta * tile);
-                    let mut buf = Vec::with_capacity(tile * tile * cpp * bp);
-                    let mut row = Vec::with_capacity(tile * cpp * bp);
-                    for y in 0..tile {
-                        let sy = (ty + y).min(h - 1);
-                        row.clear();
-                        for x in 0..tile {
-                            let sx = (tx + x).min(w - 1);
-                            for s in 0..cpp {
-                                let f = v[(sy * w + sx) * cpp + s];
-                                if half {
-                                    row.extend_from_slice(&f32_to_f16(f).to_be_bytes());
-                                } else {
-                                    row.extend_from_slice(&f.to_bits().to_be_bytes());
+    if let Some(lossy) = lossy {
+        set_lossy_tiles(&mut ifd, raw, lossy)?;
+    } else {
+        match (raw.data, opts.compression) {
+            (RawData::F32(v), DngCompression::Deflate { tile, half }) => {
+                let tile = deflate_tile(tile);
+                let bp = if half { 2 } else { 4 };
+                ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![(bp * 8) as u16; cpp]));
+                ifd.set(t::SAMPLE_FORMAT, Value::Short(vec![3; cpp]));
+                ifd.set(t::COMPRESSION, Value::Short(vec![compression::ADOBE_DEFLATE]));
+                ifd.set(t::PREDICTOR, Value::Short(vec![3]));
+                let (ta, td) = (w.div_ceil(tile), h.div_ceil(tile));
+                let tiles: Vec<Vec<u8>> = (0..ta * td)
+                    .into_par_iter()
+                    .map(|i| {
+                        let (tx, ty) = (i % ta * tile, i / ta * tile);
+                        let mut buf = Vec::with_capacity(tile * tile * cpp * bp);
+                        let mut row = Vec::with_capacity(tile * cpp * bp);
+                        for y in 0..tile {
+                            let sy = (ty + y).min(h - 1);
+                            row.clear();
+                            for x in 0..tile {
+                                let sx = (tx + x).min(w - 1);
+                                for s in 0..cpp {
+                                    let f = v[(sy * w + sx) * cpp + s];
+                                    if half {
+                                        row.extend_from_slice(&f32_to_f16(f).to_be_bytes());
+                                    } else {
+                                        row.extend_from_slice(&f.to_bits().to_be_bytes());
+                                    }
                                 }
                             }
+                            buf.extend_from_slice(&float_predict(&row, tile * cpp, bp, cpp));
                         }
-                        buf.extend_from_slice(&float_predict(&row, tile * cpp, bp, cpp));
-                    }
-                    miniz_oxide::deflate::compress_to_vec_zlib(&buf, DEFLATE_LEVEL)
-                })
-                .collect();
-            ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
-        }
-        (RawData::F32(v), _) => {
-            ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![32; cpp]));
-            ifd.set(t::SAMPLE_FORMAT, Value::Short(vec![3; cpp]));
-            ifd.set(t::COMPRESSION, Value::Short(vec![compression::NONE]));
-            let mut bytes = Vec::with_capacity(v.len() * 4);
-            for &x in v {
-                let mut tmp = Vec::with_capacity(4);
-                opts.order.put_u32(&mut tmp, x.to_bits());
-                bytes.extend_from_slice(&tmp);
+                        miniz_oxide::deflate::compress_to_vec_zlib(&buf, DEFLATE_LEVEL)
+                    })
+                    .collect();
+                ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
             }
-            ifd.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![bytes] });
-        }
-        (RawData::U16(v), _) => {
-            // Dark frames may never reach the sensor's white level, which must still fit.
-            let maxv = u32::from(v.iter().copied().max().unwrap_or(0)).max(max_white);
-            let bits = (32 - maxv.leading_zeros()).max(raw.bits).clamp(2, 16) as u8;
-            ifd.set(
-                t::BITS_PER_SAMPLE,
-                Value::Short(vec![if matches!(opts.compression, DngCompression::Uncompressed) { 16 } else { bits as u16 }; cpp]),
-            );
-            match opts.compression {
-                DngCompression::Uncompressed => {
-                    ifd.set(t::COMPRESSION, Value::Short(vec![compression::NONE]));
-                    let rows = (65536 / (w * cpp * 2)).clamp(1, h);
-                    let strips = v
-                        .chunks(rows * w * cpp)
-                        .map(|s| {
-                            let mut b = Vec::with_capacity(s.len() * 2);
-                            s.iter().for_each(|&x| opts.order.put_u16(&mut b, x));
-                            b
-                        })
-                        .collect();
-                    ifd.set_image(ImageData::Strips { rows_per_strip: rows as u32, strips });
+            (RawData::F32(v), _) => {
+                ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![32; cpp]));
+                ifd.set(t::SAMPLE_FORMAT, Value::Short(vec![3; cpp]));
+                ifd.set(t::COMPRESSION, Value::Short(vec![compression::NONE]));
+                let mut bytes = Vec::with_capacity(v.len() * 4);
+                for &x in v {
+                    let mut tmp = Vec::with_capacity(4);
+                    opts.order.put_u32(&mut tmp, x.to_bits());
+                    bytes.extend_from_slice(&tmp);
                 }
-                DngCompression::Deflate { tile, .. } => {
-                    let tile = deflate_tile(tile);
-                    ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16; cpp]));
-                    ifd.set(t::COMPRESSION, Value::Short(vec![compression::ADOBE_DEFLATE]));
-                    ifd.set(t::PREDICTOR, Value::Short(vec![2]));
-                    let (ta, td) = (w.div_ceil(tile), h.div_ceil(tile));
-                    let tiles: Vec<Vec<u8>> = (0..ta * td)
-                        .into_par_iter()
-                        .map(|i| {
-                            let (tx, ty) = (i % ta * tile, i / ta * tile);
-                            let mut buf = Vec::with_capacity(tile * tile * cpp * 2);
-                            let mut row = vec![0u16; tile * cpp];
-                            for y in 0..tile {
-                                let sy = (ty + y).min(h - 1);
-                                for x in 0..tile {
-                                    let sx = (tx + x).min(w - 1);
-                                    for s in 0..cpp {
-                                        row[x * cpp + s] = v[(sy * w + sx) * cpp + s];
-                                    }
-                                }
-                                for i in (cpp..row.len()).rev() {
-                                    row[i] = row[i].wrapping_sub(row[i - cpp]);
-                                }
-                                row.iter().for_each(|&x| opts.order.put_u16(&mut buf, x));
-                            }
-                            miniz_oxide::deflate::compress_to_vec_zlib(&buf, DEFLATE_LEVEL)
-                        })
-                        .collect();
-                    ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
-                }
-                DngCompression::Lj92 { tile } => {
-                    let tile = (tile.max(2) & !1) as usize;
-                    if tile > MAX_LJ92_TILE {
-                        return Err(RawError::Limit("tile too large"));
+                ifd.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![bytes] });
+            }
+            (RawData::U16(v), _) => {
+                // Dark frames may never reach the sensor's white level, which must still fit.
+                let maxv = u32::from(v.iter().copied().max().unwrap_or(0)).max(max_white);
+                let bits = (32 - maxv.leading_zeros()).max(raw.bits).clamp(2, 16) as u8;
+                ifd.set(
+                    t::BITS_PER_SAMPLE,
+                    Value::Short(vec![if matches!(opts.compression, DngCompression::Uncompressed) { 16 } else { bits as u16 }; cpp]),
+                );
+                match opts.compression {
+                    DngCompression::Uncompressed => {
+                        ifd.set(t::COMPRESSION, Value::Short(vec![compression::NONE]));
+                        let rows = (65536 / (w * cpp * 2)).clamp(1, h);
+                        let strips = v
+                            .chunks(rows * w * cpp)
+                            .map(|s| {
+                                let mut b = Vec::with_capacity(s.len() * 2);
+                                s.iter().for_each(|&x| opts.order.put_u16(&mut b, x));
+                                b
+                            })
+                            .collect();
+                        ifd.set_image(ImageData::Strips { rows_per_strip: rows as u32, strips });
                     }
-                    ifd.set(t::COMPRESSION, Value::Short(vec![compression::JPEG]));
-                    let (ta, td) = (w.div_ceil(tile), h.div_ceil(tile));
-                    let tiles: Vec<Vec<u8>> = (0..ta * td)
-                        .into_par_iter()
-                        .map(|i| {
-                            let (tx, ty) = (i % ta * tile, i / ta * tile);
-                            let mut buf = Vec::with_capacity(tile * tile * cpp);
-                            for y in 0..tile {
-                                let sy = (ty + y).min(h - 1);
-                                for x in 0..tile {
-                                    let sx = (tx + x).min(w - 1);
-                                    for s in 0..cpp {
-                                        buf.push(v[(sy * w + sx) * cpp + s]);
+                    DngCompression::Deflate { tile, .. } => {
+                        let tile = deflate_tile(tile);
+                        ifd.set(t::BITS_PER_SAMPLE, Value::Short(vec![16; cpp]));
+                        ifd.set(t::COMPRESSION, Value::Short(vec![compression::ADOBE_DEFLATE]));
+                        ifd.set(t::PREDICTOR, Value::Short(vec![2]));
+                        let (ta, td) = (w.div_ceil(tile), h.div_ceil(tile));
+                        let tiles: Vec<Vec<u8>> = (0..ta * td)
+                            .into_par_iter()
+                            .map(|i| {
+                                let (tx, ty) = (i % ta * tile, i / ta * tile);
+                                let mut buf = Vec::with_capacity(tile * tile * cpp * 2);
+                                let mut row = vec![0u16; tile * cpp];
+                                for y in 0..tile {
+                                    let sy = (ty + y).min(h - 1);
+                                    for x in 0..tile {
+                                        let sx = (tx + x).min(w - 1);
+                                        for s in 0..cpp {
+                                            row[x * cpp + s] = v[(sy * w + sx) * cpp + s];
+                                        }
+                                    }
+                                    for i in (cpp..row.len()).rev() {
+                                        row[i] = row[i].wrapping_sub(row[i - cpp]);
+                                    }
+                                    row.iter().for_each(|&x| opts.order.put_u16(&mut buf, x));
+                                }
+                                miniz_oxide::deflate::compress_to_vec_zlib(&buf, DEFLATE_LEVEL)
+                            })
+                            .collect();
+                        ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
+                    }
+                    DngCompression::Lj92 { tile } => {
+                        let tile = (tile.max(2) & !1) as usize;
+                        if tile > MAX_LJ92_TILE {
+                            return Err(RawError::Limit("tile too large"));
+                        }
+                        ifd.set(t::COMPRESSION, Value::Short(vec![compression::JPEG]));
+                        let (ta, td) = (w.div_ceil(tile), h.div_ceil(tile));
+                        let tiles: Vec<Vec<u8>> = (0..ta * td)
+                            .into_par_iter()
+                            .map(|i| {
+                                let (tx, ty) = (i % ta * tile, i / ta * tile);
+                                let mut buf = Vec::with_capacity(tile * tile * cpp);
+                                for y in 0..tile {
+                                    let sy = (ty + y).min(h - 1);
+                                    for x in 0..tile {
+                                        let sx = (tx + x).min(w - 1);
+                                        for s in 0..cpp {
+                                            buf.push(v[(sy * w + sx) * cpp + s]);
+                                        }
                                     }
                                 }
-                            }
-                            if cpp == 1 {
-                                ljpeg::encode(&buf, tile / 2, tile, 2, bits, 1, 0)
-                            } else {
-                                ljpeg::encode(&buf, tile, tile, cpp, bits, 1, 0)
-                            }
-                        })
-                        .collect();
-                    ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
+                                if cpp == 1 {
+                                    ljpeg::encode(&buf, tile / 2, tile, 2, bits, 1, 0)
+                                } else {
+                                    ljpeg::encode(&buf, tile, tile, cpp, bits, 1, 0)
+                                }
+                            })
+                            .collect();
+                        ifd.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles });
+                    }
                 }
             }
         }
