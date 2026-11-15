@@ -19,7 +19,7 @@
 //! A [`Decoder`] is made from the 816-byte file header. [`Decoder::decode`] takes a sound
 //! frame's flags (from its record in the file's table of contents; `craft_media::vmd` reads it)
 //! and its data, and returns interleaved `i16` samples: one block of sound or silence, or, for a
-//! frame with a silence mask, several. 8-bit samples are widened to 16 bits. Blocks do not depend
+//! frame with a silence mask (the first sound frame of a file), several. 8-bit samples are widened to 16 bits. Blocks do not depend
 //! on each other, so decoding can start at any frame.
 //!
 //! Not decoded: IMA ADPCM sound (audio flag 0x10) and the external codecs of later Coktel Vision
@@ -72,7 +72,7 @@ impl Decoder {
         if usize::from(u16_at(0)) != HEADER_LEN - 2 {
             return Err(Error::Invalid("not a VMD header"));
         }
-        if u16_at(16) & 0x1000 == 0 {
+        if u16_at(16) & 0x1000 == 0 || u16_at(804) == 0 {
             return Err(Error::Invalid("the file has no sound"));
         }
         let flags = u16_at(810);
@@ -119,20 +119,33 @@ impl Decoder {
     /// frame data. Returns interleaved samples, [`Decoder::block_samples`] for each channel and
     /// block.
     ///
-    /// - flags 1: one block of sound;
+    /// - flags 1: one block of sound (every whole block, if the frame holds more);
     /// - flags 2: a 32-bit mask, then blocks of sound: the sound a player loads ahead at the
     ///   start of a file. From bit 0 up, a set bit is a block of silence and a clear bit the next
     ///   block of data, while there is one. ffmpeg plays the silent blocks first instead;
     ///   the order here is the description's;
     /// - flags 3: one block of silence.
     ///
-    /// An empty frame gives no samples. A block cut short is an error.
+    /// An empty frame gives no samples. A frame's first block cut short is an error; a part of a
+    /// block after the last whole one is left out.
+    ///
+    /// The sound of a file is its sound frames decoded in file order and played end to end from
+    /// the first picture on: see `craft_media::vmd` for how that lines up with the pictures.
     pub fn decode(&self, flags: u8, data: &[u8]) -> Result<Vec<i16>, Error> {
         let mut out = Vec::new();
         match flags {
             3 => out.resize(self.block_samples, 0),
             _ if data.is_empty() => {}
-            1 => self.block(data, &mut out)?,
+            1 => {
+                // one block; a frame that holds more whole blocks plays them all, as in ffmpeg
+                self.block(data, &mut out)?;
+                let size = self.block_bytes();
+                if size > 0 {
+                    for more in data[size..].chunks_exact(size) {
+                        self.block(more, &mut out)?;
+                    }
+                }
+            }
             2 => {
                 let (mask, mut data) = data.split_first_chunk::<4>().ok_or(Error::Invalid("the silence mask is cut short"))?;
                 let mask = u32::from_le_bytes(*mask);

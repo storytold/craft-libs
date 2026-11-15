@@ -4,6 +4,7 @@
 
 use std::process::Command;
 
+use craft_audio::AudioError;
 use craft_audio::vmd::{Decoder, Error};
 use craft_media::vmd::{FrameKind, open};
 use craft_media_testkit::hostile::Rng;
@@ -153,6 +154,11 @@ fn eight_bit_and_silence() {
     assert_eq!(d.decode(3, &[]).unwrap(), [0; 4]);
     assert_eq!(d.decode(1, &[]).unwrap(), [0i16; 0]);
     assert_eq!(decoder(4, 0x200).decode(3, &[]).unwrap(), [0; 8]);
+    // a flags 1 frame of more than one block plays every whole block
+    assert_eq!(
+        d.decode(1, &[0x80, 0x81, 0x82, 0x83, 0x90, 0x91, 0x92, 0x93, 0xA0]).unwrap(),
+        [0, 0x100, 0x200, 0x300, 0x1000, 0x1100, 0x1200, 0x1300]
+    );
     assert_eq!(decoder(-4, 0x8000).decode(3, &[]).unwrap(), [0; 4]);
 }
 
@@ -177,6 +183,9 @@ fn bad_input_is_an_error() {
     let d = decoder(-20, 0);
     assert_eq!(d.decode(1, &[0; 20]), Err(Error::Invalid("a block of sound is cut short")));
     assert_eq!(d.decode(4, &[0; 21]), Err(Error::Unsupported("unknown sound frame flags")));
+    // in the file API's error: unsupported stays unsupported, the rest is malformed input
+    assert!(matches!(AudioError::from(Error::Unsupported("x")), AudioError::Unsupported(_)));
+    assert!(matches!(AudioError::from(Error::Invalid("x")), AudioError::Malformed(_)));
 
     let good = build(&spec(20, 0), &[]);
     let with = |patch: &dyn Fn(&mut Vec<u8>)| {
@@ -188,6 +197,7 @@ fn bad_input_is_an_error() {
     assert_eq!(with(&|h| h.truncate(815)), Some(Error::Invalid("the header is shorter than 816 bytes")));
     assert_eq!(with(&|h| h[0] = 0), Some(Error::Invalid("not a VMD header")));
     assert_eq!(with(&|h| h[17] = 0), Some(Error::Invalid("the file has no sound")));
+    assert_eq!(with(&|h| h[804..806].fill(0)), Some(Error::Invalid("the file has no sound")));
     assert_eq!(with(&|h| h[810] = 0x10), Some(Error::Unsupported("IMA ADPCM sound")));
     // a frame length of nothing decodes to nothing
     let mut empty = good.clone();

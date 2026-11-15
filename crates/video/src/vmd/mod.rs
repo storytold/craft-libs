@@ -37,8 +37,8 @@
 //! files ([`Error::Unsupported`]).
 //!
 //! Input is treated as hostile: the picture is checked against the decode memory budget
-//! ([`crate::budget`]), LZ output is bounded by the header's unpack buffer size, and every copy
-//! is bounds-checked. No `unsafe`, no panics.
+//! ([`crate::budget`]), LZ output is bounded by the header's unpack buffer size and by a few
+//! bytes a pixel of the picture, and every copy is bounds-checked. No `unsafe`, no panics.
 
 #![warn(missing_docs)]
 
@@ -205,7 +205,10 @@ impl Decoder {
             return self.render(rect, method, body);
         }
         let mut unpacked = std::mem::take(&mut self.unpacked);
-        let result = lz_unpack(body, self.unpack_limit, &mut unpacked).and_then(|()| self.render(rect, method & 0x7F, &unpacked));
+        // no rendering method reads more than a few bytes a pixel: unpacking stops there, so that
+        // a frame's cost goes by the picture's size and not by what the file says
+        let useful = self.indices.len().saturating_mul(4).saturating_add(1024);
+        let result = lz_unpack(body, self.unpack_limit, useful, &mut unpacked).and_then(|()| self.render(rect, method & 0x7F, &unpacked));
         self.unpacked = unpacked;
         result
     }
@@ -313,8 +316,9 @@ fn unpack_rle(src: &mut Reader, run: &mut [u8]) -> Result<()> {
 /// Unpack an LZ-packed frame body into `out`: the unpacked length, an optional marker that
 /// selects long chains, then tag bytes whose bits (lowest first) each announce a literal byte
 /// or a chain copied from a 4096-byte window of earlier output. Packed data that ends before
-/// the length is reached leaves `out` short; the rendering then fails if it needs more.
-fn lz_unpack(src: &[u8], limit: usize, out: &mut Vec<u8>) -> Result<()> {
+/// the length is reached leaves `out` short; the rendering then fails if it needs more. A length
+/// above `limit` is an error; unpacking stops after `useful` bytes.
+fn lz_unpack(src: &[u8], limit: usize, useful: usize, out: &mut Vec<u8>) -> Result<()> {
     out.clear();
     let mut src = Reader(src);
     let len = src.take(4).ok_or(Error::Invalid("the frame data ends early"))?;
@@ -322,6 +326,7 @@ fn lz_unpack(src: &[u8], limit: usize, out: &mut Vec<u8>) -> Result<()> {
     if left > limit {
         return Err(Error::Invalid("an LZ-packed frame is larger than the unpack buffer"));
     }
+    left = left.min(useful);
     let mut window = Window { bytes: [0x20; 4096], at: 0xFEE };
     let mut long_chains = false;
     if src.0.starts_with(&[0x34, 0x12, 0x78, 0x56]) {

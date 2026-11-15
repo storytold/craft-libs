@@ -256,6 +256,34 @@ fn lz_chains() {
         raw.extend_from_slice(chunk);
     }
     assert_eq!(unpack(&raw).unwrap(), (0u8..32).collect::<Vec<_>>());
+    // with 8 bytes or fewer left, a tag of 0xFF is eight literal bits, of which only the bytes
+    // left are read: 13 bytes are 8 raw and 5 literals
+    let mut d = flat();
+    let tail = [0x82, 13, 0, 0, 0, 0xFF, 1, 2, 3, 4, 5, 6, 7, 8, 0xFF, 9, 10, 11, 12, 13];
+    d.decode(Rect { right: 12, bottom: 0, ..FULL }, false, &tail).unwrap();
+    assert_eq!(d.indices()[..14], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 0x40]);
+}
+
+/// A frame that says it unpacks to the whole unpack buffer costs no more than its picture: the
+/// same 8 packed bytes repeated would otherwise be unpacked to megabytes for every frame.
+#[test]
+fn lz_unpacking_stops_at_what_a_picture_can_use() {
+    let mut spec = Spec::new(16, 2);
+    spec.unpack = u32::MAX;
+    let mut d = Decoder::new(&build(&spec, &[])).unwrap();
+    // 4 GiB declared; long chains of 273 bytes from the window's fill, far more than 32 pixels
+    let mut data = vec![0x82, 0xFF, 0xFF, 0xFF, 0xFF, 0x34, 0x12, 0x78, 0x56];
+    for _ in 0..40_000 {
+        data.push(0);
+        data.extend([0x00, 0x0F, 0xFF].repeat(8));
+    }
+    let start = std::time::Instant::now();
+    for _ in 0..200 {
+        d.decode(FULL, false, &data).unwrap();
+    }
+    assert_eq!(d.indices(), [0x20; 32]);
+    // 87 MB of output for each frame without the stop: seconds, not milliseconds
+    assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
 }
 
 #[test]
@@ -276,6 +304,9 @@ fn palette_changes() {
     chunk[..2].copy_from_slice(&[4, 2]);
     d.decode(FULL, true, &chunk).unwrap();
     assert_eq!((d.palette()[0], d.palette()[255]), ([255; 3], [255; 3]));
+    // components are 6 bits: higher bits are dropped
+    d.decode(FULL, true, &palette_chunk(&[0x41; 768])).unwrap();
+    assert_eq!(d.palette()[7], [4; 3]);
     assert_eq!(d.decode(FULL, true, &[0; 769]), Err(Error::Invalid("the palette is cut short")));
 }
 

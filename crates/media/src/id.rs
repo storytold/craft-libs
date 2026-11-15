@@ -371,13 +371,14 @@ mod tests {
 
     #[test]
     fn audio_and_video_are_disjoint() {
-        for c in [CodecId::Aac, CodecId::Opus, CodecId::Pcm, CodecId::Eac3, CodecId::Speex] {
+        for c in [CodecId::Aac, CodecId::Opus, CodecId::Pcm, CodecId::Eac3, CodecId::Speex, CodecId::VmdAudio] {
             assert!(c.is_audio() && !c.is_video(), "{c:?}");
         }
-        for c in [CodecId::H264, CodecId::Av1, CodecId::ProRes, CodecId::Theora, CodecId::Dnxhd, CodecId::Apv] {
+        for c in [CodecId::H264, CodecId::Av1, CodecId::ProRes, CodecId::Theora, CodecId::Dnxhd, CodecId::Apv, CodecId::VmdVideo] {
             assert!(c.is_video() && !c.is_audio(), "{c:?}");
         }
         assert!(!CodecId::Unknown.is_audio() && !CodecId::Unknown.is_video());
+        assert_eq!((CodecId::VmdVideo.name(), CodecId::VmdAudio.name(), Container::Vmd.name()), ("VMD video", "VMD audio", "VMD"));
     }
 
     #[test]

@@ -72,6 +72,14 @@ fn sound_formats() {
     assert_eq!(open_with(500, 0x8000), (8, 2, 250, CodecId::VmdAudio));
     assert_eq!(open_with(i16::MIN, 0), (16, 1, 32768, CodecId::VmdAudio));
     assert_eq!(open_with(-500, 0x10).3, CodecId::Unknown);
+
+    // sound needs the header flag and a sample rate
+    let mut d = sample(true);
+    d[804..806].fill(0);
+    assert_eq!(open(&d).unwrap().header.audio, None);
+    let mut d = sample(true);
+    d[17] &= !0x10;
+    assert_eq!(open(&d).unwrap().header.audio, None);
 }
 
 #[test]
@@ -88,18 +96,27 @@ fn other_picture_formats_are_not_vmd_video() {
     assert_eq!(params(|d| d[24..28].copy_from_slice(b"iv32")).0, VideoFormat::Indeo3);
 }
 
+/// The cases ffmpeg was checked on: the first frame as large as the picture places it.
 #[test]
-fn picture_rect_takes_off_the_screen_origin() {
-    let mut spec = Spec::new(16, 8);
-    (spec.left, spec.top) = (4, 2);
-    let frame = |rect| F::video(rect, false, vec![]);
-    let d = build(
-        &spec,
-        &[vec![frame([4, 2, 19, 9])], vec![frame([2, 0, 5, 0])], vec![frame([6, 2, 9, 2])], vec![frame([0, 0, 16, 7])], vec![frame([5, 0, 4, 0])]],
+fn picture_rect_takes_off_the_picture_position() {
+    let rects = |header_origin: (u16, u16), frames: &[[u16; 4]]| {
+        let mut spec = Spec::new(20, 10);
+        (spec.left, spec.top) = header_origin;
+        let blocks: Vec<_> = frames.iter().map(|&rect| vec![F::video(rect, false, vec![])]).collect();
+        let f = open(&build(&spec, &blocks)).unwrap();
+        (f.origin(), f.frames.iter().map(|fr| f.picture_rect(fr)).collect::<Vec<_>>())
+    };
+    // a picture at the screen's corner, whatever the header says
+    assert_eq!(rects((10, 5), &[[0, 0, 19, 9], [12, 6, 18, 9]]), ((0, 0), vec![Some((0, 0, 19, 9)), Some((12, 6, 18, 9))]));
+    // a picture at (3, 2): frames left of or above it, or past its far edges, are outside
+    assert_eq!(
+        rects((0, 0), &[[3, 2, 22, 11], [3, 2, 5, 5], [0, 0, 5, 5], [3, 2, 23, 11], [3, 2, 22, 12]]),
+        ((3, 2), vec![Some((0, 0, 19, 9)), Some((0, 0, 2, 3)), None, None, None])
     );
-    let f = open(&d).unwrap();
-    let rects: Vec<_> = f.frames.iter().map(|fr| f.picture_rect(fr)).collect();
-    assert_eq!(rects, [Some((0, 0, 15, 7)), Some((2, 0, 5, 0)), Some((2, 0, 5, 0)), None, None]);
+    // the placing frame need not be the first
+    assert_eq!(rects((0, 0), &[[4, 3, 5, 4], [4, 3, 23, 12]]), ((4, 3), vec![Some((0, 0, 1, 1)), Some((0, 0, 19, 9))]));
+    // no frame as large as the picture: the corner; inverted and oversized frames are outside
+    assert_eq!(rects((7, 7), &[[2, 0, 5, 0], [5, 0, 4, 0], [0, 1, 0, 0], [0, 0, 20, 9]]), ((0, 0), vec![Some((2, 0, 5, 0)), None, None, None]));
 }
 
 #[test]
@@ -128,7 +145,7 @@ fn table_of_contents_must_be_in_the_file() {
     let mut many = d.clone();
     many[6..8].copy_from_slice(&[0xFF; 2]);
     many[18..20].copy_from_slice(&[0xFF; 2]);
-    assert!(matches!(open(&many), Err(Error::Invalid(_))));
+    assert!(matches!(open(&many), Err(Error::Invalid(e)) if e.contains("frames in the table")));
 }
 
 #[test]

@@ -829,12 +829,18 @@ for (i, frame) in file.frames.iter().enumerate() {
   type 0 in its place, and the picture stays as it was.
 - `frame_rate()`: a file with sound plays one block of sound a picture (sample rate over block
   length); a file without plays 10 pictures a second.
+- Timing: the video frame of block `n` is shown at picture period `n`. Sound is one continuous
+  stream from the first picture on: decode the sound frames in file order and play the samples
+  end to end. The first sound frame holds many blocks (28 in most Phantasmagoria files), loaded
+  ahead by the player, so a later sound frame is heard that much later than the block it is
+  stored in, and the sound outlasts the pictures.
 - `video_params()` and `audio_params()` return `CodecParams` with `CodecId::VmdVideo` and
   `CodecId::VmdAudio` and the 816-byte header as `extradata`, which is what
   `craft_video::vmd::Decoder::new` and `craft_audio::vmd::Decoder::new` take.
   `header_bytes()` is the same header.
-- `picture_rect(frame)` places a video frame's update in the picture (frame coordinates are
-  screen coordinates when the picture does not sit at the screen origin).
+- `picture_rect(frame)` places a video frame's update in the picture. Frame coordinates are
+  screen coordinates; the first frame as large as the picture gives the picture's position
+  (`origin()`), as ffmpeg was seen to do.
 
 Gaps: only the 816-byte header is read. The later Coktel Vision revisions with a longer header
 or one without a palette are refused (`Error::NotVmd`). Files with 16-bit, 24-bit or Indeo 3

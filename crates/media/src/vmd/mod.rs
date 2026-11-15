@@ -8,6 +8,13 @@
 //! 16-byte record a frame. A block is one picture period and holds the same number of frames in
 //! every block: usually a sound frame and a video frame.
 //!
+//! Pictures and sound are timed differently. The video frame of block `n` is shown at picture
+//! period `n` ([`Frame::block`], [`VmdFile::frame_rate`]). Sound is one continuous stream that
+//! starts with the first picture: decode the sound frames in file order and play the samples end
+//! to end. The first sound frame holds many blocks of sound, which the player loads ahead, so
+//! each later sound frame is heard that much later than the block it is stored in, and the sound
+//! runs on after the last picture.
+//!
 //! [`open`] reads the header and the table of contents; [`VmdFile::read_frame`] reads one frame's
 //! data on demand. The video decoder is `craft_video::vmd` and the sound decoder
 //! `craft_audio::vmd`; both take the header ([`VmdFile::header_bytes`]) as their configuration.
@@ -109,7 +116,8 @@ pub struct AudioHeader {
     pub bits: u8,
     /// 1 or 2.
     pub channels: u8,
-    /// Number of sound buffers: how many blocks a frame with a silence mask covers.
+    /// Number of sound buffers. In the game files seen it is one more than the blocks of sound
+    /// (silent ones included) in the file's first sound frame.
     pub buffers: u16,
     /// The audio flags as stored (0x8000 old-style stereo, 0x200 new-style stereo, 0x10 IMA
     /// ADPCM).
@@ -146,7 +154,7 @@ pub struct Header {
     pub width: u16,
     /// Picture height in pixels.
     pub height: u16,
-    /// Flags (0x1000: the file has sound).
+    /// Flags (0x1000: the file has sound, if its sample rate is not 0).
     pub flags: u16,
     /// Frames in every block.
     pub frames_per_block: u16,
@@ -187,7 +195,8 @@ impl Header {
             return Err(Error::NotVmd);
         }
         let flags = u16_at(16);
-        let audio = (flags & 0x1000 != 0).then(|| {
+        // a sample rate of 0 is no sound either: ffmpeg goes by the rate alone
+        let audio = (flags & 0x1000 != 0 && u16_at(804) != 0).then(|| {
             let length = u16_at(806) as i16;
             let audio_flags = u16_at(810);
             AudioHeader {
@@ -254,7 +263,8 @@ pub enum FrameKind {
 pub struct Frame {
     /// What the frame holds.
     pub kind: FrameKind,
-    /// The block the frame belongs to: its picture period.
+    /// The block the frame is stored in. A block is one picture period, so this is when a video
+    /// frame is shown. It is not when a sound frame is heard: see the module documentation.
     pub block: u32,
     /// Offset of the frame data.
     pub offset: u64,
@@ -270,6 +280,7 @@ pub struct VmdFile {
     /// The frames, block after block.
     pub frames: Vec<Frame>,
     raw_header: Vec<u8>,
+    origin: (u16, u16),
 }
 
 /// Open a VMD file: read the header and the table of contents.
@@ -313,7 +324,17 @@ pub fn open<S: ByteSource + ?Sized>(src: &S) -> Result<VmdFile> {
             offset += u64::from(size);
         }
     }
-    Ok(VmdFile { header, frames, raw_header: raw.to_vec() })
+    // the picture's place on the screen: see `picture_rect`
+    let origin = frames
+        .iter()
+        .find_map(|f| match f.kind {
+            FrameKind::Video { left, top, right, bottom, .. } => (right.checked_sub(left).and_then(|w| w.checked_add(1)) == Some(header.width)
+                && bottom.checked_sub(top).and_then(|h| h.checked_add(1)) == Some(header.height))
+            .then_some((left, top)),
+            _ => None,
+        })
+        .unwrap_or((0, 0));
+    Ok(VmdFile { header, frames, raw_header: raw.to_vec(), origin })
 }
 
 impl VmdFile {
@@ -345,29 +366,28 @@ impl VmdFile {
         }
     }
 
+    /// The screen position `(left, top)` that video frame coordinates are measured from: see
+    /// [`VmdFile::picture_rect`].
+    pub fn origin(&self) -> (u16, u16) {
+        self.origin
+    }
+
     /// Where a video frame's update lies in the picture: `(left, top, right, bottom)` with the
     /// last column and row included, or `None` for a frame that is not video or lies outside the
     /// picture.
     ///
-    /// Frame coordinates are screen coordinates in files whose picture does not sit at the
-    /// screen origin, and the description does not say how to tell. This follows what ffmpeg
-    /// does with such files: coordinates that still fit the picture once the header's origin is
-    /// taken off are screen coordinates, any others are picture coordinates.
+    /// Frame coordinates are screen coordinates, and a picture need not sit at the screen's
+    /// corner. The description does not say where the corner comes from. This does what ffmpeg
+    /// was seen to do: the first video frame that is exactly as large as the picture gives the
+    /// picture's position ([`VmdFile::origin`]), which is taken off every frame; a file without
+    /// such a frame has its picture at the corner. The header's own position fields are not
+    /// used.
     pub fn picture_rect(&self, frame: &Frame) -> Option<(u16, u16, u16, u16)> {
         let FrameKind::Video { left, top, right, bottom, .. } = frame.kind else { return None };
         let h = &self.header;
-        if right < left || bottom < top {
-            return None;
-        }
-        let on_screen = left
-            .checked_sub(h.left)
-            .zip(top.checked_sub(h.top))
-            .zip(right.checked_sub(h.left).zip(bottom.checked_sub(h.top)))
-            .filter(|&(_, (r, b))| r < h.width && b < h.height);
-        match on_screen {
-            Some(((l, t), (r, b))) => Some((l, t, r, b)),
-            None => (right < h.width && bottom < h.height).then_some((left, top, right, bottom)),
-        }
+        let (left, right) = (left.checked_sub(self.origin.0)?, right.checked_sub(self.origin.0)?);
+        let (top, bottom) = (top.checked_sub(self.origin.1)?, bottom.checked_sub(self.origin.1)?);
+        (left <= right && top <= bottom && right < h.width && bottom < h.height).then_some((left, top, right, bottom))
     }
 
     /// What a video decoder needs, in the container-neutral form the codec crates take:
