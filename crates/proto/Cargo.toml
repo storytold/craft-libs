@@ -1,0 +1,20 @@
+[package]
+name = "craft-proto"
+description = "Mail protocols without sockets: IMAP4rev1 and SMTP clients over any Read + Write stream"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = "0.23"
+zeroize = "1"
+# Internationalization: error messages and user-facing text.
+log = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
