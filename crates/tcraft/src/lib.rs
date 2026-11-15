@@ -6,10 +6,12 @@
 //! envelope. Reads use a caller-owned budget shared with other archive entries. No reader opens
 //! a file or reserves memory based on a claimed payload before checking it.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{self, Read, Write};
 
 use craft_zip::Budget;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const TILE_SIDE: u32 = 64;
 pub const TILE_AREA: usize = 64 * 64;
@@ -30,6 +32,34 @@ pub enum Error {
     Limit(String),
     #[error("TCTX I/O: {0}")]
     Io(#[from] io::Error),
+}
+
+/// Neutral top-level project schema. Nested app-domain values and unknown fields remain JSON
+/// so they round-trip without requiring TextureCraft's in-memory model.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectDocument {
+    pub format_version: u32,
+    pub name: String,
+    pub mesh: String,
+    pub normal_format: Value,
+    pub texture_sets: Vec<Value>,
+    pub layers: BTreeMap<String, Value>,
+    pub next_id: u64,
+    pub display: Value,
+    #[serde(default)]
+    pub cameras: Vec<Value>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
+}
+
+/// Read only the version before an application applies its own recovery policy. Serde's
+/// structured parse rejects a duplicate or invalid version field, like the project reader.
+pub fn project_version(bytes: &[u8]) -> Result<u32, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct Version {
+        format_version: u32,
+    }
+    Ok(serde_json::from_slice::<Version>(bytes)?.format_version)
 }
 
 /// Width, height and number of components expected by the enclosing project schema.
@@ -241,6 +271,24 @@ mod tests {
         let mut bytes = Vec::new();
         write_header(&mut bytes, layout, count).unwrap();
         bytes
+    }
+
+    #[test]
+    fn project_schema_keeps_nested_and_future_fields() {
+        let json = serde_json::json!({
+            "format_version": 2, "name": "Stone", "mesh": "mesh.obj", "normal_format": "openGl",
+            "texture_sets": [{"name": "main", "futureSet": {"keep": true}}],
+            "layers": {"1": {"kind": "paint", "futureLayer": [1, 2]}}, "next_id": 2,
+            "display": {"futureDisplay": 4}, "mesh_file": "source.obj", "futureProject": [3]
+        });
+        let bytes = serde_json::to_vec(&json).unwrap();
+        assert_eq!(project_version(&bytes).unwrap(), 2);
+        let document: ProjectDocument = serde_json::from_slice(&bytes).unwrap();
+        let mut expected = json;
+        expected["cameras"] = serde_json::json!([]);
+        assert_eq!(serde_json::to_value(document).unwrap(), expected);
+        assert!(project_version(br#"{"format_version":1,"format_version":2}"#).is_err());
+        assert!(project_version(br#"{"format_version":-1}"#).is_err());
     }
 
     #[test]
