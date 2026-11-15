@@ -34,6 +34,10 @@ pub struct Markers {
     pub cue: Vec<Marker>,
     /// XMP markers in packet order.
     pub xmp: Vec<Marker>,
+    /// A chunk-inventory or cue-label retention limit omitted metadata. Marker coordinates
+    /// remain available when only their label was omitted. Existing marker/XMP prefix limits
+    /// are separate and do not set this flag.
+    pub limited: bool,
 }
 
 /// Most markers read from one file.
@@ -44,6 +48,12 @@ const MAX_XMP: usize = 4 << 20;
 const MAX_ADTL_RECORDS: usize = 4 * MAX_MARKERS;
 /// Most entries read from an RF64 file's `ds64` size table.
 const MAX_DS64_TABLE: usize = 1_024;
+/// Maximum retained RIFF chunk descriptors (including empty chunks).
+pub const MAX_CHUNKS: usize = 100_000;
+/// Maximum UTF-8 bytes in one retained cue label.
+pub const MAX_LABEL_BYTES: usize = 64 * 1024;
+/// Aggregate cue label bytes, enforced separately for the name map and emitted markers.
+pub const MAX_LABEL_TOTAL_BYTES: usize = 4 * 1024 * 1024;
 
 fn u32_at(b: &[u8], at: usize) -> Option<u32> {
     let s = b.get(at..at.checked_add(4)?)?;
@@ -56,9 +66,15 @@ fn u64_at(b: &[u8], at: usize) -> Option<u64> {
 }
 
 /// The text of a NUL-terminated label (the rest of the chunk), lossily decoded.
-fn label(b: &[u8]) -> String {
-    let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
-    String::from_utf8_lossy(b.get(..end).unwrap_or_default()).trim().to_string()
+fn label(b: &[u8]) -> Option<String> {
+    // Look only as far as one label can be retained; never copy an arbitrary chunk body.
+    let end = b.iter().take(MAX_LABEL_BYTES + 1).position(|&c| c == 0).unwrap_or(b.len());
+    if end > MAX_LABEL_BYTES {
+        return None;
+    }
+    let text = String::from_utf8_lossy(b.get(..end)?);
+    let text = text.trim();
+    (text.len() <= MAX_LABEL_BYTES).then(|| text.to_string())
 }
 
 /// Whether `bytes` start a RIFF/WAVE file.
@@ -102,11 +118,15 @@ fn ds64(bytes: &[u8]) -> Option<Ds64> {
 }
 
 /// The chunks of a WAVE file as `(id, body)`, stopping at the first one that doesn't fit.
-fn chunks(bytes: &[u8]) -> Vec<([u8; 4], &[u8])> {
+fn chunks<'a>(bytes: &'a [u8], limited: &mut bool) -> Vec<([u8; 4], &'a [u8])> {
     let big = ds64(bytes);
     let mut out = Vec::new();
     let mut at = 12usize;
     while let Some(head) = bytes.get(at..at.saturating_add(8)) {
+        if out.len() == MAX_CHUNKS {
+            *limited = true;
+            break;
+        }
         let (Ok(id), Some(field)) = (<[u8; 4]>::try_from(&head[..4]), u32_at(head, 4)) else { break };
         // In an RF64 file a size field of 0xFFFFFFFF stands for the size `ds64` gives.
         let size = match &big {
@@ -128,15 +148,16 @@ pub fn read(bytes: &[u8]) -> Markers {
     if !is_wav(bytes) {
         return Markers::default();
     }
-    let chunks = chunks(bytes);
+    let mut limited = false;
+    let chunks = chunks(bytes, &mut limited);
     let rate = chunks.iter().find(|(id, _)| id == b"fmt ").and_then(|(_, b)| u32_at(b, 4)).map_or(0.0, f64::from);
-    let cue = cue_markers(&chunks, rate);
+    let cue = cue_markers(&chunks, rate, &mut limited);
     let xmp = chunks.iter().find(|(id, _)| id == b"_PMX").map_or_else(Vec::new, |(_, xmp)| xmp_markers(xmp, rate));
-    Markers { cue, xmp }
+    Markers { cue, xmp, limited }
 }
 
 /// Cue points named and sized by the `adtl` list.
-fn cue_markers(chunks: &[([u8; 4], &[u8])], rate: f64) -> Vec<Marker> {
+fn cue_markers(chunks: &[([u8; 4], &[u8])], rate: f64, limited: &mut bool) -> Vec<Marker> {
     let Some((_, cue)) = chunks.iter().find(|(id, _)| id == b"cue ") else { return Vec::new() };
     let count = (u32_at(cue, 0).unwrap_or(0) as usize).min(MAX_MARKERS);
     // The cue points first: `(id, offset in samples)`.
@@ -151,6 +172,7 @@ fn cue_markers(chunks: &[([u8; 4], &[u8])], rate: f64) -> Vec<Marker> {
     let wanted: HashSet<u32> = points.iter().map(|(id, _)| *id).collect();
     let mut names: HashMap<u32, String> = HashMap::new();
     let mut lengths: HashMap<u32, u32> = HashMap::new();
+    let mut name_bytes = 0usize;
     let mut records = 0usize;
     'lists: for (_, list) in chunks.iter().filter(|(id, b)| id == b"LIST" && b.get(0..4) == Some(b"adtl")) {
         let mut at = 4usize;
@@ -166,11 +188,16 @@ fn cue_markers(chunks: &[([u8; 4], &[u8])], rate: f64) -> Vec<Marker> {
             if let Some(cue_id) = u32_at(body, 0).filter(|c| wanted.contains(c)) {
                 match &id {
                     // A `labl` is the name; a `note` only when there is none.
-                    b"labl" => {
-                        names.insert(cue_id, label(body.get(4..).unwrap_or_default()));
-                    }
-                    b"note" => {
-                        names.entry(cue_id).or_insert_with(|| label(body.get(4..).unwrap_or_default()));
+                    b"labl" | b"note" if id == *b"labl" || !names.contains_key(&cue_id) => {
+                        let without_old = name_bytes.saturating_sub(names.get(&cue_id).map_or(0, String::len));
+                        let text = label(body.get(4..).unwrap_or_default())
+                            .filter(|text| text.len() <= MAX_LABEL_TOTAL_BYTES.saturating_sub(without_old))
+                            .unwrap_or_else(|| {
+                                *limited = true;
+                                String::new()
+                            });
+                        name_bytes = without_old + text.len();
+                        names.insert(cue_id, text);
                     }
                     // The first `ltxt` of a cue point gives its length.
                     b"ltxt" => {
@@ -182,10 +209,21 @@ fn cue_markers(chunks: &[([u8; 4], &[u8])], rate: f64) -> Vec<Marker> {
             at = end.saturating_add(end & 1);
         }
     }
+    let mut emitted_bytes = 0usize;
     points
         .into_iter()
         .map(|(id, offset)| {
-            let comment = names.get(&id).cloned().unwrap_or_default();
+            let comment = match names.get(&id) {
+                Some(text) if text.len() <= MAX_LABEL_TOTAL_BYTES.saturating_sub(emitted_bytes) => {
+                    emitted_bytes += text.len();
+                    text.clone()
+                }
+                Some(_) => {
+                    *limited = true;
+                    String::new()
+                }
+                None => String::new(),
+            };
             let length = lengths.get(&id).copied().unwrap_or(0);
             Marker { start: f64::from(offset), duration: f64::from(length), rate, name: comment }
         })
@@ -551,5 +589,49 @@ mod tests {
         let text = "&".repeat(100_000);
         assert_eq!(unescape(&text), text);
         assert_eq!(unescape("&#0000065; &#00000065; &amp; &unknown;"), "A A & &unknown;");
+    }
+    #[test]
+    fn repeated_cue_ids_cannot_multiply_label_storage() {
+        let text = "x".repeat(MAX_LABEL_BYTES);
+        let points: Vec<_> = (0..MAX_MARKERS).map(|i| (1, i as u32)).collect();
+        let file = wav(&[fmt(44100), cue(&points), adtl(&[labl(b"labl", 1, &text)])]);
+        let metadata = super::read(&file);
+        assert_eq!(metadata.cue.len(), MAX_MARKERS);
+        assert_eq!(metadata.cue.iter().map(|m| m.name.len()).sum::<usize>(), MAX_LABEL_TOTAL_BYTES);
+        assert!(metadata.limited);
+        assert_eq!(metadata.cue[0].name, text);
+        assert!(metadata.cue[MAX_MARKERS - 1].name.is_empty());
+        assert_eq!(metadata.cue[MAX_MARKERS - 1].start, (MAX_MARKERS - 1) as f64);
+    }
+
+    #[test]
+    fn cue_name_map_and_single_label_are_bounded() {
+        let count = MAX_LABEL_TOTAL_BYTES / MAX_LABEL_BYTES + 2;
+        let text = "x".repeat(MAX_LABEL_BYTES);
+        let points: Vec<_> = (0..count as u32).map(|i| (i, i)).collect();
+        let labels: Vec<_> = (0..count as u32).map(|i| labl(b"labl", i, &text)).collect();
+        let metadata = super::read(&wav(&[fmt(44100), cue(&points), adtl(&labels)]));
+        assert!(metadata.limited);
+        assert_eq!(metadata.cue.iter().map(|m| m.name.len()).sum::<usize>(), MAX_LABEL_TOTAL_BYTES);
+        let oversized = "x".repeat(MAX_LABEL_BYTES + 1);
+        let metadata = super::read(&wav(&[fmt(44100), cue(&[(1, 3)]), adtl(&[labl(b"labl", 1, &oversized)])]));
+        assert!(metadata.limited);
+        assert_eq!(metadata.cue[0].start, 3.0);
+        assert!(metadata.cue[0].name.is_empty());
+    }
+
+    #[test]
+    fn empty_chunk_inventory_is_bounded() {
+        let empty = chunk(b"junk", &[]);
+        let many = empty.repeat(MAX_CHUNKS + 1);
+        let metadata = super::read(&wav(&[many, fmt(44100), cue(&[(1, 1)])]));
+        assert!(metadata.limited);
+        assert!(metadata.cue.is_empty());
+    }
+
+    #[test]
+    fn entity_lookahead_keeps_previous_semicolon_boundary() {
+        assert_eq!(unescape("&#00000065;"), "A");
+        assert_eq!(unescape("&#000000065;"), "&#000000065;");
     }
 }
