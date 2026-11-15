@@ -303,7 +303,9 @@ mod tests {
             }
             offset += size;
         };
-        let frames = craft_video::av1::decode::Decoder::new().decode(payload).unwrap();
+        let mut decoder = craft_video::av1::decode::Decoder::new();
+        let mut frames = decoder.decode(payload).unwrap();
+        frames.extend(decoder.flush_result().unwrap());
         let luma = &frames.first().expect("encoded AV1 frame").planes[0];
         assert!((i32::from(luma[16 * 64 + 16]) - 767).abs() <= 5, "diffuse white");
         assert!((i32::from(luma[16 * 64 + 48]) - 1023).abs() <= 5, "peak white");
