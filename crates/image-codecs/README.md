@@ -339,3 +339,12 @@ folder, copy the five files from that commit into `corpus/exr/`, or run
 at commit `74330157cb601573ae4523a95bb9132822fc3918` and copy its `corpus/exr/` here, as CI does.
 The images are not committed here; OpenEXR distributes them under its
 [license](https://github.com/AcademySoftwareFoundation/openexr/blob/69b2604fc76e370615438bdc8d2cd95b9349c12e/LICENSE.md).
+
+## Redistribution notices
+
+JPEG encoding uses `jpeg-encoder` 0.6.1, including work from the Independent JPEG Group.
+Retain this crate's [NOTICE](NOTICE) with binary distributions using that encoder. It includes
+its MIT license, the IJG acknowledgement and original IJG/SIMD notices. Both upstream license
+alternatives and source checksums are retained in
+[`licenses/jpeg-encoder-0.6.1`](https://github.com/storytold/craft-libs/tree/main/licenses/jpeg-encoder-0.6.1)
+at the repository root.
