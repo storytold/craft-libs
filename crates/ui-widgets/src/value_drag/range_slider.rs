@@ -349,11 +349,15 @@ impl Component for RangeSlider<'_> {
     }
 
     fn value_text(&self, cx: &Cx<'_, Self>) -> Option<String> {
-        let pair = Self::current(cx);
+        self.word_value(&Self::current(cx), cx)
+    }
+
+    /// The pair as "from to to"; `None` while either end is mixed.
+    fn word_value(&self, pair: &Pair, cx: &Cx<'_, Self>) -> Option<String> {
         pair.0.same()?;
         pair.1.same()?;
         let scale = self.track_scale();
-        let (from, to) = placed(&scale, &pair);
+        let (from, to) = placed(&scale, pair);
         let units = cx.env.units();
         let words = cx.words::<ValueDragWords>();
         Some(words.range.fill(&[("from", scale.text(&units, from).as_str()), ("to", scale.text(&units, to).as_str())]))

@@ -370,8 +370,9 @@ pub fn report_sub(ctx: &Context, decl: &SubDecl<'_>) {
     spec.labelled_by = name.labelled_by.clone();
     spec.description = node.description.clone();
     spec.numeric = numeric.cloned();
-    spec.value = node.value.clone();
-    spec.color = node.color;
+    // The composite's declared value and colour win; else the face painted for the part gives its own.
+    spec.value = node.value.clone().or_else(|| decl.face.as_ref().and_then(|face| face.value.map(str::to_owned)));
+    spec.color = node.color.or_else(|| decl.face.as_ref().and_then(|face| face.color));
     spec.expanded = expanded;
     spec.access_key = node.access_key;
     spec.shortcut = node.shortcut.clone();

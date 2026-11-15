@@ -13,13 +13,17 @@ use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{Align, Color32, Context};
 
 /// The format of `span` in `role`: its font at the role's size (mono, semibold or italic as the span is), with the
-/// optical size axis where the face has one. The span's text and colour flags are not read.
+/// optical size axis where the face has one and tabular figures (`tnum`) for a tabular span. The span's text and
+/// colour flags are not read.
 pub(crate) fn span_format(tokens: &UiTokens, fonts: StackFacts, role: TypeRole, span: &Span<'_>, color: Color32, background: Color32) -> TextFormat {
     let (mono, italics) = (span.mono, span.italic);
     let font_id = tokens.font_weighted(fonts, role, mono, span.strong);
     let mut format = TextFormat { font_id, color, italics, background, ..TextFormat::default() };
     if let Some(size) = tokens.optical_size(fonts, role, mono) {
         format.coords.push(*b"opsz", size);
+    }
+    if span.tabular {
+        format.font_features = egui::epaint::text::FontFeatures::new([(*b"tnum", 1)]);
     }
     format
 }

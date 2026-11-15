@@ -49,10 +49,8 @@ pub struct PaintUi<'a> {
     pub(crate) size: ControlSize,
     /// The selection parts step 7 declared.
     pub(crate) selections: &'a [PartRef],
-    /// The opacity before step 13 faded the component (`DisabledLook::Faded`): its children paint at it.
-    pub(crate) unfaded: Option<f32>,
-    /// The fade `steps::fade` began, closed before a child and opened again after it.
-    #[allow(dead_code)] // P3(framework-01-w5): fx.F29
+    /// The fade `steps::fade` began (`DisabledLook::Faded`): the faces paint their enabled look, and the children
+    /// shown from here lie under the component's veil.
     pub(crate) fade: Option<super::steps::Fade>,
     /// The children's `Ui`, built on the first child under `sub(id, "children")`.
     pub(crate) kids: Option<Ui>,
@@ -217,18 +215,22 @@ impl PaintUi<'_> {
     fn child_with<C: Show>(&mut self, id: Id, rect: Rect, child: C, tip: Option<TipFn<'_>>, inside: Option<Arc<InsideLabel>>) -> C::Output {
         let scope = sub(self.id, "children");
         let parent = &mut *self.ui;
-        let unfaded = self.unfaded;
         let kids = self.kids.get_or_insert_with(|| {
             let builder = egui::UiBuilder::new().layout(child::pinned_layout()).scope_id(scope).max_rect(self.rect);
-            let mut kids = alloc::child(parent, access::with_parent(builder, self.id));
-            // A child shows its own disabled look, outside its owner's fade.
-            if let Some(opacity) = unfaded {
-                kids.set_opacity(opacity);
-            }
-            kids
+            alloc::child(parent, access::with_parent(builder, self.id))
         });
         let ctx = kids.ctx().clone();
         let env = super::cx::child_env(&Env::of(kids), &super::cx::Under { enabled: self.enabled, size: self.size, inside });
+        // A child shown while the owner's fade runs lies under the owner's veil, so a faded child adds none of its own.
+        let env = match self.fade {
+            Some(_) => {
+                let layer = kids.layer_id();
+                env.derive_local(|scoped| {
+                    scoped.inherited_mut().values.set(super::steps::UnderVeil(Some(layer)));
+                })
+            }
+            None => env,
+        };
         let installed = Env::install_for(kids, env);
         // The child sits in a rect its owner chose, and the owner's own measure answers for it: no body's transcript
         // holds it.
@@ -266,7 +268,7 @@ impl PaintUi<'_> {
             muted: self.muted,
             flags: self.flags,
             enabled: self.enabled,
-            faded: self.unfaded.is_some(),
+            faded: self.fade.is_some(),
         };
         let record = run::paint_face(self.ui, self.env, &source, part, face);
         let mut own = self.record.borrow_mut();

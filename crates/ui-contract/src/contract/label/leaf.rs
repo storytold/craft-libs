@@ -66,6 +66,8 @@ pub(super) struct LabelLeaf {
     pub(super) resettable: bool,
     /// The dot shows: the value differs from the reset value.
     pub(super) differs: bool,
+    /// The reset value as the control words it, which the dot's tooltip names; `None` names no default.
+    pub(super) default: Option<String>,
     /// The width the dot's slot takes at the end of the label, 0 without one.
     slot: f32,
     pub(super) icon: Option<IconSpec<'static>>,
@@ -116,6 +118,7 @@ impl LabelLeaf {
             scrub: false,
             resettable: false,
             differs: false,
+            default: None,
             slot,
             icon: None,
             glyph: None,
@@ -265,7 +268,11 @@ impl Component for LabelLeaf {
     fn parts(&mut self, _rect: Rect, cx: &mut PartsCx<'_, Self>) {
         if self.slot > 0.0 && self.differs {
             let (slot, _) = cx.flow.take_end(self.slot);
-            let tip = cx.env.words::<CommonWords>().reset_to_default.as_str().to_owned();
+            let words = cx.env.words::<CommonWords>();
+            let tip = match &self.default {
+                Some(value) => words.reset_to_value.fill(&[("value", value.as_str())]),
+                None => words.reset_to_default.as_str().to_owned(),
+            };
             cx.part(DOT, slot).sense(Sense::CLICK).state_layer().tooltip(tip).pointer_only("the Reset command");
         }
     }

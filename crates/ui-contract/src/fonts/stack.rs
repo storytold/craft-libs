@@ -19,7 +19,9 @@
 //! Hangul sit inside the em square and fit a Latin row, so in Chinese, Japanese and Korean UIs the
 //! Latin face stays first, and rows keep the same height as in a Latin UI: CJK faces sit on the
 //! first face's baseline, scaled down only if a glyph would leave the row ([`CjkRows::Fit`]).
-//! Monospace, and every family declared [`Family::monospaced`], always keeps its Latin face first.
+//! Monospace, and every family declared [`Family::monospaced`], always keeps its Latin face first. A
+//! craft face with the `mono` role (craft-fonts' monospace face) leads those families when the app
+//! embeds it, ahead of egui's Hack.
 //! On the suite's egui fork, the other craft faces and installed text faces used as fallbacks sit
 //! on the row's baseline and rows grow to fit them by themselves; emoji and symbol faces stay
 //! centred.
@@ -238,7 +240,8 @@ impl<'a> UiFonts<'a> {
         self
     }
 
-    /// The craft-fonts faces this build embedded; may be empty.
+    /// The craft-fonts faces this build embedded; may be empty. A face with the `mono` role
+    /// leads Monospace and every family declared [`Family::monospaced`].
     pub fn craft_faces(mut self, faces: &[EmbeddedFace]) -> Self {
         self.craft_faces.extend_from_slice(faces);
         self.served.resize(self.craft_faces.len(), None);

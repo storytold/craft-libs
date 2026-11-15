@@ -671,7 +671,6 @@ pub(crate) fn paint_face<C: Show>(ui: &mut Ui, env: &Env, source: &super::FaceSo
             enabled: step1.enabled && source.enabled,
             size: step1.size,
             selections: &[],
-            unfaded: None,
             fade: None,
             kids: None,
         };
@@ -825,12 +824,16 @@ pub(crate) fn member_show<C: Show>(
     cx.core.stated = true;
     cx.core.ink = steps::surface_ink(StyleView::surface(&*style), &state, env.ink);
     item.update(&mut cx);
-    let unfaded = steps::fade_opacity(ui, &mut cx.core);
+    // Paint stays inside the row grown by the type's declared outset, as a run's does; a faded member's veil fills it.
+    let outer_clip = ui.clip_rect();
+    ui.set_clip_rect(row.expand(C::paint_outset(&env.tokens)).intersect(outer_clip));
+    let fade = steps::fade(ui, env, &mut cx.core);
     steps::paint_surface(ui, env, &cx.core, &*style);
     steps::paint_part_layers(ui, env, &cx.core);
     item.paint(&mut super::paint_ui(ui, env, &cx.core, &*style), &cx);
     item.paint_over(&mut super::paint_ui(ui, env, &cx.core, &*style), &cx);
-    ui.set_opacity(unfaded);
+    steps::unfade(ui, &mut cx.core, fade);
+    ui.set_clip_rect(outer_clip);
     let mut access = Access::default();
     item.access(&mut access, &cx);
     let member_node = report_member(&cx.core, &access, node, C::ROLE);

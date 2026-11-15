@@ -17,6 +17,11 @@ pub struct PaintRecord {
     pub faces: Vec<FaceRecord>,
     /// Child edits adopted with `cx.adopt`, read at step 15.
     pub adopted: Vec<Adopted>,
+    /// The corners of the component's surface, which a faded component's veil takes; square without a surface.
+    pub(crate) surface_radius: egui::CornerRadius,
+    /// Where a faded component's veil sits in its layer's paint list, so a later paint range of the component moves
+    /// it to that range's end and one veil covers all the component paints.
+    pub(crate) veil: Option<egui::layers::ShapeIdx>,
 }
 
 /// An adopted child event with its value type erased, queued in the paint record and read back at step 15.

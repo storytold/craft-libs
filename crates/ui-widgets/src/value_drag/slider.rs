@@ -12,7 +12,7 @@ use crate::contract::{
 use crate::runtime::env::Label;
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleColor, StyleCx, SurfaceStyle, TextLook, TrackLook};
-use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Proposal, Sense};
+use craft_behavior::{Flow, HitLevel, HitPriority, Metrics, PartKey, PressPhase, Proposal, Sense, WheelPhase};
 use craft_theme::Stateful;
 use egui::{Pos2, Rect, Vec2};
 use std::ops::RangeInclusive;
@@ -282,25 +282,34 @@ impl Component for Slider<'_> {
                 _ => {}
             }
         }
-        // A running drag is one edit: keys, the wheel and SetValue wait for it.
-        let running = cx.gesture().is_some();
-        let wheel = cx.take_wheel().filter(|_| !running);
-        let set_value = cx.intents().take_set_value().filter(|_| !running);
+        // A drag a press of the thumb or the track carries is one edit: keys, the wheel and SetValue wait for it. A
+        // run the wheel began holds nothing back; a key or SetValue commits it first, so no one-shot change lands
+        // beside its open proposal.
+        // The press check reads the gesture slot, which holds for the whole press whatever this pass's press phase is.
+        let pressing = cx.gesture().is_some() && !cx.in_wheel_run();
+        let wheel = cx.take_wheel().filter(|_| !pressing);
+        let set_value = cx.intents().take_set_value().filter(|_| !pressing);
         while let Some((mv, mods)) = cx.intents().take_move() {
-            if running {
+            if pressing {
                 continue;
+            }
+            if cx.in_wheel_run() {
+                cx.commit();
             }
             if let Some(next) = scale.stepped(current(&*cx), bounds, mv, mods) {
                 cx.set(next);
             }
         }
-        if let Some(wheel) = wheel
-            && let Some(next) = scale.wheeled(current(&*cx), bounds, &wheel, rtl, self.wheel_step)
-        {
-            cx.set(next);
-        }
         if let Some(next) = set_value {
+            if cx.in_wheel_run() {
+                cx.commit();
+            }
             cx.set(scale.snap(next));
+        }
+        if let Some(wheel) = wheel {
+            // The end share carries no scroll: it closes the run.
+            let next = if wheel.phase == WheelPhase::End { None } else { scale.wheeled(current(&*cx), bounds, &wheel, rtl, self.wheel_step) };
+            cx.wheel_run(wheel.phase, next);
         }
     }
 
@@ -314,12 +323,17 @@ impl Component for Slider<'_> {
         access.numeric(numeric.step(scale.small()));
     }
 
+    /// The app's words for the shown value when it gives them, else the value as the slider words it.
     fn value_text(&self, cx: &Cx<'_, Self>) -> Option<String> {
         let value = cx.value()?;
-        Some(match &self.value_text {
-            Some(text) => cx.env.resolve(text).as_str().to_owned(),
-            None => self.track_scale().text(&cx.env.units(), *value),
-        })
+        match &self.value_text {
+            Some(text) => Some(cx.env.resolve(text).as_str().to_owned()),
+            None => self.word_value(value, cx),
+        }
+    }
+
+    fn word_value(&self, value: &f64, cx: &Cx<'_, Self>) -> Option<String> {
+        Some(self.track_scale().text(&cx.env.units(), *value))
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {

@@ -342,8 +342,12 @@ impl Component for AngleDial<'_> {
     }
 
     fn value_text(&self, cx: &Cx<'_, Self>) -> Option<String> {
+        cx.value().and_then(|value| self.word_value(value, cx))
+    }
+
+    fn word_value(&self, value: &f64, cx: &Cx<'_, Self>) -> Option<String> {
         let decimals = decimals_for_step(self.step_size());
-        cx.value().map(|value| cx.env.units().text(UnitKind::Degrees, *value, decimals..=decimals))
+        Some(cx.env.units().text(UnitKind::Degrees, *value, decimals..=decimals))
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {

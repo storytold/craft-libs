@@ -8,6 +8,7 @@ mod hit;
 mod inside;
 pub mod kit;
 mod reach;
+mod reset;
 mod scheme;
 mod short;
 mod tooltip;

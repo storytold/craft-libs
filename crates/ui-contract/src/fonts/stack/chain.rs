@@ -1,6 +1,6 @@
 //! Building the chains: for each family, which faces come in which order.
 
-use craft_fonts_build::{EmbeddedFace, ServedFace};
+use craft_fonts_build::{EmbeddedFace, MONO_ROLE, ServedFace};
 use craft_i18n::Han;
 use craft_theme::InterfaceFont;
 use egui::{FontData, FontDefinitions, FontFamily};
@@ -24,7 +24,8 @@ const DEFAULT_PREFER: &[(&str, &str)] = &[("Jpan", "BIZ UDPGothic")];
 
 /// A served face as the stack orders it, without bytes.
 pub(super) fn without_bytes(face: &ServedFace) -> EmbeddedFace {
-    EmbeddedFace { family: face.family, style: face.style, scripts: face.scripts, index: face.index, bytes: &[], role: None } // P3(framework-01-w5): fx.F32
+    // A served face carries no role: a web build that serves its faces keeps egui's Hack first in Monospace.
+    EmbeddedFace { family: face.family, style: face.style, scripts: face.scripts, index: face.index, bytes: &[], role: None }
 }
 
 /// Whether a face tagged `tags` draws `script`; the union tags cover their parts.
@@ -295,7 +296,22 @@ impl UiFonts<'_> {
             .collect();
         base.splice(0..0, self.system_ui_slot(&family.family));
 
-        let mut configured = craft(lead);
+        // craft-fonts' monospace face leads a monospaced family when the build embeds it; Hack follows as the fallback.
+        let mono: Vec<usize> = if family.monospaced {
+            let mut mono: Vec<(u8, usize)> = self
+                .craft_faces
+                .iter()
+                .enumerate()
+                .filter(|(_, face)| face.role == Some(MONO_ROLE))
+                .filter_map(|(i, face)| style_rank(face, weight).map(|rank| (rank, i)))
+                .collect();
+            mono.sort();
+            mono.into_iter().map(|(_, i)| i).collect()
+        } else {
+            Vec::new()
+        };
+        let mut configured = craft(mono);
+        configured.extend(craft(lead));
         if language_first {
             configured.extend(craft(language));
             configured.extend(base);

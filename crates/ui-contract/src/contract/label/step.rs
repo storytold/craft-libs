@@ -162,7 +162,8 @@ pub(crate) fn run(ui: &mut Ui, env: &Env, input: &LabelIn<'_>, trailing: Option<
     let mut leaf = LabelLeaf::new(input.side.kind.shown(input.text).clone(), slot);
     leaf.scrub = input.enabled && (input.side.scrub || scope::last_scrub(&ctx, input.scope));
     leaf.resettable = reset.is_some();
-    leaf.differs = reset.as_ref().is_some_and(|fact| fact.differs); // P3(framework-01-w5): fx.F28
+    leaf.differs = reset.as_ref().is_some_and(|fact| fact.differs);
+    leaf.default = reset.as_ref().and_then(|fact| fact.default.clone());
     leaf.named = !input.side.content_only(content);
     leaf.colon = colon(env, input).filter(|_| leaf.named);
     leaf.after = input.side.layout == FieldLayout::After;

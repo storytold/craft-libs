@@ -30,7 +30,7 @@ pub(super) use id::measuring;
 pub(crate) use id::{draft, id, keeping_ids};
 pub(crate) use label::scrub_by_label;
 pub(crate) use measure::{MeasureIn, guard, measure, measure_content, measure_cx, padding, whole};
-pub(crate) use paint::{Fade, fade_opacity, next_shape, paint_focus, paint_part_layers, paint_surface, surface_ink};
+pub(crate) use paint::{Fade, UnderVeil, fade, next_shape, paint_focus, paint_part_layers, paint_surface, surface_ink, unfade};
 pub(crate) use parts::{PartsStep, check_parts, declares_none};
 pub(crate) use place::place;
 pub(crate) use report::{ReportIn, report, report_inert, report_parts, validity_of};

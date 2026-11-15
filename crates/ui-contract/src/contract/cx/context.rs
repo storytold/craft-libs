@@ -171,10 +171,10 @@ pub struct CxCore<'a> {
     /// Not enabled, with `DisabledLook::Faded`: the component and its faces paint their enabled look, which step 13
     /// fades.
     pub(crate) faded: bool,
-    /// The opacity of the component's `Ui` before step 13 faded it, which its children paint at.
-    pub(crate) unfaded: Option<f32>,
-    /// Where the faded component's shapes start and the ground they fade toward (`steps::fade`).
+    /// Where the faded component's shapes start and the ground its veil takes (`steps::fade`).
     pub(crate) fade: Option<crate::contract::steps::Fade>,
+    /// The focus ring shape each part declared (`focus_shape`), in which step 13 draws the active part's ring.
+    pub(crate) focus_shapes: Vec<((PartKey, Option<u64>), focus::FocusShape)>,
     /// Where the text part reserved the surface in the painter, so the field's surface paints beneath its text.
     pub(crate) surface_slot: Option<egui::layers::ShapeIdx>,
     /// The editor part as step 8b set it up.

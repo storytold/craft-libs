@@ -1,6 +1,7 @@
 //! How a disabled component dims what it shows. `DisabledLook::Faded`: a component that shows data paints its enabled
-//! look at `Opacity::DISABLED`, its faces and the faded children it shows each faded once; a settled region holding one
-//! replays the faded paint. `DisabledLook::States`: the data colours its `Draw` paints dim and keep their hues.
+//! look under one veil of the surface it sits on, which covers its faces and the faded children it shows too; a
+//! settled region holding one replays the veiled paint. `DisabledLook::States`: the data colours its `Draw` paints dim
+//! and keep their hues.
 
 use craft_behavior::IconId;
 use craft_theme::variant::Tone;
@@ -19,43 +20,64 @@ use egui::{Color32, Rect, Shape, Ui, pos2};
 use std::cell::Cell;
 
 const REGION: Rect = Rect { min: pos2(10.0, 10.0), max: pos2(210.0, 310.0) };
+/// The tile's picture fill.
+const PICTURE: Color32 = Color32::from_rgb(0x30, 0x90, 0xd0);
 
-/// A tile with a picture (its `RowThumb` child), a text badge (a face), the stars (a face), a colour dot and a caption.
-fn tile(ui: &mut Ui, enabled: bool) {
+/// A tile with a picture (its `RowThumb` child, faded itself), a text badge (a face), the stars (a face), a colour
+/// dot and a caption. Returns the tile's rect.
+fn tile(ui: &mut Ui, enabled: bool) -> Rect {
+    let rect = Cell::new(Rect::NOTHING);
     in_region(ui, REGION, |ui| {
-        Tile::new("IMG_0002.jpg")
+        let shown = Tile::new("IMG_0002.jpg")
             .thumb(ThumbAspect::SQUARE, |cx, rect| {
-                cx.painter.rect_filled(rect, 0.0, Color32::from_rgb(0x30, 0x90, 0xd0));
+                cx.painter.rect_filled(rect, 0.0, PICTURE);
             })
             .badge(TileBadge::new(BadgeSlot::EndTop, BadgeKind::Text(Label::from("1/3")), Tone::Neutral, None))
             .rating(3)
             .label_color(Srgba::rgb(0.86, 0.31, 0.24))
             .enabled(enabled)
             .show(ui);
+        rect.set(shown.response.rect);
     });
+    rect.get()
 }
 
-/// The strongest alpha among the colours `shape` paints with, or `None` for a shape that paints none.
-fn alpha(shape: &Shape) -> Option<u8> {
-    let solid = |mode: &ColorMode| match mode {
-        ColorMode::Solid(color) => color.a(),
-        ColorMode::UV(_) => 0,
-    };
-    let alphas: Vec<u8> = match shape {
-        Shape::Rect(rect) => vec![rect.fill.a(), rect.stroke.color.a()],
-        Shape::Circle(circle) => vec![circle.fill.a(), circle.stroke.color.a()],
-        Shape::Ellipse(ellipse) => vec![ellipse.fill.a(), ellipse.stroke.color.a()],
-        Shape::Path(path) => vec![path.fill.a(), solid(&path.stroke.color)],
-        Shape::LineSegment { stroke, .. } => vec![stroke.color.a()],
-        Shape::Mesh(mesh) => mesh.vertices.iter().map(|vertex| vertex.color.a()).collect(),
-        Shape::Text(text) => text.galley.rows.iter().flat_map(|row| row.row.visuals.mesh.vertices.iter().map(|vertex| vertex.color.a())).collect(),
-        _ => Vec::new(),
-    };
-    alphas.into_iter().max().filter(|a| *a > 0)
+/// The solid colours `shape` paints with, in a fixed order; a `Shape::Vec` gives its members'.
+fn colors_of(shape: &Shape, out: &mut Vec<Color32>) {
+    match shape {
+        Shape::Vec(shapes) => shapes.iter().for_each(|shape| colors_of(shape, out)),
+        Shape::Rect(rect) => out.extend([rect.fill, rect.stroke.color]),
+        Shape::Circle(circle) => out.extend([circle.fill, circle.stroke.color]),
+        Shape::Ellipse(ellipse) => out.extend([ellipse.fill, ellipse.stroke.color]),
+        Shape::Path(path) => {
+            out.push(path.fill);
+            if let ColorMode::Solid(color) = &path.stroke.color {
+                out.push(*color);
+            }
+        }
+        Shape::LineSegment { stroke, .. } => out.push(stroke.color),
+        Shape::Mesh(mesh) => out.extend(mesh.vertices.iter().map(|vertex| vertex.color)),
+        Shape::Text(text) => out.extend(text.galley.rows.iter().flat_map(|row| row.row.visuals.mesh.vertices.iter().map(|vertex| vertex.color))),
+        _ => {}
+    }
 }
 
-fn alphas(shapes: &[Shape]) -> Vec<Option<u8>> {
-    shapes.iter().map(alpha).collect()
+/// The solid colours of each shape.
+fn colors(shapes: &[Shape]) -> Vec<Vec<Color32>> {
+    shapes
+        .iter()
+        .map(|shape| {
+            let mut out = Vec::new();
+            colors_of(shape, &mut out);
+            out
+        })
+        .collect()
+}
+
+/// Whether `shape` has the look of a veil: a plain filled rect at the veil's alpha.
+fn veil_like(shape: &Shape) -> bool {
+    let alpha = Color32::WHITE.gamma_multiply(1.0 - Opacity::DISABLED).a();
+    matches!(shape, Shape::Rect(rect) if rect.brush.is_none() && rect.fill.a() == alpha)
 }
 
 /// The shapes of a frame once the scene shows the same thing two frames running.
@@ -64,27 +86,34 @@ fn settled_shapes(frames: &mut Frames, mut scene: impl FnMut(&mut Ui)) -> Vec<Sh
     frames.frame_shapes(&mut scene)
 }
 
-/// Every shape a disabled tile paints is `Opacity::DISABLED` as opaque as the same shape enabled: its own paint, its
-/// faces and its picture, which the `RowThumb` child fades itself. Nothing is faded twice, and the text keeps its
-/// enabled colours. A disabled button keeps its token look and paints nothing faded.
+/// A disabled tile paints the shapes and colours it paints enabled, its picture's included, and one veil over them,
+/// after its last shape; the faded picture it shows adds no veil of its own. A disabled button keeps its token look
+/// and paints nothing faded.
 #[trial]
 fn a_disabled_faded_component_paints_its_enabled_look_faded_once() {
-    let enabled = settled_shapes(&mut Frames::new(), |ui| tile(ui, true));
-    let disabled = settled_shapes(&mut Frames::new(), |ui| tile(ui, false));
-    assert_eq!(enabled.len(), disabled.len(), "a disabled tile paints the shapes it paints enabled");
-    let mut faded = 0;
-    for (at, (on, off)) in alphas(&enabled).into_iter().zip(alphas(&disabled)).enumerate() {
-        let Some(on) = on else { continue };
-        let off = f32::from(off.unwrap_or(0));
-        let expected = f32::from(on) * Opacity::DISABLED;
-        assert!((off - expected).abs() <= 1.5, "shape {at}: alpha {off} disabled, {on} enabled: {:?}", disabled[at]);
-        faded += 1;
-    }
-    assert!(faded > 5, "the picture, the badge, the stars, the dot and the caption each paint: {faded}");
-    let fallbacks = |shapes: &[Shape]| -> Vec<Color32> {
-        shapes.iter().filter_map(|shape| if let Shape::Text(text) = shape { Some(text.fallback_color.to_opaque()) } else { None }).collect()
-    };
-    assert_eq!(fallbacks(&enabled), fallbacks(&disabled), "the disabled tile's text keeps its enabled ink");
+    let enabled = settled_shapes(&mut Frames::new(), |ui| {
+        tile(ui, true);
+    });
+    let at = Cell::new(Rect::NOTHING);
+    let disabled = settled_shapes(&mut Frames::new(), |ui| at.set(tile(ui, false)));
+    let shown = at.get().intersect(REGION);
+    let veils: Vec<usize> = disabled.iter().enumerate().filter(|(_, shape)| veil_like(shape)).map(|(index, _)| index).collect();
+    let before = enabled.iter().filter(|shape| veil_like(shape)).count();
+    assert_eq!(veils.len(), before + 1, "the disabled tile adds one veil, and its faded picture none: {veils:?}");
+    let veil = *veils.last().unwrap_or_else(|| panic!("the disabled tile paints a veil"));
+    let Shape::Rect(rect) = &disabled[veil] else { panic!("the veil is a rect") };
+    assert!(rect.rect.contains_rect(shown), "the veil {:?} covers the tile {shown:?}", rect.rect);
+    assert!(
+        disabled[veil + 1..].iter().all(|shape| !shape.visual_bounding_rect().intersects(shown)),
+        "the veil is painted after the tile's last shape"
+    );
+    let mut own = disabled.clone();
+    own.remove(veil);
+    let (own, enabled) = (colors(&own), colors(&enabled));
+    assert_eq!(own, enabled, "under the veil the disabled tile paints its enabled colours");
+    let painting = own.iter().filter(|shape| shape.iter().any(|color| color.a() > 0)).count();
+    assert!(painting > 5, "the picture, the badge, the stars, the dot and the caption each paint: {painting}");
+    assert!(own.iter().flatten().any(|color| *color == PICTURE), "the picture paints its own colour under the veil");
     let button = settled_shapes(&mut Frames::new(), |ui| {
         in_region(ui, REGION, |ui| {
             Button::new("Apply").enabled(false).show(ui);
@@ -96,7 +125,7 @@ fn a_disabled_faded_component_paints_its_enabled_look_faded_once() {
     );
 }
 
-/// A settled region holding a disabled faded tile runs nothing, and replays the faded paint of the frame that ran.
+/// A settled region holding a disabled faded tile runs nothing, and replays the veiled paint of the frame that ran.
 #[trial]
 fn a_settled_region_replays_a_faded_component_without_running_it() {
     let runs = Cell::new(0);
@@ -106,7 +135,9 @@ fn a_settled_region_replays_a_faded_component_without_running_it() {
             tile(ui, false);
         });
     };
-    let ran = settled_shapes(&mut Frames::new(), |ui| tile(ui, false));
+    let ran = colors(&settled_shapes(&mut Frames::new(), |ui| {
+        tile(ui, false);
+    }));
     let mut frames = Frames::new();
     frames.frame(vec![], scene);
     assert!(runs.get() > 0, "the first frame runs the region");
@@ -115,7 +146,7 @@ fn a_settled_region_replays_a_faded_component_without_running_it() {
         runs.set(0);
         let shapes = frames.frame_shapes(scene);
         assert_eq!(runs.get(), 0, "settled frame {frame} ran the region");
-        assert_eq!(alphas(&shapes), alphas(&ran), "settled frame {frame} paints the faded shapes a run paints");
+        assert_eq!(colors(&shapes), ran, "settled frame {frame} paints the veiled colours a run paints");
     }
 }
 

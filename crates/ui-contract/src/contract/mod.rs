@@ -304,9 +304,12 @@ pub enum DisabledLook {
     /// `Opacity::DISABLED`, each keeping its hue. Controls whose look is chrome (buttons, fields, sliders, a gradient
     /// bar's stops) take it.
     States,
-    /// The component paints its enabled look at `Opacity::DISABLED`: its surface, its paint, its faces and
-    /// `paint_over`, not its focus ring. A component that shows data (a picture, a colour, a plot) takes it, so the
-    /// data dims with the rest. The children it shows are not inside the fade; each shows its own disabled look.
+    /// The component paints its enabled look, and step 13 lays one veil over it: a rect of the surface it sits on at
+    /// `1 - Opacity::DISABLED`, over its surface, its paint, its faces, the children it shows from `paint` and
+    /// `paint_over`, not its focus ring. Each colour under the veil shows mixed toward that surface by the disabled
+    /// share, and its parts do not show through each other. A component that shows data (a picture, a colour, a plot)
+    /// takes it, so the data dims with the rest. The children of its body are not under the veil; each shows its own
+    /// disabled look.
     Faded,
 }
 

@@ -9,14 +9,16 @@ use crate::style::{Flags, Ink, StateSet, StyleView};
 use craft_behavior::Input;
 use craft_theme::{State, StateMix};
 
-/// Step 12: a control with a reset value tells its label scope whether its value differs from it (10.2).
+/// Step 12: a control with a reset value tells its label scope whether its value differs from it, and the reset value
+/// as the control words it (10.2).
 pub(crate) fn register_reset<C: Component>(comp: &mut C, cx: &Cx<'_, C>) {
-    if matches!(C::INPUT, Input::Text | Input::Editor) {
+    if matches!(C::INPUT, Input::Editor) {
         return;
     }
     let Some(reset) = comp.bind().and_then(|bind| bind.reset_value().cloned()) else { return };
     let differs = cx.mixed || cx.shown.as_deref() != Some(&reset);
-    scope::register_reset(&cx.core.ctx, cx.core.id, differs);
+    let default = comp.word_value(&reset, cx);
+    scope::register_reset(&cx.core.ctx, cx.core.id, differs, default);
 }
 
 /// The eased hover, press and on values of a component, kept in its `Shown` record; a face shows its targets.
