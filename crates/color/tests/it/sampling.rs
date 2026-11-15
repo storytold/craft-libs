@@ -8,13 +8,13 @@ use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
 use craft_cms::convert::CmykConverter;
 use craft_color::ui::{
-    CaptureSource, ColorPicker, ColorPickerLayout, ColorSamplerPass, ColorSamplers, PickedColor, SamplerCache, SamplerReadouts, ScreenPick,
-    StillCapture,
+    CaptureResult, CaptureSource, ColorPicker, ColorPickerLayout, ColorSamplerPass, ColorSamplerTool, ColorSamplers, MAX_SAMPLERS, PickedColor,
+    SamplerCache, SamplerEvent, SamplerReadouts, ScreenColorPicker, ScreenPick, ScreenPickerWords, StillCapture,
 };
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, ToolFixture, trial};
-use egui::{Context, Rect, vec2};
+use egui::{Context, Modifiers, Pos2, Rect, vec2};
 
 const SIZE: [u32; 2] = [300, 200];
 
@@ -42,17 +42,221 @@ fn readouts_are_cached_per_document_and_converter() {
 }
 
 fn sampler_tool(points: &[[f64; 2]]) -> ColorSamplerPass<'static> {
-    let samplers: &'static mut ColorSamplers = Box::leak(Box::new(ColorSamplers::new()));
+    let mut samplers = ColorSamplers::new();
     for p in points {
         samplers.add(*p, SIZE).unwrap();
     }
-    ColorSamplerPass::new(samplers, SIZE)
+    // The fixture owns the pass for the whole trial, so the tool and the points live as long.
+    let samplers: &'static ColorSamplers = Box::leak(Box::new(samplers));
+    let tool: &'static mut ColorSamplerTool = Box::leak(Box::new(ColorSamplerTool::new()));
+    tool.pass(samplers, SIZE)
+}
+
+/// The document's origin at the room's top left, one pixel per point: a view the canvas shows as given, since it
+/// keeps the fixture's document over the whole room.
+fn sampler_view(rect: Rect) -> CanvasView {
+    CanvasView::new(rect, Point::new(f64::from(rect.width()) / 2.0, f64::from(rect.height()) / 2.0), 1.0)
+}
+
+fn sampler_fixture(points: &[[f64; 2]]) -> ToolFixture<ColorSamplerPass<'static>> {
+    let mut tool = ToolFixture::with_view("Color Sampler", sampler_tool(points), sampler_view, |_, _| {});
+    tool.fixture().room(vec2(800.0, 600.0));
+    tool.fixture().settle();
+    tool
+}
+
+/// The screen position of document point `doc` under `sampler_view`.
+fn doc_to_screen(tool: &ToolFixture<ColorSamplerPass<'static>>, doc: [f64; 2]) -> Pos2 {
+    tool.canvas().rect.min + vec2(doc[0] as f32, doc[1] as f32)
+}
+
+fn events(tool: &ToolFixture<ColorSamplerPass<'static>>) -> Vec<SamplerEvent> {
+    tool.tool_mut().take_events()
+}
+
+#[trial]
+fn a_new_point_lands_at_the_release_and_a_dragged_point_moves_on_release() {
+    // A new point: nothing at the press, an Add at the release; off the canvas or on Escape, nothing.
+    let mut tool = sampler_fixture(&[]);
+    let at = doc_to_screen(&tool, [100.5, 50.5]);
+    tool.press_at(at);
+    assert!(events(&tool).is_empty(), "a press only starts the carry");
+    tool.release_at(at);
+    assert_eq!(events(&tool), [SamplerEvent::Add { at: [100.0, 50.0] }]);
+    let outside = doc_to_screen(&tool, [320.5, 50.5]);
+    tool.press_at(at).release_at(outside);
+    assert!(events(&tool).is_empty(), "released off the canvas places none");
+    tool.press_at(at).escape().release_at(at);
+    assert!(events(&tool).is_empty(), "Escape drops the carry");
+
+    // A point: a click 2 px off moves it to the release pixel; dropped off the canvas it is removed.
+    let mut tool = sampler_fixture(&[[100.0, 50.0]]);
+    let on = doc_to_screen(&tool, [100.5, 50.5]);
+    let near = doc_to_screen(&tool, [102.5, 50.5]);
+    tool.press_at(on).release_at(on);
+    assert!(events(&tool).is_empty(), "a click on the point's own pixel moves nothing");
+    tool.press_at(near).release_at(near);
+    assert_eq!(events(&tool), [SamplerEvent::Move { index: 0, to: [102.0, 50.0] }]);
+    let outside = doc_to_screen(&tool, [320.5, 50.5]);
+    tool.drag_from(on, outside - on);
+    assert_eq!(events(&tool), [SamplerEvent::Remove { index: 0 }], "a point dropped off the canvas is removed");
+
+    // Alt: a click on a point removes it, off a point it adds.
+    tool.fixture().hold(Modifiers::ALT);
+    tool.press_at(on).release_at(on);
+    assert_eq!(events(&tool), [SamplerEvent::Remove { index: 0 }]);
+    let empty = doc_to_screen(&tool, [200.5, 150.5]);
+    tool.press_at(empty).release_at(empty);
+    assert_eq!(events(&tool), [SamplerEvent::Add { at: [200.0, 150.0] }]);
+    tool.fixture().hold(Modifiers::NONE);
+
+    // At the limit nothing is carried and one notice is set.
+    let full: Vec<[f64; 2]> = (0..MAX_SAMPLERS).map(|i| [10.0 + 20.0 * i as f64, 10.0]).collect();
+    let mut tool = sampler_fixture(&full);
+    let empty = doc_to_screen(&tool, [100.5, 150.5]);
+    tool.press_at(empty).release_at(empty);
+    assert!(events(&tool).is_empty(), "no point is placed at the limit");
+    assert!(tool.tool_mut().take_error().is_some(), "the refused press sets a notice");
+    assert!(tool.tool_mut().take_error().is_none(), "once");
+}
+
+/// A capture that has no answer until `ready` is set.
+struct Late {
+    ready: Arc<std::sync::atomic::AtomicBool>,
+    result: std::sync::Mutex<Option<CaptureResult>>,
+}
+
+impl CaptureSource for Late {
+    fn poll(&self) -> Option<CaptureResult> {
+        if self.ready.load(std::sync::atomic::Ordering::Relaxed) { self.result.lock().ok()?.take() } else { None }
+    }
+}
+
+const PICKED: Srgba = Srgba { r: 0.25, g: 0.5, b: 0.75, a: 1.0 };
+
+#[trial]
+fn a_screen_pick_cancelled_while_queued_or_beaten_by_a_cancel_or_a_target_change_answers_nothing() {
+    let ctx = Context::default();
+    let still = || -> Box<dyn CaptureSource> { Box::new(StillCapture::color(PICKED)) };
+
+    // Cancelled while queued: no capture starts and the next pick is not poisoned.
+    let mut pick = ScreenPick::new();
+    let started = std::cell::Cell::new(false);
+    pick.start("a");
+    pick.cancel();
+    pick.tick_with(&ctx, 1, &|| {
+        started.set(true);
+        still()
+    });
+    assert!(!started.get() && !pick.busy(), "a cancelled request starts nothing");
+    pick.start("b");
+    pick.tick_with(&ctx, 1, &still);
+    assert_eq!(pick.take("b"), Some(PICKED), "the next pick answers");
+
+    // A capture that is ready in the pass the pick is cancelled loses to the cancel.
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let late = |ready: &Arc<std::sync::atomic::AtomicBool>| -> Box<dyn CaptureSource> {
+        Box::new(Late { ready: ready.clone(), result: std::sync::Mutex::new(Some(Ok(craft_platform::screen::Capture::Color([0.25, 0.5, 0.75])))) })
+    };
+    let mut pick = ScreenPick::new();
+    pick.start("a");
+    pick.tick_with(&ctx, 1, &|| late(&ready));
+    assert!(pick.busy());
+    ready.store(true, std::sync::atomic::Ordering::Relaxed);
+    pick.cancel();
+    pick.tick_with(&ctx, 1, &|| late(&ready));
+    assert!(!pick.busy() && pick.take("a").is_none(), "the cancel wins over a finished capture");
+
+    // A target change discards the pending result.
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut pick = ScreenPick::new();
+    pick.start("a");
+    pick.tick_with(&ctx, 1, &|| late(&ready));
+    ready.store(true, std::sync::atomic::Ordering::Relaxed);
+    pick.tick_with(&ctx, 2, &|| late(&ready));
+    assert!(!pick.busy() && pick.take("a").is_none(), "another target discards the answer");
+
+    // Only the owner takes a finished colour.
+    let mut pick = ScreenPick::new();
+    pick.start("a");
+    pick.tick_with(&ctx, 1, &still);
+    assert_eq!(pick.take("b"), None, "another owner takes nothing");
+    assert_eq!(pick.take("a"), Some(PICKED));
+}
+
+#[trial]
+fn an_invalid_capture_ends_the_pick_with_a_status() {
+    let ctx = Context::default();
+    let words = ScreenPickerWords::default();
+    let images = |images: Vec<craft_platform::screen::ScreenImage>| -> Box<dyn CaptureSource> {
+        Box::new(StillCapture::new(Ok(craft_platform::screen::Capture::Images(images))))
+    };
+
+    // A pixel buffer of the wrong length.
+    let mut broken = monitor([0, 0], [4, 4], 1);
+    broken.rgba = Arc::new(vec![0; 7]);
+    let mut pick = ScreenPick::new();
+    pick.start("a");
+    pick.tick_with(&ctx, 1, &|| images(vec![broken.clone()]));
+    assert!(!pick.busy() && pick.take("a").is_none(), "a malformed image ends the pick without a colour");
+    assert!(pick.take_status(&words).is_some(), "and says why");
+    assert!(pick.take_status(&words).is_none(), "once");
+
+    // A valid profile of another colour space: a CMYK monitor profile is not an RGB profile.
+    let mut odd = monitor([0, 0], [4, 4], 1);
+    odd.icc_profile = Some(craft_cms::synth::coated_cmyk().expect("the synthetic CMYK profile").to_bytes());
+    let mut pick = ScreenPick::new();
+    pick.start("a");
+    pick.tick_with(&ctx, 1, &|| images(vec![odd.clone()]));
+    assert!(!pick.busy() && pick.take("a").is_none());
+    assert!(pick.take_status(&words).is_some(), "a profile of another colour space says why");
+}
+
+/// A fixture showing the capture windows of a pick that started over one 200 x 150 monitor.
+fn capture_fixture() -> (Fixture, Rc<RefCell<ScreenPick>>) {
+    let pick = Rc::new(RefCell::new(ScreenPick::new()));
+    pick.borrow_mut().start("a");
+    let shared = pick.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let mut pick = shared.borrow_mut();
+        let image = monitor([0, 0], [200, 150], 1);
+        pick.tick_with(ui.ctx(), 1, &move || Box::new(StillCapture::new(Ok(craft_platform::screen::Capture::Images(vec![image.clone()])))));
+        ScreenColorPicker::new(&mut pick, "Test").show(ui);
+    });
+    fixture.room(vec2(300.0, 200.0));
+    fixture.settle();
+    assert!(pick.borrow().busy(), "a valid capture keeps the pick running while its windows show");
+    (fixture, pick)
+}
+
+#[trial]
+fn every_way_out_of_the_capture_windows_ends_the_pick() {
+    use craft_ui::testing::pointer;
+    let words = ScreenPickerWords::default();
+
+    let (mut fixture, pick) = capture_fixture();
+    fixture.key(egui::Key::Escape, Modifiers::NONE);
+    assert!(!pick.borrow().busy(), "Escape ends the pick");
+    assert!(pick.borrow_mut().take("a").is_none() && pick.borrow_mut().take_status(&words).is_none(), "quietly");
+
+    let (mut fixture, pick) = capture_fixture();
+    let at = Pos2::new(50.0, 40.0);
+    fixture.frame(vec![pointer::moved(at)]);
+    fixture.frame(vec![pointer::secondary(at, true)]);
+    fixture.frame(vec![pointer::secondary(at, false)]);
+    fixture.settle();
+    assert!(!pick.borrow().busy(), "a right-click ends the pick");
+    assert!(pick.borrow_mut().take("a").is_none() && pick.borrow_mut().take_status(&words).is_none(), "quietly");
+
+    let (mut fixture, pick) = capture_fixture();
+    fixture.click_at(at);
+    assert!(!pick.borrow().busy(), "a click ends the pick");
+    assert!(pick.borrow_mut().take("a").is_some(), "with the colour under it");
 }
 
 #[trial]
 fn the_sampler_tool_meets_the_tool_rules() {
-    let view = |rect: Rect| CanvasView::new(rect, Point::new(f64::from(SIZE[0]) / 2.0, f64::from(SIZE[1]) / 2.0), 1.0);
-    let mut tool = ToolFixture::with_view("Color Sampler", sampler_tool(&[]), view, |_, _| {});
+    let mut tool = ToolFixture::with_view("Color Sampler", sampler_tool(&[]), sampler_view, |_, _| {});
     tool.check();
 }
 

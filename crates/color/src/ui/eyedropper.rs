@@ -23,6 +23,8 @@ use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, EditResponse, Entry, Outcome, Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::display::{Divider, Elide, Shade, Text};
 use craft_ui::form::Field;
+
+use super::SampleSizeSelect;
 use craft_ui::pickers::Select;
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Env, Label};
@@ -229,10 +231,8 @@ impl<'a> EyedropperBar<'a> {
         let EyedropperBar { options } = self;
         let env = Env::of(ui);
         let words = env.words::<EyedropperWords>();
-        let sizes: Vec<Entry<SampleSize>> = SampleSize::ALL.iter().map(|size| Entry::new(*size, size.label(&words))).collect();
         let sources: Vec<Entry<SampleSource>> = SampleSource::ALL.iter().map(|source| Entry::new(*source, source.label(&words))).collect();
-        let size =
-            Field::new(words.sample_size.clone()).show(ui, |ui, _| Select::new(words.size.clone(), Bind::bound(&mut options.size), &sizes).show(ui));
+        let size = SampleSizeSelect::new(Bind::bound(&mut options.size)).show(ui);
         let source =
             Field::new(words.sample.clone()).show(ui, |ui, _| Select::new(words.source.clone(), Bind::bound(&mut options.source), &sources).show(ui));
         let ring = Checkbox::new(Bind::bound(&mut options.show_ring)).label(words.show_ring.clone()).show(ui);
@@ -241,9 +241,9 @@ impl<'a> EyedropperBar<'a> {
         // The hint gives way first where the bar is short, so the selects keep their share.
         Text::new(Label::from(words.hint.fill(&[("key", key)]))).shade(Shade::Faint).elide(Elide::End).show(ui);
         // A parent's sizing pass places a field without running its body: that run reports no edit.
-        let (size_response, source_response) = (size.response().clone(), source.response().clone());
+        let source_response = source.response().clone();
         EyedropperBarOutput {
-            size: size.inner.unwrap_or_else(|| EditResponse::lifted(size_response, EditEvents::new(), None)),
+            size,
             source: source.inner.unwrap_or_else(|| EditResponse::lifted(source_response, EditEvents::new(), None)),
             ring,
         }
@@ -261,7 +261,7 @@ pub struct EyedropperPick {
 }
 
 /// The pipette icon's tip, in the icon's own 24-unit box.
-const HOTSPOT: [f32; 2] = [2.0, 22.0];
+pub(super) const HOTSPOT: [f32; 2] = [2.0, 22.0];
 /// The ring's outer radius in points.
 const RING_OUTER_RADIUS: f32 = 105.0;
 /// The width of each of the ring's two colour bands in points.
@@ -369,7 +369,10 @@ impl CanvasTool for EyedropperTool<'_> {
     }
 
     /// The pipette with its tip on the sampled pixel (the icon's lower left, in its 24-unit box).
-    fn cursor(&self, _: &ToolContext<'_>) -> Cursor {
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        if cx.precise() {
+            return PaintedCursor::Crosshair.into();
+        }
         PaintedCursor::tool(IconId::new("eyedropper"), Vec2::from(HOTSPOT), None).into()
     }
 

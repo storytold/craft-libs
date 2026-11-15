@@ -7,15 +7,21 @@
 //! tabs ([`PaintChip::pattern_editor`], [`PaintChip::picture_editor`]: craft-draw's
 //! `PatternFillEditor` and `PictureFillEditor`).
 
+use std::collections::HashMap;
+
 use craft_behavior::Mixed;
 use craft_behavior::{Axis, EditEvent, EditEvents, Metrics, PartKey};
+use craft_cms::convert::CmykConverter;
 use craft_theme::Srgba;
-use craft_ui::choice::{ChoiceWords, Segmented, Swatch};
+use craft_ui::buttons::Button;
+use craft_ui::choice::{ChoiceWords, Segmented, Swatch, SwatchFace};
 use craft_ui::contract::{
     Access, Activation, Bind, Common, Component, Cx, DisabledLook, Edit as _, EditResponse, Entry, Outcome, Overlay, OverlayUi, Overlays as _,
-    PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, WordSetCx as _,
+    PaintUi, PartsCx, Pointer as _, PopupKind, Props as _, Remember as _, Role, Show as _, ShowContainer as _, WordSetCx as _,
 };
-use craft_ui::patterns::presets::PresetState;
+use craft_ui::display::{Shade, Text};
+use craft_ui::layout_components::Row;
+use craft_ui::patterns::presets::{DefaultOpen, PresetBrowser, PresetEvent, PresetState, ThumbInfo};
 use craft_ui::primitives::textures::CachedTexture;
 use craft_ui::primitives::{ContentPainterCx, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
@@ -24,8 +30,8 @@ use craft_ui::style::{ComponentStyle, DataColor, FocusLook, StyleColor, StyleCx}
 use egui::{Color32, Pos2, Rect, Response, Ui, pos2, vec2};
 
 use super::popover::compact_picker;
-use super::{PickedColor, ScreenPickGesture, SwatchKey};
-use crate::palette::SwatchGroup;
+use super::{PickedColor, ScreenPickGesture, SwatchKey, SwatchPalette, SwatchesWords, swatch_rows};
+use crate::palette::{SwatchColor, SwatchGroup};
 
 mod paint_list;
 #[cfg(feature = "screen-testing")]
@@ -68,6 +74,10 @@ craft_ui::words! {
         add: "paintList.add" = "Add";
         /// A row's button: `{name}` the paint it removes.
         remove: template "paintList.remove" = "Remove {name}";
+        /// The popover's button that opens the full Color Picker.
+        color_picker: "paint.colorPicker" = "Color Picker…";
+        recent: "paint.recent" = "Recently Used Colors";
+        swatches: "paint.swatches" = "Swatches";
     }
 }
 
@@ -203,6 +213,10 @@ struct Shown {
     gradient: Option<GradientPreview>,
     pattern: Option<ImagePreview>,
     picture: Option<ImagePreview>,
+    /// A recent colour or a swatch was picked: its colour, before the paint's alpha is applied.
+    picked: Option<Srgba>,
+    /// The Color Picker… button was pressed.
+    full_picker: bool,
 }
 
 /// What a paint chip reports.
@@ -263,9 +277,12 @@ pub struct PaintChip<'a> {
     screen_pick: Option<ScreenPickGesture>,
     recent: &'a [Srgba],
     swatches: Option<(&'a [SwatchGroup], Bind<'a, PresetState<SwatchKey>>)>,
+    cmyk: Option<&'a CmykConverter>,
     /// A Color Picker… button at the end of the kind row opens the full picker.
     #[prop]
     full_picker: bool,
+    /// The request of the Color Picker… button, for this pass.
+    pick_color: Option<ColorRequest>,
 }
 
 impl<'a> PaintChip<'a> {
@@ -284,10 +301,15 @@ impl<'a> PaintChip<'a> {
             screen_pick: None,
             recent: &[],
             swatches: None,
+            cmyk: None,
             full_picker: false,
+            pick_color: None,
         }
         .label(label)
     }
+
+    /// The [`ColorRequest::key`] of the full picker the Color Picker… button asks for.
+    pub const COLOR_KEY: &'static str = "paintChip";
 
     /// The recent colours the popover shows beside the picker.
     #[must_use]
@@ -301,6 +323,14 @@ impl<'a> PaintChip<'a> {
     #[must_use]
     pub fn swatches(mut self, groups: &'a [SwatchGroup], state: Bind<'a, PresetState<SwatchKey>>) -> Self {
         self.swatches = Some((groups, state));
+        self
+    }
+
+    /// The document's CMYK converter, which draws CMYK swatches and gives their colours when picked; without it they
+    /// use the built-in coated CMYK, as in the Swatches panel.
+    #[must_use]
+    pub fn cmyk(mut self, converter: &'a CmykConverter) -> Self {
+        self.cmyk = Some(converter);
         self
     }
 
@@ -410,7 +440,7 @@ impl Component for PaintChip<'_> {
     }
 
     fn parts(&mut self, rect: egui::Rect, cx: &mut PartsCx<'_, Self>) {
-        let _ = cx.part(WELL, rect);
+        let _ = cx.part(WELL, rect).toggles("picker");
     }
 
     fn bind(&mut self) -> Option<craft_ui::contract::BindMut<'_, Paint>> {
@@ -443,12 +473,23 @@ impl Component for PaintChip<'_> {
         let solid = cx.memory::<LastSolid>().0.unwrap_or(self.fallback);
         let current = FillKind::of(&paint);
         let sampled = self.sampled;
+        let swatch_words = cx.words::<SwatchesWords>();
+        let recent_cells: Vec<(Label, Srgba)> = self.recent.iter().map(|color| (Label::from(color.to_hex()), *color)).collect();
+        let full_picker = self.full_picker;
+        let cmyk = self.cmyk.unwrap_or_else(|| CmykConverter::coated());
+        let solid_now = if let Paint::Solid(color) = &paint { Some(*color) } else { None };
         let entries: Vec<Entry<FillKind>> = self.kinds().into_iter().map(|kind| Entry::new(kind, kind_label(&words, kind))).collect();
-        let (gradient, pattern, picture) = (&mut self.gradient, &mut self.pattern, &mut self.picture);
+        let (gradient, pattern, picture, swatches) = (&mut self.gradient, &mut self.pattern, &mut self.picture, &mut self.swatches);
         let shown = ui.show(popup, Overlay::popover(), |ui, _| {
             let mut shown = Shown::default();
             let mut kind = current;
-            Segmented::new(name.clone(), Bind::bound(&mut kind), &entries).show(ui);
+            Row::new().show(ui, |ui, _| {
+                Segmented::new(name.clone(), Bind::bound(&mut kind), &entries).show(ui);
+                if full_picker {
+                    let button = Button::new(words.color_picker.clone()).show(ui);
+                    shown.full_picker = craft_ui::contract::clicked(&button);
+                }
+            });
             shown.kind = (kind != current).then_some(kind);
             match &paint {
                 Paint::None => {}
@@ -456,6 +497,36 @@ impl Component for PaintChip<'_> {
                     let picked = compact_picker(name.clone(), Bind::given(PickedColor::rgb(*color)), sampled).alpha(true).eyedropper(true).show(ui);
                     shown.edit = picked.events;
                     shown.screen_pick = picked.screen_pick;
+                    if !recent_cells.is_empty() {
+                        Text::new(words.recent.clone()).shade(Shade::Faint).show(ui);
+                        let mut chosen = *color;
+                        let recent = SwatchPalette::new(words.recent.clone(), Bind::bound(&mut chosen), &recent_cells).show(ui);
+                        shown.picked = recent.edit.as_ref().and_then(|edit| edit.value()).copied();
+                    }
+                    if let Some((groups, state)) = swatches.as_mut() {
+                        let groups: &[SwatchGroup] = *groups;
+                        let rows = swatch_rows(groups, &swatch_words);
+                        let colors: HashMap<&str, &SwatchColor> = groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();
+                        let out = PresetBrowser::new(words.swatches.clone(), state.reborrowed(), &rows)
+                            .toolbar(false)
+                            .row_menu(false)
+                            .default_open(DefaultOpen::None)
+                            .thumb(|painter: &ContentPainterCx<'_>, rect: Rect, info: ThumbInfo<'_, SwatchKey>| {
+                                if let SwatchKey::Swatch(name) = info.key
+                                    && let Some(color) = colors.get(name.as_str())
+                                {
+                                    SwatchFace::new(color.to_srgb(cmyk)).selected(info.selected).paint(painter, rect);
+                                }
+                            })
+                            .show(ui);
+                        for event in out.events {
+                            if let PresetEvent::Select { key: SwatchKey::Swatch(name), .. } = event
+                                && let Some(color) = colors.get(name.as_str())
+                            {
+                                shown.picked = Some(color.to_srgb(cmyk));
+                            }
+                        }
+                    }
                 }
                 Paint::Gradient(_) => shown.gradient = gradient.as_mut().and_then(|(_, editor)| editor.show(ui)),
                 Paint::Pattern(_) => shown.pattern = pattern.as_mut().and_then(|(_, editor)| editor.show(ui)),
@@ -465,9 +536,16 @@ impl Component for PaintChip<'_> {
         });
         let Some(shown) = shown else { return };
         self.screen_pick = shown.screen_pick;
+        if shown.full_picker {
+            self.pick_color = Some(ColorRequest::new(Self::COLOR_KEY, solid_now).title(name.clone()));
+            cx.popup("picker").close(cx);
+        }
         if let Some(kind) = shown.kind {
             let next = self.switched(kind, solid);
             cx.set(next);
+        } else if let (Some(rgb), Some(current)) = (shown.picked, solid_now) {
+            // A recent colour or a swatch keeps the paint's alpha.
+            cx.set(Paint::Solid(Srgba { a: current.a, ..rgb }));
         } else {
             for event in &shown.edit {
                 forward(cx, event);
@@ -534,7 +612,7 @@ impl Component for PaintChip<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> PaintChipOutput {
-        PaintChipOutput { edit: cx.edit_response(), screen_pick: self.screen_pick, pick_color: None }
+        PaintChipOutput { edit: cx.edit_response(), screen_pick: self.screen_pick, pick_color: self.pick_color }
     }
 }
 

@@ -1,6 +1,6 @@
 //! Stories of `ColorSamplerMarks` and `SamplerOptions`.
 
-use super::{ColorSamplerMarks, ColorSamplers, SamplerCache, SamplerOptions, SamplerReadouts};
+use super::{ColorSamplerMarks, ColorSamplers, SamplerCache, SamplerCarry, SamplerOptions, SamplerReadouts};
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::Point;
 use craft_theme::{Hsb, Srgba};
@@ -76,10 +76,29 @@ fn sample_points(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     shown.inner.map(StoryOutput::from).unwrap_or_default().readout(lines.join("\n"))
 }
 
-#[story(SamplerOptions, covers = [], drive = Drive::Never)]
-fn options(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    let shown = Bar::new("Color sampler options", BarKind::Options)
-        .show(ui, |ui, _| SamplerOptions::new(3, craft_ui::contract::Bind::given(crate::ui::SampleSize::Point)).show(ui));
+/// Four points and a fifth being carried: it draws at the pointer under the next number.
+#[story(ColorSamplerMarks<'static>, covers = [], drive = Drive::Never)]
+fn sample_points_carrying_a_new_point(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let mut samplers = ColorSamplers::new();
+    for at in [[40.0, 30.0], [120.0, 75.0], [200.0, 50.0], [80.0, 120.0]] {
+        let _ = samplers.add(at, SIZE);
+    }
+    let room = stage_fitting(ui, |_| SIZE[1] as f32);
+    let center = Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0);
+    let view = CanvasView::new(room, center, 1.0);
+    let picture = picture();
+    let carried = SamplerCarry { index: None, at: [160.0, 110.0] };
+    let shown = Canvas::new("Document").view(view).show_at(ui, room, |ui, body| {
+        show_document(ui, body.rect, &picture);
+        ColorSamplerMarks::new("Color samplers", &samplers).carried(carried).show_at(ui, body.rect)
+    });
+    shown.inner.map(StoryOutput::from).unwrap_or_default()
+}
+
+#[story(SamplerOptions<'static>, covers = [], drive = Drive::Never)]
+fn options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let size = data.value("size", crate::ui::SampleSize::Point);
+    let shown = Bar::new("Color sampler options", BarKind::Options).show(ui, |ui, _| SamplerOptions::new(3, craft_ui::contract::Bind::bound(size)).show(ui));
     match shown.inner {
         Some(output) => StoryOutput::from(output),
         None => StoryOutput::from(shown.output),

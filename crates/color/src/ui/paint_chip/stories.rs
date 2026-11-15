@@ -6,9 +6,13 @@ use craft_theme::Srgba;
 use craft_ui::contract::Role;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _, Validity};
 use craft_ui::layout_components::Stack;
+use craft_ui::patterns::presets::PresetState;
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::Ui;
+
+use crate::palette::{SwatchColor, SwatchEntry, SwatchGroup};
+use crate::ui::SwatchKey;
 
 /// Opens the popover with a click.
 fn open_popover(fixture: &mut Fixture) {
@@ -63,6 +67,19 @@ fn paint_chip_mixed(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PaintChip<'static>, covers = [Open], drive = Drive::Custom(open_popover))]
 fn paint_chip_open(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     chip(ui, data, Paint::Solid(BLUE))
+}
+
+/// The Solid popover with the recent colours, two swatch folders and the Color Picker… button.
+#[story(PaintChip<'static>, covers = [], drive = Drive::Custom(open_popover))]
+fn paint_chip_open_with_recents_and_swatches(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entry = |name: &str, rgb: [f32; 3]| SwatchEntry::new(name, SwatchColor::Rgb(rgb));
+    let groups = vec![
+        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red", [1.0, 0.0, 0.0]), entry("Green", [0.0, 0.7, 0.2]), entry("Blue", [0.1, 0.2, 0.9])] },
+        SwatchGroup { name: "Pastels".to_owned(), entries: vec![entry("Rose", [1.0, 0.8, 0.85]), entry("Mint", [0.75, 1.0, 0.85])] },
+    ];
+    let recent = [BLUE, Srgba::rgb(0.9, 0.5, 0.1), Srgba::rgb(0.1, 0.6, 0.3)];
+    let (held, folders) = data.value("state", (Paint::Solid(BLUE), PresetState::<SwatchKey>::new()));
+    PaintChip::new("Fill", Bind::bound(held), BLUE).recent(&recent).swatches(&groups, Bind::bound(folders)).full_picker(true).show(ui).into()
 }
 
 #[story(PaintChip<'static>, covers = [], drive = Drive::Never)]
