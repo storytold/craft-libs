@@ -113,7 +113,14 @@ pub fn images(jpeg: &[u8]) -> Vec<MpfImage> {
     };
     // offsets count from the byte-order field, which follows the signature
     let Some(base) = segs.iter().find(|s| jpeg.get(s.1..s.2) == Some(payload)).map(|s| s.1 + SIGNATURE.len()) else { return Vec::new() };
-    let Some(tiff) = payload.get(SIGNATURE.len()..).and_then(|t| Tiff::parse(t).ok()) else { return Vec::new() };
+    let Some(index) = payload.get(SIGNATURE.len()..) else { return Vec::new() };
+    images_from_index(index, base)
+}
+
+/// Read an already located MPF TIFF index. `base` is the index's offset in the containing file.
+/// Entries are bounded to [`MAX_ENTRIES`] and returned without reading image payloads.
+pub fn images_from_index(index: &[u8], base: usize) -> Vec<MpfImage> {
+    let Some(tiff) = Tiff::parse(index).ok() else { return Vec::new() };
     let Some(list) = tiff.ifds.first().and_then(|i| i.bytes(MP_ENTRY)) else { return Vec::new() };
     let u32_at = |rec: &[u8], at: usize| rec.get(at..at + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map(|s| tiff.order.u32(s) as usize);
     let mut out = Vec::new();
