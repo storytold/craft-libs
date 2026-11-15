@@ -92,37 +92,6 @@ pub fn encode_avif_with_speed(img: &Image, quality: u8, speed: u8) -> Result<Vec
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-    #[test]
-    fn sdr_avif_keeps_exif_metadata() {
-        use crate::{ChannelLayout, Image};
-
-        let exif = b"II*\0shared-avif-exif".to_vec();
-        let mut image = Image::from_u8(2, 1, ChannelLayout::Rgb, vec![20, 40, 60, 80, 100, 120]).unwrap();
-        image.meta.exif = Some(exif.clone());
-
-        let avif = encode_avif_with_speed(&image, 80, 8).unwrap();
-        assert!(avif.windows(exif.len()).any(|window| window == exif.as_slice()));
-    }
-
-    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-    #[test]
-    fn hlg_encode_matches_the_reference_display_mapping() {
-        let white = hlg_signal([1.0; 3]);
-        assert!(white.iter().all(|&value| (value - 0.75).abs() < 0.005), "{white:?}");
-
-        let peak = hlg_signal([crate::cicp::HLG_PEAK_NITS / HDR_REFERENCE_WHITE_NITS; 3]);
-        assert!(peak.iter().all(|&value| (value - 1.0).abs() < 0.005), "{peak:?}");
-
-        let invalid = hlg_signal([f32::NAN, -1.0, f32::INFINITY]);
-        assert_eq!(invalid, [0.0; 3]);
-    }
-}
-
 /// Encode linear BT.2020 HDR `rgb` (`width * height * 3` floats, `1.0` = `203` cd/m^2) as
 /// 10-bit 4:4:4 BT.2020 PQ or HLG AVIF.
 pub fn encode_avif_hdr(
@@ -246,5 +215,49 @@ pub fn encode_avif_hdr(
     {
         let _ = (width, height, rgb, quality, speed, exif, transfer);
         Err(CodecError::unsupported(Format::Avif, "AVIF encoding is not available in this build"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn sdr_avif_keeps_exif_metadata() {
+        use crate::{ChannelLayout, Image};
+
+        let exif = b"II*\0shared-avif-exif".to_vec();
+        let mut image = Image::from_u8(2, 1, ChannelLayout::Rgb, vec![20, 40, 60, 80, 100, 120]).unwrap();
+        image.meta.exif = Some(exif.clone());
+
+        let avif = super::encode_avif_with_speed(&image, 80, 8).unwrap();
+        assert!(avif.windows(exif.len()).any(|window| window == exif.as_slice()));
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn hlg_mapping_matches_reference_white_and_peak() {
+        let white = super::hlg_signal([1.0; 3]);
+        assert!(white.iter().all(|&value| (value - 0.75).abs() < 0.005), "{white:?}");
+
+        let peak = super::hlg_signal([crate::cicp::HLG_PEAK_NITS / super::HDR_REFERENCE_WHITE_NITS; 3]);
+        assert!(peak.iter().all(|&value| (value - 1.0).abs() < 0.005), "{peak:?}");
+
+        let invalid = super::hlg_signal([f32::NAN, -1.0, f32::INFINITY]);
+        assert_eq!(invalid, [0.0; 3]);
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn hlg_encoded_output_decodes_to_reference_white_and_peak() {
+        let decode_gray = |linear: f32| {
+            let avif = super::encode_avif_hdr(1, 1, &[linear; 3], 100, 10, None, super::HdrTransfer::Hlg).unwrap();
+            image::load_from_memory_with_format(&avif, image::ImageFormat::Avif).unwrap().to_rgb32f().get_pixel(0, 0)[0]
+        };
+
+        let white = decode_gray(1.0);
+        assert!((white - 0.75).abs() < 0.02, "decoded HLG SDR white: {white}");
+
+        let peak = decode_gray(crate::cicp::HLG_PEAK_NITS / super::HDR_REFERENCE_WHITE_NITS);
+        assert!((peak - 1.0).abs() < 0.02, "decoded HLG peak: {peak}");
     }
 }
