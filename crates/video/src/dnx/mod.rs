@@ -26,6 +26,39 @@ pub use encode::{Encoder, EncoderConfig};
 pub use header::{FieldCode, FrameHeader};
 pub use tables::ri_frame_size;
 
+/// Check decoded storage for all coded units and the output frame against a caller limit.
+/// Arithmetic is checked before allocation; the caller chooses its own memory policy.
+pub fn check_frame_budget(h: &FrameHeader, max_bytes: usize) -> Result<()> {
+    const TOO_BIG: Error = Error::Invalid("frame dimensions exceed the decoder memory limit");
+    let field_coded = h.interlaced && !h.frame_encoding;
+    let nw = h.mb_width() as usize;
+    let (cw, ch) = match h.chroma {
+        ChromaFormat::Yuv422 => (8, 16),
+        ChromaFormat::Yuv420 => (8, 8),
+        ChromaFormat::Yuv444 => (16, 16),
+    };
+    let ns = h.mb_rows as usize;
+    let luma_rows = ns.checked_mul(16).ok_or(TOO_BIG)?;
+    let chroma_rows = ns.checked_mul(ch).ok_or(TOO_BIG)?;
+    let luma_plane = (nw * 16).checked_mul(luma_rows).ok_or(TOO_BIG)?;
+    let chroma_plane = (nw * cw).checked_mul(chroma_rows).ok_or(TOO_BIG)?;
+    let mut unit = chroma_plane.checked_mul(2).and_then(|n| n.checked_add(luma_plane)).ok_or(TOO_BIG)?;
+    if h.alpha {
+        unit = unit.checked_add(luma_plane).ok_or(TOO_BIG)?;
+    }
+    let units = if field_coded { 2 } else { 1 };
+    let out_h = (h.lines as usize).checked_mul(units).ok_or(TOO_BIG)?;
+    let luma = (h.width as usize).checked_mul(out_h).ok_or(TOO_BIG)?;
+    let chroma = (h.chroma.chroma_width(h.width) as usize).checked_mul(h.chroma.chroma_height(out_h as u32) as usize).ok_or(TOO_BIG)?;
+    let out =
+        chroma.checked_mul(2).and_then(|n| n.checked_add(luma)).and_then(|n| if h.alpha { n.checked_add(luma) } else { Some(n) }).ok_or(TOO_BIG)?;
+    let samples = unit.checked_mul(units).and_then(|n| n.checked_add(out)).ok_or(TOO_BIG)?;
+    if samples.checked_mul(std::mem::size_of::<u16>()).is_none_or(|n| n > max_bytes) {
+        return Err(TOO_BIG);
+    }
+    Ok(())
+}
+
 /// Interpretation of the `CLF` color flag for 4:4:4 streams.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ColorInterpretation {
@@ -249,3 +282,25 @@ impl Frame {
 }
 #[cfg(test)]
 mod ffmpeg_probe;
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    #[test]
+    fn caller_budget_covers_units_output_alpha_and_fields() {
+        let mut encoder = Encoder::new(Profile::R444, 64, 64).unwrap();
+        let bytes = encoder.encode(&Frame::new(64, 64, ChromaFormat::Yuv444, 10, false)).unwrap();
+        let mut h = probe(&bytes).unwrap();
+        assert!(check_frame_budget(&h, 1 << 20).is_ok());
+        assert!(check_frame_budget(&h, 1).is_err());
+        h.alpha = true;
+        h.interlaced = true;
+        h.frame_encoding = false;
+        assert!(check_frame_budget(&h, 1 << 20).is_ok());
+        assert!(check_frame_budget(&h, 1).is_err());
+        for chroma in [ChromaFormat::Yuv420, ChromaFormat::Yuv422, ChromaFormat::Yuv444] {
+            h.chroma = chroma;
+            assert!(check_frame_budget(&h, 1 << 20).is_ok());
+        }
+    }
+}
