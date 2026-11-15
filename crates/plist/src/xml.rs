@@ -386,6 +386,14 @@ pub fn parse_xml_with_limits(data: &[u8], limits: Limits) -> Result<Value, Forma
 
 /// Parse bounded XML using an explicit date-text representation policy.
 pub fn parse_xml_with_options(data: &[u8], limits: Limits, options: XmlOptions) -> Result<Value, FormatError> {
+    let max_tokens = limits.max_nodes.min(limits.max_objects).saturating_mul(8).saturating_add(8);
+    parse_xml_with_token_limit(data, limits, options, max_tokens)
+}
+
+/// Parse XML with an independent token allowance, without reducing the value allowance.
+/// This bounds token-heavy input (for example many CDATA chunks in one string).
+/// Zero tokens refuses nonempty XML. Existing convenience APIs retain their default budget.
+pub fn parse_xml_with_token_limit(data: &[u8], limits: Limits, options: XmlOptions, max_tokens: usize) -> Result<Value, FormatError> {
     if data.len() > limits.max_input_bytes {
         return Err(FormatError::TooLarge("input bytes".into()));
     }
@@ -406,7 +414,7 @@ pub fn parse_xml_with_options(data: &[u8], limits: Limits, options: XmlOptions) 
     // XML normalizes literal line endings before parsing; character references such as
     // &#13; must still decode to a carriage return afterwards.
     let text = if text.contains('\r') { text.replace("\r\n", "\n").replace('\r', "\n") } else { text };
-    let toks = tokenize(&text, limits.max_nodes.min(limits.max_objects).saturating_mul(8).saturating_add(8))?;
+    let toks = tokenize(&text, max_tokens)?;
     let mut x = Xml { toks, pos: 0, nodes: 0, limits, bytes_left: limits.max_expanded_bytes, options };
     x.skip_space();
     let wrapped = matches!(x.peek(), Some(Tok::Open(n)) if n == "plist");
@@ -431,6 +439,15 @@ pub fn parse_xml_with_options(data: &[u8], limits: Limits, options: XmlOptions) 
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
+    #[test]
+    fn explicit_token_budget_is_independent_of_value_budget() {
+        let limits = Limits { max_nodes: 100, max_objects: 100, ..Limits::default() };
+        let xml = b"<string><![CDATA[a]]><![CDATA[b]]></string>";
+        assert!(matches!(parse_xml_with_token_limit(xml, limits, XmlOptions::default(), 3), Err(FormatError::TooLarge(_))));
+        assert_eq!(parse_xml_with_token_limit(xml, limits, XmlOptions::default(), 4).unwrap(), Value::String("ab".into()));
+        assert!(matches!(parse_xml_with_token_limit(b"<true/>", limits, XmlOptions::default(), 0), Err(FormatError::TooLarge(_))));
+    }
+
     #[test]
     fn xml_has_one_complete_root_with_only_markup_space_around_values() {
         for invalid in [
