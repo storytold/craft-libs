@@ -1,6 +1,6 @@
 [package]
 name = "craft-captions"
-description = "Caption and subtitle files behind one neutral model: SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL and TTML/IMSC1/DFXP readers and writers with exact time, and CEA-608/708 coding"
+description = "Caption and subtitle files behind one neutral model: SubRip, WebVTT, Scenarist SCC, MacCaption MCC, EBU STL, ASS, TTML/IMSC1/DFXP and the legacy text formats (MicroDVD, MPL2, SubViewer, VPlayer, SAMI) readers and writers with exact time, and CEA-608/708 coding"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
