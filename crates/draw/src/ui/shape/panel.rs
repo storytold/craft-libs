@@ -29,11 +29,12 @@ pub enum ShapePaint {
     Stroke,
 }
 
-/// The app's decoration of a paint chip before it shows: the Gradient, Pattern and Picture editors.
-pub struct ChipSetup<'a>(Box<dyn for<'b> FnMut(ShapePaint, PaintChip<'b>) -> PaintChip<'b> + 'a>);
+/// The app's decoration of a paint chip (the Gradient, Pattern and Picture editors), which also shows it, so the
+/// decoration's borrows of app state last only for the call.
+pub struct ChipSetup<'a>(Box<dyn for<'b> FnMut(ShapePaint, PaintChip<'b>, &mut Ui) -> PaintChipOutput + 'a>);
 
 impl<'a> ChipSetup<'a> {
-    pub(super) fn new(setup: impl for<'b> FnMut(ShapePaint, PaintChip<'b>) -> PaintChip<'b> + 'a) -> Self {
+    pub(super) fn new(setup: impl for<'b> FnMut(ShapePaint, PaintChip<'b>, &mut Ui) -> PaintChipOutput + 'a) -> Self {
         ChipSetup(Box::new(setup))
     }
 }
@@ -113,8 +114,10 @@ impl<'a> ShapePanel<'a> {
         self
     }
 
-    /// Decorates each paint chip before it shows (its Gradient, Pattern and Picture editors).
-    pub fn chips(mut self, setup: impl for<'b> FnMut(ShapePaint, PaintChip<'b>) -> PaintChip<'b> + 'a) -> Self {
+    /// Decorates and shows each paint chip (its Gradient, Pattern and Picture editors): `setup` gets the chip the
+    /// bar built and the `Ui` to show it in, and returns the chip's output. Inside the call the chip may borrow the
+    /// app's own state.
+    pub fn chips(mut self, setup: impl for<'b> FnMut(ShapePaint, PaintChip<'b>, &mut Ui) -> PaintChipOutput + 'a) -> Self {
         self.chips = Some(ChipSetup::new(setup));
         self
     }
@@ -317,10 +320,10 @@ impl<'p, 'a> Cells<'p, 'a> {
         if let Some((_, color)) = self.sampled.filter(|(target, _)| *target == which) {
             chip = chip.sampled(color);
         }
-        if let Some(setup) = self.chips.as_mut() {
-            chip = (setup.0)(which, chip);
+        match self.chips.as_mut() {
+            Some(setup) => (setup.0)(which, chip, ui),
+            None => chip.show(ui),
         }
-        chip.show(ui)
     }
 
     /// Takes a chip's output: its edit as a change, its eyedropper press and its full colour picker request.

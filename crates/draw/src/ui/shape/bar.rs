@@ -4,7 +4,7 @@ use super::panel::{Cells, ChipSetup, NumberCell, SIDES_RANGE, sides_change};
 use super::{LINE_WEIGHT_RANGE, RADIUS_RANGE, ShapeAppearance, ShapeChange, ShapePaint, ShapeToolSettings, ShapeWords, StrokeCells};
 use crate::ui::shape_drag::ShapeKind;
 use craft_behavior::EditEvent;
-use craft_color::ui::{PaintChip, ScreenPickGesture};
+use craft_color::ui::{PaintChip, PaintChipOutput, ScreenPickGesture};
 use craft_theme::Srgba;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
@@ -86,8 +86,10 @@ impl<'a> ShapeBar<'a> {
         self
     }
 
-    /// Decorates each paint chip before it shows (its Gradient, Pattern and Picture editors).
-    pub fn chips(mut self, setup: impl for<'b> FnMut(ShapePaint, PaintChip<'b>) -> PaintChip<'b> + 'a) -> Self {
+    /// Decorates and shows each paint chip (its Gradient, Pattern and Picture editors): `setup` gets the chip the
+    /// bar built and the `Ui` to show it in, and returns the chip's output. Inside the call the chip may borrow the
+    /// app's own state.
+    pub fn chips(mut self, setup: impl for<'b> FnMut(ShapePaint, PaintChip<'b>, &mut Ui) -> PaintChipOutput + 'a) -> Self {
         self.chips = Some(ChipSetup::new(setup));
         self
     }
