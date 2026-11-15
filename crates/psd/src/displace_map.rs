@@ -99,10 +99,15 @@ mod tests {
         let mut invalid = bytes.clone();
         invalid[8] = 4;
         assert!(parse_map(&invalid).is_none());
+        invalid[8] = 3;
         invalid[..8].fill(255);
         assert!(parse_map(&invalid).is_none());
         invalid[..8].fill(0);
         assert!(parse_map(&invalid).is_none());
+        invalid[..4].copy_from_slice(&1u32.to_le_bytes());
+        invalid[4..8].copy_from_slice(&((MAX_MAP_PIXELS + 1) as u32).to_le_bytes());
+        assert!(parse_map(&invalid).is_none());
+        assert!(write_map_iter(2, 1, std::iter::repeat(0), std::iter::repeat(0)).is_none());
         assert!(write_map(usize::MAX, 2, &[], &[]).is_none());
         assert!(write_map(MAX_MAP_PIXELS + 1, 1, &[], &[]).is_none());
         assert!(write_map(2, 1, &[0], &[0, 0]).is_none());
