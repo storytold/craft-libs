@@ -2866,6 +2866,7 @@ name = "craft-vectorcraft-format"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "proptest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
