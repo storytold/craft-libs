@@ -2711,6 +2711,7 @@ dependencies = [
  "data-url",
  "flate2",
  "kurbo 0.13.1",
+ "quick-xml 0.41.0",
  "resvg 0.48.1",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
