@@ -31,6 +31,7 @@ pub mod orientation;
 pub mod resolution;
 pub mod source_settings;
 pub mod web;
+pub mod webp_probe;
 pub use crate::allocation::probe_allocation_size;
 pub use crate::cicp::Cicp;
 pub use crate::cicp::ContentLightLevel;
