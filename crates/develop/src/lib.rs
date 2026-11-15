@@ -82,6 +82,7 @@ pub mod profiles;
 pub mod redeye;
 pub mod spots;
 pub mod straighten;
+pub mod stroke_raster;
 pub mod tone;
 pub mod transform;
 pub mod upright;
@@ -355,11 +356,14 @@ pub struct StageCache {
     capacity: usize,
     /// Another renderer's per-view state (the GPU renderer keeps its device-resident stages here).
     ext: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
+    /// Brush strokes rasterized by recent renders ([`stroke_raster::BrushCache`]): a stroke that
+    /// grew since (the next pointer move while it is painted) stamps only its new dabs.
+    brush: stroke_raster::BrushCache,
 }
 
 impl Default for StageCache {
     fn default() -> Self {
-        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None) }
+        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), brush: Default::default() }
     }
 }
 
@@ -367,6 +371,7 @@ impl StageCache {
     /// Drop everything (e.g. when memory is needed).
     pub fn clear(&self) {
         self.lock().clear();
+        self.brush.clear();
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
@@ -730,7 +735,9 @@ pub fn render(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &Render
 }
 
 /// [`render`], reusing (and refreshing) the intermediate results in `cache`. The output is
-/// identical to [`render`]'s.
+/// identical to [`render`]'s, except that an Auto Mask brush stroke continued from a cached raster
+/// ([`stroke_raster`]) refines only its new part: its alpha matches up to float rounding (under
+/// 1e-4).
 pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: &StageCache) -> Rendered {
     render_impl(Src::Shared(src), info, s, req, Some(cache))
 }
@@ -759,53 +766,10 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Src::Shared(a) => a,
     };
     let plan = plan(src_img, info, s, req);
-    let Plan { ref frame, w, h, px_per_long, detail_scale, geo, lin_key, .. } = plan;
+    let Plan { ref frame, .. } = plan;
     let s = &*plan.settings;
 
-    let shared = match (&src, cache) {
-        (Src::Shared(a), Some(c)) => Some((*a, c)),
-        _ => None,
-    };
-    let cached = shared.and_then(|(a, c)| c.get(a, geo));
-    let sampled = match &cached {
-        Some(e) => e.sampled.clone(),
-        None => Arc::new(frame.sample(src_img, w, h)),
-    };
-    lap("sample", &mut t);
-
-    let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
-    let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == lin_key) {
-        Some((_, img)) => img,
-        None => {
-            // Without a cache the resampled buffer is ours: work on it in place.
-            let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
-            lin_cpu(&mut img, info, &plan);
-            if colour_noise.is_none() {
-                colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
-            }
-            local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
-            lens_blur::apply_with(&mut img, s, frame, px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
-            Arc::new(img)
-        }
-    };
-    lap("wb/spots/nr", &mut t);
-    let mut planes = match cached.map(|e| e.planes) {
-        Some(p) if p.key == lin_key => p,
-        // A draft while noise reduction changes (a slider drag): the wide, edge-aware planes of the
-        // image before the change stand in (noise reduction barely moves a blur that wide); the
-        // per-pixel log luminance and the fine texture band are redone. Keyed so a full-quality
-        // render never takes them.
-        Some(p) if req.quality == Quality::Draft && p.pre_nr == plan.pre_nr_key => p.for_other_nr(),
-        _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
-    };
-    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, plan.native_long as f64, req.quality, &mut planes, plan.mattes.as_deref());
-    if let Some(a) = plan.fixed_air {
-        prep.air = a;
-    }
-    lap("prepare", &mut t);
-    if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes });
-    }
+    let prep = prepare_stages(&src, info, &plan, req, cache, &mut |what| lap(what, &mut t));
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req);
         let deep = match plan.keep {
@@ -842,6 +806,104 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         lap("visualize hdr", &mut t);
     }
     Rendered { image, histogram, deep: None }
+}
+
+/// The stages of a render before its per-pixel finish, for `plan` (of `src`, `info` and `req`):
+/// the resampled, white-balanced and denoised image, its spatial planes and the masks evaluated,
+/// reusing and refreshing `cache`. `lap` marks the end of each stage (profiling).
+fn prepare_stages(
+    src: &Src<'_>,
+    info: &SourceInfo,
+    plan: &Plan<'_>,
+    req: &RenderRequest,
+    cache: Option<&StageCache>,
+    lap: &mut dyn FnMut(&str),
+) -> Prepared {
+    let Plan { ref frame, w, h, px_per_long, detail_scale, geo, lin_key, .. } = *plan;
+    let s = &*plan.settings;
+    let src_img: &Rgb32f = match src {
+        Src::Borrowed(r) => r,
+        Src::Shared(a) => a,
+    };
+    let shared = match (src, cache) {
+        (Src::Shared(a), Some(c)) => Some((*a, c)),
+        _ => None,
+    };
+    let cached = shared.and_then(|(a, c)| c.get(a, geo));
+    let sampled = match &cached {
+        Some(e) => e.sampled.clone(),
+        None => Arc::new(frame.sample(src_img, w, h)),
+    };
+    lap("sample");
+
+    let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == lin_key) {
+        Some((_, img)) => img,
+        None => {
+            // Without a cache the resampled buffer is ours: work on it in place.
+            let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
+            lin_cpu(&mut img, info, plan);
+            if colour_noise.is_none() {
+                colour_noise = self::colour_noise(src_img, info, plan).map(|n| (plan.noise_key, n));
+            }
+            local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
+            lens_blur::apply_with(&mut img, s, frame, px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
+            Arc::new(img)
+        }
+    };
+    lap("wb/spots/nr");
+    let mut planes = match cached.map(|e| e.planes) {
+        Some(p) if p.key == lin_key => p,
+        // A draft while noise reduction changes (a slider drag): the wide, edge-aware planes of the
+        // image before the change stand in (noise reduction barely moves a blur that wide); the
+        // per-pixel log luminance and the fine texture band are redone. Keyed so a full-quality
+        // render never takes them.
+        Some(p) if req.quality == Quality::Draft && p.pre_nr == plan.pre_nr_key => p.for_other_nr(),
+        _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
+    };
+    // (the brush rasters are keyed by the image they compared against: `lin_key` covers it and the frame)
+    let brush = shared.map(|(a, c)| stroke_raster::BrushCacheRef { cache: &c.brush, src: a, key: lin_key });
+    let mut prep =
+        local::prepare(lin.clone(), s, frame, px_per_long, plan.native_long as f64, req.quality, &mut planes, plan.mattes.as_deref(), brush);
+    if let Some(a) = plan.fixed_air {
+        prep.air = a;
+    }
+    lap("prepare");
+    if let Some((a, c)) = shared {
+        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes });
+    }
+    prep
+}
+
+/// The alpha (0..1) of mask `id` of `s` where [`render_cached`] renders `req`: what an overlay of
+/// that mask shows, without rendering the picture (the stages before the per-pixel finish come
+/// from `cache`, and a brush stroke that grew since the last render stamps only its new dabs, see
+/// [`stroke_raster`]). `None` when `s` has no mask `id` with components. Matches the alpha
+/// [`render_cached`] evaluates for the same mask.
+pub fn mask_alpha_cached(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    cache: &StageCache,
+    id: u32,
+) -> Option<Plane> {
+    let effective = s.effective();
+    let rendition = settings_for(&effective, req);
+    let plan = plan(src, info, &rendition, req);
+    let m = plan.settings.masks.iter().find(|m| m.id == id && !m.components.is_empty())?;
+    let prep = prepare_stages(&Src::Shared(src), info, &plan, req, Some(cache), &mut |_| {});
+    let alpha = match prep.masks.iter().find(|e| e.id == id) {
+        Some(e) => e.alpha.clone(),
+        // (a hidden mask isn't evaluated with the others)
+        None => {
+            masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, plan.settings.light.exposure as f32, plan.mattes.as_deref())
+        }
+    };
+    Some(match plan.keep {
+        Some(k) => alpha.crop(k.x, k.y, k.w, k.h),
+        None => alpha,
+    })
 }
 
 /// The colour a colour-range mask would sample at normalized image point `p` (OkLab of the

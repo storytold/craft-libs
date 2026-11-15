@@ -641,7 +641,7 @@ fn many_far_flung_strokes_share_one_dab_budget() {
     let strokes = vec![s; 1000];
     let t = std::time::Instant::now();
     let mut out = Plane::new(w, h);
-    rasterize_brush(&strokes, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), &mut out);
+    rasterize_brush(&strokes, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), &mut out, None);
     assert!(t.elapsed().as_secs() < 30, "took {:?}", t.elapsed());
     assert!(out.data.iter().any(|&v| v > 0.0), "the strokes crossing the photo still paint it");
 }
