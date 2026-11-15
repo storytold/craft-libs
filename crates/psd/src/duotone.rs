@@ -19,15 +19,20 @@ pub const NO_COLOR: ColorRecord = [0xffff, 0, 0, 0, 0];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
 pub enum InkCount {
+    /// One active ink.
     One = 1,
+    /// Two active inks.
     Two = 2,
+    /// Three active inks.
     Three = 3,
+    /// Four active inks.
     Four = 4,
 }
 
 /// One fixed-size ink slot, including uninterpreted reserved curve word.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InkRecord {
+    /// Raw ink colour space and components.
     pub color: ColorRecord,
     /// Pascal name bytes, including its length byte; text encoding belongs to the caller.
     pub name: [u8; 64],
@@ -63,6 +68,7 @@ impl<'a> DuotoneView<'a> {
         (1..=4).contains(&count).then_some(Self { data, count })
     }
 
+    /// Number of active ink records (one through four).
     pub fn ink_count(self) -> usize {
         self.count
     }
