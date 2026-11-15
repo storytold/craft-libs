@@ -291,6 +291,17 @@ impl HostedLayerStyle {
         &mut self.draft
     }
 
+    /// The values new effects of `kind` start from, after the app stored them for a [`LayerStyleAsk::MakeDefault`]: the
+    /// open dialog uses them at once, as later openings do. Without [`specs`](Self::specs) from the app the dialog's
+    /// own (Photoshop's) specs take them.
+    pub fn set_defaults(&mut self, kind: EffectKind, defaults: StyleParams) {
+        let specs = self.specs.get_or_insert_with(|| EffectKind::ALL.into_iter().map(EffectSpec::photoshop).collect());
+        match specs.iter_mut().find(|spec| spec.kind == kind) {
+            Some(spec) => spec.defaults = defaults,
+            None => specs.push(EffectSpec { defaults, ..EffectSpec::photoshop(kind) }),
+        }
+    }
+
     /// The user's contour library, after the app changed it for a [`LayerStyleAsk::Contour`].
     pub fn set_user_contours(&mut self, contours: Vec<Contour>) {
         self.user_contours = contours;
