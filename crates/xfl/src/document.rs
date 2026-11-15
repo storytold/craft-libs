@@ -807,14 +807,19 @@ mod tests {
         .unwrap();
         let includes: Vec<_> = symbol_includes(document.root()).map(SymbolInclude::href).collect();
         assert_eq!(includes, [Some("LIBRARY/Shape.xml"), Some("LIBRARY/Button.xml")]);
+        let include = symbol_includes(document.root()).next().unwrap();
+        assert_eq!(include.element().local_name(), "Include");
         let folders: Vec<_> = library_folders(document.root()).map(LibraryFolder::name).collect();
         assert_eq!(folders, [Some("Characters/Hero")]);
+        let folder = library_folders(document.root()).next().unwrap();
+        assert_eq!(folder.element().local_name(), "DOMFolderItem");
 
         let symbol = Document::parse(
             br#"<x:DOMSymbolItem xmlns:x="urn:adobe:xfl" name="Characters/Hero" name="Characters/Final" symbolType="graphic" linkageExportForAS="true" linkageClassName="example.Hero" linkageIdentifier="legacy.Hero" linkageBaseClass="flash.display.MovieClip" scaleGridLeft="10" scaleGridRight="90" scaleGridTop="5" scaleGridBottom="75"><x:timeline><x:DOMTimeline/></x:timeline></x:DOMSymbolItem>"#,
         )
         .unwrap();
         let item = SymbolItem::new(symbol.root());
+        assert_eq!(item.element().local_name(), "DOMSymbolItem");
         assert_eq!(item.name(), Some("Characters/Final"), "the last duplicate attribute wins");
         assert_eq!(item.symbol_type(), Some("graphic"));
         assert_eq!(item.linkage_export_for_action_script(), Some("true"));
@@ -825,6 +830,15 @@ mod tests {
             (item.scale_grid_left(), item.scale_grid_right(), item.scale_grid_top(), item.scale_grid_bottom()),
             (Some(10.0), Some(90.0), Some(5.0), Some(75.0))
         );
+        assert!(item.has_scale_grid());
         assert!(item.timeline().is_some());
+
+        let malformed = Document::parse(br#"<DOMSymbolItem scaleGridLeft="not-a-number"/>"#).unwrap();
+        let malformed = SymbolItem::new(malformed.root());
+        assert!(malformed.has_scale_grid(), "attribute presence remains observable when its value is malformed");
+        assert_eq!(malformed.scale_grid_left(), None);
+
+        let absent = Document::parse(b"<DOMSymbolItem/>").unwrap();
+        assert!(!SymbolItem::new(absent.root()).has_scale_grid());
     }
 }
