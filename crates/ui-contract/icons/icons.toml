@@ -35,14 +35,17 @@ stroke_drawings = [
     "crop-overlay-thirds", "crop-overlay-triangle", "dash-align-corners", "dash-align-exact",
     "direct-select", "distribute-bottom", "distribute-hcenter", "distribute-horizontal", "distribute-left",
     "distribute-right", "distribute-top", "distribute-vcenter", "distribute-vertical", "eraser-background",
-    "eraser-magic", "extract-clip", "font-similar", "fx", "gradient-angle", "gradient-diamond", "gradient-linear",
+    "eraser-magic", "extract-clip", "flip-horizontal", "flip-vertical", "font-similar", "fx", "gap-horizontal",
+    "gap-vertical", "gradient-angle", "gradient-diamond", "gradient-linear",
     "gradient-radial", "gradient-reflected", "gradient-swatch", "insert-clip", "key-auto-bezier", "key-bezier", "key-continuous-bezier",
     "key-ease-in", "key-ease-out", "key-hold", "key-linear", "key-linear-filled", "keyframe-auto-bezier",
     "keyframe-bezier", "keyframe-ease-in", "keyframe-ease-out", "keyframe-easy-ease", "keyframe-hold",
     "keyframe-linear", "lasso", "lasso-magnetic", "lasso-select", "layer-mask", "lift-clip", "lollipop", "mark-in",
-    "mark-out", "marquee-column", "marquee-row", "overwrite-clip", "painting-symmetry", "pen-add-anchor",
+    "mark-out", "marquee-column", "marquee-row", "overwrite-clip", "padding-bottom", "padding-left", "padding-right",
+    "padding-top", "painting-symmetry", "pen-add-anchor",
     "pen-curvature", "pen-delete-anchor", "pen-freeform", "protractor", "quick-selection", "route-curved", "route-elbow",
-    "route-straight", "stroke-align-center", "stroke-align-inside", "stroke-align-outside", "stroke-cap-butt",
+    "route-straight", "scale-horizontal", "scale-vertical", "shear-horizontal", "stroke-align-center",
+    "stroke-align-inside", "stroke-align-outside", "stroke-cap-butt",
     "stroke-cap-round", "stroke-cap-square", "stroke-join-bevel", "stroke-join-miter", "stroke-join-round",
     "symmetry-diagonal", "symmetry-dual", "symmetry-horizontal", "symmetry-vertical", "sync-lock",
     "text-align-bottom", "text-align-middle", "text-align-top"
@@ -589,6 +592,39 @@ phosphor = "arrows-down-up"
 carbon = "arrows--vertical"
 tabler = "arrows-down-up"
 
+# The transform panels' flip, scale and shear glyphs. Phosphor 2.0.8 draws none of them, so the base set draws its
+# own (ATTRIBUTION.md); Tabler's `flip-horizontal`, `flip-vertical` and `skew-x` mean the same. Shear is the skew along
+# the x axis only: the transform panel has one shear value (its "Shear X Angle"), so there is no `shear_vertical`
+# until a surface shows a y-shear.
+
+[[icon]]
+name = "flip_horizontal"
+directional = false
+phosphor = "flip-horizontal"
+tabler = "flip-horizontal"
+
+[[icon]]
+name = "flip_vertical"
+directional = false
+phosphor = "flip-vertical"
+tabler = "flip-vertical"
+
+[[icon]]
+name = "scale_horizontal"
+directional = false
+phosphor = "scale-horizontal"
+
+[[icon]]
+name = "scale_vertical"
+directional = false
+phosphor = "scale-vertical"
+
+[[icon]]
+name = "shear_horizontal"
+directional = false
+phosphor = "shear-horizontal"
+tabler = "skew-x"
+
 [[icon]]
 name = "ban"
 directional = false
@@ -762,6 +798,41 @@ phosphor = "distribute-vcenter"
 name = "distribute_vertical"
 directional = false
 phosphor = "distribute-vertical"
+
+# The layout panels' spacing glyphs: a frame with the space on one side, and the gap between two items. Phosphor
+# 2.0.8 draws neither; Lucide's `gap-horizontal` and `gap-vertical` mean the same as the base set's.
+
+[[icon]]
+name = "gap_horizontal"
+directional = false
+lucide = "gap-horizontal"
+phosphor = "gap-horizontal"
+
+[[icon]]
+name = "gap_vertical"
+directional = false
+lucide = "gap-vertical"
+phosphor = "gap-vertical"
+
+[[icon]]
+name = "padding_bottom"
+directional = false
+phosphor = "padding-bottom"
+
+[[icon]]
+name = "padding_left"
+directional = false
+phosphor = "padding-left"
+
+[[icon]]
+name = "padding_right"
+directional = false
+phosphor = "padding-right"
+
+[[icon]]
+name = "padding_top"
+directional = false
+phosphor = "padding-top"
 
 [[icon]]
 name = "droplet"
