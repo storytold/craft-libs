@@ -2,7 +2,7 @@
 
 pub(super) mod rows;
 
-use super::collection::{CollectionEvent, LeadSource, ShownRow};
+use super::collection::{CollectionEvent, ColumnLayout, LeadSource, ShownRow};
 use super::{Collection, ItemFn};
 use crate::runtime::egui::areas;
 use craft_behavior::{Axis, GestureId, ItemSource, ScrollPos, TypeAhead};
@@ -79,11 +79,6 @@ struct Scrolled {
     anchor: Option<crate::runtime::lazy::Anchor>,
 }
 
-#[derive(Clone, Default)]
-struct View {
-    view: Option<[f32; 4]>,
-}
-
 #[derive(Clone)]
 struct Lead<K> {
     key: Option<K>,
@@ -92,11 +87,13 @@ struct Lead<K> {
     column: usize,
     /// The `CollectionProps.rows_stamp` of the pass that last set the lead.
     stamp: Option<u64>,
+    /// The lead `CollectionEvent::Rested` was reported for: one report per lead change.
+    rested: Option<K>,
 }
 
 impl<K> Default for Lead<K> {
     fn default() -> Self {
-        Lead { key: None, at: 0, column: 0, stamp: None }
+        Lead { key: None, at: 0, column: 0, stamp: None, rested: None }
     }
 }
 
@@ -106,11 +103,13 @@ struct Renaming<K> {
     draft: String,
     gesture: GestureId,
     focused: bool,
+    /// The field opened with a draft the collection proposed that differs from the row's text.
+    proposed: bool,
 }
 
 impl<K> Default for Renaming<K> {
     fn default() -> Self {
-        Renaming { key: None, draft: String::new(), gesture: GestureId::default(), focused: false }
+        Renaming { key: None, draft: String::new(), gesture: GestureId::default(), focused: false, proposed: false }
     }
 }
 
@@ -175,12 +174,11 @@ pub(super) struct ItemsHooks<'s, 'r, C: Collection> {
     offset_at_read: f64,
     offset_x: f64,
     offset_x_at_read: f64,
-    /// The part of a reveal the rows showed, passed on to the scroll owner around the collection.
-    pass_on: Option<Rect>,
     /// The scroll position named by content, kept with an offset the framework holds (`Scrolled`).
     anchor: Option<crate::runtime::lazy::Anchor>,
     anchor_at_read: Option<crate::runtime::lazy::Anchor>,
-    last: View,
+    /// The bound column layout as the read step found it; `None` while the header keeps its own memory.
+    column_layout_at_read: Option<ColumnLayout>,
     lead: Lead<C::Key>,
     renaming: Renaming<C::Key>,
     ended_rename: bool,
@@ -247,10 +245,9 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
             offset_at_read: 0.0,
             offset_x: 0.0,
             offset_x_at_read: 0.0,
-            pass_on: None,
             anchor: None,
             anchor_at_read: None,
-            last: View::default(),
+            column_layout_at_read: None,
             lead: Lead::default(),
             renaming: Renaming::default(),
             ended_rename: false,

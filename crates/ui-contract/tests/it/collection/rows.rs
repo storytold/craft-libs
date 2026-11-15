@@ -1,13 +1,14 @@
 //! The row trials: rows with focusable children, cell selection in a sheet, rows of measured heights and a lead that
 //! leaves the source.
 
-use super::kit::{Count, Dismissed, List, ROW_H, RowOut};
+use super::kit::{Count, Dismissed, List, ROW_H, RowOut, Words};
 use craft_behavior::{
-    CellAt, CellRange, CellSelection, ColumnKey, ItemSource, PartKey, Selection, SelectionModel as _, Sense, SheetLayout, SpanLayout, keyed,
+    CellAt, CellRange, CellSelection, ColumnKey, EditEvent, EditEvents, ItemSource, PartKey, ScrollPos, Selection, SelectionModel as _, Sense,
+    SheetLayout, SpanLayout, keyed,
 };
 use craft_ui::contract::{
-    Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, Focus as _, MeasureCx,
-    PartsCx, Props as _, Role, SelectMode, ShowCollection as _,
+    Bind, BindMut, Collection, CollectionEvent, CollectionProps, CollectionResponse, Common, Component, ContainerProps, Cx, EditResponse, Focus as _,
+    MeasureCx, PartsCx, Props as _, Role, SelectMode, ShowCollection as _, request_rename,
 };
 use craft_ui::runtime::focus::{FocusTarget, request};
 use craft_ui::style::StyleCx;
@@ -131,7 +132,10 @@ struct Probe<'a> {
     props: ContainerProps,
     items: CollectionProps,
     selection: Option<Bind<'a, CellSelection<usize>>>,
+    scroll: Option<Bind<'a, ScrollPos>>,
     auto: bool,
+    /// The rename draft every row proposes, and whether the rename field reports Enter.
+    rename: Option<(&'a str, &'a Cell<bool>)>,
 }
 
 impl<'a> Probe<'a> {
@@ -141,12 +145,26 @@ impl<'a> Probe<'a> {
             props: ContainerProps::new().sizing(craft_ui::contract::Sizing::Fill),
             items: CollectionProps::new().select(select),
             selection: None,
+            scroll: None,
             auto: false,
+            rename: None,
         }
+    }
+
+    /// Rows rename with `draft` proposed; the field reports Enter while `enter` is set.
+    fn renaming(mut self, draft: &'a str, enter: &'a Cell<bool>) -> Self {
+        self.items = self.items.rename(true);
+        self.rename = Some((draft, enter));
+        self
     }
 
     fn auto(mut self) -> Self {
         self.auto = true;
+        self
+    }
+
+    fn scrolled(mut self, scroll: Bind<'a, ScrollPos>) -> Self {
+        self.scroll = Some(scroll);
         self
     }
 }
@@ -158,6 +176,10 @@ impl Component for Probe<'_> {
 
     fn style(_: &StyleCx<'_>, _: ProbeStyleKey) -> PlainStyle {
         PlainStyle::default()
+    }
+
+    fn scroll(&mut self) -> Option<BindMut<'_, ScrollPos>> {
+        self.scroll.as_mut().map(Bind::reborrow)
     }
 
     fn finish(self, mut cx: Cx<'_, Self>) -> Self::Output {
@@ -182,6 +204,17 @@ impl Collection for Probe<'_> {
 
     fn item_layout(&self, source: &dyn ItemSource<usize>, width: f32, _: &StyleCx<'_>) -> SpanLayout {
         if self.auto { SpanLayout::sized(source, width, ROW_H) } else { SpanLayout::new(source, width, ROW_H) }
+    }
+
+    fn rename_draft(&self, _: &usize) -> Option<String> {
+        self.rename.map(|(draft, _)| draft.to_owned())
+    }
+
+    fn rename_editor(&mut self, ui: &mut Ui, _: Bind<'_, String>, label: Rect, _: &str) -> Option<EditResponse<String>> {
+        let (_, enter) = self.rename?;
+        let mut editor = EditResponse::lifted(ui.allocate_rect(label, egui::Sense::hover()), EditEvents::new(), None);
+        editor.submitted = enter.get();
+        Some(editor)
     }
 }
 
@@ -439,4 +472,73 @@ fn rows_in_view_stay_when_a_row_above_them_changes_height() {
     let next = frames.frame(vec![], &mut show);
     assert!(grown > idle, "the frame the row grew in ran the pass again at the anchored offset");
     assert_eq!(next, idle, "an idle frame after it runs no extra pass");
+}
+
+/// A field hosted in a row asks its scroll owner, the collection, to reveal row 25, out of view: the collection takes
+/// the reveal in its next pass against that pass's rows, shows the row and scrolls once. Guards the reveal being
+/// taken and dropped for want of a view.
+#[trial]
+fn a_reveal_from_a_hosted_field_scrolls_its_collection_in_the_same_pass() {
+    let (log, source) = (Log::new(), Count(30));
+    let scroll = Cell::new(ScrollPos::default());
+    let offsets = RefCell::new(Vec::new());
+    let mut frames = Frames::new();
+    let mut show = |ui: &mut Ui| {
+        let mut held = scroll.get();
+        in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+            let list = Probe::new(SelectMode::Single).scrolled(Bind::bound(&mut held)).id_salt("list");
+            log.take(list.show_items(ui, &source, &mut |key, _| ProbeRow::new(*key, log)));
+        });
+        scroll.set(held);
+        offsets.borrow_mut().push(held.y);
+    };
+    frames.idle(3, &mut show);
+    let view = Rect::from_min_size(ORIGIN, VIEW);
+    let first = log.rect(0);
+    let row = Rect::from_min_size(first.min + Vec2::new(0.0, 25.0 * ROW_H), first.size());
+    assert!(row.min.y >= view.max.y, "row 25 starts out of view");
+    let before = scroll.get().y;
+    offsets.borrow_mut().clear();
+    log.rects.borrow_mut().clear();
+    craft_ui::testing::contract::queue_reveal(&frames.ctx, log.id(), row);
+    frames.frame(vec![], &mut show);
+    let shown = log.rect(25);
+    assert!(shown.min.y >= view.min.y - SAME && shown.max.y <= view.max.y + SAME, "row 25 lies in the view in the frame after the reveal: {shown:?}");
+    frames.idle(2, &mut show);
+    let held: Vec<f64> = std::iter::once(before).chain(offsets.borrow().iter().copied()).collect();
+    let changes = held.windows(2).filter(|pair| (pair[0] - pair[1]).abs() > f64::EPSILON).count();
+    assert_eq!(changes, 1, "the collection scrolls once for the reveal: {held:?}");
+}
+
+/// Enter on a rename field nobody typed in commits the draft the collection proposed, and ends with no event when the
+/// draft is the row's own text.
+#[trial]
+fn enter_on_an_untyped_rename_commits_only_a_proposed_draft() {
+    let renamed = |draft: &str| {
+        let (log, enter, words) = (Log::new(), Cell::new(false), Words::flat(&["a", "b", "c"]));
+        let mut frames = Frames::new();
+        let mut show = |ui: &mut Ui| {
+            in_region(ui, Rect::from_min_size(ORIGIN, VIEW), |ui| {
+                let list = Probe::new(SelectMode::Single).id_salt("list").renaming(draft, &enter);
+                log.take(list.show_items(ui, &words, &mut |key, _| ProbeRow::new(*key, log)));
+            });
+        };
+        frames.idle(3, &mut show);
+        request_rename(&frames.ctx, log.id(), &1_usize);
+        frames.idle(3, &mut show);
+        enter.set(true);
+        frames.idle(2, &mut show);
+        let commits: Vec<String> = log
+            .events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                CollectionEvent::Rename(EditEvent::Commit { after, .. }) => Some(after.name.clone()),
+                _ => None,
+            })
+            .collect();
+        commits
+    };
+    assert_eq!(renamed("proposed"), ["proposed"], "Enter accepts the proposed draft");
+    assert!(renamed("b").is_empty(), "a draft equal to the row's text reports no commit");
 }

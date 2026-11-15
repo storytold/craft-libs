@@ -3,7 +3,8 @@
 
 use super::ItemsHooks;
 use crate::contract::collection::{
-    CollectionEvent, CollectionProps, ColumnAlign, ColumnEvent, ColumnKind, ColumnRequest, ColumnSort, ColumnSpec, HeaderMenuRequest, ToggleColumn,
+    CollectionEvent, CollectionProps, ColumnAlign, ColumnEvent, ColumnKind, ColumnLayout, ColumnRequest, ColumnSort, ColumnSpec, HeaderMenuRequest,
+    ToggleColumn,
 };
 use crate::contract::reorder::{self, Gap};
 use crate::contract::{
@@ -23,7 +24,7 @@ use crate::style::{ComponentStyle, ResizeLineLook, ScrollBarKind, StateSet, Styl
 use craft_behavior::grid::resolve_columns;
 use craft_behavior::{
     Axis, ColumnKey, ColumnWidth, CursorIcon, DropOperation, Flow, HitLevel, HitPriority, IconId, Insets, Intent, Metrics, NavMove, NavShape,
-    PartKey, PointerButton, PressPhase, Proposal, Roving, Sense,
+    PartKey, PartRef, PointerButton, PressPhase, Proposal, Roving, Sense,
 };
 use egui::{Align, Context, Id, Pos2, Rect, Response, Ui, UiBuilder, Vec2};
 
@@ -123,12 +124,9 @@ pub(crate) struct HeaderFacts {
 /// What the header keeps in session memory under the collection's id.
 #[derive(Clone, Debug, Default)]
 pub(super) struct HeaderMemory {
-    /// Column keys in display order; empty until the user moves one.
-    order: Vec<ColumnKey>,
-    /// User widths of `Content` and `Fill` columns.
-    widths: Vec<(ColumnKey, f32)>,
-    /// Columns the user hid from the header menu.
-    hidden: Vec<ColumnKey>,
+    /// The user's arrangement: the display order (empty until the user moves a column), the user widths of `Content`
+    /// and `Fill` columns and the columns hidden from the header menu. Empty while the collection binds its layout.
+    layout: ColumnLayout,
     /// The header menu the user asked for, whose column a command acts on when no header part holds focus, and the
     /// frame it was requested in. The menu is gone once no layer that takes keys is open a frame after its request.
     menu: Option<(HeaderMenuRequest, u64)>,
@@ -148,6 +146,8 @@ pub(super) struct Header {
     /// The header row's height, zero while no column has a header.
     pub(super) height: f32,
     memory: HeaderMemory,
+    /// The collection binds its column layout (`column_layout`): the binding holds the arrangement, not the memory.
+    bound: bool,
     specs: Vec<ColumnSpec>,
     /// The widest cell of each `Content` column among all rows, or its header label when wider, from the items'
     /// measure of this pass (`content_id`); zero for the other columns and while unknown.
@@ -183,15 +183,20 @@ fn hash_of(key: &ColumnKey) -> u64 {
 }
 
 impl Header {
-    /// Step 4: the columns in their display order and the header's session memory.
-    pub(super) fn read(&mut self, stage: &mut MemoryStage, id: Id, props: &CollectionProps) {
+    /// Step 4: the columns in their display order and the header's session memory. A `bound` layout (the
+    /// collection's `column_layout`) is the arrangement; the session memory keeps the menu and the resizes.
+    pub(super) fn read(&mut self, stage: &mut MemoryStage, id: Id, props: &CollectionProps, bound: Option<ColumnLayout>) {
         self.memory = stage.session::<HeaderMemory>(sub(id, "columns")).clone();
+        self.bound = bound.is_some();
+        if let Some(layout) = bound {
+            self.memory.layout = layout;
+        }
         self.sort = props.sort.clone();
         self.on = props.header;
         self.hideable = props.columns.iter().filter(|spec| spec.hideable).map(|spec| spec.key.clone()).collect();
-        let hidden = &self.memory.hidden;
+        let hidden = &self.memory.layout.hidden;
         let mut specs: Vec<ColumnSpec> = props.columns.iter().filter(|spec| !(spec.hideable && hidden.contains(&spec.key))).cloned().collect();
-        let order = &self.memory.order;
+        let order = &self.memory.layout.order;
         specs.sort_by_key(|spec| order.iter().position(|key| *key == spec.key).unwrap_or(usize::MAX));
         self.content = vec![0.0; specs.len()];
         self.specs = specs;
@@ -217,7 +222,7 @@ impl Header {
         let width = if spec.width == ColumnWidth::Toggle { ColumnWidth::Fixed(self.toggle) } else { spec.width.in_unit(self.unit) };
         match width {
             fixed @ ColumnWidth::Fixed(_) => fixed,
-            _ => self.memory.widths.iter().find(|(key, _)| *key == spec.key).map_or(spec.width, |(_, width)| ColumnWidth::Fixed(*width)),
+            _ => self.memory.layout.widths.iter().find(|(key, _)| *key == spec.key).map_or(spec.width, |(_, width)| ColumnWidth::Fixed(*width)),
         }
     }
 
@@ -444,6 +449,24 @@ impl Header {
         self.cells.iter().position(|cell| self.specs[cell.spec].key == *key)
     }
 
+    /// The full rect of the header cell whose part index is `hash`, in view or not.
+    fn cell_rect(&self, hash: u64) -> Option<Rect> {
+        self.cells.iter().find(|cell| cell.hash == hash).map(|cell| cell.rect)
+    }
+
+    /// How far a focus move to `part` moves the sideways offset the header and the rows share, so its whole cell
+    /// shows in the header's view: `None` for a part that is no header cell, or a cell already in view.
+    pub(super) fn reveal_x(&self, part: PartRef, rtl: bool) -> Option<f64> {
+        if part.key != HEADER {
+            return None;
+        }
+        let rect = self.cell_rect(part.index?)?;
+        let (by, _) = crate::contract::steps::reveal_move(rect, self.view()?);
+        // The offset runs from the reading start: in a right-to-left header a larger offset moves the cells right.
+        let by = if rtl { -by.x } else { by.x };
+        (by != 0.0).then_some(f64::from(by))
+    }
+
     fn sort(&mut self, key: &ColumnKey) {
         let descending = match &self.sort {
             Some(sort) if sort.key == *key => !sort.descending,
@@ -462,9 +485,9 @@ impl Header {
             .iter()
             .any(|spec| spec.key == *key && matches!(spec.width, ColumnWidth::Fixed(_) | ColumnWidth::Controls(_) | ColumnWidth::Toggle));
         if !owned_by_app {
-            match self.memory.widths.iter_mut().find(|(held, _)| held == key) {
+            match self.memory.layout.widths.iter_mut().find(|(held, _)| held == key) {
                 Some((_, held)) => *held = width,
-                None => self.memory.widths.push((key.clone(), width)),
+                None => self.memory.layout.widths.push((key.clone(), width)),
             }
         }
         self.events.push(ColumnEvent::Resized { key: key.clone(), width });
@@ -489,7 +512,7 @@ impl Header {
         }
         let moved = order.remove(from);
         order.insert(to, moved);
-        self.memory.order = order;
+        self.memory.layout.order = order;
         self.events.push(ColumnEvent::Moved { key: key.clone(), to });
     }
 
@@ -632,13 +655,13 @@ impl Header {
         for request in requests {
             match request {
                 ColumnRequest::Shown(key, shown) => {
-                    if !self.hideable.contains(&key) || shown != self.memory.hidden.contains(&key) {
+                    if !self.hideable.contains(&key) || shown != self.memory.layout.hidden.contains(&key) {
                         continue;
                     }
                     if shown {
-                        self.memory.hidden.retain(|held| *held != key);
+                        self.memory.layout.hidden.retain(|held| *held != key);
                     } else {
-                        self.memory.hidden.push(key.clone());
+                        self.memory.layout.hidden.push(key.clone());
                     }
                     let unsorted = !shown && self.sort.as_ref().is_some_and(|sort| sort.key == key);
                     self.events.push(ColumnEvent::Shown { key, shown });
@@ -667,7 +690,7 @@ impl Header {
         HeaderFacts {
             asked: self.asked,
             menu: self.memory.menu.as_ref().map(|(menu, _)| menu.clone()),
-            hidden: self.memory.hidden.clone(),
+            hidden: self.memory.layout.hidden.clone(),
             enabled: ColumnCommands::ALL.into_iter().filter(|&command| target.is_some_and(|at| self.allowed(command, at, rtl))).collect(),
         }
     }
@@ -773,8 +796,14 @@ impl Header {
         cx.active_part().filter(|part| part.key == HEADER).and_then(|part| self.cells.iter().position(|cell| Some(cell.hash) == part.index))
     }
 
+    /// The session memory this pass leaves. A bound layout stays the binding's alone: the memory keeps an empty one.
     pub(super) fn persist(&self) -> HeaderMemory {
-        self.memory.clone()
+        if self.bound { HeaderMemory { layout: ColumnLayout::default(), ..self.memory.clone() } } else { self.memory.clone() }
+    }
+
+    /// The user's column arrangement as this pass left it.
+    pub(super) fn layout(&self) -> &ColumnLayout {
+        &self.memory.layout
     }
 }
 

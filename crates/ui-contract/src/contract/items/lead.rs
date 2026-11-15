@@ -1,21 +1,25 @@
 //! The lead and the selection: picks, ranges, and where the lead starts and follows.
 
 use super::{ItemsHooks, Placement};
-use crate::contract::collection::{CollectionEvent, LeadOnOpen, LeadSource, SelectMode};
+use crate::contract::collection::{CollectionEvent, LeadOnOpen, LeadSource, ListDrag, SelectMode};
 use crate::contract::{Collection, Cx};
-use crate::runtime::env::ArenaId;
-use craft_behavior::{Flow, ItemLayout, SelectionChange, SelectionModel};
+use craft_behavior::{Flow, ItemLayout, PointerEvent, SelectionChange, SelectionModel};
 use egui::{Pos2, Rect, Vec2};
+use std::any::TypeId;
 
 impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
     pub(super) fn select_mode(comp: &C) -> SelectMode {
         comp.items().select
     }
 
-    /// Reports and applies a selection change.
+    /// Applies a selection change and reports it when it changes the selection: a press on the row a hover already
+    /// selected reports nothing.
     pub(super) fn change(&mut self, change: SelectionChange<C::Key>) {
+        let before = self.selection.clone();
         self.selection.apply(change.clone());
-        self.events.push(CollectionEvent::Selection(change));
+        if self.selection != before {
+            self.events.push(CollectionEvent::Selection(change));
+        }
     }
 
     pub(super) fn range(&self, from: usize, to: usize) -> Vec<C::Key> {
@@ -23,11 +27,32 @@ impl<'s, 'r, C: Collection> ItemsHooks<'s, 'r, C> {
         if from <= to { keys.collect() } else { keys.rev().collect() }
     }
 
+    /// Moves the lead to row `to`. A lead a key moved has rested at once: no timer runs for it.
     pub(super) fn move_lead(&mut self, to: usize, by: LeadSource) {
+        let key = self.place_lead(to, by);
+        if matches!(by, LeadSource::Keys) {
+            self.report_rest(key);
+        }
+    }
+
+    /// Places the lead on row `to` and reports the move, with no rest: the lead's key.
+    fn place_lead(&mut self, to: usize, by: LeadSource) -> C::Key {
         let key = self.source.key(to);
+        if self.lead.key.as_ref() != Some(&key) {
+            self.lead.rested = None;
+        }
         self.lead.key = Some(key.clone());
         self.lead.at = to;
-        self.events.push(CollectionEvent::LeadMoved { key, by });
+        self.events.push(CollectionEvent::LeadMoved { key: key.clone(), by });
+        key
+    }
+
+    /// Reports `CollectionEvent::Rested` for the lead `key`, once per lead change.
+    fn report_rest(&mut self, key: C::Key) {
+        if self.lead.rested.as_ref() != Some(&key) {
+            self.lead.rested = Some(key.clone());
+            self.events.push(CollectionEvent::Rested(key));
+        }
     }
 
     /// The position of `key`: the lead's last position is tried first, so the common lookups of a pass do not scan.
@@ -88,24 +113,18 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         }
     }
 
-    /// The row under `pos` (screen space) in the rows' placement `at`: the pointer-to-row mapping of `hover_lead`,
-    /// which `hover_lead` and the drag-select step both call.
-    #[allow(dead_code)] // P3(framework-01-w7): cw.C43
-    pub(super) fn row_under(&self, layout: &C::ItemLayout, at: Placement, pos: Pos2) -> Option<usize> {
-        let _ = (layout, at, pos);
-        todo!("cw.C43")
+    /// The pointer's position, in screen space, while it is over the collection.
+    fn hovered_pos(cx: &Cx<'_, C>) -> Option<Pos2> {
+        crate::runtime::pointer::frame(&cx.core.ctx).pos.filter(|_| cx.core.response.hovered())
     }
 
-    /// The lead follows a moving pointer over the rows, and the selection follows the lead the way it does for the
-    /// arrow keys.
-    pub(super) fn hover_lead(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, at: Placement) {
+    /// The row under `pos` (screen space) in the rows' placement `at`: the pointer-to-row mapping of `hover_lead`,
+    /// which `hover_lead`, the rest check and the drag-select step all call.
+    pub(super) fn row_under(&self, layout: &C::ItemLayout, at: Placement, pos: Pos2) -> Option<usize> {
         let Placement { rect, offset, rtl } = at;
-        let frame = crate::runtime::pointer::frame(&cx.core.ctx);
-        let hovered = cx.core.response.hovered() || crate::primitives::sensing::read_outcome(&cx.core.ctx, ArenaId::new(cx.core.id)).hover.is_some();
-        let Some(pos) = frame.pos.filter(|_| hovered && frame.delta != Vec2::ZERO) else { return };
         let pos = self.xf.map_or(pos, |map| map.to_layer(pos));
         if !rect.contains(pos) {
-            return;
+            return None;
         }
         let local = pos - rect.min.to_vec2();
         let local = if layout.mirrors() && rtl {
@@ -113,16 +132,62 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         } else {
             local
         };
-        if let Some(row) = layout.hit(local, offset).filter(|&row| self.source.enabled(row) && !self.source.is_section(row) && layout.shown(row))
-            && self.lead.key.as_ref() != Some(&self.source.key(row))
-        {
+        layout.hit(local, offset).filter(|&row| self.source.enabled(row) && !self.source.is_section(row) && layout.shown(row))
+    }
+
+    /// The lead follows a moving pointer over the rows, and the selection follows the lead the way it does for the
+    /// arrow keys. A pass moves the pointer when it holds a move event: the pointer entering over a row moves the lead
+    /// with no movement to measure, and a modifier change under a resting pointer leaves the lead where the keys put it.
+    pub(super) fn hover_lead(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, at: Placement) {
+        let moved = crate::runtime::pointer::with_pass_pointer(&cx.core.ctx, |pass| {
+            pass.events.iter().any(|event| matches!(event, PointerEvent::Moved { .. }))
+        });
+        if !moved {
+            return;
+        }
+        let Some(row) = Self::hovered_pos(cx).and_then(|pos| self.row_under(layout, at, pos)) else { return };
+        if self.lead.key.as_ref() != Some(&self.source.key(row)) {
             self.move_lead(row, LeadSource::Pointer);
             self.pick(comp, row, false, false);
         }
     }
 
+    /// The pointer resting on the lead row for the tooltip delay reports `CollectionEvent::Rested`, once per lead
+    /// change. Motion inside the row does not restart the timer, as for a tooltip.
+    pub(super) fn rest_lead(&mut self, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, at: Placement) {
+        let lead = self.lead.key.clone();
+        let over = Self::hovered_pos(cx).and_then(|pos| self.row_under(layout, at, pos));
+        let held = lead.is_some() && self.lead.rested != lead && over.is_some_and(|row| lead.as_ref() == Some(&self.source.key(row)));
+        let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
+        if crate::contract::overlay::dwell(&ctx, &mut *cx.core.memory, id, "rest", held, crate::contract::tooltip::DELAY)
+            && let Some(key) = lead
+        {
+            self.report_rest(key);
+        }
+    }
+
+    /// While a drag session another source started runs over the rows (its payload is neither this collection's row
+    /// drag nor a kind it takes), the unselected row under the pointer becomes the lead and the selection. The drag
+    /// holds the pointer, so the row comes from the pointer's position, not the collection's hover.
+    pub(super) fn drag_select(&mut self, comp: &C, cx: &Cx<'_, C>, layout: &C::ItemLayout, at: Placement) {
+        let ctx = &cx.core.ctx;
+        if !crate::runtime::drag::running(ctx)
+            || crate::runtime::drag::active_of(ctx, TypeId::of::<ListDrag<C::Key>>()).is_some()
+            || comp.drops().iter().any(|kind| crate::runtime::drag::active_of(ctx, kind.payload()).is_some())
+        {
+            return;
+        }
+        let Some(row) = crate::runtime::pointer::frame(ctx).pos.and_then(|pos| self.row_under(layout, at, pos)) else { return };
+        if self.holds(row) {
+            return;
+        }
+        self.move_lead(row, LeadSource::Pointer);
+        self.pick(comp, row, false, false);
+    }
+
     /// A lead whose key left the source moves to the key now in its place, else the one before it. The selection is
-    /// the host's: a row that left (deleted, or hidden by a filter) is not replaced by its neighbour.
+    /// the host's: a row that left (deleted, or hidden by a filter) is not replaced by its neighbour. The user did not
+    /// move the lead, so the new lead does not rest at once.
     pub(super) fn follow_lead_source(&mut self) {
         let len = self.source.len();
         if let Some(key) = self.lead.key.clone()
@@ -130,7 +195,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         {
             self.lead.key = None;
             if len > 0 {
-                self.move_lead(self.lead.at.min(len - 1), LeadSource::Keys);
+                self.place_lead(self.lead.at.min(len - 1), LeadSource::Keys);
             }
         } else if let Some(at) = self.lead.key.as_ref().and_then(|key| self.index_of(key)) {
             self.lead.at = at;

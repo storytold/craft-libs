@@ -4,11 +4,11 @@ use super::drag::Drags;
 use super::geometry::bar_track;
 use super::header::HeaderMemory;
 use super::members::Member;
-use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, Rows, SCROLL, Scrolled, View, key_hash, section_part};
+use super::{Held, ITEM_NODE, ItemsHooks, LastLayout, Lead, Placement, Renaming, Rows, SCROLL, Scrolled, key_hash, section_part};
 use super::{request, rows};
 use crate::contract::ValueOf;
 use crate::contract::collection::{
-    CollectionEvent, ContextMenuRequest, DropAt, Gestures, ItemsOut, OpenChange, PendingDrop, Rename, RowState, ShownRow,
+    CollectionEvent, ColumnLayout, ContextMenuRequest, DropAt, Gestures, ItemsOut, OpenChange, PendingDrop, Rename, RowState, ShownRow,
 };
 use crate::contract::cx::{BodyCx, Pointer as _};
 use crate::contract::run::{Measuring, ShapeHooks, ShowAt};
@@ -98,7 +98,12 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         };
         self.selection_at_read = self.selection.clone();
         self.previous = stage.session::<LastLayout<C::ItemLayout>>(sub(id, "item_layout")).0.take();
-        self.header.read(stage, id, comp.items());
+        let bound = comp.column_layout().map(|bind| match bind.get() {
+            Some(Mixed::Same(layout)) => layout,
+            _ => ColumnLayout::default(),
+        });
+        self.column_layout_at_read = bound.clone();
+        self.header.read(stage, id, comp.items(), bound);
         self.drags = stage.session::<Drags<C::Key>>(sub(id, "drags")).clone();
         self.lead = stage.session::<Lead<C::Key>>(sub(id, "lead")).clone();
         // A collection in a layer starts from `lead_on_open` at every opening of the layer, not only the first.
@@ -119,7 +124,6 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
             self.lead.key = self.selection.lead().filter(|key| self.index_of(key).is_some()).cloned();
         }
         self.renaming = stage.session::<Renaming<C::Key>>(sub(id, "rename")).clone();
-        self.last = stage.recall::<View>(sub(id, "view"));
         let scrolled = match comp.scroll() {
             Some(bind) => match bind.get() {
                 Some(Mixed::Same(pos)) => Scrolled { y: pos.y, x: pos.x, anchor: None },
@@ -149,15 +153,6 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
                 {
                     self.events.push(CollectionEvent::Zoom { factor: share.zoom, about });
                 }
-            }
-            if let (Some(rect), Some(bounds)) =
-                (if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) }, self.last.view)
-            {
-                // The rows scroll along y only: the reveal moves them along it and passes the rest on.
-                let view = Rect::from_min_max(Pos2::new(f32::NEG_INFINITY, bounds[1]), Pos2::new(f32::INFINITY, bounds[3]));
-                let (by, shown) = crate::contract::steps::reveal_move(rect, view);
-                self.offset += f64::from(by.y);
-                self.pass_on = (!quiet).then_some(shown);
             }
         }
     }
@@ -265,10 +260,14 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         Self::props_pad(comp, tokens)
     }
 
-    fn sized(&self, comp: &C, _: &Ui, _: Id, size: Vec2) -> Vec2 {
+    fn sized(&self, comp: &C, ui: &Ui, id: Id, size: Vec2) -> Vec2 {
         let sizing = comp.props(Internal::new()).sizing;
         // A collection that measured its width from its content takes that width; the column it sits in holds it.
-        let width = if self.room.x.is_finite() && !self.content_sized(comp) && !self.from_content.0 { self.room.x.max(size.x) } else { size.x };
+        let width = if self.content_sized(comp) || self.from_content.0 {
+            size.x
+        } else {
+            crate::layout::body::fill_size(ui, id, Axis::X, size.x, self.room.x, true)
+        };
         let height = match (self.scrolls && self.room.y.is_finite(), sizing) {
             (true, Sizing::Fill) if !self.from_content.1 && !self.capped => self.room.y,
             (true, Sizing::Fill) => size.y.min(self.room.y),
@@ -344,14 +343,30 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if let Some(range) = cx.scroll_moved(SCROLL) {
             self.offset = range.start;
         }
-        if let Some(shown) = self.pass_on.take() {
-            crate::contract::Focus::reveal(cx, shown);
+        if self.scrolls {
+            // A descendant's reveal, left for this pass: taken against this pass's rows (peeked while measuring).
+            let (ctx, id) = (cx.core.ctx.clone(), cx.core.id);
+            let quiet = cx.core.memory.is_peek() || crate::runtime::measure::active(&ctx);
+            if let Some(asked) = if quiet { crate::contract::peek_reveal(&ctx, id) } else { crate::contract::take_reveal(&ctx, id) } {
+                // The rows scroll along y only: the reveal moves them along it and passes the rest on.
+                let along = Rect::from_min_max(Pos2::new(f32::NEG_INFINITY, rect.min.y), Pos2::new(f32::INFINITY, rect.max.y));
+                let (by, shown) = crate::contract::steps::reveal_move(asked, along);
+                self.offset += f64::from(by.y);
+                if !quiet {
+                    crate::contract::Focus::reveal(cx, shown);
+                }
+            }
         }
         self.offset = self.offset.clamp(0.0, self.max_offset(view));
         let header_held = self.header_step(cx);
         self.offset_x = self.offset_x.clamp(0.0, f64::from((self.content.x - rect.width()).max(0.0)));
         self.open_lead(comp);
         self.follow_lead_source();
+        // A lead set in place (from the selection, `open_lead`, a row that left) has not rested yet: a lead that comes
+        // back to a row it rested on before reports the rest again.
+        if self.lead.rested != self.lead.key {
+            self.lead.rested = None;
+        }
         let lead_at = self.lead.key.as_ref().and_then(|key| self.index_of(key));
         let props = comp.items().clone();
         let Some(layout) = self.layout.take() else { return };
@@ -363,6 +378,9 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.press_step(comp, cx, &props, &layout, seen);
         if props.lead_follows_hover {
             self.hover_lead(comp, cx, &layout, seen);
+        }
+        if props.select_under_drag {
+            self.drag_select(comp, cx, &layout, seen);
         }
         self.drag_step(comp, cx, &layout, (rect, offset, rtl), &props);
         self.marquee_step(comp, cx, &layout, (rect, offset, rtl), &props);
@@ -378,6 +396,7 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         self.requested_rename(comp, cx, &props, &layout);
         self.requested_reveal(comp, &layout);
         self.type_ahead(comp, cx, &layout, lead_at);
+        self.rest_lead(cx, &layout, seen);
         request::record_lead(&cx.core.ctx, cx.core.id, self.lead.key.as_ref().and_then(|key| self.index_of(key)));
         if let Some(at) = self.page_reveal.take().filter(|&at| layout.shown(at)) {
             cx.core.reveal = Some(self.screen(&layout, rect, at, ScrollPos::default(), rtl));
@@ -753,8 +772,16 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
 
     fn settle(&mut self, comp: &mut C, cx: &mut Cx<'_, C>) {
         let id = cx.core.id;
-        // A collection's focus move reveals through its lead (`page_reveal`), never the collection's whole rect.
-        crate::runtime::focus::take_reveal_of(&cx.core.ctx, id);
+        // A collection's focus move reveals through its lead (`page_reveal`), never the collection's whole rect. A
+        // header cell's reveal moves the sideways offset the header and the rows share, to show the whole cell.
+        if let Some(Some(part)) = focus::take_reveal_of(&cx.core.ctx, id)
+            && self.scrolls
+            && let Some(by) = self.header.reveal_x(part, cx.core.flow.is_rtl())
+        {
+            let max = f64::from((self.content.x - self.rows_rect(cx).width()).max(0.0));
+            self.offset_x = (self.offset_x + by).clamp(0.0, max);
+            crate::runtime::egui::repaint::request(&cx.core.ctx);
+        }
         if self.scrolls && (self.offset != self.offset_at_read || self.offset_x != self.offset_x_at_read || self.anchor != self.anchor_at_read) {
             match comp.scroll() {
                 Some(mut bind) => {
@@ -775,6 +802,13 @@ impl<C: Collection> ShapeHooks<C> for ItemsHooks<'_, '_, C> {
         if !requests.is_empty() {
             self.header.apply_requests(&cx.core.ctx, requests, cx.core.flow.is_rtl());
             self.take_column_events();
+        }
+        if let Some(before) = self.column_layout_at_read.take()
+            && *self.header.layout() != before
+            && let Some(mut bind) = comp.column_layout()
+        {
+            let (label, doc_key) = (cx.core.label_arc(), cx.core.resolved.doc_key);
+            bind.apply(&EditEvent::set(Mixed::Same(before), self.header.layout().clone(), label, doc_key));
         }
         *cx.core.memory.session::<HeaderMemory>(sub(id, "columns")) = self.header.persist();
         *cx.core.memory.session::<Drags<C::Key>>(sub(id, "drags")) = self.drags.clone();
@@ -874,9 +908,13 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
                     self.events.push(CollectionEvent::Rename(EditEvent::cancel(gesture, reason, Some(before))));
                     self.ended_rename = true;
                 }
-                // Enter on a name nobody typed in opens no edit run: the rename ends with no event and no undo step, as a
-                // text field's empty commit does.
+                // Enter on a proposed draft nobody typed in commits it. Enter on the row's own name opens no edit run: the
+                // rename ends with no event and no undo step, as a text field's empty commit does.
                 None if editor.submitted => {
+                    if self.renaming.proposed {
+                        let after = Rename { key: key.clone(), name: self.renaming.draft.clone() };
+                        self.events.push(CollectionEvent::Rename(EditEvent::commit(gesture, before, after)));
+                    }
                     self.ended_rename = true;
                     self.refocus = true;
                 }

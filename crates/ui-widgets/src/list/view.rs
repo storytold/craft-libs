@@ -57,7 +57,7 @@ pub struct List<'a, K: Clone + Eq + Hash + Send + Sync + 'static> {
     #[prop(func = "Fn(&K) -> bool")]
     can_rename: Option<RowTest<'a, K>>,
     /// The text a row's rename field opens with, `None` for the row's text: an empty draft when several rows are picked
-    /// takes a name for all of them.
+    /// takes a name for all of them. Enter on a proposed draft nobody typed in commits it.
     #[prop(func = "Fn(&K) -> Option<String>")]
     rename_draft: Option<RowText<'a, K>>,
     /// Which rows may be dragged.

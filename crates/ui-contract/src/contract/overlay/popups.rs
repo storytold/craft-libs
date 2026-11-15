@@ -307,7 +307,6 @@ fn pointer_in_popup(ctx: &Context, popup: Id) -> bool {
 struct Dwell(Option<f64>);
 
 /// Whether `held` has lasted `delay` seconds, timed in the slot `name` of `id`; asks for a pass at the deadline.
-// P3(framework-01-w7): fx.F71 decision, `dwell` crate-visible for `items/lead.rs`
 pub(crate) fn dwell(ctx: &Context, stage: &mut MemoryStage, id: Id, name: &'static str, held: bool, delay: f64) -> bool {
     let now = frame::clock(ctx);
     let since = stage.shown::<Dwell>(sub(id, name));
