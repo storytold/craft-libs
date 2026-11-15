@@ -1443,6 +1443,21 @@ fn a_stream_encrypted_with_a_method_that_cant_be_decrypted_stays_as_stored() {
         other => panic!("{case}: {:?}", other.map(|b| b.len())),
     };
     refused(&doc, "a full save");
+    // A catalog naming the stream first has a full save number it 4 again (after the catalog,
+    // /Info and /Encrypt). Refused all the same: written as `4 0 obj` whatever its generation was,
+    // and through a full save, which the security of such a stream doesn't survive.
+    let mut same_number = doc.clone();
+    let root = same_number.trailer().reference(b"Root").unwrap();
+    let mut catalog = craft_pdf::cos::Dict::new();
+    catalog.set(b"A".to_vec(), Object::Ref(contents));
+    catalog.set(b"Type".to_vec(), Object::name("Catalog"));
+    catalog.set(b"Pages".to_vec(), Object::Ref(ObjRef::new(2, 0)));
+    same_number.set(root, Object::Dict(catalog));
+    let no_mod_date = SaveOptions { mod_date: None, ..SaveOptions::default() };
+    match write_full(&same_number, &no_mod_date) {
+        Err(CosError::Security(why)) => assert!(why.contains("unsupported algorithm"), "{why}"),
+        other => panic!("a full save that keeps the stream's number: {:?}", other.map(|b| b.len())),
+    }
     let mut unprotected = doc.clone();
     unprotected.remove_encryption();
     refused(&unprotected, "removing the security");

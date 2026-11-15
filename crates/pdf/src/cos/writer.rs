@@ -477,7 +477,6 @@ pub fn write_full(doc: &Document, opts: &SaveOptions) -> Result<Vec<u8>, CosErro
             let document = &reader.document;
             if let Object::Stream(s) = &*o
                 && document.security().is_some_and(|h| h.has_key() && defines_unsupported(h))
-                && (document.encryption_changed() || num != r.num)
                 && document.reads_as_stored(s)
             {
                 return Err(unsupported_stream());
