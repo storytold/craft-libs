@@ -108,8 +108,15 @@ fn boolean(element: &impl XflElement, name: &str) -> Option<bool> {
 /// Parses XFL's hexadecimal color and alpha attributes. Missing or malformed colors use black;
 /// missing, malformed, or non-finite alpha uses full opacity, matching the legacy importer.
 pub fn color(element: &impl XflElement, color_attribute: &str, alpha_attribute: &str) -> Color {
-    let rgb = element.attr(color_attribute).and_then(|value| u32::from_str_radix(value.trim().trim_start_matches('#'), 16).ok()).unwrap_or(0);
-    let alpha = number(element, alpha_attribute).unwrap_or(1.0).clamp(0.0, 1.0);
+    color_from_attributes(element.attr(color_attribute), element.attr(alpha_attribute))
+}
+
+/// Parses native color and alpha strings after a consumer has read them from its own element
+/// adapter. This keeps wire-value interpretation shared even when an application already has a
+/// borrowed schema view for the containing element.
+pub fn color_from_attributes(color: Option<&str>, alpha: Option<&str>) -> Color {
+    let rgb = color.and_then(|value| u32::from_str_radix(value.trim().trim_start_matches('#'), 16).ok()).unwrap_or(0);
+    let alpha = alpha.and_then(|value| value.trim().parse::<f32>().ok()).filter(|value| value.is_finite()).unwrap_or(1.0).clamp(0.0, 1.0);
     Color { rgb, alpha }
 }
 
@@ -532,6 +539,14 @@ mod tests {
         let fill = fill.definition().unwrap();
         assert_eq!(fill.alpha(), None);
         assert_eq!(fill.color_value(), Color { rgb: 0, alpha: 1.0 });
+    }
+
+    #[test]
+    fn color_attribute_values_keep_native_defaults_and_clamping() {
+        assert_eq!(color_from_attributes(Some(" #123456 "), Some("0.4")), Color { rgb: 0x123456, alpha: 0.4 });
+        assert_eq!(color_from_attributes(Some("invalid"), Some("NaN")), Color { rgb: 0, alpha: 1.0 });
+        assert_eq!(color_from_attributes(Some("#abcdef"), Some("2")), Color { rgb: 0xabcdef, alpha: 1.0 });
+        assert_eq!(color_from_attributes(None, Some("-1")), Color { rgb: 0, alpha: 0.0 });
     }
 
     #[test]
