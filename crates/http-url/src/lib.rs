@@ -60,7 +60,11 @@ impl Url {
     pub fn join(&self, location: &str) -> Result<Url, HttpError> {
         let l = location.trim();
         if l.starts_with("http://") || l.starts_with("https://") {
-            return Url::parse(l);
+            let url = Url::parse(l)?;
+            if self.tls && !url.tls {
+                return Err(HttpError::BadUrl("redirect from https to http refused".into()));
+            }
+            return Ok(url);
         }
         // another scheme (`ftp:`, `file:`, `data:`…)
         if let Some((scheme, _)) = l.split_once(':')
@@ -130,6 +134,11 @@ mod tests {
         assert_eq!(u.join("other").unwrap().path, "/x/y/other");
         assert_eq!(u.join("//c.example/p").unwrap().host, "c.example");
         assert!(u.join("ftp://nope").is_err());
+        // no downgrade from https to http, however the redirect is written
+        assert!(u.join("http://a.example/z").is_err());
+        let plain = Url::parse("http://127.0.0.1:8080/a").unwrap();
+        assert!(!plain.join("http://127.0.0.1:9/b").unwrap().tls);
+        assert!(plain.join("https://b.example/z").unwrap().tls);
     }
 
 }
