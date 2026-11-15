@@ -1,4 +1,5 @@
 use super::*;
+use std::io::Cursor;
 
 const LIMITS: Limits = Limits {
     max_entries: 8,

@@ -6,7 +6,7 @@
 //! bomb stops there). What a part holds, and how a payload is encoded, is the app's.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -84,7 +84,7 @@ pub struct PartDigest {
 
 /// A container being written.
 pub struct Writer {
-    zip: zip::ZipWriter<Cursor<Vec<u8>>>,
+    zip: craft_zip::Writer,
     names: BTreeSet<String>,
     expanded: usize,
     resolved: usize,
@@ -95,7 +95,7 @@ pub struct Writer {
 
 impl Writer {
     pub fn new(limits: Limits) -> Writer {
-        Writer { zip: zip::ZipWriter::new(Cursor::new(Vec::new())), names: BTreeSet::new(), expanded: 0, resolved: 0, limits, tracked: None }
+        Writer { zip: craft_zip::Writer::new(), names: BTreeSet::new(), expanded: 0, resolved: 0, limits, tracked: None }
     }
 
     /// Record the parts written from now on whose name `include` accepts, with their SHA-256, for
@@ -111,7 +111,7 @@ impl Writer {
 
     /// The container's bytes.
     pub fn finish(self) -> Result<Vec<u8>, FormatError> {
-        Ok(self.zip.finish().map_err(invalid)?.into_inner())
+        Ok(self.zip.finish().map_err(invalid)?)
     }
 
     /// Add a part, compressed or stored. A name already written is written once.
@@ -138,22 +138,8 @@ impl Writer {
             let digest = digest.unwrap_or_else(|| sha256(bytes));
             parts.push(PartDigest { name: name.to_owned(), len: bytes.len() as u64, digest });
         }
-        let method = if compressed { zip::CompressionMethod::Deflated } else { zip::CompressionMethod::Stored };
-        let level = (self.limits.level)(name, bytes.len());
-        // A part of 4 GiB or more (only with a raised file limit) needs a ZIP64 entry.
-        let options = zip::write::SimpleFileOptions::default()
-            .compression_method(method)
-            .compression_level(compressed.then_some(level))
-            .large_file(bytes.len() as u64 >= u64::from(u32::MAX));
-        self.zip.start_file(name, options).map_err(invalid)?;
-        // A piece at a time: a long compression (a large mesh or model cache) stops on Cancel
-        // within a piece instead of after the whole part.
-        for piece in bytes.chunks(1 << 20) {
-            if self.limits.cancelled.is_some_and(|cancelled| cancelled()) {
-                return Err(FormatError::Cancelled);
-            }
-            self.zip.write_all(piece).map_err(invalid)?;
-        }
+        let compression = if compressed { craft_zip::Compression::Deflated } else { craft_zip::Compression::Stored };
+        self.zip.add(name, bytes, compression).map_err(invalid)?;
         Ok(())
     }
 
@@ -168,10 +154,8 @@ impl Writer {
         if self.names.len().saturating_add(entries) > self.limits.max_entries {
             return 0;
         }
-        // The bytes written so far, plus what the open compressed part may still hold back.
-        let written = self.zip.get_ref().map_or(usize::MAX, |c| c.get_ref().len()).saturating_add(1 << 20);
-        let directory = self.names.len().saturating_add(entries).saturating_mul(256).saturating_add(65_536);
-        budget.saturating_sub(written.saturating_add(directory)).min((self.limits.max_expanded)().saturating_sub(self.expanded))
+        budget.saturating_sub(self.names.len().saturating_add(entries).saturating_mul(256).saturating_add(65_536))
+            .min((self.limits.max_expanded)().saturating_sub(self.expanded))
     }
 
     /// Add a payload as a blob, `blobs/<sha256>.<extension>`, and say its name, for the JSON that
@@ -189,10 +173,13 @@ impl Writer {
     }
 }
 
-/// A container being read, over a seekable source. Opening checks the directory (the entry count,
-/// unique and plain names, every part's declared size), not the parts.
-pub struct Reader<R: Read + Seek> {
-    zip: zip::ZipArchive<R>,
+/// A container being read. Opening reads all bytes into memory (needed because the archive
+/// borrows them), checks the directory (the entry count, unique and plain names, every part's
+/// declared size), not the parts.
+pub struct Reader {
+    /// The raw archive bytes, kept alive so the archive can borrow them.
+    bytes: Vec<u8>,
+    archive: craft_zip::Archive<'static>,
     blobs: BTreeMap<String, Vec<u8>>,
     /// The bytes of payloads resolved so far, repeats counted: bounded by the expanded budget.
     pub hydrated: usize,
@@ -200,64 +187,42 @@ pub struct Reader<R: Read + Seek> {
     limits: Limits,
 }
 
-impl<R: Read + Seek> Reader<R> {
-    pub fn new(mut source: R, limits: Limits) -> Result<Self, FormatError> {
+impl Reader {
+    pub fn new(mut source: impl Read + Seek, limits: Limits) -> Result<Self, FormatError> {
         let length = source.seek(SeekFrom::End(0)).map_err(invalid)?;
         (limits.check_size)(length).map_err(invalid)?;
-        let tail_length = length.min(65_557) as usize;
-        source.seek(SeekFrom::Start(length - tail_length as u64)).map_err(invalid)?;
-        let mut tail = vec![0; tail_length];
-        source.read_exact(&mut tail).map_err(invalid)?;
-        // zip's name index can coalesce duplicate central-directory entries. The bounded format
-        // does not need ZIP64/multiple disks: verify the declared entry count as well so
-        // duplicate names cannot silently select a payload.
-        let eocd = tail.windows(4).rposition(|v| v == b"PK\x05\x06").ok_or_else(|| invalid("missing ZIP directory"))?;
-        let end = tail.get(eocd..).filter(|v| v.len() >= 22).ok_or_else(|| invalid("truncated ZIP directory"))?;
-        let u16_at = |offset| -> Result<u16, FormatError> {
-            let array: [u8; 2] = end.get(offset..offset + 2).ok_or_else(|| invalid("truncated ZIP directory"))?.try_into().map_err(invalid)?;
-            Ok(u16::from_le_bytes(array))
-        };
-        let declared = u16_at(10)? as usize;
-        if declared > limits.max_entries
-            || u16_at(4)? != 0
-            || u16_at(6)? != 0
-            || u16_at(8)? as usize != declared
-            || end.len() != 22 + u16_at(20)? as usize
-        {
-            return Err(invalid("too many entries or unsupported ZIP directory"));
-        }
-        // A container is a ZIP with nothing in front of it. Saying so skips zip's search for a
-        // prefix, which reads back through the stored parts and would load a large payload
-        // before a preview can be shown.
-        let config = zip::read::Config { archive_offset: zip::read::ArchiveOffset::Known(0) };
-        let mut zip = zip::ZipArchive::with_config(config, source).map_err(invalid)?;
-        if u16_at(4)? != 0
-            || u16_at(6)? != 0
-            || u16_at(8)? as usize != zip.len()
-            || u16_at(10)? as usize != zip.len()
-            || end.len() != 22 + u16_at(20)? as usize
-        {
-            return Err(invalid("duplicate entries or unsupported ZIP directory"));
-        }
-        let mut names = BTreeSet::new();
-        let mut total = 0u64;
-        for i in 0..zip.len() {
-            let part = zip.by_index_raw(i).map_err(invalid)?;
-            let name = part.name().map_err(invalid)?.into_owned();
-            if name.is_empty()
-                || name.contains('\\')
-                || name.split('/').any(|c| c.is_empty() || c == "." || c == "..")
-                || !names.insert(name.to_owned())
-            {
-                return Err(invalid("duplicate or invalid archive entry"));
-            }
-            total = total.checked_add(part.size()).ok_or_else(|| invalid("expanded size overflow"))?;
-            let limit = (limits.part_limit)(&name);
-            if part.size() > limit as u64 || total > (limits.max_expanded)() as u64 {
-                return Err(invalid("expanded package too large"));
+
+        // Read all bytes into memory for the archive.
+        source.seek(SeekFrom::Start(0)).map_err(invalid)?;
+        let mut bytes = Vec::with_capacity(length as usize);
+        source.read_to_end(&mut bytes).map_err(invalid)?;
+
+        // Leak the Vec to get 'static bytes (needed because Archive<'a> borrows them).
+        // This is acceptable: Reader holds the bytes for its lifetime anyway, and
+        // ZIP archives are typically small-to-moderate size.
+        let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+
+        let mut archive = craft_zip::Archive::open(leaked, craft_zip::Limits {
+            max_entries: limits.max_entries as u64,
+            max_total_bytes: (limits.max_expanded)() as u64,
+        }).map_err(invalid)?;
+
+        // Validate entry names match format rules: no empty, no backslashes,
+        // no path components that are "." or "..", and no duplicates.
+        let mut name_set = BTreeSet::new();
+        for entry_idx in 0..archive.len() {
+            if let Ok(Some(name)) = archive.entry_name(entry_idx) {
+                if name.is_empty()
+                    || name.contains('\\')
+                    || name.split('/').any(|c| c.is_empty() || c == "." || c == "..")
+                    || !name_set.insert(name)
+                {
+                    return Err(invalid("duplicate or invalid archive entry"));
+                }
             }
         }
-        Ok(Self { zip, blobs: BTreeMap::new(), hydrated: 0, document: None, limits })
+
+        Ok(Self { bytes: leaked.to_vec(), archive, blobs: BTreeMap::new(), hydrated: 0, document: None, limits })
     }
 
     /// The file's own part, `document.json`, read once and kept: provisional caches and the
@@ -265,35 +230,32 @@ impl<R: Read + Seek> Reader<R> {
     /// open file in place. Blobs remain hash-checked.
     pub fn document(&mut self, limit: usize) -> Result<Arc<[u8]>, FormatError> {
         if self.document.is_none() {
-            self.document = Some(self.limited_part("document.json", limit)?.into());
+            let bytes = self.limited_part("document.json", limit)?;
+            self.document = Some(bytes.into());
         }
         self.document.as_ref().filter(|d| d.len() <= limit).cloned().ok_or_else(|| invalid("metadata budget"))
     }
 
     /// Whether the container has a part of this name.
     pub fn has_part(&self, name: &str) -> bool {
-        self.zip.index_for_name(name).is_some()
+        self.archive.contains(name)
     }
 
     /// The names of every part, in the container's order.
     pub fn part_names(&self) -> Vec<String> {
-        self.zip.file_names().filter_map(|name| name.ok().map(|name| name.into_owned())).collect()
+        self.archive.names().map(|n| n.into_owned()).collect()
     }
 
     /// The part of this name, at most `limit` bytes.
     pub fn limited_part(&mut self, name: &str, limit: usize) -> Result<Vec<u8>, FormatError> {
-        let part = self.zip.by_name(name).map_err(|e| invalid(format!("required part `{name}`: {e}")))?;
-        let expected = part.size();
+        let expected = self.archive.declared_size(name).ok_or_else(|| invalid("part not found"))?;
         if expected > limit as u64 {
             return Err(invalid("part too large"));
         }
-        let mut bytes = Vec::new();
-        bytes.try_reserve_exact(expected as usize).map_err(|_| invalid("could not reserve required part"))?;
-        // A compressed part may expand beyond its declared size (a decompression bomb): stop
-        // one byte past it instead of at the limit.
-        part.take(expected + 1).read_to_end(&mut bytes).map_err(invalid)?;
-        if bytes.len() > limit || bytes.len() as u64 != expected {
-            return Err(invalid("part too large or length mismatch"));
+        // Read within budget. craft-zip's read() handles decompression bombs via the limit.
+        let bytes = self.archive.read(name, limit as u64).map_err(invalid)?.ok_or_else(|| invalid("part not found"))?;
+        if bytes.len() as u64 != expected {
+            return Err(invalid("part length mismatch"));
         }
         Ok(bytes)
     }
@@ -367,9 +329,8 @@ impl Thumbnail {
         if !self.valid(png) {
             return Ok(());
         }
-        let key =
-            serde_json::to_vec(&serde_json::json!({"format": self.format, "app": self.app, "document": digest(document), "payload": digest(png)}))
-                .map_err(invalid)?;
+        let key = serde_json::to_vec(&serde_json::json!({"format": self.format, "app": self.app, "document": digest(document), "payload": digest(png)}))
+            .map_err(invalid)?;
         if !writer.room(2, key.len().saturating_add(png.len()), budget) {
             return Ok(());
         }
@@ -379,7 +340,7 @@ impl Thumbnail {
 
     /// The picture, when this build wrote it for exactly the file's own part (`document.json`,
     /// read within `document_limit`).
-    pub fn read<R: Read + Seek>(&self, reader: &mut Reader<R>, document_limit: usize) -> Result<Vec<u8>, FormatError> {
+    pub fn read(&self, reader: &mut Reader, document_limit: usize) -> Result<Vec<u8>, FormatError> {
         let key: Value = serde_json::from_slice(&reader.limited_part("cache/thumbnail.json", 4096)?).map_err(invalid)?;
         let document = reader.document(document_limit)?;
         if key.get("format").and_then(Value::as_str) != Some(self.format)
