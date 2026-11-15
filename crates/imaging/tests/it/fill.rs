@@ -270,10 +270,12 @@ fn fill_overlay_tints_the_sampling_area_or_the_excluded_area() {
 
 const REMEMBERED: SaveKey = SaveKey::new("trial.fill");
 
-/// With `remember`, Cancel stores the settings and the next Content-Aware Fill opens with them.
+/// With `remember`, every close stores the settings and the next Content-Aware Fill opens with them: the footer's
+/// Cancel, and a cancel from the host (the app's control route) with no pass after the change.
 #[trial]
-fn fill_remembers_its_settings_at_cancel() {
-    let remembered = || ContentAwareFillWorkspace::new(FillOpen::new([LAYER.width, LAYER.height], "Layer 1", FillLimits::new(10, 1000))).remember(REMEMBERED);
+fn fill_remembers_its_settings_at_every_close() {
+    let remembered =
+        || ContentAwareFillWorkspace::new(FillOpen::new([LAYER.width, LAYER.height], "Layer 1", FillLimits::new(10, 1000))).remember(REMEMBERED);
     let mut rig = Rig::over(remembered());
     rig.with(|work| work.settings_mut().opacity = 10.0);
     rig.fixture.idle(2);
@@ -289,6 +291,12 @@ fn fill_remembers_its_settings_at_cancel() {
     rig.host.borrow_mut().open(HostedWorkspace::new(remembered(), source));
     rig.fixture.idle(3);
     assert_eq!(rig.with(|work| work.settings().opacity), 10.0, "the next opening takes the stored settings");
+
+    rig.with(|work| work.settings_mut().opacity = 40.0);
+    let ctx = rig.fixture.ctx().clone();
+    assert!(rig.host.borrow_mut().cancel::<Hosted>(&ctx), "the host cancels the workspace");
+    let stored = saved_value::<Option<FillSettings>>(&ctx, &REMEMBERED);
+    assert!(stored.is_some_and(|settings| settings.opacity == 40.0), "a cancel from the host stores the settings");
 }
 
 /// The automation keys `expand` and `contract` edit the fill area by that many pixels, like the bar's buttons; a

@@ -35,7 +35,7 @@ fn blur_story(ui: &mut Ui, data: &mut StoryData, preview: bool, layout: ParamLay
     let layout = *data.choice("layout", layout, &LAYOUTS);
     let comparing = *data.value("comparing", false);
     let dialog = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).opened(Bind::bound(data.value("open", true))).history(true);
-    let dialog = if preview { dialog.preview(picture(ui, comparing)).layout(layout) } else { dialog };
+    let dialog = if preview { dialog.previews(true).preview(picture(ui, comparing)).layout(layout) } else { dialog };
     let shown = dialog.show(ui);
     *data.value("comparing", false) = shown.comparing;
     shown.into()

@@ -100,6 +100,90 @@ fn a_hosted_adjustment_dialog_previews_and_answers_with_its_value() {
     assert_eq!(host.borrow_mut().take::<Adjust>(), Some(DialogResult::Cancel), "Escape cancels a reopened dialog");
 }
 
+// The dialog's own edited signal: false at open, after a preview toggle and after a seed; true after an editor change,
+// and after a field set of the value.
+#[trial]
+fn an_adjustment_dialog_counts_editor_changes_and_sets_as_edits_but_not_seeds_or_preview() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let id = host.borrow_mut().open(brightness_contrast());
+    fixture.idle(10);
+    let edited = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<Adjust>().map(Adjust::edited);
+    assert_eq!(edited(&host), Some(false), "a dialog opens unedited");
+    let preview = fixture.by_label("Preview").expect("the Preview box");
+    fixture.click(&preview).idle(4);
+    if let Some(dialog) = host.borrow_mut().get_mut::<Adjust>() {
+        dialog.seed(BrightnessContrast { brightness: 0.0, contrast: 0.0, legacy: false });
+    }
+    fixture.idle(4);
+    assert_eq!(edited(&host), Some(false), "a preview toggle and a seed are not edits");
+    let slider = fixture.by_role(craft_ui::contract::Role::SLIDER).first().cloned().expect("the Brightness slider");
+    fixture.drag(&slider, Vec2::new(slider.rect.width() / 4.0, 0.0)).settle();
+    assert_eq!(edited(&host), Some(true), "an editor change is an edit");
+
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut again = self::fixture(&host);
+    host.borrow_mut().open(brightness_contrast());
+    again.idle(10);
+    let ctx = again.ctx().clone();
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "contrast", serde_json::json!(0.0)), Ok(()));
+    assert_eq!(edited(&host), Some(true), "a field set of the value is an edit");
+}
+
+// A seed after the open moves the Reset baseline: Reset stays disabled after the seed, and after an edit it returns
+// the value to the seed, not to the value the dialog opened with.
+#[trial]
+fn a_seed_moves_the_reset_baseline() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(brightness_contrast());
+    fixture.idle(10);
+    let seeded = BrightnessContrast { brightness: 5.0, contrast: 5.0, legacy: false };
+    if let Some(dialog) = host.borrow_mut().get_mut::<Adjust>() {
+        dialog.seed(seeded);
+    }
+    fixture.idle(4).hold(Modifiers::ALT).idle(2);
+    let reset = fixture.by_label("Reset").expect("Alt turns Cancel into Reset");
+    assert!(fixture.tree().is_disabled_key(reset.node), "a seed is the baseline: nothing to reset");
+    fixture.hold(Modifiers::NONE).idle(2);
+
+    let slider = fixture.by_role(craft_ui::contract::Role::SLIDER).first().cloned().expect("the Brightness slider");
+    fixture.drag(&slider, Vec2::new(slider.rect.width() / 4.0, 0.0)).settle();
+    let value = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<Adjust>().map(|dialog| dialog.value().clone());
+    assert_ne!(value(&host), Some(seeded), "the drag edits the value");
+    fixture.hold(Modifiers::ALT).idle(2);
+    let reset = fixture.by_label("Reset").expect("Alt turns Cancel into Reset");
+    assert!(!fixture.tree().is_disabled_key(reset.node), "an edit enables Reset");
+    fixture.click(&reset).idle(2);
+    fixture.hold(Modifiers::NONE).settle();
+    assert_eq!(value(&host), Some(seeded), "Reset returns to the seed");
+}
+
+// A dialog given a JSON form lists the form's keys for its value, with the dialog's own fields beside them, and the
+// form sees the edited signal.
+#[trial]
+fn an_adjustment_dialog_with_a_json_form_lists_the_forms_keys() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let form = |value: &BrightnessContrast, edited: bool| {
+        let mut params = serde_json::Map::new();
+        params.insert("b".to_owned(), serde_json::json!(value.brightness));
+        params.insert("edited".to_owned(), serde_json::json!(edited));
+        params
+    };
+    let id = host.borrow_mut().open(brightness_contrast().json_form(form));
+    fixture.idle(10);
+    let fields = || host.borrow().get::<Adjust>().and_then(|dialog| dialog.json_fields()).unwrap_or_default();
+    let listed = fields();
+    assert_eq!((listed["b"].clone(), listed["edited"].clone()), (serde_json::json!(20.0), serde_json::json!(false)));
+    assert!(listed.get("brightness").is_none(), "the serde form does not list beside the app's");
+    assert_eq!(listed["preview"], serde_json::json!(true), "the dialog's own fields list beside the form");
+    let ctx = fixture.ctx().clone();
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "brightness", serde_json::json!(5.0)), Ok(()));
+    let listed = fields();
+    assert_eq!((listed["b"].clone(), listed["edited"].clone()), (serde_json::json!(5.0), serde_json::json!(true)));
+}
+
 /// Why the app refuses the held OK.
 const REFUSED: &str = "The layer is locked.";
 

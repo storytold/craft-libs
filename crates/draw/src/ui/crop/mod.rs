@@ -3,7 +3,7 @@
 //! and the Perspective Crop tool ([`PerspectiveCropTool`], run each pass as [`PerspectiveCropPass`] over a
 //! [`PerspectiveInput`]) with its quad ([`PerspectiveCropQuad`]) and options bar ([`PerspectiveCropBar`]). Both bars
 //! share the W × H × Resolution cells over [`CropSizeFields`], whose target is a [`CropSizeTarget`]. The frame itself
-//! is `craft_ui::canvas::CropOverlay`, shown by [`CropToolPass::show_frame`].
+//! is `craft_ui::canvas::CropOverlay`, shown by [`CropTool::show_frame`].
 //!
 //! The tool reports events and never crops the document: the app crops on [`CropEvent::Apply`] with the
 //! [`CropCommit`] it carries.
@@ -36,5 +36,5 @@ pub use perspective_tool::{PerspectiveCropEvent, PerspectiveCropPass, Perspectiv
 pub use preset_list::{CropPresetList, CropPresetListOutput};
 pub use session::{CropDocKey, CropDocument, CropKept, CropSession, CropStep, LeaveFrame, StraightenState};
 pub use size_cells::CropSizeTarget;
-pub use tool::{CropCommit, CropEvent, CropInput, CropOutput, CropTool, CropToolPass, crop_to_form};
+pub use tool::{CropCommit, CropEvent, CropInput, CropOutput, CropShown, CropTool, CropToolPass, crop_to_form};
 pub use words::CropWords;

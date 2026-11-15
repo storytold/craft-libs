@@ -576,6 +576,17 @@ impl Component for TransformBox<'_> {
         Some(self.state.reborrow())
     }
 
+    /// A host keeps the box in f32 (a layer's transform, a text layer's box) and gives a proposal back rounded to
+    /// it: each corner and the pivot within f32 precision of the proposal is the proposal, not a change of the
+    /// document under the drag.
+    fn same_value(&self, proposed: &BoxState, host: &BoxState) -> bool {
+        let near = |a: Point, b: Point| {
+            let tolerance = |u: f64, v: f64| 4.0 * f64::from(f32::EPSILON) * u.abs().max(v.abs()).max(1.0);
+            (a.x - b.x).abs() <= tolerance(a.x, b.x) && (a.y - b.y).abs() <= tolerance(a.y, b.y)
+        };
+        proposed.quad.iter().zip(&host.quad).all(|(a, b)| near(*a, *b)) && near(proposed.pivot, host.pivot)
+    }
+
     /// The whole box, the corners, the edges and the reference point the rules allow, in keyboard order, then each
     /// side as a pointer-only segment, the centre and the move strips where declared, and the outside. A handle, the
     /// reference point and the centre rank alike, so the nearest wins where they overlap on a small box; they rank above

@@ -3,7 +3,7 @@
 //! The story plays the app: it stores the tool's settings, routes the bar to the tool and accepts every crop without
 //! cropping the picture.
 
-use super::super::{CropBar, CropDocKey, CropDocument, CropEvent, CropInput, CropSettings, CropTool};
+use super::super::{CropBar, CropDocKey, CropDocument, CropEvent, CropInput, CropSettings, CropShown, CropTool};
 use craft_behavior::CanvasView;
 use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{BezPath, Circle, Point, Rect, Size};
@@ -98,11 +98,9 @@ fn document(key: u64, resolution: f64) -> CropDocument {
 }
 
 /// What the tool reported in a pass of the canvas body: it shows the frame.
-fn show_frame(ui: &mut Ui, at: egui::Rect, tool: &mut CropTool, settings: &CropSettings, document: &CropDocument) -> Vec<CropEvent> {
+fn show_frame(ui: &mut Ui, at: egui::Rect, tool: &mut CropTool, settings: &CropSettings, document: &CropDocument) -> CropShown {
     let ctx = ui.ctx().clone();
-    let mut pass = tool.pass(CropInput::new(&ctx, settings, document));
-    pass.show_frame(ui, at);
-    pass.finish().events
+    tool.show_frame(ui, at, &CropInput::new(&ctx, settings, document))
 }
 
 /// Runs the tool on the canvas and returns what it reported.
@@ -112,8 +110,9 @@ fn run_tool(
     tool: &mut CropTool,
     settings: &CropSettings,
     document: &CropDocument,
+    shown: Option<CropShown>,
 ) -> Vec<CropEvent> {
-    let mut pass = tool.pass(CropInput::new(ctx, settings, document));
+    let mut pass = tool.pass(CropInput::new(ctx, settings, document), shown);
     let _ = host.run(&mut pass);
     pass.finish().events
 }
@@ -188,13 +187,13 @@ fn default_frame(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     }
     let showing = picked;
     let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &CropSettings| {
-        if showing { show_frame(ui, at, tool, settings, &document) } else { Vec::new() }
+        showing.then(|| show_frame(ui, at, tool, settings, &document))
     };
     let ctx = ui.ctx().clone();
     let output = tool_story(ui, data, ToolStory::new("Document", &picture).buttons(&buttons), CropTool::new, CropSettings::default(), body, |run| {
-        let mut events = run.shown.unwrap_or_default();
+        let mut events = Vec::new();
         if showing {
-            events.extend(run_tool(&ctx, &run.host, run.tool, run.document, &document));
+            events.extend(run_tool(&ctx, &run.host, run.tool, run.document, &document, run.shown.flatten()));
         }
         match run.pressed {
             Some(PICK_OTHER) => {
@@ -255,7 +254,7 @@ fn ratio_and_size(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &CropSettings| show_frame(ui, at, tool, settings, &document);
     let ctx = ui.ctx().clone();
     let output = tool_story(ui, data, ToolStory::new("Document", &picture), CropTool::new, settings, body, |run| {
-        let mut events = run.shown.unwrap_or_default();
+        let mut events = Vec::new();
         if let Some(change) = ratio {
             events.extend(run.tool.refit(run.document, &document, &units, change.editing));
         }
@@ -272,7 +271,7 @@ fn ratio_and_size(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             // The bar showed before the frame: the frame shows its answer on the next pass.
             frame::request_repaint(&ctx);
         }
-        events.extend(run_tool(&ctx, &run.host, run.tool, run.document, &document));
+        events.extend(run_tool(&ctx, &run.host, run.tool, run.document, &document, run.shown));
         for event in events {
             if let Some(text) = handle(&words, &units, run.tool, run.document, event) {
                 last = Some(text);
@@ -315,7 +314,7 @@ fn box_undo(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut CropTool, settings: &CropSettings| show_frame(ui, at, tool, settings, &document);
     let ctx = ui.ctx().clone();
     tool_story(ui, data, ToolStory::new("Document", &picture).buttons(&buttons), CropTool::new, CropSettings::default(), body, |run| {
-        let mut events = run.shown.unwrap_or_default();
+        let mut events = Vec::new();
         match run.pressed {
             Some(UNDO) => {
                 let _ = run.tool.undo();
@@ -325,7 +324,7 @@ fn box_undo(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
             }
             _ => {}
         }
-        events.extend(run_tool(&ctx, &run.host, run.tool, run.document, &document));
+        events.extend(run_tool(&ctx, &run.host, run.tool, run.document, &document, run.shown));
         for event in events {
             let _ = handle(&words, &units, run.tool, run.document, event);
         }

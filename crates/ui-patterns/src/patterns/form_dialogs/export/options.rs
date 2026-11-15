@@ -15,6 +15,7 @@ use crate::text::NumberField;
 use crate::value_drag::Slider;
 use egui::{Response, Ui};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 craft_ui::words! {
     /// The words of the format options dialogs.
@@ -467,7 +468,7 @@ fn options_key(kind: ExportOptionsKind) -> &'static str {
 /// with. It answers with the [`FormatOptions`] at OK; Cancel abandons the save.
 ///
 /// ```ignore
-/// host.open(HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(10))));
+/// host.open(HostedFormatOptions::new(ctx, ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(10))));
 /// if let Some(DialogResult::Ok(options)) = host.take::<HostedFormatOptions>() {
 ///     save_with(options);
 /// }
@@ -478,11 +479,13 @@ pub struct HostedFormatOptions {
     initial: Option<FormatOptions>,
     tiff: TiffDocument,
     open: bool,
-    /// The values of the rows: the dialog edits them in place, and automation reads and writes the same ones.
+    /// The words of the rows, from the root when the dialog was made.
+    words: Arc<FormatOptionsWords>,
+    /// The values of the rows, open from construction: the dialog edits them in place, and automation reads and writes
+    /// the same ones.
     fields: DialogFields,
-    /// The values right after the fields were opened (defaults filled): what Reset restores. `None` before the fields
-    /// are opened.
-    opening: Option<DialogFields>,
+    /// The values right after the fields were opened (defaults filled): what Reset restores.
+    opening: DialogFields,
     /// The numbering of the options the estimate is asked for.
     revisions: Revisions<FormatOptions>,
     /// The request the app has not taken yet.
@@ -508,22 +511,26 @@ impl HostedFormatOptions {
         }
     }
 
-    /// The options dialog of `kind`.
-    pub fn new(kind: ExportOptionsKind) -> Self {
-        HostedFormatOptions {
+    /// The options dialog of `kind`, its fields open at once, so automation lists and sets them before the first
+    /// pass.
+    pub fn new(ctx: &egui::Context, kind: ExportOptionsKind) -> Self {
+        let mut dialog = HostedFormatOptions {
             id: dialog_id(options_key(kind)),
             kind,
             initial: None,
             tiff: TiffDocument::default(),
             open: true,
+            words: Env::of_root(ctx).words::<FormatOptionsWords>(),
             fields: DialogFields::new(),
-            opening: None,
+            opening: DialogFields::new(),
             revisions: Revisions::default(),
             wanted: None,
             estimate: None,
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
-        }
+        };
+        dialog.open_fields();
+        dialog
     }
 
     /// The options the dialog starts from.
@@ -531,21 +538,23 @@ impl HostedFormatOptions {
         start_of(self.kind, self.initial)
     }
 
-    /// The parameter list the dialog shows, and the fields opened for it on the first call.
-    fn opened_params(&mut self, ctx: &egui::Context) -> Vec<Param> {
-        let words = Env::of_root(ctx).words::<FormatOptionsWords>();
-        let params = params(&words, self.start(), self.tiff);
-        if self.opening.is_none() {
-            open_fields(&params, &mut self.fields);
-            self.opening = Some(self.fields.clone());
-        }
-        params
+    /// The parameter list the dialog shows.
+    fn params(&self) -> Vec<Param> {
+        params(&self.words, self.start(), self.tiff)
+    }
+
+    /// Opens the fields from the start, with the defaults filled; the opening values Reset restores are these.
+    fn open_fields(&mut self) {
+        self.fields = DialogFields::new();
+        open_fields(&self.params(), &mut self.fields);
+        self.opening = self.fields.clone();
     }
 
     /// The options the dialog opens with, when they are the options of its format.
     #[must_use]
     pub fn initial(mut self, options: FormatOptions) -> Self {
         self.initial = Some(options);
+        self.open_fields();
         self
     }
 
@@ -554,6 +563,7 @@ impl HostedFormatOptions {
     #[must_use]
     pub fn tiff_document(mut self, layered: bool, transparent: bool, layer_note: bool) -> Self {
         self.tiff = TiffDocument { layered, transparent, layer_note };
+        self.open_fields();
         self
     }
 
@@ -567,8 +577,7 @@ impl StackDialog for HostedFormatOptions {
     type Result = FormatOptions;
 
     /// Answers OK as the button does, from the values the rows show.
-    fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        self.opened_params(ctx);
+    fn confirm(&mut self, _: &egui::Context) -> Option<Self::Result> {
         Some(answer(self.start(), &self.fields))
     }
 
@@ -579,9 +588,8 @@ impl StackDialog for HostedFormatOptions {
 
     /// Sets the value of the row `field` names when the row is shown, takes input and takes the value, as editing it
     /// would.
-    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let params = self.opened_params(ctx);
-        set_param_field(&params, &mut self.fields, field, value)
+    fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        set_param_field(&self.params(), &mut self.fields, field, value)
     }
 
     fn id(&self) -> DialogId {
@@ -589,7 +597,6 @@ impl StackDialog for HostedFormatOptions {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<FormatOptions>> {
-        self.opened_params(ui.ctx());
         let shown = FormatOptionsDialog {
             kind: self.kind,
             open: Some(Bind::bound(&mut self.open)),
@@ -597,7 +604,7 @@ impl StackDialog for HostedFormatOptions {
             estimate: self.estimate.map(|(_, estimate)| estimate),
             tiff: self.tiff,
             values: Some(Bind::bound(&mut self.fields)),
-            opening: self.opening.clone(),
+            opening: Some(self.opening.clone()),
         }
         .show(ui);
         #[cfg(feature = "testing")]

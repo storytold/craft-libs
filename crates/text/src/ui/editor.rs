@@ -34,8 +34,8 @@ use craft_behavior::{
 };
 use craft_ui::canvas::canvas_space;
 use craft_ui::contract::{
-    Animate as _, Bind, BindMut, CommandSet as _, Commands as _, Common, Component, Cx, Edit as _, EditResponse, MeasureCx, Outcome, PaintUi,
-    PartsCx, Pointer as _, Props as _, Remember as _, Role,
+    Animate as _, Bind, BindMut, CommandSet as _, Commands as _, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome,
+    PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
 };
 use craft_ui::primitives::{EditorLine, EditorPurpose, EditorRun, EditorState, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::ClipItem;
@@ -49,7 +49,10 @@ pub use commands::TextEditorCommand;
 pub use edits::{click_count, click_selection, word_boundary};
 
 use crate::quotes::QuoteStyle;
+use craft_keymap::{Chord, Key};
 use edits::{Edits, Session, char_slice, fingerprint};
+
+const ESCAPE: Chord = Chord::plain(Key::Escape);
 
 /// The selection: `anchor` stays where it started, `caret` moves. Equal: a caret with nothing selected. Char
 /// offsets.
@@ -265,10 +268,20 @@ pub struct TextEditorStyle {
     underline: StyleColor,
 }
 
+/// How an editing session ended ([`TextEditorOutput::ended`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EditorEnd {
+    /// The app keeps the text.
+    Commit,
+    /// The app undoes the session.
+    Cancel,
+}
+
 /// What the editor did this pass.
 #[derive(Debug)]
 #[non_exhaustive]
-#[must_use = "end the session on the `edit` event's `Commit` and `Cancel`"]
+#[must_use = "end the session on `ended`"]
 pub struct TextEditorOutput {
     /// The editor's response.
     pub response: Response,
@@ -276,12 +289,15 @@ pub struct TextEditorOutput {
     pub changed: bool,
     /// The selection or caret moved.
     pub selection_changed: bool,
-    /// The typing session as one gesture over the selection. The first text change gives `Begin`, later changes
-    /// `Update`. `Commit` is Cmd+Enter, a primary press on the canvas background, or Esc when Esc commits ([`TextEditor::esc_commits`], Photoshop's Use ESC
-    /// Key to Commit Text, on by default): the app ends the session, keeps the text and records one undo step.
-    /// `Cancel` is Cmd+., or Esc when it doesn't commit: the app ends the session and undoes it. A session with no
-    /// text change gives no `Commit` or `Cancel`. While a composition is open the keys give neither.
+    /// The text changes of the session as one gesture over the selection. The first text change gives `Begin`, later
+    /// changes `Update`; the session's end ([`ended`](Self::ended)) commits or cancels the gesture when one runs.
     pub edit: EditResponse<TextSelection>,
+    /// The session ended this pass, whether or not its text changed. `Commit` is Cmd+Enter, a primary press on the
+    /// canvas background, or Esc when Esc commits ([`TextEditor::esc_commits`], Photoshop's Use ESC Key to Commit
+    /// Text, on by default): the app ends the session, keeps the text and records one undo step when it changed.
+    /// `Cancel` is Cmd+., or Esc when it doesn't commit: the app ends the session and undoes it. While a composition
+    /// is open the keys give neither.
+    pub ended: Option<EditorEnd>,
     /// The Character panel command was pressed: the host shows or hides the panel. Set for the one pass.
     pub character_panel: bool,
 }
@@ -336,6 +352,7 @@ pub struct TextEditor<'a> {
     changed: bool,
     selection_changed: bool,
     character_panel: bool,
+    ended: Option<EditorEnd>,
 }
 
 impl<'a> TextEditor<'a> {
@@ -350,6 +367,7 @@ impl<'a> TextEditor<'a> {
             changed: false,
             selection_changed: false,
             character_panel: false,
+            ended: None,
         }
         .label(label)
         .command_scope(TextEditorCommand::SCOPE)
@@ -425,7 +443,8 @@ fn char_at(lines: &[HostLine], pos: TextPos) -> usize {
 impl Component for TextEditor<'_> {
     const ROLE: Role = Role::MULTILINE_TEXT_INPUT;
     const INPUT: craft_ui::contract::Input = craft_ui::contract::Input::Editor;
-    const KEYS: KeyUse = KeyUse::CODE;
+    /// Escape always ends the session, so the editor keeps it from its row and from the shortcuts while focused.
+    const KEYS: KeyUse = KeyUse::CODE.with_claims(&[ESCAPE]);
     type Style = TextEditorStyle;
     type Output = TextEditorOutput;
 
@@ -516,13 +535,6 @@ impl Component for TextEditor<'_> {
                     edits.end_composition();
                     edits.selection = TextSelection { anchor: char_at(&lines, anchor), caret: char_at(&lines, focus) };
                 }
-                EditorInput::Cancel if edits.session.preedit.is_none() => {
-                    if edits.esc_commits {
-                        edits.done.commit = true;
-                    } else {
-                        edits.done.cancel = true;
-                    }
-                }
                 EditorInput::Edit(EditCommand::SelectAll) => edits.select_all(),
                 EditorInput::Edit(EditCommand::Copy) => copied = edits.selected_text(),
                 EditorInput::Edit(EditCommand::Cut) => {
@@ -557,9 +569,16 @@ impl Component for TextEditor<'_> {
             edits.done.commit = true;
         }
 
-        // Commands arrive with the pass's own input: a second pass of the frame takes none, so a commit, a cancel or
-        // the panel toggle is reported by one pass only. Commit and Cancel wait while a composition is open: the
-        // chord belongs to the input method then.
+        // Commands and the claimed Escape arrive with the pass's own input: a second pass of the frame takes none, so
+        // a commit, a cancel or the panel toggle is reported by one pass only. Commit and Cancel wait while a
+        // composition is open: the key belongs to the input method then.
+        if cx.take_claimed(ESCAPE) && edits.session.preedit.is_none() {
+            if edits.esc_commits {
+                edits.done.commit = true;
+            } else {
+                edits.done.cancel = true;
+            }
+        }
         let mut character_panel = false;
         for command in fired {
             match command.along_flow(edits.host.vertical()) {
@@ -605,6 +624,13 @@ impl Component for TextEditor<'_> {
         } else if done.cancel {
             cx.cancel(CancelReason::Escape);
         }
+        self.ended = if done.commit {
+            Some(EditorEnd::Commit)
+        } else if done.cancel {
+            Some(EditorEnd::Cancel)
+        } else {
+            None
+        };
         self.changed = done.changed;
         self.selection_changed = selection != before;
         self.character_panel = character_panel;
@@ -694,6 +720,7 @@ impl Component for TextEditor<'_> {
             selection_changed: self.selection_changed,
             edit: cx.edit_response(),
             character_panel: self.character_panel,
+            ended: self.ended,
         }
     }
 }

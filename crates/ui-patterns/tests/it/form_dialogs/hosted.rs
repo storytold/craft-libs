@@ -6,7 +6,8 @@ use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog};
 use craft_ui::patterns::form_dialogs::{
     AboutInfo, AboutLink, CanvasSize, CanvasSizeValues, Credits, ExportOptions, ExportOptionsKind, FormatOptions, GuideLayoutDialog,
     GuideLayoutValues, GuideRect, GuideUnits, HostedAbout, HostedCanvasSize, HostedExportAs, HostedFormatOptions, HostedGuideLayoutDialog,
-    HostedImageSize, HostedNewGuideDialog, ImageSize, ImageSizeValues, JpegOptions, NewGuideDialog, NewGuideValues,
+    HostedImageSize, HostedNewDocument, HostedNewGuideDialog, ImageSize, ImageSizeValues, JpegOptions, NewDocumentDialog, NewGuideDialog,
+    NewGuideValues,
 };
 use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::{Fixture, trial};
@@ -78,14 +79,15 @@ fn fixture(host: &Rc<RefCell<DialogHost>>) -> Fixture {
 
 /// Opens `make()` on a host, then Escape; twice, so a dialog that closed once opens again. `cancel` is what the app
 /// takes after Escape.
-fn opens_and_cancels<D: StackDialog>(make: fn() -> D, title: &str, cancel: DialogResult<D::Result>)
+fn opens_and_cancels<D: StackDialog>(make: fn(&egui::Context) -> D, title: &str, cancel: DialogResult<D::Result>)
 where
     D::Result: Clone + Debug + PartialEq,
 {
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = fixture(&host);
     for round in ["first", "second"] {
-        host.borrow_mut().open(make());
+        let made = make(fixture.ctx());
+        host.borrow_mut().open(made);
         fixture.idle(10);
         assert!(fixture.by_label(title).is_some(), "{title} shows on the host ({round} open)");
         fixture.key(Key::Escape, Modifiers::NONE).idle(4);
@@ -96,11 +98,11 @@ where
 
 #[trial]
 fn each_hosted_form_opens_on_the_host_and_escape_reaches_the_app() {
-    opens_and_cancels(canvas_size, "Canvas Size", DialogResult::Cancel);
-    opens_and_cancels(|| HostedFormatOptions::new(ExportOptionsKind::Jpeg), "JPEG Options", DialogResult::Cancel);
-    opens_and_cancels(|| HostedExportAs::new("Poster", PICTURE, ExportOptions::default()), "Export As", DialogResult::Cancel);
+    opens_and_cancels(|_| canvas_size(), "Canvas Size", DialogResult::Cancel);
+    opens_and_cancels(|ctx| HostedFormatOptions::new(ctx, ExportOptionsKind::Jpeg), "JPEG Options", DialogResult::Cancel);
+    opens_and_cancels(|_| HostedExportAs::new("Poster", PICTURE, ExportOptions::default()), "Export As", DialogResult::Cancel);
     // Escape closes About like OK: a notice has no Cancel.
-    opens_and_cancels(about, "About PhotoCraft", DialogResult::Ok(()));
+    opens_and_cancels(|_| about(), "About PhotoCraft", DialogResult::Ok(()));
 }
 
 #[trial]
@@ -113,7 +115,8 @@ fn hosted_forms_answer_ok_with_their_values() {
     let size = host.borrow_mut().take::<HostedCanvasSize>().and_then(DialogResult::ok).map(|result| result.size);
     assert_eq!(size, Some(PICTURE), "Enter answers Canvas Size with its size");
 
-    host.borrow_mut().open(HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(10))));
+    let jpeg = HostedFormatOptions::new(fixture.ctx(), ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(10)));
+    host.borrow_mut().open(jpeg);
     fixture.idle(10).key(Key::Enter, Modifiers::NONE).idle(4);
     let quality = match host.borrow_mut().take::<HostedFormatOptions>() {
         Some(DialogResult::Ok(FormatOptions::Jpeg(options))) => Some(options.quality),
@@ -140,27 +143,53 @@ fn hosted_forms_answer_ok_with_their_values() {
     assert_eq!(guide, Some(250.0), "New Guide answers the guide at the set position");
 }
 
-// The JPEG quality row lists the quality the dialog opened with, and the quality automation sets, kept in the form
-// automation gives it, is the one OK answers.
+// The JPEG quality row lists the quality the dialog opened with from the moment it opens, a set made before the first
+// pass stays, and the quality automation sets, kept in the form automation gives it, is the one OK answers.
 #[trial]
 fn the_jpeg_quality_lists_its_opening_value_and_ok_answers_a_set_one() {
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = fixture(&host);
-    let id = host.borrow_mut().open(HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(10))));
-    fixture.idle(2);
+    let ctx = fixture.ctx().clone();
+    let id = host.borrow_mut().open(HostedFormatOptions::new(&ctx, ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(10))));
     let quality = |host: &Rc<RefCell<DialogHost>>| {
         host.borrow().open_dialogs().into_iter().find(|open| open.id == id).and_then(|open| open.fields).and_then(|fields| fields["quality"].as_u64())
     };
-    assert_eq!(quality(&host), Some(10), "the row opens with the start quality");
-    let ctx = fixture.ctx().clone();
+    assert_eq!(quality(&host), Some(10), "the row lists the start quality before the first pass");
     assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "quality", json!(3)), Ok(()));
-    assert_eq!(quality(&host), Some(3));
+    fixture.idle(2);
+    assert_eq!(quality(&host), Some(3), "the set made before the first pass stays");
     assert!(host.borrow_mut().confirm::<HostedFormatOptions>(&ctx), "OK is enabled");
     let answered = match host.borrow_mut().take::<HostedFormatOptions>() {
         Some(DialogResult::Ok(FormatOptions::Jpeg(options))) => Some(options.quality),
         _ => None,
     };
     assert_eq!(answered, Some(3), "OK answers the set quality");
+}
+
+// New Document opened with an image on the clipboard lists the clipboard's size and the default name from the moment
+// it opens, and a size automation sets before the first pass is the one the dialog shows and Create answers.
+#[trial]
+fn new_document_lists_its_clipboard_size_at_once_and_keeps_a_set_made_before_the_first_pass() {
+    use craft_ui::contract::Bind;
+    use craft_ui::patterns::form_dialogs::{DocumentOptions, NewDocumentResult};
+
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let ctx = fixture.ctx().clone();
+    let clipboard = PixelSize::new(640, 480);
+    let dialog = HostedNewDocument::new(&ctx, DocumentOptions::default(), move |options| NewDocumentDialog::new(Bind::bound(options)).clipboard(clipboard));
+    let id = host.borrow_mut().open(dialog);
+    let fields = |host: &Rc<RefCell<DialogHost>>| host.borrow().open_dialogs().into_iter().find(|open| open.id == id).and_then(|open| open.fields);
+    let opened = fields(&host).expect("the dialog lists its settings");
+    assert_eq!((opened["size"]["width"].as_u64(), opened["size"]["height"].as_u64()), (Some(640), Some(480)), "the clipboard's size, before the first pass");
+    assert!(opened["name"].as_str().is_some_and(|name| !name.is_empty()), "the default name, before the first pass");
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "size", json!({"width": 800, "height": 600})), Ok(()));
+    fixture.idle(10);
+    let shown = fields(&host).expect("the dialog lists its settings");
+    assert_eq!((shown["size"]["width"].as_u64(), shown["size"]["height"].as_u64()), (Some(800), Some(600)), "the first pass keeps the set size");
+    assert!(host.borrow_mut().confirm::<HostedNewDocument>(&ctx), "Create is enabled");
+    let created = host.borrow_mut().take::<HostedNewDocument>().and_then(DialogResult::ok).map(|result: NewDocumentResult| result.options.size);
+    assert_eq!(created, Some(PixelSize::new(800, 600)), "Create answers the set size");
 }
 
 // New Guide's OK refuses while the Position field holds text that does not parse, rather than answering the last good

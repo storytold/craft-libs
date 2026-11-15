@@ -56,7 +56,7 @@ fn holding_the_preview_box_compares_and_the_release_toggles_it() {
     let out = seen.clone();
     let mut fixture = Fixture::new(move |ui| {
         let picture = SizedTexture::new(TextureId::default(), vec2(64.0, 48.0));
-        let shown = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).preview(picture).show(ui);
+        let shown = ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).previews(true).preview(picture).show(ui);
         out.set((shown.preview_on, shown.comparing));
     });
     fixture.settle();
@@ -129,6 +129,43 @@ fn host_fixture(host: &Rc<RefCell<DialogHost>>, twice: &Rc<Cell<bool>>) -> Fixtu
 /// `act` on the open `HostedParamDialog`; `None` when none is open.
 fn on_dialog<T>(host: &Rc<RefCell<DialogHost>>, act: impl FnOnce(&mut HostedParamDialog) -> T) -> Option<T> {
     host.borrow_mut().get_mut::<HostedParamDialog>().map(act)
+}
+
+// A step dialog opened with recorded fields lists them, and a host set of one, before its first pass: an Actions step
+// reads and fills its dialog in the call that opens it.
+#[trial]
+fn a_hosted_param_dialog_lists_its_opening_fields_and_takes_a_set_before_its_first_pass() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let fixture = Fixture::new(|_| {});
+    let fields = DialogFields::from_pairs([("radius".to_owned(), FieldValue::Number(2.0))]);
+    let id = host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", fields, blur));
+    let listed =
+        |host: &Rc<RefCell<DialogHost>>| host.borrow().open_dialogs().into_iter().find(|dialog| dialog.id == id).and_then(|dialog| dialog.fields);
+    let fields = listed(&host).expect("the dialog lists its fields");
+    assert_eq!((fields["radius"].as_f64(), fields["smooth"].clone()), (Some(2.0), json!(false)), "the opening field and the defaults: {fields}");
+    assert_eq!(host.borrow_mut().set_json_field(fixture.ctx(), id, "radius", json!(4)), Ok(()));
+    assert_eq!(listed(&host).and_then(|fields| fields["radius"].as_f64()), Some(4.0), "the set lists before any pass");
+}
+
+// A hosted dialog that previews is previewing from the call that opens it, before any pass and without a picture
+// (a canvas-only preview); its Preview box turns it off. A dialog that does not preview has no box.
+#[trial]
+fn a_hosted_dialog_that_previews_is_previewing_before_its_first_pass() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), |fields| blur(fields).previews(true)));
+    assert_eq!(on_dialog(&host, |dialog| dialog.is_previewing()), Some(true), "previewing before the first pass");
+    fixture.idle(4);
+    let preview = fixture.by_label("Preview").expect("the Preview box without a picture");
+    fixture.click(&preview).idle(4);
+    assert_eq!(on_dialog(&host, |dialog| dialog.is_previewing()), Some(false), "the box turns the preview off");
+
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", DialogFields::new(), blur));
+    fixture.idle(4);
+    assert_eq!(on_dialog(&host, |dialog| dialog.is_previewing()), Some(false), "a dialog that does not preview");
+    assert!(fixture.by_label("Preview").is_none(), "has no Preview box");
 }
 
 /// Why the host refuses the held OK.

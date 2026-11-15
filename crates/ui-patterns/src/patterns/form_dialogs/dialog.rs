@@ -127,17 +127,18 @@ impl Outcome for ParamDialogOutput {
     }
 }
 
-/// A dialog from a parameter list: one row per [`Param`], the Preview check box with a preview pane when the host
-/// gives a picture, and OK, Cancel, extra buttons and a footer note.
+/// A dialog from a parameter list: one row per [`Param`], the Preview check box when it
+/// [`previews`](ParamDialog::previews), with a preview pane when the host gives a picture, and OK, Cancel, extra
+/// buttons and a footer note.
 ///
 /// - Keys: Tab walks the fields, Enter is OK unless a field owns it, Escape cancels. Holding Alt turns Cancel into
 ///   Reset, which restores the values from when the dialog opened (or `reset_to`) and keeps the dialog open.
 /// - Values: the `values` binding holds them; without one the dialog keeps its own between passes. The first pass
 ///   fills the parameters' defaults and, with `remember`, the values saved by [`ParamResult::remember`].
-/// - Preview: the host renders from the reported values while `preview_on` and hands the picture to `preview`, the
-///   unfiltered one while `comparing` (the Preview check box held down). Drag pans the picture, the zoom buttons
-///   scale it. A dialog with a preview has its buttons in a column beside the body, with the Preview check box and
-///   the footer note under them.
+/// - Preview: a dialog that `previews` has the Preview check box; the host renders from the reported values while
+///   `preview_on` (on the canvas, or as the picture it hands to `preview`), the unfiltered picture while `comparing`
+///   (the Preview check box held down). Drag pans the picture, the zoom buttons scale it. A dialog that previews has
+///   its buttons in a column beside the body, with the Preview check box and the footer note under them.
 /// - Footer: [`extra_buttons`](ParamDialog::extra_buttons) keep the dialog open and come back as
 ///   `ParamDialogOutput::footer_action`; [`footer_note`](ParamDialog::footer_note) is a muted line at the start edge.
 /// - A command form is a dialog with no preview and no remember key.
@@ -190,7 +191,14 @@ pub struct ParamDialog<'a> {
     /// Whether the title row has a close action.
     #[prop]
     closable: bool,
-    /// The picture the preview pane shows; without one the dialog has no preview.
+    /// Whether the dialog has the Preview check box: the host previews its values while the box is on.
+    #[prop]
+    previews: bool,
+    /// The Preview check box's value; without it the dialog keeps it, and every open starts with the box on.
+    #[prop]
+    preview_on: Option<Bind<'a, bool>>,
+    /// The picture the preview pane shows in a dialog that [`previews`](ParamDialog::previews); without one there is
+    /// no pane.
     #[prop]
     preview: Option<SizedTexture>,
     /// Whether a click on the preview centres it on the point clicked (`PreviewPane::click_centres`); a dialog whose
@@ -269,6 +277,8 @@ impl<'a> ParamDialog<'a> {
             reset_to: None,
             layout: ParamLayout::default(),
             closable: true,
+            previews: false,
+            preview_on: None,
             preview: None,
             click_centres: true,
             canvas: None,
@@ -408,6 +418,8 @@ impl<'a> ParamDialog<'a> {
             reset_to,
             layout,
             closable,
+            previews,
+            preview_on,
             preview,
             click_centres,
             canvas,
@@ -464,9 +476,11 @@ impl<'a> ParamDialog<'a> {
         if let Some(open) = open {
             form = form.opened(open);
         }
-        if preview.is_some() {
-            form = form.preview(None);
+        if previews {
+            form = form.preview(preview_on);
         }
+        // The pane shows only in a dialog that previews.
+        let preview = preview.filter(|_| previews);
         if !extra_buttons.is_empty() {
             form = form.extra_buttons(extra_buttons.iter().map(|(_, label)| FooterButton::new(label.clone(), DialogRole::Other)));
         }
@@ -733,6 +747,8 @@ type Build = dyn for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send;
 /// the dialog over them each pass.
 ///
 /// - The host keeps the dialog's open state, so a dialog opened again under the same key opens.
+/// - The host keeps the Preview check box of a dialog that [`previews`](ParamDialog::previews): it starts on, so
+///   [`is_previewing`](HostedParamDialog::is_previewing) holds from construction, before the first pass.
 /// - The preview picture comes from [`set_preview`](HostedParamDialog::set_preview) between passes, since `build` cannot
 ///   capture a picture that changes; [`is_previewing`](HostedParamDialog::is_previewing) and
 ///   [`is_comparing`](HostedParamDialog::is_comparing) say what to render.
@@ -758,8 +774,12 @@ pub struct HostedParamDialog {
     open: bool,
     /// The values the dialog opened with, passed to the form as the values Reset restores.
     opening: DialogFields,
+    /// Whether the dialog has the Preview check box ([`ParamDialog::previews`] of `build`).
+    previews: bool,
+    /// The Preview check box's value: bound to the dialog's `preview_on` prop, so it is known before the first pass.
+    preview_on: bool,
     /// The preview picture the host last gave (`set_preview`).
-    preview: Option<SizedTexture>,
+    picture: Option<SizedTexture>,
     /// What the dialog showed in its last pass.
     shown: ShownState,
     /// Whether OK files its answer for the host instead of closing ([`held_ok`](HostedParamDialog::held_ok)).
@@ -770,11 +790,10 @@ pub struct HostedParamDialog {
     centre: Option<Pos2>,
 }
 
-/// What a [`HostedParamDialog`] showed in its last pass: whether the preview is on and held for comparing, and the
+/// What a [`HostedParamDialog`] showed in its last pass: whether the Preview check box is held for comparing, and the
 /// picture point at the centre of the preview pane.
 #[derive(Clone, Copy, Debug, Default)]
 struct ShownState {
-    previewing: bool,
     comparing: bool,
     centre: Option<Pos2>,
 }
@@ -790,7 +809,7 @@ impl HostedParamDialog {
         build: impl for<'b> Fn(&'b mut DialogFields) -> ParamDialog<'b> + Send + 'static,
     ) -> Self {
         let key = key.into();
-        let ParamDialog { params, remember, patterns, .. } = build(&mut fields);
+        let ParamDialog { params, remember, patterns, previews, .. } = build(&mut fields);
         let (params, patterns) = (params.into_owned(), patterns.into_owned());
         let saved = remember.and_then(|key| MemoryStage::peek_saved::<Option<DialogFields>>(ctx, &key));
         ParamDialog::open_values(&params, &patterns, saved.as_ref(), &mut fields);
@@ -804,7 +823,9 @@ impl HostedParamDialog {
             build: Box::new(build),
             requests: HostRequests::new(),
             open: true,
-            preview: None,
+            previews,
+            preview_on: true,
+            picture: None,
             shown: ShownState::default(),
             hold: false,
             held: HeldAnswer::new(),
@@ -871,12 +892,13 @@ impl HostedParamDialog {
 
     /// Sets the picture the preview pane shows from the next pass on; `None` shows none.
     pub fn set_preview(&mut self, picture: Option<SizedTexture>) {
-        self.preview = picture;
+        self.picture = picture;
     }
 
-    /// Whether the Preview check box was on in the last pass: the host renders the preview while it is.
+    /// Whether the dialog previews and its Preview check box is on: the host renders the preview while it is. The box
+    /// starts on, so this holds from construction.
     pub fn is_previewing(&self) -> bool {
-        self.shown.previewing
+        self.previews && self.preview_on
     }
 
     /// Whether the Preview check box was held down in the last pass, to compare with the unfiltered picture.
@@ -1052,7 +1074,10 @@ impl StackDialog for HostedParamDialog {
         let finish = self.held.is_accepted();
         // A measuring run keeps the centre: the real run of the pass takes it.
         let centre = if measuring { self.centre } else { self.centre.take() };
-        let mut dialog = (self.build)(&mut self.fields)
+        let mut dialog = (self.build)(&mut self.fields);
+        self.previews = dialog.previews;
+        dialog = dialog
+            .preview_on(Bind::bound(&mut self.preview_on))
             .values_opened(self.opening.clone())
             .answers(answers)
             .opened(Bind::bound(&mut self.open))
@@ -1065,7 +1090,7 @@ impl StackDialog for HostedParamDialog {
         if self.held.is_waiting() {
             dialog = dialog.ok_enabled(false);
         }
-        if let Some(picture) = self.preview {
+        if let Some(picture) = self.picture {
             dialog = dialog.preview(picture);
         }
         let shown = dialog.show(ui);
@@ -1079,7 +1104,7 @@ impl StackDialog for HostedParamDialog {
         if let Some(action) = shown.footer_action {
             self.requests.request_footer_action(action);
         }
-        self.shown = ShownState { previewing: shown.preview_on, comparing: shown.comparing, centre: shown.preview_centre };
+        self.shown = ShownState { comparing: shown.comparing, centre: shown.preview_centre };
         if self.held.refusal().is_some_and(|(_, refused)| refused.fields != self.fields) {
             self.held.clear_refusal();
         }

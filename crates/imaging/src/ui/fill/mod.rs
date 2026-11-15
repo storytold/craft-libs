@@ -316,7 +316,8 @@ impl ContentAwareFillWorkspace {
     }
 
     /// Remembers the fill settings under `key`: the first pass opens with the stored settings when there are any, in
-    /// place of [`FillOpen::settings`], and Apply, OK and Cancel store them, as production did.
+    /// place of [`FillOpen::settings`], and every close of the workspace stores them
+    /// ([`closed`](FullWindowWorkspace::closed)).
     #[must_use]
     pub fn remember(mut self, key: SaveKey) -> Self {
         self.remember = Some(key);
@@ -430,9 +431,6 @@ impl ContentAwareFillWorkspace {
         } else {
             (shown.output.result(|| work.command()), None)
         };
-        if picked == Some(PICK_APPLY) || held.is_some() || result.is_some() {
-            work.store(ui.ctx());
-        }
         let events = std::mem::take(&mut work.events);
         WorkspacePass::new(shown.output.response, events).held(held).result(result)
     }
@@ -1016,5 +1014,9 @@ impl FullWindowWorkspace for ContentAwareFillWorkspace {
     /// The app's fill failed: the reason shows under the panel and the workspace stays open.
     fn ok_failed(&mut self, reason: Label) {
         self.error = Some(FillIssue::Message(reason));
+    }
+
+    fn closed(&mut self, ctx: &Context) {
+        self.store(ctx);
     }
 }

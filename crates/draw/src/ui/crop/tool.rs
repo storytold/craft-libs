@@ -1,7 +1,8 @@
-//! [`CropTool`]: the Crop tool on the canvas tool host. The app owns one `CropTool` and builds a
-//! [`CropToolPass`] each pass from it and the pass's input ([`CropInput`]). The pass shows the frame
-//! as one [`CropOverlay`] in the canvas body ([`CropToolPass::show_frame`]) and takes the keys the
-//! overlay does not (the canvas has the keyboard, no part is focused).
+//! [`CropTool`]: the Crop tool on the canvas tool host. The app owns one `CropTool`. Each pass it shows
+//! the frame as one [`CropOverlay`] in the canvas body ([`CropTool::show_frame`]), then builds a
+//! [`CropToolPass`] from the tool, the pass's input ([`CropInput`]) and what the body reported
+//! ([`CropShown`]). The pass takes the keys the overlay does not (the canvas has the keyboard, no part
+//! is focused).
 
 use std::sync::Arc;
 
@@ -86,6 +87,17 @@ pub enum CropEvent {
     CropTo(CropBox),
 }
 
+/// What the frame's overlay reported in the canvas body ([`CropTool::show_frame`]): its events, the snap lines of the
+/// part being dragged and the pointer it asked to scroll at. The pass of the same frame takes it
+/// ([`CropTool::pass`]), so the body's report reaches the host in that pass.
+#[derive(Debug, Default)]
+#[must_use = "hand it to this pass's `CropTool::pass`"]
+pub struct CropShown {
+    events: Vec<CropEvent>,
+    snapped: Vec<SnapLine>,
+    scrolls_at: Option<Pos2>,
+}
+
 /// What a pass of the tool reports, from [`CropToolPass::finish`]. The state the app reads after
 /// the pass ([`CropTool::frame`], [`shows_beyond_canvas`](CropTool::shows_beyond_canvas),
 /// [`dragging`](CropTool::dragging)) is on the tool.
@@ -125,9 +137,11 @@ impl<'a> CropInput<'a> {
 ///
 /// ```ignore
 /// let document = CropDocument::new(CropDocKey::new(1), Size::new(1200.0, 800.0), 300.0);
-/// let mut pass = crop.pass(CropInput::new(&ctx, &settings, &document));
-/// let shown = Canvas::new("Document", pass.command_form()).show(ui, |ui, body| pass.show_frame(ui, body.rect));
-/// let host = ToolHost::new().run(ui, &shown.output, &mut pass);
+/// let input = CropInput::new(&ctx, &settings, &document);
+/// let mut frame = None;
+/// let canvas = Canvas::new("Document").show(ui, |ui, body| frame = Some(crop.show_frame(ui, body.rect, &input)));
+/// let mut pass = crop.pass(input, frame);
+/// let host = ToolHost::new().run(ui, &canvas.output, &mut pass);
 /// for event in pass.finish().events {
 ///     match event {
 ///         CropEvent::Apply(commit) => { /* run the crop command, then */ crop.applied(true); }
@@ -209,9 +223,113 @@ impl CropTool {
         self.dragging
     }
 
-    /// This pass's tool for the host, borrowing `input`'s data.
-    pub fn pass<'a>(&'a mut self, input: CropInput<'a>) -> CropToolPass<'a> {
-        CropToolPass { tool: self, input, output: CropOutput::default(), scrolls_at: None }
+    /// This pass's tool for the host, borrowing `input`'s data. `shown` is what [`show_frame`](Self::show_frame)
+    /// reported in this pass's canvas body; `None` when the body showed no frame. Its events come first in the
+    /// pass's output, and the host takes its snap lines and scroll request.
+    pub fn pass<'a>(&'a mut self, input: CropInput<'a>, shown: Option<CropShown>) -> CropToolPass<'a> {
+        let CropShown { events, snapped, scrolls_at } = shown.unwrap_or_default();
+        CropToolPass { tool: self, input, output: CropOutput { events, snapped }, scrolls_at }
+    }
+
+    /// Shows the session's frame as one [`CropOverlay`] at `canvas_rect`, in the canvas body, with the pass's
+    /// options, and turns what it reports into events for this pass's [`pass`](Self::pass). Shows nothing without a
+    /// frame.
+    pub fn show_frame(&mut self, ui: &mut Ui, canvas_rect: Rect, input: &CropInput<'_>) -> CropShown {
+        let words = Env::of(ui).words::<CropWords>();
+        self.step = Arc::from(words.frame.as_str());
+        let (settings, document) = (input.settings, input.document);
+        let units = Env::of(ui).units();
+        let (ratio, default, straighten, dismissed) =
+            (settings.ratio_value(document, &units), self.session.is_default(), self.session.straighten().on(), self.session.dismissed());
+        let Some(frame) = self.session.frame_mut() else { return CropShown::default() };
+        let mut overlay = CropOverlay::new(words.frame.clone(), Bind::bound(frame))
+            .guide((settings.guide, settings.guide_orientation))
+            .guide_show(settings.guide_show)
+            .shield(settings.shield.clone());
+        if let Some(ratio) = ratio {
+            overlay = overlay.ratio(ratio);
+        }
+        if default {
+            overlay = overlay.default_frame();
+        }
+        if straighten {
+            overlay = overlay.straighten();
+        }
+        if settings.delete_pixels {
+            overlay = overlay.bounds(document.canvas());
+        }
+        if settings.image_mode() {
+            overlay = overlay.image_mode();
+        }
+        if settings.shield.auto_center_preview {
+            overlay = overlay.auto_center();
+        }
+        if dismissed {
+            overlay = overlay.hidden();
+        }
+        let shown = overlay.show_at(ui, canvas_rect);
+        self.take(shown, input, &units, ui.input(|i| i.time))
+    }
+
+    /// Turns the overlay's output into events and session steps. An arrow nudge joins the open run of nudges while
+    /// the Nudge Bundle Pause is set; any other edit is its own box step. It applies only this pass's output: a
+    /// second pass of the frame reads its own overlay output and never repeats an edit, a Straighten line or a
+    /// scroll request.
+    fn take(&mut self, shown: CropOverlayOutput, input: &CropInput<'_>, units: &Units, time: f64) -> CropShown {
+        let CropOverlayOutput { edit, apply, discard, straightened, straighten_ended, view, snapped, dragging, nudged, scrolls_at, .. } = shown;
+        let mut out = CropShown { events: Vec::new(), snapped, scrolls_at };
+        self.dragging = dragging;
+        if let Some(view) = view {
+            self.view = Some(view);
+        }
+        if !edit.events.is_empty() {
+            // The first edit of a hidden default frame draws a new frame.
+            self.session.show();
+        }
+        for event in edit.events {
+            match &event {
+                EditEvent::Set { after, .. } if nudged && input.nudge_pause.is_some() => {
+                    self.last_nudge = Some(time);
+                    self.session.nudge(input.ctx, *after, &self.step);
+                }
+                _ => {
+                    self.end_nudges();
+                    self.session.mirror(&event);
+                }
+            }
+            self.synced = self.session.frame();
+            out.events.push(CropEvent::Frame(event));
+        }
+        if straightened.is_some() || straighten_ended {
+            // The button was armed when the line began: a line made with Cmd alone turns the frame in place.
+            let fit = self.session.straighten().armed();
+            self.session.show();
+            // A click with no line spends the armed button too.
+            self.session.straighten_mut().disarm();
+            if let Some(angle) = straightened {
+                self.straightened(angle, fit, input.document, &mut out.events);
+            }
+        }
+        if apply && let Some(event) = self.apply(input.settings, input.document, units) {
+            out.events.push(event);
+        }
+        if discard && let Some(event) = self.discard() {
+            out.events.push(event);
+        }
+        out
+    }
+
+    /// A Straighten line levelled the frame by `angle`, as one box step: with `fit` (the button was armed)
+    /// the frame is fitted to `document`'s canvas, else (Cmd held) it keeps its size and centre and turns in place.
+    fn straightened(&mut self, angle: f64, fit: bool, document: &CropDocument, events: &mut Vec<CropEvent>) {
+        let Some(frame) = self.session.frame() else { return };
+        let next = if fit { frame.fitted(document.size, angle) } else { Some(CropBox::new(frame.rect, normalized_angle(angle))) };
+        if let Some(next) = next {
+            let event = self.session.set(next, false, &self.step);
+            self.synced = None;
+            events.push(CropEvent::Frame(event));
+            events.push(CropEvent::Straightened(angle));
+        }
     }
 
     /// The bar's Straighten button is pressed (armed for one line).
@@ -437,8 +555,8 @@ pub struct CropToolPass<'a> {
     tool: &'a mut CropTool,
     input: CropInput<'a>,
     output: CropOutput,
-    /// The pointer the overlay asked to scroll at this pass, for [`CanvasTool::each_pass`] to hand to the
-    /// host. Never carried to the next pass.
+    /// The pointer the body's overlay asked to scroll at ([`CropShown`]), for [`CanvasTool::each_pass`] to hand to
+    /// the host.
     scrolls_at: Option<Pos2>,
 }
 
@@ -446,110 +564,6 @@ impl CropToolPass<'_> {
     /// What the pass reported: its events in order.
     pub fn finish(self) -> CropOutput {
         self.output
-    }
-
-    /// Shows the session's frame as one [`CropOverlay`] at `canvas_rect`, in the canvas body, with this
-    /// pass's options, and turns what it reports into events. Shows nothing without a frame.
-    pub fn show_frame(&mut self, ui: &mut Ui, canvas_rect: Rect) {
-        let words = Env::of(ui).words::<CropWords>();
-        self.tool.step = Arc::from(words.frame.as_str());
-        let (settings, document) = (self.input.settings, self.input.document);
-        let units = Env::of(ui).units();
-        let (ratio, default, straighten, dismissed) = (
-            settings.ratio_value(document, &units),
-            self.tool.session.is_default(),
-            self.tool.session.straighten().on(),
-            self.tool.session.dismissed(),
-        );
-        let Some(frame) = self.tool.session.frame_mut() else { return };
-        let mut overlay = CropOverlay::new(words.frame.clone(), Bind::bound(frame))
-            .guide((settings.guide, settings.guide_orientation))
-            .guide_show(settings.guide_show)
-            .shield(settings.shield.clone());
-        if let Some(ratio) = ratio {
-            overlay = overlay.ratio(ratio);
-        }
-        if default {
-            overlay = overlay.default_frame();
-        }
-        if straighten {
-            overlay = overlay.straighten();
-        }
-        if settings.delete_pixels {
-            overlay = overlay.bounds(document.canvas());
-        }
-        if settings.image_mode() {
-            overlay = overlay.image_mode();
-        }
-        if settings.shield.auto_center_preview {
-            overlay = overlay.auto_center();
-        }
-        if dismissed {
-            overlay = overlay.hidden();
-        }
-        let shown = overlay.show_at(ui, canvas_rect);
-        self.take(shown, &units, ui.input(|i| i.time));
-    }
-
-    /// Turns the overlay's output into events and session steps. An arrow nudge joins the open run of nudges while
-    /// the Nudge Bundle Pause is set; any other edit is its own box step. It applies only this pass's output: a
-    /// second pass of the frame reads its own overlay output and never repeats an edit, a Straighten line or a
-    /// scroll request.
-    fn take(&mut self, shown: CropOverlayOutput, units: &Units, time: f64) {
-        let CropOverlayOutput { edit, apply, discard, straightened, straighten_ended, view, snapped, dragging, nudged, scrolls_at, .. } = shown;
-        self.tool.dragging = dragging;
-        self.output.snapped = snapped;
-        self.scrolls_at = scrolls_at;
-        if let Some(view) = view {
-            self.tool.view = Some(view);
-        }
-        if !edit.events.is_empty() {
-            // The first edit of a hidden default frame draws a new frame.
-            self.tool.session.show();
-        }
-        for event in edit.events {
-            match &event {
-                EditEvent::Set { after, .. } if nudged && self.input.nudge_pause.is_some() => {
-                    self.tool.last_nudge = Some(time);
-                    self.tool.session.nudge(self.input.ctx, *after, &self.tool.step);
-                }
-                _ => {
-                    self.tool.end_nudges();
-                    self.tool.session.mirror(&event);
-                }
-            }
-            self.tool.synced = self.tool.session.frame();
-            self.push(CropEvent::Frame(event));
-        }
-        if straightened.is_some() || straighten_ended {
-            // The button was armed when the line began: a line made with Cmd alone turns the frame in place.
-            let fit = self.tool.session.straighten().armed();
-            self.tool.session.show();
-            // A click with no line spends the armed button too.
-            self.tool.session.straighten_mut().disarm();
-            if let Some(angle) = straightened {
-                self.straightened(angle, fit);
-            }
-        }
-        if apply && let Some(event) = self.tool.apply(self.input.settings, self.input.document, units) {
-            self.push(event);
-        }
-        if discard && let Some(event) = self.tool.discard() {
-            self.push(event);
-        }
-    }
-
-    /// A Straighten line levelled the frame by `angle`, as one box step: with `fit` (the button was armed)
-    /// the frame is fitted to the canvas, else (Cmd held) it keeps its size and centre and turns in place.
-    fn straightened(&mut self, angle: f64, fit: bool) {
-        let Some(frame) = self.tool.session.frame() else { return };
-        let next = if fit { frame.fitted(self.input.document.size, angle) } else { Some(CropBox::new(frame.rect, normalized_angle(angle))) };
-        if let Some(next) = next {
-            let event = self.tool.session.set(next, false, &self.tool.step);
-            self.tool.synced = None;
-            self.push(CropEvent::Frame(event));
-            self.push(CropEvent::Straightened(angle));
-        }
     }
 
     /// Image mode: the gestures move and turn the view; the frame stays upright.

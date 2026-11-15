@@ -70,7 +70,7 @@ pub use connector::{
 pub use corner::{CornerEdit, CornerKind, CornerRadii, CornerStyle, CornerWidgets};
 pub use crop::{
     CropBar, CropBarOutput, CropBarWords, CropCommit, CropDocument, CropEvent, CropFill, CropInput, CropLength, CropOptionsMenu, CropOutput,
-    CropOverlayMenu, CropPresetChoice, CropRatio, CropRatioChange, CropSession, CropSettings, CropSizePreset, CropTarget, CropTool, CropToolPass,
+    CropOverlayMenu, CropPresetChoice, CropRatio, CropRatioChange, CropSession, CropSettings, CropSizePreset, CropShown, CropTarget, CropTool, CropToolPass,
     CropUserPreset, CropWords, PerspectiveCropOutput, PerspectiveCropTool, ResolutionUnit,
 };
 pub use crop::{
