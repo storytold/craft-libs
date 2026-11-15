@@ -74,7 +74,8 @@ pub fn parse_text<'a>(svg: &'a str, limits: &Limits) -> Result<roxmltree::Docume
     parse_text_with_depth(svg, limits).map(|(xml, _, _)| xml)
 }
 
-/// Parses and validates SVG text, returning its source nesting depth as well as its XML tree.
+/// [`parse_text`], with the source nesting: the deepest element nesting (markup entities count
+/// ten times) and the deepest stack of open elements (a self-closing leaf opens none).
 pub fn parse_text_with_depth<'a>(svg: &'a str, limits: &Limits) -> Result<(roxmltree::Document<'a>, usize, usize), Error> {
     if svg.len() > limits.bytes {
         return Err(Error::Text(crate::svgz::Error::TooLarge(limits.bytes)));
@@ -106,8 +107,9 @@ mod tests {
         let limits = Limits { depth: 4, ..Default::default() };
         let (document, depth, open_depth) = parse_text_with_depth("<svg><g><path/></g></svg>", &limits)?;
         assert!(document.root_element().has_tag_name("svg"));
-        assert_eq!(depth, 2);
-        assert_eq!(open_depth, 0);
+        // Every element is a level (svg, g, path); a self-closing leaf opens none (svg, g).
+        assert_eq!(depth, 3);
+        assert_eq!(open_depth, 2);
         let simple = parse_text("<svg/>", &limits)?;
         assert!(simple.root_element().has_tag_name("svg"));
         Ok(())

@@ -167,7 +167,8 @@ pub struct Preflight<'s> {
 }
 
 impl Preflight<'_> {
-    /// Maximum source nesting depth before following references.
+    /// The deepest stack of open source elements, before references are followed; a
+    /// self-closing leaf opens no level (`<svg><g><path/></g></svg>` is 2).
     pub fn depth(&self) -> usize {
         self.depth
     }
@@ -223,7 +224,11 @@ pub fn rewrite_root_viewport(svg: &str, target: Viewport, limits: &Limits, outpu
     }
     let root_dimension = |key: &str| {
         let value = root.attribute(key)?;
-        let (number, scale) = value.strip_suffix("pt").map_or((value, 1.0), |n| (n, 4.0 / 3.0));
+        let value = value.trim();
+        let (number, scale) = match value.strip_suffix("pt") {
+            Some(points) => (points, 4.0 / 3.0),
+            None => (value.strip_suffix("px").unwrap_or(value), 1.0),
+        };
         number.parse::<f64>().ok().map(|n| n * scale).filter(|n| n.is_finite() && *n > 0.0)
     };
     let (width, height) = root_dimension("width")

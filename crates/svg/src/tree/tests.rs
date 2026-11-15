@@ -584,3 +584,85 @@ mod invalid_image_accounting {
         assert_eq!(report.raster_limit_images, 1);
     }
 }
+
+#[test]
+fn preflight_keeps_source_depth_and_parses_the_checked_tree() {
+    let text = svg("<g><rect width='1' height='1'/></g>");
+    let checked = preflight(&text, &Limits::default()).unwrap();
+    // svg and g are open; the self-closing rect opens no level.
+    assert_eq!(checked.depth(), 2);
+    let tree = checked.parse(&options()).unwrap();
+    assert_eq!(tree.size().width(), 10.0);
+    assert!(matches!(preflight(&svg(&groups(30)), &shallow()), Err(Error::TooDeep(24))));
+}
+
+#[test]
+fn preflight_matches_parse_text_refusals() {
+    for text in ["<svg", "<svg xmlns='http://www.w3.org/2000/svg'><g></svg>"] {
+        assert!(matches!(preflight(text, &Limits::default()), Err(Error::Xml(_))));
+        assert!(matches!(parse_text(text, &Limits::default(), &options()), Err(Error::Xml(_))));
+    }
+}
+
+#[test]
+fn rewrite_root_viewport_wraps_the_root_and_keeps_the_preamble() {
+    let source = concat!(
+        "<?xml version='1.0'?>\n<!DOCTYPE svg [<!ENTITY w '4'>]>\n",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='10' viewBox='0 0 2 1'>",
+        "<rect width='&w;' height='1'/></svg>"
+    );
+    let out = rewrite_root_viewport(source, Viewport { width: 40.0, height: 30.0 }, &Limits::default(), 4096).unwrap();
+    assert!(out.starts_with("<?xml version='1.0'?>\n<!DOCTYPE svg [<!ENTITY w '4'>]>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"30\" viewBox=\"0 0 20 10\" preserveAspectRatio=\"none\"><svg "));
+    assert!(out.ends_with("</svg></svg>"));
+    let tree = parse_text(&out, &Limits::default(), &options()).unwrap();
+    assert_eq!((tree.size().width(), tree.size().height()), (40.0, 30.0));
+}
+
+#[test]
+fn rewrite_root_viewport_reads_points_and_pixels() {
+    let points = rewrite_root_viewport(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='72pt' height='36pt'/>",
+        Viewport { width: 1.0, height: 1.0 },
+        &Limits::default(),
+        4096,
+    )
+    .unwrap();
+    assert!(points.contains("viewBox=\"0 0 96 48\""));
+    let pixels = rewrite_root_viewport(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='12px' height='8'/>",
+        Viewport { width: 1.0, height: 1.0 },
+        &Limits::default(),
+        4096,
+    )
+    .unwrap();
+    assert!(pixels.contains("viewBox=\"0 0 12 8\""));
+}
+
+#[test]
+fn rewrite_root_viewport_refusals() {
+    let limits = Limits::default();
+    let one = Viewport { width: 1.0, height: 1.0 };
+    let sized = "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'/>";
+    for target in [
+        Viewport { width: f64::NAN, height: 1.0 },
+        Viewport { width: 1.0, height: f64::INFINITY },
+        Viewport { width: 0.0, height: 1.0 },
+        Viewport { width: 1.0, height: -2.0 },
+    ] {
+        assert!(matches!(rewrite_root_viewport(sized, target, &limits, 4096), Err(Error::Viewport(_))));
+    }
+    assert!(matches!(rewrite_root_viewport("<html width='10' height='10'/>", one, &limits, 4096), Err(Error::Viewport(_))));
+    for source in [
+        "<svg xmlns='http://www.w3.org/2000/svg'/>",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='50%' height='10'/>",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='10mm' height='10'/>",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='0' height='10'/>",
+        "<svg xmlns='http://www.w3.org/2000/svg' width='1e400' height='10'/>",
+    ] {
+        assert!(matches!(rewrite_root_viewport(source, one, &limits, 4096), Err(Error::Viewport(_))), "{source}");
+    }
+    assert!(matches!(rewrite_root_viewport("<svg", one, &limits, 4096), Err(Error::Xml(_))));
+    let fits = rewrite_root_viewport(sized, one, &limits, 4096).unwrap();
+    assert_eq!(rewrite_root_viewport(sized, one, &limits, fits.len()).unwrap(), fits);
+    assert!(matches!(rewrite_root_viewport(sized, one, &limits, fits.len() - 1), Err(Error::OutputTooLarge(n)) if n == fits.len() - 1));
+}
