@@ -65,9 +65,12 @@ mod wav;
     feature = "alac-encode",
     feature = "mp3-encode",
     feature = "ac3-encode",
-    feature = "eac3-encode"
+    feature = "eac3-encode",
+    feature = "vorbis-encode"
 ))]
 mod write;
+#[cfg(feature = "vorbis-encode")]
+pub use write::{OGG_BITRATES, encode_ogg};
 
 /// The FLAC packet encoder (RFC 9639), for a caller that muxes FLAC itself (into MP4, Matroska or
 /// its own `.flac` writer): planar integer samples in, frames out, and the STREAMINFO to patch in
@@ -110,8 +113,6 @@ pub use read::{
 pub use read::{RawPcm, aiff_pcm, wav_pcm};
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 pub use track::{LOOKAHEAD_PACKETS, TrackDecoder};
-#[cfg(feature = "pcm-encode")]
-pub use write::wav_float_header;
 #[cfg(any(
     feature = "pcm-encode",
     feature = "flac-encode",
@@ -121,7 +122,20 @@ pub use write::wav_float_header;
     feature = "ac3-encode",
     feature = "eac3-encode"
 ))]
-pub use write::{ENCODE_EXTENSIONS, FileEncoder, encode, encode_format_for};
+pub use write::FileEncoder;
+#[cfg(feature = "pcm-encode")]
+pub use write::wav_float_header;
+#[cfg(any(
+    feature = "pcm-encode",
+    feature = "flac-encode",
+    feature = "aac-encode",
+    feature = "alac-encode",
+    feature = "mp3-encode",
+    feature = "ac3-encode",
+    feature = "eac3-encode",
+    feature = "vorbis-encode"
+))]
+pub use write::{ENCODE_EXTENSIONS, encode, encode_format_for};
 #[cfg(feature = "pcm-encode")]
 pub use write::{pcm_aiff_file, pcm_aiff_header, pcm_wav_file, pcm_wav_header};
 
@@ -269,6 +283,8 @@ pub enum EncodeFormat {
     Ac3,
     /// An E-AC-3 stream: up to 7.1 at 32, 44.1 or 48 kHz.
     Eac3,
+    /// Ogg Vorbis, whole-buffer encoding only.
+    Ogg,
 }
 
 impl EncodeFormat {
@@ -283,6 +299,7 @@ impl EncodeFormat {
         EncodeFormat::Mp3,
         EncodeFormat::Ac3,
         EncodeFormat::Eac3,
+        EncodeFormat::Ogg,
     ];
 
     /// The extension a new file of this format gets, lower case and without the dot: `"wav"`,
@@ -297,6 +314,7 @@ impl EncodeFormat {
             EncodeFormat::Mp3 => "mp3",
             EncodeFormat::Ac3 => "ac3",
             EncodeFormat::Eac3 => "eac3",
+            EncodeFormat::Ogg => "ogg",
         }
     }
 
@@ -310,6 +328,7 @@ impl EncodeFormat {
             EncodeFormat::Mp3 => "audio/mpeg",
             EncodeFormat::Ac3 => "audio/ac3",
             EncodeFormat::Eac3 => "audio/eac3",
+            EncodeFormat::Ogg => "audio/ogg",
         }
     }
 
@@ -322,6 +341,7 @@ impl EncodeFormat {
             EncodeFormat::Aac | EncodeFormat::Alac => Container::Mp4,
             EncodeFormat::Mp3 => Container::MpegAudio,
             EncodeFormat::Ac3 | EncodeFormat::Eac3 => Container::Ac3,
+            EncodeFormat::Ogg => Container::Ogg,
         }
     }
 
@@ -335,6 +355,7 @@ impl EncodeFormat {
             EncodeFormat::Mp3 => CodecId::Mp3,
             EncodeFormat::Ac3 => CodecId::Ac3,
             EncodeFormat::Eac3 => CodecId::Eac3,
+            EncodeFormat::Ogg => CodecId::Vorbis,
         }
     }
 
@@ -348,10 +369,11 @@ impl EncodeFormat {
             EncodeFormat::Mp3 => "mp3-encode",
             EncodeFormat::Ac3 => "ac3-encode",
             EncodeFormat::Eac3 => "eac3-encode",
+            EncodeFormat::Ogg => "vorbis-encode",
         }
     }
 
-    /// Whether [`encode`] and [`FileEncoder`] write this format in this build (its
+    /// Whether [`encode`] writes this format in this build (its
     /// [`feature`](Self::feature) is on): what to filter [`EncodeFormat::ALL`] by for a menu.
     pub fn is_built(self) -> bool {
         match self {
@@ -362,6 +384,7 @@ impl EncodeFormat {
             EncodeFormat::Mp3 => cfg!(feature = "mp3-encode"),
             EncodeFormat::Ac3 => cfg!(feature = "ac3-encode"),
             EncodeFormat::Eac3 => cfg!(feature = "eac3-encode"),
+            EncodeFormat::Ogg => cfg!(all(feature = "vorbis-encode", not(target_arch = "wasm32"))),
         }
     }
 
@@ -372,7 +395,7 @@ impl EncodeFormat {
             EncodeFormat::Aac => Some(&[7350, 8000, 11_025, 12_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 64_000, 88_200, 96_000]),
             EncodeFormat::Mp3 => Some(&[16_000, 22_050, 24_000, 32_000, 44_100, 48_000]),
             EncodeFormat::Ac3 | EncodeFormat::Eac3 => Some(&[32_000, 44_100, 48_000]),
-            EncodeFormat::Wav | EncodeFormat::Aiff | EncodeFormat::Flac | EncodeFormat::Alac => None,
+            EncodeFormat::Wav | EncodeFormat::Aiff | EncodeFormat::Flac | EncodeFormat::Alac | EncodeFormat::Ogg => None,
         }
     }
 
@@ -384,7 +407,7 @@ impl EncodeFormat {
             EncodeFormat::Wav | EncodeFormat::Aiff => 32_767,
             EncodeFormat::Flac | EncodeFormat::Aac | EncodeFormat::Alac | EncodeFormat::Eac3 => 8,
             EncodeFormat::Ac3 => 6,
-            EncodeFormat::Mp3 => 2,
+            EncodeFormat::Mp3 | EncodeFormat::Ogg => 2,
         }
     }
 
@@ -398,7 +421,7 @@ impl EncodeFormat {
             EncodeFormat::Aac => &[&[0x4], &[0x3], &[0x7], &[0x107], &[0x607], &[0x60F], &[0x70F], &[0xFF]],
             // Apple's layout tags for 1–8 channels, surrounds as back speakers.
             EncodeFormat::Alac => &[&[0x4], &[0x3], &[0x7], &[0x107], &[0x37], &[0x3F], &[0x13F], &[0xFF]],
-            EncodeFormat::Mp3 => &[&[0x4], &[0x3]],
+            EncodeFormat::Mp3 | EncodeFormat::Ogg => &[&[0x4], &[0x3]],
             // The coding modes 1/0 to 3/2 with and without an LFE, by channel count.
             EncodeFormat::Ac3 => &[&[0x4], &[0x3, 0xC], &[0x7, 0x103, 0xB], &[0x107, 0x603, 0xF, 0x10B], &[0x607, 0x10F, 0x60B], &[0x60F]],
             // The same, and 7.1 with backs and sides.
@@ -449,7 +472,7 @@ impl EncodeFormat {
     /// Whether the format loses audio: AAC, MP3, AC-3 and E-AC-3. These take
     /// [`EncodeOptions::rate_control`] and ignore the bit depth and dither.
     pub fn is_lossy(self) -> bool {
-        matches!(self, EncodeFormat::Aac | EncodeFormat::Mp3 | EncodeFormat::Ac3 | EncodeFormat::Eac3)
+        matches!(self, EncodeFormat::Aac | EncodeFormat::Mp3 | EncodeFormat::Ac3 | EncodeFormat::Eac3 | EncodeFormat::Ogg)
     }
 }
 
@@ -462,7 +485,8 @@ pub enum RateControl {
     /// set of rates (MP3, AC-3) uses the highest one not above it; a rate outside what the
     /// stream can carry is moved to the nearest one inside. AAC is written at 6 kbit/s or a
     /// quarter of the sample rate per channel at least: from about half of that down its encoder
-    /// codes silence.
+    /// codes silence. Vorbis treats this as a VBR target (64–500 kbit/s), falling back to
+    /// a quality preset when that target is unsupported; it does not promise a constant bitrate.
     Bitrate(u32),
     /// A constant quality from 0.0 (smallest) to 1.0 (best), at whatever bit rate each frame
     /// needs. AAC only; values outside the range are clamped, and NaN is an error.
