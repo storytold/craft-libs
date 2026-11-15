@@ -104,7 +104,7 @@ pub use scopes::{
     ScopeView, ScopeWords, ToneZone, ToneZones, VectorscopeFrame, VectorscopePlot, ZoneScale, ZoneValues, scope_point,
 };
 pub use select::{
-    LassoTool, MagneticLassoTool, MagneticSettings, MarqueeKind, MarqueeTool, PolygonLassoTool, SelectEvent, SelectWords, SelectionShape,
+    LassoTool, MagneticLassoTool, MagneticOutlineView, MagneticSettings, MarqueeKind, MarqueeTool, PolygonLassoTool, SelectEvent, SelectWords, SelectionShape,
     operations::{SelectionOpWords, selection_operations},
 };
 pub use select_mask::{

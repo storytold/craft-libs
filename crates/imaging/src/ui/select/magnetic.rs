@@ -92,6 +92,22 @@ impl MagneticSettings {
     }
 }
 
+/// The outline in progress, as [`MagneticLassoTool::outline`] reads it, in document units.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct MagneticOutlineView<'a> {
+    /// The fastened outline, from the first fastening point to the last.
+    pub path: &'a [Point],
+    /// Indices into `path` of the fastening points (the first is 0).
+    pub anchors: &'a [usize],
+    /// The live segment from the last fastening point to the edge near the pointer.
+    pub live: &'a [Point],
+    /// The operation the first click latched.
+    pub operation: SelectionOperation,
+    /// An Alt-drag is drawing a freehand segment.
+    pub freehand: bool,
+}
+
 /// The outline being drawn.
 #[derive(Clone, Debug)]
 struct MagneticOutline {
@@ -298,6 +314,11 @@ impl<T: EdgeTracer> MagneticLassoTool<T> {
     /// What the tool is doing: an outline with its point count.
     pub fn phase(&self) -> SelectPhase {
         self.outline.as_ref().map_or(SelectPhase::Idle, |o| SelectPhase::Outline { points: o.points().count() })
+    }
+
+    /// The outline in progress, `None` while none is open.
+    pub fn outline(&self) -> Option<MagneticOutlineView<'_>> {
+        self.outline.as_ref().map(|o| MagneticOutlineView { path: &o.path, anchors: &o.anchors, live: &o.live, operation: o.operation, freehand: o.freehand })
     }
 
     /// An outline with the operation New is open: the app hides the selection's ants.

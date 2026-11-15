@@ -56,7 +56,7 @@ pub(crate) mod stories;
 pub mod operations;
 pub use drag::{InsideDrag, PressRule, cursor_over, drag_kind};
 pub use lasso::{LassoTool, paint_outline};
-pub use magnetic::{EdgeSearch, EdgeTracer, MagneticLassoTool, MagneticSettings};
+pub use magnetic::{EdgeSearch, EdgeTracer, MagneticLassoTool, MagneticOutlineView, MagneticSettings};
 pub use marquee::{MarqueeKind, MarqueeTool};
 pub use operations::{SelectionOpWords, selection_operations};
 pub use polygon::PolygonLassoTool;
