@@ -1,0 +1,24 @@
+[package]
+name = "craft-library-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The Library pane in egui: tabs, folders, search and thumbnails over an app's library.* commands"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-library = { workspace = true }
+craft-ui = { workspace = true }
+egui = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = { workspace = true }
+# Instant that also works in the browser build, for the per-frame reading budget.
+web-time = "1.1"
+
+[dev-dependencies]
+egui = { workspace = true, features = ["default_fonts"] }
+egui_kittest = "0.37"

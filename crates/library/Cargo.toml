@@ -1,0 +1,14 @@
+[package]
+name = "craft-library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "An app's Library: folders of documents listed, searched and drawn as thumbnails behind the shared library.* commands"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
