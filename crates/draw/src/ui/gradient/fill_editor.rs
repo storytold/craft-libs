@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, Mixed};
 use craft_color::ui::ScreenPickGesture;
-use craft_color::ui::gradient::{GradientEditor, GradientStops, StopColor};
+use craft_color::ui::gradient::{GradientEditor, GradientStops, StopColor, StopRef};
 use craft_theme::Srgba;
 use craft_ui::buttons::Button;
 use craft_ui::choice::{Checkbox, Segmented};
@@ -73,8 +73,11 @@ pub struct GradientFillEditorOutput {
     pub picked: Option<GradientRef>,
     /// The colour stop whose colour the host is asked to edit.
     pub color_requested: Option<StopColor>,
-    /// The popover picker's screen-pick press; the host answers with `sampled`.
+    /// The popover picker's screen-pick press; the host answers with `sampled`. The pick is for the selected colour
+    /// stop ([`selected`](Self::selected)).
     pub screen_pick: Option<ScreenPickGesture>,
+    /// The stops editor's selection after this pass; `None` when the body did not run.
+    pub selected: Option<StopRef>,
 }
 
 impl Outcome for GradientFillEditorOutput {
@@ -148,7 +151,7 @@ impl<'a> GradientFillEditor<'a> {
             let mut color_requested = None;
             let mut screen_pick = None;
             let Some(now) = value.reborrow().read(cx).and_then(|held| held.same().cloned()) else {
-                return (events, picked, color_requested, screen_pick);
+                return (events, picked, color_requested, screen_pick, None);
             };
             if !groups.is_empty() || !recent.is_empty() {
                 let palette = GradientPalette::new(label.clone(), groups, state.reborrowed()).recent(recent).show(ui);
@@ -170,6 +173,7 @@ impl<'a> GradientFillEditor<'a> {
             let stops = editor.show(ui);
             color_requested = stops.color_requested;
             screen_pick = stops.screen_pick;
+            let selected = stops.selected;
             absorb(&mut events, lift(stops.edit.events, &now, |fill, stops| fill.stops = stops));
 
             Text::new(words.options.clone()).show(ui);
@@ -211,10 +215,10 @@ impl<'a> GradientFillEditor<'a> {
             for event in events.iter() {
                 value.reborrow().write(cx, event);
             }
-            (events, picked, color_requested, screen_pick)
+            (events, picked, color_requested, screen_pick, selected)
         });
-        let (events, picked, color_requested, screen_pick) = shown.inner.unwrap_or_default();
-        GradientFillEditorOutput { response: shown.output, events, picked, color_requested, screen_pick }
+        let (events, picked, color_requested, screen_pick, selected) = shown.inner.unwrap_or_default();
+        GradientFillEditorOutput { response: shown.output, events, picked, color_requested, screen_pick, selected }
     }
 }
 
