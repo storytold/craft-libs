@@ -280,6 +280,54 @@ impl Unreadable {
     }
 }
 
+/// References that reached a member of an object stream at a generation other than 0, the only
+/// one such a member has (ISO 32000-2 §7.5.7): the first such generation of each object number
+/// (see `Document::generation_aliases`). Bounded like [`Unreadable`]: past [`Aliases::MAX`]
+/// numbers only the fact that there were more is kept.
+#[derive(Debug, Default)]
+pub(super) struct Aliases {
+    pub(super) objects: BTreeMap<u32, u16>,
+    pub(super) more: bool,
+}
+
+impl Aliases {
+    pub(super) const MAX: usize = 100;
+
+    /// Record that `num` was reached as `num generation R`; the first generation is kept.
+    pub(super) fn note(&mut self, num: u32, generation: u16) {
+        if self.objects.contains_key(&num) {
+            return;
+        }
+        if self.objects.len() >= Self::MAX {
+            self.more = true;
+            return;
+        }
+        self.objects.insert(num, generation);
+    }
+
+    /// One line per recorded object not `hidden` (edited, so no longer read from its stream),
+    /// then one saying there were more, if there were.
+    pub(super) fn lines(&self, hidden: impl Fn(u32) -> bool) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .objects
+            .iter()
+            .filter(|(num, _)| !hidden(**num))
+            .map(|(num, generation)| {
+                format!(
+                    "object {num} is stored in an object stream, so its generation is 0 (ISO 32000-2 §7.5.7); a reference to it as {num} {generation} R was followed to it"
+                )
+            })
+            .collect();
+        if self.more {
+            lines.push(format!(
+                "more references named an object stored in an object stream by a generation other than 0; only the first {} are listed",
+                Self::MAX
+            ));
+        }
+        lines
+    }
+}
+
 /// Where an overlay slot came from.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Slot {

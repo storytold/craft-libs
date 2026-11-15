@@ -1,6 +1,6 @@
 #[cfg(test)]
 use super::state::SECTION_READS;
-use super::state::Unreadable;
+use super::state::{Aliases, Unreadable};
 use super::xref::{
     MAX_COMPACT_XREF_BYTES, MAX_COMPACT_XREF_ROWS, Revision, XrefEntry, XrefIndex, XrefRange, XrefRevisionSection, XrefSection, XrefSectionData,
 };
@@ -700,6 +700,7 @@ impl Document {
         self.entries = Arc::new(XrefIndex::Materialized(Arc::new(entries.clone()), Arc::default()));
         self.cache.lock().map_err(|_| CosError::Poisoned)?.clear();
         *self.unreadable.lock().map_err(|_| CosError::Poisoned)? = Unreadable::default();
+        *self.aliases.lock().map_err(|_| CosError::Poisoned)? = Aliases::default();
         // Objects inside object streams.
         for num in objstms {
             if let Ok(o) = self.try_get(num)

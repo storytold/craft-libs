@@ -199,6 +199,10 @@ impl Document {
     /// Fetch an object by reference. Undefined references are `Null` (ISO 32000-2 §7.3.10).
     /// A live file slot also accepts its actual header generation when a damaged xref row
     /// disagrees; the disagreement is recorded in [`Self::repair_log`]. Free slots never do.
+    /// A member of an object stream accepts every generation: its own can only be 0 (§7.5.7),
+    /// so `n 1 R` cannot name another, deleted version of it that is still compressed, and
+    /// PDFium, MuPDF, Poppler and qpdf all follow such a reference to it. Each one followed is
+    /// listed in [`Self::generation_aliases`].
     pub fn get(&self, r: ObjRef) -> Arc<Object> {
         self.try_get_reference(r).unwrap_or_else(|_| Arc::new(Object::Null))
     }
@@ -212,15 +216,33 @@ impl Document {
                 Some(XrefEntry::InFile { offset, generation }) => {
                     r.generation == generation || self.indexed_header_reference(r.num, offset) == Some(r)
                 }
-                Some(XrefEntry::InStream { .. }) => r.generation == 0,
+                Some(XrefEntry::InStream { .. }) => true,
                 None | Some(XrefEntry::Free { .. }) => false,
             },
         }
     }
 
+    /// Whether every generation of a reference to `num` resolves: `num` is a member of an object
+    /// stream with no unsaved edit (see [`Self::get`]). [`Self::accepted_generations`] then lists
+    /// only its own generation, 0.
+    pub fn accepts_any_generation(&self, num: u32) -> bool {
+        !self.overlay.contains_key(&num) && matches!(self.entries.lookup(num, &self.data), Some(XrefEntry::InStream { .. }))
+    }
+
+    /// References followed to a member of an object stream by a generation other than its own,
+    /// 0 (see [`Self::get`]): one line each, for objects without an unsaved edit, in the words of
+    /// [`Self::repair_log`], to which they belong. Only those followed so far, by this document,
+    /// its clones or a save of it, are listed; past 100, a last line says there were more.
+    pub fn generation_aliases(&self) -> Vec<String> {
+        let Ok(aliases) = self.aliases.lock() else { return Vec::new() };
+        aliases.lines(|num| self.overlay.contains_key(&num))
+    }
+
     /// The generations a reference to `num` may carry and still resolve (see [`Self::get`]),
     /// sorted: none for a free or unknown slot, else the slot's generation, and for a damaged
     /// file slot (or a repair-aware edit of one) also the generation its object header carries.
+    /// A member of an object stream lists its own generation, 0, although it accepts every one
+    /// ([`Self::accepts_any_generation`]).
     /// Code comparing revisions (signature validation) uses it to tell whether the references
     /// that reached an object in one revision still reach the same slot in another.
     pub fn accepted_generations(&self, num: u32) -> Vec<u16> {
@@ -251,6 +273,12 @@ impl Document {
             }
             note_read(r.num, None);
             return Ok(Arc::new(Object::Null));
+        }
+        if r.generation != 0 && self.accepts_any_generation(r.num) {
+            // A poisoned lock only means the reference goes unlisted; it is still followed.
+            if let Ok(mut aliases) = self.aliases.lock() {
+                aliases.note(r.num, r.generation);
+            }
         }
         self.try_get(r.num)
     }
@@ -895,7 +923,8 @@ impl Document {
         Ok(())
     }
 
-    /// Other accepted generation for a known-live reference to a damaged slot.
+    /// Other accepted generation for a known-live reference to a damaged slot, or to a member of
+    /// an object stream that a reference by another generation than 0 reaches.
     pub(super) fn alternate_generation(&self, r: ObjRef) -> Option<u16> {
         match self.overlay.get(&r.num) {
             Some(Slot::RepairedSet(generation, alias, _)) => Some(if r.generation == *generation { *alias } else { *generation }),
@@ -904,6 +933,11 @@ impl Document {
                 Some(XrefEntry::InFile { offset, generation }) => self.indexed_header_reference(r.num, offset).and_then(|header| {
                     (header.generation != generation).then_some(if r.generation == generation { header.generation } else { generation })
                 }),
+                // A member of an object stream reached by another generation keeps both that one
+                // and its own, 0, through an edit; so does one edited through `n 0 R` that such a
+                // reference was followed to.
+                Some(XrefEntry::InStream { .. }) if r.generation != 0 => Some(0),
+                Some(XrefEntry::InStream { .. }) => self.aliases.lock().ok().and_then(|aliases| aliases.objects.get(&r.num).copied()),
                 _ => None,
             },
         }
