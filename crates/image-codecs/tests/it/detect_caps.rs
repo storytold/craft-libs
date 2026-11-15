@@ -62,6 +62,7 @@ fn default_build_formats_all_symmetric() {
         Format::Dpx,
         Format::Cineon,
         Format::Iff,
+        Format::Sgi,
     ];
     for f in expected {
         assert!(caps(f).read && caps(f).write, "{f:?}");
@@ -218,6 +219,22 @@ fn detect_magic_iff() {
     assert_eq!(detect(b"FORM\0\0\0\x14AIFF"), None);
     assert!(decode_as(Format::Iff, b"FORM\0\0\0\x14ILBM").is_err());
 }
+#[test]
+fn detect_magic_sgi() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    let img = Image::from_u8(5, 3, ChannelLayout::Rgba, (0..60).collect()).unwrap();
+    let bytes = encode(&img, Format::Sgi, &EncodeOptions::default()).unwrap();
+    assert_eq!(detect(&bytes), Some(Format::Sgi));
+    assert_eq!(from_extension("scan.RGB"), Some(Format::Sgi));
+    assert_eq!(from_extension("scan.bw"), Some(Format::Sgi));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Sgi));
+    assert_eq!(Format::Sgi.max_dimensions(), Some((65535, 65535)));
+    // The magic number alone, without a full header, is not SGI.
+    assert_eq!(detect(&[0x01, 0xda, 0, 1, 0, 2]), None);
+    assert!(decode_as(Format::Sgi, &[0x01, 0xda]).is_err());
+}
+
 #[test]
 fn detect_magic_avif() {
     assert_eq!(detect(b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf"), Some(Format::Avif));

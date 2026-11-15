@@ -17,6 +17,7 @@ pub(crate) mod jxl;
 pub(crate) mod pcx;
 pub(crate) mod png;
 pub(crate) mod pnm;
+pub(crate) mod sgi;
 pub(crate) mod tga;
 pub(crate) mod tiff;
 pub(crate) mod tiff_exif;
