@@ -259,11 +259,11 @@ impl Document {
         self.security = Some(handler);
         self.encrypt_num = num;
         self.encrypt_members = Arc::new(members);
+        self.damaged_ciphertext = Arc::default();
         // Objects read while locating the catalog were read before decryption was possible.
         self.cache = Arc::default();
         self.objstms = Arc::default();
         self.unreadable = Arc::default();
-        self.damaged_ciphertext = Arc::default();
         Ok(())
     }
 
