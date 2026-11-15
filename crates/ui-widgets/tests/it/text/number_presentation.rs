@@ -189,8 +189,8 @@ fn the_mono_choice_sets_the_face_the_field_paints_and_measures() {
         field.width() - run.rect.width()
     };
     let (measured, painted) = (room(fields[0], mono), room(fields[1], proportional));
-    // The value "111" is what this unbounded field measures (the current value, not a fixed sample), and the monospace
-    // role is 6.7 points wider on it than the body role, so a measure that named the face itself leaves the room apart.
+    // The value "111" is what this unbounded field measures (the current value, not a fixed sample), and its digits are
+    // set at clearly different advances in the two roles, so a measure that named the face itself leaves the room apart.
     assert!((measured - painted).abs() <= 1.0, "the field measures the role it paints: {measured} beside {painted}");
 }
 
@@ -211,6 +211,8 @@ fn a_started_value_keeps_its_unit_at_the_reading_end() {
         let (s5, s100) = (inset(numbers[0].rect, fields[0], true, rtl), inset(numbers[1].rect, fields[1], true, rtl));
         assert!((s5 - s100).abs() <= 0.5, "started values share the reading start beside a unit {what}: {s5} beside {s100}");
         let unit_end = inset(units[0].rect, fields[0], false, rtl);
+        // The field's horizontal padding is symmetric at this preset, so the value keeps at the reading start the inset the
+        // unit keeps at the reading end: coverage of the default preset's padding, not a claim that every theme's is.
         assert!((s5 - unit_end).abs() <= 0.5, "the value starts at the inset the unit keeps from the reading end {what}: {s5} beside {unit_end}");
         // The unit is the same whichever the presentation: all four fields end it at one inset.
         let ends: Vec<f32> = units.iter().zip(&fields).map(|(unit, field)| inset(unit.rect, *field, false, rtl)).collect();
@@ -231,7 +233,9 @@ fn a_started_value_keeps_its_unit_at_the_reading_end() {
 }
 
 /// The caret sits beside the value wherever the field puts it: after the last digit at End and before the first at Home,
-/// inside the field's own box, in all four presentations. An editing field lays its text out as its measure did.
+/// inside the field's own box, in all four presentations. The field is its ordinary cell width rather than sized to its
+/// content, so a value placed by the wrong alignment moves across the whole band (tens of points), not within the caret's
+/// own room. This compares the editable caret with the resting painted value.
 #[trial]
 fn the_caret_follows_the_value_wherever_the_field_puts_it() {
     for (centred, mono) in [(true, true), (true, false), (false, true), (false, false)] {
@@ -240,16 +244,7 @@ fn the_caret_follows_the_value_wherever_the_field_puts_it() {
         let mut fixture = Fixture::new(move |ui| {
             let mut v = b.borrow_mut();
             v.clear();
-            v.push(
-                NumberField::new("N", Bind::given(Some(100.0)))
-                    .centred(centred)
-                    .mono(mono)
-                    .sizing(Sizing::Content)
-                    .id_salt("n")
-                    .show(ui)
-                    .response
-                    .rect,
-            );
+            v.push(NumberField::new("N", Bind::given(Some(100.0))).centred(centred).mono(mono).id_salt("n").show(ui).response.rect);
         });
         fixture.settle();
         let field = boxes.borrow()[0];
@@ -271,44 +266,52 @@ fn the_caret_follows_the_value_wherever_the_field_puts_it() {
     }
 }
 
-/// A started value wider than the room the field gives it: it begins at the reading start rather than at a centred
-/// offset, and in edit the field scrolls so that Home and End both keep the caret inside its box.
+/// A value wider than the room the field gives it: the text is drawn from the field's inner edge and overflows the box,
+/// and in edit the field scrolls so that Home and End both keep the caret inside it. egui's single-line editor clamps
+/// either alignment to the inner edge once the text is wider than the room (`builder.rs`, `align_size_within_rect(...)
+/// .intersect(inner_rect)`), so this trial covers the overflow and the scrolling and cannot tell the two settings apart;
+/// both are exercised for that shared path only.
 #[trial]
-fn a_long_started_value_starts_at_the_reading_start_and_keeps_its_caret_in_view() {
+fn a_long_value_overflows_its_room_and_keeps_its_caret_in_view() {
     const LONG: f64 = 123_456_789_012_345.0;
     const LONG_TEXT: &str = "123456789012345";
-    let boxes: Rc<RefCell<Vec<Rect>>> = Rc::default();
-    let b = boxes.clone();
-    let mut fixture = Fixture::new(move |ui| {
-        let mut v = b.borrow_mut();
-        v.clear();
-        v.push(NumberField::new("N", Bind::given(Some(LONG))).centred(false).id_salt("long").show(ui).response.rect);
-    });
-    fixture.settle();
-    let field = boxes.borrow()[0];
-    let runs = painted_runs(&mut fixture);
-    // This fixture shows one field, so the value is its one run of that text: it is found by text alone, since a value
-    // wider than its room is painted beyond the field's box and no containment test would find it.
-    let value = match runs.iter().find(|run| run.text == LONG_TEXT) {
-        Some(run) => run.rect,
-        None => panic!("the field paints no {LONG_TEXT}: {:?}", runs.iter().map(|run| run.text.clone()).collect::<Vec<_>>()),
-    };
-    // The overflow is what the trial is for: the ordinary layout keeps the field at one number cell, so the value is
-    // wider than the field it is drawn across (were the field grown to fit, this would fail rather than test nothing).
-    assert!(value.width() > field.width(), "the value is wider than the field it overflows: {value:?} in {field:?}");
-    let start = inset(value, field, true, false);
-    assert!(start >= -0.5, "a started value begins inside the field, not left of it as a centred one would: {value:?} in {field:?}");
-    assert!(start < field.width() / 4.0, "and beside the field's start, not at a centred offset: {start} in {field:?}");
-    // In edit the value is wider than the room, so the field scrolls: the caret stays inside the box at both ends.
-    fixture.key(Key::Tab, Modifiers::NONE);
-    fixture.settle();
-    fixture.key(Key::Home, Modifiers::NONE);
-    let home = fixture.ime().expect("a field in edit reports its caret").caret;
-    fixture.key(Key::End, Modifiers::NONE);
-    let end = fixture.ime().expect("a field in edit reports its caret").caret;
-    assert!(field.expand(1.5).contains_rect(home), "the caret at Home stays in the field: {home:?} in {field:?}");
-    assert!(field.expand(1.5).contains_rect(end), "the field scrolls so the caret at End stays in it: {end:?} in {field:?}");
-    assert!(end.min.x > home.min.x, "End is past Home: {home:?} {end:?}");
+    for centred in [false, true] {
+        let boxes: Rc<RefCell<Vec<Rect>>> = Rc::default();
+        let b = boxes.clone();
+        let mut fixture = Fixture::new(move |ui| {
+            let mut v = b.borrow_mut();
+            v.clear();
+            v.push(NumberField::new("N", Bind::given(Some(LONG))).centred(centred).id_salt("long").show(ui).response.rect);
+        });
+        fixture.settle();
+        let field = boxes.borrow()[0];
+        let runs = painted_runs(&mut fixture);
+        // This fixture shows one field, so the value is found by text alone: a value wider than its room is painted
+        // beyond the field's box, and no containment test would find it.
+        let value = match runs.iter().find(|run| run.text == LONG_TEXT) {
+            Some(run) => run.rect,
+            None => panic!("the field paints no {LONG_TEXT}: {:?}", runs.iter().map(|run| run.text.clone()).collect::<Vec<_>>()),
+        };
+        // The overflow is what the trial is for: the ordinary layout keeps the field at one number cell, so the value is
+        // wider than the field it is drawn across (were the field grown to fit, this would fail rather than test nothing).
+        assert!(value.width() > field.width(), "the value is wider than the field it overflows (centred {centred}): {value:?} in {field:?}");
+        // The clamped text begins at the field's inner edge: not left of it, and not at a placed offset inside it.
+        let start = inset(value, field, true, false);
+        assert!(
+            start >= -0.5 && start < field.width() / 4.0,
+            "an overflowing value is drawn from the field's inner edge (centred {centred}): {start} in {field:?}"
+        );
+        // In edit the value is wider than the room, so the field scrolls: the caret stays inside the box at both ends.
+        fixture.key(Key::Tab, Modifiers::NONE);
+        fixture.settle();
+        fixture.key(Key::Home, Modifiers::NONE);
+        let home = fixture.ime().expect("a field in edit reports its caret").caret;
+        fixture.key(Key::End, Modifiers::NONE);
+        let end = fixture.ime().expect("a field in edit reports its caret").caret;
+        assert!(field.expand(1.5).contains_rect(home), "the caret at Home stays in the field (centred {centred}): {home:?} in {field:?}");
+        assert!(field.expand(1.5).contains_rect(end), "the field scrolls so the caret at End stays in it (centred {centred}): {end:?} in {field:?}");
+        assert!(end.min.x > home.min.x, "End is past Home (centred {centred}): {home:?} {end:?}");
+    }
 }
 
 /// A mixed field's dash and a disabled field's value are presented like any other value, and each has its centred twin

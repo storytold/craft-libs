@@ -246,7 +246,8 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     /// Where the value sits in the room the field leaves for it: in the middle (the default), or at the logical reading
     /// start, the edge the text is read from — the left edge in a left-to-right interface, the right edge in a
     /// right-to-left one. The unit keeps its place at the end of the field either way, so a column of fields lines its
-    /// units up whichever presentation its values take.
+    /// units up whichever presentation its values take. Values wider than the available room retain the existing
+    /// single-line clipping and scrolling behavior.
     #[must_use]
     pub fn centred(mut self, centred: bool) -> Self {
         self.options.centred = centred;
