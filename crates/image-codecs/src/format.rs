@@ -26,7 +26,8 @@ pub enum Format {
     OpenExr,
     /// Radiance RGBE.
     Hdr,
-    /// Encode-only behind the `avif` feature; see [`ASYMMETRIC_EXCEPTIONS`].
+    /// Encoded behind the `avif` feature and decoded behind `avif-decode` (native targets); see
+    /// [`ASYMMETRIC_EXCEPTIONS`] for a build with only one of them.
     Avif,
     /// HEIF/HEIC (HEVC-coded): read-only; see [`ASYMMETRIC_EXCEPTIONS`].
     Heif,
@@ -44,6 +45,8 @@ pub enum Format {
     Iff,
     /// JPEG 2000 (JP2 container or raw J2K codestream): read-only; see [`ASYMMETRIC_EXCEPTIONS`].
     Jp2,
+    /// JPEG-LS (`.jls`): lossless and near-lossless gray and RGB.
+    JpegLs,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -89,8 +92,10 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
     ),
     (
         Format::Avif,
-        "AVIF encode uses ravif (pure Rust) but decoding requires dav1d (C); read stays unsupported \
-         until a pure-Rust AV1 decoder is viable. Only enabled with the non-default `avif` feature.",
+        "AVIF encode (ravif and rav1e, pure Rust) is behind the non-default `avif` feature and AVIF \
+         decode (craft-video's clean-room pure-Rust AV1 decoder) behind the non-default \
+         `avif-decode` feature, native targets only (on wasm32 a decoder panic would abort). A build \
+         with only one of them reads or writes AVIF, not both.",
     ),
     (Format::Jxl, "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder; JPEG XL reading is tracked separately and is not yet available."),
     (
@@ -113,7 +118,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 24] = [
+    pub const ALL: [Format; 25] = [
         Format::Png,
         Format::Jpeg,
         Format::Jp2,
@@ -138,6 +143,7 @@ impl Format {
         Format::Cineon,
         Format::Dicom,
         Format::Iff,
+        Format::JpegLs,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -176,6 +182,7 @@ impl Format {
             Format::Dicom => "DICOM",
             Format::Iff => "Amiga IFF",
             Format::Jp2 => "JPEG 2000",
+            Format::JpegLs => "JPEG-LS",
         }
     }
 
@@ -207,6 +214,7 @@ impl Format {
             Format::Dicom => &["dcm", "dicom", "dc3"],
             Format::Iff => &["iff", "lbm", "ilbm"],
             Format::Jp2 => &["jp2", "j2k", "j2c", "jpf", "jpx"],
+            Format::JpegLs => &["jls"],
         }
     }
 
@@ -236,13 +244,14 @@ impl Format {
             Format::Dicom => "application/dicom",
             Format::Iff => "image/x-iff",
             Format::Jp2 => "image/jp2",
+            Format::JpegLs => "image/jls",
         }
     }
 
     /// Maximum encodable dimensions, if the format has a hard limit.
     pub fn max_dimensions(self) -> Option<(u32, u32)> {
         match self {
-            Format::Jpeg | Format::Gif | Format::Iff => Some((65535, 65535)),
+            Format::Jpeg | Format::Gif | Format::Iff | Format::JpegLs => Some((65535, 65535)),
             Format::WebP => Some((16384, 16384)),
             Format::Ico => Some((256, 256)),
             _ => None,
@@ -298,7 +307,9 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Qoi => base,
         Format::OpenExr => FormatCaps { depths: &[S::F16, S::F32], layouts: RGB_GRAY, ..base },
         Format::Hdr => FormatCaps { depths: &[S::F32], layouts: &[L::Rgb], alpha: false, lossy: true, ..base },
-        Format::Avif => FormatCaps { read: false, write: cfg!(feature = "avif"), lossy: true, ..base },
+        Format::Avif => {
+            FormatCaps { read: cfg!(all(feature = "avif-decode", not(target_arch = "wasm32"))), write: cfg!(feature = "avif"), lossy: true, ..base }
+        }
         Format::Heif => {
             FormatCaps { read: cfg!(feature = "heif"), write: false, depths: &[S::U8, S::U16], icc: true, exif: true, xmp: true, lossy: true, ..base }
         }
@@ -310,6 +321,7 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
+        Format::JpegLs => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Jp2 => FormatCaps { read: true, write: false, layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::Cmyk, L::CmykA], icc: true, ..base },
     }
 }
@@ -320,6 +332,9 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     let b = bytes;
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(Format::Png);
+    }
+    if crate::codecs::jpegls::looks_like_jpegls(b) {
+        return Some(Format::JpegLs);
     }
     if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Some(Format::Jpeg);

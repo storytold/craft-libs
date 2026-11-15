@@ -1,4 +1,6 @@
 pub(crate) mod avif;
+#[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+pub(crate) mod avif_decode;
 pub(crate) mod dds;
 pub(crate) mod dds_bc;
 pub(crate) mod deep_exr;
@@ -13,6 +15,7 @@ pub(crate) mod heif;
 pub(crate) mod iff;
 pub(crate) mod jp2;
 pub(crate) mod jpeg;
+pub(crate) mod jpegls;
 pub(crate) mod jxl;
 pub(crate) mod pcx;
 pub(crate) mod png;

@@ -239,6 +239,9 @@ pub struct Decoder {
     /// Bytes of the pictures the chunk being parsed has shown so far, and whether one was refused for size.
     shown_bytes: usize,
     shown_overflow: bool,
+    /// Most bytes of pictures one chunk may show: [`MAX_SHOWN_BYTES_PER_CHUNK`] unless a caller
+    /// lowered it with [`Decoder::set_shown_budget`].
+    shown_budget: usize,
     lf_deltas: LoopFilterDeltas,
     seg_features: SegmentationFeatures,
     prev_gm_params: [[i32; 6]; 8],
@@ -301,8 +304,8 @@ fn shown_within_limit(n: usize) -> bool {
 /// copies of one 4K reference (about 6.4 GB) from a few hundred bytes of show_existing_frame headers.
 const MAX_SHOWN_BYTES_PER_CHUNK: usize = 1 << 30;
 
-fn shown_bytes_within_limit(bytes: usize) -> bool {
-    bytes <= MAX_SHOWN_BYTES_PER_CHUNK
+fn shown_bytes_within_limit(bytes: usize, budget: usize) -> bool {
+    bytes <= budget.min(MAX_SHOWN_BYTES_PER_CHUNK)
 }
 
 /// Bytes of the `u16` sample planes of a `w` × `h` picture.
@@ -313,14 +316,14 @@ fn picture_bytes(w: usize, h: usize, c: &crate::av1::decode::header::ColorConfig
 }
 
 /// Add a shown picture to a chunk's outputs, refusing the chunk (and dropping everything it showed)
-/// before the list can grow past [`MAX_SHOWN_PER_CHUNK`].
-fn push_shown(out: &mut Vec<(Output, usize, u32)>, shown_bytes: &mut usize, item: (Output, usize, u32)) -> Result<()> {
+/// before the list can grow past [`MAX_SHOWN_PER_CHUNK`] or its pictures past `budget` bytes.
+fn push_shown(out: &mut Vec<(Output, usize, u32)>, shown_bytes: &mut usize, budget: usize, item: (Output, usize, u32)) -> Result<()> {
     if !shown_within_limit(out.len() + 1) {
         out.clear();
         return Err(Error::Invalid("too many pictures shown by one chunk"));
     }
     let bytes = shown_bytes.saturating_add(item.0.bytes());
-    if !shown_bytes_within_limit(bytes) {
+    if !shown_bytes_within_limit(bytes, budget) {
         out.clear();
         return Err(Error::Invalid("pictures shown by one chunk are too large"));
     }
@@ -349,6 +352,14 @@ impl Decoder {
         self.memory_budget = bytes;
     }
 
+    /// Cap the bytes of the pictures one `decode` call may return together, below the built-in
+    /// 1 GiB (a larger value keeps that). The pictures are refused before they are built, so a
+    /// caller that keeps only one of them (an AVIF still) can hold a stream to its own memory
+    /// budget instead of collecting up to 256 pictures first.
+    pub fn set_shown_budget(&mut self, bytes: u64) {
+        self.shown_budget = usize::try_from(bytes).unwrap_or(usize::MAX).min(MAX_SHOWN_BYTES_PER_CHUNK);
+    }
+
     /// A decoder using all available cores (with the `threads` feature).
     pub fn new() -> Decoder {
         Decoder::with_threads(default_threads())
@@ -369,6 +380,7 @@ impl Decoder {
             ref_color: Default::default(),
             shown_bytes: 0,
             shown_overflow: false,
+            shown_budget: MAX_SHOWN_BYTES_PER_CHUNK,
             lf_deltas: LoopFilterDeltas::defaults(),
             seg_features: SegmentationFeatures::default(),
             prev_gm_params: default_gm_params(),
@@ -564,20 +576,20 @@ impl Decoder {
                     let mut r = BitReader::new(payload);
                     let shown = self.frame_header(&mut r, temporal_id, spatial_id)?;
                     if let Some(o) = shown {
-                        push_shown(out, &mut self.shown_bytes, (o, tu, spatial_id))?;
+                        push_shown(out, &mut self.shown_bytes, self.shown_budget, (o, tu, spatial_id))?;
                         continue;
                     }
                     if obu_type == OBU_FRAME_T {
                         r.byte_align();
                         let rest = payload.get(r.byte_pos()..).ok_or(Error::Truncated)?;
                         if let Some(o) = self.tile_group(rest)? {
-                            push_shown(out, &mut self.shown_bytes, (o, tu, spatial_id))?;
+                            push_shown(out, &mut self.shown_bytes, self.shown_budget, (o, tu, spatial_id))?;
                         }
                     }
                 }
                 OBU_TILE_GROUP_T => {
                     if let Some(o) = self.tile_group(payload)? {
-                        push_shown(out, &mut self.shown_bytes, (o, tu, spatial_id))?;
+                        push_shown(out, &mut self.shown_bytes, self.shown_budget, (o, tu, spatial_id))?;
                     }
                 }
                 OBU_METADATA_T | OBU_TILE_LIST_T => {}
@@ -726,7 +738,7 @@ impl Decoder {
         // A picture past the chunk's byte budget is never built (decoding the frame as a reference
         // still happens, so the reference slots stay as the stream says), and the chunk is refused.
         let bytes = picture_bytes(job.fh.upscaled_width as usize, job.fh.frame_height as usize, &job.seq.color);
-        if job.picture.is_some() && !shown_bytes_within_limit(self.shown_bytes.saturating_add(bytes)) {
+        if job.picture.is_some() && !shown_bytes_within_limit(self.shown_bytes.saturating_add(bytes), self.shown_budget) {
             job.picture = None;
             self.shown_overflow = true;
             self.submit(job);
@@ -1307,18 +1319,33 @@ mod shown_limit_tests {
     #[test]
     fn push_shown_refuses_a_chunk_past_either_limit_and_drops_what_it_showed() {
         let (mut out, mut bytes) = (Vec::new(), 0usize);
-        push_shown(&mut out, &mut bytes, shown(10)).unwrap();
+        push_shown(&mut out, &mut bytes, MAX_SHOWN_BYTES_PER_CHUNK, shown(10)).unwrap();
         assert_eq!((out.len(), bytes), (1, 10));
         // past the byte budget
-        assert!(push_shown(&mut out, &mut bytes, shown(MAX_SHOWN_BYTES_PER_CHUNK)).is_err());
+        assert!(push_shown(&mut out, &mut bytes, MAX_SHOWN_BYTES_PER_CHUNK, shown(MAX_SHOWN_BYTES_PER_CHUNK)).is_err());
         assert!(out.is_empty(), "the refused chunk shows nothing");
         // past the count limit
         let (mut out, mut bytes) = (Vec::new(), 0usize);
         for _ in 0..MAX_SHOWN_PER_CHUNK {
-            push_shown(&mut out, &mut bytes, shown(0)).unwrap();
+            push_shown(&mut out, &mut bytes, MAX_SHOWN_BYTES_PER_CHUNK, shown(0)).unwrap();
         }
-        assert!(push_shown(&mut out, &mut bytes, shown(0)).is_err());
+        assert!(push_shown(&mut out, &mut bytes, MAX_SHOWN_BYTES_PER_CHUNK, shown(0)).is_err());
         assert!(out.is_empty());
+        // past a caller's lower budget
+        let (mut out, mut bytes) = (Vec::new(), 0usize);
+        push_shown(&mut out, &mut bytes, 100, shown(60)).unwrap();
+        assert!(push_shown(&mut out, &mut bytes, 100, shown(60)).is_err());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn a_shown_budget_can_lower_the_limit_but_not_raise_it() {
+        let mut d = Decoder::with_threads(1);
+        assert_eq!(d.shown_budget, MAX_SHOWN_BYTES_PER_CHUNK);
+        d.set_shown_budget(1 << 20);
+        assert_eq!(d.shown_budget, 1 << 20);
+        d.set_shown_budget(u64::MAX);
+        assert_eq!(d.shown_budget, MAX_SHOWN_BYTES_PER_CHUNK);
     }
 
     #[test]
@@ -1333,8 +1360,8 @@ mod shown_limit_tests {
         // 4K 4:2:0, u16 samples: about 25 MB; 256 of them is far past the limit, a few are fine
         let one = picture_bytes(3840, 2160, &c);
         assert_eq!(one, (3840 * 2160 + 2 * 1920 * 1080) * 2);
-        assert!(shown_bytes_within_limit(4 * one));
-        assert!(!shown_bytes_within_limit(MAX_SHOWN_PER_CHUNK * one));
+        assert!(shown_bytes_within_limit(4 * one, MAX_SHOWN_BYTES_PER_CHUNK));
+        assert!(!shown_bytes_within_limit(MAX_SHOWN_PER_CHUNK * one, MAX_SHOWN_BYTES_PER_CHUNK));
         let mono = crate::av1::decode::header::ColorConfig { num_planes: 1, ..Default::default() };
         assert_eq!(picture_bytes(10, 5, &mono), 100);
         assert_eq!(picture_bytes(usize::MAX, 2, &c), usize::MAX);
