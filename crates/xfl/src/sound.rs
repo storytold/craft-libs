@@ -4,7 +4,7 @@
 //! library items and mapping effects/envelopes into a consumer's audio model remain application
 //! responsibilities.
 
-use crate::shape::XflElement;
+use crate::shape::{XflElement, integer, number};
 
 /// Native frame-sound synchronization mode. Unknown values use Animate's event behavior.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -95,14 +95,6 @@ impl<E: XflElement> EnvelopePoint<'_, E> {
     pub fn level1(&self) -> Option<f32> {
         number(self.element, "level1")
     }
-}
-
-fn number(element: &impl XflElement, name: &str) -> Option<f32> {
-    element.attr(name)?.trim().parse::<f32>().ok().filter(|value| value.is_finite())
-}
-
-fn integer(element: &impl XflElement, name: &str) -> Option<u32> {
-    element.attr(name)?.trim().parse::<u32>().ok()
 }
 
 #[cfg(test)]
