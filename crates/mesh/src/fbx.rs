@@ -54,6 +54,9 @@ use crate::{
     count_warning, malformed, mat_mul, srgb_to_linear, too_large,
 };
 
+/// Bounded ZIP packages containing an FBX and its texture files.
+pub mod package;
+
 const KIND: &str = "FBX";
 
 /// The binary file's magic (`Kaydara FBX Binary`, two spaces, NUL, 0x1A, 0x00).
