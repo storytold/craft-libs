@@ -130,6 +130,31 @@ fn an_adjustment_dialog_counts_editor_changes_and_sets_as_edits_but_not_seeds_or
     assert_eq!(edited(&host), Some(true), "a field set of the value is an edit");
 }
 
+// A dialog given a JSON form lists the form's keys for its value, with the dialog's own fields beside them, and the
+// form sees the edited signal.
+#[trial]
+fn an_adjustment_dialog_with_a_json_form_lists_the_forms_keys() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let form = |value: &BrightnessContrast, edited: bool| {
+        let mut params = serde_json::Map::new();
+        params.insert("b".to_owned(), serde_json::json!(value.brightness));
+        params.insert("edited".to_owned(), serde_json::json!(edited));
+        params
+    };
+    let id = host.borrow_mut().open(brightness_contrast().json_form(form));
+    fixture.idle(10);
+    let fields = || host.borrow().get::<Adjust>().and_then(|dialog| dialog.json_fields()).unwrap_or_default();
+    let listed = fields();
+    assert_eq!((listed["b"].clone(), listed["edited"].clone()), (serde_json::json!(20.0), serde_json::json!(false)));
+    assert!(listed.get("brightness").is_none(), "the serde form does not list beside the app's");
+    assert_eq!(listed["preview"], serde_json::json!(true), "the dialog's own fields list beside the form");
+    let ctx = fixture.ctx().clone();
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "brightness", serde_json::json!(5.0)), Ok(()));
+    let listed = fields();
+    assert_eq!((listed["b"].clone(), listed["edited"].clone()), (serde_json::json!(5.0), serde_json::json!(true)));
+}
+
 /// Why the app refuses the held OK.
 const REFUSED: &str = "The layer is locked.";
 

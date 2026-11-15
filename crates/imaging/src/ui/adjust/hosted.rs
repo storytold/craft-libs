@@ -72,6 +72,8 @@ fn clipping_from_json(json: &serde_json::Value) -> Option<Option<LevelsClip>> {
 /// Shows the editor over the dialog's value for one pass; `Some` carries what the editor asks of the app this pass.
 type Editor<V, E> = dyn for<'b> Fn(&mut Ui, &mut V, &mut AdjustDialogCx<'b>) -> Option<E> + Send;
 
+type JsonForm<V> = dyn Fn(&V, bool) -> serde_json::Map<String, serde_json::Value> + Send;
+
 /// An Image › Adjustments dialog the [`DialogHost`](craft_ui::dialog::DialogHost) owns: an adjustment editor over a
 /// value `V` the host keeps, in a form dialog with OK and Cancel beside the editor (Alt turns Cancel into Reset, which
 /// restores the value the dialog opened with) and the Preview box under them. The editor runs in its dialog form
@@ -106,6 +108,8 @@ pub struct HostedAdjustDialog<V, E = ()> {
     clipping: Option<LevelsClip>,
     select_point: Option<usize>,
     editor: Box<Editor<V, E>>,
+    /// The app's form of the value's automation fields; without one the value's serde fields list.
+    json_form: Option<Box<JsonForm<V>>>,
     asks: Vec<E>,
     /// Whether OK files its value for the app instead of closing ([`held_ok`](HostedAdjustDialog::held_ok)).
     hold: bool,
@@ -145,6 +149,7 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Hoste
             clipping: None,
             select_point: None,
             editor: Box::new(editor),
+            json_form: None,
             asks: Vec::new(),
             hold: false,
             held: HeldAnswer::new(),
@@ -205,6 +210,15 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Hoste
     #[must_use]
     pub fn reset_with(mut self, target: impl Fn(&V, &V) -> V + Send + 'static) -> Self {
         self.reset_with = Some(Box::new(target));
+        self
+    }
+
+    /// Lists the value's automation fields as `form(value, edited)` gives them (the command's parameters, when they are
+    /// not the value's serde form), beside the dialog's own `preview`, `picker`, `channel` and `clipping`. `edited` is
+    /// [`edited`](HostedAdjustDialog::edited). Sets of the value's fields still go to its serde form.
+    #[must_use]
+    pub fn json_form(mut self, form: impl Fn(&V, bool) -> serde_json::Map<String, serde_json::Value> + Send + 'static) -> Self {
+        self.json_form = Some(Box::new(form));
         self
     }
 
@@ -400,13 +414,15 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {
-        let mut fields = serde_fields(&self.value)?;
-        let object = fields.as_object_mut()?;
+        let mut object = match &self.json_form {
+            Some(form) => form(&self.value, self.edited),
+            None => serde_fields(&self.value)?.as_object()?.clone(),
+        };
         object.insert("preview".to_owned(), serde_json::Value::Bool(self.preview));
         object.insert("picker".to_owned(), serde_json::to_value(self.picker).ok()?);
         object.insert("channel".to_owned(), serde_json::Value::from(self.channel));
         object.insert("clipping".to_owned(), clipping_json(self.clipping));
-        Some(fields)
+        Some(serde_json::Value::Object(object))
     }
 
     fn set_json_field(&mut self, _: &Context, field: &str, value: serde_json::Value) -> Result<(), String> {
