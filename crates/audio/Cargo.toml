@@ -23,25 +23,30 @@ decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers and the AAC, ALAC, AC-3/E-AC-3, MP3 and Opus encoders.
-encode = ["lossless-encode", "aac-encode", "alac-encode", "ac3-encode", "eac3-encode", "mp3-encode", "opus-encode"]
+# All but Opus are also file formats of `encode` and `FileEncoder`.
+encode = ["lossless-encode", "aac-encode", "alac-encode", "ac3-encode", "eac3-encode", "mp3-encode", "opus-encode", "vorbis-encode"]
 # Encode WAV/BWF/RF64, AIFF/AIFF-C and FLAC files.
 lossless-encode = ["pcm-encode", "flac-encode"]
 # Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
 pcm-encode = []
 # Encode FLAC files.
 flac-encode = ["craft-media/bitstream"]
+# Encode Ogg Vorbis files (desktop only: builds the reference libvorbis from its C sources).
+vorbis-encode = ["dep:vorbis_rs"]
 # Codec modules on their own, for packet-level use.
 aac-decode = ["craft-media/bitstream"]
-aac-encode = ["craft-media/bitstream"]
+# The AAC encoder (`aac::Encoder`), and AAC in M4A through `encode` and `FileEncoder`.
+aac-encode = ["craft-media/bitstream", "craft-media/isobmff"]
 opus-decode = []
 opus-encode = []
 ac3-decode = ["craft-media/bitstream"]
 mpa-decode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) decoder (`mp3::Decoder`).
 mp3-decode = ["mpa-decode"]
-# ALAC packet decoder and encoder (`alac`), ported from Apple's reference implementation.
+# ALAC packet decoder and encoder (`alac`), ported from Apple's reference implementation. The
+# encoder also writes ALAC in M4A through `encode` and `FileEncoder`.
 alac-decode = []
-alac-encode = []
+alac-encode = ["craft-media/isobmff"]
 ac3-encode = ["craft-media/bitstream"]
 eac3-encode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) encoder (`mp3`).
@@ -61,6 +66,9 @@ log = { version = "0.4", optional = true }
 rayon = { workspace = true, optional = true }
 # symphonia keeps its AAC decoder for AAC in CAF, a container craft-media does not read.
 symphonia = { version = "0.6.1", optional = true, default-features = false, features = ["mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+vorbis_rs = { version = "0.5", optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }

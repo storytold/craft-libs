@@ -64,6 +64,20 @@ fn builtin_heading_level(name: &str) -> Option<u8> {
 }
 
 impl Reader<'_> {
+    /// Whether a style's kept (last) definition is a default table style.
+    fn has_default_table_style(&self, root: &El) -> bool {
+        let mut defaults: Vec<String> = Vec::new();
+        for s in root.children("w:style").take(10_000) {
+            let Some(raw_id) = s.attr("w:styleId").filter(|i| !i.is_empty()) else { continue };
+            let id = self.pc.style_id(raw_id);
+            defaults.retain(|d| *d != id);
+            if s.attr("w:type") == Some("table") && style_is_default(s) {
+                defaults.push(id);
+            }
+        }
+        !defaults.is_empty()
+    }
+
     pub(super) fn read_styles(&mut self, path: &str) -> Result<(), DocxError> {
         /// Largest `w:latentStyles` kept (Word's has ~380 exceptions, ~40 KB).
         const MAX_LATENT_STYLES_XML: usize = 1 << 20;
@@ -207,6 +221,7 @@ impl Reader<'_> {
                 None => sheet.styles.push(st),
             }
         }
+        self.no_default_table_style = !self.has_default_table_style(&root);
         // Styles that give only a list level take the list from the style they are based on
         // (Heading 3: level 3 of Heading 2's outline list).
         let fixed: Vec<Option<craft_wordmodel::props::NumRef>> = sheet
@@ -316,9 +331,11 @@ impl Reader<'_> {
         for a in root.children("w:abstractNum").take(10_000) {
             let Some(id) = a.attr("w:abstractNumId").and_then(u32_of) else { continue };
             let mut levels: Vec<Level> = (0..9).map(default_level).collect();
+            let mut explicit_levels = [false; 9];
             for l in a.children("w:lvl") {
                 let Some(i) = numbering_level_index(l.attr("w:ilvl")) else { continue };
                 levels[i] = self.level(l, i);
+                explicit_levels[i] = true;
             }
             if let Some(link) = a.child_val("w:numStyleLink") {
                 links.push((id, link.to_string()));
@@ -328,6 +345,7 @@ impl Reader<'_> {
                 id,
                 name: a.child_val("w:name").map(str::to_string),
                 levels,
+                explicit_levels: Some(explicit_levels),
                 nsid: a.child_val("w:nsid").filter(|v| hex(v)).map(str::to_ascii_uppercase),
                 tmpl: a.child_val("w:tmpl").filter(|v| hex(v)).map(str::to_ascii_uppercase),
                 multi_level_type: a
@@ -361,9 +379,13 @@ impl Reader<'_> {
         for (aid, style) in links {
             let num = self.doc.styles.get(&self.pc.style_id(&style)).and_then(|s| s.para.numbering).map(|n| n.num);
             let src = num.and_then(|n| nums.iter().find(|x: &&Num| x.id == n)).map(|x| x.abstract_id);
-            let levels = src.filter(|s| *s != aid).and_then(|s| abstracts.iter().find(|a: &&AbstractNum| a.id == s)).map(|a| a.levels.clone());
-            if let (Some(levels), Some(a)) = (levels, abstracts.iter_mut().find(|a| a.id == aid)) {
+            let source = src
+                .filter(|s| *s != aid)
+                .and_then(|s| abstracts.iter().find(|a: &&AbstractNum| a.id == s))
+                .map(|a| (a.levels.clone(), a.explicit_levels));
+            if let (Some((levels, explicit_levels)), Some(a)) = (source, abstracts.iter_mut().find(|a| a.id == aid)) {
                 a.levels = levels;
+                a.explicit_levels = explicit_levels;
             }
         }
         Arc::make_mut(&mut self.doc.numbering).abstracts = abstracts;
