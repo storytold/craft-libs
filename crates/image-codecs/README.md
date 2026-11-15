@@ -302,9 +302,11 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
 `DecodeOptions { limits: Limits { max_width, max_height, max_pixels, max_alloc }, .. }` guards
 decoding. Header dimensions are checked before the pixel buffer is allocated, and the budget is
 also passed to the underlying decoders. A violation returns `CodecError::LimitExceeded`. The
-defaults are 262144 px per side, 2^30 pixels and 8 GiB (2 GiB on 32-bit targets such as wasm).
+defaults are 262144 px per side, 2^30 pixels and 8 GiB (1 GiB on 32-bit targets such as wasm).
 PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) by `max_alloc`,
 including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
+`Image::to_rgba_f32(&limits)` checks its output buffer against the same `Limits` and returns
+`CodecError::LimitExceeded` before allocating when the RGBA f32 copy would exceed them.
 PNG `cICP` and `cLLI` values are retained as image color metadata. `encode_png_pq` writes linear-light
 Rec. 2020 RGB as 16-bit BT.2100 PQ, with measured content-light levels and the required chunks.
 
