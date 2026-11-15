@@ -122,7 +122,7 @@ impl Config {
 
     fn decode_inner(self, text: &[u8], optional_padding: bool) -> Result<Vec<u8>, DecodeError> {
         let (symbols, pad) = if self.padded || optional_padding {
-            if !optional_padding && text.len() % 4 != 0 {
+            if !optional_padding && !text.len().is_multiple_of(4) {
                 return Err(DecodeError);
             }
             let pad = text.iter().rev().take(2).take_while(|c| **c == b'=').count();
