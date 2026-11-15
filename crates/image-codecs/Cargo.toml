@@ -17,6 +17,7 @@ avif = ["image/avif", "dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 heif = ["dep:craft-heif"]
 
 [dependencies]
+crc32fast = "1.5"
 thiserror = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "gif", "bmp", "tga", "ico", "qoi", "hdr"] }
 png = "0.18"
@@ -48,4 +49,5 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+craft-video = { workspace = true, features = ["av1-decode"] }
 jxl-oxide = { version = "=0.12.6", default-features = false, features = ["rayon"] }
