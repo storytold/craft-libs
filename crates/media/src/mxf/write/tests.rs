@@ -434,6 +434,10 @@ fn cinemadng_op1a_reads_back() {
         assert_eq!(t.samples.len(), 6);
         let p = t.picture.as_ref().unwrap();
         assert!(p.rgba, "RGBA picture essence descriptor (§7.2.2)");
+        assert_eq!(p.component_depth, 16);
+        assert_eq!(p.black_ref_level, Some(0));
+        assert_eq!(p.white_ref_level, Some(65_535));
+        assert!(p.full_range());
         assert_eq!((p.frame_width(), p.frame_height()), (64, 36));
         assert!(p.picture_coding.is_none());
         for i in 0..6 {
