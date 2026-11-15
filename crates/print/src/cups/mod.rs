@@ -531,12 +531,14 @@ impl Read for DeadlineReader<'_> {
             .checked_duration_since(Instant::now())
             .filter(|d| !d.is_zero())
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "CUPS reply deadline exceeded"))?;
+        #[cfg(not(target_os = "macos"))]
+        self.stream.set_timeouts(left)?;
+        #[cfg(target_os = "macos")]
         if let Err(error) = self.stream.set_timeouts(left) {
             // Darwin rejects timeout updates on a disconnected Unix socket even
             // when a complete reply is still buffered. Never fall back to a
             // blocking read: drain at most this buffer, or fail on WouldBlock.
             // Every subsequent read rechecks the same absolute deadline above.
-            #[cfg(target_os = "macos")]
             if error.raw_os_error() == Some(22)
                 && let Stream::Unix(stream) = self.stream
             {
