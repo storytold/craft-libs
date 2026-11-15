@@ -12,7 +12,7 @@ use craft_color::ui::{
 use craft_keymap::Mods;
 use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
 use craft_ui::canvas::{Canvas, CanvasTool, ToolAction, ToolContext, ToolHost, ToolInput, ToolPath, ToolPointer};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::testing::focus::AccessActionKind;
