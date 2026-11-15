@@ -533,6 +533,40 @@ fn tick() {
 }
 
 #[test]
+fn std_instant_reports_a_leading_path_after_an_arrow() {
+    let source = r#"
+fn now() -> ::std::time::Instant {
+    match Some(1) {
+        Some(_) => ::std::time::Instant::now(),
+        None => ::std::time::Instant::now(),
+    }
+}
+
+fn generic() {
+    let w = Thing::<u8>::std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/now.rs", source)])), vec![2, 4, 5]);
+}
+
+#[test]
+fn std_instant_reads_the_use_declarations_after_a_precise_capturing_bound() {
+    let source = r#"
+fn f<'a>(x: &'a [u8]) -> impl Iterator<Item = &'a u8> + use<'a> {
+    use std::time;
+    let _t = time::Instant::now();
+    x.iter()
+}
+
+fn g<'a>(x: &'a [u8]) -> impl Iterator<Item = &'a u8> + use<'a> {
+    use std::time::*;
+    x.iter()
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/iter.rs", source)])), vec![4, 9]);
+}
+
+#[test]
 fn std_instant_follows_module_and_type_aliases() {
     let source = r#"
 use std::time as t;

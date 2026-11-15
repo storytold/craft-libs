@@ -325,14 +325,15 @@ const KEYWORDS: &[&str] = &[
     "match", "mod", "move", "mut", "pub", "ref", "return", "static", "struct", "trait", "type", "unsafe", "use", "where", "while", "yield",
 ];
 
-/// Whether `toks[i]` follows `::` that itself follows a path segment, as `time` does in `a::time`.
+/// Whether `toks[i]` follows `::` that itself follows a path segment, as `time` does in `a::time` and
+/// `new` in `Vec::<T>::new`. The `>` of `->` or `=>` ends an arrow, not a generic argument list.
 fn continues_a_path(toks: &[Token], i: usize) -> bool {
     i >= 3
         && toks[i - 1].is_punct(':')
         && toks[i - 2].is_punct(':')
         && match &toks[i - 3].kind {
             Kind::Ident(s) => !KEYWORDS.contains(&s.as_str()),
-            Kind::Punct('>') => true,
+            Kind::Punct('>') => !(i >= 4 && (toks[i - 4].is_punct('-') || toks[i - 4].is_punct('='))),
             _ => false,
         }
 }
@@ -356,12 +357,13 @@ struct UseLeaf {
     start: usize,
 }
 
-/// Every name the `use` declarations of a file bring into scope.
+/// Every name the `use` declarations of a file bring into scope. A `use<..>` precise-capturing bound,
+/// as in `-> impl Trait + use<'a>`, is not a declaration.
 fn use_leaves(toks: &[Token]) -> Vec<UseLeaf> {
     let mut leaves = Vec::new();
     let mut i = 0;
     while i < toks.len() {
-        if toks[i].is_ident("use") && !continues_a_path(toks, i) {
+        if toks[i].is_ident("use") && !continues_a_path(toks, i) && !toks.get(i + 1).is_some_and(|t| t.is_punct('<')) {
             let start = i;
             let end = (i + 1..toks.len()).find(|&j| toks[j].is_punct(';')).unwrap_or(toks.len());
             let mut pos = i + 1;

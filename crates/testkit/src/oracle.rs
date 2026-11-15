@@ -4,14 +4,17 @@
 //!
 //! 1. The file that an explicit-path variable names: `CRAFT_<PROGRAM>` for [`find`] (for example
 //!    `CRAFT_FFMPEG`), or the variable the caller passes to [`find_with`]. An empty value counts as
-//!    unset. When the value is not a file, the lookup returns [`OracleError::InvalidExplicitPath`]
-//!    and does not search further.
+//!    unset. When the value is not a file the OS can start, the lookup returns
+//!    [`OracleError::InvalidExplicitPath`] and does not search further.
 //! 2. Each directory on `PATH`, in order. Empty entries are skipped, and a relative entry is
 //!    resolved against the current directory at the time of the lookup. On Windows the search tries
-//!    `<name>.exe`, then each `.com`, `.bat` or `.cmd` suffix that `PATHEXT` lists, in its order,
-//!    then the bare name. Elsewhere it tries the bare name, then `<name>.exe`. A name that already
-//!    has an extension is tried as it is.
+//!    `<name>.exe`, then each `.com`, `.bat` or `.cmd` suffix that `PATHEXT` lists, in its order.
+//!    Elsewhere it tries the bare name, then `<name>.exe`. A name that already has an extension is
+//!    tried as it is.
 //! 3. The install folders [`known_dirs`] lists.
+//!
+//! A file the OS can start is, on Windows, one whose extension is `.com`, `.exe`, `.bat` or `.cmd`
+//! in any case, and on Unix one with an execute bit set. The search skips any other file and goes on.
 //!
 //! The program found is run once with its version argument. [`Oracle::version`] is the first
 //! non-blank line of its standard output, or of its standard error when standard output is blank.
@@ -115,7 +118,7 @@ pub enum OracleError {
     InvalidVariable { variable: String },
     /// No file with the program's name was found. The `require_*` macros skip on this error.
     Missing { program: String },
-    /// The explicit-path variable is set, but its value is not a file.
+    /// The explicit-path variable is set, but its value is not a file the OS can start.
     InvalidExplicitPath { variable: String, path: PathBuf },
     /// The program was found but could not be started.
     Start { path: PathBuf, source: io::Error },
@@ -145,7 +148,7 @@ impl fmt::Display for OracleError {
             Self::Missing { program } => {
                 write!(f, "`{program}` was not found on PATH or in the known install folders ({})", install_hint(program))
             }
-            Self::InvalidExplicitPath { variable, path } => write!(f, "{variable} is set but `{}` is not a file", path.display()),
+            Self::InvalidExplicitPath { variable, path } => write!(f, "{variable} is set but `{}` is not a file the OS can start", path.display()),
             Self::Start { path, source } => write!(f, "could not start `{}`: {source}", path.display()),
             Self::Timeout { path, timeout } => write!(f, "`{}` did not finish within {timeout:?} and was killed", path.display()),
             Self::OutputLimit { path, limit } => write!(f, "`{}` wrote more than {limit} bytes to one stream and was killed", path.display()),
@@ -484,9 +487,31 @@ fn candidate_names(program: &str, windows: bool, pathext: Option<&OsStr>) -> Vec
             suffixes.push(ext);
         }
     }
-    let mut names: Vec<String> = suffixes.iter().map(|ext| format!("{program}{ext}")).collect();
-    names.push(program.to_owned());
-    names
+    suffixes.iter().map(|ext| format!("{program}{ext}")).collect()
+}
+
+/// Whether the OS can start the file at `p`: on Windows a file whose extension, in any case, is one of
+/// [`WINDOWS_SUFFIXES`], and on Unix a file with an execute bit set.
+fn startable(p: &Path, windows: bool) -> bool {
+    if !p.is_file() {
+        return false;
+    }
+    if windows {
+        let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy().to_ascii_lowercase()));
+        return ext.is_some_and(|e| WINDOWS_SUFFIXES.contains(&e.as_str()));
+    }
+    executable(p)
+}
+
+#[cfg(unix)]
+fn executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable(_: &Path) -> bool {
+    true
 }
 
 /// The absolute path of `s.program`, in the search order the module documentation gives.
@@ -497,7 +522,7 @@ fn locate(s: &Search<'_>) -> Result<PathBuf, OracleError> {
     if let Some(explicit) = s.explicit.filter(|e| !e.is_empty()) {
         let given = PathBuf::from(explicit);
         return match anchored(&given, s.cwd) {
-            Some(p) if p.is_file() => Ok(p),
+            Some(p) if startable(&p, s.windows) => Ok(p),
             _ => Err(OracleError::InvalidExplicitPath { variable: s.explicit_label.to_owned(), path: given }),
         };
     }
@@ -507,7 +532,7 @@ fn locate(s: &Search<'_>) -> Result<PathBuf, OracleError> {
     for dir in dirs {
         for name in &names {
             let p = dir.join(name);
-            if p.is_file() {
+            if startable(&p, s.windows) {
                 return Ok(p);
             }
         }
@@ -726,9 +751,15 @@ mod tests {
             &self.0
         }
 
+        /// An empty file named `name`, with its execute bits set on Unix.
         fn file(&self, name: &str) -> PathBuf {
             let p = self.0.join(name);
             std::fs::write(&p, b"").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
             p
         }
     }
@@ -922,7 +953,7 @@ mod tests {
         let a = Scratch::new("rel-a");
         let b = Scratch::new("rel-b");
         std::fs::create_dir(a.path().join("bin")).unwrap();
-        std::fs::write(a.path().join("bin").join("ffmpeg"), b"").unwrap();
+        a.file("bin/ffmpeg");
         let mut s = search("ffmpeg", None, Some(OsStr::new("bin")), &[]);
         s.cwd = Some(a.path());
         let found = locate(&s).unwrap();
@@ -941,8 +972,8 @@ mod tests {
     #[test]
     fn windows_exe_and_pathext_order_is_honored() {
         let pathext = OsStr::new(".COM;.EXE;.BAT;.CMD;.VBS;.cmd;;");
-        assert_eq!(candidate_names("ffmpeg", true, Some(pathext)), ["ffmpeg.exe", "ffmpeg.com", "ffmpeg.bat", "ffmpeg.cmd", "ffmpeg"]);
-        assert_eq!(candidate_names("ffmpeg", true, None), ["ffmpeg.exe", "ffmpeg"]);
+        assert_eq!(candidate_names("ffmpeg", true, Some(pathext)), ["ffmpeg.exe", "ffmpeg.com", "ffmpeg.bat", "ffmpeg.cmd"]);
+        assert_eq!(candidate_names("ffmpeg", true, None), ["ffmpeg.exe"]);
         assert_eq!(candidate_names("ffmpeg.exe", true, Some(pathext)), ["ffmpeg.exe"]);
         assert_eq!(candidate_names("ffmpeg", false, Some(pathext)), ["ffmpeg", "ffmpeg.exe"]);
         let d = Scratch::new("pathext");
@@ -953,6 +984,45 @@ mod tests {
         assert_eq!(locate(&s).unwrap(), cmd);
         let exe = d.file("tool.exe");
         assert_eq!(locate(&s).unwrap(), exe);
+    }
+
+    /// A file without an execute bit is skipped on the search path and refused as an explicit path.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_without_an_execute_bit_is_skipped() {
+        use std::os::unix::fs::PermissionsExt;
+        let a = Scratch::new("noexec-a");
+        let b = Scratch::new("noexec-b");
+        let data = a.file("ffmpeg");
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let exe = b.file("ffmpeg");
+        let path = std::env::join_paths([a.path(), b.path()]).unwrap();
+        assert_eq!(locate(&search("ffmpeg", None, Some(&path), &[])).unwrap(), exe);
+        let found = locate(&search("ffmpeg", Some(data.as_os_str()), None, &[]));
+        assert!(matches!(found, Err(OracleError::InvalidExplicitPath { .. })), "{found:?}");
+    }
+
+    /// On Windows only a `.com`, `.exe`, `.bat` or `.cmd` file, in any case, is found or accepted.
+    #[test]
+    fn windows_skips_files_it_cannot_start() {
+        let a = Scratch::new("winstart-a");
+        let b = Scratch::new("winstart-b");
+        a.file("tool");
+        let script = a.file("tool.ps1");
+        let exe = b.file("tool.exe");
+        let upper = b.file("TOOL.CMD");
+        let path = std::env::join_paths([a.path(), b.path()]).unwrap();
+        let mut s = search("tool", None, Some(&path), &[]);
+        s.windows = true;
+        assert_eq!(locate(&s).unwrap(), exe, "a bare name in an earlier folder does not shadow tool.exe");
+        s.program = "tool.ps1";
+        assert!(locate(&s).unwrap_err().is_missing());
+        s.program = "tool";
+        s.path_list = None;
+        s.explicit = Some(script.as_os_str());
+        assert!(matches!(locate(&s), Err(OracleError::InvalidExplicitPath { .. })));
+        s.explicit = Some(upper.as_os_str());
+        assert_eq!(locate(&s).unwrap(), upper);
     }
 
     #[test]
