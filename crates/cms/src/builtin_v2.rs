@@ -44,7 +44,7 @@ fn curve() -> Vec<u8> {
     t
 }
 
-/// The profile's bytes.
+/// Fixed-size profile bytes; all tag sizes and loop counts are constants.
 pub fn srgb() -> Vec<u8> {
     // sRGB primaries, Bradford-adapted to the D50 profile connection space.
     let tags: Vec<(&[u8; 4], Vec<u8>)> = vec![
@@ -110,6 +110,21 @@ pub fn srgb() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn parses_as_v2_with_shared_rgb_curves() {
+        let bytes = super::srgb();
+        let p = crate::Profile::parse(&bytes).unwrap();
+        assert_eq!(p.version, (2, 0x10));
+        assert_eq!(p.color_space, crate::ColorSpace::Rgb);
+        assert_eq!(p.pcs, crate::Pcs::Xyz);
+        assert_eq!(p.description, "sRGB (PdfCraft)");
+        let curves = p.trc.unwrap();
+        assert_eq!(curves[0], curves[1]);
+        assert_eq!(curves[1], curves[2]);
+        assert!(matches!(&curves[0], crate::Curve::Table(v) if v.len() == 1024 && v[0] == 0.0 && v[1023] == 1.0));
+        assert_eq!(bytes, super::srgb());
+    }
+
     #[test]
     fn profile_is_well_formed() {
         let p = super::srgb();
