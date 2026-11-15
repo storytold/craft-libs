@@ -245,6 +245,195 @@ fn embedded_svgs_are_read_within_their_budgets() {
     assert_eq!(found(&svg(r#"<image width="5" height="5" xlink:href="/etc/passwd.svg"/>"#), shallow()), [false; 0]);
 }
 
+mod resource_limit_usage {
+    use super::*;
+
+    fn data_image(bytes: &[u8]) -> String {
+        let encoded: String = bytes.iter().map(|byte| format!("%{byte:02X}")).collect();
+        format!(r#"<image width="5" height="5" xlink:href="data:image/svg+xml,{encoded}"/>"#)
+    }
+
+    fn packed(text: &str, gzip: bool) -> Vec<u8> {
+        if gzip { svgz::compress(text.as_bytes()) } else { text.as_bytes().to_vec() }
+    }
+
+    /// The outer document has its own generous text allowance, so tiny resolver limits
+    /// test the public embedded admission contract rather than rejecting the outer XML.
+    fn resolved(text: &str, limits: Limits, outer_depth: usize) -> (Vec<bool>, ImageUsage) {
+        let resolver = ImageResolver::new(limits);
+        resolver.set_document_depth(outer_depth);
+        let options = usvg::Options { image_href_resolver: resolver.resolver(), ..Default::default() };
+        let tree = parse(text.as_bytes(), &shallow(), &options).unwrap();
+        let mut found = Vec::new();
+        images(tree.root(), &mut found);
+        (found, resolver.usage())
+    }
+
+    fn expanding_encoded_children() -> Vec<(&'static str, Vec<u8>)> {
+        let latin =
+            format!("<?xml version='1.0' encoding='ISO-8859-1'?>{}", svg(&format!("<title>{}</title><rect width='1' height='1'/>", "é".repeat(100))));
+        let latin = latin.chars().map(|c| u8::try_from(u32::from(c)).unwrap()).collect();
+        let wide = svg(&format!("<title>{}</title><rect width='1' height='1'/>", "ࠀ".repeat(400)));
+        let mut little = vec![0xff, 0xfe];
+        little.extend(wide.encode_utf16().flat_map(u16::to_le_bytes));
+        let mut big = vec![0xfe, 0xff];
+        big.extend(wide.encode_utf16().flat_map(u16::to_be_bytes));
+        vec![("Latin-1", latin), ("UTF-16LE", little), ("UTF-16BE", big)]
+    }
+
+    #[test]
+    fn decoded_text_expansion_is_a_resource_refusal_for_plain_and_gzip_children() {
+        for (encoding, raw) in expanding_encoded_children() {
+            let decoded = svgz::decode(&raw).unwrap();
+            let cap = raw.len();
+            assert!(decoded.len() > cap, "{encoding} fixture must expand after inflation");
+            for gzip in [false, true] {
+                let data = if gzip { svgz::compress(&raw) } else { raw.clone() };
+                assert_eq!(svgz::inflate(&data, cap).unwrap().len(), cap, "raw bytes fit exactly");
+                assert_eq!(svgz::text(&data, cap).unwrap().len(), decoded.len(), "decoding itself succeeds");
+                let limits = Limits { bytes: cap, embedded_bytes: decoded.len(), ..shallow() };
+                assert!(matches!(checked(&decoded, &limits), Err(Error::Text(svgz::Error::TooLarge(n))) if n == cap));
+                let image = data_image(&data);
+                let (found, usage) = resolved(&svg(&image), limits, 1);
+                assert!(found.is_empty(), "{encoding}, gzip {gzip}");
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (1, 1, 0));
+                assert_eq!(usage.embedded_svg_bytes, decoded.len(), "spent decoded work remains charged");
+                let (found, usage) = resolved(&svg(&format!("{image}{image}")), limits, 1);
+                assert!(found.is_empty());
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (2, 2, 0));
+                assert_eq!(usage.embedded_svg_bytes, decoded.len(), "a refused sibling cannot repeat exhausted work");
+            }
+        }
+    }
+
+    #[test]
+    fn decoded_text_expansion_respects_aggregate_bytes_even_when_each_child_fits() {
+        for (encoding, raw) in expanding_encoded_children() {
+            let decoded = svgz::decode(&raw).unwrap();
+            let limits = Limits { bytes: decoded.len(), embedded_bytes: raw.len(), ..shallow() };
+            assert!(decoded.len() > limits.embedded_bytes);
+            checked(&decoded, &limits).unwrap(); // The independent per-image cap allows this complete XML.
+            for gzip in [false, true] {
+                let data = if gzip { svgz::compress(&raw) } else { raw.clone() };
+                assert_eq!(svgz::inflate(&data, limits.embedded_bytes).unwrap().len(), raw.len());
+                let image = data_image(&data);
+                let (found, usage) = resolved(&svg(&image), limits, 1);
+                assert!(found.is_empty(), "{encoding}, gzip {gzip}");
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (1, 1, 0));
+                assert_eq!(usage.embedded_svg_bytes, limits.embedded_bytes, "refusal consumes exactly the remaining allowance");
+                let (found, usage) = resolved(&svg(&format!("{image}{image}")), limits, 1);
+                assert!(found.is_empty());
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (2, 2, 0));
+                assert_eq!(usage.embedded_svg_bytes, limits.embedded_bytes, "a later child cannot repeat exhausted work");
+                let (found, usage) = resolved(&svg(&image), Limits { embedded_bytes: decoded.len(), ..limits }, 1);
+                assert_eq!(found, [true]);
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (0, 0, 0));
+                assert_eq!(usage.embedded_svg_bytes, decoded.len());
+            }
+        }
+    }
+
+    #[test]
+    fn decoded_text_expansion_at_the_cap_is_valid_and_malformed_xml_stays_invalid() {
+        for (encoding, raw) in expanding_encoded_children() {
+            let decoded = svgz::decode(&raw).unwrap();
+            for gzip in [false, true] {
+                let data = if gzip { svgz::compress(&raw) } else { raw.clone() };
+                let limits = Limits { bytes: decoded.len(), embedded_bytes: decoded.len(), ..shallow() };
+                let (found, usage) = resolved(&svg(&data_image(&data)), limits, 1);
+                assert_eq!(found, [true], "{encoding}, gzip {gzip}");
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (0, 0, 0));
+                assert_eq!(usage.embedded_svg_bytes, decoded.len());
+                // Preserve the declared/BOM encoding when making the XML malformed;
+                // re-encoding Latin-1 text as UTF-8 would test a second expansion instead.
+                let closing_bytes = if encoding == "Latin-1" { 6 } else { 12 };
+                let malformed = &raw[..raw.len() - closing_bytes];
+                let data = if gzip { svgz::compress(malformed) } else { malformed.to_vec() };
+                let (found, usage) = resolved(&svg(&data_image(&data)), limits, 1);
+                assert!(found.is_empty());
+                assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images, usage.invalid_svg_images), (0, 0, 1));
+            }
+        }
+    }
+
+    #[test]
+    fn embedded_chain_caps_are_explicit_resource_refusals_for_plain_and_gzip_children() {
+        for gzip in [false, true] {
+            let inner = svg("<rect width='1' height='1'/>");
+            let middle = svg(&data_image(&packed(&inner, gzip)));
+            let outer = svg(&data_image(&packed(&middle, gzip)));
+            let (found, usage) = resolved(&outer, Limits { embedded_depth: 1, ..shallow() }, 1);
+            assert_eq!(found, [true]);
+            assert_eq!(usage.embedded_svg_depth, 1);
+            assert_eq!(usage.svg_limit_images, 1, "strict consumers still see the existing limit flag");
+            assert_eq!(usage.svg_resource_limit_images, 1, "a chain cap must not become a successful partial bounded preview");
+            let (found, usage) = resolved(&outer, Limits { embedded_depth: 2, ..shallow() }, 1);
+            assert_eq!(found, [true, true]);
+            assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images), (0, 0));
+        }
+    }
+
+    #[test]
+    fn embedded_per_image_byte_caps_are_resource_refusals_for_plain_and_gzip_children() {
+        let inner = svg("<rect width='1' height='1'/>");
+        for gzip in [false, true] {
+            let outer = svg(&data_image(&packed(&inner, gzip)));
+            let (_, usage) = resolved(&outer, Limits { bytes: inner.len() - 1, embedded_bytes: inner.len() * 3, ..shallow() }, 1);
+            assert_eq!(usage.embedded_svg_count, 0);
+            assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images), (1, 1));
+            let (found, usage) = resolved(&outer, Limits { bytes: inner.len(), ..shallow() }, 1);
+            assert_eq!(found, [true]);
+            assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images), (0, 0));
+        }
+    }
+
+    #[test]
+    fn aggregate_embedded_bytes_are_resource_refusals_even_when_each_child_fits() {
+        let inner = svg("<rect width='1' height='1'/>");
+        for gzip in [false, true] {
+            let image = data_image(&packed(&inner, gzip));
+            let outer = svg(&format!("{image}{image}"));
+            let cap = inner.len() * 2 - 1;
+            let (found, usage) = resolved(&outer, Limits { embedded_bytes: cap, ..shallow() }, 1);
+            assert_eq!(found, [true]);
+            assert_eq!(usage.embedded_svg_bytes, cap, "a refused child still spends the remaining work allowance");
+            assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images), (1, 1));
+            let (found, usage) = resolved(&outer, Limits { embedded_bytes: inner.len() * 2, ..shallow() }, 1);
+            assert_eq!(found, [true, true]);
+            assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images), (0, 0));
+        }
+    }
+
+    #[test]
+    fn combined_xml_depth_omissions_remain_distinct_from_resource_refusals() {
+        let inner = svg("<rect width='1' height='1'/>");
+        for gzip in [false, true] {
+            let image = data_image(&packed(&inner, gzip));
+            let outer = svg(&format!("{}{}{}", "<g>".repeat(4), image, "</g>".repeat(4)));
+            let (found, usage) = resolved(&outer, Limits { tree_depth: 6, ..shallow() }, 5);
+            assert!(found.is_empty());
+            assert_eq!(usage.svg_limit_images, 1, "strict consumers must continue to reject this omission");
+            assert_eq!(usage.svg_resource_limit_images, 0, "non-strict consumers may omit this child without disguising a byte/chain overrun");
+            let (found, usage) = resolved(&svg(&image), Limits { tree_depth: 6, ..shallow() }, 1);
+            assert_eq!(found, [true]);
+            assert_eq!((usage.svg_limit_images, usage.svg_resource_limit_images), (0, 0));
+        }
+    }
+
+    #[test]
+    fn invalid_and_corrupt_children_do_not_claim_a_resource_limit() {
+        let mut corrupt = svgz::compress(svg("<rect width='1' height='1'/>").as_bytes());
+        let crc = corrupt.len() - 8;
+        corrupt[crc] ^= 1;
+        for data in [b"not XML".to_vec(), corrupt] {
+            let (found, usage) = resolved(&svg(&data_image(&data)), shallow(), 1);
+            assert!(found.is_empty());
+            assert!(usage.invalid_svg_images > 0 || usage.svg_limit_images > 0, "strict consumers still observe unreadable content");
+            assert_eq!(usage.svg_resource_limit_images, 0);
+        }
+    }
+}
+
 mod draw_checks {
     use super::*;
 
