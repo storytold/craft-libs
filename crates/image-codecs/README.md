@@ -57,6 +57,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
 | Amiga IFF (ILBM/PBM) | yes | yes (24-bit ILBM) | U8 | RGB, RGBA | yes (1-bit mask plane on write) | no | no | no | no | no | no | built in |
 | Sun Raster (`.ras`) | yes (incl. RLE and colour maps) | yes (uncompressed) | U8 | Gray, RGB, RGBA | yes | no | no | no | no | no | no | built in |
+| JPEG-LS (`.jls`) | yes (any NEAR; one scan per component) | yes (lossless) | U8, U16 | Gray, RGB | no | no | no | no | no | no | no | built in |
 | AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
 
@@ -340,3 +341,12 @@ folder, copy the five files from that commit into `corpus/exr/`, or run
 at commit `74330157cb601573ae4523a95bb9132822fc3918` and copy its `corpus/exr/` here, as CI does.
 The images are not committed here; OpenEXR distributes them under its
 [license](https://github.com/AcademySoftwareFoundation/openexr/blob/69b2604fc76e370615438bdc8d2cd95b9349c12e/LICENSE.md).
+
+## Redistribution notices
+
+JPEG encoding uses `jpeg-encoder` 0.6.1, including work from the Independent JPEG Group.
+Retain this crate's [NOTICE](NOTICE) with binary distributions using that encoder. It includes
+its MIT license, the IJG acknowledgement and original IJG/SIMD notices. Both upstream license
+alternatives and source checksums are retained in
+[`licenses/jpeg-encoder-0.6.1`](https://github.com/storytold/craft-libs/tree/main/licenses/jpeg-encoder-0.6.1)
+at the repository root.
