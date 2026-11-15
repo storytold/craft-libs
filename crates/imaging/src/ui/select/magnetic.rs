@@ -45,7 +45,8 @@ pub trait EdgeTracer {
 }
 
 /// The Magnetic Lasso's options bar, persisted by the app (decisions §2.4). The options bar edits
-/// [`MagneticLassoTool::settings_mut`]; `[` and `]` change `width` in the tool.
+/// [`MagneticLassoTool::settings_mut`]; `[` and `]` change `width` ([`step_width`](Self::step_width)): the tool while an
+/// outline is open, the app's shortcuts otherwise.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 #[non_exhaustive]
@@ -69,6 +70,21 @@ impl Default for MagneticSettings {
 impl MagneticSettings {
     /// The range of `width`.
     pub const WIDTH_RANGE: (f32, f32) = (1.0, 256.0);
+
+    /// One press of `[` (`by` −1) or `]` (`by` 1): the width moves by `by` whole pixels within
+    /// [`WIDTH_RANGE`](Self::WIDTH_RANGE); with `to_limit` (Shift held) it goes to the end of the range in that
+    /// direction. A width that is not a number goes back to the default.
+    pub fn step_width(&mut self, by: i32, to_limit: bool) {
+        let (min, max) = Self::WIDTH_RANGE;
+        let width = self.width;
+        self.width = if to_limit {
+            if by < 0 { min } else { max }
+        } else if width.is_finite() {
+            (width.round() + by as f32).clamp(min, max)
+        } else {
+            Self::default().width
+        };
+    }
 
     /// How far the outline runs before a point fastens by itself, in document pixels at `zoom`
     /// screen points per pixel: `(8 + (100 − frequency) · 0.9) / zoom` (8 points at 100, 98 at 0,
@@ -231,8 +247,8 @@ fn pen_pressure(pointer: &ToolPointer) -> Option<f32> {
 ///
 /// Keys: Backspace or Delete remove the last fastening point (the first cancels); Esc cancels
 /// (during a press too: the host's `cancel(Escape)` drops the outline, any other reason keeps it); `[`
-/// and `]` change the width by 1 px within 1..=256. The tool keeps Backspace, Delete and Enter from
-/// the app's shortcuts while an outline is open.
+/// and `]` change the width by 1 px within 1..=256, Shift+`[` and Shift+`]` set it to 1 and 256. The tool keeps
+/// Backspace, Delete and Enter from the app's shortcuts while an outline is open.
 ///
 /// The closed outline is [`SelectEvent::Commit`] with a `SelectionShape::Polygon`: the selection is exactly the outline drawn. An
 /// outline of fewer than 3 points commits nothing. A document change or [`reset`](Self::reset)
@@ -589,14 +605,20 @@ impl<T: EdgeTracer> CanvasTool for SelectToolPass<'_, MagneticLassoTool<T>> {
                 _ => {}
             }
         }
-        let step = match key {
-            ToolKey::Kept(chord) if chord.mods.is_none() && chord.key == Key::OpenBracket => -1.0,
-            ToolKey::Kept(chord) if chord.mods.is_none() && chord.key == Key::CloseBracket => 1.0,
+        let ToolKey::Kept(chord) = key else { return false };
+        let shift = chord.mods == Mods::SHIFT;
+        if !chord.mods.is_none() && !shift {
+            return false;
+        }
+        // A US layout may report Shift+[ as `{` with Shift held; a bare `{` (Programmer Dvorak) is no bracket key.
+        let by = match chord.key {
+            Key::OpenBracket => -1,
+            Key::CloseBracket => 1,
+            Key::OpenCurlyBracket if shift => -1,
+            Key::CloseCurlyBracket if shift => 1,
             _ => return false,
         };
-        let (min, max) = MagneticSettings::WIDTH_RANGE;
-        let width = &mut tool.settings.width;
-        *width = if width.is_finite() { (width.round() + step).clamp(min, max) } else { MagneticSettings::default().width };
+        tool.settings.step_width(by, shift);
         true
     }
 
@@ -641,4 +663,29 @@ impl<T: EdgeTracer> CanvasTool for SelectToolPass<'_, MagneticLassoTool<T>> {
 /// How near the first point a press closes the outline, in document units.
 fn close_radius(cx: &ToolContext<'_>, place: &Place) -> f64 {
     reach(cx).close / place.zoom().max(0.01)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MagneticSettings;
+
+    #[test]
+    fn width_steps_by_one_and_shift_jumps_to_the_limits() {
+        let mut settings = MagneticSettings { width: 10.4, ..MagneticSettings::default() };
+        settings.step_width(1, false);
+        assert_eq!(settings.width, 11.0, "a step adds one to the rounded width");
+        settings.width = 1.0;
+        settings.step_width(-1, false);
+        assert_eq!(settings.width, 1.0, "the step stops at the minimum");
+        settings.width = 256.0;
+        settings.step_width(1, false);
+        assert_eq!(settings.width, 256.0, "the step stops at the maximum");
+        settings.step_width(-1, true);
+        assert_eq!(settings.width, 1.0, "Shift+[ goes to the minimum");
+        settings.step_width(1, true);
+        assert_eq!(settings.width, 256.0, "Shift+] goes to the maximum");
+        settings.width = f32::NAN;
+        settings.step_width(1, false);
+        assert_eq!(settings.width, MagneticSettings::default().width, "a width that is no number goes back to the default");
+    }
 }
