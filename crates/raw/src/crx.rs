@@ -95,60 +95,94 @@ pub(crate) fn decode(sample: &[u8], config: &Cr3Compression) -> Result<Vec<u16>>
     let count = image_size(config)?;
     let tiles = layout(sample, config)?;
     validate_planes(&tiles, config)?;
-    // Allocated once the first plane decodes: a tiny crafted file can claim a huge image.
-    let mut output = Vec::new();
+    let qp = tiles.iter().map(|tile| tile_qp(sample, tile)).collect::<Result<Vec<_>>>()?;
     let midpoint = 1i32 << (config.bit_depth - 1);
     let maximum = (1i32 << config.bit_depth) - 1;
-    for tile in tiles {
-        let qp = tile_qp(sample, &tile)?;
-        // Each plane is its own entropy stream: decode a tile's planes in parallel.
-        let planes: Vec<Result<Vec<i32>>> = tile
-            .planes
-            .par_iter()
-            .enumerate()
-            .map(|(p, plane)| {
-                if config.levels == 0 {
-                    let band = plane.bands.first().ok_or_else(|| corrupt("missing lossless band"))?;
-                    lossless_plane(band_bytes(sample, band)?, tile.width / 2, tile.height / 2)
-                } else {
-                    let edges = TileEdges { left: tile.x > 0, right: tile.x + tile.width < width, top: false, bottom: false };
-                    wavelet_plane(sample, plane, tile.width / 2, tile.height / 2, edges, qp.as_ref())
-                }
-                .map_err(|error| RawError::Corrupt(format!("Canon CRX tile ({}, {}), plane {p}: {error}", tile.x, tile.y)))
-            })
-            .collect();
-        for (p, decoded) in planes.into_iter().enumerate() {
-            let decoded = decoded?;
-            if output.is_empty() {
-                output.try_reserve_exact(count).map_err(|_| RawError::Limit("CRX sample allocation"))?;
-                output.resize(count, 0);
-            }
-            for (i, &value) in decoded.iter().enumerate() {
-                let sensor_value = sensor_sample(value, midpoint, maximum, config.levels != 0)?;
-                let (x, y) = (tile.x + 2 * (i % (tile.width / 2)) + p % 2, tile.y + 2 * (i / (tile.width / 2)) + p / 2);
-                let slot = y
-                    .checked_mul(width)
-                    .and_then(|n| n.checked_add(x))
-                    .and_then(|n| output.get_mut(n))
-                    .ok_or_else(|| corrupt("tile writes outside image"))?;
-                *slot = sensor_value;
-            }
-        }
-    }
+    // Every plane of every tile is its own entropy stream: decode them all in parallel, each straight
+    // to sensor samples, so a task holds only its own plane as i32. The first error in tile and plane
+    // order is reported, as when the tiles were decoded one after another.
+    let jobs: Vec<(&Tile, Option<&QpMap>, usize, &Plane)> = tiles
+        .iter()
+        .zip(&qp)
+        .flat_map(|(tile, qp)| tile.planes.iter().enumerate().map(move |(p, plane)| (tile, qp.as_ref(), p, plane)))
+        .collect();
+    let planes: Vec<Result<Vec<u16>>> = jobs
+        .par_iter()
+        .map(|&(tile, qp, p, plane)| {
+            let decoded = decode_plane(sample, config, width, tile, plane, qp)
+                .map_err(|error| RawError::Corrupt(format!("Canon CRX tile ({}, {}), plane {p}: {error}", tile.x, tile.y)))?;
+            sensor_plane(&decoded, midpoint, maximum, config.levels != 0)
+        })
+        .collect();
+    let planes = planes.into_iter().collect::<Result<Vec<_>>>()?;
+    // Allocated once every plane has decoded: a tiny crafted file can claim a huge image.
+    let mut output = Vec::new();
+    output.try_reserve_exact(count).map_err(|_| RawError::Limit("CRX sample allocation"))?;
+    output.resize(count, 0);
+    interleave(&mut output, width, &tiles, &planes)?;
     Ok(output)
 }
 
-/// A decoded plane value as a sensor sample of the CMP1 bit depth.
+fn decode_plane(sample: &[u8], config: &Cr3Compression, width: usize, tile: &Tile, plane: &Plane, qp: Option<&QpMap>) -> Result<Vec<i32>> {
+    if config.levels == 0 {
+        let band = plane.bands.first().ok_or_else(|| corrupt("missing lossless band"))?;
+        lossless_plane(band_bytes(sample, band)?, tile.width / 2, tile.height / 2)
+    } else {
+        let edges = TileEdges { left: tile.x > 0, right: tile.x + tile.width < width, top: false, bottom: false };
+        wavelet_plane(sample, plane, tile.width / 2, tile.height / 2, edges, qp)
+    }
+}
+
+/// Decoded plane values as sensor samples of the CMP1 bit depth.
 ///
 /// Lossless planes reproduce the sensor exactly, so a value outside the bit depth is corrupt data.
 /// Wavelet (C-RAW) planes are quantized: next to clipped highlights the reconstruction overshoots
 /// the sensor's range by up to a few quantization steps (measured on 17 CC0 files: at most 36 codes
 /// above 16383 at 14 bits, never below 0), while lossless files of the same bodies clip at exactly
-/// 16383. Those samples are clamped to the range the sensor can record.
-fn sensor_sample(value: i32, midpoint: i32, maximum: i32, quantized: bool) -> Result<u16> {
-    let sample = value.checked_add(midpoint).ok_or_else(|| corrupt("decoded sample outside its bit depth"))?;
-    let sample = if quantized { sample.clamp(0, maximum) } else { sample };
-    u16::try_from(sample).ok().filter(|_| sample <= maximum).ok_or_else(|| corrupt("decoded sample outside its bit depth"))
+/// 16383. Those samples are clamped to the range the sensor can record. The range is checked once,
+/// on the plane's extremes; `midpoint` is positive, so only the largest sum can overflow.
+fn sensor_plane(values: &[i32], midpoint: i32, maximum: i32, quantized: bool) -> Result<Vec<u16>> {
+    let outside = || corrupt("decoded sample outside its bit depth");
+    let (Some(&low), Some(&high)) = (values.iter().min(), values.iter().max()) else { return Ok(Vec::new()) };
+    let high = high.checked_add(midpoint).ok_or_else(outside)?;
+    if !quantized && (low.saturating_add(midpoint) < 0 || high > maximum) {
+        return Err(outside());
+    }
+    let mut samples = Vec::new();
+    samples.try_reserve_exact(values.len()).map_err(|_| RawError::Limit("CRX sample allocation"))?;
+    // Every sum fits (the largest did), and the clamp leaves in-range lossless samples unchanged.
+    samples.extend(values.iter().map(|&value| (value + midpoint).clamp(0, maximum) as u16));
+    Ok(samples)
+}
+
+/// Writes each tile's four planes (`planes`: four per tile, in tile order) into the Bayer mosaic.
+/// Plane `p` holds the samples at row parity `p / 2` and column parity `p % 2`. Runs in parallel
+/// over pairs of output rows.
+fn interleave(output: &mut [u16], width: usize, tiles: &[Tile], planes: &[Vec<u16>]) -> Result<()> {
+    let outside = || corrupt("tile writes outside image");
+    if width == 0 || planes.len() != tiles.len() * 4 {
+        return Err(outside());
+    }
+    output.par_chunks_mut(2 * width).enumerate().try_for_each(|(pair, rows)| -> Result<()> {
+        let y = 2 * pair;
+        for (tile, planes) in tiles.iter().zip(planes.chunks_exact(4)).filter(|(tile, _)| (tile.y..tile.y + tile.height).contains(&y)) {
+            let half = tile.width / 2;
+            let start = (y - tile.y) / 2 * half;
+            for (row, sources) in rows.chunks_exact_mut(width).zip(planes.chunks_exact(2)) {
+                let [even, odd] = sources else { return Err(outside()) };
+                let target = row.get_mut(tile.x..tile.x + tile.width).ok_or_else(outside)?;
+                let even = even.get(start..start + half).ok_or_else(outside)?;
+                let odd = odd.get(start..start + half).ok_or_else(outside)?;
+                for ((pixels, &left), &right) in target.chunks_exact_mut(2).zip(even).zip(odd) {
+                    if let [a, b] = pixels {
+                        *a = left;
+                        *b = right;
+                    }
+                }
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Header-only probing must reject the same unsupported coding variants as full decoding.
@@ -1128,14 +1162,22 @@ mod tests {
 
     #[test]
     fn only_quantized_planes_clamp_out_of_range_samples() {
-        assert_eq!(sensor_sample(8200, 8192, 16383, true).unwrap(), 16383);
-        assert_eq!(sensor_sample(-8300, 8192, 16383, true).unwrap(), 0);
-        assert_eq!(sensor_sample(8191, 8192, 16383, false).unwrap(), 16383);
-        assert_eq!(sensor_sample(-8192, 8192, 16383, false).unwrap(), 0);
+        assert_eq!(sensor_plane(&[8200], 8192, 16383, true).unwrap(), [16383]);
+        assert_eq!(sensor_plane(&[-8300], 8192, 16383, true).unwrap(), [0]);
+        assert_eq!(sensor_plane(&[-8300, 0, 8200], 8192, 16383, true).unwrap(), [0, 8192, 16383]);
+        assert_eq!(sensor_plane(&[8191], 8192, 16383, false).unwrap(), [16383]);
+        assert_eq!(sensor_plane(&[-8192], 8192, 16383, false).unwrap(), [0]);
+        assert_eq!(sensor_plane(&[-8192, 5, 8191], 8192, 16383, false).unwrap(), [0, 8197, 16383]);
         // Lossless planes reproduce the sensor exactly: outside the bit depth is corrupt data.
-        assert!(matches!(sensor_sample(8192, 8192, 16383, false), Err(RawError::Corrupt(_))));
-        assert!(matches!(sensor_sample(-8193, 8192, 16383, false), Err(RawError::Corrupt(_))));
-        assert!(matches!(sensor_sample(i32::MAX, 8192, 16383, true), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[8192], 8192, 16383, false), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[-8193], 8192, 16383, false), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[0, 8192, 0], 8192, 16383, false), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[0, -8193, 0], 8192, 16383, false), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[i32::MAX], 8192, 16383, true), Err(RawError::Corrupt(_))));
+        assert!(matches!(sensor_plane(&[0, i32::MAX], 8192, 16383, true), Err(RawError::Corrupt(_))));
+        // The lowest i32 cannot overflow below: it is clamped in a quantized plane and corrupt in a lossless one.
+        assert_eq!(sensor_plane(&[i32::MIN], 8192, 16383, true).unwrap(), [0]);
+        assert!(matches!(sensor_plane(&[i32::MIN], 8192, 16383, false), Err(RawError::Corrupt(_))));
     }
 
     #[test]
@@ -1288,9 +1330,18 @@ mod tests {
             ("cr3-canon-rp-craw.cr3", 0xf48df06ca1d67382u64),
             ("cr3-canon-rp-raw-crop.cr3", 0x46808a9de3b3dcc7u64),
             ("cr3-canon-rp-craw-crop.cr3", 0x39a60c4efed4e1f4u64),
+            // EOS R5 Mark II (version 0x200 C-RAW and its lossless pair): pinned to this decoder's
+            // own output, see docs/cr3.md.
+            ("cr3-canon-r5m2-raw.cr3", 0xff716fb30248496fu64),
+            ("cr3-canon-r5m2-craw.cr3", 0xaf32b45357b534e5u64),
+            ("cr3-canon-r5m2-raw-crop.cr3", 0x31cf630afe868958u64),
+            ("cr3-canon-r5m2-craw-crop.cr3", 0x4721605b20339332u64),
         ] {
             let path = std::path::Path::new(&directory).join(name);
-            let bytes = std::fs::read(path).unwrap();
+            let Ok(bytes) = std::fs::read(&path) else {
+                eprintln!("skipped {}: not in LIGHTCRAFT_CR3_CORPUS", path.display());
+                continue;
+            };
             let container = craft_metadata::cr3::parse_cr3(&bytes).unwrap();
             let mut candidates = container
                 .tracks
@@ -1494,5 +1545,75 @@ mod tests {
         }
         assert!(dequantize(&mut [1 << 30], 1, 1, &Quantization::Uniform(10), None).is_err());
         assert!(dequantize(&mut [1], 4, 1, &Quantization::Adaptive { base: 0, gain: 0 }, None).is_err());
+    }
+
+    #[test]
+    fn interleave_places_every_plane_of_every_tile_like_a_per_sample_scatter() {
+        // A 2 x 2 tile grid whose right column is narrower, as at the right edge of a real image.
+        let (width, height) = (12, 8);
+        let tile = |x, y, width, height| Tile { x, y, width, height, planes: Vec::new(), qp: None };
+        let tiles = [tile(0, 0, 8, 4), tile(8, 0, 4, 4), tile(0, 4, 8, 4), tile(8, 4, 4, 4)];
+        let planes: Vec<Vec<u16>> = tiles
+            .iter()
+            .enumerate()
+            .flat_map(|(t, tile)| (0..4).map(move |p| (0..tile.width * tile.height / 4).map(|i| ((t * 4 + p) * 100 + i) as u16).collect()))
+            .collect();
+        let mut expected = vec![0u16; width * height];
+        for (t, tile) in tiles.iter().enumerate() {
+            for p in 0..4 {
+                for (i, &value) in planes[t * 4 + p].iter().enumerate() {
+                    let (x, y) = (tile.x + 2 * (i % (tile.width / 2)) + p % 2, tile.y + 2 * (i / (tile.width / 2)) + p / 2);
+                    expected[y * width + x] = value;
+                }
+            }
+        }
+        let mut output = vec![0u16; width * height];
+        interleave(&mut output, width, &tiles, &planes).unwrap();
+        assert_eq!(output, expected);
+        // A plane shorter than its tile is an error, not a partial image.
+        let mut short = planes.clone();
+        short[5].pop();
+        assert!(interleave(&mut output, width, &tiles, &short).is_err());
+        assert!(interleave(&mut output, width, &tiles, &planes[..12]).is_err());
+    }
+
+    #[test]
+    fn lossless_tile_grid_decodes_each_plane_to_its_place() {
+        // Four 4 x 4 tiles in a 2 x 2 grid (horizontal and vertical tile boundaries). Each 2 x 2 plane
+        // is flat at value 1, 2 or 3, chosen per tile and plane. Bitstreams per value: row 0 has a
+        // zero-run flag 0, the Rice-coded first sample and a 0 symbol; row 1 is one run to the row end.
+        let stream = |value: usize| -> &'static [u8] {
+            match value {
+                1 => &[0x1e],       // 0, 001 (k 0), 1 (k 0), 1, 1
+                2 => &[0x06, 0xc0], // 0, 00001 (k 0), 10 (k 1), 1, 1
+                _ => &[0x01, 0x98], // 0, 0000001 (k 0), 100 (k 2), 1, 1
+            }
+        };
+        let value = |t: usize, p: usize| 1 + (t + p) % 3;
+        let mut config = coding();
+        config.width = 8;
+        config.height = 8;
+        config.header_size = 432;
+        let mut sample = Vec::new();
+        let mut data = Vec::new();
+        for t in 0..4 {
+            let sizes: Vec<u32> = (0..4).map(|p| stream(value(t, p)).len() as u32).collect();
+            marker(&mut sample, 0xff01, sizes.iter().sum(), (t as u32) << 16);
+            for (p, &size) in sizes.iter().enumerate() {
+                marker(&mut sample, 0xff02, size, ((p as u32) << 28) | 0x0800_0000);
+                marker(&mut sample, 0xff03, size, 0x0020_0000);
+                data.extend_from_slice(stream(value(t, p)));
+            }
+        }
+        assert_eq!(sample.len(), 432);
+        sample.extend(data);
+        validate(&sample, &config).unwrap();
+        let expected: Vec<u16> =
+            (0..64).map(|i| (i % 8, i / 8)).map(|(x, y)| 8192 + value((y / 4) * 2 + x / 4, (y % 2) * 2 + x % 2) as u16).collect();
+        assert_eq!(decode(&sample, &config).unwrap(), expected);
+        // A corrupt plane in the last tile still fails the whole image.
+        let mut broken = sample.clone();
+        *broken.last_mut().unwrap() ^= 1;
+        assert!(decode(&broken, &config).is_err());
     }
 }
