@@ -2183,6 +2183,8 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "craft-flow",
+ "craft-html",
+ "craft-markdown",
  "craft-math",
  "craft-metafile",
  "craft-wordmodel",
