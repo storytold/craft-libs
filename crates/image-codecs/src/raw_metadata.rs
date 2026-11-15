@@ -137,7 +137,7 @@ mod tests {
                 Format::Jpeg => replace_jpeg_exif(&mut bytes, EXIF),
                 Format::Png => replace_png_exif(&mut bytes, EXIF).unwrap(),
                 Format::WebP => replace_webp_exif(&mut bytes, EXIF).unwrap(),
-                _ => unreachable!(),
+                _ => {}
             }
             let decoded = crate::decode_as_with(format, &bytes, &crate::DecodeOptions { keep_orientation: true, ..Default::default() }).unwrap();
             assert_eq!(decoded.meta.exif.as_deref().map(crate::exif_orientation), Some(6), "{format:?}");
