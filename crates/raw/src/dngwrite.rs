@@ -169,6 +169,7 @@ pub struct DngImage<'a> {
     pub opcodes: &'a crate::OpcodeLists,
     pub make: Option<&'a str>,
     pub model: Option<&'a str>,
+    pub unique_model: Option<&'a str>,
     pub cinema: &'a crate::CinemaTags,
     /// Optional application-supplied UniqueCameraModel fallback when make/model are absent.
     pub unknown_camera_model: Option<&'a str>,
@@ -193,6 +194,7 @@ impl<'a> From<&'a RawImage> for DngImage<'a> {
             opcodes: &raw.opcodes,
             make: raw.camera.make.as_deref(),
             model: raw.camera.model.as_deref(),
+            unique_model: raw.camera.unique_model.as_deref(),
             cinema: &raw.cinema,
             unknown_camera_model: None,
         }
@@ -494,7 +496,7 @@ fn write_identity_tags(ifd: &mut IfdBuilder, raw: &DngImage<'_>, opts: &DngWrite
     let model_includes_make = !make.is_empty()
         && model.get(..make.len()).is_some_and(|prefix| prefix.eq_ignore_ascii_case(make))
         && model.get(make.len()..).is_some_and(|suffix| suffix.chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_'));
-    let unique = if let Some(unique) = raw.camera.unique_model.as_deref().filter(|u| !u.is_empty()) {
+    let unique = if let Some(unique) = raw.unique_model.filter(|u| !u.is_empty()) {
         unique.to_owned()
     } else if model_includes_make || make.is_empty() {
         model.to_owned()
@@ -645,6 +647,7 @@ mod tests {
     #[test]
     fn borrowed_writer_preserves_owned_output() {
         let mut raw = tiny_raw();
+        raw.camera.unique_model = Some("Exact camera model".into());
         for floating in [false, true] {
             if floating {
                 raw.data = RawData::F32((0..64).map(|v| v as f32 / 64.0).collect());
