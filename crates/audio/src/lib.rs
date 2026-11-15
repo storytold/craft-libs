@@ -26,7 +26,7 @@
 //! - [`peaks`] (feature `peaks`): min/max/RMS pyramid for waveform drawing.
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
-//!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`]
+//!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`; `mpa-encode`: the Layer II encoder), [`mp3`]
 //!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-encode`: the packet encoder), [`qoa`]
 //!   (`qoa-decode`, `qoa-encode`: whole QOA files).
 //!

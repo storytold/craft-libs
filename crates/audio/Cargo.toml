@@ -55,6 +55,9 @@ ac3-encode = ["craft-media/bitstream"]
 eac3-encode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) encoder (`mp3`).
 mp3-encode = ["craft-media/bitstream"]
+# MPEG-1/2 Layer II (MP2) encoder (`mpa::encoder`). It shares the polyphase analysis filter of the
+# MP3 encoder and the tables of the MP1/MP2 decoder.
+mpa-encode = ["mpa-decode", "mp3-encode"]
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Encode AAC channels in parallel (with `aac-encode`).
@@ -87,6 +90,10 @@ required-features = ["decode", "lossless-encode", "peaks"]
 [[test]]
 name = "codecs"
 required-features = ["decode", "encode"]
+
+[[test]]
+name = "mp2_encoder_oracle"
+required-features = ["mpa-encode"]
 
 [[test]]
 name = "qoa_oracle"
