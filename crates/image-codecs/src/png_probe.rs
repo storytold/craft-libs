@@ -165,6 +165,8 @@ mod tests {
         chunk(&mut bytes, b"eXIf", exif);
         chunk(&mut bytes, b"IEND", &[]);
         assert_eq!(header(&bytes).ok(), Some((2, 3, 6)));
+        assert!(matches!(header_with_max_pixels(&bytes, 5), Err(CodecError::LimitExceeded(_))));
+        assert_eq!(declared_dimensions(&bytes), Some((2, 3)));
         assert!(header(&bytes[..34]).is_err());
         let mut indexed = png(3);
         chunk(&mut indexed, b"IDAT", &[1]);
