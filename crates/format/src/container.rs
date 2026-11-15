@@ -174,12 +174,10 @@ impl Writer {
     }
 }
 
-/// A container being read. Opening reads all bytes into memory (needed because the archive
-/// borrows them), checks the directory (the entry count, unique and plain names, every part's
+/// A container being read. Opening reads all bytes into memory and checks the directory
+/// (the entry count, unique and plain names, every part's
 /// declared size), not the parts.
 pub struct Reader {
-    /// The raw archive bytes, kept alive so the archive can borrow them.
-    bytes: Vec<u8>,
     archive: craft_zip::Archive<'static>,
     blobs: BTreeMap<String, Vec<u8>>,
     /// The bytes of payloads resolved so far, repeats counted: bounded by the expanded budget.
@@ -198,13 +196,8 @@ impl Reader {
         let mut bytes = Vec::with_capacity(length as usize);
         source.read_to_end(&mut bytes).map_err(invalid)?;
 
-        // Leak the Vec to get 'static bytes (needed because Archive<'a> borrows them).
-        // This is acceptable: Reader holds the bytes for its lifetime anyway, and
-        // ZIP archives are typically small-to-moderate size.
-        let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-
-        let mut archive = craft_zip::Archive::open(
-            leaked,
+        let mut archive = craft_zip::Archive::open_owned(
+            bytes,
             craft_zip::Limits { max_entries: limits.max_entries as u64, max_total_bytes: (limits.max_expanded)() as u64 },
         )
         .map_err(invalid)?;
@@ -221,7 +214,7 @@ impl Reader {
             }
         }
 
-        Ok(Self { bytes: leaked.to_vec(), archive, blobs: BTreeMap::new(), hydrated: 0, document: None, limits })
+        Ok(Self { archive, blobs: BTreeMap::new(), hydrated: 0, document: None, limits })
     }
 
     /// The file's own part, `document.json`, read once and kept: provisional caches and the
