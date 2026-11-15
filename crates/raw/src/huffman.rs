@@ -145,9 +145,10 @@ mod tests {
     /// Reference: match the code bit by bit, then read the category's additional bits (T.81 F.1.2.1).
     fn reference(src: &[u8], pos: &mut usize, codes: &[(u16, u8)]) -> Option<i32> {
         let window: u32 = (0..12).fold(0, |a, k| (a << 1) | bit(src, *pos + k));
-        let (sym, len) = codes.iter().enumerate().find_map(|(s, &(c, l))| {
-            (l > 0 && (c as u32 >> (12 - l)) == window >> (12 - l)).then_some((s as u32, l as usize))
-        })?;
+        let (sym, len) = codes
+            .iter()
+            .enumerate()
+            .find_map(|(s, &(c, l))| (l > 0 && (c as u32 >> (12 - l)) == window >> (12 - l)).then_some((s as u32, l as usize)))?;
         *pos += len;
         if sym == 0 {
             return Some(0);
@@ -157,13 +158,25 @@ mod tests {
         Some(if v < 1 << (sym - 1) { v - (1 << sym) + 1 } else { v })
     }
 
-    #[test]
-    fn diff_matches_bitwise_reference_for_every_category() {
-        // categories 0..=16, code lengths up to 12 so that short codes combine with their bits and long ones do not
-        let lens = [2u8, 2, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12];
-        let codes = canonical(&lens);
+    /// `diff` against the reference on random streams (invalid codes are stepped over) and on every (code, extra
+    /// bits) pair of every symbol.
+    fn check_table(lens: &[u8]) {
+        let codes = canonical(lens);
         let h = Huffman::new(&codes).unwrap();
+        for (sym, &(code, len)) in codes.iter().enumerate() {
+            for v in 0..1u64 << sym {
+                let (len, n) = (len as u32, sym as u32);
+                let word = (((code >> (12 - len)) as u64) << n | v) << (64 - len - n);
+                let src = word.to_be_bytes();
+                let mut pos = 0;
+                let want = reference(&src, &mut pos, &codes);
+                let mut bits = Bits::new(&src);
+                assert_eq!(diff(&mut bits, &h), want, "symbol {sym} bits {v:#b}");
+                assert_eq!(bits.consumed_bits(), pos);
+            }
+        }
         let mut s = 0x1234_5678_9abc_def0u64;
+        let (mut invalid, mut long) = (0, 0);
         for _ in 0..40 {
             let src: Vec<u8> = (0..400)
                 .map(|_| {
@@ -174,13 +187,32 @@ mod tests {
             let mut bits = Bits::new(&src);
             let mut pos = 0;
             while pos < src.len() * 8 - 64 {
+                let before = pos;
                 let want = reference(&src, &mut pos, &codes);
                 assert_eq!(diff(&mut bits, &h), want);
                 if want.is_none() {
-                    break;
+                    // step over the invalid code
+                    invalid += 1;
+                    pos += 1;
+                    bits.skip(1);
+                } else {
+                    long += (pos - before > 12) as u32;
                 }
                 assert_eq!(bits.consumed_bits(), pos);
             }
         }
+        assert!(long > 0, "{invalid} invalid codes, no symbol longer than the lookup");
+    }
+
+    #[test]
+    fn diff_matches_bitwise_reference_for_every_category() {
+        // categories 0..=16, code lengths up to 12 so that short codes combine with their bits and long ones do not
+        check_table(&[2, 2, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12]);
+    }
+
+    #[test]
+    fn diff_matches_reference_when_code_and_bits_fill_the_lookup_exactly() {
+        // category 8 with a 4-bit code and category 7 with a 5-bit code: len + category == 12
+        check_table(&[2, 3, 3, 5, 5, 5, 6, 5, 4, 7, 8, 9, 10, 11, 12, 12, 12]);
     }
 }

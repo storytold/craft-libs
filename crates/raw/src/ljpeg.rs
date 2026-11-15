@@ -778,6 +778,7 @@ pub fn decode(d: &[u8], max_samples: usize) -> Result<Frame, RawError> {
                 restart_left -= end - x;
             }
             // the first pixel of the run has the special predictions (start of the interval, first column)
+            #[allow(clippy::needless_range_loop)] // `c` indexes the tables and the sample position alike
             for c in 0..nc {
                 let i = x * nc + c;
                 let p = if reset_pending {

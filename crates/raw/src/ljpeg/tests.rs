@@ -181,15 +181,42 @@ fn roundtrip_skewed_categories_with_long_codes() {
     }
 }
 
-/// `decode_diff` is `decode` followed by `diff_value`, for tables with codes inside and beyond the lookup.
+/// Canonical decoding from the code lengths alone, bit by bit (T.81 Annex F, Figure F.16): the reference for the
+/// lookup tables.
+fn canonical_symbol(br: &mut BitReader, lens: &[u8]) -> Option<u8> {
+    let window = br.peek(16);
+    let (mut first, mut index) = (0u32, 0usize);
+    for len in 1..=16u8 {
+        let code = window >> (16 - len);
+        let n = lens.iter().filter(|&&l| l == len).count() as u32;
+        if code < first + n {
+            br.consume(len as u32);
+            return Some((index + (code - first) as usize) as u8);
+        }
+        index += n as usize;
+        first = (first + n) << 1;
+    }
+    None
+}
+
+/// `decode_diff` against canonical decoding and `diff_value`, for tables with codes inside and beyond the lookup
+/// and with `len + category` equal to the lookup width.
 #[test]
-fn decode_diff_matches_decode_and_diff_value() {
-    for lens in [[2u8, 2, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12], [2, 2, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 16]] {
+fn decode_diff_matches_canonical_decoding() {
+    let tables: [[u8; 17]; 3] = [
+        [2, 2, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 11, 12, 12, 12, 12],
+        [2, 2, 3, 3, 4, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 16],
+        [2, 3, 3, 5, 5, 5, 6, 5, 4, 7, 8, 9, 10, 11, 12, 12, 12],
+    ];
+    for lens in tables {
         let mut counts = [0u8; 16];
         for &l in &lens {
             counts[l as usize - 1] += 1;
         }
-        let values: Vec<u8> = (0..17).collect(); // lengths are already ascending
+        // symbols in code order: by length, ties by symbol
+        let mut values: Vec<u8> = (0..17).collect();
+        values.sort_by_key(|&v| (lens[v as usize], v));
+        let sorted: Vec<u8> = values.iter().map(|&v| lens[v as usize]).collect();
         let t = Huffman::new(&counts, &values).unwrap();
         let mut s = 77u64;
         let src: Vec<u8> = (0..6000)
@@ -200,11 +227,11 @@ fn decode_diff_matches_decode_and_diff_value() {
             .collect();
         let (mut a, mut b) = (BitReader::new(&src), BitReader::new(&src));
         for n in 0..8000 {
-            let want = t.decode(&mut a).map(|ssss| diff_value(&mut a, ssss));
+            let want = canonical_symbol(&mut a, &sorted).map(|i| diff_value(&mut a, values[i as usize]));
             let got = t.decode_diff(&mut b, false);
-            assert_eq!(got.ok(), want.ok(), "symbol {n}");
+            assert_eq!(got.ok(), want, "symbol {n}");
             assert_eq!(a.peek(32), b.peek(32), "symbol {n}");
-            if want.is_err() {
+            if want.is_none() {
                 // step past the invalid code so the walk goes on
                 a.consume(1);
                 b.consume(1);
