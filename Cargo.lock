@@ -1425,6 +1425,7 @@ version = "0.1.0"
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
+ "craft-media-testkit",
  "craft-timeline",
  "craft-xml",
  "proptest",
@@ -1844,6 +1845,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gzip"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+]
+
+[[package]]
 name = "craft-hdr"
 version = "0.1.0"
 dependencies = [
@@ -1919,6 +1927,7 @@ dependencies = [
  "avif-serialize",
  "craft-heif",
  "craft-jpeg",
+ "craft-media-testkit",
  "craft-metadata",
  "craft-video",
  "crc32fast",
@@ -2384,13 +2393,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-plist"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "craft-platform"
 version = "0.1.0"
 dependencies = [
@@ -2405,6 +2407,13 @@ dependencies = [
  "wasm-bindgen-test",
  "web-sys",
  "zbus",
+]
+
+[[package]]
+name = "craft-plist"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2704,6 +2713,7 @@ dependencies = [
  "data-url",
  "flate2",
  "kurbo 0.13.1",
+ "quick-xml 0.41.0",
  "resvg 0.48.1",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
@@ -2718,6 +2728,16 @@ version = "0.1.0"
 dependencies = [
  "craft-svg",
  "kurbo 0.13.1",
+]
+
+[[package]]
+name = "craft-tcraft"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2849,6 +2869,7 @@ name = "craft-vectorcraft-format"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "proptest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
