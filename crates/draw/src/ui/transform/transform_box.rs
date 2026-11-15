@@ -204,7 +204,8 @@ impl Default for Grip {
 ///   point), Home and End the first and last. The arrows move the picked part as a plain drag of it would, one
 ///   document unit, Shift ten.
 /// - The box holds the canvas's session (`KeyUse::session`): with the canvas focused or nothing focused, Enter, Escape
-///   and the arrows reach it before the canvas's tool, and the arrows move the whole box.
+///   and the arrows reach it before the canvas's tool, and the arrows move the whole box. With
+///   [`session_arrows`](Self::session_arrows) off the arrows stay the tool's (the Move tool nudges the layer).
 /// - Nothing mirrors in a right-to-left interface: the box is the document's.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control)]
@@ -238,6 +239,10 @@ pub struct TransformBox<'a> {
     /// Enlarges corner 2 with the overflow plus (a text frame whose text does not fit).
     #[prop]
     overflow: bool,
+    /// Whether the arrows the box takes from the canvas's session, while none of its parts has focus, move the whole
+    /// box (the default). Off leaves them to the canvas's tool; a focused part still moves by the arrows.
+    #[prop]
+    session_arrows: bool,
     /// How far outside the frame, in screen points, a plain press moves the box (0: off); set by `TransformOverlay`.
     move_reach: f32,
     /// Whether this pass holds a drag of the reference point, so the hidden point is drawn while it moves.
@@ -261,6 +266,7 @@ impl<'a> TransformBox<'a> {
             pixel_grid: false,
             mods: None,
             overflow: false,
+            session_arrows: true,
             move_reach: 0.0,
             pivot_held: false,
             report: Report::default(),
@@ -489,11 +495,12 @@ impl<'a> TransformBox<'a> {
     }
 
     /// The session keys: the arrows nudge the picked part (the whole box when no part has focus), Enter applies and
-    /// Escape closes the box.
+    /// Escape closes the box. Untaken, a session's arrows go back to the canvas's tool.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, shown: &BoxState, pressing: bool) {
         let picked = cx.active_part().filter(|part| part.key == BOX).and_then(|part| part.index).and_then(BoxPart::from_index);
         self.report.picked = picked;
-        if let Some((direction, mods)) = cx.intents().take_nudge() {
+        let takes_arrows = self.session_arrows || cx.is_focused();
+        if takes_arrows && let Some((direction, mods)) = cx.intents().take_nudge() {
             let step = if mods.shift { NUDGE_FAR } else { NUDGE };
             let doc = space.view.unmap_vec(direction);
             let length = doc.hypot();
