@@ -814,8 +814,8 @@ impl Document {
         self.scene_with_placements(limits, resolve, options).map(|(scene, _)| scene)
     }
 
-    /// Build a scene and list its mesh-node indices in FBX placement order.
-    pub fn scene_with_placements(&self, limits: &Limits, resolve: Resolver, options: &SceneOptions) -> Result<(Scene, Vec<usize>)> {
+    /// Build a scene and list its mesh nodes in FBX placement order.
+    pub fn scene_with_placements(&self, limits: &Limits, resolve: Resolver, options: &SceneOptions) -> Result<(Scene, Vec<Placement>)> {
         if self.version != 0 && self.version < 6000 {
             return Err(crate::Error::Unsupported(format!(
                 "FBX {}.{} (only FBX 6.x and 7.x files are read)",
@@ -982,7 +982,7 @@ impl Document {
                     }
                     ni
                 };
-                placement_nodes.insert((gid, Some(*id)), placement_node);
+                placement_nodes.insert((gid, Some(*id)), Placement { node: placement_node, model: Some(ni) });
             }
         }
         // Geometry with no Model connection still contributes a mesh at the origin.
@@ -1004,7 +1004,7 @@ impl Document {
             let node_index = b.scene.nodes.len();
             b.scene.roots.push(node_index);
             b.scene.nodes.push(Node { mesh: Some(mesh_index), ..Node::default() });
-            unplaced.push((key_text(gid), node_index));
+            unplaced.push((key_text(gid), Placement { node: node_index, model: None }));
         }
         let placements = ordered_placements(&models, &links, &placement_nodes, unplaced);
         let mut scene = b.scene;
@@ -1016,16 +1016,16 @@ impl Document {
 fn ordered_placements<'a>(
     models: &[(Key<'a>, &Record)],
     links: &[(Key<'a>, Key<'a>)],
-    placement_nodes: &HashMap<(Key<'a>, Option<Key<'a>>), usize>,
-    mut unplaced: Vec<(String, usize)>,
-) -> Vec<usize> {
+    placement_nodes: &HashMap<(Key<'a>, Option<Key<'a>>), Placement>,
+    mut unplaced: Vec<(String, Placement)>,
+) -> Vec<Placement> {
     let mut placements = Vec::new();
     let mut seen = HashSet::new();
     let mut add = |key| {
-        if let Some(index) = placement_nodes.get(&key).copied()
-            && seen.insert(index)
+        if let Some(placement) = placement_nodes.get(&key).copied()
+            && seen.insert(placement.node)
         {
-            placements.push(index);
+            placements.push(placement);
         }
     };
     // FBX 6 stores geometry in its model; connected FBX 7 geometry follows connection order.
@@ -1040,6 +1040,13 @@ fn ordered_placements<'a>(
     unplaced.sort_by(|a, b| a.0.cmp(&b.0));
     placements.extend(unplaced.into_iter().map(|(_, index)| index));
     placements
+}
+
+/// One placed FBX mesh, with its scene node and source model node (if any).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Placement {
+    pub node: usize,
+    pub model: Option<usize>,
 }
 
 /// Diffuse material values as stored in FBX, before color-space conversion.
