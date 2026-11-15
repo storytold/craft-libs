@@ -46,3 +46,44 @@ fn unreadable_sections_are_left_out_and_kept() {
     assert!(said.restore_into(&mut saved).is_empty());
     assert_eq!(saved, json!({"name": "A", "good": 1, "bad": 2}));
 }
+
+/// Notices, warnings and reports name what was left out, and kept values can be searched.
+#[test]
+fn warnings_report_and_mentions_cover_everything_kept() {
+    let mut said = NewerFile::new("App", &Newer { format: 8, reads_up_to: 8, unknown_changes: vec!["curves".into()] });
+    assert_eq!(said.notice(), "Saved by a newer App (format 8 with `curves`, which this version doesn't know). If something's missing, update.");
+    assert!(!said.needs_container());
+    said.keep_section("plugins", json!({"tool": "ruler"}), Some(json!({})), "unknown");
+    said.keep_element("shapes", json!({"name": "star", "points": ["tip"]}), "shape `star`".into());
+    let file = json!({"shapes": [{"name": "a", "tags": ["deep"], "more": {"x": "nested"}}], "n": 1});
+    said.compare(&file, &json!({"shapes": [{"name": "a"}], "n": 1}), "placeholder", &[]);
+    assert_eq!(said.warnings()[0], said.notice());
+    assert!(said.warnings().contains(&"Not read: section `plugins` (unknown). Saving keeps it.".to_string()));
+    let report = said.report();
+    assert_eq!(report["format"], 8);
+    assert_eq!(report["unknown_changes"], json!(["curves"]));
+    assert_eq!(report["notice"], json!(said.notice()));
+    for text in ["ruler", "tip", "deep", "nested"] {
+        assert!(said.mentions(text), "{text}");
+    }
+    assert!(!said.mentions("absent"));
+    said.parts.push(("blob".into(), Arc::from(&b"x"[..])));
+    assert!(said.needs_container());
+}
+
+/// A kept section or element that was replaced here is reported lost, not written over.
+#[test]
+fn replaced_sections_and_elements_are_reported_lost() {
+    let mut said = NewerFile::new("App", &newer());
+    said.keep_section("plugins", json!({"tool": "ruler"}), None, "unknown");
+    said.keep_element("shapes", json!({"name": "star"}), "shape `star`".into());
+    said.keep_element("shapes", json!({"points": 3}), "an unnamed shape".into());
+    let mut saved = json!({"plugins": {"edited": true}, "shapes": [{"name": "star"}]});
+    let lost = said.restore_into(&mut saved);
+    assert_eq!(lost, ["section `plugins`, replaced by what was edited here", "`shapes` element star, replaced by what was made here"]);
+    assert_eq!(saved["shapes"], json!([{"name": "star"}, {"points": 3}]));
+    let mut fresh = json!({});
+    said.sections.clear();
+    assert!(said.restore_into(&mut fresh).is_empty());
+    assert_eq!(fresh["shapes"], json!([{"name": "star"}, {"points": 3}]));
+}

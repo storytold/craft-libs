@@ -98,3 +98,7 @@ fn parts(dir: &Path, prefix: &str, out: &mut String, mods: &mut String) -> Resul
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "build_tests.rs"]
+mod tests;
