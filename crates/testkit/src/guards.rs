@@ -413,13 +413,14 @@ const KEYWORDS: &[&str] = &[
 ];
 
 /// Whether `toks[i]` follows `::` that itself follows a path segment, as `time` does in `a::time`.
+/// The `>` of `->` and `=>` ends no path, so `-> ::std::time` starts one.
 fn continues_a_path(toks: &[Token], i: usize) -> bool {
     i >= 3
         && toks[i - 1].is_punct(':')
         && toks[i - 2].is_punct(':')
         && match &toks[i - 3].kind {
             Kind::Ident(s) => !KEYWORDS.contains(&s.as_str()),
-            Kind::Punct('>') => true,
+            Kind::Punct('>') => !(i >= 4 && (toks[i - 4].is_punct('-') || toks[i - 4].is_punct('='))),
             _ => false,
         }
 }
@@ -466,8 +467,10 @@ struct UseLeaf {
     start: usize,
 }
 
-/// Every name the `use` declarations of a file bring into scope.
-fn use_leaves(toks: &[Token]) -> Vec<UseLeaf> {
+/// Every name the `use` declarations of a file bring into scope. A path that starts with a name in
+/// `time_aliases` is read as a path that starts with `std::time`, so the alias, at any length, is not
+/// copied into the leaves and the limits do not drop them.
+fn use_leaves(toks: &[Token], time_aliases: &BTreeSet<String>) -> Vec<UseLeaf> {
     let mut leaves = Vec::new();
     let mut i = 0;
     while i < toks.len() {
@@ -477,7 +480,7 @@ fn use_leaves(toks: &[Token]) -> Vec<UseLeaf> {
             let end = (i + 1..toks.len()).find(|&j| toks[j].is_punct(';')).unwrap_or(toks.len());
             let mut pos = i + 1;
             let mut prefix = Vec::new();
-            parse_use_tree(&toks[..end], &mut pos, &mut prefix, start, &mut leaves, 0);
+            parse_use_tree(&toks[..end], &mut pos, &mut prefix, start, &mut leaves, time_aliases, 0);
             i = end;
         } else {
             i += 1;
@@ -486,7 +489,15 @@ fn use_leaves(toks: &[Token]) -> Vec<UseLeaf> {
     leaves
 }
 
-fn parse_use_tree(toks: &[Token], pos: &mut usize, prefix: &mut Vec<String>, start: usize, out: &mut Vec<UseLeaf>, depth: usize) {
+fn parse_use_tree(
+    toks: &[Token],
+    pos: &mut usize,
+    prefix: &mut Vec<String>,
+    start: usize,
+    out: &mut Vec<UseLeaf>,
+    time_aliases: &BTreeSet<String>,
+    depth: usize,
+) {
     let base = prefix.len();
     if toks.get(*pos).is_some_and(|t| t.is_punct(':')) && toks.get(*pos + 1).is_some_and(|t| t.is_punct(':')) {
         *pos += 2;
@@ -498,7 +509,11 @@ fn parse_use_tree(toks: &[Token], pos: &mut usize, prefix: &mut Vec<String>, sta
             Kind::Ident(name) => {
                 *pos += 1;
                 if toks.get(*pos).is_some_and(|t| t.is_punct(':')) && toks.get(*pos + 1).is_some_and(|t| t.is_punct(':')) {
-                    prefix.push(name.clone());
+                    if prefix.is_empty() && time_aliases.contains(name) {
+                        prefix.extend(["std".to_string(), "time".to_string()]);
+                    } else {
+                        prefix.push(name.clone());
+                    }
                     *pos += 2;
                     continue;
                 }
@@ -538,7 +553,7 @@ fn parse_use_tree(toks: &[Token], pos: &mut usize, prefix: &mut Vec<String>, sta
                     }
                     let before = *pos;
                     if !t.is_punct(',') && depth < MAX_NESTING {
-                        parse_use_tree(toks, pos, prefix, start, out, depth + 1);
+                        parse_use_tree(toks, pos, prefix, start, out, time_aliases, depth + 1);
                     }
                     if *pos == before {
                         *pos += 1;
@@ -1176,7 +1191,7 @@ where
         let path = file.path();
         let content = file.content();
         let toks = lex_rust(content);
-        let aliases: BTreeSet<String> = use_leaves(&toks)
+        let aliases: BTreeSet<String> = use_leaves(&toks, &BTreeSet::new())
             .into_iter()
             .filter(|leaf| leaf.path == ["muda", "PredefinedMenuItem"])
             .filter_map(|leaf| leaf.name)
@@ -1213,7 +1228,8 @@ where
 /// * **What is reported**: the paths `std::time::Instant` and `::std::time::Instant`; `<m>::Instant` where a
 ///   `use` outside a native-only item binds `m` to `std::time` (`use std::time;`, `use std::time as t;`,
 ///   `use std::time::{self as t}`);
-///   and every `use` that imports `std::time::Instant` or `std::time::*`, under any name. Whitespace, comments
+///   and every `use` that imports `std::time::Instant` or `std::time::*`, under any name, directly or through
+///   such an `m` of any length (`use m::{Instant as Clock};`, `use m::*;`). Whitespace, comments
 ///   and line breaks may separate the parts of a path. Each finding names the line where the path starts (in a
 ///   `use` group, the line where the name's part of the group starts), once per line, in line order.
 /// * **What is skipped**: comments, string and character literals, other crates' `Instant` (`web_time::Instant`,
@@ -1262,13 +1278,15 @@ where
         let content = file.content();
         let toks = lex_rust(content);
         let skip = native_only(&toks);
-        let leaves = use_leaves(&toks);
+        let leaves = use_leaves(&toks, &BTreeSet::new());
         let modules: BTreeSet<String> = leaves
             .iter()
             .filter(|leaf| leaf.path == ["std", "time"] && !skip.get(leaf.start).copied().unwrap_or(false))
             .filter_map(|leaf| leaf.name.clone())
             .collect();
-        let is_std_time = |path: &[String]| path == ["std", "time"] || (path.len() == 1 && modules.contains(&path[0]));
+        // Read again with the aliases of `std::time`, so a path through an alias starts with `std::time`.
+        let leaves = if modules.is_empty() { leaves } else { use_leaves(&toks, &modules) };
+        let is_std_time = |path: &[String]| path == ["std", "time"];
 
         let mut lines = BTreeSet::new();
         for leaf in &leaves {
@@ -1666,12 +1684,14 @@ pub fn rust_sources_with_limits(dir: impl AsRef<Path>, limits: SourceLimits) -> 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::{MAX_USE_PATH, MAX_USE_SEGMENT, lex_rust, use_leaves};
 
     #[test]
     fn use_leaves_keep_no_path_longer_than_the_limit() {
         let source = format!("use {}{{x, y::z, *}};\nuse std::time::{{Instant, self as t}};\n", "a::".repeat(MAX_USE_PATH));
-        let paths: Vec<Vec<String>> = use_leaves(&lex_rust(&source)).into_iter().map(|leaf| leaf.path).collect();
+        let paths: Vec<Vec<String>> = use_leaves(&lex_rust(&source), &BTreeSet::new()).into_iter().map(|leaf| leaf.path).collect();
         assert_eq!(paths, vec![vec!["a"; MAX_USE_PATH], vec!["std", "time", "Instant"], vec!["std", "time"]]);
     }
 
@@ -1680,7 +1700,7 @@ mod tests {
         let long = "n".repeat(MAX_USE_SEGMENT + 1);
         let fits = "n".repeat(MAX_USE_SEGMENT);
         let source = format!("use {long}::{{self, x, *}};\nuse a::{long};\nuse {fits}::{{self as b, *}};\n");
-        let leaves = use_leaves(&lex_rust(&source));
+        let leaves = use_leaves(&lex_rust(&source), &BTreeSet::new());
         let paths: Vec<(Vec<String>, Option<String>)> = leaves.into_iter().map(|leaf| (leaf.path, leaf.name)).collect();
         assert_eq!(paths, vec![(vec![fits.clone()], Some("b".to_string())), (vec![fits], None)]);
     }
