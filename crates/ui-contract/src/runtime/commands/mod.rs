@@ -213,6 +213,11 @@ impl CommandState {
         self
     }
 
+    /// Whether the command can fire, as [`enabled`](Self::enabled) set it.
+    pub fn is_enabled(&self) -> bool {
+        self.flags.enabled
+    }
+
     pub(crate) fn is_marked(&self) -> bool {
         self.marked
     }
