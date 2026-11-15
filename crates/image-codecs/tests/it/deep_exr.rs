@@ -2,11 +2,14 @@
 //! specification (NONE, RLE and ZIPS × scanline and tile), the oracle tests check the
 //! compositing math against hand-computed values, and malformed inputs must error, never
 //! panic. With the `corpus` feature, the OpenEXR project's deep test images (`corpus/exr/`,
-//! pinned) are checked against the ID manifests their sidecars list.
+//! each checked against its pinned SHA-256 before decoding) are checked against the ID
+//! manifests their sidecars list.
 
 use craft_image_codecs::CodecError;
 use craft_image_codecs::f16;
 use craft_image_codecs::{Limits, decode, decode_deep_exr};
+use sha2::{Digest, Sha256};
+use std::io::Read as _;
 use std::io::Write as _;
 
 // ---------------------------------------------------------------------------------------------
@@ -797,10 +800,55 @@ fn inconsistent_count_table_errors() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Real reference files: the deep test images of the OpenEXR repository, pinned in
-// `xtask/src/corpus_pins.rs` and fetched into `corpus/exr/` by `cargo xtask corpus --exr`
-// (cargo feature `corpus`; `cargo xtask test-corpus`). Their `.txt` sidecars upstream list the
-// ID manifest of each file, an independent oracle for the u32 ID channels.
+// Real reference files: the deep test images of the OpenEXR repository at commit
+// `69b2604fc76e370615438bdc8d2cd95b9349c12e`, read from `corpus/exr/` at the repo root with the
+// cargo feature `corpus`. `REAL_FILE_SHA256` pins each file's SHA-256, and the test refuses a
+// file that is missing, is not a regular file, is larger than `MAX_REAL_FILE_BYTES` or does not
+// match its digest. The crate README says how to fill the folder. Their `.txt` sidecars upstream
+// list the ID manifest of each file, an independent oracle for the u32 ID channels.
+
+/// The pinned files as name and lowercase hex SHA-256, the same five names as `REAL_FILES`.
+const REAL_FILE_SHA256: &[(&str, &str)] = &[
+    ("11.deep.exr", "800ec94ffb2085da9a730dcda2f9611f5fb62f922a3f2aef77287e36106b9667"),
+    ("42.deep.exr", "439907f3448480894264f0c8847f6c572f645441db34a5ad9f36f3f020d101b5"),
+    ("64.deep.exr", "4d9bfa646323b80630933e114a3112095488e8c008cdf908e210979638e65fe4"),
+    ("multivariate.deep.exr", "2335ed6052258fe693cb795f2bea57f22ba0564281691c82f2987d31d96e9e74"),
+    ("objectid.deep.exr", "af8940912bfa856b2650d2005462fd348656385161ccf0745b91b143e934c5f6"),
+];
+
+/// The largest file read from `corpus/exr/`. The largest pinned file is 611,840 bytes.
+#[cfg(feature = "corpus")]
+const MAX_REAL_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Reads a regular file of at most `limit` bytes. A symbolic link, a folder or a larger file is an
+/// error, and a file that grows during the read is cut off at `limit + 1` bytes and refused.
+fn read_bounded(path: &std::path::Path, limit: u64) -> Result<Vec<u8>, String> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() || meta.len() > limit {
+        return Err(format!("{}: expected a regular file of at most {limit} bytes", path.display()));
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).and_then(|f| f.take(limit + 1).read_to_end(&mut bytes)).map_err(|e| format!("{}: {e}", path.display()))?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("{}: exceeds {limit} bytes", path.display()));
+    }
+    Ok(bytes)
+}
+
+/// Reads `dir/name` within `limit` bytes and checks its SHA-256 against `pinned`.
+fn read_pinned(dir: &std::path::Path, name: &str, pinned: &str, limit: u64) -> Result<Vec<u8>, String> {
+    let bytes = read_bounded(&dir.join(name), limit)?;
+    let got = sha256_hex(&bytes);
+    if got != pinned {
+        return Err(format!("{name}: SHA-256 {got} does not match the pinned {pinned}"));
+    }
+    Ok(bytes)
+}
 
 /// One pinned file: name, total samples, most samples in one pixel, and per ID channel the
 /// manifest IDs its sidecar lists.
@@ -846,9 +894,12 @@ const REAL_FILES: &[RealFile] = &[
 #[test]
 fn real_deep_files_decode() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/exr");
-    for &(name, total, max_per_pixel, ids) in REAL_FILES {
-        let path = dir.join(name);
-        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e} (run `cargo xtask corpus --exr`)", path.display()));
+    let decoded: Vec<&str> = REAL_FILES.iter().map(|f| f.0).collect();
+    let pinned: Vec<&str> = REAL_FILE_SHA256.iter().map(|p| p.0).collect();
+    assert_eq!(decoded, pinned, "REAL_FILES and REAL_FILE_SHA256 must list the same files");
+    for (&(name, total, max_per_pixel, ids), &(_, sha256)) in REAL_FILES.iter().zip(REAL_FILE_SHA256) {
+        let bytes = read_pinned(&dir, name, sha256, MAX_REAL_FILE_BYTES)
+            .unwrap_or_else(|e| panic!("{}: {e}; place the pinned OpenEXR deep test images in this folder (see the crate README)", dir.display()));
         let deep = decode_deep_exr(&bytes, &Limits::none()).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!((deep.width, deep.height), (256, 256), "{name}");
         assert_eq!(deep.total_samples(), total, "{name}");
@@ -872,6 +923,66 @@ fn real_deep_files_decode() {
         assert_eq!(img.to_f32_samples().expect("f32").len(), 256 * 256 * 4, "{name}");
         assert!(img.warnings.iter().any(|w| matches!(w, craft_image_codecs::DecodeWarning::DeepFlattened { .. })), "{name}");
     }
+}
+
+#[test]
+fn real_file_pins_are_well_formed() {
+    let mut names = std::collections::BTreeSet::new();
+    for &(name, sha256) in REAL_FILE_SHA256 {
+        assert!(name.ends_with(".deep.exr") && !name.contains(['/', '\\']), "{name}");
+        assert!(names.insert(name), "{name} is pinned twice");
+        assert_eq!(sha256.len(), 64, "{name}");
+        assert!(sha256.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')), "{name}: {sha256}");
+    }
+    assert_eq!(names.len(), 5);
+}
+
+/// A folder under the system temp directory, removed when dropped.
+struct ScratchDir(std::path::PathBuf);
+
+impl ScratchDir {
+    fn new(tag: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("craft-image-codecs-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        Self(dir)
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn pinned_read_refuses_a_changed_byte() {
+    let dir = ScratchDir::new("deep-exr-pin");
+    // SHA-256 of "abc" (FIPS 180-2, appendix B.1).
+    let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    std::fs::write(dir.0.join("a.deep.exr"), b"abc").expect("write");
+    assert_eq!(read_pinned(&dir.0, "a.deep.exr", abc, 16).as_deref(), Ok(&b"abc"[..]));
+
+    std::fs::write(dir.0.join("a.deep.exr"), b"abd").expect("write");
+    let err = read_pinned(&dir.0, "a.deep.exr", abc, 16).expect_err("a changed byte must be refused");
+    assert!(err.starts_with("a.deep.exr: ") && err.contains(abc) && err.contains(&sha256_hex(b"abd")), "{err}");
+}
+
+#[test]
+fn pinned_read_refuses_missing_oversize_and_folders() {
+    let dir = ScratchDir::new("deep-exr-bound");
+    let pin = sha256_hex(b"12345678");
+    std::fs::write(dir.0.join("eight.deep.exr"), b"12345678").expect("write");
+    assert!(read_pinned(&dir.0, "eight.deep.exr", &pin, 8).is_ok());
+    let err = read_pinned(&dir.0, "eight.deep.exr", &pin, 7).expect_err("a file over the limit must be refused");
+    assert!(err.contains("at most 7 bytes"), "{err}");
+
+    let err = read_pinned(&dir.0, "missing.deep.exr", &pin, 8).expect_err("a missing file must be refused");
+    assert!(err.contains("missing.deep.exr"), "{err}");
+
+    std::fs::create_dir(dir.0.join("folder.deep.exr")).expect("mkdir");
+    let err = read_pinned(&dir.0, "folder.deep.exr", &pin, 8).expect_err("a folder must be refused");
+    assert!(err.contains("regular file"), "{err}");
 }
 
 /// `gen_deep` for a cropped render: the data window sits at `(dwx, dwy)` inside a larger
