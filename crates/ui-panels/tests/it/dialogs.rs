@@ -269,3 +269,20 @@ fn cmd_d_answers_dont_save_on_macos() {
         }
     }
 }
+
+/// Each open of a dialog has its own serial, kept while it stays open, though its id is the same at every open: a
+/// reopened dialog is told apart from the one cancelled before it.
+#[trial]
+fn each_open_of_a_dialog_has_its_own_serial() {
+    let mut frames = Frames::new();
+    let mut host = DialogHost::new();
+    let id = host.open(Probe::<1>::new("picker"));
+    let first = host.open_serial(id).expect("an open dialog has a serial");
+    run(&mut host, &mut frames);
+    assert_eq!(host.open_serial(id), Some(first), "the serial stays while the dialog is open");
+    assert!(host.cancel_by_id(&frames.ctx, id));
+    assert_eq!(host.open_serial(id), None, "a closed dialog has none");
+    let again = host.open(Probe::<1>::new("picker"));
+    assert_eq!(again, id, "the reopened dialog has the same id");
+    assert_ne!(host.open_serial(id), Some(first), "the reopened dialog has a serial of its own");
+}

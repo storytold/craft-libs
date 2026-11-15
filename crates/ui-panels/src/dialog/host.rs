@@ -299,6 +299,10 @@ pub struct DialogHost {
     /// Dialogs another of their type replaced, waiting for the pass's `run` to run their
     /// [`StackDialog::cancelled`] (`open` has no `Context`).
     replaced: Vec<Box<dyn AnyStackDialog>>,
+    /// The number the last open got ([`open_serial`](DialogHost::open_serial)).
+    opens: u64,
+    /// The number of each dialog's last open, by id; read only while the dialog is open.
+    serials: Vec<(DialogId, u64)>,
 }
 
 /// One open dialog as automation sees it ([`DialogHost::open_dialogs`]).
@@ -584,6 +588,14 @@ impl DialogHost {
         self.results.push(StoredResult { type_id, id: dialog.id(), instance, key: dialog.key(), result });
     }
 
+    /// Which open of the dialog `id` this is: a number distinct for every open on this host, the same while the
+    /// dialog stays open. A dialog's id is the same at every open of its key; this tells one open from the next (a
+    /// preview cached for a cancelled open is not the reopened dialog's). `None` when `id` is not open.
+    pub fn open_serial(&self, id: DialogId) -> Option<u64> {
+        self.position_by_id(id)?;
+        self.serials.iter().find(|(open, _)| *open == id).map(|(_, serial)| *serial)
+    }
+
     fn open_with_parent(&mut self, dialog: Box<dyn AnyStackDialog>, parent: Option<DialogId>) -> DialogId {
         let (type_id, instance) = (dialog.result_type(), dialog.instance());
         self.results.retain(|stored| stored.type_id != type_id || stored.instance != instance);
@@ -595,6 +607,10 @@ impl DialogHost {
             self.cancel_orphans(None);
         }
         let id = dialog.id();
+        self.opens += 1;
+        let open = &self.open;
+        self.serials.retain(|(serial_of, _)| *serial_of != id && open.iter().any(|dialog| dialog.id() == *serial_of));
+        self.serials.push((id, self.opens));
         self.stack.push(id, parent);
         self.open.push(dialog);
         id
