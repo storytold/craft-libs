@@ -29,3 +29,21 @@ No codec feature is on by default.
 | `vp9` | [`vp9`](src/vp9/decode/README.md) | VP9: decoder (`vp9-decode` alone) and encoder (`vp9-encode` alone) |
 | `av1` | [`av1`](src/av1/decode/README.md) | AV1 (AOMedia Video 1): decoder (`av1-decode` alone) and clean-room encoder (`av1-encode`); tiled rav1e fallback for large frames (`av1-large-encode`) |
 | `threads` | — | Multi-threaded slice/row parallelism via `rayon` |
+
+## Decoded frames
+
+Each decoder returns its own picture type. `frame::VideoFrame` is a codec-agnostic form that
+every decoder's output converts into with `VideoFrame::try_from` (always built; each conversion
+comes with its codec's feature):
+
+- Planes are `[Y, Cb, Cr]`, `[R, G, B]` or `[Y]` (`ColorFamily`), plus an optional alpha plane.
+  DNx and VP9 store RGB as G, B, R; the conversion reorders them.
+- Samples keep the decoder's storage, `u8` or `u16`, with a bit depth per plane. Converting moves
+  the buffers and copies no samples.
+- Colour is given as ITU-T H.273 code points (`ColorTags`), mapped from each codec's own
+  signalling. Codecs that do not signal a value leave it unspecified (2).
+- `pts`, sample aspect ratio, field order and the decoder's draft flag are carried over where the
+  decoder reports them.
+
+The constructors check that every plane's buffer, stride and size fit the frame, so a picture
+with inconsistent fields is an error, not an out-of-bounds read.
