@@ -1,7 +1,5 @@
 //! XML property-list reader ported from Craft Anything at 8f3b7751.
-use crate::{DateValue, FormatError, Value};
-const MAX_NODES: usize = 100_000;
-const MAX_DEPTH: usize = 64;
+use crate::{DateValue, FormatError, Limits, Value};
 fn decode_base64(text: &str, url_safe: bool) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() / 4 * 3);
     let mut acc = 0u32;
@@ -47,7 +45,9 @@ fn decode_base64(text: &str, url_safe: bool) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn base64_decode(s: &str) -> Option<Vec<u8>> { decode_base64(s, false) }
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    decode_base64(s, false)
+}
 #[derive(Debug, Clone, PartialEq)]
 enum Tok {
     Open(String),
@@ -65,7 +65,7 @@ fn decode_entities(s: &str) -> String {
     while let Some(p) = rest.find('&') {
         out.push_str(rest.get(..p).unwrap_or(""));
         let after = rest.get(p..).unwrap_or("");
-        let Some(end) = after.find(';').filter(|&e| e <= 12) else {
+        let Some(end) = after.as_bytes().iter().take(13).position(|b| *b == b';') else {
             out.push('&');
             rest = after.get(1..).unwrap_or("");
             continue;
@@ -131,11 +131,11 @@ fn after_declaration(mut rest: &str) -> Result<&str, FormatError> {
     Err(FormatError::Truncated("declaration".into()))
 }
 
-fn tokenize(text: &str) -> Result<Vec<Tok>, FormatError> {
+fn tokenize(text: &str, max_tokens: usize) -> Result<Vec<Tok>, FormatError> {
     let mut toks = Vec::new();
     let mut rest = text;
     while !rest.is_empty() {
-        if toks.len() > MAX_NODES {
+        if toks.len() >= max_tokens {
             return Err(FormatError::TooLarge("too many XML tokens".into()));
         }
         match rest.find('<') {
@@ -198,6 +198,9 @@ fn tokenize(text: &str) -> Result<Vec<Tok>, FormatError> {
             toks.push(Tok::Open(inner.split_whitespace().next().unwrap_or("").to_string()));
         }
     }
+    if toks.len() > max_tokens {
+        return Err(FormatError::TooLarge("too many XML tokens".into()));
+    }
     Ok(toks)
 }
 
@@ -205,6 +208,8 @@ struct Xml {
     toks: Vec<Tok>,
     pos: usize,
     nodes: usize,
+    limits: Limits,
+    bytes_left: usize,
 }
 
 impl Xml {
@@ -223,7 +228,10 @@ impl Xml {
         let mut s = String::new();
         loop {
             match self.next() {
-                Some(Tok::Text(t)) => s.push_str(&t),
+                Some(Tok::Text(t)) => {
+                    self.bytes_left = self.bytes_left.checked_sub(t.len()).ok_or_else(|| FormatError::TooLarge("XML text/data bytes".into()))?;
+                    s.push_str(&t);
+                }
                 Some(Tok::Close(n)) if n == name => return Ok(s),
                 Some(other) => return Err(FormatError::Malformed(format!("unexpected {other:?} inside <{name}>"))),
                 None => return Err(FormatError::Truncated(format!("<{name}> is not closed"))),
@@ -239,7 +247,7 @@ impl Xml {
 
     fn value(&mut self, depth: usize) -> Result<Value, FormatError> {
         self.nodes += 1;
-        if depth > MAX_DEPTH || self.nodes > MAX_NODES {
+        if depth > self.limits.max_depth.min(256) || self.nodes > self.limits.max_nodes.min(self.limits.max_objects) {
             return Err(FormatError::TooLarge("plist nesting or size limit".into()));
         }
         self.skip_space();
@@ -267,7 +275,12 @@ impl Xml {
                 }
                 "real" => {
                     let t = self.text_until("real")?;
-                    t.trim().parse::<f64>().ok().filter(|v| v.is_finite()).map(Value::Real).ok_or_else(|| FormatError::Malformed(format!("bad real {t:?}")))
+                    t.trim()
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|v| v.is_finite())
+                        .map(Value::Real)
+                        .ok_or_else(|| FormatError::Malformed(format!("bad real {t:?}")))
                 }
                 "date" => Ok(Value::Date(DateValue::Text(self.text_until("date")?.trim().to_string()))),
                 "data" => {
@@ -330,12 +343,24 @@ fn decode_utf16_xml(data: &[u8], big_endian: bool) -> Result<String, FormatError
     if !data.len().is_multiple_of(2) {
         return Err(FormatError::Truncated("UTF-16 code unit".into()));
     }
-    let units: Vec<u16> = data.chunks_exact(2).map(|b| if big_endian { u16::from_be_bytes([b[0], b[1]]) } else { u16::from_le_bytes([b[0], b[1]]) }).collect();
+    let units: Vec<u16> = data.as_chunks::<2>().0.iter().map(|b| if big_endian { u16::from_be_bytes(*b) } else { u16::from_le_bytes(*b) }).collect();
     String::from_utf16(&units).map_err(|_| FormatError::Malformed("invalid UTF-16 in XML plist".into()))
 }
 
 /// Parse an XML property list.
 pub fn parse_xml(data: &[u8]) -> Result<Value, FormatError> {
+    parse_xml_with_limits(data, Limits::default())
+}
+
+/// Parse UTF-8 or BOM-tagged UTF-16 XML with explicit resource allowances.
+/// Input and decoded XML text are bounded before tokenization; token count, value count,
+/// nesting and cumulative leaf/key text are bounded separately. `max_objects` and
+/// `max_nodes` both cap values. Nesting never exceeds 256 even with a larger caller limit.
+/// Data text consumes its encoded size, conservatively including whitespace.
+pub fn parse_xml_with_limits(data: &[u8], limits: Limits) -> Result<Value, FormatError> {
+    if data.len() > limits.max_input_bytes {
+        return Err(FormatError::TooLarge("input bytes".into()));
+    }
     // Apple's Core Foundation reader accepts XML plists in UTF-16 as well as
     // UTF-8: it recognises both byte-order marks. `from_utf8_lossy` turns a
     // UTF-16 byte stream into NUL-separated text, so the encoding is settled
@@ -347,11 +372,14 @@ pub fn parse_xml(data: &[u8]) -> Result<Value, FormatError> {
             .map_err(|_| FormatError::Malformed("invalid UTF-8 in XML plist".into()))?
             .to_owned(),
     };
+    if text.len() > limits.max_expanded_bytes {
+        return Err(FormatError::TooLarge("decoded XML bytes".into()));
+    }
     // XML normalizes literal line endings before parsing; character references such as
     // &#13; must still decode to a carriage return afterwards.
     let text = if text.contains('\r') { text.replace("\r\n", "\n").replace('\r', "\n") } else { text };
-    let toks = tokenize(&text)?;
-    let mut x = Xml { toks, pos: 0, nodes: 0 };
+    let toks = tokenize(&text, limits.max_nodes.min(limits.max_objects).saturating_mul(8).saturating_add(8))?;
+    let mut x = Xml { toks, pos: 0, nodes: 0, limits, bytes_left: limits.max_expanded_bytes };
     x.skip_space();
     let wrapped = matches!(x.peek(), Some(Tok::Open(n)) if n == "plist");
     if wrapped {
@@ -371,10 +399,9 @@ pub fn parse_xml(data: &[u8]) -> Result<Value, FormatError> {
     Ok(value)
 }
 
-
 #[cfg(test)]
 mod tests {
-use super::*;
+    use super::*;
     #[test]
     fn xml_has_one_complete_root_with_only_markup_space_around_values() {
         for invalid in [
@@ -440,5 +467,39 @@ use super::*;
             let v = parse_xml(doc.as_bytes()).unwrap_or_else(|e| panic!("{text} should parse: {e}"));
             assert_eq!(v.get("k"), Some(&Value::Real(want)), "{text}");
         }
+    }
+
+    #[test]
+    fn malformed_entity_scan_is_bounded_and_preserves_text() {
+        for n in [4096, 65536, 262144] {
+            let text = "&".repeat(n);
+            assert_eq!(decode_entities(&text), text);
+            assert_eq!(decode_entities(&(text.clone() + ";")), text + ";");
+        }
+        assert_eq!(decode_entities("é&missing; &amp; &#13; &#x41;"), "é&missing; & \r A");
+    }
+    #[test]
+    fn caller_limits_refuse_before_unbounded_tree_growth() {
+        let limits = Limits { max_input_bytes: 3, ..Limits::default() };
+        assert!(matches!(parse_xml_with_limits(b"<true/>", limits), Err(FormatError::TooLarge(_))));
+        let limits = Limits { max_nodes: 1, ..Limits::default() };
+        assert!(matches!(parse_xml_with_limits(b"<array><true/></array>", limits), Err(FormatError::TooLarge(_))));
+        let limits = Limits { max_depth: 0, ..Limits::default() };
+        assert!(matches!(parse_xml_with_limits(b"<array><true/></array>", limits), Err(FormatError::TooLarge(_))));
+        let limits = Limits { max_expanded_bytes: 8, ..Limits::default() };
+        assert!(matches!(parse_xml_with_limits(b"<string>abc</string>", limits), Err(FormatError::TooLarge(_))));
+        assert!(parse_xml_with_limits(b"<true/>", Limits::default()).is_ok());
+    }
+    #[test]
+    fn data_preserves_existing_whitespace_padding_and_alphabet_rules() {
+        for (s, expected) in [(" Z g == ", Some(vec![102])), ("Zg", Some(vec![102])), ("Zg=", None), ("Zg==junk", None), ("_w==", None)] {
+            let xml = format!("<data>{s}</data>");
+            assert_eq!(parse_xml(xml.as_bytes()).ok(), expected.map(Value::Data));
+        }
+    }
+    #[test]
+    fn small_node_allowance_accepts_one_dictionary_entry() {
+        let limits = Limits { max_nodes: 2, max_objects: 2, ..Limits::default() };
+        assert!(parse_xml_with_limits(b"<dict><key>k</key><string>v</string></dict>", limits).is_ok());
     }
 }
