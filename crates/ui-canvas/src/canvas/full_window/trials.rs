@@ -40,7 +40,7 @@ mod hosting {
     use super::super::HostedWorkspace;
     use super::super::stories::{BrushChanged, BrushWorkspace, Flat};
     use crate::contract::Role;
-    use crate::dialog::{DialogHost, DialogResult, FieldRefusal};
+    use crate::dialog::{DialogHost, DialogResult, FieldRefusal, HeldOk, StackDialog};
     use crate::runtime::env::Label;
     use crate::testing::access::AccessTree;
     use crate::testing::input::key_press;
@@ -187,8 +187,11 @@ mod hosting {
         assert_eq!(take_ok(&host), Some(10.0), "a click on the enabled OK files the result again");
 
         host.borrow_mut().get_mut::<Hosted>().expect("open").answer_ok(Err(Label::from("Still nothing")));
+        let id = host.borrow().get::<Hosted>().map(StackDialog::id).expect("open");
+        assert_eq!(host.borrow().held_state(id), Some(HeldOk::Refused(Label::from("Still nothing"))), "the refusal is the held OK's state");
         let ctx = frames.ctx.clone();
         assert!(!host.borrow_mut().confirm::<Hosted>(&ctx), "automation's OK on a held workspace does not close it");
+        assert_eq!(host.borrow().held_state(id), Some(HeldOk::Waiting), "automation's OK waits for the app's answer");
         assert_eq!(take_ok(&host), Some(10.0), "automation's OK files the result");
 
         let revision = || host.borrow().get::<Hosted>().map(|hosted| hosted.workspace().revision).expect("open");
@@ -198,8 +201,10 @@ mod hosting {
         assert_eq!(revision(), 1, "a new source moves the workspace's revision");
 
         host.borrow_mut().get_mut::<Hosted>().expect("open").answer_ok(Ok(()));
-        frames.idle(2, &mut ui);
+        assert_eq!(host.borrow().held_state(id), Some(HeldOk::Accepted));
+        assert!(host.borrow_mut().confirm::<Hosted>(&ctx), "automation's OK finishes an accepted held OK at once");
         assert_eq!(host.borrow_mut().take::<Hosted>(), Some(DialogResult::Ok(10.0)), "the accepted OK finishes with its result");
+        frames.idle(2, &mut ui);
         assert!(dialog_bounds(&mut frames).is_none(), "the workspace closed");
     }
 

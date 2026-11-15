@@ -3,7 +3,7 @@
 //! request slots, disabled options and the remembered values a row refuses.
 
 use craft_ui::contract::{Bind, Role, SaveKey};
-use craft_ui::dialog::{DialogHost, DialogResult, dialog_id};
+use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, dialog_id};
 use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, HostedParamDialog, Param, ParamDialog, ParamKind, ParamResult};
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Label;
@@ -156,7 +156,9 @@ fn a_held_ok_refused_keeps_the_dialog_open_and_an_accepted_one_closes() {
     let ok = fixture.by_label("OK").expect("the OK button");
     assert!(fixture.tree().is_disabled_key(ok.node), "OK waits disabled for the host's answer");
 
+    assert_eq!(host.borrow().held_state(dialog_id("blur")), Some(HeldOk::Waiting), "the filed OK waits for the host");
     on_dialog(&host, |dialog| dialog.answer_ok(Err(Label::from(REFUSED))));
+    assert_eq!(host.borrow().held_state(dialog_id("blur")), Some(HeldOk::Refused(Label::from(REFUSED))));
     fixture.idle(4);
     assert!(fixture.by_label(REFUSED).is_some(), "the refusal shows under the rows");
     let ok = fixture.by_label("OK").expect("the OK button");
@@ -170,6 +172,7 @@ fn a_held_ok_refused_keeps_the_dialog_open_and_an_accepted_one_closes() {
     let filed = on_dialog(&host, HostedParamDialog::take_ok).flatten().expect("confirm files the held OK as the button does");
     assert_eq!(filed.fields.bool("smooth"), Some(true), "the held answer has the values confirmed");
     on_dialog(&host, |dialog| dialog.answer_ok(Ok(())));
+    assert_eq!(host.borrow().held_state(dialog_id("blur")), Some(HeldOk::Accepted), "the accepted OK closes at the next pass");
     fixture.idle(4);
     let answered = host.borrow_mut().take::<HostedParamDialog>().and_then(DialogResult::ok);
     assert_eq!(answered.map(|result| result.fields), Some(filed.fields), "the accepted OK closes the dialog with the held values");

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use egui::{Context, Response, Ui};
 
 use crate::contract::Bind;
-use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id};
 use crate::runtime::env::Label;
 
 /// A full-window workspace (Liquify, Filter Gallery, Select and Mask) that a [`HostedWorkspace`] shows on the app's
@@ -167,6 +167,8 @@ pub struct HostedWorkspace<W: FullWindowWorkspace> {
     untaken: bool,
     /// The app accepted the held OK: the next pass finishes with `filed`.
     finish: bool,
+    /// Why the app refused the last held OK, until OK files again.
+    refused: Option<Label>,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -186,6 +188,7 @@ impl<W: FullWindowWorkspace> HostedWorkspace<W> {
             filed: None,
             untaken: false,
             finish: false,
+            refused: None,
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
@@ -238,6 +241,7 @@ impl<W: FullWindowWorkspace> HostedWorkspace<W> {
                 self.filed = None;
                 self.untaken = false;
                 self.ok_waits = false;
+                self.refused = Some(reason.clone());
                 self.workspace.ok_failed(reason);
             }
         }
@@ -258,6 +262,7 @@ impl<W: FullWindowWorkspace> HostedWorkspace<W> {
         self.filed = Some(result);
         self.untaken = true;
         self.ok_waits = true;
+        self.refused = None;
     }
 }
 
@@ -300,7 +305,13 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
         Some(W::KEY)
     }
 
+    /// OK as the Accept button: a held workspace files the result and answers none, and answers the held result once
+    /// the app accepted it.
     fn confirm(&mut self, ctx: &Context) -> Option<W::Result> {
+        if self.finish {
+            self.finish = false;
+            return self.filed.take();
+        }
         if self.ok_waits {
             return None;
         }
@@ -310,6 +321,15 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
             return None;
         }
         Some(result)
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        match (&self.filed, &self.refused) {
+            (Some(_), _) if self.finish => Some(HeldOk::Accepted),
+            (Some(_), _) => Some(HeldOk::Waiting),
+            (None, Some(reason)) => Some(HeldOk::Refused(reason.clone())),
+            (None, None) => None,
+        }
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {

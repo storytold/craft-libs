@@ -14,7 +14,7 @@ use super::rows::{ParamRows, ParamRowsOutput};
 
 use crate::contract::{Bind, BodyCx, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _};
 
-use crate::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, StackDialog, dialog_id};
+use crate::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldOk, StackDialog, dialog_id};
 
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
@@ -1140,10 +1140,23 @@ impl StackDialog for HostedParamDialog {
         self.instance
     }
 
+    fn held_state(&self) -> Option<HeldOk> {
+        match (&self.held, &self.refused) {
+            (Some(held), _) if held.accepted => Some(HeldOk::Accepted),
+            (Some(_), _) => Some(HeldOk::Waiting),
+            (None, Some(refused)) => Some(HeldOk::Refused(refused.reason.clone())),
+            (None, None) => None,
+        }
+    }
+
     /// Answers OK as the button does: none while OK is disabled. The result keeps what a remembering dialog saves. A
-    /// held dialog files the answer for the host, as its button does, and answers none.
+    /// held dialog files the answer for the host, as its button does, and answers none; once the host accepted the
+    /// held answer, it answers that.
     fn confirm(&mut self, ctx: &Context) -> Option<ParamResult> {
         self.open(ctx);
+        if self.held.as_ref().is_some_and(|held| held.accepted) {
+            return self.held.take().map(|held| held.result);
+        }
         if self.held.is_some() {
             return None;
         }

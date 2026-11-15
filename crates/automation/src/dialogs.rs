@@ -6,7 +6,7 @@
 //! running the command its answer is for stay the app's: an answer waits for the app's `DialogHost::take` as a
 //! click's would.
 
-use craft_ui::dialog::{DialogHost, DialogId, StandardPrompt};
+use craft_ui::dialog::{DialogHost, DialogId, HeldOk, StandardPrompt};
 use egui::Context;
 use serde_json::{Value, json};
 
@@ -32,7 +32,7 @@ pub fn inspect(host: &DialogHost) -> Value {
 ///
 /// - `ui.dialog.set {dialog, field, value}` sets one field ([`DialogHost::set_json_field`]).
 /// - `ui.dialog.confirm {dialog, choice?}` answers OK, as the default button would, after setting the `choice` field
-///   when one is given (which button of a prompt).
+///   when one is given (which button of a prompt). A dialog that holds its OK files it for the app, which answers it.
 /// - `ui.dialog.cancel {dialog}` closes the dialog as Escape would: a standard prompt with a button for its Escape
 ///   answer gives that answer, with its tag; any other dialog closes with its children with Cancel.
 pub fn dialog_method(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -58,7 +58,8 @@ fn run(host: &mut DialogHost, ctx: &Context, method: &str, params: &Value, field
             if let Some(choice) = params.get("choice") {
                 host.set_json_field(ctx, id, "choice", choice.clone())?;
             }
-            if !host.confirm_by_id(ctx, id) {
+            // A held OK is filed for the app, which answers it: OK was taken, not refused.
+            if !host.confirm_by_id(ctx, id) && host.held_state(id) != Some(HeldOk::Waiting) {
                 return Err(
                     "the dialog refuses OK: it is disabled, its answer has no enabled button, or the dialog has no programmatic OK".to_owned()
                 );

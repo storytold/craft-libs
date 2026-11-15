@@ -2,7 +2,7 @@
 //! closing; OK answers with the dialog's own result type.
 
 use craft_behavior::PixelSize;
-use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
+use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog};
 use craft_ui::patterns::form_dialogs::{
     AboutInfo, AboutLink, CanvasSize, CanvasSizeValues, Credits, ExportOptions, ExportOptionsKind, FormatOptions, GuideLayoutDialog,
     GuideLayoutValues, GuideRect, GuideUnits, HostedAbout, HostedCanvasSize, HostedExportAs, HostedFormatOptions, HostedGuideLayoutDialog,
@@ -152,6 +152,15 @@ fn hosted_export_as_finishes_when_the_app_answers_its_save_request() {
     fixture.click(&export).idle(4);
     let request = host.borrow_mut().get_mut::<HostedExportAs>().and_then(HostedExportAs::pick_path).expect("Export asks for a path");
     assert!(host.borrow().is_open::<HostedExportAs>(), "the dialog waits for the path");
+    let id = host.borrow().get::<HostedExportAs>().map(StackDialog::id).expect("open");
+    assert_eq!(host.borrow().held_state(id), Some(HeldOk::Waiting), "the OK waits for the save dialog");
+    if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {
+        dialog.cancel_requests();
+    }
+    let ctx = fixture.ctx().clone();
+    assert!(!host.borrow_mut().confirm::<HostedExportAs>(&ctx), "automation's OK without a path waits for one");
+    let asked = host.borrow_mut().get_mut::<HostedExportAs>().and_then(HostedExportAs::pick_path).expect("automation's OK asks for a path as Export does");
+    assert_eq!(asked.key, request.key, "the same save request as the button's");
 
     let path = PathBuf::from("/tmp/poster.png");
     if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {

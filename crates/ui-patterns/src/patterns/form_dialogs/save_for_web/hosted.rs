@@ -3,9 +3,9 @@
 #[cfg(doc)]
 use super::MATTE_COLOR_KEY;
 use super::model::{Animation, SaveForWebOptions, SaveForWebResult, WantedVariant, WebPreset, WebVariant};
-use super::{SaveForWebDialog, WebPictures, WebSlice, WebView, result_of};
+use super::{SaveForWebDialog, WebPictures, WebSlice, WebView, result_of, save_request};
 use crate::contract::Bind;
-use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
 use crate::patterns::form_dialogs::host_requests::HostRequests;
 use crate::runtime::memory::SaveKey;
 use crate::runtime::requests::{ColorRequest, PathRequest};
@@ -166,10 +166,22 @@ impl HostedSaveForWeb {
 impl StackDialog for HostedSaveForWeb {
     type Result = SaveForWebResult;
 
-    /// Answers only once the app answered the save request with a path, as the dialog's own Save… does.
+    /// Answers only once the app answered the save request with a path, as the dialog's own Save… does: without a path
+    /// it asks for the file dialog as Save… does and answers none.
     fn confirm(&mut self, _: &egui::Context) -> Option<Self::Result> {
-        let path = self.path.clone()?;
+        let Some(path) = self.path.clone() else {
+            if !self.saving {
+                self.requests.request_path(save_request(&self.name, self.options.format));
+                self.saving = true;
+            }
+            return None;
+        };
         Some(result_of(self.options.clone(), path, self.pixels, self.view, self.remember.clone()))
+    }
+
+    /// Waiting while the file dialog Save… asked for is open.
+    fn held_state(&self) -> Option<HeldOk> {
+        self.saving.then_some(HeldOk::Waiting)
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {

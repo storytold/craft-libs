@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use super::stack::{DialogId, DialogStack};
 use crate::contract::{Pattern, PatternKind, PatternProbe};
+use crate::runtime::env::Label;
 
 /// How a dialog on the [`DialogHost`] finished. `T` is the dialog's own answer type: a struct of
 /// values for a form, an enum for a prompt with three buttons.
@@ -22,6 +23,19 @@ pub enum DialogResult<T> {
     Ok(T),
     /// Cancel, Esc, the close box, or a parent that closed over it.
     Cancel,
+}
+
+/// Where a dialog's held OK stands ([`StackDialog::held_state`]): an OK that files its answer for the app, which answers
+/// it before the dialog closes (a check the app runs, a save path it picks).
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum HeldOk {
+    /// OK filed its answer; the app has not answered it yet.
+    Waiting,
+    /// The app accepted the held OK: the dialog finishes with it at its next pass or [`DialogHost::confirm`].
+    Accepted,
+    /// The app refused the last held OK for this reason; OK is enabled again.
+    Refused(Label),
 }
 
 impl<T> DialogResult<T> {
@@ -69,8 +83,15 @@ pub trait StackDialog: Any + Send {
     /// Answers OK as a click on the default button would, without drawing: runs what OK runs
     /// (storing remembered values) and returns the answer. `None` when OK is disabled, the answer
     /// is one the dialog offers no enabled button for (a prompt's choice), or the dialog has no
-    /// programmatic OK (the default). Used by [`DialogHost::confirm`].
+    /// programmatic OK (the default). A dialog that holds its OK files the answer as its button
+    /// does and returns `None` ([`held_state`](StackDialog::held_state) is then `Waiting`); once the app
+    /// accepted the held OK, it returns the held answer. Used by [`DialogHost::confirm`].
     fn confirm(&mut self, _ctx: &Context) -> Option<Self::Result> {
+        None
+    }
+
+    /// Where the dialog's held OK stands; `None` (the default) for a dialog whose OK holds nothing now.
+    fn held_state(&self) -> Option<HeldOk> {
         None
     }
 
@@ -174,6 +195,7 @@ trait AnyStackDialog: Send {
     fn key(&self) -> Option<String>;
     fn instance(&self) -> Option<DialogId>;
     fn confirm_erased(&mut self, ctx: &Context) -> Option<Box<dyn Any + Send>>;
+    fn held_state(&self) -> Option<HeldOk>;
     fn json_fields(&self) -> Option<Value>;
     fn set_json_field(&mut self, ctx: &Context, field: &str, value: Value) -> Result<(), String>;
     fn show_erased(&mut self, ui: &mut Ui, stack: &DialogStack) -> Option<Box<dyn Any + Send>>;
@@ -205,6 +227,10 @@ impl<D: StackDialog> AnyStackDialog for D {
 
     fn confirm_erased(&mut self, ctx: &Context) -> Option<Box<dyn Any + Send>> {
         self.confirm(ctx).map(|result| Box::new(DialogResult::Ok(result)) as Box<dyn Any + Send>)
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        StackDialog::held_state(self)
     }
 
     fn json_fields(&self) -> Option<Value> {
@@ -423,13 +449,21 @@ impl DialogHost {
 
     /// Answers the open `D` with OK, as its default button would (for automation: no pointer, no
     /// pass): runs what OK runs, closes the dialog and its children, and keeps the answer for
-    /// [`take`](DialogHost::take). `false` when no `D` is open, OK is disabled, or `D` has no
-    /// programmatic OK.
+    /// [`take`](DialogHost::take). `false` when no `D` is open, OK is disabled, `D` has no
+    /// programmatic OK, or `D` holds its OK: the answer is filed for the app
+    /// ([`held_state`](DialogHost::held_state) says `Waiting`), and a `confirm` after the app accepted it
+    /// closes the dialog with it.
     pub fn confirm<D: StackDialog>(&mut self, ctx: &Context) -> bool {
         match self.position::<D>() {
             Some(at) => self.confirm_at(ctx, at),
             None => false,
         }
+    }
+
+    /// Where the held OK of the open dialog `id` names stands ([`StackDialog::held_state`]); `None` when no such dialog
+    /// is open or its OK holds nothing now.
+    pub fn held_state(&self, id: DialogId) -> Option<HeldOk> {
+        self.open.iter().find(|dialog| dialog.id() == id)?.held_state()
     }
 
     /// [`confirm`](DialogHost::confirm) for the open dialog `id` names, whatever its type.

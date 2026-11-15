@@ -6,7 +6,7 @@ use super::{
     ExportAsResult, ExportFormat, ExportFormatDefaults, ExportMetadata, ExportOptions, ExportPreview, ExportProfile, ExportSize, ExportWords,
     Revisions, SizeEstimate, export_file_name, size_error_label,
 };
-use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
 use crate::patterns::form_dialogs::form::{read_bind, write_bind};
 use crate::patterns::presets::{GroupPath, NamedPresetEvent, NamedPresetRow, PickerField, PresetLibrary, PresetPicker, PresetRow, PresetState};
 use crate::runtime::requests::{HostAnswer, PathFilter, PathRequest};
@@ -251,11 +251,7 @@ impl<'a> ExportAsDialog<'a> {
         if reset.pick(picked) == Some(ResetPick::Accept)
             && let Some(options) = &latest
         {
-            let format = formats.iter().find(|format| format.id == options.format);
-            let extension = format.map_or("png", |format| format.extension);
-            let name = format!("{}.{extension}", export_file_name(&file_name, words.untitled.as_str()));
-            let filters = format.map(|format| PathFilter::new(format.name, &[format.extension]));
-            requests.request_path(PathRequest::save(SAVE_KEY, name, filters));
+            requests.request_path(save_request(&formats, options, &file_name, &words));
         }
         let result = accepted.zip(answered.into_inner()).map(|(options, path)| answer_of(options, source, path, remember));
         let events = events.into_inner();
@@ -266,6 +262,15 @@ impl<'a> ExportAsDialog<'a> {
         }
         ExportAsOutput { response, closed, result, wanted_preview: wanted.into_inner(), requests, presets: events }
     }
+}
+
+/// The save dialog Export asks for: the document's name with the format's extension and filter.
+fn save_request(formats: &[ExportFormat], options: &ExportOptions, file_name: &str, words: &ExportWords) -> PathRequest {
+    let format = formats.iter().find(|format| format.id == options.format);
+    let extension = format.map_or("png", |format| format.extension);
+    let name = format!("{}.{extension}", export_file_name(file_name, words.untitled.as_str()));
+    let filters = format.map(|format| PathFilter::new(format.name, &[format.extension]));
+    PathRequest::save(SAVE_KEY, name, filters)
 }
 
 /// What Export answers with: the confirmed options, the chosen path, the output size, and the options to remember when
@@ -436,10 +441,23 @@ const EXPORT_KEY: &str = "file.exportAs";
 impl StackDialog for HostedExportAs {
     type Result = ExportAsResult;
 
-    /// Answers what the save answer answers: none until a path was answered or set.
-    fn confirm(&mut self, _: &egui::Context) -> Option<Self::Result> {
-        let path = self.path.clone()?;
+    /// Answers what the save answer answers. Without a path it asks for the save dialog as Export does and answers
+    /// none until the app answers the path.
+    fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
+        let Some(path) = self.path.clone() else {
+            if !self.saving {
+                let words = Env::of_root(ctx).words::<ExportWords>();
+                self.requests.request_path(save_request(&self.formats, &self.options, &self.file_name, &words));
+                self.saving = true;
+            }
+            return None;
+        };
         Some(answer_of(self.options.clone(), self.source, path, self.remember.clone()))
+    }
+
+    /// Waiting while the save dialog Export asked for is open.
+    fn held_state(&self) -> Option<HeldOk> {
+        self.saving.then_some(HeldOk::Waiting)
     }
 
     /// The options by their serde keys, and the path (`path`, null until one was answered or set).
