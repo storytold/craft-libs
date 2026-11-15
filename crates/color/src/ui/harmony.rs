@@ -15,7 +15,8 @@ use egui::{Response, Ui};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use super::picker::{ChannelRow, ChannelRule};
-use super::{ColorDisc, SwatchTable, SwatchTableOutput};
+use super::ColorDisc;
+use craft_ui::choice::{SwatchTable, SwatchTableOutput};
 use crate::harmony::{Guide, GuideOptions, Harmony, Variation};
 
 #[cfg(feature = "screen-testing")]

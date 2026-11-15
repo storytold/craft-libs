@@ -2,10 +2,10 @@
 
 use super::model::{Animation, SaveForWebOptions, SaveForWebResult, WantedVariant, WebPreset, WebVariant};
 #[cfg(doc)]
-use super::{MATTE_COLOR_KEY, SAVE_PATH_KEY};
-use super::{SaveForWebDialog, WebPictures};
+use super::MATTE_COLOR_KEY;
+use super::{SaveForWebDialog, WebPictures, WebSlice, WebView, result_of};
 use crate::contract::Bind;
-use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
 use crate::patterns::form_dialogs::host_requests::HostRequests;
 use crate::runtime::memory::SaveKey;
 use crate::runtime::requests::{ColorRequest, PathRequest};
@@ -39,22 +39,28 @@ pub struct HostedSaveForWeb {
     requests: HostRequests,
     saving: bool,
     /// Whether the dialog is open: bound to the dialog's `opened` prop.
-    #[allow(dead_code)] // P3(dialogs-w15): dl.K43
     open: bool,
+    /// The document's slices.
+    slices: Vec<WebSlice>,
+    /// The view tab: bound to the dialog's `view` prop, so automation reads and writes it here.
+    view: WebView,
+    /// The path the app answered the save request with.
+    path: Option<PathBuf>,
+    /// The output size after the last pass.
+    pixels: PixelSize,
 }
 
 impl HostedSaveForWeb {
     /// The document's slices, for the Slices choice.
     #[must_use]
-    pub fn slices(mut self, slices: Vec<super::WebSlice>) -> Self {
-        let _ = (&mut self, slices);
-        todo!("dl.K43")
+    pub fn slices(mut self, slices: Vec<WebSlice>) -> Self {
+        self.slices = slices;
+        self
     }
 
     /// The options as the user left them.
-    // P3(dialogs-w15): dl.K43 `HostedSaveForWeb::current`
     pub fn current(&self) -> &SaveForWebOptions {
-        todo!("dl.K43")
+        &self.options
     }
 
     /// A hosted dialog for the document `name` of `size` pixels showing `original` in the Original pane.
@@ -74,6 +80,10 @@ impl HostedSaveForWeb {
             requests: HostRequests::new(),
             saving: false,
             open: true,
+            slices: Vec::new(),
+            view: WebView::default(),
+            path: None,
+            pixels: size,
         }
     }
 
@@ -128,7 +138,7 @@ impl HostedSaveForWeb {
         self.requests.take_color()
     }
 
-    /// Save… was pressed in the pass since the last call: the file dialog to open, keyed [`SAVE_PATH_KEY`].
+    /// Save… was pressed in the pass since the last call: the file dialog to open, keyed [`SAVE_PATH_KEY`](super::SAVE_PATH_KEY).
     /// Returned once; answer with [`answer_path`](Self::answer_path).
     pub fn pick_path(&mut self) -> Option<PathRequest> {
         self.requests.take_path()
@@ -142,6 +152,7 @@ impl HostedSaveForWeb {
     /// Answers the file dialog request `key` with the chosen path, which finishes the dialog.
     pub fn answer_path(&mut self, key: impl Into<String>, path: PathBuf) {
         self.saving = false;
+        self.path = Some(path.clone());
         self.requests.answer_path(key, path);
     }
 
@@ -155,18 +166,34 @@ impl HostedSaveForWeb {
 impl StackDialog for HostedSaveForWeb {
     type Result = SaveForWebResult;
 
-    fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        let _ = ctx;
-        todo!("dl.K43")
+    /// Answers only once the app answered the save request with a path, as the dialog's own Save… does.
+    fn confirm(&mut self, _: &egui::Context) -> Option<Self::Result> {
+        let path = self.path.clone()?;
+        Some(result_of(self.options.clone(), path, self.pixels, self.view, self.remember.clone()))
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K43")
+        let mut fields = serde_fields(&self.options)?;
+        let map = fields.as_object_mut()?;
+        map.insert("view".to_owned(), serde_json::to_value(self.view).ok()?);
+        let path = self.path.as_ref().map_or(serde_json::Value::Null, |path| serde_json::Value::String(path.to_string_lossy().into_owned()));
+        map.insert("path".to_owned(), path);
+        Some(fields)
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K43")
+    fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        match field {
+            "view" => {
+                self.view = serde_json::from_value(value.clone()).map_err(|_| FieldRefusal::Rejects(&value).message(field))?;
+                Ok(())
+            }
+            "path" => {
+                let serde_json::Value::String(path) = &value else { return Err(FieldRefusal::Rejects(&value).message(field)) };
+                self.path = Some(PathBuf::from(path));
+                Ok(())
+            }
+            _ => set_serde_field(&mut self.options, field, value),
+        }
     }
 
     fn id(&self) -> DialogId {
@@ -178,9 +205,17 @@ impl StackDialog for HostedSaveForWeb {
             .presets(self.presets.clone())
             .saving(self.saving)
             .answers(self.requests.take_answers());
-        let dialog = SaveForWebDialog { animation: self.animation, remember: self.remember.clone(), ..dialog };
+        let dialog = SaveForWebDialog {
+            animation: self.animation,
+            remember: self.remember.clone(),
+            slices: &self.slices,
+            view: Some(Bind::bound(&mut self.view)),
+            open: Some(Bind::bound(&mut self.open)),
+            ..dialog
+        };
         let mut shown = dialog.show(ui);
         self.frame = shown.frame;
+        self.pixels = shown.size;
         if let Some(last) = shown.wanted_variants.first() {
             self.taken = last.request.revision;
             self.wanted = shown.wanted_variants;

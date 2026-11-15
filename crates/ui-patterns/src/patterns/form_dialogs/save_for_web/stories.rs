@@ -1,12 +1,14 @@
 //! Stories of `SaveForWebDialog`.
 
-use super::{Animation, SaveForWebDialog, SaveForWebOptions, WebFormat, WebPictures, WebPreset, WebVariant};
+use super::{Animation, SaveForWebDialog, SaveForWebOptions, WebFormat, WebPictures, WebPreset, WebSlice, WebSlices, WebVariant};
 use crate::contract::Bind;
 use crate::primitives::TextureCache;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::PixelSize;
 use egui::load::SizedTexture;
-use egui::{Color32, ColorImage, Ui, Vec2};
+use egui::{Color32, ColorImage, Rect, Ui, Vec2, pos2};
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 /// The picture's size in pixels.
 const PICTURE: [usize; 2] = [360, 240];
@@ -56,6 +58,54 @@ fn save_for_web_pending_animation(ui: &mut Ui, data: &mut StoryData) -> StoryOut
     let flags = extras(data, true, false);
     let (options, open) = data.value("web-animation", (SaveForWebOptions::default(), true));
     let dialog = SaveForWebDialog::new("loop.psd", size(), WebPictures::new().original(original), Bind::bound(options)).opened(Bind::bound(open));
+    with_extras(dialog, flags).show(ui).into()
+}
+
+/// The palette the GIF story's encode reports.
+fn palette() -> Vec<[u8; 3]> {
+    vec![[138, 111, 77], [132, 112, 82], [20, 20, 20], [240, 240, 240], [200, 60, 60], [60, 160, 90], [60, 90, 200], [230, 200, 60]]
+}
+
+#[story(SaveForWebDialog<'static>, covers = [], drive = Drive::Never)]
+fn save_for_web_color_table(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let original = picture(ui, "form-dialogs-web-original", Color32::from_rgb(0x8a, 0x6f, 0x4d));
+    let encoded = picture(ui, "form-dialogs-web-encoded", Color32::from_rgb(0x84, 0x70, 0x52));
+    let mut pictures = WebPictures::new().original(original);
+    pictures.set(WebVariant::new(0, 1, encoded, ENCODED_BYTES).colors(8).palette(palette()));
+    let start = SaveForWebOptions {
+        format: WebFormat::Gif,
+        colors: 8,
+        palette_edits: BTreeMap::from([(2u16, [200u8, 40, 40])]),
+        ..SaveForWebOptions::default()
+    };
+    let flags = extras(data, false, false);
+    let (options, open) = data.value("web-table", (start, true));
+    with_extras(SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)), flags).show(ui).into()
+}
+
+/// The slices of the slices story: three side by side.
+fn story_slices() -> &'static [WebSlice] {
+    static SLICES: OnceLock<Vec<WebSlice>> = OnceLock::new();
+    SLICES.get_or_init(|| {
+        (0..3u32)
+            .map(|at| {
+                let left = at as f32 * 120.0;
+                WebSlice { number: at + 1, rect: Rect::from_min_max(pos2(left, 0.0), pos2(left + 120.0, PICTURE[1] as f32)) }
+            })
+            .collect()
+    })
+}
+
+#[story(SaveForWebDialog<'static>, covers = [], drive = Drive::Never)]
+fn save_for_web_slices(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let original = picture(ui, "form-dialogs-web-original", Color32::from_rgb(0x8a, 0x6f, 0x4d));
+    let encoded = picture(ui, "form-dialogs-web-encoded", Color32::from_rgb(0x84, 0x70, 0x52));
+    let mut pictures = WebPictures::new().original(original);
+    pictures.set(WebVariant::new(0, 1, encoded, ENCODED_BYTES));
+    let start = SaveForWebOptions { slices: WebSlices::Selected(vec![2]), ..SaveForWebOptions::default() };
+    let flags = extras(data, false, false);
+    let (options, open) = data.value("web-slices", (start, true));
+    let dialog = SaveForWebDialog::new("poster.psd", size(), pictures, Bind::bound(options)).opened(Bind::bound(open)).slices(story_slices());
     with_extras(dialog, flags).show(ui).into()
 }
 

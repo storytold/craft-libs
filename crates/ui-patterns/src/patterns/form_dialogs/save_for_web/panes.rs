@@ -1,8 +1,8 @@
 //! The panes of Save for Web: the view tabs, the animation row, the zoom row and the preview panes with their captions.
 
 use super::{
-    Animation, Live, MODEM_KBPS, SaveForWebOptions, SaveForWebWords, WebFormat, WebPictures, WebVariant, WebView, ZOOM_RANGE, download_seconds,
-    four_up_variants,
+    Animation, Live, MODEM_KBPS, SaveForWebOptions, SaveForWebWords, WebFormat, WebPictures, WebSlice, WebVariant, WebView, ZOOM_RANGE,
+    download_seconds, four_up_variants,
 };
 use crate::buttons::Button;
 use crate::choice::Segmented;
@@ -10,10 +10,11 @@ use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, cl
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
 use crate::patterns::form_dialogs::{PreviewPane, PreviewState, PreviewView, PreviewZoom};
+use crate::primitives::{ContentPainterCx, StrokeWidth, TextRun};
 use crate::runtime::env::{Label, Units};
 use crate::style::TypeRole;
 use craft_behavior::{CanvasTransform, PixelSize};
-use egui::{Ui, Vec2};
+use egui::{Pos2, Rect, Ui, Vec2};
 
 /// A pane of the dialog.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -35,6 +36,17 @@ pub(super) struct Panes<'p> {
     pub(super) animation: Option<Animation>,
     pub(super) hint: &'p Label,
     pub(super) options: &'p SaveForWebOptions,
+    /// The document's slices, in the order they are drawn: a later one lies over an earlier one.
+    pub(super) slices: &'p [WebSlice],
+    /// The numbers of the selected slices.
+    pub(super) chosen: &'p [u32],
+}
+
+/// A click on a slice: its number and whether Shift was held (add to or remove from the selection).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct SliceClick {
+    pub(super) number: u32,
+    pub(super) add: bool,
 }
 
 /// What the panes of one pass report.
@@ -43,10 +55,11 @@ struct Reported {
     moved: Option<PreviewView>,
     shown: Option<PreviewView>,
     clicked: Option<WebPane>,
+    slice: Option<SliceClick>,
 }
 
-/// The view tabs, the play and zoom rows and the panes.
-pub(super) fn show(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live) {
+/// The view tabs, the play and zoom rows and the panes; a click on a slice goes to `slice`.
+pub(super) fn show(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live, slice: &mut Option<SliceClick>) {
     let words = panes.words;
     let tabs = [
         Entry::new(WebView::Original, words.original.clone()),
@@ -59,7 +72,7 @@ pub(super) fn show(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live) {
     }
     play_row(ui, panes, live);
     zoom_row(ui, words, panes.hint, live);
-    pane_grid(ui, panes, live);
+    pane_grid(ui, panes, live, slice);
 }
 
 /// Play or Pause and the frame readout, for an animation of two frames or more.
@@ -93,7 +106,7 @@ fn zoom_row(ui: &mut Ui, words: &SaveForWebWords, hint: &Label, live: &mut Live)
 }
 
 /// The panes of the view, two to a row, over the one shared view: the first view any pane reports is applied to all.
-fn pane_grid(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live) {
+fn pane_grid(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live, slice: &mut Option<SliceClick>) {
     let list = live.view.panes();
     let mut reported = Reported::default();
     Stack::new().id_salt("panes").show(ui, |ui, _| {
@@ -107,6 +120,9 @@ fn pane_grid(ui: &mut Ui, panes: &Panes<'_>, live: &mut Live) {
     });
     if let Some(pane) = reported.clicked {
         live.selected = pane;
+    }
+    if reported.slice.is_some() {
+        *slice = reported.slice;
     }
     if let Some(view) = reported.moved.or(reported.shown) {
         live.shared = view;
@@ -124,9 +140,21 @@ fn one_pane(ui: &mut Ui, panes: &Panes<'_>, live: &Live, pane: WebPane, at: usiz
     let state = state_of(panes, pane);
     let shade = if live.selected == pane { Shade::Normal } else { Shade::Muted };
     Stack::new().id_salt(at).show(ui, |ui, _| {
-        let shown = PreviewPane::state(name.clone(), state.clone(), &live.shared).click_centres(false).id_salt("pane").show(ui);
+        let mut preview = PreviewPane::state(name.clone(), state.clone(), &live.shared).click_centres(false).id_salt("pane");
+        if !panes.slices.is_empty() {
+            let (slices, chosen) = (panes.slices, panes.chosen);
+            preview = preview.overlay(move |painter: &ContentPainterCx, view: CanvasTransform, picture: Rect| {
+                paint_slices(painter, view, picture, slices, chosen);
+            });
+        }
+        let shown = preview.show(ui);
         if clicked(&shown.response) {
             reported.clicked = Some(pane);
+        }
+        if let Some(point) = shown.clicked
+            && let Some(number) = slice_at(panes.slices, point)
+        {
+            reported.slice = Some(SliceClick { number, add: crate::runtime::pointer::frame(ui.ctx()).mods.shift });
         }
         if reported.moved.is_none() {
             reported.moved = shown.view;
@@ -135,6 +163,31 @@ fn one_pane(ui: &mut Ui, panes: &Panes<'_>, live: &Live, pane: WebPane, at: usiz
         Text::new(Label::from(first.clone())).role(TypeRole::Caption).shade(shade).id_salt("first").show(ui);
         Text::new(Label::from(second.clone())).role(TypeRole::Caption).shade(shade).id_salt("second").show(ui);
     });
+}
+
+/// The number of the slice a click at `point` (in document pixels) hit: the one drawn last of those that hold it.
+fn slice_at(slices: &[WebSlice], point: Pos2) -> Option<u32> {
+    slices.iter().rev().find(|slice| slice.rect.contains(point)).map(|slice| slice.number)
+}
+
+/// Outlines each slice over the picture with its number; a selected slice has the thicker outline. `picture` is the
+/// picture's rectangle on screen and `view` its scale, so the outlines follow the pane's own zoom and pan.
+fn paint_slices(painter: &ContentPainterCx<'_>, view: CanvasTransform, picture: Rect, slices: &[WebSlice], chosen: &[u32]) {
+    let ink = painter.ink();
+    let (thin, thick) = (painter.stroke_width(StrokeWidth::Thin), painter.stroke_width(StrokeWidth::Thick));
+    for slice in slices {
+        let rect = Rect::from_min_max(picture.min + slice.rect.min.to_vec2() * view.scale, picture.min + slice.rect.max.to_vec2() * view.scale);
+        let width = if chosen.contains(&slice.number) { thick } else { thin };
+        let corners = vec![rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
+        painter.painter.add(egui::Shape::closed_line(corners, egui::Stroke::new(width, ink)));
+        let number = slice.number.to_string();
+        painter.with_draw(|draw| {
+            let run = TextRun::new(number.as_str()).role(TypeRole::Caption);
+            let corner = rect.left_top() + Vec2::splat(2.0);
+            let layout = draw.layout(&run, f32::INFINITY);
+            draw.galley(corner, &layout);
+        });
+    }
 }
 
 /// The pane's name in the accessible tree.

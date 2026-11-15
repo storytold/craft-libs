@@ -7,7 +7,8 @@ use super::{SaveForWebDialog, four_up_variants};
 use crate::patterns::form_dialogs::host_requests::PreviewRequest;
 use crate::patterns::form_dialogs::sizing::Resample;
 use crate::runtime::env::Label;
-use crate::runtime::memory::{MemoryStage, SaveKey, unique};
+use crate::runtime::memory::SaveKey;
+use craft_behavior::{Selection, SelectionChange, SelectionModel};
 use egui::Context;
 use egui::load::SizedTexture;
 use serde::{Deserialize, Serialize};
@@ -187,7 +188,6 @@ pub struct SaveForWebOptions {
     #[serde(default)]
     pub slices: WebSlices,
     /// Whether the export writes an HTML file beside the images.
-    // P3(dialogs-w15): dl.K43 `SaveForWebOptions::html`
     #[serde(default = "html_default")]
     pub html: bool,
 }
@@ -205,10 +205,29 @@ pub enum WebSlices {
     #[default]
     All,
     /// The user slices.
-    // P3(dialogs-w15): dl.K43 `WebSlices::User`
     User,
     /// The slices with these numbers.
     Selected(Vec<u32>),
+}
+
+impl WebSlices {
+    /// The numbers of the selected slices; none unless the choice is `Selected`.
+    pub(super) fn selected(&self) -> &[u32] {
+        match self {
+            WebSlices::Selected(numbers) => numbers,
+            _ => &[],
+        }
+    }
+
+    /// A click on slice `number`: it becomes the one selected slice, or with `add` (Shift) it is added to the
+    /// selection or, when already selected, removed from it.
+    pub(super) fn select(&mut self, number: u32, add: bool) {
+        let items = self.selected().to_vec();
+        let last = items.last().copied();
+        let mut selection = Selection::new(items, last, last);
+        selection.apply(if add { SelectionChange::Toggle(number) } else { SelectionChange::Set(vec![number]) });
+        *self = WebSlices::Selected(selection.items);
+    }
 }
 
 /// A slice of the document: its number and its rectangle in document pixels.
@@ -245,12 +264,18 @@ impl Default for SaveForWebOptions {
             resample: Resample::Bicubic,
             palette_edits: BTreeMap::new(),
             slices: WebSlices::All,
-            html: true, // P3(dialogs-w15): dl.K43
+            html: true,
         }
     }
 }
 
 impl SaveForWebOptions {
+    /// The options as the next open remembers them: the slices and palette edits belong to one document, so they
+    /// are left at their defaults.
+    pub(super) fn without_document_fields(&self) -> Self {
+        SaveForWebOptions { slices: WebSlices::default(), palette_edits: BTreeMap::new(), ..self.clone() }
+    }
+
     /// Whether the matte row shows: the matte fills the transparency of formats that cannot keep it.
     pub fn has_matte(&self) -> bool {
         !matches!(self.format, WebFormat::Png24 | WebFormat::WebP) || !self.transparency
@@ -282,9 +307,10 @@ impl WebPreset {
         WebPreset { name: name.into(), options }
     }
 
-    /// Whether the preset is what `current` shows apart from the size.
+    /// Whether the preset is what `current` shows apart from the size, the slices and the palette edits.
     pub fn is_set_in(&self, current: &SaveForWebOptions) -> bool {
-        self.options == SaveForWebOptions { percent: self.options.percent, ..current.clone() }
+        let own = &self.options;
+        own == &SaveForWebOptions { percent: own.percent, slices: own.slices.clone(), palette_edits: own.palette_edits.clone(), ..current.clone() }
     }
 }
 
@@ -373,9 +399,7 @@ impl SaveForWebResult {
     /// nothing.
     pub fn remember(&self, ctx: &Context) {
         if let Some((key, last)) = &self.remember {
-            let mut stage = MemoryStage::open(ctx, unique(("craft_ui::save_for_web_result", key.as_str())));
-            *stage.saved::<Option<Last>>(key) = Some(last.clone());
-            stage.write_back();
+            crate::runtime::memory::set_saved_value(ctx, key, Some(last.clone()));
         }
     }
 }

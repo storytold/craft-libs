@@ -2,12 +2,12 @@
 //! Image Size.
 
 use super::{
-    ColorTable, Dither, MATTE_COLOR_KEY, MAX_PERCENT, RESAMPLE_METHODS, SaveForWebOptions, SaveForWebWords, SizingWords, WebFormat, WebMetadata,
-    WebPreset, percent_of,
+    ColorTable, Dither, MATTE_COLOR_KEY, MAX_PERCENT, PALETTE_COLOR_KEY, RESAMPLE_METHODS, SaveForWebOptions, SaveForWebWords, SizingWords, WebFormat,
+    WebMetadata, WebPreset, WebSlices, percent_of,
 };
 use crate::runtime::requests::ColorRequest;
 
-use crate::choice::{Checkbox, Swatch};
+use crate::choice::{Checkbox, Swatch, SwatchTable};
 use crate::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
 
 use crate::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
@@ -21,10 +21,11 @@ use crate::runtime::env::{Label, UnitKind, Units};
 use crate::sections::{HeaderStrength, Section};
 use crate::text::{HexField, NumberField};
 
-use craft_behavior::NumberCodec;
+use craft_behavior::{NumberCodec, Selection};
 use craft_theme::{Rgba, Srgba};
 
 use egui::Ui;
+use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 
 /// The range of a percent slider.
@@ -75,18 +76,34 @@ pub(super) struct Kit<'k> {
     pub(super) sizing: &'k SizingWords,
     pub(super) units: &'k Units,
     pub(super) presets: &'k [WebPreset],
+    /// The palette of the shown pane's encode, when it has one.
+    pub(super) palette: Option<&'k [[u8; 3]]>,
+    /// The document has slices: the Slices choice shows.
+    pub(super) has_slices: bool,
 }
 
-/// The settings column over `options` and the output size `link`; the matte request when Matte was pressed goes to
-/// `ask`.
-pub(super) fn show(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions, link: &mut LinkedSize, ask: &mut Option<ColorRequest>) {
-    let Kit { words, sizing, units, presets } = *kit;
+/// The settings column over `options` and the output size `link`; the Color Table's cells are selected in `table`,
+/// the entry whose colour request is out is `editing`, and the matte or palette colour request when one was asked
+/// goes to `ask`.
+pub(super) fn show(
+    ui: &mut Ui,
+    kit: &Kit<'_>,
+    options: &mut SaveForWebOptions,
+    link: &mut LinkedSize,
+    table: &mut Selection<usize>,
+    editing: &mut Option<u16>,
+    ask: &mut Option<ColorRequest>,
+) {
+    let Kit { words, sizing, units, presets, palette, has_slices } = *kit;
     FieldGroup::new(words.settings.clone()).show(ui, |ui, _| {
         if !presets.is_empty() {
             preset_row(ui, words, presets, options);
         }
         format_row(ui, words, options);
         format_options(ui, words, units, options);
+        if let Some(palette) = palette.filter(|palette| options.format.indexed() && !palette.is_empty()) {
+            palette_section(ui, words, palette, options, table, editing, ask);
+        }
         if options.has_matte() {
             matte_row(ui, words, options, ask);
         }
@@ -94,6 +111,9 @@ pub(super) fn show(ui: &mut Ui, kit: &Kit<'_>, options: &mut SaveForWebOptions, 
             options.convert_srgb = on;
         }
         metadata_row(ui, words, options);
+        if has_slices {
+            slices_rows(ui, words, options);
+        }
         size_section(ui, words, sizing, units, link, &mut options.resample);
     });
 }
@@ -104,8 +124,8 @@ fn preset_row(ui: &mut Ui, words: &SaveForWebWords, presets: &[WebPreset], optio
     entries.extend(presets.iter().enumerate().map(|(at, preset)| Entry::new(Some(at), Label::from(preset.name.clone()))));
     row(ui, &words.preset, "preset", |ui| {
         if let Some(Some(at)) = Select::new(words.preset.clone(), Bind::given(current), &entries).show(ui).value().cloned() {
-            let (percent, resample) = (options.percent, options.resample);
-            *options = SaveForWebOptions { percent, resample, ..presets[at].options.clone() };
+            let (percent, resample, slices) = (options.percent, options.resample, options.slices.clone());
+            *options = SaveForWebOptions { percent, resample, slices, palette_edits: BTreeMap::new(), ..presets[at].options.clone() };
         }
     });
 }
@@ -115,6 +135,7 @@ fn format_row(ui: &mut Ui, words: &SaveForWebWords, options: &mut SaveForWebOpti
     row(ui, &words.format, "format", |ui| {
         if let Some(format) = Select::new(words.format.clone(), Bind::given(options.format), &entries).show(ui).value().cloned() {
             options.format = format;
+            options.palette_edits.clear();
         }
     });
 }
@@ -128,6 +149,7 @@ fn format_options(ui: &mut Ui, words: &SaveForWebWords, units: &Units, options: 
                 let field = whole(units, words.colors.clone(), f64::from(options.colors), COLORS);
                 if let Some(v) = field.show(ui).edit.value().cloned().flatten() {
                     options.colors = v.round().clamp(*COLORS.start(), *COLORS.end()) as u16;
+                    options.palette_edits.clear();
                 }
             });
             dither_row(ui, words, options, true);
@@ -199,8 +221,65 @@ fn color_table_row(ui: &mut Ui, words: &SaveForWebWords, options: &mut SaveForWe
     row(ui, &words.color_table, "table", |ui| {
         if let Some(table) = Select::new(words.color_table.clone(), Bind::given(options.color_table), &entries).show(ui).value().cloned() {
             options.color_table = table;
+            options.palette_edits.clear();
         }
     });
+}
+
+/// The Color Table: the shown pane's palette with the edits applied, one cell per index. Opening a cell asks the host
+/// for its colour, keyed [`PALETTE_COLOR_KEY`]; the index waits in `editing` for the answer.
+fn palette_section(
+    ui: &mut Ui,
+    words: &SaveForWebWords,
+    palette: &[[u8; 3]],
+    options: &SaveForWebOptions,
+    table: &mut Selection<usize>,
+    editing: &mut Option<u16>,
+    ask: &mut Option<ColorRequest>,
+) {
+    let entries: Vec<(Label, Srgba)> = palette
+        .iter()
+        .enumerate()
+        .map(|(index, color)| {
+            let [r, g, b] = u16::try_from(index).ok().and_then(|at| options.palette_edits.get(&at)).copied().unwrap_or(*color);
+            (Label::from(format!("{index} #{r:02x}{g:02x}{b:02x}")), Srgba::from(Rgba([r, g, b, OPAQUE])))
+        })
+        .collect();
+    Section::fixed(words.color_table.clone()).strength(HeaderStrength::Caption).id_salt("palette").show(ui, |ui, _| {
+        let shown = SwatchTable::new(words.color_table.clone(), &entries).per_row(16).tips(true).selection(Bind::bound(&mut *table)).show_all(ui);
+        if let Some(index) = shown.open
+            && let (Some((_, color)), Ok(at)) = (entries.get(index), u16::try_from(index))
+        {
+            *ask = Some(ColorRequest::new(PALETTE_COLOR_KEY, *color));
+            *editing = Some(at);
+        }
+    });
+}
+
+/// The Slices choice (All Slices, All User Slices, Selected Slices) and the Save HTML and Images check box.
+fn slices_rows(ui: &mut Ui, words: &SaveForWebWords, options: &mut SaveForWebOptions) {
+    let entries = [
+        Entry::new(0usize, words.all_slices.clone()),
+        Entry::new(1usize, words.user_slices.clone()),
+        Entry::new(2usize, words.selected_slices.clone()),
+    ];
+    let current = match options.slices {
+        WebSlices::All => 0usize,
+        WebSlices::User => 1,
+        _ => 2,
+    };
+    row(ui, &words.slices, "slices", |ui| {
+        if let Some(kind) = Select::new(words.slices.clone(), Bind::given(current), &entries).show(ui).value().cloned() {
+            options.slices = match kind {
+                0 => WebSlices::All,
+                1 => WebSlices::User,
+                _ => WebSlices::Selected(options.slices.selected().to_vec()),
+            };
+        }
+    });
+    if let Some(on) = check(ui, &words.save_html, "html", options.html) {
+        options.html = on;
+    }
 }
 
 /// The Dither list; WBMP has no Noise.

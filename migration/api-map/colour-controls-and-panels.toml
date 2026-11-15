@@ -951,7 +951,7 @@ name = "ColorSamplerTool"
 old = "craft_color::ui::ColorSamplerTool"
 new = "craft_color::ui::ColorSamplerTool"
 status = "same"
-note = "A `CanvasTool`; `take_error()` returns a `Toast`."
+note = "An owned tool: `new`, `pass(&mut self, &ColorSamplers, [u32; 2]) -> ColorSamplerPass` (the `CanvasTool`), `take_events() -> SamplerEvent` values (`Add`, `Move`, `Remove`) instead of in-place edits, `carried`, and `take_error()` returning a `Toast`."
 
 [[type]]
 name = "ColorSamplerLabels"
@@ -1000,7 +1000,7 @@ name = "SamplerOptions"
 old = ""
 new = "craft_color::ui::SamplerOptions"
 status = "replaced"
-note = "A pattern shown inside the options `Bar`: `SamplerOptions::new(count).show(ui)` returns `clear_all`."
+note = "A pattern shown inside the options `Bar`: `SamplerOptions::new(count, size: Bind<SampleSize>).show(ui)` returns `clear_all` and `size`."
 
 [[type]]
 name = "MAX_SAMPLERS"
@@ -1119,7 +1119,7 @@ note = "A pattern over `SwatchTable`: `new(label, Bind<Srgba>, &[(Label, Srgba)]
 [[type]]
 name = "SwatchTable"
 old = ""
-new = "craft_color::ui::SwatchTable"
+new = "craft_ui::choice::SwatchTable"
 status = "replaced"
 note = "An items component on the collection contract with Swatch cells: `new(label, &[(Label, Srgba)])` with `selection(Bind<Selection<usize>>)`, `per_row(n)` in place of `columns` and `multiple(bool)`; `show_all(ui)` returns `SwatchTableOutput { response, selected, chosen, open }`. Replaces `SwatchPalette::table`."
 
@@ -1133,7 +1133,7 @@ note = "Replaced by `SwatchTableOutput`."
 [[type]]
 name = "SwatchTableOutput"
 old = ""
-new = "craft_color::ui::SwatchTableOutput"
+new = "craft_ui::choice::SwatchTableOutput"
 status = "replaced"
 note = "`selected`, `open` as before; `chosen` is the whole selection."
 
@@ -1240,7 +1240,7 @@ name = "SwatchesPanel"
 old = "craft_color::ui::SwatchesPanel"
 new = "craft_color::ui::SwatchesPanel"
 status = "replaced"
-note = "A pattern on PresetBrowser: `new(Bind<SwatchLibrary>, Bind<SwatchesState>, foreground)` in place of `new(id_salt, &mut library, foreground)`; `show(ui)` returns `SwatchesPanelOutput { response, used, changed }`. Files go out as `PresetFileRequest`s from `SwatchesMenu` and come back through `SwatchesPanel::apply_file`."
+note = "A pattern on PresetBrowser: `new(groups: &[SwatchGroup], state: Bind<SwatchesState>, foreground: Srgba)` in place of `new(id_salt, &mut library, foreground)`; it reads the groups and never writes the library. `show(ui)` returns `SwatchesPanelOutput { response, used, edits }`, the edits in pass order. Files go out as `PresetFileRequest`s from `SwatchesMenu` and come back through `SwatchesPanel::apply_file(state, event, words, presets, format) -> SwatchesFileOutput { edit, report, status }`; a Loaded file becomes an `Import { groups, replace }` edit and the host makes names unique."
 
 [[type]]
 name = "SwatchesPanelResponse"
@@ -1254,7 +1254,7 @@ name = "SwatchesPanelOutput"
 old = ""
 new = "craft_color::ui::SwatchesPanelOutput"
 status = "replaced"
-note = "`imported`, `exported` and `status` are in `SwatchesFileOutput` from `apply_file`; the status line is a `Toast`."
+note = "`response`, `used` and `edits: Vec<SwatchEdit>`; the old `changed` fields are gone. `edit`, `report` and `status` are in `SwatchesFileOutput` from `apply_file`; the status line is a `Toast`."
 
 [[type]]
 name = "SwatchesMenuResponse"
@@ -1352,7 +1352,7 @@ name = "SwatchesMenu"
 old = ""
 new = "craft_color::ui::SwatchesMenu"
 status = "replaced"
-note = "`rows()`, `states(&library)` and `run_command(&mut library, &mut state, SwatchesCommand, foreground, &words)` over `SwatchesCommand`. Replaces `SwatchesPanel::panel_menu`."
+note = "`rows()`, `states(groups: &[SwatchGroup])` and `run_command(groups, &mut state, SwatchesCommand, foreground, &words) -> SwatchesMenuOutput { edit, file, status }` over `SwatchesCommand`; it reads the groups and reports the edit a command makes (`changed` goes). Replaces `SwatchesPanel::panel_menu`."
 
 [[setter]]
 type = "SwatchPalette"
