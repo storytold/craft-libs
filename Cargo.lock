@@ -1352,6 +1352,7 @@ version = "0.1.0"
 dependencies = [
  "craft-media",
  "craft-media-testkit",
+ "craft-xml",
  "log",
  "proptest",
  "rayon",
@@ -1361,6 +1362,10 @@ dependencies = [
  "thiserror 2.0.21",
  "vorbis_rs",
 ]
+
+[[package]]
+name = "craft-ber"
+version = "0.1.0"
 
 [[package]]
 name = "craft-captions"
@@ -1875,6 +1880,7 @@ dependencies = [
  "ravif",
  "rayon",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "tiff",
  "zune-core",
@@ -2378,6 +2384,16 @@ dependencies = [
  "proptest",
  "toml",
  "unicode-normalization",
+]
+
+[[package]]
+name = "craft-proto"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "log",
+ "proptest",
+ "zeroize",
 ]
 
 [[package]]
@@ -11150,7 +11166,7 @@ dependencies = [
 [[package]]
 name = "winprint"
 version = "0.2.1"
-source = "git+https://github.com/storytold/winprint.rs?rev=72951d7455ebcab569fbd9386c513d3d9f53fb02#72951d7455ebcab569fbd9386c513d3d9f53fb02"
+source = "git+https://github.com/storytold/winprint.rs?rev=8ae097ef941b432b0e7671b1ec3a506800e65e57#8ae097ef941b432b0e7671b1ec3a506800e65e57"
 dependencies = [
  "flate2",
  "fmt-derive",
