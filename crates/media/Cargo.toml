@@ -1,6 +1,6 @@
 [package]
 name = "craft-media"
-description = "Bit-level I/O, clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) and MXF demuxers and muxers, an MPEG-TS/PS demuxer and MPEG-TS muxer, and Ogg and AVI demuxers."
+description = "Bit-level I/O, clean-room ISO BMFF (MP4), QuickTime (MOV) and Matroska (MKV, WebM) and MXF demuxers and muxers, an MPEG-TS/PS demuxer and MPEG-TS muxer, and Ogg, AVI and Bink demuxers."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -20,6 +20,8 @@ isobmff = ["bitstream", "dep:thiserror"]
 matroska = []
 # AVI (RIFF) and OpenDML demuxer and muxer (`craft_media::avi`).
 avi = []
+# Bink 1 (BIK) demuxer (`craft_media::bink`).
+bink = []
 # MXF demuxer and writer (`craft_media::mxf`); the writer formats dates with chrono.
 mxf = ["dep:chrono"]
 # MPEG-2 Systems demuxer: transport streams and program streams (`craft_media::mpegts`), and the
@@ -57,6 +59,10 @@ required-features = ["avi"]
 [[test]]
 name = "oracle_avi_mux"
 required-features = ["avi"]
+
+[[test]]
+name = "oracle_bink"
+required-features = ["bink"]
 
 [[test]]
 name = "oracle_demux"
