@@ -88,6 +88,11 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   black and white levels and as-shot white balance. The complete derivation record (plan, sources
   log, scripts, verification) is in `crates/crw/clean-room/`. Colour stays in each app.
 - [`craft-csv`](crates/csv/README.md): delimited text (CSV, TSV) and SYLK: encoding detection (UTF-8, UTF-16, Windows-1252 or Windows-1256), delimiter sniffing, a record parser with a cap on fields per record, field quoting for writers, and a SYLK (`.slk`) reader with R1C1 formulas rewritten to A1.
+- [`craft-dds`](crates/dds/README.md): DirectDraw Surface (DDS) textures, read and written: the
+  top mip level of uncompressed and BC1 to BC3 (DXT1/3/5) textures, legacy and DX10 headers, and
+  our own block encoder with optional mip chains. No dependencies (rayon behind `parallel`), so an
+  app that only exports textures needn't take the whole `craft-image-codecs` codec set and its
+  licences; `craft-image-codecs` reads and writes DDS through it.
 - [`craft-dialogs`](crates/dialogs/README.md): native file and message dialogs that never block
   the event loop: queued requests shown at the end of the frame and answered on a later frame,
   free-standing Open and Folder panels and Save sheets on macOS, case-insensitive filters. What
