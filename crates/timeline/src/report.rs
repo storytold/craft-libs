@@ -46,6 +46,17 @@ impl Report {
         }
         self.push(Level::Warning, message);
     }
+    /// Add an informational diagnostic while bounding distinct messages.
+    pub fn info_limited(&mut self, limit: Option<usize>, message: impl Into<String>) {
+        let mut message = message.into();
+        if let Some(limit) = limit
+            && self.entries.len() >= limit
+            && !self.entries.iter().any(|e| e.level == Level::Info && e.message == message)
+        {
+            message = "further diagnostics omitted".into();
+        }
+        self.push(Level::Info, message);
+    }
     pub fn warn(&mut self, message: impl Into<String>) {
         self.push(Level::Warning, message);
     }

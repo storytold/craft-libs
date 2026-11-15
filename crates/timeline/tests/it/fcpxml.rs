@@ -614,3 +614,19 @@ fn shallower_retry_does_not_link_a_cached_ancestor_back_to_the_rebuilt_item() {
         visit(&imp.project, *id, &mut active, &mut done);
     }
 }
+
+#[test]
+fn optional_report_limit_bounds_distinct_fcpxml_diagnostics() {
+    let unknown = (0..10).map(|i| format!("<video name=\"missing{i}\" duration=\"1s\"/> ")).collect::<String>();
+    let doc = format!(
+        "<fcpxml version=\"1.10\"><resources/><library><event><project name=\"P\"><sequence><spine>{unknown}</spine></sequence></project></event></library></fcpxml>"
+    );
+    let opts = iopts(None);
+    let mut limited = Report::default();
+    assert!(craft_timeline::fcpxml::import_with_report_limit(&doc, &opts, &mut limited, Some(2)).is_ok());
+    assert_eq!(limited.entries.len(), 3);
+    assert!(limited.mentions("further diagnostics omitted"));
+    let mut ordinary = Report::default();
+    assert!(craft_timeline::fcpxml::import(&doc, &opts, &mut ordinary).is_ok());
+    assert_eq!(ordinary.entries.len(), 10);
+}
