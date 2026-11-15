@@ -1920,6 +1920,7 @@ dependencies = [
  "craft-heif",
  "craft-jpeg",
  "craft-metadata",
+ "crc32fast",
  "exr",
  "flate2",
  "half",
