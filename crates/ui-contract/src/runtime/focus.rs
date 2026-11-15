@@ -17,7 +17,7 @@ pub(crate) use registration::{Group, Stop};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use crate::runtime::frame::PerViewport;
-use craft_behavior::{DocKey, PartRef};
+use craft_behavior::{DocKey, OwnerClass, PartRef};
 use egui::{Context, Id, ViewportId};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -82,6 +82,8 @@ pub(crate) struct FocusedRecord {
     /// egui focus is on a widget no framework component made, and no framework press or drag is captured: egui
     /// moves focus among the app's own widgets with the arrows and the Tab it keeps. Written by the end hook.
     pub(crate) host_focus: bool,
+    /// `host_focus`, on a text edit the app drew itself. Written by the end hook.
+    pub(crate) host_text: bool,
     /// egui holds a label text selection: a copy or cut event is egui's, which copies the selection. Written by the
     /// end hook.
     pub(crate) label_selection: bool,
@@ -683,6 +685,12 @@ pub(crate) fn record(ctx: &Context, viewport: ViewportId) -> FocusedRecord {
     with_viewport(ctx, viewport, |state| state.record.clone())
 }
 
+/// Whether a text field has the keys in `viewport`, as its last end hook recorded: the focused stop types text, or
+/// egui focus is on a text edit the app drew itself.
+pub(crate) fn typing(ctx: &Context, viewport: ViewportId) -> bool {
+    with_viewport(ctx, viewport, |state| state.record.host_text || state.record.keys.is_some_and(|keys| keys.owner == OwnerClass::Text))
+}
+
 /// Whether the last `request` or move of focus landed on component `id`, once, and on which of its parts: the
 /// component then asks the enclosing scroll owner to reveal it.
 pub(crate) fn take_reveal_of(ctx: &Context, id: Id) -> Option<Option<PartRef>> {
@@ -759,9 +767,11 @@ pub(crate) fn end(ctx: &Context) {
     let host_focus = !captured && with(ctx, |state| state.focus_now).is_some_and(app_widget);
     let foreign = host_focus || (!captured && egui_focus::popup_open(ctx));
     let label_selection = egui_focus::label_selection(ctx);
+    let host_text = host_focus && ctx.text_edit_focused();
     with(ctx, |state| {
         state.record.foreign = foreign;
         state.record.host_focus = host_focus;
+        state.record.host_text = host_text;
         state.record.label_selection = label_selection;
     });
 }

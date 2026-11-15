@@ -269,6 +269,18 @@ impl WindowHost {
         Some(WindowFacts { inner: facts.inner?, outer: facts.outer, scale: scale_of(&self.ctx, &facts), state: info.state, focused: facts.focused })
     }
 
+    /// The window that has the keys: the one the platform reports focused, else the main window. A key the platform
+    /// takes from the windows (a native menu's key equivalent) belongs to it.
+    pub fn key_window(&self) -> ViewportId {
+        viewports::key_window(&self.ctx)
+    }
+
+    /// Whether a text field has the keys in [`key_window`](Self::key_window), as its last pass ended: the focused
+    /// stop types text, or egui focus is on a text edit the app drew itself.
+    pub fn typing(&self) -> bool {
+        crate::runtime::focus::typing(&self.ctx, self.key_window())
+    }
+
     /// `previous` (or a new record) updated to where `viewport`'s window is, recorded as an app window's saved
     /// placement is: where it last reported itself, or where the app last sent it. A caller that places the window at
     /// this placement sends it nothing. `None` before the window has reported its rect and scale.

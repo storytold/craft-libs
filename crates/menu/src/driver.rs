@@ -36,8 +36,8 @@ pub enum Event {
 pub enum ClipboardKeys {
     /// As egui-winit makes them without a native menu: ⌘C is [`egui::Event::Copy`], ⌘X
     /// [`egui::Event::Cut`], and ⌘V a [`egui::ViewportCommand::RequestPaste`], which eframe answers
-    /// with an [`egui::Event::Paste`] of the clipboard's text in the next frame. Text fields copy,
-    /// cut and paste.
+    /// with an [`egui::Event::Paste`] of the clipboard's text in the next frame, each in the window
+    /// that has the keys. Text fields copy, cut and paste.
     #[default]
     Egui,
     /// Key presses like any other key equivalent, for an app that runs its clipboard commands
@@ -306,10 +306,11 @@ impl NativeMenu {
     /// Once per frame, before [`NativeMenu::set_gate`]: key equivalents become the key presses they were, and
     /// clicks wait for [`NativeMenu::take_clicks`].
     ///
-    /// The window host's input filter owns the edits to egui's input (`ctx`'s [`WindowHost`], the root
-    /// viewport): this hands it the key equivalents and whether a native menu is open. They reach the frame that is
-    /// running: called before the frame (eframe's `App::raw_input_hook`), the filter reads them when the frame's
-    /// input is taken; called inside it (`App::update`), the filter repeats the pass with them in its input.
+    /// The window host's input filter owns the edits to egui's input (`ctx`'s [`WindowHost`]): this hands it the
+    /// key equivalents, for the window that has the keys ([`WindowHost::key_window`]), and whether a native menu is
+    /// open. They reach the frame that is running: called before the frame (eframe's `App::raw_input_hook`), the
+    /// filter reads them when the frame's input is taken; called inside it (`App::update`), the filter repeats the
+    /// pass with them in its input.
     /// A click or Escape in the window closes an open native menu. AppKit can deliver it to the
     /// window while the menu is still open (asynchronous menu presentation), so while the backend reports one
     /// open, the filter takes the click or Escape out of the input: it closes the menu without starting a canvas
@@ -355,7 +356,7 @@ impl NativeMenu {
             _ if tap => KeyEquivalent::Tap(*chord),
             _ => KeyEquivalent::Press(*chord),
         };
-        host.key_equivalent(egui::ViewportId::ROOT, equivalent);
+        host.key_equivalent(host.key_window(), equivalent);
     }
 
     /// The commands clicked since the last call that the gate ([`NativeMenu::set_gate`]) allows
@@ -365,7 +366,7 @@ impl NativeMenu {
     /// ([`ClipboardKeys::Egui`]) is asked of eframe here too.
     pub fn take_clicks(&mut self, ctx: &egui::Context) -> Vec<CommandRef> {
         if std::mem::take(&mut self.paste) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            ctx.send_viewport_cmd_to(WindowHost::of(ctx).key_window(), egui::ViewportCommand::RequestPaste);
         }
         let mut out = Vec::new();
         for command in std::mem::take(&mut self.clicks) {
