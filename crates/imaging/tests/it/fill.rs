@@ -274,7 +274,8 @@ const REMEMBERED: SaveKey = SaveKey::new("trial.fill");
 /// Cancel, and a cancel from the host (the app's control route) with no pass after the change.
 #[trial]
 fn fill_remembers_its_settings_at_every_close() {
-    let remembered = || ContentAwareFillWorkspace::new(FillOpen::new([LAYER.width, LAYER.height], "Layer 1", FillLimits::new(10, 1000))).remember(REMEMBERED);
+    let remembered =
+        || ContentAwareFillWorkspace::new(FillOpen::new([LAYER.width, LAYER.height], "Layer 1", FillLimits::new(10, 1000))).remember(REMEMBERED);
     let mut rig = Rig::over(remembered());
     rig.with(|work| work.settings_mut().opacity = 10.0);
     rig.fixture.idle(2);
