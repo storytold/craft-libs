@@ -80,6 +80,12 @@ pub(crate) struct Out<'a> {
     pub(crate) doc: &'a mut Document,
     /// The paragraphs the document may still have; WordArt lines are paragraphs too.
     pub(crate) paragraphs: &'a crate::ParaBudget,
+    /// The document-wide character budget, which WordArt text is charged to as well.
+    pub(crate) chars: &'a std::cell::Cell<u64>,
+    /// What WordArt must leave of `chars`. WordArt is read before the stories, so it may only
+    /// use the half of the budget their text can't need (half the budget is the WordDocument
+    /// stream's length, at least as many characters as its stories hold).
+    pub(crate) chars_reserved: u64,
 }
 
 /// The floating objects anchored by `PlcfSpa` (at `pair`), as (absolute anchor CP, object),
@@ -255,10 +261,10 @@ fn leaf(sp: &Sp, w: f32, h: f32, pt: (f32, f32), float: Float, b: &Build, out: &
 /// A WordArt shape (`msosptTextPlainText` 136 to `msosptTextCanDown` 175) as a text box holding
 /// its `gtextUNICODE` text, in its `gtextFont` and the shape's fill colour, with neither fill nor
 /// outline: the letters are the art, so a filled box would hide them. The text is not bent to the
-/// shape's warp. `None` when it has no text or reaches the part cap. Exhausting the paragraph
-/// budget also returns `None`, but marks the whole read as a limit error. The frame `w` × `h`
-/// is in frame units, `pt` points each (a group member's frame is in its group's units, but its
-/// text is sized in points).
+/// shape's warp. `None` when it has no text, reaches the part cap or WordArt's share of the
+/// character budget ([`Out::chars_reserved`]). Exhausting the paragraph budget also returns
+/// `None`, but marks the whole read as a limit error. The frame `w` × `h` is in frame units, `pt`
+/// points each (a group member's frame is in its group's units, but its text is sized in points).
 fn word_art(p: &Props, (w, h): (f32, f32), pt: (f32, f32), float: Float, out: &mut Out) -> Option<InlineObject> {
     let text: String = p.gtext.chars().take(MAX_WORD_ART_CHARS).collect();
     let text = text.replace("\r\n", "\n");
@@ -266,10 +272,16 @@ fn word_art(p: &Props, (w, h): (f32, f32), pt: (f32, f32), float: Float, out: &m
     if text.trim().is_empty() || out.doc.parts.len() >= crate::MAX_PARTS {
         return None;
     }
+    // Its characters are charged to the document's character budget, within WordArt's share.
+    let chars: u64 = lines.iter().map(|l| l.chars().count() as u64).sum();
+    if out.chars.get().saturating_sub(out.chars_reserved) < chars {
+        return None;
+    }
     // Each line is a paragraph, charged to the document's paragraph budget like any other.
     if !lines.iter().all(|_| out.paragraphs.spend()) {
         return None;
     }
+    out.chars.set(out.chars.get().saturating_sub(chars));
     let font = Some(p.gtext_font.chars().take(100).collect::<String>()).filter(|f| !f.trim().is_empty());
     // Word stretches the letters to fill the box. Without the font's metrics here, each line gets
     // its share of the height, but no more than lets its longest line fit the width at about

@@ -344,7 +344,8 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         }
     }
     let build = drawing::Build { bstore: &art.bstore, delay: &word, stories: &tb_stories };
-    let mut out = drawing::Out { pics: &mut pics, doc: &mut doc, paragraphs: &paragraphs };
+    let chars_reserved = budget.get() / 2;
+    let mut out = drawing::Out { pics: &mut pics, doc: &mut doc, paragraphs: &paragraphs, chars: &budget, chars_reserved };
     let mut drawn = drawing::anchors(&table, fib.pair(fib::pair::PLC_SPA_MOM), 0, &art.main, &build, &mut out);
     drawn.extend(drawing::anchors(&table, fib.pair(fib::pair::PLC_SPA_HDR), hdd_base, &art.header, &build, &mut out));
     drawn.sort_by_key(|(cp, _)| *cp);

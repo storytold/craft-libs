@@ -23,6 +23,8 @@ Font size is estimated from the displayed frame; zero text margins and auto-fit 
 expand rather than clip wrapped lines. Empty WordArt is omitted. At most 200 Unicode characters
 and 100 font-name characters are kept per shape; complex strings decode at most 4096 UTF-16
 units. WordArt lines share the document's paragraph budget, and text parts share its part cap.
+WordArt text is charged to the document's character budget but may use only half of it, so the
+document's own text is still read; WordArt past that share is left out.
 
 There is no writer.
 

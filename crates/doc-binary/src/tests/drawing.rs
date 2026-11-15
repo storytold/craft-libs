@@ -799,3 +799,34 @@ fn a_dib_with_a_large_tail_is_charged_for_its_copy() {
     assert!(officeart::blip(&big, 64 << 20, &mut work).is_none());
     assert_eq!(work.left, dib_len - 1);
 }
+
+#[test]
+fn word_art_text_is_charged_to_the_character_budget() {
+    // The document-wide character budget (twice the WordDocument stream's length) caps the
+    // text a .doc can make, however often its stories repeat. WordArt text, kept from the Table
+    // stream, wasn't charged to it, so 40 shapes of 200 letters each all came through a small
+    // file. WordArt is read before the stories, so it may only use the half of the budget the
+    // stories can't need: past that it is left out, and the body text is still read whole.
+    use std::io::Read;
+    const SHAPES: u32 = 40;
+    let letters = "W".repeat(200);
+    let shapes: Vec<_> = (0..SHAPES).map(|i| sp(&[fsp(136, 1026 + i, 0xA00), fopt(&[], &[(0x00C0, wz(&letters))])])).collect();
+    let art = art_content(&[], &shapes);
+    let cps: Vec<u32> = (1..=SHAPES).chain([SHAPES + 2]).collect();
+    let spas: Vec<u8> = (0..SHAPES).flat_map(|i| spa(1026 + i, [0, 0, 1440, 720], spa_flags(0, 0, 3, false))).collect();
+    let text: &'static str = Box::leak(format!("A{}B\r", "\u{8}".repeat(SHAPES as usize)).into_boxed_str());
+    let spec = StructSpec { text, extra_pairs: vec![(40, plc(&cps, &spas)), (50, art)], ..structured_spec(text, text.chars().count() as u32) };
+    let file = struct_doc(&spec);
+    let mut word = Vec::new();
+    cfb::CompoundFile::open(std::io::Cursor::new(file.clone())).unwrap().open_stream("/WordDocument").unwrap().read_to_end(&mut word).unwrap();
+    let budget = word.len() as u64 * 2;
+    assert!(budget / 2 < u64::from(SHAPES) * 200, "the shapes must not all fit in half the budget");
+
+    let doc = read(&file).expect("opens");
+    let kept: Vec<_> = doc.parts.values().filter(|p| p.kind == craft_wordmodel::PartKind::TextBox).collect();
+    let kept_chars: u64 = kept.iter().flat_map(|p| &p.blocks).filter_map(|b| b.as_para()).map(|p| p.text.chars().count() as u64).sum();
+    assert!(!kept.is_empty(), "WordArt within the budget is still kept");
+    assert!(kept_chars <= budget / 2, "{kept_chars} WordArt characters with a budget of {budget}");
+    let body = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert_eq!(body.text.chars().filter(|c| c.is_alphabetic()).collect::<String>(), "AB", "the body text is read whole");
+}
