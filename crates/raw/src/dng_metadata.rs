@@ -1,57 +1,41 @@
-//! Clean-room DNG and CinemaDNG decoder, implemented from the public specifications only (see the
-//! crate README for editions): the TIFF 6.0 / TIFF-EP container, uncompressed and lossless JPEG
-//! (ITU-T T.81 process 14) raw data, and the DNG processing model (linearisation, black and white
-//! levels, white balance, demosaic, default crop, colour matrices) to a scene-linear Rec. 709
-//! picture.
-//!
-//! - [`sniff`]: is this a DNG (a TIFF with a DNGVersion tag)?
-//! - [`Dng::parse`] → [`Dng::info`] (size, bit depth, CinemaDNG frame rate and time code),
-//!   [`Dng::raw`] (the raw samples) and [`Dng::develop`] (linear RGBA floats).
-//! - [`decode`]: parse and develop in one call.
-//!
-//! Every number in the file is hostile: offsets, counts and sizes are checked, allocations are
-//! capped by [`raw::MAX_SAMPLES`] and by the amount of data present, and the IFD walk is bounded.
-
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
-
-pub mod color;
-pub mod demosaic;
-pub mod ljpeg;
-pub mod process;
-pub mod raw;
-pub mod tiff;
-#[cfg(any(test, feature = "writer"))]
-pub mod writer;
-
-use color::{Calibration, M3, V3};
-use demosaic::Pattern;
-use process::Params;
-use raw::{PHOTOMETRIC_CFA, RawImage};
-use tiff::{Entry, Ifd, Tiff, tags};
-
-/// DNG decoding errors.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum Error {
-    #[error("not a DNG file")]
-    NotDng,
-    #[error("truncated DNG data")]
-    Truncated,
-    #[error("raw image too large")]
-    TooLarge,
-    #[error("malformed DNG: {0}")]
-    Malformed(&'static str),
-    #[error("unsupported DNG: {0}")]
-    Unsupported(String),
+//! Bounded DNG processing and camera metadata, before application rendering.
+use crate::dng_lines::{self, Error, PHOTOMETRIC_CFA, Result};
+use craft_tiff::classic::{Entry, Ifd, Tiff, tags};
+type M3 = [[f64; 3]; 3];
+type V3 = [f64; 3];
+/// Camera-plane colour filter pattern.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pattern {
+    pub rows: usize,
+    pub cols: usize,
+    pub colors: Vec<u8>,
 }
-
-pub type Result<T> = std::result::Result<T, Error>;
-
-/// Whether `b` is a DNG: a TIFF file whose first IFD has a DNGVersion tag.
-pub fn sniff(b: &[u8]) -> bool {
-    let Ok((t, first)) = Tiff::new(b) else { return false };
-    t.read_ifd(first, 0).is_ok_and(|(ifd, _)| ifd.get(tags::DNG_VERSION).is_some())
+/// Parsed image processing tags.
+#[derive(Clone, Debug, Default)]
+pub struct Params {
+    pub active_area: Option<[usize; 4]>,
+    pub linearization: Option<Vec<u16>>,
+    pub black_repeat: (usize, usize),
+    pub black: Vec<f64>,
+    pub black_delta_h: Vec<f64>,
+    pub black_delta_v: Vec<f64>,
+    pub white: Vec<f64>,
+    pub crop_origin: Option<(f64, f64)>,
+    pub crop_size: Option<(f64, f64)>,
+    pub cfa: Option<Pattern>,
 }
-
+/// Parsed camera colour calibration.
+#[derive(Clone, Debug, Default)]
+pub struct Calibration {
+    pub color_matrix: [Option<M3>; 2],
+    pub camera_calibration: [Option<M3>; 2],
+    pub forward_matrix: [Option<M3>; 2],
+    pub illuminant: [Option<u64>; 2],
+    pub analog_balance: Option<V3>,
+    pub as_shot_neutral: Option<V3>,
+    pub as_shot_white_xy: Option<(f64, f64)>,
+    pub baseline_exposure: f64,
+}
 /// SMPTE ST 12-1 time code of a CinemaDNG frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Timecode {
@@ -76,85 +60,36 @@ impl Timecode {
     }
 }
 
-/// What a DNG holds, without decoding the pixels.
+/// File-level capture fields, without image geometry or rendering policy.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Info {
-    /// Size of the developed picture (the default crop).
-    pub width: usize,
-    pub height: usize,
-    /// Size of the stored raw image.
-    pub raw_width: usize,
-    pub raw_height: usize,
-    pub bits: u32,
-    pub samples_per_pixel: usize,
-    /// Colour filter array data (else LinearRaw).
-    pub cfa: bool,
-    /// "uncompressed" or "lossless JPEG".
-    pub compression: &'static str,
+pub struct CaptureInfo {
     pub dng_version: [u8; 4],
-    /// CinemaDNG FrameRate (numerator, denominator).
     pub frame_rate: Option<(i64, i64)>,
-    /// CinemaDNG time code of this frame.
     pub timecode: Option<Timecode>,
-    /// UniqueCameraModel, else Make and Model.
     pub camera: Option<String>,
-    /// CinemaDNG ReelName.
     pub reel: Option<String>,
 }
-
-/// A developed DNG: premultiplied, scene-linear Rec. 709 RGBA floats (alpha 1), top row first.
-/// A white surface the sensor saw at its clipping level is 1.0 times 2^BaselineExposure.
-pub struct Image {
-    pub info: Info,
-    pub width: usize,
-    pub height: usize,
-    pub rgba: Vec<f32>,
+/// Metadata reader with the file's main and raw IFDs.
+pub struct Metadata<'a, 'i> {
+    pub tiff: Tiff<'a>,
+    pub main: &'i Ifd,
+    pub raw: &'i Ifd,
 }
-
-/// A parsed DNG file.
-pub struct Dng<'a> {
-    tiff: Tiff<'a>,
-    ifds: Vec<Ifd>,
-    /// Index of the main raw IFD in `ifds` (the first is IFD 0).
-    raw: usize,
-}
-
-impl<'a> Dng<'a> {
-    /// Parse the container and find the main raw image.
-    pub fn parse(bytes: &'a [u8]) -> Result<Dng<'a>> {
-        let (tiff, first) = Tiff::new(bytes)?;
-        let ifds = tiff.all_ifds(first)?;
-        if ifds.first().and_then(|i| i.get(tags::DNG_VERSION)).is_none() {
-            return Err(Error::NotDng);
-        }
-        let main = raw::find_raw_ifd(&tiff, &ifds)?;
-        let raw = ifds.iter().position(|i| i.offset == main.offset).ok_or(Error::Malformed("raw IFD"))?;
-        Ok(Dng { tiff, ifds, raw })
-    }
-
-    fn ifd0(&self) -> &Ifd {
-        static EMPTY: Ifd = Ifd { offset: 0, entries: Vec::new(), depth: 0 };
-        self.ifds.first().unwrap_or(&EMPTY)
-    }
-
-    fn raw_ifd(&self) -> &Ifd {
-        self.ifds.get(self.raw).unwrap_or(self.ifd0())
-    }
-
+impl Metadata<'_, '_> {
     /// A raw-image tag: from the raw IFD, else IFD 0.
     fn raw_tag(&self, tag: u16) -> Option<&Entry> {
-        self.raw_ifd().get(tag).or_else(|| self.ifd0().get(tag))
+        self.raw.get(tag).or_else(|| self.main.get(tag))
     }
 
     /// A camera-wide tag: from IFD 0, else the raw IFD.
     fn main_tag(&self, tag: u16) -> Option<&Entry> {
-        self.ifd0().get(tag).or_else(|| self.raw_ifd().get(tag))
+        self.main.get(tag).or_else(|| self.raw.get(tag))
     }
 
     /// A numeric tag's values; a value outside the file (or a zero denominator) is an error, so a
     /// damaged file does not silently lose its white balance.
     fn floats(&self, e: Option<&Entry>) -> Result<Option<Vec<f64>>> {
-        e.map(|e| self.tiff.floats(e)).transpose()
+        Ok(e.map(|e| self.tiff.floats(e)).transpose()?)
     }
 
     /// A 3 × 3 matrix tag (`None` when absent or not 3 × 3, e.g. for other colour counts).
@@ -168,13 +103,9 @@ impl<'a> Dng<'a> {
         Ok(self.floats(self.main_tag(tag))?.and_then(|v| <[f64; 3]>::try_from(v.as_slice()).ok()))
     }
 
-    fn text(&self, tag: u16) -> Option<String> {
-        self.main_tag(tag).and_then(|e| self.tiff.ascii(e).ok()).filter(|s| !s.is_empty())
-    }
-
     /// The CFA pattern in camera planes (`None` for LinearRaw).
-    fn cfa(&self) -> Result<Option<Pattern>> {
-        let l = raw::layout(&self.tiff, self.raw_ifd())?;
+    pub fn cfa(&self) -> Result<Option<Pattern>> {
+        let l = dng_lines::layout(&self.tiff, self.raw)?;
         if l.photometric != PHOTOMETRIC_CFA {
             return Ok(None);
         }
@@ -211,7 +142,6 @@ impl<'a> Dng<'a> {
         Ok(Some(Pattern { rows, cols, colors }))
     }
 
-    /// The processing tags of the raw image.
     pub fn params(&self) -> Result<Params> {
         let uint_pair = |tag| -> Result<Option<(usize, usize)>> {
             match self.raw_tag(tag) {
@@ -248,7 +178,7 @@ impl<'a> Dng<'a> {
                 None => Ok(None),
             }
         };
-        let list = |tag| -> Result<Vec<f64>> { self.raw_tag(tag).map(|e| self.tiff.floats(e)).transpose().map(Option::unwrap_or_default) };
+        let list = |tag| -> Result<Vec<f64>> { Ok(self.raw_tag(tag).map(|e| self.tiff.floats(e)).transpose()?.unwrap_or_default()) };
         Ok(Params {
             active_area,
             linearization,
@@ -261,6 +191,33 @@ impl<'a> Dng<'a> {
             crop_size: pair(tags::DEFAULT_CROP_SIZE)?,
             cfa: self.cfa()?,
         })
+    }
+
+    fn text(&self, tag: u16) -> Option<String> {
+        self.main_tag(tag).and_then(|e| self.tiff.ascii(e).ok()).filter(|s| !s.is_empty())
+    }
+    /// Read file-level CinemaDNG and camera fields.
+    pub fn capture_info(&self) -> CaptureInfo {
+        let dng_version = self
+            .main_tag(tags::DNG_VERSION)
+            .and_then(|e| self.tiff.uints(e).ok())
+            .and_then(|v| v.get(..4).map(|v| [0, 1, 2, 3].map(|i| v[i] as u8)))
+            .unwrap_or_default();
+        let frame_rate = self.main_tag(tags::FRAME_RATE).and_then(|e| {
+            let b = self.tiff.value_bytes(e).ok()?;
+            if !matches!(e.ty, craft_tiff::classic::Type::SRational | craft_tiff::classic::Type::Rational) {
+                return None;
+            }
+            let n = i64::from(self.tiff.u32_of(b.get(0..4)?.try_into().ok()?) as i32);
+            let d = i64::from(self.tiff.u32_of(b.get(4..8)?.try_into().ok()?) as i32);
+            (n > 0 && d > 0 && n <= 1000 * d && n * 1000 >= d).then_some((n, d))
+        });
+        let timecode = self.main_tag(tags::TIME_CODES).and_then(|e| self.tiff.value_bytes(e).ok()).and_then(Timecode::from_bytes);
+        let camera = self.text(tags::UNIQUE_CAMERA_MODEL).or_else(|| {
+            let mm = [self.text(tags::MAKE), self.text(tags::MODEL)].into_iter().flatten().collect::<Vec<_>>().join(" ");
+            (!mm.is_empty()).then_some(mm)
+        });
+        CaptureInfo { dng_version, frame_rate, timecode, camera, reel: self.text(tags::REEL_NAME) }
     }
 
     /// The colour tags.
@@ -281,78 +238,37 @@ impl<'a> Dng<'a> {
             baseline_exposure: self.floats(self.main_tag(tags::BASELINE_EXPOSURE))?.and_then(|v| v.first().copied()).unwrap_or(0.0),
         })
     }
-
-    /// Size, depth and CinemaDNG metadata.
-    pub fn info(&self) -> Result<Info> {
-        let l = raw::layout(&self.tiff, self.raw_ifd())?;
-        let p = self.params()?;
-        let (_, _, aw, ah) = process::active_rect(&p, l.width, l.height)?;
-        let (_, _, width, height) = process::crop_rect(&p, aw, ah);
-        let dng_version = self
-            .main_tag(tags::DNG_VERSION)
-            .and_then(|e| self.tiff.uints(e).ok())
-            .and_then(|v| v.get(..4).map(|v| [0, 1, 2, 3].map(|i| v[i] as u8)))
-            .unwrap_or_default();
-        let frame_rate = self.main_tag(tags::FRAME_RATE).and_then(|e| {
-            let b = self.tiff.value_bytes(e).ok()?;
-            if !matches!(e.ty, tiff::Type::SRational | tiff::Type::Rational) {
-                return None;
-            }
-            let n = i64::from(self.tiff.u32_of(b.get(0..4)?.try_into().ok()?) as i32);
-            let d = i64::from(self.tiff.u32_of(b.get(4..8)?.try_into().ok()?) as i32);
-            (n > 0 && d > 0 && n <= 1000 * d && n * 1000 >= d).then_some((n, d))
-        });
-        let timecode = self.main_tag(tags::TIME_CODES).and_then(|e| self.tiff.value_bytes(e).ok()).and_then(Timecode::from_bytes);
-        let camera = self.text(tags::UNIQUE_CAMERA_MODEL).or_else(|| {
-            let mm = [self.text(tags::MAKE), self.text(tags::MODEL)].into_iter().flatten().collect::<Vec<_>>().join(" ");
-            (!mm.is_empty()).then_some(mm)
-        });
-        Ok(Info {
-            width,
-            height,
-            raw_width: l.width,
-            raw_height: l.height,
-            bits: l.bits,
-            samples_per_pixel: l.samples_per_pixel,
-            cfa: p.cfa.is_some(),
-            compression: if l.compression == 7 { "lossless JPEG" } else { "uncompressed" },
-            dng_version,
-            frame_rate,
-            timecode,
-            camera,
-            reel: self.text(tags::REEL_NAME),
-        })
-    }
-
-    /// The raw samples of the main image, as stored (before any processing).
-    pub fn raw(&self) -> Result<RawImage> {
-        raw::read(&self.tiff, self.raw_ifd())
-    }
-
-    /// Develop the main image to scene-linear Rec. 709.
-    pub fn develop(&self) -> Result<Image> {
-        let info = self.info()?;
-        let p = self.params()?;
-        let raw = self.raw()?;
-        let calibration = self.calibration()?;
-        let solved = if p.cfa.is_none() && raw.samples_per_pixel == 1 {
-            // monochrome: no colour, only the exposure
-            let e = 2f64.powf(calibration.baseline_exposure.clamp(-16.0, 16.0));
-            color::Solved { neutral: [1.0; 3], matrix: color::scale(&color::IDENTITY, e), white_xy: color::D65 }
-        } else {
-            calibration.solve()?
-        };
-        let d = process::develop(&raw, &p, &solved.neutral, &solved.matrix)?;
-        Ok(Image { info, width: d.width, height: d.height, rgba: d.rgba })
-    }
 }
 
-/// Parse and develop a DNG file.
-pub fn decode(bytes: &[u8]) -> Result<Image> {
-    Dng::parse(bytes)?.develop()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Parse a DNG file's metadata.
-pub fn probe(bytes: &[u8]) -> Result<Info> {
-    Dng::parse(bytes)?.info()
+    #[test]
+    fn timecode_bcd_and_limits() {
+        assert_eq!(
+            Timecode::from_bytes(&[0x52, 0x34, 0x12, 0x09]),
+            Some(Timecode { frames: 12, seconds: 34, minutes: 12, hours: 9, drop_frame: true })
+        );
+        assert_eq!(Timecode::from_bytes(&[0, 0x60, 0, 0]), None);
+        assert_eq!(Timecode::from_bytes(&[0x0a, 0, 0, 0]), None);
+        assert_eq!(Timecode::from_bytes(&[0, 0, 0]), None);
+    }
+
+    #[test]
+    fn calibration_defaults_and_rejects_bad_rational() -> Result<()> {
+        let empty = Ifd::default();
+        let tiff = Tiff { data: &[], big_endian: false };
+        let metadata = Metadata { tiff, main: &empty, raw: &empty };
+        let calibration = metadata.calibration()?;
+        assert_eq!(calibration.baseline_exposure, 0.0);
+        assert_eq!(calibration.color_matrix, [None, None]);
+
+        // IFD with one BaselineExposure SRational pointing past the end of the file.
+        let data = [b'I', b'I', 42, 0, 8, 0, 0, 0, 1, 0, 42, 198, 10, 0, 1, 0, 0, 0, 200, 0, 0, 0, 0, 0, 0, 0];
+        let (tiff, first) = Tiff::new(&data)?;
+        let (ifd, _) = tiff.read_ifd(first, 0)?;
+        assert!(Metadata { tiff, main: &ifd, raw: &ifd }.calibration().is_err());
+        Ok(())
+    }
 }
