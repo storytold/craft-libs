@@ -84,22 +84,83 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
 const XMP_SIG: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 const XMP_EXT_SIG: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
 
+/// JPEG frame, marker and metadata details collected before the first scan.
+#[derive(Debug, Default)]
+pub struct JpegInspection {
+    /// Stored frame width.
+    pub width: u32,
+    /// Stored frame height.
+    pub height: u32,
+    /// Number of frame components.
+    pub components: u8,
+    /// Sample precision.
+    pub precision: u8,
+    /// Start-of-frame marker byte.
+    pub sof: u8,
+    /// Components in the first scan.
+    pub first_scan_components: u8,
+    /// Number of APP1 segments.
+    pub app1: u32,
+    /// First EXIF TIFF payload.
+    pub exif: Option<Vec<u8>>,
+    /// Offset of the EXIF TIFF payload.
+    pub exif_offset: usize,
+    /// First standard XMP packet.
+    pub xmp: Option<String>,
+    /// Reassembled ICC profile.
+    pub icc: Option<Vec<u8>>,
+    /// ICC chunks were malformed or inconsistent.
+    pub icc_invalid: bool,
+    /// Adobe APP14 transform byte.
+    pub adobe_transform: Option<u8>,
+    /// MPF TIFF offset and payload.
+    pub mpf: Option<(usize, Vec<u8>)>,
+    /// ISO gain-map APP2 payload following its identifier.
+    pub iso_gainmap: Option<Vec<u8>>,
+    valid: bool,
+}
+
+impl JpegInspection {
+    /// Whether metadata identifies this image as a gain map.
+    pub fn is_gain_map(&self) -> bool {
+        self.iso_gainmap.as_ref().is_some_and(|p| p.len() > 4) || self.xmp.as_deref().is_some_and(|x| x.contains("hdrgm:GainMapMax"))
+    }
+}
+
+/// Inspect markers before the first scan, tolerating garbage between segments and truncated
+/// final payloads. Returns `None` for a missing SOI or an invalid segment length.
+pub fn inspect_jpeg(b: &[u8]) -> Option<JpegInspection> {
+    if !b.starts_with(&[0xff, 0xd8]) {
+        return None;
+    }
+    let (embedded, _, mut inspection) = jpeg_segments_inner(b, false, true);
+    if !inspection.valid {
+        return None;
+    }
+    inspection.exif = embedded.exif;
+    inspection.xmp = embedded.xmp.map(|x| x.trim_end_matches('\0').to_string());
+    inspection.icc = embedded.icc;
+    Some(inspection)
+}
+
 /// Walk JPEG markers up to SOS and collect APP1 Exif / XMP, APP2 ICC and APP13 IPTC.
 pub fn jpeg_segments(b: &[u8]) -> Embedded {
-    jpeg_segments_inner(b, false).0
+    jpeg_segments_inner(b, false, false).0
 }
 
 /// Walk JPEG metadata and return every ordinary XMP APP1 packet in segment order, along with the
 /// usual [`Embedded`] projection (which retains only the first ordinary packet).
 pub fn jpeg_segments_with_all_xmp(b: &[u8]) -> (Embedded, Vec<String>) {
-    jpeg_segments_inner(b, true)
+    let (embedded, packets, _) = jpeg_segments_inner(b, true, false);
+    (embedded, packets)
 }
 
-fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String>) {
+fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool, inspect: bool) -> (Embedded, Vec<String>, JpegInspection) {
     let mut out = Embedded::default();
     let mut xmp_packets = Vec::new();
+    let mut inspection = JpegInspection { valid: true, ..Default::default() };
     if !b.starts_with(&[0xff, 0xd8]) {
-        return (out, xmp_packets);
+        return (out, xmp_packets, inspection);
     }
     let mut icc_parts: [Option<&[u8]>; 255] = [None; 255];
     let mut icc_total = None;
@@ -110,6 +171,10 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String
     let mut i = 2usize;
     while i + 4 <= b.len() {
         if b[i] != 0xff {
+            if inspect {
+                i += 1;
+                continue;
+            }
             break;
         }
         let marker = b[i + 1];
@@ -122,10 +187,14 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String
             continue;
         }
         if marker == 0xd9 || marker == 0xda {
+            if inspect && marker == 0xda {
+                inspection.first_scan_components = b.get(i + 4).copied().unwrap_or(0);
+            }
             break;
         }
         let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
         if len < 2 {
+            inspection.valid = false;
             break;
         }
         let Some(start) = i.checked_add(4) else { break };
@@ -133,8 +202,13 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String
         let complete = declared_end <= b.len();
         let end = declared_end.min(b.len());
         let Some(payload) = b.get(start..end) else { break };
+        if inspect {
+            inspect_marker(&mut inspection, marker, payload, start, out.exif.is_none());
+        }
         match marker {
-            0xe1 if payload.starts_with(b"Exif\0") && out.exif.is_none() => out.exif = Some(payload.get(6..).unwrap_or(&[]).to_vec()),
+            0xe1 if payload.starts_with(if inspect { b"Exif\0\0" } else { b"Exif\0" }) && out.exif.is_none() => {
+                out.exif = Some(payload.get(6..).unwrap_or(&[]).to_vec())
+            }
             0xe1 if payload.starts_with(XMP_SIG) && out.xmp.is_none() => {
                 let packet = String::from_utf8_lossy(&payload[XMP_SIG.len()..]).into_owned();
                 if collect_all_xmp {
@@ -145,7 +219,7 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String
             0xe1 if payload.starts_with(XMP_SIG) && collect_all_xmp => {
                 xmp_packets.push(String::from_utf8_lossy(&payload[XMP_SIG.len()..]).into_owned());
             }
-            0xe1 if payload.starts_with(XMP_EXT_SIG) => {
+            0xe1 if !inspect && payload.starts_with(XMP_EXT_SIG) => {
                 // GUID (32) + full length (4) + offset (4) + data
                 let p = &payload[XMP_EXT_SIG.len()..];
                 if p.len() >= 40 {
@@ -156,35 +230,9 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String
                 }
             }
             0xe2 if payload.starts_with(b"ICC_PROFILE\0") => {
-                if !complete || payload.len() < 14 {
-                    icc_invalid = true;
-                } else if let Some(header) = payload.get(12..14) {
-                    let (Some(&sequence), Some(&total)) = (header.first(), header.get(1)) else {
-                        icc_invalid = true;
-                        i = end;
-                        continue;
-                    };
-                    if sequence == 0 || total == 0 || sequence > total || icc_total.is_some_and(|expected| expected != total) {
-                        icc_invalid = true;
-                    } else {
-                        icc_total = Some(total);
-                        if let Some(slot) = icc_parts.get_mut(usize::from(sequence - 1)) {
-                            if slot.is_some() {
-                                icc_invalid = true;
-                            } else if let Some(data) = payload.get(14..) {
-                                *slot = Some(data);
-                            } else {
-                                icc_invalid = true;
-                            }
-                        } else {
-                            icc_invalid = true;
-                        }
-                    }
-                } else {
-                    icc_invalid = true;
-                }
+                collect_icc_part(payload, complete, &mut icc_parts, &mut icc_total, &mut icc_invalid);
             }
-            0xed if payload.starts_with(b"Photoshop 3.0\0") && out.iptc.is_none() => out.iptc = photoshop_iptc(&payload[14..]),
+            0xed if !inspect && payload.starts_with(b"Photoshop 3.0\0") && out.iptc.is_none() => out.iptc = photoshop_iptc(&payload[14..]),
             _ => {}
         }
         i = end;
@@ -214,8 +262,61 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool) -> (Embedded, Vec<String
             out.icc = Some(profile);
         }
     }
-    attach_extension(&mut out, b, ext, &ext_headers);
-    (out, xmp_packets)
+    inspection.icc_invalid = icc_invalid;
+    if !inspect {
+        attach_extension(&mut out, b, ext, &ext_headers);
+    }
+    (out, xmp_packets, inspection)
+}
+
+fn collect_icc_part<'a>(payload: &'a [u8], complete: bool, parts: &mut [Option<&'a [u8]>; 255], total: &mut Option<u8>, invalid: &mut bool) {
+    if !complete || payload.len() < 14 {
+        *invalid = true;
+        return;
+    }
+    let (sequence, count) = (payload[12], payload[13]);
+    if sequence == 0 || count == 0 || sequence > count || total.is_some_and(|expected| expected != count) {
+        *invalid = true;
+        return;
+    }
+    *total = Some(count);
+    let Some(slot) = parts.get_mut(usize::from(sequence - 1)) else {
+        *invalid = true;
+        return;
+    };
+    if slot.is_some() {
+        *invalid = true;
+    } else {
+        *slot = payload.get(14..);
+    }
+}
+
+fn inspect_marker(info: &mut JpegInspection, marker: u8, payload: &[u8], start: usize, needs_exif: bool) {
+    if (0xc0..=0xcf).contains(&marker) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) && payload.len() >= 6 && info.components == 0 {
+        info.precision = payload[0];
+        info.sof = marker;
+        info.height = u32::from(u16::from_be_bytes([payload[1], payload[2]]));
+        info.width = u32::from(u16::from_be_bytes([payload[3], payload[4]]));
+        info.components = payload[5];
+    }
+    if marker == 0xe1 {
+        info.app1 = info.app1.saturating_add(1);
+    }
+    if marker == 0xe1 && payload.starts_with(b"Exif\0\0") && needs_exif {
+        info.exif_offset = start + 6;
+    }
+    if marker == 0xe2 && payload.starts_with(b"MPF\0") && info.mpf.is_none() {
+        info.mpf = Some((start + 4, payload[4..].to_vec()));
+    }
+    if marker == 0xe2
+        && info.iso_gainmap.is_none()
+        && let Some(data) = payload.strip_prefix(b"urn:iso:std:iso:ts:21496:-1\0")
+    {
+        info.iso_gainmap = Some(data.to_vec());
+    }
+    if marker == 0xee && payload.starts_with(b"Adobe") && payload.len() >= 12 {
+        info.adobe_transform = Some(payload[11]);
+    }
 }
 
 /// Put the Extended XMP of JPEG `b` into `out`: when the standard packet links one, only that GUID's
@@ -863,5 +964,47 @@ mod tests {
         for n in 0..j.len() {
             let _ = crate::extract(&j[..n]);
         }
+    }
+}
+
+#[cfg(test)]
+mod jpeg_inspection_tests {
+    use super::*;
+    fn segment(out: &mut Vec<u8>, marker: u8, data: &[u8]) {
+        out.extend_from_slice(&[0xff, marker]);
+        out.extend_from_slice(&((data.len() as u16) + 2).to_be_bytes());
+        out.extend_from_slice(data);
+    }
+    #[test]
+    fn reports_mpf_gainmap_and_adobe_transform() {
+        let mut b = vec![0xff, 0xd8];
+        segment(&mut b, 0xe2, b"MPF\0IIabc");
+        segment(&mut b, 0xe2, b"urn:iso:std:iso:ts:21496:-1\0abcde");
+        segment(&mut b, 0xee, b"Adobe\0\0\0\0\0\0\x02");
+        b.extend_from_slice(&[0xff, 0xd9]);
+        let info = inspect_jpeg(&b).unwrap();
+        let (offset, data) = info.mpf.unwrap();
+        assert_eq!(&b[offset..offset + data.len()], data);
+        assert_eq!(info.iso_gainmap.as_deref(), Some(&b"abcde"[..]));
+        assert_eq!(info.adobe_transform, Some(2));
+    }
+
+    #[test]
+    fn tolerant_walk_keeps_offsets_frame_and_icc_chunks() {
+        let mut b = vec![0xff, 0xd8, 0x44];
+        segment(&mut b, 0xe1, b"Exif\0\0II");
+        segment(&mut b, 0xe2, b"ICC_PROFILE\0\x02\x02B");
+        segment(&mut b, 0xe2, b"ICC_PROFILE\0\x01\x02A");
+        segment(&mut b, 0xc0, &[8, 0, 2, 0, 3, 3]);
+        b.extend_from_slice(&[0xff, 0xda, 0, 3, 3]);
+        let info = inspect_jpeg(&b).unwrap();
+        assert_eq!((info.width, info.height, info.components, info.first_scan_components), (3, 2, 3, 3));
+        assert_eq!(info.app1, 1);
+        assert_eq!(&b[info.exif_offset..info.exif_offset + 2], b"II");
+        assert_eq!(info.icc.as_deref(), Some(&b"AB"[..]));
+        assert!(!info.icc_invalid);
+        // The existing strict API still stops at the garbage byte.
+        assert!(jpeg_segments(&b).exif.is_none());
+        assert!(inspect_jpeg(&[0xff, 0xd8, 0xff, 0xe1, 0, 1]).is_none());
     }
 }
