@@ -164,7 +164,17 @@ pub(crate) enum Transport {
 impl Transport {
     pub(crate) fn arm_recv_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         match self {
-            Self::Local(stream) => stream.set_recv_timeout(timeout),
+            Self::Local(stream) => {
+                let result = stream.set_recv_timeout(timeout);
+                // Darwin rejects socket options after full shutdown (sosetoptlock), even when
+                // unread reply bytes remain. Reading those bytes or EOF cannot block, so let
+                // the read report the actual protocol result instead of this timeout error.
+                #[cfg(target_os = "macos")]
+                if result.as_ref().is_err_and(|err| err.raw_os_error() == Some(libc::EINVAL)) {
+                    return Ok(());
+                }
+                result
+            }
             Self::Tcp(stream) => stream.set_read_timeout(timeout),
         }
     }
@@ -562,6 +572,24 @@ mod tests {
         assert_eq!(event.seq, 4);
         assert_eq!(event.data, json!({"doc_id": "abc"}));
         assert!(client.next_event(Some(Duration::ZERO)).unwrap().is_none());
+    }
+
+    #[test]
+    fn queued_events_are_read_after_the_peer_has_closed() {
+        let mut server = peer("closed", |stream, record| {
+            let mut reader = BufReader::new(stream);
+            accept_auth(&mut reader, &record.token);
+            for seq in [1, 2] {
+                write_val(&mut reader, &json!({"event": "doc.changed", "seq": seq, "data": {}}));
+            }
+        });
+        let mut client = Client::connect(&server.record).unwrap();
+        server.join.take().unwrap().join().unwrap();
+        for seq in [1, 2] {
+            let event = client.next_event(Some(Duration::from_secs(1))).unwrap().expect("queued event after peer close");
+            assert_eq!(event.seq, seq);
+        }
+        assert!(matches!(client.next_event(Some(Duration::from_secs(1))), Err(LinkError::Closed)));
     }
 
     #[test]
