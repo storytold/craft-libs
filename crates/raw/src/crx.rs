@@ -1310,6 +1310,11 @@ mod tests {
         for end in 0..sample.len() {
             assert!(decode(&sample[..end], &config).is_err());
         }
+        // A corrupt QP map (nonzero alignment bits) is reported as such, not as a plane error.
+        let at = sample.windows(5).position(|bytes| bytes == [0, 0, 1, 0x2c, 0x94]).unwrap() + 4;
+        sample[at] ^= 1;
+        let error = decode(&sample, &config).unwrap_err().to_string();
+        assert!(error.contains("alignment") && !error.contains("plane"), "{error}");
     }
 
     #[test]
