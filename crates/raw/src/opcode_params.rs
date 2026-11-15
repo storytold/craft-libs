@@ -254,7 +254,11 @@ pub fn parse(id: u32, bytes: &[u8], context: Context) -> Result<Params<'_>, Pars
                 _ => {
                     let n = r.count(4)?;
                     let vals = (0..n).map(|_| r.f32()).collect::<Result<Vec<_>, _>>()?;
-                    let need = if matches!(id, 10 | 12) { area.rows().count() } else { area.cols().count() };
+                    let need = if matches!(id, 10 | 12) {
+                        area.bottom.saturating_sub(area.top).div_ceil(area.row_pitch)
+                    } else {
+                        area.right.saturating_sub(area.left).div_ceil(area.col_pitch)
+                    };
                     if vals.len() < need {
                         return Err(ParseError::Malformed("opcode with fewer values than rows or columns"));
                     }
