@@ -120,7 +120,7 @@ fn hex_chunks_keep_bytes_and_order() {
     // DXF groups 310–319 and 1004 permit 127 payload bytes per chunk. A binary length
     // byte can represent more, but that is reader tolerance, not writer conformance.
     // Larger payloads need chunk-size/reassembly checks rather than exact tag equality;
-    // see hex_chunks.rs for the independent wire checks and pending writer regressions.
+    // see hex_chunks.rs for the independent wire checks.
     for length in [0, 1, 2, 126, 127] {
         let hex: String = (0..length).fold(String::new(), |mut out, i| {
             use std::fmt::Write as _;

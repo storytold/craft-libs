@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 
 pub mod builtin;
+mod builtin_v2;
 pub mod clut;
 pub mod curve;
 pub mod gamut;
