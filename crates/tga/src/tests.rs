@@ -240,8 +240,7 @@ fn written_files_read_back() {
 fn aggregate_decode_budget_applies_before_rle_expansion() {
     let mut file = header(10, 16, 16, 32, 0x28);
     file.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0, 255, 255]);
-    let mut limits = Limits::default();
-    limits.max_decoded_bytes = 2047;
+    let mut limits = Limits { max_decoded_bytes: 2047, ..Limits::default() };
     assert_eq!(decode(&file, &limits), Err(Error::LimitExceeded("decode allocation bytes")));
     limits.max_decoded_bytes = 2048;
     assert_eq!(decode(&file, &limits).unwrap().rgba.len(), 1024);
@@ -258,8 +257,7 @@ fn aggregate_decode_budget_counts_raw_and_palette_storage() {
     file[5] = 1;
     file[7] = 24;
     file.extend_from_slice(&[0, 0, 255, 0]);
-    let mut limits = Limits::default();
-    limits.max_decoded_bytes = 8;
+    let mut limits = Limits { max_decoded_bytes: 8, ..Limits::default() };
     assert_eq!(decode(&file, &limits), Err(Error::LimitExceeded("decode allocation bytes")));
     limits.max_decoded_bytes = 9;
     assert_eq!(decode(&file, &limits).unwrap().rgba, [255, 0, 0, 255]);
