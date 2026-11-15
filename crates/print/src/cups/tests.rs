@@ -341,3 +341,26 @@ fn a_server_that_answers_is_reachable_and_silence_is_not() {
     };
     assert!(!ipp::reachable(&Server::Tcp(addr)), "a port nothing listens on is not reachable");
 }
+
+#[test]
+fn chunked_reply_is_bounded_and_rejects_ambiguous_framing() {
+    let good = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n";
+    assert_eq!(super::read_reply(&mut &good[..]).unwrap(), b"abcde");
+    for bad in [
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n\r\n".as_slice(),
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n100001\r\n",
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\na",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n",
+    ] {
+        assert!(super::read_reply(&mut &bad[..]).is_err());
+    }
+}
+
+#[test]
+fn explicit_server_rejects_header_injection_and_malformed_port() {
+    for value in ["host\r\nInjected: yes", "host:0", "host:99999", "http://host", "user@host", ""] {
+        assert!(Server::parse(value).is_err(), "{value:?}");
+    }
+    assert_eq!(Server::parse("[::1]:631").unwrap().authority(), "[::1]:631");
+    assert_eq!(Server::parse("print.example:8631").unwrap().authority(), "print.example:8631");
+}

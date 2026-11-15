@@ -6,16 +6,17 @@
 //! Implemented from the public IPP encoding (RFC 2910/8010) and semantics (RFC 8011) and
 //! CUPS's IPP documentation; the scheduler is reached on its socket or loopback port.
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 
 use super::{Duplex, Error, Job, Printer, Scaling};
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Where the local scheduler listens: its socket, else its loopback port.
 const CUPS_SOCKET: &str = "/run/cups/cups.sock";
@@ -59,6 +60,57 @@ static REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 pub enum Server {
     Unix(PathBuf),
     Tcp(SocketAddr),
+    /// A caller-authorized host. DNS is resolved once for each connection attempt.
+    Named(String, u16),
+}
+
+impl Server {
+    /// Parse an explicitly selected CUPS_SERVER value, without connecting. No URLs,
+    /// credentials, control characters or HTTP authority delimiters are accepted.
+    pub fn parse(value: &str) -> Result<Self, Error> {
+        if value.starts_with('/') {
+            return Ok(Self::Unix(value.into()));
+        }
+        if value.is_empty() || value.len() > 255 || value.bytes().any(|c| c.is_ascii_control() || c.is_ascii_whitespace() || b"/@?#\\".contains(&c)) {
+            return Err(Error::Spool("invalid CUPS server".into()));
+        }
+        if let Ok(address) = value.parse::<SocketAddr>() {
+            return Ok(Self::Tcp(address));
+        }
+        if let Ok(ip) = value.parse::<std::net::IpAddr>() {
+            return Ok(Self::Tcp(SocketAddr::new(ip, 631)));
+        }
+        let (host, port) = match value.rsplit_once(':') {
+            Some((host, port)) => (host, port.parse::<u16>().ok().filter(|p| *p != 0).ok_or_else(|| Error::Spool("invalid CUPS port".into()))?),
+            None => (value, 631),
+        };
+        if host.is_empty() || host.contains([':', '[', ']']) {
+            return Err(Error::Spool("invalid CUPS host".into()));
+        }
+        Ok(Self::Named(host.into(), port))
+    }
+
+    fn authority(&self) -> String {
+        match self {
+            Self::Unix(_) => "localhost".into(),
+            Self::Tcp(addr) => addr.to_string(),
+            Self::Named(host, port) => format!("{host}:{port}"),
+        }
+    }
+}
+
+/// Local scheduler candidates, honoring the user's explicit CUPS_SERVER setting.
+/// No requests are made by this function; apps must authorize selection before use.
+pub fn configured_servers() -> Result<Vec<Server>, Error> {
+    if let Some(value) = std::env::var_os("CUPS_SERVER").filter(|v| !v.is_empty()) {
+        return Ok(vec![Server::parse(&value.to_string_lossy())?]);
+    }
+    Ok(vec![
+        Server::Unix(CUPS_SOCKET.into()),
+        Server::Unix("/var/run/cups/cups.sock".into()),
+        Server::Unix("/private/var/run/cupsd".into()),
+        Server::Tcp(([127, 0, 0, 1], 631).into()),
+    ])
 }
 
 fn endpoints() -> [Server; 2] {
@@ -77,7 +129,19 @@ pub(crate) fn reachable(server: &Server) -> bool {
 
 fn connect(server: &Server) -> std::io::Result<Stream> {
     match server {
+        #[cfg(unix)]
         Server::Unix(path) => UnixStream::connect(path).map(Stream::Unix),
+        #[cfg(not(unix))]
+        Server::Unix(_) => Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Unix sockets unavailable")),
+        Server::Named(host, port) => {
+            // Validate even directly constructed public variants before resolving or writing headers.
+            Server::parse(&format!("{host}:{port}")).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+            let addr = (host.as_str(), *port)
+                .to_socket_addrs()?
+                .next()
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "CUPS host has no address"))?;
+            TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).map(Stream::Tcp)
+        }
         // A loopback connect either answers promptly or the server is not there.
         Server::Tcp(addr) => TcpStream::connect_timeout(addr, CONNECT_TIMEOUT).map(|s| {
             let _ = s.set_nodelay(true);
@@ -88,6 +152,7 @@ fn connect(server: &Server) -> std::io::Result<Stream> {
 
 /// A connection to the scheduler.
 enum Stream {
+    #[cfg(unix)]
     Unix(UnixStream),
     Tcp(TcpStream),
 }
@@ -95,6 +160,7 @@ enum Stream {
 impl Stream {
     fn set_timeouts(&self, timeout: Duration) -> std::io::Result<()> {
         let (read, write) = match self {
+            #[cfg(unix)]
             Stream::Unix(s) => (s.set_read_timeout(Some(timeout)), s.set_write_timeout(Some(timeout))),
             Stream::Tcp(s) => (s.set_read_timeout(Some(timeout)), s.set_write_timeout(Some(timeout))),
         };
@@ -105,6 +171,7 @@ impl Stream {
 impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
+            #[cfg(unix)]
             Stream::Unix(s) => s.read(buf),
             Stream::Tcp(s) => s.read(buf),
         }
@@ -114,12 +181,14 @@ impl Read for Stream {
 impl Write for Stream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
+            #[cfg(unix)]
             Stream::Unix(s) => s.write(buf),
             Stream::Tcp(s) => s.write(buf),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
+            #[cfg(unix)]
             Stream::Unix(s) => s.flush(),
             Stream::Tcp(s) => s.flush(),
         }
@@ -253,7 +322,7 @@ pub(crate) fn post(endpoints: &[Server], path: &str, body: &[u8], timeout: Durat
                 continue;
             }
         };
-        match exchange(&mut stream, path, body, timeout) {
+        match exchange(&mut stream, &server.authority(), path, body, timeout) {
             Ok(reply) => return Ok(reply),
             Err(e) => {
                 failed = Some(e);
@@ -267,10 +336,10 @@ pub(crate) fn post(endpoints: &[Server], path: &str, body: &[u8], timeout: Durat
 }
 
 /// Send one IPP request and read the reply's body.
-fn exchange(stream: &mut Stream, path: &str, body: &[u8], timeout: Duration) -> Result<Vec<u8>, Error> {
+fn exchange(stream: &mut Stream, authority: &str, path: &str, body: &[u8], timeout: Duration) -> Result<Vec<u8>, Error> {
     stream.set_timeouts(timeout).map_err(|e| Error::Spool(format!("the print server could not be set up: {e}")))?;
     let head = format!(
-        "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "POST {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream
@@ -278,12 +347,28 @@ fn exchange(stream: &mut Stream, path: &str, body: &[u8], timeout: Duration) -> 
         .and_then(|()| stream.write_all(body))
         .and_then(|()| stream.flush())
         .map_err(|e| Error::Spool(format!("the request could not be sent to the print server: {e}")))?;
-    read_reply(stream)
+    read_reply(&mut DeadlineReader { stream, end: Instant::now() + timeout })
 }
 
 /// The reply's body: a strict status line and headers, then exactly `Content-Length` bytes. CUPS
 /// answers with Content-Length; a chunked or unterminated reply is refused, not guessed.
-fn read_reply(stream: &mut Stream) -> Result<Vec<u8>, Error> {
+struct DeadlineReader<'a> {
+    stream: &'a mut Stream,
+    end: Instant,
+}
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self
+            .end
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "CUPS reply deadline exceeded"))?;
+        self.stream.set_timeouts(left)?;
+        self.stream.read(buf)
+    }
+}
+
+fn read_reply(stream: &mut impl Read) -> Result<Vec<u8>, Error> {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -314,6 +399,7 @@ fn read_reply(stream: &mut Stream) -> Result<Vec<u8>, Error> {
         _ => return Err(Error::Spool(format!("the print server refused the request (HTTP {code})"))),
     }
     let mut content_length: Option<usize> = None;
+    let mut chunked = false;
     for line in head.lines().skip(1) {
         // The empty line ends the header block; any other line without a colon is malformed.
         if line.is_empty() {
@@ -323,13 +409,27 @@ fn read_reply(stream: &mut Stream) -> Result<Vec<u8>, Error> {
             return Err(Error::Spool("the print server sent an unreadable header".into()));
         };
         match name.trim().to_ascii_lowercase().as_str() {
-            "content-length" => content_length = value.trim().parse::<usize>().ok(),
+            "content-length" => {
+                let len = value.trim().parse::<usize>().map_err(|_| Error::Spool("invalid Content-Length".into()))?;
+                if content_length.replace(len).is_some() {
+                    return Err(Error::Spool("duplicate Content-Length".into()));
+                }
+            }
             // Only `identity` is not a transfer encoding to be decoded.
-            "transfer-encoding" if !value.trim().eq_ignore_ascii_case("identity") => {
-                return Err(Error::Spool("the print server sent a chunked reply".into()));
+            "transfer-encoding" => {
+                if chunked || !value.trim().eq_ignore_ascii_case("chunked") {
+                    return Err(Error::Spool("unsupported Transfer-Encoding".into()));
+                }
+                chunked = true;
             }
             _ => {}
         }
+    }
+    if chunked {
+        if content_length.is_some() {
+            return Err(Error::Spool("ambiguous reply framing".into()));
+        }
+        return read_chunks(stream);
     }
     let Some(len) = content_length else { return Err(Error::Spool("the print server sent no Content-Length".into())) };
     if len > MAX_BODY {
@@ -338,6 +438,60 @@ fn read_reply(stream: &mut Stream) -> Result<Vec<u8>, Error> {
     let mut body = vec![0u8; len];
     stream.read_exact(&mut body).map_err(|e| Error::Spool(format!("the print server's reply was cut short: {e}")))?;
     Ok(body)
+}
+
+fn read_chunks(stream: &mut impl Read) -> Result<Vec<u8>, Error> {
+    fn line(stream: &mut impl Read) -> Result<Vec<u8>, Error> {
+        let mut out = Vec::new();
+        for _ in 0..MAX_HEADERS {
+            let mut byte = [0];
+            stream.read_exact(&mut byte).map_err(|e| Error::Spool(format!("truncated chunk: {e}")))?;
+            out.push(byte[0]);
+            if out.ends_with(b"\r\n") {
+                out.truncate(out.len() - 2);
+                return Ok(out);
+            }
+        }
+        Err(Error::Spool("chunk line exceeds limit".into()))
+    }
+    let mut body = Vec::new();
+    for _ in 0..100_000 {
+        let header = line(stream)?;
+        let size = header.split(|b| *b == b';').next().unwrap_or_default();
+        if size.is_empty() || !size.iter().all(u8::is_ascii_hexdigit) {
+            return Err(Error::Spool("invalid chunk size".into()));
+        }
+        let len = std::str::from_utf8(size)
+            .ok()
+            .and_then(|s| usize::from_str_radix(s, 16).ok())
+            .ok_or_else(|| Error::Spool("invalid chunk size".into()))?;
+        if len == 0 {
+            let mut total = 0usize;
+            loop {
+                let trailer = line(stream)?;
+                total = total.saturating_add(trailer.len() + 2);
+                if total > MAX_HEADERS {
+                    return Err(Error::Spool("chunk trailers exceed limit".into()));
+                }
+                if trailer.is_empty() {
+                    return Ok(body);
+                }
+                if !trailer.contains(&b':') {
+                    return Err(Error::Spool("invalid chunk trailer".into()));
+                }
+            }
+        }
+        let end = body.len().checked_add(len).filter(|n| *n <= MAX_BODY).ok_or_else(|| Error::Spool("chunked reply exceeds limit".into()))?;
+        let start = body.len();
+        body.resize(end, 0);
+        stream.read_exact(&mut body[start..]).map_err(|e| Error::Spool(format!("truncated chunk: {e}")))?;
+        let mut crlf = [0; 2];
+        stream.read_exact(&mut crlf).map_err(|e| Error::Spool(format!("truncated chunk: {e}")))?;
+        if crlf != *b"\r\n" {
+            return Err(Error::Spool("invalid chunk terminator".into()));
+        }
+    }
+    Err(Error::Spool("too many chunks".into()))
 }
 
 /// An IPP request being built: a version, an operation and a request id, then attributes, then
