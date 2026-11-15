@@ -1,4 +1,5 @@
-//! Preset patterns on collections and overlays: `PresetBrowser`, `PresetPicker`, `PresetFooter` and `NamedPresetRow`.
+//! Preset patterns on collections and overlays: `PresetBrowser`, `PresetPicker`, `PresetFooter`, `NamedPresetRow` and
+//! `PresetManager`.
 
 mod words;
 

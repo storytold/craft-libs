@@ -42,5 +42,9 @@ craft_ui::words! {
         name_invalid: "namedPresetRow.nameInvalid" = "This name can't be used.";
         more: "namedPresetRow.more" = "Manage presets";
         save_as_new: "namedPresetRow.saveAsNew" = "Save as New Preset…";
+
+        manager_kind: "presetManager.kind" = "Preset Type";
+        manager_empty: "presetManager.empty" = "No presets of this type.";
+        done: "presetManager.done" = "Done";
     }
 }
