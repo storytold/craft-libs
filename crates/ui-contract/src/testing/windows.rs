@@ -13,6 +13,12 @@ pub fn install_spec() -> InstallSpec {
     InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows))
 }
 
+/// Makes the shell of `ctx` run on `os`, for a test of the OS matrix: the key table, the chords shown, the chrome,
+/// the capabilities of a native build and egui's own OS all follow it.
+pub fn set_os(ctx: &egui::Context, os: craft_host::target::Os) {
+    crate::runtime::windows::set_os(ctx, os);
+}
+
 /// The window actions the platform applies out of reach of egui's commands (`SetOpacity`) since the last call.
 pub fn applied_actions(ctx: &egui::Context) -> Vec<(egui::ViewportId, crate::runtime::windows::WindowAction)> {
     crate::runtime::windows::take_sent(ctx)

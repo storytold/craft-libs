@@ -304,7 +304,6 @@ impl Fixture {
     /// text editing.
     pub fn os(&mut self, os: Os) -> &mut Self {
         crate::runtime::windows::set_os(&self.frames.ctx, os);
-        fixture::set_os(&self.frames.ctx, os);
         self
     }
 
