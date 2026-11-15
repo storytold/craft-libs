@@ -21,19 +21,18 @@ pub enum PathKind {
 impl PathKind {
     /// Whether a row of this kind is renamed in place.
     pub fn renames(self) -> bool {
-        let _ = self;
-        todo!("tl.T34")
+        matches!(self, PathKind::Saved | PathKind::Work)
     }
 
     /// Whether a row of this kind can be dragged.
     pub fn drags(self) -> bool {
-        let _ = self;
-        todo!("tl.T34")
+        // A shape layer's path is the shape itself, so it is not dragged to the trash.
+        matches!(self, PathKind::Saved | PathKind::Work | PathKind::VectorMask)
     }
 
-    /// Whether a row of this kind is shown in italics: the work path.
+    /// Whether a row of this kind is shown in italics: every temporary path, that is every kind but a saved path.
     pub fn italic(self) -> bool {
-        matches!(self, PathKind::Work)
+        !matches!(self, PathKind::Saved)
     }
 }
 
@@ -65,7 +64,6 @@ impl<K> PathRow<K> {
 #[non_exhaustive]
 pub enum PathsEvent<K> {
     /// A row was selected; `None` for a click on the empty area, which deselects.
-    // P3(tools-w10): tl.T34 `Select(Option<K>)`
     Select(Option<K>),
     /// A rename committed: never empty after trimming, never unchanged.
     #[non_exhaustive]
@@ -85,7 +83,6 @@ pub enum PathsEvent<K> {
     },
     /// A command of the panel menu or the row menu, with the row the menu was opened on (`None` for a panel-menu
     /// command with no target row).
-    // P3(tools-w10): tl.T34 `Command { command, key }`
     #[non_exhaustive]
     Command {
         /// The command.
@@ -94,7 +91,6 @@ pub enum PathsEvent<K> {
         key: Option<K>,
     },
     /// A footer button was clicked, with the selected rows and the click's modifiers.
-    // P3(tools-w10): tl.T34 `Footer`
     #[non_exhaustive]
     Footer {
         /// The button.
@@ -105,7 +101,6 @@ pub enum PathsEvent<K> {
         mods: craft_keymap::Mods,
     },
     /// Rows were dropped on a footer button.
-    // P3(tools-w10): tl.T34 `FooterDrop`
     #[non_exhaustive]
     FooterDrop {
         /// The button.
@@ -117,34 +112,28 @@ pub enum PathsEvent<K> {
 
 impl<K> PathsEvent<K> {
     /// A committed rename of `key` to `text`.
-    // P3(tools-w10): tl.T34 constructors
     pub fn rename(key: K, text: impl Into<String>) -> Self {
-        let _ = (key, text);
-        todo!("tl.T34")
+        PathsEvent::Rename { key, text: text.into() }
     }
 
     /// A load of `key` as a selection with `operation`.
     pub fn load_selection(key: K, operation: SelectionOperation) -> Self {
-        let _ = (key, operation);
-        todo!("tl.T34")
+        PathsEvent::LoadSelection { key, operation }
     }
 
     /// `command` on the row `key`.
     pub fn command(command: super::PathsCommands, key: Option<K>) -> Self {
-        let _ = (command, key);
-        todo!("tl.T34")
+        PathsEvent::Command { command, key }
     }
 
     /// A click on the footer `button` with `rows` selected and `mods` held.
     pub fn footer(button: super::PathsFooterButton, rows: Vec<K>, mods: craft_keymap::Mods) -> Self {
-        let _ = (button, rows, mods);
-        todo!("tl.T34")
+        PathsEvent::Footer { button, rows, mods }
     }
 
     /// `rows` dropped on the footer `button`.
     pub fn footer_drop(button: super::PathsFooterButton, rows: Vec<K>) -> Self {
-        let _ = (button, rows);
-        todo!("tl.T34")
+        PathsEvent::FooterDrop { button, rows }
     }
 }
 

@@ -11,6 +11,9 @@ mod gradient_overlay;
 mod connector;
 mod shape_drag;
 
+// draw-paths
+mod paths_panel;
+
 // draw-pen-a
 mod bezier;
 

@@ -6,6 +6,8 @@ mod menu;
 mod model;
 mod panel;
 mod rows;
+#[cfg(feature = "screen-testing")]
+pub(crate) mod stories;
 mod words;
 
 pub use footer::PathsFooterButton;
