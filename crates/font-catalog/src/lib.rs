@@ -27,9 +27,11 @@ mod fontconfig;
 mod outline;
 mod registry;
 mod scan;
+mod segments;
 mod shape;
 mod suitcase;
 pub mod system;
+mod visual_order;
 
 pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch};
 pub use env::{FontEnv, Os, font_dirs, font_store_dir, office_font_dirs};
@@ -37,7 +39,9 @@ pub use fallback::{cluster_face, drawable_characters};
 pub use fontconfig::fontconfig_dirs;
 pub use outline::{FontOutline, GlyphPen, OutlineError};
 pub use scan::{FaceInfo, LocalizedName, Source, is_font_file, style_italic, style_weight, style_width};
+pub use segments::SegmentBoundary;
 pub use shape::{RunGlyph, RunInput, ShapeRunError, shape_run};
+pub use visual_order::{VisualGlyph, visual_order};
 
 #[cfg(test)]
 mod tests;
