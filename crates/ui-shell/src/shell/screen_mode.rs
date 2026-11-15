@@ -10,8 +10,9 @@ use egui::Context;
 use std::sync::Arc;
 
 /// The three screen modes. The shell keeps the current one in its `screen_mode` binding and maps it to the body mode,
-/// the document tabs and the scroll bars.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// the document tabs and the scroll bars. Saved as `"standard"`, `"fullScreenWithMenuBar"` and `"fullScreen"`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ScreenMode {
     /// Everything shows.

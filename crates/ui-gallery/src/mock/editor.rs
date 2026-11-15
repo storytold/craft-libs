@@ -11,7 +11,7 @@ use craft_theme::variant::Tone;
 use craft_ui::bars::{Bar, BarKind, StatusMessage, StatusReadout, StatusValues};
 use craft_ui::buttons::{IconButton, Link};
 use craft_ui::canvas::{PickStep, ViewCommands};
-use craft_ui::contract::{Bind, BodyCx, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, BodyCx, PaneEdge, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _};
 use craft_ui::dialog::{DialogResult, PromptChoice, StandardPrompt};
 use craft_ui::display::{Divider, Text};
 use craft_ui::docking::{DockConfig, DockEvent, DockPanels as _};
@@ -82,7 +82,7 @@ impl<'a> EditorMock<'a> {
             .screen_mode(screen_mode)
             .title_bar_if(true, |ui, _, state: &mut MockState| title_bar(ui, state))
             .options_bar(true, |ui, _, state: &mut MockState| options_bar(ui, state))
-            .tools(true, |ui, _, state: &mut MockState| tool_rail(ui, state))
+            .tools(PaneEdge::Start, true, |ui, _, state: &mut MockState| tool_rail(ui, state))
             .status(true, |ui, _, state: &mut MockState| status_bar(ui, state))
             .body_label(label)
             .body(|ui, cx, state: &mut MockState| body(ui, cx, state));

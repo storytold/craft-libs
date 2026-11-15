@@ -126,6 +126,13 @@ impl Toast {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ToastId(u64);
 
+impl ToastId {
+    /// The handle as a number, unique among the toasts of one queue: what a host reports to automation.
+    pub fn value(self) -> u64 {
+        self.0
+    }
+}
+
 /// A toast in the queue, as the host reads it.
 #[derive(Clone, Debug)]
 #[non_exhaustive]

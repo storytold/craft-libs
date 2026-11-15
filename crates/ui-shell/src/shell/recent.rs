@@ -55,8 +55,9 @@ impl Template {
     }
 }
 
-/// How the recent files show.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// How the recent files show. Saved as `"grid"` or `"list"`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum RecentView {
     /// Cards with thumbnails, as many columns as fit.
@@ -66,8 +67,9 @@ pub enum RecentView {
     List,
 }
 
-/// The recent files' order.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// The recent files' order. Saved as `"opened"`, `"name"` or `"created"`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum RecentSort {
     /// Most recently opened first.

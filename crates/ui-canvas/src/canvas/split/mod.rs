@@ -35,8 +35,9 @@ pub use craft_behavior::dock::Arrangement as SplitLayout;
 
 /// Where the dividers lie, as fractions of the area counted from its start edge and its top: one entry per column line
 /// and per row line of the layout, in order. A list that does not fit the layout (the wrong length, not ascending, or
-/// outside 0–1) lays out that axis in even cells.
-#[derive(Clone, Debug, PartialEq)]
+/// outside 0–1) lays out that axis in even cells. A saved value missing a field takes that field's default lines.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 #[non_exhaustive]
 pub struct SplitAt {
     /// The column lines (the vertical dividers), each over the width.

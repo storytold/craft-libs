@@ -42,6 +42,27 @@ pub enum Tone {
 }
 
 impl Tone {
+    /// Every tone, in declaration order.
+    pub const ALL: [Tone; 6] = [Tone::Neutral, Tone::Accent, Tone::Info, Tone::Good, Tone::Warn, Tone::Bad];
+
+    /// The tone's name in lower case (`"neutral"`, `"accent"`, `"info"`, `"good"`, `"warn"`, `"bad"`): the word hosts
+    /// read and write in automation and saved data.
+    pub fn name(self) -> &'static str {
+        match self {
+            Tone::Neutral => "neutral",
+            Tone::Accent => "accent",
+            Tone::Info => "info",
+            Tone::Good => "good",
+            Tone::Warn => "warn",
+            Tone::Bad => "bad",
+        }
+    }
+
+    /// The tone [`name`](Self::name) gives `name`; `None` for any other word.
+    pub fn from_name(name: &str) -> Option<Tone> {
+        Tone::ALL.into_iter().find(|tone| tone.name() == name)
+    }
+
     /// The tone's tinted fill: `accent.soft`, the status background, and the sunken surface for no status.
     pub fn soft_fill(self, tokens: &Tokens) -> Rgba {
         tokens.color.get(ToneTokens::of(self).soft_fill)
@@ -151,7 +172,7 @@ impl ToneTokens {
 /// The (ink, fill) token pairs of every soft and solid variant, in the variant table's own terms.
 pub(crate) fn variant_pairs() -> Vec<(ColorToken, ColorToken)> {
     let mut pairs = Vec::new();
-    for tone in [Tone::Neutral, Tone::Accent, Tone::Info, Tone::Good, Tone::Warn, Tone::Bad] {
+    for tone in Tone::ALL {
         let t = ToneTokens::of(tone);
         pairs.extend([(t.fg, t.soft_fill), (t.on_solid, t.solid), (t.on_solid, t.solid_hover), (t.on_solid, t.solid_pressed)]);
     }
