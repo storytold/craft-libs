@@ -3,14 +3,18 @@
 //! DXF is a sequence of (group code, value) pairs. This crate parses ASCII and binary DXF into a
 //! flat list of [`Tag`]s, splits them into sections and entities, and writes tags back. [`model`]
 //! reads the tags as a drawing (header variables, tables, blocks, entities, objects); mapping
-//! that onto an application's own document is left to the caller. Written from Autodesk's
+//! that onto an application's own document is left to the caller. [`drawing`] writes an ASCII
+//! file around a pre-built `ENTITIES` section (VectorCraft's writer). Written from Autodesk's
 //! published DXF Reference; depends on no other Craft crate. Moved from CADCraft's `cadcraft-dxf`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
 use std::io::Write as _;
 
+pub mod drawing;
 pub mod model;
+pub mod mtext;
+pub mod mtext_tokens;
 pub mod paths;
 mod version;
 pub use version::Version;

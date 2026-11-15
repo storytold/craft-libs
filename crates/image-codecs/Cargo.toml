@@ -47,6 +47,7 @@ exr = { version = "1.73", default-features = false, features = ["rayon"] }
 proptest = { workspace = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
+craft-media-testkit = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 craft-video = { workspace = true, features = ["av1-decode"] }

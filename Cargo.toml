@@ -17,6 +17,7 @@ craft-proto = { path = "crates/proto" }
 acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
+craft-plist = { path = "crates/plist" }
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
@@ -37,6 +38,7 @@ hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"
 bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
+craft-gzip = { path = "crates/gzip" }
 craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
 craft-captions = { path = "crates/captions" }
@@ -90,6 +92,7 @@ craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
 craft-jpeg = { path = "crates/jpeg" }
 craft-jsonrpc = { path = "crates/jsonrpc" }
+craft-mcp = { path = "crates/mcp" }
 craft-jxl = { path = "crates/jxl" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
@@ -144,6 +147,7 @@ craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
 craft-svg-paths = { path = "crates/svg-paths" }
 craft-stream-codecs = { path = "crates/stream-codecs" }
 craft-text = { path = "crates/text" }
+craft-tcraft = { path = "crates/tcraft" }
 craft-texture = { path = "crates/texture" }
 craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }

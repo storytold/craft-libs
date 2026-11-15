@@ -531,8 +531,7 @@ pub fn write_cube(l: &LutFile) -> String {
         s.push_str(&format!("DOMAIN_MAX {} {} {}\n", l.domain_max[0], l.domain_max[1], l.domain_max[2]));
     }
     s.push_str(&format!("LUT_3D_SIZE {}\n", l.size));
-    write_cube_rows(&mut s, l);
-    s
+    cube_rows(s, l.data.as_chunks::<3>().0.iter().copied())
 }
 
 /// Writes a `.cube` file with a creator comment, section comments and an explicit input domain.
@@ -549,14 +548,33 @@ pub fn write_cube_commented(l: &LutFile, creator: &str) -> String {
         s.push_str(&format!("DOMAIN_MAX {} {} {}\n", l.domain_max[0], l.domain_max[1], l.domain_max[2]));
     }
     s.push_str("\n#LUT data points\n");
-    write_cube_rows(&mut s, l);
+    cube_rows(s, l.data.as_chunks::<3>().0.iter().copied())
+}
+
+fn cube_rows(mut s: String, rows: impl Iterator<Item = [f32; 3]>) -> String {
+    for c in rows {
+        s.push_str(&format!("{:.6} {:.6} {:.6}\n", c[0], c[1], c[2]));
+    }
     s
 }
 
-fn write_cube_rows(s: &mut String, l: &LutFile) {
-    for c in l.data.as_chunks::<3>().0 {
-        s.push_str(&format!("{:.6} {:.6} {:.6}\n", c[0], c[1], c[2]));
-    }
+/// Annotated identity-domain CUBE export, streamed in red-fastest order without a table copy.
+/// Callers supply exactly `size³` rows for a valid size (2..=[`MAX_SIZE`]), as with [`write_cube`].
+/// Integer-depth exports clamp/round to 1/32768 steps; floating exports clamp without rounding.
+pub fn write_cube_export(creator: &str, title: &str, size: usize, integer_depth: bool, rows: impl Iterator<Item = [f32; 3]>) -> String {
+    let s = format!(
+        "#Created by: {creator}\nTITLE \"{}\"\n\n#LUT size\nLUT_3D_SIZE {size}\n\n#data domain\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n\n#LUT data points\n",
+        title.replace('"', "'")
+    );
+    cube_rows(
+        s,
+        rows.map(|c| {
+            c.map(|v| {
+                let v = v.clamp(0.0, 1.0);
+                if integer_depth { (v * 32768.0).round() / 32768.0 } else { v }
+            })
+        }),
+    )
 }
 
 fn luma(c: [f32; 3]) -> f32 {
@@ -1344,5 +1362,27 @@ LUT_3D_SIZE 2
         let back = parse_cube(&write_cube(&l)).expect("roundtrip");
         assert_eq!(back.domain_min, l.domain_min, "the written table must mean the same");
         assert_eq!(back.domain_max, l.domain_max);
+    }
+    #[test]
+    fn annotated_cube_export_preserves_header_and_integer_precision() {
+        let mut lut = LutFile::identity(2).unwrap();
+        lut.title = "My \"Look\"".into();
+        lut.data[..3].copy_from_slice(&[1.0 / 6.0, 5.0 / 6.0, 160.0 / 255.0]);
+        let output = write_cube_export("PhotoCraft", &lut.title, lut.size, true, lut.data.as_chunks::<3>().0.iter().copied());
+        assert!(output.starts_with("#Created by: PhotoCraft\nTITLE \"My 'Look'\"\n\n#LUT size\nLUT_3D_SIZE 2\n\n#data domain\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n\n#LUT data points\n0.166656 0.833344 0.627441\n"));
+        assert_eq!(output.lines().count(), 11 + 8);
+        let parsed = parse_cube(&output).unwrap();
+        assert_eq!(parsed.size, 2);
+        assert_eq!(&parsed.data[3..], &lut.data[3..]);
+        let float = write_cube_export("PhotoCraft", &lut.title, lut.size, false, lut.data.as_chunks::<3>().0.iter().copied());
+        assert!(float.contains("0.166667 0.833333 0.627451\n"));
+    }
+
+    #[test]
+    fn annotated_empty_title_and_float_clamping() {
+        let text = write_cube_export("Exporter", "", 2, false, std::iter::repeat_n([-0.5, 0.25, 1.5], 8));
+        assert!(text.contains("TITLE \"\"\n"));
+        let back = parse_cube(&text).unwrap();
+        assert_eq!(back.data, [0.0, 0.25, 1.0].repeat(8));
     }
 }

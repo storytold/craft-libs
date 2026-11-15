@@ -16,6 +16,7 @@
 
 mod allocation;
 pub mod apng;
+pub mod bmp_probe;
 pub mod cicp;
 mod codecs;
 mod error;
@@ -25,9 +26,11 @@ mod fidelity;
 mod format;
 mod image;
 mod inspection;
+pub mod jpeg_sef;
 mod lab;
 mod options;
 pub mod orientation;
+pub mod png_probe;
 pub mod resolution;
 pub mod source_settings;
 pub mod web;
@@ -63,7 +66,7 @@ pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
-use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
+use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -102,6 +105,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Cineon => dpx::decode_cineon(bytes, l),
         Format::Dicom => dicom::decode(bytes, l),
         Format::Iff => iff::decode(bytes, l),
+        Format::JpegLs => jpegls::decode(bytes, l),
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Jp2 => jp2::decode(bytes, l),
@@ -458,6 +462,7 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Cineon => dpx::encode_cineon(image, plan),
         Format::Dicom => Err(CodecError::unsupported(format, "DICOM is import-only; save as TIFF or PNG instead")),
         Format::Iff => iff::encode(image, plan),
+        Format::JpegLs => jpegls::encode(image, plan),
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
         Format::Jp2 => Err(CodecError::unsupported(format, "JPEG 2000 is import-only; save as PNG or TIFF instead")),
