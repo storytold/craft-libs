@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::props::{
-    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor, Underline,
-    VAlign,
+    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, PropChange, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor,
+    Underline, VAlign,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -52,6 +52,12 @@ pub struct Style {
     pub default: bool,
     /// Table style: conditional formatting for header row, banding etc.
     pub table: Option<TableStyleParts>,
+    /// Tracked change to the style's paragraph properties (`w:pPrChange`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub para_change: Option<Box<PropChange<ParaProps>>>,
+    /// Tracked change to the style's run properties (`w:rPrChange`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chr_change: Option<Box<PropChange<CharProps>>>,
 }
 
 /// Table style conditional formats (shading + character formatting per region).
@@ -820,6 +826,94 @@ impl StyleSheet {
         }
         out.para.style = None;
         out.chr.style = None;
+        Some(out)
+    }
+    /// Word draws a run's text with the complex-script font, size, bold and italic only when the run
+    /// is complex script or right to left (`w:cs`, `w:rtl`) by its own properties, its paragraph
+    /// style, its table style or the run defaults; a character style saying so, or saying not,
+    /// doesn't count (nor does its `w:rtl` change the order of the text). Anywhere else the text takes the run's other font and `w:sz`, Thai included,
+    /// whatever its language or `w:hint` (measured in Word for Windows: Thai text at `w:sz` 22 pt,
+    /// `w:szCs` 11 pt is drawn at 22 pt), and the same in a `.doc`. WordCraft draws Thai, Lao and Indic characters with the
+    /// complex-script formatting unless the run says it is not complex script, and counts a character
+    /// style's `w:cs`; so a run it would draw otherwise says on itself whether it is complex script
+    /// (`w:cs`, which Word reads the same way). A reader calls this on each paragraph it has read. `table` is the run formatting the table style gives
+    /// the paragraph's cell. Runs with right-to-left text are left as they are: they are written
+    /// right to left.
+    pub fn mark_runs_as_word_draws_them(&self, para: &mut crate::para::Paragraph, table: Option<&CharProps>) {
+        use crate::bidi::{is_complex_script, is_rtl_script};
+        use crate::para::{InlineObject, OBJ};
+        // What each run draws: its text, a field kept as one object standing for its result
+        // (drawn in the run's formatting, and measured in Word to follow the same rule).
+        let mut drawn = Vec::with_capacity(para.runs.len());
+        let (mut at, mut objects) = (0, para.objects.iter());
+        for run in &para.runs {
+            let mut text = String::new();
+            for c in para.text.get(at..at + run.len).unwrap_or("").chars() {
+                if c != OBJ {
+                    text.push(c);
+                } else if let Some(InlineObject::Field { result, code: false, .. }) = objects.next() {
+                    text.push_str(result);
+                }
+            }
+            at += run.len;
+            drawn.push(text);
+        }
+        let style = para.props.style.as_deref();
+        for (run, text) in para.runs.iter_mut().zip(&drawn) {
+            if text.is_empty() || text.chars().any(is_rtl_script) {
+                continue;
+            }
+            let word = self.resolve_char_in(style, table, &CharProps { style: None, ..run.props.clone() });
+            let mut ours = self.resolve_char_in(style, table, &run.props);
+            // Right to left only by its character style: Word draws and orders the run as it does
+            // one that says nothing (measured, Latin and Thai text).
+            if ours.rtl && !word.rtl {
+                run.props.rtl = Some(false);
+                ours = self.resolve_char_in(style, table, &run.props);
+            }
+            if word.cs || word.rtl {
+                if !ours.cs && !ours.rtl {
+                    run.props.cs = Some(true);
+                }
+            } else if !ours.rtl && (ours.cs || (!ours.cs_off && text.chars().any(is_complex_script))) {
+                run.props.cs = Some(false);
+            }
+        }
+    }
+    /// The run formatting `t`'s table style gives the text of each of its cells, by row and then
+    /// cell: each of a cell's parts' over the last, lowest precedence first (ECMA-376 §17.7.6), as
+    /// layout applies it between document defaults and the paragraph's style. `None` when the
+    /// table has no style. The style and the table's size are worked out once for the whole table,
+    /// and each set of parts is put together once.
+    pub fn table_cells_chr(&self, t: &crate::table::Table) -> Option<Vec<Vec<CharProps>>> {
+        let st = self.table_style(t.props.style.as_deref()?)?;
+        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+        let ncols = t.cols().clamp(1, crate::table::MAX_COLS);
+        let nrows = t.rows.len();
+        let mut made: Vec<(PartSet, CharProps)> = Vec::new();
+        let mut out = Vec::with_capacity(nrows);
+        for (r, row) in t.rows.iter().enumerate() {
+            let mut g = row.first_grid();
+            let mut cells = Vec::with_capacity(row.cells.len());
+            for cell in &row.cells {
+                let span = cell.span();
+                let parts = PartSet::of_cell(&t.props.look, sizes, (r, nrows), (g, span, ncols));
+                g = g.saturating_add(span);
+                let chr = match made.iter().find(|(p, _)| *p == parts) {
+                    Some((_, chr)) => chr.clone(),
+                    None => {
+                        let mut chr = CharProps::default();
+                        for part in parts.iter() {
+                            chr.overlay(&st.part(part).chr);
+                        }
+                        made.push((parts, chr.clone()));
+                        chr
+                    }
+                };
+                cells.push(chr);
+            }
+            out.push(cells);
+        }
         Some(out)
     }
     /// Add or replace a style.

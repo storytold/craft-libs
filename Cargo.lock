@@ -223,6 +223,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "aotuv_lancer_vorbis_sys"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bc4fd1a61860d2f1198b60bedd30910eaffa978f1ee6214dfb24ac70d589225"
+dependencies = [
+ "cc",
+ "ogg_next_sys",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1314,6 +1324,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-anicraft-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-assuan"
 version = "0.1.0"
 dependencies = [
@@ -1341,7 +1359,12 @@ dependencies = [
  "serde_json",
  "symphonia",
  "thiserror 2.0.21",
+ "vorbis_rs",
 ]
+
+[[package]]
+name = "craft-ber"
+version = "0.1.0"
 
 [[package]]
 name = "craft-captions"
@@ -1838,17 +1861,22 @@ dependencies = [
 name = "craft-image-codecs"
 version = "0.1.0"
 dependencies = [
+ "avif-serialize",
  "craft-heif",
  "craft-jpeg",
+ "craft-metadata",
  "exr",
  "flate2",
  "half",
+ "hayro-jpeg2000",
  "image",
  "image-webp",
  "jpeg-encoder 0.6.1",
  "jxl-oxide",
  "png 0.18.1",
  "proptest",
+ "rav1e",
+ "ravif",
  "rayon",
  "serde_json",
  "thiserror 2.0.21",
@@ -1877,7 +1905,9 @@ dependencies = [
 name = "craft-jpeg"
 version = "0.1.0"
 dependencies = [
+ "jpeg-decoder",
  "jpeg-encoder 0.6.1",
+ "rayon",
  "thiserror 2.0.21",
  "zune-jpeg",
 ]
@@ -2170,6 +2200,7 @@ dependencies = [
  "bytemuck",
  "chrono",
  "craft-stream-codecs",
+ "craft-svg",
  "flate2",
  "hayro",
  "hayro-cmap",
@@ -2177,6 +2208,7 @@ dependencies = [
  "hayro-syntax",
  "js-sys",
  "krilla",
+ "krilla-svg",
  "kurbo 0.13.1",
  "md-5 0.11.0",
  "proptest",
@@ -2186,6 +2218,7 @@ dependencies = [
  "stringprep",
  "thiserror 2.0.21",
  "ttf-parser",
+ "usvg 0.47.0",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "zeroize",
@@ -2352,6 +2385,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ps"
+version = "0.1.0"
+dependencies = [
+ "craft-eps",
+ "kurbo 0.13.1",
+ "miniz_oxide 0.8.9",
+ "pdf-writer",
+ "skrifa 0.47.0",
+ "weezl 0.1.12",
+]
+
+[[package]]
 name = "craft-psd"
 version = "0.1.0"
 dependencies = [
@@ -2389,7 +2434,6 @@ dependencies = [
  "base64 0.23.1",
  "craft-image-codecs",
  "image",
- "rayon",
  "thiserror 2.0.21",
 ]
 
@@ -2558,6 +2602,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-texture"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-tga"
 version = "0.1.0"
 dependencies = [
@@ -2683,6 +2735,7 @@ version = "0.1.0"
 dependencies = [
  "craft-media",
  "craft-media-testkit",
+ "rav1e",
  "rayon",
  "thiserror 2.0.21",
 ]
@@ -2765,6 +2818,7 @@ dependencies = [
 name = "craft-xfl"
 version = "0.1.0"
 dependencies = [
+ "craft-xml",
  "miniz_oxide 0.8.9",
  "thiserror 2.0.21",
 ]
@@ -2797,6 +2851,7 @@ name = "craft-xml"
 version = "0.1.0"
 dependencies = [
  "quick-xml 0.41.0",
+ "serde",
  "thiserror 2.0.21",
 ]
 
@@ -4028,6 +4083,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbc773e24e02d4ddd8395fd30dc147524273a83e54e0f312d986ea30de5f5646"
 dependencies = [
  "roxmltree 0.20.0",
+]
+
+[[package]]
+name = "fontdb"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "457e789b3d1202543297a350643cf459f836cade38934e7a4cf6a39e7cde2905"
+dependencies = [
+ "fontconfig-parser",
+ "log",
+ "memmap2",
+ "slotmap",
+ "tinyvec",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -5319,6 +5388,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "jpeg-encoder"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5614,6 +5692,22 @@ dependencies = [
  "xmp-writer",
  "yoke",
  "zune-jpeg",
+]
+
+[[package]]
+name = "krilla-svg"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1237d7c37b16ca9fbc2e72dde13a10d321f9a44aceee35c062bc0a43bfc7ce16"
+dependencies = [
+ "flate2",
+ "fontdb 0.23.0",
+ "krilla",
+ "resvg 0.47.0",
+ "skrifa 0.42.1",
+ "smallvec",
+ "tiny-skia 0.12.0",
+ "usvg 0.47.0",
 ]
 
 [[package]]
@@ -6529,6 +6623,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c7959d3349f484aec36462f98226983578bf7d33f9b034c32967489c7000e1f"
 dependencies = [
  "phf 0.11.3",
+]
+
+[[package]]
+name = "ogg_next_sys"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed2d7a48e247c2bb07e633aefb65a38648ea58c7eedd4e4408a5861721ab049b"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -7821,6 +7924,23 @@ dependencies = [
  "svgtypes 0.15.3",
  "tiny-skia 0.11.4",
  "usvg 0.45.1",
+]
+
+[[package]]
+name = "resvg"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9be183ad6a216aa96f33e4c8033b0988b8b3ea6fd2359d19af5bac4643fd8e81"
+dependencies = [
+ "gif",
+ "image-webp",
+ "log",
+ "pico-args",
+ "rgb",
+ "svgtypes 0.16.2",
+ "tiny-skia 0.12.0",
+ "usvg 0.47.0",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -9871,13 +9991,41 @@ dependencies = [
 
 [[package]]
 name = "usvg"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d46cf96c5f498d36b7a9693bc6a7075c0bb9303189d61b2249b0dc3d309c07de"
+dependencies = [
+ "base64 0.22.1",
+ "data-url",
+ "flate2",
+ "fontdb 0.23.0",
+ "imagesize 0.14.0",
+ "kurbo 0.13.1",
+ "log",
+ "pico-args",
+ "roxmltree 0.21.2",
+ "rustybuzz",
+ "simplecss",
+ "siphasher",
+ "strict-num",
+ "svgtypes 0.16.2",
+ "tiny-skia-path 0.12.0",
+ "ttf-parser",
+ "unicode-bidi",
+ "unicode-script",
+ "unicode-vo",
+ "xmlwriter",
+]
+
+[[package]]
+name = "usvg"
 version = "0.48.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "977d0a4abdef933f424a99fe09f95576e089b90aebc6f016a3bc813762493e91"
 dependencies = [
  "base64 0.23.1",
  "data-url",
- "fontdb",
+ "fontdb 0.24.0",
  "harfrust 0.12.0",
  "imagesize 0.15.0",
  "kurbo 0.13.1",
@@ -10246,6 +10394,20 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vorbis_rs"
+version = "0.5.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49c5da94d280f7a27e8c937e9b73df2da3e23a2583f48471fd8fb4c72f9c1933"
+dependencies = [
+ "aotuv_lancer_vorbis_sys",
+ "errno",
+ "getrandom 0.4.3",
+ "ogg_next_sys",
+ "thiserror 2.0.21",
+ "tinyvec",
+]
 
 [[package]]
 name = "wait-timeout"
@@ -10992,7 +11154,7 @@ dependencies = [
 [[package]]
 name = "winprint"
 version = "0.2.1"
-source = "git+https://github.com/storytold/winprint.rs?rev=72951d7455ebcab569fbd9386c513d3d9f53fb02#72951d7455ebcab569fbd9386c513d3d9f53fb02"
+source = "git+https://github.com/storytold/winprint.rs?rev=8ae097ef941b432b0e7671b1ec3a506800e65e57#8ae097ef941b432b0e7671b1ec3a506800e65e57"
 dependencies = [
  "flate2",
  "fmt-derive",
