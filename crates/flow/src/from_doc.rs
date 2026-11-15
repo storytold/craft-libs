@@ -661,7 +661,10 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             {
                 (li.list, li.label) = (0, None);
             }
-            let old = Para { kind, list, align: c.old.align, page_break: c.old.page_break_before.unwrap_or(false), ..Default::default() };
+            // Direction resolved like the current paragraph's: the old properties' own `w:bidi`, else
+            // the style's.
+            let rtl = doc.styles.resolve_para(&c.old).bidi;
+            let old = Para { kind, list, align: c.old.align, rtl, page_break: c.old.page_break_before.unwrap_or(false), ..Default::default() };
             Box::new(FmtChange { mark: rev_mark(doc, c.rev), old })
         });
     }

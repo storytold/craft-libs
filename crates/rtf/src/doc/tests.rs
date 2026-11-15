@@ -95,6 +95,30 @@ fn oldpprops_keep_the_old_paragraph_direction() {
 }
 
 #[test]
+fn tracked_rtl_to_ltr_change_from_a_document_keeps_the_old_direction() {
+    use craft_wordmodel::props::{CharProps, ParaProps, PropChange};
+    use craft_wordmodel::{Revision, RevisionKind};
+    // Document origin (not RTF): now LTR, before RTL.
+    let mut p = craft_wordmodel::Paragraph::with_text("A", CharProps::default());
+    p.props.bidi = Some(false);
+    p.props.fmt_change = PropChange::boxed(0, ParaProps { bidi: Some(true), ..Default::default() });
+    let doc = doc_with(vec![p], vec![Revision::new(RevisionKind::Format, "Bob", "2025-01-02T08:05:00Z")]);
+    let flow = model::from_doc_tracked(&doc);
+    let Some(FBlock::Para(fp)) = flow.blocks.first() else { panic!("no paragraph") };
+    assert!(!fp.rtl);
+    assert!(fp.fmt_change.as_deref().expect("change").old.rtl, "snapshot keeps RTL");
+    let rtf = export(&doc);
+    assert!(rtf.contains("{\\*\\oldpprops"), "{rtf}");
+    let back = import(rtf.as_bytes()).unwrap();
+    let p = doc_paras(&back)[0];
+    assert_ne!(p.props.bidi, Some(true), "current direction is LTR");
+    let change = p.props.fmt_change.as_deref().expect("change read back");
+    assert_eq!(change.old.bidi, Some(true));
+    // Reject restores RTL.
+    assert_eq!(change.old.formatting().bidi, Some(true));
+}
+
+#[test]
 fn stylesheet_names_take_unicode_escapes() {
     // \u116?=t \u105?=i \u116?=t \u108?=l \u101?=e — how Word writes a non-Latin style name.
     let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u116?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
