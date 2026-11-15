@@ -38,6 +38,10 @@ aac-decode = ["craft-media/bitstream"]
 # The AAC encoder (`aac::Encoder`), and AAC in M4A through `encode` and `FileEncoder`.
 aac-encode = ["craft-media/bitstream", "craft-media/isobmff"]
 opus-decode = []
+# QOA (Quite OK Audio) files: decoder and encoder in the `qoa` module, each on its own.
+qoa = ["qoa-decode", "qoa-encode"]
+qoa-decode = []
+qoa-encode = []
 opus-encode = []
 ac3-decode = ["craft-media/bitstream"]
 mpa-decode = ["craft-media/bitstream"]
@@ -83,6 +87,10 @@ required-features = ["decode", "lossless-encode", "peaks"]
 [[test]]
 name = "codecs"
 required-features = ["decode", "encode"]
+
+[[test]]
+name = "qoa_oracle"
+required-features = ["qoa"]
 
 [[example]]
 name = "info"
