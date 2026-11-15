@@ -292,7 +292,7 @@ fn test_predefined_quit_qualified_and_whitespace() {
 fn setup() {
     let q1 = muda::PredefinedMenuItem::quit(None);
     let q2 = PredefinedMenuItem :: quit(Some("Quit"));
-    let q3 = crate::menu::PredefinedMenuItem::Quit;
+    let q3 = ::muda::PredefinedMenuItem::Quit;
 }
 "#;
     let findings = predefined_quit([("src/menu.rs", source)]);
@@ -425,6 +425,25 @@ fn menu() {
 }
 "#;
     assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![4, 5, 6]);
+}
+
+#[test]
+fn predefined_quit_ignores_another_crates_type_in_a_qualified_path() {
+    let source = r#"
+use other_menu::PredefinedMenuItem as Other;
+fn menu() {
+    let a = other_crate::PredefinedMenuItem::quit(None);
+    let b = <other_crate::PredefinedMenuItem>::quit(None);
+    let c = crate::menu::PredefinedMenuItem::Quit;
+    let d = other::muda::PredefinedMenuItem::quit(None);
+    let e = <T as Menu>::PredefinedMenuItem::quit(None);
+    let f = Other::quit(None);
+    let g = muda::PredefinedMenuItem::quit(None);
+    let h = <muda :: PredefinedMenuItem>::quit(None);
+    let i = PredefinedMenuItem::quit(None);
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![10, 11, 12]);
 }
 
 #[test]
@@ -652,6 +671,73 @@ fn run(x: Option<u32>) -> u64 {
 }
 
 #[test]
+fn std_instant_ends_a_native_cfg_if_let_at_its_body_not_at_a_struct_pattern() {
+    let source = r#"
+enum State { Ready { at: u64 }, Idle }
+fn run(state: State, other: State) {
+    #[cfg(unix)]
+    if let State::Ready { .. } = state { let _a = std::time::Instant::now(); }
+    let b = std::time::Instant::now();
+    #[cfg(unix)]
+    while let State::Ready { at } = other { let _c = std::time::Instant::now(); }
+    let d = std::time::Instant::now();
+    #[cfg(unix)]
+    if let State::Idle = state { 0 } else if let State::Ready { at: 0..=9 } = state { let _e = std::time::Instant::now(); } else { let _f = std::time::Instant::now(); }
+    let g = std::time::Instant::now();
+    #[cfg(unix)]
+    if let State::Ready { .. } = state && let State::Ready { at } = other { let _h = std::time::Instant::now(); }
+    let i = std::time::Instant::now();
+    #[cfg(unix)]
+    for State::Ready { at } in [state] { let _j = std::time::Instant::now(); }
+    let k = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![6, 9, 12, 15, 18]);
+}
+
+#[test]
+fn std_instant_ends_a_native_cfg_let_else_and_match_with_struct_patterns_where_they_end() {
+    let source = r#"
+enum State { Ready { at: u64 }, Idle }
+fn run(state: State, other: State) -> u64 {
+    #[cfg(unix)]
+    let State::Ready { at } = state else { let _a = std::time::Instant::now(); return 0; };
+    let b = std::time::Instant::now();
+    #[cfg(unix)]
+    match other { State::Ready { at } => { let _c = std::time::Instant::now(); } State::Idle => {} }
+    let d = std::time::Instant::now();
+    match state {
+        #[cfg(unix)]
+        State::Ready { at } => if let State::Ready { .. } = other { let _e = std::time::Instant::now(); },
+        _ => { let f = std::time::Instant::now(); }
+    }
+    0
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![6, 9, 13]);
+}
+
+#[test]
+fn std_instant_reads_raw_identifiers_as_names_not_keywords() {
+    let source = r#"
+fn run(r#let: bool, r#in: [u8; 1]) {
+    #[cfg(unix)]
+    if r#let { let _a = std::time::Instant::now(); }
+    let b = std::time::Instant::now();
+    #[cfg(unix)]
+    for x in r#in { let _c = std::time::Instant::now(); }
+    let d = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![5, 8]);
+
+    let lib = "#[cfg(unix)]\nmod r#match;\nmod r#loop;\n";
+    let native = "use std::time::Instant;\n";
+    let web = "use std::time::Instant;\n";
+    assert_eq!(finding_paths(&std_instant([("src/lib.rs", lib), ("src/match.rs", native), ("src/loop.rs", web)])), vec!["src/loop.rs"]);
+}
+
+#[test]
 fn std_instant_runs_a_native_cfg_async_block_statement_to_its_semicolon() {
     let source = r#"
 async fn run() {
@@ -675,6 +761,32 @@ fn std_instant_checks_code_before_and_after_a_native_cfg_item_on_the_same_line()
 }
 ";
     assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![2, 4]);
+}
+
+#[test]
+fn std_instant_checks_an_item_after_a_native_cfg_item_on_the_same_line() {
+    let source = r#"#[cfg(target_os="linux")] fn native() {} fn web() { std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![1]);
+}
+
+#[test]
+fn std_instant_skips_gated_code_that_follows_a_native_cfg_item_on_the_same_line() {
+    let source = r#"#[cfg(target_os = "linux")] fn a() {} #[cfg(target_os = "macos")] fn b() { std::time::Instant::now(); }
+#[cfg(unix)] fn c() {} #[cfg(windows)] use std::time::Instant as Native;
+"#;
+    assert!(std_instant([("src/clock.rs", source)]).is_empty());
+}
+
+#[test]
+fn std_instant_ends_native_cfg_impl_mod_and_struct_items_where_they_end_on_the_line() {
+    let source = r#"struct S; #[cfg(unix)] impl S { fn now() { std::time::Instant::now(); } } fn web() { std::time::Instant::now(); }
+#[cfg(unix)] mod native { fn now() { std::time::Instant::now(); } } fn web_two() { std::time::Instant::now(); }
+#[cfg(unix)] struct P { at: std::time::Instant } struct Q { at: std::time::Instant }
+#[cfg(unix)] struct T(std::time::Instant); struct U(std::time::Instant);
+#[cfg(unix)] impl S { fn a() {} } #[cfg(unix)] mod m { fn b() { std::time::Instant::now(); } }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![1, 2, 3, 4]);
 }
 
 #[test]
