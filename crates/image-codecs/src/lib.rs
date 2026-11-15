@@ -64,10 +64,10 @@ pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
-#[cfg(feature = "sunraster")]
-use crate::codecs::sunraster;
 #[cfg(feature = "sgi")]
 use crate::codecs::sgi;
+#[cfg(feature = "sunraster")]
+use crate::codecs::sunraster;
 use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
@@ -109,10 +109,14 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Iff => iff::decode(bytes, l),
         Format::SunRaster => {
             #[cfg(feature = "sunraster")]
-            { sunraster::decode(bytes, l) }
+            {
+                sunraster::decode(bytes, l)
+            }
             #[cfg(not(feature = "sunraster"))]
-            { Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature")) }
-        },
+            {
+                Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature"))
+            }
+        }
         Format::Sgi => {
             #[cfg(feature = "sgi")]
             {
@@ -482,10 +486,14 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Iff => iff::encode(image, plan),
         Format::SunRaster => {
             #[cfg(feature = "sunraster")]
-            { sunraster::encode(image, plan) }
+            {
+                sunraster::encode(image, plan)
+            }
             #[cfg(not(feature = "sunraster"))]
-            { Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature")) }
-        },
+            {
+                Err(CodecError::unsupported(format, "Sun Raster support requires the sunraster feature"))
+            }
+        }
         Format::Sgi => {
             #[cfg(feature = "sgi")]
             {

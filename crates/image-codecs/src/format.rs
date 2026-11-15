@@ -328,7 +328,13 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
-        Format::SunRaster => FormatCaps { read: cfg!(feature = "sunraster"), write: cfg!(feature = "sunraster"), layouts: &[L::Gray, L::Rgb, L::Rgba], alpha: true, ..base },
+        Format::SunRaster => FormatCaps {
+            read: cfg!(feature = "sunraster"),
+            write: cfg!(feature = "sunraster"),
+            layouts: &[L::Gray, L::Rgb, L::Rgba],
+            alpha: true,
+            ..base
+        },
         Format::Sgi => {
             FormatCaps { read: cfg!(feature = "sgi"), write: cfg!(feature = "sgi"), depths: &[S::U8, S::U16], layouts: RGB_GRAY, alpha: true, ..base }
         }
