@@ -18,6 +18,8 @@ pub struct Frames {
     /// The context the frames run on.
     pub ctx: Context,
     time: f64,
+    /// The time of the last frame these frames ran, to tell when another driver of the context has run it since.
+    given: f64,
     root: RootEnv,
     cursor: egui::CursorIcon,
     cursor_image: Option<egui::CustomCursorImage>,
@@ -104,6 +106,7 @@ impl Frames {
         Frames {
             ctx,
             time: 0.0,
+            given: 0.0,
             root: RootEnv::default(),
             cursor: egui::CursorIcon::Default,
             cursor_image: None,
@@ -235,10 +238,16 @@ impl Frames {
         }
     }
 
-    /// Moves the clock on one frame from the later of its own time and the context's, so frames over a context the
-    /// caller also drives (an app's own, which another harness ran between these frames) never take its time back.
+    /// Moves the clock on one frame. When another driver of the context (an app's own harness) has run it past the
+    /// last frame these frames gave it, the clock first catches up with the context's, so it never takes its time
+    /// back; otherwise it keeps its own time, [`advance`](Self::advance) steps included.
     fn tick(&mut self) {
-        self.time = self.time.max(self.ctx.input(|i| i.time)) + DT;
+        let context = self.ctx.input(|i| i.time);
+        if context > self.given {
+            self.time = self.time.max(context);
+        }
+        self.time += DT;
+        self.given = self.time;
     }
 
     fn run(&mut self, viewport: egui::ViewportId, mut events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool {
