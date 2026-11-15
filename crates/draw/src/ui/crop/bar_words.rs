@@ -62,12 +62,12 @@ craft_ui::words! {
         fill_name: "cropBar.fillName" = "Fill";
         fill_background: "cropBar.fillBackground" = "Background (Default)";
         fill_content_aware: "cropBar.fillContentAware" = "Content-Aware Fill";
-        /// The preset list's From Selection entry.
-        selection: "cropBar.selection" = "From Selection";
+        /// The preset list's Selection entry.
+        selection: "cropBar.selection" = "Selection";
         /// The Fill select's first entry while Delete Cropped Pixels is off.
-        fill_transparent: "cropBar.fillTransparent" = "Transparent";
+        fill_transparent: "cropBar.fillTransparent" = "Transparent (default)";
         /// The Reset button's name and tooltip.
-        reset_tip: "cropBar.resetTip" = "Reset crop box";
+        reset_tip: "cropBar.resetTip" = "Reset the crop box, image rotation, and aspect ratio settings";
         /// The perspective bar's Show Grid check box.
         show_grid: "cropBar.showGrid" = "Show Grid";
         commit: "cropBar.commit" = "Commit current crop operation";

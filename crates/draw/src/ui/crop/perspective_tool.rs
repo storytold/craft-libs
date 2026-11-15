@@ -1,17 +1,22 @@
 //! [`PerspectiveCropTool`]: the Perspective Crop tool's background presses. A box drag draws an upright quad, and four
 //! clicks place its corners one by one. Once a quad exists, [`PerspectiveCropQuad`](super::PerspectiveCropQuad)
-//! takes the presses on its corners and inside, and a press elsewhere does nothing.
+//! takes the presses on its corners and inside, and a press elsewhere does nothing. The tool is a canvas tool for
+//! one pass through [`PerspectiveCropPass`].
 
 use std::sync::Arc;
 
+use craft_behavior::geometry::Constraint;
 use craft_behavior::kurbo::Point;
-use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, Mixed};
-use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, IconId, Mixed, PaintedCursor};
+use craft_theme::variant::Tone;
+use craft_ui::canvas::{CanvasTool, CropShield, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_ui::contract::{Bind, Show as _};
 use craft_ui::patterns::form_dialogs::{Param, ParamDialog, ParamKind};
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
+use craft_ui::runtime::env::Env;
 use egui::Pos2;
 
-use super::perspective_crop::{PerspectiveQuad, ordered};
+use super::perspective_crop::{PerspectiveCropOutput, PerspectiveCropQuad, PerspectiveQuad, grid_color, grid_lines, grid_step, is_valid, ordered};
 use super::words::CropWords;
 
 /// The key of the Perspective Crop To... command form.
@@ -41,12 +46,14 @@ struct Press {
     began: bool,
 }
 
-/// The Perspective Crop tool, kept by the app. It owns the quad: show it in the canvas body as
-/// `PerspectiveCropQuad::new(label, Bind::bound(tool.quad_mut()))`, and read the tool's own edits with
-/// [`take_events`](Self::take_events).
+/// The Perspective Crop tool, kept by the app. It owns the quad: show it in the canvas body with
+/// [`PerspectiveCropPass::show_quad`], and read the tool's own edits with [`take_events`](Self::take_events).
 ///
 /// - With no quad, a drag draws an upright box (none while it has no area), and four clicks place corners one by one;
-///   the fourth makes the quad, corners put in order. A drag clears the clicks.
+///   the fourth makes the quad, corners put in order. A drag that makes a box clears the clicks; one that makes none
+///   keeps them.
+/// - Shift makes the box square and Alt draws it from its centre.
+/// - After two or three clicks a quad to the pointer previews the corners to come.
 /// - Esc drops the pending clicks. Once a quad exists, the quad's control takes Enter, Esc and the arrows
 ///   ([`PerspectiveCropOutput::apply`](super::PerspectiveCropOutput::apply) and
 ///   [`discard`](super::PerspectiveCropOutput::discard)).
@@ -104,14 +111,19 @@ fn boxed(anchor: Point, to: Point) -> PerspectiveQuad {
     (x1 > x0 && y1 > y0).then_some([Point::new(x0, y0), Point::new(x1, y0), Point::new(x1, y1), Point::new(x0, y1)])
 }
 
+/// Whether `q` is convex whichever way it is wound: the preview of corners clicked in any order.
+fn convex(q: &[Point; 4]) -> bool {
+    is_valid(q) || is_valid(&[q[0], q[3], q[2], q[1]])
+}
+
 /// What the host hands the perspective crop pass each frame.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct PerspectiveInput<'a> {
     /// Whether the quad's grid shows.
     pub show_grid: bool,
-    /// Ties the input to the pass's lifetime until the shield (tl.T44, not in this checkout) joins it.
-    pub marker: std::marker::PhantomData<&'a ()>,
+    /// The shield over the area outside the quad; `None` shows none.
+    pub shield: Option<&'a CropShield>,
 }
 
 /// This pass's perspective crop tool for the host, borrowing its input; it is the canvas tool while the pass lives.
@@ -129,125 +141,121 @@ impl PerspectiveCropTool {
 
 impl PerspectiveCropPass<'_> {
     /// Shows the quad over the canvas at `canvas_rect` and reports its edits.
-    pub fn show_quad(&mut self, ui: &mut egui::Ui, canvas_rect: egui::Rect) -> super::PerspectiveCropOutput {
-        let _ = (&self.tool, &self.input, ui, canvas_rect);
-        todo!("tl.T48")
+    pub fn show_quad(&mut self, ui: &mut egui::Ui, canvas_rect: egui::Rect) -> PerspectiveCropOutput {
+        let label = Env::of(ui).words::<CropWords>().perspective_group.clone();
+        let mut quad = PerspectiveCropQuad::new(label, Bind::bound(&mut self.tool.quad)).show_grid(self.input.show_grid);
+        if let Some(shield) = self.input.shield {
+            quad = quad.shield(shield.clone());
+        }
+        quad.show_at(ui, canvas_rect)
     }
 }
 
 impl CanvasTool for PerspectiveCropPass<'_> {
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
-        self.tool.press(pointer, cx)
-    }
-
-    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
-        self.tool.drag(pointer, cx);
-    }
-
-    fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
-        self.tool.release(pointer, cx);
-    }
-
-    fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
-        self.tool.cancel(reason, cx);
-    }
-
-    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
-        self.tool.key(key, cx)
-    }
-
-    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
-        self.tool.paint(draw, cx);
-    }
-
-    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
-        self.tool.cursor(cx)
-    }
-
-    fn command_form(&self) -> ToolPath {
-        self.tool.command_form()
-    }
-}
-
-impl CanvasTool for PerspectiveCropTool {
-    fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
         let Some(space) = cx.space() else { return ToolAction::Ignored };
         let anchor = space.view.to_doc(pointer.pos);
-        if self.quad.is_some() || !(anchor.x.is_finite() && anchor.y.is_finite()) {
+        if self.tool.quad.is_some() || !(anchor.x.is_finite() && anchor.y.is_finite()) {
             return ToolAction::Ignored;
         }
         let Some(id) = cx.gesture_id() else { return ToolAction::Ignored };
-        self.press = Some(Press { id, anchor, origin: pointer.pos, before: self.quad, began: false });
+        self.tool.press = Some(Press { id, anchor, origin: pointer.pos, before: self.tool.quad, began: false });
         ToolAction::Claimed
     }
 
     fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
-        let (Some(mut press), Some(space)) = (self.press, cx.space()) else { return };
+        let (Some(mut press), Some(space)) = (self.tool.press, cx.space()) else { return };
         if !press.began && (pointer.pos - press.origin).abs().max_elem() > cx.slop {
             press.began = true;
-            self.clicks.clear();
             let label: Arc<str> = Arc::from(cx.words::<CropWords>().perspective_group.as_str());
-            self.events.push(PerspectiveCropEvent::Edit(EditEvent::begin(press.id, Mixed::Same(press.before), label, None)));
+            self.tool.events.push(PerspectiveCropEvent::Edit(EditEvent::begin(press.id, Mixed::Same(press.before), label, None)));
         }
         if press.began {
-            self.quad = boxed(press.anchor, space.view.to_doc(pointer.pos));
-            self.events.push(PerspectiveCropEvent::Edit(EditEvent::update(press.id, self.quad)));
+            let (a, b) = Constraint::Free.corners(press.anchor, space.view.to_doc(pointer.pos), pointer.mods.shift, pointer.mods.alt);
+            self.tool.quad = boxed(a, b);
+            if self.tool.quad.is_some() {
+                // A drag that makes no box keeps the corners clicked so far.
+                self.tool.clicks.clear();
+            }
+            self.tool.events.push(PerspectiveCropEvent::Edit(EditEvent::update(press.id, self.tool.quad)));
         }
-        self.press = Some(press);
+        self.tool.press = Some(press);
     }
 
     fn release(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
-        let Some(press) = self.press.take() else { return };
+        let Some(press) = self.tool.press.take() else { return };
         if press.began {
-            self.events.push(PerspectiveCropEvent::Edit(EditEvent::commit(press.id, Mixed::Same(press.before), self.quad)));
+            self.tool.events.push(PerspectiveCropEvent::Edit(EditEvent::commit(press.id, Mixed::Same(press.before), self.tool.quad)));
             return;
         }
-        self.clicks.push(press.anchor);
-        if let [a, b, c, d] = self.clicks[..] {
-            self.clicks.clear();
+        self.tool.clicks.push(press.anchor);
+        if let [a, b, c, d] = self.tool.clicks[..] {
+            self.tool.clicks.clear();
             let quad = Some(ordered([a, b, c, d]));
             let label: Arc<str> = Arc::from(cx.words::<CropWords>().perspective_group.as_str());
-            self.quad = quad;
-            self.events.push(PerspectiveCropEvent::Edit(EditEvent::set(Mixed::Same(press.before), quad, label, None)));
+            self.tool.quad = quad;
+            self.tool.events.push(PerspectiveCropEvent::Edit(EditEvent::set(Mixed::Same(press.before), quad, label, None)));
         }
     }
 
     fn cancel(&mut self, reason: CancelReason, _: &mut ToolContext<'_>) {
-        let Some(press) = self.press.take() else { return };
+        let Some(press) = self.tool.press.take() else { return };
         if press.began {
-            self.quad = press.before;
-            self.events.push(PerspectiveCropEvent::Edit(EditEvent::cancel(press.id, reason, Some(Mixed::Same(press.before)))));
+            self.tool.quad = press.before;
+            self.tool.events.push(PerspectiveCropEvent::Edit(EditEvent::cancel(press.id, reason, Some(Mixed::Same(press.before)))));
         }
     }
 
     fn key(&mut self, key: &ToolKey, _: &mut ToolContext<'_>) -> bool {
         match key {
-            ToolKey::Cancel if !self.clicks.is_empty() => {
-                self.clicks.clear();
+            ToolKey::Cancel if !self.tool.clicks.is_empty() => {
+                self.tool.clicks.clear();
                 true
             }
             _ => false,
         }
     }
 
-    /// The corners clicked so far, joined by a line.
+    /// The corners clicked so far, and with two or three of them the quad to the pointer: the corners to come sit
+    /// at the pointer.
     fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
         let (Some(space), Some(style)) = (cx.space(), cx.style()) else { return };
-        let dots: Vec<Pos2> = self.clicks.iter().map(|click| space.view.to_screen(*click)).collect();
+        let view = &space.view;
+        let clicks = &self.tool.clicks;
         let handle = style.handle();
         let line = style.color(style.tokens.color.overlay.line);
-        if dots.len() > 1 {
-            draw.stroke(&PaintShape::Path(dots.clone()), StrokeWidth::Medium, line);
+        let pointer = cx.pointer.as_ref().map(|p| view.to_doc(p.pos)).filter(|p| p.x.is_finite() && p.y.is_finite());
+        let preview = match (clicks.as_slice(), pointer) {
+            ([a, b], Some(p)) => Some([*a, *b, p, p]),
+            ([a, b, c], Some(p)) => Some([*a, *b, *c, p]),
+            _ => None,
+        };
+        if let Some(quad) = preview {
+            let ok = clicks.len() == 2 || convex(&quad);
+            if ok && self.input.show_grid {
+                let grid = grid_color(style);
+                for [a, b] in grid_lines(view, &quad, grid_step(style)) {
+                    draw.stroke(&PaintShape::Path(vec![a, b]), StrokeWidth::Thin, grid);
+                }
+            }
+            let outline = PaintShape::Polygon(quad.iter().map(|p| view.to_screen(*p)).collect());
+            draw.stroke(&outline, StrokeWidth::Medium, if ok { line } else { style.tone(Tone::Bad) });
+        } else if clicks.len() > 1 {
+            draw.stroke(&PaintShape::Path(clicks.iter().map(|c| view.to_screen(*c)).collect()), StrokeWidth::Medium, line);
         }
-        for dot in dots {
-            let shape = PaintShape::Circle(dot, handle.side / 2.0);
+        for click in clicks {
+            let shape = PaintShape::Circle(view.to_screen(*click), handle.side / 2.0);
             draw.fill(&shape, handle.fill.off.rest);
             draw.stroke(&shape, StrokeWidth::Thin, line);
         }
     }
 
     fn cursor(&self, _: &ToolContext<'_>) -> Cursor {
-        Cursor::System(if self.quad.is_none() { CursorIcon::Crosshair } else { CursorIcon::Default })
+        if self.tool.quad.is_none() {
+            PaintedCursor::crosshair_tool(IconId::new("perspective_crop")).into()
+        } else {
+            Cursor::System(CursorIcon::Default)
+        }
     }
 
     fn command_form(&self) -> ToolPath {

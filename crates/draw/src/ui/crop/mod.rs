@@ -1,7 +1,9 @@
 //! The Crop tool: the tool on the canvas tool host ([`CropTool`]) with its pending frame ([`CropSession`]) and options
-//! ([`CropSettings`]), the options bar ([`CropBar`]) with its overlay and gear menus, and the Perspective Crop tool
-//! ([`PerspectiveCropTool`]) with its quad ([`PerspectiveCropQuad`]). The frame itself is `craft_ui::canvas::CropOverlay`,
-//! shown by [`CropToolPass::show_frame`].
+//! ([`CropSettings`]), the options bar ([`CropBar`]) with its preset list ([`CropPresetList`]), overlay and gear menus,
+//! and the Perspective Crop tool ([`PerspectiveCropTool`], run each pass as [`PerspectiveCropPass`] over a
+//! [`PerspectiveInput`]) with its quad ([`PerspectiveCropQuad`]) and options bar ([`PerspectiveCropBar`]). Both bars
+//! share the W × H × Resolution cells over [`CropSizeFields`], whose target is a [`CropSizeTarget`]. The frame itself
+//! is `craft_ui::canvas::CropOverlay`, shown by [`CropToolPass::show_frame`].
 //!
 //! The tool reports events and never crops the document: the app crops on [`CropEvent::Apply`] with the
 //! [`CropCommit`] it carries.

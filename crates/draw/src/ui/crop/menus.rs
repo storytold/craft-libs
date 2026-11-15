@@ -34,6 +34,19 @@ fn guide_name(words: &CropBarWords, guide: CropGuide) -> &str {
     }
 }
 
+/// The overlay's icon; an overlay this list does not know has the thirds', as [`guide_name`] has its name.
+fn guide_icon(guide: CropGuide) -> IconId {
+    IconId::new(match guide {
+        CropGuide::Thirds => "crop_overlay_thirds",
+        CropGuide::Grid => "crop_overlay_grid",
+        CropGuide::Diagonal => "crop_overlay_diagonal",
+        CropGuide::Triangle => "crop_overlay_triangle",
+        CropGuide::GoldenRatio => "crop_overlay_golden_ratio",
+        CropGuide::GoldenSpiral => "crop_overlay_golden_spiral",
+        _ => "crop_overlay_thirds",
+    })
+}
+
 /// The show rule's name in `words`.
 fn show_name(words: &CropBarWords, show: GuideShow) -> &str {
     match show {
@@ -90,13 +103,13 @@ impl<'a> CropOverlayMenu<'a> {
         let before = settings.clone();
         let shown = Row::new().show(ui, |ui, cx| {
             let open = &mut cx.memory::<Open>().0;
-            let opener = IconButton::new(IconId::new("grid")).label(words.overlay.clone()).popup(PopupKind::Menu).show(ui).response;
+            let opener = IconButton::new(guide_icon(settings.guide)).label(words.overlay.clone()).popup(PopupKind::Menu).show(ui).response;
             if clicked(&opener) {
                 *open = !*open;
             }
             Menu::new(words.overlay.clone()).open(Bind::bound(open)).opened_by(&opener, Trigger::Click).show(ui, |ui, _| {
                 for guide in CropGuide::ALL {
-                    let row = MenuItem::new(guide_name(&words, guide).to_owned()).radio_mark(settings.guide == guide).show(ui);
+                    let row = MenuItem::new(guide_name(&words, guide).to_owned()).icon(guide_icon(guide)).radio_mark(settings.guide == guide).show(ui);
                     if row.ran {
                         settings.set_guide(guide);
                     }

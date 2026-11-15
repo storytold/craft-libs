@@ -85,7 +85,7 @@ impl CropLength {
     }
 
     /// The length when it is positive, finite and at most [`FIELD_MAX`].
-    fn usable(length: Option<CropLength>) -> Option<CropLength> {
+    pub(super) fn usable(length: Option<CropLength>) -> Option<CropLength> {
         length.filter(|l| l.value.is_finite() && l.value > 0.0 && l.value <= FIELD_MAX)
     }
 
@@ -274,7 +274,7 @@ impl Default for CropSettings {
 }
 
 /// `value` with up to `decimals` decimals, trailing zeros and a bare point dropped.
-fn trim_number(value: f64, decimals: usize) -> String {
+pub(super) fn trim_number(value: f64, decimals: usize) -> String {
     let text = format!("{value:.decimals$}");
     if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_owned() } else { text }
 }

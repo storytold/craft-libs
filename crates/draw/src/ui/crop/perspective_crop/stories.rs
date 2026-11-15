@@ -1,11 +1,11 @@
 //! Stories of the perspective crop quad, and of the Perspective Crop tool run live: with no quad a drag draws a box
 //! and four clicks place the corners; then the quad takes its own gestures, and Enter or Esc ends the crop.
 
-use super::super::PerspectiveCropTool;
+use super::super::{PerspectiveCropTool, PerspectiveInput};
 use super::{CORNER, PerspectiveCropQuad, PerspectiveQuad};
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{BezPath, Point};
-use craft_ui::canvas::RasterSource as _;
+use craft_ui::canvas::{CropShield, RasterSource as _};
 use craft_ui::contract::{Bind, Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, on_picture, paint_shapes};
@@ -39,7 +39,9 @@ fn on_canvas<R: Into<StoryOutput>>(ui: &mut Ui, mut quad: impl FnMut(&mut Ui, eg
 #[story(PerspectiveCropQuad<'static>, covers = [Default], drive = Drive::Drag(Grip::part(CORNER.at(0))))]
 fn skewed_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let quad = data.value("quad", Some(PAGE));
-    on_canvas(ui, |ui, at| PerspectiveCropQuad::new("Perspective crop", Bind::bound(&mut *quad)).show_at(ui, at).edit)
+    on_canvas(ui, |ui, at| {
+        PerspectiveCropQuad::new("Perspective crop", Bind::bound(&mut *quad)).shield(CropShield::PERSPECTIVE).show_at(ui, at).edit
+    })
 }
 
 #[story(PerspectiveCropQuad<'static>, covers = [Invalid], drive = Drive::Drag(Grip::part(CORNER.at(0))))]
@@ -63,13 +65,13 @@ fn drawing_a_quad(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         if tool.quad() != quad {
             tool.set(*quad);
         }
-        let shown = PerspectiveCropQuad::new("Perspective crop", Bind::bound(tool.quad_mut())).show_at(ui, at);
+        let shown = tool.pass(PerspectiveInput::default()).show_quad(ui, at);
         if shown.apply || shown.discard {
             tool.clear();
         }
     };
     tool_story(ui, data, ToolStory::new("Document", &picture), PerspectiveCropTool::new, None, body, |run| {
-        let _ = run.host.run(run.tool);
+        let _ = run.host.run(&mut run.tool.pass(PerspectiveInput::default()));
         let _ = run.tool.take_events();
         *run.document = *run.tool.quad();
         StoryOutput::default()

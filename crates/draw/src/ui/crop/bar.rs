@@ -2,11 +2,10 @@
 
 use super::bar_words::CropBarWords;
 use super::menus::{CropOptionsMenu, CropOverlayMenu};
-use super::options::{
-    CROP_RATIOS, CROP_SIZES, CropFill, CropLength, CropPresetChoice, CropRatio, CropSettings, CropSizeFields, CropUserPreset, FIELD_MAX, LENGTH_MIN,
-    RATIO_DECIMALS, RATIO_MAX, RATIO_STEP, ResolutionUnit,
-};
+use super::options::{CropFill, CropRatio, CropSettings, CropUserPreset, RATIO_DECIMALS, RATIO_MAX, RATIO_STEP};
+use super::preset_list::CropPresetList;
 use super::session::CropDocument;
+use super::size_cells::{self, SizeLimits};
 use craft_behavior::{EditEvent, EditEvents, IconId, NumberCodec};
 use craft_ui::buttons::{Button, IconButton, ToggleButton};
 use craft_ui::choice::Checkbox;
@@ -17,7 +16,7 @@ use craft_ui::display::Divider;
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
-use craft_ui::runtime::env::{Env, Label, LengthUnits, UnitKind, Units};
+use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::text::NumberField;
 use egui::{Response, Ui};
@@ -62,7 +61,7 @@ pub struct CropBarOutput {
     pub help: bool,
     /// Reset was pressed this pass.
     pub reset: bool,
-    /// From Selection was picked in the preset list.
+    /// Selection was picked in the preset list: the app calls `CropTool::take_selection_frame`.
     pub selection: bool,
 }
 
@@ -77,16 +76,19 @@ impl Outcome for CropBarOutput {
 /// The Crop tool's options, shown as children of the app's `Bar::new(label, BarKind::Options)`; ✓ and ⊘ are the bar's
 /// `commit_cancel`.
 ///
-/// - Order (Photoshop's): the preset list (Ratio, W x H x Resolution, the ratio presets, the size presets, the user's
-///   presets, Front Image, a rule, New Crop Preset…, Delete Crop Preset…); the W and H ratio fields (0 to 99,999 with 3
-///   decimals) with the swap button between them, or in W × H × Resolution mode the W, H and Resolution fields with
-///   the px/in or px/cm select; Clear; the Angle field; the Straighten toggle (pressed while armed); the overlay menu
-///   ([`CropOverlayMenu`]); the gear popover ([`CropOptionsMenu`]); the Delete Cropped Pixels check box; Fill and its
-///   select.
-/// - W and H keep their lengths with the unit they were entered in ([`CropLength`]); a cleared field is unset.
+/// - Order (Photoshop's): the preset list ([`CropPresetList`]: Selection when offered, Ratio, W x H x Resolution, the
+///   ratio presets, the size presets, the user's presets, Front Image, a rule, New Crop Preset…, Delete Crop
+///   Preset…); the W and H ratio fields (0 to 99,999 with 3 decimals) with the swap button between them, or in
+///   W × H × Resolution mode the W, H and Resolution fields with the px/in or px/cm select; Clear; the Angle field;
+///   the Straighten toggle (pressed while armed); the overlay menu ([`CropOverlayMenu`]); the gear popover
+///   ([`CropOptionsMenu`]); the Delete Cropped Pixels check box; Fill and its select; the help button when a help
+///   label is given; Reset.
+/// - W and H keep their lengths with the unit they were entered in ([`CropLength`](super::CropLength)); a cleared
+///   field is unset.
 /// - A scrub or a step of a ratio field refits live; Escape puts the ratio back.
 /// - Delete Crop Preset… is disabled when no user preset is given; New Crop Preset… when [`CropSettings::preset_name`]
 ///   is `None`; Original Ratio and Front Image without a document.
+/// - Fill's first entry reads Transparent while Delete Cropped Pixels is off and Background while it is on.
 /// - **Keyboard and AccessKit:** the list is a select named "Crop ratio" with the chosen entry as its value; the
 ///   fields are named Width, Height, Resolution and Angle; the Straighten toggle has its pressed state; the menus
 ///   open with Enter or Space.
@@ -106,21 +108,27 @@ pub struct CropBar<'a> {
     angle: Option<f64>,
     /// The help button after Fill; `Some` shows it, named by the label.
     #[prop(into)]
-    help: Option<craft_ui::runtime::env::Label>,
+    help: Option<Label>,
     /// Whether Reset is enabled (`CropTool::modified`).
     #[prop]
     can_reset: bool,
+    /// Offers Selection as the preset list's first entry.
+    #[prop]
+    selection_entry: bool,
+    /// Shows Selection as the chosen preset (`CropTool::shows_selection_entry`).
+    #[prop]
+    selection_chosen: bool,
 }
 
 impl<'a> CropBar<'a> {
     /// The bar editing `settings`, over `document` (Original Ratio's numbers and Front Image).
     pub fn new(settings: &'a mut CropSettings, document: &'a CropDocument) -> Self {
-        Self { settings, document, user_presets: &[], straighten: false, angle: None, help: None, can_reset: false }
+        Self { settings, document, user_presets: &[], straighten: false, angle: None, help: None, can_reset: false, selection_entry: false, selection_chosen: false }
     }
 
     /// Shows the bar's children.
     pub fn show(self, ui: &mut Ui) -> CropBarOutput {
-        let Self { settings, document, user_presets, straighten, angle, help, can_reset } = self;
+        let Self { settings, document, user_presets, straighten, angle, help, can_reset, selection_entry, selection_chosen } = self;
         let env = Env::of(ui);
         let words = env.words::<CropBarWords>();
         let units = env.units();
@@ -130,9 +138,15 @@ impl<'a> CropBar<'a> {
         let (mut help_pressed, mut reset_pressed) = (false, false);
         // The options are the bar's members, spaced as the bar spaces them.
         let shown = Row::new().gap(Gap::Item).show(ui, |ui, cx| {
-            preset_list(ui, settings, &words, document, has_document, user_presets, &units, &mut report);
+            let list = CropPresetList::new(settings, document).user_presets(user_presets).selection_entry(selection_entry).selection_chosen(selection_chosen).show(ui);
+            report.ratio = list.ratio;
+            report.new_preset = list.new_preset;
+            report.delete_preset = list.delete_preset;
+            report.selection = list.selection;
             if settings.ratio == CropRatio::Size {
-                size_fields(ui, settings, &words, document, &units, &mut report);
+                if size_cells::show(ui, &mut settings.size, SizeLimits::CROP, document, &units, &words).changed {
+                    report.ratio = Some(CropRatioChange { editing: false });
+                }
             } else {
                 ratio_fields(ui, cx, settings, &words, document, has_document, &units, &mut report);
             }
@@ -152,10 +166,8 @@ impl<'a> CropBar<'a> {
             CropOverlayMenu::new(settings).show(ui);
             report.pick_color = CropOptionsMenu::new(settings).show(ui).pick_color;
             Checkbox::new(Bind::bound(&mut settings.delete_pixels)).label(words.delete_pixels.clone()).show(ui);
-            let fills = [
-                Entry::new(CropFill::Background, words.fill_background.clone()),
-                Entry::new(CropFill::ContentAware, words.fill_content_aware.clone()),
-            ];
+            let background = if settings.delete_pixels { words.fill_background.clone() } else { words.fill_transparent.clone() };
+            let fills = [Entry::new(CropFill::Background, background), Entry::new(CropFill::ContentAware, words.fill_content_aware.clone())];
             Field::new(words.fill_name.clone()).id_salt("fill").sizing(Sizing::Content).show(ui, |ui, _| {
                 let pick = Select::new(words.fill_name.clone(), Bind::given(settings.fill), &fills).show(ui);
                 if let Some(fill) = pick.value().copied() {
@@ -179,7 +191,7 @@ impl<'a> CropBar<'a> {
             settings_changed: changed,
             help: help_pressed,
             reset: reset_pressed,
-            selection: false,
+            selection: report.selection,
         }
     }
 }
@@ -193,66 +205,12 @@ struct Report {
     new_preset: bool,
     delete_preset: bool,
     pick_color: Option<ColorRequest>,
+    selection: bool,
 }
 
 /// The ratio and its fields when a scrub of a ratio field began, for Escape.
 #[derive(Clone, Default)]
 struct RatioStart(Option<(CropRatio, [f64; 2])>);
-
-/// The name of size preset `index` of [`CROP_SIZES`]: its values as New Crop Preset… would name them.
-fn size_name(words: &CropBarWords, index: usize, units: &Units) -> String {
-    let Some(preset) = CROP_SIZES.get(index) else { return String::new() };
-    let size = CropSizeFields {
-        width: Some(preset.width),
-        height: Some(preset.height),
-        resolution: preset.resolution.to_owned(),
-        ..CropSizeFields::default()
-    };
-    let settings = CropSettings { ratio: CropRatio::Size, size, ..CropSettings::default() };
-    settings.preset_name(words, units).unwrap_or_default()
-}
-
-/// The preset list: Ratio, W x H x Resolution, the ratio presets, the size presets, the user's presets, Front Image,
-/// then New Crop Preset… and Delete Crop Preset….
-#[expect(clippy::too_many_arguments, reason = "the bar's inputs")]
-fn preset_list(
-    ui: &mut Ui,
-    settings: &mut CropSettings,
-    words: &CropBarWords,
-    document: &CropDocument,
-    has_document: bool,
-    user_presets: &[CropUserPreset],
-    units: &Units,
-    report: &mut Report,
-) {
-    let mut entries = vec![Entry::new(CropPresetChoice::Free, words.ratio.clone()), Entry::new(CropPresetChoice::Size, words.size_mode.clone())];
-    for (i, ratio) in CROP_RATIOS.iter().enumerate() {
-        let entry = Entry::new(CropPresetChoice::Ratio(i), words.ratio_name(i).to_owned());
-        entries.push(if *ratio == CropRatio::Original { entry.enabled(has_document) } else { entry });
-    }
-    for i in 0..CROP_SIZES.len() {
-        entries.push(Entry::new(CropPresetChoice::SizePreset(i), size_name(words, i, units)));
-    }
-    for (i, preset) in user_presets.iter().enumerate() {
-        entries.push(Entry::new(CropPresetChoice::User(i), preset.name.clone()));
-    }
-    entries.push(Entry::new(CropPresetChoice::FrontImage, words.front_image.clone()).enabled(has_document));
-    entries.push(Entry::separator());
-    entries.push(Entry::new(CropPresetChoice::NewPreset, words.new_preset.clone()).enabled(settings.preset_name(words, units).is_some()));
-    entries.push(Entry::new(CropPresetChoice::DeletePreset, words.delete_preset.clone()).enabled(!user_presets.is_empty()));
-    let current = settings.choice(user_presets);
-    let pick = Select::new(words.presets.clone(), Bind::given(current), &entries).show(ui);
-    let Some(choice) = pick.value().copied() else { return };
-    match choice {
-        CropPresetChoice::NewPreset => report.new_preset = true,
-        CropPresetChoice::DeletePreset => report.delete_preset = true,
-        choice => {
-            if settings.choose(choice, document, user_presets) {
-                report.ratio = Some(CropRatioChange { editing: false });
-            }
-        }
-    }
-}
 
 /// The two ratio fields with the swap button between them.
 #[expect(clippy::too_many_arguments, reason = "the bar's inputs")]
@@ -349,89 +307,4 @@ fn ratio_field(
             _ => {}
         }
     }
-}
-
-/// W, swap, H, Resolution and its unit, in W × H × Resolution mode.
-fn size_fields(ui: &mut Ui, settings: &mut CropSettings, words: &CropBarWords, document: &CropDocument, units: &Units, report: &mut Report) {
-    let mut changed = false;
-    let pixels_per_inch = settings.size.resolution_ppi().unwrap_or(document.resolution);
-    changed |= length_field(ui, "size-width", &words.width, &mut settings.size.width, pixels_per_inch, units.points_per_inch());
-    if clicked(&IconButton::new(IconId::new("swap_horizontal")).label(words.swap.clone()).show(ui)) {
-        settings.swap_fields();
-        changed = true;
-    }
-    changed |= length_field(ui, "size-height", &words.height, &mut settings.size.height, pixels_per_inch, units.points_per_inch());
-
-    let resolution = settings.size.resolution.trim().replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
-    let mut typed = None;
-    Field::new(words.resolution.clone()).id_salt("size-resolution").sizing(Sizing::Content).show(ui, |ui, _| {
-        let codec = NumberCodec::new(units.reader(None), 2);
-        let field = NumberField::new(words.resolution.clone(), Bind::given(resolution)).codec(codec).range(0.0..=FIELD_MAX).automatic(true).show(ui);
-        typed = field.value().copied();
-    });
-    if let Some(value) = typed {
-        let text = match value.filter(|v| *v > 0.0) {
-            Some(v) => CropSizeFields::normalize_resolution(&v.to_string(), &settings.size.resolution),
-            None => String::new(),
-        };
-        if text != settings.size.resolution {
-            settings.size.resolution = text;
-            changed = true;
-        }
-    }
-
-    let unit_entries = [
-        Entry::new(ResolutionUnit::PixelsPerInch, words.pixels_per_inch.clone()),
-        Entry::new(ResolutionUnit::PixelsPerCentimetre, words.pixels_per_centimetre.clone()),
-    ];
-    let pick = Select::new(words.resolution_unit.clone(), Bind::given(settings.size.resolution_unit), &unit_entries).show(ui);
-    if let Some(unit) = pick.value().copied()
-        && unit != settings.size.resolution_unit
-    {
-        // The same resolution in the other unit, as in Photoshop.
-        if let Some(v) = resolution {
-            let converted = if unit == ResolutionUnit::PixelsPerCentimetre { v / 2.54 } else { v * 2.54 };
-            settings.size.resolution = CropSizeFields::normalize_resolution(&converted.to_string(), &settings.size.resolution);
-        }
-        settings.size.resolution_unit = unit;
-        changed = true;
-    }
-    if changed {
-        report.ratio = Some(CropRatioChange { editing: false });
-    }
-}
-
-/// A length field over a length kept in its own unit: a typed number is in that unit (pixels while unset), a typed
-/// unit is converted into it, and a cleared field is unset. Returns whether `value` changed.
-fn length_field(
-    ui: &mut Ui,
-    salt: &'static str,
-    caption: &Label,
-    value: &mut Option<CropLength>,
-    pixels_per_inch: f64,
-    points_per_inch: f64,
-) -> bool {
-    let unit = value.map_or(UnitKind::Pixels, |length| length.unit);
-    let mut typed = None;
-    let mut typed_unit = None;
-    Field::new(caption.clone()).id_salt(salt).sizing(Sizing::Content).show(ui, |ui, _| {
-        let lengths = LengthUnits::new(unit, unit, pixels_per_inch);
-        let field =
-            NumberField::length(caption.clone(), Bind::given(value.map(|length| length.value)), lengths).range(LENGTH_MIN..=FIELD_MAX).show(ui);
-        typed = field.value().copied();
-        typed_unit = field.typed_unit;
-    });
-    let Some(next) = typed else { return false };
-    let next = next.map(|length| match typed_unit {
-        // The value is in the stored unit; a typed unit becomes the stored one, as in Photoshop.
-        Some(to) if to != unit => {
-            let pixels = unit.to_pixels(length, 1.0, pixels_per_inch, points_per_inch);
-            let converted = pixels.and_then(|pixels| to.from_pixels(pixels, 1.0, pixels_per_inch, points_per_inch));
-            converted.map_or(CropLength::new(length, unit), |value| CropLength::new(value, to))
-        }
-        _ => CropLength::new(length, unit),
-    });
-    let changed = next != *value;
-    *value = next;
-    changed
 }

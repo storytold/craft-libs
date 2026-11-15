@@ -22,6 +22,7 @@ mod pen;
 
 // draw-crop-b
 mod crop_tool;
+mod crop_size;
 mod perspective_crop;
 
 // draw-bars

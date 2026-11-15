@@ -4,10 +4,12 @@
 use craft_behavior::geometry::{Homography, screen_step};
 use craft_behavior::kurbo::{Point, Vec2 as DocVec};
 use craft_behavior::{
-    CanvasView, CursorIcon, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PartKey, PartRef, PointerButton, PressPhase, Roving, Sense,
+    CanvasView, CursorIcon, HitLevel, HitPriority, HitShape, Intent, Metrics, NavShape, PaintedCursor, PartKey, PartRef, PointerButton, PressPhase,
+    Roving, Sense,
 };
+use craft_keymap::Mods;
 use craft_theme::variant::Tone;
-use craft_ui::canvas::{CanvasSpace, NUDGE, NUDGE_FAR, canvas_space};
+use craft_ui::canvas::{CanvasSpace, CropShield, NUDGE, NUDGE_FAR, canvas_space, paint_outside};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, Styled as _, WordSetCx as _,
@@ -15,7 +17,7 @@ use craft_ui::contract::{
 use craft_ui::primitives::{PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{EnvView, Label};
 use craft_ui::runtime::focus::KeyUse;
-use craft_ui::style::{ComponentStyle, HandleLook, StyleColor, StyleCx};
+use craft_ui::style::{ComponentStyle, DataColor, HandleLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 
 use super::words::CropWords;
@@ -58,6 +60,19 @@ pub struct PerspectiveCropStyle {
     reach: f32,
     /// Screen points of the longest side per grid step.
     grid_step: f32,
+    /// The canvas colour the shield may match.
+    canvas: StyleColor,
+}
+
+/// Screen points of the longest side per grid step: the one scale of the quad's grid and the tool's preview grid.
+pub(super) fn grid_step(cx: &StyleCx<'_>) -> f32 {
+    cx.tokens.size.handle.md * GRID_CELL
+}
+
+/// A perspective grid line: the white of the handles on the document, faded towards the canvas.
+pub(super) fn grid_color(cx: &StyleCx<'_>) -> StyleColor {
+    let tokens = cx.tokens;
+    craft_theme::Mix::mix(cx.color(tokens.color.overlay.handle_fill), cx.color(tokens.color.surface.canvas), GRID_FADE)
 }
 
 /// What a drag does to the quad.
@@ -90,6 +105,8 @@ struct Live {
 struct Report {
     apply: bool,
     discard: bool,
+    /// A corner or the whole quad is being dragged: Auto Adjust Opacity lightens the shield.
+    dragging: bool,
 }
 
 /// The Perspective Crop tool's quad over the host's document, as Photoshop's Perspective Crop: the user marks four
@@ -99,6 +116,9 @@ struct Report {
 ///
 /// - The corner nearest the pointer within its reach moves alone, keeping the press offset; inside moves the quad. A
 ///   press elsewhere reaches the tool.
+/// - Shift on a corner drag keeps the axis the pointer moved less along; Alt on a corner of an upright quad moves the
+///   neighbouring corners too, so it stays a rectangle.
+/// - With a `shield` the document outside a valid quad is dimmed, under the grid.
 /// - A quad that is not convex or is wound differently from its box draws in the invalid colour without the grid and
 ///   cannot be committed.
 /// - The quad and its corners are one Tab stop. Page Down and Page Up pick the whole quad or a corner; the arrows move
@@ -116,13 +136,16 @@ pub struct PerspectiveCropQuad<'a> {
     /// Whether a valid quad shows its perspective grid (Show Grid).
     #[prop]
     show_grid: bool,
+    /// The shield painted over the document outside a valid quad; `None` paints none.
+    #[prop]
+    shield: Option<CropShield>,
     report: Report,
 }
 
 impl<'a> PerspectiveCropQuad<'a> {
     /// A quad named `label` over `quad`, in document units.
     pub fn new(label: impl Into<Label>, quad: Bind<'a, PerspectiveQuad>) -> Self {
-        PerspectiveCropQuad { common: Common::new(), quad, show_grid: true, report: Report::default() }.label(label)
+        PerspectiveCropQuad { common: Common::new(), quad, show_grid: true, shield: None, report: Report::default() }.label(label)
     }
 }
 
@@ -167,12 +190,40 @@ fn shown(value: Option<&PerspectiveQuad>) -> Option<[Point; 4]> {
     value.copied().flatten().filter(finite)
 }
 
-/// The quad a drag gives with the pointer at document point `to`.
-fn dragged(drag: &Drag, to: Point) -> [Point; 4] {
+/// Whether `q` is an upright rectangle in quad order: top left, top right, bottom right, bottom left.
+fn upright(q: &[Point; 4]) -> bool {
+    let same = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    same(q[0].y, q[1].y) && same(q[1].x, q[2].x) && same(q[2].y, q[3].y) && same(q[3].x, q[0].x)
+}
+
+/// The quad a drag gives with the pointer at document point `to` and `mods` held at this step; it reads only the
+/// step's own modifiers, so a released key puts the quad back as the press had it.
+///
+/// - Shift keeps the press position's coordinate of the corner on the axis the drag moved less along.
+/// - Alt on a corner of an upright quad moves the two neighbouring corners one coordinate each, so it stays a
+///   rectangle, put in order when the corner passes the opposite one. A skewed quad's corner moves alone.
+fn dragged(drag: &Drag, to: Point, mods: Mods) -> [Point; 4] {
     match drag.grab {
         Grab::Corner { index, offset } => {
+            let from = drag.at_press[index];
+            let mut target = to - offset;
+            if mods.shift {
+                if (target.x - from.x).abs() >= (target.y - from.y).abs() {
+                    target.y = from.y;
+                } else {
+                    target.x = from.x;
+                }
+            }
             let mut quad = drag.at_press;
-            quad[index] = to - offset;
+            quad[index] = target;
+            if mods.alt && upright(&drag.at_press) {
+                let (next, prev) = ((index + 1) % 4, (index + 3) % 4);
+                // The corner shares its row with one neighbour and its column with the other.
+                let (in_row, in_column) = if index % 2 == 0 { (next, prev) } else { (prev, next) };
+                quad[in_row].y = target.y;
+                quad[in_column].x = target.x;
+                return ordered(quad);
+            }
             quad
         }
         Grab::Move => {
@@ -195,8 +246,8 @@ impl PerspectiveCropQuad<'_> {
     }
 
     /// Follows the pointer at screen point `pos`.
-    fn step(cx: &mut Cx<'_, Self>, view: &CanvasView, drag: &Drag, pos: Pos2) {
-        let next = dragged(drag, view.to_doc(pos));
+    fn step(cx: &mut Cx<'_, Self>, view: &CanvasView, drag: &Drag, pos: Pos2, mods: Mods) {
+        let next = dragged(drag, view.to_doc(pos), mods);
         if finite(&next) {
             cx.propose(Some(next));
         }
@@ -244,9 +295,10 @@ impl Component for PerspectiveCropQuad<'_> {
             line,
             halo: cx.color(tokens.color.overlay.halo),
             invalid: cx.tone(Tone::Bad),
-            grid: craft_theme::Mix::mix(cx.color(tokens.color.overlay.handle_fill), canvas, GRID_FADE),
+            grid: grid_color(cx),
             reach: tokens.size.hit.target,
-            grid_step: tokens.size.handle.md * GRID_CELL,
+            grid_step: grid_step(cx),
+            canvas,
         }
     }
 
@@ -273,7 +325,7 @@ impl Component for PerspectiveCropQuad<'_> {
             cx.part(CORNER.at(at as u64), HitShape::circle(corner, cx.style.reach))
                 .sense(Sense::DRAG | Sense::TAKE_FOCUS)
                 .priority(HitPriority::new(HitLevel::Handle, 0))
-                .cursor(CursorIcon::Move)
+                .cursor(PaintedCursor::arrow(false))
                 .focusable();
         }
         cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
@@ -288,15 +340,17 @@ impl Component for PerspectiveCropQuad<'_> {
         for (part, corner) in grabs {
             let Some(result) = cx.part_if_declared(part) else { continue };
             let press = result.press;
+            // Only this pass's own modifiers apply: a second pass of the frame reads the same press state.
+            let mods = press.mods;
             match press.phase {
                 PressPhase::DragStart { start, pos, .. } if start.button == PointerButton::Primary => {
                     let drag = Self::begin(cx, &view, quad, corner, start.origin);
-                    Self::step(cx, &view, &drag, pos);
+                    Self::step(cx, &view, &drag, pos, mods);
                     live.drag = Some(drag);
                 }
                 PressPhase::Drag { pos, .. } => {
                     if let Some(drag) = live.drag {
-                        Self::step(cx, &view, &drag, pos);
+                        Self::step(cx, &view, &drag, pos, mods);
                     }
                 }
                 PressPhase::Release { start, pos, click: false, .. } => {
@@ -307,7 +361,7 @@ impl Component for PerspectiveCropQuad<'_> {
                         None => None,
                     };
                     if let Some(drag) = drag {
-                        Self::step(cx, &view, &drag, pos);
+                        Self::step(cx, &view, &drag, pos, mods);
                         cx.commit();
                     }
                 }
@@ -315,6 +369,7 @@ impl Component for PerspectiveCropQuad<'_> {
                 _ => {}
             }
         }
+        self.report.dragging = live.drag.is_some();
         self.run_keys(cx, &view, quad);
         *cx.memory::<Live>() = live;
     }
@@ -327,6 +382,14 @@ impl Component for PerspectiveCropQuad<'_> {
         let style = &cx.style;
         let draw = ui.draw();
         let screen: Vec<Pos2> = quad.iter().map(|p| view.to_screen(*p)).collect();
+        // The shield dims the document outside a quad that can be committed, before the grid.
+        if valid && let (Some(shield), Some(document)) = (&self.shield, space.document()) {
+            let (w, h) = (document.width, document.height);
+            let canvas = [Point::new(0.0, 0.0), Point::new(w, 0.0), Point::new(w, h), Point::new(0.0, h)].map(|p| view.to_screen(p));
+            if let Some(fill) = shield.fill_on(&space, style.canvas.egui(), self.report.dragging) {
+                paint_outside(&draw, canvas, &screen, DataColor::new(fill));
+            }
+        }
         if valid && self.show_grid {
             for [a, b] in grid_lines(&view, &quad, style.grid_step) {
                 draw.stroke(&PaintShape::Path(vec![a, b]), StrokeWidth::Thin, style.grid);

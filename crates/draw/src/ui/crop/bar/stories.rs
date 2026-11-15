@@ -3,10 +3,11 @@
 use super::super::menus::{CropOptionsMenu, CropOverlayMenu};
 use super::super::options::{CropLength, CropRatio, CropSettings, CropSizeFields, CropUserPreset};
 use super::super::session::{CropDocKey, CropDocument};
+use super::super::preset_list::CropPresetList;
 use super::CropBar;
 use craft_ui::bars::{Bar, BarKind};
 use craft_ui::contract::ShowContainer as _;
-use craft_ui::runtime::env::UnitKind;
+use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 use kurbo::Size;
@@ -71,4 +72,24 @@ fn crop_options_menu_classic_mode(ui: &mut Ui, data: &mut StoryData) -> StoryOut
     settings.shield.classic_mode = true;
     let settings = data.value("classic", settings);
     CropOptionsMenu::new(settings).show(ui).into()
+}
+
+#[story(CropBar<'static>, covers = [], drive = Drive::Never)]
+fn crop_bar_selection_and_reset(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let document = document();
+    let settings = data.value("selection", CropSettings::default());
+    let mut output = None;
+    Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+        let bar = CropBar::new(settings, &document).angle(0.0).selection_entry(true).selection_chosen(true).can_reset(true).help(Label::from("About the Fill options"));
+        output = Some(bar.show(ui));
+    });
+    output.map(StoryOutput::from).unwrap_or_default()
+}
+
+#[story(CropPresetList<'static>, covers = [], drive = Drive::Never)]
+fn crop_preset_list(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let document = document();
+    let presets = [CropUserPreset::new("3 : 2", CropRatio::Sides { width: 3.0, height: 2.0 }, CropSizeFields::default())];
+    let settings = data.value("list", CropSettings::default());
+    CropPresetList::new(settings, &document).user_presets(&presets).selection_entry(true).selection_chosen(true).show(ui).into()
 }
