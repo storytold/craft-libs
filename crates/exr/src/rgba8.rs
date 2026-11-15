@@ -81,7 +81,7 @@ pub fn write_rgba8(rgba: &[u8], w: u32, h: u32, alpha: bool, compression: Compre
     };
     // channels in the alphabetical order the file layout requires
     let names: &[u8] = if alpha { b"ABGR" } else { b"BGR" };
-    let line = (w as usize).checked_mul(names.len() * 2).ok_or_else(|| Error::FrameSize)?;
+    let line = (w as usize).checked_mul(names.len() * 2).ok_or(Error::FrameSize)?;
     // a chunk's byte count is a signed 32-bit field
     let lines = compression.lines();
     if line.checked_mul(lines).and_then(|c| i32::try_from(c).ok()).is_none() {
@@ -125,7 +125,7 @@ pub fn write_rgba8(rgba: &[u8], w: u32, h: u32, alpha: bool, compression: Compre
     let chunks = (h as usize).div_ceil(lines);
     let table = chunks.checked_mul(8);
     let body = (h as usize).checked_mul(line + 8);
-    let size = table.zip(body).and_then(|(t, b)| hd.len().checked_add(t)?.checked_add(b)).ok_or_else(|| Error::FrameSize)?;
+    let size = table.zip(body).and_then(|(t, b)| hd.len().checked_add(t)?.checked_add(b)).ok_or(Error::FrameSize)?;
     // the uncompressed size: compressed chunks only shrink it
     let mut out = Vec::with_capacity(size);
     out.extend_from_slice(&hd);
