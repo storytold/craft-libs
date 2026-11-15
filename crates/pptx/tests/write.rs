@@ -1,5 +1,7 @@
 //! The writer, read back with the reader.
 
+mod common;
+
 use std::sync::Arc;
 
 use craft_pptx::table::{Cell, Table};
@@ -191,6 +193,100 @@ fn reads_the_theme_of_a_pptx_and_of_a_thmx() {
         assert_eq!(t.fonts.major.latin, "Lato");
         assert_eq!(t.colors.get(SchemeSlot::Accent1), Rgba::rgb(0x12, 0x34, 0x56));
     }
+}
+
+const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const NS_P: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
+const NS_THM15: &str = "http://schemas.microsoft.com/office/thememl/2012/main";
+
+/// The namespace of every element named `local` in `xml`, resolved through the declarations in
+/// scope (`""` for none).
+fn namespaces_of(xml: &str, local: &str) -> Vec<String> {
+    fn rec(e: &craft_xml::El, scope: &mut Vec<(String, String)>, local: &str, out: &mut Vec<String>) {
+        let n = scope.len();
+        scope.extend(e.ns_decls().map(|(p, u)| (p.to_string(), u.to_string())));
+        if e.local() == local {
+            out.push(scope.iter().rev().find(|(p, _)| p == e.prefix()).map(|(_, u)| u.clone()).unwrap_or_default());
+        }
+        for c in e.elements() {
+            rec(c, scope, local, out);
+        }
+        scope.truncate(n);
+    }
+    let root = craft_xml::Options::default().strict().parse(xml.as_bytes()).unwrap_or_else(|e| panic!("not well-formed: {e}\n{xml}"));
+    let mut out = vec![];
+    rec(&root, &mut vec![], local, &mut out);
+    out
+}
+
+/// A theme with a custom colour list and a theme family id, with the `a:` prefix.
+const PREFIXED_THEME: &str = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="Harbour"><a:themeElements><a:clrScheme name="Harbour"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="1F1F1F"/></a:dk2><a:lt2><a:srgbClr val="EEEEEE"/></a:lt2><a:accent1><a:srgbClr val="123456"/></a:accent1><a:accent2><a:srgbClr val="222222"/></a:accent2><a:accent3><a:srgbClr val="333333"/></a:accent3><a:accent4><a:srgbClr val="444444"/></a:accent4><a:accent5><a:srgbClr val="555555"/></a:accent5><a:accent6><a:srgbClr val="666666"/></a:accent6><a:hlink><a:srgbClr val="0000FF"/></a:hlink><a:folHlink><a:srgbClr val="800080"/></a:folHlink></a:clrScheme><a:fontScheme name="Harbour"><a:majorFont><a:latin typeface="Lato"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/><a:custClrLst><a:custClr name="Brand"><a:srgbClr val="C00000"/></a:custClr></a:custClrLst><a:extLst><a:ext uri="{05A4C25C-085E-4340-85A3-A5531E510DB2}"><thm15:themeFamily xmlns:thm15="http://schemas.microsoft.com/office/thememl/2012/main" name="Harbour" id="{62F939B6-93AF-4DB8-9C6B-D6C7DFDC589F}" vid="{4A3C46E8-61CC-4603-A589-7422A47A8E4A}"/></a:ext></a:extLst></a:theme>"#;
+
+/// The deck with its theme part replaced by `theme`.
+fn with_theme(theme: &str) -> Vec<u8> {
+    let pptx = craft_pptx::export(&deck(), &Plain).unwrap();
+    common::rewrite(&pptx, |name, data| Some(if name == "ppt/theme/theme1.xml" { theme.as_bytes().to_vec() } else { data.to_vec() }), &[])
+}
+
+/// A theme written with a default namespace instead of the `a:` prefix: the parts kept as
+/// written (custom colours, theme family id) stay in the DrawingML namespace on save.
+#[test]
+fn a_default_namespace_theme_keeps_its_kept_parts_in_the_drawingml_namespace() {
+    let theme = PREFIXED_THEME.replace("<a:", "<").replace("</a:", "</").replace("xmlns:a=", "xmlns=");
+    assert!(!theme.contains("a:"), "{theme}");
+    let p = craft_pptx::import(&with_theme(&theme), &Plain).unwrap();
+    assert_eq!(p.masters[0].theme.colors.get(SchemeSlot::Accent1), Rgba::rgb(0x12, 0x34, 0x56));
+    let once = craft_pptx::export(&p, &Plain).unwrap();
+    let xml = part(&once, "ppt/theme/theme1.xml");
+    // The writer may add an `a:extLst` of its own to the colour scheme, so every one is checked.
+    for local in ["objectDefaults", "custClrLst", "custClr", "extLst", "ext", "srgbClr"] {
+        let ns = namespaces_of(&xml, local);
+        assert!(!ns.is_empty() && ns.iter().all(|n| n == NS_A), "{local}: {ns:?}\n{xml}");
+    }
+    assert_eq!(namespaces_of(&xml, "themeFamily"), [NS_THM15], "{xml}");
+    // The second save writes the same kept parts.
+    let kept = |x: &str| x[x.find("</a:themeElements>").expect("themeElements")..].to_string();
+    let twice = craft_pptx::export(&craft_pptx::import(&once, &Plain).unwrap(), &Plain).unwrap();
+    assert_eq!(kept(&part(&twice, "ppt/theme/theme1.xml")), kept(&xml));
+}
+
+/// The same theme with the `a:` prefix: the kept parts are written as before (each declaring
+/// the `a:` it uses), with no default namespace added.
+#[test]
+fn a_prefixed_theme_keeps_its_kept_parts_unchanged() {
+    let p = craft_pptx::import(&with_theme(PREFIXED_THEME), &Plain).unwrap();
+    let xml = part(&craft_pptx::export(&p, &Plain).unwrap(), "ppt/theme/theme1.xml");
+    assert!(!xml.contains(r#" xmlns=""#), "{xml}");
+    let a = format!(r#"xmlns:a="{NS_A}""#);
+    let kept = format!(
+        r#"<a:objectDefaults {a}/><a:extraClrSchemeLst {a}/><a:custClrLst {a}><a:custClr name="Brand"><a:srgbClr val="C00000"/></a:custClr></a:custClrLst><a:extLst {a}><a:ext uri="{{05A4C25C-085E-4340-85A3-A5531E510DB2}}"><thm15:themeFamily xmlns:thm15="{NS_THM15}" name="Harbour" id="{{62F939B6-93AF-4DB8-9C6B-D6C7DFDC589F}}" vid="{{4A3C46E8-61CC-4603-A589-7422A47A8E4A}}"/></a:ext></a:extLst></a:theme>"#
+    );
+    assert!(xml.contains(&kept), "{xml}");
+}
+
+/// A slide written with a default PresentationML namespace: its kept extension list stays in
+/// that namespace under the writer's `p:extLst`.
+#[test]
+fn a_default_namespace_slide_keeps_its_extensions_in_the_presentationml_namespace() {
+    let pptx = craft_pptx::export(&deck(), &Plain).unwrap();
+    let ext = r#"<extLst><ext uri="{11111111-2222-3333-4444-555555555555}"><t:data xmlns:t="urn:test" v="1"/></ext></extLst>"#;
+    let doc = common::rewrite(
+        &pptx,
+        |name, data| {
+            if name != "ppt/slides/slide1.xml" {
+                return Some(data.to_vec());
+            }
+            let xml = String::from_utf8(data.to_vec()).unwrap();
+            assert!(xml.contains("<p:sld ") && xml.contains("</p:sld>") && !xml.contains("extLst"), "{xml}");
+            Some(xml.replacen("<p:sld ", &format!(r#"<p:sld xmlns="{NS_P}" "#), 1).replace("</p:sld>", &format!("{ext}</p:sld>")).into_bytes())
+        },
+        &[],
+    );
+    let p = craft_pptx::import(&doc, &Plain).unwrap();
+    let xml = part(&craft_pptx::export(&p, &Plain).unwrap(), "ppt/slides/slide1.xml");
+    assert!(xml.contains("{11111111-2222-3333-4444-555555555555}"), "{xml}");
+    assert_eq!(namespaces_of(&xml, "ext"), [NS_P], "{xml}");
+    assert_eq!(namespaces_of(&xml, "data"), ["urn:test"], "{xml}");
 }
 
 #[test]
