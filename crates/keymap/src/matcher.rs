@@ -80,9 +80,36 @@ impl Matcher {
     /// The command `press` runs, with `layout` reading the key.
     pub fn press(&mut self, layout: &Layout, keymap: &Keymap, press: &Press<'_>) -> Option<Hit> {
         let Press { input, repeat, now, active, outer } = *press;
+        let chords = Chords::of(layout, input)?;
+        if repeat {
+            return chords.single(keymap, active, outer);
+        }
+        let first = chords.first();
+        let again = self
+            .last
+            .as_ref()
+            .is_some_and(|l| l.chord == first && !l.ran_double && l.panel.as_deref() == active.panel && now >= l.at && now - l.at < DOUBLE_PRESS);
+        let double = if again { chords.find(keymap, true, active, outer) } else { None };
+        self.last = Some(LastPress { chord: first, at: now, ran_double: double.is_some(), panel: active.panel.map(str::to_owned) });
+        double.or_else(|| chords.single(keymap, active, outer))
+    }
+
+    /// The command a press of `input` runs on its own, as [`press`](Self::press) matches a press that completes no
+    /// double press: for a key that is held down rather than pressed now (a key automation holds). Keeps no state.
+    pub fn single(layout: &Layout, keymap: &Keymap, input: &KeyInput, active: &Active<'_>, outer: &[&str]) -> Option<Hit> {
+        Chords::of(layout, input)?.single(keymap, active, outer)
+    }
+}
+
+/// The chords one press can run, most specific first: the layout's candidates, then Delete and Backspace standing
+/// for each other.
+struct Chords(Vec<Chord>);
+
+impl Chords {
+    /// `None` when the press names no key.
+    fn of(layout: &Layout, input: &KeyInput) -> Option<Chords> {
         let mut chords = layout.candidates(input);
-        let first = *chords.first()?;
-        // Delete and Backspace stand for each other, after the press's own chords.
+        chords.first()?;
         let twins: Vec<Chord> = chords
             .iter()
             .filter_map(|c| match c.key {
@@ -92,36 +119,41 @@ impl Matcher {
             })
             .collect();
         chords.extend(twins);
-        let find = |double: bool| {
-            chords
-                .iter()
-                .find_map(|&chord| Hit::from_lookup(keymap.lookup_nested(&chord, double, active, outer), Trigger { chord, double }, chord == first))
-        };
-        // Only when no binding owns the Alt chord itself, so a bound Alt chord runs its own command.
-        let alt_variant = |chords: &[Chord]| {
-            let platform = keymap.platform();
-            chords.iter().filter(|c| c.mods.alt).find_map(|&chord| {
-                if active.typing && !keymap.typing_rule().fires(&chord, platform) {
-                    return None;
+        Some(Chords(chords))
+    }
+
+    /// The chord the press means ([`Layout::resolve`]).
+    fn first(&self) -> Chord {
+        self.0[0]
+    }
+
+    /// The first chord with a binding, pressed twice when `double`.
+    fn find(&self, keymap: &Keymap, double: bool, active: &Active<'_>, outer: &[&str]) -> Option<Hit> {
+        let first = self.first();
+        self.0
+            .iter()
+            .find_map(|&chord| Hit::from_lookup(keymap.lookup_nested(&chord, double, active, outer), Trigger { chord, double }, chord == first))
+    }
+
+    /// The single press's binding, else its Alt variant.
+    fn single(&self, keymap: &Keymap, active: &Active<'_>, outer: &[&str]) -> Option<Hit> {
+        self.find(keymap, false, active, outer).or_else(|| self.alt_variant(keymap, active, outer))
+    }
+
+    /// Only when no binding owns the Alt chord itself, so a bound Alt chord runs its own command.
+    fn alt_variant(&self, keymap: &Keymap, active: &Active<'_>, outer: &[&str]) -> Option<Hit> {
+        let (first, platform) = (self.first(), keymap.platform());
+        self.0.iter().filter(|c| c.mods.alt).find_map(|&chord| {
+            if active.typing && !keymap.typing_rule().fires(&chord, platform) {
+                return None;
+            }
+            let plain = Chord::new(Mods { alt: false, ..chord.mods }, chord.key);
+            match keymap.lookup_nested(&plain, false, &Active { typing: false, ..*active }, outer) {
+                Lookup::Run(command) if keymap.bindable(&command).is_some_and(|b| b.has_alt_variant) => {
+                    Some(Hit { command, cycle: Vec::new(), trigger: Trigger { chord, double: false }, exact: chord == first, alt_variant: true })
                 }
-                let plain = Chord::new(Mods { alt: false, ..chord.mods }, chord.key);
-                match keymap.lookup_nested(&plain, false, &Active { typing: false, ..*active }, outer) {
-                    Lookup::Run(command) if keymap.bindable(&command).is_some_and(|b| b.has_alt_variant) => {
-                        Some(Hit { command, cycle: Vec::new(), trigger: Trigger { chord, double: false }, exact: chord == first, alt_variant: true })
-                    }
-                    _ => None,
-                }
-            })
-        };
-        if repeat {
-            return find(false).or_else(|| alt_variant(&chords));
-        }
-        let again = self
-            .last
-            .as_ref()
-            .is_some_and(|l| l.chord == first && !l.ran_double && l.panel.as_deref() == active.panel && now >= l.at && now - l.at < DOUBLE_PRESS);
-        let double = if again { find(true) } else { None };
-        self.last = Some(LastPress { chord: first, at: now, ran_double: double.is_some(), panel: active.panel.map(str::to_owned) });
-        double.or_else(|| find(false)).or_else(|| alt_variant(&chords))
+                _ => None,
+            }
+        })
     }
 }

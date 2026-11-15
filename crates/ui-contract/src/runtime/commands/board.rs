@@ -13,7 +13,8 @@ use crate::runtime::reads::{self, BindKey};
 use crate::runtime::{focus, keys, lazy, measure, overlay, replay, sampler};
 use craft_behavior::{EditCommand, KeyOwner, OwnerClass, pick_instance, resolve_flags};
 use craft_keymap::{
-    Active, Chord, CommandDef, CommandKind, CommandRef, Keymap, Lookup, Matcher, ModalRule, Overrides, Platform, Press, Scopes, Trigger,
+    Active, Chord, CommandDef, CommandKind, CommandRef, Hit, KeyInput, Keymap, Layout, Matcher, ModalRule, Overrides, Platform, Press, Scopes,
+    Trigger,
 };
 use egui::{Context, Id, ViewportId};
 use std::collections::{HashMap, HashSet};
@@ -231,6 +232,19 @@ impl Board {
         chain.innermost_where(|of| self.within(of, scope))
     }
 
+    /// The instance of `scope` a command routed to `at` goes to: `at` when it is an instance of the scope itself (a
+    /// canvas), else the innermost instance in `around`, the chain of the context `at` was shown in.
+    fn instance_around(&self, at: Id, around: &CommandChain, scope: &str) -> Option<Id> {
+        let own = self.instances.iter().any(|i| i.id == at && self.within(i.scope.name(), scope));
+        if own { Some(at) } else { self.innermost(around, scope) }
+    }
+
+    /// The keymap and the scopes a key matches in while `chain` (outermost first) has the keys.
+    fn key_scopes(&self, chain: &[Id]) -> Option<KeyScopes> {
+        let keymap = self.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap))?;
+        Some(KeyScopes { keymap, scopes: self.scopes_around(chain) })
+    }
+
     fn is_live(&self, ctx: &Context, id: Id) -> bool {
         self.instances.iter().any(|i| i.id == id && self.live(ctx, i))
     }
@@ -387,6 +401,32 @@ impl Board {
 
 fn is_app(scope: &str) -> bool {
     scope == CommandScope::APP.name()
+}
+
+/// The window's key matching: the keymap and the scopes a key matches in, innermost first. The key stage, the
+/// routing question whether a scoped command takes a key (`binds_scoped`) and a key automation holds at a canvas
+/// (`bound_around`) all match through it.
+struct KeyScopes {
+    keymap: Arc<Keymap>,
+    scopes: Vec<&'static str>,
+}
+
+impl KeyScopes {
+    /// What a press of `input` runs, read through `layout`, with `typing` when a text field has the keys. With
+    /// `matcher` and the press's time the press counts toward a double press; without, it is matched on its own.
+    fn press(&self, layout: &Layout, input: &KeyInput, typing: bool, matcher: Option<(&mut Matcher, f64)>) -> Option<Hit> {
+        let (panel, outer) = self.scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
+        let active = Active { panel, contexts: &[], typing };
+        match matcher {
+            Some((matcher, now)) => matcher.press(layout, &self.keymap, &Press { input, repeat: false, now, active: &active, outer }),
+            None => Matcher::single(layout, &self.keymap, input, &active, outer),
+        }
+    }
+}
+
+/// A press of `chord` known only by its key, as injected key events carry it: the typed key at its own position.
+fn chord_input(chord: &Chord) -> KeyInput {
+    KeyInput::new(chord.mods).with_typed(chord.key).with_physical(chord.key)
 }
 
 /// Loads the linked command sets.
@@ -975,56 +1015,49 @@ pub(crate) fn take<S>(ctx: &Context, instance: Option<Id>, app: bool, from_ref: 
 #[doc(hidden)]
 pub fn take_around<S: CommandSet>(ctx: &Context, at: Id, around: &CommandChain) -> Option<(S, Fired)> {
     let scope = S::SCOPE.name();
-    let (own, nearest) =
-        with(ctx, |board| (board.instances.iter().any(|i| i.id == at && board.within(i.scope.name(), scope)), board.innermost(around, scope)));
-    take(ctx, if own { Some(at) } else { nearest }, is_app(scope), S::from_ref)
+    let instance = with(ctx, |board| board.instance_around(at, around, scope));
+    take(ctx, instance, is_app(scope), S::from_ref)
 }
 
-/// The command of set `S` that `chord` runs at `at` (a canvas that is an instance of a scope itself) inside `around`,
-/// through the keymap and the scopes the window's keys match in: the lookup for a key that automation holds, so it
-/// starts what the real key starts.
+/// The command of set `S` that `chord` runs at `at` (a canvas that is an instance of a scope itself) inside `around`:
+/// the lookup for a key that automation holds, so it starts what the real key starts. The key is matched as the key
+/// stage matches a press with `at` in focus (the viewport's layout, the keymap's scopes, panel fallthrough), on its
+/// own since a held key completes no double press; the command goes where `take_around` takes it from and runs only
+/// when it is enabled there, the gate included.
 #[doc(hidden)]
 pub fn bound_around<S: CommandSet>(ctx: &Context, at: Id, around: &CommandChain, chord: &Chord) -> Option<S> {
-    with(ctx, |board| {
-        let keymap = board.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap))?;
+    let layout = keys::layout_of(ctx);
+    let (command, instance) = with(ctx, |board| {
         let mut chain: Vec<Id> = around.ids().collect();
         if !chain.contains(&at) {
             chain.push(at);
         }
-        let scopes = board.scopes_around(&chain);
-        let (panel, outer) = scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
-        let active = Active { panel, contexts: &[], typing: false };
-        match keymap.lookup_nested(chord, false, &active, outer) {
-            Lookup::Run(command) => S::from_ref(&command),
-            Lookup::Cycle(commands) => commands.iter().find_map(S::from_ref),
-            _ => None,
-        }
-    })
+        let hit = board.key_scopes(&chain)?.press(&layout, &chord_input(chord), false, None)?;
+        S::from_ref(&hit.command)?;
+        Some((hit.command, board.instance_around(at, around, S::SCOPE.name())))
+    })?;
+    let (resolved, _) = resolve_in(ctx, &command, instance, Reach::Chain(around), None);
+    if resolved.enabled { S::from_ref(&command) } else { None }
 }
 
-/// H7: the key stage's shortcut events, matched against the keymap in the scopes around the focused component,
-/// through the gate, to their commands.
-/// Whether the keymap binds `chord` to a scoped command of the focused component's command chain. A key the focused
-/// stop would activate with is left to that command.
+/// Whether the keymap binds `chord` to an enabled scoped command of the focused component's command chain, matched
+/// as the key stage matches the press. A key the focused stop would activate with is left to that command.
 pub(crate) fn binds_scoped(ctx: &Context, chord: &Chord) -> bool {
     let viewport = pass::current_viewport(ctx);
     let focused = focus::record(ctx, viewport).focused;
-    with(ctx, |board| {
-        let Some(keymap) = board.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap)) else { return false };
+    let layout = keys::layout_of(ctx);
+    let found = with(ctx, |board| {
         let chain: Vec<Id> =
             board.chains.get(&viewport).filter(|(id, _)| Some(*id) == focused).map(|(_, chain)| chain.ids().collect()).unwrap_or_default();
-        let scopes = board.scopes_around(&chain);
-        let (panel, outer) = scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
-        let active = Active { panel, contexts: &[], typing: false };
+        let keys = board.key_scopes(&chain)?;
+        let hit = keys.press(&layout, &chord_input(chord), false, None)?;
         // The lookup also ranks panels that share with the focused one and, with fallthrough, every other panel: only
         // a command of a scope around the focus counts.
-        let around = |command: &CommandRef| scopes.contains(&board.scope_of(command));
-        match keymap.lookup_nested(chord, false, &active, outer) {
-            Lookup::Run(command) => around(&command),
-            Lookup::Cycle(commands) => commands.iter().any(around),
-            _ => false,
-        }
-    })
+        let command = std::iter::once(&hit.command).chain(&hit.cycle).find(|command| keys.scopes.contains(&board.scope_of(command)))?.clone();
+        let (_, instance) = board.target_of(ctx, &command, &board.here);
+        Some((command, instance))
+    });
+    found.is_some_and(|(command, instance)| resolve_in(ctx, &command, instance, Reach::Focus, None).0.enabled)
 }
 
 /// Where a shortcut pressed with focus in a menu or on a menu bar matches, and where a hit gives the focus back. The
@@ -1071,6 +1104,8 @@ impl Returning {
     }
 }
 
+/// H7: the key stage's shortcut events, matched against the keymap in the scopes around the focused component,
+/// through the gate, to their commands.
 pub(crate) fn begin(ctx: &Context) {
     let (arrived, changed) = with(ctx, |board| board.changed.clone());
     if arrived == pass::root_frame_nr(ctx) && changed.keymap {
@@ -1109,22 +1144,19 @@ pub(crate) fn begin(ctx: &Context) {
         if shortcuts.keys.is_empty() {
             return None;
         }
-        let keymap = board.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap))?;
-        let mut scopes = board.scopes_around(&chain);
+        let mut keys = board.key_scopes(&chain)?;
         // The held-open canvas's scope is around the focus for matching: its commands fire from the dialog.
         let held_scope = held_open.and_then(|id| board.instances.iter().find(|i| i.id == id)).map(|i| i.scope.name()).filter(|scope| !is_app(scope));
         if let Some(scope) = held_scope
-            && !scopes.contains(&scope)
+            && !keys.scopes.contains(&scope)
         {
-            scopes.push(scope);
+            keys.scopes.push(scope);
         }
-        Some((keymap, scopes, std::mem::take(&mut board.matcher)))
+        Some((keys, std::mem::take(&mut board.matcher)))
     });
     // With this pass's vantage set, what the readers were shown is resolved again before any of them runs.
     wake_shown(ctx, viewport);
-    let Some((keymap, scopes, mut matcher)) = taken else { return };
-    let (panel, outer) = scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
-    let active = Active { panel, contexts: &[], typing: shortcuts.typing };
+    let Some((keys, mut matcher)) = taken else { return };
     let mut fired = Vec::new();
     for shortcut in &shortcuts.keys {
         match shortcut.phase {
@@ -1143,9 +1175,7 @@ pub(crate) fn begin(ctx: &Context) {
                 }
             }
             _ => {
-                let Some(hit) =
-                    matcher.press(&shortcuts.layout, &keymap, &Press { input: &shortcut.input, repeat: false, now, active: &active, outer })
-                else {
+                let Some(hit) = keys.press(&shortcuts.layout, &shortcut.input, shortcuts.typing, Some((&mut matcher, now))) else {
                     continue;
                 };
                 let (app, instance) = with(ctx, |board| board.target_of(ctx, &hit.command, &board.here));

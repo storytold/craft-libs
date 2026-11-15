@@ -6,9 +6,10 @@ use craft_behavior::kurbo::{Point, Size};
 use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GesturePhase, PointerButton};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
-    Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, NavigationOptions, Snap,
-    StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer,
+    Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, NavigationOptions,
+    Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer,
 };
+use craft_ui::runtime::commands::{CommandGate, CommandSet as _};
 use craft_ui::contract::{Bind, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
@@ -694,23 +695,29 @@ fn a_queued_space_covers_the_moves_queued_after_it_and_not_those_after_its_relea
 
 /// A queued Space starts the momentary Hand as the real key does: the press it is held over pans the view, and the
 /// press after its release runs the selected tool.
-#[trial]
-fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_release_runs_the_selected_tool() {
-    let log = Log::default();
-    let main = Rc::new(RefCell::new(Probe::new("main", &log)));
+/// A canvas with the momentary set and `main` as the selected tool, zoomed in, so the document is larger than the
+/// canvas and the Hand has room to pan: returns the fixture, the app's view and the canvas's id.
+fn momentary_canvas(main: Probe) -> (Fixture, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Id>>) {
+    let main = RefCell::new(main);
     let (view, canvas) = (Rc::new(Cell::new(None::<CanvasView>)), Rc::new(Cell::new(Id::NULL)));
-    let (shown_main, shown_view, shown_canvas) = (Rc::clone(&main), Rc::clone(&view), Rc::clone(&canvas));
+    let (shown_view, shown_canvas) = (Rc::clone(&view), Rc::clone(&canvas));
     let mut set = Momentary::new(NavigationOptions::default());
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
-        // Zoomed in, so the document is larger than the canvas and the Hand has room to pan.
         let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 4.0));
         let shown = Canvas::new("Document").document(DOCUMENT).view(current).show(ui, |_, _| {});
         shown_canvas.set(shown.output.response.id);
-        let reply = ToolHost::new().momentary(&mut set).run(ui, &shown.output, &mut *shown_main.borrow_mut());
+        let reply = ToolHost::new().momentary(&mut set).run(ui, &shown.output, &mut *main.borrow_mut());
         shown_view.set(Some(reply.view.unwrap_or(current)));
     });
     fixture.settle();
+    (fixture, view, canvas)
+}
+
+#[trial]
+fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_release_runs_the_selected_tool() {
+    let log = Log::default();
+    let (mut fixture, view, canvas) = momentary_canvas(Probe::new("main", &log));
     let at = fixture.by_role(Role::CANVAS)[0].rect.center();
     let before = view.get().expect("the canvas ran").center;
     let space = craft_keymap::Key::Space;
@@ -730,6 +737,31 @@ fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_r
     let calls = log.borrow().clone();
     assert_eq!(calls.iter().filter(|call| *call == "main press").count(), 1, "only the press after the release is the selected tool's: {calls:?}");
     assert!(!calls.iter().any(|call| call == "main drag"), "the Hand's drag never reaches the selected tool: {calls:?}");
+}
+
+/// A queued Space starts the Hand only where the real key would fire it: with the app's gate refusing the Hand, the
+/// press it is held over runs the selected tool.
+#[trial]
+fn a_queued_space_whose_hand_the_gate_refuses_leaves_the_press_to_the_selected_tool() {
+    let log = Log::default();
+    let (mut fixture, view, canvas) = momentary_canvas(Probe::new("main", &log));
+    fixture.gate(CommandGate::new(|command| !matches!(MomentaryCommands::from_ref(command), Some(MomentaryCommands::Hand)))).settle();
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    let before = view.get().expect("the canvas ran").center;
+    let space = craft_keymap::Key::Space;
+    for input in [
+        ToolInput::hold(space),
+        ToolInput::down(PointerButton::Primary, at),
+        ToolInput::moved(at + BY),
+        ToolInput::up(at + BY),
+        ToolInput::let_go(space),
+    ] {
+        ToolHost::inject(fixture.ctx(), canvas.get(), input);
+    }
+    fixture.idle(1);
+    assert_eq!(view.get().expect("the canvas ran").center, before, "the refused Hand pans nothing");
+    let calls = log.borrow().clone();
+    assert!(calls.iter().any(|call| call == "main drag"), "the press under the queued Space is the selected tool's: {calls:?}");
 }
 
 /// A canvas under a dialog that keeps the canvas: returns the fixture, the app's view and the canvas's rect.

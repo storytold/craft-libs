@@ -3,7 +3,7 @@
 use super::Frames;
 use super::story::{Story, StoryData, StoryOutput};
 use crate::runtime::access::Role;
-use crate::runtime::commands::{CommandInput, CommandRef, CommandState};
+use crate::runtime::commands::{CommandGate, CommandInput, CommandRef, CommandState};
 use crate::runtime::egui::access::{AccessTree, NodeKey};
 use crate::runtime::egui::fixture::{self, AccessActionKind};
 use crate::runtime::egui::injected;
@@ -230,6 +230,13 @@ impl Fixture {
         let command = command.into();
         self.commands.states.retain(|(held, _)| *held != command);
         self.commands.states.push((command, state));
+        self.frames.commands(self.commands.clone());
+        self
+    }
+
+    /// Sets the app's one gate over commands for every following pass, as an app's `FrameInput.commands` does.
+    pub fn gate(&mut self, gate: CommandGate) -> &mut Self {
+        self.commands.gate = Some(gate);
         self.frames.commands(self.commands.clone());
         self
     }
