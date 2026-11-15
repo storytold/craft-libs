@@ -502,17 +502,60 @@ fn be32(src: &[u8], at: usize) -> Result<u32> {
     Ok(u32::from_be_bytes(bytes))
 }
 
+/// An MSB-first bit reader over one entropy stream.
+///
+/// Up to 64 stream bits are held in `cache`, left-aligned: the top `count` bits are the next unread
+/// ones. A refill loads 8 bytes at once and keeps whole bytes only, so the bits below `count` are
+/// either zero or the stream's own next bits at their final positions, which a later refill ORs in
+/// again unchanged. Reads never trust those bits: they are checked against `count`.
 struct Bits<'a> {
     src: &'a [u8],
-    at: usize,
+    /// The next byte to load into `cache`.
+    next: usize,
+    cache: u64,
+    count: u32,
 }
 
-impl Bits<'_> {
-    /// The next 32 bits, MSB first, when at least that many remain before the end of the stream.
-    fn peek32(&self) -> Option<u32> {
-        let bytes = self.src.get(self.at / 8..self.at / 8 + 5)?;
-        let word = u64::from_be_bytes([0, 0, 0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]]);
-        Some((word >> (8 - self.at % 8)) as u32)
+impl<'a> Bits<'a> {
+    fn new(src: &'a [u8]) -> Self {
+        Self { src, next: 0, cache: 0, count: 0 }
+    }
+
+    /// The number of bits consumed so far.
+    fn position(&self) -> usize {
+        self.next * 8 - self.count as usize
+    }
+
+    /// Loads whole bytes until more than 56 bits are cached or the stream ends.
+    fn refill(&mut self) {
+        if self.count > 56 {
+            return;
+        }
+        if let Some(bytes) = self.src.get(self.next..self.next + 8).and_then(|s| <[u8; 8]>::try_from(s).ok()) {
+            self.cache |= u64::from_be_bytes(bytes) >> self.count;
+            let loaded = (63 - self.count) / 8;
+            self.next += loaded as usize;
+            self.count += loaded * 8;
+            return;
+        }
+        // The last 7 bytes: one at a time.
+        while self.count <= 56 {
+            let Some(&byte) = self.src.get(self.next) else { break };
+            self.cache |= u64::from(byte) << (56 - self.count);
+            self.next += 1;
+            self.count += 8;
+        }
+    }
+
+    /// Drops `count` bits (at most `self.count`, below 64).
+    fn consume(&mut self, count: u32) {
+        self.cache <<= count;
+        self.count -= count;
+    }
+
+    /// The top `count` cached bits (0 to 32) as a number; `>> 1 >> (63 - count)` is 0 for `count` 0.
+    fn top(&self, count: u32) -> u32 {
+        (self.cache >> 1 >> (63 - count)) as u32
     }
 
     fn take(&mut self, count: u32) -> Result<u32> {
@@ -522,27 +565,34 @@ impl Bits<'_> {
         if count == 0 {
             return Ok(0);
         }
-        if let Some(window) = self.peek32() {
-            self.at += count as usize;
-            return Ok(window >> (32 - count));
+        if self.count < count {
+            self.refill();
+            if self.count < count {
+                return Err(corrupt("truncated entropy stream"));
+            }
         }
-        // Near the end of the stream: bit by bit, so truncation is reported exactly.
-        let mut value = 0;
-        for _ in 0..count {
-            let byte = self.src.get(self.at / 8).ok_or_else(|| corrupt("truncated entropy stream"))?;
-            value = (value << 1) | u32::from((byte >> (7 - self.at % 8)) & 1);
-            self.at += 1;
-        }
+        let value = self.top(count);
+        self.consume(count);
         Ok(value)
     }
 
     fn rice(&mut self, k: u32) -> Result<u32> {
-        // Common case: the unary prefix and its terminating 1 lie within the next 32 bits.
-        if let Some(window) = self.peek32().filter(|&w| w != 0) {
-            let zeros = window.leading_zeros();
-            self.at += zeros as usize + 1;
-            return if k <= 20 { Ok((zeros << k) | self.take(k)?) } else { Err(corrupt("Rice parameter exceeds sample precision")) };
+        // Common case: the unary prefix (shorter than the 41-zero escape), its terminating 1 and the k
+        // low bits are all cached.
+        if k <= 20 {
+            let mut zeros = self.cache.leading_zeros();
+            if zeros + 1 + k > self.count {
+                self.refill();
+                zeros = self.cache.leading_zeros();
+            }
+            if zeros < 41 && zeros + 1 + k <= self.count {
+                self.consume(zeros + 1);
+                let low = self.top(k);
+                self.consume(k);
+                return Ok((zeros << k) | low);
+            }
         }
+        // Escapes, k above 20 and the end of the stream: bit by bit, so truncation is reported exactly.
         let mut zeros = 0;
         while self.take(1)? == 0 {
             zeros += 1;
@@ -580,11 +630,12 @@ impl Bits<'_> {
 
     fn finish(&self) -> Result<()> {
         let bits = self.src.len().checked_mul(8).ok_or(RawError::Limit("CRX entropy length"))?;
-        if bits.saturating_sub(self.at) > 7 {
+        let at = self.position();
+        if bits.saturating_sub(at) > 7 {
             return Err(corrupt("unconsumed entropy data"));
         }
         if let Some(&last) = self.src.last() {
-            let remaining = (bits - self.at) as u32;
+            let remaining = (bits - at) as u32;
             if u32::from(last) & ((1 << remaining) - 1) != 0 {
                 return Err(corrupt("nonzero entropy alignment bits"));
             }
@@ -653,7 +704,7 @@ fn lossless_plane(src: &[u8], width: usize, height: usize) -> Result<Vec<i32>> {
     current.try_reserve_exact(width).map_err(|_| RawError::Limit("CRX row allocation"))?;
     current.resize(width, 0i32);
     let (mut k, mut run_index) = (0u32, 0usize);
-    let mut bits = Bits { src, at: 0 };
+    let mut bits = Bits::new(src);
     for y in 0..height {
         let mut x = 0;
         let mut left = previous.first().copied().ok_or_else(|| corrupt("empty plane row"))?;
@@ -716,7 +767,7 @@ fn high_frequency_band(src: &[u8], width: usize, height: usize) -> Result<Vec<i3
     let (mut previous, mut current) = (row()?, row()?);
     let (mut previous_k, mut current_k) = (row()?, row()?);
     let (mut k, mut run_index) = (0u32, 0usize);
-    let mut bits = Bits { src, at: 0 };
+    let mut bits = Bits::new(src);
     for y in 0..height {
         let (mut x, mut left) = (0, 0);
         while x < width {
@@ -780,7 +831,7 @@ fn qp_map(src: &[u8], width: usize, height: usize) -> Result<QpMap> {
         Ok(values)
     };
     let (mut previous, mut current) = (row()?, row()?);
-    let mut bits = Bits { src, at: 0 };
+    let mut bits = Bits::new(src);
     let mut k = 0;
     for y in 0..height {
         let mut left = *previous.first().ok_or_else(|| corrupt("empty QP row"))?;
@@ -879,11 +930,11 @@ mod tests {
 
     #[test]
     fn partial_final_run_segment_keeps_its_index() {
-        let mut bits = Bits { src: &[0xc0], at: 0 };
+        let mut bits = Bits::new(&[0xc0]);
         let mut index = 11;
         assert_eq!(run(&mut bits, &mut index, 6).unwrap(), 6);
         assert_eq!(index, 12);
-        assert_eq!(bits.at, 2);
+        assert_eq!(bits.position(), 2);
     }
 
     #[test]
@@ -1081,14 +1132,14 @@ mod tests {
     #[test]
     fn qp_escape_and_average_precede_the_quantization_table() {
         // 23 zeros, the terminating 1, then the symbol in 8 bits.
-        let mut bits = Bits { src: &[0, 0, 1, 0x18], at: 0 };
+        let mut bits = Bits::new(&[0, 0, 1, 0x18]);
         assert_eq!(bits.qp_rice(0).unwrap(), 24);
-        assert_eq!(bits.at, 32);
+        assert_eq!(bits.position(), 32);
         // 22 zeros are an ordinary Rice prefix.
-        let mut bits = Bits { src: &[0, 0, 2, 0], at: 0 };
+        let mut bits = Bits::new(&[0, 0, 2, 0]);
         assert_eq!(bits.qp_rice(0).unwrap(), 22);
-        assert_eq!(bits.at, 23);
-        assert!(Bits { src: &[0, 0, 0, 0x80, 0], at: 0 }.qp_rice(0).is_err());
+        assert_eq!(bits.position(), 23);
+        assert!(Bits::new(&[0, 0, 0, 0x80, 0]).qp_rice(0).is_err());
         // The map's first symbol is a 32-bit literal (300 = QP 150 from prediction 0).
         let map = qp_map(&[0, 0, 1, 0x2c, 0x94], 1, 4).unwrap();
         assert_eq!(map.data, [150; 4]);
@@ -1225,5 +1276,149 @@ mod tests {
                 .fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3));
             assert_eq!(hash, expected, "{name}");
         }
+    }
+
+    /// The bit reader before the 64-bit cache: a checked 5-byte window per read, bit by bit near the end.
+    struct ReferenceBits<'a> {
+        src: &'a [u8],
+        at: usize,
+    }
+
+    impl ReferenceBits<'_> {
+        fn peek32(&self) -> Option<u32> {
+            let bytes = self.src.get(self.at / 8..self.at / 8 + 5)?;
+            let word = u64::from_be_bytes([0, 0, 0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]]);
+            Some((word >> (8 - self.at % 8)) as u32)
+        }
+
+        fn take(&mut self, count: u32) -> Result<u32> {
+            if count > 24 {
+                return Err(corrupt("invalid Rice parameter"));
+            }
+            if count == 0 {
+                return Ok(0);
+            }
+            if let Some(window) = self.peek32() {
+                self.at += count as usize;
+                return Ok(window >> (32 - count));
+            }
+            let mut value = 0;
+            for _ in 0..count {
+                let byte = self.src.get(self.at / 8).ok_or_else(|| corrupt("truncated entropy stream"))?;
+                value = (value << 1) | u32::from((byte >> (7 - self.at % 8)) & 1);
+                self.at += 1;
+            }
+            Ok(value)
+        }
+
+        fn rice(&mut self, k: u32) -> Result<u32> {
+            if let Some(window) = self.peek32().filter(|&w| w != 0) {
+                let zeros = window.leading_zeros();
+                self.at += zeros as usize + 1;
+                return if k <= 20 { Ok((zeros << k) | self.take(k)?) } else { Err(corrupt("Rice parameter exceeds sample precision")) };
+            }
+            let mut zeros = 0;
+            while self.take(1)? == 0 {
+                zeros += 1;
+                if zeros > 41 {
+                    return Err(corrupt("Rice escape prefix exceeds 41 bits"));
+                }
+            }
+            if zeros == 41 {
+                self.take(21)
+            } else if k <= 20 {
+                Ok((zeros << k) | self.take(k)?)
+            } else {
+                Err(corrupt("Rice parameter exceeds sample precision"))
+            }
+        }
+
+        fn qp_rice(&mut self, k: u32) -> Result<u32> {
+            let mut zeros = 0;
+            while self.take(1)? == 0 {
+                zeros += 1;
+                if zeros > QP_ESCAPE_ZEROS {
+                    return Err(corrupt("QP Rice escape prefix exceeds 23 bits"));
+                }
+            }
+            if zeros == QP_ESCAPE_ZEROS {
+                self.take(8)
+            } else if k <= 20 {
+                Ok((zeros << k) | self.take(k)?)
+            } else {
+                Err(corrupt("QP Rice parameter exceeds precision"))
+            }
+        }
+
+        fn finish(&self) -> bool {
+            let bits = self.src.len() * 8;
+            bits.saturating_sub(self.at) <= 7 && self.src.last().is_none_or(|&last| u32::from(last) & ((1u32 << (bits - self.at)) - 1) == 0)
+        }
+    }
+
+    /// A xorshift generator: deterministic pseudo-random test input without a dependency.
+    fn xorshift(seed: &mut u64) -> u64 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed
+    }
+
+    #[test]
+    fn cached_bit_reader_matches_the_bitwise_reference() {
+        let mut seed = 0x2545_f491_4f6c_dd1d;
+        for round in 0..400 {
+            let length = (xorshift(&mut seed) % 48) as usize;
+            // Mostly zero and small bytes, so long unary prefixes and both escapes occur.
+            let stream: Vec<u8> = (0..length)
+                .map(|_| match xorshift(&mut seed) % 4 {
+                    0 | 1 => 0,
+                    2 => (xorshift(&mut seed) & 0x0f) as u8,
+                    _ => xorshift(&mut seed) as u8,
+                })
+                .collect();
+            let ops: Vec<(u64, u32)> = (0..48).map(|_| (xorshift(&mut seed) % 3, (xorshift(&mut seed) % 26) as u32)).collect();
+            // Every truncation of the stream, so reads meet the end at every offset.
+            for end in 0..=stream.len() {
+                let src = &stream[..end];
+                let (mut cached, mut reference) = (Bits::new(src), ReferenceBits { src, at: 0 });
+                let mut complete = true;
+                for &(op, n) in &ops {
+                    let (a, b) = match op {
+                        0 => (cached.take(n), reference.take(n)),
+                        1 => (cached.rice(n), reference.rice(n)),
+                        _ => (cached.qp_rice(n % 22), reference.qp_rice(n % 22)),
+                    };
+                    assert_eq!(a.as_ref().ok(), b.as_ref().ok(), "round {round}, end {end}, op {op} {n}, stream {stream:02x?}");
+                    if a.is_err() {
+                        complete = false;
+                        break;
+                    }
+                    assert_eq!(cached.position(), reference.at, "round {round}, end {end}, op {op} {n}");
+                }
+                if complete {
+                    assert_eq!(cached.finish().is_ok(), reference.finish(), "round {round}, end {end}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rice_escape_is_an_error_when_cut_at_any_byte() {
+        // 41 zeros, the terminating 1 and the 21-bit literal 16400 (+8200): the whole stream is one escape.
+        let src = [0, 0, 0, 0, 0, 0x40, 0x80, 0x20];
+        assert_eq!(lossless_plane(&src, 1, 1).unwrap(), [8200]);
+        for end in 0..src.len() {
+            assert!(lossless_plane(&src[..end], 1, 1).is_err(), "prefix {end}");
+        }
+        // The same escape read from the cache, 9 bytes into a longer stream.
+        let mut long = vec![0xff; 9];
+        long.extend(src);
+        let mut bits = Bits::new(&long);
+        for _ in 0..72 {
+            assert_eq!(bits.rice(0).unwrap(), 0);
+        }
+        assert_eq!(bits.rice(0).unwrap(), 16400);
+        bits.finish().unwrap();
     }
 }
