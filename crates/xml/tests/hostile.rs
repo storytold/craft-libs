@@ -117,7 +117,11 @@ fn an_attribute_flood_is_refused_at_the_limit() {
         let opts = opts.with_limits(limits);
         for (k, kind) in kinds.iter().enumerate() {
             let _ = opts.parse(tag(16, kind).as_bytes());
-            assert_eq!(opts.parse(tag(17, kind).as_bytes()).err().map(|e| e.is_limit() || (opts.strict && (k == 1 || k == 3))), Some(true), "kind {k}");
+            assert_eq!(
+                opts.parse(tag(17, kind).as_bytes()).err().map(|e| e.is_limit() || (opts.strict && (k == 1 || k == 3))),
+                Some(true),
+                "kind {k}"
+            );
             assert!(opts.first_start(tag(17, kind).as_bytes(), "a").is_none());
         }
         assert_eq!(opts.parse(tag(17, kinds[0]).as_bytes()), Err(Error::TooManyAttrs(16)));
