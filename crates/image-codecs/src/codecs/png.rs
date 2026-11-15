@@ -141,12 +141,12 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     /// Reads the header and refuses what [`decode`] refuses before any pixel is decoded: sizes
     /// past `limits`, and a file too small for the image it declares.
     pub fn new(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
-        Self::open(bytes, limits, true)
+        Self::open(bytes, limits, true, false)
     }
 
     /// [`PngDecodeRows::new`], optionally without reserving the whole image: a caller that hands
     /// the rows on as they come ([`decode_rows`]) never holds them all.
-    fn open(bytes: B, limits: &Limits, reserve: bool) -> Result<Self, CodecError> {
+    fn open(bytes: B, limits: &Limits, reserve: bool, bounded_stream: bool) -> Result<Self, CodecError> {
         let at = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let bytes = SharedInput(std::sync::Arc::new(bytes));
         let input = Tracked { cursor: Cursor::new(bytes.clone()), at: at.clone() };
@@ -187,7 +187,14 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         let (width, height) = info.frame_control.map_or_else(|| info.size(), |f| (f.width, f.height));
         let line = reader.output_line_size(width).ok_or_else(|| err("image too large"))?;
         // The output layout is known: charge its real bytes per pixel, not RGBA16's worst case.
-        limits.check(width, height, layout, sample)?;
+        if bounded_stream {
+            limits.check_size(width, height)?;
+            if line > limits.alloc_usize() {
+                return Err(CodecError::LimitExceeded("one PNG row exceeds max_alloc".into()));
+            }
+        } else {
+            limits.check(width, height, layout, sample)?;
+        }
         let height = usize::try_from(height).map_err(|_| err("image too large"))?;
         if width == 0 || height == 0 {
             return Err(err("the image is empty"));
@@ -234,11 +241,35 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     /// decode the whole image after all (an interlaced file) calls
     /// [`PngDecodeRows::reserve_output`] before [`PngDecodeRows::step`].
     pub fn new_streaming(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
-        Self::open(bytes, limits, false)
+        Self::open(bytes, limits, false, false)
+    }
+
+    /// Opens a bounded row stream without charging a full image that is never retained.
+    /// Dimension, pixel-count, plausibility, decoder and metadata limits remain unchanged;
+    /// `max_alloc` also bounds each row group. It is not a total process-memory limit.
+    /// Unlike [`Self::new_streaming`], a streamable image may exceed the full-image budget.
+    /// Non-streamable images still require that budget, as do [`Self::step`] and
+    /// [`Self::reserve_output`]. The caller must bound any output it retains in its sink.
+    pub fn new_bounded_streaming(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
+        let decoder = Self::open(bytes, limits, false, true)?;
+        if !decoder.streamable() {
+            decoder.check_full_output()?;
+        }
+        Ok(decoder)
+    }
+
+    fn check_full_output(&self) -> Result<(), CodecError> {
+        let height = u32::try_from(self.height).map_err(|_| err("image too large"))?;
+        self.limits.check(self.width, height, self.layout, self.sample)?;
+        if self.size > self.limits.alloc_usize() {
+            return Err(CodecError::LimitExceeded("PNG output exceeds max_alloc".into()));
+        }
+        Ok(())
     }
 
     /// Reserves the buffer [`PngDecodeRows::step`] decodes the whole image into.
     pub fn reserve_output(&mut self) -> Result<(), CodecError> {
+        self.check_full_output()?;
         let size = self.size;
         self.buf.try_reserve_exact(size).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {size} bytes for the image")))
     }
@@ -271,6 +302,7 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     /// Decodes at least one row (the whole image if it is interlaced), then goes on while `more()`
     /// returns true. `Some` once the image is complete, after which the decoder is spent.
     pub fn step(&mut self, more: &mut dyn FnMut() -> bool) -> Result<Option<Image>, CodecError> {
+        self.check_full_output()?;
         if self.done {
             return Err(err("the image was already decoded"));
         }
@@ -338,7 +370,9 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     /// `more()` returns true; `Some` with the extras once the file is read to its end, with the
     /// resolution a format that lacks one takes from its EXIF or XMP. A damaged file fails with
     /// the error [`decode`] gives, after however many rows were delivered. An orientation (an
-    /// `eXIf` after the image data may set one) is for the caller to apply.
+    /// `eXIf` after the image data may set one) is for the caller to apply. A new group size
+    /// must exceed any partial group retained from an earlier yield; otherwise this returns
+    /// an error without consuming another row.
     pub fn step_stream<E: From<CodecError>>(
         &mut self,
         group: u32,
@@ -348,12 +382,29 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         if self.done {
             return Err(err("the image was already decoded").into());
         }
-        let group = usize::try_from(group.max(1)).unwrap_or(usize::MAX);
+        // Tail EXIF may report an orientation after rows have already been delivered;
+        // that belongs in the returned extras, not a rejection of metadata continuation.
+        if self.rows == 0 && !self.tail && !self.streamable() {
+            return Err(err("this PNG requires whole-image decoding").into());
+        }
+        let group = usize::try_from(group.max(1)).unwrap_or(usize::MAX).min(self.height);
+        if self.rows - self.group_start >= group {
+            return Err(err("PNG row group is smaller than rows held from the previous step").into());
+        }
+        let group_bytes = group.checked_mul(self.line).ok_or_else(|| err("PNG row group is too large"))?;
+        if group_bytes > self.limits.alloc_usize() {
+            return Err(CodecError::LimitExceeded("PNG row group exceeds max_alloc".into()).into());
+        }
         if !self.tail {
             while self.rows < self.height {
                 let held = self.rows - self.group_start;
                 let at = held.checked_mul(self.line).ok_or_else(|| err("image too large"))?;
                 let end = at.checked_add(self.line).ok_or_else(|| err("image too large"))?;
+                // A caller may change its group size between yields. Bound the actual held
+                // bytes as well as the requested group before growing the row buffer.
+                if end > self.limits.alloc_usize() {
+                    return Err(CodecError::LimitExceeded("PNG row group exceeds max_alloc".into()).into());
+                }
                 if self.buf.len() < end {
                     self.buf
                         .try_reserve_exact(end - self.buf.len())
@@ -368,7 +419,7 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
                     to_native_endian(row);
                 }
                 self.rows += 1;
-                if self.rows - self.group_start == group || self.rows == self.height {
+                if self.rows - self.group_start >= group || self.rows == self.height {
                     let data = self.buf.get(..end).ok_or_else(|| err("invalid PNG row group"))?;
                     sink(u32::try_from(self.group_start).map_err(|_| err("image too large"))?, data)?;
                     self.group_start = self.rows;
@@ -581,6 +632,10 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         let info = self.reader.info();
         let icc = info.icc_profile.as_ref().map(|c| c.to_vec());
         let mut meta = Metadata { exif: info.exif_metadata.as_ref().map(|c| c.to_vec()), ..Default::default() };
+        meta.content_light_level = info.content_light_level.map(|light| crate::cicp::ContentLightLevel {
+            max_content_light_level: light.max_content_light_level,
+            max_frame_average_light_level: light.max_frame_average_light_level,
+        });
         if let Some(d) = info.pixel_dims
             && d.unit == png::Unit::Meter
             && d.xppu > 0
@@ -597,7 +652,13 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
             warnings.push(DecodeWarning::MoreFrames { total: u32::try_from(self.images).ok() });
         }
         let orientation = meta.exif.as_deref().map_or(1, crate::orientation::exif_orientation);
-        PngExtras { icc, meta, warnings, orientation }
+        let cicp = info.coding_independent_code_points.map(|c| crate::cicp::Cicp {
+            primaries: u16::from(c.color_primaries),
+            transfer: u16::from(c.transfer_function),
+            matrix: u16::from(c.matrix_coefficients),
+            full_range: c.is_video_full_range_image,
+        });
+        PngExtras { icc, cicp, meta, warnings, orientation }
     }
 
     /// The image itself, with what the metadata scan accepted.
@@ -606,6 +667,7 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         let mut img = Image::from_raw(self.width, height, self.layout, self.sample, std::mem::take(&mut self.buf))?;
         let extras = self.extras();
         img.icc = extras.icc;
+        img.cicp = extras.cicp;
         img.meta = extras.meta;
         img.warnings = extras.warnings;
         Ok(img)
@@ -624,6 +686,8 @@ fn to_native_endian(samples: &mut [u8]) {
 /// they are complete only once the pixels have been read.
 pub struct PngExtras {
     pub icc: Option<Vec<u8>>,
+    /// The PNG `cICP` colour description, if present.
+    pub cicp: Option<crate::cicp::Cicp>,
     pub meta: Metadata,
     pub warnings: Vec<DecodeWarning>,
     /// The EXIF orientation (1-8) the pixels are stored in; 1 when there is none.
@@ -1050,27 +1114,112 @@ impl Write for FallibleOutput<'_> {
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
     let (w, h) = img.dimensions();
-    let bpp = img.layout().channels() * img.sample_type().bytes();
     // Big-endian sample bytes.
     let mut data = std::borrow::Cow::Borrowed(img.data());
     if img.sample_type() == SampleType::U16 {
         to_big_endian(data.to_mut());
     }
+    encode_data(
+        RawPng {
+            width: w,
+            height: h,
+            layout: img.layout(),
+            sample: img.sample_type(),
+            icc: img.icc.as_ref(),
+            cicp: img.cicp,
+            meta: &img.meta,
+            data: &data,
+        },
+        opts,
+    )
+}
+
+struct RawPng<'a> {
+    width: u32,
+    height: u32,
+    layout: ChannelLayout,
+    sample: SampleType,
+    icc: Option<&'a Vec<u8>>,
+    cicp: Option<crate::cicp::Cicp>,
+    meta: &'a Metadata,
+    data: &'a [u8],
+}
+
+fn encode_data(raw: RawPng<'_>, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
+    let RawPng { width: w, height: h, layout, sample, icc, cicp, meta, data } = raw;
+    let bpp = layout.channels() * sample.bytes();
     let mut out = Vec::new();
     {
         let mut output = FallibleOutput(&mut out);
-        let mut writer = start(&mut output, (w, h), (img.layout(), img.sample_type()), img.icc.as_ref(), &img.meta, opts)?;
+        let mut writer = start(&mut output, (w, h), (layout, sample), icc, cicp, meta, opts)?;
         if opts.png_interlaced {
-            let idat = adam7_idat(&data, w as usize, h as usize, bpp, opts.png_compression)?;
+            let idat = adam7_idat(data, w as usize, h as usize, bpp, opts.png_compression)?;
             write_idat(&mut writer, &idat, MAX_IDAT)?;
-        } else if let Some(idat) = parallel_idat(&data, w as usize, h as usize, bpp, opts.png_compression) {
+        } else if let Some(idat) = parallel_idat(data, w as usize, h as usize, bpp, opts.png_compression) {
             write_idat(&mut writer, &idat, MAX_IDAT)?;
         } else {
-            writer.write_image_data(&data).map_err(|e| CodecError::encode(F, e))?;
+            writer.write_image_data(data).map_err(|e| CodecError::encode(F, e))?;
         }
         writer.finish().map_err(|e| CodecError::encode(F, e))?;
     }
     Ok(out)
+}
+
+/// Encodes linear-light Rec. 2020 RGB as 16-bit PNG with BT.2100 PQ (`cICP`) and measured
+/// content-light levels (`cLLI`). Input samples are relative to 203 cd/m² diffuse white, as in
+/// [`crate::cicp::linearize`]. Negative and non-finite values become black; values above 10,000
+/// cd/m² are clipped to the PQ signal range. EXIF, XMP, and resolution metadata follow `opts`.
+pub fn encode_pq(src: &Image, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
+    if src.layout() != ChannelLayout::Rgb || src.sample_type() != SampleType::F32 {
+        return Err(CodecError::encode(F, "PQ PNG input must be linear-light F32 RGB"));
+    }
+    let (width, height) = src.dimensions();
+    if width == 0 || height == 0 {
+        return Err(CodecError::InvalidImage("cannot encode an empty image".into()));
+    }
+    let pixels = usize::try_from(u64::from(width) * u64::from(height)).map_err(|_| CodecError::encode(F, "image is too large"))?;
+    let samples = pixels.checked_mul(3).ok_or_else(|| CodecError::encode(F, "image is too large"))?;
+    let bytes = samples.checked_mul(2).ok_or_else(|| CodecError::encode(F, "image is too large"))?;
+    if src.data().len() != samples.checked_mul(4).ok_or_else(|| CodecError::encode(F, "image is too large"))? {
+        return Err(CodecError::encode(F, "RGB buffer length does not match the image dimensions"));
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(bytes).map_err(|_| CodecError::encode(F, "not enough memory for PQ samples"))?;
+    let mut max_nits = 0.0f32;
+    let mut sum_luma = 0.0f64;
+    for rgb in src.data().as_chunks::<12>().0 {
+        let read = |at| -> Result<f32, CodecError> {
+            let bytes = rgb.get(at..at + 4).ok_or_else(|| CodecError::encode(F, "RGB buffer is truncated"))?;
+            let bytes: [u8; 4] = bytes.try_into().map_err(|_| CodecError::encode(F, "RGB sample is truncated"))?;
+            Ok(f32::from_ne_bytes(bytes))
+        };
+        let values = [read(0)?, read(4)?, read(8)?];
+        let nits = values.map(|v| if v.is_finite() { (v.max(0.0) * crate::cicp::REFERENCE_WHITE_NITS).min(crate::cicp::PQ_PEAK_NITS) } else { 0.0 });
+        max_nits = max_nits.max(nits[0]).max(nits[1]).max(nits[2]);
+        // CTA-861.3-A defines MaxFALL as the average of each pixel's maximum linear RGB channel.
+        sum_luma += f64::from(nits[0].max(nits[1]).max(nits[2]));
+        for value in nits {
+            let encoded = crate::cicp::linear_to_pq(value / crate::cicp::REFERENCE_WHITE_NITS);
+            output.extend_from_slice(&((encoded * 65535.0).round().clamp(0.0, 65535.0) as u16).to_be_bytes());
+        }
+    }
+    let max_cll = ((max_nits.ceil().clamp(1.0, crate::cicp::PQ_PEAK_NITS)) as u32).saturating_mul(10_000);
+    let max_fall = (((sum_luma / pixels as f64).ceil().clamp(1.0, f64::from(crate::cicp::PQ_PEAK_NITS))) as u32).saturating_mul(10_000);
+    let mut meta = src.meta.clone();
+    meta.content_light_level = Some(crate::cicp::ContentLightLevel { max_content_light_level: max_cll, max_frame_average_light_level: max_fall });
+    encode_data(
+        RawPng {
+            width,
+            height,
+            layout: ChannelLayout::Rgb,
+            sample: SampleType::U16,
+            icc: None,
+            cicp: Some(crate::cicp::Cicp { primaries: 9, transfer: crate::cicp::Cicp::TRANSFER_PQ, matrix: 0, full_range: true }),
+            meta: &meta,
+            data: &output,
+        },
+        opts,
+    )
 }
 
 /// 16-bit native-endian samples to PNG's big-endian order, in place.
@@ -1088,6 +1237,7 @@ fn start<W: Write>(
     (w, h): (u32, u32),
     (layout, sample): (ChannelLayout, SampleType),
     icc: Option<&Vec<u8>>,
+    cicp: Option<crate::cicp::Cicp>,
     meta: &Metadata,
     opts: &EncodeOptions,
 ) -> Result<png::Writer<W>, CodecError> {
@@ -1154,6 +1304,22 @@ fn start<W: Write>(
         }
     }
     let mut writer = encoder.write_header().map_err(|e| CodecError::encode(F, e))?;
+    if let Some(cicp) = cicp {
+        let point = |value: u16, name: &str| {
+            u8::try_from(value).map_err(|_| CodecError::encode(F, format!("CICP {name} value {value} does not fit in a byte")))
+        };
+        // PNG stores RGB samples, so cICP's matrix coefficients byte is always zero.
+        let cicp_bytes = [point(cicp.primaries, "primaries")?, point(cicp.transfer, "transfer")?, 0, u8::from(cicp.full_range)];
+        writer.write_chunk(png::chunk::cICP, &cicp_bytes).map_err(|e| CodecError::encode(F, e))?;
+    }
+    if opts.embed_metadata
+        && let Some(light) = meta.content_light_level
+    {
+        let mut bytes = [0; 8];
+        bytes[..4].copy_from_slice(&light.max_content_light_level.to_be_bytes());
+        bytes[4..].copy_from_slice(&light.max_frame_average_light_level.to_be_bytes());
+        writer.write_chunk(png::chunk::cLLI, &bytes).map_err(|e| CodecError::encode(F, e))?;
+    }
     if let Some(stereo) = opts.png_stereo {
         // Ancillary chunk before IDAT, as the spec recommends for `sTER`.
         writer.write_chunk(png::chunk::ChunkType(*b"sTER"), &[stereo.mode()]).map_err(|e| CodecError::encode(F, e))?;
@@ -1208,7 +1374,7 @@ impl<W: Write> PngRows<W> {
             return Err(CodecError::InvalidImage("cannot encode an empty image".into()));
         }
         let plan = crate::fidelity::plan(first, F, opts);
-        let writer = start(out, (width, height), (plan.layout, plan.sample), first.icc.as_ref(), &first.meta, opts)?;
+        let writer = start(out, (width, height), (plan.layout, plan.sample), first.icc.as_ref(), first.cicp, &first.meta, opts)?;
         Ok(Self {
             writer,
             plan,
@@ -1597,6 +1763,83 @@ pub fn encode_indexed(
         writer.finish().map_err(|e| CodecError::encode(F, e))?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod hdr_tests {
+    use super::*;
+
+    #[test]
+    fn generic_png_roundtrip_keeps_cicp_and_content_light_level() {
+        let mut image = Image::from_raw(1, 1, ChannelLayout::Rgb, SampleType::U16, vec![0, 0, 0, 0, 0, 0]).unwrap();
+        image.cicp = Some(crate::cicp::Cicp { primaries: 9, transfer: 16, matrix: 9, full_range: true });
+        image.meta.content_light_level =
+            Some(crate::cicp::ContentLightLevel { max_content_light_level: 2_030_000, max_frame_average_light_level: 1_250_000 });
+
+        let encoded = encode(&image, Plan { layout: ChannelLayout::Rgb, sample: SampleType::U16 }, &EncodeOptions::default()).unwrap();
+        let decoded = decode(&encoded, &Limits::default()).unwrap();
+        assert_eq!(decoded.cicp, Some(crate::cicp::Cicp { matrix: 0, ..image.cicp.unwrap() }));
+        assert_eq!(decoded.meta.content_light_level, image.meta.content_light_level);
+    }
+
+    #[test]
+    fn generic_png_keeps_cicp_alongside_icc() {
+        let mut image = Image::from_raw(1, 1, ChannelLayout::Rgb, SampleType::U16, vec![0, 0, 0, 0, 0, 0]).unwrap();
+        image.cicp = Some(crate::cicp::Cicp { primaries: 9, transfer: 16, matrix: 0, full_range: true });
+        image.icc = Some(b"synthetic ICC profile".to_vec());
+
+        let encoded = encode(&image, Plan { layout: ChannelLayout::Rgb, sample: SampleType::U16 }, &EncodeOptions::default()).unwrap();
+        let decoded = decode(&encoded, &Limits::default()).unwrap();
+        assert_eq!(decoded.cicp, image.cicp);
+        assert_eq!(decoded.icc, image.icc);
+    }
+
+    #[test]
+    fn linearized_pq_pixels_are_tagged_as_linear_in_generic_png() {
+        let cicp = crate::cicp::Cicp { primaries: 9, transfer: crate::cicp::Cicp::TRANSFER_PQ, matrix: 0, full_range: true };
+        let encoded_white = (0.5807f32 * 65535.0).round() as u16;
+        let mut image = Image::from_u16(1, 1, ChannelLayout::Rgb, &[encoded_white; 3]).unwrap();
+        image.cicp = Some(cicp);
+        let linear = crate::cicp::linearize(image, cicp).unwrap();
+        let png = encode(&linear, Plan { layout: ChannelLayout::Rgb, sample: SampleType::U16 }, &EncodeOptions::default()).unwrap();
+        let decoded = decode(&png, &Limits::default()).unwrap();
+        assert_eq!(decoded.cicp.unwrap().transfer, crate::cicp::Cicp::TRANSFER_LINEAR);
+        assert!(decoded.to_normalized().iter().all(|&v| (v - 1.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn pq_png_writes_rec2020_codes_and_measured_light_levels() {
+        let image = Image::from_f32(1, 1, ChannelLayout::Rgb, &[1.0, 1.0, 1.0]).unwrap();
+        let encoded = encode_pq(&image, &EncodeOptions::default()).unwrap();
+        let mut reader = png::Decoder::new(Cursor::new(&encoded)).read_info().unwrap();
+        let info = reader.info();
+        let cicp = info.coding_independent_code_points.unwrap();
+        assert_eq!((cicp.color_primaries, cicp.transfer_function, cicp.matrix_coefficients, cicp.is_video_full_range_image), (9, 16, 0, true));
+        let light = info.content_light_level.unwrap();
+        assert_eq!((light.max_content_light_level, light.max_frame_average_light_level), (2_030_000, 2_030_000));
+        let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
+        let frame = reader.next_frame(&mut bytes).unwrap();
+        let rgb = bytes.get(..frame.buffer_size()).unwrap().as_chunks::<2>().0.iter().map(|v| u16::from_be_bytes(*v)).collect::<Vec<_>>();
+        assert_eq!(rgb.len(), 3);
+        for sample in rgb {
+            assert!((f32::from(sample) / 65535.0 - 0.5807).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn pq_png_maxfall_uses_highest_channel_for_saturated_pixels() {
+        let image = Image::from_f32(2, 1, ChannelLayout::Rgb, &[1.0, 0.0, 0.0, 0.0, 0.0, 1.0]).unwrap();
+        let encoded = encode_pq(&image, &EncodeOptions::default()).unwrap();
+        let reader = png::Decoder::new(Cursor::new(encoded)).read_info().unwrap();
+        let light = reader.info().content_light_level.unwrap();
+        assert_eq!((light.max_content_light_level, light.max_frame_average_light_level), (2_030_000, 2_030_000));
+    }
+
+    #[test]
+    fn pq_png_rejects_empty_images() {
+        let image = Image::from_f32(0, 1, ChannelLayout::Rgb, &[]).unwrap();
+        assert!(encode_pq(&image, &EncodeOptions::default()).is_err());
+    }
 }
 
 #[cfg(test)]
@@ -2030,7 +2273,8 @@ mod streamed_tests {
         let whole = crate::encode(&img, Format::Png, &EncodeOptions::default()).unwrap();
         let (_, zlib, _) = split(&whole);
         let mut out = Vec::new();
-        let mut w = start(&mut out, (64, 40), (ChannelLayout::Rgb, SampleType::U8), None, &Metadata::default(), &EncodeOptions::default()).unwrap();
+        let mut w =
+            start(&mut out, (64, 40), (ChannelLayout::Rgb, SampleType::U8), None, None, &Metadata::default(), &EncodeOptions::default()).unwrap();
         write_idat(&mut w, &zlib, 100).unwrap();
         w.finish().unwrap();
         let (_, joined, count) = split(&out);
