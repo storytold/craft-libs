@@ -479,6 +479,9 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     // Optimized keeps the standard tables until that decoder is updated. Progressive is fine.
     let progressive = opts.jpeg_format == JpegFormat::Progressive;
     enc.set_progressive(progressive);
+    if progressive && let Some(scans) = opts.jpeg_progressive_scans {
+        enc.set_progressive_scans(scans);
+    }
     let optimized = opts.jpeg_format == JpegFormat::Optimized && !subsampled;
     enc.set_optimized_huffman_tables(progressive || optimized);
     let e = |e: jpeg_encoder::EncodingError| CodecError::encode(F, e);
