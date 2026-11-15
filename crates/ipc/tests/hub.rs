@@ -17,6 +17,9 @@ use craft_ipc::refresh::{Tracker, write_atomic};
 use craft_ipc::server::{Activate, Activation, Assets, ControlSink, Extensions, FrameOpen, Frames, Server, ServerConfig};
 use craft_ipc::{Discovery, InstanceRecord, LinkError, RuntimeDir};
 
+// Both tests bind the same app and process named pipe on Windows, regardless of runtime directory.
+static HUB_TEST: Mutex<()> = Mutex::new(());
+
 const DOC: &str = "9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f";
 const LINK: &str = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 
@@ -296,6 +299,7 @@ fn check_activate(world: &World, hub_client: &mut Client) {
 
 #[test]
 fn hub_is_a_peer_and_producer_answers_asset_methods() {
+    let _guard = HUB_TEST.lock().unwrap();
     let tmp = Tmp::new();
     let world = start_world(&tmp);
     let (mut hub_client, hub_record) = dial(&world.runtime, "hub");
@@ -313,6 +317,7 @@ fn hub_is_a_peer_and_producer_answers_asset_methods() {
 
 #[test]
 fn server_without_a_provider_forwards_asset_methods_to_the_app() {
+    let _guard = HUB_TEST.lock().unwrap();
     let tmp = Tmp::new();
     let runtime = RuntimeDir::at(tmp.0.join("rt")).unwrap();
     let sink = Arc::new(RecordingSink::default());
