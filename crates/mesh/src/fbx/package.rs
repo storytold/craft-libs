@@ -43,7 +43,7 @@ impl<'a> Package<'a> {
             .read(&self.name, self.limits.max_model_bytes)
             .map_err(|e| malformed(KIND, format!("package: {e}")))?
             .ok_or_else(|| malformed(KIND, "package FBX is missing"))?;
-        if is_package(bytes) {
+        if is_package(&bytes) {
             return Err(malformed(KIND, "the package holds another package"));
         }
         Ok(bytes)
