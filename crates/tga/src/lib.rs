@@ -19,6 +19,8 @@
 //! must be long enough to hold the pixels its header declares before anything is allocated.
 
 #[cfg(test)]
+mod metadata_tests;
+#[cfg(test)]
 mod tests;
 
 /// Length of the fixed header.
@@ -180,6 +182,105 @@ impl Stored {
     }
 }
 
+fn metadata_offset(body: &[u8], offset: usize, first_pixel: usize) -> Option<usize> {
+    // Optional metadata cannot replace the header, image ID, or colour map.
+    (offset >= first_pixel && offset < body.len()).then_some(offset)
+}
+
+/// The start of every developer-directory payload with a nonzero length, from the directory at
+/// `directory` in `body` (none when that offset holds no readable directory).
+fn developer_payload_starts(body: &[u8], directory: usize) -> Vec<usize> {
+    let Some(count) =
+        body.get(directory..directory.saturating_add(2)).and_then(|v| v.first_chunk::<2>()).map(|v| usize::from(u16::from_le_bytes(*v)))
+    else {
+        return Vec::new();
+    };
+    let Some(fields) = body.get(directory.saturating_add(2)..) else { return Vec::new() };
+    fields
+        .chunks(10)
+        .take(count)
+        .filter_map(|field| {
+            let start = field.get(2..6).and_then(|v| v.first_chunk::<4>()).map(|v| u32::from_le_bytes(*v) as usize)?;
+            let length = field.get(6..10).and_then(|v| v.first_chunk::<4>()).map(|v| u32::from_le_bytes(*v))?;
+            (length != 0).then_some(start)
+        })
+        .collect()
+}
+
+fn image_data_end(bytes: &[u8], first_pixel: usize) -> Result<usize> {
+    if !bytes.ends_with(SIGNATURE) {
+        return Ok(bytes.len());
+    }
+    // A TGA 2.0 footer cannot begin inside the mandatory header. A legacy image
+    // may end with the same signature as pixel bytes.
+    let Some(footer) = bytes.len().checked_sub(SIGNATURE.len() + 8).filter(|&at| at >= HEADER) else {
+        return Ok(bytes.len());
+    };
+    let offsets = bytes.get(footer..footer + 8).and_then(|b| b.first_chunk::<8>()).ok_or_else(|| Error::Malformed("truncated footer"))?;
+    let extension = offsets.first_chunk::<4>().map(|v| u32::from_le_bytes(*v) as usize).ok_or_else(|| Error::Malformed("truncated footer"))?;
+    let directory = offsets
+        .get(4..)
+        .and_then(|v| v.first_chunk::<4>())
+        .map(|v| u32::from_le_bytes(*v) as usize)
+        .ok_or_else(|| Error::Malformed("truncated footer"))?;
+    let body = bytes.get(..footer).ok_or_else(|| Error::Malformed("truncated footer"))?;
+    let mut end = footer;
+
+    if let Some(offset) = metadata_offset(body, extension, first_pixel) {
+        // An in-body reference is a conservative image boundary, even if it overlaps
+        // required pixels. Those bytes cannot be distinguished from a truncated image
+        // whose missing pixels are supplied by metadata.
+        end = end.min(offset);
+        // TGA 2.0 extension fields at byte offsets 482, 486 and 490 point to the colour
+        // correction, postage-stamp and scan-line tables. The record's first two bytes give
+        // its size (495 in TGA 2.0); a shorter record has no such fields, and a record never
+        // reaches into a developer directory that follows it, so those bytes are not read as
+        // table offsets. Tables may precede the record.
+        let declared =
+            body.get(offset..offset.saturating_add(2)).and_then(|v| v.first_chunk::<2>()).map_or(0, |v| usize::from(u16::from_le_bytes(*v)));
+        let mut record_end = offset.saturating_add(declared.min(495));
+        // The developer directory and its payloads may sit anywhere after the pixels, a payload
+        // before its directory included; whichever starts first after the extension ends it.
+        // A directory offset of zero means there is none: the header is not read as one.
+        let payloads = metadata_offset(body, directory, first_pixel).map(|d| developer_payload_starts(body, d)).unwrap_or_default();
+        for next in std::iter::once(directory).chain(payloads) {
+            if next > offset {
+                record_end = record_end.min(next);
+            }
+        }
+        if let Some(area) = body.get(offset..record_end.min(body.len())) {
+            for field in [482, 486, 490] {
+                if let Some(value) = area.get(field..field + 4).and_then(|v| v.first_chunk::<4>())
+                    && let Some(table) = metadata_offset(body, u32::from_le_bytes(*value) as usize, first_pixel)
+                {
+                    end = end.min(table);
+                }
+            }
+        }
+    }
+
+    if let Some(offset) = metadata_offset(body, directory, first_pixel) {
+        end = end.min(offset);
+        if let Some(count) =
+            body.get(offset..offset.saturating_add(2)).and_then(|v| v.first_chunk::<2>()).map(|v| usize::from(u16::from_le_bytes(*v)))
+            && let Some(fields) = body.get(offset.saturating_add(2)..)
+        {
+            // A corrupt count or final entry does not hide earlier payload offsets. Each
+            // entry has a 2-byte tag followed by a 4-byte offset and 4-byte length.
+            for field in fields.chunks(10).take(count) {
+                if let Some(value) = field.get(2..6).and_then(|v| v.first_chunk::<4>())
+                    && let Some(length) = field.get(6..10).and_then(|v| v.first_chunk::<4>())
+                    && u32::from_le_bytes(*length) != 0
+                    && let Some(payload) = metadata_offset(body, u32::from_le_bytes(*value) as usize, first_pixel)
+                {
+                    end = end.min(payload);
+                }
+            }
+        }
+    }
+    Ok(end)
+}
+
 /// Decodes a Targa file to straight-alpha RGBA8, top row first.
 pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Picture> {
     let err = Error::Malformed;
@@ -208,13 +309,18 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Picture> {
     } else {
         None
     };
-    let mut at = HEADER + id_len;
-    if let Some(l) = map_entry {
-        let end = at + map_len * l.bytes();
-        let map = bytes.get(at..end).ok_or(err("truncated colour map"))?;
-        palette = map.chunks_exact(l.bytes()).map(|e| l.rgba(e)).collect();
-        at = end;
+    let map_start = HEADER + id_len;
+    let first_pixel = match map_entry {
+        Some(layout) => map_start.checked_add(map_len * layout.bytes()).ok_or(err("colour map"))?,
+        None => map_start,
+    };
+    let end = image_data_end(bytes, first_pixel)?;
+    let bytes = bytes.get(..end).ok_or(err("truncated image data"))?;
+    if let Some(layout) = map_entry {
+        let map = bytes.get(map_start..first_pixel).ok_or(err("truncated colour map"))?;
+        palette = map.chunks_exact(layout.bytes()).map(|entry| layout.rgba(entry)).collect();
     }
+    let at = first_pixel;
     let (stored_as, mapped) = match kind & 7 {
         1 => {
             if map_type != 1 || !matches!(depth, 8 | 16) {
