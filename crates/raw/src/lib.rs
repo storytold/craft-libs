@@ -66,6 +66,9 @@ mod crw;
 mod crx;
 #[cfg(feature = "cr3")]
 mod crx_wavelet;
+/// DNG camera-profile file parsing and writing.
+#[cfg(feature = "dng")]
+pub mod dcp;
 #[cfg(feature = "dng")]
 mod dng;
 #[cfg(feature = "dng")]
