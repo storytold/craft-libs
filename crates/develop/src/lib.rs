@@ -550,7 +550,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
             // (spots grow the rendered window of 8-bit renders, the lens blur that of every
             // render; a grown window is cut back to the request)
             let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
-            let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
+            let work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
+            let mut work = stroke_raster::window_for_reads(s, full_w, full_h, px_per_long, work);
             if local::joint_colour_nr(s)
                 && let Some(params) = local::nrc_params(s, detail_scale)
             {
