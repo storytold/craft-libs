@@ -475,6 +475,10 @@ mod tests {
             fn elements(&self) -> Self::Elements<'_> {
                 self.children.iter()
             }
+
+            fn text_content(&self) -> Cow<'_, str> {
+                Cow::Borrowed("")
+            }
         }
 
         fn element(name: &str, attributes: &[(&str, &str)], children: Vec<AppElement>) -> AppElement {
