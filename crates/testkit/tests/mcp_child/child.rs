@@ -107,12 +107,13 @@ fn check(ok: bool, what: impl FnOnce() -> String) -> Result<(), String> {
 }
 
 fn a_spawned_server_answers_and_closes_cleanly() -> Result<(), String> {
+    let before = std::env::var_os(ECHO_VAR);
     let mut c = start("server", McpLimits::default())?;
     let init = c.initialize(PROTOCOL_VERSION).map_err(|e| e.to_string())?;
     check(init["serverInfo"]["name"] == "child", || format!("initialize: {init}"))?;
     let r = c.call_tool("echo", json!({})).map_err(|e| e.to_string())?;
     check(r["content"][0]["text"] == "hello from the child", || format!("the child did not get its variable: {r}"))?;
-    check(std::env::var_os(ECHO_VAR).is_none(), || "the test process's environment changed".into())?;
+    check(std::env::var_os(ECHO_VAR) == before, || "the test process's environment changed".into())?;
     let out = c.close().map_err(|e| e.to_string())?;
     check(!out.forced && out.status.is_some_and(|s| s.success()), || format!("close: {out:?}"))
 }
