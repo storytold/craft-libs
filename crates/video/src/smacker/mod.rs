@@ -45,14 +45,14 @@ use crate::budget::{DECODE_MEMORY_BUDGET, PictureShape};
 /// Decoder errors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    /// The data ended inside a tree, a palette chunk or a picture.
+    /// The data ended inside a tree or a picture.
     #[error("truncated Smacker data")]
     Truncated,
     /// Structurally invalid data.
     #[error("invalid Smacker data: {0}")]
     Invalid(&'static str),
-    /// The picture is larger than the decoder's memory budget.
-    #[error("Smacker picture of {0}x{1} is over the memory budget")]
+    /// The picture has more than [`MAX_PIXELS`] pixels.
+    #[error("Smacker picture of {0}x{1} is over the size limit")]
     TooLarge(u32, u32),
 }
 
@@ -102,14 +102,15 @@ impl BigTree {
             for e in &mut escapes {
                 *e = r.read_bits(16)?;
             }
-            // four bytes a node; a node also takes at least one bit of the data, which bounds the
-            // count when the header's size is hostile
-            let limit = (size as usize / 4).saturating_add(4).min(r.bits_left());
+            // four bytes a node, and never more than a tree over 16-bit values can have: the
+            // header's size is hostile, and a node can cost one bit of data but takes far more
+            // memory than that
+            let limit = (size as usize / 4).saturating_add(4).min(MAX_TREE_NODES);
             // branches whose left subtree is being read
             let mut open: Vec<usize> = Vec::new();
             loop {
                 if nodes.len() >= limit {
-                    return Err(Error::Invalid("tree is larger than its declared size"));
+                    return Err(Error::Invalid("tree has too many nodes"));
                 }
                 if r.read_bit()? {
                     open.push(nodes.len());
@@ -117,10 +118,13 @@ impl BigTree {
                     continue;
                 }
                 let mut value = u32::from(low.decode(r)?) | u32::from(high.decode(r)?) << 8;
+                // the first escape that names this value makes the leaf a cache leaf; the 0 it
+                // then holds is not compared with the escapes after it
                 for (slot, &escape) in cache.iter_mut().zip(&escapes) {
                     if value == escape {
                         *slot = Some(nodes.len());
                         value = 0;
+                        break;
                     }
                 }
                 nodes.push(value);
@@ -184,6 +188,14 @@ impl BigTree {
     }
 }
 
+/// A tree over 16-bit values has at most 65536 leaves, and so at most 131071 nodes.
+const MAX_TREE_NODES: usize = 131_071;
+
+/// The most pixels a picture may have (4096x4096). A frame of a few bytes can fill the whole
+/// picture, so the picture size bounds the work a small file can ask for; the memory budget
+/// alone would allow gigabytes.
+pub const MAX_PIXELS: u64 = 1 << 24;
+
 /// Blocks a block type code covers, by the six-bit run index of the code.
 const fn run_length(index: usize) -> usize {
     if index < 59 { index + 1 } else { 128 << (index - 59) }
@@ -228,7 +240,7 @@ impl Decoder {
         };
         let shape =
             PictureShape { width: u64::from(width), height: u64::from(height), shift_x: 0, shift_y: 0, chroma_planes: 0, bytes_per_sample: 1 };
-        if !shape.fits(1, DECODE_MEMORY_BUDGET) {
+        if !shape.fits(1, DECODE_MEMORY_BUDGET.min(MAX_PIXELS)) {
             return Err(Error::TooLarge(width, height));
         }
         let (Ok(w), Ok(h)) = (usize::try_from(width), usize::try_from(height)) else { return Err(Error::TooLarge(width, height)) };
@@ -275,8 +287,9 @@ impl Decoder {
     /// Applies one frame: its palette chunk, if it has one, and its video data. Empty video data
     /// leaves the picture as it is.
     ///
-    /// After an error the picture holds the blocks decoded before it; the palette is only
-    /// replaced by a chunk that is valid as a whole.
+    /// A palette chunk with a copy record that runs past entry 255 is an error, and the frame's
+    /// video data is then not applied. After an error in the video data the picture holds the
+    /// blocks decoded before it.
     pub fn decode(&mut self, palette: Option<&[u8]>, video: &[u8]) -> Result<()> {
         if let Some(chunk) = palette {
             self.palette = apply_palette(&self.palette, chunk)?;
@@ -402,25 +415,25 @@ impl Blocks<'_> {
 ///
 /// The chunk is a list of records that fill the 256 entries in order: a run of entries kept
 /// from the previous palette, a run copied from another position of the previous palette, or
-/// one entry of three six-bit components.
+/// one entry of three six-bit components. A chunk that ends before entry 255 leaves the entries
+/// after it as they were; a record cut short by the end of the chunk is dropped.
 fn apply_palette(previous: &Palette, chunk: &[u8]) -> Result<Palette> {
     let mut palette = *previous;
     let mut bytes = chunk.iter().copied();
-    let mut next = || bytes.next().ok_or(Error::Truncated);
     let mut at = 0usize;
     while at < 256 {
-        let b = next()?;
+        let Some(b) = bytes.next() else { break };
         if b & 0x80 != 0 {
             at += usize::from(b & 0x7F) + 1;
         } else if b & 0x40 != 0 {
             let count = usize::from(b & 0x3F) + 1;
-            let from = usize::from(next()?);
+            let Some(from) = bytes.next().map(usize::from) else { break };
             let src = previous.get(from..from + count).ok_or(Error::Invalid("palette copy runs past entry 255"))?;
             let dst = palette.get_mut(at..at + count).ok_or(Error::Invalid("palette copy runs past entry 255"))?;
             dst.copy_from_slice(src);
             at += count;
         } else {
-            let (g, bl) = (next()?, next()?);
+            let (Some(g), Some(bl)) = (bytes.next(), bytes.next()) else { break };
             if let Some(entry) = palette.get_mut(at) {
                 *entry = [expand6(b), expand6(g), expand6(bl)];
             }
