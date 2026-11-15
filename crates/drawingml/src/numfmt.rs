@@ -761,23 +761,24 @@ const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
 /// the real calendar, so the weekday of every serial comes from the same shifted date.
 fn serial_date(n: i64, date_1904: bool) -> Option<(i64, i64, i64, usize)> {
     let days = Days::new(u64::try_from(n).ok()?);
-    let (epoch, shown) = if date_1904 {
-        // Serial 0 is 1 January 1904.
-        let epoch = NaiveDate::from_ymd_opt(1904, 1, 1)?;
-        (epoch, epoch.checked_add_days(days)?)
-    } else {
-        // Serial 1 is 1 January 1900 and 61 is 1 March 1900; 0 and 60 are Excel's own dates.
-        let epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?;
-        let real = epoch.checked_add_days(days)?;
+    // Serial 0 is 1 January 1904, or 30 December 1899 so that serial 1 is 31 December 1899 and
+    // 61 is 1 March 1900.
+    let epoch = if date_1904 { NaiveDate::from_ymd_opt(1904, 1, 1)? } else { NaiveDate::from_ymd_opt(1899, 12, 30)? };
+    let real = epoch.checked_add_days(days)?;
+    let wd = real.weekday().num_days_from_sunday() as usize;
+    if !date_1904 {
         match n {
-            0 => return Some((1900, 1, 0, real.weekday().num_days_from_sunday() as usize)),
-            60 => return Some((1900, 2, 29, real.weekday().num_days_from_sunday() as usize)),
-            1..=59 => (epoch, real.checked_add_days(Days::new(1))?),
-            _ => (epoch, real),
+            0 => return Some((1900, 1, 0, wd)),
+            60 => return Some((1900, 2, 29, wd)),
+            // Before the fake day Excel's dates are one day ahead of the real calendar's.
+            1..=59 => {
+                let shown = real.checked_add_days(Days::new(1))?;
+                return Some((i64::from(shown.year()), i64::from(shown.month()), i64::from(shown.day()), wd));
+            }
+            _ => {}
         }
-    };
-    let wd = epoch.checked_add_days(days)?.weekday().num_days_from_sunday() as usize;
-    Some((i64::from(shown.year()), i64::from(shown.month()), i64::from(shown.day()), wd))
+    }
+    Some((i64::from(real.year()), i64::from(real.month()), i64::from(real.day()), wd))
 }
 
 /// The serial `v` (not negative) in a date or time format.
@@ -795,6 +796,10 @@ fn date_text(toks: &[DTok], v: f64, date_1904: bool, dec: char) -> String {
         ms = (ms + unit / 2) / unit * unit;
     }
     let days = ms.div_euclid(86_400_000);
+    // Rounding the time up can carry into the day after the last one Excel shows.
+    if days > if date_1904 { 2_957_003 } else { 2_958_465 } {
+        return "#".repeat(8);
+    }
     let day_ms = ms.rem_euclid(86_400_000);
     let (hour, minute, second, milli) = (day_ms / 3_600_000, day_ms / 60_000 % 60, day_ms / 1000 % 60, day_ms % 1000);
     let Some((y, m, d, wd)) = serial_date(days, date_1904) else { return "#".repeat(8) };
@@ -1145,16 +1150,16 @@ mod tests {
         // February, 61 is 1 March 1900 and the walk goes on to 31 December 9999.
         let mut day = NaiveDate::from_ymd_opt(1900, 1, 1).unwrap();
         for n in 1..=2_958_465_i64 {
+            let got = serial_date(n, false).unwrap();
             if n == 60 {
-                assert_eq!(serial_date(n, false).map(|s| (s.0, s.1, s.2)), Some((1900, 2, 29)));
+                assert_eq!((got.0, got.1, got.2), (1900, 2, 29));
                 day = NaiveDate::from_ymd_opt(1900, 3, 1).unwrap();
             } else {
-                let got = serial_date(n, false).unwrap();
                 assert_eq!((got.0, got.1, got.2), (i64::from(day.year()), i64::from(day.month()), i64::from(day.day())), "1900: {n}");
                 day = day.succ_opt().unwrap_or(day);
             }
             // Excel's weekday: serial 1 is a Sunday, whatever the real calendar says before March 1900.
-            assert_eq!(serial_date(n, false).unwrap().3, ((n - 1) % 7) as usize, "1900 weekday: {n}");
+            assert_eq!(got.3, ((n - 1) % 7) as usize, "1900 weekday: {n}");
         }
         assert_eq!(serial_date(0, false), Some((1900, 1, 0, 6)));
         // 1904 system: serial 0 is 1 January 1904, a Friday; the last day is 31 December 9999.
@@ -1187,11 +1192,31 @@ mod tests {
             ("m/d/yyyy", 2_958_464.0, "12/30/9999"),
         ]);
         // The same days in the 1904 system (1462 serials earlier).
-        for (serial, excel) in [(35_122.0, "2/28/2000"), (35_123.0, "2/29/2000"), (35_124.0, "3/1/2000"), (71_647.0, "2/28/2100"), (71_648.0, "3/1/2100"), (2_957_003.0, "12/31/9999")] {
+        for (serial, excel) in [
+            (35_122.0, "2/28/2000"),
+            (35_123.0, "2/29/2000"),
+            (35_124.0, "3/1/2000"),
+            (71_647.0, "2/28/2100"),
+            (71_648.0, "3/1/2100"),
+            (2_957_003.0, "12/31/9999"),
+        ] {
             assert_eq!(format_dated("m/d/yyyy", serial, None, true), excel, "1904: {serial}");
         }
         assert_eq!(format_dated("m/d/yyyy", 2_957_004.0, None, true), "########");
         assert_eq!(format_dated("m/d/yyyy", 2_958_466.0, None, false), "########");
+    }
+
+    #[test]
+    fn rounding_the_time_up_past_the_last_day_shows_hashes() {
+        // 2958465.99999999 is 0.86 ms before 1 January 10000; a format with seconds rounds up to it.
+        for (date_1904, last) in [(false, 2_958_465.0), (true, 2_957_003.0)] {
+            assert_eq!(format_dated("m/d/yyyy h:mm:ss", last + 0.99999999, None, date_1904), "########", "1904: {date_1904}");
+            assert_eq!(format_dated("m/d/yyyy", last + 0.999_999_999_5, None, date_1904), "########", "1904: {date_1904}");
+            // Time-only formats are cut off at the same place as every other format.
+            assert_eq!(format_dated("h:mm:ss", last + 0.99999999, None, date_1904), "########", "1904: {date_1904}");
+            // A time that stays on the last day shows.
+            assert_eq!(format_dated("m/d/yyyy h:mm:ss", last + 0.999_988, None, date_1904), "12/31/9999 23:59:59", "1904: {date_1904}");
+        }
     }
 
     #[test]
