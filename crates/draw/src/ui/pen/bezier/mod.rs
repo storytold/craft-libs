@@ -571,7 +571,10 @@ impl<'a> BezierOverlay<'a> {
                     Target::Nothing
                 }
             }
-            (BezierTool::Convert, BezierHit::Anchor { path, knot }) => Target::Convert { path, knot },
+            (BezierTool::Convert, BezierHit::Anchor { path, knot }) => {
+                self.report.select = Some(PathSelection { path: Some(path), anchors: vec![knot], segment: None });
+                Target::Convert { path, knot }
+            }
             (_, BezierHit::Anchor { path, knot }) => {
                 let from = knot_at(path, knot).map_or(Point::ZERO, |k| k.anchor);
                 let selected = self.selection.has_anchor(path, knot);
