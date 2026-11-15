@@ -24,6 +24,8 @@ craft_ui::words! {
         seconds: unit "units.seconds" = "{n} s";
         pixels_per_inch: unit "units.pixelsPerInch" = "{n} ppi";
         pixels_per_centimetre: unit "units.pixelsPerCentimetre" = "{n} ppcm";
+        lines_per_inch: unit "units.linesPerInch" = "{n} lpi";
+        lines_per_centimetre: unit "units.linesPerCentimetre" = "{n} lpcm";
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
     }
@@ -92,6 +94,10 @@ pub enum UnitKind {
     Minutes,
     /// `{n} col`: a width in columns of a column size (`ColumnSize`), an affine rule no unit factor expresses.
     Columns,
+    /// `{n} lpi`: a halftone screen's frequency.
+    LinesPerInch,
+    /// `{n} lpcm`: a halftone screen's frequency.
+    LinesPerCentimetre,
 }
 
 impl UnitKind {
@@ -104,7 +110,7 @@ impl UnitKind {
         Self::ALL.get(tag as usize).copied()
     }
 
-    const ALL: [UnitKind; 13] = [
+    const ALL: [UnitKind; 15] = [
         UnitKind::Pixels,
         UnitKind::Percent,
         UnitKind::Degrees,
@@ -118,6 +124,8 @@ impl UnitKind {
         UnitKind::PixelsPerCentimetre,
         UnitKind::Minutes,
         UnitKind::Columns,
+        UnitKind::LinesPerInch,
+        UnitKind::LinesPerCentimetre,
     ];
 
     /// The digits after the decimal mark a number of this kind shows by default, at most.
@@ -130,7 +138,9 @@ impl UnitKind {
             | UnitKind::Millimetres
             | UnitKind::Picas
             | UnitKind::PixelsPerInch
-            | UnitKind::PixelsPerCentimetre => 0..=2,
+            | UnitKind::PixelsPerCentimetre
+            | UnitKind::LinesPerInch
+            | UnitKind::LinesPerCentimetre => 0..=2,
             UnitKind::Inches | UnitKind::Columns => 0..=3,
         }
     }
@@ -321,6 +331,8 @@ impl Units {
             UnitKind::PixelsPerCentimetre => words.pixels_per_centimetre.as_str(),
             UnitKind::Minutes => words.minutes.as_str(),
             UnitKind::Columns => words.columns.as_str(),
+            UnitKind::LinesPerInch => words.lines_per_inch.as_str(),
+            UnitKind::LinesPerCentimetre => words.lines_per_centimetre.as_str(),
         }
     }
 
