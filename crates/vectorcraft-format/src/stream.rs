@@ -198,11 +198,15 @@ impl Envelope {
         Self { pretty, first: true }
     }
 
-    /// Serialize a complete member before writing it to the envelope.
+    /// Serialize a member directly to the output without buffering the full value.
     pub fn field(&mut self, out: &mut impl Write, key: &str, value: &impl Serialize) -> io::Result<()> {
-        let json = if self.pretty { serde_json::to_vec_pretty(value) } else { serde_json::to_vec(value) }.map_err(io::Error::other)?;
         self.key(out, key)?;
-        Indent { inner: out, on: self.pretty }.write_all(&json)
+        // serde_json emits small writes; keep compression and underlying I/O efficient while
+        // bounding temporary memory independently of the serialized table size.
+        let mut buffered = io::BufWriter::with_capacity(64 << 10, out);
+        let indented = Indent { inner: &mut buffered, on: self.pretty };
+        if self.pretty { serde_json::to_writer_pretty(indented, value) } else { serde_json::to_writer(indented, value) }.map_err(io::Error::other)?;
+        buffered.into_inner().map(|_| ()).map_err(|e| e.into_error())
     }
 
     /// The start of member `key` (a plain name): its value follows, indented one level when
