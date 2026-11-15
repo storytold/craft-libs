@@ -32,14 +32,12 @@ pub struct DecodeInfo {
     pub orientation: Option<u16>,
 }
 
-/// Parse the first directory and enforce the pixel limit before decoding.
-/// Unlike [`header`], this does not impose layout or strip checks ahead of the decoder.
-pub fn decode_info(bytes: &[u8], max_pixels: u64) -> Result<DecodeInfo, Error> {
+fn first_directory(bytes: &[u8], max_pixels: u64) -> Result<(craft_tiff::Ifd, craft_tiff::image::ImageInfo), Error> {
     let (tiff, complete) = craft_tiff::Tiff::parse_with_status(bytes, &Default::default()).map_err(|e| Error::Malformed(e.to_string()))?;
     if !complete {
         return Err(Error::Malformed("truncated TIFF".into()));
     }
-    let ifd = tiff.ifds.first().ok_or_else(|| Error::Malformed("no IFD".into()))?;
+    let ifd = tiff.ifds.into_iter().next().ok_or_else(|| Error::Malformed("no IFD".into()))?;
     let info = ifd.image().map_err(|e| Error::Malformed(e.to_string()))?;
     if info.width == 0 || info.height == 0 {
         return Err(Error::Malformed("zero dimension".into()));
@@ -47,6 +45,13 @@ pub fn decode_info(bytes: &[u8], max_pixels: u64) -> Result<DecodeInfo, Error> {
     if u64::from(info.width) * u64::from(info.height) > max_pixels {
         return Err(Error::TooLarge { width: info.width, height: info.height });
     }
+    Ok((ifd, info))
+}
+
+/// Parse the first directory and enforce the pixel limit before decoding.
+/// Unlike [`header`], this does not impose layout or strip checks ahead of the decoder.
+pub fn decode_info(bytes: &[u8], max_pixels: u64) -> Result<DecodeInfo, Error> {
+    let (ifd, info) = first_directory(bytes, max_pixels)?;
     Ok(DecodeInfo {
         width: info.width,
         height: info.height,
@@ -58,18 +63,7 @@ pub fn decode_info(bytes: &[u8], max_pixels: u64) -> Result<DecodeInfo, Error> {
 /// Stored dimensions and orientation of the first directory, after checking the layouts and
 /// image-data bounds required by the TIFF decoder. Compressed strips are not decompressed.
 pub fn header(bytes: &[u8], max_pixels: u64) -> Result<(u32, u32, u16), Error> {
-    let (tiff, complete) = craft_tiff::Tiff::parse_with_status(bytes, &Default::default()).map_err(|e| Error::Malformed(e.to_string()))?;
-    if !complete {
-        return Err(Error::Malformed("truncated TIFF".into()));
-    }
-    let ifd = tiff.ifds.first().ok_or_else(|| Error::Malformed("no IFD".into()))?;
-    let info = ifd.image().map_err(|e| Error::Malformed(e.to_string()))?;
-    if info.width == 0 || info.height == 0 {
-        return Err(Error::Malformed("zero dimension".into()));
-    }
-    if u64::from(info.width) * u64::from(info.height) > max_pixels {
-        return Err(Error::TooLarge { width: info.width, height: info.height });
-    }
+    let (ifd, info) = first_directory(bytes, max_pixels)?;
     let bits = info.bits_per_sample.first().copied().unwrap_or(1);
     if bits < 8 && info.planar == 2 && info.samples_per_pixel > 1 {
         return Err(Error::Unsupported("planar TIFF with samples narrower than a byte"));
