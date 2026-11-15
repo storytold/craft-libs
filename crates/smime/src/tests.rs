@@ -892,6 +892,10 @@ fn certificate_rejects_mismatched_outer_signature_algorithm() {
     let offset = CA.len() - outer.value.len() + fields[0].whole.len() + fields[1].whole.len() - fields[1].value.len() + algorithm.whole.len() - 1;
     let mut changed = CA.to_vec();
     changed[offset] ^= 1;
+    // The mutation remains a syntactically valid certificate: rejection must come from
+    // algorithm agreement, not a DER decoding error. Without that guard Cert accepts it.
+    let decoded = Certificate::from_der(&changed).unwrap();
+    assert_ne!(decoded.signature_algorithm(), decoded.tbs_certificate().signature());
     assert!(crate::cert::Cert::from_der(&changed).is_none());
 }
 
