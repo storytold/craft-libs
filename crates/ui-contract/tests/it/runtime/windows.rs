@@ -1,6 +1,7 @@
 //! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
 //! resize (H4), the raise of a modal's window, the mount of a full-window container, the size of a content-sized
-//! window, the app id of child windows, injected keys across a focus loss, the window that has the keys, and `act`.
+//! window, the app id of child windows, injected keys across a focus loss, non-finite injected points, the window
+//! that has the keys, and `act`.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
@@ -353,6 +354,45 @@ fn a_window_focus_loss_releases_injected_held_keys() {
     }
     assert!(shift_click.get(), "the click after the focus loss holds its own Shift");
     assert_eq!(held.get(), (false, false), "nothing stays held after the click");
+}
+
+/// Injected input with a NaN or infinite point queues nothing, as a window never reports one, and a release at such a
+/// point still lets the held button go.
+#[trial]
+fn non_finite_injected_points_queue_nothing_and_a_release_there_lets_go() {
+    use craft_ui::runtime::windows::InjectedPointer;
+
+    let windows = Windows::new();
+    let host = WindowHost::of(&windows.ctx);
+    let presses = Cell::new(0);
+    let down = Cell::new(false);
+    let frames = |count| {
+        for _ in 0..count {
+            windows.frame(vec![], vec![], |ui| {
+                ui.ctx().input(|input| {
+                    presses.set(presses.get() + u32::from(input.pointer.primary_pressed()));
+                    down.set(input.pointer.primary_down());
+                });
+            });
+        }
+    };
+    frames(1);
+    let nan = Pos2::new(f32::NAN, 10.0);
+    host.inject_click(ViewportId::ROOT, nan, PointerButton::Primary, 1, Mods::NONE, false);
+    host.inject_move(ViewportId::ROOT, Pos2::new(f32::INFINITY, 0.0), Mods::NONE, 0.0);
+    host.inject_wheel(ViewportId::ROOT, Pos2::new(20.0, 20.0), Vec2::new(0.0, f32::NAN), Mods::NONE);
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::Down { button: PointerButton::Primary, at: nan, mods: Mods::NONE, pen: None });
+    frames(6);
+    assert_eq!(presses.get(), 0, "no non-finite press reaches egui");
+    assert!(!down.get(), "nothing is held");
+
+    host.inject_click(ViewportId::ROOT, Pos2::new(40.0, 40.0), PointerButton::Primary, 1, Mods::NONE, true);
+    frames(4);
+    assert!(down.get(), "the finite press is held");
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::Up { at: nan, mods: Mods::NONE });
+    frames(4);
+    assert!(!down.get(), "a release at a non-finite point lets the button go");
+    assert_eq!(presses.get(), 1);
 }
 
 /// The window the platform reports focused has the keys: `typing` reads its text field, and a key equivalent queued
