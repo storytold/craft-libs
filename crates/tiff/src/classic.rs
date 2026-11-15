@@ -418,4 +418,53 @@ mod tests {
         let (t, first) = Tiff::new(&b).unwrap();
         assert_eq!(t.all_ifds(first).unwrap().len(), 3);
     }
+    #[test]
+    fn numeric_field_types_and_malformed_values() {
+        fn field(code: u16, payload: &[u8]) -> Vec<u8> {
+            let mut b = b"II*\0".to_vec();
+            b.extend_from_slice(&8u32.to_le_bytes());
+            b.extend_from_slice(&1u16.to_le_bytes());
+            b.extend_from_slice(&256u16.to_le_bytes());
+            b.extend_from_slice(&code.to_le_bytes());
+            b.extend_from_slice(&1u32.to_le_bytes());
+            if payload.len() <= 4 {
+                let mut inline = [0; 4];
+                inline[..payload.len()].copy_from_slice(payload);
+                b.extend_from_slice(&inline);
+            } else {
+                b.extend_from_slice(&26u32.to_le_bytes());
+            }
+            b.extend_from_slice(&0u32.to_le_bytes());
+            if payload.len() > 4 {
+                b.extend_from_slice(payload);
+            }
+            b
+        }
+        let cases: &[(u16, &[u8], f64)] = &[
+            (1, &[7], 7.0),
+            (6, &[255], -1.0),
+            (3, &[2, 0], 2.0),
+            (8, &[255, 255], -1.0),
+            (4, &[3, 0, 0, 0], 3.0),
+            (9, &[255, 255, 255, 255], -1.0),
+            (5, &[3, 0, 0, 0, 2, 0, 0, 0], 1.5),
+            (10, &[253, 255, 255, 255, 2, 0, 0, 0], -1.5),
+            (11, &1.5_f32.to_le_bytes(), 1.5),
+            (12, &1.5_f64.to_le_bytes(), 1.5),
+        ];
+        for &(code, data, expected) in cases {
+            let bytes = field(code, data);
+            let (t, at) = Tiff::new(&bytes).unwrap();
+            let (ifd, _) = t.read_ifd(at, 0).unwrap();
+            assert_eq!(t.floats(&ifd.entries[0]).unwrap(), [expected], "type {code}");
+        }
+        let bytes = field(5, &[1, 0, 0, 0, 0, 0, 0, 0]);
+        let (t, at) = Tiff::new(&bytes).unwrap();
+        let (ifd, _) = t.read_ifd(at, 0).unwrap();
+        assert!(t.floats(&ifd.entries[0]).is_err());
+        let bytes = field(11, &f32::NAN.to_le_bytes());
+        let (t, at) = Tiff::new(&bytes).unwrap();
+        let (ifd, _) = t.read_ifd(at, 0).unwrap();
+        assert!(t.floats(&ifd.entries[0]).is_err());
+    }
 }
