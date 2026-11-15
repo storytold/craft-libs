@@ -257,8 +257,14 @@ fn mixed_attr(out: &mut Vec<u8>, name: &str, ty: &str, payload: &[u8]) {
 
 /// The version field and the headers of a mixed file whose flat part is `w × h` with float
 /// `B`, `G`, `R` channels, in scan lines or (with `tiled`) in one level of 2 × 2 tiles, and whose
-/// deep part is 3 × 2 with one float `A` channel.
+/// deep part is 3 × 2 with one float `A` channel. Both parts are uncompressed.
 fn mixed_headers(deep_first: bool, tiled: bool, (w, h): (usize, usize)) -> Vec<u8> {
+    mixed_headers_compressed(deep_first, tiled, (w, h), 0)
+}
+
+/// [`mixed_headers`] with the flat part's compression code: 0 for none, or 3 for ZIP, which
+/// holds 16 scan lines a block.
+fn mixed_headers_compressed(deep_first: bool, tiled: bool, (w, h): (usize, usize), compression: u8) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&0x0131_2f76u32.to_le_bytes());
     out.extend_from_slice(&(2u32 | 0x800 | 0x1000).to_le_bytes());
@@ -276,10 +282,12 @@ fn mixed_headers(deep_first: bool, tiled: bool, (w, h): (usize, usize)) -> Vec<u
         chlist.push(0);
         let window: Vec<u8> = [0i32, 0, w as i32 - 1, h as i32 - 1].iter().flat_map(|v| v.to_le_bytes()).collect();
         let tiled = tiled && !deep;
-        let chunks = if tiled { w.div_ceil(2) * h.div_ceil(2) } else { h };
+        let compression = if deep { 0 } else { compression };
+        let lines = if compression == 3 { 16 } else { 1 };
+        let chunks = if tiled { w.div_ceil(2) * h.div_ceil(2) } else { h.div_ceil(lines) };
         mixed_attr(&mut out, "channels", "chlist", &chlist);
         mixed_attr(&mut out, "chunkCount", "int", &(chunks as i32).to_le_bytes());
-        mixed_attr(&mut out, "compression", "compression", &[0]);
+        mixed_attr(&mut out, "compression", "compression", &[compression]);
         mixed_attr(&mut out, "dataWindow", "box2i", &window);
         mixed_attr(&mut out, "displayWindow", "box2i", &window);
         mixed_attr(&mut out, "lineOrder", "lineOrder", &[0]);
@@ -469,6 +477,45 @@ fn a_tiled_flat_part_beside_a_deep_part_must_hold_each_of_its_tiles() {
             for r in [decode_part(&b, flat, &all, &limits).map(|_| ()), decode_display_part(&b, flat, &all, &|_| 0.0, &limits).map(|_| ())] {
                 assert!(matches!(&r, Err(Error::Malformed(_))), "deep first {deep_first} {coordinates:?}: {r:?}");
             }
+        }
+    }
+}
+
+#[test]
+fn a_scan_line_chunk_beside_a_deep_part_must_start_at_its_block_s_first_line() {
+    // A ZIP flat part (16 lines a block) holds its 3 × 2 pixels in one chunk, stored raw, as a
+    // block is when compressing it does not make it smaller; the deep part follows.
+    let limits = Limits::default();
+    let (w, h) = (3usize, 2usize);
+    let (plain, offsets) = mixed_file(false, false);
+    let deep = &plain[offsets[1][0]..];
+    let with_y = |y: i32| {
+        let mut out = mixed_headers_compressed(false, false, (w, h), 3);
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&0i32.to_le_bytes());
+        chunk.extend_from_slice(&y.to_le_bytes());
+        chunk.extend_from_slice(&((w * h * 3 * 4) as i32).to_le_bytes());
+        for row in 0..h {
+            for channel in [100.0, 10.0, 0.0] {
+                (0..w).for_each(|x| chunk.extend_from_slice(&mixed_flat(channel, row * w + x).to_le_bytes()));
+            }
+        }
+        let flat_at = out.len() + 3 * 8;
+        let deep_at = flat_at + chunk.len();
+        for at in [flat_at, deep_at, deep_at + offsets[1][1] - offsets[1][0]] {
+            out.extend_from_slice(&(at as u64).to_le_bytes());
+        }
+        out.extend_from_slice(&chunk);
+        out.extend_from_slice(deep);
+        out
+    };
+    let part = decode_part(&with_y(0), 0, &all, &limits).unwrap();
+    assert_eq!(part.channel("R").unwrap().samples, Samples::F32((0..6).map(|i| mixed_flat(0.0, i)).collect()));
+    // Each of these y values rounds to block 0, but none is that block's first line.
+    for y in [-15, -1, 1, 15] {
+        let b = with_y(y);
+        for r in [decode_part(&b, 0, &all, &limits).map(|_| ()), decode_display_part(&b, 0, &all, &|_| 0.0, &limits).map(|_| ())] {
+            assert!(matches!(&r, Err(Error::Malformed(_))), "y {y}: {r:?}");
         }
     }
 }
