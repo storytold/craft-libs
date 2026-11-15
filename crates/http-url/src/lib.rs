@@ -10,7 +10,10 @@ pub struct Url {
 
 impl Url {
     pub fn parse(s: &str) -> Result<Url, HttpError> {
-        let bad = |why: &str| HttpError::BadUrl(format!("{s}: {why}"));
+        let bad = |why: &str| HttpError::BadUrl(why.to_string());
+        if s.len() > 16 * 1024 {
+            return Err(bad("URL exceeds 16 KiB"));
+        }
         let s = s.trim();
         if s.chars().any(|c| c.is_control() || c == ' ') {
             return Err(bad("contains spaces or control characters"));
@@ -97,6 +100,12 @@ impl Url {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_oversized_and_control_character_urls() {
+        assert!(Url::parse(&format!("https://example.com/{}", "x".repeat(16 * 1024))).is_err());
+        assert!(Url::parse("https://example.com/x?secret=abc\r\nInjected: 1").is_err());
+    }
 
     #[test]
     fn parses_urls() {
