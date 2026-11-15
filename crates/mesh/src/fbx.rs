@@ -47,7 +47,7 @@
 //! the image bytes.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     AlphaMode, Corner, IDENTITY, Image, Limits, Mat4, Material, Mesh, NONE, Node, Part, Resolver, Result, Scene, TextureRef, base64_decode,
@@ -782,46 +782,73 @@ impl Document {
             }
         }
 
-        // One mesh per Model with Mesh geometry (material slots are per Model). Models instancing
-        // the same geometry with the same materials share one mesh rather than each building a
-        // copy.
+        // One mesh per geometry and material-slot combination, shared by instances.
         let mut mesh_of: HashMap<(Key, Vec<usize>), usize> = HashMap::new();
-        for (id, o) in &models {
+        let mut placed = HashSet::new();
+        for (id, model) in &models {
             let Some(ni) = node_of.get(id).copied() else { continue };
-            let Some((gid, geom)) = b.geometry_of(*id) else { continue };
-            let mut mats: Vec<usize> = vec![];
+            let geometries = b.geometries_of(*id);
+            if geometries.is_empty() {
+                continue;
+            }
+            let mut mats = Vec::new();
             for (mid, _) in b.children_of(*id, "Material") {
                 mats.extend(b.material(mid)?);
             }
             let name = b.scene.nodes.get(ni).map(|n| n.name.clone()).unwrap_or_default();
-            let mesh_index = match mesh_of.get(&(gid, mats.clone())) {
-                Some(i) => *i,
-                None => {
-                    let Some(mesh) = b.mesh(&name, geom, &mats)? else { continue };
-                    b.budget.take(mesh_bytes(&mesh), &format!("mesh `{name}`"))?;
-                    if b.scene.meshes.len() >= limits.max_meshes {
-                        return Err(too_large(KIND, format!("more than {} meshes", limits.max_meshes)));
-                    }
-                    b.scene.meshes.push(mesh);
-                    mesh_of.insert((gid, mats), b.scene.meshes.len() - 1);
-                    b.scene.meshes.len() - 1
+            for (gid, geom) in geometries {
+                if !placed.insert((gid, Some(*id))) {
+                    continue;
                 }
-            };
-            match geometric(&Props::of(o)) {
-                Some(transform) => {
+                let mesh_index = match mesh_of.get(&(gid, mats.clone())) {
+                    Some(i) => *i,
+                    None => {
+                        let Some(mesh) = b.mesh(&name, geom, &mats)? else { continue };
+                        b.budget.take(mesh_bytes(&mesh), &format!("mesh `{name}`"))?;
+                        if b.scene.meshes.len() >= limits.max_meshes {
+                            return Err(too_large(KIND, format!("more than {} meshes", limits.max_meshes)));
+                        }
+                        b.scene.meshes.push(mesh);
+                        mesh_of.insert((gid, mats.clone()), b.scene.meshes.len() - 1);
+                        b.scene.meshes.len() - 1
+                    }
+                };
+                let transform = geometric(&Props::of(model));
+                let occupied = b.scene.nodes.get(ni).is_some_and(|n| n.mesh.is_some());
+                if transform.is_some() || occupied {
                     b.node_room()?;
-                    let gi = b.scene.nodes.len();
-                    b.scene.nodes.push(Node { name: format!("{name} geometry"), transform, mesh: Some(mesh_index), ..Node::default() });
-                    if let Some(n) = b.scene.nodes.get_mut(ni) {
-                        n.children.push(gi);
+                    let child = b.scene.nodes.len();
+                    b.scene.nodes.push(Node {
+                        name: format!("{name} geometry"),
+                        transform: transform.unwrap_or(IDENTITY),
+                        mesh: Some(mesh_index),
+                        ..Node::default()
+                    });
+                    if let Some(node) = b.scene.nodes.get_mut(ni) {
+                        node.children.push(child);
                     }
-                }
-                None => {
-                    if let Some(n) = b.scene.nodes.get_mut(ni) {
-                        n.mesh = Some(mesh_index);
-                    }
+                } else if let Some(node) = b.scene.nodes.get_mut(ni) {
+                    node.mesh = Some(mesh_index);
                 }
             }
+        }
+        // Geometry with no Model connection still contributes a mesh at the origin.
+        let placed_ids: HashSet<Key<'_>> = placed.iter().map(|(gid, _)| *gid).collect();
+        for geom in objects.children.iter().filter(|o| o.name == "Geometry" && o.child("Vertices").is_some()) {
+            let Some(gid) = key(geom.props.first()) else { continue };
+            if placed_ids.contains(&gid) {
+                continue;
+            }
+            let Some(mesh) = b.mesh("", geom, &[])? else { continue };
+            b.budget.take(mesh_bytes(&mesh), "unplaced mesh")?;
+            if b.scene.meshes.len() >= limits.max_meshes {
+                return Err(too_large(KIND, format!("more than {} meshes", limits.max_meshes)));
+            }
+            b.node_room()?;
+            let mesh_index = b.scene.meshes.len();
+            b.scene.meshes.push(mesh);
+            b.scene.roots.push(b.scene.nodes.len());
+            b.scene.nodes.push(Node { mesh: Some(mesh_index), ..Node::default() });
         }
         let mut scene = b.scene;
         count_warning(&mut scene.warnings, b.skipped, "polygons with fewer than three corners or a vertex that is not there were left out");
@@ -971,14 +998,18 @@ impl<'a> Build<'a, '_> {
         Ok(())
     }
 
-    /// The mesh geometry of Model `id`, and what it is shared by.
-    fn geometry_of(&self, id: Key<'a>) -> Option<(Key<'a>, &'a Record)> {
-        // 6.x: the Model holds its own mesh.
+    /// The geometries connected to a Model, including its own FBX 6 mesh.
+    fn geometries_of(&self, id: Key<'a>) -> Vec<(Key<'a>, &'a Record)> {
+        let mut geometries = Vec::new();
         if let Some(model) = self.by_key.get(&id).copied().filter(|o| o.child("Vertices").is_some()) {
-            return Some((id, model));
+            geometries.push((id, model));
         }
-        let (gid, _) = self.children_of(id, "Geometry").into_iter().next()?;
-        Some((gid, self.by_key.get(&gid).copied()?))
+        for (gid, _) in self.children_of(id, "Geometry") {
+            if let Some(geometry) = self.by_key.get(&gid).copied().filter(|o| o.child("Vertices").is_some()) {
+                geometries.push((gid, geometry));
+            }
+        }
+        geometries
     }
 
     /// The image of Texture `tid`.
