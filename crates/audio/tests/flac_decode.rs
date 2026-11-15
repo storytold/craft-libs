@@ -104,6 +104,21 @@ fn hostile_input_is_an_error_not_a_panic() {
 
 // ---- ffmpeg ----
 
+/// Little-endian 16- or 32-bit samples of raw PCM.
+fn pcm_values(raw: &[u8], bytes: usize) -> Vec<i32> {
+    if bytes == 2 {
+        raw.as_chunks::<2>().0.iter().map(|b| i32::from(i16::from_le_bytes(*b))).collect()
+    } else {
+        raw.as_chunks::<4>().0.iter().map(|b| i32::from_le_bytes(*b)).collect()
+    }
+}
+
+/// Planar channels as interleaved samples.
+fn interleave(channels: &[Vec<i32>]) -> Vec<i32> {
+    let frames = channels.first().map_or(0, Vec::len);
+    (0..frames).flat_map(|i| channels.iter().map(move |c| c[i])).collect()
+}
+
 fn ffmpeg_run(ff: &std::path::Path, args: &[&str]) -> Vec<u8> {
     let out = Command::new(ff).args(["-v", "error", "-nostdin", "-y"]).args(args).output().expect("run ffmpeg");
     assert!(out.status.success(), "ffmpeg {args:?}: {}", String::from_utf8_lossy(&out.stderr));
@@ -130,22 +145,10 @@ fn ffmpeg_files_decode_to_ffmpegs_samples() {
                     assert_eq!(got.info.channels as usize, channels);
                     let frames = got.channels[0].len();
                     assert_eq!(theirs.len(), frames * channels * bytes, "{name} {channels}ch {bits} l{level}: length");
-                    let mut ok = true;
-                    for i in 0..frames {
-                        for c in 0..channels {
-                            let at = (i * channels + c) * bytes;
-                            let want = if bytes == 2 {
-                                i32::from(i16::from_le_bytes([theirs[at], theirs[at + 1]]))
-                            } else {
-                                i32::from_le_bytes([theirs[at], theirs[at + 1], theirs[at + 2], theirs[at + 3]])
-                            };
-                            // ffmpeg returns 24-bit audio left-aligned in 32 bits.
-                            let mine = if bits == 24 { got.channels[c][i] << 8 } else { got.channels[c][i] };
-                            if mine != want {
-                                ok = false;
-                            }
-                        }
-                    }
+                    // ffmpeg returns 24-bit audio left-aligned in 32 bits.
+                    let shift = if bits == 24 { 8 } else { 0 };
+                    let mine: Vec<i32> = interleave(&got.channels).into_iter().map(|v| v << shift).collect();
+                    let ok = mine == pcm_values(&theirs, bytes);
                     assert!(ok, "{name} {channels}ch {bits}-bit level {level}: samples differ from ffmpeg's decode");
                 }
             }
@@ -164,16 +167,8 @@ fn ffmpeg_decodes_our_files_to_our_samples() {
         let theirs = ffmpeg_run(&ff, &["-i", file.to_str().expect("path"), "-f", if bits == 16 { "s16le" } else { "s32le" }, "-"]);
         let got = decode(&std::fs::read(&file).expect("read")).expect("decode");
         let bytes = if bits == 16 { 2 } else { 4 };
-        for i in 0..20_000 {
-            for c in 0..channels {
-                let at = (i * channels + c) * bytes;
-                let want = if bytes == 2 {
-                    i32::from(i16::from_le_bytes([theirs[at], theirs[at + 1]]))
-                } else {
-                    i32::from_le_bytes([theirs[at], theirs[at + 1], theirs[at + 2], theirs[at + 3]]) >> 8
-                };
-                assert_eq!(got.channels[c][i], want, "{channels}ch {bits}-bit sample {i} of channel {c}");
-            }
-        }
+        let shift = if bytes == 4 { 8 } else { 0 };
+        let want: Vec<i32> = pcm_values(&theirs, bytes).into_iter().map(|v| v >> shift).collect();
+        assert!(interleave(&got.channels) == want, "{channels}ch {bits}-bit: samples differ from ffmpeg's decode");
     }
 }
