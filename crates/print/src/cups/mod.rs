@@ -4,7 +4,15 @@
 //! `CUPS-Get-Default`) and job submission (`Print-Job`) over HTTP/1.1, for when `lpstat`/`lp`
 //! are missing (a sandboxed install, where the print dialog would otherwise have no printers).
 //! Implemented from the public IPP encoding (RFC 2910/8010) and semantics (RFC 8011) and
-//! CUPS's IPP documentation; the scheduler is reached on its socket or loopback port.
+//! CUPS's IPP documentation; the scheduler is reached on its socket or selected TCP endpoint.
+//!
+//! # Blocking and authorization
+//! The caller authorizes endpoint selection. The absolute exchange deadline covers all request
+//! writes and reply reads **after connection**. Standard-library DNS resolution and Unix socket
+//! connection are blocking OS calls outside that deadline. TCP connection attempts have their
+//! own timeout. This is not a whole-operation deadline API: do not call it on a UI thread or
+//! promise bounded completion for arbitrary named hosts/Unix listeners. No detached timeout
+//! thread is spawned; callers needing cancellation must supply a separately bounded transport.
 
 #[cfg(all(test, unix))]
 mod tests;
@@ -419,8 +427,7 @@ fn exchange(stream: &mut Stream, authority: &str, path: &str, body: &[u8], timeo
     Ok(reply)
 }
 
-/// The reply's body: a strict status line and headers, then exactly `Content-Length` bytes. CUPS
-/// answers with Content-Length; a chunked or unterminated reply is refused, not guessed.
+/// One absolute deadline shared by request writes and reply reads after connection.
 struct DeadlineReader<'a> {
     stream: &'a mut Stream,
     end: Instant,

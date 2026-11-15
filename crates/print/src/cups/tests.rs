@@ -428,6 +428,48 @@ fn reply_identity_and_metadata_request_are_checked() {
     assert!(super::validate_reply_identity(&request, &reply).is_ok());
     reply[7] ^= 1;
     assert!(super::validate_reply_identity(&request, &reply).is_err());
+    reply[4..8].copy_from_slice(&request[4..8]);
     reply[0] = 9;
     assert!(super::validate_reply_identity(&request, &reply).is_err());
+}
+
+#[test]
+fn slow_reply_cannot_reset_the_absolute_deadline() {
+    let (client, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    let producer = std::thread::spawn(move || {
+        // Finite work and a joined handle: no abandoned timeout worker.
+        for _ in 0..20 {
+            if peer.write_all(b"x").is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let start = std::time::Instant::now();
+    let mut stream = super::Stream::Unix(client);
+    let mut reader = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80) };
+    let mut bytes = [0; 20];
+    assert!(reader.read_exact(&mut bytes).is_err(), "trickle reads must not extend the absolute deadline");
+    drop(stream);
+    producer.join().unwrap();
+    assert!(start.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
+fn blocked_upload_obeys_the_same_absolute_deadline() {
+    let (client, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    let start = std::time::Instant::now();
+    let mut stream = super::Stream::Unix(client);
+    let mut writer = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80) };
+    let chunk = [0u8; 64 * 1024];
+    let mut timed_out = false;
+    // A peer that never drains cannot turn each partial write into a fresh timeout budget.
+    for _ in 0..512 {
+        if writer.write_all(&chunk).is_err() {
+            timed_out = true;
+            break;
+        }
+    }
+    assert!(timed_out, "blocked upload must terminate without a reader");
+    assert!(start.elapsed() < Duration::from_secs(3));
 }
