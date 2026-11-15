@@ -5,7 +5,7 @@ use craft_ui::contract::{Bind, Role, SaveKey};
 use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
     ExportAsDialog, ExportAsResult, ExportOptions, ExportOptionsKind, ExportSize, FormatOptions, FormatOptionsDialog, HostedExportAs,
-    HostedFormatOptions, JpegOptions, OutputPathRow, SizeEstimate,
+    HostedFormatOptions, JpegOptions, OutputPathRow, Resample, SizeEstimate,
 };
 use craft_ui::runtime::requests::PathRequest;
 use craft_ui::testing::{Fixture, trial};
@@ -272,4 +272,27 @@ fn export_as_starts_from_its_remembered_options_and_stores_the_confirmed_ones() 
     let _unstored = export_from(&host, &mut fixture, webp);
     let again = opened_with(&host, &mut fixture, ExportOptions::default());
     assert_eq!((again.format.as_str(), again.quality), ("jpg", 40), "a result not stored leaves the stored options as they were");
+}
+
+/// Export As with the app's resample methods offers no other: an unlisted opening method opens as the first listed
+/// one, and automation cannot set an unlisted one.
+#[trial]
+fn export_as_offers_only_the_apps_resample_methods() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    let mut start = ExportOptions::default();
+    start.resample = Resample::Lanczos;
+    let methods = vec![Resample::Automatic, Resample::Bicubic];
+    host.borrow_mut().open(HostedExportAs::new("Poster", document(), start).methods(methods));
+    fixture.idle(10);
+    let opened = host.borrow_mut().get_mut::<HostedExportAs>().map(|dialog| dialog.options().resample).expect("the dialog is open");
+    assert_eq!(opened, Resample::Automatic, "an unlisted method opens as the first listed one");
+
+    let mut host = host.borrow_mut();
+    let dialog = host.get_mut::<HostedExportAs>().expect("the dialog is open");
+    assert!(dialog.set_json_field(fixture.ctx(), "resample", "lanczos".into()).is_err(), "an unlisted method is refused");
+    dialog.set_json_field(fixture.ctx(), "resample", "bicubic".into()).expect("a listed method is taken");
+    assert_eq!(dialog.options().resample, Resample::Bicubic);
 }

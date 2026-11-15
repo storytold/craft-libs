@@ -129,6 +129,13 @@ pub struct ExportAsDialog<'a> {
     /// The formats the list offers.
     #[prop(into)]
     formats: Vec<ExportFormat>,
+    /// The resample methods the list offers, in the order of [`Resample::ALL`]; all of them when empty. A method the
+    /// list lacks, remembered or from a preset, opens as the first listed one.
+    #[prop]
+    methods: Vec<Resample>,
+    /// The dialog's title in place of "Export As" ("Export As: Layer 1").
+    #[prop(into)]
+    title: Option<Label>,
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
@@ -164,6 +171,8 @@ impl<'a> ExportAsDialog<'a> {
             source,
             bound: options,
             formats: ExportFormat::standard(),
+            methods: Vec::new(),
+            title: None,
             open: None,
             defaults: ExportFormatDefaults::default(),
             preview: None,
@@ -177,7 +186,8 @@ impl<'a> ExportAsDialog<'a> {
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> ExportAsOutput {
-        let ExportAsDialog { file_name, source, bound, formats, open, defaults, preview, answers, saving, mut presets, remember, opening } = self;
+        let ExportAsDialog { file_name, source, bound, formats, methods, title, open, defaults, preview, answers, saving, mut presets, remember, opening } =
+            self;
         let env = Env::of(ui);
         let words = env.words::<ExportWords>();
         // A frame can run the body twice: the library lives in a cell the passes share, and `events` collects the edits
@@ -186,6 +196,7 @@ impl<'a> ExportAsDialog<'a> {
         let events = RefCell::new(Vec::new());
         let pass = Pass {
             formats: &formats,
+            methods: &methods,
             source,
             words: &words,
             sizing: env.words::<SizingWords>(),
@@ -200,18 +211,18 @@ impl<'a> ExportAsDialog<'a> {
         let latest = RefCell::new(None::<ExportOptions>);
         let answered = RefCell::new(None::<PathBuf>);
         let mut dialog =
-            FormDialog::new(words.title.clone(), bound).ok_label(words.export.clone()).ok_enabled(!saving).accept_stays_open(true).answers(answers);
+            FormDialog::new(title.unwrap_or_else(|| words.title.clone()), bound).ok_label(words.export.clone()).ok_enabled(!saving).accept_stays_open(true).answers(answers);
         if let Some(open) = open {
             dialog = dialog.opened(open);
         }
         if let Some(opening) = opening {
             let last = remember.as_ref().and_then(|key| crate::runtime::memory::saved_value::<Option<ExportOptions>>(ui.ctx(), key));
-            dialog = dialog.opening(opened_options(opening, last, &formats, source));
+            dialog = dialog.opening(opened_options(opening, last, &formats, &methods, source));
         }
         let shown = dialog.show(ui, |ui, form, values| {
             if form.first() {
                 let last = remember.as_ref().and_then(|key| form.saved::<Option<ExportOptions>>(key).clone());
-                *values = opened_options(values.clone(), last, &formats, source);
+                *values = opened_options(values.clone(), last, &formats, &methods, source);
             }
             for answer in form.take_answers() {
                 if let HostAnswer::Path { key, path } = answer
@@ -280,6 +291,8 @@ pub struct HostedExportAs {
     /// The settings the dialog was made with: what Reset restores, whatever automation sets before the first show.
     opening: ExportOptions,
     formats: Vec<ExportFormat>,
+    methods: Vec<Resample>,
+    title: Option<Label>,
     defaults: ExportFormatDefaults,
     preview: Option<ExportPreview>,
     wanted: Option<PreviewRequest<ExportOptions>>,
@@ -335,6 +348,8 @@ impl HostedExportAs {
             opening: options.clone(),
             options,
             formats: ExportFormat::standard(),
+            methods: Vec::new(),
+            title: None,
             defaults: ExportFormatDefaults::default(),
             preview: None,
             wanted: None,
@@ -355,6 +370,21 @@ impl HostedExportAs {
     #[must_use]
     pub fn formats(mut self, formats: Vec<ExportFormat>) -> Self {
         self.formats = formats;
+        self
+    }
+
+    /// The resample methods the list offers, in the order of [`Resample::ALL`]; all of them when empty
+    /// ([`ExportAsDialog::methods`]).
+    #[must_use]
+    pub fn methods(mut self, methods: Vec<Resample>) -> Self {
+        self.methods = methods;
+        self
+    }
+
+    /// The dialog's title in place of "Export As" ([`ExportAsDialog::title`]).
+    #[must_use]
+    pub fn title(mut self, title: impl Into<Label>) -> Self {
+        self.title = Some(title.into());
         self
     }
 
@@ -422,12 +452,19 @@ impl StackDialog for HostedExportAs {
         Some(fields)
     }
 
-    /// Sets an option as the serde round trip takes it, or the path to a string.
+    /// Sets an option as the serde round trip takes it, or the path to a string. A `resample` method the list does not
+    /// offer is refused.
     fn set_json_field(&mut self, _: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
         if field == "path" {
             let path = value.as_str().filter(|path| !path.is_empty()).ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
             self.path = Some(PathBuf::from(path));
             return Ok(());
+        }
+        if field == "resample"
+            && !self.methods.is_empty()
+            && serde_json::from_value::<Resample>(value.clone()).is_ok_and(|method| !self.methods.contains(&method))
+        {
+            return Err(FieldRefusal::Rejects(&value).message(field));
         }
         set_serde_field(&mut self.options, field, value)
     }
@@ -439,6 +476,8 @@ impl StackDialog for HostedExportAs {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ExportAsResult>> {
         let dialog = ExportAsDialog {
             formats: self.formats.clone(),
+            methods: self.methods.clone(),
+            title: self.title.clone(),
             defaults: self.defaults,
             preview: self.preview.clone(),
             answers: self.requests.take_answers(),
@@ -488,13 +527,15 @@ impl StackDialog for HostedExportAs {
 
 /// The settings the dialog opens with: the remembered ones when there are any, else `base`, fitted to the formats and
 /// the source.
-fn opened_options(base: ExportOptions, last: Option<ExportOptions>, formats: &[ExportFormat], source: PixelSize) -> ExportOptions {
-    last.unwrap_or(base).fitted(formats, source)
+fn opened_options(base: ExportOptions, last: Option<ExportOptions>, formats: &[ExportFormat], methods: &[Resample], source: PixelSize) -> ExportOptions {
+    last.unwrap_or(base).fitted(formats, methods, source)
 }
 
 /// What the rows read besides the dialog's state.
 struct Pass<'p> {
     formats: &'p [ExportFormat],
+    /// The resample methods the list offers; all when empty.
+    methods: &'p [Resample],
     source: PixelSize,
     words: &'p ExportWords,
     sizing: std::sync::Arc<SizingWords>,
@@ -582,7 +623,7 @@ impl Pass<'_> {
             match event {
                 NamedPresetEvent::Apply(name) => {
                     if let Some(item) = presets.items().into_iter().find(|item| item.name == name) {
-                        *options = item.value.clone().fitted(self.formats, self.source);
+                        *options = item.value.clone().fitted(self.formats, self.methods, self.source);
                         held.error = None;
                     }
                 }
@@ -695,7 +736,7 @@ impl Pass<'_> {
         }
 
         row(ui, &self.sizing.resample, "resample", |ui| {
-            let entries = Resample::entries(&self.sizing, &[]);
+            let entries = Resample::entries(&self.sizing, self.methods);
             if let Some(method) = Select::new(self.sizing.resample.clone(), Bind::given(options.resample), &entries).show(ui).value().copied() {
                 options.resample = method;
             }
