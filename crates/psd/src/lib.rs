@@ -60,6 +60,7 @@ pub mod asl;
 pub mod atn;
 pub mod blend;
 pub mod builder;
+pub mod channel_resources;
 mod codepage;
 pub mod compression;
 pub mod csh;
