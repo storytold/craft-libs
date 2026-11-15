@@ -106,8 +106,9 @@ fn inflate(input: &[u8], max: usize) -> Step {
 /// inflating it takes in to give `output` bytes, or, where that gives fewer, the header and the
 /// whole deflate stream, its Adler-32 checksum not counted; and, told or not, how many bytes it
 /// inflated. Not told for data without a zlib header or with a preset dictionary (a reader may
-/// refuse it outright), where the data is damaged first, or where it inflates `max` bytes before
-/// either. Data that ends before either is all taken in.
+/// refuse it outright), where the data is damaged first, or where it inflates more than `max`
+/// bytes before either (`max` itself is within the limit, as for decoding). Data that ends before
+/// either is all taken in.
 pub fn input_for(data: &[u8], output: usize, max: usize) -> (Option<usize>, usize) {
     match zlib_header(data) {
         Some((_, flg)) if flg & 0x20 == 0 => {
@@ -131,20 +132,22 @@ fn least_input(input: &[u8], output: usize, max: usize) -> (Option<usize>, usize
     let counts = |d: &Decompress| (usize::try_from(d.total_in()).unwrap_or(usize::MAX), usize::try_from(d.total_out()).unwrap_or(usize::MAX));
     loop {
         let (taken, made) = counts(&d);
+        if made > max {
+            return (None, made);
+        }
         if made >= output {
             return (Some(taken), made);
         }
-        if made >= max {
-            return (None, made);
-        }
         let left = output - made;
         let feed = (left.saturating_sub(HELD) / MOST_PER_BYTE).max(1);
-        let room = left.min(max - made).min(scratch.len());
+        // One byte past `max` tells "exactly max" from "more than max", as in `inflate`.
+        let room = left.min((max - made).saturating_add(1)).min(scratch.len());
         let Some(rest) = input.get(taken..) else { return (None, made) };
         let (Some(fed), Some(out)) = (rest.get(..feed.min(rest.len())), scratch.get_mut(..room)) else { return (None, made) };
         let Ok(status) = d.decompress(fed, out, FlushDecompress::None) else { return (None, counts(&d).1) };
         let (now_taken, now_made) = counts(&d);
         match status {
+            Status::StreamEnd if now_made > max => return (None, now_made),
             Status::StreamEnd => return (Some(now_taken), now_made),
             // With the data all taken in, zlib may still hold what a step had no room for; the data
             // ends once a step gives nothing more.
@@ -233,7 +236,7 @@ mod tests {
             }
         }
         let (data, _) = &streams[2];
-        assert_eq!(input_for(data, 1 << 20, 100), (None, 100), "past what may be inflated");
+        assert_eq!(input_for(data, 1 << 20, 100), (None, 101), "past what may be inflated, by a byte");
         assert_eq!(input_for(&data[2..], 10, 1000).0, None, "no zlib header");
         assert_eq!(input_for(&[0x78, 0xbb, 0, 0], 10, 1000).0, None, "a preset dictionary");
         assert_eq!(input_for(&[0x78, 0x9c, 0xff, 0xff, 0xff], 10, 1000).0, None, "damaged");
@@ -424,10 +427,9 @@ mod tests {
         }
     }
 
-    /// A run of copies can be all taken in before what it gives has room: what zlib holds of it is
-    /// still inflated, and counts toward the limit, once the data is all taken in.
-    #[test]
-    fn what_is_held_once_the_data_is_taken_in_is_still_inflated() {
+    /// zlib data of one fixed block, one literal and 255 copies of 258: 65,791 bytes, more than a
+    /// step has room for. With its end of block, or without, when the data ends first.
+    fn a_run_of_copies(end: bool) -> Vec<u8> {
         let mut bits = Bits::default();
         bits.put(1, 1); // the final block,
         bits.put(1, 2); // fixed Huffman codes (§3.2.6)
@@ -436,10 +438,42 @@ mod tests {
             bits.code(0xc5, 8); // length 258
             bits.code(0, 5); // distance 1
         }
-        // No end of block: the data ends first. It gives 65,791 bytes, more than a step has room for.
+        if end {
+            bits.code(0, 7);
+        }
         let mut data = vec![0x78, 0x9c];
         data.extend(bits.finish());
+        data
+    }
+
+    /// A run of copies can be all taken in before what it gives has room: what zlib holds of it is
+    /// still inflated, and counts toward the limit, once the data is all taken in.
+    #[test]
+    fn what_is_held_once_the_data_is_taken_in_is_still_inflated() {
+        let data = a_run_of_copies(false);
         assert_eq!(input_for(&data, 1 << 20, 1 << 20), (Some(data.len()), 65_791), "ends first: all taken in");
-        assert_eq!(input_for(&data, 1 << 20, 65_537), (None, 65_537), "past what may be inflated");
+        assert_eq!(input_for(&data, 1 << 20, 65_537), (None, 65_538), "past what may be inflated");
+    }
+
+    /// `max` bytes are within what may be inflated, as for decoding, whatever the output asked for
+    /// past them: data that gives exactly `max` is told, and data that gives one more isn't.
+    #[test]
+    fn data_that_inflates_exactly_max_is_told_for_any_output() {
+        for end in [true, false] {
+            let data = a_run_of_copies(end);
+            for output in [65_792, 66_000, 70_000, 100_000, 148_000, 1 << 20] {
+                assert_eq!(input_for(&data, output, 65_791), (Some(data.len()), 65_791), "{end}, {output}");
+                assert_eq!(input_for(&data, output, 65_790), (None, 65_791), "{end}, {output}");
+            }
+            // An output of one byte past `max`, reached by the byte that is past it.
+            assert_eq!(input_for(&data, 65_791, 65_790), (None, 65_791), "{end}");
+        }
+        let whole = a_run_of_copies(true);
+        assert_eq!(dec_limit(&whole, 65_791).ok().map(|out| out.len()), Some(65_791), "decoded within the limit");
+        assert!(dec_limit(&whole, 65_790).is_err(), "past the limit");
+        // An empty final block, and a header alone, with nothing to be inflated.
+        assert_eq!(input_for(&[0x78, 0x9c, 0x03, 0x00], 1, 0), (Some(4), 0));
+        assert_eq!(dec_limit(&[0x78, 0x9c, 0x03, 0x00], 0).ok(), Some(Vec::new()));
+        assert_eq!(input_for(&[0x78, 0x9c], 1, 0), (Some(2), 0));
     }
 }
