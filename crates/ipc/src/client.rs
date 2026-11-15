@@ -203,7 +203,12 @@ impl PipeTransport {
 #[cfg(windows)]
 impl Read for PipeTransport {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        Self::poll(self.recv_timeout.get(), || self.stream.read(buf))
+        Self::poll(self.recv_timeout.get(), || match self.stream.read(buf) {
+            // interprocess converts Windows ERROR_NO_DATA on an empty nonblocking pipe
+            // to EOF. A disconnected pipe has no peer; otherwise retry until the deadline.
+            Ok(0) if !buf.is_empty() && self.stream.peer_creds().is_ok() => Err(std::io::ErrorKind::WouldBlock.into()),
+            result => result,
+        })
     }
 }
 
