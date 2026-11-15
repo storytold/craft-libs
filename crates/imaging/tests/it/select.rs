@@ -490,6 +490,33 @@ fn a_marquee_corner_and_a_dragged_selection_snap_to_a_guide() {
     assert_eq!(events[2..], [commit((0.0, 45.0, 400.0, 46.0), SelectionOperation::New)], "the click selects the row");
 }
 
+// Inside the click distance a selection drag still moves: one that snapping pulls back to its start (its edge on the
+// guide, moved 2 pixels off it) changed nothing and ends with a cancel, not the click's zero commit, so the Single Row
+// Marquee selects no row. A press whose pointer stays within half a pixel of it is a click, snapped or not.
+#[trial]
+fn a_selection_drag_that_snaps_back_is_no_click_and_a_jittered_press_is() {
+    let on_guide = Rect::new(75.0, 30.0, 100.0, 60.0);
+    for kind in [MarqueeKind::Rectangle, MarqueeKind::SingleRow] {
+        let mut rig = snapped_rig("Marquee", MarqueeTool::new(kind), Fake::selected(on_guide));
+        down(&mut rig, (80.0, 45.5), NONE);
+        drag_to(&mut rig, (82.0, 45.5), NONE);
+        up(&mut rig, (82.0, 45.5), NONE);
+        assert_eq!(tags(&rig.tool_mut().events()), ["begin", "cancel"], "{kind:?}: snapped back, no click");
+
+        down(&mut rig, (80.0, 45.5), NONE);
+        drag_to(&mut rig, (80.2, 45.2), NONE);
+        up(&mut rig, (80.2, 45.2), NONE);
+        let events = rig.tool_mut().events();
+        match kind {
+            MarqueeKind::SingleRow => {
+                assert_eq!(tags(&events[..2]), ["begin", "cancel"], "{events:?}");
+                assert_eq!(events[2..], [commit((0.0, 45.0, 400.0, 46.0), SelectionOperation::New)], "the jittered click selects the row");
+            }
+            _ => assert_eq!(tags(&events), ["begin", "commit 0,0"], "{kind:?}: a jittered press is a click"),
+        }
+    }
+}
+
 // ---- the Lasso ----
 
 // An open New outline hides the selection it will replace: the lasso reports it from the Alt-click on, not before or after.

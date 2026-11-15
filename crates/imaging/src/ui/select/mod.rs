@@ -150,8 +150,11 @@ pub enum SelectEvent {
     /// A click that drew nothing (a marquee released within its click slop): deselect. One undo step.
     Deselect,
     /// A press inside the selection dragged it: `Begin` at the press, `Update` as it moves, `Commit` at the release
-    /// (one undo step; a delta of 0 is no change, where the app deselects, or drops a floating piece that never
-    /// moved), `Cancel` on Escape.
+    /// (one undo step), `Cancel` on Escape. A press whose pointer never left it is a click, the `Commit` of a delta of 0,
+    /// where the app deselects or drops a floating piece that never moved; a drag that ends where it began (it came
+    /// back, or snapping pulled it back) changed nothing and ends with `Cancel` ([`CancelReason::Dismissed`]).
+    ///
+    /// [`CancelReason::Dismissed`]: craft_behavior::CancelReason::Dismissed
     DragSelection(EditEvent<SelectionDrag>),
 }
 

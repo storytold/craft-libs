@@ -86,12 +86,22 @@ pub struct MoveGesture {
     value: MoveValue,
     /// The last locked offset, for the hysteresis; `None` while ⇧ is up.
     locked: Option<Vec2>,
+    /// The pointer has been half a document unit or more from the press on an axis.
+    left: bool,
 }
 
 impl MoveGesture {
     /// Starts a drag at `start` (document units) with the keys held at the press.
     pub fn press(style: &ConstrainStyle, start: Point, mods: Mods, directions: Directions) -> MoveGesture {
-        MoveGesture { start, directions, copy_reach: style.copy_reach, alt_at_press: mods.alt, value: MoveValue::default(), locked: None }
+        MoveGesture {
+            start,
+            directions,
+            copy_reach: style.copy_reach,
+            alt_at_press: mods.alt,
+            value: MoveValue::default(),
+            locked: None,
+            left: false,
+        }
     }
 
     /// The pointer moved to `at` (document units) with `mods` at `zoom` screen points per
@@ -119,6 +129,14 @@ impl MoveGesture {
         self.value
     }
 
+    /// Whether the pointer, at a [`follow`](Self::follow), has been half a document unit or more from the press on
+    /// either axis (before the ⇧ lock), so a move of whole units has moved off its press. A press that never left is a
+    /// click, wherever its offset was snapped to; one that left stays a drag when it comes back. A tool whose gesture
+    /// takes every move from the press (`CanvasTool::takes_every_move`) decides its click by this alone.
+    pub fn left_press(&self) -> bool {
+        self.left
+    }
+
     /// The direction ⇧ holds the offset to, as the last locked offset; `None` while the move is free.
     pub fn locked(&self) -> Option<Vec2> {
         self.locked
@@ -127,6 +145,7 @@ impl MoveGesture {
     /// The value at `at`, updating the remembered lock; `copy` stays on once on.
     fn value_at(&mut self, at: Point, mods: Mods, zoom: f64) -> MoveValue {
         let d = at - self.start;
+        self.left |= d.x.round() != 0.0 || d.y.round() != 0.0;
         let delta = if mods.shift {
             let locked = lock_direction(d, self.locked, self.directions);
             self.locked = Some(locked);

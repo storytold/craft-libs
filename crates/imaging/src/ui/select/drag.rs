@@ -138,10 +138,15 @@ impl InsideDrag {
 
     /// The pointer moved to `at` (document units, unsnapped) at `zoom` screen points per document unit: an `Update`
     /// when the whole-pixel delta changed. The gesture's offset moves the press bounds, which `snap` (the tool's
-    /// `ToolContext::snap_rect`) moves onto a snap target; the sum is rounded per axis and clamped to 10^7. The
-    /// gesture's own Alt copy is ignored (the copy is latched in `kind`).
+    /// `ToolContext::snap_rect`) moves onto a snap target; the sum is rounded per axis and clamped to 10^7. Nothing
+    /// moves or snaps while the pointer has not left the press ([`MoveGesture::left_press`]): the press is still a
+    /// click. The gesture's own Alt copy is ignored (the copy is latched in `kind`).
     pub fn drag(&mut self, at: Point, mods: Mods, zoom: f64, snap: &mut dyn FnMut(kurbo::Rect) -> Vec2) -> Option<SelectEvent> {
-        let value = self.gesture.follow(at, mods, zoom)?;
+        let value = self.gesture.follow(at, mods, zoom);
+        if !self.gesture.left_press() {
+            return None;
+        }
+        let value = value?;
         let delta = whole_pixels(snapped(self.bounds, &value, snap));
         if delta == self.last {
             return None;
@@ -150,12 +155,22 @@ impl InsideDrag {
         Some(SelectEvent::DragSelection(EditEvent::update(self.id, SelectionDrag { kind: self.kind, delta })))
     }
 
-    /// The release at `at` (document units, unsnapped), snapped as [`drag`](Self::drag) is: the `Commit`. A delta of
-    /// 0 means nothing moved.
-    pub fn end(self, at: Point, mods: Mods, zoom: f64, snap: &mut dyn FnMut(kurbo::Rect) -> Vec2) -> SelectEvent {
-        let value = self.gesture.release(at, mods, zoom);
-        let after = SelectionDrag { kind: self.kind, delta: whole_pixels(snapped(self.bounds, &value, snap)) };
+    /// The release at `at` (document units, unsnapped), snapped as [`drag`](Self::drag) is. A press whose pointer
+    /// never left it ([`MoveGesture::left_press`], the drag's only click rule) is a click: the `Commit` of a zero
+    /// delta. A drag that left and ends at a zero delta (it came back, or snapping pulled it back) changed nothing:
+    /// the `Cancel` ([`CancelReason::Dismissed`]). Any other drag is the `Commit` of its delta.
+    pub fn end(mut self, at: Point, mods: Mods, zoom: f64, snap: &mut dyn FnMut(kurbo::Rect) -> Vec2) -> SelectEvent {
+        // Followed first, so a release that leaves the press with no move before it counts as leaving.
+        self.gesture.follow(at, mods, zoom);
+        let (left, value) = (self.gesture.left_press(), self.gesture.value());
         let before = SelectionDrag { kind: self.kind, delta: [0, 0] };
+        if !left {
+            return SelectEvent::DragSelection(EditEvent::commit(self.id, Mixed::Same(before), before));
+        }
+        let after = SelectionDrag { kind: self.kind, delta: whole_pixels(snapped(self.bounds, &value, snap)) };
+        if after.delta == [0, 0] {
+            return self.cancel(CancelReason::Dismissed);
+        }
         SelectEvent::DragSelection(EditEvent::commit(self.id, Mixed::Same(before), after))
     }
 

@@ -393,6 +393,12 @@ impl CanvasTool for SelectToolPass<'_, MarqueeTool> {
         Some(ToolAccess::new(words.outline.as_str()).value(value).bounds(rect))
     }
 
+    /// A selection drag takes every move from the press, so a drag of a pixel or two moves the selection;
+    /// [`MoveGesture::left_press`](craft_behavior::geometry::MoveGesture::left_press) alone decides its click.
+    fn takes_every_move(&self) -> bool {
+        self.tool.inside.is_some()
+    }
+
     fn command_form(&self) -> ToolPath {
         ToolPath::Command("the Select Area... command")
     }
