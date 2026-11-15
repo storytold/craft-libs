@@ -1,12 +1,16 @@
-//! The painted pointers (8.5): hand, magnifier, brush outline, tool icon, badges and the rotate, distort and skew
-//! pointers. Their art is drawn in points around the hotspot, like an OS cursor bitmap, so its coordinates are data
-//! tables, not layout sizes.
+//! The painted pointers (8.5): hand, magnifier, brush outline, tool icon, badges, the rotate, distort and skew
+//! pointers, the type pointers, the locator, the arrow, the path-text pointer and the crosshair with a tool icon. Their
+//! art is drawn in points around the hotspot, like an OS cursor bitmap, so its coordinates are data tables, not layout
+//! sizes.
 
 use super::art::{Art, Mark};
 use crate::primitives::SvgIcon;
-use craft_behavior::{CursorBadge, PaintedCursor};
+use crate::style::UiTokens;
+use craft_behavior::{CountMark, CursorBadge, PaintedCursor};
+use craft_i18n::Direction;
 use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 use std::cell::RefCell;
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 /// The icon sets draw on a box this many units on a side; a tool pointer's hotspot is in these.
 const ICON_UNITS: f32 = 24.0;
@@ -19,6 +23,41 @@ const BADGE_HALF: f32 = 3.5;
 const SCISSORS_SPREAD: f32 = 0.5;
 const SCISSORS_HANDLE: f32 = 0.35;
 const CLOSE_RADIUS: f32 = 0.8;
+/// Badge proportions as fractions of `BADGE_HALF`: the barbs of the move cross and of the arrow, the sampler target's
+/// ring, how far the continue slash leans, the count numeral's stem and flag, the centre and half side of the glyph
+/// beside it; and the segments of the corner badge's arc.
+const MOVE_BARB: f32 = 0.4;
+const ARROW_BARB: f32 = 0.6;
+const TARGET_RING: f32 = 0.6;
+const CONTINUE_LEAN: f32 = 0.7;
+const COUNT_STEM: f32 = -0.7;
+const COUNT_FLAG: f32 = 0.5;
+const COUNT_GLYPH_AT: f32 = 0.6;
+const COUNT_GLYPH: f32 = 0.7;
+const CORNER_SEGMENTS: usize = 6;
+/// The I-beam: half its height and half the width of its serifs.
+const BEAM_HALF: f32 = 8.0;
+const SERIF_HALF: f32 = 3.0;
+/// The area-type dots: their count on an ellipse of these radii. The path-type dots: their count on the wave
+/// `y = base + amplitude * sin(frequency * x)` from the first x in steps. A dot's side.
+const RING_DOTS: usize = 12;
+const RING_RADII: [f32; 2] = [8.0, 10.5];
+const WAVE_DOTS: usize = 9;
+const WAVE_FROM: f32 = -10.0;
+const WAVE_STEP: f32 = 2.5;
+const WAVE_BASE: f32 = 4.0;
+const WAVE_AMPLITUDE: f32 = 2.0;
+const WAVE_FREQUENCY: f32 = 0.4;
+const DOT_SIDE: f32 = 1.5;
+/// The side of the locator's square.
+const LOCATOR_SIDE: f32 = 9.0;
+/// The arrow's outline with its tip on the pointer, and the triangles that fill it: the outline is not convex.
+const ARROW: [[f32; 2]; 7] = [[0.0, 0.0], [0.0, 16.0], [3.6, 12.6], [6.8, 19.0], [9.6, 17.8], [6.6, 11.6], [11.5, 11.5]];
+const ARROW_TRIANGLES: [[usize; 3]; 5] = [[0, 1, 2], [0, 2, 5], [0, 5, 6], [2, 3, 4], [2, 4, 5]];
+/// The path-text pointer's triangle toward a grabbable start; the end's is its mirror.
+const GRAB_TRIANGLE: [[f32; 2]; 3] = [[3.0, -4.0], [8.0, 0.0], [3.0, 4.0]];
+/// The top-left corner of the tool icon beside a crosshair.
+const CROSSHAIR_ICON: [f32; 2] = [10.0, 10.0];
 /// The rotate pointer: radius of its arc, half its sweep in radians, and its segment count.
 const TURN_RADIUS: f32 = 12.0;
 const HALF_SWEEP: f32 = 0.75;
@@ -73,12 +112,21 @@ fn v(point: [f32; 2]) -> Vec2 {
     Vec2::new(point[0], point[1])
 }
 
-/// What the pointers draw with: the art they add marks to, the mark colour, its halo and the hairline width.
+/// What the pointers draw with: the art they add marks to, the mark colour, its halo, the hairline width, and whether
+/// the reading direction is right to left (marks that point along it mirror).
 pub(super) struct Pen {
     pub art: RefCell<Art>,
     pub fill: Color32,
     pub halo: Color32,
     pub thin: f32,
+    pub rtl: bool,
+}
+
+impl Pen {
+    /// 1 for left to right, -1 for right to left: the x sign of marks that point toward the reading end.
+    fn forward(&self) -> f32 {
+        if self.rtl { -1.0 } else { 1.0 }
+    }
 }
 
 /// A line mark, in points from the pointer.
@@ -86,6 +134,8 @@ enum Line {
     Segment(Vec2, Vec2),
     Circle(Vec2, f32),
     Rect(Rect),
+    /// An open line through the points.
+    Polyline(Vec<Vec2>),
 }
 
 impl Pen {
@@ -101,12 +151,17 @@ impl Pen {
     /// `lines` of `width` in `color`, each over a halo line a hairline wider on each side.
     fn lines(&self, width: f32, color: Color32, lines: &[Line]) {
         for (width, color) in [(width + self.thin * 2.0, self.halo), (width, color)] {
+            // A transparent halo (the interface icon's mark has none) would paint every mark twice, once unseen.
+            if color.a() == 0 {
+                continue;
+            }
             let stroke = Stroke::new(width, color);
             for line in lines {
                 self.push(match line {
                     Line::Segment(a, b) => Mark::Line(*a, *b, stroke),
                     Line::Circle(center, radius) => Mark::Ring(*center, *radius, stroke),
                     Line::Rect(rect) => Mark::Frame(*rect, stroke),
+                    Line::Polyline(points) => Mark::Path(points.clone(), false, stroke),
                 });
             }
         }
@@ -216,57 +271,138 @@ pub(super) fn zoom(pen: &Pen, out: bool) {
 pub(super) fn tool(pen: &Pen, icon: Option<SvgIcon>, hotspot: Vec2, badge: Option<CursorBadge>, side: f32) {
     let rect = Rect::from_min_size((-hotspot * (side / ICON_UNITS)).to_pos2(), Vec2::splat(side));
     if let Some(icon) = icon {
-        for dx in [-1.0, 0.0, 1.0] {
-            for dy in [-1.0, 0.0, 1.0] {
-                if dx != 0.0 || dy != 0.0 {
-                    pen.push(Mark::Icon(rect.translate(Vec2::new(dx, dy) * pen.thin), icon, pen.halo));
-                }
-            }
-        }
-        pen.push(Mark::Icon(rect, icon, pen.fill));
+        icon_on_halo(pen, rect, icon);
     }
     if let Some(badge) = badge {
         self::badge(pen, rect.right_bottom().to_vec2(), badge);
     }
 }
 
-/// The type tool's pointer: an I-beam, over a path when `path`.
+/// `icon` in `rect` in the mark colour, over copies of it a hairline off in each of eight directions in the halo.
+fn icon_on_halo(pen: &Pen, rect: Rect, icon: SvgIcon) {
+    for dx in [-1.0, 0.0, 1.0] {
+        for dy in [-1.0, 0.0, 1.0] {
+            if dx != 0.0 || dy != 0.0 {
+                pen.push(Mark::Icon(rect.translate(Vec2::new(dx, dy) * pen.thin), icon, pen.halo));
+            }
+        }
+    }
+    pen.push(Mark::Icon(rect, icon, pen.fill));
+}
+
+/// The I-beam centred on the pointer: its stem and two serifs.
+fn i_beam() -> [Line; 3] {
+    let (b, s) = (BEAM_HALF, SERIF_HALF);
+    [
+        Line::Segment(v([0.0, -b]), v([0.0, b])),
+        Line::Segment(v([-s, -b]), v([s, -b])),
+        Line::Segment(v([-s, b]), v([s, b])),
+    ]
+}
+
+/// The type tool's pointer: the I-beam inside a dotted ellipse, or crossed by a dotted wave when `path`.
 pub(super) fn type_on(pen: &Pen, path: bool) {
-    let _ = (pen, path);
-    todo!("cw.C34")
+    let dots: Vec<Vec2> = if path {
+        (0..WAVE_DOTS)
+            .map(|i| {
+                let x = WAVE_FROM + i as f32 * WAVE_STEP;
+                Vec2::new(x, WAVE_BASE + WAVE_AMPLITUDE * (WAVE_FREQUENCY * x).sin())
+            })
+            .collect()
+    } else {
+        (0..RING_DOTS)
+            .map(|i| {
+                let a = i as f32 / RING_DOTS as f32 * TAU;
+                Vec2::new(a.cos() * RING_RADII[0], a.sin() * RING_RADII[1])
+            })
+            .collect()
+    };
+    let dot = |centre: Vec2, grow: f32, color: Color32| {
+        pen.push(Mark::Block(Rect::from_center_size(centre.to_pos2(), Vec2::splat(DOT_SIDE)).expand(grow), 0.0, color));
+    };
+    // The dots' halos go under the beam and their fills over it, so a dot on the stem stays whole.
+    for &centre in &dots {
+        dot(centre, pen.thin, pen.halo);
+    }
+    pen.marks(&i_beam());
+    for &centre in &dots {
+        dot(centre, 0.0, pen.fill);
+    }
 }
 
-/// A locator mark.
+/// The locator: a square frame centred on the pointer between halo frames a hairline outside and inside it.
 pub(super) fn locator(pen: &Pen) {
-    let _ = pen;
-    todo!("cw.C34")
+    let rect = Rect::from_center_size(Pos2::ZERO, Vec2::splat(LOCATOR_SIDE));
+    let halo = Stroke::new(pen.thin, pen.halo);
+    pen.push(Mark::Frame(rect.expand(pen.thin), halo));
+    pen.push(Mark::Frame(rect.shrink(pen.thin), halo));
+    pen.push(Mark::Frame(rect, Stroke::new(pen.thin, pen.fill)));
 }
 
-/// An arrow with its tip on the pointer: solid, or hollow when `hollow`.
+/// The arrow with its tip on the pointer: filled with the halo and edged in the mark colour, or the other way round when
+/// `hollow`.
 pub(super) fn arrow(pen: &Pen, hollow: bool) {
-    let _ = (pen, hollow);
-    todo!("cw.C34")
+    let (fill, edge) = if hollow { (pen.fill, pen.halo) } else { (pen.halo, pen.fill) };
+    for triangle in ARROW_TRIANGLES {
+        pen.push(Mark::Polygon(triangle.iter().map(|&i| v(ARROW[i])).collect(), fill, Stroke::NONE));
+    }
+    pen.push(Mark::Path(ARROW.iter().map(|&p| v(p)).collect(), true, Stroke::new(pen.thin, edge)));
 }
 
-/// An I-beam across a path with a filled triangle toward each grabbable end.
+/// The I-beam across a path with a filled triangle toward each grabbable end: right for `start`, left for `end`.
 pub(super) fn path_text(pen: &Pen, start: bool, end: bool) {
-    let _ = (pen, start, end);
-    todo!("cw.C34")
+    pen.marks(&i_beam());
+    for sign in [start.then_some(1.0f32), end.then_some(-1.0)].into_iter().flatten() {
+        pen.polygon(GRAB_TRIANGLE.iter().map(|&[x, y]| Vec2::new(x * sign, y)).collect());
+    }
 }
 
-/// A crosshair with the tool's `icon` of `side` points below and right of it.
-pub(super) fn crosshair_tool(pen: &Pen, icon: SvgIcon, side: f32) {
-    let _ = (pen, icon, side);
-    todo!("cw.C34")
+/// A crosshair with arms of `side` points in a line of `width` in `color`, as the plain crosshair pointer, with the tool's
+/// `icon` of `side` points below and right of it. An icon the catalog lacks leaves only the crosshair.
+// A missing icon still shows the crosshair.
+pub(super) fn crosshair_tool(pen: &Pen, icon: Option<SvgIcon>, side: f32, width: f32, color: Color32) {
+    crosshair(pen, side, width, color);
+    if let Some(icon) = icon {
+        icon_on_halo(pen, Rect::from_min_size(v(CROSSHAIR_ICON).to_pos2(), Vec2::splat(side)), icon);
+    }
+}
+
+/// A plus of arm `half` centred `center` from the pointer.
+fn plus(center: Vec2, half: f32) -> [Line; 2] {
+    [
+        Line::Segment(center - Vec2::new(half, 0.0), center + Vec2::new(half, 0.0)),
+        Line::Segment(center - Vec2::new(0.0, half), center + Vec2::new(0.0, half)),
+    ]
+}
+
+/// A minus of arm `half` centred `center` from the pointer.
+fn minus(center: Vec2, half: f32) -> Line {
+    Line::Segment(center - Vec2::new(half, 0.0), center + Vec2::new(half, 0.0))
+}
+
+/// The mark of `badge` in `ink`, centred in `rect` at a cursor badge's size and with no halo: the drawing the cursor
+/// badges use, for interface icons that show the same mark. The hairline and the reading direction are those of the
+/// component that paints the icon: `tokens` and `direction`.
+pub(crate) fn paint_badge(painter: &egui::Painter, tokens: &UiTokens, direction: Direction, rect: Rect, badge: CursorBadge, ink: Color32) {
+    let pen = Pen {
+        art: RefCell::new(Art::default()),
+        fill: ink,
+        halo: Color32::TRANSPARENT,
+        thin: tokens.stroke.thin,
+        rtl: direction.is_rtl(),
+    };
+    self::badge(&pen, Vec2::ZERO, badge);
+    pen.art.into_inner().paint(painter, rect.center());
 }
 
 /// A badge centred `center` from the pointer.
 pub(super) fn badge(pen: &Pen, center: Vec2, badge: CursorBadge) {
     let h = BADGE_HALF;
     let at = |x: f32, y: f32| center + Vec2::new(x, y);
-    let marks = match badge {
-        CursorBadge::Add => vec![Line::Segment(at(-h, 0.0), at(h, 0.0)), Line::Segment(at(0.0, -h), at(0.0, h))],
-        CursorBadge::Subtract => vec![Line::Segment(at(-h, 0.0), at(h, 0.0))],
+    let axes = [Vec2::X, -Vec2::X, Vec2::Y, -Vec2::Y];
+    let marks: Vec<Line> = match badge {
+        CursorBadge::Add => plus(center, h).into(),
+        CursorBadge::Subtract => vec![minus(center, h)],
         CursorBadge::Intersect => {
             let d = 0.8 * h;
             vec![Line::Segment(at(-d, -d), at(d, d)), Line::Segment(at(-d, d), at(d, -d))]
@@ -294,8 +430,55 @@ pub(super) fn badge(pen: &Pen, center: Vec2, badge: CursorBadge) {
             ]
         }
         CursorBadge::Close => vec![Line::Circle(center, h * CLOSE_RADIUS)],
-        CursorBadge::Move | CursorBadge::Arrow | CursorBadge::Target | CursorBadge::Continue | CursorBadge::Count(_) | CursorBadge::Corner => {
-            todo!("cw.C34")
+        CursorBadge::Move => {
+            let b = h * MOVE_BARB;
+            let mut marks: Vec<Line> = plus(center, h).into();
+            for d in axes {
+                let (tip, back, across) = (center + d * h, d * b, Vec2::new(-d.y, d.x) * b);
+                marks.push(Line::Segment(tip, tip - back + across));
+                marks.push(Line::Segment(tip, tip - back - across));
+            }
+            marks
+        }
+        CursorBadge::Arrow => {
+            let (s, b) = (pen.forward(), h * ARROW_BARB);
+            vec![
+                Line::Segment(at(-s * h, 0.0), at(s * h, 0.0)),
+                Line::Segment(at(s * h, 0.0), at(s * (h - b), -b)),
+                Line::Segment(at(s * h, 0.0), at(s * (h - b), b)),
+            ]
+        }
+        CursorBadge::Target => {
+            let r = h * TARGET_RING;
+            let mut marks = vec![Line::Circle(center, r)];
+            marks.extend(axes.map(|d| Line::Segment(center + d * r, center + d * h)));
+            marks
+        }
+        CursorBadge::Continue => {
+            let x = pen.forward() * h * CONTINUE_LEAN;
+            vec![Line::Segment(at(-x, h), at(x, -h))]
+        }
+        CursorBadge::Count(mark) => {
+            let glyph_at = at(h * COUNT_GLYPH_AT, 0.0);
+            let glyph: Vec<Line> = match mark {
+                CountMark::Add => plus(glyph_at, h * COUNT_GLYPH).into(),
+                CountMark::Delete => vec![minus(glyph_at, h * COUNT_GLYPH)],
+                _ => Vec::new(),
+            };
+            // The numeral alone sits on the centre; with a glyph it moves toward the start to make room.
+            let stem = if glyph.is_empty() { 0.0 } else { h * COUNT_STEM };
+            let flag = h * COUNT_FLAG;
+            let mut marks = vec![Line::Segment(at(stem, -h), at(stem, h)), Line::Segment(at(stem, -h), at(stem - flag, flag - h))];
+            marks.extend(glyph);
+            marks
+        }
+        CursorBadge::Corner => {
+            // Two edges meeting in a quarter circle round the top-left corner.
+            let arc = (0..=CORNER_SEGMENTS).map(|i| {
+                let a = PI + FRAC_PI_2 * i as f32 / CORNER_SEGMENTS as f32;
+                center + Vec2::new(a.cos(), a.sin()) * h
+            });
+            vec![Line::Polyline(std::iter::once(at(-h, h)).chain(arc).chain(std::iter::once(at(h, -h))).collect())]
         }
         _ => Vec::new(),
     };

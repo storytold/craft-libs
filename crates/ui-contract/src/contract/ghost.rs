@@ -7,6 +7,7 @@ mod art;
 mod pointers;
 
 pub(crate) use art::Art;
+pub(crate) use pointers::paint_badge;
 
 use crate::primitives::{Draw, DrawEnv, IconSet, Mirror, PaintRecord, PaintShape, RuleKind, SvgIcon, TextRun, outline};
 use crate::runtime::drag::{self, DragPreview, DropMark};
@@ -70,6 +71,7 @@ fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, 
         fill: crate::style::rgba_color(overlay.stroke),
         halo: crate::style::rgba_color(overlay.halo),
         thin: env.tokens.stroke.thin,
+        rtl: env.direction.is_rtl(),
     };
     let ink = crate::style::ink_color(&env.tokens, Ink::OnDark);
     let edge = env.tokens.stroke.thin;
@@ -103,11 +105,9 @@ fn pointer_art(env: &Env, cursor: &craft_behavior::PaintedCursor, closed: bool, 
         PaintedCursor::Arrow { hollow, .. } => pointers::arrow(&pen, *hollow),
         PaintedCursor::PathText { start, end, .. } => pointers::path_text(&pen, *start, *end),
         PaintedCursor::CrosshairTool { icon, .. } => {
-            let side = env.tokens.size.icon.md;
+            let side = env.tokens.size.icon.sm;
             let icon = SvgIcon::of(&env.tokens, env.direction, side, icon, IconSet::default(), Mirror::Auto);
-            if let Some(icon) = icon {
-                pointers::crosshair_tool(&pen, icon, side);
-            }
+            pointers::crosshair_tool(&pen, icon, side, edge, ink);
         }
         // `Hidden` has no marks.
         _ => {}
@@ -124,7 +124,7 @@ fn paint_drag(ctx: &Context, env: &Env, painter: &egui::Painter, draw: &Draw<'_>
     match &session.preview {
         DragPreview::Badge(label) => {
             let label = env.view().resolve(label);
-            paint_badge(draw, env, at, label.as_str());
+            paint_drag_badge(draw, env, at, label.as_str());
         }
         DragPreview::Frame { size, label } => {
             let frame = Rect::from_center_size(at, *size);
@@ -142,7 +142,7 @@ fn paint_drag(ctx: &Context, env: &Env, painter: &egui::Painter, draw: &Draw<'_>
     }
 }
 
-fn paint_badge(draw: &Draw<'_>, env: &Env, at: Pos2, text: &str) {
+fn paint_drag_badge(draw: &Draw<'_>, env: &Env, at: Pos2, text: &str) {
     let space = &env.tokens.space;
     let run = TextRun::new(text);
     let layout = draw.layout(&run, f32::INFINITY);

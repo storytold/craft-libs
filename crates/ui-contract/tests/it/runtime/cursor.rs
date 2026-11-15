@@ -1,7 +1,7 @@
 //! The cursor service's images (8.5): a painted pointer reaches the window as its cursor image where the window takes
 //! one at its size, and is painted at the pointer otherwise.
 
-use craft_behavior::{Cursor, CursorBadge, CursorIcon, CursorPriority, IconId, PaintedCursor};
+use craft_behavior::{CountMark, Cursor, CursorBadge, CursorIcon, CursorPriority, IconId, PaintedCursor};
 use craft_host::target::{Backend, Os, Runtime, ShellInfo};
 use craft_ui::runtime::cursor;
 use craft_ui::testing::pointer::moved;
@@ -127,12 +127,33 @@ fn a_painted_pointer_is_the_window_cursor_image_where_the_window_takes_one() {
         PaintedCursor::turn(Vec2::new(1.0, 1.0)),
         PaintedCursor::distort(Vec2::new(-1.0, 0.0)),
         PaintedCursor::skew(Vec2::X),
+        PaintedCursor::type_on(false),
+        PaintedCursor::type_on(true),
+        PaintedCursor::Locator,
+        PaintedCursor::arrow(false),
+        PaintedCursor::arrow(true),
+        PaintedCursor::path_text(true, false),
+        PaintedCursor::crosshair_tool(IconId::new("crop")),
     ] {
         let seen = painted(&mut frames, cursor.clone());
         assert!(seen.image.is_some() && seen.shapes == 0, "{cursor:?}");
     }
     let badged = painted(&mut frames, PaintedCursor::badged(CursorIcon::Default, CursorBadge::Add));
     assert!(badged.image.is_none() && badged.shapes > 0 && badged.icon == egui::CursorIcon::Default, "the arrow stays the system's");
+    // The enums are non-exhaustive in another crate, so a badge without art would compile and show nothing.
+    for badge in [
+        CursorBadge::Move,
+        CursorBadge::Arrow,
+        CursorBadge::Target,
+        CursorBadge::Continue,
+        CursorBadge::Count(CountMark::Add),
+        CursorBadge::Count(CountMark::Move),
+        CursorBadge::Count(CountMark::Delete),
+        CursorBadge::Corner,
+    ] {
+        let seen = painted(&mut frames, PaintedCursor::badged(CursorIcon::Default, badge));
+        assert!(seen.shapes > 0, "{badge:?} has marks");
+    }
     let hidden = painted(&mut frames, PaintedCursor::Hidden);
     assert!(hidden.image.is_none() && hidden.shapes == 0 && hidden.icon == egui::CursorIcon::None);
 }

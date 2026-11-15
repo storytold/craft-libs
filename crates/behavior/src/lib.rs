@@ -71,7 +71,7 @@ pub use kurbo;
 pub use codec::{Caret, Codec, NotAValue, NumberCodec, ParseNote, PlainText, decimals_for_step};
 pub use columns::{ColumnKey, ColumnWidth, GridSection, GridView, sub_row_cells};
 pub use command::{CommandFlags, pick_instance, resolve_flags};
-pub use cursor::{Cursor, CursorBadge, CursorIcon, CursorPriority, IconId, PaintedCursor};
+pub use cursor::{CountMark, Cursor, CursorBadge, CursorIcon, CursorPriority, IconId, PaintedCursor};
 pub use digit_keys::{DigitEntry, DigitKeys};
 pub use doc_key::DocKey;
 pub use dock::DockSide;
