@@ -117,7 +117,7 @@ pub enum GraphicItem {
     },
     /// One line of text in `rect`, aligned horizontally by `align`, centred vertically; `angle`
     /// degrees clockwise turns the text about `rect`'s centre as it is drawn (chart axis titles
-    /// use 90° for the vertical axis).
+    /// turn the vertical axis's title -90°, reading upwards, as Word does).
     Text {
         rect: [f32; 4],
         text: String,

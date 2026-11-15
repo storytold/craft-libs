@@ -1,9 +1,12 @@
 use super::canvas::{Rect, clip_text, fill, rect_segs, runs, seg, stroke, text, text_angle, text_at, text_w, widest, wrap};
 use super::format::format_value;
-use super::model::{DataLabel, Grouping, Kind, Series};
+use super::model::{DataLabel, Grouping, Kind, Series, Symbol};
 use super::parse::category_text;
 use super::polar::{draw_data_labels, label_of};
 use super::{AXIS, Chart, El, GAP, GRID, GraphicItem, LINE, LINE_W, MAX_LABEL, MAX_TICKS, PathSeg, Rgb, ShapeKind, TextAlign, fill_colour, measure};
+
+/// Line width of the stroked marker symbols (x, plus, star), points.
+const MARKER_STROKE: f32 = 1.5;
 
 pub(super) fn label(s: &str) -> String {
     s.chars().take(MAX_LABEL).collect()
@@ -243,18 +246,21 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
 }
 
 /// The axis titles, one line: the title of the vertical axis (the value axis for columns, the
-/// category axis for bars) is rotated 90° on the plot's left; the horizontal axis's title sits
+/// category axis for bars) is turned 90° on the plot's left; the horizontal axis's title sits
 /// under the plot.
 fn draw_axis_titles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, area: Rect) {
     let lh = c.text_size * LINE;
     // The axis drawn along the plot's left (the value axis for columns, the category axis for
     // bars) gets its title rotated there; the other axis's title sits under the plot.
     let (left, bottom) = if c.horizontal { (&c.cat, &c.val) } else { (&c.val, &c.cat) };
+    // Word turns the vertical axis's title counter-clockwise (reading upwards) unless the file
+    // turns it the other way; a title with any other rotation would not fit the strip.
+    let up = if left.title_rot.is_some_and(|r| (r.rem_euclid(360.0) - 90.0).abs() < 1.0) { 90.0 } else { -90.0 };
     if !left.deleted
         && let Some(t) = &left.title
     {
         let t = clip_text(t, g.plot.h, c.text_size);
-        text_angle(out, Rect { x: area.x, y: g.plot.y, w: lh, h: g.plot.h }, &t, c.text_size, TextAlign::Center, false, 90.0);
+        text_angle(out, Rect { x: area.x, y: g.plot.y, w: lh, h: g.plot.h }, &t, c.text_size, TextAlign::Center, false, up);
     }
     if !bottom.deleted
         && let Some(t) = &bottom.title
@@ -481,18 +487,48 @@ fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
             stroke(out, curve(pts.iter().copied(), s.smooth), c.series_colour(j), s.line_w.unwrap_or(LINE_W));
         }
         if s.markers == Some(true) {
-            markers(out, pts.iter().flatten().copied(), c.series_colour(j));
+            markers(out, pts.iter().flatten().copied(), c.series_colour(j), s);
         }
     }
 }
 
-/// A series' points as small circles (`colour`), for lines and scatter charts.
-fn markers(out: &mut Vec<GraphicItem>, pts: impl Iterator<Item = (f32, f32)>, colour: Rgb) {
+/// A series' point markers in the series' symbol and size (`colour` fills or strokes them), for
+/// lines and scatter charts.
+fn markers(out: &mut Vec<GraphicItem>, pts: impl Iterator<Item = (f32, f32)>, colour: Rgb, s: &Series) {
     const MARKER: f32 = 6.0;
+    let size = s.marker_size.filter(|v| v.is_finite()).unwrap_or(MARKER).clamp(2.0, 72.0);
+    let h = size / 2.0;
+    let shape = |out: &mut Vec<GraphicItem>, rect: [f32; 4], kind: ShapeKind| {
+        out.push(GraphicItem::Shape { rect, kind, fill: Some(colour), stroke: None, stroke_width: 0.0 });
+    };
+    let mut strokes = Vec::new();
     for (x, y) in pts {
-        let rect = [x - MARKER / 2.0, y - MARKER / 2.0, MARKER, MARKER];
-        out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(colour), stroke: None, stroke_width: 0.0 });
+        match s.symbol {
+            Symbol::Circle => shape(out, [x - h, y - h, size, size], ShapeKind::Ellipse),
+            Symbol::Square => shape(out, [x - h, y - h, size, size], ShapeKind::Rectangle),
+            Symbol::Dot => shape(out, [x - h / 2.0, y - h / 2.0, h, h], ShapeKind::Ellipse),
+            Symbol::Dash => shape(out, [x - h, y - size / 6.0, size, size / 3.0], ShapeKind::Rectangle),
+            Symbol::Diamond => fill(
+                out,
+                vec![PathSeg::Move(x, y - h), PathSeg::Line(x + h, y), PathSeg::Line(x, y + h), PathSeg::Line(x - h, y), PathSeg::Close],
+                colour,
+            ),
+            Symbol::Triangle => {
+                fill(out, vec![PathSeg::Move(x, y - h), PathSeg::Line(x + h, y + h), PathSeg::Line(x - h, y + h), PathSeg::Close], colour)
+            }
+            Symbol::X | Symbol::Plus | Symbol::Star => {
+                if s.symbol != Symbol::Plus {
+                    strokes.extend(seg(x - h, y - h, x + h, y + h));
+                    strokes.extend(seg(x - h, y + h, x + h, y - h));
+                }
+                if s.symbol != Symbol::X {
+                    strokes.extend(seg(x - h, y, x + h, y));
+                    strokes.extend(seg(x, y - h, x, y + h));
+                }
+            }
+        }
     }
+    stroke(out, strokes, colour, MARKER_STROKE);
 }
 
 /// A polyline through `pts`, a smooth curve (Catmull-Rom pieces) when `smooth` and there are at
@@ -582,10 +618,7 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
             stroke(out, curve(pts.iter().copied(), s.smooth), c.series_colour(j), s.line_w.unwrap_or(LINE_W));
         }
         if s.markers != Some(false) {
-            for (x, y) in pts.iter().flatten() {
-                let rect = [x - MARKER / 2.0, y - MARKER / 2.0, MARKER, MARKER];
-                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.series_colour(j)), stroke: None, stroke_width: 0.0 });
-            }
+            markers(out, pts.iter().flatten().copied(), c.series_colour(j), s);
         }
     }
 }

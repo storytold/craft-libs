@@ -134,13 +134,13 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
 }
 
 /// The data label of point `i` of series `s`, when it shows one: the value as the file has it,
-/// in the series' number format.
+/// in the labels' own number format, else the series' one.
 pub(super) fn label_of(s: &Series, i: usize) -> Option<String> {
     if s.labels != Some(true) {
         return None;
     }
     let v = s.raw.get(i).copied().flatten()?;
-    let fmt = s.fmt.as_deref().filter(|f| !f.eq_ignore_ascii_case("General"));
+    let fmt = s.label_fmt.as_deref().or(s.fmt.as_deref()).filter(|f| !f.eq_ignore_ascii_case("General"));
     Some(match fmt {
         Some(f) => format_value(v, f, 1.0),
         None => general_value(v),

@@ -64,9 +64,44 @@ pub(crate) struct Axis {
     pub(crate) fmt: Option<String>,
     /// The axis title, when the file gives it one.
     pub(crate) title: Option<String>,
+    /// The title's `a:bodyPr/@rot` in degrees clockwise (`-5400000` is 90° counter-clockwise),
+    /// when the file gives one.
+    pub(crate) title_rot: Option<f32>,
     /// Tick labels, as `c:tickLblPos` says (`none` hides them; a file that says nothing shows
     /// them, as Word does).
     pub(crate) labels: bool,
+}
+
+/// The shape of a series' point markers (`ST_MarkerStyle`, ECMA-376 §21.2.3.28).
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(super) enum Symbol {
+    #[default]
+    Circle,
+    Square,
+    Diamond,
+    Triangle,
+    X,
+    Plus,
+    Star,
+    Dash,
+    Dot,
+}
+
+impl Symbol {
+    /// The symbol a `c:symbol` value names; anything unknown (`auto`, `picture`) is a circle.
+    pub(super) fn parse(name: &str) -> Symbol {
+        match name {
+            "square" => Symbol::Square,
+            "diamond" => Symbol::Diamond,
+            "triangle" => Symbol::Triangle,
+            "x" => Symbol::X,
+            "plus" => Symbol::Plus,
+            "star" => Symbol::Star,
+            "dash" => Symbol::Dash,
+            "dot" => Symbol::Dot,
+            _ => Symbol::Circle,
+        }
+    }
 }
 
 pub(super) struct Series {
@@ -84,6 +119,10 @@ pub(super) struct Series {
     pub(super) no_fill: bool,
     /// Markers on the series' points, when the file says.
     pub(super) markers: Option<bool>,
+    /// The marker shape (`c:marker/c:symbol`; a circle when missing or unknown) and its size in
+    /// points (`c:marker/c:size`), when the file gives one.
+    pub(super) symbol: Symbol,
+    pub(super) marker_size: Option<f32>,
     /// Draw the series' line as a smooth curve (`c:smooth`).
     pub(super) smooth: bool,
     pub(super) values: Vec<Option<f64>>,
@@ -96,6 +135,8 @@ pub(super) struct Series {
     pub(super) x_fmt: Option<String>,
     /// Data labels on or off for this series (`c:dLbls` of its own), when it says.
     pub(super) labels: Option<bool>,
+    /// The labels' own number format (`c:dLbls/c:numFmt` not linked to the source), if any.
+    pub(super) label_fmt: Option<String>,
     /// The values as the file has them, for data labels (`values` become shares in a 100%
     /// stacked chart); empty when the series shows no labels.
     pub(super) raw: Vec<Option<f64>>,
