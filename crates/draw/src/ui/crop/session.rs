@@ -24,6 +24,28 @@ impl CropDocKey {
     }
 }
 
+/// The document a crop tool's pending work belongs to: the Crop tool's frame, the Perspective Crop tool's quad.
+/// Switching documents drops that work (as Photoshop discards a pending crop), and this one rule says when.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct DocOwner(Option<CropDocKey>);
+
+impl DocOwner {
+    /// Work held for `held`, `None` for no document.
+    pub(super) const fn of(held: Option<CropDocKey>) -> Self {
+        Self(held)
+    }
+
+    /// The document the work belongs to.
+    pub(super) const fn key(self) -> Option<CropDocKey> {
+        self.0
+    }
+
+    /// The document the work belongs to when that is another one than `key`: the work is stale and goes.
+    pub(super) fn stale_for(self, key: CropDocKey) -> Option<CropDocKey> {
+        self.0.filter(|held| *held != key)
+    }
+}
+
 /// What the Crop tool needs to know of the active document each pass.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -303,14 +325,10 @@ impl CropSession {
     /// drawn frame was dropped, so the tool reports [`CropEvent::Discard`](super::CropEvent): the document whose
     /// drawn frame it dropped.
     pub fn for_document(&mut self, key: CropDocKey) -> Option<CropDocKey> {
-        let stale = self.frame_for.is_some_and(|(held, _)| held != key);
-        if !stale {
-            return None;
-        }
-        let dropped = self.frame_for.map(|(held, _)| held);
+        let dropped = DocOwner::of(self.frame_document()).stale_for(key)?;
         let drawn = self.pending();
         self.clear();
-        dropped.filter(|_| drawn)
+        drawn.then_some(dropped)
     }
 
     /// The document the frame was made for.

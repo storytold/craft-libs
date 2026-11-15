@@ -16,6 +16,7 @@ use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Env;
 use egui::Pos2;
 
+use super::session::{CropDocKey, DocOwner};
 use super::perspective_crop::{PerspectiveCropOutput, PerspectiveCropQuad, PerspectiveQuad, grid_color, grid_lines, grid_step, is_valid, ordered};
 use super::words::CropWords;
 
@@ -29,8 +30,13 @@ const CORNER_KEYS: [&str; 4] = ["topLeft", "topRight", "bottomRight", "bottomLef
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum PerspectiveCropEvent {
+    /// A session began: the press that starts a quad, before its box drag or its first clicked corner. The app runs
+    /// what a new quad does first here (Photoshop drops the selection).
+    Started,
     /// The tool drew the quad: a box drag (`Begin`, `Commit`; `Cancel` on Esc) or the fourth click (`Set`).
     Edit(EditEvent<PerspectiveQuad>),
+    /// Another document became active: the pending quad, clicks or press of this one were dropped.
+    Discard(CropDocKey),
 }
 
 /// A press the tool owns, on the background.
@@ -57,6 +63,9 @@ struct Press {
 /// - Esc drops the pending clicks. Once a quad exists, the quad's control takes Enter, Esc and the arrows
 ///   ([`PerspectiveCropOutput::apply`](super::PerspectiveCropOutput::apply) and
 ///   [`discard`](super::PerspectiveCropOutput::discard)).
+/// - The first press of a session reports [`PerspectiveCropEvent::Started`]. What is pending belongs to the document
+///   it was made on ([`PerspectiveInput::document`]): another document becoming active drops it and reports
+///   [`PerspectiveCropEvent::Discard`], the same rule as the Crop tool's frame.
 /// - Its keyboard path is the Perspective Crop To... command ([`perspective_to_form`]).
 #[derive(Clone, Debug, Default)]
 pub struct PerspectiveCropTool {
@@ -64,6 +73,8 @@ pub struct PerspectiveCropTool {
     clicks: Vec<Point>,
     press: Option<Press>,
     events: Vec<PerspectiveCropEvent>,
+    /// The document the pending quad, clicks or press belong to.
+    owner: DocOwner,
 }
 
 impl PerspectiveCropTool {
@@ -88,10 +99,18 @@ impl PerspectiveCropTool {
         self.clicks.clear();
     }
 
-    /// Drops the quad and the pending clicks: the active document changed, or the crop was applied.
+    /// Drops the quad and the pending clicks: the crop was applied or cancelled. A change of the active document
+    /// drops them by itself ([`PerspectiveInput::document`]).
     pub fn clear(&mut self) {
         self.set(None);
         self.press = None;
+        self.owner = DocOwner::default();
+    }
+
+    /// Something is pending: a quad, clicked corners or a press that may start one. The options bar's Commit and
+    /// Cancel end it.
+    pub fn pending(&self) -> bool {
+        self.quad.is_some() || !self.clicks.is_empty() || self.press.is_some()
     }
 
     /// The corners clicked so far, before the fourth makes the quad.
@@ -120,6 +139,9 @@ fn convex(q: &[Point; 4]) -> bool {
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct PerspectiveInput<'a> {
+    /// The active document: pending work of another document is dropped ([`PerspectiveCropEvent::Discard`]). `None`
+    /// keys nothing.
+    pub document: Option<CropDocKey>,
     /// Whether the quad's grid shows.
     pub show_grid: bool,
     /// The shield over the area outside the quad; `None` shows none.
@@ -152,6 +174,20 @@ impl PerspectiveCropPass<'_> {
 }
 
 impl CanvasTool for PerspectiveCropPass<'_> {
+    /// Drops the pending work of another document ([`PerspectiveCropEvent::Discard`]), and keys what is pending to
+    /// the active one.
+    fn each_pass(&mut self, _: &mut ToolContext<'_>) {
+        let Some(document) = self.input.document else { return };
+        if let Some(dropped) = self.tool.owner.stale_for(document) {
+            let had = self.tool.pending();
+            self.tool.clear();
+            if had {
+                self.tool.events.push(PerspectiveCropEvent::Discard(dropped));
+            }
+        }
+        self.tool.owner = DocOwner::of(self.tool.pending().then_some(document));
+    }
+
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
         let Some(space) = cx.space() else { return ToolAction::Ignored };
         let anchor = space.view.to_doc(pointer.pos);
@@ -159,7 +195,11 @@ impl CanvasTool for PerspectiveCropPass<'_> {
             return ToolAction::Ignored;
         }
         let Some(id) = cx.gesture_id() else { return ToolAction::Ignored };
+        if !self.tool.pending() {
+            self.tool.events.push(PerspectiveCropEvent::Started);
+        }
         self.tool.press = Some(Press { id, anchor, origin: pointer.pos, before: self.tool.quad, began: false });
+        self.tool.owner = DocOwner::of(self.input.document.or(self.tool.owner.key()));
         ToolAction::Claimed
     }
 
