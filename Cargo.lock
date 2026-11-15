@@ -1352,6 +1352,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ber"
+version = "0.1.0"
+
+[[package]]
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
