@@ -12,6 +12,7 @@ use std::io::Write as _;
 
 pub mod model;
 pub mod mtext;
+pub mod mtext_tokens;
 pub mod paths;
 mod version;
 pub use version::Version;
