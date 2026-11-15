@@ -95,20 +95,22 @@ pub(crate) fn decode(sample: &[u8], config: &Cr3Compression) -> Result<Vec<u16>>
     let count = image_size(config)?;
     let tiles = layout(sample, config)?;
     validate_planes(&tiles, config)?;
-    let qp = tiles.iter().map(|tile| tile_qp(sample, tile)).collect::<Result<Vec<_>>>()?;
+    // A tile's QP map error is reported by its first plane, so errors keep tile, then plane order.
+    let qp: Vec<Result<Option<QpMap>>> = tiles.iter().map(|tile| tile_qp(sample, tile)).collect();
     let midpoint = 1i32 << (config.bit_depth - 1);
     let maximum = (1i32 << config.bit_depth) - 1;
     // Every plane of every tile is its own entropy stream: decode them all in parallel, each straight
     // to sensor samples, so a task holds only its own plane as i32. The first error in tile and plane
     // order is reported, as when the tiles were decoded one after another.
-    let jobs: Vec<(&Tile, Option<&QpMap>, usize, &Plane)> = tiles
+    let jobs: Vec<(&Tile, &Result<Option<QpMap>>, usize, &Plane)> = tiles
         .iter()
         .zip(&qp)
-        .flat_map(|(tile, qp)| tile.planes.iter().enumerate().map(move |(p, plane)| (tile, qp.as_ref(), p, plane)))
+        .flat_map(|(tile, qp)| tile.planes.iter().enumerate().map(move |(p, plane)| (tile, qp, p, plane)))
         .collect();
     let planes: Vec<Result<Vec<u16>>> = jobs
         .par_iter()
         .map(|&(tile, qp, p, plane)| {
+            let qp = qp.as_ref().map_err(Clone::clone)?.as_ref();
             let decoded = decode_plane(sample, config, width, tile, plane, qp)
                 .map_err(|error| RawError::Corrupt(format!("Canon CRX tile ({}, {}), plane {p}: {error}", tile.x, tile.y)))?;
             sensor_plane(&decoded, midpoint, maximum, config.levels != 0)
@@ -1319,6 +1321,7 @@ mod tests {
     #[test]
     fn optional_cc0_samples_match_external_oracle() {
         let Some(directory) = std::env::var_os("LIGHTCRAFT_CR3_CORPUS") else { return };
+        let mut checked = 0;
         for (name, expected) in [
             ("cr3-canon-r100-raw.cr3", 0xcbe5299ab9c52630u64),
             ("cr3-canon-m50-raw.cr3", 0x62261f0ba81cfcd2u64),
@@ -1360,7 +1363,9 @@ mod tests {
                 .flat_map(|value| value.to_le_bytes())
                 .fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3));
             assert_eq!(hash, expected, "{name}");
+            checked += 1;
         }
+        assert!(checked > 0, "LIGHTCRAFT_CR3_CORPUS holds none of the pinned files");
     }
 
     /// The bit reader before the 64-bit cache: a checked 5-byte window per read, bit by bit near the end.
@@ -1475,6 +1480,7 @@ mod tests {
                         _ => (cached.qp_rice(n % 22), reference.qp_rice(n % 22)),
                     };
                     assert_eq!(a.as_ref().ok(), b.as_ref().ok(), "round {round}, end {end}, op {op} {n}, stream {stream:02x?}");
+                    assert_eq!(a.as_ref().err().map(ToString::to_string), b.as_ref().err().map(ToString::to_string), "round {round}, end {end}, op {op} {n}");
                     if a.is_err() {
                         complete = false;
                         break;
@@ -1536,6 +1542,7 @@ mod tests {
                         });
                         let case = format!("map {map_width}x{map_height}, band {band}, {width}x{height}, {quant:?}");
                         assert_eq!(cells_result.is_ok(), reference_result.is_ok(), "{case}");
+                        assert_eq!(cells_result.as_ref().err().map(ToString::to_string), reference_result.as_ref().err().map(ToString::to_string), "{case}");
                         if cells_result.is_ok() {
                             assert_eq!(cells, reference, "{case}");
                         }

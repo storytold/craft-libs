@@ -484,6 +484,7 @@ mod tests {
                     let reference_result = reference_line(&low, &high, &mut reference, before, after);
                     let case = format!("length {length}, before {before}, after {after}, extreme {extreme}");
                     assert_eq!(fast_result.is_ok(), reference_result.is_ok(), "{case}");
+                    assert_eq!(fast_result.as_ref().err().map(ToString::to_string), reference_result.as_ref().err().map(ToString::to_string), "{case}");
                     if fast_result.is_ok() {
                         assert_eq!(fast, reference, "{case}");
                     }
@@ -510,6 +511,7 @@ mod tests {
                         let reference = reference_level(&bands, width, height, edges);
                         let case = format!("{width}x{height}, {edges:?}, extreme {extreme}");
                         assert_eq!(fast.as_ref().ok().map(|band| &band.data), reference.as_ref().ok(), "{case}");
+                        assert_eq!(fast.as_ref().err().map(ToString::to_string), reference.as_ref().err().map(ToString::to_string), "{case}");
                     }
                 }
             }
