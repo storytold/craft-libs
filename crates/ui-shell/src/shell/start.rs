@@ -166,7 +166,7 @@ pub struct StartScreen<'a> {
     /// With no recent files, the Recent body is a drop card with this hint, and a double click on the page's own room
     /// reports `StartAction::Open`.
     #[prop(into)]
-    #[allow(dead_code)] // P3(canvas-widgets-w9): cw.C45
+    #[allow(dead_code)] // P3(top-w5): cw.C45
     drop_hint: Option<Label>,
 }
 

@@ -37,15 +37,13 @@ pub struct CanvasSpace {
     pasteboard: PasteboardColor,
     /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
     /// measuring pass.
-    #[allow(dead_code)] // P3(canvas-widgets-w9): cw.C70 `picture`
     picture: Option<PictureSlot>,
 }
 
 /// The shape the canvas reserved in its paint hook for the picture: its layer and index, which
-/// [`CanvasSpace::paint_picture`] grows into a `Shape::Vec` in show order.
-// P3(canvas-widgets-w9): cw.C70 decision (canvas-widgets-w1), `PictureSlot`
+/// [`CanvasSpace::paint_picture`] grows into a `Shape::Vec` in show order. The space is `Copy` and holds no painter,
+/// so the slot is named by these two.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[allow(dead_code)] // P3(canvas-widgets-w9): cw.C70 `PictureSlot`
 pub(crate) struct PictureSlot {
     pub(crate) layer: egui::LayerId,
     pub(crate) idx: egui::layers::ShapeIdx,
@@ -67,7 +65,7 @@ impl CanvasSpace {
             background: BackgroundPress::default(),
             canvas: None,
             pasteboard: PasteboardColor::Default,
-            picture: None, // P3(canvas-widgets-w9): cw.C70
+            picture: None,
         }
     }
 
@@ -141,19 +139,38 @@ impl CanvasSpace {
     }
 
     /// Appends `shapes` to the canvas's picture slot, so they paint under every canvas control of the body, in show
-    /// order with the displays that use [`RasterDisplay::picture`](super::RasterDisplay::picture).
-    // P3(canvas-widgets-w9): cw.C70 `ctx`
+    /// order with the displays that use [`RasterDisplay::picture`](super::RasterDisplay::picture). It takes the
+    /// context because the space holds none. Outside a canvas's paint (a measuring pass) there is no slot, and it
+    /// paints nothing.
     pub fn paint_picture(&self, ctx: &egui::Context, shapes: Vec<egui::Shape>) {
-        let _ = (ctx, shapes);
-        todo!("cw.C70")
+        let Some(slot) = self.picture else { return };
+        if shapes.is_empty() {
+            return;
+        }
+        ctx.graphics_mut(|layers| {
+            layers.entry(slot.layer).mutate_shape(slot.idx, |clipped| {
+                if let egui::Shape::Vec(list) = &mut clipped.shape {
+                    list.extend(shapes);
+                    return;
+                }
+                let reserved = std::mem::replace(&mut clipped.shape, egui::Shape::Noop);
+                let list = if matches!(reserved, egui::Shape::Noop) { shapes } else { std::iter::once(reserved).chain(shapes).collect() };
+                clipped.shape = egui::Shape::Vec(list);
+            });
+        });
     }
 
     /// This space with the canvas's picture slot of this pass.
     #[must_use]
-    #[allow(dead_code)] // P3(canvas-widgets-w9): cw.C70 `with_picture`
-    pub(crate) fn with_picture(self, slot: PictureSlot) -> Self {
-        let _ = slot;
-        todo!("cw.C70")
+    pub(crate) fn with_picture(mut self, slot: PictureSlot) -> Self {
+        self.picture = Some(slot);
+        self
+    }
+
+    /// The slot the canvas reserved this pass, `None` before its paint step ran or outside a canvas: a display that
+    /// paints under the controls paints in place without one.
+    pub(crate) fn picture_slot(&self) -> Option<PictureSlot> {
+        self.picture
     }
 
     /// This space published by the canvas `id`.

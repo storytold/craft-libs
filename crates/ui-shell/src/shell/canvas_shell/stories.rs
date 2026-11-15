@@ -20,3 +20,17 @@ fn canvas_panel(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         })
         .into()
 }
+
+/// The empty workspace: rail and tabs with no document, so the canvas surround fills the document area.
+#[story(CanvasPanel<'static>, covers = [Default], drive = Drive::Never)]
+fn empty_canvas_panel(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    CanvasPanel::new()
+        .rail("Panels", |ui, _| {
+            Text::new("Rail").show(ui);
+        })
+        .tabs(|ui, _| {
+            Text::new("Tabs").show(ui);
+        })
+        .show(ui, |_, _| {})
+        .into()
+}

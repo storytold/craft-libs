@@ -1,28 +1,34 @@
 //! `Pasteboard`: the area around a document's pages or artboards, and the frames of the pages on it, a canvas
-//! control (20.6). The pasteboard colour and the page border come from the application's preferences; artboards
-//! show their names above them, and a click on a name selects the artboard.
+//! control (20.6). The pasteboard colour (set on the canvas) and the page border come from the application's
+//! preferences; the default colour is the canvas surround. Artboards show their names above them, and a click on a
+//! name selects the artboard.
 
 #[cfg(feature = "testing")]
 mod stories;
 
 use super::space::canvas_space;
 use crate::contract::{Access, Common, Component, Cx, MeasureCx, Name, NoValue, Outcome, PaintUi, PartsCx, Props as _, Role};
-use crate::primitives::{PaintShape, Rule, StrokeWidth, TextRun};
+use crate::primitives::{CheckerArea, PaintShape, Rule, StrokeWidth, TextRun};
 use crate::runtime::env::Label;
-use crate::style::{ComponentStyle, DataColor, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, TypeRole};
+use crate::style::{
+    ComponentStyle, DataColor, RuleLook, RuleWidth, StyleColor, StyleCx, SurfaceEdge, SurfaceKind, SurfaceStyle, SurroundLook, TypeRole, paint_surround,
+};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
-use craft_behavior::{CanvasView, HitLevel, HitPriority, Metrics, PartKey, Sense};
+use craft_behavior::{CanvasView, HitLevel, HitPriority, HitShape, Metrics, PartKey, Sense};
 use craft_theme::Rgba;
 use egui::{Color32, CornerRadius, Pos2, Rect, Response, Vec2};
 
 /// A page name: `NAME.at(i)` for page `i`, in the order of the frames given.
 const NAME: PartKey = PartKey::new("name");
+/// A visible piece of the pasteboard: `QUAD.at(i)` for the `i`th of [`Pasteboard::quads`] that shows. Inert: it takes
+/// no press, and marks where a press keeps a typed draft unapplied.
+const QUAD: PartKey = PartKey::new("quad");
 
 /// The pasteboard's colour.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub enum PasteboardColor {
-    /// The theme's canvas surface.
+    /// The canvas surround: the theme's canvas surface and its pattern.
     #[default]
     Default,
     /// Black.
@@ -114,8 +120,8 @@ impl PageFrame {
 pub struct PasteboardStyle {
     #[style(metrics)]
     metrics: Metrics,
-    /// The pasteboard unless the preference sets a colour.
-    fill: StyleColor,
+    /// The pasteboard unless the canvas sets a colour, before the pattern preference is applied.
+    surround: SurroundLook,
     /// A page's drop shadow: the floating surface's shadow alone, blurred under a page of an unturned view.
     shadow: SurfaceStyle,
     /// The shadow's colour and offset, for the plain offset copy under a page of a turned view.
@@ -164,9 +170,6 @@ pub struct Pasteboard<'a> {
     #[common]
     common: Common,
     pages: &'a [PageFrame],
-    /// The pasteboard's colour; the theme's canvas surface by default.
-    #[prop]
-    color: PasteboardColor,
     /// The border round each page; a drop shadow by default.
     #[prop]
     border: PageBorder,
@@ -185,7 +188,6 @@ impl<'a> Pasteboard<'a> {
         Pasteboard {
             common: Common::new(),
             pages,
-            color: PasteboardColor::Default,
             border: PageBorder::DropShadow,
             uncovered: &[],
             name_sizes: Vec::new(),
@@ -195,15 +197,15 @@ impl<'a> Pasteboard<'a> {
         .label(label)
     }
 
-    /// The pasteboard as screen quads: the canvas minus the pages, each piece as its four corners (a turned view needs
-    /// quads, not rects). For an app that draws the pasteboard itself.
+    /// The pasteboard as screen quads: the canvas minus the pages and the `uncovered` rects (document units), each
+    /// piece as its four corners (a turned view needs quads, not rects). For an app that draws the pasteboard itself.
     pub fn quads(view: &CanvasView, pages: &[PageFrame], uncovered: &[DocRect]) -> Vec<[Pos2; 4]> {
-        let _ = uncovered; // P3(canvas-widgets-w9): cw.C48
         let canvas = view.visible();
         if !(canvas.x1 > canvas.x0 && canvas.y1 > canvas.y0 && canvas.area().is_finite()) {
             return Vec::new();
         }
-        let boards: Vec<DocRect> = pages.iter().filter_map(|page| clip(page.rect.abs(), canvas)).collect();
+        let boards: Vec<DocRect> =
+            pages.iter().map(|page| page.rect).chain(uncovered.iter().copied()).filter_map(|rect| clip(rect.abs(), canvas)).collect();
         let mut xs = vec![canvas.x0, canvas.x1];
         for board in &boards {
             xs.extend([board.x0, board.x1]);
@@ -275,7 +277,7 @@ impl Component for Pasteboard<'_> {
             cast.map_or((Color32::TRANSPARENT, Vec2::ZERO), |cast| (cast.color, Vec2::new(f32::from(cast.offset[0]), f32::from(cast.offset[1]))));
         PasteboardStyle {
             metrics: Metrics::new(),
-            fill: cx.color(color.surface.canvas),
+            surround: SurroundLook::of(tokens),
             shadow: SurfaceStyle { fill: Color32::TRANSPARENT, radius: CornerRadius::ZERO, edge: SurfaceEdge::None, shadow: cast },
             turned_shadow: cx.color(Rgba(ink.to_srgba_unmultiplied())),
             shadow_offset: offset,
@@ -293,7 +295,9 @@ impl Component for Pasteboard<'_> {
     }
 
     /// The page names: a click away from the tool. They have no keyboard path of their own; the app's artboard list
-    /// selects the same page.
+    /// selects the same page. Then one inert part per visible pasteboard piece, so a press on the pasteboard keeps a
+    /// typed draft (a zoom being typed) unapplied, and a press on a page, which the pieces leave out, applies it. The
+    /// press itself still reaches the canvas's background part.
     fn parts(&mut self, _: Rect, cx: &mut PartsCx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
         self.name_sizes = self
@@ -309,6 +313,13 @@ impl Component for Pasteboard<'_> {
                 .sense(Sense::CLICK)
                 .priority(HitPriority::new(HitLevel::Body, 0))
                 .pointer_only("the application's artboard list selects the same page");
+        }
+        let visible = Self::quads(&space.view, self.pages, self.uncovered).into_iter().filter(|quad| bounds(quad).intersects(space.view.rect));
+        for (at, quad) in visible.enumerate() {
+            cx.part(QUAD.at(at as u64), HitShape::Polygon(quad.to_vec()))
+                .sense(Sense::empty())
+                .holds_drafts()
+                .pointer_only("an inert area that takes no input; it only marks where a press keeps a typed draft");
         }
     }
 
@@ -337,14 +348,17 @@ impl Component for Pasteboard<'_> {
         let Some(space) = canvas_space(&cx.env) else { return };
         let (view, style) = (space.view, cx.style);
         let draw = ui.draw();
+        let edges = ui.content_painter(cx);
         let polygon = |quad: &[Pos2; 4]| PaintShape::Polygon(quad.to_vec());
+        // A colour the canvas sets is a plain data fill, with no pattern, as in production.
+        let fill = space.pasteboard().fill();
+        let look = style.surround.shown(cx.env.canvas_pattern());
         for quad in Self::quads(&view, self.pages, self.uncovered).iter().filter(|quad| bounds(quad).intersects(view.rect)) {
-            match self.color.fill() {
+            match fill {
                 Some(color) => draw.data_fill(&polygon(quad), color),
-                None => draw.fill(&polygon(quad), style.fill),
+                None => paint_surround(&edges.painter, CheckerArea::Quad(*quad), &look),
             }
         }
-        let edges = ui.content_painter(cx);
         let aligned = view.axis_aligned();
         let edge = |quad: &[Pos2; 4], color: StyleColor| {
             if aligned {

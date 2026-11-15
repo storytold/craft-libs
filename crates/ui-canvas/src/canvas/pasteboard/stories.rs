@@ -1,10 +1,11 @@
 //! Stories of the pasteboard.
 
 use super::{NAME, PageBorder, PageFrame, Pasteboard, PasteboardColor};
-use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_view, story_view};
+use crate::canvas::Canvas;
+use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_view, on_canvas_with, story_view};
 use crate::contract::Show as _;
 use crate::style::DataColor;
-use crate::testing::{Drive, Fixture, StoryData, StoryOutput, story};
+use crate::testing::{Drive, Fixture, StoryData, StoryOutput, stage, story};
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use egui::{Color32, Rect, Ui};
@@ -56,8 +57,20 @@ fn page_with_a_line(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let view = view_values(data, 0.0);
     let border = border_of(data, PageBorder::Line);
     let pages: &[PageFrame] = data.value("pages", vec![PageFrame::new(DocRect::new(60.0, 40.0, 300.0, 220.0))]);
+    let room = stage(ui);
+    let canvas = Canvas::new("Document").view(view(room, ui.pixels_per_point())).pasteboard(PasteboardColor::DarkGray);
+    on_canvas_with(ui, room, canvas, Some(&StoryDocument::STANDARD), |ui, at| Pasteboard::new("Pasteboard", pages).border(border).show_at(ui, at))
+}
+
+/// An artboard with loose layers beside it: the pasteboard leaves their rects open, so they show on the canvas.
+#[story(Pasteboard<'static>, covers = [Default], drive = Drive::Never)]
+fn loose_layers(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let view = view_values(data, 0.0);
+    let border = border_of(data, PageBorder::DropShadow);
+    let pages: &[PageFrame] = data.value("pages", vec![PageFrame::new(DocRect::new(40.0, 40.0, 240.0, 200.0)).name("Artboard 1").active(true)]);
+    let loose = [DocRect::new(280.0, 60.0, 400.0, 140.0), DocRect::new(200.0, 220.0, 320.0, 260.0)];
     on_canvas_view(ui, view, Some(&StoryDocument::STANDARD), |ui, at, _| {
-        Pasteboard::new("Pasteboard", pages).color(PasteboardColor::DarkGray).border(border).show_at(ui, at)
+        Pasteboard::new("Pasteboard", pages).uncovered(&loose).border(border).show_at(ui, at)
     })
 }
 

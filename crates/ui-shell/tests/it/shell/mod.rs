@@ -1,5 +1,6 @@
 //! The window skeleton's interface: what `ShellCx` answers by mode and reveal, and how a body reads it.
 
+mod canvas_panel;
 mod caption_button;
 mod document_window;
 mod embed;

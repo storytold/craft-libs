@@ -24,8 +24,10 @@ mod stories;
 use super::app_shell::{RegionBody, RegionFn, ShellRegion};
 use super::words::ShellWords;
 use crate::contract::{BodyCx, NoValue, Outcome, PaneEdge, Props as _, ShellPane, ShowContainer as _};
+use crate::primitives::CheckerArea;
 use crate::runtime::env::{BodyMode, Env, Label, ShellEntry};
-use egui::{Rect, Response, Ui};
+use crate::style::{SurroundLook, paint_surround};
+use egui::{CornerRadius, Rect, Response, Ui};
 
 /// The slot keys of the preset.
 pub mod slots {
@@ -66,17 +68,19 @@ impl Outcome for CanvasPanelOutput {
 }
 
 /// The canvas panel of a dock: the panel rail at the end edge, spanning the tabs and the document; then, in what is
-/// left, the document tab strip flush against the document; then the document area, which the shell's backdrop shows
-/// through. Fill the rail with `rails::PanelRail` and the tab strip with `tabs::DocumentTabs`.
+/// left, the document tab strip flush against the document; then the document area, over the canvas surround. Fill the
+/// rail with `rails::PanelRail` and the tab strip with `tabs::DocumentTabs`.
 ///
 /// - **Tabs.** They show in normal mode when the host says so (`ShellCx::tabs_visible`), or while documents are
 ///   [`opening`](CanvasPanel::opening) (a file that is still loading has a tab). Body-only mode shows neither tabs nor
 ///   rail, but the rail shows during a reveal that shows the dock.
 /// - **Rail.** It is skipped when the dock is hidden (`ShellCx::dock_visible`, or the panels are hidden with
 ///   Shift+Tab).
+/// - **Surround.** The document area shows the canvas surround, and a double click on its empty room is
+///   [`empty_double`](CanvasPanelOutput::empty_double).
 ///
-/// With no documents the host shows its start screen instead and does not use the panel. Outside a shell the panel
-/// shows everything.
+/// With no documents the host shows its start screen instead, or the panel with an empty document area. Outside a
+/// shell the panel shows everything.
 #[must_use = "show the panel with `show`"]
 #[derive(crate::contract::Pattern, crate::contract::Props)]
 pub struct CanvasPanel<'a> {
@@ -125,8 +129,15 @@ impl<'a> CanvasPanel<'a> {
                 .show(ui, |ui, cx| add(ui, cx));
             tabs_rect = Some(out.response.rect);
         }
-        let out = ShellRegion::pane(ShellPane::new("document")).id_salt("document").label(words.document.clone()).show(ui, |ui, cx| document(ui, cx));
-        CanvasPanelOutput { document: out.response.rect, response: out.output.response, rail: rail_rect, tabs: tabs_rect, empty_double: false } // P3(canvas-widgets-w9): cw.C46
+        let mut empty_double = false;
+        let out = ShellRegion::pane(ShellPane::new("document")).id_salt("document").label(words.document.clone()).senses_surface().show(ui, |ui, cx| {
+            // Painted first, so a document the closure shows covers it.
+            let look = SurroundLook::of(&env.tokens).shown(cx.env.canvas_pattern());
+            paint_surround(ui.painter(), CheckerArea::Rect(cx.rect, CornerRadius::ZERO), &look);
+            empty_double |= cx.surface_double_pressed();
+            document(ui, cx);
+        });
+        CanvasPanelOutput { document: out.response.rect, response: out.output.response, rail: rail_rect, tabs: tabs_rect, empty_double }
     }
 }
 
