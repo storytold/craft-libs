@@ -47,6 +47,8 @@ struct Config {
     overflow: bool,
     /// The canvas's rulers on both axes.
     rulers: Option<RulerText>,
+    /// The host keeps the box in f32, as a text layer keeps its box, and gives it back with its centre as the pivot.
+    f32_host: bool,
 }
 
 /// What the host keeps of the box and what the passes reported.
@@ -85,7 +87,14 @@ fn defaults() -> Config {
         text_frame: false,
         overflow: false,
         rulers: None,
+        f32_host: false,
     }
+}
+
+/// `state` as a host that keeps it in f32 gives it back: each corner rounded to f32, the pivot at the centre.
+fn kept_in_f32(state: &BoxState) -> BoxState {
+    let quad = state.quad.map(|p| Point::new(f64::from(p.x as f32), f64::from(p.y as f32)));
+    BoxState::new(quad, quad[0].midpoint(quad[2]))
 }
 
 fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
@@ -167,11 +176,11 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                     }
                     EditEvent::Update { value, .. } => {
                         host.events.push(Seen::Update);
-                        host.state = *value;
+                        host.state = if config.f32_host { kept_in_f32(value) } else { *value };
                     }
                     EditEvent::Commit { after, .. } => {
                         host.events.push(Seen::Commit);
-                        host.state = *after;
+                        host.state = if config.f32_host { kept_in_f32(after) } else { *after };
                     }
                     EditEvent::Set { after, .. } => {
                         host.events.push(Seen::Set);
@@ -370,6 +379,31 @@ fn a_text_frame_edge_drag_stops_at_its_minimum_side_and_alt_mirrors_about_the_ce
     frame(&mut h, vec![pointer::release(end)]);
     let quad = h.state().quad;
     assert!((quad[0].x - 198.0).abs() < 1e-6 && (quad[1].x - 202.0).abs() < 1e-6, "Alt pressed mid-drag mirrors on the next move: {quad:?}");
+}
+
+// A host that applies every move and keeps the box in f32 (a text layer) gives each proposal back rounded: that is the
+// proposal, not a change of the document under the drag, so every move of the drag reaches the host and the commit
+// holds the last one.
+#[trial]
+fn a_text_frame_fed_back_through_an_f32_host_follows_every_move_to_the_commit() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.text_frame = true;
+        config.f32_host = true;
+        config.rotation = 0.37;
+    });
+    let (start, mid, end) = (h.screen(Point::new(200.0, 220.0)), h.screen(Point::new(200.0, 250.0)), h.screen(Point::new(200.0, 280.0)));
+    frame(&mut h, vec![pointer::moved(start)]);
+    frame(&mut h, vec![pointer::press(start)]);
+    frame(&mut h, vec![pointer::moved(mid)]);
+    let first = h.state().quad[2].y;
+    frame(&mut h, vec![pointer::moved(end)]);
+    let second = h.state().quad[2].y;
+    frame(&mut h, vec![pointer::release(end)]);
+    frame(&mut h, Vec::new());
+    let events = h.host.borrow().events.clone();
+    assert!(!events.contains(&Seen::Cancel), "the rounded write-back cancels nothing: {events:?}");
+    assert!((first - 250.0).abs() < 0.01 && (second - 280.0).abs() < 0.01, "each move reaches the host: {first} {second}");
+    assert!((h.state().quad[2].y - 280.0).abs() < 0.01 && events.last() == Some(&Seen::Commit), "the commit holds the last move");
 }
 
 #[trial]
