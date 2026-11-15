@@ -3,7 +3,6 @@
 //! Extracted from PhotoCraft preset_store.rs at 19aec5eb44131de44361189d64910e7b3e19e57c.
 //! Original implementation: Brandon Thomas; subsequent codec changes: David Mann and FinnNk.
 //! Group schemas, file naming, content hashes and storage policy remain with the application.
-use std::io::Read;
 
 /// Largest accepted tip side.
 pub const MAX_SIDE: u32 = 16384;
@@ -21,8 +20,13 @@ pub struct Tip {
 }
 
 /// `PCTIP1`, bits (8|16), width, height (u32 LE), then the zlib-deflated samples.
+/// Returns an empty vector for invalid dimensions/sample counts or compression failure.
 pub fn encode(width: u32, height: u32, data: &[u16]) -> Vec<u8> {
     use std::io::Write;
+    let count = u64::from(width) * u64::from(height);
+    if width == 0 || height == 0 || width > MAX_SIDE || height > MAX_SIDE || count > MAX_SAMPLES || count != data.len() as u64 {
+        return Vec::new();
+    }
     let eight = data.iter().all(|v| v % 257 == 0);
     let mut out = Vec::with_capacity(TIP_HEADER + data.len() / 4);
     out.extend_from_slice(TIP_MAGIC);
@@ -77,8 +81,15 @@ pub fn decode_with_max_side(bytes: &[u8], max_side: u32) -> Result<Tip, String> 
         b => return Err(format!("unsupported tip depth {b}")),
     };
     let want = n * bytes_per;
-    let mut raw = Vec::with_capacity(want as usize);
-    flate2::read::ZlibDecoder::new(&bytes[TIP_HEADER..]).take(want + 1).read_to_end(&mut raw).map_err(|e| format!("tip data: {e}"))?;
+    // One byte beyond the declared size detects overlong output, without allocating for
+    // an attacker-controlled expansion. Require the zlib trailer, not merely enough samples.
+    let mut raw = Vec::with_capacity(want as usize + 1);
+    let status = flate2::Decompress::new(true)
+        .decompress_vec(&bytes[TIP_HEADER..], &mut raw, flate2::FlushDecompress::Finish)
+        .map_err(|e| format!("tip data: {e}"))?;
+    if status != flate2::Status::StreamEnd {
+        return Err("tip data: truncated or oversized zlib stream".into());
+    }
     if raw.len() as u64 != want {
         return Err(format!("tip data has {} bytes, expected {want}", raw.len()));
     }
