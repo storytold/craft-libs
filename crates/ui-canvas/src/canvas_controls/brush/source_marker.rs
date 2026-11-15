@@ -41,7 +41,7 @@ impl SourceMarker {
 }
 
 impl Component for SourceMarker {
-    const ROLE: Role = Role::GRAPHICS_OBJECT;
+    const ROLE: Role = Role::GROUP;
     const ALT_ROLES: &'static [Role] = &[Role::None];
     const INPUT: Input = Input::Display;
     const PARTS: bool = false;
