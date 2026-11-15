@@ -485,3 +485,27 @@ fn recorded_request_body_requires_complete_http_headers() {
     assert!(ipp_body(b"POST / HTTP/1.1\r\n").is_none());
     assert_eq!(ipp_body(b"POST / HTTP/1.1\r\n\r\nbody"), Some(b"body".as_slice()));
 }
+
+#[test]
+fn named_destinations_encode_one_path_segment_on_both_wire_fields() {
+    for is_class in [false, true] {
+        let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0, &[&group(2), &attr(0x21, "job-id", &42u32.to_be_bytes())]))]).unwrap();
+        let destination = super::Destination { name: "Office café%20?#".into(), is_class };
+        assert_eq!(super::submit_as_at(fake.endpoint(), &destination, b"pdf", &Job::default(), "artist").unwrap(), 42);
+        let kind = if is_class { "classes" } else { "printers" };
+        let path = format!("/{kind}/Office%20caf%C3%A9%2520%3F%23");
+        let request = fake.request().unwrap();
+        assert!(has(&request, format!("POST {path} HTTP/1.1").as_bytes()));
+        assert!(has(ipp_body(&request).unwrap(), format!("ipp://{}{path}", fake.server.authority()).as_bytes()));
+    }
+}
+
+#[test]
+fn destination_path_rejects_routing_syntax_before_connecting() {
+    for name in ["", ".", "..", "../admin", "a/b", "a\\b", "a\r\nb", "a\0b"] {
+        let destination = super::Destination { name: name.into(), is_class: false };
+        assert!(super::destination_path(&destination).is_err(), "{name:?}");
+    }
+    let destination = super::Destination { name: "x".repeat(257), is_class: false };
+    assert!(super::destination_path(&destination).is_err());
+}

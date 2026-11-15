@@ -343,17 +343,13 @@ pub fn submit_at(endpoints: &[Server], destination: &Destination, pdf: &[u8], jo
 /// As [`submit_at`], with the user name supplied by the application, never inferred from
 /// process credentials. Once any request bytes may have been sent, no other endpoint is tried.
 pub fn submit_as_at(endpoints: &[Server], destination: &Destination, pdf: &[u8], job: &Job, user: &str) -> Result<u32, Error> {
-    if !is_queue_name(&destination.name) {
-        return Err(Error::Spool("invalid CUPS destination name".into()));
-    }
+    let path = destination_path(destination)?;
     if user.len() > MAX_JOB_NAME || user.chars().any(char::is_control) {
         return Err(Error::Spool("invalid CUPS user name".into()));
     }
     if job.copies == 0 || job.copies > 999 {
         return Err(Error::Spool("copies must be between 1 and 999".into()));
     }
-    let kind = if destination.is_class { "classes" } else { "printers" };
-    let path = format!("/{kind}/{}", destination.name);
     let mut last = Error::Spool("no CUPS endpoint selected".into());
     for endpoint in endpoints {
         let mut stream = match connect(endpoint) {
@@ -377,6 +373,31 @@ pub fn submit_as_at(endpoints: &[Server], destination: &Destination, pdf: &[u8],
             .ok_or_else(|| Error::Spool("CUPS accepted the job without a usable job id; do not resubmit".into()));
     }
     Err(last)
+}
+
+/// Encode one destination as a URI path segment, never as routing syntax. Names from
+/// discovery may include spaces or Unicode. Reject separators, controls and dot segments
+/// rather than relying on a server to keep an encoded traversal request harmless.
+fn destination_path(destination: &Destination) -> Result<String, Error> {
+    let name = &destination.name;
+    if name.is_empty()
+        || name.len() > MAX_NAME
+        || matches!(name.as_str(), "." | "..")
+        || name.chars().any(|c| c.is_control() || matches!(c, '/' | '\\'))
+    {
+        return Err(Error::Spool("invalid CUPS destination name".into()));
+    }
+    let kind = if destination.is_class { "classes" } else { "printers" };
+    let mut path = format!("/{kind}/");
+    for byte in name.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            path.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            write!(&mut path, "%{byte:02X}").map_err(|_| Error::Spool("could not encode CUPS destination".into()))?;
+        }
+    }
+    Ok(path)
 }
 
 /// A CUPS queue name: ASCII letters, digits and `_`, `-`, `.` — what the scheduler accepts, and
