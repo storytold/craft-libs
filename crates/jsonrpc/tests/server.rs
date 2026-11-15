@@ -59,7 +59,7 @@ fn notifications_never_receive_responses_including_all_notification_batches() {
 
 #[test]
 fn invalid_envelopes_and_params_return_standard_errors() {
-    for id in [json!(1.5), json!(true), json!([]), json!({})] {
+    for id in [json!(true), json!([]), json!({})] {
         let input = json!({"jsonrpc":"2.0", "id":id, "method":"ping"});
         let reply = process(&input, Limits::default(), |_| panic!("invalid id dispatched"), |_| panic!("invalid id notified")).unwrap().unwrap();
         assert_eq!(reply["id"], Value::Null);
@@ -99,7 +99,7 @@ fn arrays_are_valid_params_and_errors_can_include_data() {
 
 #[test]
 fn parse_and_batch_limits_apply_before_dispatch() {
-    let limits = Limits { max_message_bytes: 3, max_batch_items: 1 };
+    let limits = Limits { max_message_bytes: 3, max_batch_items: 1, ..Limits::default() };
     assert_eq!(parse_json(b"null", limits), Err(ParseError::MessageTooLarge));
     assert_eq!(parse_json(b"123", limits).unwrap(), json!(123));
     assert_eq!(parse_json(b"{", limits), Err(ParseError::InvalidJson));
@@ -147,11 +147,26 @@ fn bounded_line_read_propagates_io_errors() {
 #[test]
 fn inspect_single_request_distinguishes_null_ids_and_invalid_envelopes() {
     let request = json!({"jsonrpc":"2.0", "id":null, "method":"ping"});
-    let parsed = craft_jsonrpc::request(&request).unwrap();
+    let parsed = craft_jsonrpc::request(&request, Limits::default()).unwrap();
     assert_eq!(parsed.id, Some(&Value::Null));
     assert_eq!(parsed.method, "ping");
     let notification = json!({"jsonrpc":"2.0", "method":"ping"});
-    assert!(craft_jsonrpc::request(&notification).unwrap().id.is_none());
-    assert!(craft_jsonrpc::request(&json!({"jsonrpc":"2.0", "id":false, "method":"ping"})).is_none());
-    assert!(craft_jsonrpc::request(&json!({"method":"ping"})).is_none());
+    assert!(craft_jsonrpc::request(&notification, Limits::default()).unwrap().id.is_none());
+    assert!(craft_jsonrpc::request(&json!({"jsonrpc":"2.0", "id":false, "method":"ping"}), Limits::default()).is_none());
+    assert!(craft_jsonrpc::request(&json!({"method":"ping"}), Limits::default()).is_none());
+}
+
+#[test]
+fn numeric_ids_follow_the_selected_protocol_policy() {
+    let input = json!({"jsonrpc":"2.0", "id":1.5, "method":"ping"});
+    let reply = process(&input, Limits::default(), |_| Ok(json!({})), |_| {}).unwrap().unwrap();
+    assert_eq!(reply["id"], json!(1.5));
+    let strict = Limits { integer_ids_only: true, ..Limits::default() };
+    let reply = process(&input, strict, |_| panic!("fractional ID dispatched"), |_| {}).unwrap().unwrap();
+    assert_eq!(reply["id"], Value::Null);
+    assert_eq!(reply["error"]["code"], -32600);
+    let no_null = Limits { allow_null_ids: false, ..strict };
+    let null_id = json!({"jsonrpc":"2.0", "id":null, "method":"ping"});
+    let reply = process(&null_id, no_null, |_| panic!("null ID dispatched"), |_| {}).unwrap().unwrap();
+    assert_eq!(reply["error"]["code"], -32600);
 }

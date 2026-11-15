@@ -12,8 +12,12 @@ For newline-delimited transports, `read_line` bounds memory while reading; after
 line, the caller must close the stream or discard the rest of that line.
 `serde_json`'s nesting limit remains in effect. Response sizes are the caller's responsibility.
 
-A valid request receives the handler's result or error with its original string, integer, or null
-ID. An omitted ID is a notification: it calls the separate notification handler and gets no reply.
+A valid request receives the handler's result or error with its original string, numeric, or null
+ID. The default accepts numeric IDs as required by [JSON-RPC 2.0](https://www.jsonrpc.org/specification#request_object),
+which discourages fractional values. Set `integer_ids_only` and clear `allow_null_ids` for
+protocols such as MCP that require integer or string IDs. A legacy server can retain its previous
+null-ID behavior independently. An omitted ID is a notification: it calls the separate notification
+handler and gets no reply.
 Malformed batch entries receive an invalid-request error; an empty batch gets one error response;
 a batch containing only notifications has no response. Invalid parameter shapes receive an
 invalid-params error for requests and no reply for notifications. The handler decides whether

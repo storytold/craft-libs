@@ -16,11 +16,15 @@ use std::io::BufRead;
 pub struct Limits {
     pub max_message_bytes: usize,
     pub max_batch_items: usize,
+    /// Reject fractional JSON numbers as IDs for protocols that require integer IDs.
+    pub integer_ids_only: bool,
+    /// Permit an explicit null request ID, as JSON-RPC does; some protocols prohibit it.
+    pub allow_null_ids: bool,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_message_bytes: 64 * 1024 * 1024, max_batch_items: 4096 }
+        Self { max_message_bytes: 64 * 1024 * 1024, max_batch_items: 4096, integer_ids_only: false, allow_null_ids: true }
     }
 }
 
@@ -109,10 +113,13 @@ pub struct Request<'a> {
 
 /// Inspect a single request envelope. This validates its JSON-RPC version, method and ID;
 /// [`process`] additionally validates parameter shape before dispatching it.
-pub fn request(value: &Value) -> Option<Request<'_>> {
+pub fn request(value: &Value, limits: Limits) -> Option<Request<'_>> {
     let object = value.as_object()?;
     let id = object.get("id");
-    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || !id.is_none_or(|v| v.is_null() || v.is_string() || v.is_i64() || v.is_u64()) {
+    let valid_id = id.is_none_or(|v| {
+        (v.is_null() && limits.allow_null_ids) || v.is_string() || if limits.integer_ids_only { v.is_i64() || v.is_u64() } else { v.is_number() }
+    });
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || !valid_id {
         return None;
     }
     Some(Request { id, method: object.get("method")?.as_str()?, params: object.get("params") })
@@ -150,12 +157,12 @@ fn invalid_request() -> Value {
     error_response(Value::Null, RpcError::new(-32600, "Invalid Request"))
 }
 
-fn one<F, N>(value: &Value, on_request: &mut F, on_notification: &mut N) -> Option<Value>
+fn one<F, N>(value: &Value, limits: Limits, on_request: &mut F, on_notification: &mut N) -> Option<Value>
 where
     F: FnMut(Request<'_>) -> Result<Value, RpcError>,
     N: FnMut(Request<'_>),
 {
-    let Some(request) = request(value) else { return Some(invalid_request()) };
+    let Some(request) = request(value, limits) else { return Some(invalid_request()) };
     let id = request.id;
     if request.params.is_some_and(|v| !v.is_object() && !v.is_array()) {
         return id.map(|id| error_response(id.clone(), RpcError::new(-32602, "Invalid params")));
@@ -178,13 +185,13 @@ where
     F: FnMut(Request<'_>) -> Result<Value, RpcError>,
     N: FnMut(Request<'_>),
 {
-    let Some(batch) = value.as_array() else { return Ok(one(value, &mut on_request, &mut on_notification)) };
+    let Some(batch) = value.as_array() else { return Ok(one(value, limits, &mut on_request, &mut on_notification)) };
     if batch.len() > limits.max_batch_items {
         return Err(ParseError::BatchTooLarge);
     }
     if batch.is_empty() {
         return Ok(Some(invalid_request()));
     }
-    let responses: Vec<_> = batch.iter().filter_map(|v| one(v, &mut on_request, &mut on_notification)).collect();
+    let responses: Vec<_> = batch.iter().filter_map(|v| one(v, limits, &mut on_request, &mut on_notification)).collect();
     Ok((!responses.is_empty()).then_some(Value::Array(responses)))
 }
