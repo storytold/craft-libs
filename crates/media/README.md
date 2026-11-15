@@ -834,7 +834,7 @@ for frame in &file.frames {
 | Area | Supported |
 |---|---|
 | Signatures | `SMK2`, `SMK4` (`Version`) |
-| Header | picture size, frame count, frame period (`Header::frame_period`), the ring frame and row doubling flags, the seven audio track slots (`AudioTrack`: rate, 8 or 16 bits, mono or stereo, `AudioCoding`) |
+| Header | picture size, frame count, frame period (`Header::frame_period`), the ring frame, row interlacing and row doubling flags, the seven audio track slots (`AudioTrack`: rate, 8 or 16 bits, mono or stereo, `AudioCoding`) |
 | Frames | `Frame` (offset, size, key frame flag, palette flag, audio track mask); the ring frame, which leads from the last frame back to the first, is `SmackerFile::ring_frame` |
 | Frame contents | `split_frame`: the palette chunk, the chunk of each audio track, the video data |
 | Codec parameters | `SmackerFile::video_params` (`SmackerVideo`; `extradata` is the four tree table sizes and the Huffman tree data), `AudioTrack::codec_params` (`SmackerAudio`, `Pcm`, or `Unknown` for Bink audio) |

@@ -124,7 +124,8 @@ pub struct AudioTrack {
     pub stereo: bool,
     /// How the track's chunks are coded.
     pub coding: AudioCoding,
-    /// The header's size in bytes of the largest decoded chunk of this track (a hint).
+    /// The header's size in bytes of the largest decoded chunk of this track, which the audio
+    /// decoder takes as its limit. 0 when the header does not say.
     pub max_decoded_size: u32,
     /// The top byte of the header's rate field, as stored.
     pub flags: u8,
@@ -298,8 +299,9 @@ pub struct SmackerFile {
     pub header: Header,
     /// The frames, in order. Fewer than `header.frames` if the file is cut short.
     pub frames: Vec<Frame>,
-    /// The frame after the last one, which leads back to the first frame (for looping), if the
-    /// file has one.
+    /// The frame after the last one, if the file has one: it turns the last picture into the
+    /// first, so a player that loops decodes it after the last frame in place of the first
+    /// frame, and goes on with the second. A player that does not loop leaves it out.
     pub ring_frame: Option<Frame>,
     /// The Huffman tree data of the video codec (`header.trees_size` bytes).
     pub trees: Vec<u8>,
