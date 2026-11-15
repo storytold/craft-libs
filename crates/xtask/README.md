@@ -52,6 +52,9 @@ fn ci() -> Result<(), String> {
   `run_cancelable` ends a running child with the processes it started and waits for it. On Unix the
   child runs in its own process group, which `kill -s KILL` ends, so a terminal's Ctrl-C reaches only
   the xtask and the app's Ctrl-C handler sets the flag. On Windows `taskkill /T /F` ends the tree.
+- On Unix a child started by `run_cancelable` is not in the terminal's foreground process group. A
+  child that reads from the terminal is stopped by `SIGTTIN`, and the run waits until the `Cancel` flag
+  is set. Run a command that reads from the terminal with `run`.
 
 ## Errors
 
@@ -69,7 +72,8 @@ process ends. A slot count of 0 or more than 64, or a poll interval (`with_poll`
 error before any file is opened. Next to each
 held lock file, an owner file holds the owner label, which waiting runs print; `holders` reads at
 most 4096 bytes of each and leaves out an owner file whose slot is free, such as one a killed run left
-behind. Where the lock files live, the environment variables that set them, and
+behind. An owner entry that is a link, or on Unix a file with more than one name, is also left
+out, and a link is not followed. Where the lock files live, the environment variables that set them, and
 whether a run uses a lock at all are the app's choice.
 
 ## Report

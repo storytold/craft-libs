@@ -407,6 +407,10 @@ pub fn run(mut cmd: Command, label: &str) -> Result<(), String> {
 /// `kill -s KILL`. On Windows it ends the process tree with `taskkill /T /F`. When that tool cannot
 /// be run, only the child itself is ended. `taskkill` finds the tree through the running child, so on
 /// Windows the processes a child started keep running when the child has already exited.
+///
+/// On Unix the child's process group is not the terminal's foreground group. A child that reads from
+/// the terminal is stopped by `SIGTTIN`, and this function waits until `cancel` is set. Run a command
+/// that reads from the terminal with [`run`].
 pub fn run_cancelable(mut cmd: Command, label: &str, cancel: &Cancel) -> Result<(), String> {
     crate::note(format_args!("$ {label}"));
     #[cfg(unix)]
@@ -430,7 +434,8 @@ fn wait_cancelable_with(
     mut status: impl FnMut(&mut Child) -> io::Result<Option<ExitStatus>>,
 ) -> Result<(), String> {
     loop {
-        // The status is not read once `cancel` is set, so the tree is ended while the child still runs.
+        // The status is not read once `cancel` is set, so a child that is still running is not reaped
+        // before its tree is ended.
         let exited = if cancel.is_canceled() { Ok(None) } else { status(child) };
         if cancel.is_canceled() {
             let killed = end_tree(child);

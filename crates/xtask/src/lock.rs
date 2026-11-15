@@ -120,7 +120,8 @@ fn record_owner(lock: &Path, label: &str) -> PathBuf {
 /// The owner labels of the held slots, as their holders wrote them, each cut to [`MAX_OWNER_BYTES`].
 ///
 /// A slot whose lock file is missing or free is left out, also when a run that ended without dropping
-/// its [`Held`] guard left its owner file behind.
+/// its [`Held`] guard left its owner file behind. An owner entry that is a link, or on Unix a file
+/// with more than one name, is left out too.
 pub fn holders(config: &LockConfig) -> Result<Vec<String>, Error> {
     config.check()?;
     Ok((0..config.slots)
@@ -141,9 +142,38 @@ fn is_held(lock: &Path) -> bool {
 
 fn read_owner(path: &Path) -> Option<String> {
     let mut bytes = Vec::new();
-    File::open(path).ok()?.take(MAX_OWNER_BYTES).read_to_end(&mut bytes).ok()?;
+    open_owner(path)?.take(MAX_OWNER_BYTES).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(&bytes).trim().to_owned();
     (!text.is_empty()).then_some(text)
+}
+
+/// Opens an owner file for reading when the entry is a regular file. A link planted under the name in
+/// a shared lock directory is not followed: the file opened must be the one the name points to, with
+/// no other name.
+#[cfg(unix)]
+fn open_owner(path: &Path) -> Option<File> {
+    use std::os::unix::fs::MetadataExt;
+    let named = std::fs::symlink_metadata(path).ok().filter(std::fs::Metadata::is_file)?;
+    let file = File::open(path).ok()?;
+    let opened = file.metadata().ok()?;
+    (opened.dev() == named.dev() && opened.ino() == named.ino() && opened.nlink() == 1).then_some(file)
+}
+
+/// Opens an owner file for reading when the entry is a regular file. The entry itself is opened, not
+/// the target of a link planted under the name in a shared lock directory.
+#[cfg(windows)]
+fn open_owner(path: &Path) -> Option<File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let file = OpenOptions::new().read(true).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT).open(path).ok()?;
+    file.metadata().ok()?.is_file().then_some(file)
+}
+
+/// Opens an owner file for reading when the entry is a regular file.
+#[cfg(not(any(unix, windows)))]
+fn open_owner(path: &Path) -> Option<File> {
+    std::fs::symlink_metadata(path).ok().filter(std::fs::Metadata::is_file)?;
+    File::open(path).ok()
 }
 
 /// Waits for a slot, printing the holders once while it waits.
@@ -257,6 +287,42 @@ mod tests {
         let _held = try_acquire(&c).unwrap().expect("free slot");
         std::fs::write(owner_path(&slot_path(dir.path(), 0)), vec![b'x'; 3 * MAX_OWNER_BYTES as usize]).unwrap();
         assert_eq!(holders(&c).unwrap(), ["x".repeat(MAX_OWNER_BYTES as usize)]);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn owner_reads_do_not_follow_links() {
+        let _guard = crate::spawn_guard();
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let private = dir.path().join("private.txt");
+        std::fs::write(&private, b"private").unwrap();
+        let c = config(dir.path(), 1, "");
+        let _held = try_acquire(&c).unwrap().expect("free slot");
+        let owner = owner_path(&slot_path(dir.path(), 0));
+        std::fs::remove_file(&owner).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&private, &owner).unwrap();
+        // Creating a link on Windows needs Developer Mode or an elevated process.
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&private, &owner).is_err() {
+            return;
+        }
+        assert!(holders(&c).unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_reads_skip_files_with_other_names() {
+        let _guard = crate::spawn_guard();
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let private = dir.path().join("private.txt");
+        std::fs::write(&private, b"private").unwrap();
+        let c = config(dir.path(), 1, "");
+        let _held = try_acquire(&c).unwrap().expect("free slot");
+        let owner = owner_path(&slot_path(dir.path(), 0));
+        std::fs::remove_file(&owner).unwrap();
+        std::fs::hard_link(&private, &owner).unwrap();
+        assert!(holders(&c).unwrap().is_empty());
     }
 
     #[test]
