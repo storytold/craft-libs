@@ -2,7 +2,7 @@
 
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{Data, DeriveInput, Field, Fields, GenericArgument, PathArguments, Type};
 
 /// The named fields of a struct, or an error naming `derive`.
@@ -43,17 +43,27 @@ pub(crate) fn is_named(ty: &Type, name: &str) -> bool {
     matches!(ty, Type::Path(path) if path.qself.is_none() && path.path.segments.last().is_some_and(|segment| segment.ident == name))
 }
 
-/// The path of the framework crate (`craft-ui-contract`, lib name `craft_ui`) as the crate being compiled reaches it.
+/// The path of the framework crate (`craft-ui-contract`) as the crate being compiled reaches it.
 ///
-/// Apps depend on the `craft` facade only, which re-exports it as `craft::ui`, so a hardcoded `::craft_ui` fails
-/// there. A direct dependency on `craft-ui-contract` (or being it) gives `::craft_ui`; otherwise the facade gives
-/// `::craft::ui`. With neither, `::craft_ui` is used so the error names the missing crate.
+/// Apps depend on the `craft` facade, which re-exports it as `craft::ui`; the facade is looked up first because no
+/// framework crate depends on it, while an app may also list `craft-ui-contract` (for example as a dev-dependency,
+/// which proc-macro-crate does not tell apart). Framework crates reach it as `::craft_ui`: each declares that name
+/// (`extern crate self as craft_ui` in the crates that re-export it, an `extern crate` alias in the others). A
+/// renamed dependency is reached by its own name. With neither crate, `::craft_ui` is used so the error names it.
 pub(crate) fn ui_crate() -> TokenStream {
-    if crate_name("craft-ui-contract").is_ok() {
-        return quote!(::craft_ui);
-    }
     match crate_name("craft") {
-        Ok(FoundCrate::Itself | FoundCrate::Name(_)) => quote!(::craft::ui),
-        Err(_) => quote!(::craft_ui),
+        Ok(FoundCrate::Name(name)) => {
+            let name = format_ident!("{name}");
+            return quote!(::#name::ui);
+        }
+        Ok(FoundCrate::Itself) => return quote!(::craft::ui),
+        Err(_) => {}
+    }
+    match crate_name("craft-ui-contract") {
+        Ok(FoundCrate::Name(name)) if name != "craft_ui_contract" => {
+            let name = format_ident!("{name}");
+            quote!(::#name)
+        }
+        _ => quote!(::craft_ui),
     }
 }
