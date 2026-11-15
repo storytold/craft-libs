@@ -1974,11 +1974,12 @@ The component traits, context types, `PaintUi`, `Looks`, the pipeline and its st
 - `craft_ui::contract::EDIT_MENU`: `pub const EDIT_MENU: &str`. The popup name of a text part's edit menu: step 8b registers it for every text part, and the text control opens
 - `craft_ui::contract::EdgePress`: `pub struct EdgePress<'a, K>`. The line between two adjacent rows as a target of its own while `mods` are held (Photoshop's Alt-click between two
   - `pub fn new(mods: Mods, test: impl Fn(&K, &K) -> Option<Cursor> + 'a) -> Self`. The edge press while exactly `mods` are held, on the lines `test` takes.
-- `craft_ui::contract::Edit`: `pub trait Edit`. Values and edits (chapter 10). `value`, `validity`, `gesture`, `adopt` and `edit_response` take `&self`, so `paint`
+- `craft_ui::contract::Edit`: `pub trait Edit`. Values and edits (chapter 10). `value`, `validity`, `gesture`, `gesture_before`, `adopt` and `edit_response` take
   - `type Value`. The component's value type.
   - `fn value(&self) -> Option<&Self::Value>`. The shown value: the running gesture's proposal, else the binding's. `None` for a mixed binding, a kept
   - `fn validity(&self) -> Validity<Self::Value>`. What the binding's check says about the shown value.
   - `fn gesture(&self) -> Option<GesturePhase>`. Where this pass's gesture stands.
+  - `fn gesture_before(&self) -> Option<Mixed<Self::Value>>`. The value the running gesture began with, as its `Begin` reported it: the same in every pass of the gesture,
   - `fn adopt<V: Value>(&self, child: &EditResponse<V>, start: &Self::Value, map: impl Fn(&V, &mut Self::Value))`. Maps each of the child's events onto a clone of this component's shown value and queues the resulting events, in
   - `fn edit_response(&self) -> EditResponse<Self::Value>`. The `EditResponse` a value component returns from `finish`.
   - `fn propose(&mut self, v: Self::Value)`. Sets the running gesture's value, beginning a gesture if none runs and the press that carries it has had no

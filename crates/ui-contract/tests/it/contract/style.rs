@@ -1,6 +1,7 @@
 //! The style step and what the pipeline keeps of a component's inputs: app replacements, style-affecting app
 //! values, faces, the shown value and memory eviction.
 
+use craft_behavior::Mixed;
 use craft_ui::contract::{Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Props as _, Remember as _, Role, Show as _};
 use craft_ui::style::StyleCx;
 use craft_ui::testing::{Frames, trial};
@@ -72,6 +73,55 @@ fn showing_and_measuring_clone_the_bound_value_only_when_it_changed() {
         Holder { common: Common::new(), value: Bind::bound(&mut value) }.id_salt("holder").show(ui);
     });
     assert_eq!(CLONES.load(Ordering::SeqCst) - before, 2, "a changed value is cloned once");
+}
+
+/// A leaf over a `u8` binding that sets `to` in its update when one is given.
+#[derive(Component)]
+struct Setter<'a> {
+    #[common]
+    common: Common,
+    value: Bind<'a, u8>,
+    to: Option<u8>,
+}
+
+impl Component for Setter<'_> {
+    const ROLE: Role = Role::None;
+    type Style = PlainStyle;
+    type Output = EditResponse<u8>;
+
+    fn style(_: &StyleCx<'_>, _: SetterStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::splat(10.0))
+    }
+
+    fn bind(&mut self) -> Option<BindMut<'_, u8>> {
+        Some(self.value.reborrow())
+    }
+
+    fn update(&mut self, cx: &mut Cx<'_, Self>) {
+        if let Some(to) = self.to {
+            cx.set(to);
+        }
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<u8> {
+        cx.edit_response()
+    }
+}
+
+/// A kept binding with nothing stored shows its reset value; once an edit is stored it shows the edit.
+#[trial]
+fn a_kept_binding_reads_its_reset_value_until_an_edit_is_stored() {
+    let mut frames = Frames::new();
+    let mut show = |to: Option<u8>| {
+        let mut shown = None;
+        frames.frame(vec![], |ui| {
+            shown = Setter { common: Common::new(), value: Bind::kept().reset(3), to }.id_salt("setter").show(ui).shown;
+        });
+        shown
+    };
+    assert_eq!(show(None), Some(Mixed::Same(Arc::new(3))), "nothing stored: the reset value");
+    show(Some(7));
+    assert_eq!(show(None), Some(Mixed::Same(Arc::new(7))), "the stored edit");
 }
 
 static DROPPED: AtomicU32 = AtomicU32::new(0);

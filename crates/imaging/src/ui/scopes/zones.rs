@@ -1,7 +1,8 @@
-//! Tone zones ([`ToneZone`], [`ScopeZoneEdit`], [`ToneZones`]): Camera Raw's and Lightroom's draggable ranges over the
-//! histogram.
+//! Tone zones ([`ToneZone`], [`ZoneScale`], [`ZoneValues`], [`ToneZones`]): Camera Raw's and Lightroom's draggable
+//! ranges over the histogram.
 
 use super::words::ScopeWords;
+use craft_behavior::Mixed;
 use craft_behavior::{AccessAction, CursorIcon, Metrics, NavMove, PartKey, PressPhase, Sense};
 use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, Input, Name, Numeric, PartsCx, Pointer as _, Props as _,
@@ -13,15 +14,13 @@ use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeyUse};
 use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Rect, Vec2};
+use std::ops::RangeInclusive;
 
 /// One zone's slider node and part; the index names the zone.
 pub(super) const ZONE: PartKey = PartKey::new("zone");
 
 /// Shift drags a tenth as far (LightCraft's fine factor).
 const FINE: f32 = 0.1;
-
-/// The slider nodes accept any value: the zone's range belongs to the host's control.
-const UNBOUNDED: f64 = 1.0e9;
 
 /// The steps one arrow press with Shift held takes.
 const LARGE_STEP: i32 = 10;
@@ -83,33 +82,50 @@ impl ToneZone {
     }
 }
 
-/// What the user did to one zone.
+/// How the control one zone edits moves, as the host's slider row for it has it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
-pub enum ZoneChange {
-    /// A drag over the plot, one gesture: the signed share of the plot width moved since the press (Shift drags a
-    /// tenth as far). The host maps the share to its control (PhotoCraft: `share x limit x 2`, limit 5 for Exposure,
-    /// else 100) and makes one undo step for the drag.
-    Drag(f32),
-    /// Arrow keys with the plot focused, or a screen reader's Increment and Decrement: this many of the control's own
-    /// steps (Right and Up +1, Left and Down -1, Shift x10). One undo step each.
-    Step(i32),
-    /// A double click on the zone: the host resets the control to its default. One undo step.
-    Reset,
-    /// A screen reader's SetValue, in the control's own units.
-    SetValue(f64),
+pub struct ZoneScale {
+    /// The lowest value.
+    pub min: f32,
+    /// The highest value.
+    pub max: f32,
+    /// The change a drag across the plot's full width makes (PhotoCraft: twice the range's end, so 10 stops for
+    /// Exposure and 200 for the others). Shift drags a tenth as far.
+    pub drag: f32,
+    /// The change of one arrow key press or screen reader Increment.
+    pub step: f32,
+    /// The value a double click on the zone restores.
+    pub reset: f32,
 }
 
-/// A tone-zone edit.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub struct ScopeZoneEdit {
-    /// The zone's index in the slice given to [`ToneZones::new`].
-    pub zone: usize,
-    /// The zone's key.
-    pub key: &'static str,
-    /// What happened.
-    pub change: ZoneChange,
+impl ZoneScale {
+    /// A control over `range` that a drag across the plot's width moves by `drag`, an arrow key by `step`, and a
+    /// double click resets to `reset`.
+    pub fn new(range: RangeInclusive<f32>, drag: f32, step: f32, reset: f32) -> Self {
+        ZoneScale { min: *range.start(), max: *range.end(), drag, step, reset }
+    }
+
+    /// `value` held to the range.
+    fn hold(&self, value: f32) -> f32 {
+        value.max(self.min).min(self.max)
+    }
+}
+
+/// The values of the controls the tone zones edit, one per zone in the zones' order, each in its control's units.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ZoneValues(pub Vec<f32>);
+
+impl ZoneValues {
+    /// These values with zone `at` set to what `to` makes of its value and scale, held to the zone's range; `None`
+    /// when the zone has no value or no scale.
+    fn with(&self, scales: &[ZoneScale], at: usize, to: impl FnOnce(f32, &ZoneScale) -> f32) -> Option<ZoneValues> {
+        let scale = scales.get(at)?;
+        let mut next = self.clone();
+        let value = next.0.get_mut(at)?;
+        *value = scale.hold(to(*value, scale));
+        Some(next)
+    }
 }
 
 /// The style of the tone zones: the hovered zone's band and the strip along the plot's top that belongs to the clipping
@@ -139,27 +155,32 @@ struct Held {
 /// press locks the zone under it for the whole drag; the hovered or pressed zone shows its band; Page Up and Page Down
 /// move the focused zone, the arrows step it and a double click resets it.
 ///
-/// The value is the last edit; an app reads the edit events and maps them to its controls. AccessKit: a group named
-/// [`ScopeWords::tone_zones`] holding one slider per zone, named by its label.
+/// The value is the [`ZoneValues`] of the controls the zones edit, each moved as its [`ZoneScale`] says: a drag sets
+/// the pressed zone's value to its value at the press plus the travel's share of the plot width times
+/// [`ZoneScale::drag`], one gesture; each arrow press, Increment, Decrement, SetValue and double
+/// click is a one-shot change. An app maps the values to its controls. AccessKit: a group named
+/// [`ScopeWords::tone_zones`] holding one slider per zone, named by its label, with the zone's value and range.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 pub struct ToneZones<'a> {
     #[common]
     common: Common,
-    /// The last edit, bound so the host can show it as mixed or refuse it.
+    /// The values of the controls the zones edit.
     #[prop]
-    value: Bind<'a, ScopeZoneEdit>,
+    value: Bind<'a, ZoneValues>,
     zones: &'a [ToneZone],
-    values: &'a [Label],
+    scales: &'a [ZoneScale],
+    texts: &'a [Label],
 }
 
 impl<'a> ToneZones<'a> {
-    /// The zones over the plot, each zone's value text in the same order (the tooltip and the slider's value).
-    pub fn new(label: impl Into<Label>, zones: &'a [ToneZone], values: &'a [Label]) -> Self {
-        ToneZones { common: Common::new(), value: Bind::kept(), zones, values }.label(label).ltr_axis()
+    /// The zones over the plot, with each zone's scale and value text in the same order (the text is the tooltip's
+    /// and the slider's value).
+    pub fn new(label: impl Into<Label>, zones: &'a [ToneZone], scales: &'a [ZoneScale], texts: &'a [Label]) -> Self {
+        ToneZones { common: Common::new(), value: Bind::kept(), zones, scales, texts }.label(label).ltr_axis()
     }
 
     fn value_text(&self, zone: usize) -> &str {
-        self.values.get(zone).map_or("", Label::as_str)
+        self.texts.get(zone).map_or("", Label::as_str)
     }
 
     /// The rect of a zone below the strip.
@@ -177,7 +198,7 @@ impl Component for ToneZones<'_> {
     const OVERLAYS: bool = false;
     const KEYS: KeyUse = KeyUse::of(Input::Pointer).with_moves().with_value(true).with_activate(ActivateKeys::Neither);
     type Style = ToneZonesStyle;
-    type Output = EditResponse<ScopeZoneEdit>;
+    type Output = EditResponse<ZoneValues>;
 
     fn style(cx: &StyleCx<'_>, _: ToneZonesStyleKey) -> ToneZonesStyle {
         ToneZonesStyle {
@@ -210,7 +231,7 @@ impl Component for ToneZones<'_> {
         }
     }
 
-    fn bind(&mut self) -> Option<BindMut<'_, ScopeZoneEdit>> {
+    fn bind(&mut self) -> Option<BindMut<'_, ZoneValues>> {
         Some(self.value.reborrow())
     }
 
@@ -219,12 +240,23 @@ impl Component for ToneZones<'_> {
         if zones.is_empty() {
             return;
         }
+        let scales = self.scales;
         let width = cx.rect.width().max(1.0);
-        let edit = |zone: usize, change: ZoneChange| ScopeZoneEdit { zone, key: zones[zone].key, change };
+        // A mixed value steps and drags from the zones' reset values, as a slider steps from its middle.
+        let resets = ZoneValues(scales.iter().map(|scale| scale.reset).collect());
+        // The value now with zone `at` set by `to`: arrows, Increment, Decrement, SetValue and a reset.
+        let shown = |cx: &Cx<'_, Self>, at: usize, to: &dyn Fn(f32, &ZoneScale) -> f32| cx.value().unwrap_or(&resets).with(scales, at, to);
         for at in 0..zones.len() {
             let press = cx.part(ZONE.at(at as u64)).press;
             let fine = if press.mods.shift { FINE } else { 1.0 };
-            let share = |origin: egui::Pos2, pos: egui::Pos2| (pos.x - origin.x) / width * fine;
+            // The gesture's start with the zone moved by the travel since the press.
+            let dragged = |cx: &Cx<'_, Self>, origin: egui::Pos2, pos: egui::Pos2| {
+                let moved = |value: f32, scale: &ZoneScale| value + (pos.x - origin.x) / width * fine * scale.drag;
+                match cx.gesture_before()? {
+                    Mixed::Same(start) => start.with(scales, at, moved),
+                    Mixed::Mixed => resets.with(scales, at, moved),
+                }
+            };
             match press.phase {
                 PressPhase::Down { .. } => {
                     cx.focus_own();
@@ -236,16 +268,27 @@ impl Component for ToneZones<'_> {
                     held.focused = Some(at);
                     held.pressed = Some(at);
                     cx.begin();
-                    cx.propose(edit(at, ZoneChange::Drag(share(start.origin, pos))));
+                    if let Some(values) = dragged(cx, start.origin, pos) {
+                        cx.propose(values);
+                    }
                 }
-                PressPhase::Drag { start, pos, .. } => cx.propose(edit(at, ZoneChange::Drag(share(start.origin, pos)))),
+                PressPhase::Drag { start, pos, .. } => {
+                    if let Some(values) = dragged(cx, start.origin, pos) {
+                        cx.propose(values);
+                    }
+                }
                 PressPhase::Release { start, pos, click, .. } => {
                     cx.memory::<Held>().pressed = None;
                     if cx.gesture().is_some() {
-                        cx.propose(edit(at, ZoneChange::Drag(share(start.origin, pos))));
+                        if let Some(values) = dragged(cx, start.origin, pos) {
+                            cx.propose(values);
+                        }
                         cx.commit();
-                    } else if click && start.clicks >= 2 {
-                        cx.set(edit(at, ZoneChange::Reset));
+                    } else if click
+                        && start.clicks >= 2
+                        && let Some(values) = shown(cx, at, &|_: f32, scale: &ZoneScale| scale.reset)
+                    {
+                        cx.set(values);
                     }
                 }
                 _ => {}
@@ -285,12 +328,16 @@ impl Component for ToneZones<'_> {
                 _ => continue,
             };
             cx.memory::<Held>().focused = Some(focused);
-            cx.set(edit(focused, ZoneChange::Step(steps)));
+            if let Some(values) = shown(cx, focused, &|value: f32, scale: &ZoneScale| value + steps as f32 * scale.step) {
+                cx.set(values);
+            }
         }
         for at in 0..zones.len() {
             let key = ZONE.at(at as u64);
-            if let Some(value) = cx.intents().take_set_value_at(key).filter(|value| value.is_finite() && !running) {
-                cx.set(edit(at, ZoneChange::SetValue(value)));
+            if let Some(to) = cx.intents().take_set_value_at(key).filter(|value| value.is_finite() && !running)
+                && let Some(values) = shown(cx, at, &|_: f32, _: &ZoneScale| to as f32)
+            {
+                cx.set(values);
             }
         }
         while let Some(request) = cx.intents().take_access() {
@@ -300,8 +347,8 @@ impl Component for ToneZones<'_> {
                 AccessAction::Decrement => -1,
                 _ => continue,
             };
-            if !running {
-                cx.set(edit(at, ZoneChange::Step(steps)));
+            if !running && let Some(values) = shown(cx, at, &|value: f32, scale: &ZoneScale| value + steps as f32 * scale.step) {
+                cx.set(values);
             }
         }
     }
@@ -311,7 +358,13 @@ impl Component for ToneZones<'_> {
         for (at, zone) in self.zones.iter().enumerate() {
             let node = access.node(ZONE.at(at as u64), Role::SLIDER);
             node.name = Name::Text(zone.label(&words).to_owned());
-            node.numeric = Some(Numeric::new(0.0, -UNBOUNDED..=UNBOUNDED).step(1.0).text(self.value_text(at).to_owned()));
+            let Some(scale) = self.scales.get(at) else { continue };
+            let range = f64::from(scale.min)..=f64::from(scale.max);
+            let numeric = match cx.value().and_then(|values| values.0.get(at)) {
+                Some(value) => Numeric::new(f64::from(*value), range),
+                None => Numeric::empty(range),
+            };
+            node.numeric = Some(numeric.step(f64::from(scale.step)).text(self.value_text(at).to_owned()));
         }
     }
 
@@ -328,7 +381,7 @@ impl Component for ToneZones<'_> {
         ui.draw().fill(&band, cx.style.band);
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<ScopeZoneEdit> {
+    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<ZoneValues> {
         cx.edit_response()
     }
 }

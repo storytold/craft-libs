@@ -31,8 +31,8 @@ impl CxCore<'_> {
     }
 }
 
-/// Values and edits (chapter 10). `value`, `validity`, `gesture`, `adopt` and `edit_response` take `&self`, so `paint`
-/// can call them.
+/// Values and edits (chapter 10). `value`, `validity`, `gesture`, `gesture_before`, `adopt` and `edit_response` take
+/// `&self`, so `paint` can call them.
 pub trait Edit {
     /// The component's value type.
     type Value: Value;
@@ -46,6 +46,11 @@ pub trait Edit {
 
     /// Where this pass's gesture stands.
     fn gesture(&self) -> Option<GesturePhase>;
+
+    /// The value the running gesture began with, as its `Begin` reported it: the same in every pass of the gesture,
+    /// while [`value`](Self::value) follows each proposal. A control whose proposals count from the press (a drag
+    /// by its travel) reads its start here. `None` while no gesture runs, the pass that ends one included.
+    fn gesture_before(&self) -> Option<Mixed<Self::Value>>;
 
     /// Maps each of the child's events onto a clone of this component's shown value and queues the resulting events, in
     /// the child's order, for step 15. A composite whose own value is mixed or not yet shown maps the edits onto
@@ -168,6 +173,10 @@ impl<C: Component> Edit for Cx<'_, C> {
         let began = self.events.iter().any(|event| matches!(event, EditEvent::Begin { .. }));
         let updated = self.events.iter().any(|event| matches!(event, EditEvent::Update { .. }));
         Some(if began && !updated { GesturePhase::Begin } else { GesturePhase::Update })
+    }
+
+    fn gesture_before(&self) -> Option<Mixed<ValueOf<C>>> {
+        self.core.memory.recall::<Gesture<ValueOf<C>>>(gesture_key(self.core.id)).before
     }
 
     fn adopt<V: Value>(&self, child: &EditResponse<V>, start: &ValueOf<C>, map: impl Fn(&V, &mut ValueOf<C>)) {

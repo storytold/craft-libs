@@ -90,7 +90,7 @@ pub use mask_view::{MaskViewControls, MaskViewControlsOutput, MaskViewKeys, Mask
 pub use scopes::{
     COLORS_CHANNEL, ChannelOverlay, ClipWarning, ClippingDiagnostic, ClippingFrame, ClippingMode, ClippingOverlay, ClippingWarnings, HistogramSet,
     ScopeChannel, ScopeCommand, ScopeFrame, ScopeMenuAction, ScopePanel, ScopePanelOutput, ScopePanelState, ScopeReadout, ScopeSettings, ScopeSource,
-    ScopeView, ScopeWords, ScopeZoneEdit, ToneZone, ToneZones, VectorscopeFrame, VectorscopePlot, ZoneChange, scope_point,
+    ScopeView, ScopeWords, ToneZone, ToneZones, VectorscopeFrame, VectorscopePlot, ZoneScale, ZoneValues, scope_point,
 };
 pub use select::{
     LassoTool, MagneticLassoTool, MagneticSettings, MarqueeKind, MarqueeTool, PolygonLassoTool, SelectEvent, SelectWords, SelectionShape,

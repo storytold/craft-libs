@@ -19,7 +19,7 @@
 //! |---|---|
 //! | The panel | [`ScopePanel`], [`ScopePanelOutput`], [`ScopePanelState`], [`ScopeSettings`], [`ScopeView`], [`ScopeWords`] |
 //! | The data | [`ScopeFrame`], [`HistogramSet`], [`ScopeChannel`], [`ChannelOverlay`], [`ScopeSource`], [`ScopeReadout`], [`VectorscopeFrame`], [`ClippingFrame`] |
-//! | Tone zones | [`ToneZones`], [`ToneZone`], [`ScopeZoneEdit`], [`ZoneChange`] |
+//! | Tone zones | [`ToneZones`], [`ToneZone`], [`ZoneScale`], [`ZoneValues`] |
 //! | Commands | [`ScopeCommand`], [`ScopePanel::panel_rows`], [`ScopePanel::run_command`], [`ScopeMenuAction`] |
 //! | Clipping | [`ClipWarning`], [`ClippingOverlay`], [`ClippingMode`], [`ClippingWarnings`], [`ClippingDiagnostic`] |
 //! | Vectorscope alone | [`VectorscopePlot`], [`scope_point`] |
@@ -42,4 +42,4 @@ pub use panel::{
 };
 pub use vectorscope::{VectorscopeFrame, VectorscopePlot, scope_point};
 pub use words::ScopeWords;
-pub use zones::{ScopeZoneEdit, ToneZone, ToneZones, ZoneChange};
+pub use zones::{ToneZone, ToneZones, ZoneScale, ZoneValues};

@@ -12,7 +12,7 @@ use super::menu::{ScopeCommand, ScopeMenuAction};
 use super::plot::{Shown, plot_data, resolve_channel};
 use super::vectorscope::VectorscopePlot;
 use super::words::ScopeWords;
-use super::zones::{ScopeZoneEdit, ToneZone, ToneZones};
+use super::zones::{ToneZone, ToneZones, ZoneScale, ZoneValues};
 use crate::scopes::{HistogramStatistics, histogram_statistics};
 use crate::ui::histogram::{ChannelColor, Histogram, HistogramData, LevelRange, PlotHeight, StaleMark};
 use craft_behavior::{ColumnWidth, EditEvents, IconId, Proposal};
@@ -87,7 +87,9 @@ pub struct ScopePanel<'a> {
     #[prop]
     markers: &'a [(f32, Label)],
     zones: &'a [ToneZone],
-    zone_values: &'a [Label],
+    zone_scales: &'a [ZoneScale],
+    zone_texts: &'a [Label],
+    zone_values: Bind<'a, ZoneValues>,
     /// The document has a selection: the scope menu offers Show Selected Region.
     #[prop]
     has_selection: bool,
@@ -96,13 +98,25 @@ pub struct ScopePanel<'a> {
 impl<'a> ScopePanel<'a> {
     /// A scope panel over `state`.
     pub fn new(state: &'a mut ScopePanelState) -> Self {
-        ScopePanel { state, frame: None, sources: &[], markers: &[], zones: &[], zone_values: &[], has_selection: false }
+        ScopePanel {
+            state,
+            frame: None,
+            sources: &[],
+            markers: &[],
+            zones: &[],
+            zone_scales: &[],
+            zone_texts: &[],
+            zone_values: Bind::kept(),
+            has_selection: false,
+        }
     }
 
-    /// The tone zones over the plot ([`ToneZone::CAMERA_RAW`] or [`ToneZone::LIGHTROOM`]) and each zone's value text,
-    /// in the same order (the tooltip and the slider's value).
-    pub fn zones(mut self, zones: &'a [ToneZone], values: &'a [Label]) -> Self {
+    /// The tone zones over the plot ([`ToneZone::CAMERA_RAW`] or [`ToneZone::LIGHTROOM`]) and, in the same order, each
+    /// zone's scale and value text (the tooltip and the slider's value), over the values of the controls they edit.
+    pub fn zones(mut self, zones: &'a [ToneZone], scales: &'a [ZoneScale], texts: &'a [Label], values: Bind<'a, ZoneValues>) -> Self {
         self.zones = zones;
+        self.zone_scales = scales;
+        self.zone_texts = texts;
         self.zone_values = values;
         self
     }
@@ -138,7 +152,7 @@ struct Report {
     refresh: bool,
     source_changed: bool,
     channel_changed: bool,
-    zone: EditEvents<ScopeZoneEdit>,
+    zone: EditEvents<ZoneValues>,
     hovered_level: Option<f32>,
     clipping_toggled: bool,
 }
@@ -221,7 +235,8 @@ impl Pass<'_> {
         self.report.refresh |= histogram.refresh || (!zoned && histogram.double_click);
         let mut openers = vec![histogram.response.clone()];
         if zoned {
-            let edit = ToneZones::new(words.tone_zones.clone(), self.panel.zones, self.panel.zone_values).show_at(ui, rect);
+            let (zones, scales, texts) = (self.panel.zones, self.panel.zone_scales, self.panel.zone_texts);
+            let edit = ToneZones::new(words.tone_zones.clone(), zones, scales, texts).value(self.panel.zone_values.reborrowed()).show_at(ui, rect);
             self.report.zone = edit.events;
         }
         if let Some(clipping) = frame.clipping {
@@ -418,8 +433,8 @@ pub struct ScopePanelOutput {
     pub source_changed: bool,
     /// The Channel changed.
     pub channel_changed: bool,
-    /// The tone-zone edits, in order, with their gesture; the host maps them to its control.
-    pub zone: EditEvents<ScopeZoneEdit>,
+    /// The tone-zone edits of the zones' values, in order, with their gesture; the host maps them to its controls.
+    pub zone: EditEvents<ZoneValues>,
     /// The whole level under the pointer on the main plot.
     pub hovered_level: Option<f32>,
     /// The selected level range after this pass (also in [`ScopePanelState::range`]).

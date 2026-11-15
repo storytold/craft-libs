@@ -136,7 +136,8 @@ impl<'a, T: Value> Bind<'a, T> {
         Self::from_source(Source::MutMixed(v))
     }
 
-    /// No caller value: the component keeps it in session memory under its id.
+    /// No caller value: the component keeps it in session memory under its id. Until something is stored, it reads
+    /// as the [`reset`](Self::reset) value when one is given, else as nothing.
     pub fn kept() -> Self {
         Self::from_source(Source::Kept)
     }
@@ -173,7 +174,7 @@ impl<'a, T: Value> Bind<'a, T> {
         self
     }
 
-    /// The value a reset gesture restores.
+    /// The value a reset gesture restores, and the value a kept binding reads while nothing is stored.
     pub fn reset(mut self, default: T) -> Self {
         self.reset = Some(default);
         self
@@ -299,13 +300,14 @@ impl<T: Value> BindMut<'_, T> {
         self.check.map_or(Validity::Ok, |check| check(value))
     }
 
-    /// The value of a kept binding: the saved tier when it has a `SaveKey`, else session memory under `id`. `held`
-    /// is the shown copy, reused when equal.
+    /// The value of a kept binding: the saved tier when it has a `SaveKey`, else session memory under `id`, else the
+    /// reset value while nothing is stored. `held` is the shown copy, reused when equal.
     pub(crate) fn kept(&self, stage: &mut MemoryStage, id: Id, held: &Held<T>) -> Option<Arc<T>> {
-        match self.save {
+        let stored = match self.save {
             Some(save) => (save.load)(stage, &save.key, held),
             None => stage.session::<Option<T>>(id).as_ref().map(|value| reuse_arc(held, value)),
-        }
+        };
+        stored.or_else(|| self.reset.map(|value| reuse_arc(held, value)))
     }
 
     /// Stores the value of a kept binding where `kept` reads it.

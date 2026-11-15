@@ -7,8 +7,8 @@
 use super::zones::ZONE;
 use super::{
     COLORS_CHANNEL, ChannelOverlay, ClipWarning, ClippingFrame, ClippingMode, ClippingOverlay, ClippingWarnings, HistogramSet, ScopeChannel,
-    ScopeFrame, ScopePanel, ScopePanelState, ScopeSettings, ScopeSource, ScopeView, ScopeZoneEdit, ToneZone, ToneZones, VectorscopeFrame,
-    VectorscopePlot, ZoneChange,
+    ScopeFrame, ScopePanel, ScopePanelState, ScopeSettings, ScopeSource, ScopeView, ToneZone, ToneZones, VectorscopeFrame, VectorscopePlot,
+    ZoneScale, ZoneValues,
 };
 use crate::scopes::{ChannelMask, ClippingMask, HUES, SATURATIONS, Vectorscope, hue_saturation};
 use crate::ui::histogram::ChannelColor;
@@ -185,16 +185,35 @@ fn zone_text(key: &str, value: f32) -> String {
     if key == "exposure" { format!("{value:+.2}") } else { format!("{value:+.0}") }
 }
 
+/// Each Camera Raw zone's value text, empty while the values are mixed.
+fn zone_texts(values: Option<&ZoneValues>) -> Vec<Label> {
+    let text = |at: usize, zone: &ToneZone| values.and_then(|values| values.0.get(at)).map(|value| zone_text(zone.key, *value));
+    ToneZone::CAMERA_RAW.iter().enumerate().map(|(at, zone)| Label::from(text(at, zone).unwrap_or_default())).collect()
+}
+
+/// Each Camera Raw zone's scale: Exposure in stops, -5 to 5, the others -100 to 100; a drag across the plot spans twice
+/// the range's end.
+fn zone_scales() -> [ZoneScale; 5] {
+    ToneZone::CAMERA_RAW.map(|zone| match zone.key {
+        "exposure" => ZoneScale::new(-5.0..=5.0, 10.0, 0.05, 0.0),
+        _ => ZoneScale::new(-100.0..=100.0, 200.0, 1.0, 0.0),
+    })
+}
+
+/// The zone values the zone stories start from.
+fn first_values() -> ZoneValues {
+    ZoneValues(vec![0.0; ToneZone::CAMERA_RAW.len()])
+}
+
 #[story(ScopePanel<'static>, covers = [Default], drive = Drive::Never)]
 fn tone_zones(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let values = *data.value("zone-values", [0.0f32; 5]);
-    let state = data.value("zones", ScopePanelState { settings: view(ScopeView::Expanded), ..ScopePanelState::default() });
+    let start = (ScopePanelState { settings: view(ScopeView::Expanded), ..ScopePanelState::default() }, first_values());
+    let (state, values) = data.value("zones", start);
     let curves = curves(Mode::Rgb, 0.0);
     let channels = scope_channels(&curves);
     let frame = ScopeFrame::histogram(HistogramSet::new(&channels));
-    let zones = ToneZone::CAMERA_RAW;
-    let texts: Vec<Label> = zones.iter().zip(values).map(|(zone, value)| Label::from(zone_text(zone.key, value))).collect();
-    ScopePanel::new(state).frame(&frame).zones(&zones, &texts).show(ui).into()
+    let (zones, scales, texts) = (ToneZone::CAMERA_RAW, zone_scales(), zone_texts(Some(&*values)));
+    ScopePanel::new(state).frame(&frame).zones(&zones, &scales, &texts, Bind::bound(values)).show(ui).into()
 }
 
 /// Generated pixels in a skin cluster, a sky and some foliage, with a few saturated ones.
@@ -313,38 +332,34 @@ fn clip_warning_that_is_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     ClipWarning::new("Highlight Clipping Warning (O)", Bind::bound(on).check(refuse), ChannelMask::R).show(ui).into()
 }
 
-/// The edit the zone stories start from.
-fn first_edit() -> ScopeZoneEdit {
-    ScopeZoneEdit { zone: 0, key: ToneZone::CAMERA_RAW[0].key, change: ZoneChange::Step(0) }
-}
-
-/// The zones of a story over a picture, the value text of each, and the story's canvas.
-fn zones_story(ui: &mut Ui, mut value: Bind<'_, ScopeZoneEdit>) -> StoryOutput {
-    let zones = ToneZone::CAMERA_RAW;
-    let texts: Vec<Label> = zones.iter().map(|zone| Label::from(zone_text(zone.key, 0.0))).collect();
+/// The zones of a story over a picture, with each zone's scale and value text, and the story's canvas.
+fn zones_story(ui: &mut Ui, mut value: Bind<'_, ZoneValues>, texts: &[Label]) -> StoryOutput {
+    let (zones, scales) = (ToneZone::CAMERA_RAW, zone_scales());
     let image = MockImage::default();
     story_canvas(ui, Some(&image), StoryView::Fit, |ui, rect| {
-        ToneZones::new("Tone zones", &zones, &texts).value(value.reborrowed()).show_at(ui, rect).into()
+        ToneZones::new("Tone zones", &zones, &scales, texts).value(value.reborrowed()).show_at(ui, rect).into()
     })
 }
 
 #[story(ToneZones<'static>, covers = [Default], drive = Drive::Drag(Grip::part(ZONE.at(1)).toward(vec2(1.0, 0.0))))]
 fn zones_over_a_plot(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let edit = data.value("edit", first_edit());
-    zones_story(ui, Bind::bound(edit))
+    let values = data.value("values", first_values());
+    let texts = zone_texts(Some(&*values));
+    zones_story(ui, Bind::bound(values), &texts)
 }
 
 #[story(ToneZones<'static>, covers = [Mixed], drive = Drive::Never)]
 fn zones_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let edit = data.value("mixed", Mixed::<ScopeZoneEdit>::Mixed);
-    zones_story(ui, Bind::bound_mixed(edit))
+    let values = data.value("mixed", Mixed::<ZoneValues>::Mixed);
+    zones_story(ui, Bind::bound_mixed(values), &zone_texts(None))
 }
 
 #[story(ToneZones<'static>, covers = [Invalid], drive = Drive::Never)]
 fn zones_that_are_refused(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    let edit = data.value("refused", first_edit());
-    let refuse = |_: &ScopeZoneEdit| Validity::Refuse(Message::new("Not available"));
-    zones_story(ui, Bind::bound(edit).check(refuse))
+    let values = data.value("refused", first_values());
+    let texts = zone_texts(Some(&*values));
+    let refuse = |_: &ZoneValues| Validity::Refuse(Message::new("Not available"));
+    zones_story(ui, Bind::bound(values).check(refuse), &texts)
 }
 
 #[story(ClippingOverlay<'static>, covers = [Default], drive = Drive::Never)]
