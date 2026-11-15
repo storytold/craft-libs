@@ -216,14 +216,11 @@ fn image_data_end(bytes: &[u8], first_pixel: usize) -> Result<usize> {
     let Some(footer) = bytes.len().checked_sub(SIGNATURE.len() + 8).filter(|&at| at >= HEADER) else {
         return Ok(bytes.len());
     };
-    let offsets = bytes.get(footer..footer + 8).and_then(|b| b.first_chunk::<8>()).ok_or_else(|| Error::Malformed("truncated footer"))?;
-    let extension = offsets.first_chunk::<4>().map(|v| u32::from_le_bytes(*v) as usize).ok_or_else(|| Error::Malformed("truncated footer"))?;
-    let directory = offsets
-        .get(4..)
-        .and_then(|v| v.first_chunk::<4>())
-        .map(|v| u32::from_le_bytes(*v) as usize)
-        .ok_or_else(|| Error::Malformed("truncated footer"))?;
-    let body = bytes.get(..footer).ok_or_else(|| Error::Malformed("truncated footer"))?;
+    let offsets = bytes.get(footer..footer + 8).and_then(|b| b.first_chunk::<8>()).ok_or(Error::Malformed("truncated footer"))?;
+    let extension = offsets.first_chunk::<4>().map(|v| u32::from_le_bytes(*v) as usize).ok_or(Error::Malformed("truncated footer"))?;
+    let directory =
+        offsets.get(4..).and_then(|v| v.first_chunk::<4>()).map(|v| u32::from_le_bytes(*v) as usize).ok_or(Error::Malformed("truncated footer"))?;
+    let body = bytes.get(..footer).ok_or(Error::Malformed("truncated footer"))?;
     let mut end = footer;
 
     if let Some(offset) = metadata_offset(body, extension, first_pixel) {
