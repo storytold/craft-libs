@@ -3,6 +3,7 @@
 //! This layer recognizes the document, stage, scene, layer and keyframe fields defined by XFL.
 //! It does not construct a consumer's animation model. More detailed payloads remain available
 //! through [`Document::root`] for the application adapter.
+use crate::shape::XflElement;
 use craft_xml::{Doctype, El, Error as XmlError, Limits, Local, Options, Pat, UnknownEntity};
 use std::borrow::Cow;
 
@@ -104,36 +105,60 @@ pub struct FrameModel {
 }
 
 /// A timeline (`DOMTimeline`) listed under `DOMDocument/timelines`.
-#[derive(Clone, Copy, Debug)]
-pub struct Timeline<'a> {
-    element: &'a El,
+#[derive(Debug)]
+pub struct Timeline<'a, E: XflElement = El> {
+    element: &'a E,
+}
+
+impl<E: XflElement> Copy for Timeline<'_, E> {}
+
+impl<E: XflElement> Clone for Timeline<'_, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 /// A native `DOMLayer` element.
-#[derive(Clone, Copy, Debug)]
-pub struct Layer<'a> {
-    element: &'a El,
+#[derive(Debug)]
+pub struct Layer<'a, E: XflElement = El> {
+    element: &'a E,
+}
+
+impl<E: XflElement> Copy for Layer<'_, E> {}
+
+impl<E: XflElement> Clone for Layer<'_, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
 /// A native `DOMFrame` element.
-#[derive(Clone, Copy, Debug)]
-pub struct Frame<'a> {
-    element: &'a El,
+#[derive(Debug)]
+pub struct Frame<'a, E: XflElement = El> {
+    element: &'a E,
 }
 
-fn attr_last<'a>(element: &'a El, name: &str) -> Option<&'a str> {
-    element.attrs.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.as_str())
+impl<E: XflElement> Copy for Frame<'_, E> {}
+
+impl<E: XflElement> Clone for Frame<'_, E> {
+    fn clone(&self) -> Self {
+        *self
+    }
 }
 
-fn number_f32(element: &El, name: &str) -> Option<f32> {
+fn attr_last<'a>(element: &'a impl XflElement, name: &str) -> Option<&'a str> {
+    element.attr(name)
+}
+
+fn number_f32(element: &impl XflElement, name: &str) -> Option<f32> {
     attr_last(element, name).and_then(|value| value.trim().parse::<f32>().ok()).filter(|value| value.is_finite())
 }
 
-fn number_u32(element: &El, name: &str) -> Option<u32> {
+fn number_u32(element: &impl XflElement, name: &str) -> Option<u32> {
     attr_last(element, name).and_then(|value| value.trim().parse::<u32>().ok())
 }
 
-fn boolean(element: &El, name: &str) -> Option<bool> {
+fn boolean(element: &impl XflElement, name: &str) -> Option<bool> {
     attr_last(element, name).map(|value| value.trim() == "true")
 }
 
@@ -187,7 +212,7 @@ impl Document {
         let profile = self
             .root
             .elements()
-            .find(|element| Local("flash_profile").matches(&element.name) && boolean(element, "current") == Some(true))
+            .find(|element| Local("flash_profile").matches(&element.name) && boolean(*element, "current") == Some(true))
             .or_else(|| self.root.elements().find(|element| Local("flash_profile").matches(&element.name)))
             .unwrap_or(&self.root);
         let properties = profile.child(Local("PublishFlashProperties")).unwrap_or(profile);
@@ -237,23 +262,28 @@ impl Document {
     }
 }
 
-impl<'a> Timeline<'a> {
+impl<'a, E: XflElement> Timeline<'a, E> {
+    /// Creates a borrowed XFL timeline view over a consumer's compatible XML element.
+    pub fn new(element: &'a E) -> Self {
+        Self { element }
+    }
+
     pub fn name(self) -> Option<&'a str> {
         attr_last(self.element, "name")
     }
 
     /// Raw timeline XML for application-specific payload conversion.
-    pub fn element(self) -> &'a El {
+    pub fn element(self) -> &'a E {
         self.element
     }
 
     /// Layers in native order. Non-`DOMLayer` extension nodes are skipped.
-    pub fn layers(self) -> impl Iterator<Item = Layer<'a>> {
+    pub fn layers(self) -> impl Iterator<Item = Layer<'a, E>> {
         self.element
-            .child(Local("layers"))
+            .child("layers")
             .into_iter()
-            .flat_map(El::elements)
-            .filter(|element| Local("DOMLayer").matches(&element.name))
+            .flat_map(|element| element.elements())
+            .filter(|element| element.local_name() == "DOMLayer")
             .map(|element| Layer { element })
     }
 
@@ -262,7 +292,12 @@ impl<'a> Timeline<'a> {
     }
 }
 
-impl<'a> Layer<'a> {
+impl<'a, E: XflElement> Layer<'a, E> {
+    /// Creates a borrowed XFL layer view over a consumer's compatible XML element.
+    pub fn new(element: &'a E) -> Self {
+        Self { element }
+    }
+
     pub fn name(self) -> Option<&'a str> {
         attr_last(self.element, "name")
     }
@@ -296,12 +331,16 @@ impl<'a> Layer<'a> {
     }
 
     /// Frames in native order. Non-`DOMFrame` extension nodes are skipped.
-    pub fn frames(self) -> impl Iterator<Item = Frame<'a>> {
+    pub fn element(self) -> &'a E {
         self.element
-            .child(Local("frames"))
+    }
+
+    pub fn frames(self) -> impl Iterator<Item = Frame<'a, E>> {
+        self.element
+            .child("frames")
             .into_iter()
-            .flat_map(El::elements)
-            .filter(|element| Local("DOMFrame").matches(&element.name))
+            .flat_map(|element| element.elements())
+            .filter(|element| element.local_name() == "DOMFrame")
             .map(|element| Frame { element })
     }
 
@@ -325,7 +364,12 @@ impl<'a> Layer<'a> {
     }
 }
 
-impl<'a> Frame<'a> {
+impl<'a, E: XflElement> Frame<'a, E> {
+    /// Creates a borrowed XFL frame view over a consumer's compatible XML element.
+    pub fn new(element: &'a E) -> Self {
+        Self { element }
+    }
+
     pub fn index(self) -> Option<u32> {
         number_u32(self.element, "index")
     }
@@ -347,7 +391,7 @@ impl<'a> Frame<'a> {
     }
 
     /// Raw frame XML for application-specific shape, action, sound and tween conversion.
-    pub fn element(self) -> &'a El {
+    pub fn element(self) -> &'a E {
         self.element
     }
 
@@ -406,6 +450,91 @@ mod tests {
         assert_eq!((frame.index(), frame.duration()), (Some(4), Some(3)));
         assert_eq!((frame.name(), frame.label_type(), frame.tween_type()), (Some("Intro"), Some("name"), Some("motion")));
         assert_eq!(frame.element().child("elements").unwrap().child("Shape").unwrap().name, "Shape");
+    }
+
+    #[test]
+    fn borrowed_timeline_views_accept_compatible_element_adapters() {
+        #[derive(Debug)]
+        struct AppElement {
+            name: String,
+            attributes: Vec<(String, String)>,
+            children: Vec<AppElement>,
+        }
+
+        impl XflElement for AppElement {
+            type Elements<'a> = std::slice::Iter<'a, Self>;
+
+            fn local_name(&self) -> &str {
+                self.name.rsplit(':').next().unwrap_or(&self.name)
+            }
+
+            fn attr(&self, name: &str) -> Option<&str> {
+                self.attributes.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.as_str())
+            }
+
+            fn elements(&self) -> Self::Elements<'_> {
+                self.children.iter()
+            }
+
+            fn text_content(&self) -> Cow<'_, str> {
+                Cow::Borrowed("")
+            }
+        }
+
+        fn element(name: &str, attributes: &[(&str, &str)], children: Vec<AppElement>) -> AppElement {
+            AppElement {
+                name: name.to_string(),
+                attributes: attributes.iter().map(|(key, value)| ((*key).to_string(), (*value).to_string())).collect(),
+                children,
+            }
+        }
+
+        let root = element(
+            "x:DOMDocument",
+            &[],
+            vec![element(
+                "x:timelines",
+                &[],
+                vec![element(
+                    "x:DOMTimeline",
+                    &[("name", "Old"), ("name", "Scene")],
+                    vec![element(
+                        "x:layers",
+                        &[],
+                        vec![element(
+                            "x:DOMLayer",
+                            &[("name", "Old"), ("name", "Layer"), ("color", "#abcdef"), ("visible", "false")],
+                            vec![element(
+                                "x:frames",
+                                &[],
+                                vec![element(
+                                    "x:DOMFrame",
+                                    &[
+                                        ("index", "999"),
+                                        ("index", "3"),
+                                        ("duration", "2"),
+                                        ("name", "Intro"),
+                                        ("labelType", "name"),
+                                        ("tweenType", "motion"),
+                                    ],
+                                    vec![],
+                                )],
+                            )],
+                        )],
+                    )],
+                )],
+            )],
+        );
+        let timeline_element = root.child("timelines").unwrap().child("DOMTimeline").unwrap();
+        let timeline = Timeline::new(timeline_element);
+        assert_eq!(timeline.name(), Some("Scene"));
+        let layer = timeline.layers().next().unwrap();
+        assert_eq!(layer.name(), Some("Layer"));
+        assert_eq!(layer.color(), Some("#abcdef"));
+        assert_eq!(layer.visible(), Some(false));
+        let frame = layer.frames().next().unwrap();
+        assert_eq!((frame.index(), frame.duration()), (Some(3), Some(2)));
+        assert_eq!((frame.name(), frame.label_type(), frame.tween_type()), (Some("Intro"), Some("name"), Some("motion")));
     }
 
     #[test]
