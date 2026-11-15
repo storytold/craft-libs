@@ -26,6 +26,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `BodyLayout`, `RowAlign` | How the body step lays out a body (`ContainerProps.layout`) | `craft_ui::layout` | 6.3, 16.2 |
 | `CancelReason` | Why a gesture or press was cancelled (`Refused`, `Dismissed`, `HostChanged`, `UndoDuringGesture`, ...) | craft-behavior | 10.2 |
 | `cancel_all` | `runtime::edit::cancel_all(ctx, reason)`: cancels every running gesture; the app's undo and redo call it first | `craft_ui::runtime::edit` | 10.3 |
+| `propose_with`, `gesture_note` | `cx.propose_with(value, note)` proposes like `propose` and, when the component takes the proposal, sets a typed note on the running gesture; `runtime::edit::gesture_note::<V, N>(ctx, id)` reads that note from outside the component's pass (`None` while no gesture runs) and the note goes when the gesture ends | `craft_ui::contract`, `craft_ui::runtime::edit` | 10.3 |
 | Canvas control | A leaf a `Canvas` body shows, declared with `#[component(canvas_control)]` | the component's family | 8.3, 20.6 |
 | Command form | A canvas tool's keyboard path | the tool's crate | 8.3 |
 | `CanvasTransform` | The transform a canvas body is shown through, from `ContainerProps.transform` | craft-behavior | 8.3 |
@@ -42,6 +43,9 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | `ColumnWidth`, `ColumnKey` | A column's width rule | craft-behavior | 17.1, 6.3 |
 | Command scope | A `CommandScope`, live while a container declaring it is live | craft-keymap | 11.3 |
 | `CommandRef`, `CommandKind`, `ModalRule` | A command's id, its kind (`Command`, `Toggle`, `Radio`, `Tool`, `Momentary`) and whether it fires while a dialog is open | craft-keymap | 11.2 |
+| `Board::bound_around` | The command of a set that a chord runs on a canvas inside a command chain, through the keymap and the scopes the window's keys match in; the tool host uses it so a key that automation holds starts the momentary tool the real key starts | `craft_ui::runtime::commands` | 11.2 |
+| `ToolInput::hold`, `ToolInput::let_go` | Queued tool inputs for a key going down and coming up again: the key stays held for the inputs queued after it, so a held Space pans a press the way the real key does | `craft_ui_canvas::canvas::tool_host` | 8.3 |
+| `Frames::over` | A frame driver over a given `egui::Context` (`Frames::new` makes its own), for tests that run the app's own context | `craft_ui::testing` | 22.4 |
 | `CommandGate` | The one gate that can disable commands (dialog open, workspace, recorder, pending operation) | `craft_ui::runtime::commands` | 11.3 |
 | `Commands` | The context trait on `Cx`, `BodyCx` and `ItemCx` for commands and the clipboard | `craft_ui::runtime::commands` | 11.3 |
 | `CommandSet` | A typed set of commands with one scope, written by `#[derive(CommandSet)]` and read with `take_command::<S>()` | craft-keymap (trait), `craft_ui::runtime::commands` (board) | 11.2, 11.3 |
