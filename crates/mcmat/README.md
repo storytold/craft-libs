@@ -5,7 +5,7 @@ contains `material.json`, named texture maps and a source package. Applications 
 parameter values and cook or render maps themselves; this crate does not depend on an app's
 model. It supports callers that read either version 1 or version 2 of the manifest, or both.
 
-`Material::open` takes caller-provided version, entry-count, map-count, per-entry and total
+`is_material` checks for a manifest with a bounded ZIP index; `Material::open` takes caller-provided version, entry-count, map-count, per-entry and total
 expanded-byte limits. Each subsequent `read` and `read_source` shares that budget, including
 repeated references to the same ZIP member. Duplicate member names are refused. The manifest
 preserves unknown fields at the top level and on maps; parameter, input and preset objects are

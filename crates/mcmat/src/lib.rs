@@ -69,6 +69,12 @@ pub enum Error {
     Archive(#[from] craft_zip::Error),
 }
 
+/// Whether a bounded ZIP index contains a material manifest. This does not validate the manifest.
+pub fn is_material(bytes: &[u8], max_entries: u64) -> bool {
+    Archive::open(bytes, craft_zip::Limits { max_entries, max_total_bytes: 0 })
+        .is_ok_and(|archive| !archive.has_duplicate_names() && archive.contains(MANIFEST_ENTRY))
+}
+
 /// Manifest and original archive, retaining one shared expanded-byte budget across reads.
 pub struct Material<'a> {
     pub manifest: Manifest,
@@ -157,6 +163,8 @@ mod tests {
         for version in [1, 2] {
             let manifest = sample(version);
             let bytes = write(&manifest, &[("maps/base.png".into(), vec![1, 2, 3])], b"source").unwrap();
+            assert!(is_material(&bytes, 100));
+            assert!(!is_material(&bytes, 1));
             let mut material = Material::open(&bytes, limits()).unwrap();
             assert_eq!(material.manifest, manifest);
             assert_eq!(material.read("maps/base.png").unwrap(), [1, 2, 3]);
