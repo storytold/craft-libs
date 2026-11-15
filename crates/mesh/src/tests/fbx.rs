@@ -662,3 +662,13 @@ fn scene_option_selects_the_last_parent_connection() {
     let default = doc.scene(&Limits::default(), &mut no_external).unwrap();
     assert!(default.nodes[0].children.contains(&2));
 }
+
+#[test]
+fn object_only_hierarchy_ignores_property_connections() {
+    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" {} Model: 2, \"Model::B\", \"Null\" {} } Connections: { C: \"OP\",2,1,\"SomeProperty\" }";
+    let doc = document(text.as_bytes());
+    let options = crate::fbx::SceneOptions { only_object_connections: true, ..Default::default() };
+    let scene = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    assert_eq!(scene.roots.len(), 2);
+    assert_eq!(doc.scene(&Limits::default(), &mut no_external).unwrap().roots.len(), 1);
+}
