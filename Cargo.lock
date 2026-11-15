@@ -1363,6 +1363,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ber"
+version = "0.1.0"
+
+[[package]]
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
@@ -2430,7 +2434,6 @@ dependencies = [
  "base64 0.23.1",
  "craft-image-codecs",
  "image",
- "rayon",
  "thiserror 2.0.21",
 ]
 
@@ -2732,6 +2735,7 @@ version = "0.1.0"
 dependencies = [
  "craft-media",
  "craft-media-testkit",
+ "rav1e",
  "rayon",
  "thiserror 2.0.21",
 ]

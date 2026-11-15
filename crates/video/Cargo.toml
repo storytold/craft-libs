@@ -52,6 +52,8 @@ vp9-encode = ["craft-media/isobmff"]
 av1 = ["av1-decode", "av1-encode"]
 av1-decode = []
 av1-encode = ["craft-media/isobmff"]
+# Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
+av1-large-encode = ["av1-encode", "dep:rav1e"]
 # Decode and encode across worker threads (rayon) in the codecs that support it.
 threads = ["dep:rayon"]
 
@@ -59,6 +61,9 @@ threads = ["dep:rayon"]
 craft-media = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rav1e = { version = "0.8", default-features = false, optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
