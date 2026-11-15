@@ -27,6 +27,27 @@ pub struct Sections<'a> {
     pub metafile: Option<&'a [u8]>,
 }
 
+fn word(bytes: &[u8], at: usize) -> Result<usize, Error> {
+    let end = at.checked_add(4).ok_or(Error::OutsideFile)?;
+    let b = bytes.get(at..end).and_then(|b| <[u8; 4]>::try_from(b).ok()).ok_or(Error::OutsideFile)?;
+    usize::try_from(u32::from_le_bytes(b)).map_err(|_| Error::OutsideFile)
+}
+
+fn part(bytes: &[u8], at: usize) -> Result<&[u8], Error> {
+    let len_at = at.checked_add(4).ok_or(Error::OutsideFile)?;
+    let (start, len) = (word(bytes, at)?, word(bytes, len_at)?);
+    start.checked_add(len).and_then(|end| bytes.get(start..end)).ok_or(Error::OutsideFile)
+}
+
+/// The PostScript program in an EPS, ignoring preview ranges in its binary header.
+///
+/// This is useful to readers that execute only PostScript and historically accepted a valid
+/// program section even when a separate preview range was damaged. Use [`sections`] when every
+/// declared section must be validated.
+pub fn postscript_section(bytes: &[u8]) -> Result<&[u8], Error> {
+    if bytes.starts_with(&DOS_MAGIC) { part(bytes, 4) } else { Ok(bytes) }
+}
+
 /// The sections of an EPS file: its PostScript and previews behind a binary header, or the whole
 /// file as PostScript. A header that points outside the file is an error, whichever section it
 /// is: such a file is cut short or not an EPS.
@@ -34,17 +55,12 @@ pub fn sections(bytes: &[u8]) -> Result<Sections<'_>, Error> {
     if !bytes.starts_with(&DOS_MAGIC) {
         return Ok(Sections { postscript: bytes, tiff: None, metafile: None });
     }
-    let word = |at: usize| -> Result<usize, Error> {
-        let b = bytes.get(at..at.saturating_add(4)).and_then(|b| <[u8; 4]>::try_from(b).ok()).ok_or(Error::OutsideFile)?;
-        usize::try_from(u32::from_le_bytes(b)).map_err(|_| Error::OutsideFile)
-    };
-    let part = |at: usize| -> Result<&[u8], Error> {
-        let (start, len) = (word(at)?, word(at + 4)?);
-        start.checked_add(len).and_then(|end| bytes.get(start..end)).ok_or(Error::OutsideFile)
-    };
     // A preview with no offset or no length is absent.
-    let preview = |at: usize| -> Result<Option<&[u8]>, Error> { if word(at)? == 0 || word(at + 4)? == 0 { Ok(None) } else { part(at).map(Some) } };
-    Ok(Sections { postscript: part(4)?, metafile: preview(12)?, tiff: preview(20)? })
+    let preview = |at: usize| -> Result<Option<&[u8]>, Error> {
+        let len_at = at.checked_add(4).ok_or(Error::OutsideFile)?;
+        if word(bytes, at)? == 0 || word(bytes, len_at)? == 0 { Ok(None) } else { part(bytes, at).map(Some) }
+    };
+    Ok(Sections { postscript: postscript_section(bytes)?, metafile: preview(12)?, tiff: preview(20)? })
 }
 
 /// `postscript` behind a binary header, followed by its previews. With neither preview the
