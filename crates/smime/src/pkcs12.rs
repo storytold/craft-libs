@@ -232,11 +232,18 @@ impl Work {
     }
 }
 
+/// A private-key bag and the metadata used to pair it with its certificate.
+struct KeyBag {
+    key: Zeroizing<Vec<u8>>,
+    key_id: Option<Vec<u8>>,
+    encrypted: bool,
+}
+
 /// The bags found.
 #[derive(Default)]
 struct Found {
     /// Each private key, its local key id, and whether it was encrypted in the file.
-    keys: Vec<(Zeroizing<Vec<u8>>, Option<Vec<u8>>, bool)>,
+    keys: Vec<KeyBag>,
     certificates: Vec<(Vec<u8>, Option<Vec<u8>>)>,
 }
 
@@ -245,7 +252,7 @@ impl Found {
     /// (a key that doesn't carry its public half) the one with the key's local key id, when it
     /// is of the very kind the key is (algorithm and curve). The kind said is the private key's.
     fn finish(mut self) -> Result<Opened, Error> {
-        let (key, key_id, key_encrypted) = match self.keys.len() {
+        let KeyBag { key, key_id, encrypted: key_encrypted } = match self.keys.len() {
             1 => self.keys.pop().ok_or(Error::NoPrivateKey)?,
             _ => return Err(Error::NoPrivateKey),
         };
@@ -653,7 +660,7 @@ fn safe_contents(bytes: &[u8], safe: Safe<'_>, work: &mut Work, found: &mut Foun
         }
         let key_id = attributes.and_then(local_key_id);
         match oid_of(kind)? {
-            KEY_BAG => found.keys.push((Zeroizing::new(value.whole.to_vec()), key_id, encrypted)),
+            KEY_BAG => found.keys.push(KeyBag { key: Zeroizing::new(value.whole.to_vec()), key_id, encrypted }),
             SHROUDED_KEY_BAG => {
                 // EncryptedPrivateKeyInfo (RFC 5958 §3).
                 if value.tag != 0x30 {
@@ -666,7 +673,7 @@ fn safe_contents(bytes: &[u8], safe: Safe<'_>, work: &mut Work, found: &mut Foun
                 if ber::read(&key).is_none_or(|(k, rest)| k.tag != 0x30 || !rest.is_empty()) {
                     return Err(Error::WrongPassphrase);
                 }
-                found.keys.push((key, key_id, true));
+                found.keys.push(KeyBag { key, key_id, encrypted: true });
             }
             CERT_BAG => {
                 if value.tag != 0x30 {
