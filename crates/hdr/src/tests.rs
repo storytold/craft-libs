@@ -142,3 +142,57 @@ fn limits_are_checked_before_allocating() {
     assert_eq!(decode(&long, &Limits { max_header: 8, ..Limits::default() }), Err(Error::Malformed("truncated header")));
     assert_eq!((Limits::default().max_pixels, Limits::default().max_header), (1 << 26, 64 << 10));
 }
+
+/// `isize::MAX` on a 32-bit target such as `wasm32`.
+const BOUND_32: u64 = i32::MAX as u64;
+
+#[test]
+fn buffer_lengths_respect_target_isize_bound() {
+    // A scan line of RGBE pixels, 4 bytes each.
+    assert_eq!(alloc_len(536_870_911, 4, BOUND_32), Some(536_870_911));
+    assert_eq!(alloc_len(536_870_912, 4, BOUND_32), None);
+    assert_eq!(alloc_len(u64::from(u32::MAX), 4, BOUND_32), None);
+    // The float picture: 3 floats of 4 bytes a pixel.
+    assert_eq!(alloc_len(178_956_970 * 3, 4, BOUND_32), Some(178_956_970 * 3));
+    assert_eq!(alloc_len(178_956_971 * 3, 4, BOUND_32), None);
+    // The default pixel limit fits a 32-bit target.
+    assert_eq!(alloc_len(Limits::default().max_pixels * 3, 4, BOUND_32), Some(3 << 26));
+    assert_eq!(checked_byte_len(u64::MAX, 4), None);
+    assert_eq!(alloc_len(u64::MAX, 1, MAX_ALLOC_BYTES), None);
+}
+
+#[test]
+fn raised_pixel_limit_stops_at_the_target_bound() {
+    let open = Limits { max_pixels: u64::MAX, ..Limits::default() };
+    // 2 × 2 needs an 8-byte scan line and a 48-byte float picture.
+    let ok = file("-Y 2 +X 2", &[0; 16]);
+    assert!(decode_within(&ok, &open, 48).is_ok());
+    assert_eq!(decode_within(&ok, &open, 47), Err(Error::LimitExceeded("pixel count")));
+    // A 1 × 536,870,912 picture is past the 32-bit bound in both buffers; refused before
+    // anything is allocated, ahead of the scan-line validation.
+    let wide = file("-Y 1 +X 536870912", &[0; 131_072]);
+    assert_eq!(decode_within(&wide, &open, BOUND_32), Err(Error::LimitExceeded("pixel count")));
+    // 178,956,971 one-pixel scan lines fit the scan buffer but not the float picture.
+    let tall = file("-Y 178956971 +X 1", &[0; 43_692]);
+    assert_eq!(decode_within(&tall, &open, BOUND_32), Err(Error::LimitExceeded("pixel count")));
+}
+
+#[test]
+fn header_lines_are_measured_after_lossy_conversion() {
+    // `#` and ten bytes that are not UTF-8: 11 bytes in the file, 31 as text.
+    let mut f = b"#?RADIANCE\n#".to_vec();
+    f.extend_from_slice(&[0xff; 10]);
+    f.extend_from_slice(b"\n\n-Y 1 +X 1\n\0\0\0\0");
+    assert_eq!(lossy_len(&f[11..22]), Some(31));
+    assert!(decode_within(&f, &Limits::default(), 31).is_ok());
+    assert_eq!(decode_within(&f, &Limits::default(), 30), Err(Error::LimitExceeded("header length")));
+    assert_eq!(lossy_len(b"ok \xe2\x82"), Some(6));
+    assert_eq!(lossy_len(b""), Some(0));
+}
+
+#[test]
+fn resolution_tokens_after_the_fourth_are_ignored() {
+    let f = dec(&file("-Y 1 +X 1 a b c d e f", &[0; 4])).unwrap();
+    assert_eq!((f.width, f.height), (1, 1));
+    assert_eq!(dec(&file("-Y 1 +X", &[0; 4])), Err(Error::Malformed("bad resolution line")));
+}
