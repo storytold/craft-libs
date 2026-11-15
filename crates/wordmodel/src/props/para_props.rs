@@ -450,8 +450,8 @@ pub struct ParaProps {
     pub suppress_hyphens: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppress_line_numbers: Option<bool>,
-    /// Suppress overlap with floating objects (`w:suppressOverlap`, ECMA-376 §17.3.1.29): the
-    /// paragraph does not shorten to make room for a floating table or shape.
+    /// Suppress overlap with floating objects (`w:suppressOverlap`): the paragraph does not shorten
+    /// to make room for a floating table or shape.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suppress_overlap: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

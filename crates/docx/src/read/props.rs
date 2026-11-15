@@ -556,8 +556,9 @@ pub fn margins(e: &El) -> [f32; 4] {
     margin_sides(e).map(|side| side.unwrap_or(0.0))
 }
 
-/// `w:tblCellSpacing` keeps its bounded width and supported measurement type. Malformed forms are
-/// ignored, as Word ignores them.
+/// `w:tblCellSpacing` keeps its bounded width and supported measurement type. A malformed width or an
+/// unsupported `w:type` drops the whole element, not just its width — which also loses the
+/// border-inside-the-cell effect that a present element has, even at a zero width.
 fn cell_spacing(e: &El) -> Option<CellSpacing> {
     let kind = match e.attr("w:type") {
         Some(value) => CellSpacingKind::from_ooxml(value)?,

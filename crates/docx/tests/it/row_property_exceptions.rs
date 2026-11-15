@@ -196,7 +196,7 @@ fn new_table_properties_are_written_in_schema_order() {
 
     let styles = part_xml(&output, "word/styles.xml");
     let style_tcpr = styles.split_once("<w:tcPr>").unwrap().1.split_once("</w:tcPr>").unwrap().0;
-    assert_order(style_tcpr, &["w:tcFitText", "w:vAlign"]);
+    assert_order(style_tcpr, &["w:shd", "w:tcFitText", "w:vAlign"]);
 }
 
 #[test]

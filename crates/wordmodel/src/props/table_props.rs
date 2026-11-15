@@ -25,7 +25,11 @@ pub enum TextDirection {
     Up,
 }
 
-/// Width and measurement type of table cell spacing (`w:tblCellSpacing`, ECMA-376 §17.4.46).
+/// Width and measurement type of table cell spacing (`w:tblCellSpacing`).
+///
+/// The width is in twips for `dxa`, and in fiftieths of a percent for `pct` — the file's own unit; the
+/// reader normalises a `pct` width to 0 because Word ignores percentage spacing, so a `pct` value set
+/// through this API does not survive a save and a reload (the type does).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CellSpacing {
@@ -276,7 +280,7 @@ pub struct RowProps {
     pub header: bool,
     /// Don't let the row break across pages.
     pub cant_split: bool,
-    /// Table properties this row overrides (`w:tblPrEx`, ECMA-376 §17.4.61): width, alignment,
+    /// Table properties this row overrides (`w:tblPrEx`, ECMA-376 §17.4.61): width, alignment, cell spacing,
     /// indent, borders, shading, layout and cell margins. `Some` when the file has the element.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exceptions: Option<Box<TableProps>>,
