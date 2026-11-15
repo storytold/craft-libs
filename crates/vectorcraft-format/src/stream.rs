@@ -4,8 +4,60 @@
 //! Extracted from VectorCraft, licensed under MIT OR Apache-2.0.
 
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{self, Write};
+
+/// Native file metadata for streaming a JSON envelope. Asset entries should be prepared using
+/// the same [`crate::Tail`] whose parts will be written after the JSON.
+pub struct FileHeader<'a> {
+    /// Native format version to write.
+    pub version: u32,
+    /// Application generator string.
+    pub generator: &'a str,
+    /// Optional saved PDF compatibility preference.
+    pub pdf_compatible: Option<bool>,
+    /// Optional inline preview.
+    pub preview: Option<&'a crate::Image>,
+    /// Embedded profiles keyed by profile name.
+    pub profiles: &'a BTreeMap<&'a str, crate::Image>,
+    /// Optional PDF entry.
+    pub pdf: Option<&'a crate::Image>,
+}
+
+/// Write the native JSON envelope, streaming the document through `document`. The callback
+/// returns the image entries after serializing the document, allowing it to collect image keys
+/// without keeping a copy of the document JSON. It must write one complete JSON value.
+pub fn write_file_json<'a>(
+    mut out: impl Write,
+    header: &FileHeader<'a>,
+    pretty: bool,
+    document: impl FnOnce(&mut dyn Write) -> io::Result<BTreeMap<&'a str, crate::Image>>,
+) -> io::Result<()> {
+    if !(crate::MIN_VERSION..=crate::VERSION).contains(&header.version) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "unsupported native file version"));
+    }
+    let mut env = Envelope::new(pretty);
+    let format = if header.version < 3 { crate::LEGACY_EXTENSION } else { crate::EXTENSION };
+    env.field(&mut out, "format", &format)?;
+    env.field(&mut out, "version", &header.version)?;
+    env.field(&mut out, "generator", &header.generator)?;
+    if let Some(compatible) = header.pdf_compatible {
+        env.field(&mut out, "pdfCompatible", &compatible)?;
+    }
+    if let Some(preview) = header.preview {
+        env.field(&mut out, "preview", preview)?;
+    }
+    if !header.profiles.is_empty() {
+        env.field(&mut out, "profiles", header.profiles)?;
+    }
+    if let Some(pdf) = header.pdf {
+        env.field(&mut out, "pdf", pdf)?;
+    }
+    env.key(&mut out, "document")?;
+    let images = document(&mut Indent { inner: &mut out, on: pretty })?;
+    env.field(&mut out, "images", &images)?;
+    env.finish(&mut out)
+}
 
 /// Indents JSON text written through it one level (two spaces after each newline), as a member
 /// of the file's top-level object; newlines only occur between tokens, inside strings they are

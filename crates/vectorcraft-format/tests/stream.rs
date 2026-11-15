@@ -81,3 +81,28 @@ fn tail_calls_hook_in_order_and_propagates_errors() {
         .unwrap();
     assert!(!called);
 }
+
+#[test]
+fn native_schema_order_and_versions() {
+    use craft_vectorcraft_format::stream::{FileHeader, write_file_json};
+    let profiles = Default::default();
+    for (version, name) in [(1, "drawcraft"), (4, "vectorcraft")] {
+        for pretty in [false, true] {
+            let header = FileHeader { version, generator: "test", pdf_compatible: Some(false), preview: None, profiles: &profiles, pdf: None };
+            let mut out = Vec::new();
+            write_file_json(&mut out, &header, pretty, |w| {
+                w.write_all(if pretty { b"{\n  \"key\": \"image\"\n}" } else { b"{\"key\":\"image\"}" })?;
+                Ok(Default::default())
+            })
+            .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&out).unwrap();
+            assert_eq!(value["format"], name);
+            assert_eq!(value["pdfCompatible"], false);
+            let text = std::str::from_utf8(&out).unwrap();
+            assert!(text.find("\"format\"").unwrap() < text.find("\"version\"").unwrap());
+            assert!(text.find("\"document\"").unwrap() < text.find("\"images\"").unwrap());
+        }
+    }
+    let header = FileHeader { version: 0, generator: "test", pdf_compatible: None, preview: None, profiles: &profiles, pdf: None };
+    assert!(write_file_json(Vec::new(), &header, false, |_| Ok(Default::default())).is_err());
+}
