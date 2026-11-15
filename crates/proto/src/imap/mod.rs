@@ -878,7 +878,8 @@ impl<S: Read + Write> Imap<S> {
     }
 
     fn fetch_flags(&mut self, set: &str, ids: bool, labels_wanted: bool) -> Result<Vec<Fetched>, ProtoError> {
-        let mut found: BTreeMap<u32, (Vec<String>, Option<u64>, Option<Vec<String>>)> = BTreeMap::new();
+        type FetchedFlags = (Vec<String>, Option<u64>, Option<Vec<String>>);
+        let mut found: BTreeMap<u32, FetchedFlags> = BTreeMap::new();
         // The bytes of labels and of flags kept so far, all messages together.
         let mut label_bytes = 0usize;
         let mut flag_bytes = 0usize;

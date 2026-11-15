@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Password authentication from RFC 4616 and RFC 4959, over an already secured stream.
 
-use super::*;
+use super::{Imap, ProtoError, Read, Status, Write, ignore, said};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 impl<S: Read + Write> Imap<S> {

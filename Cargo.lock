@@ -2374,7 +2374,6 @@ name = "craft-proto"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
- "encoding_rs",
  "log",
  "proptest",
  "zeroize",
