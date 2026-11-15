@@ -534,6 +534,23 @@ pub fn write_cube(l: &LutFile) -> String {
     cube_rows(s, l.data.as_chunks::<3>().0.iter().copied())
 }
 
+/// Writes a `.cube` file with a creator comment, section comments and an explicit input domain.
+///
+/// This layout is useful for exported LUTs; [`write_cube`] keeps its compact layout for embedded
+/// tables. Values retain six decimal places, and their order and quantisation belong to the
+/// caller. A default domain is written as `0.0` and `1.0` for compatibility with export consumers.
+pub fn write_cube_commented(l: &LutFile, creator: &str) -> String {
+    let mut s = format!("#Created by: {creator}\nTITLE \"{}\"\n\n#LUT size\nLUT_3D_SIZE {}\n\n#data domain\n", l.title.replace('"', "'"), l.size);
+    if l.domain_is_default() {
+        s.push_str("DOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n");
+    } else {
+        s.push_str(&format!("DOMAIN_MIN {} {} {}\n", l.domain_min[0], l.domain_min[1], l.domain_min[2]));
+        s.push_str(&format!("DOMAIN_MAX {} {} {}\n", l.domain_max[0], l.domain_max[1], l.domain_max[2]));
+    }
+    s.push_str("\n#LUT data points\n");
+    cube_rows(s, l.data.as_chunks::<3>().0.iter().copied())
+}
+
 fn cube_rows(mut s: String, rows: impl Iterator<Item = [f32; 3]>) -> String {
     for c in rows {
         s.push_str(&format!("{:.6} {:.6} {:.6}\n", c[0], c[1], c[2]));
@@ -624,6 +641,30 @@ pub fn builtin(id: &str) -> Option<LutFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commented_cube_preserves_export_header_and_rows() {
+        let mut lut = super::LutFile::identity(2).unwrap();
+        lut.title = "A \"look\"".into();
+        let text = super::write_cube_commented(&lut, "ExampleCraft");
+        assert!(text.starts_with("#Created by: ExampleCraft\nTITLE \"A 'look'\"\n\n#LUT size\nLUT_3D_SIZE 2\n\n#data domain\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n\n#LUT data points\n"));
+        let parsed = super::parse_cube(&text).unwrap();
+        assert_eq!(parsed.data, lut.data);
+        assert_eq!(parsed.title, "A 'look'");
+        assert_eq!(text.lines().count(), 11 + 8);
+        let rows = |s: &str| s.lines().filter(|line| line.starts_with(|c: char| c.is_ascii_digit())).map(str::to_owned).collect::<Vec<_>>();
+        assert_eq!(rows(&text), rows(&super::write_cube(&lut)));
+    }
+
+    #[test]
+    fn commented_cube_keeps_nondefault_domain_and_sample_precision() {
+        let mut lut = super::LutFile::identity(2).unwrap();
+        lut.domain_min = [0.125, 0.25, 0.375];
+        lut.domain_max = [0.625, 0.75, 0.875];
+        lut.data[0] = 0.833344;
+        let parsed = super::parse_cube(&super::write_cube_commented(&lut, "ExampleCraft")).unwrap();
+        assert_eq!(parsed, lut);
+    }
 
     #[test]
     fn cube_title_hashes_and_comment_quotes_are_distinct() {
