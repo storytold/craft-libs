@@ -1316,7 +1316,18 @@ impl<'a> Build<'a, '_> {
             return Ok(Some(*m));
         }
         let Some(record) = self.by_key.get(&mid).copied() else { return Ok(None) };
-        let mut m = material(short_name(record.first_str().unwrap_or("")), record);
+        let name = short_name(record.first_str().unwrap_or(""));
+        let fallback;
+        let name = if name.is_empty() {
+            fallback = match mid {
+                Key::Id(i) => format!("Material_{i}"),
+                Key::Name(s) => format!("Material_{s}"),
+            };
+            &fallback
+        } else {
+            name
+        };
+        let mut m = material(name, record);
         for (tid, prop) in self.children_of(mid, "Texture") {
             let slot = match prop {
                 Some("DiffuseColor") => &mut m.base_color_texture,
@@ -1386,9 +1397,14 @@ impl<'a> Build<'a, '_> {
         let mut color_indices = HashMap::<(u32, u32), u32>::new();
         let mut first_color = HashMap::<u32, u32>::new();
         let mut colors_complete = colors.is_some();
-        let slots = geom.child("LayerElementMaterial").and_then(|e| {
+        let slots = geom.children_named("LayerElementMaterial").min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0)).and_then(|e| {
             let mapping = e.child("MappingInformationType").and_then(|m| m.str_at(0)).unwrap_or("AllSame");
-            Some((mapping == "ByPolygon", e.child("Materials")?.ints()))
+            let by_poly = match mapping {
+                "ByPolygon" | "ByPolygonVertex" | "ByVertex" | "ByVertice" | "ByControlPoint" => true,
+                "AllSame" => false,
+                _ => return None,
+            };
+            Some((by_poly, e.child("Materials")?.ints()))
         });
         let (normal_layer, uv_layer) = (normals.as_ref().map(|l| &l.0), uvs.as_ref().map(|l| &l.0));
 
@@ -1458,11 +1474,13 @@ impl<'a> Build<'a, '_> {
             if self.triangles > limits.max_triangles {
                 return Err(too_large(KIND, format!("more than {} triangles", limits.max_triangles)));
             }
-            let slot = slots.as_ref().and_then(|(by_poly, ids)| {
-                let k = if *by_poly { *ids.get(p_index)? } else { *ids.first()? };
-                materials.get(usize::try_from(k).ok()?).copied()
-            });
-            let slot = slot.or_else(|| materials.first().copied());
+            let slot = match &slots {
+                Some((by_poly, ids)) => {
+                    let k = if *by_poly { ids.get(p_index) } else { ids.first() };
+                    k.and_then(|k| usize::try_from(*k).ok()).and_then(|k| materials.get(k)).copied()
+                }
+                None => materials.first().copied(),
+            };
             let at = match part_of.get(&slot) {
                 Some(at) => *at,
                 None => {
