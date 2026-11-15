@@ -1110,10 +1110,10 @@ impl<'a> Build<'a, '_> {
                 ("LayerElementMaterial", &["Materials"][..]),
                 ("LayerElementColor", &["Colors", "ColorIndex"][..]),
             ] {
-                if let Some(layer) = geom.children_named(element).min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0)) {
-                    if names.iter().filter_map(|n| layer.child(n)).any(|r| !valid(r, false)) {
-                        return Err(malformed(KIND, "mesh array contains a non-numeric or non-finite value"));
-                    }
+                if let Some(layer) = geom.children_named(element).min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0))
+                    && names.iter().filter_map(|n| layer.child(n)).any(|r| !valid(r, false))
+                {
+                    return Err(malformed(KIND, "mesh array contains a non-numeric or non-finite value"));
                 }
             }
         }
