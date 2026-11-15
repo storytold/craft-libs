@@ -4,6 +4,17 @@ fn err(message: &str) -> CodecError {
     CodecError::malformed(Format::Png, message)
 }
 
+/// Dimensions declared in a PNG IHDR prefix, without checking the rest of the file.
+/// Useful only for an early allocation limit; use [`header`] for structural inspection.
+pub fn declared_dimensions(b: &[u8]) -> Option<(u32, u32)> {
+    if !b.starts_with(b"\x89PNG\r\n\x1a\n") || b.get(12..16) != Some(b"IHDR") {
+        return None;
+    }
+    let w = u32::from_be_bytes(b.get(16..20)?.try_into().ok()?);
+    let h = u32::from_be_bytes(b.get(20..24)?.try_into().ok()?);
+    Some((w, h))
+}
+
 /// Stored dimensions and EXIF orientation. This does not validate CRCs or compressed pixels.
 pub fn header(b: &[u8]) -> Result<(u32, u32, u16), CodecError> {
     if !b.starts_with(b"\x89PNG\r\n\x1a\n") {
