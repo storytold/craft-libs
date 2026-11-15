@@ -558,7 +558,7 @@ fn destination_limit_is_explicit_and_never_silently_truncates() {
     }
     body.push(3);
     assert_eq!(super::parse_reply(&body).unwrap().queues.len(), super::MAX_PRINTERS);
-    body.pop();
+    assert_eq!(body.pop(), Some(3));
     body.push(4);
     body.extend(printer_name("OneTooMany"));
     body.push(3);
