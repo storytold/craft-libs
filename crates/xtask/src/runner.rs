@@ -405,24 +405,32 @@ pub fn run(mut cmd: Command, label: &str) -> Result<(), String> {
 /// On Unix the child runs in a process group of its own, so a terminal's Ctrl-C reaches the xtask
 /// and not the child: the app's Ctrl-C handler sets `cancel`, and this function ends the group with
 /// `kill -s KILL`. On Windows it ends the process tree with `taskkill /T /F`. When that tool cannot
-/// be run, only the child itself is ended.
+/// be run, only the child itself is ended. `taskkill` finds the tree through the running child, so on
+/// Windows the processes a child started keep running when the child has already exited.
 pub fn run_cancelable(mut cmd: Command, label: &str, cancel: &Cancel) -> Result<(), String> {
     crate::note(format_args!("$ {label}"));
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     let mut child = spawn(&mut cmd, label)?;
+    wait_cancelable(&mut child, label, cancel)
+}
+
+/// Waits for `child`, ending its group or tree when `cancel` is set. The flag is checked before each
+/// look at the child's status, so a child that exits after `cancel` was set still has its group or
+/// tree ended, and the run counts as canceled.
+fn wait_cancelable(child: &mut Child, label: &str, cancel: &Cancel) -> Result<(), String> {
     loop {
-        if let Some(status) = child.try_wait().map_err(|e| format!("{label}: {e}"))? {
-            return exit_result(label, status);
-        }
         if cancel.is_canceled() {
-            let killed = end_tree(&mut child);
+            let killed = end_tree(child);
             let reaped = child.wait();
             return match (killed, reaped) {
                 (_, Ok(_)) => Err(format!("{label}: canceled")),
                 (Err(k), Err(w)) => Err(format!("{label}: canceled, but the child could not be ended ({k}; {w})")),
                 (Ok(()), Err(w)) => Err(format!("{label}: canceled, but waiting for the child failed ({w})")),
             };
+        }
+        if let Some(status) = child.try_wait().map_err(|e| format!("{label}: {e}"))? {
+            return exit_result(label, status);
         }
         std::thread::sleep(CHILD_POLL);
     }
@@ -805,6 +813,20 @@ mod tests {
         let mut child = spawn(&mut cmd, "stdin").expect("child");
         assert!(child.stdin.is_none(), "the child's stdin is still open");
         assert!(child.wait().expect("child").success());
+    }
+
+    #[test]
+    fn a_child_that_exits_after_cancel_counts_as_canceled() {
+        let _guard = crate::spawn_guard();
+        // The filter matches no test, so the child exits at once with success. Waiting here first
+        // stands for a child that exits while `cancel` is already set.
+        let mut cmd = test_child("runner::tests::no_such_test", "CRAFT_XTASK_EXITED_CHILD");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let mut child = spawn(&mut cmd, "exited").expect("child");
+        assert!(child.wait().expect("child").success());
+        let cancel = Cancel::new();
+        cancel.cancel();
+        assert_eq!(wait_cancelable(&mut child, "exited", &cancel), Err("exited: canceled".to_owned()));
     }
 
     #[test]
