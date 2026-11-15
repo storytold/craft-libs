@@ -784,3 +784,14 @@ fn strict_ascii_reports_unbalanced_and_unterminated_records() {
     }
     assert!(read_document(b"Objects: { A: 1", &Limits::default()).is_ok());
 }
+
+#[test]
+fn scene_option_selects_the_last_parent_connection() {
+    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" {} Model: 2, \"Model::B\", \"Null\" {} Model: 3, \"Model::Child\", \"Null\" {} } Connections: { C: \"OO\",3,1 C: \"OO\",3,2 }";
+    let doc = document(text.as_bytes());
+    let options = crate::fbx::SceneOptions { prefer_last_parent: true, ..Default::default() };
+    let scene = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    assert!(scene.nodes[1].children.contains(&2));
+    let default = doc.scene(&Limits::default(), &mut no_external).unwrap();
+    assert!(default.nodes[0].children.contains(&2));
+}

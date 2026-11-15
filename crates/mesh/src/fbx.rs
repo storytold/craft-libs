@@ -731,6 +731,8 @@ pub struct SceneOptions {
     pub apply_inactive_rotation: bool,
     /// Refuse malformed geometry arrays and accept an unterminated final polygon.
     pub strict_geometry: bool,
+    /// If a model names several parents, use the last connection.
+    pub prefer_last_parent: bool,
 }
 
 impl Document {
@@ -840,7 +842,11 @@ impl Document {
             if let (Some(ci), Some(pi)) = (node_of.get(c), node_of.get(p))
                 && ci != pi
             {
-                parent.entry(*ci).or_insert(*pi);
+                if options.prefer_last_parent {
+                    parent.insert(*ci, *pi);
+                } else {
+                    parent.entry(*ci).or_insert(*pi);
+                }
             }
         }
         for i in 0..b.scene.nodes.len() {
