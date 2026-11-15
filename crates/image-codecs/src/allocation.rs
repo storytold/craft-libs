@@ -247,3 +247,52 @@ fn read_le24(bytes: &[u8], at: usize) -> Option<u32> {
     let b = bytes.get(at..at.checked_add(3)?)?;
     Some(u32::from_le_bytes([b[0], b[1], b[2], 0]))
 }
+
+/// Probe the stored dimensions of the first PNG, JPEG, BMP or TIFF image, without decoding
+/// pixels or applying orientation. TIFF uses the first directory even if it is a thumbnail.
+/// The caller's limits bound both the header decoder and the declared output dimensions.
+pub fn probe_stored_size(bytes: &[u8], limits: &crate::Limits) -> Result<(u32, u32), CodecError> {
+    use std::io::Cursor;
+    let format = crate::detect(bytes).ok_or(CodecError::UnknownFormat)?;
+    if !matches!(format, Format::Png | Format::Jpeg | Format::Bmp | Format::Tiff) {
+        return Err(CodecError::unsupported(format, "stored-size probe is not available for this format"));
+    }
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|e| CodecError::malformed(format, e))?;
+    let mut image_limits = image::Limits::default();
+    image_limits.max_image_width = Some(limits.max_width);
+    image_limits.max_image_height = Some(limits.max_height);
+    image_limits.max_alloc = Some(limits.max_alloc);
+    reader.limits(image_limits);
+    let (w, h) = reader.into_dimensions().map_err(|e| CodecError::malformed(format, e))?;
+    limits.check_size(w, h)?;
+    Ok((w, h))
+}
+
+#[cfg(test)]
+mod stored_size_tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn stored_probe_uses_caller_limits_without_decoding() {
+        let mut bmp = Cursor::new(Vec::new());
+        image::write_buffer_with_format(&mut bmp, &vec![0; 300_000 * 3], 1, 300_000, image::ExtendedColorType::Rgb8, image::ImageFormat::Bmp)
+            .unwrap();
+        let bytes = bmp.into_inner();
+        let limits = crate::Limits::new(u32::MAX, u32::MAX, 128_000_000, 2_048_000_000);
+        assert_eq!(probe_stored_size(&bytes, &limits).unwrap(), (1, 300_000));
+        assert!(probe_stored_size(&bytes, &crate::Limits::default()).is_err());
+        assert!(probe_stored_size(&bytes[..20], &limits).is_err());
+    }
+
+    #[test]
+    fn common_stored_headers_are_probed() {
+        let limits = crate::Limits::new(100, 100, 10_000, 1 << 20);
+        for format in [image::ImageFormat::Png, image::ImageFormat::Jpeg, image::ImageFormat::Bmp, image::ImageFormat::Tiff] {
+            let mut out = Cursor::new(Vec::new());
+            image::write_buffer_with_format(&mut out, &[10; 18], 3, 2, image::ExtendedColorType::Rgb8, format).unwrap();
+            assert_eq!(probe_stored_size(&out.into_inner(), &limits).unwrap(), (3, 2), "{format:?}");
+        }
+    }
+}

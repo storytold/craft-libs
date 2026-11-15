@@ -31,7 +31,7 @@ pub mod orientation;
 pub mod resolution;
 pub mod source_settings;
 pub mod web;
-pub use crate::allocation::probe_allocation_size;
+pub use crate::allocation::{probe_allocation_size, probe_stored_size};
 pub use crate::cicp::Cicp;
 pub use crate::cicp::ContentLightLevel;
 pub use crate::codecs::avif::{HDR_REFERENCE_WHITE_NITS, HdrTransfer, encode_avif_hdr, encode_avif_with_speed};
