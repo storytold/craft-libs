@@ -26,3 +26,6 @@ pub mod hyphen;
 pub mod linebreak;
 #[cfg(feature = "segment")]
 pub mod segment;
+
+/// Paragraph-wide line composition with stateful line measurement.
+pub mod composer;
