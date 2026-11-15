@@ -11,8 +11,9 @@ pub struct Limits {
     pub max_height: u32,
     /// Maximum `width * height`.
     pub max_pixels: u64,
-    /// Maximum bytes for the decoded pixel buffer (and passed on as the
-    /// allocation budget to underlying decoders).
+    /// Maximum bytes for a decoded pixel buffer. Whole-image decoders apply this to the full
+    /// output; streaming decoders apply it to each buffered row or group. It is also passed on as
+    /// the allocation budget to underlying decoders.
     /// PNG also applies this to the aggregate decoded text/XMP UTF-8 bytes,
     /// including keywords, separately from pixels. Animated WebP charges
     /// every retained frame's full pixel copy plus its own copy of the

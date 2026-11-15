@@ -661,6 +661,61 @@ fn step_stream_gives_the_pixels_and_extras_of_decode() {
     assert!(!PngDecodeRows::new_streaming(bytes.as_slice(), &Limits::default()).unwrap().streamable());
 }
 
+/// Streaming may exceed the whole-image allocation budget, while each output group and metadata
+/// remain bounded by it. Whole-frame paths still refuse the same image.
+#[test]
+fn streaming_png_bounds_row_groups_and_keeps_whole_image_limit() {
+    let (w, h) = (23u32, 19u32);
+    let image = Image::from_raw(
+        w,
+        h,
+        ChannelLayout::Rgb,
+        SampleType::U16,
+        (0..w as usize * h as usize * 3 * 2).map(|i| (i.wrapping_mul(65_537) >> 9) as u8).collect(),
+    )
+    .unwrap();
+    let bytes = encode(&image, Format::Png, &EncodeOptions::default()).unwrap();
+    let expected = decode(&bytes).unwrap();
+    let row_bytes = dec_line(w, ChannelLayout::Rgb, SampleType::U16);
+    let max_alloc = row_bytes * 3;
+    let limits = Limits { max_alloc: max_alloc as u64, ..Limits::default() };
+
+    assert!(PngDecodeRows::new(bytes.as_slice(), &limits).is_err(), "whole-image construction must keep its allocation guard");
+    assert!(PngDecodeRows::new_streaming(bytes.as_slice(), &Limits { max_width: w - 1, ..limits }).is_err(), "streaming must keep dimension limits");
+    assert!(
+        PngDecodeRows::new_streaming(bytes.as_slice(), &Limits { max_pixels: u64::from(w) * u64::from(h) - 1, ..limits }).is_err(),
+        "streaming must keep pixel limits"
+    );
+    let mut whole = PngDecodeRows::new_streaming(bytes.as_slice(), &limits).unwrap();
+    assert!(whole.step(&mut || true).is_err(), "whole-image stepping must keep its allocation guard");
+    assert!(whole.reserve_output().is_err(), "explicit whole-image reservation must keep its allocation guard");
+
+    let mut rows = PngDecodeRows::new_streaming(bytes.as_slice(), &limits).unwrap();
+    let mut data = Vec::new();
+    let mut largest_group = 0;
+    let extras = rows
+        .step_stream(u32::MAX, &mut || true, &mut |_, group| -> Result<(), CodecError> {
+            largest_group = largest_group.max(group.len());
+            assert!(group.len() <= max_alloc, "row group exceeded max_alloc");
+            data.extend_from_slice(group);
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(largest_group, max_alloc, "an oversized requested group is capped to the budget");
+    assert_eq!(data, expected.data());
+    assert_eq!(extras.meta.text, expected.meta.text);
+
+    let mut with_text = image;
+    with_text.meta.text.push(("Comment".into(), "x".repeat(max_alloc + 1)));
+    let metadata_png = encode(&with_text, Format::Png, &EncodeOptions::default()).unwrap();
+    let mut metadata_rows = PngDecodeRows::new_streaming(metadata_png.as_slice(), &limits).unwrap();
+    assert!(matches!(
+        metadata_rows.step_stream(u32::MAX, &mut || true, &mut |_, _| -> Result<(), CodecError> { Ok(()) }),
+        Err(CodecError::LimitExceeded(_))
+    ));
+}
+
 /// Bytes per row of `w` pixels.
 fn dec_line(w: u32, layout: ChannelLayout, sample: SampleType) -> usize {
     w as usize * layout.channels() * sample.bytes()

@@ -139,13 +139,16 @@ pub struct PngDecodeRows<B: AsRef<[u8]>> {
 
 impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     /// Reads the header and refuses what [`decode`] refuses before any pixel is decoded: sizes
-    /// past `limits`, and a file too small for the image it declares.
+    /// past `limits`, a file too small for the image it declares, or an output larger than
+    /// `max_alloc`.
     pub fn new(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
         Self::open(bytes, limits, true)
     }
 
-    /// [`PngDecodeRows::new`], optionally without reserving the whole image: a caller that hands
-    /// the rows on as they come ([`decode_rows`]) never holds them all.
+    /// Opens a PNG, optionally for streaming its rows without holding the whole image. In
+    /// streaming mode, dimensions and pixel count are still checked, as are one row and each
+    /// decoded metadata budget; `max_alloc` bounds row groups. The whole-image allocation check
+    /// remains in force for [`PngDecodeRows::step`] and [`PngDecodeRows::reserve_output`].
     fn open(bytes: B, limits: &Limits, reserve: bool) -> Result<Self, CodecError> {
         let at = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let bytes = SharedInput(std::sync::Arc::new(bytes));
@@ -187,7 +190,14 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         let (width, height) = info.frame_control.map_or_else(|| info.size(), |f| (f.width, f.height));
         let line = reader.output_line_size(width).ok_or_else(|| err("image too large"))?;
         // The output layout is known: charge its real bytes per pixel, not RGBA16's worst case.
-        limits.check(width, height, layout, sample)?;
+        // A streaming decoder holds rows, not the whole image, so its allocation budget is
+        // applied to one row here and to each requested row group in `step_stream`.
+        if reserve {
+            limits.check(width, height, layout, sample)?;
+        } else {
+            limits.check_size(width, height)?;
+            limits.check_bytes(width, 1, (layout.channels() * sample.bytes()) as u64)?;
+        }
         let height = usize::try_from(height).map_err(|_| err("image too large"))?;
         if width == 0 || height == 0 {
             return Err(err("the image is empty"));
@@ -229,18 +239,26 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         })
     }
 
-    /// [`PngDecodeRows::new`] without reserving the whole image, for a caller that streams the rows
-    /// ([`PngDecodeRows::step_stream`]) and so never holds them all. A caller that finds it must
-    /// decode the whole image after all (an interlaced file) calls
-    /// [`PngDecodeRows::reserve_output`] before [`PngDecodeRows::step`].
+    /// Opens without requiring the whole decoded image to fit `max_alloc`, for callers that hand
+    /// rows on as they come ([`PngDecodeRows::step_stream`]). Dimensions, pixel count, decoder
+    /// limits, one-row allocation, and decoded metadata limits remain checked. Each row group is
+    /// bounded by `max_alloc`. To decode the whole image (including an interlaced file), the full
+    /// image must still fit: [`PngDecodeRows::step`] and [`PngDecodeRows::reserve_output`] enforce
+    /// that limit.
     pub fn new_streaming(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
         Self::open(bytes, limits, false)
     }
 
     /// Reserves the buffer [`PngDecodeRows::step`] decodes the whole image into.
     pub fn reserve_output(&mut self) -> Result<(), CodecError> {
+        self.check_whole_output()?;
         let size = self.size;
         self.buf.try_reserve_exact(size).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {size} bytes for the image")))
+    }
+
+    fn check_whole_output(&self) -> Result<(), CodecError> {
+        let height = u32::try_from(self.height).map_err(|_| err("image too large"))?;
+        self.limits.check(self.width, height, self.layout, self.sample)
     }
 
     /// Whether the rows come in final order, so [`PngDecodeRows::step_stream`] can hand them on:
@@ -274,6 +292,9 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         if self.done {
             return Err(err("the image was already decoded"));
         }
+        // `new_streaming` defers this check so a large image can use `step_stream`, but `step`
+        // returns a whole frame and must not grow its buffer past the allocation budget.
+        self.check_whole_output()?;
         // Once the pixels are complete and the tail is known, a step only reads metadata:
         // running the pixel reader again after `begin_tail` would decode an Adam7 frame twice
         // or finish the image data again on every metadata yield.
@@ -332,13 +353,14 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
     }
 
     /// Decodes the rows of a [`streamable`](PngDecodeRows::streamable) file a group at a time:
-    /// `sink(y0, data)` gets whole rows `y0..` in final order, `group` of them at a time (the last
-    /// group may be shorter; 0 counts as 1), native-endian, exactly the samples [`decode`] would
-    /// return, and the decoder keeps only that group. Decodes at least one row, then goes on while
-    /// `more()` returns true; `Some` with the extras once the file is read to its end, with the
-    /// resolution a format that lacks one takes from its EXIF or XMP. A damaged file fails with
-    /// the error [`decode`] gives, after however many rows were delivered. An orientation (an
-    /// `eXIf` after the image data may set one) is for the caller to apply.
+    /// `sink(y0, data)` gets whole rows `y0..` in final order, at most `group` of them at a time
+    /// (the last group may be shorter; 0 counts as 1; `max_alloc` may cap it further),
+    /// native-endian, exactly the samples [`decode`] would return. The decoder keeps only that
+    /// group. It decodes at least one row, then goes on while `more()` returns true; `Some` with
+    /// the extras once the file is read to its end, with the resolution a format that lacks one
+    /// takes from its EXIF or XMP. A damaged file fails with the error [`decode`] gives, after
+    /// however many rows were delivered. An orientation (an `eXIf` after the image data may set
+    /// one) is for the caller to apply.
     pub fn step_stream<E: From<CodecError>>(
         &mut self,
         group: u32,
@@ -348,7 +370,11 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         if self.done {
             return Err(err("the image was already decoded").into());
         }
-        let group = usize::try_from(group.max(1)).unwrap_or(usize::MAX);
+        let requested_group = usize::try_from(group.max(1)).unwrap_or(usize::MAX);
+        let row_bytes = u64::try_from(self.line).map_err(|_| err("image too large"))?;
+        let max_group = usize::try_from(self.limits.max_alloc / row_bytes).unwrap_or(usize::MAX);
+        // `open` rejects a row larger than max_alloc, so at least one row always fits.
+        let group = requested_group.min(max_group.max(1));
         if !self.tail {
             while self.rows < self.height {
                 let held = self.rows - self.group_start;
