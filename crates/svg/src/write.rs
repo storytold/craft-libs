@@ -86,18 +86,36 @@ impl Attribute {
     pub fn translate_scale(x: f64, y: f64, scale_x: f64, scale_y: f64) -> Self {
         Self { name: "transform".into(), value: Value::TranslateScale { x, y, scale_x, scale_y } }
     }
+    /// A translate/scale transform with three decimal places for positions and four for scales.
+    pub fn translate_scale_fixed(x: f64, y: f64, scale_x: f64, scale_y: f64) -> Self {
+        Self::text("transform", format!("translate({} {}) scale({} {})", num(x, 3), num(y, 3), num(scale_x, 4), num(scale_y, 4)))
+    }
 }
 
 impl Scene {
     /// Serialize the scene as an SVG 1.1 document.
     pub fn write(&self) -> String {
+        self.write_impl(false)
+    }
+
+    /// Serialize the root viewBox with three decimal places for stable fixed-width output.
+    pub fn write_fixed_view_box(&self) -> String {
+        self.write_impl(true)
+    }
+
+    fn write_impl(&self, fixed: bool) -> String {
         let mut writer = SvgWriter::new();
+        let view_box = if fixed {
+            format!("{} {} {} {}", num(self.view_box[0], 3), num(self.view_box[1], 3), num(self.view_box[2], 3), num(self.view_box[3], 3))
+        } else {
+            view_box_data(self.view_box)
+        };
         writer
             .root()
             .attr("version", "1.1")
             .attr("width", format!("{}mm", num(self.width_mm, 3)))
             .attr("height", format!("{}mm", num(self.height_mm, 3)))
-            .attr("viewBox", view_box_data(self.view_box))
+            .attr("viewBox", view_box)
             .open();
         write_elements(&mut writer, &self.elements, 1);
         writer.line(0);
@@ -305,6 +323,14 @@ mod tests {
         p.curve_to((1.0, 1.0), (2.0, 2.0), (3.0, 1.0 / 3.0));
         p.close_path();
         p
+    }
+
+    #[test]
+    fn scene_can_keep_fixed_view_box_without_changing_default_output() {
+        let scene = Scene { width_mm: 100.0, height_mm: 150.0, view_box: [0.0, 0.0, 100.0, 150.0], elements: vec![] };
+        assert!(scene.write().contains("viewBox=\"0 0 100 150\""));
+        assert!(scene.write_fixed_view_box().contains("viewBox=\"0.000 0.000 100.000 150.000\""));
+        assert_eq!(Attribute::translate_scale_fixed(6.0, 46.0, 0.5, -0.5).value, Value::Text("translate(6.000 46.000) scale(0.5000 -0.5000)".into()));
     }
 
     #[test]
