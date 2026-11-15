@@ -49,6 +49,20 @@ pub struct FontAxis {
     pub hidden: bool,
 }
 
+impl FontAxis {
+    /// The axis `tag` named `name`, from `min` to `max` with the face's `default`; not hidden.
+    pub fn new(tag: [u8; 4], name: impl Into<String>, min: f32, default: f32, max: f32) -> Self {
+        FontAxis { tag, name: name.into(), min, default, max, hidden: false }
+    }
+
+    /// Whether the font hides the axis from the user.
+    #[must_use]
+    pub fn hidden(mut self, hidden: bool) -> Self {
+        self.hidden = hidden;
+        self
+    }
+}
+
 /// A named instance of a variable face (`Bold Condensed`): its coordinates per axis.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -59,18 +73,21 @@ pub struct NamedInstance {
     pub coordinates: Vec<([u8; 4], f32)>,
 }
 
+impl NamedInstance {
+    /// The instance `name` at `coordinates`, as (tag, value) for every axis of the face in axis order.
+    pub fn new(name: impl Into<String>, coordinates: Vec<([u8; 4], f32)>) -> Self {
+        NamedInstance { name: name.into(), coordinates }
+    }
+}
+
 /// The axes of the face at `index` in `data`, in font order; empty for a static font.
 pub fn read_axes(data: &[u8], index: u32) -> Vec<FontAxis> {
     let Ok(font) = FontRef::from_index(data, index) else { return Vec::new() };
     font.axes()
         .iter()
-        .map(|axis| FontAxis {
-            tag: axis.tag().to_be_bytes(),
-            name: name(&font, axis.name_id()).unwrap_or_default(),
-            min: axis.min_value(),
-            default: axis.default_value(),
-            max: axis.max_value(),
-            hidden: axis.is_hidden(),
+        .map(|axis| {
+            let label = name(&font, axis.name_id()).unwrap_or_default();
+            FontAxis::new(axis.tag().to_be_bytes(), label, axis.min_value(), axis.default_value(), axis.max_value()).hidden(axis.is_hidden())
         })
         .collect()
 }
@@ -81,9 +98,9 @@ pub fn read_named_instances(data: &[u8], index: u32) -> Vec<NamedInstance> {
     let tags: Vec<[u8; 4]> = font.axes().iter().map(|axis| axis.tag().to_be_bytes()).collect();
     font.named_instances()
         .iter()
-        .map(|instance| NamedInstance {
-            name: name(&font, instance.subfamily_name_id()).unwrap_or_default(),
-            coordinates: tags.iter().copied().zip(instance.user_coords()).collect(),
+        .map(|instance| {
+            let label = name(&font, instance.subfamily_name_id()).unwrap_or_default();
+            NamedInstance::new(label, tags.iter().copied().zip(instance.user_coords()).collect())
         })
         .collect()
 }
