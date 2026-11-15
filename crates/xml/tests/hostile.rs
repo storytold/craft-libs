@@ -524,3 +524,41 @@ fn a_strict_pull_reader_refuses_what_is_outside_the_root() {
     // white space, comments and instructions may stand outside the root
     assert!(read(strict, b"<?xml version='1.0'?>\r\n <!-- c -->\t<a>x</a>\n<?pi?> ").is_ok());
 }
+
+#[test]
+fn strict_attributes_are_unique_before_name_rewriting() {
+    use craft_xml::{Names, Options};
+    for names in [Names::AsWritten, Names::Local] {
+        let strict = Options { names, ..Options::default() }.strict();
+        for xml in [
+            "<r a='1' a='2'/>",
+            "<r xmlns:p='urn:x' xmlns:q='urn:x' p:a='1' q:a='2'/>",
+            "<r xml:a='1' xmlns:p='http://www.w3.org/XML/1998/namespace' p:a='2'/>",
+            "<r xmlns:p='urn:x'><c xmlns:q='urn:x' p:a='1' q:a='2'/></r>",
+        ] {
+            assert!(strict.parse(xml.as_bytes()).is_err(), "{xml}");
+            let mut events = strict.events(xml.as_bytes());
+            assert!(
+                loop {
+                    match events.next() {
+                        Ok(Some(_)) => {}
+                        Ok(None) => break false,
+                        Err(_) => break true,
+                    }
+                },
+                "{xml}"
+            );
+        }
+        for xml in [
+            "<r xmlns='urn:x' xmlns:p='urn:x' a='1' p:a='2'/>",
+            "<r p:a='1' q:a='2'/>",
+            "<r xmlns:p='urn:x'><c xmlns:p='urn:y' xmlns:q='urn:x' p:a='1' q:a='2'/></r>",
+        ] {
+            assert!(strict.parse(xml.as_bytes()).is_ok(), "{xml}");
+        }
+        assert!(Options { names, ..Options::default() }.parse(b"<r a='1' a='2'/>").is_ok());
+    }
+    let strict = Options { limits: craft_xml::Limits { max_attrs: 2, ..craft_xml::Limits::DEFAULT }, ..Options::default() }.strict();
+    assert!(strict.parse(b"<r xmlns:a='a' xmlns:b='b'><c xmlns:c='c'/></r>").is_err());
+    assert!(strict.parse(b"<r a='1' b='2' c='3'/>").is_err());
+}

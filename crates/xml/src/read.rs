@@ -1,6 +1,7 @@
 //! Reading: the pull reader over `quick-xml`, the tree builder on top of it, and streaming.
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use quick_xml::Reader;
@@ -699,7 +700,7 @@ impl<'o, 'i> Events<'o, 'i> {
             _ => None,
         };
         let scope = self.scope.len();
-        if canonical.is_some() {
+        if canonical.is_some() || self.opts.strict {
             self.declare(e)?;
         }
         let raw = e.name();
@@ -707,6 +708,8 @@ impl<'o, 'i> Events<'o, 'i> {
         let mut out = Vec::new();
         let mut attrs = e.attributes();
         attrs.with_checks(false);
+        let mut raw_names = BTreeSet::new();
+        let mut expanded_names = BTreeSet::new();
         for (seen, a) in attrs.enumerate() {
             if seen >= limits.max_attrs {
                 return Err(Error::TooManyAttrs(limits.max_attrs));
@@ -718,6 +721,26 @@ impl<'o, 'i> Events<'o, 'i> {
             };
             let key = a.key.as_ref();
             let decl = is_ns_decl(key);
+            if self.opts.strict {
+                let raw_key = self.decode(key)?;
+                if !raw_names.insert(raw_key.to_string()) {
+                    return self.syntax(format!("duplicate attribute `{raw_key}`"));
+                }
+                if !decl {
+                    // Default namespaces do not apply to attributes. Keep undeclared prefixes
+                    // distinct so standalone fragments retain the reader's existing behaviour.
+                    let expanded = match raw_key.split_once(':') {
+                        Some(("xml", local)) => (XML_NS, local),
+                        Some((prefix, local)) => {
+                            self.scope.iter().rev().find(|(p, _)| p == prefix).map_or(("", raw_key.as_ref()), |(_, uri)| (uri.as_str(), local))
+                        }
+                        None => ("", raw_key.as_ref()),
+                    };
+                    if !expanded_names.insert((expanded.0.to_string(), expanded.1.to_string())) {
+                        return self.syntax(format!("duplicate expanded attribute `{raw_key}`"));
+                    }
+                }
+            }
             if decl && !self.opts.ns_decls {
                 continue;
             }
