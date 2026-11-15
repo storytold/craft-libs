@@ -88,7 +88,8 @@ impl Budget {
 }
 
 /// Bytes the values under `records` keep. Used for ASCII files, which hold array elements as one
-/// [`Prop`] each and are parsed before they can be counted (the text itself bounds them).
+/// [`Prop`] each.
+#[cfg(test)]
 pub(crate) fn value_bytes(records: &[Record]) -> Option<usize> {
     records.iter().try_fold(0usize, |acc, n| {
         let own = n.props.iter().try_fold(0usize, |a, p| {
@@ -238,9 +239,16 @@ pub fn read_document(bytes: &[u8], limits: &Limits) -> Result<Document> {
     let (version, records) = if is_binary(bytes) {
         read_binary(bytes, &budget)?
     } else {
-        let (version, records) = read_ascii(&String::from_utf8_lossy(bytes))?;
-        budget.take(value_bytes(&records), "its values")?;
-        (version, records)
+        let text = match std::str::from_utf8(bytes) {
+            Ok(text) => std::borrow::Cow::Borrowed(text),
+            Err(_) => {
+                if bytes.len() > limits.max_data_bytes {
+                    return Err(too_large(KIND, "invalid UTF-8 text exceeds the memory limit"));
+                }
+                String::from_utf8_lossy(bytes)
+            }
+        };
+        read_ascii(&text, &budget)?
     };
     Ok(Document { version, records, left: budget.left.get() })
 }
@@ -436,110 +444,118 @@ fn read_binary(bytes: &[u8], budget: &Budget) -> Result<(u32, Vec<Record>)> {
 // ---------------------------------------------------------------------------------------------
 // ASCII
 
-#[derive(Clone, Debug, PartialEq)]
-enum Tok {
-    Key(String),
-    Val(Prop),
-    /// `*N` array length (the values follow in an `a:` child).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Tok<'a> {
+    Key(&'a str),
+    Value(&'a str, bool),
     Count,
     Comma,
     Open,
     Close,
 }
 
-fn tokenize(text: &str) -> Vec<Tok> {
-    let mut out = vec![];
-    let mut it = text.char_indices().peekable();
-    while let Some(&(i, c)) = it.peek() {
-        match c {
-            c if c.is_whitespace() => {
-                it.next();
+/// Scan on demand so punctuation and ignored input cannot build an unbounded token vector.
+struct Ascii<'a> {
+    text: &'a str,
+    pos: usize,
+    lookahead: Option<Tok<'a>>,
+}
+
+impl<'a> Ascii<'a> {
+    fn next_token(&mut self) -> Option<Tok<'a>> {
+        loop {
+            let rest = self.text.get(self.pos..)?;
+            let c = rest.chars().next()?;
+            if c.is_whitespace() {
+                self.pos += c.len_utf8();
+                continue;
             }
-            ';' => {
-                for (_, c) in it.by_ref() {
-                    if c == '\n' {
-                        break;
-                    }
+            if c == ';' {
+                self.pos += rest.find('\n').map_or(rest.len(), |i| i + 1);
+                continue;
+            }
+            match c {
+                ',' | '{' | '}' => {
+                    self.pos += 1;
+                    return Some(match c {
+                        ',' => Tok::Comma,
+                        '{' => Tok::Open,
+                        _ => Tok::Close,
+                    });
                 }
-            }
-            ',' => {
-                it.next();
-                out.push(Tok::Comma);
-            }
-            '{' => {
-                it.next();
-                out.push(Tok::Open);
-            }
-            '}' => {
-                it.next();
-                out.push(Tok::Close);
-            }
-            '"' => {
-                it.next();
-                let start = i + 1;
-                let mut end = text.len();
-                for (j, c) in it.by_ref() {
-                    if c == '"' {
-                        end = j;
-                        break;
-                    }
+                '"' => {
+                    let tail = rest.get(1..).unwrap_or("");
+                    let end = tail.find('"').unwrap_or(tail.len());
+                    self.pos += 1 + end + usize::from(end < tail.len());
+                    return Some(Tok::Value(tail.get(..end).unwrap_or(""), true));
                 }
-                out.push(Tok::Val(Prop::Str(text.get(start..end).unwrap_or("").replace("&quot;", "\""))));
-            }
-            _ => {
-                let start = i;
-                let mut end = text.len();
-                while let Some(&(j, c)) = it.peek() {
-                    if c.is_whitespace() || matches!(c, ',' | '{' | '}' | '"' | ';' | ':') {
-                        end = j;
-                        break;
+                _ => {
+                    let end = rest.find(|c: char| c.is_whitespace() || matches!(c, ',' | '{' | '}' | '"' | ';' | ':')).unwrap_or(rest.len());
+                    let word = rest.get(..end).unwrap_or("");
+                    self.pos += end;
+                    if rest.as_bytes().get(end) == Some(&b':') {
+                        self.pos += 1;
+                        return Some(Tok::Key(word));
                     }
-                    it.next();
-                }
-                let word = text.get(start..end).unwrap_or("");
-                if it.peek().is_some_and(|(_, c)| *c == ':') {
-                    it.next();
-                    out.push(Tok::Key(word.to_string()));
-                } else if word.starts_with('*') {
-                    out.push(Tok::Count);
-                } else if let Ok(i) = word.parse::<i64>() {
-                    out.push(Tok::Val(Prop::Int(i)));
-                } else if let Ok(f) = word.parse::<f64>() {
-                    out.push(Tok::Val(Prop::Float(f)));
-                } else if !word.is_empty() {
-                    out.push(Tok::Val(Prop::Str(word.to_string())));
-                } else {
+                    if word.starts_with('*') {
+                        return Some(Tok::Count);
+                    }
+                    if !word.is_empty() {
+                        return Some(Tok::Value(word, false));
+                    }
                     // A stray `:` with no key.
-                    it.next();
+                    self.pos += 1;
                 }
             }
         }
     }
-    out
+
+    fn peek(&mut self) -> Option<Tok<'a>> {
+        if self.lookahead.is_none() {
+            self.lookahead = self.next_token();
+        }
+        self.lookahead
+    }
+
+    fn take(&mut self) -> Option<Tok<'a>> {
+        self.lookahead.take().or_else(|| self.next_token())
+    }
 }
 
-fn ascii_list(toks: &[Tok], i: &mut usize, depth: usize) -> Result<Vec<Record>> {
+fn ascii_list(scan: &mut Ascii<'_>, budget: &Budget, records_budget: &Budget, depth: usize) -> Result<Vec<Record>> {
     if depth > MAX_DEPTH {
         return Err(too_large(KIND, "records nested too deeply"));
     }
     let mut out = vec![];
-    while let Some(t) = toks.get(*i) {
-        *i += 1;
+    while let Some(t) = scan.take() {
         match t {
             Tok::Close if depth > 0 => return Ok(out),
             Tok::Key(name) => {
-                let mut record = Record { name: name.clone(), ..Record::default() };
+                records_budget.take(std::mem::size_of::<Record>().checked_add(name.len()), "its records")?;
+                let mut record = Record { name: name.to_string(), ..Record::default() };
                 loop {
-                    match toks.get(*i) {
-                        Some(Tok::Val(v)) => record.props.push(v.clone()),
+                    match scan.peek() {
+                        Some(Tok::Value(value, quoted)) => {
+                            let number = if quoted {
+                                None
+                            } else {
+                                value.parse::<i64>().ok().map(Prop::Int).or_else(|| value.parse::<f64>().ok().map(Prop::Float))
+                            };
+                            let size = std::mem::size_of::<Prop>().checked_add(if number.is_some() { 0 } else { value.len() });
+                            // Charge before copying a string or growing the property vector.
+                            budget.take(size, "its values")?;
+                            record
+                                .props
+                                .push(number.unwrap_or_else(|| Prop::Str(if quoted { value.replace("&quot;", "\"") } else { value.to_string() })));
+                        }
                         Some(Tok::Count | Tok::Comma) => {}
                         _ => break,
                     }
-                    *i += 1;
+                    scan.take();
                 }
-                if toks.get(*i) == Some(&Tok::Open) {
-                    *i += 1;
-                    record.children = ascii_list(toks, i, depth + 1)?;
+                if scan.peek() == Some(Tok::Open) {
+                    scan.take();
+                    record.children = ascii_list(scan, budget, records_budget, depth + 1)?;
                 }
                 out.push(record);
             }
@@ -549,10 +565,10 @@ fn ascii_list(toks: &[Tok], i: &mut usize, depth: usize) -> Result<Vec<Record>> 
     Ok(out)
 }
 
-fn read_ascii(text: &str) -> Result<(u32, Vec<Record>)> {
-    let toks = tokenize(text);
-    let mut i = 0;
-    let records = ascii_list(&toks, &mut i, 0)?;
+fn read_ascii(text: &str, budget: &Budget) -> Result<(u32, Vec<Record>)> {
+    let mut scan = Ascii { text, pos: 0, lookahead: None };
+    let records_budget = Budget::new(budget.limit);
+    let records = ascii_list(&mut scan, budget, &records_budget, 0)?;
     let version = records
         .iter()
         .find(|n| n.name == "FBXHeaderExtension")
