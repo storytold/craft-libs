@@ -23,6 +23,9 @@ use craft_behavior::{
 use egui::{Pos2, Rect, Vec2};
 use std::any::Any;
 
+/// Rows per second the view scrolls at when the pointer is a full edge band beyond the view's edge.
+pub(super) const EDGE_ROWS_PER_SECOND: f32 = 4.0;
+
 /// A toggle sweep: the value it sets and the rows it has crossed.
 #[derive(Clone)]
 struct Sweep<K> {
@@ -285,7 +288,12 @@ fn cancel_reason(cancel: PressCancel) -> CancelReason {
 
 impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Scrolls the rows while the pointer, `y` below the rows' top edge, is within a row of an edge of the `view`,
-    /// faster the further past it: the rate of a row drag near the edge of a scroll region.
+    /// faster the further past it, up to `EDGE_ROWS_PER_SECOND` a full band in or beyond the edge: the rate of a row
+    /// drag or a marquee near the edge of a scroll region. It asks for the next frame only while the pointer is in or
+    /// past a band, so a drag held over the middle rests.
+    ///
+    /// The step is the frame's time, taken once: a pass that repeats a frame carries no input and scrolls nothing, as
+    /// the body's scroll strips do (`body/scroll.rs`, `scroll_input`).
     pub(super) fn edge_scroll(&mut self, cx: &Cx<'_, C>, layout: &C::ItemLayout, view: f32, y: f32) {
         if !self.scrolls || self.source.is_empty() {
             return;
@@ -300,10 +308,10 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         if depth <= 0.0 {
             return;
         }
-        let dt = cx.core.ctx.input(|input| input.stable_dt);
-        let step = depth.min(1.0) * super::marquee::EDGE_ROWS_PER_SECOND * row * dt;
-        self.offset = (self.offset + f64::from(direction * step)).clamp(0.0, self.max_offset(view));
         cx.core.ctx.request_repaint();
+        let dt = crate::runtime::frame::facts(&cx.core.ctx).elapsed.clamp(0.0, 0.1) as f32;
+        let step = depth.min(1.0) * EDGE_ROWS_PER_SECOND * row * dt;
+        self.offset = (self.offset + f64::from(direction * step)).clamp(0.0, self.max_offset(view));
     }
 
     /// `at` in the layout's logical coordinates, relative to the rows' rect.
@@ -560,13 +568,18 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     }
 
     /// A drag that did not start in the collection: the first drop kind that takes its payload at the place under the
-    /// pointer registers the target; its release reports `Dropped`, and while held it is the pending drop.
+    /// pointer registers the target and scrolls the rows at their edges; its release reports `Dropped`, and while held
+    /// it is the pending drop. A drag no kind takes here scrolls nothing: it is meant for another target.
     fn kind_drop(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, place: (Rect, ScrollPos, bool)) {
         let xf = self.xf;
+        let (rect, _, rtl) = place;
         for kind in comp.drops() {
             let Some((payload, at)) = cx.core.dragging_of(kind.payload()) else { continue };
-            let at = xf.map_or(at, |map| map.to_layer(at));
-            let Some((at, mark)) = self.kind_spot(layout, place, kind.place(), at).filter(|(at, _)| kind.accepts(&*payload, at)) else { continue };
+            let point = xf.map_or(at, |map| map.to_layer(at));
+            let Some((at, mark)) = self.kind_spot(layout, place, kind.place(), point).filter(|(at, _)| kind.accepts(&*payload, at)) else {
+                continue;
+            };
+            self.edge_scroll(cx, layout, rect.height(), Self::logical(layout, rect, rtl, point).y);
             let ordinal = drag::next_ordinal(&cx.core.ctx, cx.core.id);
             if let Some(op) = cx.core.drop_target_of(kind.payload(), &KindDrop { mark }) {
                 self.events.push(CollectionEvent::Dropped { at, op, payload: DropPayload::new(payload) });
@@ -630,6 +643,12 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
         let own = cx.dragging::<ListDrag<C::Key>>().filter(|(payload, _)| payload.list == cx.core.id);
         if let Some((payload, at)) = own {
             if let Some(rule) = props.reorder {
+                // Above or below the rows too, while the pointer stays over their columns: `edge_scroll` scrolls at
+                // its full rate past an edge.
+                let point = layer(at);
+                if rect.x_range().contains(point.x) {
+                    self.edge_scroll(cx, layout, rect.height(), Self::logical(layout, rect, rtl, point).y);
+                }
                 let groups = rule.into_groups && matches!(layout.nav(), NavShape::Tree);
                 let step = groups.then(|| cx.env.control(cx.core.resolved.size).icon);
                 let spot = if self.source.is_empty() {

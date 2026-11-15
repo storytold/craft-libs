@@ -8,9 +8,6 @@ use crate::runtime::env::Env;
 use craft_behavior::{ItemLayout, MarqueeSelect, PointerButton, PressPhase, ScrollPos, SelectionChange};
 use egui::{Pos2, Rect, Ui, Vec2};
 
-/// Rows per second the view scrolls at when the pointer is a full edge band beyond the view's edge.
-pub(super) const EDGE_ROWS_PER_SECOND: f32 = 4.0;
-
 /// A marquee in progress. Its corners are in the layout's logical content coordinates, so a scroll during the drag
 /// moves the rectangle with the rows.
 #[derive(Clone)]

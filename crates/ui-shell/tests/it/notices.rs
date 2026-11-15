@@ -111,3 +111,96 @@ fn a_dismissed_toast_hands_the_focus_on_and_the_last_returns_it() {
     assert!(toast::cards(fixture.ctx(), &window).is_empty(), "both cards ended");
     assert_eq!(focused_name(&fixture).as_deref(), Some("Before"), "the focus is back where it came from");
 }
+
+/// Past the cap a new card always shows. It makes room by dropping the oldest earlier card that would leave by itself;
+/// a sticky card and a card with an action stay. The drop is reported: `toast::end` says `Dropped`, and a notice
+/// center reports `NoticeEnd::Dropped` for its own notice.
+#[trial]
+fn the_cap_drops_a_card_that_would_leave_by_itself_and_reports_it() {
+    use craft_ui::notices::{NoticeCenter, NoticeEnd, PostedNotice};
+    use craft_ui::runtime::toast::{ToastAction, ToastEnd};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let window = WindowKey::new("toast-cap-shell");
+    let ends = Rc::new(RefCell::new(Vec::new()));
+    let (shell, seen) = (window.clone(), ends.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        seen.borrow_mut().extend(NoticeCenter::new().window(shell.clone()).show(ui).ends);
+        AppShell::embedded(shell.clone()).body(|_, _, _| {}).show(ui, &mut ());
+    });
+    fixture.room(egui::Vec2::new(800.0, 600.0));
+    fixture.settle();
+    let ctx = fixture.ctx().clone();
+    let ids = |ctx: &egui::Context| toast::cards(ctx, &window).iter().map(|card| card.id).collect::<Vec<_>>();
+    let sticky = toast::post(&ctx, &window, Toast::new("The disk is full.").timeout(None));
+    let action = toast::post(&ctx, &window, Toast::new("Brushes were updated.").action(ToastAction::new("Undo")));
+    let timed = toast::post(&ctx, &window, Toast::new("poster.png was saved."));
+    let newest = toast::post(&ctx, &window, Toast::new("flyer.png was saved."));
+    fixture.settle();
+    assert_eq!(ids(&ctx), vec![sticky, action, newest], "the timed card made room; the sticky and the action card stay");
+    assert!(fixture.texts().iter().any(|painted| painted.text == "flyer.png was saved."), "the newest card shows");
+    assert_eq!(toast::end(&ctx, timed), Some(ToastEnd::Dropped), "the dropped card reports how it ended");
+
+    // The queue holds the sticky card, the action card and `newest`. The notice drops `newest`, the oldest card that
+    // leaves by itself; the next toast drops the notice, which is then the oldest such card.
+    let center = NoticeCenter::new().window(window.clone());
+    let notice = center.post(&ctx, &PostedNotice::new("poster.pdf was exported."), &[]).expect("no key silences the notice");
+    let last = toast::post(&ctx, &window, Toast::new("banner.png was saved."));
+    fixture.settle();
+    assert_eq!(ids(&ctx), vec![sticky, action, last], "each new card stayed and dropped a timed one");
+    assert_eq!(toast::end(&ctx, newest), Some(ToastEnd::Dropped), "the notice dropped the card before it");
+    assert!(ends.borrow().contains(&NoticeEnd::Dropped(notice)), "the center reports its notice dropped: {:?}", ends.borrow());
+}
+
+/// A card the pointer rests on for longer than its timeout, with no pass running meanwhile, gets its whole timeout
+/// again when the pointer leaves: the pass that sees the pointer go, run twice in its frame, counts none of the hover
+/// against it. It expires one full timeout after the leave.
+#[trial]
+fn a_card_left_after_a_long_still_hover_gets_its_whole_delay() {
+    use craft_ui::runtime::toast::ToastEnd;
+    use craft_ui::testing::pointer::moved;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    const TIMEOUT: f32 = 2.0;
+    const MESSAGE: &str = "poster.png was saved.";
+    let window = WindowKey::new("toast-hover-shell");
+    let discard = Rc::new(Cell::new(false));
+    let (shell, asks) = (window.clone(), discard.clone());
+    let mut posted = false;
+    let mut fixture = Fixture::new(move |ui| {
+        if !posted {
+            toast::post(ui.ctx(), &shell, Toast::new(MESSAGE).timeout(Some(TIMEOUT)));
+            posted = true;
+        }
+        AppShell::embedded(shell.clone()).body(|_, _, _| {}).show(ui, &mut ());
+        if asks.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the leave frame runs twice");
+        }
+    });
+    fixture.room(egui::Vec2::new(800.0, 600.0));
+    fixture.settle();
+    let card = toast::cards(fixture.ctx(), &window).first().map(|card| card.id).expect("the card is queued");
+    let queued = |fixture: &Fixture| toast::cards(fixture.ctx(), &window).iter().any(|shown| shown.id == card);
+
+    // Half the timeout runs out before the pointer comes.
+    fixture.advance(f64::from(TIMEOUT) / 2.0).frame(Vec::new());
+    let on_card = fixture.texts().iter().find(|painted| painted.text == MESSAGE).map(|painted| painted.rect.center()).expect("the card shows");
+    fixture.frame(vec![moved(on_card)]).frame(Vec::new());
+
+    // The pointer rests on the card five timeouts long; nothing repaints meanwhile.
+    fixture.advance(f64::from(TIMEOUT) * 5.0);
+    discard.set(true);
+    fixture.frame(vec![moved(egui::Pos2::new(5.0, 5.0))]);
+    discard.set(false);
+    assert_eq!(fixture.passes(), 2, "the leave frame ran twice");
+    fixture.frame(Vec::new());
+    assert!(queued(&fixture), "the hover counts nothing against the card");
+
+    fixture.advance(f64::from(TIMEOUT) * 0.75).frame(Vec::new());
+    assert!(queued(&fixture), "the card has its whole timeout again, not the half left before the hover");
+    fixture.advance(f64::from(TIMEOUT) * 0.5).frame(Vec::new());
+    assert!(!queued(&fixture), "a full timeout after the leave the card is gone");
+    assert_eq!(toast::end(fixture.ctx(), card), Some(ToastEnd::Expired), "it expired");
+}

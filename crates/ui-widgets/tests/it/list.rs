@@ -1032,3 +1032,84 @@ fn a_group_header_is_regular_and_a_section_heading_strong() {
         assert_eq!(role(ListRow::new("Camera").section_heading()), TypeRole::BodyStrong, "a section heading");
     });
 }
+
+/// A reorder drag held in the bottom edge band scrolls the rows on every frame, and a frame egui runs twice scrolls
+/// them once; held below the list it still scrolls; moved back over the middle rows, the rows stay and no frame is
+/// asked for.
+#[trial]
+fn a_row_dragged_to_the_edge_scrolls_the_list_and_rests_without_frames() {
+    use craft_ui::contract::{ReorderRule, Sizing};
+    use craft_ui::testing::pointer::moved;
+    use egui::Pos2;
+    use std::borrow::Cow;
+    use std::cell::Cell;
+
+    const ROWS: usize = 40;
+    let name = |at: usize| format!("Layer {at}");
+    let list_id = Id::NULL.with("long-rows");
+    let discard = Rc::new(Cell::new(false));
+    let asks = discard.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let keys: Vec<usize> = (0..ROWS).collect();
+        let source = keyed(&keys, |key: &usize| *key).with_text(|key| Cow::Owned(format!("Layer {key}")));
+        let list = List::new("Layers").id(list_id).sizing(Sizing::Content).max_rows(6).reorder(ReorderRule::new());
+        list.show_items(ui, &source, &mut |key, _| ListRow::new(format!("Layer {key}")));
+        if asks.get() && ui.ctx().current_pass_index() == 0 {
+            ui.ctx().request_discard("the trial runs the frame twice");
+        }
+    });
+    fixture.room(Vec2::new(300.0, 400.0));
+    fixture.settle();
+    let list = fixture.node_of(list_id).expect("the list's node").rect;
+    let first = fixture.by_label(&name(0)).expect("the first row").rect;
+    let row = fixture.by_label(&name(1)).expect("the second row").rect.min.y - first.min.y;
+    // How far the rows have scrolled, from the first row whose top is in view: its place in the rows, less how far
+    // below the rows' top it sits. Rows above the view are not built, or sit above the top.
+    let scrolled = |fixture: &Fixture| {
+        (0..ROWS)
+            .find_map(|at| {
+                let shown = fixture.by_label(&name(at)).filter(|shown| shown.rect.min.y >= first.min.y - 0.5 && shown.rect.height() >= row - 0.5)?;
+                Some(at as f32 * row - (shown.rect.min.y - first.min.y))
+            })
+            .unwrap_or(0.0)
+    };
+
+    let grab = fixture.by_label(&name(4)).expect("a row near the bottom").rect.center();
+    let band = Pos2::new(grab.x, list.max.y - row / 4.0);
+    fixture.drag_hold_at(grab, band - grab);
+    let mut last = scrolled(&fixture);
+    assert!(last > 0.0, "the drag into the bottom band scrolls the rows");
+    for _ in 0..3 {
+        fixture.frame(Vec::new());
+        let now = scrolled(&fixture);
+        assert!(now > last, "every frame in the band scrolls on: {now} after {last}");
+        last = now;
+    }
+
+    // Two frames of one pass each, then two frames of which the first runs twice: the second pair scrolls as far as
+    // the first (two steps), not a step further. Each pair is measured after a one-pass frame.
+    let before = scrolled(&fixture);
+    fixture.frame(Vec::new()).frame(Vec::new());
+    assert_eq!(fixture.passes(), 1, "a frame of the held drag runs one pass");
+    let between = scrolled(&fixture);
+    discard.set(true);
+    fixture.frame(Vec::new());
+    discard.set(false);
+    assert_eq!(fixture.passes(), 2, "the trial's frame ran twice");
+    fixture.frame(Vec::new());
+    let (plain, rerun) = (between - before, scrolled(&fixture) - between);
+    assert!(plain > 0.0 && rerun < plain * 1.25, "a frame run twice scrolls one frame's step: {rerun} against {plain}");
+
+    let below = Pos2::new(grab.x, list.max.y + 2.0 * row);
+    fixture.frame(vec![moved(below)]).frame(Vec::new());
+    let past = scrolled(&fixture);
+    fixture.idle(2);
+    assert!(scrolled(&fixture) > past, "held below the list, the rows still scroll");
+
+    fixture.frame(vec![moved(Pos2::new(grab.x, list.center().y))]).idle(2);
+    let rest = scrolled(&fixture);
+    fixture.frame(Vec::new());
+    assert_eq!(scrolled(&fixture), rest, "over the middle rows nothing scrolls");
+    assert!(!fixture.repaint_requested(), "a drag held over the middle rows asks for no frame");
+    fixture.release_at(Pos2::new(grab.x, list.center().y));
+}

@@ -2,8 +2,9 @@
 //!
 //! The window's shell shows its queue through `ToastHost`, at the end-bottom corner of its body, and tells it which
 //! cards the pointer or focus holds; an embedded shell shows its own queue inside its own body. A card's timer runs only
-//! while nothing holds it. Each new toast is announced once, when it is first shown. At most `MAX_CARDS` cards are
-//! queued per window; a toast's end (an action taken, a dismissal, the timer) is read once with `end`.
+//! while nothing holds it, and starts over with its whole timeout when the hold ends. Each new toast is announced once,
+//! when it is first shown. At most `MAX_CARDS` cards are queued per window; a toast's end (an action taken, a
+//! dismissal, the timer, a drop by the cap) is read once with `end`.
 
 use crate::runtime::access::{self, Politeness};
 use crate::runtime::egui::{pass, repaint};
@@ -15,7 +16,8 @@ use egui::{Context, ViewportId};
 /// How long a toast stays when it names no timeout, in seconds: the source apps' notification duration.
 pub const TIMEOUT: f32 = 6.0;
 
-/// Most cards queued at once; posting past it drops the oldest card that has no action.
+/// Most cards queued at once per window. Posting past it keeps the new card and drops the oldest earlier card that
+/// would leave by itself (no action, a timeout), else the oldest earlier card; `end` reports the drop as `Dropped`.
 pub const MAX_CARDS: usize = 3;
 
 /// Ended toasts whose end nobody has read yet; the oldest report goes first.
@@ -45,7 +47,7 @@ pub enum ToastEnd {
     Dismissed,
     /// The timer ran out.
     Expired,
-    /// The queue was over its card limit and dropped the card.
+    /// The cap removed the card to make room for a newer one.
     Dropped,
 }
 
@@ -139,6 +141,16 @@ struct Live {
     shown: bool,
     remaining: Option<f32>,
     held: bool,
+    /// The hold ended in this pass: the timer starts over and skips this pass's countdown, whose elapsed time covers
+    /// the whole hold (`last_tick` is the last end hook, which can lie before a long still hover).
+    fresh: bool,
+}
+
+impl Live {
+    /// Whether the card leaves by itself: it has no action to wait for and a timer that runs.
+    fn leaves_by_itself(&self) -> bool {
+        self.card.toast.actions.is_empty() && self.remaining.is_some()
+    }
 }
 
 /// The queues of one viewport's windows, with the ids, the timers' clock and the ends they share.
@@ -195,11 +207,17 @@ pub fn post_to(ctx: &Context, viewport: ViewportId, window: &WindowKey, toast: T
         queue.next += 1;
         let id = ToastId(queue.next);
         let remaining = toast.timeout;
+        let mut dropped = Vec::new();
         let live = queue.window(window);
-        live.push(Live { card: Card { id, toast }, shown: false, remaining, held: false });
+        live.push(Live { card: Card { id, toast }, shown: false, remaining, held: false, fresh: false });
         while live.len() > MAX_CARDS {
-            let at = live.iter().position(|live| live.card.toast.actions.is_empty()).unwrap_or(0);
-            live.remove(at);
+            // The new card is last and never the one dropped; a kept card has no timer, so it counts as sticky.
+            let earlier = live.len() - 1;
+            let at = live.iter().take(earlier).position(Live::leaves_by_itself).unwrap_or(0);
+            dropped.push(live.remove(at).card.id);
+        }
+        for dropped in dropped {
+            record(&mut queue.ended, dropped, ToastEnd::Dropped);
         }
         id
     });
@@ -238,8 +256,8 @@ fn remove(ctx: &Context, id: ToastId, end: Option<ToastEnd>) {
     }
 }
 
-/// How the toast `id` ended, once: `None` while it is queued, after the report was read, and for a toast the cap
-/// dropped or the app removed.
+/// How the toast `id` ended, once: `Dropped` for a card the cap removed; `None` while it is queued, after the report
+/// was read, and for a toast the app removed with `dismiss`.
 pub fn end(ctx: &Context, id: ToastId) -> Option<ToastEnd> {
     pass::live_viewports(ctx).into_iter().find_map(|viewport| {
         PerViewport::<Queue>::with(ctx, viewport, |queue| {
@@ -270,14 +288,28 @@ pub fn cards(ctx: &Context, window: &WindowKey) -> Vec<Card> {
 
 /// Every live viewport's cards with their windows, oldest first, for `ui.inspect`; `cards` is the running viewport's.
 pub fn snapshot(ctx: &Context) -> Vec<(WindowKey, Card)> {
-    let _ = ctx;
-    todo!("tp.T25")
+    let mut cards = Vec::new();
+    for viewport in pass::live_viewports(ctx) {
+        PerViewport::<Queue>::with(ctx, viewport, |queue| {
+            for (key, live) in &queue.windows {
+                cards.extend(live.iter().map(|live| (key.clone(), live.card.clone())));
+            }
+        });
+    }
+    cards
 }
 
-/// The host shows `id` in this pass; `held` says the pointer or focus is on it. The first show announces it.
+/// The host shows `id` in this pass; `held` says the pointer or focus is on it. The first show announces it. A card
+/// whose hold ends gets its whole timeout again.
 pub fn shown(ctx: &Context, id: ToastId, text: &str, held: bool) {
     let announce = PerViewport::<Queue>::with(ctx, pass::current_viewport(ctx), |queue| {
         let live = queue.live().find(|live| live.card.id == id)?;
+        // A kept card has no timer (`keep`), and keeps none. A second pass in the frame finds the hold already ended
+        // and restarts nothing; its end hook counts down only the time since the first pass's.
+        if live.held && !held && live.remaining.is_some() {
+            live.remaining = live.card.toast.timeout;
+            live.fresh = true;
+        }
         live.held = held;
         let first = !live.shown;
         live.shown = true;
@@ -288,8 +320,8 @@ pub fn shown(ctx: &Context, id: ToastId, text: &str, held: bool) {
     }
 }
 
-/// The end hook: runs the timers of the shown, unheld cards, drops the expired ones (reporting `Expired`) and asks for a pass when the
-/// next one expires.
+/// The end hook: runs the timers of the shown, unheld cards (not a card whose hold ended in this pass), drops the
+/// expired ones (reporting `Expired`) and asks for a pass when the next one expires.
 pub(crate) fn end_pass(ctx: &Context) {
     let viewport = pass::current_viewport(ctx);
     let now = frame::clock(ctx);
@@ -297,6 +329,9 @@ pub(crate) fn end_pass(ctx: &Context) {
         let elapsed = queue.last_tick.map_or(0.0, |last| (now - last).max(0.0)) as f32;
         queue.last_tick = Some(now);
         for live in queue.live() {
+            if std::mem::take(&mut live.fresh) {
+                continue;
+            }
             if live.shown
                 && !live.held
                 && let Some(remaining) = &mut live.remaining
