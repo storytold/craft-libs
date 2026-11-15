@@ -159,6 +159,24 @@ impl PreviewView {
         }
         PreviewView { transform: PreviewPane::rescaled(self.transform, scale, &self.range, Vec2::ZERO), fit: false, ..self.clone() }
     }
+
+    /// The view at the same zoom with the point `point` of a picture of `picture` points at the well's centre, as a
+    /// click there centres it; it no longer follows the well. The pane settles it at the picture's edges. The inverse
+    /// of [`centre`](PreviewView::centre).
+    #[must_use]
+    pub(crate) fn centred_on(&self, point: Pos2, picture: Vec2) -> Self {
+        if self.fixed {
+            return self.clone();
+        }
+        let scale = self.transform.scale;
+        PreviewView { transform: CanvasTransform::new(scale, (picture / 2.0 - point.to_vec2()) * scale), fit: false, ..self.clone() }
+    }
+
+    /// The point of a picture of `picture` points at the well's centre in this view: `offset` is how far the
+    /// picture's centre lies from the well's centre, at the view's zoom.
+    pub(crate) fn centre(&self, picture: Vec2) -> Pos2 {
+        (picture / 2.0 - self.transform.offset / self.transform.scale).to_pos2()
+    }
 }
 
 impl Default for PreviewView {

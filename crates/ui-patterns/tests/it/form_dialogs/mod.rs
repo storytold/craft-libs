@@ -4,10 +4,12 @@
 mod about;
 mod dialog;
 mod export;
+mod files;
 mod hosted;
 mod new_document;
 mod params;
 mod password;
 mod preview;
 mod preview_width;
+mod save_for_web;
 mod size_model;

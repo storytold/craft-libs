@@ -1,8 +1,10 @@
 //! Stories of `ParamDialog`.
 
-use super::{ParamDialog, ParamLayout};
+use super::{HostedParamDialog, ParamDialog, ParamLayout};
 use crate::contract::Bind;
-use crate::patterns::form_dialogs::Param;
+use crate::dialog::StackDialog as _;
+use crate::dialog::stories::hosted_with;
+use crate::patterns::form_dialogs::{DialogFields, Param};
 use crate::primitives::TextureCache;
 use crate::runtime::env::Label;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
@@ -65,6 +67,40 @@ fn param_dialog_close_without_reset(ui: &mut Ui, data: &mut StoryData) -> StoryO
 }
 
 const COMMAND_SPEC: &str = r#"{"name":text,"size":1..100=10,"method":"fit|fill","keep":bool}"#;
+
+#[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
+fn param_dialog_with_footer_buttons(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    ParamDialog::new("color-table", "Color Table", Param::parse_list(SPEC))
+        .opened(Bind::bound(data.value("open", true)))
+        .extra_buttons(vec![("load".to_owned(), Label::from("Load…")), ("save".to_owned(), Label::from("Save…"))])
+        .footer_note("About 1.2 MB")
+        .show(ui)
+        .into()
+}
+
+/// Why the story's host refuses every OK.
+const REFUSAL: &str = "The radius is too large for this layer.";
+
+#[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
+fn hosted_param_dialog_with_a_refused_ok(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let ctx = ui.ctx().clone();
+    let open = move || {
+        let mut dialog =
+            HostedParamDialog::new("blur", DialogFields::new(), |fields| ParamDialog::new("blur", "Blur", Param::parse_list(SPEC)).values(Bind::bound(fields)))
+                .held_ok();
+        // The story opens with an OK already refused, so the notice shows under the rows.
+        let _ = dialog.confirm(&ctx);
+        dialog.answer_ok(Err(Label::from(REFUSAL)));
+        dialog
+    };
+    hosted_with(ui, data, (), open, |host| {
+        if let Some(dialog) = host.get_mut::<HostedParamDialog>()
+            && dialog.take_ok().is_some()
+        {
+            dialog.answer_ok(Err(Label::from(REFUSAL)));
+        }
+    })
+}
 
 #[story(ParamDialog<'static>, covers = [], drive = Drive::Never)]
 fn command_form(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {

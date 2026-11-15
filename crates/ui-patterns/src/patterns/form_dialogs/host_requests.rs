@@ -24,15 +24,22 @@ impl<O> PreviewRequest<O> {
     }
 }
 
-/// The requests of parameter rows that the host answers: the colour picker, the file dialog and the eyedropper, and
-/// the click on a dialog's preview picture (an eyedropper there samples it). A hosted dialog embeds one, feeds it each pass's rows with [`absorb`](HostRequests::absorb) and offers the
-/// `take_*` methods to its host. A request stays until it is taken; a newer one of the same kind replaces it.
+/// The requests of parameter rows that the host answers: the colour picker, the file dialog, the eyedropper and a
+/// folder listing, the click on a dialog's preview picture (an eyedropper there samples it) and a footer button that
+/// keeps the dialog open. A hosted dialog embeds one, feeds it each pass's rows with [`absorb`](HostRequests::absorb)
+/// and offers the `take_*` methods to its host. A request stays until it is taken; a newer one of the same kind
+/// replaces it. It also keeps the colours a child picker previews in the dialog's colour rows
+/// ([`preview_color`](HostRequests::preview_color)).
 #[derive(Clone, Debug, Default)]
 pub struct HostRequests {
     color: Option<ColorRequest>,
     path: Option<PathRequest>,
     eyedropper: Option<EyedropperRequest>,
+    listing: Option<ListingRequest>,
     preview_click: Option<Pos2>,
+    footer_action: Option<String>,
+    /// The previewed colour of each colour row a child picker edits, by row key; one entry per key.
+    previews: Vec<(String, Srgba)>,
     answers: Vec<HostAnswer>,
 }
 
@@ -52,6 +59,9 @@ impl HostRequests {
         }
         if let Some(request) = rows.eyedropper.take() {
             self.request_eyedropper(request);
+        }
+        if let Some(request) = rows.listing.take() {
+            self.request_listing(request);
         }
     }
 
@@ -119,52 +129,59 @@ impl HostRequests {
 
     /// Moves the requests and answers of `other` in; its requests replace the ones not taken yet.
     pub fn extend(&mut self, other: HostRequests) {
-        let HostRequests { color, path, eyedropper, preview_click, answers } = other;
+        let HostRequests { color, path, eyedropper, listing, preview_click, footer_action, previews, answers } = other;
         self.color = color.or(self.color.take());
         self.path = path.or(self.path.take());
         self.eyedropper = eyedropper.or(self.eyedropper.take());
+        self.listing = listing.or(self.listing.take());
         self.preview_click = preview_click.or(self.preview_click.take());
+        self.footer_action = footer_action.or(self.footer_action.take());
+        for (key, color) in previews {
+            self.preview_color(key, Some(color));
+        }
         self.answers.extend(answers);
     }
 
     /// Files a footer button's id the user pressed; it replaces one not taken yet.
-    #[allow(dead_code)] // P3(dialogs-w1): dl.K24
     pub fn request_footer_action(&mut self, id: String) {
-        let _ = id;
-        todo!("dl.K24")
+        self.footer_action = Some(id);
     }
 
     /// The footer button id that was pressed, once.
-    #[allow(dead_code)] // P3(dialogs-w1): dl.K24
     pub fn take_footer_action(&mut self) -> Option<String> {
-        todo!("dl.K24")
+        self.footer_action.take()
     }
 
     /// Files a request for the files of a folder; it replaces one not taken yet.
-    #[allow(dead_code)] // P3(dialogs-w1): dl.K24
     pub fn request_listing(&mut self, request: ListingRequest) {
-        let _ = request;
-        todo!("dl.K24")
+        self.listing = Some(request);
     }
 
     /// The folder listing that was requested, once.
-    #[allow(dead_code)] // P3(dialogs-w1): dl.K24
     pub fn take_listing(&mut self) -> Option<ListingRequest> {
-        todo!("dl.K24")
+        self.listing.take()
     }
 
     /// Answers the listing request `key` with the `files` of its folder: the dialog applies them in its next pass.
-    #[allow(dead_code)] // P3(dialogs-w1): dl.K24
     pub fn answer_listing(&mut self, key: impl Into<String>, files: Vec<PathBuf>) {
-        let _ = (key.into(), files);
-        todo!("dl.K24")
+        self.listing = None;
+        self.answers.push(HostAnswer::Listing { key: key.into(), files });
     }
 
-    /// Shows `color` as the live preview of the colour row `key` while it is picked; `None` ends the preview.
-    #[allow(dead_code)] // P3(dialogs-w1): dl.K77
+    /// Shows `color` as the live preview of the colour row `key` while it is picked; `None` ends the preview. A newer
+    /// colour for the same row replaces the earlier one.
     pub fn preview_color(&mut self, key: impl Into<String>, color: Option<Srgba>) {
-        let _ = (key.into(), color);
-        todo!("dl.K77")
+        let key = key.into();
+        self.previews.retain(|(previewed, _)| *previewed != key);
+        if let Some(color) = color {
+            self.previews.push((key, color));
+        }
+    }
+
+    /// The colours child pickers preview, by colour row key: the dialog draws each in its row in place of the row's
+    /// value, and writes none of them into its values.
+    pub fn previewed_colors(&self) -> &[(String, Srgba)] {
+        &self.previews
     }
 
     /// Drops the colour request not taken yet (the picker was cancelled).

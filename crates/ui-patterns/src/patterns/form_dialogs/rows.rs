@@ -100,12 +100,20 @@ pub struct ParamRows<'a> {
     seed: Option<Bind<'a, u64>>,
     read_only: bool,
     canvas: Option<Id>,
+    preview_colors: &'a [(String, Srgba)],
 }
 
 impl<'a> ParamRows<'a> {
     /// Rows for `params` over `fields`, the group named `label`.
     pub fn new(label: impl Into<Label>, params: &'a [Param], fields: Bind<'a, DialogFields>) -> Self {
-        ParamRows { label: label.into(), params, fields, seed: None, read_only: false, canvas: None }
+        ParamRows { label: label.into(), params, fields, seed: None, read_only: false, canvas: None, preview_colors: &[] }
+    }
+
+    /// The colours child pickers preview, by colour row key: each such row draws its colour for the pass in place of
+    /// its value and writes nothing, so the values stay as they were when the picker closes.
+    pub fn preview_colors(mut self, colors: &'a [(String, Srgba)]) -> Self {
+        self.preview_colors = colors;
+        self
     }
 
     /// The state of the Random button's sequence: each press reads it and writes the next.
@@ -136,12 +144,13 @@ impl<'a> ParamRows<'a> {
 
     /// Shows the rows across the width offered.
     pub fn show(self, ui: &mut Ui) -> ParamRowsOutput {
-        let ParamRows { label, params, mut fields, mut seed, read_only, canvas } = self;
+        let ParamRows { label, params, mut fields, mut seed, read_only, canvas, preview_colors } = self;
         let env = Env::of(ui);
         let words = env.words::<ParamWords>();
         let units = env.units();
         let name: Arc<str> = label.as_str().into();
         let mut pass = Pass::new(&words, &units);
+        pass.previews = preview_colors;
         let mut changed = false;
         let mut values = None;
         let mut group = |ui: &mut Ui| {
@@ -208,6 +217,8 @@ struct Pass<'p> {
     eyedropper: Option<EyedropperRequest>,
     /// An eyedropper row is armed.
     sampling: bool,
+    /// The colours shown in colour rows in place of their values (`ParamRows::preview_colors`).
+    previews: &'p [(String, Srgba)],
 }
 
 /// A parameter as the pass shows it: its key, its label without the colon, and whether it takes input.
@@ -251,6 +262,7 @@ impl<'p> Pass<'p> {
             path: None,
             eyedropper: None,
             sampling: false,
+            previews: &[],
         }
     }
 
@@ -469,7 +481,11 @@ impl<'p> Pass<'p> {
             }
         }
         let armed = self.memo.armed.as_deref() == Some(line.key);
-        let shown = color.map_or(Mixed::Mixed, |rgb| Mixed::Same(Srgba::from_rgb_array(rgb)));
+        let previewed = self.previews.iter().find(|(key, _)| key == line.key).map(|(_, color)| *color);
+        let shown = match previewed {
+            Some(color) => Mixed::Same(color),
+            None => color.map_or(Mixed::Mixed, |rgb| Mixed::Same(Srgba::from_rgb_array(rgb))),
+        };
         line.show(ui, |ui| {
             beside(ui, |ui| {
                 let swatch = Swatch::new(line.name.clone(), shown).picker(line.key).id_salt("choose").show(ui);

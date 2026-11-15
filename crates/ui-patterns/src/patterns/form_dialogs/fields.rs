@@ -32,8 +32,10 @@ pub enum FieldValue {
     /// three numbers reads back as `Grid`, `Point` or `Color`, which [`DialogFields::list`] turns
     /// back into the list.
     List(Vec<FieldValue>),
-    /// Any JSON value: what a [`ParamKind::Custom`](super::ParamKind::Custom) row keeps under its key. Last so an
-    /// untagged read keeps the fixed-shape variants above.
+    /// Any JSON value: what a [`ParamKind::Custom`](super::ParamKind::Custom) row keeps under its key when its value is
+    /// structured (Blur Gallery's pins, `[{x, y, blur, …}]`). Last so an untagged read keeps the fixed-shape variants
+    /// above: an array of objects reads back as a `List` of `Json`, so a reader of the key takes that form as well as
+    /// `Json` of an array.
     Json(serde_json::Value),
 }
 

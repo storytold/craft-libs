@@ -172,6 +172,8 @@ pub struct FormDialog<'a, V: Value + Default> {
     answers: Vec<HostAnswer>,
     reset_with: Option<ResetWithFn<'a, V>>,
     on_reset: Option<OnResetFn<'a>>,
+    /// Values the host opened before the first pass: the first pass keeps them as the opening values Reset restores.
+    opening: Option<V>,
 }
 
 impl<'a, V: Value + Default> FormDialog<'a, V> {
@@ -198,6 +200,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             shaped: None,
             answers: Vec::new(),
             reset_with: None,
+            opening: None,
             on_reset: None,
         }
     }
@@ -317,6 +320,13 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
+    /// Values the host opened before the first pass. The first pass stores them, not its own values, as the opening
+    /// values Reset restores and the edited check compares with.
+    pub fn opening(mut self, opening: V) -> Self {
+        self.opening = Some(opening);
+        self
+    }
+
     /// Runs when Reset is picked, for what the body keeps in its own memory.
     pub fn on_reset(mut self, restore: impl FnMut(&mut BodyCx<'_>) + 'a) -> Self {
         self.on_reset = Some(Box::new(restore));
@@ -347,6 +357,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             mut answers,
             reset_with,
             on_reset,
+            opening,
         } = self;
         let env = Env::of(ui);
         let common = env.words::<CommonWords>();
@@ -459,7 +470,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                 crate::runtime::edit::watch_gestures(&ctx, || body(ui, &mut form, &mut values))
             };
             if first {
-                cx.memory::<Opened<V>>().0 = Some(values.clone());
+                cx.memory::<Opened<V>>().0 = Some(opening.clone().unwrap_or_else(|| values.clone()));
             }
             if history && !measuring {
                 let mut steps = steps.unwrap_or_else(|| EditHistory::new(&values));

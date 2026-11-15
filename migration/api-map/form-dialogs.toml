@@ -26,7 +26,7 @@ name = "CommandForm"
 old = "craft_ui::dialog::command_form::CommandForm"
 new = ""
 status = "replaced"
-note = "Replaced by the constructor `ParamDialog::command(key, title, params)`: a `ParamDialog` with no `preview` and no `remember` key, with every option of `ParamDialog` (`values`, `opened`, `ok_enabled`, `ok_reason`, `ok_label`, `cancel_label`, `closable`, `outer_gesture`, `footer_extra`, `below`). Hosted, `HostedParamDialog::command(key, fields, build)`."
+note = "Replaced by the constructor `ParamDialog::command(key, title, params)`: a `ParamDialog` with no `preview` and no `remember` key, with every option of `ParamDialog` (`values`, `opened`, `ok_enabled`, `ok_reason`, `ok_label`, `cancel_label`, `closable`, `outer_gesture`, `footer_note`, `below`). Hosted, `HostedParamDialog::command(key, fields, build)`."
 
 [[type]]
 name = "ParamLayout"
@@ -403,7 +403,9 @@ note = "The close action is named by the dialog title row; `closable(false)` rem
 [[setter]]
 type = "ParamDialog"
 old = "footer_extra(FnMut(&mut Ui) + Send + 'static)"
-new = "footer_extra(FnMut(&mut Ui) + 'a)"
+new = ""
+status = "removed"
+note = "A footer line is `footer_note(impl Into<Label>)`; footer buttons that keep the dialog open are `extra_buttons(Vec<(String, Label)>)`, reported as `ParamDialogOutput::footer_action`."
 
 [[setter]]
 type = "ParamDialog"
@@ -502,7 +504,9 @@ new = "below(impl Fn(&mut Ui, &DialogFields))"
 [[setter]]
 type = "ParamDialog"
 old = "footer_extra(impl FnMut(&mut Ui))"
-new = "footer_extra(impl FnMut(&mut Ui))"
+new = ""
+status = "removed"
+note = "A footer line is `footer_note(impl Into<Label>)`; footer buttons that keep the dialog open are `extra_buttons(Vec<(String, Label)>)`, reported as `ParamDialogOutput::footer_action`."
 
 [[setter]]
 type = "ParamDialog"
