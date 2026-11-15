@@ -564,3 +564,30 @@ fn destination_limit_is_explicit_and_never_silently_truncates() {
     body.push(3);
     assert!(super::parse_reply(&body).err().unwrap().to_string().contains("too many CUPS destinations"));
 }
+
+#[test]
+fn closed_unix_peer_keeps_its_buffered_reply_readable_with_a_deadline() {
+    let (client, mut peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    let body = ipp_reply(0, &[&group(1), &group(4), &printer_name("Studio")]);
+    peer.write_all(&http_reply(&body)).unwrap();
+    drop(peer);
+    let mut stream = super::Stream::Unix(client);
+    let mut reader = super::DeadlineReader { stream: &mut stream, end: std::time::Instant::now() + Duration::from_secs(1) };
+    assert_eq!(super::read_reply(&mut reader).unwrap(), body);
+    let mut byte = [0];
+    assert_eq!(reader.read(&mut byte).unwrap(), 0);
+    reader.end = std::time::Instant::now();
+    assert_eq!(reader.read(&mut byte).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+}
+
+#[test]
+fn stalled_unix_peer_still_fails_within_the_absolute_read_deadline() {
+    let (client, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    let start = std::time::Instant::now();
+    let mut stream = super::Stream::Unix(client);
+    let mut reader = super::DeadlineReader { stream: &mut stream, end: start + Duration::from_millis(80) };
+    let mut byte = [0];
+    let error = reader.read(&mut byte).unwrap_err();
+    assert!(matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock));
+    assert!(start.elapsed() < Duration::from_secs(3));
+}
