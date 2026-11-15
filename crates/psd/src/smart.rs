@@ -470,6 +470,51 @@ fn linked_file(item: &[u8], at: usize) -> Result<LinkedFile> {
     Ok(out)
 }
 
+/// Header of an embedded (`liFD`) linked-layer item, without reading its payload.
+/// Offsets are relative to the item (not its enclosing eight-byte length field).
+/// A deferred reader can supply just the header, then validate the payload range
+/// against the full record length before reading those bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmbeddedFileHeader {
+    /// Lossy UTF-8 identifier, matching Photoshop metadata display semantics.
+    pub uuid: String,
+    /// Lossy UTF-16 filename with trailing NULs removed.
+    pub name: String,
+    /// Start of the payload within the item.
+    pub data_offset: usize,
+    /// Declared payload length; the payload need not be resident.
+    pub data_len: usize,
+}
+
+impl EmbeddedFileHeader {
+    /// Borrow the payload only when the supplied complete item contains it.
+    pub fn payload<'a>(&self, item: &'a [u8]) -> Option<&'a [u8]> {
+        item.get(self.data_offset..self.data_offset.checked_add(self.data_len)?)
+    }
+}
+
+/// Read an embedded item's header from a possibly partial/deferred item buffer.
+/// This deliberately does not require its declared payload to be present. A malformed
+/// header or a non-embedded item is an error, not an empty embedded file. Callers walking
+/// framed records may continue to the next record after such an error.
+/// Ported from PhotoCraft's linked-item reader; record versions remain forward-compatible.
+pub fn embedded_file_header(item: &[u8]) -> Result<EmbeddedFileHeader> {
+    let mut r = Reader::new(item);
+    let kind = r.array::<4>()?;
+    let _version = r.u32()?;
+    let uuid = String::from_utf8_lossy(&read_pascal(&mut r, 1)?).into_owned();
+    let name = UnicodeString::read(&mut r)?.to_string_lossy();
+    r.skip(8)?; // file type and creator
+    let data_len = usize::try_from(r.u64()?).map_err(|_| PsdError::LimitExceeded("linked payload exceeds address space"))?;
+    if r.u8()? != 0 {
+        crate::descriptor::VersionedDescriptor::read(&mut r)?;
+    }
+    if kind != *b"liFD" {
+        return Err(PsdError::invalid("linked item is not embedded"));
+    }
+    Ok(EmbeddedFileHeader { uuid, name, data_offset: r.pos(), data_len })
+}
+
 /// The four-character file type Photoshop records for an embedded file, from its first bytes:
 /// `8BPS` (`8BPB` for a PSB), `PNGf`, `JPEG`, `TIFF`, `GIFf`, or four spaces.
 pub fn file_type(bytes: &[u8]) -> [u8; 4] {
