@@ -1151,8 +1151,9 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     }
     doc.seal_kept();
     let (prints, pages) = (super::package::style_prints(&doc), craft_wordmodel::kept::pages_fingerprint(&doc));
+    let (shape, layouts) = (craft_wordmodel::kept::pages_shape_fingerprint(&doc), super::package::page_layouts(&doc));
     if let Some(k) = doc.kept.get_mut() {
-        (k.style_prints, k.pages_fp) = (prints, Some(pages));
+        (k.style_prints, k.pages_fp, k.pages_shape_fp, k.page_layouts) = (prints, Some(pages), Some(shape), layouts);
     }
     Ok(doc)
 }
