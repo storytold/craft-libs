@@ -766,11 +766,11 @@ mod tests {
     use crate::color::Rgba;
 
     /// `ListStyle` sits inline in every `TextBody`/`Shape`, which the pptx group reader holds on the
-    /// stack once per nesting level. Keep it small (the `defPPr` level is boxed) so a debug build
-    /// does not overflow the 1 MiB Windows main-thread stack.
+    /// stack once per nesting level. Keep it at `Vec` (24) + `Option<Box>` (8) bytes (the `defPPr`
+    /// level is boxed) so a debug build does not overflow the 1 MiB Windows main-thread stack.
     #[test]
     fn list_style_stays_small() {
-        assert!(std::mem::size_of::<ListStyle>() <= 64, "{}", std::mem::size_of::<ListStyle>());
+        assert!(std::mem::size_of::<ListStyle>() <= 32, "{}", std::mem::size_of::<ListStyle>());
     }
 
     #[test]
