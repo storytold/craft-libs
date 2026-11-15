@@ -22,6 +22,25 @@ pub const fn xml_limits() -> craft_xml::Limits {
 /// `META-INF/container.xml` of a package.
 pub const CONTAINER_XML: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">\n\t<rootfiles>\n\t\t<rootfile full-path=\"designmap.xml\" media-type=\"text/xml\"/>\n\t</rootfiles>\n</container>\n";
 
+/// The standard root element for `designmap.xml`, including its required namespace and core
+/// document identity fields. The caller supplies DesignCraft-independent values; children are
+/// appended after construction.
+pub fn designmap_root(self_id: &str, story_list: &str, name: &str, zero_point: &str, active_layer: &str) -> El {
+    El::new("Document")
+        .with_attr("xmlns:idPkg", PACKAGING_NS)
+        .with_attr("DOMVersion", DOM_VERSION)
+        .with_attr("Self", self_id)
+        .with_attr("StoryList", story_list)
+        .with_attr("Name", name)
+        .with_attr("ZeroPoint", zero_point)
+        .with_attr("ActiveLayer", active_layer)
+}
+
+/// An `idPkg` reference in `designmap.xml` to a part stored at `src`.
+pub fn designmap_include(kind: &str, src: &str) -> El {
+    El::new(format!("idPkg:{kind}")).with_attr("src", src)
+}
+
 /// Parses a part into its root element with [`xml_limits`].
 ///
 /// Names are kept as written (`idPkg:Story`), text is kept exactly (it is story content), CDATA
@@ -112,10 +131,15 @@ pub fn part_xml(root: &El) -> Vec<u8> {
 /// `designmap.xml` as bytes: [`part_xml`] with the `<?aid …?>` instruction that tells InDesign
 /// what the file is.
 pub fn designmap_xml(root: &El) -> Vec<u8> {
+    let pi = format!("<?aid style=\"50\" type=\"document\" readerVersion=\"6.0\" featureSet=\"257\" product=\"{}(1)\" ?>", DOM_VERSION);
+    designmap_xml_with_pi(root, &pi)
+}
+
+/// A designmap part with the caller's `<?aid …?>` metadata instruction.
+pub fn designmap_xml_with_pi(root: &El, pi: &str) -> Vec<u8> {
     let mut s = String::from(DECL_STANDALONE);
-    s.push_str("<?aid style=\"50\" type=\"document\" readerVersion=\"6.0\" featureSet=\"257\" product=\"");
-    s.push_str(DOM_VERSION);
-    s.push_str("(1)\" ?>\n");
+    s.push_str(pi);
+    s.push('\n');
     root.write_xml_pretty(&mut s, "\t");
     s.into_bytes()
 }

@@ -1,8 +1,8 @@
 //! Shared PostScript format primitives for EPS programs.
 //!
-//! [`Scanner`] handles bounded lexical parsing. [`OperandStack`] and [`ExecutionBudget`] provide
-//! reusable language-level VM behavior while leaving values, dictionaries, graphics state,
-//! rendering, and font policy to the host interpreter.
+//! [`Scanner`] handles bounded lexical parsing. [`OperandStack`], [`ExecutionBudget`], and
+//! [`NumericOperator`] provide reusable language-level VM behavior while leaving values,
+//! dictionaries, graphics state, rendering, and font policy to the host interpreter.
 
 /// Maximum nesting depth for executable procedures in a source token.
 pub const MAX_PROCEDURE_DEPTH: usize = 100;
@@ -270,6 +270,137 @@ impl ExecutionBudget {
     pub fn leave_call(&mut self) {
         self.call_depth = self.call_depth.saturating_sub(1);
     }
+}
+
+/// Numeric operators used by PostScript's value-independent arithmetic core.
+///
+/// The host interpreter remains responsible for popping operands and selecting a result value,
+/// but these operations define the shared arithmetic semantics. Non-finite results become zero,
+/// matching the defensive finite-value policy used by the host interpreter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericOperator {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    IntegerDivide,
+    Modulo,
+    Atan,
+    Exponentiate,
+    Maximum,
+    Minimum,
+    Negate,
+    Absolute,
+    SquareRoot,
+    Sine,
+    Cosine,
+    NaturalLog,
+    CommonLog,
+    ToInteger,
+    ToReal,
+    Round,
+    Floor,
+    Ceiling,
+    Truncate,
+}
+
+impl NumericOperator {
+    /// Resolve a standard PostScript operator name to its numeric operation.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "add" => Self::Add,
+            "sub" => Self::Subtract,
+            "mul" => Self::Multiply,
+            "div" => Self::Divide,
+            "idiv" => Self::IntegerDivide,
+            "mod" => Self::Modulo,
+            "atan" => Self::Atan,
+            "exp" => Self::Exponentiate,
+            "max" => Self::Maximum,
+            "min" => Self::Minimum,
+            "neg" => Self::Negate,
+            "abs" => Self::Absolute,
+            "sqrt" => Self::SquareRoot,
+            "sin" => Self::Sine,
+            "cos" => Self::Cosine,
+            "ln" => Self::NaturalLog,
+            "log" => Self::CommonLog,
+            "cvi" => Self::ToInteger,
+            "cvr" => Self::ToReal,
+            "round" => Self::Round,
+            "floor" => Self::Floor,
+            "ceiling" => Self::Ceiling,
+            "truncate" => Self::Truncate,
+            _ => return None,
+        })
+    }
+
+    /// Number of operands the operation consumes.
+    pub const fn arity(self) -> usize {
+        match self {
+            Self::Add
+            | Self::Subtract
+            | Self::Multiply
+            | Self::Divide
+            | Self::IntegerDivide
+            | Self::Modulo
+            | Self::Atan
+            | Self::Exponentiate
+            | Self::Maximum
+            | Self::Minimum => 2,
+            _ => 1,
+        }
+    }
+
+    /// Apply a binary operator. Returns `None` for an operator that takes one operand.
+    pub fn apply_binary(self, a: f64, b: f64) -> Option<f64> {
+        let value = match self {
+            Self::Add => a + b,
+            Self::Subtract => a - b,
+            Self::Multiply => a * b,
+            Self::Divide => {
+                if b == 0.0 {
+                    0.0
+                } else {
+                    a / b
+                }
+            }
+            // Rust's float-to-int cast saturates, as the app's previous VM did. checked_div/rem
+            // also make both zero-divisor and i64::MIN / -1 cases deterministic.
+            Self::IntegerDivide => (a as i64).checked_div(b as i64).unwrap_or(0) as f64,
+            Self::Modulo => (a as i64).checked_rem(b as i64).unwrap_or(0) as f64,
+            Self::Atan => a.atan2(b).to_degrees().rem_euclid(360.0),
+            Self::Exponentiate => a.powf(b),
+            Self::Maximum => a.max(b),
+            Self::Minimum => a.min(b),
+            _ => return None,
+        };
+        Some(finite_or_zero(value))
+    }
+
+    /// Apply a unary operator. Returns `None` for an operator that takes two operands.
+    pub fn apply_unary(self, a: f64) -> Option<f64> {
+        let value = match self {
+            Self::Negate => -a,
+            Self::Absolute => a.abs(),
+            Self::SquareRoot => a.max(0.0).sqrt(),
+            Self::Sine => a.to_radians().sin(),
+            Self::Cosine => a.to_radians().cos(),
+            Self::NaturalLog => a.ln(),
+            Self::CommonLog => a.log10(),
+            Self::ToInteger | Self::Truncate => a.trunc(),
+            Self::ToReal => a,
+            Self::Round => (a + 0.5).floor(),
+            Self::Floor => a.floor(),
+            Self::Ceiling => a.ceil(),
+            _ => return None,
+        };
+        Some(finite_or_zero(value))
+    }
+}
+
+fn finite_or_zero(value: f64) -> f64 {
+    if value.is_finite() { value } else { 0.0 }
 }
 
 /// A lexical PostScript value. Names are left unevaluated for the caller's interpreter.
@@ -652,6 +783,53 @@ mod stack_tests {
         budget.leave_call();
         assert_eq!(budget.call_depth(), 0);
         assert!(budget.enter_call());
+    }
+}
+
+#[cfg(test)]
+mod numeric_operator_tests {
+    use super::NumericOperator as N;
+
+    #[test]
+    fn binary_numeric_operator_results_match_the_shared_vm_contract() {
+        assert_eq!(N::from_name("add"), Some(N::Add));
+        assert_eq!(N::from_name("idiv").map(N::arity), Some(2));
+        assert_eq!(N::from_name("sqrt").map(N::arity), Some(1));
+        assert_eq!(N::from_name("setgray"), None);
+        assert_eq!(N::Add.apply_binary(2.0, 3.0), Some(5.0));
+        assert_eq!(N::Subtract.apply_binary(2.0, 3.0), Some(-1.0));
+        assert_eq!(N::Multiply.apply_binary(2.0, 3.0), Some(6.0));
+        assert_eq!(N::Divide.apply_binary(7.0, 2.0), Some(3.5));
+        assert_eq!(N::Divide.apply_binary(7.0, 0.0), Some(0.0));
+        assert_eq!(N::IntegerDivide.apply_binary(-7.0, 2.0), Some(-3.0));
+        assert_eq!(N::IntegerDivide.apply_binary(7.0, 0.0), Some(0.0));
+        assert_eq!(N::IntegerDivide.apply_binary(i64::MIN as f64, -1.0), Some(0.0));
+        assert_eq!(N::Modulo.apply_binary(-7.0, 2.0), Some(-1.0));
+        assert_eq!(N::Modulo.apply_binary(7.0, 0.0), Some(0.0));
+        assert_eq!(N::Atan.apply_binary(0.0, -1.0), Some(180.0));
+        assert_eq!(N::Exponentiate.apply_binary(-2.0, 3.0), Some(-8.0));
+        assert_eq!(N::Exponentiate.apply_binary(-2.0, 0.5), Some(0.0));
+        assert_eq!(N::Maximum.apply_binary(2.0, 3.0), Some(3.0));
+        assert_eq!(N::Minimum.apply_binary(2.0, 3.0), Some(2.0));
+        assert_eq!(N::Negate.apply_binary(1.0, 2.0), None);
+    }
+
+    #[test]
+    fn unary_numeric_operator_results_match_the_shared_vm_contract() {
+        assert_eq!(N::Negate.apply_unary(2.0), Some(-2.0));
+        assert_eq!(N::Absolute.apply_unary(-2.0), Some(2.0));
+        assert_eq!(N::SquareRoot.apply_unary(-2.0), Some(0.0));
+        assert_eq!(N::Sine.apply_unary(30.0).map(|v| (v - 0.5).abs() < 1e-12), Some(true));
+        assert_eq!(N::Cosine.apply_unary(60.0).map(|v| (v - 0.5).abs() < 1e-12), Some(true));
+        assert_eq!(N::NaturalLog.apply_unary(-1.0), Some(0.0));
+        assert_eq!(N::CommonLog.apply_unary(100.0), Some(2.0));
+        assert_eq!(N::ToInteger.apply_unary(-2.9), Some(-2.0));
+        assert_eq!(N::ToReal.apply_unary(2.5), Some(2.5));
+        assert_eq!(N::Round.apply_unary(-1.5), Some(-1.0));
+        assert_eq!(N::Floor.apply_unary(1.9), Some(1.0));
+        assert_eq!(N::Ceiling.apply_unary(1.1), Some(2.0));
+        assert_eq!(N::Truncate.apply_unary(-2.9), Some(-2.0));
+        assert_eq!(N::Add.apply_unary(1.0), None);
     }
 }
 

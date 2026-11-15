@@ -6,7 +6,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Read, Seek};
+use std::io::{Cursor, Read, Seek, Write};
 
 pub use craft_document_bundle::Asset;
 use craft_document_bundle::Spec;
@@ -14,9 +14,10 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 pub const MIME: &str = "application/vnd.designcraft+zip";
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 pub const EXTENSION: &str = "designcraft";
 pub const PREVIEW: &str = "preview.png";
+pub const PROXIES_DIRECTORY: &str = "proxies";
 pub const MAX_PREVIEW_BYTES: u64 = 4 << 20;
 
 const BUNDLE: Spec<'static> = Spec {
@@ -26,6 +27,7 @@ const BUNDLE: Spec<'static> = Spec {
     document_entry: "document.json",
     preview_entry: PREVIEW,
     assets_directory: "assets",
+    proxies_directory: PROXIES_DIRECTORY,
     format_name: "designcraft",
     legacy_assets_field: Some("assetData"),
 };
@@ -57,23 +59,53 @@ impl From<craft_document_bundle::Error> for Error {
 pub struct Loaded<T> {
     pub document: T,
     pub assets: Vec<(String, Vec<u8>)>,
+    /// Proxy previews (JPEG or PNG bytes) of linked assets, keyed by asset id.
+    pub proxies: Vec<(String, Vec<u8>)>,
 }
 
 /// The reader capability required by `document`, inferred from its neutral JSON schema and
-/// embedded assets. Traversal beyond 64 levels conservatively requires version 4.
+/// embedded assets. Traversal beyond 64 levels conservatively requires version 4. A linked
+/// asset (`/assets/<id>/storage == "linked"`) requires version 5.
 pub fn required_version(document: &Value, assets: &[Asset<'_>]) -> u32 {
+    if has_linked_asset(document) {
+        return 5;
+    }
     if has_version_four_feature(document) {
         return 4;
     }
     if assets.iter().any(|asset| craft_eps::is_eps(asset.data)) { 3 } else { 2 }
 }
 
-/// Serialize a document and its external assets as a `.designcraft` ZIP bundle.
-pub fn save<T: Serialize>(document: &T, generator: &str, preview: Option<&[u8]>, assets: &[Asset<'_>]) -> Result<Vec<u8>, Error> {
+/// Serialize a document, its embedded assets and the proxy previews of its linked assets as a
+/// `.designcraft` ZIP bundle. Linked assets have a record in the document and no `assets` entry.
+pub fn save<T: Serialize>(
+    document: &T,
+    generator: &str,
+    preview: Option<&[u8]>,
+    assets: &[Asset<'_>],
+    proxies: &[Asset<'_>],
+) -> Result<Vec<u8>, Error> {
+    let mut out = Cursor::new(Vec::new());
+    write_to(&mut out, document, generator, preview, assets, proxies)?;
+    Ok(out.into_inner())
+}
+
+/// Like [`save`], streaming the ZIP into `out`. A writer that returns an error (to cancel a
+/// long save, say) stops the write and the error is returned as [`Error::Io`].
+pub fn write_to<T: Serialize, W: Write + Seek>(
+    out: W,
+    document: &T,
+    generator: &str,
+    preview: Option<&[u8]>,
+    assets: &[Asset<'_>],
+    proxies: &[Asset<'_>],
+) -> Result<(), Error> {
     let value = serde_json::to_value(document).map_err(|error| Error::Io(error.to_string()))?;
+    let embedded: Vec<Asset<'_>> = assets.iter().filter(|asset| !is_linked(&value, asset.id)).copied().collect();
+    let assets = embedded.as_slice();
     let version = required_version(&value, assets);
     let json = serde_json::to_vec_pretty(&value).map_err(|error| Error::Io(error.to_string()))?;
-    craft_document_bundle::write(&json, version, generator, preview, assets, BUNDLE).map_err(Into::into)
+    craft_document_bundle::write_to(out, &json, version, generator, preview, assets, proxies, BUNDLE).map_err(Into::into)
 }
 
 /// Read a `.designcraft` ZIP or legacy single-file JSON, applying all versioned schema migrations
@@ -82,7 +114,7 @@ pub fn load<T: DeserializeOwned>(bytes: &[u8]) -> Result<Loaded<T>, Error> {
     let mut package = craft_document_bundle::read(bytes, VERSION, BUNDLE)?;
     upgrade_legacy_json(&mut package.document, package.version);
     let document = serde_json::from_value(package.document).map_err(|error| Error::NotOurs(error.to_string()))?;
-    Ok(Loaded { document, assets: package.assets })
+    Ok(Loaded { document, assets: package.assets, proxies: package.proxies })
 }
 
 /// Whether `bytes` are a native DesignCraft ZIP package.
@@ -98,6 +130,17 @@ pub fn starts_designcraft(prefix: &[u8]) -> bool {
 /// Read the first-page PNG preview from a ZIP package, with a fixed 4 MiB cap.
 pub fn read_preview<R: Read + Seek>(reader: R) -> Option<Vec<u8>> {
     craft_document_bundle::read_preview_from(reader, PREVIEW)
+}
+
+fn is_linked(document: &Value, id: &str) -> bool {
+    document.get("assets").and_then(|assets| assets.get(id)).and_then(|asset| asset.get("storage")).and_then(Value::as_str) == Some("linked")
+}
+
+fn has_linked_asset(document: &Value) -> bool {
+    document
+        .get("assets")
+        .and_then(Value::as_object)
+        .is_some_and(|assets| assets.values().any(|asset| asset.get("storage").and_then(Value::as_str) == Some("linked")))
 }
 
 fn has_version_four_feature(document: &Value) -> bool {
