@@ -13,3 +13,4 @@ workspace = true
 [dependencies]
 quick-xml = { version = "0.41", default-features = false }
 thiserror = { workspace = true }
+serde = { workspace = true, features = ["derive"] }

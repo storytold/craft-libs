@@ -56,6 +56,10 @@ pub const MAX_MAINDOC: usize = 32 << 20;
 pub const MAX_LAYER_FILE: usize = 1 << 30;
 /// Most entries the archive may declare; checked before the archive is indexed.
 pub const MAX_ENTRIES: u64 = 100_000;
+/// Most bytes all the entries read from one archive may expand to together. Each pixel file may be
+/// [`MAX_LAYER_FILE`] on its own, so without a total a document of many layers could spend far more
+/// than one open should.
+pub const MAX_TOTAL: u64 = 4 << 30;
 /// Largest ICC profile.
 pub const MAX_ICC: usize = 16 << 20;
 /// Deepest element nesting of `maindoc.xml`.
@@ -247,7 +251,10 @@ impl Image {
             limits: craft_xml::Limits { max_input: MAX_MAINDOC, max_depth: MAX_XML_DEPTH, ..craft_xml::Limits::DEFAULT },
             ..craft_xml::Options::local().strict()
         };
-        let root = options.parse(maindoc).map_err(|e| invalid(format!("maindoc.xml: {e}")))?;
+        let root = options.parse(maindoc).map_err(|e| match e {
+            craft_xml::Error::Doctype => invalid("maindoc.xml: a document type with an internal DTD subset is not accepted"),
+            other => invalid(format!("maindoc.xml: {other}")),
+        })?;
         let image = root.child("IMAGE").ok_or_else(|| invalid("maindoc.xml has no IMAGE"))?;
         let side = |a: &str| -> Result<u32> {
             let v = number(image, a, 0.0)?;
@@ -284,8 +291,13 @@ pub struct Archive<'a> {
 impl<'a> Archive<'a> {
     /// Opens the archive, checks its `mimetype` and reads `maindoc.xml`.
     pub fn open(bytes: &'a [u8]) -> Result<Archive<'a>> {
-        let mut zip =
-            craft_zip::Archive::open(bytes, craft_zip::Limits { max_entries: MAX_ENTRIES, max_total_bytes: u64::MAX }).map_err(zip_error)?;
+        Self::open_with(bytes, craft_zip::Limits { max_entries: MAX_ENTRIES, max_total_bytes: MAX_TOTAL })
+    }
+
+    /// [`Archive::open`] with explicit zip limits, so a test can set a small document-wide total
+    /// ([`MAX_TOTAL`] is what [`Archive::open`] passes).
+    pub(crate) fn open_with(bytes: &'a [u8], limits: craft_zip::Limits) -> Result<Archive<'a>> {
+        let mut zip = craft_zip::Archive::open(bytes, limits).map_err(zip_error)?;
         // `zip` keeps one entry of a repeated name; which one the writer meant is not known.
         if zip.has_duplicate_names() {
             return Err(invalid("two entries of the archive share a name"));

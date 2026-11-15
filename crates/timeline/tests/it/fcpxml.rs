@@ -503,3 +503,114 @@ fn relative_media_urls_are_percent_decoded() {
     let boats = &p.sequence(only_seq(&imp)).unwrap().video_tracks[0].items[1];
     assert_eq!(media_key(p, boats.item), "/proj/media/boats b.mov");
 }
+
+// Parity regressions from FilmCraft e6df318 (including #4799), adapted to the neutral model.
+#[test]
+fn media_cut_off_by_the_depth_limit_is_complete_when_reached_higher_up() {
+    // m0 … m64 nest one inside the next. Project A reaches m63 at the depth limit, so m64 is left
+    // out of it; project B refers to m63 directly, where m64 fits, and must not get the cut-off copy.
+    let mut media = String::new();
+    for i in 0..64 {
+        media.push_str(&format!(
+            r#"<media id="m{i}" name="M{i}"><sequence format="r1"><spine><ref-clip ref="m{}" offset="0s" start="0s" duration="1s"/></spine></sequence></media>"#,
+            i + 1
+        ));
+    }
+    media.push_str(r#"<media id="m64" name="M64"><sequence format="r1"><spine/></sequence></media>"#);
+    let xml = format!(
+        r#"<fcpxml version="1.10"><resources><format id="r1" frameDuration="1/24s" width="1920" height="1080"/>{media}</resources>
+        <library><event>
+          <project name="A"><sequence format="r1"><spine><ref-clip ref="m0" offset="0s" start="0s" duration="1s"/></spine></sequence></project>
+          <project name="B"><sequence format="r1"><spine><ref-clip ref="m63" offset="0s" start="0s" duration="1s"/></spine></sequence></project>
+        </event></library></fcpxml>"#
+    );
+    let (imp, rep) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(rep.mentions("nested too deeply"), "{rep:?}");
+    let m63 = imp.project.items.values().find(|i| i.name == "M63").and_then(|i| imp.project.sequence(i.id)).unwrap();
+    assert_eq!(m63.video_tracks[0].items.len(), 1, "M63 keeps its nested M64");
+}
+
+#[test]
+fn media_cut_off_by_xml_layout_is_complete_when_revisited_at_the_same_media_depth() {
+    // Both references have media-chain depth zero, but the first is reached through connected
+    // clips. Its resource must not remain cached as complete after the XML-layout guard fires.
+    for depth in [125, 126] {
+        let nested = format!(
+            "{}<ref-clip lane=\"1\" ref=\"m0\" offset=\"0s\" duration=\"1s\"/>{}",
+            "<gap lane=\"1\" offset=\"0s\" duration=\"1s\">".repeat(depth),
+            "</gap>".repeat(depth)
+        );
+        let xml = format!(
+            r#"<fcpxml version="1.10"><resources>
+          <format id="r1" frameDuration="1/24s" width="1920" height="1080"/>
+          <media id="m0" name="M0"><sequence format="r1"><spine>
+            <ref-clip ref="m1" offset="0s" duration="1s"/>
+          </spine></sequence></media>
+          <media id="m1" name="M1"><sequence format="r1"><spine/></sequence></media>
+        </resources><library><event>
+          <project name="A"><sequence format="r1"><spine>{nested}</spine></sequence></project>
+          <project name="B"><sequence format="r1"><spine>
+            <ref-clip ref="m0" offset="0s" duration="1s"/>
+          </spine></sequence></project>
+        </event></library></fcpxml>"#
+        );
+        let (imp, rep) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+        assert!(rep.mentions("XML") && rep.mentions("nested"), "{rep:?}");
+        let m0 = imp.project.items.values().find(|i| i.name == "M0").and_then(|i| imp.project.sequence(i.id)).unwrap();
+        assert_eq!(m0.video_tracks[0].items.len(), 1, "M0 keeps its nested M1 after the shallower revisit");
+    }
+}
+
+#[test]
+fn flat_resource_chain_is_bounded_even_when_xml_is_shallow() {
+    let mut media = String::new();
+    for i in 0..512 {
+        media.push_str(&format!(
+            r#"<media id="m{i}" name="M{i}"><sequence><spine><ref-clip ref="m{}" duration="1s"/></spine></sequence></media>"#,
+            i + 1
+        ));
+    }
+    let xml = format!(
+        r#"<fcpxml version="1.10"><resources>{media}</resources><project name="P"><sequence><spine><ref-clip ref="m0" duration="1s"/></spine></sequence></project></fcpxml>"#
+    );
+    let (imp, rep) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(rep.mentions("nested too deeply"), "{rep:?}");
+    assert!(imp.project.items.len() <= 65, "the flat resource graph is not expanded beyond the semantic limit");
+}
+
+#[test]
+fn shallower_retry_does_not_link_a_cached_ancestor_back_to_the_rebuilt_item() {
+    let mut media = String::new();
+    for i in 0..64 {
+        media.push_str(&format!(
+            r#"<media id="m{i}" name="M{i}"><sequence><spine><ref-clip ref="m{}" duration="1s"/></spine></sequence></media>"#,
+            (i + 1) % 64
+        ));
+    }
+    let xml = format!(
+        r#"<fcpxml version="1.10"><resources>{media}</resources>
+        <project name="A"><sequence><spine><ref-clip ref="m0" duration="1s"/></spine></sequence></project>
+        <project name="B"><sequence><spine><ref-clip ref="m62" duration="1s"/></spine></sequence></project></fcpxml>"#
+    );
+    let (imp, rep) = import(xml.as_bytes(), Format::Fcpxml, None).unwrap();
+    assert!(rep.mentions("cached media"), "{rep:?}");
+    // Check the final graph, not just the resource-name recursion stack during import.
+    fn visit(p: &Project, id: ItemId, active: &mut std::collections::HashSet<ItemId>, done: &mut std::collections::HashSet<ItemId>) {
+        if done.contains(&id) {
+            return;
+        }
+        assert!(active.insert(id), "cached media introduced a cycle at {id:?}");
+        if let Some(seq) = p.sequence(id) {
+            for item in seq.all_tracks().flat_map(|track| &track.items) {
+                visit(p, item.item, active, done);
+            }
+        }
+        active.remove(&id);
+        done.insert(id);
+    }
+    let mut active = std::collections::HashSet::new();
+    let mut done = std::collections::HashSet::new();
+    for id in imp.project.items.keys() {
+        visit(&imp.project, *id, &mut active, &mut done);
+    }
+}

@@ -14,7 +14,15 @@ fn only_formats_the_encoder_writes_are_named() {
     for name in craft_audio::ENCODE_EXTENSIONS {
         assert!(encode_format_for(name).is_some(), "{name}");
     }
-    for other in ["mp3", "ogg", "m4a", "xyz", ""] {
+    for other in ["opus", "aac", "mp4", "xyz", ""] {
         assert_eq!(encode_format_for(other), None, "{other}");
     }
+}
+
+#[test]
+fn ogg_names_follow_the_native_feature() {
+    let built = cfg!(all(feature = "vorbis-encode", not(target_arch = "wasm32")));
+    assert_eq!(EncodeFormat::Ogg.is_built(), built);
+    assert_eq!(encode_format_for("ogg"), built.then_some(EncodeFormat::Ogg));
+    assert_eq!(craft_audio::ENCODE_EXTENSIONS.contains(&"ogg"), built);
 }
