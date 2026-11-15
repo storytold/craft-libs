@@ -119,8 +119,111 @@ fn rat_vec(v: &[f64]) -> Value {
     Value::Rational(v.iter().map(|&x| rational(x)).collect())
 }
 
+/// Colour tags copied by value, with potentially large profile tables borrowed.
+pub struct DngColor<'a> {
+    pub illuminant: [u16; 2],
+    pub color_matrix: [Option<Matrix3>; 2],
+    pub forward_matrix: [Option<Matrix3>; 2],
+    pub camera_calibration: [Option<Matrix3>; 2],
+    pub analog_balance: Option<[f64; 3]>,
+    pub as_shot_neutral: Option<[f64; 3]>,
+    pub as_shot_white_xy: Option<[f64; 2]>,
+    pub baseline_exposure: f64,
+    pub baseline_sharpness: Option<f64>,
+    pub profile: &'a crate::profile::ProfileLook,
+}
+
+impl<'a> From<&'a crate::ColorData> for DngColor<'a> {
+    fn from(color: &'a crate::ColorData) -> Self {
+        Self {
+            illuminant: color.illuminant,
+            color_matrix: color.color_matrix,
+            forward_matrix: color.forward_matrix,
+            camera_calibration: color.camera_calibration,
+            analog_balance: color.analog_balance,
+            as_shot_neutral: color.as_shot_neutral,
+            as_shot_white_xy: color.as_shot_white_xy,
+            baseline_exposure: color.baseline_exposure,
+            baseline_sharpness: color.baseline_sharpness,
+            profile: &color.profile,
+        }
+    }
+}
+
+/// Borrowed wire-format input for callers with their own application image type.
+/// Pixel buffers and large profile/opcode tables are not copied.
+pub struct DngImage<'a> {
+    pub width: usize,
+    pub height: usize,
+    pub cpp: usize,
+    pub data: &'a RawData,
+    pub cfa: Option<&'a crate::Cfa>,
+    pub bits: u32,
+    pub black: &'a crate::BlackLevel,
+    pub white: &'a [f32],
+    pub active_area: crate::Rect,
+    pub crop: crate::Rect,
+    pub orientation: crate::Orientation,
+    pub color: DngColor<'a>,
+    pub wb_multipliers: Option<[f32; 3]>,
+    pub opcodes: &'a crate::OpcodeLists,
+    pub make: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub cinema: &'a crate::CinemaTags,
+    /// Optional application-supplied UniqueCameraModel fallback when make/model are absent.
+    pub unknown_camera_model: Option<&'a str>,
+}
+
+impl<'a> From<&'a RawImage> for DngImage<'a> {
+    fn from(raw: &'a RawImage) -> Self {
+        Self {
+            width: raw.width,
+            height: raw.height,
+            cpp: raw.cpp,
+            data: &raw.data,
+            cfa: raw.cfa.as_ref(),
+            bits: raw.bits,
+            black: &raw.black,
+            white: &raw.white,
+            active_area: raw.active_area,
+            crop: raw.crop,
+            orientation: raw.orientation,
+            color: DngColor::from(&raw.color),
+            wb_multipliers: raw.wb_multipliers,
+            opcodes: &raw.opcodes,
+            make: raw.camera.make.as_deref(),
+            model: raw.camera.model.as_deref(),
+            cinema: &raw.cinema,
+            unknown_camera_model: None,
+        }
+    }
+}
+
+impl DngImage<'_> {
+    fn validate(&self) -> Result<()> {
+        crate::validate_image_layout(self.width, self.height, self.cpp, Some(self.data.len()), self.cfa, self.active_area)?;
+        if self.width > u32::MAX as usize || self.height > u32::MAX as usize {
+            return Err(RawError::Limit("DNG dimensions exceed TIFF fields"));
+        }
+        Ok(())
+    }
+
+    fn white_at(&self, sample: usize) -> f32 {
+        self.white.get(sample).or_else(|| self.white.first()).copied().unwrap_or(65535.0)
+    }
+}
+
+/// Write an image without taking ownership of its pixels or application metadata.
+pub fn write_dng_view(raw: &DngImage<'_>, opts: &DngWriteOptions) -> Result<Vec<u8>> {
+    write_image(raw, opts)
+}
+
 /// Serialise `raw` as a DNG.
 pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
+    write_dng_view(&DngImage::from(raw), opts)
+}
+
+fn write_image(raw: &DngImage<'_>, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     raw.validate()?;
     if opts.software.trim() == "LightCraft" {
         return Err(RawError::Unsupported("the Software tag `LightCraft` marks files with a sensor-anchored CFAPattern".into()));
@@ -137,7 +240,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     ifd.set(t::DNG_BACKWARD_VERSION, Value::Byte(vec![1, 3, 0, 0]));
     write_identity_tags(&mut ifd, raw, opts);
 
-    if let Some(cfa) = &raw.cfa {
+    if let Some(cfa) = raw.cfa {
         ifd.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![cfa.height as u16, cfa.width as u16]));
         // the tag is anchored at the ActiveArea's top-left, `raw.cfa` at the sensor origin
         let a = raw.active_area;
@@ -145,7 +248,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
         ifd.set(t::CFA_PLANE_COLOR, Value::Byte(vec![0, 1, 2]));
         ifd.set(t::CFA_LAYOUT, Value::Short(vec![1]));
     }
-    let b = &raw.black;
+    let b = raw.black;
     ifd.set(t::BLACK_LEVEL_REPEAT_DIM, Value::Short(vec![b.repeat_rows as u16, b.repeat_cols as u16]));
     let mut bl: Vec<f64> = b.values.iter().map(|&v| v as f64).collect();
     if bl.len() == 1 && cpp > 1 {
@@ -174,7 +277,7 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     write_profile_tags(&mut ifd, raw, opts.order);
     write_opcode_tags(&mut ifd, raw);
 
-    match (&raw.data, opts.compression) {
+    match (raw.data, opts.compression) {
         (RawData::F32(v), DngCompression::Deflate { tile, half }) => {
             let tile = deflate_tile(tile);
             let bp = if half { 2 } else { 4 };
@@ -311,9 +414,9 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
 }
 
 /// Make, Model, UniqueCameraModel, Orientation, Software and the XMP packet.
-fn write_identity_tags(ifd: &mut IfdBuilder, raw: &RawImage, opts: &DngWriteOptions) {
-    let make = raw.camera.make.as_deref().unwrap_or_default();
-    let model = raw.camera.model.as_deref().unwrap_or_default();
+fn write_identity_tags(ifd: &mut IfdBuilder, raw: &DngImage<'_>, opts: &DngWriteOptions) {
+    let make = raw.make.unwrap_or_default();
+    let model = raw.model.unwrap_or_default();
     if !make.is_empty() {
         ifd.set(t::MAKE, Value::Ascii(make.to_owned()));
     }
@@ -332,7 +435,7 @@ fn write_identity_tags(ifd: &mut IfdBuilder, raw: &RawImage, opts: &DngWriteOpti
     } else {
         format!("{make} {model}")
     };
-    ifd.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii(if unique.is_empty() { "Unknown".into() } else { unique }));
+    ifd.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii(if unique.is_empty() { raw.unknown_camera_model.unwrap_or("Unknown").into() } else { unique }));
     ifd.set(t::ORIENTATION, Value::Short(vec![raw.orientation.to_exif()]));
     ifd.set(t::SOFTWARE, Value::Ascii(opts.software.clone()));
     if let Some(xmp) = &opts.xmp {
@@ -341,7 +444,7 @@ fn write_identity_tags(ifd: &mut IfdBuilder, raw: &RawImage, opts: &DngWriteOpti
 }
 
 /// The colour tags (matrices, white balance, baseline exposure and sharpness) and the CinemaDNG frame tags.
-fn write_color_tags(ifd: &mut IfdBuilder, raw: &RawImage) {
+fn write_color_tags(ifd: &mut IfdBuilder, raw: &DngImage<'_>) {
     let c = &raw.color;
     for (i, tag) in [t::CALIBRATION_ILLUMINANT_1, t::CALIBRATION_ILLUMINANT_2].into_iter().enumerate() {
         if c.color_matrix[i].is_some() {
@@ -385,9 +488,9 @@ fn write_color_tags(ifd: &mut IfdBuilder, raw: &RawImage) {
     }
 }
 
-fn write_profile_tags(ifd: &mut IfdBuilder, raw: &RawImage, order: ByteOrder) {
+fn write_profile_tags(ifd: &mut IfdBuilder, raw: &DngImage<'_>, order: ByteOrder) {
     // The source's own profile look travels with its data (conversions, smart previews, merges).
-    let profile = &raw.color.profile;
+    let profile = raw.color.profile;
     let table_tags = |ifd: &mut IfdBuilder, table: &crate::profile::HsvTable, dims: u16, enc: u16| {
         ifd.set(dims, Value::Long(vec![table.hue_divisions as u32, table.sat_divisions as u32, table.val_divisions as u32]));
         if table.srgb_value {
@@ -425,7 +528,7 @@ fn write_profile_tags(ifd: &mut IfdBuilder, raw: &RawImage, order: ByteOrder) {
     }
 }
 
-fn write_opcode_tags(ifd: &mut IfdBuilder, raw: &RawImage) {
+fn write_opcode_tags(ifd: &mut IfdBuilder, raw: &DngImage<'_>) {
     for (list, tag) in [(&raw.opcodes.list1, t::OPCODE_LIST_1), (&raw.opcodes.list2, t::OPCODE_LIST_2), (&raw.opcodes.list3, t::OPCODE_LIST_3)] {
         if !list.is_empty() {
             ifd.set(tag, Value::Undefined(opcodes::write_list(list)));
