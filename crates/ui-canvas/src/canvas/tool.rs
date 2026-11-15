@@ -695,6 +695,78 @@ pub trait CanvasTool {
     fn command_form(&self) -> ToolPath;
 }
 
+/// A borrowed tool is the tool: an app hands a tool it keeps (`&mut tool`) to the host with no wrapper. Every method
+/// forwards, the defaults included, so the tool's own overrides hold.
+impl<T: CanvasTool + ?Sized> CanvasTool for &mut T {
+    fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
+        (**self).each_pass(cx);
+    }
+
+    fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
+        (**self).press(pointer, cx)
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        (**self).drag(pointer, cx);
+    }
+
+    fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        (**self).release(pointer, cx);
+    }
+
+    fn hover(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
+        (**self).hover(pointer, cx);
+    }
+
+    fn cancel(&mut self, reason: CancelReason, cx: &mut ToolContext<'_>) {
+        (**self).cancel(reason, cx);
+    }
+
+    fn claims(&self) -> ToolClaims {
+        (**self).claims()
+    }
+
+    fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
+        (**self).key(key, cx)
+    }
+
+    fn paint(&self, draw: &Draw<'_>, cx: &ToolContext<'_>) {
+        (**self).paint(draw, cx);
+    }
+
+    fn cursor(&self, cx: &ToolContext<'_>) -> Cursor {
+        (**self).cursor(cx)
+    }
+
+    fn takes(&self, button: PointerButton, mods: Mods) -> bool {
+        (**self).takes(button, mods)
+    }
+
+    fn autoscrolls(&self) -> bool {
+        (**self).autoscrolls()
+    }
+
+    fn autoscrolls_on_hover(&self) -> bool {
+        (**self).autoscrolls_on_hover()
+    }
+
+    fn view_only(&self) -> bool {
+        (**self).view_only()
+    }
+
+    fn takes_every_move(&self) -> bool {
+        (**self).takes_every_move()
+    }
+
+    fn access(&self, cx: &ToolContext<'_>) -> Option<ToolAccess> {
+        (**self).access(cx)
+    }
+
+    fn command_form(&self) -> ToolPath {
+        (**self).command_form()
+    }
+}
+
 /// The suite's probe of the canvas tool `T`: `#[pattern(tool)]` registers through it, so only a `CanvasTool` takes
 /// the attribute.
 #[doc(hidden)]
