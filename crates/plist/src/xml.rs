@@ -56,6 +56,12 @@ enum Tok {
     Text(String),
 }
 
+// Ported from LightCraft f786b875: scan one entity-name run, never the remaining document.
+fn entity_end(rest: &str) -> Option<usize> {
+    let n = rest.bytes().skip(1).take_while(|b| b.is_ascii_alphanumeric() || *b == b'#').count();
+    (rest.as_bytes().get(n + 1) == Some(&b';')).then_some(n + 1)
+}
+
 fn decode_entities(s: &str) -> String {
     if !s.contains('&') {
         return s.to_string();
@@ -65,7 +71,7 @@ fn decode_entities(s: &str) -> String {
     while let Some(p) = rest.find('&') {
         out.push_str(rest.get(..p).unwrap_or(""));
         let after = rest.get(p..).unwrap_or("");
-        let Some(end) = after.as_bytes().iter().take(13).position(|b| *b == b';') else {
+        let Some(end) = entity_end(after) else {
             out.push('&');
             rest = after.get(1..).unwrap_or("");
             continue;
@@ -478,6 +484,7 @@ mod tests {
             assert_eq!(decode_entities(&(text.clone() + ";")), text + ";");
         }
         assert_eq!(decode_entities("é&missing; &amp; &#13; &#x41;"), "é&missing; & \r A");
+        assert_eq!(decode_entities("C&#0000000097;non &#x0000041;"), "Canon A");
     }
     #[test]
     fn caller_limits_refuse_before_unbounded_tree_growth() {
