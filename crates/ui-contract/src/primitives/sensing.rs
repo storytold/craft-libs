@@ -174,6 +174,8 @@ impl MemberDecl {
 struct RootInfo {
     id: Id,
     rect: Rect,
+    /// The part of `rect` inside the root's clip: where its own background lies.
+    shown: Rect,
     own_sense: Sense,
 }
 
@@ -322,11 +324,18 @@ fn member_over_shapes(member: &MemberDecl, target: f32) -> impl Iterator<Item = 
     member.parts.iter().filter(|part| part.over).map(move |part| member_part_shape(member, part, member.over_at, target))
 }
 
-/// The shapes of last pass in resolution order: own parts, then members in show order, each member's `over` parts
-/// above the members its body showed, and the own `over` parts at their position among them.
+/// The root's own background over `rect`, below every part and member, sensing `sense`.
+fn background_shape(root: Id, rect: Rect, sense: Sense) -> Shape<Id> {
+    Shape::new(rect.into(), sense, root, None, HitPriority::new(HitLevel::Background, 0), 0)
+}
+
+/// The shapes of last pass in resolution order: the root's own background over its shown rect, which hovers and takes
+/// a press when the root senses one itself, own parts, then members in show order, each member's `over` parts above
+/// the members its body showed, and the own `over` parts at their position among them.
 fn candidates(state: &ArenaState, target: f32) -> Vec<Shape<Id>> {
     let root = state.root.map_or(Id::NULL, |root| root.id);
-    let mut shapes: Vec<Shape<Id>> = own_shapes(&state.previous_own, root, target).collect();
+    let background = state.root.map(|info| background_shape(info.id, info.shown, info.own_sense | Sense::HOVER));
+    let mut shapes: Vec<Shape<Id>> = background.into_iter().chain(own_shapes(&state.previous_own, root, target)).collect();
     for (at, member) in state.previous.iter().enumerate() {
         shapes.extend(member_shapes(member, member_position(at), target));
         shapes.extend(member_over_shapes(member, target));
@@ -476,21 +485,20 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
     let response = response::widget(ui, spec.id, Rect::from_min_max(shown.min, shown.max.max(shown.min)), sense);
     // Each edge or handle part that reaches outside the root rect gets its own widget, resolved as the root.
     let mut widgets = vec![spec.id, sub(spec.id, "transform")];
-    for part in spec.own.iter().filter(|part| !part.over && own_widget(spec.rect, part)) {
+    for part in spec.own.iter().filter(|part| reaches_out(spec.rect, part)) {
         let id = sub(spec.id, ("edge", part.key, part.index));
         response::widget(ui, id, part.shape.bounds().intersect(clip), part.sense);
         crate::runtime::egui::access::hide(ctx, id);
         widgets.push(id);
     }
     widgets.extend(over_parts(spec.own).map(|part| over_widget(spec.id, part)));
-    let background = (!spec.own_sense.is_empty())
-        .then(|| Shape::new(spec.rect.into(), spec.own_sense, spec.id, None, HitPriority::new(HitLevel::Background, 0), 0));
+    let background = (!spec.own_sense.is_empty()).then(|| background_shape(spec.id, spec.rect, spec.own_sense));
     pointer::record_widgets_in(ctx, read.viewport, layer, spec.id, &widgets, sense.contains(Sense::CLICK));
     // The parts last pass registered, which this pass's results read.
     let known = with_arena_in(ctx, read.viewport, arena, read.pass_nr, |state| {
         state.own.clear();
         state.own.extend_from_slice(spec.own);
-        state.root = Some(RootInfo { id: spec.id, rect: spec.rect, own_sense: spec.own_sense });
+        state.root = Some(RootInfo { id: spec.id, rect: spec.rect, shown, own_sense: spec.own_sense });
         state.widgets = widgets;
         state.last_layer = Some(layer);
         state.last_sense = sense;
@@ -504,11 +512,12 @@ pub(crate) fn sense_root(ui: &Ui, spec: RootSpec<'_>) -> RootResult {
     pointer::record_shapes_in(ctx, read.viewport, layer, spec.id, own_shapes(spec.own, spec.id, read.target()).chain(background));
     let mut response = response;
     let outcome = outcome_in(ctx, &read, arena, layer, spec.enabled, sense);
-    // The root's response reports the presses on its own widget: a part with a widget of its own reports in its
-    // part result, as a member does in its response.
-    let on_root = |hit: &Hit| {
-        hit.owner == spec.id && hit.part.is_none_or(|part| !spec.own.iter().any(|decl| decl.part_ref() == part && own_widget(spec.rect, decl)))
-    };
+    // The root is hovered while the arena's hover resolve finds anything under the pointer: its background, its parts
+    // or its members, whichever egui widget lies on top there.
+    response::hover_flags(&mut response, outcome.hover.is_some());
+    // The root's response reports the presses on the root and on every part of its own, whichever egui widget took
+    // them; the part results say which part. A member reports in its own response.
+    let on_root = |hit: &Hit| hit.owner == spec.id;
     response::press_flags(&mut response, press_view(&outcome, on_root, on_root));
     let (activation, activated_member) = match outcome.activated {
         Some(hit) if hit.owner == spec.id => (true, None),
@@ -533,10 +542,10 @@ fn over_parts(own: &[PartDecl]) -> impl Iterator<Item = &PartDecl> {
     own.iter().filter(|part| part.over && part.sense.takes_press())
 }
 
-/// Whether a root's own `part` has an egui widget beside the root's: an `over` part that takes a press, or an edge
-/// or handle part that reaches outside the root's `rect`.
-fn own_widget(rect: Rect, part: &PartDecl) -> bool {
-    if part.over { part.sense.takes_press() } else { part.priority.level >= HitLevel::Edge && !rect.contains_rect(part.shape.bounds()) }
+/// Whether a root's own `part` is an edge or handle part, not `over`, that reaches outside the root's `rect`: it gets
+/// an egui widget of its own, so egui's press target reaches it there.
+fn reaches_out(rect: Rect, part: &PartDecl) -> bool {
+    !part.over && part.priority.level >= HitLevel::Edge && !rect.contains_rect(part.shape.bounds())
 }
 
 fn over_widget(root: Id, part: &PartDecl) -> Id {
@@ -695,8 +704,7 @@ fn press_view(outcome: &Outcome, holds: impl Fn(&Hit) -> bool, clicks: impl Fn(&
     }
 }
 
-/// The resolve rule over last pass's shapes at `point`. A press inside the root rect that hits no shape goes to
-/// the root's own background when the root senses a press.
+/// The resolve rule over last pass's shapes at `point`.
 fn resolve_in(state: &ArenaState, xf: Option<LayerMap>, point: Pos2, kind: ResolveFor, target: f32) -> Option<Hit> {
     let shapes = candidates(state, target);
     let won = resolve_mapped(&shapes, point, kind, |p| xf.map_or(p, |map| map.to_layer(p)));
@@ -725,7 +733,6 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
     let hover_layer_ok = top.is_some_and(|top| top == layer || Some(top) == body_layer);
     let (mut cancelled, mut release_held) = (false, false);
     let outcome = with_arena(ctx, arena, pass_nr, |state| {
-        let root = state.root.unwrap_or(RootInfo { id: Id::NULL, rect: Rect::NOTHING, own_sense: Sense::empty() });
         let pos = pos.unwrap_or(Pos2::ZERO);
         let input = PassInput::new(
             &pass_pointer.events,
@@ -759,15 +766,7 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             if !enabled || !allowed {
                 return None;
             }
-            let hit = resolve_in(state, xf, at, ResolveFor::Press, target).or_else(|| {
-                (root.rect.contains(at) && root.own_sense.takes_press()).then_some(Hit {
-                    owner: root.id,
-                    part: None,
-                    sense: root.own_sense,
-                    local: false,
-                })
-            });
-            hit.map(|hit| (hit, hit.sense))
+            resolve_in(state, xf, at, ResolveFor::Press, target).map(|hit| (hit, hit.sense))
         });
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));
         release_held = machine.release_held();

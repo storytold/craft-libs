@@ -30,6 +30,8 @@ struct Strip<'a> {
     /// The chords bound to the window's keys (`commands::window_shortcuts`).
     window_shortcuts: &'a [(WindowShortcut, Chord)],
     menu_bar: bool,
+    /// The focused stop holds drafts (`KeyUse::holds_drafts`): a lone Alt alerts instead of focusing the menu bar.
+    holds_drafts: bool,
     /// A dialog keeps a canvas open and Space belongs to it: the press is the canvas's momentary command chord.
     canvas_space: bool,
     /// An app's own egui widget or popup has the focus (`FocusedRecord::foreign`): Tab, Escape and the clipboard
@@ -165,13 +167,18 @@ impl Strip<'_> {
         }
     }
 
-    /// A lone Alt press, pressed and released with no other key between, focuses the menu bar (9.7).
+    /// A lone Alt press, pressed and released with no other key between, focuses the menu bar (9.7). In a field that
+    /// holds drafts it only alerts, so the draft keeps its focus (L-52).
     fn alt_change(&self, batch: &mut Batch, alt: &mut AltTrack, held: bool) {
         if held && !alt.down {
             alt.other_key = false;
         }
-        if !held && alt.down && !alt.other_key && self.menu_bar && self.os != Os::Mac {
-            batch.menu.push(MenuKey::Focus);
+        if !held && alt.down && !alt.other_key && self.os != Os::Mac {
+            if self.holds_drafts {
+                batch.refused = true;
+            } else if self.menu_bar {
+                batch.menu.push(MenuKey::Focus);
+            }
         }
         alt.down = held;
     }
@@ -333,6 +340,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
             edit_chords: &edit_chords,
             window_shortcuts: &window_shortcuts,
             menu_bar,
+            holds_drafts: keys.is_some_and(|keys| keys.holds_drafts),
             canvas_space: hole.as_ref().is_some_and(|hole| hole.space || hole.space_pressed),
             foreign: record.foreign,
             canvas,
@@ -360,6 +368,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     });
     if let Some(visible) = visible {
         focus::set_visible(ctx, viewport, visible);
+    }
+    if batch.refused {
+        crate::runtime::frame::refuse(ctx);
     }
     with(ctx, viewport, |stage| {
         stage.batch = batch;

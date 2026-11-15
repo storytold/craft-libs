@@ -912,7 +912,7 @@ impl<K: Clone + PartialEq + Send + Sync + 'static> Model<K> {
         let mut submitted = false;
         Row::new().show(ui, |ui, _| {
             Text::new(words.search_in.clone()).show(ui);
-            let field = TextField::new(words.search_in.clone(), Bind::bound(&mut self.folder)).show(ui);
+            let field = TextField::new(words.search_in.clone(), Bind::bound(&mut self.folder)).limit(None).show(ui);
             submitted = field.submitted;
             browse = clicked(&Button::new(words.browse.clone()).show(ui));
         });

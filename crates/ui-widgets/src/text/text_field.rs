@@ -20,6 +20,32 @@ use std::sync::Arc;
 /// The clear part of a search field.
 const CLEAR: PartKey = PartKey::new("clear");
 
+/// The most characters a single-line field holds unless its caller sets a limit: a field is no place for a document.
+const SINGLE_LINE_LIMIT: usize = 1024;
+
+/// The character limit a caller set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Limit {
+    /// [`SINGLE_LINE_LIMIT`] on a single-line field, none on a multi-line one.
+    #[default]
+    Default,
+    /// No limit: a path or an address may be longer than the default.
+    None,
+    /// At most this many characters.
+    At(usize),
+}
+
+impl Limit {
+    /// The limit the text part applies, for a field that is multi-line or not.
+    fn effective(self, multiline: bool) -> Option<usize> {
+        match self {
+            Limit::Default => (!multiline).then_some(SINGLE_LINE_LIMIT),
+            Limit::None => None,
+            Limit::At(n) => Some(n),
+        }
+    }
+}
+
 /// A text field over a codec: plain text by default.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(overlay, probe(TextField<'static, PlainText>))]
@@ -29,6 +55,7 @@ pub struct TextField<'a, C: Codec + Clone + 'static = PlainText> {
     value: Bind<'a, C::Value>,
     pub(super) codec: C,
     options: TextOptions,
+    limit: Limit,
     /// The value of an empty field, for a codec whose values have no natural empty: the start a mixed field's typing
     /// parses against (a mixed field shows no text) and what the clear part of a search field sets.
     #[prop]
@@ -73,6 +100,7 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
             value,
             codec,
             options: TextOptions::default(),
+            limit: Limit::Default,
             empty: None,
             search: false,
             leading: Vec::new(),
@@ -143,10 +171,11 @@ impl<'a, C: Codec + Clone + 'static> TextField<'a, C> {
         self
     }
 
-    /// The most characters the text holds; `None` clears the limit.
+    /// The most characters the text holds; `None` clears the limit. A single-line field holds 1024 characters unless
+    /// this is set; a multi-line field has no limit unless this is set.
     #[must_use]
     pub fn limit(mut self, limit: impl Into<Option<usize>>) -> Self {
-        self.options.limit = limit.into(); // P3(canvas-widgets-w11): cw.C61 adds the single-line default of 1024
+        self.limit = limit.into().map_or(Limit::None, Limit::At);
         self
     }
 
@@ -290,7 +319,8 @@ impl<C: Codec + Clone + 'static> Component for TextField<'_, C> {
             }
         }
         if let Some(start) = value.or(self.empty.as_ref()) {
-            let options = TextOptions { mixed: value.is_none(), ..self.options.clone() };
+            let limit = self.limit.effective(self.options.multiline());
+            let options = TextOptions { mixed: value.is_none(), limit, ..self.options.clone() };
             cx.text(text_part::<C::Value>(), placed.text, &self.codec, start, &options);
         }
     }

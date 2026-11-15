@@ -210,8 +210,8 @@ pub(crate) struct Pass {
     /// The map from its parent's layer space to screen space of each layer container shown this pass, set by its host
     /// before its body runs: the caller's `placed`, `placed_at`, float position and `bounds` are in that space.
     spaces: Vec<(Id, TSTransform)>,
-    /// Each activation of this pass: the component and a layer whose body was running around it.
-    activated: Vec<(Id, Id)>,
+    /// Each activation of this pass: the component and the layers it closes (`note_activated`).
+    activated: Vec<(Id, Vec<Id>)>,
     /// The components whose activation this pass opened or closed a popup (`claim_activation`).
     claimed: Vec<Id>,
     /// The layers a primary press landed outside of, this pass, while their dismissal keeps them open.
@@ -379,12 +379,15 @@ pub fn top(ctx: &Context) -> Option<Id> {
 
 /// Whether `layer` is the layer of a popup open above `below` in last pass's overlay stack: `layer` belongs to a
 /// non-exiting popup entry, and `below` is the window's base layer (no entry's layer) or the layer of an entry
-/// opened before it.
-// P3(canvas-widgets-w11): cw.C57 decision, `popup_above`
-#[allow(dead_code)] // P3(canvas-widgets-w11): popup_above
+/// opened before it. The stack, not egui's area order, says which layer was opened above which.
 pub(crate) fn popup_above(ctx: &Context, layer: LayerId, below: LayerId) -> bool {
-    let _ = (ctx, layer, below);
-    todo!("canvas-widgets-w11")
+    with_pass(ctx, |pass| {
+        // Entries are recorded parent first, so an earlier entry was opened before a later one.
+        let Some(at) = pass.last.iter().position(|entry| entry.layer == layer && entry.rank == Rank::Popup && !entry.exiting) else {
+            return false;
+        };
+        pass.last.iter().position(|entry| entry.layer == below).is_none_or(|under| under < at)
+    })
 }
 
 /// `id` and everything opened from inside it, shown last frame.
@@ -544,13 +547,16 @@ pub(crate) fn end_layer(ctx: &Context) {
     });
 }
 
-/// Records that the component `id` was activated: every layer whose body is running, except the one `id` is the
-/// container of, may close on it (`Dismiss.on_activate`).
+/// Records that the component `id` was activated: the innermost layer whose body is running around it, other than the
+/// one `id` is the container of, and the menus the walk out of that layer crosses (`focus::menus_closed_from`) may
+/// close on it (`Dismiss.on_activate`). An activation in a popup opened from a field inside a menu leaves that menu
+/// open.
 pub(crate) fn note_activated(ctx: &Context, id: Id) {
-    with_pass(ctx, |pass| {
-        let layers: Vec<(Id, Id)> = pass.drawing.iter().copied().filter(|layer| *layer != id).map(|layer| (id, layer)).collect();
-        pass.activated.extend(layers);
-    });
+    let Some(layer) = with_pass(ctx, |pass| pass.drawing.iter().rev().copied().find(|layer| *layer != id)) else {
+        return;
+    };
+    let closes = crate::runtime::focus::menus_closed_from(ctx, layer);
+    with_pass(ctx, |pass| pass.activated.push((id, closes)));
 }
 
 /// Records that the activation of `component` in this pass toggled a popup it opens: an opener's activation opens
@@ -563,9 +569,10 @@ pub(crate) fn claim_activation(ctx: &Context, component: Id) {
     });
 }
 
-/// Whether a component inside the layer `id` was activated in this pass, other than an opener toggling its popup.
-pub(crate) fn activated_inside(ctx: &Context, id: Id) -> bool {
-    with_pass(ctx, |pass| pass.activated.iter().any(|(component, layer)| *layer == id && !pass.claimed.contains(component)))
+/// Whether an activation in this pass closes the layer `id` (`note_activated`), other than an opener toggling its
+/// popup.
+pub(crate) fn closed_by_activation(ctx: &Context, id: Id) -> bool {
+    with_pass(ctx, |pass| pass.activated.iter().any(|(component, closes)| closes.contains(&id) && !pass.claimed.contains(component)))
 }
 
 /// The input hook: removes the primary presses that land outside the top menu family, its anchors and its parents,

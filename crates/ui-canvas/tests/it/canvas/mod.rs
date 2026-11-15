@@ -8,6 +8,8 @@ mod navigator;
 
 mod opacity_keys;
 
+mod press_focus;
+
 mod pasteboard;
 
 mod raster;

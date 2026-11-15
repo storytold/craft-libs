@@ -2,7 +2,6 @@
 
 use super::NavigationOptions;
 use crate::buttons::Button;
-use crate::canvas::zoom_field::show_zoom_field;
 use crate::canvas::{CanvasWords, ViewCommands, ViewTarget};
 use crate::choice::{Checkbox, Segmented};
 use crate::contract::{Bind, BodyCx, Entry, Gap, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
@@ -10,7 +9,7 @@ use crate::display::Divider;
 use crate::form::Field;
 use crate::layout_components::Row;
 use crate::runtime::env::{Env, UnitKind};
-use crate::text::NumberField;
+use crate::text::{InvalidZoom, NumberField, ZoomField};
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::{CanvasView, EditEvents, IconId, Mixed};
 use egui::{Response, Ui};
@@ -24,7 +23,7 @@ pub struct NavigateBarOutput {
     /// The view changes of this pass from the Zoom and Angle fields, for a binding that does not write through.
     pub view: EditEvents<CanvasView>,
     /// The zoom field's refused entry of this pass, for the app's alert; `None` when the field took its input.
-    pub invalid_zoom: Option<crate::text::InvalidZoom>,
+    pub invalid_zoom: Option<InvalidZoom>,
 }
 
 impl Outcome for NavigateBarOutput {
@@ -87,6 +86,7 @@ impl<'a> NavigateBar<'a> {
         let env = Env::of(ui);
         let words = env.words::<CanvasWords>();
         let mut events = EditEvents::new();
+        let mut invalid_zoom = None;
         let row = Row::new().gap(Gap::Item);
         let shown = match members {
             Members::Zoom { mut view, target, options, mut out } => row.show(ui, |ui, cx| {
@@ -96,7 +96,9 @@ impl<'a> NavigateBar<'a> {
                 ];
                 Segmented::new(words.navigate_direction.clone(), out.reborrowed(), &directions).show(ui);
                 if let Some(Mixed::Same(current)) = view.reborrow().read(cx) {
-                    events = write(&mut view, cx, show_zoom_field(ui, words.navigate_zoom.clone(), current, target.document));
+                    let field = ZoomField::new(words.navigate_zoom.clone(), Some(current), target.document).stepper(true).show(ui);
+                    invalid_zoom = field.invalid_zoom;
+                    events = write(&mut view, cx, field.view);
                 }
                 Divider::vertical().show(ui);
                 Checkbox::new(Bind::bound(&mut options.zoom_resizes_windows)).label(words.navigate_resize_windows.clone()).show(ui);
@@ -129,7 +131,7 @@ impl<'a> NavigateBar<'a> {
                 view_buttons(ui, &words);
             }),
         };
-        NavigateBarOutput { response: shown.output, view: events, invalid_zoom: None } // P3(canvas-widgets-w11): cw.C60
+        NavigateBarOutput { response: shown.output, view: events, invalid_zoom }
     }
 }
 

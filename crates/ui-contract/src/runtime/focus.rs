@@ -11,7 +11,6 @@ mod press;
 pub mod registration;
 
 pub(crate) use nav::{enter_row, leave_row, roving_move, row_has_stops};
-#[allow(unused_imports)] // P3(canvas-widgets-w11): cw.C57
 pub(crate) use press::{held_draft, note_holds_drafts};
 pub(crate) use registration::{Group, Stop};
 

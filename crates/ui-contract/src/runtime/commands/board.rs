@@ -26,8 +26,9 @@ type StateKey = (u32, Option<Id>);
 enum Declaration {
     /// An instance publishes the command's state.
     Instance(Id),
-    /// The focused component takes the command as an edit.
-    Focused,
+    /// The focused component takes the command as an edit; `inactive` when the edit does nothing now
+    /// (`KeyUse::inactive`), so the command resolves disabled.
+    Focused { inactive: bool },
 }
 
 /// A container instance that receives scoped commands.
@@ -142,6 +143,8 @@ struct Vantage {
     /// The edit commands the focused stop takes; `None` reads them from the stop that holds key focus when the
     /// command resolves.
     edits: Option<EditSet>,
+    /// Those of `edits` that do nothing now, read with them.
+    inactive: Option<EditSet>,
 }
 
 fn with<R>(ctx: &Context, f: impl FnOnce(&mut Board) -> R) -> R {
@@ -261,9 +264,13 @@ impl Board {
             return Some(Declaration::Instance(id));
         }
         let edit = self.registry.edit_of(&command.id)?;
-        let edits = from.edits.or_else(|| focus::record(ctx, pass::current_viewport(ctx)).keys.map(|keys| keys.edits));
+        let keys = from
+            .edits
+            .map(|edits| (edits, from.inactive.unwrap_or(EditSet::NONE)))
+            .or_else(|| focus::record(ctx, pass::current_viewport(ctx)).keys.map(|keys| (keys.edits, keys.inactive)));
         let in_reach = !dialog_open || !from.inside_modal.is_empty();
-        (in_reach && edits.is_some_and(|edits| edits.contains(edit))).then_some(Declaration::Focused)
+        let (edits, inactive) = keys.filter(|_| in_reach)?;
+        edits.contains(edit).then_some(Declaration::Focused { inactive: inactive.contains(edit) })
     }
 
     /// `command` as seen by `instance`, or by the app for an app-scope command, from `from`, before the gate, and the
@@ -292,7 +299,7 @@ impl Board {
         };
         let key = match declaring {
             Some(Declaration::Instance(id)) => self.numbers.get(command.id.as_str()).map(|&number| (number, Some(id))),
-            Some(Declaration::Focused) => None,
+            Some(Declaration::Focused { .. }) => None,
             None => self.state_key(command, instance),
         };
         let this = key.and_then(|key| self.this.get(&key));
@@ -320,7 +327,7 @@ impl Board {
             label: state.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
             icon: def.and_then(|def| def.icon.clone()),
             chord,
-            enabled: flags.enabled && modal && live,
+            enabled: flags.enabled && modal && live && !matches!(declaring, Some(Declaration::Focused { inactive: true })),
             checked: flags.checked,
             marked: state.is_some_and(CommandState::is_marked),
             hint: state.and_then(|s| s.hint_ref().cloned()),
@@ -583,7 +590,7 @@ fn beneath(ctx: &Context, layer: Id) -> Vantage {
     let stop = focus::return_stop(ctx, layer);
     let dialog_keys = keys::owner_at(ctx, stop.as_ref().map(|(rec, _)| rec), stop.as_ref().map_or(&[][..], |(_, scopes)| scopes), Some(layer))
         == KeyOwner::Class(OwnerClass::Dialog);
-    let edits = stop.as_ref().map_or(EditSet::NONE, |(rec, _)| rec.stop.keys.edits);
+    let (edits, inactive) = stop.as_ref().map_or((EditSet::NONE, EditSet::NONE), |(rec, _)| (rec.stop.keys.edits, rec.stop.keys.inactive));
     let returns = stop.map(|(rec, _)| rec.stop.key().0);
     with(ctx, |board| {
         let chain: Vec<Id> = returns
@@ -593,7 +600,7 @@ fn beneath(ctx: &Context, layer: Id) -> Vantage {
         // Nothing to return to inside a modal: the modal's root takes the commands, as in `begin`.
         let chain = if chain.is_empty() && returns.is_none() { root.into_iter().collect() } else { chain };
         let inside_modal = Board::inside_modal_of(&chain, |id| Some(id) == root);
-        Vantage { modal_open, dialog_keys, inside_modal, focused: vec![(viewport, chain)], edits: Some(edits) }
+        Vantage { modal_open, dialog_keys, inside_modal, focused: vec![(viewport, chain)], edits: Some(edits), inactive: Some(inactive) }
     })
 }
 

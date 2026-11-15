@@ -462,6 +462,26 @@ pub(crate) fn press_winner(ctx: &Context, at: Pos2, targets: PressTargets) -> Op
     candidates.into_iter().find_map(|(root, shapes)| resolve(&shapes, at, ResolveFor::Press).map(|winner| (winner, root)))
 }
 
+/// Every shape of the last pass on the topmost layer at `at` (screen points) whose area contains it, as
+/// `(owner, part)`, sensing or not, in no particular order; empty where no layer is. The hit record a press is
+/// classified on, for rules that ask what lies under a point rather than who wins it.
+pub fn shapes_at(ctx: &Context, at: Pos2) -> Vec<(Id, Option<PartRef>)> {
+    let Some(layer) = areas::layer_at(ctx, at) else { return Vec::new() };
+    // Every shape recorded on a layer lies in that layer's space, as in `press_winner`.
+    let at = areas::layer_map(ctx, layer).map_or(at, |map| map.to_layer(at));
+    PerViewport::<Shapes>::with(ctx, pass::current_viewport(ctx), |record| {
+        record
+            .last
+            .get(&layer)
+            .into_iter()
+            .flat_map(|roots| roots.values())
+            .flat_map(|root| root.shapes.iter())
+            .filter(|shape| shape.hits(at))
+            .map(|shape| (shape.owner, shape.part))
+            .collect()
+    })
+}
+
 /// The screen bounds of the root `root` from its shape record, with the viewport and layer they were recorded in: the
 /// running pass's shapes when the root has registered in it, else the previous pass's. Searched over the live
 /// viewports, so the input hook reads it before the pass begins.

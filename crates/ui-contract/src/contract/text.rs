@@ -12,7 +12,7 @@ use crate::primitives::{TextKey, TextOptions, TextOutcome, TextRun, Wrap};
 use crate::runtime::access::text as text_access;
 use crate::runtime::focus::{EditSet, KeepKeys, KeyUse};
 use crate::runtime::keys;
-use crate::runtime::memory::sub;
+use crate::runtime::memory::{MemoryStage, sub};
 use crate::runtime::motion::Animate as _;
 use craft_behavior::{
     CancelReason, Caret, Codec, EditCommand, EditRun, Ended, EscapeRule, Escaped, Gesture, NotAValue, PartKey, PartRef, Typed, TypingRun,
@@ -29,6 +29,11 @@ pub const EDIT_MENU: &str = "edit";
 /// The id of the text adapter's state in the component's memory.
 fn state_id(id: egui::Id) -> egui::Id {
     sub(id, "text_state")
+}
+
+/// The selection the text part of the component `id` held when its edit menu took the focus, while the menu is open.
+pub(crate) fn held_selection(memory: &mut MemoryStage, id: egui::Id) -> Option<(usize, usize)> {
+    memory.shown::<TextState>(state_id(id)).held_selection
 }
 
 /// Whether a scrubbing field was in edit before the press that is now down: a press that becomes a drag scrubs and
@@ -137,6 +142,11 @@ struct Resolved<V> {
     /// The modifiers of the submitting Enter; none unless `submitted`.
     submit_mods: Mods,
     escaped: bool,
+    /// The draft became the codec's normal form of its value: `run` selects the whole text.
+    rewritten: bool,
+    /// The pass refused input (a character the codec's filter dropped, a rewriting Tab): `run` calls
+    /// `frame::refuse`, since the resolver has no context.
+    refused: bool,
 }
 
 /// The typing run over the state the adapter recorded this pass, the component's value (`None` while mixed) and
@@ -164,12 +174,14 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
             run.error = Some(NotAValue);
         }
         let mut events = Vec::new();
+        let (mut rewritten, mut refused) = (false, false);
         if std::mem::take(&mut state.dirty)
             && let Some(draft) = state.draft.clone()
         {
             let start = run.start.clone();
-            if let (Typed::Apply(applied), _) = typing.edit(&mut run, &start, &draft) {
-                // P3(canvas-widgets-w11): cw.N2: the dropped-character flag is read by cw.N4
+            let (typed, dropped) = typing.edit(&mut run, &start, &draft);
+            refused |= dropped;
+            if let Typed::Apply(applied) = typed {
                 events.push(TextEvent::Propose(applied));
             }
         }
@@ -202,9 +214,13 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
                     _ => {}
                 }
             }
+            Some(End::Rewrite { refuses }) => {
+                rewritten = typing.rewrite(&mut run);
+                refused |= refuses;
+            }
             Some(end @ (End::Submit | End::Separator)) => match typing.commit_tagged(&mut run) {
-                (Ended::Commit(committed), tag) => {
-                    committed_note = Some(tag); // P3(canvas-widgets-w11): cw.N3
+                (Ended::Commit(committed), note) => {
+                    committed_note = Some(note);
                     state.normalised = Some(typing.codec().normalise(&draft_text, &committed));
                     events.push(TextEvent::Commit(committed));
                     submitted = end == End::Submit;
@@ -214,8 +230,8 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
                 _ => {}
             },
             Some(End::Blur) => match typing.commit_tagged(&mut run) {
-                (Ended::Commit(committed), tag) => {
-                    committed_note = Some(tag); // P3(canvas-widgets-w11): cw.N3
+                (Ended::Commit(committed), note) => {
+                    committed_note = Some(note);
                     state.normalised = Some(typing.codec().normalise(&draft_text, &committed));
                     events.push(TextEvent::Commit(committed));
                 }
@@ -234,7 +250,7 @@ fn resolver<K: Codec + Clone + 'static>(codec: K, options: &TextOptions, rect: R
         outcome.draft = run.draft.clone();
         outcome.invalid = state.invalid;
         outcome.committed = committed_note;
-        Resolved { events, outcome, submitted, submit_mods: if submitted { submit_mods } else { Mods::NONE }, escaped }
+        Resolved { events, outcome, submitted, submit_mods: if submitted { submit_mods } else { Mods::NONE }, escaped, rewritten, refused }
     })
 }
 
@@ -407,6 +423,7 @@ pub(crate) fn run<C: Component>(
     let held = cx.popup(EDIT_MENU).is_open_in(&mut cx.core);
     serve_access(cx, &mut state, widget, &decl.shown, read_only);
     cx.core.surface_slot = Some(ui.painter().add(egui::Shape::Noop));
+    let menu_held = state.held_selection.is_some();
     let out = adapter::run(
         &mut state,
         adapter::AdapterIn {
@@ -440,7 +457,9 @@ pub(crate) fn run<C: Component>(
         state.focused = false;
     }
     let commit_now = step.commit_now || (was_focused && left_for_part);
-    if out.focused && !left_for_part && !was_focused {
+    // Focus back from the edit menu finds the selection the part held for it, which the adapter put back.
+    let back_from_menu = menu_held && state.held_selection.is_none();
+    if out.focused && !left_for_part && !was_focused && !back_from_menu {
         let len = decl.shown.chars().count();
         match decl.caret {
             Caret::All => adapter::select(&ctx, widget, 0, len),
@@ -450,7 +469,25 @@ pub(crate) fn run<C: Component>(
     if decl.options.complete.is_some() {
         drive_completions(cx, &mut state);
     }
+    if decl.options.holds_drafts {
+        // A window deactivation leaves the draft for the next Enter or a press elsewhere (L-52).
+        if state.end == Some(End::Blur) && crate::runtime::pointer::with_pass_pointer(&ctx, |pointer| pointer.focus_lost) {
+            state.end = None;
+        }
+        // A press the focus service held for this part keeps focus; the draft shows as its value would.
+        if state.end.is_none() && crate::runtime::focus::held_draft(&ctx) == Some(id) {
+            state.end = Some(End::Rewrite { refuses: false });
+        }
+    }
     let resolved = resolve(&mut state, cx.value(), commit_now);
+    if resolved.refused {
+        crate::runtime::frame::refuse(&ctx);
+    }
+    if resolved.rewritten {
+        let len = state.draft.as_deref().map_or(0, |draft| draft.chars().count());
+        adapter::select(&ctx, widget, 0, len);
+        crate::runtime::egui::repaint::request(&ctx);
+    }
     if let Some(baseline) = out.baseline {
         cx.core.paint.borrow_mut().baseline.get_or_insert(baseline);
     }

@@ -138,6 +138,8 @@ struct Batch {
     /// The bare Tab presses the input hook took from egui: each toggles the window's panels or moves focus, which
     /// `take_nav` decides once this pass's root env is installed.
     tabs: Vec<TabPress>,
+    /// A lone Alt in a field that holds drafts was refused: the input hook calls `frame::refuse`.
+    refused: bool,
 }
 
 /// A bare Tab or Shift+Tab press.

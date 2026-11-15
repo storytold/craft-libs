@@ -79,13 +79,15 @@ impl<'a> NavigatorPanel<'a> {
     pub fn show(self, ui: &mut Ui) -> NavigatorPanelOutput {
         let NavigatorPanel { label, mut view, document, mut preview, navigation, proxy, enabled } = self;
         let mut change = EditEvents::new();
+        let mut invalid_zoom = None;
         let shown = Stack::new().enabled(enabled).show(ui, |ui, _| {
             // The body runs for the measuring pass and again for the real one, so each run lends the picture.
             let preview =
                 Navigator::new(label.clone(), view.reborrowed(), document).preview(preview.reborrowed()).navigation(navigation).proxy(proxy).show(ui);
             let row = NavigatorZoomRow::new(view.reborrowed(), document).show(ui);
+            invalid_zoom = row.invalid_zoom;
             change = preview.view.events.clone().into_iter().chain(row.view).collect();
         });
-        NavigatorPanelOutput { response: shown.output, view: change, invalid_zoom: None } // P3(canvas-widgets-w11): cw.C60
+        NavigatorPanelOutput { response: shown.output, view: change, invalid_zoom }
     }
 }

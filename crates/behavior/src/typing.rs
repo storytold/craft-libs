@@ -142,6 +142,7 @@ impl<C: Codec> TypingRun<C> {
             run.start = start.clone();
         }
         let mut draft: String = text.chars().filter(|c| self.codec.filter(*c)).collect();
+        let dropped = draft.chars().count() != text.chars().count();
         if let Some(limit) = self.limit
             && let Some((at, _)) = draft.char_indices().nth(limit)
         {
@@ -156,13 +157,19 @@ impl<C: Codec> TypingRun<C> {
             _ => Typed::Draft,
         };
         run.draft = Some(draft);
-        (typed, false) // P3(canvas-widgets-w11): cw.N2
+        (typed, dropped)
     }
 
-    /// Replaces the draft with the codec's normal form of the value it reads; whether it read one.
+    /// Replaces the draft with the codec's normal form of the value it reads (`Codec::normalise`, as a commit
+    /// shows it); whether it read one. The run stays open, so nothing applies.
     pub fn rewrite(&self, run: &mut EditRun<C::Value>) -> bool {
-        let _ = run;
-        todo!("cw.N2")
+        let Some(draft) = run.draft.as_deref() else { return false };
+        let Ok(value) = self.codec.parse(draft, &run.start) else { return false };
+        let normal = self.codec.normalise(draft, &value);
+        run.draft = Some(normal);
+        run.error = None;
+        run.rejected = None;
+        true
     }
 
     /// Commits the draft: a value closes the run, a draft that is no value keeps it open.

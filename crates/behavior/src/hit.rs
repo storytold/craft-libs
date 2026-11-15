@@ -239,6 +239,12 @@ impl<O> Shape<O> {
         self.local = local;
         self
     }
+
+    /// Whether `point` lies in the hit area: the shape grown to be at least its `min_across` wide and high. The
+    /// test a resolution keeps a shape by.
+    pub fn hits(&self, point: Pos2) -> bool {
+        self.shape.hit_across(point, self.min_across)
+    }
 }
 
 /// What a resolution is for.
@@ -281,7 +287,7 @@ pub fn resolve_mapped<O: Copy>(shapes: &[Shape<O>], point: Pos2, what: ResolveFo
         .iter()
         .enumerate()
         .filter(|(_, shape)| what == ResolveFor::Hover || shape.sense.takes_press())
-        .filter(|(_, shape)| shape.shape.hit_across(at(shape), shape.min_across))
+        .filter(|(_, shape)| shape.hits(at(shape)))
         .max_by(|(ia, a), (ib, b)| {
             (a.position, a.priority.level, a.priority.sub)
                 .cmp(&(b.position, b.priority.level, b.priority.sub))

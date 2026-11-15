@@ -107,6 +107,16 @@ fn member_on(ctx: &egui::Context, layer_id: LayerId, clip: Rect, id: Id, rect: R
     response
 }
 
+/// Sets the hover of a root's `Response` from the framework's hover resolve, in place of egui's: egui reports a
+/// widget that senses a click hovered only where it is egui's click winner, and a root's widget senses the clicks
+/// of its parts and members.
+pub(crate) fn hover_flags(response: &mut Response, hovered: bool) {
+    response.flags.set(Flags::HOVERED, hovered);
+    if hovered {
+        response.flags |= Flags::CONTAINS_POINTER;
+    }
+}
+
 /// Sets the press flags of a component's `Response` from the press lifecycle, in place of egui's: a component clicks
 /// and drags by the framework's rule (a release within the slop, whatever its duration), whatever click options the
 /// app gives egui. A key or AccessKit click is step 17's (`rewrite_clicks`). A disabled response reports none.

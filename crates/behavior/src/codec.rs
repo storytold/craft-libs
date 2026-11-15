@@ -225,9 +225,32 @@ impl NumberCodec {
 
     /// The same codec with the typing rules of a zoom field: digits, `/` and the decimal separator, `a/b` as the
     /// percentage `a ÷ b × 100`, and a second separator cutting the text.
-    pub fn zoom_typing(self) -> Self {
-        let _ = self;
-        todo!("cw.C55")
+    pub fn zoom_typing(mut self) -> Self {
+        self.zoom = true;
+        self
+    }
+
+    /// The zoom reading of trimmed, non-empty `text`: the text before a second decimal separator, then `a/b` as a
+    /// percentage or a plain number. The filter keeps `+`, `-` and `*` out, so the reader's expressions never run.
+    fn read_zoom(&self, text: &str) -> Result<(f64, ParseNote), NotAValue> {
+        let separator = self.reader.decimal_separator();
+        let second = text.char_indices().filter(|&(_, c)| c == separator).nth(1).map(|(at, _)| at);
+        let (kept, cut) = match second {
+            Some(at) => (&text[..at], true),
+            None => (text, false),
+        };
+        let number = match kept.split_once('/') {
+            Some((part, whole)) => {
+                let part = self.reader.read(part, None)?;
+                let whole = self.reader.read(whole, None)?;
+                if whole == 0.0 {
+                    return Err(NotAValue);
+                }
+                part / whole * 100.0
+            }
+            None => self.reader.read(kept, None)?,
+        };
+        Ok((number, ParseNote { cut, ..ParseNote::default() }))
     }
 
     /// The same codec writing at most `decimals` decimal places.
@@ -295,17 +318,27 @@ impl Codec for NumberCodec {
         self.parse_tagged(text, start).map(|(value, _)| value)
     }
 
-    /// The tag is that of the unit the text named; `None` when it named no tagged unit or a custom parser read it.
+    /// The note's unit is the tag of the unit the text named; `None` when it named no tagged unit or a custom parser
+    /// read it. With zoom typing the note's `cut` says a second decimal separator cut the text.
     fn parse_tagged(&self, text: &str, start: &Option<f64>) -> Result<(Option<f64>, ParseNote), NotAValue> {
-        if text.trim().is_empty() {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
             return Ok((None, ParseNote::default()));
         }
+        if self.zoom {
+            return self.read_zoom(trimmed).map(|(number, note)| (Some(number), note));
+        }
         match self.reader.read_tagged(text, *start) {
-            Ok((number, tag)) => Ok((Some(number), ParseNote { unit: tag, ..ParseNote::default() })), // P3(canvas-widgets-w11): cw.N1
+            Ok((number, tag)) => Ok((Some(number), ParseNote { unit: tag, ..ParseNote::default() })),
             Err(rejected) => {
                 self.custom.as_ref().and_then(|parse| parse(text.trim())).map(|number| (Some(number), ParseNote::default())).ok_or(rejected)
             }
         }
+    }
+
+    /// Zoom typing takes ASCII digits, `/` and the decimal separator; every other number field takes every character.
+    fn filter(&self, c: char) -> bool {
+        !self.zoom || c.is_ascii_digit() || c == '/' || c == self.reader.decimal_separator()
     }
 
     fn sample(&self, _current: &Option<f64>) -> Cow<'_, str> {

@@ -236,7 +236,11 @@ impl PartBuilder<'_> {
     /// The part's area keeps a focused text draft unapplied on a press. A press holds when any part under its point on
     /// the press's layer declares it, sensing or not, whatever part wins the press.
     pub fn holds_drafts(self) -> Self {
-        todo!("cw.C58")
+        // A sizing pass has no window and records nothing, as for `exclusive`.
+        if let Some((ctx, owner)) = self.window {
+            crate::runtime::focus::note_holds_drafts(ctx, owner, PartRef { key: self.decl.key, index: self.decl.index });
+        }
+        self
     }
 
     /// The part opens and closes the component's popup `popup` (the name given to `cx.popup`): a press on it toggles

@@ -2,9 +2,9 @@
 //! classified focus move applies at the end hook.
 
 use super::{Act, State, StopKey};
+use crate::runtime::egui::areas;
 use crate::runtime::egui::focus as egui_focus;
-use crate::runtime::pointer;
-use crate::runtime::sampler;
+use crate::runtime::{overlay, pointer, sampler};
 use craft_behavior::PartRef;
 use craft_behavior::Winner;
 use craft_behavior::focus::{PressFocus, classify_press};
@@ -17,20 +17,20 @@ pub(crate) struct PressAt {
     root: Option<Id>,
     /// The egui widget that takes the press.
     target: Option<Id>,
+    /// Every part under the press point on its layer, sensing or not, from last pass's shapes: `(owner, part)`.
+    under: Vec<(Id, Option<PartRef>)>,
+    /// The press landed in a popup layer opened above the layer of the widget that holds egui focus.
+    over_focus: bool,
 }
 
 /// Records that the part `part` of `owner` is declared `holds_drafts`, for the press classification of the next pass.
-#[allow(dead_code)] // P3(canvas-widgets-w11): cw.C57
 pub(crate) fn note_holds_drafts(ctx: &Context, owner: Id, part: PartRef) {
-    let _ = (ctx, owner, part);
-    todo!("cw.C57")
+    super::with(ctx, |state| state.press.holding.push((owner, part)));
 }
 
 /// The text stop whose draft the press of this pass left unapplied, when one is.
-#[allow(dead_code)] // P3(canvas-widgets-w11): cw.C57
 pub(crate) fn held_draft(ctx: &Context) -> Option<Id> {
-    let _ = ctx;
-    todo!("cw.C57")
+    super::with(ctx, |state| state.press.held_draft)
 }
 
 pub(crate) fn press_at(ctx: &Context) -> Option<PressAt> {
@@ -38,7 +38,11 @@ pub(crate) fn press_at(ctx: &Context) -> Option<PressAt> {
     egui_focus::primary_press_origin(ctx).filter(|pos| !sampler::admitted_press(ctx, *pos)).map(|pos| {
         let targets = pointer::pass_pointer(ctx).press_targets;
         let (winner, root) = pointer::press_winner(ctx, pos, targets).unzip();
-        PressAt { winner, root, target: targets.click }
+        let under = pointer::shapes_at(ctx, pos);
+        // The focused widget's layer is egui's last-pass record of it; a stop records no layer of its own.
+        let focus_layer = egui_focus::focused(ctx).and_then(|widget| ctx.read_response(widget)).map(|response| response.layer_id);
+        let over_focus = areas::layer_at(ctx, pos).zip(focus_layer).is_some_and(|(layer, below)| overlay::popup_above(ctx, layer, below));
+        PressAt { winner, root, target: targets.click, under, over_focus }
     })
 }
 
@@ -62,6 +66,12 @@ pub(crate) struct PressState {
     /// Tab, Shift+Tab or F6 moved focus this pass.
     pub(super) by_keys: bool,
     focus_at_begin: Option<Id>,
+    /// The parts declared `holds_drafts` in the running pass, `(owner, part)`.
+    holding: Vec<(Id, PartRef)>,
+    /// The parts declared `holds_drafts` in the last pass, whose shapes the press is classified on.
+    last_holding: Vec<(Id, PartRef)>,
+    /// The text stop whose draft this pass's press left unapplied.
+    held_draft: Option<Id>,
 }
 
 impl PressState {
@@ -71,20 +81,37 @@ impl PressState {
         self.tabbed_from = None;
         self.by_keys = false;
         self.focus_at_begin = focused;
+        self.last_holding = std::mem::take(&mut self.holding);
+        self.held_draft = None;
+    }
+
+    /// Whether a part under the press is one last pass declared `holds_drafts`.
+    fn holds(&self, under: &[(Id, Option<PartRef>)]) -> bool {
+        under.iter().any(|(owner, part)| part.is_some_and(|part| self.last_holding.contains(&(*owner, part))))
     }
 }
 
 impl State {
     /// Classifies this pass's primary press by the shape that wins it on the top layer, and marks a focused
-    /// text part to commit its draft when the press leaves it.
+    /// text part to commit its draft when the press leaves it. A focused text stop whose keys hold drafts keeps focus
+    /// and its draft when any part under the press declared `holds_drafts`, whatever shape wins, or when the press
+    /// lands in a popup opened above it; the stop is then the held draft.
     pub(super) fn classify_press(&mut self, at: &PressAt) {
         let winner = at.winner.as_ref();
-        // A press on the widget that holds egui focus (the text of a field in edit) is that widget's own: it keeps the
-        // focus and the draft.
-        let on_focused = at.target.is_some() && at.target == self.focus_now;
-        let kind = if on_focused { PressFocus::Keep } else { classify_press(winner.map(|winner| winner.sense)) };
+        // A press on the focused stop is its own: it keeps the focus and the draft. The stop a press is on is the one it
+        // would take focus for, read against the framework's record: egui focus sits on an arena's root while a member
+        // of its body holds the stop, so a press on the root is not on the member. A press no stop's shape wins is on
+        // the focused stop when egui gives it to the widget that holds egui focus (an app's own widget).
+        let on_focused = match winner.and_then(|winner| self.press_stop(winner.owner, winner.part)) {
+            Some(pressed) => self.stop_of_focus().is_some_and(|focused| focused.stop.key() == pressed.stop.key()),
+            None => at.target.is_some() && at.target == self.focus_now,
+        };
+        let text_rec = self.stop_of_focus().filter(|stop| stop.stop.text);
+        let text_stop = text_rec.as_ref().map(|stop| stop.stop.id);
+        let held = !on_focused && text_rec.as_ref().is_some_and(|stop| stop.stop.keys.holds_drafts) && (at.over_focus || self.press.holds(&at.under));
+        self.press.held_draft = text_stop.filter(|_| held);
+        let kind = if on_focused || held { PressFocus::Keep } else { classify_press(winner.map(|winner| winner.sense)) };
         let (owner, part) = winner.map_or((None, None), |winner| (Some(winner.owner), winner.part));
-        let text_stop = self.stop_of_focus().filter(|stop| stop.stop.text).map(|stop| stop.stop.id);
         let was_text = text_stop.is_some() && kind.commits_draft();
         // A press that takes focus for another component commits too: the page that component switches may remove the
         // field in the same pass, so a later focus loss would never reach it.

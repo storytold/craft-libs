@@ -261,6 +261,10 @@ pub struct KeyUse {
     pub claims: &'static [Chord],
     /// Edit commands delivered as `Intent::Edit`.
     pub edits: EditSet,
+    /// Edit commands in `edits` that do nothing now (Cut and Copy with no selection): their keys and menu picks still
+    /// reach the component, so they never fall through to the commands around it, and the edit menu shows them
+    /// disabled.
+    pub inactive: EditSet,
     /// The component's key class.
     pub owner: OwnerClass,
     /// The component's arrows step a value: Alt with an arrow is a fine move. Set per instance by a component that
@@ -320,6 +324,7 @@ impl KeyUse {
         activate: ActivateKeys::Neither,
         claims: &[],
         edits: EditSet::NONE,
+        inactive: EditSet::NONE,
         owner: OwnerClass::Widget,
         value: false,
         moves: false,
@@ -360,6 +365,7 @@ impl KeyUse {
             activate,
             claims: &[],
             edits,
+            inactive: EditSet::NONE,
             owner,
             value: false,
             moves: false,
@@ -395,6 +401,12 @@ impl KeyUse {
     /// The same use listing `edits`.
     pub const fn with_edits(mut self, edits: EditSet) -> Self {
         self.edits = edits;
+        self
+    }
+
+    /// The same use marking `inactive` of its edit commands as doing nothing now (`KeyUse::inactive`).
+    pub const fn with_inactive(mut self, inactive: EditSet) -> Self {
+        self.inactive = inactive;
         self
     }
 

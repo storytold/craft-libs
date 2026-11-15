@@ -149,6 +149,8 @@ impl std::fmt::Debug for TextOptions {
             .field("lines", &self.lines)
             .field("live", &self.live)
             .field("complete", &self.complete.is_some())
+            .field("tab_rewrites", &self.tab_rewrites)
+            .field("holds_drafts", &self.holds_drafts)
             .finish_non_exhaustive()
     }
 }

@@ -68,7 +68,7 @@ impl<'a> PathRow<'a> {
         let mut edit = EditEvents::new();
         let mut browse = false;
         let shown = Row::new().show(ui, |ui, _| {
-            let mut field = TextField::new(name.clone(), value.reborrowed()).sizing(Sizing::FillWidth).id_salt("path");
+            let mut field = TextField::new(name.clone(), value.reborrowed()).limit(None).sizing(Sizing::FillWidth).id_salt("path");
             if let Some(placeholder) = placeholder.clone() {
                 field = field.placeholder(placeholder);
             }

@@ -1,11 +1,11 @@
 //! `NavigatorZoomRow`: the Navigator's percent field, Zoom Out, slider and Zoom In.
 
 use crate::buttons::IconButton;
-use crate::canvas::zoom_field::show_zoom_field;
 use crate::canvas::{CanvasWords, ViewCommands};
 use crate::contract::{Bind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
 use crate::layout_components::Row;
 use crate::runtime::env::Env;
+use crate::text::{InvalidZoom, ZoomField};
 use crate::value_drag::{Slider, SliderScale};
 use craft_behavior::canvas::zoom;
 use craft_behavior::kurbo::Size;
@@ -22,7 +22,7 @@ pub struct NavigatorZoomRowOutput {
     /// its gesture.
     pub view: EditEvents<CanvasView>,
     /// The zoom field's refused entry of this pass, for the app's alert; `None` when the field took its input.
-    pub invalid_zoom: Option<crate::text::InvalidZoom>,
+    pub invalid_zoom: Option<InvalidZoom>,
 }
 
 impl Outcome for NavigatorZoomRowOutput {
@@ -69,13 +69,16 @@ impl<'a> NavigatorZoomRow<'a> {
         let zoom_label = words.navigator_zoom.clone();
 
         let mut events = EditEvents::new();
+        let mut invalid_zoom = None;
         let shown = Row::new().show(ui, |ui, cx| {
             let Some(Mixed::Same(current)) = view.reborrow().read(cx) else { return };
             let device = zoom::device(&current, pixels_per_point);
             let at = |device: f64| zoom::with_device(&current, device, document, pixels_per_point);
             let mut edits: Vec<EditEvent<CanvasView>> = Vec::new();
 
-            edits.extend(show_zoom_field(ui, zoom_label.clone(), current, document));
+            let field = ZoomField::new(zoom_label.clone(), Some(current), document).stepper(true).show(ui);
+            invalid_zoom = field.invalid_zoom;
+            edits.extend(field.view);
 
             IconButton::command(IconId::new("minus"), ViewCommands::ZoomOut).show(ui);
 
@@ -95,6 +98,6 @@ impl<'a> NavigatorZoomRow<'a> {
             }
             events = edits.into_iter().collect();
         });
-        NavigatorZoomRowOutput { response: shown.output, view: events, invalid_zoom: None } // P3(canvas-widgets-w11): cw.C60
+        NavigatorZoomRowOutput { response: shown.output, view: events, invalid_zoom }
     }
 }

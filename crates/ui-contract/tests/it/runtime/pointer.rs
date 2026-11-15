@@ -181,6 +181,34 @@ fn touchpad_tap_activates_one_component() {
     tap_on_canvas(Some(ZOOM), true);
 }
 
+/// A click on any part of a root's own reports on the root's response, whichever egui widget took it: a part inside
+/// the root rect and an edge part reaching past its end alike; the part result says which part.
+#[trial]
+fn a_click_on_an_own_part_reports_on_the_root_wherever_the_part_lies() {
+    const INSIDE: PartKey = PartKey::new("inside");
+    const PAST: PartKey = PartKey::new("past");
+    let lane = ProbeRoot::new("lane", rect(100.0, 100.0, 200.0, 40.0), Sense::CLICK)
+        .part(ProbePart::new(INSIDE, rect(120.0, 110.0, 20.0, 20.0), Sense::CLICK | Sense::DRAG).level(HitLevel::Edge, 0))
+        .part(ProbePart::new(PAST, rect(290.0, 110.0, 20.0, 20.0), Sense::CLICK | Sense::DRAG).level(HitLevel::Edge, 0));
+    let (mut show_frame, log) = scene(vec![lane]);
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    for (key, at) in [(INSIDE, Pos2::new(130.0, 120.0)), (PAST, Pos2::new(305.0, 120.0))] {
+        log.borrow_mut().clear();
+        pointer::click(&mut frames, at, &mut show_frame);
+        let log = log.borrow();
+        let clicks: Vec<_> = log.frames.iter().filter(|reports| reports[0].root.clicked).collect();
+        assert_eq!(clicks.len(), 1, "{key:?}: the root's response reports the click once");
+        assert!(
+            matches!(clicks[0][0].root.phase(key), PressPhase::Release { click: true, .. }),
+            "{key:?}: the part result names the part: {:?}",
+            clicks[0][0].root.phase(key)
+        );
+        let other = if key == INSIDE { PAST } else { INSIDE };
+        assert!(log.root_phases(0, Some(other)).is_empty(), "{key:?}: the other part saw no press");
+    }
+}
+
 /// A press reads `Down` in one pass only, the pass it went down, though its frame runs a discard pass and the
 /// button stays down for later frames: an owner that acts on `Down` acts once per press.
 #[trial]

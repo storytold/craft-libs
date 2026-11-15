@@ -8,10 +8,10 @@ use crate::display::{Elide, Text};
 use crate::form::Field;
 use crate::layout_components::Row;
 use crate::runtime::commands::{self, CommandRef};
-use crate::runtime::env::{Env, Label, UnitKind, Units};
-use craft_behavior::canvas::zoom;
+use crate::runtime::env::{Env, Label, Units};
+use crate::text::{InvalidZoom, ZoomField};
 use craft_behavior::kurbo::Size;
-use craft_behavior::{CanvasView, EditEvents, IconId, Mixed, PixelSize, ZoomLadder};
+use craft_behavior::{CanvasView, EditEvents, IconId, Mixed, PixelSize};
 use egui::{Response, Ui};
 use std::time::Duration;
 
@@ -150,8 +150,9 @@ pub struct StatusReadoutOutput {
     pub view: EditEvents<CanvasView>,
     /// The item chosen in the menu this pass; the host stores it.
     pub item: Option<StatusItem>,
-    /// A typed zoom outside the zoom range was clamped, in the pass it committed.
-    pub invalid_zoom: Option<crate::text::InvalidZoom>,
+    /// The zoom field's cut entry of this pass ([`ZoomFieldOutput::invalid_zoom`](crate::text::ZoomFieldOutput)),
+    /// for the app's alert.
+    pub invalid_zoom: Option<InvalidZoom>,
 }
 
 impl Outcome for StatusReadoutOutput {
@@ -201,34 +202,24 @@ impl<'a> StatusReadout<'a> {
         let env = Env::of(ui);
         let words = env.words::<BarWords>();
         let text = self.item.text(self.values, &words, &env, ui.ctx());
-        let pixels_per_point = env.scale.0;
         let document = self.document;
         let mut events = EditEvents::new();
+        let mut invalid_zoom = None;
         let shown = Row::new().show(ui, |ui, cx| {
             let current = match self.view.reborrow().read(cx) {
                 Some(Mixed::Same(current)) => Some(current),
                 _ => None,
             };
-            let device = current.as_ref().map(|view| zoom::device(view, pixels_per_point));
             let glyph = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::icon(IconId::new("zoom_in")))).scrub(true);
-            let field = Field::new(words.readout_zoom.clone()).side(glyph).sizing(Sizing::Content).show(ui, |ui, _| {
-                let mut number = crate::text::NumberField::new(words.readout_zoom.clone(), Bind::given(device.map(|device| device * 100.0)))
-                    .codec(env.units().zoom_codec())
-                    .unit_kind(UnitKind::Percent)
-                    .scrub_by_label()
-                    .enabled(current.is_some());
-                if let Some(device) = device {
-                    number = number.range(ZoomLadder::percent_range(device, document));
-                }
-                number.show(ui)
+            let field = Field::new(words.readout_zoom.clone())
+                .side(glyph)
+                .sizing(Sizing::Content)
+                .show(ui, |ui, _| ZoomField::new(words.readout_zoom.clone(), current, document).scrub(true).show(ui));
+            let field = field.inner.map(|zoom| {
+                invalid_zoom = zoom.invalid_zoom;
+                events = zoom.view;
+                zoom.response
             });
-            let typed = field.inner.as_ref().map(|zoom| zoom.edit.events.clone()).unwrap_or_default();
-            events = match current {
-                Some(current) => {
-                    typed.map(|percent| percent.map_or(current, |percent| zoom::with_device(&current, percent / 100.0, document, pixels_per_point)))
-                }
-                None => EditEvents::new(),
-            };
             for edit in &events {
                 self.view.reborrow().write(cx, edit);
             }
@@ -241,9 +232,9 @@ impl<'a> StatusReadout<'a> {
             let entries: Vec<Entry<StatusItem>> =
                 StatusItem::ALL.iter().map(|&item| Entry::new(item, item.name(&words)).checked(item == self.item)).collect();
             let menu = crate::menu::pick_values_from(ui, words.readout_menu.clone(), &more, &entries);
-            (field.inner.map(|zoom| zoom.edit.response), menu.picked)
+            (field, menu.picked)
         });
         let (zoom, item) = shown.inner.unzip();
-        StatusReadoutOutput { response: shown.output, zoom: zoom.flatten(), view: events, item: item.flatten(), invalid_zoom: None } // P3(canvas-widgets-w11): cw.C60
+        StatusReadoutOutput { response: shown.output, zoom: zoom.flatten(), view: events, item: item.flatten(), invalid_zoom }
     }
 }
