@@ -15,6 +15,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod allocation;
+pub mod apng;
+pub mod bmp_probe;
 pub mod cicp;
 mod codecs;
 mod error;
@@ -24,15 +26,18 @@ mod fidelity;
 mod format;
 mod image;
 mod inspection;
+pub mod jpeg_sef;
 mod lab;
 mod options;
 pub mod orientation;
+pub mod png_probe;
 pub mod resolution;
 pub mod source_settings;
 pub mod web;
 pub use crate::allocation::probe_allocation_size;
 pub use crate::cicp::Cicp;
 pub use crate::cicp::ContentLightLevel;
+pub use crate::codecs::avif::{HDR_REFERENCE_WHITE_NITS, HdrTransfer, encode_avif_hdr, encode_avif_with_speed};
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
 pub use crate::codecs::png::{
@@ -61,7 +66,7 @@ pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
-use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
+use crate::codecs::{dds, dicom, dpx, exr, fits, heif, iff, jp2, jpeg, jpegls, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -100,6 +105,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Cineon => dpx::decode_cineon(bytes, l),
         Format::Dicom => dicom::decode(bytes, l),
         Format::Iff => iff::decode(bytes, l),
+        Format::JpegLs => jpegls::decode(bytes, l),
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Jp2 => jp2::decode(bytes, l),
@@ -234,6 +240,17 @@ pub struct JpegInfo {
 /// [`JpegInfo`] of `bytes`; `None` without a readable frame of 1, 3 or 4 components.
 pub fn jpeg_info(bytes: &[u8]) -> Option<JpegInfo> {
     jpeg::info(bytes)
+}
+
+/// PCX's dimensions are available from its fixed-size header without decoding the RLE rows.
+pub fn pcx_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    codecs::pcx::dimensions(bytes)
+}
+
+/// The X11 color-name lookup used by XPM files, expressed as normalized sRGB.
+pub fn xpm_named_color_rgb(name: &str) -> Option<[f32; 3]> {
+    let rgb = codecs::xpm::exact_x11_name(name)?;
+    Some(rgb.map(|channel| f32::from(channel) / 255.0))
 }
 
 /// The colour table of a GIF's first frame (its Local Color Table, else the Global one) and the
@@ -445,6 +462,7 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Cineon => dpx::encode_cineon(image, plan),
         Format::Dicom => Err(CodecError::unsupported(format, "DICOM is import-only; save as TIFF or PNG instead")),
         Format::Iff => iff::encode(image, plan),
+        Format::JpegLs => jpegls::encode(image, plan),
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
         Format::Jp2 => Err(CodecError::unsupported(format, "JPEG 2000 is import-only; save as PNG or TIFF instead")),
