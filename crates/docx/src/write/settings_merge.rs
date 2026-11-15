@@ -390,16 +390,18 @@ mod tests {
 
     #[test]
     fn gutter_at_top_comes_from_the_generated_part() {
-        let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:mirrorMargins/><w:gutterAtTop/><w:proofState w:spelling="clean"/></w:settings>"#;
+        let orig =
+            r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:mirrorMargins/><w:gutterAtTop/><w:proofState w:spelling="clean"/></w:settings>"#;
         assert!(has_unowned(orig.as_bytes()));
         // Turned off in the model: the original element goes, the foreign one stays.
         let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
         assert!(!out.contains("gutterAtTop") && out.contains("<w:proofState"), "{out}");
         // On in the model: written once, in place.
-        let gen_on = GEN.replace("<w:defaultTabStop", "<w:gutterAtTop/><w:defaultTabStop");
+        let gen_on = GEN.replace("<w:defaultTabStop", "<w:mirrorMargins/><w:gutterAtTop/><w:defaultTabStop");
         let out = String::from_utf8(merge(orig.as_bytes(), gen_on.as_bytes()).unwrap()).unwrap();
         assert_eq!(out.matches("<w:gutterAtTop/>").count(), 1, "{out}");
-        assert!(out.find("<w:mirrorMargins/>") < out.find("<w:gutterAtTop/>") && out.find("<w:gutterAtTop/>") < out.find("<w:proofState"), "{out}");
+        let at = |tag: &str| out.find(tag).unwrap_or_else(|| panic!("{tag} missing: {out}"));
+        assert!(at("<w:mirrorMargins/>") < at("<w:gutterAtTop/>") && at("<w:gutterAtTop/>") < at("<w:proofState"), "{out}");
         // A file whose only extra setting is this one has nothing foreign to keep.
         assert!(!has_unowned(br#"<w:settings xmlns:w="w"><w:zoom w:percent="100"/><w:gutterAtTop/></w:settings>"#));
     }

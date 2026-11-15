@@ -2981,6 +2981,8 @@ fn gutter_at_top_reads_every_value_spelling() {
         (r#"<w:gutterAtTop w:val="0"/>"#, false),
         (r#"<w:gutterAtTop w:val="false"/>"#, false),
         (r#"<w:gutterAtTop w:val="off"/>"#, false),
+        (r#"<w:gutterAtTop w:val="False"/>"#, false),
+        (r#"<w:gutterAtTop w:val="FALSE"/>"#, false),
     ] {
         let file = replace_part(&plain, "word/settings.xml", xml.replace(zoom, &format!("{zoom}{element}")).as_bytes());
         assert_eq!(craft_docx::read(&file).unwrap().settings.gutter_at_top, expected, "{element:?}");
@@ -2997,9 +2999,8 @@ fn gutter_at_top_is_merged_into_a_foreign_settings_part() {
     let xml = settings_part(&plain);
     let zoom = r#"<w:zoom w:percent="100"/>"#;
     let foreign = |element: &str| {
-        let extra = format!(
-            r#"{zoom}<w:mirrorMargins/>{element}<w:proofState w:spelling="clean"/><w:rsids><w:rsidRoot w:val="00A1B2C3"/></w:rsids>"#
-        );
+        let extra =
+            format!(r#"{zoom}<w:mirrorMargins/>{element}<w:proofState w:spelling="clean"/><w:rsids><w:rsidRoot w:val="00A1B2C3"/></w:rsids>"#);
         replace_part(&plain, "word/settings.xml", xml.replace(zoom, &extra).as_bytes())
     };
 
