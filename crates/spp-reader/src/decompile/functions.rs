@@ -233,6 +233,7 @@ pub fn value_type(xml_ty: u32) -> u32 {
         2 => 4,
         3 => 5,
         4 => 1,
+        6 => TEXT_TYPE,
         8 => 6,
         9 => 7,
         10 => 8,
@@ -240,12 +241,27 @@ pub fn value_type(xml_ty: u32) -> u32 {
     }
 }
 
+/// The `type` number of a text input.
+pub const TEXT_TYPE: u32 = 9;
+
 const LANES: [&str; 4] = ["x", "y", "z", "w"];
 
 /// What stops a loop the engine would run until its condition holds, whatever that takes.
 const LOOP_NO_CAP: u32 = 1 << 24;
 
 impl Functions {
+    /// The name of a function returning graph input `uid` as it is (a text input's text), created on first use.
+    pub fn input_function(&mut self, uid: u32, desc: &Description) -> String {
+        let body = format!("node 2 {}\nnode 1 f_out in=@2\n", input_node(uid, desc));
+        if let Some(name) = self.by_body.get(&body) {
+            return name.clone();
+        }
+        let name = format!("fn{}", self.subgraphs.len() + 1);
+        self.subgraphs.push((name.clone(), format!("meta kind \"function\"\n{body}")));
+        self.by_body.insert(body, name.clone());
+        name
+    }
+
     /// The name of a function computing `e`, created on first use. `lane` picks one component of a vector
     /// result (for parameters stored per channel).
     pub fn function(&mut self, e: &Expr, desc: &Description, lane: Option<usize>) -> String {

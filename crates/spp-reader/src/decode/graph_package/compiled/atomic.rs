@@ -29,6 +29,7 @@ const OP_FXMAP_COLOR: u8 = 0x09;
 const OP_VECTOR: u8 = 0x0a;
 const OP_INPUT_GRAY: u8 = 0x20;
 const OP_INPUT_COLOR: u8 = 0x21;
+const OP_TEXT: u8 = 0x22;
 const OP_NORMAL: u8 = 0x25;
 const OP_PIXEL_PROCESSOR_GRAY: u8 = 0x28;
 const OP_PIXEL_PROCESSOR_COLOR: u8 = 0x29;
@@ -152,6 +153,7 @@ pub enum Kind {
     Normal,
     Emboss,
     GradientDynamic,
+    Text,
     Unknown,
 }
 
@@ -345,6 +347,7 @@ pub fn decode(rec: &NodeRecord, s: &Section<'_>) -> Result<AtomicNode, DecodeErr
         OP_NORMAL => decode_normal(&mut f, &mut node)?,
         OP_CURVE => decode_curve(&mut f, &mut node)?,
         OP_VECTOR => decode_vector(&mut f, &mut node)?,
+        OP_TEXT => decode_text(&mut f, &mut node)?,
         OP_INPUT_GRAY | OP_INPUT_COLOR => {
             node.kind = Kind::Input;
             node.color = rec.opcode == OP_INPUT_COLOR;
@@ -462,6 +465,40 @@ fn decode_blend(f: &mut Fields<'_, '_>, node: &mut AtomicNode) -> Result<(), Dec
         _ => Value::Default,
     };
     node.params.push(Param { name: "cropping", value: crop });
+    Ok(())
+}
+
+/// Text codes in its mode word (two bits each, 1 inline, 2 expression): position (bits 0–1, two words), font size
+/// (6–7) and alignment (8–9), in that order after the frame; bits 12–13 say where the text comes from (3: the graph
+/// input whose uid is the third word). The second word is unknown (0 in every font graph seen); the fourth is the
+/// section offset of the font. Measured on the four font graphs of the corpus (mode `0x3282` in all of them); a node
+/// with other codes set has fields this does not know and stays [`Kind::Unknown`].
+const TEXT_PARAMS: &[ParamSpec] = &[p("position", 0, 2), p("fontsize", 6, 1), p("alignment", 8, 1)];
+const TEXT_KNOWN_CODES: u32 = 0x33c3;
+const TEXT_SOURCE_SHIFT: u32 = 12;
+
+fn decode_text(f: &mut Fields<'_, '_>, node: &mut AtomicNode) -> Result<(), DecodeError> {
+    let m = f.rec.word(0).ok_or_else(|| DecodeError::invalid(RECORD, format!("node {} ends early", f.rec.index)))?;
+    if m & !TEXT_KNOWN_CODES != 0 {
+        return Ok(());
+    }
+    node.kind = Kind::Text;
+    node.mode = Some(f.word()?);
+    f.word()?;
+    let text = f.word()?;
+    if (m >> TEXT_SOURCE_SHIFT) & 3 == 3 {
+        node.params.push(Param { name: "text_input", value: Value::Const(vec![text]) });
+    }
+    node.params.push(Param { name: "font", value: Value::Const(vec![f.word()?]) });
+    frame(f, node)?;
+    for ps in TEXT_PARAMS {
+        let value = match (m >> ps.bit) & 3 {
+            1 => Value::Const(f.words(ps.words)?),
+            2 => Value::Expr(f.expr()?),
+            _ => Value::Default,
+        };
+        node.params.push(Param { name: ps.name, value });
+    }
     Ok(())
 }
 

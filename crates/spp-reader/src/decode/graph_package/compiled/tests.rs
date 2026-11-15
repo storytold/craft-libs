@@ -408,3 +408,71 @@ mod records {
         assert_eq!(e.instrs[3].operands, Operands::Constant(vec![0x3f80_0000]));
     }
 }
+
+/// A graph with one text node (0x22) reading its text from a graph input, with the layout of the font graphs: mode word
+/// 0x3282, an unknown word, the text input's uid, the font's offset, then the size, position, font size and alignment
+/// expressions.
+fn text_graph() -> Vec<u8> {
+    let w = vec![
+        0,           // 0x00
+        0,           // 0x04: font: hash
+        4,           // 0x08: length
+        0x0000_0100, // 0x0c: bytes 00 01 00 00 (a TrueType start)
+        0x18,        // 0x10: node table, one entry: node at 0x18
+        0,           // 0x14 (padding)
+        0x0001_8822, // 0x18: tag: op 0x22, variant 0x88, flags 0x0001 (size expression)
+        0x3282,      // 0x1c: mode word
+        0,           // 0x20
+        0xdddd,      // 0x24: text input uid
+        0x04,        // 0x28: font offset
+        0x3c,        // 0x2c: -> size expression
+        0x44,        // 0x30: -> position
+        0x4c,        // 0x34: -> font size
+        0x54,        // 0x38: -> alignment
+        0x0a42_0001, // 0x3c: read input (int2)
+        0xbbbb,
+        0x0942_0001, // 0x44: read input (float2)
+        0xeeee,
+        0x0902_0001, // 0x4c: read input (float)
+        0xffff,
+        0x0a02_0001, // 0x54: read input (int)
+        0x1111,
+        8, // 0x5c: defaults: $outputsize = 8,8
+        8,
+        0x0005_0001, // 0x64: root: 1 output, 5 inputs
+        0xcccc,
+        8,
+        0xbbbb,
+        6,
+        0xdddd,
+        1,
+        0xeeee,
+        0,
+        0xffff,
+        4,
+        0x1111,
+        1,    // node count
+        0x10, // node table
+        0x14, // node table end
+        0x5c, // defaults
+    ];
+    file(&w, 0x64)
+}
+
+#[test]
+fn text_nodes_name_their_text_input_font_and_expressions() {
+    let a = Assembly::parse(&text_graph()).unwrap();
+    let nodes = a.atomic_nodes();
+    let n = nodes[0].as_ref().unwrap();
+    assert_eq!(n.kind, Kind::Text);
+    assert_eq!(n.param("text_input"), Some(&Value::Const(vec![0xdddd])));
+    assert_eq!(n.param("font"), Some(&Value::Const(vec![4])));
+    assert_eq!(a.embedded_font(4), Some(&[0u8, 1, 0, 0][..]));
+    assert_eq!(a.embedded_font(0), None, "no font signature there");
+    let input = |name: &str| match n.param(name) {
+        Some(Value::Expr(e)) => e.as_input(),
+        _ => None,
+    };
+    assert_eq!((input("position"), input("fontsize"), input("alignment")), (Some(0xeeee), Some(0xffff), Some(0x1111)));
+    assert_eq!(n.size.as_ref().and_then(Expr::as_input), Some(0xbbbb));
+}

@@ -115,7 +115,8 @@ pub fn decompile(desc: &Description, asm: &Assembly, size: usize) -> Decompiled 
             let _ = writeln!(body, "output {name} {}", nid(node));
         }
     }
-    for (k, p) in params.iter().enumerate() {
+    // a text parameter has no slider
+    for (k, p) in params.iter().enumerate().filter(|(_, p)| functions::value_type(p.ty) != functions::TEXT_TYPE) {
         let (lo, hi) = (p.min.as_deref().unwrap_or("0"), p.max.as_deref().unwrap_or("1"));
         // the slider range of a vector parameter is per lane; an exposed parameter takes one number
         let first = |v: &str| v.split(',').next().unwrap_or(v).trim().to_string();
@@ -188,6 +189,11 @@ fn output_node(s: &crate::decode::graph_package::compiled::Section<'_>, asm: &As
 
 fn input_value(p: &GraphInputInfo) -> String {
     let ty = functions::value_type(p.ty);
+    if ty == functions::TEXT_TYPE {
+        // the graph text has no escapes: a quote or a line break can't travel in a default
+        let d: String = p.default.as_deref().unwrap_or("").chars().filter(|c| !matches!(c, '"' | '\n' | '\r')).collect();
+        return format!("input_value name=\"{}\" type={ty} v=\"{d}\"", p.identifier);
+    }
     let d: Vec<f32> = p.default.as_deref().unwrap_or("0").split(',').filter_map(|v| v.trim().parse().ok()).collect();
     let mut line = format!("input_value name=\"{}\" type={ty}", p.identifier);
     match d.as_slice() {
@@ -346,6 +352,7 @@ fn operation(a: &AtomicNode, cx: &mut NodeCx<'_>) -> String {
         Kind::Vector => triangle_strips(a),
         Kind::Curve => curve(a),
         Kind::FxMap => fx_map(a, cx),
+        Kind::Text => text(a, cx),
         // a value node has no image; expressions that read it compute it themselves
         Kind::PixelProcessor if a.value_words > 0 => "color r=0 g=0 b=0".into(),
         Kind::PixelProcessor => pixel_processor(a, cx),
@@ -615,6 +622,53 @@ fn transform(a: &AtomicNode, cx: &mut NodeCx<'_>) -> String {
             }
         }
         _ => {}
+    }
+    l
+}
+
+/// Text drawn with the font stored in the graph: the text from the graph input it names, position (an offset from the
+/// middle), size and alignment as the graph runtime's `text` node takes them.
+fn text(a: &AtomicNode, cx: &mut NodeCx<'_>) -> String {
+    let (desc, asm) = (cx.desc, cx.asm);
+    let mut l = String::from("text");
+    let font = match a.param("font") {
+        Some(Value::Const(w)) => w.first().copied(),
+        _ => None,
+    };
+    match font.and_then(|off| asm.embedded_font(off).map(|ttf| (off, ttf))) {
+        Some((off, ttf)) => {
+            let file = format!("font_{off:x}.ttf");
+            if !cx.embedded.iter().any(|(name, _)| *name == file) {
+                cx.embedded.push((file.clone(), ttf.to_vec()));
+            }
+            l += &format!(" font=\"{file}\"");
+        }
+        None => cx.warnings.push(format!("node {}: the text's font is not understood (the built-in face draws it)", a.index)),
+    }
+    match a.param("text_input") {
+        Some(Value::Const(w)) if w.first().is_some_and(|uid| desc.input(*uid).is_some()) => {
+            let uid = w.first().copied().unwrap_or(0);
+            l += &format!(" fn.text=\"{}\"", cx.fns.input_function(uid, desc));
+        }
+        _ => cx.warnings.push(format!("node {}: the text's source is not understood (it draws no text)", a.index)),
+    }
+    match a.param("position") {
+        Some(Value::Const(w)) => {
+            for (k, x) in XY.iter().zip(w) {
+                l += &format!(" {k}={}", f32::from_bits(*x));
+            }
+        }
+        Some(Value::Expr(e)) => {
+            for (lane, k) in XY.iter().enumerate() {
+                l += &format!(" fn.{k}=\"{}\"", cx.fns.function(e, desc, Some(lane)));
+            }
+        }
+        _ => {}
+    }
+    param(&mut l, "size", a.param("fontsize"), &[], desc, cx.fns, 1.0);
+    match a.param("alignment") {
+        Some(Value::Const(w)) => l += &format!(" align={}", w.first().copied().unwrap_or(1)),
+        v => param(&mut l, "align", v, &[], desc, cx.fns, 1.0),
     }
     l
 }

@@ -36,6 +36,8 @@ const HEADER_UID: u32 = 0x0c;
 const HEADER_ROOT: u32 = 0x2c;
 /// An embedded JPEG starts with its start-of-image marker and the next marker's first byte.
 const JPEG_START: [u8; 3] = [0xff, 0xd8, 0xff];
+/// An embedded font starts with an sfnt version: TrueType (`00 01 00 00`, `true`) or OpenType outlines (`OTTO`).
+const FONT_STARTS: [[u8; 4]; 3] = [[0, 1, 0, 0], *b"true", *b"OTTO"];
 
 /// One graph input as the compiled code lists it: its type code and uid (as in the XML description).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +120,14 @@ impl Assembly {
         let s = self.section();
         let len = s.u32(off).ok()?;
         s.bytes(off.checked_add(4)?, len).filter(|b| b.starts_with(&JPEG_START))
+    }
+
+    /// The font stored at section offset `off`: a text node's font word points at `{u32 hash, u32 length, bytes}`, a
+    /// TrueType or OpenType face.
+    pub fn embedded_font(&self, off: u32) -> Option<&[u8]> {
+        let s = self.section();
+        let len = s.u32(off.checked_add(4)?).ok()?;
+        s.bytes(off.checked_add(8)?, len).filter(|b| FONT_STARTS.iter().any(|m| b.starts_with(m)))
     }
 
     pub fn input(&self, uid: u32) -> Option<&AsmInput> {
