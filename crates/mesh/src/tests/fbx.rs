@@ -844,3 +844,26 @@ fn strict_binary_requires_a_closing_record() {
     assert!(read_document(truncated, &Limits::default()).is_ok());
     assert!(crate::fbx::read_document_strict(truncated, &Limits::default()).is_err());
 }
+
+#[test]
+fn placement_and_polygon_order_follow_the_fbx() {
+    let text = ASCII.replace("a: 0,1,2,-4,0,1,-5", "a: 0,1,2,-4,0,1,-5,0,1,-5").replace("a: 0,1\n", "a: 0,1,0\n");
+    let doc = document(text.as_bytes());
+    let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
+    let (scene, placements) = doc.scene_with_placements(&Limits::default(), &mut no_external, &options).unwrap();
+    assert_eq!(placements.len(), 1);
+    let mesh = scene.nodes[placements[0]].mesh.unwrap();
+    let parts = &scene.meshes[mesh].parts;
+    assert_eq!(parts.len(), 3);
+    assert_eq!(parts[0].material, parts[2].material);
+    assert_ne!(parts[0].material, parts[1].material);
+}
+
+#[test]
+fn placement_order_follows_connections_not_model_declarations() {
+    let text = with("Model: 201, \"Model::Later\", \"Mesh\" {}\n", "").replace("C: \"OO\",100,300", "C: \"OO\",100,201\n C: \"OO\",100,300");
+    let doc = document(text.as_bytes());
+    let (scene, placements) = doc.scene_with_placements(&Limits::default(), &mut no_external, &Default::default()).unwrap();
+    let names: Vec<_> = placements.iter().map(|i| scene.nodes[*i].name.as_str()).collect();
+    assert_eq!(names, ["Later", "Shape geometry"]);
+}
