@@ -5,6 +5,11 @@
 use crate::{AudioError, Result};
 use craft_media::ByteSource;
 
+/// Whether a prefix identifies a RIFF or RF64 WAVE file.
+pub fn sniff(b: &[u8]) -> bool {
+    b.len() >= 12 && (&b[0..4] == b"RIFF" || &b[0..4] == b"RF64") && &b[8..12] == b"WAVE"
+}
+
 const MAX_CHUNKS: usize = 1 << 16;
 const IXML_MAX: u64 = 1 << 20;
 /// Maximum sample data returned by a single range read.
