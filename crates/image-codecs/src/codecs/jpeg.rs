@@ -679,6 +679,20 @@ mod tests {
 
     /// `info` reads the frame from the markers, and which decoder the file goes to.
     #[test]
+    fn ff_search_matches_plain_search() {
+        let mut b: Vec<u8> = (0..300u32).map(|i| (i * 7 % 255) as u8).collect();
+        for at in [None, Some(0), Some(7), Some(8), Some(15), Some(203), Some(296), Some(299)] {
+            if let Some(i) = at {
+                b[i] = 0xff;
+            }
+            for start in [0, 1, 5, 9, 290, 299, 300] {
+                let s = &b[start..];
+                assert_eq!(find_ff(s), s.iter().position(|&v| v == 0xff));
+            }
+        }
+    }
+
+    #[test]
     fn info_reads_the_frame_and_the_decoder() {
         let img = Image::from_raw(37, 21, ChannelLayout::Rgb, SampleType::U8, vec![128; 37 * 21 * 3]).unwrap();
         let rgb = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
