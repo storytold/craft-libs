@@ -148,6 +148,26 @@ mod tests {
         tasks.finish().await;
     }
     #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_line_read_retains_consumed_prefix() {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+        let (mut writer, stream) = tokio::io::duplex(32);
+        let mut reader = BufReader::new(stream);
+        let mut partial = Vec::new();
+        writer.write_all(b"prefix").await.unwrap();
+        {
+            let mut read = Box::pin(bounded_line(&mut reader, &mut partial, 32));
+            poll_fn(|cx| {
+                assert!(matches!(read.as_mut().poll(cx), Poll::Pending));
+                Poll::Ready(())
+            })
+            .await;
+        }
+        assert_eq!(partial, b"prefix");
+        writer.write_all(b" suffix\n").await.unwrap();
+        assert_eq!(bounded_line(&mut reader, &mut partial, 32).await.unwrap().as_deref(), Some("prefix suffix"));
+    }
+    #[tokio::test(flavor = "current_thread")]
     async fn parse_error_does_not_discard_partial_service_reply() {
         let (mut client, input) = tokio::io::duplex(128);
         let (output, client_out) = tokio::io::duplex(128);
