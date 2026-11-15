@@ -324,14 +324,27 @@ impl<'a> TransformBox<'a> {
     }
 
     /// The box the pointer at screen position `pos` gives a drag, snapped through the canvas's `snap` and rounded, with
-    /// the lines it snapped to. The Control key suspends the snapping unless it changes what the drag does (off macOS
-    /// Ctrl is ⌘: a corner distorts, an edge skews).
+    /// the lines it snapped to. A corner, an edge or the reference point snaps the grabbed point, not the pointer: a
+    /// press a few pixels off the handle still lands the handle on the line. The Control key suspends the snapping
+    /// unless it changes what the drag does (off macOS Ctrl is ⌘: a corner distorts, an edge skews).
     fn proposal(&self, space: &CanvasSpace, snap: Option<&Snap>, grip: &Grip, pos: Pos2, mods: Mods) -> (BoxState, Vec<SnapLine>) {
         let to = space.view.to_doc(pos);
         let reads_control = self.rules.drag_kind(grip.part, mods) != self.rules.drag_kind(grip.part, Mods { cmd: false, ..mods });
-        let (to, lines) = match snap {
-            Some(snap) => snap.point(to, mods, GestureSnap { reads_control, ..GestureSnap::default() }),
-            None => (to, Vec::new()),
+        let quad = &grip.start.quad;
+        let grabbed = match grip.part {
+            BoxPart::Corner(i) => Some(quad[usize::from(i % 4)]),
+            BoxPart::Edge(i) => Some(quad[usize::from(i % 4)].midpoint(quad[usize::from(i + 1) % 4])),
+            BoxPart::Pivot => Some(grip.start.pivot),
+            _ => None,
+        };
+        let (to, lines) = match (snap, grabbed) {
+            (Some(snap), Some(grabbed)) => {
+                let off = grip.from - grabbed;
+                let (at, lines) = snap.point(to - off, mods, GestureSnap { reads_control, ..GestureSnap::default() });
+                (at + off, lines)
+            }
+            (Some(snap), None) => snap.point(to, mods, GestureSnap { reads_control, ..GestureSnap::default() }),
+            (None, _) => (to, Vec::new()),
         };
         let dragged = quad::drag(&grip.start, &grip.last, grip.part, grip.from, to, mods, &self.rules);
         (if self.pixel_grid { on_pixel_grid(dragged) } else { dragged }, lines)
