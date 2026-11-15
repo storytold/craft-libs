@@ -121,7 +121,20 @@ fn check(d: &AffixDict, word: &str, opts: &crate::Options) -> bool {
                 .split(['-', '\u{05BE}'])
                 .all(|p| p.chars().count() <= 1 || PREFIXES.contains(&p) || !p.chars().any(is_hebrew_letter) || known(d, p, p));
     }
-    known(d, w, &norm)
+    if norm == "גב'" || norm == "גב" {
+        return true;
+    }
+    if known(d, w, &norm) {
+        return true;
+    }
+    if (w.ends_with('\'') || w.ends_with('’') || w.ends_with('\u{05F3}')) && w.len() > 1 {
+        let without_trail = w.trim_end_matches(['\'', '’', '\u{05F3}']);
+        let norm_wt = normalize_hebrew(without_trail);
+        if known(d, without_trail, &norm_wt) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Checks whether `raw` or its normalized/unpointed form `norm` is in `d` or the user dictionary.

@@ -883,6 +883,8 @@ fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(us
             || c == '-'
             || c == '"'
             || c == '״'
+            || c == '”'
+            || c == '“'
             || c == '׳'
             || c == '־'
             || unicode_normalization::char::is_combining_mark(c)
@@ -3121,6 +3123,7 @@ mod tests {
         assert!(issues.is_empty(), "צה״ל and וכו׳ should be accepted as valid tokens without false flags: {issues:?}");
     }
 
+    #[test]
     fn decomposed_words_stay_whole() {
         // English results depend on the dictionaries other tests install.
         crate::hold_dictionary_tests();

@@ -63,16 +63,16 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
             if space_run.is_none() {
                 space_run = Some(i);
             }
-        } else if let Some(start) = space_run.take() {
-            if i - start >= 2 {
-                v.push(issue(start, i, "רווח כפול".into(), vec![" ".into()]));
-            }
+        } else if let Some(start) = space_run.take()
+            && i - start >= 2
+        {
+            v.push(issue(start, i, "רווח כפול".into(), vec![" ".into()]));
         }
     }
-    if let Some(start) = space_run.take() {
-        if text.len() - start >= 2 {
-            v.push(issue(start, text.len(), "רווח כפול".into(), vec![" ".into()]));
-        }
+    if let Some(start) = space_run.take()
+        && text.len() - start >= 2
+    {
+        v.push(issue(start, text.len(), "רווח כפול".into(), vec![" ".into()]));
     }
 }
 
