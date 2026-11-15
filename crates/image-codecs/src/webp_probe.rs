@@ -39,7 +39,11 @@ mod tests {
     fn preserves_stored_dimensions_with_exif_orientation() {
         let mut image = crate::Image::from_u8(2, 3, crate::ChannelLayout::Rgb, vec![42; 18]).unwrap();
         image.meta.exif = Some(b"II\x2a\x00\x08\x00\x00\x00\x01\x00\x12\x01\x03\x00\x01\x00\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00".to_vec());
-        let bytes = crate::encode(&image, Format::WebP, &crate::EncodeOptions::default()).unwrap();
+        let mut bytes = crate::encode(&image, Format::WebP, &crate::EncodeOptions::default()).unwrap();
+        // The writer correctly makes exported pixels upright; simulate a camera file carrying orientation 6.
+        let exif = bytes.windows(4).position(|v| v == b"EXIF").unwrap();
+        let tiff = exif + 8;
+        bytes[tiff + 18] = 6;
         assert_eq!(header(&bytes).unwrap(), (2, 3, 6));
     }
 
