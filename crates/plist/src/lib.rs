@@ -4,7 +4,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 mod binary;
 mod bytes;
-pub use binary::{DateValue, Value, parse_binary, parse_binary_with_limits};
+pub use binary::{DateValue, Value, first_string_in_array, parse_binary, parse_binary_with_limits};
 
 /// Caller-selected resource limits. Zero values refuse the corresponding resource.
 #[derive(Clone, Copy, Debug)]

@@ -75,6 +75,12 @@ pub fn parse_binary(data: &[u8]) -> Result<Value, FormatError> {
 
 /// Parse a binary property list, with caller-selected input, object, expansion and nesting limits.
 pub fn parse_binary_with_limits(data: &[u8], limits: Limits) -> Result<Value, FormatError> {
+    let (mut b, top) = reader(data, limits)?;
+    let mut stack = reserved(limits.max_depth.min(256))?;
+    b.object(top, &mut stack)
+}
+
+fn reader(data: &[u8], limits: Limits) -> Result<(Bin<'_>, usize), FormatError> {
     if data.len() > limits.max_input_bytes {
         return Err(FormatError::TooLarge("input bytes".into()));
     }
@@ -122,9 +128,8 @@ pub fn parse_binary_with_limits(data: &[u8], limits: Limits) -> Result<Value, Fo
     let top = usize::try_from(top).map_err(|_| FormatError::Malformed("top object".into()))?;
     // Object payloads and references must not borrow bytes from the offset table or trailer.
     let objects = data.get(..table).ok_or_else(|| FormatError::Truncated("object area".into()))?;
-    let mut b = Bin { r: Reader::new(objects), offsets, ref_size, nodes: 0, bytes_left: limits.max_expanded_bytes, limits };
-    let mut stack = reserved(limits.max_depth.min(256))?;
-    b.object(top, &mut stack)
+    let b = Bin { r: Reader::new(objects), offsets, ref_size, nodes: 0, bytes_left: limits.max_expanded_bytes, limits };
+    Ok((b, top))
 }
 
 fn read_be(r: &Reader<'_>, off: usize, n: usize) -> Option<u64> {
@@ -332,4 +337,55 @@ fn reserved_string(n: usize) -> Result<String, FormatError> {
     let mut s = String::new();
     s.try_reserve_exact(n).map_err(|_| FormatError::TooLarge("string allocation".into()))?;
     Ok(s)
+}
+
+/// Select the first string in one top-level dictionary array without expanding unrelated values.
+/// First matching dictionary key wins. Missing/wrong-typed values return `None`; malformed
+/// selected objects and resource exhaustion return errors. Unselected value graphs are not
+/// validated. This permits preference readers to ignore unrelated future object kinds.
+pub fn first_string_in_array(data: &[u8], key: &str, limits: Limits) -> Result<Option<String>, FormatError> {
+    let (mut b, top) = reader(data, limits)?;
+    let (kind, n, start) = b.header(top)?;
+    if kind != 0xd {
+        return Ok(None);
+    }
+    if n > limits.max_nodes {
+        return Err(FormatError::TooLarge("dictionary lookup entries".into()));
+    }
+    let bytes = n.checked_mul(2).and_then(|n| n.checked_mul(b.ref_size)).ok_or_else(|| FormatError::Malformed("dictionary references".into()))?;
+    b.r.slice(start, bytes).ok_or_else(|| FormatError::Truncated("dictionary references".into()))?;
+    for i in 0..n {
+        let k = b.reference(start, i)?;
+        if b.selected_string(k)?.as_deref() != Some(key) {
+            continue;
+        }
+        let value = b.reference(start, n + i)?;
+        let (kind, count, payload) = b.header(value)?;
+        if kind != 0xa || count == 0 {
+            return Ok(None);
+        }
+        let first = b.reference(payload, 0)?;
+        return b.selected_string(first);
+    }
+    Ok(None)
+}
+impl Bin<'_> {
+    fn header(&self, idx: usize) -> Result<(u8, usize, usize), FormatError> {
+        let at = *self.offsets.get(idx).ok_or_else(|| FormatError::Malformed("missing object".into()))?;
+        let marker = self.r.u8(at).ok_or_else(|| FormatError::Truncated("object marker".into()))?;
+        let kind = marker >> 4;
+        // Only containers and strings use an extended length. Unknown types are not traversed.
+        let (n, start) = if matches!(kind, 0x5 | 0x6 | 0xa | 0xd) { self.count(at, marker & 15)? } else { (usize::from(marker & 15), at + 1) };
+        Ok((kind, n, start))
+    }
+    fn selected_string(&mut self, idx: usize) -> Result<Option<String>, FormatError> {
+        let (kind, _, _) = self.header(idx)?;
+        if !matches!(kind, 0x5 | 0x6) {
+            return Ok(None);
+        }
+        match self.object(idx, &mut Vec::new())? {
+            Value::String(s) => Ok(Some(s)),
+            _ => Ok(None),
+        }
+    }
 }

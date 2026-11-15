@@ -55,3 +55,21 @@ fn utf16_and_lossy_expansion_spend_budget() {
     assert_eq!(parse_binary(&bad).unwrap().as_str(), Some("�"));
     assert!(parse_binary_with_limits(&bad, Limits { max_expanded_bytes: 2, ..Limits::default() }).is_err());
 }
+
+#[test]
+fn selective_lookup_ignores_unrelated_graphs_and_preserves_first_match() {
+    use craft_plist::first_string_in_array;
+    let b = plist(&[&[0xd2, 1, 2, 3, 4], b"\x55Other", b"\x5eAppleLanguages", &[0xaf], &[0xa2, 5, 6], b"\x55ja-JP", &[0xff]]);
+    assert!(parse_binary(&b).is_err());
+    assert_eq!(first_string_in_array(&b, "AppleLanguages", Limits::default()).unwrap().as_deref(), Some("ja-JP"));
+    let duplicate = plist(&[&[0xd2, 1, 1, 2, 3], b"\x5eAppleLanguages", &[0xa1, 4], &[0xa1, 5], b"\x55zh-TW", b"\x55ko-KR"]);
+    assert_eq!(first_string_in_array(&duplicate, "AppleLanguages", Limits::default()).unwrap().as_deref(), Some("zh-TW"));
+    assert!(first_string_in_array(&b, "AppleLanguages", Limits { max_expanded_bytes: 1, ..Limits::default() }).is_err());
+}
+
+#[test]
+fn selective_lookup_requires_an_array_not_a_set() {
+    use craft_plist::first_string_in_array;
+    let b = plist(&[&[0xd1, 1, 2], b"\x5eAppleLanguages", &[0xc1, 3], b"\x55ja-JP"]);
+    assert_eq!(first_string_in_array(&b, "AppleLanguages", Limits::default()).unwrap(), None);
+}
