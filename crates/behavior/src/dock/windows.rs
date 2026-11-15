@@ -217,23 +217,37 @@ impl<D: Clone + Eq + Hash> DocumentWindows<D> {
         let Some(at) = self.floating.iter().position(|(g, _)| g.id == id) else { return false };
         let (group, _) = self.floating.remove(at);
         let returning: Vec<D> = group.documents.into_iter().filter(|d| !self.documents().any(|held| held == d)).collect();
-        if returning.is_empty() {
-            return true;
+        self.dock(returning, group.shown);
+        true
+    }
+
+    /// Adds `document` to the first docked group, or to a new docked group when there is none. A document a group
+    /// already holds stays where it is.
+    pub fn add_document(&mut self, document: &D) {
+        if !self.documents().any(|held| held == document) {
+            self.dock(vec![document.clone()], None);
+        }
+    }
+
+    /// Puts `documents` at the end of the first docked group, or into a new docked group showing `shown` (else the
+    /// first of them) when there is none.
+    fn dock(&mut self, documents: Vec<D>, shown: Option<D>) {
+        if documents.is_empty() {
+            return;
         }
         match self.docked.first_mut() {
             Some(first) => {
                 if first.shown.is_none() {
-                    first.shown = returning.first().cloned();
+                    first.shown = documents.first().cloned();
                 }
-                first.documents.extend(returning);
+                first.documents.extend(documents);
             }
             None => {
                 let id = self.fresh_id();
-                let shown = group.shown.filter(|s| returning.contains(s)).or_else(|| returning.first().cloned());
-                self.docked.push(DocumentGroup { id, documents: returning, shown });
+                let shown = shown.filter(|s| documents.contains(s)).or_else(|| documents.first().cloned());
+                self.docked.push(DocumentGroup { id, documents, shown });
             }
         }
-        true
     }
 
     /// The dock actions that put `self` into `layout`, for the dock to draw the windows. The
