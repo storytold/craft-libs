@@ -39,6 +39,11 @@ def read_concurrency(text):
     starts = [index for index, line in enumerate(lines) if line.startswith("concurrency:")]
     if len(starts) != 1:
         raise AssertionError(f"expected one top-level concurrency block, found {len(starts)}")
+    header = lines[starts[0]].partition("#")[0].strip()
+    if header != "concurrency:":
+        # `concurrency: |` and `concurrency: some-string` are scalars, not a mapping. Reading the
+        # lines under one as fields would let a workflow that is not this policy pass every check.
+        raise AssertionError(f"concurrency must be a mapping, not a scalar: {lines[starts[0]]!r}")
     fields = {}
     for line in lines[starts[0] + 1:]:
         stripped = line.strip()
@@ -109,6 +114,16 @@ class ConcurrencyTests(unittest.TestCase):
         self.assertEqual(self.group_shape["prefix"], "workspace")
         self.assertEqual(self.group_shape["event"], PULL_REQUEST)
         self.assertEqual(self.cancel_shape["event"], PULL_REQUEST)
+
+    def test_a_scalar_concurrency_value_is_not_read_as_a_mapping(self):
+        cases = {
+            "a block scalar": "concurrency: |\n  group: workspace-x\n  cancel-in-progress: true\n",
+            "a plain scalar": "concurrency: workspace-x\njobs: {}\n",
+        }
+        for description, text in cases.items():
+            with self.subTest(description):
+                with self.assertRaises(AssertionError):
+                    read_concurrency(text)
 
     def test_one_group_per_pull_request_and_run(self):
         for description, first, second in SAME_GROUP:
