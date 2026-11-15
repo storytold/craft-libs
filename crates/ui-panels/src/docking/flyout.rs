@@ -1,13 +1,13 @@
 //! `Flyout`: the panel an icon of an iconic column opens beside the column.
 
-use crate::contract::overlay::{Anchor, Dismiss, Place, PlacementChange};
-use crate::contract::{BodyCx, Overlay, OverlayUi, PopupHandle};
+use crate::contract::overlay::{Anchor, Dismiss, FloatPlace, Place, PlacementChange, ResizeEdges};
+use crate::contract::{
+    BodyCx, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, Overlay, OverlayUi, Pad, PopupHandle, Role, SizeLimits, Sizing,
+};
+use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::dock::DockEdge;
-use craft_behavior::overlay::{Align, Side};
-use egui::{Rect, Ui, Vec2};
-
-#[cfg(feature = "testing")]
-mod stories;
+use craft_behavior::{Metrics, Sense};
+use egui::{Pos2, Rect, Response, Ui, Vec2};
 
 /// Where a group view puts the group it is given: measured at a width, or shown in a rect.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,56 +18,156 @@ pub enum GroupAt {
     Show(Rect),
 }
 
-/// A popup beside an iconic column, on the side of the canvas, level with the icon that opened it. Escape and a
-/// press outside close it; with Auto-Collapse Iconic Panels the focus leaving it closes it too. Its body is
-/// measured at the flyout's width first: the flyout is as tall as the body measures within the room, and at least
-/// its `size`'s height, and the body then shows in the rect that takes.
-#[derive(crate::contract::Pattern)]
+/// The style of a flyout: its surface and padding come from the container.
+#[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
+#[non_exhaustive]
+pub struct FlyoutStyle {
+    #[style(metrics)]
+    metrics: Metrics,
+}
+
+/// What a flyout reports in a pass.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct FlyoutOutput {
+    /// The flyout's response.
+    pub response: Response,
+    /// The last step of a resize the user made this pass, with the rect the caller keeps.
+    pub placed: Option<PlacementChange>,
+}
+
+impl Outcome for FlyoutOutput {
+    type Value = NoValue;
+
+    fn response(&self) -> &Response {
+        &self.response
+    }
+
+    fn unshown(response: Response) -> Option<Self> {
+        Some(FlyoutOutput { response, placed: None })
+    }
+}
+
+/// A popup beside an iconic column, on the side of the canvas, whose top left the caller places. Escape and a press
+/// outside close it; with Auto-Collapse Iconic Panels the focus leaving it closes it too. Its body is measured at the
+/// flyout's width first: the flyout is as tall as the body measures within the room below its top, and at least its
+/// `size`'s height, and the body then shows in the rect that takes.
+///
+/// The user resizes it by its top and bottom edges, the edge away from the column and the two corners there; the
+/// column side stays. The flyout keeps no rect of its own: each step comes back in [`FlyoutShown::placed`] and the
+/// caller places the next pass from it.
+#[derive(crate::contract::Component, crate::contract::Props)]
+#[component(container, unregistered)]
 pub struct Flyout {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
     edge: DockEdge,
     size: Vec2,
     auto_collapse: bool,
+    within: Rect,
+    least: Vec2,
+    placed: Option<PlacementChange>,
 }
 
 impl Flyout {
     /// A flyout at least `size` for the column on the window edge `edge`, closing when the focus leaves it if
     /// `auto_collapse`.
     pub fn new(edge: DockEdge, size: Vec2, auto_collapse: bool) -> Self {
-        Flyout { edge, size, auto_collapse }
+        let props = ContainerProps::new().surface(SurfaceKind::Popup).pad(Pad::None).sizing(Sizing::Content);
+        Flyout { common: Common::new(), props, edge, size, auto_collapse, within: Rect::EVERYTHING, least: Vec2::ZERO, placed: None }
     }
 
-    /// The layer the flyout shows in: hung from `anchor` (the icon's part) on the side away from the window edge.
-    /// The anchored placement mirrors the side in a right-to-left layout.
-    pub fn overlay(&self, anchor: Anchor) -> Overlay {
-        let side = match self.edge {
-            DockEdge::End => Side::Start,
-            _ => Side::End,
-        };
-        Overlay::popover()
-            .place(Place::anchored(anchor, side, Align::Start))
+    /// The rect the flyout and every resize of it stay inside.
+    #[must_use]
+    pub fn within(mut self, within: Rect) -> Self {
+        self.within = within;
+        self
+    }
+
+    /// The least size a resize leaves the flyout.
+    #[must_use]
+    pub fn least(mut self, least: Vec2) -> Self {
+        self.least = least;
+        self
+    }
+
+    /// The layer the flyout shows in, its top left at `top_left`: placed by the caller, resizable on every edge but
+    /// the one facing the column. The side away from the column mirrors in a right-to-left layout (`rtl`).
+    fn overlay(&self, top_left: Pos2, rtl: bool) -> Overlay {
+        let free = if (self.edge == DockEdge::End) == rtl { ResizeEdges::RIGHT } else { ResizeEdges::LEFT };
+        let bounded = self.within.is_finite();
+        let least = if bounded { self.least.min(self.within.size().max(Vec2::ZERO)) } else { self.least };
+        // A float place as well as the caller's position: the placement pins no edge, so the edge set alone decides
+        // the grips.
+        let overlay = Overlay::popover()
+            .place(Place::Float(FloatPlace::at(top_left)))
+            .placed_at(top_left)
+            .size_limits(SizeLimits::at_least(least))
+            .resize_edges(free.union(ResizeEdges::TOP).union(ResizeEdges::BOTTOM))
             .dismiss(Dismiss::new().focus_left(self.auto_collapse))
-            .body_scroll(false)
+            .body_scroll(false);
+        if bounded { overlay.bounds(self.within) } else { overlay }
     }
 
-    /// Shows the flyout of `popup` while it is open, hung from `anchor`, and returns what it showed;
-    /// `None` while it is closed. `body` returns the height it measures for `GroupAt::Measure`, or `None` to take
-    /// the flyout's own height.
+    /// Shows the flyout of `popup` while it is open, its top left at `anchor` (a point, or a rect's top left), and
+    /// returns what it showed; `None` while it is closed. `body` returns the height it measures for
+    /// `GroupAt::Measure`, or `None` to take the flyout's own height.
     pub fn show(
-        self,
+        mut self,
         ui: &mut OverlayUi<'_>,
         popup: PopupHandle,
         anchor: Anchor,
         mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>, GroupAt) -> Option<f32>,
     ) -> Option<FlyoutShown> {
+        let top_left = match anchor {
+            Anchor::Point(at) => at,
+            Anchor::Rect(rect) => rect.min,
+            _ => {
+                debug_assert!(false, "a flyout is placed at a point or a rect's top left");
+                return None;
+            }
+        };
         let size = self.size;
-        let rect = ui.show(popup, self.overlay(anchor), |ui, cx| {
-            let measured = body(ui, cx, GroupAt::Measure(size.x)).map_or(size.y, |height| height.min(ui.available_height()));
+        // A body measures no taller than the room below the top, inside the bounds.
+        let room = (self.within.bottom() - top_left.y).max(size.y);
+        let overlay = self.overlay(top_left, ui.is_rtl());
+        self.props = self.props.mount(Mount::Layer(overlay));
+        let shown = ui.show_container(popup, self, |ui, cx| {
+            let measured = body(ui, cx, GroupAt::Measure(size.x)).map_or(size.y, |height| height.min(room));
             let rect = crate::layout::place_in_flow(ui, Vec2::new(size.x, size.y.max(measured)));
             body(ui, cx, GroupAt::Show(rect));
             rect
-        });
-        // P3(framework-01-w9): fx.F50 reports the user's placement change and mounts the flyout as a layer of its own.
-        rect.map(|rect| FlyoutShown { rect, placed: None, dismissed: dismissed(ui, popup) })
+        })?;
+        let rect = shown.inner?;
+        Some(FlyoutShown { rect, placed: shown.output.placed, dismissed: ui.closing(popup).is_some() })
+    }
+}
+
+impl Component for Flyout {
+    const ROLE: Role = Role::GROUP;
+    const PARTS: bool = false;
+    const STOPS: bool = false;
+    type Style = FlyoutStyle;
+    type Output = FlyoutOutput;
+
+    fn style(_: &StyleCx<'_>, _: FlyoutStyleKey) -> FlyoutStyle {
+        FlyoutStyle::default()
+    }
+
+    fn sense(&self) -> Sense {
+        Sense::empty()
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> FlyoutOutput {
+        FlyoutOutput { response: cx.response.clone(), placed: self.placed }
+    }
+}
+
+impl Container for Flyout {
+    fn placement_changed(&mut self, change: &PlacementChange) {
+        self.placed = Some(*change);
     }
 }
 
@@ -77,13 +177,8 @@ impl Flyout {
 pub struct FlyoutShown {
     /// The rect the flyout's body showed in.
     pub rect: Rect,
-    /// The placement the user changed this pass: the flyout's size or top edge.
+    /// The last step of the resize the user made this pass: the flyout's size or top edge.
     pub placed: Option<PlacementChange>,
-    /// The layer closed in this pass.
+    /// The layer closed in this pass: by Escape, a press outside, the focus leaving it or a close its body asked for.
     pub dismissed: bool,
-}
-
-/// Whether the layer of `popup` was dismissed in this pass of `ui` (Escape, a press outside, the focus leaving it).
-pub(super) fn dismissed(ui: &OverlayUi<'_>, popup: PopupHandle) -> bool {
-    ui.closed.iter().any(|(id, _)| *id == popup.id())
 }

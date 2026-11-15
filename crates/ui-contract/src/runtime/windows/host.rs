@@ -15,6 +15,7 @@ use craft_behavior::placement::Placement;
 use craft_behavior::{Monitor, PointerButton};
 use craft_host::target::{Caps, ShellInfo, WindowState};
 use craft_keymap::{Chord, Key, Mods};
+use craft_window::desktop::Desktop;
 use craft_window::policy::Frame;
 use egui::{Context, Id, Pos2, Rect, Vec2, ViewportId};
 
@@ -293,6 +294,12 @@ impl WindowHost {
         }
         let captions = PerViewport::<Record>::with(&self.ctx, viewport, |record| record.captions.clone());
         frame_of(window_info(&self.ctx, viewport, &base_shell(&self.ctx)).chrome, captions)
+    }
+
+    /// The desktop the app's windows open on, as the installed frame decision detected it; `None` when the app
+    /// installed no decision (an embedded shell, a trial). The caption buttons take the desktop's icon theme from it.
+    pub fn desktop(&self) -> Option<Desktop> {
+        shared(&self.ctx, |shared| shared.desktop.clone())
     }
 
     /// Where the exclusive parts of `viewport`'s window lay in its last complete pass: the caption buttons, the edge

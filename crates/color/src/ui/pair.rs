@@ -376,8 +376,11 @@ impl Component for SwatchPair<'_> {
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        // Asking registers the popup for this pass, which the overlay hook needs even while it stays closed.
-        let _ = cx.popup("picker").is_open(cx);
+        // Asking registers the popup for this pass, which the overlay hook needs even while it stays closed. A pair in
+        // host-picker mode has no popup, so its group offers no Expand.
+        if self.popover {
+            let _ = cx.popup("picker").is_open(cx);
+        }
         let active = cx.value().copied().unwrap_or_default();
         for i in 0..2u64 {
             let well = Well::of(i);
@@ -407,6 +410,14 @@ impl Component for SwatchPair<'_> {
                 }
             }
         }
+        // An Expand on the pair itself reaches it as a keyed activation of its root, with no well activated: it opens
+        // the active well's picker.
+        let by_well = (0..2u64).any(|i| cx.part_activated(WELL.at(i)).is_some());
+        if self.popover && !by_well && cx.activation().is_some_and(|activation| activation.by_key) {
+            cx.memory::<Opened>().0 = Some(active.index());
+            let popup = cx.popup("picker");
+            popup.open(cx);
+        }
         self.defaults |= cx.part_activated(DEFAULT).is_some();
         self.swap |= cx.part_activated(SWAP).is_some();
         if self.click_activates
@@ -422,6 +433,10 @@ impl Component for SwatchPair<'_> {
     }
 
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
+        // Without the popover the pair registered no popup this pass.
+        if !self.popover {
+            return;
+        }
         let popup = cx.popup("picker");
         let opened = cx.memory::<Opened>().0.map_or(Well::Primary, Well::of);
         let well = &self.wells[opened.index() as usize];

@@ -11,6 +11,7 @@ use crate::runtime::overlay;
 use crate::runtime::pass_state;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority};
 use craft_host::target::{Caps, EdgeInsets, Os, ShellInfo, WindowChrome, WindowKind};
+use craft_window::desktop::Desktop;
 use craft_window::native::NativeWindow;
 use craft_window::policy::{Captions, Decision, Frame, LayoutWatch};
 use craft_window::restore::Store;
@@ -83,6 +84,8 @@ pub(crate) struct Shared {
     /// The root window's frame and its caption layout watch, from `InstallSpec::frame`.
     root_frame: Option<Frame>,
     layouts: Option<LayoutWatch>,
+    /// The desktop the installed frame decision was made for (`Decision::desktop`); `None` without a decision.
+    desktop: Option<Desktop>,
     /// Whether the root window had focus in the last root pass.
     root_focused: bool,
     /// Whether no window of the app had focus when the last frame's windows had all reported.
@@ -203,6 +206,7 @@ pub(crate) fn install(
         shared.app_id = app_id;
         shared.system = Some(system);
         shared.store = store;
+        shared.desktop = frame.as_ref().map(|decision| decision.desktop.clone());
         shared.root_frame = frame.map(|decision| decision.frame);
         shared.layouts = layouts;
     });

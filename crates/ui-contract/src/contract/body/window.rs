@@ -97,6 +97,16 @@ pub(super) struct WindowMode {
     restore: Placement,
     began: Option<Rect>,
     moving: Option<WindowMove>,
+    /// The index in `GRIPS` of the grip a drag holds, from its `DragStart` to its release: `move_parts` keeps it
+    /// declared when the drag flips the layer to a side whose placement holds its edge, so the drag keeps its result.
+    held: Option<usize>,
+}
+
+impl WindowMode {
+    /// The grip a drag holds, for `move_parts`.
+    pub(super) fn held(&self) -> Option<usize> {
+        self.held
+    }
 }
 
 /// A move of a viewport mount's OS window that the app runs ([`windows::keeps_app_drag`]), from its Begin to its Commit
@@ -139,6 +149,14 @@ fn resized_edge(before: Rect, after: Rect) -> Option<ResizeEdge> {
     })
 }
 
+/// `rect` moved, at its size, the least distance that puts it inside `bounds`: the one keep rule for a layer's
+/// bounds, whether the user moves the layer or the host places it. On an axis where it is longer than the bounds, its
+/// low edge sits on theirs.
+pub(crate) fn keep_inside(rect: Rect, bounds: Rect) -> Rect {
+    let keep = |low: f32, high: f32, bounds_low: f32, bounds_high: f32| low.min(bounds_high - (high - low)).max(bounds_low) - low;
+    rect.translate(Vec2::new(keep(rect.min.x, rect.max.x, bounds.min.x, bounds.max.x), keep(rect.min.y, rect.max.y, bounds.min.y, bounds.max.y)))
+}
+
 /// What every change of a layer's rect keeps to: the least and most size, and the rect it stays inside.
 struct Limits {
     min: Vec2,
@@ -154,9 +172,7 @@ impl Limits {
     /// `rect` moved by `delta`, kept inside the bounds.
     fn moved(&self, rect: Rect, delta: Vec2) -> Rect {
         let rect = rect.translate(delta);
-        let Some(bounds) = self.bounds else { return rect };
-        let keep = |low: f32, high: f32, bounds_low: f32, bounds_high: f32| low.min(bounds_high - (high - low)).max(bounds_low) - low;
-        rect.translate(Vec2::new(keep(rect.min.x, rect.max.x, bounds.min.x, bounds.max.x), keep(rect.min.y, rect.max.y, bounds.min.y, bounds.max.y)))
+        self.bounds.map_or(rect, |bounds| keep_inside(rect, bounds))
     }
 
     /// `rect` with the edges `dx` and `dy` (-1: low edge, 1: high edge, 0: none) moved by `delta`, within the size
@@ -253,6 +269,42 @@ impl Pinned {
     }
 }
 
+/// The edges the grip with direction (`dx`, `dy`) of `GRIPS` moves.
+fn moved_edges(dx: i8, dy: i8) -> ResizeEdges {
+    let x = match dx {
+        -1 => ResizeEdges::LEFT,
+        1 => ResizeEdges::RIGHT,
+        _ => ResizeEdges::NONE,
+    };
+    let y = match dy {
+        -1 => ResizeEdges::TOP,
+        1 => ResizeEdges::BOTTOM,
+        _ => ResizeEdges::NONE,
+    };
+    x.union(y)
+}
+
+/// The grip rule every resize of a layer reads: the grip with direction (`dx`, `dy`) stands when every edge it moves
+/// is in `edges` and the placement leaves it free. An explicit edge set never overrides the placement.
+fn grip_stands(edges: ResizeEdges, pinned: Pinned, dx: i8, dy: i8) -> bool {
+    edges.contains(moved_edges(dx, dy)) && !pinned.holds(dx, dy)
+}
+
+/// The edges keyboard Size mode moves, by the grip rule: on each axis the high edge (right, bottom) when its grip
+/// stands, else the low one when its grip does, else none (`1`, `-1`, `0`).
+fn size_edges(edges: ResizeEdges, pinned: Pinned) -> (i8, i8) {
+    let axis = |high: (i8, i8), low: (i8, i8)| {
+        if grip_stands(edges, pinned, high.0, high.1) {
+            1
+        } else if grip_stands(edges, pinned, low.0, low.1) {
+            -1
+        } else {
+            0
+        }
+    };
+    (axis((1, 0), (-1, 0)), axis((0, 1), (0, -1)))
+}
+
 impl BodyHooks<'_> {
     /// The `window.Move` and `window.Size` commands and the keys of the mode they start (16.3): arrows move or
     /// resize by a step (Shift: four steps), Enter, the command again or a primary press keeps the placement, Escape
@@ -261,8 +313,11 @@ impl BodyHooks<'_> {
     pub(super) fn window_keys<C: Container>(&mut self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
         let (id, ctx) = (cx.core.id, cx.core.ctx.clone());
         let (Some(window), Some(overlay)) = (window_instance(props, id), overlay_of(props)) else { return };
+        let overlay = overlay.in_screen(crate::runtime::overlay::parent_space(&ctx, id));
+        let overlay = &*overlay;
         let limits = Limits::new(overlay, window_min(props, cx.style.metrics().min_size));
         let rect = cx.core.rect;
+        let rtl = cx.core.env.direction().is_rtl();
         let mut slot = PlacementSlot::new(&mut *cx.core.memory, id, self.save.as_ref(), overlay);
         let current = slot.read();
         let step = |rect: Rect, phase: GesturePhase| PlacementChange { rect, phase, pointer: None, kind: PlacementKind::Keyboard };
@@ -279,7 +334,7 @@ impl BodyHooks<'_> {
             if mode.kind == Some(kind) {
                 mode = WindowMode::default();
             } else {
-                mode = WindowMode { kind: Some(kind), restore: current.clone(), began: Some(current.rect_over(rect)), moving: None };
+                mode = WindowMode { kind: Some(kind), restore: current.clone(), began: Some(current.rect_over(rect)), moving: None, held: None };
                 self.reports.push(step(current.rect_over(rect), GesturePhase::Begin));
             }
         }
@@ -291,6 +346,8 @@ impl BodyHooks<'_> {
         }
         if let Some(kind) = mode.kind {
             let unit = self.nudge;
+            // Size mode moves the edges whose grips stand at this pass's side of the anchor.
+            let (size_x, size_y) = size_edges(overlay.resize.edges, Pinned::of(overlay, &ctx, id, rtl));
             let mut placement = current;
             for (key, direction) in MODE_ARROWS {
                 for (mods, scale) in [(Mods::NONE, 1.0), (Mods::SHIFT, 4.0)] {
@@ -301,7 +358,9 @@ impl BodyHooks<'_> {
                         let before = placement.rect_over(rect);
                         let next = match kind {
                             WindowModeKind::Move => limits.moved(before, delta),
-                            WindowModeKind::Size => limits.resized(before, 1, 1, delta),
+                            // Left and Right act on the free horizontal edge only, Up and Down on the vertical one.
+                            WindowModeKind::Size if direction[0] != 0 => limits.resized(before, size_x, 0, delta),
+                            WindowModeKind::Size => limits.resized(before, 0, size_y, delta),
                         };
                         placement = Placement::at(next);
                         self.reports.push(step(next, GesturePhase::Update));
@@ -337,6 +396,8 @@ impl BodyHooks<'_> {
             return;
         }
         let id = cx.core.id;
+        let overlay = overlay.in_screen(crate::runtime::overlay::parent_space(&cx.core.ctx, id));
+        let overlay = &*overlay;
         let limits = Limits::new(overlay, window_min(props, cx.style.metrics().min_size));
         let rect = cx.core.rect;
         // A part the container did not declare this pass (no band, no grips) has no result.
@@ -357,6 +418,7 @@ impl BodyHooks<'_> {
             PressPhase::DragStart { start, pos, .. } => {
                 self.mode.began = Some(current.rect_over(rect));
                 self.mode.restore = current.clone();
+                self.mode.held = grip;
                 (start.origin, Some(pos), GesturePhase::Begin)
             }
             PressPhase::Drag { start, pos, .. } => (start.origin, Some(pos), GesturePhase::Update),
@@ -385,6 +447,7 @@ impl BodyHooks<'_> {
         });
         if matches!(gesture, GesturePhase::Commit | GesturePhase::Cancel) {
             self.mode.began = None;
+            self.mode.held = None;
         }
     }
 
@@ -525,8 +588,9 @@ impl BodyHooks<'_> {
     /// The move band and the grips (16.3). A layer's move and resize the layer; those of an OS window (`os_window`)
     /// stand by `WindowParts` and join the window's exclusive list, which the hit-test sink reads. A layer's parts never
     /// join it, or the sink would move the OS window from a dialog inside it, except the band of a layer that moves the
-    /// window it is shown in (`Overlay::moves_window`): that band is a drag area of the window.
-    pub(super) fn move_parts<C: Container>(props: &ContainerProps, regions: &Regions, rect: Rect, pcx: &mut PartsCx<'_, C>) {
+    /// window it is shown in (`Overlay::moves_window`): that band is a drag area of the window. `held` is the grip a
+    /// drag holds (`WindowMode::held`), which stays declared until its release.
+    pub(super) fn move_parts<C: Container>(props: &ContainerProps, regions: &Regions, rect: Rect, held: Option<usize>, pcx: &mut PartsCx<'_, C>) {
         let ctx = pcx.ui.ctx().clone();
         let handle = pcx.tokens.tokens().size.handle.sm;
         let reason = "the Move and Size commands of the window command set do the same";
@@ -562,17 +626,17 @@ impl BodyHooks<'_> {
         }
         // The grips of a layer straddle its edge; those of a window lie inside it, where the window has pixels. They
         // stack above the body (`over`), so a root in the body never covers their inner half (8.3).
-        let (grips, inset) = match &props.mount {
-            Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => (overlay.resize.edges != ResizeEdges::NONE, 0.0),
-            Mount::Window { resize } => (resize.edges != ResizeEdges::NONE, handle / 2.0),
-            _ => (false, 0.0),
+        let (edges, inset) = match &props.mount {
+            Mount::Layer(overlay) | Mount::Viewport { fallback: overlay, .. } => (overlay.resize.edges, 0.0),
+            Mount::Window { resize } => (resize.edges, handle / 2.0),
+            _ => (ResizeEdges::NONE, 0.0),
         };
-        if !grips || !stands.grips {
+        if edges == ResizeEdges::NONE || !stands.grips {
             return;
         }
         let pinned = overlay_of(props).map_or(Pinned::NONE, |overlay| Pinned::of(overlay, &ctx, pcx.id, pcx.env.direction().is_rtl()));
         for (index, (dx, dy, cursor)) in GRIPS.into_iter().enumerate() {
-            if pinned.holds(dx, dy) {
+            if held != Some(index) && !grip_stands(edges, pinned, dx, dy) {
                 continue;
             }
             let along = |edge: i8, low: f32, high: f32| match edge {

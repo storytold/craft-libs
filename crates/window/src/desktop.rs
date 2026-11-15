@@ -7,6 +7,12 @@ mod work_area;
 #[cfg(feature = "ui")]
 pub use work_area::{TASKBAR, WindowState, fits, visible_part};
 
+#[cfg(target_os = "linux")]
+mod icon_theme;
+
+#[cfg(target_os = "linux")]
+pub use icon_theme::{IconTheme, base_dirs, read_small};
+
 pub use craft_host::target::{Backend, DesktopKind};
 
 /// What the running desktop is and offers.

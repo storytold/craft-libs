@@ -1066,7 +1066,7 @@ fn run_in_host(p: &mut Pass<'_, '_, '_>, ui: &mut Ui, host_at: Option<ShowAt>, h
             .iter()
             .filter_map(|toggle| core.results.get(&(toggle.part.key, toggle.part.index)).map(|result| (toggle.part, result.rect)))
             .collect();
-        let mut overlays = OverlayUi::new(&ctx, overlay::OverlayOwner { id, anchor: rect, parts }, &*ui, resolved, env.clone(), open);
+        let mut overlays = OverlayUi::new(&ctx, overlay::OverlayOwner { id, anchor: rect, parts }, &mut *ui, resolved, env.clone(), open);
         e.overlay(&mut overlays);
         overlay::apply_closes(&ctx, overlays.closed);
     }

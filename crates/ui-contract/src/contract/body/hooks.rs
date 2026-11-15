@@ -82,6 +82,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.close = true;
         self.open = false;
         comp.closed(why);
+        crate::contract::overlay::note_layer_closed(&cx.core.ctx, cx.core.id, why);
         self.write_open(comp, cx);
     }
 
@@ -603,7 +604,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 .drag_cursor(CursorIcon::Grabbing)
                 .pointer_only("Cmd+] and Cmd+[ move the section, with Shift to the ends");
         }
-        Self::move_parts(&props, &regions, rect, pcx);
+        Self::move_parts(&props, &regions, rect, self.mode.held(), pcx);
         self.pane_grip = Self::pane_grip(&props, rect, pcx);
     }
 
@@ -658,7 +659,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             self.window_drag(props, cx);
         }
         self.window_placed(props, cx);
-        for change in std::mem::take(&mut self.reports) {
+        // The body moves and resizes the layer in screen space; the caller places it in its parent's layer space.
+        let from_screen = crate::runtime::overlay::parent_space(&cx.core.ctx, cx.core.id).inverse();
+        for mut change in std::mem::take(&mut self.reports) {
+            change.rect = from_screen * change.rect;
             comp.placement_changed(&change);
         }
     }
@@ -1154,7 +1158,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         }
         if self.close {
             self.open = false;
-            comp.closed(self.reason.take().unwrap_or(CloseReason::Requested));
+            let why = self.reason.take().unwrap_or(CloseReason::Requested);
+            comp.closed(why);
+            crate::contract::overlay::note_layer_closed(&cx.core.ctx, cx.core.id, why);
         }
         self.write_open(comp, cx);
         if self.offset != self.offset_at_read || self.anchor != self.anchor_at_read {

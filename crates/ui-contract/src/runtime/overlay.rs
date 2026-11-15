@@ -11,6 +11,7 @@ use crate::runtime::pass_state;
 use crate::runtime::pointer;
 use craft_behavior::OwnerClass;
 use craft_behavior::overlay::Side;
+use egui::emath::TSTransform;
 use egui::{Context, Id, LayerId, Pos2, Rect, ViewportId};
 use smallvec::SmallVec;
 use std::collections::HashMap;
@@ -206,6 +207,9 @@ pub(crate) struct Pass {
     drawing: Vec<Id>,
     /// The side of its anchor each anchored layer was placed on this pass, set before its body runs.
     sides: Vec<(Id, Side)>,
+    /// The map from its parent's layer space to screen space of each layer container shown this pass, set by its host
+    /// before its body runs: the caller's `placed`, `placed_at`, float position and `bounds` are in that space.
+    spaces: Vec<(Id, TSTransform)>,
     /// Each activation of this pass: the component and a layer whose body was running around it.
     activated: Vec<(Id, Id)>,
     /// The components whose activation this pass opened or closed a popup (`claim_activation`).
@@ -267,6 +271,7 @@ fn with_pass<R>(ctx: &Context, f: impl FnOnce(&mut Pass) -> R) -> R {
             }
             pass.drawing.clear();
             pass.sides.clear();
+            pass.spaces.clear();
             pass.activated.clear();
             pass.claimed.clear();
             pass.pressed_outside.clear();
@@ -414,6 +419,18 @@ pub fn entry(ctx: &Context, id: Id) -> Option<OpenEntry> {
 /// The side of its anchor the layer `id` was placed on in this pass, once its host placed it by a known size.
 pub(crate) fn placed_side(ctx: &Context, id: Id) -> Option<Side> {
     with_pass(ctx, |pass| pass.sides.iter().rev().find(|(layer, _)| *layer == id).map(|(_, side)| *side))
+}
+
+/// Records that the layer container `id` is shown in this pass from a parent whose layer maps to screen space by
+/// `to_screen`.
+pub(crate) fn note_parent_space(ctx: &Context, id: Id, to_screen: TSTransform) {
+    with_pass(ctx, |pass| pass.spaces.push((id, to_screen)));
+}
+
+/// The map from the parent's layer space of the layer container `id` to screen space, as its host recorded it in this
+/// pass; the identity for any other container.
+pub(crate) fn parent_space(ctx: &Context, id: Id) -> TSTransform {
+    with_pass(ctx, |pass| pass.spaces.iter().rev().find(|(layer, _)| *layer == id).map_or(TSTransform::IDENTITY, |(_, space)| *space))
 }
 
 /// The parent a layer opened now has: the layer whose body is running.

@@ -14,7 +14,7 @@ const OPEN: [(&str, &str); 4] = [
     // Container form.
     ("popup_list", "Square"),
     // Hook form, a dock group body that paints its own panel.
-    ("open_beside_its_column", "Panel 0"),
+    ("icon_flyout_open", "Brushes"),
 ];
 
 /// The story `name`, opened by its drive, and the shapes of the frame after it settled.
@@ -110,9 +110,11 @@ fn a_popup_list_insets_its_rows_and_marks_the_chosen_one() {
 /// A flyout hangs beside its iconic column: it touches the column's edge and covers none of it.
 #[trial]
 fn a_flyout_hangs_beside_its_column_without_covering_it() {
-    let (fixture, shapes) = open("open_beside_its_column");
+    let (fixture, shapes) = open("icon_flyout_open");
     let surface = surface("flyout", &shapes);
     let column = fixture.by_label("Panels").expect("the column").rect;
-    assert!(surface.left() >= column.right() - 0.5, "the flyout {surface:?} covers none of the column {column:?}");
-    assert!(surface.left() - column.right() < 0.5, "the flyout {surface:?} touches the column {column:?}");
+    // The story's column is on the end edge, so its flyout hangs on the canvas side, before the column.
+    let gap = column.left() - surface.right();
+    assert!(gap > -0.5, "the flyout {surface:?} covers none of the column {column:?}");
+    assert!(gap < 0.5, "the flyout {surface:?} touches the column {column:?}");
 }

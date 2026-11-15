@@ -210,6 +210,17 @@ impl Host for LayerHost {
         // A resizable layer with a default size is placed by it until the user or the caller sizes it.
         let region = overlay::region_for(env, &self.overlay);
         let mut overlay = self.overlay.opened_in(env);
+        // The caller's placement, float position and bounds are in the parent's layer space; the layer is placed, and
+        // its body moves and resizes it, in screen space. The body's reports go back to the parent's space.
+        let to_screen = areas::layer_to_screen(&ctx, parent.layer_id());
+        crate::runtime::overlay::note_parent_space(&ctx, id, to_screen);
+        let mapped = match overlay.in_screen(to_screen) {
+            std::borrow::Cow::Owned(mapped) => Some(mapped),
+            std::borrow::Cow::Borrowed(_) => None,
+        };
+        if let Some(mapped) = mapped {
+            overlay = mapped;
+        }
         let screen = overlay::screen_for(&ctx, env, &overlay);
         let placement = shown_placement(&ctx, id, self.save.as_ref(), &overlay, screen, env.tokens.space.inset.screen);
         // An anchored resizable layer has no position to seed: its default size is held as its minimum until the
@@ -228,7 +239,7 @@ impl Host for LayerHost {
         // Without an opener, an anchor given as a rect or point is in the parent's layer, and `Response` is the
         // parent's cursor.
         let own = Rect::from_min_max(parent.cursor().min, parent.cursor().min);
-        let anchor = overlay::resolve_anchor(&ctx, id, &overlay, own, areas::layer_to_screen(&ctx, parent.layer_id()));
+        let anchor = overlay::resolve_anchor(&ctx, id, &overlay, own, to_screen);
         // The layer is placed by the size the container takes in this pass: its placed rect or the size the user gave
         // it, else what it measured.
         let size = at.map_or(sized.unwrap_or(self.size), |shown| match shown {

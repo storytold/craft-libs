@@ -4,6 +4,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use craft_window::desktop::Desktop;
+
 use crate::primitives::svg_tree;
 
 /// The largest side a mask is rendered at, in device pixels.
@@ -29,6 +31,17 @@ impl CaptionIcon {
 
     fn index(self) -> usize {
         Self::ALL.iter().position(|icon| *icon == self).unwrap_or_default()
+    }
+
+    /// The icon name the freedesktop themes give the glyph.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn theme_name(self) -> &'static str {
+        match self {
+            CaptionIcon::Minimize => "window-minimize-symbolic",
+            CaptionIcon::Maximize => "window-maximize-symbolic",
+            CaptionIcon::Restore => "window-restore-symbolic",
+            CaptionIcon::Close => "window-close-symbolic",
+        }
     }
 }
 
@@ -67,6 +80,19 @@ impl CaptionIcons {
         CaptionIcons::new(theme, generation, Arc::new(render))
     }
 
+    /// The glyphs of `desktop`'s icon theme, or `None` for the family's own glyphs when the desktop names no theme.
+    /// `previous` comes back while it is of the same theme, so the theme's files are read only when its name
+    /// changes. A theme without the files still gives icons of its name (each mask `None`), so it is not searched
+    /// again on the next call.
+    pub fn for_desktop(desktop: &Desktop, previous: Option<CaptionIcons>) -> Option<CaptionIcons> {
+        let name = desktop.icon_theme.as_deref()?;
+        if let Some(previous) = previous.filter(|icons| icons.theme == name) {
+            return Some(previous);
+        }
+        // The files are read once, here; a reinstalled theme is read again when the desktop's theme name changes.
+        Some(CaptionIcons::from_files(name, 0, theme_files(name)))
+    }
+
     /// The theme's name.
     pub fn theme(&self) -> &str {
         &self.theme
@@ -95,6 +121,22 @@ impl std::fmt::Debug for CaptionIcons {
     }
 }
 
+/// The four glyph SVGs of icon theme `theme` (with its parents and `hicolor`), in [`CaptionIcon::ALL`] order.
+#[cfg(target_os = "linux")]
+fn theme_files(theme: &str) -> [Option<Arc<[u8]>>; 4] {
+    use craft_window::desktop::{IconTheme, base_dirs, read_small};
+    let Some(found) = IconTheme::load(theme, &base_dirs(&|key: &str| std::env::var(key).ok())) else {
+        return Default::default();
+    };
+    CaptionIcon::ALL.map(|icon| found.find_svg(icon.theme_name()).and_then(|path| read_small(&path)).map(Arc::<[u8]>::from))
+}
+
+/// The freedesktop lookup is Linux's; elsewhere every glyph is the family's own.
+#[cfg(not(target_os = "linux"))]
+fn theme_files(_theme: &str) -> [Option<Arc<[u8]>>; 4] {
+    Default::default()
+}
+
 /// An SVG's coverage (alpha) as a `px` x `px` mask, the drawing fitted and centred. `None` for an unreadable SVG or
 /// an absurd size.
 fn rasterize_mask(svg: &[u8], px: u32) -> Option<CaptionMask> {
@@ -102,15 +144,21 @@ fn rasterize_mask(svg: &[u8], px: u32) -> Option<CaptionMask> {
     if !(1..=MAX_MASK_SIDE).contains(&px) {
         return None;
     }
-    let tree = svg_tree::parse(svg).ok()?;
-    let size = tree.size();
-    let side = size.width().max(size.height());
-    if !side.is_finite() || side <= 0.0 {
-        return None;
-    }
-    let scale = px as f32 / side;
-    let (dx, dy) = ((px as f32 - size.width() * scale) / 2.0, (px as f32 - size.height() * scale) / 2.0);
-    let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
-    resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale).post_translate(dx, dy), &mut pixmap.as_mut());
-    Some(pixmap.data().as_chunks::<4>().0.iter().map(|[_, _, _, a]| *a).collect())
+    // usvg and resvg panic on some malformed drawings (a filter offset past the pixmap): such an icon file from the
+    // user's disk is unreadable, not a crash.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Option<CaptionMask> {
+        let tree = svg_tree::parse(svg).ok()?;
+        let size = tree.size();
+        let side = size.width().max(size.height());
+        if !side.is_finite() || side <= 0.0 {
+            return None;
+        }
+        let scale = px as f32 / side;
+        let (dx, dy) = ((px as f32 - size.width() * scale) / 2.0, (px as f32 - size.height() * scale) / 2.0);
+        let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
+        resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale).post_translate(dx, dy), &mut pixmap.as_mut());
+        Some(pixmap.data().as_chunks::<4>().0.iter().map(|[_, _, _, a]| *a).collect())
+    }))
+    .ok()
+    .flatten()
 }

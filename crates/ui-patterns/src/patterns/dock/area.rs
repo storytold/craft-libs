@@ -881,8 +881,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         }
         if let Some(resize) = work.flyout {
             let panel = resize.panel;
-            self.report.actions.push(Action::resize_flyout_width(panel.clone(), Some(resize.width)));
-            self.report.actions.push(Action::resize_group(panel.clone(), Some(resize.height)));
+            if let Some(width) = resize.width {
+                self.report.actions.push(Action::resize_flyout_width(panel.clone(), Some(width)));
+            }
+            if let Some(height) = resize.height {
+                self.report.actions.push(Action::resize_group(panel.clone(), Some(height)));
+            }
             if resize.offset.is_some() {
                 self.report.actions.push(Action::move_flyout_top(panel, resize.offset));
             }

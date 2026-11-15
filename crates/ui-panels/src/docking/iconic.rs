@@ -2,7 +2,6 @@
 
 use super::divider::{self, Divider, Drag};
 use super::dock_column::{BarRecord, CHEVRON, bar_slots, chevron_name, column_grip, describe_chevron, paint_chevron, register_edges, show_bar};
-use super::flyout;
 use super::{DockSizes, DockSpot, DockTargets, DockWords, DragUnit, Flyout, GroupAt, PanelKey, PanelSpec, Splitter, start_group_drag};
 use crate::buttons::IconButton;
 use crate::contract::overlay::Anchor;
@@ -90,10 +89,11 @@ pub struct IconicColumnOutput<P> {
 pub struct FlyoutResize<P> {
     /// The panel whose flyout was resized.
     pub panel: P,
-    /// The new width.
-    pub width: f32,
-    /// The new height.
-    pub height: f32,
+    /// The new width, when it differs from the width the column placed the flyout with: a drag of the top or
+    /// bottom edge leaves it `None`, so the group's width keeps following the column's expanded width.
+    pub width: Option<f32>,
+    /// The new height, when it differs from the height the flyout showed at.
+    pub height: Option<f32>,
     /// The top edge's offset from the icons' top, when the top edge moved.
     pub offset: Option<f32>,
 }
@@ -139,7 +139,10 @@ pub struct IconicColumnStyle {
 /// on an icon, Escape and auto-collapse write it, and the host opens a panel (the Window menu) by writing it. The column registers the drop bands of its edges and of the halves of
 /// each icon group with the dock `dock`. The flyout shows its group through the `view` of
 /// [`show_flyouts`](IconicColumn::show_flyouts), with the opened panel active, as tall as the view measures the
-/// group within the room and at least the height of its panels' default heights.
+/// group within the room and at least the height of its panels' default heights; a group the user sized keeps that
+/// size. The flyout's top is level with its group's icons, shifted by the group's `flyout_offset`, inside `within`.
+/// The user resizes it by its top and bottom edges and the edge away from the column; each step comes back in
+/// [`IconicColumnOutput::flyout`], which the host keeps in the group (`flyout_width`, `height`, `flyout_offset`).
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container, overlay, probe(IconicColumn<'static, u8>))]
 pub struct IconicColumn<'a, P: Value + Hash + 'static> {
@@ -169,6 +172,18 @@ pub struct IconicColumn<'a, P: Value + Hash + 'static> {
     laid: Option<Plan>,
     /// The bar's chevron was clicked this pass: the column expands.
     expand: bool,
+    /// The size the user gave the open flyout this pass.
+    flyout: Option<FlyoutResize<P>>,
+}
+
+/// Where the flyout of one cell shows: the group with the cell's panel active, its top left, its size, whether the
+/// height is the group's own (the body's measure does not change it) and the top of the group's icons.
+struct FlyoutPlan<P> {
+    group: Group<P>,
+    top_left: Pos2,
+    size: Vec2,
+    fixed: bool,
+    icons_top: f32,
 }
 
 /// Where the parts of an iconic column sit.
@@ -208,6 +223,7 @@ impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
             width: None,
             laid: None,
             expand: false,
+            flyout: None,
         }
         .label(label)
     }
@@ -304,6 +320,31 @@ impl<'a, P: Value + Hash + 'static> IconicColumn<'a, P> {
         let mut shown = self.column.groups.get(group)?.clone();
         shown.active = panel;
         Some(shown)
+    }
+
+    /// The flyout of the cell `at` beside `column`, inside `bounds`, on the screen side `right` of the column: its top
+    /// is the top of its group's icons shifted by the group's saved offset and kept inside the bounds, its width the
+    /// group's flyout width else `expanded`, its height the group's own else what its panels ask for, and neither is
+    /// less than `least`.
+    fn flyout_plan(
+        &self,
+        at: usize,
+        column: Rect,
+        bounds: Rect,
+        right: bool,
+        (expanded, least): (f32, Vec2),
+        sizes: &DockSizes,
+    ) -> Option<FlyoutPlan<P>> {
+        let (group_at, _) = *self.flat().get(at)?;
+        let icons = self.laid.as_ref()?.groups.iter().find(|(group, _)| *group == group_at)?.1;
+        let group = self.flyout_group(at)?;
+        let width = group.flyout_width.filter(|width| width.is_finite() && *width > 0.0).unwrap_or(expanded).max(least.x).min(bounds.width());
+        let fixed = group.height.is_some_and(|height| height.is_finite() && height > 0.0);
+        let height = self.flyout_height(&group, sizes).max(least.y).min(bounds.height());
+        let offset = group.flyout_offset.filter(|offset| offset.is_finite()).unwrap_or(0.0);
+        let top = (icons.top() + offset).min(bounds.bottom() - height).max(bounds.top());
+        let left = if right { column.right() } else { column.left() - width };
+        Some(FlyoutPlan { group, top_left: Pos2::new(left, top), size: Vec2::new(width, height), fixed, icons_top: icons.top() })
     }
 }
 
@@ -489,42 +530,63 @@ impl<P: Value + Hash + 'static> Component for IconicColumn<'_, P> {
         describe_chevron(access, &chevron_name(&words, false));
     }
 
-    /// The flyout of every cell whose popup is open, beside the column.
+    /// The flyout of every cell whose popup is open, beside the column on the canvas side. A resize the user makes
+    /// comes back as the open group's new size and, when its top moved, its top's offset from the group's icons.
     fn overlay(&mut self, ui: &mut OverlayUi<'_>, cx: &mut Cx<'_, Self>) {
         let popup = cx.popup("flyout");
         let sizes = cx.style.sizes.column;
-        let width = sizes.expanded_width(self.column, self.spec);
-        let (edge, auto_collapse) = (self.edge, self.auto_collapse);
-        let groups: Vec<Option<(Group<P>, f32)>> = (0..self.flat().len())
-            .map(|at| {
-                self.flyout_group(at).map(|group| {
-                    let height = self.flyout_height(&group, &sizes);
-                    (group, height)
-                })
-            })
-            .collect();
-        let wide = self.laid.as_ref().is_some_and(|plan| !plan.names.is_empty());
+        let (edge, auto_collapse, column) = (self.edge, self.auto_collapse, cx.rect);
+        // The screen side the canvas is on: away from the window edge, mirrored in a right-to-left layout.
+        let right = (edge == DockEdge::End) == cx.flow.is_rtl();
+        let within = if self.within.is_positive() { self.within } else { cx.core.ctx.content_rect() };
+        // The column side of the bounds stops at the column, so a saved width wider than the room keeps that side.
+        let bounds = if right { within.with_min_x(within.min.x.max(column.right())) } else { within.with_max_x(within.max.x.min(column.left())) };
+        if !bounds.is_positive() {
+            return;
+        }
+        let least = Vec2::new(sizes.least_pane, sizes.strip + sizes.least).min(bounds.size());
+        let expanded = sizes.expanded_width(self.column, self.spec);
+        let plans: Vec<Option<FlyoutPlan<P>>> =
+            (0..self.flat().len()).map(|at| self.flyout_plan(at, column, bounds, right, (expanded, least), &sizes)).collect();
         let Some(view) = self.view.as_mut() else { return };
         let mut dismissed = false;
-        for (at, group) in groups.into_iter().enumerate() {
-            let Some((group, height)) = group else { continue };
-            // In a wide column the flyout hangs beside the whole row, past the name.
-            let anchor = match (ui.anchor_part(CELL.at(at as u64)), wide.then(|| ui.anchor_part(NAME.at(at as u64)))) {
-                (Anchor::Rect(icon), Some(Anchor::Rect(name))) => Anchor::Rect(icon.union(name)),
-                (icon, _) => icon,
-            };
-            Flyout::new(edge, Vec2::new(width, height), auto_collapse)
-                .show(ui, popup.at(at), anchor, |ui, body, place| view(&group, place, ui, body));
-            dismissed |= flyout::dismissed(ui, popup.at(at));
+        let mut resized = None;
+        for (at, plan) in plans.into_iter().enumerate() {
+            let Some(FlyoutPlan { group, top_left, size, fixed, icons_top }) = plan else { continue };
+            let shown = Flyout::new(edge, size, auto_collapse).within(bounds).least(least).show(
+                ui,
+                popup.at(at),
+                Anchor::Point(top_left),
+                |ui, body, place| match place {
+                    // A height the user gave the group is the flyout's: its body's measure leaves it.
+                    GroupAt::Measure(_) if fixed => None,
+                    _ => view(&group, place, ui, body),
+                },
+            );
+            let Some(shown) = shown else { continue };
+            dismissed |= shown.dismissed;
+            if let Some(change) = shown.placed
+                && let Some(panel) = group.panels.first()
+            {
+                // Only the dimensions the user changed are reported: the column placed the flyout at `size`'s width,
+                // and at the group's height when it has one, else at the height its body took.
+                let changed = |now: f32, placed: f32| ((now - placed).abs() > 0.5).then_some(now);
+                let placed_height = if fixed { size.y } else { shown.rect.height() };
+                let top = change.rect.top();
+                let offset = (top != top_left.y).then_some(top - icons_top);
+                let (width, height) = (changed(change.rect.width(), size.x), changed(change.rect.height(), placed_height));
+                resized = Some(FlyoutResize { panel: panel.clone(), width, height, offset });
+            }
         }
         if dismissed {
             cx.set(None);
         }
+        self.flyout = resized;
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> IconicColumnOutput<P> {
         let iconic = self.record.iconic.or(self.expand.then_some(false));
-        IconicColumnOutput { edit: cx.edit_response(), placed: cx.rect, iconic, picked: self.record.picked, width: self.width, flyout: None } // P3(framework-01-w9): fx.F51
+        IconicColumnOutput { edit: cx.edit_response(), placed: cx.rect, iconic, picked: self.record.picked, width: self.width, flyout: self.flyout }
     }
 }
 

@@ -4,6 +4,7 @@ use super::{PairWell, SwatchPair, Well};
 use craft_behavior::Mixed;
 use craft_theme::Srgba;
 use craft_ui::contract::{Bind, Show as _, Validity};
+use craft_ui::rails::{LastUsed, ToolRail, ToolSlot};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
 use egui::{Key, Modifiers, Ui};
@@ -94,4 +95,23 @@ fn swatch_pair_invalid(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let refuse_secondary =
         |well: &Well| if *well == Well::Secondary { Validity::Refuse(Message::new("Only the foreground can be edited")) } else { Validity::Ok };
     SwatchPair::new("Colours", wells(false), Bind::bound(data.value("active", Well::Secondary)).check(refuse_secondary)).show(ui).into()
+}
+
+/// The pair in a tool rail's footer, as PhotoCraft's colour chips: the gap round the front well takes the rail's chrome.
+#[story(SwatchPair<'static>, covers = [], drive = Drive::Never)]
+fn swatch_pair_tool_rail(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let active = data.value("active", Well::Primary);
+    let (slots, last): (Vec<ToolSlot<u8>>, LastUsed<u8>) = (Vec::new(), LastUsed::default());
+    let wells = [PairWell::new("Foreground colour", Srgba::rgb(0.0, 0.0, 0.0)), PairWell::new("Background colour", Srgba::rgb(1.0, 1.0, 1.0))];
+    let mut shown = None;
+    ToolRail::new("Tools", &slots, &0, &last).show_rail(ui, |ui, _| {
+        shown = Some(
+            SwatchPair::new("Colours", wells.clone(), Bind::bound(&mut *active))
+                .popover(false)
+                .swap_button("Swap colours")
+                .default_button("Default colours")
+                .show(ui),
+        );
+    });
+    shown.map(StoryOutput::from).unwrap_or_default()
 }

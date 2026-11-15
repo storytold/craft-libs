@@ -107,10 +107,18 @@ fn layer_bounds(layer: &Layer<'_>, bounds: Rect) -> Rect {
     kept_in(layer.overlay, layer.anchor, bounds, layer.env.tokens.space.pad.regular)
 }
 
+/// The part of the safe rect `bounds` a layer of `overlay` stays inside: within the overlay's own
+/// [`bounds`](Overlay::bounds) when it sets them, in every placement kind. Bounds that miss the safe rect leave it whole.
+fn within_bounds(overlay: &Overlay, bounds: Rect) -> Rect {
+    overlay.bounds.map(|own| own.intersect(bounds)).filter(|both| !both.is_negative()).unwrap_or(bounds)
+}
+
 /// The rect a layer of `overlay` is placed and measured inside, the one rule the host and the body's measuring run
-/// share: the safe rect `bounds`, and for a `Corner` anchor the part of its rect (`resolved`, in screen space) within
-/// it, less `inset`, so a toast stays inside the body whose corner it sits at.
+/// share: the safe rect `bounds` within the overlay's own bounds (`within_bounds`), and for a `Corner` anchor the part
+/// of its rect (`resolved`, in screen space) within that, less `inset`, so a toast stays inside the body whose corner
+/// it sits at.
 fn kept_in(overlay: &Overlay, resolved: Rect, bounds: Rect, inset: f32) -> Rect {
+    let bounds = within_bounds(overlay, bounds);
     match &overlay.place {
         Place::Anchored { anchor: Anchor::Corner(..), .. } => resolved.intersect(bounds).shrink(inset),
         _ => bounds,
@@ -118,12 +126,12 @@ fn kept_in(overlay: &Overlay, resolved: Rect, bounds: Rect, inset: f32) -> Rect 
 }
 
 /// The anchor rect of `overlay` in screen space, the one rule the host and the body's measuring run share: a
-/// `Corner` anchor from its rect as `resolved` gives it in screen space, within the safe rect `bounds`, less `inset`, a `Pointer` anchor from `pointer_at` (the pointer where
-/// the layer opened, taken from the pointer now when none is recorded), any other from `resolved`.
+/// `Corner` anchor the corner of the rect it is kept in (`kept_in`), a `Pointer` anchor from `pointer_at` (the pointer
+/// where the layer opened, taken from the pointer now when none is recorded), any other from `resolved`.
 fn resolved_anchor(ctx: &Context, overlay: &Overlay, resolved: Rect, bounds: Rect, inset: f32, pointer_at: &mut Option<Pos2>) -> Rect {
     let point = |at: Pos2| Rect::from_min_max(at, at);
     match &overlay.place {
-        Place::Anchored { anchor: Anchor::Corner(_, at), .. } => point(at.pos_in_rect(&resolved.intersect(bounds).shrink(inset))),
+        Place::Anchored { anchor: Anchor::Corner(_, at), .. } => point(at.pos_in_rect(&kept_in(overlay, resolved, bounds, inset))),
         Place::Anchored { anchor: Anchor::Pointer, .. } => {
             point(*pointer_at.get_or_insert_with(|| areas::pointer_pos(ctx).unwrap_or(bounds.center())))
         }
@@ -153,6 +161,9 @@ pub(crate) fn measuring_room(
     if !matches!(overlay.place, Place::Anchored { .. }) {
         return None;
     }
+    // The caller's bounds are in the owner's layer space, as an anchor rect is.
+    let mapped = overlay.in_screen(own_to_screen);
+    let overlay = &*mapped;
     let bounds = screen_for(ctx, env, overlay);
     let resolved = resolve_anchor(ctx, id, overlay, own, own_to_screen);
     let anchor = resolved_anchor(ctx, overlay, resolved, bounds, inset, &mut MemoryStage::peek::<LayerMemory>(ctx, memory_slot(id)).pointer_at);
@@ -198,11 +209,12 @@ pub(super) struct Placed {
     pub(super) room: egui::Vec2,
 }
 
-/// The pure placement of the anchored forms; the viewport centre or the given position for floats, kept inside the
-/// safe rect. An anchored layer takes its side by its size: below its anchor, above when the room below is too short
-/// and the room above is larger, and keeps that side while it stays open and the content fits there or that side is
-/// the larger. Before its size is known (a popup's first, hidden pass) it takes no side and its body is offered
-/// `content_room`, so the size it measures decides the side.
+/// The pure placement of the anchored forms; the centre or the given position for floats, kept inside the safe rect
+/// within the overlay's bounds (`within_bounds`) by the keep rule moves follow. An anchored layer takes its side by its
+/// size: below its anchor, above when the room below is too short and the room above is larger, and keeps that side
+/// while it stays open and the content fits there or that side is the larger. Before its size is known (a popup's
+/// first, hidden pass) it takes no side and its body is offered `content_room`, so the size it measures decides the
+/// side.
 pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, size: Option<egui::Vec2>, bounds: Rect, anchor: Rect) -> Placed {
     let rtl = layer.env.direction.is_rtl();
     let cap = cap(layer.overlay, bounds, anchor);
@@ -228,11 +240,11 @@ pub(super) fn placement(ctx: &Context, layer: &Layer<'_>, size: Option<egui::Vec
             Placed { at: placed.rect.min, side: Some(placed.side), room }
         }
         Place::Float(float) => {
+            let kept = within_bounds(layer.overlay, bounds);
             let size = size.unwrap_or(egui::Vec2::ZERO);
-            let min = float.pos.unwrap_or_else(|| bounds.center() - size / 2.0);
-            let max_min = Pos2::new((bounds.right() - size.x).max(bounds.left()), (bounds.bottom() - size.y).max(bounds.top()));
-            let at = Pos2::new(min.x.clamp(bounds.left(), max_min.x), min.y.clamp(bounds.top(), max_min.y));
-            Placed { at, side: None, room: (bounds.max - at).max(egui::Vec2::ZERO).min(cap) }
+            let min = float.pos.unwrap_or_else(|| kept.center() - size / 2.0);
+            let at = crate::contract::body::keep_inside(Rect::from_min_size(min, size), kept).min;
+            Placed { at, side: None, room: (kept.max - at).max(egui::Vec2::ZERO).min(cap) }
         }
     }
 }

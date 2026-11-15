@@ -9,7 +9,9 @@ use crate::runtime::overlay::{Backdrop, Rank};
 use crate::runtime::windows::ResizeEdge;
 use craft_behavior::overlay::{Align, MinWidth, Side};
 use craft_behavior::{GesturePhase, OwnerClass};
+use egui::emath::TSTransform;
 use egui::{Align2, Pos2, Rect, Response, Vec2};
+use std::borrow::Cow;
 
 /// What a press outside the layer and its anchor does.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -124,7 +126,8 @@ pub struct Overlay {
     /// The position the caller places the layer's top left at, in the layer's parent space; its size comes from its
     /// content and size limits. Reported and owned like `placed`.
     pub placed_at: Option<Pos2>,
-    /// The rect a move or resize keeps the layer inside.
+    /// The rect the layer is kept inside: where it is placed, hung or floated, and through the user's moves and
+    /// resizes. In the layer's parent space.
     pub bounds: Option<Rect>,
     /// The layer's own opacity, below the open and close motion's.
     pub opacity: f32,
@@ -173,6 +176,23 @@ impl Overlay {
             moves_window: false,
             full_window: false,
         }
+    }
+
+    /// The overlay with what its caller gives in the parent's layer space (`placed`, `placed_at`, a float position
+    /// and `bounds`) in screen space, by the parent layer's map `to_screen`: where the layer host places the layer and
+    /// its body moves and resizes it.
+    pub(crate) fn in_screen(&self, to_screen: TSTransform) -> Cow<'_, Overlay> {
+        if to_screen == TSTransform::IDENTITY {
+            return Cow::Borrowed(self);
+        }
+        let mut mapped = self.clone();
+        mapped.placed = mapped.placed.map(|rect| to_screen * rect);
+        mapped.placed_at = mapped.placed_at.map(|pos| to_screen * pos);
+        mapped.bounds = mapped.bounds.map(|rect| to_screen * rect);
+        if let Place::Float(FloatPlace { pos: Some(pos) }) = &mut mapped.place {
+            *pos = to_screen * *pos;
+        }
+        Cow::Owned(mapped)
     }
 
     fn below() -> Place {
@@ -359,7 +379,8 @@ impl Overlay {
         self
     }
 
-    /// Sets the rect a move or resize keeps the layer inside.
+    /// Sets the rect the layer is kept inside: where it is placed, hung or floated, and through the user's moves and
+    /// resizes.
     pub fn bounds(mut self, bounds: Rect) -> Overlay {
         self.bounds = Some(bounds);
         self

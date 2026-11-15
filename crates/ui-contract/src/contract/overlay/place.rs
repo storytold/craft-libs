@@ -24,7 +24,7 @@ pub enum Anchor {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct FloatPlace {
-    /// A screen position for the layer's left-top; `None` centres it in the viewport.
+    /// A position for the layer's left-top, in the layer's parent space; `None` centres it in the viewport.
     pub pos: Option<Pos2>,
 }
 

@@ -78,6 +78,33 @@ pub(crate) struct Popups {
     /// The opener that opened each layer with openers, by the layer's first opener: its id and trigger (two
     /// openers on one response differ by trigger) and how it fired.
     pub(super) opened_by: HashMap<Id, (Id, Trigger, Opening)>,
+    /// The popups whose layer is a container running now (`OverlayUi::show_container`), innermost last.
+    pub(super) layers: Vec<PopupLayer>,
+}
+
+/// A popup shown as a container's layer, while the container runs: the popup's open state, which the container takes
+/// as its own, and the close the container decided, which `OverlayUi::show_container` records as the popup's.
+#[derive(Clone, Copy)]
+pub(super) struct PopupLayer {
+    pub(super) id: Id,
+    pub(super) open: bool,
+    pub(super) closed: Option<CloseReason>,
+}
+
+/// The open state of the popup whose layer is the container `id`, while `OverlayUi::show_container` runs it; `None`
+/// for a container that is no popup's layer.
+pub(crate) fn popup_layer_open(ctx: &Context, id: Id) -> Option<bool> {
+    with_popups(ctx, |popups| popups.layers.iter().rev().find(|layer| layer.id == id).map(|layer| layer.open))
+}
+
+/// The container `id` closed, and why. When it is a popup's layer, the popup closes for the same reason; any other
+/// container is not recorded.
+pub(crate) fn note_layer_closed(ctx: &Context, id: Id, why: CloseReason) {
+    with_popups(ctx, |popups| {
+        if let Some(layer) = popups.layers.iter_mut().rev().find(|layer| layer.id == id) {
+            layer.closed.get_or_insert(why);
+        }
+    });
 }
 
 pub(super) fn with_popups<R>(ctx: &Context, f: impl FnOnce(&mut Popups) -> R) -> R {

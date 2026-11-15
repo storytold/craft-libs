@@ -2,18 +2,21 @@
 //! and resizes as `PlacementChange`s, within the overlay's bounds and size limits; a viewport mount hands the move
 //! and resize to the OS window.
 
-use craft_behavior::GesturePhase;
-use craft_ui::contract::overlay::{PlacementChange, PlacementKind};
+use craft_behavior::overlay::{Align, Side};
+use craft_behavior::{GesturePhase, Sense};
+use craft_ui::contract::overlay::{Anchor, Place, PlacementChange, PlacementKind};
 use craft_ui::contract::{
     BodyCx, Common, Component, Container, ContainerProps, Cx, DragBand, HeaderRegion, Mount, Overlay, Props as _, Role, Show as _,
     ShowContainer as _, Sizing,
 };
-use craft_ui::runtime::commands::{CommandSet, WindowCommand};
+use craft_ui::runtime::commands::{self, CommandSet, FireSource, WindowCommand};
+use craft_ui::runtime::env::{Direction, with_env};
 use craft_ui::style::StyleCx;
+use craft_ui::testing::input::key_press;
 use craft_ui::testing::layout::allocate;
 use craft_ui::testing::{Frames, pointer, trial};
 use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
-use egui::{Pos2, Rect, Response, Ui, Vec2};
+use egui::{Key, Modifiers, Pos2, Rect, Response, Ui, Vec2};
 use std::cell::{Cell, RefCell};
 
 const SLACK: f32 = 1.5;
@@ -139,4 +142,92 @@ fn a_placed_layer_reports_its_move_and_keeps_no_placement_of_its_own() {
     caller.controlled.set(false);
     frames.idle(3, &mut show);
     assert!((caller.rect.get().min - commit.rect.min).abs().max_elem() > SLACK, "no placement was stored: {:?}", caller.rect.get());
+}
+
+/// Where the layers of the Size trial hang from: with room above it and before it.
+const ANCHOR: Rect = Rect { min: Pos2::new(400.0, 300.0), max: Pos2::new(430.0, 320.0) };
+
+/// Keyboard Size mode on a resizable layer hung from its anchor: the arrows move the edges its placement leaves free
+/// and never the edge that faces the anchor or the one aligned with it; Escape puts the layer back.
+#[trial]
+fn keyboard_size_mode_moves_the_free_edges() {
+    // Above its anchor the bottom faces it and the start (left) edge is aligned with it; beside it at the end under
+    // right to left (to its left) the right edge faces it and the top is aligned with it.
+    for (rtl, side, grow) in [(false, Side::Above, [Key::ArrowRight, Key::ArrowUp]), (true, Side::End, [Key::ArrowLeft, Key::ArrowDown])] {
+        let (shown, log, seen) = (Cell::new(Rect::NOTHING), RefCell::new(Vec::new()), RefCell::new(Seen::default()));
+        let pane = |ui: &mut Ui| {
+            let overlay = Overlay::popover().place(Place::anchored(Anchor::Rect(ANCHOR), side, Align::Start)).resizable(true);
+            let props =
+                ContainerProps::new().mount(Mount::Layer(overlay)).sizing(Sizing::Content).command_scope(<WindowCommand as CommandSet>::SCOPE);
+            let out = Pane { common: Common::new(), props, log: &log }.id_salt("sized").show(ui, |ui, _| {
+                Probe::new(&seen).size(BODY).sense(Sense::CLICK | Sense::FOCUS).show(ui);
+            });
+            shown.set(out.output.rect);
+        };
+        let mut show = |ui: &mut Ui| {
+            if rtl {
+                with_env(ui, |o| o.direction = Some(Direction::Rtl), pane);
+            } else {
+                pane(ui);
+            }
+        };
+        let mut frames = Frames::new();
+        frames.idle(4, &mut show);
+        let start = shown.get();
+        assert!(start.is_positive(), "rtl={rtl}: the layer shows: {start:?}");
+        if rtl {
+            assert!(start.right() <= ANCHOR.left() + SLACK, "the layer lies before its anchor: {start:?}");
+        } else {
+            assert!(start.bottom() <= ANCHOR.top() + SLACK, "the layer lies above its anchor: {start:?}");
+        }
+        // The focus goes into the layer, where the mode needs it.
+        pointer::click(&mut frames, start.center(), &mut show);
+        assert!(commands::fire(&frames.ctx, WindowCommand::Size, FireSource::Menu), "rtl={rtl}: the layer is a window instance");
+        frames.idle(2, &mut show);
+        for key in grow.iter().flat_map(|key| [*key, *key]) {
+            frames.frame(vec![key_press(key, Modifiers::NONE)], &mut show);
+            frames.idle(1, &mut show);
+        }
+        frames.idle(2, &mut show);
+        let grown = shown.get();
+        // The edges the placement holds: the one facing the anchor and the one aligned with it.
+        let held = |rect: Rect| if rtl { Vec2::new(rect.right(), rect.top()) } else { Vec2::new(rect.left(), rect.bottom()) };
+        assert!((held(grown) - held(start)).abs().max_elem() < SLACK, "rtl={rtl}: the held edges stay: {start:?} -> {grown:?}");
+        assert!(grown.width() > start.width() + SLACK, "rtl={rtl}: the free side edge moved out: {start:?} -> {grown:?}");
+        assert!(grown.height() > start.height() + SLACK, "rtl={rtl}: the free end edge moved out: {start:?} -> {grown:?}");
+        let changes = log.borrow().clone();
+        assert!(changes.iter().all(|change| change.kind == PlacementKind::Keyboard), "rtl={rtl}: keyboard steps only: {changes:?}");
+        assert!(changes.iter().any(|change| change.phase == GesturePhase::Update), "rtl={rtl}: each arrow is a step: {changes:?}");
+        frames.frame(vec![key_press(Key::Escape, Modifiers::NONE)], &mut show);
+        frames.idle(3, &mut show);
+        assert!(near(shown.get(), start), "rtl={rtl}: Escape puts the layer back: {start:?} -> {:?}", shown.get());
+        assert_eq!(log.borrow().last().map(|change| change.phase), Some(GesturePhase::Cancel), "rtl={rtl}: Escape cancels the mode");
+    }
+}
+
+/// The rect the layers of the bounds trial are kept inside, and an anchor at its bottom end corner.
+const BOUNDS: Rect = Rect { min: Pos2::new(100.0, 100.0), max: Pos2::new(400.0, 360.0) };
+const EDGE: Rect = Rect { min: Pos2::new(370.0, 320.0), max: Pos2::new(400.0, 340.0) };
+
+/// A layer with bounds shows inside them however it is placed: hung from an anchor at their edge, it slides inside
+/// them as it slides inside the screen; placed at a position outside them, it is kept inside.
+#[trial]
+fn a_layer_with_bounds_shows_inside_them_hung_or_placed() {
+    let hung = Overlay::popover().place(Place::anchored(Anchor::Rect(EDGE), Side::Below, Align::Start));
+    let placed_at = Overlay::floating().placed_at(Pos2::new(BOUNDS.right() - 20.0, BOUNDS.top() - 50.0));
+    for (name, overlay) in [("hung", hung), ("placed_at", placed_at)] {
+        let (shown, log, seen) = (Cell::new(Rect::NOTHING), RefCell::new(Vec::new()), RefCell::new(Seen::default()));
+        let mut show = |ui: &mut Ui| {
+            let props = ContainerProps::new().mount(Mount::Layer(overlay.clone().bounds(BOUNDS))).sizing(Sizing::Content);
+            let out = Pane { common: Common::new(), props, log: &log }.id_salt(name).show(ui, |ui, _| {
+                Probe::new(&seen).size(BODY).show(ui);
+            });
+            shown.set(out.output.rect);
+        };
+        let mut frames = Frames::new();
+        frames.idle(4, &mut show);
+        let rect = shown.get();
+        assert!(rect.is_positive(), "{name}: the layer shows: {rect:?}");
+        assert!(BOUNDS.expand(SLACK).contains_rect(rect), "{name}: the layer lies inside {BOUNDS:?}: {rect:?}");
+    }
 }

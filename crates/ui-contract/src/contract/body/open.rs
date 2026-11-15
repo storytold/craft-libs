@@ -21,6 +21,10 @@ fn open_slot<'s>(stage: &'s mut MemoryStage, id: Id, save: Option<&SaveKey>) -> 
 
 /// Whether the container is open this pass: its binding, else its opener's state, else its slot.
 pub(super) fn open_now<C: Container>(comp: &mut C, stage: &mut MemoryStage, id: Id, props: &ContainerProps) -> bool {
+    // A popup's layer (`OverlayUi::show_container`) is open while the popup is: the popup's slot is the one owner.
+    if let Some(open) = crate::contract::overlay::popup_layer_open(stage.ctx(), id) {
+        return open;
+    }
     let initially_open = props.collapse.is_none_or(|collapse| collapse.initially_open);
     match comp.open() {
         Some(bind) => matches!(bind.get(), Some(Mixed::Same(true))),
@@ -61,6 +65,11 @@ impl BodyHooks<'_> {
             return;
         }
         let id = cx.core.id;
+        // A popup's layer leaves its open state to the popup's slot, which its close (`note_layer_closed`) writes.
+        if crate::contract::overlay::popup_layer_open(&cx.core.ctx, id).is_some() {
+            self.open_at_read = self.open;
+            return;
+        }
         let opener = opener_of(comp.props(Internal::new())).cloned();
         match comp.open() {
             Some(mut bind) => {
