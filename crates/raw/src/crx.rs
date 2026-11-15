@@ -1556,7 +1556,7 @@ mod tests {
         let planes: Vec<Vec<u16>> = tiles
             .iter()
             .enumerate()
-            .flat_map(|(t, tile)| (0..4).map(move |p| (0..tile.width * tile.height / 4).map(|i| ((t * 4 + p) * 100 + i) as u16).collect()))
+            .flat_map(|(t, tile)| (0..4).map(move |p| (0..tile.width * tile.height / 4).map(|i| ((t * 4 + p) * 100 + i) as u16).collect::<Vec<u16>>()))
             .collect();
         let mut expected = vec![0u16; width * height];
         for (t, tile) in tiles.iter().enumerate() {
