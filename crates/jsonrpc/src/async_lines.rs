@@ -19,24 +19,65 @@ pub struct Tasks {
 }
 impl Tasks {
     /// Stop the reader and allow queued output to finish, as after a service exits.
+    /// This waits for a blocked output sink; callers needing cancellation can call `abort` instead.
     pub async fn finish(self) {
         self.reader.abort();
         let _ = self.writer.await;
     }
+    /// Cancel both forwarding tasks, including a writer blocked on output.
+    pub fn abort(self) {
+        self.reader.abort();
+        self.writer.abort();
+    }
+}
+
+async fn bounded_line(reader: &mut BufReader<impl AsyncRead + Unpin>, limit: usize) -> std::io::Result<Option<String>> {
+    let mut bytes = Vec::new();
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            if bytes.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        let newline = chunk.iter().position(|b| *b == b'\n');
+        let count = newline.unwrap_or(chunk.len());
+        if count > limit.saturating_sub(bytes.len()) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "JSON-RPC line exceeds limit"));
+        }
+        bytes.try_reserve(count).map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "JSON-RPC line allocation failed"))?;
+        bytes.extend_from_slice(&chunk[..count]);
+        reader.consume(count + usize::from(newline.is_some()));
+        if newline.is_some() {
+            if bytes.last() == Some(&b'\r') {
+                bytes.pop();
+            }
+            break;
+        }
+    }
+    String::from_utf8(bytes).map(Some).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 /// Spawn a line adapter. Invalid JSON gets a JSON-RPC parse error; valid values pass through.
-/// The bounded error queue applies backpressure if the client stops reading.
-pub fn spawn(input: impl AsyncRead + Unpin + Send + 'static, output: impl AsyncWrite + Unpin + Send + 'static) -> Adapter {
+/// The bounded error queue applies backpressure if the client stops reading. Input and output lines
+/// above their respective limits close their forwarding direction, including unterminated lines.
+/// Buffers grow incrementally; forwarding and JSON parsing can temporarily hold additional copies.
+pub fn spawn(
+    input: impl AsyncRead + Unpin + Send + 'static,
+    output: impl AsyncWrite + Unpin + Send + 'static,
+    input_limit: usize,
+    output_limit: usize,
+) -> Adapter {
     const PIPE_BYTES: usize = 1 << 20;
     const MAX_QUEUED_PARSE_ERRORS: usize = 64;
     let (mut to_service, service_in) = tokio::io::duplex(PIPE_BYTES);
     let (service_out, from_service) = tokio::io::duplex(PIPE_BYTES);
     let (err_tx, mut err_rx) = tokio::sync::mpsc::channel::<String>(MAX_QUEUED_PARSE_ERRORS);
     let reader = tokio::spawn(async move {
-        let mut lines = BufReader::new(input).lines();
+        let mut lines = BufReader::new(input);
         loop {
             let line = tokio::select! {
-                l = lines.next_line() => match l { Ok(Some(l)) => l, _ => break },
+                l = bounded_line(&mut lines, input_limit) => match l { Ok(Some(l)) => l, _ => break },
                 () = err_tx.closed() => break,
             };
             if line.trim().is_empty() {
@@ -60,10 +101,10 @@ pub fn spawn(input: impl AsyncRead + Unpin + Send + 'static, output: impl AsyncW
     });
     let writer = tokio::spawn(async move {
         let mut output = output;
-        let mut replies = BufReader::new(from_service).lines();
+        let mut replies = BufReader::new(from_service);
         loop {
             let line = tokio::select! {
-                l = replies.next_line() => match l { Ok(Some(l)) => l, _ => break },
+                l = bounded_line(&mut replies, output_limit) => match l { Ok(Some(l)) => l, _ => break },
                 Some(e) = err_rx.recv() => e,
             };
             if output.write_all(format!("{line}\n").as_bytes()).await.is_err() || output.flush().await.is_err() {
@@ -83,7 +124,7 @@ mod tests {
     async fn forwards_valid_lines_and_returns_parse_errors() {
         let (mut client_in, input) = tokio::io::duplex(1024);
         let (output, client_out) = tokio::io::duplex(1024);
-        let Adapter { mut service_in, mut service_out, tasks } = spawn(input, output);
+        let Adapter { mut service_in, mut service_out, tasks } = spawn(input, output, 1024, 1024);
         client_in.write_all(b"\n{bad}\n{\"id\":1}\n").await.unwrap();
         client_in.shutdown().await.unwrap();
         let mut forwarded = String::new();
@@ -99,5 +140,35 @@ mod tests {
         assert_eq!(result["id"], 1);
         service_out.shutdown().await.unwrap();
         tasks.finish().await;
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn oversized_unterminated_lines_stop_both_directions() {
+        let (mut client, input) = tokio::io::duplex(128);
+        let (output, _client_out) = tokio::io::duplex(128);
+        let Adapter { mut service_in, service_out, tasks } = spawn(input, output, 8, 8);
+        client.write_all(b"123456789").await.unwrap();
+        let mut forwarded = Vec::new();
+        service_in.read_to_end(&mut forwarded).await.unwrap();
+        assert!(forwarded.is_empty());
+        drop(service_out);
+        tasks.finish().await;
+
+        let (_client, input) = tokio::io::duplex(128);
+        let (output, mut client_out) = tokio::io::duplex(128);
+        let Adapter { service_in: _, mut service_out, tasks } = spawn(input, output, 8, 8);
+        service_out.write_all(b"123456789").await.unwrap();
+        let mut received = Vec::new();
+        client_out.read_to_end(&mut received).await.unwrap();
+        assert!(received.is_empty());
+        tasks.abort();
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocked_output_tasks_can_be_cancelled() {
+        let (_client, input) = tokio::io::duplex(16);
+        let (output, _blocked) = tokio::io::duplex(1);
+        let Adapter { service_in: _, mut service_out, tasks } = spawn(input, output, 64, 64);
+        service_out.write_all(b"123456789\n").await.unwrap();
+        tokio::task::yield_now().await;
+        tasks.abort();
     }
 }
