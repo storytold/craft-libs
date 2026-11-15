@@ -35,3 +35,10 @@ fn align_tags(b: &[u8]) -> Vec<u8> {
     out
 }
 
+fn fixed_date(mut b: Vec<u8>) -> Vec<u8> {
+    if let Some(date) = b.get_mut(24..36) {
+        date.fill(0);
+    }
+    b
+}
+
