@@ -212,7 +212,7 @@ fn unescape(s: &str) -> String {
     while let Some(i) = rest.find('&') {
         out.push_str(rest.get(..i).unwrap_or_default());
         let tail = rest.get(i..).unwrap_or_default();
-        let Some(semi) = tail.find(';').filter(|&n| n <= 10) else {
+        let Some(semi) = tail.as_bytes().iter().take(11).position(|b| *b == b';') else {
             out.push('&');
             rest = tail.get(1..).unwrap_or_default();
             continue;
@@ -531,5 +531,25 @@ mod tests {
         let m = read(&wav(&[fmt(44100), cue(&[(1, 44100)]), adtl(&subs)]));
         assert_eq!((m.len(), m[0].comment.as_str()), (1, ""));
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn metadata_keeps_original_coordinates_and_separate_sources() {
+        let xmp = br#"<rdf:li xmpDM:startTime="1" xmpDM:duration="2" xmpDM:name="Same"/>"#;
+        let file = wav(&[fmt(44100), cue(&[(1, 1)]), adtl(&[labl(b"labl", 1, "Same")]), chunk(b"_PMX", xmp)]);
+        let data = super::read(&file);
+        assert_eq!(data.cue[0].start, 1.0);
+        assert_eq!(data.cue[0].rate, 44100.0);
+        assert_eq!(data.xmp[0].start, 1.0);
+        assert_eq!(data.xmp[0].duration, 2.0);
+        assert_eq!(data.cue.len(), 1);
+        assert_eq!(data.xmp.len(), 1);
+    }
+
+    #[test]
+    fn repeated_unterminated_entities_preserve_text_with_bounded_lookahead() {
+        let text = "&".repeat(100_000);
+        assert_eq!(unescape(&text), text);
+        assert_eq!(unescape("&#0000065; &#00000065; &amp; &unknown;"), "A A & &unknown;");
     }
 }
