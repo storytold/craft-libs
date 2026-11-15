@@ -199,7 +199,7 @@ pub fn compose_with<G: Glyph, F: Flexibility, M: Measure>(
     let n = g.len();
     // The search assumes increasing break positions when indexing its prefix sums.
     // Reject malformed candidates before they can make a later line run backwards.
-    if cands.windows(2).any(|pair| pair[0].end >= pair[1].end) {
+    if cands.windows(2).any(|pair| pair[0].end > pair[1].end) {
         return None;
     }
     if n == 0 {
@@ -358,6 +358,14 @@ mod tests {
             0.0
         }
     }
+    #[test]
+    fn rejects_breaks_that_move_backwards() {
+        let glyphs: Vec<_> = "abcd".chars().map(Unit).collect();
+        let candidates = [Breakpoint { end: 3, hyphen: 0.0 }, Breakpoint { end: 1, hyphen: 0.0 }];
+        let params = Params { justify_last: false, ragged: true, tolerance: 100.0, uniform_from: 0, hyphen_limit: 0 };
+        assert_eq!(compose(&glyphs, &|_| 3.0, &|_| 0.0, &|_| 0.0, &candidates, &[] as &[Rigid], &params), None);
+    }
+
     #[test]
     fn composes_ragged_paragraph_and_trims_spaces() {
         let glyphs: Vec<_> = "aa bb cc".chars().map(Unit).collect();
