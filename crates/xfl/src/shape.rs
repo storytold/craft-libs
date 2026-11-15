@@ -140,6 +140,68 @@ pub struct Shape<'a, E: XflElement> {
     element: &'a E,
 }
 
+/// Kind of native drawable primitive stored in XFL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrimitiveKind {
+    Rectangle,
+    Oval,
+}
+
+/// Native rectangle or oval object, including its native style definitions.
+#[derive(Clone, Copy, Debug)]
+pub struct Primitive<'a, E: XflElement> {
+    element: &'a E,
+    kind: PrimitiveKind,
+}
+
+impl<'a, E: XflElement> Primitive<'a, E> {
+    /// Views a supported native primitive by its local element name.
+    pub fn new(element: &'a E) -> Option<Self> {
+        let kind = match element.local_name() {
+            "DOMRectangleObject" => PrimitiveKind::Rectangle,
+            "DOMOvalObject" => PrimitiveKind::Oval,
+            _ => return None,
+        };
+        Some(Self { element, kind })
+    }
+
+    pub fn kind(&self) -> PrimitiveKind {
+        self.kind
+    }
+
+    pub fn x(&self) -> Option<f32> {
+        number(self.element, "x")
+    }
+
+    pub fn y(&self) -> Option<f32> {
+        number(self.element, "y")
+    }
+
+    pub fn width(&self) -> Option<f32> {
+        number(self.element, "objectWidth")
+    }
+
+    pub fn height(&self) -> Option<f32> {
+        number(self.element, "objectHeight")
+    }
+
+    pub fn top_left_radius(&self) -> Option<f32> {
+        number(self.element, "topLeftRadius")
+    }
+
+    pub fn matrix(&self) -> Matrix {
+        matrix(self.element)
+    }
+
+    pub fn fill(&self) -> Option<Fill<'_, E>> {
+        self.element.child("fill")?.elements().next().map(|element| Fill { element })
+    }
+
+    pub fn stroke(&self) -> Option<Stroke<'_, E>> {
+        self.element.child("stroke")?.elements().next().map(|element| Stroke { element })
+    }
+}
+
 impl<'a, E: XflElement> Shape<'a, E> {
     /// Views an element as an XFL shape when its local name is `DOMShape`.
     pub fn new(element: &'a E) -> Option<Self> {
@@ -496,5 +558,23 @@ mod tests {
         }
         let app = AppElement { name: "x:DOMShape".into(), attrs: vec![("isDrawingObject".into(), "true".into())], children: Vec::new() };
         assert_eq!(Shape::new(&app).unwrap().is_drawing_object(), Some(true));
+    }
+
+    #[test]
+    fn reads_native_rectangle_and_oval_geometry_and_styles() {
+        let root = parse(br##"<DOMRectangleObject x="-2" y="3" objectWidth="20" objectHeight="10" topLeftRadius="4"><matrix><Matrix tx="7"/></matrix><fill><SolidColor color="#123456"/></fill><stroke><DashedStroke weight="2" dash1="5" dash2="3"/></stroke></DOMRectangleObject>"##);
+        let primitive = Primitive::new(&root).unwrap();
+        assert_eq!(primitive.kind(), PrimitiveKind::Rectangle);
+        assert_eq!(
+            (primitive.x(), primitive.y(), primitive.width(), primitive.height(), primitive.top_left_radius()),
+            (Some(-2.0), Some(3.0), Some(20.0), Some(10.0), Some(4.0))
+        );
+        assert_eq!(primitive.matrix().tx, 7.0);
+        assert_eq!(primitive.fill().unwrap().kind(), FillKind::SolidColor);
+        assert_eq!(primitive.stroke().unwrap().kind(), StrokeKind::Dashed);
+
+        let oval = parse(b"<DOMOvalObject objectWidth='10' objectHeight='8'/>");
+        assert_eq!(Primitive::new(&oval).unwrap().kind(), PrimitiveKind::Oval);
+        assert!(Primitive::new(&parse(b"<DOMShape/>")).is_none());
     }
 }
