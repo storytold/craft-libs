@@ -233,6 +233,7 @@ mod tests {
         let segs = segments(&file).unwrap();
         assert_eq!(segs.iter().map(|s| s.0).collect::<Vec<_>>(), [0xe0, 0xe1, 0xe2, 0xdb]);
         let (_, a, e) = segs[2];
+        assert_eq!(images_from_index(&file[a + SIGNATURE.len()..e], a + SIGNATURE.len()), found);
         let mut without = file[..a - 4].to_vec();
         without.extend_from_slice(&file[e..found[0].offset]);
         assert_eq!(without, primary);
