@@ -1706,3 +1706,6 @@ mod tests;
 /// Baseline JPEG encoder (8-bit, Huffman-coded sequential DCT).
 mod encode;
 pub use encode::{ChromaSubsampling, EncodeError, encode_baseline};
+
+mod app14;
+pub use app14::adobe_transform;
