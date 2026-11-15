@@ -54,7 +54,7 @@ fn shown<'a>(runs: &'a [Run], field: Rect, text: &str) -> &'a Run {
 }
 
 /// The one run inside `field` (the dash of a mixed field).
-fn only<'a>(runs: &'a [Run], field: Rect) -> &'a Run {
+fn only(runs: &[Run], field: Rect) -> &Run {
     match runs.iter().find(|run| field.expand(1.0).contains_rect(run.rect)) {
         Some(run) => run,
         None => panic!("{field:?} paints nothing: {:?}", runs.iter().map(|run| run.text.clone()).collect::<Vec<_>>()),
