@@ -249,9 +249,8 @@ impl Component for HudPick<'_> {
             }
             return;
         }
-        // Only a pass the pointer moved in picks: a rerun pass of the frame has no move. Injected pointer events (the
-        // control channel's `ToolHost::inject` queue) are raw events of the pass, so they stir it like a real move.
-        // The press that opened the HUD picks nothing until the pointer leaves `at`, unless a gesture already runs.
+        // Only a pass the pointer moved in picks: a rerun pass of the frame has no move. The press that opened the HUD
+        // picks nothing until the pointer leaves `at`, unless a gesture already runs.
         let moved = pointer::with_pass_pointer(&cx.ctx, |pass| pass.stirred.then_some(pass.hover).flatten());
         let Some(pointer) = moved.filter(|pointer| *pointer != self.at || running) else { return };
         let geometry = cx.style.geometry();
