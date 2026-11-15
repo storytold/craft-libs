@@ -521,17 +521,17 @@ fn run_one<F: Fn(&[u8])>(watch: &Watch, clock: &Clock, label: &str, limit: &Limi
     }
     let outcome = catch_unwind(AssertUnwindSafe(|| parse(data)));
     let spent = clock().saturating_sub(started);
+    // The payload is dropped before the lock is taken and while the case still counts as running, so
+    // the watchdog still reports a payload whose drop does not return.
+    let panicked = outcome.err().map(|payload| panic_text(payload.as_ref()));
     let mut state = watch.lock();
     state.running = false;
     let name = || format!("{label}: {} (len {})", state.case, state.len);
     if spent > limit.limit {
-        let panicked = match &outcome {
-            Ok(()) => String::new(),
-            Err(payload) => format!(" (it panicked: {})", panic_text(payload.as_ref())),
-        };
+        let panicked = panicked.map_or_else(String::new, |text| format!(" (it panicked: {text})"));
         return Err(format!("{} finished only after its limit of {}{panicked}", name(), limit.text));
     }
-    outcome.map_err(|payload| format!("{}: the parser panicked: {}", name(), panic_text(payload.as_ref())))
+    panicked.map_or(Ok(()), |text| Err(format!("{}: the parser panicked: {text}", name())))
 }
 
 /// The text of a panic payload.
@@ -618,6 +618,37 @@ mod tests {
         let limit = Limit { limit: Duration::from_secs(5), text: "5s".to_owned() };
         let message = run_one(&watch, &clock, "late", &limit, "the unmodified seed".to_owned(), &[1], &|_: &[u8]| {}).unwrap_err();
         assert_eq!(message, "late: the unmodified seed (len 1) finished only after its limit of 5s");
+        assert!(!watch.lock().running);
+    }
+
+    /// A panic payload that records, when it is dropped, whether the progress lock was free and
+    /// whether the case still counted as running.
+    struct DropProbe {
+        watch: Arc<Watch>,
+        seen: Arc<Mutex<Option<Option<bool>>>>,
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            let running = self.watch.state.try_lock().ok().map(|state| state.running);
+            *self.seen.lock().unwrap() = Some(running);
+        }
+    }
+
+    #[test]
+    fn a_panic_payload_is_dropped_outside_the_lock_while_the_case_runs() {
+        let watch = Arc::new(Watch {
+            state: Mutex::new(Progress { case: String::new(), len: 0, started: Duration::ZERO, running: false, outcome: None }),
+            stopped: Condvar::new(),
+        });
+        let seen = Arc::new(Mutex::new(None));
+        let clock: Clock = Arc::new(|| Duration::ZERO);
+        let limit = Limit { limit: Duration::from_secs(5), text: "5s".to_owned() };
+        let probe = (Arc::clone(&watch), Arc::clone(&seen));
+        let parse = move |_: &[u8]| std::panic::panic_any(DropProbe { watch: Arc::clone(&probe.0), seen: Arc::clone(&probe.1) });
+        let message = run_one(&watch, &clock, "probe", &limit, "the unmodified seed".to_owned(), &[1], &parse).unwrap_err();
+        assert_eq!(message, "probe: the unmodified seed (len 1): the parser panicked: a payload that is not a message");
+        assert_eq!(*seen.lock().unwrap(), Some(Some(true)), "the payload was dropped with the lock held or the case stopped");
         assert!(!watch.lock().running);
     }
 
