@@ -303,6 +303,22 @@ fn a_tree_is_bounded_whatever_size_the_header_declares() {
 }
 
 #[test]
+fn a_tree_of_every_sixteen_bit_value_is_read_and_a_larger_one_is_not() {
+    let plain = TreeWriter::new(&[0], NO_ESCAPES);
+    let with_types = |symbols: &[u16]| {
+        let types = TreeWriter::new(symbols, NO_ESCAPES);
+        let s = Stream { maps: plain.clone(), colours: plain.clone(), full: plain.clone(), types };
+        Decoder::new(&s.params(8, 8, b"SMK2")).map(|_| ())
+    };
+    // 65536 leaves: 131071 nodes
+    let mut symbols: Vec<u16> = (0..=u16::MAX).collect();
+    assert_eq!(with_types(&symbols), Ok(()));
+    // one leaf more, in a whole tree that declares its true size
+    symbols.push(0);
+    assert_eq!(with_types(&symbols), Err(Error::Invalid("tree has too many nodes")));
+}
+
+#[test]
 fn the_picture_size_is_limited() {
     let s = Stream::new(&[0], &[0], &[0], &[code(VOID, 0, 0)]);
     assert!(Decoder::new(&s.params(4096, 4096, b"SMK2")).is_ok());

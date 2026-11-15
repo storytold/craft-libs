@@ -28,7 +28,8 @@
 //! ```
 //!
 //! The decoder keeps the picture and the palette between frames, so frames are decoded in order
-//! from the first one. `SMK4` files are decoded from the format description only: no `SMK4` file
+//! from the first one. A file's ring frame (`SmackerFile::ring_frame`) is for looping: it is
+//! decoded after the last frame in place of the first. `SMK4` files are decoded from the format description only: no `SMK4` file
 //! was available to check the two extra full-block modes against.
 
 #![warn(missing_docs)]
@@ -416,7 +417,9 @@ impl Blocks<'_> {
 /// The chunk is a list of records that fill the 256 entries in order: a run of entries kept
 /// from the previous palette, a run copied from another position of the previous palette, or
 /// one entry of three six-bit components. A chunk that ends before entry 255 leaves the entries
-/// after it as they were; a record cut short by the end of the chunk is dropped.
+/// after it as they were; a record cut short by the end of the chunk is dropped. This follows
+/// the format description. ffmpeg differs here: it reads on past the chunk into the frame's
+/// other data until it has 256 entries. None of the real files checked has such a chunk.
 fn apply_palette(previous: &Palette, chunk: &[u8]) -> Result<Palette> {
     let mut palette = *previous;
     let mut bytes = chunk.iter().copied();
