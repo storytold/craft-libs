@@ -197,6 +197,11 @@ pub fn compose_with<G: Glyph, F: Flexibility, M: Measure>(
     p: &Params,
 ) -> Option<Vec<(usize, bool)>> {
     let n = g.len();
+    // The search assumes increasing break positions when indexing its prefix sums.
+    // Reject malformed candidates before they can make a later line run backwards.
+    if cands.windows(2).any(|pair| pair[0].end >= pair[1].end) {
+        return None;
+    }
     if n == 0 {
         return Some(vec![]);
     }
