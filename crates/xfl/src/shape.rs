@@ -1,0 +1,500 @@
+//! Borrowed views of native XFL shape and style elements.
+//!
+//! These views recognize XFL's element names and attribute grammar without depending on an
+//! application's geometry, paint, or animation types. They work with `craft_xml::El` and with
+//! compatible borrowed element adapters implemented by consumers.
+
+use crate::edges::{self, Segment};
+
+/// An element source used by the borrowed XFL schema views.
+///
+/// Consumers with an existing XML facade can implement this small interface and use the same
+/// XFL parser without converting or reparsing their tree. Attribute lookup must return the last
+/// occurrence when an XML document repeats an attribute, matching the native XFL reader's
+/// historical behavior.
+pub trait XflElement {
+    /// Iterator type for direct child elements.
+    type Elements<'a>: Iterator<Item = &'a Self>
+    where
+        Self: 'a;
+
+    /// The element's local name, with any namespace prefix removed.
+    fn local_name(&self) -> &str;
+
+    /// The last attribute with this exact name.
+    fn attr(&self, name: &str) -> Option<&str>;
+
+    /// Direct child elements in document order.
+    fn elements(&self) -> Self::Elements<'_>;
+
+    /// The first direct child whose local name matches.
+    fn child(&self, name: &str) -> Option<&Self> {
+        self.elements().find(|element| element.local_name() == name)
+    }
+
+    /// Direct children whose local name matches, in document order.
+    fn elements_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Self> + 'a {
+        self.elements().filter(move |element| element.local_name() == name)
+    }
+}
+
+/// Direct child elements of `craft_xml::El`, used by its `XflElement` implementation.
+pub struct XmlElements<'a> {
+    nodes: std::slice::Iter<'a, craft_xml::Node>,
+}
+
+impl<'a> Iterator for XmlElements<'a> {
+    type Item = &'a craft_xml::El;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.nodes.find_map(|node| match node {
+            craft_xml::Node::El(element) => Some(element),
+            _ => None,
+        })
+    }
+}
+
+impl XflElement for craft_xml::El {
+    type Elements<'a> = XmlElements<'a>;
+
+    fn local_name(&self) -> &str {
+        self.name.rsplit(':').next().unwrap_or(&self.name)
+    }
+
+    fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.as_str())
+    }
+
+    fn elements(&self) -> Self::Elements<'_> {
+        XmlElements { nodes: self.children.iter() }
+    }
+}
+
+/// XFL matrix coefficients, in the native units stored in XML.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Matrix {
+    pub a: f32,
+    pub b: f32,
+    pub c: f32,
+    pub d: f32,
+    pub tx: f32,
+    pub ty: f32,
+}
+
+/// A color encoded by an XFL color attribute and its optional alpha attribute.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Color {
+    pub rgb: u32,
+    pub alpha: f32,
+}
+
+impl Matrix {
+    /// The matrix used when an XFL element omits its transform.
+    pub const IDENTITY: Matrix = Matrix { a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0 };
+
+    fn finite(self) -> bool {
+        [self.a, self.b, self.c, self.d, self.tx, self.ty].into_iter().all(f32::is_finite)
+    }
+}
+
+fn number(element: &impl XflElement, name: &str) -> Option<f32> {
+    element.attr(name)?.trim().parse::<f32>().ok().filter(|value| value.is_finite())
+}
+
+fn integer(element: &impl XflElement, name: &str) -> Option<u32> {
+    element.attr(name)?.trim().parse::<u32>().ok()
+}
+
+fn boolean(element: &impl XflElement, name: &str) -> Option<bool> {
+    element.attr(name).map(|value| value.trim() == "true")
+}
+
+/// Parses XFL's hexadecimal color and alpha attributes. Missing or malformed colors use black;
+/// missing, malformed, or non-finite alpha uses full opacity, matching the legacy importer.
+pub fn color(element: &impl XflElement, color_attribute: &str, alpha_attribute: &str) -> Color {
+    let rgb = element.attr(color_attribute).and_then(|value| u32::from_str_radix(value.trim().trim_start_matches('#'), 16).ok()).unwrap_or(0);
+    let alpha = number(element, alpha_attribute).unwrap_or(1.0).clamp(0.0, 1.0);
+    Color { rgb, alpha }
+}
+
+/// Reads the native `<matrix><Matrix .../></matrix>` transform, using XFL's identity defaults.
+/// A non-finite coefficient makes the entire transform identity, matching the previous reader.
+pub fn matrix(element: &impl XflElement) -> Matrix {
+    let Some(matrix) = element.child("matrix").and_then(|wrapper| wrapper.child("Matrix")) else {
+        return Matrix::IDENTITY;
+    };
+    let parsed = Matrix {
+        a: number(matrix, "a").unwrap_or(1.0),
+        b: number(matrix, "b").unwrap_or(0.0),
+        c: number(matrix, "c").unwrap_or(0.0),
+        d: number(matrix, "d").unwrap_or(1.0),
+        tx: number(matrix, "tx").unwrap_or(0.0),
+        ty: number(matrix, "ty").unwrap_or(0.0),
+    };
+    if parsed.finite() { parsed } else { Matrix::IDENTITY }
+}
+
+/// A native `DOMShape` or drawing shape and its XFL style tables.
+#[derive(Clone, Copy, Debug)]
+pub struct Shape<'a, E: XflElement> {
+    element: &'a E,
+}
+
+impl<'a, E: XflElement> Shape<'a, E> {
+    /// Views an element as an XFL shape when its local name is `DOMShape`.
+    pub fn new(element: &'a E) -> Option<Self> {
+        (element.local_name() == "DOMShape").then_some(Self { element })
+    }
+
+    /// Native shape transform.
+    pub fn matrix(&self) -> Matrix {
+        matrix(self.element)
+    }
+
+    /// Whether Animate stores the shape as a drawing object.
+    pub fn is_drawing_object(&self) -> Option<bool> {
+        boolean(self.element, "isDrawingObject")
+    }
+
+    /// Fill styles, preserving their native order and index values.
+    pub fn fills(&self) -> impl Iterator<Item = FillStyle<'_, E>> + '_ {
+        self.element.child("fills").into_iter().flat_map(|table| table.elements_named("FillStyle")).map(|element| FillStyle { element })
+    }
+
+    /// Stroke styles, preserving their native order and index values.
+    pub fn strokes(&self) -> impl Iterator<Item = StrokeStyle<'_, E>> + '_ {
+        self.element.child("strokes").into_iter().flat_map(|table| table.elements_named("StrokeStyle")).map(|element| StrokeStyle { element })
+    }
+
+    /// Native edge records, preserving malformed and unknown data for consumer policy.
+    pub fn edges(&self) -> impl Iterator<Item = Edge<'_, E>> + '_ {
+        self.element.child("edges").into_iter().flat_map(|table| table.elements_named("Edge")).map(|element| Edge { element })
+    }
+}
+
+/// A native `FillStyle` entry.
+#[derive(Clone, Copy, Debug)]
+pub struct FillStyle<'a, E: XflElement> {
+    element: &'a E,
+}
+
+impl<'a, E: XflElement> FillStyle<'a, E> {
+    pub fn index(&self) -> Option<u32> {
+        integer(self.element, "index")
+    }
+
+    /// The first recognized fill definition inside this table entry.
+    pub fn definition(&self) -> Option<Fill<'_, E>> {
+        self.element.elements().next().map(|element| Fill { element })
+    }
+}
+
+/// Native fill definitions understood by XFL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FillKind {
+    SolidColor,
+    LinearGradient,
+    RadialGradient,
+    Bitmap,
+    Other,
+}
+
+/// A native XFL fill definition.
+#[derive(Clone, Copy, Debug)]
+pub struct Fill<'a, E: XflElement> {
+    element: &'a E,
+}
+
+impl<'a, E: XflElement> Fill<'a, E> {
+    /// Views any native fill-definition element, including fills nested in primitives or strokes.
+    pub fn new(element: &'a E) -> Self {
+        Self { element }
+    }
+
+    /// Underlying native definition element for consumers that map it into application types.
+    pub fn element(&self) -> &'a E {
+        self.element
+    }
+
+    pub fn kind(&self) -> FillKind {
+        match self.element.local_name() {
+            "SolidColor" => FillKind::SolidColor,
+            "LinearGradient" => FillKind::LinearGradient,
+            "RadialGradient" => FillKind::RadialGradient,
+            "BitmapFill" => FillKind::Bitmap,
+            _ => FillKind::Other,
+        }
+    }
+
+    pub fn color(&self) -> Option<&str> {
+        self.element.attr("color")
+    }
+
+    pub fn color_value(&self) -> Color {
+        color(self.element, "color", "alpha")
+    }
+
+    pub fn alpha(&self) -> Option<f32> {
+        number(self.element, "alpha")
+    }
+
+    pub fn matrix(&self) -> Matrix {
+        matrix(self.element)
+    }
+
+    pub fn spread_method(&self) -> Option<&str> {
+        self.element.attr("spreadMethod")
+    }
+
+    pub fn interpolation_method(&self) -> Option<&str> {
+        self.element.attr("interpolationMethod")
+    }
+
+    pub fn focal_point_ratio(&self) -> Option<f32> {
+        number(self.element, "focalPointRatio")
+    }
+
+    pub fn bitmap_path(&self) -> Option<&str> {
+        self.element.attr("bitmapPath")
+    }
+
+    pub fn bitmap_is_clipped(&self) -> Option<bool> {
+        boolean(self.element, "bitmapIsClipped")
+    }
+
+    /// Gradient entries, preserving source order and raw native ratios.
+    pub fn gradient_entries(&self) -> impl Iterator<Item = GradientEntry<'_, E>> + '_ {
+        self.element.elements_named("GradientEntry").map(|element| GradientEntry { element })
+    }
+}
+
+/// A native gradient ramp entry.
+#[derive(Clone, Copy, Debug)]
+pub struct GradientEntry<'a, E: XflElement> {
+    element: &'a E,
+}
+
+impl<E: XflElement> GradientEntry<'_, E> {
+    pub fn ratio(&self) -> Option<f32> {
+        number(self.element, "ratio")
+    }
+
+    pub fn color(&self) -> Option<&str> {
+        self.element.attr("color")
+    }
+
+    pub fn color_value(&self) -> Color {
+        color(self.element, "color", "alpha")
+    }
+
+    pub fn alpha(&self) -> Option<f32> {
+        number(self.element, "alpha")
+    }
+}
+
+/// Native stroke definitions understood by XFL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StrokeKind {
+    Solid,
+    Dashed,
+    Dotted,
+    Ragged,
+    Stipple,
+    Hatched,
+    Other,
+}
+
+/// A native `StrokeStyle` table entry.
+#[derive(Clone, Copy, Debug)]
+pub struct StrokeStyle<'a, E: XflElement> {
+    element: &'a E,
+}
+
+impl<'a, E: XflElement> StrokeStyle<'a, E> {
+    pub fn index(&self) -> Option<u32> {
+        integer(self.element, "index")
+    }
+
+    /// The first stroke definition inside this table entry.
+    pub fn definition(&self) -> Option<Stroke<'_, E>> {
+        self.element.elements().next().map(|element| Stroke { element })
+    }
+}
+
+/// A native XFL stroke definition.
+#[derive(Clone, Copy, Debug)]
+pub struct Stroke<'a, E: XflElement> {
+    element: &'a E,
+}
+
+impl<'a, E: XflElement> Stroke<'a, E> {
+    /// Views a native stroke-definition element.
+    pub fn new(element: &'a E) -> Self {
+        Self { element }
+    }
+
+    /// Underlying native definition element for consumers that map it into application types.
+    pub fn element(&self) -> &'a E {
+        self.element
+    }
+
+    pub fn kind(&self) -> StrokeKind {
+        match self.element.local_name() {
+            "SolidStroke" => StrokeKind::Solid,
+            "DashedStroke" => StrokeKind::Dashed,
+            "DottedStroke" => StrokeKind::Dotted,
+            "RaggedStroke" => StrokeKind::Ragged,
+            "StippleStroke" => StrokeKind::Stipple,
+            "HatchedStroke" => StrokeKind::Hatched,
+            _ => StrokeKind::Other,
+        }
+    }
+
+    pub fn weight(&self) -> Option<f32> {
+        number(self.element, "weight")
+    }
+
+    pub fn caps(&self) -> Option<&str> {
+        self.element.attr("caps")
+    }
+
+    pub fn joints(&self) -> Option<&str> {
+        self.element.attr("joints")
+    }
+
+    pub fn miter_limit(&self) -> Option<f32> {
+        number(self.element, "miterLimit")
+    }
+
+    pub fn dash1(&self) -> Option<f32> {
+        number(self.element, "dash1")
+    }
+
+    pub fn dash2(&self) -> Option<f32> {
+        number(self.element, "dash2")
+    }
+
+    pub fn dot_space(&self) -> Option<f32> {
+        number(self.element, "dotSpace")
+    }
+
+    /// The first fill definition nested in the stroke.
+    pub fn fill(&self) -> Option<Fill<'_, E>> {
+        self.element.child("fill")?.elements().next().map(|element| Fill { element })
+    }
+}
+
+/// A native `<Edge>` record and its style indices.
+#[derive(Clone, Copy, Debug)]
+pub struct Edge<'a, E: XflElement> {
+    element: &'a E,
+}
+
+impl<E: XflElement> Edge<'_, E> {
+    pub fn fill_style0(&self) -> Option<u32> {
+        integer(self.element, "fillStyle0")
+    }
+
+    pub fn fill_style1(&self) -> Option<u32> {
+        integer(self.element, "fillStyle1")
+    }
+
+    pub fn stroke_style(&self) -> Option<u32> {
+        integer(self.element, "strokeStyle")
+    }
+
+    pub fn encoded_segments(&self) -> Option<&str> {
+        self.element.attr("edges")
+    }
+
+    /// Parsed XFL path segments, using the shared bounded edge grammar.
+    pub fn segments(&self) -> Vec<Segment> {
+        self.encoded_segments().map(edges::parse_edge_segments).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(source: &[u8]) -> craft_xml::El {
+        craft_xml::Options::default().parse(source).unwrap()
+    }
+
+    #[test]
+    fn reads_prefixed_shape_fill_stroke_and_edge_schema() {
+        let root = parse(br##"<x:DOMShape xmlns:x="urn:xfl" isDrawingObject="false">
+            <x:matrix><x:Matrix a="2" tx="12"/></x:matrix>
+            <x:fills><x:FillStyle index="1"><x:LinearGradient spreadMethod="reflect" interpolationMethod="linearRGB">
+              <x:GradientEntry ratio="0" color="#102030"/><x:GradientEntry ratio="255" color="#ffffff" alpha=".5"/>
+            </x:LinearGradient></x:FillStyle><x:FillStyle index="2"><x:BitmapFill bitmapPath="Library/a.png" bitmapIsClipped="true"/></x:FillStyle></x:fills>
+            <x:strokes><x:StrokeStyle index="3"><x:DashedStroke weight="2" dash1="8" dash2="3" caps="square" joints="miter" miterLimit="7"><x:fill><x:SolidColor color="#abcdef"/></x:fill></x:DashedStroke></x:StrokeStyle></x:strokes>
+            <x:edges><x:Edge fillStyle0="2" fillStyle1="1" strokeStyle="3" edges="!0 0|200 0"/></x:edges>
+        </x:DOMShape>"##);
+
+        let shape = Shape::new(&root).unwrap();
+        assert_eq!(shape.matrix(), Matrix { a: 2.0, b: 0.0, c: 0.0, d: 1.0, tx: 12.0, ty: 0.0 });
+        assert_eq!(shape.is_drawing_object(), Some(false));
+        let fills: Vec<_> = shape.fills().collect();
+        assert_eq!(fills.iter().map(FillStyle::index).collect::<Vec<_>>(), [Some(1), Some(2)]);
+        let gradient = fills[0].definition().unwrap();
+        assert_eq!(gradient.kind(), FillKind::LinearGradient);
+        assert_eq!(gradient.spread_method(), Some("reflect"));
+        assert_eq!(gradient.interpolation_method(), Some("linearRGB"));
+        assert_eq!(gradient.gradient_entries().map(|entry| entry.ratio()).collect::<Vec<_>>(), [Some(0.0), Some(255.0)]);
+        let bitmap = fills[1].definition().unwrap();
+        assert_eq!(bitmap.kind(), FillKind::Bitmap);
+        assert_eq!(bitmap.bitmap_path(), Some("Library/a.png"));
+        assert_eq!(bitmap.bitmap_is_clipped(), Some(true));
+
+        let stroke_style = shape.strokes().next().unwrap();
+        let stroke = stroke_style.definition().unwrap();
+        assert_eq!(stroke.kind(), StrokeKind::Dashed);
+        assert_eq!(stroke.weight(), Some(2.0));
+        assert_eq!((stroke.dash1(), stroke.dash2()), (Some(8.0), Some(3.0)));
+        assert_eq!(stroke.fill().unwrap().color(), Some("#abcdef"));
+        let color = stroke.fill().unwrap().color_value();
+        assert_eq!(color, Color { rgb: 0xabcdef, alpha: 1.0 });
+
+        let edge = shape.edges().next().unwrap();
+        assert_eq!((edge.fill_style0(), edge.fill_style1(), edge.stroke_style()), (Some(2), Some(1), Some(3)));
+        assert_eq!(edge.segments().len(), 1);
+    }
+
+    #[test]
+    fn duplicate_attributes_use_last_value_and_invalid_numbers_are_absent() {
+        let root = parse(b"<DOMShape isDrawingObject='false' isDrawingObject='true'><matrix><Matrix a='NaN'/></matrix><fills><FillStyle index='1' index='4'><SolidColor alpha='Infinity'/></FillStyle></fills></DOMShape>");
+        let shape = Shape::new(&root).unwrap();
+        assert_eq!(shape.is_drawing_object(), Some(true));
+        assert_eq!(shape.matrix(), Matrix::IDENTITY);
+        let fill = shape.fills().next().unwrap();
+        assert_eq!(fill.index(), Some(4));
+        let fill = fill.definition().unwrap();
+        assert_eq!(fill.alpha(), None);
+        assert_eq!(fill.color_value(), Color { rgb: 0, alpha: 1.0 });
+    }
+
+    #[test]
+    fn an_application_element_adapter_can_use_the_same_views() {
+        #[derive(Debug)]
+        struct AppElement {
+            name: String,
+            attrs: Vec<(String, String)>,
+            children: Vec<AppElement>,
+        }
+        impl XflElement for AppElement {
+            type Elements<'a> = std::slice::Iter<'a, AppElement>;
+            fn local_name(&self) -> &str {
+                self.name.rsplit(':').next().unwrap_or(&self.name)
+            }
+            fn attr(&self, name: &str) -> Option<&str> {
+                self.attrs.iter().rev().find(|(key, _)| key == name).map(|(_, value)| value.as_str())
+            }
+            fn elements(&self) -> Self::Elements<'_> {
+                self.children.iter()
+            }
+        }
+        let app = AppElement { name: "x:DOMShape".into(), attrs: vec![("isDrawingObject".into(), "true".into())], children: Vec::new() };
+        assert_eq!(Shape::new(&app).unwrap().is_drawing_object(), Some(true));
+    }
+}
