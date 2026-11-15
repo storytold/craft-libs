@@ -484,6 +484,13 @@ fn motion_in_a_first_frame_reads_the_picture_being_decoded() {
     dec.reset();
     let pic = dec.decode(&packet(&next, &flat_chroma(128))).unwrap();
     assert!(block(&pic, 1).iter().flatten().all(|&v| v == 30));
+
+    // a first frame that fails leaves no previous picture: the next frame is still a first frame
+    let mut dec = decoder();
+    let good = packet(&luma, &flat_chroma(128));
+    assert!(dec.decode(&good[..16]).is_err());
+    let pic = dec.decode(&good).unwrap();
+    assert!(block(&pic, 1).iter().flatten().all(|&v| v == 77));
 }
 
 #[test]
@@ -583,6 +590,23 @@ fn reset_forgets_the_previous_picture() {
 }
 
 #[test]
-fn a_picture_past_the_memory_budget_is_refused_before_anything_is_allocated() {
+fn a_picture_past_the_memory_budget_is_refused() {
     assert!(matches!(Decoder::new(32767, 32767, *b"BIKi", 0), Err(Error::Unsupported(_))));
+}
+
+#[test]
+fn a_corrected_table_entry_gives_the_block_ffmpeg_gives() {
+    // Coefficient (0, 2) = 331 with DC 60 at quantiser 11. The multiplier of that position is one
+    // of 30 that a first measurement had 1 too low, and with the lower value one sample row of
+    // this block differs. These are ffmpeg's samples.
+    const FFMPEG_ROW: [u8; 8] = [23, 252, 3, 232, 232, 3, 252, 23];
+    // 9 planes. Plane 8: the first group is flagged; its first member is non-zero (low bits
+    // 331 - 256 = 75, positive) and the other three stay zero; the six entries after it are not
+    // flagged. Planes 7 to 0: nine entries, none flagged.
+    let mut inline = vec![(9, 4), (1, 1), (0, 1), (75, 8), (0, 1), (0b111, 3), (0, 6)];
+    inline.extend(std::iter::repeat_n((0, 9), 8));
+    inline.push((11, 4));
+    let luma = Row { types: vec![5, 6], colours: vec![1], intra_dc: Some(60), inline, ..Row::default() };
+    let pic = decoder().decode(&packet(&luma, &flat_chroma(128))).unwrap();
+    assert!(block(&pic, 0).iter().all(|r| r == &FFMPEG_ROW), "{:?}", block(&pic, 0)[0]);
 }

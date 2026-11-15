@@ -181,7 +181,7 @@ fn refuses_invalid_headers() {
 }
 
 #[test]
-fn a_huge_frame_count_allocates_no_more_than_the_file_holds() {
+fn a_frame_count_past_what_the_file_holds_is_refused() {
     let mut d = sample();
     d[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
     // the index now claims to run far past the file, so every offset lies inside it
@@ -294,6 +294,20 @@ fn an_index_longer_than_one_piece_reads_like_a_short_one() {
     // cut inside the third piece: the frames before the cut are kept
     let cut = f.frames[n - 50].offset as usize;
     assert_eq!(open(&d[..cut]).unwrap().frames.len(), n - 50);
+
+    // an invalid entry at the start of the second piece is named by its frame
+    let piece = INDEX_PIECE_ENTRIES as usize;
+    let entry_at = |k: usize| HEADER_LEN + 4 * k;
+    let mut bad = d.clone();
+    bad[entry_at(piece)..entry_at(piece) + 4].copy_from_slice(&0u32.to_le_bytes());
+    match open(&bad) {
+        Err(Error::Invalid(message)) => assert!(message.starts_with(&format!("frame {} at ", piece - 1)), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    // an entry past the end of the file ends the table there, whatever follows it
+    let mut cut_off = d.clone();
+    cut_off[entry_at(10)..entry_at(10) + 4].copy_from_slice(&0xffff_fff0u32.to_le_bytes());
+    assert_eq!(open(&cut_off).unwrap().frames.len(), 9);
 }
 
 #[test]

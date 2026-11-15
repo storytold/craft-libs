@@ -13,9 +13,16 @@ are not part of the build or the tests.
 - Python 3 and `ffmpeg` on `PATH`.
 - `BINK_PROBE_SAMPLE`: the path of the probe sample. The synthetic frames are built on one real
   file: 180x139, revision `i`, one audio track or none, whose frames 0 and 1 are black and whose
-  frame 2 is the first with picture content. Bit positions quoted in some scripts (the luma
-  plane of frame 0 ending at bit 461, chroma planes at bits 480 and 1184) belong to the file
-  that was used and are only used by the early exploration scripts (`t8.py`, `t9.py`).
+  frame 2 is the first with picture content. Some scripts use bit positions of the file that was
+  used (the luma plane of frame 0 ending at bit 461, its chroma planes starting at bits 480 and
+  1184): `t8.py`, `t9.py`, `synth.py` and `trees2.py`, and through them `scans.py`.
+- `BINK_PROBE_DECODER` (`fuzz_diff.py`): the program that decodes a `.bik` file with the Rust
+  decoder; by default the `bink_binkdec` example in the workspace's release target directory.
+- `BINK_PROBE_CASES` (`fuzz_diff.py`): where differing cases are kept; by default
+  `bink_probe_cases` in the system's temporary directory.
+- `IF` and `REV` (`cmodel.py`): switch the coefficient model to variants that were tried and
+  rejected (`IF=1`: members left at zero go next to their group instead of to the front of the
+  list; `REV=0`: they keep their order). The defaults are the model that matches.
 
 No sample is in the repository: existing Bink files are not ours to commit, and no tool here
 writes them.

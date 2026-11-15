@@ -1,7 +1,7 @@
 """Model of the DCT coefficient coding (hypothesis under test) and a differential tester against ffmpeg."""
 import sys, os, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-OPT = dict(refine_first=os.environ.get('RF', '1') == '1', insig_front=os.environ.get('IF', '1') == '1')
+OPT = dict(insig_front=os.environ.get('IF', '0') == '1')
 def decode_coefs(bits, v, opt=OPT):
     """Returns ({(row, col): signed value}, bits consumed)."""
     pos = [0]

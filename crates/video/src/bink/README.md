@@ -34,6 +34,9 @@ for i in 0..file.frames.len() {
 - The example reads the file with `craft_media::bink`, which needs `craft-media`'s `bink`
   feature; this crate's `bink` feature does not turn it on.
 - Frames are decoded in order. A frame that is not a key frame builds on the picture before it.
+  Which frames are key frames, and the frame rate, come from the container.
+- A `Picture` holds the samples as coded. The decoder makes no statement about their colour
+  matrix or range: nothing in the stream says, and comparing with ffmpeg cannot tell.
 - After an error the decoder keeps the last picture that decoded.
 - `reset()` forgets the previous picture, for decoding from a key frame after a seek.
 
@@ -44,7 +47,7 @@ memory budget.
 ## The format, as derived
 
 Bits are read from the least significant end of each byte; a multi-bit field has its first bit
-lowest.
+lowest. Every sign bit is 1 for negative.
 
 ### Packet
 
@@ -86,7 +89,7 @@ The 16 trees are fixed prefix codes (`TREES`). Tree 0 is four raw bits.
 ### Bundles
 
 A chunk starts with its length. The field is `bit_length(n + 511)` bits wide, where `n` is the
-most values a row of blocks can need:
+most values a row of blocks can need. The chunks of a row are stored in the order of this table:
 
 | Bundle | `n` | After the length |
 |---|---|---|
@@ -94,8 +97,8 @@ most values a row of blocks can need:
 | Sub-types | `(width + 7) / 16`, with half the luma width rounded down as the width of a chroma plane | as block types |
 | Colours | 64 per block | 1 bit: all values equal (one coded colour follows), else coded colours |
 | Patterns | 8 per block | coded values: low nibble, then high nibble |
-| X and y offsets | blocks per row | 1 bit: all values equal, else coded values; a 4-bit magnitude and a sign bit when it is not zero (1 = negative) |
-| Intra DC | blocks per row | an 11-bit start value, then groups of up to 8 deltas |
+| X and y offsets | blocks per row | 1 bit: all values equal (4 raw bits follow, and a sign bit when they are not zero), else coded values: a magnitude symbol and a sign bit when it is not zero |
+| Intra DC | blocks per row | an 11-bit start value, then groups of up to 8 deltas. The length counts the start value, so one fewer delta follows. |
 | Inter DC | blocks per row | a 10-bit start magnitude and a sign bit when it is not zero, then the same groups |
 | Run lengths | 48 per block | 1 bit: all values equal (4 bits follow), else coded values |
 
@@ -128,7 +131,9 @@ most values a row of blocks can need:
 Sums of a prediction and a residue wrap to 8 bits, as do intra DCT results. Nothing is clamped.
 
 In the first frame, and after `reset()`, there is no previous picture: a copy or a motion
-reference then reads the picture being decoded, as far as it is drawn.
+reference then reads the picture being decoded, as far as it is drawn. ffmpeg decodes such a
+block only in the first row of blocks and with no vertical offset, and gives the same samples
+there; it refuses the others, which this decoder decodes by the same rule.
 
 A block that no entry draws (the two blocks a 16x16 entry steps over when nothing was drawn
 there) is 0: this decoder starts every picture as zeros. That is its own choice. ffmpeg leaves
@@ -142,8 +147,9 @@ coefficient data is a walk over a list, once per bit plane from the highest down
 as the 2x2 groups at (row 0, column 2), (2, 0) and (2, 2), then the single positions (0, 1),
 (1, 0) and (1, 1). Each entry reads 1 bit; 0 leaves it for the next plane. Otherwise:
 
-- a single position becomes non-zero: its magnitude is the plane's bit, followed at once by its
-  lower bits, then a sign bit. The entry is removed.
+- a single position becomes non-zero. Its magnitude has the plane's bit set, which is not read;
+  the bits below it are read at once as one field of as many bits as the plane's number (none in
+  plane 0), then a sign bit. The entry is removed.
 - a 2x2 group codes its four members in raster order: a 1 bit leaves the member zero and puts it
   at the front of the list as a single position (it is not looked at again in this plane); a 0
   bit makes it non-zero as above. One of the three starting groups is then replaced by its 4x4
