@@ -43,6 +43,7 @@ mod tests {
         assert_eq!(process_line("  ", 20, call), None);
         assert_eq!(process_line(r#"{"id":[1],"method":"echo"}"#, 100, call).unwrap(), r#"{"id":[1],"ok":true,"result":null}"#);
         assert_eq!(process_line(r#"{"method":"bad"}"#, 100, call).unwrap(), r#"{"error":"unknown","id":null,"ok":false}"#);
+        assert_eq!(process_line(r#"{"method":"echo"}"#, 100, call).unwrap(), r#"{"id":null,"ok":true,"result":null}"#);
         assert!(process_line("{", 100, call).unwrap().contains("bad request envelope:"));
         assert_eq!(process_line(r#"{"id":3}"#, 100, call).unwrap(), r#"{"error":"missing `method`","id":3,"ok":false}"#);
         assert!(process_line("abcdef", 2, call).unwrap().contains("byte limit"));
