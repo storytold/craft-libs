@@ -46,5 +46,11 @@ mod tests {
         assert!(process_line("{", 100, call).unwrap().contains("bad request envelope:"));
         assert_eq!(process_line(r#"{"id":3}"#, 100, call).unwrap(), r#"{"error":"missing `method`","id":3,"ok":false}"#);
         assert!(process_line("abcdef", 2, call).unwrap().contains("byte limit"));
+        let invoked = std::cell::Cell::new(false);
+        let _ = process_line("    ", 2, |_, _| -> Result<Value, &'static str> {
+            invoked.set(true);
+            Ok(Value::Null)
+        });
+        assert!(!invoked.get());
     }
 }
