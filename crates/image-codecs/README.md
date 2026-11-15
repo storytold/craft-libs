@@ -324,3 +324,16 @@ Rec. 2020 RGB as 16-bit BT.2100 PQ, with measured content-light levels and the r
 
 If `corpus/pngsuite/*.png` exists at the repo root, every file in it is compared against the
 `image` crate's decoder. Without it, that test is skipped.
+
+With the `corpus` feature, the deep EXR test reads `11.deep.exr`, `42.deep.exr`, `64.deep.exr`,
+`multivariate.deep.exr` and `objectid.deep.exr` from `corpus/exr/` at the repo root. These are the
+deep test images in `src/test/bin/test_images` of the
+[OpenEXR repository at commit `69b2604fc76e370615438bdc8d2cd95b9349c12e`](https://github.com/AcademySoftwareFoundation/openexr/tree/69b2604fc76e370615438bdc8d2cd95b9349c12e/src/test/bin/test_images).
+The test checks each file against the SHA-256 pinned in `REAL_FILE_SHA256` in
+`tests/it/deep_exr.rs` before decoding it, and fails when a file is missing, is not a regular
+file, is larger than 4 MiB or does not match. It reads no other file in the folder. To fill the
+folder, copy the five files from that commit into `corpus/exr/`, or run
+`cargo xtask corpus --exr` in a checkout of [PhotoCraft](https://github.com/storytold/PhotoCraft)
+at commit `74330157cb601573ae4523a95bb9132822fc3918` and copy its `corpus/exr/` here, as CI does.
+The images are not committed here; OpenEXR distributes them under its
+[license](https://github.com/AcademySoftwareFoundation/openexr/blob/69b2604fc76e370615438bdc8d2cd95b9349c12e/LICENSE.md).
