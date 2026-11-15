@@ -69,4 +69,28 @@ mod tests {
         decode_into(&[0; 8], Format { bits: 0, ..fmt }, &mut channels);
         assert_eq!(channels, [vec![0.5], vec![-0.5]]);
     }
+    #[test]
+    fn decodes_sample_representations_and_ignores_invalid_inputs() {
+        let base = Format { bits: 8, float: false, big_endian: false, signed: false };
+        let cases: &[(Format, &[u8], f32)] = &[
+            (base, &[192], 0.5),
+            (Format { signed: true, ..base }, &[192], -0.5),
+            (Format { bits: 16, ..base }, &[0, 64], 0.5),
+            (Format { bits: 24, ..base }, &[0, 0, 64], 0.5),
+            (Format { bits: 24, big_endian: true, ..base }, &[0xc0, 0, 0], -0.5),
+            (Format { bits: 32, ..base }, &[0, 0, 0, 64], 0.5),
+            (Format { bits: 32, big_endian: true, ..base }, &[0xc0, 0, 0, 0], -0.5),
+            (Format { bits: 32, float: true, ..base }, &0.5_f32.to_le_bytes(), 0.5),
+            (Format { bits: 32, float: true, big_endian: true, ..base }, &(-0.5_f32).to_be_bytes(), -0.5),
+            (Format { bits: 64, float: true, ..base }, &0.5_f64.to_le_bytes(), 0.5),
+            (Format { bits: 64, float: true, big_endian: true, ..base }, &(-0.5_f64).to_be_bytes(), -0.5),
+            (Format { bits: 12, ..base }, &[0xff, 0xff], 0.0),
+        ];
+        for &(format, bytes, expected) in cases {
+            let mut out = [vec![1.0]];
+            decode_into(bytes, format, &mut out);
+            assert_eq!(out[0], [1.0, expected], "{format:?}");
+        }
+        decode_into(&[1], base, &mut []);
+    }
 }
