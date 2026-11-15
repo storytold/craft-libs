@@ -6,27 +6,31 @@ mod stories;
 
 use super::recent::{RecentFile, RecentSort, RecentView, Template, ThumbKey, sort_recent};
 use super::words::ShellWords;
-use crate::buttons::Button;
+use crate::buttons::{Button, Link};
 use crate::choice::Segmented;
 use crate::contract::{
-    ActivateOn, Bind, CollectionEvent, Entry, Gap, NoValue, Outcome, Pad, Pattern, Props, Remember as _, Scroll, SelectMode, Show as _,
+    ActivateOn, Bind, BodyCx, CollectionEvent, Entry, Gap, NoValue, Outcome, Pad, Pattern, Props, Remember as _, Scroll, SelectMode, Show as _,
     ShowCollection as _, ShowContainer as _, Sizing, clicked,
 };
+use crate::display::{Divider, Icon};
 use crate::layout_components::{Row, Stack};
-use crate::list::{List, ListRow, ThumbAspect};
+use crate::list::{List, ListRow, RowEvent, ThumbAspect, ThumbSize, TrailingFace, TrailingPart};
 use crate::menu::{Menu, MenuItem};
 use crate::notices::{Notice, NoticeLayout};
 use crate::pickers::Select;
-use crate::primitives::{CachedTexture, ContentPainterCx, IconSpec, Revision, TextureState, TextureStore, ThumbSource, Thumbnails};
-use crate::runtime::commands::CommandRef;
+use crate::primitives::{
+    CheckerArea, ContentPainterCx, IconSpec, Priority, ThumbPaint, ThumbRequest, ThumbSource, Thumbnails,
+};
+use crate::runtime::commands::{self, CommandRef, FireSource};
 use crate::runtime::commands::{CommandSet as _, Commands as _};
 use crate::runtime::env::{AgeStyle, Env, Label};
 use crate::sections::Section;
-use crate::tile_grid::{CaptionPlace, Tile, TileGrid, TilePartEvent, TileStatus};
-use craft_behavior::{IconId, SelectionChange, keyed};
+use crate::style::{Corners, SurfaceKind, SurroundLook, paint_surround};
+use crate::tile_grid::{CaptionPlace, Tile, TileGrid, TilePartEvent};
+use craft_behavior::{IconId, Proposal, SelectionChange, keyed};
 use craft_theme::Variant;
 use craft_theme::variant::Tone;
-use egui::{Pos2, Rect, Response, Ui};
+use egui::{CornerRadius, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -40,6 +44,9 @@ const PICTURE_HIGH: u16 = 9;
 
 /// The number of recent files shown until `max_recent` says otherwise.
 const RECENT_SHOWN: usize = 12;
+
+/// The revealed part of a recent row that takes the file off the list.
+const REMOVE: TrailingPart = TrailingPart::new(0);
 
 /// The commands of a recent file's context menu. They act on the file that has the lead in the recent files, which a
 /// secondary click or the context-menu key gives to the file the menu is for. Delete at the lead of the recent files is
@@ -127,8 +134,12 @@ impl Outcome for StartOutput {
 /// - **Recent files.** A grid of cards or a list, by the `view` binding, in the order of the `sort` binding. A click or
 ///   Enter opens a file; arrows move; the context menu (secondary click, the menu key or Shift+F10) and the
 ///   [`StartRecentCommands`] remove it from the list, clear the list or show it in its folder.
-/// - **Thumbnails.** A file or template with a revision shows the picture the `thumbnails` store holds for its
-///   [`ThumbKey`] and that revision: a placeholder until the store has it, a failure mark when loading failed.
+/// - **Thumbnails.** With `thumbnails(store, source)`, each card, row and template asks the store for its
+///   [`ThumbKey`] at the size it paints: a placeholder until the picture is ready, a failure mark when loading failed,
+///   the file icon when the source has no picture for the key. Without it cards show the file icon.
+/// - **Links.** `links` adds a rail beside the page (New and Open, then the links) in a room wide enough, else the
+///   links follow the sections. A double click on the page's own room opens a file, as Open does.
+/// - **No recent files.** With a `drop_hint` the Recent section is a card that opens a file on a click, Enter or Space.
 /// - **State.** The app owns the list, the view and the sort. The screen writes a changed view or sort through its
 ///   binding and reports everything else as [`StartAction`]s.
 ///
@@ -155,18 +166,13 @@ pub struct StartScreen<'a> {
     /// The time the age lines count from, in seconds since the Unix epoch. Without it the cards show no age.
     #[prop]
     now: Option<i64>,
-    /// The store that holds the thumbnails and previews, which the app fills.
-    thumbnails: Option<TextureStore<ThumbKey>>,
     /// The thumbnails and the source of each key's revision: cards, rows and templates ask `Thumbnails::state`.
-    #[allow(dead_code)] // P3(top-w5): tp.T29
-    shown: Option<(&'a Thumbnails<ThumbKey>, &'a dyn ThumbSource<ThumbKey>)>,
+    thumbnails: Option<(&'a Thumbnails<ThumbKey>, &'a dyn ThumbSource<ThumbKey>)>,
     /// The links beside the page: New and Open at the rail's top, then these.
     #[prop]
     links: &'a [StartLink],
-    /// With no recent files, the Recent body is a drop card with this hint, and a double click on the page's own room
-    /// reports `StartAction::Open`.
+    /// With no recent files, the Recent body is a drop card with this hint that opens a file on a click.
     #[prop(into)]
-    #[allow(dead_code)] // P3(top-w5): cw.C45
     drop_hint: Option<Label>,
 }
 
@@ -216,7 +222,6 @@ impl<'a> StartScreen<'a> {
             max_recent: RECENT_SHOWN,
             now: None,
             thumbnails: None,
-            shown: None,
             links: &[],
             drop_hint: None,
         }
@@ -225,15 +230,7 @@ impl<'a> StartScreen<'a> {
     /// Cards, rows and templates ask `thumbnails.state(..)` for what they show; `source` gives each key's revision.
     #[must_use]
     pub fn thumbnails(mut self, thumbnails: &'a Thumbnails<ThumbKey>, source: &'a dyn ThumbSource<ThumbKey>) -> Self {
-        self.shown = Some((thumbnails, source));
-        self
-    }
-
-    /// The store of thumbnails the page reads today.
-    #[must_use]
-    pub(crate) fn texture_store(mut self, store: TextureStore<ThumbKey>) -> Self {
-        // P3(top-w5): tp.T29
-        self.thumbnails = Some(store);
+        self.thumbnails = Some((thumbnails, source));
         self
     }
 }
@@ -245,29 +242,20 @@ struct Leads {
     pinned: Option<PathBuf>,
 }
 
-/// What a card or row shows as its picture.
-enum Picture {
-    /// The item has no thumbnail.
-    None,
-    /// The store has no picture yet.
-    Pending,
-    /// A picture to draw.
-    Ready(CachedTexture),
-    /// Loading the picture failed.
-    Failed,
-}
+/// The thumbnails and the source of each key's revision.
+type ThumbHost<'p> = (&'p Thumbnails<ThumbKey>, &'p dyn ThumbSource<ThumbKey>);
 
 /// What every section of one pass reads.
 struct Page<'p> {
-    ctx: &'p egui::Context,
     env: &'p Env,
     words: &'p ShellWords,
-    thumbnails: Option<&'p TextureStore<ThumbKey>>,
+    thumbnails: Option<ThumbHost<'p>>,
+    drop_hint: Option<&'p Label>,
     now: Option<i64>,
     actions: &'p RefCell<Vec<StartAction>>,
 }
 
-impl Page<'_> {
+impl<'p> Page<'p> {
     fn push(&self, action: StartAction) {
         self.actions.borrow_mut().push(action);
     }
@@ -278,29 +266,21 @@ impl Page<'_> {
         Some(self.env.relative_age(now.saturating_sub(then).max(0).unsigned_abs(), AgeStyle::Long))
     }
 
-    fn picture(&self, key: ThumbKey, revision: Option<Revision>) -> Picture {
-        let (Some(store), Some(revision)) = (self.thumbnails, revision) else { return Picture::None };
-        let state = store.state(self.ctx, &key, revision);
-        if let Some(texture) = state.shown() {
-            return Picture::Ready(texture);
-        }
-        match state {
-            TextureState::Failed { .. } => Picture::Failed,
-            TextureState::Empty => Picture::None,
-            _ => Picture::Pending,
-        }
-    }
-
-    fn tile<'t>(&self, name: &str, detail: Option<String>, picture: Picture) -> Tile<'t> {
+    /// A card named `name` whose picture is the thumbnail of `key`, asked for at the cell it paints in; the file icon
+    /// without `thumbnails`.
+    fn tile<'t>(&self, name: &str, detail: Option<String>, key: ThumbKey) -> Tile<'t>
+    where
+        'p: 't,
+    {
         let mut tile = Tile::new(Label::from(name.to_owned()));
         if let Some(detail) = detail {
             tile = tile.detail(detail);
         }
-        match picture {
-            Picture::Ready(texture) => tile.thumb(ThumbAspect::new(PICTURE_WIDE, PICTURE_HIGH), move |cx, rect| paint_picture(cx, rect, texture)),
-            Picture::Failed => tile.status(TileStatus::Failed),
-            Picture::Pending => tile,
-            Picture::None => tile.icon(IconId::new("file")),
+        match self.thumbnails {
+            Some((thumbnails, source)) => {
+                tile.thumb(ThumbAspect::new(PICTURE_WIDE, PICTURE_HIGH), move |cx, rect| paint_thumb(cx, rect, thumbnails, source, &key))
+            }
+            None => tile.icon(IconId::new("file")),
         }
     }
 
@@ -320,16 +300,18 @@ impl Page<'_> {
     }
 }
 
-/// The picture inside `rect`, as large as fits with its own proportions.
-fn paint_picture(cx: &ContentPainterCx, rect: Rect, texture: CachedTexture) {
-    let size = texture.size_vec2();
-    if size.x <= 0.0 || size.y <= 0.0 {
+/// The thumbnail of `key` in `rect`, asked for at the size it paints. The store paints the placeholder while the
+/// picture is not ready and the failure mark when it failed; a key the source has no picture for (`Blank`) gets the
+/// file icon on the sunken tile.
+fn paint_thumb(cx: &ContentPainterCx, rect: Rect, thumbnails: &Thumbnails<ThumbKey>, source: &dyn ThumbSource<ThumbKey>, key: &ThumbKey) {
+    let request = ThumbRequest::for_cell(rect.width().max(rect.height()), cx.pixels_per_point());
+    let state = thumbnails.state(cx.painter.ctx(), source, key, &request, Priority::VISIBLE);
+    if thumbnails.paint(cx, rect, &state, &ThumbPaint::default()) {
         return;
     }
-    let scale = (rect.width() / size.x).min(rect.height() / size.y);
-    let fitted = Rect::from_center_size(rect.center(), size * scale);
-    let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
-    cx.picture(texture.id, fitted, uv, cx.style_cx().tokens.shape.radius.control);
+    cx.surface(rect, SurfaceKind::Sunken, Corners::None);
+    let side = cx.style_cx().tokens.size.icon.lg;
+    cx.icon(Rect::from_center_size(rect.center(), Vec2::splat(side)), &IconSpec::svg(IconId::new("file")));
 }
 
 /// The folder a path is in, for the line under a file's name.
@@ -362,42 +344,110 @@ fn read_events<K: Clone, E>(events: Vec<CollectionEvent<K, E>>, lead: &mut Optio
 impl StartScreen<'_> {
     /// Shows the page across the available room and reports what the user did.
     pub fn show(self, ui: &mut Ui) -> StartOutput {
-        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, .. } = self; // P3(top-w5): tp.T29
+        let StartScreen { view, sort, recent, pinned, templates, max_recent, now, thumbnails, links, drop_hint } = self;
         let env = Env::of(ui);
         let collator = env.collator();
         let words = env.words::<ShellWords>();
-        let ctx = ui.ctx().clone();
         let actions = RefCell::new(Vec::new());
-        let page = Page { ctx: &ctx, env: &env, words: &words, thumbnails: thumbnails.as_ref(), now, actions: &actions };
+        let page = Page { env: &env, words: &words, thumbnails, drop_hint: drop_hint.as_ref(), now, actions: &actions };
         let view = RefCell::new(view);
         let sort = RefCell::new(sort);
 
-        let shown = Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| {
-            Stack::new().gap(Gap::Section).pad(Pad::Regular).fill_width().show(ui, |ui, cx| {
-                let current_view = view.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
-                let current_sort = sort.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
-                let mut files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
-                sort_recent(&mut files, current_sort, &collator);
+        let room = ui.available_rect_before_wrap();
+        // The page's surround is square.
+        paint_surround(ui.painter(), CheckerArea::Rect(room, CornerRadius::ZERO), &SurroundLook::of(&env.tokens).shown(env.canvas_pattern));
 
-                Row::new().gap(Gap::Tight).show(ui, |ui, _| {
-                    if clicked(&Button::new(words.new.clone()).id_salt("new").variant(Variant::PRIMARY).show(ui)) {
-                        page.push(StartAction::New);
-                    }
-                    if clicked(&Button::new(words.open.clone()).id_salt("open").show(ui)) {
-                        page.push(StartAction::Open);
-                    }
+        let rail_stack = || Stack::new().gap(Gap::Tight).pad(Pad::Regular).label(words.start_links.clone());
+        let rail_body = |ui: &mut Ui| {
+            new_and_open(&page, ui);
+            let _ = Divider::horizontal().show(ui);
+            link_items(ui, links);
+        };
+        let page_stack = || Stack::new().gap(Gap::Section).pad(Pad::Regular).fill_width();
+        // `beside` is whether the rail stands beside the page; without it New and Open lead the page and the links follow
+        // the sections.
+        let page_body = |ui: &mut Ui, cx: &mut BodyCx<'_>, beside: bool| {
+            let current_view = view.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
+            let current_sort = sort.borrow_mut().reborrow().read(cx).and_then(|held| held.same().copied()).unwrap_or_default();
+            let mut files: Vec<RecentFile> = recent.iter().take(max_recent).cloned().collect();
+            sort_recent(&mut files, current_sort, &collator);
+
+            if !beside {
+                let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| new_and_open(&page, ui));
+            }
+            recent_section(&page, ui, &view, &sort, current_view, &files);
+            if let Some(pinned) = pinned {
+                pinned_section(&page, ui, pinned);
+            }
+            if !templates.is_empty() {
+                templates_section(&page, ui, templates);
+            }
+            if !beside && !links.is_empty() {
+                let _ = Stack::new().gap(Gap::Tight).label(words.start_links.clone()).show(ui, |ui, _| link_items(ui, links));
+            }
+        };
+
+        // The rail stands beside the sections when the room holds the rail, the gap and the sections' least width; a
+        // narrower page keeps New and Open in its row and lists the links after the sections.
+        let rail = !links.is_empty() && {
+            let rail_width = rail_stack().measure_in(ui, Proposal::Ideal, |ui, _| rail_body(ui)).x;
+            let sections_least = page_stack().measure_in(ui, Proposal::Min, |ui, cx| page_body(ui, cx, true)).x;
+            ui.available_width() >= rail_width + env.tokens.space.gap.section + sections_least
+        };
+
+        // The page senses its own surface for the empty-room double click (`BodyCx::surface_double_pressed`). A pass reads
+        // only its own input, so a second pass of one frame reports the double click only if it holds the second press.
+        let shown = Stack::new().fill().scroll(Scroll::vertical()).senses_surface().show(ui, |ui, cx| {
+            if cx.surface_double_pressed() {
+                page.push(StartAction::Open);
+            }
+            if rail {
+                let _ = Row::new().gap(Gap::Section).fill_width().show(ui, |ui, _| {
+                    let _ = rail_stack().show(ui, |ui, _| rail_body(ui));
+                    let _ = page_stack().show(ui, |ui, cx| page_body(ui, cx, true));
                 });
-
-                recent_section(&page, ui, &view, &sort, current_view, &files);
-                if let Some(pinned) = pinned {
-                    pinned_section(&page, ui, pinned);
-                }
-                if !templates.is_empty() {
-                    templates_section(&page, ui, templates);
-                }
-            });
+            } else {
+                let _ = page_stack().show(ui, |ui, cx| page_body(ui, cx, false));
+            }
         });
         StartOutput { response: shown.output, actions: actions.into_inner() }
+    }
+}
+
+/// New and Open, the first Tab stops of the page.
+fn new_and_open(page: &Page<'_>, ui: &mut Ui) {
+    let words = page.words;
+    if clicked(&Button::new(words.new.clone()).id_salt("new").variant(Variant::PRIMARY).show(ui)) {
+        page.push(StartAction::New);
+    }
+    if clicked(&Button::new(words.open.clone()).id_salt("open").show(ui)) {
+        page.push(StartAction::Open);
+    }
+}
+
+/// The links, one under another: a URL opens through its `Link` (the URL is its tooltip), a command fires as a
+/// pointer activation.
+fn link_items(ui: &mut Ui, links: &[StartLink]) {
+    for (at, link) in links.iter().enumerate() {
+        match &link.target {
+            StartLinkTarget::Url(url) => {
+                let _ = Row::new().gap(Gap::Tight).show(ui, |ui, _| {
+                    if let Some(icon) = &link.icon {
+                        let _ = Icon::new(IconSpec::svg(icon.clone())).id_salt(("start-link-icon", at)).show(ui);
+                    }
+                    let _ = Link::new(link.label.clone()).id_salt(("start-link", at)).url(url.clone()).tooltip(url.clone()).show(ui);
+                });
+            }
+            StartLinkTarget::Command(command) => {
+                let mut button = Button::new(link.label.clone()).id_salt(("start-link", at));
+                if let Some(icon) = &link.icon {
+                    button = button.icon(icon.clone());
+                }
+                if clicked(&button.show(ui)) {
+                    let _ = commands::fire(ui.ctx(), command.clone(), FireSource::Pointer);
+                }
+            }
+        }
     }
 }
 
@@ -441,7 +491,18 @@ fn recent_section(
                 }
             }
             if files.is_empty() {
-                let _ = Notice::new(Tone::Neutral, words.no_recent.clone()).layout(NoticeLayout::Centred).show(ui);
+                match page.drop_hint {
+                    Some(hint) => {
+                        // The card is a button, so a click, Enter and Space open a file and it has its own Tab stop.
+                        let card = Button::new(hint.clone()).id_salt("drop").icon(IconId::new("image")).sizing(Sizing::FillWidth).show(ui);
+                        if clicked(&card) {
+                            page.push(StartAction::Open);
+                        }
+                    }
+                    None => {
+                        let _ = Notice::new(Tone::Neutral, words.no_recent.clone()).layout(NoticeLayout::Centred).show(ui);
+                    }
+                }
                 return;
             }
             let file_of = |path: &PathBuf| files.iter().find(|file| &file.path == path);
@@ -449,7 +510,7 @@ fn recent_section(
             let (response, (opened, removed)) = if current == RecentView::Grid {
                 let out = page.grid::<PathBuf>(words.recent.clone(), true).show_items(ui, &source, &mut |path, _| {
                     let Some(file) = file_of(path) else { return Tile::new(Label::Empty) };
-                    page.tile(&file.name, page.age(file.opened), page.picture(ThumbKey::Recent(file.path.clone()), file.thumbnail))
+                    page.tile(&file.name, page.age(file.opened), ThumbKey::Recent(file.path.clone()))
                         .corner_action(IconId::new("close"), StartRecentCommands::Remove)
                         .tooltip(file.path.display().to_string())
                 });
@@ -479,9 +540,33 @@ fn recent_section(
                             Some(age) => row.trailing(age),
                             None => row,
                         };
-                        row.icon(IconSpec::svg(IconId::new("file")))
+                        let row = row.trailing_part_revealed(
+                            REMOVE,
+                            TrailingFace::Icon(IconSpec::svg(IconId::new("close"))),
+                            words.remove_recent.fill(&[("name", file.name.as_str())]),
+                        );
+                        match page.thumbnails {
+                            Some((thumbnails, source)) => {
+                                let key = ThumbKey::Recent(file.path.clone());
+                                row.thumb_aspect(ThumbSize::Medium, ThumbAspect::new(PICTURE_WIDE, PICTURE_HIGH), move |cx, rect| {
+                                    paint_thumb(cx, rect, thumbnails, source, &key);
+                                })
+                            }
+                            None => row.icon(IconSpec::svg(IconId::new("file"))),
+                        }
                     });
-                (out.response, read_events(out.events, &mut lead))
+                // The revealed remove part reports `RowEvent::Trailing`, which `read_events` does not read.
+                let part: Vec<PathBuf> = out
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        CollectionEvent::Item(key, RowEvent::Trailing { part, .. }) if *part == REMOVE => Some(key.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                let (opened, mut removed) = read_events(out.events, &mut lead);
+                removed.extend(part);
+                (out.response, (opened, removed))
             };
             for path in opened {
                 page.push(StartAction::OpenRecent(path));
@@ -554,7 +639,7 @@ fn templates_section(page: &Page<'_>, ui: &mut Ui, templates: &[Template]) {
         let out = page.grid::<String>(words.templates.clone(), false).show_items(ui, &source, &mut |id, _| {
             let Some(template) = templates.iter().find(|template| &template.id == id) else { return Tile::new(Label::Empty) };
             let detail = (!template.detail.is_empty()).then(|| template.detail.clone());
-            page.tile(&template.name, detail, page.picture(ThumbKey::Template(template.id.clone()), template.thumbnail))
+            page.tile(&template.name, detail, ThumbKey::Template(template.id.clone()))
         });
         let mut lead = None;
         for id in read_events(out.response.events, &mut lead).0 {

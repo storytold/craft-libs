@@ -4,10 +4,8 @@ use craft_i18n::Collator;
 use std::cmp::Ordering;
 use std::path::PathBuf;
 
-use crate::primitives::Revision;
-
-/// The key a start screen's thumbnail has in the app's texture store. The app loads the picture for the key and
-/// revision a card names; the screen only reads the store.
+/// The key a start screen's thumbnail has. The screen asks `Thumbnails::state` for the key at the painted cell, and
+/// the app's `ThumbSource` answers its revision and renders the picture.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ThumbKey {
@@ -29,15 +27,12 @@ pub struct RecentFile {
     pub opened: Option<i64>,
     /// Created, in seconds since the Unix epoch, for sorting by Created.
     pub created: Option<i64>,
-    /// The revision of the picture stored under [`ThumbKey::Recent`] with this path; `None` for a file with no
-    /// thumbnail.
-    pub thumbnail: Option<Revision>,
 }
 
 impl RecentFile {
-    /// A recent file at `path` shown as `name`, with no dates and no thumbnail.
+    /// A recent file at `path` shown as `name`, with no dates.
     pub fn new(path: impl Into<PathBuf>, name: impl Into<String>) -> Self {
-        RecentFile { path: path.into(), name: name.into(), opened: None, created: None, thumbnail: None }
+        RecentFile { path: path.into(), name: name.into(), opened: None, created: None }
     }
 }
 
@@ -51,15 +46,12 @@ pub struct Template {
     pub name: String,
     /// The line under the name: "1920 × 1080 px".
     pub detail: String,
-    /// The revision of the picture stored under [`ThumbKey::Template`] with this id; `None` for a card with no
-    /// preview.
-    pub thumbnail: Option<Revision>,
 }
 
 impl Template {
-    /// A template `id` named `name`, with `detail` under the name and no preview.
+    /// A template `id` named `name`, with `detail` under the name.
     pub fn new(id: impl Into<String>, name: impl Into<String>, detail: impl Into<String>) -> Self {
-        Template { id: id.into(), name: name.into(), detail: detail.into(), thumbnail: None }
+        Template { id: id.into(), name: name.into(), detail: detail.into() }
     }
 }
 

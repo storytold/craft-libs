@@ -427,6 +427,38 @@ fn a_retry_after_a_helper_failure_while_the_app_runs_waits_for_the_exit() {
     assert_eq!(next.status(), &Status::Idle, "the retry is not recorded as a failure");
 }
 
+/// An automatic check that finds a release keeps the last update's result in the status; a requested check replaces it.
+#[trial]
+fn an_automatic_check_that_finds_a_release_keeps_the_last_update_result() {
+    let ctx = egui::Context::default();
+    let (_dir, paths, mut u) = with_records("0.2.0");
+    crate::paths::write_atomic(&paths.data.join("self-update-done.txt"), b"v0.2.0").unwrap();
+    start_answered(&mut u, &ctx, Ok(Some(newer())));
+    assert!(u.prompt.is_some(), "the release is offered");
+    assert_eq!(u.status(), &Status::Updated("0.2.0".into()), "the automatic check leaves the result shown");
+
+    u.check_now();
+    let (tx, rx) = channel();
+    u.check = Some(rx);
+    assert!(tx.send(Ok(Some((newer(), false)))).is_ok());
+    u.tick(&ctx);
+    assert_eq!(u.status(), &Status::Idle, "a requested check replaces it");
+}
+
+/// Reading the last update's result starts no check; the check at start still runs once afterwards and keeps the
+/// result.
+#[trial]
+fn reading_the_last_update_starts_no_check() {
+    let (_dir, paths, mut u) = with_records("0.2.0");
+    crate::paths::write_atomic(&paths.data.join("self-update-done.txt"), b"v0.2.0").unwrap();
+    u.read_last_update();
+    assert_eq!(u.status(), &Status::Updated("0.2.0".into()));
+    assert!(u.check.is_none(), "no check is in flight");
+    u.check_at_start();
+    assert!(u.check.is_some(), "the check at start runs after the read");
+    assert_eq!(u.status(), &Status::Updated("0.2.0".into()), "the second read finds no record and keeps the result");
+}
+
 /// An offer the app made before the check at start keeps its prompt; when the check finds the
 /// release too, that prompt says why the last update failed, once.
 #[trial]

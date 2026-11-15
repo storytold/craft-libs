@@ -209,6 +209,8 @@ pub struct Updater {
     /// The check running (or queued behind it) was asked for by the user.
     requested: bool,
     started: bool,
+    /// The last update's outcome record was read ([`Updater::read_last_update`]).
+    outcome_read: bool,
     check: Option<Receiver<Found>>,
     /// Replaces [`can_install_itself`] on the check's thread (tests).
     probe: Option<InstallProbe>,
@@ -260,6 +262,7 @@ impl Updater {
             status: Status::Idle,
             requested: false,
             started: false,
+            outcome_read: false,
             check: None,
             probe: None,
             installing_itself: false,
@@ -338,9 +341,14 @@ impl Updater {
         self.paths.clone().or_else(|| if cfg!(test) { None } else { Paths::for_app(self.app).ok() })
     }
 
-    /// What the last update came to, once: [`Status::Updated`] when it installed the version
-    /// running now, [`Status::InstallFailed`] with the reason when it failed.
-    fn read_outcome(&mut self) {
+    /// What the last update came to, once per launch: [`Status::Updated`] when it installed the version running now,
+    /// [`Status::InstallFailed`] with the reason when it failed. The guard is inside the `Updater`, so
+    /// [`Self::check_at_start`] and an app that starts no check (automatic checks off) can both call it. `Updated`
+    /// stays until [`Self::dismiss_status`] or a requested check; a failure's reason moves into the next offer's prompt.
+    pub fn read_last_update(&mut self) {
+        if std::mem::replace(&mut self.outcome_read, true) {
+            return;
+        }
         let Some(paths) = self.outcome_paths() else { return };
         match self_update::take_outcome(&paths, &self.version) {
             Some(Outcome::Installed(version)) => self.status = Status::Updated(version.to_string()),
@@ -390,7 +398,7 @@ impl Updater {
     /// status is not [`Status::Idle`]. The check itself stays quiet unless it finds a release.
     pub fn check_at_start(&mut self) {
         if !std::mem::replace(&mut self.started, true) {
-            self.read_outcome();
+            self.read_last_update();
             self.begin(false);
         }
     }
@@ -529,14 +537,8 @@ impl Updater {
         Status::Ready
     }
 
-    /// Reads the last update's outcome once per launch, with its guard inside the `Updater`; `check_at_start` calls it.
-    // P3(top-w5): tp.T33 `Updater::read_last_update`
-    pub fn read_last_update(&mut self) {
-        todo!("tp.T33")
-    }
-
     /// Sets the outcome of a check. The check at start leaves the status as it is: nothing, or
-    /// the outcome of the last update ([`Self::read_outcome`]).
+    /// the outcome of the last update ([`Self::read_last_update`]).
     fn finish_check(&mut self, answer: Found) {
         let requested = std::mem::take(&mut self.requested);
         // A check that was running when an installation started answers with the installation's
@@ -575,7 +577,10 @@ impl Updater {
                         }
                     }
                 }
-                self.status = Status::Idle;
+                // A failure's reason moves into the prompt; only an install result stays shown until the user dismisses it or asks for a check.
+                if requested || !matches!(self.status, Status::Updated(_)) {
+                    self.status = Status::Idle;
+                }
             }
             Ok(None) if requested => self.status = Status::UpToDate,
             Ok(None) => {}
