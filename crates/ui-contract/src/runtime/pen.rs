@@ -13,6 +13,8 @@ const MOST_QUEUED: usize = 4096;
 struct Readings {
     queued: Vec<PointerSample>,
     current: Option<PointerSample>,
+    /// The last reading of the last batch drained: the first move of the next batch starts from it.
+    before: Option<PointerSample>,
     barrel: bool,
     /// The pen tip went down with the barrel button held: the pointer feed reports the contact as the secondary
     /// button until the tip lifts, also when the barrel button comes up first.
@@ -50,9 +52,21 @@ impl PenSource {
         self.lock().barrel = down;
     }
 
-    /// Takes the readings queued since the last drain, in order.
-    pub(crate) fn drain(&self) -> Vec<PointerSample> {
-        std::mem::take(&mut self.lock().queued)
+    /// Takes the readings queued since the last drain, in order, with the last reading of the drain before. A pen
+    /// reports pressure 0 while it hovers and as it lifts (X11, macOS), which is no contact: a batch that also holds a
+    /// contact reading drops its pressure-0 readings, so a stroke's last moves keep the pressure the pen left with and
+    /// a tap its own (#1798).
+    pub(crate) fn drain(&self) -> (Option<PointerSample>, Vec<PointerSample>) {
+        let mut readings = self.lock();
+        let mut samples = std::mem::take(&mut readings.queued);
+        if samples.iter().any(|sample| sample.pressure > 0.0) {
+            samples.retain(|sample| sample.pressure > 0.0);
+        }
+        let before = readings.before;
+        if let Some(&last) = samples.last() {
+            readings.before = Some(last);
+        }
+        (before, samples)
     }
 
     /// The latest reading, if the pen is on the tablet.
@@ -92,8 +106,12 @@ pub(crate) fn source(ctx: &Context) -> Option<PenSource> {
 
 /// What one pass reads of the pen: the readings since the last drain, the current one and the barrel button.
 pub(crate) struct PenPass {
+    /// The last reading before the pass's own.
+    before: Option<PointerSample>,
     samples: Vec<PointerSample>,
-    /// The latest reading, `None` once the pen left the tablet.
+    /// The pen's reading for the pass as a whole (its press and release): the latest reading, or the pass's last
+    /// contact reading when the pen lifted (or reads pressure 0) by the time the pass runs, as after a tap shorter than
+    /// a pass; `None` once the pen left the tablet with no contact in the pass.
     pub current: Option<PointerSample>,
     /// The barrel button is down.
     pub barrel: bool,
@@ -104,20 +122,27 @@ pub(crate) struct PenPass {
 impl PenPass {
     /// Drains `source` for a pass whose events carry pointer events: its moves take the readings.
     pub(crate) fn read(source: &PenSource) -> Self {
-        PenPass { samples: source.drain(), current: source.current(), barrel: source.barrel(), barrel_press: source.barrel_press() }
+        let (before, samples) = source.drain();
+        let latest = source.current();
+        let contact = samples.last().copied().filter(|sample| sample.pressure > 0.0);
+        let current = match contact {
+            Some(contact) if latest.is_none_or(|latest| latest.pressure <= 0.0) => Some(contact),
+            _ => latest,
+        };
+        PenPass { before, samples, current, barrel: source.barrel(), barrel_press: source.barrel_press() }
     }
 
     /// The live state of `source` with no readings, for a pass with no pointer event: the queue stays for the pass
     /// that carries the moves.
     pub(crate) fn live(source: &PenSource) -> Self {
-        PenPass { samples: Vec::new(), current: source.current(), barrel: source.barrel(), barrel_press: source.barrel_press() }
+        PenPass { before: None, samples: Vec::new(), current: source.current(), barrel: source.barrel(), barrel_press: source.barrel_press() }
     }
 
     /// The pass of an injected step that carries the pen's reading `sample`: the one reading of the pass, on the
     /// tablet, with the barrel button up.
     pub(crate) fn injected(sample: PointerSample) -> Self {
         let sample = sample.sanitized();
-        PenPass { samples: vec![sample], current: Some(sample), barrel: false, barrel_press: false }
+        PenPass { before: None, samples: vec![sample], current: Some(sample), barrel: false, barrel_press: false }
     }
 
     /// Whether the pen reported in the pass or is on the tablet: the pointer is the pen.
@@ -125,19 +150,28 @@ impl PenPass {
         self.current.is_some() || !self.samples.is_empty()
     }
 
-    /// The reading of move `nr` of the pass's `moves` pointer moves. The queued readings spread evenly over the moves,
-    /// the last move taking the latest reading; a move between two readings takes the pressure and tilt between them
-    /// and the nearer one's rotation and end (an angle that wraps does not average). A pass with no new reading repeats
-    /// the current one.
+    /// The reading of move `nr` of the pass's `moves` pointer moves. The pen reports at its own rate: the pass's
+    /// readings, after the last reading before them, spread evenly over its moves, so as many moves as readings take
+    /// one reading each and the last move takes the latest. A move between two readings takes the pressure and tilt
+    /// between them, the rotation between them the short way round, and the nearer one's end. A pass with no new
+    /// reading repeats the current one.
     pub(crate) fn paired(&self, nr: usize, moves: usize) -> Option<PointerSample> {
-        let Some(last) = self.samples.len().checked_sub(1) else { return self.current };
-        let at = (nr + 1).min(moves.max(1)) as f32 / moves.max(1) as f32 * last as f32;
+        let Some(&first) = self.samples.first() else { return self.current };
+        let start = self.before.unwrap_or(first);
+        let count = self.samples.len();
+        // Point 0 is the reading before the pass, point i the pass's reading i - 1.
+        let point = |i: usize| if i == 0 { start } else { self.samples[i.min(count) - 1] };
+        let moves = moves.max(1);
+        let at = ((nr + 1).min(moves) * count) as f32 / moves as f32;
         let below = at.floor() as usize;
-        let (Some(&a), Some(&b)) = (self.samples.get(below), self.samples.get((below + 1).min(last))) else { return self.current };
-        let t = at - below as f32;
+        let (a, b, t) = (point(below), point(below + 1), at - below as f32);
+        let lerp = |from: f32, to: f32| from + (to - from) * t;
+        let turn = std::f32::consts::TAU;
+        let rotation = (b.rotation - a.rotation + turn * 1.5).rem_euclid(turn) - turn / 2.0;
         let mut sample = if t < 0.5 { a } else { b };
-        sample.pressure = a.pressure + (b.pressure - a.pressure) * t;
-        sample.tilt = [a.tilt[0] + (b.tilt[0] - a.tilt[0]) * t, a.tilt[1] + (b.tilt[1] - a.tilt[1]) * t];
-        Some(sample)
+        sample.pressure = lerp(a.pressure, b.pressure);
+        sample.tilt = [lerp(a.tilt[0], b.tilt[0]), lerp(a.tilt[1], b.tilt[1])];
+        sample.rotation = a.rotation + rotation * t;
+        Some(sample.sanitized())
     }
 }
