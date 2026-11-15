@@ -7,12 +7,12 @@ use std::fmt::Display;
 /// Process one bounded control line. Blank lines yield no response. Missing `params` becomes null;
 /// arbitrary JSON ids are echoed and malformed JSON has a null id, matching the legacy protocol.
 pub fn process_line<E: Display>(line: &str, max_bytes: usize, dispatch: impl FnOnce(&str, &Value) -> Result<Value, E>) -> Option<String> {
+    if line.len() > max_bytes {
+        return Some(error(None, "request exceeds byte limit"));
+    }
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
-    }
-    if line.len() > max_bytes {
-        return Some(error(None, "request exceeds byte limit"));
     }
     let value: Value = match serde_json::from_str(trimmed) {
         Ok(v) => v,
