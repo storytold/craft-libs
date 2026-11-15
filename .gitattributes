@@ -14,3 +14,6 @@ crates/font-store/index/sources.json -text
 
 # The build fixture verifies these license files are copied byte-for-byte.
 crates/fonts-build/tests/fixture/craft-fonts/fonts/**/OFL.txt -text
+
+# DXF drawing goldens assert exact writer bytes, including LF on every platform.
+crates/dxf/tests/data/drawing_*.dxf -text
