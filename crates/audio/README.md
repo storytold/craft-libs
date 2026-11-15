@@ -762,3 +762,8 @@ The codec modules' public items keep their names, so apps can re-export them
   CAF.
   MP4 and Matroska files decode to presentation length. A packet that fails is concealed, not
   dropped. A failed source read is `AudioError::Io`.
+
+WAV timestamps use `bext` when present, including a zero timestamp. Otherwise a bounded iXML
+`BWFXML/BEXT` time reference supplies the timestamp (two unsigned 32-bit words; an omitted high
+word is zero). Only the first iXML chunk is considered. Invalid or oversized optional XML is
+ignored without rejecting the audio. This works for byte-backed and streaming sources.
