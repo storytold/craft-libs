@@ -1,13 +1,13 @@
 //! `DocumentTabs`: the tab strip of one document group. Tabs reorder within the strip, drop into another group's
 //! strip through the drag session, and tear off when released over no strip; the host areas at both ends of the strip
-//! are the caller's closures.
+//! are the caller's closures. Files from the OS drop between the tabs when the host takes them.
 
 #[cfg(feature = "testing")]
 mod stories;
 
 use super::{Tab, TabStrip};
 use crate::contract::{
-    CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, ListDrag, ReorderRule, ShowCollection as _, ShowContainer as _,
+    CollectionEvent, ContextMenuRequest, DropAt, DropKind, DropPlace, ListDrag, OsFiles, ReorderRule, ShowCollection as _, ShowContainer as _,
 };
 use crate::layout_components::Row;
 use crate::runtime::drag::OsFile;
@@ -83,7 +83,7 @@ impl<D> DocumentTab<D> {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum DocumentTabsEvent<D> {
-    /// The tab was selected: a click, an arrow key or a drag resting over it.
+    /// The tab was selected: a click, Space or Enter, or a drag of another payload resting over the tab.
     Selected(D),
     /// The tab was activated: Enter, or a double click.
     Activated(D),
@@ -138,6 +138,8 @@ pub struct DocumentTabsOutput<D> {
     pub response: Response,
     /// What happened, in order.
     pub events: Vec<DocumentTabsEvent<D>>,
+    /// The tab under the pointer this pass, also while another component holds the press: the Move tool's transfer reads it.
+    pub hovered: Option<D>,
 }
 
 type Area<'a> = Box<dyn FnOnce(&mut Ui) + 'a>;
@@ -221,11 +223,17 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
 
     /// Shows the group's strip.
     pub fn show(self, ui: &mut Ui) -> DocumentTabsOutput<D> {
-        let DocumentTabs { label, tabs, selected, reorderable, tear_off, leading, trailing, large: _, takes_files: _ } = self; // P3(canvas-widgets-w8): cw.C42
+        let DocumentTabs { label, tabs, selected, reorderable, tear_off, leading, trailing, large, takes_files } = self;
         let source = keyed(tabs, |tab: &DocumentTab<D>| tab.id.clone()).with_text(|tab| Cow::Borrowed(tab.label.as_str()));
         let mut strip = TabStrip::new(label).takes_drop(DropKind::new(DropPlace::Between, |_: &ListDrag<D>, _| true));
+        if takes_files {
+            strip = strip.takes_drop(DropKind::new(DropPlace::Between, |_: &OsFiles, _| true));
+        }
         if tear_off {
             strip = strip.tear_off();
+        }
+        if large {
+            strip = strip.large();
         }
         if let Some(document) = selected {
             strip = strip.shown(document);
@@ -233,11 +241,29 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
         if reorderable {
             strip = strip.reorder(ReorderRule::new());
         }
+        let hovered = std::cell::RefCell::new(None);
         let show_strip = |ui: &mut Ui, strip: TabStrip<'_, D>| {
-            strip.show_items(ui, &source, &mut |key, _| {
-                let document = tabs.iter().find(|tab| &tab.id == key);
-                let tab = Tab::new(document.map_or_else(Label::default, |tab| tab.label.clone())).closable(document.is_some_and(|tab| tab.closable));
-                if document.is_some_and(|tab| tab.modified) { tab.modified() } else { tab }
+            strip.show_items(ui, &source, &mut |key, cx| {
+                if cx.row.hovered {
+                    *hovered.borrow_mut() = Some(key.clone());
+                }
+                let Some(document) = tabs.iter().find(|tab| &tab.id == key) else {
+                    return Tab::new(Label::default()).closable(false);
+                };
+                let mut tab = Tab::new(document.label.clone()).closable(document.closable);
+                if document.modified {
+                    tab = tab.modified();
+                }
+                if let Some(fraction) = document.progress {
+                    tab = tab.progress(fraction);
+                }
+                if let Some(detail) = &document.detail {
+                    tab = tab.detail(detail.clone());
+                }
+                if let Some(close) = &document.close_label {
+                    tab = tab.close_label(close.clone());
+                }
+                tab
             })
         };
         let shown = if leading.is_none() && trailing.is_none() {
@@ -260,7 +286,7 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
         };
         let shown = match shown {
             Ok(shown) => shown,
-            Err(response) => return DocumentTabsOutput { response, events: Vec::new() },
+            Err(response) => return DocumentTabsOutput { response, events: Vec::new(), hovered: None },
         };
         let mut events = Vec::new();
         let response = shown.response.response.clone();
@@ -277,8 +303,12 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
                         });
                     }
                 }
-                CollectionEvent::Dropped { at: DropAt::Gap { key: Some(over), .. }, payload, .. } => {
-                    if let Some(drag) = payload.get::<ListDrag<D>>() {
+                CollectionEvent::Dropped { at: DropAt::Gap { key, insert, .. }, payload, .. } => {
+                    // The gap's `key` is the tab under the pointer; `insert` is the display position the files land
+                    // before, so the tab at `insert` is the one they go before.
+                    if let Some(files) = payload.get::<OsFiles>() {
+                        events.push(DocumentTabsEvent::FilesDropped { files: files.files.clone(), before: tabs.get(insert).map(|tab| tab.id.clone()) });
+                    } else if let (Some(drag), Some(over)) = (payload.get::<ListDrag<D>>(), key) {
                         events.push(DocumentTabsEvent::DroppedInto { documents: drag.keys.clone(), over });
                     }
                 }
@@ -292,6 +322,6 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
         if shown.empty_double {
             events.push(DocumentTabsEvent::EmptyDoubleClick);
         }
-        DocumentTabsOutput { response, events }
+        DocumentTabsOutput { response, events, hovered: hovered.into_inner() }
     }
 }

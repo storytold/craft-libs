@@ -345,8 +345,9 @@ fn os_files(ctx: &Context) {
     let seen = files::seen(ctx);
     let frame = pass::root_frame_nr(ctx);
     let viewport = pass::current_viewport(ctx);
-    let started = board(ctx, |board| match &mut board.session {
-        None if !seen.hovered.is_empty() => {
+    let hovering = !seen.hovered.is_empty();
+    board(ctx, |board| match &mut board.session {
+        None if hovering => {
             board.session = Some(Session {
                 source: Id::NULL.with("craft_ui::os_files"),
                 moving: Moving::default(),
@@ -364,7 +365,6 @@ fn os_files(ctx: &Context) {
             });
             board.ended = None;
             board.started += 1;
-            true
         }
         Some(session) if session.os => {
             if !seen.dropped.is_empty() {
@@ -372,14 +372,15 @@ fn os_files(ctx: &Context) {
                 let files = seen.dropped.into_iter().map(|file| with_hovered_type(file, hovered)).collect();
                 session.payload = Arc::new(OsFiles { files });
                 session.dropped = Some(frame);
-            } else if seen.hovered.is_empty() && session.dropped != Some(frame) {
+            } else if !hovering && session.dropped != Some(frame) {
                 board.session = None;
             }
-            false
         }
-        _ => false,
+        _ => {}
     });
-    if started {
+    // The OS sends the window no pointer events while it drags files over it (winit 0.30), so nothing else asks for
+    // the passes that follow the pointer to the target under it.
+    if hovering {
         crate::runtime::egui::repaint::request(ctx);
     }
 }
@@ -406,10 +407,16 @@ pub fn cross_window_pointer(ctx: &Context, viewport: ViewportId) -> Option<Pos2>
     (source != viewport).then(|| WindowHost::of(ctx).pointer_in(viewport)).flatten()
 }
 
-/// The running session's payload whose type is `payload` and the pointer in screen space.
+/// The running session's payload whose type is `payload` and the pointer in screen space. For files the OS drags, the
+/// pointer is the platform's desktop pointer in this window when it tells one (outside this window means no
+/// pointer), else the frame's: the OS sends the window no pointer events while it drags files over it (winit 0.30).
 pub(crate) fn dragging_of(ctx: &Context, payload: TypeId) -> Option<(Arc<dyn Any + Send + Sync>, Pos2)> {
     let payload = active_of(ctx, payload)?;
-    Some((payload, pointer::frame(ctx).pos?))
+    let os = board(ctx, |board| board.session.as_ref().is_some_and(|session| session.os));
+    let frame = pointer::frame(ctx).pos;
+    let host = WindowHost::of(ctx);
+    let pointer = if os && host.desktop_pointer().is_some() { host.pointer_in(pass::current_viewport(ctx)) } else { frame };
+    Some((payload, pointer?))
 }
 
 /// The layer the running session's source moves with the pointer, which hit tests for drop targets look through.

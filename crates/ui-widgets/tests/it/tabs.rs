@@ -292,3 +292,32 @@ fn tabs_with_the_same_label_keep_their_own_selection_and_click() {
     fixture.click_at(rects[0].center()).settle();
     assert_eq!(shown.get(), 0, "a click on the first tab shows the first");
 }
+
+/// The strip reports the tab under the pointer, also while a press held on another component is dragged over it, and
+/// none over the empty room.
+#[trial]
+fn the_strip_reports_the_tab_under_the_pointer_while_another_root_holds_the_press() {
+    use craft_ui::buttons::Button;
+    use craft_ui::contract::Show as _;
+    use craft_ui::tabs::{DocumentTab, DocumentTabs};
+    let seen = Rc::new(RefCell::new(None));
+    let held = seen.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let tabs = [DocumentTab::new(0_usize, "One"), DocumentTab::new(1, "Two")];
+        let out = DocumentTabs::new("Documents", &tabs).selected(0).show(ui);
+        *held.borrow_mut() = out.hovered;
+        Button::new("Canvas").show(ui);
+    });
+    fixture.room(egui::Vec2::new(640.0, 120.0)).settle();
+    let second = fixture.by_label("Two").expect("the tab's node").rect;
+    let canvas = fixture.by_label("Canvas").expect("the button's node").center();
+    let empty = egui::Pos2::new(second.right() + 60.0, second.center().y);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(canvas)]);
+    fixture.frame(vec![craft_ui::testing::pointer::press(canvas)]);
+    fixture.frame(vec![craft_ui::testing::pointer::moved(second.center())]);
+    fixture.frame(vec![]);
+    assert_eq!(*seen.borrow(), Some(1), "the second tab is under the pointer");
+    fixture.frame(vec![craft_ui::testing::pointer::moved(empty)]);
+    fixture.frame(vec![]);
+    assert_eq!(*seen.borrow(), None, "the empty room has no tab");
+}

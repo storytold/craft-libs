@@ -1,18 +1,22 @@
 //! Drag and drop (8.4): the session, drop targets, the operation, cancel and the ghost layer's preview.
 
 use craft_behavior::{DropOperation, PartKey, PressPhase};
+use craft_host::target::ShellInfo;
 use craft_ui::contract::{
     Common, Component, Cx, DragPreview, DropMark, DropTarget, MeasureCx, OsFiles, PartsCx, Pointer as _, Props as _, Role, Show as _,
     WindowDropTarget,
 };
+use craft_ui::runtime::InstallSpec;
 use craft_ui::runtime::drag;
 use craft_ui::runtime::env::Label;
 use craft_ui::style::{ComponentStyle, StyleCx};
 use craft_ui::testing::pointer::{moved, press, release};
+use craft_ui::testing::windows::FakeSystem;
 use craft_ui::testing::{Frames, trial};
 use craft_ui_test_kit::windows::Windows;
 use egui::{Pos2, Rect, Response, Ui, Vec2, ViewportBuilder, ViewportId, ViewportInfo};
 use std::cell::RefCell;
+use std::sync::Arc;
 
 const GRIP: PartKey = PartKey::new("grip");
 
@@ -265,4 +269,53 @@ fn files_that_leave_the_window_end_the_drag_without_a_drop() {
     frames.frame(vec![moved(LIST.center())], &mut show);
     assert!(drag::active::<OsFiles>(&frames.ctx).is_none(), "the drag ends when the files leave");
     assert!(landed.borrow().rows.is_empty() && landed.borrow().window.is_empty(), "nothing landed");
+}
+
+/// Where the window's inner rect sits on the desktop in the desktop-pointer trial.
+const WINDOW_AT: Pos2 = Pos2::new(100.0, 50.0);
+
+/// Files held over the window target the row under the desktop pointer, which the platform tells while the OS sends
+/// the window no pointer events, and drop on it; every pass while they hover asks for the next. Where the platform
+/// tells no pointer, the frame's pointer targets.
+#[trial]
+fn files_over_the_window_are_targeted_at_the_desktop_pointer_while_the_frame_has_none() {
+    let landed = RefCell::new(Landed::default());
+    let system = Arc::new(FakeSystem::new());
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default(), system.clone()));
+    windows.root_info(ViewportInfo { inner_rect: Some(Rect::from_min_size(WINDOW_AT, WINDOW.size())), ..ViewportInfo::default() });
+    let frame = |events: Vec<egui::Event>, hovered: Vec<egui::HoveredFile>, dropped: Vec<String>| {
+        let _ = windows.frame_with_files(events, vec![], hovered, dropped, |ui| {
+            FileList { common: Common::new(), landed: &landed }.id_salt("files").show_at(ui, LIST);
+        });
+        windows.ctx.has_requested_repaint()
+    };
+    let hover = || vec![egui::HoveredFile { path: Some("a.png".into()), ..egui::HoveredFile::default() }];
+    let row = |n: usize| Rect::from_min_size(LIST.min + Vec2::new(0.0, n as f32 * ROW), Vec2::new(LIST.width(), ROW));
+    for _ in 0..2 {
+        frame(vec![], vec![], vec![]);
+    }
+    let over = WINDOW_AT + row(2).center().to_vec2();
+    system.set_pointer(Some([over.x, over.y]));
+    for pass in 0..3 {
+        assert!(frame(vec![], hover(), vec![]), "frame {pass} with files over the window asks for the next");
+    }
+    assert!(drag::active::<OsFiles>(&windows.ctx).is_some(), "hovering files are the active payload");
+    assert_eq!(drag::mark(&windows.ctx), Some(DropMark::Into(row(2))), "the row under the desktop pointer would take the files");
+    frame(vec![], vec![], vec!["a.png".to_owned()]);
+    frame(vec![], vec![], vec![]);
+    assert_eq!(landed.borrow().rows, vec![(2, vec!["a.png".to_owned()])], "the files dropped on the row under the desktop pointer");
+    assert!(landed.borrow().window.is_empty(), "the row took the drop, not the window");
+    assert!(drag::active::<OsFiles>(&windows.ctx).is_none(), "the drop ends the drag");
+
+    system.set_pointer(None);
+    for _ in 0..2 {
+        assert!(!frame(vec![], vec![], vec![]), "idle frames with no hovered files and no events request no repaint");
+    }
+    frame(vec![], hover(), vec![]);
+    assert!(frame(vec![], hover(), vec![]), "hovered files that stay the same still ask for the next frame");
+    let first = row(0).center();
+    for _ in 0..2 {
+        frame(vec![moved(first)], hover(), vec![]);
+    }
+    assert_eq!(drag::mark(&windows.ctx), Some(DropMark::Into(row(0))), "without a platform pointer the frame's pointer targets");
 }
