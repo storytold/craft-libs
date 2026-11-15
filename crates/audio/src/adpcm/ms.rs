@@ -7,7 +7,7 @@
 //! high nibble. A block of `block_align` bytes holds `(block_align - 7 * channels) * 2 / channels
 //! + 2` samples per channel. Each sample is predicted as `(sample1 * c1 + sample2 * c2) / 256` (rounding toward zero)
 //! from the block's coefficient pair, plus `code * delta`; then `delta` becomes
-//! `max(16, delta * ADAPT[code] / 256)`.
+//! `max(16, delta * a / 256)`, where `a` is the table entry for the code (`ADAPT`).
 
 use super::{Error, Result, clip16};
 

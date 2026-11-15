@@ -144,6 +144,110 @@ fn partial_final_blocks_are_handled() {
     assert_eq!(yamaha::decode(&yamaha::encode(&[5, 6, 7], 1).unwrap(), 1).unwrap().len(), 4);
 }
 
+// ---- the other rounding some ffmpeg versions use for IMA and Flash ADPCM
+//
+// The IMA recommended practices build the step difference from `step >> 3` and the shifted steps
+// of the magnitude bits that are set; some decoders (including older ffmpeg releases) compute
+// `((2 * magnitude + 1) * step) >> (bits - 1)` instead, which rounds differently by a few units
+// and so drifts apart through the predictor. A stream decodes to ours or to this one.
+
+fn alt_diff(mag: i32, step: i32, bits: u32) -> i32 {
+    ((2 * mag + 1) * step) >> (bits - 1)
+}
+
+const INDEX_4: [i32; 8] = [-1, -1, -1, -1, 2, 4, 6, 8];
+const INDEX_5: [i32; 16] = [-1, -1, -1, -1, -1, -1, -1, -1, 1, 2, 4, 6, 8, 10, 13, 16];
+const STEPS: [i32; 89] = [
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190,
+    209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499,
+    2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350,
+    22385, 24623, 27086, 29794, 32767,
+];
+
+fn index_table(bits: u32) -> &'static [i32] {
+    match bits {
+        2 => &[-1, 2],
+        3 => &[-1, -1, 2, 4],
+        4 => &INDEX_4,
+        _ => &INDEX_5,
+    }
+}
+
+/// `ima::decode` with the other rounding.
+fn alt_ima_decode(data: &[u8], channels: usize, block_align: usize) -> Vec<i16> {
+    let per = ima::samples_per_block(block_align, channels).expect("layout");
+    let mut out = Vec::new();
+    for block in data.chunks_exact(block_align) {
+        let mut pred = vec![0i32; channels];
+        let mut idx = vec![0i32; channels];
+        let base = out.len();
+        out.resize(base + per * channels, 0);
+        for ch in 0..channels {
+            pred[ch] = i32::from(i16::from_le_bytes([block[4 * ch], block[4 * ch + 1]]));
+            idx[ch] = i32::from(block[4 * ch + 2]);
+            out[base + ch] = pred[ch] as i16;
+        }
+        for (g, group) in block[4 * channels..].chunks_exact(4 * channels).enumerate() {
+            for (ch, bytes) in group.chunks_exact(4).enumerate() {
+                for (k, b) in bytes.iter().enumerate() {
+                    for (half, nib) in [b & 0xF, b >> 4].into_iter().enumerate() {
+                        let step = STEPS[idx[ch] as usize];
+                        let d = alt_diff(i32::from(nib & 7), step, 4);
+                        pred[ch] = (pred[ch] + if nib & 8 != 0 { -d } else { d }).clamp(-32768, 32767);
+                        idx[ch] = (idx[ch] + INDEX_4[usize::from(nib & 7)]).clamp(0, 88);
+                        out[base + (1 + g * 8 + k * 2 + half) * channels + ch] = pred[ch] as i16;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `swf::decode` with the other rounding (one stream).
+fn alt_swf_decode(data: &[u8], channels: usize) -> Vec<i16> {
+    let mut bitpos = 0usize;
+    let mut get = |n: usize| -> Option<u32> {
+        let mut v = 0u32;
+        for _ in 0..n {
+            let byte = *data.get(bitpos / 8)?;
+            v = (v << 1) | u32::from((byte >> (7 - bitpos % 8)) & 1);
+            bitpos += 1;
+        }
+        Some(v)
+    };
+    let bits = get(2).expect("header") + 2;
+    let mut out = Vec::new();
+    loop {
+        let mut pred = Vec::new();
+        let mut idx = Vec::new();
+        for _ in 0..channels {
+            let (Some(p), Some(i)) = (get(16), get(6)) else { return out };
+            out.push(p as u16 as i16);
+            pred.push(i32::from(p as u16 as i16));
+            idx.push(i as i32);
+        }
+        for _ in 1..4096 {
+            for ch in 0..channels {
+                let Some(code) = get(bits as usize) else { return out };
+                let mag = (code & ((1 << (bits - 1)) - 1)) as i32;
+                let d = alt_diff(mag, STEPS[idx[ch] as usize], bits);
+                pred[ch] = (pred[ch] + if code >> (bits - 1) != 0 { -d } else { d }).clamp(-32768, 32767);
+                idx[ch] = (idx[ch] + index_table(bits)[mag as usize]).clamp(0, 88);
+                out.push(pred[ch] as i16);
+            }
+        }
+    }
+}
+
+/// Assert `theirs` is `ours` or `alt` over their common length (and say which).
+fn same_as_either(what: &str, ours: &[i16], alt: &[i16], theirs: &[i16]) {
+    let n = ours.len().min(theirs.len());
+    let (a, b) = (max_diff(&ours[..n], &theirs[..n]), max_diff(&alt[..n.min(alt.len())], &theirs[..n.min(alt.len())]));
+    println!("{what}: largest difference from ours {a}, from the other rounding {b}");
+    assert!(a == 0 || b == 0, "{what}: ffmpeg's decode is neither ours ({a}) nor the other rounding ({b})");
+}
+
 // ---- ffmpeg as the reference
 
 fn ffmpeg(ff: &Path, args: &[&str]) {
@@ -243,9 +347,13 @@ fn we_decode_what_ffmpeg_encodes_to_the_samples_ffmpeg_decodes() {
             };
             let n = ours.len().min(theirs.len());
             assert!(n >= 29_000 * channels, "{name} {channels}ch: {} ours, {} theirs", ours.len(), theirs.len());
-            let d = max_diff(&ours[..n], &theirs[..n]);
-            println!("{name} {channels}ch: {n} samples, largest difference from ffmpeg's decode {d}");
-            assert_eq!(d, 0, "{name} {channels}ch");
+            if name == "ima" {
+                same_as_either(&format!("{name} {channels}ch"), &ours, &alt_ima_decode(&data, ch, block), &theirs);
+            } else {
+                let d = max_diff(&ours[..n], &theirs[..n]);
+                println!("{name} {channels}ch: {n} samples, largest difference from ffmpeg's decode {d}");
+                assert_eq!(d, 0, "{name} {channels}ch");
+            }
             // our encoder is as good as ffmpeg's on the same audio, to within 3 dB
             let mine = match name {
                 "ima" => ima::decode(&ima::encode(&x, ch, block).expect("encode"), ch, block).expect("decode"),
@@ -267,10 +375,11 @@ fn ffmpeg_decodes_what_we_encode_to_the_samples_we_decode() {
     for channels in [1usize, 2] {
         let x = signal(channels, 12_000);
         let coefs: Vec<u8> = ms::COEFFICIENTS.iter().flat_map(|&(a, b)| [a as i16, b as i16].into_iter().flat_map(i16::to_le_bytes)).collect();
-        let streams: Vec<(&str, Vec<u8>, Vec<i16>)> = {
+        let streams: Vec<(&str, Vec<u8>, Vec<i16>, Vec<i16>)> = {
             let e = ima::encode(&x, channels, 512).unwrap();
             let per = ima::samples_per_block(512, channels).unwrap() as u16;
             let d = ima::decode(&e, channels, 512).unwrap();
+            let d_alt = alt_ima_decode(&e, channels, 512);
             let ima_wav = wav(0x11, channels, 512, 4, &per.to_le_bytes(), &e);
             let e = ms::encode(&x, channels, 512).unwrap();
             let per = ms::samples_per_block(512, channels).unwrap() as u16;
@@ -282,9 +391,9 @@ fn ffmpeg_decodes_what_we_encode_to_the_samples_we_decode() {
             let e = yamaha::encode(&x, channels).unwrap();
             let d3 = yamaha::decode(&e, channels).unwrap();
             let y_wav = wav(0x20, channels, 512 * channels, 4, &[], &e);
-            vec![("ima", ima_wav, d), ("ms", ms_wav, d2), ("yamaha", y_wav, d3)]
+            vec![("ima", ima_wav, d, d_alt), ("ms", ms_wav, d2.clone(), d2), ("yamaha", y_wav, d3.clone(), d3)]
         };
-        for (name, bytes, ours) in streams {
+        for (name, bytes, ours, alt) in streams {
             let file = dir.join(format!("our_{name}{channels}.wav"));
             std::fs::write(&file, bytes).expect("write");
             let back = dir.join(format!("our_{name}{channels}.pcm"));
@@ -292,16 +401,7 @@ fn ffmpeg_decodes_what_we_encode_to_the_samples_we_decode() {
             let theirs = read_pcm(&back);
             let n = ours.len().min(theirs.len());
             assert!(n + 2048 >= ours.len(), "{name} {channels}ch: ffmpeg decoded {} of {}", theirs.len(), ours.len());
-            let d = max_diff(&ours[..n], &theirs[..n]);
-            println!("{name} {channels}ch: ffmpeg's decode of our stream differs from ours by at most {d}");
-            let first = (0..n).find(|&i| ours[i] != theirs[i]);
-            assert_eq!(
-                d,
-                0,
-                "{name} {channels}ch: first difference at {first:?}: {:?} against {:?}",
-                first.map(|i| &ours[i.saturating_sub(2)..i + 3]),
-                first.map(|i| &theirs[i.saturating_sub(2)..i + 3])
-            );
+            same_as_either(&format!("{name} {channels}ch, our stream"), &ours, &alt, &theirs);
         }
     }
 }
@@ -369,9 +469,8 @@ fn flash_adpcm_matches_ffmpeg_in_both_directions() {
         let ours: Vec<i16> = tags.iter().flat_map(|t| swf::decode(t, channels).expect("decode")).collect();
         let n = ours.len().min(theirs.len());
         assert!(n >= 4096 * 3 * channels - 8192, "{n} samples");
-        let d = max_diff(&ours[..n], &theirs[..n]);
-        println!("swf {channels}ch: {n} samples, largest difference from ffmpeg's decode {d}");
-        assert_eq!(d, 0);
+        let alt: Vec<i16> = tags.iter().flat_map(|t| alt_swf_decode(t, channels)).collect();
+        same_as_either(&format!("swf {channels}ch"), &ours, &alt, &theirs);
         // ffmpeg decodes ours, one 4096-sample stream per tag
         for bits in [2u32, 3, 4, 5] {
             let tags: Vec<Vec<u8>> = x.chunks(4096 * channels).map(|c| swf::encode(c, channels, bits).expect("encode")).collect();
@@ -383,9 +482,8 @@ fn flash_adpcm_matches_ffmpeg_in_both_directions() {
             let theirs = read_pcm(&back);
             let n = ours.len().min(theirs.len());
             assert!(n >= 4096 * 3 * channels - 8192, "{bits} bits: {n} samples");
-            let d = max_diff(&ours[..n], &theirs[..n]);
-            println!("swf {channels}ch {bits} bits: ffmpeg's decode of our stream differs by at most {d}");
-            assert_eq!(d, 0, "{channels}ch {bits} bits");
+            let alt: Vec<i16> = tags.iter().flat_map(|t| alt_swf_decode(t, channels)).collect();
+            same_as_either(&format!("swf {channels}ch {bits} bits, our stream"), &ours, &alt, &theirs);
         }
     }
 }
