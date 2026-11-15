@@ -82,17 +82,42 @@ impl Server {
         if value.is_empty() || value.len() > 255 || value.bytes().any(|c| c.is_ascii_control() || c.is_ascii_whitespace() || b"/@?#\\".contains(&c)) {
             return Err(Error::Spool("invalid CUPS server".into()));
         }
-        if let Ok(address) = value.parse::<SocketAddr>() {
-            return Ok(Self::Tcp(address));
-        }
-        if let Ok(ip) = value.parse::<std::net::IpAddr>() {
-            return Ok(Self::Tcp(SocketAddr::new(ip, 631)));
-        }
-        let (host, port) = match value.rsplit_once(':') {
-            Some((host, port)) => (host, port.parse::<u16>().ok().filter(|p| *p != 0).ok_or_else(|| Error::Spool("invalid CUPS port".into()))?),
-            None => (value, 631),
+        let (host, port) = if let Some(rest) = value.strip_prefix('[') {
+            let (host, tail) = rest.split_once(']').ok_or_else(|| Error::Spool("invalid CUPS IPv6 host".into()))?;
+            let port = if tail.is_empty() {
+                631
+            } else {
+                tail.strip_prefix(':')
+                    .and_then(|p| p.parse::<u16>().ok())
+                    .filter(|p| *p != 0)
+                    .ok_or_else(|| Error::Spool("invalid CUPS port".into()))?
+            };
+            (host, port)
+        } else if value.matches(':').count() > 1 {
+            // A bare IPv6 address is a host, never an implicit final port. Scoped
+            // literals use brackets when specifying a port to avoid ambiguity.
+            (value, 631)
+        } else {
+            match value.rsplit_once(':') {
+                Some((host, port)) => (host, port.parse::<u16>().ok().filter(|p| *p != 0).ok_or_else(|| Error::Spool("invalid CUPS port".into()))?),
+                None => (value, 631),
+            }
         };
-        if host.is_empty() || host.contains([':', '[', ']']) {
+        if host.is_empty() || host.contains(['[', ']']) {
+            return Err(Error::Spool("invalid CUPS host".into()));
+        }
+        if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            return Ok(Self::Tcp(SocketAddr::new(ip, port)));
+        }
+        if host.contains(':') {
+            let (ip, zone) = host.split_once('%').ok_or_else(|| Error::Spool("invalid CUPS IPv6 host".into()))?;
+            if ip.parse::<std::net::Ipv6Addr>().is_err()
+                || zone.is_empty()
+                || !zone.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+            {
+                return Err(Error::Spool("invalid CUPS IPv6 scope".into()));
+            }
+        } else if host.contains('%') {
             return Err(Error::Spool("invalid CUPS host".into()));
         }
         Ok(Self::Named(host.into(), port))
@@ -101,7 +126,8 @@ impl Server {
     fn authority(&self) -> String {
         match self {
             Self::Unix(_) => "localhost".into(),
-            Self::Tcp(addr) => addr.to_string(),
+            Self::Tcp(addr) => addr.to_string().replace('%', "%25"),
+            Self::Named(host, port) if host.contains(':') => format!("[{}]:{port}", host.replace('%', "%25")),
             Self::Named(host, port) => format!("{host}:{port}"),
         }
     }
@@ -145,7 +171,8 @@ fn connect(server: &Server) -> std::io::Result<Stream> {
         Server::Unix(_) => Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Unix sockets unavailable")),
         Server::Named(host, port) => {
             // Validate even directly constructed public variants before resolving or writing headers.
-            Server::parse(&format!("{host}:{port}")).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+            let endpoint = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
+            Server::parse(&endpoint).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
             let addr = (host.as_str(), *port)
                 .to_socket_addrs()?
                 .next()

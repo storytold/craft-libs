@@ -524,3 +524,15 @@ fn separate_queue_query_preserves_optional_discovery_errors() {
     let request = fake.request().unwrap();
     assert_eq!(&ipp_body(&request).unwrap()[..4], &[1, 1, 0x40, 0x05]);
 }
+
+#[test]
+fn ipv6_endpoint_keeps_scope_for_resolution_and_escapes_wire_authority() {
+    assert_eq!(Server::parse("[::1]").unwrap().authority(), "[::1]:631");
+    assert_eq!(Server::parse("::1").unwrap().authority(), "[::1]:631");
+    let scoped = Server::parse("[fe80::1%en0]:8631").unwrap();
+    assert!(matches!(&scoped, Server::Named(host, 8631) if host == "fe80::1%en0"));
+    assert_eq!(scoped.authority(), "[fe80::1%25en0]:8631");
+    for bad in ["[::1]junk", "[::1]:0", "[::1]:abc", "[fe80::1%]:631", "[fe80::1%x%y]:631", "host%zone"] {
+        assert!(Server::parse(bad).is_err(), "{bad}");
+    }
+}
