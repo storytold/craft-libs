@@ -303,7 +303,17 @@ def test(top, packages, cargo_args, test_args):
     directory, the lib's unit tests first, stopping at the first that fails."""
     no_run = "--no-run" in cargo_args
     quiet = "-q" in cargo_args or "--quiet" in cargo_args
-    cargo_args = [a for a in cargo_args if a != "--no-run"]
+    # cl reads cargo's JSON messages itself (diagnostics still render), so a caller's own --message-format is dropped.
+    kept = []
+    skip = False
+    for a in cargo_args:
+        if skip:
+            skip = False
+        elif a == "--message-format":
+            skip = True
+        elif a != "--no-run" and not a.startswith("--message-format="):
+            kept.append(a)
+    cargo_args = kept
     rc, target, messages = cargo(top, cargo_args[:1] + ["--no-run", "--message-format=json-render-diagnostics"] + cargo_args[1:], json_out=True)
     if rc != 0:
         sys.exit(rc)
