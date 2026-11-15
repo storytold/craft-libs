@@ -250,6 +250,7 @@ fn the_caret_follows_the_value_wherever_the_field_puts_it() {
         let field = boxes.borrow()[0];
         let runs = painted_runs(&mut fixture);
         let value = shown(&runs, field, "100").rect;
+        assert!(fixture.focused().is_none(), "the resting paint is the unfocused field's: {field:?}");
         fixture.key(Key::Tab, Modifiers::NONE);
         fixture.settle();
         fixture.key(Key::End, Modifiers::NONE);
