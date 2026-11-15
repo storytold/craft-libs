@@ -217,6 +217,17 @@ impl<'a> LutPicker<'a> {
         entries
     }
 
+    /// The choice the select shows: a held LUT whose name is a scanned folder file's name is that folder row, so the
+    /// file the layer was loaded from is not listed a second time as a custom row.
+    fn shown_choice(current: Option<&LutChoice>, files: &FolderFiles) -> Option<LutChoice> {
+        if let Some(LutChoice::Loaded { name, .. }) = current
+            && let Some((_, path)) = files.iter().find(|(file, _)| file == name)
+        {
+            return Some(LutChoice::Folder(path.clone()));
+        }
+        current.cloned()
+    }
+
     fn select<'e>(words: &LutWords, shown: Mixed<Row>, entries: &'e [Entry<Row>]) -> Select<'e, Row> {
         Select::new(words.label.clone(), Bind::given(shown), entries)
     }
@@ -315,8 +326,9 @@ impl Component for LutPicker<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let words = cx.words::<LutWords>();
         let state = cx.recall::<LutState>();
-        let entries = Self::entries(&words, cx.value(), &state.files);
-        let shown = cx.value().map_or(Mixed::Mixed, |value| Mixed::Same(Row::Choice(value.clone())));
+        let current = Self::shown_choice(cx.value(), &state.files);
+        let entries = Self::entries(&words, current.as_ref(), &state.files);
+        let shown = current.map_or(Mixed::Mixed, |value| Mixed::Same(Row::Choice(value)));
         let out = ui.child("select", cx.rect, Self::select(&words, shown, &entries));
         let mut adopted = EditEvents::new();
         for event in &out.events {

@@ -11,7 +11,7 @@ use crate::contract::{
     Remember as _, Role, SideLabel, WordSetCx as _,
 };
 use crate::primitives::TextRun;
-use crate::runtime::env::Label;
+use crate::runtime::env::{Label, LengthUnits};
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{EditEvents, Flow, IconId, Metrics, Mixed, Proposal, Sense};
 use craft_i18n::Format;
@@ -154,6 +154,8 @@ pub struct LinkedFields<'a, const N: usize> {
     /// Each field's own range.
     #[prop]
     ranges: Option<[RangeInclusive<f64>; N]>,
+    /// The lengths every field keeps and shows (`LinkedFields::lengths`); plain numbers without it.
+    lengths: Option<LengthUnits>,
 }
 
 impl<'a, const N: usize> LinkedFields<'a, N> {
@@ -169,8 +171,17 @@ impl<'a, const N: usize> LinkedFields<'a, N> {
             layout: LinkedLayout::Row,
             captions: None,
             ranges: None,
+            lengths: None,
         }
         .label(label)
+    }
+
+    /// Makes every field a length field (`NumberField::length`): the values are kept in `units.stored` and shown in
+    /// `units.shown`. `range` is then in the stored unit.
+    #[must_use]
+    pub fn lengths(mut self, units: LengthUnits) -> Self {
+        self.lengths = Some(units);
+        self
     }
 
     /// Shows a caption with each field that also scrubs it, and names the field: inside the field at its start in the
@@ -209,7 +220,12 @@ impl<'a, const N: usize> LinkedFields<'a, N> {
     }
 
     fn field(&self, i: usize, group: &Label, words: &LinkedWords, format: &Format, value: Mixed<Option<f64>>) -> NumberField<'static> {
-        NumberField::new(self.name(i, group, words, format), Bind::given(value)).range(self.range_of(i))
+        let name = self.name(i, group, words, format);
+        let field = match self.lengths {
+            Some(units) => NumberField::length(name, Bind::given(value), units),
+            None => NumberField::new(name, Bind::given(value)),
+        };
+        field.range(self.range_of(i))
     }
 }
 
