@@ -82,6 +82,9 @@ fn parse_binary_within(data: &[u8], byte_budget: usize) -> Result<Value, FormatE
     if !data.starts_with(b"bplist") {
         return Err(FormatError::Malformed("not a binary plist".into()));
     }
+    if !data.starts_with(b"bplist0") {
+        return Err(FormatError::Unsupported("unknown binary plist version".into()));
+    }
     let len = data.len();
     if len < 8 + 32 {
         return Err(FormatError::Truncated("binary plist trailer".into()));
@@ -201,7 +204,7 @@ impl Bin<'_> {
                 0x0 => Value::Null,
                 0x8 => Value::Bool(false),
                 0x9 => Value::Bool(true),
-                _ => Value::Null,
+                _ => return Err(FormatError::Malformed(format!("unknown simple plist object {m:#04x}"))),
             },
             0x1 => {
                 if lo > 4 {
@@ -224,7 +227,7 @@ impl Bin<'_> {
                 };
                 Value::Real(v.ok_or_else(|| FormatError::Truncated("real".into()))?)
             }
-            0x3 => Value::Date(DateValue::Seconds(self.r.u64_be(at + 1).map(f64::from_bits).ok_or_else(|| FormatError::Truncated("date".into()))?)),
+            0x3 if lo == 3 => Value::Date(DateValue::Seconds(self.r.u64_be(at + 1).map(f64::from_bits).ok_or_else(|| FormatError::Truncated("date".into()))?)),
             0x4 => {
                 let (n, s) = self.count(at, lo)?;
                 let bytes = self.r.slice(s, n).ok_or_else(|| FormatError::Truncated("data".into()))?;
@@ -285,7 +288,7 @@ impl Bin<'_> {
                     let v = self.reference(s, i + n)?;
                     let key = match self.object(k, stack)? {
                         Value::String(s) => s,
-                        other => format!("{:?}", other.to_json()),
+                        _ => return Err(FormatError::Unsupported("non-string dictionary keys cannot be represented in this plist view".into())),
                     };
                     out.push((key, self.object(v, stack)?));
                 }
