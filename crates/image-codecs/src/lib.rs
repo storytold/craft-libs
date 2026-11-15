@@ -26,6 +26,7 @@ mod fidelity;
 mod format;
 mod image;
 mod inspection;
+pub mod jpeg_sef;
 mod lab;
 mod options;
 pub mod orientation;
@@ -109,7 +110,11 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Jp2 => jp2::decode(bytes, l),
         Format::Jxl => Err(CodecError::unsupported(format, "JPEG XL reading is not yet available; export is supported")),
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
+        #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+        Format::Avif => codecs::avif_decode::decode(bytes, l, opts.keep_orientation),
+        #[cfg(not(all(feature = "avif-decode", not(target_arch = "wasm32"))))]
+        Format::Avif => via_image::decode(format, bytes, l),
+        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::decode(format, bytes, l),
     }?;
     finish_format(format, bytes, img, opts)
 }
@@ -166,10 +171,11 @@ fn finish_format(format: Format, bytes: &[u8], mut img: Image, opts: &DecodeOpti
     }
     // Turn the pixels upright, like Photoshop: a TIFF records it in the decoded page's own
     // directory, the others in their EXIF block. The metadata is rewritten to Orientation = 1
-    // on the way. HEIF keeps it in its container, and its decoder has already applied it.
+    // on the way. HEIF and AVIF keep it in their container, and their decoders have already
+    // applied it.
     let o = match format {
         Format::Tiff => tiff::orientation(bytes, None),
-        Format::Heif => 1,
+        Format::Heif | Format::Avif => 1,
         Format::Dpx => dpx::orientation(bytes),
         Format::Cineon => dpx::cineon_orientation(bytes),
         _ => img.meta.exif.as_deref().map_or(1, exif_orientation),
@@ -198,10 +204,11 @@ pub fn decode_png_rows<E: From<CodecError>>(
 }
 
 /// The upright pixel size [`decode`] would return, read from the file's header without decoding
-/// pixels, for WebP, OpenEXR (flat) and the GIF/BMP/TGA/ICO/QOI/HDR family. It runs the same
+/// pixels, for WebP, OpenEXR (flat), AVIF (with `avif-decode`) and the GIF/BMP/TGA/ICO/QOI/HDR family. It runs the same
 /// header reads and size checks as the decoder (default [`Limits`]) and swaps the size for an
-/// EXIF orientation of 5–8, so wherever [`decode`] succeeds the two agree. Other formats (and
-/// deep EXR or AVIF) return [`CodecError::Unsupported`]: decode those to learn their size.
+/// EXIF orientation of 5–8 (AVIF: its container's `clap` and `irot`), so wherever [`decode`]
+/// succeeds the two agree. Other formats (and deep EXR) return [`CodecError::Unsupported`]: decode
+/// those to learn their size.
 pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     let format = detect(bytes).ok_or(CodecError::UnknownFormat)?;
     if !caps(format).read {
@@ -211,7 +218,11 @@ pub fn probe_size(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
     let (w, h, exif) = match format {
         Format::WebP => webp::probe(bytes, l)?,
         Format::OpenExr => exr::probe(bytes, l).map(|(w, h)| (w, h, None))?,
-        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::probe(format, bytes, l)?,
+        #[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+        Format::Avif => codecs::avif_decode::probe(bytes, l).map(|(w, h)| (w, h, None))?,
+        #[cfg(not(all(feature = "avif-decode", not(target_arch = "wasm32"))))]
+        Format::Avif => via_image::probe(format, bytes, l)?,
+        Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr => via_image::probe(format, bytes, l)?,
         _ => return Err(CodecError::unsupported(format, "no header-only size probe")),
     };
     let o = exif.as_deref().map_or(1, exif_orientation);

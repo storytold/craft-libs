@@ -638,9 +638,9 @@ fn euler(d: [f64; 3], order: i64) -> Mat4 {
 }
 
 /// A Model's local transform: `T · Roff · Rp · Rpre · R · Rpost⁻¹ · Rp⁻¹ · Soff · Sp · S · Sp⁻¹`.
-fn model_local(p: &Props) -> Mat4 {
+fn model_local(p: &Props, apply_inactive_rotation: bool) -> Mat4 {
     let order = p.f("RotationOrder").map_or(0, |o| o as i64);
-    let active = p.f("RotationActive").is_some_and(|a| a != 0.0);
+    let active = apply_inactive_rotation || p.f("RotationActive").is_some_and(|a| a != 0.0);
     let (pre, post) =
         if active { (euler(p.v3("PreRotation", [0.0; 3]), 0), transpose(&euler(p.v3("PostRotation", [0.0; 3]), 0))) } else { (IDENTITY, IDENTITY) };
     let rp = p.v3("RotationPivot", [0.0; 3]);
@@ -669,6 +669,20 @@ fn geometric(p: &Props) -> Option<Mat4> {
         return None;
     }
     Some(chain(&[translate(t), euler(r, 0), scale(s)]))
+}
+
+/// Optional FBX scene compatibility behavior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SceneOptions {
+    /// Apply pre/post rotations even when `RotationActive` is missing or zero. Some importers
+    /// retain these values regardless of the flag.
+    pub apply_inactive_rotation: bool,
+    /// Refuse malformed geometry arrays and accept an unterminated final polygon.
+    pub strict_geometry: bool,
+    /// If a model names several parents, use the last connection.
+    pub prefer_last_parent: bool,
+    /// Restrict model hierarchy, geometry and material links to object connections.
+    pub only_object_connections: bool,
 }
 
 impl Document {
@@ -720,6 +734,11 @@ impl Document {
     /// The scene the records describe. `resolve` is asked for texture image files (see the
     /// module documentation).
     pub fn scene(&self, limits: &Limits, resolve: Resolver) -> Result<Scene> {
+        self.scene_with_options(limits, resolve, &SceneOptions::default())
+    }
+
+    /// Build a scene with explicitly selected compatibility behavior.
+    pub fn scene_with_options(&self, limits: &Limits, resolve: Resolver, options: &SceneOptions) -> Result<Scene> {
         if self.version != 0 && self.version < 6000 {
             return Err(crate::Error::Unsupported(format!(
                 "FBX {}.{} (only FBX 6.x and 7.x files are read)",
@@ -730,10 +749,13 @@ impl Document {
         let objects = self.top("Objects").ok_or_else(|| malformed(KIND, "no Objects section"))?;
         let mut b = Build {
             limits,
+            strict_geometry: options.strict_geometry,
+            only_object_connections: options.only_object_connections,
             budget: Budget { left: Cell::new(self.left), limit: limits.max_data_bytes },
             resolve,
             by_key: objects.children.iter().filter_map(|o| Some((key(o.props.first())?, o))).collect(),
             children: HashMap::new(),
+            object_children: HashMap::new(),
             scene: Scene::default(),
             material_of: HashMap::new(),
             texture_of: HashMap::new(),
@@ -746,8 +768,14 @@ impl Document {
         let mut links: Vec<(Key, Key)> = vec![];
         for e in self.top("Connections").into_iter().flat_map(|c| c.children.iter()).filter(|e| e.name == "C" || e.name == "Connect") {
             let (Some(child), Some(parent)) = (key(e.props.get(1)), key(e.props.get(2))) else { continue };
-            links.push((child, parent));
+            let object = e.str_at(0) == Some("OO");
+            if !options.only_object_connections || object {
+                links.push((child, parent));
+            }
             b.children.entry(parent).or_default().push((child, e.str_at(3)));
+            if options.only_object_connections && object {
+                b.object_children.entry(parent).or_default().push((child, e.str_at(3)));
+            }
         }
 
         let models: Vec<(Key, &Record)> =
@@ -761,7 +789,7 @@ impl Document {
             node_of.insert(*id, b.scene.nodes.len());
             b.scene.nodes.push(Node {
                 name: short_name(o.first_str().unwrap_or("")).to_string(),
-                transform: model_local(&Props::of(o)),
+                transform: model_local(&Props::of(o), options.apply_inactive_rotation),
                 ..Node::default()
             });
         }
@@ -772,7 +800,11 @@ impl Document {
             if let (Some(ci), Some(pi)) = (node_of.get(c), node_of.get(p))
                 && ci != pi
             {
-                parent.entry(*ci).or_insert(*pi);
+                if options.prefer_last_parent {
+                    parent.insert(*ci, *pi);
+                } else {
+                    parent.entry(*ci).or_insert(*pi);
+                }
             }
         }
         for i in 0..b.scene.nodes.len() {
@@ -942,10 +974,13 @@ fn material(name: &str, record: &Record) -> Material {
 /// A scene under construction.
 struct Build<'a, 'r> {
     limits: &'a Limits,
+    strict_geometry: bool,
+    only_object_connections: bool,
     budget: Budget,
     resolve: Resolver<'r>,
     by_key: HashMap<Key<'a>, &'a Record>,
     children: HashMap<Key<'a>, Vec<(Key<'a>, Option<&'a str>)>>,
+    object_children: HashMap<Key<'a>, Vec<(Key<'a>, Option<&'a str>)>>,
     scene: Scene,
     material_of: HashMap<Key<'a>, usize>,
     texture_of: HashMap<Key<'a>, Option<usize>>,
@@ -960,7 +995,12 @@ struct Build<'a, 'r> {
 impl<'a> Build<'a, '_> {
     /// The objects of `kind` connected under `id`, with the property each connects to.
     fn children_of(&self, id: Key<'a>, kind: &str) -> Vec<(Key<'a>, Option<&'a str>)> {
-        let all = self.children.get(&id).map(Vec::as_slice).unwrap_or_default();
+        let source = if self.only_object_connections && matches!(kind, "Geometry" | "Material" | "NodeAttribute") {
+            &self.object_children
+        } else {
+            &self.children
+        };
+        let all = source.get(&id).map(Vec::as_slice).unwrap_or_default();
         all.iter().filter(|l| self.by_key.get(&l.0).is_some_and(|o| o.name == kind)).copied().collect()
     }
 
@@ -1074,6 +1114,32 @@ impl<'a> Build<'a, '_> {
     fn mesh(&mut self, name: &str, geom: &Record, materials: &[usize]) -> Result<Option<Mesh>> {
         let limits = self.limits;
         let (Some(vertices), Some(pvi)) = (geom.child("Vertices"), geom.child("PolygonVertexIndex")) else { return Ok(None) };
+        if self.strict_geometry {
+            let valid = |record: &Record, integers: bool| {
+                let values = record.child("a").unwrap_or(record);
+                values.props.iter().all(|p| match p {
+                    Prop::Int(_) | Prop::Ints(_) => true,
+                    Prop::Float(f) => f.is_finite() && (!integers || f.fract() == 0.0),
+                    Prop::Floats(a) => a.iter().all(|f| f.is_finite() && (!integers || f.fract() == 0.0)),
+                    _ => false,
+                })
+            };
+            if !valid(vertices, false) || !valid(pvi, true) {
+                return Err(malformed(KIND, "mesh array contains a non-numeric, non-finite or fractional index value"));
+            }
+            for (element, names) in [
+                ("LayerElementNormal", &["Normals", "NormalsIndex"][..]),
+                ("LayerElementUV", &["UV", "UVIndex"][..]),
+                ("LayerElementMaterial", &["Materials"][..]),
+                ("LayerElementColor", &["Colors", "ColorIndex"][..]),
+            ] {
+                if let Some(layer) = geom.children_named(element).min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0))
+                    && names.iter().filter_map(|n| layer.child(n)).any(|r| !valid(r, false))
+                {
+                    return Err(malformed(KIND, "mesh array contains a non-numeric or non-finite value"));
+                }
+            }
+        }
         let pool = |what: &str, n: usize| {
             if n > limits.max_vertices { Err(too_large(KIND, format!("more than {} {what}", limits.max_vertices))) } else { Ok(()) }
         };
@@ -1091,15 +1157,18 @@ impl<'a> Build<'a, '_> {
         let mut part_of: HashMap<Option<usize>, usize> = HashMap::new();
         let mut face: Vec<Corner> = vec![];
         let (mut broken, mut poly) = (false, 0usize);
-        for (pv, raw) in pvi.ints().into_iter().enumerate() {
+        let polygon_indices = pvi.ints();
+        let index_count = polygon_indices.len();
+        for (pv, raw) in polygon_indices.into_iter().enumerate() {
             // The last corner of a polygon is stored as `-index - 1`.
-            let (v, last) = if raw < 0 { (!raw, true) } else { (raw, false) };
+            let (v, last) = if raw < 0 { (!raw, true) } else { (raw, self.strict_geometry && pv + 1 == index_count) };
             match u32::try_from(v).ok().filter(|v| (*v as usize) < positions.len()) {
                 Some(p) => face.push(Corner {
                     position: p,
                     normal: Layer::at(normal_layer, pv, p as usize, poly),
                     uv: Layer::at(uv_layer, pv, p as usize, poly),
                 }),
+                None if self.strict_geometry => return Err(malformed(KIND, format!("polygon vertex index {raw} out of range"))),
                 None => broken = true,
             }
             if face.len() > limits.max_face_corners {
