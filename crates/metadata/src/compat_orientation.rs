@@ -179,4 +179,59 @@ mod tests {
         assert_eq!(summarize(b"II*\0\xff\xff\xff\xff"), ExifSummary::default());
         assert_eq!(summarize(&[]), ExifSummary::default());
     }
+
+    /// Big-endian IFD: `entries` are (tag, type, count, value-or-offset), value left-justified.
+    fn be_ifd(out: &mut Vec<u8>, entries: &[(u16, u16, u32, [u8; 4])], next: u32) {
+        out.extend_from_slice(&(entries.len() as u16).to_be_bytes());
+        for (tag, typ, count, value) in entries {
+            out.extend_from_slice(&tag.to_be_bytes());
+            out.extend_from_slice(&typ.to_be_bytes());
+            out.extend_from_slice(&count.to_be_bytes());
+            out.extend_from_slice(value);
+        }
+        out.extend_from_slice(&next.to_be_bytes());
+    }
+
+    #[test]
+    fn big_endian_thumbnail_and_adobe_rgb_interop_hint() {
+        let (ifd1, exif, interop, rational, thumb) = (38u32, 68u32, 98u32, 164u32, 172u32);
+        let mut b = b"MM\0\x2a\0\0\0\x08".to_vec();
+        be_ifd(&mut b, &[(0x0112, 3, 1, [0, 6, 0, 0]), (0x8769, 4, 1, exif.to_be_bytes())], ifd1);
+        be_ifd(&mut b, &[(0x0201, 4, 1, thumb.to_be_bytes()), (0x0202, 1, 1, [6, 0, 0, 0])], 0);
+        be_ifd(&mut b, &[(0xA001, 3, 1, [0xFF, 0xFF, 0, 0]), (0xA005, 13, 1, interop.to_be_bytes())], 0);
+        // Every tag-1 candidate is read; only the ASCII "R03" one matches.
+        be_ifd(
+            &mut b,
+            &[(1, 99, 1, [0; 4]), (1, 5, 1, rational.to_be_bytes()), (1, 4, 1, *b"R98\0"), (1, 3, 1, *b"R9\0\0"), (1, 2, 4, *b"R03\0")],
+            0,
+        );
+        assert_eq!(b.len(), rational as usize);
+        b.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 2]);
+        b.extend_from_slice(&[0xFF, 0xD8, 0xFF, 0xD9, 0, 0]);
+        let s = summarize(&b);
+        assert_eq!(s, ExifSummary { orientation: Some(6), thumbnail: Some((thumb as usize, 6)), adobe_rgb_hint: true });
+        // A thumbnail that is not a JPEG, or runs past the blob, is ignored.
+        let mut not_jpeg = b.clone();
+        not_jpeg[thumb as usize] = 0;
+        assert_eq!(summarize(&not_jpeg).thumbnail, None);
+        assert_eq!(summarize(&b[..b.len() - 1]).thumbnail, None);
+        // Without ColorSpace 0xFFFF the interop index is not consulted.
+        let mut srgb = b.clone();
+        srgb[(exif + 10) as usize] = 0;
+        assert!(!summarize(&srgb).adobe_rgb_hint);
+    }
+
+    #[test]
+    fn rejects_bad_headers_types_and_oversized_tables() {
+        assert_eq!(summarize(b"XX\0\x2a\0\0\0\x08"), ExifSummary::default());
+        assert_eq!(summarize(b"MM\0\x2b\0\0\0\x08"), ExifSummary::default());
+        let mut huge = b"MM\0\x2a\0\0\0\x08".to_vec();
+        huge.extend_from_slice(&5000u16.to_be_bytes());
+        assert_eq!(summarize(&huge), ExifSummary::default());
+        // Orientation stored with an unsupported type (SRATIONAL) is ignored.
+        let mut bytes = minimal_exif(6);
+        bytes[12..14].copy_from_slice(&10u16.to_le_bytes());
+        assert_eq!(orientation(&bytes), 1);
+        assert_eq!(orientation(&[b"Exif\0\0".as_slice(), &minimal_exif(3)].concat()), 3);
+    }
 }
