@@ -351,7 +351,7 @@ note = "Words are `CreateShapeWords`."
 [[type]]
 name = "GradientEditor"
 old = "craft_draw::ui::GradientEditor"
-new = "craft_draw::ui::gradient::GradientEditor"
+new = "craft_color::ui::gradient::GradientEditor"
 status = "replaced"
 note = "A pattern: `GradientEditor::new(label, Bind<GradientStops>).show(ui)` with output `GradientEditorOutput`. The selection is the host's `selected` binding or the editor's own."
 
@@ -365,7 +365,7 @@ note = "`edit` folds the bar's and the fields' events; `color_requested` carries
 [[type]]
 name = "GradientEditorOutput"
 old = ""
-new = "craft_draw::ui::gradient::GradientEditorOutput"
+new = "craft_color::ui::gradient::GradientEditorOutput"
 status = "replaced"
 note = "`edit` folds the bar's and the fields' events; `color_requested` carries a `StopColor`; the eyedropper request is `screen_pick`."
 
@@ -386,29 +386,29 @@ note = "A `words!` set with count rows for the stop counts."
 [[type]]
 name = "GradientWords"
 old = ""
-new = "craft_draw::ui::gradient::GradientWords"
+new = "craft_color::ui::gradient::GradientWords"
 status = "replaced"
 note = "A `words!` set with count rows for the stop counts."
 
 [[type]]
 name = "StopRef"
 old = "craft_draw::ui::gradient::StopRef"
-new = "craft_draw::ui::gradient::StopRef"
-status = "same"
+new = "craft_color::ui::gradient::StopRef"
+status = "moved"
 note = "Moved to `value.rs`; `#[non_exhaustive]`."
 
 [[type]]
 name = "StopDrop"
 old = "craft_draw::ui::gradient::StopDrop"
-new = "craft_draw::ui::gradient::StopDrop"
-status = "same"
+new = "craft_color::ui::gradient::StopDrop"
+status = "moved"
 note = "The payload type is carried with it in `dropped`."
 
 [[type]]
 name = "GradientRamp"
 old = "craft_draw::ui::gradient::GradientRamp"
-new = "craft_draw::ui::gradient::GradientRamp"
-status = "same"
+new = "craft_color::ui::gradient::GradientRamp"
+status = "moved"
 note = "`paint(cx, rect, colors)` over the kit's ramp painter."
 
 [[type]]
@@ -428,62 +428,62 @@ note = "`GradientSwatch::new(label, &stops)`; output `GradientSwatchOutput { res
 [[type]]
 name = "GradientStops"
 old = "craft_draw::ui::gradient::GradientStops"
-new = "craft_draw::ui::gradient::GradientStops"
-status = "same"
+new = "craft_color::ui::gradient::GradientStops"
+status = "moved"
 note = "`#[non_exhaustive]` with constructors."
 
 [[type]]
 name = "ColorStop"
 old = "craft_draw::ui::gradient::ColorStop"
-new = "craft_draw::ui::gradient::ColorStop"
-status = "same"
+new = "craft_color::ui::gradient::ColorStop"
+status = "moved"
 note = "`#[non_exhaustive]` with constructors."
 
 [[type]]
 name = "OpacityStop"
 old = "craft_draw::ui::gradient::OpacityStop"
-new = "craft_draw::ui::gradient::OpacityStop"
-status = "same"
+new = "craft_color::ui::gradient::OpacityStop"
+status = "moved"
 note = "`#[non_exhaustive]` with constructors."
 
 [[type]]
 name = "StopRow"
 old = "craft_draw::ui::gradient::StopRow"
-new = "craft_draw::ui::gradient::StopRow"
-status = "same"
+new = "craft_color::ui::gradient::StopRow"
+status = "moved"
 note = "`#[non_exhaustive]` with constructors."
 
 [[type]]
 name = "StopRows"
 old = "craft_draw::ui::gradient::StopRows"
-new = "craft_draw::ui::gradient::StopRows"
-status = "same"
+new = "craft_color::ui::gradient::StopRows"
+status = "moved"
 note = "`#[non_exhaustive]` with constructors."
 
 [[type]]
 name = "StopRules"
 old = "craft_draw::ui::gradient::StopRules"
-new = "craft_draw::ui::gradient::StopRules"
-status = "same"
+new = "craft_color::ui::gradient::StopRules"
+status = "moved"
 note = "`#[non_exhaustive]` with constructors."
 
 [[type]]
 name = "Sampler"
 old = "craft_draw::ui::gradient::Sampler"
-new = "craft_draw::ui::gradient::Sampler"
-status = "same"
+new = "craft_color::ui::gradient::Sampler"
+status = "moved"
 note = "`#[non_exhaustive]` with constructors."
 
 [[type]]
 name = "default_sampler"
 old = "craft_draw::ui::gradient::default_sampler"
-new = "craft_draw::ui::gradient::default_sampler"
-status = "same"
+new = "craft_color::ui::gradient::default_sampler"
+status = "moved"
 
 [[type]]
 name = "StopColor"
 old = ""
-new = "craft_draw::ui::gradient::StopColor"
+new = "craft_color::ui::gradient::StopColor"
 status = "pending"
 note = "New: the colour stop whose colour the host is asked to edit, with its `ColorRequest`."
 
@@ -1436,9 +1436,9 @@ note = "Constructed with `TransformRow::new(state, skew_v)`; the type is `#[non_
 [[type]]
 name = "BarGroups"
 old = "craft_draw::ui::BarGroups"
-new = "craft_draw::ui::BarGroups"
-status = "same"
-note = "`#[non_exhaustive]`: start from `BarGroups::ALL` and clear fields."
+new = "craft_draw::ui::TransformGroups"
+status = "moved"
+note = "`#[non_exhaustive]`: start from `TransformGroups::ALL` and clear fields. The panel form leaves out the rows of hidden groups."
 
 [[type]]
 name = "SizeUnit"
@@ -1603,7 +1603,7 @@ name = "ArtboardBar"
 old = "craft_draw::ui::artboard::ArtboardBar"
 new = "craft_draw::ui::artboard::ArtboardBar"
 status = "same"
-note = "A pattern shown as children of the app options `Bar`: `ArtboardBar::new(selected, presets)`, `show(ui)`. Add New Artboard is a `BarItem` of `ArtboardCommand`; `id_salt`, `labels` and `output` go."
+note = "A pattern shown as children of the app options `Bar`: `ArtboardBar::new(target: ArtboardBarTarget, presets)`, `show(ui)`. Add New Artboard is a `BarItem` of `ArtboardCommand`; `id_salt`, `labels` and `output` go."
 
 [[type]]
 name = "ArtboardBarOutput"
@@ -1710,7 +1710,7 @@ note = "`pixels_per_inch` and the document size replace the two `UnitContext`s."
 [[setter]]
 type = "ArtboardBar"
 old = "ArtboardBar::new(id_salt, selected, presets)"
-new = "ArtboardBar::new(selected, presets)"
+new = "ArtboardBar::new(target: ArtboardBarTarget, presets)"
 note = "No id salt."
 
 [[setter]]

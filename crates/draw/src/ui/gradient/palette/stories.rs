@@ -7,7 +7,7 @@ use craft_ui::testing::{StoryData, StoryOutput, story};
 use egui::Ui;
 
 use super::{GradientGroup, GradientItem, GradientPalette, GradientRef};
-use crate::ui::gradient::{ColorStop, GradientStops};
+use craft_color::ui::gradient::{ColorStop, GradientStops};
 
 fn pair(a: [f32; 3], b: [f32; 3]) -> GradientStops {
     let color = |c: [f32; 3]| Srgba { r: c[0], g: c[1], b: c[2], a: 1.0 };

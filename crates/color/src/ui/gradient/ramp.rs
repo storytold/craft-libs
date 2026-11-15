@@ -13,7 +13,7 @@ use crate::gradient::{GradientStops, Sampler, StopRow};
 const EVEN_SAMPLES: usize = 64;
 
 /// Paint for a gradient: a mesh across a rect, over the checkerboard where it is translucent.
-/// The ramp has no edge; [`GradientSwatch`](super::GradientSwatch) draws a swatch's rings and the
+/// The ramp has no edge; craft-draw's `GradientSwatch` draws a swatch's rings and the
 /// stop bar its edge.
 #[derive(Clone, Copy, Debug)]
 pub struct GradientRamp;

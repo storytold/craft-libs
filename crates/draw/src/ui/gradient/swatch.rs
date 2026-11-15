@@ -8,9 +8,7 @@ use craft_ui::contract::{
 use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Response, Vec2};
 
-use super::ramp::GradientRamp;
-use super::stops::{Sampler, default_sampler};
-use super::value::{GradientStops, StopRows};
+use craft_color::ui::gradient::{GradientRamp, GradientStops, Sampler, StopRows, default_sampler};
 
 #[cfg(feature = "screen-testing")]
 mod stories;

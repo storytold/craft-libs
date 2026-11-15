@@ -1,7 +1,7 @@
 //! Stories of `GradientSwatch`.
 
 use super::GradientSwatch;
-use crate::ui::gradient::{ColorStop, GradientStops, OpacityStop, StopRows};
+use craft_color::ui::gradient::{ColorStop, GradientStops, OpacityStop, StopRows};
 use craft_theme::Srgba;
 use craft_ui::contract::{Props as _, Show as _, ShowContainer as _, Sizing};
 use craft_ui::display::{Shade, Text};

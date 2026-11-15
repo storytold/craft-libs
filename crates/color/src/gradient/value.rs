@@ -36,6 +36,7 @@ pub enum StopRow {
 
 /// A colour stop.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ColorStop {
     /// Where the stop is, 0..=1.
@@ -44,15 +45,18 @@ pub struct ColorStop {
     pub color: Srgba,
     /// Where between this stop and the next the mix is half and half, 0..=1; 0.5 is centred. The
     /// last stop's is unused.
+    #[serde(default = "centred")]
     pub midpoint: f32,
     /// The host's: it travels with the stop through moves and reorders, so the host can keep what
     /// the stop doesn't model (a swatch link, a stable id). An added stop has tag 0; a copy keeps
     /// its source's.
+    #[serde(default)]
     pub tag: u64,
 }
 
 /// An opacity stop of a [`StopRows::Split`] gradient.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct OpacityStop {
     /// Where the stop is, 0..=1.
@@ -60,9 +64,16 @@ pub struct OpacityStop {
     /// Its opacity, 0..=1.
     pub opacity: f32,
     /// As [`ColorStop::midpoint`].
+    #[serde(default = "centred")]
     pub midpoint: f32,
     /// As [`ColorStop::tag`].
+    #[serde(default)]
     pub tag: u64,
+}
+
+/// The midpoint of a stop saved without one: centred, as the constructors make it.
+fn centred() -> f32 {
+    0.5
 }
 
 impl ColorStop {
@@ -109,12 +120,14 @@ impl OpacityStop {
 
 /// A gradient's stops, each list sorted by location.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct GradientStops {
     /// The colour stops.
     pub color: Vec<ColorStop>,
     /// The opacity stops; empty under [`StopRows::Combined`], and for an opaque
     /// [`StopRows::Split`] gradient.
+    #[serde(default)]
     pub opacity: Vec<OpacityStop>,
 }
 

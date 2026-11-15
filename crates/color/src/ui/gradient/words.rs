@@ -1,8 +1,8 @@
-//! The words of the gradient stop bar, its fields and the canvas gradient line.
+//! The words of the gradient stop bar, its fields and the canvas gradient line's marker texts.
 
 craft_ui::words! {
     /// The gradient editor's words. Templates take `{i}`, `{n}`, `{location}`, `{hex}`, `{opacity}`, `{colors}`,
-    /// `{opacities}`, `{x}` and `{y}`.
+    /// and `{opacities}`.
     pub struct GradientWords {
         /// A colour stop's accessible name: "Color stop {i} of {n}".
         color_stop: template "gradient.colorStop" = "Color stop {i} of {n}";
@@ -26,8 +26,6 @@ craft_ui::words! {
         split_value: template "gradient.splitValue" = "{colors}, {opacities}";
         /// The count of stops in the bar's value under `StopRows::Combined`.
         bar_stops: count "gradient.barStops" = "{n} stop" | "{n} stops";
-        /// A canvas gradient line's end handle value, a point in document units: "{x}, {y}".
-        point_value: template "gradient.pointValue" = "{x}, {y}";
         /// The Color field's label.
         color: "gradient.color" = "Color";
         /// The Opacity field's label.

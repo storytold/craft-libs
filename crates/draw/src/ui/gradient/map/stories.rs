@@ -5,7 +5,7 @@ use craft_ui::testing::{StoryData, StoryOutput, story};
 use egui::Ui;
 
 use super::{GradientMap, GradientMapEditor};
-use crate::ui::gradient::{ColorStop, GradientStops};
+use craft_color::ui::gradient::{ColorStop, GradientStops};
 
 #[story(GradientMapEditor<'static>, covers = [Default])]
 fn gradient_map(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {

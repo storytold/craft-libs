@@ -1,8 +1,8 @@
 //! [`GradientMapEditor`]: the Gradient Map adjustment: the preset picker, the [`GradientEditor`] stop bar with colour
 //! stops only, Reverse and Dither.
 //!
-//! It lives here, beside the gradient editor it builds on, rather than with the other adjustment editors in
-//! craft-imaging: a family crate depends on no other family crate but craft-color.
+//! It lives here rather than with the other adjustment editors in craft-imaging because it picks from the palette's
+//! [`GradientGroup`] presets, and a family crate depends on no other family crate but craft-color.
 
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -17,13 +17,17 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{Response, Ui};
 use std::sync::Arc;
 
-use super::{ColorStop, GradientEditor, GradientGroup, GradientRef, GradientStops, Sampler, StopColor, StopRows, StopRules};
+use craft_color::ui::gradient::{ColorStop, GradientEditor, GradientStops, Sampler, StopColor, StopRows, StopRules};
+use serde::{Deserialize, Serialize};
+
+use super::{GradientGroup, GradientRef};
 
 const MAX_STOPS: usize = 64;
 const MIN_STOPS: usize = 2;
 
 /// The Gradient Map adjustment's value: the gradient the image's luminance maps through, and its two options.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct GradientMap {
     /// The gradient: colour stops only.
@@ -107,9 +111,9 @@ impl<'a> GradientMapEditor<'a> {
             .iter()
             .take(MAX_STOPS)
             .map(|s| {
-                let mut color = s.color;
-                color.a = 1.0;
-                ColorStop { color, midpoint: 0.5, ..*s }
+                let mut stop = s.with_midpoint(0.5);
+                stop.color.a = 1.0;
+                stop
             })
             .collect();
         (color.len() >= MIN_STOPS).then(|| GradientStops::new(color))
@@ -147,7 +151,7 @@ impl<'a> GradientMapEditor<'a> {
             if clicked(&Button::new(import_label.clone()).show(ui)) {
                 import = true;
             }
-            let rules = StopRules { rows: StopRows::ColorOnly, min: MIN_STOPS, max: MAX_STOPS, ..StopRules::default() };
+            let rules = StopRules::new(StopRows::ColorOnly).stops(MIN_STOPS, MAX_STOPS);
             let mut editor =
                 GradientEditor::new(stops_label.clone(), Bind::given(base.stops.clone())).rules(rules).midpoints(false).location_decimals(1);
             if let Some(sampler) = self.sampler {

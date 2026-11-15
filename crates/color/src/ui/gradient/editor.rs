@@ -17,6 +17,8 @@ use crate::gradient::{GradientStops, Sampler, StopRules};
 
 mod bar;
 mod fields;
+#[cfg(feature = "screen-testing")]
+mod stories;
 
 use bar::GradientBar;
 pub use bar::StopDrop;

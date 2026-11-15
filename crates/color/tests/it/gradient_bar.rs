@@ -5,12 +5,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_behavior::EditEvent;
-use craft_draw::ui::gradient::stops::{StopRules, sample};
-use craft_draw::ui::gradient::{ColorStop, GradientEditor, GradientStops, OpacityStop, StopDrop, StopRef, StopRows};
+use craft_color::ui::gradient::stops::{StopRules, sample};
+use craft_color::ui::gradient::{ColorStop, GradientEditor, GradientStops, OpacityStop, StopDrop, StopRef, StopRows};
 use craft_theme::Srgba;
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Color32, Shape, TextureId, Vec2};
+use egui::{Color32, Event, Shape, TextureId, Vec2, vec2};
 
 const RED: Srgba = Srgba::rgb(1.0, 0.0, 0.0);
 const BLUE: Srgba = Srgba::rgb(0.0, 0.0, 1.0);
@@ -68,10 +68,16 @@ fn kind<T>(event: &EditEvent<T>) -> &'static str {
 }
 
 fn rig(start: GradientStops, rules: StopRules, fields: bool) -> Rig {
+    rig_below(start, rules, fields, 0.0)
+}
+
+/// A rig whose editor sits `above` points down a room tall enough for a drag far above and far below the bar.
+fn rig_below(start: GradientStops, rules: StopRules, fields: bool, above: f32) -> Rig {
     let stops = Rc::new(RefCell::new(start));
     let seen = Rc::new(RefCell::new(Seen::default()));
     let (shared, report) = (stops.clone(), seen.clone());
     let mut fixture = Fixture::new(move |ui| {
+        ui.add_space(above);
         let mut stops = shared.borrow_mut();
         let out = GradientEditor::new("Gradient", Bind::bound(&mut stops)).rules(rules.clone()).fields(fields).drop_target::<u32>().show(ui);
         let mut seen = report.borrow_mut();
@@ -80,6 +86,9 @@ fn rig(start: GradientStops, rules: StopRules, fields: bool) -> Rig {
         seen.dropped.extend(out.dropped.iter().map(|(place, _)| *place));
         seen.selected = out.selected;
     });
+    if above > 0.0 {
+        fixture.room(vec2(400.0, 2.0 * above + 300.0));
+    }
     fixture.settle();
     Rig { fixture, stops, seen }
 }
@@ -115,6 +124,101 @@ fn a_drag_past_a_neighbour_is_one_gesture_and_the_selection_follows_the_stop() {
     assert_eq!(events.first(), Some(&"begin"));
     assert_eq!(events.iter().filter(|e| **e == "begin").count(), 1, "one gesture");
     assert!(matches!(events.last(), Some(&"commit") | Some(&"set")), "{events:?}");
+}
+
+/// Three colour stops (tags 1..=3) and three opacity stops (tags 11..=13).
+fn three_and_three() -> GradientStops {
+    GradientStops::with_opacity(
+        three().color,
+        vec![OpacityStop::new(0.0, 1.0).with_tag(11), OpacityStop::new(0.5, 0.5).with_tag(12), OpacityStop::new(1.0, 1.0).with_tag(13)],
+    )
+}
+
+impl Rig {
+    fn opacity_tags(&self) -> Vec<u64> {
+        self.stops.borrow().opacity.iter().map(|s| s.tag).collect()
+    }
+}
+
+#[trial]
+fn a_stop_dragged_off_the_bar_comes_off_unless_it_returns_or_is_one_of_the_last_two() {
+    // The pointer goes this far past the bar's edge: well beyond the tear-off distance, which is a share of the
+    // control height and so of the bar's own height.
+    const ABOVE: f32 = 500.0;
+    let far = |rig: &Rig| rig.marker("Gradient").rect.height() * 4.0;
+
+    // A colour stop dragged down and released there comes off, in one gesture; the opacity row is untouched.
+    let mut rig = rig_below(three_and_three(), StopRules::default(), false, ABOVE);
+    let from = rig.marker("Color stop 2 of 3").center();
+    let by = vec2(0.0, far(&rig));
+    rig.seen.borrow_mut().events.clear();
+    rig.fixture.drag_at(from, by);
+    rig.fixture.idle(2);
+    assert_eq!(rig.tags(), [1, 3], "the dragged colour stop came off");
+    assert_eq!(rig.opacity_tags(), [11, 12, 13], "the opacity row kept its stops");
+    let events = rig.seen.borrow().events.clone();
+    assert_eq!(events.iter().filter(|e| **e == "begin").count(), 1, "one gesture: {events:?}");
+
+    // An opacity stop dragged up off the bar comes off the same way.
+    let mut rig = rig_below(three_and_three(), StopRules::default(), false, ABOVE);
+    let from = rig.marker("Opacity stop 2 of 3").center();
+    let by = vec2(0.0, -far(&rig));
+    rig.fixture.drag_at(from, by);
+    rig.fixture.idle(2);
+    assert_eq!(rig.opacity_tags(), [11, 13], "the dragged opacity stop came off");
+    assert_eq!(rig.tags(), [1, 2, 3], "the colour row kept its stops");
+
+    // The release frame decides: a stop taken off the bar and brought back before the release stays.
+    let mut rig = rig_below(three_and_three(), StopRules::default(), false, ABOVE);
+    let from = rig.marker("Color stop 2 of 3").center();
+    let by = vec2(0.0, far(&rig));
+    rig.fixture.drag_hold_at(from, by);
+    rig.fixture.frame(vec![Event::PointerMoved(from)]);
+    rig.fixture.release_at(from);
+    rig.fixture.idle(2);
+    assert_eq!(rig.tags(), [1, 2, 3], "the stop returned to the bar before the release and stays");
+
+    // At the row's minimum a stop dragged off the bar stays, in both rows.
+    let mut rig = rig_below(red_to_blue(), StopRules::default(), false, ABOVE);
+    let before = rig.stops.borrow().clone();
+    let (down, up) = (rig.marker("Color stop 1 of 2").center(), rig.marker("Opacity stop 1 of 2").center());
+    let by = vec2(0.0, far(&rig));
+    rig.fixture.drag_at(down, by);
+    rig.fixture.drag_at(up, -by);
+    rig.fixture.idle(2);
+    assert_eq!(*rig.stops.borrow(), before, "the last two stops of a row cannot be torn off");
+}
+
+/// Four colour stops, the middle two at the same location: tags 1 at 0, 2 and 3 at 0.5, 4 at 1.
+fn tied_in_the_middle() -> GradientStops {
+    GradientStops::new(vec![
+        ColorStop::new(0.0, RED).with_tag(1),
+        ColorStop::new(0.5, Srgba::BLACK).with_tag(2),
+        ColorStop::new(0.5, Srgba::BLACK).with_tag(3),
+        ColorStop::new(1.0, BLUE).with_tag(4),
+    ])
+}
+
+#[trial]
+fn a_stop_keeps_its_place_among_stops_at_its_location_unless_it_crossed_them() {
+    // Drags colour stop `name` to the horizontal position of the tied pair (`share` of the way from the first stop
+    // to the last, read from the markers) and returns the tags in order and the selection.
+    let drag = |name: &str, share: f32| {
+        let mut rig = rig(tied_in_the_middle(), StopRules::default(), false);
+        let (first, last) = (rig.marker("Color stop 1 of 4").center().x, rig.marker("Color stop 4 of 4").center().x);
+        let from = rig.marker(name).center();
+        let by = vec2(first + (last - first) * share - from.x, 0.0);
+        rig.fixture.drag_at(from, by);
+        rig.fixture.idle(2);
+        (rig.tags(), rig.seen.borrow().selected)
+    };
+
+    // Moving up onto the tied location, the stop stays before them; moving down onto it, after them.
+    assert_eq!(drag("Color stop 1 of 4", 0.5), (vec![1, 2, 3, 4], Some(StopRef::Color(0))), "reached the tie from below");
+    assert_eq!(drag("Color stop 4 of 4", 0.5), (vec![1, 2, 3, 4], Some(StopRef::Color(3))), "reached the tie from above");
+    // Past the tie it crosses both stops and the selection goes with it.
+    assert_eq!(drag("Color stop 1 of 4", 0.75), (vec![2, 3, 1, 4], Some(StopRef::Color(2))), "crossed the tie upward");
+    assert_eq!(drag("Color stop 4 of 4", 0.25), (vec![1, 4, 2, 3], Some(StopRef::Color(1))), "crossed the tie downward");
 }
 
 #[trial]
