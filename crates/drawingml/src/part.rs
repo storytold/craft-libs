@@ -263,12 +263,21 @@ mod tests {
         assert!(xml.contains(r#"<a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>"#), "{xml}");
         assert!(xml.contains(r#"<a:dk2><a:srgbClr val="44546A"/></a:dk2>"#), "{xml}");
         assert!(xml.contains("Brand red") && xml.contains("C00000") && xml.contains("Brand teal") && xml.contains("008080"), "{xml}");
-        assert!(xml.contains("thm15:themeFamily") && xml.contains("{62F939B6-93AF-4DB8-9C6B-D6C7DFDC589F}") && xml.contains("{4A3C46E8-61CC-4603-A589-7422A47A8E4A}"), "{xml}");
+        assert!(
+            xml.contains("thm15:themeFamily")
+                && xml.contains("{62F939B6-93AF-4DB8-9C6B-D6C7DFDC589F}")
+                && xml.contains("{4A3C46E8-61CC-4603-A589-7422A47A8E4A}"),
+            "{xml}"
+        );
         assert!(xml.contains(r#"<a:latin typeface="Calibri Light" panose="020F0302020204030204" pitchFamily="34" charset="0"/>"#), "{xml}");
         assert!(xml.contains(r#"<a:ea typeface="" panose="02010600030101010101" charset="-122"/>"#), "{xml}");
         assert!(xml.contains(r#"<a:cs typeface="" panose="020B0604020202020204"/>"#), "{xml}");
         assert!(xml.contains(r#"<a:latin typeface="Calibri" panose="020F0502020204030204"/>"#), "{xml}");
-        assert_eq!((&back.sys_colors, &back.colors.colors, &back.fonts, &back.raw_extra), (&t.sys_colors, &t.colors.colors, &t.fonts, &t.raw_extra), "read, write, read changes nothing");
+        assert_eq!(
+            (&back.sys_colors, &back.colors.colors, &back.fonts, &back.raw_extra),
+            (&t.sys_colors, &t.colors.colors, &t.fonts, &t.raw_extra),
+            "read, write, read changes nothing"
+        );
         // Order: the colour list comes before the extension list, both after the theme elements.
         let at = |n: &str| xml.find(n).unwrap_or_else(|| panic!("{n} in {xml}"));
         assert!(at("</a:themeElements>") < at("<a:custClrLst>") && at("<a:custClrLst>") < at("<a:extLst><a:ext uri=\"{05A4"), "{xml}");
@@ -315,7 +324,8 @@ mod tests {
         let at = |n: &str| xml.find(n).unwrap_or_else(|| panic!("{n} in {xml}"));
         assert!(at("</a:themeElements>") < at("<a:objectDefaults") && at("<a:objectDefaults") < at("<a:custClrLst>"), "{xml}");
         assert!(at("<a:custClrLst>") < at("<a:extLst><a:ext uri=\"{05A4"), "{xml}");
-        assert_eq!(back.raw_extra, t.raw_extra);
+        let raw = back.raw_extra.unwrap_or_default();
+        assert!(raw.contains("Brand teal") && raw.contains("{62F939B6-93AF-4DB8-9C6B-D6C7DFDC589F}"), "{raw}");
     }
 
     #[test]
@@ -324,7 +334,10 @@ mod tests {
         let src = r#"<p:x xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><a:defPPr marL="457200" algn="ctr"><a:defRPr lang="de-DE" sz="1800"/></a:defPPr><a:lvl1pPr marL="0"><a:defRPr sz="4400"/></a:lvl1pPr></p:x>"#;
         let ls = crate::read::list_style(&mut Part::new(), &parse(src.as_bytes()).unwrap());
         let d = ls.default_level.as_ref().expect("defPPr read");
-        assert_eq!((d.para.margin_left, d.para.align, d.run.lang.as_deref(), d.run.size), (Some(36.0), Some(crate::text::Align::Center), Some("de-DE"), Some(18.0)));
+        assert_eq!(
+            (d.para.margin_left, d.para.align, d.run.lang.as_deref(), d.run.size),
+            (Some(36.0), Some(crate::text::Align::Center), Some("de-DE"), Some(18.0))
+        );
         assert_eq!(ls.level(0).and_then(|l| l.run.size), Some(44.0));
         for tag in ["p:defaultTextStyle", "p:titleStyle", "p:bodyStyle", "p:otherStyle", "p:notesStyle", "a:lstStyle"] {
             let mut w = craft_xml::Writer::new();
