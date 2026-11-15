@@ -19,8 +19,50 @@ pub const CURVATURE_T_RANGE: RangeInclusive<f64> = 0.01..=0.99;
 /// knot 0's in handle (put in line with its kept out handle, else with the next kept knot's in
 /// handle, else its anchor). One entry per anchor.
 pub fn carried_handles(anchors: &[Point], corners: &[bool], closed: bool, kept: &[(Point, Point)]) -> Vec<(Point, Point)> {
-    let _ = (anchors, corners, closed, kept);
-    todo!("tl.T33")
+    // pc: crates/ui-egui/src/tools/vector_ui/curvature.rs:11-56 `curvature_refresh` (#10726, #10744).
+    let mut handles = curvature_handles(anchors, corners, closed);
+    let corner = |i: usize| corners.get(i).copied().unwrap_or(false);
+    let last = kept.len().saturating_sub(1);
+    let extended = anchors.len() > kept.len();
+    if extended && !closed && !kept.is_empty() {
+        // As in Photoshop, a path carried on is a new Curvature run from its end.
+        let run = curvature_handles(anchors.get(last..).unwrap_or_default(), corners.get(last..).unwrap_or_default(), false);
+        for (slot, fresh) in handles.iter_mut().skip(last).zip(run) {
+            *slot = fresh;
+        }
+    }
+    for (i, &(was_in, was_out)) in kept.iter().enumerate() {
+        let Some(slot) = handles.get_mut(i) else { break };
+        let (keep_in, keep_out) = (!(closed && i == 0), !(extended && i == last));
+        if keep_in {
+            slot.0 = was_in;
+        }
+        if keep_out {
+            slot.1 = was_out;
+        }
+        if !keep_in && keep_out && !corner(i) {
+            // An out handle on its anchor gives no direction: the kept segment leaves towards its next control point,
+            // else the next anchor, so the bent in handle comes from the far side and the knot stays smooth.
+            let across = kept.get(i + 1).zip(anchors.get(i + 1)).map(|(next, &anchor)| [next.0, anchor]);
+            let toward = std::iter::once(slot.1).chain(across.into_iter().flatten());
+            if let Some(h) = toward.filter_map(|from| in_line(anchors[i], from, slot.0)).next() {
+                slot.0 = h;
+            }
+        }
+    }
+    handles
+}
+
+/// A handle as long as `bent` from `anchor`, on the far side of it from `kept`; `None` when `kept` lies on the anchor
+/// and gives no direction.
+fn in_line(anchor: Point, kept: Point, bent: Point) -> Option<Point> {
+    let d = anchor - kept;
+    let len = d.hypot();
+    if !(len > 1e-9 && len.is_finite()) {
+        return None;
+    }
+    let reach = bent.distance(anchor);
+    reach.is_finite().then(|| anchor + d / len * reach)
 }
 
 /// The Curvature Pen's handles for `anchors`: for each anchor its (in, out) handle points, so the

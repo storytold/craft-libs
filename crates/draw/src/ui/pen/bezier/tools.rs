@@ -18,9 +18,11 @@ impl BezierTool {
         }
     }
 
-    /// Whether the tool takes a press on `hit`; `interior` is whether an anchor is neither end of an open subpath.
+    /// Whether the tool takes a press on `hit`; `interior` is whether an anchor is neither end of an open subpath and
+    /// `straight` whether a segment has both handles retracted.
     ///
-    /// - Direct: every part. Convert: anchors and handles.
+    /// - Direct: every part. Convert: anchors and handles, and a straight segment (a drag bends it, or moves a fully
+    ///   selected path); never a curved one.
     /// - Add Anchor: a segment, or an anchor (the press is taken so it starts no path; it reports nothing). Delete
     ///   Anchor: an anchor, or a segment (taken, nothing reported). Handles are never taken.
     /// - Auto Add/Delete: a segment, or an anchor that is not the first or last of an open subpath (those are the
@@ -28,12 +30,12 @@ impl BezierTool {
     ///   canvas.
     /// - Curvature: an anchor or a segment, never a handle or empty canvas.
     /// - Anchors: none.
-    pub(super) fn takes(self, hit: &BezierHit, interior: bool) -> bool {
+    pub(super) fn takes(self, hit: &BezierHit, interior: bool, straight: bool) -> bool {
         // pc: crates/ui-egui/src/tools/anchor_tools.rs:37-48 `target`, :57-84 `pen_auto` (ends excluded :74-78);
         // crates/ui-egui/src/tools/direct_select.rs:368-376 `curvature_target`.
         match self {
             BezierTool::Direct => true,
-            BezierTool::Convert => !matches!(hit, BezierHit::Segment { .. }),
+            BezierTool::Convert => straight || !matches!(hit, BezierHit::Segment { .. }),
             BezierTool::Anchors => false,
             // The swap with ⌥ changes what a press reports, not what it takes.
             BezierTool::AddAnchor | BezierTool::DeleteAnchor | BezierTool::Curvature => !matches!(hit, BezierHit::Handle { .. }),
@@ -56,24 +58,38 @@ impl BezierTool {
         matches!(self, BezierTool::Direct | BezierTool::Convert | BezierTool::Curvature)
     }
 
+    /// Whether Delete and Backspace report [`AnchorDelete`](super::AnchorDelete) for the selection. Under Anchors and
+    /// Auto Add/Delete the key goes on to the pen draft.
+    pub(super) fn deletes(self) -> bool {
+        matches!(self, BezierTool::Direct | BezierTool::Convert | BezierTool::Curvature | BezierTool::AddAnchor | BezierTool::DeleteAnchor)
+    }
+
+    /// Whether a click with ⌥ on an anchor picks its whole subpath: Delete Anchor with ⌥, where the swapped Add
+    /// Anchor has nothing to do on an anchor.
+    pub(super) fn picks_subpath(self, mods: Mods) -> bool {
+        self == BezierTool::DeleteAnchor && mods.alt
+    }
+
+    /// Whether a press on a segment adds an anchor: Add Anchor, or Auto Add/Delete, unless ⌥ swaps Add for Delete.
+    pub(super) fn adds(self, mods: Mods) -> bool {
+        matches!(self.acting(mods), BezierTool::AddAnchor | BezierTool::AutoAddDelete)
+    }
+
     /// Whether the tool shows the hover mark of what a press would take.
     pub(super) fn marks(self) -> bool {
         matches!(self, BezierTool::AddAnchor | BezierTool::DeleteAnchor | BezierTool::AutoAddDelete | BezierTool::Curvature)
     }
 }
 
-/// A click of Add, Delete or Auto Add/Delete on `hit`, reported on press as PhotoCraft does: a segment sets
-/// `insert` with the hit's `t`; an anchor sets `delete` with that one anchor. One undo step each. The pen draft, when
-/// the host passes it as one more path ([`PathMode::resolve`](crate::ui::pen::PathMode::resolve)), is hit and
-/// reported like any path, under the key the host gave it.
+/// A click of Delete Anchor or Auto Add/Delete on an anchor, reported on press as PhotoCraft does: `delete` of that one
+/// anchor, one undo step. A segment press is the overlay's own ([`BezierTool::adds`]: an anchor that drags into
+/// place). The pen draft, when the host passes it as one more path
+/// ([`PathMode::resolve`](crate::ui::pen::PathMode::resolve)), is hit and reported like any path, under the key the
+/// host gave it.
 pub(super) fn anchor_click(tool: BezierTool, hit: BezierHit, mods: Mods, report: &mut Report) {
     // pc: crates/ui-egui/src/tools/anchor_tools.rs:88-114 `pointer`, `click`; :130-150 `apply`.
-    match (hit, tool.acting(mods)) {
-        (BezierHit::Segment { path, segment, t }, BezierTool::AddAnchor | BezierTool::AutoAddDelete) => report.insert = Some((path, segment, t)),
-        (BezierHit::Anchor { path, knot }, BezierTool::DeleteAnchor | BezierTool::AutoAddDelete) => {
-            report.delete = Some(AnchorDelete::new(path, vec![knot], false))
-        } // P3(tools-w9): tl.T32
-        _ => {}
+    if let (BezierHit::Anchor { path, knot }, BezierTool::DeleteAnchor | BezierTool::AutoAddDelete) = (hit, tool.acting(mods)) {
+        report.delete = Some(AnchorDelete::new(path, vec![knot], false));
     }
 }
 
@@ -91,9 +107,15 @@ pub(super) fn hover_mark(tool: BezierTool, hit: BezierHit, mods: Mods) -> Option
             other => other,
         });
     }
-    let mut would = Report::default();
-    anchor_click(tool, hit, mods, &mut would);
-    (would.insert.is_some() || would.delete.is_some()).then_some(hit)
+    let marked = match hit {
+        BezierHit::Segment { .. } => tool.adds(mods),
+        _ => {
+            let mut would = Report::default();
+            anchor_click(tool, hit, mods, &mut would);
+            would.delete.is_some()
+        }
+    };
+    marked.then_some(hit)
 }
 
 /// `t` clamped to the range the Curvature tool inserts at.

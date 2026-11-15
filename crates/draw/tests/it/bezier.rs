@@ -3,7 +3,7 @@
 use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::{
-    AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef, PathEdit, PathSelection,
+    AnchorDelete, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef, PathEdit, PathSelection,
     SegmentMark,
 };
 use craft_ui::canvas::{Canvas, Guide};
@@ -128,6 +128,7 @@ fn path_edit_apply_matches_the_kernel_for_every_existing_edit() {
         PathEdit::convert(7, kr(5), None),
         PathEdit::toggle_curvature(7, kr(5)),
         PathEdit::insert_curvature(7, kr(0), 0.0, by),
+        PathEdit::insert_anchor(7, kr(5), 0.5, by),
     ];
     for e in edits {
         assert!(!e.apply(&mut ep));
@@ -163,7 +164,7 @@ struct State {
     seen: Vec<Seen>,
     changes: Vec<PathEdit>,
     inserts: Vec<(u64, KnotRef, f64)>,
-    deletes: Vec<(u64, Vec<KnotRef>)>,
+    deletes: Vec<AnchorDelete>,
     hover: Option<BezierHit>,
     /// Passes that reported a selection and no edit event.
     lone_selects: usize,
@@ -283,8 +284,8 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
             }
         }
         if let Some(delete) = output.delete {
-            let (path, mut knots) = (delete.path, delete.anchors); // P3(tools-w9): tl.T32
-            st.deletes.push((path, knots.clone()));
+            let (path, mut knots) = (delete.path, delete.anchors.clone());
+            st.deletes.push(delete);
             knots.sort_by(|a, b| b.cmp(a));
             if let Some(entry) = st.paths.iter_mut().find(|e| e.key == path) {
                 for k in knots {
@@ -395,6 +396,135 @@ fn cmd_or_ctrl_with_page_down_on_a_focused_anchor_scrolls_the_canvas_and_picks_n
     let after = h.state.borrow().view.expect("the canvas showed").center;
     assert!(after.x > before.x && after.y == before.y, "the overlay leaves Cmd/Ctrl+Page Down to the canvas: {before:?} -> {after:?}");
     assert_eq!(h.state.borrow().selection, picked, "the page key picks no part");
+}
+
+// Add Anchor on a segment: a press, a drag and a release are one gesture that inserts the anchor and moves it, with the
+// new anchor selected; a click inserts it where the segment was pressed and moves nothing.
+#[trial]
+fn an_add_anchor_drag_inserts_and_moves_the_new_anchor_in_one_gesture() {
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::AddAnchor);
+    let on = h.screen(p(110.0, 60.0));
+    h.drag(on, vec2(0.0, FAR));
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.seen.iter().filter(|s| **s == Seen::Begin).count(), 1, "{:?}", st.seen);
+        assert_eq!(st.seen.first(), Some(&Seen::Begin));
+        assert_eq!(st.seen.last(), Some(&Seen::Commit));
+        assert!(!st.seen.contains(&Seen::Set), "{:?}", st.seen);
+        let Some(PathEdit::InsertAnchor { path: 1, segment, by, .. }) = st.changes.last().cloned() else { panic!("{:?}", st.changes) };
+        assert_eq!(segment, kr(0));
+        assert!(by.y > 10.0 && by.x.abs() < 1e-6, "{by:?}");
+        let knots = &st.paths[0].subpaths[0].knots;
+        assert_eq!(knots.len(), 5);
+        assert!((knots[1].anchor.y - (60.0 + by.y)).abs() < 1e-6, "the new anchor moved with the pointer: {:?}", knots[1].anchor);
+        assert_eq!(st.selection, sel(1, &[(0, 1)]));
+        assert!(st.inserts.is_empty(), "the Insert key's report is not used");
+    }
+
+    // A click inserts without moving.
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::AddAnchor);
+    let on = h.screen(p(110.0, 60.0));
+    h.press_at(on);
+    h.release_at(on);
+    let st = h.state.borrow();
+    assert!(matches!(st.changes.last(), Some(PathEdit::InsertAnchor { by, .. }) if *by == Vec2::ZERO), "{:?}", st.changes);
+    assert_eq!(st.paths[0].subpaths[0].knots.len(), 5);
+    assert_eq!(st.selection, sel(1, &[(0, 1)]));
+}
+
+// Convert on a segment: a drag on a straight one bends it when nothing of the path is selected and moves the path when
+// every anchor is, a partial selection and a curved segment do nothing; handles within the straightness tolerance of
+// their anchors still make the segment straight.
+#[trial]
+fn convert_bends_a_straight_segment_and_moves_a_fully_selected_path() {
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    let straight = h.screen(p(110.0, 60.0));
+    h.drag(straight, vec2(0.0, FAR));
+    assert!(matches!(h.last_change(), Some(PathEdit::BendSegment { path: 1, .. })), "{:?}", h.last_change());
+    let moved = h.state.borrow().paths[0].subpaths[0].knots.iter().take(2).map(|k| k.anchor.y).collect::<Vec<_>>();
+    assert!(moved.iter().all(|y| *y > 70.0), "both ends of a straight segment move: {moved:?}");
+
+    // A curved segment stays untaken.
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::Convert);
+    let curved_at = h.state.borrow().paths[0].subpaths[0].segment(1).expect("segment").eval(0.5);
+    let curved = h.screen(curved_at);
+    let before = h.state.borrow().paths.clone();
+    h.drag(curved, vec2(0.0, FAR));
+    assert!(h.state.borrow().changes.is_empty(), "{:?}", h.last_change());
+    assert_eq!(h.state.borrow().paths, before);
+
+    // A part of the path selected: nothing; every anchor selected: the whole path moves.
+    let mut h = two_paths();
+    let straight = h.screen(p(110.0, 60.0));
+    h.update(|st| (st.tool, st.selection) = (BezierTool::Convert, sel(1, &[(0, 0)])));
+    h.drag(straight, vec2(0.0, FAR));
+    assert!(h.state.borrow().changes.is_empty(), "{:?}", h.last_change());
+    h.update(|st| st.selection = sel(1, &[(0, 0), (0, 1), (0, 2), (0, 3)]));
+    h.drag(straight, vec2(0.0, FAR));
+    assert!(matches!(h.last_change(), Some(PathEdit::MoveAnchors { path: 1, anchors, .. }) if anchors.len() == 4), "{:?}", h.last_change());
+
+    // Handles a hair off their anchors: the segment is straight all the same.
+    let mut h = two_paths();
+    h.update(|st| {
+        st.tool = BezierTool::Convert;
+        let knots = &mut st.paths[0].subpaths[0].knots;
+        knots[0].out_ctrl.x += 1e-12;
+        knots[1].in_ctrl.x -= 1e-12;
+    });
+    h.drag(straight, vec2(0.0, FAR));
+    assert!(matches!(h.last_change(), Some(PathEdit::BendSegment { path: 1, .. })), "{:?}", h.last_change());
+}
+
+// Delete reports the selected anchors with `segments` true under the tools that delete anchors; under Anchors and Auto
+// Add/Delete it stays with the pen draft. A Delete Anchor click reports one anchor with `segments` false.
+#[trial]
+fn delete_keys_report_segments_and_only_deleting_tools_take_them() {
+    for (tool, takes) in [(BezierTool::Direct, true), (BezierTool::AutoAddDelete, false), (BezierTool::Anchors, false)] {
+        let mut h = two_paths();
+        h.update(|st| (st.tool, st.selection) = (tool, sel(1, &[(0, 1)])));
+        h.fixture.key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Tab, egui::Modifiers::NONE);
+        h.fixture.key(egui::Key::Delete, egui::Modifiers::NONE).settle();
+        let st = h.state.borrow();
+        if takes {
+            assert_eq!(st.deletes, [AnchorDelete::new(1, vec![kr(1)], true)], "{tool:?}");
+        } else {
+            assert!(st.deletes.is_empty(), "{tool:?} leaves Delete to the pen draft: {:?}", st.deletes);
+        }
+    }
+
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::DeleteAnchor);
+    let anchor = h.screen(p(160.0, 60.0));
+    h.press_at(anchor);
+    h.release_at(anchor);
+    assert_eq!(h.state.borrow().deletes, [AnchorDelete::new(1, vec![kr(1)], false)]);
+}
+
+// ⌥ with Delete Anchor on an anchor: a click picks the anchor's whole subpath and edits nothing; a drag selects
+// nothing.
+#[trial]
+fn alt_under_delete_anchor_picks_the_subpath_on_a_click_and_nothing_on_a_drag() {
+    let mut h = two_paths();
+    h.update(|st| st.tool = BezierTool::DeleteAnchor);
+    let anchor = h.screen(p(160.0, 60.0));
+    h.fixture.hold(egui::Modifiers::ALT);
+    h.press_at(anchor);
+    h.release_at(anchor);
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.selection, sel(1, &[(0, 0), (0, 1), (0, 2), (0, 3)]));
+        assert!(st.deletes.is_empty() && st.changes.is_empty() && st.seen.is_empty(), "{:?} {:?} {:?}", st.deletes, st.changes, st.seen);
+    }
+
+    h.update(|st| st.selection = PathSelection::default());
+    h.drag(anchor, vec2(FAR, FAR));
+    let st = h.state.borrow();
+    assert_eq!(st.selection, PathSelection::default());
+    assert!(st.deletes.is_empty() && st.changes.is_empty() && st.seen.is_empty());
 }
 
 #[trial]

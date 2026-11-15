@@ -58,15 +58,17 @@ pub enum BezierTool {
     #[default]
     Direct,
     /// Convert Point (also the Pen with ⌥): a click on an anchor makes a corner, a drag from it pulls out smooth
-    /// handles; a handle drag moves that handle alone.
+    /// handles; a handle drag moves that handle alone; a drag on a straight segment bends it, or moves the whole path
+    /// when every anchor is selected.
     Convert,
     /// Anchors drawn, not edited (PhotoCraft's Path Selection and Pen tools).
     Anchors,
-    /// Add Anchor Point: a click on a segment reports [`insert`](BezierOutput::insert) at the hit's `t`; ⌥ makes it
-    /// Delete Anchor Point. Hover: the segment mark with the anchor a click adds ([`HitMark`]).
+    /// Add Anchor Point: a press on a segment inserts an anchor at the hit's `t` ([`PathEdit::InsertAnchor`]); a drag
+    /// moves the new anchor, which is selected; ⌥ makes it Delete Anchor Point. Hover: the segment mark with the
+    /// anchor a click adds ([`HitMark`]).
     AddAnchor,
     /// Delete Anchor Point: a click on an anchor reports [`delete`](BezierOutput::delete) of that anchor; ⌥ makes it
-    /// Add Anchor Point. Hover: the anchor mark.
+    /// Add Anchor Point, except that a ⌥ click on an anchor selects its whole subpath. Hover: the anchor mark.
     DeleteAnchor,
     /// The Pen's Auto Add/Delete while no path is being drawn: Add on a segment, Delete on an anchor that is not an
     /// open subpath's end (the pen draft takes those), no ⌥ swap, no marquee. Presses on empty canvas are left to the
@@ -168,6 +170,7 @@ struct Report {
     select: Option<PathSelection>,
     insert: Option<(u64, KnotRef, f64)>,
     delete: Option<AnchorDelete>,
+    pressed_empty: bool,
     context: Option<(BezierHit, Pos2)>,
     hover: Option<BezierHit>,
 }
@@ -213,6 +216,20 @@ enum Target {
         segment: KnotRef,
         t: f64,
         from: Point,
+    },
+    /// Add Anchor's insert (also Auto Add/Delete's) into `segment` at `t`, dragged from `from`, the point of the curve
+    /// at `t`: the new anchor goes where the pointer takes it.
+    Insert {
+        path: u64,
+        segment: KnotRef,
+        t: f64,
+        from: Point,
+    },
+    /// ⌥ with Delete Anchor on an anchor: a click picks the anchor's whole subpath, a drag does nothing.
+    /// Reported on the click's release, so a drag selects nothing.
+    Pick {
+        path: u64,
+        knot: KnotRef,
     },
     /// The second click of a double-click on an anchor: a toggle on release, never a drag.
     Toggle {
@@ -265,6 +282,8 @@ struct Item {
     shape: HitShape,
     /// An anchor that is not the first or last of an open subpath.
     interior: bool,
+    /// A segment with both handles retracted.
+    straight: bool,
     /// An anchor's place among the path's anchors, from 1, and their number.
     ordinal: (usize, usize),
 }
@@ -334,8 +353,9 @@ struct Scene {
 ///   followed by its shown handles, in then out), Home and End the first and last; picking an anchor selects it alone.
 ///   ⇧ Page Down and ⇧ Page Up add the next and previous anchor; ⌘A selects every anchor of the path. The arrows move
 ///   the selected anchors or the picked handle (⌥ alone); Delete and Backspace report
-///   [`delete`](BezierOutput::delete), Insert [`insert`](BezierOutput::insert) halfway along the segment leaving the
-///   picked anchor; Escape deselects.
+///   [`delete`](BezierOutput::delete) under the tools that delete anchors (Direct, Convert, Curvature, Add Anchor,
+///   Delete Anchor), Insert [`insert`](BezierOutput::insert) halfway along the segment leaving the picked anchor;
+///   Escape deselects.
 /// - The anchor tools ([`BezierTool::AddAnchor`], [`BezierTool::DeleteAnchor`], [`BezierTool::AutoAddDelete`]) and
 ///   [`BezierTool::Curvature`] take only a press that hits what they edit, and draw the [`HitMark`] of what a press
 ///   would take under the pointer. [`segment_mark`](Self::segment_mark), [`anchors`](Self::anchors) and
@@ -417,6 +437,7 @@ impl<'a> BezierOverlay<'a> {
                         at: anchor,
                         shape: HitShape::circle(anchor, reach),
                         interior,
+                        straight: false,
                         ordinal: (n + 1, count),
                     });
                 }
@@ -430,13 +451,14 @@ impl<'a> BezierOverlay<'a> {
                             at: end,
                             shape: HitShape::circle(end, reach),
                             interior,
+                            straight: false,
                             ordinal: (n + 1, count),
                         });
                     }
                 }
             }
         }
-        if self.tool.takes(&BezierHit::Segment { path: 0, segment: KnotRef::new(0, 0), t: 0.0 }, true) {
+        if self.tool.takes(&BezierHit::Segment { path: 0, segment: KnotRef::new(0, 0), t: 0.0 }, true, true) {
             for (at, path) in paths.iter().enumerate() {
                 for (s, sub) in path.subpaths.iter().enumerate() {
                     for i in 0..sub.segment_count() {
@@ -459,6 +481,7 @@ impl<'a> BezierOverlay<'a> {
                             at: corners[0],
                             shape: HitShape::polyline(points, false),
                             interior: true,
+                            straight: sub.is_straight(i),
                             ordinal: (0, 0),
                         });
                     }
@@ -470,7 +493,7 @@ impl<'a> BezierOverlay<'a> {
 
     /// Whether the press on `item` is the tool's.
     fn takes(&self, item: &Item) -> bool {
-        self.tool.takes(&item.proxy(), item.interior)
+        self.tool.takes(&item.proxy(), item.interior, item.straight)
     }
 
     fn path(paths: &[EditPath], key: u64) -> Option<&EditPath> {
@@ -481,6 +504,34 @@ impl<'a> BezierOverlay<'a> {
         Self::path(paths, key)
             .and_then(|p| p.subpaths.get(subpath))
             .map_or_else(Vec::new, |s| (0..s.knots.len()).map(|k| KnotRef::new(subpath, k)).collect())
+    }
+
+    /// The point of `path`'s segment leaving `segment` at `t`.
+    fn segment_point(paths: &[EditPath], path: u64, segment: KnotRef, t: f64) -> Point {
+        Self::path(paths, path)
+            .and_then(|p| p.subpaths.get(segment.subpath))
+            .and_then(|s| s.segment(segment.knot))
+            .map_or(Point::ZERO, |c| c.eval(t))
+    }
+
+    /// The selection that has only the anchor a segment insert adds.
+    fn inserted(path: u64, segment: KnotRef) -> PathSelection {
+        PathSelection { path: Some(path), anchors: vec![KnotRef::new(segment.subpath, segment.knot + 1)], segment: None }
+    }
+
+    /// The target a press drags: for the tools that act on the press ([`BezierTool::clicks`]) an insert into a
+    /// segment they add to, or the ⌥ pick of a subpath, else nothing; for the others [`target`](Self::target).
+    fn press_target(&mut self, hit: BezierHit, start: PressStart, mods: Mods, paths: &[EditPath]) -> Target {
+        if !self.tool.clicks() {
+            return self.target(hit, start, mods, paths);
+        }
+        match hit {
+            BezierHit::Segment { path, segment, t } if self.tool.adds(mods) => {
+                Target::Insert { path, segment, t, from: Self::segment_point(paths, path, segment, t) }
+            }
+            BezierHit::Anchor { path, knot } if self.tool.picks_subpath(mods) => Target::Pick { path, knot },
+            _ => Target::Nothing,
+        }
     }
 
     /// The target a press `start` on `hit` with `mods` drags, and the selection it makes.
@@ -500,11 +551,26 @@ impl<'a> BezierOverlay<'a> {
             }
             (BezierTool::Curvature, BezierHit::Segment { path, segment, t }) => {
                 let t = tools::curvature_t(t);
-                let from = Self::path(paths, path)
-                    .and_then(|p| p.subpaths.get(segment.subpath))
-                    .and_then(|s| s.segment(segment.knot))
-                    .map_or(Point::ZERO, |c| c.eval(t));
-                Target::CurvatureInsert { path, segment, t, from }
+                Target::CurvatureInsert { path, segment, t, from: Self::segment_point(paths, path, segment, t) }
+            }
+            // A straight segment: with nothing of the path selected a drag bends it, with every anchor selected it
+            // moves the path; ⇧, ⌥ or a partial selection do nothing.
+            (BezierTool::Convert, BezierHit::Segment { path, segment, t }) => {
+                let Some(shown) = Self::path(paths, path) else { return Target::Nothing };
+                if mods.alt || mods.shift {
+                    return Target::Nothing;
+                }
+                let from = Self::segment_point(paths, path, segment, t);
+                let chosen: &[KnotRef] = if self.selection.path == Some(path) { &self.selection.anchors } else { &[] };
+                let all: Vec<KnotRef> = shown.knot_refs().collect();
+                if chosen.is_empty() {
+                    self.report.select = Some(PathSelection { path: Some(path), anchors: Vec::new(), segment: Some(segment) });
+                    Target::Bend { path, segment, t, from }
+                } else if all.iter().all(|k| chosen.contains(k)) {
+                    Target::Anchors { path, anchors: all, from }
+                } else {
+                    Target::Nothing
+                }
             }
             (BezierTool::Convert, BezierHit::Anchor { path, knot }) => Target::Convert { path, knot },
             (_, BezierHit::Anchor { path, knot }) => {
@@ -529,20 +595,14 @@ impl<'a> BezierOverlay<'a> {
                 Target::Anchors { path, anchors, from }
             }
             (_, BezierHit::Segment { path, segment, t }) => {
-                let sub = Self::path(paths, path).and_then(|p| p.subpaths.get(segment.subpath));
-                let from = sub.and_then(|s| s.segment(segment.knot)).map_or(Point::ZERO, |c| c.eval(t));
+                let from = Self::segment_point(paths, path, segment, t);
                 if mods.alt {
                     let anchors = Self::subpath_anchors(paths, path, segment.subpath);
                     self.report.select = Some(PathSelection { path: Some(path), anchors: anchors.clone(), segment: None });
                     Target::Anchors { path, anchors, from }
                 } else {
                     self.report.select = Some(PathSelection { path: Some(path), anchors: Vec::new(), segment: Some(segment) });
-                    match sub.and_then(|s| s.is_straight(segment.knot).then(|| s.segment_ends(segment.knot)).flatten()) {
-                        Some((a, b)) => {
-                            Target::Anchors { path, anchors: vec![KnotRef::new(segment.subpath, a), KnotRef::new(segment.subpath, b)], from }
-                        }
-                        None => Target::Bend { path, segment, t, from },
-                    }
+                    Target::Bend { path, segment, t, from }
                 }
             }
             (_, BezierHit::Handle { .. }) => Target::Nothing,
@@ -572,7 +632,8 @@ impl<'a> BezierOverlay<'a> {
             &Target::CurvatureInsert { path, segment, t, from } => {
                 PathEdit::InsertCurvature { path, segment, t, by: snapped(from + locked(delta)) - from }
             }
-            Target::Nothing | Target::Toggle { .. } | Target::Marquee => return None,
+            &Target::Insert { path, segment, t, from } => PathEdit::InsertAnchor { path, segment, t, by: snapped(from + locked(delta)) - from },
+            Target::Nothing | Target::Toggle { .. } | Target::Pick { .. } | Target::Marquee => return None,
         })
     }
 
@@ -641,11 +702,12 @@ impl<'a> BezierOverlay<'a> {
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     let hit = item.hit(paths, view, start.origin);
-                    if self.tool.clicks() {
+                    let target = self.press_target(hit, start, press.mods, paths);
+                    if target == Target::Nothing && self.tool.clicks() {
+                        // Delete Anchor and Auto Add/Delete act on an anchor at the press.
                         tools::anchor_click(self.tool, hit, press.mods, &mut self.report);
                         *cx.press_slot::<Held>() = None;
                     } else {
-                        let target = self.target(hit, start, press.mods, paths);
                         *cx.press_slot::<Held>() = Some(Held { origin: start.origin, target, start: paths.to_vec(), began: false });
                     }
                 }
@@ -665,6 +727,7 @@ impl<'a> BezierOverlay<'a> {
             let press = result.press;
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
+                    self.report.pressed_empty = true;
                     *cx.press_slot::<Held>() = Some(Held { origin: start.origin, target: Target::Marquee, start: Vec::new(), began: false });
                 }
                 PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
@@ -690,17 +753,16 @@ impl<'a> BezierOverlay<'a> {
         let mut held = match (kept, item) {
             (Some(held), _) => held,
             (None, Some(item)) => {
-                let target = self.target(item.hit(paths, view, start.origin), start, mods, paths);
+                let target = self.press_target(item.hit(paths, view, start.origin), start, mods, paths);
                 Held { origin: start.origin, target, start: paths.to_vec(), began: false }
             }
             (None, None) => Held { origin: start.origin, target: Target::Marquee, start: Vec::new(), began: false },
         };
-        let moves = !matches!(held.target, Target::Nothing | Target::Toggle { .. });
+        let moves = !matches!(held.target, Target::Nothing | Target::Toggle { .. } | Target::Pick { .. });
         if first && moves {
             held.began = true;
-            if let Target::CurvatureInsert { path, segment, .. } = held.target {
-                self.report.select =
-                    Some(PathSelection { path: Some(path), anchors: vec![KnotRef::new(segment.subpath, segment.knot + 1)], segment: None });
+            if let Target::CurvatureInsert { path, segment, .. } | Target::Insert { path, segment, .. } = held.target {
+                self.report.select = Some(Self::inserted(path, segment));
             }
             if held.target != Target::Marquee {
                 cx.begin();
@@ -724,13 +786,13 @@ impl<'a> BezierOverlay<'a> {
         let Pointing { view, snap, start, pos, mods } = at;
         let Some(held) = cx.press_slot::<Held>().take().filter(|held| held.origin == start.origin) else {
             // A press and its drag in one pass: one edit from the press.
-            if !click
-                && !self.tool.clicks()
-                && let Some(item) = item
-            {
-                let target = self.target(item.hit(paths, view, start.origin), start, mods, paths);
+            if !click && let Some(item) = item {
+                let target = self.press_target(item.hit(paths, view, start.origin), start, mods, paths);
                 if let Some(edit) = Self::edit(view, snap, self.tool, &target, start.origin, pos, mods) {
                     self.set(cx, paths, edit);
+                    if let Target::Insert { path, segment, .. } = target {
+                        self.report.select = Some(Self::inserted(path, segment));
+                    }
                 }
             }
             return;
@@ -756,8 +818,16 @@ impl<'a> BezierOverlay<'a> {
             Target::Toggle { path, knot } => self.set(cx, &held.start, PathEdit::ToggleCurvature { path, knot }),
             Target::CurvatureInsert { path, segment, t, .. } => {
                 self.set(cx, &held.start, PathEdit::InsertCurvature { path, segment, t, by: Vec2::ZERO });
-                self.report.select =
-                    Some(PathSelection { path: Some(path), anchors: vec![KnotRef::new(segment.subpath, segment.knot + 1)], segment: None });
+                self.report.select = Some(Self::inserted(path, segment));
+            }
+            Target::Insert { path, segment, t, .. } => {
+                self.set(cx, &held.start, PathEdit::InsertAnchor { path, segment, t, by: Vec2::ZERO });
+                self.report.select = Some(Self::inserted(path, segment));
+            }
+            // A click without a drag (a press past the slop is no click) picks the anchor's whole subpath.
+            Target::Pick { path, knot } if click => {
+                let anchors = Self::subpath_anchors(paths, path, knot.subpath);
+                self.report.select = Some(PathSelection { path: Some(path), anchors, segment: None });
             }
             _ => {}
         }
@@ -853,13 +923,17 @@ impl<'a> BezierOverlay<'a> {
         {
             self.report.insert = Some((*key, *knot, 0.5));
         }
-        let forward = cx.intents().take_exact(&Intent::delete(true, Granularity::Unit));
-        let backward = cx.intents().take_exact(&Intent::delete(false, Granularity::Unit));
-        if (forward || backward)
+        // Delete is the overlay's only under the tools that delete anchors, and only with anchors selected: under
+        // Anchors and Auto Add/Delete it is left for the pen draft.
+        if self.tool.deletes()
             && let Some(path) = self.selection.path
             && !self.selection.anchors.is_empty()
         {
-            self.report.delete = Some(AnchorDelete::new(path, self.selection.anchors.clone(), false)); // P3(tools-w9): tl.T32
+            let forward = cx.intents().take_exact(&Intent::delete(true, Granularity::Unit));
+            let backward = cx.intents().take_exact(&Intent::delete(false, Granularity::Unit));
+            if forward || backward {
+                self.report.delete = Some(AnchorDelete::new(path, self.selection.anchors.clone(), true));
+            }
         }
         if keyed && cx.gesture().is_none() && cx.intents().take(Intent::Cancel) && *self.selection != PathSelection::default() {
             self.report.select = Some(PathSelection::default());
@@ -934,11 +1008,13 @@ pub struct BezierOutput {
     pub change: Option<PathEdit>,
     /// The selection the overlay asks for.
     pub select: Option<PathSelection>,
-    /// Add an anchor to the segment leaving a knot of a path, at `t` (PhotoCraft's Add Anchor Point): a click of an
-    /// anchor tool on a segment, or Insert on a picked anchor (`t` 0.5).
+    /// Add an anchor to the segment leaving a knot of a path, at `t` (PhotoCraft's Add Anchor Point): Insert on a
+    /// picked anchor (`t` 0.5). A click or drag of an anchor tool on a segment is the [`change`](Self::change)
+    /// [`PathEdit::InsertAnchor`] instead.
     pub insert: Option<(u64, KnotRef, f64)>,
-    /// Delete or Backspace: remove these anchors of a path (Delete Anchor Point).
-    /// Delete or Backspace: remove these anchors of a path (Delete Anchor Point).
+    /// Delete or Backspace with anchors selected under a tool that deletes (Direct, Convert, Curvature, Add Anchor,
+    /// Delete Anchor): remove these anchors of a path (Delete Anchor Point), `segments` true; a Delete Anchor click
+    /// on an anchor reports that one anchor with `segments` false.
     pub delete: Option<AnchorDelete>,
     /// A press landed on empty canvas, outside every path.
     pub pressed_empty: bool,
@@ -1150,7 +1226,7 @@ impl Component for BezierOverlay<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> BezierOutput {
-        let Report { change, select, insert, delete, context, hover } = self.report;
-        BezierOutput { edit: cx.edit_response(), change, select, insert, delete, pressed_empty: false, context, hover } // P3(tools-w9): tl.T32
+        let Report { change, select, insert, delete, pressed_empty, context, hover } = self.report;
+        BezierOutput { edit: cx.edit_response(), change, select, insert, delete, pressed_empty, context, hover }
     }
 }

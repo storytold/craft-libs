@@ -5,7 +5,7 @@
 use kurbo::{ParamCurve, Point, Vec2};
 
 use super::model::{EditPath, EditSubpath, HandleSide, Knot, KnotRef, PathEdit};
-use crate::geometry::curvature::curvature_handles;
+use crate::geometry::curvature::carried_handles;
 
 fn lerp(a: Point, b: Point, t: f64) -> Point {
     a + (b - a) * t
@@ -100,13 +100,14 @@ impl EditSubpath {
         self.reflow_kept(0);
     }
 
-    /// The reflow with the first `kept` knots left as they are.
+    /// The reflow of a subpath whose first `kept` knots keep their handles
+    /// ([`carried_handles`](crate::geometry::curvature::carried_handles)): a path the Curvature Pen
+    /// carries on does not bend the knots it had.
     pub fn reflow_kept(&mut self, kept: usize) {
-        let _ = kept;
-        // P3(tools-w9): tl.T32
         let anchors: Vec<Point> = self.knots.iter().map(|k| k.anchor).collect();
         let corners: Vec<bool> = self.knots.iter().map(|k| !k.smooth).collect();
-        let fresh = curvature_handles(&anchors, &corners, self.closed);
+        let held: Vec<(Point, Point)> = self.knots.iter().take(kept).map(|k| (k.in_ctrl, k.out_ctrl)).collect();
+        let fresh = carried_handles(&anchors, &corners, self.closed, &held);
         for (k, (in_ctrl, out_ctrl)) in self.knots.iter_mut().zip(fresh) {
             if k.smooth {
                 k.in_ctrl = in_ctrl;
@@ -134,6 +135,8 @@ impl PathEdit {
     /// - `InsertCurvature`: [`EditSubpath::insert_at`] (the new knot made smooth, on a straight
     ///   segment too, as Photoshop's Curvature Pen adds a smooth point), the new knot moved by
     ///   `by`, then the subpath reflowed.
+    /// - `InsertAnchor`: [`EditSubpath::insert_at`], the new knot with its handles moved by `by`; no
+    ///   reflow and no smoothing, so a straight segment gets a corner knot.
     /// - `ToggleCurvature`: a smooth knot becomes a corner with retracted handles, a corner
     ///   becomes smooth, then the subpath reflows.
     pub fn apply(&self, path: &mut EditPath) -> bool {
@@ -190,7 +193,14 @@ impl PathEdit {
                     keep_smooth(&mut sp.knots[b], HandleSide::In);
                 }
             }
-            PathEdit::InsertAnchor { .. } => todo!("tl.T32"),
+            PathEdit::InsertAnchor { segment, t, by, .. } => {
+                let Some(sp) = path.subpaths.get_mut(segment.subpath) else { return false };
+                let Some(at) = sp.insert_at(segment.knot, *t) else { return false };
+                let k = &mut sp.knots[at];
+                k.anchor += *by;
+                k.in_ctrl += *by;
+                k.out_ctrl += *by;
+            }
             PathEdit::Convert { knot, out, .. } => {
                 if !knot_ok(path, *knot) {
                     return false;

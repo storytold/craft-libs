@@ -56,12 +56,12 @@ impl PathMode {
     /// | Tool | Keys | `bezier` | `draft` | `draft_senses` |
     /// |---|---|---|---|---|
     /// | any pen or anchor tool, Convert Point | ⌘ | `Direct` | the tool's draft mode if `drawing`, else `None` | false |
-    /// | Pen | none, drawing | `Show` | `Pen` | true |
-    /// | Pen | none, not drawing | `AutoAddDelete` if `auto_add_delete`, else `Show` | `Pen` | true |
+    /// | Pen | none, drawing | `Anchors` | `Pen` | true |
+    /// | Pen | none, not drawing | `AutoAddDelete` if `auto_add_delete`, else `Anchors` | `Pen` | true |
     /// | Pen | ⌥, not drawing | `Convert` | `Pen` | true |
-    /// | Pen | ⇧ or ⌥, drawing; ⇧, not drawing | `Show` | `Pen` | true |
+    /// | Pen | ⇧ or ⌥, drawing; ⇧, not drawing | `Anchors` | `Pen` | true |
     /// | Curvature | none or ⇧ or ⌥, not drawing | `Curvature` | `Curvature` | true |
-    /// | Curvature | drawing | `Show` | `Curvature` | true |
+    /// | Curvature | drawing | `Anchors` | `Curvature` | true |
     /// | Add Anchor, Delete Anchor | no ⌘ | `AddAnchor`, `DeleteAnchor` (the overlay swaps them with ⌥) | `Pen` if `drawing` (shown, not sensing), else `None` | false |
     /// | Convert Point | no ⌘ | `Convert` | as Add Anchor | false |
     /// | Direct Selection | any | `Direct` | as Add Anchor | false |

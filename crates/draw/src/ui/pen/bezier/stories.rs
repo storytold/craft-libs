@@ -1,7 +1,8 @@
 //! Stories of `BezierOverlay`.
 
 use super::{
-    ANCHOR, AnchorsShown, BezierOutput, BezierOverlay, BezierTool, EditPath, EditSubpath, HandlesShown, Knot, KnotRef, PathSelection, index,
+    ANCHOR, AnchorsShown, BezierOutput, BezierOverlay, BezierTool, EditPath, EditSubpath, HandlesShown, Knot, KnotRef, PathSelection, SEGMENT,
+    index,
 };
 use craft_behavior::kurbo::Point;
 use craft_theme::Srgba;
@@ -48,11 +49,28 @@ fn curvature_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas(ui, |ui, at| BezierOverlay::new("Paths", Bind::bound(&mut *paths), &selected()).tool(BezierTool::Curvature).show_at(ui, at))
 }
 
-#[story(BezierOverlay<'static>, covers = [Default], drive = Drive::Drag(Grip::part(ANCHOR.at(index(0, KnotRef { subpath: 0, knot: 0 }))).toward(Vec2::X)))]
+/// Add Anchor takes a press on an anchor and moves nothing: the drag is `add_anchor_tool_dragged`'s, on a segment.
+#[story(BezierOverlay<'static>, covers = [Default], drive = Drive::Never)]
 fn add_anchor_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let paths = data.value("paths", paths());
     on_canvas(ui, |ui, at| {
         BezierOverlay::new("Paths", Bind::bound(&mut *paths), &PathSelection::default()).tool(BezierTool::AddAnchor).show_at(ui, at)
+    })
+}
+
+#[story(BezierOverlay<'static>, covers = [Default], drive = Drive::Drag(Grip::part(SEGMENT.at(index(0, KnotRef { subpath: 0, knot: 0 }))).toward(Vec2::Y)))]
+fn add_anchor_tool_dragged(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let paths = data.value("paths", paths());
+    on_canvas(ui, |ui, at| {
+        BezierOverlay::new("Paths", Bind::bound(&mut *paths), &PathSelection::default()).tool(BezierTool::AddAnchor).show_at(ui, at)
+    })
+}
+
+#[story(BezierOverlay<'static>, covers = [Default], drive = Drive::Drag(Grip::part(SEGMENT.at(index(0, KnotRef { subpath: 0, knot: 0 }))).toward(Vec2::Y)))]
+fn convert_tool_straight_segment(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let paths = data.value("paths", paths());
+    on_canvas(ui, |ui, at| {
+        BezierOverlay::new("Paths", Bind::bound(&mut *paths), &PathSelection::default()).tool(BezierTool::Convert).show_at(ui, at)
     })
 }
 

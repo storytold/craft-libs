@@ -20,6 +20,10 @@ pub struct Knot {
     pub smooth: bool,
 }
 
+/// How close a handle lies to its anchor and still counts as retracted, in document units: PhotoCraft's straightness
+/// tolerance, so a segment whose handles sit a hair off their anchors is straight for every reader.
+const RETRACTED: f64 = 1e-9;
+
 impl Knot {
     /// A knot with its anchor, both handles and whether it is smooth.
     pub fn new(anchor: Point, in_ctrl: Point, out_ctrl: Point, smooth: bool) -> Self {
@@ -44,9 +48,9 @@ impl Knot {
         }
     }
 
-    /// Whether the handle on `side` lies on the anchor.
+    /// Whether the handle on `side` lies on the anchor, within 1e-9 document units.
     pub fn retracted(&self, side: HandleSide) -> bool {
-        self.handle(side) == self.anchor
+        self.handle(side).distance(self.anchor) < RETRACTED
     }
 }
 
