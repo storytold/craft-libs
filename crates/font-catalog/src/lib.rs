@@ -31,9 +31,9 @@ mod outline;
 mod registry;
 mod scan;
 mod segments;
-mod shape;
 /// Bounded SFNT face metadata discovery over caller-provided random-access readers.
 pub mod sfnt;
+mod shape;
 mod suitcase;
 pub mod system;
 mod visual_order;
