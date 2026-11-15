@@ -362,9 +362,12 @@ pub enum AdtsConfigError {
 /// ADTS fixed fields taken from the prefix of an AudioSpecificConfig.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdtsConfig {
-    object_type: u8,
-    sf_index: u8,
-    channel_config: u8,
+    /// Audio object type, 1 through 4.
+    pub object_type: u8,
+    /// Indexed sample rate, 0 through 12.
+    pub sf_index: u8,
+    /// Channel configuration, 1 through 7.
+    pub channel_config: u8,
 }
 impl AdtsConfig {
     /// Parse only the first two ASC bytes. Unlike a decoder's full ASC parser, this accepts all
