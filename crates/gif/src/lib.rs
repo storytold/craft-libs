@@ -1,7 +1,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-//! The blocks of a GIF, read without decompressing any pixels (GIF89a specification: Logical
-//! Screen Descriptor, Global and Local Color Tables, Graphic Control Extension, Application
-//! Extension, Image Descriptor).
+//! GIF reading and writing. The block reader reads without decompressing pixels (GIF89a
+//! specification: Logical Screen Descriptor, Global and Local Color Tables, Graphic Control
+//! Extension, Application Extension, Image Descriptor).
 //!
 //! [`scan`] walks the file once and reports what an importer needs before it decodes anything:
 //! the logical screen size, every frame's position, size, delay and transparent colour, whether
@@ -12,6 +12,10 @@
 //!
 //! With feature `frames`, [`frames::read_frames`] decodes every frame through the `image` crate's
 //! GIF decoder, after the checks [`scan`] makes possible, with bounded memory.
+//! [`write::animation`] writes full-canvas RGBA8 animation frames with GIF palette quantization,
+//! timing, loop and disposal metadata. Parallel producers can quantize frames with
+//! [`write::prepare_frame`] and pass the compact results to
+//! [`write::AnimationWriter::write_prepared_frame`].
 //!
 //! Input is treated as hostile: every read is bounds-checked, and the number of frames recorded
 //! is capped by the caller.
@@ -20,6 +24,8 @@
 pub mod frames;
 #[cfg(test)]
 mod tests;
+/// GIF image and animation encoding.
+pub mod write;
 
 /// One frame (image descriptor) of a GIF.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +192,94 @@ pub fn palette(bytes: &[u8]) -> Option<(Vec<[u8; 3]>, Option<u8>)> {
     }
     let transparent = first.transparent.filter(|i| usize::from(*i) < colors.len());
     Some((colors, transparent))
+}
+
+/// Counts pixels emitted by the first GIF frame's LZW stream, up to its declared area.
+/// Returns `None` when the first frame or its LZW minimum code size is unreadable. This reads
+/// code lengths only; it does not allocate or materialize pixel values.
+pub fn first_frame_decoded_pixels(bytes: &[u8]) -> Option<u64> {
+    let parsed = scan(bytes, 1)?;
+    let frame = parsed.frames.first()?;
+    let packed = *bytes.get(frame.offset.checked_add(9)?)?;
+    let table_bytes = table_len(packed);
+    let code_size_at = frame.offset.checked_add(10)?.checked_add(table_bytes)?;
+    let min_size = *bytes.get(code_size_at)?;
+    if !(1..=11).contains(&min_size) {
+        return None;
+    }
+    let clear = 1usize << min_size;
+    let end = clear + 1;
+    let max = u64::from(frame.width) * u64::from(frame.height);
+    let mut lengths = [1u16; 4096];
+    let (mut width, mut next, mut previous) = (u32::from(min_size) + 1, end + 1, None::<usize>);
+    let (mut bits, mut held, mut pixels) = (0u32, 0u32, 0u64);
+    let mut pos = code_size_at.checked_add(1)?;
+    while let Some(&length) = bytes.get(pos) {
+        let start = pos.checked_add(1)?;
+        pos = start.checked_add(usize::from(length))?;
+        if length == 0 {
+            break;
+        }
+        for &byte in bytes.get(start..pos.min(bytes.len()))? {
+            bits |= u32::from(byte) << held;
+            held += 8;
+            while held >= width {
+                let code = (bits & ((1 << width) - 1)) as usize;
+                bits >>= width;
+                held -= width;
+                if code == clear {
+                    (width, next, previous) = (u32::from(min_size) + 1, end + 1, None);
+                    continue;
+                }
+                let string_len = match previous {
+                    _ if code == end => return Some(pixels),
+                    None if code < clear => 1,
+                    Some(_) if code < next => lengths.get(code).copied().unwrap_or(1),
+                    Some(prev) if code == next => lengths.get(prev).copied().unwrap_or(1).saturating_add(1),
+                    _ => return Some(pixels),
+                };
+                let defined_len = previous.map(|prev| lengths.get(prev).copied().unwrap_or(1).saturating_add(1));
+                if let Some(defined_len) = defined_len
+                    && let Some(slot) = lengths.get_mut(next)
+                {
+                    *slot = defined_len;
+                    next += 1;
+                    if next == 1 << width && width < 12 {
+                        width += 1;
+                    }
+                }
+                previous = Some(code);
+                pixels = pixels.saturating_add(u64::from(string_len));
+                if pixels >= max {
+                    return Some(max);
+                }
+            }
+        }
+    }
+    Some(pixels)
+}
+
+/// Counts compressed image-data bytes in the first frame's sub-blocks, excluding its LZW code-size
+/// byte and all later blocks. A truncated final sub-block contributes only the bytes present.
+pub fn first_frame_compressed_bytes(bytes: &[u8]) -> Option<usize> {
+    let parsed = scan(bytes, 1)?;
+    let frame = parsed.frames.first()?;
+    let packed = *bytes.get(frame.offset.checked_add(9)?)?;
+    let mut pos = frame.offset.checked_add(10)?.checked_add(table_len(packed))?.checked_add(1)?;
+    let mut total = 0usize;
+    loop {
+        let length = usize::from(*bytes.get(pos)?);
+        pos = pos.checked_add(1)?;
+        if length == 0 {
+            return Some(total);
+        }
+        let end = pos.checked_add(length)?;
+        total = total.checked_add(end.min(bytes.len()).saturating_sub(pos))?;
+        if end > bytes.len() {
+            return Some(total);
+        }
+        pos = end;
+    }
 }
 
 /// Whether a file of `file_len` bytes can plausibly hold `declared_bytes` of decoded picture: at
