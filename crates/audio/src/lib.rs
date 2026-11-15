@@ -54,6 +54,8 @@ pub mod peaks;
 pub mod qoa;
 #[cfg(feature = "decode-native")]
 mod read;
+#[cfg(feature = "s302m")]
+pub mod s302m;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod track;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
