@@ -616,20 +616,26 @@ mod tests {
     fn wait_until_returns_on_condition() {
         let ready = &AtomicBool::new(false);
         let (asked, asked_rx) = mpsc::channel();
+        let (stored, stored_rx) = mpsc::channel();
         thread::scope(|s| {
             s.spawn(move || {
                 asked_rx.recv().unwrap();
                 ready.store(true, Ordering::SeqCst);
+                stored.send(()).unwrap();
             });
             let mut calls = 0;
             wait_until(long(), "the flag", || {
                 calls += 1;
                 if calls == 1 {
+                    // The flag is set before this call returns, and it still answers false, so the
+                    // condition is called a second time whatever order the threads run in.
                     asked.send(()).unwrap();
+                    stored_rx.recv().unwrap();
+                    return false;
                 }
                 ready.load(Ordering::SeqCst)
             });
-            assert!(calls >= 2);
+            assert_eq!(calls, 2);
         });
     }
 
