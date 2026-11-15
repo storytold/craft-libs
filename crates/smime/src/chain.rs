@@ -13,7 +13,7 @@ use crate::Timestamp;
 use crate::digital_signature::Why;
 
 use crate::algorithms::Fault;
-use crate::cert::{Cert, Constraints, dir_within, mail_within};
+use crate::cert::{Cert, Constraints, dir_within, directory_supported, mail_within};
 
 /// The most certificates between a signer's and a trust anchor.
 pub const MAX_PATH: usize = 6;
@@ -210,14 +210,23 @@ fn within(cert: &Cert, c: &Constraints) -> bool {
     if mail.iter().any(|a| c.excluded_mail.iter().any(|e| mail_within(a, e))) {
         return false;
     }
-    let rdns = cert.subject_rdns();
-    if rdns.is_empty() {
+    // Unsupported normalization must not make an excluded subtree look different.
+    if c.permitted_dirs.is_none() && c.excluded_dirs.is_empty() {
         return true;
     }
-    if let Some(permitted) = &c.permitted_dirs
-        && !permitted.iter().any(|p| dir_within(&rdns, p))
+    let Some(names) = cert.directory_names() else { return false };
+    if !names.iter().all(|name| directory_supported(name))
+        || !c.excluded_dirs.iter().all(|name| directory_supported(name))
+        || c.permitted_dirs.as_ref().is_some_and(|names| !names.iter().all(|name| directory_supported(name)))
     {
         return false;
     }
-    !c.excluded_dirs.iter().any(|e| dir_within(&rdns, e))
+    names.iter().all(|rdns| {
+        if let Some(permitted) = &c.permitted_dirs
+            && !permitted.iter().any(|p| dir_within(rdns, p))
+        {
+            return false;
+        }
+        !c.excluded_dirs.iter().any(|e| dir_within(rdns, e))
+    })
 }

@@ -104,7 +104,7 @@ pub(crate) fn check_within(signed: Signed<'_>, context: &Context<'_>, verificati
     };
     let mut pool: Vec<Cert> = data.certificates.iter().take(MAX_CERTS).filter_map(|c| Cert::from_der(c.whole)).collect();
     pool.extend(context.known.iter().take(MAX_CERTS).filter_map(|c| Cert::from_der(c)));
-    let mut digests = Digests::new(content);
+    let mut digests = Digests::new(content, matches!(signed, Signed::Detached { .. }));
     let mut budget = verifications;
     let mut best: Option<Checked> = None;
     for signer in data.signers.iter().take(MAX_SIGNERS) {
@@ -124,6 +124,7 @@ pub(crate) fn check_within(signed: Signed<'_>, context: &Context<'_>, verificati
 /// again for every signer and key tried), as it came and in its canonical form.
 struct Digests<'a> {
     content: &'a [u8],
+    allow_transport_normalization: bool,
     /// The content with lone LFs made CRLF, when it has any: worked out at its first use.
     canonical: Option<Option<Vec<u8>>>,
     plain: Vec<(Hash, Vec<u8>)>,
@@ -131,8 +132,8 @@ struct Digests<'a> {
 }
 
 impl<'a> Digests<'a> {
-    fn new(content: &'a [u8]) -> Self {
-        Digests { content, canonical: None, plain: Vec::new(), crlf: Vec::new() }
+    fn new(content: &'a [u8], allow_transport_normalization: bool) -> Self {
+        Digests { content, allow_transport_normalization, canonical: None, plain: Vec::new(), crlf: Vec::new() }
     }
 
     fn of(&mut self, hash: Hash) -> Vec<u8> {
@@ -146,6 +147,11 @@ impl<'a> Digests<'a> {
 
     /// The digest of the canonical form; `None` when the content has no lone LF (it is its own).
     fn of_canonical(&mut self, hash: Hash) -> Option<Vec<u8>> {
+        // Encapsulated content is already the exact signed octet sequence. Rewriting
+        // binary payload newlines would authenticate different bytes than we expose.
+        if !self.allow_transport_normalization {
+            return None;
+        }
         if let Some((_, d)) = self.crlf.iter().find(|(h, _)| *h == hash) {
             return Some(d.clone());
         }

@@ -10,7 +10,9 @@ use der::{Decode, Encode};
 use x509_cert::Certificate;
 use x509_cert::ext::pkix::constraints::name::GeneralSubtrees;
 use x509_cert::ext::pkix::name::GeneralName;
-use x509_cert::ext::pkix::{BasicConstraints, ExtendedKeyUsage, KeyUsage, NameConstraints, SubjectAltName, SubjectKeyIdentifier};
+use x509_cert::ext::pkix::{
+    AuthorityKeyIdentifier, BasicConstraints, CertificatePolicies, ExtendedKeyUsage, KeyUsage, NameConstraints, SubjectAltName, SubjectKeyIdentifier,
+};
 
 use crate::algorithms::{self, Fault};
 use craft_ber as ber;
@@ -47,6 +49,9 @@ pub struct Constraints {
     pub excluded_dirs: Vec<Vec<Vec<u8>>>,
 }
 
+/// A directory identity represented as ordered DER relative names.
+pub type DirectoryName = Vec<Vec<u8>>;
+
 /// A certificate: its DER, the body its issuer signed, and what it says.
 #[derive(Clone, Debug)]
 pub struct Cert {
@@ -80,6 +85,20 @@ impl Cert {
         let parsed = Certificate::from_der(der).ok()?;
         // RFC 5280 4.1.1.2: the outer and signed algorithm identifiers must agree.
         if parsed.signature_algorithm() != parsed.tbs_certificate().signature() {
+            return None;
+        }
+        // A recognized extension that cannot be decoded is not an absent extension.
+        // In particular, never fall back to the subject identity after a malformed SAN.
+        let tbs = parsed.tbs_certificate();
+        if tbs.get_extension::<SubjectAltName>().is_err()
+            || tbs.get_extension::<SubjectKeyIdentifier>().is_err()
+            || tbs.get_extension::<AuthorityKeyIdentifier>().is_err()
+            || tbs.get_extension::<KeyUsage>().is_err()
+            || tbs.get_extension::<ExtendedKeyUsage>().is_err()
+            || tbs.get_extension::<BasicConstraints>().is_err()
+            || tbs.get_extension::<NameConstraints>().is_err()
+            || tbs.get_extension::<CertificatePolicies>().is_err()
+        {
             return None;
         }
         let subject = parsed.tbs_certificate().subject().to_der().ok()?;
@@ -258,9 +277,22 @@ impl Cert {
         Ok(Some(c))
     }
 
-    /// Its subject's relative names, each in DER, in order: for directory name constraints.
-    pub fn subject_rdns(&self) -> Vec<Vec<u8>> {
-        self.parsed.tbs_certificate().subject().iter_rdn().filter_map(|r| r.to_der().ok()).collect()
+    /// Every directory identity: the nonempty subject and every directoryName SAN.
+    pub fn directory_names(&self) -> Option<Vec<DirectoryName>> {
+        let rdns = |name: &x509_cert::name::Name| name.iter_rdn().map(|r| r.to_der().ok()).collect::<Option<Vec<_>>>();
+        let mut names = Vec::new();
+        let subject = rdns(self.parsed.tbs_certificate().subject())?;
+        if !subject.is_empty() {
+            names.push(subject);
+        }
+        if let Some((_, san)) = self.parsed.tbs_certificate().get_extension::<SubjectAltName>().ok()? {
+            for name in &san.0 {
+                if let GeneralName::DirectoryName(name) = name {
+                    names.push(rdns(name)?);
+                }
+            }
+        }
+        Some(names)
     }
 
     /// Whether it may be a certification authority's: basic constraints say so, and its key
@@ -363,15 +395,17 @@ pub fn mail_within(address: &str, base: &str) -> bool {
 }
 
 /// Whether the name `rdns` is within the directory name `base`: it begins with all of it, each
-/// relative name compared as RFC 5280 §7.1 compares them (a name written in another case, with
-/// other spaces or in the other of the two string types is the same name).
+/// relative name compared using the supported ASCII subset of RFC 5280 §7.1.
+/// Unsupported string types or non-ASCII values must fail closed in the caller.
 pub fn dir_within(rdns: &[Vec<u8>], base: &[Vec<u8>]) -> bool {
-    rdns.len() >= base.len() && rdns.iter().zip(base).all(|(a, b)| a == b || matches!((rdn_key(a), rdn_key(b)), (Some(x), Some(y)) if x == y))
+    rdns.len() >= base.len() && rdns.iter().zip(base).all(|(a, b)| matches!((rdn_key(a), rdn_key(b)), (Some(x), Some(y)) if x == y))
 }
 
-/// A relative name's attributes as they compare: each type with its value, a PrintableString or
-/// UTF8String's with its letters in one case and its runs of spaces made one (and none at either
-/// end), any other's as it is written; sorted, since the attributes of one are a set.
+/// Whether every relative name is within the supported comparison profile.
+pub fn directory_supported(rdns: &[Vec<u8>]) -> bool {
+    rdns.iter().all(|rdn| rdn_key(rdn).is_some())
+}
+
 fn rdn_key(der: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
     use der::Tag;
     let rdn = x509_cert::name::RelativeDistinguishedName::from_der(der).ok()?;
@@ -381,16 +415,17 @@ fn rdn_key(der: &[u8]) -> Option<Vec<(String, Vec<u8>)>> {
             let value = match der::Tagged::tag(&atv.value) {
                 Tag::PrintableString | Tag::Utf8String => {
                     let text = std::str::from_utf8(atv.value.value()).ok()?;
+                    // RFC 5280 7.1 requires StringPrep for non-ASCII names. Until the
+                    // complete profile is implemented, constrained chains fail closed.
+                    if !text.is_ascii() {
+                        return None;
+                    }
                     let folded: Vec<String> = text.split_whitespace().map(str::to_lowercase).collect();
                     let mut v = b"s".to_vec();
                     v.extend_from_slice(folded.join(" ").as_bytes());
                     v
                 }
-                _ => {
-                    let mut v = b"b".to_vec();
-                    v.extend(atv.value.to_der().ok()?);
-                    v
-                }
+                _ => return None,
             };
             Some((atv.oid.to_string(), value))
         })

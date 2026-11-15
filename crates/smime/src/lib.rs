@@ -12,6 +12,10 @@
 //! whether the certificate rests on a trust anchor, is for signing mail and is for the From
 //! address. MD5 and SHA-1 are no longer safe and are said to be. Revocation isn't checked.
 //!
+//! Directory-name constraints currently support ASCII PrintableString/UTF8String names.
+//! Constrained chains requiring other string profiles are refused, not approximately matched.
+//! Opaque CMS content is verified as exact octets; only detached transport text permits LF repair.
+//!
 //! Input is hostile: BER is turned into DER with nesting bounded, every length is checked
 //! against what is there, the certificates, signers and the path to an anchor are capped, and
 //! nothing here panics on any bytes.

@@ -945,3 +945,101 @@ fn pss_restricted_public_keys_are_not_treated_as_unrestricted_rsa() {
         assert_eq!(crate::algorithms::verify(&key, &info.signature_algorithm, Some(hash), &signed, info.signature.as_bytes()), Err(Fault::Unknown));
     }
 }
+
+#[test]
+fn malformed_critical_san_is_not_an_absent_identity() {
+    let root = root("Example Root");
+    let mut params = signer_params("Ada", "ada@example.org");
+    params.subject_alt_names.clear();
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CustomDnType(vec![1, 2, 840, 113549, 1, 9, 1]), rcgen::DnValue::Ia5String("ada@example.org".try_into().unwrap()));
+    let mut san = rcgen::CustomExtension::from_oid_content(&[2, 5, 29, 17], vec![0x05, 0]);
+    san.set_criticality(true);
+    params.custom_extensions.push(san);
+    let signer = issued(params, key(&rcgen::PKCS_ECDSA_P256_SHA256), &root);
+    assert!(Certificate::from_der(&signer.der).is_ok(), "outer certificate is valid DER");
+    assert!(crate::cert::Cert::from_der(&signer.der).is_none());
+    assert_ne!(path_verdict(&signer, &[], &root, "ada@example.org").0, Verdict::Verified);
+}
+
+#[test]
+fn excluded_directory_san_is_checked_even_with_empty_subject() {
+    let root = root("Example Root");
+    let mut rogue = rcgen::DistinguishedName::new();
+    rogue.push(rcgen::DnType::OrganizationName, "Rogue");
+    let ca = authority("Corp CA", &root, |p| {
+        p.name_constraints =
+            Some(rcgen::NameConstraints { permitted_subtrees: vec![], excluded_subtrees: vec![rcgen::GeneralSubtree::DirectoryName(rogue)] });
+    });
+    let directory: x509_cert::name::Name = "O=Rogue".parse().unwrap();
+    for empty_subject in [false, true] {
+        let mut params = signer_params("Ada", "ada@example.org");
+        if empty_subject {
+            params.distinguished_name = rcgen::DistinguishedName::new();
+        }
+        params.subject_alt_names.clear();
+        let mut names = tlv(0x81, b"ada@example.org");
+        names.extend(tlv(0xa4, &directory.to_der().unwrap()));
+        let mut san = rcgen::CustomExtension::from_oid_content(&[2, 5, 29, 17], tlv(0x30, &names));
+        san.set_criticality(true);
+        params.custom_extensions.push(san);
+        let signer = issued(params, key(&rcgen::PKCS_ECDSA_P256_SHA256), &ca);
+        assert_eq!(path_verdict(&signer, &[&ca], &root, "ada@example.org"), (Verdict::NotVerified, Some(Why::Constrained)));
+    }
+}
+
+#[test]
+fn unsupported_unicode_directory_normalization_fails_closed() {
+    let root = root("Example Root");
+    let mut excluded = rcgen::DistinguishedName::new();
+    excluded.push(rcgen::DnType::OrganizationName, "STRASSE");
+    let ca = authority("Corp CA", &root, |p| {
+        p.name_constraints =
+            Some(rcgen::NameConstraints { permitted_subtrees: vec![], excluded_subtrees: vec![rcgen::GeneralSubtree::DirectoryName(excluded)] });
+    });
+    let mut params = signer_params("Ada", "ada@example.org");
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    params.distinguished_name.push(rcgen::DnType::OrganizationName, "Straße");
+    let signer = issued(params, key(&rcgen::PKCS_ECDSA_P256_SHA256), &ca);
+    assert_eq!(path_verdict(&signer, &[&ca], &root, "ada@example.org"), (Verdict::NotVerified, Some(Why::Constrained)));
+}
+
+#[test]
+fn opaque_binary_content_is_verified_as_exact_octets_with_or_without_attributes() {
+    const BINARY: &[u8] = b"Content-Type: application/octet-stream\r\nContent-Transfer-Encoding: binary\r\n\r\nA\r\nB";
+    const CHANGED: &[u8] = b"Content-Type: application/octet-stream\r\nContent-Transfer-Encoding: binary\r\n\r\nA\nB";
+    let root = root("Example Root");
+    let signer = signer_by("Ada", "ada@example.org", &root);
+    let anchors = Anchors::new([&root.der]);
+    let context = Context { anchors: &anchors, from: "ada@example.org", now: NOW, known: &[], coverage: Coverage::Whole };
+    for bare in [false, true] {
+        let cms = sign_data_with(
+            BINARY,
+            &signer,
+            &[&signer],
+            false,
+            |info| {
+                if bare {
+                    let rng = ring::rand::SystemRandom::new();
+                    let pair = ring::signature::EcdsaKeyPair::from_pkcs8(
+                        &ring::signature::ECDSA_P256_SHA256_ASN1_SIGNING,
+                        &signer.key.serialize_der(),
+                        &rng,
+                    )
+                    .unwrap();
+                    info.signed_attrs = None;
+                    info.signature = OctetString::new(pair.sign(&rng, BINARY).unwrap().as_ref().to_vec()).unwrap();
+                }
+            },
+            |data| data.encap_content_info.econtent = Some(OctetString::new(BINARY.to_vec()).unwrap()),
+        );
+        assert_eq!(check(Signed::Opaque(&cms), &context).unwrap().signature.verdict, Verdict::Verified);
+        let info = ContentInfo::from_der(&cms).unwrap();
+        let mut data = info.content.decode_as::<SignedData>().unwrap();
+        data.encap_content_info.econtent = Some(OctetString::new(CHANGED.to_vec()).unwrap());
+        let changed = ContentInfo { content_type: info.content_type, content: Any::encode_from(&data).unwrap() }.to_der().unwrap();
+        assert_eq!(craft_ber::signed_content(&changed).unwrap(), CHANGED);
+        assert_eq!(check(Signed::Opaque(&changed), &context).unwrap().signature.verdict, Verdict::Changed);
+    }
+}
