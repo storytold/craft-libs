@@ -751,3 +751,24 @@ fn all_connected_and_unplaced_geometries_are_instances() {
     assert_eq!(scene.instances(&Limits::default()).unwrap().len(), 3);
     assert_eq!(scene.roots.len(), 2);
 }
+
+#[test]
+fn fbx_corner_colors_keep_seams_and_incomplete_layers_are_omitted() {
+    let layer = r#"LayerElementColor: 0 {
+ MappingInformationType: "ByPolygonVertex"
+ ReferenceInformationType: "Direct"
+ Colors: 1,0,0,1, 0,1,0,1, 0,0,1,1, 1,1,0,1, 0,1,0,1, 0,0,1,1
+}"#;
+    let text = ASCII.replace("LayerElementNormal: 0 {", &format!("{layer}\n LayerElementNormal: 0 {{"));
+    // Add a color for every corner of the original quad and triangle.
+    let text = text.replace("0,0,1,1\n}", "0,0,1,1, 1,0,1,1\n}");
+    let scene = parse(text.as_bytes()).unwrap();
+    let mesh = &scene.meshes[0];
+    let colors: Vec<_> = mesh.parts.iter().flat_map(|part| part.corners.iter()).map(|corner| mesh.colors[corner.position as usize]).collect();
+    assert_eq!(colors.len(), 7);
+    assert!(colors.contains(&[1.0, 0.0, 0.0, 1.0]));
+    assert!(colors.contains(&[0.0, 1.0, 0.0, 1.0]));
+    assert!(colors.contains(&[1.0, 0.0, 1.0, 1.0]));
+    let incomplete = text.replace(", 1,0,1,1\n}", "\n}");
+    assert!(parse(incomplete.as_bytes()).unwrap().meshes[0].colors.is_empty());
+}
