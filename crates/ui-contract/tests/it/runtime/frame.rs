@@ -1,7 +1,16 @@
-//! The frame loop: installed options, the one-press rule and the per-frame output.
+//! The frame loop: installed options, the one-press rule, the per-frame output, and the command states a settled
+//! region shows.
 
+use craft_ui::contract::{
+    CommandSet, Common, Component, Container, ContainerProps, Cx, Lazy, Mount, Overlay, Props as _, Role, Show as _, ShowContainer as _,
+};
+use craft_ui::runtime::commands::{CommandGate, CommandInput, CommandRef};
+use craft_ui::style::StyleCx;
+use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Frames, trial};
-use egui::{Event, Modifiers, PointerButton, Pos2};
+use craft_ui_test_kit::contract::{PlainStyle, Probe, Seen};
+use egui::{Event, Id, Modifiers, PointerButton, Pos2, Rect, Response, Ui, Vec2};
+use std::cell::{Cell, RefCell};
 
 const AT: Pos2 = Pos2::new(20.0, 12.0);
 
@@ -53,9 +62,8 @@ fn one_press_per_pass_and_a_discard_pass_gets_no_held_events() {
 /// forty leaves makes as many lookups as one of ten.
 #[trial]
 fn a_settled_pass_looks_up_as_many_services_for_forty_leaves_as_for_ten() {
-    use craft_ui::contract::{Props as _, Show as _, ShowContainer as _};
     use craft_ui::runtime::egui::memory::service_lookups;
-    use craft_ui_test_kit::contract::{Panel, Probe, Seen};
+    use craft_ui_test_kit::contract::Panel;
     let settled_lookups = |leaves: usize| {
         let mut frames = Frames::new();
         let mut show = |ui: &mut egui::Ui| {
@@ -75,4 +83,155 @@ fn a_settled_pass_looks_up_as_many_services_for_forty_leaves_as_for_ten() {
     };
     let (ten, forty) = (settled_lookups(10), settled_lookups(40));
     assert_eq!(ten, forty, "context-data lookups grow with the runs: {ten} for ten leaves, {forty} for forty");
+}
+
+/// The app command the settled region's probe is bound to; its modal rule is the default one, `Blocked`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, CommandSet)]
+#[command(prefix = "frameTrial")]
+#[non_exhaustive]
+enum Shown {
+    #[command(label = "Apply")]
+    Apply,
+}
+
+/// A gate that refuses `Shown::Apply` when `refuses`, else lets every command through. Each call makes a new closure.
+fn gate(refuses: bool) -> CommandInput {
+    CommandInput::new().gate(CommandGate::new(move |command: &CommandRef| !refuses || Shown::from_ref(command).is_none()))
+}
+
+/// A modal layer with an empty body.
+#[derive(craft_ui::contract::Component)]
+#[component(container, unregistered)]
+struct Modal {
+    #[common]
+    common: Common,
+    #[container]
+    props: ContainerProps,
+}
+
+impl Component for Modal {
+    const ROLE: Role = Role::GROUP;
+    type Style = PlainStyle;
+    type Output = Response;
+
+    fn style(_: &StyleCx<'_>, _: ModalStyleKey) -> PlainStyle {
+        PlainStyle::min(Vec2::new(120.0, 60.0))
+    }
+
+    fn finish(self, cx: Cx<'_, Self>) -> Response {
+        cx.response.clone()
+    }
+}
+
+impl Container for Modal {}
+
+/// A settling region of room `room` holding a probe bound to `Shown::Apply`, and a modal layer beside it while `open`
+/// holds.
+struct CommandScene {
+    runs: Cell<usize>,
+    open: Cell<bool>,
+    room: Cell<Vec2>,
+    seen: RefCell<Seen>,
+}
+
+impl CommandScene {
+    fn new() -> CommandScene {
+        CommandScene { runs: Cell::new(0), open: Cell::new(false), room: Cell::new(Vec2::new(200.0, 80.0)), seen: RefCell::new(Seen::default()) }
+    }
+
+    fn show(&self, ui: &mut Ui) {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), self.room.get()), |ui| {
+            Lazy::new("commands", 0.0).settles(true).show(ui, |ui| {
+                self.runs.set(self.runs.get() + 1);
+                Probe::new(&self.seen).command(Shown::Apply).show(ui);
+            });
+        });
+        if self.open.get() {
+            let props = ContainerProps::new().mount(Mount::Layer(Overlay::modal()));
+            Modal { common: Common::new(), props }.id_salt("modal").show(ui, |_, _| {});
+        }
+    }
+
+    /// The region's runs in one frame with no input.
+    fn frame(&self, frames: &mut Frames) -> usize {
+        self.runs.set(0);
+        frames.frame(vec![], |ui| self.show(ui));
+        self.runs.get()
+    }
+
+    fn settle(&self, frames: &mut Frames) {
+        frames.idle(30, |ui| self.show(ui));
+    }
+
+    /// Whether the probe's node is disabled in the last frame's tree.
+    fn disabled(&self, frames: &mut Frames) -> bool {
+        let id: Id = self.seen.borrow().id.expect("the probe ran");
+        frames.tree().is_disabled(id)
+    }
+}
+
+/// fx.F23: a settled region shows a command's new enabled state after a frame whose only change is the app's gate, and
+/// after a modal layer beside it closes with no input. Each pass resolves again, before any component runs, what every
+/// reader was shown, and the settled region whose resolution changed runs. The access tree hides what sits behind an
+/// open modal layer, so the region's run under the modal (its room changed) is read only through what it shows once
+/// the layer closed.
+#[trial]
+fn a_command_state_change_with_no_input_repaints_the_settled_region() {
+    let scene = CommandScene::new();
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    assert_eq!(scene.frame(&mut frames), 0, "the region settles");
+    assert!(!scene.disabled(&mut frames), "Apply starts enabled");
+
+    frames.commands(gate(true));
+    assert!(scene.frame(&mut frames) > 0, "the gate refusing Apply runs the settled region");
+    assert!(scene.disabled(&mut frames), "the region shows Apply disabled in the frame the gate refuses it");
+    scene.settle(&mut frames);
+    assert_eq!(scene.frame(&mut frames), 0, "it settles again");
+    assert!(scene.disabled(&mut frames), "a settled frame keeps Apply disabled");
+    frames.commands(gate(false));
+    scene.frame(&mut frames);
+    assert!(!scene.disabled(&mut frames), "the gate letting Apply through shows it enabled");
+
+    scene.settle(&mut frames);
+    scene.open.set(true);
+    scene.settle(&mut frames);
+    scene.room.set(Vec2::new(220.0, 80.0));
+    assert!(scene.frame(&mut frames) > 0, "the region runs at its new room, under the modal layer that blocks Apply");
+    scene.settle(&mut frames);
+    scene.open.set(false);
+    scene.frame(&mut frames);
+    scene.frame(&mut frames);
+    assert!(!scene.disabled(&mut frames), "once the modal layer closed, the region shows Apply enabled");
+    scene.settle(&mut frames);
+    assert_eq!(scene.frame(&mut frames), 0, "it settles again");
+    assert!(!scene.disabled(&mut frames), "a settled frame keeps Apply enabled");
+}
+
+/// fx.F23's count relation: a frame given a new gate closure that answers as the last one did resolves every reader to
+/// what it was shown, so no settled region runs, in a frame's first pass or in a discard pass the frame reruns. A gate
+/// that answers otherwise runs the region.
+#[trial]
+fn an_unchanged_gate_reruns_no_settled_region() {
+    let scene = CommandScene::new();
+    let mut frames = Frames::new();
+    frames.commands(gate(false));
+    scene.settle(&mut frames);
+    for frame in 0..4 {
+        frames.commands(gate(false));
+        assert_eq!(scene.frame(&mut frames), 0, "frame {frame} with a fresh, equal gate ran the settled region");
+    }
+    frames.commands(gate(false));
+    scene.runs.set(0);
+    let mut first = true;
+    let passes = frames.frame(vec![], |ui| {
+        scene.show(ui);
+        if std::mem::take(&mut first) {
+            ui.ctx().request_discard("command trial");
+        }
+    });
+    assert_eq!(passes, 2, "the frame reruns its pass");
+    assert_eq!(scene.runs.get(), 0, "neither pass of the frame ran the settled region");
+    frames.commands(gate(true));
+    assert!(scene.frame(&mut frames) > 0, "a gate that refuses the region's command runs it");
 }

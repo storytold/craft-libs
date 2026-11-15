@@ -126,6 +126,15 @@ impl std::error::Error for CommandDefError {}
 
 static LOADED: OnceLock<Arc<Registry>> = OnceLock::new();
 
+/// Indexes the definition at `at` under its id `id`; an id already in `index` is refused (`Duplicate`). The registry
+/// and an app's catalog index their definitions through it.
+pub(crate) fn index_id(index: &mut HashMap<String, usize>, id: &str, at: usize) -> Result<(), CommandDefError> {
+    if index.insert(id.to_owned(), at).is_some() {
+        return Err(CommandDefError::Duplicate { command: id.to_owned() });
+    }
+    Ok(())
+}
+
 /// The loaded definitions, by id.
 #[derive(Default)]
 pub(crate) struct Registry {
@@ -172,10 +181,7 @@ impl Registry {
     }
 
     fn add(&mut self, def: CommandDef) -> Result<(), CommandDefError> {
-        let id = def.command.id.clone();
-        if self.index.insert(id.clone(), self.defs.len()).is_some() {
-            return Err(CommandDefError::Duplicate { command: id });
-        }
+        index_id(&mut self.index, &def.command.id, self.defs.len())?;
         self.defs.push(def);
         Ok(())
     }

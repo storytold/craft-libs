@@ -252,6 +252,58 @@ fn the_help_search_takes_its_editing_keys() {
     assert!(field_reads(&fixture, "txo"), "Left moves the caret before the last letter");
 }
 
+/// A command chord pressed after the focus moved between the rows of an open menu still runs in the scope focus came
+/// from and gives the focus back there, for a menu a title click opened and one F10 and Down opened.
+#[trial]
+fn a_command_shortcut_after_moving_in_an_open_menu_runs_where_focus_was() {
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::runtime::commands::Commands as _;
+    let count = Rc::new(Cell::new(0));
+    let target = Rc::new(Cell::new(None));
+    let (seen, stop) = (count.clone(), target.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&View", |ui| {
+            MenuItem::new("&One").show(ui);
+            MenuItem::new("&Two").show(ui);
+            MenuItem::new("T&hree").show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        craft_ui::layout_components::Stack::new().command_scope(<BarKeysCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
+            while cx.take_command::<BarKeysCommand>().is_some() {
+                seen.set(seen.get() + 1);
+            }
+            stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
+        });
+    });
+    fixture.settle();
+    craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
+    fixture.settle();
+    let press = |fixture: &mut Fixture, key: egui::Key, modifiers: egui::Modifiers| {
+        fixture.key(key, modifiers);
+        fixture.settle();
+    };
+    let down_twice_then_chord = |fixture: &mut Fixture, how: &str| {
+        assert!(fixture.by_label("Two").is_some(), "{how}: View is open");
+        press(fixture, egui::Key::ArrowDown, egui::Modifiers::NONE);
+        press(fixture, egui::Key::ArrowDown, egui::Modifiers::NONE);
+        assert_ne!(fixture.focused_stop().map(|(id, _)| id), target.get(), "{how}: the focus is on a row of the menu");
+        press(fixture, egui::Key::P, egui::Modifiers::COMMAND | egui::Modifiers::ALT);
+        assert!(fixture.by_label("Two").is_none(), "{how}: the chord closes the menu");
+        assert_eq!(fixture.focused_stop().map(|(id, _)| id), target.get(), "{how}: the focus is back on the stop that held it");
+    };
+
+    let view = fixture.by_label("View").expect("the View title");
+    fixture.click(&view);
+    fixture.settle();
+    down_twice_then_chord(&mut fixture, "opened by a click");
+    assert_eq!(count.get(), 1, "opened by a click: the chord runs once, in the scope focus came from");
+
+    press(&mut fixture, egui::Key::F10, egui::Modifiers::NONE);
+    press(&mut fixture, egui::Key::ArrowDown, egui::Modifiers::NONE);
+    down_twice_then_chord(&mut fixture, "opened by F10 and Down");
+    assert_eq!(count.get(), 2, "opened by F10 and Down: the chord runs once, in the scope focus came from");
+}
+
 /// A field inside an open menu keeps its own edit menu: Cut picked from the Help search field's edit menu cuts the
 /// search text, not the text of the field that held focus before Help opened, and closes only the edit menu.
 #[trial]

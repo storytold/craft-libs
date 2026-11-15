@@ -7,7 +7,7 @@ mod registry;
 
 pub use clipboard::{ClipContent, ClipError, ClipItem, ClipboardHandle};
 pub use craft_behavior::EditCommand;
-pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform};
+pub use craft_keymap::{Binding, CommandDef, CommandKind, CommandRef, CommandScope, ModalRule, Platform, Scope};
 pub use library::ChromeCommand;
 pub(crate) use library::WindowShortcut;
 pub use library::{EditCommands, NavCommand, WindowCommand};
@@ -17,6 +17,9 @@ pub use registry::{SetEntry, sets};
 
 #[doc(hidden)]
 pub use board::declare_child;
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub use board::keymap_builds;
 #[doc(hidden)]
 pub use board::focus_within;
 pub(crate) use board::publish as publish_for;
@@ -33,14 +36,16 @@ use craft_behavior::edit_history::Step;
 use craft_keymap::{Chord, Overrides};
 use egui::{Context, Id, ViewportId};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Commands an app defines at run time, all in the app scope.
+/// Commands an app defines at run time (plug-ins, its tool list), all in the app scope ([`Scope::app`]). They join
+/// the linked command sets: their chords fire them into `FrameOutput.fired`, and surfaces resolve their label, icon,
+/// kind and chord. An id a linked set already defines stays that set's.
 #[derive(Clone)]
 pub struct AppCatalog {
-    #[allow(dead_code)] // P3(top-w7): tp.T35
     defs: Arc<[CommandDef]>,
-    #[allow(dead_code)] // P3(top-w7): tp.T35
+    index: Arc<HashMap<String, usize>>,
     generation: u64,
 }
 
@@ -48,8 +53,28 @@ impl AppCatalog {
     /// A catalog of `defs`; `generation` changes when the app's rows do. Refuses two defs with one id (`Duplicate`) and a
     /// def in another scope (`NotApp`).
     pub fn new(defs: Vec<CommandDef>, generation: u64) -> Result<Self, CommandDefError> {
-        let _ = (defs, generation);
-        todo!("tp.T35")
+        let mut index = HashMap::with_capacity(defs.len());
+        for (at, def) in defs.iter().enumerate() {
+            if !def.scope.is_app() {
+                return Err(CommandDefError::NotApp { command: def.command.id.clone() });
+            }
+            registry::index_id(&mut index, &def.command.id, at)?;
+        }
+        Ok(AppCatalog { defs: defs.into(), index: Arc::new(index), generation })
+    }
+
+    /// The app's version of the catalog. The board rebuilds the keymap when it differs from the last frame's, and never
+    /// compares the definitions, so an app gives a new generation exactly when its rows change.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn defs(&self) -> &[CommandDef] {
+        &self.defs
+    }
+
+    pub(crate) fn get(&self, id: &str) -> Option<&CommandDef> {
+        self.index.get(id).and_then(|&at| self.defs.get(at))
     }
 }
 
@@ -246,7 +271,6 @@ pub struct CommandInput {
     pub(crate) states: Vec<(CommandRef, CommandState)>,
     pub(crate) overrides: Option<Arc<Overrides>>,
     pub(crate) gate: Option<CommandGate>,
-    #[allow(dead_code)] // P3(top-w7): tp.T36
     pub(crate) catalog: Option<AppCatalog>,
 }
 
@@ -288,7 +312,7 @@ impl CommandInput {
 /// The chain of container instances that receive scoped commands, innermost last. A private inherited field of
 /// the env.
 #[doc(hidden)]
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct CommandChain(Arc<[(CommandScope, Id)]>);
 
 impl CommandChain {
