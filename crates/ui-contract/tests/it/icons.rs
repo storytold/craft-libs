@@ -50,6 +50,11 @@ const DRAWN_BY: [(&str, &[&str]); 11] = [
     ("gap_vertical", &["lucide", "phosphor", "tabler"]),
 ];
 
+/// The three curated horizontal/vertical pairs: the two flips, the two gaps and the two axes of scale. These are the
+/// pairs a consumer can swap by mistake, and the only ones the axis trial reads.
+const AXIS_PAIRS: [(&str, &str); 3] =
+    [("flip_horizontal", "flip_vertical"), ("gap_horizontal", "gap_vertical"), ("scale_horizontal", "scale_vertical")];
+
 /// The side of the drawing's centre each padding puts its filled space band on, as a sign on x and y.
 const PADDING_SIDES: [(&str, i32, i32); 4] = [("padding_top", 0, -1), ("padding_right", 1, 0), ("padding_bottom", 0, 1), ("padding_left", -1, 0)];
 
@@ -175,27 +180,59 @@ fn drawing(set: &str, stem: &str) -> (PathBuf, Tree) {
     (path, tree)
 }
 
-/// One painted path: its absolute box including the stroke, in hundredths of a view-box unit, and whether it is filled.
-/// The stroke is part of the box because a drawing's ink is what the eye sees, and a stroke past the view box is ink
-/// the icon loses.
-type Shape = (i64, i64, i64, i64, bool);
+/// One painted path as these trials read it: the geometry the parser gives (every segment, in path order), the transform
+/// the path lands with, its absolute box including the stroke, and whether it is filled. The geometry is what tells two
+/// drawings apart when their boxes match: Lucide's `flip-horizontal` and `gap-horizontal` have the same multiset of path
+/// boxes and different brackets, one opening out and one in. The stroke is part of the box because a drawing's ink is
+/// what the eye sees, and a stroke past the view box is ink the icon loses.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Shape {
+    /// Every segment of the path, as the parser types them, in path order.
+    segments: String,
+    /// The path's absolute transform.
+    transform: String,
+    /// The absolute box including the stroke, in hundredths of a view-box unit: left, top, right, bottom.
+    bounds: [i64; 4],
+    /// Whether the path is painted with a fill.
+    filled: bool,
+}
 
-/// Every visible path of `group`, depth first.
+impl Shape {
+    /// The centre of the path's box, in hundredths of a view-box unit.
+    fn centre(&self) -> (i64, i64) {
+        ((self.bounds[0] + self.bounds[2]) / 2, (self.bounds[1] + self.bounds[3]) / 2)
+    }
+
+    fn width(&self) -> i64 {
+        self.bounds[2] - self.bounds[0]
+    }
+
+    fn height(&self) -> i64 {
+        self.bounds[3] - self.bounds[1]
+    }
+
+    /// The box's area in hundredths squared, which ranks a drawing's parts by how much of it they paint.
+    fn area(&self) -> i64 {
+        self.width().max(0) * self.height().max(0)
+    }
+}
+
+/// Every painted path of `group`, depth first. A path with neither a fill nor a stroke paints nothing (Tabler ships one
+/// as a placeholder) and is left out: its box would otherwise outrank the drawing's real parts.
 fn shapes(group: &Group) -> Vec<Shape> {
     fn walk(group: &Group, out: &mut Vec<Shape>) {
         for node in group.children() {
             match node {
                 Node::Group(inner) => walk(inner, out),
-                Node::Path(path) if path.is_visible() => {
-                    let box_ = path.abs_stroke_bounding_box();
+                Node::Path(path) if path.is_visible() && (path.fill().is_some() || path.stroke().is_some()) => {
+                    let bounds = path.abs_stroke_bounding_box();
                     let hundredths = |value: f32| (value * 100.0).round() as i64;
-                    out.push((
-                        hundredths(box_.left()),
-                        hundredths(box_.top()),
-                        hundredths(box_.right()),
-                        hundredths(box_.bottom()),
-                        path.fill().is_some(),
-                    ));
+                    out.push(Shape {
+                        segments: format!("{:?}", path.data().segments().collect::<Vec<_>>()),
+                        transform: format!("{:?}", path.abs_transform()),
+                        bounds: [hundredths(bounds.left()), hundredths(bounds.top()), hundredths(bounds.right()), hundredths(bounds.bottom())],
+                        filled: path.fill().is_some(),
+                    });
                 }
                 _ => {}
             }
@@ -206,9 +243,20 @@ fn shapes(group: &Group) -> Vec<Shape> {
     out
 }
 
-/// The centre of a shape's box, in hundredths of a view-box unit.
-fn centre(shape: &Shape) -> (i64, i64) {
-    ((shape.0 + shape.2) / 2, (shape.1 + shape.3) / 2)
+/// How far a drawing spreads along x and along y, in hundredths: the separation of its two largest painted paths, or
+/// the box of its one path. A curated pair's two drawings each have one of those shapes, so a swapped pair turns the
+/// larger number into the other axis.
+fn spread(painted: &[Shape]) -> (i64, i64) {
+    let mut ranked: Vec<&Shape> = painted.iter().collect();
+    ranked.sort_by(|a, b| b.area().cmp(&a.area()));
+    match ranked.as_slice() {
+        [first, second, ..] => {
+            let ((ax, ay), (bx, by)) = (first.centre(), second.centre());
+            ((ax - bx).abs(), (ay - by).abs())
+        }
+        [only] => (only.width(), only.height()),
+        [] => (0, 0),
+    }
 }
 
 #[trial]
@@ -325,11 +373,11 @@ fn each_padding_drawing_puts_its_space_on_its_side() {
         for (set, stem) in &catalogue[name].stems {
             let (path, tree) = drawing(set, stem);
             let view = tree.size();
-            let bands: Vec<Shape> = shapes(tree.root()).into_iter().filter(|shape| shape.4).collect();
+            let bands: Vec<Shape> = shapes(tree.root()).into_iter().filter(|shape| shape.filled).collect();
             assert_eq!(bands.len(), 1, "`{name}` in `{set}` fills {} parts: the space it names is one solid band ({})", bands.len(), path.display());
-            let band = bands[0];
-            assert!(band.2 > band.0 && band.3 > band.1, "`{name}` in `{set}` fills an empty band: {}", path.display());
-            let (x, y) = centre(&band);
+            let band = &bands[0];
+            assert!(band.width() > 0 && band.height() > 0, "`{name}` in `{set}` fills an empty band: {}", path.display());
+            let (x, y) = band.centre();
             let (across, along) = ((view.width() * 100.0) as i64 / 2, (view.height() * 100.0) as i64 / 2);
             // A tenth of the drawing, so a band nudged off centre cannot pass, and a twentieth the other way, so the
             // band is squarely on one side rather than in a corner.
@@ -343,6 +391,39 @@ fn each_padding_drawing_puts_its_space_on_its_side() {
                 path.display()
             );
             assert!(side_ways <= slack, "`{name}` in `{set}` puts its band {side_ways} hundredths off the other axis: {}", path.display());
+        }
+    }
+}
+
+/// The curated pairs run along the axis their names give: a flip and a gap spread between their two largest painted
+/// paths (Lucide's horizontal flip is taller than it is wide, so the drawing's overall shape says nothing), and an
+/// axis of scale is one painted path that is wider than tall or the reverse. Swapping one pair's drawings therefore
+/// fails here. This is a check on three named pairs, not a reading of what an arbitrary SVG means.
+#[trial]
+fn each_axis_pair_runs_along_its_axis() {
+    let manifest = std::fs::read_to_string(icons_dir().join("icons.toml")).unwrap();
+    let (sets, _) = declared_sets(&manifest);
+    let catalogue = entries(&manifest, &sets);
+    for (horizontal, vertical) in AXIS_PAIRS {
+        for (name, along_x) in [(horizontal, true), (vertical, false)] {
+            for (set, stem) in &catalogue[name].stems {
+                let (path, tree) = drawing(set, stem);
+                let view = tree.size();
+                let (dx, dy) = spread(&shapes(tree.root()));
+                let (along, across) = if along_x { (dx, dy) } else { (dy, dx) };
+                let axis = if along_x { "x" } else { "y" };
+                let tenth = (view.width().max(view.height()) * 100.0) as i64 / 10;
+                assert!(
+                    along > across,
+                    "`{name}` in `{set}` spreads {dx} hundredths along x and {dy} along y, so it does not run along {axis}: {}",
+                    path.display()
+                );
+                assert!(
+                    along >= tenth,
+                    "`{name}` in `{set}` spreads only {along} hundredths along {axis}, under a tenth of the drawing: {}",
+                    path.display()
+                );
+            }
         }
     }
 }
