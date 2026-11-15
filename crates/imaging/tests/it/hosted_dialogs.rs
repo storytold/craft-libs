@@ -7,7 +7,8 @@ use std::rc::Rc;
 use craft_imaging::layer_style::{EffectId, EffectInstance, EffectKind, LayerStyle, LayerStyleDraft, LayerStylePage, StyleParams};
 use craft_imaging::ui::adjust::{BrightnessContrast, BrightnessContrastEditor, HostedAdjustDialog};
 use craft_imaging::ui::layer_style::{HostedLayerStyle, LayerStyleAsk};
-use craft_ui::dialog::{DialogHost, DialogResult, StackDialog, dialog_id};
+use craft_ui::dialog::{DialogHost, DialogResult, HeldOk, StackDialog, dialog_id};
+use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
 
@@ -97,4 +98,47 @@ fn a_hosted_adjustment_dialog_previews_and_answers_with_its_value() {
     host.borrow_mut().open(brightness_contrast());
     fixture.idle(10).key(Key::Escape, Modifiers::NONE).idle(4);
     assert_eq!(host.borrow_mut().take::<Adjust>(), Some(DialogResult::Cancel), "Escape cancels a reopened dialog");
+}
+
+/// Why the app refuses the held OK.
+const REFUSED: &str = "The layer is locked.";
+
+// OK of a held adjustment dialog files its value and waits with OK disabled; a refusal keeps the dialog open with OK
+// enabled and the reason shown until the value changes; an accepted OK closes it with the value.
+#[trial]
+fn a_held_adjustment_ok_refused_stays_open_and_an_accepted_one_closes() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let id = host.borrow_mut().open(brightness_contrast().held_ok());
+    fixture.idle(10);
+    let on_dialog = |act: &mut dyn FnMut(&mut Adjust)| host.borrow_mut().get_mut::<Adjust>().map(act);
+
+    let ok = fixture.by_label("OK").expect("the OK button");
+    fixture.click(&ok).idle(4);
+    let mut filed = None;
+    on_dialog(&mut |dialog| filed = dialog.take_ok());
+    assert_eq!(filed.map(|value| value.brightness), Some(20.0), "OK files the value");
+    assert_eq!(host.borrow().held_state(id), Some(HeldOk::Waiting), "the filed OK waits for the app");
+    let ok = fixture.by_label("OK").expect("the OK button");
+    assert!(fixture.tree().is_disabled_key(ok.node), "OK waits disabled for the app's answer");
+
+    on_dialog(&mut |dialog| dialog.answer_ok(Err(Label::from(REFUSED))));
+    fixture.idle(4);
+    assert!(host.borrow().is_open::<Adjust>(), "a refused OK keeps the dialog open");
+    assert_eq!(host.borrow().held_state(id), Some(HeldOk::Refused(Label::from(REFUSED))));
+    assert!(fixture.by_label(REFUSED).is_some(), "the refusal shows in the dialog");
+    let ok = fixture.by_label("OK").expect("the OK button");
+    assert!(!fixture.tree().is_disabled_key(ok.node), "a refusal enables OK again");
+    on_dialog(&mut |dialog| dialog.value_mut().brightness = 5.0);
+    fixture.idle(4);
+    assert!(fixture.by_label(REFUSED).is_none(), "a changed value clears the refusal");
+
+    let ctx = fixture.ctx().clone();
+    assert!(!host.borrow_mut().confirm_by_id(&ctx, id), "confirm on a held dialog files the value and answers nothing yet");
+    on_dialog(&mut |dialog| filed = dialog.take_ok());
+    assert_eq!(filed.map(|value| value.brightness), Some(5.0), "confirm files the value as the button does");
+    on_dialog(&mut |dialog| dialog.answer_ok(Ok(())));
+    fixture.idle(4);
+    let answered = host.borrow_mut().take_keyed::<Adjust>().and_then(|(result, _)| result.ok()).map(|value| value.brightness);
+    assert_eq!(answered, Some(5.0), "the accepted OK closes the dialog with the held value");
 }

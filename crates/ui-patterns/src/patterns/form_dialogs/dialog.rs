@@ -14,7 +14,7 @@ use super::rows::{ParamRows, ParamRowsOutput};
 
 use crate::contract::{Bind, BodyCx, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _};
 
-use crate::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldOk, StackDialog, dialog_id};
+use crate::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, StackDialog, dialog_id};
 
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
@@ -764,10 +764,8 @@ pub struct HostedParamDialog {
     shown: ShownState,
     /// Whether OK files its answer for the host instead of closing ([`held_ok`](HostedParamDialog::held_ok)).
     hold: bool,
-    /// An OK the host holds back until it answers `answer_ok`.
-    held: Option<Held>,
-    /// The host's refusal of the last held OK, shown until a value changes.
-    refused: Option<Refused>,
+    /// The OK the host holds back until it answers `answer_ok`, and its refusal, shown until a value changes.
+    held: HeldAnswer<ParamResult>,
     /// The picture point the next pass centres the preview on ([`centre_preview`](HostedParamDialog::centre_preview)).
     centre: Option<Pos2>,
 }
@@ -779,21 +777,6 @@ struct ShownState {
     previewing: bool,
     comparing: bool,
     centre: Option<Pos2>,
-}
-
-/// An OK a [`HostedParamDialog`] holds back until the host answers it.
-struct Held {
-    result: ParamResult,
-    /// `take_ok` has handed the result to the host.
-    taken: bool,
-    /// The host accepted it: the next pass closes the dialog with it.
-    accepted: bool,
-}
-
-/// Why the host refused a held OK, and the values it refused.
-struct Refused {
-    reason: Label,
-    fields: DialogFields,
 }
 
 impl HostedParamDialog {
@@ -811,10 +794,11 @@ impl HostedParamDialog {
         let (params, patterns) = (params.into_owned(), patterns.into_owned());
         let saved = remember.and_then(|key| MemoryStage::peek_saved::<Option<DialogFields>>(ctx, &key));
         ParamDialog::open_values(&params, &patterns, saved.as_ref(), &mut fields);
+        let id = dialog_id(key.as_str());
         HostedParamDialog {
-            id: dialog_id(key.as_str()),
+            id,
             key,
-            instance: None,
+            instance: Some(id),
             opening: fields.clone(),
             fields,
             build: Box::new(build),
@@ -823,8 +807,7 @@ impl HostedParamDialog {
             preview: None,
             shown: ShownState::default(),
             hold: false,
-            held: None,
-            refused: None,
+            held: HeldAnswer::new(),
             centre: None,
         }
     }
@@ -841,6 +824,9 @@ impl HostedParamDialog {
     }
 
     /// Names this dialog among others made with the same key (one per document, say), so they keep separate state.
+    /// Without it the dialog is the one of its key: dialogs of different keys stay open together, and the same key
+    /// opened again replaces it. Its result is taken with [`DialogHost::take_keyed`](crate::dialog::DialogHost::take_keyed)
+    /// or by id.
     #[must_use]
     pub fn instance(mut self, instance: impl std::hash::Hash + std::fmt::Debug) -> Self {
         self.id = dialog_id((self.key.as_str(), instance));
@@ -913,33 +899,19 @@ impl HostedParamDialog {
 
     /// The OK filed by a held dialog, once.
     pub fn take_ok(&mut self) -> Option<ParamResult> {
-        let held = self.held.as_mut().filter(|held| !held.taken)?;
-        held.taken = true;
-        Some(held.result.clone())
+        self.held.take()
     }
 
     /// The host's answer to the held OK: `Ok` closes the dialog with the held answer in the next pass; `Err` enables
     /// OK again and shows the label under the rows until a value changes. Without a held OK it does nothing.
     pub fn answer_ok(&mut self, answer: Result<(), Label>) {
-        match answer {
-            Ok(()) => {
-                if let Some(held) = self.held.as_mut() {
-                    held.accepted = true;
-                }
-            }
-            Err(reason) => {
-                if let Some(held) = self.held.take() {
-                    self.refused = Some(Refused { reason, fields: held.result.fields });
-                }
-            }
-        }
+        self.held.answer(answer);
     }
 
     /// Holds `result` for the host: the OK of a held dialog, from the button or from `confirm`.
     fn file_held(&mut self, mut result: ParamResult) {
         result.id = self.id;
-        self.held = Some(Held { result, taken: false, accepted: false });
-        self.refused = None;
+        self.held.file(result);
     }
 
     /// The footer button id that was pressed, once (`ParamDialog::extra_buttons`).
@@ -1077,7 +1049,7 @@ impl StackDialog for HostedParamDialog {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<ParamResult>> {
         let measuring = crate::runtime::measure::active(ui.ctx());
         let answers = if measuring { Vec::new() } else { self.requests.take_answers() };
-        let finish = self.held.as_ref().is_some_and(|held| held.accepted);
+        let finish = self.held.is_accepted();
         // A measuring run keeps the centre: the real run of the pass takes it.
         let centre = if measuring { self.centre } else { self.centre.take() };
         let mut dialog = (self.build)(&mut self.fields)
@@ -1086,11 +1058,11 @@ impl StackDialog for HostedParamDialog {
             .opened(Bind::bound(&mut self.open))
             .hold_ok(self.hold)
             .finish_held(finish)
-            .refusal(self.refused.as_ref().map(|refused| (refused.reason.clone(), refused.fields.clone())))
+            .refusal(self.held.refusal().map(|(reason, refused)| (reason.clone(), refused.fields.clone())))
             .preview_colors(self.requests.previewed_colors().to_vec())
             .centre_on(centre);
         // OK waits for the host's answer: a second OK cannot file over the held one.
-        if self.held.is_some() {
+        if self.held.is_waiting() {
             dialog = dialog.ok_enabled(false);
         }
         if let Some(picture) = self.preview {
@@ -1108,8 +1080,8 @@ impl StackDialog for HostedParamDialog {
             self.requests.request_footer_action(action);
         }
         self.shown = ShownState { previewing: shown.preview_on, comparing: shown.comparing, centre: shown.preview_centre };
-        if self.refused.as_ref().is_some_and(|refused| refused.fields != self.fields) {
-            self.refused = None;
+        if self.held.refusal().is_some_and(|(_, refused)| refused.fields != self.fields) {
+            self.held.clear_refusal();
         }
         if let Some(result) = shown.held {
             self.file_held(result);
@@ -1120,7 +1092,7 @@ impl StackDialog for HostedParamDialog {
                 Some(DialogResult::Ok(result))
             }
             (None, Some(CloseReason::Activated)) if finish => {
-                Some(self.held.take().map_or(DialogResult::Cancel, |held| DialogResult::Ok(held.result)))
+                Some(self.held.finish().map_or(DialogResult::Cancel, DialogResult::Ok))
             }
             (None, Some(_)) => Some(DialogResult::Cancel),
             (None, None) => None,
@@ -1136,22 +1108,17 @@ impl StackDialog for HostedParamDialog {
     }
 
     fn held_state(&self) -> Option<HeldOk> {
-        match (&self.held, &self.refused) {
-            (Some(held), _) if held.accepted => Some(HeldOk::Accepted),
-            (Some(_), _) => Some(HeldOk::Waiting),
-            (None, Some(refused)) => Some(HeldOk::Refused(refused.reason.clone())),
-            (None, None) => None,
-        }
+        self.held.state()
     }
 
     /// Answers OK as the button does: none while OK is disabled. The result keeps what a remembering dialog saves. A
     /// held dialog files the answer for the host, as its button does, and answers none; once the host accepted the
     /// held answer, it answers that.
     fn confirm(&mut self, _: &Context) -> Option<ParamResult> {
-        if self.held.as_ref().is_some_and(|held| held.accepted) {
-            return self.held.take().map(|held| held.result);
+        if self.held.is_accepted() {
+            return self.held.finish();
         }
-        if self.held.is_some() {
+        if self.held.is_waiting() {
             return None;
         }
         let ParamDialog { key, params, remember, ok_enabled, .. } = (self.build)(&mut self.fields);

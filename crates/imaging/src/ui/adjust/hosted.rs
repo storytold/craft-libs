@@ -1,11 +1,16 @@
 //! [`HostedAdjustDialog`]: an Image › Adjustments dialog on the dialog host, around any adjustment editor.
 
 use craft_behavior::{GestureId, Value};
-use craft_ui::contract::{Bind, Sampler as _};
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
+use craft_theme::variant::Tone;
+use craft_ui::contract::{Bind, Sampler as _, Show as _};
+use craft_ui::dialog::{
+    DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field,
+};
+use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::SaveKey;
+use craft_ui::runtime::overlay::CloseReason;
 use egui::{Context, Ui};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -99,6 +104,10 @@ pub struct HostedAdjustDialog<V, E = ()> {
     select_point: Option<usize>,
     editor: Box<Editor<V, E>>,
     asks: Vec<E>,
+    /// Whether OK files its value for the app instead of closing ([`held_ok`](HostedAdjustDialog::held_ok)).
+    hold: bool,
+    /// The OK the app holds back until it answers `answer_ok`, and its refusal, shown until the value changes.
+    held: HeldAnswer<V>,
     #[cfg(feature = "screen-testing")]
     facts: craft_ui::testing::StoryOutput,
 }
@@ -133,9 +142,31 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Hoste
             select_point: None,
             editor: Box::new(editor),
             asks: Vec::new(),
+            hold: false,
+            held: HeldAnswer::new(),
             #[cfg(feature = "screen-testing")]
             facts: craft_ui::testing::StoryOutput::default(),
         }
+    }
+
+    /// Makes OK file its value for the app instead of closing: the app runs the adjustment and answers with
+    /// [`answer_ok`](HostedAdjustDialog::answer_ok); a refusal keeps the dialog open and shows why. OK stays disabled
+    /// until the answer.
+    #[must_use]
+    pub fn held_ok(mut self) -> Self {
+        self.hold = true;
+        self
+    }
+
+    /// The value a held OK filed, once.
+    pub fn take_ok(&mut self) -> Option<V> {
+        self.held.take()
+    }
+
+    /// The app's answer to the held OK: `Ok` closes the dialog with the held value in the next pass; `Err` enables OK
+    /// again and shows the reason under the editor until the value changes. Without a held OK it does nothing.
+    pub fn answer_ok(&mut self, answer: Result<(), Label>) {
+        self.held.answer(answer);
     }
 
     /// The editor's context: Dynamic Color Sliders, a grey document. Always a dialog context.
@@ -261,20 +292,28 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             clipping,
             select_point,
             reset_with,
+            hold,
+            held,
             ..
         } = self;
+        // The app accepted the held OK: this pass closes the dialog with it. A measuring run closes nothing.
+        let finish = held.is_accepted() && !craft_ui::runtime::measure::active(ui.ctx());
+        let refusal = held.refusal().map(|(reason, refused)| (reason.clone(), refused.clone()));
         // The request to select a point is this pass's alone: a rerun of the pass in the frame finds none.
         let (canvas, select_point) = (*canvas, select_point.take());
         let (context, resizable, remember) = (*context, *resizable, remember.clone());
-        let form = FormDialog::new(title.clone(), Bind::bound(value)).opened(Bind::bound(open)).preview(Some(Bind::bound(&mut *preview))).shaped(
-            move |dialog| {
+        let form = FormDialog::new(title.clone(), Bind::bound(value))
+            .opened(Bind::bound(open))
+            .preview(Some(Bind::bound(&mut *preview)))
+            .accept_stays_open(*hold)
+            .ok_enabled(!held.is_waiting())
+            .shaped(move |dialog| {
                 let dialog = dialog.resizable(resizable);
                 match remember {
                     Some(key) => dialog.remember(key),
                     None => dialog,
                 }
-            },
-        );
+            });
         let form = match reset_with.as_deref() {
             Some(target) => form.reset_with(target),
             None => form,
@@ -286,14 +325,30 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             let mut cx =
                 AdjustDialogCx { context, canvas, picker: &mut *picker, channel: &mut *channel, select_point, clipping: &mut *clipping, edit: None };
             asks.extend(editor(ui, value, &mut cx));
+            if let Some((reason, _)) = refusal.as_ref().filter(|(_, refused)| refused == value) {
+                Notice::new(Tone::Bad, reason.clone()).layout(NoticeLayout::Inline).show(ui);
+            }
+            if finish {
+                form.request_close_as(CloseReason::Activated);
+            }
             true
         });
         *comparing = shown.comparing;
+        if held.refusal().is_some_and(|(_, refused)| refused != value) {
+            held.clear_refusal();
+        }
+        // The pass reports a press only in the pass that took the input, so a second pass of the frame files nothing.
+        if *hold && shown.picked == Some(0) && !held.is_waiting() {
+            held.file(value.clone());
+        }
+        if finish && shown.closed == Some(CloseReason::Activated) {
+            return Some(held.finish().map_or(DialogResult::Cancel, DialogResult::Ok));
+        }
         #[cfg(feature = "screen-testing")]
         {
             self.facts = craft_ui::contract::Outcome::story_facts(&shown.response);
         }
-        let accepted = shown.accepted.map(DialogResult::Ok);
+        let accepted = shown.accepted.filter(|_| !*hold).map(DialogResult::Ok);
         accepted.or(shown.closed.map(|_| DialogResult::Cancel))
     }
 
@@ -301,8 +356,24 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
         Some(&self.key)
     }
 
+    /// OK as the button: a held dialog files the value and answers none, and answers the held value once the app
+    /// accepted it.
     fn confirm(&mut self, _: &Context) -> Option<V> {
+        if self.held.is_accepted() {
+            return self.held.finish();
+        }
+        if self.held.is_waiting() {
+            return None;
+        }
+        if self.hold {
+            self.held.file(self.value.clone());
+            return None;
+        }
         Some(self.value.clone())
+    }
+
+    fn held_state(&self) -> Option<HeldOk> {
+        self.held.state()
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {

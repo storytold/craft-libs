@@ -3,7 +3,9 @@
 // The catalog is given through `Frames::commands`, which keeps it for every later frame.
 
 use craft_ui::contract::{Bind, Props as _, Show as _};
-use craft_ui::runtime::commands::{AppCatalog, Binding, CommandDef, CommandInput, CommandKind, FirePhase, Scope, keymap_builds};
+use craft_ui::runtime::commands::{
+    AppCatalog, Binding, CommandDef, CommandInput, CommandKind, CommandRef, CommandState, EditCommands, FirePhase, Scope, keymap_builds,
+};
 use craft_ui::runtime::env::WindowKey;
 use craft_ui::runtime::frame::take_output;
 use craft_ui::shell::AppShell;
@@ -111,4 +113,62 @@ fn an_unchanged_catalog_builds_no_keymap() {
     frames.frame(vec![key_press(Key::P, chord)], &mut show);
     frames.frame(vec![key_release(Key::P, chord)], &mut show);
     assert_eq!(fired(&frames), [hit(RENAME, FirePhase::Press)], "the new generation's command fires by its chord");
+}
+
+/// A key event with no physical key, as egui_kittest and some platforms send it.
+fn logical(key: Key, pressed: bool, modifiers: Modifiers) -> egui::Event {
+    egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers }
+}
+
+/// A press with no physical key runs its command by the logical key, once, whether its release comes in a later pass or
+/// in the same one (a quick tap during a slow frame), for a plain letter and a Cmd chord alike.
+#[trial]
+fn a_press_without_a_physical_key_fires_its_command_once() {
+    let mut show = |ui: &mut Ui| {
+        AppShell::new(WindowKey::main()).show(ui, &mut ());
+    };
+    let mut frames = Frames::new();
+    frames.commands(catalog(1));
+    frames.idle(3, &mut show);
+    let chord = Modifiers::COMMAND | Modifiers::ALT;
+    for (key, mods, id) in [(Key::Q, Modifiers::NONE, QUICK), (Key::U, chord, EXPORT)] {
+        frames.frame(vec![logical(key, true, mods)], &mut show);
+        frames.frame(vec![logical(key, false, mods)], &mut show);
+        assert_eq!(fired(&frames), [hit(id, FirePhase::Press)], "{id}: press and release on separate passes");
+        let one_pass = vec![
+            egui::Event::ModifiersChanged(mods),
+            logical(key, true, mods),
+            logical(key, false, mods),
+            egui::Event::ModifiersChanged(Modifiers::NONE),
+        ];
+        frames.frame(one_pass, &mut show);
+        frames.idle(2, &mut show);
+        assert_eq!(fired(&frames), [hit(id, FirePhase::Press)], "{id}: press and release in one pass");
+    }
+}
+
+/// An app catalog's def of a registry command adds its keys beside the registry's: F2 does what Cmd+X does (Photoshop's
+/// second keys for Cut, Copy and Paste).
+#[trial]
+fn an_app_catalogs_alternate_key_for_a_registry_command_runs_it() {
+    let cut = CommandRef::from(EditCommands::Cut);
+    let alternate = CommandDef::new(cut.clone(), "Cut", Scope::app()).with_default(Binding::parse("F2").expect("the trial's chord parses"));
+    let input = || {
+        CommandInput::new()
+            .catalog(AppCatalog::new(vec![alternate.clone()], 1).expect("the trial's catalog is valid"))
+            .state(cut.clone(), CommandState::new())
+    };
+    let mut show = |ui: &mut Ui| {
+        AppShell::new(WindowKey::main()).show(ui, &mut ());
+    };
+    let mut frames = Frames::new();
+    frames.commands(input());
+    frames.idle(3, &mut show);
+    frames.frame(vec![key_press(Key::X, Modifiers::COMMAND)], &mut show);
+    frames.frame(vec![key_release(Key::X, Modifiers::COMMAND)], &mut show);
+    let by_registry_key = fired(&frames);
+    assert_eq!(by_registry_key, [(cut.id.clone(), None, FirePhase::Press)], "the registry's key runs Cut");
+    frames.frame(vec![key_press(Key::F2, Modifiers::NONE)], &mut show);
+    frames.frame(vec![key_release(Key::F2, Modifiers::NONE)], &mut show);
+    assert_eq!(fired(&frames), by_registry_key, "the catalog's alternate key does what the registry's key does");
 }

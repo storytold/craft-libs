@@ -10,9 +10,9 @@ use std::fmt;
 use egui::{Context, Ui};
 use serde_json::Value;
 
+use super::held::HeldOk;
 use super::stack::{DialogId, DialogStack};
 use crate::contract::{Pattern, PatternKind, PatternProbe};
-use crate::runtime::env::Label;
 
 /// How a dialog on the [`DialogHost`] finished. `T` is the dialog's own answer type: a struct of
 /// values for a form, an enum for a prompt with three buttons.
@@ -23,19 +23,6 @@ pub enum DialogResult<T> {
     Ok(T),
     /// Cancel, Esc, the close box, or a parent that closed over it.
     Cancel,
-}
-
-/// Where a dialog's held OK stands ([`StackDialog::held_state`]): an OK that files its answer for the app, which answers
-/// it before the dialog closes (a check the app runs, a save path it picks).
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum HeldOk {
-    /// OK filed its answer; the app has not answered it yet.
-    Waiting,
-    /// The app accepted the held OK: the dialog finishes with it at its next pass or [`DialogHost::confirm`].
-    Accepted,
-    /// The app refused the last held OK for this reason; OK is enabled again.
-    Refused(Label),
 }
 
 impl<T> DialogResult<T> {
@@ -312,6 +299,10 @@ pub struct DialogHost {
     /// Dialogs another of their type replaced, waiting for the pass's `run` to run their
     /// [`StackDialog::cancelled`] (`open` has no `Context`).
     replaced: Vec<Box<dyn AnyStackDialog>>,
+    /// The number the last open got ([`open_serial`](DialogHost::open_serial)).
+    opens: u64,
+    /// The number of each dialog's last open, by id; read only while the dialog is open.
+    serials: Vec<(DialogId, u64)>,
 }
 
 /// One open dialog as automation sees it ([`DialogHost::open_dialogs`]).
@@ -421,16 +412,18 @@ impl DialogHost {
     /// of the type; if that `open` replaced a `D` that was still open, the replaced one's
     /// `Cancel` waits instead. Results are per type, so the app tells two `D` apart by what the
     /// result carries (a key, a tag). A `D` opened with an instance ([`StackDialog::instance`])
-    /// keeps its result apart, for [`take_by_id`](DialogHost::take_by_id) only.
+    /// keeps its result apart, for [`take_keyed`](DialogHost::take_keyed) and
+    /// [`take_by_id`](DialogHost::take_by_id).
     pub fn take<D: StackDialog>(&mut self) -> Option<DialogResult<D::Result>> {
-        self.take_keyed::<D>().map(|(result, _)| result)
+        let at = self.results.iter().rposition(|stored| stored.type_id == TypeId::of::<D>() && stored.instance.is_none())?;
+        self.take_at::<D>(at).map(|(result, _)| result)
     }
 
-    /// [`take`](DialogHost::take) with the key the dialog had ([`StackDialog::key`]): what a
-    /// `Cancel` after a replace-by-open needs to tell which command it was. `None` key for a
-    /// dialog without one.
+    /// The result of the last `D` that finished or was cancelled, whatever its instance, with the
+    /// key the dialog had ([`StackDialog::key`]), once: the key tells which command it was, a
+    /// `Cancel` after a replace-by-open included. `None` key for a dialog without one.
     pub fn take_keyed<D: StackDialog>(&mut self) -> Option<(DialogResult<D::Result>, Option<String>)> {
-        let at = self.results.iter().rposition(|stored| stored.type_id == TypeId::of::<D>() && stored.instance.is_none())?;
+        let at = self.results.iter().rposition(|stored| stored.type_id == TypeId::of::<D>())?;
         self.take_at::<D>(at)
     }
 
@@ -595,6 +588,14 @@ impl DialogHost {
         self.results.push(StoredResult { type_id, id: dialog.id(), instance, key: dialog.key(), result });
     }
 
+    /// Which open of the dialog `id` this is: a number distinct for every open on this host, the same while the
+    /// dialog stays open. A dialog's id is the same at every open of its key; this tells one open from the next (a
+    /// preview cached for a cancelled open is not the reopened dialog's). `None` when `id` is not open.
+    pub fn open_serial(&self, id: DialogId) -> Option<u64> {
+        self.position_by_id(id)?;
+        self.serials.iter().find(|(open, _)| *open == id).map(|(_, serial)| *serial)
+    }
+
     fn open_with_parent(&mut self, dialog: Box<dyn AnyStackDialog>, parent: Option<DialogId>) -> DialogId {
         let (type_id, instance) = (dialog.result_type(), dialog.instance());
         self.results.retain(|stored| stored.type_id != type_id || stored.instance != instance);
@@ -606,6 +607,10 @@ impl DialogHost {
             self.cancel_orphans(None);
         }
         let id = dialog.id();
+        self.opens += 1;
+        let open = &self.open;
+        self.serials.retain(|(serial_of, _)| *serial_of != id && open.iter().any(|dialog| dialog.id() == *serial_of));
+        self.serials.push((id, self.opens));
         self.stack.push(id, parent);
         self.open.push(dialog);
         id

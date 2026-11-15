@@ -5,7 +5,7 @@ use std::sync::Arc;
 use egui::{Context, Response, Ui};
 
 use crate::contract::Bind;
-use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldAnswer, HeldOk, StackDialog, dialog_id};
 use crate::runtime::env::Label;
 
 /// A full-window workspace (Liquify, Filter Gallery, Select and Mask) that a [`HostedWorkspace`] shows on the app's
@@ -159,16 +159,9 @@ pub struct HostedWorkspace<W: FullWindowWorkspace> {
     open: bool,
     revision: u64,
     hold_ok: bool,
-    /// From the filed OK until the app's answer: the workspace disables its OK.
-    ok_waits: bool,
-    /// The held OK's answer, kept until the app answers it.
-    filed: Option<W::Result>,
-    /// `take_ok` has not handed out `filed` yet.
-    untaken: bool,
-    /// The app accepted the held OK: the next pass finishes with `filed`.
-    finish: bool,
-    /// Why the app refused the last held OK, until OK files again.
-    refused: Option<Label>,
+    /// The held OK's answer until the app answers it (the workspace disables its OK meanwhile), and why the app
+    /// refused the last one, until OK files again.
+    held: HeldAnswer<W::Result>,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -184,11 +177,7 @@ impl<W: FullWindowWorkspace> HostedWorkspace<W> {
             open: true,
             revision: 0,
             hold_ok: false,
-            ok_waits: false,
-            filed: None,
-            untaken: false,
-            finish: false,
-            refused: None,
+            held: HeldAnswer::new(),
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
@@ -222,28 +211,18 @@ impl<W: FullWindowWorkspace> HostedWorkspace<W> {
     where
         W::Result: Clone,
     {
-        if !std::mem::take(&mut self.untaken) {
-            return None;
-        }
-        self.filed.clone()
+        self.held.take()
     }
 
     /// The app's answer to a held OK: `Ok` closes the workspace with it in the next pass, `Err(reason)` keeps it
     /// open with OK enabled again and hands `reason` to [`FullWindowWorkspace::ok_failed`]. Does nothing while no OK
     /// is held.
     pub fn answer_ok(&mut self, answer: Result<(), Label>) {
-        if self.filed.is_none() {
-            return;
-        }
-        match answer {
-            Ok(()) => self.finish = true,
-            Err(reason) => {
-                self.filed = None;
-                self.untaken = false;
-                self.ok_waits = false;
-                self.refused = Some(reason.clone());
-                self.workspace.ok_failed(reason);
-            }
+        let refused = answer.as_ref().err().cloned();
+        if self.held.answer(answer)
+            && let Some(reason) = refused
+        {
+            self.workspace.ok_failed(reason);
         }
     }
 
@@ -259,10 +238,7 @@ impl<W: FullWindowWorkspace> HostedWorkspace<W> {
 
     /// Files a held OK's `result` for the app; OK waits for the answer.
     fn file(&mut self, result: W::Result) {
-        self.filed = Some(result);
-        self.untaken = true;
-        self.ok_waits = true;
-        self.refused = None;
+        self.held.file(result);
     }
 }
 
@@ -275,9 +251,7 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<W::Result>> {
         // The app accepted the held OK: the first pass after the answer finishes, whichever pass of a frame it is.
-        if std::mem::take(&mut self.finish)
-            && let Some(result) = self.filed.take()
-        {
+        if let Some(result) = self.held.finish() {
             return Some(DialogResult::Ok(result));
         }
         let cx = WorkspaceCx {
@@ -285,7 +259,7 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
             revision: self.revision,
             open: Bind::bound(&mut self.open),
             hold_ok: self.hold_ok,
-            ok_waits: self.ok_waits,
+            ok_waits: self.held.is_waiting(),
         };
         let pass = self.workspace.show(ui, cx);
         #[cfg(feature = "testing")]
@@ -295,7 +269,7 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
         self.events.extend(pass.events);
         // A pick reaches only the pass whose input held it; a later pass of the frame finds OK waiting and files
         // nothing more.
-        if let Some(result) = pass.held.filter(|_| self.hold_ok && !self.ok_waits) {
+        if let Some(result) = pass.held.filter(|_| self.hold_ok && !self.held.is_waiting()) {
             self.file(result);
         }
         pass.result
@@ -308,11 +282,10 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
     /// OK as the Accept button: a held workspace files the result and answers none, and answers the held result once
     /// the app accepted it.
     fn confirm(&mut self, ctx: &Context) -> Option<W::Result> {
-        if self.finish {
-            self.finish = false;
-            return self.filed.take();
+        if self.held.is_accepted() {
+            return self.held.finish();
         }
-        if self.ok_waits {
+        if self.held.is_waiting() {
             return None;
         }
         let result = self.workspace.confirm(ctx, &*self.source)?;
@@ -324,12 +297,7 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
     }
 
     fn held_state(&self) -> Option<HeldOk> {
-        match (&self.filed, &self.refused) {
-            (Some(_), _) if self.finish => Some(HeldOk::Accepted),
-            (Some(_), _) => Some(HeldOk::Waiting),
-            (None, Some(reason)) => Some(HeldOk::Refused(reason.clone())),
-            (None, None) => None,
-        }
+        self.held.state()
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {

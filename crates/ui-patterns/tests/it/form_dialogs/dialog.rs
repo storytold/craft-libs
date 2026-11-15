@@ -174,7 +174,7 @@ fn a_held_ok_refused_keeps_the_dialog_open_and_an_accepted_one_closes() {
     on_dialog(&host, |dialog| dialog.answer_ok(Ok(())));
     assert_eq!(host.borrow().held_state(dialog_id("blur")), Some(HeldOk::Accepted), "the accepted OK closes at the next pass");
     fixture.idle(4);
-    let answered = host.borrow_mut().take::<HostedParamDialog>().and_then(DialogResult::ok);
+    let answered = host.borrow_mut().take_keyed::<HostedParamDialog>().map(|(result, _)| result).and_then(DialogResult::ok);
     assert_eq!(answered.map(|result| result.fields), Some(filed.fields), "the accepted OK closes the dialog with the held values");
 }
 
@@ -188,7 +188,7 @@ fn a_hosted_dialog_reopened_under_the_same_key_opens() {
     let mut fixture = Fixture::new(move |ui| {
         let mut host = shown.borrow_mut();
         host.run(ui);
-        if let Some(result) = host.take::<HostedParamDialog>() {
+        if let Some(result) = host.take_keyed::<HostedParamDialog>().map(|(result, _)| result) {
             if again.replace(false) {
                 host.open(HostedParamDialog::new(ui.ctx(), "blur", DialogFields::new(), blur));
             } else {
@@ -323,7 +323,7 @@ fn a_remembered_value_its_row_refuses_opens_as_the_default() {
         let mut host = shown.borrow_mut();
         host.run(ui);
         // The app remembers an answer where it takes it, after its command ran.
-        if let Some(DialogResult::Ok(result)) = host.take::<HostedParamDialog>() {
+        if let Some(DialogResult::Ok(result)) = host.take_keyed::<HostedParamDialog>().map(|(result, _)| result) {
             result.remember(ui.ctx());
         }
     });
@@ -459,4 +459,37 @@ fn a_field_set_before_the_first_show_resets_to_the_opening_value() {
     fixture.click(&reset).idle(2);
     fixture.hold(Modifiers::NONE).settle();
     assert_eq!(on_dialog(&host, |dialog| dialog.fields().number("radius")).flatten(), Some(10.0), "Reset restores the opening value");
+}
+
+/// A Sharpen dialog over the host's values.
+fn sharpen(fields: &mut DialogFields) -> ParamDialog<'_> {
+    ParamDialog::new("sharpen", "Sharpen", Param::parse_list(SPEC)).values(Bind::bound(fields))
+}
+
+// Hosted dialogs of two commands stay open together and each answers by its key; the same command opened again
+// replaces only its own dialog.
+#[trial]
+fn hosted_dialogs_of_two_commands_stay_open_together() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    let ctx = fixture.ctx().clone();
+    host.borrow_mut().open(HostedParamDialog::new(&ctx, "blur", DialogFields::new(), blur));
+    host.borrow_mut().open(HostedParamDialog::new(&ctx, "sharpen", DialogFields::new(), sharpen));
+    fixture.idle(4);
+    assert_eq!(host.borrow().stack().ids().count(), 2, "the second command's dialog leaves the first open");
+
+    host.borrow_mut().open(HostedParamDialog::new(&ctx, "blur", DialogFields::new(), blur));
+    fixture.idle(4);
+    let replaced = host.borrow_mut().take_keyed::<HostedParamDialog>();
+    assert!(matches!(replaced, Some((DialogResult::Cancel, Some(ref key))) if key == "blur"), "the same command replaces its own dialog");
+    assert!(host.borrow().get_by_id::<HostedParamDialog>(dialog_id("sharpen")).is_some(), "the other command's dialog stays open");
+
+    for key in ["blur", "sharpen"] {
+        assert!(host.borrow_mut().confirm_by_id(&ctx, dialog_id(key)), "{key}: OK answers");
+        let answered = host.borrow_mut().take_keyed::<HostedParamDialog>();
+        assert!(
+            matches!(answered, Some((DialogResult::Ok(ref result), Some(ref named))) if named == key && result.key == key),
+            "{key}: its OK comes back by its key"
+        );
+    }
 }
