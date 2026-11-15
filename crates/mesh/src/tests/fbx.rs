@@ -803,3 +803,31 @@ fn strict_binary_requires_a_closing_record() {
     assert!(read_document(truncated, &Limits::default()).is_ok());
     assert!(crate::fbx::read_document_strict(truncated, &Limits::default()).is_err());
 }
+
+#[test]
+fn diffuse_materials_preserve_factors_and_texture_candidates() {
+    let text = with(
+        "Texture: 600, \"Texture::Base\", \"\" { RelativeFilename: \"maps/base.png\" FileName: \"C:/a/base.png\" }\n",
+        "C: \"OP\",600,400,\"Maya|baseColor\"\n",
+    );
+    let doc = document(text.as_bytes());
+    let mut asked = Vec::new();
+    let materials = doc
+        .diffuse_materials(&Limits::default(), &mut |paths| {
+            asked.push(paths.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+            Some(b"image".to_vec())
+        })
+        .unwrap();
+    assert_eq!(asked, vec![vec!["maps/base.png", "base.png"]]);
+    let red = materials.iter().find(|m| m.name == "Red").unwrap();
+    assert_eq!(red.factor, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(red.image.as_deref(), Some(&b"image"[..]));
+    let small = Limits { max_data_bytes: 4, ..Limits::default() };
+    assert!(matches!(doc.diffuse_materials(&small, &mut |_| Some(b"image".to_vec())), Err(Error::TooLarge(_))));
+    let embedded_text = with(
+        &format!("Texture: 600, \"Texture::Base\", \"\" {{}}\nVideo: 700, \"Video::Base\", \"Clip\" {{ Content: \"{}\" }}\n", b64(b"embedded")),
+        "C: \"OP\",600,400,\"DiffuseColor\"\nC: \"OO\",700,600\n",
+    );
+    let embedded = document(embedded_text.as_bytes()).diffuse_materials(&Limits::default(), &mut |_| None).unwrap();
+    assert_eq!(embedded.iter().find(|m| m.name == "Red").unwrap().image.as_deref(), Some(&b"embedded"[..]));
+}
