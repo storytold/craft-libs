@@ -2386,6 +2386,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-proto"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "log",
+ "proptest",
+ "zeroize",
+]
+
+[[package]]
 name = "craft-ps"
 version = "0.1.0"
 dependencies = [
