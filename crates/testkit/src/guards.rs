@@ -529,7 +529,8 @@ fn parse_use_tree(
             Kind::Ident(name) => {
                 *pos += 1;
                 if toks.get(*pos).is_some_and(|t| t.is_punct(':')) && toks.get(*pos + 1).is_some_and(|t| t.is_punct(':')) {
-                    if prefix.is_empty() && time_aliases.contains(name) {
+                    // After a leading `::` the first segment names an external crate, never a local alias.
+                    if prefix.is_empty() && !absolute && time_aliases.contains(name) {
                         prefix.extend([Rc::from("std"), Rc::from("time")]);
                         via = Some(*pos - 1);
                     } else {
@@ -781,11 +782,21 @@ fn operand_expected(toks: &[Token], j: usize) -> bool {
 /// `&&` in a chain) or of a `for` opens a struct pattern and does not end the item. An `else` chain ends
 /// at its last block.
 ///
+/// An `if` or `match` expression in a condition, scrutinee or iterator, as in
+/// `for x in if a { b } else { c } { ... }`, is read to the end of its last block (up to [`MAX_NESTING`]
+/// levels of such expressions), and the body is the next `{` after it.
+///
 /// In the head of an `fn`, `impl`, `trait`, `struct`, `enum` or `union` item, a block inside angle
 /// brackets (a const generic default or argument such as `<const N: usize = { 1 + 2 }>`, also in a
 /// return type or a `where` clause) does not end the item. The `>` of `->` does not close an angle
 /// bracket.
 fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
+    item_end_at(toks, start, inner, 0)
+}
+
+/// [`item_end`] for an item or, with `nested` above 0, for an `if` or `match` expression inside the head of
+/// another one, `nested` levels deep, which ends right after its last block.
+fn item_end_at(toks: &[Token], start: usize, inner: bool, nested: usize) -> usize {
     let mut depth = 0usize;
     let mut block_item = false;
     let mut arm = false;
@@ -800,6 +811,12 @@ fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
             block_item = true;
         }
         match &toks[j].kind {
+            // An `if` or `match` expression in the condition ends at its last block, so its blocks do not
+            // read as the body.
+            Kind::Ident(k) if at_top && condition == Condition::Expression && matches!(k.as_str(), "if" | "match") && nested < MAX_NESTING => {
+                j = item_end_at(toks, j, false, nested + 1).max(j + 1);
+                continue;
+            }
             Kind::Ident(k) if at_top && head && (BLOCK_KEYWORDS.contains(&k.as_str()) || starts_block(toks, j)) => {
                 if !block_item {
                     condition = match k.as_str() {
@@ -859,11 +876,17 @@ fn item_end(toks: &[Token], start: usize, inner: bool) -> usize {
                 if depth == 0 && *c == '}' && block_item && !inner && condition == Condition::Done && angle == 0 {
                     if toks.get(j + 1).is_some_and(|t| t.is_ident("else")) {
                         // `else if` has a condition of its own before its body; `else {` opens the body.
+                        // The `if` is stepped over, so it does not read as an `if` inside the condition.
                         if toks.get(j + 2).is_some_and(|t| t.is_ident("if")) {
                             condition = Condition::Expression;
+                            j += 3;
+                        } else {
+                            j += 1;
                         }
-                        j += 1;
                         continue;
+                    }
+                    if nested > 0 {
+                        return j + 1;
                     }
                     if toks.get(j + 1).is_some_and(|t| t.is_punct('.') || t.is_punct('?')) {
                         // A method call, field or `?` after the block continues the expression to its `;` or `,`.
@@ -1408,21 +1431,10 @@ fn report(findings: &mut Vec<Finding>, path: &str, content: &str, lines: &BTreeS
 /// name to the muda crate, and whether one binds it to something else.
 type CrateBindings<'a> = BTreeMap<(&'a str, Option<usize>), (bool, bool)>;
 
-/// The names of the muda crate in a file, and where each is bound. The names are `muda` itself and each
-/// name that `use muda as m;`, `use muda::{self as m};` or `extern crate muda as m;` gives it. For each
-/// name and each pair of braces, the bindings record whether a `use` or an `extern crate` in them binds
-/// the name to the crate, and whether a `use`, an `extern crate` or a `mod` in them binds it to something
-/// else. A binding to something else inside an item with a `cfg` attribute, or through `crate::`, `self::`
-/// or `super::` (which may be a re-export of the crate), is left out.
-fn muda_crate_bindings<'a>(
-    toks: &'a [Token],
-    leaves: &'a [UseLeaf],
-    around: &[Option<usize>],
-    gated: &[bool],
-) -> (BTreeSet<&'a str>, CrateBindings<'a>) {
-    // Each `extern crate c;` or `extern crate c as n;`: whether `c` is muda, and the index of the name it
-    // binds.
-    let mut externs: Vec<(bool, &'a str, usize)> = Vec::new();
+/// Each `extern crate c;` or `extern crate c as n;` in a file: whether `c` is muda, the name it binds, and
+/// the index of that name.
+fn extern_crates(toks: &[Token]) -> Vec<(bool, &str, usize)> {
+    let mut externs = Vec::new();
     for i in 0..toks.len() {
         if toks[i].is_ident("extern")
             && toks.get(i + 1).is_some_and(|t| t.is_ident("crate"))
@@ -1436,18 +1448,114 @@ fn muda_crate_bindings<'a>(
             }
         }
     }
+    externs
+}
+
+/// For each of `paths`, the names that an `extern crate muda as m;` outside any braces of its crate root adds
+/// to the crate's extern prelude, so that a path starting with `::m` names muda anywhere in the crate.
+///
+/// The crate roots follow Cargo's layout: `src/lib.rs` and `src/main.rs`; `build.rs` and another `lib.rs` or
+/// `main.rs` (such as `src/bin/tool/main.rs`) when no `mod` declaration in another of the files names it,
+/// plainly or through a `#[path]` attribute; and each file directly in a `bin`, `examples`, `tests` or
+/// `benches` folder other than `mod.rs` when no declaration without a `#[path]` attribute names it. A root's
+/// names reach every file that a chain of declarations
+/// from it names, where a file loaded through a `#[path]` attribute has its modules in its own folder, as
+/// [`module_files`] reads them.
+fn extern_prelude_names(paths: &[String], contents: &[&str]) -> Vec<BTreeSet<String>> {
+    let mut index: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (i, path) in paths.iter().enumerate() {
+        index.entry(path.as_str()).or_default().push(i);
+    }
+    let mut decls: Vec<Vec<ModDecl>> = Vec::with_capacity(paths.len());
+    let mut aliases: Vec<Vec<String>> = Vec::with_capacity(paths.len());
+    for content in contents {
+        let toks = lex_rust(content);
+        decls.push(module_decls(&toks, &vec![false; toks.len()]));
+        let (around, _) = brace_scopes(&toks);
+        aliases.push(
+            extern_crates(&toks).into_iter().filter(|&(muda, _, at)| muda && around[at].is_none()).map(|(_, name, _)| name.to_owned()).collect(),
+        );
+    }
+    // Node `2 * file` is the file loaded plainly (or as a crate root) and node `2 * file + 1` the file loaded
+    // through a `#[path]` attribute. Each node lists the nodes its declarations name.
+    let mut named = vec![false; paths.len()];
+    let mut named_plainly = vec![false; paths.len()];
+    let edges: Vec<Vec<usize>> = (0..paths.len() * 2)
+        .map(|node| {
+            let (file, path_loaded) = (node / 2, node % 2 == 1);
+            let mut targets = Vec::new();
+            for decl in &decls[file] {
+                let by_path = usize::from(decl.module.path_attribute.is_some());
+                for candidate in module_files(&paths[file], decl, path_loaded) {
+                    for &j in index.get(candidate.as_str()).into_iter().flatten() {
+                        if j != file {
+                            named[j] = true;
+                            named_plainly[j] |= by_path == 0;
+                            targets.push(2 * j + by_path);
+                        }
+                    }
+                }
+            }
+            targets
+        })
+        .collect();
+    let root = |file: usize| {
+        let mut segments = paths[file].rsplit('/');
+        match (segments.next(), segments.next()) {
+            (Some("lib.rs" | "main.rs"), Some("src")) => true,
+            (Some("lib.rs" | "main.rs" | "build.rs"), _) => !named[file],
+            (Some(name), Some("bin" | "examples" | "tests" | "benches")) => name.ends_with(".rs") && name != "mod.rs" && !named_plainly[file],
+            _ => false,
+        }
+    };
+    let mut prelude = vec![BTreeSet::new(); paths.len()];
+    for start in (0..paths.len()).filter(|&file| !aliases[file].is_empty() && root(file)) {
+        let mut seen = vec![false; paths.len() * 2];
+        let mut queue = vec![2 * start];
+        seen[2 * start] = true;
+        while let Some(node) = queue.pop() {
+            prelude[node / 2].extend(aliases[start].iter().cloned());
+            for &next in &edges[node] {
+                if !seen[next] {
+                    seen[next] = true;
+                    queue.push(next);
+                }
+            }
+        }
+    }
+    prelude
+}
+
+/// The names of the muda crate in a file, and where each is bound. The names are `muda` itself, each name
+/// in `prelude` (see [`extern_prelude_names`]), which names the crate as `muda` does, and each name that
+/// `use muda as m;`, `use muda::{self as m};` or `extern crate muda as m;` gives it. For each
+/// name and each pair of braces, the bindings record whether a `use` or an `extern crate` in them binds
+/// the name to the crate, and whether a `use`, an `extern crate` or a `mod` in them binds it to something
+/// else. A binding to something else inside an item with a `cfg` attribute, or through `crate::`, `self::`
+/// or `super::` (which may be a re-export of the crate), is left out.
+fn muda_crate_bindings<'a>(
+    toks: &'a [Token],
+    leaves: &'a [UseLeaf],
+    around: &[Option<usize>],
+    gated: &[bool],
+    prelude: &'a BTreeSet<String>,
+) -> (BTreeSet<&'a str>, CrateBindings<'a>) {
+    let externs = extern_crates(toks);
+    // Whether a `use` path names the crate itself: `muda`, or a name of the crate in the extern prelude.
+    let crate_path = |leaf: &UseLeaf| leaf.path.len() == 1 && (leaf.path[0] == "muda" || prelude.contains(&leaf.path[0]));
     let mut names: BTreeSet<&'a str> = BTreeSet::from(["muda"]);
-    names.extend(leaves.iter().filter(|leaf| leaf.path == ["muda"]).filter_map(UseLeaf::binding));
+    names.extend(prelude.iter().map(String::as_str));
+    names.extend(leaves.iter().filter(|leaf| crate_path(leaf)).filter_map(UseLeaf::binding));
     names.extend(externs.iter().filter(|&&(muda, _, _)| muda).map(|&(_, name, _)| name));
     let mut bound: CrateBindings<'a> = BTreeMap::new();
     // `use muda as m;` binds `m` to the crate only where `muda` itself names the crate, so it is read
-    // after every other binding.
-    let renames = |leaf: &UseLeaf| leaf.path == ["muda"] && leaf.binding() != Some("muda");
+    // after every other binding. The same holds for a name of the crate in the extern prelude.
+    let renames = |leaf: &UseLeaf| crate_path(leaf) && leaf.binding() != Some(leaf.path[0].as_str());
     for leaf in leaves.iter().filter(|leaf| !renames(leaf)) {
         let Some(name) = leaf.binding().filter(|name| names.contains(name)) else { continue };
         let local = leaf.root.as_deref().is_some_and(|s| matches!(s, "crate" | "self" | "super"));
         let entry = bound.entry((name, around.get(leaf.start).copied().flatten()));
-        if leaf.path == ["muda"] {
+        if crate_path(leaf) {
             entry.or_default().0 = true;
         } else if !local && !gated.get(leaf.start).copied().unwrap_or(false) {
             entry.or_default().1 = true;
@@ -1475,8 +1583,8 @@ fn muda_crate_bindings<'a>(
     let mut renamed = Vec::new();
     for leaf in leaves.iter().filter(|leaf| renames(leaf)) {
         let Some(name) = leaf.binding() else { continue };
-        let crate_here =
-            leaf.absolute || !matches!(lookup(toks, around, leaf.start, |scope| bound.get(&("muda", scope)).copied()), Some(Some((false, true))));
+        let crate_here = leaf.absolute
+            || !matches!(lookup(toks, around, leaf.start, |scope| bound.get(&(leaf.path[0].as_str(), scope)).copied()), Some(Some((false, true))));
         let local = leaf.root.as_deref().is_some_and(|s| matches!(s, "crate" | "self" | "super"));
         let scope = around.get(leaf.start).copied().flatten();
         if crate_here {
@@ -1509,7 +1617,14 @@ fn muda_crate_bindings<'a>(
 /// braces binding it bind only to something else (`use other_menu as muda;`, `mod muda`), read like a name
 /// used on its own below; `::muda::PredefinedMenuItem` always names the crate. A name that the crate is
 /// imported under (`use muda as menu;`, `use muda::{self as menu};`, `extern crate muda as menu;`) is read
-/// like `muda` in the braces that bind it, so `menu::PredefinedMenuItem::quit` is reported there. It also
+/// like `muda` in the braces that bind it, so `menu::PredefinedMenuItem::quit` is reported there. An
+/// `extern crate muda as menu;` outside any braces of a crate root (`src/lib.rs` and `src/main.rs`; `build.rs`,
+/// another `lib.rs` or `main.rs`, or a file directly in a `bin`, `examples`, `tests` or `benches` folder other
+/// than `mod.rs`, unless a `mod` declaration in another of `files` names it, for a file in those folders one
+/// without a `#[path]` attribute) also adds `menu` to
+/// the crate's extern prelude, so in that file and in every file of `files` that a chain of `mod`
+/// declarations from it names, `menu` is read like `muda` and `::menu::PredefinedMenuItem::quit` is
+/// reported. Elsewhere a path that starts with `::` names the crate only through `muda`. It also
 /// follows a `use` or a `type` alias that renames muda's type (`use muda::PredefinedMenuItem as Item;` then
 /// `Item::quit`); a rename of another crate's `PredefinedMenuItem` is not followed, including one through a
 /// name `muda` that the braces around the `use` or `type` bind to something else, read as for a qualified
@@ -1528,28 +1643,34 @@ where
     I: IntoIterator,
     I::Item: AsFileSource,
 {
+    let files: Vec<I::Item> = files.into_iter().collect();
+    let paths: Vec<String> = files.iter().map(|file| normalize_path(file.path())).collect();
+    let contents: Vec<&str> = files.iter().map(|file| file.content()).collect();
+    let prelude = extern_prelude_names(&paths, &contents);
     let mut findings = Vec::new();
-    for file in files {
+    for (index, file) in files.iter().enumerate() {
         let path = file.path();
         let content = file.content();
         let toks = lex_rust(content);
         let leaves = use_leaves(&toks, &BTreeSet::new());
         let (around, opener) = brace_scopes(&toks);
         let gated = cfg_covered(&toks, true);
-        let (crate_names, crate_bound) = muda_crate_bindings(&toks, &leaves, &around, &gated);
+        let (crate_names, crate_bound) = muda_crate_bindings(&toks, &leaves, &around, &gated, &prelude[index]);
         let names_crate = |s: &str| crate_names.contains(s);
-        // Whether `name`, read at token `i`, names the crate. After a leading `::` only `muda` does.
-        // Otherwise `muda` does unless the innermost braces around `i` that bind `muda` bind it only to
-        // something else, and another name of the crate does when those braces bind it to the crate, or
-        // only to nothing else.
+        // Whether `name`, read at token `i`, names the crate. After a leading `::`, `muda` does, and so
+        // does a name that `extern crate muda as name;` outside any braces of the file's crate root gives it
+        // (a name in the extern prelude). Otherwise `muda` and a name in the extern prelude do unless the
+        // innermost braces around `i` that bind the name bind it only to something else, and another name
+        // of the crate does when those braces bind it to the crate, or only to nothing else.
+        let in_prelude = |name: &str| name == "muda" || prelude[index].contains(name);
         let crate_name_at = |name: &str, i: usize, absolute: bool| {
             if absolute || !names_crate(name) {
-                return name == "muda";
+                return in_prelude(name);
             }
             match lookup(&toks, &around, i, |scope| crate_bound.get(&(name, scope)).copied()) {
                 None => true,
                 Some(Some((muda, other))) => muda || !other,
-                Some(None) => name == "muda",
+                Some(None) => in_prelude(name),
             }
         };
         // Whether the identifier at `i` names the crate.
@@ -1559,7 +1680,7 @@ where
             crate_name_at(name, i, absolute)
         };
         // A `use` path to muda's type, read through a name of the crate bound where the `use` is. After
-        // a leading `::` the first segment is an external crate, so only `muda` names it.
+        // a leading `::` the first segment is an external crate, so only a name in the extern prelude names it.
         let is_muda =
             |leaf: &UseLeaf| leaf.path.len() == 2 && leaf.path[1] == "PredefinedMenuItem" && crate_name_at(&leaf.path[0], leaf.start, leaf.absolute);
         // Whether the braces opened at `o` are the body of an `impl` or a `trait`, whose `type` items are
@@ -1755,7 +1876,8 @@ where
 ///   braces of its `use` (or the file), down to but not into the body of a nested `mod`; nearer braces whose
 ///   `use` or `mod` binds the same name to something else hide it, unless that `use` or `mod` carries a `cfg`
 ///   attribute of its own that is not known to be true on `wasm32-unknown-unknown`, which may leave it out of
-///   the web build.
+///   the web build. A path that starts with `::` names an external crate, so `::m::Instant` and
+///   `use ::m::Instant;` are not read through an alias `m`.
 pub fn std_instant<I>(files: I) -> Vec<Finding>
 where
     I: IntoIterator,
@@ -1854,7 +1976,9 @@ where
             let hit = if name == "std" {
                 then_path(&toks, i + 1, |s| s == "time") && then_path(&toks, i + 4, |s| s == "Instant")
             } else {
-                modules.contains(name) && then_path(&toks, i + 1, |s| s == "Instant") && time_alias(name, i)
+                // After a leading `::` the name is an external crate, not a local alias of `std::time`.
+                let absolute = i >= 2 && toks[i - 1].is_punct(':') && toks[i - 2].is_punct(':');
+                !absolute && modules.contains(name) && then_path(&toks, i + 1, |s| s == "Instant") && time_alias(name, i)
             };
             if hit {
                 lines.insert(tok.line);
