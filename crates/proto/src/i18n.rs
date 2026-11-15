@@ -5,6 +5,7 @@
 //!
 //! Provides the `said!` macro and related types for creating user-facing error messages.
 
+pub use crate::said;
 use std::fmt;
 
 /// A value that can be converted to an argument for error messages.
