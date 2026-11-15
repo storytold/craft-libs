@@ -401,6 +401,7 @@ pub fn parse_xml_with_limits(data: &[u8], limits: Limits) -> Result<Value, Forma
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
     #[test]
     fn xml_has_one_complete_root_with_only_markup_space_around_values() {
