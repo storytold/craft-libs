@@ -13,6 +13,7 @@ pub(crate) mod heif;
 pub(crate) mod iff;
 pub(crate) mod jp2;
 pub(crate) mod jpeg;
+pub(crate) mod jpegls;
 pub(crate) mod jxl;
 pub(crate) mod pcx;
 pub(crate) mod png;
