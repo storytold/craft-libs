@@ -96,6 +96,10 @@ pub fn write_dcp(p: &DcpProfile) -> Result<Vec<u8>, DcpError> {
     use craft_tiff::writer::srational;
     use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
     let c = &p.color;
+    // ColorMatrix1 is required: do not emit a profile that our reader must reject.
+    if c.color_matrix[0].is_none() {
+        return Err(DcpError::NoMatrix);
+    }
     let mut ifd = IfdBuilder::new();
     ifd.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii(p.camera_model.clone()));
     ifd.set(t::PROFILE_NAME, Value::Ascii(p.name.clone()));
@@ -150,6 +154,18 @@ pub fn write_dcp(p: &DcpProfile) -> Result<Vec<u8>, DcpError> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writing_requires_the_first_color_matrix() {
+        let mut p = DcpProfile { name: "test".into(), camera_model: "test".into(), color: ColorData::default() };
+        assert_eq!(write_dcp(&p), Err(DcpError::NoMatrix));
+        let matrix = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        p.color.color_matrix[1] = Some(matrix);
+        assert_eq!(write_dcp(&p), Err(DcpError::NoMatrix));
+        p.color.color_matrix[0] = Some(matrix);
+        let back = parse_dcp(&write_dcp(&p).unwrap()).unwrap();
+        assert_eq!(back.color.color_matrix, p.color.color_matrix);
+    }
 
     #[test]
     fn reading_a_profile_stops_past_the_size_limit() {
