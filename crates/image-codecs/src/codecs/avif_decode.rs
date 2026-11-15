@@ -822,6 +822,10 @@ fn read_metadata(c: &Container) -> (Option<Vec<u8>>, Option<String>) {
 /// Decodes the primary image. `keep_orientation` leaves the container's `clap`, `irot` and
 /// `imir` unapplied (the stored pixels), as for HEIF.
 pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> Result<Image> {
+    decode_with_depth(bytes, limits, keep_orientation).map(|(image, _)| image)
+}
+
+pub(crate) fn decode_with_depth(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> Result<(Image, u8)> {
     let c = parse(bytes)?;
     let id = c.primary;
     let (w, h) = item_size(&c, id)?;
@@ -860,9 +864,9 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     // PQ or HLG: linear light in 32-bit float, as for HEIF.
     if cicp.is_hdr() {
         limits.check(w, h, layout, SampleType::F32)?;
-        return crate::cicp::linearize(img, cicp);
+        return crate::cicp::linearize(img, cicp).map(|image| (image, bits));
     }
-    Ok(img)
+    Ok((img, bits))
 }
 
 #[cfg(test)]
