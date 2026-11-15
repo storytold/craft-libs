@@ -8,7 +8,7 @@ fn chunk(id: &[u8; 4], body: &[u8]) -> Vec<u8> {
     let mut out = id.to_vec();
     out.extend_from_slice(&(body.len() as u32).to_le_bytes());
     out.extend_from_slice(body);
-    if body.len() % 2 != 0 {
+    if !body.len().is_multiple_of(2) {
         out.push(0);
     }
     out
