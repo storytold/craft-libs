@@ -177,6 +177,15 @@ fn frame_past_the_end_is_an_error() {
     assert!(matches!(f.read_frame(&d, 0), Err(Error::Invalid(_))));
 }
 
+/// `vec![0; size]` panics for a size past `isize::MAX`, which a frame of over 2 GiB is on a
+/// 32-bit target; the frame buffer must not.
+#[test]
+fn a_buffer_that_cannot_be_had_is_not_a_panic() {
+    assert_eq!(zeroed(usize::MAX), None);
+    assert_eq!(zeroed(isize::MAX as usize + 1), None);
+    assert_eq!(zeroed(3), Some(vec![0; 3]));
+}
+
 #[test]
 fn hostile_input_never_panics() {
     for (i, seed) in [sample(true), sample(false)].iter().enumerate() {

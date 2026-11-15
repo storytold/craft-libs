@@ -473,9 +473,14 @@ fn real_files_match_ffmpeg() {
             if frame.size == 0 {
                 continue;
             }
-            let rect = file.picture_rect(i).unwrap_or_else(|| panic!("{name}: frame {i} lies outside the picture"));
             let data = file.read_frame(&source, i).unwrap();
-            decoder.decode(rect.into(), new_palette, &data).unwrap_or_else(|e| panic!("{name}: frame {i}: {e}"));
+            // as the documented loop does: a frame without a rectangle may still bring a palette
+            match file.picture_rect(i) {
+                Some(rect) => decoder.decode(rect.into(), new_palette, &data),
+                None if new_palette => decoder.decode_palette(&data),
+                None => panic!("{name}: frame {i} lies outside the picture"),
+            }
+            .unwrap_or_else(|e| panic!("{name}: frame {i}: {e}"));
             theirs_out.read_exact(&mut theirs).unwrap_or_else(|e| panic!("{name}: ffmpeg has no picture for frame {i}: {e}"));
             let ours = decoder.rgb24();
             if theirs != ours {

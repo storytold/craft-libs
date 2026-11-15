@@ -344,6 +344,16 @@ pub fn open<S: ByteSource + ?Sized>(src: &S) -> Result<VmdFile> {
     Ok(VmdFile { header, frames, raw_header: raw.to_vec(), origins })
 }
 
+/// `size` zero bytes, or `None` if they cannot be had. `vec![0; size]` panics with a capacity
+/// overflow for a size the address space cannot hold, which a frame of over 2 GiB is on a 32-bit
+/// target.
+fn zeroed(size: usize) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(size).ok()?;
+    bytes.resize(size, 0);
+    Some(bytes)
+}
+
 impl VmdFile {
     /// The 816 header bytes as stored: the configuration (`CodecParams::extradata`) of the VMD
     /// video and sound decoders.
@@ -359,12 +369,7 @@ impl VmdFile {
         if f.offset.checked_add(u64::from(f.size)).is_none_or(|end| end > src.len()) {
             return Err(Error::Invalid(format!("frame {index} reaches past the end of the file")));
         }
-        // fallibly: a size the address space cannot hold (above 2 GiB on a 32-bit target) is an
-        // error, not a capacity-overflow panic
-        let size = f.size as usize;
-        let mut data = Vec::new();
-        data.try_reserve_exact(size).map_err(|_| Error::Invalid(format!("frame {index} is too large to load")))?;
-        data.resize(size, 0);
+        let mut data = zeroed(f.size as usize).ok_or_else(|| Error::Invalid(format!("frame {index} is too large to load")))?;
         src.read_at(f.offset, &mut data)?;
         Ok(data)
     }
