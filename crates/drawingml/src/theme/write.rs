@@ -13,6 +13,9 @@ use crate::write as dml;
 fn font_set(w: &mut Writer, tag: &str, f: &FontSet) {
     w.open(tag, &[]);
     let face = |w: &mut Writer, tag: &str, name: &str, a: &TypefaceAttrs| {
+        // Panose and the like describe one font: a changed typeface does not keep them.
+        let none = TypefaceAttrs::default();
+        let a = if a.typeface == name { a } else { &none };
         w.tag(tag)
             .attr("typeface", name)
             .attr_opt("panose", a.panose.as_deref())

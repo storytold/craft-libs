@@ -24,7 +24,7 @@ fn font_set(e: Option<&El>) -> FontSet {
     let attrs = |n: &str| {
         let c = e.and_then(|e| e.child(Local(n)));
         let at = |a: &str| c.and_then(|c| c.attr_local(a)).map(String::from);
-        TypefaceAttrs { panose: at("panose"), pitch_family: at("pitchFamily"), charset: at("charset") }
+        TypefaceAttrs { typeface: at("typeface").unwrap_or_default(), panose: at("panose"), pitch_family: at("pitchFamily"), charset: at("charset") }
     };
     FontSet { latin: tf("latin"), ea: tf("ea"), cs: tf("cs"), latin_attrs: attrs("latin"), ea_attrs: attrs("ea"), cs_attrs: attrs("cs"), scripts }
 }

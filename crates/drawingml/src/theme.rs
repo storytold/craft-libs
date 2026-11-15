@@ -28,6 +28,8 @@ pub struct FontSet {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TypefaceAttrs {
+    /// The typeface name these attributes belong to; the writer drops them once the typeface changed.
+    pub typeface: String,
     /// Ten hex byte pairs, as written.
     pub panose: Option<String>,
     pub pitch_family: Option<String>,

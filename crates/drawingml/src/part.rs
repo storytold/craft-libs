@@ -287,6 +287,38 @@ mod tests {
     }
 
     #[test]
+    fn font_panose_is_dropped_when_the_typeface_changes() {
+        let mut t = crate::theme::read_theme(&mut Part::new(), &parse(THEME_FILE.as_bytes()).unwrap());
+        t.fonts.minor.latin = "Arial".into();
+        let (xml, _) = theme_round_trip(&t);
+        assert!(xml.contains(r#"<a:latin typeface="Arial"/>"#), "{xml}");
+        assert!(!xml.contains("020F0502020204030204"), "{xml}");
+        assert!(xml.contains(r#"<a:latin typeface="Calibri Light" panose="020F0302020204030204""#), "the unchanged major font keeps it: {xml}");
+    }
+
+    #[test]
+    fn system_colour_without_last_clr_gets_it_and_an_unknown_name_becomes_srgb() {
+        let file = THEME_FILE
+            .replace(r#"<a:sysClr val="windowText" lastClr="000000"/>"#, r#"<a:sysClr val="windowText"/>"#)
+            .replace(r#"<a:sysClr val="window" lastClr="FFFFFF"/>"#, r#"<a:sysClr val="notAColor" lastClr="123456"/>"#);
+        let t = crate::theme::read_theme(&mut Part::new(), &parse(file.as_bytes()).unwrap());
+        let (xml, _) = theme_round_trip(&t);
+        assert!(xml.contains(r#"<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>"#), "{xml}");
+        assert!(xml.contains(r#"<a:lt1><a:srgbClr val="123456"/></a:lt1>"#), "{xml}");
+    }
+
+    #[test]
+    fn custom_colours_and_family_id_without_object_defaults_follow_an_empty_one() {
+        let file = THEME_FILE.replace("<a:objectDefaults/><a:extraClrSchemeLst/>", "");
+        let t = crate::theme::read_theme(&mut Part::new(), &parse(file.as_bytes()).unwrap());
+        let (xml, back) = theme_round_trip(&t);
+        let at = |n: &str| xml.find(n).unwrap_or_else(|| panic!("{n} in {xml}"));
+        assert!(at("</a:themeElements>") < at("<a:objectDefaults") && at("<a:objectDefaults") < at("<a:custClrLst>"), "{xml}");
+        assert!(at("<a:custClrLst>") < at("<a:extLst><a:ext uri=\"{05A4"), "{xml}");
+        assert_eq!(back.raw_extra, t.raw_extra);
+    }
+
+    #[test]
     fn list_styles_keep_def_ppr_in_every_place_they_are_written() {
         use crate::text::{ListStyle, TextBody};
         let src = r#"<p:x xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><a:defPPr marL="457200" algn="ctr"><a:defRPr lang="de-DE" sz="1800"/></a:defPPr><a:lvl1pPr marL="0"><a:defRPr sz="4400"/></a:lvl1pPr></p:x>"#;
