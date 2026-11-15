@@ -1,12 +1,10 @@
 //! A `Bar` too short for its members: it lays out under right-to-left as the mirror of left-to-right, and its end
-//! region shares the members' line; a member that fills takes the room the bar leaves; a select fits its widest entry
-//! up to a field length; a rule before a member the bar hides is not drawn, and a settled bar replays it so; a button
-//! label elides no further than its readable least.
+//! region shares the members' line; a member that fills takes the room the bar leaves; a rule before a member the bar
+//! hides is not drawn, and a settled bar replays it so; a button label elides no further than its readable least.
 
 use craft_behavior::IconId;
 use craft_behavior::geometry::Constraint;
 use craft_i18n::Direction;
-use craft_theme::ControlSize;
 use craft_ui::bars::{Bar, BarItem, BarItems, BarKind, ConstraintFields, ItemDisplay};
 use craft_ui::buttons::{Button, IconButton};
 use craft_ui::choice::Checkbox;
@@ -14,7 +12,6 @@ use craft_ui::contract::{Bind, Entry, Lazy, Props as _, Show as _, ShowContainer
 use craft_ui::display::{Divider, Elide, Text};
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
-use craft_ui::popover::Popover;
 use craft_ui::primitives::TextRun;
 use craft_ui::runtime::commands::EditCommands;
 use craft_ui::testing::layout::in_region;
@@ -157,52 +154,6 @@ fn a_member_the_bar_shows_in_part_is_not_shown_until_it_is_whole() {
     assert!(checked > 0, "no width put a button across the bar's end");
 }
 
-const SHORT: &[&str] = &["Normal", "Fixed"];
-const LONG: &[&str] = &["Normal", "A select entry far longer than any field is wide, so the box elides it"];
-
-/// The width of a small select of `entries`, in an options bar or in a plain column.
-fn select_width(entries: &'static [&'static str], in_bar: bool) -> f32 {
-    let entries: Vec<Entry<u8>> = (0u8..).zip(entries).map(|(at, text)| Entry::new(at, *text)).collect();
-    let mut fixture = Fixture::new(move |ui| {
-        let select = |ui: &mut Ui| {
-            Select::new("Pick", Bind::given(0u8), &entries).size(ControlSize::Sm).show(ui);
-        };
-        if in_bar {
-            Bar::new("Options", BarKind::Options).show(ui, |ui, _| select(ui));
-        } else {
-            select(ui);
-        }
-    });
-    fixture.room(Vec2::new(900.0, 80.0)).settle();
-    fixture.by_label("Pick").expect("the select").rect.width()
-}
-
-#[trial]
-fn a_select_in_a_bar_fits_its_widest_entry_up_to_the_field_length() {
-    let (short_bar, short_plain) = (select_width(SHORT, true), select_width(SHORT, false));
-    let (long_bar, long_plain) = (select_width(LONG, true), select_width(LONG, false));
-    assert!(short_bar < short_plain - SLACK, "short entries: {short_bar} in a bar, {short_plain} at the field length outside one");
-    assert!(long_bar <= short_plain + SLACK, "a long entry widens the select in a bar past the field length: {long_bar} against {short_plain}");
-    assert!(long_plain > long_bar + SLACK, "outside a bar the long entry sets the width: {long_plain}, in a bar {long_bar}");
-}
-
-/// A layer opened from a bar is not the bar's line: a select in a popover a bar's button opens keeps the field length.
-#[trial]
-fn a_select_in_a_popover_opened_from_a_bar_keeps_the_field_length() {
-    let mut fixture = Fixture::new(|ui| {
-        let entries = [Entry::new(0u8, SHORT[0]), Entry::new(1, SHORT[1])];
-        Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
-            let opener = Button::new("More").show(ui).response;
-            Popover::new("More options", Bind::given(true)).opened_by(&opener).show(ui, |ui, _| {
-                Select::new("Inside", Bind::given(0u8), &entries).size(ControlSize::Sm).show(ui);
-            });
-        });
-    });
-    fixture.room(Vec2::new(900.0, 300.0)).settle();
-    let inside = fixture.by_label("Inside").expect("the select in the popover").rect.width();
-    let plain = select_width(SHORT, false);
-    assert!((inside - plain).abs() <= SLACK, "the select in the popover is {inside} wide, a select outside any bar {plain}");
-}
 
 /// A bar `width` wide holding an icon button, a rule and a second icon button; `rects` gets the two buttons' rects.
 /// Icon buttons keep their width, so nothing in the line narrows to make room.

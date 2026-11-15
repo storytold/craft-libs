@@ -3,7 +3,7 @@
 use super::view::FullWindowView;
 use crate::buttons::IconButton;
 use crate::canvas::ViewCommands;
-use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing};
 use crate::dialog::DialogWords;
 use crate::display::{Elide, Progress, Shade, Text};
 use crate::layout_components::Row;
@@ -111,7 +111,8 @@ impl<'a> FullWindowZoomBar<'a> {
             }
             let mut entries = vec![Entry::new(FIT, words.full_window_fit_in_view.clone())];
             entries.extend(zooms.into_iter().map(|zoom| Entry::new(zoom, Label::from(units.zoom_percent(zoom as f64 / 100.0)))));
-            let picked = Select::new(words.full_window_zoom.clone(), Bind::given(current), &entries).size(ControlSize::Sm).show(ui);
+            let picked =
+                Select::new(words.full_window_zoom.clone(), Bind::given(current), &entries).size(ControlSize::Sm).sizing(Sizing::Content).show(ui);
             if let Some(&hundredths) = picked.value().filter(|picked| **picked != current) {
                 if hundredths == FIT {
                     next.apply(ViewCommands::FitOnScreen);

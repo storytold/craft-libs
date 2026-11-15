@@ -25,7 +25,8 @@ use crate::runtime::overlay::CloseReason;
 use crate::style::{ComponentStyle, Ink, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{StepResult, ValueAxes, ValueSteps};
 use craft_behavior::{
-    CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Metrics, NavMove, PartKey, Selection, Sense, TypeAhead, Value, wheel_step,
+    CancelReason, GesturePhase, HitLevel, HitPriority, IconId, Metrics, NavMove, PartKey, Selection, Sense, TypeAhead, Value, WheelPhase,
+    wheel_step,
 };
 use craft_theme::{Stateful, States};
 use egui::{Rect, Ui, Vec2};
@@ -76,8 +77,8 @@ impl<'a> HeaderMenu<'a> {
 /// arrow keys, Home, End and the wheel (while the field is focused or armed) step the pick through the stepped entries
 /// ([`Entry::stepped`]); from a value that is none of them, forward lands on the first and back on the last. The field is
 /// as wide as its widest entry, placeholder or mixed word, at least a field length, so it keeps its width whichever is
-/// shown. A content-sized select, and a select in a bar, fit that widest face, up to a field length; a longer one
-/// elides.
+/// shown. A content-sized select fits that widest face, up to a field length; a longer one elides. The closed wheel
+/// run is one edit gesture, committed when the wheel gesture ends.
 ///
 /// The face shows the picked entry's [closed label](Entry::closed_label) where it has one; the list, type-ahead and
 /// the accessible value keep the full label. A [`picture`](Select::picture) draws each entry's thumbnail in its row
@@ -213,7 +214,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let list = cx.popup("list");
         toggle_on_key(cx, list);
-        if !list.is_open(cx) && matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) {
+        // A wheel run proposes while the list is closed; only a proposal the open list made is dropped here.
+        if !list.is_open(cx) && !cx.in_wheel_run() && matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) {
             cx.cancel(CancelReason::Dismissed);
         }
         let stops = step_stops(self.entries);
@@ -225,11 +227,8 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             // Type-ahead passes over headings: their captions name no entry.
             let labels: Vec<Label> =
                 self.entries.iter().map(|entry| if entry.is_item() { cx.env.resolve(entry.label()) } else { Label::Empty }).collect();
-            let typed = text.to_lowercase();
             let folder = cx.env.folder();
-            // P3(canvas-widgets-w12): cw.C64
-            let found =
-                TypeAhead::pick(&typed, held, labels.len(), |at| Cow::Borrowed(labels[at].as_str()), |text| folder.fold(text).as_str().to_owned());
+            let found = TypeAhead::pick(&text, held, labels.len(), |at| Cow::Borrowed(labels[at].as_str()), |s| folder.key(s));
             if let Some(value) = found.filter(|&at| self.entries[at].is_enabled()).and_then(|at| self.entries[at].value()) {
                 cx.propose(value.clone());
                 list.open(cx);
@@ -237,22 +236,33 @@ impl<T: Value + 'static> Component for Select<'_, T> {
             }
         }
         if let Some(at) = cx.intents().take_set_value() {
+            // `Edit::set` is a one-shot change: a wheel run's open proposal is committed first.
+            if cx.in_wheel_run() {
+                cx.commit();
+            }
             let to = (at.round().max(0.0) as usize).min(stops.len() - 1);
             self.pick(cx, stops[to]);
         }
         while let Some((mv, _)) = cx.intents().take_move() {
+            if cx.in_wheel_run() {
+                cx.commit();
+            }
             if let Some(to) = step(&stops, self.position(cx.value()), mv) {
                 self.pick(cx, to);
             }
         }
-        // The wheel gives one notch, up for a step forward.
-        if let Some(wheel) = cx.take_wheel()
-            && let StepResult::Set(along) =
+        // The wheel gives one notch, up for a step forward. The end share of the gesture has no scroll and commits the run.
+        if let Some(wheel) = cx.take_wheel() {
+            if matches!(wheel.phase, WheelPhase::End) {
+                cx.wheel_run(wheel.phase, None);
+            } else if let StepResult::Set(along) =
                 wheel_step(&ValueSteps::new(0.0, -1.0, 1.0, 1.0, 1.0), ValueAxes::Both, &wheel, cx.env.direction().is_rtl())
-            && along != 0.0
-            && let Some(to) = step_stop(&stops, held, along > 0.0)
-        {
-            self.pick(cx, to);
+                && along != 0.0
+                && let Some(to) = step_stop(&stops, self.position(cx.value()), along > 0.0)
+                && let Some(value) = self.entries[to].value()
+            {
+                cx.wheel_run(wheel.phase, Some(value.clone()));
+            }
         }
     }
 
