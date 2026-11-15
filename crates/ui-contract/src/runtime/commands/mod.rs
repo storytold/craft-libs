@@ -125,6 +125,13 @@ pub struct Fired {
     pub alt_variant: bool,
 }
 
+impl Fired {
+    /// `command` fired from `source` in `phase`, for the app scope (no target), without a group cycle or the Alt variant.
+    pub fn new(command: CommandRef, source: FireSource, phase: FirePhase) -> Fired {
+        Fired { command, target: None, source, phase, cycle: false, alt_variant: false }
+    }
+}
+
 /// Where a fired command came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

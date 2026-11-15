@@ -896,7 +896,7 @@ pub(crate) fn fall_through(ctx: &Context, command: craft_behavior::EditCommand) 
     let Some(command) = EditCommands::of(command) else { return };
     let command = CommandRef::from(command);
     let target = with(ctx, |board| board.resolve(ctx, &command, None, Reach::Focus, &board.here).0.instance);
-    let fired = Fired { command, target, source: FireSource::Key, phase: FirePhase::Press, cycle: false, alt_variant: false };
+    let fired = Fired { target, ..Fired::new(command, FireSource::Key, FirePhase::Press) };
     with(ctx, |board| if fired.target.is_some() { board.queue.push(fired) } else { board.out.push(fired) });
     repaint::request_of(ctx, ViewportId::ROOT);
 }
@@ -911,10 +911,7 @@ pub(crate) fn fire_resolved(ctx: &Context, command: &ResolvedCommand, source: Fi
     if !command.enabled || !crate::runtime::measure::effect(ctx, "board::fire_resolved") {
         return false;
     }
-    queue(
-        ctx,
-        Fired { command: command.command.clone(), target: command.instance, source, phase: FirePhase::Press, cycle: false, alt_variant: false },
-    );
+    queue(ctx, Fired { target: command.instance, ..Fired::new(command.command.clone(), source, FirePhase::Press) });
     true
 }
 
@@ -940,7 +937,7 @@ fn fire_in(ctx: &Context, command: &CommandRef, source: FireSource, from: Option
     }
     // An app-scope command a modal layer's instance declares is delivered to that instance.
     let target = if app { resolved.instance } else { instance };
-    queue(ctx, Fired { command: command.clone(), target, source, phase: FirePhase::Press, cycle: false, alt_variant: false });
+    queue(ctx, Fired { target, ..Fired::new(command.clone(), source, FirePhase::Press) });
     true
 }
 
