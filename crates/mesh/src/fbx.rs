@@ -829,6 +829,132 @@ impl Document {
     }
 }
 
+/// Diffuse material values as stored in FBX, before color-space conversion.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiffuseMaterial {
+    pub name: String,
+    pub factor: [f32; 4],
+    /// Encoded embedded or resolved image bytes, when available.
+    pub image: Option<Vec<u8>>,
+}
+
+impl Document {
+    /// Read all FBX diffuse materials, including unconnected materials. The resolver receives
+    /// the relative path followed by the absolute path's leaf, in preference order.
+    pub fn diffuse_materials(&self, limits: &Limits, resolve: &mut dyn FnMut(&[&str]) -> Option<Vec<u8>>) -> Result<Vec<DiffuseMaterial>> {
+        let objects = self.top("Objects").ok_or_else(|| malformed(KIND, "no Objects section"))?;
+        let mut materials = HashMap::new();
+        let mut textures = HashMap::new();
+        let mut videos = HashMap::new();
+        for record in &objects.children {
+            let Some(id) = key(record.props.first()) else { continue };
+            match record.name.as_str() {
+                "Material" => {
+                    materials.insert(id, record);
+                }
+                "Texture" => {
+                    textures.insert(id, record);
+                }
+                "Video" => {
+                    videos.insert(id, record);
+                }
+                _ => {}
+            }
+        }
+        if materials.len() > limits.max_materials {
+            return Err(too_large(KIND, "too many materials"));
+        }
+        let mut video_of = HashMap::new();
+        let mut diffuse = HashMap::new();
+        for link in self.top("Connections").into_iter().flat_map(|c| c.children.iter()).filter(|c| c.name == "C" || c.name == "Connect") {
+            let (Some(child), Some(parent)) = (key(link.props.get(1)), key(link.props.get(2))) else { continue };
+            if videos.contains_key(&child) && textures.contains_key(&parent) {
+                video_of.insert(parent, child);
+            } else if textures.contains_key(&child) && materials.contains_key(&parent) {
+                match (link.str_at(0), link.str_at(3)) {
+                    (Some("OP"), Some("DiffuseColor" | "Maya|baseColor")) => {
+                        diffuse.insert(parent, child);
+                    }
+                    (Some("OO"), _) => {
+                        diffuse.entry(parent).or_insert(child);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let budget = Budget { left: Cell::new(self.left.min(limits.max_data_bytes)), limit: limits.max_data_bytes };
+        let mut out = Vec::new();
+        for (id, material) in materials {
+            let tex = diffuse.get(&id).and_then(|t| textures.get(t)).copied();
+            let video = diffuse.get(&id).and_then(|t| video_of.get(t)).and_then(|v| videos.get(v)).copied();
+            let mut image = None;
+            if let Some(content) = video.or(tex).and_then(|n| n.child("Content")) {
+                match content.props.first() {
+                    Some(Prop::Bytes(bytes)) if !bytes.is_empty() => {
+                        budget.take(Some(bytes.len()), "an embedded image")?;
+                        image = Some(bytes.clone());
+                    }
+                    Some(Prop::Str(_)) => {
+                        let size = content.props.iter().filter_map(Prop::as_str).try_fold(0usize, |n, s| n.checked_add(s.len()));
+                        // Reserve a conservative bound before concatenating and decoding.
+                        budget.take(size, "an embedded image")?;
+                        let text: String = content.props.iter().filter_map(Prop::as_str).collect();
+                        image = base64_decode(text.trim()).filter(|b| !b.is_empty());
+                    }
+                    _ => {}
+                }
+            }
+            if image.is_none() {
+                for record in [tex, video].into_iter().flatten() {
+                    let relative = record.child("RelativeFilename").and_then(|n| n.str_at(0)).unwrap_or("");
+                    let absolute = ["FileName", "Filename"]
+                        .into_iter()
+                        .find_map(|n| record.child(n).and_then(|v| v.str_at(0)).filter(|s| !s.is_empty()))
+                        .unwrap_or("");
+                    let leaf = absolute.rsplit(['/', '\\']).next().unwrap_or("");
+                    let mut paths = Vec::new();
+                    for path in [relative, leaf] {
+                        if !path.is_empty() && !paths.contains(&path) {
+                            paths.push(path);
+                        }
+                    }
+                    if !paths.is_empty() {
+                        if let Some(bytes) = resolve(&paths) {
+                            budget.take(Some(bytes.len()), "a resolved image")?;
+                            image = Some(bytes);
+                            break;
+                        }
+                    }
+                }
+            }
+            let props = Props::of(material);
+            let values = props.values("DiffuseColor");
+            let factor = match values.as_slice() {
+                [r, g, b, ..] => {
+                    let f = props.f("DiffuseFactor").unwrap_or(1.0);
+                    [(*r * f) as f32, (*g * f) as f32, (*b * f) as f32, 1.0]
+                }
+                _ => [1.0; 4],
+            };
+            if factor.iter().any(|v| !v.is_finite()) || (image.is_none() && values.len() < 3) {
+                continue;
+            }
+            let raw_name = short_name(material.first_str().unwrap_or(""));
+            let name = if raw_name.is_empty() {
+                match id {
+                    Key::Id(i) => format!("Material_{i}"),
+                    Key::Name(s) => format!("Material_{s}"),
+                }
+            } else {
+                raw_name.to_string()
+            };
+            out.push(DiffuseMaterial { name, factor, image });
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(out)
+    }
+}
+
 /// What connections name an object by: its id, or its `Class::Name`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Key<'a> {
