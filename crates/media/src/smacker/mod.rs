@@ -299,9 +299,11 @@ pub struct SmackerFile {
     pub header: Header,
     /// The frames, in order. Fewer than `header.frames` if the file is cut short.
     pub frames: Vec<Frame>,
-    /// The frame after the last one, if the file has one: it turns the last picture into the
-    /// first, so a player that loops decodes it after the last frame in place of the first
-    /// frame, and goes on with the second. A player that does not loop leaves it out.
+    /// The frame after the last one, if the file has one. The header flags it as the frame that
+    /// leads back to the start for looping. In the one real file checked, the picture after it
+    /// is close to the first picture but not equal to it, and it has no audio chunk where the
+    /// first frame has one, so it does not stand in for the first frame. ffmpeg decodes it as
+    /// one more picture at the end.
     pub ring_frame: Option<Frame>,
     /// The Huffman tree data of the video codec (`header.trees_size` bytes).
     pub trees: Vec<u8>,
