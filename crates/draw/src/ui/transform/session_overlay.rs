@@ -9,11 +9,11 @@ use craft_behavior::geometry::quad::{BoxPart, BoxRules};
 use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::contract::Show as _;
-use craft_ui::contract::{Bind, Entry};
+use craft_ui::contract::{Bind, Entry, IdSource, Props as _};
 use craft_ui::menu::Menu;
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::env::{Env, Label};
-use egui::{Rect, Ui};
+use egui::{AsIdSalt, Id, IdSalt, Rect, Ui};
 
 use super::{
     ApplyBy, TransformBox, TransformChoice, TransformEdit, TransformMenuWords, TransformPhase, TransformSession, TransformSettings, TransformWarp,
@@ -61,12 +61,28 @@ pub struct TransformOverlay<'a, W> {
     mods: Option<Mods>,
     menu_rows: &'a [Entry<String>],
     move_reach: f32,
+    id: IdSource,
 }
 
 impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
     /// The overlay of `session` named `label`, with the box rules `settings` give.
     pub fn new(label: impl Into<Label>, session: &'a TransformSession<W>, settings: &'a TransformSettings) -> Self {
-        Self { label: label.into(), session, settings, rules: None, pixel_grid: false, mods: None, menu_rows: &[], move_reach: 0.0 }
+        Self { label: label.into(), session, settings, rules: None, pixel_grid: false, mods: None, menu_rows: &[], move_reach: 0.0, id: IdSource::Auto }
+    }
+
+    /// Salts the box's id with `salt`, as [`Props::id_salt`](craft_ui::contract::Props::id_salt) does: a host that
+    /// shows a [`TransformBox`] before the session opens gives both the same id, so a drag carries over.
+    #[must_use]
+    pub fn id_salt(mut self, salt: impl AsIdSalt) -> Self {
+        self.id = IdSource::Salt(IdSalt::new(salt));
+        self
+    }
+
+    /// Uses `id` as the box's id, as [`Props::id`](craft_ui::contract::Props::id) does.
+    #[must_use]
+    pub fn id(mut self, id: Id) -> Self {
+        self.id = IdSource::Id(id);
+        self
     }
 
     /// The app's rows after Warp in the box menu; a pick is reported as [`TransformOverlayOutput::menu_row`].
@@ -122,7 +138,8 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         let mut tbox = TransformBox::new(self.label.clone(), Bind::given(*session.state()), session.rect(), session.skew_v())
             .rules(rules)
             .reference_point(session.reference_point())
-            .pixel_grid(self.pixel_grid);
+            .pixel_grid(self.pixel_grid)
+            .id_source(self.id);
         if self.move_reach > 0.0 {
             tbox = tbox.move_reach(self.move_reach);
         }
