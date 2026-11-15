@@ -34,11 +34,27 @@ pub struct Session {
     policy: Policy,
     state: State,
     capabilities: Value,
+    versions: Vec<String>,
+    permissive_initialize: bool,
+    server_info: Option<Value>,
+    instructions: Option<String>,
+    initialized: bool,
 }
 
 impl Session {
     pub fn new(name: impl Into<String>, version: impl Into<String>, policy: Policy) -> Self {
-        Self { name: name.into(), version: version.into(), policy, state: State::New, capabilities: json!({"tools": {}}) }
+        Self {
+            name: name.into(),
+            version: version.into(),
+            policy,
+            state: State::New,
+            capabilities: json!({"tools": {}}),
+            versions: vec![PROTOCOL_VERSION.into()],
+            permissive_initialize: false,
+            server_info: None,
+            instructions: None,
+            initialized: false,
+        }
     }
 
     /// Set the server capabilities returned at initialization. The value must be an object.
@@ -48,6 +64,27 @@ impl Session {
         }
         self.capabilities = capabilities;
         Ok(self)
+    }
+
+    /// Configure a permissive legacy server: absent or malformed initialize parameters are
+    /// accepted, supported client versions are echoed, and unknown versions use the first entry.
+    pub fn with_legacy_initialize(mut self, versions: &[&str], server_info: Value) -> Self {
+        if !versions.is_empty() {
+            self.versions = versions.iter().map(|v| (*v).to_owned()).collect();
+        }
+        self.permissive_initialize = true;
+        self.server_info = Some(server_info);
+        self
+    }
+
+    /// Update connection-specific instructions returned by subsequent initialize requests.
+    pub fn set_instructions(&mut self, instructions: String) {
+        self.instructions = Some(instructions);
+    }
+
+    /// Whether an initialized notification has been observed, including before initialize.
+    pub fn is_initialized(&self) -> bool {
+        self.initialized
     }
 
     pub fn state(&self) -> State {
@@ -63,6 +100,18 @@ impl Session {
         if request.method == "initialize" {
             if self.policy == Policy::Strict && (in_batch || self.state != State::New) {
                 return Some(Err(RpcError::new(-32600, "Invalid Request")));
+            }
+            if self.permissive_initialize {
+                let asked = request.params.and_then(|p| p.get("protocolVersion")).and_then(Value::as_str);
+                let version = asked
+                    .filter(|v| self.versions.iter().any(|supported| supported == v))
+                    .unwrap_or_else(|| self.versions.first().map(String::as_str).unwrap_or(PROTOCOL_VERSION));
+                let mut result = json!({"protocolVersion": version, "capabilities": self.capabilities, "serverInfo": self.server_info});
+                if let Some(instructions) = &self.instructions {
+                    result["instructions"] = json!(instructions);
+                }
+                self.state = State::AwaitingInitialized;
+                return Some(Ok(result));
             }
             let Some(params) = request.params.and_then(Value::as_object) else {
                 return Some(Err(invalid_initialize()));
@@ -89,8 +138,11 @@ impl Session {
 
     /// Observe a JSON-RPC notification; notifications never receive replies.
     pub fn notification(&mut self, request: Request<'_>) {
-        if request.method == "notifications/initialized" && self.state == State::AwaitingInitialized {
-            self.state = State::Ready;
+        if request.method == "notifications/initialized" {
+            self.initialized = true;
+            if self.state == State::AwaitingInitialized {
+                self.state = State::Ready;
+            }
         }
     }
 }
@@ -125,6 +177,22 @@ mod tests {
 
     fn call<'a>(method: &'a str, params: Option<&'a Value>) -> Request<'a> {
         Request { id: None, method, params }
+    }
+
+    #[test]
+    fn legacy_initialization_negotiates_and_accepts_missing_parameters() {
+        let mut s = Session::new("test", "1", Policy::Compatible).with_legacy_initialize(&["new", "old"], json!({"name":"custom", "title":"Title"}));
+        s.notification(call("notifications/initialized", None));
+        assert!(s.is_initialized());
+        s.set_instructions("help".into());
+        for (params, expected) in
+            [(None, "new"), (Some(json!({"protocolVersion":"old"})), "old"), (Some(json!({"protocolVersion":"unknown"})), "new")]
+        {
+            let result = s.request(call("initialize", params.as_ref()), false).unwrap().unwrap();
+            assert_eq!(result["protocolVersion"], expected);
+            assert_eq!(result["serverInfo"]["title"], "Title");
+            assert_eq!(result["instructions"], "help");
+        }
     }
 
     #[test]
