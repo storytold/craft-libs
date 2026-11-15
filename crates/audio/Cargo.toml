@@ -19,7 +19,7 @@ workspace = true
 # µ-law and free-format MP3 through symphonia.
 decode = ["decode-native", "symphonia"]
 # `decode` without symphonia: only the formats with a native decoder (others are Unsupported).
-decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-decode", "mp3-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
+decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-decode", "mp3-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log", "dep:craft-xml"]
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers and the AAC, ALAC, AC-3/E-AC-3, MP3 and Opus encoders.
@@ -60,6 +60,7 @@ serde = ["dep:serde", "craft-media/serde"]
 
 [dependencies]
 craft-media = { workspace = true }
+craft-xml = { workspace = true, optional = true }
 thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
