@@ -15,6 +15,7 @@ craft-shx = { path = "crates/shx" }
 craft-http-url = { path = "crates/http-url" }
 craft-usd = { path = "crates/usd" }
 craft-smime = { path = "crates/smime" }
+craft-ssip = { path = "crates/ssip" }
 craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
 acadrust = "=0.6.6"
