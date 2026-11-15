@@ -60,7 +60,7 @@ mod tns;
 
 #[cfg(feature = "aac-decode")]
 pub(crate) use config::split_adts_upto;
-pub use config::{AdtsHeader, AudioSpecificConfig, ElementType, ProgramConfig, config_layout, split_adts};
+pub use config::{AdtsConfig, AdtsConfigError, AdtsHeader, AudioSpecificConfig, ElementType, ProgramConfig, config_layout, split_adts};
 #[cfg(feature = "aac-decode")]
 pub use decoder::Decoder;
 #[cfg(feature = "aac-encode")]
