@@ -143,6 +143,10 @@ impl<'a, E: XflElement> Filter<'a, E> {
         self.element.attr("highlightColor").map(|_| shape::color(self.element, "highlightColor", "highlightAlpha"))
     }
 
+    pub fn highlight_alpha(&self) -> Option<f32> {
+        number(self.element, "highlightAlpha")
+    }
+
     /// Native gradient entries, either direct children or one wrapper level below the filter.
     pub fn ramp_entries(&self) -> impl Iterator<Item = RampEntry<'a, E>> + 'a {
         self.element
