@@ -205,6 +205,63 @@ fn the_wheel_steps_a_slider_when_focused_or_freed_and_otherwise_scrolls_the_pane
     assert!(value == 0.0 && panel > 0.0, "a gated scope wins over a free one inside it ({value}, {panel})");
 }
 
+#[trial]
+fn a_wheel_gesture_keeps_scrolling_the_panel_over_a_free_slider() {
+    use craft_behavior::GESTURE_GAP;
+    use craft_ui::contract::{ContainerProps, Scroll, ShowContainer as _};
+    use craft_ui::runtime::env::{WheelScope, with_env};
+    use craft_ui::testing::layout::{Block, in_region};
+    use craft_ui_test_kit::body::Slab;
+    use std::cell::Cell;
+
+    // The pointer stays over the panel above the slider; the panel's scroll carries the slider up under it. The panel
+    // is as wide as its widest member, so the point lies within the blocks' and the slider's span.
+    let pointer_at = Pos2::new(60.0, 150.0);
+    let value = RefCell::new(START);
+    let (top, slider, passed_under) = (Cell::new(0.0_f32), Cell::new(Rect::NOTHING), Cell::new(false));
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 300.0)), |ui| {
+            Slab::new(ContainerProps::new().scroll(Scroll::vertical())).id_salt("panel").show(ui, |ui, _| {
+                top.set(ui.next_widget_position().y);
+                Block::new(Vec2::new(100.0, 200.0)).show(ui);
+                with_env(
+                    ui,
+                    |set| set.wheel = Some(WheelScope::Free),
+                    |ui| {
+                        let mut value = value.borrow_mut();
+                        let rect = Slider::new(Bind::bound(&mut *value), 0.0..=100.0).label("Opacity").show(ui).response.rect;
+                        slider.set(rect);
+                        passed_under.set(passed_under.get() || rect.contains(pointer_at));
+                    },
+                );
+                Block::new(Vec2::new(100.0, 1000.0)).show(ui);
+            });
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    assert!(slider.get().min.y > pointer_at.y, "the slider starts below the pointer: {:?}", slider.get());
+    let top_before = top.get();
+    frames.frame(vec![pointer::moved(pointer_at)], &mut show);
+    // One gesture: a wheel event every frame, each well inside the gap of the one before.
+    for _ in 0..15 {
+        frames.frame(vec![pointer::wheel(-8.0)], &mut show);
+    }
+    frames.idle(2, &mut show);
+    assert!(passed_under.get(), "the slider passed under the pointer: {:?}", slider.get());
+    assert!(top_before - top.get() > 60.0, "the panel kept scrolling: {} -> {}", top_before, top.get());
+    assert_eq!(*value.borrow(), START, "the free slider the gesture passed over did not step");
+
+    // A new gesture over the slider steps it and leaves the panel where it is.
+    frames.advance(GESTURE_GAP);
+    frames.frame(vec![pointer::moved(slider.get().center())], &mut show);
+    let top_before = top.get();
+    frames.frame(vec![pointer::wheel(-40.0)], &mut show);
+    frames.idle(2, &mut show);
+    assert_ne!(*value.borrow(), START, "a new gesture over the free slider steps it");
+    assert_eq!(top.get(), top_before, "the panel stays");
+}
+
 /// The rings a frame paints inside `within`: outlines with no fill.
 fn rings(shapes: &[egui::Shape], within: Rect) -> usize {
     shapes

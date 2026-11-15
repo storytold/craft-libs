@@ -464,7 +464,7 @@ fn step_name<V>(event: &craft_behavior::EditEvent<V>) -> &'static str {
 
 /// Wheel notches over a field are one edit gesture, one undo step: Begin, then Updates, and one Commit when the
 /// wheel gesture ends. A value written from outside while the run is open cancels it, and the end then commits
-/// nothing.
+/// nothing. A notch in the pass whose gap ends a run begins the next run.
 #[trial]
 fn a_wheel_run_on_a_field_is_one_edit_gesture() {
     use craft_behavior::GESTURE_GAP;
@@ -514,6 +514,17 @@ fn a_wheel_run_on_a_field_is_one_edit_gesture() {
     fixture.advance(GESTURE_GAP * 2.0).idle(3);
     assert!(!steps.borrow().contains(&"commit"), "the end commits no cancelled run: {:?}", steps.borrow());
     assert_eq!(*value.borrow(), Some(77.0), "the outside value stays");
+
+    // The pass that sees the gap end one run also carries the next notch: the first run commits, the notch begins
+    // the second.
+    steps.borrow_mut().clear();
+    for _ in 0..2 {
+        fixture.frame(vec![wheel_lines(1.0)]);
+    }
+    fixture.advance(GESTURE_GAP * 2.0).frame(vec![wheel_lines(1.0)]);
+    fixture.advance(GESTURE_GAP * 2.0).idle(3);
+    let gestures: Vec<&str> = steps.borrow().iter().copied().filter(|step| matches!(*step, "begin" | "commit")).collect();
+    assert_eq!(gestures, ["begin", "commit", "begin", "commit"], "two edit gestures, the first committed: {:?}", steps.borrow());
 }
 
 /// An arrow over a typed sum applies the sum first and steps from it, and the field keeps focus.

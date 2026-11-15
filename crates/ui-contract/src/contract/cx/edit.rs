@@ -340,9 +340,13 @@ impl<C: Component> Cx<'_, C> {
 impl<C: Component> Cx<'_, C> {
     /// Advances the component's wheel run, one edit gesture through the gesture slot: a notch with `Some(next)`
     /// proposes it (the first notch begins the run), and a `WheelPhase::End` share, which the runtime hands a value
-    /// control when the wheel gesture ends, commits a running run. A run a host change or a removal cancelled stays
-    /// cancelled; the end then changes nothing.
+    /// control when the wheel gesture ends, commits a running run. A `WheelPhase::Start` share, which the runtime
+    /// hands when a new gesture begins in the pass the last one ended, commits the running run first, so its notch
+    /// begins the next run. A run a host change or a removal cancelled stays cancelled; the end then changes nothing.
     pub fn wheel_run(&mut self, phase: WheelPhase, next: Option<ValueOf<C>>) {
+        if phase == WheelPhase::Start && self.in_wheel_run() {
+            self.commit();
+        }
         if let Some(next) = next {
             let running = self.gesture_slot().is_running();
             self.propose(next);

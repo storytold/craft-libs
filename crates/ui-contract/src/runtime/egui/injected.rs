@@ -301,13 +301,26 @@ fn remove_event_run(events: &mut Vec<Event>, step: &[Event]) {
 
 /// The input hook's first step: appends the next queued step of `input.viewport_id` to `input.events`. Returns
 /// whether a pass of the viewport must follow: steps remain queued. A step that rests holds the queue until the
-/// input time passes its rest, and asks for the pass that ends it.
+/// input time passes its rest, and asks for the pass that ends it. A window focus loss in the input ends what injected
+/// input does there: egui forgets held buttons, keys and modifiers at a focus loss, so the step in flight is withdrawn,
+/// the queue dropped and nothing counts as held.
 pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
     let viewport = input.viewport_id;
     let (pass_nr, focused) = (pass::pass_nr(ctx, viewport), crate::runtime::focus::record(ctx, viewport).focused);
     let frame = pass::frame_nr(ctx, viewport);
+    let blurred = input.events.iter().any(|event| matches!(event, Event::WindowFocused(false)));
     let mut wake = None;
     let follow = Service::<Injected>::run(ctx, |injected| {
+        if blurred {
+            let unrun = injected.lanes.get(&viewport).and_then(|lane| lane.flight.as_ref()).is_some_and(|flight| flight.pass >= pass_nr);
+            if unrun {
+                withdraw_flight(injected, viewport, &mut input.events);
+            } else if injected.lanes.remove(&viewport).is_some_and(|lane| !lane.queue.is_empty()) {
+                injected.withdrawn = true;
+            }
+            injected.held.remove(&viewport);
+            return false;
+        }
         let Some(lane) = injected.lanes.get_mut(&viewport) else { return false };
         if lane.withdrawn {
             if lane.flight.as_ref().is_some_and(|flight| flight.pass >= pass_nr) {
@@ -478,6 +491,14 @@ pub(crate) fn inject_pass(ctx: &Context, viewport: ViewportId) {
     });
 }
 
+/// Queues one IME event (a preedit or a commit) with the held modifiers, behind earlier injected input.
+pub(crate) fn inject_ime(ctx: &Context, viewport: ViewportId, event: egui::ImeEvent) {
+    queue(ctx, viewport, move |request| {
+        let mods = request.held.mods;
+        request.step(mods, [Event::Ime(event)]);
+    });
+}
+
 /// Sets the Caps Lock state injected input holds in place of the platform's; `None` returns to the platform's.
 pub(crate) fn set_caps_lock(ctx: &Context, on: Option<bool>) {
     Service::<Injected>::run(ctx, |injected| injected.caps_lock = on);
@@ -521,10 +542,19 @@ pub(crate) fn cancel(ctx: &Context) -> bool {
     })
 }
 
-/// Ends the injection session of the context.
+/// Ends the injection session of the context: drops every queue and step in flight ([`cancel`]), queues the release of
+/// everything held in each viewport where injected input holds a button, a key or a modifier, and returns Caps Lock to
+/// the platform's. The releases run on the viewports' next passes; `cancel` alone leaves the delivered steps' keys
+/// held.
 pub(crate) fn end(ctx: &Context) {
-    let _ = ctx;
-    todo!("fx.F21")
+    cancel(ctx);
+    let holding: Vec<ViewportId> = Service::<Injected>::run(ctx, |injected| {
+        injected.held.iter().filter(|(_, held)| held.holds() || held.mods != Modifiers::NONE).map(|(viewport, _)| *viewport).collect()
+    });
+    for viewport in holding {
+        inject_release(ctx, viewport, None, Released::All);
+    }
+    set_caps_lock(ctx, None);
 }
 
 /// Whether nothing is queued and no step awaits its pass or its rest: the application may answer its waiters.

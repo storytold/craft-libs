@@ -109,9 +109,16 @@ impl PointerSample {
 
     /// The sample with every field in range: pressure within 0 to 1, tilt and rotation finite radians, a stray value
     /// replaced by its neutral one.
+    ///
+    /// A tablet driver's pressure outside 0 to 1 is clamped and one that is no number reads as full pressure, so a
+    /// stroke keeps drawing; tilt is clamped to a quarter turn each way and an unreadable tilt or rotation is none.
     #[must_use]
     pub fn sanitized(self) -> Self {
-        todo!("cw.C73")
+        let pressure = if self.pressure.is_nan() { 1.0 } else { self.pressure.clamp(0.0, 1.0) };
+        let quarter = std::f32::consts::FRAC_PI_2;
+        let tilt = self.tilt.map(|tilt| if tilt.is_finite() { tilt.clamp(-quarter, quarter) } else { 0.0 });
+        let rotation = if self.rotation.is_finite() { self.rotation } else { 0.0 };
+        PointerSample { pressure, tilt, rotation, eraser: self.eraser }
     }
 }
 

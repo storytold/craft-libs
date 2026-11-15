@@ -1,11 +1,14 @@
 //! The wheel service: the begin hook splits the pass's wheel input among last pass's takers.
 
-use craft_behavior::{Sense, WheelTaker};
+use craft_behavior::{GESTURE_GAP, Sense, Wheel, WheelPhase, WheelTaker};
+use craft_host::target::Os;
 use craft_ui::testing::pointer;
 use craft_ui::testing::sensing::{ProbeRoot, show};
-use craft_ui::testing::wheel::{register, take};
-use craft_ui::testing::{Frames, trial};
-use egui::{Pos2, Rect, Vec2};
+use craft_ui::testing::wheel::{register, take, take_share};
+use craft_ui::testing::{Fixture, Frames, trial};
+use egui::{Event, Id, Modifiers, MouseWheelSource, MouseWheelUnit, Pos2, Rect, TouchPhase, Vec2};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// Skeleton: `frames_state::slider_takes_the_wheel_after_a_press_until_the_pointer_leaves`, second half: a press
 /// arms a value control for the wheel until the pointer leaves it.
@@ -37,4 +40,147 @@ fn a_press_arms_a_gated_taker_until_the_pointer_leaves() {
     frames.frame(vec![pointer::moved(Pos2::new(300.0, 300.0))], &mut show_frame);
     frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
     assert_eq!(read.get(), (scroll, None), "once the pointer leaves, the panel takes it again");
+}
+
+/// A wheel event of `delta` in `unit` with `modifiers`, in device phase `phase`.
+fn wheel_event(unit: MouseWheelUnit, delta: Vec2, phase: TouchPhase, modifiers: Modifiers) -> Event {
+    Event::MouseWheel { unit, delta, phase, modifiers, source: MouseWheelSource::Wheel }
+}
+
+#[trial]
+fn a_fractional_ctrl_wheel_is_a_pinch_and_a_whole_notch_stays_a_scroll() {
+    // egui reports the Ctrl key as `ctrl` and `command` off macOS.
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    let ctrl_lines = |dy: f32| wheel_event(MouseWheelUnit::Line, Vec2::new(0.0, dy), TouchPhase::Move, ctrl);
+    let pinched = |shares: &[Wheel]| shares.len() == 1 && shares[0].zoom > 1.0 && shares[0].scroll == Vec2::ZERO;
+    let scrolled = |shares: &[Wheel]| shares.len() == 1 && shares[0].zoom == 1.0 && shares[0].scroll.y > 0.0;
+    for os in [Os::Windows, Os::Linux, Os::Mac] {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let shares = Rc::clone(&seen);
+        let view = Id::new("pinch_view");
+        let mut fixture = Fixture::new(move |ui| {
+            register(ui.ctx(), WheelTaker::new(view, Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))).vertical(true).zoom(true));
+            shares.borrow_mut().extend(take_share(ui.ctx(), view));
+        });
+        fixture.os(os);
+        // As PhotoCraft sets egui: no wheel modifier is egui's own zoom, so a Ctrl+wheel reaches the view as a scroll.
+        fixture.ctx().options_mut(|options| options.input_options.zoom_modifier = Modifiers::NONE);
+        fixture.settle();
+        fixture.frame(vec![pointer::moved(Pos2::new(200.0, 150.0))]);
+        seen.borrow_mut().clear();
+        let step = |fixture: &mut Fixture, events: Vec<Event>| -> Vec<Wheel> {
+            fixture.frame(events);
+            std::mem::take(&mut *seen.borrow_mut())
+        };
+
+        // A touchpad driver's pinch step: a fractional Ctrl+wheel line.
+        let fractional = step(&mut fixture, vec![ctrl_lines(0.4)]);
+        if os == Os::Mac {
+            assert!(scrolled(&fractional), "{os:?}: macOS reports its pinch itself, a Ctrl+wheel stays a scroll: {fractional:?}");
+        } else {
+            assert!(pinched(&fractional), "{os:?}: a fractional Ctrl+wheel is a pinch step: {fractional:?}");
+        }
+        let rounded = step(&mut fixture, vec![ctrl_lines(1.0)]);
+        if os == Os::Mac {
+            assert!(scrolled(&rounded), "{os:?}: {rounded:?}");
+        } else {
+            assert!(pinched(&rounded), "{os:?}: a whole notch right after a pinch step is the pinch's: {rounded:?}");
+        }
+        fixture.advance(0.5);
+        let notch = step(&mut fixture, vec![ctrl_lines(1.0)]);
+        assert!(scrolled(&notch), "{os:?}: a whole notch after the pinch paused is a wheel notch: {notch:?}");
+
+        // A native pinch ends the run of folded steps.
+        step(&mut fixture, vec![ctrl_lines(0.4)]);
+        let native = step(&mut fixture, vec![Event::Zoom(1.1)]);
+        assert!(native.len() == 1 && (native[0].zoom - 1.1).abs() < 1e-4, "{os:?}: a native pinch reaches the view as sent: {native:?}");
+        let after_native = step(&mut fixture, vec![ctrl_lines(1.0)]);
+        assert!(scrolled(&after_native), "{os:?}: a whole notch after a native pinch is a wheel notch: {after_native:?}");
+    }
+}
+
+#[trial]
+fn a_wheel_gesture_ends_for_a_value_control_in_any_wheel_scope_and_not_for_a_scroll_region_or_the_canvas() {
+    let panel = Id::new("gesture_panel");
+    let slider = Id::new("gesture_slider");
+    let canvas = Id::new("gesture_canvas");
+    let seen: RefCell<Vec<(Id, Wheel)>> = RefCell::new(Vec::new());
+    let mut show_frame = |ui: &mut egui::Ui| {
+        let ctx = ui.ctx();
+        register(ctx, WheelTaker::new(panel, Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))).vertical(true).scrolls(true));
+        // A slider in a free wheel scope: neither gated nor a field, a value control all the same.
+        register(ctx, WheelTaker::new(slider, Rect::from_min_size(Pos2::new(50.0, 50.0), Vec2::new(100.0, 20.0))).vertical(true).value(true));
+        register(ctx, WheelTaker::new(canvas, Rect::from_min_size(Pos2::new(200.0, 200.0), Vec2::splat(180.0))).vertical(true).zoom(true));
+        for id in [panel, slider, canvas] {
+            if let Some(share) = take_share(ctx, id) {
+                seen.borrow_mut().push((id, share));
+            }
+        }
+    };
+    let ends = |shares: &[(Id, Wheel)]| -> Vec<Id> {
+        let ends: Vec<&(Id, Wheel)> = shares.iter().filter(|(_, share)| share.phase == WheelPhase::End).collect();
+        assert!(ends.iter().all(|(_, share)| share.scroll == Vec2::ZERO), "an end share moves nothing: {ends:?}");
+        ends.into_iter().map(|(id, _)| *id).collect()
+    };
+    // Lets the gap pass with idle frames and returns every share seen since the last call.
+    let close = |frames: &mut Frames, show_frame: &mut dyn FnMut(&mut egui::Ui)| -> Vec<(Id, Wheel)> {
+        frames.advance(GESTURE_GAP);
+        frames.idle(2, &mut *show_frame);
+        std::mem::take(&mut *seen.borrow_mut())
+    };
+    let (on_slider, on_panel, on_canvas) = (Pos2::new(70.0, 60.0), Pos2::new(300.0, 100.0), Pos2::new(290.0, 290.0));
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show_frame);
+    seen.borrow_mut().clear();
+
+    // The gap ends a gesture of a value control: one end share, and a pass is asked for when the gap ends.
+    frames.frame(vec![pointer::moved(on_slider)], &mut show_frame);
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    let turned = frames.ctx.input(|input| input.time);
+    // egui smooths a large wheel step over a few frames and asks for a pass at once until it is spent; the gap's wake
+    // is the delay once egui has settled.
+    let mut delay = Some(0.0);
+    for _ in 0..60 {
+        frames.idle(1, &mut show_frame);
+        delay = frames.repaint_delay().map(|delay| delay.as_secs_f64());
+        if delay != Some(0.0) {
+            break;
+        }
+    }
+    let left = GESTURE_GAP - (frames.ctx.input(|input| input.time) - turned);
+    assert!(
+        left > 0.0 && delay.is_some_and(|delay| (delay - left).abs() < 0.02),
+        "a running gesture of a value control asks for a pass when its gap ends: {delay:?} against {left}"
+    );
+    let shares = close(&mut frames, &mut show_frame);
+    assert!(shares.first().is_some_and(|(id, share)| *id == slider && share.phase == WheelPhase::Move), "the slider took the wheel: {shares:?}");
+    assert_eq!(ends(&shares), [slider], "the gap ends the slider's gesture once");
+
+    // A press ends it at once.
+    frames.frame(vec![pointer::moved(on_slider)], &mut show_frame);
+    frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+    seen.borrow_mut().clear();
+    frames.frame(vec![pointer::press(on_panel)], &mut show_frame);
+    let pressed = std::mem::take(&mut *seen.borrow_mut());
+    assert_eq!(ends(&pressed), [slider], "a press ends the slider's gesture in its pass");
+    frames.frame(vec![pointer::release(on_panel)], &mut show_frame);
+    assert!(ends(&close(&mut frames, &mut show_frame)).is_empty(), "an ended gesture ends once");
+
+    // A scroll region and the canvas hear no end of their own.
+    for at in [on_panel, on_canvas] {
+        frames.frame(vec![pointer::moved(at)], &mut show_frame);
+        frames.frame(vec![pointer::wheel(-30.0)], &mut show_frame);
+        let shares = close(&mut frames, &mut show_frame);
+        assert!(!shares.is_empty(), "the wheel at {at:?} reached its taker");
+        assert!(ends(&shares).is_empty(), "no end share for the taker at {at:?}: {shares:?}");
+    }
+
+    // A device that reports phases ends the gesture itself; its end reaches the owner as sent, and only once.
+    for (at, owner) in [(on_slider, slider), (on_panel, panel)] {
+        frames.frame(vec![pointer::moved(at)], &mut show_frame);
+        for (dy, phase) in [(-10.0, TouchPhase::Start), (-10.0, TouchPhase::Move), (0.0, TouchPhase::End)] {
+            frames.frame(vec![wheel_event(MouseWheelUnit::Point, Vec2::new(0.0, dy), phase, Modifiers::NONE)], &mut show_frame);
+        }
+        assert_eq!(ends(&close(&mut frames, &mut show_frame)), [owner], "the device's end reaches the gesture's owner once");
+    }
 }

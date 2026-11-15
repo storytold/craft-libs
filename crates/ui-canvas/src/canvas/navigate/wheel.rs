@@ -104,9 +104,19 @@ impl WheelNavigation {
 
     /// The degrees `input` adds to the view's rotation: the trackpad's with `trackpad_rotate`, the fingers' twist with
     /// `touch_gestures`; `None` for none.
+    /// The trackpad's rotation wins when the trackpad and the fingers both report one.
     pub fn rotation(input: &WheelInput, options: &NavigationOptions) -> Option<f64> {
-        let _ = (input, options);
-        todo!("cw.C30")
+        if !options.trackpad_rotate {
+            return None;
+        }
+        let radians = if input.rotation != 0.0 {
+            input.rotation
+        } else if options.touch_gestures {
+            input.touch_rotation
+        } else {
+            return None;
+        };
+        (radians.is_finite() && radians != 0.0).then(|| f64::from(radians).to_degrees())
     }
 
     /// Whether `mods` make the Alt zoom gesture on `os`: Alt, with the Control key allowed, which is `ctrl` on macOS
@@ -118,10 +128,12 @@ impl WheelNavigation {
     /// The view change for one pass of `input` under `options`, if any.
     pub fn classify(&mut self, input: WheelInput, options: &NavigationOptions) -> Option<WheelAction> {
         let notch = if input.notch.is_finite() && input.notch > 0.0 { input.notch } else { 1.0 };
-        let pinch = input.zoom.is_finite() && input.zoom > 0.0 && input.zoom != 1.0;
+        // The fingers' pinch counts only with Enable Gestures; the trackpad's whatever it says.
+        let factor = input.zoom * if options.touch_gestures { input.touch_zoom } else { 1.0 };
+        let pinch = factor.is_finite() && factor > 0.0 && factor != 1.0;
         if options.pinch_zooms && pinch {
             self.residual = 0.0;
-            return Some(WheelAction::Zoom(f64::from(input.zoom)));
+            return Some(WheelAction::Zoom(f64::from(factor)));
         }
         let scroll_finite = input.scroll.x.is_finite() && input.scroll.y.is_finite();
         let plain = !input.mods.cmd && !input.mods.ctrl;

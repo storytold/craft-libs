@@ -3,7 +3,7 @@
 use crate::runtime::egui::{input, plugin};
 use crate::runtime::env::{SystemReader, system};
 use crate::runtime::pen::PenSource;
-use crate::runtime::{commands, frame, windows};
+use crate::runtime::{commands, frame, pen, windows};
 use crate::style::{DuplicateStyle, StyleReplacements};
 use craft_host::target::ShellInfo;
 use craft_window::policy::Decision;
@@ -149,18 +149,25 @@ impl std::fmt::Display for InstallError {
 
 impl std::error::Error for InstallError {}
 
-/// Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: interface scale is a command, and
-/// quit goes through the close guard. A second call on the same context is an error.
+/// Adds the runtime plugin to `ctx` and sets the egui options the runtime owns: interface scale is a command, quit goes
+/// through the close guard, and the wheel's modifiers are the spec's. A second call on the same context is an error,
+/// checked first so an app that installs again (a language change) gets that answer; a call inside a pass is one too.
 pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
     if plugin::is_registered(ctx) {
         return Err(InstallError::AlreadyInstalled);
+    }
+    // The hooks of a pass that is running would see a runtime that was never there at its begin.
+    if frame::in_pass(ctx) {
+        return Err(InstallError::DuringPass);
     }
     let looks = spec.looks.freeze().map_err(InstallError::DuplicateStyle)?;
     commands::install(ctx).map_err(InstallError::Commands)?;
     looks.store(ctx);
     input::clear_shortcuts(ctx);
+    input::set_wheel_modifiers(ctx, spec.wheel.zoom, spec.wheel.sideways);
     system::install(ctx, spec.system);
-    windows::install(ctx, spec.shell_info, spec.window_system, spec.placement, spec.frame, spec.app_id.clone());
+    pen::install(ctx, spec.pen);
+    windows::install(ctx, spec.shell_info, spec.window_system, spec.placement, spec.frame, spec.app_id);
     frame::set_frame_layers(ctx, spec.frame_layers);
     frame::seed_hooked_passes(ctx);
     plugin::register(ctx);

@@ -82,7 +82,8 @@ fn focus_list(frames: &mut Frames, seen: &Seen, show: &mut impl FnMut(&mut Ui)) 
     frames.idle(2, &mut *show);
 }
 
-/// A list inside a scrolling panel takes the wheel while it can scroll and hands it to the panel at its end.
+/// A list inside a scrolling panel takes the wheel while it can scroll and hands a gesture that starts at its end to the
+/// panel.
 #[trial]
 fn a_list_at_its_end_hands_the_wheel_to_the_enclosing_panel() {
     use craft_ui::contract::{ContainerProps, Scroll, ShowContainer as _};
@@ -116,6 +117,8 @@ fn a_list_at_its_end_hands_the_wheel_to_the_enclosing_panel() {
         frames.frame(vec![pointer::wheel(-100_000.0)], &mut show);
     }
     assert_eq!(seen.range().end, ROWS, "the list reached its last row");
+    // A running gesture keeps the list; the next one starts at the list's end.
+    frames.advance(craft_behavior::GESTURE_GAP);
     frames.frame(vec![pointer::wheel(-WHEEL)], &mut show);
     assert!(top0 - first_top.get() > SAME, "at its end the list hands the wheel to the panel: {top0} -> {}", first_top.get());
 }

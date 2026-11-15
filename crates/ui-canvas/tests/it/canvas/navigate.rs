@@ -1,10 +1,11 @@
 //! Navigation rules (wheel, page keys, flick, autoscroll), the zoom motion and the momentary tool order.
 
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CanvasView, Wheel, WheelPhase, WheelUnit};
+use craft_behavior::{Axis, CanvasView, GESTURE_GAP, MotionMode, Wheel, WheelPhase, WheelUnit};
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{
-    Canvas, Guide, GuideKey, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide, ViewCommands, WheelNavigation,
+    Autoscroll, Canvas, CanvasSpace, Guide, GuideKey, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide, ViewCommands,
+    WheelNavigation,
 };
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
@@ -13,8 +14,8 @@ use craft_ui::runtime::commands::{self, CommandRef, FirePhase, FireSource};
 use craft_ui::runtime::frame;
 use craft_ui::testing::{Fixture, pointer, trial};
 use craft_ui::text::NumberField;
-use egui::{Key, Modifiers, Vec2};
-use std::cell::Cell;
+use egui::{Key, Modifiers, Pos2, TouchPhase, Vec2};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[trial]
@@ -350,4 +351,307 @@ fn a_canvas_in_a_sizing_pass_of_its_parent_shows_nothing_and_reports_an_idle_pre
     });
     fixture.settle();
     assert_eq!(idle.get(), Some(true), "the canvas ran and its press is idle");
+}
+
+/// Navigation options with overscroll on, so no edge clamp moves the view the trials measure.
+fn navigation(pinch_zooms: bool, touch_gestures: bool, trackpad_rotate: bool) -> NavigationOptions {
+    let mut options = NavigationOptions::default();
+    options.pinch_zooms = pinch_zooms;
+    options.touch_gestures = touch_gestures;
+    options.trackpad_rotate = trackpad_rotate;
+    options.overscroll = true;
+    options
+}
+
+/// Two fingers of one touch screen in `phase`, at `center` ∓ `half`.
+fn fingers(phase: TouchPhase, center: Pos2, half: Vec2) -> Vec<egui::Event> {
+    [(0, center - half), (1, center + half)]
+        .map(|(id, pos)| egui::Event::Touch { device_id: egui::TouchDeviceId(0), id: egui::TouchId(id), phase, pos, force: None })
+        .into()
+}
+
+/// The zoom ratio and the rotation of the view a canvas shows after the frames of `input` over its middle, under
+/// `options`, from a view turned `rotation` degrees and mirrored when `flip`.
+fn gestured(options: NavigationOptions, rotation: f64, flip: bool, input: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>>) -> (f64, f64) {
+    // A view with a rect is shown as given: no first fit.
+    let start = CanvasView::new(egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0)), Point::new(2000.0, 2000.0), 1.0);
+    let view = Rc::new(Cell::new(start.rotation(rotation).flip_x(flip)));
+    let shown = Rc::clone(&view);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut given = shown.get();
+        given.rect = ui.available_rect_before_wrap();
+        let canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(options).view(given).show(ui, |_, _| {});
+        shown.set(canvas.output.view.unwrap_or(given));
+    });
+    fixture.settle();
+    let middle = view.get().rect.center();
+    fixture.frame(vec![pointer::moved(middle)]);
+    let before = view.get();
+    for events in input(middle) {
+        fixture.frame(events);
+    }
+    let after = view.get();
+    (after.zoom / before.zoom, after.rotation)
+}
+
+#[trial]
+fn pinch_and_rotation_follow_the_gesture_options_and_the_flip() {
+    const TURN: f32 = 0.1;
+    let degrees = f64::from(TURN).to_degrees();
+    let pinch: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|_| vec![vec![egui::Event::Zoom(1.2)]];
+    let rotate: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|_| vec![vec![egui::Event::Rotate(TURN)]];
+    let spread: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|at| {
+        vec![fingers(TouchPhase::Start, at, Vec2::new(50.0, 0.0)), fingers(TouchPhase::Move, at, Vec2::new(75.0, 0.0)), fingers(TouchPhase::End, at, Vec2::new(75.0, 0.0))]
+    };
+    let twist: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|at| {
+        let turned = Vec2::new(TURN.cos(), TURN.sin()) * 50.0;
+        vec![fingers(TouchPhase::Start, at, Vec2::new(50.0, 0.0)), fingers(TouchPhase::Move, at, turned), fingers(TouchPhase::End, at, turned)]
+    };
+    // (case, options (pinch, gestures, rotate), input, zooms, degrees turned)
+    let cases: [(&str, NavigationOptions, &dyn Fn(Pos2) -> Vec<Vec<egui::Event>>, bool, f64); 12] = [
+        ("the trackpad's pinch", navigation(true, true, false), pinch, true, 0.0),
+        ("the fingers' pinch", navigation(true, true, false), spread, true, 0.0),
+        ("the trackpad's pinch without Zoom with Trackpad Pinch", navigation(false, true, false), pinch, false, 0.0),
+        ("the fingers' pinch without Zoom with Trackpad Pinch", navigation(false, true, false), spread, false, 0.0),
+        ("the fingers' pinch without Enable Gestures", navigation(true, false, false), spread, false, 0.0),
+        ("the trackpad's pinch without Enable Gestures", navigation(true, false, false), pinch, true, 0.0),
+        ("the trackpad's rotation without Rotate View with Trackpad", navigation(true, true, false), rotate, false, 0.0),
+        ("the trackpad's rotation", navigation(true, true, true), rotate, false, degrees),
+        ("the trackpad's rotation without Enable Gestures", navigation(true, false, true), rotate, false, degrees),
+        ("the fingers' twist", navigation(true, true, true), twist, false, degrees),
+        ("the fingers' twist without Enable Gestures", navigation(true, false, true), twist, false, 0.0),
+        ("the fingers' twist without Rotate View with Trackpad", navigation(true, true, false), twist, false, 0.0),
+    ];
+    for (case, options, input, zooms, turned) in cases {
+        let (ratio, rotation) = gestured(options, 0.0, false, input);
+        if zooms {
+            assert!(ratio > 1.01, "{case} zooms: {ratio}");
+        } else {
+            assert!((ratio - 1.0).abs() < 1e-4, "{case} does not zoom: {ratio}");
+        }
+        assert!((rotation - turned).abs() < 0.05, "{case} turns the view {turned}°: {rotation}");
+    }
+
+    let (_, flipped) = gestured(navigation(true, true, true), 0.0, true, rotate);
+    assert!((flipped + degrees).abs() < 0.05, "a mirrored view turns the other way: {flipped}");
+
+    let five: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|_| vec![vec![egui::Event::Rotate(5.0_f32.to_radians())]];
+    let (_, wrapped) = gestured(navigation(true, true, true), 178.0, false, five);
+    assert!(wrapped > -180.0 && wrapped <= 180.0 && (wrapped + 177.0).abs() < 0.05, "178° turned 5° more is -177°: {wrapped}");
+}
+
+#[trial]
+fn fractional_shift_alt_scrolls_add_up_to_whole_rungs_per_canvas() {
+    let views = Rc::new([
+        Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(500.0, 500.0), 1.0)),
+        Cell::new(CanvasView::new(egui::Rect::ZERO, Point::new(500.0, 500.0), 1.0)),
+    ]);
+    let shown = Rc::clone(&views);
+    let mut fixture = Fixture::new(move |ui| {
+        for (left, label, view) in [(0.0_f32, "Left", &shown[0]), (200.0, "Right", &shown[1])] {
+            craft_ui::testing::layout::in_region(ui, egui::Rect::from_min_size(Pos2::new(left, 0.0), Vec2::new(200.0, 300.0)), |ui| {
+                let mut given = view.get();
+                given.rect = ui.available_rect_before_wrap();
+                let canvas = Canvas::new(label).document(Size::new(1000.0, 1000.0)).view(given).show(ui, |_, _| {});
+                view.set(canvas.output.view.unwrap_or(given));
+            });
+        }
+    });
+    fixture.settle();
+    let shift_alt = Modifiers { shift: true, alt: true, ..Modifiers::NONE };
+    // A trackpad's part of a wheel line with Shift and Alt over one canvas: the zoom ratio it made.
+    let scroll = |fixture: &mut Fixture, view: &Cell<CanvasView>| {
+        let before = view.get().zoom;
+        wheel_line(fixture, view, 0.4, shift_alt);
+        view.get().zoom / before
+    };
+    let (left, right) = (&views[0], &views[1]);
+    assert_eq!(scroll(&mut fixture, left), 1.0, "0.4 of a notch steps nothing");
+    assert_eq!(scroll(&mut fixture, left), 1.0, "0.8 of a notch steps nothing");
+    // A new gesture, so the right canvas takes the wheel under the pointer.
+    fixture.advance(GESTURE_GAP);
+    assert_eq!(scroll(&mut fixture, right), 1.0, "the other canvas keeps its own remainder");
+    fixture.advance(GESTURE_GAP);
+    assert!(scroll(&mut fixture, left) > 1.0, "1.2 notches step one rung");
+    assert_eq!(scroll(&mut fixture, left), 1.0, "the step keeps what was left over: 0.6");
+    fixture.advance(GESTURE_GAP);
+    assert_eq!(scroll(&mut fixture, right), 1.0, "0.8 on the other canvas");
+    assert!(scroll(&mut fixture, right) > 1.0, "1.2 on the other canvas steps it");
+}
+
+/// What the zoom-ease trial's app gives its canvas each pass, and the space the canvas showed.
+struct EaseApp {
+    view: CanvasView,
+    ease: Option<(CanvasView, Option<(Point, Pos2)>)>,
+    jumped: bool,
+    options: NavigationOptions,
+    space: Option<CanvasSpace>,
+}
+
+impl EaseApp {
+    /// The app's zoom step by `factor` about document point `doc`, which stays where it is on screen, eased from the
+    /// view it showed. Returns where `doc` stays.
+    fn zoom_step(app: &RefCell<EaseApp>, doc: Point, factor: f64) -> Pos2 {
+        let mut app = app.borrow_mut();
+        let before = app.view;
+        let screen = before.to_screen(doc);
+        let mut next = before;
+        next.zoom *= factor;
+        next.center = doc - next.unmap_vec(screen - next.rect.center());
+        app.view = next;
+        app.ease = Some((before, Some((doc, screen))));
+        screen
+    }
+
+    fn space(app: &RefCell<EaseApp>) -> CanvasSpace {
+        app.borrow().space.expect("a canvas given a view publishes its space")
+    }
+}
+
+/// The space shows its target: no ease runs and the view on screen is the target, up to the pixel alignment.
+fn at_target(space: &CanvasSpace) -> bool {
+    let (view, target) = (space.view, space.target());
+    !space.easing() && (view.zoom - target.zoom).abs() < 1e-9 && (view.center - target.center).hypot() < 1.0
+}
+
+#[trial]
+fn a_zoom_ease_keeps_its_anchor_snaps_when_animation_turns_off_and_stops_on_a_wheel_or_pan() {
+    let app = Rc::new(RefCell::new(EaseApp {
+        view: CanvasView::new(egui::Rect::ZERO, Point::new(2000.0, 2000.0), 1.0),
+        ease: None,
+        jumped: false,
+        options: navigation(true, true, false),
+        space: None,
+    }));
+    let shared = Rc::clone(&app);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut app = shared.borrow_mut();
+        let mut given = app.view;
+        given.rect = ui.available_rect_before_wrap();
+        let mut canvas = Canvas::new("Document").document(Size::new(4000.0, 4000.0)).navigation(app.options).view(given);
+        if let Some((from, anchor)) = app.ease.take() {
+            canvas = canvas.ease_from(from, anchor);
+        }
+        if std::mem::take(&mut app.jumped) {
+            canvas = canvas.jumped();
+        }
+        let shown = canvas.show(ui, |_, _| {});
+        app.view = shown.output.view.unwrap_or(given);
+        app.space = shown.output.space;
+    });
+    fixture.motion(MotionMode::Full);
+    fixture.settle();
+    let canvas = fixture.by_role(Role::CANVAS)[0];
+    // The canvas holds focus, so a menu row's view command reaches it.
+    fixture.click(&canvas);
+    let at = app.borrow().view.rect.center() + Vec2::new(40.0, 30.0);
+    fixture.frame(vec![pointer::moved(at)]);
+    let doc = app.borrow().view.to_doc(app.borrow().view.rect.center() + Vec2::new(-120.0, 80.0));
+
+    // An anchored step keeps its document point under its screen point all the way.
+    let screen = EaseApp::zoom_step(&app, doc, 2.0);
+    let mut eased = 0;
+    loop {
+        fixture.frame(vec![]);
+        let space = EaseApp::space(&app);
+        assert!(space.view.to_screen(doc).distance(screen) < 0.5, "frame {eased} of the ease: {:?}", space.view);
+        if !space.easing() {
+            break;
+        }
+        eased += 1;
+        assert!(eased < 120, "the ease ends");
+    }
+    assert!(eased > 1, "the step eased over several frames");
+    assert!(at_target(&EaseApp::space(&app)), "the ease ends at the target");
+
+    // With Animated Zoom off the step jumps.
+    app.borrow_mut().options.animated_zoom = false;
+    EaseApp::zoom_step(&app, doc, 0.5);
+    fixture.frame(vec![]);
+    assert!(at_target(&EaseApp::space(&app)), "with Animated Zoom off the step jumps");
+    app.borrow_mut().options.animated_zoom = true;
+
+    EaseApp::zoom_step(&app, doc, 2.0);
+    fixture.frame(vec![]);
+    assert!(EaseApp::space(&app).easing(), "the step eases");
+    app.borrow_mut().options.animated_zoom = false;
+    fixture.frame(vec![]);
+    assert!(at_target(&EaseApp::space(&app)), "turning Animated Zoom off mid-ease shows the target at once");
+    app.borrow_mut().options.animated_zoom = true;
+    fixture.frame(vec![]);
+    assert!(at_target(&EaseApp::space(&app)), "turning it back on does not resume the ease");
+
+    // A wheel, a pinch and a pan take over from an ease; a Zoom tool's scrub reaches the canvas as the tool host's
+    // stop, as the app's own jump does.
+    let wheel = |dy: f32, modifiers: Modifiers| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, dy),
+        phase: egui::TouchPhase::Move,
+        modifiers,
+        source: egui::MouseWheelSource::Wheel,
+    };
+    let interruptions = [
+        ("an Alt+wheel zoom", vec![wheel(1.0, Modifiers::ALT)], false),
+        ("a trackpad pinch", vec![egui::Event::Zoom(1.2)], false),
+        ("a wheel pan", vec![wheel(-1.0, Modifiers::NONE)], false),
+        ("the app's own jump", vec![], true),
+    ];
+    for (factor, (what, events, jumped)) in [0.5, 2.0, 0.5, 2.0].into_iter().zip(interruptions) {
+        EaseApp::zoom_step(&app, doc, factor);
+        fixture.frame(vec![]);
+        assert!(EaseApp::space(&app).easing(), "{what}: the step eases");
+        app.borrow_mut().jumped = jumped;
+        fixture.frame(events);
+        assert!(at_target(&EaseApp::space(&app)), "{what} stops the ease at the view it leaves");
+    }
+
+    // A view command retargets a running ease from the view in between, about the centre, without the old anchor.
+    let screen = EaseApp::zoom_step(&app, doc, 0.5);
+    fixture.frame(vec![]);
+    let before = EaseApp::space(&app);
+    assert!(before.easing(), "the step eases");
+    assert!(commands::fire(fixture.ctx(), ViewCommands::ZoomIn, FireSource::Menu), "a menu row fires the canvas's Zoom In");
+    fixture.frame(vec![]);
+    let retargeted = EaseApp::space(&app);
+    assert!(retargeted.easing(), "the command eases on");
+    assert!(retargeted.target().zoom > before.target().zoom, "toward the command's zoom");
+    assert!((retargeted.view.center - retargeted.target().center).hypot() < 1e-6, "about the centre the command keeps");
+    assert!(retargeted.view.to_screen(doc).distance(screen) > 1.0, "the old anchor is dropped");
+}
+
+#[trial]
+fn autoscroll_stops_at_the_shown_image_edge() {
+    let rect = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0));
+    let square = Size::new(1000.0, 1000.0);
+
+    // At 2x the image's right edge is 40 points past the canvas's: a step of 100 moves 40 (20 document units).
+    let mut zoomed = CanvasView::new(rect, Point::new(880.0, 500.0), 2.0);
+    let moved = Autoscroll::scroll(&mut zoomed, Vec2::new(100.0, 0.0), square);
+    assert!(moved.is_some_and(|d| (d.x - 20.0).abs() < 1e-6 && d.y == 0.0), "{moved:?}");
+    assert!((zoomed.center.x - 900.0).abs() < 1e-6, "the image edge meets the canvas edge: {:?}", zoomed.center);
+    assert_eq!(Autoscroll::scroll(&mut zoomed, Vec2::new(100.0, 0.0), square), None, "at the edge it stops");
+
+    let mut fits = CanvasView::new(rect, Point::new(50.0, 50.0), 1.0);
+    assert_eq!(Autoscroll::scroll(&mut fits, Vec2::new(100.0, 100.0), Size::new(100.0, 100.0)), None, "an image that fits never scrolls");
+
+    // The image's right edge is already 180 points inside the canvas's.
+    let mut past = CanvasView::new(rect, Point::new(990.0, 500.0), 2.0);
+    assert_eq!(Autoscroll::scroll(&mut past, Vec2::new(50.0, 0.0), square), None, "a view past a limit is not pulled back");
+    assert_eq!(past.center, Point::new(990.0, 500.0));
+
+    // A quarter turn at 2x with aspect 2: the document's x runs down the screen at 4 points a unit, its bottom edge
+    // 40 points below the canvas's.
+    let mut turned = CanvasView::new(rect, Point::new(952.5, 250.0), 2.0).aspect(2.0).rotation(90.0);
+    let tall = Size::new(1000.0, 500.0);
+    let moved = Autoscroll::scroll(&mut turned, Vec2::new(0.0, 100.0), tall);
+    assert!(moved.is_some_and(|d| (d.x - 10.0).abs() < 1e-6 && d.y.abs() < 1e-6), "the displayed edge stops it: {moved:?}");
+    assert_eq!(Autoscroll::scroll(&mut turned, Vec2::new(0.0, 100.0), tall), None, "at the displayed edge it stops");
+
+    // An oblique turn: the image is wider than the canvas and fits its height.
+    let mut oblique = CanvasView::new(rect, Point::new(1000.0, 10.0), 0.5).rotation(10.0);
+    let wide = Size::new(2000.0, 20.0);
+    let centre = oblique.center;
+    assert!(Autoscroll::scroll(&mut oblique, Vec2::new(100.0, 50.0), wide).is_some(), "the wide axis scrolls");
+    let shift = oblique.to_screen(centre) - rect.center();
+    assert!((shift.x + 100.0).abs() < 1e-3 && shift.y.abs() < 1e-3, "along the screen's x, and the fitting axis stays: {shift:?}");
 }
