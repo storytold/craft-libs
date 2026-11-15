@@ -21,7 +21,7 @@ const DPX_HEADER: usize = 2048;
 pub fn encode_rgba8_dpx10(rgba: &[u8], w: u32, h: u32, creator: &str) -> std::result::Result<Vec<u8>, Rgba8EncodeError> {
     let n = checked_len(rgba, w, h)?;
     // one 32-bit word per pixel; `n` is already `w * h * 4`
-    let size = n.checked_add(DPX_HEADER).ok_or_else(|| Rgba8EncodeError::FrameSize)?;
+    let size = n.checked_add(DPX_HEADER).ok_or(Rgba8EncodeError::FrameSize)?;
     let file_size = u32::try_from(size).map_err(|_| Rgba8EncodeError::TooLarge)?;
     // SMPTE ST 268: undefined numeric fields are all ones, undefined text fields are NUL
     let mut hd = vec![0xFF_u8; DPX_HEADER];
