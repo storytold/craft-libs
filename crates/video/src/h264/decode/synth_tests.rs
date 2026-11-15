@@ -791,7 +791,7 @@ fn output_queue_counts_against_the_memory_budget() {
 /// count the budget uses for the incoming SPS's pictures.
 #[test]
 fn a_held_frame_is_charged_at_its_own_size() {
-    let f = crate::h264::decode::picture::Frame::new(0, 0, 2, 3);
+    let f = crate::h264::decode::picture::Frame::new(0, 0, 2, 3, crate::h264::decode::picture::PicFormat::P420_8);
     assert_eq!(f.bytes(), (2 * 3 * 256 + 2 * 2 * 3 * 64) as u64);
 }
 

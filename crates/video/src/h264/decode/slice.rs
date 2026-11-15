@@ -330,7 +330,9 @@ impl SliceHeader {
         }
         let slice_qp_delta = r.read_se()?;
         let Some(qp) = pps.pic_init_qp.checked_add(slice_qp_delta) else { return crate::h264::decode::error::invalid("slice QP out of range") };
-        ensure!((0..=51).contains(&qp), "slice QP {qp} out of range");
+        // SliceQPY in -QpBdOffsetY..=51 (7.4.3)
+        let qp_min = -6 * sps.bit_depth_luma.saturating_sub(8).min(8) as i32;
+        ensure!((qp_min..=51).contains(&qp), "slice QP {qp} out of range");
         let mut sp_for_switch = false;
         let mut slice_qs_delta = 0;
         if matches!(slice_type, SliceType::Sp | SliceType::Si) {
