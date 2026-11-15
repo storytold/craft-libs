@@ -36,7 +36,20 @@ pub fn signed_content(cms: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     let signed = children(signed.value)?;
-    let encap = signed.get(2).filter(|e| e.tag == 0x30)?;
+    let [version, digests, encap, tail @ ..] = signed.as_slice() else { return None };
+    if version.tag != 0x02 || !matches!(version.value, [1 | 3 | 4 | 5]) || digests.tag != 0x31 || encap.tag != 0x30 {
+        return None;
+    }
+    if children(digests.value)?.iter().any(|algorithm| algorithm.tag != 0x30) {
+        return None;
+    }
+    // Certificates and revocation lists are optional, but ordered and present at most once.
+    let tail = if tail.first().is_some_and(|field| field.tag == 0xa0) { tail.get(1..)? } else { tail };
+    let tail = if tail.first().is_some_and(|field| field.tag == 0xa1) { tail.get(1..)? } else { tail };
+    let [signers] = tail else { return None };
+    if signers.tag != 0x31 || children(signers.value)?.iter().any(|signer| signer.tag != 0x30) {
+        return None;
+    }
     let encap = children(encap.value)?;
     let [kind, content] = encap.as_slice() else { return None };
     if kind.tag != 0x06 || kind.value != DATA || content.tag != 0xa0 {
@@ -371,6 +384,19 @@ mod tests {
     fn rejects_wrong_cms_container_and_oid_tags() {
         for (outer, signed, oid) in [(0x31, 0x30, 0x06), (0x30, 0x31, 0x06), (0x30, 0x30, 0x04)] {
             assert_eq!(signed_content(&cms(outer, signed, oid, false, false)), None);
+        }
+    }
+
+    #[test]
+    fn rejects_missing_mandatory_signed_data_fields() {
+        let mut encap = tlv(0x06, DATA);
+        encap.extend(tlv(0xa0, &tlv(0x04, b"hello")));
+        for prefix in [vec![0x05, 0, 0x05, 0], vec![0x02, 1, 1, 0x31, 0]] {
+            let mut malformed = prefix;
+            malformed.extend(tlv(0x30, &encap));
+            let mut info = tlv(0x06, SIGNED_DATA);
+            info.extend(tlv(0xa0, &tlv(0x30, &malformed)));
+            assert_eq!(signed_content(&tlv(0x30, &info)), None);
         }
     }
 
