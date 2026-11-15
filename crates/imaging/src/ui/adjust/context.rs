@@ -1,9 +1,13 @@
 //! [`AdjustContext`], what every adjustment editor shares with its host, and the tone channels of
 //! Levels and Curves ([`ToneSpace`], [`ToneChannel`], [`ToneChannels`]).
 
+use std::sync::Arc;
+
+use craft_behavior::{EditEvent, Mixed};
 use craft_theme::Srgba;
-use craft_ui::contract::CommandSet;
+use craft_ui::contract::{Bind, CommandSet};
 use craft_ui::runtime::env::Label;
+use craft_ui::runtime::memory::StageAccess;
 
 use super::AdjustWords;
 use crate::ui::histogram::ChannelColor;
@@ -276,5 +280,27 @@ impl ToneChannelCommands {
             ToneChannelCommands::Channel4 => 3,
             ToneChannelCommands::Channel5 => 4,
         }
+    }
+}
+
+impl ToneChannels {
+    /// The entry `command` picks: its position when the list has it, `None` for a position past the list.
+    pub(super) fn entry_of(&self, command: ToneChannelCommands) -> Option<usize> {
+        (command.index() < self.len()).then_some(command.index())
+    }
+}
+
+/// The shown channel the host keeps in `bind`, when it holds one.
+pub(super) fn read_shown(bind: &mut Option<Bind<'_, usize>>, cx: &mut impl StageAccess) -> Option<usize> {
+    match bind.as_mut()?.reborrow().read(cx)? {
+        Mixed::Same(value) => Some(value),
+        Mixed::Mixed => None,
+    }
+}
+
+/// Stores `after` as the shown channel in `bind` when it differs from `before`; without a bind there is nothing to write.
+pub(super) fn write_shown(bind: &mut Option<Bind<'_, usize>>, cx: &mut impl StageAccess, before: usize, after: usize) {
+    if let (Some(bind), true) = (bind.as_mut(), before != after) {
+        bind.reborrow().write(cx, &EditEvent::set(Mixed::Same(before), after, Arc::from("Channel"), None));
     }
 }

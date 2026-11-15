@@ -18,7 +18,7 @@ use egui::{Rect, Response, Ui, Vec2};
 
 use super::channel::{ChannelRule, ChannelUnit, channel_name};
 use super::compact::Body;
-use super::{Collected, ColorPicker, ColorPickerWords, Pass};
+use super::{Collected, ColorPicker, ColorPickerWords, Pass, PickedColor};
 use crate::ui::AreaMode;
 
 /// A warning the host shows beside the Full picker's compare swatch, as the out-of-gamut and web-colour warnings of
@@ -204,7 +204,7 @@ impl<'a> Body<'a> {
                         Stack::new().show(ui, |ui, _| {
                             for warning in &self.warnings {
                                 if ColorWarningChip::new(warning).show(ui).clicked {
-                                    got.clicks.push(warning.nearest);
+                                    got.clicks.push(PickedColor { color: warning.nearest, model: None });
                                 }
                             }
                         });
@@ -217,13 +217,17 @@ impl<'a> Body<'a> {
 
     /// The compare swatch: the colour being edited over the current one, with their captions; a click on the current
     /// half sets it.
-    fn compare_swatch(&self, ui: &mut Ui, pass: &Pass<'a>, current: Mixed<Srgba>, words: &ColorPickerWords, got: &mut Collected) {
+    fn compare_swatch(&self, ui: &mut Ui, pass: &Pass<'a>, current: Mixed<PickedColor>, words: &ColorPickerWords, got: &mut Collected) {
         let caption = |text: &str| Text::new(text.to_owned()).role(TypeRole::Caption).shade(Shade::Muted);
         Stack::new().show(ui, |ui, _| {
             caption(words.new_caption.as_str()).show(ui);
             Swatch::new(words.new_color.as_str().to_owned(), pass.shows(pass.shown.color)).sizing(Sizing::FillWidth).show(ui);
             let restore = words.restore.as_str().to_owned();
-            if Swatch::new(restore.clone(), current).tooltip(restore).sizing(Sizing::FillWidth).show(ui).clicked
+            let shown = match current {
+                Mixed::Same(current) => Mixed::Same(current.color),
+                Mixed::Mixed => Mixed::Mixed,
+            };
+            if Swatch::new(restore.clone(), shown).tooltip(restore).sizing(Sizing::FillWidth).show(ui).clicked
                 && let Mixed::Same(current) = current
             {
                 got.clicks.push(current);

@@ -7,7 +7,7 @@ use std::rc::Rc;
 use craft_imaging::layer_style::{EffectId, EffectInstance, EffectKind, LayerStyle, LayerStyleDraft, LayerStylePage, StyleParams};
 use craft_imaging::ui::adjust::{BrightnessContrast, BrightnessContrastEditor, HostedAdjustDialog};
 use craft_imaging::ui::layer_style::{HostedLayerStyle, LayerStyleAsk};
-use craft_ui::dialog::{DialogHost, DialogResult};
+use craft_ui::dialog::{DialogHost, DialogResult, StackDialog, dialog_id};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
 
@@ -55,7 +55,7 @@ type Adjust = HostedAdjustDialog<BrightnessContrast, &'static str>;
 fn brightness_contrast() -> Adjust {
     let value = BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false };
     HostedAdjustDialog::new("image.adjustments.brightnessContrast", "Brightness/Contrast", value, |ui, value, cx| {
-        BrightnessContrastEditor::new("Brightness/Contrast", craft_ui::contract::Bind::bound(value)).context(cx.context).show(ui); // P3(dialogs-w6): dl.K45
+        BrightnessContrastEditor::new("Brightness/Contrast", craft_ui::contract::Bind::bound(value)).context(cx.context).show(ui);
         Some("shown")
     })
 }
@@ -74,9 +74,21 @@ fn a_hosted_adjustment_dialog_previews_and_answers_with_its_value() {
     fixture.click(&preview).idle(4);
     assert_eq!(host.borrow().get::<Adjust>().map(Adjust::is_previewing), Some(false), "the Preview box turns preview off");
 
-    if let Some(dialog) = host.borrow_mut().get_mut::<Adjust>() {
-        dialog.value_mut().contrast = 35.0;
+    // The automation path: the value's serde fields, then a refused unknown field.
+    let id = dialog_id("image.adjustments.brightnessContrast");
+    let ctx = fixture.ctx().clone();
+    let set = host.borrow_mut().set_json_field(&ctx, id, "contrast", serde_json::json!(35.0));
+    assert_eq!(set, Ok(()), "the value's field takes a number");
+    let refused = host.borrow_mut().set_json_field(&ctx, id, "noSuchField", serde_json::json!(1));
+    assert!(refused.is_err(), "an unknown field is refused");
+    // The view fields the dialog keeps beside its value take the same path and read back.
+    for (field, value) in [("channel", serde_json::json!(1)), ("picker", serde_json::json!("gray")), ("preview", serde_json::json!(false))] {
+        let set = host.borrow_mut().set_json_field(&ctx, id, field, value.clone());
+        assert_eq!(set, Ok(()), "{field} is a field of the dialog");
+        let read = host.borrow().get::<Adjust>().and_then(|dialog| dialog.json_fields()).map(|fields| fields[field].clone());
+        assert_eq!(read, Some(value), "{field} reads back");
     }
+    fixture.idle(4);
     let ok = fixture.by_label("OK").expect("the OK button");
     fixture.click(&ok).idle(4);
     let contrast = host.borrow_mut().take::<Adjust>().and_then(DialogResult::ok).map(|value| value.contrast);

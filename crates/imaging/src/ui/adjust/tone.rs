@@ -32,7 +32,8 @@ fn pipette_hotspot() -> Vec2 {
 }
 
 /// One of the three point pickers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum TonePicker {
     /// Set Black Point.

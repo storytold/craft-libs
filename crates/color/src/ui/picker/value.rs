@@ -62,6 +62,13 @@ impl PickedColor {
         PickedColor { color: rules.apply(self.color.with_alpha((percent / 100.0) as f32)), model: self.model }
     }
 
+    /// This colour set again (a click on the compare swatch or a warning chip), through the rules. Its values stay
+    /// while the rules leave the colour alone.
+    pub(super) fn through(self, rules: &Rules<'_>) -> PickedColor {
+        let color = rules.apply(self.color);
+        PickedColor { color, model: self.model.filter(|_| color.same_rgb8(self.color)) }
+    }
+
     /// A colour set as such (a sample, a click on a swatch): no model values stay with it.
     pub(super) fn with_color(&self, color: Srgba, rules: &Rules<'_>) -> PickedColor {
         PickedColor { color: rules.apply(color), model: None }

@@ -173,7 +173,7 @@ struct Collected {
     /// The children's edits as edits of the colour shown, in the order they were made.
     edits: EditEvents<PickedColor>,
     /// Colours the compare swatch and the warning chips set.
-    clicks: Vec<Srgba>,
+    clicks: Vec<PickedColor>,
     screen_pick: Option<ScreenPickGesture>,
     model_pick: Option<&'static str>,
     /// The mode the "Field shows" group picked.
@@ -285,9 +285,9 @@ pub struct ColorPicker<'a> {
     #[prop]
     eyedropper_busy: bool,
     /// The Full layout's compare swatch: the colour being edited over this one, the colour the host started from; a
-    /// click on it sets it again.
+    /// click on it sets it again, with the model values it carries.
     #[prop(into)]
-    compare: Option<Mixed<Srgba>>,
+    compare: Option<Mixed<PickedColor>>,
     warnings: Vec<ColorWarning>,
     /// Applied to every colour before it is reported, after Only Web Colors' snap.
     #[prop(func = "Fn(Srgba) -> Srgba")]
@@ -478,9 +478,8 @@ impl<'a> Run<'_, 'a> {
         for edit in got.edits {
             self.land(body, edit);
         }
-        for color in got.clicks {
-            let next = self.latest.with_color(color, &rules);
-            self.set(body, next);
+        for picked in got.clicks {
+            self.set(body, picked.through(&rules));
         }
         if let Some(next) = got.mode_pick.filter(|next| *next != mode) {
             self.write_mode(body, mode, next);

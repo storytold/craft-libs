@@ -48,3 +48,28 @@ fn a_sample_reads_each_corner_run_on_its_own() {
     let Some(points) = curves.curves[0].points() else { panic!("still a point curve") };
     assert_eq!(points[2], [128.0, 210.0], "the chord of the run from the corner at 100, not of the whole curve");
 }
+
+/// A curves point from a sample goes on the shown channel, or with Shift on each of Red, Green and Blue at that
+/// channel's own level, leaving the composite alone.
+#[trial]
+fn a_curves_point_from_a_sample_goes_on_the_shown_channel_or_on_each_colour() {
+    let identity = |_: &[[f32; 2]]| (0..=255).map(|x| x as f32).collect::<Vec<f32>>();
+    let sample = Srgba { r: 0.2, g: 0.6, b: 0.4, a: 1.0 };
+    let xs = |curves: &ToneCurves, channel: usize| -> Vec<f32> {
+        curves.curves[channel].points().map(|points| points.iter().map(|point| point[0]).collect()).unwrap_or_default()
+    };
+
+    let mut curves = ToneCurves::identity(&rgb());
+    let shown = CurvesPanel::add_point_from_sample(&mut curves, &rgb(), 0, sample, true, &identity);
+    assert_eq!(shown, None, "the composite is not one of the three, so no point of it is selected");
+    assert_eq!(xs(&curves, 0), [0.0, 255.0], "the composite keeps its two points");
+    assert_eq!(xs(&curves, 1), [0.0, 51.0, 255.0], "Red takes its own level");
+    assert_eq!(xs(&curves, 2), [0.0, 153.0, 255.0], "Green takes its own level");
+    assert_eq!(xs(&curves, 3), [0.0, 102.0, 255.0], "Blue takes its own level");
+
+    let mut curves = ToneCurves::identity(&rgb());
+    let shown = CurvesPanel::add_point_from_sample(&mut curves, &rgb(), 2, sample, false, &identity);
+    assert_eq!(shown, Some(1), "the point is selected by its index on the curve, not by the channel number");
+    assert_eq!(xs(&curves, 2), [0.0, 153.0, 255.0]);
+    assert_eq!((xs(&curves, 1).len(), xs(&curves, 3).len()), (2, 2), "the other colours stay as they were");
+}

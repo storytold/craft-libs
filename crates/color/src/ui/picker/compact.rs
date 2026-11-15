@@ -2,7 +2,7 @@
 //! screen-pick button). The Full layout is in `full.rs`.
 
 use craft_behavior::Mixed;
-use craft_theme::{ColorModel, Srgba};
+use craft_theme::ColorModel;
 use craft_ui::contract::{Bind, Entry, LabelScheme, Props as _, Show as _, ShowContainer as _};
 use craft_ui::form::FieldGroup;
 use craft_ui::layout_components::Row;
@@ -14,7 +14,7 @@ use egui::Ui;
 
 use super::channel::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
 use super::screen_pick::ScreenPickButton;
-use super::{Collected, ColorPickerLayout, ColorPickerWords, ColorWarning, Pass};
+use super::{Collected, ColorPickerLayout, ColorPickerWords, ColorWarning, Pass, PickedColor};
 use crate::ui::channels::WEB_LEVELS;
 use crate::ui::{AreaMode, ColorArea, ColorStrip};
 
@@ -23,7 +23,7 @@ pub(super) struct Body<'a> {
     pub layout: ColorPickerLayout,
     pub models: Vec<&'a dyn ColorModel>,
     pub warnings: Vec<ColorWarning>,
-    pub compare: Option<Mixed<Srgba>>,
+    pub compare: Option<Mixed<PickedColor>>,
     pub alpha: bool,
     pub dynamic_tracks: bool,
     pub eyedropper: bool,

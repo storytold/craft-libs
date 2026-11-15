@@ -1,8 +1,8 @@
 //! [`HostedAdjustDialog`]: an Image › Adjustments dialog on the dialog host, around any adjustment editor.
 
 use craft_behavior::{GestureId, Value};
-use craft_ui::contract::Bind;
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::contract::{Bind, Sampler as _};
+use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
 use craft_ui::patterns::form_dialogs::FormDialog;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::memory::SaveKey;
@@ -45,6 +45,25 @@ pub struct AdjustDialogCx<'a> {
     pub edit: Option<(EditPhase, GestureId)>,
 }
 
+/// The clipping display as automation names it: `"shadows"`, `"highlights"` or null (`LevelsClip` has no serde).
+fn clipping_json(clip: Option<LevelsClip>) -> serde_json::Value {
+    match clip {
+        Some(LevelsClip::Shadows) => "shadows".into(),
+        Some(LevelsClip::Highlights) => "highlights".into(),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// The clipping display `json` names; the outer `None` when it names none of the three.
+fn clipping_from_json(json: &serde_json::Value) -> Option<Option<LevelsClip>> {
+    match json {
+        serde_json::Value::Null => Some(None),
+        serde_json::Value::String(name) if name == "shadows" => Some(Some(LevelsClip::Shadows)),
+        serde_json::Value::String(name) if name == "highlights" => Some(Some(LevelsClip::Highlights)),
+        _ => None,
+    }
+}
+
 /// Shows the editor over the dialog's value for one pass; `Some` carries what the editor asks of the app this pass.
 type Editor<V, E> = dyn for<'b> Fn(&mut Ui, &mut V, &mut AdjustDialogCx<'b>) -> Option<E> + Send;
 
@@ -56,7 +75,7 @@ type Editor<V, E> = dyn for<'b> Fn(&mut Ui, &mut V, &mut AdjustDialogCx<'b>) -> 
 ///
 /// ```ignore
 /// host.open(HostedAdjustDialog::new("image.adjustments.brightnessContrast", "Brightness/Contrast", value, |ui, value, cx| {
-///     BrightnessContrastEditor::new("Brightness/Contrast", value).context(cx).show(ui);
+///     BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(value)).context(cx.context).show(ui);
 ///     None::<()>
 /// }));
 /// // each pass: preview from host.get::<HostedAdjustDialog<BrightnessContrast>>() when its `preview()` is on.
@@ -241,11 +260,13 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             channel,
             clipping,
             select_point,
+            reset_with,
             ..
         } = self;
+        // The request to select a point is this pass's alone: a rerun of the pass in the frame finds none.
         let (canvas, select_point) = (*canvas, select_point.take());
         let (context, resizable, remember) = (*context, *resizable, remember.clone());
-        let shown = FormDialog::new(title.clone(), Bind::bound(value))
+        let form = FormDialog::new(title.clone(), Bind::bound(value))
             .opened(Bind::bound(open))
             .preview(Some(Bind::bound(&mut *preview)))
             .shaped(move |dialog| {
@@ -254,12 +275,19 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
                     Some(key) => dialog.remember(key),
                     None => dialog,
                 }
-            })
-            .show(ui, |ui, _, value| {
-                let mut cx = AdjustDialogCx { context, canvas, picker, channel, select_point, clipping, edit: None };
-                asks.extend(editor(ui, value, &mut cx));
-                true
             });
+        let form = match reset_with.as_deref() {
+            Some(target) => form.reset_with(target),
+            None => form,
+        };
+        let shown = form.show(ui, |ui, form, value| {
+            if let Some(canvas) = canvas {
+                form.keep_view_open(canvas);
+            }
+            let mut cx = AdjustDialogCx { context, canvas, picker: &mut *picker, channel: &mut *channel, select_point, clipping: &mut *clipping, edit: None };
+            asks.extend(editor(ui, value, &mut cx));
+            true
+        });
         *comparing = shown.comparing;
         #[cfg(feature = "screen-testing")]
         {
@@ -273,23 +301,44 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
         Some(&self.key)
     }
 
-    fn confirm(&mut self, ctx: &Context) -> Option<V> {
-        let _ = ctx;
-        todo!("dl.K46")
+    fn confirm(&mut self, _: &Context) -> Option<V> {
+        Some(self.value.clone())
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K46")
+        let mut fields = serde_fields(&self.value)?;
+        let object = fields.as_object_mut()?;
+        object.insert("preview".to_owned(), serde_json::Value::Bool(self.preview));
+        object.insert("picker".to_owned(), serde_json::to_value(self.picker).ok()?);
+        object.insert("channel".to_owned(), serde_json::Value::from(self.channel));
+        object.insert("clipping".to_owned(), clipping_json(self.clipping));
+        Some(fields)
     }
 
-    fn set_json_field(&mut self, ctx: &Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K46")
+    fn set_json_field(&mut self, _: &Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        let rejected = |value: &serde_json::Value| FieldRefusal::Rejects(value).message(field);
+        match field {
+            "preview" => {
+                self.preview = value.as_bool().ok_or_else(|| rejected(&value))?;
+            }
+            "picker" => {
+                self.picker = serde_json::from_value::<Option<TonePicker>>(value.clone()).map_err(|_| rejected(&value))?;
+            }
+            "channel" => {
+                let at = value.as_u64().and_then(|at| usize::try_from(at).ok());
+                self.channel = at.ok_or_else(|| rejected(&value))?;
+            }
+            "clipping" => {
+                let clip = clipping_from_json(&value).ok_or_else(|| rejected(&value))?;
+                self.set_clipping(clip);
+            }
+            _ => return set_serde_field(&mut self.value, field, value),
+        }
+        Ok(())
     }
 
-    fn cancelled(&mut self, ctx: &Context) {
-        let _ = ctx;
-        todo!("dl.K46")
+    fn cancelled(&mut self, _: &Context) {
+        self.picker = None;
     }
 
     #[cfg(feature = "screen-testing")]

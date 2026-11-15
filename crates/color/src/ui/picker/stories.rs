@@ -91,7 +91,7 @@ fn color_picker_full(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = ColorPicker::new("Foreground color", Bind::bound(color))
         .layout(ColorPickerLayout::Full)
         .mode(Bind::bound(&mut mode))
-        .compare(current)
+        .compare(PickedColor::rgb(current))
         .warnings([ColorWarning::new("Out of gamut for printing", Srgba::rgb(0.9, 0.1, 0.9))])
         .eyedropper(true)
         .show(ui);

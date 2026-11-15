@@ -25,7 +25,7 @@ fn brightness_contrast_dialog(ui: &mut Ui, data: &mut StoryData) -> StoryOutput 
     let value = BrightnessContrast { brightness: 20.0, contrast: -10.0, legacy: false };
     hosted(ui, data, (), || {
         HostedAdjustDialog::new("image.adjustments.brightnessContrast", "Brightness/Contrast", value, |ui, value, cx| {
-            BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(value)).context(cx.context).show(ui); // P3(dialogs-w6): dl.K45
+            BrightnessContrastEditor::new("Brightness/Contrast", Bind::bound(value)).context(cx.context).show(ui);
             None::<()>
         })
     })

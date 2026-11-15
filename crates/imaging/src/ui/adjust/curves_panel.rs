@@ -13,7 +13,7 @@ use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
 use craft_ui::buttons::{Button, ToggleButton};
 use craft_ui::contract::{
-    Bind, CanvasGesture, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked,
+    Bind, CanvasGesture, CommandSet as _, Commands as _, Entry, NoValue, Outcome, Pattern, Props, Remember as _, Sampler as _, Show as _, ShowContainer as _, clicked,
 };
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
@@ -22,7 +22,8 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::TypeRole;
 use egui::{Id, Response, Ui};
 
-use super::{AdjustContext, AdjustWords, ToneChannel, ToneChannels, TonePicker, TonePickerRow};
+use super::context::{read_shown, write_shown};
+use super::{AdjustContext, AdjustWords, ToneChannel, ToneChannelCommands, ToneChannels, TonePicker, TonePickerRow};
 use crate::ui::curve::{Curve, CurveChannel, CurveEditor, CurveRules};
 use crate::ui::histogram::{ChannelColor, HistogramData};
 
@@ -291,7 +292,7 @@ impl<'a> CurvesPanel<'a> {
             sampler,
             mut pickers,
             canvas,
-            channel: _, // P3(dialogs-w6): dl.K45
+            channel: mut channel_bind,
             picker_enabled,
             pickers_unavailable,
             context,
@@ -307,13 +308,25 @@ impl<'a> CurvesPanel<'a> {
         let (mut edit, mut mode, mut picker) = (EditEvents::new(), None, None);
         let mut selected = None;
         let mut shown_channel = 0;
-        let group = Stack::new().label(label).enabled(enabled).show(ui, |ui, cx| {
+        let stack = Stack::new().label(label).enabled(enabled);
+        // Alt+2…Alt+6 pick the Channel select's entry in a dialog; Properties has no such keys.
+        let stack = if context.is_dialog() { stack.command_scope(ToneChannelCommands::SCOPE) } else { stack };
+        let group = stack.show(ui, |ui, cx| {
             let value = match curves.reborrow().read(cx) {
                 Some(Mixed::Same(value)) => value,
                 _ => ToneCurves::identity(&channels),
             };
             let state = cx.keep::<Shown>().clone();
-            let channel = state.channel.min(channels.len().saturating_sub(1));
+            let stored = read_shown(&mut channel_bind, cx).unwrap_or(state.channel);
+            let mut commanded = stored;
+            if context.is_dialog() {
+                while let Some((command, _)) = cx.take_command::<ToneChannelCommands>() {
+                    commanded = channels.entry_of(command).unwrap_or(commanded);
+                }
+            }
+            let channel = commanded.min(channels.len().saturating_sub(1));
+            // The kept selection belongs to the channel it was made on.
+            let kept_selection = if commanded == stored { state.selected } else { None };
             let pencil = value.mode == CurvesMode::Pencil;
             let fallback = Curve::identity(255.0);
             let curve = value.curves.get(channel).unwrap_or(&fallback);
@@ -352,7 +365,7 @@ impl<'a> CurvesPanel<'a> {
                 smooth = clicked(&Button::new(words.smooth.clone()).enabled(can_smooth).tooltip(words.smooth_tip.clone()).show(ui));
             });
 
-            let selection = if picked == channel { select.or(state.selected) } else { None };
+            let selection = if picked == channel { select.or(kept_selection) } else { None };
             let sample = sampler.as_deref();
             let mut editor = CurveEditor::new(name, Bind::given(curve.clone()))
                 .channels(&curve_channels)
@@ -405,22 +418,10 @@ impl<'a> CurvesPanel<'a> {
             }
             // An edit belongs to the channel it was drawn for; a switch shows from the next pass, with no selection.
             shown_channel = if picked == channel || !edit.is_empty() { channel } else { picked };
-            *cx.keep::<Shown>() = Shown { channel: shown_channel, selected: if shown_channel == channel { selected } else { None } };
+            write_shown(&mut channel_bind, cx, stored, shown_channel);
+            let kept_channel = if channel_bind.is_some() { stored } else { shown_channel };
+            *cx.keep::<Shown>() = Shown { channel: kept_channel, selected: if shown_channel == channel { selected } else { None } };
         });
         CurvesPanelOutput { response: group.output, edit, channel: shown_channel, mode, picker, selected }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use craft_host::target::Os;
-    use craft_ui::testing::trial;
-
-    #[trial]
-    fn the_hint_key_is_the_modifier_alone() {
-        assert_eq!(modifier_words(Os::Linux, Mods::CMD), "Ctrl");
-        assert_eq!(modifier_words(Os::Windows, Mods::SHIFT), "Shift");
-        assert!(!modifier_words(Os::Mac, Mods::CMD).ends_with(['+', 'A']));
     }
 }

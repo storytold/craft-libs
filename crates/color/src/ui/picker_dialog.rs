@@ -16,7 +16,7 @@ use craft_host::target::Caps;
 use craft_settings::Remembered;
 use craft_theme::{ColorModel, Srgba, builtin_models};
 use craft_ui::contract::{Bind, CanvasGesture, Sampler as _, ShowContainer as _};
-use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id, serde_fields, set_serde_field};
 use craft_ui::patterns::form_dialogs::{HostRequests, ResetFooter};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::Initial;
@@ -102,6 +102,8 @@ enum Title {
 ///   `DialogHost::get_by_id` and shows it live; Cancel is the app's cue to put the old colour back.
 pub struct ColorPickerDialog {
     id: DialogId,
+    /// Which of several pickers of the same key this is ([`instance`](Self::instance)).
+    instance: Option<DialogId>,
     key: String,
     title: Title,
     title_args: Vec<(String, String)>,
@@ -157,6 +159,7 @@ impl ColorPickerDialog {
         let opening = color.map(PickedColor::rgb);
         ColorPickerDialog {
             id: dialog_id(("color-picker", key.as_str())),
+            instance: None,
             key,
             title,
             title_args: Vec::new(),
@@ -255,10 +258,11 @@ impl ColorPickerDialog {
 
     /// The dialog for one target among several of the same key: its id is `dialog_id(("color-picker", key,
     /// instance))`, and [`StackDialog::instance`] returns it, so the host replaces a picker only for the same target.
-    // P3(dialogs-w6): dl.K50 `ColorPickerDialog::instance`
-    pub fn instance(self, instance: impl std::hash::Hash + std::fmt::Debug) -> Self {
-        let _ = (self, instance);
-        todo!("dl.K50")
+    #[must_use]
+    pub fn instance(mut self, instance: impl std::hash::Hash + std::fmt::Debug) -> Self {
+        self.id = dialog_id(("color-picker", self.key.as_str(), instance));
+        self.instance = Some(self.id);
+        self
     }
 
     /// Whether a screen pick is running; the picker's screen-pick button is disabled meanwhile. The host sets it each
@@ -305,15 +309,23 @@ impl ColorPickerDialog {
     }
 
     /// What OK does: stores the remembered field component and Only Web Colors, and answers with the colour.
-    fn accept(&mut self, ctx: &Context) -> Option<ColorPickerResult> {
+    fn accept(&mut self, _: &Context) -> Option<ColorPickerResult> {
         let picked = self.current?;
         self.requests.cancel();
         if self.remember
-            && let Some(host) = self.host.clone().or_else(|| Host::try_of_ctx(ctx))
+            && let Some(host) = &self.host
         {
-            Remembered::<ColorPickerMemory>::new(MEMORY_SCOPE).store(&host, &self.memory);
+            Remembered::<ColorPickerMemory>::new(MEMORY_SCOPE).store(host, &self.memory);
         }
         Some(ColorPickerResult { key: self.key.clone(), picked })
+    }
+
+    /// Runs the dialog's start for automation that reaches it before its first pass.
+    fn start_headless(&mut self, ctx: &Context) {
+        if !self.started {
+            let host = Env::of_root(ctx).view().host().cloned();
+            self.start(host.as_ref());
+        }
     }
 
     /// The first pass: recalls the remembered field component and Only Web Colors, and with Only Web Colors on snaps
@@ -362,20 +374,32 @@ impl StackDialog for ColorPickerDialog {
     /// Answers OK as the OK button would, without drawing: the dialog's start (recalled memory, the Only Web Colors
     /// snap) has run, the memory is stored, and the colour is the current one.
     fn confirm(&mut self, ctx: &Context) -> Option<ColorPickerResult> {
-        if !self.started {
-            let host = Host::try_of_ctx(ctx);
-            self.start(host.as_ref());
-        }
+        self.start_headless(ctx);
         self.accept(ctx)
     }
 
+    fn instance(&self) -> Option<DialogId> {
+        self.instance
+    }
+
+    /// `color` (`#rrggbb`, null when there is none yet), and the memory's own `mode` and `webColors`.
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K50")
+        let mut fields = serde_fields(&self.memory)?;
+        let color = self.current.map_or(serde_json::Value::Null, |picked| picked.color.to_hex().into());
+        fields.as_object_mut()?.insert("color".to_owned(), color);
+        Some(fields)
     }
 
     fn set_json_field(&mut self, ctx: &Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K50")
+        // The dialog's start recalls the memory and snaps the opening colour; a field set before it would be overwritten.
+        self.start_headless(ctx);
+        if field != "color" {
+            return set_serde_field(&mut self.memory, field, value);
+        }
+        let parsed = value.as_str().and_then(Srgba::from_hex);
+        let color = parsed.ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+        self.set_color(PickedColor { color, model: None });
+        Ok(())
     }
 
     /// The host closed the dialog from outside: its dropper ends with it.
@@ -425,7 +449,7 @@ impl StackDialog for ColorPickerDialog {
         let Self { current, opening, compare, memory, screen_busy, sample, pending_screen, open, .. } = self;
         let mut held: Mixed<PickedColor> = current.map_or(Mixed::Mixed, Mixed::Same);
         let (sampled, busy, compare_with) =
-            (sample.take(), *screen_busy, compare.then(|| opening.map_or(Mixed::Mixed, |opening| Mixed::Same(opening.color))));
+            (sample.take(), *screen_busy, compare.then(|| opening.map_or(Mixed::Mixed, Mixed::Same)));
         let color = current.map(|current| current.color);
         let web_only = memory.web_colors;
         let shown = Dialog::new(title.clone())
