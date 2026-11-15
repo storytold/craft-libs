@@ -24,7 +24,7 @@ pub use inline_object::{CanvasStyle, GroupChild, InlineObject, MAX_GROUP_CHILDRE
 pub use run::{COLUMN_BREAK, LINE_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, Run, SOFT_HYPHEN, next_rev};
 
 /// A paragraph.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Paragraph {
     pub text: String,
     pub runs: Vec<Run>,
@@ -51,6 +51,19 @@ impl PartialEq for Paragraph {
             && self.mark == o.mark
             && self.objects == o.objects
             && self.section == o.section
+    }
+}
+
+impl std::fmt::Debug for Paragraph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Paragraph")
+            .field("text", &self.text)
+            .field("runs", &self.runs)
+            .field("props", &self.props)
+            .field("mark", &self.mark)
+            .field("objects", &self.objects)
+            .field("section", &self.section)
+            .finish_non_exhaustive()
     }
 }
 
