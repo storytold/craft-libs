@@ -95,16 +95,16 @@ pub fn write(
             return Some(data.clone());
         }
         for path in paths {
-            if let Some(name) = below(path) {
-                if let Some(data) = found(path).filter(|d| d.len() as u64 <= package_limits.max_texture_bytes) {
-                    total = total.saturating_add(data.len() as u64);
-                    if total > package_limits.max_total_bytes {
-                        exceeded = true;
-                        return None;
-                    }
-                    files.push((name, data.clone()));
-                    return Some(data);
+            if let Some(name) = below(path)
+                && let Some(data) = found(path).filter(|d| d.len() as u64 <= package_limits.max_texture_bytes)
+            {
+                total = total.saturating_add(data.len() as u64);
+                if total > package_limits.max_total_bytes {
+                    exceeded = true;
+                    return None;
                 }
+                files.push((name, data.clone()));
+                return Some(data);
             }
         }
         if let Some(first) = paths.first().filter(|p| !missing.iter().any(|m| m == **p)) {
