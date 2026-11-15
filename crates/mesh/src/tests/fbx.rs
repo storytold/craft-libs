@@ -753,3 +753,13 @@ fn optional_inactive_pre_rotation_keeps_legacy_placements() {
     let turned = transform_point(&legacy.nodes[0].transform, p);
     assert!((turned[0]).abs() < 1e-12 && (turned[1] - 1.0).abs() < 1e-12);
 }
+
+#[test]
+fn layer_zero_takes_precedence_and_an_indexed_layer_needs_indices() {
+    let layer_one = "LayerElementUV: 1 { MappingInformationType: \"ByPolygonVertex\" ReferenceInformationType: \"Direct\" UV: 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25 }\n";
+    let text = ASCII.replace("LayerElementUV: 0 {", &format!("{layer_one} LayerElementUV: 0 {{"));
+    let scene = parse(text.as_bytes()).unwrap();
+    assert_eq!(scene.meshes[0].uv_sets[0][0], [0.0, 1.0]);
+    let missing = ASCII.replace("UVIndex: *7", "UnusedIndex: *7");
+    assert!(parse(missing.as_bytes()).unwrap().meshes[0].uv_sets.is_empty());
+}
