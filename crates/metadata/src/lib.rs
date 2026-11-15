@@ -19,6 +19,7 @@
 //! HEIF, PSD and MRW files are read by their own crates. Put the blocks they return into an
 //! [`Embedded`] and call [`from_embedded`].
 
+pub mod camera_fields;
 mod container;
 pub mod cr3;
 mod datetime;
@@ -36,7 +37,7 @@ pub mod tags;
 mod xmp;
 mod xmp_merge;
 
-pub use container::{Embedded, embedded, jpeg_segments, jpeg_segments_with_all_xmp, png_chunks, webp_chunks};
+pub use container::{Embedded, JpegInspection, embedded, inspect_jpeg, jpeg_segments, jpeg_segments_with_all_xmp, png_chunks, webp_chunks};
 pub use datetime::{DatePrecision, DateTime};
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
