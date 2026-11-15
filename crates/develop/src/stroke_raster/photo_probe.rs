@@ -220,7 +220,7 @@ fn photo_probe() {
             let cells = Cells::of(bd.r, bd.dabs.first().copied(), w, h);
             if let Some(k) = std::env::var("CRAFT_AUTOMASK_DAB").ok().and_then(|s| s.parse::<usize>().ok()) {
                 let refc = reference(&bd, k, &cells, &prep.img, &prep.log_l).unwrap();
-                let g = grow(&bd, k, bd.r, &cells, &prep.img, &prep.log_l, refc).unwrap();
+                let g = grow(&bd, k, bd.r, &cells, &prep.img, &prep.log_l, refc, &mut CellCache::default()).unwrap();
                 eprintln!("dab {k} at {:?} cell {} ref {refc:?} grid at cell ({}, {}) free {:?}", bd.dabs[k], cells.size, g.i0, g.j0, g.free);
                 // the grid over the photo: each cell's path cost (green free, yellow partial, red
                 // past PATH_NONE, dark unreached), membership as brightness
@@ -273,7 +273,7 @@ fn photo_probe() {
                         continue;
                     }
                     let refc = reference(&bd, kk, &cells, &prep.img, &prep.log_l).unwrap();
-                    let g = grow(&bd, kk, bd.r, &cells, &prep.img, &prep.log_l, refc).unwrap();
+                    let g = grow(&bd, kk, bd.r, &cells, &prep.img, &prep.log_l, refc, &mut CellCache::default()).unwrap();
                     let mb = pixel_member(&g, &cells, px, py, p);
                     let (ci, cj) = cells.of_pixel(px, py);
                     let mut near = Vec::new();

@@ -271,6 +271,7 @@ fn chroma_mean(ch: &Rgb32f, r: usize) -> Rgb32f {
     offs.dedup();
     let mut out = Rgb32f::new(w, h);
     let mut d = Vec::with_capacity(offs.len() * offs.len());
+    let mut ds: Vec<f32> = Vec::with_capacity(offs.len() * offs.len());
     for y in 0..h {
         for x in 0..w {
             let Some(c) = ch.data.get(y * w + x).copied() else { continue };
@@ -284,9 +285,10 @@ fn chroma_mean(ch: &Rgb32f, r: usize) -> Rgb32f {
                     }
                 }
             }
-            let mut ds: Vec<f32> = d.iter().map(|e| e.0).collect();
-            ds.sort_by(f32::total_cmp);
-            let q = ds.get(ds.len() / 4).copied().unwrap_or(0.0);
+            ds.clear();
+            ds.extend(d.iter().map(|e| e.0));
+            let nth = ds.len() / 4;
+            let q = if ds.is_empty() { 0.0 } else { *ds.select_nth_unstable_by(nth, f32::total_cmp).1 };
             let t = CHROMA_MEAN_RANGE.max(CHROMA_MEAN_NOISE * q);
             let (mut acc, mut wsum) = ([0f32; 3], 0f32);
             for (dist, s) in &d {
@@ -385,6 +387,9 @@ const UNIFORM_CHROMA: f32 = 0.02;
 /// A cell spreading up to this many times as far as the typical cell the dab grew over is uniform
 /// too (a textured surface's cells all spread).
 const UNIFORM_TYPICAL: f32 = 1.5;
+
+/// A pixel this little like the cells around it ([`pixel_member`]) is not like them at all.
+const PIXEL_FAINT: f32 = 0.1;
 
 /// Chromaticity distance at which a pixel is no longer like a cell ([`pixel_member`]); at least
 /// this, more in noisier cells.
@@ -622,7 +627,29 @@ impl Grown {
     }
 }
 
-fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &Plane, refc: (f32, [f32; 3])) -> Option<Grown> {
+/// Cells' [`CellStats`] already measured: neighbouring dabs reach mostly the same cells.
+#[derive(Default)]
+struct CellCache(std::collections::HashMap<(usize, usize), Option<CellStats>>);
+
+/// How many cells a [`CellCache`] holds before it starts again (a bound on its memory).
+const CELL_CACHE_MAX: usize = 1 << 20;
+
+impl CellCache {
+    fn get(&mut self, cells: &Cells, i: usize, j: usize, img: &Rgb32f, log_l: &Plane) -> Option<CellStats> {
+        if let Some(v) = self.0.get(&(i, j)) {
+            return *v;
+        }
+        if self.0.len() >= CELL_CACHE_MAX {
+            self.0.clear();
+        }
+        let v = cells.cell_stats(i, j, img, log_l);
+        self.0.insert((i, j), v);
+        v
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &Plane, refc: (f32, [f32; 3]), cache: &mut CellCache) -> Option<Grown> {
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
     let d = *bd.dabs.get(k)?;
@@ -638,7 +665,7 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
         for i in i0..=i1 {
             // (a cell past the output's edge is no way through: a zoomed window and the whole
             // frame must agree)
-            let got = cells.cell_stats(i, j, img, log_l);
+            let got = cache.get(cells, i, j, img, log_l);
             inside.push(got.is_some());
             let st =
                 got.unwrap_or(CellStats { mean: refc, spread: (f32::INFINITY, f32::INFINITY), change: 0.0, grad: (0.0, 0.0), centre: (0.0, 0.0) });
@@ -810,7 +837,9 @@ fn pixel_member(g: &Grown, cells: &Cells, x: usize, y: usize, p: (f32, [f32; 3])
             }
         }
     }
-    best
+    // (a faint likeness counts for nothing: many dabs each lending a pixel a little would add up,
+    // flow on flow, to a haze of paint past an edge)
+    ((best - PIXEL_FAINT) / (1.0 - PIXEL_FAINT)).max(0.0)
 }
 
 /// The share of a radius an Auto Mask dab of process 9 paints fully before it fades (at least its
@@ -839,12 +868,13 @@ fn stamp_smoothed(
         return;
     }
     let cells = Cells::of(bd.r, bd.dabs.first().copied(), w, h);
+    let mut cache = CellCache::default();
     let bw = area.width();
     for k in range {
         let Some(d) = bd.dabs.get(k).copied() else { break };
         let (r, hard, flow) = bd.dab(k);
         let Some(refc) = reference(bd, k, &cells, img, log_l) else { continue };
-        let Some(g) = grow(bd, k, r, &cells, img, log_l, refc) else { continue };
+        let Some(g) = grow(bd, k, r, &cells, img, log_l, refc, &mut cache) else { continue };
         let hard = hard.max(AUTO_HARD * r);
         let rect = dab_rect(d, r, w, h);
         let (x0, x1) = (rect.x0.max(area.x0), rect.x1.min(area.x1));
