@@ -4,16 +4,22 @@ use crate::{PsdError, Result};
 /// Display-encoded samples, interleaved by pixel.
 #[derive(Clone, Copy)]
 pub enum Samples<'a> {
+    /// Eight-bit samples.
     U8(&'a [u8]),
+    /// Sixteen-bit samples.
     U16(&'a [u16]),
 }
 
 /// Optional resources embedded in a flat PSD.
 #[derive(Clone, Copy, Default)]
 pub struct Metadata<'a> {
+    /// ICC profile bytes.
     pub icc: Option<&'a [u8]>,
+    /// TIFF-structured EXIF bytes.
     pub exif: Option<&'a [u8]>,
+    /// XMP document text.
     pub xmp: Option<&'a str>,
+    /// Resolution in pixels per inch.
     pub ppi: Option<u16>,
 }
 
@@ -106,7 +112,7 @@ fn resource(out: &mut Vec<u8>, id: u16, data: &[u8]) -> Result<()> {
     out.extend_from_slice(&[0, 0]);
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(data);
-    if data.len() % 2 != 0 {
+    if !data.len().is_multiple_of(2) {
         out.push(0);
     }
     Ok(())
