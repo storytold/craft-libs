@@ -166,7 +166,8 @@ impl Caps {
             // AppKit moves a window smoothly; a window the app moves by its position jitters there.
             Os::Mac => base.union(Caps::NATIVE_MENU_BAR).union(Caps::SCREEN_CAPTURE).union(Caps::OS_MOVES_TRACKED),
             Os::Windows => base.union(Caps::OS_RESIZES_UNDECORATED).union(Caps::SCREEN_CAPTURE),
-            Os::Linux => base,
+            // X11 captures with `GetImage`, Wayland picks through the Screenshot portal.
+            Os::Linux => base.union(Caps::SCREEN_CAPTURE),
         }
     }
 

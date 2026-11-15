@@ -3,8 +3,9 @@
 //!
 //! Backends: X11 (`GetImage` per RandR monitor, `_ICC_PROFILE` properties), Wayland (the
 //! Screenshot portal's `PickColor`, where the compositor's own picker returns one colour), macOS (CoreGraphics window-list image per display, the
-//! image's colour space), Windows (`xcap` per monitor, no profile). Web and sessions without a
-//! display have no capture: [`capture`] returns [`ScreenError::Unsupported`].
+//! image's colour space), Windows (`xcap` per monitor, no profile), the web (the browser's
+//! EyeDropper, which returns one colour). Sessions without a display and browsers without the
+//! EyeDropper have no capture: [`capture`] returns [`ScreenError::Unsupported`].
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -87,12 +88,32 @@ impl Drop for CaptureHandle {
 /// first (sizes validated against [`MAX_PIXELS`] per image), or on Wayland the one colour the
 /// compositor's picker returns. `scale` is the app's native pixels per point, the monitors'
 /// scale on X11, which reports none. `wake` runs once the result (or a failure) is ready to
-/// take, so the UI polls with [`CaptureHandle::try_take`] only in the frame that follows.
+/// take, so the UI polls with [`CaptureHandle::try_take`] only in the frame that follows. On the
+/// web the browser's EyeDropper picks the one colour; the browser has no threads, so its promise
+/// settles on the page's event loop instead of a worker.
 pub fn capture(scale: f32, wake: Wake) -> CaptureHandle {
-    spawn(wake, move |stop| run(stop, scale))
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = scale;
+        web::capture(wake)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        spawn(wake, move |stop| run(stop, scale))
+    }
+}
+
+/// Whether the browser has the EyeDropper API. A web host sets `Caps::SCREEN_CAPTURE` from it at
+/// startup, so the picker's button shows only where a pick can work. Native builds take the
+/// capability from `Caps::native`; a session without a display answers [`ScreenError::Unsupported`]
+/// at its first capture.
+#[cfg(target_arch = "wasm32")]
+pub fn available() -> bool {
+    web::available()
 }
 
 /// Runs `job` on the capture thread and calls `wake` after its result is queued.
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn(wake: Wake, job: impl FnOnce(&AtomicBool) -> Result<Capture, ScreenError> + Send + 'static) -> CaptureHandle {
     let stop = Arc::new(AtomicBool::new(false));
     let (tx, rx) = std::sync::mpsc::channel();
@@ -120,11 +141,6 @@ fn run(stop: &AtomicBool, _scale: f32) -> Result<Capture, ScreenError> {
     backend::capture(stop).map(Capture::Images)
 }
 
-/// The browser's EyeDropper: the one colour the user picks, as [`Capture::Color`].
-#[cfg(target_arch = "wasm32")]
-fn run(_stop: &AtomicBool, _scale: f32) -> Result<Capture, ScreenError> {
-    todo!("dl.K78")
-}
 
 /// The scale a monitor image gets: the app's native pixels per point, or 1 when it has none.
 #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
@@ -548,6 +564,136 @@ mod backend {
             });
         }
         Ok(images)
+    }
+}
+
+/// The browser's EyeDropper: the user picks one colour, returned as [`Capture::Color`]. The
+/// EyeDropper and its `AbortController` are reached through `Reflect`, so the backend needs only
+/// the `Window` binding of web-sys; the promise settles through one `allSettled` callback, so no
+/// future executor is needed.
+#[cfg(all(target_arch = "wasm32", feature = "browser"))]
+mod web {
+    use super::{Arc, AtomicBool, Capture, CaptureHandle, Ordering, ScreenError, Wake};
+    use craft_theme::Srgba;
+    use js_sys::{Array, Function, Object, Promise, Reflect};
+    use std::sync::mpsc::Sender;
+    use wasm_bindgen::{JsCast, JsValue, closure::Closure};
+
+    /// How often the page checks whether the capture was cancelled, in milliseconds.
+    const STOP_POLL_MS: i32 = 50;
+
+    /// The browser's `EyeDropper` constructor, when it has one.
+    fn eye_dropper() -> Option<Function> {
+        let window = web_sys::window()?;
+        Reflect::get(&window, &JsValue::from_str("EyeDropper")).ok()?.dyn_into::<Function>().ok()
+    }
+
+    /// Whether the browser has the EyeDropper API.
+    pub fn available() -> bool {
+        eye_dropper().is_some()
+    }
+
+    /// Opens the EyeDropper; its answer is queued and `wake` runs when the promise settles. A browser
+    /// without the EyeDropper answers `Unsupported` at once.
+    pub fn capture(wake: Wake) -> CaptureHandle {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = CaptureHandle { stop: stop.clone(), result: rx };
+        if let Err(e) = open(stop, tx.clone(), wake.clone()) {
+            let _ = tx.send(Err(e));
+            wake.wake();
+        }
+        handle
+    }
+
+    fn failed(what: &str, e: JsValue) -> ScreenError {
+        ScreenError::Failed(format!("{what}: {e:?}"))
+    }
+
+    /// `target[name]` as a function.
+    fn method(target: &JsValue, name: &str) -> Result<Function, ScreenError> {
+        Reflect::get(target, &JsValue::from_str(name))
+            .map_err(|e| failed(&format!("could not read {name}"), e))?
+            .dyn_into::<Function>()
+            .map_err(|_| ScreenError::Failed(format!("{name} is not a function")))
+    }
+
+    fn open(stop: Arc<AtomicBool>, tx: Sender<Result<Capture, ScreenError>>, wake: Wake) -> Result<(), ScreenError> {
+        let window = web_sys::window().ok_or(ScreenError::Unsupported)?;
+        let constructor = eye_dropper().ok_or(ScreenError::Unsupported)?;
+        let eye = Reflect::construct(&constructor, &Array::new()).map_err(|e| failed("could not start the browser eyedropper", e))?;
+        let controller = Reflect::construct(&method(&window, "AbortController")?, &Array::new())
+            .map_err(|e| failed("could not create the eyedropper's cancellation", e))?;
+        let abort = method(&controller, "abort")?;
+        let signal = Reflect::get(&controller, &JsValue::from_str("signal")).map_err(|e| failed("could not read the cancellation signal", e))?;
+        let options = Object::new();
+        Reflect::set(&options, &JsValue::from_str("signal"), &signal).map_err(|e| failed("could not set the eyedropper's options", e))?;
+        let promise = method(&eye, "open")?
+            .call1(&eye, &options)
+            .map_err(|e| failed("could not open the browser eyedropper", e))?
+            .dyn_into::<Promise>()
+            .map_err(|_| ScreenError::Failed("the browser eyedropper returned no promise".into()))?;
+        let (timer_abort, timer_controller) = (abort.clone(), controller.clone());
+        let timer = Closure::<dyn FnMut()>::new(move || {
+            if stop.load(Ordering::Relaxed) {
+                let _ = timer_abort.call0(&timer_controller);
+            }
+        });
+        let interval = window.set_interval_with_callback_and_timeout_and_arguments_0(timer.as_ref().unchecked_ref(), STOP_POLL_MS).map_err(|e| {
+            let _ = abort.call0(&controller);
+            failed("could not watch the eyedropper's cancellation", e)
+        })?;
+        // `allSettled` turns the pick and its rejection into one fulfilled value, so a single
+        // one-shot callback handles both and frees itself after it runs.
+        let settled = Promise::all_settled(&Array::of1(&promise));
+        let settle_window = window.clone();
+        let on_settle = Closure::once_into_js(move |outcome: JsValue| {
+            settle_window.clear_interval_with_handle(interval);
+            drop(timer);
+            let _ = tx.send(answer(&Array::from(&outcome).get(0)));
+            wake.wake();
+        });
+        method(&settled, "then")?.call1(&settled, &on_settle).map_err(|e| {
+            window.clear_interval_with_handle(interval);
+            let _ = abort.call0(&controller);
+            failed("could not wait for the browser eyedropper", e)
+        })?;
+        Ok(())
+    }
+
+    /// The pick from one `allSettled` entry. An abort (the handle stopped, or Esc in the browser's
+    /// picker) is `Cancelled`.
+    fn answer(entry: &JsValue) -> Result<Capture, ScreenError> {
+        let field = |target: &JsValue, name: &str| Reflect::get(target, &JsValue::from_str(name)).unwrap_or(JsValue::UNDEFINED);
+        if field(entry, "status").as_string().as_deref() == Some("fulfilled") {
+            return field(&field(entry, "value"), "sRGBHex")
+                .as_string()
+                .and_then(|hex| Srgba::from_hex(&hex))
+                .map(|c| Capture::Color([c.r, c.g, c.b]))
+                .ok_or_else(|| ScreenError::Failed("the browser eyedropper returned an invalid color".into()));
+        }
+        let reason = field(entry, "reason");
+        if field(&reason, "name").as_string().as_deref() == Some("AbortError") {
+            return Err(ScreenError::Cancelled);
+        }
+        Err(failed("browser screen color selection failed", reason))
+    }
+}
+
+/// A wasm32 build without the browser bindings has no capture.
+#[cfg(all(target_arch = "wasm32", not(feature = "browser")))]
+mod web {
+    use super::{Arc, AtomicBool, CaptureHandle, ScreenError, Wake};
+
+    pub fn available() -> bool {
+        false
+    }
+
+    pub fn capture(wake: Wake) -> CaptureHandle {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = tx.send(Err(ScreenError::Unsupported));
+        wake.wake();
+        CaptureHandle { stop: Arc::new(AtomicBool::new(false)), result: rx }
     }
 }
 
