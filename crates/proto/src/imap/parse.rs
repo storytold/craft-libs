@@ -274,8 +274,8 @@ mod tests {
     #[test]
     fn sections_are_part_of_the_word() {
         assert_eq!(
-            parse("(BODY[HEADER.FIELDS (FROM TO)] x BODY[]<0> y)"),
-            vec![Value::List(vec![atom("BODY[HEADER.FIELDS (FROM TO)]"), atom("x"), atom("BODY[]<0>"), atom("y")])]
+            parse("12 FETCH (BODY[HEADER.FIELDS (FROM TO)] x BODY[]<0> y)"),
+            vec![atom("12"), atom("FETCH"), Value::List(vec![atom("BODY[HEADER.FIELDS (FROM TO)]"), atom("x"), atom("BODY[]<0>"), atom("y")])]
         );
         assert_eq!(parse(r#"LIST () "/" [Gmail]/Trash"#), vec![atom("LIST"), Value::List(vec![]), string("/"), atom("[Gmail]/Trash")]);
         // A bracket that never closes is an ordinary character.
