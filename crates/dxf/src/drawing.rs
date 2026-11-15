@@ -210,7 +210,7 @@ impl Codes {
         if let Some(lt) = &style.linetype {
             self.str(6, lt);
         }
-        self.int(62, i64::from(style.aci.max(1)));
+        self.int(62, i64::from(style.aci));
         if self.v.r2000()
             && let Some(lw) = style.lineweight
         {
@@ -585,7 +585,8 @@ impl Drawing {
             c.int(70, 0);
             c.int(71, 1);
             c.int(72, 0);
-            let entries: Vec<(&str, Handle)> = self.images.iter().map(|i| (i.name.as_str(), i.handle)).collect();
+            let keys: Vec<String> = self.images.iter().map(|i| format!("IMAGE_{:X}", i.handle.0)).collect();
+            let entries: Vec<(&str, Handle)> = keys.iter().zip(&self.images).map(|(key, image)| (key.as_str(), image.handle)).collect();
             dict(c, fixed::IMAGE_DICT, fixed::ROOT, &entries);
             for img in &self.images {
                 c.raw(0, "IMAGEDEF");
@@ -729,6 +730,30 @@ mod tests {
             ("drawing_line_r2018.dxf", Format::R2018, true),
         ] {
             assert_golden(name, &sample(v, line).write());
+        }
+    }
+
+    #[test]
+    fn entity_preserves_byblock_colour() {
+        for v in Format::ALL {
+            let mut c = Codes::new(v);
+            c.entity("LINE", Handle(fixed::FIRST_FREE), fixed::MODEL_RECORD, "0", &EntityStyle::default(), "AcDbLine");
+            assert!(c.into_string().contains(" 62\n0\n"), "{v:?}");
+        }
+    }
+
+    #[test]
+    fn image_dictionary_keys_are_independent_of_filenames() {
+        let mut drawing = sample(Format::R2018, false);
+        for (index, name) in [r"C:\images\scan,1.png", "scan,1.png"].into_iter().enumerate() {
+            drawing.images.push(ImageDef { name: name.into(), size: (10, 20), handle: Handle(fixed::FIRST_FREE + index as u32), reactors: vec![] });
+        }
+        drawing.next = fixed::FIRST_FREE + 2;
+        let output = drawing.write();
+        for image in &drawing.images {
+            assert!(output.contains(&format!("  3\nIMAGE_{:X}\n350\n{:X}\n", image.handle.0, image.handle.0)));
+            assert!(output.contains(&format!("  1\n{}\n", image.name)));
+            assert!(!output.contains(&format!("  3\n{}\n", image.name)));
         }
     }
 
