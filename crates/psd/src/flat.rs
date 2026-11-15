@@ -120,15 +120,15 @@ mod tests {
     fn writes_rgb_eight_bit_rows_and_preserves_resources() {
         let bytes = write(
             2,
-            1,
+            2,
             4,
-            Samples::U8(&[10, 20, 30, 0, 40, 50, 60, 1]),
+            Samples::U8(&[10, 20, 30, 0, 40, 50, 60, 1, 70, 80, 90, 2, 100, 110, 120, 3]),
             Metadata { icc: Some(&[1, 2, 3]), xmp: Some("<x/>"), ppi: Some(300), ..Metadata::default() },
         )
         .unwrap();
         let psd = crate::PsdFile::from_bytes(&bytes).unwrap();
         assert_eq!(psd.header.channels, 3);
-        assert_eq!(psd.decode_merged().unwrap(), [10, 40, 20, 50, 30, 60]);
+        assert_eq!(psd.decode_merged().unwrap(), [10, 40, 70, 100, 20, 50, 80, 110, 30, 60, 90, 120]);
         assert!(psd.resources.iter().any(|r| r.id == 1039 && r.data == [1, 2, 3]));
         assert!(psd.resources.iter().any(|r| r.id == 1060 && r.data == b"<x/>"));
     }
