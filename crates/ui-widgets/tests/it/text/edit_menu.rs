@@ -32,7 +32,10 @@ fn rig() -> Rig {
 }
 
 impl Rig {
+    /// A right click well after the click that focused the field: egui counts presses of any button into one click
+    /// run, and a second press of a run selects the word under it.
     fn right_click_in_the_field(&mut self) {
+        self.fixture.advance(1.0);
         let at = self.fixture.by_label("Name").expect("the field").center();
         self.fixture.frame(vec![pointer::secondary(at, true)]);
         self.fixture.frame(vec![pointer::secondary(at, false)]);
@@ -109,16 +112,31 @@ fn an_edit_command_fired_from_elsewhere_reaches_the_focused_field() {
     assert_eq!(*rig.text.borrow(), "");
 }
 
-/// The Delete row deletes the field's selection: the command reaches the focused text part as its edit, not the app.
+/// Cut, Copy and Delete need a selection; Paste, Undo and Select All do not.
 #[trial]
-fn the_edit_menus_delete_deletes_the_selection_in_the_field() {
+fn the_edit_menu_offers_cut_copy_and_delete_only_with_a_selection() {
     let mut rig = rig();
+    let selection_rows = ["Cut", "Copy", "Delete"];
+    let always_rows = ["Paste", "Undo", "Select All"];
+    let disabled = |rig: &Rig, row: &str| {
+        let target = rig.fixture.by_label(row).unwrap_or_else(|| panic!("the edit menu has {row}"));
+        rig.fixture.tree().is_disabled_key(target.node)
+    };
+    rig.right_click_in_the_field();
+    assert!(rig.menu_open(), "the edit menu is open");
+    for row in selection_rows {
+        assert!(disabled(&rig, row), "{row} is disabled while the selection is empty");
+    }
+    for row in always_rows {
+        assert!(!disabled(&rig, row), "{row} stays enabled without a selection");
+    }
+    rig.fixture.key(Key::Escape, Modifiers::NONE);
+    rig.fixture.settle();
     rig.fixture.key(Key::A, Modifiers::COMMAND);
     rig.fixture.settle();
     rig.right_click_in_the_field();
-    let delete = rig.fixture.by_label("Delete").expect("the Delete row");
-    rig.fixture.click(&delete);
-    rig.fixture.settle();
-    assert_eq!(*rig.text.borrow(), "", "Delete takes the selection out of the field");
-    assert!(rig.focus_in_the_field(), "the focus is back in the field");
+    assert!(rig.menu_open(), "the edit menu opens again");
+    for row in selection_rows {
+        assert!(!disabled(&rig, row), "{row} is enabled with a selection");
+    }
 }

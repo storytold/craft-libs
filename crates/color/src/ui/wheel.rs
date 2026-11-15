@@ -317,6 +317,7 @@ impl Component for ColorWheel<'_> {
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let geometry = ColorWheel::geometry(cx.style, rect);
         let reach = cx.style.grab;
+        let hue = finite(cx.value().copied().unwrap_or_else(blank).values[0]);
         // The ring takes every press within its reach; the triangle takes the circle inside the ring's reach.
         cx.part(RING, HitShape::circle(geometry.center, geometry.outer + reach))
             .sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::CLICK)
@@ -326,7 +327,8 @@ impl Component for ColorWheel<'_> {
             .sense(Sense::DRAG | Sense::SETS_ON_PRESS | Sense::CLICK)
             .priority(HitPriority::new(HitLevel::Handle, 0))
             .focusable()
-            .focus_shape(FocusShape::Circle);
+            // The triangle turns with the hue, so its ring is rebuilt each pass.
+            .focus_shape(FocusShape::Polygon(geometry.corners(hue, 0.0).to_vec()));
     }
 
     fn bind(&mut self) -> Option<BindMut<'_, ModelValues>> {

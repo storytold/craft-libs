@@ -3,7 +3,8 @@
 use super::draw::PaintShape;
 use crate::style::{Flags, FocusLook};
 use egui::emath::GuiRounding as _;
-use egui::{CornerRadius, Shape, Stroke, StrokeKind};
+use crate::runtime::focus::FocusShape;
+use egui::{CornerRadius, Pos2, Rect, Shape, Stroke, StrokeKind, Vec2};
 
 /// How a focus indication is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -28,10 +29,12 @@ impl FocusRing {
 
     /// The shape the ring is drawn around for a part declared with `shape` and laid out in `rect`: the rect, the circle
     /// inside it, or the polygon's points.
-    #[allow(dead_code)] // P3(framework-01-w6): fx.F33
-    pub(crate) fn outline(shape: &crate::runtime::focus::FocusShape, rect: egui::Rect) -> PaintShape {
-        let _ = (shape, rect);
-        todo!("fx.F33")
+    pub(crate) fn outline(shape: &FocusShape, rect: Rect) -> PaintShape {
+        match shape {
+            FocusShape::Rect => PaintShape::Rect(rect, CornerRadius::ZERO),
+            FocusShape::Circle => PaintShape::Circle(rect.center(), rect.width().min(rect.height()) / 2.0),
+            FocusShape::Polygon(points) => PaintShape::Polygon(points.clone()),
+        }
     }
 
     /// The shapes of the ring around `shape`, grown by `look.offset`. A halo adds a stroke twice as wide at a
@@ -60,8 +63,34 @@ impl FocusRing {
                 Shape::rect_stroke(grown, radius, stroke, StrokeKind::Inside)
             }
             PaintShape::Circle(center, r) => Shape::circle_stroke(*center, r + offset, stroke),
-            PaintShape::Polygon(points) => Shape::closed_line(points.clone(), stroke),
+            PaintShape::Polygon(points) => Shape::closed_line(grow_polygon(points, offset), stroke),
             PaintShape::Path(points) => Shape::line(points.clone(), stroke),
         }
     }
+}
+
+/// `points` moved outward by `offset`: each vertex slides along the bisector of its two edge normals by
+/// `offset / cos(half angle)`, so every edge ends up `offset` from where it was (a mitred outline). Fewer than three
+/// points, or an offset of zero, leave the polygon as it is.
+fn grow_polygon(points: &[Pos2], offset: f32) -> Vec<Pos2> {
+    let count = points.len();
+    if count < 3 || offset == 0.0 {
+        return points.to_vec();
+    }
+    // The sign of the area says which side of an edge is outside, whatever the winding.
+    let area: f32 = (0..count).map(|i| points[i].x * points[(i + 1) % count].y - points[(i + 1) % count].x * points[i].y).sum();
+    let side = if area < 0.0 { -1.0 } else { 1.0 };
+    let normal = |from: Pos2, to: Pos2| -> Vec2 {
+        let along = (to - from).normalized();
+        Vec2::new(along.y, -along.x) * side
+    };
+    (0..count)
+        .map(|i| {
+            let (before, here, after) = (points[(i + count - 1) % count], points[i], points[(i + 1) % count]);
+            let (n1, n2) = (normal(before, here), normal(here, after));
+            // 1 + n1.n2 = 2 cos^2(half angle); it vanishes only where the edges fold back on themselves.
+            let miter = 1.0 + n1.dot(n2);
+            if miter < 1e-3 { here + n1 * offset } else { here + (n1 + n2) * (offset / miter) }
+        })
+        .collect()
 }
