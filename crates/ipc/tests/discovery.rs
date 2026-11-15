@@ -91,8 +91,7 @@ impl Drop for HoldCleanup {
 
 fn hold_dir() -> PathBuf {
     let mut bytes = [0u8; 4];
-    let mut file = std::fs::File::open("/dev/urandom").unwrap();
-    std::io::Read::read_exact(&mut file, &mut bytes).unwrap();
+    getrandom::getrandom(&mut bytes).unwrap();
     let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     std::env::temp_dir().join(format!("cl-hold-{hex}"))
 }

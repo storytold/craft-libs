@@ -94,8 +94,10 @@ struct Rig {
 }
 
 fn boot(epoch: u64) -> Rig {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let path = std::env::temp_dir().join(format!("cl-blk-{:08x}", (nanos as u64) ^ u64::from(std::process::id()).wrapping_mul(0x9E37)));
+    // Parallel tests can observe the same clock tick on macOS.
+    static NEXT_RIG: AtomicU64 = AtomicU64::new(0);
+    let serial = NEXT_RIG.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("cl-blk-{}-{serial}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     let source = Arc::new(FakeSource { epoch: AtomicU64::new(epoch), closed: Mutex::new(Vec::new()) });
     let tickets = Arc::new(FrameTickets::new(Arc::clone(&source) as Arc<dyn FrameSource>));
