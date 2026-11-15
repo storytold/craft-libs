@@ -413,22 +413,56 @@ fn wavelet_plane(sample: &[u8], plane: &Plane, width: usize, height: usize, edge
     for high in high_dimensions.iter().rev() {
         shapes.extend_from_slice(high);
     }
-    let mut bands = Vec::with_capacity(10);
-    for (i, (&(w, h), band)) in shapes.iter().zip(&plane.bands).enumerate() {
-        let bytes = band_bytes(sample, band)?;
-        let mut data = if i == 0 { lossless_plane(bytes, w, h)? } else { coded_high_frequency_band(bytes, w, coded_band_width(i, w, edges), h)? };
-        for (position, value) in data.iter_mut().enumerate() {
-            let step = match band.quant {
-                Quantization::Uniform(value) => quant_step(value, MAX_UNIFORM_QUANT)?,
-                Quantization::Adaptive { base, gain } => {
-                    adaptive_step(qp.ok_or_else(|| corrupt("missing QP map"))?, i, position % w, position / w, base, gain)?
-                }
-            };
-            *value = value.checked_mul(step).ok_or_else(|| corrupt("dequantized coefficient overflow"))?;
-        }
-        bands.push(WaveletBand { width: w, height: h, data });
-    }
+    // Each subband is its own entropy stream: decode and dequantize them in parallel. The first error
+    // in band order is reported, as when they were decoded one after another.
+    let bands: Vec<Result<WaveletBand>> = shapes
+        .par_iter()
+        .zip(plane.bands.par_iter())
+        .enumerate()
+        .map(|(i, (&(w, h), band))| {
+            let bytes = band_bytes(sample, band)?;
+            let mut data = if i == 0 { lossless_plane(bytes, w, h)? } else { coded_high_frequency_band(bytes, w, coded_band_width(i, w, edges), h)? };
+            dequantize(&mut data, i, w, &band.quant, qp)?;
+            Ok(WaveletBand { width: w, height: h, data })
+        })
+        .collect();
+    let bands = bands.into_iter().collect::<Result<Vec<_>>>()?;
     crx_wavelet::reconstruct(&bands, width, height, 3, edges)
+}
+
+/// Multiplies the coefficients of subband `band` (`width` columns) by their quantization step.
+///
+/// The step is constant per subband, except for adaptive quantization with a gain, where it is
+/// constant per QP cell: 2 coefficients wide in bands 4-6 and 4 wide in bands 7-9 (see
+/// [`adaptive_step`]), so it is looked up once per cell rather than per coefficient.
+fn dequantize(data: &mut [i32], band: usize, width: usize, quant: &Quantization, qp: Option<&QpMap>) -> Result<()> {
+    let (map, base, gain) = match *quant {
+        Quantization::Uniform(value) => return scale(data, quant_step(value, MAX_UNIFORM_QUANT)?),
+        Quantization::Adaptive { base, gain } => (qp.ok_or_else(|| corrupt("missing QP map"))?, base, gain),
+    };
+    if gain == 0 {
+        return scale(data, adaptive_step(map, band, 0, 0, base, gain)?);
+    }
+    if width == 0 {
+        return Err(corrupt("empty subband row"));
+    }
+    let cell = if (4..=6).contains(&band) { 2 } else { 4 };
+    for (y, row) in data.chunks_exact_mut(width).enumerate() {
+        for (column, values) in row.chunks_mut(cell).enumerate() {
+            scale(values, adaptive_step(map, band, column * cell, y, base, gain)?)?;
+        }
+    }
+    Ok(())
+}
+
+fn scale(values: &mut [i32], step: i32) -> Result<()> {
+    let mut overflow = false;
+    for value in values.iter_mut() {
+        let (product, wrapped) = value.overflowing_mul(step);
+        *value = product;
+        overflow |= wrapped;
+    }
+    if overflow { Err(corrupt("dequantized coefficient overflow")) } else { Ok(()) }
 }
 
 fn adaptive_step(map: &QpMap, band: usize, x: usize, y: usize, base: u32, gain: u32) -> Result<i32> {
@@ -1420,5 +1454,45 @@ mod tests {
         }
         assert_eq!(bits.rice(0).unwrap(), 16400);
         bits.finish().unwrap();
+    }
+
+    #[test]
+    fn dequantization_per_cell_matches_a_step_per_coefficient() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15;
+        // Odd map heights as on the EOS R7, and band sizes that fit the map and that overrun it by one.
+        for (map_width, map_height) in [(1, 1), (2, 3), (3, 4), (5, 7)] {
+            let map = QpMap { width: map_width, height: map_height, data: (0..map_width * map_height).map(|_| 131 + (xorshift(&mut seed) % 45) as i32).collect() };
+            for band in 0..10 {
+                for (width, height) in [(1, 1), (3, 2), (2 * map_width - 1, map_height.div_ceil(2)), (2 * map_width + 1, map_height), (4 * map_width, map_height), (4 * map_width + 1, map_height + 1)] {
+                    for quant in [
+                        Quantization::Uniform(4 + 4 * band as u8),
+                        Quantization::Adaptive { base: 0, gain: 0 },
+                        Quantization::Adaptive { base: 3, gain: 0 },
+                        Quantization::Adaptive { base: 1, gain: 8 },
+                        Quantization::Adaptive { base: 0, gain: 16 },
+                    ] {
+                        let data: Vec<i32> = (0..width * height).map(|_| (xorshift(&mut seed) % 2001) as i32 - 1000).collect();
+                        let mut cells = data.clone();
+                        let cells_result = dequantize(&mut cells, band, width, &quant, Some(&map));
+                        let mut reference = data;
+                        let reference_result = reference.iter_mut().enumerate().try_for_each(|(position, value)| -> Result<()> {
+                            let step = match quant {
+                                Quantization::Uniform(uniform) => quant_step(uniform, MAX_UNIFORM_QUANT)?,
+                                Quantization::Adaptive { base, gain } => adaptive_step(&map, band, position % width, position / width, base, gain)?,
+                            };
+                            *value = value.checked_mul(step).ok_or_else(|| corrupt("dequantized coefficient overflow"))?;
+                            Ok(())
+                        });
+                        let case = format!("map {map_width}x{map_height}, band {band}, {width}x{height}, {quant:?}");
+                        assert_eq!(cells_result.is_ok(), reference_result.is_ok(), "{case}");
+                        if cells_result.is_ok() {
+                            assert_eq!(cells, reference, "{case}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(dequantize(&mut [1 << 30], 1, 1, &Quantization::Uniform(10), None).is_err());
+        assert!(dequantize(&mut [1], 4, 1, &Quantization::Adaptive { base: 0, gain: 0 }, None).is_err());
     }
 }
