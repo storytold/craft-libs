@@ -186,6 +186,16 @@ impl Pdf {
     pub fn metadata(&self) -> &Metadata {
         self.xref.metadata()
     }
+
+    /// Return the document information dictionary resolved through the final trailer and xref.
+    pub fn info(&self) -> Option<crate::object::Dict<'_>> {
+        self.xref.info_id().and_then(|id| self.xref.get(id))
+    }
+
+    /// Whether the resolved trailer declares the document encrypted.
+    pub fn is_encrypted(&self) -> bool {
+        self.xref.is_encrypted()
+    }
 }
 
 fn find_version(data: &[u8]) -> Option<PdfVersion> {
