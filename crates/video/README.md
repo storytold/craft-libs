@@ -70,6 +70,6 @@ for frame in &file.frames {
   blocks decoded before it.
 - Verified: `tests/smacker` compares pictures with ffmpeg on a directory of real files
   (`CRAFT_SMACKER_SAMPLES`, the first 150 frames of each file, or all with `CRAFT_SMACKER_FRAMES=0`; skipped when it is not set, since real files come from commercial
-  games and are not in the repository). 67 `SMK2` files from three games match on every frame.
-  No `SMK4` file was available: its two extra full-block modes are tested only against
-  streams built from the format description.
+  games and are not in the repository). 1,796 files from four games match on every frame: 357 `SMK2` and 1,439 `SMK4`, whose two
+  extra full-block modes many of them use. ffmpeg refuses six more files (4x4 pictures that
+  only carry sound); the decoder reads them without error, with nothing to compare against.

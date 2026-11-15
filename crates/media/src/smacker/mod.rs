@@ -124,9 +124,9 @@ pub struct AudioTrack {
     pub stereo: bool,
     /// How the track's chunks are coded.
     pub coding: AudioCoding,
-    /// The header's size in bytes of the largest decoded chunk of this track, which the audio
-    /// decoder takes as its limit. 0 when the header does not say.
-    pub max_decoded_size: u32,
+    /// The header's audio size field for this track, in bytes. It does not bound a decoded
+    /// chunk: in most real `SMK4` files checked, chunks decode to more than it says.
+    pub size_hint: u32,
     /// The top byte of the header's rate field, as stored.
     pub flags: u8,
 }
@@ -138,7 +138,7 @@ impl AudioTrack {
     const BINK_RDFT: u8 = 0x08;
     const BINK_DCT: u8 = 0x04;
 
-    fn parse(rate: u32, max_decoded_size: u32) -> AudioTrack {
+    fn parse(rate: u32, size_hint: u32) -> AudioTrack {
         let flags = (rate >> 24) as u8;
         let coding = if flags & Self::BINK_RDFT != 0 {
             AudioCoding::BinkRdft
@@ -154,7 +154,7 @@ impl AudioTrack {
             sixteen_bit: flags & Self::SIXTEEN_BIT != 0,
             stereo: flags & Self::STEREO != 0,
             coding,
-            max_decoded_size,
+            size_hint,
             flags,
         }
     }

@@ -23,7 +23,7 @@
 //!     // a frame has a chunk of a track only when the track has data in it
 //!     let Some(chunk) = split_frame(&data, frame)?.audio[0] else { continue };
 //!     let decoded = match track.coding {
-//!         AudioCoding::Dpcm => decode(chunk, track.max_decoded_size)?,
+//!         AudioCoding::Dpcm => decode(chunk, 0)?,
 //!         AudioCoding::Pcm => pcm(chunk, track.sixteen_bit, track.stereo),
 //!         _ => break, // Bink audio
 //!     };
@@ -131,16 +131,15 @@ pub struct Chunk {
 /// The chunk says itself whether it is stereo and 16-bit. A chunk flagged as holding no data
 /// decodes to no samples.
 ///
-/// `max_decoded_size` is the most bytes of samples the chunk may decode to: the track's
-/// `AudioTrack::max_decoded_size` from the file header, which a hostile chunk would otherwise
-/// exceed at no cost in data. 0, which is what a header that leaves the field empty gives, sets
-/// no limit of the caller's. [`MAX_DECODED_SIZE`] applies in every case. A chunk larger than a
-/// header value that is too small is an error ([`Error::TooLarge`]); pass 0 to decode such a
-/// file.
+/// `max_decoded_size` is the most bytes of samples the caller accepts from one chunk; a larger
+/// chunk is an error ([`Error::TooLarge`]). 0 sets no limit of the caller's.
+/// [`MAX_DECODED_SIZE`] applies in every case. The file header's audio size field
+/// (`AudioTrack::size_hint`) is not such a limit: chunks of real files decode to more.
 ///
-/// With no limit of the caller's, a chunk of a few bytes can decode to the full
-/// [`MAX_DECODED_SIZE`], and a file can hold one such chunk for each frame and track. A caller
-/// that reads files it does not trust and keeps what it decodes bounds the total itself.
+/// A chunk declares its own size and can code a sample in no bits, so a chunk of a few bytes
+/// can decode to the full limit, and a file can hold one such chunk for each frame and track. A
+/// caller that reads files it does not trust and keeps what it decodes bounds the total itself,
+/// or passes a limit that suits the track, such as a few seconds of samples.
 pub fn decode(chunk: &[u8], max_decoded_size: u32) -> Result<Chunk> {
     let (size, data) = chunk.split_first_chunk::<4>().ok_or(Error::Truncated)?;
     let size = u32::from_le_bytes(*size);

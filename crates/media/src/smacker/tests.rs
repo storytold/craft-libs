@@ -113,12 +113,12 @@ fn the_size_table_carries_the_key_frame_flag_in_its_low_bits() {
 }
 
 #[test]
-fn audio_tracks_carry_their_largest_decoded_size() {
+fn audio_tracks_carry_the_header_size_field() {
     let mut bytes = sample();
     bytes[24..28].copy_from_slice(&1234u32.to_le_bytes());
     bytes[32..36].copy_from_slice(&77u32.to_le_bytes());
     let h = open(&bytes).unwrap().header;
-    assert_eq!(h.audio.map(|a| a.max_decoded_size), [1234, 0, 77, 0, 0, 0, 0]);
+    assert_eq!(h.audio.map(|a| a.size_hint), [1234, 0, 77, 0, 0, 0, 0]);
 }
 
 #[test]

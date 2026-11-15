@@ -29,8 +29,7 @@
 //!
 //! The decoder keeps the picture and the palette between frames, so frames are decoded in order
 //! from the first one. A file's ring frame (`SmackerFile::ring_frame`) decodes like any other
-//! frame, after the last one. `SMK4` files are decoded from the format description only: no `SMK4` file
-//! was available to check the two extra full-block modes against.
+//! frame, after the last one.
 
 #![warn(missing_docs)]
 
