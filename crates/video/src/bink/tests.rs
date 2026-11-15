@@ -52,7 +52,14 @@ struct Row {
 }
 
 impl Row {
+    /// Writes the row as a plane `bw` blocks wide whose sub-type field counts half the blocks.
     fn write(&self, w: &mut BitWriter, bw: u32) {
+        self.write_plane(w, bw, bw / 2);
+    }
+
+    /// Writes the row as a plane `bw` blocks wide whose sub-type length field is sized for
+    /// `sub_types` 16x16 blocks per row.
+    fn write_plane(&self, w: &mut BitWriter, bw: u32, sub_types: u32) {
         for _ in 0..23 {
             w.put(0, 4); // tree 0: raw nibbles
         }
@@ -66,7 +73,7 @@ impl Row {
             }
         };
         raw(w, &self.types, bw);
-        raw(w, &self.sub_types, bw / 2);
+        raw(w, &self.sub_types, sub_types);
         w.put(self.colours.len() as u32, length_bits(bw * 64));
         if !self.colours.is_empty() {
             w.put(0, 1);
@@ -385,4 +392,142 @@ fn hostile_input_never_panics() {
             }
         });
     }
+}
+
+/// Coefficient data for a single coefficient at (1, 1) of `value` (positive, `planes` bits): the
+/// walk leaves the three groups and the positions (0, 1) and (1, 0) alone in every plane.
+fn single_coefficient_at_1_1(value: u32, planes: u32) -> Vec<(u32, u32)> {
+    let top = planes - 1;
+    let mut bits = vec![(planes, 4), (0, 5), (1, 1), (value & ((1 << top) - 1), top), (0, 1)];
+    bits.extend(std::iter::repeat_n((0, 5), top as usize));
+    bits
+}
+
+#[test]
+fn a_16x16_block_is_decoded_once_and_doubled() {
+    // 16x16 picture: one 16x16 raw block, listed on both rows. After the first row the sub-type
+    // and colour bundles are used up, so the second row starts with their zero lengths.
+    let luma = Row {
+        types: vec![1, 1],
+        sub_types: vec![9],
+        colours: (1..=64).collect(),
+        inline: vec![(0, length_bits(1)), (0, length_bits(128))],
+        ..Row::default()
+    };
+    let mut w = BitWriter::default();
+    w.put(0, 32);
+    luma.write(&mut w, 2);
+    flat_chroma(128).write(&mut w, 1);
+    flat_chroma(128).write(&mut w, 1);
+    let pic = Decoder::new(16, 16, *b"BIKi", 0).unwrap().decode(&w.bytes()).unwrap();
+    for y in 0..16 {
+        for x in 0..16 {
+            assert_eq!(usize::from(pic.y[y * 16 + x]), (y / 2) * 8 + x / 2 + 1, "({x}, {y})");
+        }
+    }
+}
+
+/// A revision `i` packet for a 24x8 picture: three luma blocks, two blocks per chroma plane.
+fn packet_24x8(luma: &Row) -> Vec<u8> {
+    let chroma = Row { types: vec![6, 6], colours: vec![128, 128], ..Row::default() };
+    let mut w = BitWriter::default();
+    w.put(0, 32);
+    luma.write_plane(&mut w, 3, 1);
+    chroma.write_plane(&mut w, 2, 1);
+    chroma.write_plane(&mut w, 2, 1);
+    w.bytes()
+}
+
+#[test]
+fn a_16x16_block_at_the_edge_is_clipped_like_ffmpeg() {
+    // the last column of three, on the only row: the part inside the plane is drawn
+    let luma = Row { types: vec![6, 6, 1], sub_types: vec![6], colours: vec![5, 6, 77], ..Row::default() };
+    let pic = Decoder::new(24, 8, *b"BIKi", 0).unwrap().decode(&packet_24x8(&luma)).unwrap();
+    let column = |bx: usize| pic.y.chunks(24).flat_map(|r| r[bx * 8..bx * 8 + 8].to_vec()).collect::<Vec<u8>>();
+    assert!(column(0).iter().all(|&v| v == 5));
+    assert!(column(1).iter().all(|&v| v == 6));
+    assert!(column(2).iter().all(|&v| v == 77));
+}
+
+#[test]
+fn a_16x16_entry_at_an_odd_column_only_steps_over_two_blocks() {
+    // no sub-type is read for it, and the two blocks stay as a new picture starts: zero
+    let luma = Row { types: vec![6, 1], colours: vec![5], ..Row::default() };
+    let mut dec = Decoder::new(24, 8, *b"BIKi", 0).unwrap();
+    let first = Row { types: vec![6, 6, 6], colours: vec![9, 9, 9], ..Row::default() };
+    dec.decode(&packet_24x8(&first)).unwrap();
+    let pic = dec.decode(&packet_24x8(&luma)).unwrap();
+    let column = |bx: usize| pic.y.chunks(24).flat_map(|r| r[bx * 8..bx * 8 + 8].to_vec()).collect::<Vec<u8>>();
+    assert!(column(0).iter().all(|&v| v == 5));
+    assert!(column(1).iter().chain(&column(2)).all(|&v| v == 0));
+}
+
+#[test]
+fn the_chroma_sub_type_field_is_sized_from_half_the_luma_width_rounded_down() {
+    // width 17: the chroma planes are 9 samples (two blocks) wide, but their sub-type field is
+    // sized for (8 + 7) / 16 = 0 blocks: 9 bits, where two blocks would give 10
+    assert_eq!((length_bits(0), length_bits(1)), (9, 10));
+    let luma = Row { types: vec![6, 6, 6], colours: vec![1, 2, 3], ..Row::default() };
+    let chroma = |value| Row { types: vec![6, 6], colours: vec![value, value], ..Row::default() };
+    let mut w = BitWriter::default();
+    w.put(0, 32);
+    luma.write_plane(&mut w, 3, 1);
+    chroma(60).write_plane(&mut w, 2, 0);
+    chroma(70).write_plane(&mut w, 2, 0);
+    let pic = Decoder::new(17, 8, *b"BIKi", 0).unwrap().decode(&w.bytes()).unwrap();
+    assert_eq!((pic.chroma_width, pic.chroma_height), (9, 4));
+    assert!(pic.v.iter().all(|&v| v == 60));
+    assert!(pic.u.iter().all(|&v| v == 70));
+    assert_eq!(pic.y[..17], [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 3]);
+}
+
+#[test]
+fn a_coefficient_that_overflows_32_bits_wraps_like_ffmpeg() {
+    // coefficient (1, 1) = 30000 at quantiser 0 with DC 1024: the row pass multiplies past 32
+    // bits. These are the samples ffmpeg gives for the same block.
+    #[rustfmt::skip]
+    const FFMPEG: [u8; 64] = [
+        64, 57, 83, 215, 41, 173, 199, 192, 57, 90, 190, 163, 93, 66, 166, 199,
+        83, 190, 170, 67, 189, 86, 66, 173, 215, 163, 67, 196, 60, 189, 93, 41,
+        41, 93, 189, 60, 196, 67, 163, 215, 173, 66, 86, 189, 67, 170, 190, 83,
+        199, 166, 66, 93, 163, 190, 90, 57, 192, 199, 173, 41, 215, 83, 57, 64,
+    ];
+    let mut inline = single_coefficient_at_1_1(30000, 15);
+    inline.push((0, 4));
+    let luma = Row { types: vec![5, 6], colours: vec![1], intra_dc: Some(1024), inline, ..Row::default() };
+    let pic = decoder().decode(&packet(&luma, &flat_chroma(128))).unwrap();
+    assert_eq!(block(&pic, 0).concat(), FFMPEG);
+
+    // a coefficient in the normal range, also from ffmpeg: 3000 at the same position
+    #[rustfmt::skip]
+    const FFMPEG_3000: [u8; 64] = [
+        96, 201, 178, 69, 187, 78, 55, 160, 201, 73, 92, 39, 217, 164, 183, 55,
+        178, 92, 190, 240, 16, 66, 164, 78, 69, 39, 240, 167, 89, 16, 217, 187,
+        187, 217, 16, 89, 167, 240, 39, 69, 78, 164, 66, 16, 240, 190, 92, 178,
+        55, 183, 164, 217, 39, 92, 73, 201, 160, 55, 78, 187, 69, 178, 201, 96,
+    ];
+    let mut inline = single_coefficient_at_1_1(3000, 12);
+    inline.push((0, 4));
+    let luma = Row { types: vec![5, 6], colours: vec![1], intra_dc: Some(1024), inline, ..Row::default() };
+    let pic = decoder().decode(&packet(&luma, &flat_chroma(128))).unwrap();
+    assert_eq!(block(&pic, 0).concat(), FFMPEG_3000);
+}
+
+#[test]
+fn reset_forgets_the_previous_picture() {
+    let mut dec = decoder();
+    let first = Row { types: vec![6, 6], colours: vec![40, 50], ..Row::default() };
+    let skip = Row { types: vec![0, 0], ..Row::default() };
+    let chroma_skip = Row { types: vec![0], ..Row::default() };
+    dec.decode(&packet(&first, &flat_chroma(128))).unwrap();
+    let kept = dec.decode(&packet(&skip, &chroma_skip)).unwrap();
+    assert!(block(&kept, 0).iter().flatten().all(|&v| v == 40));
+    dec.reset();
+    let cleared = dec.decode(&packet(&skip, &chroma_skip)).unwrap();
+    assert!(cleared.y.iter().chain(&cleared.u).chain(&cleared.v).all(|&v| v == 0));
+}
+
+#[test]
+fn a_picture_past_the_memory_budget_is_refused_before_anything_is_allocated() {
+    assert!(matches!(Decoder::new(32767, 32767, *b"BIKi", 0), Err(Error::Unsupported(_))));
 }

@@ -53,6 +53,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// The largest width or height a Bink file can declare.
 const MAX_DIMENSION: u32 = 32767;
 
+/// The shortest packet that can hold one plane's 23 tree headers.
+const MIN_PACKET_LEN: usize = 12;
+
 /// Video flag: frames carry an alpha plane.
 const FLAG_ALPHA: u32 = 1 << 20;
 /// Video flag: the video is grayscale.
@@ -86,13 +89,17 @@ struct PlaneStore {
     height: usize,
     blocks_wide: usize,
     blocks_high: usize,
+    /// The most 16x16 blocks a row can hold.
+    sub_types: usize,
 }
 
 impl PlaneStore {
-    fn new(width: usize, height: usize) -> PlaneStore {
+    /// A plane of `width` by `height` samples; `sub_types` is the count that sizes the sub-type
+    /// length field.
+    fn new(width: usize, height: usize, sub_types: usize) -> PlaneStore {
         let (blocks_wide, blocks_high) = (width.div_ceil(8), height.div_ceil(8));
         let samples = blocks_wide * 8 * blocks_high * 8;
-        PlaneStore { cur: vec![0; samples], prev: vec![0; samples], width, height, blocks_wide, blocks_high }
+        PlaneStore { cur: vec![0; samples], prev: vec![0; samples], width, height, blocks_wide, blocks_high, sub_types }
     }
 
     /// The visible samples of the current picture, rows of `width`.
@@ -156,8 +163,17 @@ impl Decoder {
             return Err(Error::Unsupported(format!("picture size {width}x{height} exceeds the decoder memory budget")));
         }
         let (w, h) = (width as usize, height as usize);
-        let chroma = || PlaneStore::new(w.div_ceil(2), h.div_ceil(2));
-        Ok(Decoder { width, height, size_word, signed_colours: !size_word, planes: [PlaneStore::new(w, h), chroma(), chroma()], coded_order })
+        // the sub-type field of a chroma plane is sized from half the luma width rounded down,
+        // although the plane itself is half the luma width rounded up
+        let chroma = || PlaneStore::new(w.div_ceil(2), h.div_ceil(2), (w / 2 + 7) / 16);
+        Ok(Decoder {
+            width,
+            height,
+            size_word,
+            signed_colours: !size_word,
+            planes: [PlaneStore::new(w, h, (w + 7) / 16), chroma(), chroma()],
+            coded_order,
+        })
     }
 
     /// A decoder for the video of a Bink file, from `craft_media::bink::BinkFile::video_params`:
@@ -186,9 +202,14 @@ impl Decoder {
     /// Decodes the video packet of the next frame. After an error the decoder still holds the
     /// last picture that decoded, so later frames build on that one.
     pub fn decode(&mut self, packet: &[u8]) -> Result<Picture> {
+        // the tree headers of one plane alone take 92 bits; refuse less before touching a picture
+        if packet.len() < MIN_PACKET_LEN {
+            return Err(Error::Invalid("the packet is too short to hold a plane".into()));
+        }
+        // a new picture starts from zeros: a block no entry draws stays 0
         for p in &mut self.planes {
             std::mem::swap(&mut p.cur, &mut p.prev);
-            p.cur.copy_from_slice(&p.prev);
+            p.cur.fill(0);
         }
         if let Err(e) = self.decode_planes(packet) {
             for p in &mut self.planes {
@@ -215,7 +236,8 @@ impl Decoder {
         }
         for index in self.coded_order {
             let p = &mut self.planes[index];
-            let mut plane = decode::Plane { cur: &mut p.cur, prev: &p.prev, blocks_wide: p.blocks_wide, blocks_high: p.blocks_high };
+            let mut plane =
+                decode::Plane { cur: &mut p.cur, prev: &p.prev, blocks_wide: p.blocks_wide, blocks_high: p.blocks_high, sub_types: p.sub_types };
             decode::decode_plane(&mut bits, &mut plane, self.signed_colours)?;
             bits.align32();
         }

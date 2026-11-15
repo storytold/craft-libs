@@ -170,11 +170,12 @@ struct Bundles {
 }
 
 impl Bundles {
-    fn new(blocks_wide: usize, signed_colours: bool) -> Bundles {
+    /// Bundles for a plane `blocks_wide` blocks wide whose rows hold at most `sub_types` 16x16 blocks.
+    fn new(blocks_wide: usize, sub_types: usize, signed_colours: bool) -> Bundles {
         let bw = blocks_wide;
         Bundles {
             block_type: Bundle::new(bw),
-            sub_type: Bundle::new(bw / 2),
+            sub_type: Bundle::new(sub_types),
             colour: Bundle::new(bw.saturating_mul(64)),
             pattern: Bundle::new(bw.saturating_mul(8)),
             x_off: Bundle::new(bw),
@@ -287,9 +288,8 @@ fn read_offsets(bundle: &mut Bundle, bits: &mut Bits, tree: &Tree) -> Result<()>
     Ok(())
 }
 
-/// The range a DC value may take. A real stream stays far inside it; past it the dequantised
-/// value would no longer mean anything.
-const DC_LIMIT: i32 = 32767;
+/// The range a DC value may take: 16 bits, signed. A real stream stays far inside it.
+const DC_RANGE: std::ops::RangeInclusive<i32> = -32768..=32767;
 
 /// A chunk of DC values: a start value, then groups of 8 deltas that share a bit count.
 fn read_dc(bundle: &mut Bundle, bits: &mut Bits, inter: bool) -> Result<()> {
@@ -308,7 +308,7 @@ fn read_dc(bundle: &mut Bundle, bits: &mut Bits, inter: bool) -> Result<()> {
             if delta_bits != 0 {
                 let d = bits.get(delta_bits)? as i32;
                 value += if d != 0 && bits.bit()? { -d } else { d };
-                if !(-DC_LIMIT..=DC_LIMIT).contains(&value) {
+                if !DC_RANGE.contains(&value) {
                     return invalid("a DC value is out of range");
                 }
             }
@@ -429,14 +429,15 @@ fn read_list(bits: &mut Bits, coder: ListCoder, planes: u32, mut budget: u32, ou
 }
 
 /// The inverse transform of a dequantised block, in place: columns, then rows, then the final
-/// rounding. Arithmetic wraps, so no input can overflow.
+/// rounding. Every operation wraps at 32 bits, so no input can overflow; a real stream never
+/// comes near that.
 fn inverse_dct(block: &mut [i32; 64]) {
-    const A1: i64 = 2896;
-    const A2: i64 = 3784;
-    const A3: i64 = 2217;
-    const A4: i64 = 5352;
-    fn mul(x: i32, a: i64) -> i32 {
-        ((i64::from(x) * a) >> 11) as i32
+    const A1: i32 = 2896;
+    const A2: i32 = 3784;
+    const A3: i32 = 2217;
+    const A4: i32 = 5352;
+    fn mul(x: i32, a: i32) -> i32 {
+        x.wrapping_mul(a) >> 11
     }
     fn pass(i: [i32; 8]) -> [i32; 8] {
         let (a, s) = (i32::wrapping_add, i32::wrapping_sub);
@@ -481,7 +482,8 @@ fn read_dct(bits: &mut Bits, dc: i32, tables: &[[u32; 64]; 16]) -> Result<[i32; 
     block[0] = dc;
     let table = &tables[bits.get(4)? as usize & 15];
     for (v, &m) in block.iter_mut().zip(table) {
-        *v = ((i64::from(*v) * i64::from(m)) >> 11) as i32;
+        // 32-bit wrapping, like the transform
+        *v = v.wrapping_mul(m as i32) >> 11;
     }
     inverse_dct(&mut block);
     Ok(block)
@@ -493,6 +495,8 @@ pub(super) struct Plane<'a> {
     pub(super) prev: &'a [u8],
     pub(super) blocks_wide: usize,
     pub(super) blocks_high: usize,
+    /// The most 16x16 blocks a row can hold, which sets the width of the sub-type length field.
+    pub(super) sub_types: usize,
 }
 
 impl Plane<'_> {
@@ -510,12 +514,16 @@ impl Plane<'_> {
         Ok(())
     }
 
-    /// Writes an 8x8 block scaled to 16x16 at block (bx, by).
+    /// Writes an 8x8 block scaled to 16x16 at block (bx, by), clipped to the plane: in the last
+    /// column of an odd number of columns, or the last row of an odd number of rows, only the
+    /// part inside the plane is drawn.
     fn put_scaled(&mut self, bx: usize, by: usize, px: &[u8; 64]) -> Result<()> {
         let stride = self.stride();
-        for y in 0..16 {
+        let width = 16.min(stride.saturating_sub(bx * 8));
+        let rows = 16.min((self.blocks_high * 8).saturating_sub(by * 8));
+        for y in 0..rows {
             let at = (by * 8 + y) * stride + bx * 8;
-            let row = self.cur.get_mut(at..at + 16).ok_or_else(|| Error::Invalid("block outside the plane".into()))?;
+            let row = self.cur.get_mut(at..at + width).ok_or_else(|| Error::Invalid("block outside the plane".into()))?;
             for (x, v) in row.iter_mut().enumerate() {
                 *v = px[(y / 2) * 8 + x / 2];
             }
@@ -600,7 +608,7 @@ fn intra_block(kind: i32, bits: &mut Bits, b: &mut Bundles) -> Result<[u8; 64]> 
 /// Decodes one plane from `bits`, which stands at the plane's tree headers.
 pub(super) fn decode_plane(bits: &mut Bits, plane: &mut Plane, signed_colours: bool) -> Result<()> {
     let trees = Trees::read(bits)?;
-    let mut b = Bundles::new(plane.blocks_wide, signed_colours);
+    let mut b = Bundles::new(plane.blocks_wide, plane.sub_types, signed_colours);
     for by in 0..plane.blocks_high {
         b.refill(bits, &trees)?;
         let mut bx = 0;
@@ -612,11 +620,10 @@ pub(super) fn decode_plane(bits: &mut Bits, plane: &mut Plane, signed_colours: b
                     plane.put(bx, by, &px)?;
                 }
                 1 => {
-                    // a 16x16 block is listed on both of its rows; it is decoded on the first
-                    if by % 2 == 0 {
-                        if bx + 1 >= plane.blocks_wide || by + 1 >= plane.blocks_high {
-                            return invalid("a 16x16 block passes the edge of the plane");
-                        }
+                    // a 16x16 block is listed on both of its rows and decoded on the first, which
+                    // is an even row; it starts at an even column. Anywhere else the entry only
+                    // steps over two blocks.
+                    if by % 2 == 0 && bx % 2 == 0 {
                         let sub = b.sub_type.take()?;
                         if !matches!(sub, 3 | 5 | 6 | 8 | 9) {
                             return invalid("unknown 16x16 block type");
@@ -653,4 +660,37 @@ pub(super) fn decode_plane(bits: &mut Bits, plane: &mut Plane, signed_colours: b
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Packs `(value, bits)` fields least significant bit first.
+    fn pack(fields: &[(u32, u32)]) -> Vec<u8> {
+        let bits: Vec<bool> = fields.iter().flat_map(|&(v, n)| (0..n).map(move |k| v >> k & 1 != 0)).collect();
+        bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |b, (k, &v)| b | u8::from(v) << k)).collect()
+    }
+
+    /// Reads an inter DC chunk of two values: -1023, then a 15-bit delta subtracted from it.
+    fn inter_dc_after_delta(delta: u32) -> Result<Vec<i32>> {
+        let data = pack(&[(2, 10), (1023, 10), (1, 1), (15, 4), (delta, 15), (1, 1)]);
+        let mut bundle = Bundle::new(1);
+        read_dc(&mut bundle, &mut Bits::new(&data), true)?;
+        Ok(bundle.values)
+    }
+
+    #[test]
+    fn dc_values_span_sixteen_signed_bits() {
+        assert_eq!(inter_dc_after_delta(31745).unwrap(), [-1023, -32768]);
+        assert!(inter_dc_after_delta(31746).is_err());
+        // and the upper end: 2047, then +30720 reaches 32767; one more is out of range
+        let up = |delta: u32| {
+            let data = pack(&[(2, 10), (2047, 11), (15, 4), (delta, 15), (0, 1)]);
+            let mut bundle = Bundle::new(1);
+            read_dc(&mut bundle, &mut Bits::new(&data), false).map(|()| bundle.values)
+        };
+        assert_eq!(up(30720).unwrap(), [2047, 32767]);
+        assert!(up(30721).is_err());
+    }
 }

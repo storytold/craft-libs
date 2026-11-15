@@ -31,6 +31,8 @@ for i in 0..file.frames.len() {
 }
 ```
 
+- The example reads the file with `craft_media::bink`, which needs `craft-media`'s `bink`
+  feature; this crate's `bink` feature does not turn it on.
 - Frames are decoded in order. A frame that is not a key frame builds on the picture before it.
 - After an error the decoder keeps the last picture that decoded.
 - `reset()` forgets the previous picture, for decoding from a key frame after a seek.
@@ -85,7 +87,8 @@ most values a row of blocks can need:
 
 | Bundle | `n` | After the length |
 |---|---|---|
-| Block types, sub-types | blocks per row (sub-types: half) | 1 bit: all values equal (4 bits follow), else coded values |
+| Block types | blocks per row | 1 bit: all values equal (4 bits follow), else coded values |
+| Sub-types | `(width + 7) / 16`, with half the luma width rounded down as the width of a chroma plane | as block types |
 | Colours | 64 per block | 1 bit: all values equal (one coded colour follows), else coded colours |
 | Patterns | 8 per block | coded values: low nibble, then high nibble |
 | X and y offsets | blocks per row | 1 bit: all values equal, else coded values; a 4-bit magnitude and a sign bit when it is not zero (1 = negative) |
@@ -106,7 +109,7 @@ most values a row of blocks can need:
 | Type | Block |
 |---|---|
 | 0 | copied from the previous picture |
-| 1 | a 16x16 block: a sub-type (3, 5, 6, 8 or 9) is read, the block is decoded as 8x8 and every sample doubled. It is listed on both of its rows and decoded on the first. |
+| 1 | a 16x16 block: a sub-type (3, 5, 6, 8 or 9) is read, the block is decoded as 8x8 and every sample doubled. It is listed on both of its rows and decoded on the first: at an even column of an even row. At an odd column or on an odd row the entry only steps over two blocks. At the right or bottom edge of an odd number of blocks, the part inside the plane is drawn. |
 | 2 | motion: an x and a y offset; copied from the previous picture at that offset |
 | 3 | run fill: a 4-bit scan pattern; then runs until 64 samples are placed: a run length (bundle value + 1), then 1 bit: one colour for the run, or a colour per sample. When 63 samples are placed the last takes one more colour. |
 | 4 | motion plus residue: offsets, then the residue coder on the samples |
@@ -117,6 +120,8 @@ most values a row of blocks can need:
 | 9 | raw: 64 colours in raster order |
 
 Sums of a prediction and a residue wrap to 8 bits, as do intra DCT results. Nothing is clamped.
+A picture starts as zeros: a block that no entry draws (the two blocks a 16x16 entry steps over
+when nothing was drawn there) stays 0.
 
 ### DCT coefficients
 
@@ -148,11 +153,12 @@ walk over sample positions, with the list starting as the groups (0, 2), (2, 0),
 
 ### Dequantisation and transform
 
-A coefficient is multiplied by the entry of its position in the quantiser's table and shifted
-right by 11; the DC value likewise. The tables (`INTRA_QUANT`, `INTER_QUANT`) hold 16 fractional
+A DC value is 16 bits, signed (-32768 to 32767). A coefficient is multiplied by the entry of
+its position in the quantiser's table and shifted right by 11; the DC value likewise. The tables (`INTRA_QUANT`, `INTER_QUANT`) hold 16 fractional
 bits and include the scale factors of the transform. The inverse transform is a fixed-point
 scaled inverse DCT: columns, then rows, with four multiplications per pass by 2896, 3784, 2217
-and 5352 (each shifted right by 11), and a final `(x + 127) >> 8`.
+and 5352 (each shifted right by 11), and a final `(x + 127) >> 8`. Every multiplication and sum
+wraps at 32 bits.
 
 ## How each part was established
 
@@ -167,6 +173,7 @@ and 5352 (each shifted right by 11), and a final `(x + 127) >> 8`.
 | Transform | candidate fixed-point transforms compared with ffmpeg on random blocks until one matched every sample |
 | Quantiser tables | each of the 2048 entries narrowed to one integer by probes chosen to separate the candidates |
 | Whole decoder | every frame of the sample files compared with ffmpeg, sample for sample |
+| Edge rules (16x16 blocks at edges and odd columns, field widths at other picture sizes, DC range, overflow) | random synthetic streams of every block type and size decoded by both decoders |
 
 ## Limits
 
@@ -174,13 +181,14 @@ and 5352 (each shifted right by 11), and a final `(x + 127) >> 8`.
   accepts some references that run across a row end and rejects some inside the plane; no real
   file needs either.
 - A block that needs a value its bundle does not hold is an error.
-- Arithmetic in the transform wraps, so no coefficient can overflow.
+- A packet must hold all three planes in full. ffmpeg also decodes a packet whose trailing zero
+  bytes are cut off, or that ends at a plane boundary.
+- Coefficients too large for a real stream (from about 7 bit planes) overflow 32 bits. The
+  decoder wraps as ffmpeg does, and matches it on the cases tested, but rare one-sample
+  differences were seen at the largest sizes.
 - Pictures are bounded by `budget::DECODE_MEMORY_BUDGET`, chunk sizes by their length fields.
 
-Not verified, because the samples cannot show it: whether the run-length field counts 48 or 64
-values per block and whether the sub-type field counts half the blocks per row or all of them
-(the two give the same width at every sample size), and everything about revisions other than
-`f` and `i`.
+Not verified: everything about revisions other than `f` and `i`, for which there is no sample.
 
 ## Tests
 

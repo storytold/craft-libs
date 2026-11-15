@@ -214,3 +214,32 @@ fn hostile_input_never_panics() {
         });
     }
 }
+
+/// A source that reports a shorter length than it serves, like a file growing while it is opened.
+struct Understating<'a> {
+    data: &'a [u8],
+    reported: u64,
+}
+
+impl ByteSource for Understating<'_> {
+    fn len(&self) -> u64 {
+        self.reported
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        self.data.read_at(offset, buf)
+    }
+}
+
+#[test]
+fn a_source_that_understates_its_length_is_an_error_not_a_panic() {
+    let mut d = sample();
+    d[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+    // the header and both track headers can be read, but the reported length ends before them
+    for reported in [44, 50, 67] {
+        let src = Understating { data: &d, reported };
+        assert!(matches!(open(&src), Err(Error::Invalid(_))), "reported length {reported}");
+    }
+    // at the end of the track headers there is room for no index entry: no frames, no error
+    let src = Understating { data: &d, reported: 68 };
+    assert_eq!(open(&src).unwrap().frames.len(), 0);
+}

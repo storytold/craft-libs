@@ -35,6 +35,7 @@ fn real_files_decode_like_ffmpeg() {
     files.sort();
     assert!(!files.is_empty(), "no .bik files under {}", Path::new(&dir).display());
     let mut failures = Vec::new();
+    let mut compared = 0usize;
     for path in files {
         let file = std::fs::File::open(&path).unwrap();
         let bink = craft_media::bink::open(&file).unwrap();
@@ -81,6 +82,7 @@ fn real_files_decode_like_ffmpeg() {
                 failed = Some(format!("frame {i}: {dy} luma, {du} Cb and {dv} Cr samples differ"));
                 break;
             }
+            compared += 1;
         }
         drop(out);
         let _ = child.kill();
@@ -94,4 +96,6 @@ fn real_files_decode_like_ffmpeg() {
         }
     }
     assert!(failures.is_empty(), "{} file(s) differ from ffmpeg:\n{}", failures.len(), failures.join("\n"));
+    // files of a revision the decoder refuses are skipped; a directory of only those proves nothing
+    assert!(compared > 0, "no frame was compared: every file under {} was skipped or empty", Path::new(&dir).display());
 }

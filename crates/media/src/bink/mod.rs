@@ -265,15 +265,22 @@ pub fn open<S: ByteSource + ?Sized>(src: &S) -> Result<BinkFile> {
 
     // the index: one absolute offset per frame and one for the end of the last frame
     let index_at = (HEADER_LEN + tracks * 12) as u64;
-    let room = (len - index_at) / 4;
+    // `len` was taken before the reads above: a source that reports less than it serves (a file
+    // still being written) must not make this wrap
+    let Some(room) = len.checked_sub(index_at) else { return invalid("audio track headers cut off") };
     if header.frames == 0 {
         return invalid("no frames");
     }
-    let entries = (u64::from(header.frames) + 1).min(room) as usize;
-    let mut index = vec![0u8; entries * 4];
+    // as many entries as the file declares and could hold; on a 32-bit target that may not fit
+    let entries = (u64::from(header.frames) + 1).min(room / 4);
+    let (Ok(entries), Some(index_len)) = (usize::try_from(entries), usize::try_from(entries).ok().and_then(|e| e.checked_mul(4))) else {
+        return invalid("frame index too large");
+    };
+    let mut index = vec![0u8; index_len];
     src.read_at(index_at, &mut index)?;
     let data_start = index_at + (u64::from(header.frames) + 1) * 4;
-    let mut frames = Vec::with_capacity(entries.saturating_sub(1));
+    // grown as entries prove valid, so a hostile count reserves nothing beyond the index itself
+    let mut frames = Vec::new();
     for i in 0..entries.saturating_sub(1) {
         let entry = le32(&index, i * 4);
         let offset = u64::from(entry & !1);
