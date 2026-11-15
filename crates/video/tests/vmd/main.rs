@@ -112,7 +112,7 @@ fn decode_all(bytes: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut out = Vec::new();
     for (i, frame) in file.frames.iter().enumerate() {
         let FrameKind::Video { new_palette, .. } = frame.kind else { continue };
-        let rect = Rect::from(file.picture_rect(frame).unwrap());
+        let rect = Rect::from(file.picture_rect(i).unwrap());
         decoder.decode(rect, new_palette, &file.read_frame(bytes, i).unwrap()).unwrap();
         out.push((decoder.indices().to_vec(), decoder.rgb24()));
     }
@@ -236,16 +236,17 @@ fn lz_chains() {
     assert_eq!(unpack(&short).unwrap(), want);
     // with the marker the window starts at 0x111, and a length of 18 takes one more byte: 18 + 5
     let long = [32, 0, 0, 0, 0x34, 0x12, 0x78, 0x56, 0b0000_0111, 0x90, 0xA0, 0xB0, 0x11, 0x10, 0x00, 0x0F, 5];
-    let mut want = vec![0x90, 0xA0, 0xB0, 0x90, 0xA0, 0xB0];
-    want.resize(29, 0x20);
-    want.extend([0x40; 3]);
-    // 29 of the 32 bytes arrive: the picture's last three pixels are not painted
+    // 29 of the 32 bytes arrive (3 literals, 3 and 23 chained): the first row is painted, the
+    // second, three bytes short, is not
     assert_eq!(unpack(&long), Err(Error::Invalid("the frame data ends early")));
     let mut d = flat();
     let mut data = vec![0x82u8];
     data.extend_from_slice(&long);
     let _ = d.decode(FULL, false, &data);
-    assert_eq!(d.indices()[..16], want[..16]);
+    let mut want = vec![0x90, 0xA0, 0xB0, 0x90, 0xA0, 0xB0];
+    want.resize(16, 0x20);
+    want.extend([0x40; 16]);
+    assert_eq!(d.indices(), want);
     // a chain that overlaps what it writes repeats it: one literal, then 18 copies of it
     let overlap = [32, 0, 0, 0, 0b0000_0001, 7, 0xEE, 0xFF, 0xEE, 0xFA];
     assert_eq!(unpack(&overlap).unwrap(), [7; 32]);
@@ -284,6 +285,22 @@ fn lz_unpacking_stops_at_what_a_picture_can_use() {
     assert_eq!(d.indices(), [0x20; 32]);
     // 87 MB of output for each frame without the stop: seconds, not milliseconds
     assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+
+    // the stop leaves room for the largest body a frame needs: every two pixels as a run-length
+    // run of their own, five bytes for two pixels
+    let (w, h) = (128, 32);
+    let mut d = Decoder::new(&build(&Spec::new(w, h), &[])).unwrap();
+    let body: Vec<u8> = (0..w * h / 2).flat_map(|i| [0x81, 0xFF, 0x81, i as u8, (i >> 8) as u8]).collect();
+    // LZ packing with literals only: tags of 0xFF, eight bytes each
+    let mut data = vec![0x83];
+    data.extend((body.len() as u32).to_le_bytes());
+    for chunk in body.chunks(8) {
+        data.push(0xFF);
+        data.extend_from_slice(chunk);
+    }
+    d.decode(Rect { left: 0, top: 0, right: w - 1, bottom: h - 1 }, false, &data).unwrap();
+    let want: Vec<u8> = (0..w * h / 2).flat_map(|i| [i as u8, (i >> 8) as u8]).collect();
+    assert!(d.indices() == want);
 }
 
 #[test]
@@ -370,7 +387,7 @@ fn hostile_input_never_panics() {
                 let Ok(data) = file.read_frame(d, i) else { continue };
                 // the rectangle as stored too: the decoder must refuse what does not fit
                 let _ = decoder.decode(Rect { left, top, right, bottom }, new_palette, &data);
-                if let Some(rect) = file.picture_rect(frame) {
+                if let Some(rect) = file.picture_rect(i) {
                     let _ = decoder.decode(rect.into(), new_palette, &data);
                 }
             }
@@ -419,7 +436,7 @@ fn real_files_match_ffmpeg() {
             if frame.size == 0 {
                 continue;
             }
-            let rect = file.picture_rect(frame).unwrap_or_else(|| panic!("{name}: frame {i} lies outside the picture"));
+            let rect = file.picture_rect(i).unwrap_or_else(|| panic!("{name}: frame {i} lies outside the picture"));
             let data = file.read_frame(&source, i).unwrap();
             decoder.decode(rect.into(), new_palette, &data).unwrap_or_else(|e| panic!("{name}: frame {i}: {e}"));
             theirs_out.read_exact(&mut theirs).unwrap_or_else(|e| panic!("{name}: ffmpeg has no picture for frame {i}: {e}"));

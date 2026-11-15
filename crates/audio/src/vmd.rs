@@ -25,8 +25,9 @@
 //! Not decoded: IMA ADPCM sound (audio flag 0x10) and the external codecs of later Coktel Vision
 //! files ([`Error::Unsupported`]).
 //!
-//! Input is treated as hostile: a frame yields at most 32 blocks (the width of the silence
-//! mask) of at most 65 535 samples a channel, and a block is decoded only if all of it is there. No `unsafe`, no panics.
+//! Input is treated as hostile: a block is at most 65 535 samples a channel and is decoded only
+//! if all of it is there; a frame with a silence mask yields at most 32 blocks (the width of
+//! the mask), any other frame as many whole blocks as its data holds. No `unsafe`, no panics.
 
 #![warn(missing_docs)]
 
@@ -61,7 +62,7 @@ pub struct Decoder {
     channels: usize,
     sixteen_bit: bool,
     /// Samples of one block, all channels counted.
-    block_samples: usize,
+    block_total: usize,
 }
 
 impl Decoder {
@@ -82,12 +83,12 @@ impl Decoder {
         let length = u16_at(806) as i16;
         let frame_length = usize::from(length.unsigned_abs());
         // old-style stereo counts both channels, new-style one
-        let (channels, block_samples) = match flags {
+        let (channels, block_total) = match flags {
             f if f & 0x8000 != 0 => (2, frame_length & !1),
             f if f & 0x200 != 0 => (2, frame_length * 2),
             _ => (1, frame_length),
         };
-        Ok(Decoder { sample_rate: u32::from(u16_at(804)), channels, sixteen_bit: length < 0, block_samples })
+        Ok(Decoder { sample_rate: u32::from(u16_at(804)), channels, sixteen_bit: length < 0, block_total })
     }
 
     /// Samples a second.
@@ -107,12 +108,12 @@ impl Decoder {
 
     /// Samples of one block for each channel.
     pub fn block_samples(&self) -> usize {
-        self.block_samples / self.channels
+        self.block_total / self.channels
     }
 
     /// Bytes of one block of sound in a frame.
     pub fn block_bytes(&self) -> usize {
-        if self.sixteen_bit { (self.block_samples + self.channels).min(self.block_samples * 2) } else { self.block_samples }
+        if self.sixteen_bit { (self.block_total + self.channels).min(self.block_total * 2) } else { self.block_total }
     }
 
     /// Decode one sound frame: `flags` is the frame's flag byte from its record, `data` the
@@ -126,16 +127,16 @@ impl Decoder {
     ///   the order here is the description's;
     /// - flags 3: one block of silence.
     ///
-    /// An empty frame gives no samples. A frame's first block cut short is an error; a part of a
-    /// block after the last whole one is left out.
+    /// An empty frame gives no samples. With flags 1, a first block cut short is an error. A part
+    /// of a block after the last whole one is left out, with flags 1 and 2.
     ///
     /// The sound of a file is its sound frames decoded in file order and played end to end from
     /// the first picture on: see `craft_media::vmd` for how that lines up with the pictures.
     pub fn decode(&self, flags: u8, data: &[u8]) -> Result<Vec<i16>, Error> {
         let mut out = Vec::new();
         match flags {
-            3 => out.resize(self.block_samples, 0),
-            _ if data.is_empty() => {}
+            3 => out.resize(self.block_total, 0),
+            1 | 2 if data.is_empty() => {}
             1 => {
                 // one block; a frame that holds more whole blocks plays them all, as in ffmpeg
                 self.block(data, &mut out)?;
@@ -154,7 +155,7 @@ impl Decoder {
                 // one block fewer than it says.
                 for i in 0..32 {
                     if mask >> i & 1 == 1 {
-                        out.resize(out.len() + self.block_samples, 0);
+                        out.resize(out.len() + self.block_total, 0);
                     } else if !data.is_empty() && data.len() >= self.block_bytes() {
                         self.block(data, &mut out)?;
                         data = &data[self.block_bytes()..];

@@ -25,7 +25,7 @@
 //! let mut decoder = Decoder::new(file.header_bytes())?;
 //! for (i, frame) in file.frames.iter().enumerate() {
 //!     let FrameKind::Video { new_palette, .. } = frame.kind else { continue };
-//!     let Some(rect) = file.picture_rect(frame) else { continue };
+//!     let Some(rect) = file.picture_rect(i) else { continue };
 //!     decoder.decode(Rect::from(rect), new_palette, &file.read_frame(&bytes, i)?)?;
 //!     let rgb = decoder.rgb24(); // the picture after this block
 //! }
@@ -122,8 +122,8 @@ impl Decoder {
         if width == 0 || height == 0 {
             return Err(Error::Invalid("the picture has no pixels"));
         }
-        // the indices and an RGBA copy of them for the caller
-        let shape = PictureShape { width: width.into(), height: height.into(), shift_x: 0, shift_y: 0, chroma_planes: 0, bytes_per_sample: 5 };
+        // the indices, an RGBA copy of them for the caller, and the unpack buffer
+        let shape = PictureShape { width: width.into(), height: height.into(), shift_x: 0, shift_y: 0, chroma_planes: 0, bytes_per_sample: 9 };
         if !shape.fits(1, DECODE_MEMORY_BUDGET) {
             return Err(Error::TooLarge(width, height));
         }
@@ -205,8 +205,9 @@ impl Decoder {
             return self.render(rect, method, body);
         }
         let mut unpacked = std::mem::take(&mut self.unpacked);
-        // no rendering method reads more than a few bytes a pixel: unpacking stops there, so that
-        // a frame's cost goes by the picture's size and not by what the file says
+        // a frame needs at most three bytes a pixel (more only with run-length codes that
+        // paint nothing): unpacking stops past that, so that a frame's cost goes by the
+        // picture's size and not by what the file says
         let useful = self.indices.len().saturating_mul(4).saturating_add(1024);
         let result = lz_unpack(body, self.unpack_limit, useful, &mut unpacked).and_then(|()| self.render(rect, method & 0x7F, &unpacked));
         self.unpacked = unpacked;

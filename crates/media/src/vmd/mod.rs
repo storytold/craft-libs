@@ -195,7 +195,8 @@ impl Header {
             return Err(Error::NotVmd);
         }
         let flags = u16_at(16);
-        // a sample rate of 0 is no sound either: ffmpeg goes by the rate alone
+        // the flag is the description's rule. A sample rate of 0 is no sound either: ffmpeg goes
+        // by the rate alone, and also plays a file that has a rate without the flag
         let audio = (flags & 0x1000 != 0 && u16_at(804) != 0).then(|| {
             let length = u16_at(806) as i16;
             let audio_flags = u16_at(810);
@@ -280,7 +281,8 @@ pub struct VmdFile {
     /// The frames, block after block.
     pub frames: Vec<Frame>,
     raw_header: Vec<u8>,
-    origin: (u16, u16),
+    /// For each frame, the picture's screen position when the frame is decoded.
+    origins: Vec<(u16, u16)>,
 }
 
 /// Open a VMD file: read the header and the table of contents.
@@ -324,17 +326,22 @@ pub fn open<S: ByteSource + ?Sized>(src: &S) -> Result<VmdFile> {
             offset += u64::from(size);
         }
     }
-    // the picture's place on the screen: see `picture_rect`
-    let origin = frames
+    // the picture's place on the screen as each frame finds it: see `picture_rect`
+    let mut origin = (0, 0);
+    let origins = frames
         .iter()
-        .find_map(|f| match f.kind {
-            FrameKind::Video { left, top, right, bottom, .. } => (right.checked_sub(left).and_then(|w| w.checked_add(1)) == Some(header.width)
-                && bottom.checked_sub(top).and_then(|h| h.checked_add(1)) == Some(header.height))
-            .then_some((left, top)),
-            _ => None,
+        .map(|f| {
+            if let FrameKind::Video { left, top, right, bottom, .. } = f.kind {
+                let full = right.checked_sub(left).and_then(|w| w.checked_add(1)) == Some(header.width)
+                    && bottom.checked_sub(top).and_then(|h| h.checked_add(1)) == Some(header.height);
+                if full && f.size > 0 && (left, top) != (0, 0) {
+                    origin = (left, top);
+                }
+            }
+            origin
         })
-        .unwrap_or((0, 0));
-    Ok(VmdFile { header, frames, raw_header: raw.to_vec(), origin })
+        .collect();
+    Ok(VmdFile { header, frames, raw_header: raw.to_vec(), origins })
 }
 
 impl VmdFile {
@@ -361,32 +368,27 @@ impl VmdFile {
     /// one without plays 10 pictures a second.
     pub fn frame_rate(&self) -> (u32, u32) {
         match &self.header.audio {
-            Some(a) if a.sample_rate > 0 && a.block_samples() > 0 => (u32::from(a.sample_rate), a.block_samples()),
+            Some(a) if a.block_samples() > 0 => (u32::from(a.sample_rate), a.block_samples()),
             _ => (10, 1),
         }
     }
 
-    /// The screen position `(left, top)` that video frame coordinates are measured from: see
-    /// [`VmdFile::picture_rect`].
-    pub fn origin(&self) -> (u16, u16) {
-        self.origin
-    }
-
-    /// Where a video frame's update lies in the picture: `(left, top, right, bottom)` with the
+    /// Where the video frame `index` updates the picture: `(left, top, right, bottom)` with the
     /// last column and row included, or `None` for a frame that is not video or lies outside the
     /// picture.
     ///
     /// Frame coordinates are screen coordinates, and a picture need not sit at the screen's
-    /// corner. The description does not say where the corner comes from. This does what ffmpeg
-    /// was seen to do: the first video frame that is exactly as large as the picture gives the
-    /// picture's position ([`VmdFile::origin`]), which is taken off every frame; a file without
-    /// such a frame has its picture at the corner. The header's own position fields are not
-    /// used.
-    pub fn picture_rect(&self, frame: &Frame) -> Option<(u16, u16, u16, u16)> {
-        let FrameKind::Video { left, top, right, bottom, .. } = frame.kind else { return None };
+    /// corner. The description does not say where the picture's position comes from. This does
+    /// what ffmpeg was seen to do: the picture starts at the corner, and a video frame that has
+    /// data, is exactly as large as the picture and is not at the corner moves it there for that
+    /// frame and those after it. The position is taken off the frame's coordinates. The header's
+    /// own position fields are not used.
+    pub fn picture_rect(&self, index: usize) -> Option<(u16, u16, u16, u16)> {
+        let FrameKind::Video { left, top, right, bottom, .. } = self.frames.get(index)?.kind else { return None };
         let h = &self.header;
-        let (left, right) = (left.checked_sub(self.origin.0)?, right.checked_sub(self.origin.0)?);
-        let (top, bottom) = (top.checked_sub(self.origin.1)?, bottom.checked_sub(self.origin.1)?);
+        let (x, y) = *self.origins.get(index)?;
+        let (left, right) = (left.checked_sub(x)?, right.checked_sub(x)?);
+        let (top, bottom) = (top.checked_sub(y)?, bottom.checked_sub(y)?);
         (left <= right && top <= bottom && right < h.width && bottom < h.height).then_some((left, top, right, bottom))
     }
 

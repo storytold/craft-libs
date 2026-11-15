@@ -817,7 +817,7 @@ let (num, den) = file.frame_rate();          // pictures a second, as a fraction
 for (i, frame) in file.frames.iter().enumerate() {
     let data = file.read_frame(&bytes, i)?;  // one frame's data, read on demand
     match frame.kind {
-        FrameKind::Video { new_palette, .. } => { /* file.picture_rect(frame), craft_video::vmd */ }
+        FrameKind::Video { new_palette, .. } => { /* file.picture_rect(i), craft_video::vmd */ }
         FrameKind::Audio { flags } => { /* craft_audio::vmd */ }
         FrameKind::Other(_) => {}
     }
@@ -838,9 +838,9 @@ for (i, frame) in file.frames.iter().enumerate() {
   `CodecId::VmdAudio` and the 816-byte header as `extradata`, which is what
   `craft_video::vmd::Decoder::new` and `craft_audio::vmd::Decoder::new` take.
   `header_bytes()` is the same header.
-- `picture_rect(frame)` places a video frame's update in the picture. Frame coordinates are
-  screen coordinates; the first frame as large as the picture gives the picture's position
-  (`origin()`), as ffmpeg was seen to do.
+- `picture_rect(index)` places a video frame's update in the picture. Frame coordinates are
+  screen coordinates; a frame as large as the picture that is not at the screen's corner gives
+  the picture's position from then on, as ffmpeg was seen to do.
 
 Gaps: only the 816-byte header is read. The later Coktel Vision revisions with a longer header
 or one without a palette are refused (`Error::NotVmd`). Files with 16-bit, 24-bit or Indeo 3

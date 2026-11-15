@@ -141,6 +141,10 @@ fn sixteen_bit_steps() {
     data.extend([1, 0x82].repeat(3));
     let d = decoder(-4, 0x200);
     assert_eq!(d.decode(1, &data).unwrap(), [1000, -1000, 1008, -1016, 1016, -1032, 1024, -1048]);
+    // a flags 1 frame of several blocks: each block starts from its own first samples
+    let (first, first_samples) = dpcm_pack(&[100, -100, 300, -50, 200, 0, 1000, 500], 2);
+    let (second, second_samples) = dpcm_pack(&[-7000, 7000, -6000, 6500, -6100, 6400, -3000, 3000], 2);
+    assert_eq!(d.decode(1, &[first, second, vec![1, 2, 3]].concat()).unwrap(), [first_samples, second_samples].concat());
     // steps past 16 bits stop at the ends
     let mut data = 30000i16.to_le_bytes().to_vec();
     data.extend([0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
@@ -183,6 +187,7 @@ fn bad_input_is_an_error() {
     let d = decoder(-20, 0);
     assert_eq!(d.decode(1, &[0; 20]), Err(Error::Invalid("a block of sound is cut short")));
     assert_eq!(d.decode(4, &[0; 21]), Err(Error::Unsupported("unknown sound frame flags")));
+    assert_eq!(d.decode(4, &[]), Err(Error::Unsupported("unknown sound frame flags")));
     // in the file API's error: unsupported stays unsupported, the rest is malformed input
     assert!(matches!(AudioError::from(Error::Unsupported("x")), AudioError::Unsupported(_)));
     assert!(matches!(AudioError::from(Error::Invalid("x")), AudioError::Malformed(_)));

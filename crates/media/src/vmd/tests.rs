@@ -96,27 +96,43 @@ fn other_picture_formats_are_not_vmd_video() {
     assert_eq!(params(|d| d[24..28].copy_from_slice(b"iv32")).0, VideoFormat::Indeo3);
 }
 
-/// The cases ffmpeg was checked on: the first frame as large as the picture places it.
+/// The cases ffmpeg was checked on. The picture is 20x10 and every frame has data unless said.
 #[test]
-fn picture_rect_takes_off_the_picture_position() {
-    let rects = |header_origin: (u16, u16), frames: &[[u16; 4]]| {
+fn picture_rect_follows_the_picture_position() {
+    let rects = |header_origin: (u16, u16), frames: &[([u16; 4], usize)]| {
         let mut spec = Spec::new(20, 10);
         (spec.left, spec.top) = header_origin;
-        let blocks: Vec<_> = frames.iter().map(|&rect| vec![F::video(rect, false, vec![])]).collect();
+        let blocks: Vec<_> = frames.iter().map(|&(rect, size)| vec![F::video(rect, false, vec![2; size])]).collect();
         let f = open(&build(&spec, &blocks)).unwrap();
-        (f.origin(), f.frames.iter().map(|fr| f.picture_rect(fr)).collect::<Vec<_>>())
+        (0..f.frames.len()).map(|i| f.picture_rect(i)).collect::<Vec<_>>()
     };
+    let at = |l, t, r, b| Some((l, t, r, b));
     // a picture at the screen's corner, whatever the header says
-    assert_eq!(rects((10, 5), &[[0, 0, 19, 9], [12, 6, 18, 9]]), ((0, 0), vec![Some((0, 0, 19, 9)), Some((12, 6, 18, 9))]));
-    // a picture at (3, 2): frames left of or above it, or past its far edges, are outside
+    assert_eq!(rects((10, 5), &[([0, 0, 19, 9], 1), ([12, 6, 18, 9], 1)]), [at(0, 0, 19, 9), at(12, 6, 18, 9)]);
+    // a frame as large as the picture moves it; frames before that keep the corner
+    assert_eq!(rects((10, 5), &[([0, 0, 5, 5], 1), ([10, 5, 29, 14], 1), ([10, 5, 12, 7], 1)]), [at(0, 0, 5, 5), at(0, 0, 19, 9), at(0, 0, 2, 2)]);
     assert_eq!(
-        rects((0, 0), &[[3, 2, 22, 11], [3, 2, 5, 5], [0, 0, 5, 5], [3, 2, 23, 11], [3, 2, 22, 12]]),
-        ((3, 2), vec![Some((0, 0, 19, 9)), Some((0, 0, 2, 3)), None, None, None])
+        rects((0, 0), &[([0, 0, 9, 4], 1), ([2, 2, 3, 3], 1), ([6, 4, 25, 13], 1), ([6, 4, 8, 6], 1)]),
+        [at(0, 0, 9, 4), at(2, 2, 3, 3), at(0, 0, 19, 9), at(0, 0, 2, 2)]
     );
-    // the placing frame need not be the first
-    assert_eq!(rects((0, 0), &[[4, 3, 5, 4], [4, 3, 23, 12]]), ((4, 3), vec![Some((0, 0, 1, 1)), Some((0, 0, 19, 9))]));
-    // no frame as large as the picture: the corner; inverted and oversized frames are outside
-    assert_eq!(rects((7, 7), &[[2, 0, 5, 0], [5, 0, 4, 0], [0, 1, 0, 0], [0, 0, 20, 9]]), ((0, 0), vec![Some((2, 0, 5, 0)), None, None, None]));
+    // a frame without data does not move it
+    assert_eq!(rects((0, 0), &[([3, 2, 22, 11], 0), ([3, 2, 5, 5], 1), ([0, 0, 2, 2], 1)]), [None, at(3, 2, 5, 5), at(0, 0, 2, 2)]);
+    // once moved, a full frame at the corner is outside; one elsewhere moves the picture again
+    assert_eq!(
+        rects((0, 0), &[([0, 0, 19, 9], 1), ([3, 2, 22, 11], 1), ([0, 0, 19, 9], 1), ([3, 2, 5, 5], 1)]),
+        [at(0, 0, 19, 9), at(0, 0, 19, 9), None, at(0, 0, 2, 3)]
+    );
+    assert_eq!(
+        rects((0, 0), &[([3, 2, 22, 11], 1), ([5, 5, 24, 14], 1), ([5, 5, 7, 7], 1), ([3, 0, 22, 9], 1), ([3, 2, 5, 5], 1)]),
+        [at(0, 0, 19, 9), at(0, 0, 19, 9), at(0, 0, 2, 2), at(0, 0, 19, 9), at(0, 2, 2, 5)]
+    );
+    // as wide as the picture but not as high is an ordinary frame
+    assert_eq!(rects((0, 0), &[([3, 2, 22, 8], 1), ([3, 2, 5, 5], 1)]), [None, at(3, 2, 5, 5)]);
+    // inverted and oversized frames are outside
+    assert_eq!(
+        rects((0, 0), &[([2, 0, 5, 0], 1), ([5, 0, 4, 0], 1), ([0, 1, 0, 0], 1), ([0, 0, 20, 9], 1), ([0, 0, 19, 10], 1)]),
+        [at(2, 0, 5, 0), None, None, None, None]
+    );
 }
 
 #[test]
@@ -168,8 +184,8 @@ fn hostile_input_never_panics() {
                 for k in [0, n / 2, n.saturating_sub(1), n, usize::MAX] {
                     let _ = f.read_frame(d, k);
                 }
-                for fr in &f.frames {
-                    let _ = f.picture_rect(fr);
+                for k in [0, n / 2, n.saturating_sub(1), n, usize::MAX] {
+                    let _ = f.picture_rect(k);
                 }
                 let _ = (f.frame_rate(), f.video_params(), f.audio_params());
             }
