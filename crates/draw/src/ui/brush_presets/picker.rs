@@ -271,6 +271,7 @@ pub struct BrushPresetPicker<'a, K: Value + Eq + Hash> {
     resizable: Option<SaveKey>,
     opened_at: Option<(Pos2, Bind<'a, bool>)>,
     compact: bool,
+    enabled: bool,
     app_rows: Option<Box<dyn FnOnce(&mut Ui) + 'a>>,
 }
 
@@ -296,6 +297,7 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
             resizable: None,
             opened_at: None,
             compact: false,
+            enabled: true,
             app_rows: None,
         }
     }
@@ -304,6 +306,12 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
     /// search row, the gear or the browser.
     pub fn compact(mut self, on: bool) -> Self {
         self.compact = on;
+        self
+    }
+
+    /// Whether the picker takes input: off disables its field, its head and its popover. It is enabled by default.
+    pub fn enabled(mut self, on: bool) -> Self {
+        self.enabled = on;
         self
     }
 
@@ -334,12 +342,13 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
             resizable,
             mut opened_at,
             compact,
+            enabled,
             mut app_rows,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<BrushPresetWords>();
         let name: std::sync::Arc<str> = std::sync::Arc::from(label.as_str());
-        let shown = Stack::new().label(label.clone()).show(ui, |ui, cx| {
+        let shown = Stack::new().label(label.clone()).enabled(enabled).show(ui, |ui, cx| {
             let before = match state.reborrow().read(cx) {
                 Some(Mixed::Same(held)) => held,
                 _ => BrushPickerState::new(),
