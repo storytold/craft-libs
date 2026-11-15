@@ -35,6 +35,7 @@ pub mod resolution;
 pub mod source_settings;
 pub mod tiff_probe;
 pub mod web;
+pub mod webp_probe;
 pub use crate::allocation::{probe_allocation_size, probe_stored_size};
 pub use crate::cicp::Cicp;
 pub use crate::cicp::ContentLightLevel;
