@@ -12,8 +12,11 @@ pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 /// Parsed `TySh` contents.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TySh {
+    /// Affine transform in PSD order: xx, xy, yx, yy, tx, ty.
     pub transform: [f64; 6],
+    /// Text descriptor, including text content and styling data.
     pub text: Descriptor,
+    /// Optional warp descriptor retained from the Type Tool block.
     pub warp: Option<Descriptor>,
     /// The four trailing big-endian f32 values (left, top, right, bottom) after the warp
     /// descriptor. Photoshop writes zeros for unwarped type and the text-space bounds (the
