@@ -230,6 +230,8 @@ struct Flight {
 
 #[derive(Default)]
 struct Lane {
+    /// The frame whose first pass took the latest step: later passes of that frame take none.
+    entered: Option<u64>,
     queue: VecDeque<Step>,
     flight: Option<Flight>,
     /// The application withdrew the lane's input ([`withdraw`]); the next input hook carries it out.
@@ -303,6 +305,7 @@ fn remove_event_run(events: &mut Vec<Event>, step: &[Event]) {
 pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
     let viewport = input.viewport_id;
     let (pass_nr, focused) = (pass::pass_nr(ctx, viewport), crate::runtime::focus::record(ctx, viewport).focused);
+    let frame = pass::frame_nr(ctx, viewport);
     let mut wake = None;
     let follow = Service::<Injected>::run(ctx, |injected| {
         let Some(lane) = injected.lanes.get_mut(&viewport) else { return false };
@@ -337,6 +340,11 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
                 return !lane.queue.is_empty();
             }
         }
+        if lane.entered == Some(frame) {
+            // A later pass of the frame whose first pass took a step takes none: input enters a frame's first pass
+            // only. The step in flight still ends, or is withdrawn, as above.
+            return !lane.queue.is_empty();
+        }
         if let Some(step) = lane.queue.pop_front() {
             input.events.extend(step.events.iter().cloned());
             let until = (step.rest > 0.0).then_some(input.time).flatten().map(|now| now + step.rest);
@@ -344,6 +352,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
             let before = held.clone();
             held.apply(&step.events);
             lane.flight = Some(Flight { step, pass: pass_nr, focus: focused, until, before });
+            lane.entered = Some(frame);
             return !lane.queue.is_empty();
         }
         false
@@ -458,6 +467,14 @@ pub(crate) fn inject_text(ctx: &Context, viewport: ViewportId, text: &str) {
             let mods = request.held.mods;
             request.step(mods, frame);
         }
+    });
+}
+
+/// Queues one pass of `viewport` behind its queue, with no events: `idle` stays false until that pass ran.
+pub(crate) fn inject_pass(ctx: &Context, viewport: ViewportId) {
+    queue(ctx, viewport, |request| {
+        let mods = request.held.mods;
+        request.step(mods, []);
     });
 }
 

@@ -51,8 +51,12 @@ pub fn start_with_deadline(
             let host = host.clone();
             let token = Arc::clone(&token);
             std::thread::spawn(move || {
-                let _permit = permit;
                 serve(stream, &token, &tx, &host, auth_deadline);
+                // What the last client held down would otherwise stay held with no one left to
+                // release it; while another connection is live, its input is left alone.
+                if permit.release() {
+                    host.end_injection();
+                }
             });
         }
     });

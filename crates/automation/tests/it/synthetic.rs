@@ -139,7 +139,7 @@ fn a_held_key_stays_down_until_its_release() {
 #[trial]
 fn a_wheel_turn_carries_its_modifiers() {
     let mut rig = Rig::new();
-    rig.send("ui.wheel", json!({"x": 30, "y": 20, "dy": 40, "command": true}));
+    rig.send("ui.wheel", json!({"x": 30, "y": 20, "dy": 40, "alt": true}));
     let passes = rig.take();
     let turn = passes.iter().find_map(|pass| {
         pass.events.iter().find_map(|event| match event {
@@ -149,7 +149,7 @@ fn a_wheel_turn_carries_its_modifiers() {
     });
     let (pos, delta, modifiers) = turn.expect("a pass saw the turn");
     assert_eq!(pos, Some(pos2(30.0, 20.0)));
-    assert!(delta.y > 0.0 && delta.x == 0.0 && modifiers.command);
+    assert!(delta.y > 0.0 && delta.x == 0.0 && modifiers.alt);
 }
 
 /// The injected Caps Lock state wins over the platform's until it is cleared.
@@ -246,4 +246,16 @@ fn queued_input_is_withdrawn_when_its_target_changes() {
     let answer = reply.try_recv().expect("the waiter is answered");
     assert!(answer["error"].as_str().is_some_and(|error| error.contains(TARGET_CHANGED)), "{answer}");
     assert!(host.injected_idle());
+}
+
+/// A queued pass of the root keeps the host busy until one pass of the root ran.
+#[trial]
+fn a_queued_pass_holds_idle_until_it_ran() {
+    let mut rig = Rig::new();
+    let host = rig.host();
+    host.inject_pass(ViewportId::ROOT);
+    assert!(!host.injected_idle(), "the pass has not run");
+    rig.fx.frame(Vec::new());
+    rig.fx.frame(Vec::new());
+    assert!(host.injected_idle(), "the pass ran");
 }

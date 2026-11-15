@@ -100,6 +100,11 @@ impl WindowHost {
         screenshot::issue(&self.ctx, viewport, max_image_bytes)
     }
 
+    /// Whether `viewport`'s window is open this pass, measured or not.
+    pub fn is_open(&self, viewport: ViewportId) -> bool {
+        viewports::reported(&self.ctx).iter().any(|(id, _)| *id == viewport)
+    }
+
     /// What a screenshot of `viewport` measures this pass; `None` when the viewport is not running.
     pub fn screenshot_facts(&self, viewport: ViewportId) -> Option<ScreenshotFacts> {
         screenshot::facts(&self.ctx, viewport)
@@ -171,6 +176,12 @@ impl WindowHost {
         injected::inject_text(&self.ctx, viewport, text);
     }
 
+    /// Queues `event` as the platform's input method would deliver it (a preedit or a commit), behind earlier
+    /// injected input.
+    pub fn inject_ime(&self, viewport: ViewportId, event: egui::ImeEvent) {
+        injected::inject_ime(&self.ctx, viewport, event);
+    }
+
     /// Withdraws the injected input of `viewport` (the document changed) at its next input hook: a step whose pass
     /// has not run and the queue behind it; what is dropped counts as withdrawn
     /// ([`take_injected_withdrawn`](Self::take_injected_withdrawn)). Called from the raw input hook, so every
@@ -184,12 +195,22 @@ impl WindowHost {
         injected::cancel(&self.ctx)
     }
 
-    /// Ends the injection session: the automation connection that fed it is gone.
+    /// Ends the injection session: the automation connection that fed it is gone. Drops every queue and step in
+    /// flight, queues the release of every button, key and modifier injected input holds (they run on each
+    /// viewport's next pass), and returns Caps Lock to the platform's state.
     pub fn end_injection(&self) {
         injected::end(&self.ctx);
     }
 
-    /// Whether no injected step is queued or awaits its pass: the application may answer its waiters.
+    /// Queues a pass of `viewport` behind its injected input: `injected_idle` stays false until that pass ran. A
+    /// component that keeps injected input of its own for its next pass (the tool host's `ToolHost::inject`) calls
+    /// it, so automation's idle answer waits for the pass that takes the input.
+    pub fn inject_pass(&self, viewport: ViewportId) {
+        injected::inject_pass(&self.ctx, viewport);
+    }
+
+    /// Whether no injected step is queued or awaits its pass (see [`inject_pass`](Self::inject_pass)): the
+    /// application may answer its waiters.
     pub fn injected_idle(&self) -> bool {
         injected::idle(&self.ctx)
     }

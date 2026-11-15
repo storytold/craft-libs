@@ -415,7 +415,8 @@ pub fn discardable(ctx: &Context) -> bool {
 }
 
 /// Discards the running pass, so nothing of it paints, and runs it again, when [`discardable`]: for a host that learns
-/// only after a part ran that the part showed what it must not.
+/// only after a part ran that the part showed what it must not. A pass after a discard carries no input (events,
+/// injected steps and press edges enter a frame's first pass only); held state persists.
 pub fn discard_pass(ctx: &Context, reason: &'static str) {
     crate::runtime::egui::sizing::request_discard(ctx, crate::runtime::egui::sizing::Rerun::App(reason));
 }

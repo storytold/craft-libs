@@ -27,9 +27,21 @@ pub use tree::{AccessTree, Declared, NodeKey};
 
 /// The rect `id`'s response had in the last finished pass, converted as the node's bounds are; `None` when absent,
 /// without area, or behind the open modal. The ids it answers are component and item widget ids; parts have none.
+/// It answers for the context's current viewport (the root between frames); a child window's rects are read inside
+/// that window's pass.
 pub fn bounds(ctx: &Context, id: Id) -> Option<egui::Rect> {
-    let _ = (ctx, id);
-    todo!("cw.C67")
+    let widget = ctx.widget_rect_last_pass(id)?;
+    if behind_modal(ctx, ctx.viewport_id(), widget.layer_id) {
+        return None;
+    }
+    let rect = widget.rect;
+    (rect.is_finite() && rect.width() > 0.0 && rect.height() > 0.0).then_some(rect)
+}
+
+/// Whether a widget on `layer` sits behind the open modal of `viewport`: a modal layer is open there and `layer` is
+/// not above it. The access tree and [`bounds`] both ask this, so automation never gets a rect the tree hides.
+fn behind_modal(ctx: &Context, viewport: ViewportId, layer: egui::LayerId) -> bool {
+    crate::runtime::commands::modal_root(ctx, viewport).is_some() && !ctx.memory(|memory| memory.is_above_modal_layer(layer))
 }
 
 /// The AccessKit role of a node.
@@ -161,11 +173,12 @@ pub(crate) fn order_children(ctx: &Context) {
 /// While a modal layer is open in `viewport`, hides the nodes the runtime wrote on layers below it: what sits behind
 /// a modal is inert for assistive technology, as it is for the pointer and the keys.
 fn hide_behind_modal(ctx: &Context, viewport: ViewportId, written: &HashSet<Id>) {
+    // Without a modal nothing is behind one; this spares reading every written node's response.
     if crate::runtime::commands::modal_root(ctx, viewport).is_none() {
         return;
     }
     for id in written {
-        let behind = ctx.read_response(*id).is_some_and(|response| !ctx.memory(|memory| memory.is_above_modal_layer(response.layer_id)));
+        let behind = ctx.read_response(*id).is_some_and(|response| behind_modal(ctx, viewport, response.layer_id));
         if behind {
             hide(ctx, *id);
         }

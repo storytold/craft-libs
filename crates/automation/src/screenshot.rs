@@ -1,19 +1,21 @@
 //! `ui.screenshot`: bounded, cancellable capture requests over [`WindowHost::screenshot`].
 //!
 //! The slot correlates one capture with one image. This queue owns what the slot leaves to the
-//! app: request identity (token, output path, reply), deadlines and settling, the admission budget
-//! ([`MAX_PENDING`] requests, [`MAX_IMAGE_BYTES`] per image, [`MAX_TOTAL_BYTES`] in all), the
-//! document identity fixed at admission, the geometry epoch recorded at issue so an image is saved
-//! only for the layout it was rendered from (a size, scale, zoom or minimised change between issue
-//! and collection is a retry, at most [`MAX_RETRIES`]), and a monotonic clock. A request that
-//! arrives before the first UI pass recorded the geometry waits instead of failing.
+//! app: request identity (token, output path, reply, the viewport it shoots), deadlines and
+//! settling, the admission budget ([`MAX_PENDING`] requests, [`MAX_IMAGE_BYTES`] per image,
+//! [`MAX_TOTAL_BYTES`] in all), the document identity fixed at admission, each viewport's geometry
+//! epoch recorded at issue so an image is saved only for the layout it was rendered from (a size,
+//! scale, zoom or minimised change between issue and collection is a retry, at most
+//! [`MAX_RETRIES`]), and a monotonic clock. A request for a viewport whose geometry is not recorded
+//! yet waits instead of failing; one whose window is not open fails with [`WINDOW_CLOSED`].
 //!
 //! Phases: [`Captures::issue`] runs in the UI pass (settling counts real layout passes; a
-//! discarded pass is skipped); [`Captures::note_geometry`] and [`Captures::drain`] run in the
-//! logic phase. The image is encoded and written on the UI thread by
+//! discarded pass is skipped); [`Captures::note_windows`] (or [`Captures::note_geometry`] for a
+//! synthetic geometry) and [`Captures::drain`] run in the logic phase. The image is encoded and written on the UI thread by
 //! [`ControlChannel::finish_captures`](crate::control::ControlChannel::finish_captures), never
 //! inside the callback.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
@@ -64,7 +66,7 @@ impl DocumentId {
     }
 }
 
-/// The layout of the root viewport a capture is rendered from: size in points, pixels per point,
+/// The layout of the viewport a capture is rendered from: size in points, pixels per point,
 /// zoom, the texture side limit and whether the window is minimised. Window position is not part
 /// of it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -189,7 +191,7 @@ impl Finished {
     }
 }
 
-/// A request admitted before any geometry was recorded.
+/// A request not yet queued: it waits while its viewport's geometry is not recorded.
 struct WaitingAdmit {
     token: u64,
     viewport: ViewportId,
@@ -200,13 +202,21 @@ struct WaitingAdmit {
     document: Option<DocumentId>,
 }
 
+/// What one viewport's window measured: its geometry this pass, `None` while the window is not
+/// open, and the epoch that advances on each layout change.
+#[derive(Clone, Copy, Default)]
+struct Window {
+    geometry: Option<CaptureGeometry>,
+    epoch: u64,
+}
+
 /// The screenshot request queue and its admission budget.
 #[derive(Default)]
 pub struct Captures {
     records: Vec<PendingCapture>,
     waiting: Vec<WaitingAdmit>,
-    geometry: Option<CaptureGeometry>,
-    epoch: u64,
+    /// One entry per recorded viewport; a viewport with no entry was never measured.
+    windows: HashMap<ViewportId, Window>,
 }
 
 impl Captures {
@@ -232,38 +242,54 @@ impl Captures {
 
     /// The geometry recorded by the last [`Self::note_geometry`] for `viewport`, if any.
     pub fn last_geometry(&self, viewport: ViewportId) -> Option<CaptureGeometry> {
-        let _ = viewport; // P3(canvas-widgets-w13): cw.C69 geometry per viewport.
-        self.geometry
+        self.windows.get(&viewport).and_then(|window| window.geometry)
     }
 
     /// Record this pass's geometry of `viewport`; advances and returns that viewport's epoch when
     /// it changed.
     pub fn note_geometry(&mut self, viewport: ViewportId, geometry: CaptureGeometry) -> u64 {
-        let _ = viewport; // P3(canvas-widgets-w13): cw.C69 geometry per viewport.
-        let changed = self.geometry.is_none_or(|old| !old.same_layout(&geometry));
+        let window = self.windows.entry(viewport).or_default();
+        let changed = window.geometry.is_none_or(|old| !old.same_layout(&geometry));
         if changed {
-            self.epoch = self.epoch.wrapping_add(1);
+            window.epoch = window.epoch.wrapping_add(1);
         }
-        self.geometry = Some(geometry);
-        self.epoch
+        window.geometry = Some(geometry);
+        window.epoch
     }
 
     /// The app's one call per pass: for the root and each viewport a pending or waiting request
     /// names, records `CaptureGeometry::from_facts` of `host.screenshot_facts(viewport)`, or marks
-    /// the viewport closed when that is `None`.
-    #[allow(dead_code)] // P3(canvas-widgets-w13): cw.C69
+    /// the viewport closed when that is `None`. Viewports no request names are forgotten, so a
+    /// window measured for an earlier request is measured afresh for the next.
     pub fn note_windows(&mut self, host: &WindowHost, document: Option<DocumentId>) {
-        let _ = (host, document);
-        todo!("cw.C69")
+        let mut named = vec![ViewportId::ROOT];
+        for viewport in self.records.iter().map(|r| r.viewport).chain(self.waiting.iter().map(|w| w.viewport)) {
+            if !named.contains(&viewport) {
+                named.push(viewport);
+            }
+        }
+        self.windows.retain(|viewport, _| named.contains(viewport));
+        for viewport in named {
+            match host.screenshot_facts(viewport) {
+                Some(facts) => {
+                    self.note_geometry(viewport, CaptureGeometry::from_facts(facts, document));
+                }
+                None if host.is_open(viewport) => {}
+                None => self.windows.entry(viewport).or_default().geometry = None,
+            }
+        }
     }
 
-    /// Admit a request against the budget. `Err` returns the reply sender with the error text:
+    /// Admit a request for `viewport` against the budget. `Err` returns the reply sender with the
+    /// error text:
     /// `screenshot token {token} is already pending`,
     /// `too many screenshots pending (at most {MAX_PENDING})`,
+    /// `screenshot {token} failed: {WINDOW_CLOSED}`,
     /// `the viewport is not capturable ({w}×{h} points at {ppp} px/pt, texture side {side})`,
     /// `a {N} MiB screenshot is over the {MAX_IMAGE_BYTES / 1 MiB} MiB per-image limit` (`N` the
     /// expected bytes / 1 MiB, integer division), or
-    /// `screenshot budget exhausted: {total} bytes reserved of a {MAX_TOTAL_BYTES}-byte aggregate limit`. With no geometry yet the request waits.
+    /// `screenshot budget exhausted: {total} bytes reserved of a {MAX_TOTAL_BYTES}-byte aggregate limit`.
+    /// While the viewport's geometry is not recorded the request waits.
     pub fn admit(
         &mut self,
         token: u64,
@@ -280,32 +306,33 @@ impl Captures {
         if self.pending() >= MAX_PENDING {
             return Err((reply, format!("too many screenshots pending (at most {MAX_PENDING})")));
         }
-        if self.geometry.is_none() {
-            self.waiting.push(WaitingAdmit { token, viewport, path, reply, deadline: now + DEADLINE, settle_ms, document });
-            return Ok(());
+        let request = WaitingAdmit { token, viewport, path, reply, deadline: now + DEADLINE, settle_ms, document };
+        match self.windows.get(&viewport).copied() {
+            None => {
+                self.waiting.push(request);
+                Ok(())
+            }
+            Some(Window { geometry: None, .. }) => Err((request.reply, window_closed_error(token))),
+            Some(Window { geometry: Some(geometry), epoch }) => self.admit_with_geometry(request, geometry, epoch),
         }
-        self.admit_with_geometry(token, path, viewport, reply, document, settle_ms, now)
     }
 
+    /// Queues `request` at `geometry` and `epoch`, what its viewport's window recorded.
     fn admit_with_geometry(
         &mut self,
-        token: u64,
-        path: Option<String>,
-        viewport: ViewportId,
-        reply: Sender<ControlResponse>,
-        document: Option<DocumentId>,
-        settle_ms: f64,
-        now: Instant,
+        request: WaitingAdmit,
+        geometry: CaptureGeometry,
+        epoch: u64,
     ) -> Result<(), (Sender<ControlResponse>, String)> {
+        let WaitingAdmit { token, viewport, path, reply, deadline, settle_ms, document } = request;
+        // The request's clock started when it arrived.
+        let arrived = deadline - DEADLINE;
         if self.records.iter().any(|r| r.token == token) {
             return Err((reply, format!("screenshot token {token} is already pending")));
         }
         if self.records.len() >= MAX_PENDING {
             return Err((reply, format!("too many screenshots pending (at most {MAX_PENDING})")));
         }
-        let Some(geometry) = self.geometry else {
-            return Err((reply, "the window geometry is not known yet; try again after a frame has been drawn".into()));
-        };
         let expected = match image_budget(&geometry) {
             Ok(bytes) => bytes,
             Err(e) => return Err((reply, e)),
@@ -320,11 +347,11 @@ impl Captures {
             viewport,
             path,
             reply: Some(reply),
-            deadline: now + DEADLINE,
-            ready_at: now + Duration::from_secs_f64(settle / 1000.0),
+            deadline,
+            ready_at: arrived + Duration::from_secs_f64(settle / 1000.0),
             settle_passes: 0,
             geometry,
-            epoch: self.epoch,
+            epoch,
             issued_epoch: None,
             reserved_bytes: expected,
             document,
@@ -334,7 +361,8 @@ impl Captures {
         Ok(())
     }
 
-    /// Move waiting requests into the queue once geometry is known; expire the rest.
+    /// Move waiting requests into the queue once their viewport's geometry is known, fail those
+    /// whose window is closed, and expire the rest at their deadline.
     pub fn admit_waiting(&mut self, now: Instant) {
         if self.waiting.is_empty() {
             return;
@@ -346,13 +374,15 @@ impl Captures {
                 let _ = w.reply.send(serde_json::json!({"ok": false, "error": timeout_error(w.token)}));
                 continue;
             }
-            if self.geometry.is_none() {
-                still_waiting.push(w);
-                continue;
-            }
-            // The request's clock started when it arrived.
-            let arrived = w.deadline - DEADLINE;
-            if let Err((reply, e)) = self.admit_with_geometry(w.token, w.path, w.viewport, w.reply, w.document, w.settle_ms, arrived) {
+            let admitted = match self.windows.get(&w.viewport).copied() {
+                None => {
+                    still_waiting.push(w);
+                    continue;
+                }
+                Some(Window { geometry: None, .. }) => Err((w.reply, window_closed_error(w.token))),
+                Some(Window { geometry: Some(geometry), epoch }) => self.admit_with_geometry(w, geometry, epoch),
+            };
+            if let Err((reply, e)) = admitted {
                 let _ = reply.send(serde_json::json!({"ok": false, "error": e}));
             }
         }
@@ -366,14 +396,10 @@ impl Captures {
         }
     }
 
-    /// UI phase: issue due requests through `host` (a fresh slot each), return the ones that
-    /// expired meanwhile.
+    /// UI phase: issue due requests through `host` (a fresh slot each), each in its own viewport,
+    /// and return the ones that expired or whose window closed meanwhile.
     pub fn issue(&mut self, host: &WindowHost, now: Instant, document: Option<DocumentId>) -> Vec<Finished> {
         let mut finished = Vec::new();
-        let Some(current) = self.geometry else { return finished };
-        // A document switch inside the pass means neither the drawn frame nor the pass's
-        // document identity is trustworthy.
-        let pass_changed = !same_activation(current.document, document);
         for i in 0..self.records.len() {
             if self.records[i].issued() {
                 continue;
@@ -383,11 +409,18 @@ impl Captures {
                 finished.push(finish(&mut self.records[i], Err(timeout_error(token))));
                 continue;
             }
+            let Some(window) = self.windows.get(&self.records[i].viewport).copied() else { continue };
+            let Some(current) = window.geometry else {
+                finished.push(finish(&mut self.records[i], Err(window_closed_error(token))));
+                continue;
+            };
             if !same_activation(document, self.records[i].document) || !same_activation(current.document, self.records[i].document) {
                 finished.push(finish(&mut self.records[i], Err(document_changed_error(token))));
                 continue;
             }
-            if pass_changed {
+            // A document switch inside the pass means neither the drawn frame nor the pass's
+            // document identity is trustworthy.
+            if !same_activation(current.document, document) {
                 continue;
             }
             // A minimised window has no surface to read back.
@@ -400,10 +433,9 @@ impl Captures {
             }
             // No pixels exist yet: finalise the geometry at issue, re-checking the budget, and
             // let the new layout settle for another pass.
-            if self.records[i].epoch != self.epoch || !current.same_layout(&self.records[i].geometry) {
+            if self.records[i].epoch != window.epoch || !current.same_layout(&self.records[i].geometry) {
                 let others: usize = self.records.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, r)| r.reserved_bytes).sum();
-                let epoch = self.epoch;
-                if let Err(e) = revalidate_reservation(&mut self.records[i], others, current, epoch) {
+                if let Err(e) = revalidate_reservation(&mut self.records[i], others, current, window.epoch) {
                     finished.push(finish(&mut self.records[i], Err(e)));
                 }
                 continue;
@@ -411,16 +443,17 @@ impl Captures {
             let slot = host.screenshot(self.records[i].viewport, MAX_IMAGE_BYTES);
             let r = &mut self.records[i];
             r.slot = Some(slot);
-            r.issued_epoch = Some(self.epoch);
+            r.issued_epoch = Some(window.epoch);
         }
         self.records.retain(|r| !finished.iter().any(|f| f.token == r.token));
         finished
     }
 
-    /// Logic phase: collect completed images (retrying after an epoch advance), expire the late.
+    /// Logic phase: collect completed images (retrying after an epoch advance), expire the late
+    /// and fail those whose window closed. Each request is read against the geometry its own
+    /// viewport recorded this pass.
     pub fn drain(&mut self, now: Instant, document: Option<DocumentId>) -> Vec<Finished> {
-        let current = self.geometry; // P3(canvas-widgets-w13): cw.C69 per-viewport geometry.
-        // Requests that arrived before the first UI pass start here, once its geometry is known.
+        // Requests that arrived before their viewport was measured start here, once it is.
         self.admit_waiting(now);
         let mut finished = Vec::new();
         for i in 0..self.records.len() {
@@ -430,6 +463,12 @@ impl Captures {
                 finished.push(finish(&mut self.records[i], Err(timeout_error(token))));
                 continue;
             }
+            let window = self.windows.get(&self.records[i].viewport).copied();
+            if window.is_some_and(|window| window.geometry.is_none()) {
+                finished.push(finish(&mut self.records[i], Err(window_closed_error(token))));
+                continue;
+            }
+            let current = window.and_then(|window| window.geometry);
             if !same_activation(document, self.records[i].document) || !same_activation(current.and_then(|c| c.document), self.records[i].document) {
                 finished.push(finish(&mut self.records[i], Err(document_changed_error(token))));
                 continue;
@@ -447,13 +486,13 @@ impl Captures {
                     continue;
                 }
             };
-            let Some(current) = current else {
+            let Some((current, epoch)) = window.and_then(|window| window.geometry.map(|geometry| (geometry, window.epoch))) else {
                 finished.push(finish(&mut self.records[i], Err(format!("screenshot {token} failed: the window geometry is unknown"))));
                 continue;
             };
             // An epoch advance since issue means the image may belong to an intermediate layout,
             // even if the values changed back.
-            let epoch_advanced = self.records[i].issued_epoch.is_none_or(|issued| issued != self.epoch);
+            let epoch_advanced = self.records[i].issued_epoch.is_none_or(|issued| issued != epoch);
             let pass_mixed = !same_activation(current.document, document);
             if epoch_advanced || !current.same_layout(&self.records[i].geometry) || pass_mixed {
                 slot.cancel();
@@ -463,7 +502,6 @@ impl Captures {
                 }
                 self.records[i].retries = self.records[i].retries.saturating_add(1);
                 let others: usize = self.records.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, r)| r.reserved_bytes).sum();
-                let epoch = self.epoch;
                 match revalidate_reservation(&mut self.records[i], others, current, epoch) {
                     Ok(()) => self.records[i].ready_at = now,
                     Err(e) => finished.push(finish(&mut self.records[i], Err(e))),
@@ -595,6 +633,10 @@ fn same_activation(a: Option<DocumentId>, b: Option<DocumentId>) -> bool {
 
 fn timeout_error(token: u64) -> String {
     format!("screenshot {token} timed out: no frame was presented within {} s", DEADLINE.as_secs())
+}
+
+fn window_closed_error(token: u64) -> String {
+    format!("screenshot {token} failed: {WINDOW_CLOSED}")
 }
 
 fn document_changed_error(token: u64) -> String {

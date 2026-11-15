@@ -239,3 +239,65 @@ fn a_held_press_reads_down_once_through_a_discard_pass_and_later_frames() {
     assert!(phases.iter().all(|phase| phase.button_down() || matches!(phase, PressPhase::Release { .. })), "{phases:?}");
     assert!(matches!(phases.last(), Some(PressPhase::Release { .. })), "{phases:?}");
 }
+
+/// Input enters the first pass of a frame only: a frame with a pointer move, a wheel notch, a key press and an
+/// injected step, forced to rerun, hands each to its consumer once. The rerun pass is not stirred, its wheel taker
+/// has no share, its focused component has no intent and it carries no injected step.
+#[trial]
+fn a_rerun_pass_delivers_none_of_the_frames_input_again() {
+    use craft_behavior::{Input, WheelTaker};
+    use craft_ui::runtime::focus::{FocusTarget, KeyUse};
+    use craft_ui::testing::focus::{Stop, intents_of, named_id, register_stop, widget};
+    use craft_ui::testing::input::key_press;
+    use craft_ui::testing::wheel::{register, take};
+
+    #[derive(Default)]
+    struct Pass {
+        stirred: bool,
+        wheel: bool,
+        moves: usize,
+        injected: bool,
+    }
+    let field = named_id("rerun_field");
+    let log: Rc<RefCell<Vec<Pass>>> = Rc::default();
+    let sink = log.clone();
+    let mut show = move |ui: &mut Ui| {
+        let ctx = ui.ctx().clone();
+        widget(ui, field);
+        register_stop(&ctx, Stop::new(field, KeyUse::of(Input::Text)));
+        register(&ctx, WheelTaker::new(field, Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0))).vertical(true));
+        let mut intents = intents_of(&ctx, Some(field), false);
+        let mut moves = 0;
+        while intents.take_move().is_some() {
+            moves += 1;
+        }
+        sink.borrow_mut().push(Pass {
+            stirred: craft_ui::runtime::pointer::with_pass_pointer(&ctx, |pass| pass.stirred),
+            wheel: take(&ctx, field).is_some(),
+            moves,
+            injected: craft_ui::runtime::windows::WindowHost::of(&ctx).injected_pass(),
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(2, &mut show);
+    craft_ui::runtime::focus::request(&frames.ctx, FocusTarget::Id(field));
+    frames.idle(2, &mut show);
+    craft_ui::runtime::windows::WindowHost::of(&frames.ctx).inject_text(egui::ViewportId::ROOT, "x");
+    log.borrow_mut().clear();
+    let mut first = true;
+    let events = vec![pointer::moved(Pos2::new(20.0, 20.0)), pointer::wheel(-30.0), key_press(egui::Key::ArrowRight, egui::Modifiers::NONE)];
+    let passes = frames.frame(events, |ui| {
+        if std::mem::take(&mut first) {
+            craft_ui::runtime::frame::discard_pass(ui.ctx(), "test");
+        }
+        show(ui);
+    });
+    assert_eq!(passes, 2, "the frame reruns");
+    let log = log.borrow();
+    assert_eq!(log.len(), 2);
+    assert_eq!(log.iter().filter(|pass| pass.stirred).count(), 1, "one pass saw the pointer move");
+    assert_eq!(log.iter().filter(|pass| pass.wheel).count(), 1, "one pass took the wheel notch");
+    assert_eq!(log.iter().map(|pass| pass.moves).sum::<usize>(), 1, "the key's intent arrived once");
+    assert_eq!(log.iter().filter(|pass| pass.injected).count(), 1, "the injected step entered once");
+    assert!(log[0].stirred && log[0].injected && !log[1].stirred && !log[1].injected, "the first pass carries the input");
+}

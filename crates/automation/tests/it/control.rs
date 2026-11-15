@@ -46,6 +46,24 @@ fn deadlines_distinguish_expired_from_timed_out() {
     assert_eq!(abandoned_reply.try_recv().expect("a reply")["error"], json!(expired_error()));
 }
 
+/// A request sent without a deadline runs even when nobody waits for its reply any more: a fire-and-forget step
+/// (a key press, a release) still happens.
+#[trial]
+fn a_request_without_a_deadline_is_dispatched_after_its_reply_receiver_is_dropped() {
+    let (tx, rx) = channel();
+    let mut channel = ControlChannel::new(rx);
+
+    let (request, reply) = ControlRequest::new("ui.key", json!({"key": "Escape"}));
+    assert!(request.deadline.is_none(), "a new request has no deadline");
+    drop(reply);
+    tx.send(request).expect("sent");
+
+    let next = channel.next_request().expect("the deadline-free request is dispatched");
+    assert_eq!(next.method, "ui.key");
+    assert_eq!(next.params, json!({"key": "Escape"}));
+    assert!(channel.next_request().is_none(), "the request runs once");
+}
+
 /// A job's reply goes to the requests waiting on that job only, as the app built it (an error with partial results
 /// keeps both); the other job's waiter keeps waiting.
 #[trial]

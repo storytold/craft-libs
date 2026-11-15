@@ -23,7 +23,10 @@ pub(crate) const WHEEL_LINE_POINTS: f32 = 40.0;
 /// Points one wheel page adds to `PointerFrame.scroll`.
 pub(crate) const WHEEL_PAGE_POINTS: f32 = 400.0;
 
-/// The pointer input of one pass of one viewport, egui-converted.
+/// The pointer input of one pass of one viewport, egui-converted. Input enters a frame's first pass only (egui hands
+/// the frame's events to it, and injected steps and held-back presses follow the frame): a rerun pass of the
+/// frame carries no events, so its `delta`, `press`, `release` and `scroll` are empty while the held facts (`pos`,
+/// `buttons`) persist. A consumer applies what its pass hands it and never turns a held fact into an event.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct PointerFrame {
@@ -67,7 +70,8 @@ pub struct PressTargets {
     pub drag: Option<Id>,
 }
 
-/// What the begin hook read of the pass, for the sensing core and the services.
+/// What the begin hook read of the pass, for the sensing core and the services. Built from the pass's own events,
+/// so a rerun pass of a frame (see [`PointerFrame`]) reads none.
 #[derive(Clone, Debug, Default)]
 #[doc(hidden)]
 pub struct PassPointer {

@@ -262,7 +262,7 @@ pub fn client_token(
 }
 
 /// Counts live connections against [`MAX_CONNECTIONS`]; a [`ConnectionPermit`] releases one when
-/// dropped.
+/// released or dropped.
 #[derive(Debug, Default)]
 pub struct ConnectionLimiter {
     live: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -283,30 +283,38 @@ impl ConnectionLimiter {
                 return None;
             }
             match self.live.compare_exchange_weak(current, current + 1, Ordering::AcqRel, Ordering::Acquire) {
-                Ok(_) => return Some(ConnectionPermit { live: std::sync::Arc::clone(&self.live) }),
+                Ok(_) => return Some(ConnectionPermit { live: std::sync::Arc::clone(&self.live), released: false }),
                 Err(actual) => current = actual,
             }
         }
     }
 }
 
-/// One live connection's share of [`ConnectionLimiter`]; dropping it frees the slot.
+/// One live connection's share of [`ConnectionLimiter`]; [`Self::release`] or dropping it frees
+/// the slot.
 #[derive(Debug)]
 pub struct ConnectionPermit {
     live: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// The slot was freed by [`Self::release`], so `Drop` must not free it again.
+    released: bool,
 }
 
 impl ConnectionPermit {
     /// Frees the slot once, atomically, without `Drop` freeing it again; answers whether this was
-    /// the last live connection.
-    pub fn release(self) -> bool {
-        todo!("fx.F21")
+    /// the last live connection. One atomic decrement decides it, so of two connections ending
+    /// together exactly one sees itself as the last. A connection admitted between the decrement and
+    /// `end_injection` may lose input it sends before authenticating; it sends none.
+    pub fn release(mut self) -> bool {
+        self.released = true;
+        self.live.fetch_sub(1, Ordering::AcqRel) == 1
     }
 }
 
 impl Drop for ConnectionPermit {
     fn drop(&mut self) {
-        self.live.fetch_sub(1, Ordering::AcqRel);
+        if !self.released {
+            self.live.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 }
 

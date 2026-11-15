@@ -28,7 +28,7 @@ use craft_ui::bars::StatusMessage;
 use craft_ui::contract::{Pattern, Props as _, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::windows::{ScreenshotSlot, WindowHost};
-use egui::{Color32, Context, Pos2, Rect, Ui, ViewportId, pos2, vec2};
+use egui::{Color32, Context, Pos2, Rect, Ui, pos2, vec2};
 
 use super::ScreenPickGesture;
 
@@ -440,8 +440,9 @@ impl ScreenPick {
             }
         };
         let windows = WindowHost::of(ctx);
-        // P3(canvas-widgets-w13): cw.C66 — `screenshot_facts` takes the viewport and gives `None` when it is not running.
-        let Some(size) = windows.screenshot_facts(windows.current()) else {
+        // The frame is measured and shot in the same viewport, so a pick inside a child window samples that window.
+        let viewport = windows.current();
+        let Some(size) = windows.screenshot_facts(viewport) else {
             self.hold = None;
             return None;
         };
@@ -458,7 +459,7 @@ impl ScreenPick {
         let sampled = hold.frame.as_ref().filter(|_| inside).and_then(|frame| sample_frame(frame, size.pixels_per_point, at, back.as_deref()));
         if !released {
             if hold.slot.is_none() {
-                hold.slot = Some(windows.screenshot(ViewportId::ROOT, FRAME_BYTES));
+                hold.slot = Some(windows.screenshot(viewport, FRAME_BYTES));
             }
             ctx.request_repaint();
             return sampled;

@@ -4038,7 +4038,7 @@ dependencies = [
 [[package]]
 name = "ecolor"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 dependencies = [
  "bytemuck",
  "emath",
@@ -4094,7 +4094,7 @@ dependencies = [
 [[package]]
 name = "eframe"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -4129,7 +4129,7 @@ dependencies = [
 [[package]]
 name = "egui"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 dependencies = [
  "accesskit",
  "ahash",
@@ -4148,7 +4148,7 @@ dependencies = [
 [[package]]
 name = "egui-wgpu"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -4167,7 +4167,7 @@ dependencies = [
 [[package]]
 name = "egui-winit"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 dependencies = [
  "block2 0.6.2",
  "bytemuck",
@@ -4187,7 +4187,7 @@ dependencies = [
 [[package]]
 name = "egui_glow"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 dependencies = [
  "bytemuck",
  "egui",
@@ -4200,7 +4200,7 @@ dependencies = [
 [[package]]
 name = "egui_kittest"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 dependencies = [
  "eframe",
  "egui",
@@ -4268,7 +4268,7 @@ dependencies = [
 [[package]]
 name = "emath"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 dependencies = [
  "bytemuck",
 ]
@@ -4329,7 +4329,7 @@ dependencies = [
 [[package]]
 name = "epaint"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 dependencies = [
  "ahash",
  "bytemuck",
@@ -4355,7 +4355,7 @@ dependencies = [
 [[package]]
 name = "epaint_default_fonts"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 
 [[package]]
 name = "equivalent"
@@ -12498,19 +12498,19 @@ dependencies = [
 [[patch.unused]]
 name = "egui_demo_lib"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 
 [[patch.unused]]
 name = "egui_extras"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 
 [[patch.unused]]
 name = "egui_inspection"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"
 
 [[patch.unused]]
 name = "egui_system_font_provider"
 version = "0.37.0"
-source = "git+https://github.com/storytold/egui.git?rev=dcd4de1fbc7502c3a2d69476d9665610947440df#dcd4de1fbc7502c3a2d69476d9665610947440df"
+source = "git+https://github.com/storytold/egui.git?rev=5d6f991d5159b51f464c210b43d650a279cd844a#5d6f991d5159b51f464c210b43d650a279cd844a"

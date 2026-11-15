@@ -103,7 +103,7 @@ pub struct ScreenshotSlot {
     shared: Arc<Shared>,
 }
 
-/// What a screenshot of the running viewport measures this pass.
+/// What a screenshot of one viewport measures this pass.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScreenshotFacts {
@@ -129,16 +129,20 @@ pub(crate) fn issue(ctx: &Context, viewport: ViewportId, max_image_bytes: usize)
     slot
 }
 
-/// What a screenshot of `viewport` measures this pass; `None` when the viewport is not running.
+/// What a screenshot of `viewport` measures this pass, from the window that viewport reported; `None` when the
+/// viewport is not open. The size is the window's inner rect; only the running viewport falls back to its input
+/// rect, since another viewport's input is not this pass's.
 pub(crate) fn facts(ctx: &Context, viewport: ViewportId) -> Option<ScreenshotFacts> {
-    let _ = viewport; // P3(canvas-widgets-w13): cw.C66
-    let window = viewports::current(ctx);
-    let size_points = ctx.input(|input| window.inner.map_or_else(|| input.viewport_rect().size(), |inner| inner.size()));
-    let max_texture_side = ctx.input(|input| input.max_texture_side);
+    let window = viewports::reported(ctx).into_iter().find_map(|(id, facts)| (id == viewport).then_some(facts))?;
+    let running = ctx.viewport_id() == viewport;
+    let (size_points, max_texture_side) = ctx.input(|input| {
+        let size = window.inner.map(|inner| inner.size()).or_else(|| running.then(|| input.viewport_rect().size()));
+        (size, input.max_texture_side)
+    });
     let zoom = ctx.zoom_factor();
     let pixels_per_point =
         window.native_scale.filter(|scale| scale.is_finite() && *scale > 0.0).map_or_else(|| ctx.pixels_per_point(), |scale| scale * zoom);
-    Some(ScreenshotFacts { size_points, pixels_per_point, zoom, max_texture_side, minimized: window.minimized })
+    Some(ScreenshotFacts { size_points: size_points?, pixels_per_point, zoom, max_texture_side, minimized: window.minimized })
 }
 
 impl ScreenshotSlot {
