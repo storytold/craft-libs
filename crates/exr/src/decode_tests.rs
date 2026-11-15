@@ -240,10 +240,11 @@ fn hostile_files_never_panic() {
     assert!(parts(b"not exr", &limits).is_err());
 }
 
-// A multi-part file with a flat scan-line part and a deep scan-line part, built by hand per the
-// OpenEXR file layout (the `exr` crate's writer refuses deep headers): version 2 with the deep and
-// multi-part flags, the headers and an empty header, one offset table per part, then chunks that
-// each start with their part number. Both parts are uncompressed, one scan line per chunk.
+// A multi-part file with a flat part and a deep scan-line part, built by hand per the OpenEXR file
+// layout (the `exr` crate's writer refuses deep headers): version 2 with the deep and multi-part
+// flags, the headers and an empty header, one offset table per part, then chunks that each start
+// with their part number. Both parts are uncompressed, two chunks a part: the deep part and a
+// scan-line flat part hold one scan line a chunk, and a tiled flat part one 2 × 2 tile a chunk.
 
 fn mixed_attr(out: &mut Vec<u8>, name: &str, ty: &str, payload: &[u8]) {
     out.extend_from_slice(name.as_bytes());
@@ -255,8 +256,9 @@ fn mixed_attr(out: &mut Vec<u8>, name: &str, ty: &str, payload: &[u8]) {
 }
 
 /// The version field and the headers of a mixed file whose flat part is `w × h` with float
-/// `B`, `G`, `R` channels and whose deep part is 3 × 2 with one float `A` channel.
-fn mixed_headers(deep_first: bool, (w, h): (usize, usize)) -> Vec<u8> {
+/// `B`, `G`, `R` channels, in scan lines or (with `tiled`) in one level of 2 × 2 tiles, and whose
+/// deep part is 3 × 2 with one float `A` channel.
+fn mixed_headers(deep_first: bool, tiled: bool, (w, h): (usize, usize)) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&0x0131_2f76u32.to_le_bytes());
     out.extend_from_slice(&(2u32 | 0x800 | 0x1000).to_le_bytes());
@@ -273,8 +275,10 @@ fn mixed_headers(deep_first: bool, (w, h): (usize, usize)) -> Vec<u8> {
         }
         chlist.push(0);
         let window: Vec<u8> = [0i32, 0, w as i32 - 1, h as i32 - 1].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let tiled = tiled && !deep;
+        let chunks = if tiled { w.div_ceil(2) * h.div_ceil(2) } else { h };
         mixed_attr(&mut out, "channels", "chlist", &chlist);
-        mixed_attr(&mut out, "chunkCount", "int", &(h as i32).to_le_bytes());
+        mixed_attr(&mut out, "chunkCount", "int", &(chunks as i32).to_le_bytes());
         mixed_attr(&mut out, "compression", "compression", &[0]);
         mixed_attr(&mut out, "dataWindow", "box2i", &window);
         mixed_attr(&mut out, "displayWindow", "box2i", &window);
@@ -286,7 +290,18 @@ fn mixed_headers(deep_first: bool, (w, h): (usize, usize)) -> Vec<u8> {
         mixed_attr(&mut out, "pixelAspectRatio", "float", &1f32.to_le_bytes());
         mixed_attr(&mut out, "screenWindowCenter", "v2f", &[0u8; 8]);
         mixed_attr(&mut out, "screenWindowWidth", "float", &1f32.to_le_bytes());
-        mixed_attr(&mut out, "type", "string", if deep { b"deepscanline" } else { b"scanlineimage" });
+        if tiled {
+            // 2 × 2 tiles, one level, rounded down.
+            mixed_attr(&mut out, "tiles", "tiledesc", &[2, 0, 0, 0, 2, 0, 0, 0, 0]);
+        }
+        let ty: &[u8] = if deep {
+            b"deepscanline"
+        } else if tiled {
+            b"tiledimage"
+        } else {
+            b"scanlineimage"
+        };
+        mixed_attr(&mut out, "type", "string", ty);
         if deep {
             mixed_attr(&mut out, "version", "int", &1i32.to_le_bytes());
         }
@@ -301,10 +316,11 @@ fn mixed_flat(channel: f32, i: usize) -> f32 {
     channel + 1.0 + i as f32
 }
 
-/// A mixed file with a 3 × 2 flat part, and its chunk offsets as `offsets[part][line]`.
-fn mixed_file(deep_first: bool) -> (Vec<u8>, [[usize; 2]; 2]) {
+/// A mixed file with a 3 × 2 flat part, and its chunk offsets as `offsets[part][chunk]`. The
+/// tiled flat part's chunks hold the tiles at (0, 0) and (1, 0).
+fn mixed_file(deep_first: bool, tiled: bool) -> (Vec<u8>, [[usize; 2]; 2]) {
     let (w, h) = (3usize, 2usize);
-    let mut out = mixed_headers(deep_first, (w, h));
+    let mut out = mixed_headers(deep_first, tiled, (w, h));
     let chunks: Vec<Vec<Vec<u8>>> = (0..2i32)
         .map(|part| {
             let deep = (part == 0) == deep_first;
@@ -312,6 +328,18 @@ fn mixed_file(deep_first: bool) -> (Vec<u8>, [[usize; 2]; 2]) {
                 .map(|y| {
                     let mut c = Vec::new();
                     c.extend_from_slice(&part.to_le_bytes());
+                    if tiled && !deep {
+                        // Tile (y, 0) at level (0, 0): columns 2y and 2y + 1 that lie inside.
+                        [y as i32, 0, 0, 0].iter().for_each(|v| c.extend_from_slice(&v.to_le_bytes()));
+                        let xs = 2 * y..(2 * y + 2).min(w);
+                        c.extend_from_slice(&((xs.len() * h * 3 * 4) as i32).to_le_bytes());
+                        for row in 0..h {
+                            for channel in [100.0, 10.0, 0.0] {
+                                xs.clone().for_each(|x| c.extend_from_slice(&mixed_flat(channel, row * w + x).to_le_bytes()));
+                            }
+                        }
+                        return c;
+                    }
                     c.extend_from_slice(&(y as i32).to_le_bytes());
                     if deep {
                         // Packed count table, packed and unpacked sample data: one sample a pixel.
@@ -347,8 +375,8 @@ fn mixed_file(deep_first: bool) -> (Vec<u8>, [[usize; 2]; 2]) {
 #[test]
 fn a_flat_part_beside_a_deep_part_decodes() {
     let limits = Limits::default();
-    for deep_first in [false, true] {
-        let (bytes, _) = mixed_file(deep_first);
+    for (deep_first, tiled) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (bytes, _) = mixed_file(deep_first, tiled);
         let (flat, deep) = if deep_first { (1, 0) } else { (0, 1) };
         let parts = parts(&bytes, &limits).unwrap();
         assert_eq!((parts[flat].deep, parts[deep].deep, parts[flat].name.as_deref()), (false, true, Some("flat")));
@@ -356,7 +384,7 @@ fn a_flat_part_beside_a_deep_part_decodes() {
         let part = decode_part(&bytes, flat, &all, &limits).unwrap();
         for (name, channel) in [("R", 0.0), ("G", 10.0), ("B", 100.0)] {
             let expected: Vec<f32> = (0..6).map(|i| mixed_flat(channel, i)).collect();
-            assert_eq!(part.channel(name).unwrap().samples, Samples::F32(expected), "deep first {deep_first} {name}");
+            assert_eq!(part.channel(name).unwrap().samples, Samples::F32(expected), "deep first {deep_first} tiled {tiled} {name}");
         }
         let only_g = decode_part(&bytes, flat, &|n| n == "G", &limits).unwrap();
         assert_eq!(only_g.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["G"]);
@@ -377,9 +405,9 @@ fn a_flat_part_beside_a_deep_part_decodes() {
 fn a_flat_part_s_chunks_beside_a_deep_part_are_checked_before_they_are_read() {
     let limits = Limits::default();
     for deep_first in [false, true] {
-        let (good, offsets) = mixed_file(deep_first);
+        let (good, offsets) = mixed_file(deep_first, false);
         let (flat, deep) = if deep_first { (1, 0) } else { (0, 1) };
-        let tables = mixed_headers(deep_first, (3, 2)).len();
+        let tables = mixed_headers(deep_first, false, (3, 2)).len();
         let entry = tables + flat * 2 * 8;
         let with_offset = |slot: usize, value: u64| {
             let mut b = good.clone();
@@ -427,15 +455,34 @@ fn a_flat_part_s_chunks_beside_a_deep_part_are_checked_before_they_are_read() {
 }
 
 #[test]
+fn a_tiled_flat_part_beside_a_deep_part_must_hold_each_of_its_tiles() {
+    let limits = Limits::default();
+    for deep_first in [false, true] {
+        let (good, offsets) = mixed_file(deep_first, true);
+        let flat = usize::from(deep_first);
+        // The second chunk names tile (0, 0) at level (1, 1), which a one-level part does not
+        // have, or tile (0, 0) again, so tile (1, 0) has no chunk.
+        for coordinates in [[0i32, 0, 1, 1], [0, 0, 0, 0]] {
+            let mut b = good.clone();
+            let at = offsets[flat][1] + 4;
+            coordinates.iter().enumerate().for_each(|(i, v)| b[at + i * 4..at + i * 4 + 4].copy_from_slice(&v.to_le_bytes()));
+            for r in [decode_part(&b, flat, &all, &limits).map(|_| ()), decode_display_part(&b, flat, &all, &|_| 0.0, &limits).map(|_| ())] {
+                assert!(matches!(&r, Err(Error::Malformed(_))), "deep first {deep_first} {coordinates:?}: {r:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn the_flat_parts_of_a_mixed_file_must_fit_the_file() {
     // 1024 × 1024 × 3 float samples (12 MiB) declared in a file of a few hundred bytes: over a
     // ratio of 1 plus the 1 MiB slack, though another part is deep.
-    let headers = mixed_headers(false, (1024, 1024));
+    let headers = mixed_headers(false, false, (1024, 1024));
     assert!(parts(&headers, &Limits::default()).is_ok());
     let tight = Limits { max_ratio: 1, ..Limits::default() };
     for r in [parts(&headers, &tight).map(|_| ()), decode_part(&headers, 0, &all, &tight).map(|_| ())] {
         assert!(matches!(&r, Err(Error::LimitExceeded(_))), "{r:?}");
     }
     // The deep part's samples are not counted, and a small flat part passes the same ratio.
-    assert!(parts(&mixed_file(false).0, &tight).is_ok());
+    assert!(parts(&mixed_file(false, false).0, &tight).is_ok());
 }

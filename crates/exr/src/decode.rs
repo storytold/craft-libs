@@ -747,7 +747,8 @@ fn tables_start(bytes: &[u8]) -> Result<u64> {
 /// deep headers, so here only the flat headers are validated, the offset tables (one `u64` per
 /// chunk, a table per part in header order) are walked from the end of the headers, and only the
 /// selected part's chunks are read. Each chunk must start past the last offset table and inside
-/// the file, carry the selected part's number, and hold a block no other chunk of the part holds.
+/// the file, carry the selected part's number, and hold one of the part's blocks that no other
+/// chunk of the part holds, so the part's chunks hold every one of its blocks.
 fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &mut impl ChannelsReader) -> Result<()> {
     let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
     let multipart = meta.requirements.is_multilayer();
@@ -768,7 +769,7 @@ fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &m
         .ok()
         .and_then(|start| bytes.get(start..start.checked_add(header.chunk_count.checked_mul(8)?)?))
         .ok_or_else(truncated)?;
-    let mut blocks = std::collections::HashSet::new();
+    let mut blocks: std::collections::HashSet<TileCoordinates> = header.blocks_increasing_y_order().map(|block| block.location).collect();
     for &entry in offsets.as_chunks::<8>().0 {
         let offset = u64::from_le_bytes(entry);
         let chunk = usize::try_from(offset)
@@ -786,8 +787,11 @@ fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &m
         }
         let chunk = Chunk::read(&mut Cursor::new(chunk), meta).map_err(map_exr)?;
         let tile = header.get_block_data_indices(&chunk.compressed_block).map_err(map_exr)?;
-        if !blocks.insert(tile) {
-            return Err(malformed(format!("two chunks of part {index} hold block {:?} at level {:?}", tile.tile_index, tile.level_index)));
+        if !blocks.remove(&tile) {
+            return Err(malformed(format!(
+                "part {index} has no free slot for block {:?} at level {:?}: it is outside the part or another chunk holds it",
+                tile.tile_index, tile.level_index
+            )));
         }
         if reader.filter_block(tile) {
             let block = UncompressedBlock::decompress_chunk(chunk, meta, false).map_err(map_exr)?;
