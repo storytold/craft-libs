@@ -36,6 +36,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn preserves_stored_dimensions_with_exif_orientation() {
+        let mut image = crate::Image::from_u8(2, 3, crate::ChannelLayout::Rgb, vec![42; 18]).unwrap();
+        image.meta.exif = Some(b"II\x2a\x00\x08\x00\x00\x00\x01\x00\x12\x01\x03\x00\x01\x00\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00".to_vec());
+        let bytes = crate::encode(&image, Format::WebP, &crate::EncodeOptions::default()).unwrap();
+        assert_eq!(header(&bytes).unwrap(), (2, 3, 6));
+    }
+
+    #[test]
     fn rejects_missing_and_truncated_image_chunks() {
         let mut bytes = b"RIFF\x00\x00\x00\x00WEBP".to_vec();
         assert!(header(&bytes).is_err());
