@@ -238,6 +238,15 @@ pub fn is_binary(bytes: &[u8]) -> bool {
 
 /// Read an FBX file (binary or ASCII) into its records.
 pub fn read_document(bytes: &[u8], limits: &Limits) -> Result<Document> {
+    read_document_impl(bytes, limits, false)
+}
+
+/// Read records with strict ASCII syntax checking for malformed strings and record delimiters.
+pub fn read_document_strict(bytes: &[u8], limits: &Limits) -> Result<Document> {
+    read_document_impl(bytes, limits, true)
+}
+
+fn read_document_impl(bytes: &[u8], limits: &Limits, strict: bool) -> Result<Document> {
     let budget = Budget::new(limits.max_data_bytes);
     let (version, records) = if is_binary(bytes) {
         read_binary(bytes, &budget)?
@@ -251,7 +260,7 @@ pub fn read_document(bytes: &[u8], limits: &Limits) -> Result<Document> {
                 String::from_utf8_lossy(bytes)
             }
         };
-        read_ascii(&text, &budget)?
+        read_ascii(&text, &budget, strict)?
     };
     Ok(Document { version, records, left: budget.left.get() })
 }
@@ -449,6 +458,8 @@ struct Ascii<'a> {
     text: &'a str,
     pos: usize,
     lookahead: Option<Tok<'a>>,
+    strict: bool,
+    unterminated: bool,
 }
 
 impl<'a> Ascii<'a> {
@@ -476,6 +487,7 @@ impl<'a> Ascii<'a> {
                 '"' => {
                     let tail = rest.get(1..).unwrap_or("");
                     let end = tail.find('"').unwrap_or(tail.len());
+                    self.unterminated |= end == tail.len();
                     self.pos += 1 + end + usize::from(end < tail.len());
                     return Some(Tok::Value(tail.get(..end).unwrap_or(""), true));
                 }
@@ -520,11 +532,14 @@ fn ascii_list(scan: &mut Ascii<'_>, budget: &Budget, records_budget: &Budget, de
     while let Some(t) = scan.take() {
         match t {
             Tok::Close if depth > 0 => return Ok(out),
+            Tok::Close if scan.strict => return Err(malformed(KIND, "unbalanced closing brace")),
             Tok::Key(name) => {
                 records_budget.take(std::mem::size_of::<Record>().checked_add(name.len()), "its records")?;
                 let mut record = Record { name: name.to_string(), ..Record::default() };
+                let mut needs_comma = false;
                 loop {
                     match scan.peek() {
+                        Some(Tok::Value(..) | Tok::Count) if scan.strict && needs_comma => break,
                         Some(Tok::Value(value, quoted)) => {
                             let number = if quoted {
                                 None
@@ -538,9 +553,15 @@ fn ascii_list(scan: &mut Ascii<'_>, budget: &Budget, records_budget: &Budget, de
                                 .props
                                 .push(number.unwrap_or_else(|| Prop::Str(if quoted { value.replace("&quot;", "\"") } else { value.to_string() })));
                         }
-                        Some(Tok::Count | Tok::Comma) => {}
+                        Some(Tok::Count) => {}
+                        Some(Tok::Comma) => {
+                            needs_comma = false;
+                            scan.take();
+                            continue;
+                        }
                         _ => break,
                     }
+                    needs_comma = true;
                     scan.take();
                 }
                 if scan.peek() == Some(Tok::Open) {
@@ -549,16 +570,23 @@ fn ascii_list(scan: &mut Ascii<'_>, budget: &Budget, records_budget: &Budget, de
                 }
                 out.push(record);
             }
+            _ if scan.strict => return Err(malformed(KIND, "expected a property name")),
             _ => {}
         }
+    }
+    if scan.strict && depth > 0 {
+        return Err(malformed(KIND, "missing closing brace"));
     }
     Ok(out)
 }
 
-fn read_ascii(text: &str, budget: &Budget) -> Result<(u32, Vec<Record>)> {
-    let mut scan = Ascii { text, pos: 0, lookahead: None };
+fn read_ascii(text: &str, budget: &Budget, strict: bool) -> Result<(u32, Vec<Record>)> {
+    let mut scan = Ascii { text, pos: 0, lookahead: None, strict, unterminated: false };
     let records_budget = Budget::new(budget.limit);
     let records = ascii_list(&mut scan, budget, &records_budget, 0)?;
+    if strict && scan.unterminated {
+        return Err(malformed(KIND, "unterminated string"));
+    }
     let version = records
         .iter()
         .find(|n| n.name == "FBXHeaderExtension")

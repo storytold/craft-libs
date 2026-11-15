@@ -774,3 +774,13 @@ fn strict_geometry_rejects_bad_arrays_and_keeps_final_polygon() {
         assert!(read_strict(&ASCII.replace("a: 0,1,2,-4,0,1,-5", bad)).is_err());
     }
 }
+
+#[test]
+fn strict_ascii_reports_unbalanced_and_unterminated_records() {
+    let strict = |s: &str| crate::fbx::read_document_strict(s.as_bytes(), &Limits::default());
+    assert!(strict(ASCII).is_ok());
+    for s in ["Objects: { A: 1", "Objects: { } }", "Objects: { A: \"unterminated", "Objects: { A: 1 2 }"] {
+        assert!(strict(s).is_err(), "{s}");
+    }
+    assert!(read_document(b"Objects: { A: 1", &Limits::default()).is_ok());
+}
