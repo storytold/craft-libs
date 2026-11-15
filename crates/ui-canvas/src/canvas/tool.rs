@@ -218,6 +218,10 @@ pub(crate) struct ToolRequests {
     pub(crate) ease: Option<ViewEase>,
     pub(crate) snapped: Vec<SnapLine>,
     pub(crate) autoscroll_at: Option<Pos2>,
+    /// The pan's scroll-all-windows choice, from [`ToolContext::pan_view`].
+    pub(crate) pan: Option<bool>,
+    /// Rows the Show Transformation Values gate never silences, from [`ToolContext::hud`].
+    pub(crate) hud: Option<Vec<(Label, String)>>,
 }
 
 /// What a tool sees and may ask for during a call.
@@ -406,7 +410,7 @@ impl<'a> ToolContext<'a> {
 
     /// `point`, a document point under the pointer, moved to what the canvas snaps it to (View > Snap To) with the
     /// modifiers held now; the point itself when the canvas has no snapping or the Control key suspends it
-    /// ([`snap_suspended`](super::snap_suspended)). The tool builds no snapping of its own.
+    /// ([`Snap::apply`] decides). The tool builds no snapping of its own.
     pub fn snap(&self, point: Point) -> Point {
         Point::new(self.snap_along(Axis::Y, point.x), self.snap_along(Axis::X, point.y))
     }
@@ -414,17 +418,16 @@ impl<'a> ToolContext<'a> {
     /// The coordinate `position` across a guide that would run along `along`, snapped as [`snap`](Self::snap) does:
     /// an x coordinate is across `Axis::Y`.
     pub fn snap_along(&self, along: Axis, position: f64) -> f64 {
-        match self.snap {
-            Some(snap) if !super::snap_suspended(self.mods, self.os(), false) => snap.apply(along, position, self.mods),
-            _ => position,
-        }
+        self.snap.map_or(position, |snap| snap.apply(along, position, self.mods))
     }
 
     /// The offset that moves `rect` (document units) onto a View > Snap To target with the modifiers held now; zero
     /// when Control suspends snapping or the canvas has no snap.
     pub fn snap_rect(&mut self, rect: kurbo::Rect) -> kurbo::Vec2 {
-        let _ = rect;
-        todo!("cw.C8")
+        let Some(snap) = self.snap else { return kurbo::Vec2::ZERO };
+        let (offset, lines) = snap.rect(rect, self.mods);
+        self.requests.snapped.extend(lines);
+        offset
     }
 
     /// Adds the snap lines a canvas control the tool shows snapped this pass, handed to the host in the same pass.
@@ -434,8 +437,8 @@ impl<'a> ToolContext<'a> {
 
     /// Sets the view for a pan (as [`set_view`](Self::set_view)); the host reports it as [`ViewPan`].
     pub fn pan_view(&mut self, view: CanvasView, scroll_all: bool) {
-        let _ = (view, scroll_all);
-        todo!("cw.C10")
+        self.set_view(view);
+        self.requests.pan = Some(scroll_all);
     }
 
     /// A canvas control the tool shows asks the app to scroll: the host reports `past_edge` for `pointer` through the
@@ -521,10 +524,9 @@ impl<'a> ToolContext<'a> {
     }
 
     /// Labelled values to show beside the pointer this pass, never gated by Show Transformation Values (brush size
-    /// readouts). The last request of a pass wins.
+    /// readouts). The last request of a pass wins. A hud asked for in the same pass as a readout replaces it.
     pub fn hud(&mut self, rows: Vec<(Label, String)>) {
-        let _ = rows;
-        todo!("cw.C2")
+        self.requests.hud = Some(rows);
     }
 
     /// Asks for another pass (an animation, a held key that repeats).
@@ -675,7 +677,8 @@ pub trait CanvasTool {
     }
 
     /// Whether the host calls `drag` once per pointer move of a pass (the freehand family) instead of once at the
-    /// latest position. Default: `false`.
+    /// latest position. `each_pass` runs before the pass's `drag` calls, so a tool that takes every move updates its
+    /// live stroke once per pass after `run` returns, never per `drag` call. Default: `false`.
     fn takes_every_move(&self) -> bool {
         false
     }

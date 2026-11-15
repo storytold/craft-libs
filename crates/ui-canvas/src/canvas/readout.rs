@@ -27,7 +27,17 @@ impl EnvValue for ShowReadouts {
 /// label and the widest value a section gap apart. Labels are in the muted ink and values in the normal one. No rows
 /// paint nothing.
 pub fn readout(cx: &impl StageAccess, at: Pos2, rows: &[(Label, String)]) {
-    paint_readout(cx.stage().ctx(), at, rows);
+    let ctx = cx.stage().ctx();
+    if !shown(ctx) {
+        return;
+    }
+    paint_readout(ctx, at, rows);
+}
+
+/// Whether the root env's [`ShowReadouts`] lets value readouts paint: the one reading of the gate, shared by [`readout`]
+/// and the tool host.
+pub(super) fn shown(ctx: &Context) -> bool {
+    Env::of_root(ctx).view().get::<ShowReadouts>().0
 }
 
 /// [`readout`] that the Show Transformation Values gate ([`ShowReadouts`]) never silences: brush size readouts.

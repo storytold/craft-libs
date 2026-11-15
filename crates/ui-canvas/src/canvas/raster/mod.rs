@@ -34,6 +34,7 @@ use craft_behavior::kurbo::{Point as Point64, Rect as Rect64};
 use craft_behavior::{CanvasView, Metrics, PixelSize};
 use detail::{texel_extent, texel_origin};
 use egui::epaint::{Mesh, Vertex};
+use egui::layers::ShapeIdx;
 use egui::{Color32, ColorImage, Context, Id, Pos2, Response, Shape, TextureFilter, TextureOptions, Vec2, pos2};
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
@@ -261,7 +262,10 @@ pub struct RasterDisplay<'a> {
     /// How far the picture reaches past the document's edge.
     #[prop]
     extent: Extent,
-    /// The display paints in the canvas's picture slot, under every canvas control of the body.
+    /// The display paints in the canvas's picture slot, under every canvas control of the body, when the canvas
+    /// space carries a slot; otherwise it paints in place. A display under the controls fills its canvas, so the
+    /// canvas content rect, the slot's clip, is its clip. It declares no faded look of its own (`DisabledLook::States`):
+    /// the canvas's own veil covers the slot.
     #[prop(flag, name = "picture")]
     under_controls: bool,
     read: PixelRect,
@@ -507,6 +511,11 @@ impl Component for RasterDisplay<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(shown) = &self.shown else { return };
         let painter = ui.content_painter(cx);
+        // A display that paints under the controls marks where its shapes start; they move into the canvas's picture
+        // slot at the end, in show order with every other picture. Outside a canvas, or in a space with no slot, it
+        // paints in place.
+        let space = canvas_space(&cx.env);
+        let first = (self.under_controls && space.and_then(|space| space.picture_slot()).is_some()).then(|| painter.painter.add(Shape::Noop));
         // The picture's area on screen: the document, or the mapped area. A mapped area with nothing of the unit
         // square in it has no checkerboard and no edge.
         let corners = match &self.mapping {
@@ -557,6 +566,21 @@ impl Component for RasterDisplay<'_> {
             && let Some(corners) = corners
         {
             painter.with_draw(|draw| edge(draw, corners));
+        }
+        if let (Some(first), Some(space)) = (first, space) {
+            let last = painter.painter.add(Shape::Noop);
+            let (ctx, layer) = (painter.painter.ctx().clone(), painter.painter.layer_id());
+            let shapes: Vec<Shape> = ctx.graphics_mut(|layers| {
+                let list = layers.entry(layer);
+                (first.0 + 1..last.0)
+                    .map(|at| {
+                        let mut taken = Shape::Noop;
+                        list.mutate_shape(ShapeIdx(at), |clipped| std::mem::swap(&mut clipped.shape, &mut taken));
+                        taken
+                    })
+                    .collect()
+            });
+            space.paint_picture(&ctx, shapes);
         }
     }
 

@@ -12,8 +12,11 @@
 use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CancelReason, CanvasView};
+use craft_keymap::{Chord, Key as ChordKey, Mods};
+use craft_ui::buttons::Button;
 use craft_ui::canvas::{CanvasTool, CropOverlay, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
+use craft_ui::popover::Popover;
 use craft_ui::primitives::Draw;
 use craft_ui::testing::access::Declared;
 use craft_ui::testing::focus::{AccessActionKind, key_release};
@@ -168,6 +171,74 @@ fn with_no_session_control_the_arrows_and_enter_reach_the_tool_with_nothing_focu
     canvas.fixture().key(Key::ArrowRight, Modifiers::NONE).key(Key::Enter, Modifiers::NONE).settle();
     let seen = &canvas.tool().seen;
     assert!(matches!(seen[..], [ToolKey::Nudge { .. }, ToolKey::Submit]), "{seen:?}");
+}
+
+/// The chords `Claimer` takes through `ToolClaims::keys`.
+fn enter_and_escape() -> &'static [Chord] {
+    static KEYS: std::sync::OnceLock<[Chord; 2]> = std::sync::OnceLock::new();
+    KEYS.get_or_init(|| [Chord::new(Mods::NONE, ChordKey::Enter), Chord::new(Mods::NONE, ChordKey::Escape)])
+}
+
+/// A tool that claims Enter and Escape as single chords and takes every key it is offered.
+#[derive(Default)]
+struct Claimer {
+    seen: Vec<ToolKey>,
+}
+
+impl CanvasTool for Claimer {
+    fn claims(&self) -> ToolClaims {
+        ToolClaims::NONE.keys(enter_and_escape())
+    }
+
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Ignored
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn key(&mut self, key: &ToolKey, _: &mut ToolContext<'_>) -> bool {
+        self.seen.push(key.clone());
+        true
+    }
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the claimer's form")
+    }
+}
+
+#[trial]
+fn an_open_layer_takes_enter_and_escape_before_a_tools_claim() {
+    let open = Rc::new(Cell::new(false));
+    let shown = Rc::clone(&open);
+    let mut canvas = ToolFixture::with_body("Document", Claimer::default(), move |ui, _| {
+        let opener = Button::new("Options").show(ui);
+        let mut is_open = shown.get();
+        Popover::new("Options panel", Bind::bound(&mut is_open)).opened_by(&opener).show(ui, |ui, _| {
+            let _ = Button::new("Item").show(ui);
+        });
+        shown.set(is_open);
+    });
+    canvas.fixture().settle();
+    open.set(true);
+    canvas.fixture().idle(4);
+    // The layer's keys come first: Enter goes to it, and Escape closes it.
+    canvas.fixture().key(Key::Enter, Modifiers::NONE).key(Key::Escape, Modifiers::NONE).settle();
+    assert!(canvas.tool().seen.is_empty(), "the open layer took both keys: {:?}", canvas.tool().seen);
+    assert!(!open.get(), "Escape closed the layer");
+    canvas.fixture().idle(10);
+    // Escape returned focus to the opener, whose Enter it is; the tool's chords hold while the canvas has focus, and
+    // the canvas is the stop before the opener.
+    canvas.fixture().key(Key::Tab, Modifiers::SHIFT).settle();
+    assert_eq!(canvas.fixture().focused_stop().map(|(id, _)| id), Some(canvas.canvas_id()), "Shift+Tab focuses the canvas");
+    canvas.fixture().key(Key::Enter, Modifiers::NONE).key(Key::Escape, Modifiers::NONE).settle();
+    let kept = canvas.tool().seen.iter().filter(|key| matches!(key, ToolKey::Kept(_))).count();
+    assert_eq!(kept, 2, "with the layer closed both chords reach the tool as Kept: {:?}", canvas.tool().seen);
 }
 
 /// A marker the arrows move one unit along x while `held`; it describes itself as `Marker` at its place.

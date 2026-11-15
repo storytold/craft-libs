@@ -5,6 +5,7 @@ mod words;
 // Guides and smart guides.
 mod guides;
 mod smart_guides;
+pub(crate) use smart_guides::paint_lines;
 
 pub use guides::{GuideCommands, GuideStyle, Guides, GuidesOutput, reading};
 pub use smart_guides::{Measure, SmartGuides, SmartGuidesStyle, SmartLine};

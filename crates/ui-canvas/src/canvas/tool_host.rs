@@ -43,6 +43,15 @@
 //! place of the selected tool, and a gesture keeps the tool it began with. An app that switches tools itself from
 //! other input asks [`ToolHost::in_gesture`] first and keeps the tool it started the gesture with.
 //!
+//! Stand-ins: [`ToolHost::stand_in`] gives the tool a press runs while Command or Alt is held and the selected tool
+//! does not take the press, or answers it [`ToolAction::Ignored`]. The order is the momentary tool, then the Command
+//! stand-in, then the Alt stand-in, then the selected tool, and the gesture keeps the tool it began with. While the key
+//! is held and no gesture runs, hover, cursor and paint are the stand-in's.
+//!
+//! Readouts: a tool's [`ToolContext::readout`] rows paint only while the root env's `ShowReadouts` holds; its
+//! [`ToolContext::hud`] rows always paint. A secondary press the tool did not take is reported in
+//! [`ToolHostResponse::context`], and so is the Menu key.
+//!
 //! ```no_run
 //! # extern crate craft_ui_canvas as craft_ui;
 //! use craft_ui::canvas::{Canvas, CanvasTool, Momentary, ToolHost};
@@ -57,11 +66,14 @@
 use super::frame_step;
 use super::momentary::{Momentary, MomentaryCommands, MomentaryTool};
 use super::navigate::Autoscroll;
-use super::readout::paint_readout;
+use super::readout::{paint_readout, shown as readouts_shown};
 use super::tool::{CanvasTool, March, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPointer, ToolRequests};
 use super::tools::HandTool;
 use super::zoom_motion::{self, Steer};
-use super::{CanvasOutput, CanvasSpace, Snap};
+use super::{CanvasOutput, CanvasSpace, Snap, context_click};
+use crate::canvas_controls::paint_lines;
+use crate::canvas_controls::{SmartGuides, SmartLine};
+use crate::contract::{Component, Meta as _};
 use crate::primitives::{ContentPainterCx, Draw, DrawEnv, PaintRecord};
 use crate::runtime::access::{self, Name, Role, SubDecl, SubNode};
 use crate::runtime::commands;
@@ -69,17 +81,20 @@ use crate::runtime::edit::next_gesture_id;
 use crate::runtime::env::{Env, Label};
 use crate::runtime::memory::{global, with_session};
 use crate::runtime::pointer::{self, PointerFrame};
+use crate::runtime::overlay::{self, OpenFilter};
+use crate::runtime::sampler::{self, CanvasGesture};
 use crate::runtime::{cursor, frame, keys, lock_keys, measure};
-use crate::style::{DataColor, StyleCx};
+use crate::style::{DataColor, StyleCx, resolve_style};
 use craft_behavior::geometry::SnapLine;
 use craft_behavior::kurbo;
 use craft_behavior::{
     AccessAction, AccessRequest, CancelReason, CanvasView, Cursor, CursorPriority, GestureId, GesturePhase, Intent, PartKey, PartRef, PointerButton,
-    PointerSample, PressCancel, PressPhase, PressStart, PressState,
+    PointerEvent, PointerSample, PressCancel, PressPhase, PressStart, PressState,
 };
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Variant;
-use egui::{Context, Id, Pos2, Rect, Ui, Vec2};
+use crate::runtime::windows::WindowHost;
+use egui::{Context, Id, Pos2, Rect, Ui, Vec2, ViewportId};
 use std::cell::RefCell;
 
 /// A pointer event from automation, queued with [`ToolHost::inject`] and delivered on the next pass as if the
@@ -98,6 +113,8 @@ pub enum ToolInput {
         sample: PointerSample,
         /// The modifiers held.
         mods: Mods,
+        /// How many presses make up the click run: 1 for a lone press, 2 for a double press.
+        clicks: u32,
     },
     /// The pointer moved: a drag while a gesture runs, else a hover.
     #[non_exhaustive]
@@ -122,7 +139,7 @@ pub enum ToolInput {
 impl ToolInput {
     /// A mouse press of `button` at `pos`, with no modifiers.
     pub const fn down(button: PointerButton, pos: Pos2) -> Self {
-        ToolInput::Down { button, pos, sample: PointerSample::new(1.0), mods: Mods::NONE }
+        ToolInput::Down { button, pos, sample: PointerSample::new(1.0), mods: Mods::NONE, clicks: 1 }
     }
 
     /// A mouse move to `pos`, with no modifiers.
@@ -150,6 +167,15 @@ impl ToolInput {
         match &mut self {
             ToolInput::Down { sample, .. } | ToolInput::Move { sample, .. } => *sample = pen,
             ToolInput::Up { .. } => {}
+        }
+        self
+    }
+
+    /// A `Down` as the `count`th press of a click run (2 for a double press); the other inputs are unchanged.
+    #[must_use]
+    pub fn clicks(mut self, count: u32) -> Self {
+        if let ToolInput::Down { clicks, .. } = &mut self {
+            *clicks = count;
         }
         self
     }
@@ -252,6 +278,17 @@ struct Active {
     injected: bool,
     /// The tool has had a `drag` call in this gesture.
     dragged: bool,
+    /// The stand-in the gesture runs with, latched at the press until the gesture ends; `None` is the selected tool.
+    stand_in: Option<StandInKey>,
+}
+
+/// A secondary press the selected tool refused: what its menu request carries when the button comes up.
+#[derive(Clone, Copy, Debug)]
+struct SecondaryPress {
+    /// The modifiers held when the button went down.
+    mods: Mods,
+    /// The momentary tool in effect at the press.
+    momentary: Option<MomentaryTool>,
 }
 
 /// What the host keeps between passes, in a session slot keyed by the canvas's id.
@@ -268,12 +305,24 @@ struct HostState {
     space: Option<CanvasSpace>,
     /// The view a tool set while [`ToolHost::cancel`] ended its gesture outside a pass: the next pass reports it.
     cancelled_view: Option<CanvasView>,
+    /// The viewport the canvas last ran in: an injected input owes that viewport a pass.
+    viewport: ViewportId,
     /// The pass clock of the last pass that was not a measuring pass: an autoscroll moves by the time since.
     time: Option<f64>,
+    /// The open secondary press the tool refused: its release asks for the canvas menu.
+    secondary: Option<SecondaryPress>,
 }
 
 fn state_id(canvas: Id) -> Id {
     global("craft-ui tool host", canvas)
+}
+
+/// Whether the key of a stand-in is held in `mods`.
+fn held_at(key: StandInKey, mods: Mods) -> bool {
+    match key {
+        StandInKey::Command => mods.cmd,
+        StandInKey::Alt => mods.alt,
+    }
 }
 
 /// The on-canvas tool host. Built each pass, shown once with the canvas's output and the tool.
@@ -281,13 +330,9 @@ fn state_id(canvas: Id) -> Id {
 pub struct ToolHost<'m> {
     disabled: bool,
     momentary: Option<&'m mut Momentary>,
-    #[allow(dead_code)] // P3(canvas-widgets-w2): cw.C1
     command_stand_in: Option<&'m mut (dyn CanvasTool + 'm)>,
-    #[allow(dead_code)] // P3(canvas-widgets-w2): cw.C1
     alt_stand_in: Option<&'m mut (dyn CanvasTool + 'm)>,
-    #[allow(dead_code)] // P3(canvas-widgets-w2): cw.C3
     smart_guide_color: Option<DataColor>,
-    #[allow(dead_code)] // P3(canvas-widgets-w2): cw.C4
     precise_cursors: bool,
 }
 
@@ -344,7 +389,7 @@ impl<'m> ToolHost<'m> {
     /// Delivers the pass's pointer and key events to `tool`, paints it over the canvas, and paints the readout it
     /// asked for beside the pointer.
     pub fn run(self, ui: &Ui, canvas: &CanvasOutput, tool: &mut dyn CanvasTool) -> ToolHostResponse {
-        let ToolHost { disabled, momentary, .. } = self; // P3(canvas-widgets-w2): cw.C1, cw.C3, cw.C4
+        let ToolHost { disabled, momentary, mut command_stand_in, mut alt_stand_in, smart_guide_color, precise_cursors } = self;
         let ctx = ui.ctx().clone();
         let env = Env::of(ui);
         let key = state_id(canvas.response.id);
@@ -372,11 +417,13 @@ impl<'m> ToolHost<'m> {
             }
             commands::take_around::<MomentaryCommands>(&ctx, canvas.response.id, env.view().command_chain())
         });
+        let mut momentary_tool = None;
         let tool: &mut dyn CanvasTool = match momentary {
             Some(momentary) => {
                 for (command, event) in fired {
                     momentary.fired(command, event.phase);
                 }
+                momentary_tool = momentary.tool(input.mods, state.gesture.is_some());
                 let (tool, hand) = momentary.substitute(tool, input.mods, state.gesture.is_some());
                 glide = hand;
                 tool
@@ -386,8 +433,30 @@ impl<'m> ToolHost<'m> {
                 tool
             }
         };
+        if !measuring && tool.view_only() {
+            sampler::pass_tool_gesture(&ctx, canvas.response.id, CanvasGesture::PRIMARY);
+        }
+        // With no gesture and no momentary tool, a held stand-in key makes the stand-in the tool of hover, cursor and
+        // paint while the selected tool does not take a primary press.
+        let lent = if state.gesture.is_none() && momentary_tool.is_none() && !tool.takes(PointerButton::Primary, input.mods) {
+            [StandInKey::Command, StandInKey::Alt].into_iter().find(|key| {
+                let set = match key {
+                    StandInKey::Command => command_stand_in.is_some(),
+                    StandInKey::Alt => alt_stand_in.is_some(),
+                };
+                set && held_at(*key, input.mods)
+            })
+        } else {
+            None
+        };
         let mut run = Run {
             tool: &mut *tool,
+            command: command_stand_in.as_deref_mut(),
+            alt: alt_stand_in.as_deref_mut(),
+            lent: None,
+            stand_ins: momentary_tool.is_none(),
+            momentary: momentary_tool,
+            precise: precise_cursors,
             space,
             slop: input.slop,
             down: &down,
@@ -408,6 +477,7 @@ impl<'m> ToolHost<'m> {
         if !measuring {
             run.call(None, |tool, cx| tool.each_pass(cx));
             run.hover_scrolls = run.tool.autoscrolls_on_hover();
+            run.lent = lent;
             if let Some(hand) = glide {
                 run.glide(hand);
             }
@@ -416,13 +486,16 @@ impl<'m> ToolHost<'m> {
                 run.state.spent |= canvas.press.phase.is_press();
             } else {
                 run.phase(&canvas.press, &input);
+                run.hover_outside(canvas.response.id, &canvas.press, &input);
                 for event in queued {
                     run.injected(event);
                 }
                 run.keys(&ctx, canvas.response.id, env.direction.is_rtl());
+                run.menu_key();
             }
         }
         let Run { mut response, requests, .. } = run;
+        let before = space.map(|space| space.target());
         if !measuring {
             if let Some(past) = response.past_edge {
                 let step = frame_step(input.time - state.time.unwrap_or(input.time));
@@ -437,6 +510,9 @@ impl<'m> ToolHost<'m> {
         // jumps stops that ease.
         if let Some(view) = response.view.as_mut() {
             *view = canvas.clamped(*view);
+            if let (Some(scroll_all), Some(before)) = (requests.pan, before) {
+                response.pan = Some(ViewPan::new(view.center - before.center, scroll_all));
+            }
             let steer = match (requests.ease, canvas.space) {
                 (Some(ease), Some(drawn)) => Steer::Ease { from: drawn.view, anchor: ease.anchor },
                 _ => Steer::Stop,
@@ -450,6 +526,13 @@ impl<'m> ToolHost<'m> {
         let phase = canvas.press.phase;
         let over = phase.is_press() || matches!(phase, PressPhase::Hover) || state.gesture.is_some();
         let current = state.gesture.map(|active| active.last).or_else(|| over.then(|| hover_pointer(&input, canvas.press)).flatten());
+        // The tool of hover, cursor, paint and claims: the one the running gesture latched, else the stand-in lent for
+        // the held key, else the selected tool.
+        let effective: &dyn CanvasTool = match state.gesture.map_or(lent, |active| active.stand_in) {
+            Some(StandInKey::Command) => command_stand_in.as_deref().unwrap_or(&*tool),
+            Some(StandInKey::Alt) => alt_stand_in.as_deref().unwrap_or(&*tool),
+            None => &*tool,
+        };
         let context = || {
             let cx = ToolContext::new(rect, space)
                 .pointer(current)
@@ -458,6 +541,7 @@ impl<'m> ToolHost<'m> {
                 .slop(input.slop)
                 .down(&down)
                 .caps_lock(caps)
+                .precise_cursors(precise_cursors)
                 .gesture(state.gesture.map(|active| active.id))
                 .env(&env);
             match canvas.snap.as_ref() {
@@ -465,21 +549,32 @@ impl<'m> ToolHost<'m> {
                 None => cx,
             }
         };
-        paint_tool(ui, &env, tool, context());
+        paint_tool(ui, &env, effective, context());
+        if canvas.snap.as_ref().is_some_and(|snap| snap.options().smart_guides) {
+            paint_smart_lines(ui, &env, rect, space, &requests.snapped, smart_guide_color);
+        }
+        response.snapped = requests.snapped;
         let cx = context();
         // A disabled host delivers no key, so it holds none from the app.
-        state.claims = if disabled { ToolClaims::NONE } else { tool.claims() };
-        if let Some(access) = tool.access(&cx) {
+        state.claims = if disabled { ToolClaims::NONE } else { effective.claims() };
+        if let Some(access) = effective.access(&cx) {
             report_access(&ctx, canvas, rect, &access, state.claims.nudges);
         }
         if over {
-            let wanted = tool.cursor(&cx);
+            let wanted = effective.cursor(&cx);
             cursor::request(&ctx, wanted.clone(), CursorPriority::Tool);
             response.cursor = Some(wanted);
         }
-        if let (Some(rows), Some(at)) = (requests.readout, current) {
-            paint_readout(&ctx, at.pos, &rows);
-            response.readout = Some(ToolReadout { at: at.pos, rows });
+        if let Some(at) = current.map(|pointer| pointer.pos) {
+            let gate = readouts_shown(&ctx);
+            // One box per pass: a hud replaces a readout asked for in the same pass.
+            let (rows, paints) = if requests.hud.is_some() { (requests.hud, true) } else { (requests.readout, gate) };
+            if let Some(rows) = rows {
+                if paints {
+                    paint_readout(&ctx, at, &rows);
+                }
+                response.readout = Some(ToolReadout { at, rows });
+            }
         }
         if requests.repaint {
             frame::request_repaint(&ctx);
@@ -492,6 +587,7 @@ impl<'m> ToolHost<'m> {
         }
         state.rect = Some(rect);
         state.space = space;
+        state.viewport = WindowHost::of(&ctx).current();
         with_session(&ctx, key, |slot: &mut HostState| {
             let later = std::mem::take(&mut slot.queued);
             *slot = state;
@@ -503,7 +599,11 @@ impl<'m> ToolHost<'m> {
     /// Queues an automation pointer event for the host of the canvas `canvas` (`CanvasOutput::response.id`); it is
     /// delivered on the next pass, after the pointer's own events. A `Down` while a gesture runs is dropped.
     pub fn inject(ctx: &Context, canvas: Id, input: ToolInput) {
-        with_session(ctx, state_id(canvas), |state: &mut HostState| state.queued.push(input));
+        let viewport = with_session(ctx, state_id(canvas), |state: &mut HostState| {
+            state.queued.push(input);
+            state.viewport
+        });
+        WindowHost::of(ctx).inject_pass(viewport);
         frame::request_repaint(ctx);
     }
 
@@ -540,8 +640,7 @@ impl<'m> ToolHost<'m> {
 
     /// The canvas space the host of `canvas` used in its last pass, `None` before its first.
     pub fn shown_space(ctx: &Context, canvas: Id) -> Option<CanvasSpace> {
-        let _ = (ctx, canvas);
-        todo!("canvas-widgets-w1")
+        with_session(ctx, state_id(canvas), |state: &mut HostState| state.space)
     }
 }
 
@@ -601,7 +700,13 @@ fn paint_tool(ui: &Ui, env: &Env, tool: &dyn CanvasTool, cx: ToolContext<'_>) {
     let record = RefCell::new(PaintRecord::default());
     let draw = Draw::new(&painter, &record, DrawEnv { tokens: &env.tokens, direction: env.direction, ink: env.ink });
     let content = ContentPainterCx::new(painter.clone(), env, env.ink);
-    let style = StyleCx::new(
+    let march = March { policy: env.motion, dash: env.tokens.stroke.dash };
+    tool.paint(&draw, &cx.painter(&content, march).styled(host_style(ui, env)));
+}
+
+/// The style context the host paints with: the secondary variant of the pass's env.
+fn host_style<'a>(ui: &'a Ui, env: &'a Env) -> StyleCx<'a> {
+    StyleCx::new(
         ui.ctx(),
         &env.tokens,
         &env.values,
@@ -613,9 +718,20 @@ fn paint_tool(ui: &Ui, env: &Env, tool: &dyn CanvasTool, cx: ToolContext<'_>) {
         env.active,
         env.key,
         env.line_ratio,
-    );
-    let march = March { policy: env.motion, dash: env.tokens.stroke.dash };
-    tool.paint(&draw, &cx.painter(&content, march).styled(style));
+    )
+}
+
+/// Paints the smart kinds of the snap `lines` over the canvas through the smart guides' one line loop, in `color` or
+/// the theme's smart guide colour. `SmartGuides` itself paints only inside a canvas body, which the host is not in.
+fn paint_smart_lines(ui: &Ui, env: &Env, rect: Rect, space: Option<CanvasSpace>, lines: &[SnapLine], color: Option<DataColor>) {
+    let Some(space) = space else { return };
+    let smart: Vec<SmartLine> = lines.iter().filter(|line| line.kind.is_smart()).map(|line| SmartLine::of(line, space.view.visible())).collect();
+    if smart.is_empty() {
+        return;
+    }
+    let content = ContentPainterCx::new(ui.painter().with_clip_rect(rect), env, env.ink);
+    let style = resolve_style(&host_style(ui, env), SmartGuides::new(&[], &[]).style_key(), ui.ctx(), <SmartGuides<'static> as Component>::style);
+    paint_lines(&content, &space.view, &smart, &style, color);
 }
 
 /// The hover sample of the pass: the pointer's latest position with the pen's reading.
@@ -653,7 +769,7 @@ fn delete_chords(claims: ToolClaims) -> impl Iterator<Item = Chord> {
 
 /// Every chord `claims` holds from the app's shortcuts.
 fn claimed_chords(claims: ToolClaims) -> impl Iterator<Item = Chord> {
-    kept_chords().filter(move |_| claims.keyboard).chain(delete_chords(claims))
+    kept_chords().filter(move |_| claims.keyboard).chain(delete_chords(claims)).chain(claims.keys.iter().copied())
 }
 
 /// The sample of a press at `pos` taken at `time`: the button the press runs with, and its sample.
@@ -671,7 +787,9 @@ fn cancel_reason(reason: PressCancel) -> CancelReason {
 }
 
 /// One pass of the host: the tool, the state and what the calls produced.
-struct Run<'a> {
+///
+/// `'t` is the stand-ins' own lifetime: the host lends them for one run, so `Run`'s borrows need not outlive the host.
+struct Run<'a, 't> {
     tool: &'a mut dyn CanvasTool,
     space: Option<CanvasSpace>,
     slop: f32,
@@ -693,9 +811,22 @@ struct Run<'a> {
     ending: Option<GestureId>,
     /// The tool autoscrolls on hover, in its state after `each_pass`.
     hover_scrolls: bool,
+    /// The Command stand-in.
+    command: Option<&'a mut (dyn CanvasTool + 't)>,
+    /// The Alt stand-in.
+    alt: Option<&'a mut (dyn CanvasTool + 't)>,
+    /// The stand-in lent to hover, cursor and paint while no gesture runs (its key is held and the selected tool does
+    /// not take a primary press).
+    lent: Option<StandInKey>,
+    /// A press may run a stand-in: no momentary tool is in effect.
+    stand_ins: bool,
+    /// The momentary tool in effect this pass.
+    momentary: Option<MomentaryTool>,
+    /// Preferences > Cursors > Other Cursors is Precise.
+    precise: bool,
 }
 
-impl<'a> Run<'a> {
+impl<'a, 't: 'a> Run<'a, 't> {
     fn context(&self, pointer: Option<ToolPointer>) -> ToolContext<'a> {
         let cx = ToolContext::new(self.rect, self.space)
             .pointer(pointer)
@@ -704,6 +835,7 @@ impl<'a> Run<'a> {
             .slop(self.slop)
             .down(self.down)
             .caps_lock(self.caps)
+            .precise_cursors(self.precise)
             .gesture(self.state.gesture.map(|active| active.id).or(self.ending));
         let cx = cx.env(self.env);
         match self.snap {
@@ -717,6 +849,12 @@ impl<'a> Run<'a> {
         let asked = cx.take_requests();
         self.requests.readout = asked.readout.or(self.requests.readout.take());
         self.requests.repaint |= asked.repaint;
+        self.requests.hud = asked.hud.or(self.requests.hud.take());
+        self.requests.snapped.extend(asked.snapped);
+        self.requests.pan = asked.pan.or(self.requests.pan);
+        if let Some(at) = asked.autoscroll_at {
+            self.scroll_past(at);
+        }
         if let Some(view) = asked.view {
             if let Some(space) = self.space.as_mut() {
                 space.set_view(view);
@@ -726,11 +864,60 @@ impl<'a> Run<'a> {
         }
     }
 
+    /// The tool `who` names: a stand-in, or the selected tool for `None` and for a stand-in that is not set.
+    fn pick_as(&mut self, who: Option<StandInKey>) -> &mut (dyn CanvasTool + 'a) {
+        let stand = match who {
+            Some(StandInKey::Command) => self.command.as_deref_mut(),
+            Some(StandInKey::Alt) => self.alt.as_deref_mut(),
+            None => None,
+        };
+        match stand {
+            Some(stand) => stand,
+            None => &mut *self.tool,
+        }
+    }
+
+    /// A call on the tool of the moment: the running gesture's, else the lent stand-in, else the selected tool.
     fn call<R>(&mut self, pointer: Option<ToolPointer>, run: impl FnOnce(&mut dyn CanvasTool, &mut ToolContext<'_>) -> R) -> R {
+        let who = self.state.gesture.map_or(self.lent, |active| active.stand_in);
+        self.call_as(who, pointer, run)
+    }
+
+    fn call_as<R>(
+        &mut self,
+        who: Option<StandInKey>,
+        pointer: Option<ToolPointer>,
+        run: impl FnOnce(&mut dyn CanvasTool, &mut ToolContext<'_>) -> R,
+    ) -> R {
         let mut cx = self.context(pointer);
-        let out = run(&mut *self.tool, &mut cx);
+        let out = run(self.pick_as(who), &mut cx);
         self.absorb(cx);
         out
+    }
+
+    /// The stand-in whose key `pointer` holds and which takes the press.
+    fn stand_for(&self, pointer: &ToolPointer) -> Option<StandInKey> {
+        if !self.stand_ins {
+            return None;
+        }
+        [StandInKey::Command, StandInKey::Alt].into_iter().find(|key| {
+            let stand = match key {
+                StandInKey::Command => self.command.as_deref(),
+                StandInKey::Alt => self.alt.as_deref(),
+            };
+            held_at(*key, pointer.mods) && stand.is_some_and(|tool| tool.takes(pointer.button, pointer.mods))
+        })
+    }
+
+    /// The one past-edge rule: how far `pos` lies past the canvas edge, for a drag and for a canvas control that asks to
+    /// scroll. An empty canvas (a window shrunk to nothing) has no edge to scroll past.
+    fn scroll_past(&mut self, pos: Pos2) {
+        if self.rect.is_positive() {
+            let past = pos - self.rect.clamp(pos);
+            if past != Vec2::ZERO {
+                self.response.past_edge = Some(past);
+            }
+        }
     }
 
     /// Advances the glide of a momentary Hand that is not the tool of this pass.
@@ -747,19 +934,34 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// Offers a press to the tool when it takes the button; a refused, ignored or whole press is spent.
+    /// Offers a press to the tool when it takes the button, else to the stand-in whose key is held; a press the selected
+    /// tool answers `Ignored` goes to that stand-in too. A refused, ignored or whole press is spent.
     fn begin(&mut self, pointer: ToolPointer, injected: bool) {
+        let mut who = None;
         if !self.tool.takes(pointer.button, pointer.mods) {
-            self.state.spent = true;
-            return;
+            who = self.stand_for(&pointer);
+            if who.is_none() {
+                self.state.spent = true;
+                if pointer.button == PointerButton::Secondary {
+                    self.state.secondary = Some(SecondaryPress { mods: pointer.mods, momentary: self.momentary });
+                }
+                return;
+            }
         }
         let id = next_gesture_id(self.ctx);
         self.ending = Some(id);
-        let action = self.call(Some(pointer), |tool, cx| tool.press(&pointer, cx));
+        let mut action = self.call_as(who, Some(pointer), |tool, cx| tool.press(&pointer, cx));
+        if action == ToolAction::Ignored
+            && who.is_none()
+            && let Some(key) = self.stand_for(&pointer)
+        {
+            who = Some(key);
+            action = self.call_as(who, Some(pointer), |tool, cx| tool.press(&pointer, cx));
+        }
         self.ending = None;
         match action {
             ToolAction::Claimed => {
-                self.state.gesture = Some(Active { id, button: pointer.button, last: pointer, injected, dragged: false });
+                self.state.gesture = Some(Active { id, button: pointer.button, last: pointer, injected, dragged: false, stand_in: who });
                 self.report(GesturePhase::Begin);
             }
             ToolAction::Done => {
@@ -779,19 +981,85 @@ impl<'a> Run<'a> {
         active.dragged = true;
         self.call(Some(pointer), |tool, cx| tool.drag(&pointer, cx));
         self.report(GesturePhase::Update);
-        // An empty canvas (a window shrunk to nothing) has no edge to scroll past.
-        if self.tool.autoscrolls() && self.rect.is_positive() {
-            let past = pointer.pos - self.rect.clamp(pointer.pos);
-            if past != Vec2::ZERO {
-                self.response.past_edge = Some(past);
-            }
+        let who = self.state.gesture.and_then(|active| active.stand_in);
+        if self.pick_as(who).autoscrolls() {
+            self.scroll_past(pointer.pos);
+        }
+    }
+
+    /// The drag of this pass: one call per pointer move of the pass for a tool that takes every move, their times
+    /// spread from the last delivered sample to the pass time; one call at `pos` for any other tool.
+    fn drag_moves(&mut self, start: PressStart, pos: Pos2, press: &PressState) {
+        let Some(active) = self.state.gesture else { return };
+        // A pass delivers only the moves it was handed: a rerun pass has none. A held pointer resting past the edge
+        // keeps one drag per pass, since the view scrolls under it.
+        let stirred = pointer::with_pass_pointer(self.ctx, |pass| pass.stirred);
+        if !stirred && pos == self.rect.clamp(pos) {
+            return;
+        }
+        let moves: Vec<(Pos2, Option<PointerSample>)> = if self.pick_as(active.stand_in).takes_every_move() {
+            pointer::with_pass_pointer(self.ctx, |pass| {
+                let from = pass.events.iter().rposition(|event| matches!(event, PointerEvent::Pressed { .. })).map_or(0, |at| at + 1);
+                pass.events[from..]
+                    .iter()
+                    .filter_map(|event| match event {
+                        PointerEvent::Moved { at, sample } => Some((*at, *sample)),
+                        _ => None,
+                    })
+                    .collect()
+            })
+        } else {
+            Vec::new()
+        };
+        if moves.is_empty() {
+            self.drag(press_pointer(start, pos, self.time, press));
+            return;
+        }
+        let (from, count) = (active.last.time, moves.len());
+        for (k, (at, sample)) in moves.into_iter().enumerate() {
+            let time = if k + 1 == count { self.time } else { from + (self.time - from) * (k + 1) as f64 / count as f64 };
+            self.drag(press_pointer(start, at, time, press).sample(sample.or(press.sample).unwrap_or(PointerSample::new(1.0))));
+        }
+    }
+
+    /// A hover with the pointer outside the canvas, for a tool that autoscrolls on hover: the tool follows the pointer
+    /// and the view scrolls at the distance past the edge. Nothing runs with a button down, a momentary tool or stand-in
+    /// in effect, an open modal or popup layer, another canvas's background under the pointer or the window unfocused.
+    fn hover_outside(&mut self, canvas: Id, press: &PressState, frame: &PointerFrame) {
+        let Some(pos) = frame.pos else { return };
+        if !self.hover_scrolls
+            || self.state.gesture.is_some()
+            || self.lent.is_some()
+            || self.momentary.is_some()
+            || press.phase.is_press()
+            || pointer::shapes_at(self.ctx, pos).iter().any(|(owner, part)| *owner != canvas && part.is_some_and(|part| part.key == super::BACKGROUND))
+            || !self.rect.is_positive()
+            || self.rect.contains(pos)
+            || !frame.buttons.is_empty()
+            || !self.ctx.input(|input| input.focused)
+            || overlay::any_open(self.ctx, OpenFilter::Keys)
+        {
+            return;
+        }
+        let pointer = ToolPointer::new(pos, PointerButton::Primary, frame.time)
+            .mods(frame.mods)
+            .sample(frame.sample.unwrap_or(PointerSample::new(1.0)));
+        self.call(Some(pointer), |tool, cx| tool.hover(&pointer, cx));
+        self.scroll_past(pos);
+    }
+
+    /// The Menu key or Shift+F10 reached the focused canvas: the app opens its menu at the view's centre.
+    fn menu_key(&mut self) {
+        let Some(space) = self.space else { return };
+        if space.background().context_key && self.response.context.is_none() {
+            self.response.context = Some(ContextRequest { at: space.view.rect.center(), mods: self.mods, momentary: self.momentary });
         }
     }
 
     fn end(&mut self, pointer: ToolPointer) {
         if let Some(active) = self.state.gesture.take() {
             self.ending = Some(active.id);
-            self.call(Some(pointer), |tool, cx| tool.release(&pointer, cx));
+            self.call_as(active.stand_in, Some(pointer), |tool, cx| tool.release(&pointer, cx));
             self.ending = None;
             self.report(GesturePhase::Commit);
         }
@@ -800,7 +1068,7 @@ impl<'a> Run<'a> {
     fn cancel(&mut self, reason: CancelReason) {
         if let Some(active) = self.state.gesture.take() {
             self.ending = Some(active.id);
-            self.call(Some(active.last), |tool, cx| tool.cancel(reason, cx));
+            self.call_as(active.stand_in, Some(active.last), |tool, cx| tool.cancel(reason, cx));
             self.ending = None;
             self.report(GesturePhase::Cancel);
             self.cancelled = true;
@@ -853,7 +1121,7 @@ impl<'a> Run<'a> {
                 if self.state.gesture.is_none() && !self.state.spent {
                     self.begin(press_pointer(start, start.origin, start.time, press), false);
                 }
-                self.drag(press_pointer(start, pos, self.time, press));
+                self.drag_moves(start, pos, press);
             }
             PressPhase::Release { start, pos, click, .. } => {
                 if self.state.gesture.is_none() && !self.state.spent {
@@ -866,10 +1134,15 @@ impl<'a> Run<'a> {
                 }
                 self.end(pointer);
                 self.state.spent = false;
+                // A secondary press the tool refused asks for the menu when its button comes up.
+                if let (Some(asked), Some(at)) = (self.state.secondary.take(), context_click(press)) {
+                    self.response.context = Some(ContextRequest { at, mods: asked.mods, momentary: asked.momentary });
+                }
             }
             PressPhase::Cancel { reason, .. } => {
                 self.cancel(cancel_reason(reason));
                 self.state.spent = false;
+                self.state.secondary = None;
             }
             _ => {}
         }
@@ -878,8 +1151,8 @@ impl<'a> Run<'a> {
     fn injected(&mut self, input: ToolInput) {
         let own = self.state.gesture.is_none_or(|active| active.injected);
         match input {
-            ToolInput::Down { button, pos, sample, mods } if self.state.gesture.is_none() => {
-                let pointer = ToolPointer::new(pos, button, self.time).mods(mods).sample(sample).clicks(1);
+            ToolInput::Down { button, pos, sample, mods, clicks } if self.state.gesture.is_none() => {
+                let pointer = ToolPointer::new(pos, button, self.time).mods(mods).sample(sample).clicks(clicks);
                 self.begin(pointer, true);
                 self.state.spent = false;
             }
@@ -957,6 +1230,12 @@ impl<'a> Run<'a> {
                 if self.call(None, |tool, cx| tool.key(&kept, cx)) {
                     self.response.took_key = Some(kept);
                 }
+            }
+        }
+        for chord in claims.keys.iter().copied().filter(|chord| keys::take_claimed(ctx, canvas, *chord)) {
+            let kept = ToolKey::Kept(chord);
+            if self.call(None, |tool, cx| tool.key(&kept, cx)) {
+                self.response.took_key = Some(kept);
             }
         }
     }
