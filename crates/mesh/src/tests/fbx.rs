@@ -672,3 +672,22 @@ fn object_only_hierarchy_ignores_property_connections() {
     assert_eq!(scene.roots.len(), 2);
     assert_eq!(doc.scene(&Limits::default(), &mut no_external).unwrap().roots.len(), 1);
 }
+
+#[test]
+fn binary_scalar_properties_are_bounded_before_reserving() {
+    let mut bytes = BINARY_MAGIC.to_vec();
+    bytes.extend(7400u32.to_le_bytes());
+    let count = 1000u32;
+    let end = bytes.len() + 13 + 1 + count as usize * 2;
+    bytes.extend((end as u32).to_le_bytes());
+    bytes.extend(count.to_le_bytes());
+    bytes.extend((count * 2).to_le_bytes());
+    bytes.push(1);
+    bytes.push(b'A');
+    for _ in 0..count {
+        bytes.extend([b'C', 1]);
+    }
+    let limits = Limits { max_data_bytes: 1024, ..Limits::default() };
+    assert!(matches!(read_document(&bytes, &limits), Err(Error::TooLarge(_))));
+    assert!(read_document(&bytes, &Limits::default()).is_ok());
+}
