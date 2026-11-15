@@ -26,6 +26,12 @@ pub enum OutlineError {
     /// The glyph's outline is malformed.
     #[error("cannot draw glyph outline: {0}")]
     Draw(#[from] skrifa::outline::DrawError),
+    /// The glyph emitted more path elements than the safety limit.
+    #[error("glyph outline exceeds the element limit")]
+    TooComplex,
+    /// The outline starts without a move command.
+    #[error("glyph outline has no initial move")]
+    InvalidPath,
 }
 
 impl<'a> FontOutline<'a> {
@@ -58,30 +64,83 @@ impl<'a> FontOutline<'a> {
     }
 
     /// Draw a glyph in design units. Empty glyphs such as spaces can produce an empty path.
+    /// A malformed or excessively complex glyph returns an error instead of partial geometry.
     pub fn outline(&self, glyph: u32) -> Result<BezPath, OutlineError> {
+        let (path, status) = self.outline_recovering(glyph)?;
+        status.map(|()| path)
+    }
+
+    /// Draw a glyph while retaining the bounded prefix produced before a draw error. This is
+    /// useful for consumers preserving existing rendering of damaged fonts. The inner result
+    /// reports whether the returned path is complete; the outer error means no glyph was found.
+    /// Paths stop growing at 100,000 elements, even when the font is untrusted.
+    pub fn outline_recovering(&self, glyph: u32) -> Result<(BezPath, Result<(), OutlineError>), OutlineError> {
         let outline = self.font.outline_glyphs().get(GlyphId::new(glyph)).ok_or(OutlineError::MissingGlyph)?;
-        let mut pen = PathPen(BezPath::new());
-        outline.draw(DrawSettings::unhinted(Size::unscaled(), &self.location), &mut pen)?;
-        Ok(pen.0)
+        let mut pen = PathPen::new();
+        let result = outline.draw(DrawSettings::unhinted(Size::unscaled(), &self.location), &mut pen);
+        let status = if pen.invalid {
+            Err(OutlineError::InvalidPath)
+        } else if pen.truncated {
+            Err(OutlineError::TooComplex)
+        } else {
+            result.map(|_| ()).map_err(OutlineError::Draw)
+        };
+        Ok((pen.path, status))
     }
 }
 
-struct PathPen(BezPath);
+const MAX_OUTLINE_ELEMENTS: usize = 100_000;
+struct PathPen {
+    path: BezPath,
+    truncated: bool,
+    invalid: bool,
+}
+impl PathPen {
+    fn new() -> Self {
+        Self { path: BezPath::new(), truncated: false, invalid: false }
+    }
+    fn has_start(&mut self) -> bool {
+        if self.path.elements().is_empty() {
+            self.invalid = true;
+            false
+        } else {
+            true
+        }
+    }
+    fn room(&mut self) -> bool {
+        if self.path.elements().len() >= MAX_OUTLINE_ELEMENTS {
+            self.truncated = true;
+            false
+        } else {
+            true
+        }
+    }
+}
 impl OutlinePen for PathPen {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.0.move_to((f64::from(x), f64::from(y)));
+        if self.room() {
+            self.path.move_to((f64::from(x), f64::from(y)));
+        }
     }
     fn line_to(&mut self, x: f32, y: f32) {
-        self.0.line_to((f64::from(x), f64::from(y)));
+        if self.has_start() && self.room() {
+            self.path.line_to((f64::from(x), f64::from(y)));
+        }
     }
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        self.0.quad_to((f64::from(x1), f64::from(y1)), (f64::from(x), f64::from(y)));
+        if self.has_start() && self.room() {
+            self.path.quad_to((f64::from(x1), f64::from(y1)), (f64::from(x), f64::from(y)));
+        }
     }
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        self.0.curve_to((f64::from(x1), f64::from(y1)), (f64::from(x2), f64::from(y2)), (f64::from(x), f64::from(y)));
+        if self.has_start() && self.room() {
+            self.path.curve_to((f64::from(x1), f64::from(y1)), (f64::from(x2), f64::from(y2)), (f64::from(x), f64::from(y)));
+        }
     }
     fn close(&mut self) {
-        self.0.close_path();
+        if self.has_start() && self.room() {
+            self.path.close_path();
+        }
     }
 }
 
@@ -99,14 +158,14 @@ mod tests {
 
     #[test]
     fn pen_preserves_geometry_and_upward_y() {
-        let mut pen = PathPen(BezPath::new());
+        let mut pen = PathPen::new();
         pen.move_to(1.0, 2.0);
         pen.line_to(3.0, 4.0);
         pen.quad_to(5.0, 6.0, 7.0, 8.0);
         pen.curve_to(9.0, 10.0, 11.0, 12.0, 13.0, 14.0);
         pen.close();
         assert_eq!(
-            pen.0.elements(),
+            pen.path.elements(),
             &[
                 PathEl::MoveTo((1.0, 2.0).into()),
                 PathEl::LineTo((3.0, 4.0).into()),
@@ -115,6 +174,17 @@ mod tests {
                 PathEl::ClosePath,
             ]
         );
+    }
+
+    #[test]
+    fn pen_caps_path_growth() {
+        let mut pen = PathPen::new();
+        pen.move_to(0.0, 0.0);
+        for _ in 0..MAX_OUTLINE_ELEMENTS {
+            pen.line_to(1.0, 2.0);
+        }
+        assert_eq!(pen.path.elements().len(), MAX_OUTLINE_ELEMENTS);
+        assert!(pen.truncated);
     }
 
     #[test]
