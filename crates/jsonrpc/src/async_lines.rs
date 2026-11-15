@@ -31,19 +31,23 @@ impl Tasks {
     }
 }
 
-async fn bounded_line(reader: &mut BufReader<impl AsyncRead + Unpin>, limit: usize) -> std::io::Result<Option<String>> {
-    let mut bytes = Vec::new();
+async fn bounded_line(reader: &mut BufReader<impl AsyncRead + Unpin>, bytes: &mut Vec<u8>, limit: usize) -> std::io::Result<Option<String>> {
     loop {
         let chunk = reader.fill_buf().await?;
         if chunk.is_empty() {
             if bytes.is_empty() {
                 return Ok(None);
             }
+            if bytes.len() > limit {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "JSON-RPC line exceeds limit"));
+            }
             break;
         }
         let newline = chunk.iter().position(|b| *b == b'\n');
         let count = newline.unwrap_or(chunk.len());
-        if count > limit.saturating_sub(bytes.len()) {
+        let size = bytes.len().saturating_add(count);
+        let last = if count == 0 { bytes.last().copied() } else { Some(chunk[count - 1]) };
+        if size > limit && !(size == limit.saturating_add(1) && last == Some(b'\r')) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "JSON-RPC line exceeds limit"));
         }
         bytes.try_reserve(count).map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "JSON-RPC line allocation failed"))?;
@@ -56,7 +60,7 @@ async fn bounded_line(reader: &mut BufReader<impl AsyncRead + Unpin>, limit: usi
             break;
         }
     }
-    String::from_utf8(bytes).map(Some).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    String::from_utf8(std::mem::take(bytes)).map(Some).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 /// Spawn a line adapter. Invalid JSON gets a JSON-RPC parse error; valid values pass through.
 /// The bounded error queue applies backpressure if the client stops reading. Input and output lines
@@ -75,9 +79,10 @@ pub fn spawn(
     let (err_tx, mut err_rx) = tokio::sync::mpsc::channel::<String>(MAX_QUEUED_PARSE_ERRORS);
     let reader = tokio::spawn(async move {
         let mut lines = BufReader::new(input);
+        let mut partial = Vec::new();
         loop {
             let line = tokio::select! {
-                l = bounded_line(&mut lines, input_limit) => match l { Ok(Some(l)) => l, _ => break },
+                l = bounded_line(&mut lines, &mut partial, input_limit) => match l { Ok(Some(l)) => l, _ => break },
                 () = err_tx.closed() => break,
             };
             if line.trim().is_empty() {
@@ -102,9 +107,10 @@ pub fn spawn(
     let writer = tokio::spawn(async move {
         let mut output = output;
         let mut replies = BufReader::new(from_service);
+        let mut partial = Vec::new();
         loop {
             let line = tokio::select! {
-                l = bounded_line(&mut replies, output_limit) => match l { Ok(Some(l)) => l, _ => break },
+                l = bounded_line(&mut replies, &mut partial, output_limit) => match l { Ok(Some(l)) => l, _ => break },
                 Some(e) = err_rx.recv() => e,
             };
             if output.write_all(format!("{line}\n").as_bytes()).await.is_err() || output.flush().await.is_err() {
@@ -140,6 +146,29 @@ mod tests {
         assert_eq!(result["id"], 1);
         service_out.shutdown().await.unwrap();
         tasks.finish().await;
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn parse_error_does_not_discard_partial_service_reply() {
+        let (mut client, input) = tokio::io::duplex(128);
+        let (output, client_out) = tokio::io::duplex(128);
+        let Adapter { service_in: _, mut service_out, tasks } = spawn(input, output, 128, 128);
+        service_out.write_all(b"{\"id\":1,").await.unwrap();
+        tokio::task::yield_now().await;
+        client.write_all(b"{bad}\n").await.unwrap();
+        let mut lines = BufReader::new(client_out).lines();
+        let error: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(error["error"]["code"], -32700);
+        service_out.write_all(b"\"result\":true}\n").await.unwrap();
+        let reply: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(reply, json!({"id": 1, "result": true}));
+        tasks.abort();
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn crlf_at_exact_limit_does_not_count_the_terminator() {
+        let mut reader = BufReader::new(&b"1234\r\n"[..]);
+        assert_eq!(bounded_line(&mut reader, &mut Vec::new(), 4).await.unwrap().as_deref(), Some("1234"));
+        let mut reader = BufReader::new(&b"1234\r"[..]);
+        assert!(bounded_line(&mut reader, &mut Vec::new(), 4).await.is_err());
     }
     #[tokio::test(flavor = "current_thread")]
     async fn oversized_unterminated_lines_stop_both_directions() {
