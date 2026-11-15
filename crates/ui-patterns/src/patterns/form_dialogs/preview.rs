@@ -14,7 +14,9 @@ use crate::runtime::env::{Env, Label, UnitKind};
 use crate::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use crate::style::{ComponentStyle, FocusLook, StyleCx};
 use crate::text::NumberField;
-use craft_behavior::{AccessAction, AccessData, CanvasTransform, CursorIcon, CursorPriority, IconId, Metrics, NavMove, PartKey, PressPhase, Sense};
+use craft_behavior::{
+    AccessAction, AccessData, CanvasTransform, CursorIcon, CursorPriority, IconId, Metrics, NavMove, PartKey, PointerButton, PressPhase, Sense,
+};
 use egui::load::SizedTexture;
 use egui::{Pos2, Rect, Response, Ui, Vec2, pos2};
 use std::ops::RangeInclusive;
@@ -224,8 +226,9 @@ pub struct PreviewOutput {
     /// texture's size is its pixel size) from its top-left corner; `None` when there was no click or it missed the
     /// picture. It is reported whether or not the click centres the view: an eyedropper or a locator reads it.
     pub clicked: Option<Pos2>,
-    /// The point of the picture a press landed on this pass, in the same units as `clicked`; unlike `clicked` it is
-    /// reported when the press begins, not when it ends as a click.
+    /// The point of the picture a primary press of a `fixed` view landed on this pass, in the same units as `clicked`:
+    /// on the press and on each pass the held pointer moves, not when it ends as a click. `None` for a view that is not
+    /// `fixed` (a drag pans there), off the picture, or in a pass that carries no press or move.
     pub pressed: Option<Pos2>,
 }
 
@@ -271,6 +274,8 @@ pub struct PreviewPane<'a> {
     double_clicked: bool,
     /// The picture point a single click landed on this pass.
     clicked: Option<Pos2>,
+    /// The picture point a primary press of a fixed view landed on or moved over this pass.
+    pressed: Option<Pos2>,
     /// The host's drawing over the picture of a `Ready` pane.
     #[prop(func = "FnOnce(&ContentPainterCx, CanvasTransform, Rect)")]
     overlay: Option<PaneOverlay<'a>>,
@@ -300,6 +305,7 @@ impl PreviewPane<'_> {
             moved: None,
             double_clicked: false,
             clicked: None,
+            pressed: None,
             overlay: None,
             overflow: (false, false),
             fixed: view.fixed,
@@ -374,6 +380,14 @@ impl PreviewPane<'_> {
     pub fn settled(view: CanvasTransform, picture: Vec2, well: Vec2) -> CanvasTransform {
         let slack = ((picture * view.scale - well) / 2.0).max(Vec2::ZERO);
         CanvasTransform::new(view.scale, view.offset.clamp(-slack, slack))
+    }
+
+    /// The point of a picture of `picture` points shown through `shown` in `well` that the pointer at `pos` is over, from
+    /// the picture's top-left corner; `None` off the picture.
+    fn picture_point(pos: Pos2, well: Rect, shown: CanvasTransform, picture: Vec2) -> Option<Pos2> {
+        let point = (pos - well.center() - shown.offset) / shown.scale + picture / 2.0;
+        let on_picture = (0.0..=picture.x).contains(&point.x) && (0.0..=picture.y).contains(&point.y);
+        on_picture.then(|| point.to_pos2())
     }
 
     /// The picture of a `Ready` pane.
@@ -468,18 +482,25 @@ impl Component for PreviewPane<'_> {
         // reports a view only when the result differs from what it shows, so the press staying down changes nothing.
         let mut refit = false;
         match cx.part(WELL).press.phase {
-            PressPhase::Drag { delta, .. } => {
+            PressPhase::Drag { start, pos, delta, .. } => {
                 next.offset += delta;
                 cx.cursor(CursorIcon::Grabbing, CursorPriority::Drag);
+                if self.fixed && start.button == PointerButton::Primary && delta != Vec2::ZERO {
+                    self.pressed = Self::picture_point(pos, well, shown, texture.size);
+                }
+            }
+            PressPhase::DragStart { start, pos, .. } if self.fixed && start.button == PointerButton::Primary => {
+                self.pressed = Self::picture_point(pos, well, shown, texture.size);
+            }
+            PressPhase::Down { start, .. } if self.fixed && start.button == PointerButton::Primary => {
+                self.pressed = Self::picture_point(start.origin, well, shown, texture.size);
             }
             PressPhase::Down { start, .. } if start.clicks >= 2 && !self.fixed => {
                 refit = true;
                 self.double_clicked = true;
             }
             PressPhase::Release { start, pos, click: true, .. } if start.clicks < 2 => {
-                let point = (pos - well.center() - shown.offset) / shown.scale + texture.size / 2.0;
-                let on_picture = (0.0..=texture.size.x).contains(&point.x) && (0.0..=texture.size.y).contains(&point.y);
-                self.clicked = on_picture.then(|| point.to_pos2());
+                self.clicked = Self::picture_point(pos, well, shown, texture.size);
                 if self.click_centres {
                     next.offset += well.center() - pos;
                 }
@@ -588,7 +609,7 @@ impl Component for PreviewPane<'_> {
             shown,
             double_clicked: self.double_clicked,
             clicked: self.clicked,
-            pressed: None, // P3(dialogs-w9): dl.K75
+            pressed: self.pressed,
         }
     }
 }

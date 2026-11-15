@@ -3,6 +3,7 @@
 mod adjust_editors;
 mod adjust_tone;
 mod blur_pins;
+mod color_range;
 mod contour_field;
 mod curve;
 mod fill;

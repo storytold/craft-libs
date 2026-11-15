@@ -9,9 +9,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum ColorRangeSelect {
-    /// Sampled colours.
+    /// Sampled colours. Serialises as the engine's `sampledColors`.
     #[default]
-    // P3(dialogs-w9): dl.K54 the engine's name
     #[serde(rename = "sampledColors")]
     Sampled,
     /// Reds.
@@ -33,15 +32,12 @@ pub enum ColorRangeSelect {
     /// Shadows.
     Shadows,
     /// Skin tones.
-    // P3(dialogs-w9): dl.K54 `SkinTones`
     SkinTones,
     /// Out-of-gamut colours.
-    // P3(dialogs-w9): dl.K54 `OutOfGamut`
     OutOfGamut,
 }
 
 /// The sampling tool: the plain eyedropper, Add to Sample or Subtract from Sample.
-// P3(dialogs-w9): dl.K54 serde for the `tool` json key
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
@@ -56,28 +52,38 @@ pub enum SampleTool {
 }
 
 impl SampleTool {
-    /// The tool as `mods` change it: Shift adds, else Alt subtracts.
+    /// The tool as `mods` change it: Shift adds, else Alt subtracts. The one place this rule lives, for a pick and
+    /// for the canvas cursor's mark.
     #[must_use]
     pub fn with_mods(self, mods: Mods) -> SampleTool {
-        let _ = (self, mods);
-        todo!("dl.K54")
+        if mods.shift {
+            SampleTool::Add
+        } else if mods.alt {
+            SampleTool::Subtract
+        } else {
+            self
+        }
     }
 
     /// The mark the canvas cursor shows for the tool.
     pub fn badge(self) -> Option<CursorBadge> {
-        let _ = self;
-        todo!("dl.K54")
+        match self {
+            SampleTool::Sample => None,
+            SampleTool::Add => Some(CursorBadge::Add),
+            SampleTool::Subtract => Some(CursorBadge::Subtract),
+        }
     }
 }
 
-/// Whether a sample adds to the range or subtracts from it.
+/// Whether a sample adds to the range or subtracts from it. Serialises as the engine's `"+"` and `"-"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum SampleSign {
     /// An added sample.
+    #[serde(rename = "+")]
     Add,
     /// A subtracted sample.
+    #[serde(rename = "-")]
     Subtract,
 }
 
@@ -95,30 +101,56 @@ pub struct ColorSamples {
 impl ColorSamples {
     /// Takes a sample at `at` in a document of `size`: floored and clamped to the document, by `tool` as `mods` change
     /// it. Also Replace Color's sampling rule.
+    ///
+    /// The eyedropper replaces every sample with this one; Add and Subtract append, so the order of the clicks is kept
+    /// (the engine applies additions and subtractions one after another).
     pub fn pick(&mut self, at: [f64; 2], size: [u32; 2], tool: SampleTool, mods: Mods) {
-        let _ = (at, size, tool, mods);
-        todo!("dl.K54")
+        let cell = |v: f64, extent: u32| {
+            let v = if v.is_finite() { v } else { 0.0 };
+            v.floor().clamp(0.0, f64::from(extent.max(1)) - 1.0)
+        };
+        let at = [cell(at[0], size[0]), cell(at[1], size[1])];
+        match tool.with_mods(mods) {
+            SampleTool::Add => {
+                self.add.push(at);
+                self.order.push(SampleSign::Add);
+            }
+            SampleTool::Subtract => {
+                self.subtract.push(at);
+                self.order.push(SampleSign::Subtract);
+            }
+            SampleTool::Sample => {
+                self.add = vec![at];
+                self.subtract.clear();
+                self.order = vec![SampleSign::Add];
+            }
+        }
     }
 
-    /// The order of the samples, `None` while they are all of one sign.
+    /// The order of the samples, `None` while it does not match the two lists (then the engine takes the lists in
+    /// their own order).
     pub fn order(&self) -> Option<&[SampleSign]> {
-        todo!("dl.K54")
+        let added = self.order.iter().filter(|sign| **sign == SampleSign::Add).count();
+        let subtracted = self.order.len() - added;
+        (added == self.add.len() && subtracted == self.subtract.len()).then_some(self.order.as_slice())
     }
 
     /// Drops every sample.
     pub fn clear(&mut self) {
-        todo!("dl.K54")
+        self.add.clear();
+        self.subtract.clear();
+        self.order.clear();
     }
 }
 
-/// The Color Range dialog's value.
+/// The Color Range dialog's value: the command's parameters.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct ColorRangeValue {
     /// What the range picks by.
     pub select: ColorRangeSelect,
-    /// Fuzziness, 0..=200.
+    /// Fuzziness of Sampled Colors and Skin Tones, 0..=200.
     pub fuzziness: f64,
     /// Range, 0..=100 percent.
     pub range: f64,
@@ -131,31 +163,45 @@ pub struct ColorRangeValue {
     /// Whether the selection is inverted.
     pub invert: bool,
     /// Localized Color Clusters.
-    // P3(dialogs-w9): dl.K54 `localized`
     pub localized: bool,
-    /// The fuzziness of the tonal ranges (Highlights, Midtones, Shadows, Skin Tones).
-    // P3(dialogs-w9): dl.K54 `tone_fuzziness`
+    /// The fuzziness of the tonal ranges (Highlights, Midtones, Shadows), 0..=100 percent.
     pub tone_fuzziness: f64,
-    /// The Shadows level.
-    // P3(dialogs-w9): dl.K54 `shadows_level`
+    /// The Shadows level, 0..=255.
     pub shadows_level: f64,
-    /// The Highlights level.
-    // P3(dialogs-w9): dl.K54 `highlights_level`
+    /// The Highlights level, 0..=255.
     pub highlights_level: f64,
 }
 
 impl Default for ColorRangeValue {
-    /// Production's opening values (pc color_range_ui.rs:94-110).
-    // P3(dialogs-w9): dl.K54 `impl Default`
+    /// Photoshop's opening values: Sampled Colors, Fuzziness 40, Range 100, no samples.
     fn default() -> Self {
-        todo!("dl.K54")
+        ColorRangeValue {
+            select: ColorRangeSelect::Sampled,
+            fuzziness: 40.0,
+            range: 100.0,
+            midtones_low: 105.0,
+            midtones_high: 150.0,
+            samples: ColorSamples::default(),
+            invert: false,
+            localized: false,
+            tone_fuzziness: 20.0,
+            shadows_level: 65.0,
+            highlights_level: 190.0,
+        }
     }
 }
 
 impl ColorRangeValue {
-    /// Which controls the value's `select` shows.
+    /// Which controls the value's `select` shows or enables.
     pub fn controls(&self) -> RangeControls {
-        todo!("dl.K54")
+        let sampled = self.select == ColorRangeSelect::Sampled;
+        let tonal = matches!(self.select, ColorRangeSelect::Highlights | ColorRangeSelect::Midtones | ColorRangeSelect::Shadows);
+        RangeControls {
+            fuzziness: sampled || tonal || self.select == ColorRangeSelect::SkinTones,
+            sampling: sampled,
+            range: sampled && self.localized,
+            tonal,
+        }
     }
 }
 
@@ -163,12 +209,12 @@ impl ColorRangeValue {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RangeControls {
-    /// The Fuzziness slider.
+    /// The Fuzziness slider is enabled.
     pub fuzziness: bool,
-    /// The sampling tools.
+    /// The sampling tools are enabled.
     pub sampling: bool,
-    /// The Range slider.
+    /// The Range slider is shown.
     pub range: bool,
-    /// The Midtones bounds.
+    /// The tonal sliders (Shadows, Highlights, Midtones bounds) are shown.
     pub tonal: bool,
 }

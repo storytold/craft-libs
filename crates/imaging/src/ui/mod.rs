@@ -9,13 +9,16 @@
 //!   hue and saturation, color balance, channel mixer, selective color and more).
 //! - [`live_preview`]: the [`LivePreview`] of an adjustment on a proxy of the image.
 //! - [`layer_style`]: the [`LayerStyleDialog`], the [`BlendIfBar`] and the [`ContourField`].
-//! - [`blend_keys`]: the [`BlendKeys`] that pick a blend mode from the keyboard.
+//! - [`color_range`]: the [`ColorRangeDialog`] of Select › Color Range, its [`ColorRangeValue`] and the
+//!   [`HostedColorRange`] on the dialog host.
 //! - [`select`]: the [`MarqueeTool`] and the lasso tools; [`selection`]: the [`SelectionOverlay`];
 //!   [`mask_view`]: the [`MaskViewControls`] for a mask's views.
 //! - [`select_mask`], [`fill`], [`filter_gallery`], [`liquify`], [`wide_angle`] and
 //!   [`vanishing_point`]: the full-window editors ([`SelectMaskWorkspace`],
 //!   [`ContentAwareFillWorkspace`], [`FilterGalleryWorkspace`], [`LiquifyWorkspace`],
 //!   [`WideAngleWorkspace`], [`VanishingPointWorkspace`]), each with its session, panel and options bar.
+//! - [`raw_develop`]: the [`RawDevelopWorkspace`], the full-window editor of a raw file; its settings are
+//!   [`crate::raw::RawDevelopSettings`].
 //! - [`blur_pins`]: the [`BlurPinsOverlay`] and [`BlurPinsPanel`] of the blur effects.
 //! - [`channels`]: the Channels panel.
 //! - [`scopes`]: the scope panel (histogram, statistics, tone zones, vectorscope) and the
@@ -24,7 +27,7 @@
 //! The main types of each module are also re-exported here.
 
 pub mod adjust;
-pub mod blend_keys;
+
 pub mod blur_pins;
 pub mod channels;
 pub mod color_range;
@@ -49,13 +52,13 @@ pub mod warp;
 pub mod wide_angle;
 
 pub use adjust::{
-    AdjustContext, AdjustField, AdjustSession, AdjustSliders, AdjustTrack, AdjustWords, BlackWhite, BlackWhiteEditor, BrightnessContrast,
+    AdjustDialogCx, AdjustmentKind, AdjustmentsPanel, AdjustmentsPanelOutput, ToneChannelCommands, AdjustContext, AdjustField, AdjustSession, AdjustSliders, AdjustTrack, AdjustWords, BlackWhite, BlackWhiteEditor, BrightnessContrast,
     BrightnessContrastEditor, ChannelMixer, ChannelMixerEditor, ColorBalance, ColorBalanceEditor, CurvesMode, CurvesPanel, CurvesPanelOutput,
     HostedAdjustDialog, HueSaturation, HueSaturationEditor, Levels, LevelsClip, LevelsEditor, LevelsEditorOutput, LevelsPanel, LevelsPanelOutput,
     LevelsWords, PhotoFilter, PhotoFilterEditor, SelectiveColor, SelectiveColorEditor, ThresholdEditor, ToneCurves, TonePick, TonePickTool,
     TonePicker, TonePickerRow, TonePickerRowOutput,
 };
-pub use blend_keys::{BlendKeyEntry, BlendKeyPick, BlendKeys, BlendShortcut, BlendStep};
+
 pub use blur_pins::{
     BlurKind, BlurPin, BlurPins, BlurPinsCommand, BlurPinsOutput, BlurPinsOverlay, BlurPinsPanel, BlurPinsPanelOutput, BlurPinsWords, IrisShape,
     TiltBand,
@@ -64,13 +67,17 @@ pub use channels::{
     ChannelKind, ChannelRow, ChannelsCommands, ChannelsEvent, ChannelsFooterButton, ChannelsOutput, ChannelsPanel, ChannelsWords, ColorIndicates,
     OVERLAY_OPACITIES, OverlayPreset, targeted_row,
 };
+pub use color_range::{
+    ColorRangeDialog, ColorRangeOutput, ColorRangeSelect, ColorRangeValue, ColorRangeWords, ColorSamples, HostedColorRange, RangeControls, SampleSign,
+    SampleTool,
+};
 pub use curve::{Curve, CurveChannel, CurveEditor, CurveEditorOutput, CurvePreview, CurveRows, CurveRules, CurveSampler, CurveWords, ToneRamp};
 pub use fill::{
-    ContentAwareFillWorkspace, FillBar, FillBarOutput, FillEvent, FillLimit, FillLimits, FillOpen, FillOutput, FillOverlay, FillPanel,
+    ContentAwareFillWorkspace, FillBar, FillBarOutput, FillEvent, FillLimit, FillLimits, FillOp, FillOpen, FillOverlay, FillPanel,
     FillPanelOutput, FillSession, FillSettings, FillSource, FillTool, FillWords,
 };
 pub use filter_gallery::{
-    EffectParameters, EffectStack, FilterCatalog, FilterGalleryEvent, FilterGalleryOpen, FilterGalleryOutput, FilterGallerySession,
+    EffectParameters, EffectStack, FilterCatalog, FilterGalleryEvent, FilterGalleryOpen, FilterGallerySession,
     FilterGalleryWords, FilterGalleryWorkspace, FilterTree, GalleryFilter,
 };
 pub use histogram::{
@@ -82,11 +89,15 @@ pub use layer_style::{
     LayerStyleWords, StylePresets,
 };
 pub use liquify::{
-    LiquifyCommands, LiquifyEvent, LiquifyOpen, LiquifyOutput, LiquifyPanel, LiquifyPanelOutput, LiquifySession, LiquifySettings, LiquifySource,
+    LiquifyCommands, LiquifyDone, LiquifyEvent, LiquifyOpen, LiquifyPanel, LiquifyPanelOutput, LiquifySession, LiquifySettings, LiquifySource,
     LiquifyTiming, LiquifyTool, LiquifyWords, LiquifyWorkspace,
 };
 pub use live_preview::{DraftScale, LivePreview, PreviewKey, PreviewLane, PreviewSession, ProxyPlan};
 pub use mask_view::{MaskViewControls, MaskViewControlsOutput, MaskViewKeys, MaskViewMode, MaskViewRecipe, MaskViewState, MaskViewWords};
+pub use raw_develop::{
+    Demosaic, RawDevelopEvent, RawDevelopOpen, RawDevelopPanel, RawDevelopResult, RawDevelopSource, RawDevelopWorkspace, RawFilmItem, RawFinish,
+    RawFloatingScope, RawPreviewRequest, RawScopeStrip, RawTarget,
+};
 pub use scopes::{
     COLORS_CHANNEL, ChannelOverlay, ClipWarning, ClippingDiagnostic, ClippingFrame, ClippingMode, ClippingOverlay, ClippingWarnings, HistogramSet,
     ScopeChannel, ScopeCommand, ScopeFrame, ScopeMenuAction, ScopePanel, ScopePanelOutput, ScopePanelState, ScopeReadout, ScopeSettings, ScopeSource,
@@ -94,16 +105,17 @@ pub use scopes::{
 };
 pub use select::{
     LassoTool, MagneticLassoTool, MagneticSettings, MarqueeKind, MarqueeTool, PolygonLassoTool, SelectEvent, SelectWords, SelectionShape,
+    operations::{SelectionOpWords, selection_operations},
 };
 pub use select_mask::{
-    LimitRefused, SelectMaskBar, SelectMaskBarOutput, SelectMaskEdit, SelectMaskEvent, SelectMaskLimits, SelectMaskOpen, SelectMaskOutput,
+    LimitRefused, SelectMaskBar, SelectMaskBarOutput, SelectMaskEdit, SelectMaskEvent, SelectMaskLimits, SelectMaskDone, SelectMaskOp, SelectMaskOpen,
     SelectMaskPanel, SelectMaskPanelOutput, SelectMaskSession, SelectMaskSettings, SelectMaskSource, SelectMaskWords, SelectMaskWorkspace,
 };
 pub use selection::{OutlineSource, SelectionOverlay, SelectionOverlayOutput, SelectionWords};
 pub use transform_preview::{PreviewMap, PreviewQuality, StyledPreview, TransformPreview};
 pub use vanishing_point::{
-    StampLimits, StampSettings, VanishingPlane, VanishingPointBar, VanishingPointBarOutput, VanishingPointEditor, VanishingPointEvent,
-    VanishingPointOpen, VanishingPointOutput, VanishingPointSession, VanishingPointSettings, VanishingPointSource, VanishingPointWords,
+    StampLimits, StampSettings, VanishingPlane, VanishingPointBar, VanishingPointBarOutput, VanishingPointCommand, VanishingPointEditor,
+    VanishingPointEvent, VanishingPointOpen, VanishingPointSession, VanishingPointSettings, VanishingPointSource, VanishingPointWords,
     VanishingPointWorkspace, VanishingScene,
 };
 pub use warp::perspective::{
@@ -114,10 +126,10 @@ pub use warp::pin::{
     Pin, PinWarp, PinWarpBar, PinWarpBarOutput, PinWarpBarWords, PinWarpCommands, PinWarpOutput, PinWarpSession, PinWarpSettings, PinWarpWords,
 };
 pub use warp::{
-    WarpEdit, WarpFieldValues, WarpFields, WarpFieldsEdit, WarpFieldsOutput, WarpFieldsWords, WarpGrid, WarpGridChoice, WarpGridOutput,
+    CylinderHandle, CylinderValues, CylinderWarp, CylinderWarpOutput, WarpEdit, WarpFieldValues, WarpFields, WarpFieldsEdit, WarpFieldsOutput, WarpFieldsWords, WarpGrid, WarpGridChoice, WarpGridOutput,
     WarpGridStyle, WarpMesh, WarpSide, WarpSplit, WarpStyleEntry, WarpWords,
 };
 pub use wide_angle::{
-    PreviewDone, WideAngleConstraint, WideAngleEvent, WideAngleModel, WideAngleOpen, WideAngleOutput, WideAnglePanel, WideAnglePanelOutput,
+    PreviewDone, WideAngleConstraint, WideAngleEvent, WideAngleModel, WideAngleOpen, WideAnglePanel, WideAnglePanelOutput,
     WideAngleSession, WideAngleSource, WideAngleTool, WideAngleWords, WideAngleWorkspace,
 };
