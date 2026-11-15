@@ -447,6 +447,32 @@ fn menu() {
 }
 
 #[test]
+fn predefined_quit_ignores_a_muda_path_that_a_local_binding_of_muda_names() {
+    let source = r#"
+use other_menu as muda;
+fn menu() {
+    let a = muda::PredefinedMenuItem::quit(None);
+    let b = <muda::PredefinedMenuItem>::quit(None);
+    let c = ::muda::PredefinedMenuItem::quit(None);
+}
+mod inner {
+    use ::muda;
+    fn menu() { let d = muda::PredefinedMenuItem::quit(None); }
+}
+mod defined {
+    mod muda {}
+    fn menu() { let e = muda::PredefinedMenuItem::quit(None); }
+}
+mod gated {
+    #[cfg(unix)]
+    use other_menu as muda;
+    fn menu() { let f = muda::PredefinedMenuItem::quit(None); }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![6, 10, 19]);
+}
+
+#[test]
 fn predefined_quit_ignores_a_bare_name_that_another_import_or_a_local_type_binds_in_its_scope() {
     let imported = r#"
 use other_menu::PredefinedMenuItem;
@@ -1167,6 +1193,65 @@ fn a_long_alias_of_std_time_shared_by_many_use_leaves_is_read_without_copying_it
     assert_eq!(lines(&std_instant([("src/wide.rs", source.as_str())])), vec![2]);
 }
 
+#[test]
+fn a_use_past_the_path_limits_still_binds_its_name() {
+    let segment = r#"
+use other_menu::MenuItemWithAnExceptionallyLongName as PredefinedMenuItem;
+fn quit() { PredefinedMenuItem::quit(None); }
+"#;
+    let length = r#"
+use a::b::c::d::e::f::g::h::Item as PredefinedMenuItem;
+fn quit() { PredefinedMenuItem::quit(None); }
+"#;
+    let shared = r#"
+use other_menu::MenuItemWithAnExceptionallyLongName::{self as PredefinedMenuItem};
+fn quit() { PredefinedMenuItem::quit(None); }
+"#;
+    assert!(predefined_quit([("src/menu.rs", segment), ("src/len.rs", length), ("src/shared.rs", shared)]).is_empty());
+
+    // A path into this crate past the limits may still be a re-export of muda's type.
+    let local = r#"
+use crate::module_with_an_exceptionally_long_name::PredefinedMenuItem;
+fn quit() { PredefinedMenuItem::quit(None); }
+"#;
+    assert_eq!(lines(&predefined_quit([("src/local.rs", local)])), vec![3]);
+
+    let clock = r#"
+use std::time as t;
+fn now() {
+    use other_clock::ClockModuleWithAnExceptionallyLongName as t;
+    let _ = t::Instant::now();
+}
+fn later() {
+    use other_clock::ClockModuleWithAnExceptionallyLongName::{self as t};
+    let _ = t::Instant::now();
+}
+fn web() { let _ = t::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", clock)])), vec![11]);
+}
+
+#[test]
+fn std_instant_reports_an_underscore_import_of_instant_in_a_group() {
+    let source = r#"
+use std::{time::Instant as _};
+use std::time::{Instant as _};
+use std::time::Instant as _;
+use std::time::{self as _};
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![2, 3, 4]);
+    assert!(predefined_quit([("src/menu.rs", "use muda::{PredefinedMenuItem as _};\nfn f() { _::quit(); }\n")]).is_empty());
+}
+
+#[test]
+fn std_instant_keeps_an_import_that_an_alias_in_a_nested_module_shares_a_name_with() {
+    let source = r#"
+mod unrelated { use ::std::time as std; }
+use std::{time::Instant};
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![3]);
+}
+
 fn finding_paths(findings: &[Finding]) -> Vec<&str> {
     findings.iter().map(|f| f.path.as_str()).collect()
 }
@@ -1343,6 +1428,36 @@ fn std_instant_checks_module_files_declared_deeper_than_its_nesting_limit() {
     assert_eq!(finding_paths(&std_instant(files)), vec![deep_path.as_str()]);
     let files = [("src/lib.rs", shallow_lib.as_str()), (shallow_path.as_str(), clock)];
     assert!(std_instant(files).is_empty());
+}
+
+#[test]
+fn std_instant_checks_a_crate_root_that_a_disabled_declaration_names() {
+    let lib = r#"
+#[cfg(any())]
+#[path = "lib.rs"]
+mod never;
+
+fn web() {
+    std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/lib.rs", lib)])), vec![7]);
+
+    // A cycle of two files that only each other name, through declarations the web build leaves out.
+    let a = "#[cfg(unix)]\n#[path = \"b.rs\"]\nmod b;\nfn web() { std::time::Instant::now(); }\n";
+    let b = "#[cfg(unix)]\n#[path = \"a.rs\"]\nmod a;\n";
+    assert_eq!(finding_paths(&std_instant([("src/a.rs", a), ("src/b.rs", b)])), vec!["src/a.rs"]);
+
+    // In a cycle with `lib.rs`, only `lib.rs` is a crate root, so its native-only module stays out.
+    let lib = "#[cfg(unix)]\n#[path = \"a.rs\"]\nmod a;\nfn web() {}\n";
+    let a = "#[cfg(any())]\n#[path = \"lib.rs\"]\nmod root;\nuse std::time::Instant;\n";
+    assert!(std_instant([("src/lib.rs", lib), ("src/a.rs", a)]).is_empty());
+
+    // A cycle that a crate root reaches keeps its native-only member out.
+    let lib = "mod a;\n";
+    let a = "#[cfg(unix)]\nmod b;\n";
+    let b = "#[path = \"../a.rs\"]\nmod again;\nuse std::time::Instant;\n";
+    assert!(std_instant([("src/lib.rs", lib), ("src/a.rs", a), ("src/a/b.rs", b)]).is_empty());
 }
 
 #[test]
