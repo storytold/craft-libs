@@ -70,6 +70,7 @@ craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
 craft-dwg = { path = "crates/dwg" }
+craft-fcproj-format = { path = "crates/fcproj-format" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
@@ -93,6 +94,7 @@ craft-indd = { path = "crates/indd" }
 craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
 craft-jpeg = { path = "crates/jpeg" }
+craft-control-protocol = { path = "crates/control-protocol" }
 craft-jsonrpc = { path = "crates/jsonrpc" }
 craft-mcp = { path = "crates/mcp" }
 craft-jxl = { path = "crates/jxl" }

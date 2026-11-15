@@ -32,6 +32,7 @@ pub mod named;
 mod normalize;
 pub mod pipeline;
 pub mod profile;
+pub mod spi1d;
 pub mod synth;
 pub mod transform;
 mod write;
