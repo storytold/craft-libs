@@ -14,6 +14,7 @@ pub mod fixture;
 pub mod focus;
 pub mod frames;
 mod host_key_trials;
+mod icon_trials;
 pub mod index;
 pub mod input;
 mod key_trials;

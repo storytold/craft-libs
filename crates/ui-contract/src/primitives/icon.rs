@@ -52,6 +52,8 @@ pub enum IconSource<'a> {
     /// A letter in an outlined box, in the spec's colour or ink: the icon of something that has none, from the first
     /// letter of its name. Painted by [`Draw::icon`](super::Draw::icon) as text, in the theme's fonts.
     Initial(char),
+    /// The mark of a cursor badge, painted by the cursor-badge painter in the spec's colour or ink.
+    Mark(craft_behavior::CursorBadge),
 }
 
 impl std::fmt::Debug for IconSource<'_> {
@@ -62,6 +64,7 @@ impl std::fmt::Debug for IconSource<'_> {
             IconSource::Swatch(color) => f.debug_tuple("Swatch").field(color).finish(),
             IconSource::Disc => f.write_str("Disc"),
             IconSource::Initial(letter) => f.debug_tuple("Initial").field(letter).finish(),
+            IconSource::Mark(badge) => f.debug_tuple("Mark").field(badge).finish(),
         }
     }
 }
@@ -75,6 +78,7 @@ impl PartialEq for IconSource<'_> {
             (IconSource::Swatch(a), IconSource::Swatch(b)) => a == b,
             (IconSource::Disc, IconSource::Disc) => true,
             (IconSource::Initial(a), IconSource::Initial(b)) => a == b,
+            (IconSource::Mark(a), IconSource::Mark(b)) => a == b,
             _ => false,
         }
     }
@@ -106,8 +110,7 @@ impl<'a> IconSpec<'a> {
     /// An icon whose glyph is the mark of the cursor `badge` (the plus or minus drawn at the cursor), painted by the
     /// one cursor-badge painter.
     pub fn mark(badge: craft_behavior::CursorBadge) -> IconSpec<'a> {
-        let _ = badge;
-        todo!("cw.C75")
+        IconSpec { source: IconSource::Mark(badge), ink: Ink::OnPanel, color: None, mirror: Mirror::Auto, set: IconSet::default(), badge: None }
     }
 
     /// An icon of `glyph` in the panel ink.
@@ -199,12 +202,13 @@ impl From<IconId> for IconSpec<'_> {
     }
 }
 
-/// Whether the catalog has an icon named `id`.
+/// Whether the built-in catalog or a registered app icon set has an icon named `id`.
 pub fn has_icon(id: &IconId) -> bool {
-    svg_set::find(id.name()).is_some()
+    svg_set::lookup(id.name()).is_some()
 }
 
-/// The names of the catalog's icons, sorted.
+/// The names of the built-in catalog's icons, sorted; app icon sets registered with [`register_app_icons`] are not
+/// listed.
 pub fn icon_names() -> &'static [&'static str] {
     svg_set::names()
 }
@@ -227,13 +231,14 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
                 icon.paint(painter, square, color);
             }
         }
+        IconSource::Mark(badge) => crate::contract::ghost::paint_badge(painter, tokens, direction, square, *badge, color),
     }
 }
 
-/// A catalog icon as it is drawn: its entry and set, whether it is mirrored, and its stroke width in points.
+/// A catalog or app icon as it is drawn: its entry and set, whether it is mirrored, and its stroke width in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SvgIcon {
-    index: usize,
+    entry: svg_set::Entry,
     set: IconSet,
     mirrored: bool,
     stroke: f32,
@@ -241,14 +246,14 @@ pub(crate) struct SvgIcon {
 
 impl SvgIcon {
     /// The icon `id` of `set` at `side` points under `direction` and `mirror`; `None`, with a log line, for a name the
-    /// catalog lacks.
+    /// catalog and the registered app sets lack.
     pub(crate) fn of(tokens: &UiTokens, direction: Direction, side: f32, id: &IconId, set: IconSet, mirror: Mirror) -> Option<SvgIcon> {
-        let Some(index) = svg_set::find(id.name()) else {
+        let Some(entry) = svg_set::lookup(id.name()) else {
             log::error!("icon {:?} is not in the catalog", id.name());
             return None;
         };
-        let mirrored = direction == Direction::Rtl && svg_set::directional(index) && mirror == Mirror::Auto;
-        Some(SvgIcon { index, set, mirrored, stroke: stroke(tokens, side) })
+        let mirrored = direction == Direction::Rtl && svg_set::directional(entry) && mirror == Mirror::Auto;
+        Some(SvgIcon { entry, set, mirrored, stroke: stroke(tokens, side) })
     }
 
     /// The image's side in pixels and its stroke in 64ths of a pixel for a square of `side` points at `ppp`: the
@@ -256,14 +261,14 @@ impl SvgIcon {
     /// stroke, so all its requests share one.
     fn pixels(&self, side: f32, ppp: f32) -> (u32, u32) {
         let px = (side * ppp).round().max(1.0) as u32;
-        let stroke_px = if svg_set::stroke_width(self.index, self.set).is_some() { (self.stroke * ppp * 64.0).round() as u32 } else { 0 };
+        let stroke_px = if svg_set::entry_stroke_width(self.entry, self.set).is_some() { (self.stroke * ppp * 64.0).round() as u32 } else { 0 };
         (px, stroke_px)
     }
 
     /// The icon in white for a square of `side` points at `ppp`, its alpha from the drawing.
     pub(crate) fn mask(&self, side: f32, ppp: f32) -> egui::ColorImage {
         let (px, stroke_px) = self.pixels(side, ppp);
-        svg_set::rasterise(self.index, self.set, px, stroke_px as f32 / 64.0, self.mirrored)
+        svg_set::rasterise_entry(self.entry, self.set, px, stroke_px as f32 / 64.0, self.mirrored)
     }
 
     /// Paints the icon in `color` centred in `square`, on whole pixels.
@@ -271,7 +276,7 @@ impl SvgIcon {
         let ctx = painter.ctx();
         let ppp = ctx.pixels_per_point();
         let (px, stroke_px) = self.pixels(square.width(), ppp);
-        let key = (self.index, self.set, px, stroke_px, self.mirrored);
+        let key = (self.entry, self.set, px, stroke_px, self.mirrored);
         let texture = TextureCache::texture(ctx, key, || self.mask(square.width(), ppp));
         let side = px as f32 / ppp;
         let min = (square.center() - vec2(side, side) / 2.0).round_to_pixels(ppp);

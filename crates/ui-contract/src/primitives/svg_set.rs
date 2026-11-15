@@ -1,7 +1,8 @@
-//! The SVG icon catalog the build embeds, and its rasteriser.
+//! The SVG icon catalog the build embeds, the app icon sets registered beside it, and their rasteriser.
 
 use egui::{Color32, ColorImage};
 use resvg::tiny_skia;
+use std::sync::{PoisonError, RwLock};
 
 use super::svg_tree;
 
@@ -23,14 +24,63 @@ pub struct AppIcons {
 /// Registering the same set again is a no-op; a name the built-in catalog or an earlier app set has is refused with a
 /// log line.
 pub fn register_app_icons(set: &'static AppIcons) {
-    let _ = set;
-    todo!("tp.T51")
+    let mut guard = APPS.write().unwrap_or_else(PoisonError::into_inner);
+    let registry = &mut *guard;
+    if registry.sets.iter().any(|known| std::ptr::eq(*known, set)) {
+        return;
+    }
+    let set_at = registry.sets.len();
+    registry.sets.push(set);
+    for (icon, (name, _)) in set.icons.iter().enumerate() {
+        if find(name).is_some() {
+            log::warn!("app icon set {:?}: icon {name:?} is refused, the built-in catalog has it", set.name);
+            continue;
+        }
+        match registry.index.binary_search_by(|(known, ..)| (*known).cmp(name)) {
+            Ok(at) => {
+                let earlier = registry.sets[registry.index[at].1].name;
+                log::warn!("app icon set {:?}: icon {name:?} is refused, set {earlier:?} has it", set.name);
+            }
+            Err(at) => registry.index.insert(at, (name, set_at, icon)),
+        }
+    }
 }
 
-/// The names of the registered app icons.
-#[allow(dead_code)] // P3(top-w10): tp.T51
-pub(crate) fn app_names() -> Vec<&'static str> {
-    todo!("tp.T51")
+/// The registered sets and the sorted index of their icons: name, set, position in the set.
+struct Registry {
+    sets: Vec<&'static AppIcons>,
+    index: Vec<(&'static str, usize, usize)>,
+}
+
+/// Process-wide like the generated catalog: it is the icon catalog, not pass state.
+static APPS: RwLock<Registry> = RwLock::new(Registry { sets: Vec::new(), index: Vec::new() });
+
+/// An icon the lookup found: a catalog position or an app set's icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Entry {
+    /// The position in the built-in catalog.
+    Catalog(usize),
+    /// The icon `icon` of the registered set `set`.
+    App { set: usize, icon: usize },
+}
+
+/// The icon called `name`: the built-in catalog first, then the registered app sets.
+pub(crate) fn lookup(name: &str) -> Option<Entry> {
+    if let Some(index) = find(name) {
+        return Some(Entry::Catalog(index));
+    }
+    let registry = APPS.read().unwrap_or_else(PoisonError::into_inner);
+    let at = registry.index.binary_search_by(|(known, ..)| (*known).cmp(name)).ok()?;
+    let (_, set, icon) = registry.index[at];
+    Some(Entry::App { set, icon })
+}
+
+/// The name, document and own stroke width of an app icon.
+fn app_icon(set: usize, icon: usize) -> (&'static str, &'static [u8], Option<f32>) {
+    let registry = APPS.read().unwrap_or_else(PoisonError::into_inner);
+    let set = registry.sets[set];
+    let (name, svg) = set.icons[icon];
+    (name, svg, set.stroke_width)
 }
 
 /// The position of the icon called `name` in the catalog.
@@ -43,9 +93,44 @@ pub(crate) fn names() -> &'static [&'static str] {
     &NAMES
 }
 
-/// Whether the icon at `index` flips under right-to-left.
-pub(crate) fn directional(index: usize) -> bool {
-    DIRECTIONAL[index]
+/// Whether `entry` flips under right-to-left; no app icon does.
+pub(crate) fn directional(entry: Entry) -> bool {
+    match entry {
+        Entry::Catalog(index) => DIRECTIONAL[index],
+        Entry::App { .. } => false,
+    }
+}
+
+/// The document's own stroke width of `entry` in `set`, `None` for a document drawn with fills or as drawn.
+pub(crate) fn entry_stroke_width(entry: Entry, set: IconSet) -> Option<f32> {
+    match entry {
+        Entry::Catalog(index) => stroke_width(index, set),
+        Entry::App { set: s, icon } => app_icon(s, icon).2,
+    }
+}
+
+/// `entry` in white at `px` x `px` physical pixels; a catalog entry as [`rasterise`], an app entry through the same
+/// drawing with its set's stroke width.
+pub(crate) fn rasterise_entry(entry: Entry, set: IconSet, px: u32, stroke_px: f32, mirrored: bool) -> ColorImage {
+    match entry {
+        Entry::Catalog(index) => rasterise(index, set, px, stroke_px, mirrored),
+        Entry::App { set: s, icon } => {
+            let (name, svg, own) = app_icon(s, icon);
+            image(draw(svg, own, px, stroke_px, mirrored), px, || format!("app icon {name}"))
+        }
+    }
+}
+
+/// The white image of a drawn pixmap; a failed drawing gives a transparent image and a log line.
+fn image(drawn: Result<tiny_skia::Pixmap, String>, px: u32, label: impl FnOnce() -> String) -> ColorImage {
+    let size = [px as usize; 2];
+    match drawn {
+        Ok(pixmap) => ColorImage::new(size, pixmap.pixels().iter().map(|p| Color32::from_white_alpha(p.alpha())).collect()),
+        Err(error) => {
+            log::error!("{}: {error}", label());
+            ColorImage::filled(size, Color32::TRANSPARENT)
+        }
+    }
 }
 
 /// The icon in white at `px` x `px` physical pixels, its alpha from the drawing; tinted when drawn.
@@ -53,14 +138,7 @@ pub(crate) fn directional(index: usize) -> bool {
 /// A document drawn with strokes is drawn `stroke_px` physical pixels wide, one drawn with fills as drawn. `mirrored`
 /// flips the drawing horizontally. A document that fails to parse gives a transparent image and a log line.
 pub(crate) fn rasterise(index: usize, set: IconSet, px: u32, stroke_px: f32, mirrored: bool) -> ColorImage {
-    let size = [px as usize; 2];
-    match draw(svg(index, set), stroke_width(index, set), px, stroke_px, mirrored) {
-        Ok(pixmap) => ColorImage::new(size, pixmap.pixels().iter().map(|p| Color32::from_white_alpha(p.alpha())).collect()),
-        Err(error) => {
-            log::error!("icon {} in {}: {error}", NAMES[index], set.id());
-            ColorImage::filled(size, Color32::TRANSPARENT)
-        }
-    }
+    image(draw(svg(index, set), stroke_width(index, set), px, stroke_px, mirrored), px, || format!("icon {} in {}", NAMES[index], set.id()))
 }
 
 /// `own` is the document's own stroke width in view-box units; a document without one is drawn as it is.
