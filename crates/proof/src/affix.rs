@@ -2248,11 +2248,12 @@ impl AffixDict {
             return false;
         }
         // The exact simple-word path includes affixes; asking with no exclusions detects a
-        // target whose only derivations carry NOSUGGEST, SUBSTANDARD or FORBIDDENWORD. Spend
+        // target that may carry NOSUGGEST, SUBSTANDARD or FORBIDDENWORD. An eligible exact
+        // compound derivation still counts, but a lowercase fallback must not rescue it. Spend
         // the same shared suggestion budget as the normal checker, and abstain if it runs out.
         match self.simple_word_budgeted(&target, Excluded::default(), true) {
             None => return false,
-            Some(true) if !self.simple_word(&target, self.excluded(true)) => return false,
+            Some(true) if !self.contains_except(&target, self.excluded(true)) => return false,
             _ => {}
         }
         self.can_suggest(changed)

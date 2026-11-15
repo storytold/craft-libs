@@ -822,6 +822,20 @@ mod tests {
         assert!(!d.can_suggest_cased("normal", "pour"));
     }
 
+    /// An excluded simple entry does not exclude an eligible exact COMPOUNDRULE derivation.
+    #[test]
+    fn rep_keeps_eligible_exact_compound_beside_an_excluded_simple_entry() {
+        for flag in ["N", "S", "F"] {
+            let aff = "SET UTF-8\nNOSUGGEST N\nSUBSTANDARD S\nFORBIDDENWORD F\nCOMPOUNDRULE ab\nREP 1\nREP zz foobar\n";
+            let d = AffixDict::from_hunspell(aff, &format!("3\nfoobar/{flag}\nfoo/a\nbar/b\n"), &[]).unwrap();
+            for d in [&d, &AffixDict::from_bytes(&d.to_bytes().unwrap()).unwrap()] {
+                assert_eq!(d.contains_suggestible("foobar"), flag != "F", "{flag}: exact compound eligibility");
+                let got = suggest_in(d, "zz", 4, &Tuning::DEFAULT);
+                assert_eq!(got.iter().any(|w| w == "foobar"), flag != "F", "{flag}: {got:?}");
+            }
+        }
+    }
+
     /// A language's tables come after its dictionary's, a TRY alphabet stands in for a missing TRY
     /// line, and a split rule decides which missing spaces are offered.
     #[test]
