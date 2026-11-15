@@ -108,6 +108,13 @@ impl<'a> Material<'a> {
 
 /// Write a manifest, its named maps, and the source. Duplicate member names are rejected.
 pub fn write(manifest: &Manifest, maps: &[(String, Vec<u8>)], source: &[u8]) -> Result<Vec<u8>, Error> {
+    // Flattened fields must not serialize a second copy of a known key.
+    const KNOWN: &[&str] = &["format", "version", "name", "graph", "size", "maps", "parameters", "inputs", "presets", "source"];
+    if manifest.extra.keys().any(|key| KNOWN.contains(&key.as_str()))
+        || manifest.maps.iter().any(|map| map.extra.contains_key("usage") || map.extra.contains_key("file"))
+    {
+        return Err(Error::Invalid("an extra field duplicates a known field".into()));
+    }
     let json = serde_json::to_vec_pretty(manifest).map_err(|e| Error::Invalid(format!("material.json: {e}")))?;
     let mut writer = Writer::new();
     writer.add(MANIFEST_ENTRY, &json, Compression::Deflated)?;
@@ -180,6 +187,16 @@ mod tests {
         let mut material = Material::open(&bytes, aggregate).unwrap();
         assert_eq!(material.read("maps/base.png").unwrap().len(), 8);
         assert!(material.read_source().is_err());
+    }
+
+    #[test]
+    fn refuses_extra_fields_that_duplicate_known_keys() {
+        let mut manifest = sample(2);
+        manifest.extra.insert("version".into(), 3.into());
+        assert!(write(&manifest, &[], b"source").is_err());
+        manifest.extra.remove("version");
+        manifest.maps[0].extra.insert("file".into(), "other".into());
+        assert!(write(&manifest, &[], b"source").is_err());
     }
 
     #[test]
