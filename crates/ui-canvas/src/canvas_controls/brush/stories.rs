@@ -3,8 +3,8 @@
 //! Alt + right-drag resizes it with the falloff preview; Play runs either drag.
 
 use super::{
-    BrushCursor, BrushCursorOptions, BrushDimensions, BrushResize, BrushResizeOptions, BrushTip, BrushTipOutline, FalloffPreview, PaintingCursor,
-    TipCell, TipFalloff, TipPose, TipRings,
+    BrushCursor, BrushCursorOptions, BrushDimensions, BrushResize, BrushResizeOptions, BrushTip, BrushTipOutline, CoverageMask, FalloffPreview,
+    PaintingCursor, SourceMarker, StrokeTrail, TipCell, TipFalloff, TipPose, TipRings, TrailTone,
 };
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas_view, story_view};
 use crate::canvas::testing::tool_story::{ToolScript, ToolStory, tool_story};
@@ -17,7 +17,8 @@ use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{CancelReason, CanvasView, Cursor, PaintedCursor, PointerButton};
 use craft_keymap::Mods;
-use egui::{Rect, Ui};
+use egui::{Id, Rect, Ui};
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// The zoom, in percent of one device pixel per document pixel.
 const ZOOM: f64 = 400.0;
@@ -53,6 +54,42 @@ fn soft_tip(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
 fn hard_tip(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let falloff = TipFalloff::hard(RADIUS);
     on_canvas_view(ui, brush_view, Some(&StoryDocument::STANDARD), |ui, rect, _| FalloffPreview::new(&falloff, CENTRE, RADIUS).show_at(ui, rect))
+}
+
+/// A drag-shaped mask whose stroke runs at height `y`.
+fn stamped(y: f64) -> CoverageMask {
+    let mut mask = CoverageMask::new(DocRect::new(40.0, 60.0, 160.0, 140.0), 256);
+    mask.begin_stroke();
+    mask.stamp_capsule(Point::new(60.0, y), Point::new(100.0, y + 6.0), 5.0);
+    mask.stamp_capsule(Point::new(100.0, y + 6.0), Point::new(140.0, y - 4.0), 5.0);
+    mask
+}
+
+/// The footprint of one tone. The mask is kept across passes (stamped once), so the trail uploads only what changed.
+fn footprint_of(ui: &mut Ui, name: &'static str, label: &'static str, tone: TrailTone, y: f64) -> StoryOutput {
+    let kept = ui.data_mut(|data| data.get_temp_mut_or_insert_with(Id::new(("footprint", name)), || Arc::new(Mutex::new(stamped(y)))).clone());
+    let mut mask = kept.lock().unwrap_or_else(PoisonError::into_inner);
+    on_canvas_view(ui, brush_view, Some(&StoryDocument::STANDARD), |ui, rect, _| StrokeTrail::new(label, &mut *mask).tone(tone).show_at(ui, rect))
+}
+
+#[story(StrokeTrail<'static>, covers = [Default])]
+fn footprint_light(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    footprint_of(ui, "light", "Light footprint", TrailTone::Light, 100.0)
+}
+
+#[story(StrokeTrail<'static>, covers = [Default])]
+fn footprint_shade(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    footprint_of(ui, "shade", "Shade footprint", TrailTone::Shade, 100.0)
+}
+
+#[story(StrokeTrail<'static>, covers = [Default])]
+fn footprint_danger(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    footprint_of(ui, "danger", "Danger footprint", TrailTone::Danger, 100.0)
+}
+
+#[story(SourceMarker, covers = [Default])]
+fn source(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    on_canvas_view(ui, brush_view, Some(&StoryDocument::STANDARD), |ui, rect, _| SourceMarker::new("Clone source", CENTRE).show_at(ui, rect))
 }
 
 #[story(TipCell, covers = [Default])]
@@ -173,7 +210,7 @@ impl CanvasTool for BrushPass<'_> {
             *self.dimensions = step.dimensions;
         }
         let rows = self.brush.resize.readout_rows(&cx.units(), &cx.words::<CanvasControlWords>());
-        cx.readout(rows);
+        cx.hud(rows);
     }
 
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {

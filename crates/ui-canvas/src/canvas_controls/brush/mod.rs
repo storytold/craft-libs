@@ -14,6 +14,9 @@
 //!   diameter, up and down the hardness ([`BrushLevel`]), reported as [`ResizeStep`]s.
 //! - [`TipFalloff`] and [`FalloffPreview`]: the tip's falloff and the canvas control that shows it with the brush
 //!   circle round it.
+//! - [`StrokeTrail`] and [`CoverageMask`]: the footprint of the stroke being painted, a coverage raster the tool
+//!   stamps and the control uploads by its changed rows, in a [`TrailTone`].
+//! - [`SourceMarker`]: the clone source's crosshair at a document point.
 //!
 //! A brush tool returns [`BrushCursor::cursor`] from `CanvasTool::cursor`. The app shows [`BrushResize::preview`] or
 //! [`BrushCursor::tip_cell`] at the canvas rect in the canvas body, and the tool hands

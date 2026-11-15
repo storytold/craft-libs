@@ -23,10 +23,16 @@ pub struct LineGuideStyle {
     line: StyleColor,
     /// The halo under the line, so it reads on any image.
     halo: StyleColor,
+    /// The radius of the dot at the line's start: the thick stroke, so the disc is twice that across.
+    dot: f32,
 }
 
+/// The shortest line, in points on screen, that is drawn: a lag shorter than this shows nothing.
+const MIN_LENGTH: f32 = 2.0;
+
 /// The Shift-click line from `from` (the end of the last stroke) to `to` (the pointer), both in document units. A
-/// non-finite end draws nothing. The brush tip at the pointer is the cursor's, not this line's.
+/// non-finite end draws nothing. It draws nothing shorter than `MIN_LENGTH`, for the Smoothing string and the
+/// Shift-click line alike. The brush tip at the pointer is the cursor's, not this line's.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(canvas_control)]
 pub struct StraightLinePreview {
@@ -36,7 +42,6 @@ pub struct StraightLinePreview {
     to: Point,
     /// A filled disc in the line colour at `from`, twice the thick stroke wide: the brush end of the smoothing string.
     #[prop(flag)]
-    #[allow(dead_code)] // P3(tools-w17): cw.C36
     dot: bool,
 }
 
@@ -59,7 +64,12 @@ impl Component for StraightLinePreview {
 
     fn style(cx: &StyleCx<'_>, _: StraightLinePreviewStyleKey) -> LineGuideStyle {
         let overlay = &cx.tokens.color.overlay;
-        LineGuideStyle { metrics: Metrics::new(), line: cx.color(overlay.stroke), halo: cx.color(overlay.halo) }
+        LineGuideStyle {
+            metrics: Metrics::new(),
+            line: cx.color(overlay.stroke),
+            halo: cx.color(overlay.halo),
+            dot: cx.tokens.stroke.thick,
+        }
     }
 
     fn measure(&mut self, _: &MeasureCx<'_, Self>) -> egui::Vec2 {
@@ -69,10 +79,17 @@ impl Component for StraightLinePreview {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let finite = [self.from, self.to].iter().all(|point| point.x.is_finite() && point.y.is_finite());
         let Some(space) = canvas_space(&cx.env).filter(|_| finite) else { return };
-        let ends = PaintShape::Path(vec![space.view.to_screen(self.from), space.view.to_screen(self.to)]);
+        let (start, end) = (space.view.to_screen(self.from), space.view.to_screen(self.to));
+        if start.distance(end) < MIN_LENGTH {
+            return;
+        }
+        let ends = PaintShape::Path(vec![start, end]);
         let draw = ui.draw();
         draw.stroke(&ends, StrokeWidth::Thick, cx.style.halo);
         draw.stroke(&ends, StrokeWidth::Thin, cx.style.line);
+        if self.dot {
+            draw.fill(&PaintShape::Circle(start, cx.style.dot), cx.style.line);
+        }
     }
 
     fn access(&self, access: &mut Access, _: &Cx<'_, Self>) {
