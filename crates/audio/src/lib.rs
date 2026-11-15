@@ -76,6 +76,8 @@ pub mod wav_markers;
 ))]
 mod write;
 
+/// Interleaved PCM packet decoding.
+pub mod pcm_interleaved;
 /// Range-backed PCM WAVE access and a 16-bit PCM writer.
 pub mod wav_range;
 #[cfg(feature = "vorbis-encode")]
