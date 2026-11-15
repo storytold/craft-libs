@@ -31,6 +31,8 @@ pub mod edges;
 pub mod media;
 /// Borrowed views of native XFL shape and style elements.
 pub mod shape;
+/// Borrowed views of native XFL text-field and text-run schema.
+pub mod text;
 
 /// Largest single entry inflated (bytes).
 pub const MAX_ENTRY: usize = 256 * 1024 * 1024;
