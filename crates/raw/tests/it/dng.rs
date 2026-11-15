@@ -1,7 +1,7 @@
 //! Synthetic DNG round trips: every storage variant we decode is written with our own TIFF writer (and LJ92
 //! encoder) and must decode bit-exactly.
 
-use craft_raw::opcodes::{Area, Opcode};
+use craft_raw::opcodes::{self, Area, Opcode};
 use craft_raw::{
     BlackLevel, Cfa, ColorData, DngCompression, DngWriteOptions, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect, decode,
     embedded_preview, probe, write_dng,
@@ -58,6 +58,7 @@ fn synthetic(w: usize, h: usize, cfa: Option<Cfa>, cpp: usize) -> RawImage {
         color,
         wb_multipliers: None,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         camera,
@@ -1177,10 +1178,75 @@ fn white_level_defaults_to_the_linearization_tables_maximum() {
     };
     let img = build(None);
     assert!(img.linearized);
+    assert_eq!(img.linearization_table.as_deref(), Some(table.as_slice()));
     assert_eq!(img.data, RawData::U16(codes.iter().map(|&c| table[c as usize]).collect()));
     assert_eq!(img.white, vec![51000.0], "255 × 200, the table's top");
     // a stated level still wins
     assert_eq!(build(Some(40000)).white, vec![40000.0]);
+}
+
+/// DNG chapter 7: OpcodeList1 runs on the stored codes, then the LinearizationTable maps them to
+/// sensor values. When list 1 is present, decode leaves the table unapplied so the develop pipeline
+/// can keep that order. Applying the table first would give a different picture.
+#[test]
+fn opcode_list1_runs_on_stored_samples_before_linearization() {
+    let (w, h) = (4, 2);
+    let stored = vec![2u16; w * h];
+    // table: 2 → 20, 7 → 30, 20 → 99 (so the two orders disagree)
+    let mut table = vec![0u16; 32];
+    table[2] = 20;
+    table[7] = 30;
+    table[20] = 99;
+    // MapTable: 2 → 7, 20 → 8
+    let mut map: Vec<u16> = (0..32).collect();
+    map[2] = 7;
+    map[20] = 8;
+    let area = Area { top: 0, left: 0, bottom: h as u32, right: w as u32, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 };
+    let list1 = opcodes::write_list(&[Opcode::MapTable { area, table: map.clone() }]);
+
+    let mut raw = base_ifd(w, h, 16, 1, true);
+    raw.set(t::COMPRESSION, Value::Short(vec![compression::NONE]));
+    raw.set_image(ImageData::Strips { rows_per_strip: h as u32, strips: vec![u16_bytes(&stored, ByteOrder::Little)] });
+    raw.set(t::LINEARIZATION_TABLE, Value::Short(table.clone()));
+    raw.set(t::OPCODE_LIST_1, Value::Undefined(list1));
+    raw.set(t::WHITE_LEVEL, Value::Long(vec![100]));
+    let img = decode(&dng(raw, ByteOrder::Little)).unwrap();
+    assert!(!img.linearized, "list 1 is present, so the table must wait");
+    assert_eq!(img.data, RawData::U16(stored.clone()));
+    assert_eq!(img.linearization_table.as_deref(), Some(table.as_slice()));
+    assert_eq!(img.opcodes.list1.len(), 1);
+
+    let apply_map = |samples: &mut [u16]| {
+        for s in samples {
+            let i = (*s as usize).min(map.len() - 1);
+            *s = map[i];
+        }
+    };
+
+    let mut correct = img.clone();
+    if let RawData::U16(v) = &mut correct.data {
+        apply_map(v);
+    }
+    correct.apply_linearization();
+    assert!(correct.linearized);
+    // 2 → 7 (MapTable) → 30 (linearization)
+    assert_eq!(correct.data, RawData::U16(vec![30; w * h]));
+
+    let mut wrong = img.clone();
+    wrong.apply_linearization();
+    if let RawData::U16(v) = &mut wrong.data {
+        apply_map(v);
+    }
+    // 2 → 20 (linearization) → 8 (MapTable)
+    assert_eq!(wrong.data, RawData::U16(vec![8; w * h]));
+    assert_ne!(correct.data, wrong.data);
+
+    // the unapplied table and list 1 survive a write / decode round trip
+    let back = decode(&write_dng(&img, &DngWriteOptions { compression: DngCompression::Uncompressed, ..Default::default() }).unwrap()).unwrap();
+    assert!(!back.linearized);
+    assert_eq!(back.data, RawData::U16(stored));
+    assert_eq!(back.linearization_table.as_deref(), Some(table.as_slice()));
+    assert_eq!(back.opcodes.list1.len(), 1);
 }
 
 /// PhotoCraft: `AsShotWhiteXY` is a chromaticity, so both coordinates lie inside (0, 1).

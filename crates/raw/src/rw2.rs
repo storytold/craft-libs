@@ -672,6 +672,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists { list3: distortion(ifd0, active).into_iter().collect(), ..Default::default() },
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
