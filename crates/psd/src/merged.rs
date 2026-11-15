@@ -230,6 +230,7 @@ mod tests {
         let merged = Merged::open(&b, 4).unwrap();
         assert_eq!(merged.read_planes(1).unwrap(), vec![vec![0x80; 8]]);
         assert!(merged.read_planes(2).is_err());
+        assert!(merged.validate_all().is_err());
         assert!(Merged::open(&b, 3).is_err());
     }
 
@@ -241,6 +242,7 @@ mod tests {
         b.extend_from_slice(&[1; 8]);
         let merged = Merged::open(&b, 4).unwrap();
         assert_eq!(merged.read_planes(1).unwrap(), vec![vec![1; 8]]);
+        assert!(merged.validate_all().is_ok());
         let mut row = [0; 4];
         unpackbits(&[3, 7, 8], &mut row).unwrap();
         assert_eq!(row, [7, 8, 0, 0]);
