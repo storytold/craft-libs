@@ -665,3 +665,97 @@ fn step_stream_gives_the_pixels_and_extras_of_decode() {
 fn dec_line(w: u32, layout: ChannelLayout, sample: SampleType) -> usize {
     w as usize * layout.channels() * sample.bytes()
 }
+
+#[test]
+fn bounded_png_stream_does_not_charge_unretained_full_frame() {
+    let image = synth(256, 1024, ChannelLayout::Rgba, SampleType::U16, 77, 0.5);
+    let bytes = encode(&image, Format::Png, &EncodeOptions::default()).unwrap();
+    let limits = Limits { max_alloc: 512 * 1024, ..Limits::default() };
+    assert!(image.data().len() > limits.max_alloc as usize);
+    assert!(PngDecodeRows::new(bytes.as_slice(), &limits).is_err());
+    assert!(PngDecodeRows::new_streaming(bytes.as_slice(), &limits).is_err());
+    let mut decoder = PngDecodeRows::new_bounded_streaming(bytes.as_slice(), &limits).unwrap();
+    assert!(decoder.streamable());
+    // Opening a stream must not become a way to bypass whole-image allocation guards.
+    assert!(decoder.reserve_output().is_err());
+    assert!(decoder.step(&mut || true).is_err());
+    let mut next = 0;
+    let mut sink = |first: u32, rows: &[u8]| -> Result<(), CodecError> {
+        assert_eq!(first as usize, next);
+        assert!(rows.len() <= 3 * 256 * 8);
+        let start = next * 256 * 8;
+        assert_eq!(rows, &image.data()[start..start + rows.len()]);
+        next += rows.len() / (256 * 8);
+        Ok(())
+    };
+    while decoder.step_stream(3, &mut || false, &mut sink).unwrap().is_none() {}
+    assert_eq!(next, 1024);
+}
+
+#[test]
+fn bounded_png_stream_keeps_group_dimension_and_fallback_limits() {
+    let image = synth(256, 1024, ChannelLayout::Rgba, SampleType::U16, 81, 0.5);
+    let bytes = encode(&image, Format::Png, &EncodeOptions::default()).unwrap();
+    let limits = Limits { max_alloc: 512 * 1024, ..Limits::default() };
+    let mut decoder = PngDecodeRows::new_bounded_streaming(bytes.as_slice(), &limits).unwrap();
+    assert!(decoder.step_stream::<CodecError>(1024, &mut || true, &mut |_, _| panic!("oversized group reached sink")).is_err());
+    for strict in [
+        Limits { max_width: 255, ..limits },
+        Limits { max_height: 1023, ..limits },
+        Limits { max_pixels: 256 * 1024 - 1, ..limits },
+        Limits { max_alloc: 1024, ..limits },
+    ] {
+        assert!(PngDecodeRows::new_bounded_streaming(bytes.as_slice(), &strict).is_err());
+    }
+    let adam7 = interlaced(&image);
+    assert!(PngDecodeRows::new_bounded_streaming(adam7.as_slice(), &limits).is_err());
+}
+
+#[test]
+fn bounded_png_stream_rejects_shrinking_below_buffered_rows() {
+    let image = synth(16, 8, ChannelLayout::Rgba, SampleType::U16, 83, 0.5);
+    let bytes = encode(&image, Format::Png, &EncodeOptions::default()).unwrap();
+    let mut decoder = PngDecodeRows::new_bounded_streaming(bytes.as_slice(), &Limits::default()).unwrap();
+    for _ in 0..3 {
+        assert!(decoder.step_stream::<CodecError>(4, &mut || false, &mut |_, _| panic!("group is incomplete")).unwrap().is_none());
+    }
+    assert!(decoder.step_stream::<CodecError>(1, &mut || true, &mut |_, _| panic!("changed group reached sink")).is_err());
+    let mut output = Vec::new();
+    decoder
+        .step_stream::<CodecError>(4, &mut || true, &mut |_, rows| {
+            output.extend_from_slice(rows);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(output, image.data());
+}
+
+#[test]
+fn bounded_png_stream_preserves_late_exif_across_metadata_yields() {
+    let image = synth(16, 8, ChannelLayout::Rgba, SampleType::U16, 89, 0.5);
+    let bytes = encode(&image, Format::Png, &EncodeOptions::default()).unwrap();
+    let mut exif = sample_exif();
+    exif[18..22].copy_from_slice(&6u32.to_le_bytes());
+    let mut chunks = vec![png_chunk(b"eXIf", &exif)];
+    for i in 0..150 {
+        chunks.push(png_chunk(b"tEXt", format!("key{i}\0value").as_bytes()));
+    }
+    let bytes = with_chunks_before_iend(&bytes, &chunks);
+    let mut decoder = PngDecodeRows::new_bounded_streaming(bytes.as_slice(), &Limits::default()).unwrap();
+    assert!(decoder.streamable());
+    let mut output = Vec::new();
+    let extras = loop {
+        if let Some(extras) = decoder
+            .step_stream::<CodecError>(2, &mut || false, &mut |_, rows| {
+                output.extend_from_slice(rows);
+                Ok(())
+            })
+            .unwrap()
+        {
+            break extras;
+        }
+    };
+    assert_eq!(output, image.data());
+    assert_eq!(extras.orientation, 6);
+    assert_eq!(extras.meta.text.len(), 150);
+}
