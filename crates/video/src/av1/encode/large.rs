@@ -17,6 +17,11 @@ pub struct LargeEncoder {
 impl LargeEncoder {
     /// Creates a tiled 8-bit 4:2:0 encoder for dimensions up to 8192 samples per side.
     pub fn new(cfg: &EncoderConfig) -> Result<Self, Error> {
+        Self::with_speed(cfg, 6)
+    }
+
+    /// Creates the tiled encoder with a rav1e speed preset from 1 (slower) to 10 (faster).
+    pub fn with_speed(cfg: &EncoderConfig, speed: u8) -> Result<Self, Error> {
         if cfg.width < 16 || cfg.height < 16 || cfg.width > 8192 || cfg.height > 8192 {
             return Err(Error::InvalidConfig("large AV1 frame dimensions must be 16..=8192".into()));
         }
@@ -26,7 +31,7 @@ impl LargeEncoder {
         let RateControl::ConstantQ(quality) = cfg.rate else {
             return Err(Error::InvalidConfig("large AV1 encoding currently supports constant quantizer rate control".into()));
         };
-        let mut ec = Rav1eConfig::with_speed_preset(6);
+        let mut ec = Rav1eConfig::with_speed_preset(speed.clamp(1, 10));
         ec.width = cfg.width as usize;
         ec.height = cfg.height as usize;
         ec.time_base = Rational::new(u64::from(cfg.fps_den), u64::from(cfg.fps_num));
