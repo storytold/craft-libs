@@ -178,7 +178,8 @@ fn a_format_estimate_shows_only_the_answer_for_the_current_values() {
     let shown = Rc::clone(&host);
     let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
     fixture.room(Vec2::new(1400.0, 1000.0));
-    host.borrow_mut().open(HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(6))));
+    let jpeg = HostedFormatOptions::new(fixture.ctx(), ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(6)));
+    host.borrow_mut().open(jpeg);
     fixture.idle(10);
     let waiting = painted(&fixture);
 
