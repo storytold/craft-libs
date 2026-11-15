@@ -463,7 +463,11 @@ mod tests {
         (0..count)
             .map(|_| {
                 let r = xorshift(seed);
-                if extreme && r % 5 == 0 { if r & 32 == 0 { i32::MAX - (r >> 40) as i32 % 4 } else { i32::MIN + (r >> 40) as i32 % 4 } } else { (r % 2001) as i32 - 1000 }
+                if extreme && r.is_multiple_of(5) {
+                    if r & 32 == 0 { i32::MAX - (r >> 40) as i32 % 4 } else { i32::MIN + (r >> 40) as i32 % 4 }
+                } else {
+                    (r % 2001) as i32 - 1000
+                }
             })
             .collect()
     }
@@ -484,7 +488,11 @@ mod tests {
                     let reference_result = reference_line(&low, &high, &mut reference, before, after);
                     let case = format!("length {length}, before {before}, after {after}, extreme {extreme}");
                     assert_eq!(fast_result.is_ok(), reference_result.is_ok(), "{case}");
-                    assert_eq!(fast_result.as_ref().err().map(ToString::to_string), reference_result.as_ref().err().map(ToString::to_string), "{case}");
+                    assert_eq!(
+                        fast_result.as_ref().err().map(ToString::to_string),
+                        reference_result.as_ref().err().map(ToString::to_string),
+                        "{case}"
+                    );
                     if fast_result.is_ok() {
                         assert_eq!(fast, reference, "{case}");
                     }
@@ -504,7 +512,7 @@ mod tests {
                         let (lw, hw) = sizes(width, left, right);
                         let (lhgt, hhgt) = sizes(height, top, bottom);
                         // Overflow cases on the smaller sizes only; they fail early and are cheap.
-                        let extreme = width * height < 40 && xorshift(&mut seed) % 2 == 0;
+                        let extreme = width * height < 40 && xorshift(&mut seed).is_multiple_of(2);
                         let mut band = |w, h| Band { width: w, height: h, data: coefficients(&mut seed, w * h, extreme) };
                         let bands = [band(lw, lhgt), band(hw, lhgt), band(lw, hhgt), band(hw, hhgt)];
                         let fast = inverse_level(&bands[0], &bands[1], &bands[2], &bands[3], width, height, edges);

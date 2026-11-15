@@ -102,11 +102,8 @@ pub(crate) fn decode(sample: &[u8], config: &Cr3Compression) -> Result<Vec<u16>>
     // Every plane of every tile is its own entropy stream: decode them all in parallel, each straight
     // to sensor samples, so a task holds only its own plane as i32. The first error in tile and plane
     // order is reported, as when the tiles were decoded one after another.
-    let jobs: Vec<(&Tile, &Result<Option<QpMap>>, usize, &Plane)> = tiles
-        .iter()
-        .zip(&qp)
-        .flat_map(|(tile, qp)| tile.planes.iter().enumerate().map(move |(p, plane)| (tile, qp, p, plane)))
-        .collect();
+    let jobs: Vec<(&Tile, &Result<Option<QpMap>>, usize, &Plane)> =
+        tiles.iter().zip(&qp).flat_map(|(tile, qp)| tile.planes.iter().enumerate().map(move |(p, plane)| (tile, qp, p, plane))).collect();
     let planes: Vec<Result<Vec<u16>>> = jobs
         .par_iter()
         .map(|&(tile, qp, p, plane)| {
@@ -167,19 +164,16 @@ fn interleave(output: &mut [u16], width: usize, tiles: &[Tile], planes: &[Vec<u1
     }
     output.par_chunks_mut(2 * width).enumerate().try_for_each(|(pair, rows)| -> Result<()> {
         let y = 2 * pair;
-        for (tile, planes) in tiles.iter().zip(planes.chunks_exact(4)).filter(|(tile, _)| (tile.y..tile.y + tile.height).contains(&y)) {
+        for (tile, planes) in tiles.iter().zip(planes.as_chunks::<4>().0).filter(|(tile, _)| (tile.y..tile.y + tile.height).contains(&y)) {
             let half = tile.width / 2;
             let start = (y - tile.y) / 2 * half;
-            for (row, sources) in rows.chunks_exact_mut(width).zip(planes.chunks_exact(2)) {
-                let [even, odd] = sources else { return Err(outside()) };
+            for (row, [even, odd]) in rows.chunks_exact_mut(width).zip(planes.as_chunks::<2>().0) {
                 let target = row.get_mut(tile.x..tile.x + tile.width).ok_or_else(outside)?;
                 let even = even.get(start..start + half).ok_or_else(outside)?;
                 let odd = odd.get(start..start + half).ok_or_else(outside)?;
-                for ((pixels, &left), &right) in target.chunks_exact_mut(2).zip(even).zip(odd) {
-                    if let [a, b] = pixels {
-                        *a = left;
-                        *b = right;
-                    }
+                for ([a, b], (&left, &right)) in target.as_chunks_mut::<2>().0.iter_mut().zip(even.iter().zip(odd)) {
+                    *a = left;
+                    *b = right;
                 }
             }
         }
@@ -1480,7 +1474,11 @@ mod tests {
                         _ => (cached.qp_rice(n % 22), reference.qp_rice(n % 22)),
                     };
                     assert_eq!(a.as_ref().ok(), b.as_ref().ok(), "round {round}, end {end}, op {op} {n}, stream {stream:02x?}");
-                    assert_eq!(a.as_ref().err().map(ToString::to_string), b.as_ref().err().map(ToString::to_string), "round {round}, end {end}, op {op} {n}");
+                    assert_eq!(
+                        a.as_ref().err().map(ToString::to_string),
+                        b.as_ref().err().map(ToString::to_string),
+                        "round {round}, end {end}, op {op} {n}"
+                    );
                     if a.is_err() {
                         complete = false;
                         break;
@@ -1518,9 +1516,20 @@ mod tests {
         let mut seed = 0x9e37_79b9_7f4a_7c15;
         // Odd map heights as on the EOS R7, and band sizes that fit the map and that overrun it by one.
         for (map_width, map_height) in [(1, 1), (2, 3), (3, 4), (5, 7)] {
-            let map = QpMap { width: map_width, height: map_height, data: (0..map_width * map_height).map(|_| 131 + (xorshift(&mut seed) % 45) as i32).collect() };
+            let map = QpMap {
+                width: map_width,
+                height: map_height,
+                data: (0..map_width * map_height).map(|_| 131 + (xorshift(&mut seed) % 45) as i32).collect(),
+            };
             for band in 0..10 {
-                for (width, height) in [(1, 1), (3, 2), (2 * map_width - 1, map_height.div_ceil(2)), (2 * map_width + 1, map_height), (4 * map_width, map_height), (4 * map_width + 1, map_height + 1)] {
+                for (width, height) in [
+                    (1, 1),
+                    (3, 2),
+                    (2 * map_width - 1, map_height.div_ceil(2)),
+                    (2 * map_width + 1, map_height),
+                    (4 * map_width, map_height),
+                    (4 * map_width + 1, map_height + 1),
+                ] {
                     for quant in [
                         Quantization::Uniform(4 + 4 * band as u8),
                         Quantization::Adaptive { base: 0, gain: 0 },
@@ -1542,7 +1551,11 @@ mod tests {
                         });
                         let case = format!("map {map_width}x{map_height}, band {band}, {width}x{height}, {quant:?}");
                         assert_eq!(cells_result.is_ok(), reference_result.is_ok(), "{case}");
-                        assert_eq!(cells_result.as_ref().err().map(ToString::to_string), reference_result.as_ref().err().map(ToString::to_string), "{case}");
+                        assert_eq!(
+                            cells_result.as_ref().err().map(ToString::to_string),
+                            reference_result.as_ref().err().map(ToString::to_string),
+                            "{case}"
+                        );
                         if cells_result.is_ok() {
                             assert_eq!(cells, reference, "{case}");
                         }
@@ -1563,7 +1576,9 @@ mod tests {
         let planes: Vec<Vec<u16>> = tiles
             .iter()
             .enumerate()
-            .flat_map(|(t, tile)| (0..4).map(move |p| (0..tile.width * tile.height / 4).map(|i| ((t * 4 + p) * 100 + i) as u16).collect::<Vec<u16>>()))
+            .flat_map(|(t, tile)| {
+                (0..4).map(move |p| (0..tile.width * tile.height / 4).map(|i| ((t * 4 + p) * 100 + i) as u16).collect::<Vec<u16>>())
+            })
             .collect();
         let mut expected = vec![0u16; width * height];
         for (t, tile) in tiles.iter().enumerate() {
