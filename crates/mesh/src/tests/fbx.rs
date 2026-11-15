@@ -627,3 +627,48 @@ fn fbx6_model_holds_its_mesh() {
         assert_eq!(d.unit_scale(), Some(100.0));
     }
 }
+
+#[test]
+fn optional_inactive_pre_rotation_keeps_legacy_placements() {
+    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" { Properties70: { P: \"PreRotation\", \"\", \"\", \"\", 0,0,90 } } }";
+    let doc = document(text.as_bytes());
+    let normal = doc.scene(&Limits::default(), &mut no_external).unwrap();
+    let options = crate::fbx::SceneOptions { apply_inactive_rotation: true, ..Default::default() };
+    let legacy = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    let p = [1.0, 0.0, 0.0];
+    assert_eq!(transform_point(&normal.nodes[0].transform, p), p);
+    let turned = transform_point(&legacy.nodes[0].transform, p);
+    assert!((turned[0]).abs() < 1e-12 && (turned[1] - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn strict_geometry_rejects_bad_arrays_and_keeps_final_polygon() {
+    let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
+    let read_strict = |s: &str| document(s.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options);
+    let unterminated = ASCII.replace("a: 0,1,2,-4,0,1,-5", "a: 0,1,2,-4,0,1,4");
+    assert_eq!(read_strict(&unterminated).unwrap().meshes[0].triangle_count(), 3);
+    for bad in ["a: 0,1,2,-4,0,1,200", "a: 0,1,2,-4,0,1,1.5", "a: 0,1,2,-4,0,1,NaN"] {
+        assert!(read_strict(&ASCII.replace("a: 0,1,2,-4,0,1,-5", bad)).is_err());
+    }
+}
+
+#[test]
+fn scene_option_selects_the_last_parent_connection() {
+    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" {} Model: 2, \"Model::B\", \"Null\" {} Model: 3, \"Model::Child\", \"Null\" {} } Connections: { C: \"OO\",3,1 C: \"OO\",3,2 }";
+    let doc = document(text.as_bytes());
+    let options = crate::fbx::SceneOptions { prefer_last_parent: true, ..Default::default() };
+    let scene = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    assert!(scene.nodes[1].children.contains(&2));
+    let default = doc.scene(&Limits::default(), &mut no_external).unwrap();
+    assert!(default.nodes[0].children.contains(&2));
+}
+
+#[test]
+fn object_only_hierarchy_ignores_property_connections() {
+    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" {} Model: 2, \"Model::B\", \"Null\" {} } Connections: { C: \"OP\",2,1,\"SomeProperty\" }";
+    let doc = document(text.as_bytes());
+    let options = crate::fbx::SceneOptions { only_object_connections: true, ..Default::default() };
+    let scene = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    assert_eq!(scene.roots.len(), 2);
+    assert_eq!(doc.scene(&Limits::default(), &mut no_external).unwrap().roots.len(), 1);
+}
