@@ -403,7 +403,15 @@ fn account_invalid_data_urls(xml: &roxmltree::Document<'_>, used: &Used) {
     for node in xml.descendants().filter(|n| n.is_element() && matches!(n.tag_name().name(), "image" | "feImage")) {
         let href = node.attribute(("http://www.w3.org/1999/xlink", "href")).or_else(|| node.attribute("href"));
         let Some(href) = href else { continue };
-        let Ok(url) = data_url::DataUrl::process(href) else { continue };
+        let url = match data_url::DataUrl::process(href) {
+            Ok(url) => url,
+            Err(_) => {
+                if href.split_once(':').is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("data")) {
+                    used.invalid_raster.fetch_add(1, Ordering::Relaxed);
+                }
+                continue;
+            }
+        };
         if url.decode(|_| Ok::<(), std::convert::Infallible>(())).is_err() {
             used.invalid_raster.fetch_add(1, Ordering::Relaxed);
         }
@@ -460,6 +468,9 @@ fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: craft_
     let decode_limits = craft_image_codecs::Limits::new(width, height, pixels, limits.embedded_raster_pixels.saturating_mul(8));
     let options = craft_image_codecs::DecodeOptions { limits: decode_limits, keep_orientation: true };
     if let Err(error) = craft_image_codecs::decode_as_with(format, &data, &options) {
+        // No tree retains this allocation on failure. Forget its address before it
+        // can be reused, but keep the pixel charge for the decode work already spent.
+        used.raster_data.lock().unwrap_or_else(PoisonError::into_inner).remove(&pointer);
         match error {
             craft_image_codecs::CodecError::LimitExceeded(_) => {
                 used.raster_limit.fetch_add(1, Ordering::Relaxed);

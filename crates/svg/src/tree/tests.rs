@@ -530,6 +530,42 @@ mod invalid_image_accounting {
     }
 
     #[test]
+    fn malformed_data_url_without_comma_is_counted() {
+        let bad = r#"<image width="1" height="1" xlink:href="data:image/png;base64"/>"#;
+        let (found, report) = usage(bad, shallow());
+        assert!(found.is_empty());
+        assert_eq!(report.invalid_raster_images, 1);
+        let (found, report) = usage(&embed(&svg(bad)), shallow());
+        assert_eq!(found, [true]);
+        assert_eq!(report.invalid_raster_images, 1);
+    }
+
+    #[test]
+    fn failed_decode_forgets_address_but_preserves_spent_budget() {
+        let valid = png();
+        let idat = valid.windows(4).position(|b| b == b"IDAT").unwrap();
+        let invalid = Arc::new(valid[..idat + 4].to_vec());
+        let pointer = Arc::as_ptr(&invalid) as usize;
+        let limits = Limits { embedded_raster_pixels: 3, ..shallow() };
+        let resolver = ImageResolver::new(limits);
+        let used = &resolver.used;
+        let format = craft_image_codecs::Format::Png;
+        assert!(raster_image(used, &limits, invalid, format).is_none());
+        assert!(!used.raster_data.lock().unwrap().contains(&pointer));
+        assert_eq!(resolver.usage().raster_pixels, 1);
+        let first_data = Arc::new(valid.clone());
+        let first = raster_image(used, &limits, first_data.clone(), format).unwrap();
+        assert_eq!(resolver.usage().raster_pixels, 2);
+        let repeated = raster_image(used, &limits, first_data, format).unwrap();
+        assert_eq!(resolver.usage().raster_pixels, 2);
+        let second = raster_image(used, &limits, Arc::new(valid.clone()), format).unwrap();
+        assert_eq!(resolver.usage().raster_pixels, 3);
+        assert!(raster_image(used, &limits, Arc::new(valid), format).is_none());
+        assert_eq!(resolver.usage().raster_limit_images, 1);
+        drop((first, repeated, second));
+    }
+
+    #[test]
     fn corrupt_pixels_do_not_pass_a_valid_header_probe() {
         let valid = png();
         let (found, report) = usage(&image(&valid), shallow());
