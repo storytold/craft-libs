@@ -811,3 +811,41 @@ fn image_before_text_keeps_the_space() {
     let html = inlines_html(&[Inline::Figure("chart".to_string()), inline_text(" next")]);
     assert_eq!(html, "<img alt=\"chart\"> next");
 }
+
+/// A run that `esc` writes nothing for is not visible content: the space after it still starts the
+/// paragraph, and a trailing one does not become the paragraph's end.
+#[test]
+fn escaped_away_text_is_not_visible() {
+    for invisible in ["\u{000C}", "\u{000E}", "\u{000C}\u{000E}"] {
+        let lead = inlines_html(&[inline_text(invisible), inline_text(" x")]);
+        assert_eq!(lead, "&nbsp;x", "{invisible:?} at the start");
+        let trail = inlines_html(&[inline_text("Total: "), inline_text(invisible)]);
+        assert_eq!(trail, "Total:&nbsp;", "{invisible:?} at the end");
+    }
+    // A tab and a line break are written out, so they stay visible.
+    assert_eq!(inlines_html(&[inline_text("\t"), inline_text(" x")]), "<span style=\"white-space:pre\">\t</span> x");
+    assert_eq!(inlines_html(&[inline_text("\n"), inline_text(" x")]), "<br> x");
+
+    // A field result and a control's text go through the same `text_html`, so they need the same
+    // predicate: a result of only dropped characters shows nothing either.
+    let field = |result: &str| Inline::Field { instr: "REF a".to_string(), result: result.to_string(), fmt: Fmt::default(), locked: false };
+    let control = |text: &str| Inline::Control { control: Box::default(), text: text.to_string(), fmt: Fmt::default() };
+    for result in ["\u{000C}", "\u{000E}"] {
+        assert_eq!(inlines_html(&[field(result), inline_text(" x")]), "&nbsp;x", "field result {result:?} at the start");
+        assert_eq!(inlines_html(&[inline_text("Total: "), field(result)]), "Total:&nbsp;", "field result {result:?} at the end");
+        assert_eq!(inlines_html(&[control(result), inline_text(" x")]), "&nbsp;x", "control text {result:?} at the start");
+        assert_eq!(inlines_html(&[inline_text("Total: "), control(result)]), "Total:&nbsp;", "control text {result:?} at the end");
+    }
+    // A field whose result is real text stays visible.
+    assert_eq!(inlines_html(&[field("7"), inline_text(" x")]), "7 x");
+}
+
+/// A ruby with neither base nor annotation paints nothing, so the space before it still ends the
+/// paragraph; one with either text is visible.
+#[test]
+fn empty_ruby_is_not_visible() {
+    let empty = Inline::Ruby { base: String::new(), ruby: String::new(), fmt: Fmt::default() };
+    assert_eq!(inlines_html(&[inline_text("x "), empty]), "x&nbsp;<ruby><rt></rt></ruby>");
+    let filled = Inline::Ruby { base: String::new(), ruby: "kan".to_string(), fmt: Fmt::default() };
+    assert_eq!(inlines_html(&[inline_text("x "), filled]), "x <ruby><rt>kan</rt></ruby>");
+}

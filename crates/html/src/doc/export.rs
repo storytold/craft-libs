@@ -46,11 +46,12 @@ fn align_css(a: Option<Align>) -> Option<&'static str> {
     }
 }
 
-/// `at_start`/`at_end`: `t` begins/ends the paragraph's visible text, the two places a browser
-/// collapses a plain space, so the space there is written as `&nbsp;` instead. "Visible" means
-/// something a browser paints: a bookmark's empty `<a id>`, a note or comment mark, a shape's
-/// anchor and a field boundary show nothing, so text that only follows a leading bookmark still
-/// starts the paragraph (see [`shows_something`]).
+/// `at_start`/`at_end`: `t` begins or ends the paragraph's visible text, where a browser collapses a
+/// plain space, so the space there is written as `&nbsp;` instead. The pair covers the two paragraph
+/// ends only: a line break's own two sides are handled inside one `t` (see the space arm below), not
+/// across inlines. "Visible" means something a browser paints: a bookmark's empty `<a id>`, a note or
+/// comment mark, a shape's anchor and a field boundary show nothing, so text that only follows a
+/// leading bookmark still starts the paragraph (see [`shows_something`]).
 fn text_html(t: &str, at_start: bool, at_end: bool) -> String {
     let mut o = String::new();
     let mut prev_space = at_start;
@@ -76,12 +77,16 @@ fn text_html(t: &str, at_start: bool, at_end: bool) -> String {
 /// comment writes a mark, and a shape, group or field boundary writes nothing: none of them makes
 /// the text around it interior. A space is visible content — it is exactly the space whose collapse
 /// [`text_html`]'s two flags prevent.
+///
+/// Text that `esc` writes nothing for (`U+000C` and `U+000E`, the control characters it drops) is not
+/// visible either; `craft_flow::clean_text` keeps those characters, so a flow can hold such a run.
 fn shows_something(i: &Inline) -> bool {
     match i {
-        Inline::Text(t, _) => !t.is_empty(),
-        Inline::Ruby { .. } | Inline::Image(_) | Inline::Figure(_) | Inline::Chart(_) | Inline::Equation { .. } => true,
+        Inline::Text(t, _) => text_shows(t),
+        Inline::Ruby { base, ruby, .. } => text_shows(base) || text_shows(ruby),
+        Inline::Image(_) | Inline::Figure(_) | Inline::Chart(_) | Inline::Equation { .. } => true,
         Inline::Field { instr, .. } if model::shows_nothing(instr) => false,
-        Inline::Field { result, .. } | Inline::Control { text: result, .. } => !result.is_empty(),
+        Inline::Field { result, .. } | Inline::Control { text: result, .. } => text_shows(result),
         Inline::Anchor(_)
         | Inline::AnchorEnd(_)
         | Inline::Note { .. }
@@ -92,6 +97,13 @@ fn shows_something(i: &Inline) -> bool {
         | Inline::FieldStart(_)
         | Inline::FieldEnd => false,
     }
+}
+
+/// Whether `t` puts anything on the page. `esc` writes nothing for the two control characters it drops
+/// (`U+000C` and `U+000E`), and `craft_flow::clean_text` keeps them, so a run — text, a ruby's base or
+/// annotation, a field's or control's result — can consist of them alone and show nothing.
+fn text_shows(t: &str) -> bool {
+    t.chars().any(|c| !matches!(c, '\u{000C}' | '\u{000E}'))
 }
 
 /// The tags that carry `f`'s character formatting: what opens them, and what closes them
