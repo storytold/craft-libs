@@ -4,6 +4,11 @@ use crate::{Error, Limits, Result, malformed, too_large};
 
 const ZIP_MAGIC: &[u8] = b"PK\x03\x04";
 
+/// Whether bytes begin with a ZIP local-file header.
+pub fn is_package(bytes: &[u8]) -> bool {
+    bytes.starts_with(ZIP_MAGIC)
+}
+
 /// Limits for an FBX package and each referenced texture.
 #[derive(Clone, Copy, Debug)]
 pub struct PackageLimits {
@@ -38,7 +43,7 @@ impl<'a> Package<'a> {
             .read(&self.name, self.limits.max_model_bytes)
             .map_err(|e| malformed(KIND, format!("package: {e}")))?
             .ok_or_else(|| malformed(KIND, "package FBX is missing"))?;
-        if bytes.starts_with(ZIP_MAGIC) {
+        if is_package(bytes) {
             return Err(malformed(KIND, "the package holds another package"));
         }
         Ok(bytes)
@@ -78,7 +83,7 @@ pub fn write(
     package_limits: PackageLimits,
     found: &mut dyn FnMut(&str) -> Option<Vec<u8>>,
 ) -> Result<(Option<Vec<u8>>, Vec<String>)> {
-    if bytes.starts_with(ZIP_MAGIC) {
+    if is_package(bytes) {
         return Ok((None, Vec::new()));
     }
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
