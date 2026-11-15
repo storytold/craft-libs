@@ -6,7 +6,7 @@ use craft_keymap::Mods;
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::{Draw, ToolIcon};
 
-use super::drag::{InsideDrag, PressRule, drag_kind};
+use super::drag::{InsideDrag, PressRule, drag_kind, moved_selection_snap};
 use super::lasso::{LassoCursor, apply, begin_inside, cursor, draft_key, outline_access, paint_outline, phase, reach, sample};
 use super::{Place, Report, SelectEvent, SelectPhase, SelectToolPass, SelectionProbe};
 
@@ -160,7 +160,7 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
         let (tool, probe) = (&mut *self.tool, self.probe);
         let Some(place) = Place::of(cx) else { return };
         if let Some(inside) = tool.inside.as_mut() {
-            if let Some(event) = inside.drag(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| cx.snap_rect(rect)) {
+            if let Some(event) = inside.drag(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| moved_selection_snap(cx, rect)) {
                 tool.report.push(event);
             }
             return;
@@ -174,7 +174,7 @@ impl CanvasTool for SelectToolPass<'_, PolygonLassoTool> {
         let (tool, probe) = (&mut *self.tool, self.probe);
         let Some(place) = Place::of(cx) else { return };
         if let Some(inside) = tool.inside.take() {
-            tool.report.push(inside.end(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| cx.snap_rect(rect)));
+            tool.report.push(inside.end(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| moved_selection_snap(cx, rect)));
             return;
         }
         let event = tool.draft.release(sample(pointer, &place));

@@ -345,12 +345,15 @@ impl<'a> CurvesPanel<'a> {
             }
 
             let mut picked = channel;
-            Row::new().show(ui, |ui, _| {
-                Text::new(words.channel.clone()).shade(Shade::Muted).role(TypeRole::Label).show(ui);
-                if let Some(&at) = Select::new(words.channel.clone(), Bind::given(channel), &entries).show(ui).value() {
-                    picked = at;
-                }
-            });
+            // No channels (an action whose target is unresolved): no Channel select.
+            if !entries.is_empty() {
+                Row::new().show(ui, |ui, _| {
+                    Text::new(words.channel.clone()).shade(Shade::Muted).role(TypeRole::Label).show(ui);
+                    if let Some(&at) = Select::new(words.channel.clone(), Bind::given(channel), &entries).show(ui).value() {
+                        picked = at;
+                    }
+                });
+            }
             let mut smooth = false;
             Row::new().show(ui, |ui, _| {
                 for (target, icon, name) in

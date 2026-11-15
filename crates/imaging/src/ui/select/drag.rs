@@ -2,7 +2,7 @@
 //! tools use it unchanged). Public for the app's own tools: the Magic Wand in New mode drags the outline like a
 //! marquee, so it takes [`PressRule::Drags`].
 
-use craft_behavior::geometry::{ConstrainStyle, Directions, MoveGesture, MoveValue, SelectionOperation};
+use craft_behavior::geometry::{ConstrainStyle, Directions, MoveGesture, MoveValue, SelectionOperation, SnapKind, SnapKinds};
 use craft_behavior::{CancelReason, Cursor, CursorBadge, CursorIcon, EditEvent, GestureId, Mixed, PaintedCursor};
 use craft_keymap::Mods;
 use kurbo::{Point, Vec2};
@@ -164,6 +164,12 @@ impl InsideDrag {
         let before = SelectionDrag { kind: self.kind, delta: [0, 0] };
         SelectEvent::DragSelection(EditEvent::cancel(self.id, reason, Some(Mixed::Same(before))))
     }
+}
+
+/// The offset that snaps the moved selection's bounds `rect` to the canvas's targets: every kind but the selection's own
+/// edges, which move with it.
+pub(super) fn moved_selection_snap(cx: &mut craft_ui::canvas::ToolContext<'_>, rect: kurbo::Rect) -> Vec2 {
+    cx.snap_rect_of(rect, SnapKinds::ALL.without(SnapKind::Selection))
 }
 
 /// The value's offset plus the snap of the press `bounds` moved by it; the offset itself without bounds. A value that

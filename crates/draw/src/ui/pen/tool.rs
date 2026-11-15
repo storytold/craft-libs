@@ -203,9 +203,13 @@ impl PenTool {
 
     /// The host's open draft. The tool keeps the draft it is drawing and reads this only while it has none: a
     /// non-empty draft with none open (a resumed path) becomes the draft and begins its gesture at once. Hand in
-    /// `None` once [`PenEvent::Finished`] came.
+    /// `None` once [`PenEvent::Finished`] came. `None` while a run is open and no press is down means the host ended
+    /// the draft itself (a commit, a menu command): the tool drops its run and draft with no event, and the next press
+    /// starts a new draft. A press that is down keeps its run.
     pub fn draft(&mut self, draft: Option<&EditSubpath>) -> &mut Self {
-        if self.run.is_none() {
+        let host_ended = draft.is_none_or(|draft| draft.knots.is_empty()) && self.run.is_some() && self.drag.is_none();
+        if self.run.is_none() || host_ended {
+            self.run = None;
             match draft.filter(|draft| !draft.knots.is_empty()) {
                 Some(draft) => {
                     self.shown = draft.clone();
@@ -215,6 +219,7 @@ impl PenTool {
                 None => {
                     self.shown = EditSubpath::default();
                     self.own = 0;
+                    self.kept = 0;
                     self.resume = false;
                 }
             }

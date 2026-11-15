@@ -311,6 +311,11 @@ pub(crate) struct ScrollOwner {
 }
 
 impl Scoped {
+    /// How far from a handle, point or edge a press still takes it, in screen points: the theme's `size.hit.target`.
+    pub fn hit_reach(&self) -> f32 {
+        self.tokens.size.hit.target
+    }
+
     /// Whether the scope is the body of a container with a view of its own, as the innermost scroll owner: its stops
     /// take the document key role (`KeyRole::document`).
     pub(crate) fn in_view_body(&self) -> bool {
@@ -523,6 +528,13 @@ impl Env {
         let viewport = pass::current_viewport(ctx);
         let found = PerViewport::<ViewportEnvs>::with(ctx, viewport, |envs| envs.root.clone());
         found.unwrap_or_else(|| Env::from_root(ctx, &RootEnv::fallback(ctx), None, scale::pixels_per_point(ctx)))
+    }
+
+    /// How far from a handle, point or edge a press still takes it, in screen points: the theme's `size.hit.target` as
+    /// the running viewport's root env has it. `ToolContext::reach` reads the same
+    /// value; code with no tool context (a menu capture hit-testing a canvas point) reads it here.
+    pub fn root_hit_reach(ctx: &Context) -> f32 {
+        Self::of_root(ctx).hit_reach()
     }
 
     /// The `Host` of the running viewport's root env.

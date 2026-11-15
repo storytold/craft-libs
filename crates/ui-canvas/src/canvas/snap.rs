@@ -54,8 +54,13 @@ impl Snap {
 
     /// The offset that moves `rect` onto a snap target, with the lines to draw; zero when snapping is off.
     pub fn rect(&self, rect: craft_behavior::kurbo::Rect, mods: Mods) -> (Vec2, Vec<SnapLine>) {
+        self.rect_of(rect, mods, craft_behavior::geometry::SnapKinds::ALL)
+    }
+
+    /// [`rect`](Self::rect) to the targets of a kind in `kinds` only.
+    pub fn rect_of(&self, rect: craft_behavior::kurbo::Rect, mods: Mods, kinds: craft_behavior::geometry::SnapKinds) -> (Vec2, Vec<SnapLine>) {
         match self.reach(mods, false) {
-            Some(tolerance) => self.targets.snap_rect(rect, tolerance),
+            Some(tolerance) => self.targets.snap_rect_of(rect, tolerance, kinds),
             None => (Vec2::ZERO, Vec::new()),
         }
     }

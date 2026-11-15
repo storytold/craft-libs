@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_automation::synthetic::{MAX_CLICKS, MAX_SCREEN_POINT, NO_DOCUMENT, input_method};
+use craft_automation::synthetic::{At, MAX_CLICKS, NOT_FINITE, MAX_SCREEN_POINT, NO_DOCUMENT, input_method};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::egui::injected::hook_without_pass;
 use craft_ui::runtime::windows::WindowHost;
@@ -335,4 +335,15 @@ fn ui_ime_reaches_a_focused_text_field_as_a_preedit_then_a_commit_in_order() {
     let both = input_method("ui.ime", &json!({"preedit": "a", "commit": "b"}), &host, ViewportId::ROOT, &map);
     assert!(matches!(both, Some(Err(_))), "{both:?}");
     assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "the refused request queued nothing");
+}
+
+/// A NaN or infinite point of a request is an error at the request, in either coordinate space, not a panic in the pass.
+#[trial]
+fn a_point_that_is_not_finite_is_refused() {
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        for at in [At::Screen(pos2(bad, 1.0)), At::Screen(pos2(1.0, bad)), At::Document(pos2(bad, 1.0))] {
+            assert_eq!(at.resolve(&|p| Some(p)), Err(NOT_FINITE.to_owned()), "{at:?}");
+        }
+    }
+    assert_eq!(At::Screen(pos2(3.0, 4.0)).resolve(&|_| None), Ok(pos2(3.0, 4.0)));
 }

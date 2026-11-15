@@ -16,7 +16,7 @@ use craft_imaging::ui::fill::{
 use craft_imaging::ui::select_mask::EditMode;
 use craft_imaging::ui::wide_angle::PreviewDone;
 use craft_ui::canvas::{PixelRect, RasterSource};
-use craft_ui::dialog::{DialogHost, DialogResult, HostedWorkspace};
+use craft_ui::dialog::{DialogHost, FullWindowWorkspace as _, DialogResult, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::memory::{SaveKey, saved_value};
@@ -289,4 +289,19 @@ fn fill_remembers_its_settings_at_cancel() {
     rig.host.borrow_mut().open(HostedWorkspace::new(remembered(), source));
     rig.fixture.idle(3);
     assert_eq!(rig.with(|work| work.settings().opacity), 10.0, "the next opening takes the stored settings");
+}
+
+/// The automation keys `expand` and `contract` edit the fill area by that many pixels, like the bar's buttons; a
+/// value that is not a number is refused.
+#[trial]
+fn expand_and_contract_keys_edit_the_fill_area() {
+    let rig = Rig::new(FillSettings::default(), FillLimits::new(10, 100));
+    let ctx = rig.fixture.ctx().clone();
+    let source: Arc<dyn FillSource> = Arc::new(Source);
+    let set = |field: &str, value: serde_json::Value| rig.with(|workspace| workspace.set_json_field(&ctx, &*source, field, value));
+    assert_eq!(set("expand", serde_json::json!(3)), Ok(()));
+    assert_eq!(set("contract", serde_json::json!(2)), Ok(()));
+    assert!(set("expand", serde_json::json!("wide")).is_err(), "text is not an amount");
+    let edits = rig.with(|workspace| workspace.session().fill_edits.clone());
+    assert_eq!(edits, vec![FillAreaEdit::grow(true, 3.0), FillAreaEdit::grow(false, 2.0)]);
 }

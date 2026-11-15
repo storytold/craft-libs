@@ -35,3 +35,10 @@ fn fillet_matches_photocraft() {
 }
 
 // `None` for a zero radius, NaN, a zero-length edge, a straight and a folded vertex.
+
+/// A rectangle's cap is exactly half its short side, not a few ulps under it: a drag past the cap stores the cap.
+#[trial]
+fn a_right_angle_corner_caps_at_exactly_half_the_short_side() {
+    let f = fillet(Point::new(40.0, 0.0), Point::new(0.0, 0.0), Point::new(0.0, 100.0), 1e12).expect("a right angle fillets");
+    assert_eq!(f.radius, 20.0);
+}

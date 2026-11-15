@@ -8,7 +8,7 @@ use craft_ui::primitives::{Draw, PaintShape, StrokeWidth, ToolIcon};
 use egui::{Pos2, Vec2};
 use kurbo::Rect;
 
-use super::drag::{InsideDrag, PressRule, cursor_over, drag_kind};
+use super::drag::{InsideDrag, PressRule, cursor_over, drag_kind, moved_selection_snap};
 use super::{DragKind, Place, Report, SelectEvent, SelectPhase, SelectToolPass, SelectWords, SelectionProbe, SelectionShape};
 
 /// Where a lasso cursor's icon touches the document: the icon's own origin.
@@ -330,7 +330,7 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
         let (tool, probe) = (&mut *self.tool, self.probe);
         let Some(place) = Place::of(cx) else { return };
         if let Some(inside) = tool.inside.as_mut() {
-            if let Some(event) = inside.drag(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| cx.snap_rect(rect)) {
+            if let Some(event) = inside.drag(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| moved_selection_snap(cx, rect)) {
                 tool.report.push(event);
             }
             return;
@@ -345,7 +345,7 @@ impl CanvasTool for SelectToolPass<'_, LassoTool> {
         let (tool, probe) = (&mut *self.tool, self.probe);
         let Some(place) = Place::of(cx) else { return };
         if let Some(inside) = tool.inside.take() {
-            tool.report.push(inside.end(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| cx.snap_rect(rect)));
+            tool.report.push(inside.end(place.doc(pointer.pos), pointer.mods, place.zoom(), &mut |rect| moved_selection_snap(cx, rect)));
             return;
         }
         let event = tool.draft.release(sample(pointer, &place));

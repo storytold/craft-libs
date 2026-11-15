@@ -57,3 +57,14 @@ fn scopes_merge_by_the_table_and_follow_the_ui_tree() {
         assert!(ui.is_enabled(), "the parent Ui is untouched by the scope");
     });
 }
+
+/// The pointer reach is the theme's hit target, read the same from a scope and from the context outside any `Ui`.
+#[trial]
+fn the_hit_reach_is_one_read_in_a_scope_and_from_the_context() {
+    let mut frames = Frames::new();
+    frames.frame(vec![], |ui| {
+        let reach = Env::of(ui).hit_reach();
+        assert!(reach > 0.0);
+        assert_eq!(Env::root_hit_reach(ui.ctx()), reach);
+    });
+}

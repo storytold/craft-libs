@@ -110,7 +110,8 @@ impl WindowHost {
         screenshot::facts(&self.ctx, viewport)
     }
 
-    /// Queues a pointer move to `at` in `viewport` with `mods` held, delivered on a pass of its own; the modifiers
+    /// Queues a pointer move to `at` in `viewport`; `at` is finite (the request that carries it refuses a NaN or infinite
+    /// position) and the same holds for every `inject_*` position below with `mods` held, delivered on a pass of its own; the modifiers
     /// stay held after it, and a button held by earlier injected input stays down, so the move drags. With `rest`
     /// (seconds) the input counts as processed only once the pointer has rested that long.
     pub fn inject_move(&self, viewport: ViewportId, at: Pos2, mods: Mods, rest: f64) {

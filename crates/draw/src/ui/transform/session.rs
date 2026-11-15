@@ -53,6 +53,14 @@ pub trait TransformWarp: Clone + PartialEq + Send + Sync + 'static {
     /// An app whose type layers commit an identity warp (a Warp Text set back to None) answers
     /// false for those.
     fn is_identity(&self) -> bool;
+
+    /// The source frame the warp is made on, when it is not the session's: a stored smart warp is edited over the
+    /// unwarped source, whose frame differs from the bounds of its warped render the session opened on. The session
+    /// takes it as its frame, with the box on its corners, in the step that enters the warp, and gives the frame and
+    /// box back when the warp is left. `None` (the default): the warp follows the session's own frame and box.
+    fn frame(&self) -> Option<Rect> {
+        None
+    }
 }
 
 /// No warp: a session that never enters the Warp phase (VectorCraft's Free Transform, Content-Aware
@@ -156,6 +164,10 @@ pub struct TransformResult<W> {
 /// and changing one of them is no undo step of its own.
 #[derive(Clone, Debug, PartialEq)]
 struct TransformDraft<W> {
+    /// The source frame: the session's own, or a stored warp's ([`TransformWarp::frame`]) while it is open.
+    frame: Rect,
+    /// The frame and box the session had before a warp with its own frame replaced them, for `LeaveWarp`.
+    unwarped: Option<(Rect, BoxState)>,
     state: BoxState,
     skew_v: f64,
     warp: Option<W>,
@@ -173,8 +185,6 @@ struct TransformDraft<W> {
 /// - No serde (LC7): the app builds its own record from the getters.
 #[derive(Clone, Debug)]
 pub struct TransformSession<W = ()> {
-    /// The source frame (the layer's bounds); fixed for the session.
-    rect: Rect,
     /// What the content allows (type refuses distort and perspective).
     allow: BoxAllow,
     draft: TransformDraft<W>,
@@ -207,9 +217,8 @@ impl<W: TransformWarp> TransformSession<W> {
     /// A session on `rect` whose box starts at `state`: Content-Aware Move's placed box, a box
     /// reopened after a failed commit.
     pub fn with_state(rect: Rect, state: BoxState) -> Self {
-        let draft = TransformDraft { state, skew_v: 0.0, warp: None };
+        let draft = TransformDraft { frame: rect, unwarped: None, state, skew_v: 0.0, warp: None };
         Self {
-            rect,
             allow: BoxAllow::default(),
             history: EditHistory::new(&draft),
             rested: draft.clone(),
@@ -252,9 +261,9 @@ impl<W: TransformWarp> TransformSession<W> {
         self
     }
 
-    /// The source frame.
+    /// The source frame: the one the session opened on, or the open warp's own ([`TransformWarp::frame`]).
     pub fn rect(&self) -> Rect {
-        self.rect
+        self.draft.frame
     }
 
     /// The box.
@@ -320,13 +329,13 @@ impl<W: TransformWarp> TransformSession<W> {
     pub fn homography(&self) -> Option<Homography> {
         // pc: crates/ui-egui/src/tools/transform_tool/draw.rs:113 (`Homography::rect_to_quad` of
         // the unit square, then the box).
-        let (w, h) = (self.rect.width(), self.rect.height());
+        let (w, h) = (self.draft.frame.width(), self.draft.frame.height());
         if !(w.abs() > 1e-9 && h.abs() > 1e-9) {
             return None;
         }
         let unit = Homography::unit_to_quad(self.draft.state.quad)?;
         // The box's map after the frame's affine map onto the unit square.
-        let (x0, y0) = (self.rect.x0, self.rect.y0);
+        let (x0, y0) = (self.draft.frame.x0, self.draft.frame.y0);
         let row = |i: usize| {
             let r = unit.row(i);
             [r[0] / w, r[1] / h, r[2] - r[0] * x0 / w - r[1] * y0 / h]
@@ -353,7 +362,7 @@ impl<W: TransformWarp> TransformSession<W> {
         // the frame's corners).
         match &self.draft.warp {
             Some(warp) => warp.is_identity(),
-            None => self.draft.state.quad == BoxState::from_rect(self.rect).quad,
+            None => self.draft.state.quad == BoxState::from_rect(self.draft.frame).quad,
         }
     }
 
@@ -363,7 +372,7 @@ impl<W: TransformWarp> TransformSession<W> {
         if self.is_untouched() {
             return None;
         }
-        Some(TransformResult { rect: self.rect, state: self.draft.state, interpolation: self.interpolation, warp: self.draft.warp.clone() })
+        Some(TransformResult { rect: self.draft.frame, state: self.draft.state, interpolation: self.interpolation, warp: self.draft.warp.clone() })
     }
 
     /// Applies one edit; `now` is the pass's input time in seconds (the nudge pause reads it).
@@ -411,11 +420,26 @@ impl<W: TransformWarp> TransformSession<W> {
             TransformEdit::Pivot(anchor) => self.draft.state.pivot = self.draft.state.point_at(anchor),
             TransformEdit::WarpRequested => {
                 if self.allow.warp && self.draft.warp.is_none() {
-                    return Some(TransformRequest::NeedWarp { rect: self.rect, state: self.draft.state });
+                    return Some(TransformRequest::NeedWarp { rect: self.draft.frame, state: self.draft.state });
                 }
             }
-            TransformEdit::Warp(warp) => self.draft.warp = Some(warp),
-            TransformEdit::LeaveWarp => self.draft.warp = None,
+            TransformEdit::Warp(warp) => {
+                if self.draft.warp.is_none()
+                    && let Some(frame) = warp.frame()
+                {
+                    self.draft.unwarped = Some((self.draft.frame, self.draft.state));
+                    self.draft.frame = frame;
+                    self.draft.state = BoxState::from_rect(frame);
+                }
+                self.draft.warp = Some(warp);
+            }
+            TransformEdit::LeaveWarp => {
+                if let Some((frame, state)) = self.draft.unwarped.take() {
+                    self.draft.frame = frame;
+                    self.draft.state = state;
+                }
+                self.draft.warp = None;
+            }
         }
         None
     }

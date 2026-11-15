@@ -334,6 +334,14 @@ impl SnapTargets {
     /// The offset that moves `rect` so its nearest edge or centre meets a target on each axis,
     /// with the lines to draw. Edges win over centres at equal distance.
     pub fn snap_rect(&self, rect: Rect, tolerance: f64) -> (Vec2, Vec<SnapLine>) {
+        self.snap_rect_of(rect, tolerance, SnapKinds::ALL)
+    }
+
+    /// [`snap_rect`](Self::snap_rect) to the targets of a kind in `kinds` only (moving a selection skips the selection's
+    /// own edges).
+    ///
+    /// Public: craft-ui-canvas's `Snap::rect` filters through it.
+    pub fn snap_rect_of(&self, rect: Rect, tolerance: f64, kinds: SnapKinds) -> (Vec2, Vec<SnapLine>) {
         let mut delta = Vec2::ZERO;
         let mut lines = Vec::new();
         let rect = rect.abs();
@@ -346,7 +354,7 @@ impl SnapTargets {
             let anchors = [lo, hi, (lo + hi) / 2.0];
             let mut best: Option<f64> = None;
             for anchor in anchors {
-                if let Some(t) = self.nearest(along, anchor, tolerance) {
+                if let Some(t) = self.nearest_of(along, anchor, tolerance, kinds) {
                     let d = t.position - anchor;
                     if best.is_none_or(|b| d.abs() < b.abs() - TIE) {
                         best = Some(d);
@@ -363,7 +371,7 @@ impl SnapTargets {
                 let hit = self
                     .targets
                     .iter()
-                    .filter(|t| t.along == along && (t.position - moved).abs() < 1e-6)
+                    .filter(|t| t.along == along && kinds.contains(t.kind) && (t.position - moved).abs() < 1e-6)
                     .min_by_key(|t| u8::from(t.kind != SnapKind::Guide));
                 if let Some(t) = hit {
                     lines.push(line(t, other.0, other.1));

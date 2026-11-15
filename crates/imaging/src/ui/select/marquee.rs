@@ -10,7 +10,7 @@ use craft_ui::primitives::Draw;
 use egui::Pos2;
 use kurbo::{Point, Rect, Vec2};
 
-use super::drag::{InsideDrag, PressRule, cursor_over, drag_kind};
+use super::drag::{InsideDrag, PressRule, cursor_over, drag_kind, moved_selection_snap};
 use super::{Place, Report, SelectEvent, SelectPhase, SelectToolPass, SelectWords, SelectionProbe, SelectionShape};
 
 /// The points that approximate an ellipse's ants.
@@ -320,7 +320,7 @@ impl CanvasTool for SelectToolPass<'_, MarqueeTool> {
         let Some(place) = Place::of(cx) else { return };
         let raw = place.doc(pointer.pos);
         if let Some(inside) = tool.inside.as_mut() {
-            if let Some(event) = inside.drag(raw, pointer.mods, place.zoom(), &mut |rect| cx.snap_rect(rect)) {
+            if let Some(event) = inside.drag(raw, pointer.mods, place.zoom(), &mut |rect| moved_selection_snap(cx, rect)) {
                 tool.report.push(event);
             }
             return;
@@ -341,7 +341,7 @@ impl CanvasTool for SelectToolPass<'_, MarqueeTool> {
         if let Some(inside) = tool.inside.take() {
             let line = tool.line.take();
             let unmoved = inside.clone();
-            let event = inside.end(raw, pointer.mods, place.zoom(), &mut |rect| cx.snap_rect(rect));
+            let event = inside.end(raw, pointer.mods, place.zoom(), &mut |rect| moved_selection_snap(cx, rect));
             let still = matches!(&event, SelectEvent::DragSelection(EditEvent::Commit { after, .. }) if after.delta == [0, 0]);
             let picked = line.filter(|_| still).and_then(|line| Some((single_line(tool.kind, line.size, line.at)?, line.operation)));
             match picked {

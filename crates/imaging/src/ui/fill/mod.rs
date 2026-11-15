@@ -927,7 +927,7 @@ impl FullWindowWorkspace for ContentAwareFillWorkspace {
     }
 
     /// A settings key, a bar key of [`json_fields`](Self::json_fields), or an action: `stroke` (`{points, size?, alt?}`),
-    /// `lasso` (`{points, op}`), `reset` (`"all"`, `"fillArea"`, `"sampling"`), `undo`, `redo` and `apply` (each `true`).
+    /// `lasso` (`{points, op}`), `expand` and `contract` (pixels, 1..=100: the fill area grows or shrinks by that), `reset` (`"all"`, `"fillArea"`, `"sampling"`), `undo`, `redo` and `apply` (each `true`).
     /// A stroke or lasso edit goes through the limits like the canvas's; one a limit refuses is rejected and the panel
     /// shows the limit.
     fn set_json_field(&mut self, ctx: &Context, _source: &Self::Source, field: &str, value: serde_json::Value) -> Result<(), String> {
@@ -951,6 +951,10 @@ impl FullWindowWorkspace for ContentAwareFillWorkspace {
             "expandBy" => {
                 let by = value.as_f64().ok_or_else(|| rejects(&value))?;
                 self.options.grow_by = by.clamp(FillAreaEdit::GROW_RANGE.0, FillAreaEdit::GROW_RANGE.1);
+            }
+            "expand" | "contract" => {
+                let by = value.as_f64().filter(|by| by.is_finite()).ok_or_else(|| rejects(&value))?;
+                self.perform(FillOp::FillArea(FillAreaEdit::grow(field == "expand", by))).map_err(|limit| limit.message(&Env::of_root(ctx)))?;
             }
             "sampling" => {
                 let mode = serde_json::from_value::<SamplingMode>(value.clone()).map_err(|_| rejects(&value))?;

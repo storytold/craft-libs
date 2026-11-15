@@ -56,18 +56,22 @@ pub fn fillet(prev: Point, vertex: Point, next: Point, radius: f64) -> Option<Fi
     };
     let (u1, l1) = unit(prev)?;
     let (u2, l2) = unit(next)?;
-    let half = u1.dot(u2).clamp(-1.0, 1.0).acos() / 2.0;
+    let cos = u1.dot(u2).clamp(-1.0, 1.0);
+    let half = cos.acos() / 2.0;
     if !(1e-6..=FRAC_PI_2 - 1e-6).contains(&half) {
         return None;
     }
-    let radius = radius.min(l1.min(l2) / 2.0 * half.tan());
+    // tan(half) from the cosine by the half-angle identity, so a right angle is exactly 1 and a rectangle's cap is
+    // exactly min(w, h) / 2 (`half.tan()` of a right angle is a few ulps off).
+    let tan = ((1.0 - cos) / (1.0 + cos)).sqrt();
+    let radius = radius.min(l1.min(l2) / 2.0 * tan);
     let sum = u1 + u2;
     let len = sum.hypot();
     if len < 1e-9 {
         return None;
     }
     let bisector = sum / len;
-    let tangent = radius / half.tan();
+    let tangent = radius / tan;
     Some(Fillet {
         centre: vertex + bisector * (radius / half.sin()),
         from: vertex + u1 * tangent,

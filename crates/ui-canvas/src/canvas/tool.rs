@@ -10,7 +10,7 @@ use crate::primitives::{ContentPainterCx, Draw};
 use crate::runtime::env::{Direction, Env, Label, MotionPolicy, PointSize, UnitWords, Units, WordSet, Words};
 use crate::runtime::motion::loop_phase;
 use crate::style::StyleCx;
-use craft_behavior::geometry::SnapLine;
+use craft_behavior::geometry::{SnapKinds, SnapLine};
 use craft_behavior::kurbo::{self, Point};
 use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GestureId, PointerButton, PointerSample};
 use craft_i18n::{Digits, Format, Region};
@@ -424,8 +424,14 @@ impl<'a> ToolContext<'a> {
     /// The offset that moves `rect` (document units) onto a View > Snap To target with the modifiers held now; zero
     /// when Control suspends snapping or the canvas has no snap.
     pub fn snap_rect(&mut self, rect: kurbo::Rect) -> kurbo::Vec2 {
+        self.snap_rect_of(rect, SnapKinds::ALL)
+    }
+
+    /// [`snap_rect`](Self::snap_rect) to the targets of a kind in `kinds` only: moving a selection leaves out the
+    /// selection's own edges.
+    pub fn snap_rect_of(&mut self, rect: kurbo::Rect, kinds: SnapKinds) -> kurbo::Vec2 {
         let Some(snap) = self.snap else { return kurbo::Vec2::ZERO };
-        let (offset, lines) = snap.rect(rect, self.mods);
+        let (offset, lines) = snap.rect_of(rect, self.mods, kinds);
         self.requests.snapped.extend(lines);
         offset
     }
@@ -478,7 +484,7 @@ impl<'a> ToolContext<'a> {
     /// without an env.
     pub fn reach(&self) -> f32 {
         match self.env {
-            Some(env) => env.tokens.size.hit.target,
+            Some(env) => env.hit_reach(),
             None => crate::runtime::frame::resolved_hit(&craft_theme::AppSizes::default()).target,
         }
     }

@@ -176,7 +176,8 @@ impl ToneChannel {
 }
 
 /// The channels a Levels or Curves panel lists, in Channel-select order; a histogram, a Levels
-/// value or a curve of the host is addressed by the same index.
+/// value or a curve of the host is addressed by the same index. The list is empty for an action whose target is
+/// unresolved ([`listed`](Self::listed) with no channel); the panels then draw no Channel select.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ToneChannels {
     channels: Vec<ToneChannel>,
@@ -232,7 +233,8 @@ impl ToneChannels {
         self.channels.len()
     }
 
-    /// Whether the list is empty (never for [`of`](Self::of) and [`isolated`](Self::isolated)).
+    /// Whether the list is empty ([`listed`](Self::listed) with none); never for
+    /// [`of`](Self::of) and [`isolated`](Self::isolated).
     pub fn is_empty(&self) -> bool {
         self.channels.is_empty()
     }

@@ -138,3 +138,34 @@ fn the_homography_maps_the_frame_onto_the_box() {
     s.apply(TransformEdit::Box(set(line)), 0.0);
     assert!(s.homography().is_none());
 }
+
+#[derive(Clone, Debug, PartialEq)]
+struct Framed(Rect);
+
+impl TransformWarp for Framed {
+    fn is_identity(&self) -> bool {
+        false
+    }
+
+    fn frame(&self) -> Option<Rect> {
+        Some(self.0)
+    }
+}
+
+/// A warp with its own frame takes the session's frame and box in the step that enters it; leaving the warp, Undo and
+/// Redo give the frame and the box back in step with the warp.
+#[trial]
+fn a_warp_with_its_own_frame_takes_the_frame_and_gives_it_back() {
+    let inner = Rect::new(20.0, 10.0, 120.0, 60.0);
+    let mut s = TransformSession::<Framed>::new(FRAME);
+    s.apply(TransformEdit::Warp(Framed(inner)), 0.0);
+    s.settle(0.0, false);
+    assert_eq!((s.rect(), s.state().quad), (inner, BoxState::from_rect(inner).quad));
+    assert!(!s.is_untouched());
+    assert!(s.undo());
+    assert_eq!((s.rect(), s.state().quad), (FRAME, BoxState::from_rect(FRAME).quad), "undo restores frame and box with the warp");
+    assert!(s.redo());
+    assert_eq!(s.rect(), inner);
+    s.apply(TransformEdit::LeaveWarp, 1.0);
+    assert_eq!((s.rect(), s.state().quad), (FRAME, BoxState::from_rect(FRAME).quad));
+}

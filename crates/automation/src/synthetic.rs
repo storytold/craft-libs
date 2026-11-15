@@ -46,6 +46,9 @@ pub const NO_DOCUMENT: &str = "no document canvas to place document coordinates 
 /// The error of a document point whose place on the screen is beyond [`MAX_SCREEN_POINT`].
 pub const OFF_SCREEN: &str = "the document point is too far off the screen";
 
+/// The error of a point that is not finite (NaN or infinite): refused at the request, never queued.
+pub const NOT_FINITE: &str = "the point must be finite";
+
 /// The application's map from a document point to the screen point its canvas shows it at; `None` when no canvas
 /// shows a document. Applications without documents pass `&|_| None`.
 pub type DocumentMap<'a> = &'a dyn Fn(Pos2) -> Option<Pos2>;
@@ -73,10 +76,12 @@ impl At {
     }
 
     /// The screen point, through `map` for a document point; [`NO_DOCUMENT`] when the map has none, and
-    /// [`OFF_SCREEN`] when it maps beyond [`MAX_SCREEN_POINT`].
+    /// [`OFF_SCREEN`] when it maps beyond [`MAX_SCREEN_POINT`]; a point that is not finite is [`NOT_FINITE`].
     pub fn resolve(self, map: DocumentMap<'_>) -> Result<Pos2, String> {
         match self {
-            Self::Screen(at) => Ok(at),
+            Self::Screen(at) if at.x.is_finite() && at.y.is_finite() => Ok(at),
+            Self::Screen(_) => Err(NOT_FINITE.to_owned()),
+            Self::Document(at) if !(at.x.is_finite() && at.y.is_finite()) => Err(NOT_FINITE.to_owned()),
             Self::Document(at) => {
                 let on_screen = map(at).ok_or_else(|| NO_DOCUMENT.to_owned())?;
                 let within = |v: f32| v.is_finite() && f64::from(v.abs()) <= MAX_SCREEN_POINT;

@@ -285,3 +285,18 @@ fn a_curvature_resume_keeps_the_carried_knots_and_replace_updates_the_draft() {
 }
 
 // ---- Path modes and Path Options ----
+
+/// A host that ended the draft itself hands in no draft: the pen drops its run without an event, and the next press
+/// starts a new draft rather than carrying on the ended one.
+#[trial]
+fn a_draft_the_host_ended_is_not_carried_on() {
+    let mut pen = pen();
+    pen.click_doc(100.0, 100.0);
+    pen.click_doc(200.0, 100.0);
+    assert_eq!(pen.draft().knots.len(), 2);
+    pen.fixture.tool_mut().draft(None);
+    assert!(pen.fixture.tool_mut().take_events().is_empty(), "the host ended it: the pen reports nothing");
+    pen.log.clear();
+    pen.click_doc(100.0, 200.0);
+    assert_eq!(pen.draft().knots.len(), 1, "a new draft");
+}

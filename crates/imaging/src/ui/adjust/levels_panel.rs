@@ -199,10 +199,13 @@ impl<'a> LevelsPanel<'a> {
             let mut picked = channel;
             let mut auto = false;
             Row::new().show(ui, |ui, _| {
-                Text::new(words.channel.clone()).shade(Shade::Muted).role(TypeRole::Label).show(ui);
-                let select = Select::new(words.channel.clone(), Bind::given(channel), &entries).sizing(Sizing::Content).show(ui);
-                if let Some(&at) = select.value() {
-                    picked = at;
+                // No channels (an action whose target is unresolved): no Channel select.
+                if !entries.is_empty() {
+                    Text::new(words.channel.clone()).shade(Shade::Muted).role(TypeRole::Label).show(ui);
+                    let select = Select::new(words.channel.clone(), Bind::given(channel), &entries).sizing(Sizing::Content).show(ui);
+                    if let Some(&at) = select.value() {
+                        picked = at;
+                    }
                 }
                 auto = clicked(&Button::new(words.auto.clone()).enabled(counts.is_some()).show(ui));
             });
