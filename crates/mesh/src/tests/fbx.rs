@@ -771,6 +771,9 @@ fn fbx_corner_colors_keep_seams_and_incomplete_layers_are_omitted() {
     assert!(colors.contains(&[1.0, 0.0, 1.0, 1.0]));
     let incomplete = text.replace(", 1,0,1,1\n}", "\n}");
     assert!(parse(incomplete.as_bytes()).unwrap().meshes[0].colors.is_empty());
+}
+
+#[test]
 fn ascii_budget_applies_while_reading_values_and_records() {
     let limits = Limits { max_data_bytes: 512, ..Limits::default() };
     let many_values = format!("Objects: {{\n A: {}\n}}", "1,".repeat(1000));
