@@ -148,4 +148,10 @@ impl LivePreview {
         // `now - changed < ms`); crates/ui-egui/src/canvas/navigator.rs:13 `NAVIGATOR_SETTLE_MS` (200).
         self.last.is_some_and(|(key, changed)| !key.is_none() && now - changed < within)
     }
+
+    /// The seconds left until [`settling`](Self::settling) turns false, while it is true: when a
+    /// host waiting out the debounce asks for its next frame.
+    pub fn settles_in(&self, now: f64, within: f64) -> Option<f64> {
+        self.last.filter(|(key, _)| !key.is_none()).map(|(_, changed)| changed + within - now).filter(|left| *left > 0.0)
+    }
 }
