@@ -42,6 +42,7 @@ No default features. The shared types (`AudioBuffer`, `AudioInfo`, `ChannelLayou
 | `mpa-decode` | `mpa::Decoder` | craft-media `bitstream` |
 | `mp3-decode` | `mp3::Decoder`, `mp3::InfoTag` | `mpa-decode` |
 | `mp3-encode` | `mp3::Encoder`; `encode`, `FileEncoder` for MP3 | craft-media `bitstream` |
+| `adpcm` | `adpcm::{ima, ms, yamaha, swf}`: decoders and encoders for IMA WAV, Microsoft, Yamaha and Flash ADPCM | craft-media `bitstream` |
 | `peaks` | `peaks::Peaks` | none |
 | `rayon` | parallel AAC encoding (with `aac-encode`) | `rayon` |
 | `serde` | `Serialize`/`Deserialize` on the shared types | `serde` |
