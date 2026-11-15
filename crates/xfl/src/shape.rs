@@ -101,15 +101,15 @@ impl Matrix {
     pub const IDENTITY: Matrix = Matrix { a: 1.0, b: 0.0, c: 0.0, d: 1.0, tx: 0.0, ty: 0.0 };
 }
 
-fn number(element: &impl XflElement, name: &str) -> Option<f32> {
+pub(crate) fn number(element: &impl XflElement, name: &str) -> Option<f32> {
     element.attr(name)?.trim().parse::<f32>().ok().filter(|value| value.is_finite())
 }
 
-fn integer(element: &impl XflElement, name: &str) -> Option<u32> {
+pub(crate) fn integer(element: &impl XflElement, name: &str) -> Option<u32> {
     element.attr(name)?.trim().parse::<u32>().ok()
 }
 
-fn boolean(element: &impl XflElement, name: &str) -> Option<bool> {
+pub(crate) fn boolean(element: &impl XflElement, name: &str) -> Option<bool> {
     element.attr(name).map(|value| value.trim() == "true")
 }
 
