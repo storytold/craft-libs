@@ -676,3 +676,18 @@ Connections: {
     let limits = Limits { max_extras: 1, ..Limits::default() };
     assert!(matches!(read(text.as_bytes(), &limits, &mut no_external), Err(Error::TooLarge(_))));
 }
+
+#[test]
+fn all_connected_and_unplaced_geometries_are_instances() {
+    let geometry = |id| format!("Geometry: {id}, \"Geometry::Part{id}\", \"Mesh\" {{ Vertices: 0,0,0,1,0,0,0,1,0 PolygonVertexIndex: 0,1,-3 }}\n");
+    let text = format!(
+        "FBXHeaderExtension: {{ FBXVersion: 7400 }}\nObjects: {{\n{}{}{} Model: 10, \"Model::M\", \"Mesh\" {{}} }}\nConnections: {{ C: \"OO\",1,10 C: \"OO\",2,10 C: \"OO\",2,10 }}",
+        geometry(1),
+        geometry(2),
+        geometry(3)
+    );
+    let scene = parse(text.as_bytes()).unwrap();
+    assert_eq!(scene.meshes.len(), 3);
+    assert_eq!(scene.instances(&Limits::default()).unwrap().len(), 3);
+    assert_eq!(scene.roots.len(), 2);
+}
