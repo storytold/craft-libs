@@ -253,9 +253,10 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
         self
     }
 
-    /// The face the value is set in: monospace, whose digits share one advance so values keep their places as they
-    /// change (the default), or the UI body face. The face is the one the field measures its value in, paints it in and
-    /// edits it in, so the room a value takes is the room its text and caret fill.
+    /// The type role the value is set in: the monospace role, whose digits share one advance so values keep their places
+    /// as they change (the default), or the UI body role, whose face **and** size the value then takes. The role is the
+    /// one the field measures its value in, paints it in and edits it in, so the room a value takes is the room its text
+    /// and caret fill.
     #[must_use]
     pub fn mono(mut self, mono: bool) -> Self {
         self.options.mono = mono;

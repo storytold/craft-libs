@@ -109,8 +109,8 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     out.inner.flatten().map(StoryOutput::from).unwrap_or_default()
 }
 
-/// The two presentation choices on their own and together: the value centred or started at the reading start, set in the
-/// monospace face or the UI body face, over the same range.
+/// The two presentation choices on their own and together: the value centred or started at the logical reading start, set
+/// in the monospace role or the UI body role (face and size), over the same range.
 #[story(NumberField<'static>, covers = [], drive = Drive::Type("42"))]
 fn number_field_presentation(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let out = FieldGroup::new("Number field presentation").show(ui, |ui, _| {
