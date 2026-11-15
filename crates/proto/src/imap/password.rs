@@ -3,6 +3,7 @@
 //! Password authentication from RFC 4616 and RFC 4959, over an already secured stream.
 
 use super::*;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 impl<S: Read + Write> Imap<S> {
     /// Prefer the server's advertised PLAIN mechanism; otherwise use LOGIN. The host must
@@ -28,7 +29,7 @@ impl<S: Read + Write> Imap<S> {
             return Err(ProtoError::Auth(said!("the user name or password is too long")));
         }
         // Empty authorization identity: the server derives it from the authentication identity.
-        let response = encoding_rs::UTF_8.encode(format!("\0{user}\0{password}").as_bytes());
+        let response = STANDARD.encode(format!("\0{user}\0{password}").as_bytes());
         self.secrets.add(password);
         self.secrets.add(&response);
         let inline = self.offers("SASL-IR");

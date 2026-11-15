@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Test streams: a scripted server, and a stream that only fails.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use std::io::{Error, ErrorKind, Read, Write};
 
 /// A canned server: reads hand out what the server "says" (a few bytes at a time, so every

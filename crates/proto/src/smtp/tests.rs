@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: MailCraft contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::io::ErrorKind;
 
 use proptest::prelude::*;

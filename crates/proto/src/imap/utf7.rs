@@ -110,6 +110,7 @@ fn flush(pending: &mut Vec<u16>, out: &mut String) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use proptest::prelude::*;
 
     use super::*;

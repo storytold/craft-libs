@@ -13,8 +13,8 @@ use std::io::{Read, Write};
 
 use super::Imap;
 use super::parse;
-use crate::{ProtoError, for_trace};
 use crate::i18n::{Arg, said};
+use crate::{ProtoError, for_trace};
 
 /// Most lines [`Imap::idle_end`] reads on the way to the command's end.
 const MAX_ENDING: usize = 256;

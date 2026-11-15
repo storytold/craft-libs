@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Gmail's labels of a message (`X-GM-LABELS`, Google's "Gmail IMAP extensions", #1153).
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use proptest::prelude::*;
 
 use super::*;

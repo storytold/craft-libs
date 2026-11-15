@@ -30,9 +30,10 @@ use std::io::{Read, Write};
 use parse::{Piece, Status, StatusLine, Value};
 pub use utf7::{decode_utf7, encode_utf7};
 
+use crate::i18n::{Arg, Text};
 use crate::line::Wire;
+use crate::said;
 use crate::{MAX_LINE, MAX_LITERAL, ProtoError, Secrets, for_trace, tidy, xoauth2};
-use crate::i18n::{Arg, Text, said};
 
 /// Most responses the server may send to one command.
 const MAX_RESPONSES: usize = 250_000;

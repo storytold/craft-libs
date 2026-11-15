@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: MailCraft contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use proptest::prelude::*;
 
 use super::*;

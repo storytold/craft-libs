@@ -11,6 +11,8 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+base64 = "0.23"
+zeroize = "1"
 # Character set decoding (WHATWG Encoding Standard) and base64.
 encoding_rs = { workspace = true }
 # Internationalization: error messages and user-facing text.

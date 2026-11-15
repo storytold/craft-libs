@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: MailCraft contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! What one command may make the client keep or read, however much the server sends.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use proptest::prelude::*;
 
 use super::*;

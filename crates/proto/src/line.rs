@@ -4,8 +4,8 @@
 
 use std::io::{ErrorKind, Read, Write};
 
+use crate::said;
 use crate::{MAX_LINE, MAX_LITERAL, ProtoError};
-use craft_proto::said;
 
 /// How much is asked of the stream in one read.
 const CHUNK: usize = 16 * 1024;
@@ -223,6 +223,7 @@ fn read_some<S: Read>(stream: &mut S, buf: &mut [u8]) -> Result<usize, ProtoErro
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use crate::script::{Broken, Script};
 

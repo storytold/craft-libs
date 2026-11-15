@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Gmail's IMAP extensions (#911): `X-GM-MSGID` and `X-GM-RAW`.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
 use crate::script::Script;
 

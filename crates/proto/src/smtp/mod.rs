@@ -4,11 +4,12 @@
 
 use std::io::{Read, Write};
 
-use encoding_rs::UTF_8;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 
+use crate::i18n::{Arg, Text};
 use crate::line::Wire;
+use crate::said;
 use crate::{ProtoError, Secrets, for_trace, tidy, xoauth2};
-use crate::i18n::{Arg, Text, said};
 
 /// Most lines one reply may have.
 const MAX_REPLY_LINES: usize = 256;

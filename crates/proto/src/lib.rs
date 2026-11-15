@@ -13,7 +13,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-mod i18n;
+pub mod i18n;
 pub mod imap;
 mod line;
 pub mod smtp;
@@ -21,9 +21,9 @@ pub mod smtp;
 #[cfg(test)]
 mod script;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use i18n::{Arg, Text};
 
-pub use i18n::said;
 pub(crate) use i18n::{for_trace, tidy};
 
 /// Longest line a server may send.
@@ -35,7 +35,7 @@ const MAX_XOAUTH2: usize = 32 * 1024;
 
 /// What went wrong. Each holds the reason as a [`Text`]: Craft's own words are a template
 /// displayed in its language ([`said!`]), and what a server or the system said is kept as
-/// it said it ([`Text::verbatim`]). The English ([`Display`](fmt::Display)) is what the CLI, MCP
+/// it said it ([`Text::verbatim`]). The English ([`Display`](std::fmt::Display)) is what the CLI, MCP
 /// and the log read, and it is the same either way.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,40 +73,53 @@ impl std::fmt::Display for ProtoError {
 impl std::error::Error for ProtoError {}
 
 /// Secrets: passwords and tokens, never shown in logs or errors.
-pub(crate) struct Secrets(Vec<String>);
+#[derive(Default)]
+pub(crate) struct Secrets(Vec<zeroize::Zeroizing<String>>);
 
 impl Secrets {
-    pub(crate) fn new() -> Self {
-        Secrets(Vec::new())
-    }
-
     pub(crate) fn add(&mut self, secret: &str) {
-        if !secret.is_empty() {
-            self.0.push(secret.to_string());
+        if !secret.is_empty() && !self.0.iter().any(|s| s.as_str() == secret) {
+            self.0.push(zeroize::Zeroizing::new(secret.to_owned()));
+            // Longer overlapping secrets must be hidden before their prefixes.
+            self.0.sort_by_key(|s| std::cmp::Reverse(s.len()));
         }
     }
 
-    pub(crate) fn clear(&mut self) {
-        self.0.clear();
+    pub(crate) fn hide(&self, text: &str) -> String {
+        self.0.iter().fold(text.to_owned(), |text, secret| text.replace(secret.as_str(), "***"))
     }
 }
 
-impl Drop for Secrets {
-    fn drop(&mut self) {
-        for s in &mut self.0 {
-            unsafe { std::ptr::write_bytes(s.as_mut_ptr(), 0, s.len()) };
-        }
+/// Build a bounded, base64-encoded SASL XOAUTH2 initial response.
+pub(crate) fn xoauth2(user: &str, token: &str) -> Result<String, ProtoError> {
+    if user.is_empty() || token.is_empty() || user.chars().chain(token.chars()).any(char::is_control) {
+        return Err(ProtoError::Auth(said!("the user name or token has a character that can't be sent")));
     }
-}
-
-/// Generate an XOAUTH2 authorization string.
-pub(crate) fn xoauth2(user: &str, token: &str) -> String {
-    encoding_rs::UTF_8.encode(&format!("user={user}\x01auth=Bearer {token}\x01\x01")).0.into_owned()
+    if user.len().saturating_add(token.len()) > MAX_XOAUTH2 {
+        return Err(ProtoError::Auth(said!("the user name or token is too long")));
+    }
+    let plain = zeroize::Zeroizing::new(format!("user={user}\x01auth=Bearer {token}\x01\x01"));
+    Ok(STANDARD.encode(plain.as_bytes()))
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
+
+    #[test]
+    fn secrets_redact_overlapping_values() {
+        let mut secrets = Secrets::default();
+        secrets.add("token");
+        secrets.add("token-long");
+        assert_eq!(secrets.hide("token-long token"), "*** ***");
+    }
+
+    #[test]
+    fn xoauth2_rejects_injection_and_oversized_values() {
+        assert!(xoauth2("user\x01auth=Bearer injected", "token").is_err());
+        assert!(xoauth2("user", &"x".repeat(MAX_XOAUTH2)).is_err());
+    }
 
     #[test]
     fn error_display() {
@@ -122,7 +135,8 @@ mod tests {
 
     #[test]
     fn xoauth2_format() {
-        let result = xoauth2("user@example.com", "token123");
+        let result = xoauth2("user@example.com", "token123").unwrap();
+        let result = String::from_utf8(STANDARD.decode(result).unwrap()).unwrap();
         assert!(result.contains("user=user@example.com"));
         assert!(result.contains("auth=Bearer token123"));
     }

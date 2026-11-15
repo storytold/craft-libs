@@ -9,8 +9,8 @@ use std::io::{Read, Write};
 
 use super::parse::{Status, Value};
 use super::{Command, Imap, MAX_COMMAND_TEXT, MAX_QUOTED, Part, Response};
-use crate::{ProtoError, for_trace};
 use crate::i18n::said;
+use crate::{ProtoError, for_trace};
 
 /// Most mailboxes asked in one go: their commands are a few kilobytes at most, so the server
 /// can't be left waiting to be read while we write.
