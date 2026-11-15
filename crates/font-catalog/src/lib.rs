@@ -22,6 +22,7 @@
 
 mod catalog;
 mod env;
+mod face_data;
 mod fallback;
 mod fontconfig;
 mod ligature;
@@ -38,6 +39,7 @@ mod visual_order;
 
 pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch};
 pub use env::{FontEnv, Os, font_dirs, font_store_dir, office_font_dirs};
+pub use face_data::FaceData;
 pub use fallback::{cluster_face, drawable_characters};
 pub use fontconfig::fontconfig_dirs;
 pub use ligature::ligature_caret_stops;
