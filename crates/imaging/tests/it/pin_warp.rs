@@ -288,3 +288,39 @@ fn page_down_steps_to_the_next_pin_and_with_cmd_or_ctrl_leaves_it_to_the_canvas(
     let back = h.view.get().expect("shown");
     assert!(back.rect.contains(back.to_screen(second)), "the pin focus arrived at shows");
 }
+
+#[trial]
+fn a_delete_during_a_pin_drag_ends_the_drag_as_one_step_and_the_next_press_starts_a_fresh_drag() {
+    let original = vec![pin(100.0, 100.0), pin(200.0, 100.0)];
+    let mut h = harness(original.clone(), Vec::new());
+    let (a, b) = (h.at(100.0, 100.0), h.at(100.0, 130.0));
+    h.fixture.frame(vec![pointer::moved(a)]);
+    h.fixture.frame(vec![pointer::press(a)]);
+    h.fixture.frame(vec![pointer::moved(a.lerp(b, 0.5))]);
+    h.fixture.frame(vec![pointer::moved(b)]);
+    h.fixture.key(egui::Key::Delete, Modifiers::NONE);
+    // The pointer keeps moving and releases after the delete: neither is the pin's drag any more.
+    let away = h.at(300.0, 200.0);
+    h.fixture.frame(vec![pointer::moved(away)]);
+    h.fixture.frame(vec![pointer::release(away)]);
+    h.fixture.frame(Vec::new());
+    assert_eq!(h.seen(), [Seen::Begin, Seen::Commit, Seen::Set], "the drag commits, then the delete is its own edit");
+    {
+        let mut held = h.state.borrow_mut();
+        let State { session, solver, .. } = &mut *held;
+        assert_eq!(session.pins(), &original[1..], "the dragged pin is the one deleted");
+        assert!(session.undo(solver));
+        assert_eq!(session.pins(), &[Pin::new(Point::new(100.0, 100.0), Point::new(100.0, 130.0)), original[1]], "the delete keeps the drag's move");
+        assert!(session.undo(solver));
+        assert_eq!(session.pins(), &original[..], "the drag is one step");
+        assert!(!session.can_undo());
+        assert!(session.redo(solver) && session.redo(solver));
+    }
+
+    // The next press drags only the pin under it.
+    h.state.borrow_mut().seen.clear();
+    h.drag((200.0, 100.0), (200.0, 125.0), Modifiers::NONE);
+    let moved = h.state.borrow().session.pins()[0];
+    assert!(moved.at.distance(Point::new(200.0, 125.0)) < 1e-3, "{:?}", moved.at);
+    assert_eq!(h.seen(), [Seen::Begin, Seen::Commit]);
+}

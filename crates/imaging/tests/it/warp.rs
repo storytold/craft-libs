@@ -2,7 +2,7 @@
 
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{CanvasView, EditEvent};
-use craft_imaging::ui::warp::{WarpEdit, WarpGrid, WarpMesh, WarpSplit};
+use craft_imaging::ui::warp::{CylinderValues, CylinderWarp, WarpEdit, WarpGrid, WarpMesh, WarpSplit};
 use craft_ui::canvas::Canvas;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -83,6 +83,17 @@ fn harness_in(mesh: WarpMesh, rotation: f64, flip: bool) -> Harness {
     Harness { fixture, mesh, view, seen, edit, picked }
 }
 
+/// Presses at `from`, moves to `to` in four steps and releases.
+fn drag_frames(fixture: &mut Fixture, from: Pos2, to: Pos2) {
+    fixture.frame(vec![pointer::moved(from)]);
+    fixture.frame(vec![pointer::press(from)]);
+    for step in 1..=4 {
+        fixture.frame(vec![pointer::moved(from + (to - from) * (step as f32 / 4.0))]);
+    }
+    fixture.frame(vec![pointer::release(to)]);
+    fixture.frame(Vec::new());
+}
+
 impl Harness {
     fn screen(&self, p: Point) -> Pos2 {
         self.view.get().expect("drawn").to_screen(p)
@@ -94,13 +105,7 @@ impl Harness {
     }
 
     fn drag(&mut self, from: Pos2, to: Pos2) {
-        self.fixture.frame(vec![pointer::moved(from)]);
-        self.fixture.frame(vec![pointer::press(from)]);
-        for step in 1..=4 {
-            self.fixture.frame(vec![pointer::moved(from + (to - from) * (step as f32 / 4.0))]);
-        }
-        self.fixture.frame(vec![pointer::release(to)]);
-        self.fixture.frame(Vec::new());
+        drag_frames(&mut self.fixture, from, to);
     }
 
     fn click(&mut self, at: Pos2, modifiers: Modifiers) {
@@ -228,4 +233,151 @@ fn an_uneven_split_keeps_the_surface_where_it_was() {
     for (s, t) in [(0.05, 0.2), (0.15, 0.8), (0.4, 0.75), (0.9, 0.95), (0.5, 0.9)] {
         assert!(mesh.eval(s, t).distance(cut.eval(s, t)) < 1e-9, "({s}, {t})");
     }
+}
+
+#[trial]
+fn a_mesh_replaced_during_a_grid_press_cancels_the_press() {
+    let mut h = harness(WarpMesh::identity(RECT, 1, 1));
+    let from = h.screen(Point::new(RECT.x1, RECT.y1));
+    h.fixture.frame(vec![pointer::moved(from)]);
+    h.fixture.frame(vec![pointer::press(from)]);
+    h.fixture.frame(vec![pointer::moved(from + shift(10.0, 6.0))]);
+    h.fixture.frame(vec![pointer::moved(from + shift(14.0, 8.0))]);
+    assert_eq!(h.seen.borrow().first(), Some(&Seen::Begin), "the anchor's drag began");
+    assert_eq!(h.size(), (1, 1));
+
+    // The host splits the mesh while the press runs; the press holds the old mesh's knots.
+    let split = h.mesh().split(WarpSplit::Cross, 0, 0, 0.5, 0.5);
+    *h.mesh.borrow_mut() = split.clone();
+    for step in [shift(30.0, 20.0), shift(40.0, 30.0)] {
+        h.fixture.frame(vec![pointer::moved(from + step)]);
+    }
+    h.fixture.frame(vec![pointer::release(from + shift(40.0, 30.0))]);
+    h.fixture.frame(Vec::new());
+    assert_eq!(h.count(Seen::Cancel), 1, "{:?}", h.seen.borrow());
+    assert_eq!(h.count(Seen::Commit), 0, "the press does not commit over the split");
+    assert_eq!(h.size(), (2, 2), "the moves after the split do not bring the old mesh back");
+    assert_eq!(h.mesh().points, split.points, "and do not move its points");
+}
+
+/// The cylinder editor over `RECT`'s cylinder, with the edit phases it reported.
+struct CylinderHarness {
+    fixture: Fixture,
+    values: Rc<RefCell<CylinderValues>>,
+    view: Rc<Cell<Option<CanvasView>>>,
+    seen: Rc<RefCell<Vec<Seen>>>,
+}
+
+fn cylinder_harness() -> CylinderHarness {
+    let values = Rc::new(RefCell::new(CylinderValues::for_box([RECT.x0, RECT.y0, RECT.x1, RECT.y1])));
+    let view = Rc::new(Cell::new(None));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let shown = (Rc::clone(&values), Rc::clone(&view), Rc::clone(&seen));
+    let mut fixture = Fixture::new(move |ui| {
+        let (values, view, seen) = &shown;
+        let room = ui.available_rect_before_wrap();
+        let centre = Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0);
+        let shown_view = CanvasView::new(room, centre, 1.0);
+        view.set(Some(shown_view));
+        let mesh = WarpMesh::identity(RECT, 1, 1);
+        let canvas = Canvas::new("Document").view(shown_view).show(ui, |ui, body| {
+            let mut held = values.borrow_mut();
+            CylinderWarp::new("Cylinder", Bind::bound(&mut *held), &mesh).show_at(ui, body.rect)
+        });
+        if let Some(output) = canvas.inner {
+            let phases = output.values.events.iter().map(|event| match event {
+                EditEvent::Begin { .. } => Seen::Begin,
+                EditEvent::Update { .. } => Seen::Update,
+                EditEvent::Commit { .. } => Seen::Commit,
+                EditEvent::Cancel { .. } => Seen::Cancel,
+                _ => Seen::Set,
+            });
+            seen.borrow_mut().extend(phases);
+        }
+    });
+    fixture.settle();
+    CylinderHarness { fixture, values, view, seen }
+}
+
+impl CylinderHarness {
+    fn screen(&self, x: f64, y: f64) -> Pos2 {
+        self.view.get().expect("drawn").to_screen(Point::new(x, y))
+    }
+
+    fn values(&self) -> [f64; 7] {
+        self.values.borrow().to_array()
+    }
+
+    fn count(&self, phase: Seen) -> usize {
+        self.seen.borrow().iter().filter(|seen| **seen == phase).count()
+    }
+}
+
+/// `[left, bottom, right, top, top depth, bottom depth, wrap]` near each other.
+fn near(got: [f64; 7], want: [f64; 7], what: &str) {
+    assert!(got.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-3), "{what}: {got:?} against {want:?}");
+}
+
+#[trial]
+fn cylinder_handles_drag_their_values_and_keep_them_sound() {
+    // RECT is 180 wide: the half axis is 90, the centre 190. Depths 0.5, wrap 0.85 (its handle 0.15 of the half axis out).
+    let start = [100.0, 200.0, 280.0, 80.0, 0.5, 0.5, 0.85];
+    let (top_right, bottom_left, bend, bottom, wrap, surface) =
+        ((280.0, 80.0), (100.0, 200.0), (190.0, 125.0), (190.0, 245.0), (203.5, 185.0), (130.0, 160.0));
+    // (handle's place, the drag in document units, the values after)
+    let cases: [((f64, f64), (f32, f32), [f64; 7], &str); 10] = [
+        (top_right, (-30.0, 15.0), [100.0, 200.0, 250.0, 95.0, 0.5, 0.5, 0.85], "the top right corner takes its silhouette and its edge"),
+        (bottom_left, (10.0, -20.0), [110.0, 180.0, 280.0, 80.0, 0.5, 0.5, 0.85], "the bottom left corner takes its silhouette and its edge"),
+        (bend, (0.0, 9.0), [100.0, 200.0, 280.0, 80.0, 0.6, 0.6, 0.85], "Bend moves both depths by the drag over the half axis"),
+        (bend, (0.0, 150.0), [100.0, 200.0, 280.0, 80.0, 1.0, 1.0, 0.85], "a depth stays within the half axis"),
+        (bottom, (0.0, 30.0), [100.0, 230.0, 280.0, 80.0, 0.5, 0.5, 0.85], "Bottom moves the lower edge"),
+        (bottom, (0.0, -150.0), [100.0, 81.0, 280.0, 80.0, 0.5, 0.5, 0.85], "the lower edge stops 1 short of the top"),
+        (wrap, (9.0, 0.0), [100.0, 200.0, 280.0, 80.0, 0.5, 0.5, 0.75], "Wrap follows the pointer along the axis"),
+        (surface, (15.0, 5.0), [115.0, 205.0, 295.0, 85.0, 0.5, 0.5, 0.85], "the surface moves all four edges"),
+        (top_right, (-190.0, 0.0), [100.0, 200.0, 101.0, 80.0, 0.5, 0.5, 0.85], "the right silhouette stops 1 short of the left"),
+        (bottom_left, (190.0, 0.0), [279.0, 200.0, 280.0, 80.0, 0.5, 0.5, 0.85], "the left silhouette stops 1 short of the right"),
+    ];
+    for (at, (dx, dy), want, what) in cases {
+        let mut h = cylinder_harness();
+        near(h.values(), start, "the start");
+        let from = h.screen(at.0, at.1);
+        drag_frames(&mut h.fixture, from, from + shift(dx, dy));
+        near(h.values(), want, what);
+        assert_eq!(h.seen.borrow().first(), Some(&Seen::Begin), "{what}");
+        assert_eq!(h.count(Seen::Commit), 1, "{what}: one drag commits once");
+    }
+
+    // A press that does not move changes nothing and begins no edit; one off the cylinder grabs nothing.
+    let mut h = cylinder_harness();
+    let at = h.screen(top_right.0, top_right.1);
+    h.fixture.click_at(at);
+    near(h.values(), start, "a click");
+    assert_eq!(h.count(Seen::Begin), 0);
+    let off = h.screen(40.0, 40.0);
+    drag_frames(&mut h.fixture, off, off + shift(10.0, 10.0));
+    near(h.values(), start, "a drag off the cylinder");
+
+    // Escape puts the values back to what they were at the press.
+    let from = h.screen(bend.0, bend.1);
+    h.fixture.frame(vec![pointer::moved(from)]);
+    h.fixture.frame(vec![pointer::press(from)]);
+    h.fixture.frame(vec![pointer::moved(from + shift(0.0, 9.0))]);
+    h.fixture.frame(vec![pointer::moved(from + shift(0.0, 18.0))]);
+    assert!(h.values()[4] > 0.5, "the drag moved the depth: {:?}", h.values());
+    h.fixture.key(egui::Key::Escape, Modifiers::NONE);
+    h.fixture.frame(vec![pointer::release(from + shift(0.0, 18.0))]);
+    h.fixture.frame(Vec::new());
+    near(h.values(), start, "Escape");
+    assert_eq!(h.count(Seen::Cancel), 1);
+    assert_eq!(h.count(Seen::Commit), 0);
+
+    // An arrow moves the picked handle one unit, Shift ten, each as one Set; a pass applies the nudge once.
+    let mut h = cylinder_harness();
+    let at = h.screen(top_right.0, top_right.1);
+    h.fixture.click_at(at);
+    h.fixture.key(egui::Key::ArrowRight, Modifiers::NONE);
+    near(h.values(), [100.0, 200.0, 281.0, 80.0, 0.5, 0.5, 0.85], "an arrow");
+    h.fixture.key(egui::Key::ArrowRight, Modifiers::SHIFT);
+    near(h.values(), [100.0, 200.0, 291.0, 80.0, 0.5, 0.5, 0.85], "Shift and an arrow");
+    assert_eq!(h.count(Seen::Set), 2);
 }

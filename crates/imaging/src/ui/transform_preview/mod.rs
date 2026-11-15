@@ -88,8 +88,9 @@ pub struct PreviewStyle {
 ///   level 0 nearest with [`nearest`](Self::nearest).
 /// - The mesh is clipped to the canvas in document space ([`clip`](Self::clip)), also under a
 ///   turned view; quad cells with a corner past the horizon (a Distort dragged behind the eye)
-///   are left out; triangles are drawn from the most displaced to the least, so a fold keeps its
-///   layers whole.
+///   are left out; triangles are drawn in the renderer's fold order
+///   ([`cell_order`](crate::fold_order::cell_order): turned-over cells last, then by increasing
+///   displacement), so a fold keeps its layers whole.
 /// - [`opacity`](Self::opacity) tints every vertex white with that alpha (layer opacity × fill).
 /// - With [`styled`](Self::styled) and a plan that fits, the styled composite is drawn in place of
 ///   the mesh (quad maps only); otherwise the plain mesh.

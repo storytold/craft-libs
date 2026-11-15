@@ -56,18 +56,16 @@ pub struct WarpStyleEntry {
     pub label: String,
     /// A preset style: the orientation and Bend, H and V act on it.
     pub preset: bool,
-    /// The Custom style (the mesh edited by hand): hidden over a type layer.
-    pub custom: bool,
-    /// The style is offered over a type layer.
+    /// The style is offered over a type layer (false for Custom and Cylinder).
     pub over_type: bool,
-    /// The style enables Split and Grid.
+    /// Split and Grid act on the style (false for Cylinder).
     pub splits: bool,
 }
 
 impl WarpStyleEntry {
-    /// A style `key` shown as `label`, neither a preset nor Custom.
+    /// A style `key` shown as `label`, not a preset, offered over a type layer and enabling Split and Grid.
     pub fn new(key: impl Into<String>, label: impl Into<String>) -> Self {
-        Self { key: key.into(), label: label.into(), preset: false, custom: false, over_type: false, splits: false }
+        Self { key: key.into(), label: label.into(), preset: false, over_type: true, splits: true }
     }
 
     /// Whether the style is offered over a type layer.
@@ -88,13 +86,6 @@ impl WarpStyleEntry {
     #[must_use]
     pub fn preset(mut self, preset: bool) -> Self {
         self.preset = preset;
-        self
-    }
-
-    /// Whether this is the Custom style.
-    #[must_use]
-    pub fn custom(mut self, custom: bool) -> Self {
-        self.custom = custom;
         self
     }
 }
@@ -227,8 +218,9 @@ pub struct WarpFieldsOutput {
 ///   one pressed, a press on it disarms), a divider, "Grid" and a select (Custom, Default,
 ///   3 x 3, 4 x 4, 5 x 5), a divider, "Warp" and the style select, the orientation toggle
 ///   (pressed when vertical), and Bend, H, V number fields (−100 to 100 %).
-/// - [`on_type`](Self::on_type): Split and Grid draw disabled and Custom is not offered (PhotoCraft
-///   #3004).
+/// - [`on_type`](Self::on_type): Split and Grid draw disabled and the styles with no
+///   [`over_type`](WarpStyleEntry::over_type) are not offered (PhotoCraft #3004). Split and Grid are also
+///   disabled while the current style has no [`splits`](WarpStyleEntry::splits).
 /// - The orientation and the three fields are always there and enabled only on a preset style.
 /// - The group reports and never changes the warp.
 #[must_use = "show the group with `show`"]
@@ -239,7 +231,7 @@ pub struct WarpFields<'a> {
     /// The armed Split tool, shown pressed.
     #[prop]
     split: Option<WarpSplit>,
-    /// The warp is on a type layer: Split and Grid disabled, no Custom.
+    /// The warp is on a type layer: Split and Grid disabled, only the styles offered over a type layer.
     #[prop(flag)]
     on_type: bool,
 }
@@ -256,9 +248,11 @@ impl<'a> WarpFields<'a> {
         let words = Env::of(ui).words::<WarpFieldsWords>();
         let caption = FieldLayout::Beside;
         let mut edits = Vec::new();
+        // Split and Grid act on the current style only when it splits (not the Cylinder).
+        let splits = !on_type && styles.iter().find(|entry| entry.key == values.style).is_none_or(|entry| entry.splits);
         // The groups hold the bar's members, spaced as the bar spaces them.
         Row::new().gap(Gap::Item).show(ui, |ui, _| {
-            Row::new().gap(Gap::Item).enabled(!on_type).show(ui, |ui, _| {
+            Row::new().gap(Gap::Item).enabled(splits).show(ui, |ui, _| {
                 Field::new(words.split.clone()).layout(caption).sizing(Sizing::Content).show(ui, |ui, _| {
                     Row::new().show(ui, |ui, _| {
                         let tools = [
@@ -284,7 +278,7 @@ impl<'a> WarpFields<'a> {
                         Entry::new(WarpGridChoice::Four, words.four.clone()),
                         Entry::new(WarpGridChoice::Five, words.five.clone()),
                     ];
-                    let pick = Select::new(words.grid.clone(), Bind::given(values.grid), &entries).show(ui);
+                    let pick = Select::new(words.grid.clone(), Bind::given(values.grid), &entries).sizing(Sizing::Content).show(ui);
                     if let Some(&picked) = pick.value()
                         && picked != values.grid
                         && let Some(size) = picked.size()
@@ -297,10 +291,10 @@ impl<'a> WarpFields<'a> {
             Field::new(words.warp.clone()).layout(caption).sizing(Sizing::Content).show(ui, |ui, _| {
                 let entries: Vec<Entry<String>> = styles
                     .iter()
-                    .filter(|entry| !(on_type && entry.custom))
+                    .filter(|entry| !(on_type && !entry.over_type))
                     .map(|entry| Entry::new(entry.key.clone(), entry.label.clone()))
                     .collect();
-                let pick = Select::new(words.warp.clone(), Bind::given(values.style.clone()), &entries).show(ui);
+                let pick = Select::new(words.warp.clone(), Bind::given(values.style.clone()), &entries).sizing(Sizing::Content).show(ui);
                 if let Some(picked) = pick.value()
                     && *picked != values.style
                 {

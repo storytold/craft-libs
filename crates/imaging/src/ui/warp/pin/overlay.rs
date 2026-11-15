@@ -180,6 +180,8 @@ struct Drag {
     /// The pins the movement is added to, with the placed pin for a placement.
     base: Vec<Pin>,
     began: bool,
+    /// The pointer at the drag's last proposal, in document units: where a Delete ends the drag.
+    latest: Point,
 }
 
 impl Drag {
@@ -214,7 +216,7 @@ impl Drag {
 
 impl Default for Drag {
     fn default() -> Self {
-        Drag { kind: Kind::Place { before: Vec::new() }, origin: Point::ZERO, base: Vec::new(), began: false }
+        Drag { kind: Kind::Place { before: Vec::new() }, origin: Point::ZERO, base: Vec::new(), began: false, latest: Point::ZERO }
     }
 }
 
@@ -272,7 +274,7 @@ impl PinWarp<'_> {
             self.report.select = Some(now);
         }
         *cx.press_slot::<Drag>() =
-            moved.map(|moved| Drag { kind: Kind::Move(moved), origin: space.view.to_doc(origin), base: pins.to_vec(), began: false });
+            moved.map(|moved| Drag { kind: Kind::Move(moved), origin: space.view.to_doc(origin), base: pins.to_vec(), began: false, latest: space.view.to_doc(origin) });
     }
 
     /// A press on the mesh: Alt near a selected pin turns it; otherwise a pin is placed under the press.
@@ -282,7 +284,7 @@ impl PinWarp<'_> {
             let turn = nearest_selected(&space.view, pins, self.selection(), origin, cx.style.turn_reach).and_then(|i| {
                 let pin = pins[i];
                 let base = pin.angle.or_else(|| self.mesh.turn_at(pin.rest))?;
-                Some(Drag { kind: Kind::Turn { pin: i, base, from: angle_of(at - pin.at)? }, origin: at, base: pins.to_vec(), began: false })
+                Some(Drag { kind: Kind::Turn { pin: i, base, from: angle_of(at - pin.at)? }, origin: at, base: pins.to_vec(), began: false, latest: at })
             });
             *cx.press_slot::<Drag>() = turn;
         } else if let Some(rest) = self.mesh.rest_of(at) {
@@ -292,8 +294,19 @@ impl PinWarp<'_> {
             self.report.select = Some(vec![placed.len() - 1]);
             cx.begin();
             cx.propose(placed.clone());
-            *cx.press_slot::<Drag>() = Some(Drag { kind: Kind::Place { before }, origin: at, base: placed, began: true });
+            *cx.press_slot::<Drag>() = Some(Drag { kind: Kind::Place { before }, origin: at, base: placed, began: true, latest: at });
         }
+    }
+
+    /// Ends the running drag as one step: takes the press slot and, when the drag began, proposes its value with the
+    /// pointer at `at` (the drag's last proposal when `None`) and commits it. Returns that value; `None` when no drag
+    /// began, which leaves nothing to end.
+    fn finish_drag(cx: &mut Cx<'_, Self>, at: Option<Point>) -> Option<Vec<Pin>> {
+        let drag = cx.press_slot::<Drag>().take().filter(|drag| drag.began)?;
+        let value = drag.value_at(at.unwrap_or(drag.latest));
+        cx.propose(value.clone());
+        cx.commit();
+        Some(value)
     }
 
     /// Follows or ends the drag of a press.
@@ -305,15 +318,12 @@ impl PinWarp<'_> {
                     cx.begin();
                     drag.began = true;
                 }
-                cx.propose(drag.value_at(space.view.to_doc(pos)));
+                drag.latest = space.view.to_doc(pos);
+                cx.propose(drag.value_at(drag.latest));
                 *cx.press_slot::<Drag>() = Some(drag);
             }
             PressPhase::Release { pos, .. } => {
-                let Some(drag) = cx.press_slot::<Drag>().take() else { return };
-                if drag.began {
-                    cx.propose(drag.value_at(space.view.to_doc(pos)));
-                    cx.commit();
-                }
+                Self::finish_drag(cx, Some(space.view.to_doc(pos)));
             }
             PressPhase::Cancel { .. } => {
                 if let Some(drag) = cx.press_slot::<Drag>().take()
@@ -397,6 +407,10 @@ impl PinWarp<'_> {
         let forward = cx.intents().take_exact(&Intent::delete(true, Granularity::Unit));
         let backward = cx.intents().take_exact(&Intent::delete(false, Granularity::Unit));
         if forward || backward {
+            // A drag running ends here as its own step; the delete then removes pins from the dragged value, and the
+            // release that follows finds no press.
+            let dragged = Self::finish_drag(cx, None);
+            let pins = dragged.as_deref().unwrap_or(pins);
             let chosen: Vec<usize> = if self.selection().is_empty() { vec![picked] } else { self.selection().to_vec() };
             let rest: Vec<Pin> = pins.iter().enumerate().filter(|(i, _)| !chosen.contains(i)).map(|(_, pin)| *pin).collect();
             cx.set(rest);

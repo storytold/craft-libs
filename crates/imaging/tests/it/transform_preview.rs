@@ -4,11 +4,14 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use craft_behavior::CanvasView;
-use craft_behavior::kurbo::Point;
+use craft_behavior::kurbo::{Point, Rect as DocRect};
+use craft_imaging::fold_order::cell_order;
 use craft_imaging::ui::transform_preview::{
-    PreviewDisplay, PreviewMap, PreviewPixels, PreviewTextures, StylePlan, StyledContent, StyledFrame, StyledPreview, StyledSource, TransformPreview,
+    PreviewDisplay, PreviewMap, PreviewPixels, PreviewTextures, StylePlan, StyledBudget, StyledContent, StyledFrame, StyledPreview, StyledSource,
+    TextureChoice, TransformPreview,
 };
-use craft_ui::canvas::Canvas;
+use craft_imaging::ui::warp::WarpMesh;
+use craft_ui::canvas::{Canvas, PixelRect};
 use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Color32, ColorImage, Shape};
@@ -103,6 +106,161 @@ fn pixels_past_the_canvas_edge_are_clipped_in_document_space() {
     // Without a clip the whole quad is drawn.
     let (open, view) = shown(quad, 1.0, None, 0.0);
     assert!(open[0].vertices.iter().any(|v| view.to_doc(v.pos).x < 0.0));
+}
+
+/// Twice the signed area of the cell of `row`-wide `points` whose top left vertex is `a`: its sign is the cell's facing.
+fn facing(points: &[Point], a: usize, row: usize) -> f64 {
+    let q = [a, a + 1, a + row + 1, a + row].map(|k| points[k]);
+    (0..4).map(|i| q[i].x * q[(i + 1) % 4].y - q[(i + 1) % 4].x * q[i].y).sum()
+}
+
+// The renderer and the preview share one fold order: a cell the warp turns over comes last, so a fold shows inside out
+// only where the picture folds; the others go by increasing displacement. A vertex sent to infinity goes under.
+#[trial]
+fn a_turned_over_cell_draws_last_and_an_unbounded_cell_goes_under() {
+    // The top right anchor of a one-patch warp dragged far past the left edge folds the top right of the picture back.
+    let source = DocRect::new(0.0, 0.0, 180.0, 120.0);
+    let mut mesh = WarpMesh::identity(source, 1, 1);
+    mesh.points[3].x -= 260.0;
+    let built = PreviewMap::mesh(&mesh, source).build(1.0, [1.0, 1.0]);
+    let row = (built.indices[2] - built.indices[0]) as usize - 1;
+    let cells: Vec<usize> = built.indices.chunks(6).map(|cell| cell[0] as usize).collect();
+    assert_eq!(cells.len(), (row - 1) * (built.points.len() / row - 1), "every cell is drawn once");
+    let turned = |a: usize| facing(&built.points, a, row) * facing(&built.rest, a, row) < 0.0;
+    let moved = |a: usize| [a, a + 1, a + row, a + row + 1].iter().map(|&k| (built.points[k] - built.rest[k]).hypot()).sum::<f64>();
+    let turned_count = cells.iter().filter(|&&a| turned(a)).count();
+    assert!(turned_count > 0 && turned_count < cells.len(), "the fold turns some cells over and not all: {turned_count} of {}", cells.len());
+    for pair in cells.windows(2) {
+        let (before, after) = (pair[0], pair[1]);
+        assert!(turned(before) <= turned(after), "turned cells come after the others: {before} then {after}");
+        if turned(before) == turned(after) {
+            assert!(moved(before) <= moved(after) + 1e-9, "by increasing displacement: {before} then {after}");
+        }
+    }
+
+    // A cell with a vertex sent to infinity or to NaN goes under the cells that moved a finite way.
+    let rest = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0]];
+    let mut pos = rest.map(|[x, y]| [x + 1.0, y]);
+    pos[2] = [f64::INFINITY, 0.0];
+    pos[5] = [f64::NAN, 1.0];
+    assert_eq!(cell_order(&pos, &rest, 3), vec![1, 0]);
+
+    // Mirrored cells go on top even when they moved less than the cells around them; a mirrored placement as a whole
+    // turns nothing over.
+    let rest = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0], [3.0, 1.0]];
+    let pos = [[-9.0, 0.0], [1.0, 0.0], [2.2, 0.0], [1.6, 0.0], [-9.0, 1.0], [1.0, 1.0], [2.2, 1.0], [1.6, 1.0]];
+    assert_eq!(cell_order(&pos, &rest, 4), vec![1, 0, 2]);
+    let mirrored = rest.map(|[x, y]| [-x, y]);
+    assert_eq!(cell_order(&mirrored, &mirrored, 4), vec![0, 1, 2]);
+
+    // Mismatched lengths and a row under 2 give no cells.
+    assert!(cell_order(&pos, &rest[..5], 4).is_empty());
+    assert!(cell_order(&pos, &rest, 1).is_empty());
+}
+
+// The work stays within its budget for any box, and a box that cannot be composited is refused.
+#[trial]
+fn a_style_plan_stays_within_its_budget_at_screen_size_and_refuses_hostile_boxes() {
+    let reach = |scale: f64| (4.0 * scale).round() as i32;
+    let area = |plan: &StylePlan| f64::from(plan.content.width()) * f64::from(plan.content.height());
+    let budget = StyledBudget::default();
+
+    // A box as big as a huge canvas at 100 %: the scale drops until the content fits, and no further.
+    let huge = [pt(0.0, 0.0), pt(12_000.0, 0.0), pt(12_000.0, 8_000.0), pt(0.0, 8_000.0)];
+    for pixels in [budget.pixels(100.0, true), budget.pixels(100.0, false)] {
+        let plan = StylePlan::new(huge, [12_000, 8_000], 1.0, pixels, reach).expect("planned");
+        assert!(area(&plan) <= pixels && area(&plan) > pixels * 0.5, "{} of {pixels}", area(&plan));
+        assert!(plan.scale < 1.0);
+    }
+
+    // Hostile boxes: not finite, collapsed, astronomically large or far away.
+    let ok = [pt(60.0, 60.0), pt(100.0, 60.0), pt(100.0, 100.0), pt(60.0, 100.0)];
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut quad = ok;
+        quad[2].x = bad;
+        assert!(StylePlan::new(quad, [200, 200], 1.0, StyledBudget::MAX_PIXELS, reach).is_none());
+    }
+    assert!(StylePlan::new([pt(80.0, 80.0); 4], [200, 200], 1.0, StyledBudget::MAX_PIXELS, reach).is_none(), "a collapsed box");
+    assert!(
+        StylePlan::new([pt(-90.0, 0.0), pt(-50.0, 0.0), pt(-50.0, 20.0), pt(-90.0, 20.0)], [200, 200], 1.0, StyledBudget::MAX_PIXELS, reach)
+            .is_none()
+    );
+    for quad in [
+        [pt(-1e300, -1e300), pt(1e300, -1e300), pt(1e300, 1e300), pt(-1e300, 1e300)],
+        [pt(1e18, 1e18), pt(1e18 + 40.0, 1e18), pt(1e18 + 40.0, 1e18 + 40.0), pt(1e18, 1e18 + 40.0)],
+        [pt(0.0, 0.0), pt(1e12, 0.0), pt(1e12, 1.0), pt(0.0, 1.0)],
+    ] {
+        if let Some(plan) = StylePlan::new(quad, [200, 200], 1.0, StyledBudget::MAX_PIXELS, reach) {
+            assert!(area(&plan) <= StyledBudget::MAX_PIXELS, "{plan:?}");
+        }
+    }
+    // A zoom with no meaning counts as 100 %, and a budget with none stays within the most work.
+    for zoom in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        assert_eq!(StylePlan::new(ok, [200, 200], zoom, StyledBudget::MAX_PIXELS, reach).map(|plan| plan.scale), Some(1.0), "zoom {zoom}");
+    }
+    for pixels in [f64::NAN, f64::INFINITY, -5.0, 0.0] {
+        if let Some(plan) = StylePlan::new(ok, [200, 200], 1.0, pixels, reach) {
+            assert!(area(&plan) <= StyledBudget::MAX_PIXELS, "{pixels}");
+        }
+    }
+
+    // At 50 % the work is at screen resolution.
+    let plan = StylePlan::new(ok, [200, 200], 0.5, StyledBudget::MAX_PIXELS, reach).expect("planned");
+    assert_eq!(plan.scale, 0.5);
+    assert_eq!(plan.bounds, PixelRect::new(30, 30, 50, 50));
+
+    // The part past the canvas edge is not shown but still shapes the style: the content reaches past the edge.
+    let hanging = [pt(-20.0, 80.0), pt(20.0, 80.0), pt(20.0, 100.0), pt(-20.0, 100.0)];
+    let plan = StylePlan::new(hanging, [200, 200], 1.0, StyledBudget::MAX_PIXELS, reach).expect("planned");
+    assert_eq!(plan.shown.x0, 0);
+    assert!(plan.content.x0 < 0, "{plan:?}");
+}
+
+// A monitor conversion changes the uploaded texture and leaves the stored levels as they were: the styled composite and
+// the mips read the document's pixels.
+#[trial]
+fn a_monitor_conversion_changes_only_the_shown_upload() {
+    let ctx = egui::Context::default();
+    let raw = solid([2, 2], Color32::from_rgb(140, 89, 51));
+    let textures = PreviewTextures::new("monitor", PreviewPixels::new(raw.clone(), [1.0, 1.0]));
+    // The trial stands in for the renderer: it takes the texture deltas it reads and applies none.
+    let uploaded = |id: egui::TextureId| {
+        let mut delta = ctx.tex_manager().write().take_delta();
+        let texel = delta.set.get(&id).and_then(|sets| sets.first()).map(|set| match &set.image {
+            egui::ImageData::Color(image) => image.pixels[0],
+        });
+        delta.clear();
+        texel
+    };
+    let (plain, _) = textures.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
+    assert_eq!(uploaded(plain), Some(raw.pixels[0]), "without a conversion the document's texels go up");
+    let green = PreviewDisplay::new(7, |image| ColorImage::new(image.size, vec![Color32::GREEN; image.pixels.len()]));
+    let (shown, _) = textures.pick(&ctx, TextureChoice::new(0, false), Some(&green)).expect("uploaded");
+    assert_eq!(uploaded(shown), Some(Color32::GREEN), "the monitor's texels go up");
+    assert_eq!(textures.level_image(0).expect("level 0").0.pixels, raw.pixels, "the stored level stays the document's");
+}
+
+// A warp that stretches a cell far gets more samples across it than a plain one: the stretch decides the sampling. A
+// cell's samples follow the larger side of its extent on screen, so the layer is low enough that the narrow column's
+// width decides them.
+#[trial]
+fn a_stretched_warp_cell_gets_samples_for_its_stretch() {
+    let source = DocRect::new(0.0, 0.0, 900.0, 30.0);
+    let plain = WarpMesh::identity_with_knots(source, vec![0.0, 0.45, 0.5, 1.0], vec![0.0, 1.0]).expect("knots");
+    // The narrow column's right anchor and its handle pulled 300 to the left.
+    let mut stretched = plain.clone();
+    let width = stretched.width();
+    for j in 0..stretched.height() {
+        for i in [5, 6] {
+            stretched.points[j * width + i].x -= 300.0;
+        }
+    }
+    // The samples across the narrow column (0.45..0.5 of the width), read from the top row's rest positions.
+    let narrow = |mesh: &WarpMesh| {
+        let built = PreviewMap::mesh(mesh, source).build(1.0, [1.0, 1.0]);
+        built.rest.iter().filter(|rest| rest.y == source.y0 && (405.0..450.0).contains(&rest.x)).count()
+    };
+    assert!(narrow(&stretched) > narrow(&plain), "{} samples against {}", narrow(&stretched), narrow(&plain));
 }
 
 // An identity mesh at zoom 1 samples each patch at the minimum.

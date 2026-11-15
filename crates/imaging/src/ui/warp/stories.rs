@@ -60,7 +60,7 @@ fn lines_only(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas(ui, mesh, |ui, rect, mesh| WarpGrid::new("Warp", Bind::bound(mesh), picture()).lines_only().show_at(ui, rect))
 }
 
-/// The app's style list: None, four presets and Custom.
+/// The app's style list: None, four presets, Custom and Cylinder.
 fn styles() -> Vec<WarpStyleEntry> {
     vec![
         WarpStyleEntry::new("none", "None"),
@@ -68,7 +68,8 @@ fn styles() -> Vec<WarpStyleEntry> {
         WarpStyleEntry::new("bulge", "Bulge").preset(true),
         WarpStyleEntry::new("flag", "Flag").preset(true),
         WarpStyleEntry::new("wave", "Wave").preset(true),
-        WarpStyleEntry::new("custom", "Custom").custom(true),
+        WarpStyleEntry::new("custom", "Custom").over_type(false),
+        WarpStyleEntry::new("cylinder", "Cylinder").over_type(false).splits(false),
     ]
 }
 

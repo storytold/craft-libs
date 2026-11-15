@@ -5,6 +5,7 @@ use craft_behavior::geometry::Homography;
 use craft_behavior::kurbo::{self, Point, Rect};
 
 use super::PreviewQuality;
+use crate::fold_order::cell_order;
 use crate::ui::warp::WarpMesh;
 use crate::ui::warp::pin::PinMeshView;
 
@@ -296,58 +297,28 @@ pub(super) fn surface_point(mesh: &WarpMesh, s: f64, t: f64) -> Point {
     sum.to_point()
 }
 
-/// Triangle indices for a `row`-wide vertex grid, two per cell, cells ordered from the most
-/// displaced (mean of its four corners' distance from rest) to the least. Empty when `row < 2` or
-/// the lengths differ.
+/// Triangle indices for a `row`-wide vertex grid, two per cell, cells in the renderer's fold order
+/// ([`cell_order`]): turned-over cells last, then by increasing displacement. Empty when `row < 2`
+/// or the lengths differ.
 pub(super) fn triangle_order(points: &[Point], rest: &[Point], row: usize) -> Vec<u32> {
-    // pc: crates/ui-egui/src/tools/warp_preview.rs:58 (`triangle_order`).
-    if row < 2 || points.len() != rest.len() {
-        return Vec::new();
-    }
-    let rows = points.len() / row;
-    let moved = |k: usize| match (points.get(k), rest.get(k)) {
-        (Some(p), Some(r)) => (*p - *r).hypot(),
-        _ => 0.0,
-    };
-    let mut cells: Vec<(f64, usize)> = Vec::with_capacity(rows * row);
-    for j in 0..rows.saturating_sub(1) {
-        for i in 0..row - 1 {
-            let a = j * row + i;
-            cells.push(((moved(a) + moved(a + 1) + moved(a + row) + moved(a + row + 1)) / 4.0, a));
-        }
-    }
-    cells.sort_by(|x, y| y.0.total_cmp(&x.0));
+    let pairs = |pts: &[Point]| pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>();
+    let cells = cell_order(&pairs(points), &pairs(rest), row);
     let mut out = Vec::with_capacity(cells.len() * 6);
-    for (_, a) in cells {
+    for a in cells {
         out.extend([a, a + 1, a + row + 1, a, a + row + 1, a + row].map(|k| k as u32));
     }
     out
 }
 
-/// The homogeneous `w` of `h` at the unit-square point `(u, v)`.
-fn homogeneous_w(h: &Homography, u: f64, v: f64) -> f64 {
-    let [g, k, i] = h.row(2);
-    g * u + k * v + i
-}
-
 /// For an `n` × `n` grid of cells over the unit square mapped by `h` (`(n + 1)²` vertices, row by
-/// row): whether each vertex lands on the same side of the horizon as the unit square (its
-/// homogeneous `w` has the sign of the square's, beyond 1e-9). A Distort dragged past the horizon
-/// sends the rest of the image to the far side, where its cells would wrap round infinity.
+/// row): whether each vertex lands in front of the horizon (`Homography::apply_in_front`). A
+/// Distort dragged past the horizon sends the rest of the image to the far side, where its cells
+/// would wrap round infinity.
 pub(super) fn front_vertices(h: &Homography, n: usize) -> Vec<bool> {
-    // pc: crates/ui-egui/src/tools/transform_tool/draw.rs:83 (`front_vertices`).
-    let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
-    let ahead = corners.iter().filter(|(x, y)| homogeneous_w(h, *x, *y) > 0.0).count();
-    // The side most of the square's corners are on; a split square follows its centre.
-    let front = match ahead {
-        3 | 4 => 1.0,
-        0 | 1 => -1.0,
-        _ if homogeneous_w(h, 0.5, 0.5) >= 0.0 => 1.0,
-        _ => -1.0,
-    };
+    let unit = Rect::new(0.0, 0.0, 1.0, 1.0);
     (0..=n)
-        .flat_map(|j| (0..=n).map(move |i| (i as f64 / n as f64, j as f64 / n as f64)))
-        .map(|(u, v)| front * homogeneous_w(h, u, v) > 1e-9)
+        .flat_map(|j| (0..=n).map(move |i| Point::new(i as f64 / n as f64, j as f64 / n as f64)))
+        .map(|p| h.apply_in_front(p, unit).is_some())
         .collect()
 }
 

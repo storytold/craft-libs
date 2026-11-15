@@ -228,6 +228,13 @@ impl<'a> WarpGrid<'a> {
             }
             PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                 let Some(mut held) = cx.press_slot::<Press>().clone() else { return };
+                // The host replaced the mesh under the press (a split, a style pick). A begun press was cancelled by the
+                // framework (`HostChanged`); this only drops the press.
+                if mesh.us != held.mesh.us || mesh.vs != held.mesh.vs {
+                    cx.memory::<Slot>().dragging = None;
+                    *cx.press_slot::<Press>() = None;
+                    return;
+                }
                 let by = view.to_doc(pos) - view.to_doc(start.origin);
                 let edit = match held.target {
                     Target::Point(index) => WarpEdit::Point { index, by },
@@ -257,13 +264,16 @@ impl<'a> WarpGrid<'a> {
                     _ => {}
                 }
             }
-            PressPhase::Cancel { .. } => {
-                cx.memory::<Slot>().dragging = None;
-                if cx.press_slot::<Press>().take().is_some_and(|held| held.began) {
-                    cx.cancel(CancelReason::Escape);
-                }
-            }
+            PressPhase::Cancel { .. } => Self::end_press(cx),
             _ => {}
+        }
+    }
+
+    /// Ends the running press without a result: reports the cancel when the drag began and clears the press slot.
+    fn end_press(cx: &mut Cx<'_, Self>) {
+        cx.memory::<Slot>().dragging = None;
+        if cx.press_slot::<Press>().take().is_some_and(|held| held.began) {
+            cx.cancel(CancelReason::Escape);
         }
     }
 

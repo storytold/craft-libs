@@ -2,7 +2,7 @@
 //! boundaries, anchors and their handles, dragged by the pointer and moved from the keyboard.
 //!
 //! Beside it: the Warp group of the options bar ([`WarpFields`]), Puppet Warp ([`pin`]),
-//! Perspective Warp ([`perspective`]) and the one painter of a deformed mesh's lines
+//! Perspective Warp ([`perspective`]), the Cylinder warp's editor ([`CylinderWarp`]) and the one painter of a deformed mesh's lines
 //! (`MeshLines`).
 
 mod cylinder;
