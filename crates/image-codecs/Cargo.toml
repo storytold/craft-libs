@@ -15,6 +15,9 @@ corpus = []
 default = []
 avif = ["image/avif", "dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 heif = ["dep:craft-heif"]
+# AVIF decode: craft-video's clean-room pure-Rust AV1 decoder. Native targets only (on wasm32 a
+# decoder panic aborts instead of becoming an error), so wasm32 builds leave AVIF unreadable.
+avif-decode = ["dep:craft-video", "craft-video/av1-decode"]
 
 [dependencies]
 crc32fast = "1.5"
@@ -41,6 +44,7 @@ hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["st
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
+craft-video = { workspace = true, optional = true }
 exr = { version = "1.73", default-features = false, features = ["rayon"] }
 
 [dev-dependencies]
