@@ -62,6 +62,7 @@ fn default_build_formats_all_symmetric() {
         Format::Dpx,
         Format::Cineon,
         Format::Iff,
+        #[cfg(feature = "sgi")]
         Format::Sgi,
         Format::JpegLs,
     ];
@@ -220,6 +221,7 @@ fn detect_magic_iff() {
     assert_eq!(detect(b"FORM\0\0\0\x14AIFF"), None);
     assert!(decode_as(Format::Iff, b"FORM\0\0\0\x14ILBM").is_err());
 }
+#[cfg(feature = "sgi")]
 #[test]
 fn detect_magic_sgi() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
@@ -339,4 +341,17 @@ fn extensions_unique_across_formats() {
     all.sort();
     all.dedup();
     assert_eq!(all.len(), n);
+}
+
+#[cfg(not(feature = "sgi"))]
+#[test]
+fn sgi_requires_explicit_feature() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    assert!(!caps(Format::Sgi).read && !caps(Format::Sgi).write);
+    assert!(decode_as(Format::Sgi, &[]).is_err());
+    let image = Image::from_u8(1, 1, ChannelLayout::Gray, vec![0]).unwrap();
+    assert!(encode(&image, Format::Sgi, &EncodeOptions::default()).is_err());
+    let mut header = vec![0; 512];
+    header[..12].copy_from_slice(&[1, 218, 0, 1, 0, 2, 0, 1, 0, 1, 0, 1]);
+    assert_eq!(detect(&header), None);
 }

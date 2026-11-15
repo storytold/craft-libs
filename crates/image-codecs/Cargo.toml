@@ -13,6 +13,7 @@ workspace = true
 [features]
 corpus = []
 default = []
+sgi = []
 avif = ["image/avif", "dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 heif = ["dep:craft-heif"]
 
