@@ -176,7 +176,7 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
         let mut it = line.split_whitespace();
         let key = it.next().unwrap_or("");
         let nums = |it: std::str::SplitWhitespace<'_>| -> Result<[f32; 3], LutError> {
-            let v: Vec<f32> = it.filter_map(|s| s.parse().ok()).collect();
+            let v: Vec<f32> = it.map(|s| s.parse().ok()).collect::<Option<_>>().ok_or_else(|| LutError(format!("bad line `{line}`")))?;
             if v.len() == 3 { Ok([v[0], v[1], v[2]]) } else { err(format!("bad line `{line}`")) }
         };
         match key {
