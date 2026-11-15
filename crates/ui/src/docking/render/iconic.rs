@@ -308,17 +308,13 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             return;
         }
         let width = request.group.flyout_width.unwrap_or(request.width).max(self.style.min_pane).min(bounds.width());
-        let max = self
-            .content
-            .floating_size(&active)
-            .map(|size| size.y)
-            .or(request.group.height)
-            .filter(|h| h.is_finite() && *h > 0.0)
-            .unwrap_or(FLYOUT_HEIGHT);
-        // Only untouched heights fit content: otherwise the next frame undoes a resize.
+        let max = self.content.floating_size(&active).map(|size| size.y).filter(|h| h.is_finite() && *h > 0.0).unwrap_or(FLYOUT_HEIGHT);
+        // The docked height (`group.height`) is not used: a group docked short, or resized in
+        // its column, would open its flyout short and scrolling too. Only untouched heights fit
+        // content: otherwise the next frame undoes a resize.
         let height = request
             .group
-            .height
+            .flyout_height
             .or_else(|| self.fitted_height(&active, self.style.tab_height, max))
             .unwrap_or(max)
             .max(self.style.tab_height + self.style.min_pane)
@@ -366,7 +362,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         if let Some(resized) = response.resized {
             // Width-only drags preserve automatic fitting and heights clamped by a small viewport.
             if resized.height() != response.rect.height() {
-                self.output.actions.push(Action::ResizeGroup { panel: active.clone(), height: Some(resized.height()) });
+                self.output.actions.push(Action::ResizeFlyoutHeight { panel: active.clone(), height: Some(resized.height()) });
             }
             if resized.width() != response.rect.width() {
                 self.output.actions.push(Action::ResizeFlyoutWidth { panel: active.clone(), width: Some(resized.width()) });

@@ -40,6 +40,10 @@ pub struct Group<P> {
     /// [`DockContent::dock_heights`](crate::docking::DockContent::dock_heights).
     #[cfg_attr(feature = "serde", serde(default))]
     pub height: Option<f32>,
+    /// User-set flyout height, kept apart from [`height`](Self::height) so the docked and the
+    /// flyout sizes don't follow each other; absent, the flyout fits its content.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub flyout_height: Option<f32>,
     /// User-set flyout width; absent in older workspaces, which use the column width.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub flyout_width: Option<f32>,
@@ -51,7 +55,7 @@ pub struct Group<P> {
 
 impl<P> Group<P> {
     pub fn new(panels: Vec<P>, active: usize) -> Self {
-        Self { panels, active, minimized: false, height: None, flyout_width: None, flyout_offset: None }
+        Self { panels, active, minimized: false, height: None, flyout_height: None, flyout_width: None, flyout_offset: None }
     }
 
     pub fn active_panel(&self) -> Option<&P> {
@@ -141,6 +145,8 @@ pub enum PanelState {
 pub struct GroupLocation {
     pub minimized: bool,
     pub height: Option<f32>,
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub flyout_height: Option<f32>,
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub flyout_width: Option<f32>,
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
@@ -736,6 +742,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                         active: 0,
                         minimized: !entry.open,
                         height: entry.height,
+                        flyout_height: None,
                         flyout_width: None,
                         flyout_offset: None,
                     };
@@ -751,6 +758,7 @@ impl<P: Clone + Eq + Hash> Layout<P> {
                             active: 0,
                             minimized: !entry.open,
                             height: entry.height,
+                            flyout_height: None,
                             flyout_width: None,
                             flyout_offset: None,
                         })))
