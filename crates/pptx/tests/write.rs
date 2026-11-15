@@ -220,7 +220,7 @@ fn namespaces_of(xml: &str, local: &str) -> Vec<String> {
 }
 
 /// A theme with a custom colour list and a theme family id, with the `a:` prefix.
-const PREFIXED_THEME: &str = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="Harbour"><a:themeElements><a:clrScheme name="Harbour"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="1F1F1F"/></a:dk2><a:lt2><a:srgbClr val="EEEEEE"/></a:lt2><a:accent1><a:srgbClr val="123456"/></a:accent1><a:accent2><a:srgbClr val="222222"/></a:accent2><a:accent3><a:srgbClr val="333333"/></a:accent3><a:accent4><a:srgbClr val="444444"/></a:accent4><a:accent5><a:srgbClr val="555555"/></a:accent5><a:accent6><a:srgbClr val="666666"/></a:accent6><a:hlink><a:srgbClr val="0000FF"/></a:hlink><a:folHlink><a:srgbClr val="800080"/></a:folHlink></a:clrScheme><a:fontScheme name="Harbour"><a:majorFont><a:latin typeface="Lato"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/><a:custClrLst><a:custClr name="Brand"><a:srgbClr val="C00000"/></a:custClr></a:custClrLst><a:extLst><a:ext uri="{05A4C25C-085E-4340-85A3-A5531E510DB2}"><thm15:themeFamily xmlns:thm15="http://schemas.microsoft.com/office/thememl/2012/main" name="Harbour" id="{62F939B6-93AF-4DB8-9C6B-D6C7DFDC589F}" vid="{4A3C46E8-61CC-4603-A589-7422A47A8E4A}"/></a:ext></a:extLst></a:theme>"#;
+const PREFIXED_THEME: &str = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" name="Harbour"><a:themeElements><a:clrScheme name="Harbour"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="1F1F1F"/></a:dk2><a:lt2><a:srgbClr val="EEEEEE"/></a:lt2><a:accent1><a:srgbClr val="123456"/></a:accent1><a:accent2><a:srgbClr val="222222"/></a:accent2><a:accent3><a:srgbClr val="333333"/></a:accent3><a:accent4><a:srgbClr val="444444"/></a:accent4><a:accent5><a:srgbClr val="555555"/></a:accent5><a:accent6><a:srgbClr val="666666"/></a:accent6><a:hlink><a:srgbClr val="0000FF"/></a:hlink><a:folHlink><a:srgbClr val="800080"/></a:folHlink></a:clrScheme><a:fontScheme name="Harbour"><a:majorFont><a:latin typeface="Lato"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Harbour"><a:fillStyleLst/><a:lnStyleLst/><a:effectStyleLst><a:effectStyle><a:effectLst/><a:scene3d><a:camera prst="orthographicFront"/><a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d><a:bevelT w="63500" h="25400"/></a:sp3d></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst/></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/><a:custClrLst><a:custClr name="Brand"><a:srgbClr val="C00000"/></a:custClr></a:custClrLst><a:extLst><a:ext uri="{05A4C25C-085E-4340-85A3-A5531E510DB2}"><thm15:themeFamily xmlns:thm15="http://schemas.microsoft.com/office/thememl/2012/main" name="Harbour" id="{62F939B6-93AF-4DB8-9C6B-D6C7DFDC589F}" vid="{4A3C46E8-61CC-4603-A589-7422A47A8E4A}"/></a:ext></a:extLst></a:theme>"#;
 
 /// The deck with its theme part replaced by `theme`.
 fn with_theme(theme: &str) -> Vec<u8> {
@@ -244,6 +244,9 @@ fn a_default_namespace_theme_keeps_its_kept_parts_in_the_drawingml_namespace() {
         assert!(!ns.is_empty() && ns.iter().all(|n| n == NS_A), "{local}: {ns:?}\n{xml}");
     }
     assert_eq!(namespaces_of(&xml, "themeFamily"), [NS_THM15], "{xml}");
+    // The effect style's 3-D is kept as written too.
+    assert_eq!(namespaces_of(&xml, "scene3d"), [NS_A], "{xml}");
+    assert_eq!(namespaces_of(&xml, "sp3d"), [NS_A], "{xml}");
     // The second save writes the same kept parts.
     let kept = |x: &str| x[x.find("</a:themeElements>").expect("themeElements")..].to_string();
     let twice = craft_pptx::export(&craft_pptx::import(&once, &Plain).unwrap(), &Plain).unwrap();
@@ -264,29 +267,53 @@ fn a_prefixed_theme_keeps_its_kept_parts_unchanged() {
     assert!(xml.contains(&kept), "{xml}");
 }
 
-/// A slide written with a default PresentationML namespace: its kept extension list stays in
-/// that namespace under the writer's `p:extLst`.
-#[test]
-fn a_default_namespace_slide_keeps_its_extensions_in_the_presentationml_namespace() {
+/// The deck with part `name` (root `root`) given a default PresentationML namespace and an
+/// unprefixed extension list, saved again: the part as written.
+fn default_namespace_extensions(name: &str, root: &str) -> String {
     let pptx = craft_pptx::export(&deck(), &Plain).unwrap();
     let ext = r#"<extLst><ext uri="{11111111-2222-3333-4444-555555555555}"><t:data xmlns:t="urn:test" v="1"/></ext></extLst>"#;
+    let (open, close) = (format!("<{root} "), format!("</{root}>"));
     let doc = common::rewrite(
         &pptx,
-        |name, data| {
-            if name != "ppt/slides/slide1.xml" {
+        |n, data| {
+            if n != name {
                 return Some(data.to_vec());
             }
             let xml = String::from_utf8(data.to_vec()).unwrap();
-            assert!(xml.contains("<p:sld ") && xml.contains("</p:sld>") && !xml.contains("extLst"), "{xml}");
-            Some(xml.replacen("<p:sld ", &format!(r#"<p:sld xmlns="{NS_P}" "#), 1).replace("</p:sld>", &format!("{ext}</p:sld>")).into_bytes())
+            assert!(xml.contains(&open) && xml.contains(&close) && !xml.contains("extLst"), "{xml}");
+            Some(xml.replacen(&open, &format!(r#"<{root} xmlns="{NS_P}" "#), 1).replace(&close, &format!("{ext}{close}")).into_bytes())
         },
         &[],
     );
     let p = craft_pptx::import(&doc, &Plain).unwrap();
-    let xml = part(&craft_pptx::export(&p, &Plain).unwrap(), "ppt/slides/slide1.xml");
+    part(&craft_pptx::export(&p, &Plain).unwrap(), name)
+}
+
+/// The namespaces of the `ext` elements in `xml` other than DrawingML's `a:ext` (an extent).
+fn extension_namespaces(xml: &str) -> Vec<String> {
+    namespaces_of(xml, "ext").into_iter().filter(|n| n != NS_A).collect()
+}
+
+/// A slide written with a default PresentationML namespace: its kept extension list stays in
+/// that namespace under the writer's `p:extLst`.
+#[test]
+fn a_default_namespace_slide_keeps_its_extensions_in_the_presentationml_namespace() {
+    let xml = default_namespace_extensions("ppt/slides/slide1.xml", "p:sld");
     assert!(xml.contains("{11111111-2222-3333-4444-555555555555}"), "{xml}");
-    assert_eq!(namespaces_of(&xml, "ext"), [NS_P], "{xml}");
+    assert_eq!(extension_namespaces(&xml), [NS_P], "{xml}");
     assert_eq!(namespaces_of(&xml, "data"), ["urn:test"], "{xml}");
+}
+
+/// The same for a layout and a master, whose kept extension list is written back through
+/// `ext_children`.
+#[test]
+fn a_default_namespace_layout_and_master_keep_their_extensions_in_the_presentationml_namespace() {
+    for (name, root) in [("ppt/slideLayouts/slideLayout1.xml", "p:sldLayout"), ("ppt/slideMasters/slideMaster1.xml", "p:sldMaster")] {
+        let xml = default_namespace_extensions(name, root);
+        assert!(xml.contains("{11111111-2222-3333-4444-555555555555}"), "{name}: {xml}");
+        assert_eq!(extension_namespaces(&xml), [NS_P], "{name}: {xml}");
+        assert_eq!(namespaces_of(&xml, "data"), ["urn:test"], "{name}: {xml}");
+    }
 }
 
 #[test]
