@@ -1,6 +1,6 @@
 [package]
 name = "craft-dds"
-description = "DirectDraw Surface (DDS) textures: uncompressed and BC1-BC3 block compression, read and write, without dependencies"
+description = "DirectDraw Surface (DDS) textures: uncompressed and BC1-BC5 block compression, read and write, without dependencies"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

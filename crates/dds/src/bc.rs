@@ -1,6 +1,10 @@
-//! BC1, BC2 and BC3 (DXT1, DXT3, DXT5) blocks, after Microsoft's public block compression
+//! BC1 to BC5 (DXT1, DXT3, DXT5, ATI1, ATI2) blocks, after Microsoft's public block compression
 //! documentation ("Block Compression (Direct3D 10)" and "Texture Block Compression in Direct3D
-//! 11"): the palettes the DDS reader decodes with, and the block encoder the DDS writer uses.
+//! 11"): the block decoders and the block encoder the DDS reader and writer use. Nothing here
+//! knows about DDS headers, so other containers of the same blocks can use it.
+//!
+//! BC4 is one block of 16 single-channel values, the same block BC3 stores its alpha in; BC5 is
+//! two of them, red then green. [`value_block`] and [`decode_values`] serve all three.
 //!
 //! The encoder fits a block's colours with two RGB565 endpoints along their principal axis,
 //! refines them by least squares, and scores every candidate against the exact palette the
@@ -35,7 +39,7 @@ pub(crate) fn colour_palette(c0: u16, c1: u16, four: bool) -> [[u8; 4]; 4] {
     }
 }
 
-/// A BC3 alpha block's eight values: six interpolated at sevenths when `a0 > a1`, else four
+/// A value block's eight values: six interpolated at sevenths when `a0 > a1`, else four
 /// interpolated at fifths followed by 0 and 255.
 pub(crate) fn alpha_palette(a0: u8, a1: u8) -> [u8; 8] {
     let (a0, a1) = (u32::from(a0), u32::from(a1));
@@ -52,6 +56,32 @@ pub(crate) fn alpha_palette(a0: u8, a1: u8) -> [u8; 8] {
         }
     }
     palette.map(|v| v as u8)
+}
+
+/// A colour block's 16 texels as RGBA. BC2 and BC3 colour blocks always have four colours
+/// (`one_bit_alpha` false); only BC1's `c0 <= c1` order selects three colours and transparent
+/// black. Missing bytes read as 0.
+pub(crate) fn decode_colour(block: &[u8], one_bit_alpha: bool) -> Block {
+    let byte = |i: usize| block.get(i).copied().unwrap_or(0);
+    let (c0, c1) = (u16::from_le_bytes([byte(0), byte(1)]), u16::from_le_bytes([byte(2), byte(3)]));
+    let palette = colour_palette(c0, c1, c0 > c1 || !one_bit_alpha);
+    let indices = u32::from_le_bytes([byte(4), byte(5), byte(6), byte(7)]);
+    std::array::from_fn(|t| palette[(indices >> (2 * t)) as usize & 3])
+}
+
+/// BC2's alpha: four explicit bits per texel.
+pub(crate) fn decode_bc2_alpha(block: &[u8]) -> [u8; 16] {
+    let bits = u64::from_le_bytes(std::array::from_fn(|i| block.get(i).copied().unwrap_or(0)));
+    std::array::from_fn(|t| ((bits >> (4 * t)) & 0xf) as u8 * 17)
+}
+
+/// A value block (BC3's alpha, BC4, either half of BC5): two endpoints and a 3-bit index per
+/// texel into eight values, or into six plus 0 and 255 when `a0 <= a1`. Missing bytes read as 0.
+pub(crate) fn decode_values(block: &[u8]) -> [u8; 16] {
+    let byte = |i: usize| block.get(i).copied().unwrap_or(0);
+    let palette = alpha_palette(byte(0), byte(1));
+    let bits = u64::from_le_bytes([byte(2), byte(3), byte(4), byte(5), byte(6), byte(7), 0, 0]);
+    std::array::from_fn(|t| palette[((bits >> (3 * t)) & 7) as usize])
 }
 
 /// A BC1 block. Texels under half opacity become BC1's transparent black, which needs the
@@ -299,7 +329,7 @@ fn least_squares(block: &Block, opaque: Mask, bytes: &[u8; 8]) -> Option<(u16, u
     Some((to565(e0), to565(e1)))
 }
 
-/// An interpolated block of 16 single-channel values (BC3's alpha): whichever of the two modes
+/// A block of 16 single-channel values (BC3's alpha, BC4, either half of BC5): whichever of the two modes
 /// (eight values between the extremes, or six between the extremes other than 0 and 255, plus
 /// exact 0 and 255) fits better. Only the values of `inside` count.
 pub(crate) fn value_block(values: &[u8; 16], inside: Mask) -> [u8; 8] {
@@ -342,13 +372,6 @@ fn value_fit(values: &[u8; 16], inside: Mask, a0: u8, a1: u8) -> ([u8; 8], u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn decode_colour(bytes: &[u8; 8], bc1: bool) -> Block {
-        let (c0, c1) = (u16::from_le_bytes([bytes[0], bytes[1]]), u16::from_le_bytes([bytes[2], bytes[3]]));
-        let palette = colour_palette(c0, c1, c0 > c1 || !bc1);
-        let indices = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-        std::array::from_fn(|t| palette[(indices >> (2 * t)) as usize & 3])
-    }
 
     #[test]
     fn solid_blocks_land_on_the_nearest_565_colour() {
@@ -417,6 +440,31 @@ mod tests {
         let (_, bounding_box) = fit(&block, u16::MAX, 0, to565([120.0, 121.0, 121.0]), to565([136.0, 135.0, 135.0]), true);
         let ours = error(&colour_block(&block, u16::MAX, 0, false));
         assert!(ours < bounding_box, "{ours} vs the bounding box's {bounding_box}");
+    }
+
+    #[test]
+    fn value_blocks_decode_the_frozen_vectors() {
+        // Eight-value mode (a0 = 200 > a1 = 50), every index 0.
+        assert_eq!(decode_values(&[0xc8, 0x32, 0, 0, 0, 0, 0, 0]), [200; 16]);
+        // Six-value mode (a0 = 10 <= a1 = 250), every index 1.
+        assert_eq!(decode_values(&[0x0a, 0xfa, 0x49, 0x92, 0x24, 0x49, 0x92, 0x24]), [250; 16]);
+        // Six-value mode's indices 6 and 7 are 0 and 255 whatever the endpoints.
+        let bits: u64 = (0..16).fold(0, |b, t| b | (6 + (t % 2)) << (3 * t));
+        let b = bits.to_le_bytes();
+        let got = decode_values(&[10, 250, b[0], b[1], b[2], b[3], b[4], b[5]]);
+        assert_eq!(got, std::array::from_fn(|t| if t % 2 == 0 { 0 } else { 255 }));
+    }
+
+    #[test]
+    fn value_blocks_round_trip_ramps_and_solids() {
+        for values in [[200u8; 16], [0; 16], [255; 16], std::array::from_fn(|t| (t * 17) as u8), std::array::from_fn(|t| 100 + t as u8)] {
+            let back = decode_values(&value_block(&values, u16::MAX));
+            let worst = values.iter().zip(back).map(|(a, b)| a.abs_diff(b)).max().unwrap_or(0);
+            // Within half a step of either mode: 255 / 7 apart in the eight-value mode, about
+            // 221 / 5 in the six-value one.
+            assert!(worst <= 23, "{values:?} -> {back:?}");
+        }
+        assert_eq!(decode_values(&value_block(&[200; 16], u16::MAX)), [200; 16]);
     }
 
     #[test]

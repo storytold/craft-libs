@@ -3,12 +3,16 @@
 //!
 //! Reading: the top mip level of a 2D texture, either uncompressed (8 to 32 bits per pixel
 //! described by channel masks, RGB or luminance) or block-compressed BC1/BC2/BC3
-//! (DXT1/DXT3/DXT5), with or without the DX10 header. Cubemaps, texture arrays and volume
-//! textures are refused rather than flattened to one face or slice.
+//! (DXT1/DXT3/DXT5) or unsigned BC4/BC5 (ATI1/ATI2), with or without the DX10 header. BC4 opens
+//! as gray and BC5 as RGB with blue 0: BC5 stores only red and green, and a normal map's Z is
+//! left for the caller to reconstruct. Cubemaps, texture arrays and volume textures are refused
+//! rather than flattened to one face or slice, and signed (SNORM) BC4/BC5 is refused too.
 //!
-//! Writing: a 2D texture, uncompressed (BGRA or BGRX, luminance with or without alpha) or
-//! BC1/BC2/BC3, optionally with its full mip chain. The legacy header describes all of these,
-//! so no DX10 header is written; formats only DXGI can name (BC4–BC7, sRGB) aren't written.
+//! Writing: a 2D texture, uncompressed (BGRA or BGRX, luminance with or without alpha),
+//! BC1/BC2/BC3 or BC4/BC5, optionally with its full mip chain. The legacy header describes all
+//! but BC4 and BC5, which are written with the DX10 header (`BC4_UNORM`, `BC5_UNORM`): their
+//! legacy FourCCs are vendor names that programs read differently (ATI2's two blocks are swapped
+//! by some). BC6H, BC7 and sRGB formats aren't written.
 //!
 //! Pixels are 8 bits per channel, interleaved, top row first, in one of the [`Layout`]s. The
 //! crate has no dependencies; the `parallel` feature encodes and decodes rows of blocks (and mip
@@ -86,8 +90,10 @@ impl fmt::Display for DdsError {
 
 impl std::error::Error for DdsError {}
 
-/// How a DDS texture stores its pixels.
+/// How a DDS texture stores its pixels. More compressions may be added, so a `match` on it needs
+/// a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum DdsCompression {
     /// Uncompressed, 8 bits per channel: BGRA (BGRX without alpha), or luminance with or
     /// without alpha for grayscale. Lossless.
@@ -100,30 +106,52 @@ pub enum DdsCompression {
     Bc2,
     /// BC3 (DXT5): 8 bits per pixel, with smooth interpolated alpha.
     Bc3,
+    /// BC4 (ATI1): 4 bits per pixel, one channel: gray, for roughness, metallic, height or
+    /// ambient-occlusion maps. Written from gray pixels.
+    Bc4,
+    /// BC5 (ATI2): 8 bits per pixel, two channels: red and green, for tangent-space normal maps
+    /// (X and Y; Z is reconstructed by the renderer). Written from RGB pixels, blue dropped.
+    Bc5,
 }
 
 impl DdsCompression {
-    pub const ALL: [DdsCompression; 4] = [DdsCompression::None, DdsCompression::Bc1, DdsCompression::Bc2, DdsCompression::Bc3];
+    pub const ALL: [DdsCompression; 6] =
+        [DdsCompression::None, DdsCompression::Bc1, DdsCompression::Bc2, DdsCompression::Bc3, DdsCompression::Bc4, DdsCompression::Bc5];
 
-    /// The name scripts and the CLI use: `none`, `bc1`, `bc2` or `bc3`.
+    /// The name scripts and the CLI use: `none`, `bc1`, `bc2`, `bc3`, `bc4` or `bc5`.
     pub fn name(self) -> &'static str {
         match self {
             DdsCompression::None => "none",
             DdsCompression::Bc1 => "bc1",
             DdsCompression::Bc2 => "bc2",
             DdsCompression::Bc3 => "bc3",
+            DdsCompression::Bc4 => "bc4",
+            DdsCompression::Bc5 => "bc5",
         }
     }
 
-    /// [`Self::name`] back to a compression, also taking the DXT names (`dxt1`, `dxt3`,
-    /// `dxt5`), in any case. Anything else is `None`.
+    /// [`Self::name`] back to a compression, also taking the DXT and ATI names (`dxt1`, `dxt3`,
+    /// `dxt5`, `ati1`, `ati2`), in any case. Anything else is `None`.
     pub fn from_name(name: &str) -> Option<Self> {
         match name.to_ascii_lowercase().as_str() {
             "none" => Some(DdsCompression::None),
             "bc1" | "dxt1" => Some(DdsCompression::Bc1),
             "bc2" | "dxt3" => Some(DdsCompression::Bc2),
             "bc3" | "dxt5" => Some(DdsCompression::Bc3),
+            "bc4" | "ati1" => Some(DdsCompression::Bc4),
+            "bc5" | "ati2" => Some(DdsCompression::Bc5),
             _ => None,
+        }
+    }
+
+    /// The pixel layout the compression is written from: gray for BC4, RGB for BC5, RGBA for
+    /// the other block compressions. `None` for uncompressed textures, which take every layout.
+    pub fn layout(self) -> Option<Layout> {
+        match self {
+            DdsCompression::None => None,
+            DdsCompression::Bc4 => Some(Layout::Gray),
+            DdsCompression::Bc5 => Some(Layout::Rgb),
+            DdsCompression::Bc1 | DdsCompression::Bc2 | DdsCompression::Bc3 => Some(Layout::Rgba),
         }
     }
 
@@ -224,6 +252,10 @@ enum Encoding {
     Bc1,
     Bc2,
     Bc3,
+    /// One value block: gray.
+    Bc4,
+    /// Two value blocks: red, then green.
+    Bc5,
 }
 
 impl Encoding {
@@ -247,7 +279,18 @@ impl Encoding {
             Encoding::Masks { gray: true, fields, .. } if fields[3].is_some() => Layout::GrayA,
             Encoding::Masks { gray: true, .. } => Layout::Gray,
             Encoding::Masks { fields, .. } if fields[3].is_none() => Layout::Rgb,
+            Encoding::Bc4 => Layout::Gray,
+            Encoding::Bc5 => Layout::Rgb,
             _ => Layout::Rgba,
+        }
+    }
+
+    /// Bytes per 4×4 block; 0 for uncompressed pixels.
+    fn block_size(&self) -> usize {
+        match self {
+            Encoding::Masks { .. } => 0,
+            Encoding::Bc1 | Encoding::Bc4 => 8,
+            Encoding::Bc2 | Encoding::Bc3 | Encoding::Bc5 => 16,
         }
     }
 
@@ -267,9 +310,8 @@ impl Encoding {
                 }
                 (row_bytes, h)
             }
-            Encoding::Bc1 | Encoding::Bc2 | Encoding::Bc3 => {
-                let block = if matches!(self, Encoding::Bc1) { 8 } else { 16 };
-                (w.div_ceil(4).checked_mul(block).ok_or_else(overflow)?, h.div_ceil(4))
+            Encoding::Bc1 | Encoding::Bc2 | Encoding::Bc3 | Encoding::Bc4 | Encoding::Bc5 => {
+                (w.div_ceil(4).checked_mul(self.block_size()).ok_or_else(overflow)?, h.div_ceil(4))
             }
         };
         let size = row_bytes.checked_mul(rows).ok_or_else(overflow)?;
@@ -286,8 +328,14 @@ fn legacy_encoding(b: &[u8]) -> Result<Encoding, DdsError> {
             b"DXT1" => Ok(Encoding::Bc1),
             b"DXT3" => Ok(Encoding::Bc2),
             b"DXT5" => Ok(Encoding::Bc3),
+            // Microsoft's mapping (DirectXTex reads ATI2 as BC5_UNORM, as Pillow does): red in
+            // the first block, green in the second. FFmpeg's reader swaps the two blocks of
+            // ATI2, after the old ATI 3Dc tools; this reader doesn't.
+            b"ATI1" | b"BC4U" => Ok(Encoding::Bc4),
+            b"ATI2" | b"BC5U" => Ok(Encoding::Bc5),
+            b"BC4S" | b"BC5S" => Err(unsupported(format!("signed (SNORM) `{}` textures are not supported", fourcc_name(fourcc)))),
             b"DXT2" | b"DXT4" => Err(unsupported("premultiplied-alpha DXT2/DXT4 textures are not supported")),
-            _ => Err(unsupported(format!("compression `{}` is not supported (DXT1, DXT3 and DXT5 are)", fourcc_name(fourcc)))),
+            _ => Err(unsupported(format!("compression `{}` is not supported (DXT1, DXT3, DXT5, ATI1/BC4U and ATI2/BC5U are)", fourcc_name(fourcc)))),
         };
     }
     if flags & DDPF_RGB != 0 {
@@ -321,7 +369,12 @@ fn dx10_encoding(b: &[u8]) -> Result<Encoding, DdsError> {
         70..=72 => Ok(Encoding::Bc1),
         73..=75 => Ok(Encoding::Bc2),
         76..=78 => Ok(Encoding::Bc3),
-        _ => Err(unsupported(format!("DXGI format {dxgi} is not supported (BC1, BC2, BC3 and 8-bit RGBA or BGRA are)"))),
+        // Typeless, then UNORM: a typeless texture's view is unsigned unless a program says
+        // otherwise, and Pillow writes BC5 as typeless.
+        79 | 80 => Ok(Encoding::Bc4),
+        82 | 83 => Ok(Encoding::Bc5),
+        81 | 84 => Err(unsupported(format!("signed (SNORM) BC4 and BC5 textures are not supported (DXGI format {dxgi})"))),
+        _ => Err(unsupported(format!("DXGI format {dxgi} is not supported (BC1 to BC5 and 8-bit RGBA or BGRA are)"))),
     }
 }
 
@@ -386,7 +439,9 @@ impl<'a> Texture<'a> {
         let mut pixels = vec![0u8; total];
         match encoding {
             Encoding::Masks { bytes, gray, fields } => decode_masks(Masks { bytes, gray, fields }, data, row_pitch, &mut pixels, row_size),
-            Encoding::Bc1 | Encoding::Bc2 | Encoding::Bc3 => decode_blocks(encoding, data, (w, channels), &mut pixels),
+            Encoding::Bc1 | Encoding::Bc2 | Encoding::Bc3 | Encoding::Bc4 | Encoding::Bc5 => {
+                decode_blocks(encoding, data, (w, channels), &mut pixels)
+            }
         }
         Ok(pixels)
     }
@@ -455,16 +510,19 @@ fn decode_masks(m: Masks, data: &[u8], row_pitch: usize, pixels: &mut [u8], row_
 /// per task. Blocks wholly inside the image copy whole rows of texels; only those on the right
 /// edge check each texel.
 fn decode_blocks(encoding: Encoding, data: &[u8], (width, channels): (usize, usize), pixels: &mut [u8]) {
-    let block_size = if matches!(encoding, Encoding::Bc1) { 8 } else { 16 };
+    let block_size = encoding.block_size().max(1);
     let blocks_x = width.div_ceil(4);
     let row_size = width * channels;
     rows(pixels, row_size.saturating_mul(4), |by, band| {
         let src = data.get(by * blocks_x * block_size..).unwrap_or_default();
         for (bx, block) in src.chunks_exact(block_size).take(blocks_x).enumerate() {
+            let second = block.get(8..).unwrap_or_default();
             let texels = match encoding {
-                Encoding::Bc1 => bc1(block, true),
-                Encoding::Bc2 => with_alpha(bc1(block.get(8..).unwrap_or_default(), false), bc2_alpha(block)),
-                _ => with_alpha(bc1(block.get(8..).unwrap_or_default(), false), bc3_alpha(block)),
+                Encoding::Bc1 => bc::decode_colour(block, true),
+                Encoding::Bc2 => with_alpha(bc::decode_colour(second, false), bc::decode_bc2_alpha(block)),
+                Encoding::Bc4 => values(&[bc::decode_values(block)]),
+                Encoding::Bc5 => values(&[bc::decode_values(block), bc::decode_values(second)]),
+                _ => with_alpha(bc::decode_colour(second, false), bc::decode_values(block)),
             };
             let x0 = bx * 4;
             // The band holds the block's rows that lie inside the image (fewer than four in the
@@ -485,29 +543,10 @@ fn decode_blocks(encoding: Encoding, data: &[u8], (width, channels): (usize, usi
     });
 }
 
-/// A BC1 colour block. BC2 and BC3 colour blocks always have four colours; only BC1's
-/// `c0 <= c1` order selects three colours and transparent black.
-fn bc1(block: &[u8], one_bit_alpha: bool) -> [[u8; 4]; 16] {
-    let byte = |i: usize| block.get(i).copied().unwrap_or(0);
-    let (c0, c1) = (u16::from_le_bytes([byte(0), byte(1)]), u16::from_le_bytes([byte(2), byte(3)]));
-    let palette = bc::colour_palette(c0, c1, c0 > c1 || !one_bit_alpha);
-    let indices = u32::from_le_bytes([byte(4), byte(5), byte(6), byte(7)]);
-    std::array::from_fn(|t| palette[(indices >> (2 * t)) as usize & 3])
-}
-
-/// BC2: four explicit bits of alpha per texel.
-fn bc2_alpha(block: &[u8]) -> [u8; 16] {
-    let bits = u64::from_le_bytes(std::array::from_fn(|i| block.get(i).copied().unwrap_or(0)));
-    std::array::from_fn(|t| ((bits >> (4 * t)) & 0xf) as u8 * 17)
-}
-
-/// BC3: two alpha endpoints and a 3-bit index per texel into eight values, or into six plus
-/// 0 and 255 when `a0 <= a1`.
-fn bc3_alpha(block: &[u8]) -> [u8; 16] {
-    let byte = |i: usize| block.get(i).copied().unwrap_or(0);
-    let palette = bc::alpha_palette(byte(0), byte(1));
-    let bits = u64::from_le_bytes([byte(2), byte(3), byte(4), byte(5), byte(6), byte(7), 0, 0]);
-    std::array::from_fn(|t| palette[((bits >> (3 * t)) & 7) as usize])
+/// Texels whose first channels are `channels`' values, the rest 0: gray for BC4, red and green
+/// (and blue 0) for BC5.
+fn values(channels: &[[u8; 16]]) -> [[u8; 4]; 16] {
+    std::array::from_fn(|t| std::array::from_fn(|c| channels.get(c).map_or(0, |v| v[t])))
 }
 
 fn with_alpha(mut texels: [[u8; 4]; 16], alpha: [u8; 16]) -> [[u8; 4]; 16] {
@@ -527,6 +566,8 @@ const DDSD_LINEARSIZE: u32 = 0x8_0000;
 const DDSCAPS_COMPLEX: u32 = 0x8;
 const DDSCAPS_TEXTURE: u32 = 0x1000;
 const DDSCAPS_MIPMAP: u32 = 0x40_0000;
+const DXGI_BC4_UNORM: u32 = 80;
+const DXGI_BC5_UNORM: u32 = 83;
 
 fn encode_err(reason: impl fmt::Display) -> DdsError {
     DdsError::Encode(reason.to_string())
@@ -554,10 +595,13 @@ enum Store {
     Bc1,
     Bc2,
     Bc3,
+    Bc4,
+    Bc5,
 }
 
 impl Store {
-    /// The storage for pixels of `layout`. Block compressions take RGBA only.
+    /// The storage for pixels of `layout`. Block compressions take their
+    /// [`DdsCompression::layout`] only.
     fn new(compression: DdsCompression, layout: Layout) -> Result<Store, DdsError> {
         Ok(match (compression, layout) {
             (DdsCompression::None, Layout::Gray) => Store::Luminance,
@@ -567,6 +611,8 @@ impl Store {
             (DdsCompression::Bc1, Layout::Rgba) => Store::Bc1,
             (DdsCompression::Bc2, Layout::Rgba) => Store::Bc2,
             (DdsCompression::Bc3, Layout::Rgba) => Store::Bc3,
+            (DdsCompression::Bc4, Layout::Gray) => Store::Bc4,
+            (DdsCompression::Bc5, Layout::Rgb) => Store::Bc5,
             (_, layout) => return Err(encode_err(format!("{layout:?} pixels can't be written as `{}`", compression.name()))),
         })
     }
@@ -577,13 +623,22 @@ impl Store {
             Store::Luminance => 1,
             Store::LuminanceAlpha => 2,
             Store::Bgrx | Store::Bgra => 4,
-            Store::Bc1 => 8,
-            Store::Bc2 | Store::Bc3 => 16,
+            Store::Bc1 | Store::Bc4 => 8,
+            Store::Bc2 | Store::Bc3 | Store::Bc5 => 16,
         }
     }
 
     fn is_block(self) -> bool {
-        matches!(self, Store::Bc1 | Store::Bc2 | Store::Bc3)
+        matches!(self, Store::Bc1 | Store::Bc2 | Store::Bc3 | Store::Bc4 | Store::Bc5)
+    }
+
+    /// The DXGI format of the DX10 header, for the formats the legacy header can't name.
+    fn dxgi(self) -> Option<u32> {
+        match self {
+            Store::Bc4 => Some(DXGI_BC4_UNORM),
+            Store::Bc5 => Some(DXGI_BC5_UNORM),
+            _ => None,
+        }
     }
 
     /// Bytes of one row of pixels (or of 4×4 blocks) of a level `width` wide.
@@ -606,6 +661,7 @@ impl Store {
             Store::Bc1 => (DDPF_FOURCC, *b"DXT1", 0, [0; 4]),
             Store::Bc2 => (DDPF_FOURCC, *b"DXT3", 0, [0; 4]),
             Store::Bc3 => (DDPF_FOURCC, *b"DXT5", 0, [0; 4]),
+            Store::Bc4 | Store::Bc5 => (DDPF_FOURCC, *b"DX10", 0, [0; 4]),
         }
     }
 }
@@ -620,7 +676,8 @@ fn half((w, h): (usize, usize)) -> (usize, usize) {
 }
 
 /// A DDS file of `width` × `height` `pixels` in `layout`, interleaved and top row first.
-/// Block compressions take [`Layout::Rgba`] pixels; uncompressed textures take every layout.
+/// Block compressions take the layout [`DdsCompression::layout`] names (RGBA for BC1 to BC3,
+/// gray for BC4, RGB for BC5); uncompressed textures take every layout.
 pub fn encode(width: u32, height: u32, layout: Layout, pixels: &[u8], options: DdsOptions) -> Result<Vec<u8>, DdsError> {
     let store = Store::new(options.compression, layout)?;
     let expected = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(layout.channels()));
@@ -636,14 +693,18 @@ pub fn encode(width: u32, height: u32, layout: Layout, pixels: &[u8], options: D
         sizes.push(store.level_bytes(size.0, size.1).ok_or_else(|| encode_err("texture size overflow"))?);
         size = half(size);
     }
-    let total = sizes.iter().try_fold(HEADER, |total, &s| total.checked_add(s)).ok_or_else(|| encode_err("texture size overflow"))?;
+    let head = if store.dxgi().is_some() { HEADER + DX10_HEADER } else { HEADER };
+    let total = sizes.iter().try_fold(head, |total, &s| total.checked_add(s)).ok_or_else(|| encode_err("texture size overflow"))?;
     let header = header(width, height, store, levels, sizes.first().copied().unwrap_or(0))?;
     let mut out = alloc_zeroed(total)?;
-    out.get_mut(..HEADER).ok_or_else(|| encode_err("output buffer too small"))?.copy_from_slice(&header);
+    let (Some(dst), Some(src)) = (out.get_mut(..head), header.get(..head)) else {
+        return Err(encode_err("output buffer too small"));
+    };
+    dst.copy_from_slice(src);
 
     let channels = layout.channels();
     let mut level = Cow::Borrowed(pixels);
-    let (mut size, mut at) = (top, HEADER);
+    let (mut size, mut at) = (top, head);
     for (i, &bytes) in sizes.iter().enumerate() {
         let dst = out.get_mut(at..at + bytes).ok_or_else(|| encode_err("output buffer too small"))?;
         write_level(store, &level, size, dst)?;
@@ -657,9 +718,10 @@ pub fn encode(width: u32, height: u32, layout: Layout, pixels: &[u8], options: D
     Ok(out)
 }
 
-/// The `DDS ` signature and DDS_HEADER. `top` is the top level's size in bytes.
-fn header(width: u32, height: u32, store: Store, levels: u32, top: usize) -> Result<[u8; HEADER], DdsError> {
-    let mut b = [0u8; HEADER];
+/// The `DDS ` signature, DDS_HEADER and, for a format only DXGI names, DDS_HEADER_DXT10 (the
+/// caller keeps the first [`HEADER`] bytes otherwise). `top` is the top level's size in bytes.
+fn header(width: u32, height: u32, store: Store, levels: u32, top: usize) -> Result<[u8; HEADER + DX10_HEADER], DdsError> {
+    let mut b = [0u8; HEADER + DX10_HEADER];
     let mut put = |at: usize, v: u32| {
         if let Some(d) = b.get_mut(at..at + 4) {
             d.copy_from_slice(&v.to_le_bytes());
@@ -686,6 +748,12 @@ fn header(width: u32, height: u32, store: Store, levels: u32, top: usize) -> Res
         put(92 + 4 * i, mask);
     }
     put(108, DDSCAPS_TEXTURE | if mipmapped { DDSCAPS_COMPLEX | DDSCAPS_MIPMAP } else { 0 });
+    if let Some(dxgi) = store.dxgi() {
+        // One 2D texture, no misc flags, alpha mode unknown (the formats have no alpha).
+        put(HEADER, dxgi);
+        put(HEADER + 4, DIMENSION_TEXTURE2D);
+        put(HEADER + 12, 1);
+    }
     b[..4].copy_from_slice(b"DDS ");
     Ok(b)
 }
@@ -739,8 +807,38 @@ fn write_level(store: Store, pixels: &[u8], (width, height): (usize, usize), dst
                 }
             });
         }
+        Store::Bc4 | Store::Bc5 => {
+            // BC4: the gray channel; BC5: red, then green, of RGB pixels.
+            let channels = if store == Store::Bc4 { 1 } else { 3 };
+            rows(dst, row_bytes, |by, row| {
+                for (bx, d) in row.chunks_exact_mut(store.unit()).enumerate() {
+                    for (c, d) in d.as_chunks_mut::<8>().0.iter_mut().enumerate() {
+                        let (values, inside) = gather_channel(pixels, (width, height), channels, c, (bx, by));
+                        *d = bc::value_block(&values, inside);
+                    }
+                }
+            });
+        }
     }
     Ok(())
+}
+
+/// Channel `c` of block (`bx`, `by`) of pixels with `channels` channels, and which of its texels
+/// lie inside the image.
+fn gather_channel(pixels: &[u8], (width, height): (usize, usize), channels: usize, c: usize, (bx, by): (usize, usize)) -> ([u8; 16], Mask) {
+    let mut values = [0u8; 16];
+    let mut inside: Mask = 0;
+    for (t, v) in values.iter_mut().enumerate() {
+        let (x, y) = (bx * 4 + t % 4, by * 4 + t / 4);
+        if x < width
+            && y < height
+            && let Some(&p) = pixels.get((y * width + x) * channels + c)
+        {
+            *v = p;
+            inside |= 1 << t;
+        }
+    }
+    (values, inside)
 }
 
 /// Block (`bx`, `by`)'s texels, and which of them lie inside the image.
@@ -831,9 +929,17 @@ mod tests {
     }
 
     #[test]
-    fn block_compressions_take_rgba_only() {
+    fn block_compressions_take_their_layout_only() {
         let options = DdsOptions { compression: DdsCompression::Bc3, mipmaps: false };
         assert_eq!(encode(1, 1, Layout::Rgb, &[1, 2, 3], options), Err(DdsError::Encode("Rgb pixels can't be written as `bc3`".into())));
+        for compression in DdsCompression::ALL {
+            for layout in [Layout::Gray, Layout::GrayA, Layout::Rgb, Layout::Rgba] {
+                let options = DdsOptions { compression, mipmaps: false };
+                let written = encode(1, 1, layout, &[9; 4][..layout.channels()], options);
+                let takes = compression.layout().is_none_or(|l| l == layout);
+                assert_eq!(written.is_ok(), takes, "{compression:?} from {layout:?}");
+            }
+        }
     }
 
     #[test]

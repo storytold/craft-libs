@@ -19,7 +19,7 @@ fn error(e: DdsError) -> CodecError {
     }
 }
 
-fn channel_layout(layout: Layout) -> ChannelLayout {
+pub(crate) fn channel_layout(layout: Layout) -> ChannelLayout {
     match layout {
         Layout::Gray => ChannelLayout::Gray,
         Layout::GrayA => ChannelLayout::GrayA,
