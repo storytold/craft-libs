@@ -71,6 +71,7 @@ pub mod file;
 pub mod filter_effects;
 #[cfg(any(test, feature = "testgen"))]
 pub mod fixtures;
+pub mod flat;
 pub mod float;
 pub mod grd;
 pub mod hdr;
@@ -80,6 +81,7 @@ pub mod image_data;
 mod io;
 pub mod layer;
 mod lazy;
+pub mod merged;
 pub mod metadata;
 pub mod path;
 pub mod patterns;
