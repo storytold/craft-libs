@@ -39,8 +39,7 @@
 //! name is listed in [`Scene::external`]. The names come from the file: a resolver must not trust
 //! them as paths.
 //!
-//! Not read: FBX 5 and older, animation stacks, skin deformers, blend shapes, cameras and
-//! lights, NURBS and patches.
+//! Not read: FBX 5 and older, animation stacks, skin deformers, blend shapes, lights, NURBS and patches.
 //!
 //! [`Limits::max_data_bytes`] bounds what one file may keep in memory: its parsed values (an
 //! array element counts 8 bytes whatever its type in the file), the meshes built from them and
@@ -50,8 +49,8 @@ use std::cell::Cell;
 use std::collections::HashMap;
 
 use crate::{
-    AlphaMode, Corner, IDENTITY, Image, Limits, Mat4, Material, Mesh, NONE, Node, Part, Resolver, Result, Scene, TextureRef, base64_decode,
-    count_warning, malformed, mat_mul, srgb_to_linear, too_large,
+    AlphaMode, Camera, Corner, IDENTITY, Image, Limits, Mat4, Material, Mesh, NONE, Node, Part, Projection, Resolver, Result, Scene, TextureRef,
+    base64_decode, count_warning, malformed, mat_mul, srgb_to_linear, too_large,
 };
 
 const KIND: &str = "FBX";
@@ -824,6 +823,44 @@ impl Document {
             match parent.get(&i).and_then(|p| b.scene.nodes.get_mut(*p)) {
                 Some(p) => p.children.push(i),
                 None => b.scene.roots.push(i),
+            }
+        }
+
+        // FBX cameras look along +X; a child turns the neutral camera's -Z onto +X.
+        // Keep this separate from the Model so its children retain their original transforms.
+        for (id, model) in &models {
+            let class_index = if matches!(model.props.first(), Some(Prop::Int(_))) { 2 } else { 1 };
+            if model.str_at(class_index) != Some("Camera") {
+                continue;
+            }
+            let name = short_name(model.first_str().unwrap_or(""));
+            if name.starts_with("Producer ") {
+                continue;
+            }
+            let Some(ni) = node_of.get(id).copied() else { continue };
+            let lens = b.children_of(*id, "NodeAttribute").last().and_then(|(key, _)| b.by_key.get(key)).copied().unwrap_or(model);
+            let props = Props::of(lens);
+            let positive = |key| props.f(key).filter(|v| *v > 0.0);
+            let projection = if props.f("CameraProjectionType") == Some(1.0) {
+                let mag = positive("OrthoZoom").unwrap_or(1.0);
+                Projection::Orthographic { xmag: mag, ymag: mag, znear: 0.01, zfar: 1000.0 }
+            } else {
+                let yfov = match positive("FocalLength") {
+                    Some(focal) => 2.0 * (positive("FilmHeight").unwrap_or(0.612) * 25.4 / (2.0 * focal)).atan(),
+                    None => positive("FieldOfViewY").or_else(|| positive("FieldOfView")).unwrap_or(40.0).to_radians(),
+                };
+                Projection::Perspective { yfov, aspect: None, znear: 0.01, zfar: None }
+            };
+            if b.scene.cameras.len() >= limits.max_extras {
+                return Err(too_large(KIND, "too many cameras"));
+            }
+            b.node_room()?;
+            let ci = b.scene.cameras.len();
+            b.scene.cameras.push(Camera { name: name.to_string(), projection });
+            let child = b.scene.nodes.len();
+            b.scene.nodes.push(Node { name: format!("{name} camera"), transform: rotate(1, -90.0), camera: Some(ci), ..Node::default() });
+            if let Some(node) = b.scene.nodes.get_mut(ni) {
+                node.children.push(child);
             }
         }
 

@@ -701,3 +701,38 @@ fn fbx_invalid_material_slot_is_unassigned_and_unnamed_material_has_id() {
     assert!(parts.iter().any(|p| p.material.is_none()));
     assert!(parts.iter().any(|p| p.material.is_some()));
 }
+
+#[test]
+fn cameras_keep_lens_and_model_hierarchy() {
+    let text = r#"FBXHeaderExtension: { FBXVersion: 7400 }
+Objects: {
+ Model: 1, "Model::Rig", "Null" { Properties70: { P: "Lcl Translation", "", "", "", 1,2,3 } }
+ Model: 2, "Model::View", "Camera" { }
+ NodeAttribute: 3, "NodeAttribute::Lens", "Camera" { Properties70: {
+  P: "FocalLength", "", "", "", 50
+  P: "FilmHeight", "", "", "", 1
+ } }
+ Model: 4, "Model::Ortho", "Camera" { Properties70: {
+  P: "CameraProjectionType", "", "", "", 1
+  P: "OrthoZoom", "", "", "", 3
+ } }
+ Model: 5, "Model::Producer Perspective", "Camera" { }
+}
+Connections: {
+ C: "OO",2,1
+ C: "OO",3,2
+}
+"#;
+    let scene = parse(text.as_bytes()).unwrap();
+    assert_eq!(scene.cameras.len(), 2);
+    let crate::Projection::Perspective { yfov, .. } = scene.cameras[0].projection else { panic!("perspective") };
+    assert!((yfov - 2.0 * (25.4_f64 / 100.0).atan()).abs() < 1e-12);
+    assert!(matches!(scene.cameras[1].projection, crate::Projection::Orthographic { ymag: 3.0, .. }));
+    let camera_node = scene.nodes.iter().find(|n| n.camera == Some(0)).unwrap();
+    let forward = crate::transform_point(&camera_node.transform, [0.0, 0.0, -1.0]);
+    assert!((forward[0] - 1.0).abs() < 1e-12);
+    let rig = scene.nodes.iter().find(|n| n.name == "Rig").unwrap();
+    assert!(rig.children.iter().any(|i| scene.nodes[*i].name == "View"));
+    let limits = Limits { max_extras: 1, ..Limits::default() };
+    assert!(matches!(read(text.as_bytes(), &limits, &mut no_external), Err(Error::TooLarge(_))));
+}
