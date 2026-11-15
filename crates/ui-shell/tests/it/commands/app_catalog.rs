@@ -172,3 +172,30 @@ fn an_app_catalogs_alternate_key_for_a_registry_command_runs_it() {
     frames.frame(vec![key_release(Key::F2, Modifiers::NONE)], &mut show);
     assert_eq!(fired(&frames), by_registry_key, "the catalog's alternate key does what the registry's key does");
 }
+
+/// A story's commands: only an install that shows stories loads them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui::contract::CommandSet)]
+#[command(prefix = "trialStory", story)]
+#[non_exhaustive]
+enum StoryCommand {
+    #[command(label = "Story Eraser", default = "Cmd+Alt+Shift+E")]
+    Eraser,
+}
+
+/// A story's command set binds its keys in an install that shows stories (the story fixtures, the gallery) and is absent
+/// from an app's install, so a story's keys never take an app's.
+#[trial]
+fn a_story_command_set_loads_only_in_an_install_that_shows_stories() {
+    let eraser = CommandRef::from(StoryCommand::Eraser);
+    let mut stories = Frames::new();
+    stories.idle(2, &mut |_: &mut Ui| {});
+    assert!(!craft_ui::runtime::commands::bindings(&stories.ctx, &eraser).is_empty(), "the story fixture loads the story's set");
+
+    let mut app = Frames::uninstalled();
+    let spec = craft_ui::InstallSpec::new(craft_host::target::ShellInfo::default(), std::sync::Arc::new(craft_ui::testing::windows::NoWindows));
+    craft_ui::install(&app.ctx, spec).expect("the app's install");
+    app.idle(2, &mut |_: &mut Ui| {});
+    assert!(craft_ui::runtime::commands::bindings(&app.ctx, &eraser).is_empty(), "an app's install has no story's set");
+    let save = CommandRef::new("trial.save");
+    assert!(!craft_ui::runtime::commands::bindings(&app.ctx, &save).is_empty(), "the app's install keeps the other sets");
+}

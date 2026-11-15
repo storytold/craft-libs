@@ -7,7 +7,7 @@ use std::num::NonZeroU8;
 
 /// The tools of the stories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui_macros::CommandSet)]
-#[command(prefix = "railStory")]
+#[command(prefix = "railStory", story)]
 #[non_exhaustive]
 pub(crate) enum StoryTools {
     /// Move.

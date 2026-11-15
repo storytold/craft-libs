@@ -1,4 +1,4 @@
-//! `#[derive(CommandSet)]` with `#[command(prefix = "..", scope = "..")]` on the enum and
+//! `#[derive(CommandSet)]` with `#[command(prefix = "..", scope = "..", story)]` on the enum and
 //! `#[command(label = "..", icon = "..", kind = "..", group = "..", modal = "..", edit = "..", default = "..", path = "..", alias = "..")]` on variants.
 //! `edit = ".."` links the command to the `EditCommand` a focused component takes it as.
 //! `default(mac = "..")` (or `windows`, `linux`) is a default of one platform: it replaces the unqualified defaults there.
@@ -12,6 +12,7 @@ use syn::{Attribute, Data, DeriveInput, Fields, LitStr, Variant};
 struct SetAttrs {
     prefix: Option<LitStr>,
     scope: Option<LitStr>,
+    story: bool,
 }
 
 #[derive(Default)]
@@ -211,11 +212,14 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             set.prefix = Some(meta.value()?.parse()?);
         } else if meta.path.is_ident("scope") {
             set.scope = Some(meta.value()?.parse()?);
+        } else if meta.path.is_ident("story") {
+            set.story = true;
         } else {
             return Ok(false);
         }
         Ok(true)
     })?;
+    let register = if set.story { quote!(#k::__register_command_set!(#ident, story);) } else { quote!(#k::__register_command_set!(#ident);) };
     let prefix = set.prefix.ok_or_else(|| syn::Error::new_spanned(ident, "a command set names its id prefix: `#[command(prefix = \"..\")]`"))?;
     check_prefix(&prefix)?;
     if let Some(scope) = &set.scope {
@@ -316,7 +320,7 @@ pub(crate) fn derive(input: TokenStream) -> syn::Result<TokenStream> {
         }
 
         const _: () = {
-            #k::__register_command_set!(#ident);
+            #register
         };
     })
 }

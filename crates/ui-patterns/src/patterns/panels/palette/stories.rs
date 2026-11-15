@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 
 /// The PhotoCraft commands of the stories that the library's edit commands do not cover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, craft_ui_macros::CommandSet)]
-#[command(prefix = "paletteStory")]
+#[command(prefix = "paletteStory", story)]
 enum PhotoCraftCommand {
     #[command(label = "Search", icon = "search", default = "Cmd+F")]
     Search,

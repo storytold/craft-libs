@@ -39,6 +39,9 @@ pub struct InstallSpec {
     pub app_id: String,
     /// The tablet readings the pointer feed pairs with each pointer move; none reports no pen.
     pub pen: Option<PenSource>,
+    /// Whether the stories' command sets (`#[command(story)]`) load: the gallery and the story fixtures show
+    /// stories, an app does not, so a story's keys never reach an app's keymap.
+    pub stories: bool,
 }
 
 /// The modifiers the mouse wheel zooms and scrolls sideways with.
@@ -70,7 +73,14 @@ impl InstallSpec {
             wheel: WheelModifiers::default(),
             app_id: String::new(),
             pen: None,
+            stories: false,
         }
+    }
+
+    /// Loads the stories' command sets too, for an install that shows stories.
+    pub fn stories(mut self) -> Self {
+        self.stories = true;
+        self
     }
 
     /// Sets the store viewport mounts save their window placement in.
@@ -177,7 +187,7 @@ pub fn install(ctx: &Context, spec: InstallSpec) -> Result<(), InstallError> {
         return Err(InstallError::DuringPass);
     }
     let looks = spec.looks.freeze().map_err(InstallError::DuplicateStyle)?;
-    commands::install(ctx).map_err(InstallError::Commands)?;
+    commands::install(ctx, spec.stories).map_err(InstallError::Commands)?;
     looks.store(ctx);
     input::clear_shortcuts(ctx);
     input::set_wheel_modifiers(ctx, spec.wheel.zoom, spec.wheel.sideways);

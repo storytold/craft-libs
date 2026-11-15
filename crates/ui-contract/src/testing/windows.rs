@@ -8,9 +8,9 @@ pub use crate::runtime::egui::fixture::{FullOutput, RawInput, dragged_id, record
 
 pub use craft_window::system::{FakeSystem, NoWindows};
 
-/// An install spec for the running build's shell and a system with no OS services.
+/// An install spec for the running build's shell and a system with no OS services, with the stories' command sets.
 pub fn install_spec() -> InstallSpec {
-    InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows))
+    InstallSpec::new(ShellInfo::default(), Arc::new(NoWindows)).stories()
 }
 
 /// Makes the shell of `ctx` run on `os`, for a test of the OS matrix: the key table, the chords shown, the chrome,

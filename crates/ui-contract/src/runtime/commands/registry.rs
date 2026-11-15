@@ -23,6 +23,8 @@ pub struct SetEntry {
     pub edits: fn() -> Vec<(&'static str, EditCommand)>,
     /// The defaults of one platform, which replace the command's other defaults there.
     pub platform_defaults: fn() -> Result<Vec<PlatformDefault>, CommandDefError>,
+    /// A story's set (`#[command(story)]`): loaded only by an install that shows stories.
+    pub story: bool,
 }
 
 impl SetEntry {
@@ -34,7 +36,13 @@ impl SetEntry {
         edits: fn() -> Vec<(&'static str, EditCommand)>,
         platform_defaults: fn() -> Result<Vec<PlatformDefault>, CommandDefError>,
     ) -> Self {
-        SetEntry { name, defs, no_default_on, edits, platform_defaults }
+        SetEntry { name, defs, no_default_on, edits, platform_defaults, story: false }
+    }
+
+    /// The entry as a story's set.
+    pub const fn story(mut self) -> Self {
+        self.story = true;
+        self
     }
 }
 
@@ -48,20 +56,27 @@ pub fn sets() -> Vec<&'static SetEntry> {
     sets
 }
 
-/// Registers the command set `$ty`, so `install` loads it.
+/// Registers the command set `$ty`, so `install` loads it; `story` registers a story's set, which only an install
+/// that shows stories loads.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __register_command_set {
     ($ty:ty) => {
+        $crate::__register_command_set!(@entry $ty, ::core::convert::identity);
+    };
+    ($ty:ty, story) => {
+        $crate::__register_command_set!(@entry $ty, $crate::runtime::commands::SetEntry::story);
+    };
+    (@entry $ty:ty, $mark:expr) => {
         const _: () = {
             $crate::__private::inventory::submit! {
-                $crate::runtime::commands::SetEntry::new(
+                $mark($crate::runtime::commands::SetEntry::new(
                     ::std::any::type_name::<$ty>,
                     <$ty as $crate::runtime::commands::CommandSet>::defs,
                     <$ty as $crate::runtime::commands::CommandSet>::no_default_on,
                     <$ty as $crate::runtime::commands::CommandSet>::edits,
                     <$ty as $crate::runtime::commands::CommandSet>::platform_defaults,
-                )
+                ))
             }
         };
     };
@@ -124,7 +139,8 @@ impl std::fmt::Display for CommandDefError {
 
 impl std::error::Error for CommandDefError {}
 
-static LOADED: OnceLock<Arc<Registry>> = OnceLock::new();
+/// The shared registries: the app's sets, and the app's sets with the stories' (`[apps, with stories]`).
+static LOADED: [OnceLock<Arc<Registry>>; 2] = [OnceLock::new(), OnceLock::new()];
 
 /// Indexes the definition at `at` under its id `id`; an id already in `index` is refused (`Duplicate`). The registry
 /// and an app's catalog index their definitions through it.
@@ -146,13 +162,15 @@ pub(crate) struct Registry {
     edits: HashMap<String, EditCommand>,
     /// Defaults that one platform has instead of the command's others.
     platform_defaults: Vec<(String, Platform, Binding)>,
+    /// Whether the stories' sets are loaded.
+    stories: bool,
 }
 
 impl Registry {
-    /// Loads every linked set.
-    pub(crate) fn load() -> Result<Registry, CommandDefError> {
-        let mut registry = Registry::default();
-        for entry in sets() {
+    /// Loads every linked set; the stories' sets only with `stories`.
+    pub(crate) fn load(stories: bool) -> Result<Registry, CommandDefError> {
+        let mut registry = Registry { stories, ..Registry::default() };
+        for entry in sets().into_iter().filter(|entry| stories || !entry.story) {
             for def in (entry.defs)()? {
                 registry.add(def)?;
             }
@@ -165,19 +183,25 @@ impl Registry {
         Ok(registry)
     }
 
-    /// The registry of every linked set, loaded once per process: the sets are static, so every context shares one.
-    /// A load that fails is not kept, so each install reports its error.
-    pub(crate) fn shared() -> Result<Arc<Registry>, CommandDefError> {
-        if let Some(loaded) = LOADED.get() {
+    /// The registry of every linked set (the stories' sets only with `stories`), loaded once per process: the sets are
+    /// static, so every context shares one. A load that fails is not kept, so each install reports its error.
+    pub(crate) fn shared(stories: bool) -> Result<Arc<Registry>, CommandDefError> {
+        let slot = &LOADED[usize::from(stories)];
+        if let Some(loaded) = slot.get() {
             return Ok(loaded.clone());
         }
-        let registry = Arc::new(Registry::load()?);
-        Ok(LOADED.get_or_init(|| registry).clone())
+        let registry = Arc::new(Registry::load(stories)?);
+        Ok(slot.get_or_init(|| registry).clone())
     }
 
-    /// Whether `registry` is the one [`Registry::shared`] loaded.
+    /// Whether `registry` is one [`Registry::shared`] loaded.
     pub(crate) fn is_shared(registry: &Arc<Registry>) -> bool {
-        LOADED.get().is_some_and(|loaded| Arc::ptr_eq(loaded, registry))
+        LOADED[usize::from(registry.stories)].get().is_some_and(|loaded| Arc::ptr_eq(loaded, registry))
+    }
+
+    /// Whether the stories' sets are loaded.
+    pub(crate) fn has_stories(&self) -> bool {
+        self.stories
     }
 
     fn add(&mut self, def: CommandDef) -> Result<(), CommandDefError> {

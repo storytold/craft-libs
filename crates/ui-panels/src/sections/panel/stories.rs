@@ -13,7 +13,7 @@ use egui::Ui;
 
 /// The header commands of the stories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, craft_ui_macros::CommandSet)]
-#[command(prefix = "panelStory")]
+#[command(prefix = "panelStory", story)]
 #[non_exhaustive]
 enum CardCommands {
     /// Open.

@@ -88,11 +88,13 @@ impl Frames {
     }
 
     /// Frames on `ctx`, a context the caller made (an app's own, which its code reads outside the frames), with the
-    /// runtime installed on it unless it already is. The context keeps its own fonts and options.
+    /// runtime installed on it unless it already is, as an app installs it: without the stories' command sets. The
+    /// context keeps its own fonts and options.
     pub fn over(ctx: Context) -> Self {
-        let mut frames = Self::on(ctx);
+        let frames = Self::on(ctx);
         if !plugin::is_registered(&frames.ctx) {
-            frames.install();
+            let installed = crate::install(&frames.ctx, crate::runtime::InstallSpec { stories: false, ..super::install_spec() });
+            debug_assert!(installed.is_ok(), "the context takes the runtime once");
         }
         frames
     }

@@ -9,7 +9,7 @@ const TITLE: &str = "craft-ui stories";
 const WINDOW_MIN: [f32; 2] = [640.0, 480.0];
 
 fn spec() -> AppSpec {
-    AppSpec::new("craft-ui-gallery", TITLE, Defaults::new(WINDOW, WINDOW_MIN))
+    AppSpec::new("craft-ui-gallery", TITLE, Defaults::new(WINDOW, WINDOW_MIN)).stories()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -27,7 +27,8 @@ fn expanded(result: syn::Result<proc_macro2::TokenStream>) -> TokenStream {
 
 /// Writes `CommandSet` for an enum of unit variants and registers the set, which the command board loads at
 /// install. `#[command(prefix = "..", scope = "..")]` on the enum gives the id prefix and the scope (the
-/// application scope without one). The prefix is one lower-camel segment naming the set's type, and ids are
+/// application scope without one); `#[command(story)]` marks a story's set, which only an install that shows stories
+/// loads (the gallery, the story fixtures), so its keys never reach an app. The prefix is one lower-camel segment naming the set's type, and ids are
 /// `prefix.variant_name`. Each variant takes `label`, `icon`, `kind`, `modal`, `edit` (the `EditCommand` a focused component takes the command as), `default`, `path` and `alias`.
 #[proc_macro_derive(CommandSet, attributes(command))]
 pub fn derive_command_set(input: TokenStream) -> TokenStream {

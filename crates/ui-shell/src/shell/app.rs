@@ -32,6 +32,8 @@ pub struct AppSpec {
     pub window_system: Arc<dyn WindowSystem>,
     /// Who draws the root window's frame (`craft_window::policy::decide_for`). Unset: the OS draws it.
     pub frame: Option<Decision>,
+    /// Whether the stories' command sets load ([`InstallSpec::stories`]): the gallery's spec sets it.
+    pub stories: bool,
 }
 
 impl AppSpec {
@@ -46,7 +48,14 @@ impl AppSpec {
             placement: Arc::new(Mutex::new(Store::in_memory())),
             window_system: Arc::new(SystemWindows),
             frame: None,
+            stories: false,
         }
+    }
+
+    /// Loads the stories' command sets too, for an app that shows stories (the gallery).
+    pub fn stories(mut self) -> Self {
+        self.stories = true;
+        self
     }
 
     /// Sets the placement store, shared by every window of the app.
@@ -170,6 +179,9 @@ fn create<A: ShellApp + 'static>(
         let mut install = InstallSpec::new(spec.shell_info, spec.window_system).placement(spec.placement).system(system).app_id(spec.app_id.clone());
         if let Some(decision) = spec.frame {
             install = install.frame(decision);
+        }
+        if spec.stories {
+            install = install.stories();
         }
         // The suite's interface face; an app that installs its own fonts in `make` replaces it.
         let fonts = crate::fonts::UiFonts::new(&crate::fonts::I18nScripts);

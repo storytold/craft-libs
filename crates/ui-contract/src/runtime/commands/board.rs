@@ -429,9 +429,9 @@ fn chord_input(chord: &Chord) -> KeyInput {
     KeyInput::new(chord.mods).with_typed(chord.key).with_physical(chord.key)
 }
 
-/// Loads the linked command sets.
-pub(crate) fn install(ctx: &Context) -> Result<(), registry::CommandDefError> {
-    let registry = registry::Registry::shared()?;
+/// Loads the linked command sets; the stories' sets only with `stories`.
+pub(crate) fn install(ctx: &Context, stories: bool) -> Result<(), registry::CommandDefError> {
+    let registry = registry::Registry::shared(stories)?;
     with(ctx, |board| board.registry = registry);
     Ok(())
 }
@@ -535,9 +535,9 @@ fn build_keymap(registry: &registry::Registry, app: Option<&AppCatalog>, platfor
     BuiltKeymap { keymap: Arc::new(keymap), edit_chords, window_shortcuts }
 }
 
-/// The keymap of the shared registry on each platform with no overrides. It depends on nothing else, so every
-/// context of the process shares it.
-static DEFAULT_KEYMAPS: std::sync::Mutex<Vec<(Platform, BuiltKeymap)>> = std::sync::Mutex::new(Vec::new());
+/// The keymap of each shared registry (with or without the stories' sets) on each platform with no overrides. It
+/// depends on nothing else, so every context of the process shares it.
+static DEFAULT_KEYMAPS: std::sync::Mutex<Vec<(Platform, bool, BuiltKeymap)>> = std::sync::Mutex::new(Vec::new());
 
 /// The keymap of `registry` and `app` on `platform` under `overrides`: built once per platform for the shared
 /// registry with no overrides and no catalog, else built here.
@@ -546,11 +546,12 @@ fn keymap_for(registry: &Arc<registry::Registry>, app: Option<&AppCatalog>, plat
         return build_keymap(registry, app, platform, overrides);
     }
     let mut kept = DEFAULT_KEYMAPS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some((_, built)) = kept.iter().find(|(on, _)| *on == platform) {
+    let stories = registry.has_stories();
+    if let Some((.., built)) = kept.iter().find(|(on, with, _)| *on == platform && *with == stories) {
         return built.clone();
     }
     let built = build_keymap(registry, None, platform, None);
-    kept.push((platform, built.clone()));
+    kept.push((platform, stories, built.clone()));
     built
 }
 
