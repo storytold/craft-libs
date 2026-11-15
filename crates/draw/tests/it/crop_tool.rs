@@ -5,7 +5,7 @@ use craft_behavior::CanvasView;
 use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{Point, Rect, Size};
 use craft_draw::ui::crop::{CropDocKey, CropDocument, CropEvent, CropInput, CropRatio, CropSession, CropSettings, CropTool};
-use craft_ui::canvas::{Canvas, NavigationOptions, ToolHost};
+use craft_ui::canvas::{Canvas, NavigationOptions, Snap, ToolHost};
 use craft_ui::contract::ShowContainer as _;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::env::{Env, Units};
@@ -88,6 +88,12 @@ struct Host {
     turned_start: bool,
     /// The overlay is shown: false after the tool was left, as the app stops showing it.
     shown: bool,
+    /// The canvas's snapping.
+    snap: Option<Snap>,
+    /// The passes whose host response had the pointer past the canvas edge (an autoscroll).
+    past_edge_passes: usize,
+    /// The passes whose host response carried snap lines.
+    snap_passes: usize,
 }
 
 struct Rig {
@@ -115,6 +121,9 @@ impl Rig {
             view: None,
             turned_start,
             shown: true,
+            snap: None,
+            past_edge_passes: 0,
+            snap_passes: 0,
         }));
         let shown = Rc::clone(&host);
         let mut fixture = Fixture::new(move |ui| {
@@ -124,18 +133,29 @@ impl Rig {
             let base = CanvasView::new(room, Point::new(200.0, 150.0), 1.0);
             let view = host.view.unwrap_or(if host.turned_start { base.rotation(30.0) } else { base });
             let showing = host.shown;
-            let mut pass = host.tool.pass(CropInput::new(&host.ctx, &host.settings, &host.document));
+            let input = CropInput::new(&host.ctx, &host.settings, &host.document);
             // Overscroll on: the rig's canvas shows the whole document at fit, where Overscroll off holds the view, and
             // image mode moves and turns the view.
             let mut navigation = NavigationOptions::default();
             navigation.overscroll = true;
-            let canvas = Canvas::new("Document").document(SIZE).navigation(navigation).view(view).show(ui, |ui, body| {
+            let mut canvas = Canvas::new("Document").document(SIZE).navigation(navigation).view(view);
+            if let Some(snap) = host.snap.clone() {
+                canvas = canvas.snap(snap);
+            }
+            // The body and the host run as an app with a split body runs them: the body's report reaches the host's
+            // pass of the same frame.
+            let tool = &mut host.tool;
+            let mut frame = None;
+            let canvas = canvas.show(ui, |ui, body| {
                 if showing {
-                    pass.show_frame(ui, body.rect);
+                    frame = Some(tool.show_frame(ui, body.rect, &input));
                 }
             });
+            let mut pass = host.tool.pass(input, frame);
             let response = ToolHost::new().run(ui, &canvas.output, &mut pass);
             let events = pass.finish().events;
+            host.past_edge_passes += usize::from(response.past_edge.is_some());
+            host.snap_passes += usize::from(!response.snapped.is_empty());
             if let Some(view) = response.view {
                 host.view = Some(view);
             }
@@ -196,6 +216,35 @@ impl Rig {
         let view = host.view.expect("the tool set the view");
         view.affine() * host.tool.frame().expect("a frame").center()
     }
+}
+
+/// A drag of the frame reaches the host in the pass that moved it: the snap lines of a frame edge on a guide, and the
+/// autoscroll of a drag past the canvas edge.
+#[trial]
+fn a_frame_drag_hands_its_snap_lines_and_autoscroll_to_the_host_in_the_pass_that_moved_it() {
+    use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
+    use std::sync::Arc;
+
+    let mut rig = Rig::new(classic());
+    rig.drag((100.0, 80.0), (300.0, 220.0));
+    let mut targets = SnapTargets::new();
+    targets.add(SnapTarget::new(craft_behavior::Axis::Y, 350.0, SnapKind::Guide));
+    rig.host.borrow_mut().snap = Some(Snap::new(Arc::new(targets), SnapOptions::default()));
+    rig.run();
+    rig.host.borrow_mut().snap_passes = 0;
+    rig.drag((200.0, 150.0), (249.0, 150.0));
+    assert!(rig.host.borrow().snap_passes > 0, "the frame's right edge on the guide reports its snap lines to the host");
+
+    rig.host.borrow_mut().past_edge_passes = 0;
+    let canvas = rig.fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas");
+    let from = rig.at(200.0, 150.0);
+    rig.fixture.frame(vec![pointer::moved(from)]);
+    rig.fixture.frame(vec![pointer::press(from)]);
+    rig.fixture.frame(vec![pointer::moved(from + Vec2::new(10.0, 0.0))]);
+    rig.fixture.frame(vec![pointer::moved(Pos2::new(canvas.rect.right() + 20.0, from.y))]);
+    rig.fixture.frame(Vec::new());
+    assert!(rig.host.borrow().past_edge_passes > 0, "a move past the canvas edge autoscrolls");
+    rig.fixture.frame(vec![pointer::release(Pos2::new(canvas.rect.right() + 20.0, from.y))]);
 }
 
 #[trial]
