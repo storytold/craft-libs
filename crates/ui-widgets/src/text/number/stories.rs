@@ -109,6 +109,31 @@ fn number_field(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     out.inner.flatten().map(StoryOutput::from).unwrap_or_default()
 }
 
+/// The two presentation choices on their own and together: the value centred or started at the reading start, set in the
+/// monospace face or the UI body face, over the same range.
+#[story(NumberField<'static>, covers = [], drive = Drive::Type("42"))]
+fn number_field_presentation(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let out = FieldGroup::new("Number field presentation").show(ui, |ui, _| {
+        let first = row("Centred, mono")
+            .show(ui, |ui, _| NumberField::new("Centred, mono", Bind::bound(data.value("centred_mono", Some(SIZE)))).range(RANGE).show(ui).edit);
+        row("Started, mono").show(ui, |ui, _| {
+            NumberField::new("Started, mono", Bind::bound(data.value("started_mono", Some(SIZE)))).range(RANGE).centred(false).show(ui);
+        });
+        row("Centred, proportional").show(ui, |ui, _| {
+            NumberField::new("Centred, proportional", Bind::bound(data.value("centred_ui", Some(SIZE)))).range(RANGE).mono(false).show(ui);
+        });
+        row("Started, proportional").show(ui, |ui, _| {
+            NumberField::new("Started, proportional", Bind::bound(data.value("started_ui", Some(SIZE))))
+                .range(RANGE)
+                .centred(false)
+                .mono(false)
+                .show(ui);
+        });
+        first.inner
+    });
+    out.inner.flatten().map(StoryOutput::from).unwrap_or_default()
+}
+
 #[story(NumberField<'static>, covers = [LongText], drive = Drive::Never)]
 fn number_field_long(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     NumberField::new("Size", Bind::bound(data.value("long", Some(HUGE)))).show(ui).edit.into()

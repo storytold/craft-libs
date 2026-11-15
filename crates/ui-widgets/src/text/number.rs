@@ -15,7 +15,7 @@ use crate::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, Entry, Focus as _, Input, MeasureCx, Numeric, OverlayUi, Overlays as _, PaintUi,
     PartsCx, Pointer as _, Props as _, Role, Scrub, Sizing, Styled as _, WordSetCx as _,
 };
-use crate::primitives::{TextOptions, TextRun};
+use crate::primitives::{Span, TextOptions, TextRun};
 use crate::runtime::env::{Label, LengthUnits, UnitKind, Units};
 use crate::style::{ComponentStyle, StyleColor, StyleCx, SurfaceLook, TextLook, TypeRole};
 use craft_behavior::nav::{LARGE_STEPS, StepResult, ValueAxes, ValueSteps};
@@ -208,7 +208,9 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             fixed_decimals: None,
             lengths: None,
             scale: 1.0,
-            options: TextOptions::default(),
+            // The value sits in the middle of its room in the monospace face, the presentation every number field has
+            // had; `centred` and `mono` let a caller choose either independently.
+            options: TextOptions { centred: true, mono: true, ..TextOptions::default() },
             scrub: false,
             track: 0.0,
             picked: None,
@@ -238,6 +240,25 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     #[must_use]
     pub fn scrub_by_label(mut self) -> Self {
         self.scrub = true;
+        self
+    }
+
+    /// Where the value sits in the room the field leaves for it: in the middle (the default), or at the logical reading
+    /// start, the edge the text is read from — the left edge in a left-to-right interface, the right edge in a
+    /// right-to-left one. The unit keeps its place at the end of the field either way, so a column of fields lines its
+    /// units up whichever presentation its values take.
+    #[must_use]
+    pub fn centred(mut self, centred: bool) -> Self {
+        self.options.centred = centred;
+        self
+    }
+
+    /// The face the value is set in: monospace, whose digits share one advance so values keep their places as they
+    /// change (the default), or the UI body face. The face is the one the field measures its value in, paints it in and
+    /// edits it in, so the room a value takes is the room its text and caret fill.
+    #[must_use]
+    pub fn mono(mut self, mono: bool) -> Self {
+        self.options.mono = mono;
         self
     }
 
@@ -391,6 +412,14 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
             decimals: self.shown_decimals(),
         }
     }
+
+    /// The run the value is measured in: the role and the face of the text part's options, which is the one rule the
+    /// text adapter lays the shown and edited text out by (`tokens.font` reads the mono face from the span, else the
+    /// role's). A measure that named the face by itself would size a proportional field's value in the mono face.
+    fn value_run<'s>(&self, text: &'s str) -> TextRun<'s> {
+        let span = if self.options.mono { Span::new(text).mono() } else { Span::new(text) };
+        TextRun::spans(vec![span]).role(self.options.role)
+    }
 }
 impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
     const ROLE: Role = Role::SPIN_BUTTON;
@@ -435,7 +464,7 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
         // A mixed field is sized as it is with a value, so it keeps its width when the selection changes.
         let blank = V::blank().unwrap_or_else(|| V::of_number(self.rule().blank()));
         let sample = codec.sample(cx.value().unwrap_or(&blank));
-        let mut text = cx.field_text(&TextRun::new(sample.as_ref()).role(TypeRole::Mono));
+        let mut text = cx.field_text(&self.value_run(sample.as_ref()));
         if content {
             text.x = crate::layout::ambient_width(cx.ui.ctx(), &VALUES, text.x).map_or(text.x, |width| width.max(text.x));
         }
@@ -465,8 +494,6 @@ impl<V: NumberValue + 'static> Component for NumberField<'_, V> {
             cx.label_part(*slot);
         }
         let text = placed.text;
-        self.options.centred = true;
-        self.options.mono = true;
         self.options.steps_value = self.presets.is_none() && self.popup_slider.is_none();
         let shown = cx.value();
         if self.options.placeholder.is_none() {
