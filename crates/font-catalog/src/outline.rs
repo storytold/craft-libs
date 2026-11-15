@@ -214,4 +214,38 @@ mod tests {
         assert!(!light_path.elements().is_empty());
         assert_ne!(light_path, bold_path);
     }
+
+    #[test]
+    fn malformed_cff_recovers_the_same_prefix_as_direct_drawing() {
+        use skrifa::raw::ps::cff::CffFontRef;
+        let Ok(dir) = std::env::var("CRAFT_FONTS_DIR") else { return };
+        let mut bytes = std::fs::read(std::path::Path::new(&dir).join("fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf")).unwrap();
+        let (gid, start, len) = {
+            let f = FontRef::new(&bytes).unwrap();
+            let cff = f.table_data(Tag::new(b"CFF ")).unwrap().as_bytes();
+            let cff = CffFontRef::new(cff, 0, None).unwrap();
+            let (gid, cs) = (0..cff.num_glyphs())
+                .find_map(|gid| {
+                    let cs = cff.charstrings().get(gid as usize)?;
+                    (cs.len() >= 8).then_some((gid, cs))
+                })
+                .unwrap();
+            (gid, cs.as_ptr() as usize - bytes.as_ptr() as usize, cs.len())
+        };
+        assert!(len >= 8);
+        // A move and line followed by a Type 2 callsubr without an operand. It emits a path
+        // prefix before the parser reports an error, without changing the font table offsets.
+        bytes[start..start + 8].copy_from_slice(&[139, 139, 21, 239, 139, 5, 10, 14]);
+        let f = FontRef::new(&bytes).unwrap();
+        let mut old = PathPen::new();
+        let result =
+            f.outline_glyphs().get(GlyphId::new(gid)).unwrap().draw(DrawSettings::unhinted(Size::unscaled(), &Location::default()), &mut old);
+        assert!(result.is_err());
+        assert!(!old.path.elements().is_empty());
+        let shared = FontOutline::from_bytes(&bytes, 0, &[]).unwrap();
+        let (prefix, status) = shared.outline_recovering(gid).unwrap();
+        assert!(matches!(status, Err(OutlineError::Draw(_))));
+        assert_eq!(prefix, old.path);
+        assert!(matches!(shared.outline(gid), Err(OutlineError::Draw(_))));
+    }
 }
