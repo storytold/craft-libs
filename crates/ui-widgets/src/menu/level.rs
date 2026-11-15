@@ -162,7 +162,7 @@ impl MenuLevel {
             }
             let letters = if let Some(folder) = state.lettered {
                 let labels: Vec<&str> = state.now.iter().map(|row| row.text.as_str()).collect();
-                mnemonic::assign(&labels, &folder) // P3(top-w2): tp.T11
+                mnemonic::assign(&labels, &folder)
             } else {
                 vec![None; state.now.len()]
             };
@@ -185,10 +185,10 @@ impl MenuLevel {
 
     pub(super) fn mnemonic_of(&self, id: Id) -> Option<(char, usize)> {
         self.with(|state| {
-            let folder = state.lettered?; // P3(top-w2): tp.T11
+            let folder = state.lettered?;
             let at = state.now.iter().position(|row| row.id == id)?;
             let labels: Vec<&str> = state.now.iter().map(|row| row.text.as_str()).collect();
-            mnemonic::assign(&labels, &folder)[at] // P3(top-w2): tp.T11
+            mnemonic::assign(&labels, &folder)[at]
         })
     }
 

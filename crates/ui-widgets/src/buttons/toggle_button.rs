@@ -1,7 +1,9 @@
 //! `ToggleButton`: a button that stays pressed while on.
 
 use super::face::{self, FaceLook, FaceSpec};
-use crate::contract::{Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, PaintUi, Pointer as _, Props, Role};
+use crate::contract::{
+    Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, PaintUi, Pointer as _, Props, Role,
+};
 use crate::primitives::IconSpec;
 use crate::runtime::commands::CommandRef;
 use crate::runtime::env::Label;
@@ -65,7 +67,6 @@ pub struct ToggleButton<'a> {
     #[prop(flag)]
     escape_disarms: bool,
     /// The name a screen reader hears when it differs from the face (a modifier key's symbol face).
-    // P3(top-w2): tp.T16 decision, the `spoken` prop
     #[prop]
     spoken: Option<Label>,
 }
@@ -82,7 +83,7 @@ impl<'a> ToggleButton<'a> {
             role: None,
             icon_only: false,
             escape_disarms: false,
-            spoken: None, // P3(top-w2): tp.T16
+            spoken: None,
         }
         .label(label)
     }
@@ -98,7 +99,7 @@ impl<'a> ToggleButton<'a> {
             role: None,
             icon_only: false,
             escape_disarms: false,
-            spoken: None, // P3(top-w2): tp.T16
+            spoken: None,
         };
         <ToggleButton as Props>::command(button, command)
     }
@@ -170,6 +171,12 @@ impl Component for ToggleButton<'_> {
 
     fn bind(&mut self) -> Option<BindMut<'_, bool>> {
         self.value.as_mut().map(Bind::reborrow)
+    }
+
+    fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
+        if let Some(spoken) = &self.spoken {
+            access.name(Name::Text(cx.env.resolve(spoken).as_str().to_owned()));
+        }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {

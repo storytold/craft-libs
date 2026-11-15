@@ -15,7 +15,7 @@ pub fn marked(label: &str, folder: &Folder) -> (String, Option<char>) {
 
 /// [`marked`] with the character index of the marked letter in the returned text.
 pub fn marked_at(label: &str, folder: &Folder) -> (String, Option<(char, usize)>) {
-    let _ = folder; // P3(top-w2): tp.T9
+    let turkic = folder.turkic();
     let mut text = String::with_capacity(label.len());
     let mut mark = None;
     let mut at = 0;
@@ -27,8 +27,11 @@ pub fn marked_at(label: &str, folder: &Folder) -> (String, Option<(char, usize)>
             continue;
         }
         let Some(next) = chars.next() else { break };
-        if mark.is_none() && next != '&' && next.is_ascii_alphanumeric() {
-            mark = Some((next.to_ascii_uppercase(), at));
+        if mark.is_none()
+            && next != '&'
+            && let Some(key) = letter(next, turkic)
+        {
+            mark = Some((key, at));
         }
         text.push(next);
         at += 1;
@@ -51,14 +54,14 @@ pub fn assign(labels: &[&str], folder: &Folder) -> Vec<Option<(char, usize)>> {
     }
     for ((text, _), slot) in parsed.iter().zip(&mut out) {
         if slot.is_none() {
-            *slot = first_unused(text, &used);
+            *slot = first_unused(text, &used, folder.turkic());
             used.extend(slot.map(|(letter, _)| letter));
         }
     }
     out
 }
 
-fn first_unused(text: &str, used: &[char]) -> Option<(char, usize)> {
+fn first_unused(text: &str, used: &[char], turkic: bool) -> Option<(char, usize)> {
     let mut previous_alnum = false;
     let mut starts = Vec::new();
     for (at, c) in text.chars().enumerate() {
@@ -71,7 +74,17 @@ fn first_unused(text: &str, used: &[char]) -> Option<(char, usize)> {
     starts
         .into_iter()
         .chain(all)
-        .filter(|(c, _)| c.is_ascii_alphanumeric())
-        .map(|(c, at)| (c.to_ascii_uppercase(), at))
+        .filter_map(|(c, at)| Some((letter(c, turkic)?, at)))
         .find(|(c, _)| !used.contains(c))
+}
+
+/// The key that types `c`, as a mnemonic letter: its upper case, which must be an ASCII letter or digit. In Turkish
+/// and Azerbaijani `I` is the capital of `ı`, so `ı` takes the I key, while `i` and `İ` have no key of their own.
+fn letter(c: char, turkic: bool) -> Option<char> {
+    match c {
+        'ı' if turkic => Some('I'),
+        'i' if turkic => None,
+        c if c.is_ascii_alphanumeric() => Some(c.to_ascii_uppercase()),
+        _ => None,
+    }
 }

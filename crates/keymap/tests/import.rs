@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use craft_keymap::chord::foreign::{Flavor, ForeignError};
-use craft_keymap::import::{FailedChange, UnmatchedReason};
+use craft_keymap::import::{FailedChange, UnmatchedReason, kys};
 use craft_keymap::{
     Binding, CommandDef, CommandKind, CommandRef, ContextRule, ForeignEntry, ForeignKey, ForeignSet, ImportOptions, ImportReport, Keymap,
     MAX_COMMANDS, Overrides, Platform, Scope, Scopes, plan, reserved,
@@ -201,4 +201,85 @@ fn a_failed_change_keeps_its_shortcut_when_a_later_change_frees_room() {
     assert_eq!(failed, [("file.save", FailedChange::Bind), ("view.zoomIn", FailedChange::Bind)]);
     assert!(r.conflicts_cleared.is_empty(), "{:?}", r.conflicts_cleared);
     assert_eq!(r.imported, 1);
+}
+
+/// A Mac keymap of `catalog` with no reserved chords, for sets read with [`kys::read`].
+fn mac_keymap(catalog: Vec<CommandDef>) -> Keymap {
+    Keymap::new(catalog, Scopes::new(), Platform::Mac)
+}
+
+/// A `.kys` set of `rows`.
+fn kys_set(rows: &str) -> ForeignSet {
+    kys::read(&format!("<photoshop-keyboard-shortcuts version=\"4\">{rows}</photoshop-keyboard-shortcuts>")).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// The command holds exactly the bindings `texts`, in any order.
+fn has_all(km: &Keymap, id: &str, texts: &[&str]) {
+    let got = km.bindings(&CommandRef::new(id));
+    let want = bindings(texts);
+    assert!(got.len() == want.len() && want.iter().all(|w| got.contains(w)), "{id}: {got:?}, wanted {want:?}");
+}
+
+fn tool(id: &str, label: &str, keys: &[&str]) -> CommandDef {
+    command(id, label, &[], keys).with_kind(CommandKind::Tool { group: None })
+}
+
+#[test]
+fn a_shared_label_goes_to_the_command_whose_default_key_the_row_carries() {
+    // Photoshop names a row by its label alone; both commands are `Levels…` and both have a
+    // default, so only the row's keys tell them apart.
+    let catalog = vec![command("image.levels", "Levels…", &[], &["Cmd+L"]), command("layer.newLevels", "Levels…", &[], &["Cmd+Alt+L"])];
+    let mut km = mac_keymap(catalog);
+    let set = kys_set(
+        "<command name=\"Levels...\"><shortcut>Cmd+L</shortcut><shortcut>F9</shortcut></command>\
+         <command name=\"Levels...\"><shortcut>Opt+Cmd+L</shortcut><shortcut>F10</shortcut></command>\
+         <command name=\"Levels...\"><shortcut>F11</shortcut></command>",
+    );
+    let r = plan(&set, &km, &ImportOptions::default()).apply(&mut km);
+    has_all(&km, "image.levels", &["Cmd+L", "F9"]);
+    has_all(&km, "layer.newLevels", &["Cmd+Alt+L", "F10"]);
+    let unmatched: Vec<(&str, &str, UnmatchedReason)> = r.unmatched.iter().map(|u| (u.item.as_str(), u.keys.as_str(), u.reason)).collect();
+    assert_eq!(unmatched, [("Levels...", "F11", UnmatchedReason::Ambiguous)], "a row carrying neither default stays ambiguous");
+}
+
+#[test]
+fn a_row_with_a_default_and_a_function_key_keeps_both() {
+    let mut km = mac_keymap(vec![command("edit.copy", "Copy", &["Edit", "Copy"], &["Cmd+C"])]);
+    let set = kys_set("<command name=\"Copy\"><shortcut>F3</shortcut><shortcut>Cmd+C</shortcut></command>");
+    let r = plan(&set, &km, &ImportOptions::default()).apply(&mut km);
+    has_all(&km, "edit.copy", &["Cmd+C", "F3"]);
+    assert!(r.unmatched.is_empty() && r.unreadable.is_empty() && r.failed.is_empty(), "{r:?}");
+}
+
+#[test]
+fn tool_keys_match_by_name_or_id_and_take_one_letter() {
+    let catalog = vec![
+        // A command with a tool's label: a tool row never binds it.
+        command("edit.move", "Move Tool", &["Edit", "Move Tool"], &[]),
+        tool("tool.move", "Move Tool", &["M"]),
+        tool("tool.pencil", "Pencil Tool", &[]),
+        tool("tool.brush", "Brush Tool", &[]),
+        tool("tool.lasso", "Lasso Tool", &["L"]),
+    ];
+    let mut km = mac_keymap(catalog);
+    let set = kys_set(
+        "<command name=\"Copy\"><shortcut>Cmd+C</shortcut></command>\
+         <tool name=\"Move Tool\">V</tool>\
+         <tool name=\"pencil tool\">n</tool>\
+         <tool name=\"Renamed\" craft-id=\"tool.brush\">B</tool>\
+         <tool name=\"Imaginary Tool\">Q</tool>\
+         <tool name=\"Lasso Tool\">Shift+L</tool>",
+    );
+    let r = plan(&set, &km, &ImportOptions::default()).apply(&mut km);
+    // By name, ignoring case, and by id whatever the name says.
+    has(&km, "tool.move", &["V"]);
+    has(&km, "tool.pencil", &["N"]);
+    has(&km, "tool.brush", &["B"]);
+    has(&km, "edit.move", &[]);
+    // A tool key with a modifier is unreadable and the tool keeps its key.
+    has(&km, "tool.lasso", &["L"]);
+    let unreadable: Vec<&str> = r.unreadable.iter().map(|u| u.item.as_str()).collect();
+    assert_eq!(unreadable, ["Lasso Tool"]);
+    let unmatched: Vec<(&str, UnmatchedReason)> = r.unmatched.iter().map(|u| (u.item.as_str(), u.reason)).collect();
+    assert_eq!(unmatched, [("Copy", UnmatchedReason::NoMatch), ("Imaginary Tool", UnmatchedReason::NoMatch)]);
 }

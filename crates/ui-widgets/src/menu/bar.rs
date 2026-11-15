@@ -308,8 +308,9 @@ impl<'a> MenuBar<'a> {
     fn texts(&self, env: &EnvView<'_>) -> Vec<(String, Option<(char, usize)>)> {
         let labels: Vec<Label> = self.titles.iter().map(|title| env.resolve(&title.label)).collect();
         let refs: Vec<&str> = labels.iter().map(Label::as_str).collect();
-        let marks = if env.shell().os.is_mac() { vec![None; refs.len()] } else { mnemonic::assign(&refs, &env.folder()) }; // P3(top-w2): tp.T11
-        refs.iter().zip(marks).map(|(label, mark)| (mnemonic::marked(label, &env.folder()).0, mark)).collect() // P3(top-w2): tp.T11
+        let folder = env.folder();
+        let marks = if env.shell().os.is_mac() { vec![None; refs.len()] } else { mnemonic::assign(&refs, &folder) };
+        refs.iter().zip(marks).map(|(label, mark)| (mnemonic::marked(label, &folder).0, mark)).collect()
     }
 
     fn face(text: &str, lit: bool, mnemonic: Option<usize>) -> TitleFace {

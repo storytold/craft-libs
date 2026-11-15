@@ -352,4 +352,25 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn turkish_and_azerbaijani_keep_the_dotted_and_dotless_i_pairs_apart() {
+        assert!(!Folder::new("en").turkic());
+        for locale in ["tr", "az", "tr-TR", "AZ_az"] {
+            let f = Folder::new(locale).keep_accents();
+            assert!(f.turkic(), "{locale}");
+            // Dotless: `I` is the capital of `ı`, not of `i`.
+            assert_eq!(f.key("I"), f.key("ı"), "{locale}");
+            assert_ne!(f.key("I"), f.key("i"), "{locale}");
+            assert!(f.contains("IRMAK", "ırmak"), "{locale}");
+            assert!(!f.contains("IRMAK", "irmak"), "{locale}");
+            // Dotted: `İ`, precomposed or as `I` and a combining dot, is the capital of `i`.
+            for dotted in ["İ", "I\u{307}"] {
+                assert_eq!(f.key(dotted), f.key("i"), "{locale} {dotted:?}");
+                assert_ne!(f.key(dotted), f.key("ı"), "{locale} {dotted:?}");
+                assert!(f.contains(&format!("{dotted}STANBUL"), "istanbul"), "{locale} {dotted:?}");
+                assert!(!f.contains(&format!("{dotted}STANBUL"), "ıstanbul"), "{locale} {dotted:?}");
+            }
+        }
+    }
 }

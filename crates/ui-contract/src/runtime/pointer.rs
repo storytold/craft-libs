@@ -40,7 +40,8 @@ pub struct PointerFrame {
     pub press: Option<PressStart>,
     /// The button released in the pass.
     pub release: Option<PointerButton>,
-    /// The modifiers held.
+    /// The modifiers held, with the ones the app latches for the user (a Modifier Keys panel) added: the app holds
+    /// them down for every press and drag. Key chords read the keyboard's own modifiers instead.
     pub mods: Mods,
     /// The pass's time in seconds.
     pub time: f64,
@@ -88,7 +89,8 @@ pub struct PassPointer {
 
 #[derive(Default)]
 pub(crate) struct Memory {
-    last_press: Option<(Pos2, f64, u32, craft_keymap::Mods)>,
+    /// The latest primary press: where, when, its click count and the modifiers held with it.
+    last_press: Option<(Pos2, f64, u32, Mods)>,
     press_targets: PressTargets,
     /// A cancel a service requested for the running pass.
     requested: Option<(u64, PressCancel)>,
@@ -116,9 +118,13 @@ pub(crate) struct Shapes {
 
 /// The begin hook (H5): converts the pass's pointer input.
 pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
+
     let viewport = pass::current_viewport(ctx);
     let pass_nr = pass::pass_nr(ctx, viewport);
     let mut read = input::pointer_read(ctx);
+    // Every pass reads its own input and the frame's latches, so a second pass of a frame builds the same
+    // modifiers from its own (event-free) input and counts no press twice.
+    let mods = with_latched(read.mods, latched);
     // A drag that started in another window reaches this one through the desktop pointer (8.4).
     if read.pos.is_none() {
         read.pos = drag::cross_window_pointer(ctx, viewport);
@@ -131,8 +137,8 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         let mut events = read.events.clone();
         for event in &mut events {
             if let PointerEvent::Pressed { button: PointerButton::Primary, pos, time, clicks, .. } = event {
-                *clicks = count_clicks(memory.last_press, *pos, *time, latched, hit.slop); // P3(top-w2): pn.C14
-                memory.last_press = Some((*pos, *time, *clicks, latched));
+                *clicks = count_clicks(memory.last_press, *pos, *time, mods, hit.slop);
+                memory.last_press = Some((*pos, *time, *clicks, mods));
             }
         }
         if read.primary_pressed || other_pressed {
@@ -152,7 +158,7 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
         buttons: read.buttons,
         press,
         release: read.release,
-        mods: read.mods,
+        mods,
         time: read.time,
         kind: read.kind,
         sample: read.sample,
@@ -174,6 +180,11 @@ pub(crate) fn begin(ctx: &Context, hit: HitSizes, latched: craft_keymap::Mods) {
     };
     PerViewport::<Stamped<Arc<PassPointer>>>::with_pass(ctx, viewport, pass_nr, |_, _| {}, |record| *record = Arc::new(pass_pointer));
     PerViewport::<Shapes>::with(ctx, viewport, |shapes| shapes.last = std::mem::take(&mut shapes.this));
+}
+
+/// The modifiers `held` with the app's `latched` ones added, field by field: `Mods` has no operator for it.
+fn with_latched(held: Mods, latched: Mods) -> Mods {
+    Mods { cmd: held.cmd || latched.cmd, ctrl: held.ctrl || latched.ctrl, alt: held.alt || latched.alt, shift: held.shift || latched.shift }
 }
 
 /// The running viewport's pass number.

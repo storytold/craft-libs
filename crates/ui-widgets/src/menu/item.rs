@@ -370,7 +370,7 @@ impl Component for MenuItem<'_> {
         }
         let columns = self.columns(cx, &level);
         let detail = self.detail_size(cx);
-        let text = mnemonic::marked(cx.resolved.label, &cx.env.folder()).0; // P3(top-w2): tp.T11
+        let text = mnemonic::marked(cx.resolved.label, &cx.env.folder()).0;
         let run = TextRun::new(text.as_str()).role(self.label_look(cx.style).role);
         let label = if text.is_empty() { Vec2::ZERO } else { cx.layout_at(&run, f32::INFINITY).size() };
         let gap = cx.gap();
@@ -479,9 +479,13 @@ impl Component for MenuItem<'_> {
         if takes_over && level.clear_submenu() {
             frame::request_repaint(&ctx);
         }
-        // The run closes the menus: focus leaves them first, so the command reaches the stop focus returns to.
-        if asked && !self.keep_open {
-            crate::runtime::focus::return_from_pick(&ctx, crate::runtime::focus::PickedIn::Menus);
+        // The run closes the menus out from the one this row runs in: focus leaves them first, so the command reaches
+        // the stop focus returns to.
+        if asked
+            && !self.keep_open
+            && let Some(menu) = crate::runtime::focus::running_menu(&ctx)
+        {
+            crate::runtime::focus::return_from_pick(&ctx, crate::runtime::focus::PickedIn::Menus(menu));
         }
         // Every activation of a menu row reaches its command as `FireSource::Menu`, whether it was typed, clicked or keyed.
         // A typed letter also runs a row that has no command: the injected activation closes the menu.
@@ -513,7 +517,7 @@ impl Component for MenuItem<'_> {
         let level = cx.env.get::<MenuLevel>();
         let command = cx.command.as_deref();
         let (mark_column, icon_column) = self.lead_columns(&cx.core.ctx, side, gap, command, &level);
-        let text = mnemonic::marked(cx.resolved.label, &cx.env.folder()).0; // P3(top-w2): tp.T11
+        let text = mnemonic::marked(cx.resolved.label, &cx.env.folder()).0;
         let mark = self.mark(command, &level);
         let draw = ui.draw();
         let detail = self.detail.as_ref().map(|detail| cx.env.resolve(detail));
@@ -568,7 +572,7 @@ impl Component for MenuItem<'_> {
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let level = cx.env.get::<MenuLevel>();
-        access.name(Name::Text(mnemonic::marked(cx.resolved.label, &cx.env.folder()).0)); // P3(top-w2): tp.T11
+        access.name(Name::Text(mnemonic::marked(cx.resolved.label, &cx.env.folder()).0));
         if self.heading {
             access.role(Role::HEADING);
             return;

@@ -66,3 +66,30 @@ fn help_search_ignores_accents_and_matches_the_english_label_and_the_path() {
         assert!(!rig.open(absent), "{typed:?} leaves {absent:?} out");
     }
 }
+
+/// A menu a title click opened takes the letter a row marks: the row runs and the run closes the menu.
+#[trial]
+fn a_letter_runs_the_row_it_marks_in_a_menu_a_title_click_opened() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let saved = Rc::new(Cell::new(0));
+    let seen = saved.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&File", |ui| {
+            MenuItem::new("&New").show(ui);
+            if MenuItem::new("&Save").show(ui).ran {
+                seen.set(seen.get() + 1);
+            }
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+    });
+    fixture.settle();
+    let file = fixture.by_label("File").expect("the File title");
+    fixture.click(&file);
+    fixture.settle();
+    assert!(fixture.by_label("Save").is_some(), "File is open");
+    fixture.type_text("s");
+    fixture.settle();
+    assert_eq!(saved.get(), 1, "the letter runs the row it marks");
+    assert!(fixture.by_label("Save").is_none(), "and the run closes the menu");
+}

@@ -1,5 +1,6 @@
 //! Which desktop and backend the window opens on, read from the environment and, on Wayland, the
-//! compositor's registry; and, with the `ui` feature, whether a window fits its monitor (`fits`).
+//! compositor's registry; and, with the `ui` feature, whether a window fits its monitor (`fits`)
+//! and the part of it the user can see above the taskbar (`visible_part`).
 
 #[cfg(feature = "ui")]
 mod work_area;

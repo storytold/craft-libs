@@ -118,6 +118,74 @@ fn a_shortcut_pressed_on_the_focused_bar_runs_once_where_focus_was_and_gives_foc
     assert_eq!(fixture.focused_stop().map(|(id, _)| id), target.get(), "and the focus is back on that stop");
 }
 
+/// A command chord pressed while a menu is open closes the menu and runs where focus was, as with the menu closed
+/// (#9065); the open menu's own keys, a plain letter among them, still drive it.
+#[trial]
+fn a_command_shortcut_closes_an_open_menu_and_runs() {
+    use craft_ui::contract::ShowContainer as _;
+    use craft_ui::runtime::commands::Commands as _;
+    let count = Rc::new(Cell::new(0));
+    let target = Rc::new(Cell::new(None));
+    let (seen, stop) = (count.clone(), target.clone());
+    let mut fixture = Fixture::new(move |ui| {
+        let titles = vec![MenuTitle::new("&Edit", |ui| {
+            MenuItem::command(EditCommands::Undo).show(ui);
+            MenuItem::new("&Zoom").show(ui);
+        })];
+        MenuBar::new("Main menu", titles).show(ui);
+        craft_ui::layout_components::Stack::new().command_scope(<BarKeysCommand as craft_ui::contract::CommandSet>::SCOPE).show(ui, |ui, cx| {
+            while cx.take_command::<BarKeysCommand>().is_some() {
+                seen.set(seen.get() + 1);
+            }
+            stop.set(Some(craft_ui::buttons::Button::new("Target").show(ui).id));
+        });
+    });
+    fixture.settle();
+    craft_ui::runtime::focus::request(fixture.ctx(), craft_ui::runtime::focus::FocusTarget::Id(target.get().expect("the button ran")));
+    fixture.settle();
+    let open_edit = |fixture: &mut Fixture| {
+        let edit = fixture.by_label("Edit").expect("the Edit title");
+        fixture.click(&edit);
+        fixture.settle();
+        assert!(fixture.by_label("Zoom").is_some(), "Edit is open");
+    };
+
+    open_edit(&mut fixture);
+    fixture.key(egui::Key::P, egui::Modifiers::COMMAND | egui::Modifiers::ALT);
+    fixture.settle();
+    assert_eq!(count.get(), 1, "the shortcut runs once with the menu open, in the scope focus came from");
+    assert!(fixture.by_label("Zoom").is_none(), "and closes the menu");
+    assert_eq!(fixture.focused_stop().map(|(id, _)| id), target.get(), "focus is back on the stop that held it");
+
+    open_edit(&mut fixture);
+    // A mnemonic reads the typed text, as the open menu's other letters do.
+    fixture.type_text("z");
+    fixture.settle();
+    assert!(fixture.by_label("Zoom").is_none(), "a plain letter still picks the row it marks, which closes the menu");
+    assert_eq!(count.get(), 1, "and runs no shortcut");
+    assert_eq!(fixture.focused_stop().map(|(id, _)| id), target.get());
+}
+
+/// ⌘Z and ⌘C are the Help search field's own editing chords: with the field focused they stay with it, Help stays open,
+/// and no app command runs (#9314). The text-field rule of `holds_press` meets the command-chord rule of an open menu
+/// here.
+#[trial]
+fn undo_and_copy_stay_with_the_help_search_field() {
+    let mut rig = rig();
+    rig.click("Help");
+    rig.fixture.type_text("und");
+    rig.fixture.settle();
+    let search = rig.fixture.focused_stop().map(|(id, _)| id);
+    assert!(search.is_some() && search != rig.field.get(), "Help opens with its search field focused");
+    for key in [egui::Key::Z, egui::Key::C] {
+        rig.fixture.key(key, egui::Modifiers::COMMAND);
+        rig.fixture.settle();
+        assert!(rig.fixture.by_label("About").is_some(), "⌘{key:?} keeps Help open");
+        assert_eq!(rig.fixture.focused_stop().map(|(id, _)| id), search, "⌘{key:?} keeps the focus in the search field");
+    }
+    assert_eq!(*rig.text.borrow(), "helloabc", "no app Undo ran in the field that held focus before Help opened");
+}
+
 /// A bar whose Help searches the target scope's Toggle, then the Target button inside that scope; returns the count
 /// of Toggle runs and the button's id.
 fn scoped_rig() -> ScopedRig {
@@ -182,4 +250,36 @@ fn the_help_search_takes_its_editing_keys() {
     fixture.type_text("x");
     fixture.settle();
     assert!(field_reads(&fixture, "txo"), "Left moves the caret before the last letter");
+}
+
+/// A field inside an open menu keeps its own edit menu: Cut picked from the Help search field's edit menu cuts the
+/// search text, not the text of the field that held focus before Help opened, and closes only the edit menu.
+#[trial]
+fn cut_from_the_help_search_fields_edit_menu_cuts_the_search_text() {
+    use craft_ui::testing::pointer;
+    let mut rig = rig();
+    rig.click("Help");
+    rig.fixture.type_text("und");
+    rig.fixture.key(egui::Key::A, egui::Modifiers::COMMAND);
+    rig.fixture.settle();
+    let held = rig.fixture.focused_stop().map(|(id, _)| id);
+    // Well after the title click: egui counts presses of any button into one click run.
+    rig.fixture.advance(1.0);
+    let search = rig.fixture.by_label("Search menus").expect("the search field").center();
+    rig.fixture.frame(vec![pointer::secondary(search, true)]);
+    rig.fixture.frame(vec![pointer::secondary(search, false)]);
+    rig.fixture.settle();
+    let cut = rig.fixture.by_label("Cut").expect("the search field's edit menu");
+    assert!(!rig.fixture.tree().is_disabled_key(cut.node), "Cut follows the search field's selection");
+    let at = cut.center();
+    let mut copied = Vec::new();
+    let click = [vec![pointer::moved(at)], vec![pointer::press(at)], vec![pointer::release(at)]];
+    for events in click.into_iter().chain(std::iter::repeat_n(Vec::new(), 8)) {
+        rig.fixture.frame(events);
+        copied.extend_from_slice(rig.fixture.copied());
+    }
+    assert_eq!(copied, ["und"], "Cut takes the search text");
+    assert_eq!(*rig.text.borrow(), "helloabc", "and leaves the field under the menus alone");
+    assert!(rig.fixture.by_label("About").is_some(), "the pick closes only the edit menu: Help stays open");
+    assert_eq!(rig.fixture.focused_stop().map(|(id, _)| id), held, "focus is back in the search field");
 }

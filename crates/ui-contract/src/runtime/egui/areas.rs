@@ -277,9 +277,14 @@ pub(crate) fn layer_rect(ctx: &Context, id: Id) -> Option<Rect> {
     ctx.memory(|memory| memory.area_rect(id))
 }
 
-/// The viewport's safe rect: the room overlays must stay inside.
+/// The viewport's safe rect: the room overlays must stay inside, the part of the content rect the user can see on
+/// the monitor and above its taskbar. Without a known monitor size it is the whole content rect.
 pub(crate) fn safe_rect(ctx: &Context) -> Rect {
-    ctx.content_rect()
+    let content = ctx.content_rect();
+    ctx.input(|input| {
+        let viewport = input.viewport();
+        craft_window::desktop::visible_part(content, viewport.monitor_size, viewport.inner_rect, craft_window::desktop::WindowState::of(viewport))
+    })
 }
 
 /// Hands egui the whole layer order of the running pass, bottom first. egui consumes it by the end of the pass.

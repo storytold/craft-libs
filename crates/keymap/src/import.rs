@@ -1030,6 +1030,9 @@ impl Names {
 /// The catalog by normalized path and label, for the match steps.
 struct Index {
     tool: Vec<bool>,
+    /// Each command's default triggers, for choosing among same-named commands by the keys an
+    /// entry carries.
+    defaults: Vec<Vec<Trigger>>,
     /// Whether each command has a default binding, for choosing among same-named commands.
     has_default: Vec<bool>,
     /// Whether each command has a menu path of its own (not an import-only one).
@@ -1047,6 +1050,7 @@ impl Index {
     fn new(keymap: &Keymap) -> Index {
         let mut ix = Index {
             tool: Vec::new(),
+            defaults: Vec::new(),
             has_default: Vec::new(),
             has_menu: Vec::new(),
             keys: HashMap::new(),
@@ -1056,6 +1060,7 @@ impl Index {
         };
         for (i, b) in keymap.catalog().iter().enumerate() {
             ix.tool.push(matches!(b.kind, CommandKind::Tool { .. }));
+            ix.defaults.push(b.defaults.iter().map(|d| d.trigger).collect());
             ix.has_default.push(!b.defaults.is_empty());
             ix.has_menu.push(!b.paths.is_empty());
             ix.keys.insert(b.command.key(), i);
@@ -1069,11 +1074,20 @@ impl Index {
     }
 
     /// The one command of `list` of the wanted kind. Among several, those with a default binding
-    /// win over those without, then those with a menu path over those without; the pick is
-    /// unique only when one is left. Aliases such as `history.undo` thus lose to the command
-    /// users know from the menu.
-    fn pick(&self, list: Option<&Vec<usize>>, tool: bool) -> Found {
+    /// that is one of `keys` win first: a source that gives two commands one label still carries
+    /// the key that tells them apart. Then those with a default binding win over those without,
+    /// then those with a menu path over those without; the pick is unique only when one is left.
+    /// Aliases such as `history.undo` thus lose to the command users know from the menu.
+    fn pick(&self, list: Option<&Vec<usize>>, tool: bool, keys: &[ForeignKey]) -> Found {
         let mut fits: Vec<usize> = list.into_iter().flatten().copied().filter(|i| self.tool.get(*i) == Some(&tool)).collect();
+        let carried = |i: &usize| {
+            self.defaults
+                .get(*i)
+                .is_some_and(|d| d.iter().any(|t| keys.iter().any(|k| k.trigger.as_ref().is_ok_and(|kt| kt == t))))
+        };
+        if fits.len() > 1 && fits.iter().any(carried) {
+            fits.retain(carried);
+        }
         for preferred in [&self.has_default, &self.has_menu] {
             if fits.len() > 1 && fits.iter().any(|i| preferred[*i]) {
                 fits.retain(|i| preferred[*i]);
@@ -1111,7 +1125,7 @@ impl Index {
         let toggle_steps = self.toggles.steps(menu.as_ref(), &toggle_segs, panel);
         let mut many = false;
         for (list, by_panel) in steps.into_iter().chain(toggle_steps) {
-            match self.pick(list, tool) {
+            match self.pick(list, tool, &entry.keys) {
                 Found::One(i, _) => return Found::One(i, by_panel),
                 Found::Many => many = true,
                 Found::None => {}
