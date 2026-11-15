@@ -499,6 +499,87 @@ mod crate_root {
 }
 
 #[test]
+fn predefined_quit_follows_a_name_that_the_muda_crate_is_imported_under() {
+    let source = r#"
+use muda as menu;
+fn menu_bar() {
+    let a = menu::PredefinedMenuItem::quit(None);
+    let b = <menu::PredefinedMenuItem>::quit(None);
+    let c = ::menu::PredefinedMenuItem::quit(None);
+}
+mod grouped {
+    use muda::{self as m};
+    fn menu_bar() { let d = m::PredefinedMenuItem::quit(None); }
+}
+mod renamed {
+    extern crate muda as native;
+    type Item = native::PredefinedMenuItem;
+    fn menu_bar() { let e = native::PredefinedMenuItem::quit(None); let f = Item::quit(None); }
+}
+mod imported {
+    use muda::{self as m};
+    use m::PredefinedMenuItem as Quit;
+    fn menu_bar() { let g = Quit::quit(None); }
+}
+mod unbound {
+    fn menu_bar() { let h = m::PredefinedMenuItem::quit(None); }
+}
+mod shadowed {
+    use other_menu as menu;
+    fn menu_bar() { let i = menu::PredefinedMenuItem::quit(None); }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![4, 5, 10, 15, 20]);
+}
+
+#[test]
+fn predefined_quit_reads_a_crate_name_in_an_import_where_the_import_is() {
+    let source = r#"
+mod native {
+    use muda as menu;
+    use menu::PredefinedMenuItem as Item;
+    type Alias = menu::PredefinedMenuItem;
+    fn menu_bar() { let a = Item::quit(None); let b = Alias::quit(None); }
+}
+mod other {
+    use other_menu as menu;
+    use menu::PredefinedMenuItem as Item;
+    type Alias = menu::PredefinedMenuItem;
+    fn menu_bar() { let c = Item::quit(None); let d = Alias::quit(None); }
+}
+mod external {
+    use muda as menu;
+    use ::menu::PredefinedMenuItem as Item;
+    type Alias = ::menu::PredefinedMenuItem;
+    fn menu_bar() { let e = Item::quit(None); let f = Alias::quit(None); }
+}
+mod grouped {
+    use muda as menu;
+    use {::menu::PredefinedMenuItem as Item};
+    fn menu_bar() { let g = Item::quit(None); }
+}
+mod shadowed {
+    use muda as menu;
+    fn menu_bar() {
+        extern crate other_menu as menu;
+        let h = menu::PredefinedMenuItem::quit(None);
+    }
+}
+mod renamed_module {
+    use other_menu as muda;
+    use muda as menu;
+    fn menu_bar() { let i = menu::PredefinedMenuItem::quit(None); }
+}
+mod renamed_crate {
+    mod muda {}
+    use ::muda as menu;
+    fn menu_bar() { let j = menu::PredefinedMenuItem::quit(None); }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![6, 40]);
+}
+
+#[test]
 fn predefined_quit_ignores_a_bare_name_that_another_import_or_a_local_type_binds_in_its_scope() {
     let imported = r#"
 use other_menu::PredefinedMenuItem;

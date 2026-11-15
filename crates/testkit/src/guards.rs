@@ -472,7 +472,7 @@ struct UseLeaf {
     start: usize,
     /// Index of the alias of `std::time` that the path was read through, when [`use_leaves`] was given one.
     alias: Option<usize>,
-    /// Whether the path starts with `::`, so that its first segment names a crate.
+    /// Whether the path starts with `::`, so that its first segment names an external crate.
     absolute: bool,
 }
 
@@ -1404,6 +1404,98 @@ fn report(findings: &mut Vec<Finding>, path: &str, content: &str, lines: &BTreeS
     }
 }
 
+/// For each pair of braces (`None` for the file) and a name: whether a binding in those braces binds the
+/// name to the muda crate, and whether one binds it to something else.
+type CrateBindings<'a> = BTreeMap<(&'a str, Option<usize>), (bool, bool)>;
+
+/// The names of the muda crate in a file, and where each is bound. The names are `muda` itself and each
+/// name that `use muda as m;`, `use muda::{self as m};` or `extern crate muda as m;` gives it. For each
+/// name and each pair of braces, the bindings record whether a `use` or an `extern crate` in them binds
+/// the name to the crate, and whether a `use`, an `extern crate` or a `mod` in them binds it to something
+/// else. A binding to something else inside an item with a `cfg` attribute, or through `crate::`, `self::`
+/// or `super::` (which may be a re-export of the crate), is left out.
+fn muda_crate_bindings<'a>(
+    toks: &'a [Token],
+    leaves: &'a [UseLeaf],
+    around: &[Option<usize>],
+    gated: &[bool],
+) -> (BTreeSet<&'a str>, CrateBindings<'a>) {
+    // Each `extern crate c;` or `extern crate c as n;`: whether `c` is muda, and the index of the name it
+    // binds.
+    let mut externs: Vec<(bool, &'a str, usize)> = Vec::new();
+    for i in 0..toks.len() {
+        if toks[i].is_ident("extern")
+            && toks.get(i + 1).is_some_and(|t| t.is_ident("crate"))
+            && let Some(Kind::Ident(krate)) = toks.get(i + 2).map(|t| &t.kind)
+        {
+            let at = if toks.get(i + 3).is_some_and(|t| t.is_ident("as")) { i + 4 } else { i + 2 };
+            if let Some(Kind::Ident(name)) = toks.get(at).map(|t| &t.kind)
+                && name != "_"
+            {
+                externs.push((krate == "muda", name.as_str(), at));
+            }
+        }
+    }
+    let mut names: BTreeSet<&'a str> = BTreeSet::from(["muda"]);
+    names.extend(leaves.iter().filter(|leaf| leaf.path == ["muda"]).filter_map(UseLeaf::binding));
+    names.extend(externs.iter().filter(|&&(muda, _, _)| muda).map(|&(_, name, _)| name));
+    let mut bound: CrateBindings<'a> = BTreeMap::new();
+    // `use muda as m;` binds `m` to the crate only where `muda` itself names the crate, so it is read
+    // after every other binding.
+    let renames = |leaf: &UseLeaf| leaf.path == ["muda"] && leaf.binding() != Some("muda");
+    for leaf in leaves.iter().filter(|leaf| !renames(leaf)) {
+        let Some(name) = leaf.binding().filter(|name| names.contains(name)) else { continue };
+        let local = leaf.root.as_deref().is_some_and(|s| matches!(s, "crate" | "self" | "super"));
+        let entry = bound.entry((name, around.get(leaf.start).copied().flatten()));
+        if leaf.path == ["muda"] {
+            entry.or_default().0 = true;
+        } else if !local && !gated.get(leaf.start).copied().unwrap_or(false) {
+            entry.or_default().1 = true;
+        }
+    }
+    for &(muda, name, at) in &externs {
+        if !names.contains(name) {
+            continue;
+        }
+        if muda {
+            bound.entry((name, around[at])).or_default().0 = true;
+        } else if !gated[at] {
+            bound.entry((name, around[at])).or_default().1 = true;
+        }
+    }
+    for (i, t) in toks.iter().enumerate() {
+        if let Kind::Ident(name) = &t.kind
+            && names.contains(name.as_str())
+            && i.checked_sub(1).is_some_and(|k| toks[k].is_ident("mod"))
+            && !gated[i]
+        {
+            bound.entry((name, around[i])).or_default().1 = true;
+        }
+    }
+    let mut renamed = Vec::new();
+    for leaf in leaves.iter().filter(|leaf| renames(leaf)) {
+        let Some(name) = leaf.binding() else { continue };
+        let crate_here =
+            leaf.absolute || !matches!(lookup(toks, around, leaf.start, |scope| bound.get(&("muda", scope)).copied()), Some(Some((false, true))));
+        let local = leaf.root.as_deref().is_some_and(|s| matches!(s, "crate" | "self" | "super"));
+        let scope = around.get(leaf.start).copied().flatten();
+        if crate_here {
+            renamed.push((name, scope, true));
+        } else if !local && !gated.get(leaf.start).copied().unwrap_or(false) {
+            renamed.push((name, scope, false));
+        }
+    }
+    for (name, scope, muda) in renamed {
+        let entry = bound.entry((name, scope)).or_default();
+        if muda {
+            entry.0 = true;
+        } else {
+            entry.1 = true;
+        }
+    }
+    (names, bound)
+}
+
 /// Guard: detects direct calls to `muda`'s predefined Quit menu item.
 ///
 /// Using `PredefinedMenuItem::quit` connects the macOS menu directly to `NSApplication terminate:`,
@@ -1415,10 +1507,13 @@ fn report(findings: &mut Vec<Finding>, path: &str, content: &str, lines: &BTreeS
 /// is reported too. A path that names the type through another crate or module, such as
 /// `other::PredefinedMenuItem::quit`, is not, and neither is a path through a name `muda` that the innermost
 /// braces binding it bind only to something else (`use other_menu as muda;`, `mod muda`), read like a name
-/// used on its own below; `::muda::PredefinedMenuItem` always names the crate. It also follows a `use` or a `type` alias that renames
-/// muda's type (`use muda::PredefinedMenuItem as Item;` then `Item::quit`); a rename of another crate's
-/// `PredefinedMenuItem` is not followed, including one through a name `muda` that the braces around the
-/// `use` or `type` bind to something else, read as for a qualified path.
+/// used on its own below; `::muda::PredefinedMenuItem` always names the crate. A name that the crate is
+/// imported under (`use muda as menu;`, `use muda::{self as menu};`, `extern crate muda as menu;`) is read
+/// like `muda` in the braces that bind it, so `menu::PredefinedMenuItem::quit` is reported there. It also
+/// follows a `use` or a `type` alias that renames muda's type (`use muda::PredefinedMenuItem as Item;` then
+/// `Item::quit`); a rename of another crate's `PredefinedMenuItem` is not followed, including one through a
+/// name `muda` that the braces around the `use` or `type` bind to something else, read as for a qualified
+/// path.
 ///
 /// A name used on its own (`PredefinedMenuItem::quit`, `Item::quit`) is read in the innermost braces
 /// around it, within its module, or the file, that bind the name. It is reported when those braces
@@ -1441,34 +1536,32 @@ where
         let leaves = use_leaves(&toks, &BTreeSet::new());
         let (around, opener) = brace_scopes(&toks);
         let gated = cfg_covered(&toks, true);
-        // For each pair of braces (`None` for the file), whether a `use` in it binds the name `muda` to the
-        // crate, and whether a `use` or a `mod` in it binds `muda` to something else. A binding inside an
-        // item with a `cfg` attribute may not apply on the platform the guard protects, and a path into
-        // this crate (`crate::`, `self::`, `super::`) may lead to a re-export of the crate, so neither
-        // counts as something else.
-        let mut crate_bound: BTreeMap<Option<usize>, (bool, bool)> = BTreeMap::new();
-        for leaf in leaves.iter().filter(|leaf| leaf.binding() == Some("muda")) {
-            let local = leaf.root.as_deref().is_some_and(|s| matches!(s, "crate" | "self" | "super"));
-            let entry = around.get(leaf.start).copied().flatten();
-            if leaf.path == ["muda"] {
-                crate_bound.entry(entry).or_default().0 = true;
-            } else if !local && !gated.get(leaf.start).copied().unwrap_or(false) {
-                crate_bound.entry(entry).or_default().1 = true;
+        let (crate_names, crate_bound) = muda_crate_bindings(&toks, &leaves, &around, &gated);
+        let names_crate = |s: &str| crate_names.contains(s);
+        // Whether `name`, read at token `i`, names the crate. After a leading `::` only `muda` does.
+        // Otherwise `muda` does unless the innermost braces around `i` that bind `muda` bind it only to
+        // something else, and another name of the crate does when those braces bind it to the crate, or
+        // only to nothing else.
+        let crate_name_at = |name: &str, i: usize, absolute: bool| {
+            if absolute || !names_crate(name) {
+                return name == "muda";
             }
-        }
-        for (i, t) in toks.iter().enumerate() {
-            if t.is_ident("muda") && i.checked_sub(1).is_some_and(|k| toks[k].is_ident("mod")) && !gated[i] {
-                crate_bound.entry(around[i]).or_default().1 = true;
+            match lookup(&toks, &around, i, |scope| crate_bound.get(&(name, scope)).copied()) {
+                None => true,
+                Some(Some((muda, other))) => muda || !other,
+                Some(None) => name == "muda",
             }
-        }
-        // Whether a relative path's first segment `muda`, read from `toks[at]`, names the crate: unless the
-        // innermost braces around it that bind `muda` bind it only to something else.
-        let crate_at = |at: usize| !matches!(lookup(&toks, &around, at, |scope| crate_bound.get(&scope).copied()), Some(Some((false, true))));
-        // Whether `muda` at `i` names the crate: after a leading `::` it always does.
-        let crate_is_muda = |i: usize| (i >= 2 && toks[i - 1].is_punct(':') && toks[i - 2].is_punct(':')) || crate_at(i);
-        // Whether a `use` leaf imports muda's type: its path is `muda::PredefinedMenuItem`, and `muda` names
-        // the crate where the `use` is.
-        let is_muda = |leaf: &UseLeaf| leaf.path == ["muda", "PredefinedMenuItem"] && (leaf.absolute || crate_at(leaf.start));
+        };
+        // Whether the identifier at `i` names the crate.
+        let crate_is_muda = |i: usize| {
+            let Kind::Ident(name) = &toks[i].kind else { return false };
+            let absolute = i >= 2 && toks[i - 1].is_punct(':') && toks[i - 2].is_punct(':');
+            crate_name_at(name, i, absolute)
+        };
+        // A `use` path to muda's type, read through a name of the crate bound where the `use` is. After
+        // a leading `::` the first segment is an external crate, so only `muda` names it.
+        let is_muda =
+            |leaf: &UseLeaf| leaf.path.len() == 2 && leaf.path[1] == "PredefinedMenuItem" && crate_name_at(&leaf.path[0], leaf.start, leaf.absolute);
         // Whether the braces opened at `o` are the body of an `impl` or a `trait`, whose `type` items are
         // associated types rather than names in scope. The head is read back from `o` to the `;`, `{` or
         // `}` before it, stepping over a block in angle brackets (`impl Foo<{ N }>`), for at most
@@ -1518,7 +1611,8 @@ where
             }
             s < o && (toks[s].is_ident("impl") || toks[s].is_ident("trait"))
         };
-        // Whether the `type` name at `i` is followed by `= muda::PredefinedMenuItem;` (or `::muda::...`).
+        // Whether the `type` name at `i` is followed by `= muda::PredefinedMenuItem;` (or `::muda::...`, or
+        // a name of the crate in place of `muda`).
         let aliases_muda = |i: usize| {
             let mut j = i + 1;
             if !toks.get(j).is_some_and(|t| t.is_punct('=')) {
@@ -1528,7 +1622,7 @@ where
             if toks.get(j).is_some_and(|t| t.is_punct(':')) && toks.get(j + 1).is_some_and(|t| t.is_punct(':')) {
                 j += 2;
             }
-            toks.get(j).is_some_and(|t| t.is_ident("muda"))
+            j < toks.len()
                 && crate_is_muda(j)
                 && then_path(&toks, j + 1, |s| s == "PredefinedMenuItem")
                 && toks.get(j + 4).is_some_and(|t| t.is_punct(';'))
@@ -1602,10 +1696,10 @@ where
             if !names.contains(name.as_str()) {
                 continue;
             }
-            // A qualified name counts only as `muda::PredefinedMenuItem` (or `::muda::...`), not as
-            // another crate's or module's type of the same name.
+            // A qualified name counts only as `muda::PredefinedMenuItem` (or `::muda::...`, or a name of the
+            // crate in place of `muda`), not as another crate's or module's type of the same name.
             let named = if continues_a_path(&toks, i) {
-                name == "PredefinedMenuItem" && toks[i - 3].is_ident("muda") && !continues_a_path(&toks, i - 3) && crate_is_muda(i - 3)
+                name == "PredefinedMenuItem" && !continues_a_path(&toks, i - 3) && crate_is_muda(i - 3)
             } else {
                 bare_is_muda(name, i)
             };
