@@ -25,6 +25,12 @@ impl SettingsDraft {
         }
     }
 
+    /// Removes the value at `key`, for a row whose off state stores no value (an `Option` that is `None`); Apply then
+    /// reports the key with no value. A missing key removes nothing.
+    pub fn remove(&mut self, key: &str) {
+        remove(&mut self.table, key);
+    }
+
     /// Writes the colour row `key` (the `#rrggbb` text a [`SettingRule::color`] row holds), for the colour a picker
     /// opened from [`CustomSettings::nested`] returned.
     pub fn set_color(&mut self, key: &str, color: Srgba) {

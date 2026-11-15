@@ -1,7 +1,9 @@
 //! The settings document without a window: rows, applied edits, rebase and row conditions.
 
 use craft_theme::Rgba;
-use craft_ui::patterns::preferences::{PageInfo, PrefValue, PreferencesModel, RowKind, SettingRule, SettingsDocument, StandardPage};
+use craft_ui::patterns::preferences::{
+    CustomSettings, PageInfo, PrefValue, PreferencesModel, RowKind, SettingRule, SettingsDocument, SettingsDraft, StandardPage,
+};
 use craft_ui::testing::trial;
 use serde::{Deserialize, Serialize};
 use toml::Value;
@@ -240,4 +242,37 @@ fn a_row_with_several_conditions_shows_only_while_all_hold() {
 
     assert!(shown(&doc, "export.other"), "an absent key passes shown_unless");
     assert!(!shown(&doc, "export.never"), "an absent key fails shown_when");
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct Memory {
+    percent: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct MemoryPrefs {
+    memory: Memory,
+}
+
+/// A custom row that turns its value off.
+struct TurnOff;
+
+impl CustomSettings<MemoryPrefs> for TurnOff {
+    fn nested(&mut self, _: &egui::Context, draft: &mut SettingsDraft) {
+        draft.remove("memory.percent");
+    }
+}
+
+/// A custom row's `SettingsDraft::remove` stores no value: Apply reports the key with none and the struct reads `None`.
+#[trial]
+fn a_removed_draft_value_applies_as_no_value() {
+    let saved = MemoryPrefs { memory: Memory { percent: Some(70) } };
+    let mut doc = SettingsDocument::new(saved).expect("serializes").custom(TurnOff);
+    doc.nested(&egui::Context::default());
+    doc.apply().expect("the draft fits the struct");
+    let edits = doc.take_applied_edits().expect("applied");
+    assert_eq!(edits, vec![("memory.percent".to_owned(), None)]);
+    assert_eq!(doc.saved().memory.percent, None);
 }
