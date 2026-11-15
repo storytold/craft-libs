@@ -1,0 +1,40 @@
+[package]
+name = "craft-smime"
+description = "S/MIME (RFC 8551): Digital signatures checked from CMS (RFC 5652) and X.509 (RFC 5280), no I/O"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-ber = { workspace = true }
+# RustCrypto: CMS, X.509, DER, SPKI, OID, RSA, P256, P384, SHA2.
+cms = { version = "0.15", default-features = false }
+x509-cert = { version = "0.2", default-features = false }
+der = { version = "0.7", default-features = false }
+spki = { version = "0.7", default-features = false }
+const-oid = { version = "0.9", default-features = false }
+rsa = { version = "0.9", default-features = false }
+p256 = { version = "0.13", default-features = false }
+p384 = { version = "0.13", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+# PKCS #12 file handling (RFC 7292 Appendix B): PBES2, triple-DES key derivation.
+pkcs12 = { version = "0.6", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+hmac = { version = "0.12", default-features = false }
+sha1 = { version = "0.11", default-features = false }
+aes = { version = "0.8", default-features = false }
+des = { version = "0.8", default-features = false }
+cbc = { version = "0.1", default-features = false, features = ["block-padding"] }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+# Error handling.
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+rcgen = { version = "0.13" }
+ring = { version = "0.17" }
