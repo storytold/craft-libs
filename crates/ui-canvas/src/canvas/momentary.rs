@@ -120,7 +120,22 @@ impl Momentary {
         if in_gesture {
             return self.latched;
         }
-        let tool = match self.held {
+        let tool = self.pick(self.held, mods);
+        self.latched = tool;
+        tool
+    }
+
+    /// The tool for a press that automation queued. `queued` is the command that the keys the injection queue holds at
+    /// the press run through the keymap; without one, the command whose window key is down counts. Picked with `mods`
+    /// and latched for the gesture, as [`tool`](Self::tool) does for a pointer press.
+    pub(crate) fn press(&mut self, queued: Option<MomentaryCommands>, mods: Mods) -> Option<MomentaryTool> {
+        let tool = self.pick(queued.or(self.held), mods);
+        self.latched = tool;
+        tool
+    }
+
+    fn pick(&self, held: Option<MomentaryCommands>, mods: Mods) -> Option<MomentaryTool> {
+        match held {
             Some(held) => {
                 let tool = MomentaryTool::from(held);
                 Some(if mods.alt {
@@ -135,26 +150,23 @@ impl Momentary {
             None if self.hand_selected && mods.alt => Some(MomentaryTool::ZoomOut),
             None if self.hand_selected && (mods.cmd || mods.ctrl) => Some(MomentaryTool::ZoomIn),
             None => None,
-        };
-        self.latched = tool;
-        tool
+        }
     }
 
-    /// The tool the host runs this pass: the momentary one in effect, else `selected`. The second answer is the
-    /// momentary Hand when it is not the tool of the pass but still glides after a flick.
-    pub(crate) fn substitute<'t>(
-        &'t mut self,
-        selected: &'t mut dyn CanvasTool,
-        mods: Mods,
-        in_gesture: bool,
-    ) -> (&'t mut dyn CanvasTool, Option<&'t mut HandTool>) {
-        match self.tool(mods, in_gesture) {
-            Some(MomentaryTool::Hand) => (&mut self.hand, None),
+    /// The tool the host runs for `tool`, the momentary tool in effect: the set's Hand or Zoom, else `selected`.
+    pub(crate) fn run_as<'t>(&'t mut self, tool: Option<MomentaryTool>, selected: &'t mut dyn CanvasTool) -> &'t mut dyn CanvasTool {
+        match tool {
+            Some(MomentaryTool::Hand) => &mut self.hand,
             Some(tool) => {
                 self.zoom.out = tool.zooms_out();
-                (&mut self.zoom, self.hand.is_gliding().then_some(&mut self.hand))
+                &mut self.zoom
             }
-            None => (selected, self.hand.is_gliding().then_some(&mut self.hand)),
+            None => selected,
         }
+    }
+
+    /// The momentary Hand while it glides after a flick.
+    pub(crate) fn gliding_hand(&mut self) -> Option<&mut HandTool> {
+        self.hand.is_gliding().then_some(&mut self.hand)
     }
 }

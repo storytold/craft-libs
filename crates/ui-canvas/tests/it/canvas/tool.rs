@@ -128,7 +128,7 @@ fn a_gesture_cancelled_by_the_app_starts_no_new_one_while_the_button_stays_down(
     let from = fixture.canvas().center();
     fixture.press_at(from);
     let (ctx, id) = (fixture.fixture().ctx().clone(), fixture.canvas_id());
-    assert!(ToolHost::cancel(&ctx, id, &mut *fixture.tool_mut(), CancelReason::Dismissed), "a gesture was running");
+    assert!(ToolHost::new().cancel(&ctx, id, &mut *fixture.tool_mut(), CancelReason::Dismissed), "a gesture was running");
 
     fixture.move_to(from + BY).move_to(from + BY * 2.0).release_at(from + BY * 2.0);
     assert_eq!(fixture.tool().calls, [Call::Press, Call::Cancel(CancelReason::Dismissed)], "the held button is not the tool's any more");
@@ -390,6 +390,8 @@ struct Probe {
     every_move: bool,
     snaps: bool,
     drags: Vec<(Pos2, f64)>,
+    /// Whether Space was held at each drag.
+    space_drags: Vec<bool>,
     pass_time: f64,
     log: Log,
 }
@@ -404,6 +406,7 @@ impl Probe {
             every_move: false,
             snaps: false,
             drags: Vec::new(),
+            space_drags: Vec::new(),
             pass_time: 0.0,
             log: Rc::clone(log),
         }
@@ -435,9 +438,10 @@ impl CanvasTool for Probe {
         if holds(self.ignores, pointer.mods) { ToolAction::Ignored } else { ToolAction::Claimed }
     }
 
-    fn drag(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) {
+    fn drag(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         self.note("drag");
         self.drags.push((pointer.pos, pointer.time));
+        self.space_drags.push(cx.held(craft_keymap::Key::Space));
     }
 
     fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {
@@ -493,6 +497,8 @@ struct Rig {
     contexts: Rc<RefCell<Vec<ContextRequest>>>,
     snapped: Rc<RefCell<Vec<SnapLine>>>,
     cursor: Rc<RefCell<Option<Cursor>>>,
+    command: Rc<RefCell<Probe>>,
+    alt: Rc<RefCell<Probe>>,
 }
 
 impl Rig {
@@ -506,7 +512,8 @@ impl Rig {
         let cursor = Rc::new(RefCell::new(None));
         let (shown_main, shown_canvas, shown_contexts, shown_snapped, shown_cursor) =
             (Rc::clone(&main), Rc::clone(&canvas), Rc::clone(&contexts), Rc::clone(&snapped), Rc::clone(&cursor));
-        let (mut command, mut alt) = (Probe::new("command", log), Probe::new("alt", log));
+        let (command, alt) = (Rc::new(RefCell::new(Probe::new("command", log))), Rc::new(RefCell::new(Probe::new("alt", log))));
+        let (shown_command, shown_alt) = (Rc::clone(&command), Rc::clone(&alt));
         let mut fixture = Fixture::new(move |ui| {
             let room = ui.available_rect_before_wrap();
             let mut shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 1.0));
@@ -515,7 +522,9 @@ impl Rig {
             }
             let shown = shown.show(ui, |_, _| {});
             shown_canvas.set(shown.output.response.id);
-            let mut host = ToolHost::new().stand_in(StandInKey::Command, &mut command).stand_in(StandInKey::Alt, &mut alt).smart_guide_color(setup.smart_color);
+            let (mut command, mut alt) = (shown_command.borrow_mut(), shown_alt.borrow_mut());
+            let mut host =
+                ToolHost::new().stand_in(StandInKey::Command, &mut *command).stand_in(StandInKey::Alt, &mut *alt).smart_guide_color(setup.smart_color);
             if let Some(momentary) = setup.momentary.as_mut() {
                 host = host.momentary(momentary);
             }
@@ -530,7 +539,7 @@ impl Rig {
             }
         });
         fixture.settle();
-        Rig { fixture, main, canvas, log: Rc::clone(log), contexts, snapped, cursor }
+        Rig { fixture, main, command, alt, canvas, log: Rc::clone(log), contexts, snapped, cursor }
     }
 
     fn centre(&mut self) -> Pos2 {
@@ -632,6 +641,95 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     let at = rig.centre();
     rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::moved(at)]).frame(vec![pointer::press(at)]).frame(vec![pointer::release(at)]);
     assert!(!rig.calls().iter().any(|call| call == "command press"), "Cmd over the selected Hand is Zoom In: {:?}", rig.calls());
+}
+
+/// The app's cancel ends a gesture a stand-in holds on that stand-in: the host built with the pass's stand-ins picks the
+/// holder, so the selected tool is not cancelled for a gesture it never had.
+#[trial]
+fn a_gesture_a_stand_in_holds_is_cancelled_on_the_stand_in() {
+    let log = Log::default();
+    let mut main = Probe::new("main", &log);
+    main.refuses = Some(StandInKey::Command);
+    let mut rig = Rig::new(main, &log, None);
+    let at = rig.centre();
+    rig.fixture.hold(Modifiers::COMMAND).frame(vec![pointer::press(at)]).frame(vec![pointer::moved(at + BY)]);
+    rig.log.borrow_mut().clear();
+    let (ctx, canvas) = (rig.fixture.ctx().clone(), rig.canvas.get());
+    let cancelled = {
+        let (mut command, mut alt, mut main) = (rig.command.borrow_mut(), rig.alt.borrow_mut(), rig.main.borrow_mut());
+        ToolHost::new().stand_in(StandInKey::Command, &mut *command).stand_in(StandInKey::Alt, &mut *alt).cancel(
+            &ctx,
+            canvas,
+            &mut *main,
+            CancelReason::HostChanged,
+        )
+    };
+    assert!(cancelled, "the Command stand-in's gesture was running");
+    assert_eq!(rig.calls(), ["command cancel"], "the stand-in that holds the gesture is cancelled, the selected tool is not");
+}
+
+/// A key queued with the pointer events is down for exactly the events queued after it until it is let go.
+#[trial]
+fn a_queued_space_covers_the_moves_queued_after_it_and_not_those_after_its_release() {
+    let log = Log::default();
+    let mut rig = Rig::new(Probe::new("main", &log), &log, None);
+    let at = rig.centre();
+    let (ctx, canvas) = (rig.fixture.ctx().clone(), rig.canvas.get());
+    let space = craft_keymap::Key::Space;
+    for input in [
+        ToolInput::down(PointerButton::Primary, at),
+        ToolInput::moved(at + BY),
+        ToolInput::hold(space),
+        ToolInput::moved(at + BY * 2.0),
+        ToolInput::moved(at + BY * 3.0),
+        ToolInput::let_go(space),
+        ToolInput::moved(at + BY * 4.0),
+        ToolInput::up(at + BY * 4.0),
+    ] {
+        ToolHost::inject(&ctx, canvas, input);
+    }
+    rig.fixture.idle(1);
+    assert_eq!(rig.main.borrow().space_drags, [false, true, true, false], "Space is held for the two moves queued while it is down");
+}
+
+/// A queued Space starts the momentary Hand as the real key does: the press it is held over pans the view, and the
+/// press after its release runs the selected tool.
+#[trial]
+fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_release_runs_the_selected_tool() {
+    let log = Log::default();
+    let main = Rc::new(RefCell::new(Probe::new("main", &log)));
+    let (view, canvas) = (Rc::new(Cell::new(None::<CanvasView>)), Rc::new(Cell::new(Id::NULL)));
+    let (shown_main, shown_view, shown_canvas) = (Rc::clone(&main), Rc::clone(&view), Rc::clone(&canvas));
+    let mut set = Momentary::new(NavigationOptions::default());
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        // Zoomed in, so the document is larger than the canvas and the Hand has room to pan.
+        let current = shown_view.get().unwrap_or_else(|| CanvasView::new(room, Point::new(600.0, 450.0), 4.0));
+        let shown = Canvas::new("Document").document(DOCUMENT).view(current).show(ui, |_, _| {});
+        shown_canvas.set(shown.output.response.id);
+        let reply = ToolHost::new().momentary(&mut set).run(ui, &shown.output, &mut *shown_main.borrow_mut());
+        shown_view.set(Some(reply.view.unwrap_or(current)));
+    });
+    fixture.settle();
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    let before = view.get().expect("the canvas ran").center;
+    let space = craft_keymap::Key::Space;
+    for input in [
+        ToolInput::hold(space),
+        ToolInput::down(PointerButton::Primary, at),
+        ToolInput::moved(at + BY),
+        ToolInput::up(at + BY),
+        ToolInput::let_go(space),
+        ToolInput::down(PointerButton::Primary, at),
+        ToolInput::up(at),
+    ] {
+        ToolHost::inject(fixture.ctx(), canvas.get(), input);
+    }
+    fixture.idle(1);
+    assert_ne!(view.get().expect("the canvas ran").center, before, "the press under the queued Space pans with the Hand");
+    let calls = log.borrow().clone();
+    assert_eq!(calls.iter().filter(|call| *call == "main press").count(), 1, "only the press after the release is the selected tool's: {calls:?}");
+    assert!(!calls.iter().any(|call| call == "main drag"), "the Hand's drag never reaches the selected tool: {calls:?}");
 }
 
 /// A canvas under a dialog that keeps the canvas: returns the fixture, the app's view and the canvas's rect.

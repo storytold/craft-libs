@@ -980,6 +980,28 @@ pub fn take_around<S: CommandSet>(ctx: &Context, at: Id, around: &CommandChain) 
     take(ctx, if own { Some(at) } else { nearest }, is_app(scope), S::from_ref)
 }
 
+/// The command of set `S` that `chord` runs at `at` (a canvas that is an instance of a scope itself) inside `around`,
+/// through the keymap and the scopes the window's keys match in: the lookup for a key that automation holds, so it
+/// starts what the real key starts.
+#[doc(hidden)]
+pub fn bound_around<S: CommandSet>(ctx: &Context, at: Id, around: &CommandChain, chord: &Chord) -> Option<S> {
+    with(ctx, |board| {
+        let keymap = board.keymap.as_ref().map(|cache| Arc::clone(&cache.keymap))?;
+        let mut chain: Vec<Id> = around.ids().collect();
+        if !chain.contains(&at) {
+            chain.push(at);
+        }
+        let scopes = board.scopes_around(&chain);
+        let (panel, outer) = scopes.split_first().map_or((None, &[][..]), |(panel, outer)| (Some(*panel), outer));
+        let active = Active { panel, contexts: &[], typing: false };
+        match keymap.lookup_nested(chord, false, &active, outer) {
+            Lookup::Run(command) => S::from_ref(&command),
+            Lookup::Cycle(commands) => commands.iter().find_map(S::from_ref),
+            _ => None,
+        }
+    })
+}
+
 /// H7: the key stage's shortcut events, matched against the keymap in the scopes around the focused component,
 /// through the gate, to their commands.
 /// Whether the keymap binds `chord` to a scoped command of the focused component's command chain. A key the focused

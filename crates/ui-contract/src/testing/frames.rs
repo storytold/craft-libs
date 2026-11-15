@@ -2,7 +2,7 @@
 
 use crate::runtime::commands::CommandInput;
 use crate::runtime::egui::access::AccessTree;
-use crate::runtime::egui::{areas, fixture};
+use crate::runtime::egui::{areas, fixture, plugin};
 use crate::runtime::env::RootEnv;
 use crate::runtime::frame::{FrameInput, announce, set_input};
 use craft_host::Host;
@@ -85,10 +85,24 @@ impl Frames {
         self.paint.as_mut().map(std::mem::take)
     }
 
+    /// Frames on `ctx`, a context the caller made (an app's own, which its code reads outside the frames), with the
+    /// runtime installed on it unless it already is. The context keeps its own fonts and options.
+    pub fn over(ctx: Context) -> Self {
+        let mut frames = Self::on(ctx);
+        if !plugin::is_registered(&frames.ctx) {
+            frames.install();
+        }
+        frames
+    }
+
     /// A fresh context without the runtime, for frames that ran before `install`.
     pub fn uninstalled() -> Self {
+        Self::on(fixture::bare_context())
+    }
+
+    fn on(ctx: Context) -> Self {
         Frames {
-            ctx: fixture::bare_context(),
+            ctx,
             time: 0.0,
             root: RootEnv::default(),
             cursor: egui::CursorIcon::Default,

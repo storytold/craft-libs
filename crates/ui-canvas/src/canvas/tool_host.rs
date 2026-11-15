@@ -46,7 +46,12 @@
 //! Stand-ins: [`ToolHost::stand_in`] gives the tool a press runs while Command or Alt is held and the selected tool
 //! does not take the press, or answers it [`ToolAction::Ignored`]. The order is the momentary tool, then the Command
 //! stand-in, then the Alt stand-in, then the selected tool, and the gesture keeps the tool it began with. While the key
-//! is held and no gesture runs, hover, cursor and paint are the stand-in's.
+//! is held and no gesture runs, hover, cursor and paint are the stand-in's. [`ToolHost::cancel`], on a host built
+//! with the same stand-ins and momentary set, ends a gesture with the tool that holds it, so the app never decides
+//! which tool that is.
+//!
+//! Automation: [`ToolHost::inject`] queues pointer events and held keys in one queue, which the next pass delivers in
+//! order; a queued held key is down ([`ToolContext::held`]) for exactly the queued events after it until it is let go.
 //!
 //! Readouts: a tool's [`ToolContext::readout`] rows paint only while the root env's `ShowReadouts` holds; its
 //! [`ToolContext::hud`] rows always paint. A secondary press the tool did not take is reported in
@@ -68,7 +73,6 @@ use super::momentary::{Momentary, MomentaryCommands, MomentaryTool};
 use super::navigate::Autoscroll;
 use super::readout::{paint_readout, shown as readouts_shown};
 use super::tool::{CanvasTool, March, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPointer, ToolRequests};
-use super::tools::HandTool;
 use super::zoom_motion::{self, Steer};
 use super::{CanvasOutput, CanvasSpace, Snap, context_click};
 use crate::canvas_controls::paint_lines;
@@ -97,8 +101,8 @@ use crate::runtime::windows::WindowHost;
 use egui::{Context, Id, Pos2, Rect, Ui, Vec2, ViewportId};
 use std::cell::RefCell;
 
-/// A pointer event from automation, queued with [`ToolHost::inject`] and delivered on the next pass as if the
-/// pointer did it. Positions are screen points.
+/// A pointer event or held key from automation, queued with [`ToolHost::inject`] and delivered on the next pass in
+/// the order queued, as if the pointer and the keyboard did it. Positions are screen points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ToolInput {
@@ -134,6 +138,19 @@ pub enum ToolInput {
         /// The modifiers held.
         mods: Mods,
     },
+    /// A key goes down: the inputs queued after it run with the key held ([`ToolContext::held`]) until its
+    /// [`ToolInput::LetGo`], in this pass or a later one.
+    #[non_exhaustive]
+    Hold {
+        /// The key.
+        key: Key,
+    },
+    /// A key a [`ToolInput::Hold`] held comes up: the inputs queued after it run without it.
+    #[non_exhaustive]
+    LetGo {
+        /// The key.
+        key: Key,
+    },
 }
 
 impl ToolInput {
@@ -152,21 +169,32 @@ impl ToolInput {
         ToolInput::Up { pos, mods: Mods::NONE }
     }
 
-    /// The input with the modifiers `held`.
+    /// `key` going down, held for the inputs queued after it.
+    pub const fn hold(key: Key) -> Self {
+        ToolInput::Hold { key }
+    }
+
+    /// `key`, held by an earlier [`ToolInput::hold`], coming up.
+    pub const fn let_go(key: Key) -> Self {
+        ToolInput::LetGo { key }
+    }
+
+    /// The input with the modifiers `held`; a held key carries none.
     #[must_use]
     pub fn mods(mut self, held: Mods) -> Self {
         match &mut self {
             ToolInput::Down { mods, .. } | ToolInput::Move { mods, .. } | ToolInput::Up { mods, .. } => *mods = held,
+            ToolInput::Hold { .. } | ToolInput::LetGo { .. } => {}
         }
         self
     }
 
-    /// The input with the pen's reading `pen`; a button coming up has none.
+    /// The input with the pen's reading `pen`; a button coming up and a held key have none.
     #[must_use]
     pub fn sample(mut self, pen: PointerSample) -> Self {
         match &mut self {
             ToolInput::Down { sample, .. } | ToolInput::Move { sample, .. } => *sample = pen,
-            ToolInput::Up { .. } => {}
+            ToolInput::Up { .. } | ToolInput::Hold { .. } | ToolInput::LetGo { .. } => {}
         }
         self
     }
@@ -298,6 +326,8 @@ struct HostState {
     /// The open press was refused, ignored or finished whole: its later phases are not the tool's.
     spent: bool,
     queued: Vec<ToolInput>,
+    /// The keys the delivered [`ToolInput::Hold`]s hold down until their [`ToolInput::LetGo`].
+    injected_held: Vec<Key>,
     /// The keys the tool claimed at the end of the last pass.
     claims: ToolClaims,
     /// The canvas of the last pass, for [`ToolHost::cancel`] outside a pass.
@@ -323,6 +353,20 @@ fn held_at(key: StandInKey, mods: Mods) -> bool {
         StandInKey::Command => mods.cmd,
         StandInKey::Alt => mods.alt,
     }
+}
+
+/// The tool the host runs for `tool`, the momentary tool in effect: the set's Hand or Zoom, else `selected`.
+fn run_as<'t>(set: Option<&'t mut Momentary>, tool: Option<MomentaryTool>, selected: &'t mut dyn CanvasTool) -> &'t mut dyn CanvasTool {
+    match set {
+        Some(set) => set.run_as(tool, selected),
+        None => selected,
+    }
+}
+
+/// The momentary command a key the injection queue holds runs at a press with `mods`: the keymap's command for the key
+/// with the press's modifiers, else for the key alone, since modifiers pressed after a momentary key still count.
+fn queued_momentary(ctx: &Context, canvas: Id, around: &commands::CommandChain, key: Key, mods: Mods) -> Option<MomentaryCommands> {
+    [mods, Mods::NONE].into_iter().find_map(|mods| commands::bound_around::<MomentaryCommands>(ctx, canvas, around, &Chord::new(mods, key)))
 }
 
 /// The on-canvas tool host. Built each pass, shown once with the canvas's output and the tool.
@@ -389,7 +433,7 @@ impl<'m> ToolHost<'m> {
     /// Delivers the pass's pointer and key events to `tool`, paints it over the canvas, and paints the readout it
     /// asked for beside the pointer.
     pub fn run(self, ui: &Ui, canvas: &CanvasOutput, tool: &mut dyn CanvasTool) -> ToolHostResponse {
-        let ToolHost { disabled, momentary, mut command_stand_in, mut alt_stand_in, smart_guide_color, precise_cursors } = self;
+        let ToolHost { disabled, mut momentary, mut command_stand_in, mut alt_stand_in, smart_guide_color, precise_cursors } = self;
         let ctx = ui.ctx().clone();
         let env = Env::of(ui);
         let key = state_id(canvas.response.id);
@@ -407,38 +451,62 @@ impl<'m> ToolHost<'m> {
         let cancelled_view = if measuring { None } else { state.cancelled_view.take() };
         let space = canvas.space;
         let down = keys::down(&ctx);
+        // The keys each queued input runs with: the window's, and the ones the queue's own holds keep down at it. A press
+        // also gets the momentary command those held keys run through the keymap, as the window's keys fire it.
+        let queued_down: Vec<(Vec<Key>, Option<MomentaryCommands>)> = if measuring {
+            Vec::new()
+        } else {
+            queued
+                .iter()
+                .map(|input| {
+                    match *input {
+                        ToolInput::Hold { key } if !state.injected_held.contains(&key) => state.injected_held.push(key),
+                        ToolInput::LetGo { key } => state.injected_held.retain(|held| *held != key),
+                        _ => {}
+                    }
+                    let mut keys = down.clone();
+                    keys.extend(state.injected_held.iter().filter(|key| !down.contains(key)));
+                    let held = match *input {
+                        ToolInput::Down { mods, .. } => {
+                            state.injected_held.iter().find_map(|key| queued_momentary(&ctx, canvas.response.id, env.view().command_chain(), *key, mods))
+                        }
+                        _ => None,
+                    };
+                    (keys, held)
+                })
+                .collect()
+        };
         let caps = lock_keys::caps_lock(&ctx);
         let rect = canvas.response.rect;
         let input = pointer::frame(&ctx);
-        let mut glide = None;
         let fired = std::iter::from_fn(|| {
             if measuring {
                 return None;
             }
             commands::take_around::<MomentaryCommands>(&ctx, canvas.response.id, env.view().command_chain())
         });
-        let mut momentary_tool = None;
-        let tool: &mut dyn CanvasTool = match momentary {
+        let momentary_tool = match momentary.as_deref_mut() {
             Some(momentary) => {
                 for (command, event) in fired {
                     momentary.fired(command, event.phase);
                 }
-                momentary_tool = momentary.tool(input.mods, state.gesture.is_some());
-                let (tool, hand) = momentary.substitute(tool, input.mods, state.gesture.is_some());
-                glide = hand;
-                tool
+                momentary.tool(input.mods, state.gesture.is_some())
             }
             None => {
                 fired.for_each(drop);
-                tool
+                None
             }
         };
-        if !measuring && tool.view_only() {
+        let (view_only, takes_primary) = {
+            let pass = run_as(momentary.as_deref_mut(), momentary_tool, &mut *tool);
+            (pass.view_only(), pass.takes(PointerButton::Primary, input.mods))
+        };
+        if !measuring && view_only {
             sampler::pass_tool_gesture(&ctx, canvas.response.id, CanvasGesture::PRIMARY);
         }
         // With no gesture and no momentary tool, a held stand-in key makes the stand-in the tool of hover, cursor and
         // paint while the selected tool does not take a primary press.
-        let lent = if state.gesture.is_none() && momentary_tool.is_none() && !tool.takes(PointerButton::Primary, input.mods) {
+        let lent = if state.gesture.is_none() && momentary_tool.is_none() && !takes_primary {
             [StandInKey::Command, StandInKey::Alt].into_iter().find(|key| {
                 let set = match key {
                     StandInKey::Command => command_stand_in.is_some(),
@@ -450,7 +518,8 @@ impl<'m> ToolHost<'m> {
             None
         };
         let mut run = Run {
-            tool: &mut *tool,
+            selected: &mut *tool,
+            set: momentary.as_deref_mut(),
             command: command_stand_in.as_deref_mut(),
             alt: alt_stand_in.as_deref_mut(),
             lent: None,
@@ -476,25 +545,25 @@ impl<'m> ToolHost<'m> {
         };
         if !measuring {
             run.call(None, |tool, cx| tool.each_pass(cx));
-            run.hover_scrolls = run.tool.autoscrolls_on_hover();
+            run.hover_scrolls = run.pick_as(None).autoscrolls_on_hover();
             run.lent = lent;
-            if let Some(hand) = glide {
-                run.glide(hand);
-            }
+            run.glide();
             if disabled {
                 run.cancel(CancelReason::Dismissed);
                 run.state.spent |= canvas.press.phase.is_press();
             } else {
                 run.phase(&canvas.press, &input);
                 run.hover_outside(canvas.response.id, &canvas.press, &input);
-                for event in queued {
-                    run.injected(event);
+                for (event, (keys, held)) in queued.into_iter().zip(&queued_down) {
+                    run.down = keys.as_slice();
+                    run.injected(event, *held);
                 }
+                run.down = down.as_slice();
                 run.keys(&ctx, canvas.response.id, env.direction.is_rtl());
                 run.menu_key();
             }
         }
-        let Run { mut response, requests, .. } = run;
+        let Run { mut response, requests, momentary: momentary_tool, .. } = run;
         let before = space.map(|space| space.target());
         if !measuring {
             if let Some(past) = response.past_edge {
@@ -527,11 +596,12 @@ impl<'m> ToolHost<'m> {
         let over = phase.is_press() || matches!(phase, PressPhase::Hover) || state.gesture.is_some();
         let current = state.gesture.map(|active| active.last).or_else(|| over.then(|| hover_pointer(&input, canvas.press)).flatten());
         // The tool of hover, cursor, paint and claims: the one the running gesture latched, else the stand-in lent for
-        // the held key, else the selected tool.
+        // the held key, else the momentary tool in effect, else the selected tool.
+        let pass: &dyn CanvasTool = run_as(momentary.as_deref_mut(), momentary_tool, &mut *tool);
         let effective: &dyn CanvasTool = match state.gesture.map_or(lent, |active| active.stand_in) {
-            Some(StandInKey::Command) => command_stand_in.as_deref().unwrap_or(&*tool),
-            Some(StandInKey::Alt) => alt_stand_in.as_deref().unwrap_or(&*tool),
-            None => &*tool,
+            Some(StandInKey::Command) => command_stand_in.as_deref().unwrap_or(pass),
+            Some(StandInKey::Alt) => alt_stand_in.as_deref().unwrap_or(pass),
+            None => pass,
         };
         let context = || {
             let cx = ToolContext::new(rect, space)
@@ -596,8 +666,14 @@ impl<'m> ToolHost<'m> {
         response
     }
 
-    /// Queues an automation pointer event for the host of the canvas `canvas` (`CanvasOutput::response.id`); it is
-    /// delivered on the next pass, after the pointer's own events. A `Down` while a gesture runs is dropped.
+    /// Queues an automation input for the host of the canvas `canvas` (`CanvasOutput::response.id`); the queue is
+    /// delivered on the next pass, in order, after the pointer's own events. A `Down` while a gesture runs is dropped.
+    /// A key is held for exactly the inputs queued between its [`ToolInput::hold`] and its [`ToolInput::let_go`]
+    /// (the window's own keys are held for every one), so one queue orders the keys against the pointer. A held key
+    /// that the keymap binds to a [`MomentaryCommands`](super::MomentaryCommands) command starts that momentary tool
+    /// for the presses queued while it is down, as the real key does (a queued Space pans with the Hand). The window
+    /// host owes the canvas's viewport a pass for the queue, so [`WindowHost::injected_idle`] turns true only once the
+    /// pass took it.
     pub fn inject(ctx: &Context, canvas: Id, input: ToolInput) {
         let viewport = with_session(ctx, state_id(canvas), |state: &mut HostState| {
             state.queued.push(input);
@@ -608,9 +684,12 @@ impl<'m> ToolHost<'m> {
     }
 
     /// Ends the gesture in progress on the canvas `canvas` now, without a commit (the app switched tools or
-    /// documents, a modal opened). `tool` is the tool that holds the gesture, so call it before the app replaces
-    /// it; it runs against the canvas of the last pass. Returns whether a gesture was cancelled.
-    pub fn cancel(ctx: &Context, canvas: Id, tool: &mut dyn CanvasTool, reason: CancelReason) -> bool {
+    /// documents, a modal opened). Build the host as for [`ToolHost::run`], with the same stand-ins and momentary
+    /// set: it cancels the gesture with the tool that holds it, picked as the pass picks it (the stand-in or
+    /// momentary tool the press latched, else `selected`). Call it before the app replaces its tools; it runs against
+    /// the canvas of the last pass. Returns whether a gesture was cancelled.
+    pub fn cancel(self, ctx: &Context, canvas: Id, selected: &mut dyn CanvasTool, reason: CancelReason) -> bool {
+        let ToolHost { mut momentary, command_stand_in, alt_stand_in, .. } = self;
         // The press is still held: its later moves and release are not the next gesture's.
         let taken = with_session(ctx, state_id(canvas), |slot: &mut HostState| {
             let taken = slot.gesture.take().map(|active| (active, slot.rect, slot.space));
@@ -618,6 +697,17 @@ impl<'m> ToolHost<'m> {
             taken
         });
         let Some((active, rect, space)) = taken else { return false };
+        // A press that latched a stand-in ran without the momentary set, so the stand-in comes first.
+        let stand_in = match active.stand_in {
+            Some(StandInKey::Command) => command_stand_in,
+            Some(StandInKey::Alt) => alt_stand_in,
+            None => None,
+        };
+        let latched = momentary.as_deref_mut().and_then(|momentary| momentary.tool(Mods::NONE, true));
+        let tool: &mut dyn CanvasTool = match stand_in {
+            Some(stand_in) => stand_in,
+            None => run_as(momentary, latched, selected),
+        };
         let down = keys::down(ctx);
         let mut cx = ToolContext::new(rect.unwrap_or(Rect::NOTHING), space)
             .pointer(Some(active.last))
@@ -790,7 +880,10 @@ fn cancel_reason(reason: PressCancel) -> CancelReason {
 ///
 /// `'t` is the stand-ins' own lifetime: the host lends them for one run, so `Run`'s borrows need not outlive the host.
 struct Run<'a, 't> {
-    tool: &'a mut dyn CanvasTool,
+    /// The selected tool.
+    selected: &'a mut dyn CanvasTool,
+    /// The momentary set: its tool in `momentary` runs in place of the selected one.
+    set: Option<&'a mut Momentary>,
     space: Option<CanvasSpace>,
     slop: f32,
     down: &'a [Key],
@@ -820,7 +913,7 @@ struct Run<'a, 't> {
     lent: Option<StandInKey>,
     /// A press may run a stand-in: no momentary tool is in effect.
     stand_ins: bool,
-    /// The momentary tool in effect this pass.
+    /// The momentary tool in effect: the pass's, until an injected press picks its own.
     momentary: Option<MomentaryTool>,
     /// Preferences > Cursors > Other Cursors is Precise.
     precise: bool,
@@ -864,8 +957,9 @@ impl<'a, 't: 'a> Run<'a, 't> {
         }
     }
 
-    /// The tool `who` names: a stand-in, or the selected tool for `None` and for a stand-in that is not set.
-    fn pick_as(&mut self, who: Option<StandInKey>) -> &mut (dyn CanvasTool + 'a) {
+    /// The tool `who` names: a stand-in, or for `None` and for a stand-in that is not set the momentary tool in effect,
+    /// else the selected tool.
+    fn pick_as(&mut self, who: Option<StandInKey>) -> &mut dyn CanvasTool {
         let stand = match who {
             Some(StandInKey::Command) => self.command.as_deref_mut(),
             Some(StandInKey::Alt) => self.alt.as_deref_mut(),
@@ -873,7 +967,16 @@ impl<'a, 't: 'a> Run<'a, 't> {
         };
         match stand {
             Some(stand) => stand,
-            None => &mut *self.tool,
+            None => run_as(self.set.as_deref_mut(), self.momentary, &mut *self.selected),
+        }
+    }
+
+    /// Picks the momentary tool for an injected press: `queued`, the command the injection queue's held keys run, else
+    /// the window's held key, with the press's `mods`. A press under a momentary tool runs no stand-in.
+    fn pick_momentary(&mut self, queued: Option<MomentaryCommands>, mods: Mods) {
+        if let Some(set) = self.set.as_deref_mut() {
+            self.momentary = set.press(queued, mods);
+            self.stand_ins = self.momentary.is_none();
         }
     }
 
@@ -921,8 +1024,12 @@ impl<'a, 't: 'a> Run<'a, 't> {
     }
 
     /// Advances the glide of a momentary Hand that is not the tool of this pass.
-    fn glide(&mut self, hand: &mut HandTool) {
+    fn glide(&mut self) {
+        if self.momentary == Some(MomentaryTool::Hand) {
+            return;
+        }
         let mut cx = self.context(None);
+        let Some(hand) = self.set.as_deref_mut().and_then(Momentary::gliding_hand) else { return };
         hand.each_pass(&mut cx);
         self.absorb(cx);
     }
@@ -938,7 +1045,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
     /// tool answers `Ignored` goes to that stand-in too. A refused, ignored or whole press is spent.
     fn begin(&mut self, pointer: ToolPointer, injected: bool) {
         let mut who = None;
-        if !self.tool.takes(pointer.button, pointer.mods) {
+        if !self.pick_as(None).takes(pointer.button, pointer.mods) {
             who = self.stand_for(&pointer);
             if who.is_none() {
                 self.state.spent = true;
@@ -1148,10 +1255,12 @@ impl<'a, 't: 'a> Run<'a, 't> {
         }
     }
 
-    fn injected(&mut self, input: ToolInput) {
+    /// Delivers one queued input. `queued` is the momentary command the queue's held keys run at a press.
+    fn injected(&mut self, input: ToolInput, queued: Option<MomentaryCommands>) {
         let own = self.state.gesture.is_none_or(|active| active.injected);
         match input {
             ToolInput::Down { button, pos, sample, mods, clicks } if self.state.gesture.is_none() => {
+                self.pick_momentary(queued, mods);
                 let pointer = ToolPointer::new(pos, button, self.time).mods(mods).sample(sample).clicks(clicks);
                 self.begin(pointer, true);
                 self.state.spent = false;

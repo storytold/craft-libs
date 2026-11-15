@@ -235,3 +235,22 @@ fn an_unchanged_gate_reruns_no_settled_region() {
     frames.commands(gate(true));
     assert!(scene.frame(&mut frames) > 0, "a gate that refuses the region's command runs it");
 }
+
+/// Frames over a given context run on it: its passes are the frames', the runtime is installed on it once, and a
+/// second driver over the same context runs on it without installing again.
+#[trial]
+fn frames_over_a_given_context_run_on_it() {
+    let ctx = egui::Context::default();
+    let mut frames = Frames::over(ctx.clone());
+    let mut ran_on = Vec::new();
+    frames.frame(vec![], |ui| ran_on.push(ui.ctx() == &ctx));
+    assert!(!ran_on.is_empty() && ran_on.iter().all(|on| *on), "every pass ran on the given context");
+    assert!(
+        matches!(craft_ui::install(&ctx, craft_ui::testing::install_spec()), Err(craft_ui::runtime::InstallError::AlreadyInstalled)),
+        "the driver installed the runtime on the given context"
+    );
+    let mut again = Frames::over(ctx.clone());
+    let mut second = false;
+    again.frame(vec![], |ui| second |= ui.ctx() == &ctx);
+    assert!(second, "a second driver over the installed context runs on it");
+}
