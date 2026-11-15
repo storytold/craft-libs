@@ -116,6 +116,26 @@ fn jpeg_cmyk_roundtrip_with_adobe_marker() {
 }
 
 #[test]
+fn jpeg_cmyk_without_adobe_marker_keeps_samples_as_inks() {
+    let img = Image::from_u8(16, 16, ChannelLayout::Cmyk, [10u8, 100, 200, 50].repeat(256)).unwrap();
+    let marked = encode(&img, Format::Jpeg, &EncodeOptions { jpeg_quality: 95, ..Default::default() }).unwrap();
+    let signature = b"\xFF\xEE\x00\x0EAdobe";
+    let start = marked.windows(signature.len()).position(|part| part == signature).expect("Adobe APP14 marker");
+    // APP14's two marker bytes and two-byte length precede its 12-byte payload.
+    let mut unmarked = Vec::with_capacity(marked.len() - 16);
+    unmarked.extend_from_slice(&marked[..start]);
+    unmarked.extend_from_slice(&marked[start + 16..]);
+
+    let adobe_pixels = decode(&marked).unwrap().data().to_vec();
+    let unmarked_pixels = decode(&unmarked).unwrap().data().to_vec();
+    for (adobe, raw) in adobe_pixels.as_chunks::<4>().0.iter().zip(unmarked_pixels.as_chunks::<4>().0) {
+        for (&ink, &stored) in adobe.iter().zip(raw) {
+            assert_eq!(stored, 255 - ink, "unmarked CMYK samples are direct inks");
+        }
+    }
+}
+
+#[test]
 fn jpeg_ycck_decodes_to_cmyk() {
     let img = synth(40, 32, ChannelLayout::Cmyk, SampleType::U8, 4, 0.02);
     let mut bytes = Vec::new();
