@@ -1886,3 +1886,46 @@ fn compound_borders_round_trip() {
     let back = import(export(&d).as_bytes()).unwrap();
     assert_eq!(tops(&back), want);
 }
+
+fn para_aligns(flow: &Flow) -> Vec<(bool, Option<Align>)> {
+    flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some((p.rtl, p.align)) } else { None }).collect()
+}
+
+#[test]
+fn alignment_words_after_rtlpar_mean_start_and_end() {
+    // Word reads `\ql`/`\qr` that follow `\rtlpar` as start/end (the model's alignment is
+    // logical), so `\rtlpar\qr` sits at the right edge and `\rtlpar\ql` at the left edge.
+    // Words written before `\rtlpar` keep their plain meaning (checked in Word by saving to DOCX:
+    // `\qr\rtlpar` gives jc=right, i.e. end, in the bidi paragraph; `\ql\rtlpar` gives no jc).
+    let rtf = br#"{\rtf1\ansi\deff0{\fonttbl{\f0 Arial;}}\pard LTR one.\par \pard\rtlpar\qr A.\par \pard\rtlpar B.\par \pard\ltrpar Back.\par \pard\rtlpar\ql C.\par \pard\rtlpar\qc D.\par \pard\ql\rtlpar E.\par \pard\qr\rtlpar F.\par \pard\rtlpar\ltrpar\qr G.\par}"#;
+    let got = para_aligns(&parse(rtf).unwrap());
+    assert_eq!(
+        got,
+        [
+            (false, None),
+            (true, Some(Align::Left)),
+            (true, None),
+            (false, None),
+            (true, Some(Align::Right)),
+            (true, Some(Align::Center)),
+            (true, Some(Align::Left)),
+            (true, Some(Align::Right)),
+            (false, Some(Align::Right)),
+        ]
+    );
+}
+
+#[test]
+fn alignment_survives_an_export_import_round_trip() {
+    let rtf = br#"{\rtf1\ansi\pard\ql L.\par \pard\qr R.\par \pard\qc C.\par \pard\rtlpar\qr start.\par \pard\rtlpar\ql end.\par \pard\rtlpar\qc mid.\par \pard\rtlpar plain.\par}"#;
+    let first = para_aligns(&parse(rtf).unwrap());
+    let doc = import(rtf).unwrap();
+    let out = export(&doc);
+    let second = para_aligns(&parse(out.as_bytes()).unwrap());
+    let norm = |v: Vec<(bool, Option<Align>)>| v.into_iter().map(|(r, a)| (r, a.filter(|a| *a != Align::Left))).collect::<Vec<_>>();
+    assert_eq!(norm(first), norm(second.clone()), "{out}");
+    // `\rtlpar\qr` is start (no explicit alignment in the model) and `\rtlpar\ql` is end.
+    assert_eq!(norm(second)[3..5], [(true, None), (true, Some(Align::Right))], "{out}");
+    // The export writes the alignment before the direction, which Word reads as logical start/end.
+    assert!(out.contains("\\qr\\rtlpar"), "{out}");
+}
