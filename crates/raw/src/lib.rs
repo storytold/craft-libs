@@ -97,6 +97,8 @@ pub mod kelvin;
 mod kodak;
 pub mod lens_metadata;
 pub mod ljpeg;
+/// Optimized lossless JPEG decoder for streams with line-aligned restarts.
+pub mod ljpeg_lines;
 #[cfg(feature = "arw")]
 mod llvc;
 #[cfg(feature = "mef")]
@@ -643,6 +645,7 @@ pub fn orientation(bytes: &[u8]) -> Option<u16> {
     }
     // A damaged/unsupported pixel IFD must not hide usable orientation metadata from preview
     // fallback. CR3 keeps IFD0 in its CMT1 box; TIFF-based raws keep it at the file start.
+    #[cfg(feature = "cr3")]
     if probe(bytes) == Some(RawFormat::Cr3) {
         return cr3::orientation(bytes);
     }
