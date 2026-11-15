@@ -2,6 +2,7 @@
 
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fmt::Write;
 use std::hash::Hash;
 
@@ -90,15 +91,20 @@ impl<T, K: Eq + Hash> Interned<T, K> {
         self.index.get(key).copied()
     }
 
-    /// The place of the entry with `key`, adding `item()` at the end when there is none.
+    /// The place of the entry with `key`, adding `item()` at the end when there is none: one
+    /// lookup in the index either way.
     pub(crate) fn insert(&mut self, key: K, item: impl FnOnce() -> T) -> usize {
-        if let Some(i) = self.get(&key) {
-            return i;
+        #[cfg(test)]
+        STEPS.with(|s| s.set(s.get() + 1));
+        match self.index.entry(key) {
+            Entry::Occupied(e) => *e.get(),
+            Entry::Vacant(e) => {
+                self.items.push(item());
+                let i = self.items.len() - 1;
+                e.insert(i);
+                i
+            }
         }
-        self.items.push(item());
-        let i = self.items.len() - 1;
-        self.index.insert(key, i);
-        i
     }
 }
 

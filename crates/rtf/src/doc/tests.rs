@@ -1207,6 +1207,8 @@ fn many_distinct_fonts_colours_and_authors_take_constant_steps_each() {
     };
     let mut out = String::new();
     let steps = crate::write::lookup_steps(|| w.para(&p, false, None, "\\par", &mut out));
+    // One lookup each for the font and the colour, and two for a new author: the borrowed
+    // lookup, then the insert.
     assert!(steps <= 4 * n, "{steps} steps for {n} runs");
     assert!(out.contains(&format!("\\f{n}\\cf{n}")), "the last run names the last font and colour");
     assert!(out.contains(&format!("\\crauth{n}")), "the last run names the last author");

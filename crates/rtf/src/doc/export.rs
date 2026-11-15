@@ -306,7 +306,13 @@ impl Writer {
         if a.is_empty() {
             return 0;
         }
-        authors.insert(a.to_string(), || a.to_string()) + 1
+        // A borrowed lookup first: most calls name an author already in the table, and need no
+        // `String` for the key.
+        let i = match authors.get(a) {
+            Some(i) => i,
+            None => authors.insert(a.to_string(), || a.to_string()),
+        };
+        i + 1
     }
 
     /// Control words of a tracked insertion and deletion (`\revised`, `\deleted`).
