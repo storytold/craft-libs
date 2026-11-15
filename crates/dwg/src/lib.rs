@@ -703,6 +703,23 @@ mod native {
         }
     }
 
+    /// A FIELD's format string between the two places acadrust 0.6.6 keeps it. Its DXF reader
+    /// puts a pre-2007 field's format (group 4) only in `Field::format`, and its DWG writer
+    /// writes that one only for versions before 2007; from 2007 it writes `value.format`. A field
+    /// read from an older drawing and written as DWG 2007 or later would lose its format
+    /// (`dd/MM/yyyy`, `%lu2`). The child values hold no format of their own in the old DXF.
+    fn field_formats(doc: &mut acadrust::CadDocument) {
+        if doc.version < acadrust::DxfVersion::AC1021 {
+            return;
+        }
+        for o in doc.objects.values_mut() {
+            let acadrust::objects::ObjectType::Field(f) = o else { continue };
+            if f.value.format.is_empty() && !f.format.is_empty() {
+                f.value.format = f.format.clone();
+            }
+        }
+    }
+
     /// The DWG dimension flags byte. Its bit 1 is DXF group 70's bit 32 (ODA DWG specification,
     /// common dimension data), which acadrust keeps no copy of from DXF: it is set here as
     /// CADCraft's DXF writer always sets it (#1094). Bit 0, the opposite of group 70's bit 128,
@@ -1238,6 +1255,7 @@ mod native {
             };
             other_layout_owners(&mut doc);
             table_style_rows(&mut doc, true);
+            field_formats(&mut doc);
             dimension_flags(&mut doc);
             let mut unwritten = drop_unwritable(&mut doc);
             for (kind, n) in proxies {
@@ -2102,5 +2120,44 @@ mod tests {
                 .collect();
             assert_eq!(frames, [vec![0xDE, 0xAD, 0xBE, 0xEF]], "{version}");
         }
+    }
+
+    /// A FIELD read from a pre-2007 DXF keeps its format (group 4) only in `Field::format`, which
+    /// acadrust's DWG writer writes just for versions before 2007: saved as DWG 2007 or later the
+    /// format (`dd/MM/yyyy`) was lost. A 2007+ field with its own format is written as it is.
+    #[cfg(not(no_dwg_bridge))]
+    #[test]
+    fn field_formats_survive_saving_an_older_drawing_as_dwg_2007_or_later() {
+        let formats = |dwg: Vec<u8>| -> Vec<String> {
+            let back = acadrust::DwgReader::from_stream(std::io::Cursor::new(dwg)).read().unwrap();
+            back.objects
+                .values()
+                .filter_map(|o| match o {
+                    acadrust::objects::ObjectType::Field(f) => Some(f.value.format.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        for source in ["AC1015", "AC1018"] {
+            let dxf = format!(
+                "  0\nSECTION\n  2\nHEADER\n  9\n$ACADVER\n  1\n{source}\n  0\nENDSEC\n  0\nSECTION\n  2\nCLASSES\n  0\nCLASS\n  1\nFIELD\n  2\nAcDbField\n  3\nObjectDBX Classes\n 90\n0\n 91\n0\n  0\nENDSEC\n  0\nSECTION\n  2\nOBJECTS\n  0\nFIELD\n  5\nA1F\n330\n1F\n  1\nAcVar\n  2\n\\AcVar Date\n  4\ndd/MM/yyyy\n 90\n0\n 97\n0\n 91\n0\n 92\n0\n 94\n0\n 95\n0\n 96\n0\n300\n\n  0\nENDSEC\n  0\nEOF\n"
+            );
+            assert_eq!(formats(dxf_to_dwg_as(dxf.as_bytes(), "AC1032").unwrap()), ["dd/MM/yyyy"], "{source}");
+        }
+        let mut doc = acadrust::CadDocument::new();
+        doc.classes.add_or_update(acadrust::classes::DxfClass::new("FIELD", "AcDbField"));
+        let handle = doc.allocate_handle();
+        let field = acadrust::objects::Field {
+            handle,
+            owner: doc.header.named_objects_dict_handle,
+            evaluator_id: "AcVar".into(),
+            code: "\\AcVar Date".into(),
+            value: acadrust::entities::CellValue { format: "%lu2".into(), ..Default::default() },
+            ..Default::default()
+        };
+        doc.objects.insert(handle, acadrust::objects::ObjectType::Field(field));
+        let mut dxf = Vec::new();
+        acadrust::DxfWriter::new(&doc).write_to_writer(&mut dxf).unwrap();
+        assert_eq!(formats(dxf_to_dwg_as(&dxf, "AC1032").unwrap()), ["%lu2"]);
     }
 }
