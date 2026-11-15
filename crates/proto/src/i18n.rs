@@ -109,14 +109,55 @@ macro_rules! said {
     };
 }
 
-/// Tidy text for error messages: remove control characters.
-pub fn tidy(text: &str) -> String {
-    text.chars().filter(|c| !c.is_control() || *c == '\n' || *c == '\t').collect()
+/// What the wire trace shows of a protocol line, either way: its leading keywords (a tag, a
+/// reply code, a command or status word, a sequence set, an extension's name) and how long the
+/// rest is. Whatever follows the first character that is no keyword's (lower case, `@`, a
+/// quote, a bracket of a list) is left out: a user name, an address in `MAIL FROM` or `RCPT TO`,
+/// a folder's name, a server's "ada@example.org authenticated" or "<bob@example.org> unknown",
+/// the flags and headers of a message. Secrets are hidden before this (before calling this function).
+pub fn for_trace(line: &str) -> String {
+    const MAX_KEPT: usize = 120;
+    let line = line.trim_end();
+    let keyword = |c: char| c.is_ascii_uppercase() || c.is_ascii_digit() || matches!(c, '*' | '+' | '-' | '.' | ':' | ',' | '=' | '_' | '[' | ']');
+    let end = line.char_indices().find(|(_, c)| !keyword(*c) && *c != ' ').map_or(line.len(), |(at, _)| at);
+    let mut kept = line.get(..end).unwrap_or_default();
+    let opens = line.get(end..).is_some_and(|rest| rest.starts_with(['<', '(', '"', '{', '\\']));
+    if end < line.len() && !kept.ends_with(' ') && !opens {
+        // A word cut short is left out, unless it is the first one (`250-` of `250-mx.example`).
+        if let Some(space) = kept.trim_end().rfind(' ') {
+            kept = kept.get(..space).unwrap_or_default();
+        }
+    }
+    let kept: String = kept.trim_end().chars().take(MAX_KEPT).collect();
+    let left = line.get(kept.len()..).unwrap_or_default().trim_start().len();
+    match (kept.is_empty(), left) {
+        (_, 0) => kept,
+        (true, _) => format!("({left} bytes)"),
+        (false, _) => format!("{kept} … ({left} bytes)"),
+    }
 }
 
-/// Escape control characters and bound diagnostic output.
-pub fn for_trace(text: &str) -> String {
-    text.chars().take(1024).flat_map(char::escape_debug).collect()
+/// Server text made fit for an error message: one line, no control characters, not too long.
+pub fn tidy(text: &str) -> String {
+    const MAX_CHARS: usize = 300;
+    let mut out = String::new();
+    let mut space = false;
+    for (n, c) in text.trim().chars().enumerate() {
+        if n >= MAX_CHARS {
+            out.push('…');
+            break;
+        }
+        if c.is_control() || c.is_whitespace() {
+            space = !out.is_empty();
+        } else {
+            if space {
+                out.push(' ');
+                space = false;
+            }
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -144,7 +185,7 @@ mod tests {
 
     #[test]
     fn tidy_removes_control_chars() {
-        assert_eq!(tidy("hello\x01world"), "helloworld");
-        assert_eq!(tidy("hello\nworld"), "hello\nworld");
+        assert_eq!(tidy("hello\x01world"), "hello world");
+        assert_eq!(tidy("hello\nworld"), "hello world");
     }
 }

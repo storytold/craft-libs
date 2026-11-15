@@ -141,3 +141,78 @@ mod tests {
         assert!(result.contains("auth=Bearer token123"));
     }
 }
+
+#[cfg(test)]
+mod source_regression_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    use super::*;
+
+    #[test]
+    fn the_wire_trace_keeps_keywords_and_no_address_name_or_text() {
+        // (Line, what the trace shows.)
+        for (line, shown) in [
+            ("A0001 OK ada@example.org authenticated (Success)\r\n", "A0001 OK … (39 bytes)"),
+            ("A0002 LOGIN ***", "A0002 LOGIN ***"),
+            ("MAIL FROM:<ada@example.org> SIZE=120", "MAIL FROM: … (26 bytes)"),
+            ("RCPT TO:<bob@example.org>", "RCPT TO: … (17 bytes)"),
+            ("550 5.1.1 <bob@example.org>: Recipient address rejected", "550 5.1.1 … (45 bytes)"),
+            ("250-mx.example.org at your service", "250- … (30 bytes)"),
+            ("250-AUTH LOGIN PLAIN XOAUTH2", "250-AUTH LOGIN PLAIN XOAUTH2"),
+            ("A0003 SELECT \"Letters from Grace\"", "A0003 SELECT … (20 bytes)"),
+            ("* LIST (\\HasNoChildren) \"/\" Grace", "* LIST … (26 bytes)"),
+            ("* 12 FETCH (UID 40 FLAGS (\\Seen) BODY[HEADER.FIELDS (SUBJECT)] \"Subject: Quarterly figures\")", "* 12 FETCH … (81 bytes)"),
+            ("* 3 EXISTS", "* 3 EXISTS"),
+            ("UID FETCH 1:40,42 (UID FLAGS)", "UID FETCH 1:40,42 … (11 bytes)"),
+            ("hello there", "(11 bytes)"),
+            ("", ""),
+        ] {
+            let traced = for_trace(line);
+            assert_eq!(traced, shown, "{line:?}");
+            for private in ["ada", "bob", "Grace", "Quarterly", "mx.example"] {
+                assert!(!traced.contains(private), "{line:?}: {traced}");
+            }
+        }
+        assert!(for_trace(&format!("A0001 OK {}", "X ".repeat(500))).len() < 160);
+        assert_eq!(for_trace("ünïcödé ä"), "(14 bytes)");
+    }
+
+    #[test]
+    fn secrets_are_hidden_longest_first() {
+        let mut s = Secrets::default();
+        s.add("hunter2");
+        s.add("hunter2-and-more");
+        s.add("");
+        assert_eq!(s.hide("no hunter2-and-more, no hunter2, nothing"), "no ***, no ***, nothing");
+        assert_eq!(Secrets::default().hide("plain"), "plain");
+    }
+
+    #[test]
+    fn the_xoauth2_response_is_user_and_bearer_token_between_control_a() {
+        let decoded = |payload: String| STANDARD.decode(payload).unwrap();
+        assert_eq!(decoded(xoauth2("ada@example.org", "tok.en-123").unwrap()), b"user=ada@example.org\x01auth=Bearer tok.en-123\x01\x01");
+        // The example of the mechanism's description.
+        assert_eq!(
+            xoauth2("someuser@example.com", "ya29.vF9dft4qmTc2Nvb3RlckBhdHRhdmlzdGEuY29tCg").unwrap(),
+            "dXNlcj1zb21ldXNlckBleGFtcGxlLmNvbQFhdXRoPUJlYXJlciB5YTI5LnZGOWRmdDRxbVRjMk52YjNSbGNrQmhkSFJoZG1semRHRXVZMjl0Q2cBAQ=="
+        );
+        assert_eq!(decoded(xoauth2("ädä", "t").unwrap()), "user=ädä\x01auth=Bearer t\x01\x01".as_bytes());
+        // Nothing that could end the name, the token or the line early.
+        for (user, token) in [("ada\x01auth=Bearer other", "t"), ("ada", "t\x01"), ("ada\r\n", "t"), ("ada", "t\nQUIT"), ("a\0", "t"), ("ada", "\0")]
+        {
+            assert!(matches!(xoauth2(user, token), Err(ProtoError::Auth(_))), "{user:?} {token:?}");
+        }
+        assert!(matches!(xoauth2("ada", ""), Err(ProtoError::Auth(_))));
+        assert!(xoauth2("ada", &"t".repeat(MAX_XOAUTH2 - 3)).is_ok());
+        let err = xoauth2("ada", &"t".repeat(MAX_XOAUTH2)).unwrap_err();
+        assert!(matches!(&err, ProtoError::Auth(why) if why.to_string().len() < 100), "{err:?}");
+    }
+
+    #[test]
+    fn server_text_is_tidied() {
+        assert_eq!(tidy("  5.7.8\tBad\r\n credentials \u{7}"), "5.7.8 Bad credentials");
+        let long = tidy(&"é".repeat(1000));
+        assert_eq!(long.chars().count(), 301);
+        assert!(long.ends_with('…'));
+        assert_eq!(tidy(""), "");
+    }
+}
