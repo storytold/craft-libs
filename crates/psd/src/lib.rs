@@ -74,6 +74,7 @@ pub mod fixtures;
 pub mod flat;
 pub mod float;
 pub mod grd;
+pub mod guides;
 pub mod hdr;
 pub mod head;
 pub mod header;
