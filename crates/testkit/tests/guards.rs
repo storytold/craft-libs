@@ -447,6 +447,125 @@ fn menu() {
 }
 
 #[test]
+fn predefined_quit_ignores_a_bare_name_that_another_import_or_a_local_type_binds_in_its_scope() {
+    let imported = r#"
+use other_menu::PredefinedMenuItem;
+fn menu() {
+    let a = PredefinedMenuItem::quit(None);
+    let b = muda::PredefinedMenuItem::quit(None);
+}
+"#;
+    let grouped = "use other_menu::{PredefinedMenuItem, Menu};\nfn menu() { let a = PredefinedMenuItem::quit(None); }\n";
+    let local = r#"
+struct PredefinedMenuItem;
+fn menu() {
+    let a = PredefinedMenuItem::quit(None);
+    let b = <PredefinedMenuItem>::quit(None);
+}
+"#;
+    let both = r#"
+use muda::PredefinedMenuItem;
+mod other { pub struct PredefinedMenuItem; }
+fn menu() {
+    let a = PredefinedMenuItem::quit(None);
+}
+"#;
+    let scoped = r#"
+use muda::*;
+mod other {
+    use other_menu::PredefinedMenuItem;
+    fn menu() { let a = PredefinedMenuItem::quit(None); }
+}
+mod local { struct PredefinedMenuItem; fn menu() { let b = PredefinedMenuItem::quit(None); } }
+fn menu() {
+    let c = PredefinedMenuItem::quit(None);
+    { use other_menu::PredefinedMenuItem; let d = PredefinedMenuItem::quit(None); }
+    let e = PredefinedMenuItem::quit(None);
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/imported.rs", imported)])), vec![5]);
+    assert!(predefined_quit([("src/grouped.rs", grouped)]).is_empty());
+    assert!(predefined_quit([("src/local.rs", local)]).is_empty());
+    assert_eq!(lines(&predefined_quit([("src/both.rs", both)])), vec![5]);
+    assert_eq!(lines(&predefined_quit([("src/scoped.rs", scoped)])), vec![9, 11]);
+    let child = r#"
+use other_menu::PredefinedMenuItem;
+mod child {
+    use muda::*;
+    fn menu() { let a = PredefinedMenuItem::quit(None); }
+}
+fn menu() { let b = PredefinedMenuItem::quit(None); }
+"#;
+    assert_eq!(lines(&predefined_quit([("src/child.rs", child)])), vec![5]);
+    let renamed = r#"
+mod a {
+    use muda::PredefinedMenuItem as Item;
+    fn menu() { let a = Item::quit(None); }
+}
+mod b {
+    struct Item;
+    fn menu() { let b = Item::quit(None); }
+}
+mod c { fn menu() { let c = Item::quit(None); } }
+mod d { type Quit = muda::PredefinedMenuItem; fn menu() { let d = Quit::quit(None); } }
+"#;
+    assert_eq!(lines(&predefined_quit([("src/renamed.rs", renamed)])), vec![4, 11]);
+    let aliased_or_gated = r#"
+mod alias {
+    type PredefinedMenuItem = ::muda::PredefinedMenuItem;
+    fn menu() { let a = PredefinedMenuItem::quit(None); }
+}
+mod gated {
+    use muda::*;
+    #[cfg(windows)]
+    struct PredefinedMenuItem;
+    #[cfg(windows)] use other_menu::PredefinedMenuItem;
+    fn menu() { let b = PredefinedMenuItem::quit(None); }
+}
+mod other { type PredefinedMenuItem = other_menu::PredefinedMenuItem; fn menu() { let c = PredefinedMenuItem::quit(None); } }
+mod assoc {
+    use muda::PredefinedMenuItem;
+    trait Menu { type PredefinedMenuItem; fn menu() { let d = PredefinedMenuItem::quit(None); } }
+    #[allow(dead_code)] unsafe impl<const N: usize> Menu for Wrap<{ N }> {
+        fn menu() { let e = PredefinedMenuItem::quit(None); }
+        type PredefinedMenuItem = u8;
+    }
+}
+mod reexported {
+    use crate::PredefinedMenuItem;
+    fn menu() { let f = PredefinedMenuItem::quit(None); }
+    mod inner { use super::super::{self as up, PredefinedMenuItem}; fn menu() { let g = PredefinedMenuItem::quit(None); } }
+    mod aliased { type PredefinedMenuItem = crate::menu::PredefinedMenuItem; fn menu() { let h = PredefinedMenuItem::quit(None); } }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/aliased.rs", aliased_or_gated)])), vec![4, 11, 16, 18, 24, 25, 26]);
+}
+
+#[test]
+fn std_instant_reads_a_std_time_alias_only_in_its_scope() {
+    let source = r#"
+mod native {
+    use std::time as clock;
+    fn now() { let a = clock::Instant::now(); }
+    use clock::Instant as A;
+}
+mod web {
+    use web_time as clock;
+    fn now() { let b = clock::Instant::now(); }
+    use clock::Instant as B;
+    use {clock::*, std::time::*};
+}
+mod child { fn now() { let c = clock::Instant::now(); } }
+fn run() {
+    use std::time as t;
+    let d = t::Instant::now();
+    { mod t {} let e = t::Instant::now(); }
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/lib.rs", source)])), vec![4, 5, 11, 16]);
+}
+
+#[test]
 fn std_instant_ignores_an_alias_that_only_a_native_cfg_imports() {
     let source = r#"
 #[cfg(not(target_arch = "wasm32"))]
@@ -787,6 +906,21 @@ fn std_instant_ends_native_cfg_impl_mod_and_struct_items_where_they_end_on_the_l
 #[cfg(unix)] impl S { fn a() {} } #[cfg(unix)] mod m { fn b() { std::time::Instant::now(); } }
 "#;
     assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn std_instant_reads_blocks_in_generic_brackets_as_part_of_a_native_cfg_item_head() {
+    let source = r#"#[cfg(unix)] struct Native<const N: usize = { 1 + 2 }> { clock: std::time::Instant }
+#[cfg(unix)] enum E<const N: usize = { 3 }> { A(std::time::Instant) }
+#[cfg(unix)] trait Tr<const N: usize = { 1 }>: Sized where Self: Into<W<{ 2 }>> { fn now() -> std::time::Instant { std::time::Instant::now() } }
+#[cfg(unix)] impl<const N: usize> Tr<{ N }> for Native<{ N }> { fn now() -> std::time::Instant { std::time::Instant::now() } }
+#[cfg(unix)] fn native<T>() -> W<{ 1 + 1 }> where T: Into<W<{ 2 }>> { std::time::Instant::now(); W }
+#[cfg(unix)] fn arrow<F: Fn() -> u8>(f: F) -> impl Fn() -> W<{ 3 }> where F: Copy { let _t = std::time::Instant::now(); f }
+struct Web<const N: usize = { 1 }> { clock: std::time::Instant }
+fn web() -> W<{ 1 }> where u8: Into<W<{ 2 }>> { std::time::Instant::now(); W }
+#[cfg(unix)] struct A<const N: usize = { 1 }> { a: std::time::Instant } fn after() { std::time::Instant::now(); }
+"#;
+    assert_eq!(lines(&std_instant([("src/clock.rs", source)])), vec![7, 8, 9]);
 }
 
 #[test]
@@ -1332,6 +1466,45 @@ fn rust_sources_skips_build_output_folders_marked_with_cachedir_tag() {
     dir.write("notes/CACHEDIR.TAG", "not a cache tag\n");
     dir.write("notes/kept.rs", "pub fn kept() {}");
     let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
+    assert_eq!(file_names(&sources), vec!["kept.rs", "lib.rs"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_sources_does_not_read_a_cachedir_tag_through_a_symlink() {
+    let outside = ScratchDir::new("cachedir_link_target");
+    outside.write("CACHEDIR.TAG", "Signature: 8a477f597d28d172789f06886806bc55\n");
+    let dir = ScratchDir::new("cachedir_link");
+    dir.write("src/lib.rs", "pub fn lib() {}");
+    dir.write("linked/kept.rs", "pub fn kept() {}");
+    std::os::unix::fs::symlink(outside.path().join("CACHEDIR.TAG"), dir.path().join("linked").join("CACHEDIR.TAG")).expect("symlink marker");
+    let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
+    assert_eq!(file_names(&sources), vec!["kept.rs", "lib.rs"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn rust_sources_does_not_open_a_cachedir_tag_fifo() {
+    let dir = ScratchDir::new("cachedir_fifo");
+    dir.write("src/lib.rs", "pub fn lib() {}");
+    dir.write("piped/kept.rs", "pub fn kept() {}");
+    let fifo = dir.path().join("piped").join("CACHEDIR.TAG");
+    match std::process::Command::new("mkfifo").arg(&fifo).status() {
+        Ok(status) if status.success() => {}
+        other => {
+            eprintln!("skipped: mkfifo is not available here ({other:?})");
+            return;
+        }
+    }
+    let root = dir.path().to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(craft_testkit::rust_sources(root));
+    });
+    let sources = rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("rust_sources returns instead of blocking on the CACHEDIR.TAG FIFO")
+        .expect("rust_sources");
     assert_eq!(file_names(&sources), vec!["kept.rs", "lib.rs"]);
 }
 
