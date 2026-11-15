@@ -60,6 +60,14 @@ pub trait FullWindowWorkspace: Send + 'static {
     fn ok_failed(&mut self, reason: Label) {
         let _ = reason;
     }
+
+    /// The workspace closed, by any route: its own OK, Cancel or Escape, an accepted held OK, the host's
+    /// [`confirm`](FullWindowWorkspace::confirm), or a close from outside (`DialogHost::cancel`, a workspace of the same
+    /// kind opened over it, its parent closing). What the workspace keeps past its close (remembered settings) is
+    /// written here. Does nothing by default.
+    fn closed(&mut self, ctx: &Context) {
+        let _ = ctx;
+    }
 }
 
 /// What the host hands a [`FullWindowWorkspace`] each pass.
@@ -252,6 +260,7 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<W::Result>> {
         // The app accepted the held OK: the first pass after the answer finishes, whichever pass of a frame it is.
         if let Some(result) = self.held.finish() {
+            self.workspace.closed(ui.ctx());
             return Some(DialogResult::Ok(result));
         }
         let cx = WorkspaceCx {
@@ -272,6 +281,9 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
         if let Some(result) = pass.held.filter(|_| self.hold_ok && !self.held.is_waiting()) {
             self.file(result);
         }
+        if pass.result.is_some() {
+            self.workspace.closed(ui.ctx());
+        }
         pass.result
     }
 
@@ -282,18 +294,26 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
     /// OK as the Accept button: a held workspace files the result and answers none, and answers the held result once
     /// the app accepted it.
     fn confirm(&mut self, ctx: &Context) -> Option<W::Result> {
-        if self.held.is_accepted() {
-            return self.held.finish();
+        let result = if self.held.is_accepted() {
+            self.held.finish()
+        } else if self.held.is_waiting() {
+            None
+        } else {
+            let result = self.workspace.confirm(ctx, &*self.source)?;
+            if self.hold_ok {
+                self.file(result);
+                return None;
+            }
+            Some(result)
+        };
+        if result.is_some() {
+            self.workspace.closed(ctx);
         }
-        if self.held.is_waiting() {
-            return None;
-        }
-        let result = self.workspace.confirm(ctx, &*self.source)?;
-        if self.hold_ok {
-            self.file(result);
-            return None;
-        }
-        Some(result)
+        result
+    }
+
+    fn cancelled(&mut self, ctx: &Context) {
+        self.workspace.closed(ctx);
     }
 
     fn held_state(&self) -> Option<HeldOk> {
