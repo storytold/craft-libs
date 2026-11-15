@@ -12,7 +12,12 @@ pub(crate) fn write_label_patch(ctx: &Context, patch: &LabelPatch) {
                 if node.role() == accesskit::Role::Unknown {
                     node.set_role(accesskit::Role::Label);
                 }
-                if node.label().is_none() {
+                // A `Label` is named by its value, as egui names its own labels; other roles by their label.
+                if node.role() == accesskit::Role::Label {
+                    if node.value().is_none() {
+                        node.set_value(text.clone());
+                    }
+                } else if node.label().is_none() {
                     node.set_label(text.clone());
                 }
                 if *disabled {
