@@ -4,7 +4,8 @@ use craft_ui::contract::Bind;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 
-use super::{AxisSliders, AxisValues, FontAxis, NamedInstance};
+use super::{AxisSliders, AxisValues};
+use crate::axes::{FontAxis, NamedInstance};
 
 const WGHT: [u8; 4] = *b"wght";
 const WDTH: [u8; 4] = *b"wdth";

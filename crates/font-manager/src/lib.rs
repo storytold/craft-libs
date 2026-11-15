@@ -19,7 +19,6 @@ pub mod index;
 pub mod installed;
 pub mod store;
 
-#[cfg(feature = "ui")]
 pub mod axes;
 #[cfg(feature = "ui")]
 pub mod glyphs;
