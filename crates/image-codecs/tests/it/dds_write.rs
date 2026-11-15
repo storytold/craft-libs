@@ -479,6 +479,18 @@ fn compression_names_round_trip() {
 #[test]
 #[ignore]
 fn dds_encode_timings_on_30_mp() {
+    let img = texture_30_mp();
+    for compression in DdsCompression::ALL {
+        for mipmaps in [false, true] {
+            let t = std::time::Instant::now();
+            let b = encode(&img, Format::Dds, &opts(compression, mipmaps)).unwrap();
+            eprintln!("{compression:?} mipmaps={mipmaps}: {:.0} ms, {} MB", t.elapsed().as_secs_f64() * 1e3, b.len() >> 20);
+        }
+    }
+}
+
+/// A synthetic ~30 MP RGBA texture (6336×4752): gentle ramps with a little noise.
+fn texture_30_mp() -> Image {
     let (w, h) = (6336u32, 4752u32);
     let mut s = 0x1234_5678u32;
     let mut data = Vec::with_capacity(w as usize * h as usize * 4);
@@ -490,12 +502,28 @@ fn dds_encode_timings_on_30_mp() {
             data.extend([(x / 25 + y / 19) as u8, (x / 31) as u8 ^ (s as u8 & 3), (y / 23) as u8, (255 - x / 25) as u8]);
         }
     }
-    let img = Image::from_u8(w, h, ChannelLayout::Rgba, data).unwrap();
+    Image::from_u8(w, h, ChannelLayout::Rgba, data).unwrap()
+}
+
+/// Decode timings of the same texture written with each compression: the best of five runs, so
+/// one slow run doesn't decide. Ignored by default; run in release:
+///
+/// ```sh
+/// cargo test --release -p craft-image-codecs --test it -- dds_write:: --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn dds_decode_timings_on_30_mp() {
+    let img = texture_30_mp();
     for compression in DdsCompression::ALL {
-        for mipmaps in [false, true] {
+        let b = encode(&img, Format::Dds, &opts(compression, false)).unwrap();
+        let mut best = f64::INFINITY;
+        for _ in 0..5 {
             let t = std::time::Instant::now();
-            let b = encode(&img, Format::Dds, &opts(compression, mipmaps)).unwrap();
-            eprintln!("{compression:?} mipmaps={mipmaps}: {:.0} ms, {} MB", t.elapsed().as_secs_f64() * 1e3, b.len() >> 20);
+            let back = decode(&b).unwrap();
+            best = best.min(t.elapsed().as_secs_f64());
+            assert_eq!(back.dimensions(), img.dimensions());
         }
+        eprintln!("{compression:?} decode: {:.0} ms, {} MB", best * 1e3, b.len() >> 20);
     }
 }
