@@ -461,7 +461,7 @@ pub trait Component: Meta + Sized {
         None
     }
 
-    /// App values for content the component does not build: its body or its items. Runs once, at step 13.
+    /// App values for content the component does not build: its body or its items. Runs at step 13, and in a measuring run of the body before it.
     fn content_env(&self, _cx: &Cx<'_, Self>, _values: &mut crate::runtime::env::AppValues) {}
 
     /// After sensing, before paint: value maths, memory, popup triggers.

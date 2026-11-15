@@ -5,7 +5,7 @@ use craft_behavior::{Axis, CanvasView, GESTURE_GAP, MotionMode, Wheel, WheelPhas
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasSpace, Guide, GuideKey, Momentary, MomentaryCommands, MomentaryTool, NavigationOptions, TouchpadGlide, ViewCommands,
-    WheelNavigation, canvas_space,
+    WheelNavigation,
 };
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
@@ -92,13 +92,12 @@ fn cmd_or_ctrl_with_page_down_on_a_focused_canvas_control_scrolls_the_canvas_sid
     let mut fixture = Fixture::new(move |ui| {
         let mut given = shown.get();
         given.rect = ui.available_rect_before_wrap();
+        let canvas = ui.id().with("document canvas");
         let canvas = Canvas::new("Document")
+            .id(canvas)
             .document(Size::new(4000.0, 4000.0))
             .view(given)
-            .show(ui, |ui, body| {
-                let canvas = canvas_space(&body.env).and_then(|space| space.canvas()).expect("the canvas publishes its space");
-                Guides::new("Guides", canvas, Bind::bound(&mut guides)).interactive(true).show_at(ui, body.rect)
-            });
+            .show(ui, |ui, body| Guides::new("Guides", canvas, Bind::bound(&mut guides)).interactive(true).show_at(ui, body.rect));
         shown.set(canvas.output.view.unwrap_or(given));
     });
     fixture.settle();
@@ -404,7 +403,11 @@ fn pinch_and_rotation_follow_the_gesture_options_and_the_flip() {
     let pinch: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|_| vec![vec![egui::Event::Zoom(1.2)]];
     let rotate: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|_| vec![vec![egui::Event::Rotate(TURN)]];
     let spread: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|at| {
-        vec![fingers(TouchPhase::Start, at, Vec2::new(50.0, 0.0)), fingers(TouchPhase::Move, at, Vec2::new(75.0, 0.0)), fingers(TouchPhase::End, at, Vec2::new(75.0, 0.0))]
+        vec![
+            fingers(TouchPhase::Start, at, Vec2::new(50.0, 0.0)),
+            fingers(TouchPhase::Move, at, Vec2::new(75.0, 0.0)),
+            fingers(TouchPhase::End, at, Vec2::new(75.0, 0.0)),
+        ]
     };
     let twist: &dyn Fn(Pos2) -> Vec<Vec<egui::Event>> = &|at| {
         let turned = Vec2::new(TURN.cos(), TURN.sin()) * 50.0;

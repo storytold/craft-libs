@@ -180,9 +180,10 @@ impl CanvasSpace {
         self
     }
 
-    /// The id of the canvas that published this space: what a control claims keys on the focused canvas with, and the
-    /// id a body hands to a control keyed by its canvas ([`Guides::new`](crate::canvas_controls::Guides::new)).
-    pub fn canvas(&self) -> Option<egui::Id> {
+    /// The id of the canvas that published this space: what a control claims keys on the focused canvas with. A body
+    /// hands a control keyed by its canvas ([`Guides::new`](crate::canvas_controls::Guides::new)) the id it named the
+    /// canvas with, not this one: the space exists only once the view has settled, after the body's measuring run.
+    pub(crate) fn canvas(&self) -> Option<egui::Id> {
         self.canvas
     }
 

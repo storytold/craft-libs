@@ -3,12 +3,12 @@
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_behavior::{Axis, CancelReason, CanvasView};
-use craft_ui::canvas::{CanvasTool, Guide, GuideKey, Rulers, Snap, ToolAction, ToolContext, ToolPath, ToolPointer, canvas_space};
+use craft_ui::canvas::{CanvasTool, Guide, GuideKey, Rulers, Snap, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::canvas_controls::reading::{GuideReading, running};
 use craft_ui::contract::{Bind, BodyCx, Show as _};
 use craft_ui::primitives::Draw;
-use craft_ui::testing::{ToolFixture, pointer, trial};
+use craft_ui::testing::{ToolFixture, pointer, tool_fixture, trial};
 use egui::{Id, Key, Modifiers, Pos2, Rect, Vec2, pos2, vec2};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -54,9 +54,9 @@ fn guide(key: u64, along: Axis, position: f64) -> Guide {
     Guide::new(GuideKey::new(key), along, position)
 }
 
-/// The id of the canvas whose body `cx` is, which the guides are keyed by.
-fn canvas_of(cx: &BodyCx<'_>) -> Id {
-    canvas_space(&cx.env).and_then(|space| space.canvas()).expect("the fixture's canvas publishes its space")
+/// The id the fixture names its "Document" canvas with, which the guides are keyed by.
+fn canvas_of(_: &BodyCx<'_>) -> Id {
+    tool_fixture::canvas_id("Document")
 }
 
 /// The guide at `position` running `along`, if there is one.
@@ -187,7 +187,8 @@ fn a_dragged_guide_is_removed_off_the_bounds_or_on_a_ruler_and_alt_and_shift_cha
 
     // 222.6 is 1.7 from the target at 224.3; the ruler's minor ticks at zoom 1 are 10 pixels apart.
     drag_with(&mut fixture, Modifiers::SHIFT, top(300.0), pos2(300.0, 222.6));
-    let ticked: Vec<f64> = guides.borrow().iter().filter(|guide| guide.along == Axis::X && guide.position != 250.3).map(|guide| guide.position).collect();
+    let ticked: Vec<f64> =
+        guides.borrow().iter().filter(|guide| guide.along == Axis::X && guide.position != 250.3).map(|guide| guide.position).collect();
     assert!(
         matches!(ticked.as_slice(), [tick] if tick.fract() == 0.0 && (tick - 222.6).abs() <= 10.0),
         "Shift lands on a tick, not on the snap target: {:?}",

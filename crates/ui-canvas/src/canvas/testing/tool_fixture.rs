@@ -19,6 +19,12 @@ pub const DOCUMENT: Size = Size::new(1200.0, 900.0);
 /// from the path of the first drag, which a tool may leave a hit part on.
 const ESCAPE_DRAG_START: Vec2 = Vec2::new(0.25, 0.25);
 
+/// The id a [`ToolFixture`] gives its canvas labelled `label`: what a body hands to a control keyed by its canvas
+/// ([`Guides::new`](crate::canvas_controls::Guides::new)), as an app names its own canvas.
+pub fn canvas_id(label: &'static str) -> Id {
+    Id::new(("tool fixture canvas", label))
+}
+
 /// A tool shown on a canvas that fills the fixture's room, with the gesture phases the host reported.
 #[non_exhaustive]
 pub struct ToolFixture<T: CanvasTool + 'static> {
@@ -78,7 +84,7 @@ impl<T: CanvasTool + 'static> ToolFixture<T> {
         let enabled = Rc::new(Cell::new(true));
         let (shown, seen, id, on) = (Rc::clone(&tool), Rc::clone(&gestures), Rc::clone(&canvas), Rc::clone(&enabled));
         let mut fixture = Fixture::new(move |ui| {
-            let mut shown_canvas = Canvas::new(label).document(DOCUMENT);
+            let mut shown_canvas = Canvas::new(label).id(canvas_id(label)).document(DOCUMENT);
             if let Some(view) = &view {
                 shown_canvas = shown_canvas.view(view(ui.available_rect_before_wrap()));
             }

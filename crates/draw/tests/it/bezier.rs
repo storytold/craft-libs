@@ -3,10 +3,10 @@
 use craft_behavior::kurbo::{ParamCurve as _, Point, Size, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::ui::{
-    AnchorDelete, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef, PathEdit, PathSelection,
-    SegmentMark,
+    AnchorDelete, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef, PathEdit,
+    PathSelection, SegmentMark,
 };
-use craft_ui::canvas::{Canvas, Guide, canvas_space};
+use craft_ui::canvas::{Canvas, Guide};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -248,13 +248,13 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         };
         st.view = Some(view);
         let selection = st.selection.clone();
-        let canvas = Canvas::new("Document").view(view);
+        let canvas_id = ui.id().with("document canvas");
+        let canvas = Canvas::new("Document").id(canvas_id).view(view);
         let canvas = if st.pans { canvas.document(Size::new(4000.0, 4000.0)) } else { canvas };
         let canvas = canvas.show(ui, |ui, body| {
             // The guides lie under the paths: a stack position hides the levels of the ones below it.
             if !st.guides.is_empty() {
-                let canvas = canvas_space(&body.env).and_then(|space| space.canvas()).expect("the canvas publishes its space");
-                Guides::new("Guides", canvas, Bind::bound(&mut st.guides)).interactive(true).show_at(ui, body.rect);
+                Guides::new("Guides", canvas_id, Bind::bound(&mut st.guides)).interactive(true).show_at(ui, body.rect);
             }
             BezierOverlay::new("Paths", Bind::bound(&mut st.paths), &selection)
                 .tool(st.tool)
