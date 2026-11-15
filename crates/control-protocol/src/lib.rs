@@ -8,6 +8,20 @@ pub fn valid_token(token: &str) -> bool {
     token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// Encode one client request, including its terminating newline.
+pub fn request_line(id: u64, token: Option<&str>, method: &str, params: &Value) -> String {
+    format!("{}\n", json!({"id": id, "token": token, "method": method, "params": params}))
+}
+
+/// Extract the result or application error from a parsed control reply.
+pub fn reply_result(reply: &Value) -> Result<Value, String> {
+    if reply.get("ok").and_then(Value::as_bool) == Some(true) {
+        Ok(reply.get("result").cloned().unwrap_or(Value::Null))
+    } else {
+        Err(reply.get("error").and_then(Value::as_str).unwrap_or("error").to_owned())
+    }
+}
+
 /// One parsed line.
 enum Line {
     Request {
@@ -120,6 +134,13 @@ pub fn serve_lines<R: Read, W: Write>(read: R, mut out: W, token: &str, max_line
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn client_request_and_reply_keep_optional_fields() {
+        let line = request_line(7, None, "status", &json!({"a": 1}));
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), json!({"id": 7, "token": null, "method": "status", "params": {"a": 1}}));
+        assert_eq!(reply_result(&json!({"ok": true})).unwrap(), Value::Null);
+        assert_eq!(reply_result(&json!({"ok": false, "error": "busy"})).unwrap_err(), "busy");
+    }
     #[test]
     fn validates_session_token_shape() {
         assert!(valid_token(&"aB09".repeat(16)));
