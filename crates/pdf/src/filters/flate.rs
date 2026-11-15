@@ -144,7 +144,11 @@ fn least_input(input: &[u8], output: usize, max: usize) -> (Option<usize>, usize
         let room = left.min((max - made).saturating_add(1)).min(scratch.len());
         let Some(rest) = input.get(taken..) else { return (None, made) };
         let (Some(fed), Some(out)) = (rest.get(..feed.min(rest.len())), scratch.get_mut(..room)) else { return (None, made) };
-        let Ok(status) = d.decompress(fed, out, FlushDecompress::None) else { return (None, counts(&d).1) };
+        let Ok(status) = d.decompress(fed, out, FlushDecompress::None) else {
+            // A step can give the last of the output and then meet the damage: the output came first.
+            let (now_taken, now_made) = counts(&d);
+            return ((now_made >= output && now_made <= max).then_some(now_taken), now_made);
+        };
         let (now_taken, now_made) = counts(&d);
         match status {
             Status::StreamEnd if now_made > max => return (None, now_made),
@@ -475,5 +479,61 @@ mod tests {
         assert_eq!(input_for(&[0x78, 0x9c, 0x03, 0x00], 1, 0), (Some(4), 0));
         assert_eq!(dec_limit(&[0x78, 0x9c, 0x03, 0x00], 0).ok(), Some(Vec::new()));
         assert_eq!(input_for(&[0x78, 0x9c], 1, 0), (Some(2), 0));
+    }
+
+    /// zlib data of a dynamic block of `count` 'A's, a bit each, and its end, then a block of the
+    /// reserved type (§3.2.3): damage, five bits after the last 'A'.
+    fn letters_then_damage(count: usize) -> Vec<u8> {
+        let mut bits = Bits::default();
+        bits.put(0, 1); // a block that isn't the last,
+        bits.put(2, 2); // of dynamic Huffman codes (§3.2.7)
+        bits.put(0, 5); // 257 literal and length codes
+        bits.put(0, 5); // 1 distance code
+        bits.put(14, 4); // 18 code length codes, in their order up to the one for 1
+        for symbol in [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1] {
+            bits.put(
+                match symbol {
+                    18 => 1,
+                    1 | 2 => 2,
+                    _ => 0,
+                },
+                3,
+            );
+        }
+        // Code length codes: 18 is 0, 1 is 10, 2 is 11. 'A' gets a bit (0), 'B' and 256 two (10, 11).
+        let zeros = |bits: &mut Bits, n: u32| {
+            bits.code(0, 1);
+            bits.put(n - 11, 7);
+        };
+        zeros(&mut bits, 65);
+        bits.code(2, 2);
+        bits.code(3, 2);
+        zeros(&mut bits, 138);
+        zeros(&mut bits, 51);
+        bits.code(3, 2);
+        bits.code(2, 2); // the distance code: a bit
+        for _ in 0..count {
+            bits.code(0, 1); // 'A'
+        }
+        bits.code(3, 2); // the end of the block
+        bits.put(1, 1); // the last block,
+        bits.put(3, 2); // of the reserved type
+        [&[0x78, 0x9c][..], &bits.finish()].concat()
+    }
+
+    /// The step that gives the last of the output can meet damage after it in the same byte (here
+    /// for 2, 3, 4, 10, 11 and 12 'A's): the output came first, so it is told, as it is where the
+    /// damage is in the next byte.
+    #[test]
+    fn damage_after_the_output_in_the_same_byte_is_after_it() {
+        for count in 1..=16 {
+            let data = letters_then_damage(count);
+            assert_eq!(decode(&data, 1 << 20, Some(1 << 20)).0.map_err(|f| f.partial), Err(vec![b'A'; count]), "{count}");
+            let least = least_prefix(&data, count);
+            assert_eq!(input_for(&data, count, 1 << 20), (Some(least), count), "{count}");
+            assert_eq!(input_for(&data, count, count), (Some(least), count), "exactly max, {count}");
+            assert_eq!(input_for(&data, count + 1, 1 << 20), (None, count), "damage first, {count}");
+            assert_eq!(input_for(&data, count, count - 1), (None, count), "past what may be inflated, {count}");
+        }
     }
 }
