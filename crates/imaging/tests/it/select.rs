@@ -10,7 +10,7 @@ use craft_imaging::ui::select::{
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{CanvasTool, Snap, ToolAccess, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::Draw;
-use craft_ui::testing::{ToolFixture, trial};
+use craft_ui::testing::{ToolFixture, pointer, trial};
 use egui::{Key, Modifiers, Pos2, Rect as ScreenRect, pos2};
 use kurbo::{Point, Rect, Vec2};
 use std::cell::{Cell, RefCell};
@@ -430,12 +430,14 @@ fn marquee_corners_follow_constraint_and_modifiers() {
 #[trial]
 fn marquee_selection_drag_reports_whole_pixel_deltas_and_cancel() {
     let mut rig = rig("Marquee", MarqueeTool::new(MarqueeKind::Rectangle), Fake::selected(Rect::new(100.0, 100.0, 200.0, 200.0)));
+    // The first move goes past the press arena's slop, so the press is a drag; the later ones move by parts of a pixel.
     down(&mut rig, (150.0, 150.0), NONE);
-    drag_to(&mut rig, (150.2, 150.2), NONE);
-    drag_to(&mut rig, (150.6, 150.0), NONE);
-    drag_to(&mut rig, (150.7, 150.0), NONE);
-    up(&mut rig, (152.0, 150.0), NONE);
-    assert_eq!(tags(&rig.tool_mut().events()), ["begin", "update 1,0", "commit 2,0"]);
+    drag_to(&mut rig, (160.2, 150.2), NONE);
+    drag_to(&mut rig, (160.6, 150.0), NONE);
+    drag_to(&mut rig, (160.7, 150.0), NONE);
+    up(&mut rig, (162.0, 150.0), NONE);
+    // The release elsewhere is a move there, then the button coming up.
+    assert_eq!(tags(&rig.tool_mut().events()), ["begin", "update 10,0", "update 11,0", "update 12,0", "commit 12,0"]);
 
     click(&mut rig, (150.0, 150.0), NONE);
     assert_eq!(tags(&rig.tool_mut().events()), ["begin", "commit 0,0"]);
@@ -492,18 +494,21 @@ fn a_marquee_corner_and_a_dragged_selection_snap_to_a_guide() {
 
 // Alt pressed during a freehand drag turns on straight segments, Alt-clicks add vertices and releasing Alt closes. A
 // first press with Alt and nothing selected starts straight segments and stays New; Backspace and a secondary press
-// each retract one vertex, and a click on the last point closes.
+// each retract one vertex, and a click on the last point closes. Alt stays down across presses and releases, as a
+// hand holds it, so the pointer and the keyboard here are the hand's (an injected release lets go of its modifiers).
 #[trial]
 fn lasso_alt_clicks_make_straight_segments_that_retract_and_close() {
+    let hand_click = |rig: &mut Rig<LassoTool>, point: (f64, f64)| {
+        rig.press_at(at(point)).release_at(at(point));
+    };
     let mut rig = rig("Lasso", LassoTool::new(), Fake::empty());
     focus(&mut rig);
-    down(&mut rig, (100.0, 100.0), NONE);
-    drag_to(&mut rig, (140.0, 100.0), NONE);
+    rig.press_at(at((100.0, 100.0))).move_to(at((140.0, 100.0)));
     hold(&mut rig, Modifiers::ALT);
-    up(&mut rig, (140.0, 100.0), Mods::ALT);
+    rig.release_at(at((140.0, 100.0)));
     assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 2 }, "with Alt down the release keeps the outline open");
-    click(&mut rig, (140.0, 140.0), Mods::ALT);
-    click(&mut rig, (100.0, 140.0), Mods::ALT);
+    hand_click(&mut rig, (140.0, 140.0));
+    hand_click(&mut rig, (100.0, 140.0));
     assert!(rig.tool_mut().events().is_empty(), "Alt-clicks add vertices");
     hold(&mut rig, Modifiers::NONE);
     let events = rig.tool_mut().events();
@@ -511,15 +516,15 @@ fn lasso_alt_clicks_make_straight_segments_that_retract_and_close() {
 
     hold(&mut rig, Modifiers::ALT);
     for point in [(100.0, 100.0), (200.0, 100.0), (200.0, 200.0), (100.0, 200.0), (150.0, 250.0)] {
-        click(&mut rig, point, Mods::ALT);
+        hand_click(&mut rig, point);
     }
     assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 5 }, "a first Alt press with nothing selected starts straight segments");
     press_key(&mut rig, Key::Backspace, Modifiers::ALT);
     assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 4 }, "Backspace retracts");
-    inject(&mut rig, ToolInput::down(PointerButton::Secondary, at((300.0, 300.0))).mods(Mods::ALT));
-    inject(&mut rig, ToolInput::up(at((300.0, 300.0))).mods(Mods::ALT));
+    let right = at((300.0, 300.0));
+    rig.fixture().frame(vec![pointer::moved(right)]).frame(vec![pointer::secondary(right, true)]).frame(vec![pointer::secondary(right, false)]);
     assert_eq!(rig.tool().phase(), SelectPhase::Outline { points: 3 }, "a secondary press retracts");
-    click(&mut rig, (200.0, 200.0), Mods::ALT);
+    hand_click(&mut rig, (200.0, 200.0));
     let events = rig.tool_mut().events();
     assert_eq!(
         events,
@@ -722,10 +727,12 @@ fn magnetic_fastens_every_spacing_and_walks_jumps() {
     assert!(slow < normal && normal < fast, "{slow} {normal} {fast}");
     // 200 px at 47 px: the start and four fastened points.
     assert!((4..=6).contains(&normal), "{normal}");
+    // A jump of 1220 points at a step of 4 is longer than 256 steps; the canvas is wide enough that it ends over it.
     let (mut rig, log) = magnetic();
+    rig.fixture().room(egui::vec2(1600.0, 400.0)).frame(Vec::new());
     rig.tool_mut().tool().settings_mut().frequency = 100.0;
     click(&mut rig, pt(start), NONE);
-    glide(&mut rig, Point::new(5000.0, 150.0), NONE);
+    glide(&mut rig, Point::new(1500.0, 150.0), NONE);
     assert_eq!(log.snaps.get(), 1 + 256, "the start, then 256 steps");
 }
 
@@ -746,7 +753,8 @@ fn magnetic_closes_by_start_click_double_click_or_enter_and_retracts_to_the_firs
 
     let (mut rig, _) = magnetic();
     click(&mut rig, pt(on(0.0)), NONE);
-    glide_along(&mut rig, 0.0, 5.0);
+    // Round the circle back to the start, so the pointer reaches the start along the edge.
+    glide_along(&mut rig, 0.0, std::f64::consts::TAU);
     // A second apart, so the click on the start is not a double click.
     rig.fixture().advance(1.0);
     click(&mut rig, pt(on(0.0)), NONE);
