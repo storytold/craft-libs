@@ -230,33 +230,7 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool, inspect: bool) -> (Embed
                 }
             }
             0xe2 if payload.starts_with(b"ICC_PROFILE\0") => {
-                if !complete || payload.len() < 14 {
-                    icc_invalid = true;
-                } else if let Some(header) = payload.get(12..14) {
-                    let (Some(&sequence), Some(&total)) = (header.first(), header.get(1)) else {
-                        icc_invalid = true;
-                        i = end;
-                        continue;
-                    };
-                    if sequence == 0 || total == 0 || sequence > total || icc_total.is_some_and(|expected| expected != total) {
-                        icc_invalid = true;
-                    } else {
-                        icc_total = Some(total);
-                        if let Some(slot) = icc_parts.get_mut(usize::from(sequence - 1)) {
-                            if slot.is_some() {
-                                icc_invalid = true;
-                            } else if let Some(data) = payload.get(14..) {
-                                *slot = Some(data);
-                            } else {
-                                icc_invalid = true;
-                            }
-                        } else {
-                            icc_invalid = true;
-                        }
-                    }
-                } else {
-                    icc_invalid = true;
-                }
+                collect_icc_part(payload, complete, &mut icc_parts, &mut icc_total, &mut icc_invalid);
             }
             0xed if !inspect && payload.starts_with(b"Photoshop 3.0\0") && out.iptc.is_none() => out.iptc = photoshop_iptc(&payload[14..]),
             _ => {}
@@ -293,6 +267,28 @@ fn jpeg_segments_inner(b: &[u8], collect_all_xmp: bool, inspect: bool) -> (Embed
         attach_extension(&mut out, b, ext, &ext_headers);
     }
     (out, xmp_packets, inspection)
+}
+
+fn collect_icc_part<'a>(payload: &'a [u8], complete: bool, parts: &mut [Option<&'a [u8]>; 255], total: &mut Option<u8>, invalid: &mut bool) {
+    if !complete || payload.len() < 14 {
+        *invalid = true;
+        return;
+    }
+    let (sequence, count) = (payload[12], payload[13]);
+    if sequence == 0 || count == 0 || sequence > count || total.is_some_and(|expected| expected != count) {
+        *invalid = true;
+        return;
+    }
+    *total = Some(count);
+    let Some(slot) = parts.get_mut(usize::from(sequence - 1)) else {
+        *invalid = true;
+        return;
+    };
+    if slot.is_some() {
+        *invalid = true;
+    } else {
+        *slot = payload.get(14..);
+    }
 }
 
 fn inspect_marker(info: &mut JpegInspection, marker: u8, payload: &[u8], start: usize, needs_exif: bool) {
