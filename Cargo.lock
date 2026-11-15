@@ -1352,6 +1352,7 @@ version = "0.1.0"
 dependencies = [
  "craft-media",
  "craft-media-testkit",
+ "craft-xml",
  "log",
  "proptest",
  "rayon",
