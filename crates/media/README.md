@@ -700,7 +700,7 @@ let pcm = mxf.read_pcm(&file, a, 48_000, 1920)?; // planar f32, sample-exact
   MPEG-4 visual, JPEG 2000, DV, uncompressed, CinemaDNG (the CinemaDNG container labels, the
   registered MXF-GC TIFF/EP container and TIFF/EP picture coding labels, a 42h picture element
   type, or a TIFF header with the DNGVersion tag at the start of the essence; the DNG pictures
-  themselves are developed by `craft-raw`).
+  themselves are decoded by `craft-raw`).
 - **Sound.** PCM chunks (frame- or clip-wrapped) with sample counts; `read_pcm` decodes
   little-endian 8/16/24/32-bit PCM (wave / AES3 descriptors) and ST 331 AES3 elements (D-10).
 - **Timecode.** The material package timecode component (start frame count, rounded base,
