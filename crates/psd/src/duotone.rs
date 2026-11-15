@@ -15,6 +15,16 @@ pub type ColorRecord = [u16; 5];
 /// Sentinel for an absent ink or computed overprint colour.
 pub const NO_COLOR: ColorRecord = [0xffff, 0, 0, 0, 0];
 
+/// Valid active ink counts for a serialized block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u16)]
+pub enum InkCount {
+    One = 1,
+    Two = 2,
+    Three = 3,
+    Four = 4,
+}
+
 /// One fixed-size ink slot, including uninterpreted reserved curve word.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InkRecord {
@@ -83,14 +93,11 @@ pub fn alternate_color(data: &[u8], index: usize) -> Option<ColorRecord> {
 }
 
 /// Serialize four raw slots and explicit trailing policy into a fixed-size block.
-/// `count` must be 1..=4. Reserved bytes and inactive slots are preserved as supplied.
-pub fn write_block(count: u16, inks: &[InkRecord; 4], dot_gain: u16, overprints: &[ColorRecord; 11]) -> Option<[u8; BLOCK_LEN]> {
-    if !(1..=4).contains(&count) {
-        return None;
-    }
+/// The typed count cannot be invalid. Reserved bytes and inactive slots are preserved as supplied.
+pub fn write_block(count: InkCount, inks: &[InkRecord; 4], dot_gain: u16, overprints: &[ColorRecord; 11]) -> [u8; BLOCK_LEN] {
     let mut out = [0u8; BLOCK_LEN];
     out[..2].copy_from_slice(&1u16.to_be_bytes());
-    out[2..4].copy_from_slice(&count.to_be_bytes());
+    out[2..4].copy_from_slice(&(count as u16).to_be_bytes());
     for (i, ink) in inks.iter().enumerate() {
         for (j, value) in ink.color.iter().enumerate() {
             let at = 4 + 10 * i + 2 * j;
@@ -109,11 +116,10 @@ pub fn write_block(count: u16, inks: &[InkRecord; 4], dot_gain: u16, overprints:
             out[at..at + 2].copy_from_slice(&value.to_be_bytes());
         }
     }
-    Some(out)
+    out
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -124,7 +130,7 @@ mod tests {
         ink.curve[0] = 0;
         ink.curve[12] = 1000;
         let slots = std::array::from_fn(|_| ink.clone());
-        let bytes = write_block(4, &slots, 20, &[NO_COLOR; 11]).unwrap();
+        let bytes = write_block(InkCount::Four, &slots, 20, &[NO_COLOR; 11]);
         assert_eq!(&bytes[..4], &[0, 1, 0, 4]);
         assert_eq!(&bytes[44..48], &[3, b'I', b'n', b'k']);
         assert_eq!(&bytes[412..416], &[0, 20, 255, 255]);
@@ -138,8 +144,6 @@ mod tests {
             assert!(DuotoneView::parse(&bytes[..n]).is_none());
         }
         assert!(DuotoneView::parse(&bytes[..412]).is_some());
-        assert!(write_block(0, &slots, 20, &[NO_COLOR; 11]).is_none());
-        assert!(write_block(5, &slots, 20, &[NO_COLOR; 11]).is_none());
     }
 
     #[test]
