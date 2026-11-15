@@ -92,6 +92,11 @@ fn hostile_headers_fail_without_allocating() {
     assert_eq!(dec(&f), Err(Error::LimitExceeded("pixel count")));
     let mut f = header(10, 16384, 16384, 32, 0);
     f.extend_from_slice(&[0xFF, 1, 2, 3, 4]);
+    // The aggregate decoded-storage budget rejects this before any allocation.
+    assert_eq!(dec(&f), Err(Error::LimitExceeded("decode allocation bytes")));
+    // Under budget, an incomplete RLE stream must still fail as truncated.
+    let mut f = header(10, 16, 16, 32, 0);
+    f.extend_from_slice(&[0xFF, 1, 2, 3, 4]); // only 128 of 256 pixels
     assert_eq!(dec(&f), Err(Error::Malformed("truncated run-length data")));
     let mut f = header(2, 4, 4, 24, 0);
     f.extend_from_slice(&[0; 10]);
