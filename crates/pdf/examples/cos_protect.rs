@@ -1,4 +1,4 @@
-//! Encrypt a PDF: `cargo run -p craft-pdf --features cos --example cos_protect in.pdf out.pdf rc4-40|rc4-128|aes-128|aes-256 USER OWNER`
+//! Encrypt a PDF: `cargo run -p craft-pdf --features cos --example cos_protect in.pdf out.pdf rc4-40|rc4-128|rc4-128-crypt-filter|aes-128|aes-256 USER OWNER`
 /// 32 fresh bytes for the file key. `RandomState` is seeded by the operating system (as the
 /// engine's `entropy` uses it), so every run encrypts with a different key.
 fn seed() -> [u8; 32] {
@@ -18,11 +18,12 @@ fn main() {
     let algorithm = match alg.as_str() {
         "rc4-40" => craft_pdf::cos::Algorithm::Rc4_40,
         "rc4-128" => craft_pdf::cos::Algorithm::Rc4_128,
+        "rc4-128-crypt-filter" => craft_pdf::cos::Algorithm::Rc4_128CryptFilter,
         "aes-128" => craft_pdf::cos::Algorithm::Aes128,
         _ => craft_pdf::cos::Algorithm::Aes256,
     };
     let mut doc = craft_pdf::cos::Document::open(std::sync::Arc::new(std::fs::read(input).unwrap())).unwrap();
-    // `rc4-40` and `rc4-128` are the legacy schemes, which `set_encryption` refuses.
+    // `rc4-40`, `rc4-128` and `rc4-128-crypt-filter` are the legacy schemes, which `set_encryption` refuses.
     doc.set_encryption_legacy(&craft_pdf::cos::NewEncryption {
         algorithm,
         user_password: user,
