@@ -427,19 +427,25 @@ struct DeadlineReader<'a> {
 }
 impl Write for DeadlineReader<'_> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let left = self.end.checked_duration_since(Instant::now()).filter(|d| !d.is_zero())
+        let left = self
+            .end
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "CUPS exchange deadline exceeded"))?;
         self.stream.set_timeouts(left)?;
         self.stream.write(buf)
     }
-    fn flush(&mut self) -> std::io::Result<()> { self.stream.flush() }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
 }
 
 fn validate_reply_identity(request: &[u8], reply: &[u8]) -> Result<(), Error> {
-    if reply.get(..2) != Some(&[1,1]) || request.get(4..8).is_none() || request.get(4..8) != reply.get(4..8) {
+    if reply.get(..2) != Some(&[1, 1]) || request.get(4..8).is_none() || request.get(4..8) != reply.get(4..8) {
         return Err(Error::Spool("CUPS reply version or request id does not match; do not resubmit".into()));
     }
     Ok(())
+}
 
 impl Read for DeadlineReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
