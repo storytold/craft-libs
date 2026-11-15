@@ -5,7 +5,9 @@
 //!   `note`) sub-chunks of a `LIST` `adtl` chunk, and given a length by `ltxt`.
 //! - **XMP** (Adobe's tools): an `_PMX` chunk holding an XMP packet whose `xmpDM:markers` list has
 //!   one entry per marker (`xmpDM:startTime`, `xmpDM:duration`, `xmpDM:name`), counted in frames
-//!   of `xmpDM:frameRate` (`f44100` for samples at 44.1 kHz).
+//!   of `xmpDM:frameRate` (`f44100` for samples at 44.1 kHz), or with an explicit
+//!   FrameCount rate suffix (`15f24`, `15f30000s1001`). Durations with a distinct rate
+//!   are converted to the marker start rate without app-specific time quantization.
 //!
 //! RF64 files (WAVs over 4 GB) carry a `0xFFFFFFFF` size for a chunk too big for 32 bits and give its real size in a
 //! `ds64` chunk; those sizes are resolved so the chunks after the audio are still found.
@@ -15,7 +17,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// Marker coordinates as stored by the file, before app-specific time quantization.
+/// Marker coordinates before app-specific time quantization. Explicit XMP duration
+/// rates are normalized to the start coordinate rate; bare counts retain the legacy
+/// track/file-rate interpretation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Marker {
     /// Start in frames at `rate`.
@@ -233,15 +237,51 @@ fn cue_markers(chunks: &[([u8; 4], &[u8])], rate: f64, limited: &mut bool) -> Ve
 /// The text of `name` in an XMP entry, as an attribute (`name="v"`) or an element
 /// (`<name>v</name>`).
 fn xmp_value(entry: &str, name: &str) -> Option<String> {
-    let attr = format!("{name}=\"");
-    if let Some(i) = entry.find(&attr) {
-        let rest = entry.get(i + attr.len()..)?;
-        return Some(unescape(rest.get(..rest.find('"')?)?));
+    // Each entry starts just after `<rdf:li`. Scan only tag attributes, skipping
+    // quoted values so a label containing an attribute-like string cannot spoof it.
+    let bytes = entry.as_bytes();
+    let mut at = 0;
+    let mut in_tag = true;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'<' => in_tag = true,
+            b'>' => in_tag = false,
+            b'\'' | b'"' if in_tag => {
+                let quote = bytes[at];
+                at += 1;
+                while at < bytes.len() && bytes[at] != quote {
+                    at += 1;
+                }
+            }
+            _ if in_tag && (at == 0 || xml_space(bytes[at - 1])) && bytes[at..].starts_with(name.as_bytes()) => {
+                let mut value = at + name.len();
+                while value < bytes.len() && xml_space(bytes[value]) {
+                    value += 1;
+                }
+                if bytes.get(value) == Some(&b'=') {
+                    value += 1;
+                    while value < bytes.len() && xml_space(bytes[value]) {
+                        value += 1;
+                    }
+                    if let Some(&quote @ (b'\'' | b'"')) = bytes.get(value) {
+                        let start = value + 1;
+                        let end = bytes.get(start..)?.iter().position(|&b| b == quote)? + start;
+                        return Some(unescape(entry.get(start..end)?));
+                    }
+                }
+            }
+            _ => {}
+        }
+        at += 1;
     }
     let open = format!("<{name}>");
     let i = entry.find(&open)?;
     let rest = entry.get(i + open.len()..)?;
     Some(unescape(rest.get(..rest.find('<')?)?))
+}
+
+fn xml_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\r' | b'\n')
 }
 
 fn unescape(s: &str) -> String {
@@ -284,7 +324,19 @@ fn xmp_rate(text: &str) -> Option<f64> {
     let t = text.trim().strip_prefix('f')?;
     let (num, den) = t.split_once('s').unwrap_or((t, "1"));
     let (n, d): (f64, f64) = (num.parse().ok()?, den.parse().ok()?);
-    (n > 0.0 && d > 0.0).then_some(n / d)
+    (n.is_finite() && d.is_finite() && n > 0.0 && d > 0.0 && (n / d).is_finite() && n / d > 0.0).then_some(n / d)
+}
+
+/// Adobe XMP FrameCount: a count optionally followed by `fRATE[sSCALE]`.
+/// Bare counts retain the caller's legacy track/file-rate interpretation.
+fn xmp_count(text: &str, default_rate: f64) -> Option<(f64, f64)> {
+    let text = text.trim();
+    let (count, rate) = match text.find('f') {
+        Some(at) => (text.get(..at)?, xmp_rate(text.get(at..)?)?),
+        None => (text, default_rate),
+    };
+    let count: f64 = count.parse().ok()?;
+    (count.is_finite() && rate.is_finite() && rate > 0.0).then_some((count, rate))
 }
 
 /// The markers of an XMP packet's `xmpDM:markers` entries.
@@ -297,10 +349,16 @@ fn xmp_markers(packet: &[u8], file_rate: f64) -> Vec<Marker> {
         if let Some(r) = xmp_value(entry, "xmpDM:frameRate").as_deref().and_then(xmp_rate) {
             rate = r;
         }
-        let Some(start) = xmp_value(entry, "xmpDM:startTime").and_then(|v| v.trim().parse::<f64>().ok()) else { continue };
-        let length = xmp_value(entry, "xmpDM:duration").and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(0.0);
+        let Some((start, marker_rate)) = xmp_value(entry, "xmpDM:startTime").and_then(|v| xmp_count(&v, rate)) else { continue };
+        let length = xmp_value(entry, "xmpDM:duration")
+            .and_then(|v| xmp_count(&v, rate))
+            .map(|(count, duration_rate)| if duration_rate == marker_rate { count } else { count / duration_rate * marker_rate })
+            .unwrap_or(0.0);
+        if !length.is_finite() {
+            continue;
+        }
         let comment = xmp_value(entry, "xmpDM:name").unwrap_or_default();
-        out.push(Marker { start, duration: length, rate, name: comment });
+        out.push(Marker { start, duration: length, rate: marker_rate, name: comment });
         if out.len() >= MAX_MARKERS {
             break;
         }
@@ -633,5 +691,31 @@ mod tests {
     fn entity_lookahead_keeps_previous_semicolon_boundary() {
         assert_eq!(unescape("&#00000065;"), "A");
         assert_eq!(unescape("&#000000065;"), "&#000000065;");
+    }
+    #[test]
+    fn xmp_quotes_spacing_and_attribute_boundaries() {
+        let packet = br#"<rdf:li xmpDM:startTime = '24000' xmpDM:duration	=
+'12000' xmpDM:name='single &amp; quoted'/>"#;
+        let markers = xmp_markers(packet, 48000.0);
+        assert_eq!(markers.len(), 1);
+        assert_eq!((markers[0].start, markers[0].duration, markers[0].rate), (24000.0, 12000.0, 48000.0));
+        assert_eq!(markers[0].name, "single & quoted");
+        let spoof = r#" label=" xmpDM:startTime='7'" otherxmpDM:startTime='8' xmpDM:startTime = '9'/>"#;
+        assert_eq!(xmp_value(spoof, "xmpDM:startTime").as_deref(), Some("9"));
+        assert!(xmp_value(" xmpDM:startTime='unterminated", "xmpDM:startTime").is_none());
+    }
+
+    #[test]
+    fn xmp_frame_counts_preserve_explicit_and_mixed_rates() {
+        let packet = br#"<rdf:li xmpDM:frameRate='f48000'><rdf:li xmpDM:startTime='15f24' xmpDM:duration='15f30000s1001'/><rdf:li xmpDM:startTime='48000' xmpDM:duration='12f24'/><rdf:li xmpDM:startTime='15f24' xmpDM:duration='24000'/></rdf:li>"#;
+        let markers = xmp_markers(packet, 44100.0);
+        assert_eq!(markers.len(), 3);
+        assert_eq!((markers[0].start, markers[0].rate), (15.0, 24.0));
+        assert!((markers[0].duration / markers[0].rate - 0.5005).abs() < 1e-12);
+        assert_eq!((markers[1].start, markers[1].duration, markers[1].rate), (48000.0, 24000.0, 48000.0));
+        assert_eq!((markers[2].start, markers[2].duration, markers[2].rate), (15.0, 12.0, 24.0));
+        for invalid in ["15f0", "15f24s0", "15fNaN", "15finf", "NaN", "1e999", "15f24junk"] {
+            assert!(xmp_count(invalid, 48000.0).is_none(), "{invalid}");
+        }
     }
 }
