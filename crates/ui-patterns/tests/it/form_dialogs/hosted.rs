@@ -140,6 +140,54 @@ fn hosted_forms_answer_ok_with_their_values() {
     assert_eq!(guide, Some(250.0), "New Guide answers the guide at the set position");
 }
 
+// The JPEG quality row lists the quality the dialog opened with, and the quality automation sets, kept in the form
+// automation gives it, is the one OK answers.
+#[trial]
+fn the_jpeg_quality_lists_its_opening_value_and_ok_answers_a_set_one() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    let id = host.borrow_mut().open(HostedFormatOptions::new(ExportOptionsKind::Jpeg).initial(FormatOptions::Jpeg(JpegOptions::new(10))));
+    fixture.idle(2);
+    let quality = |host: &Rc<RefCell<DialogHost>>| {
+        host.borrow().open_dialogs().into_iter().find(|open| open.id == id).and_then(|open| open.fields).and_then(|fields| fields["quality"].as_u64())
+    };
+    assert_eq!(quality(&host), Some(10), "the row opens with the start quality");
+    let ctx = fixture.ctx().clone();
+    assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "quality", json!(3)), Ok(()));
+    assert_eq!(quality(&host), Some(3));
+    assert!(host.borrow_mut().confirm::<HostedFormatOptions>(&ctx), "OK is enabled");
+    let answered = match host.borrow_mut().take::<HostedFormatOptions>() {
+        Some(DialogResult::Ok(FormatOptions::Jpeg(options))) => Some(options.quality),
+        _ => None,
+    };
+    assert_eq!(answered, Some(3), "OK answers the set quality");
+}
+
+// New Guide's OK refuses while the Position field holds text that does not parse, rather than answering the last good
+// position; once a parsing text is committed, OK answers it.
+#[trial]
+fn new_guide_refuses_ok_while_the_position_text_does_not_parse() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(new_guide());
+    fixture.settle();
+    let ctx = fixture.ctx().clone();
+    let type_position = |fixture: &mut Fixture, text: &str| {
+        let position = fixture.by_label("Position").expect("the Position field");
+        fixture.click(&position).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(text);
+        fixture.settle();
+    };
+    type_position(&mut fixture, "far");
+    assert!(!host.borrow_mut().confirm::<HostedNewGuideDialog>(&ctx), "text that does not parse is refused");
+    assert!(!host.borrow().is_empty(), "the dialog stays open");
+    type_position(&mut fixture, "40");
+    fixture.key(Key::Tab, Modifiers::NONE).settle();
+    assert!(host.borrow_mut().confirm::<HostedNewGuideDialog>(&ctx), "text that parses is taken");
+    let guide = host.borrow_mut().take::<HostedNewGuideDialog>().and_then(DialogResult::ok).map(|guide| guide.position);
+    assert_eq!(guide, Some(40.0));
+}
+
 #[trial]
 fn hosted_export_as_finishes_when_the_app_answers_its_save_request() {
     let host = Rc::new(RefCell::new(DialogHost::new()));
@@ -159,7 +207,8 @@ fn hosted_export_as_finishes_when_the_app_answers_its_save_request() {
     }
     let ctx = fixture.ctx().clone();
     assert!(!host.borrow_mut().confirm::<HostedExportAs>(&ctx), "automation's OK without a path waits for one");
-    let asked = host.borrow_mut().get_mut::<HostedExportAs>().and_then(HostedExportAs::pick_path).expect("automation's OK asks for a path as Export does");
+    let asked =
+        host.borrow_mut().get_mut::<HostedExportAs>().and_then(HostedExportAs::pick_path).expect("automation's OK asks for a path as Export does");
     assert_eq!(asked.key, request.key, "the same save request as the button's");
 
     let path = PathBuf::from("/tmp/poster.png");
