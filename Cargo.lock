@@ -1926,6 +1926,7 @@ dependencies = [
  "avif-serialize",
  "craft-heif",
  "craft-jpeg",
+ "craft-media-testkit",
  "craft-metadata",
  "craft-video",
  "crc32fast",
