@@ -109,7 +109,13 @@ pub(crate) fn value_bytes(records: &[Record]) -> Option<usize> {
 /// Bytes a mesh keeps.
 pub(crate) fn mesh_bytes(m: &Mesh) -> Option<usize> {
     let uvs = m.uv_sets.iter().try_fold(0usize, |a, s| a.checked_add(s.len().checked_mul(8)?))?;
-    let pools = m.positions.len().checked_mul(24)?.checked_add(m.normals.len().checked_mul(24)?)?.checked_add(uvs)?;
+    let pools = m
+        .positions
+        .len()
+        .checked_mul(24)?
+        .checked_add(m.normals.len().checked_mul(24)?)?
+        .checked_add(uvs)?
+        .checked_add(m.colors.len().checked_mul(16)?)?;
     m.parts.iter().try_fold(pools, |a, p| a.checked_add(p.corners.len().checked_mul(12)?)?.checked_add(p.face_sizes.len().checked_mul(4)?))
 }
 
@@ -1077,10 +1083,19 @@ impl<'a> Build<'a, '_> {
         let pool = |what: &str, n: usize| {
             if n > limits.max_vertices { Err(too_large(KIND, format!("more than {} {what}", limits.max_vertices))) } else { Ok(()) }
         };
-        let positions: Vec<[f64; 3]> = vertices.floats().as_chunks::<3>().0.iter().map(|c| c.map(finite)).collect();
+        let mut positions: Vec<[f64; 3]> = vertices.floats().as_chunks::<3>().0.iter().map(|c| c.map(finite)).collect();
         pool("vertices", positions.len())?;
+        let original_positions = positions.len();
         let normals = Layer::of(geom, "LayerElementNormal", "Normals", &["NormalsIndex", "NormalIndex"], 3);
         let uvs = Layer::of(geom, "LayerElementUV", "UV", &["UVIndex"], 2);
+        let colors = Layer::of(geom, "LayerElementColor", "Colors", &["ColorIndex", "ColorsIndex"], 4);
+        if colors.is_some() && positions.len().checked_mul(16).is_none_or(|n| n > self.budget.left.get()) {
+            return Err(too_large(KIND, "vertex colors exceed the memory limit"));
+        }
+        let mut vertex_colors = colors.as_ref().map(|_| vec![[1.0; 4]; positions.len()]).unwrap_or_default();
+        let mut color_indices = HashMap::<(u32, u32), u32>::new();
+        let mut first_color = HashMap::<u32, u32>::new();
+        let mut colors_complete = colors.is_some();
         let slots = geom.child("LayerElementMaterial").and_then(|e| {
             let mapping = e.child("MappingInformationType").and_then(|m| m.str_at(0)).unwrap_or("AllSame");
             Some((mapping == "ByPolygon", e.child("Materials")?.ints()))
@@ -1094,12 +1109,44 @@ impl<'a> Build<'a, '_> {
         for (pv, raw) in pvi.ints().into_iter().enumerate() {
             // The last corner of a polygon is stored as `-index - 1`.
             let (v, last) = if raw < 0 { (!raw, true) } else { (raw, false) };
-            match u32::try_from(v).ok().filter(|v| (*v as usize) < positions.len()) {
-                Some(p) => face.push(Corner {
-                    position: p,
-                    normal: Layer::at(normal_layer, pv, p as usize, poly),
-                    uv: Layer::at(uv_layer, pv, p as usize, poly),
-                }),
+            match u32::try_from(v).ok().filter(|v| (*v as usize) < original_positions) {
+                Some(p) => {
+                    let normal = Layer::at(normal_layer, pv, p as usize, poly);
+                    let uv = Layer::at(uv_layer, pv, p as usize, poly);
+                    let mut position = p;
+                    if let Some((layer, values)) = &colors {
+                        let color = Layer::at(Some(layer), pv, p as usize, poly);
+                        let rgba = usize::try_from(color)
+                            .ok()
+                            .and_then(|i| i.checked_mul(4))
+                            .and_then(|i| i.checked_add(4).and_then(|end| values.get(i..end)));
+                        if let Some(rgba) = rgba {
+                            if let Some(existing) = color_indices.get(&(p, color)) {
+                                position = *existing;
+                            } else {
+                                if first_color.insert(p, color).is_some() {
+                                    pool("vertices", positions.len().saturating_add(1))?;
+                                    if positions.len().saturating_add(1).checked_mul(40).is_none_or(|n| n > self.budget.left.get()) {
+                                        return Err(too_large(KIND, "colored vertices exceed the memory limit"));
+                                    }
+                                    position = u32::try_from(positions.len()).map_err(|_| too_large(KIND, "too many vertices"))?;
+                                    let Some(original) = positions.get(p as usize).copied() else { continue };
+                                    positions.push(original);
+                                    vertex_colors.push([1.0; 4]);
+                                }
+                                if let Some(dst) = vertex_colors.get_mut(position as usize) {
+                                    if let [r, g, b, a] = rgba {
+                                        *dst = [finite(*r) as f32, finite(*g) as f32, finite(*b) as f32, finite(*a) as f32];
+                                    }
+                                }
+                                color_indices.insert((p, color), position);
+                            }
+                        } else {
+                            colors_complete = false;
+                        }
+                    }
+                    face.push(Corner { position, normal, uv });
+                }
                 None => broken = true,
             }
             if face.len() > limits.max_face_corners {
@@ -1152,6 +1199,20 @@ impl<'a> Build<'a, '_> {
         let uvs: Option<Vec<[f32; 2]>> =
             uvs.map(|(_, d)| d.as_chunks::<2>().0.iter().map(|c| [finite(c[0]) as f32, 1.0 - finite(c[1]) as f32]).collect());
         pool("UVs", uvs.as_ref().map_or(0, Vec::len))?;
-        Ok(Some(Mesh { name: name.to_string(), positions, normals, uv_sets: uvs.into_iter().collect(), parts, ..Mesh::default() }))
+        if !colors_complete {
+            vertex_colors.clear();
+            if colors.is_some() {
+                self.scene.warnings.push("FBX: incomplete vertex color layer was omitted".into());
+            }
+        }
+        Ok(Some(Mesh {
+            name: name.to_string(),
+            positions,
+            normals,
+            uv_sets: uvs.into_iter().collect(),
+            colors: vertex_colors,
+            parts,
+            ..Mesh::default()
+        }))
     }
 }
