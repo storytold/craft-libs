@@ -473,6 +473,32 @@ mod gated {
 }
 
 #[test]
+fn predefined_quit_ignores_a_rename_through_a_local_binding_of_muda() {
+    let source = r#"
+use other_menu as muda;
+use muda::PredefinedMenuItem as Item;
+type Alias = muda::PredefinedMenuItem;
+fn menu() {
+    let a = Item::quit(None);
+    let b = Alias::quit(None);
+}
+mod absolute {
+    use other_menu as muda;
+    use ::muda::PredefinedMenuItem as Item;
+    type Alias = ::muda::PredefinedMenuItem;
+    use ::{muda::PredefinedMenuItem as Grouped};
+    fn menu() { let c = Item::quit(None); let d = Alias::quit(None); let e = Grouped::quit(None); }
+}
+mod crate_root {
+    use muda::PredefinedMenuItem as Item;
+    type Alias = muda::PredefinedMenuItem;
+    fn menu() { let f = Item::quit(None); let g = Alias::quit(None); }
+}
+"#;
+    assert_eq!(lines(&predefined_quit([("src/menu.rs", source)])), vec![14, 19]);
+}
+
+#[test]
 fn predefined_quit_ignores_a_bare_name_that_another_import_or_a_local_type_binds_in_its_scope() {
     let imported = r#"
 use other_menu::PredefinedMenuItem;
@@ -589,6 +615,34 @@ fn run() {
 }
 "#;
     assert_eq!(lines(&std_instant([("src/lib.rs", source)])), vec![4, 5, 11, 16]);
+}
+
+#[test]
+fn std_instant_keeps_an_alias_that_a_cfg_gated_import_may_shadow() {
+    let source = r#"
+use std::time as clock;
+fn now() {
+    #[cfg(feature = "web-clock")]
+    use web_time as clock;
+    let a = clock::Instant::now();
+}
+fn gated() {
+    #[cfg(feature = "web-clock")]
+    mod clock {}
+    let b = clock::Instant::now();
+}
+#[cfg(feature = "web-clock")]
+fn web() {
+    use web_time as clock;
+    let c = clock::Instant::now();
+}
+fn wasm() {
+    #[cfg(target_arch = "wasm32")]
+    use web_time as clock;
+    let d = clock::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/lib.rs", source)])), vec![6, 11]);
 }
 
 #[test]
@@ -838,6 +892,39 @@ fn run(state: State, other: State) {
 }
 "#;
     assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![6, 9, 12, 15, 18]);
+}
+
+#[test]
+fn std_instant_ends_a_native_cfg_if_at_its_body_not_at_a_block_in_its_condition() {
+    let source = r#"
+fn run(ready: bool, items: Vec<u64>) {
+    #[cfg(unix)]
+    if { ready } { let _a = std::time::Instant::now(); }
+    let b = std::time::Instant::now();
+    #[cfg(unix)]
+    while !{ ready } { let _c = std::time::Instant::now(); }
+    let d = std::time::Instant::now();
+    #[cfg(unix)]
+    if ready && unsafe { check() } { let _e = std::time::Instant::now(); }
+    let f = std::time::Instant::now();
+    #[cfg(unix)]
+    for item in { items } { let _g = std::time::Instant::now(); }
+    let h = std::time::Instant::now();
+    #[cfg(unix)]
+    match { 1 } { _ => { let _i = std::time::Instant::now(); } }
+    let j = std::time::Instant::now();
+    #[cfg(unix)]
+    if let true = { ready } { let _k = std::time::Instant::now(); }
+    let l = std::time::Instant::now();
+    #[cfg(unix)]
+    if loop { break ready } { let _m = std::time::Instant::now(); }
+    let n = std::time::Instant::now();
+    #[cfg(unix)]
+    if async move { ready }.await { let _o = std::time::Instant::now(); }
+    let p = std::time::Instant::now();
+}
+"#;
+    assert_eq!(lines(&std_instant([("src/run.rs", source)])), vec![5, 8, 11, 14, 17, 20, 23, 26]);
 }
 
 #[test]
