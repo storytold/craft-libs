@@ -426,13 +426,15 @@ impl<'b> BodyHooks<'b> {
         });
         let taken = measured.unwrap_or(0.0);
         let cut = if taken > 0.0 { taken + self.end_gap + self.rules.end } else { 0.0 };
-        let end_w = measured.unwrap_or(width);
         let end_bottom = if full { footer_top + across_h } else { footer_top };
-        let mut end = if rtl {
-            Rect::from_min_max(Pos2::new(left, top), Pos2::new(left + end_w, end_bottom.max(top)))
-        } else {
-            Rect::from_min_max(Pos2::new(right - end_w, top), Pos2::new(right, end_bottom.max(top)))
+        // The line's own edges before the first measure: a line of unbounded room (a content-sized container measured
+        // in an unbounded flow) has no finite width to take from its other edge.
+        let (end_left, end_right) = match measured {
+            None => (left, right),
+            Some(end_w) if rtl => (left, left + end_w),
+            Some(end_w) => (right - end_w, right),
         };
+        let mut end = Rect::from_min_max(Pos2::new(end_left, top), Pos2::new(end_right, end_bottom.max(top)));
         if rtl {
             body.min.x = (body.min.x + cut).min(body.max.x);
         } else {

@@ -187,7 +187,7 @@ impl Frames {
     /// One frame with no events; returns the shapes it painted, nested shapes flattened.
     pub fn frame_shapes(&mut self, mut ui: impl FnMut(&mut Ui)) -> Vec<egui::Shape> {
         set_input(&self.ctx, self.input());
-        self.time += DT;
+        self.tick();
         fixture::run_frame_shapes(&self.ctx, self.time, self.screen, &mut ui)
     }
 
@@ -235,8 +235,14 @@ impl Frames {
         }
     }
 
+    /// Moves the clock on one frame from the later of its own time and the context's, so frames over a context the
+    /// caller also drives (an app's own, which another harness ran between these frames) never take its time back.
+    fn tick(&mut self) {
+        self.time = self.time.max(self.ctx.input(|i| i.time)) + DT;
+    }
+
     fn run(&mut self, viewport: egui::ViewportId, mut events: Vec<Event>, ui: impl FnMut(&mut Ui)) -> bool {
-        self.time += DT;
+        self.tick();
         if self.told != self.modifiers {
             self.told = self.modifiers;
             events.insert(0, fixture::modifiers_changed(self.modifiers));
