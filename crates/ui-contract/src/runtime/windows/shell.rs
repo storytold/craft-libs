@@ -28,9 +28,14 @@ pub fn os_of(ctx: &Context) -> Os {
 }
 
 /// Makes the shell run on `os`, as a test of the OS matrix does: the capabilities and the menu placement of a
-/// native build follow it. egui's own OS is the caller's to set.
+/// native build follow it, and so does egui's own OS (its text editing keys).
 #[cfg(feature = "testing")]
 pub(crate) fn set_os(ctx: &Context, os: Os) {
+    ctx.set_os(match os {
+        Os::Mac => egui::os::OperatingSystem::Mac,
+        Os::Windows => egui::os::OperatingSystem::Windows,
+        _ => egui::os::OperatingSystem::Nix,
+    });
     shared(ctx, |shared| {
         let root_chrome = shared.root_frame.as_ref().map(chrome_of);
         let shell = shared.shell.get_or_insert_with(ShellInfo::default);

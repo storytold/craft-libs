@@ -79,7 +79,7 @@ mod store {
             notes.push(format!("Settings were imported from {}", from.display()));
         }
         if !report.section_errors.is_empty() {
-            notes.push(format!("{} settings sections were reset to their defaults", report.section_errors.len()));
+            notes.push(format!("{} settings were reset to their defaults", report.section_errors.len()));
         }
         notes.extend(report.warning.iter().cloned());
         notes

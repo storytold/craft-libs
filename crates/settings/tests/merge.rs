@@ -1,7 +1,7 @@
 //! `document::merge_changes` (gap 31).
 use super::common;
 
-use common::Prefs;
+use common::{Prefs, open_in, read_config, write_config};
 use craft_settings::document::{merge_changes, parse};
 
 fn merged(base: &str, ours: &str, theirs: &str) -> String {
@@ -42,4 +42,21 @@ fn stale_migration_is_not_written_over() {
     let out = parse(&merged(base, ours, theirs)).unwrap();
     assert_eq!(out["appearance"]["theme"].as_str(), Some("light"), "their choice stays");
     assert_eq!(out["appearance"]["ui_scale"].as_float(), Some(1.5), "our own change is written");
+}
+
+// Two instances open a file without the section they then each change one key of: each keeps the other's key, as a
+// section the file lacked holds its defaults, not this instance's change.
+#[test]
+fn a_section_the_file_lacked_merges_only_the_keys_each_instance_changed() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_config(tmp.path(), "schema_version = 2\n");
+    let (mut first, _) = open_in(tmp.path());
+    let (mut second, _) = open_in(tmp.path());
+    first.update(|p| p.general.language = "fr".into());
+    second.update(|p| p.general.autosave_minutes = 9);
+    first.flush().unwrap();
+    second.flush().unwrap();
+    let (reopened, _) = open_in(tmp.path());
+    let general = &reopened.get().general;
+    assert_eq!((general.language.as_str(), general.autosave_minutes), ("fr", 9), "{}", read_config(tmp.path()));
 }

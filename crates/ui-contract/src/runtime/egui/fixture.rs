@@ -576,15 +576,6 @@ pub(crate) fn access_set_value(target: egui::Id, value: f64) -> Event {
     })
 }
 
-/// Tells the context which operating system it runs on.
-pub(crate) fn set_os(ctx: &Context, os: craft_host::target::Os) {
-    ctx.set_os(match os {
-        craft_host::target::Os::Mac => egui::os::OperatingSystem::Mac,
-        craft_host::target::Os::Windows => egui::os::OperatingSystem::Windows,
-        _ => egui::os::OperatingSystem::Nix,
-    });
-}
-
 /// An IME preedit event of `text` with no cursor range.
 pub fn ime_preedit(text: &str) -> Event {
     Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: None })
