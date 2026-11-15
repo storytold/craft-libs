@@ -27,6 +27,8 @@ use std::collections::HashMap;
 pub mod document;
 /// XFL's edge-attribute grammar, independent of any consuming application's geometry types.
 pub mod edges;
+/// Borrowed views of native XFL filter records.
+pub mod filters;
 /// Borrowed views of native XFL media library records.
 pub mod media;
 /// Borrowed views of native XFL shape and style elements.
