@@ -1,4 +1,5 @@
 //! Authenticated JSON-lines request framing and dispatch for local control services.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
 use subtle::ConstantTimeEq;
@@ -134,6 +135,63 @@ pub fn serve_lines<R: Read, W: Write>(read: R, mut out: W, token: &str, max_line
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rejects_bad_request_shapes_without_dispatching() {
+        for input in [&b"\xff\n"[..], &b"[]\n"[..], &b"{}\n"[..]] {
+            let mut out = Vec::new();
+            serve_lines(input, &mut out, "secret", 1024, |_, _| panic!("must not dispatch"));
+            let reply: Value = serde_json::from_slice(&out).unwrap();
+            assert_eq!(reply["ok"], false);
+            assert!(reply["error"].as_str().unwrap().contains("closing the connection"));
+        }
+    }
+    #[test]
+    fn timeout_after_partial_line_never_dispatches() {
+        struct Partial(bool);
+        impl Read for Partial {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if !self.0 {
+                    self.0 = true;
+                    buf[..2].copy_from_slice(b"{\"");
+                    return Ok(2);
+                }
+                Err(std::io::ErrorKind::TimedOut.into())
+            }
+        }
+        let mut out = Vec::new();
+        serve_lines(Partial(false), &mut out, "secret", 1024, |_, _| panic!("must not dispatch"));
+        assert!(out.is_empty());
+    }
+    #[test]
+    fn line_boundaries_and_closed_dispatch_are_preserved() {
+        let mut buf = Vec::new();
+        assert_eq!(read_bounded_line(&mut &b"abc\r\n"[..], &mut buf, 4), Ok(true));
+        assert_eq!(buf, b"abc");
+        assert_eq!(read_bounded_line(&mut &b"abcd\n"[..], &mut buf, 4), Ok(true));
+        assert_eq!(buf, b"abcd");
+        let mut out = Vec::new();
+        serve_lines(&b"{\"method\":\"x\",\"token\":\"s\"}\n"[..], &mut out, "s", 1024, |_, _| None);
+        assert!(out.is_empty());
+    }
+    #[test]
+    fn output_failure_stops_following_requests() {
+        struct Closed;
+        impl Write for Closed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let input = b"{\"method\":\"x\",\"token\":\"s\"}\n{\"method\":\"y\",\"token\":\"s\"}\n";
+        let mut calls = 0;
+        serve_lines(&input[..], Closed, "s", 1024, |_, _| {
+            calls += 1;
+            Some(json!({"ok": true}))
+        });
+        assert_eq!(calls, 1);
+    }
     #[test]
     fn client_request_and_reply_keep_optional_fields() {
         let line = request_line(7, None, "status", &json!({"a": 1}));
