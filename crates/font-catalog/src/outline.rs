@@ -237,6 +237,25 @@ mod tests {
     }
 
     #[test]
+    fn streaming_adapter_forwards_each_command_and_rejects_an_invalid_prefix() {
+        let mut pen = PathPen::new();
+        {
+            let mut sink = Sink(&mut pen);
+            OutlinePen::move_to(&mut sink, 1.0, 2.0);
+            OutlinePen::line_to(&mut sink, 3.0, 4.0);
+            OutlinePen::quad_to(&mut sink, 5.0, 6.0, 7.0, 8.0);
+            OutlinePen::curve_to(&mut sink, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0);
+            OutlinePen::close(&mut sink);
+        }
+        assert_eq!(pen.path.elements().len(), 5);
+        assert_eq!(pen.path.elements()[2], PathEl::QuadTo((5.0, 6.0).into(), (7.0, 8.0).into()));
+        let mut invalid = PathPen::new();
+        OutlinePen::line_to(&mut invalid, 1.0, 2.0);
+        assert!(invalid.invalid);
+        assert!(invalid.path.elements().is_empty());
+    }
+
+    #[test]
     fn pen_caps_path_growth() {
         let mut pen = PathPen::new();
         OutlinePen::move_to(&mut pen, 0.0, 0.0);
@@ -275,27 +294,31 @@ mod tests {
         assert_ne!(light_path, bold_path);
     }
 
+    // Construct a minimal CFF font so CI can exercise the public API without installed fonts.
+    fn cff_font(program: &[u8]) -> Vec<u8> {
+        let mut cff = vec![1, 0, 4, 4, 0, 1, 1, 1, 2, b'X', 0, 1, 1, 1, 7, 29, 0, 0, 0, 25, 17, 0, 0, 0, 0];
+        cff.extend_from_slice(&[0, 1, 4]);
+        cff.extend_from_slice(&1u32.to_be_bytes());
+        cff.extend_from_slice(&((program.len() as u32) + 1).to_be_bytes());
+        cff.extend_from_slice(program);
+        let mut builder = write_fonts::FontBuilder::new();
+        let mut head = vec![0; 54];
+        head[18..20].copy_from_slice(&1000u16.to_be_bytes());
+        let mut hhea = vec![0; 36];
+        hhea[34..36].copy_from_slice(&1u16.to_be_bytes());
+        builder.add_raw(write_fonts::types::Tag::new(b"head"), head);
+        builder.add_raw(write_fonts::types::Tag::new(b"hhea"), hhea);
+        builder.add_raw(write_fonts::types::Tag::new(b"hmtx"), vec![0, 100, 0, 0]);
+        builder.add_raw(write_fonts::types::Tag::new(b"maxp"), vec![0, 0, 0x50, 0, 0, 1]);
+        builder.add_raw(write_fonts::types::Tag::new(b"CFF "), cff);
+        builder.build()
+    }
+
     #[test]
     fn malformed_cff_recovers_the_same_prefix_as_direct_drawing() {
-        use skrifa::raw::ps::cff::CffFontRef;
-        let Ok(dir) = std::env::var("CRAFT_FONTS_DIR") else { return };
-        let mut bytes = std::fs::read(std::path::Path::new(&dir).join("fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf")).unwrap();
-        let (gid, start, len) = {
-            let f = FontRef::new(&bytes).unwrap();
-            let cff = f.table_data(Tag::new(b"CFF ")).unwrap().as_bytes();
-            let cff = CffFontRef::new(cff, 0, None).unwrap();
-            let (gid, cs) = (0..cff.num_glyphs())
-                .find_map(|gid| {
-                    let cs = cff.charstrings().get(gid as usize)?;
-                    (cs.len() >= 8).then_some((gid, cs))
-                })
-                .unwrap();
-            (gid, cs.as_ptr() as usize - bytes.as_ptr() as usize, cs.len())
-        };
-        assert!(len >= 8);
-        // A move and line followed by a Type 2 callsubr without an operand. It emits a path
-        // prefix before the parser reports an error, without changing the font table offsets.
-        bytes[start..start + 8].copy_from_slice(&[139, 139, 21, 239, 139, 5, 10, 14]);
+        // Move and line, then callsubr without an operand: a prefix is emitted before failure.
+        let bytes = cff_font(&[139, 139, 21, 239, 139, 5, 10, 14]);
+        let gid = 0;
         let f = FontRef::new(&bytes).unwrap();
         let mut old = PathPen::new();
         let result =
@@ -303,6 +326,8 @@ mod tests {
         assert!(result.is_err());
         assert!(!old.path.elements().is_empty());
         let shared = FontOutline::from_bytes(&bytes, 0, &[]).unwrap();
+        assert_eq!(shared.metrics().units_per_em, 1000);
+        assert_eq!(shared.glyph_for('A'), None);
         let (prefix, status) = shared.outline_recovering(gid).unwrap();
         assert!(matches!(status, Err(OutlineError::Draw(_))));
         assert_eq!(prefix, old.path);
@@ -314,28 +339,13 @@ mod tests {
 
     #[test]
     fn streaming_preserves_a_large_valid_cff_outline() {
-        let Ok(dir) = std::env::var("CRAFT_FONTS_DIR") else { return };
-        let source = std::fs::read(std::path::Path::new(&dir).join("fonts/noto-sans-cjk-sc/NotoSansCJKsc-Regular.otf")).unwrap();
-        let source = FontRef::new(&source).unwrap();
-        // Minimal CFF with a single generated Type 2 charstring. The glyph has over 100,000
-        // valid line segments; no binary fixture is copied into this repository.
-        let mut program = vec![139, 139, 21]; // rmoveto 0,0
+        // Minimal CFF with more than 100,000 line segments.
+        let mut program = vec![139, 139, 21];
         for _ in 0..100_001 {
             program.extend_from_slice(&[140, 6]);
-        } // hlineto 1
-        program.push(14); // endchar
-        let mut cff = vec![1, 0, 4, 4, 0, 1, 1, 1, 2, b'X', 0, 1, 1, 1, 7, 29, 0, 0, 0, 25, 17, 0, 0, 0, 0];
-        cff.extend_from_slice(&[0, 1, 4]);
-        cff.extend_from_slice(&1u32.to_be_bytes());
-        cff.extend_from_slice(&((program.len() as u32) + 1).to_be_bytes());
-        cff.extend_from_slice(&program);
-        let mut builder = write_fonts::FontBuilder::new();
-        for tag in [b"head", b"maxp", b"hhea", b"hmtx"] {
-            builder.add_raw(write_fonts::types::Tag::new(tag), source.table_data(Tag::new(tag)).unwrap().as_bytes().to_vec());
         }
-        assert!(skrifa::raw::ps::cff::CffFontRef::new(&cff, 0, None).is_ok(), "synthetic CFF parses");
-        builder.add_raw(write_fonts::types::Tag::new(b"CFF "), cff);
-        let bytes = builder.build();
+        program.push(14);
+        let bytes = cff_font(&program);
         let shared = FontOutline::from_bytes(&bytes, 0, &[]).unwrap();
         struct Count(usize);
         impl GlyphPen for Count {
