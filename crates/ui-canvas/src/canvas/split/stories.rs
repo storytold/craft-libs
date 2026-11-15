@@ -15,72 +15,106 @@ use egui::{Ui, Vec2};
 /// The widest the left views of the invalid story may be, as a fraction of the area.
 const MOST_LEFT: f32 = 0.8;
 
-/// The names of the panes' canvases, by pane.
-const NAMES: [&str; 4] = ["Main view", "View", "View", "View"];
+/// The pane of two side by side views that shows the main view: the right one, where the views have always kept it.
+const MAIN_OF_TWO: usize = 1;
 
-/// Shows a view of the document, fitted to the pane, in each pane of `layout`, the first pane active.
-fn split(ui: &mut Ui, layout: SplitLayout, at: Bind<'_, SplitAt>, shown: SplitAt) -> StoryOutput {
+/// The pane of four views that shows the main view: the bottom right one.
+const MAIN_OF_FOUR: usize = 3;
+
+/// Shows a view of the document, fitted to the pane, in each pane of `layout` with `count` documents. Pane `main` is
+/// the active one and its canvas is named "Main view".
+fn split(ui: &mut Ui, layout: SplitLayout, count: usize, main: usize, at: Bind<'_, SplitAt>, shown: SplitAt) -> StoryOutput {
     let document = &StoryDocument::STANDARD;
     let size = document.size();
     let ppp = ui.pixels_per_point();
-    let views = SplitViews::new("Views", layout, at).show(ui, |ui, body| {
-        for (pane, rect) in layout.placed(shown, body.rect, body.env.direction().is_rtl()).into_iter().enumerate() {
+    let views = SplitViews::new("Views", layout, at).count(count).active(main).show(ui, |ui, body| {
+        for (pane, rect) in shown.placed(layout, count, body.rect, body.env.direction().is_rtl()).into_iter().enumerate() {
             let mut view = CanvasView::new(rect, document.centre(), 1.0);
             zoom::fit(&mut view, Size::new(f64::from(size.width), f64::from(size.height)), ppp, 0.0);
-            Canvas::new(NAMES[pane]).view(view).show_at(ui, rect, |ui, body| show_document(ui, body.rect, document));
+            let name = if pane == main { "Main view" } else { "View" };
+            Canvas::new(name).view(view).show_at(ui, rect, |ui, body| show_document(ui, body.rect, document));
         }
     });
     views.output.into()
 }
 
-/// Drags the divider between side by side views by twice the drag threshold.
-fn drag_divider(fixture: &mut Fixture) {
+/// Drags divider `index` by twice the drag threshold along `travel`.
+fn drag_divider_at(fixture: &mut Fixture, index: u64, travel: Vec2) {
     let Some(id) = fixture.root_id() else { return };
-    let Some(grip) = fixture.part(id, DIVIDER.at(0)) else { return };
-    let travel = 2.0 * crate::testing::input::slop(fixture.ctx());
-    fixture.drag(&grip, Vec2::new(travel, 0.0));
+    let Some(grip) = fixture.part(id, DIVIDER.at(index)) else { return };
+    let slop = 2.0 * crate::testing::input::slop(fixture.ctx());
+    fixture.drag(&grip, travel * slop);
 }
 
-/// Clicks the second pane, which is not active.
+/// Drags the first column divider (between side by side views) to the right.
+fn drag_divider(fixture: &mut Fixture) {
+    drag_divider_at(fixture, 0, Vec2::new(1.0, 0.0));
+}
+
+/// Drags the first row divider (between stacked views) down: the first divider whose line runs along x. The column
+/// lines come first, so in 3-up Stacked the row line is divider 1.
+fn drag_row_divider(fixture: &mut Fixture) {
+    let Some(id) = fixture.root_id() else { return };
+    let row = (0..).map_while(|index| fixture.part(id, DIVIDER.at(index)).map(|part| (index, part.rect))).find(|(_, rect)| rect.width() > rect.height());
+    if let Some((index, _)) = row {
+        drag_divider_at(fixture, index, Vec2::new(0.0, 1.0));
+    }
+}
+
+/// Clicks the first pane, which is not active: the main view of two views is pane 1.
 fn click_inactive_pane(fixture: &mut Fixture) {
     let Some(id) = fixture.root_id() else { return };
-    let Some(pane) = fixture.part(id, PANE.at(1)) else { return };
+    let Some(pane) = fixture.part(id, PANE.at(0)) else { return };
     fixture.click(&pane);
 }
 
 #[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(drag_divider))]
 fn two_views(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let at = data.value("split", SplitAt::default());
-    let shown = *at;
-    split(ui, SplitLayout::Two, Bind::bound(at), shown)
+    let shown = at.clone();
+    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, Bind::bound(at), shown)
 }
 
 #[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(drag_divider))]
 fn four_views(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let at = data.value("split", SplitAt::default());
-    let shown = *at;
-    split(ui, SplitLayout::Four, Bind::bound(at), shown)
+    let shown = at.clone();
+    split(ui, SplitLayout::FourUp, 4, MAIN_OF_FOUR, Bind::bound(at), shown)
+}
+
+#[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(drag_divider))]
+fn grid_views(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let at = data.value("split", SplitAt::default());
+    let shown = at.clone();
+    split(ui, SplitLayout::Tile, 5, 0, Bind::bound(at), shown)
+}
+
+#[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(drag_row_divider))]
+fn stacked_views(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let at = data.value("split", SplitAt::default());
+    let shown = at.clone();
+    split(ui, SplitLayout::ThreeUpStacked, 3, 0, Bind::bound(at), shown)
 }
 
 #[story(SplitViews<'static>, covers = [Default], drive = Drive::Custom(click_inactive_pane))]
 fn another_view_clicked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let at = data.value("split", SplitAt::default());
-    let shown = *at;
-    split(ui, SplitLayout::Two, Bind::bound(at), shown)
+    let shown = at.clone();
+    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, Bind::bound(at), shown)
 }
 
 #[story(SplitViews<'static>, covers = [Mixed], drive = Drive::Custom(drag_divider))]
 fn splits_that_differ(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let at = data.value("split", Mixed::<SplitAt>::Mixed);
-    split(ui, SplitLayout::Two, Bind::bound_mixed(at), SplitAt::default())
+    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, Bind::bound_mixed(at), SplitAt::default())
 }
 
 #[story(SplitViews<'static>, covers = [Invalid], drive = Drive::Custom(drag_divider))]
 fn views_too_far_left(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let at = data.value("split", SplitAt::new(MOST_LEFT + 0.1, 0.5));
-    let shown = *at;
+    let shown = at.clone();
     let too_wide = |at: &SplitAt| {
-        if at.x > MOST_LEFT { Validity::Refuse(Message::new("The left view is too wide")) } else { Validity::Ok }
+        if at.columns.first().is_some_and(|&x| x > MOST_LEFT) { Validity::Refuse(Message::new("The left view is too wide")) } else { Validity::Ok }
     };
-    split(ui, SplitLayout::Two, Bind::bound(at).check(too_wide), shown)
+    split(ui, SplitLayout::TwoUpVertical, 2, MAIN_OF_TWO, Bind::bound(at).check(too_wide), shown)
 }

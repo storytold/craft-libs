@@ -1,9 +1,11 @@
-//! `SplitViews`: one canvas area shown as 1, 2 or 4 views of the same document. One view is active and is the full
-//! interactive view (tools, overlays, keys); the others show the document from their own view and become active on a
-//! click. The dividers between views move with the pointer and, when focused, with the arrow keys.
+//! `SplitViews`: one canvas area shown as views of one document, or a grid of panes the caller fills (one document
+//! each). One view is active and is the full interactive view (tools, overlays, keys); the others show their document
+//! from their own view and become active on a click. The dividers between panes move with the pointer and, when
+//! focused, with the arrow keys.
 //!
-//! The body shows one view per pane at the rects [`SplitLayout::rects`] gives for the split the caller binds. A
-//! linked pane follows the active view's zoom and position ([`SplitViews::follow`]).
+//! The panes are the cells [`arrange_rects`] gives for the arrangement the caller names, with the dividers moved to
+//! the [`SplitAt`] the caller binds ([`SplitAt::placed`]). A linked pane follows the active view's zoom and position
+//! ([`SplitViews::follow`]).
 
 #[cfg(feature = "testing")]
 mod stories;
@@ -19,40 +21,52 @@ use crate::primitives::{PaintShape, StrokeWidth};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::style::{ComponentStyle, StyleColor, StyleCx};
+use craft_behavior::dock::arrange_rects;
 use craft_behavior::{Axis, CanvasView, Flow, HitLevel, HitPriority, Metrics, PartKey, Sense};
-use egui::{CornerRadius, Pos2, Rect, Response};
+use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 
 const DIVIDER: PartKey = PartKey::new("divider");
 const PANE: PartKey = PartKey::new("pane");
 
-/// How the canvas area divides.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum SplitLayout {
-    /// One view.
-    #[default]
-    One,
-    /// Two views side by side, the main view on the right.
-    Two,
-    /// Four views in quarters, the main view at the bottom right.
-    Four,
-}
+/// How the canvas area divides: the Window › Arrange arrangements. The n-up and tile arrangements divide it into panes
+/// in the reading order [`arrange_rects`] gives (pane 0 at the top start corner); any other entry, or fewer than two
+/// panes, shows one pane over the whole area.
+pub use craft_behavior::dock::Arrangement as SplitLayout;
 
-/// Where the dividers lie, as fractions of the area: `x` of its width for the vertical divider between side by side
-/// views, `y` of its height for the horizontal one of four views.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Where the dividers lie, as fractions of the area counted from its start edge and its top: one entry per column line
+/// and per row line of the layout, in order. A list that does not fit the layout (the wrong length, not ascending, or
+/// outside 0–1) lays out that axis in even cells.
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct SplitAt {
-    /// The vertical divider's distance from the left edge, over the width.
-    pub x: f32,
-    /// The horizontal divider's distance from the top edge, over the height.
-    pub y: f32,
+    /// The column lines (the vertical dividers), each over the width.
+    pub columns: Vec<f32>,
+    /// The row lines (the horizontal dividers), each over the height.
+    pub rows: Vec<f32>,
 }
 
 impl SplitAt {
-    /// Dividers at fractions `x` and `y` of the area.
-    pub const fn new(x: f32, y: f32) -> Self {
-        SplitAt { x, y }
+    /// One column line at `x` and one row line at `y`: the dividers of two side by side views and of four views.
+    pub fn new(x: f32, y: f32) -> Self {
+        SplitAt { columns: vec![x], rows: vec![y] }
+    }
+
+    /// The column lines at `columns` and the row lines at `rows`.
+    pub fn lines(columns: Vec<f32>, rows: Vec<f32>) -> Self {
+        SplitAt { columns, rows }
+    }
+
+    /// The panes' rects in `full` for `layout` showing `count` documents (a tile arrangement shows that many panes,
+    /// an n-up one its own number), with the lines at these fractions counted from the left, in reading order.
+    pub fn rects(&self, layout: SplitLayout, count: usize, full: Rect) -> Vec<Rect> {
+        lay_out(layout, count, self, full).panes
+    }
+
+    /// The panes' rects in `full` placed for the layout direction: [`rects`](Self::rects) reflected across the middle
+    /// of `full` under `rtl`, so pane 0 sits at the top start corner and the fractions count from the start edge.
+    pub fn placed(&self, layout: SplitLayout, count: usize, full: Rect, rtl: bool) -> Vec<Rect> {
+        let flow = Flow::new(full, rtl);
+        self.rects(layout, count, full).into_iter().map(|rect| flow.to_physical(rect)).collect()
     }
 }
 
@@ -62,49 +76,104 @@ impl Default for SplitAt {
     }
 }
 
-impl SplitLayout {
-    /// The number of panes.
-    pub fn panes(self) -> usize {
-        match self {
-            SplitLayout::One => 1,
-            SplitLayout::Two => 2,
-            SplitLayout::Four => 4,
-        }
-    }
+/// One dividing line between panes, in reading order: its coordinate along its axis and the extent it spans across.
+#[derive(Clone, Copy, Debug)]
+struct Line {
+    at: f32,
+    from: f32,
+    to: f32,
+}
 
-    /// The panes' rects in `full` placed for the layout direction: [`rects`](Self::rects) reflected across the middle
-    /// of `full` under `rtl`, so the dividers' fractions count from the start edge.
-    pub fn placed(self, at: SplitAt, full: Rect, rtl: bool) -> Vec<Rect> {
-        let flow = Flow::new(full, rtl);
-        self.rects(at, full).into_iter().map(|rect| flow.to_physical(rect)).collect()
-    }
+/// A layout laid out in a rect: the panes and the lines between them, unmirrored.
+#[derive(Debug)]
+struct Laid {
+    panes: Vec<Rect>,
+    columns: Vec<Line>,
+    rows: Vec<Line>,
+}
 
-    /// The panes' rects in `full` with the dividers at `at` counted from the left, the main view (pane 0) first and
-    /// the others in reading order.
-    pub fn rects(self, at: SplitAt, full: Rect) -> Vec<Rect> {
-        let (x, y) = (full.left() + full.width() * at.x, full.top() + full.height() * at.y);
-        let quad = |x0, y0, x1, y1| Rect::from_min_max(Pos2::new(x0, y0), Pos2::new(x1, y1));
-        match self {
-            SplitLayout::One => vec![full],
-            SplitLayout::Two => vec![quad(x, full.top(), full.right(), full.bottom()), quad(full.left(), full.top(), x, full.bottom())],
-            SplitLayout::Four => vec![
-                quad(x, y, full.right(), full.bottom()),
-                quad(full.left(), full.top(), x, y),
-                quad(x, full.top(), full.right(), y),
-                quad(full.left(), y, x, full.bottom()),
-            ],
-        }
-    }
+/// How close two cell edges along an extent of `len` are when they are the same line: [`arrange_rects`] builds each
+/// edge from a sum of equal shares, so one line can differ in the last bits between neighbouring cells.
+fn tolerance(len: f32) -> f32 {
+    len.abs().max(1.0) * 1e-4
+}
 
-    /// The panes in reading order: top left first, row by row. The pane numbered `n` in the accessible names is the
-    /// `n`th of this order.
-    pub fn reading_order(self) -> Vec<usize> {
-        match self {
-            SplitLayout::One => vec![0],
-            SplitLayout::Two => vec![1, 0],
-            SplitLayout::Four => vec![1, 2, 3, 0],
-        }
+/// The distinct coordinates of `edges` strictly inside `start..end`, ascending.
+fn interior(edges: impl Iterator<Item = f32>, start: f32, end: f32, tol: f32) -> Vec<f32> {
+    let mut inside: Vec<f32> = edges.filter(|&edge| edge > start + tol && edge < end - tol).collect();
+    inside.sort_by(f32::total_cmp);
+    inside.dedup_by(|next, kept| (*next - *kept).abs() <= tol);
+    inside
+}
+
+/// The lines' coordinates: `fractions` of `len` from `start` when they fit `even` (as many, ascending, inside 0–1),
+/// else the even lines themselves.
+fn targets(fractions: &[f32], even: &[f32], start: f32, len: f32) -> Vec<f32> {
+    let inside = fractions.iter().all(|fraction| (0.0..=1.0).contains(fraction));
+    let ascending = fractions.windows(2).all(|pair| matches!(pair, [a, b] if a < b));
+    if fractions.len() == even.len() && inside && ascending {
+        fractions.iter().map(|fraction| start + len * fraction).collect()
+    } else {
+        even.to_vec()
     }
+}
+
+/// `edge` moved to the target of the even line it lies on, or kept when it lies on none (an outer edge).
+fn snapped(edge: f32, even: &[f32], targets: &[f32], tol: f32) -> f32 {
+    even.iter().zip(targets).find(|(line, _)| (**line - edge).abs() <= tol).map_or(edge, |(_, target)| *target)
+}
+
+/// Each even line of `even` with its target in `targets`, spanning the extent (by `across`) of the panes whose cells
+/// have an edge (by `edges`) on it.
+fn spans(
+    even: &[f32],
+    targets: &[f32],
+    cells: &[Rect],
+    panes: &[Rect],
+    tol: f32,
+    edges: impl Fn(&Rect) -> [f32; 2],
+    across: impl Fn(&Rect) -> (f32, f32),
+) -> Vec<Line> {
+    even.iter()
+        .zip(targets)
+        .map(|(&line, &at)| {
+            let touching = cells.iter().zip(panes).filter(|(cell, _)| edges(cell).iter().any(|edge| (edge - line).abs() <= tol));
+            let (from, to) = touching.fold((f32::INFINITY, f32::NEG_INFINITY), |(from, to), (_, pane)| {
+                let (start, end) = across(pane);
+                (from.min(start), to.max(end))
+            });
+            Line { at, from, to }
+        })
+        .collect()
+}
+
+/// `layout` showing `count` documents in `full`, with the lines at `at`: [`arrange_rects`]' even cells with each edge
+/// on an inner line moved to where `at` puts that line. A line spans the panes whose edges lie on it, so the row line
+/// of 3-up Stacked spans only the second column.
+fn lay_out(layout: SplitLayout, count: usize, at: &SplitAt, full: Rect) -> Laid {
+    let cells = layout
+        .group_count(count)
+        .and_then(|n| arrange_rects(layout, full, n))
+        .filter(|cells| !cells.is_empty())
+        .unwrap_or_else(|| vec![full]);
+    let (tol_x, tol_y) = (tolerance(full.width()), tolerance(full.height()));
+    let even_columns = interior(cells.iter().flat_map(|cell| [cell.left(), cell.right()]), full.left(), full.right(), tol_x);
+    let even_rows = interior(cells.iter().flat_map(|cell| [cell.top(), cell.bottom()]), full.top(), full.bottom(), tol_y);
+    let columns = targets(&at.columns, &even_columns, full.left(), full.width());
+    let rows = targets(&at.rows, &even_rows, full.top(), full.height());
+    let x = |edge: f32| snapped(edge, &even_columns, &columns, tol_x);
+    let y = |edge: f32| snapped(edge, &even_rows, &rows, tol_y);
+    let panes: Vec<Rect> =
+        cells.iter().map(|cell| Rect::from_min_max(Pos2::new(x(cell.left()), y(cell.top())), Pos2::new(x(cell.right()), y(cell.bottom())))).collect();
+    let column_lines =
+        spans(&even_columns, &columns, &cells, &panes, tol_x, |cell| [cell.left(), cell.right()], |pane| (pane.top(), pane.bottom()));
+    let row_lines = spans(&even_rows, &rows, &cells, &panes, tol_y, |cell| [cell.top(), cell.bottom()], |pane| (pane.left(), pane.right()));
+    Laid { panes, columns: column_lines, rows: row_lines }
+}
+
+/// The number of panes `layout` shows with `count` documents.
+fn pane_count(layout: SplitLayout, count: usize) -> usize {
+    lay_out(layout, count, &SplitAt::lines(Vec::new(), Vec::new()), Rect::from_min_size(Pos2::ZERO, Vec2::splat(1.0))).panes.len()
 }
 
 /// One pane's view: its own, or linked to the main view's zoom and position.
@@ -124,27 +193,40 @@ impl SplitPane {
     }
 }
 
-/// The dividers of `layout` in `rect` at `at`: the vertical one first, then the horizontal one of four views. Each
-/// can move until a pane is `least` points across.
-fn dividers(layout: SplitLayout, at: SplitAt, rect: Rect, sizes: &DockSizes) -> Vec<Divider> {
-    let (x, y) = (rect.left() + rect.width() * at.x, rect.top() + rect.height() * at.y);
-    let span = |from: f32, to: f32| (from + sizes.least_pane, (to - sizes.least_pane).max(from + sizes.least_pane));
-    let vertical = || Divider::new(Axis::X, x, rect, span(rect.left(), rect.right()), sizes.reach);
-    let horizontal = || Divider::new(Axis::Y, y, rect, span(rect.top(), rect.bottom()), sizes.reach);
-    match layout {
-        SplitLayout::One => Vec::new(),
-        SplitLayout::Two => vec![vertical()],
-        SplitLayout::Four => vec![vertical(), horizontal()],
-    }
+/// The dividers of `laid` in `rect`: the column lines first, then the row lines, each in order. Each can move until
+/// the panes on both sides of it are `least_pane` points across; a line with no room for that stays where it is.
+fn dividers(laid: &Laid, rect: Rect, sizes: &DockSizes) -> Vec<Divider> {
+    let range = |lines: &[Line], index: usize, start: f32, end: f32| {
+        let at = lines.get(index).map_or(start, |line| line.at);
+        let before = index.checked_sub(1).and_then(|i| lines.get(i)).map_or(start, |line| line.at);
+        let after = lines.get(index + 1).map_or(end, |line| line.at);
+        let (lo, hi) = (before + sizes.least_pane, after - sizes.least_pane);
+        if lo <= hi { (lo, hi) } else { (at, at) }
+    };
+    let columns = laid.columns.iter().enumerate().map(|(index, line)| {
+        let span = Rect::from_min_max(Pos2::new(line.at, line.from), Pos2::new(line.at, line.to));
+        Divider::new(Axis::X, line.at, span, range(&laid.columns, index, rect.left(), rect.right()), sizes.reach)
+    });
+    let rows = laid.rows.iter().enumerate().map(|(index, line)| {
+        let span = Rect::from_min_max(Pos2::new(line.from, line.at), Pos2::new(line.to, line.at));
+        Divider::new(Axis::Y, line.at, span, range(&laid.rows, index, rect.top(), rect.bottom()), sizes.reach)
+    });
+    columns.chain(rows).collect()
 }
 
-/// `at` with divider `divider` moved to the coordinate `coord` of `rect`.
-fn moved(at: SplitAt, divider: &Divider, coord: f32, rect: Rect) -> SplitAt {
+/// The split with divider `index` of `laid` (numbered as [`dividers`] numbers them) moved to the coordinate `coord`
+/// of `rect`, within the divider's range. Every other line stays where `laid` has it, so the lists written always
+/// fit the layout.
+fn moved(laid: &Laid, index: usize, divider: &Divider, coord: f32, rect: Rect) -> SplitAt {
     let coord = coord.clamp(divider.lo, divider.hi);
-    match divider.axis {
-        Axis::X => SplitAt { x: (coord - rect.left()) / rect.width(), ..at },
-        _ => SplitAt { y: (coord - rect.top()) / rect.height(), ..at },
+    let mut columns: Vec<f32> = laid.columns.iter().map(|line| (line.at - rect.left()) / rect.width()).collect();
+    let mut rows: Vec<f32> = laid.rows.iter().map(|line| (line.at - rect.top()) / rect.height()).collect();
+    if let Some(column) = columns.get_mut(index) {
+        *column = (coord - rect.left()) / rect.width();
+    } else if let Some(row) = index.checked_sub(laid.columns.len()).and_then(|row| rows.get_mut(row)) {
+        *row = (coord - rect.top()) / rect.height();
     }
+    SplitAt { columns, rows }
 }
 
 /// The style of split views: the sizes the dividers and their keys read, and the edge of the active view.
@@ -185,9 +267,10 @@ impl Outcome for SplitViewsOutput {
     }
 }
 
-/// One canvas area divided into 1, 2 or 4 panes. The active pane is the app's: it routes tools and keys there. An
-/// inactive pane is a Tab stop over its view: a press, Enter or Space on it reports it in [`SplitViewsOutput::activated`]
-/// and its view gets no press.
+/// One canvas area shown as views of one document, or a grid of panes the caller fills (one document each), in the
+/// panes of a [`SplitLayout`]. The active pane is the app's: it routes tools and keys there. An inactive pane is a
+/// Tab stop over its view: a press, Enter or Space on it reports it in [`SplitViewsOutput::activated`] and its view
+/// gets no press.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(container)]
 pub struct SplitViews<'a> {
@@ -200,6 +283,10 @@ pub struct SplitViews<'a> {
     /// The active pane: the full interactive view (0 by default). The other panes are display-only until clicked.
     #[prop]
     active: usize,
+    /// The documents a tile arrangement shows, one pane each (0 by default); the n-up arrangements show their own
+    /// number of panes. Pass the same number to [`SplitAt::placed`] for the body's panes.
+    #[prop]
+    count: usize,
     activated: Option<usize>,
 }
 
@@ -208,7 +295,7 @@ impl<'a> SplitViews<'a> {
     /// active until [`active`](Self::active) says otherwise.
     pub fn new(label: impl Into<Label>, layout: SplitLayout, at: Bind<'a, SplitAt>) -> Self {
         let props = ContainerProps::new().arena(true).sizing(Sizing::Fill).pad(Pad::None);
-        SplitViews { common: Common::new(), props, layout, at, active: 0, activated: None }.label(label)
+        SplitViews { common: Common::new(), props, layout, at, active: 0, count: 0, activated: None }.label(label)
     }
 
     /// Copies the main view's centre and zoom into the linked panes, each keeping its own rect and rotation.
@@ -220,18 +307,23 @@ impl<'a> SplitViews<'a> {
     }
 
     fn active_pane(&self) -> usize {
-        self.active.min(self.layout.panes() - 1)
+        self.active.min(pane_count(self.layout, self.count).saturating_sub(1))
+    }
+
+    /// The layout laid out in `rect` with the lines at `at`.
+    fn laid(&self, at: &SplitAt, rect: Rect) -> Laid {
+        lay_out(self.layout, self.count, at, rect)
     }
 }
 
 /// Dragging a divider moves its boundary (one gesture from the drag's start to its release), the arrow keys move the
 /// focused divider by a step, Shift or Page by a jump, and assistive technology sets it to a value.
-fn resize(cx: &mut Cx<'_, SplitViews<'_>>, at: SplitAt, dividers: &[Divider]) {
+fn resize(cx: &mut Cx<'_, SplitViews<'_>>, at: &SplitAt, laid: &Laid, dividers: &[Divider]) {
     let rect = cx.rect;
     for (index, divider) in dividers.iter().enumerate() {
         match divider::pointer(cx, DIVIDER, index as u64, divider) {
             Some(Drag::Start) => cx.begin(),
-            Some(Drag::To(coord)) => cx.propose(moved(at, divider, coord, rect)),
+            Some(Drag::To(coord)) => cx.propose(moved(laid, index, divider, coord, rect)),
             Some(Drag::Release) => cx.commit(),
             None => {}
         }
@@ -241,8 +333,8 @@ fn resize(cx: &mut Cx<'_, SplitViews<'_>>, at: SplitAt, dividers: &[Divider]) {
     if let Some((index, coord)) = divider::keys(cx, DIVIDER, &keyed, sizes.step, sizes.jump)
         && let Some(divider) = dividers.get(index as usize)
     {
-        let next = moved(at, divider, coord, rect);
-        if next != at {
+        let next = moved(laid, index as usize, divider, coord, rect);
+        if next != *at {
             cx.set(next);
         }
     }
@@ -275,10 +367,11 @@ impl Component for SplitViews<'_> {
     /// part under its view, so every pane has an accessible node. A divider is an edge part above the panes, its own
     /// Tab stop that the arrow keys move.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        let at = cx.value().copied().unwrap_or_default();
+        let at = cx.value().cloned().unwrap_or_default();
         let active = self.active_pane();
         let flow = Flow::new(rect, cx.flow.is_rtl());
-        for (pane, pane_rect) in self.layout.placed(at, rect, flow.is_rtl()).into_iter().enumerate() {
+        let laid = self.laid(&at, rect);
+        for (pane, pane_rect) in laid.panes.iter().map(|pane| flow.to_physical(*pane)).enumerate() {
             if pane == active {
                 cx.part(PANE.at(pane as u64), pane_rect).priority(HitPriority::new(HitLevel::Background, 0));
             } else {
@@ -293,16 +386,17 @@ impl Component for SplitViews<'_> {
             return;
         }
         let sizes = cx.style.sizes;
-        for (index, divider) in dividers(self.layout, at, rect, &sizes).iter().enumerate() {
+        for (index, divider) in dividers(&laid, rect, &sizes).iter().enumerate() {
             divider::declare(cx, rect, DIVIDER, index as u64, divider);
         }
     }
 
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
-        if let Some(at) = cx.value().copied() {
+        if let Some(at) = cx.value().cloned() {
             let sizes = cx.style.sizes;
-            let dividers = dividers(self.layout, at, cx.rect, &sizes);
-            resize(cx, at, &dividers);
+            let laid = self.laid(&at, cx.rect);
+            let dividers = dividers(&laid, cx.rect, &sizes);
+            resize(cx, &at, &laid, &dividers);
         }
         let active = self.active_pane();
         // A press chooses the pane, as in Photoshop; Enter, Space and assistive technology activate it too.
@@ -311,32 +405,35 @@ impl Component for SplitViews<'_> {
             cx.part_if_declared(part).is_some_and(|result| matches!(result.press.phase, craft_behavior::PressPhase::Down { .. }))
                 || cx.part_activated(part).is_some()
         };
-        self.activated = (0..self.layout.panes()).filter(|&pane| pane != active).find(chosen);
+        self.activated = (0..pane_count(self.layout, self.count)).filter(|&pane| pane != active).find(chosen);
     }
 
     fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let at = cx.value().copied().unwrap_or_default();
+        let at = cx.value().cloned().unwrap_or_default();
+        let laid = self.laid(&at, cx.rect);
         if cx.value().is_some() {
-            for (index, divider) in dividers(self.layout, at, cx.rect, &cx.style.sizes).iter().enumerate() {
+            for (index, divider) in dividers(&laid, cx.rect, &cx.style.sizes).iter().enumerate() {
                 ui.face(DIVIDER.at(index as u64), Splitter::new(divider.axis));
             }
         }
-        if self.layout.panes() > 1
-            && let Some(rect) = self.layout.placed(at, cx.rect, cx.flow.is_rtl()).get(self.active_pane())
+        if laid.panes.len() > 1
+            && let Some(rect) = laid.panes.get(self.active_pane())
         {
-            ui.draw().stroke(&PaintShape::Rect(*rect, CornerRadius::ZERO), StrokeWidth::Thin, cx.style.active_edge);
+            let rect = Flow::new(cx.rect, cx.flow.is_rtl()).to_physical(*rect);
+            ui.draw().stroke(&PaintShape::Rect(rect, CornerRadius::ZERO), StrokeWidth::Thin, cx.style.active_edge);
         }
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {
         let words = cx.words::<SplitWords>();
-        for (number, pane) in self.layout.reading_order().into_iter().enumerate() {
-            let number = cx.format().number((number + 1) as f64, 0);
+        let at = cx.value().cloned().unwrap_or_default();
+        let laid = self.laid(&at, cx.rect);
+        for pane in 0..laid.panes.len() {
+            let number = cx.format().number((pane + 1) as f64, 0);
             let name = words.view.fill(&[("n", number.as_str())]);
             access.node(PANE.at(pane as u64), Role::GROUP).name = Name::Text(name);
         }
-        let at = cx.value().copied().unwrap_or_default();
-        let shown = if cx.value().is_some() { dividers(self.layout, at, cx.rect, &cx.style.sizes) } else { Vec::new() };
+        let shown = if cx.value().is_some() { dividers(&laid, cx.rect, &cx.style.sizes) } else { Vec::new() };
         for (index, divider) in shown.iter().enumerate() {
             divider::describe(access, DIVIDER, index as u64, divider, words.resize.as_str(), cx.style.sizes.step);
         }

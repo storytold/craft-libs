@@ -2,7 +2,7 @@
 //! scroll, as PdfCraft's Compare Files shows the old file left and the new one right. The half the user last pressed
 //! leads (the new file at first). The pair draws the leading half first; the other takes the leader's zoom, layout
 //! and scroll before it is drawn, in the same pass. The halves and the divider are craft-ui's [`SplitViews`] with
-//! [`SplitLayout::Two`].
+//! [`SplitLayout::TwoUpVertical`]: pane 0 is the left half, pane 1 the right half and main view.
 
 use super::view::{PageViewOutput, PageViewState};
 use craft_ui::canvas::{SplitAt, SplitLayout, SplitViews};
@@ -89,20 +89,21 @@ impl<'a> SyncedViews<'a> {
             Lead::Left => (left, right),
             Lead::Right => (right, left),
         };
-        // `SplitLayout::Two` puts pane 0 (the main view) on the right.
+        // `SplitLayout::TwoUpVertical` numbers its panes in reading order: pane 0 is the left half.
         let active = match lead {
-            Lead::Left => 1,
-            Lead::Right => 0,
+            Lead::Left => 0,
+            Lead::Right => 1,
         };
         let mut views: [Option<PageViewOutput>; 2] = [None, None];
-        let divider = *at;
-        let mut split = SplitViews::new(label, SplitLayout::Two, Bind::bound(at)).active(active).show(ui, |ui, body| {
+        let divider = at.clone();
+        let layout = SplitLayout::TwoUpVertical;
+        let mut split = SplitViews::new(label, layout, Bind::bound(at)).active(active).show(ui, |ui, body| {
             // The follower is a copy per run, so the body writes nothing kept; `settle` stores the last copy.
             let mut followed = None;
-            let rects = SplitLayout::Two.placed(divider, body.rect, body.env.direction().is_rtl());
+            let rects = divider.placed(layout, 2, body.rect, body.env.direction().is_rtl());
             for pane in [active, 1 - active] {
                 let Some(&rect) = rects.get(pane) else { continue };
-                let this = if pane == 1 { Lead::Left } else { Lead::Right };
+                let this = if pane == 0 { Lead::Left } else { Lead::Right };
                 views[pane] = Some(if this == lead {
                     half(ui, rect, leader, this)
                 } else {
@@ -125,10 +126,9 @@ impl<'a> SyncedViews<'a> {
             }
         });
         if let Some(pane) = split.output.activated {
-            state.lead = if pane == 1 { Lead::Left } else { Lead::Right };
+            state.lead = if pane == 0 { Lead::Left } else { Lead::Right };
         }
-        let [right, left] = views;
-        SyncedViewsOutput { edit: split.output.edit, views: [left, right] }
+        SyncedViewsOutput { edit: split.output.edit, views }
     }
 }
 

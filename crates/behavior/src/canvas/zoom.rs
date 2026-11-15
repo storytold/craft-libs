@@ -161,10 +161,11 @@ fn fit_rect_up_to(view: &mut CanvasView, rect: Rect, size: Size, pixels_per_poin
 }
 
 /// The window-canvas size at which the zoomed document fits: the canvas size less the view's
-/// rect size plus the screen extent of the whole document.
+/// rect size plus the screen extent of the whole document. The difference between `canvas` and
+/// the view's rect (the rulers and scrollbars) stays, so the view's rect becomes the document's
+/// turned box. A document window sizes itself to it with `DocumentWindow::wrap_in`.
 pub fn wrapped_canvas(view: &CanvasView, document: Size, canvas: ScreenRect) -> ScreenVec {
-    let _ = (view, document, canvas);
-    todo!("cw.C72")
+    canvas.size() - view.rect.size() + view.extent(Rect::from_origin_size(Point::ORIGIN, document))
 }
 
 /// Fill Screen: centre the document and zoom until it covers `view.rect`; one axis may extend

@@ -15,6 +15,9 @@ use crate::monitor::{Monitor, MonitorKey};
 const BAR: f32 = 64.0;
 const MAX_POINTS: f32 = 100_000.0;
 
+/// Points a monitor without a known work area loses to the taskbar, Dock or menu bar, per axis.
+const SCREEN_ROOM: [f32; 2] = [0.0, 48.0];
+
 /// A rectangle in logical points at zoom 1: top-left corner and size.
 ///
 /// `pos` is `Placement::position_px` divided by `Placement::scale`; it is informational, and
@@ -108,7 +111,7 @@ pub struct Defaults {
 impl Defaults {
     /// Defaults for a first window of `size` points and a minimum of `min` points.
     pub fn new(size: [f32; 2], min: [f32; 2]) -> Self {
-        Self { size, min, screen_room: [0.0, 48.0], restore_fullscreen: false, no_position: false }
+        Self { size, min, screen_room: SCREEN_ROOM, restore_fullscreen: false, no_position: false }
     }
 
     /// Set the room a monitor loses to the taskbar, Dock or menu bar.
@@ -193,9 +196,12 @@ fn fit(size: [f32; 2], room: [f32; 2], min: [f32; 2]) -> [f32; 2] {
 }
 
 /// `size` at least `min` and at most the monitor's usable area less `frame`; the cap wins over the minimum.
+/// All in points; `frame` is the window's decoration around the size.
 pub fn capped(size: Vec2, monitor: &Monitor, frame: Vec2, min: Vec2) -> Vec2 {
-    let _ = (size, monitor, frame, min);
-    todo!("cw.C54")
+    let usable = monitor.usable(SCREEN_ROOM);
+    let room = [usable[0] - frame.x.max(0.0), usable[1] - frame.y.max(0.0)];
+    let [x, y] = fit([size.x, size.y], room, [min.x, min.y]);
+    vec2(x, y)
 }
 
 fn in_points(v: f32) -> bool {

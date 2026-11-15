@@ -199,7 +199,7 @@ name = "Snap"
 old = ""
 new = "craft_ui::canvas::Snap"
 status = "replaced"
-note = "The canvas's snapping of a coordinate the pointer sets, given once with `Canvas::snap(Snap::new(|axis, value, mods| ..))`. The canvas publishes it to its body (`canvas_snap(env)`), so the rulers' zero point and the guides read it, and hands it to the tool host through `CanvasOutput`, so `ToolContext::snap` reads it. `Rulers::snap`, `Guides::snap` and `ToolHost::snap` are gone. The closure is `Send + Sync + 'static`."
+note = "The canvas's snapping of a coordinate the pointer sets, as data over the document's targets: given once with `Canvas::snap(Snap::new(targets, options))`, where `targets` is an `Arc<craft_behavior::geometry::SnapTargets>` and `options` the View › Snap To `SnapOptions`; the canvas sets the tolerance for its view each pass. The canvas publishes it to its body (`canvas_snap(env)`), so the rulers' zero point and the guides read it, and hands it to the tool host through `CanvasOutput`, so `ToolContext::snap` reads it. `Rulers::snap`, `Guides::snap` and `ToolHost::snap` are gone."
 
 [[type]]
 name = "CanvasScrollbars"
@@ -478,7 +478,7 @@ name = "PaintedCursor"
 old = ""
 new = "craft_behavior::PaintedCursor"
 status = "replaced"
-note = "A cursor request is data: `cx.cursor(PaintedCursor::..)` through the cursor service, painted by the overlay host on the ghost layer. `ToolCursor::Circle/Crosshair/Outline/Hand/Zoom/Tool/Badged` are `PaintedCursor::circle/Crosshair/outline/Hand/zoom/tool/badged`; `turn_cursor`, `distort_cursor` and `skew_cursor` are `PaintedCursor::turn(toward)`, `distort(dir)` and `skew(dir)` with screen directions (no `CanvasView` or `PointerInk`). The crosshair and the brush outline are painted, not uploaded as OS bitmaps. `CursorOptions` and `CursorHost` are gone; an app decides which cursor to request."
+note = "A cursor request is data: a `craft_behavior::Cursor`, either `Cursor::System(CursorIcon)` or `Cursor::Painted(PaintedCursor)` (both `From`), through the cursor service; the overlay host paints a `PaintedCursor` on the ghost layer. `ToolCursor::Circle/Crosshair/Outline/Hand/Zoom/Tool/Badged` are `PaintedCursor::circle/Crosshair/outline/Hand/zoom/tool/badged`, with the centre mark and a badge on a circle or an outline through `marked(centre, badge)`; `turn_cursor`, `distort_cursor` and `skew_cursor` are `PaintedCursor::turn(toward)`, `distort(dir)` and `skew(dir)` with screen directions (no `CanvasView` or `PointerInk`). The type, arrow, path-text, crosshair-with-icon, locator and hidden pointers are `type_on(path)`, `arrow(hollow)`, `path_text(start, end)`, `crosshair_tool(icon)`, `Locator` and `Hidden`. The crosshair and the brush outline are painted, not uploaded as OS bitmaps. `CursorOptions` and `CursorHost` are gone; an app decides which cursor to request."
 
 [[type]]
 name = "Readout"
@@ -564,14 +564,14 @@ name = "SplitViews"
 old = "craft_ui::canvas::split::SplitViews"
 new = "craft_ui::canvas::SplitViews"
 status = "moved"
-note = "A container: `SplitViews::new(label, layout, Bind::bound(&mut split_at)).active(n).show(ui, |ui, body| ..)`; the body shows one view per pane at `layout.rects(split_at, body.rect)`, in `layout.draw_order(first)` for `first(n)`. The dividers move with the pointer and the arrow keys through the bound `SplitAt`; the pane gap is gone. `follow` is unchanged."
+note = "A container: `SplitViews::new(label, layout, Bind::bound(&mut split_at)).active(n).count(documents).show(ui, |ui, body| ..)`; the body shows one view per pane at `split_at.placed(layout, documents, body.rect, rtl)`, pane 0 at the top start corner. The dividers move with the pointer and the arrow keys through the bound `SplitAt`; the pane gap is gone. `follow` is unchanged."
 
 [[type]]
 name = "SplitLayout"
 old = "craft_ui::canvas::split::SplitLayout"
 new = "craft_ui::canvas::SplitLayout"
-status = "moved"
-note = "`#[non_exhaustive]`; `rects(at: SplitAt, full)` replaces `rects(gap, full)`; `reading_order()` and `draw_order(first)` are new."
+status = "replaced"
+note = "A re-export of the Window › Arrange enum `craft_behavior::dock::Arrangement`. `One` is no layout: an entry that gives no cells, or fewer than two documents, shows one pane over the whole area. `Two` is `TwoUpVertical` with pane 0 on the left (the old main view, on the right, is pane 1); `Four` is `FourUp` with pane 0 at the top left (the old main view is pane 3). The tile arrangements take the document count (`SplitViews::count`). The pane rects are `SplitAt::rects(layout, count, full)` and `SplitAt::placed(.., rtl)`."
 
 [[type]]
 name = "SplitPane"
@@ -599,7 +599,7 @@ name = "SplitAt"
 old = ""
 new = "craft_ui::canvas::SplitAt"
 status = "replaced"
-note = "New: where the dividers lie, as fractions of the area. Replaces the fixed pane gap."
+note = "Where the dividers lie, as fractions of the area: `SplitAt { columns, rows }`, one entry per column line and per row line, `Clone` (not `Copy`). `SplitAt::new(x, y)` for two and four views, `SplitAt::lines(columns, rows)` for the rest; a list that does not fit the layout lays out even cells. Replaces the fixed pane gap."
 
 [[type]]
 name = "SplitLabels"
@@ -607,6 +607,27 @@ old = "craft_ui::canvas::split::SplitLabels"
 new = ""
 status = "removed"
 note = "Words: `SplitWords` (`splitViews.view`, `splitViews.resize`)."
+
+[[type]]
+name = "wrapped_canvas"
+old = ""
+new = "craft_behavior::canvas::zoom::wrapped_canvas"
+status = "replaced"
+note = "`wrapped_canvas(&view, document, canvas) -> ScreenVec`: the canvas size that shows the whole turned document at the view's zoom, keeping the rulers and scrollbars around the view. Replaces an app's own zoom-to-window sizing (PhotoCraft's `zoom_window_fit::{wrap, wrapped_size}`); pass it to `DocumentWindow::wrap_in`."
+
+[[type]]
+name = "capped"
+old = ""
+new = "craft_behavior::placement::capped"
+status = "replaced"
+note = "`capped(size, &monitor, frame, min) -> Vec2`: `size` at least `min` and at most the monitor's work area less the window's `frame`, in points; the cap wins over the minimum. `DocumentWindow::wrap_in` sizes the window with it."
+
+[[type]]
+name = "DocumentWindow"
+old = ""
+new = "craft_ui::shell::DocumentWindow"
+status = "replaced"
+note = "Zoom-to-window sizing: in the pass a zoom edit changed the view, the window's body calls `DocumentWindow::wrap_in(cx, canvas_rect, wanted)` with `wanted = zoom::wrapped_canvas(..)`. The window takes that size between its own minimum (`overlay(|o| o.size_limits(..))`) and the monitor's work area, about its centre, and reports `DocumentWindowOutput::wrapped`: `Some(Wrapped::Fits)` (centre the document) or `Some(Wrapped::Capped)` (keep the zoomed spot); `None` without OS windows, when maximised or full screen, or before the window reports its facts. The rest of the type is in `craft-window-ui.toml`."
 
 [[type]]
 name = "ToolPill"
@@ -700,14 +721,20 @@ new = "active(usize)"
 [[setter]]
 type = "SplitViews"
 old = "first(usize)"
-new = "SplitLayout::draw_order(first)"
-note = "The body shows the panes; the caller walks `draw_order`."
+new = ""
+note = "The body shows the panes in the order of `SplitAt::placed`; pane 0 is the top start corner."
+
+[[setter]]
+type = "SplitViews"
+old = ""
+new = "count(usize)"
+note = "The documents a tile arrangement shows, one pane each."
 
 [[setter]]
 type = "SplitViews"
 old = "show(ui, rect, |ui, pane, rect| ..)"
 new = "show(ui, |ui, body| ..)"
-note = "The pane rects are `layout.rects(split_at, body.rect)`."
+note = "The pane rects are `split_at.placed(layout, count, body.rect, rtl)`."
 
 # Raster display and thumbnails.
 [[type]]
