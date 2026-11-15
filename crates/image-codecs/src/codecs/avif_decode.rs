@@ -18,7 +18,8 @@
 //! Bounded for hostile input: box nesting, item, property and extent counts are capped; item data
 //! can't add up to more than the file; the [`Limits`] are checked against the declared size
 //! before any picture is decoded, against every decoded picture and against each output buffer;
-//! the AV1 decoder's picture store is capped by `max_alloc` too; and a panic in the decoder is
+//! the AV1 decoder's picture store and the pictures one chunk may show are capped by `max_alloc`
+//! too; repeated transforms are refused; and a panic in the decoder is
 //! a malformed-file error. wasm32 builds leave AVIF unreadable: a panic there aborts instead of
 //! unwinding.
 //!
@@ -150,7 +151,7 @@ struct Loc {
     extents: Vec<Extent>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Transform {
     /// Clean aperture: width, height, horizontal and vertical offset of the centre.
     Clap { w: f64, h: f64, dx: f64, dy: f64 },
@@ -371,15 +372,18 @@ fn parse_prop(t: &[u8; 4], b: &[u8]) -> Result<Prop> {
         b"irot" => Prop::T(Transform::Rot(r.u8()? & 3)),
         b"imir" => Prop::T(Transform::Mir(r.u8()? & 1)),
         b"clap" => {
-            let mut q = || -> Result<f64> {
-                let n = r.u32()? as i32;
-                let d = r.u32()? as i32;
+            // Width and height are unsigned fractions; the centre offsets have signed numerators
+            // (and unsigned denominators), as libavif and libheif read them.
+            let mut q = |signed: bool| -> Result<f64> {
+                let raw = r.u32()?;
+                let n = if signed { f64::from(raw as i32) } else { f64::from(raw) };
+                let d = r.u32()?;
                 if d == 0 {
                     return Err(bad("clap with a zero denominator"));
                 }
-                Ok(f64::from(n) / f64::from(d))
+                Ok(n / f64::from(d))
             };
-            let (w, h, dx, dy) = (q()?, q()?, q()?, q()?);
+            let (w, h, dx, dy) = (q(false)?, q(false)?, q(true)?, q(true)?);
             Prop::T(Transform::Clap { w, h, dx, dy })
         }
         _ => Prop::Other,
@@ -429,8 +433,19 @@ impl Container<'_> {
     fn ispe(&self, id: u32) -> Option<(u32, u32)> {
         self.props_of(id).find_map(|p| if let Prop::Ispe(w, h) = p { Some((*w, *h)) } else { None })
     }
-    fn transforms(&self, id: u32) -> Vec<Transform> {
-        self.props_of(id).filter_map(|p| if let Prop::T(t) = p { Some(*t) } else { None }).collect()
+    /// The item's transformative properties in association order. HEIF allows each of `clap`,
+    /// `irot` and `imir` at most once per item; a file that associates one more often (repeated
+    /// `ipma` entries could otherwise ask for a quarter of a million full-image rotations) is
+    /// refused before any pixels are touched.
+    fn transforms(&self, id: u32) -> Result<Vec<Transform>> {
+        // Three is the most a valid item has, so a fourth is already a repeat.
+        let ts: Vec<Transform> = self.props_of(id).filter_map(|p| if let Prop::T(t) = p { Some(*t) } else { None }).take(4).collect();
+        for (i, t) in ts.iter().enumerate() {
+            if ts[..i].iter().any(|u| std::mem::discriminant(u) == std::mem::discriminant(t)) {
+                return Err(bad("an image item has a transformative property (clap, irot or imir) more than once"));
+            }
+        }
+        Ok(ts)
     }
     fn nclx(&self, id: u32) -> Option<Cicp> {
         self.props_of(id).find_map(|p| if let Prop::Nclx(n) = p { Some(*n) } else { None })
@@ -504,7 +519,7 @@ pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32)> {
     let c = parse(bytes)?;
     let (w, h) = item_size(&c, c.primary)?;
     limits.check_size(w, h)?;
-    Ok(displayed(w, h, &c.transforms(c.primary)))
+    Ok(displayed(w, h, &c.transforms(c.primary)?))
 }
 
 /// One decoded AV1 picture.
@@ -539,6 +554,9 @@ fn decode_av1(c: &Container, id: u32, limits: &Limits) -> Result<Pic> {
     let config = c.props_of(id).find_map(|p| if let Prop::Av1c(o) = p { Some(o.clone()) } else { None });
     let mut dec = av1::Decoder::new();
     dec.set_memory_budget(limits.max_alloc.min(AV1_MEMORY_BUDGET));
+    // Only the first picture is kept, so the pictures a chunk may show are held to the same budget
+    // before they are built (the decoder allows up to 1 GiB of them otherwise).
+    dec.set_shown_budget(limits.max_alloc);
     let mut pics = catch_unwind(AssertUnwindSafe(|| -> std::result::Result<Vec<av1::Picture>, av1::Error> {
         let mut pics = Vec::new();
         // The sequence header normally travels in the item too; the av1C copy covers files
@@ -580,7 +598,9 @@ fn coefficients(matrix: u16, primaries: u16) -> Result<Option<(f32, f32)>> {
         1 => Some((0.2126, 0.0722)),
         4 => Some((0.30, 0.11)),
         7 => Some((0.212, 0.087)),
-        9 | 10 => Some((0.2627, 0.0593)),
+        // 9 is BT.2020 non-constant luminance; 10 (constant luminance) needs other equations and
+        // is refused below.
+        9 => Some((0.2627, 0.0593)),
         // Chromaticity-derived non-constant luminance.
         12 => {
             let [kr, _, kb] = crate::cicp::luma_weights(primaries);
@@ -830,6 +850,16 @@ pub(crate) fn decode_with_depth(bytes: &[u8], limits: &Limits, keep_orientation:
     let id = c.primary;
     let (w, h) = item_size(&c, id)?;
     let alpha = c.alpha_item().filter(|&a| item_size(&c, a).is_ok_and(|s| s == (w, h)));
+    let transforms = c.transforms(id)?;
+    // The alpha plane is composed in stored orientation and turned with the colour, which is right
+    // when it has no transforms of its own (what encoders write) or the colour's. Others would put
+    // transparency in the wrong place, so they are refused rather than ignored.
+    if let Some(a) = alpha {
+        let own = c.transforms(a)?;
+        if !own.is_empty() && own != transforms {
+            return Err(CodecError::unsupported(F, "an alpha plane with transforms (clap, irot, imir) that differ from the image's"));
+        }
+    }
     let layout = if alpha.is_some() { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
     // The declared size, before any picture is decoded.
     let mut canvas = Canvas::new(w, h, layout, limits)?;
@@ -846,7 +876,7 @@ pub(crate) fn decode_with_depth(bytes: &[u8], limits: &Limits, keep_orientation:
         }
     }
     if !keep_orientation {
-        canvas = apply_transforms(canvas, &c.transforms(id));
+        canvas = apply_transforms(canvas, &transforms);
     }
     let (w, h) = (canvas.w as u32, canvas.h as u32);
     let image = Image::from_u16(w, h, layout, &canvas.data)?;
@@ -1075,6 +1105,87 @@ mod tests {
         assert_eq!((kept.width(), kept.height(), rgb8(&kept)), (33, 17, QUAD_SOURCE.to_vec()));
     }
 
+    /// A `clap` box: width, height, horizontal and vertical offset, each numerator then denominator.
+    fn clap_box(f: [u32; 8]) -> Vec<u8> {
+        bx(b"clap", &f.iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn clean_aperture_sizes_are_unsigned() {
+        let (av1, cfg) = av1_of(QUAD_GBR_LOSSLESS);
+        let av1c = bx(b"av1C", &[&[0x81, 0, 0, 0][..], &cfg].concat());
+        // A 2 × 2 aperture with its width written as 0x80000000 / 0x40000000, centred one pixel
+        // left of the image centre (a signed offset numerator: -1 / 1).
+        let clap = clap_box([0x8000_0000, 0x4000_0000, 2, 1, (-1i32) as u32, 1, 0, 1]);
+        let file = build(&[(1, b"av01", &av1, &[1, 2, 3])], &[ispe(33, 17), av1c, clap], &[]);
+        assert_eq!(crate::probe_size(&file).unwrap(), (2, 2));
+        let img = crate::decode(&file).unwrap();
+        assert_eq!((img.width(), img.height()), (2, 2));
+        // Centre (16, 8) moved to (15, 8): the 2 × 2 crop starts at (15, 8) (rounded from 14.5, 7.5).
+        let got = rgb8(&img);
+        let (x0, y0) = ((32.0f64 / 2.0 - 1.0 - 0.5).round() as usize, (16.0f64 / 2.0 - 0.5).round() as usize);
+        for y in 0..2 {
+            for x in 0..2 {
+                let s = ((y0 + y) * 33 + x0 + x) * 3;
+                assert_eq!(&got[(y * 2 + x) * 3..][..3], &QUAD_SOURCE[s..s + 3], "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_transforms_are_refused() {
+        let (av1, cfg) = av1_of(QUAD_GBR_LOSSLESS);
+        let av1c = bx(b"av1C", &[&[0x81, 0, 0, 0][..], &cfg].concat());
+        // the same irot associated twice, and through two ipma entries for the item
+        let twice = build(&[(1, b"av01", &av1, &[1, 2, 3, 3])], &[ispe(33, 17), av1c.clone(), bx(b"irot", &[1])], &[]);
+        assert!(matches!(crate::probe_size(&twice), Err(CodecError::Malformed { .. })));
+        assert!(matches!(crate::decode(&twice), Err(CodecError::Malformed { .. })));
+        let mut many = build(&[(1, b"av01", &av1, &[1, 2, 3])], &[ispe(33, 17), av1c.clone(), bx(b"irot", &[1])], &[]);
+        let c = parse(&many).unwrap();
+        assert_eq!(c.transforms(1).unwrap(), vec![Transform::Rot(1)]);
+        // 1024 more ipma records for item 1, each repeating the irot 255 times
+        let mut ipma = vec![0, 0, 0, 0];
+        ipma.extend_from_slice(&1024u32.to_be_bytes());
+        for _ in 0..1024 {
+            ipma.extend_from_slice(&[0, 1, 255]);
+            ipma.extend(std::iter::repeat_n(3u8, 255));
+        }
+        many = build(&[(1, b"av01", &av1, &[1, 2])], &[ispe(33, 17), av1c, bx(b"irot", &[1])], &[]);
+        let mut c = parse(&many).unwrap();
+        parse_ipma(&ipma, &mut c).unwrap();
+        assert!(matches!(c.transforms(1), Err(CodecError::Malformed { .. })));
+        // each kind once is fine, in any order
+        let ok = build(
+            &[(1, b"av01", &av1, &[1, 2, 3, 4, 5])],
+            &[
+                ispe(33, 17),
+                bx(b"av1C", &[&[0x81, 0, 0, 0][..], &cfg].concat()),
+                clap_box([33, 1, 17, 1, 0, 1, 0, 1]),
+                bx(b"irot", &[1]),
+                bx(b"imir", &[0]),
+            ],
+            &[],
+        );
+        assert_eq!(crate::probe_size(&ok).unwrap(), (17, 33));
+    }
+
+    #[test]
+    fn alpha_with_transforms_of_its_own_is_refused() {
+        let (av1, cfg) = av1_of(QUAD_GBR_LOSSLESS);
+        let av1c = bx(b"av1C", &[&[0x81, 0, 0, 0][..], &cfg].concat());
+        let auxc = fbx(b"auxC", b"urn:mpeg:mpegB:cicp:systems:auxiliary:alpha\0");
+        let props = [ispe(33, 17), av1c, auxc, bx(b"imir", &[1])];
+        let with = |colour: &[u8], alpha: &[u8]| build(&[(1, b"av01", &av1, colour), (2, b"av01", &av1, alpha)], &props, &[(b"auxl", 2, &[1])]);
+        // no transforms on the alpha plane, or the colour's: composed, then turned together
+        let plain = crate::decode(&with(&[1, 2], &[1, 2, 3])).unwrap();
+        assert_eq!(plain.layout(), ChannelLayout::Rgba);
+        let both = crate::decode(&with(&[1, 2, 4], &[1, 2, 3, 4])).unwrap();
+        let alpha_free = crate::decode(&with(&[1, 2, 4], &[1, 2, 3])).unwrap();
+        assert_eq!(both.to_rgba8(), alpha_free.to_rgba8());
+        // an alpha-only mirror would put transparency on the wrong side
+        assert!(matches!(crate::decode(&with(&[1, 2], &[1, 2, 3, 4])), Err(CodecError::Unsupported { .. })));
+    }
+
     #[test]
     fn transforms_rotate_mirror_and_crop() {
         // 3 × 2, one channel, value = index
@@ -1164,7 +1275,7 @@ mod tests {
 
     #[test]
     fn unsupported_matrices_are_errors() {
-        for m in [8u16, 11, 13, 14] {
+        for m in [8u16, 10, 11, 13, 14] {
             assert!(matches!(coefficients(m, 1), Err(CodecError::Unsupported { .. })), "{m}");
         }
         assert_eq!(coefficients(0, 1).unwrap(), None);

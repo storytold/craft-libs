@@ -18,6 +18,9 @@
 //! - [`stream`]: one flat scan-line part read block by block, for pictures larger than memory.
 //! - [`cryptomatte_samples`]: a file's Cryptomatte layers and their per-pixel (ID, coverage) ranks.
 
+/// RFC 1950/1951 compressor for ZIP-compressed EXR chunks.
+pub mod zlib;
+
 pub mod channels;
 pub mod cryptomatte;
 #[cfg(feature = "decode")]

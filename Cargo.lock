@@ -223,16 +223,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "aotuv_lancer_vorbis_sys"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bc4fd1a61860d2f1198b60bedd30910eaffa978f1ee6214dfb24ac70d589225"
-dependencies = [
- "cc",
- "ogg_next_sys",
-]
-
-[[package]]
 name = "arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1414,7 +1404,6 @@ dependencies = [
  "serde_json",
  "symphonia",
  "thiserror 2.0.21",
- "vorbis_rs",
 ]
 
 [[package]]
@@ -1425,6 +1414,7 @@ version = "0.1.0"
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
+ "craft-media-testkit",
  "craft-timeline",
  "craft-xml",
  "proptest",
@@ -1844,6 +1834,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gzip"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+]
+
+[[package]]
 name = "craft-hdr"
 version = "0.1.0"
 dependencies = [
@@ -1919,6 +1916,7 @@ dependencies = [
  "avif-serialize",
  "craft-heif",
  "craft-jpeg",
+ "craft-media-testkit",
  "craft-metadata",
  "craft-video",
  "crc32fast",
@@ -2073,6 +2071,14 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-mcp"
+version = "0.1.0"
+dependencies = [
+ "craft-jsonrpc",
+ "serde_json",
 ]
 
 [[package]]
@@ -2376,13 +2382,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-plist"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "craft-platform"
 version = "0.1.0"
 dependencies = [
@@ -2397,6 +2396,13 @@ dependencies = [
  "wasm-bindgen-test",
  "web-sys",
  "zbus",
+]
+
+[[package]]
+name = "craft-plist"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2696,6 +2702,7 @@ dependencies = [
  "data-url",
  "flate2",
  "kurbo 0.13.1",
+ "quick-xml 0.41.0",
  "resvg 0.48.1",
  "roxmltree 0.21.2",
  "thiserror 2.0.21",
@@ -2710,6 +2717,16 @@ version = "0.1.0"
 dependencies = [
  "craft-svg",
  "kurbo 0.13.1",
+]
+
+[[package]]
+name = "craft-tcraft"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2828,6 +2845,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-usd"
+version = "0.1.0"
+dependencies = [
+ "lz4_flex",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-vcard"
 version = "0.1.0"
 dependencies = [
@@ -2841,6 +2866,7 @@ name = "craft-vectorcraft-format"
 version = "0.1.0"
 dependencies = [
  "flate2",
+ "proptest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -6026,6 +6052,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
+name = "lz4_flex"
+version = "0.11.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
+
+[[package]]
 name = "maybe-owned"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6781,15 +6813,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c7959d3349f484aec36462f98226983578bf7d33f9b034c32967489c7000e1f"
 dependencies = [
  "phf 0.11.3",
-]
-
-[[package]]
-name = "ogg_next_sys"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed2d7a48e247c2bb07e633aefb65a38648ea58c7eedd4e4408a5861721ab049b"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -10609,20 +10632,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vorbis_rs"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49c5da94d280f7a27e8c937e9b73df2da3e23a2583f48471fd8fb4c72f9c1933"
-dependencies = [
- "aotuv_lancer_vorbis_sys",
- "errno",
- "getrandom 0.4.3",
- "ogg_next_sys",
- "thiserror 2.0.21",
- "tinyvec",
-]
 
 [[package]]
 name = "wait-timeout"

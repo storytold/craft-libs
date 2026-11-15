@@ -20,6 +20,7 @@
 #![forbid(unsafe_code)]
 
 pub mod builtin;
+mod builtin_v2;
 pub mod clut;
 pub mod curve;
 pub mod gamut;
@@ -33,6 +34,7 @@ pub mod profile;
 pub mod synth;
 pub mod transform;
 mod write;
+pub mod write_v2;
 
 pub use builtin::Builtin;
 pub use clut::Clut;
