@@ -18,10 +18,10 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod bridge;
 /// Common bounded decoding and PNG/JPEG encoding for common image formats.
 pub mod common;
 pub mod dds;
-mod dds_bc;
 pub mod dicom;
 pub mod fits;
 pub mod iff;
@@ -215,45 +215,30 @@ impl Limits {
 
     /// Validates declared dimensions for an output buffer of the given layout and sample type.
     pub fn check(&self, width: u32, height: u32, layout: ChannelLayout, sample: SampleType) -> Result<(), CodecError> {
-        if width == 0 || height == 0 {
-            return Err(CodecError::InvalidImage(format!("zero-sized image {width}x{height}")));
-        }
-        if width > self.max_width || height > self.max_height {
-            return Err(CodecError::LimitExceeded(format!("dimensions {width}x{height} exceed max {}x{}", self.max_width, self.max_height)));
-        }
-        let pixels = width as u64 * height as u64;
-        if pixels > self.max_pixels {
-            return Err(CodecError::LimitExceeded(format!("{pixels} pixels exceed max {}", self.max_pixels)));
-        }
-        let bytes = pixels.saturating_mul((layout.channels() * sample.bytes()) as u64);
-        if bytes > self.max_alloc {
-            return Err(CodecError::LimitExceeded(format!("{bytes} bytes exceed max_alloc {}", self.max_alloc)));
-        }
-        if usize::try_from(bytes).is_err() {
-            return Err(CodecError::LimitExceeded(format!("{bytes} bytes do not fit in memory")));
-        }
-        Ok(())
+        let layout = match layout {
+            ChannelLayout::Gray => craft_image_codecs::ChannelLayout::Gray,
+            ChannelLayout::GrayA => craft_image_codecs::ChannelLayout::GrayA,
+            ChannelLayout::Rgb => craft_image_codecs::ChannelLayout::Rgb,
+            ChannelLayout::Rgba => craft_image_codecs::ChannelLayout::Rgba,
+            ChannelLayout::Cmyk => craft_image_codecs::ChannelLayout::Cmyk,
+            ChannelLayout::CmykA => craft_image_codecs::ChannelLayout::CmykA,
+        };
+        let sample = match sample {
+            SampleType::U8 => craft_image_codecs::SampleType::U8,
+            SampleType::U16 => craft_image_codecs::SampleType::U16,
+            SampleType::F32 => craft_image_codecs::SampleType::F32,
+        };
+        craft_image_codecs::Limits::new(self.max_width, self.max_height, self.max_pixels, self.max_alloc)
+            .check(width, height, layout, sample)
+            .map_err(crate::bridge::from_shared_error)
     }
 
     /// Decompression-bomb guard for formats that compress: refuses a file too small to hold
     /// `declared_bytes` of stored image data when the compression never beats `max_ratio`:1.
     /// Called before the output buffer is allocated. 1 MiB of slack leaves tiny images alone.
-    pub(crate) fn check_plausible(declared_bytes: u64, file_len: usize, max_ratio: u64) -> Result<(), CodecError> {
-        let capacity = (file_len as u64).saturating_mul(max_ratio).saturating_add(1 << 20);
-        if declared_bytes > capacity {
-            return Err(CodecError::LimitExceeded(format!("a {file_len} byte file cannot hold {declared_bytes} bytes of image data")));
-        }
-        Ok(())
+    pub fn check_plausible(declared_bytes: u64, file_len: usize, max_ratio: u64) -> Result<(), CodecError> {
+        craft_image_codecs::Limits::check_plausible(declared_bytes, file_len, max_ratio).map_err(crate::bridge::from_shared_error)
     }
-}
-
-/// A zero-filled buffer of `len` elements, allocated fallibly: an allocation failure is
-/// [`CodecError::LimitExceeded`] instead of an abort.
-pub(crate) fn alloc_zeroed<T: Copy + Default>(len: usize) -> Result<Vec<T>, CodecError> {
-    let mut v = Vec::new();
-    v.try_reserve_exact(len).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {len} elements for the image")))?;
-    v.resize(len, T::default());
-    Ok(v)
 }
 
 #[cfg(test)]
