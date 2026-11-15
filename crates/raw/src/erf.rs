@@ -123,6 +123,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         color: ColorData::default(),
         wb_multipliers: None,
         linearized: false,
+        linearization_table: None,
         opcodes: OpcodeLists::default(),
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),
         cinema: Default::default(),
