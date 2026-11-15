@@ -25,6 +25,8 @@ mod env;
 mod fontconfig;
 mod registry;
 mod scan;
+/// Bounded SFNT face metadata discovery over caller-provided random-access readers.
+pub mod sfnt;
 mod suitcase;
 pub mod system;
 
