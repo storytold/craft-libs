@@ -1,6 +1,6 @@
-//! The file list, the path field and the picker tickets they keep, against a file service that records its requests.
+//! The path field and the picker ticket it keeps, against a file service that records its requests.
 
-use craft_dialogs::ui::{FileList, FileListPicker, PathField};
+use craft_dialogs::ui::PathField;
 use craft_host::{AppInfo, FileError, Files, Host, PickAnswer, PickId, PickRequest, Picked};
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
@@ -70,42 +70,6 @@ fn host_with(files: &Arc<StubFiles>) -> Arc<Host> {
 
 fn paths(names: &[&str]) -> Vec<PathBuf> {
     names.iter().map(|n| PathBuf::from(format!("/photos/{n}"))).collect()
-}
-
-fn names(list: &FileList) -> Vec<String> {
-    list.files.iter().map(|p| p.file_name().expect("a file name").to_string_lossy().into_owned()).collect()
-}
-
-/// An answer arriving while the list shows lands in the list once and is written to the binding once: the footer's
-/// sizing pass takes and writes nothing.
-#[trial]
-fn browse_answer_is_taken_and_written_once() {
-    let files = Arc::new(StubFiles::default());
-    let list = Rc::new(RefCell::new(FileList::default()));
-    let changes = Rc::new(Cell::new(0usize));
-    let ticket = Rc::new(Cell::new(None::<PickId>));
-    let (held, counted, issued) = (Rc::clone(&list), Rc::clone(&changes), Rc::clone(&ticket));
-    let mut fixture = Fixture::new(move |ui| {
-        let mut list = held.borrow_mut();
-        let out = FileListPicker::new("Files to load", Bind::bound(&mut *list)).show(ui);
-        if out.browsing.is_some() {
-            issued.set(out.browsing);
-        }
-        if out.changed {
-            counted.set(counted.get() + 1);
-        }
-    });
-    fixture.host(host_with(&files));
-    fixture.settle();
-    let browse = fixture.by_label("Browse…").expect("the Browse button");
-    fixture.click(&browse);
-    fixture.settle();
-    changes.set(0);
-
-    files.answer(ticket.get().expect("Browse issued a ticket"), Picked::Paths(paths(&["a.png", "b.png"])));
-    fixture.idle(3);
-    assert_eq!(names(&list.borrow()), ["a.png", "b.png"]);
-    assert_eq!(changes.get(), 1, "the answer is written to the binding once");
 }
 
 /// The path field's Browse queues a pick through the file service, and the answer lands in the field's path once.

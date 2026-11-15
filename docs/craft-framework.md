@@ -591,8 +591,8 @@ Along a height its parent sizes from its content, a container that fills takes i
 
 | Crate | Components |
 | --- | --- |
-| `craft-color` | ColorPicker, ColorArea, ColorWheel, ColorDisc, ColorRamp, ColorPopover, SwatchPair, SwatchPalette |
-| `craft-draw` | GradientSwatch, GradientEditor, GradientPalette, gradient line, TransformFields, transform box, bezier paths, crop frame, perspective crop quad, pen draft |
+| `craft-color` | ColorPicker, ColorArea, ColorWheel, ColorDisc, ColorRamp, ColorPopover, SwatchPair, SwatchPalette, GradientEditor, the gradient stop rules and the gradient model |
+| `craft-draw` | GradientSwatch, GradientPalette, gradient line, TransformFields, transform box, bezier paths, crop frame, perspective crop quad, pen draft |
 | `craft-imaging` | LevelsEditor, CurveEditor, Histogram, warp grid |
 | `craft-layers` | Layers panel, rows, filter bar, thumbnails |
 | `craft-browse` | Tile grid, media bin, places, thumbnails, relink |
@@ -1187,6 +1187,7 @@ Colour for apps: picker, wells, swatch tables, ramps, hex field. New on the bran
 | `ui::choice` | Colour choice: named colours plus Custom | exists |
 | `ui::disc`, `ui::wheel`, `ui::ramp` | Colour disc, wheel and ramp | exists |
 | `ui::droppers`, `ui::eyedropper`, `ui::samplers`, `ui::screen_picker` | Dialog droppers, eyedropper tool, sample points, screen picker | exists |
+| `ui::gradient` | `GradientEditor`, the stop rules and the gradient model | exists |
 | `ui::harmony` | Harmony wheel | exists |
 | `ui::hex`, `ui::readout` | Hex field and channel readout | exists |
 | `ui::lut_picker` | LUT picker | exists |
@@ -1229,7 +1230,7 @@ Native file and message dialogs that never block the event loop.
 | `native` | Native dialogs on a worker thread | exists |
 | `save` | Save and Save As flow with guards | exists |
 | `service` | File dialog service behind the host's files | exists |
-| `ui::file_list`, `ui::path_field` | File list picker; path field with Browse | exists |
+| `ui::path_field` | Path field with Browse | exists |
 
 #### craft-docpath
 
@@ -1251,7 +1252,7 @@ Vector and shape tools, pen, stroke, gradient, crop, measure, symmetry, brush pr
 | `ui::connector` | Connector tool, overlay and bar | exists |
 | `ui::corner` | Corner radius widgets | exists |
 | `ui::crop` | Crop frame and crop tool | exists |
-| `ui::gradient` | Gradient swatch, editor, palette and on-canvas gradient line | exists |
+| `ui::gradient` | Gradient swatch, palette and on-canvas gradient line | exists |
 | `ui::measure` | Ruler tool, bar and box distances | exists |
 | `ui::pattern`, `ui::picture_fill` | Pattern fill picker; picture fill options | exists |
 | `ui::pen` | Pen draft and bezier paths | exists |
@@ -1368,7 +1369,6 @@ Raster image editing. New on the branch (step 1). Core at the root, widgets in `
 | `trace` | Mask outline tracing | exists |
 | `ui::adjust` | Levels editor and the colour adjustment editors | exists |
 | `ui::live_preview` | Live preview of an adjustment: keys, lanes, proxy plan |
-| `ui::blend_keys` | Blend-mode key picker | exists |
 | `ui::blur_pins` | Blur pins on the canvas | exists |
 | `ui::channels` | Channels panel | exists |
 | `ui::fill` | Fill-from-surroundings workspace | exists |
@@ -1740,8 +1740,9 @@ The derives and macros of the UI library: `Component`, `Props`, `ComponentStyle`
 | Module | Holds | State |
 | --- | --- | --- |
 | `patterns::dock` | `DockArea`, `DockPanels`, `PaneArea`, `WorkspaceSwitcher` | exists |
-| `patterns::form_dialogs` | Form dialogs, among them `PdfExportDialog` over `craft-pdf`'s settings | exists |
-| `patterns::panels` | `Inspector`, `CommandPalette`, `Tour` | exists |
+| `patterns::blend_keys` | Blend-mode key picker | exists |
+| `patterns::form_dialogs` | Form dialogs, among them `PdfExportDialog` over `craft-pdf`'s settings; `FileListPicker`, `FileList`, `FileListMode`, `FileListPickerOutput`, `FileListWords` | exists |
+| `patterns::panels` | `Inspector`, `CommandPalette`, `Tour`, `HistoryPanel`, `ModifierKeysPanel` | exists |
 | `patterns::preferences` | `PreferencesWindow` and its pages | exists |
 | `patterns::presets` | The preset browser over a generic preset library model | exists |
 

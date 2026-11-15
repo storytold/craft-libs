@@ -23,6 +23,9 @@ use std::path::{Path, PathBuf};
 #[cfg(feature = "testing")]
 mod stories;
 
+/// The list shows this many rows, then scrolls.
+const LIST_ROWS: u16 = 6;
+
 craft_ui::words! {
     /// The words of the file list picker.
     pub struct FileListWords {
@@ -133,6 +136,8 @@ impl Outcome for FileListPickerOutput {
 ///
 /// Keys: the list is one Tab stop; arrows move the selection; Delete and Backspace remove the selected file; Cmd+] and
 /// Cmd+[ move it up and down (Ctrl off macOS; Shift to the ends). Dropped files are added by the dialog with [`FileList::add`].
+///
+/// The list shows six rows and scrolls the rest.
 #[must_use = "show the picker with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct FileListPicker<'a> {
@@ -249,7 +254,7 @@ impl<'a> FileListPicker<'a> {
                 let source = Rows::new(paths);
                 let mut selection =
                     now.selected.as_ref().filter(|path| paths.contains(path)).map_or_else(Selection::default, |path| Selection::single(path.clone()));
-                let list = List::new(words.files.clone()).id_salt("files").surface(SurfaceKind::Sunken).pad(Pad::Control);
+                let list = List::new(words.files.clone()).id_salt("files").surface(SurfaceKind::Sunken).pad(Pad::Control).max_rows(LIST_ROWS);
                 let list = if folder {
                     list.select(SelectMode::None)
                 } else {

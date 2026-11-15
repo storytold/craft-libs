@@ -14,8 +14,8 @@ use egui::{Rect, Response, Vec2};
 /// The selection part that shows the text.
 const TEXT: PartKey = PartKey::new("text");
 
-/// The style of selectable text: padding from the control metrics, no surface, the body role in the normal text
-/// colour.
+/// The style of selectable text: padding from the control metrics when it is inset like a field's text, no surface,
+/// the body role in the normal text colour.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct SelectableStyle {
@@ -27,19 +27,23 @@ pub struct SelectableStyle {
 
 /// Read-only text the user focuses with a press to select and copy, which Tab passes over. Its node is a label named
 /// by `label`, with the text as its value.
-#[derive(crate::contract::Component)]
+#[derive(crate::contract::Component, crate::contract::Props)]
 pub struct SelectableText {
     #[common]
     common: Common,
     text: String,
     wrap: Wrap,
     mono: bool,
+    /// The text is inset by the control padding, as the text of a field.
+    #[style_key]
+    #[prop(flag)]
+    field_inset: bool,
 }
 
 impl SelectableText {
     /// Selectable `text` named `label`.
     pub fn new(label: impl Into<Label>, text: &str) -> Self {
-        SelectableText { common: Common::new(), text: text.to_owned(), wrap: Wrap::Line, mono: false }.label(label)
+        SelectableText { common: Common::new(), text: text.to_owned(), wrap: Wrap::Line, mono: false, field_inset: false }.label(label)
     }
 
     /// The text wraps over several lines.
@@ -69,12 +73,13 @@ impl Component for SelectableText {
     type Style = SelectableStyle;
     type Output = Response;
 
-    fn style(cx: &StyleCx<'_>, _: SelectableTextStyleKey) -> SelectableStyle {
+    fn style(cx: &StyleCx<'_>, key: SelectableTextStyleKey) -> SelectableStyle {
         let text = &cx.tokens.color.text;
         let color = cx.color(text.normal);
         let off = States::new(color, color, color, cx.color(text.disabled));
+        let metrics = if key.field_inset { Metrics::new().padding(Insets::horizontal(cx.control().pad_x)) } else { Metrics::new() };
         SelectableStyle {
-            metrics: Metrics::new().padding(Insets::horizontal(cx.control().pad_x)),
+            metrics,
             text: TextLook::new(TypeRole::Body, Stateful::new(color).off(off)),
         }
     }

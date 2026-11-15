@@ -184,3 +184,6 @@ fn classify_error(e: &zbus::Error) -> Option<bool> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests;
