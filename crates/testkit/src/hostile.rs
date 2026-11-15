@@ -471,7 +471,9 @@ fn run_cases<F>(label: String, limit: Limit, seed: Arc<[u8]>, rounds: usize, par
 where
     F: Fn(&[u8]) + Send + Sync + 'static,
 {
-    let first = Progress { case: "the unmodified seed".to_owned(), len: seed.len(), started: clock(), running: true, outcome: None };
+    // No case counts as running until the worker starts it, so a worker that starts late is not
+    // reported as a case past its limit.
+    let first = Progress { case: "the unmodified seed".to_owned(), len: seed.len(), started: clock(), running: false, outcome: None };
     let watch = Arc::new(Watch { state: Mutex::new(first), stopped: Condvar::new() });
     let (worker_watch, worker_clock, worker_label, worker_limit) = (Arc::clone(&watch), Arc::clone(&clock), label.clone(), limit.clone());
     thread::Builder::new()
@@ -650,6 +652,30 @@ mod tests {
         assert_eq!(message, "probe: the unmodified seed (len 1): the parser panicked: a payload that is not a message");
         assert_eq!(*seen.lock().unwrap(), Some(Some(true)), "the payload was dropped with the lock held or the case stopped");
         assert!(!watch.lock().running);
+    }
+
+    #[test]
+    fn a_worker_that_starts_late_is_not_a_case_past_its_limit() {
+        // The worker's first clock reading waits until the calling thread has checked the limit once,
+        // and that check reads an hour after the start; every other reading is zero.
+        let (checked, worker_waits) = mpsc::channel::<()>();
+        let (checked, worker_waits) = (Mutex::new(Some(checked)), Mutex::new(worker_waits));
+        let caller_reads = Mutex::new(0usize);
+        let clock: Clock = Arc::new(move || {
+            if thread::current().name() == Some(WORKER_NAME) {
+                let _ = worker_waits.lock().unwrap().recv();
+                return Duration::ZERO;
+            }
+            let mut reads = caller_reads.lock().unwrap();
+            *reads += 1;
+            if *reads == 2 {
+                drop(checked.lock().unwrap().take());
+                return Duration::from_secs(3600);
+            }
+            Duration::ZERO
+        });
+        let limit = Limit { limit: Duration::from_secs(5), text: "5s".to_owned() };
+        assert_eq!(run_cases("late start".to_owned(), limit, Arc::from(&[1u8][..]), 0, |_: &[u8]| {}, clock), Ok(()));
     }
 
     #[test]
