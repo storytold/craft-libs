@@ -194,6 +194,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         Some(r) => r,
         None => dark_trimmed(samples, w, hgt, black_point.as_deref().map(|v| v.iter().sum::<f64>() / 4.0), white),
     };
+    let mut assumed_cfa = false;
     let cfa = match (ifd0.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), ifd0.bytes(t::CFA_PATTERN_EP)) {
         (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
             Cfa { width: 2, height: 2, pattern: p.to_vec(), origin_x: 0, origin_y: 0 }
@@ -202,7 +203,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         // of the image area: the *ist D (origin 19, 11) and the 645D (80, 59) only fit unshifted. The 12-bit 10 MP
         // bodies and everything from the K-3 on say RGGB; the K-7 / K-5 / 645D generation says BGGR. Files without the
         // tag keep BGGR.
-        _ => cfa_from_exif(&tiff).unwrap_or_else(|| Cfa::bayer_static("BGGR")),
+        _ => cfa_from_exif(&tiff).unwrap_or_else(|| {
+            assumed_cfa = true;
+            Cfa::bayer_static("BGGR")
+        }),
     };
     let black = match black_point.as_deref() {
         Some(v @ [_, _, _, _]) => {
@@ -240,6 +244,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: crate::RawNotices { assumed_cfa, ..Default::default() },
     };
     img.validate_for(mode)?;
     Ok(img)
@@ -485,6 +490,47 @@ mod tests {
         // no tag: the assumed layout stays
         let img = decode(&tiny_pef(4, 2, 1, 16, &[0; 16]), Mode::Full, &Limits::default()).unwrap();
         assert_eq!(img.cfa, Some(Cfa::bayer_static("BGGR")));
+    }
+
+    #[test]
+    fn fixed_cfa_fallback_is_noticed_but_either_usable_metadata_form_is_not_assumed() {
+        use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+        let expected: Vec<u16> = (0..16).map(|i| 100 + i * 7).collect();
+        let valid_exif = &[2, 0, 2, 0, 1, 0, 2, 1][..];
+        let invalid_exif = &[2, 0, 2, 0, 1, 0][..];
+        for (primary, exif, assumed, pattern) in [
+            (None, None, true, "BGGR"),
+            (Some([0, 1, 1, 3]), None, true, "BGGR"),
+            (None, Some(invalid_exif), true, "BGGR"),
+            (Some([0, 1, 1, 3]), Some(invalid_exif), true, "BGGR"),
+            (Some([0, 1, 1, 3]), Some(valid_exif), false, "GRBG"),
+            (None, Some(valid_exif), false, "GRBG"),
+            (Some([0, 1, 1, 2]), None, false, "RGGB"),
+            (Some([0, 1, 1, 2]), Some(valid_exif), false, "RGGB"),
+        ] {
+            let mut raw = IfdBuilder::new();
+            raw.set(t::IMAGE_WIDTH, Value::Long(vec![4]));
+            raw.set(t::IMAGE_LENGTH, Value::Long(vec![4]));
+            raw.set(t::BITS_PER_SAMPLE, Value::Short(vec![16]));
+            raw.set(t::COMPRESSION, Value::Short(vec![1]));
+            raw.set(t::PHOTOMETRIC, Value::Short(vec![32803]));
+            raw.set(t::MAKE, Value::Ascii("PENTAX Corporation".into()));
+            if let Some(pattern) = primary {
+                raw.set(t::CFA_REPEAT_PATTERN_DIM, Value::Short(vec![2, 2]));
+                raw.set(t::CFA_PATTERN_EP, Value::Byte(pattern.to_vec()));
+            }
+            if let Some(pattern) = exif {
+                raw.set_child(t::EXIF_IFD, IfdBuilder::new().with(crate::EXIF_CFA_PATTERN, Value::Undefined(pattern.to_vec())));
+            }
+            raw.set_image(ImageData::Strips { rows_per_strip: 4, strips: vec![expected.iter().flat_map(|value| value.to_be_bytes()).collect()] });
+            let bytes = TiffWriter::new(ByteOrder::Big, false).write(&[raw]).unwrap();
+            for mode in [Mode::Header, Mode::Full] {
+                let image = decode(&bytes, mode, &Limits::default()).unwrap();
+                assert_eq!(image.cfa, Some(Cfa::bayer_static(pattern)));
+                assert_eq!(image.data, RawData::U16(expected.clone()));
+                assert_eq!(image.notices, crate::RawNotices { assumed_cfa: assumed, ..Default::default() });
+            }
+        }
     }
 
     /// A `w x h` big-endian 14-bit PEF of plain 16-bit words without area tags, whose maker note has only a
