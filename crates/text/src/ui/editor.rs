@@ -279,8 +279,8 @@ pub struct TextEditorOutput {
     /// The typing session as one gesture over the selection. The first text change gives `Begin`, later changes
     /// `Update`. `Commit` is Cmd+Enter, a primary press on the canvas background, or Esc when Esc commits ([`TextEditor::esc_commits`], Photoshop's Use ESC
     /// Key to Commit Text, on by default): the app ends the session, keeps the text and records one undo step.
-    /// `Cancel` is Esc when it doesn't commit: the app ends the session and undoes it. A session with no text
-    /// change gives no `Commit` or `Cancel`.
+    /// `Cancel` is Cmd+., or Esc when it doesn't commit: the app ends the session and undoes it. A session with no
+    /// text change gives no `Commit` or `Cancel`. While a composition is open the keys give neither.
     pub edit: EditResponse<TextSelection>,
     /// The Character panel command was pressed: the host shows or hides the panel. Set for the one pass.
     pub character_panel: bool,
@@ -313,7 +313,8 @@ impl Outcome for TextEditorOutput {
 /// - Keys: Left and Right by char (a selection collapses to its edge), with Cmd or Alt by word, Up and Down by
 ///   line, Cmd+Up and Cmd+Down to the text's start or end, Home and End to the line's edges, Shift extends any of
 ///   them. Backspace and Delete by char, Alt by word, Cmd+Backspace to the line start. Cmd+A all, Cmd+C, Cmd+X and
-///   Cmd+V the clipboard. Enter a line break; Cmd+Enter commits; Esc commits or cancels. The
+///   Cmd+V the clipboard. Enter a line break; Cmd+Enter commits; Esc commits or cancels; Cmd+. cancels;
+///   Cmd+T asks the host for its Character panel. The
 ///   [`TextEditorCommand`]s format. In vertical text the arrows turn with the flow, the formatting keys too: Alt+Up
 ///   and Alt+Down track, Alt+Left and Alt+Right set the leading. A formatting key the host does not take moves the
 ///   caret as its arrow does: a line, a word, or with Cmd to the text's start or end; Shift extends.
@@ -334,14 +335,24 @@ pub struct TextEditor<'a> {
     esc_commits: bool,
     changed: bool,
     selection_changed: bool,
+    character_panel: bool,
 }
 
 impl<'a> TextEditor<'a> {
     /// An editor named `label` over the app's text `host`, with the selection bound to `selection`.
     pub fn new(label: impl Into<Label>, host: &'a mut dyn TextEditorHost, selection: Bind<'a, TextSelection>) -> Self {
-        TextEditor { common: Common::new(), host, selection, smart_quotes: None, esc_commits: true, changed: false, selection_changed: false }
-            .label(label)
-            .command_scope(TextEditorCommand::SCOPE)
+        TextEditor {
+            common: Common::new(),
+            host,
+            selection,
+            smart_quotes: None,
+            esc_commits: true,
+            changed: false,
+            selection_changed: false,
+            character_panel: false,
+        }
+        .label(label)
+        .command_scope(TextEditorCommand::SCOPE)
     }
 }
 
@@ -546,15 +557,21 @@ impl Component for TextEditor<'_> {
             edits.done.commit = true;
         }
 
+        // Commands arrive with the pass's own input: a second pass of the frame takes none, so a commit, a cancel or
+        // the panel toggle is reported by one pass only. Commit and Cancel wait while a composition is open: the
+        // chord belongs to the input method then.
+        let mut character_panel = false;
         for command in fired {
-            let command = command.along_flow(edits.host.vertical());
-            let empty = edits.selection.is_empty();
-            match command.style_key(empty) {
-                None => edits.done.commit |= edits.session.preedit.is_none(),
-                Some(key) => {
-                    let handled = edits.host.style_key(key, edits.selection);
-                    if !handled && let Some((step, mods)) = command.fallback() {
-                        edits.move_along(step, mods);
+            match command.along_flow(edits.host.vertical()) {
+                TextEditorCommand::Commit => edits.done.commit |= edits.session.preedit.is_none(),
+                TextEditorCommand::Cancel => edits.done.cancel |= edits.session.preedit.is_none(),
+                TextEditorCommand::CharacterPanel => character_panel = true,
+                command => {
+                    if let Some(key) = command.style_key(edits.selection.is_empty()) {
+                        let handled = edits.host.style_key(key, edits.selection);
+                        if !handled && let Some((step, mods)) = command.fallback() {
+                            edits.move_along(step, mods);
+                        }
                     }
                 }
             }
@@ -590,6 +607,7 @@ impl Component for TextEditor<'_> {
         }
         self.changed = done.changed;
         self.selection_changed = selection != before;
+        self.character_panel = character_panel;
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -675,7 +693,7 @@ impl Component for TextEditor<'_> {
             changed: self.changed,
             selection_changed: self.selection_changed,
             edit: cx.edit_response(),
-            character_panel: false,
+            character_panel: self.character_panel,
         }
     }
 }

@@ -1,10 +1,12 @@
-//! Synthetic pointer and keyboard input: `ui.click`, `ui.move`, `ui.wheel`, `ui.key`, `ui.release`, `ui.type` and
-//! `ui.capsLock`.
+//! Synthetic pointer, keyboard and input-method input: `ui.click`, `ui.move`, `ui.wheel`, `ui.key`, `ui.release`,
+//! `ui.type`, `ui.ime` and `ui.capsLock`.
 //!
 //! This module reads and validates the protocol's parameters; the window host queues the input
 //! ([`WindowHost::inject_move`], [`WindowHost::inject_click`], [`WindowHost::inject_wheel`],
-//! [`WindowHost::inject_key`], [`WindowHost::inject_release`], [`WindowHost::inject_text`]), one step per pass, so a
-//! move, a press, a release and a key's down and up land on separate passes as real input does. The host answers the
+//! [`WindowHost::inject_key`], [`WindowHost::inject_release`], [`WindowHost::inject_text`],
+//! [`WindowHost::inject_ime`]), one step per pass, so a move, a press, a release, a key's down and up and each
+//! composition step land on separate passes as real input does. A request is validated whole before anything of it is
+//! queued, so a refused one leaves no half-queued press. The host answers the
 //! waiting replies once [`WindowHost::injected_idle`] turns true ([`crate::control::ControlChannel::poll_input`]), and
 //! withdraws a step queued for a document or focus that changed before the pass consumed it.
 //!
@@ -301,7 +303,7 @@ pub fn input_method(method: &str, params: &Value, host: &WindowHost, viewport: V
         "ui.key" => KeyPress::from_params(params).map(|key| key.inject(host, viewport)),
         "ui.release" => Release::from_params(params).and_then(|release| release.inject(host, viewport, map)),
         "ui.type" => text(params).map(|text| host.inject_text(viewport, &text)),
-        "ui.ime" => todo!("tl.T23"),
+        "ui.ime" => ime(params).map(|event| host.inject_ime(viewport, event)),
         "ui.capsLock" => caps_lock_from_params(params).map(|on| host.set_caps_lock(on)),
         _ => return None,
     })
@@ -311,4 +313,35 @@ pub fn input_method(method: &str, params: &Value, host: &WindowHost, viewport: V
 fn text(params: &Value) -> Result<String, String> {
     let p = Params(params).only(None, &["text"])?;
     Params(&p).str_field("text")?.map(str::to_owned).ok_or_else(|| "missing `text`".into())
+}
+
+/// A validated `ui.ime`: `{preedit, cursor?}`, the composition so far with the converted segment `[start, end]` in
+/// chars, or `{commit}`, the text it ends with. Exactly one of `preedit` and `commit`; `cursor` only with `preedit`.
+fn ime(params: &Value) -> Result<egui::ImeEvent, String> {
+    let p = Params(params).only(None, &["preedit", "cursor", "commit"])?;
+    let p = Params(&p);
+    let cursor = p.0.get("cursor").map(ime_cursor).transpose()?;
+    match (p.str_field("preedit")?, p.str_field("commit")?) {
+        (Some(text), None) => {
+            if cursor.as_ref().is_some_and(|range| range.end > text.chars().count()) {
+                return Err("cursor must lie within the preedit's characters".into());
+            }
+            Ok(egui::ImeEvent::Preedit { text: text.to_owned(), active_range_chars: cursor })
+        }
+        (None, Some(_)) if cursor.is_some() => Err("`cursor` goes with `preedit`, not `commit`".into()),
+        (None, Some(text)) => Ok(egui::ImeEvent::Commit(text.to_owned())),
+        (Some(_), Some(_)) => Err("`preedit` and `commit` exclude each other".into()),
+        (None, None) => Err("missing `preedit` or `commit`".into()),
+    }
+}
+
+/// `cursor`: `[start, end]`, char offsets into the preedit with `start <= end`.
+fn ime_cursor(cursor: &Value) -> Result<std::ops::Range<usize>, String> {
+    const SHAPE: &str = "cursor must be [start, end], non-negative integers with start <= end";
+    let offset = |value: &Value| value.as_u64().and_then(|at| usize::try_from(at).ok());
+    let ends = match cursor.as_array().map(Vec::as_slice) {
+        Some([start, end]) => offset(start).zip(offset(end)),
+        _ => None,
+    };
+    ends.filter(|(start, end)| start <= end).map(|(start, end)| start..end).ok_or_else(|| SHAPE.into())
 }

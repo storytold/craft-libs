@@ -345,6 +345,11 @@ fn movement(mac: bool, key: Key, mods: Mods, role: KeyRole) -> Option<Intent> {
         Key::Delete | Key::Backspace if role.deletes && role.nudge && !role.text => {
             mods.is_none().then(|| Intent::delete(key == Key::Delete, Granularity::Unit))
         }
+        // In text on macOS Cmd+Backspace deletes back to the line start; Cmd+Delete stays one character, as forward
+        // by line would delete a word in the canvas text editor.
+        Key::Backspace if mac && role.deletes && role.text && mods.cmd && !mods.alt => {
+            Some(Intent::Delete { forward: false, by: Granularity::Line, shift: mods.shift })
+        }
         Key::Delete | Key::Backspace if role.deletes && (!mods.alt || mac) => {
             let by = if by_word { Granularity::Word } else { Granularity::Unit };
             Some(Intent::Delete { forward: key == Key::Delete, by, shift: mods.shift })

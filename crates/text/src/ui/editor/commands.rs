@@ -1,4 +1,6 @@
-//! The editor's own commands: Photoshop's type formatting keys and the commit chord. The editor reads them with
+//! The editor's own commands: Photoshop's type formatting keys, the commit and cancel chords and the Character panel
+//! toggle. They sit in the `textEditor` scope, so they reach the editor before an app's shortcut on the same chord
+//! (Cmd+T is Free Transform elsewhere) while the editor holds the keys. The editor reads them with
 //! `take_command`, so the keymap rebinds them like any command; the editor reads no raw keys.
 
 use craft_behavior::{Granularity, MoveMods, NavMove};
@@ -84,13 +86,13 @@ pub enum TextEditorCommand {
 }
 
 impl TextEditorCommand {
-    /// The formatting key the command stands for; `None` for `Commit`. Tracking at a caret is kerning.
+    /// The formatting key the command stands for; `None` for `Commit`, `Cancel` and `CharacterPanel`. Tracking at a
+    /// caret is kerning.
     pub(super) fn style_key(self, selection_is_empty: bool) -> Option<StyleKey> {
         use TextEditorCommand as C;
         let tracking = |by: f32| if selection_is_empty { StyleKey::Kern(by) } else { StyleKey::Tracking(by) };
         Some(match self {
-            C::Commit => return None,
-            C::Cancel | C::CharacterPanel => return None, // P3(tools-w6): tl.T21
+            C::Commit | C::Cancel | C::CharacterPanel => return None,
             C::AllCaps => StyleKey::Toggle(CharToggle::AllCaps),
             C::Underline => StyleKey::Toggle(CharToggle::Underline),
             C::FauxBold => StyleKey::Toggle(CharToggle::FauxBold),
