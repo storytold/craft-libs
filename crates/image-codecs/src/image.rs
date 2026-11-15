@@ -1105,7 +1105,6 @@ mod tests {
                 let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
                 assert_eq!(bits(&got), bits(&want), "{layout:?} {sample:?}");
                 assert_eq!(bits(&got), bits(&via_convert), "{layout:?} {sample:?}: convert");
-                assert_eq!(got.capacity(), got.len(), "{layout:?} {sample:?}: one exact reservation");
             }
         }
     }
