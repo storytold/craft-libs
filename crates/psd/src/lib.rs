@@ -54,6 +54,7 @@ pub mod aco;
 pub mod act;
 pub mod adjust;
 pub mod animation;
+pub mod annotations;
 pub mod ase;
 pub mod asl;
 pub mod atn;
