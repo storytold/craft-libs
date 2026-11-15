@@ -26,7 +26,7 @@ pub fn header(bytes: &[u8]) -> Result<(u32, u32, u16), CodecError> {
         return Err(err("no image data"));
     }
     let (w, h) = crate::probe_size(bytes)?;
-    let orientation = exif.map_or(1, crate::exif_orientation);
+    let orientation = exif.map_or(1, craft_metadata::compat_orientation::orientation);
     let (w, h) = if (5..=8).contains(&orientation) { (h, w) } else { (w, h) };
     Ok((w, h, orientation))
 }
