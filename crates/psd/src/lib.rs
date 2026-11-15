@@ -81,6 +81,7 @@ pub mod image_data;
 mod io;
 pub mod layer;
 mod lazy;
+pub mod merged;
 pub mod metadata;
 pub mod path;
 pub mod patterns;
