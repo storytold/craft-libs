@@ -478,6 +478,8 @@ fn recent_section(
         })
         .show(ui, |ui, cx| {
             let mut lead = cx.keep::<Leads>().recent.clone().filter(|path| files.iter().any(|file| &file.path == path));
+            // One rule for the menu row, the palette and the keys: where the platform cannot reveal a file, the command is disabled.
+            cx.publish(StartRecentCommands::Reveal, commands::CommandState::new().enabled(craft_platform::open::CAN_REVEAL));
             while let Some((command, _)) = cx.take_command::<StartRecentCommands>() {
                 let action = match (command, lead.clone()) {
                     (StartRecentCommands::Clear, _) => Some(StartAction::ClearRecent),
@@ -579,9 +581,7 @@ fn recent_section(
                     let _ = MenuItem::command(StartRecentCommands::Open).show(ui);
                     let _ = MenuItem::command(StartRecentCommands::Remove).show(ui);
                     let _ = MenuItem::command(StartRecentCommands::Clear).show(ui);
-                    if craft_platform::open::CAN_REVEAL {
-                        let _ = MenuItem::command(StartRecentCommands::Reveal).show(ui);
-                    }
+                    let _ = MenuItem::command(StartRecentCommands::Reveal).show(ui);
                 });
             }
             cx.keep::<Leads>().recent = lead;
