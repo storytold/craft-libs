@@ -212,7 +212,8 @@ pub struct Viewport {
 }
 
 /// Wraps a validated SVG root in a new viewport while preserving the original root as content.
-/// The original root must have finite, positive pixel or point dimensions.
+/// The original root must have finite, positive pixel or point dimensions, and the wrapped
+/// output must still pass [`preflight`] under `limits`.
 pub fn rewrite_root_viewport(svg: &str, target: Viewport, limits: &Limits, output_limit: usize) -> Result<String, Error> {
     if !target.width.is_finite() || !target.height.is_finite() || target.width <= 0.0 || target.height <= 0.0 {
         return Err(Error::Viewport("target dimensions must be finite and positive".into()));
@@ -256,6 +257,9 @@ pub fn rewrite_root_viewport(svg: &str, target: Viewport, limits: &Limits, outpu
     output.push_str(&prefix);
     output.push_str(inner);
     output.push_str("</svg>");
+    // The wrapper adds a level, so a source at the depth limit can come out over it: check the
+    // output under the limits `parse_text` applies rather than return text it would refuse.
+    preflight(&output, limits)?;
     Ok(output)
 }
 

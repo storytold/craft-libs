@@ -666,3 +666,22 @@ fn rewrite_root_viewport_refusals() {
     assert_eq!(rewrite_root_viewport(sized, one, &limits, fits.len()).unwrap(), fits);
     assert!(matches!(rewrite_root_viewport(sized, one, &limits, fits.len() - 1), Err(Error::OutputTooLarge(n)) if n == fits.len() - 1));
 }
+
+#[test]
+fn rewrite_root_viewport_output_stays_within_the_limits() {
+    let limits = shallow();
+    let one = Viewport { width: 1.0, height: 1.0 };
+    let mut refused_at_the_limit = false;
+    for n in 0..limits.depth {
+        let source = svg(&groups(n));
+        if preflight(&source, &limits).is_err() {
+            break;
+        }
+        match rewrite_root_viewport(&source, one, &limits, 1 << 20) {
+            Ok(out) => assert!(parse_text(&out, &limits, &options()).is_ok(), "{n} groups"),
+            Err(Error::TooDeep(_)) => refused_at_the_limit = true,
+            Err(e) => panic!("{n} groups: {e:?}"),
+        }
+    }
+    assert!(refused_at_the_limit, "a source at the depth limit is refused, not wrapped past it");
+}
