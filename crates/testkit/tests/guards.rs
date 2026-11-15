@@ -1698,15 +1698,13 @@ fn rust_sources_does_not_open_a_cachedir_tag_fifo() {
             return;
         }
     }
-    let root = dir.path().to_path_buf();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(craft_testkit::rust_sources(root));
-    });
-    let sources = rx
-        .recv_timeout(std::time::Duration::from_secs(30))
-        .expect("rust_sources returns instead of blocking on the CACHEDIR.TAG FIFO")
-        .expect("rust_sources");
+    // Opening the FIFO for reading and writing does not wait for another end on Linux or macOS. The
+    // signature waits in the pipe, so a scan that opened the FIFO would read it and leave out `kept.rs`
+    // without blocking.
+    let mut pipe = std::fs::OpenOptions::new().read(true).write(true).open(&fifo).expect("open FIFO");
+    std::io::Write::write_all(&mut pipe, b"Signature: 8a477f597d28d172789f06886806bc55\n").expect("write signature");
+    let sources = craft_testkit::rust_sources(dir.path()).expect("rust_sources");
+    drop(pipe);
     assert_eq!(file_names(&sources), vec!["kept.rs", "lib.rs"]);
 }
 
