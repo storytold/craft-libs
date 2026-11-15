@@ -195,6 +195,27 @@ enum DataEnd {
 /// measured on these, not on the file length, which APP padding can inflate without
 /// adding image data.
 fn data_end(b: &[u8]) -> (DataEnd, u64) {
+    data_end_mode(b, false)
+}
+
+/// Whether the marker walk actually reaches the first EOI, with malformed segment lengths refused.
+pub(crate) fn reaches_eoi(b: &[u8]) -> bool {
+    data_end_mode(b, true).0 == DataEnd::Complete
+}
+
+fn find_ff(b: &[u8]) -> Option<usize> {
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    let (words, tail) = b.as_chunks::<8>();
+    for (i, word) in words.iter().enumerate() {
+        let x = !u64::from_ne_bytes(*word);
+        if x.wrapping_sub(ONES) & !x & (ONES << 7) != 0 {
+            return word.iter().position(|&v| v == 0xff).map(|j| i * 8 + j);
+        }
+    }
+    tail.iter().position(|&v| v == 0xff).map(|j| words.len() * 8 + j)
+}
+
+fn data_end_mode(b: &[u8], strict: bool) -> (DataEnd, u64) {
     // Where the bytes run out: inside the image data once a scan has held some.
     let cut = |scan_data: bool, scanned: u64| (if scan_data { DataEnd::Truncated } else { DataEnd::Empty }, scanned);
     let mut i = 2; // past SOI
@@ -207,7 +228,7 @@ fn data_end(b: &[u8]) -> (DataEnd, u64) {
             // segments after the stray bytes (padding among them) are still recognised. Stray
             // bytes are not scan data, so they never count (junk would buy budget as padding
             // did); with no marker left, the image data ends here.
-            let Some(p) = b.get(i..).and_then(|r| r.iter().position(|&v| v == 0xFF)) else { return cut(scan_data, scanned) };
+            let Some(p) = b.get(i..).and_then(find_ff) else { return cut(scan_data, scanned) };
             i += p;
             continue;
         }
@@ -216,15 +237,19 @@ fn data_end(b: &[u8]) -> (DataEnd, u64) {
             0xD9 => return (DataEnd::Complete, scanned),
             0xFF => i += 1,
             0x01 | 0xD0..=0xD8 => i += 2,
+            0x00 if strict => i += 2,
             _ => {
                 let Some(len) = b.get(i + 2..i + 4).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_be_bytes) else {
                     return cut(scan_data, scanned);
                 };
+                if strict && len < 2 {
+                    return cut(scan_data, scanned);
+                }
                 i = i.saturating_add(2 + usize::from(len));
                 if code == 0xDA {
                     let start = i;
                     loop {
-                        let Some(p) = b.get(i..).and_then(|r| r.iter().position(|&v| v == 0xFF)) else {
+                        let Some(p) = b.get(i..).and_then(find_ff) else {
                             // EOF inside this scan: everything from the scan start to the end
                             // of the file is scan data (inside a declared segment it may not
                             // be, so only count what remains).
