@@ -1087,12 +1087,12 @@ impl Document {
                             paths.push(path);
                         }
                     }
-                    if !paths.is_empty() {
-                        if let Some(bytes) = resolve(&paths) {
-                            budget.take(Some(bytes.len()), "a resolved image")?;
-                            image = Some(bytes);
-                            break;
-                        }
+                    if !paths.is_empty()
+                        && let Some(bytes) = resolve(&paths)
+                    {
+                        budget.take(Some(bytes.len()), "a resolved image")?;
+                        image = Some(bytes);
+                        break;
                     }
                 }
             }
