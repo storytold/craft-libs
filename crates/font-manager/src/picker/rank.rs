@@ -4,13 +4,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
-use craft_font_catalog::{Catalog, FaceInfo, LocalizedName};
+use craft_font_catalog::{Catalog, FaceInfo, LocalizedName, Outlines};
 use craft_i18n::matcher::{Matcher, Rank};
 use craft_i18n::{Collator, Folder};
 use skrifa::MetadataProvider as _;
 use skrifa::raw::{FontRef, TableProvider};
 
-use super::{FamilyRow, FontClass, FontFilters, FontPickerSettings, SIMILAR_COUNT};
+use super::{FamilyRow, FontClass, FontFilters, FontFormat, FontPickerSettings, SIMILAR_COUNT};
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -19,7 +19,10 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// What the catalog says about a family, read once per catalog generation.
 pub(super) struct Info {
     pub(super) localized: Vec<LocalizedName>,
-    pub(super) variable: bool,
+    /// Variable when any face of the family is; else the outlines of the regular face.
+    pub(super) format: FontFormat,
+    /// The number of faces of the family, named instances included.
+    pub(super) styles: usize,
     /// The upright face nearest weight 400: the one that stands for the family.
     pub(super) regular: FaceInfo,
 }
@@ -54,7 +57,25 @@ impl Traits {
 pub(super) struct Infos {
     pub(super) families: HashMap<String, Info>,
     traits: Mutex<HashMap<String, Option<Traits>>>,
-    samples: Mutex<HashMap<(String, String), String>>,
+    samples: Mutex<HashMap<(String, String, String), Samples>>,
+}
+
+/// The texts a row's thumbnails paint.
+#[derive(Clone, Default)]
+pub(super) struct Samples {
+    /// The Latin sample, the name or the face's first glyphs.
+    pub(super) latin: String,
+    /// The Arabic second sample, when the face draws it and the Latin sample.
+    pub(super) arabic: Option<String>,
+}
+
+/// The Arabic letters a face must map besides the Arabic sample: alef, lam, meem and ain.
+const ARABIC_CORE: &str = "\u{627}\u{644}\u{645}\u{639}";
+
+/// Whether a face gets the Arabic second sample: `drawn` (the face's character map) draws the Latin sample, the core
+/// Arabic letters and the Arabic sample.
+fn has_arabic_sample(drawn: &dyn Fn(&str) -> bool, latin: &str, arabic: &str) -> bool {
+    drawn(latin) && drawn(ARABIC_CORE) && drawn(arabic)
 }
 
 impl Infos {
@@ -68,7 +89,14 @@ impl Infos {
             .filter_map(|(family, faces)| {
                 let regular = regular_face(&faces)?.clone();
                 let localized = faces.iter().flat_map(|f| f.localized_families.iter().cloned()).collect();
-                Some((family, Info { localized, variable: faces.iter().any(|f| f.variable), regular }))
+                let format = if faces.iter().any(|f| f.variable) {
+                    FontFormat::Variable
+                } else if regular.outlines == Outlines::TrueType {
+                    FontFormat::TrueType
+                } else {
+                    FontFormat::OpenType
+                };
+                Some((family, Info { localized, format, styles: faces.len(), regular }))
             })
             .collect();
         Infos { families, traits: Mutex::new(HashMap::new()), samples: Mutex::new(HashMap::new()) }
@@ -89,31 +117,34 @@ impl Infos {
         lock(&self.traits).get(family).and_then(|t| t.as_ref()).and_then(|t| t.class)
     }
 
-    /// What the row's sample says: `sample` when the family's face draws it, else its name, else the
-    /// first glyphs the face has (a symbol or non-Latin face).
-    pub(super) fn sample_text(&self, catalog: &Catalog, family: &str, sample: &str, shown: &str) -> String {
-        let key = (family.to_owned(), sample.to_owned());
+    /// What the row's samples say: `sample` when the family's face draws it, else its name, else the
+    /// first glyphs the face has (a symbol or non-Latin face); and `arabic` as a second sample when the face
+    /// draws that too. Both come from one read of the face's character map.
+    pub(super) fn sample_text(&self, catalog: &Catalog, family: &str, sample: &str, arabic: &str, shown: &str) -> Samples {
+        let key = (family.to_owned(), sample.to_owned(), arabic.to_owned());
         if let Some(text) = lock(&self.samples).get(&key) {
             return text.clone();
         }
-        let text = self.families.get(family).and_then(|info| draws(catalog, &info.regular, sample, shown)).unwrap_or_default();
+        let text = self.families.get(family).and_then(|info| draws(catalog, &info.regular, sample, arabic, shown)).unwrap_or_default();
         lock(&self.samples).insert(key, text.clone());
         text
     }
 }
 
-fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, shown: &str) -> Option<String> {
+fn draws(catalog: &Catalog, face: &FaceInfo, sample: &str, arabic: &str, shown: &str) -> Option<Samples> {
     let data = catalog.load(face).ok()?;
     let font = FontRef::from_index(&data.bytes, face.index).ok()?;
     let map = font.charmap();
     let drawn = |t: &str| t.chars().filter(|c| !c.is_whitespace()).all(|c| map.map(c).is_some());
     if drawn(sample) {
-        return Some(sample.to_owned());
+        let arabic = has_arabic_sample(&drawn, sample, arabic).then(|| arabic.to_owned());
+        return Some(Samples { latin: sample.to_owned(), arabic });
     }
     if drawn(shown) {
-        return Some(shown.to_owned());
+        return Some(Samples { latin: shown.to_owned(), arabic: None });
     }
-    Some(map.mappings().filter_map(|(cp, _)| char::from_u32(cp)).filter(|c| !c.is_whitespace() && !c.is_control()).take(6).collect())
+    let first = map.mappings().filter_map(|(cp, _)| char::from_u32(cp)).filter(|c| !c.is_whitespace() && !c.is_control()).take(6).collect();
+    Some(Samples { latin: first, arabic: None })
 }
 
 type CacheEntry = (Weak<Catalog>, u64, Arc<Infos>);
@@ -247,6 +278,8 @@ pub(super) struct Listing<'a> {
     pub(super) current: &'a str,
     /// The interface language code the names are shown in.
     pub(super) language: &'a str,
+    /// Families the host can fetch but the catalog lacks; they list with the matches, by rank and name, with no class, format or sample.
+    pub(super) served: &'a [String],
 }
 
 /// How the interface language folds and orders text.
@@ -276,21 +309,31 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
                 family: family.clone(),
                 starred: settings.is_some_and(|s| s.favorites.iter().any(|f| f == family)),
                 class: infos.known_class(family),
-                format: info.variable.then_some(super::FontFormat::Variable), // P3(tools-w7): tl.T25 the format from the outlines.
-                styles: 0,
+                format: Some(info.format),
+                styles: info.styles,
                 recent: false,
                 shown,
             };
             Some((rank, row))
         })
         .collect();
+    for name in listing.served {
+        if infos.families.contains_key(name) || ranked.iter().any(|(_, r)| r.family == *name) {
+            continue;
+        }
+        if let Some(found) = matcher.score(name) {
+            let starred = settings.is_some_and(|s| s.favorites.iter().any(|f| f == name));
+            let row = FamilyRow { family: name.clone(), shown: name.clone(), starred, class: None, format: None, styles: 0, recent: false };
+            ranked.push((found.rank, row));
+        }
+    }
     ranked.sort_by(|(a_rank, a), (b_rank, b)| a_rank.cmp(b_rank).then_with(|| language.collator.compare(&a.shown, &b.shown)));
     let mut rows: Vec<FamilyRow> = ranked.into_iter().map(|(_, row)| row).collect();
     if filters.favorites {
         rows.retain(|r| r.starred);
     }
     if filters.variable {
-        rows.retain(|r| r.format == Some(super::FontFormat::Variable));
+        rows.retain(|r| r.format == Some(FontFormat::Variable));
     }
     if let Some(class) = filters.class {
         rows.retain_mut(|r| {
@@ -331,4 +374,30 @@ pub(super) fn list(catalog: &Arc<Catalog>, infos: &Infos, listing: &Listing<'_>,
         rows.splice(0..0, recent);
     }
     (rows, comparable)
+}
+
+#[cfg(test)]
+mod tests {
+    use craft_ui::testing::trial;
+
+    use super::{ARABIC_CORE, has_arabic_sample};
+
+    const LATIN: &str = "AaBbCc";
+    /// "أبجد هوز".
+    const ARABIC: &str = "\u{623}\u{628}\u{62C}\u{62F} \u{647}\u{648}\u{632}";
+
+    fn maps(chars: &str) -> impl Fn(&str) -> bool + '_ {
+        move |text| text.chars().filter(|c| !c.is_whitespace()).all(|c| chars.contains(c))
+    }
+
+    #[trial]
+    fn an_arabic_sample_needs_the_latin_sample_and_every_arabic_test_letter() {
+        let all = format!("{LATIN}{ARABIC_CORE}{ARABIC}");
+        assert!(has_arabic_sample(&maps(&all), LATIN, ARABIC));
+        assert!(!has_arabic_sample(&maps(LATIN), LATIN, ARABIC), "a Latin-only face");
+        for missing in LATIN.chars().chain(ARABIC_CORE.chars()).chain(ARABIC.chars().filter(|c| !c.is_whitespace())) {
+            let partial: String = all.chars().filter(|c| *c != missing).collect();
+            assert!(!has_arabic_sample(&maps(&partial), LATIN, ARABIC), "without U+{:04X}", missing as u32);
+        }
+    }
 }

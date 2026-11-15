@@ -293,7 +293,7 @@ pub fn family_rows(
     language: &str,
 ) -> Vec<FamilyRow> {
     let (folder, collator) = (craft_i18n::Folder::new(language), craft_i18n::Collator::new(language));
-    let listing = rank::Listing { query, settings, filters, current, language };
+    let listing = rank::Listing { query, settings, filters, current, language, served: &[] };
     rank::list(catalog, &infos(catalog), &listing, &rank::Language { folder: &folder, collator: &collator }, true).0
 }
 
@@ -378,13 +378,16 @@ impl Codec for FamilyCodec {
     }
 }
 
-/// What the picker keeps between passes: the draft the list was last filtered for, the family the list previews
-/// and whether the class column is hidden.
+/// What the picker keeps between passes: the draft the list was last filtered for, the family the list previews,
+/// whether the class column is hidden, and, for the open list only, the families whose styles show and the families
+/// already reported as rested.
 #[derive(Clone, Default)]
 struct Typing {
     draft: Option<String>,
     lead: Option<String>,
     hide_classes: bool,
+    expanded: Vec<String>,
+    rested: Vec<String>,
 }
 
 /// The interface language code of the host, English without one.
@@ -446,6 +449,8 @@ pub struct FontPicker<'a> {
     #[prop]
     filters: Option<Bind<'a, FontFilters>>,
     picked: Option<String>,
+    picked_style: Option<String>,
+    rested: Option<String>,
     /// The preview banner's text.
     #[prop]
     preview_text: Option<&'a str>,
@@ -457,8 +462,19 @@ pub struct FontPicker<'a> {
 impl<'a> FontPicker<'a> {
     /// A picker named `label` over the family `family` of `catalog`.
     pub fn new(label: impl Into<Label>, family: Bind<'a, String>, catalog: &'a Arc<Catalog>) -> Self {
-        FontPicker { common: Common::new(), family, catalog, settings: None, filters: None, picked: None, preview_text: None, served: &[] }
-            .label(label)
+        FontPicker {
+            common: Common::new(),
+            family,
+            catalog,
+            settings: None,
+            filters: None,
+            picked: None,
+            picked_style: None,
+            rested: None,
+            preview_text: None,
+            served: &[],
+        }
+        .label(label)
     }
 
     fn trailing(name: Label) -> [Adornment; 1] {
@@ -475,7 +491,7 @@ impl<'a> FontPicker<'a> {
         let (folder, collator) = (cx.env.folder(), cx.env.collator());
         let filters = FontFilters::default();
         let language = ui_language(&cx.env);
-        let listing = rank::Listing { query: "", settings, filters: &filters, current: "", language: &language };
+        let listing = rank::Listing { query: "", settings, filters: &filters, current: "", language: &language, served: &[] };
         rank::list(self.catalog, &infos, &listing, &rank::Language { folder: &folder, collator: &collator }, false).0
     }
 }
@@ -541,7 +557,11 @@ impl Component for FontPicker<'_> {
         if list.is_open(cx) {
             return;
         }
-        cx.memory::<Typing>().lead = None;
+        // The one place the picker forgets what belongs to an open list.
+        let typing = cx.memory::<Typing>();
+        typing.lead = None;
+        typing.expanded.clear();
+        typing.rested.clear();
         if matches!(cx.gesture(), Some(craft_behavior::GesturePhase::Begin | craft_behavior::GesturePhase::Update)) {
             cx.cancel(craft_behavior::CancelReason::Dismissed);
         }
@@ -593,6 +613,6 @@ impl Component for FontPicker<'_> {
             settings.note_recent(family);
             write(&mut bind, &mut cx, settings, "Recent font");
         }
-        FontPickerOutput { edit, picked, preview, picked_style: None, rested: None }
+        FontPickerOutput { edit, picked, preview, picked_style: self.picked_style, rested: self.rested }
     }
 }

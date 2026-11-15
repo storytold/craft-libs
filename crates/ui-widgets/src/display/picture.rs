@@ -3,7 +3,7 @@
 use super::display_sense;
 use crate::contract::{Access, Common, Component, Cx, DisabledLook, MeasureCx, PaintUi, Props as _, Role};
 use crate::list::{ThumbAspect, ThumbSize};
-use crate::primitives::{Revision, TextureStore, TextureStoreOptions, fit_rect};
+use crate::primitives::{ContentPainterCx, Revision, TextureStore, TextureStoreOptions, fit_rect};
 use crate::runtime::env::Label;
 use crate::style::{ComponentStyle, StyleCx};
 use craft_behavior::{Metrics, Sense};
@@ -36,21 +36,28 @@ pub struct PictureStyle {
     height: f32,
 }
 
-/// A picture of an image the caller makes. `image` runs only when the store holds no texture for `key` at the
-/// picture's revision, so a picture that does not change decodes once. The texture fits inside the picture's rect
-/// at its own aspect. It is decoration unless labelled: only a labelled picture is in the AccessKit tree, as an
+/// Where a picture's content comes from.
+enum Source<'a> {
+    /// Pixels the caller makes, stored as a texture under `key`.
+    Image { key: u64, image: &'a dyn Fn() -> ColorImage },
+    /// A content painter that paints into the picture's rect.
+    Painter(Box<dyn Fn(&ContentPainterCx, Rect) + 'a>),
+}
+
+/// A picture of an image the caller makes (`new`) or of what a content painter paints (`painter`); both sit in a rect
+/// of the same token sizes. `image` runs only when the store holds no texture for `key` at the picture's revision,
+/// so a picture that does not change decodes once. The texture fits inside the picture's rect at its own aspect; a
+/// painter gets the whole rect. It is decoration unless labelled: only a labelled picture is in the AccessKit tree, as an
 /// image, and its label shows as its tooltip.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component(content_painter)]
 pub struct Picture<'a> {
     #[common]
     common: Common,
-    /// What the picture is called in the texture store among the pictures of its component; one key, one picture.
-    key: u64,
     /// The version of the key's picture: a new revision makes `image` run again.
     #[prop]
     revision: Revision,
-    image: &'a dyn Fn() -> ColorImage,
+    source: Source<'a>,
     /// The width of the picture's rect as a multiple of its height.
     #[prop]
     aspect: ThumbAspect,
@@ -64,7 +71,17 @@ impl<'a> Picture<'a> {
     /// A picture of the image `image` makes, stored under `key`. `label` names it for a screen reader; an empty
     /// one leaves it decorative.
     pub fn new(label: impl Into<Label>, key: u64, image: &'a dyn Fn() -> ColorImage) -> Self {
-        Picture { common: Common::new(), key, revision: Revision::default(), image, aspect: ThumbAspect::SQUARE, extent: PictureSize::Icon }
+        Picture::from_source(label, Source::Image { key, image })
+    }
+
+    /// A picture of what `paint` paints into the picture's rect, whose width is `aspect` times its height. `label`
+    /// names it for a screen reader; an empty one leaves it decorative.
+    pub fn painter(label: impl Into<Label>, aspect: ThumbAspect, paint: impl Fn(&ContentPainterCx, Rect) + 'a) -> Self {
+        Picture::from_source(label, Source::Painter(Box::new(paint))).aspect(aspect)
+    }
+
+    fn from_source(label: impl Into<Label>, source: Source<'a>) -> Self {
+        Picture { common: Common::new(), revision: Revision::default(), source, aspect: ThumbAspect::SQUARE, extent: PictureSize::Icon }
             .label(label)
     }
 }
@@ -109,11 +126,16 @@ impl Component for Picture<'_> {
         if cx.style.height <= 0.0 {
             return;
         }
-        let store = TextureStore::<(Id, u64)>::in_context(&cx.ctx, "picture", TextureStoreOptions::thumbnails());
-        let texture = store.get_or_put(&cx.ctx, (cx.resolved.id, self.key), self.revision, self.image);
-        let target = fit_rect(cx.content_rect, texture.size_vec2());
-        let whole = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
-        ui.content_painter(cx).picture(texture.id, target, whole, 0.0);
+        match &self.source {
+            Source::Image { key, image } => {
+                let store = TextureStore::<(Id, u64)>::in_context(&cx.ctx, "picture", TextureStoreOptions::thumbnails());
+                let texture = store.get_or_put(&cx.ctx, (cx.resolved.id, *key), self.revision, *image);
+                let target = fit_rect(cx.content_rect, texture.size_vec2());
+                let whole = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+                ui.content_painter(cx).picture(texture.id, target, whole, 0.0);
+            }
+            Source::Painter(paint) => paint(&ui.content_painter(cx), cx.content_rect),
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> Response {

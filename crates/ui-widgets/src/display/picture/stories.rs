@@ -2,7 +2,7 @@
 
 use super::{Picture, PictureSize};
 use crate::contract::Show as _;
-use crate::list::ThumbSize;
+use crate::list::{ThumbAspect, ThumbSize};
 use crate::testing::{Drive, StoryData, StoryOutput, story};
 use egui::{Color32, ColorImage, Ui};
 
@@ -28,4 +28,9 @@ fn picture_thumbnail(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     })
     .inner
     .into()
+}
+
+#[story(Picture<'static>, covers = [], drive = Drive::Never)]
+fn picture_painter(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    Picture::painter("Swatch", ThumbAspect::new(4, 1), |cx, rect| cx.checker(rect)).extent(PictureSize::Thumb(ThumbSize::Large)).show(ui).into()
 }
