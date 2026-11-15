@@ -260,6 +260,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
     /// Typed text moves the lead to the next row whose label starts with it.
     pub(super) fn type_ahead(&mut self, comp: &C, cx: &mut Cx<'_, C>, layout: &C::ItemLayout, lead_at: Option<usize>) {
         let (ctx, id, len) = (cx.core.ctx.clone(), cx.core.id, self.source.len());
+        let folder = cx.core.env.folder();
         while let Some(text) = cx.core.intents.take_text() {
             let now = frame::clock(&ctx);
             let mut typing = cx.core.memory.session::<Typing>(sub(id, "typing")).0.clone();
@@ -269,8 +270,7 @@ impl<C: Collection> ItemsHooks<'_, '_, C> {
             }
             cx.core.memory.session::<Typing>(sub(id, "typing")).0 = typing;
             let source = self.source;
-            if let Some(to) = TypeAhead::pick(&prefix, lead_at, len, |at| source.text(at).unwrap_or_default(), str::to_lowercase) {
-                // P3(canvas-widgets-w12): cw.C64
+            if let Some(to) = TypeAhead::pick(&prefix, lead_at, len, |at| source.text(at).unwrap_or_default(), |text| folder.key(text)) {
                 self.move_lead(to, LeadSource::Keys);
                 self.pick(comp, to, false, false);
                 self.reveal_with(layout, to);

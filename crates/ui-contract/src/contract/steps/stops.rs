@@ -5,7 +5,7 @@ use crate::contract::Resolved;
 use crate::runtime::egui::memory as store;
 use crate::runtime::focus::{self, Group, Stop};
 use crate::runtime::memory::sub;
-use craft_behavior::{KeyRole, PartRef};
+use craft_behavior::{DocKey, KeyRole, PartRef};
 use egui::{Context, Id};
 
 /// The parts of last pass's complete set in which this pass's results are read; first-frame parts read idle.
@@ -37,6 +37,8 @@ pub(crate) struct StopsIn<'a> {
     pub item: bool,
     /// The component's stop is its scope's default.
     pub default_stop: bool,
+    /// The component's resolved document key: `FocusTarget::Doc` with it focuses the component.
+    pub doc_key: Option<DocKey>,
 }
 
 /// The id of the roving group a container's body forms.
@@ -81,6 +83,10 @@ pub(crate) fn register_stops(input: &StopsIn<'_>) -> Vec<Stop> {
     };
     if input.focusable {
         focus::register_stop(ctx, if let Some(group) = input.group.or(input.row) { own().in_group(group) } else { own() });
+    }
+    let part_stops = input.parts_focus && input.parts.decls.iter().any(|(_, extras)| extras.focusable);
+    if let Some(key) = input.doc_key.filter(|_| input.focusable || part_stops) {
+        focus::register_doc(ctx, key, input.id);
     }
     // A selection part is a press-only stop in no group: neither Tab nor the arrows reach it.
     if input.parts_focus {

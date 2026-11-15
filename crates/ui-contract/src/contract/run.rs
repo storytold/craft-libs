@@ -735,6 +735,7 @@ fn stops_step(at: StopsStep<'_>, e: &mut dyn ErasedPass<'_>, facts: &TypeFacts, 
         row: env.row,
         item: env.item == Some(id),
         default_stop: resolved.default_stop,
+        doc_key: resolved.doc_key,
     });
 }
 

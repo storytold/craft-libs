@@ -137,7 +137,8 @@ pub struct Group {
     pub lead: Option<StopKey>,
     /// The group is a collection row's children: Tab leaves the collection and Forward enters the row.
     pub row: bool,
-    /// The collection a row group belongs to: Escape, Up and Down and Back from the first child return focus to it.
+    /// The component whose body or rows the group is: the container of a body group, or the collection of a row group,
+    /// to which Escape, Up and Down and Back from the first child return focus.
     pub owner: Option<Id>,
     /// The group lays out right to left: a physical Left or Right arrow moves the opposite way.
     pub rtl: bool,
@@ -168,8 +169,12 @@ impl Group {
     }
 
     /// Marks the children of a row of `owner`'s collection.
-    pub fn row(mut self, owner: Id) -> Self {
-        self.row = true;
+    pub fn row(self, owner: Id) -> Self {
+        Group { row: true, ..self.owner(owner) }
+    }
+
+    /// The component whose body or rows the group is.
+    pub fn owner(mut self, owner: Id) -> Self {
         self.owner = Some(owner);
         self
     }

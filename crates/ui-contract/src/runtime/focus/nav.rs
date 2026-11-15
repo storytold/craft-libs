@@ -1,7 +1,7 @@
 //! Focus movement: Tab and F6, roving groups, initial focus, restore, programmatic requests and focus after
 //! removal. Every movement reads last pass's registrations and returns the egui changes to apply.
 
-use super::{Act, BeginIn, FocusTarget, Initial, PickedIn, State, StopKey, StopRec};
+use super::{Act, BeginIn, FocusTarget, Initial, PickedIn, State, StopKey, StopRec, TabReach};
 use crate::runtime::egui::focus as egui_focus;
 use crate::runtime::egui::memory::FastMap;
 use craft_behavior::focus::after_removal;
@@ -61,6 +61,15 @@ impl NavOutline for Members {
     }
 }
 
+/// The walk out of a layer (`State::walk_out`).
+pub(super) struct MenuWalk {
+    /// The stop focus goes to once every crossed scope closes; `None` when a crossed scope returns focus nowhere or
+    /// the chain loops.
+    pub(super) to: Option<StopRec>,
+    /// The layer the walk started from, then each menu it crossed, innermost first.
+    pub(super) crossed: Vec<Id>,
+}
+
 /// One pass's registrations: the stops, roving groups and row groups Tab order is made of.
 #[derive(Clone, Copy)]
 struct Lists<'a> {
@@ -112,6 +121,7 @@ impl State {
         self.last_scope_order = std::mem::take(&mut self.scope_order);
         self.last_groups = std::mem::take(&mut self.groups);
         self.last_row_sets = std::mem::take(&mut self.row_sets);
+        self.last_docs = std::mem::take(&mut self.docs);
         self.open.clear();
         self.body_from.clear();
         self.entered = false;
@@ -267,7 +277,9 @@ impl State {
         self.last_scope_order.iter().rev().find(|id| self.last_scopes.get(id).is_some_and(|scope| scope.policy.trap)).copied()
     }
 
-    pub(super) fn tab(&mut self, forward: bool, all_controls: bool) -> Vec<Act> {
+    /// A Tab move. In a dialog's trap with `dialog_tab` at `Fields`, only text stops are entries, whatever the
+    /// window's rule: a roving group whose arrival member holds no text is skipped too.
+    pub(super) fn tab(&mut self, forward: bool, all_controls: bool, dialog_tab: TabReach) -> Vec<Act> {
         // A child of a collection row tabs on from its collection: the row groups are no Tab entries. The content of a
         // layer that keeps the focus on its anchor (a dropdown) is no Tab entry either: Tab goes on from the anchor.
         let current = self.stop_of_focus().map(|rec| {
@@ -275,8 +287,11 @@ impl State {
             let rec = owner.unwrap_or(rec);
             self.anchored_layer(rec.scope).and_then(|opener| self.find_stop(opener)).unwrap_or(rec)
         });
-        let mut entries = self.entries(self.trap_of(current.as_ref()), all_controls);
-        entries.retain(|entry| self.anchored_layer(entry.arrival().scope).is_none());
+        let trap = self.trap_of(current.as_ref());
+        let in_dialog = trap.and_then(|id| self.last_scopes.get(&id)).is_some_and(|scope| scope.policy.kind == ScopeKind::Dialog);
+        let fields = in_dialog && dialog_tab == TabReach::Fields;
+        let mut entries = self.entries(trap, all_controls && !fields);
+        entries.retain(|entry| self.anchored_layer(entry.arrival().scope).is_none() && (!fields || entry.arrival().stop.text));
         let Some(next) = cycle(&entries, current.as_ref(), forward) else { return Vec::new() };
         let arrival = entries[next].arrival().clone();
         self.focus_stop(arrival)
@@ -321,7 +336,7 @@ impl State {
         let key = match target {
             FocusTarget::Id(id) => (id, None),
             FocusTarget::Part(id, part) => (id, Some(part)),
-            FocusTarget::Doc(doc) => match self.docs.get(&doc) {
+            FocusTarget::Doc(doc) => match self.docs.get(&doc).or_else(|| self.last_docs.get(&doc)) {
                 Some(id) => (*id, None),
                 None => return Vec::new(),
             },
@@ -438,16 +453,22 @@ impl State {
         self.stops.iter().find(|rec| rec.stop.key() == opener).cloned()
     }
 
-    /// Where a pick returns focus before its command runs: the pick closes the chain of menus around the focused stop,
-    /// or the layer it was picked in, so focus goes to the opener of the outermost scope that closes, or to the stop a
-    /// menu bar took focus from when that opener is the bar. `None` when focus is in nothing the pick closes.
+    /// Where a pick returns focus before its command runs: the pick closes the menus the walk out of the layer it ran
+    /// in crosses (`walk_out`), or the modal layer it was picked in, so focus goes to the opener of the outermost scope
+    /// that closes, or to the stop a menu bar took focus from when that opener is the bar. `None` when focus is in
+    /// nothing the pick closes.
     pub(super) fn picked_focus(&mut self, picked: PickedIn) -> Option<StopRec> {
         let inside = self.stop_of_focus()?;
-        let closes = |id: Id| match picked {
-            PickedIn::Menus => self.scopes.get(&id).or_else(|| self.last_scopes.get(&id)).is_some_and(|scope| scope.policy.kind == ScopeKind::Menu),
-            PickedIn::Layer(layer) => id == layer,
+        let mut opener = match picked {
+            PickedIn::Menus(layer) => {
+                let walk = self.walk_out(layer);
+                if !walk.crossed.iter().any(|menu| self.within(inside.scope, *menu)) {
+                    return None;
+                }
+                walk.to?.stop.key()
+            }
+            PickedIn::Layer(layer) => self.opener_back(inside.scope, |id| id == layer)?,
         };
-        let mut opener = self.opener_back(inside.scope, closes)?;
         if let Some((bar, held)) = self.bar_return
             && opener.0 == bar
         {
@@ -457,18 +478,70 @@ impl State {
         self.find_stop(opener)
     }
 
+    /// Whether the scope `from` is `scope` or sits inside it.
+    pub(super) fn within(&self, from: Option<Id>, scope: Id) -> bool {
+        let mut at = from;
+        while let Some(id) = at {
+            if id == scope {
+                return true;
+            }
+            at = self.scopes.get(&id).or_else(|| self.last_scopes.get(&id)).and_then(|record| record.parent);
+        }
+        false
+    }
+
+    /// The innermost menu scope around the scope `from`, `from` included.
+    pub(super) fn menu_scope(&self, from: Option<Id>) -> Option<Id> {
+        let mut at = from;
+        while let Some(id) = at {
+            let scope = self.scopes.get(&id).or_else(|| self.last_scopes.get(&id))?;
+            if scope.policy.kind == ScopeKind::Menu {
+                return Some(id);
+            }
+            at = scope.parent;
+        }
+        None
+    }
+
+    /// The menu `rec` is a row of: it sits in that menu and joined the roving group of the body it is in. A field in
+    /// a menu (Help's search) sits in the body without joining it.
+    fn row_menu(&self, rec: &StopRec) -> Option<Id> {
+        (rec.stop.group.is_some() && rec.stop.group == rec.stop.body).then(|| self.menu_scope(rec.scope)).flatten()
+    }
+
+    /// Where focus goes once the menus around the scope `from` close, and the outermost of them: the walk out of the
+    /// innermost menu around `from` (`walk_out`). `None` when `from` is in no menu, or the walk finds no stop.
+    pub(super) fn out_of_menus(&self, from: Option<Id>) -> Option<(StopRec, Id)> {
+        let walk = self.walk_out(self.menu_scope(from)?);
+        let root = *walk.crossed.last()?;
+        Some((walk.to?, root))
+    }
+
+    /// The walk out of the layer `layer`: it crosses `layer`, then each menu whose row the last crossed scope returns
+    /// focus to (a submenu returns to its parent row), and ends at the first stop that is not a menu row, a field
+    /// inside another menu included. A popup opened from such a stop starts its own chain. Which menus an activation
+    /// closes, where its command resolves and fires, and where focus returns all come from this walk.
+    pub(super) fn walk_out(&self, layer: Id) -> MenuWalk {
+        let mut crossed = vec![layer];
+        loop {
+            let Some(rec) = crossed.last().and_then(|scope| self.return_stop(*scope)) else {
+                return MenuWalk { to: None, crossed };
+            };
+            let Some(menu) = self.row_menu(&rec) else {
+                return MenuWalk { to: Some(rec), crossed };
+            };
+            if crossed.contains(&menu) {
+                return MenuWalk { to: None, crossed };
+            }
+            crossed.push(menu);
+        }
+    }
+
     /// The stop focus returns to when the scope `scope` closes. A scope opened while nothing held focus records its own
     /// first stop as its opener: that is no stop to return to.
     pub(super) fn return_stop(&self, scope: Id) -> Option<StopRec> {
         let rec = self.opener_back(Some(scope), |id| id == scope).and_then(|key| self.find_stop(key))?;
-        let mut at = rec.scope;
-        while let Some(id) = at {
-            if id == scope {
-                return None;
-            }
-            at = self.scopes.get(&id).or_else(|| self.last_scopes.get(&id)).and_then(|record| record.parent);
-        }
-        Some(rec)
+        (!self.within(rec.scope, scope)).then_some(rec)
     }
 
     /// Walking out from `from`, the opener focus returns to when the scopes `closes` names go away: the opener of the
@@ -559,7 +632,7 @@ pub(super) fn begin(state: &mut State, input: BeginIn) -> (Vec<Act>, Vec<String>
         acts.extend(state.apply_target(target));
     }
     for forward in input.nav.tabs {
-        let moved = state.tab(forward, input.tab_all_controls);
+        let moved = state.tab(forward, input.tab_all_controls, input.dialog_tab);
         state.press.by_keys |= !moved.is_empty();
         if let Some(from) = input.focused.filter(|_| !moved.is_empty()) {
             state.press.tabbed_from = Some((from, forward));

@@ -1,5 +1,6 @@
 //! The focus service and the key stage, driven through registered stops over real egui widgets.
 
+mod dialog_tab;
 mod keys;
 mod press;
 mod roving;

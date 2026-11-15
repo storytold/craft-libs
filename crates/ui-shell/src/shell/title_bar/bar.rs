@@ -227,11 +227,11 @@ impl Component for TitleBar<'_> {
         Sense::empty()
     }
 
-    /// One inert part over the bar's rect. A press anywhere on the bar keeps a focused draft (the zoom field)
-    /// unapplied.
+    /// One inert part over the bar's rect. A press anywhere on the bar (its move band, the menu titles, the captions)
+    /// keeps a focused draft (the zoom field) unapplied; sensing nothing, the part leaves presses and hover to the
+    /// members under it.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        // P3(canvas-widgets-w11): cw.C65 adds `.holds_drafts()` (cw.C58) once it has a body.
-        cx.part(PartKey::new("title_bar"), rect).sense(Sense::empty());
+        cx.part(PartKey::new("title_bar"), rect).sense(Sense::empty()).holds_drafts();
     }
 
     fn access(&self, access: &mut Access, cx: &Cx<'_, Self>) {

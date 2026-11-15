@@ -100,6 +100,8 @@ pub(crate) struct BeginIn {
     pub(crate) press: Option<press::PressAt>,
     pub(crate) nav: crate::runtime::keys::NavKeys,
     pub(crate) tab_all_controls: bool,
+    /// Which stops Tab visits inside a dialog's trap (`RootEnv::dialog_tab`).
+    pub(crate) dialog_tab: TabReach,
     pub(crate) frame: u64,
 }
 
@@ -132,6 +134,8 @@ pub(crate) struct State {
     pub(crate) focus_now: Option<Id>,
     pub(super) pending: Option<FocusTarget>,
     pub(super) docs: FastMap<DocKey, Id>,
+    /// Last pass's `docs`: a focus request made between passes resolves against the components that last showed.
+    pub(super) last_docs: FastMap<DocKey, Id>,
     pub(super) revealed: Option<StopKey>,
     pub(super) seen: FastMap<Id, u64>,
     /// A scope moved focus to its initial stop in the running pass.
@@ -431,8 +435,38 @@ pub fn give_back_bar(ctx: &Context) -> bool {
 
 /// The stop a menu bar took the focus from, while the bar's stop `focused` holds it: where a shortcut pressed on the
 /// bar matches and goes.
-pub(crate) fn bar_return_of(ctx: &Context, focused: Id) -> Option<Id> {
-    with(ctx, |state| state.bar_return.as_ref().filter(|(bar, _)| *bar == focused).map(|(_, (id, _))| *id))
+pub(crate) fn bar_return_of(ctx: &Context, focused: Id) -> Option<StopKey> {
+    with(ctx, |state| state.bar_return.as_ref().filter(|(bar, _)| *bar == focused).map(|(_, key)| *key))
+}
+
+/// Where focus goes once every menu around the scope `from` closes, as `out_of_menus` finds it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OutOfMenus {
+    /// The stop focus goes to.
+    pub(crate) to: StopKey,
+    /// `to` is the stop a menu bar took the focus from, which `give_back_bar` gives it back to.
+    pub(crate) bar: bool,
+    /// The outermost menu of the chain: the layer whose closing ends it.
+    pub(crate) root: Id,
+}
+
+/// Where focus goes once the menus around the scope `from` close (`State::out_of_menus`), and from a menu bar reached
+/// that way on to the stop the bar took the focus from. A shortcut pressed in a menu matches there, a component inside
+/// a menu resolves its bound command from there, and a pick returns focus there (`return_from_pick`), as with the
+/// menus closed.
+pub(crate) fn out_of_menus(ctx: &Context, from: Option<Id>) -> Option<OutOfMenus> {
+    let (to, root) = with(ctx, |state| state.out_of_menus(from).map(|(rec, root)| (rec.stop.key(), root)))?;
+    Some(match bar_return_of(ctx, to.0) {
+        Some(held) => OutOfMenus { to: held, bar: true, root },
+        None => OutOfMenus { to, bar: false, root },
+    })
+}
+
+/// What an activation inside the layer `layer` closes: `layer` and the menus the walk out of it crosses
+/// (`State::walk_out`), innermost first. A popup opened from a stop that is no menu row, such as a field inside a
+/// menu, closes alone.
+pub(crate) fn menus_closed_from(ctx: &Context, layer: Id) -> Vec<Id> {
+    with(ctx, |state| state.walk_out(layer).crossed)
 }
 
 /// Forgets the stop a menu bar took focus from: focus left the bar by other means, so a later Escape has nowhere
@@ -446,8 +480,8 @@ pub fn forget_bar_return(ctx: &Context) {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[doc(hidden)]
 pub enum PickedIn {
-    /// The chain of menus around the focused stop.
-    Menus,
+    /// The layer the pick ran in and the menus the walk out of it crosses (`menus_closed_from`).
+    Menus(Id),
     /// The modal layer the pick was made in (the command palette).
     Layer(Id),
 }
@@ -474,7 +508,6 @@ pub(crate) fn return_stop(ctx: &Context, scope: Id) -> Option<(StopRec, Vec<Id>)
 }
 
 /// Registers the component that `FocusTarget::Doc(key)` focuses.
-#[cfg_attr(not(feature = "testing"), expect(dead_code, reason = "the component pipeline (F3) registers and reads it"))]
 pub(crate) fn register_doc(ctx: &Context, key: DocKey, id: Id) {
     with(ctx, |state| {
         state.docs.insert(key, id);
@@ -675,12 +708,12 @@ pub(crate) fn take_reveal(ctx: &Context) -> Option<StopKey> {
 
 /// The begin hook: applies a pending request and this pass's Tab and F6 moves, then classifies the press.
 pub(crate) fn begin(ctx: &Context, tab_all_controls: bool, dialog_tab: TabReach) {
-    let _ = dialog_tab; // P3(canvas-widgets-w12): cw.C63
     let input = BeginIn {
         focused: egui_focus::focused(ctx),
         press: press::press_at(ctx),
         nav: crate::runtime::keys::take_nav(ctx),
         tab_all_controls,
+        dialog_tab,
         frame: crate::runtime::egui::pass::frame_nr(ctx, viewport(ctx)),
     };
     let tab_to_egui = input.nav.tab_to_egui;
@@ -749,38 +782,33 @@ pub(crate) fn scope_chain(ctx: &Context, rec: &StopRec) -> Vec<Id> {
 /// Whether focus sits inside a menu and arrived by keyboard.
 #[doc(hidden)]
 pub fn keyboard_in_menu(ctx: &Context) -> bool {
-    focused_rec(ctx).is_some_and(|rec| menu_scope(ctx, &rec).is_some()) && with(ctx, |state| state.visible)
+    focused_rec(ctx).is_some_and(|rec| menu_scope(ctx, rec.scope).is_some()) && with(ctx, |state| state.visible)
 }
 
-/// The innermost menu scope `rec` sits in: plain typed text inside a menu goes to its container.
-pub(crate) fn menu_scope(ctx: &Context, rec: &StopRec) -> Option<Id> {
-    with(ctx, |state| {
-        let mut at = rec.scope;
-        while let Some(id) = at {
-            let scope = state.last_scopes.get(&id)?;
-            if scope.policy.kind == craft_behavior::ScopeKind::Menu {
-                return Some(id);
-            }
-            at = scope.parent;
-        }
-        None
-    })
+/// The container that runs the menu level the stop `rec` sits in: the owner of the innermost body around it, while it
+/// is inside a menu. Plain typed text in a menu goes to it, which picks the row the letter names.
+pub(crate) fn menu_level(ctx: &Context, rec: &StopRec) -> Option<Id> {
+    menu_scope(ctx, rec.scope)?;
+    let body = rec.stop.body?;
+    with(ctx, |state| state.groups.get(&body).or_else(|| state.last_groups.get(&body)).and_then(|group| group.owner))
+}
+
+/// The innermost menu scope around the component whose body is running: the menu a row being shown sits in.
+#[doc(hidden)]
+pub fn running_menu(ctx: &Context) -> Option<Id> {
+    menu_scope(ctx, open_scope(ctx))
+}
+
+/// The innermost menu scope around the scope `from`, `from` included.
+pub(crate) fn menu_scope(ctx: &Context, from: Option<Id>) -> Option<Id> {
+    with(ctx, |state| state.menu_scope(from))
 }
 
 /// Whether the focused stop sits inside `scope` or a scope opened from inside it; `None` when nothing is focused.
 #[doc(hidden)]
 pub fn focus_in_scope(ctx: &Context, scope: Id) -> Option<bool> {
     let rec = focused_rec(ctx)?;
-    Some(with(ctx, |state| {
-        let mut at = rec.scope;
-        while let Some(id) = at {
-            if id == scope {
-                return true;
-            }
-            at = state.scopes.get(&id).or_else(|| state.last_scopes.get(&id)).and_then(|record| record.parent);
-        }
-        false
-    }))
+    Some(with(ctx, |state| state.within(rec.scope, scope)))
 }
 
 /// Whether the focus is in the focus scope of the layer `layer`, or, for an `Initial::KeepAnchor` scope, on the stop

@@ -187,19 +187,21 @@ impl TypeAhead {
         TypeAhead { buffer: String::new(), last: f64::NEG_INFINITY }
     }
 
-    /// Adds `letter` typed at `now` seconds and returns the prefix.
+    /// Adds `letter` typed at `now` seconds and returns the prefix, its letters as typed: case is the caller's fold,
+    /// applied in `pick`, so it follows the interface language.
     pub fn push(&mut self, letter: char, now: f64) -> &str {
         if now - self.last > Self::RESET_AFTER {
             self.buffer.clear();
         }
         self.last = now;
-        self.buffer.extend(letter.to_lowercase());
+        self.buffer.push(letter);
         &self.buffer
     }
 
-    /// The entry a prefix picks: the first match from the position after `from` (from `from` itself when the
-    /// prefix is one repeated letter, so repeating a letter cycles), wrapping at the end. `fold` folds the prefix and
-    /// each label before they are compared.
+    /// The entry a prefix picks: the first match from the position after `from` when the prefix is one letter or one
+    /// repeated letter (so repeating a letter cycles), from `from` itself for a longer prefix, wrapping at the end.
+    /// `fold` folds the prefix once and each label before they are compared, so the repeated-letter test reads the
+    /// folded prefix too.
     pub fn pick<'a>(
         prefix: &str,
         from: Option<usize>,
@@ -207,19 +209,20 @@ impl TypeAhead {
         label: impl Fn(usize) -> std::borrow::Cow<'a, str>,
         fold: impl Fn(&str) -> String,
     ) -> Option<usize> {
-        let _ = &fold; // P3(canvas-widgets-w12): cw.C64
         if len == 0 || prefix.is_empty() {
             return None;
         }
-        let mut chars = prefix.chars();
-        let first = chars.next();
-        let repeated = first.is_some_and(|c| prefix.chars().all(|p| p == c)) && prefix.chars().count() > 1;
-        let needle: String = if repeated { first.into_iter().collect() } else { prefix.to_owned() };
+        let folded = fold(prefix);
+        // A prefix that folds to nothing would match every label, the empty ones of headings included.
+        let first = folded.chars().next()?;
+        let count = folded.chars().count();
+        let repeated = count > 1 && folded.chars().all(|c| c == first);
+        let needle: String = if repeated { first.to_string() } else { folded };
         let start = match from {
-            Some(at) if repeated || prefix.chars().count() == 1 => at + 1,
+            Some(at) if repeated || count == 1 => at.saturating_add(1),
             Some(at) => at,
             None => 0,
-        };
-        (0..len).map(|offset| (start + offset) % len).find(|&at| label(at).to_lowercase().starts_with(&needle))
+        } % len;
+        (0..len).map(|offset| (start + offset) % len).find(|&at| fold(&label(at)).starts_with(&needle))
     }
 }

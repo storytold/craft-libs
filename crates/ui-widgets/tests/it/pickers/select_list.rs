@@ -2,6 +2,7 @@
 //! chooses it, and typing on the closed field opens the list on the first match. The keys the list takes are its own;
 //! a command or app shortcut it leaves runs and closes it.
 
+use craft_host::{AppInfo, Host};
 use craft_ui::buttons::Button;
 use craft_ui::contract::overlay::close_popups;
 use craft_ui::contract::{Bind, CommandSet, Entry, Role, Show as _, ShowContainer as _};
@@ -13,6 +14,7 @@ use craft_ui::testing::input::{key_press, text};
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
 use egui::{Event, Key, Modifiers, Ui};
 use std::cell::Cell;
+use std::sync::Arc;
 
 /// A select over One to Four.
 fn select(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
@@ -84,6 +86,43 @@ fn tab_in_the_open_list_chooses_the_row_the_keys_reached_and_moves_on() {
     assert!(!list_open(&mut fixture), "Tab closes the list");
     assert_eq!(value(&mut fixture), 2, "and keeps the row the keys reached");
     assert_ne!(fixture.focused_stop(), on_select, "and the focus moved on");
+}
+
+/// A select over a Latin entry, the two Turkic capital i's and a Greek one.
+fn turkic(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let entries = [Entry::new(1u8, "Kitap"), Entry::new(2u8, "IRMAK"), Entry::new(3u8, "İSTANBUL"), Entry::new(4u8, "Ωμέγα")];
+    Select::new("Pick", Bind::bound(data.value("value", 1u8)), &entries).show(ui).into()
+}
+
+/// The value after typing `typed` on the closed, focused select holding `held`, with Azerbaijani as the host's
+/// interface language.
+fn typed_in_azerbaijani(held: u8, typed: &str) -> u8 {
+    let (i18n, _) = craft_i18n::I18n::from_owned([("az".to_owned(), String::new(), String::new())], &["az"]);
+    let lang = i18n.from_code("az").expect("Azerbaijani is offered");
+    let host = Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).i18n(Arc::new(i18n)).lang(lang).build();
+    let mut fixture = Fixture::story(&Story::new("select_turkic", turkic));
+    fixture.host(Arc::new(host));
+    *fixture.data().value("value", 1u8) = held;
+    fixture.settle();
+    fixture.key(Key::Tab, Modifiers::NONE);
+    fixture.settle();
+    fixture.type_text(typed);
+    fixture.settle();
+    assert!(list_open(&mut fixture), "`{typed}` matches an entry and opens the list");
+    value(&mut fixture)
+}
+
+/// Type-ahead folds the typed letters and the labels in the interface language: in Azerbaijani the dotted and dotless
+/// i find both capitals, a decomposed dotted i finds İSTANBUL, and a Greek label matches its letters in either case.
+#[trial]
+fn type_ahead_folds_case_in_the_interface_language() {
+    assert_eq!(typed_in_azerbaijani(1, "ır"), 2, "`ır` finds IRMAK");
+    assert_eq!(typed_in_azerbaijani(3, "ı"), 2, "`ı` after İSTANBUL wraps round to IRMAK");
+    assert_eq!(typed_in_azerbaijani(2, "i"), 3, "`i` after IRMAK finds İSTANBUL");
+    assert_eq!(typed_in_azerbaijani(1, "is"), 3, "`is` finds İSTANBUL, whose capital lowercases to i and a combining dot");
+    assert_eq!(typed_in_azerbaijani(1, "i\u{307}s"), 3, "a typed i with a combining dot finds İSTANBUL");
+    assert_eq!(typed_in_azerbaijani(1, "ωμ"), 4, "a Greek prefix finds its label");
+    assert_eq!(typed_in_azerbaijani(1, "ΩΜ"), 4, "in capitals too");
 }
 
 /// A select over two groups under headings: Shapes (One, Two) and Lines (Three).

@@ -205,22 +205,20 @@ impl BodyHooks<'_> {
     /// Thumb drags, track presses and AccessKit scroll actions. They move the view at step 4 of the next pass, as the
     /// wheel does there, and that pass repeats this frame: the pass that paints an offset is the one whose step 4 set
     /// it, so the content laid out for the view (out-of-view children skip their run, `runtime::lazy`) is the content
-    /// shown. A pass that repeats a frame carries no input, and a press held since the frame's first pass adds nothing
-    /// there.
+    /// shown. Every input read here is the pass's own, and the strips step by the pass's elapsed time, so a pass that
+    /// repeats a frame moves nothing.
     pub(super) fn scroll_input<C: Container>(&self, props: &ContainerProps, cx: &mut Cx<'_, C>) {
         use crate::contract::Pointer as _;
         let Some(scroll) = scroll_of(props) else { return };
         let ctx = cx.core.ctx.clone();
-        if ctx.current_pass_index() > 0 {
-            return;
-        }
         let mut offset = self.offset;
         if let Some(range) = cx.scroll_moved(SCROLL_Y) {
             offset.y = range.start;
         }
-        // Resting the pointer on a strip scrolls toward it at a steady speed, frame by frame.
+        // Resting the pointer on a strip scrolls toward it at a steady speed.
         if self.last.view.is_some_and(|at| self.strips(scroll, rect_of(at)).is_some()) {
-            let step = f64::from(STRIP_ROWS_PER_SECOND * self.row * ctx.input(|input| input.stable_dt).clamp(0.0, 0.1));
+            let elapsed = crate::runtime::frame::facts(&ctx).elapsed.clamp(0.0, 0.1);
+            let step = f64::from(STRIP_ROWS_PER_SECOND * self.row) * elapsed;
             for (strip, toward) in [(STRIP_BACK, -1.0), (STRIP_FORWARD, 1.0)] {
                 if cx.core.results.get(&(strip, None)).is_some_and(|result| result.hovered) {
                     offset.y += toward * step;

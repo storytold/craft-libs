@@ -346,10 +346,9 @@ pub(crate) fn in_pass(ctx: &Context) -> bool {
 }
 
 /// Records that the running pass refused its input (the text part refusing a Tab); the next `take_output` reports it
-/// in `FrameOutput::refused`.
+/// in `FrameOutput::refused`. Public so an app's own widget refuses through the same channel.
 pub fn refuse(ctx: &Context) {
-    let _ = ctx;
-    todo!("cw.C56")
+    pass_state::with::<FrameState, _>(ctx, |state| state.output.refused = true);
 }
 
 /// Everything accumulated since the last call, across passes and discarded passes.
@@ -466,7 +465,8 @@ pub fn take_chrome_toggles(ctx: &Context, viewport: ViewportId, window: &WindowK
 struct ViewportRecord {
     held: HeldInput,
     press_cancelled: bool,
-    now: f64,
+    /// `None` until the viewport's first pass begins.
+    now: Option<f64>,
 }
 
 impl Stored for ViewportRecord {}
@@ -488,6 +488,9 @@ pub struct PassFacts {
     pub frame_nr: u64,
     /// The pass's time in seconds.
     pub now: f64,
+    /// Seconds since this viewport's previous pass. A frame's later passes share its pass clock, so they read 0; a
+    /// viewport's first pass reads 0.
+    pub elapsed: f64,
 }
 
 thread_local! {
@@ -506,7 +509,7 @@ pub fn running(ctx: &Context) -> Option<PassFacts> {
 pub(crate) fn facts(ctx: &Context) -> PassFacts {
     running(ctx).unwrap_or_else(|| {
         let viewport = ctx.viewport_id();
-        PassFacts { viewport, pass_nr: pass::pass_nr(ctx, viewport), frame_nr: pass::frame_nr(ctx, viewport), now: clock(ctx) }
+        PassFacts { viewport, pass_nr: pass::pass_nr(ctx, viewport), frame_nr: pass::frame_nr(ctx, viewport), now: clock(ctx), elapsed: 0.0 }
     })
 }
 
@@ -515,7 +518,7 @@ pub(crate) fn facts(ctx: &Context) -> PassFacts {
 pub fn clock(ctx: &Context) -> f64 {
     match running(ctx) {
         Some(facts) => facts.now,
-        None => PerViewport::<ViewportRecord>::with(ctx, pass::current_viewport(ctx), |record| record.now),
+        None => PerViewport::<ViewportRecord>::with(ctx, pass::current_viewport(ctx), |record| record.now.unwrap_or(0.0)),
     }
 }
 
@@ -539,6 +542,9 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     let viewport = input.viewport_id;
     // H0a: the next injected step joins the input and passes the stages below like real input.
     let injected = crate::runtime::egui::injected::input_hook(ctx, input);
+    // H0c: the legacy pinch fold, the text cap and the Control-click mapping, on injected and real input alike, before
+    // the one-press rule sees a mapped press and before the IME and key stages read the text.
+    raw_input::prepare(ctx, input);
     // H0b: the OS colour scheme egui's integration reports reaches the system reader.
     crate::runtime::env::system::input_hook(ctx, &input.events);
     // H0: one press per pass.
@@ -572,17 +578,17 @@ pub(crate) fn begin_pass(ui: &mut Ui) {
     // H5: read the clock once; the runtime cancelled a captured press since this viewport's last pass.
     let now = pass::now(&ctx);
     let (pass_nr, frame_nr) = (pass::pass_nr(&ctx, viewport), ctx.cumulative_frame_nr_for(viewport));
+    let (elapsed, cancelled) = PerViewport::<ViewportRecord>::with(&ctx, viewport, |record| {
+        let elapsed = record.now.replace(now).map_or(0.0, |previous| (now - previous).max(0.0));
+        (elapsed, std::mem::take(&mut record.press_cancelled))
+    });
     RUNNING.with(|running| {
         let mut running = running.borrow_mut();
         // A pass of this viewport that never ended (a panic unwound through it) is not still running.
         running.retain(|pass| !(pass.ctx == ctx && pass.facts.viewport == viewport));
-        running.push(RunningPass { ctx: ctx.clone(), facts: PassFacts { viewport, pass_nr, frame_nr, now } });
+        running.push(RunningPass { ctx: ctx.clone(), facts: PassFacts { viewport, pass_nr, frame_nr, now, elapsed } });
     });
     pass_state::hold(&ctx);
-    let cancelled = PerViewport::<ViewportRecord>::with(&ctx, viewport, |record| {
-        record.now = now;
-        std::mem::take(&mut record.press_cancelled)
-    });
     if cancelled {
         raw_input::stop_dragging(&ctx);
     }
