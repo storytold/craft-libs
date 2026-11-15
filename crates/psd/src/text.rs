@@ -150,3 +150,6 @@ mod tests {
         assert_eq!(t.style.size, Some(12.0));
     }
 }
+
+/// Editable type-tool envelope with PhotoCraft-compatible recovery and geometry limits.
+pub mod envelope;

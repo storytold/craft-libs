@@ -23,13 +23,17 @@ struct ReadmeExamples;
 
 mod archive;
 mod guard;
+mod metadata_reader;
 pub mod preflight;
+mod seekable;
 mod write;
 
 pub use archive::{Archive, Limits};
 pub use guard::check_entry_count;
 #[cfg(any(test, feature = "test-support"))]
 pub use guard::zip64_entry_count_sample;
+pub use metadata_reader::{Indexing, MetadataReader};
+pub use seekable::{InspectError, inspect_seekable};
 pub use write::{Compression, Writer};
 
 /// The payload of a ZIP's first entry when it is a stored file named `mimetype` of at most 256
@@ -202,5 +206,43 @@ mod tests {
         assert_eq!(budget.charge(u64::MAX), Ok(()));
         assert_eq!(budget.remaining(), 0);
         assert!(budget.charge(u64::MAX).is_err());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn archive_reports_entries_that_alias_the_same_payload() {
+        use std::io::Write as _;
+
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file("first", opts).unwrap();
+        zip.write_all(b"payload").unwrap();
+        zip.shallow_copy_file("first", "alias").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+
+        let mut archive = Archive::open(&bytes, Limits { max_entries: 2, max_total_bytes: 100 }).unwrap();
+        assert!(archive.has_overlapping_files().unwrap());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    fn archive_can_copy_one_name_at_a_time_by_index() {
+        use std::io::Write as _;
+
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default();
+        zip.start_file("first", opts).unwrap();
+        zip.write_all(b"1").unwrap();
+        zip.start_file("second", opts).unwrap();
+        zip.write_all(b"2").unwrap();
+        zip.start_file("folder\\", opts).unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+
+        let mut archive = Archive::open(&bytes, Limits { max_entries: 3, max_total_bytes: 10 }).unwrap();
+        assert_eq!(archive.entry_name(0).unwrap().as_deref(), Some("first"));
+        assert_eq!(archive.entry_name(1).unwrap().as_deref(), Some("second"));
+        assert_eq!(archive.entry_is_dir(2).unwrap(), Some(true));
+        assert_eq!(archive.entry_name(2).unwrap().as_deref(), Some("folder\\"));
+        assert_eq!(archive.entry_name(3).unwrap(), None);
     }
 }

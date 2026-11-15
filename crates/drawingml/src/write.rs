@@ -107,6 +107,7 @@ pub fn blip_fill(w: &mut Writer, out: &mut dyn Sink, tag: &str, pf: &PictureFill
     w.tag(tag).attr("rotWithShape", if pf.upright { "0" } else { "1" }).open();
     let adj = &pf.adjust;
     let has_kids = pf.alpha.is_some()
+        || pf.svg.is_some()
         || adj.brightness != 0.0
         || adj.contrast != 0.0
         || adj.grayscale
@@ -165,6 +166,13 @@ pub fn blip_fill(w: &mut Writer, out: &mut dyn Sink, tag: &str, pf: &PictureFill
             w.close();
             w.close();
             w.close();
+            w.close();
+            w.close();
+        }
+        if let Some(svg) = pf.svg.and_then(|id| out.media_rel(id, "image")) {
+            w.open("a:extLst", &[]);
+            w.tag("a:ext").attr("uri", "{96DAC541-7B7A-43D3-8B79-37D633B846F1}").open();
+            w.tag("asvg:svgBlip").attr("xmlns:asvg", "http://schemas.microsoft.com/office/drawing/2016/SVG/main").attr("r:embed", &svg).empty();
             w.close();
             w.close();
         }
