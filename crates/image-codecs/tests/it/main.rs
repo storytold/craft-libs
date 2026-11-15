@@ -3,6 +3,7 @@
 mod camera_raw;
 mod common;
 mod dds;
+mod dds_oracle;
 mod dds_write;
 mod decode_warnings;
 mod deep_exr;
