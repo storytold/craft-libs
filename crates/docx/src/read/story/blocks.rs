@@ -249,10 +249,11 @@ impl Reader<'_> {
                     .unwrap_or_default();
                 para.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
-            if para.props.numbering.is_some()
-                && let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange"))
-            {
-                let original = ch.attr("w:original").unwrap_or("").chars().take(256).collect();
+            if let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange")) {
+                // Multi-level numbering caches (`w:original`) routinely exceed 256 chars while staying
+                // bounded against hostile attributes.
+                const MAX_CHANGE_ORIGINAL: usize = 4096;
+                let original = ch.attr("w:original").unwrap_or("").chars().take(MAX_CHANGE_ORIGINAL).collect();
                 para.props.num_change = Some(Box::new(NumChange { rev: self.revision(RevisionKind::Format, ch), original }));
             }
             if let Some(s) = ppr.child("w:sectPr") {
