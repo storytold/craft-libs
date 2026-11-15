@@ -151,6 +151,12 @@ pub fn report_os_contrast(ctx: &Context, contrast: craft_theme::Contrast) {
     crate::runtime::env::system::report_contrast(ctx, contrast);
 }
 
+/// Reports `dark` as the OS's colour scheme on `ctx` through the host's reader, as a desktop source would; the
+/// integration sends no `Event::SystemTheme` (Linux without the settings portal).
+pub fn report_os_theme(ctx: &Context, dark: bool) {
+    crate::runtime::env::system::report_theme(ctx, dark);
+}
+
 /// A resolved style as the style cases read it: the variants its type lists and the looks that state colours
 /// reach, with the whole style kept to tell two styles apart.
 #[derive(Clone)]

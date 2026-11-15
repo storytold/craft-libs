@@ -27,4 +27,5 @@ toml_edit = { version = "0.25", features = ["serde"] }
 dirs = "7"
 
 [dev-dependencies]
+craft-settings = { path = ".", features = ["testing"] }
 tempfile = "3"

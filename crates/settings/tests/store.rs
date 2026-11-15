@@ -2,7 +2,14 @@
 
 use super::common;
 
-use common::{Theme, config_path, open_in, read_config, write_config};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use common::{Prefs, Theme, config_path, empty_probe, open_in, read_config, write_config};
+use craft_settings::store::{FIRST_RETRY_DELAY, MAX_RETRY_DELAY};
+use craft_settings::testing::MemoryFiles;
+use craft_settings::{Location, OpenOptions, SaveStatus, SettingsStore};
 
 #[test]
 fn comments_unknown_keys_and_order_survive_a_save() {
@@ -43,4 +50,47 @@ fn outside_edit_with_the_same_mtime_is_still_seen() {
     let text = read_config(tmp.path());
     assert!(text.contains("# same second"), "{text}");
     assert!(text.contains("language = \"fr\""), "{text}");
+}
+
+#[test]
+fn a_failing_save_backs_off_and_succeeds_without_another_edit() {
+    let debounce = Duration::from_millis(100);
+    let dir = Path::new("/memory");
+    let files = Arc::new(MemoryFiles::new());
+    files.fail_writes(true);
+    let options = OpenOptions::new(Location::Dir(PathBuf::from(dir))).probe(empty_probe()).debounce(debounce).files(files.clone());
+    let (mut store, _) = SettingsStore::<Prefs>::open_with(options);
+    let start = Instant::now();
+    assert!(store.update_at(start, |p| p.general.language = "fr".into()));
+
+    // Before the debounce passes nothing is attempted.
+    assert!(matches!(store.tick(start).status, SaveStatus::Pending));
+
+    // Each failure waits twice as long as the one before, up to the cap.
+    let mut now = start + debounce;
+    let mut delays = Vec::new();
+    for _ in 0..7 {
+        let result = store.tick(now);
+        assert!(matches!(result.status, SaveStatus::Failed(_)), "{:?}", result.status);
+        let deadline = result.next_deadline.expect("a retry is scheduled");
+        delays.push(deadline - now);
+        // Asking again before the deadline does not write.
+        assert!(matches!(store.tick(now).status, SaveStatus::Pending));
+        now = deadline;
+    }
+    let expected: Vec<Duration> = [1u32, 2, 4, 8, 16, 32, 64].into_iter().map(|s| (FIRST_RETRY_DELAY * s).min(MAX_RETRY_DELAY)).collect();
+    assert_eq!(delays, expected);
+    assert!(files.text(&config_path(dir)).is_none());
+
+    // Storage works again: the next tick at the deadline saves the pending change, with no new edit.
+    files.fail_writes(false);
+    let result = store.tick(now);
+    assert!(matches!(result.status, SaveStatus::Saved), "{:?}", result.status);
+    assert!(result.next_deadline.is_none());
+    assert!(!store.is_dirty());
+    assert!(files.text(&config_path(dir)).as_deref().is_some_and(|text| text.contains("language = \"fr\"")));
+
+    // The retry state is cleared: a later edit saves after the debounce, not after the old backoff.
+    assert!(store.update_at(now, |p| p.general.language = "de".into()));
+    assert!(matches!(store.tick(now + debounce).status, SaveStatus::Saved));
 }

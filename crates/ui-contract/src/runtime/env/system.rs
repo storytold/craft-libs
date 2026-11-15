@@ -53,6 +53,13 @@ pub(crate) fn input_hook(ctx: &Context, events: &[Event]) {
     });
 }
 
+/// Reports the colour scheme `dark` as the OS's through the host's reader alone, as a desktop source would,
+/// without an `Event::SystemTheme` from the integration.
+#[cfg(feature = "testing")]
+pub(crate) fn report_theme(ctx: &Context, dark: bool) {
+    Service::<Source>::run(ctx, |source| source.0.report_theme(if dark { Theme::Dark } else { Theme::Light }));
+}
+
 /// Reports `contrast` as the OS's, as a desktop source would.
 #[cfg(feature = "testing")]
 pub(crate) fn report_contrast(ctx: &Context, contrast: craft_theme::Contrast) {
