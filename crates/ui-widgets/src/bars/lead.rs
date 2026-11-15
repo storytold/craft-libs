@@ -16,17 +16,25 @@ use egui::{Response, Ui};
 pub struct BarHome<'a> {
     label: Label,
     on: Bind<'a, bool>,
+    enabled: bool,
 }
 
 impl<'a> BarHome<'a> {
     /// A Home button named `label` over `on`.
     pub fn new(label: impl Into<Label>, on: Bind<'a, bool>) -> Self {
-        BarHome { label: label.into(), on }
+        BarHome { label: label.into(), on, enabled: true }
+    }
+
+    /// Whether the button takes input; it is enabled by default.
+    #[must_use]
+    pub fn enabled(mut self, on: bool) -> Self {
+        self.enabled = on;
+        self
     }
 
     /// Shows the button and the rule after it.
     pub fn show(self, ui: &mut Ui) -> EditResponse<bool> {
-        let shown = ToggleButton::new(self.label, self.on).icon(IconSpec::svg(IconId::new("home"))).icon_only().show(ui);
+        let shown = ToggleButton::new(self.label, self.on).icon(IconSpec::svg(IconId::new("home"))).icon_only().enabled(self.enabled).show(ui);
         Divider::vertical().show(ui);
         shown
     }
@@ -56,18 +64,26 @@ impl Outcome for BarToolOutput {
 pub struct BarTool {
     icon: IconId,
     label: Label,
+    enabled: bool,
 }
 
 impl BarTool {
     /// The icon `icon` of the tool named `label`.
     pub fn new(icon: IconId, label: impl Into<Label>) -> Self {
-        BarTool { icon, label: label.into() }
+        BarTool { icon, label: label.into(), enabled: true }
+    }
+
+    /// Whether the icon takes input; it is enabled by default. The arrow draws in the disabled look with it.
+    #[must_use]
+    pub fn enabled(mut self, on: bool) -> Self {
+        self.enabled = on;
+        self
     }
 
     /// Shows the icon, its arrow and the rule after them.
     pub fn show(self, ui: &mut Ui) -> BarToolOutput {
-        let shown: ButtonOutput = IconButton::new(self.icon).label(self.label).show(ui);
-        Icon::new(DisclosureGlyph::dropdown()).show(ui);
+        let shown: ButtonOutput = IconButton::new(self.icon).label(self.label).enabled(self.enabled).show(ui);
+        Icon::new(DisclosureGlyph::dropdown()).enabled(self.enabled).show(ui);
         Divider::vertical().show(ui);
         BarToolOutput { response: shown.response }
     }
