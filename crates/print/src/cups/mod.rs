@@ -404,7 +404,7 @@ pub(crate) fn post(endpoints: &[Server], path: &str, body: &[u8], timeout: Durat
 
 /// Send one IPP request and read the reply's body.
 fn exchange(stream: &mut Stream, authority: &str, path: &str, body: &[u8], timeout: Duration) -> Result<Vec<u8>, Error> {
-    stream.set_timeouts(timeout).map_err(|e| Error::Spool(format!("the print server could not be set up: {e}")))?;
+    let mut stream = DeadlineReader { stream, end: Instant::now() + timeout };
     let head = format!(
         "POST {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Type: application/ipp\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
@@ -414,7 +414,9 @@ fn exchange(stream: &mut Stream, authority: &str, path: &str, body: &[u8], timeo
         .and_then(|()| stream.write_all(body))
         .and_then(|()| stream.flush())
         .map_err(|e| Error::Spool(format!("the request could not be sent to the print server: {e}")))?;
-    read_reply(&mut DeadlineReader { stream, end: Instant::now() + timeout })
+    let reply = read_reply(&mut stream)?;
+    validate_reply_identity(body, &reply)?;
+    Ok(reply)
 }
 
 /// The reply's body: a strict status line and headers, then exactly `Content-Length` bytes. CUPS
@@ -423,6 +425,22 @@ struct DeadlineReader<'a> {
     stream: &'a mut Stream,
     end: Instant,
 }
+impl Write for DeadlineReader<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let left = self.end.checked_duration_since(Instant::now()).filter(|d| !d.is_zero())
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::TimedOut, "CUPS exchange deadline exceeded"))?;
+        self.stream.set_timeouts(left)?;
+        self.stream.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> { self.stream.flush() }
+}
+
+fn validate_reply_identity(request: &[u8], reply: &[u8]) -> Result<(), Error> {
+    if reply.get(..2) != Some(&[1,1]) || request.get(4..8).is_none() || request.get(4..8) != reply.get(4..8) {
+        return Err(Error::Spool("CUPS reply version or request id does not match; do not resubmit".into()));
+    }
+    Ok(())
+
 impl Read for DeadlineReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let left = self
@@ -609,6 +627,7 @@ fn discovery_request(operation: u16) -> Vec<u8> {
     r.attribute(TAG_LANGUAGE, "attributes-natural-language", b"en");
     r.attribute(TAG_URI, "printer-uri", b"ipp://localhost/");
     r.attribute(TAG_KEYWORD, "requested-attributes", b"printer-name");
+    r.additional(TAG_KEYWORD, "printer-info");
     r.additional(TAG_KEYWORD, "printer-state");
     r.additional(TAG_KEYWORD, "printer-is-accepting-jobs");
     r.end();

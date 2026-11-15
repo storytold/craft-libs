@@ -72,9 +72,17 @@ fn listen_tcp(listener: std::net::TcpListener, replies: Vec<Vec<u8>>) -> Receive
 
 fn serve(mut stream: impl Read + Write, replies: &Mutex<VecDeque<Vec<u8>>>, requests: &mpsc::Sender<Vec<u8>>) {
     let Some(request) = read_request(&mut stream) else { return };
+    let request_id = ipp_body(&request).get(4..8).map(|id| id.to_vec());
     let _ = requests.send(request);
     // A list out of replies is a server that hangs up before answering.
-    if let Some(reply) = replies.lock().unwrap().pop_front() {
+    if let Some(mut reply) = replies.lock().unwrap().pop_front() {
+        if let Some(body) = reply.windows(4).position(|w| w == b"\r\n\r\n").map(|at| at + 4)
+            && reply.get(body..body + 2) == Some(&[1, 1])
+            && let Some(id) = request_id
+            && let Some(destination) = reply.get_mut(body + 4..body + 8)
+        {
+            destination.copy_from_slice(&id);
+        }
         let _ = stream.write_all(&reply);
         let _ = stream.flush();
     }
@@ -408,4 +416,18 @@ fn queue_metadata_stays_with_its_printer_group() {
     assert!(!reply.queues[0].accepting_jobs);
     assert!(reply.queues[1].info.is_empty());
     assert!(reply.queues[1].accepting_jobs);
+}
+
+#[test]
+fn reply_identity_and_metadata_request_are_checked() {
+    let request = super::discovery_request(0x4002);
+    assert!(has(&request, b"printer-info"));
+    let mut reply = vec![1, 1, 0, 0];
+    reply.extend_from_slice(&request[4..8]);
+    reply.push(3);
+    assert!(super::validate_reply_identity(&request, &reply).is_ok());
+    reply[7] ^= 1;
+    assert!(super::validate_reply_identity(&request, &reply).is_err());
+    reply[0] = 9;
+    assert!(super::validate_reply_identity(&request, &reply).is_err());
 }
