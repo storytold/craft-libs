@@ -1068,39 +1068,47 @@ impl<'a, 't: 'a> Run<'a, 't> {
         }
     }
 
-    /// The drag of this pass: one call per pointer move of the pass for a tool that takes every move, their times
-    /// spread from the last delivered sample to the pass time; one call at `pos` for any other tool.
+    /// The drag of this pass past the click distance: one call per pointer move of the pass for a tool that takes
+    /// every move ([`Self::every_move`]); one call at `pos` for any other tool.
     fn drag_moves(&mut self, start: PressStart, pos: Pos2, press: &PressState) {
-        let Some(active) = self.state.gesture else { return };
+        if self.state.gesture.is_none() {
+            return;
+        }
         // A pass delivers only the moves it was handed: a rerun pass has none. A held pointer resting past the edge
         // keeps one drag per pass, since the view scrolls under it.
         let stirred = pointer::with_pass_pointer(self.ctx, |pass| pass.stirred);
         if !stirred && pos == self.rect.clamp(pos) {
             return;
         }
-        let moves: Vec<(Pos2, Option<PointerSample>)> = if self.pick_as(active.stand_in).takes_every_move() {
-            pointer::with_pass_pointer(self.ctx, |pass| {
-                let from = pass.events.iter().rposition(|event| matches!(event, PointerEvent::Pressed { .. })).map_or(0, |at| at + 1);
-                pass.events[from..]
-                    .iter()
-                    .filter_map(|event| match event {
-                        PointerEvent::Moved { at, sample } => Some((*at, *sample)),
-                        _ => None,
-                    })
-                    .collect()
-            })
-        } else {
-            Vec::new()
-        };
-        if moves.is_empty() {
+        if !self.every_move(start, press) {
             self.drag(press_pointer(start, pos, self.time, press));
-            return;
         }
+    }
+
+    /// For a gesture whose tool takes every move: one drag call per pointer move of the pass after its press, inside
+    /// the click distance too, their times spread from the last delivered move to the pass time. False when the tool
+    /// does not take every move or the pass has no move to give it.
+    fn every_move(&mut self, start: PressStart, press: &PressState) -> bool {
+        let Some(active) = self.state.gesture else { return false };
+        if !self.pick_as(active.stand_in).takes_every_move() {
+            return false;
+        }
+        let moves: Vec<(Pos2, Option<PointerSample>)> = pointer::with_pass_pointer(self.ctx, |pass| {
+            let from = pass.events.iter().rposition(|event| matches!(event, PointerEvent::Pressed { .. })).map_or(0, |at| at + 1);
+            pass.events[from..]
+                .iter()
+                .filter_map(|event| match event {
+                    PointerEvent::Moved { at, sample } => Some((*at, *sample)),
+                    _ => None,
+                })
+                .collect()
+        });
         let (from, count) = (active.last.time, moves.len());
         for (k, (at, sample)) in moves.into_iter().enumerate() {
             let time = if k + 1 == count { self.time } else { from + (self.time - from) * (k + 1) as f64 / count as f64 };
             self.drag(press_pointer(start, at, time, press).sample(sample.or(press.sample).unwrap_or(PointerSample::new(1.0))));
         }
+        count > 0
     }
 
     /// A hover with the pointer outside the canvas, for a tool that autoscrolls on hover: the tool follows the pointer
@@ -1195,6 +1203,10 @@ impl<'a, 't: 'a> Run<'a, 't> {
             PressPhase::Down { start, .. } => {
                 self.state.spent = false;
                 self.begin(press_pointer(start, start.origin, start.time, press));
+                self.every_move(start, press);
+            }
+            PressPhase::Held { start, .. } => {
+                self.every_move(start, press);
             }
             PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } => {
                 if self.state.gesture.is_none() && !self.state.spent {
@@ -1206,6 +1218,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
                 if self.state.gesture.is_none() && !self.state.spent {
                     self.begin(press_pointer(start, start.origin, start.time, press));
                 }
+                self.every_move(start, press);
                 let pointer = press_pointer(start, pos, self.time, press);
                 // A press that moved past slop and came up within one pass is still a drag.
                 if !click && self.state.gesture.is_some_and(|active| !active.dragged) {

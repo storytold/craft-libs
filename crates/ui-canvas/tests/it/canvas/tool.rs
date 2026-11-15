@@ -973,6 +973,33 @@ fn a_tool_that_takes_every_move_gets_each_move_of_a_pass_in_order() {
     }
 }
 
+/// A tool that takes every move gets the moves of the press inside the click distance, one pass each; any other tool
+/// gets none of them and its press stays a click.
+#[trial]
+fn moves_inside_the_click_distance_reach_a_tool_that_takes_every_move() {
+    for every in [true, false] {
+        let log = Log::default();
+        let mut main = Probe::new("main", &log);
+        main.every_move = every;
+        let mut rig = Rig::with(main, &log, None, Setup::default());
+        let at = rig.centre();
+        let path = [at + Vec2::new(1.0, 0.0), at + Vec2::new(2.0, 0.0), at + Vec2::new(3.0, 0.0)];
+        rig.fixture.frame(vec![pointer::press(at)]);
+        for to in path {
+            rig.fixture.frame(vec![pointer::moved(to)]);
+        }
+        rig.fixture.frame(vec![pointer::release(path[2])]);
+        let seen: Vec<Pos2> = rig.main.borrow().drags.iter().map(|(pos, _)| *pos).collect();
+        let calls = log.borrow().clone();
+        if every {
+            assert_eq!(seen, path, "each move from the press reaches the tool, in order");
+        } else {
+            assert!(seen.is_empty(), "a tool that does not take every move gets no drag inside the click distance: {seen:?}");
+        }
+        assert!(calls.iter().any(|call| call == "main release"), "the gesture ends with the release: {calls:?}");
+    }
+}
+
 #[trial]
 fn a_secondary_click_the_tool_did_not_take_asks_for_the_menu() {
     let log = Log::default();

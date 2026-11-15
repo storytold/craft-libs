@@ -682,9 +682,11 @@ pub trait CanvasTool {
         false
     }
 
-    /// Whether the host calls `drag` once per pointer move of a pass (the freehand family) instead of once at the
-    /// latest position. `each_pass` runs before the pass's `drag` calls, so a tool that takes every move updates its
-    /// live stroke once per pass after `run` returns, never per `drag` call. Default: `false`.
+    /// Whether the host calls `drag` once per pointer move from the press on (the freehand family), the moves inside
+    /// the click distance included, instead of once at the latest position past it. Such a gesture is a drag from the
+    /// press and has no click: a brush paints from where it went down. `each_pass` runs before the pass's `drag` calls,
+    /// so a tool that takes every move updates its live stroke once per pass after `run` returns, never per `drag`
+    /// call. Default: `false`.
     fn takes_every_move(&self) -> bool {
         false
     }
