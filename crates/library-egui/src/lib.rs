@@ -7,13 +7,18 @@
 //! The pane holds no document and reads no file: it speaks only the `library.*` commands, through
 //! the app's [`Host`]. The app also gives its words ([`Labels`], whose nouns are the commands'
 //! keys) and colours ([`Palette`]), and may add tabs of its own beside the shared one ([`ITEMS`]),
-//! which it draws in [`Host::tab`].
+//! which it draws in [`Host::tab`]. Every word the pane shows, the app's and the pane's own
+//! ([`words`]), goes through [`Host::text`], so the app can show it in the person's language.
 //!
 //! Files are read a few per frame, so a large Library fills in without stalling the window, only
-//! thumbnails in view are drawn, and at most [`MAX_SHOWN_FILES`] files are laid out at once.
+//! thumbnails in view are drawn, and at most [`MAX_SHOWN_FILES`] files are laid out at once. The
+//! pane scrolls its own grid within the space it can be seen in, so its folder and search controls
+//! stay in view even when the app puts it in a scroll area. A Library whose files each hold one
+//! item (pictures, icons) shows them in one grid ([`Labels::one_per_file`]).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -39,6 +44,106 @@ const MAX_MENU_ELEMENTS: usize = 40;
 const MAX_ELEMENT_LISTS: usize = 64;
 /// The largest thumbnail decoded, in pixels.
 const MAX_THUMB_PIXELS: u64 = 512 * 2048;
+/// The grid's least height, when the pane is barely in view.
+const MIN_GRID_HEIGHT: f32 = 120.0;
+/// The narrowest cell of a one-item-per-file grid, which fits as many columns as this allows.
+const FLAT_CELL: f32 = 96.0;
+const MAX_FLAT_COLUMNS: usize = 6;
+
+/// The pane's own words, in English. Each goes through [`Host::text`] before it is shown; a
+/// `{name}` placeholder stays in the translation and is filled in after.
+pub mod words {
+    pub const ALL_FOLDERS: &str = "All folders";
+    /// The folder drop-down's accessible name.
+    pub const FOLDER: &str = "Library folder";
+    pub const ADD_FOLDER: &str = "Add Folder…";
+    pub const REMOVE: &str = "Remove";
+    pub const REMOVE_TIP: &str = "Stop showing this folder in the Library (its files stay where they are)";
+    pub const REFRESH: &str = "Refresh";
+    pub const REFRESH_TIP: &str = "Read the folders again";
+    /// The hint of the path field, when the app has no folder picker.
+    pub const FOLDER_PATH: &str = "Folder path";
+    pub const ADD: &str = "Add";
+    pub const READING: &str = "Reading {read} of {total} files…";
+    pub const NO_MATCH: &str = "Nothing matches \"{query}\".";
+    pub const NOTHING_HERE: &str = "Nothing in this folder yet.";
+    pub const SHOWING_FIRST: &str = "Showing the first {shown} of {total} files: choose a folder or search to see the others.";
+    pub const EMPTY_FILE: &str = "Nothing in this file.";
+    pub const HIDDEN: &str = "Hidden";
+    pub const CLICK_TO_INSERT: &str = "Click to insert";
+    /// An item's accessible name: `{item}` is [`super::Labels::item`], `{number}` counts from 1.
+    pub const ITEM_TITLED: &str = "{item} {number}: {title}";
+    pub const ITEM_UNTITLED: &str = "{item} {number}";
+    /// An item's accessible name in a one-item-per-file grid.
+    pub const ITEM_NAMED: &str = "{item}: {title}";
+    pub const ELEMENT_TIP: &str = "Put this element in the same place";
+    /// An element name several shapes carry.
+    pub const ELEMENT_COUNT: &str = "{name} (×{count})";
+    pub const MORE: &str = "and {count} more";
+
+    /// Every word above, for an app's translation catalog and its checks.
+    pub const ALL: &[&str] = &[
+        ALL_FOLDERS,
+        FOLDER,
+        ADD_FOLDER,
+        REMOVE,
+        REMOVE_TIP,
+        REFRESH,
+        REFRESH_TIP,
+        FOLDER_PATH,
+        ADD,
+        READING,
+        NO_MATCH,
+        NOTHING_HERE,
+        SHOWING_FIRST,
+        EMPTY_FILE,
+        HIDDEN,
+        CLICK_TO_INSERT,
+        ITEM_TITLED,
+        ITEM_UNTITLED,
+        ITEM_NAMED,
+        ELEMENT_TIP,
+        ELEMENT_COUNT,
+        MORE,
+    ];
+}
+
+/// `template` with each `{name}` in `values` replaced by its value, in one pass, so a value that
+/// holds braces is shown as it is. Other braces stay.
+pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let (before, from) = rest.split_at(open);
+        out.push_str(before);
+        let value = from.find('}').and_then(|close| {
+            let name = from.get(1..close)?;
+            values.iter().find(|(n, _)| *n == name).map(|(_, v)| (*v, close))
+        });
+        match value {
+            Some((v, close)) => {
+                out.push_str(v);
+                rest = from.get(close + 1..).unwrap_or_default();
+            }
+            None => {
+                out.push('{');
+                rest = from.get(1..).unwrap_or_default();
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `english` in the app's language.
+fn tr(host: &dyn Host, english: &str) -> String {
+    host.text(english).into_owned()
+}
+
+/// The template `english` in the app's language, filled in.
+fn trf(host: &dyn Host, english: &str, values: &[(&str, &str)]) -> String {
+    fill(&host.text(english), values)
+}
 
 /// What the pane needs from the app.
 pub trait Host {
@@ -58,9 +163,16 @@ pub trait Host {
     fn report(&mut self, message: String);
     /// Draw the app's own tab `id` (one of [`Labels::tabs`] other than [`ITEMS`]).
     fn tab(&mut self, _ui: &mut Ui, _id: &str) {}
+    /// `english` in the person's language: one of [`words::ALL`] or a word of the app's
+    /// [`Labels`]. A `{name}` placeholder stays in the answer; the pane fills it in. The default
+    /// shows English.
+    fn text<'a>(&self, english: &'a str) -> Cow<'a, str> {
+        Cow::Borrowed(english)
+    }
 }
 
-/// The app's words. `nouns` also name the commands' keys (`slide`, `slides`).
+/// The app's words, in English (each goes through [`Host::text`]), and how its items are laid out.
+/// `nouns` also name the commands' keys (`slide`, `slides`) and are never shown.
 #[derive(Clone, Debug)]
 pub struct Labels {
     pub nouns: Nouns,
@@ -83,6 +195,9 @@ pub struct Labels {
     pub not_in_browser: &'static str,
     /// An item's height over its width, before its thumbnail arrives.
     pub aspect: f32,
+    /// Every file is one item (a picture, an icon): the items share one grid, each named under
+    /// its thumbnail, rather than each file having its own heading.
+    pub one_per_file: bool,
 }
 
 /// The app's colours.
@@ -198,10 +313,11 @@ pub fn show(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, p
     if !labels.tabs.iter().any(|(id, _)| *id == st.tab) {
         st.tab = labels.tabs.first().map(|(id, _)| (*id).to_string()).unwrap_or_else(|| ITEMS.to_string());
     }
+    let tabs: Vec<(&str, String)> = labels.tabs.iter().map(|(id, label)| (*id, tr(host, label))).collect();
     ui.horizontal(|ui| {
-        for (id, label) in labels.tabs {
-            if ui.selectable_label(st.tab == *id, *label).clicked() {
-                st.tab = (*id).to_string();
+        for (id, label) in tabs {
+            if ui.selectable_label(st.tab == id, label).clicked() {
+                st.tab = id.to_string();
             }
         }
     });
@@ -243,37 +359,50 @@ fn folder_controls(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &La
     if st.folder.as_ref().is_some_and(|f| !folders.contains(f)) {
         st.folder = None;
     }
-    let shown = st.folder.as_deref().map_or("All folders", folder_name).to_string();
+    let all = tr(host, words::ALL_FOLDERS);
+    let shown = st.folder.as_deref().map_or(all.as_str(), folder_name).to_string();
     let mut chosen = st.folder.clone();
     let combo = craft_ui::ComboBox::from_id_salt("library_folder").selected_text(shown).width(ui.available_width()).show_ui(ui, |ui| {
-        ui.selectable_value(&mut chosen, None, "All folders");
+        ui.selectable_value(&mut chosen, None, all.as_str());
         for f in &folders {
             ui.selectable_value(&mut chosen, Some(f.clone()), folder_name(f)).on_hover_text(f);
         }
     });
-    combo.response.widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, "Library folder"));
+    let name = tr(host, words::FOLDER);
+    combo.response.widget_info(|| WidgetInfo::labeled(Role::ComboBox, true, &name));
     st.folder = chosen;
+    let [add_label, add_tip, remove_label, remove_tip, refresh_label, refresh_tip, path_hint, add_path] = [
+        words::ADD_FOLDER,
+        labels.add_folder_tip,
+        words::REMOVE,
+        words::REMOVE_TIP,
+        words::REFRESH,
+        words::REFRESH_TIP,
+        words::FOLDER_PATH,
+        words::ADD,
+    ]
+    .map(|w| tr(host, w));
     ui.horizontal(|ui| {
         let full = folders.len() >= craft_library::MAX_FOLDERS;
-        let add = ui.add_enabled(!full, egui::Button::new("Add Folder…"));
-        if add.on_hover_text(labels.add_folder_tip).clicked() {
+        let add = ui.add_enabled(!full, egui::Button::new(add_label));
+        if add.on_hover_text(add_tip).clicked() {
             add_folder(st, host);
         }
-        let remove = ui.add_enabled(st.folder.is_some(), egui::Button::new("Remove"));
-        if remove.on_hover_text("Stop showing this folder in the Library (its files stay where they are)").clicked()
+        let remove = ui.add_enabled(st.folder.is_some(), egui::Button::new(remove_label));
+        if remove.on_hover_text(remove_tip).clicked()
             && let Some(f) = st.folder.take()
         {
             let _ = host.act("library.removeFolder", json!({"path": f}));
         }
-        if ui.button("Refresh").on_hover_text("Read the folders again").clicked() {
+        if ui.button(refresh_label).on_hover_text(refresh_tip).clicked() {
             st.refresh();
         }
     });
     if st.adding {
         ui.horizontal(|ui| {
-            let field = ui.add(egui::TextEdit::singleline(&mut st.new_folder).hint_text("Folder path").desired_width(ui.available_width() - 60.0));
+            let field = ui.add(egui::TextEdit::singleline(&mut st.new_folder).hint_text(path_hint).desired_width(ui.available_width() - 60.0));
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (ui.button("Add").clicked() || enter) && !st.new_folder.trim().is_empty() {
+            if (ui.button(add_path).clicked() || enter) && !st.new_folder.trim().is_empty() {
                 let path = st.new_folder.trim().to_string();
                 if let Ok(v) = host.act("library.addFolder", json!({"path": path})) {
                     st.folder = v["path"].as_str().map(String::from);
@@ -413,18 +542,19 @@ fn hit_groups(files: &[FileRow], hits: &[(String, usize, String)]) -> Vec<Group>
 
 fn items(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal: &Palette) {
     if cfg!(target_arch = "wasm32") {
-        ui.label(dim(pal, labels.not_in_browser));
+        ui.label(dim(pal, tr(host, labels.not_in_browser)));
         return;
     }
     folder_controls(ui, st, host, labels);
     let folders = host.folders();
     if folders.is_empty() {
         ui.add_space(6.0);
-        ui.label(dim(pal, labels.empty));
+        ui.label(dim(pal, tr(host, labels.empty)));
         return;
     }
     ui.add_space(4.0);
-    let field = ui.add(egui::TextEdit::singleline(&mut st.query).hint_text(labels.search_hint).desired_width(f32::INFINITY));
+    let hint = tr(host, labels.search_hint);
+    let field = ui.add(egui::TextEdit::singleline(&mut st.query).hint_text(hint).desired_width(f32::INFINITY));
     if field.changed() {
         st.typed_at = ui.input(|i| i.time);
     }
@@ -435,7 +565,8 @@ fn items(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal:
     read_some(st, host, labels.nouns);
     let reading = !st.ready();
     if reading {
-        ui.label(dim(pal, format!("Reading {} of {} files…", st.read, st.files.len())));
+        let (read, total) = (st.read.to_string(), st.files.len().to_string());
+        ui.label(dim(pal, trf(host, words::READING, &[("read", &read), ("total", &total)])));
         ui.ctx().request_repaint();
     }
     let query = st.query.trim().to_string();
@@ -457,7 +588,7 @@ fn items(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal:
         match st.hits.as_ref().filter(|_| st.searched == query) {
             Some(groups) => {
                 if groups.is_empty() {
-                    ui.label(dim(pal, format!("No {} match \"{query}\".", labels.nouns.many)));
+                    ui.label(dim(pal, trf(host, words::NO_MATCH, &[("query", &query)])));
                 }
                 groups.clone()
             }
@@ -465,18 +596,67 @@ fn items(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal:
         }
     };
     if !reading && query.is_empty() && groups.is_empty() {
-        ui.label(dim(pal, "Nothing in this folder yet."));
+        ui.label(dim(pal, tr(host, words::NOTHING_HERE)));
     }
     if query.is_empty() && st.files.len() > MAX_SHOWN_FILES {
-        let n = st.files.len();
-        ui.label(dim(pal, format!("Showing the first {MAX_SHOWN_FILES} of {n} files: choose a folder or search to see the others.")));
+        let (shown, total) = (MAX_SHOWN_FILES.to_string(), st.files.len().to_string());
+        ui.label(dim(pal, trf(host, words::SHOWING_FIRST, &[("shown", &shown), ("total", &total)])));
     }
-    let mut budget = THUMBS_PER_FRAME;
-    for g in &groups {
-        group(ui, st, host, labels, pal, g, &mut budget);
+    // The grid scrolls within the part of the pane that can be seen, so the controls above stay
+    // in view even inside the app's own scroll area (where the height left is unbounded).
+    let visible = ui.clip_rect().bottom() - ui.cursor().top();
+    let room = ui.available_height().min(visible).max(MIN_GRID_HEIGHT);
+    egui::ScrollArea::vertical().id_salt("library_items").max_height(room).auto_shrink([false, false]).show(ui, |ui| {
+        let mut budget = THUMBS_PER_FRAME;
+        if labels.one_per_file {
+            flat(ui, st, host, labels, pal, &groups, &mut budget);
+        } else {
+            for g in &groups {
+                group(ui, st, host, labels, pal, g, &mut budget);
+            }
+        }
+        if budget == 0 {
+            ui.ctx().request_repaint();
+        }
+    });
+}
+
+/// Pixels to draw a cell `w` points wide, in steps of 32 so nearby pane widths share thumbnails.
+fn thumb_px(ui: &Ui, w: f32) -> u32 {
+    let px = ((w * ui.ctx().pixels_per_point()) / 32.0).ceil() as u32 * 32;
+    px.clamp(*craft_library::THUMB_WIDTHS.start(), *craft_library::THUMB_WIDTHS.end())
+}
+
+/// Every file's one item in one grid, named under its thumbnail; files that couldn't be read
+/// after it.
+fn flat(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal: &Palette, groups: &[Group], budget: &mut usize) {
+    let gap = 6.0;
+    let width = ui.available_width();
+    let columns = (((width + gap) / (FLAT_CELL + gap)).floor() as usize).clamp(2, MAX_FLAT_COLUMNS);
+    let w = ((width - gap * (columns - 1) as f32) / columns as f32).floor().max(32.0);
+    let px = thumb_px(ui, w);
+    let cells: Vec<(&str, ItemRow)> = groups
+        .iter()
+        .flat_map(|g| {
+            g.items.iter().map(move |it| {
+                let title = if it.title.trim().is_empty() { g.title.clone() } else { it.title.clone() };
+                (g.file.as_str(), ItemRow { title, ..it.clone() })
+            })
+        })
+        .collect();
+    ui.add_space(6.0);
+    for row in cells.chunks(columns) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for (file, it) in row {
+                cell(ui, st, host, labels, pal, file, it, (w, px, true), budget);
+            }
+        });
     }
-    if budget == 0 {
-        ui.ctx().request_repaint();
+    for g in groups {
+        if let Some(e) = &g.error {
+            ui.label(RichText::new(format!("{}: {e}", g.title)).color(pal.text_dim).small()).on_hover_text(&g.file);
+        }
     }
 }
 
@@ -488,29 +668,38 @@ fn group(ui: &mut Ui, st: &mut State, host: &mut dyn Host, labels: &Labels, pal:
         return;
     }
     if g.items.is_empty() {
-        ui.label(dim(pal, format!("No {}.", labels.nouns.many)));
+        ui.label(dim(pal, tr(host, words::EMPTY_FILE)));
         return;
     }
     let gap = 6.0;
     let w = ((ui.available_width() - gap) / 2.0).floor().max(48.0);
-    // Pixels for the screen, in steps of 32 so nearby pane widths share thumbnails.
-    let px = ((w * ui.ctx().pixels_per_point()) / 32.0).ceil() as u32 * 32;
-    let px = px.clamp(*craft_library::THUMB_WIDTHS.start(), *craft_library::THUMB_WIDTHS.end());
+    let px = thumb_px(ui, w);
     for pair in g.items.chunks(2) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             for it in pair {
-                cell(ui, st, host, labels, pal, &g.file, it, w, px, budget);
+                cell(ui, st, host, labels, pal, &g.file, it, (w, px, false), budget);
             }
         });
     }
 }
 
-/// The accessible name of an item's cell: "Slide 2: Agenda".
-pub fn cell_label(item: &str, row: &ItemRow) -> String {
-    if row.title.is_empty() { format!("{item} {}", row.index + 1) } else { format!("{item} {}: {}", row.index + 1, row.title) }
+/// The accessible name of an item's cell, in the app's language: "Slide 2: Agenda", or in a
+/// one-item-per-file grid "Picture: Harbour".
+pub fn cell_label(host: &dyn Host, labels: &Labels, row: &ItemRow) -> String {
+    let item = tr(host, labels.item);
+    let number = (row.index + 1).to_string();
+    let values = [("item", item.as_str()), ("number", number.as_str()), ("title", row.title.as_str())];
+    let template = match (labels.one_per_file, row.title.is_empty()) {
+        (true, false) => words::ITEM_NAMED,
+        (_, true) => words::ITEM_UNTITLED,
+        (false, false) => words::ITEM_TITLED,
+    };
+    trf(host, template, &values)
 }
 
+/// One item's cell, `size.0` points wide, its thumbnail drawn `size.1` pixels wide; `size.2`: in
+/// a one-item-per-file grid, which names the item without its number.
 #[allow(clippy::too_many_arguments)]
 fn cell(
     ui: &mut Ui,
@@ -520,10 +709,10 @@ fn cell(
     pal: &Palette,
     file: &str,
     row: &ItemRow,
-    w: f32,
-    px: u32,
+    size: (f32, u32, bool),
     budget: &mut usize,
 ) {
+    let (w, px, named) = size;
     let key: ThumbKey = (file.to_string(), row.index, px);
     let aspect = match st.thumbs.get(&key) {
         Some(Thumb::Ready(tex)) => {
@@ -535,7 +724,7 @@ fn cell(
     let h = w * aspect;
     let label_h = 16.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(w, h + label_h), Sense::click());
-    let label = cell_label(labels.item, row);
+    let label = cell_label(host, labels, row);
     resp.widget_info(|| WidgetInfo::labeled(Role::Button, true, &label));
     let img = Rect::from_min_size(rect.min, vec2(w, h));
     if ui.is_rect_visible(rect) {
@@ -559,12 +748,17 @@ fn cell(
         }
         let edge = if resp.hovered() { Stroke::new(2.0, pal.accent) } else { Stroke::new(1.0, pal.border) };
         p.rect_stroke(img, CornerRadius::same(2), edge, StrokeKind::Inside);
-        let text = if row.title.is_empty() { format!("{}", row.index + 1) } else { format!("{}  {}", row.index + 1, row.title) };
+        let text = match (named, row.title.is_empty()) {
+            (true, false) => row.title.clone(),
+            (_, true) => format!("{}", row.index + 1),
+            (false, false) => format!("{}  {}", row.index + 1, row.title),
+        };
         let galley = p.layout_no_wrap(text, egui::FontId::proportional(11.0), if row.hidden { pal.text_faint } else { pal.text_dim });
         let at = egui::pos2(rect.left(), img.bottom() + 2.0);
         p.with_clip_rect(Rect::from_min_max(at, rect.max)).galley(at, galley, pal.text_dim);
     }
-    let hint = if row.hidden { format!("{label} (hidden)\nClick to insert") } else { format!("{label}\nClick to insert") };
+    let click = tr(host, words::CLICK_TO_INSERT);
+    let hint = if row.hidden { format!("{label}\n{}\n{click}", tr(host, words::HIDDEN)) } else { format!("{label}\n{click}") };
     let resp = resp.on_hover_text(hint);
     let one = labels.nouns.one;
     let target = |extra: Value| {
@@ -579,30 +773,43 @@ fn cell(
         let _ = host.act("library.insert", target(json!({})));
     }
     let place = host.can_place();
+    let insert_item = tr(host, labels.insert_item);
+    let insert_shapes = labels.insert_shapes.map(|w| tr(host, w));
+    let insert_element = labels.insert_element.map(|w| tr(host, w));
     resp.context_menu(|ui| {
-        if ui.button(labels.insert_item).clicked() {
+        if ui.button(insert_item.as_str()).clicked() {
             let _ = host.act("library.insert", target(json!({})));
             ui.close();
         }
-        if let Some(shapes) = labels.insert_shapes
-            && ui.add_enabled(place, egui::Button::new(shapes)).clicked()
+        if let Some(shapes) = &insert_shapes
+            && ui.add_enabled(place, egui::Button::new(shapes.as_str())).clicked()
         {
             let _ = host.act("library.insert", target(json!({"as": "shapes"})));
             ui.close();
         }
-        if let Some(element) = labels.insert_element {
+        if let Some(element) = &insert_element {
             let names = element_names(st, host, labels.nouns, file, row.index);
+            let tip = tr(host, words::ELEMENT_TIP);
+            let shown: Vec<String> = names
+                .iter()
+                .take(MAX_MENU_ELEMENTS)
+                .map(
+                    |(name, count)| {
+                        if *count > 1 { trf(host, words::ELEMENT_COUNT, &[("name", name), ("count", &count.to_string())]) } else { name.clone() }
+                    },
+                )
+                .collect();
+            let more = names.len().checked_sub(MAX_MENU_ELEMENTS).filter(|n| *n > 0).map(|n| trf(host, words::MORE, &[("count", &n.to_string())]));
             ui.add_enabled_ui(place && !names.is_empty(), |ui| {
-                ui.menu_button(element, |ui| {
-                    for (name, count) in names.iter().take(MAX_MENU_ELEMENTS) {
-                        let shown = if *count > 1 { format!("{name} (×{count})") } else { name.clone() };
-                        if ui.button(shown).on_hover_text("Put this element where it is on this one").clicked() {
+                ui.menu_button(element.as_str(), |ui| {
+                    for ((name, _), shown) in names.iter().zip(shown) {
+                        if ui.button(shown).on_hover_text(tip.as_str()).clicked() {
                             let _ = host.act("library.insert", target(json!({"names": [name]})));
                             ui.close();
                         }
                     }
-                    if names.len() > MAX_MENU_ELEMENTS {
-                        ui.label(dim(pal, format!("and {} more", names.len() - MAX_MENU_ELEMENTS)));
+                    if let Some(more) = &more {
+                        ui.label(dim(pal, more.as_str()));
                     }
                 });
             });

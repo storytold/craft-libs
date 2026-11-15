@@ -221,6 +221,93 @@ fn folders_are_kept_bounded_and_removed_by_any_spelling() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The plain file system, counting the files it reads.
+#[derive(Default)]
+struct Counting(std::cell::Cell<usize>);
+
+impl Fs for Counting {
+    fn read_dir(&self, path: &Path, max: usize) -> Result<(Vec<DirEntry>, bool), String> {
+        Disk.read_dir(path, max)
+    }
+    fn stat(&self, path: &Path) -> Result<(EntryKind, Stamp), String> {
+        Disk.stat(path)
+    }
+    fn canonical(&self, path: &Path) -> Result<PathBuf, String> {
+        Disk.canonical(path)
+    }
+    fn read(&self, path: &Path, max: u64) -> Result<Vec<u8>, String> {
+        self.0.set(self.0.get() + 1);
+        Disk.read(path, max)
+    }
+}
+
+/// `.pic` files, one picture each, known from the name: the item's text is its format.
+#[derive(Default)]
+struct Pics;
+
+impl Kind for Pics {
+    type Doc = usize;
+    fn extensions(&self) -> &[&str] {
+        &["pic"]
+    }
+    fn nouns(&self) -> Nouns {
+        Nouns { one: "picture", many: "pictures" }
+    }
+    fn open(&self, _name: &str, bytes: &[u8]) -> Result<usize, String> {
+        Ok(bytes.len())
+    }
+    fn title(&self, _doc: &usize) -> Option<String> {
+        None
+    }
+    fn count(&self, _doc: &usize) -> usize {
+        1
+    }
+    fn item(&self, _doc: &usize, _index: usize) -> Item {
+        Item::default()
+    }
+    fn thumbnail(&self, doc: &usize, _index: usize, width: u32) -> Result<Thumbnail, String> {
+        Ok(Thumbnail { png: Arc::new(vec![0; *doc]), width, height: width })
+    }
+    fn item_from_name(&self, name: &str) -> Option<Item> {
+        Some(Item { title: name.into(), hidden: false, text: "pic".into() })
+    }
+}
+
+/// A folder of pictures lists and searches without a file being read: only a thumbnail reads one.
+#[test]
+fn files_known_from_their_names_are_listed_and_searched_without_being_read() {
+    let dir = folder("pics");
+    for name in ["sunset.pic", "harbour.pic", "sunrise.pic"] {
+        std::fs::write(dir.join(name), b"pixels").unwrap();
+    }
+    let fs = Counting::default();
+    let folders = vec![s(&dir)];
+    let mut lib = Library::new(Pics);
+    // Listed without opening, the items still come: they cost nothing.
+    let listed = lib.list(&fs, &folders, &json!({"pictures": false})).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 3);
+    assert_eq!(listed[0]["pictures"], json!([{"index": 0, "title": "harbour.pic", "hidden": false}]));
+    assert_eq!(listed[0]["pictureCount"], json!(1));
+    let opened = lib.list(&fs, &folders, &json!({})).unwrap();
+    assert_eq!(opened[2]["pictures"][0]["title"], json!("sunset.pic"));
+    let hits = lib.search(&fs, &folders, &json!({"query": "sun"})).unwrap();
+    assert_eq!(hits.as_array().unwrap().len(), 2);
+    let by_format = lib.search(&fs, &folders, &json!({"query": "pic"})).unwrap();
+    assert_eq!(by_format.as_array().unwrap().len(), 3);
+    assert_eq!(fs.0.get(), 0, "nothing read to list or search");
+    // A thumbnail reads that one file.
+    let file = s(&dir.join("sunset.pic"));
+    let t = lib.thumbnail(&fs, &folders, &json!({"file": file, "picture": 0})).unwrap();
+    assert_eq!(t["width"], json!(THUMB_WIDTH));
+    assert_eq!(fs.0.get(), 1);
+    // An over-large file is still listed with why it isn't opened, without being read.
+    let mut lib = Library::new(Pics);
+    let huge = Stamp { len: MAX_FILE_BYTES + 1, modified: None };
+    assert!(lib.index(&fs, &dir.join("huge.pic"), huge).error.as_deref().is_some_and(|e| e.contains("not opened")));
+    assert_eq!(fs.0.get(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Every folder listing and file read goes through the app's [`Fs`], which is where an app
 /// confines them (such as DeckCraft's automation read roots). The core reaching for the file
 /// system itself would bypass that, so it may not (its tests may).

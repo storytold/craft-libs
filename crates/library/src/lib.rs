@@ -165,6 +165,13 @@ pub trait Kind {
     /// Item `index` drawn `width` pixels wide (within [`THUMB_WIDTHS`]) and no taller than
     /// [`MAX_THUMB_HEIGHT`], as PNG.
     fn thumbnail(&self, doc: &Self::Doc, index: usize, width: u32) -> Result<Thumbnail, String>;
+    /// For a kind whose every file is one item known from its name (a picture, an icon): the item
+    /// of the file `name`. The Library then lists, indexes and searches such files without reading
+    /// them, and reads one only to draw its thumbnail or for the app's insert. `None`, the
+    /// default: files are opened to find their items.
+    fn item_from_name(&self, _name: &str) -> Option<Item> {
+        None
+    }
 }
 
 // ---------- folders ----------
@@ -335,11 +342,17 @@ pub fn stem(path: &Path) -> String {
 }
 
 fn index_of<K: Kind>(kind: &K, path: &Path, doc: &K::Doc, stamp: Stamp) -> FileIndex {
-    let title = kind.title(doc).map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).unwrap_or_else(|| stem(path));
     let count = kind.count(doc);
-    let items: Vec<IndexItem> = (0..count.min(MAX_ITEMS))
-        .map(|i| {
-            let it = kind.item(doc, i);
+    index_from(path, kind.title(doc), count, (0..count.min(MAX_ITEMS)).map(|i| kind.item(doc, i)), stamp)
+}
+
+/// The index of the file at `path`: its `title` (else the file name), how many items it has, and
+/// its first [`MAX_ITEMS`] `items`.
+fn index_from(path: &Path, title: Option<String>, count: usize, items: impl Iterator<Item = Item>, stamp: Stamp) -> FileIndex {
+    let title = title.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).unwrap_or_else(|| stem(path));
+    let items: Vec<IndexItem> = items
+        .take(MAX_ITEMS)
+        .map(|it| {
             let title = cap_chars(it.title.trim(), MAX_TITLE);
             let mut text = it.text;
             cap_bytes(&mut text, MAX_ITEM_TEXT);
@@ -520,9 +533,15 @@ impl<K: Kind> Library<K> {
         let now = self.tick();
         let current = self.index.get(path).is_some_and(|f| f.stamp == stamp);
         if !current {
-            let fresh = match self.doc(fs, path, stamp) {
-                Ok(doc) => index_of(&self.kind, path, &doc, stamp),
-                Err(e) => failed(path, stamp, e),
+            let named = self.named_item(path);
+            let fresh = match named {
+                // Known from its name: nothing is read.
+                Some(_) if stamp.len > MAX_FILE_BYTES => failed(path, stamp, too_large()),
+                Some(item) => index_from(path, None, 1, std::iter::once(item), stamp),
+                None => match self.doc(fs, path, stamp) {
+                    Ok(doc) => index_of(&self.kind, path, &doc, stamp),
+                    Err(e) => failed(path, stamp, e),
+                },
             };
             if let Some(old) = self.index.insert(path.to_path_buf(), fresh) {
                 self.index_bytes = self.index_bytes.saturating_sub(old.bytes);
@@ -534,6 +553,11 @@ impl<K: Kind> Library<K> {
         let entry = self.index.entry(path.to_path_buf()).or_insert_with(|| failed(path, stamp, "not indexed".into()));
         entry.used = now;
         entry
+    }
+
+    /// The one item of the file at `path` when the kind knows it from the name.
+    fn named_item(&self, path: &Path) -> Option<Item> {
+        path.file_name().and_then(|n| n.to_str()).and_then(|n| self.kind.item_from_name(n))
     }
 
     /// Drop the least recently used indexes until they fit the budget, never `keep`.
@@ -740,7 +764,8 @@ impl<K: Kind> Library<K> {
     /// One file as `library.list` answers it.
     fn file_json(&mut self, fs: &dyn Fs, path: &Path, stamp: Stamp, folder: &str, open: bool) -> Value {
         let mut v = json!({"file": path.to_string_lossy(), "folder": folder});
-        if !open {
+        // A file whose item comes from its name is listed whole: that reads nothing.
+        if !open && self.named_item(path).is_none() {
             v["title"] = json!(stem(path));
             if stamp.len > MAX_FILE_BYTES {
                 v["error"] = json!(too_large());
@@ -763,7 +788,8 @@ impl<K: Kind> Library<K> {
 
     /// `library.list {folder?, file?, <many>?: bool}` → `[{file, folder, title, <many>: [{index,
     /// title, hidden}], <one>Count, truncated?, error?}]`; with `<many>: false` the files are
-    /// listed without being opened.
+    /// listed without being opened (and without their items, unless [`Kind::item_from_name`] gives
+    /// them).
     pub fn list(&mut self, fs: &dyn Fs, folders: &[String], p: &Value) -> Result<Value, String> {
         let open = p.get(self.kind.nouns().many).and_then(Value::as_bool).unwrap_or(true);
         let files = if str_param(p, "file").is_some() {

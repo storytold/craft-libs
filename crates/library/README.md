@@ -15,6 +15,9 @@ The pane that shows it is in [`craft-library-egui`](../library-egui/README.md).
 - **`Kind`**: what its Library holds: the file extensions, how to open a file, how many items it
   has (slides, pages, sheets), each item's title, hidden flag and text, and how to draw an item's
   thumbnail as PNG. Its `Nouns` (`slide`/`slides`, `page`/`pages`…) name the items in every answer.
+  A kind whose every file is one item known from its name (a picture, an icon) also gives
+  `item_from_name`: such files are listed, indexed and searched without being read, and a file is
+  read only to draw its thumbnail or for the app's insert.
 
 ```rust
 struct Pages;

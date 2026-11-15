@@ -20,6 +20,9 @@ struct Pages {
     acted: Vec<(String, Value)>,
     asked: Vec<String>,
     picker: bool,
+    /// Show every word as «word», and remember the words asked for.
+    translate: bool,
+    words: std::cell::RefCell<std::collections::BTreeSet<String>>,
 }
 
 impl Host for Pages {
@@ -57,6 +60,10 @@ impl Host for Pages {
     fn tab(&mut self, ui: &mut Ui, id: &str) {
         ui.label(format!("the app's own {id} tab"));
     }
+    fn text<'a>(&self, english: &'a str) -> Cow<'a, str> {
+        self.words.borrow_mut().insert(english.to_string());
+        if self.translate { Cow::Owned(format!("«{english}»")) } else { Cow::Borrowed(english) }
+    }
 }
 
 const LABELS: Labels = Labels {
@@ -71,6 +78,7 @@ const LABELS: Labels = Labels {
     empty: "Add a folder of documents to see their pages here.",
     not_in_browser: "Not in the browser.",
     aspect: 1.4,
+    one_per_file: false,
 };
 
 fn harness(host: Pages) -> Harness<'static, (State, Pages)> {
@@ -155,4 +163,143 @@ fn thumbnails_decode_and_hostile_ones_fail_quietly() {
     assert_eq!(unbase64("Zm9vYmFy"), Some(b"foobar".to_vec()));
     assert_eq!(unbase64("Zg=="), Some(b"f".to_vec()));
     assert!(unbase64("**").is_none());
+}
+
+/// The words of [`LABELS`], which an app's catalog holds beside [`words::ALL`].
+fn label_words() -> Vec<&'static str> {
+    let mut w: Vec<&str> = LABELS.tabs.iter().map(|(_, l)| *l).collect();
+    w.extend([LABELS.item, LABELS.insert_item, LABELS.search_hint, LABELS.add_folder_tip, LABELS.empty, LABELS.not_in_browser]);
+    w.extend(LABELS.insert_shapes.into_iter().chain(LABELS.insert_element));
+    w
+}
+
+#[test]
+fn every_word_shown_comes_through_the_host() {
+    let mut h = harness(Pages { folders: vec!["/lib".into()], translate: true, ..Default::default() });
+    // The pane's words and the app's, translated; the English isn't shown.
+    for shown in ["«Add Folder…»", "«Remove»", "«Refresh»", "«Pages»", "«Stamps»"] {
+        assert!(h.query_by_label(shown).is_some(), "{shown}");
+    }
+    assert!(h.query_by_label("Add Folder…").is_none());
+    assert!(h.query_by_label("«Library folder»").is_some(), "the drop-down's accessible name");
+    // A template is translated whole, then filled in.
+    assert!(h.query_by_label("««Page» 1: Cover»").is_some());
+    let at = h.get_by_label("««Page» 1: Cover»").rect().center();
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+        h.step();
+    }
+    h.run_steps(2);
+    assert!(h.query_by_label("«Insert page»").is_some() && h.query_by_label("«Insert element»").is_some());
+    h.state_mut().0.query = "nothing like it".into();
+    h.state_mut().1.asked.clear();
+    for _ in 0..30 {
+        h.step();
+    }
+    // Every word asked for is one an app's catalog can hold.
+    let known: Vec<&str> = words::ALL.iter().copied().chain(label_words()).collect();
+    for w in h.state().1.words.borrow().iter() {
+        assert!(known.contains(&w.as_str()), "{w:?} is in neither words::ALL nor the Labels");
+    }
+}
+
+#[test]
+fn templates_fill_in_once_and_keep_other_braces() {
+    assert_eq!(fill("Reading {read} of {total} files…", &[("read", "3"), ("total", "10")]), "Reading 3 of 10 files…");
+    // A value holding a placeholder is shown as it is, and unknown braces stay.
+    assert_eq!(fill("{title} {x} {", &[("title", "{title}")]), "{title} {x} {");
+    assert_eq!(fill("{name} (×{count})", &[("name", "Logo"), ("count", "2")]), "Logo (×2)");
+}
+
+/// `n` one-picture files in `/lib`, `pic0.png`…; their pictures are titled `p0`… or not at all.
+struct Pics {
+    n: usize,
+    titled: bool,
+}
+
+impl Host for Pics {
+    fn act(&mut self, _id: &str, _params: Value) -> Result<Value, String> {
+        Ok(json!({}))
+    }
+    fn ask(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let titled = self.titled;
+        let file = |i: usize| {
+            let title = if titled { format!("p{i}") } else { String::new() };
+            json!({"file": format!("/lib/pic{i}.png"), "folder": "/lib", "title": format!("pic{i}"), "pages": [{"index": 0, "title": title, "hidden": false}]})
+        };
+        match id {
+            "library.list" => match params["file"].as_str() {
+                Some(f) => Ok(json!([(0..self.n).map(file).find(|v| v["file"] == f).unwrap_or(json!({}))])),
+                None => Ok(Value::Array((0..self.n).map(file).collect())),
+            },
+            "library.thumbnail" => Ok(json!({"png": png(), "width": 16, "height": 9})),
+            _ => Ok(json!([])),
+        }
+    }
+    fn folders(&self) -> Vec<String> {
+        vec!["/lib".into()]
+    }
+    fn pick_folder(&mut self) -> Option<Option<String>> {
+        None
+    }
+    fn can_place(&self) -> bool {
+        true
+    }
+    fn report(&mut self, _message: String) {}
+}
+
+fn pics(n: usize, titled: bool, labels: Labels, scrolled: bool) -> Harness<'static, State> {
+    let mut h = Harness::builder().with_size(egui::vec2(320.0, 480.0)).build_ui_state(
+        move |ui, st: &mut State| {
+            let pal = Palette::from_visuals(ui.visuals());
+            let mut host = Pics { n, titled };
+            // Some apps put their panes in a scroll area of their own.
+            if scrolled {
+                egui::ScrollArea::vertical().show(ui, |ui| show(ui, st, &mut host, &labels, &pal));
+            } else {
+                show(ui, st, &mut host, &labels, &pal);
+            }
+        },
+        State::default(),
+    );
+    h.run_steps(6);
+    h
+}
+
+#[test]
+fn files_of_one_item_each_share_one_grid() {
+    let flat = Labels { one_per_file: true, item: "Picture", ..LABELS };
+    let h = pics(4, false, flat, false);
+    // Named after the file, with no heading of its own, two or more to a row.
+    let first = h.get_by_label("Picture: pic0").rect();
+    let second = h.get_by_label("Picture: pic1").rect();
+    assert_eq!(first.top(), second.top(), "side by side");
+    assert!(h.query_by_label("pic0").is_none(), "no heading per file");
+    // Grouped by file, each file has its heading and its one item a row to itself.
+    let h = pics(4, false, LABELS, false);
+    assert!(h.query_by_label("pic0").is_some());
+    let cells: Vec<_> = h.query_all_by_label("Page 1").map(|n| n.rect().top()).collect();
+    assert!(cells.len() == 4 && cells[0] < cells[1], "{cells:?}");
+}
+
+#[test]
+fn the_controls_stay_in_view_when_the_grid_scrolls() {
+    let mut h = pics(40, true, LABELS, true);
+    let controls = h.get_by_label("Library folder").rect().top();
+    let item = || "Page 1: p0";
+    let before = h.get_by_label(item()).rect().top();
+    let over = h.get_by_label(item()).rect().center();
+    h.event(egui::Event::PointerMoved(over));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -400.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Wheel,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(8);
+    assert!(h.get_by_label(item()).rect().top() < before - 100.0, "the grid scrolled");
+    assert_eq!(h.get_by_label("Library folder").rect().top(), controls, "the folder and search controls didn't");
 }
