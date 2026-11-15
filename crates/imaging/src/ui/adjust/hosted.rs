@@ -93,6 +93,9 @@ pub struct HostedAdjustDialog<V, E = ()> {
     title: Label,
     open: bool,
     value: V,
+    /// The value Reset returns to and the footer compares with: the opening value, then the last
+    /// [`seed`](HostedAdjustDialog::seed).
+    opening: V,
     /// Whether the value was edited since the dialog opened: by the editor, Reset, a field set or
     /// [`value_mut`](HostedAdjustDialog::value_mut). A [`seed`](HostedAdjustDialog::seed) is not an edit.
     edited: bool,
@@ -135,6 +138,7 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Hoste
             key,
             title: title.into(),
             open: true,
+            opening: value.clone(),
             value,
             edited: false,
             preview: true,
@@ -272,8 +276,9 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Hoste
     }
 
     /// Replaces the value with the one the dialog opens at (the app seeds it after opening, or again once its target
-    /// resolves or changes), without counting as an edit.
+    /// resolves or changes), without counting as an edit. Reset returns to the last seed.
     pub fn seed(&mut self, value: V) {
+        self.opening = value.clone();
         self.value = value;
     }
 
@@ -312,6 +317,7 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
             title,
             open,
             value,
+            opening,
             edited,
             preview,
             comparing,
@@ -341,6 +347,7 @@ impl<V: Value + Default + Serialize + DeserializeOwned, E: Send + 'static> Stack
         let form = FormDialog::new(title.clone(), Bind::bound(value))
             .opened(Bind::bound(open))
             .preview(Some(Bind::bound(&mut *preview)))
+            .opening(opening.clone())
             .accept_stays_open(*hold)
             .ok_enabled(!held.is_waiting())
             .shaped(move |dialog| {

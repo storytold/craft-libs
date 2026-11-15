@@ -186,7 +186,7 @@ pub struct FormDialog<'a, V: Value + Default> {
     answers: Vec<HostAnswer>,
     reset_with: Option<ResetWithFn<'a, V>>,
     on_reset: Option<OnResetFn<'a>>,
-    /// Values the host opened before the first pass: the first pass keeps them as the opening values Reset restores.
+    /// The host's opening values: each pass given them keeps them as the values Reset restores.
     opening: Option<V>,
 }
 
@@ -334,8 +334,9 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
-    /// Values the host opened before the first pass. The first pass stores them, not its own values, as the opening
-    /// values Reset restores and the edited check compares with.
+    /// The opening values the host keeps: Reset restores them and the edited check compares with them. Each pass given
+    /// them stores them, so a host that moves its baseline (a seed after the open) passes the new one. Without them the
+    /// first pass's values are the opening values.
     pub fn opening(mut self, opening: V) -> Self {
         self.opening = Some(opening);
         self
@@ -483,8 +484,10 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                 let ctx = ui.ctx().clone();
                 crate::runtime::edit::watch_gestures(&ctx, || body(ui, &mut form, &mut values))
             };
-            if first {
-                cx.memory::<Opened<V>>().0 = Some(opening.clone().unwrap_or_else(|| values.clone()));
+            match &opening {
+                Some(opening) if !measuring => cx.memory::<Opened<V>>().0 = Some(opening.clone()),
+                None if first => cx.memory::<Opened<V>>().0 = Some(values.clone()),
+                _ => {}
             }
             if history && !measuring {
                 let mut steps = steps.unwrap_or_else(|| EditHistory::new(&values));

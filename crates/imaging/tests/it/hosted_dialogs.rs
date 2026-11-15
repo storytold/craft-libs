@@ -130,6 +130,35 @@ fn an_adjustment_dialog_counts_editor_changes_and_sets_as_edits_but_not_seeds_or
     assert_eq!(edited(&host), Some(true), "a field set of the value is an edit");
 }
 
+// A seed after the open moves the Reset baseline: Reset stays disabled after the seed, and after an edit it returns
+// the value to the seed, not to the value the dialog opened with.
+#[trial]
+fn a_seed_moves_the_reset_baseline() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(brightness_contrast());
+    fixture.idle(10);
+    let seeded = BrightnessContrast { brightness: 5.0, contrast: 5.0, legacy: false };
+    if let Some(dialog) = host.borrow_mut().get_mut::<Adjust>() {
+        dialog.seed(seeded);
+    }
+    fixture.idle(4).hold(Modifiers::ALT).idle(2);
+    let reset = fixture.by_label("Reset").expect("Alt turns Cancel into Reset");
+    assert!(fixture.tree().is_disabled_key(reset.node), "a seed is the baseline: nothing to reset");
+    fixture.hold(Modifiers::NONE).idle(2);
+
+    let slider = fixture.by_role(craft_ui::contract::Role::SLIDER).first().cloned().expect("the Brightness slider");
+    fixture.drag(&slider, Vec2::new(slider.rect.width() / 4.0, 0.0)).settle();
+    let value = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<Adjust>().map(|dialog| dialog.value().clone());
+    assert_ne!(value(&host), Some(seeded), "the drag edits the value");
+    fixture.hold(Modifiers::ALT).idle(2);
+    let reset = fixture.by_label("Reset").expect("Alt turns Cancel into Reset");
+    assert!(!fixture.tree().is_disabled_key(reset.node), "an edit enables Reset");
+    fixture.click(&reset).idle(2);
+    fixture.hold(Modifiers::NONE).settle();
+    assert_eq!(value(&host), Some(seeded), "Reset returns to the seed");
+}
+
 // A dialog given a JSON form lists the form's keys for its value, with the dialog's own fields beside them, and the
 // form sees the edited signal.
 #[trial]
