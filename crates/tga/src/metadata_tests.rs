@@ -124,7 +124,7 @@ fn importing_truncated_pixels_does_not_consume_tga_footer() {
             file.extend_from_slice(&offsets);
             file.extend_from_slice(SIGNATURE);
             let result = dec(&file);
-            assert!(matches!(result, Err(_)), "kind {kind}, metadata {metadata:?}: metadata is not a second pixel");
+            assert!(result.is_err(), "kind {kind}, metadata {metadata:?}: metadata is not a second pixel");
         }
     }
     for kind in [1, 9] {
@@ -136,7 +136,7 @@ fn importing_truncated_pixels_does_not_consume_tga_footer() {
         file.extend_from_slice(&[0; 8]);
         file.extend_from_slice(SIGNATURE);
         let result = dec(&file);
-        assert!(matches!(result, Err(_)), "kind {kind}: the footer is not colour-map data");
+        assert!(result.is_err(), "kind {kind}: the footer is not colour-map data");
     }
 }
 
@@ -200,7 +200,7 @@ fn preceding_metadata_cannot_supply_missing_pixels() {
     let mut accepted = Vec::new();
     for metadata in 0..4 {
         let result = dec(&preceding_metadata(false, metadata));
-        if !matches!(result, Err(_)) {
+        if result.is_ok() {
             accepted.push(metadata);
         }
     }
@@ -305,7 +305,7 @@ fn malformed_optional_metadata_cannot_supply_missing_pixels() {
     let footer = file.len() - SIGNATURE.len() - 8;
     let directory = u32::from_le_bytes(file[footer + 4..footer + 8].try_into().unwrap()) as usize;
     file[directory + 8..directory + 12].copy_from_slice(&u32::MAX.to_le_bytes());
-    assert!(matches!(dec(&file), Err(_)));
+    assert!(dec(&file).is_err());
 
     // The declared entry count exceeds the bytes before the footer, but the first entry's
     // payload still precedes the directory and cannot be used as a second pixel.
@@ -313,17 +313,17 @@ fn malformed_optional_metadata_cannot_supply_missing_pixels() {
     let footer = file.len() - SIGNATURE.len() - 8;
     let directory = u32::from_le_bytes(file[footer + 4..footer + 8].try_into().unwrap()) as usize;
     file[directory..directory + 2].copy_from_slice(&2u16.to_le_bytes());
-    assert!(matches!(dec(&file), Err(_)));
+    assert!(dec(&file).is_err());
 
     let mut file = preceding_metadata(false, 2);
     let footer = file.len() - SIGNATURE.len() - 8;
     let extension = u32::from_le_bytes(file[footer..footer + 4].try_into().unwrap()) as usize;
     file[extension..extension + 2].copy_from_slice(&494u16.to_le_bytes());
-    assert!(matches!(dec(&file), Err(_)));
+    assert!(dec(&file).is_err());
     let mut file = preceding_metadata(false, 2);
     let footer = file.len() - SIGNATURE.len() - 8;
     file.remove(footer - 1);
-    assert!(matches!(dec(&file), Err(_)));
+    assert!(dec(&file).is_err());
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn valid_developer_directory_with_overlapping_payload_rejects_pixels() {
     assert_eq!(u32::from_le_bytes(file[moved_footer + 4..moved_footer + 8].try_into().unwrap()), directory as u32);
     assert_eq!(u16::from_le_bytes(file[directory..directory + 2].try_into().unwrap()), 2);
     assert_eq!(&file[directory + 12..directory + 22], &extra);
-    assert!(matches!(dec(&file), Err(_)));
+    assert!(dec(&file).is_err());
 }
 
 #[test]
@@ -356,7 +356,7 @@ fn nonempty_developer_reference_inside_pixels_rejects_the_whole_image() {
     file.extend_from_slice(&0u32.to_le_bytes());
     file.extend_from_slice(&directory.to_le_bytes());
     file.extend_from_slice(SIGNATURE);
-    assert!(matches!(dec(&file), Err(_)), "an overlapping reference must not return a partial image");
+    assert!(dec(&file).is_err(), "an overlapping reference must not return a partial image");
 }
 
 #[test]
@@ -376,7 +376,7 @@ fn inflated_developer_count_scans_the_next_chunk_as_an_entry_and_rejects_its_pix
     file.extend_from_slice(&0u32.to_le_bytes());
     file.extend_from_slice(&directory.to_le_bytes());
     file.extend_from_slice(SIGNATURE);
-    assert!(matches!(dec(&file), Err(_)), "a scanned entry's payload inside the pixels is refused");
+    assert!(dec(&file).is_err(), "a scanned entry's payload inside the pixels is refused");
 }
 
 #[test]
@@ -389,7 +389,7 @@ fn legacy_pixels_that_end_in_signature_at_or_after_the_header_are_read_as_a_foot
     let mut file = header(3, width, 1, 8, 0x20);
     file.extend(vec![0; prefix]);
     file.extend_from_slice(SIGNATURE);
-    assert!(matches!(dec(&file), Err(_)));
+    assert!(dec(&file).is_err());
 }
 
 #[test]

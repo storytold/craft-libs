@@ -59,11 +59,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Limits {
     /// Most pixels (width × height) a picture may have. Default 2^28 (16384 × 16384).
     pub max_pixels: u64,
+    /// Maximum combined palette, stored-pixel and RGBA allocation bytes. Default 256 MiB.
+    pub max_decoded_bytes: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_pixels: 1 << 28 }
+        Self { max_pixels: 1 << 28, max_decoded_bytes: 256 << 20 }
     }
 }
 
@@ -313,10 +315,6 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Picture> {
     };
     let end = image_data_end(bytes, first_pixel)?;
     let bytes = bytes.get(..end).ok_or(err("truncated image data"))?;
-    if let Some(layout) = map_entry {
-        let map = bytes.get(map_start..first_pixel).ok_or(err("truncated colour map"))?;
-        palette = map.chunks_exact(layout.bytes()).map(|entry| layout.rgba(entry)).collect();
-    }
     let at = first_pixel;
     let (stored_as, mapped) = match kind & 7 {
         1 => {
@@ -335,14 +333,35 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Picture> {
     };
     let data = bytes.get(at..).unwrap_or_default();
     let bpp = stored_as.bytes();
+    let stored_bytes = pixels.checked_mul(bpp).ok_or(Error::LimitExceeded("image size"))?;
+    let rgba_bytes = pixels.checked_mul(4).ok_or(Error::LimitExceeded("image size"))?;
+    let palette_bytes = if map_entry.is_some() { map_len * 4 } else { 0 };
+    let aggregate =
+        stored_bytes.checked_add(rgba_bytes).and_then(|n| n.checked_add(palette_bytes)).ok_or(Error::LimitExceeded("decode allocation bytes"))?;
+    if aggregate > limits.max_decoded_bytes {
+        return Err(Error::LimitExceeded("decode allocation bytes"));
+    }
+    if let Some(layout) = map_entry {
+        let map = bytes.get(map_start..first_pixel).ok_or(err("truncated colour map"))?;
+        palette.try_reserve_exact(map_len).map_err(|_| Error::LimitExceeded("allocation failed"))?;
+        palette.extend(map.chunks_exact(layout.bytes()).map(|entry| layout.rgba(entry)));
+    }
     // The stored values, in file order.
     let stored: Vec<u8> = if rle {
         unpack_rle(data, pixels, bpp)?
     } else {
         let n = pixels.checked_mul(bpp).ok_or(Error::LimitExceeded("image size"))?;
-        data.get(..n).ok_or(err("truncated pixel data"))?.to_vec()
+        {
+            let source = data.get(..n).ok_or(err("truncated pixel data"))?;
+            let mut values = Vec::new();
+            values.try_reserve_exact(n).map_err(|_| Error::LimitExceeded("allocation failed"))?;
+            values.extend_from_slice(source);
+            values
+        }
     };
-    let mut rgba = vec![0u8; pixels.checked_mul(4).ok_or(Error::LimitExceeded("image size"))?];
+    let mut rgba = Vec::new();
+    rgba.try_reserve_exact(rgba_bytes).map_err(|_| Error::LimitExceeded("allocation failed"))?;
+    rgba.resize(rgba_bytes, 0u8);
     for (i, v) in stored.chunks_exact(bpp).enumerate().take(pixels) {
         let (x, y) = (i % w, i / w);
         let x = if right_to_left { w - 1 - x } else { x };
@@ -386,7 +405,8 @@ fn unpack_rle(mut data: &[u8], pixels: usize, bpp: usize) -> Result<Vec<u8>> {
         return Err(short);
     }
     let total = pixels.checked_mul(bpp).ok_or(Error::LimitExceeded("image size"))?;
-    let mut out = Vec::with_capacity(total);
+    let mut out = Vec::new();
+    out.try_reserve_exact(total).map_err(|_| Error::LimitExceeded("allocation failed"))?;
     while out.len() < total {
         let (&head, rest) = data.split_first().ok_or(short.clone())?;
         let count = usize::from(head & 0x7F) + 1;
