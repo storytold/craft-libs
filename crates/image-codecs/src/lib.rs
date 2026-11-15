@@ -26,6 +26,7 @@ mod fidelity;
 mod format;
 mod image;
 mod inspection;
+pub mod jpeg_sef;
 mod lab;
 mod options;
 pub mod orientation;
