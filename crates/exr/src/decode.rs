@@ -7,7 +7,7 @@
 //! - [`decode_part`] decodes the channels of one flat part that a filter keeps, in their stored
 //!   sample type, over the part's data window. Every compression the `exr` crate reads is read,
 //!   scan lines and tiles alike (the largest resolution level). Other parts' chunks are skipped
-//!   unread, and channels the filter drops are never allocated.
+//!   unread, and channels the filter drops are never allocated. Other parts may be deep.
 //! - [`write`] writes one scan-line part.
 //!
 //! The `exr` crate sizes buffers from headers before it reads pixels, so everything that reaches
@@ -18,7 +18,7 @@
 use std::io::Cursor;
 
 use exr::block::UncompressedBlock;
-use exr::block::chunk::TileCoordinates;
+use exr::block::chunk::{Chunk, TileCoordinates};
 use exr::image::read::image::ReadImage;
 use exr::image::read::layers::{ChannelsReader, ReadAllLayers, ReadChannels};
 use exr::meta::MetaData;
@@ -248,7 +248,7 @@ fn window_size(size: exr::math::Vec2<usize>) -> (u32, u32) {
 fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData> {
     check_previews(bytes)?;
     let meta = MetaData::read_from_buffered(Cursor::new(bytes), false).map_err(map_exr)?;
-    let (mut total, mut dwa) = (0u64, 0u64);
+    let (mut total, mut flat, mut dwa) = (0u64, 0u64, 0u64);
     for header in meta.headers.iter() {
         let (w, h) = window_size(header.layer_size);
         if w > limits.max_width || h > limits.max_height {
@@ -260,23 +260,24 @@ fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData> {
         }
         let bytes = pixels.saturating_mul(header.channels.list.len().max(1) as u64 * 4);
         total = total.saturating_add(bytes);
-        if matches!(header.compression, ExrCompression::DWAA(_) | ExrCompression::DWAB(_)) {
-            dwa = dwa.saturating_add(bytes);
+        if !header.deep {
+            flat = flat.saturating_add(bytes);
+            if matches!(header.compression, ExrCompression::DWAA(_) | ExrCompression::DWAB(_)) {
+                dwa = dwa.saturating_add(bytes);
+            }
         }
     }
     if total > limits.max_bytes {
         return Err(Error::LimitExceeded(format!("{total} bytes across {} parts exceed {}", meta.headers.len(), limits.max_bytes)));
     }
-    // The crate allocates a flat part's samples before reading its chunks, so the file must be
-    // able to hold them. DWA's run-length channels are zlib-packed on top and reach about
-    // 132000:1, so DWA parts are counted at a quarter. Deep parts size their samples from the
-    // file's own counts.
-    if !meta.requirements.has_deep_data {
-        let declared = total.saturating_sub(dwa).saturating_add(dwa / 4);
-        let capacity = (bytes.len() as u64).saturating_mul(limits.max_ratio).saturating_add(1 << 20);
-        if declared > capacity {
-            return Err(Error::LimitExceeded(format!("a {} byte file cannot hold {declared} bytes of samples", bytes.len())));
-        }
+    // A flat part's samples are allocated before its chunks are read, so the file must be able
+    // to hold the flat parts' samples. DWA's run-length channels are zlib-packed on top and reach
+    // about 132000:1, so DWA parts are counted at a quarter. Deep parts size their samples from
+    // the file's own counts and are not counted here.
+    let declared = flat.saturating_sub(dwa).saturating_add(dwa / 4);
+    let capacity = (bytes.len() as u64).saturating_mul(limits.max_ratio).saturating_add(1 << 20);
+    if declared > capacity {
+        return Err(Error::LimitExceeded(format!("a {} byte file cannot hold {declared} bytes of samples", bytes.len())));
     }
     Ok(meta)
 }
@@ -459,19 +460,24 @@ pub fn decode_display_part(
     }
     let block_limit = std::cell::Cell::new(None);
     let select = DisplaySelect { index, keep, fill, limits, seen: std::cell::Cell::new(0), block_limit: &block_limit };
-    let image = ReadImage::new(ReadAllLayers { read_channels: select }, |_| {})
-        .from_buffered(Cursor::new(bytes))
-        .map_err(|error| block_limit.take().map(Error::LimitExceeded).unwrap_or_else(|| map_exr(error)))?;
-    let channels = image
-        .layer_data
-        .into_iter()
-        .nth(index)
-        .ok_or_else(|| malformed("the part was not read"))?
-        .channel_data
-        .into_iter()
-        .flatten()
-        .map(|(name, samples)| DisplayChannel { name, samples })
-        .collect();
+    let exr_error = |error| block_limit.take().map(Error::LimitExceeded).unwrap_or_else(|| map_exr(error));
+    let planes = if meta.headers.iter().any(|header| header.deep) {
+        let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
+        select.seen.set(index);
+        let mut reader = select.create_channels_reader(header).map_err(exr_error)?;
+        read_flat_part_chunks(bytes, &meta, index, &mut reader)?;
+        reader.into_channels()
+    } else {
+        ReadImage::new(ReadAllLayers { read_channels: select }, |_| {})
+            .from_buffered(Cursor::new(bytes))
+            .map_err(exr_error)?
+            .layer_data
+            .into_iter()
+            .nth(index)
+            .ok_or_else(|| malformed("the part was not read"))?
+            .channel_data
+    };
+    let channels = planes.into_iter().flatten().map(|(name, samples)| DisplayChannel { name, samples }).collect();
     Ok(DisplayPart { info, channels })
 }
 
@@ -727,22 +733,93 @@ impl ChannelsReader for SelectReader {
     }
 }
 
+/// Where the headers end and the offset tables begin: [`MetaData::read_from_buffered`] consumes
+/// exactly the version field and the headers.
+fn tables_start(bytes: &[u8]) -> Result<u64> {
+    let mut cursor = Cursor::new(bytes);
+    MetaData::read_from_buffered(&mut cursor, false).map_err(map_exr)?;
+    Ok(cursor.position())
+}
+
+/// Reads the chunks of flat part `index` of a file that also holds deep parts into `reader`.
+///
+/// The `exr` crate's image reader validates every header before it reads a chunk and refuses
+/// deep headers, so here only the flat headers are validated, the offset tables (one `u64` per
+/// chunk, a table per part in header order) are walked from the end of the headers, and only the
+/// selected part's chunks are read. Each chunk must start past the last offset table and inside
+/// the file, carry the selected part's number, and hold a block no other chunk of the part holds.
+fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &mut impl ChannelsReader) -> Result<()> {
+    let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
+    let multipart = meta.requirements.is_multilayer();
+    let mut long_names = false;
+    for flat in meta.headers.iter().filter(|h| !h.deep) {
+        flat.validate(multipart, &mut long_names, false).map_err(map_exr)?;
+    }
+    let truncated = || malformed("the offset tables run past the end of the file");
+    let (mut table, mut tables_end) = (0u64, tables_start(bytes)?);
+    for (i, h) in meta.headers.iter().enumerate() {
+        if i == index {
+            table = tables_end;
+        }
+        let len = u64::try_from(h.chunk_count).ok().and_then(|n| n.checked_mul(8)).ok_or_else(truncated)?;
+        tables_end = tables_end.checked_add(len).filter(|end| *end <= bytes.len() as u64).ok_or_else(truncated)?;
+    }
+    let offsets = usize::try_from(table)
+        .ok()
+        .and_then(|start| bytes.get(start..start.checked_add(header.chunk_count.checked_mul(8)?)?))
+        .ok_or_else(truncated)?;
+    let mut blocks = std::collections::HashSet::new();
+    for &entry in offsets.as_chunks::<8>().0 {
+        let offset = u64::from_le_bytes(entry);
+        let chunk = usize::try_from(offset)
+            .ok()
+            .filter(|_| offset >= tables_end)
+            .and_then(|start| bytes.get(start..))
+            .filter(|rest| !rest.is_empty())
+            .ok_or_else(|| malformed(format!("chunk offset {offset} is outside the chunk area of the file")))?;
+        if multipart {
+            let part = chunk.get(..4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(i32::from_le_bytes);
+            let part = part.ok_or_else(|| malformed(format!("the chunk at offset {offset} is cut off")))?;
+            if usize::try_from(part).ok() != Some(index) {
+                return Err(malformed(format!("the chunk at offset {offset} belongs to part {part}, not part {index}")));
+            }
+        }
+        let chunk = Chunk::read(&mut Cursor::new(chunk), meta).map_err(map_exr)?;
+        let tile = header.get_block_data_indices(&chunk.compressed_block).map_err(map_exr)?;
+        if !blocks.insert(tile) {
+            return Err(malformed(format!("two chunks of part {index} hold block {:?} at level {:?}", tile.tile_index, tile.level_index)));
+        }
+        if reader.filter_block(tile) {
+            let block = UncompressedBlock::decompress_chunk(chunk, meta, false).map_err(map_exr)?;
+            reader.read_block(header, block).map_err(map_exr)?;
+        }
+    }
+    Ok(())
+}
+
 /// Decodes the channels of flat part `index` that `keep` accepts (by the name as stored), in
-/// their stored type. A file with deep parts, or a kept channel that is subsampled, is
-/// [`Error::Unsupported`].
+/// their stored type. A deep part, or a kept channel that is subsampled, is
+/// [`Error::Unsupported`]; the file's other parts may be deep.
 pub fn decode_part(bytes: &[u8], index: usize, keep: &dyn Fn(&str) -> bool, limits: &Limits) -> Result<Part> {
     let meta = read_meta(bytes, limits)?;
-    if meta.requirements.has_deep_data {
+    let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index} of {}", meta.headers.len())))?;
+    if header.deep {
         return Err(Error::Unsupported("deep data (use the deep reader)".into()));
     }
-    let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index} of {}", meta.headers.len())))?;
     if matches!(header.compression, ExrCompression::HTJ2K32 | ExrCompression::HTJ2K256) {
         return Err(Error::Unsupported("HTJ2K compression".into()));
     }
     let info = part_info(index, header);
     let select = Select { index, keep, seen: std::cell::Cell::new(0) };
-    let image = ReadImage::new(ReadAllLayers { read_channels: select }, |_| {}).from_buffered(Cursor::new(bytes)).map_err(map_exr)?;
-    let planes = image.layer_data.into_iter().nth(index).map(|l| l.channel_data).ok_or_else(|| malformed("the part was not read"))?;
+    let planes = if meta.headers.iter().any(|header| header.deep) {
+        select.seen.set(index);
+        let mut reader = select.create_channels_reader(header).map_err(map_exr)?;
+        read_flat_part_chunks(bytes, &meta, index, &mut reader)?;
+        reader.into_channels()
+    } else {
+        let image = ReadImage::new(ReadAllLayers { read_channels: select }, |_| {}).from_buffered(Cursor::new(bytes)).map_err(map_exr)?;
+        image.layer_data.into_iter().nth(index).map(|l| l.channel_data).ok_or_else(|| malformed("the part was not read"))?
+    };
     let channels = info.channels.iter().zip(planes).filter_map(|(c, p)| Some(Channel { name: c.name.clone(), samples: p? })).collect();
     Ok(Part { info, channels })
 }

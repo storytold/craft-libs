@@ -1,4 +1,5 @@
-//! The preview check is PhotoCraft's test; the rest builds files with the `exr` crate.
+//! The preview check is PhotoCraft's test; the rest builds files with the `exr` crate, except the
+//! files that mix flat and deep parts, which are built by hand.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use exr::meta::attribute::{Preview, Text};
@@ -237,4 +238,204 @@ fn hostile_files_never_panic() {
         }
     }
     assert!(parts(b"not exr", &limits).is_err());
+}
+
+// A multi-part file with a flat scan-line part and a deep scan-line part, built by hand per the
+// OpenEXR file layout (the `exr` crate's writer refuses deep headers): version 2 with the deep and
+// multi-part flags, the headers and an empty header, one offset table per part, then chunks that
+// each start with their part number. Both parts are uncompressed, one scan line per chunk.
+
+fn mixed_attr(out: &mut Vec<u8>, name: &str, ty: &str, payload: &[u8]) {
+    out.extend_from_slice(name.as_bytes());
+    out.push(0);
+    out.extend_from_slice(ty.as_bytes());
+    out.push(0);
+    out.extend_from_slice(&(payload.len() as i32).to_le_bytes());
+    out.extend_from_slice(payload);
+}
+
+/// The version field and the headers of a mixed file whose flat part is `w × h` with float
+/// `B`, `G`, `R` channels and whose deep part is 3 × 2 with one float `A` channel.
+fn mixed_headers(deep_first: bool, (w, h): (usize, usize)) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&0x0131_2f76u32.to_le_bytes());
+    out.extend_from_slice(&(2u32 | 0x800 | 0x1000).to_le_bytes());
+    for deep in if deep_first { [true, false] } else { [false, true] } {
+        let (w, h, channels): (usize, usize, &[&str]) = if deep { (3, 2, &["A"]) } else { (w, h, &["B", "G", "R"]) };
+        let mut chlist = Vec::new();
+        for name in channels {
+            chlist.extend_from_slice(name.as_bytes());
+            chlist.push(0);
+            chlist.extend_from_slice(&2i32.to_le_bytes()); // float
+            chlist.extend_from_slice(&[0u8; 4]); // pLinear and reserved
+            chlist.extend_from_slice(&1i32.to_le_bytes());
+            chlist.extend_from_slice(&1i32.to_le_bytes());
+        }
+        chlist.push(0);
+        let window: Vec<u8> = [0i32, 0, w as i32 - 1, h as i32 - 1].iter().flat_map(|v| v.to_le_bytes()).collect();
+        mixed_attr(&mut out, "channels", "chlist", &chlist);
+        mixed_attr(&mut out, "chunkCount", "int", &(h as i32).to_le_bytes());
+        mixed_attr(&mut out, "compression", "compression", &[0]);
+        mixed_attr(&mut out, "dataWindow", "box2i", &window);
+        mixed_attr(&mut out, "displayWindow", "box2i", &window);
+        mixed_attr(&mut out, "lineOrder", "lineOrder", &[0]);
+        if deep {
+            mixed_attr(&mut out, "maxSamplesPerPixel", "int", &1i32.to_le_bytes());
+        }
+        mixed_attr(&mut out, "name", "string", if deep { b"deep" } else { b"flat" });
+        mixed_attr(&mut out, "pixelAspectRatio", "float", &1f32.to_le_bytes());
+        mixed_attr(&mut out, "screenWindowCenter", "v2f", &[0u8; 8]);
+        mixed_attr(&mut out, "screenWindowWidth", "float", &1f32.to_le_bytes());
+        mixed_attr(&mut out, "type", "string", if deep { b"deepscanline" } else { b"scanlineimage" });
+        if deep {
+            mixed_attr(&mut out, "version", "int", &1i32.to_le_bytes());
+        }
+        out.push(0); // end of this header
+    }
+    out.push(0); // end of the header list
+    out
+}
+
+/// Sample `i` of a flat channel: `R` is 1, 2, 3, …, `G` 10 more and `B` 100 more, top row first.
+fn mixed_flat(channel: f32, i: usize) -> f32 {
+    channel + 1.0 + i as f32
+}
+
+/// A mixed file with a 3 × 2 flat part, and its chunk offsets as `offsets[part][line]`.
+fn mixed_file(deep_first: bool) -> (Vec<u8>, [[usize; 2]; 2]) {
+    let (w, h) = (3usize, 2usize);
+    let mut out = mixed_headers(deep_first, (w, h));
+    let chunks: Vec<Vec<Vec<u8>>> = (0..2i32)
+        .map(|part| {
+            let deep = (part == 0) == deep_first;
+            (0..h)
+                .map(|y| {
+                    let mut c = Vec::new();
+                    c.extend_from_slice(&part.to_le_bytes());
+                    c.extend_from_slice(&(y as i32).to_le_bytes());
+                    if deep {
+                        // Packed count table, packed and unpacked sample data: one sample a pixel.
+                        for size in [w * 4, w * 4, w * 4] {
+                            c.extend_from_slice(&(size as u64).to_le_bytes());
+                        }
+                        (1..=w as u32).for_each(|n| c.extend_from_slice(&n.to_le_bytes()));
+                        (0..w).for_each(|_| c.extend_from_slice(&0.5f32.to_le_bytes()));
+                    } else {
+                        c.extend_from_slice(&((w * 3 * 4) as i32).to_le_bytes());
+                        for channel in [100.0, 10.0, 0.0] {
+                            (0..w).for_each(|x| c.extend_from_slice(&mixed_flat(channel, y * w + x).to_le_bytes()));
+                        }
+                    }
+                    c
+                })
+                .collect()
+        })
+        .collect();
+    let mut offsets = [[0usize; 2]; 2];
+    let mut at = out.len() + 2 * h * 8;
+    for (part, lines) in chunks.iter().enumerate() {
+        for (y, c) in lines.iter().enumerate() {
+            offsets[part][y] = at;
+            out.extend_from_slice(&(at as u64).to_le_bytes());
+            at += c.len();
+        }
+    }
+    chunks.into_iter().flatten().for_each(|c| out.extend_from_slice(&c));
+    (out, offsets)
+}
+
+#[test]
+fn a_flat_part_beside_a_deep_part_decodes() {
+    let limits = Limits::default();
+    for deep_first in [false, true] {
+        let (bytes, _) = mixed_file(deep_first);
+        let (flat, deep) = if deep_first { (1, 0) } else { (0, 1) };
+        let parts = parts(&bytes, &limits).unwrap();
+        assert_eq!((parts[flat].deep, parts[deep].deep, parts[flat].name.as_deref()), (false, true, Some("flat")));
+
+        let part = decode_part(&bytes, flat, &all, &limits).unwrap();
+        for (name, channel) in [("R", 0.0), ("G", 10.0), ("B", 100.0)] {
+            let expected: Vec<f32> = (0..6).map(|i| mixed_flat(channel, i)).collect();
+            assert_eq!(part.channel(name).unwrap().samples, Samples::F32(expected), "deep first {deep_first} {name}");
+        }
+        let only_g = decode_part(&bytes, flat, &|n| n == "G", &limits).unwrap();
+        assert_eq!(only_g.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["G"]);
+
+        let display = decode_display_part(&bytes, flat, &|n| n == "flat.R", &|_| 9.0, &limits).unwrap();
+        assert_eq!(display.channels.len(), 1);
+        assert_eq!((display.channels[0].name.as_str(), display.channels[0].samples.as_slice()), ("flat.R", &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0][..]));
+
+        assert!(matches!(decode_part(&bytes, deep, &all, &limits), Err(Error::Unsupported(_))));
+        assert!(matches!(decode_display_part(&bytes, deep, &all, &|_| 0.0, &limits), Err(Error::Unsupported(_))));
+        assert!(matches!(decode_part(&bytes, 2, &all, &limits), Err(Error::Malformed(_))));
+        let deep_image = crate::deep::decode_deep(&bytes, &limits).unwrap();
+        assert_eq!((deep_image.width, deep_image.height), (3, 2));
+    }
+}
+
+#[test]
+fn a_flat_part_s_chunks_beside_a_deep_part_are_checked_before_they_are_read() {
+    let limits = Limits::default();
+    for deep_first in [false, true] {
+        let (good, offsets) = mixed_file(deep_first);
+        let (flat, deep) = if deep_first { (1, 0) } else { (0, 1) };
+        let tables = mixed_headers(deep_first, (3, 2)).len();
+        let entry = tables + flat * 2 * 8;
+        let with_offset = |slot: usize, value: u64| {
+            let mut b = good.clone();
+            b[entry + slot * 8..entry + slot * 8 + 8].copy_from_slice(&value.to_le_bytes());
+            b
+        };
+        let refused = |b: &[u8]| {
+            for r in [decode_part(b, flat, &all, &limits).map(|_| ()), decode_display_part(b, flat, &all, &|_| 0.0, &limits).map(|_| ())] {
+                assert!(matches!(&r, Err(Error::Malformed(_))), "deep first {deep_first}: {r:?}");
+            }
+        };
+        // The deep part's chunk, the end of the file and past it, the offset tables, the same
+        // chunk twice.
+        refused(&with_offset(0, offsets[deep][0] as u64));
+        refused(&with_offset(0, good.len() as u64));
+        refused(&with_offset(0, u64::MAX));
+        refused(&with_offset(0, (tables + 8) as u64));
+        refused(&with_offset(1, offsets[flat][0] as u64));
+        // A chunk naming another part, and one declaring more bytes than a block holds.
+        let mut b = good.clone();
+        b[offsets[flat][1]..offsets[flat][1] + 4].copy_from_slice(&(deep as i32).to_le_bytes());
+        refused(&b);
+        let mut b = good.clone();
+        b[offsets[flat][0] + 8..offsets[flat][0] + 12].copy_from_slice(&i32::MAX.to_le_bytes());
+        refused(&b);
+        // Offset tables longer than the file.
+        refused(&good[..tables + 20]);
+
+        for n in 0..good.len() {
+            let _ = decode_part(&good[..n], flat, &all, &limits);
+            let _ = decode_display_part(&good[..n], flat, &all, &|_| 0.0, &limits);
+        }
+        for i in 0..good.len() {
+            for v in [0u8, 1, 0x7F, 0xFF] {
+                let mut b = good.clone();
+                b[i] = v;
+                if let Ok(p) = decode_part(&b, flat, &all, &limits) {
+                    let n = p.info.data_window.width as usize * p.info.data_window.height as usize;
+                    assert!(p.channels.iter().all(|c| c.samples.len() == n));
+                }
+                let _ = decode_display_part(&b, flat, &all, &|_| 0.0, &limits);
+            }
+        }
+    }
+}
+
+#[test]
+fn the_flat_parts_of_a_mixed_file_must_fit_the_file() {
+    // 1024 × 1024 × 3 float samples (12 MiB) declared in a file of a few hundred bytes: over a
+    // ratio of 1 plus the 1 MiB slack, though another part is deep.
+    let headers = mixed_headers(false, (1024, 1024));
+    assert!(parts(&headers, &Limits::default()).is_ok());
+    let tight = Limits { max_ratio: 1, ..Limits::default() };
+    for r in [parts(&headers, &tight).map(|_| ()), decode_part(&headers, 0, &all, &tight).map(|_| ())] {
+        assert!(matches!(&r, Err(Error::LimitExceeded(_))), "{r:?}");
+    }
+    // The deep part's samples are not counted, and a small flat part passes the same ratio.
+    assert!(parts(&mixed_file(false).0, &tight).is_ok());
 }
