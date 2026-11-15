@@ -627,3 +627,16 @@ fn fbx6_model_holds_its_mesh() {
         assert_eq!(d.unit_scale(), Some(100.0));
     }
 }
+
+#[test]
+fn optional_inactive_pre_rotation_keeps_legacy_placements() {
+    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" { Properties70: { P: \"PreRotation\", \"\", \"\", \"\", 0,0,90 } } }";
+    let doc = document(text.as_bytes());
+    let normal = doc.scene(&Limits::default(), &mut no_external).unwrap();
+    let options = crate::fbx::SceneOptions { apply_inactive_rotation: true };
+    let legacy = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    let p = [1.0, 0.0, 0.0];
+    assert_eq!(transform_point(&normal.nodes[0].transform, p), p);
+    let turned = transform_point(&legacy.nodes[0].transform, p);
+    assert!((turned[0]).abs() < 1e-12 && (turned[1] - 1.0).abs() < 1e-12);
+}

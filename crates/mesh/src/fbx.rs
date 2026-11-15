@@ -638,9 +638,9 @@ fn euler(d: [f64; 3], order: i64) -> Mat4 {
 }
 
 /// A Model's local transform: `T · Roff · Rp · Rpre · R · Rpost⁻¹ · Rp⁻¹ · Soff · Sp · S · Sp⁻¹`.
-fn model_local(p: &Props) -> Mat4 {
+fn model_local(p: &Props, apply_inactive_rotation: bool) -> Mat4 {
     let order = p.f("RotationOrder").map_or(0, |o| o as i64);
-    let active = p.f("RotationActive").is_some_and(|a| a != 0.0);
+    let active = apply_inactive_rotation || p.f("RotationActive").is_some_and(|a| a != 0.0);
     let (pre, post) =
         if active { (euler(p.v3("PreRotation", [0.0; 3]), 0), transpose(&euler(p.v3("PostRotation", [0.0; 3]), 0))) } else { (IDENTITY, IDENTITY) };
     let rp = p.v3("RotationPivot", [0.0; 3]);
@@ -669,6 +669,14 @@ fn geometric(p: &Props) -> Option<Mat4> {
         return None;
     }
     Some(chain(&[translate(t), euler(r, 0), scale(s)]))
+}
+
+/// Optional FBX scene compatibility behavior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SceneOptions {
+    /// Apply pre/post rotations even when `RotationActive` is missing or zero. Some importers
+    /// retain these values regardless of the flag.
+    pub apply_inactive_rotation: bool,
 }
 
 impl Document {
@@ -720,6 +728,11 @@ impl Document {
     /// The scene the records describe. `resolve` is asked for texture image files (see the
     /// module documentation).
     pub fn scene(&self, limits: &Limits, resolve: Resolver) -> Result<Scene> {
+        self.scene_with_options(limits, resolve, &SceneOptions::default())
+    }
+
+    /// Build a scene with explicitly selected compatibility behavior.
+    pub fn scene_with_options(&self, limits: &Limits, resolve: Resolver, options: &SceneOptions) -> Result<Scene> {
         if self.version != 0 && self.version < 6000 {
             return Err(crate::Error::Unsupported(format!(
                 "FBX {}.{} (only FBX 6.x and 7.x files are read)",
@@ -761,7 +774,7 @@ impl Document {
             node_of.insert(*id, b.scene.nodes.len());
             b.scene.nodes.push(Node {
                 name: short_name(o.first_str().unwrap_or("")).to_string(),
-                transform: model_local(&Props::of(o)),
+                transform: model_local(&Props::of(o), options.apply_inactive_rotation),
                 ..Node::default()
             });
         }
