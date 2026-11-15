@@ -26,4 +26,3 @@ impl std::fmt::Display for ShxError {
 }
 
 impl std::error::Error for ShxError {}
-

@@ -13,7 +13,9 @@
 //! program's own length is written.
 
 use super::ShxError;
-use super::parse::{BIGFONT, SHAPES_10, UNIFONT};
+const SHAPES_10: &[u8] = b"AutoCAD-86 shapes 1.0\r\n\x1a";
+const BIGFONT: &[u8] = b"AutoCAD-86 bigfont 1.0\r\n\x1a";
+const UNIFONT: &[u8] = b"AutoCAD-86 unifont 1.0\r\n\x1a";
 
 /// Largest source compiled.
 const MAX_SOURCE: usize = 8 << 20;
@@ -44,7 +46,7 @@ fn number(tok: &str, line: usize) -> Result<i64, ShxError> {
     } else {
         digits.parse::<i64>().map_err(|_| err())?
     };
-    if v > 0xFFFF {
+    if !(0..=0xFFFF).contains(&v) {
         return Err(err());
     }
     Ok(if neg { -v } else { v })
@@ -190,6 +192,11 @@ pub fn compile(source: &str) -> Result<Vec<u8>, ShxError> {
                 kind = Kind::Big;
                 let v = numbers(rest, line)?;
                 let n = usize::try_from(v.get(1).copied().unwrap_or(0)).unwrap_or(0);
+                // A big font has byte-valued lead ranges. Bound repeated headers too,
+                // so a tiny declaration cannot amplify into millions of ranges.
+                if n > 256 || ranges.len().saturating_add(n) > 256 {
+                    return Err(ShxError::TooLarge);
+                }
                 for k in 0..n {
                     let lo = v.get(2 + 2 * k).copied().unwrap_or(0);
                     let hi = v.get(3 + 2 * k).copied().unwrap_or(lo);
@@ -210,6 +217,9 @@ pub fn compile(source: &str) -> Result<Vec<u8>, ShxError> {
             let num = number(parts.next().unwrap_or_default().trim(), line)?;
             let _defbytes = parts.next();
             let name = parts.next().unwrap_or_default().trim().to_string();
+            if defs.len() >= usize::from(u16::MAX) {
+                return Err(ShxError::TooLarge);
+            }
             defs.push((num, name, line, Vec::new()));
             continue;
         }
@@ -228,6 +238,7 @@ pub fn compile(source: &str) -> Result<Vec<u8>, ShxError> {
         }
     }
     let mut shapes: Vec<Shape> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for (num, name, line, toks) in defs {
         let number = u16::try_from(num).map_err(|_| ShxError::Source(line, format!("shape number {num} out of range")))?;
         let program = if number == 0 {
@@ -236,7 +247,7 @@ pub fn compile(source: &str) -> Result<Vec<u8>, ShxError> {
         } else {
             Enc { toks: &toks, i: 0, out: Vec::new(), kind, line }.program()?
         };
-        if shapes.iter().any(|s| s.number == number) {
+        if !seen.insert(number) {
             return Err(ShxError::Source(line, format!("shape {number} is defined twice")));
         }
         shapes.push(Shape { number, name, program });
@@ -296,6 +307,9 @@ pub fn compile(source: &str) -> Result<Vec<u8>, ShxError> {
             out.extend(UNIFONT);
             let (name, info) = uni_info.unwrap_or_default();
             out.extend((u32::from(count) + 1).to_le_bytes());
+            if name.len().saturating_add(1).saturating_add(info.len()) > usize::from(u16::MAX) {
+                return Err(ShxError::TooLarge);
+            }
             let mut rec: Vec<u8> = name.bytes().filter(|b| *b != 0).collect();
             rec.push(0);
             rec.extend(&info);

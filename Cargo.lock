@@ -2611,6 +2611,10 @@ name = "craft-sheet"
 version = "0.1.0"
 
 [[package]]
+name = "craft-shx"
+version = "0.1.0"
+
+[[package]]
 name = "craft-silhouette-studio"
 version = "0.1.0"
 dependencies = [
