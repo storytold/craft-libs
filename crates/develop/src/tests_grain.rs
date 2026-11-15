@@ -35,7 +35,7 @@ fn processes_before_v7_keep_the_value_noise() {
             Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 => {
                 assert!(matches!(model, Some(GrainModel::Value(_))), "{p:?}")
             }
-            Process::V7 | Process::V8 => assert!(matches!(model, Some(GrainModel::Crystal(_))), "{p:?}"),
+            Process::V7 | Process::V8 | Process::V9 => assert!(matches!(model, Some(GrainModel::Crystal(_))), "{p:?}"),
         }
         assert!(GrainModel::new(&on(p, 0.0), 2000.0, false).is_none(), "{p:?}: no grain at Amount 0");
     }

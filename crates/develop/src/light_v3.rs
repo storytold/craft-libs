@@ -284,7 +284,7 @@ pub fn applies(s: &DevelopSettings, info: &SourceInfo) -> bool {
     let camera_look = info.raw && info.camera_tone.is_some();
     match s.process.process() {
         Process::V1 | Process::V2 | Process::V3 => false,
-        Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => camera_look,
+        Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V9 => camera_look,
     }
 }
 

@@ -144,7 +144,7 @@ fn the_brush_cache_reuses_the_raster_of_a_growing_stroke() {
         ..Default::default()
     };
     for n in [5, 30, 60] {
-        let cached = crate::masks::evaluate_one_cached(&mask(n), &f, w, h, &img, &l, 0.0, None, Some(at));
+        let cached = crate::masks::evaluate_one_cached(&mask(n), &f, w, h, &img, &l, 0.0, None, AutoMaskModel::PerPixel, Some(at));
         let fresh = crate::masks::evaluate_one(&mask(n), &f, w, h, &img, &l, 0.0, None);
         assert!(max_diff(&cached, &fresh) < 1e-3, "{n} points");
         assert_eq!(cache.len(), 1, "one raster, grown");
@@ -152,9 +152,9 @@ fn the_brush_cache_reuses_the_raster_of_a_growing_stroke() {
     // another source: not this raster
     let other = Arc::new(img.clone());
     let bd = brush_dabs(&stroke(path(60), true, false), &f, w, h);
-    assert_eq!(cache.take(&BrushCacheRef { key: 1, src: &other, cache: &cache }, &bd, w, h).dabs(), 0);
-    assert_eq!(cache.take(&BrushCacheRef { key: 2, ..at }, &bd, w, h).dabs(), 0);
-    assert_eq!(cache.take(&at, &bd, w, h).dabs(), bd.dabs.len());
+    assert_eq!(cache.take(&BrushCacheRef { key: 1, src: &other, cache: &cache }, &bd, w, h, AutoMaskModel::PerPixel).dabs(), 0);
+    assert_eq!(cache.take(&BrushCacheRef { key: 2, ..at }, &bd, w, h, AutoMaskModel::PerPixel).dabs(), 0);
+    assert_eq!(cache.take(&at, &bd, w, h, AutoMaskModel::PerPixel).dabs(), bd.dabs.len());
 }
 
 /// While a stroke grows (one render per pointer move), the cached render and the mask-only alpha
@@ -193,4 +193,53 @@ fn renders_of_a_growing_stroke_match_uncached_ones() {
         assert!(worst <= 1, "{n} points: the mask-only alpha is off by {worst}");
     }
     assert!(mask_alpha_cached(&src, &info, &s, &oreq, &overlay, 9).is_none(), "no such mask");
+}
+
+/// Process 9's Auto Mask painted point by point is the committed stroke too, and processes 1 to 8
+/// keep the per-pixel model (their renders unchanged).
+#[test]
+fn the_smoothed_model_painted_live_matches_the_committed_stroke_and_is_process_9s() {
+    use craft_develop_model::Process;
+    let (w, h) = (320, 200);
+    let (img, l) = scene(w, h, 150);
+    let f = frame(w, h);
+    let s = stroke(path(120), true, false);
+    let mut live = StrokeRaster::with_model(w, h, AutoMaskModel::Smoothed);
+    for n in 1..=s.points.len() {
+        let part = BrushStroke { points: s.points[..n].to_vec(), ..s.clone() };
+        live.update(&brush_dabs(&part, &f, w, h), &img, &l);
+    }
+    let committed = crate::masks::shape_alpha_cached(
+        &MaskShape::Brush { strokes: vec![s.clone()] },
+        &f,
+        w,
+        h,
+        &img,
+        &l,
+        0.0,
+        None,
+        AutoMaskModel::Smoothed,
+        None,
+    );
+    let d = max_diff(&live.to_plane(), &committed);
+    eprintln!("live vs committed smoothed Auto Mask stroke: max difference {d:e}");
+    assert!(d < 1e-4, "live and committed differ by {d}");
+    assert_eq!(AutoMaskModel::for_process(Process::V8), AutoMaskModel::PerPixel);
+    assert_eq!(AutoMaskModel::for_process(Process::V9), AutoMaskModel::Smoothed);
+    assert_eq!(AutoMaskModel::for_process(Process::LATEST), AutoMaskModel::Smoothed);
+    // a V8 photo's Auto Mask renders exactly as before
+    let old = shape_alpha(&MaskShape::Brush { strokes: vec![s.clone()] }, &f, w, h, &img, &l, 0.0, None);
+    let v8 = crate::masks::shape_alpha_cached(
+        &MaskShape::Brush { strokes: vec![s] },
+        &f,
+        w,
+        h,
+        &img,
+        &l,
+        0.0,
+        None,
+        AutoMaskModel::for_process(Process::V8),
+        None,
+    );
+    assert_eq!(old.data, v8.data);
 }

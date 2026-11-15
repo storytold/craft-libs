@@ -12,7 +12,7 @@ use craft_geom::{Orientation, Point};
 
 use crate::for_rows;
 use crate::geometry::Frame;
-use crate::stroke_raster::{BrushCacheRef, PixRect, stamp};
+use crate::stroke_raster::{AutoMaskModel, BrushCacheRef, PixRect, StrokeRaster, stamp};
 
 /// What an embedded segmentation matte selects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +148,7 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 /// The visible masks with components, evaluated in order (`mattes`: the source's, see [`Mattes`]).
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Vec<Evaluated> {
-    evaluate_cached(masks, frame, w, h, img, log_l, ev, mattes, None)
+    evaluate_cached(masks, frame, w, h, img, log_l, ev, mattes, AutoMaskModel::PerPixel, None)
 }
 
 /// [`evaluate`], brush strokes taking their rasters from (and leaving them in) `brush`
@@ -164,12 +164,13 @@ pub fn evaluate_cached(
     log_l: &Plane,
     ev: f32,
     mattes: Option<&Mattes>,
+    model: AutoMaskModel,
     brush: Option<BrushCacheRef<'_>>,
 ) -> Vec<Evaluated> {
     masks
         .iter()
         .filter(|m| m.visible && !m.components.is_empty())
-        .map(|m| Evaluated { id: m.id, alpha: evaluate_one_cached(m, frame, w, h, img, log_l, ev, mattes, brush), adjust: m.adjust })
+        .map(|m| Evaluated { id: m.id, alpha: evaluate_one_cached(m, frame, w, h, img, log_l, ev, mattes, model, brush), adjust: m.adjust })
         .collect()
 }
 
@@ -177,7 +178,7 @@ pub fn evaluate_cached(
 /// scaled by its amount.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
-    evaluate_one_cached(m, frame, w, h, img, log_l, ev, mattes, None)
+    evaluate_one_cached(m, frame, w, h, img, log_l, ev, mattes, AutoMaskModel::PerPixel, None)
 }
 
 /// [`evaluate_one`] with the brush rasters of `brush` ([`evaluate_cached`]).
@@ -191,6 +192,7 @@ pub fn evaluate_one_cached(
     log_l: &Plane,
     ev: f32,
     mattes: Option<&Mattes>,
+    model: AutoMaskModel,
     brush: Option<BrushCacheRef<'_>>,
 ) -> Plane {
     // its coordinates on the photo before the warp, or (an old mask) on the corrected frame
@@ -198,7 +200,7 @@ pub fn evaluate_one_cached(
     let mut alpha = Plane::new(w, h);
     let mut first = true;
     for comp in &m.components {
-        let mut c = shape_alpha_cached(&comp.shape, frame, w, h, img, log_l, ev, mattes, brush);
+        let mut c = shape_alpha_cached(&comp.shape, frame, w, h, img, log_l, ev, mattes, model, brush);
         if comp.invert {
             c.data.iter_mut().for_each(|v| *v = 1.0 - *v);
         }
@@ -251,7 +253,7 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
 /// The alpha plane of one component shape. AI shapes use the source's matching `mattes`, if any.
 #[allow(clippy::too_many_arguments)]
 pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
-    shape_alpha_cached(shape, frame, w, h, img, log_l, ev, mattes, None)
+    shape_alpha_cached(shape, frame, w, h, img, log_l, ev, mattes, AutoMaskModel::PerPixel, None)
 }
 
 /// [`shape_alpha`] with the brush rasters of `brush` ([`evaluate_cached`]).
@@ -265,6 +267,7 @@ pub fn shape_alpha_cached(
     log_l: &Plane,
     ev: f32,
     mattes: Option<&Mattes>,
+    model: AutoMaskModel,
     brush: Option<BrushCacheRef<'_>>,
 ) -> Plane {
     let fitting = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
@@ -299,7 +302,7 @@ pub fn shape_alpha_cached(
                 if inv { 1.0 - a } else { a }
             });
         }
-        MaskShape::Brush { strokes } => rasterize_brush(strokes, frame, w, h, img, log_l, &mut out, brush),
+        MaskShape::Brush { strokes } => rasterize_brush(strokes, frame, w, h, img, log_l, &mut out, model, brush),
         MaskShape::LuminanceRange { lo, hi, lo_feather, hi_feather } => {
             let (lo, hi, lf, hf) = (*lo as f32, *hi as f32, (*lo_feather as f32).max(1e-3), (*hi_feather as f32).max(1e-3));
             for (v, l) in out.data.iter_mut().zip(&log_l.data) {
@@ -830,6 +833,40 @@ pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
     q
 }
 
+/// [`guided_cross`] without the clamp to 0..1 (for planes that aren't alphas).
+pub fn guided_cross_unclamped(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
+    let g = guided_coeffs(guide, p, sigma, eps, false);
+    let mut q = Plane::new(p.width, p.height);
+    for i in 0..q.data.len() {
+        q.data[i] = g.a.data[i] * guide.data[i] + g.b.data[i];
+    }
+    q
+}
+
+/// The self-guided filter of `p` (He et al.): an edge-preserving smoothing, differences well under
+/// `eps.sqrt()` flattened within windows of `sigma` px, edges well over it kept.
+pub fn guided_self(p: &Plane, sigma: f32, eps: f32) -> Plane {
+    use crate::raster::blur::gaussian;
+    // (the guided filter with the guide its own input: the window means of p and p² serve as
+    // both, four blurs instead of six)
+    let m = gaussian(p, sigma);
+    let m2 = gaussian(&p.map(|v| v * v), sigma);
+    let mut a = Plane::new(p.width, p.height);
+    let mut b = Plane::new(p.width, p.height);
+    for i in 0..p.data.len() {
+        let var = (m2.data[i] - m.data[i] * m.data[i]).max(0.0);
+        let k = var / (var + eps);
+        a.data[i] = k;
+        b.data[i] = m.data[i] - k * m.data[i];
+    }
+    let (a, b) = (gaussian(&a, sigma), gaussian(&b, sigma));
+    let mut q = Plane::new(p.width, p.height);
+    for i in 0..q.data.len() {
+        q.data[i] = a.data[i] * p.data[i] + b.data[i];
+    }
+    q
+}
+
 /// [`guided_cross`] in its subsampled form (He and Sun, "Fast Guided Filter", 2015, as
 /// [`crate::local::guided_fast`] is of the self-guided filter, at its step), in place and
 /// unclamped, for a `p` that is smooth at the window's scale (a mask enlarged from a model's grid):
@@ -897,7 +934,7 @@ pub fn brush_over_budget(strokes: &[BrushStroke], frame: &Frame, w: usize, h: us
 
 /// Stamp brush strokes into `out` (max-combine; erase strokes subtract). Auto Mask strokes weight
 /// each dab by [`auto_similarity`] to the pixel under its centre and are refined with
-/// [`guided_cross`] on log luminance. With `brush`, each stroke takes its raster from there
+/// [`guided_cross`] on log luminance (`model`: [`AutoMaskModel`] says how, by process). With `brush`, each stroke takes its raster from there
 /// ([`crate::stroke_raster::StrokeRaster`]): only the dabs added since it was last rasterized are
 /// stamped and refined.
 #[allow(clippy::too_many_arguments)]
@@ -909,6 +946,7 @@ fn rasterize_brush(
     img: &Rgb32f,
     log_l: &Plane,
     out: &mut Plane,
+    model: AutoMaskModel,
     brush: Option<BrushCacheRef<'_>>,
 ) {
     if w == 0 || h == 0 {
@@ -924,10 +962,17 @@ fn rasterize_brush(
         let bd = brush_dabs_within(s, frame, w, h, room);
         room = room.saturating_sub(bd.dabs.len());
         if let Some(at) = &brush {
-            let mut raster = at.cache.take(at, &bd, w, h);
+            let mut raster = at.cache.take(at, &bd, w, h, model);
             raster.update(&bd, img, log_l);
             raster.apply_to(out);
             at.cache.put(at, raster);
+            continue;
+        }
+        if bd.auto && model == AutoMaskModel::Smoothed {
+            // (rasterized in windows: the same code paints it live)
+            let mut raster = StrokeRaster::with_model(w, h, model);
+            raster.update(&bd, img, log_l);
+            raster.apply_to(out);
             continue;
         }
         let (erase, auto) = (bd.erase, bd.auto);

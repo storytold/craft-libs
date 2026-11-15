@@ -137,6 +137,191 @@ pub(crate) fn stamp(bd: &BrushDabs, range: Range<usize>, w: usize, h: usize, img
     }
 }
 
+/// How an Auto Mask stroke decides what to paint (by the settings' process,
+/// [`AutoMaskModel::for_process`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AutoMaskModel {
+    /// Processes 1 to 8: each pixel compared with the one pixel under the dab's centre, then the
+    /// paint's gaps along edges filled by a guided filter on log luminance.
+    #[default]
+    PerPixel,
+    /// Process 9: both compared on an edge-preserving smoothing of the photo (noise and fine
+    /// texture flattened, edges kept), small holes in the paint closed, then the guided filter on
+    /// the smoothed luminance. Fills noisy and textured surfaces solidly and smoothly.
+    Smoothed,
+}
+
+impl AutoMaskModel {
+    /// The model process `p` renders Auto Mask strokes with.
+    pub fn for_process(p: craft_develop_model::Process) -> AutoMaskModel {
+        if p >= craft_develop_model::Process::V9 { AutoMaskModel::Smoothed } else { AutoMaskModel::PerPixel }
+    }
+}
+
+/// [`AutoMaskModel::Smoothed`]'s scales for a brush of radius `r` px in a `w × h` output, all in
+/// proportion to the brush (so a preview and the full-size export paint the same shape).
+#[derive(Clone, Copy, Debug)]
+struct Smoothing {
+    /// The edge-preserving smoothing of the photo: window sigma (px) and regularization (EV²:
+    /// luminance differences well under its root are flattened, edges well over it kept).
+    sigma: f32,
+    eps: f32,
+    /// How far the smoothing reaches (px).
+    reach: usize,
+    /// Holes in the paint up to about twice this (px) across are closed.
+    close: usize,
+    /// The final guided filter of the paint on the smoothed luminance.
+    refine_sigma: f32,
+    refine_eps: f32,
+    refine_reach: usize,
+}
+
+/// [`Smoothing::eps`]: luminance texture and noise up to about a third of a stop are flattened.
+const SMOOTH_EPS: f32 = 0.1;
+
+impl Smoothing {
+    fn of(r: f64, w: usize, h: usize) -> Smoothing {
+        let sigma = (0.12 * r).max(1.0) as f32;
+        let (refine_sigma, refine_eps) = auto_refine(r);
+        Smoothing {
+            sigma,
+            eps: SMOOTH_EPS,
+            reach: guided_reach(sigma, w, h),
+            close: (r / 8.0).round().max(1.0) as usize,
+            refine_sigma,
+            refine_eps: refine_eps * 0.5,
+            refine_reach: guided_reach(refine_sigma, w, h),
+        }
+    }
+}
+
+/// The photo as [`AutoMaskModel::Smoothed`] compares it: luminance smoothed without crossing
+/// edges over `win`, chromaticity over the smaller `cwin` (only where dabs paint and sample).
+struct Smoothed {
+    win: PixRect,
+    l: Plane,
+    cwin: PixRect,
+    ch: Rgb32f,
+}
+
+/// Index of output pixel `(x, y)` in a plane over `r`.
+fn index_in(r: &PixRect, x: usize, y: usize) -> Option<usize> {
+    if x < r.x0 || y < r.y0 || x >= r.x1 || y >= r.y1 {
+        return None;
+    }
+    (y - r.y0).checked_mul(r.width())?.checked_add(x - r.x0)
+}
+
+impl Smoothed {
+    fn of(win: PixRect, cwin: PixRect, img: &Rgb32f, log_l: &Plane, k: &Smoothing) -> Smoothed {
+        let (ww, wh) = (win.width(), win.height());
+        let l = log_l.crop(win.x0, win.y0, ww, wh);
+        let ls = masks::guided_self(&l, k.sigma, k.eps);
+        // chromaticity smoothed by the same edge-aware windows, steered by the smoothed luminance
+        let (cw, chh) = (cwin.width(), cwin.height());
+        let guide = ls.crop(cwin.x0.saturating_sub(win.x0), cwin.y0.saturating_sub(win.y0), cw, chh);
+        let ch = img.crop(cwin.x0, cwin.y0, cw, chh).map(chromaticity);
+        let mut chs = Rgb32f::new(cw, chh);
+        if (guide.width, guide.height) == (cw, chh) {
+            for c in 0..3 {
+                let plane = ch.map(|v| v[c]);
+                let s = masks::guided_cross_unclamped(&guide, &plane, k.sigma, k.eps);
+                for (o, v) in chs.data.iter_mut().zip(&s.data) {
+                    o[c] = *v;
+                }
+            }
+        }
+        Smoothed { win, l: ls, cwin, ch: chs }
+    }
+
+    /// The smoothed (luminance, chromaticity) at output pixel `(x, y)` (inside the windows).
+    fn at(&self, x: usize, y: usize) -> Option<(f32, [f32; 3])> {
+        Some((*self.l.data.get(index_in(&self.win, x, y)?)?, *self.ch.data.get(index_in(&self.cwin, x, y)?)?))
+    }
+}
+
+/// How many dab centres [`AutoMaskModel::Smoothed`] takes its reference from: the dab's own and
+/// the ones before it, their median, so one dab whose centre strays over an edge (a wobble of the
+/// hand) keeps the side the stroke is on, while a stroke that moves over stays there.
+const REFERENCE_DABS: usize = 7;
+
+/// The reference colour of dab `k` of `bd`: the median, channel by channel, of the smoothed photo
+/// at its centre and at the [`REFERENCE_DABS`] − 1 centres before it.
+fn reference(bd: &BrushDabs, k: usize, w: usize, h: usize, sm: &Smoothed) -> Option<(f32, [f32; 3])> {
+    let mut got: Vec<(f32, [f32; 3])> = Vec::with_capacity(REFERENCE_DABS);
+    for j in k.saturating_sub(REFERENCE_DABS - 1)..=k {
+        let c = dab_pixel(*bd.dabs.get(j)?, w, h);
+        if let Some(v) = sm.at(c % w, c / w) {
+            got.push(v);
+        }
+    }
+    let median = |mut v: Vec<f32>| {
+        v.sort_by(f32::total_cmp);
+        v.get(v.len() / 2).copied()
+    };
+    let l = median(got.iter().map(|g| g.0).collect())?;
+    let ch = [0, 1, 2].map(|c| median(got.iter().map(|g| g.1[c]).collect()).unwrap_or(0.0));
+    Some((l, ch))
+}
+
+/// [`stamp`] for [`AutoMaskModel::Smoothed`]: each dab's paint weighted by how like its reference
+/// ([`reference`]) the smoothed photo is.
+fn stamp_smoothed(bd: &BrushDabs, range: Range<usize>, w: usize, h: usize, sm: &Smoothed, buf: &mut [f32], area: PixRect) {
+    if w == 0 || h == 0 || buf.len() < area.area() {
+        return;
+    }
+    let bw = area.width();
+    for k in range {
+        let Some(d) = bd.dabs.get(k).copied() else { break };
+        let (r, hard, flow) = bd.dab(k);
+        let Some((rl, rch)) = reference(bd, k, w, h, sm) else { continue };
+        let rect = dab_rect(d, r, w, h);
+        let (x0, x1) = (rect.x0.max(area.x0), rect.x1.min(area.x1));
+        let (y0, y1) = (rect.y0.max(area.y0), rect.y1.min(area.y1));
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let dd = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(d);
+                if dd > r {
+                    continue;
+                }
+                let Some((l, ch)) = sm.at(x, y) else { continue };
+                let a = dab_alpha(dd, r, hard) * auto_similarity(l, ch, rl, rch);
+                let v = &mut buf[(y - area.y0) * bw + (x - area.x0)];
+                *v = accumulate(*v, a, flow, bd.density);
+            }
+        }
+    }
+}
+
+/// A square max (`max` true) or min filter of radius `r` over `p`, separable, edges clamped.
+fn rank_filter(p: &Plane, r: usize, max: bool) -> Plane {
+    let (w, h) = (p.width, p.height);
+    let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
+    let mut t = Plane::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            let (a, b) = (x.saturating_sub(r), (x + r).min(w.saturating_sub(1)));
+            let mut v = p.data[y * w + a];
+            for xi in a + 1..=b {
+                v = pick(v, p.data[y * w + xi]);
+            }
+            t.data[y * w + x] = v;
+        }
+    }
+    let mut o = Plane::new(w, h);
+    for y in 0..h {
+        let (a, b) = (y.saturating_sub(r), (y + r).min(h.saturating_sub(1)));
+        for x in 0..w {
+            let mut v = t.data[a * w + x];
+            for yi in a + 1..=b {
+                v = pick(v, t.data[yi * w + x]);
+            }
+            o.data[y * w + x] = v;
+        }
+    }
+    o
+}
+
 /// What a stroke's dabs are painted with; a raster only takes more dabs painted the same way.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Brush {
@@ -165,6 +350,7 @@ impl Brush {
 pub struct StrokeRaster {
     w: usize,
     h: usize,
+    model: AutoMaskModel,
     brush: Option<Brush>,
     dabs: Vec<Point>,
     pressure: Vec<f32>,
@@ -177,9 +363,30 @@ pub struct StrokeRaster {
 }
 
 impl StrokeRaster {
-    /// An empty raster for a `w × h` output.
+    /// An empty raster for a `w × h` output, Auto Mask strokes painted the way processes 1 to 8
+    /// do ([`AutoMaskModel::PerPixel`]; [`Self::with_model`] for another).
     pub fn new(w: usize, h: usize) -> StrokeRaster {
-        StrokeRaster { w, h, brush: None, dabs: Vec::new(), pressure: Vec::new(), bounds: PixRect::default(), raw: Vec::new(), refined: Vec::new() }
+        StrokeRaster::with_model(w, h, AutoMaskModel::PerPixel)
+    }
+
+    /// An empty raster for a `w × h` output, Auto Mask strokes painted by `model`.
+    pub fn with_model(w: usize, h: usize, model: AutoMaskModel) -> StrokeRaster {
+        StrokeRaster {
+            w,
+            h,
+            model,
+            brush: None,
+            dabs: Vec::new(),
+            pressure: Vec::new(),
+            bounds: PixRect::default(),
+            raw: Vec::new(),
+            refined: Vec::new(),
+        }
+    }
+
+    /// How Auto Mask strokes are painted.
+    pub fn model(&self) -> AutoMaskModel {
+        self.model
     }
 
     /// The output size.
@@ -235,7 +442,7 @@ impl StrokeRaster {
         let mut changed = PixRect::default();
         if !self.continues(bd) {
             changed = self.bounds;
-            *self = StrokeRaster::new(w, h);
+            *self = StrokeRaster::with_model(w, h, self.model);
         }
         let brush = Brush::of(bd);
         self.brush = Some(brush);
@@ -257,6 +464,26 @@ impl StrokeRaster {
         }
         if touched.is_empty() {
             return (!changed.is_empty()).then_some(changed);
+        }
+        if brush.auto && self.model == AutoMaskModel::Smoothed {
+            let k = Smoothing::of(brush.r, w, h);
+            // the paint changes in `touched`, its closing up to `close` twice beyond, the guided
+            // filter's output its reach beyond that; the inputs of all that come from `win`
+            let out = touched.grow(2 * k.close + k.refine_reach, w, h);
+            // (and the centres of the dabs before the new ones, which their references read)
+            let before = start.saturating_sub(REFERENCE_DABS - 1)..start;
+            let read = before.fold(touched, |acc, j| acc.union(dab_rect(bd.dabs[j], 1.0, w, h)));
+            // the smoothed luminance steers the refinement over `out` and so is read its reach
+            // beyond; the chromaticity only where dabs paint and sample; each smoothing reads
+            // its own reach beyond what it gives
+            let win = read.grow(2 * k.close + 2 * k.refine_reach + k.reach, w, h);
+            let cwin = read.grow(k.reach, w, h);
+            self.cover(out);
+            let sm = Smoothed::of(win, cwin, img, log_l, &k);
+            let bounds = self.bounds;
+            stamp_smoothed(bd, new, w, h, &sm, &mut self.raw, bounds);
+            self.refine_smoothed(out, &sm, &k);
+            return Some(changed.union(out));
         }
         let (sigma, eps) = auto_refine(brush.r);
         let reach = if brush.auto { guided_reach(sigma, w, h) } else { 0 };
@@ -331,6 +558,45 @@ impl StrokeRaster {
                 if let (Some(r), Some(v), Some(f)) = (self.raw.get(i), q.data.get(qi), self.refined.get_mut(i)) {
                     // the refinement fills gaps along edges; it never takes paint away
                     *f = r.max(*v);
+                }
+            }
+        }
+    }
+
+    /// The paint over `win` (0 outside the planes).
+    fn raw_in(&self, win: PixRect) -> Plane {
+        let (ww, wh) = (win.width(), win.height());
+        let b = self.bounds;
+        let mut p = Plane::new(ww, wh);
+        for y in win.y0.max(b.y0)..win.y1.min(b.y1) {
+            let (x0, x1) = (win.x0.max(b.x0), win.x1.min(b.x1));
+            if x0 >= x1 {
+                continue;
+            }
+            let src = (y - b.y0) * b.width() + (x0 - b.x0);
+            let dst = (y - win.y0) * ww + (x0 - win.x0);
+            if let (Some(s), Some(d)) = (self.raw.get(src..src + (x1 - x0)), p.data.get_mut(dst..dst + (x1 - x0))) {
+                d.copy_from_slice(s);
+            }
+        }
+        p
+    }
+
+    /// [`AutoMaskModel::Smoothed`]'s refinement over `out`: the paint closed (holes up to about
+    /// twice `close` filled), then its gaps along edges filled by the guided filter on the
+    /// smoothed luminance; never less than the paint.
+    fn refine_smoothed(&mut self, out: PixRect, sm: &Smoothed, k: &Smoothing) {
+        let win = sm.win;
+        let p = self.raw_in(win);
+        let closed = rank_filter(&rank_filter(&p, k.close, true), k.close, false);
+        let q = masks::guided_cross(&sm.l, &closed, k.refine_sigma, k.refine_eps);
+        let (b, ww) = (self.bounds, win.width());
+        for y in out.y0..out.y1 {
+            for x in out.x0..out.x1 {
+                let i = (y - b.y0) * b.width() + (x - b.x0);
+                let wi = (y - win.y0) * ww + (x - win.x0);
+                if let (Some(c), Some(v), Some(f)) = (closed.data.get(wi), q.data.get(wi), self.refined.get_mut(i)) {
+                    *f = c.max(*v);
                 }
             }
         }
@@ -441,17 +707,19 @@ impl BrushCache {
 
     /// The raster of `bd` painted so far for this render's source and key (taken out of the cache:
     /// [`Self::put`] it back), the one that has the most of it; a new one when none fits.
-    pub fn take(&self, at: &BrushCacheRef<'_>, bd: &BrushDabs, w: usize, h: usize) -> StrokeRaster {
+    pub fn take(&self, at: &BrushCacheRef<'_>, bd: &BrushDabs, w: usize, h: usize, model: AutoMaskModel) -> StrokeRaster {
         let mut v = self.lock();
         let best = v
             .iter()
             .enumerate()
-            .filter(|(_, e)| e.key == at.key && Arc::ptr_eq(&e.src, at.src) && e.raster.size() == (w, h) && e.raster.continues(bd))
+            .filter(|(_, e)| {
+                e.key == at.key && Arc::ptr_eq(&e.src, at.src) && e.raster.size() == (w, h) && e.raster.model == model && e.raster.continues(bd)
+            })
             .max_by_key(|(_, e)| e.raster.dabs())
             .map(|(i, _)| i);
         match best {
             Some(i) => v.remove(i).raster,
-            None => StrokeRaster::new(w, h),
+            None => StrokeRaster::with_model(w, h, model),
         }
     }
 
@@ -472,3 +740,6 @@ impl BrushCache {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod quality_tests;

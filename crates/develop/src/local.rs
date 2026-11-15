@@ -4,6 +4,7 @@
 use crate::color::cct::{temp_tint_to_xy, wb_matrix, xy_to_temp_tint};
 use crate::color::{REC2020, luminance_2020};
 use crate::raster::blur::{gauss_taps, gaussian, gaussian_taps};
+use crate::stroke_raster::AutoMaskModel;
 use craft_develop_model::{DevelopSettings, Process};
 use std::sync::Arc;
 
@@ -375,7 +376,9 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V9 => {
+            base_detail_radius(px_per_long)
+        }
     }
 }
 
@@ -909,7 +912,20 @@ pub(crate) fn prepare(
         None => (None, 1.0),
     };
     let ev = s.light.exposure as f32;
-    let masks = timed("masks", || masks::evaluate_cached(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes, brush));
+    let masks = timed("masks", || {
+        masks::evaluate_cached(
+            &s.masks,
+            frame,
+            img.width,
+            img.height,
+            &img,
+            &log_l,
+            ev,
+            mattes,
+            AutoMaskModel::for_process(s.process.process()),
+            brush,
+        )
+    });
     Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 
