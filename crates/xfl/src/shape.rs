@@ -5,6 +5,7 @@
 //! compatible borrowed element adapters implemented by consumers.
 
 use crate::edges::{self, Segment};
+use std::borrow::Cow;
 
 /// An element source used by the borrowed XFL schema views.
 ///
@@ -26,6 +27,9 @@ pub trait XflElement {
 
     /// Direct child elements in document order.
     fn elements(&self) -> Self::Elements<'_>;
+
+    /// This element's direct character data, with XML references resolved.
+    fn text_content(&self) -> Cow<'_, str>;
 
     /// The first direct child whose local name matches.
     fn child(&self, name: &str) -> Option<&Self> {
@@ -67,6 +71,10 @@ impl XflElement for craft_xml::El {
 
     fn elements(&self) -> Self::Elements<'_> {
         XmlElements { nodes: self.children.iter() }
+    }
+
+    fn text_content(&self) -> Cow<'_, str> {
+        self.text()
     }
 }
 
@@ -564,6 +572,9 @@ mod tests {
             }
             fn elements(&self) -> Self::Elements<'_> {
                 self.children.iter()
+            }
+            fn text_content(&self) -> Cow<'_, str> {
+                Cow::Borrowed("")
             }
         }
         let app = AppElement { name: "x:DOMShape".into(), attrs: vec![("isDrawingObject".into(), "true".into())], children: Vec::new() };
