@@ -131,6 +131,22 @@ fn on_dialog<T>(host: &Rc<RefCell<DialogHost>>, act: impl FnOnce(&mut HostedPara
     host.borrow_mut().get_mut::<HostedParamDialog>().map(act)
 }
 
+// A step dialog opened with recorded fields lists them, and a host set of one, before its first pass: an Actions step
+// reads and fills its dialog in the call that opens it.
+#[trial]
+fn a_hosted_param_dialog_lists_its_opening_fields_and_takes_a_set_before_its_first_pass() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let fixture = Fixture::new(|_| {});
+    let fields = DialogFields::from_pairs([("radius".to_owned(), FieldValue::Number(2.0))]);
+    let id = host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "blur", fields, blur));
+    let listed =
+        |host: &Rc<RefCell<DialogHost>>| host.borrow().open_dialogs().into_iter().find(|dialog| dialog.id == id).and_then(|dialog| dialog.fields);
+    let fields = listed(&host).expect("the dialog lists its fields");
+    assert_eq!((fields["radius"].as_f64(), fields["smooth"].clone()), (Some(2.0), json!(false)), "the opening field and the defaults: {fields}");
+    assert_eq!(host.borrow_mut().set_json_field(fixture.ctx(), id, "radius", json!(4)), Ok(()));
+    assert_eq!(listed(&host).and_then(|fields| fields["radius"].as_f64()), Some(4.0), "the set lists before any pass");
+}
+
 /// Why the host refuses the held OK.
 const REFUSED: &str = "The radius is too large for this layer.";
 
