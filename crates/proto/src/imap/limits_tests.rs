@@ -157,9 +157,16 @@ proptest! {
             prop_assert!(list.iter().all(|m| m.raw.len() <= MAX_MAILBOX_NAME && m.flags.len() <= MAX_FLAGS && m.flags.iter().all(|f| f.len() <= MAX_FLAG_LEN)));
         }
         let mut s = Script::new(server.clone());
+        // A fixed range retains its UID bound even if the server sends newer deliveries.
+        if let Ok(got) = opened(&mut s, 10, 50).uid_fetch_flags("1:49") {
+            prop_assert!(got.len() <= 2 * 10 + FETCH_SLACK);
+            prop_assert!(got.iter().all(|f| f.uid >= 1 && f.uid < 50 && f.flags.len() <= MAX_FLAGS && f.flags.iter().all(|x| x.len() <= MAX_FLAG_LEN)));
+        }
+        let mut s = Script::new(server.clone());
+        // Wildcards admit deliveries newer than SELECT's UIDNEXT, but retain all storage caps.
         if let Ok(got) = opened(&mut s, 10, 50).uid_fetch_flags("1:*") {
             prop_assert!(got.len() <= 2 * 10 + FETCH_SLACK);
-            prop_assert!(got.iter().all(|f| f.uid >= 1 && f.uid < 50 && f.flags.iter().all(|x| x.len() <= MAX_FLAG_LEN)));
+            prop_assert!(got.iter().all(|f| f.uid >= 1 && f.flags.len() <= MAX_FLAGS && f.flags.iter().all(|x| x.len() <= MAX_FLAG_LEN)));
         }
         let mut s = Script::new(server);
         if let Ok(got) = opened(&mut s, 10, 50).uid_fetch_sizes("5:20") {
