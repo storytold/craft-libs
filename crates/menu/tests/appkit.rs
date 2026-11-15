@@ -12,7 +12,15 @@ fn main() {
         }
         return;
     }
+    // One process installs one menu bar, so each case runs in a process of its own.
+    if args.iter().any(|a| a == "--without-window-menu") {
+        mac::a_bar_without_a_window_menu_keeps_its_main_menu();
+        return;
+    }
     mac::disabled_items_lose_their_key_equivalents_in_place();
+    let exe = std::env::current_exe().expect("the test binary");
+    let status = std::process::Command::new(exe).arg("--without-window-menu").status().expect("the second case runs");
+    assert!(status.success(), "a_bar_without_a_window_menu_keeps_its_main_menu failed");
     println!("test appkit ... ok");
 }
 
@@ -81,6 +89,27 @@ mod mac {
 
     fn row(key: &str, enabled: bool, checked: bool) -> (String, bool, bool) {
         (key.to_owned(), enabled, checked)
+    }
+
+    /// An app without a Window menu: enabling and disabling an item never replaces the main menu.
+    pub fn a_bar_without_a_window_menu_keeps_its_main_menu() {
+        let mtm = MainThreadMarker::new().expect("the main thread");
+        let app = NSApplication::sharedApplication(mtm);
+        let ctx = egui::Context::default();
+        let bar = |enabled: bool| MenuBar {
+            menus: vec![
+                Menu::new("Test", vec![Item::new("app.about", "About").into()]).role(MenuRole::App),
+                Menu::new("File", vec![item("file.save", "Save", "Cmd+S", enabled).into()]).role(MenuRole::File),
+            ],
+            documents: Vec::new(),
+        };
+        let mut native = install_with(&ctx, &bar(true), MacOptions::default()).expect("the menu bar installs");
+        let main = app.mainMenu().expect("a main menu");
+        for enabled in [false, true, false] {
+            native.sync(Layout { bar: bar(enabled), clashes: Vec::new() });
+            assert_eq!(find(&menu(&app, &["File"]), "Save").isEnabled(), enabled);
+        }
+        assert!(std::ptr::eq(Retained::as_ptr(&main), Retained::as_ptr(&app.mainMenu().expect("a main menu"))), "the menu bar was rebuilt");
     }
 
     pub fn disabled_items_lose_their_key_equivalents_in_place() {

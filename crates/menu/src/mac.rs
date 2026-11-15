@@ -323,6 +323,9 @@ struct Target {
     layout_shortcut: bool,
 }
 
+/// How many failed builds in a row are tried again without a new sync ([`MacMenu::rebuild`]).
+const RETRIES: u8 = 3;
+
 /// The native items by muda id.
 type Entries = HashMap<String, Entry>;
 
@@ -341,6 +344,8 @@ struct MacMenu {
     /// The last build failed: the menus may not show the latest [`MenuBar`] (an item enabled or
     /// disabled with its key equivalent kept), so the next update builds again.
     stale: bool,
+    /// Failed builds in a row since the last one that worked ([`MacMenu::rebuild`]).
+    retries: u8,
     window: Option<WindowMenu>,
     /// The latest menus, waiting for the open menu to close.
     pending: Option<MenuBar>,
@@ -359,6 +364,7 @@ impl MacMenu {
             rx,
             structure: 0,
             stale: false,
+            retries: 0,
             window: None,
             pending: None,
             options,
@@ -430,11 +436,11 @@ impl MacMenu {
     /// Falls back to a full build when that fails.
     fn rebuild_window(&mut self, bar: &MenuBar) {
         let (Some(menu), Some((old, old_ids, _))) = (self.menu.clone(), self.window.clone()) else {
-            self.build(bar);
+            self.rebuild(bar);
             return;
         };
         let Some((at, spec)) = bar.menus.iter().enumerate().find(|(_, m)| m.role == MenuRole::Window) else {
-            self.build(bar);
+            self.rebuild(bar);
             return;
         };
         let mut entries = self.entries.clone();
@@ -460,17 +466,30 @@ impl MacMenu {
                 self.publish();
             }
             _ => {
-                self.build(bar);
+                self.rebuild(bar);
             }
+        }
+    }
+
+    /// [`MacMenu::build`] for an update. After a failed build the menus are stale, and nothing may
+    /// sync them again (the driver skips a layout equal to the last one), so a failed build is
+    /// tried again later, up to [`RETRIES`] times in a row; after that the next sync tries again.
+    fn rebuild(&mut self, bar: &MenuBar) {
+        if self.build(bar) {
+            self.retries = 0;
+        } else if self.retries < RETRIES {
+            self.retries = self.retries.saturating_add(1);
+            self.retry_later(bar.clone());
         }
     }
 
     fn update(&mut self, bar: &MenuBar) {
         if self.menu.is_none() || self.stale || structure_key(bar) != self.structure {
-            self.build(bar);
+            self.rebuild(bar);
             return;
         }
-        if self.window.as_ref().map(|w| w.2) != Some(window_key(bar)) {
+        // Without a Window menu there is nothing to rebuild: one appearing changes `structure_key`.
+        if self.window.as_ref().is_some_and(|w| w.2 != window_key(bar)) {
             self.rebuild_window(bar);
         }
         // Items by muda id: the n-th item of a command, depth first, is its n-th native item.
@@ -515,9 +534,7 @@ impl MacMenu {
             }
         }
         match rebuild {
-            Some(Rebuild::Bar) => {
-                self.build(bar);
-            }
+            Some(Rebuild::Bar) => self.rebuild(bar),
             Some(Rebuild::Window) => self.rebuild_window(bar),
             None => {}
         }
