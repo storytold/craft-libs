@@ -36,6 +36,9 @@ const OP_PIXEL_PROCESSOR_COLOR: u8 = 0x29;
 const OP_DISTANCE_GRAY: u8 = 0x2a;
 const OP_DISTANCE_COLOR: u8 = 0x2b;
 const OP_CURVE: u8 = 0x2c;
+/// A curve on a colour image: the grey curve's layout, the curve applied to each colour component (Moss #809: a colour
+/// gradient map's output through five keys, blended at 47%; the record reads exactly as a curve's).
+const OP_CURVE_COLOR: u8 = 0x2d;
 
 // Format data: record flag bits (the record's u16 `flags`).
 /// Bit 0: a size expression pointer follows the seed.
@@ -345,7 +348,7 @@ pub fn decode(rec: &NodeRecord, s: &Section<'_>) -> Result<AtomicNode, DecodeErr
         OP_PIXEL_PROCESSOR_GRAY | OP_PIXEL_PROCESSOR_COLOR => decode_pixel_processor(&mut f, &mut node)?,
         OP_DISTANCE_GRAY | OP_DISTANCE_COLOR => decode_distance(&mut f, &mut node)?,
         OP_NORMAL => decode_normal(&mut f, &mut node)?,
-        OP_CURVE => decode_curve(&mut f, &mut node)?,
+        OP_CURVE | OP_CURVE_COLOR => decode_curve(&mut f, &mut node)?,
         OP_VECTOR => decode_vector(&mut f, &mut node)?,
         OP_TEXT => decode_text(&mut f, &mut node)?,
         OP_INPUT_GRAY | OP_INPUT_COLOR => {
@@ -679,6 +682,7 @@ fn decode_vector(f: &mut Fields<'_, '_>, node: &mut AtomicNode) -> Result<(), De
 /// it to the input, which then only gives the size.
 fn decode_curve(f: &mut Fields<'_, '_>, node: &mut AtomicNode) -> Result<(), DecodeError> {
     node.kind = Kind::Curve;
+    node.color = f.rec.opcode == OP_CURVE_COLOR;
     node.inputs.push(f.index()?);
     let n = f.word()?;
     let keys = f.word()?;

@@ -239,6 +239,10 @@ mod operations {
         let n = decode(&record(0x2c, 0x218, &[7, 2, 0]), &s).unwrap();
         assert_eq!((n.kind, n.inputs.clone(), n.mode), (Kind::Curve, vec![7], Some(1)));
         assert_eq!((n.curve[1].point, n.curve[1].left), ([1.0, 1.0], [0.0, 1.0]));
+        // the colour curve (0x2d) reads the same, in colour
+        let c = decode(&record(0x2d, 0x018, &[7, 2, 0]), &s).unwrap();
+        assert_eq!((c.kind, c.color, c.inputs.clone(), c.curve.len()), (Kind::Curve, true, vec![7], 2));
+        assert_eq!(c.curve[1].right, [1.0, 1.0]);
     }
 
     #[test]
