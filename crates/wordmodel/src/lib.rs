@@ -17,6 +17,7 @@
 struct ReadmeExamples;
 
 pub mod bidi;
+pub mod bookmark;
 mod byte_store;
 pub mod chart;
 mod cjk_numbers;
@@ -116,6 +117,9 @@ pub struct Document {
     pub sources: Vec<Source>,
     /// Custom document properties, in file order.
     pub custom_props: Vec<CustomProp>,
+    /// Original DOCX bookmark attributes and placement, shared between edit snapshots.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub bookmark_attrs: Arc<BTreeMap<String, bookmark::BookmarkAttrs>>,
     /// The document's own footnote separators and continuation notice.
     #[serde(skip_serializing_if = "NoteSeparators::is_empty")]
     pub footnote_separators: NoteSeparators,

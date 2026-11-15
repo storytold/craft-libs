@@ -48,3 +48,21 @@ Equations (OMML) are read and written by `craft_math::omml`.
 
 - DrawingML (`a:`) shape fills, lines, custom geometry and colours are still read with this
   crate's own code; they move to `craft-drawingml`.
+
+## Structural bookmark boundaries
+
+Bookmarks read directly between body/header blocks, table rows or row cells keep
+source identifiers, optional column bounds and structural placement while their
+inline model markers remain at the matching paragraph edges. Moved markers save
+inline, without structural column bounds; deleted markers are not recreated.
+The metadata lives in `craft_wordmodel::Document::bookmark_attrs` and is shared
+between document snapshots. Applications replacing a bookmark name must remove
+its old metadata when removing/replacing the original markers.
+
+Synthetic controls in `tests/bookmarks.rs` cover structural positions, repeated
+saves, content controls, supported/unsupported chunks, empty cells, source ID
+collisions and moved/deleted markers. These controls do not establish native Word
+or broader document-corpus fidelity. This is the shared-library port supporting
+[WordCraft #5254](https://github.com/storytold/wordcraft/pull/5254); overlapping
+[WordCraft #4853](https://github.com/storytold/wordcraft/pull/4853) still requires
+a maintainer integration decision.
