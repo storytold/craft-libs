@@ -90,8 +90,11 @@ pub struct Writer {
     resolved: usize,
     limits: Limits,
     /// Which written parts to record for a signature, and the records so far.
-    tracked: Option<(fn(&str) -> bool, Vec<PartDigest>)>,
+    tracked: Option<TrackedParts>,
 }
+
+/// A tracking closure and the part digests collected so far.
+type TrackedParts = (fn(&str) -> bool, Vec<PartDigest>);
 
 impl Writer {
     pub fn new(limits: Limits) -> Writer {
@@ -111,7 +114,7 @@ impl Writer {
 
     /// The container's bytes.
     pub fn finish(self) -> Result<Vec<u8>, FormatError> {
-        Ok(self.zip.finish().map_err(invalid)?)
+        self.zip.finish().map_err(invalid)
     }
 
     /// Add a part, compressed or stored. A name already written is written once.
@@ -179,6 +182,7 @@ impl Writer {
 /// declared size), not the parts.
 pub struct Reader {
     /// The raw archive bytes, kept alive so the archive can borrow them.
+    #[allow(dead_code)]
     bytes: Vec<u8>,
     archive: craft_zip::Archive<'static>,
     blobs: BTreeMap<String, Vec<u8>>,
@@ -213,11 +217,10 @@ impl Reader {
         // no path components that are "." or "..", and no duplicates.
         let mut name_set = BTreeSet::new();
         for entry_idx in 0..archive.len() {
-            if let Ok(Some(name)) = archive.entry_name(entry_idx) {
-                if name.is_empty() || name.contains('\\') || name.split('/').any(|c| c.is_empty() || c == "." || c == "..") || !name_set.insert(name)
-                {
-                    return Err(invalid("duplicate or invalid archive entry"));
-                }
+            if let Ok(Some(name)) = archive.entry_name(entry_idx)
+                && (name.is_empty() || name.contains('\\') || name.split('/').any(|c| c.is_empty() || c == "." || c == "..") || !name_set.insert(name))
+            {
+                return Err(invalid("duplicate or invalid archive entry"));
             }
         }
 
