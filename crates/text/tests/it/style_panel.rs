@@ -1,5 +1,5 @@
 //! The styles panel's click rules: a click applies, Alt-click clears overrides, a double click opens Options, except on
-//! the character style None.
+//! the character style None; at a bare caret every attempt to apply a character style warns.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -8,7 +8,7 @@ use craft_behavior::Selection;
 use craft_text::ui::style_panel::{TextStyleAction, TextStyleKind, TextStyleRow, TextStylesPanel};
 use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
-use egui::Modifiers;
+use egui::{Key, Modifiers};
 
 #[trial]
 fn a_click_applies_alt_clears_overrides_and_a_double_click_opens_options_except_on_none() {
@@ -40,4 +40,32 @@ fn a_click_applies_alt_clears_overrides_and_a_double_click_opens_options_except_
     let none = fixture.by_label("None").expect("the None row is shown");
     fixture.click(&none).click(&none).idle(4);
     assert!(!taken(&state).contains(&TextStyleAction::Options(0)), "a double click on None opens nothing");
+}
+
+#[trial]
+fn every_attempt_to_apply_a_character_style_at_a_bare_caret_warns_and_applies_nothing() {
+    let state = Rc::new(RefCell::new((Selection::<u64>::default(), Vec::<TextStyleAction>::new(), 0usize)));
+    let shared = state.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let rows = [TextStyleRow::new(0, "None"), TextStyleRow::new(1, "Emphasis")];
+        let mut guard = shared.borrow_mut();
+        let (selection, actions, warnings) = &mut *guard;
+        let out = TextStylesPanel::new("Character Styles", TextStyleKind::Character, &rows, Bind::bound(selection))
+            .target(true)
+            .text_selected(false)
+            .show(ui);
+        actions.extend(out.action);
+        *warnings += usize::from(out.status.is_some());
+    });
+    fixture.idle(10);
+    let warnings = |state: &Rc<RefCell<(Selection<u64>, Vec<TextStyleAction>, usize)>>| std::mem::take(&mut state.borrow_mut().2);
+
+    let emphasis = fixture.by_label("Emphasis").expect("the Emphasis row is shown");
+    fixture.click(&emphasis).idle(4);
+    assert_eq!(warnings(&state), 1, "a click warns");
+    fixture.advance(1.0).click(&emphasis).idle(4);
+    assert_eq!(warnings(&state), 1, "a click on the row already selected warns again");
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    assert_eq!(warnings(&state), 1, "Enter on the row warns");
+    assert!(state.borrow().1.is_empty(), "nothing is applied at a bare caret");
 }

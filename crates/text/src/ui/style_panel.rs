@@ -3,7 +3,7 @@
 //! Clear Override and Redefine, then Style Options, Duplicate, New and Delete. The styles, their attributes and the
 //! commands are the app's; the panel reports what the user asked for.
 
-use craft_behavior::{IconId, Selection, SelectionChange, keyed};
+use craft_behavior::{IconId, Selection, keyed};
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
 use craft_ui::contract::{
@@ -411,20 +411,15 @@ impl<'a> TextStylesPanel<'a> {
 
             let pointer = craft_ui::runtime::pointer::frame(ui.ctx());
             let alt = pointer.mods.alt;
-            // A press reports the selection it makes, then the lead it moved.
-            let by_pointer =
-                events.iter().any(|event| matches!(event, CollectionEvent::LeadMoved { by: craft_ui::contract::LeadSource::Pointer, .. }));
+            let plain = !pointer.mods.shift && !pointer.mods.cmd;
             for event in events {
                 match event {
-                    CollectionEvent::Selection(SelectionChange::Set(keys)) if by_pointer && keys.len() == 1 => {
-                        if target && !paragraph && !text_selected {
-                            hint.set(true);
-                        }
-                    }
                     CollectionEvent::Activate(id) if second && (id != 0 || paragraph) => action.set(Some(TextStyleAction::Options(id))),
-                    CollectionEvent::Activate(id) if target && (paragraph || text_selected) && !pointer.mods.shift && !pointer.mods.cmd => {
+                    CollectionEvent::Activate(id) if target && (paragraph || text_selected) && plain => {
                         action.set(Some(TextStyleAction::apply(id, alt)));
                     }
+                    // A character style at a bare caret has nothing to apply to: the attempt warns instead.
+                    CollectionEvent::Activate(_) if target && !paragraph && !text_selected && plain => hint.set(true),
                     CollectionEvent::Delete(keys) if keys.len() > 1 => action.set(Some(TextStyleAction::DeleteHighlighted)),
                     CollectionEvent::Delete(keys) => {
                         if let Some(id) = keys.first().copied().filter(|id| *id != 0) {
