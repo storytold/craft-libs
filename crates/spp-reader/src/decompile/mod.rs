@@ -627,10 +627,11 @@ fn transform(a: &AtomicNode, cx: &mut NodeCx<'_>) -> String {
 }
 
 /// Text drawn with the font stored in the graph: the text from the graph input it names, position (an offset from the
-/// middle), size and alignment as the graph runtime's `text` node takes them.
+/// middle, y up), size and alignment as the graph runtime's `text` node takes them.
 fn text(a: &AtomicNode, cx: &mut NodeCx<'_>) -> String {
     let (desc, asm) = (cx.desc, cx.asm);
-    let mut l = String::from("text");
+    // the position's y counts up the image (measured on Day 7: the label's text sits 0.1 of the tip lower otherwise)
+    let mut l = String::from("text y_up=1");
     let font = match a.param("font") {
         Some(Value::Const(w)) => w.first().copied(),
         _ => None,
