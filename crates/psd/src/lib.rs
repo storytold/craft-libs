@@ -64,6 +64,7 @@ mod codepage;
 pub mod compression;
 pub mod csh;
 pub mod descriptor;
+pub mod displace_map;
 pub mod engine_data;
 pub mod error;
 pub mod file;
