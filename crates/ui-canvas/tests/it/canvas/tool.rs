@@ -3,7 +3,7 @@
 
 use craft_behavior::geometry::{SnapKind, SnapLine, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Size};
-use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GesturePhase, PointerButton};
+use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, GesturePhase, PointerButton, PointerSample};
 use craft_keymap::Mods;
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, NavigationOptions, Snap,
@@ -16,6 +16,7 @@ use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::commands::{CommandGate, CommandSet as _};
 use craft_ui::runtime::frame;
+use craft_ui::runtime::windows::WindowHost;
 use craft_ui::style::DataColor;
 use craft_ui::testing::input::key_press;
 use craft_ui::testing::{Fixture, ToolFixture, pointer, trial};
@@ -585,10 +586,10 @@ fn a_held_command_or_alt_runs_its_stand_in_for_one_gesture() {
     rig.log.borrow_mut().clear();
     let (ctx, canvas) = (rig.fixture.ctx().clone(), rig.canvas.get());
     ToolHost::inject(&ctx, canvas, ToolInput::down(PointerButton::Primary, at).mods(Mods::CMD));
-    rig.fixture.idle(1);
     ToolHost::inject(&ctx, canvas, ToolInput::up(at));
-    rig.fixture.idle(1);
-    let calls = rig.calls();
+    rig.fixture.run_injected();
+    // The press's move to `at` hovers first, with Command held.
+    let calls: Vec<String> = rig.calls().into_iter().filter(|call| !call.ends_with("hover")).collect();
     assert_eq!(calls.first().map(String::as_str), Some("command press"), "{calls:?}");
     assert_eq!(calls.last().map(String::as_str), Some("command release"), "{calls:?}");
 
@@ -671,7 +672,7 @@ fn a_gesture_a_stand_in_holds_is_cancelled_on_the_stand_in() {
     assert_eq!(rig.calls(), ["command cancel"], "the stand-in that holds the gesture is cancelled, the selected tool is not");
 }
 
-/// A key queued with the pointer events is down for exactly the events queued after it until it is let go.
+/// A key injected with the pointer events is down for exactly the events injected after it until it is let go.
 #[trial]
 fn a_queued_space_covers_the_moves_queued_after_it_and_not_those_after_its_release() {
     let log = Log::default();
@@ -691,8 +692,83 @@ fn a_queued_space_covers_the_moves_queued_after_it_and_not_those_after_its_relea
     ] {
         ToolHost::inject(&ctx, canvas, input);
     }
-    rig.fixture.idle(1);
+    rig.fixture.run_injected();
     assert_eq!(rig.main.borrow().space_drags, [false, true, true, false], "Space is held for the two moves queued while it is down");
+}
+
+/// A held key whose release never comes ends where the window host drops injected input: after a cancel, the drag of
+/// a later gesture runs without it.
+#[trial]
+fn a_held_space_ends_when_the_injected_input_is_cancelled() {
+    let log = Log::default();
+    let mut rig = Rig::new(Probe::new("main", &log), &log, None);
+    let at = rig.centre();
+    let (ctx, canvas) = (rig.fixture.ctx().clone(), rig.canvas.get());
+    for input in [ToolInput::hold(craft_keymap::Key::Space), ToolInput::down(PointerButton::Primary, at), ToolInput::moved(at + BY)] {
+        ToolHost::inject(&ctx, canvas, input);
+    }
+    rig.fixture.run_injected();
+    WindowHost::of(&ctx).cancel_injected();
+    for input in [ToolInput::up(at + BY), ToolInput::down(PointerButton::Primary, at), ToolInput::moved(at + BY), ToolInput::up(at + BY)] {
+        ToolHost::inject(&ctx, canvas, input);
+    }
+    rig.fixture.run_injected();
+    assert_eq!(rig.main.borrow().space_drags, [true, false], "Space is held for the first drag and not after the cancel");
+}
+
+/// A tool that records the pen pressure of its press and drags.
+#[derive(Default)]
+struct PenProbe {
+    pressures: Vec<f32>,
+}
+
+impl CanvasTool for PenProbe {
+    fn press(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.pressures.push(pointer.sample.pressure);
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) {
+        self.pressures.push(pointer.sample.pressure);
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("the probe only records")
+    }
+}
+
+/// An injected pen reading reaches the tool as a tablet's does: the press and the drag carry the pressure their steps
+/// were injected with.
+#[trial]
+fn an_injected_pen_reading_reaches_the_tool() {
+    let probe = Rc::new(RefCell::new(PenProbe::default()));
+    let (shown_probe, canvas) = (Rc::clone(&probe), Rc::new(Cell::new(Id::NULL)));
+    let shown_canvas = Rc::clone(&canvas);
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 1.0)).show(ui, |_, _| {});
+        shown_canvas.set(shown.output.response.id);
+        let _ = ToolHost::new().run(ui, &shown.output, &mut *shown_probe.borrow_mut());
+    });
+    fixture.settle();
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    let ctx = fixture.ctx().clone();
+    for input in [
+        ToolInput::down(PointerButton::Primary, at).sample(PointerSample::new(0.3)),
+        ToolInput::moved(at + BY).sample(PointerSample::new(0.7)),
+        ToolInput::up(at + BY),
+    ] {
+        ToolHost::inject(&ctx, canvas.get(), input);
+    }
+    fixture.run_injected();
+    let pressures = probe.borrow().pressures.clone();
+    assert!(pressures.len() == 2 && (pressures[0] - 0.3).abs() < 1e-4 && (pressures[1] - 0.7).abs() < 1e-4, "{pressures:?}");
 }
 
 /// A queued Space starts the momentary Hand as the real key does: the press it is held over pans the view, and the
@@ -734,7 +810,7 @@ fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_r
     ] {
         ToolHost::inject(fixture.ctx(), canvas.get(), input);
     }
-    fixture.idle(1);
+    fixture.run_injected();
     assert_ne!(view.get().expect("the canvas ran").center, before, "the press under the queued Space pans with the Hand");
     let calls = log.borrow().clone();
     assert_eq!(calls.iter().filter(|call| *call == "main press").count(), 1, "only the press after the release is the selected tool's: {calls:?}");
@@ -760,7 +836,7 @@ fn a_queued_space_whose_hand_the_gate_refuses_leaves_the_press_to_the_selected_t
     ] {
         ToolHost::inject(fixture.ctx(), canvas.get(), input);
     }
-    fixture.idle(1);
+    fixture.run_injected();
     assert_eq!(view.get().expect("the canvas ran").center, before, "the refused Hand pans nothing");
     let calls = log.borrow().clone();
     assert!(calls.iter().any(|call| call == "main drag"), "the press under the queued Space is the selected tool's: {calls:?}");

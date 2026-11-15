@@ -10,7 +10,7 @@ use craft_imaging::ui::select::{
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{CanvasTool, Snap, ToolAccess, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer};
 use craft_ui::primitives::Draw;
-use craft_ui::testing::{ToolFixture, pointer, trial};
+use craft_ui::testing::{ToolFixture, trial};
 use egui::{Key, Modifiers, Pos2, Rect as ScreenRect, pos2};
 use kurbo::{Point, Rect, Vec2};
 use std::cell::{Cell, RefCell};
@@ -224,7 +224,7 @@ where
 {
     let (ctx, id) = (rig.fixture().ctx().clone(), rig.canvas_id());
     ToolHost::inject(&ctx, id, input);
-    rig.fixture().frame(Vec::new());
+    rig.fixture().run_injected();
 }
 
 fn down<T: Reports + 'static>(rig: &mut Rig<T>, point: (f64, f64), mods: Mods)
@@ -694,10 +694,7 @@ fn pt(point: Point) -> (f64, f64) {
 
 /// A hover to `point`.
 fn glide(rig: &mut Rig<MagneticLassoTool<Circle>>, point: Point, mods: Mods) {
-    // The real pointer goes with the injected one, so the hover each pass reports is this point and not where the pointer was left.
-    let (ctx, id) = (rig.fixture().ctx().clone(), rig.canvas_id());
-    ToolHost::inject(&ctx, id, ToolInput::moved(at(pt(point))).mods(mods));
-    rig.fixture().frame(vec![pointer::moved(at(pt(point)))]);
+    inject(rig, ToolInput::moved(at(pt(point))).mods(mods));
 }
 
 /// The pointer moves along the circle from angle `from` to angle `to` in small samples, as a hand follows an edge.

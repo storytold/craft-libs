@@ -44,7 +44,7 @@ One row per name in the author table (Overview) and per `pub` item a component a
 | Command scope | A `CommandScope`, live while a container declaring it is live | craft-keymap | 11.3 |
 | `CommandRef`, `CommandKind`, `ModalRule` | A command's id, its kind (`Command`, `Toggle`, `Radio`, `Tool`, `Momentary`) and whether it fires while a dialog is open | craft-keymap | 11.2 |
 | `Board::bound_around` | The command of a set that a chord runs on a canvas inside a command chain, through the keymap and the scopes the window's keys match in; the tool host uses it so a key that automation holds starts the momentary tool the real key starts | `craft_ui::runtime::commands` | 11.2 |
-| `ToolInput::hold`, `ToolInput::let_go` | Queued tool inputs for a key going down and coming up again: the key stays held for the inputs queued after it, so a held Space pans a press the way the real key does | `craft_ui_canvas::canvas::tool_host` | 8.3 |
+| `ToolInput::hold`, `ToolInput::let_go` | Injected tool inputs for a key going down and coming up again with no key event: the window host holds the key from the pass of the hold to the pass of the release, so a held Space pans a press the way the real key does | `craft_ui_canvas::canvas::tool_host` | 8.3 |
 | `Frames::over` | A frame driver over a given `egui::Context` (`Frames::new` makes its own), for tests that run the app's own context | `craft_ui::testing` | 22.4 |
 | `CommandGate` | The one gate that can disable commands (dialog open, workspace, recorder, pending operation) | `craft_ui::runtime::commands` | 11.3 |
 | `Commands` | The context trait on `Cx`, `BodyCx` and `ItemCx` for commands and the clipboard | `craft_ui::runtime::commands` | 11.3 |

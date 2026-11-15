@@ -113,6 +113,13 @@ impl PenPass {
         PenPass { samples: Vec::new(), current: source.current(), barrel: source.barrel(), barrel_press: source.barrel_press() }
     }
 
+    /// The pass of an injected step that carries the pen's reading `sample`: the one reading of the pass, on the
+    /// tablet, with the barrel button up.
+    pub(crate) fn injected(sample: PointerSample) -> Self {
+        let sample = sample.sanitized();
+        PenPass { samples: vec![sample], current: Some(sample), barrel: false, barrel_press: false }
+    }
+
     /// Whether the pen reported in the pass or is on the tablet: the pointer is the pen.
     pub(crate) fn active(&self) -> bool {
         self.current.is_some() || !self.samples.is_empty()

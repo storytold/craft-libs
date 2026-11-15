@@ -257,11 +257,17 @@ pub(crate) fn button_of(button: egui::PointerButton) -> PointerButton {
 ///
 /// Only a pass whose events carry pointer events drains the pen's queue: a pass without one (another window's, or a
 /// rerun pass, whose events egui hands only to the frame's first pass) leaves the readings for the pass with the moves.
+/// A pass whose injected step carries a pen reading (`injected::pen`) reads it in place of the tablet, which it leaves
+/// alone.
 pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
     let os = crate::runtime::windows::os_of(ctx);
-    let pen = crate::runtime::pen::source(ctx);
+    let injected_pen = super::injected::pen(ctx);
+    let pen = crate::runtime::pen::source(ctx).filter(|_| injected_pen.is_none());
     let pointed = ctx.input(|input| input.raw.events.iter().any(|event| matches!(event, Event::PointerMoved(_) | Event::PointerButton { .. })));
-    let tablet = pen.as_ref().map(|source| if pointed { PenPass::read(source) } else { PenPass::live(source) });
+    let tablet = match injected_pen {
+        Some(sample) => Some(PenPass::injected(sample)),
+        None => pen.as_ref().map(|source| if pointed { PenPass::read(source) } else { PenPass::live(source) }),
+    };
     let (read, barrel_press) = ctx.input(|input| {
         let mut events = Vec::new();
         let mut moves = Vec::new();

@@ -117,19 +117,17 @@ impl Momentary {
     /// the Hand into Zoom In, and Alt turns either into Zoom Out. While `in_gesture` (a drag runs), the tool of the
     /// pass before keeps the drag, whatever the keys do.
     pub fn tool(&mut self, mods: Mods, in_gesture: bool) -> Option<MomentaryTool> {
+        self.tool_holding(None, mods, in_gesture)
+    }
+
+    /// [`tool`](Self::tool) with `injected`, the command that the keys injected input holds with no key event
+    /// ([`ToolInput::hold`](super::ToolInput::hold)) run through the keymap: it counts before the command whose window
+    /// key is down, as the real key would.
+    pub(crate) fn tool_holding(&mut self, injected: Option<MomentaryCommands>, mods: Mods, in_gesture: bool) -> Option<MomentaryTool> {
         if in_gesture {
             return self.latched;
         }
-        let tool = self.pick(self.held, mods);
-        self.latched = tool;
-        tool
-    }
-
-    /// The tool for a press that automation queued. `queued` is the command that the keys the injection queue holds at
-    /// the press run through the keymap; without one, the command whose window key is down counts. Picked with `mods`
-    /// and latched for the gesture, as [`tool`](Self::tool) does for a pointer press.
-    pub(crate) fn press(&mut self, queued: Option<MomentaryCommands>, mods: Mods) -> Option<MomentaryTool> {
-        let tool = self.pick(queued.or(self.held), mods);
+        let tool = self.pick(injected.or(self.held), mods);
         self.latched = tool;
         tool
     }

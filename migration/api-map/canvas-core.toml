@@ -61,7 +61,7 @@ name = "ToolInput"
 old = "craft_ui::canvas::tool_host::ToolInput"
 new = "craft_ui::canvas::ToolInput"
 status = "moved"
-note = "Positions are screen points (`pos`), the pen reading is `sample: PointerSample`, and `modifiers` is `mods: Mods`."
+note = "Positions are screen points (`pos`), the pen reading is `sample: Option<PointerSample>` (`None` for a mouse; set with `.sample(pen)`), `modifiers` is `mods: Mods`, and a Down has no click count: the press machine counts clicks. `ToolHost::inject` hands each input to the window host's injected input, one step per pass."
 
 [[type]]
 name = "ToolGesture"

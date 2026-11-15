@@ -3,17 +3,21 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_behavior::EditEvent;
+use craft_behavior::kurbo::{Point, Size};
+use craft_behavior::{CancelReason, CanvasView, EditEvent, PointerButton};
 use craft_color::AreaMode;
 use craft_color::ui::{
     ColorArea, ColorDisc, ColorHud, ColorRamp, DiscMove, RampKind, RampPick, WheelGeometry, hue_at, triangle_corners, triangle_point, triangle_sv,
 };
+use craft_keymap::Mods;
 use craft_theme::{ColorModel, HsbModel, ModelValues, Srgba};
+use craft_ui::canvas::{Canvas, CanvasTool, ToolAction, ToolContext, ToolHost, ToolInput, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Show as _};
+use craft_ui::primitives::Draw;
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, trial};
-use egui::{Event, Key, Modifiers, Pos2, Rect, Ui, pos2, vec2};
+use egui::{Event, Id, Key, Modifiers, Pos2, Rect, Ui, pos2, vec2};
 
 fn within(a: f32, b: f32) -> bool {
     (a - b).abs() < 1e-3
@@ -255,4 +259,81 @@ fn color_hud_escape_keeps_the_picked_colour() {
     assert_eq!(rig.count(|event| matches!(event, EditEvent::Cancel { .. })), 0, "and does not revert");
     assert_eq!(rig.color.get(), picked, "the picked colour stays");
     assert!(!rig.closed.borrow().is_empty(), "and the HUD reports that it closed");
+}
+
+/// A canvas tool whose secondary press opens the HUD at the press, as an app's HUD Color Picker chord does.
+#[derive(Default)]
+struct HudOpener {
+    open: Option<Pos2>,
+}
+
+impl CanvasTool for HudOpener {
+    fn press(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.open = Some(pointer.pos);
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn takes(&self, button: PointerButton, _: Mods) -> bool {
+        button == PointerButton::Secondary
+    }
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the HUD opener of a trial")
+    }
+}
+
+/// Automation drives the HUD through the tool host as a hand does: the injected secondary press opens it, the injected
+/// move picks where it went (the HUD reads the pass pointer), and the injected release commits.
+#[trial]
+fn color_hud_picks_at_an_injected_move() {
+    let start = Srgba::rgb(0.4, 0.6, 0.8);
+    let (color, events, canvas) = (Rc::new(Cell::new(start)), Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(Id::NULL)));
+    let (c, e, shown_canvas) = (color.clone(), events.clone(), canvas.clone());
+    let mut tool = HudOpener::default();
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let view = CanvasView::new(room, Point::new(300.0, 200.0), 1.0);
+        let shown = Canvas::new("Document").document(Size::new(600.0, 400.0)).view(view).show(ui, |_, _| {});
+        let id = shown.output.response.id;
+        shown_canvas.set(id);
+        let _ = ToolHost::new().run(ui, &shown.output, &mut tool);
+        let Some(at) = tool.open else { return };
+        let out = ColorHud::new("Color HUD", at, Bind::given(c.get())).start(start).held(ToolHost::in_gesture(ui.ctx(), id)).show(ui);
+        for event in out.events {
+            if let EditEvent::Update { value, .. } = &event {
+                c.set(*value);
+            }
+            e.borrow_mut().push(event);
+        }
+        if out.closed.is_some() {
+            tool.open = None;
+        }
+    });
+    fixture.room(vec2(600.0, 400.0));
+    fixture.settle();
+    let ctx = fixture.ctx().clone();
+    let count = |which: fn(&EditEvent<Srgba>) -> bool| events.borrow().iter().filter(|event| which(event)).count();
+
+    ToolHost::inject(&ctx, canvas.get(), ToolInput::down(PointerButton::Secondary, HUD_AT));
+    fixture.run_injected().settle();
+    let area = fixture.by_label(AreaMode::Hue.name()).expect("the injected press opened the HUD").rect;
+
+    ToolHost::inject(&ctx, canvas.get(), ToolInput::moved(area.center()));
+    fixture.run_injected();
+    let values = HsbModel.from_srgb(color.get()).values;
+    assert!((values[1] - 50.0).abs() < 3.0, "the area's middle across is half saturation: {}", values[1]);
+    assert!((values[2] - 50.0).abs() < 3.0, "the area's middle down is half brightness: {}", values[2]);
+    assert_eq!(count(|event| matches!(event, EditEvent::Commit { .. })), 0, "it runs while the press is held");
+
+    ToolHost::inject(&ctx, canvas.get(), ToolInput::up(area.center()));
+    fixture.run_injected().idle(2);
+    assert_eq!(count(|event| matches!(event, EditEvent::Commit { .. })), 1, "the injected release commits");
 }

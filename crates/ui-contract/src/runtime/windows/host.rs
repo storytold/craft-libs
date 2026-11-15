@@ -6,7 +6,7 @@ use super::placement::placement_of;
 use super::shell::{base_shell, shell_of, window_info};
 use super::spec::frame_of;
 use super::{Record, shared};
-use crate::runtime::egui::injected::{self, Released};
+use crate::runtime::egui::injected::{self, InjectedPointer, Released};
 use crate::runtime::egui::input_filter;
 use crate::runtime::egui::screenshot::{ScreenshotFacts, ScreenshotSlot};
 use crate::runtime::egui::{pass, screenshot, viewports};
@@ -139,6 +139,29 @@ impl WindowHost {
         injected::inject_release(&self.ctx, viewport, at, released);
     }
 
+    /// Queues one pointer step in `viewport` as a device would send it, one pass per event, with the pen's reading
+    /// for a pen: its pass reads the reading in place of the tablet's.
+    pub fn inject_pointer(&self, viewport: ViewportId, step: InjectedPointer) {
+        injected::inject_pointer(&self.ctx, viewport, step);
+    }
+
+    /// Queues `key` held down in `viewport` with no key event, on a pass of its own: no shortcut or key stage sees it,
+    /// only [`injected_holds`](Self::injected_holds), until [`inject_let_go`](Self::inject_let_go). It ends where
+    /// injected input is dropped: a withdrawal, a window focus loss, a cancel, the end of the injection session.
+    pub fn inject_hold(&self, viewport: ViewportId, key: Key) {
+        injected::inject_hold(&self.ctx, viewport, key, true);
+    }
+
+    /// Queues the release of a key [`inject_hold`](Self::inject_hold) holds, on a pass of its own.
+    pub fn inject_let_go(&self, viewport: ViewportId, key: Key) {
+        injected::inject_hold(&self.ctx, viewport, key, false);
+    }
+
+    /// The keys [`inject_hold`](Self::inject_hold) holds in `viewport`, as of its running pass.
+    pub fn injected_holds(&self, viewport: ViewportId) -> Vec<Key> {
+        injected::holds(&self.ctx, viewport)
+    }
+
     /// Holds Caps Lock on or off in place of the platform's state; `None` returns to the platform's.
     pub fn set_caps_lock(&self, on: Option<bool>) {
         injected::set_caps_lock(&self.ctx, on);
@@ -190,7 +213,8 @@ impl WindowHost {
         injected::withdraw(&self.ctx, viewport);
     }
 
-    /// Drops every injected queue and step in flight; true when anything was pending.
+    /// Drops every injected queue and step in flight, and the keys [`inject_hold`](Self::inject_hold) holds; true
+    /// when anything was pending.
     pub fn cancel_injected(&self) -> bool {
         injected::cancel(&self.ctx)
     }
@@ -202,15 +226,7 @@ impl WindowHost {
         injected::end(&self.ctx);
     }
 
-    /// Queues a pass of `viewport` behind its injected input: `injected_idle` stays false until that pass ran. A
-    /// component that keeps injected input of its own for its next pass (the tool host's `ToolHost::inject`) calls
-    /// it, so automation's idle answer waits for the pass that takes the input.
-    pub fn inject_pass(&self, viewport: ViewportId) {
-        injected::inject_pass(&self.ctx, viewport);
-    }
-
-    /// Whether no injected step is queued or awaits its pass (see [`inject_pass`](Self::inject_pass)): the
-    /// application may answer its waiters.
+    /// Whether no injected step is queued or awaits its pass: the application may answer its waiters.
     pub fn injected_idle(&self) -> bool {
         injected::idle(&self.ctx)
     }

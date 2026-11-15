@@ -6,10 +6,16 @@
 //! does, and pass through the same input stages. A step stays in flight until a pass of its viewport has run. A
 //! step whose pass has not run is withdrawn when the focus changed since it was injected, and when the application
 //! withdraws the viewport's input because its document changed (`withdraw`). Screen points are egui points.
+//!
+//! A pointer step can carry the pen's reading ([`InjectedPointer`]): its pass reads it in place of the tablet's
+//! (`pen`), so its moves and its press pair with it as with a tablet reading. A held key with no key event
+//! (`inject_hold`) is a step of its own: no key stage or shortcut sees it, and only a reader that asks (`holds`)
+//! does, from the pass of its hold to the pass of its release (the tool host's `ToolInput::hold`). Such keys end
+//! where the lane drops input: a withdrawal, a focus loss, a cancel, the end of the session.
 
 use std::collections::{HashMap, VecDeque};
 
-use craft_behavior::PointerButton;
+use craft_behavior::{PointerButton, PointerSample};
 use craft_keymap::{Key, Mods, Platform};
 use egui::{Context, Event, Id, Modifiers, Pos2, Vec2, ViewportId};
 
@@ -91,19 +97,27 @@ pub(crate) fn wheel(delta: Vec2, modifiers: Modifiers) -> Event {
     Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, phase: egui::TouchPhase::Move, modifiers, source: egui::MouseWheelSource::Wheel }
 }
 
-/// What injected input holds down in a viewport: the modifiers, buttons and keys, and where the pointer is.
+/// What injected input holds down in a viewport: the modifiers, buttons and keys, where the pointer is, and the keys
+/// held with no key event.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Held {
     mods: Modifiers,
     buttons: Vec<egui::PointerButton>,
     keys: Vec<egui::Key>,
     pos: Option<Pos2>,
+    /// The keys [`inject_hold`] holds: no event carries them.
+    silent: Vec<Key>,
 }
 
 impl Held {
-    /// The state after `events`.
-    fn apply(&mut self, events: &[Event]) {
-        for event in events {
+    /// The state after `step`.
+    fn apply(&mut self, step: &Step) {
+        match step.hold {
+            Some(Hold::Down(key)) if !self.silent.contains(&key) => self.silent.push(key),
+            Some(Hold::Up(key)) => self.silent.retain(|held| *held != key),
+            _ => {}
+        }
+        for event in &step.events {
             match event {
                 Event::PointerMoved(pos) => self.pos = Some(*pos),
                 Event::PointerButton { pos, button, pressed, .. } => {
@@ -131,17 +145,26 @@ impl Held {
     }
 }
 
-/// One step of injected input: a frame of events, and how long the step stays in flight after its pass (a hover
-/// that rests before the reply).
+/// A key a step holds down or lets go of with no key event.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Hold {
+    Down(Key),
+    Up(Key),
+}
+
+/// One step of injected input: a frame of events, how long the step stays in flight after its pass (a hover that
+/// rests before the reply), the pen's reading its pass reads, and the key it holds or lets go of with no event.
 #[derive(Clone, Debug, Default)]
 struct Step {
     events: Frame,
     rest: f64,
+    pen: Option<PointerSample>,
+    hold: Option<Hold>,
 }
 
 impl From<Frame> for Step {
     fn from(events: Frame) -> Self {
-        Self { events, rest: 0.0 }
+        Self { events, ..Self::default() }
     }
 }
 
@@ -161,16 +184,24 @@ impl Request {
     fn step(&mut self, mods: Modifiers, events: impl IntoIterator<Item = Event>) -> &mut Step {
         let announce = (self.held.mods != mods).then(|| modifiers_changed(mods));
         let events: Frame = announce.into_iter().chain(events).collect();
-        self.held.apply(&events);
+        let step = Step::from(events);
+        self.held.apply(&step);
         let at = self.steps.len();
-        self.steps.push(events.into());
+        self.steps.push(step);
         &mut self.steps[at]
     }
 
-    /// A move to `at` unless the pointer is there, with `mods` announced.
-    fn move_to(&mut self, at: Pos2, mods: Modifiers) {
+    /// Adds a step with no event that holds `hold`'s key down or lets it go.
+    fn hold(&mut self, hold: Hold) {
+        let step = Step { hold: Some(hold), ..Step::default() };
+        self.held.apply(&step);
+        self.steps.push(step);
+    }
+
+    /// A move to `at` unless the pointer is there, with `mods` announced and the pen's reading `pen`.
+    fn move_to(&mut self, at: Pos2, mods: Modifiers, pen: Option<PointerSample>) {
         if self.held.pos != Some(at) || self.held.mods != mods {
-            self.step(mods, [pointer_moved(at)]);
+            self.step(mods, [pointer_moved(at)]).pen = pen;
         }
     }
 
@@ -212,7 +243,7 @@ pub enum Released {
     Button(PointerButton),
     /// One key.
     Key(Key),
-    /// Every held button and key, and the held modifiers.
+    /// Every held button and key (also those held with no key event), and the held modifiers.
     All,
 }
 
@@ -258,7 +289,7 @@ impl Injected {
     fn projected(&self, viewport: ViewportId) -> Held {
         let mut held = self.held.get(&viewport).cloned().unwrap_or_default();
         for step in self.lanes.get(&viewport).into_iter().flat_map(|lane| &lane.queue) {
-            held.apply(&step.events);
+            held.apply(step);
         }
         held
     }
@@ -278,12 +309,16 @@ impl Injected {
 }
 
 /// Withdraws the step in flight of `viewport`, whose pass has not run, and the queue behind it: the integration's
-/// preserved copy of the step leaves `events`, and what was held before the step is held again.
+/// preserved copy of the step leaves `events`, and what was held before the step is held again, except the keys held
+/// with no event, whose releases went with the queue.
 fn withdraw_flight(injected: &mut Injected, viewport: ViewportId, events: &mut Vec<Event>) {
     let Some(lane) = injected.lanes.remove(&viewport) else { return };
     if let Some(flight) = lane.flight {
         remove_event_run(events, &flight.step.events);
         injected.held.insert(viewport, flight.before);
+    }
+    if let Some(held) = injected.held.get_mut(&viewport) {
+        held.silent.clear();
     }
     injected.withdrawn = true;
 }
@@ -363,7 +398,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut egui::RawInput) -> bool {
             let until = (step.rest > 0.0).then_some(input.time).flatten().map(|now| now + step.rest);
             let held = injected.held.entry(viewport).or_default();
             let before = held.clone();
-            held.apply(&step.events);
+            held.apply(&step);
             lane.flight = Some(Flight { step, pass: pass_nr, focus: focused, until, before });
             lane.entered = Some(frame);
             return !lane.queue.is_empty();
@@ -406,7 +441,7 @@ pub(crate) fn inject_click(ctx: &Context, viewport: ViewportId, at: Pos2, button
     let Some(pressed_button) = egui_button(button) else { return };
     let mods = platform_modifiers(ctx, mods);
     queue(ctx, viewport, |request| {
-        request.move_to(at, mods);
+        request.move_to(at, mods, None);
         for nr in 1..=count {
             request.step(mods, [self::button(at, pressed_button, true, mods)]);
             if !(hold && nr == count) {
@@ -434,7 +469,7 @@ pub(crate) fn inject_key(ctx: &Context, viewport: ViewportId, key: Key, mods: Mo
 pub(crate) fn inject_wheel(ctx: &Context, viewport: ViewportId, at: Pos2, delta: Vec2, mods: Mods) {
     let mods = platform_modifiers(ctx, mods);
     queue(ctx, viewport, |request| {
-        request.move_to(at, mods);
+        request.move_to(at, mods, None);
         request.step(mods, [wheel(delta, mods)]);
     });
 }
@@ -458,7 +493,7 @@ pub(crate) fn inject_release(ctx: &Context, viewport: ViewportId, at: Option<Pos
         if let Some(at) = at
             && !buttons.is_empty()
         {
-            request.move_to(at, mods);
+            request.move_to(at, mods, None);
         }
         for pressed_button in buttons {
             let pos = at.unwrap_or_default();
@@ -467,10 +502,97 @@ pub(crate) fn inject_release(ctx: &Context, viewport: ViewportId, at: Option<Pos
         for key in keys {
             request.step(mods, [key_release(key, mods)]);
         }
-        if released == Released::All && mods != Modifiers::NONE {
-            request.step(Modifiers::NONE, []);
+        if released == Released::All {
+            for key in request.held.silent.clone() {
+                request.hold(Hold::Up(key));
+            }
+            if mods != Modifiers::NONE {
+                request.step(Modifiers::NONE, []);
+            }
         }
     });
+}
+
+/// One pointer step an automation client drives as a device would, with the modifiers held and, for a pen, its
+/// reading, which the step's pass reads in place of the tablet's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum InjectedPointer {
+    /// `button` goes down at `at`, after a move there when the injected pointer is elsewhere.
+    Down {
+        /// The button.
+        button: PointerButton,
+        /// The pointer.
+        at: Pos2,
+        /// The modifiers held.
+        mods: Mods,
+        /// The pen's reading; `None` for a mouse.
+        pen: Option<PointerSample>,
+    },
+    /// The pointer moves to `at`; a button held by injected input drags.
+    Move {
+        /// The pointer.
+        at: Pos2,
+        /// The modifiers held.
+        mods: Mods,
+        /// The pen's reading; `None` for a mouse.
+        pen: Option<PointerSample>,
+    },
+    /// Every button injected input holds comes up at `at`, after a move there; the modifiers go with them when no
+    /// button or key stays down. Nothing held queues nothing.
+    Up {
+        /// The pointer.
+        at: Pos2,
+        /// The modifiers held.
+        mods: Mods,
+    },
+}
+
+/// Queues `step` for `viewport`, one pass per event. A button egui has no counterpart for queues nothing.
+pub(crate) fn inject_pointer(ctx: &Context, viewport: ViewportId, step: InjectedPointer) {
+    match step {
+        InjectedPointer::Down { button, at, mods, pen } => {
+            let Some(pressed_button) = egui_button(button) else { return };
+            let mods = platform_modifiers(ctx, mods);
+            queue(ctx, viewport, |request| {
+                request.move_to(at, mods, pen);
+                request.step(mods, [self::button(at, pressed_button, true, mods)]).pen = pen;
+            });
+        }
+        InjectedPointer::Move { at, mods, pen } => {
+            let mods = platform_modifiers(ctx, mods);
+            queue(ctx, viewport, |request| request.step(mods, [pointer_moved(at)]).pen = pen);
+        }
+        InjectedPointer::Up { at, mods } => {
+            let mods = platform_modifiers(ctx, mods);
+            queue(ctx, viewport, |request| {
+                let buttons = request.held.buttons.clone();
+                if buttons.is_empty() {
+                    return;
+                }
+                request.move_to(at, mods, None);
+                for pressed_button in buttons {
+                    request.step(mods, [self::button(at, pressed_button, false, mods)]);
+                }
+                request.release_mods_unless_holding();
+            });
+        }
+    }
+}
+
+/// Queues a step with no event that holds `key` down (`down`) or lets it go: only [`holds`] reads it. A key held
+/// already, or one let go that is not held, queues nothing.
+pub(crate) fn inject_hold(ctx: &Context, viewport: ViewportId, key: Key, down: bool) {
+    queue(ctx, viewport, |request| {
+        if request.held.silent.contains(&key) != down {
+            request.hold(if down { Hold::Down(key) } else { Hold::Up(key) });
+        }
+    });
+}
+
+/// The keys injected input holds in `viewport` with no key event ([`inject_hold`]), as of its running pass.
+pub(crate) fn holds(ctx: &Context, viewport: ViewportId) -> Vec<Key> {
+    Service::<Injected>::run(ctx, |injected| injected.held.get(&viewport).map(|held| held.silent.clone()).unwrap_or_default())
 }
 
 /// Queues `text` as typed text.
@@ -480,14 +602,6 @@ pub(crate) fn inject_text(ctx: &Context, viewport: ViewportId, text: &str) {
             let mods = request.held.mods;
             request.step(mods, frame);
         }
-    });
-}
-
-/// Queues one pass of `viewport` behind its queue, with no events: `idle` stays false until that pass ran.
-pub(crate) fn inject_pass(ctx: &Context, viewport: ViewportId) {
-    queue(ctx, viewport, |request| {
-        let mods = request.held.mods;
-        request.step(mods, []);
     });
 }
 
@@ -510,34 +624,51 @@ pub(crate) fn caps_lock(ctx: &Context) -> Option<bool> {
     Service::<Injected>::run(ctx, |injected| injected.caps_lock)
 }
 
-/// Whether the running pass's input carries an injected step: the pass acts for an automation client.
-pub(crate) fn in_pass(ctx: &Context) -> bool {
+/// What `f` reads of the step the running pass's input carries, when it carries one.
+fn with_running<R>(ctx: &Context, f: impl FnOnce(Option<&Step>) -> R) -> R {
     let viewport = pass::current_viewport(ctx);
     let nr = pass::pass_nr(ctx, viewport);
     Service::<Injected>::run(ctx, |injected| {
-        injected.lanes.get(&viewport).and_then(|lane| lane.flight.as_ref()).is_some_and(|flight| flight.pass == nr)
+        f(injected.lanes.get(&viewport).and_then(|lane| lane.flight.as_ref()).filter(|flight| flight.pass == nr).map(|flight| &flight.step))
     })
 }
 
-/// Withdraws the injected input of `viewport`: the application's document changed. The viewport's next input hook
-/// carries it out per step: a step handed to the input whose pass has not run leaves the input with the queue behind
-/// it, and what was held before it is held again; after a step whose pass has run, only the queue is dropped.
-/// Anything dropped counts as withdrawn ([`take_withdrawn`]). The application withdraws from its raw input hook,
-/// which runs right before the framework's, so every request queued before that hook is dropped with the rest.
+/// Whether the running pass's input carries an injected step: the pass acts for an automation client.
+pub(crate) fn in_pass(ctx: &Context) -> bool {
+    with_running(ctx, |step| step.is_some())
+}
+
+/// The pen's reading the running pass's injected step carries: the pass reads it in place of the tablet's.
+pub(crate) fn pen(ctx: &Context) -> Option<PointerSample> {
+    with_running(ctx, |step| step.and_then(|step| step.pen))
+}
+
+/// Withdraws the injected input of `viewport`: the application's document changed. The keys held with no event end at
+/// once. The viewport's next input hook carries out the rest per step: a step handed to the input whose pass has not
+/// run leaves the input with the queue behind it, and what was held before it is held again; after a step whose pass
+/// has run, only the queue is dropped. Anything dropped counts as withdrawn ([`take_withdrawn`]). The application
+/// withdraws from its raw input hook, which runs right before the framework's, so every request queued before that
+/// hook is dropped with the rest.
 pub(crate) fn withdraw(ctx: &Context, viewport: ViewportId) {
     Service::<Injected>::run(ctx, |injected| {
         if let Some(lane) = injected.lanes.get_mut(&viewport) {
             lane.withdrawn = true;
         }
+        if let Some(held) = injected.held.get_mut(&viewport) {
+            held.silent.clear();
+        }
     });
 }
 
-/// Drops every queue and step in flight; true when anything was pending. What the delivered steps hold stays held
-/// until a release.
+/// Drops every queue and step in flight, and the keys held with no event; true when anything was pending. The buttons
+/// and keys the delivered steps hold stay held until a release.
 pub(crate) fn cancel(ctx: &Context) -> bool {
     Service::<Injected>::run(ctx, |injected| {
         let pending = injected.lanes.values().any(|lane| lane.flight.is_some() || !lane.queue.is_empty());
         injected.lanes.clear();
+        for held in injected.held.values_mut() {
+            held.silent.clear();
+        }
         pending
     })
 }

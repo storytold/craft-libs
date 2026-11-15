@@ -20,6 +20,9 @@ use std::rc::Rc;
 /// The most frames [`Fixture::settle`] runs.
 const SETTLE_FRAMES: usize = 4;
 
+/// The most frames [`Fixture::run_injected`] runs.
+const INJECTED_FRAMES: usize = 64;
+
 /// A node of the AccessKit tree, as input addresses it.
 #[derive(Clone, Copy, Debug)]
 pub struct Target {
@@ -434,6 +437,21 @@ impl Fixture {
         for _ in 0..n {
             self.frame(Vec::new());
         }
+        self
+    }
+
+    /// Frames with no events until every injected step has run its pass
+    /// ([`WindowHost::injected_idle`](crate::runtime::windows::WindowHost::injected_idle)); injected input runs one
+    /// step per pass. Panics when it has not after 64 frames.
+    pub fn run_injected(&mut self) -> &mut Self {
+        let host = crate::runtime::windows::WindowHost::of(self.ctx());
+        for _ in 0..INJECTED_FRAMES {
+            if host.injected_idle() {
+                return self;
+            }
+            self.frame(Vec::new());
+        }
+        assert!(host.injected_idle(), "the injected input ran within {INJECTED_FRAMES} frames");
         self
     }
 

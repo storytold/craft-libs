@@ -336,15 +336,3 @@ fn ui_ime_reaches_a_focused_text_field_as_a_preedit_then_a_commit_in_order() {
     assert!(matches!(both, Some(Err(_))), "{both:?}");
     assert!(hook_without_pass(&ctx, ViewportId::ROOT).is_empty(), "the refused request queued nothing");
 }
-
-/// A queued pass of the root keeps the host busy until one pass of the root ran.
-#[trial]
-fn a_queued_pass_holds_idle_until_it_ran() {
-    let mut rig = Rig::new();
-    let host = rig.host();
-    host.inject_pass(ViewportId::ROOT);
-    assert!(!host.injected_idle(), "the pass has not run");
-    rig.fx.frame(Vec::new());
-    rig.fx.frame(Vec::new());
-    assert!(host.injected_idle(), "the pass ran");
-}
