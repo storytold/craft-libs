@@ -633,4 +633,62 @@ mod service_tests {
         service.forget(orphan);
         assert!(service.take_answer(orphan).is_none());
     }
+
+    /// Picks `answer` as a Save suggesting `png`, pumps, and returns the settled answer.
+    fn saved_as(service: &FileService, panels: &mut FilePanels, policy: ExtensionPolicy) -> Picked {
+        panels.set_extension_policy(policy);
+        let id = service.pick(PickRequest::save("export").suggested_extension("png"));
+        panels.pump(NONE);
+        answered(service, id)
+    }
+
+    // Lowercasing and adding the suggested extension are separate steps; another known extension
+    // is kept, and a policy that does neither keeps the typed name.
+    #[trial]
+    fn a_saved_path_is_settled_by_the_extension_policy() {
+        let typed = |name: &str| Answer::Paths(vec![PathBuf::from(name)]);
+        let (service, mut panels, _) = service_with(vec![
+            typed("/x/Photo.PNG"),
+            typed("/x/Photo"),
+            typed("/x/Photo.JPG"),
+            typed("/x/Photo.PNG"),
+            typed("/x/Photo"),
+            typed("/x/Photo.PNG"),
+            typed("/x/Photo"),
+        ]);
+        let path = |p: &str| Picked::Paths(vec![PathBuf::from(p)]);
+        let both = ExtensionPolicy { lowercase: true, add_suggested: true };
+        assert_eq!(saved_as(&service, &mut panels, both), path("/x/Photo.png"), "only the extension is lowercased");
+        assert_eq!(saved_as(&service, &mut panels, both), path("/x/Photo.png"), "a bare name gets the suggested extension");
+        assert_eq!(saved_as(&service, &mut panels, both), path("/x/Photo.jpg"), "another known extension is kept, lowercased");
+        let neither = ExtensionPolicy::AS_TYPED;
+        assert_eq!(saved_as(&service, &mut panels, neither), path("/x/Photo.PNG"));
+        assert_eq!(saved_as(&service, &mut panels, neither), path("/x/Photo"));
+        let add_only = ExtensionPolicy { lowercase: false, add_suggested: true };
+        assert_eq!(saved_as(&service, &mut panels, add_only), path("/x/Photo.PNG"), "adding does not lowercase");
+        assert_eq!(saved_as(&service, &mut panels, add_only), path("/x/Photo.png"));
+    }
+
+    // The panel asked about the file it answered; the extension change can name another existing
+    // file, and that one is asked about here. Cancel ends the pick; an answer the panel already
+    // asked about is not asked again.
+    #[trial]
+    fn a_replace_the_panel_did_not_ask_about_is_asked_here() {
+        let dir = std::env::temp_dir().join(format!("craft-dialogs-replace-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        std::fs::write(dir.join("Photo.png"), b"old").expect("existing file");
+        let typed = |name: &str| Answer::Paths(vec![dir.join(name)]);
+        let (service, mut panels, log) = service_with(vec![typed("Photo"), Answer::Message(MessageResult::Cancel), typed("Photo.png")]);
+
+        let bare = service.pick(PickRequest::save("export").suggested_extension("png"));
+        panels.pump(NONE);
+        assert_eq!(answered(&service, bare), Picked::Cancelled, "Cancel on the question ends the pick");
+        assert_eq!(log.borrow().len(), 2, "the save panel, then the question");
+
+        let asked = service.pick(PickRequest::save("export").suggested_extension("png"));
+        panels.pump(NONE);
+        assert_eq!(answered(&service, asked), Picked::Paths(vec![dir.join("Photo.png")]));
+        assert_eq!(log.borrow().len(), 3, "no question for a path the panel asked about");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
