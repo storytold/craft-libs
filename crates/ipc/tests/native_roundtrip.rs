@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 use craft_ipc::client::{Client, HelloClient};
 use craft_ipc::server::{Activate, Activation, ControlSink, FrameOpen, Frames, Server, ServerConfig};
@@ -73,6 +74,14 @@ fn native_transport_authenticates_and_delivers_commands() {
         .unwrap();
     let reply = client.call("engine.execute", json!({"command": "ping"})).unwrap();
     assert_eq!(reply, json!({"method": "engine.execute", "params": {"command": "ping"}}));
+
+    client.subscribe(&["doc.changed"]).unwrap();
+    let start = Instant::now();
+    assert!(client.next_event(Some(Duration::from_millis(50))).unwrap().is_none());
+    assert!(start.elapsed() < Duration::from_secs(2), "quiet native transport must respect its deadline");
+    server.emit("doc.changed", json!({"after_timeout": true})).unwrap();
+    let event = client.next_event(Some(Duration::from_secs(2))).unwrap().expect("event after timeout");
+    assert_eq!(event.data, json!({"after_timeout": true}));
 
     let mut wrong = server.record().clone();
     let opposite = if wrong.token.starts_with('0') { "1" } else { "0" };

@@ -232,8 +232,17 @@ fn accept_local(mut stream: Stream, hub: &Arc<Hub>) {
     let Ok(writer_stream) = stream.try_clone() else {
         return;
     };
-    let reader: Box<dyn Read + Send> = Box::new(stream);
-    let writer: Box<dyn Write + Send> = Box::new(writer_stream);
+    #[cfg(windows)]
+    let (reader, writer): (Box<dyn Read + Send>, Box<dyn Write + Send>) = {
+        let (Ok(reader), Ok(writer)) = (crate::client::PipeTransport::new(stream), crate::client::PipeTransport::new(writer_stream)) else {
+            return;
+        };
+        reader.set_timeouts(READ_POLL, REFUSE_WRITE);
+        writer.set_timeouts(READ_POLL, REFUSE_WRITE);
+        (Box::new(reader), Box::new(writer))
+    };
+    #[cfg(not(windows))]
+    let (reader, writer): (Box<dyn Read + Send>, Box<dyn Write + Send>) = (Box::new(stream), Box::new(writer_stream));
     spawn(slot, Arc::clone(hub), BufReader::new(reader), Arc::new(std::sync::Mutex::new(writer)), true);
 }
 

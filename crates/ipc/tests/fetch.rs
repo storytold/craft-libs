@@ -103,7 +103,7 @@ fn boot() -> Rig {
     });
     let tickets = Arc::new(FrameTickets::new(Arc::clone(&fake) as Arc<dyn FrameSource>));
     let server = Server::start(ServerConfig {
-        app: "ec".into(),
+        app: format!("ec-{serial}"),
         app_version: "0.8.3".into(),
         instance: None,
         runtime: Some(RuntimeDir::at(&path).unwrap()),

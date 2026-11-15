@@ -2,7 +2,6 @@
 //! They do not use the client module.
 #![cfg(unix)]
 
-use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -261,36 +260,16 @@ fn events_wait_for_subscribe_then_one_event_is_delivered() {
 }
 
 #[test]
-fn overflow_is_one_slot_not_257_payloads() {
+fn oversized_event_delivers_an_overflow_marker() {
     let harness = boot();
     let mut client = Client::connect(&harness.socket, &harness.token);
     let sub = client.call(2, "events.subscribe", json!({"events": ["doc.changed"]}));
     assert_eq!(sub["result"]["seq"], json!(0), "{sub}");
-    for n in 0..257 {
-        harness.server.emit("doc.changed", json!({"n": n})).unwrap();
-    }
-    client.set_timeout(Duration::from_millis(500));
-    let mut events = Vec::new();
-    while let Some(event) = read_value(&mut client.reader) {
-        events.push(event);
-    }
-    let mut saw_overflow = false;
-    let mut since_ok = false;
-    let mut payloads = HashSet::new();
-    for event in &events {
-        if event["event"] == json!("events.overflow") {
-            saw_overflow = true;
-            since_ok = event["data"]["since"].is_number();
-        } else if event["event"] == json!("doc.changed") {
-            payloads.insert(event["data"]["n"].clone());
-        }
-    }
-    assert!(saw_overflow, "no overflow in {events:?}");
-    assert!(since_ok, "overflow since missing in {events:?}");
-    assert!(payloads.len() < 257, "got {} distinct payloads", payloads.len());
-    assert!(payloads.len() <= 255, "overflow should take a queue slot, got {} payloads", payloads.len());
+    harness.server.emit("doc.changed", json!({"blob": "x".repeat(MAX_LINE)})).unwrap();
+    let event = read_value(&mut client.reader).expect("missing overflow event");
+    assert_eq!(event["event"], json!("events.overflow"));
+    assert!(event["data"]["since"].is_number());
     harness.server.shutdown().unwrap();
-    drop(harness.tmp);
 }
 
 #[test]

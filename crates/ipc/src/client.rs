@@ -159,6 +159,65 @@ impl Client {
 pub(crate) enum Transport {
     Local(Stream),
     Tcp(TcpStream),
+    #[cfg(windows)]
+    Pipe(PipeTransport),
+}
+
+/// Windows named pipes have no socket-style timeouts. Poll their nonblocking I/O so
+/// authentication and frame requests retain the same bounded waits as other transports.
+#[cfg(windows)]
+pub(crate) struct PipeTransport {
+    stream: Stream,
+    recv_timeout: std::cell::Cell<Option<Duration>>,
+    send_timeout: std::cell::Cell<Option<Duration>>,
+}
+
+#[cfg(windows)]
+impl PipeTransport {
+    pub(crate) fn new(stream: Stream) -> std::io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        Ok(Self { stream, recv_timeout: std::cell::Cell::new(None), send_timeout: std::cell::Cell::new(None) })
+    }
+
+    pub(crate) fn set_timeouts(&self, recv: Duration, send: Duration) {
+        self.recv_timeout.set(Some(recv));
+        self.send_timeout.set(Some(send));
+    }
+
+    fn poll<T>(timeout: Option<Duration>, mut operation: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+        let start = Instant::now();
+        loop {
+            match operation() {
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if timeout.is_some_and(|limit| start.elapsed() >= limit) {
+                        return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "named pipe I/O timed out"));
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                result => return result,
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Read for PipeTransport {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        Self::poll(self.recv_timeout.get(), || self.stream.read(buf))
+    }
+}
+
+#[cfg(windows)]
+impl Write for PipeTransport {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Self::poll(self.send_timeout.get(), || match self.stream.write(buf) {
+            Ok(0) if !buf.is_empty() => Err(std::io::ErrorKind::WouldBlock.into()),
+            result => result,
+        })
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
 }
 
 impl Transport {
@@ -176,6 +235,11 @@ impl Transport {
                 result
             }
             Self::Tcp(stream) => stream.set_read_timeout(timeout),
+            #[cfg(windows)]
+            Self::Pipe(stream) => {
+                stream.recv_timeout.set(timeout);
+                Ok(())
+            }
         }
     }
 
@@ -183,6 +247,11 @@ impl Transport {
         match self {
             Self::Local(stream) => stream.set_send_timeout(timeout),
             Self::Tcp(stream) => stream.set_write_timeout(timeout),
+            #[cfg(windows)]
+            Self::Pipe(stream) => {
+                stream.send_timeout.set(timeout);
+                Ok(())
+            }
         }
     }
 }
@@ -192,6 +261,8 @@ impl Read for Transport {
         match self {
             Self::Local(stream) => stream.read(buf),
             Self::Tcp(stream) => stream.read(buf),
+            #[cfg(windows)]
+            Self::Pipe(stream) => stream.read(buf),
         }
     }
 }
@@ -201,6 +272,8 @@ impl Write for Transport {
         match self {
             Self::Local(stream) => stream.write(buf),
             Self::Tcp(stream) => stream.write(buf),
+            #[cfg(windows)]
+            Self::Pipe(stream) => stream.write(buf),
         }
     }
 
@@ -208,6 +281,8 @@ impl Write for Transport {
         match self {
             Self::Local(stream) => stream.flush(),
             Self::Tcp(stream) => stream.flush(),
+            #[cfg(windows)]
+            Self::Pipe(stream) => stream.flush(),
         }
     }
 }
@@ -224,7 +299,16 @@ pub(crate) fn open_reader(record: &InstanceRecord) -> Result<BufReader<Transport
 fn open_transport(endpoint: &Endpoint) -> Result<(Transport, bool), LinkError> {
     match endpoint {
         Endpoint::Unix { path } => Ok((Transport::Local(connect_unix(path)?), true)),
-        Endpoint::Pipe { name } => Ok((Transport::Local(connect_pipe(name)?), true)),
+        Endpoint::Pipe { name } => {
+            #[cfg(windows)]
+            {
+                Ok((Transport::Pipe(PipeTransport::new(connect_pipe(name)?)?), true))
+            }
+            #[cfg(not(windows))]
+            {
+                Ok((Transport::Local(connect_pipe(name)?), true))
+            }
+        }
         Endpoint::Tcp { port } => {
             let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, *port));
             let wait = Duration::from_secs(wire::REPLY_DEADLINE_SECS);
