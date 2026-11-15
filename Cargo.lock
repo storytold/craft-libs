@@ -2305,6 +2305,9 @@ dependencies = [
  "craft-ui",
  "craft-window",
  "egui",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "serde",
  "serde_json",
 ]
@@ -3204,6 +3207,7 @@ dependencies = [
  "eframe",
  "egui",
  "resvg",
+ "serde",
  "web-time",
 ]
 

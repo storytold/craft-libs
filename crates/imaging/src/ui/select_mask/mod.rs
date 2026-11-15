@@ -851,8 +851,8 @@ impl SelectMaskWorkspace {
         if let (Some(ctx), Some(id)) = (ctx, self.canvas_id) {
             match tool {
                 SelectMaskTool::Hand => false,
-                SelectMaskTool::Zoom => ToolHost::cancel(ctx, id, &mut self.zoom_tool, reason),
-                _ => ToolHost::cancel(ctx, id, &mut self.canvas.tool(tool, &mut self.options, real_time), reason),
+                SelectMaskTool::Zoom => ToolHost::new().cancel(ctx, id, &mut self.zoom_tool, reason),
+                _ => ToolHost::new().cancel(ctx, id, &mut self.canvas.tool(tool, &mut self.options, real_time), reason),
             };
         }
         if self.canvas.busy() && tool.edits() {

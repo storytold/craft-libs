@@ -552,9 +552,9 @@ fn pick(slots: &[ToolSlot<WideAngleTool>], command: WideAngleCommands, fired: &F
 fn end_gesture(ctx: &egui::Context, body: &mut Body, reason: CancelReason) {
     let Some(canvas) = body.canvas else { return };
     match body.tool {
-        WideAngleTool::Constraint => ToolHost::cancel(ctx, canvas, &mut body.constraint, reason),
-        WideAngleTool::Hand => body.hand.as_mut().is_some_and(|hand| ToolHost::cancel(ctx, canvas, hand, reason)),
-        WideAngleTool::Zoom => body.zoom.as_mut().is_some_and(|zoom| ToolHost::cancel(ctx, canvas, zoom, reason)),
+        WideAngleTool::Constraint => ToolHost::new().cancel(ctx, canvas, &mut body.constraint, reason),
+        WideAngleTool::Hand => body.hand.as_mut().is_some_and(|hand| ToolHost::new().cancel(ctx, canvas, hand, reason)),
+        WideAngleTool::Zoom => body.zoom.as_mut().is_some_and(|zoom| ToolHost::new().cancel(ctx, canvas, zoom, reason)),
     };
 }
 

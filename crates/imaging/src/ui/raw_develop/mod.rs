@@ -418,12 +418,12 @@ impl RawDevelopWorkspace {
             RawTool::Hand => {}
             RawTool::Zoom => {
                 if let Some(zoom) = self.zoom_tool.as_mut() {
-                    ToolHost::cancel(ctx, canvas, zoom, reason);
+                    ToolHost::new().cancel(ctx, canvas, zoom, reason);
                 }
             }
             RawTool::Sampler => {
                 let mut pass = self.sampler_tool.pass(&self.samplers, size);
-                ToolHost::cancel(ctx, canvas, &mut pass, reason);
+                ToolHost::new().cancel(ctx, canvas, &mut pass, reason);
             }
         }
     }

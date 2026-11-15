@@ -608,10 +608,10 @@ impl VanishingPointWorkspace {
     fn cancel_gesture(&mut self, ctx: &egui::Context, state: &VanishingView, reason: CancelReason, out: &mut Vec<VanishingPointEvent>) {
         match (self.strip, state.canvas) {
             (VanishingPointStripTool::Hand, Some(canvas)) => {
-                ToolHost::cancel(ctx, canvas, &mut self.hand, reason);
+                ToolHost::new().cancel(ctx, canvas, &mut self.hand, reason);
             }
             (VanishingPointStripTool::Zoom, Some(canvas)) => {
-                ToolHost::cancel(ctx, canvas, &mut self.zoom, reason);
+                ToolHost::new().cancel(ctx, canvas, &mut self.zoom, reason);
             }
             _ => self.editor.cancel(&mut self.session, reason),
         }

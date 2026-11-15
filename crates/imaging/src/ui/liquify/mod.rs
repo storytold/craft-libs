@@ -653,9 +653,9 @@ impl Edit {
         let LiquifyView { canvas, canvas_id, .. } = state;
         if let (Some(ctx), Some(id)) = (ctx, *canvas_id) {
             match self.settings.tool {
-                LiquifyTool::Hand => ToolHost::cancel(ctx, id, &mut canvas.hand, reason),
-                LiquifyTool::Zoom => ToolHost::cancel(ctx, id, &mut canvas.zoom, reason),
-                _ => ToolHost::cancel(ctx, id, &mut canvas.tool(&mut self.settings, &cursor), reason),
+                LiquifyTool::Hand => ToolHost::new().cancel(ctx, id, &mut canvas.hand, reason),
+                LiquifyTool::Zoom => ToolHost::new().cancel(ctx, id, &mut canvas.zoom, reason),
+                _ => ToolHost::new().cancel(ctx, id, &mut canvas.tool(&mut self.settings, &cursor), reason),
             };
         }
         if canvas.busy() {

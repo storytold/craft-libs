@@ -799,11 +799,11 @@ impl ContentAwareFillWorkspace {
     fn cancel_gesture(&mut self, ctx: Option<&Context>, reason: CancelReason) {
         if let (Some(ctx), Some(id)) = (ctx, self.canvas_id) {
             match self.tool {
-                FillTool::Hand => ToolHost::cancel(ctx, id, &mut self.hand, reason),
-                FillTool::Zoom => ToolHost::cancel(ctx, id, &mut self.zoom, reason),
+                FillTool::Hand => ToolHost::new().cancel(ctx, id, &mut self.hand, reason),
+                FillTool::Zoom => ToolHost::new().cancel(ctx, id, &mut self.zoom, reason),
                 FillTool::SamplingBrush | FillTool::Lasso => {
                     let mut tool = self.canvas.tool(self.tool, &mut self.options, &self.session, &self.limits, &self.cursor_options);
-                    ToolHost::cancel(ctx, id, &mut tool, reason)
+                    ToolHost::new().cancel(ctx, id, &mut tool, reason)
                 }
             };
         }

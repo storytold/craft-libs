@@ -322,7 +322,7 @@ where
     for<'a> SelectToolPass<'a, T>: CanvasTool,
 {
     let (ctx, id) = (rig.fixture().ctx().clone(), rig.canvas_id());
-    let _ = ToolHost::cancel(&ctx, id, &mut *rig.tool_mut(), reason);
+    let _ = ToolHost::new().cancel(&ctx, id, &mut *rig.tool_mut(), reason);
     rig.fixture().frame(Vec::new());
 }
 
