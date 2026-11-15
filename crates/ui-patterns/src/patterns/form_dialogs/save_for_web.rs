@@ -352,6 +352,10 @@ pub struct SaveForWebDialog<'a> {
     /// and the dialog share one value.
     #[prop]
     view: Option<Bind<'a, WebView>>,
+    /// Binds the animation frame the panes show to `frame`: the dialog shows the bound frame and writes the frame Play
+    /// moves to, so the host and the dialog share one value.
+    #[prop]
+    frame: Option<Bind<'a, u32>>,
 }
 
 impl<'a> SaveForWebDialog<'a> {
@@ -370,13 +374,15 @@ impl<'a> SaveForWebDialog<'a> {
             answers: Vec::new(),
             slices: &[],
             view: None,
+            frame: None,
         }
     }
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> SaveForWebOutput {
-        let SaveForWebDialog { name, size, pictures, options, open, presets, animation, remember, saving, answers, slices, view } = self;
+        let SaveForWebDialog { name, size, pictures, options, open, presets, animation, remember, saving, answers, slices, view, frame } = self;
         let mut view_held = view.map(Held::new);
+        let mut frame_held = frame.map(Held::new);
         let env = Env::of(ui);
         let words = env.words::<SaveForWebWords>();
         let sizing = env.words::<SizingWords>();
@@ -443,6 +449,11 @@ impl<'a> SaveForWebDialog<'a> {
                 }
             }
             let before = (options.clone(), live.link.pixels(), live.view, live.frame);
+            // A frame the host set is a change from the one the last pass showed: the panes are encoded again.
+            if let Some(bound) = frame_held.as_mut().and_then(|held| held.read(&mut **cx)) {
+                live.frame = bound;
+            }
+            let frame_before = live.frame;
             live.advance(&**cx, animation);
             let view_before = live.view;
 
@@ -480,6 +491,12 @@ impl<'a> SaveForWebDialog<'a> {
             }
             if (options.clone(), live.link.pixels(), live.view, live.frame) != before {
                 live.revision += 1;
+            }
+            if live.frame != frame_before
+                && !measuring
+                && let Some(held) = frame_held.as_mut()
+            {
+                held.write(&mut **cx, &frame_before, live.frame, "frame");
             }
             if live.view != view_before {
                 if !measuring && let Some(held) = view_held.as_mut() {

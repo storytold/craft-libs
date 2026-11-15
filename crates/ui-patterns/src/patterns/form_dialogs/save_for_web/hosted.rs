@@ -188,6 +188,7 @@ impl StackDialog for HostedSaveForWeb {
         let mut fields = serde_fields(&self.options)?;
         let map = fields.as_object_mut()?;
         map.insert("view".to_owned(), serde_json::to_value(self.view).ok()?);
+        map.insert("frame".to_owned(), serde_json::Value::from(self.frame));
         let path = self.path.as_ref().map_or(serde_json::Value::Null, |path| serde_json::Value::String(path.to_string_lossy().into_owned()));
         map.insert("path".to_owned(), path);
         Some(fields)
@@ -202,6 +203,13 @@ impl StackDialog for HostedSaveForWeb {
             "path" => {
                 let serde_json::Value::String(path) = &value else { return Err(FieldRefusal::Rejects(&value).message(field)) };
                 self.path = Some(PathBuf::from(path));
+                Ok(())
+            }
+            // The panes show the frame from the next pass; one past the last frame is the last, as Play keeps it.
+            "frame" => {
+                let frame = value.as_u64().ok_or_else(|| FieldRefusal::Rejects(&value).message(field))?;
+                let last = self.animation.map_or(0, |animation| animation.frames.saturating_sub(1));
+                self.frame = u32::try_from(frame).unwrap_or(u32::MAX).min(last);
                 Ok(())
             }
             _ => set_serde_field(&mut self.options, field, value),
@@ -222,11 +230,11 @@ impl StackDialog for HostedSaveForWeb {
             remember: self.remember.clone(),
             slices: &self.slices,
             view: Some(Bind::bound(&mut self.view)),
+            frame: Some(Bind::bound(&mut self.frame)),
             open: Some(Bind::bound(&mut self.open)),
             ..dialog
         };
         let mut shown = dialog.show(ui);
-        self.frame = shown.frame;
         self.pixels = shown.size;
         if let Some(last) = shown.wanted_variants.first() {
             self.taken = last.request.revision;
