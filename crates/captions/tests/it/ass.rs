@@ -99,7 +99,8 @@ fn we_read_what_ffmpeg_writes() {
 fn ffmpeg_reads_what_we_write() {
     let Some(ff) = craft_media_testkit::ffmpeg() else { return };
     let dir = craft_media_testkit::fixture_subdir("captions_ass");
-    let doc = parse(SRT.as_bytes(), Format::Srt).expect("parse srt");
+    let mut doc = parse(SRT.as_bytes(), Format::Srt).expect("parse srt");
+    doc.cues.push(Cue { start: cs(400_000), end: cs(400_100), text: r"C:\New\notes\hello and \N \n \h".into(), ..Default::default() });
     let (ass, srt) = (dir.join("ours.ass"), dir.join("back.srt"));
     std::fs::write(&ass, write(&doc, Format::Ass, WriteOptions::default())).expect("write");
     ffmpeg_run(&ff, &["-i", ass.to_str().expect("path"), srt.to_str().expect("path")]);
@@ -110,4 +111,32 @@ fn ffmpeg_reads_what_we_write() {
         assert_eq!(t.end, cs((d.end.0 + T / 200) / (T / 100)));
         assert_eq!(t.text, d.text, "text of the cue at {:?}", d.start);
     }
+}
+
+#[test]
+fn literal_backslashes_survive_ass_round_trip() {
+    let text = r"C:\New\notes\hello and \N \n \h";
+    let doc = Document { cues: vec![Cue { start: cs(100), end: cs(200), text: text.into(), ..Default::default() }], ..Default::default() };
+    let bytes = write(&doc, Format::Ass, WriteOptions::default());
+    assert_eq!(parse(&bytes, Format::Ass).unwrap().cues[0].text, text);
+}
+
+#[test]
+fn carriage_returns_cannot_create_dialogue_records() {
+    let doc = Document {
+        cues: vec![Cue {
+            start: cs(100),
+            end: cs(200),
+            text: "first\rsecond\r\nthird".into(),
+            speaker: Some("Ann\rOther".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let bytes = write(&doc, Format::Ass, WriteOptions::default());
+    assert!(!bytes.contains(&b'\r'));
+    let back = parse(&bytes, Format::Ass).unwrap();
+    assert_eq!(back.cues.len(), 1);
+    assert_eq!(back.cues[0].text, "first\nsecond\nthird");
+    assert_eq!(back.cues[0].speaker.as_deref(), Some("Ann Other"));
 }

@@ -191,7 +191,10 @@ fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len() + 8);
     let mut rest = text;
     while !rest.is_empty() {
-        if let Some(r) = rest.strip_prefix("<i>") {
+        if let Some(r) = rest.strip_prefix("\r\n") {
+            out.push_str("\\N");
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("<i>") {
             out.push_str("{\\i1}");
             rest = r;
         } else if let Some(r) = rest.strip_prefix("</i>") {
@@ -211,7 +214,9 @@ fn escape(text: &str) -> String {
             rest = r;
         } else if let Some(c) = rest.chars().next() {
             match c {
-                '\n' => out.push_str("\\N"),
+                '\n' | '\r' => out.push_str("\\N"),
+                // Empty override block separates a literal slash from N/n/h.
+                '\\' => out.push_str("\\{}"),
                 '{' => out.push('\u{ff5b}'),
                 '}' => out.push('\u{ff5d}'),
                 '\u{a0}' => out.push_str("\\h"),
@@ -232,7 +237,7 @@ pub fn write(doc: &Document) -> String {
     );
     for c in &doc.cues {
         // A comma in the Name field would shift the columns; the other fields are fixed text.
-        let name = c.speaker.as_deref().unwrap_or("").replace([',', '\n'], " ");
+        let name = c.speaker.as_deref().unwrap_or("").replace([',', '\n', '\r'], " ");
         out.push_str(&format!("Dialogue: 0,{},{},Default,{},0,0,0,,{}\n", format_time(c.start), format_time(c.end), name, escape(&c.text)));
     }
     out
