@@ -1596,6 +1596,7 @@ dependencies = [
 name = "craft-drawingml"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "craft-xml",
  "kurbo 0.13.1",
  "log",

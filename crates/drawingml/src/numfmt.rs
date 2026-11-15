@@ -1,6 +1,8 @@
 //! Number formats: Excel format codes (`#,##0`, `0.0%`, `_-* # ##0 "₽"_-;…`, `General`) as chart
 //! axes and data labels show them, in the chart's language (digit grouping and decimal mark).
 
+use chrono::{Datelike, Days, NaiveDate};
+
 /// Digit grouping and decimal mark for a language tag (`ru-RU`, `de-DE`, `en-US`).
 fn marks(lang: Option<&str>) -> (char, char) {
     let l = lang.unwrap_or("en").split(['-', '_']).next().unwrap_or("en").to_ascii_lowercase();
@@ -752,42 +754,30 @@ fn date_tokens(section: &str) -> Option<Vec<DTok>> {
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-/// Year, month and day of `z` days after 1 January 1970 (proleptic Gregorian calendar).
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
-}
-
-/// The serial date `n` as (year, month, day, weekday with 0 = Sunday). In the 1900 system serial 0
-/// is "1 January 1900" minus a day, and serial 60 is the 29 February 1900 that Excel counts
-/// though it never existed; from 61 on the serial is the real calendar's.
-fn serial_date(n: i64, date_1904: bool) -> (i64, i64, i64, usize) {
-    let weekday = |w: i64| w.rem_euclid(7) as usize;
-    if date_1904 {
-        let (y, m, d) = civil_from_days(n - 24_107);
-        // 1 January 1904 was a Friday.
-        return (y, m, d, weekday(n + 5));
-    }
-    let wd = weekday(n - 1);
-    match n {
-        0 => (1900, 1, 0, wd),
-        60 => (1900, 2, 29, wd),
-        1..=59 => {
-            let (y, m, d) = civil_from_days(n - 25_568);
-            (y, m, d, wd)
+/// The serial date `n` (not negative) as (year, month, day, weekday with 0 = Sunday), or `None`
+/// when it is past what chrono can hold. In the 1900 system serial 0 is "1 January 1900" minus a
+/// day, and serial 60 is the 29 February 1900 that Excel counts though it never existed; from 61
+/// on the serial is the real calendar's. Excel's weekday before 1 March 1900 is one day behind
+/// the real calendar, so the weekday of every serial comes from the same shifted date.
+fn serial_date(n: i64, date_1904: bool) -> Option<(i64, i64, i64, usize)> {
+    let days = Days::new(u64::try_from(n).ok()?);
+    let (epoch, shown) = if date_1904 {
+        // Serial 0 is 1 January 1904.
+        let epoch = NaiveDate::from_ymd_opt(1904, 1, 1)?;
+        (epoch, epoch.checked_add_days(days)?)
+    } else {
+        // Serial 1 is 1 January 1900 and 61 is 1 March 1900; 0 and 60 are Excel's own dates.
+        let epoch = NaiveDate::from_ymd_opt(1899, 12, 30)?;
+        let real = epoch.checked_add_days(days)?;
+        match n {
+            0 => return Some((1900, 1, 0, real.weekday().num_days_from_sunday() as usize)),
+            60 => return Some((1900, 2, 29, real.weekday().num_days_from_sunday() as usize)),
+            1..=59 => (epoch, real.checked_add_days(Days::new(1))?),
+            _ => (epoch, real),
         }
-        _ => {
-            let (y, m, d) = civil_from_days(n - 25_569);
-            (y, m, d, wd)
-        }
-    }
+    };
+    let wd = epoch.checked_add_days(days)?.weekday().num_days_from_sunday() as usize;
+    Some((i64::from(shown.year()), i64::from(shown.month()), i64::from(shown.day()), wd))
 }
 
 /// The serial `v` (not negative) in a date or time format.
@@ -807,7 +797,7 @@ fn date_text(toks: &[DTok], v: f64, date_1904: bool, dec: char) -> String {
     let days = ms.div_euclid(86_400_000);
     let day_ms = ms.rem_euclid(86_400_000);
     let (hour, minute, second, milli) = (day_ms / 3_600_000, day_ms / 60_000 % 60, day_ms / 1000 % 60, day_ms % 1000);
-    let (y, m, d, wd) = serial_date(days, date_1904);
+    let Some((y, m, d, wd)) = serial_date(days, date_1904) else { return "#".repeat(8) };
     let ampm = toks.iter().any(|t| matches!(t, DTok::Ampm | DTok::Ap(..)));
     let mut out = String::new();
     for t in toks {
@@ -1147,6 +1137,61 @@ mod tests {
             ("m/d/yyyy", 2_958_466.0, "########"),
         ]);
         assert_eq!(format("m/d/yyyy", 0.0, None), "1/0/1900");
+    }
+
+    #[test]
+    fn serial_dates_match_a_day_by_day_walk_of_the_calendar() {
+        // 1900 system: serial 1..=59 are 1 January..28 February 1900, 60 is Excel's fake 29
+        // February, 61 is 1 March 1900 and the walk goes on to 31 December 9999.
+        let mut day = NaiveDate::from_ymd_opt(1900, 1, 1).unwrap();
+        for n in 1..=2_958_465_i64 {
+            if n == 60 {
+                assert_eq!(serial_date(n, false).map(|s| (s.0, s.1, s.2)), Some((1900, 2, 29)));
+                day = NaiveDate::from_ymd_opt(1900, 3, 1).unwrap();
+            } else {
+                let got = serial_date(n, false).unwrap();
+                assert_eq!((got.0, got.1, got.2), (i64::from(day.year()), i64::from(day.month()), i64::from(day.day())), "1900: {n}");
+                day = day.succ_opt().unwrap_or(day);
+            }
+            // Excel's weekday: serial 1 is a Sunday, whatever the real calendar says before March 1900.
+            assert_eq!(serial_date(n, false).unwrap().3, ((n - 1) % 7) as usize, "1900 weekday: {n}");
+        }
+        assert_eq!(serial_date(0, false), Some((1900, 1, 0, 6)));
+        // 1904 system: serial 0 is 1 January 1904, a Friday; the last day is 31 December 9999.
+        let mut day = NaiveDate::from_ymd_opt(1904, 1, 1).unwrap();
+        for n in 0..=2_957_003_i64 {
+            let got = serial_date(n, true).unwrap();
+            assert_eq!((got.0, got.1, got.2), (i64::from(day.year()), i64::from(day.month()), i64::from(day.day())), "1904: {n}");
+            assert_eq!(got.3, ((n + 5) % 7) as usize, "1904 weekday: {n}");
+            day = day.succ_opt().unwrap_or(day);
+        }
+        assert_eq!(serial_date(2_957_003, true).map(|s| (s.0, s.1, s.2)), Some((9999, 12, 31)));
+        assert_eq!(serial_date(-1, true), None);
+        assert_eq!(serial_date(-1, false), None);
+    }
+
+    #[test]
+    fn leap_years_follow_the_gregorian_rule_and_excels_one_mistake() {
+        check(&[
+            // code, value, Excel shows
+            // 1900 is no leap year in the calendar; Excel has a 29 February 1900 anyway (serial 60).
+            ("m/d/yyyy", 365.0, "12/30/1900"),
+            ("m/d/yyyy", 366.0, "12/31/1900"),
+            ("m/d/yyyy", 367.0, "1/1/1901"),
+            // 2000 is a leap year, 2100 is not.
+            ("m/d/yyyy", 36_584.0, "2/28/2000"),
+            ("m/d/yyyy", 36_585.0, "2/29/2000"),
+            ("m/d/yyyy", 36_586.0, "3/1/2000"),
+            ("m/d/yyyy", 73_109.0, "2/28/2100"),
+            ("m/d/yyyy", 73_110.0, "3/1/2100"),
+            ("m/d/yyyy", 2_958_464.0, "12/30/9999"),
+        ]);
+        // The same days in the 1904 system (1462 serials earlier).
+        for (serial, excel) in [(35_122.0, "2/28/2000"), (35_123.0, "2/29/2000"), (35_124.0, "3/1/2000"), (71_647.0, "2/28/2100"), (71_648.0, "3/1/2100"), (2_957_003.0, "12/31/9999")] {
+            assert_eq!(format_dated("m/d/yyyy", serial, None, true), excel, "1904: {serial}");
+        }
+        assert_eq!(format_dated("m/d/yyyy", 2_957_004.0, None, true), "########");
+        assert_eq!(format_dated("m/d/yyyy", 2_958_466.0, None, false), "########");
     }
 
     #[test]
