@@ -19,6 +19,42 @@ pub enum Error {
     Malformed(String),
 }
 
+/// First-directory values needed to preflight decoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DecodeInfo {
+    /// Stored width.
+    pub width: u32,
+    /// Stored height.
+    pub height: u32,
+    /// First sample's bit depth, defaulting to eight.
+    pub bit_depth: u8,
+    /// Raw orientation tag, if present.
+    pub orientation: Option<u16>,
+}
+
+/// Parse the first directory and enforce the pixel limit before decoding.
+/// Unlike [`header`], this does not impose layout or strip checks ahead of the decoder.
+pub fn decode_info(bytes: &[u8], max_pixels: u64) -> Result<DecodeInfo, Error> {
+    let (tiff, complete) = craft_tiff::Tiff::parse_with_status(bytes, &Default::default()).map_err(|e| Error::Malformed(e.to_string()))?;
+    if !complete {
+        return Err(Error::Malformed("truncated TIFF".into()));
+    }
+    let ifd = tiff.ifds.first().ok_or_else(|| Error::Malformed("no IFD".into()))?;
+    let info = ifd.image().map_err(|e| Error::Malformed(e.to_string()))?;
+    if info.width == 0 || info.height == 0 {
+        return Err(Error::Malformed("zero dimension".into()));
+    }
+    if u64::from(info.width) * u64::from(info.height) > max_pixels {
+        return Err(Error::TooLarge { width: info.width, height: info.height });
+    }
+    Ok(DecodeInfo {
+        width: info.width,
+        height: info.height,
+        bit_depth: info.bits_per_sample.first().copied().unwrap_or(8) as u8,
+        orientation: ifd.u16(craft_tiff::tags::ORIENTATION),
+    })
+}
+
 /// Stored dimensions and orientation of the first directory, after checking the layouts and
 /// image-data bounds required by the TIFF decoder. Compressed strips are not decompressed.
 pub fn header(bytes: &[u8], max_pixels: u64) -> Result<(u32, u32, u16), Error> {
