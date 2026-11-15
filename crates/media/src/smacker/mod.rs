@@ -125,7 +125,9 @@ pub struct AudioTrack {
     /// How the track's chunks are coded.
     pub coding: AudioCoding,
     /// The header's audio size field for this track, in bytes. It does not bound a decoded
-    /// chunk: in most real `SMK4` files checked, chunks decode to more than it says.
+    /// chunk. In the real files checked it is the largest decoded size of a chunk in every
+    /// `SMK2` track and in most `SMK4` tracks, but in 373 `SMK4` tracks it is the largest stored
+    /// size of a chunk, which a DPCM chunk decodes to more than.
     pub size_hint: u32,
     /// The top byte of the header's rate field, as stored.
     pub flags: u8,
@@ -284,7 +286,9 @@ pub struct Frame {
     pub offset: u64,
     /// Bytes of the frame.
     pub size: u32,
-    /// The key frame flag of the frame size table.
+    /// The key frame flag of the frame size table: the frame does not build on the previous
+    /// picture. None of the real `SMK2` files checked sets it, not even on the first frame, so
+    /// a clear flag does not say that a frame depends on the one before.
     pub keyframe: bool,
     /// The frame starts with a palette chunk.
     pub has_palette: bool,
@@ -300,9 +304,9 @@ pub struct SmackerFile {
     /// The frames, in order. Fewer than `header.frames` if the file is cut short.
     pub frames: Vec<Frame>,
     /// The frame after the last one, if the file has one. The header flags it as the frame that
-    /// leads back to the start for looping. In the one real file checked, the picture after it
-    /// is close to the first picture but not equal to it, and it has no audio chunk where the
-    /// first frame has one, so it does not stand in for the first frame. ffmpeg decodes it as
+    /// leads back to the start for looping. In 216 of the 243 real files checked, the picture
+    /// after it equals the first picture; in the other 27 up to 7% of the pixels differ. It
+    /// carries its own chunks, so audio in the first frame is not in it. ffmpeg decodes it as
     /// one more picture at the end.
     pub ring_frame: Option<Frame>,
     /// The Huffman tree data of the video codec (`header.trees_size` bytes).
