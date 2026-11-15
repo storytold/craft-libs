@@ -18,6 +18,7 @@ mod pages;
 mod rules;
 mod texts;
 
+use draft::{insert, lookup, remove};
 pub use draft::SettingsDraft;
 pub use pages::{PageInfo, StandardPage};
 pub use rules::{RuleKind, SettingRule};
@@ -70,7 +71,9 @@ impl<T> CustomSettings<T> for () {}
 ///
 /// The window edits a draft. Apply turns the draft back into `T` through serde: a value that doesn't fit refuses Apply
 /// with the `settingsDocument.invalid` word; otherwise the draft is the new saved value and
-/// [`take_applied`](Self::take_applied) hands it to the app, which saves it. Cancel drops the draft. Reset Section puts
+/// [`take_applied_edits`](Self::take_applied_edits) hands the app the keys it changed, which it writes into its
+/// settings file. [`rebase`](Self::rebase) takes a value another instance saved as the new base and keeps the edits made
+/// in the window. Cancel drops the draft. Reset Section puts
 /// `T::default()`'s values of the page into the draft, except rules marked [`keep_on_reset`](SettingRule::keep_on_reset).
 ///
 /// ```ignore
@@ -79,7 +82,7 @@ impl<T> CustomSettings<T> for () {}
 ///     .rules(app_rules());
 /// // each pass while the window is open:
 /// let out = PreferencesWindow::new(label).show(ui, &mut prefs);
-/// if let Some(value) = prefs.take_applied() { store.set(value); }
+/// if let Some(edits) = prefs.take_applied_edits() { store.write_edits(edits); }
 /// ```
 pub struct SettingsDocument<T, C = ()> {
     saved: T,
@@ -101,8 +104,12 @@ pub struct SettingsDocument<T, C = ()> {
     /// The page and row texts, built on the first [`PreferencesModel::pages`] after a change of pages, rules, language or
     /// struct.
     texts: OnceLock<Texts>,
-    applied: Option<T>,
+    /// The edits Apply made since [`take_applied_edits`](Self::take_applied_edits), one per key, the latest last.
+    applied: Edits,
 }
+
+/// Dotted `page.key` paths with their new value; `None` removes the key.
+type Edits = Vec<(String, Option<toml::Value>)>;
 
 /// The order of the settings struct's fields: its tables, and the keys of each.
 #[derive(Clone, Debug, Default)]
@@ -149,7 +156,7 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq> SettingsDocu
             translator: None,
             own: Arc::default(),
             texts: OnceLock::new(),
-            applied: None,
+            applied: Vec::new(),
         })
     }
 }
@@ -223,31 +230,33 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         &self.saved
     }
 
-    /// Replaces the saved value and the draft (another instance changed the file). `Err` leaves the document as it was.
-    pub fn reload(&mut self, saved: T) -> Result<(), toml::ser::Error> {
-        self.saved_table = table_of(&saved)?;
-        self.draft = SettingsDraft { table: self.saved_table.clone() };
+    /// The settings Apply or OK changed since the last call, once, as `(key, value)` pairs with dotted `page.key` keys: a
+    /// `None` value removes the key. The app writes just these edits into the settings file, so another instance's edits
+    /// to other keys stay. `None` when nothing changed.
+    pub fn take_applied_edits(&mut self) -> Option<Vec<(String, Option<toml::Value>)>> {
+        (!self.applied.is_empty()).then(|| std::mem::take(&mut self.applied))
+    }
+
+    /// Takes `saved` (another instance changed the file) as the new base the draft is compared with. A row the user has
+    /// not edited follows it; an edited row keeps the draft, so the next Apply writes only the user's edits. A value
+    /// equal to the saved one changes nothing. `Err` leaves the document as it was.
+    pub fn rebase(&mut self, saved: T) -> Result<(), toml::ser::Error> {
+        if saved == self.saved {
+            return Ok(());
+        }
+        let table = table_of(&saved)?;
+        for (key, value) in model::changed_keys(&self.saved_table, &table) {
+            if lookup(&self.draft.table, &key) == lookup(&self.saved_table, &key) {
+                match value {
+                    Some(value) => insert(&mut self.draft.table, &key, value),
+                    None => remove(&mut self.draft.table, &key),
+                }
+            }
+        }
+        self.saved_table = table;
         self.order = FieldOrder::of(&saved);
         self.saved = saved;
         self.texts = OnceLock::new();
         Ok(())
-    }
-
-    /// The value Apply or OK committed, once.
-    pub fn take_applied(&mut self) -> Option<T> {
-        self.applied.take()
-    }
-
-    /// The settings Apply or OK changed, once, as `(key, value)` pairs in the file's table: a `None` value removes the
-    /// key. The app writes just these edits into the settings file, so another instance's edits to other keys stay.
-    pub fn take_applied_edits(&mut self) -> Option<Vec<(String, Option<toml::Value>)>> {
-        todo!("tp.T18")
-    }
-
-    /// Takes `saved` as the new base the draft is compared with, as `reload` does, but keeps the edits the user has made
-    /// in the window on top of it. `Err` leaves the document as it was.
-    pub fn rebase(&mut self, saved: T) -> Result<(), toml::ser::Error> {
-        let _ = saved;
-        todo!("tp.T19")
     }
 }

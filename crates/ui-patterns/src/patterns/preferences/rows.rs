@@ -2,15 +2,16 @@
 
 use super::model::{PrefValue, PreferencesModel, RowKind, RowSpec};
 use crate::buttons::Button;
-use crate::choice::Checkbox;
+use crate::choice::{Checkbox, Swatch};
 use crate::contract::{Bind, Entry, FieldLayout, Props as _, Show as _, ShowContainer as _, clicked};
 use crate::form::{Field, Help};
-use crate::layout_components::Stack;
+use crate::layout_components::{Row, Stack};
 use crate::pickers::Select;
 use crate::runtime::env::{Label, UnitKind, Units};
+use crate::runtime::requests::ColorRequest;
 use crate::text::{HexField, NumberField, TextField};
 use craft_behavior::NumberCodec;
-use craft_theme::Rgba;
+use craft_theme::{Rgba, Srgba};
 use egui::Ui;
 use std::ops::RangeInclusive;
 
@@ -69,10 +70,13 @@ impl ShownRow {
     }
 }
 
-/// What a pass of rows asks of the host: the values the rows edited, in order.
+/// What a pass of rows asks of the host: the values the rows edited, in order, and the colour row whose swatch was
+/// pressed.
 #[derive(Default)]
 pub(super) struct RowsOut {
     pub edits: Vec<(String, PrefValue)>,
+    /// The request of the swatch pressed this pass, keyed by the row.
+    pub pick_color: Option<ColorRequest>,
 }
 
 /// The arrow-key step of a number row that names none: whole steps for whole numbers and wide ranges, else one unit
@@ -159,10 +163,18 @@ pub(super) fn show_row<H: PreferencesModel + ?Sized>(ui: &mut Ui, host: &mut H, 
         }
         Kind::Color(color) => {
             let mut next = None;
+            let mut ask = None;
             field().show(ui, |ui, _| {
-                next = HexField::hex(label.clone(), Bind::given(*color)).show(ui).events.landed().cloned();
+                Row::new().show(ui, |ui, _| {
+                    let swatch = Swatch::new(label.clone(), Srgba::from(*color)).picker(key).id_salt("choose").show(ui);
+                    ask = swatch.pick_color;
+                    next = HexField::hex(label.clone(), Bind::given(*color)).id_salt("hex").show(ui).events.landed().cloned();
+                });
             });
             record(next.map(PrefValue::Color));
+            if ask.is_some() {
+                out.pick_color = ask;
+            }
         }
         Kind::Custom if label.as_str().is_empty() => {
             Stack::new().id_salt(key).show(ui, |ui, _| host.custom_row(ui, key));

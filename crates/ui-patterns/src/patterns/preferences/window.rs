@@ -153,6 +153,8 @@ impl<'a> PreferencesWindow<'a> {
         let buttons = [ok, apply, FooterButton::new(common.cancel.clone(), DialogRole::Cancel)];
 
         let mut open = true;
+        // Filed by a swatch press in this pass.
+        let mut pick_color = None;
         let session = RefCell::new(Session {
             host: &mut *host,
             state,
@@ -197,6 +199,9 @@ impl<'a> PreferencesWindow<'a> {
                 let snap = body::snapshot(&*session.host, &matcher, &session.work.selected);
                 let mut out = BodyOut::default();
                 body::show_body(ui, &mut *session.host, &snap, &mut session.work, &words, &units, &mut out);
+                if let Some(request) = out.rows.pick_color.take() {
+                    pick_color = Some(request);
+                }
                 let edits = out.edits();
                 if !edits.is_empty() || out.reset {
                     session.work.error = None;
@@ -219,6 +224,7 @@ impl<'a> PreferencesWindow<'a> {
         let mut result = PreferencesOutput::new(response);
         result.page = page;
         result.applied = applied;
+        result.pick_color = pick_color;
         match closed.filter(|_| !nested) {
             Some(CloseReason::Activated) => result.closed = Some(Closed::Ok),
             Some(_) => {

@@ -25,8 +25,10 @@ pub struct SettingRule {
     pub help: Option<String>,
     /// The control to use; `None` picks it from the value's type.
     pub kind: Option<RuleKind>,
-    /// Shown only while another setting has this value.
-    pub shown_when: Option<(String, String)>,
+    /// Shown only while every `(key, value)` holds: the setting at `key` has this value.
+    pub shown_when: Vec<(String, String)>,
+    /// Shown only while no `(key, value)` holds: the setting at `key` has another value, or is absent.
+    pub shown_unless: Vec<(String, String)>,
     /// Never shown.
     pub hidden: bool,
     /// Shown only on Linux.
@@ -81,7 +83,8 @@ impl SettingRule {
             label: None,
             help: None,
             kind: None,
-            shown_when: None,
+            shown_when: Vec::new(),
+            shown_unless: Vec::new(),
             hidden: false,
             linux_only: false,
             restart: false,
@@ -162,10 +165,19 @@ impl SettingRule {
         self
     }
 
-    /// Shows the row only while the setting at `key` has `value`.
+    /// Shows the row only while the setting at `key` has `value`. Called again, the row shows only while every
+    /// condition holds.
     #[must_use]
     pub fn shown_when(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.shown_when = Some((key.into(), value.into()));
+        self.shown_when.push((key.into(), value.into()));
+        self
+    }
+
+    /// Shows the row only while the setting at `key` does not have `value`; a missing setting shows it. Called again,
+    /// the row hides when any of them has its value.
+    #[must_use]
+    pub fn shown_unless(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.shown_unless.push((key.into(), value.into()));
         self
     }
 

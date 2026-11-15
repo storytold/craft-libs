@@ -9,7 +9,41 @@ use craft_theme::Rgba;
 use egui::{Context, Ui};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::collections::BTreeSet;
 use std::sync::Arc;
+
+/// The dotted `page.key` paths whose value differs between `from` and `to`, with `to`'s value (`None` where `to` lacks
+/// the key). The walk covers the keys of each page; a value inside a page, nested table or array, compares whole. A
+/// top-level value that is not a table compares whole under its own name.
+pub(super) fn changed_keys(from: &toml::Table, to: &toml::Table) -> Vec<(String, Option<toml::Value>)> {
+    fn page_table<'a>(value: Option<&'a toml::Value>, empty: &'a toml::Table) -> Option<&'a toml::Table> {
+        match value {
+            None => Some(empty),
+            Some(toml::Value::Table(table)) => Some(table),
+            Some(_) => None,
+        }
+    }
+    let empty = toml::Table::new();
+    let mut changed = Vec::new();
+    let pages: BTreeSet<&String> = from.keys().chain(to.keys()).collect();
+    for page in pages {
+        let (before, after) = (from.get(page), to.get(page));
+        match (page_table(before, &empty), page_table(after, &empty)) {
+            (Some(before), Some(after)) => {
+                let keys: BTreeSet<&String> = before.keys().chain(after.keys()).collect();
+                for key in keys {
+                    if before.get(key) != after.get(key) {
+                        changed.push((format!("{page}.{key}"), after.get(key).cloned()));
+                    }
+                }
+            }
+            _ if before != after => changed.push((page.clone(), after.cloned())),
+            _ => {}
+        }
+    }
+    changed
+}
+
 
 impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSettings<T>> PreferencesModel for SettingsDocument<T, C> {
     fn pages(&self) -> Vec<PageSpec<'_>> {
@@ -95,10 +129,13 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         // The serialized value is the next draft: the struct's own reading of the values.
         let table = table_of(&value).map_err(|error| invalid(error.to_string()))?;
         self.custom.apply(&value)?;
+        for (key, edit) in changed_keys(&self.saved_table, &table) {
+            self.applied.retain(|(earlier, _)| *earlier != key);
+            self.applied.push((key, edit));
+        }
         self.saved_table = table;
         self.draft = SettingsDraft { table: self.saved_table.clone() };
-        self.saved = value.clone();
-        self.applied = Some(value);
+        self.saved = value;
         Ok(())
     }
 

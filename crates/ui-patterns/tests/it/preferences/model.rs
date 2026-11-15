@@ -1,9 +1,10 @@
-//! The settings document without a window.
+//! The settings document without a window: rows, applied edits, rebase and row conditions.
 
 use craft_theme::Rgba;
 use craft_ui::patterns::preferences::{PageInfo, PrefValue, PreferencesModel, RowKind, SettingRule, SettingsDocument, StandardPage};
 use craft_ui::testing::trial;
 use serde::{Deserialize, Serialize};
+use toml::Value;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -71,8 +72,8 @@ fn history_states(doc: &impl PreferencesModel) -> i64 {
         .expect("a row")
 }
 
-/// `set` clamps to the range and keeps to the choices; Apply returns the typed value once through `take_applied`; Cancel
-/// restores the draft; a value the struct can't hold refuses Apply and keeps the draft.
+/// `set` clamps to the range and keeps to the choices; Apply returns the edited keys once through `take_applied_edits`;
+/// Cancel restores the draft; a value the struct can't hold refuses Apply and keeps the draft.
 #[trial]
 fn apply_returns_the_typed_value_and_cancel_drops_the_draft() {
     let mut doc = document();
@@ -92,20 +93,24 @@ fn apply_returns_the_typed_value_and_cancel_drops_the_draft() {
     doc.set("performance.canvasCustomColor", PrefValue::Color(Rgba([0x11, 0x22, 0x33, 0x80])));
     doc.set("performance.zoomStep", PrefValue::Float(9.0));
     doc.apply().expect("the draft fits the struct");
-    let applied = doc.take_applied().expect("applied");
-    assert_eq!(applied.performance.history_states, 1);
-    assert_eq!(applied.performance.render_mode, "soft");
-    assert_eq!(applied.performance.canvas_custom_color, "#112233");
-    assert_eq!(applied.performance.zoom_step, 4.0);
-    assert_eq!(applied.performance.levels, [1, 2]);
-    assert_eq!(*doc.saved(), applied);
-    assert!(doc.take_applied().is_none());
+    let edits = doc.take_applied_edits().expect("applied");
+    let edit = |key: &str| edits.iter().find(|(edited, _)| edited == key).map(|(_, value)| value.clone());
+    assert_eq!(edits.len(), 4, "only the edited keys: {edits:?}");
+    assert_eq!(edit("performance.historyStates"), Some(Some(Value::Integer(1))));
+    assert_eq!(edit("performance.renderMode"), Some(Some(Value::String("soft".into()))));
+    assert_eq!(edit("performance.canvasCustomColor"), Some(Some(Value::String("#112233".into()))));
+    assert_eq!(edit("performance.zoomStep"), Some(Some(Value::Float(4.0))));
+    assert_eq!(edit("performance.levels"), None, "a key that kept its value is not an edit");
+    let saved = doc.saved();
+    assert_eq!(saved.performance.history_states, 1);
+    assert_eq!(saved.performance.levels, [1, 2]);
+    assert!(doc.take_applied_edits().is_none());
     assert!(!doc.differs());
 
     doc.set("performance.tileSize", PrefValue::Int(300));
     let error = doc.apply().expect_err("300 doesn't fit a u8");
     assert!(error.starts_with("These settings can't be applied: "), "{error}");
-    assert!(doc.take_applied().is_none());
+    assert!(doc.take_applied_edits().is_none());
     assert!(doc.differs());
 }
 
@@ -129,5 +134,110 @@ fn reset_section_drops_keys_the_defaults_do_not_serialize() {
     let mut doc = SettingsDocument::new(saved).expect("serializes");
     doc.reset_page("brush");
     doc.apply().expect("the draft fits the struct");
-    assert_eq!(doc.take_applied().expect("applied"), Sparse::default());
+    let edits = doc.take_applied_edits().expect("applied");
+    let edit = |key: &str| edits.iter().find(|(edited, _)| edited == key).map(|(_, value)| value.clone());
+    assert_eq!(edit("brush.size"), Some(Some(Value::Integer(0))));
+    assert_eq!(edit("brush.lastPreset"), Some(None), "the removed key is an edit that removes it");
+    assert_eq!(*doc.saved(), Sparse::default());
+}
+
+fn zoom_step(doc: &impl PreferencesModel) -> f64 {
+    doc.pages()
+        .iter()
+        .flat_map(|page| page.groups.iter().flat_map(|group| group.rows.iter()))
+        .find_map(|row| match row.kind {
+            RowKind::Float { value, .. } if row.key == "performance.zoomStep" => Some(value),
+            _ => None,
+        })
+        .expect("a row")
+}
+
+/// A saved value from another instance moves the rows the user has not edited and leaves the edited ones; the next Apply
+/// writes only the user's edits.
+#[trial]
+fn rebase_keeps_the_edited_rows_and_follows_the_others() {
+    let mut other = Prefs::default();
+    other.performance.history_states = 30;
+    other.performance.zoom_step = 3.0;
+
+    let mut doc = document();
+    doc.set("performance.historyStates", PrefValue::Int(20));
+    doc.rebase(Prefs::default()).expect("serializes");
+    assert_eq!(history_states(&doc), 20, "a value equal to the saved one changes nothing");
+    assert!(doc.differs());
+
+    doc.rebase(other.clone()).expect("serializes");
+    assert_eq!(history_states(&doc), 20, "the edited row keeps the draft");
+    assert_eq!(zoom_step(&doc), 3.0, "the other row follows the new saved value");
+    assert!(doc.differs(), "the edit is still unsaved");
+    assert_eq!(*doc.saved(), other);
+
+    doc.apply().expect("the draft fits the struct");
+    let edits = doc.take_applied_edits().expect("applied");
+    assert_eq!(edits, [("performance.historyStates".to_owned(), Some(Value::Integer(20)))], "only the edited key");
+
+    let mut untouched = document();
+    untouched.rebase(other).expect("serializes");
+    assert_eq!(history_states(&untouched), 30);
+    assert!(!untouched.differs(), "without edits the draft is the new saved value");
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct Export {
+    format: String,
+    enabled: bool,
+    lossless: bool,
+    quality: i64,
+    other: i64,
+    never: i64,
+}
+
+impl Default for Export {
+    fn default() -> Self {
+        Self { format: "png".into(), enabled: false, lossless: false, quality: 80, other: 1, never: 1 }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct ExportPrefs {
+    export: Export,
+}
+
+/// Whether the pages show the row `key`: listed and not hidden by its rule.
+fn shown(doc: &impl PreferencesModel, key: &str) -> bool {
+    doc.pages().iter().flat_map(|page| page.groups.iter().flat_map(|group| group.rows.iter())).any(|row| row.key == key && row.visible)
+}
+
+/// A row with two `shown_when` conditions and one `shown_unless` shows only while all three hold, as the draft changes.
+#[trial]
+fn a_row_with_several_conditions_shows_only_while_all_hold() {
+    let rules = vec![
+        SettingRule::new("export.format").choices(&[("png", "PNG"), ("webp", "WebP")]),
+        SettingRule::new("export.quality")
+            .int(1..=100)
+            .shown_when("export.format", "webp")
+            .shown_when("export.enabled", "true")
+            .shown_unless("export.lossless", "true"),
+        SettingRule::new("export.other").shown_unless("export.absent", "x"),
+        SettingRule::new("export.never").shown_when("export.absent", "x"),
+    ];
+    let mut doc = SettingsDocument::new(ExportPrefs::default()).expect("serializes").rules(rules);
+    let quality = |doc: &SettingsDocument<ExportPrefs>| shown(doc, "export.quality");
+    assert!(!quality(&doc), "png hides it");
+
+    doc.set("export.format", PrefValue::Choice("webp".into()));
+    assert!(!quality(&doc), "one shown_when is not enough");
+    doc.set("export.enabled", PrefValue::Bool(true));
+    assert!(quality(&doc), "both shown_when hold and lossless is off");
+    doc.set("export.lossless", PrefValue::Bool(true));
+    assert!(!quality(&doc), "shown_unless hides it");
+    doc.set("export.lossless", PrefValue::Bool(false));
+    assert!(quality(&doc));
+    doc.set("export.format", PrefValue::Choice("png".into()));
+    assert!(!quality(&doc), "a shown_when that stops holding hides it again");
+
+    assert!(shown(&doc, "export.other"), "an absent key passes shown_unless");
+    assert!(!shown(&doc, "export.never"), "an absent key fails shown_when");
 }

@@ -59,3 +59,17 @@ pub(super) fn insert(table: &mut toml::Table, key: &str, value: toml::Value) {
         }
     }
 }
+
+/// Removes the value at the dotted `key`; a missing path removes nothing.
+pub(super) fn remove(table: &mut toml::Table, key: &str) {
+    match key.split_once('.') {
+        None => {
+            table.remove(key);
+        }
+        Some((head, rest)) => {
+            if let Some(toml::Value::Table(inner)) = table.get_mut(head) {
+                remove(inner, rest);
+            }
+        }
+    }
+}

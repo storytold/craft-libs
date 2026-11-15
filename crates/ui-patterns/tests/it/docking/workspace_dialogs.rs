@@ -1,8 +1,11 @@
 //! New Workspace and Delete Workspace answer what `WorkspaceAsk` asks, with the set's refusals.
 
 use craft_behavior::dock::{NamedWorkspace, Workspace, WorkspaceChrome, WorkspaceKeeps, WorkspaceSet};
-use craft_ui::patterns::dock::{DeleteWorkspaceDialog, NewWorkspace, NewWorkspaceDialog};
+use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
+use craft_ui::patterns::dock::{DeleteWorkspaceDialog, HostedNewWorkspace, NewWorkspace, NewWorkspaceDialog};
 use craft_ui::testing::{Fixture, trial};
+use egui::Vec2;
+use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -64,4 +67,33 @@ fn delete_workspace_answers_the_picked_saved_workspace_and_refuses_the_current_o
     let ok = fixture.by_label("OK").unwrap();
     fixture.click(&ok).idle(10);
     assert_eq!(*answers.borrow(), ["review"], "the pick starts on the first saved workspace that is not current");
+}
+
+#[trial]
+fn the_hosted_new_workspace_refuses_a_built_in_name_and_answers_through_the_host() {
+    type Hosted = HostedNewWorkspace<u32>;
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| shown.borrow_mut().run(ui));
+    fixture.room(Vec2::new(1400.0, 1000.0));
+    let id = host.borrow_mut().open(HostedNewWorkspace::new(&workspaces()));
+    fixture.idle(10);
+    let ctx = fixture.ctx().clone();
+
+    let fields = host.borrow().get::<Hosted>().and_then(|dialog| dialog.json_fields()).expect("the dialog lists its fields");
+    let mut names: Vec<&str> = fields.as_object().expect("an object").keys().map(String::as_str).collect();
+    names.sort();
+    assert_eq!(names, ["keyboardShortcuts", "menus", "name", "toolbar"]);
+
+    host.borrow_mut().set_json_field(&ctx, id, "name", json!("essentials")).expect("the name field takes text");
+    assert!(!host.borrow_mut().confirm::<Hosted>(&ctx), "a built-in's name is refused as the drawn OK refuses it");
+    assert!(host.borrow().is_open::<Hosted>(), "a refused confirm keeps the dialog open");
+
+    host.borrow_mut().set_json_field(&ctx, id, "name", json!("Mine 2")).expect("the name field takes text");
+    host.borrow_mut().set_json_field(&ctx, id, "toolbar", json!(true)).expect("the toolbar box is offered");
+    assert!(host.borrow_mut().set_json_field(&ctx, id, "menus", json!("yes")).is_err(), "a box takes a bool");
+    assert!(host.borrow_mut().confirm::<Hosted>(&ctx), "a new name is accepted");
+    let answer = host.borrow_mut().take::<Hosted>().and_then(DialogResult::ok).expect("the answer reaches the app");
+    assert_eq!(answer.name, "Mine 2");
+    assert_eq!(answer.keeps, WorkspaceKeeps::new(false, false, true), "the boxes set through the fields are the captures");
 }

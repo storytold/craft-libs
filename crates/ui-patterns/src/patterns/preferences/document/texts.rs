@@ -93,7 +93,7 @@ fn choice_kind<'a>(options: &'a [(String, Label)], counted: Option<UnitKind>, va
     }
 }
 
-/// What `shown_when` compares: a string as it is, a bool or number as Rust writes it.
+/// What `shown_when` and `shown_unless` compare: a string as it is, a bool or number as Rust writes it.
 fn value_text(value: &toml::Value) -> String {
     match value {
         toml::Value::String(text) => text.clone(),
@@ -214,10 +214,8 @@ impl<T: Serialize + DeserializeOwned + Default + Clone + PartialEq, C: CustomSet
         if rule.hidden || (rule.linux_only && self.os != Os::Linux) {
             return false;
         }
-        match &rule.shown_when {
-            Some((other, wanted)) => lookup(&self.draft.table, other).is_some_and(|value| value_text(value) == *wanted),
-            None => true,
-        }
+        let has = |(other, wanted): &(String, String)| lookup(&self.draft.table, other).is_some_and(|value| value_text(value) == *wanted);
+        rule.shown_when.iter().all(has) && !rule.shown_unless.iter().any(has)
     }
 
     pub(super) fn row_spec<'a>(&'a self, row: &'a RowText) -> Option<RowSpec<'a>> {
