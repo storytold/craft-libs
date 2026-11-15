@@ -41,7 +41,10 @@ Buffers are checked once per call, before any pixel is written.
 * `builtin::cicp_rgb(primaries, transfer, linear)`: the RGB profile for an ITU-T H.273 colour
   description (a HEIF `nclx` box, a video stream).
 * `lutfile::parse(name, bytes)` / `lutfile::write_cube(&lut)`: `.cube`, `.3dl` and `.look` LUT
-  files; `lutfile::builtin(id)` returns generated looks (`lutfile::BUILTIN`).
+  files; `lutfile::builtin(id)` returns generated looks (`lutfile::BUILTIN`). A `.3dl` shaper is
+  kept as a 1-D curve in `LutFile::shaper` and applied ahead of the table by `lutfile::sample`
+  (`lutfile::shape` is the curve); `lutfile::write_3dl(&lut)` writes it back, or returns an error
+  for a look `.3dl` cannot hold (a 2-node table, a non-default domain).
 * `Profile::to_bytes()`: original bytes of parsed profiles (byte-exact), or an ICC v4.3 encoding
   with its profile ID set.
 * `profile_id(bytes)`: the MD5 profile ID of any profile, to check a stored one.
