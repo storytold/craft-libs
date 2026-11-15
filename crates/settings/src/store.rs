@@ -367,7 +367,11 @@ impl<T: Settings> SettingsStore<T> {
                 return;
             }
         }
-        let (value, errors) = document::deserialize_sections::<T>(&doc);
+        // A value the file holds that the type cannot read is taken out, and the file is saved again with its default.
+        let (value, errors) = document::repair_sections::<T>(&mut doc);
+        if !errors.is_empty() {
+            self.dirty = true;
+        }
         self.value = value;
         self.doc = doc;
         self.base = base;

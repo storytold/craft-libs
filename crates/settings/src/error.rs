@@ -29,11 +29,11 @@ impl fmt::Display for MigrateError {
 
 impl std::error::Error for MigrateError {}
 
-/// A `[section]` that parsed as TOML but did not fit the settings type, or a value a
-/// [`LegacyFile`](crate::LegacyFile) parse could not read; its defaults were used.
+/// A value of `config.toml` that parsed as TOML but did not fit the settings type, or a value a
+/// [`LegacyFile`](crate::LegacyFile) parse could not read; its default was used.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SectionError {
-    /// The top-level key; for a legacy import, the dotted key path (`interface.uiScale`).
+    /// The dotted key path of the value (`interface.uiScale`, a map's `shortcuts.file.open`).
     pub section: String,
     /// The deserialization error.
     pub message: String,
@@ -100,7 +100,8 @@ pub struct LoadReport {
     pub source: Source,
     /// Set when a damaged `config.toml` was renamed; the new name.
     pub broken_moved_to: Option<PathBuf>,
-    /// Sections whose values were replaced by defaults.
+    /// Values replaced by their defaults. A `config.toml` value is also taken out of the file, which
+    /// the next save writes with the default in its place.
     pub section_errors: Vec<SectionError>,
     /// Set when the file was upgraded from an older `schema_version`.
     pub migrated_from: Option<u32>,

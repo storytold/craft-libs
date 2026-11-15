@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -67,6 +68,23 @@ impl Settings for Prefs {
             other => Err(MigrateError::new(other, "unknown version")),
         }
     }
+}
+
+/// Settings with a free-form map beside a section, as an app's shortcut overrides or tool options are.
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+#[serde(default)]
+pub struct Keyed {
+    pub general: General,
+    pub shortcuts: BTreeMap<String, String>,
+}
+
+impl Settings for Keyed {
+    const APP_ID: &'static str = "keyedcraft";
+    const SCHEMA_VERSION: u32 = 1;
+}
+
+pub fn open_keyed(dir: &Path) -> (SettingsStore<Keyed>, craft_settings::LoadReport) {
+    SettingsStore::open_with(OpenOptions::new(Location::Dir(dir.to_path_buf())).probe(empty_probe()))
 }
 
 /// A probe that sees no environment, no executable and no platform folder.
