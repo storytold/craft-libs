@@ -59,6 +59,48 @@ impl<'a> Merged<'a> {
         Ok(Self { head, transparency, compression, bytes, data_offset: at })
     }
 
+    /// Check that all declared raw data or RLE row payloads fit without decoding them.
+    pub fn validate_all(&self) -> Result<()> {
+        let h = &self.head.header;
+        let bpc = match h.depth {
+            8 => 1usize,
+            16 => 2,
+            32 => 4,
+            _ => return Err(PsdError::Unsupported("merged depth".into())),
+        };
+        let channels = usize::from(h.channels);
+        let height = h.height as usize;
+        let mut at = self.data_offset;
+        match self.compression {
+            0 => {
+                let len = (h.width as usize)
+                    .checked_mul(height)
+                    .and_then(|n| n.checked_mul(bpc))
+                    .and_then(|n| n.checked_mul(channels))
+                    .ok_or(PsdError::LimitExceeded("merged data"))?;
+                take(self.bytes, &mut at, len)?;
+            }
+            1 => {
+                let rows = channels.checked_mul(height).ok_or(PsdError::LimitExceeded("row count"))?;
+                let entry = if h.version.is_psb() { 4 } else { 2 };
+                let table_len = rows.checked_mul(entry).ok_or(PsdError::LimitExceeded("row table"))?;
+                let table = take(self.bytes, &mut at, table_len)?;
+                let mut total = 0usize;
+                for chunk in table.chunks_exact(entry) {
+                    let len = if entry == 2 {
+                        usize::from(u16::from_be_bytes([chunk[0], chunk[1]]))
+                    } else {
+                        u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as usize
+                    };
+                    total = total.saturating_add(len);
+                }
+                take(self.bytes, &mut at, total)?;
+            }
+            _ => return Err(PsdError::Unsupported("merged compression".into())),
+        }
+        Ok(())
+    }
+
     /// Decode only the first `used` planes, leaving spot channels untouched. Eight-, sixteen-, and
     /// thirty-two-bit raw or PackBits samples are returned as planar big-endian bytes. Before any
     /// RLE plane allocation, encoded row lengths must fit the input and the PackBits expansion bound.
