@@ -242,8 +242,7 @@ pub struct HandTool {
     flick: FlickPan,
     /// Lent by the momentary set: a secondary press pans too.
     lent: bool,
-    /// The press's scroll-all-windows choice, reported with the pan.
-    #[allow(dead_code)] // P3(canvas-widgets-w2): cw.C14
+    /// The press's scroll-all-windows choice, reported with every pan of the gesture and of its glide.
     scroll_all: bool,
 }
 
@@ -296,7 +295,7 @@ impl CanvasTool for HandTool {
         let Some(space) = cx.space() else { return };
         // The glide steps from the view it set, not the shown one, so steps under half a device pixel add up.
         if let Some(view) = self.glide(&space.target(), cx.time) {
-            cx.set_view(view);
+            cx.pan_view(view, self.scroll_all);
         }
         if self.flick.gliding() {
             cx.request_repaint();
@@ -307,6 +306,8 @@ impl CanvasTool for HandTool {
         self.flick.stop();
         self.start = cx.space().map(|space| (space.view, pointer.pos));
         self.last = pointer.pos;
+        // Chosen here so a Shift released during the drag or the glide does not change where the pan goes.
+        self.scroll_all = self.options.scroll_all_windows || pointer.mods.shift;
         ToolAction::Claimed
     }
 
@@ -316,7 +317,7 @@ impl CanvasTool for HandTool {
         self.last = pointer.pos;
         let mut next = view;
         pan(&mut next, pointer.pos - from);
-        cx.set_view(next);
+        cx.pan_view(next, self.scroll_all);
         self.flick.drag(pointer.time, delta);
         if delta != egui::Vec2::ZERO {
             cx.request_repaint();
@@ -335,7 +336,7 @@ impl CanvasTool for HandTool {
         if self.flick.gliding() {
             cx.request_repaint();
         }
-        cx.set_view(next);
+        cx.pan_view(next, self.scroll_all);
     }
 
     fn cancel(&mut self, _reason: CancelReason, cx: &mut ToolContext<'_>) {

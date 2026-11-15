@@ -74,7 +74,6 @@ pub struct Momentary {
     hand: HandTool,
     zoom: ZoomTool,
     /// The selected tool is the Hand: Cmd and Alt at a press then give Zoom In and Zoom Out.
-    #[allow(dead_code)] // P3(canvas-widgets-w2): cw.C15
     hand_selected: bool,
 }
 
@@ -88,6 +87,11 @@ impl Momentary {
     /// press give Zoom In and Zoom Out with the same latch.
     pub fn hand_selected(&mut self, selected: bool) {
         self.hand_selected = selected;
+    }
+
+    /// The command whose key is down, if any: the signal an app reads to know the Hand key is held.
+    pub fn held(&self) -> Option<MomentaryCommands> {
+        self.held
     }
 
     /// Follows a change of the navigation options.
@@ -116,16 +120,22 @@ impl Momentary {
         if in_gesture {
             return self.latched;
         }
-        let tool = self.held.map(|held| {
-            let tool = MomentaryTool::from(held);
-            if mods.alt {
-                MomentaryTool::ZoomOut
-            } else if tool == MomentaryTool::Hand && (mods.cmd || mods.ctrl) {
-                MomentaryTool::ZoomIn
-            } else {
-                tool
+        let tool = match self.held {
+            Some(held) => {
+                let tool = MomentaryTool::from(held);
+                Some(if mods.alt {
+                    MomentaryTool::ZoomOut
+                } else if tool == MomentaryTool::Hand && (mods.cmd || mods.ctrl) {
+                    MomentaryTool::ZoomIn
+                } else {
+                    tool
+                })
             }
-        });
+            // The selected Hand: Alt and Cmd at the press zoom, with the same latch as a held key.
+            None if self.hand_selected && mods.alt => Some(MomentaryTool::ZoomOut),
+            None if self.hand_selected && (mods.cmd || mods.ctrl) => Some(MomentaryTool::ZoomIn),
+            None => None,
+        };
         self.latched = tool;
         tool
     }
