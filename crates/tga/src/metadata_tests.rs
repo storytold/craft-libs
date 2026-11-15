@@ -163,6 +163,7 @@ fn complete_tga_footer_and_metadata_do_not_change_pixels() {
 }
 
 fn preceding_metadata(complete: bool, metadata: usize) -> Vec<u8> {
+    assert!(metadata <= 3, "test metadata selector must be 0..=3");
     let mut file = header(2, if complete { 1 } else { 2 }, 1, 24, 0x20);
     file.extend_from_slice(&[0, 0, 255]);
     let payload_offset = file.len() as u32;
@@ -180,7 +181,7 @@ fn preceding_metadata(complete: bool, metadata: usize) -> Vec<u8> {
             1 => file.extend_from_slice(&[0; 2048]),
             2 => file.extend_from_slice(&[1, 1, 0, 255, 0]),
             3 => file.extend_from_slice(&18u32.to_le_bytes()),
-            _ => unreachable!(),
+            _ => {}
         }
         let extension_offset = file.len() as u32;
         let mut extension = [0; 495];
