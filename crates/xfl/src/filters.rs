@@ -3,7 +3,7 @@
 //! This module parses the wire-level filter names, fields, and gradient-ramp entries. Consumers
 //! remain responsible for mapping those values into their own rendering/filter models.
 
-use crate::shape::{self, Color, XflElement};
+use crate::shape::{self, Color, XflElement, boolean, integer, number};
 
 /// Native filter variants understood by XFL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,18 +171,6 @@ impl<'a, E: XflElement> RampEntry<'a, E> {
     pub fn color(&self) -> Color {
         shape::color(self.element, "color", "alpha")
     }
-}
-
-fn number(element: &impl XflElement, name: &str) -> Option<f32> {
-    element.attr(name)?.trim().parse::<f32>().ok().filter(|value| value.is_finite())
-}
-
-fn integer(element: &impl XflElement, name: &str) -> Option<u32> {
-    element.attr(name)?.trim().parse::<u32>().ok()
-}
-
-fn boolean(element: &impl XflElement, name: &str) -> Option<bool> {
-    element.attr(name).map(|value| value.trim() == "true")
 }
 
 #[cfg(test)]
