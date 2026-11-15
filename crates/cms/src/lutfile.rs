@@ -518,21 +518,47 @@ pub fn parse_look(text: &str) -> Result<LutFile, LutError> {
     LutFile { title: tag("title").unwrap_or_default(), size, data, domain_min: [0.0; 3], domain_max: [1.0; 3] }.check()
 }
 
+/// Export presentation for a `.cube` table. Compact output preserves the existing writer.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CubeWriteOptions<'a> {
+    /// Add the annotated export header, including the default domain, with this creator.
+    pub created_by: Option<&'a str>,
+    /// Clamp to 0..1 and round to 1/32768 steps, for integer-depth export compatibility.
+    pub quantize_15_bit: bool,
+}
+
 /// Writes a `.cube` file (what Photoshop embeds in a Color Lookup layer).
 pub fn write_cube(l: &LutFile) -> String {
+    write_cube_with_options(l, CubeWriteOptions::default())
+}
+
+/// Writes a table with optional annotated headers and integer-depth export quantization.
+/// As with [`write_cube`], callers supply a valid table in red-fastest order.
+pub fn write_cube_with_options(l: &LutFile, options: CubeWriteOptions<'_>) -> String {
     let mut s = String::new();
-    if !l.title.is_empty() {
+    if let Some(creator) = options.created_by {
+        s.push_str(&format!("#Created by: {creator}\n"));
+    }
+    if !l.title.is_empty() || options.created_by.is_some() {
         s.push_str(&format!("TITLE \"{}\"\n", l.title.replace('"', "'")));
     }
-    // The domain is what every row means: a table read with a non-default one must not be
-    // written back as if it expected inputs in 0..1. `parse_cube` accepts these anywhere.
-    if !l.domain_is_default() {
-        s.push_str(&format!("DOMAIN_MIN {} {} {}\n", l.domain_min[0], l.domain_min[1], l.domain_min[2]));
-        s.push_str(&format!("DOMAIN_MAX {} {} {}\n", l.domain_max[0], l.domain_max[1], l.domain_max[2]));
+    if options.created_by.is_some() {
+        s.push_str(&format!("\n#LUT size\nLUT_3D_SIZE {}\n\n#data domain\n", l.size));
     }
-    s.push_str(&format!("LUT_3D_SIZE {}\n", l.size));
+    // The input domain must survive a write. Annotated exports also spell out the default.
+    if !l.domain_is_default() || options.created_by.is_some() {
+        let domain = |v: f32| if options.created_by.is_some() { format!("{v:?}") } else { v.to_string() };
+        s.push_str(&format!("DOMAIN_MIN {} {} {}\n", domain(l.domain_min[0]), domain(l.domain_min[1]), domain(l.domain_min[2])));
+        s.push_str(&format!("DOMAIN_MAX {} {} {}\n", domain(l.domain_max[0]), domain(l.domain_max[1]), domain(l.domain_max[2])));
+    }
+    if options.created_by.is_some() {
+        s.push_str("\n#LUT data points\n");
+    } else {
+        s.push_str(&format!("LUT_3D_SIZE {}\n", l.size));
+    }
     for c in l.data.as_chunks::<3>().0 {
-        s.push_str(&format!("{:.6} {:.6} {:.6}\n", c[0], c[1], c[2]));
+        let value = |v: f32| if options.quantize_15_bit { (v.clamp(0.0, 1.0) * 32768.0).round() / 32768.0 } else { v };
+        s.push_str(&format!("{:.6} {:.6} {:.6}\n", value(c[0]), value(c[1]), value(c[2])));
     }
     s
 }
@@ -1298,5 +1324,34 @@ LUT_3D_SIZE 2
         let back = parse_cube(&write_cube(&l)).expect("roundtrip");
         assert_eq!(back.domain_min, l.domain_min, "the written table must mean the same");
         assert_eq!(back.domain_max, l.domain_max);
+    }
+    #[test]
+    fn annotated_cube_export_preserves_header_and_integer_precision() {
+        let mut lut = LutFile::identity(2).unwrap();
+        lut.title = "My \"Look\"".into();
+        lut.data[..3].copy_from_slice(&[1.0 / 6.0, 5.0 / 6.0, 160.0 / 255.0]);
+        let output = write_cube_with_options(&lut, CubeWriteOptions { created_by: Some("PhotoCraft"), quantize_15_bit: true });
+        assert!(output.starts_with("#Created by: PhotoCraft\nTITLE \"My 'Look'\"\n\n#LUT size\nLUT_3D_SIZE 2\n\n#data domain\nDOMAIN_MIN 0.0 0.0 0.0\nDOMAIN_MAX 1.0 1.0 1.0\n\n#LUT data points\n0.166656 0.833344 0.627441\n"));
+        assert_eq!(output.lines().count(), 11 + 8);
+        let parsed = parse_cube(&output).unwrap();
+        assert_eq!(parsed.size, 2);
+        assert_eq!(&parsed.data[3..], &lut.data[3..]);
+        let float = write_cube_with_options(&lut, CubeWriteOptions { created_by: Some("PhotoCraft"), quantize_15_bit: false });
+        assert!(float.contains("0.166667 0.833333 0.627451\n"));
+    }
+
+    #[test]
+    fn annotated_domain_and_empty_title_roundtrip() {
+        let mut lut = LutFile::identity(2).unwrap();
+        lut.title.clear();
+        lut.domain_min = [-1.0, 0.25, 0.5];
+        lut.domain_max = [2.0, 0.75, 1.5];
+        let text = write_cube_with_options(&lut, CubeWriteOptions { created_by: Some("Exporter"), ..Default::default() });
+        assert!(text.contains("TITLE \"\"\n"));
+        let back = parse_cube(&text).unwrap();
+        assert_eq!(back.domain_min, lut.domain_min);
+        assert_eq!(back.domain_max, lut.domain_max);
+        assert_eq!(back.data, lut.data);
+        assert_eq!(write_cube(&lut), write_cube_with_options(&lut, CubeWriteOptions::default()));
     }
 }
