@@ -65,8 +65,9 @@ external provider are `Error::UnsupportedEncryption`. Every size in the FilePass
 checked before it is used. There is no writer
 (`craft_xls::testing` builds small fixtures for tests).
 
-A formula that cannot be put back into text (a link to another workbook, a macro command, an
-unknown token) leaves its cell with the saved result, and `Warning::FormulaKept` says why.
+A formula that cannot be put back into text (a link to another workbook, a macro command, a
+call to a VBA or XLM macro function, an unknown token) leaves its cell with the saved result,
+and `Warning::FormulaKept` says why.
 Formulas are legacy (pre-dynamic-array) ones and are returned as stored: a caller whose formula
 language has dynamic arrays adds Excel's implicit intersection itself.
 
