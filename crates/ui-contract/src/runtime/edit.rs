@@ -33,11 +33,12 @@ pub(crate) fn latest(ctx: &Context) -> (u64, Option<CancelReason>) {
 /// when it is an `N`; `None` while no gesture of the component runs. `V` is the component's value type, under which
 /// its gesture is kept. A reader outside the component's pass, drawn before or after it, reads the same note.
 pub fn gesture_note<V: Value, N: Clone + 'static>(ctx: &Context, id: Id) -> Option<N> {
-    let gesture = MemoryStage::peek::<Gesture<V>>(ctx, crate::contract::gesture_key(id));
-    if !gesture.is_running() {
-        return None;
-    }
-    gesture.note.as_ref()?.get::<N>().cloned()
+    MemoryStage::peek_with::<Gesture<V>, _>(ctx, crate::contract::gesture_key(id), |gesture| {
+        if !gesture.is_running() {
+            return None;
+        }
+        gesture.note.as_ref()?.get::<N>().cloned()
+    })
 }
 
 /// The newest gesture id handed out in this context, and how many times a component has reported its gesture running

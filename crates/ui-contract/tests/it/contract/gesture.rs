@@ -12,6 +12,7 @@ use egui::Vec2;
 enum Step {
     Idle,
     Propose(u8),
+    ProposeNoted(u8, &'static str),
     Commit,
 }
 
@@ -42,6 +43,7 @@ impl Component for Dragger<'_> {
         match self.step {
             Step::Idle => {}
             Step::Propose(to) => cx.propose(to),
+            Step::ProposeNoted(to, note) => cx.propose_with(to, note),
             Step::Commit => cx.commit(),
         }
         *self.before = cx.gesture_before();
@@ -72,4 +74,28 @@ fn a_gesture_reads_the_value_it_began_with_until_it_ends() {
     assert_eq!(show(Step::Idle, &mut value), Some(Mixed::Same(4)), "a pass with no proposal still reads it");
     assert_eq!(show(Step::Commit, &mut value), None, "the pass that commits has none");
     assert_eq!(show(Step::Idle, &mut value), None, "none after the gesture");
+}
+
+/// The note a gesture sets is readable outside the pass while the gesture runs, a refused proposal leaves the last
+/// note as it was, and the note goes when the gesture ends.
+#[trial]
+fn a_gesture_note_is_set_by_accepted_proposals_and_ends_with_the_gesture() {
+    let mut frames = Frames::new();
+    let mut value = 4u8;
+    let mut show = |step: Step, enabled: bool, value: &mut u8| {
+        let mut before = None;
+        let mut id = None;
+        frames.frame(vec![], |ui| {
+            id = Some(Dragger { common: Common::new(), value: Bind::bound(&mut *value), step, before: &mut before }.enabled(enabled).id_salt("dragger").show(ui).id);
+        });
+        (frames.ctx.clone(), id.unwrap())
+    };
+    let (ctx, id) = show(Step::ProposeNoted(5, "first"), true, &mut value);
+    assert_eq!(craft_ui::runtime::edit::gesture_note::<u8, &'static str>(&ctx, id), Some("first"));
+    show(Step::ProposeNoted(6, "refused"), false, &mut value);
+    assert_eq!(craft_ui::runtime::edit::gesture_note::<u8, &'static str>(&ctx, id), Some("first"), "a refused proposal sets no note");
+    show(Step::ProposeNoted(7, "second"), true, &mut value);
+    assert_eq!(craft_ui::runtime::edit::gesture_note::<u8, &'static str>(&ctx, id), Some("second"));
+    show(Step::Commit, true, &mut value);
+    assert_eq!(craft_ui::runtime::edit::gesture_note::<u8, &'static str>(&ctx, id), None, "no note after the gesture");
 }

@@ -88,6 +88,42 @@ impl<C: Component> Cx<'_, C> {
         self.core.memory.shown(id)
     }
 
+    /// [`propose`](Edit::propose), saying whether the component took the proposal: `false` when it refuses edits or
+    /// the gesture was cancelled under its press.
+    fn take_proposal(&mut self, v: ValueOf<C>) -> bool {
+        if self.refuses_edits() {
+            return false;
+        }
+        let before = self.before();
+        let (label, doc_key) = (self.core.label_arc(), self.core.resolved.doc_key);
+        let fresh = crate::runtime::edit::next_gesture_id(&self.core.ctx);
+        let slot = self.gesture_slot();
+        // A gesture cancelled under its press stays cancelled until the release.
+        if slot.dead {
+            return false;
+        }
+        let started = !slot.is_running();
+        if started {
+            slot.id = fresh;
+            slot.before = Some(before.clone());
+        }
+        slot.proposal = Some(v.clone());
+        let id = slot.id;
+        let report = slot.reported.as_ref() != Some(&v);
+        if report {
+            slot.reported = Some(v.clone());
+        }
+        if started {
+            self.events.push(EditEvent::begin(id, before, label, doc_key));
+        }
+        if report {
+            self.events.push(EditEvent::update(id, v.clone()));
+        }
+        self.shown = Some(Arc::new(v));
+        self.mixed = false;
+        true
+    }
+
     /// The value before an edit: the shown value, or mixed.
     fn before(&self) -> Mixed<ValueOf<C>> {
         match (&self.shown, self.mixed) {
@@ -219,36 +255,7 @@ impl<C: Component> Edit for Cx<'_, C> {
     }
 
     fn propose(&mut self, v: ValueOf<C>) {
-        if self.refuses_edits() {
-            return;
-        }
-        let before = self.before();
-        let (label, doc_key) = (self.core.label_arc(), self.core.resolved.doc_key);
-        let fresh = crate::runtime::edit::next_gesture_id(&self.core.ctx);
-        let slot = self.gesture_slot();
-        // A gesture cancelled under its press stays cancelled until the release.
-        if slot.dead {
-            return;
-        }
-        let started = !slot.is_running();
-        if started {
-            slot.id = fresh;
-            slot.before = Some(before.clone());
-        }
-        slot.proposal = Some(v.clone());
-        let id = slot.id;
-        let report = slot.reported.as_ref() != Some(&v);
-        if report {
-            slot.reported = Some(v.clone());
-        }
-        if started {
-            self.events.push(EditEvent::begin(id, before, label, doc_key));
-        }
-        if report {
-            self.events.push(EditEvent::update(id, v.clone()));
-        }
-        self.shown = Some(Arc::new(v));
-        self.mixed = false;
+        self.take_proposal(v);
     }
 
     fn set(&mut self, v: ValueOf<C>) {
@@ -375,10 +382,8 @@ impl<C: Component> Cx<'_, C> {
     /// guide a guides drag moves. The note replaces the last one and goes when the gesture ends; a proposal the
     /// component refuses sets none.
     pub fn propose_with<N: Send + Sync + 'static>(&mut self, v: ValueOf<C>, note: N) {
-        self.propose(v);
-        let slot = self.gesture_slot();
-        if slot.is_running() {
-            slot.note = Some(GestureNote::new(note));
+        if self.take_proposal(v) {
+            self.gesture_slot().note = Some(GestureNote::new(note));
         }
     }
 
