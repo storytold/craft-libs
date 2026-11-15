@@ -33,6 +33,8 @@ pub mod filters;
 pub mod media;
 /// Borrowed views of native XFL shape and style elements.
 pub mod shape;
+/// Borrowed views of native XFL shape-hint records.
+pub mod shape_hints;
 
 /// Largest single entry inflated (bytes).
 pub const MAX_ENTRY: usize = 256 * 1024 * 1024;
