@@ -259,17 +259,17 @@ fn mixed_attr(out: &mut Vec<u8>, name: &str, ty: &str, payload: &[u8]) {
 /// `B`, `G`, `R` channels, in scan lines or (with `tiled`) in one level of 2 × 2 tiles, and whose
 /// deep part is 3 × 2 with one float `A` channel. Both parts are uncompressed.
 fn mixed_headers(deep_first: bool, tiled: bool, (w, h): (usize, usize)) -> Vec<u8> {
-    mixed_headers_compressed(deep_first, tiled, (w, h), 0)
+    mixed_headers_with(deep_first, tiled, (w, h), 0, &["B", "G", "R"], 2)
 }
 
-/// [`mixed_headers`] with the flat part's compression code: 0 for none, or 3 for ZIP, which
-/// holds 16 scan lines a block.
-fn mixed_headers_compressed(deep_first: bool, tiled: bool, (w, h): (usize, usize), compression: u8) -> Vec<u8> {
+/// [`mixed_headers`] with the flat part's compression code (0 for none, or 3 for ZIP, which
+/// holds 16 scan lines a block), its float channels, and the width and height of its tiles.
+fn mixed_headers_with(deep_first: bool, tiled: bool, (w, h): (usize, usize), compression: u8, flat_channels: &[&str], tile: u32) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&0x0131_2f76u32.to_le_bytes());
     out.extend_from_slice(&(2u32 | 0x800 | 0x1000).to_le_bytes());
     for deep in if deep_first { [true, false] } else { [false, true] } {
-        let (w, h, channels): (usize, usize, &[&str]) = if deep { (3, 2, &["A"]) } else { (w, h, &["B", "G", "R"]) };
+        let (w, h, channels): (usize, usize, &[&str]) = if deep { (3, 2, &["A"]) } else { (w, h, flat_channels) };
         let mut chlist = Vec::new();
         for name in channels {
             chlist.extend_from_slice(name.as_bytes());
@@ -284,7 +284,7 @@ fn mixed_headers_compressed(deep_first: bool, tiled: bool, (w, h): (usize, usize
         let tiled = tiled && !deep;
         let compression = if deep { 0 } else { compression };
         let lines = if compression == 3 { 16 } else { 1 };
-        let chunks = if tiled { w.div_ceil(2) * h.div_ceil(2) } else { h.div_ceil(lines) };
+        let chunks = if tiled { w.div_ceil(tile as usize) * h.div_ceil(tile as usize) } else { h.div_ceil(lines) };
         mixed_attr(&mut out, "channels", "chlist", &chlist);
         mixed_attr(&mut out, "chunkCount", "int", &(chunks as i32).to_le_bytes());
         mixed_attr(&mut out, "compression", "compression", &[compression]);
@@ -299,8 +299,10 @@ fn mixed_headers_compressed(deep_first: bool, tiled: bool, (w, h): (usize, usize
         mixed_attr(&mut out, "screenWindowCenter", "v2f", &[0u8; 8]);
         mixed_attr(&mut out, "screenWindowWidth", "float", &1f32.to_le_bytes());
         if tiled {
-            // 2 × 2 tiles, one level, rounded down.
-            mixed_attr(&mut out, "tiles", "tiledesc", &[2, 0, 0, 0, 2, 0, 0, 0, 0]);
+            // `tile` × `tile` tiles, one level, rounded down.
+            let mut desc: Vec<u8> = [tile, tile].iter().flat_map(|v| v.to_le_bytes()).collect();
+            desc.push(0);
+            mixed_attr(&mut out, "tiles", "tiledesc", &desc);
         }
         let ty: &[u8] = if deep {
             b"deepscanline"
@@ -490,7 +492,7 @@ fn a_scan_line_chunk_beside_a_deep_part_must_start_at_its_block_s_first_line() {
     let (plain, offsets) = mixed_file(false, false);
     let deep = &plain[offsets[1][0]..];
     let with_y = |y: i32| {
-        let mut out = mixed_headers_compressed(false, false, (w, h), 3);
+        let mut out = mixed_headers_with(false, false, (w, h), 3, &["B", "G", "R"], 2);
         let mut chunk = Vec::new();
         chunk.extend_from_slice(&0i32.to_le_bytes());
         chunk.extend_from_slice(&y.to_le_bytes());
@@ -516,6 +518,44 @@ fn a_scan_line_chunk_beside_a_deep_part_must_start_at_its_block_s_first_line() {
         let b = with_y(y);
         for r in [decode_part(&b, 0, &all, &limits).map(|_| ()), decode_display_part(&b, 0, &all, &|_| 0.0, &limits).map(|_| ())] {
             assert!(matches!(&r, Err(Error::Malformed(_))), "y {y}: {r:?}");
+        }
+    }
+}
+
+#[test]
+fn a_tile_too_large_to_address_is_refused_before_a_chunk_is_read() {
+    // Five float channels in 10^9 × 10^9 tiles: 20 bytes a pixel times 10^18 pixels does not fit
+    // in a 64-bit size, though the 1 × 1 part passes every size limit.
+    let limits = Limits::default();
+    let channels = ["A", "B", "C", "D", "E"];
+    let tile = 1_000_000_000u32;
+
+    let (plain, offsets) = mixed_file(false, false);
+    let mut mixed = mixed_headers_with(false, true, (1, 1), 0, &channels, tile);
+    let mut chunk = Vec::new();
+    [0i32, 0, 0, 0, 0, 20].iter().for_each(|v| chunk.extend_from_slice(&v.to_le_bytes()));
+    channels.iter().for_each(|_| chunk.extend_from_slice(&1f32.to_le_bytes()));
+    let flat_at = mixed.len() + 3 * 8;
+    let deep_at = flat_at + chunk.len();
+    for at in [flat_at, deep_at, deep_at + offsets[1][1] - offsets[1][0]] {
+        mixed.extend_from_slice(&(at as u64).to_le_bytes());
+    }
+    mixed.extend_from_slice(&chunk);
+    mixed.extend_from_slice(&plain[offsets[1][0]..]);
+
+    // A file of flat parts only, read by the crate's own reader, with its 4 × 4 tiles widened.
+    let mut flat_only = file(vec![layer(None, 1, 1, &channels, true, exr::prelude::Compression::Uncompressed)], (1, 1));
+    let at = flat_only.windows(9).position(|w| w == b"tiledesc\0").unwrap() + 9 + 4;
+    [tile, tile].iter().enumerate().for_each(|(i, v)| flat_only[at + i * 4..at + i * 4 + 4].copy_from_slice(&v.to_le_bytes()));
+
+    for (name, b) in [("mixed", &mixed), ("flat only", &flat_only)] {
+        let results = [
+            parts(b, &limits).map(|_| ()),
+            decode_part(b, 0, &all, &limits).map(|_| ()),
+            decode_display_part(b, 0, &all, &|_| 0.0, &limits).map(|_| ()),
+        ];
+        for r in results {
+            assert!(matches!(&r, Err(Error::LimitExceeded(_))), "{name}: {r:?}");
         }
     }
 }

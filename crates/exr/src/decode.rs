@@ -249,7 +249,17 @@ fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData> {
     check_previews(bytes)?;
     let meta = MetaData::read_from_buffered(Cursor::new(bytes), false).map_err(map_exr)?;
     let (mut total, mut flat, mut dwa) = (0u64, 0u64, 0u64);
-    for header in meta.headers.iter() {
+    for (index, header) in meta.headers.iter().enumerate() {
+        // The crate sizes a flat chunk's bound as a block's pixels times the bytes a pixel takes,
+        // without checking the product, before it reads the chunk.
+        let block_pixels = match header.blocks {
+            exr::meta::BlockDescription::Tiles(tiles) => (tiles.tile_size.0 as u64).checked_mul(tiles.tile_size.1 as u64),
+            exr::meta::BlockDescription::ScanLines => (header.compression.scan_lines_per_block() as u64).checked_mul(header.layer_size.0 as u64),
+        };
+        let block_bytes = block_pixels.and_then(|n| n.checked_mul(header.channels.bytes_per_pixel as u64)).and_then(|n| usize::try_from(n).ok());
+        if !header.deep && block_bytes.is_none() {
+            return Err(Error::LimitExceeded(format!("a block of part {index} holds more bytes than this platform can address")));
+        }
         let (w, h) = window_size(header.layer_size);
         if w > limits.max_width || h > limits.max_height {
             return Err(Error::LimitExceeded(format!("a {w}x{h} part exceeds {}x{}", limits.max_width, limits.max_height)));
