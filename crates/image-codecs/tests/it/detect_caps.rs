@@ -62,6 +62,7 @@ fn default_build_formats_all_symmetric() {
         Format::Dpx,
         Format::Cineon,
         Format::Iff,
+        Format::SunRaster,
     ];
     for f in expected {
         assert!(caps(f).read && caps(f).write, "{f:?}");
@@ -218,6 +219,19 @@ fn detect_magic_iff() {
     assert_eq!(detect(b"FORM\0\0\0\x14AIFF"), None);
     assert!(decode_as(Format::Iff, b"FORM\0\0\0\x14ILBM").is_err());
 }
+#[test]
+fn detect_magic_sun_raster() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    let img = Image::from_u8(5, 3, ChannelLayout::Rgb, (0..45).collect()).unwrap();
+    let bytes = encode(&img, Format::SunRaster, &EncodeOptions::default()).unwrap();
+    assert_eq!(detect(&bytes), Some(Format::SunRaster));
+    assert_eq!(from_extension("scan.RAS"), Some(Format::SunRaster));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::SunRaster));
+    assert_eq!(detect(&[0x59, 0xa6, 0x6a, 0x95]), None);
+    assert!(decode_as(Format::SunRaster, &[0x59, 0xa6, 0x6a, 0x95]).is_err());
+}
+
 #[test]
 fn detect_magic_avif() {
     assert_eq!(detect(b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf"), Some(Format::Avif));

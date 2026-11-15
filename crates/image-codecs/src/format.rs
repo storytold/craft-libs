@@ -44,6 +44,8 @@ pub enum Format {
     Iff,
     /// JPEG 2000 (JP2 container or raw J2K codestream): read-only; see [`ASYMMETRIC_EXCEPTIONS`].
     Jp2,
+    /// Sun Raster (`.ras`): 1-, 8-, 24- and 32-bit, uncompressed or RLE.
+    SunRaster,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -113,7 +115,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 24] = [
+    pub const ALL: [Format; 25] = [
         Format::Png,
         Format::Jpeg,
         Format::Jp2,
@@ -138,6 +140,7 @@ impl Format {
         Format::Cineon,
         Format::Dicom,
         Format::Iff,
+        Format::SunRaster,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -176,6 +179,7 @@ impl Format {
             Format::Dicom => "DICOM",
             Format::Iff => "Amiga IFF",
             Format::Jp2 => "JPEG 2000",
+            Format::SunRaster => "Sun Raster",
         }
     }
 
@@ -207,6 +211,7 @@ impl Format {
             Format::Dicom => &["dcm", "dicom", "dc3"],
             Format::Iff => &["iff", "lbm", "ilbm"],
             Format::Jp2 => &["jp2", "j2k", "j2c", "jpf", "jpx"],
+            Format::SunRaster => &["ras", "sun"],
         }
     }
 
@@ -236,6 +241,7 @@ impl Format {
             Format::Dicom => "application/dicom",
             Format::Iff => "image/x-iff",
             Format::Jp2 => "image/jp2",
+            Format::SunRaster => "image/x-sun-raster",
         }
     }
 
@@ -310,6 +316,7 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
+        Format::SunRaster => FormatCaps { layouts: &[L::Gray, L::Rgb, L::Rgba], alpha: true, ..base },
         Format::Jp2 => FormatCaps { read: true, write: false, layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::Cmyk, L::CmykA], icc: true, ..base },
     }
 }
@@ -387,6 +394,9 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     }
     if b.starts_with(b"/* XPM */") || b.starts_with(b"! XPM2\n") || b.starts_with(b"! XPM2\r\n") {
         return Some(Format::Xpm);
+    }
+    if crate::codecs::sunraster::looks_like_sunraster(b) {
+        return Some(Format::SunRaster);
     }
     if crate::codecs::pcx::looks_like_pcx(b) {
         return Some(Format::Pcx);
