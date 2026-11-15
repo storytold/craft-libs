@@ -377,6 +377,22 @@ fn non_json_stdout_is_protocol_error() {
 }
 
 #[test]
+fn a_blank_stdout_line_is_protocol_error() {
+    // The fake ends each line with a newline, so these send "\n" and "  \r\n".
+    for blank in ["", "  \r"] {
+        let mut c = fake(move |_, req| Some(vec![blank.to_string(), result(req, json!(1))]));
+        let err = c.request_within("x", json!({}), LONG).unwrap_err();
+        assert!(matches!(err, McpError::Protocol(_)), "{blank:?}: {err}");
+        assert!(c.closed().is_some());
+        // Without a reply after it, the blank line still ends the request before its deadline.
+        let mut c = fake(move |_, _| Some(vec![blank.to_string()]));
+        let err = c.request_within("x", json!({}), LONG).unwrap_err();
+        assert!(matches!(err, McpError::Protocol(_)), "{blank:?}: {err}");
+        assert!(c.closed().is_some());
+    }
+}
+
+#[test]
 fn a_malformed_reply_is_a_protocol_error() {
     for reply in [json!({"result": 1, "error": {"code": 1, "message": "both"}}), json!({}), json!({"error": {"code": "x", "message": "m"}})] {
         let mut c = fake(move |_, req| {

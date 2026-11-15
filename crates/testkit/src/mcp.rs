@@ -464,7 +464,6 @@ impl McpChild {
             loop {
                 let incoming = match read_line_capped(&mut r, cap) {
                     Ok(None) => Incoming::Ended,
-                    Ok(Some(line)) if line.iter().all(u8::is_ascii_whitespace) => continue,
                     Ok(Some(line)) => parse_line(&line),
                     Err(LineError::TooLong) => Incoming::TooLong,
                     Err(LineError::Io(e)) => Incoming::ReadFailed(e),
