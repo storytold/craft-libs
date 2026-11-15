@@ -11,7 +11,9 @@ allocation failure inside the decoder. On native applications, call `use_own_wor
 startup and call `serve_if_asked()` before normal argument handling. Subsequent `decode` and
 `encode_*` calls then run in a child process with a 30-minute timeout; a crash or stack overflow
 is contained to that child. The worker has no operating-system memory limit yet. Without a
-configured worker, conversions run in the current process.
+configured worker, conversions are refused rather than run in the current process: call
+`allow_in_process()` only for input that is known to be trusted (tests, or bytes this process
+produced itself). Coordinates, once a worker is configured but cannot start, also fail closed.
 
 The bridge is not built for `wasm32` or FreeBSD/aarch64. Those targets retain the public API and
 return a clear unsupported-build error. The `acadrust` 0.6.6 dependency is used unmodified under
