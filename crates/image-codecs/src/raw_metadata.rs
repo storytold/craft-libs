@@ -177,14 +177,21 @@ mod tests {
         }
         let mut image = crate::Image::from_u8(2, 2, crate::ChannelLayout::Rgb, vec![80; 12]).unwrap();
         image.meta.exif = Some(EXIF.to_vec());
-        for format in [Format::Png, Format::WebP] {
+        for format in [Format::Jpeg, Format::Png, Format::WebP] {
             let encoded = crate::encode(&image, format, &crate::EncodeOptions::default()).unwrap();
             for at in 0..encoded.len() {
                 for value in [0, 255] {
                     let mut original = encoded.clone();
                     original[at] = value;
                     let mut shared = original.clone();
-                    if format == Format::Png {
+                    if format == Format::Jpeg {
+                        if let Some(pos) = original.windows(6).position(|w| w == b"Exif\0\0")
+                            && let Some(dst) = original.get_mut(pos + 6..pos + 6 + EXIF.len())
+                        {
+                            dst.copy_from_slice(EXIF);
+                        }
+                        replace_jpeg_exif(&mut shared, EXIF);
+                    } else if format == Format::Png {
                         old_png(&mut original, EXIF);
                         replace_png_exif(&mut shared, EXIF).unwrap();
                     } else {
