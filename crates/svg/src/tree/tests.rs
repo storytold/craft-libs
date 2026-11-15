@@ -531,13 +531,15 @@ mod invalid_image_accounting {
 
     #[test]
     fn malformed_data_url_without_comma_is_counted() {
-        let bad = r#"<image width="1" height="1" xlink:href="data:image/png;base64"/>"#;
-        let (found, report) = usage(bad, shallow());
-        assert!(found.is_empty());
-        assert_eq!(report.invalid_raster_images, 1);
-        let (found, report) = usage(&embed(&svg(bad)), shallow());
-        assert_eq!(found, [true]);
-        assert_eq!(report.invalid_raster_images, 1);
+        for href in ["data:image/png;base64", " data:image/png;base64", "da&#x9;ta:image/png;base64", "da&#xA;ta:image/png;base64"] {
+            let bad = format!(r#"<image width="1" height="1" xlink:href="{href}"/>"#);
+            let (found, report) = usage(&bad, shallow());
+            assert!(found.is_empty(), "{href}");
+            assert_eq!(report.invalid_raster_images, 1, "{href}");
+            let (found, report) = usage(&embed(&svg(&bad)), shallow());
+            assert_eq!(found, [true], "{href}");
+            assert_eq!(report.invalid_raster_images, 1, "{href}");
+        }
     }
 
     #[test]

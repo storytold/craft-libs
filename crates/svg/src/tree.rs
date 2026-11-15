@@ -405,12 +405,12 @@ fn account_invalid_data_urls(xml: &roxmltree::Document<'_>, used: &Used) {
         let Some(href) = href else { continue };
         let url = match data_url::DataUrl::process(href) {
             Ok(url) => url,
-            Err(_) => {
-                if href.split_once(':').is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("data")) {
-                    used.invalid_raster.fetch_add(1, Ordering::Relaxed);
-                }
+            // Use the parser's normalized scheme recognition, including whitespace.
+            Err(data_url::DataUrlError::NoComma) => {
+                used.invalid_raster.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
+            Err(data_url::DataUrlError::NotADataUrl) => continue,
         };
         if url.decode(|_| Ok::<(), std::convert::Infallible>(())).is_err() {
             used.invalid_raster.fetch_add(1, Ordering::Relaxed);
