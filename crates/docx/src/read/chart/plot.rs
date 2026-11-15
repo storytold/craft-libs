@@ -468,7 +468,11 @@ fn bars(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataL
             let (p0, p1) = (p0.min(p1), p0.max(p1));
             let segs = if g.horiz { rect_segs(p0, a, p1, a + thick) } else { rect_segs(a, p0, a + thick, p1) };
             if !s.no_fill {
-                fill(out, segs, c.point_colour(j, i));
+                fill(out, segs.clone(), c.point_colour(j, i));
+            }
+            // An explicit outline shows without a fill too (the series' colour is the line's here).
+            if let (true, true, Some(w)) = (s.line, s.no_fill, s.line_w) {
+                stroke(out, segs, c.point_colour(j, i), w);
             }
             if let Some(text) = label_of(s, i) {
                 let mid = a + thick / 2.0;
@@ -626,7 +630,9 @@ fn areas(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
             segs.push(PathSeg::Line(g.cat_x(i), g.val(*b)));
         }
         segs.push(PathSeg::Close);
-        fill(out, segs, c.series_colour(j));
+        if !s.no_fill {
+            fill(out, segs, c.series_colour(j));
+        }
         for (i, (t, b)) in top.iter().zip(&base).enumerate() {
             if let Some(text) = label_of(s, i) {
                 labels.push(DataLabel { x: g.cat_x(i), y: g.val((t + b) / 2.0), text, inside: true, pos: LabelPos::Above, off: 0.0 });

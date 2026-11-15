@@ -140,7 +140,7 @@ pub(super) fn label_of(s: &Series, i: usize) -> Option<String> {
         return None;
     }
     let v = s.raw.get(i).copied().flatten()?;
-    let fmt = s.label_fmt.as_deref().or(s.fmt.as_deref()).filter(|f| !f.eq_ignore_ascii_case("General"));
+    let fmt = s.label_fmt.as_ref().map_or(s.fmt.as_deref(), |f| f.as_deref().or(s.fmt.as_deref())).filter(|f| !f.eq_ignore_ascii_case("General"));
     Some(match fmt {
         Some(f) => format_value(v, f, 1.0),
         None => general_value(v),

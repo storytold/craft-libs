@@ -162,8 +162,9 @@ pub(super) struct Series {
     pub(super) x_fmt: Option<String>,
     /// Data labels on or off for this series (`c:dLbls` of its own), when it says.
     pub(super) labels: Option<bool>,
-    /// The labels' own number format (`c:dLbls/c:numFmt` not linked to the source), if any.
-    pub(super) label_fmt: Option<String>,
+    /// The labels' number format (`c:dLbls/c:numFmt`): `None` when not given (the chart type's
+    /// applies), `Some(None)` when linked to the source, else `Some(Some(code))`.
+    pub(super) label_fmt: Option<Option<String>>,
     /// The data labels' `c:dLblPos`, when the file gives a known one.
     pub(super) label_pos: Option<LabelPos>,
     /// The marker's own fill (`c:marker/c:spPr`); without it markers take the automatic colour.

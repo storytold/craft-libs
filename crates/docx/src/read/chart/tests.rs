@@ -830,3 +830,72 @@ fn horizontal_value_axis_title_gets_its_own_strip() {
     let p = plot_left(&items).unwrap();
     assert!(p.is_finite() && p <= 300.0 * 0.3, "{p}");
 }
+
+/// A one-series chart whose series carries `sp` as its `c:spPr`.
+fn chart_with_sp(kind: &str, sp: &str) -> Vec<GraphicItem> {
+    let s = ser(0, "S", None, &["Q1", "Q2"], &["4", "8"]).replace("<c:cat>", &format!("{sp}<c:cat>"));
+    let plot = match kind {
+        "area" => format!(
+            r#"<c:areaChart><c:grouping val="standard"/>{s}<c:axId val="1"/><c:axId val="2"/></c:areaChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+        ),
+        dir => format!(
+            r#"<c:barChart><c:barDir val="{dir}"/><c:grouping val="clustered"/>{s}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+        ),
+    };
+    chart_items(&space(&plot), &theme(), 300.0, 200.0)
+}
+
+/// The series' closed shapes: (filled, stroked with the given width).
+fn series_shapes(items: &[GraphicItem], width: f32) -> (usize, usize) {
+    let closed = |segs: &[PathSeg]| segs.iter().any(|s| matches!(s, PathSeg::Close));
+    let fills = items.iter().filter(|it| matches!(it, GraphicItem::Path { segs, fill: Some(_), .. } if closed(segs))).count();
+    let strokes = items
+        .iter()
+        .filter(|it| matches!(it, GraphicItem::Path { segs, fill: None, stroke: Some(_), stroke_width, .. } if closed(segs) && (*stroke_width - width).abs() < 0.01))
+        .count();
+    (fills, strokes)
+}
+
+#[test]
+fn unfilled_bars_keep_their_explicit_outline() {
+    let outlined = r#"<c:spPr><a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr>"#;
+    let no_line = r#"<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>"#;
+    for dir in ["col", "bar"] {
+        // Two points, two outlines, no fill.
+        assert_eq!(series_shapes(&chart_with_sp(dir, outlined), 2.0), (0, 2), "{dir}");
+        // Control: no fill and no line draws nothing.
+        assert_eq!(series_shapes(&chart_with_sp(dir, no_line), 2.0), (0, 0), "{dir}");
+    }
+}
+
+#[test]
+fn no_fill_area_series_is_not_painted() {
+    let filled = r#"<c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr>"#;
+    let none = r#"<c:spPr><a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr>"#;
+    assert_eq!(series_shapes(&chart_with_sp("area", filled), 2.0).0, 1);
+    assert_eq!(series_shapes(&chart_with_sp("area", none), 2.0).0, 0);
+}
+
+#[test]
+fn source_linked_series_labels_do_not_inherit_the_chart_format() {
+    let dl = |fmt: &str| format!(r#"<c:dLbls><c:numFmt formatCode="{fmt}" sourceLinked="{{}}"/><c:showVal val="1"/></c:dLbls>"#);
+    let shown = |items: &[GraphicItem]| -> Vec<String> {
+        items.iter().filter_map(|it| if let GraphicItem::Text { text, .. } = it { Some(text.clone()) } else { None }).collect()
+    };
+    // Chart-level 0%; the series' own labels are `linked` (or have no labels element at all).
+    let run = |series_dl: &str| {
+        let s = ser(0, "S", Some("FF0000"), &["Q1", "Q2", "Q3"], &["3.2", "4.1", "5"]).replace("<c:cat>", &format!("{series_dl}<c:cat>"));
+        let chart_dl = dl("0%").replace("{}", "0");
+        let plot = format!(
+            r#"<c:lineChart><c:grouping val="standard"/>{s}{chart_dl}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+        );
+        shown(&chart_items(&space(&plot), &theme(), 300.0, 200.0))
+    };
+    for linked in ["1", "true"] {
+        let own = run(&dl("General").replace("{}", linked));
+        assert!(own.contains(&"3.2".to_string()) && !own.contains(&"320%".to_string()), "sourceLinked={linked}: {own:?}");
+    }
+    // Control: a series without a label format still takes the chart's.
+    let inherited = run(r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#);
+    assert!(inherited.contains(&"320%".to_string()), "{inherited:?}");
+}

@@ -44,6 +44,7 @@ impl Chart {
             s.values.resize(n, None);
             s.xs.resize(n, None);
             s.labels = Some(s.labels.or(type_labels).unwrap_or(false));
+            // Absent (`None`) inherits the chart type's; explicitly source-linked (`Some(None)`) does not.
             if s.label_fmt.is_none() {
                 s.label_fmt.clone_from(&type_fmt);
             }
@@ -191,13 +192,15 @@ fn show_values(d: Option<&El>) -> Option<bool> {
     d.child("c:showVal").map(|v| v.attr("val").is_none_or(truthy))
 }
 
-/// The number format of data labels (`c:dLbls/c:numFmt`) when it is not linked to the source.
-fn label_format(d: Option<&El>) -> Option<String> {
-    d?.child("c:numFmt")
-        .filter(|f| f.attr("sourceLinked") != Some("1"))
-        .and_then(|f| f.attr("formatCode"))
-        .filter(|f| f.chars().count() <= craft_wordmodel::chart::MAX_FMT)
-        .map(str::to_string)
+/// The number format of data labels (`c:dLbls/c:numFmt`): `None` when the labels say nothing,
+/// `Some(None)` when they are linked to the source (so a chart-level format does not apply),
+/// `Some(Some(code))` for their own format code.
+fn label_format(d: Option<&El>) -> Option<Option<String>> {
+    let f = d?.child("c:numFmt")?;
+    if f.attr("sourceLinked").is_some_and(truthy) {
+        return Some(None);
+    }
+    f.attr("formatCode").filter(|f| f.chars().count() <= craft_wordmodel::chart::MAX_FMT).map(|f| Some(f.to_string()))
 }
 
 fn legend_pos(chart: &El) -> Option<Pos> {
