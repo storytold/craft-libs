@@ -281,6 +281,20 @@ fn an_edited_catalog_metadata_does_not_change_what_decrypts() {
     assert_eq!(data_of(&doc, metadata.num), PAGE_XMP.as_bytes());
 }
 
+/// From the review of this change: an incremental save of the same edit writes both streams again,
+/// each as the saved catalog has it, so the file reads back as the document did.
+#[test]
+fn an_edited_catalog_metadata_saved_incrementally_reads_back() {
+    let mut doc = Document::open_with_password(Arc::new(encrypted_by_hand(Algorithm::Aes128)), Some("own")).unwrap();
+    let root = doc.root().unwrap();
+    doc.update_dict(root, |c| c.set(b"Metadata".to_vec(), Object::Ref(craft_pdf::cos::ObjRef::new(6, 0)))).unwrap();
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(holds(&bytes, PAGE_XMP), "the stream the catalog names now is written in the clear");
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert_eq!(data_of(&doc, 6), PAGE_XMP.as_bytes(), "the page's metadata read as the file held it");
+    assert_eq!(data_of(&doc, 5), DOC_XMP.as_bytes(), "the document's former metadata decrypted from plaintext");
+}
+
 /// A catalog `/Metadata` whose generation doesn't reach the object names no stream: the object
 /// under that number, the page's metadata, is encrypted as any stream is.
 #[test]

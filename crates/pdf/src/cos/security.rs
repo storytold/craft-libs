@@ -417,6 +417,22 @@ fn document_metadata_in_clear(doc: &Document, h: &SecurityHandler, num: u32, dec
     catalog_metadata(doc) == Some(num)
 }
 
+/// The document-level metadata streams whose encryption an edit of the catalog's `/Metadata`
+/// changed (see [`document_metadata_in_clear`]): the one the source's catalog names and the one
+/// the catalog as edited names, when they differ and `/EncryptMetadata` is false in a `/V` 4 or
+/// 5 dictionary. Empty otherwise.
+pub(crate) fn metadata_scope_moved(doc: &Document) -> Vec<u32> {
+    let Some(h) = doc.security() else { return Vec::new() };
+    if h.encrypts_metadata() || !matches!(h.dict().v, 4 | 5) {
+        return Vec::new();
+    }
+    let (source, edited) = (doc.source_metadata(), catalog_metadata(doc));
+    if source == edited {
+        return Vec::new();
+    }
+    source.into_iter().chain(edited).collect()
+}
+
 /// The object the catalog's `/Metadata` names, when the reference reaches it (its generation one
 /// the object takes). A catalog that reads as absent (past [`MAX_FOLLOWED`]) names none.
 pub(crate) fn catalog_metadata(doc: &Document) -> Option<u32> {
