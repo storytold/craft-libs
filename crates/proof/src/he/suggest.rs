@@ -9,7 +9,8 @@ pub fn suggest(word: &str, max: usize) -> Vec<String> {
 
 /// Spelling suggestions for `word` against a given [`AffixDict`].
 pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
-    crate::cs::suggest::suggest_in(d, word, max)
+    let norm = super::normalize_hebrew(word);
+    crate::cs::suggest::suggest_in(d, &norm, max)
 }
 
 #[cfg(test)]

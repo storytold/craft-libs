@@ -57,11 +57,22 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
             v.push(issue(i, i + 1 + p.len_utf8(), "רווח לפני סימן פיסוק".into(), vec![p.to_string()]));
         }
     }
-    for (i, _) in text.match_indices("  ") {
-        if i > 0 && text.get(..i).is_some_and(|t| t.ends_with(' ')) {
-            continue;
+    let mut space_run: Option<usize> = None;
+    for (i, c) in text.char_indices() {
+        if c == ' ' {
+            if space_run.is_none() {
+                space_run = Some(i);
+            }
+        } else if let Some(start) = space_run.take() {
+            if i - start >= 2 {
+                v.push(issue(start, i, "רווח כפול".into(), vec![" ".into()]));
+            }
         }
-        v.push(issue(i, i + 2, "רווח כפול".into(), vec![" ".into()]));
+    }
+    if let Some(start) = space_run.take() {
+        if text.len() - start >= 2 {
+            v.push(issue(start, text.len(), "רווח כפול".into(), vec![" ".into()]));
+        }
     }
 }
 

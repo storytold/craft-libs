@@ -1,37 +1,12 @@
-//! Hand-written synthetic Hebrew test fixture for unit tests.
+//! Synthetic Hebrew Hunspell dictionary used by unit tests to verify Hebrew spelling and suggestions
+//! without depending on system dictionary paths.
 
-/// Synthetic Hunspell `.aff` rules for Hebrew tests.
-pub const AFF: &str = "SET UTF-8
-FLAG UTF-8
-FORBIDDENWORD F
-NEEDAFFIX X
-TRY שלוםביתספרעבודהאניאתהךםןףץ
-REP 2
-REP מ ם
-REP נ ן
-PFX H Y 3
-PFX H 0 ה .
-PFX H 0 ב .
-PFX H 0 וב .
-SFX S Y 1
-SFX S 0 ים .
-";
+/// Synthetic Hunspell `.aff` prefix/suffix rules for Hebrew tests.
+pub const AFF: &str = "SET UTF-8\nFLAG UTF-8\nFORBIDDENWORD F\nNEEDAFFIX X\nTRY שלוםביתספרעבודהאניאתהךםןףץ\nREP 2\nREP מ ם\nREP נ ן\nPFX H Y 3\nPFX H 0 ה .\nPFX H 0 ב .\nPFX H 0 וב .\nSFX S Y 1\nSFX S 0 ים .\n";
 
 /// Synthetic Hunspell `.dic` word list for Hebrew tests.
-pub const DIC: &str = "12
-שלום/H
-בית/H
-ספר/HS
-עולם/H
-עבודה/H
-ילד/HS
-ילדה/H
-ירושלים
-ישראל
-צה\"ל
-וגו'
-מילהאסורה/F
-";
+pub const DIC: &str =
+    "15\nשלום/H\nבית/H\nספר/HS\nעולם/H\nעבודה/H\nילד/HS\nילדה/H\nירושלים\nישראל\nצה\"ל/H\nוכו\'/H\nוגו\'/H\nחייל/H\nמשרת/H\nמילהאסורה/F\n";
 
 /// Installs the synthetic Hebrew dictionary for unit tests.
 pub fn install() {

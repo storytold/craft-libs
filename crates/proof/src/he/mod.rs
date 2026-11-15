@@ -64,7 +64,7 @@ fn is_hebrew_mark(c: char) -> bool {
 
 /// Strips Hebrew niqqud and cantillation marks from `w` and normalizes Hebrew geresh/gershayim to
 /// ASCII `'` and `"` (as Hspell/Hunspell `he_IL` dictionaries store acronyms and abbreviations).
-fn normalize_hebrew(w: &str) -> String {
+pub(crate) fn normalize_hebrew(w: &str) -> String {
     let mut out = String::with_capacity(w.len());
     for c in w.chars() {
         if is_hebrew_mark(c) {

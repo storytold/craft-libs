@@ -856,13 +856,67 @@ pub fn check_spelling_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// cost quadratic scanning (#1335).
 fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options) -> Vec<Issue> {
     let mut token = (0, 0, false);
-    words(text)
+    words_for_spelling(text, &lang)
         .into_iter()
         .filter_map(|(a, b)| {
             if a < token.0 || a >= token.1 {
                 token = enclosing_token(text, a, b);
             }
             spelling_issue(text, a, b, lang(a), opts, token.2)
+        })
+        .collect()
+}
+
+/// Words extracted for spell checking. For Hebrew text, keeps gershayim (U+05F4 / `"`), geresh
+/// (U+05F3 / `'`), and maqaf (U+05BE / `-`) within the token so acronyms (`צה״ל`, `ק"ק`),
+/// abbreviations (`וכו'`), and hyphenated compounds are checked as whole units.
+fn words_for_spelling(text: &str, lang: &impl Fn(usize) -> ProofLang) -> Vec<(usize, usize)> {
+    if !text.chars().any(crate::he::is_hebrew_letter) {
+        return words(text);
+    }
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    let is_w = |c: char| {
+        c.is_alphanumeric()
+            || c == '\''
+            || c == '’'
+            || c == '-'
+            || c == '"'
+            || c == '״'
+            || c == '׳'
+            || c == '־'
+            || unicode_normalization::char::is_combining_mark(c)
+    };
+    for (i, c) in text.char_indices() {
+        match (start, is_w(c)) {
+            (None, true) => start = Some(i),
+            (Some(s), false) => {
+                out.push((s, i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(s) = start {
+        out.push((s, text.len()));
+    }
+    out.into_iter()
+        .filter_map(|(a, b)| {
+            let w = text.get(a..b)?;
+            let is_he = lang(a) == ProofLang::He || w.chars().any(crate::he::is_hebrew_letter);
+            if is_he {
+                // For Hebrew, trim only leading apostrophes/quotes/hyphens, and trailing quotes/hyphens,
+                // but preserve trailing geresh/apostrophe (e.g. וכו', פרופ').
+                let lead = w.len() - w.trim_start_matches(['\'', '’', '-', '"', '״', '׳', '־']).len();
+                let trimmed_lead = &w[lead..];
+                let trail = trimmed_lead.len() - trimmed_lead.trim_end_matches(['-', '"', '״', '־']).len();
+                let final_w = &trimmed_lead[..trimmed_lead.len() - trail];
+                if final_w.is_empty() { None } else { Some((a + lead, a + lead + final_w.len())) }
+            } else {
+                let lead = w.len() - w.trim_start_matches(['\'', '’', '-', '"', '״', '׳', '־']).len();
+                let trail = w.len() - w.trim_end_matches(['\'', '’', '-', '"', '״', '׳', '־']).len();
+                (a + lead < b - trail).then_some((a + lead, b - trail))
+            }
         })
         .collect()
 }
@@ -3060,6 +3114,13 @@ mod tests {
     /// Combining marks stay in their word (#3562 review): a decomposed word is one word, with the
     /// byte range of what was typed, and it is checked as its composed form in every language.
     #[test]
+    #[test]
+    fn hebrew_spelling_tokenizer_preserves_acronyms_and_abbreviations() {
+        crate::he::test_dict::install();
+        let issues = check_spelling_in("החייל משרת בצה״ל וכו׳.", ProofLang::He);
+        assert!(issues.is_empty(), "צה״ל and וכו׳ should be accepted as valid tokens without false flags: {issues:?}");
+    }
+
     fn decomposed_words_stay_whole() {
         // English results depend on the dictionaries other tests install.
         crate::hold_dictionary_tests();
