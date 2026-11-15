@@ -254,6 +254,7 @@ struct Bin<'a> {
     /// 64-bit record offsets (version 7500 and later).
     wide: bool,
     budget: &'a Budget,
+    records_budget: &'a Budget,
 }
 
 impl Bin<'_> {
@@ -313,6 +314,8 @@ impl Bin<'_> {
         if end <= start || end > limit.min(self.d.len()) {
             return Err(malformed(KIND, format!("bad record end {end} at byte {start}")));
         }
+        // Bound record and property-vector allocations before copying names or reserving storage.
+        self.records_budget.take(std::mem::size_of::<Record>().checked_add(nlen.saturating_mul(3)), "its records")?;
         let name = String::from_utf8_lossy(self.take(pos, nlen)?).into_owned();
         let pstart = *pos;
         let pend =
@@ -321,7 +324,9 @@ impl Bin<'_> {
         if nprops > plen as u64 {
             return Err(malformed(KIND, format!("`{name}`: {nprops} properties in {plen} bytes")));
         }
-        let mut props = Vec::with_capacity(nprops as usize);
+        let count = usize::try_from(nprops).map_err(|_| too_large(KIND, "too many properties"))?;
+        self.records_budget.take(count.checked_mul(std::mem::size_of::<Prop>()), "its properties")?;
+        let mut props = Vec::with_capacity(count);
         for _ in 0..nprops {
             props.push(self.prop(pos, pend)?);
         }
@@ -332,7 +337,12 @@ impl Bin<'_> {
     }
 
     fn prop(&self, pos: &mut usize, pend: usize) -> Result<Prop> {
-        let sub = Bin { d: self.d.get(..pend).ok_or_else(|| malformed(KIND, "truncated property"))?, wide: self.wide, budget: self.budget };
+        let sub = Bin {
+            d: self.d.get(..pend).ok_or_else(|| malformed(KIND, "truncated property"))?,
+            wide: self.wide,
+            budget: self.budget,
+            records_budget: self.records_budget,
+        };
         let t = sub.arr::<1>(pos)?[0];
         Ok(match t {
             b'Y' => Prop::Int(i64::from(i16::from_le_bytes(sub.arr(pos)?))),
@@ -343,10 +353,12 @@ impl Bin<'_> {
             b'D' => Prop::Float(f64::from_le_bytes(sub.arr(pos)?)),
             b'S' => {
                 let n = sub.u32(pos)? as usize;
+                sub.budget.take(n.checked_mul(3), "a string")?;
                 Prop::Str(object_name(sub.take(pos, n)?))
             }
             b'R' => {
                 let n = sub.u32(pos)? as usize;
+                sub.budget.take(Some(n), "binary data")?;
                 Prop::Bytes(sub.take(pos, n)?.to_vec())
             }
             b'f' | b'd' | b'l' | b'i' | b'b' => {
@@ -400,8 +412,9 @@ fn object_name(b: &[u8]) -> String {
 
 fn read_binary(bytes: &[u8], budget: &Budget) -> Result<(u32, Vec<Record>)> {
     let mut pos = BINARY_MAGIC.len();
-    let version = Bin { d: bytes, wide: false, budget }.u32(&mut pos)?;
-    let bin = Bin { d: bytes, wide: version >= 7500, budget };
+    let records_budget = Budget::new(budget.limit);
+    let version = Bin { d: bytes, wide: false, budget, records_budget: &records_budget }.u32(&mut pos)?;
+    let bin = Bin { d: bytes, wide: version >= 7500, budget, records_budget: &records_budget };
     let mut records = vec![];
     while pos < bytes.len() {
         match bin.record(&mut pos, bytes.len(), 0) {
