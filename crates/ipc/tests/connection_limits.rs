@@ -76,8 +76,18 @@ fn auth_line(token: &str) -> String {
 
 const HELLO: &str = "{\"id\":1,\"method\":\"link.hello\",\"params\":{\"protocol\":{\"min\":1,\"max\":1}}}\n";
 
+fn arm_read_timeout(stream: &UnixStream, secs: u64) {
+    let result = stream.set_read_timeout(Some(Duration::from_secs(secs)));
+    // Darwin refuses socket options after shutdown. The queued denial/EOF can still be read.
+    #[cfg(target_os = "macos")]
+    if result.as_ref().is_err_and(|err| err.raw_os_error() == Some(libc::EINVAL)) {
+        return;
+    }
+    result.unwrap();
+}
+
 fn read_text(stream: &mut UnixStream, secs: u64) -> String {
-    stream.set_read_timeout(Some(Duration::from_secs(secs))).unwrap();
+    arm_read_timeout(stream, secs);
     let mut text = String::new();
     let _ = stream.read_to_string(&mut text);
     text
@@ -85,7 +95,7 @@ fn read_text(stream: &mut UnixStream, secs: u64) -> String {
 
 fn next_line(reader: &mut BufReader<UnixStream>) -> String {
     let mut line = String::new();
-    reader.get_ref().set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    arm_read_timeout(reader.get_ref(), 5);
     reader.read_line(&mut line).unwrap();
     line
 }
@@ -175,7 +185,12 @@ fn an_auth_line_that_completes_after_the_deadline_is_refused() {
     let (server, socket, token, dir) = boot_with("lateauth", limits);
     let mut s = UnixStream::connect(&socket).unwrap();
     std::thread::sleep(Duration::from_millis(400));
-    s.write_all(auth_line(&token).as_bytes()).unwrap();
+    if let Err(err) = s.write_all(auth_line(&token).as_bytes()) {
+        assert!(
+            matches!(err.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::NotConnected),
+            "{err}"
+        );
+    }
     let text = read_text(&mut s, 6);
     assert!(text.contains("authentication required"), "{text:?}");
     assert!(!text.contains("\"authenticated\""), "{text:?}");

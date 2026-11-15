@@ -204,6 +204,15 @@ mod tests {
 
     const ASSET: &str = "craft://photocraft/550e8400-e29b-41d4-a716-446655440000/image/flat";
 
+    fn absolute(path: &str) -> String {
+        if cfg!(windows) { format!("C:{path}") } else { path.to_owned() }
+    }
+
+    fn file_url(path: &str) -> String {
+        let path = path.replace('\\', "/").replace(' ', "%20");
+        format!("file://{}{path}", if path.starts_with('/') { "" } else { "/" })
+    }
+
     #[test]
     fn parses_otio() {
         let got = OpenPayload::from_value(&json!({"format": "otio-json", "data": "{}"})).unwrap();
@@ -224,14 +233,15 @@ mod tests {
 
     #[test]
     fn rejects_media_that_does_not_exist_with_the_paths() {
-        let payload = json!({"format": "otio-json", "data": otio_with("file:///nowhere/My%20Clip.mov")});
+        let missing = absolute("/nowhere/My Clip.mov");
+        let payload = json!({"format": "otio-json", "data": otio_with(&file_url(&missing))});
         let err = OpenPayload::from_value(&payload).unwrap_err();
-        assert_eq!(err, LinkError::MediaMissing { paths: vec!["/nowhere/My Clip.mov".to_string()] });
+        assert_eq!(err, LinkError::MediaMissing { paths: vec![missing.clone()] });
         assert_eq!(err.code(), "media_missing");
-        assert_eq!(err.to_object().data.get("missing"), Some(&json!(["/nowhere/My Clip.mov"])));
-        assert!(err.to_string().contains("/nowhere/My Clip.mov"), "{err}");
+        assert_eq!(err.to_object().data.get("missing"), Some(&json!([missing])));
+        assert!(err.to_string().contains(&missing), "{err}");
         // A bare absolute path counts the same.
-        let bare = json!({"format": "otio-json", "data": otio_with("/nowhere/clip.mov")});
+        let bare = json!({"format": "otio-json", "data": otio_with(&absolute("/nowhere/clip.mov"))});
         assert!(matches!(OpenPayload::from_value(&bare), Err(LinkError::MediaMissing { .. })));
     }
 
@@ -241,7 +251,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("My Clip.mov");
         std::fs::write(&file, b"x").unwrap();
-        let url = format!("file://{}", file.to_str().unwrap().replace(' ', "%20"));
+        let url = file_url(file.to_str().unwrap());
+        assert_eq!(std::path::PathBuf::from(local_path(&url).unwrap().unwrap()), file);
         let good = json!({"format": "otio-json", "data": otio_with(&url)});
         assert!(OpenPayload::from_value(&good).is_ok());
         // A relative target has no base here. The app resolves it.
@@ -255,11 +266,12 @@ mod tests {
 
     #[test]
     fn parses_image_doc() {
-        let got = OpenPayload::from_value(&json!({"format": "image-doc", "path": "/tmp/a.photocraft", "asset": ASSET})).unwrap();
+        let expected = absolute("/tmp/a.photocraft");
+        let got = OpenPayload::from_value(&json!({"format": "image-doc", "path": expected, "asset": ASSET})).unwrap();
         let OpenPayload::ImageDoc { path, asset } = got else {
             panic!("wrong variant");
         };
-        assert_eq!(path, "/tmp/a.photocraft");
+        assert_eq!(path, expected);
         assert_eq!(asset.to_string(), ASSET);
     }
 
@@ -269,11 +281,17 @@ mod tests {
 
     #[test]
     fn traversal_in_a_named_path_is_payload_invalid() {
-        for bad in ["/tmp/../etc/passwd", "file:///tmp/a/../../etc/passwd", "file:///tmp/%2e%2e/etc/passwd", "/tmp/a\u{0}b", "file:///tmp/a%00b"] {
-            let err = OpenPayload::from_value(&payload_with(bad)).unwrap_err();
+        for bad in [
+            absolute("/tmp/../etc/passwd"),
+            file_url(&absolute("/tmp/a/../../etc/passwd")),
+            file_url(&absolute("/tmp/%2e%2e/etc/passwd")),
+            absolute("/tmp/a\u{0}b"),
+            file_url(&absolute("/tmp/a%00b")),
+        ] {
+            let err = OpenPayload::from_value(&payload_with(&bad)).unwrap_err();
             assert!(matches!(err, LinkError::PayloadInvalid(_)), "{bad:?}: {err:?}");
         }
-        let err = OpenPayload::from_value(&json!({"format": "image-doc", "path": "/tmp/../etc/x.png", "asset": ASSET})).unwrap_err();
+        let err = OpenPayload::from_value(&json!({"format": "image-doc", "path": absolute("/tmp/../etc/x.png"), "asset": ASSET})).unwrap_err();
         assert!(matches!(err, LinkError::PayloadInvalid(_)), "{err:?}");
         // A relative target is the app's business, `..` or not.
         assert!(OpenPayload::from_value(&payload_with("clips/../a.mov")).is_ok());
@@ -334,16 +352,17 @@ mod tests {
     #[test]
     fn size_depth_and_count_are_bounded() {
         // Too many distinct media files.
-        let refs: Vec<Value> =
-            (0..=MAX_MEDIA_REFS).map(|n| json!({"OTIO_SCHEMA": "ExternalReference.1", "target_url": format!("/nowhere/{n}.mov")})).collect();
+        let refs: Vec<Value> = (0..=MAX_MEDIA_REFS)
+            .map(|n| json!({"OTIO_SCHEMA": "ExternalReference.1", "target_url": absolute(&format!("/nowhere/{n}.mov"))}))
+            .collect();
         let many = json!({"OTIO_SCHEMA": "Timeline.1", "refs": refs}).to_string();
         let err = OpenPayload::from_value(&json!({"format": "otio-json", "data": many})).unwrap_err();
         assert!(matches!(err, LinkError::PayloadInvalid(_)), "{err:?}");
         // The same file named many times counts once.
         let same: Vec<Value> =
-            (0..MAX_MEDIA_REFS * 2).map(|_| json!({"OTIO_SCHEMA": "ExternalReference.1", "target_url": "/nowhere/a.mov"})).collect();
+            (0..MAX_MEDIA_REFS * 2).map(|_| json!({"OTIO_SCHEMA": "ExternalReference.1", "target_url": absolute("/nowhere/a.mov")})).collect();
         let doc = json!({"OTIO_SCHEMA": "Timeline.1", "refs": same}).to_string();
-        assert_eq!(missing_media(&doc).unwrap(), vec!["/nowhere/a.mov".to_string()]);
+        assert_eq!(missing_media(&doc).unwrap(), vec![absolute("/nowhere/a.mov")]);
         // Too deep. serde_json refuses at 128, so the document reads as "not JSON" and the app reports it.
         let deep = format!("{}{}", "[".repeat(300), "]".repeat(300));
         assert_eq!(missing_media(&deep).unwrap(), Vec::<String>::new());

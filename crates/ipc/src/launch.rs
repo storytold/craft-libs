@@ -469,7 +469,7 @@ mod tests {
         let data = root.path().join("xdg");
         let home = root.path().join("home");
         write_manifest(&installed_manifest(&home, Some(&data)), "effectcraft", &bin);
-        let by_manifest = env_map(&[("XDG_DATA_HOME", data.to_str().unwrap())]);
+        let by_manifest = data_env(&data);
         chmod(&bin_dir, 0o755);
         assert_eq!(super::resolve_with("effectcraft", &by_manifest, Some(&home), None, &[]).unwrap(), bin);
         chmod(&bin_dir, 0o777);
@@ -495,9 +495,16 @@ mod tests {
     fn installed_manifest(home: &Path, xdg: Option<&Path>) -> PathBuf {
         if cfg!(target_os = "macos") {
             home.join("Library/Application Support/ArtCraft Launcher/installed.json")
+        } else if cfg!(windows) {
+            xdg.unwrap_or(home).join("ArtCraft Launcher/installed.json")
         } else {
             xdg.map_or_else(|| home.join(".local/share"), Path::to_path_buf).join("artcraft-launcher/installed.json")
         }
+    }
+
+    fn data_env(data: &Path) -> BTreeMap<String, String> {
+        let key = if cfg!(windows) { "LOCALAPPDATA" } else { "XDG_DATA_HOME" };
+        env_map(&[(key, data.to_str().unwrap())])
     }
 
     fn write_manifest(path: &Path, app: &str, bin: &Path) {
@@ -569,11 +576,12 @@ mod tests {
         let home = root.path().join("home");
         let manifest = installed_manifest(&home, Some(&data));
         write_manifest(&manifest, "effectcraft", &bin);
-        let env = env_map(&[("XDG_DATA_HOME", data.to_str().unwrap())]);
+        let env = data_env(&data);
         let got = super::resolve_with("effectcraft", &env, Some(&home), None, &[]).unwrap();
         assert_eq!(got, bin);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn relative_xdg_data_home_uses_home() {
         let root = Tmp::new("rel");
@@ -587,8 +595,15 @@ mod tests {
         assert_eq!(got, bin);
     }
 
+    #[cfg(windows)]
     #[test]
-    fn portable_manifest_wins_over_xdg() {
+    fn relative_localappdata_is_not_used() {
+        let env = env_map(&[("LOCALAPPDATA", "relative/data")]);
+        assert!(matches!(super::resolve_with("effectcraft", &env, None, None, &[]), Err(LinkError::NotInstalled { .. })));
+    }
+
+    #[test]
+    fn portable_manifest_wins_over_native_data_directory() {
         let root = Tmp::new("port");
         let exe = root.path().join("exe-dir");
         std::fs::create_dir_all(&exe).unwrap();
@@ -601,7 +616,7 @@ mod tests {
         touch(&decoy);
         let home = root.path().join("home");
         write_manifest(&installed_manifest(&home, Some(&xdg)), "effectcraft", &decoy);
-        let env = env_map(&[("XDG_DATA_HOME", xdg.to_str().unwrap())]);
+        let env = data_env(&xdg);
         let got = super::resolve_with("effectcraft", &env, Some(&home), Some(&exe), &[]).unwrap();
         assert_eq!(got, bin);
     }
@@ -617,7 +632,8 @@ mod tests {
         let bin_dir = root.path().join("bin");
         let bin = bin_dir.join("effectcraft");
         touch(&bin);
-        let env = env_map(&[("XDG_DATA_HOME", data.to_str().unwrap()), ("PATH", bin_dir.to_str().unwrap())]);
+        let mut env = data_env(&data);
+        env.insert("PATH".into(), bin_dir.to_str().unwrap().into());
         let got = super::resolve_with("effectcraft", &env, Some(&home), None, &[]).unwrap();
         assert_eq!(got, bin);
     }

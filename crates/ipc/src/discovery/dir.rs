@@ -13,7 +13,18 @@ pub struct RuntimeDir {
 impl RuntimeDir {
     /// Resolve the directory for this process and create it when it is missing.
     pub fn resolve() -> Result<Self, LinkError> {
-        Self::at(runtime_path()?)
+        Self::from_resolved_path(runtime_path()?)
+    }
+
+    fn from_resolved_path(path: PathBuf) -> Result<Self, LinkError> {
+        // LOCALAPPDATA exists on a fresh Windows install, but its Craft namespace does not.
+        // Create and validate that single namespace first; do not recursively follow arbitrary
+        // missing ancestors. RuntimeDir::at keeps its existing caller-provided-path contract.
+        #[cfg(windows)]
+        if let Some(parent) = path.parent() {
+            ensure_private_dir(parent)?;
+        }
+        Self::at(path)
     }
 
     /// Use `path` as the runtime directory. Tests use this so they do not touch
@@ -315,10 +326,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn a_fresh_windows_runtime_creates_its_namespace() {
+        let base = scratch("fresh-runtime");
+        std::fs::create_dir_all(&base).unwrap();
+        let path = base.join("Craft").join("run");
+        let dir = RuntimeDir::from_resolved_path(path.clone()).unwrap();
+        assert_eq!(dir.path(), path);
+        assert!(base.join("Craft").is_dir());
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn resolve_points_at_a_private_craft_dir() {
         let dir = RuntimeDir::resolve().unwrap();
-        assert!(dir.path().ends_with("craft"), "{}", dir.path().display());
+        #[cfg(windows)]
+        assert!(dir.path().ends_with(Path::new("Craft").join("run")), "{}", dir.path().display());
+        #[cfg(unix)]
+        assert!(dir.path().ends_with("craft") || dir.path().ends_with(format!("craft-{}", current_euid().unwrap())), "{}", dir.path().display());
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
