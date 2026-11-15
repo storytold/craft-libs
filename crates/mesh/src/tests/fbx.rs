@@ -651,3 +651,13 @@ fn strict_ascii_reports_unbalanced_and_unterminated_records() {
     }
     assert!(read_document(b"Objects: { A: 1", &Limits::default()).is_ok());
 }
+
+#[test]
+fn strict_binary_requires_a_closing_record() {
+    let doc = document(ASCII.as_bytes());
+    let bytes = write_binary(&doc.records, 7400, false);
+    assert!(crate::fbx::read_document_strict(&bytes, &Limits::default()).is_ok());
+    let truncated = &bytes[..bytes.len() - 29];
+    assert!(read_document(truncated, &Limits::default()).is_ok());
+    assert!(crate::fbx::read_document_strict(truncated, &Limits::default()).is_err());
+}
