@@ -21,25 +21,25 @@ struct FakeCups {
 }
 
 impl FakeCups {
-    fn on_unix(replies: Vec<Vec<u8>>) -> Self {
-        let dir = tempfile::tempdir().unwrap();
+    fn on_unix(replies: Vec<Vec<u8>>) -> std::io::Result<Self> {
+        let dir = tempfile::tempdir()?;
         let path = dir.path().join("cups.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(&path)?;
         // The socket must outlive this function; the folder is left for the process to reap.
         std::mem::forget(dir);
         let requests = listen_unix(listener, replies);
-        FakeCups { server: Server::Unix(path), requests }
+        Ok(FakeCups { server: Server::Unix(path), requests })
     }
 
-    fn on_tcp(replies: Vec<Vec<u8>>) -> Self {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let server = Server::Tcp(listener.local_addr().unwrap());
+    fn on_tcp(replies: Vec<Vec<u8>>) -> std::io::Result<Self> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let server = Server::Tcp(listener.local_addr()?);
         let requests = listen_tcp(listener, replies);
-        FakeCups { server, requests }
+        Ok(FakeCups { server, requests })
     }
 
-    fn request(&self) -> Vec<u8> {
-        self.requests.recv_timeout(Duration::from_secs(5)).expect("the fake server took the request")
+    fn request(&self) -> Result<Vec<u8>, mpsc::RecvTimeoutError> {
+        self.requests.recv_timeout(Duration::from_secs(5))
     }
 
     /// The server as the one-endpoint list the client functions take.
@@ -72,10 +72,12 @@ fn listen_tcp(listener: std::net::TcpListener, replies: Vec<Vec<u8>>) -> Receive
 
 fn serve(mut stream: impl Read + Write, replies: &Mutex<VecDeque<Vec<u8>>>, requests: &mpsc::Sender<Vec<u8>>) {
     let Some(request) = read_request(&mut stream) else { return };
-    let request_id = ipp_body(&request).get(4..8).map(|id| id.to_vec());
+    let Some(body) = ipp_body(&request) else { return };
+    let request_id = body.get(4..8).map(|id| id.to_vec());
     let _ = requests.send(request);
     // A list out of replies is a server that hangs up before answering.
-    if let Some(mut reply) = replies.lock().unwrap().pop_front() {
+    let Ok(mut replies) = replies.lock() else { return };
+    if let Some(mut reply) = replies.pop_front() {
         if let Some(body) = reply.windows(4).position(|w| w == b"\r\n\r\n").map(|at| at + 4)
             && reply.get(body..body + 2) == Some(&[1, 1])
             && let Some(id) = request_id
@@ -154,9 +156,9 @@ fn has(bytes: &[u8], needle: &[u8]) -> bool {
 }
 
 /// The IPP part of a recorded request: everything after the HTTP head.
-fn ipp_body(request: &[u8]) -> &[u8] {
-    let at = request.windows(4).position(|w| w == b"\r\n\r\n").expect("an HTTP request has a head");
-    &request[at + 4..]
+fn ipp_body(request: &[u8]) -> Option<&[u8]> {
+    let at = request.windows(4).position(|w| w == b"\r\n\r\n")?;
+    request.get(at + 4..)
 }
 
 fn entry(name: &str, default: bool) -> spool::Printer {
@@ -180,17 +182,18 @@ fn discovery_finds_queues_and_the_default_over_a_unix_socket() {
             ],
         )),
         http_reply(&ipp_reply(0x0000, &[&group(0x01), &group(0x04), &printer_name("Office_Laser")])),
-    ]);
+    ])
+    .unwrap();
     let printers = ipp::printers_at(fake.endpoint()).unwrap();
     assert_eq!(printers, [entry("Office_Laser", true), entry("Label_Writer", false)], "each queue once, the default marked");
-    let taken = fake.request();
-    let queues = ipp_body(&taken);
+    let taken = fake.request().unwrap();
+    let queues = ipp_body(&taken).unwrap();
     assert_eq!(&queues[..4], &[1, 1, 0x40, 0x02], "IPP 1.1, CUPS-Get-Printers");
     assert!(has(queues, b"ipp://localhost/"));
     assert!(has(queues, &attr(0x44, "requested-attributes", b"printer-name")));
     assert!(has(queues, b"printer-is-accepting-jobs"), "only the attributes the dialog needs are asked for");
-    let taken = fake.request();
-    let default = ipp_body(&taken);
+    let taken = fake.request().unwrap();
+    let default = ipp_body(&taken).unwrap();
     assert_eq!(&default[..4], &[1, 1, 0x40, 0x01], "CUPS-Get-Default");
 }
 
@@ -210,11 +213,12 @@ fn a_print_job_carries_the_pdf_and_the_options() {
     let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(
         0x0000,
         &[&group(0x01), &group(0x02), &attr(0x21, "job-id", &12u32.to_be_bytes()), &attr(0x23, "job-state", &[3u8])],
-    ))]);
+    ))])
+    .unwrap();
     let message = ipp::print_job_at(fake.endpoint(), &pdf, &job).unwrap();
     assert_eq!(message, "request id is Office-12", "the same message lp prints");
-    let taken = fake.request();
-    let request = ipp_body(&taken);
+    let taken = fake.request().unwrap();
+    let request = ipp_body(&taken).unwrap();
     assert_eq!(&request[..4], &[1, 1, 0x00, 0x02], "IPP 1.1, Print-Job");
     assert!(has(request, b"ipp://localhost/printers/Office"));
     let mut copies = group(0x02);
@@ -234,13 +238,14 @@ fn the_default_printer_is_used_when_the_job_has_none() {
     let fake = FakeCups::on_tcp(vec![
         http_reply(&ipp_reply(0x0000, &[&group(0x01), &group(0x04), &printer_name("Office")])),
         http_reply(&ipp_reply(0x0000, &[&group(0x01), &group(0x02), &attr(0x21, "job-id", &7u32.to_be_bytes())])),
-    ]);
+    ])
+    .unwrap();
     let message = ipp::print_job_at(fake.endpoint(), b"%PDF-1.7\n", &Job::default()).unwrap();
     assert_eq!(message, "request id is Office-7");
-    let default = fake.request();
-    assert_eq!(&ipp_body(&default)[..4], &[1, 1, 0x40, 0x01], "the default comes from CUPS-Get-Default");
-    let taken = fake.request();
-    assert!(has(ipp_body(&taken), b"ipp://localhost/printers/Office"), "the resolved default is the target");
+    let default = fake.request().unwrap();
+    assert_eq!(&ipp_body(&default).unwrap()[..4], &[1, 1, 0x40, 0x01], "the default comes from CUPS-Get-Default");
+    let taken = fake.request().unwrap();
+    assert!(has(ipp_body(&taken).unwrap(), b"ipp://localhost/printers/Office"), "the resolved default is the target");
 }
 
 #[test]
@@ -248,7 +253,8 @@ fn a_default_outside_the_queue_list_still_gets_its_marker() {
     let fake = FakeCups::on_unix(vec![
         http_reply(&ipp_reply(0x0000, &[&group(0x01), &group(0x04), &printer_name("Office_Laser")])),
         http_reply(&ipp_reply(0x0000, &[&group(0x01), &group(0x04), &printer_name("Label_Writer")])),
-    ]);
+    ])
+    .unwrap();
     let printers = ipp::printers_at(fake.endpoint()).unwrap();
     assert_eq!(
         printers,
@@ -259,14 +265,14 @@ fn a_default_outside_the_queue_list_still_gets_its_marker() {
 
 #[test]
 fn no_default_printer_is_an_error_when_the_job_names_none() {
-    let fake = FakeCups::on_unix(vec![http_reply(&ipp_reply(0x0000, &[&group(0x01)]))]);
+    let fake = FakeCups::on_unix(vec![http_reply(&ipp_reply(0x0000, &[&group(0x01)]))]).unwrap();
     let err = ipp::print_job_at(fake.endpoint(), b"%PDF-1.7\n", &Job::default()).unwrap_err();
     assert!(err.to_string().contains("no default printer"), "{err}");
 }
 
 #[test]
 fn a_printer_name_that_cannot_be_a_uri_path_is_refused() {
-    let fake = FakeCups::on_tcp(vec![]);
+    let fake = FakeCups::on_tcp(vec![]).unwrap();
     let mut long = "x".repeat(257);
     long.push('y');
     for name in ["Office (east)", "../../admin", "", "a b", "Brother/HL", "Копир", long.as_str()] {
@@ -281,7 +287,7 @@ fn a_printer_name_that_cannot_be_a_uri_path_is_refused() {
 
 #[test]
 fn an_ipp_refusal_is_an_error_that_names_the_problem() {
-    let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0x0506, &[&group(0x01)]))]);
+    let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0x0506, &[&group(0x01)]))]).unwrap();
     let job = spool::Job { printer: Some("Office".into()), ..Job::default() };
     assert_eq!(
         ipp::print_job_at(fake.endpoint(), b"%PDF-1.7\n", &job),
@@ -309,7 +315,7 @@ fn malformed_replies_are_errors_never_a_panic() {
         ("no end of attributes", vec![1, 1, 0, 0, 0, 0, 0, 1, 0x04, 0x42, 0x00, 0x01, b'x']),
     ];
     for (why, body) in bodies {
-        let fake = FakeCups::on_unix(vec![http_reply(&body)]);
+        let fake = FakeCups::on_unix(vec![http_reply(&body)]).unwrap();
         let result = ipp::printers_at(fake.endpoint());
         assert!(result.is_err(), "{why}: the reply must be an error, not a panic or a success");
     }
@@ -326,20 +332,20 @@ fn http_replies_that_cannot_carry_an_answer_are_refused() {
         ("unreadable status line", b"not HTTP at all\r\n\r\n".to_vec()),
     ];
     for (why, reply) in replies {
-        let fake = FakeCups::on_unix(vec![reply]);
+        let fake = FakeCups::on_unix(vec![reply]).unwrap();
         let result = ipp::post(&[fake.server], "/", b"ignored", TIMEOUT, true);
         assert!(result.is_err(), "{why}: the reply must be an error, not a panic or a success");
     }
     // A server that takes the request and hangs up.
-    let fake = FakeCups::on_unix(vec![]);
+    let fake = FakeCups::on_unix(vec![]).unwrap();
     assert!(ipp::post(&[fake.server], "/", b"ignored", TIMEOUT, true).is_err(), "a hang-up is an error");
 }
 
 #[test]
 fn a_server_that_answers_is_reachable_and_silence_is_not() {
-    let fake = FakeCups::on_unix(vec![]);
+    let fake = FakeCups::on_unix(vec![]).unwrap();
     assert!(ipp::reachable(&fake.server), "a unix socket that accepts connections is reachable");
-    let fake = FakeCups::on_tcp(vec![]);
+    let fake = FakeCups::on_tcp(vec![]).unwrap();
     assert!(ipp::reachable(&fake.server), "a loopback port that accepts connections is reachable");
     let absent = Server::Unix("/nonexistent/craft-print-test.sock".into());
     assert!(!ipp::reachable(&absent), "a socket nothing listens on is not reachable");
@@ -375,23 +381,23 @@ fn explicit_server_rejects_header_injection_and_malformed_port() {
 
 #[test]
 fn class_submission_preserves_authority_user_and_numeric_job_id() {
-    let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0, &[&group(2), &attr(0x21, "job-id", &42u32.to_be_bytes())]))]);
+    let fake = FakeCups::on_tcp(vec![http_reply(&ipp_reply(0, &[&group(2), &attr(0x21, "job-id", &42u32.to_be_bytes())]))]).unwrap();
     let destination = super::Destination { name: "Studio".into(), is_class: true };
     assert_eq!(super::submit_as_at(fake.endpoint(), &destination, b"pdf", &Job::default(), "artist").unwrap(), 42);
-    let request = fake.request();
+    let request = fake.request().unwrap();
     assert!(has(&request, b"POST /classes/Studio HTTP/1.1"));
     assert!(has(&request, format!("Host: {}", fake.server.authority()).as_bytes()));
-    assert!(has(ipp_body(&request), format!("ipp://{}/classes/Studio", fake.server.authority()).as_bytes()));
-    assert!(has(ipp_body(&request), &attr(0x42, "requesting-user-name", b"artist")));
+    assert!(has(ipp_body(&request).unwrap(), format!("ipp://{}/classes/Studio", fake.server.authority()).as_bytes()));
+    assert!(has(ipp_body(&request).unwrap(), &attr(0x42, "requesting-user-name", b"artist")));
 }
 
 #[test]
 fn uncertain_submission_never_tries_the_second_endpoint() {
-    let first = FakeCups::on_tcp(vec![]);
-    let second = FakeCups::on_tcp(vec![]);
+    let first = FakeCups::on_tcp(vec![]).unwrap();
+    let second = FakeCups::on_tcp(vec![]).unwrap();
     let destination = super::Destination { name: "Studio".into(), is_class: false };
     assert!(super::submit_at(&[first.server.clone(), second.server.clone()], &destination, b"pdf", &Job::default()).is_err());
-    let _ = first.request();
+    let _ = first.request().unwrap();
     assert!(second.requests.recv_timeout(Duration::from_millis(100)).is_err());
 }
 
@@ -472,4 +478,10 @@ fn blocked_upload_obeys_the_same_absolute_deadline() {
     }
     assert!(timed_out, "blocked upload must terminate without a reader");
     assert!(start.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
+fn recorded_request_body_requires_complete_http_headers() {
+    assert!(ipp_body(b"POST / HTTP/1.1\r\n").is_none());
+    assert_eq!(ipp_body(b"POST / HTTP/1.1\r\n\r\nbody"), Some(b"body".as_slice()));
 }
