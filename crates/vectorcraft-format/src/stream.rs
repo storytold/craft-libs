@@ -1,5 +1,9 @@
 //! Streaming helpers for the native JSON envelope.
 //!
+//! Field values are emitted in bounded chunks. The decoded JSON and tail framing stay the same
+//! as VectorCraft's previous writer, but compressed bytes can differ when a deflate backend's
+//! output depends on input chunking. Gzip readers still validate the CRC and size trailer.
+//!
 //! Copyright (c) 2026 ArtCraft Team and the VectorCraft contributors.
 //! Extracted from VectorCraft, licensed under MIT OR Apache-2.0.
 
