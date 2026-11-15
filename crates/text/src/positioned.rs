@@ -71,6 +71,8 @@ pub struct PositionedGlyph<A: Artwork> {
     pub warichu: Option<usize>,
     /// Warichu block baseline offset.
     pub warichu_line: f64,
+    /// Glyph lies before an open path and is retained for caret mapping only.
+    pub off_path: bool,
 }
 
 impl<A: Artwork> PositionedGlyph<A> {
@@ -179,6 +181,7 @@ mod tests {
             width_start: 1.0,
             warichu: None,
             warichu_line: 0.0,
+            off_path: false,
         }
     }
     #[test]
