@@ -176,6 +176,8 @@ pub struct ReadOptions {
     pub preserve_runs: bool,
     /// Do not resolve or report material libraries; `usemtl` names remain available.
     pub ignore_material_libraries: bool,
+    /// Treat each group declaration as an object boundary, retaining repeated names.
+    pub groups_as_objects: bool,
 }
 
 struct Reader<'a> {
@@ -407,6 +409,10 @@ impl Reader<'_> {
                 };
             }
             "o" => self.start_object(after.to_string())?,
+            "g" if self.options.groups_as_objects => {
+                self.group.clear();
+                self.start_object(after.to_string())?;
+            }
             "g" => {
                 self.slot = None;
                 self.group = after.to_string();
