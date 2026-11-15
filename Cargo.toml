@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-usd = { path = "crates/usd" }
 craft-smime = { path = "crates/smime" }
 craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
@@ -54,6 +55,7 @@ craft-doc-binary = { path = "crates/doc-binary" }
 craft-docx = { path = "crates/docx" }
 craft-document-bundle = { path = "crates/document-bundle" }
 craft-mcmat = { path = "crates/mcmat" }
+craft-deckcraft-format = { path = "crates/deckcraft-format" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
