@@ -5,6 +5,7 @@
 mod compile;
 mod error;
 pub mod parse;
+pub mod program;
 pub use compile::compile;
 pub use error::ShxError;
 pub use parse::{ParsedFont, Record, ShxKind};
