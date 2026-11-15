@@ -503,6 +503,10 @@ pub fn embedded_file_header(item: &[u8]) -> Result<EmbeddedFileHeader> {
     let kind = r.array::<4>()?;
     let _version = r.u32()?;
     let uuid = String::from_utf8_lossy(&read_pascal(&mut r, 1)?).into_owned();
+    // A filename is metadata, never an unbounded allocation. Check before decoding.
+    if r.clone().u32()? > 32_768 {
+        return Err(PsdError::LimitExceeded("linked filename exceeds 32768 UTF-16 units"));
+    }
     let name = UnicodeString::read(&mut r)?.to_string_lossy();
     r.skip(8)?; // file type and creator
     let data_len = usize::try_from(r.u64()?).map_err(|_| PsdError::LimitExceeded("linked payload exceeds address space"))?;
