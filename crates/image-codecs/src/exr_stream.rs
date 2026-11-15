@@ -199,6 +199,12 @@ impl<R: Read + Seek> Decoder<R> {
             }
             offsets.push(offset);
         }
+        // Check the bounded offset table before rejecting a large declared image.
+        // A truncated file with an oversized data window is malformed; a complete
+        // file above the streaming area limit is rejected before any pixel decode.
+        if (w as u64).saturating_mul(h as u64) > 1 << 30 {
+            return Err(limit("EXR pixel count exceeds the streaming limit of 1073741824"));
+        }
         Ok(Self { source, meta, info, offsets, seen: vec![false; expected], channels, next: 0, file_len, chunks_start, raw_limit, rows })
     }
 

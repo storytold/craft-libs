@@ -230,7 +230,16 @@ fn decode_band(
                 }
                 continue;
             }
-            let buf = chunk_scratch(lay, scratch, pref.len)?;
+            if pref.len > lay.scratch_cap {
+                return Err(CodecError::LimitExceeded(format!("a {} byte strip or tile", pref.len)));
+            }
+            if scratch.len() < pref.len {
+                scratch
+                    .try_reserve_exact(pref.len - scratch.len())
+                    .map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {} bytes for a strip or tile", pref.len)))?;
+                scratch.resize(pref.len, 0);
+            }
+            let buf = scratch.get_mut(..pref.len).ok_or_else(|| err("scratch buffer"))?;
             match dec.read_chunk_bytes(chunk, buf) {
                 Ok(()) => tally.decoded += 1,
                 Err(e) if is_eof(&e) => {
@@ -275,19 +284,6 @@ fn deposit_extras(lay: &Layout, src: &[u8], dst: &mut [u8], n: usize, x0: usize)
     }
 }
 
-fn chunk_scratch<'a>(lay: &Layout, scratch: &'a mut Vec<u8>, len: usize) -> Result<&'a mut [u8], CodecError> {
-    if len > lay.scratch_cap {
-        return Err(CodecError::LimitExceeded(format!("a {} byte strip or tile", len)));
-    }
-    if scratch.len() < len {
-        scratch
-            .try_reserve_exact(len - scratch.len())
-            .map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {} bytes for a strip or tile", len)))?;
-        scratch.resize(len, 0);
-    }
-    scratch.get_mut(..len).ok_or_else(|| err("scratch buffer"))
-}
-
 /// Planar files store each extra sample as its own plane. Read those planes into `extra`.
 fn read_planar_extras(
     lay: &Layout,
@@ -314,7 +310,16 @@ fn read_planar_extras(
                 .ok_or_else(|| err("chunk index out of range"))?;
             let pref = dec.image_chunk_buffer_layout(chunk).map_err(map_err)?;
             let stride = pref.row_stride.map(|s| s.get()).ok_or_else(|| err("empty chunk row"))?;
-            let buf = chunk_scratch(lay, scratch, pref.len)?;
+            if pref.len > lay.scratch_cap {
+                return Err(CodecError::LimitExceeded(format!("a {} byte strip or tile", pref.len)));
+            }
+            if scratch.len() < pref.len {
+                scratch
+                    .try_reserve_exact(pref.len - scratch.len())
+                    .map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {} bytes for a strip or tile", pref.len)))?;
+                scratch.resize(pref.len, 0);
+            }
+            let buf = scratch.get_mut(..pref.len).ok_or_else(|| err("scratch buffer"))?;
             match dec.read_chunk_bytes(chunk, buf) {
                 Ok(()) => tally.decoded += 1,
                 Err(e) if is_eof(&e) => {

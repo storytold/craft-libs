@@ -303,6 +303,9 @@ pub struct EncodeOptions {
     pub jpeg_chroma_subsampling: bool,
     /// JPEG scan layout (baseline, baseline optimized or progressive).
     pub jpeg_format: JpegFormat,
+    /// Optional number of progressive JPEG scans (typically 3..=5). Ignored unless
+    /// `jpeg_format` is [`JpegFormat::Progressive`].
+    pub jpeg_progressive_scans: Option<u8>,
     pub png_compression: PngCompression,
     /// Write Adam7-interlaced PNG.
     pub png_interlaced: bool,
@@ -340,6 +343,7 @@ impl Default for EncodeOptions {
             jpeg_quality: 90,
             jpeg_chroma_subsampling: true,
             jpeg_format: JpegFormat::Baseline,
+            jpeg_progressive_scans: None,
             png_compression: PngCompression::Default,
             png_interlaced: false,
             png_stereo: None,

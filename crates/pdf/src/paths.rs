@@ -145,6 +145,7 @@ fn import_selected(bytes: &[u8], limits: Limits, selected: Option<usize>) -> Res
 #[derive(Default)]
 struct Collector {
     paths: Vec<BezPath>,
+    last_fill_path: Option<BezPath>,
     omitted_text: usize,
     omitted_images: usize,
     clips_seen: usize,
@@ -157,9 +158,18 @@ struct Collector {
 impl Device<'_> for Collector {
     fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
     fn set_blend_mode(&mut self, _: BlendMode) {}
-    fn draw_path(&mut self, path: &BezPath, transform: Affine, _: &Paint<'_>, _: &PathDrawMode) {
+    fn draw_path(&mut self, path: &BezPath, transform: Affine, _: &Paint<'_>, mode: &PathDrawMode) {
         if path.is_empty() {
             return;
+        }
+        let path = transform * path.clone();
+        match mode {
+            PathDrawMode::Fill(_) => self.last_fill_path = Some(path.clone()),
+            PathDrawMode::Stroke(_) => {
+                if self.last_fill_path.take().as_ref() == Some(&path) {
+                    return;
+                }
+            }
         }
         let count = path.elements().len();
         if self.paths.len() >= self.max_paths || self.elements.saturating_add(count) > self.max_elements {
@@ -167,16 +177,18 @@ impl Device<'_> for Collector {
             return;
         }
         self.elements = self.elements.saturating_add(count);
-        self.paths.push(transform * path.clone());
+        self.paths.push(path);
     }
     fn push_clip_path(&mut self, _: &ClipPath) {
         self.clips_seen = self.clips_seen.saturating_add(1);
     }
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
     fn draw_glyph(&mut self, _: &Glyph<'_>, _: Affine, _: Affine, _: &Paint<'_>, _: &GlyphDrawMode) {
+        self.last_fill_path = None;
         self.omitted_text = self.omitted_text.saturating_add(1);
     }
     fn draw_image(&mut self, _: Image<'_, '_>, _: Affine) {
+        self.last_fill_path = None;
         self.omitted_images = self.omitted_images.saturating_add(1);
     }
     fn pop_clip_path(&mut self) {}

@@ -276,6 +276,10 @@ impl Reader<'_> {
         if sc.fields.iter().any(|f| f.phase == Phase::Instr) && para.plain_text().is_empty() {
             para.mark.hidden = Some(true);
         }
+        // A cell's paragraphs are marked once their table is read: its style counts.
+        if !sc.in_cell {
+            self.doc.styles.mark_runs_as_word_draws_them(&mut para, None);
+        }
         para.normalize();
         para
     }
@@ -314,15 +318,32 @@ impl Reader<'_> {
 
     // ---- tables ----
 
+    /// Word gives a table no cell margins when the file has no default table style and neither the
+    /// table nor its style sets them; saving may write a default Normal Table, so the zeros are
+    /// kept as the table's own. shortcut: they stay direct formatting (a table style applied later
+    /// keeps them), until the model knows the file's default table style. A `w:tblCellMar` that sets
+    /// only some sides keeps them: only the sides it omits become 0.
+    fn no_default_margins(&self, props: &mut craft_wordmodel::props::TableProps) {
+        if self.no_default_table_style
+            && props.cell_margins.is_none()
+            && props.style.as_deref().and_then(|id| self.doc.styles.table_style(id)).is_none_or(|s| s.parts.cell_margins.is_none())
+        {
+            props.cell_margins = Some([0.0; 4]);
+        }
+    }
+
     fn read_table(&mut self, sc: &mut StoryCtx, t: &El, rels: &Rels, depth: usize) -> Option<Table> {
         let mut table = Table::default();
         if let Some(p) = t.child("w:tblPr") {
             table.props = self.pc.tblpr(p);
             if let Some(ch) = p.child("w:tblPrChange") {
-                let old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
+                let mut old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
+                // Rejecting the change brings back these properties: with the same margins.
+                self.no_default_margins(&mut old);
                 table.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
         }
+        self.no_default_margins(&mut table.props);
         if let Some(g) = t.child("w:tblGrid") {
             table.grid = g
                 .children("w:gridCol")
@@ -355,8 +376,10 @@ impl Reader<'_> {
                     continue;
                 }
                 let mut blocks = Blocks::new();
+                let outer = std::mem::replace(&mut sc.in_cell, true);
                 self.read_blocks(sc, tc, rels, &mut blocks, depth + 4);
                 self.flush_pending(sc, &mut blocks);
+                sc.in_cell = outer;
                 row.cells.push(Cell { props, blocks, controls: cell_controls });
             }
             if !row.cells.is_empty() {
@@ -369,6 +392,20 @@ impl Reader<'_> {
         if table.grid.is_empty() {
             let cols = table.cols().clamp(1, MAX_COLS);
             table.grid = vec![72.0; cols];
+        }
+        // The cells' paragraphs, with the run formatting the table style gives each cell (a
+        // table inside has marked its own).
+        let chrs = self.doc.styles.table_cells_chr(&table);
+        for (ri, row) in table.rows.iter_mut().enumerate() {
+            for (ci, cell) in row.cells.iter_mut().enumerate() {
+                let chr = chrs.as_ref().and_then(|c| c.get(ri)?.get(ci));
+                for b in &mut cell.blocks {
+                    if let Block::Para(p) = Arc::make_mut(b) {
+                        self.doc.styles.mark_runs_as_word_draws_them(p, chr);
+                        p.normalize();
+                    }
+                }
+            }
         }
         Some(table)
     }

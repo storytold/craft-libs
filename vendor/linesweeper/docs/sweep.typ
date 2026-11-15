@@ -221,7 +221,7 @@ The first observation is that the sweep line invariants are maintained as we inc
 to the next event:
 + For the order invariant, first note that there is an event whenever $y$ leaves the domain of a segment, so $y$ remains in all domains until the next event.
   Moreover, if at any $y' > y$ the ordering breaks, two line segments must have $epsilon$-crossed one another by $y'$.
-  The third invariant guarantees that there's an event before this happens, so by the contra-positive until an event happens the ordering
+  The crossing invariant guarantees that there's an event before this happens, so by the contra-positive until an event happens the ordering
   constraint is maintained.
 + The crossing invariant is maintained because the set of things to check (i.e. the set of line segments that $epsilon$-cross
   one another after $y$) only shrinks as $y$ increases.
@@ -368,13 +368,13 @@ of the other one.
 #figure(
   pseudocode-list([
     + *for* $j = i$ down to $1$
-      + let $w^j$ be the smallest height of any event between $j$ and $i$
+      + let $w^j$ be the smallest height of any event between $j$ and $i+1$
 
-      + *if* $(alpha^j_(-,epsilon), alpha^i)$ cross by $w^j$
-        + choose $z$ before the crossing, such that $alpha^j approx_(z,epsilon) alpha^i$
-        + insert an intersection event for $(alpha^j, alpha^i)$ at $z$
+      + *if* $(alpha^j_(-,epsilon), alpha^(i+1))$ cross by $w^j$
+        + choose $z$ before the crossing, such that $alpha^j approx_(z,epsilon) alpha^(i+1)$
+        + insert an intersection event for $(alpha^j, alpha^(i+1))$ at $z$
 
-      + *if* $alpha^j_+ (z) <= alpha^i (z)$ for all $z in [y, w^j]$
+      + *if* $alpha^j_+ (z) <= alpha^(i+1) (z)$ for all $z in [y, w^j]$
         + *break*
   ]),
   caption: "Intersection scan to the left"
@@ -383,8 +383,8 @@ of the other one.
 We'll skip the proof of the following lemma, because it's basically the same as the last one.
 
 #lemma[
-Suppose that $(alpha^1, ..., alpha^i)$ satisfy the ordering invariant
-at $y$, and suppose also that $(alpha^1, ..., alpha^(i+1))$
+Suppose that $(alpha^1, ..., alpha^(i+1))$ satisfy the ordering invariant
+at $y$, and suppose also that $(alpha^1, ..., alpha^i)$
 satisfy the crossing invariant at $y$.
 After running an intersection scan to the left,
 $(alpha^1, ..., alpha^(i+1))$ satisfy a slightly stronger crossing invariant at $y$: for every $j <= i$,
@@ -555,7 +555,7 @@ height. Note that because the sweep line changes at a discrete set of heights,
 at every important height $y$ we actually have two weakly-ordered sweep line:
 the "old" one from infinitesmally before $y$ height and the "new" one from $y$
 onwards. Because everything is continuous and the weak ordering conditions are
-closed, both the old and new sweep lines satisfy the weak ordering condi0.2tions
+closed, both the old and new sweep lines satisfy the weak ordering conditions
 at $y$.
 
 The algorithm goes like this: at every important height we use
@@ -623,7 +623,7 @@ Let's check that this insertion position is valid: for every $j <= i$ we have
 either $j <= i_-$ or $i_- < j <= i$. In the first case, we already observed
 that $alpha^j_-(y) <= beta(y)$; in the second case, $q(j)$ returned `true` and
 so $alpha^j_-(y) <= beta^j^+ (y)$. In either case, $alpha^j prec.tilde beta$.
-On the other hand, $q(i+i)$ being `false` implies that $alpha^(i+1)_- (y) >=
+On the other hand, $q(i+1)$ being `false` implies that $alpha^(i+1)_- (y) >=
 beta(y)$. This implies that for all $j >= i+1$, $alpha^j_+ (y) >= beta(y)$ and
 so $alpha^j succ.tilde_y beta$.
 

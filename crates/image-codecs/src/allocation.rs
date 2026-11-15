@@ -124,20 +124,28 @@ fn gif_bounds(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
                 let frame_height = u32::from(u16_le(bytes, at + 7).ok_or_else(bad)?);
                 let descriptor = bytes.get(at..at.checked_add(10).ok_or_else(bad)?).ok_or_else(bad)?;
                 let flags = descriptor[9];
+                // The frame rectangle determines its decoded allocation even when the later
+                // compressed payload is truncated. Report known dimensions so callers can
+                // refuse an oversized frame before asking a decoder to inspect its pixels.
+                width = width.max(left.saturating_add(frame_width));
+                height = height.max(top.saturating_add(frame_height));
                 let mut body = at.checked_add(10).ok_or_else(bad)?;
                 if flags & 0x80 != 0 {
                     let table = 3usize.checked_mul(1usize.checked_shl(u32::from((flags & 7) + 1)).ok_or_else(bad)?).ok_or_else(bad)?;
                     body = body.checked_add(table).ok_or_else(bad)?;
                 }
                 body = body.checked_add(1).ok_or_else(bad)?; // LZW minimum code size.
-                if bytes.get(..body).is_none() || frame_width == 0 || frame_height == 0 {
+                if frame_width == 0 || frame_height == 0 {
                     return Err(bad());
                 }
-                width = width.max(left.saturating_add(frame_width));
-                height = height.max(top.saturating_add(frame_height));
+                if bytes.get(..body).is_none() {
+                    return Ok((width, height));
+                }
                 at = body;
+                frames = frames.saturating_add(1);
                 loop {
-                    let length = usize::from(*bytes.get(at).ok_or_else(bad)?);
+                    let Some(&length) = bytes.get(at) else { return Ok((width, height)) };
+                    let length = usize::from(length);
                     at = at.checked_add(1).ok_or_else(bad)?;
                     if length == 0 {
                         break;
@@ -147,7 +155,6 @@ fn gif_bounds(bytes: &[u8]) -> Result<(u32, u32), CodecError> {
                         return Err(bad());
                     }
                 }
-                frames = frames.saturating_add(1);
             }
             _ => return Err(bad()),
         }

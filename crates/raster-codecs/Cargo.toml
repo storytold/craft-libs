@@ -15,4 +15,3 @@ base64 = "0.23"
 craft-image-codecs = { workspace = true }
 thiserror = { workspace = true }
 image = { version = "0.25", default-features = false }
-
