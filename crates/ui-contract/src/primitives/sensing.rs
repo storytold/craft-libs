@@ -780,7 +780,11 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             if !enabled || !allowed {
                 return None;
             }
-            resolve_in(state, xf, at, ResolveFor::Press, target).map(|hit| (hit, hit.sense))
+            // egui gives no click target where a drag-only widget is on top (a resize grip over a layer's or a
+            // window's edge): a root under it keeps its click there, but a drag is that widget's.
+            let drag_elsewhere = targets.click.is_none() && targets.drag.is_some_and(|id| !mine(Some(id)));
+            resolve_in(state, xf, at, ResolveFor::Press, target)
+                .map(|hit| (hit, if drag_elsewhere { hit.sense.difference(Sense::DRAG) } else { hit.sense }))
         });
         cancelled = matches!(step.phase, Some(PressPhase::Cancel { .. }));
         release_held = machine.release_held();
