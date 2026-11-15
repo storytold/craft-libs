@@ -1469,6 +1469,16 @@ impl<'a> Build<'a, '_> {
                             if let Some(existing) = color_indices.get(&(p, color)) {
                                 position = *existing;
                             } else {
+                                // Color seams need two maps as well as the output pools; do not
+                                // grow them past the remaining file budget on hostile corner lists.
+                                let staging = color_indices
+                                    .len()
+                                    .checked_add(1)
+                                    .and_then(|n| n.checked_mul(64))
+                                    .and_then(|n| positions.len().checked_mul(40).and_then(|pool| n.checked_add(pool)));
+                                if staging.is_none_or(|n| n > self.budget.left.get()) {
+                                    return Err(too_large(KIND, "color seams exceed the memory limit"));
+                                }
                                 if first_color.insert(p, color).is_some() {
                                     pool("vertices", positions.len().saturating_add(1))?;
                                     if positions.len().saturating_add(1).checked_mul(40).is_none_or(|n| n > self.budget.left.get()) {
