@@ -29,6 +29,8 @@ const HEADER_LEN: usize = 44;
 const MAX_AUDIO_TRACKS: u32 = 256;
 /// The largest width or height a file may declare.
 const MAX_DIMENSION: u32 = 32767;
+/// Index entries read at a time: 64 KiB.
+const INDEX_PIECE_ENTRIES: u64 = 16384;
 
 /// Errors from reading a Bink file.
 #[non_exhaustive]
@@ -221,7 +223,11 @@ pub fn open<S: ByteSource + ?Sized>(src: &S) -> Result<BinkFile> {
         if len >= 4 {
             src.read_at(0, &mut sig)?;
         }
-        return if sniff(&sig) { invalid("file shorter than the header") } else { Err(Error::NotBink) };
+        return match sig {
+            _ if sig.starts_with(b"KB2") => Err(Error::Bink2),
+            _ if sniff(&sig) => invalid("file shorter than the header"),
+            _ => Err(Error::NotBink),
+        };
     }
     src.read_at(0, &mut head)?;
     if head.starts_with(b"KB2") {
@@ -271,27 +277,35 @@ pub fn open<S: ByteSource + ?Sized>(src: &S) -> Result<BinkFile> {
     if header.frames == 0 {
         return invalid("no frames");
     }
-    // as many entries as the file declares and could hold; on a 32-bit target that may not fit
-    let entries = (u64::from(header.frames) + 1).min(room / 4);
-    let (Ok(entries), Some(index_len)) = (usize::try_from(entries), usize::try_from(entries).ok().and_then(|e| e.checked_mul(4))) else {
-        return invalid("frame index too large");
-    };
-    let mut index = vec![0u8; index_len];
-    src.read_at(index_at, &mut index)?;
+    // as many entries as the file declares and could hold
+    let mut left = (u64::from(header.frames) + 1).min(room / 4);
     let data_start = index_at + (u64::from(header.frames) + 1) * 4;
-    // grown as entries prove valid, so a hostile count reserves nothing beyond the index itself
+    // The index is read in pieces and each entry checked as it arrives, so a hostile frame
+    // count costs one piece, not the index it claims. The table grows as entries prove valid.
     let mut frames = Vec::new();
-    for i in 0..entries.saturating_sub(1) {
-        let entry = le32(&index, i * 4);
-        let offset = u64::from(entry & !1);
-        let end = u64::from(le32(&index, i * 4 + 4) & !1);
-        if end > len {
-            break; // truncated file: keep the frames that are whole
+    let mut at = index_at;
+    let mut previous: Option<u32> = None;
+    let mut piece = Vec::new();
+    'index: while left > 0 {
+        let entries = left.min(INDEX_PIECE_ENTRIES) as usize;
+        piece.resize(entries * 4, 0);
+        src.read_at(at, &mut piece)?;
+        for bytes in piece.as_chunks::<4>().0 {
+            let entry = u32::from_le_bytes(*bytes);
+            if let Some(start) = previous {
+                let (offset, end) = (u64::from(start & !1), u64::from(entry & !1));
+                if end > len {
+                    break 'index; // truncated file: keep the frames that are whole
+                }
+                if offset < data_start || end < offset {
+                    return invalid(format!("frame {} at {offset}..{end}", frames.len()));
+                }
+                frames.push(Frame { offset, size: (end - offset) as u32, key: start & 1 != 0 });
+            }
+            previous = Some(entry);
         }
-        if offset < data_start || end < offset {
-            return invalid(format!("frame {i} at {offset}..{end}"));
-        }
-        frames.push(Frame { offset, size: (end - offset) as u32, key: entry & 1 != 0 });
+        at += (entries * 4) as u64;
+        left -= entries as u64;
     }
     Ok(BinkFile { header, audio, frames })
 }

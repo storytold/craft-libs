@@ -127,7 +127,8 @@ struct Bundle {
 }
 
 impl Bundle {
-    /// A bundle whose chunks hold at most `per_row + 511` values.
+    /// A bundle whose rows need at most `per_row` values: its length field has as many bits as
+    /// `per_row + 511` does.
     fn new(per_row: usize) -> Bundle {
         let length_bits = usize::BITS - per_row.saturating_add(511).leading_zeros();
         Bundle { values: Vec::new(), next: 0, finished: false, length_bits }
@@ -492,7 +493,9 @@ fn read_dct(bits: &mut Bits, dc: i32, tables: &[[u32; 64]; 16]) -> Result<[i32; 
 /// One plane being decoded: `cur` and `prev` hold `blocks_high * 8` rows of `stride` samples.
 pub(super) struct Plane<'a> {
     pub(super) cur: &'a mut [u8],
-    pub(super) prev: &'a [u8],
+    /// The previous picture, or `None` before the first: references then read the picture being
+    /// decoded.
+    pub(super) prev: Option<&'a [u8]>,
     pub(super) blocks_wide: usize,
     pub(super) blocks_high: usize,
     /// The most 16x16 blocks a row can hold, which sets the width of the sub-type length field.
@@ -531,8 +534,10 @@ impl Plane<'_> {
         Ok(())
     }
 
-    /// The 8x8 block of the previous picture at block (bx, by) moved by (dx, dy).
+    /// The 8x8 block of the previous picture at block (bx, by) moved by (dx, dy). With no
+    /// previous picture it is read from the picture being decoded, as far as that is drawn.
     fn reference(&self, bx: usize, by: usize, dx: i32, dy: i32) -> Result<[u8; 64]> {
+        let source = self.prev.unwrap_or(&*self.cur);
         let stride = self.stride();
         let x = (bx * 8) as i64 + i64::from(dx);
         let y = (by * 8) as i64 + i64::from(dy);
@@ -543,7 +548,7 @@ impl Plane<'_> {
         let mut px = [0u8; 64];
         for (r, row) in px.as_chunks_mut::<8>().0.iter_mut().enumerate() {
             let at = (y + r) * stride + x;
-            row.copy_from_slice(self.prev.get(at..at + 8).ok_or_else(|| Error::Invalid("reference outside the plane".into()))?);
+            row.copy_from_slice(source.get(at..at + 8).ok_or_else(|| Error::Invalid("reference outside the plane".into()))?);
         }
         Ok(px)
     }
@@ -678,6 +683,110 @@ mod tests {
         let mut bundle = Bundle::new(1);
         read_dc(&mut bundle, &mut Bits::new(&data), true)?;
         Ok(bundle.values)
+    }
+
+    /// Packs a string of bits in read order.
+    fn bit_string(bits: &str) -> Vec<u8> {
+        pack(&bits.bytes().map(|b| (u32::from(b == b'1'), 1)).collect::<Vec<_>>())
+    }
+
+    /// The symbol order a tree holds: each rank's code is fed back through the tree.
+    fn order_of(tree: &Tree, number: usize) -> Vec<u8> {
+        TREES[number].iter().map(|&(code, len)| tree.symbol(&mut Bits::new(&pack(&[(u32::from(code), u32::from(len))]))).unwrap()).collect()
+    }
+
+    #[test]
+    fn every_predefined_tree_is_a_complete_prefix_code() {
+        for (number, codes) in TREES.iter().enumerate() {
+            let identity: [u8; 16] = std::array::from_fn(|i| i as u8);
+            let tree = Tree::new(number, &identity);
+            assert!(tree.lookup.iter().all(|&(_, len)| (1..=7).contains(&len)), "tree {number} leaves a 7-bit pattern uncoded");
+            assert_eq!(order_of(&tree, number), identity, "tree {number}");
+            let kraft: u32 = codes.iter().map(|&(_, len)| 128 >> len).sum();
+            assert_eq!(kraft, 128, "tree {number}");
+        }
+    }
+
+    #[test]
+    fn tree_headers_in_both_forms_as_real_frames_carry_them() {
+        // list form: tree 12, six symbols listed, the rest ascending
+        let data = bit_string("00111101100111000001101100110110");
+        let tree = Tree::read(&mut Bits::new(&data)).unwrap();
+        assert_eq!(order_of(&tree, 12), [9, 3, 8, 13, 12, 6, 0, 1, 2, 4, 5, 7, 10, 11, 14, 15]);
+        // merge form: tree 10, three passes
+        let data = bit_string("01010010000100100000011000001000");
+        let mut bits = Bits::new(&data);
+        let tree = Tree::read(&mut bits).unwrap();
+        assert_eq!(order_of(&tree, 10), [0, 1, 2, 3, 4, 5, 6, 7, 9, 15, 8, 10, 11, 14, 12, 13]);
+        assert!(bits.get(1).is_err(), "the header is the whole 32 bits");
+        // tree 0 has no order to read
+        let mut bits = Bits::new(&[0xf0]);
+        Tree::read(&mut bits).unwrap();
+        assert_eq!(bits.get(4).unwrap(), 15);
+        // a symbol listed twice is refused: tree 1, two symbols, both 5
+        assert!(Tree::read(&mut Bits::new(&pack(&[(1, 4), (1, 1), (1, 3), (5, 4), (5, 4)]))).is_err());
+    }
+
+    /// Reads one chunk of block types coded with the raw tree.
+    fn types(fields: &[(u32, u32)]) -> Result<Vec<i32>> {
+        let mut bundle = Bundle::new(1);
+        let identity: [u8; 16] = std::array::from_fn(|i| i as u8);
+        read_types(&mut bundle, &mut Bits::new(&pack(fields)), &Tree::new(0, &identity))?;
+        Ok(bundle.values)
+    }
+
+    #[test]
+    fn type_chunks_repeat_with_run_symbols_and_start_from_zero() {
+        // 13 values: a run of 8 first (repeating 0, as at every chunk start), then 5, then a run of 4
+        let coded = [(13, 10), (0, 1), (13, 4), (5, 4), (12, 4)];
+        assert_eq!(types(&coded).unwrap(), [0, 0, 0, 0, 0, 0, 0, 0, 5, 5, 5, 5, 5]);
+        // the same symbols in a chunk of 12 pass its end
+        assert!(types(&[(12, 10), (0, 1), (13, 4), (5, 4), (12, 4)]).is_err());
+        // all values equal
+        assert_eq!(types(&[(5, 10), (1, 1), (7, 4)]).unwrap(), [7; 5]);
+        // a zero length finishes the bundle and reads nothing more
+        let mut bundle = Bundle::new(1);
+        let identity: [u8; 16] = std::array::from_fn(|i| i as u8);
+        let data = pack(&[(0, 10), (0x3ff, 10)]);
+        let mut bits = Bits::new(&data);
+        read_types(&mut bundle, &mut bits, &Tree::new(0, &identity)).unwrap();
+        read_types(&mut bundle, &mut bits, &Tree::new(0, &identity)).unwrap();
+        assert!(bundle.finished && bundle.values.is_empty());
+        assert_eq!(bits.get(10).unwrap(), 0x3ff);
+    }
+
+    #[test]
+    fn offsets_and_runs_have_an_all_equal_form() {
+        let identity: [u8; 16] = std::array::from_fn(|i| i as u8);
+        let raw = Tree::new(0, &identity);
+        let mut bundle = Bundle::new(1);
+        read_offsets(&mut bundle, &mut Bits::new(&pack(&[(3, 10), (1, 1), (9, 4), (1, 1)])), &raw).unwrap();
+        assert_eq!(bundle.values, [-9, -9, -9]);
+        let mut bundle = Bundle::new(1);
+        read_offsets(&mut bundle, &mut Bits::new(&pack(&[(3, 10), (0, 1), (2, 4), (0, 1), (0, 4), (15, 4), (1, 1)])), &raw).unwrap();
+        assert_eq!(bundle.values, [2, 0, -15]);
+    }
+
+    #[test]
+    fn residue_refines_earlier_samples_before_each_plane_and_stops_at_its_budget() {
+        // two planes. Plane 1: the first group is flagged; (0,2) becomes +2, (0,3) stays zero,
+        // (1,2) becomes -2, (1,3) stays zero; nothing else is flagged. Plane 0: refinement bits
+        // for (0,2) and (1,2) in that order (1, 0), then (1,3) is flagged and becomes +1.
+        let stream = "1 00 1 01 1 0000  10  10 0 0000";
+        let data = bit_string(&stream.replace(' ', ""));
+        let mut out = [0i32; 64];
+        read_list(&mut Bits::new(&data), ListCoder::Residue, 2, 100, &mut out).unwrap();
+        let mut want = [0i32; 64];
+        (want[2], want[10], want[11]) = (3, -2, 1);
+        assert_eq!(out, want);
+        // a budget of three is spent by the two new samples and the refinement bit
+        let mut out = [0i32; 64];
+        let mut bits = Bits::new(&data);
+        read_list(&mut bits, ListCoder::Residue, 2, 3, &mut out).unwrap();
+        (want[2], want[10], want[11]) = (3, -2, 0);
+        assert_eq!(out, want);
+        // and the block ends there: the next bit read is the second refinement bit
+        assert_eq!(bits.get(2).unwrap(), 0b10);
     }
 
     #[test]

@@ -1,5 +1,5 @@
-//! Real Bink files against ffprobe: the frame table and the packets of every frame match the
-//! packets ffprobe reads.
+//! Real Bink files against ffprobe: every frame is read, and the stream, size and key flag of
+//! each packet match the packets ffprobe reads. Packet contents are not compared.
 //!
 //! No tool here can write a Bink file, and existing files are not ours to commit, so the test
 //! reads `*.bik` files from the directory named by `CRAFT_BINK_SAMPLES_DIR` (searched

@@ -1,5 +1,6 @@
-//! Synthetic frames written bit by bit, checked against values observed from ffmpeg for the same
-//! constructions (see `tools/bink_probe`), and hostile input.
+//! Synthetic frames written bit by bit. Where a test's expected samples are what ffmpeg gives
+//! for the same construction (see `tools/bink_probe`), the test says so; the others check the
+//! decoder's own rules: refusals, errors, state and hostile input.
 
 use super::*;
 
@@ -456,10 +457,49 @@ fn a_16x16_entry_at_an_odd_column_only_steps_over_two_blocks() {
     let mut dec = Decoder::new(24, 8, *b"BIKi", 0).unwrap();
     let first = Row { types: vec![6, 6, 6], colours: vec![9, 9, 9], ..Row::default() };
     dec.decode(&packet_24x8(&first)).unwrap();
-    let pic = dec.decode(&packet_24x8(&luma)).unwrap();
-    let column = |bx: usize| pic.y.chunks(24).flat_map(|r| r[bx * 8..bx * 8 + 8].to_vec()).collect::<Vec<u8>>();
-    assert!(column(0).iter().all(|&v| v == 5));
-    assert!(column(1).iter().chain(&column(2)).all(|&v| v == 0));
+    let column = |pic: &Picture, bx: usize| pic.y.chunks(24).flat_map(|r| r[bx * 8..bx * 8 + 8].to_vec()).collect::<Vec<u8>>();
+    let second = dec.decode(&packet_24x8(&luma)).unwrap();
+    assert!(column(&second, 0).iter().all(|&v| v == 5));
+    assert!(column(&second, 1).iter().chain(&column(&second, 2)).all(|&v| v == 0));
+    // and in every later frame: a new picture starts as zeros whatever came before
+    let third = dec.decode(&packet_24x8(&luma)).unwrap();
+    assert!(column(&third, 0).iter().all(|&v| v == 5));
+    assert!(column(&third, 1).iter().chain(&column(&third, 2)).all(|&v| v == 0));
+}
+
+#[test]
+fn motion_in_a_first_frame_reads_the_picture_being_decoded() {
+    // ffmpeg: a fill of 77, then a motion block copying from 8 samples to its left, gives 77
+    let luma = Row { types: vec![6, 2], colours: vec![77], x_off: vec![(8, true)], y_off: vec![(0, false)], ..Row::default() };
+    let mut dec = decoder();
+    let pic = dec.decode(&packet(&luma, &flat_chroma(128))).unwrap();
+    assert!(block(&pic, 1).iter().flatten().all(|&v| v == 77));
+    // in a later frame the same block copies from the previous picture
+    let next = Row { types: vec![6, 2], colours: vec![30], x_off: vec![(8, true)], y_off: vec![(0, false)], ..Row::default() };
+    let chroma_skip = Row { types: vec![0], ..Row::default() };
+    let pic = dec.decode(&packet(&next, &chroma_skip)).unwrap();
+    assert!(block(&pic, 0).iter().flatten().all(|&v| v == 30));
+    assert!(block(&pic, 1).iter().flatten().all(|&v| v == 77));
+    // and after a reset it is a first frame again
+    dec.reset();
+    let pic = dec.decode(&packet(&next, &flat_chroma(128))).unwrap();
+    assert!(block(&pic, 1).iter().flatten().all(|&v| v == 30));
+}
+
+#[test]
+fn a_bundle_used_up_on_one_row_reads_a_new_chunk_on_the_next() {
+    // 8x16: two rows of one block. Row 0 has one type and one colour; row 1 starts with a new
+    // chunk of each (the other bundles ended with a zero length on row 0)
+    let second_row = vec![(1, length_bits(1)), (0, 1), (6, 4), (1, length_bits(64)), (0, 1), (1, 4), (4, 4)];
+    let luma = Row { types: vec![6], colours: vec![10], inline: second_row, ..Row::default() };
+    let mut w = BitWriter::default();
+    w.put(0, 32);
+    luma.write_plane(&mut w, 1, 0);
+    flat_chroma(128).write(&mut w, 1);
+    flat_chroma(128).write(&mut w, 1);
+    let pic = Decoder::new(8, 16, *b"BIKi", 0).unwrap().decode(&w.bytes()).unwrap();
+    assert!(pic.y[..64].iter().all(|&v| v == 10));
+    assert!(pic.y[64..].iter().all(|&v| v == 0x14));
 }
 
 #[test]
@@ -511,6 +551,21 @@ fn a_coefficient_that_overflows_32_bits_wraps_like_ffmpeg() {
     let luma = Row { types: vec![5, 6], colours: vec![1], intra_dc: Some(1024), inline, ..Row::default() };
     let pic = decoder().decode(&packet(&luma, &flat_chroma(128))).unwrap();
     assert_eq!(block(&pic, 0).concat(), FFMPEG_3000);
+
+    // DC 100 and coefficient 6000 at quantiser 15: here the transform's own multiplications
+    // pass 32 bits, not only dequantisation
+    #[rustfmt::skip]
+    const FFMPEG_Q15: [u8; 64] = [
+        38, 211, 235, 246, 86, 97, 121, 38, 211, 95, 254, 168, 164, 78, 237, 121,
+        235, 190, 127, 141, 191, 205, 142, 97, 246, 140, 41, 111, 221, 35, 192, 86,
+        86, 192, 35, 221, 111, 41, 140, 246, 97, 142, 205, 191, 141, 127, 190, 235,
+        121, 237, 78, 164, 168, 254, 95, 211, 38, 121, 97, 86, 246, 235, 211, 38,
+    ];
+    let mut inline = single_coefficient_at_1_1(6000, 13);
+    inline.push((15, 4));
+    let luma = Row { types: vec![5, 6], colours: vec![1], intra_dc: Some(100), inline, ..Row::default() };
+    let pic = decoder().decode(&packet(&luma, &flat_chroma(128))).unwrap();
+    assert_eq!(block(&pic, 0).concat(), FFMPEG_Q15);
 }
 
 #[test]

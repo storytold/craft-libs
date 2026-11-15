@@ -74,9 +74,12 @@ A tree header is a 4-bit tree number and, unless it is 0, the order of the tree'
 
 - a 1 bit, a 3-bit count `n`, then `n + 1` symbols of 4 bits that come first; the rest follow in
   ascending order;
-- or a 0 bit, a 2-bit depth `d`, then `d + 1` merge passes over runs of 1, 2, 4 and 8 symbols:
-  two neighbouring runs are merged by taking, for each output symbol, one bit that says which
-  run gives its next symbol, until one run is empty.
+- or a 0 bit, a 2-bit depth `d`, then `d + 1` merge passes over runs of 1, 2, 4 and 8 symbols,
+  starting from the symbols in ascending order: two neighbouring runs are merged by taking, for
+  each output symbol, one bit that says which run gives its next symbol (1 = the second), until
+  one run is empty; the rest of the other run follows without bits.
+
+A header that lists a symbol twice is refused.
 
 The 16 trees are fixed prefix codes (`TREES`). Tree 0 is four raw bits.
 
@@ -100,7 +103,10 @@ most values a row of blocks can need:
 - In the two type bundles, symbols 12 to 15 repeat the previous value 4, 8, 12 or 32 times. The
   previous value is 0 at the start of every chunk.
 - A colour is its high nibble, coded with the tree the previous colour's high nibble selects,
-  then its low nibble.
+  then its low nibble. The previous high nibble is 0 at the start of a plane and carries over
+  from chunk to chunk. In revision `f` it is the high nibble as coded, before the value is
+  turned into a sample.
+- A run of types that passes the end of its chunk is refused, as is a DC value outside 16 bits.
 - A group of DC deltas starts with a 4-bit bit count. A count of 0 repeats the value; otherwise
   each delta is that many bits and a sign bit when it is not zero.
 
@@ -120,8 +126,14 @@ most values a row of blocks can need:
 | 9 | raw: 64 colours in raster order |
 
 Sums of a prediction and a residue wrap to 8 bits, as do intra DCT results. Nothing is clamped.
-A picture starts as zeros: a block that no entry draws (the two blocks a 16x16 entry steps over
-when nothing was drawn there) stays 0.
+
+In the first frame, and after `reset()`, there is no previous picture: a copy or a motion
+reference then reads the picture being decoded, as far as it is drawn.
+
+A block that no entry draws (the two blocks a 16x16 entry steps over when nothing was drawn
+there) is 0: this decoder starts every picture as zeros. That is its own choice. ffmpeg leaves
+such a block as its recycled buffer held it, zeros or part of an earlier picture, so there is
+no rule to follow; a real stream draws every block.
 
 ### DCT coefficients
 
@@ -147,7 +159,8 @@ walk over sample positions, with the list starting as the groups (0, 2), (2, 0),
 (0, 0). It differs from the coefficient coder in two ways:
 
 - a new non-zero sample gets only the plane's bit and its sign; before each plane's walk, every
-  sample that is already non-zero reads 1 bit that adds the plane's bit to its magnitude;
+  sample that is already non-zero reads 1 bit that adds the plane's bit to its magnitude. Those
+  bits come in the order the samples became non-zero;
 - every new non-zero sample and every added bit spends one unit of the budget, and the block
   ends at once when the budget is spent.
 
@@ -155,10 +168,27 @@ walk over sample positions, with the list starting as the groups (0, 2), (2, 0),
 
 A DC value is 16 bits, signed (-32768 to 32767). A coefficient is multiplied by the entry of
 its position in the quantiser's table and shifted right by 11; the DC value likewise. The tables (`INTRA_QUANT`, `INTER_QUANT`) hold 16 fractional
-bits and include the scale factors of the transform. The inverse transform is a fixed-point
-scaled inverse DCT: columns, then rows, with four multiplications per pass by 2896, 3784, 2217
-and 5352 (each shifted right by 11), and a final `(x + 127) >> 8`. Every multiplication and sum
-wraps at 32 bits.
+bits and include the scale factors of the transform.
+
+The inverse transform is a fixed-point scaled inverse DCT, applied to the eight columns and
+then to the eight rows. With `mul(x, a) = (x * a) >> 11`, one pass over inputs `i0` to `i7` is:
+
+```text
+t10 = i0 + i4          t11 = i0 - i4          t13 = i2 + i6
+t12 = mul(i2 - i6, 2896) - t13
+t0 = t10 + t13         t3 = t10 - t13         t1 = t11 + t12         t2 = t11 - t12
+
+z13 = i5 + i3          z10 = i5 - i3          z11 = i1 + i7          z12 = i1 - i7
+t7 = z11 + z13         u11 = mul(z11 - z13, 2896)
+z5 = mul(z10 + z12, 3784)
+u10 = mul(z12, 2217) - z5                     u12 = mul(z10, -5352) + z5
+t6 = u12 - t7          t5 = u11 - t6          t4 = u10 + t5
+
+out = [t0 + t7, t1 + t6, t2 + t5, t3 - t4, t3 + t4, t2 - t5, t1 - t6, t0 - t7]
+```
+
+After the row pass each value becomes `(x + 127) >> 8`. Every product and sum, in
+dequantisation and in the transform, wraps at 32 bits, and the shifts are arithmetic.
 
 ## How each part was established
 
@@ -171,7 +201,7 @@ wraps at 32 bits.
 | Scan patterns | a run-fill block of 64 one-sample runs per pattern |
 | Coefficient and residue coding | a model compared with ffmpeg on random streams (data length, positions, signs, values) |
 | Transform | candidate fixed-point transforms compared with ffmpeg on random blocks until one matched every sample |
-| Quantiser tables | each of the 2048 entries narrowed to one integer by probes chosen to separate the candidates |
+| Quantiser tables | each of the 2048 entries narrowed to one integer by probes chosen to separate the candidates, with coefficients of up to 15 bits; a second, independent fit of single-coefficient blocks gave the same entries |
 | Whole decoder | every frame of the sample files compared with ffmpeg, sample for sample |
 | Edge rules (16x16 blocks at edges and odd columns, field widths at other picture sizes, DC range, overflow) | random synthetic streams of every block type and size decoded by both decoders |
 
@@ -184,8 +214,8 @@ wraps at 32 bits.
 - A packet must hold all three planes in full. ffmpeg also decodes a packet whose trailing zero
   bytes are cut off, or that ends at a plane boundary.
 - Coefficients too large for a real stream (from about 7 bit planes) overflow 32 bits. The
-  decoder wraps as ffmpeg does, and matches it on the cases tested, but rare one-sample
-  differences were seen at the largest sizes.
+  decoder wraps as ffmpeg does and matched it on every such stream tested.
+- Bytes after the last plane are ignored.
 - Pictures are bounded by `budget::DECODE_MEMORY_BUDGET`, chunk sizes by their length fields.
 
 Not verified: everything about revisions other than `f` and `i`, for which there is no sample.

@@ -15,8 +15,8 @@ def save(key, table):
     with LOCK:
         d = load(); d[key] = table; json.dump(d, open(OUT + '.tmp', 'w')); os.replace(OUT + '.tmp', OUT)
 def predict(T, m, r, c, dcB, helper):
-    B = [[0] * 8 for _ in range(8)]; B[0][0] = dcB; B[r][c] = (m * T) >> 11
-    for (hr, hc), (hm, hT) in helper.items(): B[hr][hc] = (hm * hT) >> 11
+    B = [[0] * 8 for _ in range(8)]; B[0][0] = dcB; B[r][c] = xform.w32(m * T) >> 11
+    for (hr, hc), (hm, hT) in helper.items(): B[hr][hc] = xform.w32(hm * hT) >> 11
     R = xform.idct(B)
     return tuple(R[y][x] & 255 for y in range(8) for x in range(8))
 def ask(kind, q, coefs, dc):
@@ -28,8 +28,8 @@ def ask(kind, q, coefs, dc):
 def solve(kind, q, r, c, cands, dcT, known, max_probes=24, seed=0):
     num, den = xform.SCALE[q]
     dcmax = 1023 if kind == 'inter' else 2047
-    # dequantised values up to about 100000 keep every later product inside 32 bits and cover far more than a real stream uses
-    mmax = max(3, min(8000, int(2.05e8 / max(cands))))
+    # the model wraps at 32 bits like the decoder, so any coefficient a stream can code (15 planes) is a valid probe
+    mmax = 32767
     rnd = random.Random(seed + r * 8 + c + 64 * q)
     helpers = [p for p in known if p != (r, c)]
     alive = list(cands)
@@ -43,7 +43,7 @@ def solve(kind, q, r, c, cands, dcT, known, max_probes=24, seed=0):
                 hp = rnd.choice(helpers); hT = known[hp]
                 helper = {hp: (rnd.choice([-1, 1]) * rnd.randint(1, max(2, min(300, int(0.2e8 / hT)))), hT)}
             dc = max(1, min(dcmax, round(rnd.randint(300, 900) * (1 if kind == 'inter' else 1.6) * den / num)))
-            dcB = (dc * dcT) >> 11
+            dcB = xform.w32(dc * dcT) >> 11
             groups = {}
             for T in alive: groups.setdefault(predict(T, m, r, c, dcB, helper), []).append(T)
             score = max(len(g) for g in groups.values())
@@ -69,7 +69,7 @@ def solve_dc(kind, q, cands, known, seed=0):
             hm = rnd.choice([-1, 1]) * rnd.randint(1, max(2, min(300, int(0.2e8 / hT))))
             groups = {}
             for T in alive:
-                B = [[0] * 8 for _ in range(8)]; B[0][0] = (dc * T) >> 11; B[hp[0]][hp[1]] = (hm * hT) >> 11
+                B = [[0] * 8 for _ in range(8)]; B[0][0] = xform.w32(dc * T) >> 11; B[hp[0]][hp[1]] = xform.w32(hm * hT) >> 11
                 R = xform.idct(B)
                 groups.setdefault(tuple(R[y][x] & 255 for y in range(8) for x in range(8)), []).append(T)
             score = max(len(g) for g in groups.values())

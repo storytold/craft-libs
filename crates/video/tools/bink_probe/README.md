@@ -34,10 +34,11 @@ writes them.
 | `rmodel.py` | Model of the residue coding and its test on random streams |
 | `ac1.py`, `ac3.py`, `ac5.py`, `idct1.py`, `inter3.py` | Single DCT blocks: quantiser position, coefficient estimates, basis patterns |
 | `dataset.py`, `fit1.py` | Random blocks from ffmpeg and the search for the exact fixed-point transform |
-| `xform.py` | The transform as found |
+| `xform.py` | The transform as found, with its 32-bit wrapping |
 | `wverify.py`, `texact5.py` | Quantiser weights (`weights.json`) and every dequantisation multiplier (`tables_measured.json`) |
 | `inter6.py` | Random inter DCT blocks with motion at every quantiser |
 | `dec.py`, `dec3.py` | The model decoder, compared with ffmpeg frame by frame on real files |
+| `fuzz_diff.py` | Random synthetic streams of every block type, size and both revisions, decoded by ffmpeg and by the Rust decoder (the `bink_binkdec` example) and compared: the edge rules that no real file shows |
 | `gen_tables.py` | Writes `src/bink/tables.rs` from the three data files |
 
 ## Data
@@ -45,8 +46,11 @@ writes them.
 - `trees.json`: for each tree, the code of each rank as the bits in read order.
 - `scans.json`: for each scan pattern, the sample index of each step.
 - `weights.json`: the quantiser weights in sixteenths, used as starting estimates.
-- `tables_measured.json`: the multipliers. Where several neighbouring integers decode every
-  coefficient value in the legal range identically, the one nearest the estimate was taken.
+- `tables_measured.json`: the multipliers, each the one integer that reproduces ffmpeg for every
+  probe, with coefficients of up to 15 bits. The exception is the DC multiplier of most
+  quantisers, where the exact ratio and the next integer decode every DC value a start field can
+  hold identically; the exact ratio was taken, and DC values up to 16 bits were then checked
+  with `fuzz_diff.py`.
 
 ## Regenerating the tables
 

@@ -243,3 +243,61 @@ fn a_source_that_understates_its_length_is_an_error_not_a_panic() {
     let src = Understating { data: &d, reported: 68 };
     assert_eq!(open(&src).unwrap().frames.len(), 0);
 }
+
+/// A source of zeros of any length that counts the bytes read from it, with `head` at its start.
+struct Zeros {
+    head: Vec<u8>,
+    len: u64,
+    read: std::cell::Cell<u64>,
+}
+
+impl ByteSource for Zeros {
+    fn len(&self) -> u64 {
+        self.len
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if offset.checked_add(buf.len() as u64).is_none_or(|end| end > self.len) {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "past the end"));
+        }
+        self.read.set(self.read.get() + buf.len() as u64);
+        for (k, b) in buf.iter_mut().enumerate() {
+            *b = usize::try_from(offset).ok().and_then(|o| self.head.get(o + k)).copied().unwrap_or(0);
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_huge_frame_count_is_refused_after_one_piece_of_the_index() {
+    // 2^28 frames declared in a 4 GiB source of zeros: the first entries are invalid, and the
+    // gigabyte of index the count claims is never read
+    let mut head = sample()[..HEADER_LEN].to_vec();
+    head[8..12].copy_from_slice(&(1u32 << 28).to_le_bytes());
+    head[40..44].copy_from_slice(&0u32.to_le_bytes());
+    let src = Zeros { head, len: 4 << 30, read: std::cell::Cell::new(0) };
+    assert!(matches!(open(&src), Err(Error::Invalid(_))));
+    assert!(src.read.get() <= HEADER_LEN as u64 + INDEX_PIECE_ENTRIES * 4, "read {} bytes", src.read.get());
+}
+
+#[test]
+fn an_index_longer_than_one_piece_reads_like_a_short_one() {
+    // enough frames of four bytes each to span three pieces of the index
+    let n = INDEX_PIECE_ENTRIES as usize * 2 + 100;
+    let frames: Vec<TestFrame> = (0..n).map(|i| TestFrame { key: i % 1000 == 0, audio: vec![], video: (i as u32).to_le_bytes().to_vec() }).collect();
+    let d = bink(b"BIKi", &[], &frames);
+    let f = open(&d).unwrap();
+    assert_eq!(f.frames.len(), n);
+    for i in [0, 1, INDEX_PIECE_ENTRIES as usize - 1, INDEX_PIECE_ENTRIES as usize, INDEX_PIECE_ENTRIES as usize + 1, n - 1] {
+        assert_eq!(f.read_frame(&d, i).unwrap(), (i as u32).to_le_bytes(), "frame {i}");
+        assert_eq!(f.frames[i].key, i % 1000 == 0, "frame {i}");
+    }
+    // cut inside the third piece: the frames before the cut are kept
+    let cut = f.frames[n - 50].offset as usize;
+    assert_eq!(open(&d[..cut]).unwrap().frames.len(), n - 50);
+}
+
+#[test]
+fn a_short_bink_2_file_is_named_as_such() {
+    assert!(matches!(open(&b"KB2g\0\0\0\0"[..]), Err(Error::Bink2)));
+    assert!(matches!(open(&b"KB2"[..]), Err(Error::NotBink)));
+}

@@ -120,6 +120,10 @@ name = "vp8"
 required-features = ["vp8-decode"]
 
 [[example]]
+name = "bink_binkdec"
+required-features = ["bink-decode"]
+
+[[example]]
 name = "vp8_fuzz"
 required-features = ["vp8-decode"]
 

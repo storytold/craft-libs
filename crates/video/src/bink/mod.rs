@@ -126,6 +126,8 @@ pub struct Decoder {
     planes: [PlaneStore; 3],
     /// The index into `planes` of each coded plane, in stream order.
     coded_order: [usize; 3],
+    /// Whether a picture has been decoded since the decoder was made or reset.
+    has_previous: bool,
 }
 
 impl Decoder {
@@ -173,6 +175,7 @@ impl Decoder {
             signed_colours: !size_word,
             planes: [PlaneStore::new(w, h, (w + 7) / 16), chroma(), chroma()],
             coded_order,
+            has_previous: false,
         })
     }
 
@@ -197,6 +200,7 @@ impl Decoder {
             p.cur.fill(0);
             p.prev.fill(0);
         }
+        self.has_previous = false;
     }
 
     /// Decodes the video packet of the next frame. After an error the decoder still holds the
@@ -206,7 +210,9 @@ impl Decoder {
         if packet.len() < MIN_PACKET_LEN {
             return Err(Error::Invalid("the packet is too short to hold a plane".into()));
         }
-        // a new picture starts from zeros: a block no entry draws stays 0
+        // A new picture starts as zeros, so a block no entry draws is 0. ffmpeg leaves such a
+        // block as its recycled buffer held it (zeros, or some earlier picture), which is not a
+        // rule of the format; a real stream draws every block.
         for p in &mut self.planes {
             std::mem::swap(&mut p.cur, &mut p.prev);
             p.cur.fill(0);
@@ -217,6 +223,7 @@ impl Decoder {
             }
             return Err(e);
         }
+        self.has_previous = true;
         Ok(Picture {
             width: self.width,
             height: self.height,
@@ -236,8 +243,13 @@ impl Decoder {
         }
         for index in self.coded_order {
             let p = &mut self.planes[index];
-            let mut plane =
-                decode::Plane { cur: &mut p.cur, prev: &p.prev, blocks_wide: p.blocks_wide, blocks_high: p.blocks_high, sub_types: p.sub_types };
+            let mut plane = decode::Plane {
+                cur: &mut p.cur,
+                prev: self.has_previous.then_some(&p.prev[..]),
+                blocks_wide: p.blocks_wide,
+                blocks_high: p.blocks_high,
+                sub_types: p.sub_types,
+            };
             decode::decode_plane(&mut bits, &mut plane, self.signed_colours)?;
             bits.align32();
         }
