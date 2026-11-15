@@ -237,6 +237,17 @@ pub fn jpeg_info(bytes: &[u8]) -> Option<JpegInfo> {
     jpeg::info(bytes)
 }
 
+/// PCX's dimensions are available from its fixed-size header without decoding the RLE rows.
+pub fn pcx_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    codecs::pcx::dimensions(bytes)
+}
+
+/// The X11 color-name lookup used by XPM files, expressed as normalized sRGB.
+pub fn xpm_named_color_rgb(name: &str) -> Option<[f32; 3]> {
+    let rgb = codecs::xpm::exact_x11_name(name)?;
+    Some(rgb.map(|channel| f32::from(channel) / 255.0))
+}
+
 /// The colour table of a GIF's first frame (its Local Color Table, else the Global one) and the
 /// entry its Graphic Control Extension makes transparent, read without decoding pixels.
 pub fn gif_palette(bytes: &[u8]) -> Option<(Vec<[u8; 3]>, Option<u8>)> {

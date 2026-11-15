@@ -397,12 +397,15 @@ fn the_formats_are_named() {
     for name in ENCODE_EXTENSIONS {
         assert!(encode_format_for(name).is_some(), "{name}");
     }
-    assert_eq!(ENCODE_EXTENSIONS.len(), 12);
+    assert_eq!(ENCODE_EXTENSIONS.len(), 13);
     for format in CODED {
         assert!(EncodeFormat::ALL.contains(&format) && format.is_built());
     }
     let features: Vec<_> = EncodeFormat::ALL.iter().map(|f| f.feature()).collect();
-    assert_eq!(features, ["pcm-encode", "pcm-encode", "flac-encode", "alac-encode", "aac-encode", "mp3-encode", "ac3-encode", "eac3-encode"]);
+    assert_eq!(
+        features,
+        ["pcm-encode", "pcm-encode", "flac-encode", "alac-encode", "aac-encode", "mp3-encode", "ac3-encode", "eac3-encode", "vorbis-encode"]
+    );
 }
 
 /// ffmpeg's decode of `file` as interleaved `f32`, split into `channels` channels.
@@ -495,6 +498,10 @@ fn the_format_queries_agree_with_the_writer() {
     let layouts = masks.iter().map(|&mask| ChannelLayout::from_mask(mask)).chain((1..=9).map(ChannelLayout::unordered));
     for layout in layouts {
         for &format in EncodeFormat::ALL {
+            // Vorbis is whole-buffer-only; its direct/generic API and options are tested separately.
+            if format == EncodeFormat::Ogg {
+                continue;
+            }
             // 24 bits is a depth every format has.
             let opts = EncodeOptions::new(format).with_layout(layout);
             for &sample_rate in &rates {
@@ -520,7 +527,7 @@ fn the_format_queries_agree_with_the_writer() {
     // The most channels is the most: one more is refused, by the layouts of a format that has
     // a fixed set and by the writer of one that has not.
     let most: Vec<u16> = EncodeFormat::ALL.iter().map(|f| f.max_channels()).collect();
-    assert_eq!(most, [32_767, 32_767, 8, 8, 8, 2, 6, 8]);
+    assert_eq!(most, [32_767, 32_767, 8, 8, 8, 2, 6, 8, 2]);
     for &format in EncodeFormat::ALL {
         let most = format.max_channels();
         match format.fixed_layouts(most) {
@@ -568,4 +575,17 @@ fn the_bit_rate_used_can_be_asked_for() {
     let opts = EncodeOptions::new(EncodeFormat::Mp3).with_bitrate(130_000);
     assert_eq!(encode(&buf, &opts).unwrap().len() as u32, 43 * 1152 / 8 * opts.bitrate(48_000, 2).unwrap().unwrap() / 48_000);
     assert!(is_unsupported(EncodeOptions::new(EncodeFormat::Mp3).bitrate(48_000, 6)));
+}
+
+#[test]
+fn vorbis_is_whole_buffer_only_and_validates_layouts() {
+    let opts = EncodeOptions::new(EncodeFormat::Ogg).with_layout(ChannelLayout::STEREO);
+    assert!(opts.check(48_000, 2).is_ok());
+    assert_eq!(opts.bitrate(48_000, 2).unwrap(), None);
+    assert!(FileEncoder::new(Cursor::new(Vec::new()), &opts, 48_000, 2).is_err());
+    let buf = craft_audio::AudioBuffer::new(48_000, 2, 512);
+    assert!(craft_audio::encode(&buf, &opts).unwrap().starts_with(b"OggS"));
+    let wrong = opts.with_layout(ChannelLayout::from_mask(0xC));
+    assert!(wrong.check(48_000, 2).is_err());
+    assert!(craft_audio::encode(&buf, &wrong).is_err());
 }
