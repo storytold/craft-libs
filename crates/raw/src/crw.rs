@@ -65,6 +65,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, caller: &Limits) -> Result<RawIma
         cinema: Default::default(),
         lens_metadata: Default::default(),
         level_sources: Default::default(),
+        notices: crate::RawNotices::default(),
     };
     img.validate_for(mode)?;
     Ok(img)

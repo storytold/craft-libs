@@ -443,7 +443,8 @@ fn the_unhashed_area_never_decides_who_is_blamed() {
 
     // An issuer only in the unhashed area finds a key, which counts because it fits.
     let alice = secret(ALICE, Make::default());
-    let mut config = config(&alice.primary_key, pgp::packet::SignatureType::Binary, t, vec![]);
+    let alice_created = made(&alice);
+    let mut config = config(&alice.primary_key, pgp::packet::SignatureType::Binary, alice_created, vec![]);
     config.hashed_subpackets.retain(|p| matches!(p.data, SubpacketData::SignatureCreationTime(_)));
     config.unhashed_subpackets = vec![Subpacket::regular(SubpacketData::IssuerFingerprint(alice.primary_key.fingerprint())).unwrap()];
     let sig = config.sign(&alice.primary_key, &Password::empty(), SIGNED_PART.as_bytes()).unwrap();

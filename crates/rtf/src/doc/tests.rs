@@ -1168,7 +1168,7 @@ fn old_formatting_in_a_code_paragraph_has_the_code_font() {
     p.push_text("x", &Fmt { font: Some("Arial".into()), fmt_change: Some(Box::new(FmtChange { mark, old: Fmt::default() })), ..Default::default() });
     let mut w = Writer {
         marks: Vec::new(),
-        t: Tables { fonts: vec!["Aptos".into()], colors: Vec::new() },
+        t: Tables::new("Aptos".into()),
         lists: Vec::new(),
         authors: None,
         base: Fmt::default(),
@@ -1179,6 +1179,39 @@ fn old_formatting_in_a_code_paragraph_has_the_code_font() {
     w.para(&p, false, None, "\\par", &mut out);
     let mono = w.t.font(model::MONO_FONT);
     assert!(out.contains(&format!("{{\\*\\oldcprops \\f{mono}\\crauth1}}")), "{out}");
+}
+
+#[test]
+fn many_distinct_fonts_colours_and_authors_take_constant_steps_each() {
+    use model::FmtChange;
+    // Each run has its own font, colour and tracked-change author.
+    let n = 3000;
+    let mut p = Para::default();
+    for i in 0..n {
+        let mark = RevMark { author: format!("Author {i}"), date: String::new(), id: None };
+        let color = Rgb((i >> 16) as u8, (i >> 8) as u8, i as u8);
+        let font: Arc<str> = format!("Font {i}").into();
+        p.push_text(
+            "x",
+            &Fmt { font: Some(font), color: Some(color), fmt_change: Some(Box::new(FmtChange { mark, old: Fmt::default() })), ..Default::default() },
+        );
+    }
+    let mut w = Writer {
+        marks: Vec::new(),
+        t: Tables::new("Aptos".into()),
+        lists: Vec::new(),
+        authors: None,
+        base: Fmt::default(),
+        sections: Vec::new(),
+        sect_i: 0,
+    };
+    let mut out = String::new();
+    let steps = crate::write::lookup_steps(|| w.para(&p, false, None, "\\par", &mut out));
+    // One lookup each for the font and the colour, and two for a new author: the borrowed
+    // lookup, then the insert.
+    assert!(steps <= 4 * n, "{steps} steps for {n} runs");
+    assert!(out.contains(&format!("\\f{n}\\cf{n}")), "the last run names the last font and colour");
+    assert!(out.contains(&format!("\\crauth{n}")), "the last run names the last author");
 }
 
 /// The text runs of `rtf`'s paragraphs, in order, with their formatting.

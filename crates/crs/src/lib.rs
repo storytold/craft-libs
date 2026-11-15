@@ -74,7 +74,8 @@ impl Value {
 }
 
 /// The `crs:` settings of a packet, by name without the prefix (`Exposure2012`). Where a name
-/// occurs more than once (in several `rdf:Description`s), the last one is kept.
+/// occurs more than once (in several `rdf:Description`s), the first text-bearing value is kept,
+/// as [`craft_metadata::parse_xmp`] reads every packet: a blank repeat must not hide it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Settings {
     pub entries: BTreeMap<String, Value>,
