@@ -122,7 +122,8 @@ pub(super) struct ScreenModeFollow {
 impl ScreenModeFollow {
     /// Reads the mode from `bind` and applies this pass's screen-mode commands. With `os`, follows the OS window and
     /// brings it to the mode; an embedded shell passes false and its mode only changes what its own region shows.
-    /// Writes the mode back under `name` when it changed. Returns the mode and whether it changed.
+    /// Writes the mode back under `name` when this pass changed it. Returns the mode and whether it differs from the mode
+    /// the last pass applied, whoever wrote it.
     pub(super) fn follow(
         &mut self,
         ctx: &Context,
@@ -135,6 +136,7 @@ impl ScreenModeFollow {
             Some(Mixed::Same(held)) => held,
             _ => ScreenMode::default(),
         };
+        let last = self.applied;
         let mut mode = before;
         while let Some((command, _)) = cx.take_command::<ScreenModeCommands>() {
             mode = command.apply(mode);
@@ -147,7 +149,7 @@ impl ScreenModeFollow {
             let event = EditEvent::set(Mixed::Same(before), mode, name, None);
             let _ = bind.write(cx, &event);
         }
-        (mode, mode != before)
+        (mode, mode != last)
     }
 
     /// Follows the OS window out of full screen and sends the actions that bring it to `mode`. Returns the mode the
