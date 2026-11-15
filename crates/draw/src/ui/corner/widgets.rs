@@ -144,7 +144,7 @@ impl CornerWidgets<'_> {
                     self.show_readout(cx, pos, radius);
                     self.report.change = Some(edit);
                 }
-                PressPhase::Release { start, click, .. } if start.button == PointerButton::Primary => {
+                PressPhase::Release { start, pos, click, .. } if start.button == PointerButton::Primary => {
                     let grab = cx.memory::<Grab>().clone();
                     if grab.corner != Some(widget.corner) {
                         continue;
@@ -156,6 +156,14 @@ impl CornerWidgets<'_> {
                             self.report.activate = Some(widget.corner);
                         }
                     } else {
+                        // The release point is the gesture's last move: propose it and report it before the commit, so a
+                        // host that applies `change` to its own types gets the last move too.
+                        if let Some(step) = grab.step {
+                            let radius = geometry::dragged_radius(grab.from, step, grab.press, view.to_doc(pos));
+                            let edit = geometry::drag_edit(&grab.targets, widget.corner, radius, press.mods.alt);
+                            cx.propose(geometry::apply(&grab.targets, &edit));
+                            self.report.change = Some(edit);
+                        }
                         cx.commit();
                     }
                     *cx.memory::<Grab>() = Grab::default();

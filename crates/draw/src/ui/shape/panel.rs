@@ -3,18 +3,20 @@
 
 use std::ops::RangeInclusive;
 
-use super::{LiveShape, RADIUS_RANGE, ShapeAppearance, ShapeChange, ShapeWords};
-use crate::ui::stroke::StrokeButton;
+use super::arrowheads::arrow_rows;
+use super::stroke_cells::{style_button, take_width, width_cell};
+use super::{LINE_WEIGHT_RANGE, LiveShape, RADIUS_RANGE, ShapeAppearance, ShapeChange, ShapeWords};
 use craft_behavior::{EditEvent, EditEvents, NumberCodec};
 use craft_color::ui::{Paint, PaintChip, PaintChipOutput, ScreenPickGesture};
 use craft_theme::Srgba;
+use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, GlyphLabel, LabelKind, LabelScheme, Props as _, Show as _, ShowContainer as _, SideLabel};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::runtime::env::{Env, Label, LengthUnits, UnitKind, Units, with_env};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::sections::Section;
-use craft_ui::text::NumberField;
+use craft_ui::text::{NumberField, RangeAlert};
 use egui::Ui;
 
 /// Which paint a chip edits, for [`ShapePanel::chips`] and [`ShapeBar::chips`](super::ShapeBar::chips).
@@ -58,9 +60,11 @@ pub struct ShapePanelOutput {
 ///   [`stroke_open`](Self::stroke_open)). Stroke width 0 is no stroke; an edit that turns a stroke on at 0 carries
 ///   [`ShapeChange::ENABLED_STROKE_WIDTH`] in the same change; an arrow step that clamps at 0 reports nothing.
 /// - Shape (a collapsible section), by the [`LiveShape`]: W and H (1 to 300,000 px, whole pixels) for a rect,
-///   ellipse or polygon; a rect's "Corner radius" (0 to 100,000, sets all four) then Top Left, Top Right, Bottom
+///   ellipse or polygon; a rect's "Corner radius" (0 to 150,000, sets all four) then Top Left, Top Right, Bottom
 ///   Left, Bottom Right rows (PhotoCraft's row order, mapped to the radii order TL, TR, BR, BL); a polygon's Corner
-///   radius, Sides (3 to 100) and Star ratio (1 to 100 %, stored 0.01 to 1); a line's Weight (1 to 10,000).
+///   radius, Sides (3 to 100) and Star ratio (1 to 100 %, stored 0.01 to 1); a line's Weight (1 to 10,000), and with
+///   arrowheads its Start and End check boxes, Width, Length and Concavity, then the "Set as default" check box
+///   ([`arrow_default`](Self::arrow_default)).
 /// - A locked layer ([`ShapeAppearance::locked`]) disables the whole panel.
 /// - Keyboard: every field and chip is a Tab stop in reading order; sections fold with their title rows. Right to
 ///   left the rows mirror; the corner names stay.
@@ -136,8 +140,7 @@ impl<'a> ShapePanel<'a> {
 
     /// Adds the sections to `ui` and reports the changed fields.
     pub fn show(self, ui: &mut Ui) -> ShapePanelOutput {
-        let ShapePanel { label, shape, appearance, stroke_open, chips, fallbacks, sections, sampled, pixels_per_inch, arrow_default } = self;
-        let _ = arrow_default; // P3(tools-w8): tl.T28
+        let ShapePanel { label, shape, appearance, stroke_open, chips, fallbacks, sections, sampled, pixels_per_inch, mut arrow_default } = self;
         let env = Env::of(ui);
         let (words, units) = (env.words::<ShapeWords>(), env.units());
         let mut pass = Cells::new(&words, &units, pixels_per_inch, appearance, fallbacks, sampled, chips);
@@ -154,7 +157,7 @@ impl<'a> ShapePanel<'a> {
                     });
                 }
                 if sections.1 {
-                    Section::new(words.shape.clone()).id_salt("liveShape").show(ui, |ui, _| pass.shape_rows(ui, shape));
+                    Section::new(words.shape.clone()).id_salt("liveShape").show(ui, |ui, _| pass.shape_rows(ui, shape, arrow_default.as_mut()));
                 }
             });
         };
@@ -163,7 +166,7 @@ impl<'a> ShapePanel<'a> {
         } else {
             body(ui);
         }
-        ShapePanelOutput { events: pass.events, screen_pick: pass.screen_pick, pick_color: None }
+        ShapePanelOutput { events: pass.events, screen_pick: pass.screen_pick, pick_color: pass.pick_color }
     }
 }
 
@@ -235,10 +238,19 @@ impl NumberCell {
         field.range(self.range.clone()).codec(self.codec.clone())
     }
 
-    /// The edit of the field shown in `ui`; an emptied field keeps the value.
-    pub fn show(&self, ui: &mut Ui) -> EditEvents<f64> {
+    /// The edit of the field shown in `ui` and the alert of a typed value that was clamped; an emptied field keeps the
+    /// value.
+    pub fn show(&self, ui: &mut Ui) -> (EditEvents<f64>, Option<RangeAlert>) {
         let kept = self.value;
-        self.field().scrub_by_label().show(ui).edit.events.map(|value| value.unwrap_or(kept))
+        let out = self.field().scrub_by_label().show(ui);
+        let alert = out.out_of_range;
+        (out.edit.events.map(|value| value.unwrap_or(kept)), alert)
+    }
+
+    /// The field in a row under its caption, which scrubs it: the edit of the field.
+    pub fn labelled(&self, ui: &mut Ui) -> EditEvents<f64> {
+        let side = SideLabel::new().scrub(true);
+        Field::new(self.caption.clone()).id_salt(self.key).side(side).show(ui, |ui, _| self.show(ui).0).inner.unwrap_or_default()
     }
 }
 
@@ -260,6 +272,7 @@ pub(super) struct Cells<'p, 'a> {
     pub(super) open: Option<Bind<'a, bool>>,
     pub events: Vec<EditEvent<ShapeChange>>,
     pub screen_pick: Option<(ShapePaint, ScreenPickGesture)>,
+    pub pick_color: Option<(ShapePaint, ColorRequest)>,
 }
 
 impl<'p, 'a> Cells<'p, 'a> {
@@ -272,13 +285,26 @@ impl<'p, 'a> Cells<'p, 'a> {
         sampled: Option<(ShapePaint, Srgba)>,
         chips: Option<ChipSetup<'a>>,
     ) -> Self {
-        Cells { words, units, pixels_per_inch, appearance, fallbacks, sampled, chips, open: None, events: Vec::new(), screen_pick: None }
+        Cells {
+            words,
+            units,
+            pixels_per_inch,
+            appearance,
+            fallbacks,
+            sampled,
+            chips,
+            open: None,
+            events: Vec::new(),
+            screen_pick: None,
+            pick_color: None,
+        }
     }
 
     /// Starts a run of the body: it may run more than once in a pass, and each run starts clean.
     pub fn begin(&mut self) {
         self.events.clear();
         self.screen_pick = None;
+        self.pick_color = None;
     }
 
     /// The paint chip of `which`, decorated by the app's setup.
@@ -297,10 +323,13 @@ impl<'p, 'a> Cells<'p, 'a> {
         chip.show(ui)
     }
 
-    /// Takes a chip's output: its edit as a change, its eyedropper press.
+    /// Takes a chip's output: its edit as a change, its eyedropper press and its full colour picker request.
     pub fn take_chip(&mut self, which: ShapePaint, out: PaintChipOutput) {
         if let Some(gesture) = out.screen_pick {
             self.screen_pick = Some((which, gesture));
+        }
+        if let Some(request) = out.pick_color {
+            self.pick_color = Some((which, request));
         }
         for event in out.edit.events {
             let paints = match &event {
@@ -335,58 +364,21 @@ impl<'p, 'a> Cells<'p, 'a> {
         }
     }
 
-    /// The stroke width cell: 0 to 288 px.
-    pub fn width_cell(&self) -> NumberCell {
-        NumberCell::pixels(
-            self.units,
-            self.pixels_per_inch,
-            "stroke-width",
-            &self.words.stroke_width,
-            self.appearance.stroke_width,
-            0.0..=STROKE_WIDTH_MAX,
-        )
-    }
-
-    /// Takes the stroke width field's event. An arrow step that stays at 0 changes nothing, so it adds no stroke.
-    pub fn take_width(&mut self, events: EditEvents<f64>) {
-        for event in events {
-            let unchanged = matches!(&event, EditEvent::Set { after, .. } | EditEvent::Update { value: after, .. } if *after <= 0.0 && self.appearance.stroke_width <= 0.0);
-            if !unchanged {
-                self.events.push(event.map(ShapeChange::StrokeWidth));
-            }
-        }
-    }
-
     fn width_row(&mut self, ui: &mut Ui) {
-        let cell = self.width_cell();
-        let side = SideLabel::new().scrub(true);
-        let events = Field::new(cell.caption.clone()).id_salt(cell.key).side(side).show(ui, |ui, _| cell.show(ui)).inner.unwrap_or_default();
-        self.take_width(events);
-    }
-
-    /// The Stroke style button over the appearance's stroke style, when the app gave the popover's open flag. It is
-    /// off while the width is 0; a pick then also carries the stroke's width in the same change.
-    pub fn style_button(&mut self, ui: &mut Ui, corners: bool) {
-        let off = self.appearance.stroke_width <= 0.0;
-        let Some(open) = self.open.as_mut() else { return };
-        let style = Bind::given(self.appearance.stroke_style.clone());
-        let button = StrokeButton::new(self.words.stroke_style.clone(), style, open.reborrowed()).corners(corners).stroked(!off).enabled(!off);
-        for event in button.show(ui).events {
-            let width = (off && matches!(event, EditEvent::Set { .. } | EditEvent::Begin { .. })).then_some(ShapeChange::ENABLED_STROKE_WIDTH);
-            self.events.push(event.map(|style| ShapeChange::StrokeStyle { style, width }));
-        }
+        let cell = width_cell(self.words, self.units, self.pixels_per_inch, self.appearance);
+        let events = cell.labelled(ui);
+        take_width(self.appearance, events, &mut self.events);
     }
 
     fn style_row(&mut self, ui: &mut Ui, corners: bool) {
-        if self.open.is_some() {
-            Field::new(self.words.stroke_style.clone()).id_salt("stroke-style").show(ui, |ui, _| self.style_button(ui, corners));
-        }
+        let Some(open) = self.open.as_mut() else { return };
+        let (words, appearance, events) = (self.words, self.appearance, &mut self.events);
+        Field::new(words.stroke_style.clone()).id_salt("stroke-style").show(ui, |ui, _| style_button(ui, words, appearance, open, corners, events));
     }
 
     /// A labelled row with `cell`; its edit goes out through `change`.
     fn number_row(&mut self, ui: &mut Ui, cell: NumberCell, change: impl Fn(f64) -> ShapeChange) {
-        let side = SideLabel::new().scrub(true);
-        let events = Field::new(cell.caption.clone()).id_salt(cell.key).side(side).show(ui, |ui, _| cell.show(ui)).inner.unwrap_or_default();
+        let events = cell.labelled(ui);
         self.events.extend(events.map(&change));
     }
 
@@ -402,7 +394,7 @@ impl<'p, 'a> Cells<'p, 'a> {
         Row::new().fill_width().show(ui, |ui, _| {
             for ((cell, glyph), edit) in cells.iter().zip(glyphs).zip(edits.iter_mut()) {
                 let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone()))).scrub(true);
-                *edit = Field::new(cell.caption.clone()).id_salt(cell.key).side(side).show(ui, |ui, _| cell.show(ui)).inner.unwrap_or_default();
+                *edit = Field::new(cell.caption.clone()).id_salt(cell.key).side(side).show(ui, |ui, _| cell.show(ui).0).inner.unwrap_or_default();
             }
         });
         let [w, h] = edits;
@@ -411,7 +403,7 @@ impl<'p, 'a> Cells<'p, 'a> {
     }
 
     /// The Shape section's rows for `shape`.
-    fn shape_rows(&mut self, ui: &mut Ui, shape: &LiveShape) {
+    fn shape_rows(&mut self, ui: &mut Ui, shape: &LiveShape, arrow_default: Option<&mut Bind<'_, bool>>) {
         let (units, ppi, words) = (self.units, self.pixels_per_inch, self.words);
         match shape {
             LiveShape::Rect { width, height, radii } => {
@@ -445,9 +437,22 @@ impl<'p, 'a> Cells<'p, 'a> {
                 let ratio = NumberCell::percent(units, "star-ratio", &words.star_ratio, star_ratio * 100.0, RATIO_PERCENT);
                 self.number_row(ui, ratio, |percent| ShapeChange::StarRatio(percent / 100.0));
             }
-            LiveShape::Line { weight, .. } => {
-                let cell = NumberCell::pixels(units, ppi, "weight", &words.weight, *weight, super::LINE_WEIGHT_RANGE);
-                self.number_row(ui, cell, ShapeChange::Weight);
+            LiveShape::Line { weight, arrows } => {
+                let cell = NumberCell::pixels(units, ppi, "weight", &words.weight, *weight, LINE_WEIGHT_RANGE);
+                match arrows {
+                    None => self.number_row(ui, cell, ShapeChange::Weight),
+                    Some(arrows) => {
+                        // PhotoCraft's order puts the weight between the head's length and its concavity.
+                        let edits = arrow_rows(ui, words, units, ppi, *arrows, |ui| self.number_row(ui, cell, ShapeChange::Weight));
+                        self.events.extend(edits.into_iter().map(|edit| edit.map(ShapeChange::Arrowheads)));
+                        if let Some(link) = arrow_default {
+                            let _ = Checkbox::new(link.reborrowed())
+                                .label(words.set_as_default.clone())
+                                .tooltip(words.set_as_default_tip.clone())
+                                .show(ui);
+                        }
+                    }
+                }
             }
         }
     }
@@ -458,13 +463,8 @@ pub(super) fn sides_change(sides: f64) -> ShapeChange {
     ShapeChange::Sides(sides.round().clamp(*SIDES_RANGE.start(), *SIDES_RANGE.end()) as u32)
 }
 
-/// The largest stroke width in pixels.
-const STROKE_WIDTH_MAX: f64 = 288.0;
 /// The range of a shape's width and height in whole pixels.
 const SIZE_RANGE: RangeInclusive<f64> = 1.0..=300_000.0;
-/// The range of a corner radius in pixels.
-#[allow(dead_code)] // P3(tools-w8): tl.T27
-const RADIUS_RANGE_OLD: RangeInclusive<f64> = 0.0..=100_000.0;
 /// The number of sides of a polygon or points of a star.
 pub(super) const SIDES_RANGE: RangeInclusive<f64> = 3.0..=100.0;
 /// The star ratio in percent.

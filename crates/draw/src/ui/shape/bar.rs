@@ -1,7 +1,7 @@
 //! [`ShapeBar`]: the Shape tools' options bar cells.
 
 use super::panel::{Cells, ChipSetup, NumberCell, SIDES_RANGE, sides_change};
-use super::{ShapeAppearance, ShapeChange, ShapePaint, ShapeToolSettings, ShapeWords};
+use super::{LINE_WEIGHT_RANGE, RADIUS_RANGE, ShapeAppearance, ShapeChange, ShapePaint, ShapeToolSettings, ShapeWords, StrokeCells};
 use crate::ui::shape_drag::ShapeKind;
 use craft_behavior::EditEvent;
 use craft_color::ui::{PaintChip, ScreenPickGesture};
@@ -34,13 +34,14 @@ pub struct ShapeBarOutput {
 
 /// The cells a Shape tool adds to the options bar, in PhotoCraft's order: the "Fill" check box and chip, the
 /// "Stroke" chip, the stroke width (0 to 288 px), the Stroke style button; then the kind's cell: Rectangle and
-/// Rounded Rectangle "Radius" (0 to 10,000), Polygon and Star "Sides" (3 to 100), Line "Weight" (1 to 1,000). A
+/// Rounded Rectangle "Radius" (0 to 150,000), Polygon and Star "Sides" (3 to 100), Line "Weight" (1 to 10,000). A
 /// pattern shown as children of a `Bar`.
 ///
 /// - The values are the selected shape layer's when one is selected, else the tool settings' (the app passes the
 ///   right [`ShapeAppearance`]).
 /// - Stroke width 0 is no stroke; an edit that turns the stroke on at 0 carries
 ///   [`ShapeChange::ENABLED_STROKE_WIDTH`] in the same change.
+/// - [`paint(false)`](Self::paint) leaves out the Fill check box, both chips and the stroke cells; the kind's cell stays.
 /// - Keyboard: every cell is a Tab stop in the bar's order; captions scrub their fields.
 #[must_use = "show the cells with `show`"]
 #[derive(craft_ui::contract::Pattern)]
@@ -106,38 +107,43 @@ impl<'a> ShapeBar<'a> {
     /// Adds the cells to the bar's row `ui`.
     pub fn show(self, ui: &mut Ui) -> ShapeBarOutput {
         let ShapeBar { kind, settings, appearance, stroke_open, chips, fallbacks, sampled, pixels_per_inch, paint } = self;
-        let _ = paint; // P3(tools-w8): tl.T28
         let env = Env::of(ui);
         let (words, units) = (env.words::<ShapeWords>(), env.units());
         let mut pass = Cells::new(&words, &units, pixels_per_inch, appearance, fallbacks, sampled, chips);
-        pass.open = stroke_open;
+        let mut stroke_open = stroke_open;
+        let mut out_of_range = None;
         Row::new().enabled(!appearance.locked).show(ui, |ui, _| {
+            // The body may run more than once in a pass; each run starts clean.
             pass.begin();
-            let fill_on = !matches!(appearance.fill, craft_color::ui::Paint::None);
-            let check = Checkbox::new(Bind::given(fill_on)).label(words.fill.clone()).show(ui).events;
-            pass.events.extend(check.map(ShapeChange::FillOn));
-            let hidden = SideLabel::new().kind(LabelKind::Hidden);
-            let fill = Field::new(words.fill_color.clone())
-                .id_salt("fill")
-                .side(hidden.clone())
-                .sizing(Sizing::Content)
-                .show(ui, |ui, _| pass.chip(ui, ShapePaint::Fill));
-            if let Some(out) = fill.inner {
-                pass.take_chip(ShapePaint::Fill, out);
+            out_of_range = None;
+            if paint {
+                let fill_on = !matches!(appearance.fill, craft_color::ui::Paint::None);
+                let check = Checkbox::new(Bind::given(fill_on)).label(words.fill.clone()).show(ui).events;
+                pass.events.extend(check.map(ShapeChange::FillOn));
+                let hidden = SideLabel::new().kind(LabelKind::Hidden);
+                let fill = Field::new(words.fill_color.clone())
+                    .id_salt("fill")
+                    .side(hidden)
+                    .sizing(Sizing::Content)
+                    .show(ui, |ui, _| pass.chip(ui, ShapePaint::Fill));
+                if let Some(out) = fill.inner {
+                    pass.take_chip(ShapePaint::Fill, out);
+                }
+                let stroke =
+                    Field::new(words.stroke.clone()).id_salt("stroke").sizing(Sizing::Content).show(ui, |ui, _| pass.chip(ui, ShapePaint::Stroke));
+                if let Some(out) = stroke.inner {
+                    pass.take_chip(ShapePaint::Stroke, out);
+                }
+                let mut cells = StrokeCells::new(appearance, pixels_per_inch).corners(kind != ShapeKind::Ellipse);
+                if let Some(open) = stroke_open.as_mut() {
+                    cells = cells.stroke_open(open.reborrowed());
+                }
+                let events = cells.show(ui);
+                pass.events.extend(events);
             }
-            let stroke =
-                Field::new(words.stroke.clone()).id_salt("stroke").sizing(Sizing::Content).show(ui, |ui, _| pass.chip(ui, ShapePaint::Stroke));
-            if let Some(out) = stroke.inner {
-                pass.take_chip(ShapePaint::Stroke, out);
-            }
-            let width = pass.width_cell();
-            let event =
-                Field::new(width.caption.clone()).id_salt(width.key).side(hidden).sizing(Sizing::Content).show(ui, |ui, _| width.show(ui)).inner;
-            pass.take_width(event.unwrap_or_default());
-            pass.style_button(ui, kind != ShapeKind::Ellipse);
             let cell = match kind {
                 ShapeKind::Rectangle | ShapeKind::RoundedRectangle => Some((
-                    NumberCell::pixels(&units, pixels_per_inch, "radius", &words.radius, settings.corner_radius, super::RADIUS_RANGE),
+                    NumberCell::pixels(&units, pixels_per_inch, "radius", &words.radius, settings.corner_radius, RADIUS_RANGE),
                     ShapeChange::CornerRadius as fn(f64) -> ShapeChange,
                 )),
                 ShapeKind::Polygon | ShapeKind::Star => Some((
@@ -145,7 +151,7 @@ impl<'a> ShapeBar<'a> {
                     sides_change as fn(f64) -> ShapeChange,
                 )),
                 ShapeKind::Line => Some((
-                    NumberCell::pixels(&units, pixels_per_inch, "weight", &words.weight, settings.line_weight, super::LINE_WEIGHT_RANGE),
+                    NumberCell::pixels(&units, pixels_per_inch, "weight", &words.weight, settings.line_weight, LINE_WEIGHT_RANGE),
                     ShapeChange::Weight as fn(f64) -> ShapeChange,
                 )),
                 _ => None,
@@ -153,18 +159,12 @@ impl<'a> ShapeBar<'a> {
             if let Some((cell, change)) = cell {
                 Divider::vertical().show(ui);
                 let side = SideLabel::new().scrub(true);
-                let event =
-                    Field::new(cell.caption.clone()).id_salt(cell.key).side(side).sizing(Sizing::Content).show(ui, |ui, _| cell.show(ui)).inner;
-                pass.events.extend(event.unwrap_or_default().map(change));
+                let (events, alert) =
+                    Field::new(cell.caption.clone()).id_salt(cell.key).side(side).sizing(Sizing::Content).show(ui, |ui, _| cell.show(ui)).inner.unwrap_or_default();
+                pass.events.extend(events.map(change));
+                out_of_range = alert;
             }
         });
-        ShapeBarOutput { events: pass.events, screen_pick: pass.screen_pick, pick_color: None, out_of_range: None }
+        ShapeBarOutput { events: pass.events, screen_pick: pass.screen_pick, pick_color: pass.pick_color, out_of_range }
     }
 }
-
-/// The largest corner radius of the bar's Radius cell, in pixels.
-#[allow(dead_code)] // P3(tools-w8): tl.T27
-const RADIUS_MAX: f64 = 10_000.0;
-/// The largest weight of the bar's Line cell, in pixels.
-#[allow(dead_code)] // P3(tools-w8): tl.T27
-const LINE_WEIGHT_MAX: f64 = 1_000.0;

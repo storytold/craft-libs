@@ -38,5 +38,29 @@ craft_ui::words! {
         weight: "shape.weight" = "Weight";
         /// The options bar's corner radius cell.
         radius: "shape.radius" = "Radius";
+        /// The vector mode select's accessible name.
+        mode: "shape.mode" = "Mode";
+        /// The mode entry that draws a shape layer.
+        shape_mode: "shape.shapeMode" = "Shape";
+        /// The mode entry that draws a path.
+        path_mode: "shape.pathMode" = "Path";
+        /// The mode entry that draws filled pixels.
+        pixels_mode: "shape.pixelsMode" = "Pixels";
+        /// The arrowhead popover's name and its button's accessible name.
+        arrowheads: "shape.arrowheads" = "Arrowheads";
+        /// The check box for an arrowhead at the start.
+        arrow_start: "shape.arrowStart" = "Start";
+        /// The check box for an arrowhead at the end.
+        arrow_end: "shape.arrowEnd" = "End";
+        /// The arrowhead width field.
+        arrow_width: "shape.arrowWidth" = "Width";
+        /// The arrowhead length field.
+        arrow_length: "shape.arrowLength" = "Length";
+        /// The arrowhead concavity field.
+        arrow_concavity: "shape.arrowConcavity" = "Concavity";
+        /// The check box that makes the arrowhead values the defaults of new arrows.
+        set_as_default: "shape.setAsDefault" = "Set as default";
+        /// The tooltip of that check box.
+        set_as_default_tip: "shape.setAsDefaultTip" = "Use these settings for new arrows";
     }
 }

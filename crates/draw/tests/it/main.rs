@@ -2,6 +2,8 @@
 
 // draw-shape
 mod add_beside;
+mod corner;
+mod shape_cells;
 
 // draw-gradient-b
 mod gradient_fill;

@@ -49,9 +49,9 @@ pub struct Arrowheads {
     pub start: bool,
     /// An arrowhead at the end.
     pub end: bool,
-    /// The head's width as a percentage of the line weight.
+    /// The head's width in document pixels.
     pub width: f64,
-    /// The head's length as a percentage of the line weight.
+    /// The head's length in document pixels.
     pub length: f64,
     /// The head's concavity in percent.
     pub concavity: f64,
@@ -59,10 +59,8 @@ pub struct Arrowheads {
 
 impl Arrowheads {
     /// The range of the width and length fields, in document pixels (production and engine units).
-    // P3(tools-w8): tl.T27 production units
     pub const ARROW_SIZE: RangeInclusive<f64> = 1.0..=4096.0;
     /// The range of the concavity field, in percent.
-    // P3(tools-w8): tl.T27 production units
     pub const ARROW_CONCAVITY: RangeInclusive<f64> = 0.0..=100.0;
 
     /// No arrowheads at the default size.
@@ -266,7 +264,7 @@ pub struct ShapeToolSettings {
     pub corner_radius: f64,
     /// A polygon's sides or a star's points.
     pub sides: u32,
-    /// A star's inner over outer radius; 1 for a plain polygon.
+    /// A star's inner over outer radius.
     pub star_ratio: f64,
     /// The Line's weight.
     pub line_weight: f64,
@@ -277,14 +275,14 @@ pub struct ShapeToolSettings {
 }
 
 impl Default for ShapeToolSettings {
-    /// Fill on, square corners, 5 sides, a plain polygon, weight 3, no stroke (PhotoCraft's
-    /// `ToolOptions::default`, `state/tool_options.rs:405-412`).
+    /// Fill on, square corners, 5 sides, a star ratio of 0.5 (production's Star), weight 3, no stroke, no
+    /// arrowheads.
     fn default() -> Self {
         ShapeToolSettings {
             fill_on: true,
             corner_radius: 0.0,
             sides: 5,
-            star_ratio: 1.0,
+            star_ratio: 0.5,
             line_weight: 3.0,
             stroke_width: 0.0,
             arrowheads: Arrowheads::default(),

@@ -1,7 +1,9 @@
 //! [`VectorModeSelect`]: the Shape, Path and Pixels mode choice of the vector tools.
 
-use super::VectorMode;
-use craft_ui::contract::{Bind, EditResponse};
+use super::{ShapeWords, VectorMode};
+use craft_ui::contract::{Bind, Entry, EditResponse, Show as _};
+use craft_ui::pickers::Select;
+use craft_ui::runtime::env::Env;
 use egui::Ui;
 
 /// The mode select of the vector tools' bars; a mode in `offered` with `false` shows disabled.
@@ -21,7 +23,18 @@ impl<'a> VectorModeSelect<'a> {
     /// Shows the select and reports the picked mode.
     pub fn show(self, ui: &mut Ui) -> EditResponse<VectorMode> {
         let VectorModeSelect { mode, offered } = self;
-        let _ = (ui, mode, offered);
-        todo!("tl.T29")
+        let words = Env::of(ui).words::<ShapeWords>();
+        let entries: Vec<Entry<VectorMode>> = offered
+            .iter()
+            .map(|&(offered_mode, enabled)| {
+                let label = match offered_mode {
+                    VectorMode::Shape => &words.shape_mode,
+                    VectorMode::Path => &words.path_mode,
+                    VectorMode::Pixels => &words.pixels_mode,
+                };
+                Entry::new(offered_mode, label.clone()).enabled(enabled)
+            })
+            .collect();
+        Select::new(words.mode.clone(), mode, &entries).show(ui)
     }
 }

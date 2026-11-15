@@ -1,13 +1,58 @@
-//! [`StrokeCells`]: the stroke width cell and the Stroke style button, shared by the Shape bar and the Pen tools'
-//! Shape mode.
+//! [`StrokeCells`]: the stroke width cell and the Stroke style button, shared by the Shape bar, the Appearance section
+//! of the panel and the Pen tools' Shape mode.
 
-use super::{ShapeAppearance, ShapeChange};
-use craft_behavior::EditEvent;
-use craft_ui::contract::Bind;
+use super::panel::NumberCell;
+use super::{ShapeAppearance, ShapeChange, ShapeWords};
+use crate::ui::stroke::StrokeButton;
+use craft_behavior::{EditEvent, EditEvents};
+use craft_ui::contract::{Bind, LabelKind, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use craft_ui::form::Field;
+use craft_ui::runtime::env::{Env, Units};
 use egui::Ui;
+
+/// The largest stroke width in pixels.
+const STROKE_WIDTH_MAX: f64 = 288.0;
+
+/// The stroke width cell of `appearance`: 0 to 288 px.
+pub(super) fn width_cell(words: &ShapeWords, units: &Units, pixels_per_inch: f64, appearance: &ShapeAppearance) -> NumberCell {
+    NumberCell::pixels(units, pixels_per_inch, "stroke-width", &words.stroke_width, appearance.stroke_width, 0.0..=STROKE_WIDTH_MAX)
+}
+
+/// Adds the stroke width field's events to `out`. An arrow step that stays at 0 changes nothing, so it adds no stroke.
+pub(super) fn take_width(appearance: &ShapeAppearance, events: EditEvents<f64>, out: &mut Vec<EditEvent<ShapeChange>>) {
+    for event in events {
+        let unchanged = matches!(&event, EditEvent::Set { after, .. } | EditEvent::Update { value: after, .. } if *after <= 0.0 && appearance.stroke_width <= 0.0);
+        if !unchanged {
+            out.push(event.map(ShapeChange::StrokeWidth));
+        }
+    }
+}
+
+/// Shows the Stroke style button over the appearance's stroke style and adds its events to `out`. It is off while the
+/// width is 0; a pick then also carries the stroke's width in the same change.
+pub(super) fn style_button(
+    ui: &mut Ui,
+    words: &ShapeWords,
+    appearance: &ShapeAppearance,
+    open: &mut Bind<'_, bool>,
+    corners: bool,
+    out: &mut Vec<EditEvent<ShapeChange>>,
+) {
+    let off = appearance.stroke_width <= 0.0;
+    let style = Bind::given(appearance.stroke_style.clone());
+    let button = StrokeButton::new(words.stroke_style.clone(), style, open.reborrowed()).corners(corners).stroked(!off).enabled(!off);
+    for event in button.show(ui).events {
+        let width = (off && matches!(event, EditEvent::Set { .. } | EditEvent::Begin { .. })).then_some(ShapeChange::ENABLED_STROKE_WIDTH);
+        out.push(event.map(|style| ShapeChange::StrokeStyle { style, width }));
+    }
+}
 
 /// The stroke width cell and the Stroke style button of a shape's stroke, as one pattern shown as children of a
 /// `Bar`.
+///
+/// - The width is 0 to 288 px; 0 is no stroke, and an edit that turns the stroke on carries
+///   [`ShapeChange::ENABLED_STROKE_WIDTH`].
+/// - The style button shows only with [`stroke_open`](Self::stroke_open) and is off while the width is 0.
 #[must_use = "show the cells with `show`"]
 #[derive(craft_ui::contract::Pattern)]
 pub struct StrokeCells<'a> {
@@ -37,8 +82,17 @@ impl<'a> StrokeCells<'a> {
 
     /// Adds the cells to the bar's row `ui` and reports each change.
     pub fn show(self, ui: &mut Ui) -> Vec<EditEvent<ShapeChange>> {
-        let StrokeCells { appearance, pixels_per_inch, corners, stroke_open } = self;
-        let _ = (ui, appearance, pixels_per_inch, corners, stroke_open);
-        todo!("tl.T29")
+        let StrokeCells { appearance, pixels_per_inch, corners, mut stroke_open } = self;
+        let env = Env::of(ui);
+        let (words, units) = (env.words::<ShapeWords>(), env.units());
+        let mut events = Vec::new();
+        let cell = width_cell(&words, &units, pixels_per_inch, appearance);
+        let hidden = SideLabel::new().kind(LabelKind::Hidden);
+        let width = Field::new(cell.caption.clone()).id_salt(cell.key).side(hidden).sizing(Sizing::Content).show(ui, |ui, _| cell.show(ui).0).inner;
+        take_width(appearance, width.unwrap_or_default(), &mut events);
+        if let Some(open) = stroke_open.as_mut() {
+            style_button(ui, &words, appearance, open, corners, &mut events);
+        }
+        events
     }
 }
