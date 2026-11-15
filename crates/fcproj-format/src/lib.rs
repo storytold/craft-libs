@@ -57,6 +57,26 @@ pub struct EnvelopeIn<P> {
     #[serde(default)]
     pub view: Option<Value>,
 }
+/// Serialize the current envelope, with optional editor view and caller-provided generator.
+pub fn encode<P: Serialize, V: Serialize>(project: &P, view: Option<&V>, generator: String, pretty: bool) -> Vec<u8> {
+    let envelope = EnvelopeOut { format: FORMAT_ID, schema_version: SCHEMA_VERSION, generator, project, view };
+    let result = if pretty { serde_json::to_vec_pretty(&envelope) } else { serde_json::to_vec(&envelope) };
+    result.unwrap_or_default()
+}
+
+/// Decode an envelope, migrating older documents while retaining the current-version fast path.
+pub fn decode<P: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<(EnvelopeIn<P>, u32), FormatError> {
+    let found = detect_bytes(bytes)?;
+    if found == SCHEMA_VERSION {
+        let env = serde_json::from_slice(bytes).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+        return Ok((env, found));
+    }
+    let doc: Value = serde_json::from_slice(bytes).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    let doc = migrate_with(MIGRATIONS, doc, found)?;
+    let env = serde_json::from_value(doc).map_err(|e| FormatError::Corrupt(format!("after upgrading from schema v{found}: {e}")))?;
+    Ok((env, found))
+}
+
 /// Probe and validate the schema directly from bytes without building a JSON tree.
 pub fn detect_bytes(bytes: &[u8]) -> Result<u32, FormatError> {
     let probe: Probe = serde_json::from_slice(bytes)
@@ -249,6 +269,22 @@ mod tests {
         let parsed: EnvelopeIn<Value> = serde_json::from_value(migrated).unwrap();
         assert!(parsed.view.is_none());
         assert_eq!(parsed.project["extra"], json!([1, 2]));
+    }
+    #[test]
+    fn typed_encode_and_decode_current_and_legacy() {
+        let project = json!({"items": {}, "root": {}, "name": "Cut"});
+        let view = json!({"active": 3});
+        for pretty in [false, true] {
+            let bytes = encode(&project, Some(&view), "FilmCraft test".into(), pretty);
+            let (file, version): (EnvelopeIn<Value>, _) = decode(&bytes).unwrap();
+            assert_eq!(version, SCHEMA_VERSION);
+            assert_eq!(file.project, project);
+            assert_eq!(file.view, Some(view.clone()));
+        }
+        let old = br#"{"version":1,"items":{},"root":{},"name":"Cut"}"#;
+        let (file, version): (EnvelopeIn<Value>, _) = decode(old).unwrap();
+        assert_eq!(version, 1);
+        assert_eq!(file.project["name"], "Cut");
     }
     #[test]
     fn rejects_wrong_future_and_damaged_envelopes() {
