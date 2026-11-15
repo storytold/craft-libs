@@ -74,11 +74,13 @@ pub struct PositionedGlyph<A: Artwork> {
 }
 
 impl<A: Artwork> PositionedGlyph<A> {
-    fn width_stops(&self) -> impl Iterator<Item = (usize, f64)> + '_ {
+    /// Source caret stops as fractions of glyph width.
+    pub fn width_stops(&self) -> impl Iterator<Item = (usize, f64)> + '_ {
         std::iter::once((self.byte, 0.0)).chain(self.carets.iter().copied()).chain(std::iter::once((self.byte + self.len, 1.0)))
     }
 
-    fn stops_along(&self, extent: f64) -> impl Iterator<Item = (usize, f64)> + '_ {
+    /// Source caret stops measured from the logical leading edge.
+    pub fn stops_along(&self, extent: f64) -> impl Iterator<Item = (usize, f64)> + '_ {
         let (width, start) = if self.width > 0.0 && self.width.is_finite() {
             (self.width, if self.width_start.is_finite() { self.width_start } else { 0.0 })
         } else {
