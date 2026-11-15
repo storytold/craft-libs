@@ -218,7 +218,10 @@ impl Reader {
         let mut name_set = BTreeSet::new();
         for entry_idx in 0..archive.len() {
             if let Ok(Some(name)) = archive.entry_name(entry_idx)
-                && (name.is_empty() || name.contains('\\') || name.split('/').any(|c| c.is_empty() || c == "." || c == "..") || !name_set.insert(name))
+                && (name.is_empty()
+                    || name.contains('\\')
+                    || name.split('/').any(|c| c.is_empty() || c == "." || c == "..")
+                    || !name_set.insert(name))
             {
                 return Err(invalid("duplicate or invalid archive entry"));
             }
