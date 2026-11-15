@@ -122,9 +122,13 @@ impl Document {
     /// initialization vector followed by whole blocks (ISO 32000-2 §7.6.3.2): cut short or damaged,
     /// so what it decrypted to lacks the rest. Known once the stream has been read; an edited
     /// stream is this document's own and never is. Data that must be whole, such as an attachment
-    /// exported as a file, is refused on it; drawing tolerates it.
+    /// exported as a file, is refused on it; drawing tolerates it. Any reference that reaches the
+    /// stream asks about it: one read through a damaged xref row is recorded with its header's
+    /// generation, and one number holds one object.
     pub fn ciphertext_damaged(&self, id: ObjRef) -> bool {
-        !self.overlay.contains_key(&id.num) && self.damaged_ciphertext.lock().is_ok_and(|d| d.contains(&id))
+        !self.overlay.contains_key(&id.num)
+            && self.reference_matches(id)
+            && self.damaged_ciphertext.lock().is_ok_and(|d| d.iter().any(|r| r.num == id.num))
     }
 
     /// Record `num` as unreadable. `reason` is built only for an object not yet listed, so a file

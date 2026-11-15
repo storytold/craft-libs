@@ -258,3 +258,24 @@ fn aes_stream_data_cut_short_is_recorded_once_read() {
         }
     }
 }
+
+/// From the review of the AES change: a stream read through a damaged xref row is decrypted with
+/// its header's generation and recorded so, and the reference that reached it, by the row's
+/// generation, asks about the same stream. A generation nothing accepts still names nothing.
+#[test]
+fn damaged_aes_data_is_known_by_the_reference_that_read_it() {
+    let mut bytes = fixture_stored(Algorithm::Aes128, "DocOpen", false, |mut cipher| {
+        cipher.truncate(cipher.len() - 1);
+        cipher
+    });
+    let header = format!("\n{} 0 obj\n", EMBEDDED.num).into_bytes();
+    let at = bytes.windows(header.len()).position(|w| w == header.as_slice()).unwrap();
+    assert_eq!(bytes.windows(header.len()).filter(|w| *w == header.as_slice()).count(), 1);
+    // The header says generation 1, the xref row 0: the same length, so every offset stays.
+    bytes[at + header.len() - 6] = b'1';
+    let doc = Document::open_with_password(Arc::new(bytes), Some(PASSWORD)).unwrap();
+    let _ = stream(&doc, EMBEDDED);
+    assert!(doc.ciphertext_damaged(EMBEDDED), "asked by the row's generation");
+    assert!(doc.ciphertext_damaged(ObjRef { generation: 1, ..EMBEDDED }), "asked by the header's generation");
+    assert!(!doc.ciphertext_damaged(ObjRef { generation: 2, ..EMBEDDED }), "a generation nothing accepts");
+}
