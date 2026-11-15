@@ -98,6 +98,9 @@ mod tests {
         let image = crate::Image::from_u8(2, 3, crate::ChannelLayout::Rgb, vec![42; 18]).unwrap();
         let bytes = crate::encode(&image, crate::Format::Tiff, &crate::EncodeOptions::default()).unwrap();
         assert_eq!(header(&bytes, 6).unwrap(), (2, 3, 1));
+        let info = decode_info(&bytes, 6).unwrap();
+        assert_eq!((info.width, info.height, info.bit_depth), (2, 3, 8));
+        assert!(matches!(decode_info(&bytes, 5), Err(Error::TooLarge { width: 2, height: 3 })));
         assert!(matches!(header(&bytes, 5), Err(Error::TooLarge { width: 2, height: 3 })));
         assert!(header(&bytes[..8], 6).is_err());
     }
