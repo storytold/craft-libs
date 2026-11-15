@@ -8,8 +8,9 @@ use craft_behavior::geometry::{Constraint, marquee_pixels, square_pixels};
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CancelReason, Cursor, CursorIcon, GestureId};
 use craft_keymap::Mods;
-use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolContext, ToolPath, ToolPointer};
-use craft_ui::primitives::{Dashes, Draw, PaintShape, StrokeWidth};
+use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolClaims, ToolContext, ToolKey, ToolPath, ToolPointer};
+use craft_ui::primitives::{Dashes, Draw, PaintShape, StrokeColor, StrokeWidth};
+use craft_ui::style::DataColor;
 
 /// The Slice and Slice Select tools. The app owns one value, sets its [`mode`](Self::mode) from the selected tool and
 /// its snapshot (items, selection, lock, settings) each pass, hands it to `ToolHost::run` and drains
@@ -22,7 +23,11 @@ use craft_ui::primitives::{Dashes, Draw, PaintShape, StrokeWidth};
 ///   ([`fixed_ratio_pixels`]). Fixed Size is exactly its pixels, made by a click and previewed from the press.
 /// - The pointer snaps by the canvas's snapping, the press included.
 ///
-/// Select mode: a press away from every slice clears the selection.
+/// Select mode: a press away from every slice clears the selection. With a slice selected and no drag running the tool
+/// claims Delete and Backspace and always takes them, so they never reach the app's Delete Layer or Clear: a stored slice
+/// reports `Command(Delete)`, an auto slice nothing, and Lock Slices `Refused(Locked)`.
+///
+/// Colour ([`color`](Self::color)): the slice colour of the dashed preview line; the theme's line colour without one.
 ///
 /// Locked ([`locked`](Self::locked)): a press draws and moves nothing, clears the selection (`Select { number: None }`,
 /// as PhotoCraft) and reports `Refused(Locked)`.
@@ -39,7 +44,6 @@ pub struct SliceTool {
     events: Vec<SliceEvent>,
     drag: Option<Drag>,
     ids: GestureId,
-    #[allow(dead_code)] // P3(tools-w19): tl.T57
     color: Option<craft_theme::Srgba>,
 }
 
@@ -239,7 +243,26 @@ impl CanvasTool for SliceTool {
         draw.stroke(&PaintShape::Polygon(quad.clone()), StrokeWidth::Thin, style.color(colors.handle_fill));
         let mut path = quad.clone();
         path.push(quad[0]);
-        draw.dashed(&path, Dashes::new(style.tokens.stroke.dash, style.tokens.stroke.dash_gap), StrokeWidth::Thin, style.color(colors.line));
+        let line: StrokeColor = self.color.map_or_else(|| style.color(colors.line).into(), |color| DataColor::new(color.into()).into());
+        draw.dashed(&path, Dashes::new(style.tokens.stroke.dash, style.tokens.stroke.dash_gap), StrokeWidth::Thin, line);
+    }
+
+    fn claims(&self) -> ToolClaims {
+        if self.mode == SliceMode::Select && self.drag.is_none() && self.selected.is_some() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+    }
+
+    fn key(&mut self, key: &ToolKey, _cx: &mut ToolContext<'_>) -> bool {
+        match key {
+            ToolKey::Delete { .. } if self.claims() != ToolClaims::NONE => {
+                if self.locked {
+                    self.events.push(SliceEvent::Refused(SliceRefusal::Locked));
+                } else if self.items.iter().any(|item| Some(item.number) == self.selected && item.origin.stored()) {
+                    self.events.push(SliceEvent::Command(SliceCommand::Delete));
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     fn access(&self, cx: &ToolContext<'_>) -> Option<ToolAccess> {

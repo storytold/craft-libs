@@ -47,7 +47,8 @@ impl Outcome for RulerBarOutput {
 /// - Use Measurement Scale multiplies X, Y, W, H, L1 and L2 by the scale factor, not the angle
 ///   ([`RulerReading::scaled`](super::RulerReading::scaled)); the values are then plain numbers in the scale's own
 ///   unit, which the bar does not know.
-/// - One rule after the readouts, then the check box, Straighten Layer and Clear (both disabled with no line).
+/// - One rule after the readouts, then the check box, Straighten Layer (disabled with no line or without
+///   [`can_straighten`](Self::can_straighten)) and Clear (disabled with no line).
 /// - **AccessKit:** each readout is a field named by the `*_name` words, valued with its text.
 #[must_use = "show the bar's children with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
@@ -61,7 +62,7 @@ pub struct RulerBar<'a> {
     /// it cannot read them itself. Default: document pixels.
     #[prop]
     rulers: CanvasRulers,
-    /// Whether Straighten Layer is enabled (a line is drawn and the document has a layer to turn).
+    /// Whether Straighten Layer can run: the app's command state (the document has a layer to turn). It also needs a line.
     #[prop]
     can_straighten: bool,
 }
@@ -75,7 +76,6 @@ impl<'a> RulerBar<'a> {
     /// Shows the bar's children.
     pub fn show(self, ui: &mut Ui) -> RulerBarOutput {
         let Self { line, mut use_scale, factor, rulers, can_straighten } = self;
-        let _ = can_straighten; // P3(tools-w19): tl.T59
         let env = Env::of(ui);
         let words = env.words::<RulerWords>();
         let units = env.units();
@@ -113,7 +113,7 @@ impl<'a> RulerBar<'a> {
             Divider::vertical().show(ui);
             Checkbox::new(use_scale.reborrowed()).label(words.use_scale.clone()).show(ui);
             let enabled = line.is_some();
-            straighten_layer = clicked(&Button::new(words.straighten_layer.clone()).enabled(enabled).show(ui));
+            straighten_layer = clicked(&Button::new(words.straighten_layer.clone()).enabled(enabled && can_straighten).show(ui));
             clear = clicked(&Button::new(words.clear.clone()).enabled(enabled).show(ui));
         });
         RulerBarOutput { response: shown.output, straighten_layer, clear }

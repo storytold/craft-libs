@@ -64,6 +64,14 @@ fn symmetry_on(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     StoryOutput::default()
 }
 
+#[story(SymmetryMenu<'static>, covers = [], drive = Drive::Never)]
+fn symmetry_menu_unavailable(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
+    let choice = SymmetryChoice::Mode(SymmetryMode::Dual);
+    let paths = [SymmetryPathRow::new("work", "Work Path")];
+    SymmetryMenu::new("Symmetry", &choice).paths(&paths).can_set(false).show(ui);
+    StoryOutput::default()
+}
+
 #[story(SymmetryOverlay<'static>, covers = [Default], drive = Drive::Never)]
 fn dual_axis(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let symmetry = sample(SymmetryMode::Dual);

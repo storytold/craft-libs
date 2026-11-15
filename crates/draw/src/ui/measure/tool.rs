@@ -23,9 +23,9 @@ struct Drag {
 /// The Ruler tool, kept by the app while the tool is picked.
 ///
 /// - **Pointer:** a press on the background starts a new line from the press; a drag moves its end and Shift puts the
-///   end on the nearest 45° ray about the start, at the pointer's distance. A new line shorter than [`MIN_LINE`]
-///   document units is cleared on release. Escape puts the line back. A press on a point of an existing line is the
-///   [`RulerOverlay`]'s.
+///   end on the nearest 45° ray about the start, at the pointer's distance. A press and release under [`MIN_LINE`]
+///   document units keeps the line from before the press (none if there was none). Escape during a drag keeps the
+///   line from before the press. A press on a point of an existing line is the [`RulerOverlay`]'s.
 /// - **Keyboard:** with the canvas focused the arrows move the whole line 1 unit and Shift 10; Delete and Backspace
 ///   clear it. The overlay's points take the keys while they have the focus.
 /// - **Events:** the line's changes, in order, from [`take_events`](Self::take_events) after the host has run: the
@@ -138,7 +138,7 @@ impl CanvasTool for RulerPass<'_> {
         }
     }
 
-    /// Commit; a new line under [`MIN_LINE`] commits `None`.
+    /// Commit; a line under [`MIN_LINE`] commits the line from before the press, so a click changes nothing.
     fn release(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) {
         let Some(drag) = self.tool.drag.take() else { return };
         let Some(mut line) = self.line else { return };
@@ -150,7 +150,7 @@ impl CanvasTool for RulerPass<'_> {
         self.report(value, EditEvent::commit(drag.id, Mixed::Same(drag.before), value));
     }
 
-    /// Escape: Cancel; the app puts the line of the press back.
+    /// Escape: Cancel; the pass's line is the one from before the press.
     fn cancel(&mut self, reason: CancelReason, _: &mut ToolContext<'_>) {
         let Some(drag) = self.tool.drag.take() else { return };
         self.report(drag.before, EditEvent::cancel(drag.id, reason, Some(Mixed::Same(drag.before))));

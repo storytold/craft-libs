@@ -275,7 +275,7 @@ impl<'a> SliceOverlay<'a> {
     }
 
     /// The keys of the focused slice: selection follows the focus, the arrows move a user slice, Delete removes a
-    /// stored one and Enter opens the options.
+    /// stored one (the key is taken on every slice) and Enter opens the options.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace) {
         let words = cx.words::<SliceToolWords>();
         let focused = cx.active_part().filter(|part| part.key == SLICE).and_then(|part| part.index);
@@ -294,12 +294,11 @@ impl<'a> SliceOverlay<'a> {
             let event = Run::set(words.move_slice.as_str().into(), item.rect, rect);
             self.events.push(SliceEvent::Move { number: item.number, event });
         }
-        if item.origin.stored() {
-            let forward = cx.intents().take_exact(&Intent::delete(true, Granularity::Unit));
-            let backward = cx.intents().take_exact(&Intent::delete(false, Granularity::Unit));
-            if forward || backward {
-                self.events.push(SliceEvent::Command(super::SliceCommand::Delete));
-            }
+        // Both intents are taken on every slice so the app's Delete Layer never sees the key; only a stored slice goes.
+        let forward = cx.intents().take_exact(&Intent::delete(true, Granularity::Unit));
+        let backward = cx.intents().take_exact(&Intent::delete(false, Granularity::Unit));
+        if (forward || backward) && item.origin.stored() {
+            self.events.push(SliceEvent::Command(super::SliceCommand::Delete));
         }
         if cx.intents().take(Intent::Submit) {
             self.events.push(SliceEvent::Command(super::SliceCommand::Options));

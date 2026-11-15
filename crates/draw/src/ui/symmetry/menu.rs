@@ -92,7 +92,8 @@ impl Outcome for SymmetryMenuOutput {
 /// on, with the current mode's or path's name as its description. A press opens a [`Menu`]: Symmetry Off (checked
 /// while off, disabled then), a separator, Vertical, Horizontal, Dual Axis and Diagonal with their glyphs, a separator
 /// and one row per path (checked when it is the source) when there are paths, a separator, then Transform Symmetry
-/// (enabled only with [`can_transform`](Self::can_transform)).
+/// (enabled only with [`can_transform`](Self::can_transform)). Every row but Transform Symmetry is disabled without
+/// [`can_set`](Self::can_set) (no document, or a job running on it).
 #[must_use = "show the button with `show`"]
 #[derive(craft_ui::contract::Pattern)]
 pub struct SymmetryMenu<'a> {
@@ -100,18 +101,19 @@ pub struct SymmetryMenu<'a> {
     current: &'a SymmetryChoice,
     paths: &'a [SymmetryPathRow],
     can_transform: bool,
+    can_set: bool,
 }
 
 impl<'a> SymmetryMenu<'a> {
     /// The button named `label` for the symmetry `current`.
     pub fn new(label: impl Into<Label>, current: &'a SymmetryChoice) -> Self {
-        Self { label: label.into(), current, paths: &[], can_transform: false }
+        Self { label: label.into(), current, paths: &[], can_transform: false, can_set: true }
     }
 
     /// Whether Off, the mode rows and the path rows are enabled: false with no document or while an
     /// engine job runs. The app decides.
-    pub fn can_set(self, can: bool) -> Self {
-        let _ = can; // P3(tools-w19): tl.T58
+    pub fn can_set(mut self, can: bool) -> Self {
+        self.can_set = can;
         self
     }
 
@@ -134,7 +136,7 @@ impl<'a> SymmetryMenu<'a> {
         let current = self.current;
         let is_off = matches!(current, SymmetryChoice::Off);
 
-        let mut entries: Vec<Entry<SymmetryCommand>> = vec![Entry::new(SymmetryCommand::Off, words.off.clone()).checked(is_off).enabled(!is_off)];
+        let mut entries: Vec<Entry<SymmetryCommand>> = vec![Entry::new(SymmetryCommand::Off, words.off.clone()).checked(is_off).enabled(!is_off && self.can_set)];
         entries.push(Entry::separator());
         for mode in SymmetryMode::ALL {
             let (label, icon) = match mode {
@@ -144,14 +146,14 @@ impl<'a> SymmetryMenu<'a> {
                 SymmetryMode::Diagonal => (&words.diagonal, "symmetry_diagonal"),
             };
             let chosen = *current == SymmetryChoice::Mode(mode);
-            entries.push(Entry::new(SymmetryCommand::Mode(mode), label.clone()).icon(IconId::new(icon)).checked(chosen));
+            entries.push(Entry::new(SymmetryCommand::Mode(mode), label.clone()).icon(IconId::new(icon)).checked(chosen).enabled(self.can_set));
         }
         if !self.paths.is_empty() {
             entries.push(Entry::separator());
         }
         for row in self.paths {
             let chosen = matches!(current, SymmetryChoice::Path(key) if *key == row.key);
-            entries.push(Entry::new(SymmetryCommand::FromPath(row.key.clone()), Label::from(row.label.clone())).checked(chosen));
+            entries.push(Entry::new(SymmetryCommand::FromPath(row.key.clone()), Label::from(row.label.clone())).checked(chosen).enabled(self.can_set));
         }
         entries.push(Entry::separator());
         entries.push(Entry::new(SymmetryCommand::Transform, words.transform.clone()).enabled(self.can_transform));

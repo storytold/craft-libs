@@ -53,6 +53,15 @@ pub struct SliceOptions {
     pub background: Option<Srgba>,
 }
 
+/// The name of `kind` in the dialog's JSON fields.
+fn kind_name(kind: SliceKind) -> &'static str {
+    match kind {
+        SliceKind::Image => "image",
+        SliceKind::NoImage => "noImage",
+        SliceKind::HtmlText => "htmlText",
+    }
+}
+
 /// The colour a background starts with when None is switched to Colour.
 const BACKGROUND_START: Srgba = Srgba::rgb(1.0, 1.0, 1.0);
 
@@ -114,12 +123,66 @@ impl StackDialog for SliceOptionsDialog {
     type Result = SliceOptions;
 
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("tl.T57")
+        let options = &self.options;
+        let mut fields = serde_json::json!({
+            "kind": kind_name(options.kind),
+            "name": options.name,
+            "url": options.url,
+            "target": options.target,
+            "message": options.message,
+            "alt": options.alt,
+            "cellText": options.cell_text,
+        });
+        if options.background_row
+            && let Some(map) = fields.as_object_mut()
+        {
+            let background = options.background.map_or(serde_json::Value::Null, |color| {
+                serde_json::Value::String(Srgba::rgb(color.r, color.g, color.b).to_hex())
+            });
+            map.insert("background".into(), background);
+        }
+        Some(fields)
     }
 
     fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("tl.T57")
+        let text = |value: &serde_json::Value| value.as_str().map(str::to_owned).ok_or_else(|| format!("field `{field}` takes a string, got {value}"));
+        match field {
+            "kind" => {
+                let name = text(&value)?;
+                let kind = self
+                    .kinds
+                    .iter()
+                    .copied()
+                    .find(|&kind| kind_name(kind) == name)
+                    .ok_or_else(|| format!("field `kind` takes one of the offered types, got `{name}`"))?;
+                self.options.kind = kind;
+            }
+            "name" => self.options.name = text(&value)?,
+            "url" => self.options.url = text(&value)?,
+            "target" => self.options.target = text(&value)?,
+            "message" => self.options.message = text(&value)?,
+            "alt" => self.options.alt = text(&value)?,
+            "cellText" => self.options.cell_text = text(&value)?,
+            "background" => {
+                if !self.options.background_row {
+                    return Err("field `background` is not shown: the dialog has no Background row".into());
+                }
+                self.options.background = match &value {
+                    serde_json::Value::Null => None,
+                    serde_json::Value::String(hex) => {
+                        let digits = hex.strip_prefix('#').unwrap_or(hex);
+                        if digits.len() != 6 {
+                            return Err(format!("field `background` takes six hex digits or null, got `{hex}`"));
+                        }
+                        Some(Srgba::from_hex(digits).ok_or_else(|| format!("field `background` takes six hex digits or null, got `{hex}`"))?)
+                    }
+                    other => return Err(format!("field `background` takes six hex digits or null, got {other}")),
+                };
+            }
+            _ => return Err(format!("unknown field `{field}`")),
+        }
+        ctx.request_repaint();
+        Ok(())
     }
 
     fn id(&self) -> DialogId {
@@ -338,12 +401,34 @@ impl StackDialog for DivideSlicesDialog {
     type Result = DivideSlices;
 
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("tl.T57")
+        let Axes { rows, columns } = self.axes;
+        let axis = |axis: AxisState| if axis.on { serde_json::json!(axis.value) } else { serde_json::Value::Null };
+        let by = |axis: AxisState| if axis.by_size { "size" } else { "count" };
+        Some(serde_json::json!({ "rows": axis(rows), "rowsBy": by(rows), "columns": axis(columns), "columnsBy": by(columns) }))
     }
 
     fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("tl.T57")
+        let (axis, what) = match field {
+            "rows" | "rowsBy" => (&mut self.axes.rows, field.trim_end_matches("By")),
+            "columns" | "columnsBy" => (&mut self.axes.columns, field.trim_end_matches("By")),
+            _ => return Err(format!("unknown field `{field}`")),
+        };
+        if field.ends_with("By") {
+            axis.by_size = match value.as_str() {
+                Some("count") => false,
+                Some("size") => true,
+                _ => return Err(format!("field `{field}` takes \"count\" or \"size\", got {value}")),
+            };
+            axis.value = axis.value.min(axis.max());
+        } else if value.is_null() {
+            axis.on = false;
+        } else {
+            let number = value.as_f64().ok_or_else(|| format!("field `{what}` takes a number or null, got {value}"))?;
+            axis.value = number.round().clamp(1.0, f64::from(axis.max())) as u32;
+            axis.on = true;
+        }
+        ctx.request_repaint();
+        Ok(())
     }
 
     fn id(&self) -> DialogId {

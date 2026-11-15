@@ -1,12 +1,13 @@
 //! [`SliceBar`]: the members the Slice tools add to the app's options `Bar`.
 
-use super::{SliceCommand, SliceMode, SliceToolSettings, SliceWords};
+use super::{SliceCommand, SliceMode, SliceToolSettings, SliceToolWords, SliceWords};
 use craft_behavior::PixelSize;
 use craft_ui::bars::{BarItem, BarItems, ConstraintFields, ItemDisplay};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _};
-use craft_ui::display::Divider;
+use craft_ui::display::{Divider, Elide, Shade, Text};
 use craft_ui::runtime::env::{Env, UnitKind};
+use craft_ui::style::TypeRole;
 use egui::{Response, Ui};
 
 /// The Fixed Size unit, the units menu's list, the document's resolution and its size.
@@ -46,6 +47,7 @@ impl Outcome for SliceBarOutput {
 /// - Select: Promote, Divide…, Delete, a rule, the Hide Auto Slices check box, a rule, Slice Options….
 /// - The buttons are the commands of [`SliceCommand`]: the app gates them with [`SliceCommand::enabled`] as command
 ///   state, and takes them when they run.
+/// - [`locked`](Self::locked): a muted notice after the members in both modes, with no rule before it.
 /// - Keyboard: each member is a Tab stop in the bar's order.
 #[must_use = "show the members with `show`"]
 #[derive(craft_ui::contract::Pattern)]
@@ -78,7 +80,6 @@ impl<'a> SliceBar<'a> {
     /// Adds the members to the bar's row.
     pub fn show(self, ui: &mut Ui) -> SliceBarOutput {
         let SliceBar { mode, settings, size_units, locked } = self;
-        let _ = locked; // P3(tools-w19): tl.T57
         let words = Env::of(ui).words::<SliceWords>();
         let text = |commands: &[SliceCommand]| {
             BarItems::new(commands.iter().map(|&command| BarItem::new(command).display(ItemDisplay::Text)).collect()).label(words.commands.clone())
@@ -109,6 +110,10 @@ impl<'a> SliceBar<'a> {
                 text(&[SliceCommand::Options]).show(ui)
             }
         };
+        if locked {
+            let notice = Env::of(ui).words::<SliceToolWords>().locked.clone();
+            Text::new(notice).shade(Shade::Muted).role(TypeRole::Caption).elide(Elide::End).show(ui);
+        }
         SliceBarOutput { response, settings_changed, unit_picked }
     }
 }

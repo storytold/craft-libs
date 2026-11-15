@@ -2,7 +2,7 @@
 
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{Axis, CancelReason, CanvasView, EditEvent};
-use craft_draw::ui::measure::{RulerLine, RulerOverlay, RulerTool, box_distances};
+use craft_draw::ui::measure::{MIN_LINE, RulerLine, RulerOverlay, RulerTool, box_distances};
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::primitives::Draw;
@@ -118,6 +118,8 @@ impl CanvasTool for Driven {
 
 struct Shown {
     fixture: ToolFixture<Driven>,
+    /// The line the tool's events left, as the app would store it.
+    line: Rc<RefCell<Option<RulerLine>>>,
 }
 
 fn shown(start: Option<RulerLine>) -> Shown {
@@ -143,7 +145,52 @@ fn shown(start: Option<RulerLine>) -> Shown {
             *body_line.borrow_mut() = line;
         },
     );
-    Shown { fixture }
+    Shown { fixture, line }
+}
+
+/// A line near the canvas's top left corner (the view puts the document origin at the room's corner), away from the
+/// canvas's middle where the trials press, so a press there is the tool's and not a point of the line.
+fn corner_line() -> RulerLine {
+    RulerLine::new(Point::new(20.0, 20.0), Point::new(80.0, 20.0))
+}
+
+/// The release rule: with a line, a click (a press and release under `MIN_LINE`) commits the line from before the
+/// press; with none it commits none; a drag past `MIN_LINE` commits the new line.
+#[trial]
+fn a_click_keeps_the_line_and_a_drag_replaces_it() {
+    let before = corner_line();
+
+    let mut with_line = shown(Some(before));
+    let at = with_line.fixture.canvas().center();
+    with_line.fixture.press_at(at).release_at(at);
+    assert_eq!(*with_line.line.borrow(), Some(before), "a click keeps the line");
+
+    let mut without = shown(None);
+    let at = without.fixture.canvas().center();
+    without.fixture.press_at(at).release_at(at);
+    assert_eq!(*without.line.borrow(), None, "a click with no line makes none");
+
+    let mut dragged = shown(Some(before));
+    dragged.fixture.drag(egui::vec2(60.0, 40.0));
+    let after = (*dragged.line.borrow()).expect("a drag makes a line");
+    assert_ne!(after, before, "a drag replaces the line");
+    assert!(after.start.distance(after.end) >= MIN_LINE);
+}
+
+/// L-81 Q4: Escape during a drag that replaces the line leaves the line as it was before the press.
+#[trial]
+fn escape_during_a_ruler_drag_keeps_the_line_from_before_the_press() {
+    let before = corner_line();
+    let mut ruler = shown(Some(before));
+    let from = ruler.fixture.canvas().center();
+    ruler.fixture.press_at(from);
+    ruler.fixture.move_to(from + egui::vec2(20.0, 15.0));
+    ruler.fixture.move_to(from + egui::vec2(40.0, 30.0));
+    assert_ne!(*ruler.line.borrow(), Some(before), "the drag replaced the line while it ran");
+    ruler.fixture.escape();
+    assert_eq!(*ruler.line.borrow(), Some(before), "Escape puts the line from before the press back");
+    ruler.fixture.release_at(from + egui::vec2(40.0, 30.0));
+    assert_eq!(*ruler.line.borrow(), Some(before), "the release after Escape changes nothing");
 }
 
 /// The tool owes the canvas a command form and a clean gesture: one begin, one commit, and Escape cancels.

@@ -30,6 +30,7 @@ mod artboard;
 
 // draw-bars
 mod measure;
+mod slice;
 mod slice_divide;
 
 // draw-stroke

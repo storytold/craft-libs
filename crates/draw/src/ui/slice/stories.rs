@@ -74,12 +74,12 @@ fn locked_slices(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     on_canvas(ui, |overlay| overlay.pick(true).selected_slice(1).locked(true))
 }
 
-fn bar(ui: &mut Ui, data: &mut StoryData, mode: SliceMode, style: Constraint) -> StoryOutput {
+fn bar(ui: &mut Ui, data: &mut StoryData, mode: SliceMode, style: Constraint, locked: bool) -> StoryOutput {
     let settings = data.value("settings", SliceToolSettings::new(style));
     let units = [Entry::new(UnitKind::Pixels, "px"), Entry::new(UnitKind::Inches, "in")];
     Bar::new("Options", BarKind::Options)
         .show(ui, |ui, _| {
-            SliceBar::new(mode, settings).size_units(UnitKind::Pixels, &units, PIXELS_PER_INCH, DOCUMENT).show(ui);
+            SliceBar::new(mode, settings).size_units(UnitKind::Pixels, &units, PIXELS_PER_INCH, DOCUMENT).locked(locked).show(ui);
         })
         .output
         .into()
@@ -87,17 +87,22 @@ fn bar(ui: &mut Ui, data: &mut StoryData, mode: SliceMode, style: Constraint) ->
 
 #[story(SliceBar<'static>, covers = [Default], drive = Drive::Never)]
 fn slice_bar_slice_mode(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    bar(ui, data, SliceMode::Slice, Constraint::Free)
+    bar(ui, data, SliceMode::Slice, Constraint::Free, false)
 }
 
 #[story(SliceBar<'static>, covers = [], drive = Drive::Never)]
 fn slice_bar_fixed_size(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    bar(ui, data, SliceMode::Slice, Constraint::Size(64.0, 64.0))
+    bar(ui, data, SliceMode::Slice, Constraint::Size(64.0, 64.0), false)
 }
 
 #[story(SliceBar<'static>, covers = [], drive = Drive::Never)]
 fn slice_bar_select_mode(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
-    bar(ui, data, SliceMode::Select, Constraint::Free)
+    bar(ui, data, SliceMode::Select, Constraint::Free, false)
+}
+
+#[story(SliceBar<'static>, covers = [], drive = Drive::Never)]
+fn slice_bar_locked(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    bar(ui, data, SliceMode::Select, Constraint::Free, true)
 }
 
 /// The slices of the live story's document: a demo layout of user, auto and layer slices on the story document.
