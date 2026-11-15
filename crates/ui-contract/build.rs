@@ -52,6 +52,9 @@ fn deflate_egui_fonts(out: &Path) {
         ("Hack-Regular", epaint_default_fonts::HACK_REGULAR),
         ("egui-icons", epaint_default_fonts::EGUI_ICONS),
         ("Ubuntu-Light", epaint_default_fonts::UBUNTU_LIGHT),
+        // The monochrome emoji faces, opt-in through `fonts::noto_emoji` and `fonts::emoji_icon_font`.
+        ("NotoEmoji-Regular", epaint_default_fonts::NOTO_EMOJI_REGULAR),
+        ("emoji-icon-font", epaint_default_fonts::EMOJI_ICON),
     ];
     // The suite's interface face (Inter, subset to Latin, Greek and Cyrillic; fonts/inter/OFL.txt).
     println!("cargo::rerun-if-changed=fonts/inter");

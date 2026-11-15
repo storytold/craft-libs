@@ -112,6 +112,11 @@ const MAX_FONT_BYTES: u64 = 128 << 20;
 /// the craft faces of every family (lowest priority, so it follows the stack's own chain). A face
 /// is read once; a script whose candidates are exhausted is not tried again until the fonts are
 /// reinstalled.
+///
+/// The loader retains no font bytes: a file is read once, checked, and handed to egui as owned data, one
+/// face per file. Memory is bounded by [`MAX_FONT_BYTES`] per file and [`MAX_SCRIPT_READS`] files per script,
+/// so there is no blob budget to enforce. In a collection the face is chosen by character-map coverage, then by
+/// the Han region's family, and a face whose tables are malformed is skipped.
 pub struct OnDemandFonts {
     candidates: Arc<dyn FontCandidates>,
     han: Option<Han>,

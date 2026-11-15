@@ -18,6 +18,8 @@ pub(super) const SUITE_FACES: [&str; 2] = ["Inter-Regular", "Inter-SemiBold"];
 static HACK: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("Hack-Regular")));
 static EGUI_ICONS: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("egui-icons")));
 static UBUNTU_LIGHT: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("Ubuntu-Light")));
+static NOTO_EMOJI: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("NotoEmoji-Regular")));
+static EMOJI_ICON_FONT: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("emoji-icon-font")));
 static INTER_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("Inter-Regular")));
 static INTER_SEMIBOLD: LazyLock<Vec<u8>> = LazyLock::new(|| inflate(deflated!("Inter-SemiBold")));
 
@@ -66,4 +68,25 @@ pub fn deflated_default_definitions() -> FontDefinitions {
     fonts.families.insert(FontFamily::Proportional, proportional);
     fonts.families.insert(FontFamily::Name(SEMIBOLD.into()), semibold);
     fonts
+}
+
+/// egui's monochrome emoji face, Noto Emoji Regular, at egui's own scale: for [`Emoji::monochrome`](super::Emoji) in an
+/// app that builds egui without `default_fonts`. The stored copy is deflated, and an app that never calls this links
+/// none of its bytes. `None` when the copy doesn't inflate.
+pub fn noto_emoji() -> Option<FontData> {
+    emoji_face("NotoEmoji-Regular", NOTO_EMOJI.as_slice(), 0.81)
+}
+
+/// egui's `emoji-icon-font` (a few pictographs Noto Emoji lacks) at egui's own scale, for
+/// [`UiFonts::app_face`](super::UiFonts::app_face). `None` when the copy doesn't inflate.
+pub fn emoji_icon_font() -> Option<FontData> {
+    emoji_face("emoji-icon-font", EMOJI_ICON_FONT.as_slice(), 0.90)
+}
+
+fn emoji_face(name: &str, bytes: &'static [u8], scale: f32) -> Option<FontData> {
+    if bytes.is_empty() {
+        log::error!("egui default font {name} is unavailable");
+        return None;
+    }
+    Some(FontData::from_static(bytes).tweak(FontTweak { scale, ..Default::default() }))
 }

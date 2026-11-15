@@ -82,18 +82,21 @@ craft-window = { workspace = true, features = ["ui", "appkit"] }
 [build-dependencies]
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-epaint_default_fonts = "0.37"
+epaint_default_fonts = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 
 [dev-dependencies]
 craft-ui-contract = { path = ".", features = ["testing"] }
 craft-behavior = { workspace = true }
 craft-fonts-build = { workspace = true }
 craft-host = { workspace = true }
+craft-i18n = { workspace = true }
 craft-keymap = { workspace = true, features = ["egui"] }
 craft-theme = { workspace = true }
 craft-ui-test-kit = { workspace = true }
 craft-window = { workspace = true }
 egui = { workspace = true }
+# The oracle for the deflated default faces (`tests/it/fonts/on_demand.rs`).
+epaint_default_fonts = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 proc-macro2 = "1"
 syn = { version = "2", features = ["full"] }
 
