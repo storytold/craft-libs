@@ -128,6 +128,76 @@ mod tests {
     use super::*;
     const EXIF: &[u8] = b"II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0";
     #[test]
+    fn replacements_match_previous_code_on_mutated_containers() {
+        fn old_png(png: &mut Vec<u8>, exif: &[u8]) {
+            let mut p = 8usize;
+            while let Some(b) = png.get(p..p + 4) {
+                let size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
+                let end = p.saturating_add(12).saturating_add(size);
+                if end > png.len() {
+                    break;
+                }
+                if png.get(p + 4..p + 8) == Some(b"eXIf") {
+                    let mut chunk = (exif.len() as u32).to_be_bytes().to_vec();
+                    chunk.extend_from_slice(b"eXIf");
+                    chunk.extend_from_slice(exif);
+                    let mut crc = 0xffff_ffffu32;
+                    for &v in &chunk[4..] {
+                        crc ^= u32::from(v);
+                        for _ in 0..8 {
+                            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+                        }
+                    }
+                    chunk.extend_from_slice(&(!crc).to_be_bytes());
+                    png.splice(p..end, chunk);
+                    return;
+                }
+                p = end;
+            }
+        }
+        fn old_webp(webp: &mut Vec<u8>, exif: &[u8]) {
+            let mut p = 12usize;
+            while let Some(h) = webp.get(p..p.saturating_add(8)) {
+                let size = u32::from_le_bytes([h[4], h[5], h[6], h[7]]) as usize;
+                let end = p.saturating_add(8).saturating_add(size).saturating_add(size & 1);
+                if &h[..4] == b"EXIF" && end <= webp.len() {
+                    let mut chunk = b"EXIF".to_vec();
+                    chunk.extend_from_slice(&(exif.len() as u32).to_le_bytes());
+                    chunk.extend_from_slice(exif);
+                    if exif.len() & 1 == 1 {
+                        chunk.push(0);
+                    }
+                    webp.splice(p..end, chunk);
+                    let size = (webp.len().saturating_sub(8)) as u32;
+                    webp[4..8].copy_from_slice(&size.to_le_bytes());
+                    return;
+                }
+                p = end;
+            }
+        }
+        let mut image = crate::Image::from_u8(2, 2, crate::ChannelLayout::Rgb, vec![80; 12]).unwrap();
+        image.meta.exif = Some(EXIF.to_vec());
+        for format in [Format::Png, Format::WebP] {
+            let encoded = crate::encode(&image, format, &crate::EncodeOptions::default()).unwrap();
+            for at in 0..encoded.len() {
+                for value in [0, 255] {
+                    let mut original = encoded.clone();
+                    original[at] = value;
+                    let mut shared = original.clone();
+                    if format == Format::Png {
+                        old_png(&mut original, EXIF);
+                        replace_png_exif(&mut shared, EXIF).unwrap();
+                    } else {
+                        old_webp(&mut original, EXIF);
+                        replace_webp_exif(&mut shared, EXIF).unwrap();
+                    }
+                    assert_eq!(shared, original, "{format:?}: byte {at} value {value}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn explicit_replacements_preserve_raw_orientation_in_real_encodings() {
         let mut image = crate::Image::from_u8(2, 2, crate::ChannelLayout::Rgb, vec![80; 12]).unwrap();
         image.meta.exif = Some(EXIF.to_vec());
