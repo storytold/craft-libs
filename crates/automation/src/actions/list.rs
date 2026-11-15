@@ -482,8 +482,8 @@ impl ActionList {
         }
         let mut merged = MergedFile::default();
         let mut names = Names::of(&self.actions);
-        for mut action in actions {
-            let name = names.claim(&action.name);
+        let claimed = names.claim_all(actions.iter().map(|action| action.name.as_str()));
+        for (mut action, name) in actions.into_iter().zip(claimed) {
             if name != action.name {
                 merged.renames.push((action.name.clone(), name.clone()));
             }
@@ -510,9 +510,9 @@ impl ActionList {
     /// keeps reaching the first action that has it.
     pub fn from_file(file: ActionsFile) -> Self {
         let ActionsFile { mut actions, sets, .. } = file;
-        let mut names = Names::default();
-        for action in &mut actions {
-            action.name = names.claim(&action.name);
+        let claimed = Names::default().claim_all(actions.iter().map(|action| action.name.as_str()));
+        for (action, name) in actions.iter_mut().zip(claimed) {
+            action.name = name;
         }
         Self { actions, sets, revision: 0 }
     }
@@ -573,6 +573,15 @@ impl Names {
     /// The names of `actions`.
     fn of(actions: &[Action]) -> Self {
         Self::new(actions.iter().map(|action| action.name.clone()))
+    }
+
+    /// The names for `bases`, in order. Every base that is free keeps its name, even when an
+    /// earlier repeat of another base would have picked it as a suffix; only the repeats and the
+    /// clashes with taken names go through [`claim`](Self::claim).
+    fn claim_all<'a>(&mut self, bases: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+        let bases: Vec<&str> = bases.into_iter().collect();
+        let free: Vec<bool> = bases.iter().map(|base| self.taken.insert((*base).to_owned())).collect();
+        bases.iter().zip(free).map(|(base, free)| if free { (*base).to_owned() } else { self.claim(base) }).collect()
     }
 
     /// `base` if it is free, else `base 2`, `base 3` … the first free one; the name returned is

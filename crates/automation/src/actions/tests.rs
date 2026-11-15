@@ -80,6 +80,20 @@ fn action_list_file_round_trip_keeps_pc_json() {
     assert_eq!(back.sets, ["Empty"]);
     assert_eq!(ActionList::from_file(back).sets(), ["S", "Empty"]);
 }
+// A file that repeats a name keeps a later action's own name: `Foo, Foo, Foo 2` renames the repeat
+// (`Foo 3`), never the real `Foo 2`; a merge does the same against the names already in the list.
+#[trial]
+fn action_names_in_a_file_keep_their_own_names_and_rename_only_repeats() {
+    let names = |list: &ActionList| list.actions.iter().map(|action| action.name.clone()).collect::<Vec<_>>();
+    let file = || ActionsFile { version: ActionsFile::VERSION, actions: vec![action("Foo", &[]), action("Foo", &[]), action("Foo 2", &[])], sets: Vec::new() };
+    assert_eq!(names(&ActionList::from_file(file())), ["Foo", "Foo 3", "Foo 2"]);
+
+    let mut list = list_of(vec![action("Foo", &[])]);
+    let merged = list.merge_file(file(), false, |_, _| {});
+    assert_eq!(names(&list), ["Foo", "Foo 3", "Foo 4", "Foo 2"]);
+    assert_eq!(merged.renames, [("Foo".to_owned(), "Foo 3".to_owned()), ("Foo".to_owned(), "Foo 4".to_owned())]);
+}
+
 /// A runner whose steps are named by what they do: `pause`, `wait`, `stop`, `deny` (refused by the
 /// gate), `noop`; any other is `Done`. Its own `charge` refuses once `charges` are spent.
 struct Scripted {
