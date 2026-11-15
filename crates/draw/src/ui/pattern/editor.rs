@@ -19,7 +19,7 @@ use craft_ui::value_drag::AngleDial;
 use egui::{Rect, Response, Ui};
 
 /// The angle of the dial runs over half a turn each way.
-const ANGLE_RANGE: std::ops::RangeInclusive<f64> = -180.0..=180.0;
+pub(super) const ANGLE_RANGE: std::ops::RangeInclusive<f64> = -180.0..=180.0;
 
 type SwatchPaintFn = Arc<dyn Fn(&ContentPainterCx<'_>, Rect, &PatternSwatch) + Send + Sync>;
 

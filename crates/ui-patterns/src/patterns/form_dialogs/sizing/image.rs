@@ -1,9 +1,10 @@
 //! `ImageSize`: the Image Size dialog.
 
-use super::{Kit, LinkedSize, Resample, SizeForm, SizingOutput, show_form};
+use super::{Kit, LinkedSize, Resample, SizeForm, SizingOutput, set_size_json, show_form, size_json, size_valid};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
-use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use serde_json::json;
 use crate::form::Field;
 use crate::pickers::Select;
 use crate::runtime::env::{ColumnSize, UnitKind};
@@ -26,7 +27,8 @@ pub struct ImageSizeResult {
     pub resample: Option<Resample>,
     /// Whether layer effects scale with the image.
     pub scale_styles: bool,
-    /// Whether the resolution was edited, so the app resamples at the new resolution.
+    /// Whether the resolution differs from the opening one. The opening resolution is held to the dialog's range, so
+    /// while this is `false` the app keeps the document's own resolution, which may lie outside it.
     pub resolution_changed: bool,
 }
 
@@ -43,11 +45,25 @@ pub struct ImageSizeValues {
 }
 
 impl ImageSizeValues {
-    /// Sets the width of the column of the rows' fields, so the dialog lines up with its siblings.
+    /// The document's column size (the Units preference's column width and gutter): the Width row offers Columns,
+    /// converted through it. Without one the row offers no Columns.
     #[must_use]
     pub fn column_size(mut self, size: ColumnSize) -> Self {
-        let _ = (&mut self, size);
-        todo!("dl.K37")
+        self.size = self.size.column_size(size);
+        self
+    }
+
+    /// What OK answers with for these values.
+    fn result(&self) -> ImageSizeResult {
+        ImageSizeResult {
+            size: self.size.pixels(),
+            pixels_per_inch: self.size.pixels_per_inch(),
+            unit: self.size.unit(),
+            resolution_unit: self.size.resolution_unit(),
+            resample: self.size.is_resampling().then_some(self.method),
+            scale_styles: self.scale_styles,
+            resolution_changed: self.size.resolution_changed(),
+        }
     }
 
     /// The values for a document of `size` pixels, at 72 pixels per inch, in pixels, resampling automatically with
@@ -200,15 +216,7 @@ impl<'a> ImageSize<'a> {
                     state.scale_styles = on;
                 }
             },
-            |state| ImageSizeResult {
-                size: state.size.pixels(),
-                pixels_per_inch: state.size.pixels_per_inch(),
-                unit: state.size.unit(),
-                resolution_unit: state.size.resolution_unit(),
-                resample: state.size.is_resampling().then_some(state.method),
-                scale_styles: state.scale_styles,
-                resolution_changed: false, // P3(dialogs-w13): dl.K36
-            },
+            ImageSizeValues::result,
         )
     }
 }
@@ -259,18 +267,70 @@ const KEY: &str = "sizing.imageSize";
 impl StackDialog for HostedImageSize {
     type Result = ImageSizeResult;
 
-    fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        let _ = ctx;
-        todo!("dl.K36")
+    /// Answers what OK answers; `None` while OK is refused (a side out of range).
+    fn confirm(&mut self, _ctx: &egui::Context) -> Option<Self::Result> {
+        size_valid(self.values.pixels()).then(|| self.values.result())
     }
 
+    /// `width`, `height`, `unit` and `widthUnit` (as the size rows show them), `resolution`, `resolutionUnit`,
+    /// `resample` (the method, `null` while Resample is off), `constrain` and `scaleStyles`.
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K36")
+        let values = &self.values;
+        let mut fields = size_json(&values.size);
+        fields.insert("resolution".into(), json!(values.size.resolution()));
+        fields.insert("resolutionUnit".into(), json!(values.size.resolution_unit()));
+        fields.insert("resample".into(), json!(values.size.is_resampling().then_some(values.method)));
+        fields.insert("constrain".into(), json!(values.size.is_linked()));
+        fields.insert("scaleStyles".into(), json!(values.scale_styles));
+        Some(serde_json::Value::Object(fields))
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K36")
+    /// Sets a field through the setter its row calls. The chain and Scale Styles refuse as inactive while their
+    /// rows are disabled; `resample` takes a method the dialog lists or `null` (Resample off).
+    fn set_json_field(&mut self, _ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        let methods = (self.build)(Bind::bound(&mut self.values)).methods;
+        let values = &mut self.values;
+        if let Some(done) = set_size_json(&mut values.size, field, &value) {
+            return done;
+        }
+        let rejects = || FieldRefusal::Rejects(&value).message(field);
+        match field {
+            "resolution" => {
+                let number = value.as_f64().ok_or_else(rejects)?;
+                values.size.set_resolution(number);
+            }
+            "resolutionUnit" => {
+                let kind = serde_json::from_value::<UnitKind>(value.clone()).map_err(|_| rejects())?;
+                if !values.size.set_resolution_unit(kind) {
+                    return Err(rejects());
+                }
+            }
+            "resample" if value.is_null() => values.size.resampling(false),
+            "resample" => {
+                let method = serde_json::from_value::<Resample>(value.clone()).map_err(|_| rejects())?;
+                if !methods.is_empty() && !methods.contains(&method) {
+                    return Err(rejects());
+                }
+                values.size.resampling(true);
+                values.method = method;
+            }
+            "constrain" => {
+                let on = value.as_bool().ok_or_else(rejects)?;
+                if !values.size.is_resampling() {
+                    return Err(FieldRefusal::Inactive.message(field));
+                }
+                values.size.lock(on);
+            }
+            "scaleStyles" => {
+                let on = value.as_bool().ok_or_else(rejects)?;
+                if !values.size.is_linked() {
+                    return Err(FieldRefusal::Inactive.message(field));
+                }
+                values.scale_styles = on;
+            }
+            _ => return Err(FieldRefusal::Unknown.message(field)),
+        }
+        Ok(())
     }
 
     fn id(&self) -> DialogId {

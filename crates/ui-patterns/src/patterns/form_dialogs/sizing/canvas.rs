@@ -1,9 +1,10 @@
 //! `CanvasSize`: the Canvas Size dialog.
 
-use super::{CanvasExtension, Kit, LinkedSize, SizeForm, SizingOutput, show_form};
+use super::{CanvasExtension, Kit, LinkedSize, SizeForm, SizingOutput, set_size_json, show_form, size_json, size_valid};
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
-use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use serde_json::json;
 use crate::form::Field;
 use crate::pickers::{Anchor9, ReferencePoint, Select};
 use crate::runtime::env::{ColumnSize, UnitKind};
@@ -40,11 +41,28 @@ pub struct CanvasSizeValues {
 }
 
 impl CanvasSizeValues {
-    /// Sets the width of the column of the rows' fields, so the dialog lines up with its siblings.
+    /// The document's column size (the Units preference's column width and gutter): the Width row offers Columns,
+    /// converted through it as in Image Size. Without one the row offers no Columns.
     #[must_use]
     pub fn column_size(mut self, size: ColumnSize) -> Self {
-        let _ = (&mut self, size);
-        todo!("dl.K37")
+        self.size = self.size.column_size(size);
+        self
+    }
+
+    /// What OK answers with for these values.
+    fn result(&self) -> CanvasSizeResult {
+        CanvasSizeResult {
+            size: self.size.pixels(),
+            unit: self.size.unit(),
+            relative: self.size.is_relative(),
+            anchor: self.anchor,
+            extension: self.fill(),
+        }
+    }
+
+    /// The extension the canvas fills with: Transparent for a document with no background, whatever was set.
+    fn fill(&self) -> CanvasExtension {
+        if self.has_background { self.extension.clone() } else { CanvasExtension::Transparent }
     }
 
     /// The values for a canvas of `size` pixels, at 72 pixels per inch, in pixels, anchored at the centre and filling
@@ -165,9 +183,7 @@ impl<'a> CanvasSize<'a> {
             |ui, state| {
                 let size = state.size.original();
                 let has_background = state.has_background;
-                if !has_background {
-                    state.extension = CanvasExtension::Transparent;
-                }
+                state.extension = state.fill();
                 kit.readout(ui, &words.current_size, kit.file_size(size, bytes_per_pixel), None);
                 kit.readout(ui, &words.current_width, kit.pixels(size.width), None);
                 kit.readout(ui, &words.current_height, kit.pixels(size.height), None);
@@ -195,13 +211,7 @@ impl<'a> CanvasSize<'a> {
                     }
                 });
             },
-            |state| CanvasSizeResult {
-                size: state.size.pixels(),
-                unit: state.size.unit(),
-                relative: state.size.is_relative(),
-                anchor: state.anchor,
-                extension: state.extension.clone(),
-            },
+            CanvasSizeValues::result,
         )
     }
 }
@@ -252,18 +262,45 @@ const KEY: &str = "sizing.canvasSize";
 impl StackDialog for HostedCanvasSize {
     type Result = CanvasSizeResult;
 
-    fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        let _ = ctx;
-        todo!("dl.K36")
+    /// Answers what OK answers; `None` while OK is refused (a side out of range).
+    fn confirm(&mut self, _ctx: &egui::Context) -> Option<Self::Result> {
+        size_valid(self.values.pixels()).then(|| self.values.result())
     }
 
+    /// `width`, `height`, `unit` and `widthUnit` (as the size rows show them), `relative`, `anchor` and `extension`.
     fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K36")
+        let values = &self.values;
+        let mut fields = size_json(&values.size);
+        fields.insert("relative".into(), json!(values.size.is_relative()));
+        fields.insert("anchor".into(), json!(values.anchor));
+        fields.insert("extension".into(), json!(values.fill()));
+        Some(serde_json::Value::Object(fields))
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K36")
+    /// Sets a field through the setter its row calls. `extension` takes one the list offers, and refuses as
+    /// inactive for a document with no background (the list is off).
+    fn set_json_field(&mut self, _ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
+        let values = &mut self.values;
+        if let Some(done) = set_size_json(&mut values.size, field, &value) {
+            return done;
+        }
+        let rejects = || FieldRefusal::Rejects(&value).message(field);
+        match field {
+            "relative" => values.size.relative(value.as_bool().ok_or_else(rejects)?),
+            "anchor" => values.anchor = serde_json::from_value::<Anchor9>(value.clone()).map_err(|_| rejects())?,
+            "extension" => {
+                if !values.has_background {
+                    return Err(FieldRefusal::Inactive.message(field));
+                }
+                let extension = serde_json::from_value::<CanvasExtension>(value.clone()).map_err(|_| rejects())?;
+                if !CanvasExtension::offered(&values.extension, true).contains(&extension) {
+                    return Err(rejects());
+                }
+                values.extension = extension;
+            }
+            _ => return Err(FieldRefusal::Unknown.message(field)),
+        }
+        Ok(())
     }
 
     fn id(&self) -> DialogId {

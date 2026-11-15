@@ -3,13 +3,16 @@
 use super::layout::{GuideLength, GuideUnits};
 use crate::runtime::requests::HostAnswer;
 
-use super::{FormDialog, GUIDE_LIMIT, GuideDialogWords, HostRequests, NEW_GUIDE_COLOR_KEY, apply_color_answers, color_row};
+use super::{FormDialog, GUIDE_LIMIT, GuideDialogWords, HostRequests, NEW_GUIDE_COLOR_KEY, apply_color_answers, color_json, color_row, read_color};
 use crate::canvas_data::{Guide, GuideColor, GuideKey};
 
 use crate::choice::Segmented;
 use crate::contract::{Bind, Entry, NoValue, Outcome, SaveKey, Show as _, ShowContainer as _};
 
-use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use crate::runtime::memory::{saved_value, set_saved_value};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::form::{Field, FieldGroup};
 
@@ -112,15 +115,34 @@ pub struct NewGuideDialog<'a> {
     /// Binds the open state to `open`.
     #[prop(name = "opened")]
     open: Option<Bind<'a, bool>>,
-    /// Saves the values under `key` for the next open.
+    /// Remembers a new guide's values under `key`: the remembered values replace the opening ones, and OK stores the
+    /// confirmed ones for the next open. Edit Selected Guides neither recalls nor stores.
     #[prop]
     remember: Option<SaveKey>,
+    /// Whether the values already start from the remembered ones, so the first pass recalls nothing: a hosted
+    /// dialog recalls before any pass, and automation may have set a field since.
+    recalled: bool,
 }
 
 impl<'a> NewGuideDialog<'a> {
     /// New Guide over `values`, for a document measured in `units`.
     pub fn new(units: GuideUnits, values: Bind<'a, NewGuideValues>) -> Self {
-        NewGuideDialog { units, values, edit: None, key: GuideKey::new(0), error: None, answers: Vec::new(), open: None, remember: None }
+        NewGuideDialog {
+            units,
+            values,
+            edit: None,
+            key: GuideKey::new(0),
+            error: None,
+            answers: Vec::new(),
+            open: None,
+            remember: None,
+            recalled: false,
+        }
+    }
+
+    /// The key the values are remembered under: a new guide's `remember`, none for an edit.
+    fn memory_key(&self) -> Option<&SaveKey> {
+        self.remember.as_ref().filter(|_| self.edit.is_none())
     }
 
     /// Edit Selected Guides for `guide`, which is drawn in `preference` when it has no colour of its own: the
@@ -131,8 +153,8 @@ impl<'a> NewGuideDialog<'a> {
 
     /// Shows the dialog.
     pub fn show(self, ui: &mut Ui) -> NewGuideOutput {
-        let NewGuideDialog { units, values, edit, key, error, answers, open, remember } = self;
-        let _ = &remember; // P3(dialogs-w13): dl.K36
+        let memory = self.memory_key().cloned();
+        let NewGuideDialog { units, values, edit, key, error, answers, open, recalled, .. } = self;
         let env = Env::of(ui);
         let words = env.words::<GuideDialogWords>();
         let number_units = env.units();
@@ -146,6 +168,9 @@ impl<'a> NewGuideDialog<'a> {
             let first = form.first();
             if let (true, Some((guide, preference))) = (first, &edit) {
                 *values = NewGuideValues::of_guide(guide, *preference);
+            }
+            if let (true, false, Some(remembered)) = (first, recalled, memory.as_ref().and_then(|key| recall(ui.ctx(), key))) {
+                *values = remembered;
             }
             apply_color_answers(form.take_answers(), NEW_GUIDE_COLOR_KEY, &mut values.color);
             if let Some(message) = &error {
@@ -164,9 +189,35 @@ impl<'a> NewGuideDialog<'a> {
             });
             parsed
         });
-        let result = shown.accepted.map(|values| guide_of(&values, edit.as_ref(), key));
+        let result = shown.accepted.map(|values| {
+            if let Some(memory) = &memory {
+                store(ui.ctx(), memory, &values);
+            }
+            guide_of(&values, edit.as_ref(), key)
+        });
         NewGuideOutput { response: shown.response, closed: shown.closed, result, requests: shown.requests }
     }
+}
+
+/// What New Guide remembers under its `remember` key: the last confirmed new guide's values. Its own type because
+/// [`GuideColor`] has no serde form; the colour is kept as its bytes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct Remembered {
+    along: Axis,
+    position_px: f64,
+    color: [u8; 4],
+}
+
+/// The values remembered under `key`, once a new guide was confirmed with it.
+fn recall(ctx: &egui::Context, key: &SaveKey) -> Option<NewGuideValues> {
+    let remembered = saved_value::<Option<Remembered>>(ctx, key)?;
+    Some(NewGuideValues::new(remembered.along, remembered.position_px, GuideColor::from_rgba(Rgba(remembered.color))))
+}
+
+/// Stores `values` under `key` for the next open.
+fn store(ctx: &egui::Context, key: &SaveKey, values: &NewGuideValues) {
+    let remembered = Remembered { along: values.along, position_px: values.position_px, color: values.color.rgba().0 };
+    set_saved_value(ctx, key, Some(remembered));
 }
 
 /// The guide the values make: the edited guide with the values applied, or a new guide with `key`. An edited guide
@@ -180,11 +231,30 @@ fn guide_of(values: &NewGuideValues, edit: Option<&(Guide, Rgba)>, key: GuideKey
     Guide { along: values.along, position: values.position_px, color, ..base }
 }
 
+/// The extent a position's percent is of: the document's width for a vertical guide, its height for a horizontal one.
+fn position_extent(units: &GuideUnits, along: Axis) -> f64 {
+    if along == Axis::Y { units.width_px } else { units.height_px }
+}
+
+/// The position in the ruler unit, as the Position field shows it.
+fn ruler_position(units: &GuideUnits, values: &NewGuideValues) -> f64 {
+    units.from_pixels(values.position_px, units.ruler, position_extent(units, values.along)).unwrap_or(0.0)
+}
+
+/// Sets the position from `typed` in the ruler unit, held to the guide limit, as a commit in the Position field
+/// does; `false` and nothing changes when `typed` does not convert.
+fn set_ruler_position(units: &GuideUnits, values: &mut NewGuideValues, typed: f64) -> bool {
+    let extent = position_extent(units, values.along);
+    let Some(px) = units.to_pixels(GuideLength::new(typed, units.ruler), extent) else { return false };
+    values.position_px = px.clamp(-GUIDE_LIMIT, GUIDE_LIMIT);
+    true
+}
+
 /// The Position row; `false` while its text does not parse.
 fn position_row(ui: &mut Ui, words: &GuideDialogWords, numbers: &Units, units: &GuideUnits, values: &mut NewGuideValues, focus_here: bool) -> bool {
     let ruler = units.ruler;
-    let extent = if values.along == Axis::Y { units.width_px } else { units.height_px };
-    let shown = units.from_pixels(values.position_px, ruler, extent).unwrap_or(0.0);
+    let extent = position_extent(units, values.along);
+    let shown = ruler_position(units, values);
     let high = units.from_pixels(GUIDE_LIMIT, ruler, extent).filter(|v| v.is_finite()).unwrap_or(GUIDE_LIMIT).abs();
     let places = *ruler.decimals().end();
     Field::new(words.position.clone())
@@ -201,9 +271,8 @@ fn position_row(ui: &mut Ui, words: &GuideDialogWords, numbers: &Units, units: &
             }
             if let Some(Some(typed)) = field.value().copied() {
                 let scale = 10f64.powi(i32::try_from(places).unwrap_or(0));
-                let changed = (typed * scale).round() != (shown * scale).round();
-                if let (true, Some(px)) = (changed, units.to_pixels(GuideLength::new(typed, ruler), extent)) {
-                    values.position_px = px.clamp(-GUIDE_LIMIT, GUIDE_LIMIT);
+                if (typed * scale).round() != (shown * scale).round() {
+                    set_ruler_position(units, values, typed);
                 }
             }
             !field.unparsed
@@ -225,15 +294,39 @@ pub struct HostedNewGuideDialog {
     values: NewGuideValues,
     build: Box<Build>,
     requests: HostRequests,
-    /// Whether the dialog is open: bound to the dialog's `opened` prop.
-    #[allow(dead_code)] // P3(dialogs-w13): dl.K36
+    /// Whether the dialog is open: bound to the dialog's `opened` prop, so the host's dialog closes with it.
     open: bool,
+    /// The app's message shown above the fields, set with [`set_error`](Self::set_error); it replaces the one
+    /// `build` gives while set.
+    error: Option<Label>,
+    /// Whether the remembered values were recalled into `values`: once, before the first show, OK or set reads them.
+    recalled: bool,
 }
 
 impl HostedNewGuideDialog {
     /// A dialog opening with `values`; `build` makes it over the values (`NewGuideDialog::new` or `edit`).
     pub fn new(values: NewGuideValues, build: impl for<'b> Fn(Bind<'b, NewGuideValues>) -> NewGuideDialog<'b> + Send + 'static) -> Self {
-        HostedNewGuideDialog { id: dialog_id("guides.newGuide"), values, build: Box::new(build), requests: HostRequests::new(), open: true }
+        HostedNewGuideDialog {
+            id: dialog_id("guides.newGuide"),
+            values,
+            build: Box::new(build),
+            requests: HostRequests::new(),
+            open: true,
+            error: None,
+            recalled: false,
+        }
+    }
+
+    /// Replaces the opening values with the remembered ones, once, as the dialog's first pass would: automation may
+    /// set or confirm before any pass.
+    fn recall(&mut self, ctx: &egui::Context) {
+        if std::mem::replace(&mut self.recalled, true) {
+            return;
+        }
+        let memory = (self.build)(Bind::bound(&mut self.values)).memory_key().cloned();
+        if let Some(remembered) = memory.and_then(|key| recall(ctx, &key)) {
+            self.values = remembered;
+        }
     }
 
     /// The values the dialog shows.
@@ -241,10 +334,10 @@ impl HostedNewGuideDialog {
         &self.values
     }
 
-    /// Shows `error` above the fields: the app's message when it refused the position.
+    /// Shows `error` above the fields from the next pass on: the app's message when it refused the position, such as
+    /// Edit Selected Guides' check of each pass. `None` shows the one `build` gives, if any.
     pub fn set_error(&mut self, error: Option<Label>) {
-        let _ = error;
-        todo!("dl.K36")
+        self.error = error;
     }
 
     /// What the dialog asked of the host and the host's answers: take the colour request, answer it.
@@ -256,18 +349,56 @@ impl HostedNewGuideDialog {
 impl StackDialog for HostedNewGuideDialog {
     type Result = Guide;
 
+    /// Answers the guide OK makes, and stores a new guide's values under its `remember` key as OK does.
     fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        let _ = ctx;
-        todo!("dl.K36")
+        self.recall(ctx);
+        let (memory, edit, key) = {
+            let dialog = (self.build)(Bind::bound(&mut self.values));
+            (dialog.memory_key().cloned(), dialog.edit.clone(), dialog.key)
+        };
+        if let Some(memory) = &memory {
+            store(ctx, memory, &self.values);
+        }
+        Some(guide_of(&self.values, edit.as_ref(), key))
     }
 
-    fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K36")
+    /// `orientation` (`horizontal` or `vertical`), `position` in the ruler unit as the Position field shows it, and
+    /// `color` in the `Srgba` form.
+    fn json_fields(&self) -> Option<Value> {
+        let units = (self.build)(Bind::given(self.values)).units;
+        let orientation = if self.values.along == Axis::Y { "vertical" } else { "horizontal" };
+        Some(json!({
+            "orientation": orientation,
+            "position": ruler_position(&units, &self.values),
+            "color": color_json(self.values.color),
+        }))
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K36")
+    /// Sets a field as its row does: `position` is in the ruler unit and held to the guide limit; `color` picks the
+    /// named colour it matches, else Custom.
+    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
+        self.recall(ctx);
+        let units = (self.build)(Bind::bound(&mut self.values)).units;
+        let rejects = || FieldRefusal::Rejects(&value).message(field);
+        let values = &mut self.values;
+        match field {
+            "orientation" => {
+                values.along = match value.as_str() {
+                    Some("horizontal") => Axis::X,
+                    Some("vertical") => Axis::Y,
+                    _ => return Err(rejects()),
+                }
+            }
+            "position" => {
+                let typed = value.as_f64().ok_or_else(rejects)?;
+                if !set_ruler_position(&units, values, typed) {
+                    return Err(rejects());
+                }
+            }
+            "color" => values.color = read_color(&value).ok_or_else(rejects)?,
+            _ => return Err(FieldRefusal::Unknown.message(field)),
+        }
+        Ok(())
     }
 
     fn id(&self) -> DialogId {
@@ -275,7 +406,13 @@ impl StackDialog for HostedNewGuideDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<Guide>> {
-        let shown = (self.build)(Bind::bound(&mut self.values)).answers(self.requests.take_answers()).show(ui);
+        self.recall(ui.ctx());
+        let mut dialog = (self.build)(Bind::bound(&mut self.values)).answers(self.requests.take_answers()).opened(Bind::bound(&mut self.open));
+        dialog.recalled = true;
+        if self.error.is_some() {
+            dialog.error = self.error.clone();
+        }
+        let shown = dialog.show(ui);
         self.requests.extend(shown.requests);
         match (shown.result, shown.closed) {
             (Some(guide), _) => Some(DialogResult::Ok(guide)),

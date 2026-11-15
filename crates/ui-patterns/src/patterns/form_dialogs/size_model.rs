@@ -134,26 +134,55 @@ pub struct LinkedSize {
     relative: bool,
     chain: bool,
     points_per_inch: f64,
+    /// The document's column size, which makes Columns a width unit; `None` offers no Columns.
+    columns: Option<ColumnSize>,
+    /// Whether the width shows Columns while the height keeps `unit`. Only ever on with `columns` set.
+    width_in_columns: bool,
     typed: Option<Typed>,
 }
 
 impl LinkedSize {
-    /// Sets the width of the column of the rows' fields.
+    /// The document's column size (the Units preference's column width and gutter), which lets the width be shown in
+    /// [`UnitKind::Columns`]. Without it the width offers no Columns.
     #[must_use]
     pub fn column_size(mut self, size: ColumnSize) -> Self {
-        let _ = (&mut self, size);
-        todo!("dl.K37")
+        self.columns = Some(size);
+        self
     }
 
-    /// The unit the width is shown in.
+    /// The column size the width converts Columns through, when it has one.
+    pub fn columns(&self) -> Option<ColumnSize> {
+        self.columns
+    }
+
+    /// The unit the width field shows: Columns while the width-only override is on, else the shared
+    /// [`unit`](Self::unit).
     pub fn width_unit(&self) -> UnitKind {
-        todo!("dl.K37")
+        self.side_unit(Side::Width)
     }
 
-    /// Shows the width in `unit`; `false` when the size has no such unit.
+    /// Shows the width in `unit`. Columns turns the width-only override on (and is refused without a column size);
+    /// any other length turns it off and sets the shared unit as [`set_unit`](Self::set_unit) does. Returns `false`
+    /// and changes nothing for a kind the width cannot show.
     pub fn set_width_unit(&mut self, unit: UnitKind) -> bool {
-        let _ = unit;
-        todo!("dl.K37")
+        if unit == UnitKind::Columns {
+            if self.columns.is_some() {
+                self.width_in_columns = true;
+            }
+            return self.columns.is_some();
+        }
+        let length = self.set_unit(unit);
+        if length {
+            self.width_in_columns = false;
+        }
+        length
+    }
+
+    /// Whether the resolution differs from the one the dialog opened with. The opening value is the clamped one
+    /// (see [`opening_resolution`](Self::opening_resolution)), so a document whose own resolution lies outside the
+    /// range reads unchanged until the user edits it, and the app keeps the document's value.
+    pub fn resolution_changed(&self) -> bool {
+        self.ppi != self.original_ppi
     }
 
     /// Fields for a document of size `original` at 72 ppi, in pixels and pixels per inch, locked, resampling and
@@ -171,6 +200,8 @@ impl LinkedSize {
             relative: false,
             chain: true,
             points_per_inch: UnitKind::POINTS_PER_INCH,
+            columns: None,
+            width_in_columns: false,
             typed: None,
         }
     }
@@ -248,7 +279,7 @@ impl LinkedSize {
         self.relative
     }
 
-    /// The unit the width and height fields show.
+    /// The unit the height field shows, and the width field unless it shows Columns: what the results report.
     pub fn unit(&self) -> UnitKind {
         self.unit
     }
@@ -298,10 +329,30 @@ impl LinkedSize {
         self.typed = None;
     }
 
-    /// Whether the width and height fields take input: in pixels and percent they need Resample on, since only
-    /// resampling changes the pixel count.
+    /// Whether the height field, and the width field while it shows the shared unit, take input: in pixels and
+    /// percent they need Resample on, since only resampling changes the pixel count.
     pub fn is_editable(&self) -> bool {
-        self.resampling || !is_pixel_unit(self.unit)
+        self.side_editable(Side::Height)
+    }
+
+    /// Whether the width field takes input: as [`is_editable`](Self::is_editable), with a Columns width counting as
+    /// a physical size.
+    pub fn is_width_editable(&self) -> bool {
+        self.side_editable(Side::Width)
+    }
+
+    fn side_editable(&self, side: Side) -> bool {
+        self.resampling || !is_pixel_unit(self.side_unit(side))
+    }
+
+    /// The unit `side`'s field shows.
+    fn side_unit(&self, side: Side) -> UnitKind {
+        if self.column_conversion(side).is_some() { UnitKind::Columns } else { self.unit }
+    }
+
+    /// The column size `side` converts through: the width's while it shows Columns.
+    fn column_conversion(&self, side: Side) -> Option<ColumnSize> {
+        self.columns.filter(|_| side == Side::Width && self.width_in_columns)
     }
 
     /// The width in the current unit (the change in width, in a relative size), unrounded.
@@ -371,12 +422,31 @@ impl LinkedSize {
 
     fn range(&self, side: Side) -> RangeInclusive<f64> {
         let original = pixels_along(self.original, side);
-        let limit = self.unit_value(MAX_DOCUMENT_SIDE, original);
-        if self.relative { -limit..=limit } else { self.unit_value(1.0, original).min(self.shown(side))..=limit }
+        if self.relative {
+            let limit = self.unit_value(side, MAX_DOCUMENT_SIDE, original, true);
+            -limit..=limit
+        } else {
+            let limit = self.unit_value(side, MAX_DOCUMENT_SIDE, original, false);
+            self.unit_value(side, 1.0, original, false).min(self.shown(side))..=limit
+        }
     }
 
-    fn unit_value(&self, pixels: f64, original: f64) -> f64 {
-        self.unit.from_pixels(pixels, original, self.ppi, self.points_per_inch).unwrap_or(pixels)
+    /// `pixels` along `side` in the unit its field shows; a `relative` value is a change in size, which matters to
+    /// Columns only (the gutter is counted between columns, not per column).
+    fn unit_value(&self, side: Side, pixels: f64, original: f64, relative: bool) -> f64 {
+        match self.column_conversion(side) {
+            Some(columns) => columns.columns(pixels / self.ppi.max(1.0) * self.points_per_inch, relative),
+            None => self.unit.from_pixels(pixels, original, self.ppi, self.points_per_inch).unwrap_or(pixels),
+        }
+    }
+
+    /// A value of `side`'s field as pixels; the inverse of `unit_value`. `None` for a shared unit that is not a pixel
+    /// or length unit.
+    fn unit_pixels(&self, side: Side, value: f64, original: f64, relative: bool) -> Option<f64> {
+        match self.column_conversion(side) {
+            Some(columns) => Some(columns.points(value, relative) / self.points_per_inch * self.ppi.max(1.0)),
+            None => self.unit.to_pixels(value, original, self.ppi, self.points_per_inch),
+        }
     }
 
     /// The field's value in the current unit: the value typed last while the pixel size it made stands, else the
@@ -384,7 +454,7 @@ impl LinkedSize {
     fn shown(&self, side: Side) -> f64 {
         if let Some(typed) = &self.typed
             && typed.side == side
-            && typed.unit == self.unit
+            && typed.unit == self.side_unit(side)
             && typed.relative == self.relative
             && typed.size == self.current
             && typed.ppi == self.ppi
@@ -392,7 +462,7 @@ impl LinkedSize {
             return typed.value;
         }
         let (current, original) = (pixels_along(self.current, side), pixels_along(self.original, side));
-        self.unit_value(if self.relative { current - original } else { current }, original)
+        self.unit_value(side, if self.relative { current - original } else { current }, original, self.relative)
     }
 
     fn edit(&mut self, side: Side, value: f64) {
@@ -400,10 +470,10 @@ impl LinkedSize {
             return;
         }
         let (current, original) = (pixels_along(self.current, side), pixels_along(self.original, side));
-        let Some(pixels) = self.unit.to_pixels(value, original, self.ppi, self.points_per_inch) else { return };
+        let Some(pixels) = self.unit_pixels(side, value, original, self.relative) else { return };
         self.typed = None;
         if !self.resampling {
-            if !is_pixel_unit(self.unit) && pixels > 0.0 {
+            if !is_pixel_unit(self.side_unit(side)) && pixels > 0.0 {
                 self.ppi = (self.ppi * current / pixels).clamp(*PPI_RANGE.start(), *PPI_RANGE.end());
                 self.current = self.original;
                 self.remember(side, value);
@@ -416,7 +486,7 @@ impl LinkedSize {
     }
 
     fn remember(&mut self, side: Side, value: f64) {
-        self.typed = Some(Typed { side, value, unit: self.unit, relative: self.relative, size: self.current, ppi: self.ppi });
+        self.typed = Some(Typed { side, value, unit: self.side_unit(side), relative: self.relative, size: self.current, ppi: self.ppi });
     }
 
     /// Sets one side in pixels, scaling the other by the opening ratio when locked.

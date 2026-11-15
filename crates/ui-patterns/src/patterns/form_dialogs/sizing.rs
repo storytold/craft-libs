@@ -4,7 +4,7 @@
 use super::FormDialog;
 use super::size_model::{LinkedSize, MAX_DOCUMENT_SIDE};
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _, ShowContainer as _};
-use crate::dialog::DialogResult;
+use crate::dialog::{DialogResult, FieldRefusal};
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
 use crate::layout_components::{Row, Stack};
@@ -133,8 +133,10 @@ impl Resample {
     }
 }
 
-/// What fills the area a larger canvas adds.
-#[derive(Clone, Debug, PartialEq)]
+/// What fills the area a larger canvas adds. Serialised camelCase (`"background"`, `{"other": [r, g, b]}`), the
+/// form automation reads and writes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum CanvasExtension {
     /// The foreground colour.
@@ -170,6 +172,11 @@ impl CanvasExtension {
     /// The list entries for a canvas whose current extension is `current`: the five named colours, `Other` while it is
     /// the current one, and Transparent for a document with no background (`has_background` false).
     pub fn entries(words: &SizingWords, current: &CanvasExtension, has_background: bool) -> Vec<Entry<CanvasExtension>> {
+        Self::offered(current, has_background).into_iter().map(|extension| Entry::new(extension.clone(), extension.label(words))).collect()
+    }
+
+    /// The extensions the list offers, in its order: what [`entries`](Self::entries) shows and automation may pick.
+    fn offered(current: &CanvasExtension, has_background: bool) -> Vec<CanvasExtension> {
         let mut list =
             vec![CanvasExtension::Foreground, CanvasExtension::Background, CanvasExtension::White, CanvasExtension::Black, CanvasExtension::Gray];
         if matches!(current, CanvasExtension::Other(_)) {
@@ -178,7 +185,7 @@ impl CanvasExtension {
         if !has_background {
             list.push(CanvasExtension::Transparent);
         }
-        list.into_iter().map(|extension| Entry::new(extension.clone(), extension.label(words))).collect()
+        list
     }
 }
 
@@ -226,6 +233,42 @@ fn size_valid(size: PixelSize) -> bool {
     side(size.width) && side(size.height)
 }
 
+/// The automation fields of the width and height rows both dialogs share: `width` and `height` in the unit their
+/// field shows, as typing in the field is; `unit`, the shared unit; and `widthUnit`, the unit the width shows.
+fn size_json(size: &LinkedSize) -> serde_json::Map<String, serde_json::Value> {
+    let mut fields = serde_json::Map::new();
+    fields.insert("width".into(), serde_json::json!(size.width()));
+    fields.insert("height".into(), serde_json::json!(size.height()));
+    fields.insert("unit".into(), serde_json::json!(size.unit()));
+    fields.insert("widthUnit".into(), serde_json::json!(size.width_unit()));
+    fields
+}
+
+/// Sets one of [`size_json`]'s fields through the setter its row calls; `None` when `field` is not one of them. A
+/// side whose row is disabled (pixels with Resample off) refuses as inactive.
+fn set_size_json(size: &mut LinkedSize, field: &str, value: &serde_json::Value) -> Option<Result<(), String>> {
+    let rejects = || FieldRefusal::Rejects(value).message(field);
+    let kind = || serde_json::from_value::<UnitKind>(value.clone()).map_err(|_| rejects());
+    Some(match field {
+        "width" | "height" => {
+            let editable = if field == "width" { size.is_width_editable() } else { size.is_editable() };
+            if !editable {
+                return Some(Err(FieldRefusal::Inactive.message(field)));
+            }
+            let Some(number) = value.as_f64() else { return Some(Err(rejects())) };
+            if field == "width" {
+                size.set_width(number);
+            } else {
+                size.set_height(number);
+            }
+            Ok(())
+        }
+        "unit" => kind().and_then(|kind| if size.set_unit(kind) { Ok(()) } else { Err(rejects()) }),
+        "widthUnit" => kind().and_then(|kind| if size.set_width_unit(kind) { Ok(()) } else { Err(rejects()) }),
+        _ => return None,
+    })
+}
+
 /// A size dialog on `FormDialog`: `rows` edits the values and `answer` makes the result from them at OK. OK, Cancel
 /// and Alt-for-Reset follow `ParamDialog`; OK is refused while the pixel size is empty or over the limit.
 pub(super) fn show_form<'a, S: SizeForm + Default, R>(
@@ -253,6 +296,8 @@ pub(super) struct Kit {
     units: Units,
     link: Label,
     lengths: Vec<Entry<UnitKind>>,
+    /// `lengths` and Columns: what the width offers when the values carry a column size.
+    widths: Vec<Entry<UnitKind>>,
     resolutions: Vec<Entry<UnitKind>>,
 }
 
@@ -275,11 +320,16 @@ impl Kit {
     pub(super) fn new(ui: &Ui) -> Self {
         let env = Env::of(ui);
         let units = env.units();
-        let entries = |kinds: &[UnitKind]| kinds.iter().map(|kind| Entry::new(*kind, Label::from(units.symbol(*kind)))).collect();
+        let entries =
+            |kinds: &[UnitKind]| -> Vec<Entry<UnitKind>> { kinds.iter().map(|kind| Entry::new(*kind, Label::from(units.symbol(*kind)))).collect() };
+        let lengths = entries(&LENGTH_UNITS);
+        let mut widths = lengths.clone();
+        widths.extend(entries(&[UnitKind::Columns]));
         Kit {
             words: env.words::<SizingWords>(),
             link: LinkMode::Ratio.label(&env.words::<LinkedWords>()),
-            lengths: entries(&LENGTH_UNITS),
+            lengths,
+            widths,
             resolutions: entries(&RESOLUTION_UNITS),
             units,
         }
@@ -355,8 +405,9 @@ impl Kit {
     /// One number with its unit, over the model.
     fn row(&self, ui: &mut Ui, size: &mut LinkedSize, which: Dimension) {
         let words = &self.words;
+        let widths = if size.columns().is_some() { &self.widths } else { &self.lengths };
         let (name, unit_name, value, range, unit, entries, salt) = match which {
-            Dimension::Width => (&words.width, &words.width_unit, size.width(), size.width_range(), size.unit(), &self.lengths, "width"),
+            Dimension::Width => (&words.width, &words.width_unit, size.width(), size.width_range(), size.width_unit(), widths, "width"),
             Dimension::Height => (&words.height, &words.height_unit, size.height(), size.height_range(), size.unit(), &self.lengths, "height"),
             Dimension::Resolution => (
                 &words.resolution,
@@ -368,7 +419,11 @@ impl Kit {
                 "resolution",
             ),
         };
-        let editable = !matches!(which, Dimension::Width | Dimension::Height) || size.is_editable();
+        let editable = match which {
+            Dimension::Width => size.is_width_editable(),
+            Dimension::Height => size.is_editable(),
+            Dimension::Resolution => true,
+        };
         let mut field = Field::new(name.clone()).id_salt(salt);
         if !editable {
             field = field.tooltip(words.resample_off.clone());
@@ -389,7 +444,8 @@ impl Kit {
             }
             if let Some(kind) = shown.unit.value().copied() {
                 match which {
-                    Dimension::Width | Dimension::Height => size.set_unit(kind),
+                    Dimension::Width => size.set_width_unit(kind),
+                    Dimension::Height => size.set_unit(kind),
                     Dimension::Resolution => size.set_resolution_unit(kind),
                 };
             }

@@ -9,18 +9,19 @@ use craft_behavior::Mixed;
 use craft_theme::variant::Tone;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Props as _, Remember as _, Show as _, ShowContainer as _};
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{FormDialog, GuideUnits};
 use craft_ui::pickers::UnitSelect;
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
-use craft_ui::runtime::memory::SaveKey;
+use craft_ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use craft_ui::sections::DialogRole;
 use craft_ui::text::{LinkMode, LinkedFields, LinkedLayout, NumberField};
 use egui::Ui;
 use kurbo::{Point, Rect};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use super::ShapeKind;
 use super::words::CreateShapeWords;
@@ -36,8 +37,8 @@ const MAX_RADIUS: f64 = 10_000.0;
 
 /// What Create Shape opens with: the kind, the clicked point and the document's units, and the
 /// values the fields start from. The dialog replaces width, height, From Center and the star ratio
-/// with the remembered ones for the kind on its first pass unless [`recalled`](Self::recalled) is
-/// set.
+/// with the remembered ones for the kind before its first pass, OK or field set, unless
+/// [`recalled`](Self::recalled) is set.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct CreateShapeOptions {
@@ -162,6 +163,8 @@ pub struct CreateShapeDialog {
     options: CreateShapeOptions,
     /// Each size field's unit for this opening.
     units: [UnitKind; 2],
+    /// Whether the dialog is open: bound to the form's open state, so the host's dialog closes with it.
+    open: bool,
 }
 
 /// The document a dialog without [`CreateShapeOptions::units`] measures in: pixels, with no percent.
@@ -269,7 +272,17 @@ impl CreateShapeDialog {
     /// Create Shape with `options`.
     pub fn new(options: CreateShapeOptions) -> Self {
         let ruler = options.units.map_or(UnitKind::Pixels, |units| units.ruler);
-        CreateShapeDialog { id: dialog_id("shape.create"), options, units: [ruler; 2] }
+        CreateShapeDialog { id: dialog_id("shape.create"), options, units: [ruler; 2], open: true }
+    }
+
+    /// Puts the kind's remembered values over the opening ones, once, before the first show, OK or set reads them:
+    /// automation may set or confirm before any pass.
+    fn recall(&mut self, ctx: &egui::Context) {
+        if std::mem::replace(&mut self.options.recalled, true) {
+            return;
+        }
+        let memory = saved_value::<Memory>(ctx, &save_key(self.options.kind));
+        recalled(&mut self.options, &memory);
     }
 
     /// Whether `kind` has a Create dialog: every kind but Line and Custom (PhotoCraft has none for
@@ -294,9 +307,8 @@ fn size_field(
     document: &GuideUnits,
     entries: &[Entry<UnitKind>],
 ) {
-    let extent = if axis == 0 { document.width_px } else { document.height_px };
-    let pixels = if axis == 0 { size.0 } else { size.1 };
-    let shown = document.from_pixels(pixels, *unit, extent).unwrap_or(0.0);
+    let extent = extent_of(document, axis);
+    let shown = shown_size(document, axis, *unit, *size);
     let (low, high) = (
         document.from_pixels(*CreateShapeOptions::SIZE.start(), *unit, extent),
         document.from_pixels(*CreateShapeOptions::SIZE.end(), *unit, extent),
@@ -311,20 +323,40 @@ fn size_field(
     }
     if let Some(value) = out.edit.value().copied().flatten()
         && shown_places(value, *unit) != shown_places(shown, *unit)
-        && let Some(px) = document.to_pixels(length(value, *unit), extent)
     {
-        let px = thousandths(px);
-        if axis == 0 {
-            size.0 = px;
-        } else {
-            size.1 = px;
-        }
+        set_size(document, axis, *unit, size, value);
     }
 }
 
-/// The units a shape's size is entered in: pixels, a percentage of the document and the physical lengths.
-fn length_units() -> impl Iterator<Item = UnitKind> {
-    [UnitKind::Pixels, UnitKind::Percent].into_iter().chain(UnitKind::LENGTHS)
+/// The pixels a percentage of size field `axis` is of: the document's width or height.
+fn extent_of(document: &GuideUnits, axis: usize) -> f64 {
+    if axis == 0 { document.width_px } else { document.height_px }
+}
+
+/// Size field `axis`'s value in `unit`, as the field shows it.
+fn shown_size(document: &GuideUnits, axis: usize, unit: UnitKind, size: (f64, f64)) -> f64 {
+    let pixels = if axis == 0 { size.0 } else { size.1 };
+    document.from_pixels(pixels, unit, extent_of(document, axis)).unwrap_or(0.0)
+}
+
+/// Sets size field `axis` from `value` in `unit`, kept to a thousandth of a pixel, as a commit in the field does;
+/// `false` and nothing changes when `value` does not convert.
+fn set_size(document: &GuideUnits, axis: usize, unit: UnitKind, size: &mut (f64, f64), value: f64) -> bool {
+    let Some(px) = document.to_pixels(length(value, unit), extent_of(document, axis)) else { return false };
+    let px = thousandths(px);
+    if axis == 0 {
+        size.0 = px;
+    } else {
+        size.1 = px;
+    }
+    true
+}
+
+/// The units a shape's size is entered in: pixels, a percentage of the document and the physical lengths. Percent
+/// needs the document (`values.units`).
+fn length_units(values: &CreateShapeOptions) -> impl Iterator<Item = UnitKind> + use<> {
+    let percent = values.units.is_some();
+    [UnitKind::Pixels, UnitKind::Percent].into_iter().chain(UnitKind::LENGTHS).filter(move |kind| percent || *kind != UnitKind::Percent)
 }
 
 /// `value` in `unit` as a length the document converts.
@@ -342,10 +374,7 @@ fn body(
     latest: &RefCell<Option<Memory>>,
 ) -> bool {
     let document = values.units.unwrap_or_else(pixels_only);
-    let entries: Vec<Entry<UnitKind>> = length_units()
-        .filter(|kind| values.units.is_some() || *kind != UnitKind::Percent)
-        .map(|kind| Entry::new(kind, Label::from(numbers.symbol(kind))))
-        .collect();
+    let entries: Vec<Entry<UnitKind>> = length_units(values).map(|kind| Entry::new(kind, Label::from(numbers.symbol(kind)))).collect();
     let kind = values.kind;
     let name = match kind {
         ShapeKind::RoundedRectangle => &words.rounded_rectangle,
@@ -424,18 +453,84 @@ fn body(
 impl StackDialog for CreateShapeDialog {
     type Result = CreatedShape;
 
-    fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K36")
+    /// `width` and `height` in the unit their field shows, `widthUnit` and `heightUnit`, `radii` (top-left,
+    /// top-right, bottom-right, bottom-left, in pixels), `linkRadii`, `sides`, `starRatio` (in percent, as its
+    /// field shows it) and `fromCenter`.
+    fn json_fields(&self) -> Option<Value> {
+        let o = &self.options;
+        let document = o.units.unwrap_or_else(pixels_only);
+        Some(json!({
+            "width": shown_size(&document, 0, self.units[0], o.size),
+            "height": shown_size(&document, 1, self.units[1], o.size),
+            "widthUnit": self.units[0],
+            "heightUnit": self.units[1],
+            "radii": o.radii,
+            "linkRadii": o.link_radii,
+            "sides": o.sides,
+            "starRatio": (o.star_ratio * 100.0).clamp(1.0, 100.0),
+            "fromCenter": o.from_center,
+        }))
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K36")
+    /// Sets a field as its row does, from the remembered values on. The radius rows answer only for a rectangle, and
+    /// Sides and Star Ratio only for a polygon or star; elsewhere they refuse as inactive. Linked radii take four
+    /// equal values.
+    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
+        self.recall(ctx);
+        let rejects = || FieldRefusal::Rejects(&value).message(field);
+        let kind = self.options.kind;
+        let rect = matches!(kind, ShapeKind::Rectangle | ShapeKind::RoundedRectangle);
+        let polygon = matches!(kind, ShapeKind::Polygon | ShapeKind::Star);
+        let shown = match field {
+            "radii" | "linkRadii" => rect,
+            "sides" | "starRatio" => polygon,
+            _ => true,
+        };
+        if !shown {
+            return Err(FieldRefusal::Inactive.message(field));
+        }
+        let document = self.options.units.unwrap_or_else(pixels_only);
+        let offered: Vec<UnitKind> = length_units(&self.options).collect();
+        let o = &mut self.options;
+        match field {
+            "width" | "height" => {
+                let axis = usize::from(field == "height");
+                let number = value.as_f64().ok_or_else(rejects)?;
+                if !set_size(&document, axis, self.units[axis], &mut o.size, number) {
+                    return Err(rejects());
+                }
+            }
+            "widthUnit" | "heightUnit" => {
+                let unit = serde_json::from_value::<UnitKind>(value.clone()).ok().filter(|unit| offered.contains(unit)).ok_or_else(rejects)?;
+                self.units[usize::from(field == "heightUnit")] = unit;
+            }
+            "radii" => {
+                let radii = serde_json::from_value::<[f64; 4]>(value.clone()).map_err(|_| rejects())?;
+                if radii.iter().any(|radius| !radius.is_finite()) || (o.link_radii && radii.iter().any(|radius| *radius != radii[0])) {
+                    return Err(rejects());
+                }
+                o.radii = radii.map(|radius| radius.clamp(0.0, MAX_RADIUS));
+            }
+            "linkRadii" => o.link_radii = value.as_bool().ok_or_else(rejects)?,
+            "sides" => {
+                let sides = value.as_f64().ok_or_else(rejects)?;
+                o.sides = sides.round().clamp(f64::from(*SIDES.start()), f64::from(*SIDES.end())) as u32;
+            }
+            "starRatio" => o.star_ratio = (value.as_f64().ok_or_else(rejects)?.clamp(1.0, 100.0) / 100.0).clamp(0.01, 1.0),
+            "fromCenter" => o.from_center = value.as_bool().ok_or_else(rejects)?,
+            _ => return Err(FieldRefusal::Unknown.message(field)),
+        }
+        Ok(())
     }
 
+    /// Answers the shape OK makes and remembers the kind's values as OK does; `None` while OK is refused.
     fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        let _ = ctx;
-        todo!("dl.K36")
+        self.recall(ctx);
+        let env = Env::of_root(ctx);
+        let shape = answer(&self.options, &env.words::<CreateShapeWords>(), &env.units()).ok()?;
+        let key = save_key(self.options.kind);
+        set_saved_value::<Memory>(ctx, &key, remembered(&self.options, &shape));
+        Some(shape)
     }
 
     fn id(&self) -> DialogId {
@@ -458,11 +553,13 @@ impl StackDialog for CreateShapeDialog {
             .as_str()
             .to_owned(),
         );
-        let key = save_key(self.options.kind);
+        self.recall(ui.ctx());
+        let write_key = save_key(self.options.kind);
         let latest = Rc::new(RefCell::new(None::<Memory>));
-        let (write, write_key) = (Rc::clone(&latest), key.clone());
-        let CreateShapeDialog { options, units, .. } = self;
+        let write = Rc::clone(&latest);
+        let CreateShapeDialog { options, units, open, .. } = self;
         let shown = FormDialog::new(title, Bind::bound(options))
+            .opened(Bind::bound(open))
             .alt_resets(false)
             .shaped(move |dialog| {
                 dialog.on_pick(move |button, cx| {
@@ -473,14 +570,7 @@ impl StackDialog for CreateShapeDialog {
                     }
                 })
             })
-            .show(ui, |ui, form, values| {
-                if form.first() && !values.recalled {
-                    values.recalled = true;
-                    let memory = form.saved::<Memory>(&key).clone();
-                    recalled(values, &memory);
-                }
-                body(ui, values, units, &words, &numbers, &latest)
-            });
+            .show(ui, |ui, _, values| body(ui, values, units, &words, &numbers, &latest));
         match (shown.accepted, shown.closed) {
             (Some(values), _) => answer(&values, &words, &numbers).ok().map(DialogResult::Ok),
             (None, Some(_)) => Some(DialogResult::Cancel),

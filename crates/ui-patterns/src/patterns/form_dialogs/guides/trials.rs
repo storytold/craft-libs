@@ -1,12 +1,13 @@
 //! Trials of the guide dialogs.
 #![allow(clippy::panic, clippy::expect_used, reason = "trials assert by panicking")]
 
-use super::{GUIDE_LAYOUT_COLOR_KEY, GuideLayoutDialog, GuideLayoutValues, GuideRect, GuideUnits};
-use crate::canvas_data::GuideColor;
-use crate::contract::Bind;
+use super::{GUIDE_LAYOUT_COLOR_KEY, GuideLayoutDialog, GuideLayoutValues, GuideRect, GuideUnits, NewGuideDialog, NewGuideValues};
+use crate::canvas_data::{Guide, GuideColor};
+use crate::contract::{Bind, SaveKey};
 use crate::runtime::env::UnitKind;
 use crate::runtime::requests::ColorRequest;
 use crate::testing::{Fixture, trial};
+use craft_behavior::Axis;
 use craft_theme::Rgba;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -37,7 +38,7 @@ fn the_preview_check_box_under_the_side_buttons_starts_on_at_every_open() {
     assert!(!previewing.get(), "with Preview off the dialog previews nothing");
     fixture.key(egui::Key::Escape, egui::Modifiers::NONE).idle(4);
     assert!(!open.get(), "Escape closes the dialog");
-    // A closed dialog's shown memory goes after 3 passes and 0.5 s.
+    // Past its exit fade the closed dialog shows nothing and has ended its shown life: the next open is a first pass.
     fixture.advance(1.0).idle(4);
     open.set(true);
     fixture.settle();
@@ -72,4 +73,57 @@ fn a_click_on_the_custom_colour_swatch_asks_the_picker_at_that_colour() {
     values.borrow_mut().color = GuideColor::Cyan;
     fixture.settle();
     assert!(fixture.by_label("Custom…").is_none(), "a named colour shows no swatch");
+}
+
+const REMEMBERED_GUIDE: SaveKey = SaveKey::new("craft_ui_trials.new_guide");
+
+/// S-D1: OK stores a new guide's axis, position and colour under its `remember` key, and the next open starts from them
+/// whatever values the app passes; Cancel stores nothing.
+#[trial]
+fn a_new_guide_remembers_its_confirmed_values_for_the_next_open() {
+    let open = Rc::new(Cell::new(true));
+    let values = Rc::new(RefCell::new(NewGuideValues::new(Axis::X, 0.0, GuideColor::Magenta)));
+    let made: Rc<RefCell<Vec<Guide>>> = Rc::default();
+    let (opened, held, seen) = (Rc::clone(&open), Rc::clone(&values), Rc::clone(&made));
+    let mut fixture = Fixture::new(move |ui| {
+        let units = GuideUnits::new(UnitKind::Pixels, 3000.0, 2000.0, 300.0);
+        let mut is_open = opened.get();
+        let mut current = held.borrow_mut();
+        let shown = NewGuideDialog::new(units, Bind::bound(&mut *current)).remember(REMEMBERED_GUIDE).opened(Bind::bound(&mut is_open)).show(ui);
+        opened.set(is_open);
+        seen.borrow_mut().extend(shown.result);
+    });
+    // The app opens the dialog again with its own default values. Past its exit fade the closed dialog shows nothing
+    // and has ended its shown life, so the reopen is a first pass.
+    let reopen = |fixture: &mut Fixture| {
+        fixture.advance(1.0).idle(4);
+        *values.borrow_mut() = NewGuideValues::default();
+        open.set(true);
+        fixture.settle();
+    };
+
+    fixture.settle();
+    assert_eq!(*values.borrow(), NewGuideValues::new(Axis::X, 0.0, GuideColor::Magenta), "with nothing remembered the opening values stand");
+    let vertical = fixture.by_label("Vertical").expect("the orientation offers Vertical");
+    fixture.click(&vertical).settle();
+    let position = fixture.by_label("Position").expect("the Position field");
+    fixture.click(&position).settle();
+    fixture.key(egui::Key::A, egui::Modifiers::COMMAND);
+    fixture.type_text("120");
+    fixture.key(egui::Key::Enter, egui::Modifiers::NONE).settle();
+    assert!(!open.get(), "Enter is OK");
+    let confirmed: Vec<_> = made.borrow().iter().map(|guide| (guide.along, guide.position, guide.color)).collect();
+    assert_eq!(confirmed, [(Axis::Y, 120.0, Some(GuideColor::Magenta.rgba()))], "OK makes the guide of the edited values");
+
+    reopen(&mut fixture);
+    assert_eq!(*values.borrow(), NewGuideValues::new(Axis::Y, 120.0, GuideColor::Magenta), "the next open starts from the confirmed values");
+    let horizontal = fixture.by_label("Horizontal").expect("the orientation offers Horizontal");
+    fixture.click(&horizontal).settle();
+    assert_eq!(values.borrow().along, Axis::X, "the click edits the values");
+    fixture.key(egui::Key::Escape, egui::Modifiers::NONE).idle(4);
+    assert!(!open.get(), "Escape cancels");
+    assert_eq!(made.borrow().len(), 1, "Cancel makes no guide");
+
+    reopen(&mut fixture);
+    assert_eq!(*values.borrow(), NewGuideValues::new(Axis::Y, 120.0, GuideColor::Magenta), "Cancel stored nothing: the OK'd values come back");
 }

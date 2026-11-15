@@ -4,11 +4,14 @@
 use craft_behavior::PixelSize;
 use craft_ui::dialog::{DialogHost, DialogResult, StackDialog};
 use craft_ui::patterns::form_dialogs::{
-    AboutInfo, AboutLink, CanvasSize, CanvasSizeValues, Credits, ExportOptions, ExportOptionsKind, FormatOptions, HostedAbout, HostedCanvasSize,
-    HostedExportAs, HostedFormatOptions, JpegOptions,
+    AboutInfo, AboutLink, CanvasSize, CanvasSizeValues, Credits, ExportOptions, ExportOptionsKind, FormatOptions, GuideLayoutDialog, GuideLayoutValues,
+    GuideRect, GuideUnits, HostedAbout, HostedCanvasSize, HostedExportAs, HostedFormatOptions, HostedGuideLayoutDialog, HostedImageSize,
+    HostedNewGuideDialog, ImageSize, ImageSizeValues, JpegOptions, NewGuideDialog, NewGuideValues,
 };
+use craft_ui::runtime::env::UnitKind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers, Vec2};
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -24,6 +27,45 @@ fn about() -> HostedAbout {
 #[allow(clippy::redundant_closure, reason = "the builder must be generic over the bind's lifetime, which the bare path is not")]
 fn canvas_size() -> HostedCanvasSize {
     HostedCanvasSize::new(CanvasSizeValues::new(PICTURE), |values| CanvasSize::new(values))
+}
+
+#[allow(clippy::redundant_closure, reason = "the builder must be generic over the bind's lifetime, which the bare path is not")]
+fn image_size() -> HostedImageSize {
+    HostedImageSize::new(ImageSizeValues::new(PICTURE), |values| ImageSize::new(values))
+}
+
+/// The document of the guide dialogs: 3000 × 2000 px at 300 ppi, measured in pixels.
+fn guide_units() -> GuideUnits {
+    GuideUnits::new(UnitKind::Pixels, 3000.0, 2000.0, 300.0)
+}
+
+fn guide_layout() -> HostedGuideLayoutDialog {
+    HostedGuideLayoutDialog::new(GuideLayoutValues::default(), |values| {
+        GuideLayoutDialog::new(guide_units(), GuideRect::new(0.0, 0.0, 3000.0, 2000.0), values)
+    })
+}
+
+fn new_guide() -> HostedNewGuideDialog {
+    HostedNewGuideDialog::new(NewGuideValues::default(), |values| NewGuideDialog::new(guide_units(), values))
+}
+
+/// Drives `dialog` as automation does, before any pass: the host lists its fields with `field` among them, an unknown
+/// field is refused and changes nothing, `field` takes `value` and is listed with it, and OK answers. Returns the
+/// answer.
+fn automate<D: StackDialog>(dialog: D, field: &str, value: Value) -> Option<D::Result> {
+    let ctx = egui::Context::default();
+    let mut host = DialogHost::new();
+    let id = host.open(dialog);
+    let listed = |host: &DialogHost| host.open_dialogs().into_iter().find(|open| open.id == id).and_then(|open| open.fields);
+    let before = listed(&host).unwrap_or(Value::Null);
+    assert!(before.get(field).is_some(), "{field} is listed in {before}");
+    assert!(host.set_json_field(&ctx, id, "noSuchField", json!(1)).is_err(), "an unknown field is refused");
+    assert_eq!(listed(&host).unwrap_or(Value::Null), before, "a refused field changes nothing");
+    assert_eq!(host.set_json_field(&ctx, id, field, value.clone()), Ok(()), "{field} takes {value}");
+    assert_eq!(listed(&host).and_then(|fields| fields.get(field).cloned()), Some(value), "{field} is listed with the set value");
+    assert!(host.confirm::<D>(&ctx), "OK is enabled");
+    assert!(host.is_empty(), "OK closes the dialog");
+    host.take::<D>().and_then(DialogResult::ok)
 }
 
 /// A fixture that runs `host` every pass, in a room large enough for every form.
@@ -85,6 +127,17 @@ fn hosted_forms_answer_ok_with_their_values() {
     fixture.click(&website).idle(4);
     let link = host.borrow_mut().get_mut::<HostedAbout>().and_then(HostedAbout::take_link);
     assert_eq!(link.as_deref(), Some("https://example.org"), "the link waits for the app");
+
+    // PatternFillDialog and CreateShapeDialog live in craft-draw, which depends on this crate; their automation is
+    // driven in craft-draw's tests/it (shape_drag.rs, pattern_fill.rs).
+    let image = automate(image_size(), "width", json!(800.0)).map(|result| result.size);
+    assert_eq!(image, Some(PixelSize::new(800, 450)), "Image Size answers the set width, the height following the lock");
+    let canvas = automate(canvas_size(), "width", json!(2000.0)).map(|result| result.size);
+    assert_eq!(canvas, Some(PixelSize::new(2000, 900)), "Canvas Size answers the set width; its sides are not linked");
+    let layout = automate(guide_layout(), "centerColumns", json!(true)).map(|result| (result.options.center_columns, result.guides.is_empty()));
+    assert_eq!(layout, Some((true, false)), "Guide Layout answers its options and the guides they make");
+    let guide = automate(new_guide(), "position", json!(250.0)).map(|guide| guide.position);
+    assert_eq!(guide, Some(250.0), "New Guide answers the guide at the set position");
 }
 
 #[trial]

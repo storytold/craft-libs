@@ -201,16 +201,43 @@ pub struct ColumnSize {
 }
 
 impl ColumnSize {
+    /// The column width used when the given one is not a finite number above 0.
+    const FALLBACK_WIDTH: f64 = 180.0;
+    /// The gutter used when the given one is not finite.
+    const FALLBACK_GUTTER: f64 = 12.0;
+
+    /// The width and gutter the conversion uses: the fallbacks the field docs name, so a degenerate preference
+    /// never divides by zero.
+    fn sane(self) -> (f64, f64) {
+        let width = if self.width.is_finite() && self.width > 0.0 { self.width } else { Self::FALLBACK_WIDTH };
+        let gutter = if self.gutter.is_finite() { self.gutter.max(0.0) } else { Self::FALLBACK_GUTTER };
+        (width, gutter)
+    }
+
     /// `columns` columns as points; a `relative` change converts the span of `|columns|` with its sign, and 0 stays 0.
     pub fn points(self, columns: f64, relative: bool) -> f64 {
-        let _ = (columns, relative);
-        todo!("dl.K14")
+        let (width, gutter) = self.sane();
+        let span = |n: f64| n * (width + gutter) - gutter;
+        if !relative {
+            return span(columns);
+        }
+        if columns == 0.0 {
+            return 0.0;
+        }
+        columns.signum() * span(columns.abs()).max(0.0)
     }
 
     /// `points` as columns; the inverse of [`points`](Self::points).
     pub fn columns(self, points: f64, relative: bool) -> f64 {
-        let _ = (points, relative);
-        todo!("dl.K14")
+        let (width, gutter) = self.sane();
+        let count = |p: f64| (p + gutter) / (width + gutter);
+        if !relative {
+            return count(points);
+        }
+        if points == 0.0 {
+            return 0.0;
+        }
+        points.signum() * count(points.abs())
     }
 }
 
@@ -257,9 +284,10 @@ pub struct Units {
 
 impl Units {
     /// The codec of a zoom field in percent: the percent reader, up to two decimals (the zoom ladder has rungs such as
-    /// 66.67 %).
+    /// 66.67 %), with zoom typing (`a/b` as a ratio, a second separator cutting the text), so every zoom field reads
+    /// typed text by the same rules.
     pub fn zoom_codec(&self) -> NumberCodec {
-        NumberCodec::new(self.reader(Some(UnitKind::Percent)), ZOOM_DECIMALS)
+        NumberCodec::new(self.reader(Some(UnitKind::Percent)), ZOOM_DECIMALS).zoom_typing()
     }
 }
 

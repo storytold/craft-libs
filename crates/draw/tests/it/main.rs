@@ -43,3 +43,6 @@ mod transform_fields;
 
 // draw-presets
 mod presets;
+
+// dialogs-w13
+mod pattern_fill;

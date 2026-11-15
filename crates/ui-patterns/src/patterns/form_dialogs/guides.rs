@@ -26,9 +26,9 @@ use super::{FormDialog, HostRequests};
 use crate::canvas_data::{Guide, GuideColor};
 
 use crate::choice::Checkbox;
-use crate::contract::{Bind, EditResponse, Entry, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _};
+use crate::contract::{Bind, EditResponse, Entry, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, Sizing};
 
-use crate::dialog::{DialogId, DialogResult, DialogStack, StackDialog, dialog_id};
+use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 
 use crate::display::Text;
 use crate::form::{Field, FieldGroup};
@@ -36,7 +36,7 @@ use crate::form::{Field, FieldGroup};
 use crate::notices::{Notice, NoticeLayout};
 
 use crate::pickers::Select;
-use crate::runtime::env::{Env, Label, Units};
+use crate::runtime::env::{Env, Label, UnitKind, Units};
 
 use crate::runtime::overlay::CloseReason;
 use crate::sections::GroupBox;
@@ -46,6 +46,7 @@ use craft_theme::variant::Tone;
 use craft_theme::{Rgba, Srgba};
 
 use egui::{Response, Ui};
+use serde_json::{Value, json};
 
 use std::cell::{Cell, RefCell};
 
@@ -342,8 +343,7 @@ impl<'a> GuideLayoutDialog<'a> {
             apply_color_answers(form.take_answers(), GUIDE_LAYOUT_COLOR_KEY, &mut values.color);
             measure.unparsed.set(false);
             layout_rows(ui, &measure, &rows, values, form.requests());
-            let rects = targets(&values.options, &document, &artboards);
-            let made = values.options.lines(&rects, &existing, &units, first_key, Some(values.color.rgba()));
+            let made = layout_guides(values, &units, &document, &artboards, &existing, first_key);
             let remembered = form.memory::<LastValid>();
             let ok = match made {
                 Ok(guides) => {
@@ -367,6 +367,20 @@ impl<'a> GuideLayoutDialog<'a> {
         let preview = shown.preview_on.then(|| last.into_inner()).flatten();
         GuideLayoutOutput { response: shown.response, closed: shown.closed, result, preview, requests: shown.requests }
     }
+}
+
+/// The guides OK commits for `values`: the layout over its targets, in its colour, beside the `existing` guides. The
+/// dialog's body and the hosted dialog's `confirm` both answer with it.
+fn layout_guides(
+    values: &GuideLayoutValues,
+    units: &GuideUnits,
+    document: &GuideRect,
+    artboards: &[GuideRect],
+    existing: &[Guide],
+    first_key: u64,
+) -> Result<Vec<Guide>, GuideLayoutError> {
+    let rects = targets(&values.options, document, artboards);
+    values.options.lines(&rects, existing, units, first_key, Some(values.color.rgba()))
 }
 
 /// The rectangles the layout fills for its target.
@@ -404,8 +418,14 @@ fn layout_rows(ui: &mut Ui, measure: &Measure<'_>, form: &Form<'_>, values: &mut
             values.options.clear_existing = on;
         }
     });
-    if !values.options.same_fields(&before) && values.options.preset == before.preset {
-        values.options.preset = GuideLayoutPreset::Custom;
+    turn_custom(&mut values.options, &before);
+}
+
+/// Turns the preset to Custom when a layout field changed from `before` and the preset did not: an edit leaves the
+/// preset, a preset pick does not. Changing target, colour or Preview is no layout field.
+fn turn_custom(options: &mut GuideLayoutOptions, before: &GuideLayoutOptions) {
+    if !options.same_fields(before) && options.preset == before.preset {
+        options.preset = GuideLayoutPreset::Custom;
     }
 }
 
@@ -419,11 +439,86 @@ fn preset_row(ui: &mut Ui, words: &GuideDialogWords, options: &mut GuideLayoutOp
     let entries: Vec<Entry<GuideLayoutPreset>> = GuideLayoutPreset::ALL.into_iter().map(|preset| Entry::new(preset, preset.label(words))).collect();
     let current = options.preset;
     Field::new(words.preset.clone()).show(ui, |ui, _| {
-        if let Some(picked) = Select::new(words.preset.clone(), Bind::given(current), &entries).show(ui).value().copied() {
-            picked.apply(options);
-            options.preset = picked;
+        if let Some(picked) = Select::new(words.preset.clone(), Bind::given(current), &entries).sizing(Sizing::Content).show(ui).value().copied() {
+            pick_preset(options, picked);
         }
     });
+}
+
+/// Applies `preset` to `options` as a pick in the Preset list does.
+fn pick_preset(options: &mut GuideLayoutOptions, preset: GuideLayoutPreset) {
+    preset.apply(options);
+    options.preset = preset;
+}
+
+/// The automation names of the presets.
+const PRESET_NAMES: [(GuideLayoutPreset, &str); 4] = [
+    (GuideLayoutPreset::Custom, "custom"),
+    (GuideLayoutPreset::FiveColumnsThreeRows, "fiveColumnsThreeRows"),
+    (GuideLayoutPreset::EightColumns, "eightColumns"),
+    (GuideLayoutPreset::TwelveColumns, "twelveColumns"),
+];
+
+/// The automation names of the targets.
+const TARGET_NAMES: [(GuideTarget, &str); 2] = [(GuideTarget::Document, "document"), (GuideTarget::SelectedArtboards, "selectedArtboards")];
+
+/// The automation name of `item` in `names`.
+fn name_of<T: PartialEq + Copy>(names: &[(T, &'static str)], item: T) -> Value {
+    names.iter().find(|(named, _)| *named == item).map_or(Value::Null, |(_, name)| json!(name))
+}
+
+/// The item `value` names in `names`.
+fn named<T: Copy>(names: &[(T, &'static str)], value: &Value) -> Option<T> {
+    let name = value.as_str()?;
+    names.iter().find(|(_, named)| *named == name).map(|(item, _)| *item)
+}
+
+/// A guide colour as automation reads it: the colour in the `Srgba` form.
+fn color_json(color: GuideColor) -> Value {
+    json!(Srgba::from(color.rgba()))
+}
+
+/// The guide colour `value` gives in the `Srgba` form: a named colour when it is one, else Custom, as the colour
+/// row shows a picked colour.
+fn read_color(value: &Value) -> Option<GuideColor> {
+    let color = serde_json::from_value::<Srgba>(value.clone()).ok()?;
+    Some(GuideColor::from_rgba(color.to_rgba()))
+}
+
+/// A layout length as automation reads it: `{value, unit}`.
+fn length_json(length: GuideLength) -> Value {
+    json!({ "value": length.value, "unit": length.unit })
+}
+
+/// The length `value` gives as `{value, unit}`: a number of at least 0 in pixels, percent or a length unit, what the
+/// layout fields take.
+fn read_length(value: &Value) -> Option<GuideLength> {
+    let number = value.get("value")?.as_f64().filter(|number| *number >= 0.0)?;
+    let unit = serde_json::from_value::<UnitKind>(value.get("unit")?.clone()).ok()?;
+    let takes = matches!(unit, UnitKind::Pixels | UnitKind::Percent) || UnitKind::LENGTHS.contains(&unit);
+    takes.then_some(GuideLength::new(number, unit))
+}
+
+/// A column or row group as automation reads it: `{enabled, number, size, gutter}`, `size` `null` for automatic.
+fn group_json(group: &GuideGroup) -> Value {
+    json!({
+        "enabled": group.enabled,
+        "number": group.number,
+        "size": group.size.map(length_json),
+        "gutter": length_json(group.gutter),
+    })
+}
+
+/// The group `value` gives as [`group_json`] writes it; `number` 1 to [`MAX_COUNT`].
+fn read_group(value: &Value) -> Option<GuideGroup> {
+    let enabled = value.get("enabled")?.as_bool()?;
+    let number = value.get("number")?.as_u64().and_then(|number| u32::try_from(number).ok()).filter(|number| (1..=MAX_COUNT).contains(number))?;
+    let size = match value.get("size")? {
+        Value::Null => None,
+        size => Some(read_length(size)?),
+    };
+    let gutter = read_length(value.get("gutter")?)?;
+    Some(GuideGroup::new(enabled, number, size, gutter))
 }
 
 fn target_row(ui: &mut Ui, words: &GuideDialogWords, options: &mut GuideLayoutOptions, artboards: bool) {
@@ -433,7 +528,7 @@ fn target_row(ui: &mut Ui, words: &GuideDialogWords, options: &mut GuideLayoutOp
     }
     let current = options.target;
     Field::new(words.target.clone()).show(ui, |ui, _| {
-        if let Some(picked) = Select::new(words.target.clone(), Bind::given(current), &entries).show(ui).value().copied() {
+        if let Some(picked) = Select::new(words.target.clone(), Bind::given(current), &entries).sizing(Sizing::Content).show(ui).value().copied() {
             options.target = picked;
         }
     });
@@ -508,9 +603,11 @@ pub struct HostedGuideLayoutDialog {
     build: Box<Build>,
     preview: Option<Vec<Guide>>,
     requests: HostRequests,
-    /// Whether the dialog is open: bound to the dialog's `opened` prop.
-    #[allow(dead_code)] // P3(dialogs-w13): dl.K36
+    /// Whether the dialog is open: bound to the dialog's `opened` prop, so the host's dialog closes with it.
     open: bool,
+    /// The Preview check box, bound to the dialog's `preview` prop so automation reads and sets it. Starts on, as
+    /// the unbound dialog does at every open.
+    preview_on: bool,
 }
 
 impl HostedGuideLayoutDialog {
@@ -523,6 +620,7 @@ impl HostedGuideLayoutDialog {
             preview: None,
             requests: HostRequests::new(),
             open: true,
+            preview_on: true,
         }
     }
 
@@ -545,18 +643,68 @@ impl HostedGuideLayoutDialog {
 impl StackDialog for HostedGuideLayoutDialog {
     type Result = GuideLayoutResult;
 
-    fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
-        let _ = ctx;
-        todo!("dl.K36")
+    /// Answers what OK answers: the guide list of [`layout_guides`]; `None` while the layout is invalid.
+    fn confirm(&mut self, _ctx: &egui::Context) -> Option<Self::Result> {
+        let GuideLayoutDialog { units, document, artboards, existing, first_key, .. } = (self.build)(Bind::bound(&mut self.values));
+        let values = self.values;
+        let guides = layout_guides(&values, &units, &document, &artboards, &existing, first_key).ok()?;
+        Some(GuideLayoutResult { options: values.options, guides, color: values.color.rgba() })
     }
 
-    fn json_fields(&self) -> Option<serde_json::Value> {
-        todo!("dl.K36")
+    /// `preset`, `target`, `columns` and `rows` (`{enabled, number, size, gutter}`), `marginEnabled`, `margin` (top,
+    /// left, bottom, right), `centerColumns`, `clearExisting`, `color` and `preview`. A length is `{value, unit}`.
+    fn json_fields(&self) -> Option<Value> {
+        let options = &self.values.options;
+        Some(json!({
+            "preset": name_of(&PRESET_NAMES, options.preset),
+            "target": name_of(&TARGET_NAMES, options.target),
+            "columns": group_json(&options.columns),
+            "rows": group_json(&options.rows),
+            "marginEnabled": options.margin_enabled,
+            "margin": options.margin.map(length_json),
+            "centerColumns": options.center_columns,
+            "clearExisting": options.clear_existing,
+            "color": color_json(self.values.color),
+            "preview": self.preview_on,
+        }))
     }
 
-    fn set_json_field(&mut self, ctx: &egui::Context, field: &str, value: serde_json::Value) -> Result<(), String> {
-        let _ = (ctx, field, value);
-        todo!("dl.K36")
+    /// Sets a field as its row does: `preset` applies the preset, an edit of a layout field turns the preset to
+    /// Custom, and `target` takes Selected Artboards only while the dialog lists it.
+    fn set_json_field(&mut self, _ctx: &egui::Context, field: &str, value: Value) -> Result<(), String> {
+        let has_artboards = !(self.build)(Bind::bound(&mut self.values)).artboards.is_empty();
+        let rejects = || FieldRefusal::Rejects(&value).message(field);
+        let before = self.values.options;
+        let options = &mut self.values.options;
+        let flag = || value.as_bool().ok_or_else(rejects);
+        match field {
+            "preset" => pick_preset(options, named(&PRESET_NAMES, &value).ok_or_else(rejects)?),
+            "target" => match named(&TARGET_NAMES, &value) {
+                Some(GuideTarget::SelectedArtboards) if !has_artboards => return Err(rejects()),
+                Some(target) => options.target = target,
+                None => return Err(rejects()),
+            },
+            "columns" => options.columns = read_group(&value).ok_or_else(rejects)?,
+            "rows" => options.rows = read_group(&value).ok_or_else(rejects)?,
+            "marginEnabled" => options.margin_enabled = flag()?,
+            "margin" => {
+                let sides = value.as_array().filter(|sides| sides.len() == 4).ok_or_else(rejects)?;
+                let mut margin = options.margin;
+                for (side, length) in margin.iter_mut().zip(sides) {
+                    *side = read_length(length).ok_or_else(rejects)?;
+                }
+                options.margin = margin;
+            }
+            "centerColumns" => options.center_columns = flag()?,
+            "clearExisting" => options.clear_existing = flag()?,
+            "color" => self.values.color = read_color(&value).ok_or_else(rejects)?,
+            "preview" => self.preview_on = flag()?,
+            _ => return Err(FieldRefusal::Unknown.message(field)),
+        }
+        if field != "preset" {
+            turn_custom(&mut self.values.options, &before);
+        }
+        Ok(())
     }
 
     fn id(&self) -> DialogId {
@@ -564,7 +712,11 @@ impl StackDialog for HostedGuideLayoutDialog {
     }
 
     fn show(&mut self, ui: &mut Ui, _: &DialogStack) -> Option<DialogResult<GuideLayoutResult>> {
-        let shown = (self.build)(Bind::bound(&mut self.values)).answers(self.requests.take_answers()).show(ui);
+        let shown = (self.build)(Bind::bound(&mut self.values))
+            .answers(self.requests.take_answers())
+            .opened(Bind::bound(&mut self.open))
+            .preview(Bind::bound(&mut self.preview_on))
+            .show(ui);
         self.preview = shown.preview;
         self.requests.extend(shown.requests);
         match (shown.result, shown.closed) {
