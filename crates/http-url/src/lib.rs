@@ -1,3 +1,24 @@
+//! Bounded HTTP/HTTPS URL parsing and redirect resolution, extracted from LightCraft.
+//!
+//! This is syntax handling, not a network permission or SSRF policy. It permits local/private
+//! hosts and performs no DNS, socket or TLS operations. Callers own destination allowlists,
+//! credential forwarding, redirect counts, connection deadlines and response limits.
+//! Only parsed values have validated fields; constructing public fields bypasses parsing.
+
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+/// A URL or redirect cannot be represented by this bounded HTTP URL syntax.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UrlError(pub String);
+
+impl std::fmt::Display for UrlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for UrlError {}
+
 /// A parsed `http://` or `https://` URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Url {
@@ -46,8 +67,8 @@ fn strip_scheme<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 }
 
 impl Url {
-    pub fn parse(s: &str) -> Result<Url, HttpError> {
-        let bad = |why: &str| HttpError::BadUrl(why.to_string());
+    pub fn parse(s: &str) -> Result<Url, UrlError> {
+        let bad = |why: &str| UrlError(why.to_string());
         if s.len() > 16 * 1024 {
             return Err(bad("URL exceeds 16 KiB"));
         }
@@ -99,12 +120,16 @@ impl Url {
     }
 
     /// `Location` of a redirect, resolved against this URL.
-    pub fn join(&self, location: &str) -> Result<Url, HttpError> {
+    pub fn join(&self, location: &str) -> Result<Url, UrlError> {
+        // Reject before concatenating a hostile Location with the base URL.
+        if location.len() > 16 * 1024 || self.host.len().saturating_add(self.path.len()) > 16 * 1024 {
+            return Err(UrlError("URL exceeds 16 KiB".into()));
+        }
         let l = location.trim();
         if strip_scheme(l, "http://").is_some() || strip_scheme(l, "https://").is_some() {
             let url = Url::parse(l)?;
             if self.tls && !url.tls {
-                return Err(HttpError::BadUrl("redirect from https to http refused".into()));
+                return Err(UrlError("redirect from https to http refused".into()));
             }
             return Ok(url);
         }
@@ -113,7 +138,7 @@ impl Url {
             && !scheme.is_empty()
             && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
         {
-            return Err(HttpError::BadUrl(format!("redirect to an unsupported location `{scheme}:`")));
+            return Err(UrlError(format!("redirect to an unsupported location `{scheme}:`")));
         }
         let scheme = if self.tls { "https" } else { "http" };
         let host = if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() };
@@ -138,7 +163,8 @@ impl Url {
         Url::parse(&format!("{base}{dir}/{l}"))
     }
 
-    fn host_header(&self) -> String {
+    /// Authority formatted for an HTTP Host field.
+    pub fn host_header(&self) -> String {
         let host = if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() };
         let default = if self.tls { 443 } else { 80 };
         if self.port == default { host } else { format!("{host}:{}", self.port) }
@@ -153,7 +179,8 @@ impl Url {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+    use super::{Url, UrlError};
 
     #[test]
     fn fragment_only_or_empty_location_keeps_file_name_and_query() {
@@ -166,6 +193,9 @@ mod tests {
 
     #[test]
     fn rejects_oversized_and_control_character_urls() {
+        let base = Url::parse("https://example.com/path").unwrap();
+        assert!(base.join(&format!("#{}", "x".repeat(16 * 1024))).is_err());
+        assert!(base.join(&"x".repeat(16 * 1024 + 1)).is_err());
         assert!(Url::parse(&format!("https://example.com/{}", "x".repeat(16 * 1024))).is_err());
         assert!(Url::parse("https://example.com/x?secret=abc\r\nInjected: 1").is_err());
     }
@@ -222,7 +252,7 @@ mod tests {
     #[test]
     fn rejects_text_after_a_bracketed_ipv6_host() {
         for bad in ["http://[::1]junk/x", "https://[::1]junk/x", "http://[::1]8080/x", "http://[::1]8080"] {
-            assert!(matches!(Url::parse(bad), Err(HttpError::BadUrl(_))), "{bad}");
+            assert!(matches!(Url::parse(bad), Err(UrlError(_))), "{bad}");
         }
         let u = Url::parse("http://[::1]:8080/x").unwrap();
         assert_eq!((u.host.as_str(), u.port), ("::1", 8080));
@@ -244,5 +274,4 @@ mod tests {
         assert!(!plain.join("http://127.0.0.1:9/b").unwrap().tls);
         assert!(plain.join("https://b.example/z").unwrap().tls);
     }
-
 }
