@@ -78,7 +78,10 @@ fn encrypt_dict(h: &SecurityHandler) -> String {
 /// catalog's in the clear, unless `/V` is below 4, where the entry means nothing and every stream
 /// is encrypted.
 fn encrypted_by_hand(alg: Algorithm) -> Vec<u8> {
-    let params = NewEncryption { algorithm: alg, user_password: "", owner_password: "own", permissions: -4, encrypt_metadata: false, seed: [3; 32] };
+    // Below revision 4 the key doesn't depend on `/EncryptMetadata` (Algorithm 2 step f), so a
+    // handler made with the metadata encrypted is the one the dictionary below describes.
+    let encrypt_metadata = matches!(alg, Algorithm::Rc4_40 | Algorithm::Rc4_128);
+    let params = NewEncryption { algorithm: alg, user_password: "", owner_password: "own", permissions: -4, encrypt_metadata, seed: [3; 32] };
     let h = craft_pdf::crypt::create_legacy(&params, &unhex(ID)).unwrap();
     let content = h.encrypt_stream(4, 0, SECRET.as_bytes(), StreamKind::Normal);
     let doc_meta = if h.dict().v >= 4 { DOC_XMP.as_bytes().to_vec() } else { h.encrypt_stream(5, 0, DOC_XMP.as_bytes(), StreamKind::Normal) };
