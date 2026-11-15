@@ -1844,6 +1844,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gzip"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+]
+
+[[package]]
 name = "craft-hdr"
 version = "0.1.0"
 dependencies = [
@@ -2384,13 +2391,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-plist"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "craft-platform"
 version = "0.1.0"
 dependencies = [
@@ -2405,6 +2405,13 @@ dependencies = [
  "wasm-bindgen-test",
  "web-sys",
  "zbus",
+]
+
+[[package]]
+name = "craft-plist"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
