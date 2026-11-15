@@ -28,6 +28,7 @@ mod inspection;
 mod lab;
 mod options;
 pub mod orientation;
+pub mod png_probe;
 pub mod resolution;
 pub mod source_settings;
 pub mod web;
