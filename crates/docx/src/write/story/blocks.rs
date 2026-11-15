@@ -131,7 +131,7 @@ impl Writer<'_> {
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
                 tcpr(w, &c.props, chg.as_ref());
                 let span = c.span();
-                let text = style.as_ref().map(|st| cell_text(st, t, (ri, nrows), (g, span, ncols)));
+                let text = style.as_ref().map(|st| cell_text(st, t, (ri, nrows), (g, span, cols)));
                 let outer = std::mem::replace(&mut self.table_text, text);
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
                 self.table_text = outer;

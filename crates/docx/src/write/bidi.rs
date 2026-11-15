@@ -88,10 +88,14 @@ fn direct(c: &mut CharProps, lang: Option<&String>, m: &CharProps) {
     // A run that says it isn't complex script (`w:cs w:val="0"`) was drawn in its ordinary
     // formatting whatever its complex-script values say: those are written as the ordinary ones.
     let off = m.cs == Some(false);
-    if (off || m.font_cs.is_none())
-        && let Some(f) = &m.font
-    {
-        c.font_cs = Some(f.clone());
+    if let Some(f) = &m.font {
+        if off || m.font_cs.is_none() {
+            c.font_cs = Some(f.clone());
+        }
+    } else if off && m.font_cs.is_some() {
+        // Nothing names an ordinary font: it was drawn in the body font, not the complex-script
+        // one it inherits (without one, a right-to-left piece falls back to the body font itself).
+        c.font_cs = Some(craft_wordmodel::styles::BODY_FONT.to_string());
     }
     if off || m.size_cs.is_none() {
         c.size_cs = Some(m.size.unwrap_or(craft_wordmodel::props::DEFAULT_FONT_SIZE));
