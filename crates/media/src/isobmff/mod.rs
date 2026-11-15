@@ -26,7 +26,7 @@ pub use codec::{
     AacConfig, ApvConfig, AudioParams, Av1Config, AvcConfig, BitRate, CleanAperture, CodecConfig, ColorInfo, FieldInfo, FlacConfig, HevcConfig,
     HevcNalArray, MasteringDisplay, OpusConfig, PcmConfig, SampleEntry, TimecodeConfig, VideoParams, VpcConfig, parse_asc,
 };
-pub use config_fields::{avcc_length_size, hvcc_length_size_and_tid};
+pub use config_fields::{avcc_length_size, dac3_layout, dec3_layout, esds_object_type, hvcc_length_size_and_tid};
 pub use demux::{Edit, Metadata, Mp4File, Sample, SampleGroup, Track, TrackKind, open};
 pub use error::{Error, Result};
 pub use mux::{Brand, FragmentedWriter, Mp4Writer, TrackConfig, WriteSample, WriterOptions};
