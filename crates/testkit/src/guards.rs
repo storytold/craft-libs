@@ -115,13 +115,13 @@ impl AsFileSource for &(&str, String) {
 const MAX_NESTING: usize = 64;
 
 /// The most segments of a `use` path that [`use_leaves`] keeps. The guards compare paths of at most
-/// three segments, so a leaf with a longer path is left out, and a long prefix shared by many leaves
-/// is not copied into each of them.
+/// three segments, so a leaf with a longer path keeps only the name it binds, and a long prefix shared
+/// by many leaves is not copied into each of them.
 const MAX_USE_PATH: usize = 8;
 
 /// The longest segment, in bytes, of a `use` path that [`use_leaves`] keeps. The longest segment the
-/// guards compare is `PredefinedMenuItem`, so a leaf with a longer segment is left out, and a long name
-/// shared by many leaves is not copied into each of them.
+/// guards compare is `PredefinedMenuItem`, so a leaf with a longer segment keeps only the name it binds,
+/// and a long name shared by many leaves is not copied into each of them.
 const MAX_USE_SEGMENT: usize = 32;
 
 /// The kind of a Rust token. Comments are dropped; string, character and number literals keep no text
@@ -458,15 +458,28 @@ fn opens_qualified_path(toks: &[Token], i: usize) -> bool {
 /// One name a `use` declaration brings into scope.
 #[derive(Debug)]
 struct UseLeaf {
-    /// The full path, `self` removed and without a leading `::`.
+    /// The full path, `self` removed and without a leading `::`. It is empty for a path longer than
+    /// [`MAX_USE_PATH`] segments or with a segment longer than [`MAX_USE_SEGMENT`] bytes, whose leaf then
+    /// records only the name it binds.
     path: Vec<String>,
-    /// The name it is bound to; `None` for a glob import.
-    name: Option<String>,
+    /// The name it is bound to, `_` for an underscore import; `None` for a glob import. The name is
+    /// shared with the other leaves that bind the same segment of one path.
+    name: Option<Rc<str>>,
+    /// The first segment of the path, kept when the path is not.
+    root: Option<Rc<str>>,
     line: usize,
     /// Index of the `use` keyword.
     start: usize,
     /// Index of the alias of `std::time` that the path was read through, when [`use_leaves`] was given one.
     alias: Option<usize>,
+}
+
+impl UseLeaf {
+    /// The name the leaf binds in scope: `None` for a glob import and for an underscore import, which
+    /// imports an item without binding a name.
+    fn binding(&self) -> Option<&str> {
+        self.name.as_deref().filter(|name| *name != "_")
+    }
 }
 
 /// Every name the `use` declarations of a file bring into scope. A path that starts with a name in
@@ -494,7 +507,7 @@ fn use_leaves(toks: &[Token], time_aliases: &BTreeSet<String>) -> Vec<UseLeaf> {
 fn parse_use_tree(
     toks: &[Token],
     pos: &mut usize,
-    prefix: &mut Vec<String>,
+    prefix: &mut Vec<Rc<str>>,
     // The index of the `use` keyword, and of the alias of `std::time` that `prefix` was read through.
     (start, mut via): (usize, Option<usize>),
     out: &mut Vec<UseLeaf>,
@@ -513,10 +526,10 @@ fn parse_use_tree(
                 *pos += 1;
                 if toks.get(*pos).is_some_and(|t| t.is_punct(':')) && toks.get(*pos + 1).is_some_and(|t| t.is_punct(':')) {
                     if prefix.is_empty() && time_aliases.contains(name) {
-                        prefix.extend(["std".to_string(), "time".to_string()]);
+                        prefix.extend([Rc::from("std"), Rc::from("time")]);
                         via = Some(*pos - 1);
                     } else {
-                        prefix.push(name.clone());
+                        prefix.push(Rc::from(name.as_str()));
                     }
                     *pos += 2;
                     continue;
@@ -529,21 +542,34 @@ fn parse_use_tree(
                     }
                     _ => None,
                 };
-                if length <= MAX_USE_PATH && short_segments(prefix) && name.len() <= MAX_USE_SEGMENT {
-                    let mut path = prefix.clone();
+                // The name the leaf binds: its alias, its last name, or for `self` the last segment of
+                // the prefix, shared rather than copied.
+                let bound = match alias {
+                    Some(alias) => Some(Rc::from(alias.as_str())),
+                    None if name != "self" => Some(Rc::from(name.as_str())),
+                    None => prefix.last().cloned(),
+                };
+                // A path past the limits is not copied, but the leaf still binds its name, so that the name
+                // does not read as unbound.
+                let path = if length <= MAX_USE_PATH && short_segments(prefix) && name.len() <= MAX_USE_SEGMENT {
+                    let mut path: Vec<String> = prefix.iter().map(|segment| segment.to_string()).collect();
                     if name != "self" {
                         path.push(name.clone());
                     }
-                    let bound = alias.cloned().or_else(|| path.last().cloned());
-                    if let Some(bound) = bound.filter(|b| b != "_") {
-                        out.push(UseLeaf { path, name: Some(bound), line, start, alias: via });
-                    }
+                    path
+                } else {
+                    Vec::new()
+                };
+                if bound.is_some() {
+                    let root = prefix.first().cloned().or_else(|| Some(Rc::from(name.as_str())));
+                    out.push(UseLeaf { path, name: bound, root, line, start, alias: via });
                 }
                 break;
             }
             Kind::Punct('*') => {
                 if prefix.len() <= MAX_USE_PATH && short_segments(prefix) {
-                    out.push(UseLeaf { path: prefix.clone(), name: None, line, start, alias: via });
+                    let path = prefix.iter().map(|segment| segment.to_string()).collect();
+                    out.push(UseLeaf { path, name: None, root: prefix.first().cloned(), line, start, alias: via });
                 }
                 *pos += 1;
                 break;
@@ -572,7 +598,7 @@ fn parse_use_tree(
 }
 
 /// Whether every segment of `path` is at most [`MAX_USE_SEGMENT`] bytes long.
-fn short_segments(path: &[String]) -> bool {
+fn short_segments(path: &[Rc<str>]) -> bool {
     path.iter().all(|segment| segment.len() <= MAX_USE_SEGMENT)
 }
 
@@ -1092,7 +1118,8 @@ fn module_files(parent: &str, decl: &ModDecl, path_loaded: bool) -> Vec<String> 
 
 /// For each file, whether it is native-only: a `mod` declaration in a native-only item, or any declaration
 /// in a native-only file, names it, and no chain of declarations outside native-only items reaches it from
-/// a crate root (a file that no declaration names).
+/// a crate root (a file that no declaration names, or in a cycle of declarations that no file outside the
+/// cycle names, its `lib.rs` or `main.rs`, or every member when it has neither).
 fn native_only_files(paths: &[String], decls: &[Vec<ModDecl>]) -> Vec<bool> {
     let mut index: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (i, path) in paths.iter().enumerate() {
@@ -1119,6 +1146,30 @@ fn native_only_files(paths: &[String], decls: &[Vec<ModDecl>]) -> Vec<bool> {
         })
         .collect();
 
+    // A group of files that name each other in a cycle, and that no file outside the group names, has no
+    // member that a crate root can reach. rustc does not load a cycle of enabled declarations, so such a
+    // cycle runs through a declaration the build leaves out. When the group holds a `lib.rs` or `main.rs`,
+    // those files are its crate roots and the declarations that name them are read as left out; otherwise
+    // no declaration of the group names its own members, and each of them can be a crate root.
+    let file_edges: Vec<Vec<usize>> =
+        (0..paths.len()).map(|file| edges[2 * file].iter().chain(&edges[2 * file + 1]).map(|&(_, target)| target / 2).collect()).collect();
+    let component = components(&file_edges);
+    let root_file = |file: usize| matches!(paths[file].rsplit('/').next(), Some("lib.rs" | "main.rs"));
+    let mut entered = vec![false; paths.len()];
+    let mut has_root = vec![false; paths.len()];
+    for (file, targets) in file_edges.iter().enumerate() {
+        has_root[component[file]] |= root_file(file);
+        for &target in targets {
+            if component[target] != component[file] {
+                entered[component[target]] = true;
+            }
+        }
+    }
+    let names = |node: usize, target: usize| {
+        let group = component[target / 2];
+        component[node / 2] != group || entered[group] || (has_root[group] && !root_file(target / 2))
+    };
+
     // The nodes that are loaded: a file that no loaded node names is a crate root, loaded plainly, and a
     // node is loaded when a loaded node names it. Every file starts out loaded plainly, and the set is
     // narrowed until it stops changing, or after `MAX_MODULE_ROUNDS` rounds.
@@ -1129,7 +1180,9 @@ fn native_only_files(paths: &[String], decls: &[Vec<ModDecl>]) -> Vec<bool> {
         for (node, targets) in edges.iter().enumerate() {
             if loaded[node] {
                 for &(_, target) in targets {
-                    reached[target] = true;
+                    if names(node, target) {
+                        reached[target] = true;
+                    }
                 }
             }
         }
@@ -1179,6 +1232,63 @@ fn native_only_files(paths: &[String], decls: &[Vec<ModDecl>]) -> Vec<bool> {
 
 /// The most rounds [`native_only_files`] spends narrowing the set of loaded files.
 const MAX_MODULE_ROUNDS: usize = 16;
+
+/// For each node of the graph `edges`, the number of its strongly connected component (Tarjan's
+/// algorithm, with an explicit stack in place of recursion).
+fn components(edges: &[Vec<usize>]) -> Vec<usize> {
+    const UNSEEN: usize = usize::MAX;
+    let mut index = vec![UNSEEN; edges.len()];
+    let mut low = vec![0; edges.len()];
+    let mut on_stack = vec![false; edges.len()];
+    let mut component = vec![UNSEEN; edges.len()];
+    let mut stack = Vec::new();
+    let mut next = 0;
+    let mut count = 0;
+    for root in 0..edges.len() {
+        if index[root] != UNSEEN {
+            continue;
+        }
+        index[root] = next;
+        low[root] = next;
+        next += 1;
+        stack.push(root);
+        on_stack[root] = true;
+        // Each frame is a node and the position of the next edge of it to follow.
+        let mut work = vec![(root, 0usize)];
+        while let Some(frame) = work.last_mut() {
+            let node = frame.0;
+            if let Some(&target) = edges[node].get(frame.1) {
+                frame.1 += 1;
+                if index[target] == UNSEEN {
+                    index[target] = next;
+                    low[target] = next;
+                    next += 1;
+                    stack.push(target);
+                    on_stack[target] = true;
+                    work.push((target, 0));
+                } else if on_stack[target] {
+                    low[node] = low[node].min(index[target]);
+                }
+                continue;
+            }
+            work.pop();
+            if let Some(&(parent, _)) = work.last() {
+                low[parent] = low[parent].min(low[node]);
+            }
+            if low[node] == index[node] {
+                while let Some(member) = stack.pop() {
+                    on_stack[member] = false;
+                    component[member] = count;
+                    if member == node {
+                        break;
+                    }
+                }
+                count += 1;
+            }
+        }
+    }
+    component
+}
 
 /// The innermost `{` around each token, and for each `}` the `{` it closes.
 fn brace_scopes(toks: &[Token]) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
@@ -1237,7 +1347,9 @@ fn report(findings: &mut Vec<Finding>, path: &str, content: &str, lines: &BTreeS
 /// The guard reads Rust tokens, so comments, strings and character literals are ignored, and whitespace
 /// or line breaks around `::` do not hide a call. A qualified path such as `<muda::PredefinedMenuItem>::quit`
 /// is reported too. A path that names the type through another crate or module, such as
-/// `other::PredefinedMenuItem::quit`, is not. It also follows a `use` or a `type` alias that renames
+/// `other::PredefinedMenuItem::quit`, is not, and neither is a path through a name `muda` that the innermost
+/// braces binding it bind only to something else (`use other_menu as muda;`, `mod muda`), read like a name
+/// used on its own below; `::muda::PredefinedMenuItem` always names the crate. It also follows a `use` or a `type` alias that renames
 /// muda's type (`use muda::PredefinedMenuItem as Item;` then `Item::quit`); a rename of another crate's
 /// `PredefinedMenuItem` is not followed.
 ///
@@ -1329,7 +1441,7 @@ where
             |i: usize| i.checked_sub(1).is_some_and(|k| ["struct", "enum", "union", "type", "trait"].iter().any(|kw| toks[k].is_ident(kw)));
         // The names of muda's type: its own, and each name a `use` or a `type` alias gives it.
         let mut names: BTreeSet<&str> = BTreeSet::from(["PredefinedMenuItem"]);
-        names.extend(leaves.iter().filter(|leaf| is_muda(leaf)).filter_map(|leaf| leaf.name.as_deref()));
+        names.extend(leaves.iter().filter(|leaf| is_muda(leaf)).filter_map(UseLeaf::binding));
         for (i, t) in toks.iter().enumerate() {
             if let Kind::Ident(name) = &t.kind
                 && i.checked_sub(1).is_some_and(|k| toks[k].is_ident("type"))
@@ -1345,11 +1457,11 @@ where
         let gated = cfg_covered(&toks, true);
         let mut bound: BTreeMap<(&str, Option<usize>), (bool, bool)> = BTreeMap::new();
         for leaf in &leaves {
-            let Some(name) = leaf.name.as_deref().filter(|name| names.contains(name)) else { continue };
+            let Some(name) = leaf.binding().filter(|name| names.contains(name)) else { continue };
             let muda = is_muda(leaf);
             // A path into this crate (`crate::`, `self::`, `super::`) may lead to a re-export of muda's
             // type, so it is not counted as another type.
-            let local = leaf.path.first().is_some_and(|s| matches!(s.as_str(), "crate" | "self" | "super"));
+            let local = leaf.root.as_deref().is_some_and(|s| matches!(s, "crate" | "self" | "super"));
             if muda || (!local && !gated.get(leaf.start).copied().unwrap_or(false)) {
                 let entry = bound.entry((name, around.get(leaf.start).copied().flatten())).or_default();
                 if muda {
@@ -1389,6 +1501,30 @@ where
             Some(Some((muda, other))) => muda || !other,
             Some(None) => name == "PredefinedMenuItem",
         };
+        // For each pair of braces (`None` for the file), whether a `use` in it binds the name `muda` to the
+        // crate, and whether a `use` or a `mod` in it binds `muda` to something else, with the same
+        // exceptions as for the type's names.
+        let mut crate_bound: BTreeMap<Option<usize>, (bool, bool)> = BTreeMap::new();
+        for leaf in leaves.iter().filter(|leaf| leaf.binding() == Some("muda")) {
+            let local = leaf.root.as_deref().is_some_and(|s| matches!(s, "crate" | "self" | "super"));
+            let entry = around.get(leaf.start).copied().flatten();
+            if leaf.path == ["muda"] {
+                crate_bound.entry(entry).or_default().0 = true;
+            } else if !local && !gated.get(leaf.start).copied().unwrap_or(false) {
+                crate_bound.entry(entry).or_default().1 = true;
+            }
+        }
+        for (i, t) in toks.iter().enumerate() {
+            if t.is_ident("muda") && i.checked_sub(1).is_some_and(|k| toks[k].is_ident("mod")) && !gated[i] {
+                crate_bound.entry(around[i]).or_default().1 = true;
+            }
+        }
+        // Whether `muda` at `i` names the crate: after a leading `::` it always does, and otherwise unless
+        // the innermost braces around it that bind `muda` bind it only to something else.
+        let crate_is_muda = |i: usize| {
+            let absolute = i >= 2 && toks[i - 1].is_punct(':') && toks[i - 2].is_punct(':');
+            absolute || !matches!(lookup(&toks, &around, i, |scope| crate_bound.get(&scope).copied()), Some(Some((false, true))))
+        };
         let mut lines = BTreeSet::new();
         for (i, tok) in toks.iter().enumerate() {
             let Kind::Ident(name) = &tok.kind else { continue };
@@ -1398,7 +1534,7 @@ where
             // A qualified name counts only as `muda::PredefinedMenuItem` (or `::muda::...`), not as
             // another crate's or module's type of the same name.
             let named = if continues_a_path(&toks, i) {
-                name == "PredefinedMenuItem" && toks[i - 3].is_ident("muda") && !continues_a_path(&toks, i - 3)
+                name == "PredefinedMenuItem" && toks[i - 3].is_ident("muda") && !continues_a_path(&toks, i - 3) && crate_is_muda(i - 3)
             } else {
                 bare_is_muda(name, i)
             };
@@ -1440,7 +1576,9 @@ where
 ///   is not known from the source, so the item is checked. Escapes in a predicate's string values are decoded.
 /// * **Module files**: a `mod name;` inside such an item makes the module's file native-only, and so are the
 ///   files of the modules declared in it, when they are among `files`, unless a chain of declarations outside
-///   such items also reaches the file from a crate root (a file that no declaration names). The module's file is `name.rs` or
+///   such items also reaches the file from a crate root (a file that no declaration names, or in a cycle of
+///   declarations that no file outside the cycle names, such as `lib.rs` naming itself through `#[path]`, the
+///   cycle's `lib.rs` or `main.rs`, or every file of the cycle when it has neither). The module's file is `name.rs` or
 ///   `name/mod.rs` next to `lib.rs`, `main.rs`, `mod.rs` or a file that a `#[path]` attribute names, and in
 ///   the folder named after any other file's stem, below the folders of enclosing inline modules; a `#[path = "..."]` attribute on the declaration
 ///   or on an enclosing inline module is followed. Paths are compared as text with `\` read as `/`, so the files must be named the same way
@@ -1481,14 +1619,14 @@ where
         let modules: BTreeSet<String> = leaves
             .iter()
             .filter(|leaf| leaf.path == ["std", "time"] && !skip.get(leaf.start).copied().unwrap_or(false))
-            .filter_map(|leaf| leaf.name.clone())
+            .filter_map(|leaf| leaf.binding().map(str::to_owned))
             .collect();
         // For each alias name and each pair of braces (`None` for the file), whether a `use` in it binds
         // the name to `std::time`, and whether a `use` or a `mod` in it binds the name to something else.
         let (around, _) = brace_scopes(&toks);
         let mut bound: BTreeMap<(&str, Option<usize>), (bool, bool)> = BTreeMap::new();
         for leaf in &leaves {
-            let Some(name) = leaf.name.as_deref().filter(|name| modules.contains(*name)) else { continue };
+            let Some(name) = leaf.binding().filter(|name| modules.contains(*name)) else { continue };
             if !skip.get(leaf.start).copied().unwrap_or(false) {
                 let entry = bound.entry((name, around.get(leaf.start).copied().flatten())).or_default();
                 if leaf.path == ["std", "time"] {
@@ -1515,12 +1653,13 @@ where
             Some(None) => false,
         };
         // Read again with the aliases of `std::time`, so a path through an alias starts with `std::time`.
+        // The leaves read without aliases are checked as well, since an alias does not reach every `use`
+        // whose path starts with its name (an alias in a nested module named `std`).
         let aliased = if modules.is_empty() { Vec::new() } else { use_leaves(&toks, &modules) };
-        let leaves = if modules.is_empty() { &leaves } else { &aliased };
         let is_std_time = |path: &[String]| path == ["std", "time"];
 
         let mut lines = BTreeSet::new();
-        for leaf in leaves {
+        for leaf in leaves.iter().chain(&aliased) {
             if skip.get(leaf.start).copied().unwrap_or(false) {
                 continue;
             }
@@ -1929,11 +2068,25 @@ mod tests {
 
     use super::{MAX_USE_PATH, MAX_USE_SEGMENT, lex_rust, use_leaves};
 
+    fn paths_and_names(source: &str) -> Vec<(Vec<String>, Option<String>)> {
+        use_leaves(&lex_rust(source), &BTreeSet::new()).into_iter().map(|leaf| (leaf.path, leaf.name.map(|name| name.to_string()))).collect()
+    }
+
     #[test]
     fn use_leaves_keep_no_path_longer_than_the_limit() {
         let source = format!("use {}{{x, y::z, *}};\nuse std::time::{{Instant, self as t}};\n", "a::".repeat(MAX_USE_PATH));
-        let paths: Vec<Vec<String>> = use_leaves(&lex_rust(&source), &BTreeSet::new()).into_iter().map(|leaf| leaf.path).collect();
-        assert_eq!(paths, vec![vec!["a"; MAX_USE_PATH], vec!["std", "time", "Instant"], vec!["std", "time"]]);
+        let some = |name: &str| Some(name.to_string());
+        let path = |segments: &[&str]| segments.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            paths_and_names(&source),
+            vec![
+                (Vec::new(), some("x")),
+                (Vec::new(), some("z")),
+                (vec!["a".to_string(); MAX_USE_PATH], None),
+                (path(&["std", "time", "Instant"]), some("Instant")),
+                (path(&["std", "time"]), some("t")),
+            ]
+        );
     }
 
     #[test]
@@ -1941,8 +2094,15 @@ mod tests {
         let long = "n".repeat(MAX_USE_SEGMENT + 1);
         let fits = "n".repeat(MAX_USE_SEGMENT);
         let source = format!("use {long}::{{self, x, *}};\nuse a::{long};\nuse {fits}::{{self as b, *}};\n");
-        let leaves = use_leaves(&lex_rust(&source), &BTreeSet::new());
-        let paths: Vec<(Vec<String>, Option<String>)> = leaves.into_iter().map(|leaf| (leaf.path, leaf.name)).collect();
-        assert_eq!(paths, vec![(vec![fits.clone()], Some("b".to_string())), (vec![fits], None)]);
+        assert_eq!(
+            paths_and_names(&source),
+            vec![
+                (Vec::new(), Some(long.clone())),
+                (Vec::new(), Some("x".to_string())),
+                (Vec::new(), Some(long)),
+                (vec![fits.clone()], Some("b".to_string())),
+                (vec![fits], None),
+            ]
+        );
     }
 }
