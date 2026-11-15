@@ -27,6 +27,7 @@ mod fontconfig;
 mod outline;
 mod registry;
 mod scan;
+mod segments;
 mod shape;
 mod suitcase;
 pub mod system;
@@ -37,6 +38,7 @@ pub use fallback::{cluster_face, drawable_characters};
 pub use fontconfig::fontconfig_dirs;
 pub use outline::{FontOutline, GlyphPen, OutlineError};
 pub use scan::{FaceInfo, LocalizedName, Source, is_font_file, style_italic, style_weight, style_width};
+pub use segments::SegmentBoundary;
 pub use shape::{RunGlyph, RunInput, ShapeRunError, shape_run};
 
 #[cfg(test)]
