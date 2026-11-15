@@ -44,8 +44,11 @@ fn hlg_signal(rgb: [f32; 3]) -> [f32; 3] {
 pub fn encode_avif_with_speed(img: &Image, quality: u8, speed: u8) -> Result<Vec<u8>, CodecError> {
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     {
-        let mut enc =
-            ravif::Encoder::new().with_quality(f32::from(quality.clamp(1, 100))).with_speed(speed.clamp(1, 10)).with_bit_depth(ravif::BitDepth::Ten);
+        let mut enc = ravif::Encoder::new()
+            .with_quality(f32::from(quality.clamp(1, 100)))
+            .with_alpha_quality(f32::from(quality.clamp(1, 100)))
+            .with_speed(speed.clamp(1, 10))
+            .with_bit_depth(ravif::BitDepth::Ten);
         if let Some(exif) = img.meta.exif.as_deref() {
             enc = enc.with_exif(exif);
         }
@@ -220,6 +223,27 @@ pub fn encode_avif_hdr(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn sdr_avif_uses_requested_alpha_quality() {
+        use crate::{ChannelLayout, Image};
+
+        let pixels: Vec<ravif::RGBA8> = (0..1024).map(|i| ravif::RGBA8::new(100, 120, 140, ((i * 37) % 256) as u8)).collect();
+        let samples: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
+        let image = Image::from_u8(32, 32, ChannelLayout::Rgba, samples).unwrap();
+        let actual = super::encode_avif_with_speed(&image, 20, 10).unwrap();
+        let expected = ravif::Encoder::new()
+            .with_quality(20.0)
+            .with_alpha_quality(20.0)
+            .with_speed(10)
+            .with_bit_depth(ravif::BitDepth::Ten)
+            .with_alpha_color_mode(ravif::AlphaColorMode::UnassociatedClean)
+            .encode_rgba(ravif::Img::new(&pixels, 32, 32))
+            .unwrap()
+            .avif_file;
+        assert!(actual == expected, "encoded alpha must use the requested quality");
+    }
+
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     #[test]
     fn sdr_avif_keeps_exif_metadata() {
