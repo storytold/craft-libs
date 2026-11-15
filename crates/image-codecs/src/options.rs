@@ -32,6 +32,10 @@ impl Default for Limits {
 }
 
 impl Limits {
+    /// Construct explicit bounds for a caller-owned format adapter.
+    pub const fn new(max_width: u32, max_height: u32, max_pixels: u64, max_alloc: u64) -> Self {
+        Limits { max_width, max_height, max_pixels, max_alloc }
+    }
     /// For a decoder that writes a band of rows at a time into the document's tiles instead of
     /// one buffer (TIFF, #8169): the largest document size, 300,000 px a side, on 64-bit
     /// targets, with `max_alloc` bounding each group of bands. 32-bit targets keep the
@@ -85,7 +89,7 @@ impl Limits {
     /// never beats `max_ratio`:1. Called before the output buffer is allocated, so a
     /// header-only hostile file cannot make the decoder reserve gigabytes. A fixed 1 MiB of
     /// slack keeps tiny images and headers with large metadata unaffected.
-    pub(crate) fn check_plausible(declared_bytes: u64, file_len: usize, max_ratio: u64) -> Result<(), CodecError> {
+    pub fn check_plausible(declared_bytes: u64, file_len: usize, max_ratio: u64) -> Result<(), CodecError> {
         let capacity = (file_len as u64).saturating_mul(max_ratio).saturating_add(1 << 20);
         if declared_bytes > capacity {
             return Err(CodecError::LimitExceeded(format!("a {file_len} byte file cannot hold {declared_bytes} bytes of image data")));
