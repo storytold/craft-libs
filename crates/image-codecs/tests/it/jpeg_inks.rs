@@ -1,7 +1,7 @@
 //! `jpeg_inks`: four-component JPEGs read as Adobe-inverted inks, as `zune-jpeg`-based readers
 //! kept them, beside `decode`'s own reading.
 
-use craft_image_codecs::jpeg_inks::{decode_jpeg_inks, jpeg_components, jpeg_icc_profile};
+use craft_image_codecs::jpeg_inks::{decode_jpeg_inks, jpeg_components, jpeg_dimensions, jpeg_icc_profile};
 use craft_image_codecs::*;
 
 /// A `w` × `h` four-component JPEG of `samples` at quality 100, written by `jpeg-encoder` as
@@ -80,13 +80,24 @@ fn four_component_jpegs_read_as_inverted_inks() {
 fn headers_give_components_and_icc() {
     let icc: Vec<u8> = (0..200_000u32).map(|i| (i * 7 % 251) as u8).collect();
     let cmyk = four(8, 8, &[9; 256], jpeg_encoder::ColorType::Cmyk, Some(&icc));
-    assert_eq!(jpeg_components(&cmyk), Some(4));
+    assert_eq!((jpeg_components(&cmyk), jpeg_dimensions(&cmyk)), (Some(4), Some((8, 8))));
     assert_eq!(jpeg_icc_profile(&cmyk).as_deref(), Some(icc.as_slice()), "three APP2 segments");
     let gray = encode(&Image::from_u8(8, 8, ChannelLayout::Gray, vec![50; 64]).unwrap(), Format::Jpeg, &EncodeOptions::default()).unwrap();
     assert_eq!((jpeg_components(&gray), jpeg_icc_profile(&gray)), (Some(1), None));
     for not in [&b""[..], b"\xFF\xD8", b"\x89PNG\r\n\x1a\n"] {
-        assert_eq!((jpeg_components(not), jpeg_icc_profile(not)), (None, None));
+        assert_eq!((jpeg_components(not), jpeg_icc_profile(not), jpeg_dimensions(not)), (None, None, None));
     }
+}
+
+/// A frame header past 16384 pixels a side, `zune-jpeg`'s default, isn't read.
+#[test]
+fn sides_past_zunes_default_are_not_read() {
+    let mut gray = encode(&Image::from_u8(8, 8, ChannelLayout::Gray, vec![50; 64]).unwrap(), Format::Jpeg, &EncodeOptions::default()).unwrap();
+    let sof = gray.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+    gray[sof + 5..sof + 9].copy_from_slice(&[0x40, 0x00, 0x40, 0x00]);
+    assert_eq!(jpeg_dimensions(&gray), Some((16384, 16384)));
+    gray[sof + 7..sof + 9].copy_from_slice(&[0x40, 0x01]);
+    assert_eq!((jpeg_dimensions(&gray), jpeg_components(&gray)), (None, None));
 }
 
 /// What isn't a four-component image `zune-jpeg` decodes is refused: other component counts, an
@@ -161,6 +172,8 @@ fn matches_the_reference_reader() {
                     for file in [without_adobe(&out), out] {
                         let read = decode_jpeg_inks(&file, &Limits::default());
                         assert_eq!(jpeg_components(&file), Some(4));
+                        let (dw, dh) = jpeg_dimensions(&file).unwrap();
+                        assert_eq!((usize::from(w), usize::from(h)), (dw as usize, dh as usize));
                         let Some((rw, rh, inks)) = reference_inks(&file) else {
                             eprintln!("refused: {w}x{h} {ty:?} q{q} progressive {progressive}");
                             assert!(read.is_err(), "refused by both: {w}x{h} {ty:?} q{q}");

@@ -37,6 +37,13 @@ pub fn jpeg_components(bytes: &[u8]) -> Option<usize> {
     Some(usize::from(headers(bytes)?.info()?.components))
 }
 
+/// The width and height the frame header of JPEG `bytes` declares, for any colour type; `None`
+/// when they aren't a JPEG whose headers can be read (which includes sides past 16384 pixels).
+pub fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let (w, h) = headers(bytes)?.dimensions()?;
+    Some((u32::try_from(w).ok()?, u32::try_from(h).ok()?))
+}
+
 /// The ICC profile of JPEG `bytes`, put together from all its numbered `ICC_PROFILE` APP2
 /// segments; `None` without one, when it is empty, and when the headers can't be read.
 pub fn jpeg_icc_profile(bytes: &[u8]) -> Option<Vec<u8>> {
