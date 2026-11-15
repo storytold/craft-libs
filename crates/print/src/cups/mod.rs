@@ -861,9 +861,10 @@ fn parse_reply(reply: &[u8]) -> Result<Reply, Error> {
                 let value = r.take(usize::from(value_len)).ok_or_else(malformed)?;
                 match (group, name, tag) {
                     (GROUP_PRINTER, "printer-name", TAG_NAME) => {
-                        if names.len() < MAX_PRINTERS
-                            && let Some(printer) = std::str::from_utf8(value).ok().filter(|n| !n.is_empty() && n.len() <= MAX_NAME)
-                        {
+                        if let Some(printer) = std::str::from_utf8(value).ok().filter(|n| !n.is_empty() && n.len() <= MAX_NAME) {
+                            if names.len() >= MAX_PRINTERS {
+                                return Err(Error::Spool("too many CUPS destinations".into()));
+                            }
                             if !queue.name.is_empty() {
                                 return Err(malformed());
                             }
@@ -872,9 +873,8 @@ fn parse_reply(reply: &[u8]) -> Result<Reply, Error> {
                         }
                     }
                     (GROUP_PRINTER, "printer-info", 0x41 | TAG_NAME) => {
-                        if value.len() > MAX_NAME {
-                            return Err(malformed());
-                        }
+                        // Human descriptions are text, not queue identifiers. Their u16
+                        // wire length and the whole-response MAX_BODY cap bound allocation.
                         queue.info = std::str::from_utf8(value).map_err(|_| malformed())?.to_owned();
                     }
                     (GROUP_PRINTER, "printer-state", 0x23 | TAG_INTEGER) => {

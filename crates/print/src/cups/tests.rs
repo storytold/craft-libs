@@ -540,3 +540,27 @@ fn ipv6_endpoint_keeps_scope_for_resolution_and_escapes_wire_authority() {
         assert!(Server::parse(bad).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn long_printer_descriptions_are_not_limited_like_queue_names() {
+    let description = "Studio ".repeat(200);
+    let body = ipp_reply(0, &[&group(1), &group(4), &printer_name("Studio"), &attr(0x41, "printer-info", description.as_bytes())]);
+    let parsed = super::parse_reply(&body).unwrap();
+    assert_eq!(parsed.queues[0].info, description);
+}
+
+#[test]
+fn destination_limit_is_explicit_and_never_silently_truncates() {
+    let mut body = vec![1, 1, 0, 0, 0, 0, 0, 1];
+    for index in 0..super::MAX_PRINTERS {
+        body.push(4);
+        body.extend(printer_name(&format!("Printer{index}")));
+    }
+    body.push(3);
+    assert_eq!(super::parse_reply(&body).unwrap().queues.len(), super::MAX_PRINTERS);
+    body.pop();
+    body.push(4);
+    body.extend(printer_name("OneTooMany"));
+    body.push(3);
+    assert!(super::parse_reply(&body).err().unwrap().to_string().contains("too many CUPS destinations"));
+}
