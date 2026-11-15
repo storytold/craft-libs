@@ -38,7 +38,7 @@ mod range;
 mod rate;
 mod resample;
 mod silk;
-mod tables;
+pub(super) mod tables;
 
 use std::sync::OnceLock;
 
