@@ -91,7 +91,7 @@ fn permute<T: Copy + Default, F: Fn(usize, usize) -> usize>(v: &mut Vec<T>, w: u
 }
 
 /// A 3×3 matrix tag: nine finite values that can be inverted.
-fn mat3(v: Option<Vec<f64>>) -> Option<Matrix3> {
+pub(crate) fn mat3(v: Option<Vec<f64>>) -> Option<Matrix3> {
     let v = v?;
     if v.len() != 9 || v.iter().any(|x| !x.is_finite()) {
         return None;

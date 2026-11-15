@@ -96,8 +96,17 @@ pub fn write_dcp(p: &DcpProfile) -> Result<Vec<u8>, DcpError> {
     use craft_tiff::writer::srational;
     use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
     let c = &p.color;
-    // ColorMatrix1 is required: do not emit a profile that our reader must reject.
-    if c.color_matrix[0].is_none() {
+    // ColorMatrix1 must remain usable after TIFF rational rounding, or our reader rejects it.
+    let first = c.color_matrix[0].as_ref().ok_or(DcpError::NoMatrix)?;
+    let serialized = first
+        .iter()
+        .flatten()
+        .map(|v| {
+            let (n, d) = srational(*v);
+            f64::from(n) / f64::from(d)
+        })
+        .collect();
+    if first.iter().flatten().any(|v| !v.is_finite()) || crate::dng::mat3(Some(serialized)).is_none() {
         return Err(DcpError::NoMatrix);
     }
     let mut ifd = IfdBuilder::new();
@@ -165,6 +174,21 @@ mod tests {
         p.color.color_matrix[0] = Some(matrix);
         let back = parse_dcp(&write_dcp(&p).unwrap()).unwrap();
         assert_eq!(back.color.color_matrix, p.color.color_matrix);
+    }
+
+    #[test]
+    fn writing_rejects_unusable_or_rounding_singular_first_matrices() {
+        let identity = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        for matrix in [
+            [[0.0; 3]; 3],
+            [[1.0, 1.0, 0.0], [1.0, 1.0 + 1e-8, 0.0], [0.0, 0.0, 1.0]],
+            [[f64::NAN, 0.0, 0.0], identity[1], identity[2]],
+            [[f64::INFINITY, 0.0, 0.0], identity[1], identity[2]],
+        ] {
+            let mut p = DcpProfile { name: "test".into(), camera_model: "test".into(), color: ColorData::default() };
+            p.color.color_matrix[0] = Some(matrix);
+            assert_eq!(write_dcp(&p), Err(DcpError::NoMatrix));
+        }
     }
 
     #[test]
