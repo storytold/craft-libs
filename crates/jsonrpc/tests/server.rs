@@ -143,3 +143,15 @@ fn bounded_line_read_propagates_io_errors() {
     let mut reader = std::io::BufReader::new(Broken);
     assert!(matches!(craft_jsonrpc::read_line(&mut reader, 1), Err(craft_jsonrpc::LineError::Io(_))));
 }
+
+#[test]
+fn inspect_single_request_distinguishes_null_ids_and_invalid_envelopes() {
+    let request = json!({"jsonrpc":"2.0", "id":null, "method":"ping"});
+    let parsed = craft_jsonrpc::request(&request).unwrap();
+    assert_eq!(parsed.id, Some(&Value::Null));
+    assert_eq!(parsed.method, "ping");
+    let notification = json!({"jsonrpc":"2.0", "method":"ping"});
+    assert!(craft_jsonrpc::request(&notification).unwrap().id.is_none());
+    assert!(craft_jsonrpc::request(&json!({"jsonrpc":"2.0", "id":false, "method":"ping"})).is_none());
+    assert!(craft_jsonrpc::request(&json!({"method":"ping"})).is_none());
+}

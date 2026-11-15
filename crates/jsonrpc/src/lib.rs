@@ -107,6 +107,17 @@ pub struct Request<'a> {
     pub params: Option<&'a Value>,
 }
 
+/// Inspect a single request envelope. This validates its JSON-RPC version, method and ID;
+/// [`process`] additionally validates parameter shape before dispatching it.
+pub fn request(value: &Value) -> Option<Request<'_>> {
+    let object = value.as_object()?;
+    let id = object.get("id");
+    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || !id.is_none_or(|v| v.is_null() || v.is_string() || v.is_i64() || v.is_u64()) {
+        return None;
+    }
+    Some(Request { id, method: object.get("method")?.as_str()?, params: object.get("params") })
+}
+
 /// A JSON-RPC error returned by a method handler.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RpcError {
@@ -144,15 +155,8 @@ where
     F: FnMut(Request<'_>) -> Result<Value, RpcError>,
     N: FnMut(Request<'_>),
 {
-    let Some(object) = value.as_object() else { return Some(invalid_request()) };
-    let id = object.get("id");
-    let valid_id = id.is_none_or(|v| v.is_null() || v.is_string() || v.is_i64() || v.is_u64());
-    let method = object.get("method").and_then(Value::as_str);
-    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || method.is_none() || !valid_id {
-        return Some(invalid_request());
-    }
-    let Some(method) = method else { return Some(invalid_request()) };
-    let request = Request { id, method, params: object.get("params") };
+    let Some(request) = request(value) else { return Some(invalid_request()) };
+    let id = request.id;
     if request.params.is_some_and(|v| !v.is_object() && !v.is_array()) {
         return id.map(|id| error_response(id.clone(), RpcError::new(-32602, "Invalid params")));
     }
