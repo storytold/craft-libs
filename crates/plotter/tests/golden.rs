@@ -135,7 +135,7 @@ fn silhouette_registration_marks() {
     let p = silhouette::encode(&pro, &j).unwrap();
     let (head, rest) = p.split_at_registration();
     let text = |c: &[Command]| c.iter().map(Command::to_ascii).collect::<Vec<_>>().join(" ");
-    assert!(text(head).ends_with(" FC18,1,1 TB50,0 TB99 TB52,2 TB51,400 TB53,10 TB55,1 TB123,4600,3600,200,100"));
+    assert!(text(head).ends_with(" FC18,1,1 TB50,0 TB99 TB52,2 TB51,400 TB53,10 TB54,0,0 TB55,1 TB123,4600,3600,200,100"));
     // The design is shifted so the first mark is the origin.
     assert_eq!(text(rest), "M100,100 D100,300 M100,0 SO0");
     assert_eq!(p.registration_wait, Some(head.len()));
@@ -148,7 +148,7 @@ fn silhouette_registration_marks() {
     reg.origin_right_mm = 0.0;
     assert!(ascii(&reg).ends_with(" TB124,4600,3600,0,0"));
     reg.search = false;
-    assert_eq!(ascii(&reg), "TB50,0 TB99 TB52,2 TB51,400 TB53,10 TB55,1 TB23,4600,3600");
+    assert_eq!(ascii(&reg), "TB50,0 TB99 TB52,2 TB51,400 TB53,10 TB54,0,0 TB55,1 TB23,4600,3600");
 }
 
 #[test]
