@@ -154,7 +154,8 @@ impl Writer {
         if self.names.len().saturating_add(entries) > self.limits.max_entries {
             return 0;
         }
-        budget.saturating_sub(self.names.len().saturating_add(entries).saturating_mul(256).saturating_add(65_536))
+        budget
+            .saturating_sub(self.names.len().saturating_add(entries).saturating_mul(256).saturating_add(65_536))
             .min((self.limits.max_expanded)().saturating_sub(self.expanded))
     }
 
@@ -202,20 +203,18 @@ impl Reader {
         // ZIP archives are typically small-to-moderate size.
         let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
 
-        let mut archive = craft_zip::Archive::open(leaked, craft_zip::Limits {
-            max_entries: limits.max_entries as u64,
-            max_total_bytes: (limits.max_expanded)() as u64,
-        }).map_err(invalid)?;
+        let mut archive = craft_zip::Archive::open(
+            leaked,
+            craft_zip::Limits { max_entries: limits.max_entries as u64, max_total_bytes: (limits.max_expanded)() as u64 },
+        )
+        .map_err(invalid)?;
 
         // Validate entry names match format rules: no empty, no backslashes,
         // no path components that are "." or "..", and no duplicates.
         let mut name_set = BTreeSet::new();
         for entry_idx in 0..archive.len() {
             if let Ok(Some(name)) = archive.entry_name(entry_idx) {
-                if name.is_empty()
-                    || name.contains('\\')
-                    || name.split('/').any(|c| c.is_empty() || c == "." || c == "..")
-                    || !name_set.insert(name)
+                if name.is_empty() || name.contains('\\') || name.split('/').any(|c| c.is_empty() || c == "." || c == "..") || !name_set.insert(name)
                 {
                     return Err(invalid("duplicate or invalid archive entry"));
                 }
@@ -329,8 +328,9 @@ impl Thumbnail {
         if !self.valid(png) {
             return Ok(());
         }
-        let key = serde_json::to_vec(&serde_json::json!({"format": self.format, "app": self.app, "document": digest(document), "payload": digest(png)}))
-            .map_err(invalid)?;
+        let key =
+            serde_json::to_vec(&serde_json::json!({"format": self.format, "app": self.app, "document": digest(document), "payload": digest(png)}))
+                .map_err(invalid)?;
         if !writer.room(2, key.len().saturating_add(png.len()), budget) {
             return Ok(());
         }
