@@ -764,3 +764,24 @@ fn a_huge_link_group_does_not_write_quadratic_links() {
     assert_eq!(text.matches("<linkclipref>").count(), 64 * 64);
     assert!(rep.has_warnings(), "{rep}");
 }
+
+#[test]
+fn nested_sequence_chain_is_bounded_and_reimported_at_a_shallower_depth() {
+    let mut doc = String::from("<xmeml><project><children>");
+    for i in 0..66 {
+        let nested = if i < 65 {
+            format!(
+                "<clipitem id=\"c{i}\"><name>nest</name><start>0</start><end>24</end><in>0</in><out>24</out><sequence id=\"s{}\"/></clipitem>",
+                i + 1
+            )
+        } else {
+            String::new()
+        };
+        doc.push_str(&format!("<sequence id=\"s{i}\"><name>S{i}</name><rate><timebase>24</timebase></rate><duration>24</duration><media><video><track>{nested}</track></video></media></sequence>"));
+    }
+    doc.push_str("</children></project></xmeml>");
+    let (imported, report) = fcp7_import(&doc, None);
+    assert!(report.mentions("nested too deeply"));
+    let nested = imported.project.items.values().find(|item| item.name == "S63").and_then(|item| imported.project.sequence(item.id));
+    assert!(nested.is_some_and(|seq| seq.video_tracks.first().is_some_and(|track| track.items.len() == 1)));
+}

@@ -14,7 +14,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-craft-image-codecs = { path = "..", features = ["heif"] }
+craft-image-codecs = { path = "..", features = ["heif", "avif-decode"] }
 # Called directly too: the codec turns its panics into errors (see decode_heif.rs).
 heic-rs = "=0.1.4"
 
@@ -73,6 +73,13 @@ bench = false
 [[bin]]
 name = "decode_webp"
 path = "fuzz_targets/decode_webp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_avif"
+path = "fuzz_targets/decode_avif.rs"
 test = false
 doc = false
 bench = false

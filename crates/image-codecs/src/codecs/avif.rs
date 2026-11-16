@@ -25,12 +25,17 @@ fn pq_encode(nits: f32) -> f32 {
 
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 fn hlg_signal(rgb: [f32; 3]) -> [f32; 3] {
+    const K: [f32; 3] = [0.2627, 0.6780, 0.0593];
+    const GAMMA: f32 = 1.2;
     const A: f32 = 0.17883277;
     const B: f32 = 0.28466892;
     const C: f32 = 0.559_910_7;
-    rgb.map(|v| {
-        let s = if v.is_finite() { v.clamp(0.0, 12.0) / 12.0 } else { 0.0 };
-        if s <= 1.0 / 12.0 { (3.0 * s).sqrt() } else { A * (12.0 * s - B).ln() + C }
+    let display = rgb.map(|v| (if v.is_finite() { v.max(0.0) } else { 0.0 }) * (HDR_REFERENCE_WHITE_NITS / crate::cicp::HLG_PEAK_NITS));
+    let y = K[0] * display[0] + K[1] * display[1] + K[2] * display[2];
+    let inverse_ootf = if y > 0.0 { y.powf((1.0 - GAMMA) / GAMMA) } else { 0.0 };
+    display.map(|v| {
+        let scene = (v * inverse_ootf).clamp(0.0, 1.0);
+        if scene <= 1.0 / 12.0 { (3.0 * scene).sqrt() } else { A * (12.0 * scene - B).ln() + C }
     })
 }
 
@@ -39,8 +44,14 @@ fn hlg_signal(rgb: [f32; 3]) -> [f32; 3] {
 pub fn encode_avif_with_speed(img: &Image, quality: u8, speed: u8) -> Result<Vec<u8>, CodecError> {
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     {
-        let mut enc =
-            ravif::Encoder::new().with_quality(f32::from(quality.clamp(1, 100))).with_speed(speed.clamp(1, 10)).with_bit_depth(ravif::BitDepth::Ten);
+        let mut enc = ravif::Encoder::new()
+            .with_quality(f32::from(quality.clamp(1, 100)))
+            .with_alpha_quality(f32::from(quality.clamp(1, 100)))
+            .with_speed(speed.clamp(1, 10))
+            .with_bit_depth(ravif::BitDepth::Ten);
+        if let Some(exif) = img.meta.exif.as_deref() {
+            enc = enc.with_exif(exif);
+        }
         let alpha_mode = if img.layout().has_alpha() { ravif::AlphaColorMode::UnassociatedClean } else { ravif::AlphaColorMode::UnassociatedDirty };
         enc = enc.with_alpha_color_mode(alpha_mode);
         let w = img.width() as usize;
@@ -207,5 +218,96 @@ pub fn encode_avif_hdr(
     {
         let _ = (width, height, rgb, quality, speed, exif, transfer);
         Err(CodecError::unsupported(Format::Avif, "AVIF encoding is not available in this build"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn sdr_avif_uses_requested_alpha_quality() {
+        use crate::{ChannelLayout, Image};
+
+        let pixels: Vec<ravif::RGBA8> = (0..1024).map(|i| ravif::RGBA8::new(100, 120, 140, ((i * 37) % 256) as u8)).collect();
+        let samples: Vec<u8> = pixels.iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
+        let image = Image::from_u8(32, 32, ChannelLayout::Rgba, samples).unwrap();
+        let actual = super::encode_avif_with_speed(&image, 20, 10).unwrap();
+        let expected = ravif::Encoder::new()
+            .with_quality(20.0)
+            .with_alpha_quality(20.0)
+            .with_speed(10)
+            .with_bit_depth(ravif::BitDepth::Ten)
+            .with_alpha_color_mode(ravif::AlphaColorMode::UnassociatedClean)
+            .encode_rgba(ravif::Img::new(&pixels, 32, 32))
+            .unwrap()
+            .avif_file;
+        assert!(actual == expected, "encoded alpha must use the requested quality");
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn sdr_avif_keeps_exif_metadata() {
+        use crate::{ChannelLayout, Image};
+
+        let exif = b"II*\0shared-avif-exif".to_vec();
+        let mut image = Image::from_u8(2, 1, ChannelLayout::Rgb, vec![20, 40, 60, 80, 100, 120]).unwrap();
+        image.meta.exif = Some(exif.clone());
+
+        let avif = super::encode_avif_with_speed(&image, 80, 8).unwrap();
+        assert!(avif.windows(exif.len()).any(|window| window == exif.as_slice()));
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn hlg_mapping_matches_reference_white_and_peak() {
+        let white = super::hlg_signal([1.0; 3]);
+        assert!(white.iter().all(|&value| (value - 0.75).abs() < 0.005), "{white:?}");
+
+        let peak = super::hlg_signal([crate::cicp::HLG_PEAK_NITS / super::HDR_REFERENCE_WHITE_NITS; 3]);
+        assert!(peak.iter().all(|&value| (value - 1.0).abs() < 0.005), "{peak:?}");
+
+        let invalid = super::hlg_signal([f32::NAN, -1.0, f32::INFINITY]);
+        assert_eq!(invalid, [0.0; 3]);
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn hlg_encoded_output_signals_bt2020_hlg() {
+        let avif = super::encode_avif_hdr(1, 1, &[1.0; 3], 100, 10, None, super::HdrTransfer::Hlg).unwrap();
+        let nclx = avif.windows(4).position(|window| window == b"nclx").expect("the AVIF has nclx color metadata");
+        let color = avif.get(nclx + 4..nclx + 11).expect("complete nclx color metadata");
+        assert_eq!(&color[..2], &[0, 9], "BT.2020 primaries");
+        assert_eq!(&color[2..4], &[0, 18], "BT.2100 HLG transfer");
+        assert_eq!(&color[4..6], &[0, 9], "BT.2020 non-constant luminance matrix");
+        assert!(!avif.windows(4).any(|window| window == b"clli"), "HLG does not signal PQ content-light metadata");
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn hlg_encoded_pixels_preserve_reference_white_and_peak() {
+        let mut rgb = Vec::new();
+        for _ in 0..32 {
+            for x in 0..64 {
+                let level = if x < 32 { 1.0 } else { crate::cicp::HLG_PEAK_NITS / super::HDR_REFERENCE_WHITE_NITS };
+                rgb.extend_from_slice(&[level; 3]);
+            }
+        }
+        let avif = super::encode_avif_hdr(64, 32, &rgb, 100, 10, None, super::HdrTransfer::Hlg).unwrap();
+        let mut offset = 0;
+        let payload = loop {
+            let header = avif.get(offset..offset + 8).expect("complete AVIF box header");
+            let size = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;
+            assert!(size >= 8 && offset + size <= avif.len(), "valid AVIF box size");
+            if &header[4..] == b"mdat" {
+                break &avif[offset + 8..offset + size];
+            }
+            offset += size;
+        };
+        let mut decoder = craft_video::av1::decode::Decoder::new();
+        let mut frames = decoder.decode(payload).unwrap();
+        frames.extend(decoder.flush_result().unwrap());
+        let luma = &frames.first().expect("encoded AV1 frame").planes[0];
+        assert!((i32::from(luma[16 * 64 + 16]) - 767).abs() <= 5, "diffuse white");
+        assert!((i32::from(luma[16 * 64 + 48]) - 1023).abs() <= 5, "peak white");
     }
 }

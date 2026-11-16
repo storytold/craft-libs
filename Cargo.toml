@@ -11,12 +11,14 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-usd = { path = "crates/usd" }
 craft-smime = { path = "crates/smime" }
 craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
 acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
+craft-plist = { path = "crates/plist" }
 craft-platform = { path = "crates/platform" }
 craft-aep = { path = "crates/aep" }
 craft-affinity = { path = "crates/affinity" }
@@ -37,6 +39,7 @@ hayro-syntax = { version = "=0.7.2", default-features = false, features = ["std"
 bytemuck = "1"
 kurbo = "0.13"
 thiserror = "2"
+craft-gzip = { path = "crates/gzip" }
 craft-aaf = { path = "crates/aaf" }
 craft-atomic = { path = "crates/atomic" }
 craft-captions = { path = "crates/captions" }
@@ -51,6 +54,8 @@ craft-dialogs = { path = "crates/dialogs" }
 craft-doc-binary = { path = "crates/doc-binary" }
 craft-docx = { path = "crates/docx" }
 craft-document-bundle = { path = "crates/document-bundle" }
+craft-mcmat = { path = "crates/mcmat" }
+craft-deckcraft-format = { path = "crates/deckcraft-format" }
 craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
@@ -65,6 +70,7 @@ craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
 craft-dwg = { path = "crates/dwg" }
+craft-fcproj-format = { path = "crates/fcproj-format" }
 craft-ecproj-format = { path = "crates/ecproj-format" }
 craft-figma-rest = { path = "crates/figma-rest" }
 craft-exr = { path = "crates/exr" }
@@ -88,6 +94,9 @@ craft-indd = { path = "crates/indd" }
 craft-jmap = { path = "crates/jmap" }
 craft-ical = { path = "crates/ical" }
 craft-jpeg = { path = "crates/jpeg" }
+craft-control-protocol = { path = "crates/control-protocol" }
+craft-jsonrpc = { path = "crates/jsonrpc" }
+craft-mcp = { path = "crates/mcp" }
 craft-jxl = { path = "crates/jxl" }
 craft-kiwi = { path = "crates/kiwi" }
 craft-keymap = { path = "crates/keymap" }
@@ -142,6 +151,7 @@ craft-stencilcraft-document = { path = "crates/stencilcraft-document" }
 craft-svg-paths = { path = "crates/svg-paths" }
 craft-stream-codecs = { path = "crates/stream-codecs" }
 craft-text = { path = "crates/text" }
+craft-tcraft = { path = "crates/tcraft" }
 craft-texture = { path = "crates/texture" }
 craft-tga = { path = "crates/tga" }
 craft-timeline = { path = "crates/timeline" }

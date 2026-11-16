@@ -470,6 +470,55 @@ fn linked_file(item: &[u8], at: usize) -> Result<LinkedFile> {
     Ok(out)
 }
 
+/// Header of an embedded (`liFD`) linked-layer item, without reading its payload.
+/// Offsets are relative to the item (not its enclosing eight-byte length field).
+/// A deferred reader can supply just the header, then validate the payload range
+/// against the full record length before reading those bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmbeddedFileHeader {
+    /// Lossy UTF-8 identifier, matching Photoshop metadata display semantics.
+    pub uuid: String,
+    /// Lossy UTF-16 filename with trailing NULs removed.
+    pub name: String,
+    /// Start of the payload within the item.
+    pub data_offset: usize,
+    /// Declared payload length; the payload need not be resident.
+    pub data_len: usize,
+}
+
+impl EmbeddedFileHeader {
+    /// Borrow the payload only when the supplied complete item contains it.
+    pub fn payload<'a>(&self, item: &'a [u8]) -> Option<&'a [u8]> {
+        item.get(self.data_offset..self.data_offset.checked_add(self.data_len)?)
+    }
+}
+
+/// Read an embedded item's header from a possibly partial/deferred item buffer.
+/// This deliberately does not require its declared payload to be present. A malformed
+/// header or a non-embedded item is an error, not an empty embedded file. Callers walking
+/// framed records may continue to the next record after such an error.
+/// Ported from PhotoCraft's linked-item reader; record versions remain forward-compatible.
+pub fn embedded_file_header(item: &[u8]) -> Result<EmbeddedFileHeader> {
+    let mut r = Reader::new(item);
+    let kind = r.array::<4>()?;
+    let _version = r.u32()?;
+    let uuid = String::from_utf8_lossy(&read_pascal(&mut r, 1)?).into_owned();
+    // A filename is metadata, never an unbounded allocation. Check before decoding.
+    if r.clone().u32()? > 32_768 {
+        return Err(PsdError::LimitExceeded("linked filename exceeds 32768 UTF-16 units"));
+    }
+    let name = UnicodeString::read(&mut r)?.to_string_lossy();
+    r.skip(8)?; // file type and creator
+    let data_len = usize::try_from(r.u64()?).map_err(|_| PsdError::LimitExceeded("linked payload exceeds address space"))?;
+    if r.u8()? != 0 {
+        crate::descriptor::VersionedDescriptor::read(&mut r)?;
+    }
+    if kind != *b"liFD" {
+        return Err(PsdError::invalid("linked item is not embedded"));
+    }
+    Ok(EmbeddedFileHeader { uuid, name, data_offset: r.pos(), data_len })
+}
+
 /// The four-character file type Photoshop records for an embedded file, from its first bytes:
 /// `8BPS` (`8BPB` for a PSB), `PNGf`, `JPEG`, `TIFF`, `GIFf`, or four spaces.
 pub fn file_type(bytes: &[u8]) -> [u8; 4] {
@@ -519,7 +568,29 @@ pub struct LinkedRecord<'a> {
     pub raw: &'a [u8],
 }
 
-impl LinkedRecord<'_> {
+impl<'a> LinkedRecord<'a> {
+    /// The complete item, excluding framing and padding; absent for a damaged tail.
+    pub fn item(&self) -> Option<&'a [u8]> {
+        framed_record(self.raw).map(|(item, _)| item)
+    }
+
+    /// Copy this complete record under a new ID, leaving the payload byte-identical.
+    /// Selection policy belongs to the caller; malformed tails cannot be copied.
+    pub fn copy_with_uuid(&self, new_uuid: &str) -> Option<Vec<u8>> {
+        let item = self.item()?;
+        let old_end = 9usize.checked_add(usize::from(*item.get(8)?))?;
+        let new_len = u8::try_from(new_uuid.len()).ok()?;
+        let mut copy = item.get(..8)?.to_vec();
+        copy.push(new_len);
+        copy.extend_from_slice(new_uuid.as_bytes());
+        copy.extend_from_slice(item.get(old_end..)?);
+        let mut out = Vec::with_capacity(copy.len() + 11);
+        out.put_u64(copy.len() as u64);
+        out.extend(copy);
+        out.resize(out.len().next_multiple_of(4), 0);
+        Some(out)
+    }
+
     /// The unique id as text, when it is readable and valid UTF-8.
     pub fn uuid_str(&self) -> Option<&str> {
         std::str::from_utf8(self.uuid?).ok()
@@ -545,17 +616,26 @@ fn record_uuid(item: &[u8]) -> Option<&[u8]> {
 /// The records of a linked layer block's data, in order, each with its unique id when its header
 /// is readable. A tail that is no complete record is returned as one record without an id.
 pub fn linked_records(data: &[u8]) -> Vec<LinkedRecord<'_>> {
-    let mut out = Vec::new();
+    iter_linked_records(data).collect()
+}
+
+/// Stream the same raw views as [`linked_records`] without allocating a record list.
+/// Complete frames with malformed inner headers do not hide subsequent frames;
+/// an incomplete tail is yielded once with no identifier.
+pub fn iter_linked_records(data: &[u8]) -> impl Iterator<Item = LinkedRecord<'_>> {
     let mut rest = data;
-    while !rest.is_empty() {
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
         let Some((item, raw)) = framed_record(rest) else {
-            out.push(LinkedRecord { uuid: None, raw: rest });
-            break;
+            let tail = rest;
+            rest = &[];
+            return Some(LinkedRecord { uuid: None, raw: tail });
         };
-        out.push(LinkedRecord { uuid: record_uuid(item), raw });
         rest = rest.get(raw.len()..).unwrap_or_default();
-    }
-    out
+        Some(LinkedRecord { uuid: record_uuid(item), raw })
+    })
 }
 
 /// The unique ids of every record of a linked layer block's data that has a readable one.
@@ -653,18 +733,7 @@ pub fn contains_linked_record(data: &[u8], record: &[u8]) -> bool {
 /// field and padding; the rest of the record (embedded, external or alias data) is kept.
 pub fn copy_linked_record(data: &[u8], uuid: &str, new_uuid: &str) -> Option<Vec<u8>> {
     let record = linked_records(data).into_iter().find(|r| r.uuid == Some(uuid.as_bytes()))?;
-    let (item, _) = framed_record(record.raw)?;
-    let old_end = 9usize.checked_add(usize::from(*item.get(8)?))?;
-    let new_len = u8::try_from(new_uuid.len()).ok()?;
-    let mut copy = item.get(..8)?.to_vec();
-    copy.push(new_len);
-    copy.extend_from_slice(new_uuid.as_bytes());
-    copy.extend_from_slice(item.get(old_end..)?);
-    let mut out = Vec::with_capacity(copy.len() + 11);
-    out.put_u64(copy.len() as u64);
-    out.extend(copy);
-    out.resize(out.len().next_multiple_of(4), 0);
-    Some(out)
+    record.copy_with_uuid(new_uuid)
 }
 
 impl PsdFile {
@@ -1109,5 +1178,59 @@ mod tests {
         let s = SmartObject { uuid: "x".into(), quad: [[f64::NAN; 2]; 4], size: None, warp: None };
         let (_, (w, h)) = s.bake_scale(100.0, 100.0, 4.0, doc);
         assert!(u64::from(w) * u64::from(h) <= MAX_BAKE_PIXELS);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod embedded_header_tests {
+    use super::*;
+
+    #[test]
+    fn headers_do_not_require_resident_payload() {
+        let data = encode_embedded_file("id", "a.psd", b"payload");
+        let record = iter_linked_records(&data).next().unwrap();
+        let item = record.item().unwrap();
+        let header = embedded_file_header(item).unwrap();
+        assert_eq!(header.uuid, "id");
+        assert_eq!(header.name, "a.psd");
+        assert_eq!(header.payload(item), Some(&b"payload"[..]));
+        assert_eq!(embedded_file_header(&item[..header.data_offset]).unwrap(), header);
+        assert_eq!(header.payload(&item[..header.data_offset]), None);
+        for n in 0..header.data_offset {
+            assert!(embedded_file_header(&item[..n]).is_err());
+        }
+    }
+
+    #[test]
+    fn filename_limits_and_lossy_metadata_are_preserved() {
+        let data = encode_embedded_file("x", &"a".repeat(32767), b"");
+        let item = iter_linked_records(&data).next().unwrap().item().unwrap();
+        assert_eq!(embedded_file_header(item).unwrap().name.len(), 32767);
+        let data = encode_embedded_file("x", &"a".repeat(32768), b"");
+        assert!(embedded_file_header(iter_linked_records(&data).next().unwrap().item().unwrap()).is_err());
+        let data = encode_embedded_file("x", "y", b"payload");
+        let mut item = iter_linked_records(&data).next().unwrap().item().unwrap().to_vec();
+        item[9] = 0xff;
+        item[14..16].copy_from_slice(&0xd800u16.to_be_bytes());
+        let h = embedded_file_header(&item).unwrap();
+        assert_eq!(h.uuid, "\u{fffd}");
+        assert_eq!(h.name, "\u{fffd}");
+        item[0..4].copy_from_slice(b"liFE");
+        assert!(embedded_file_header(&item).is_err());
+    }
+
+    #[test]
+    fn malformed_inner_records_do_not_hide_later_files() {
+        let mut data = vec![0; 8]; // A complete empty item, not a truncated frame.
+        data.extend(encode_embedded_file("wanted", "x", b"ok"));
+        data.extend([1, 2, 3]); // Incomplete tail retained, never interpreted as an item.
+        let records: Vec<_> = iter_linked_records(&data).collect();
+        assert_eq!(records, linked_records(&data));
+        assert!(embedded_file_header(records[0].item().unwrap()).is_err());
+        let item = records[1].item().unwrap();
+        assert_eq!(embedded_file_header(item).unwrap().payload(item), Some(&b"ok"[..]));
+        assert_eq!(records[2].item(), None);
+        assert_eq!(records[2].raw, &[1, 2, 3]);
     }
 }

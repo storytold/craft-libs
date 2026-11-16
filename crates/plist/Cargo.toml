@@ -1,0 +1,14 @@
+[package]
+name = "craft-plist"
+description = "Bounded cross-platform binary and XML Apple property-list reader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
