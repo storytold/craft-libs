@@ -65,12 +65,20 @@ pub struct ColorParseError {
 /// and SVG 2 paint both defer to): the 148 named colours, `#rgb`, `#rgba`, `#rrggbb`,
 /// `#rrggbbaa`, `rgb()`/`rgba()` with integer 0–255 or percentage channels, and
 /// `hsl()`/`hsla()`, in comma or space syntax with an optional alpha (`/ a` or a fourth
-/// comma value). Alpha is checked and then dropped.
+/// comma value). Alpha is checked and then dropped; [`parse_color_alpha`] keeps it.
 ///
 /// Anything else — `transparent`, `currentColor`, `color()`, out-of-range channels —
 /// is an error, not a guess: silent color loss is worse than a reported failure.
 /// Callers that understand `none`/`currentColor` (SVG paint) resolve them first.
 pub fn parse_color(input: &str) -> Result<Color, ColorParseError> {
+    parse_color_alpha(input).map(|(color, _)| color)
+}
+
+/// [`parse_color`], with the colour's alpha in `[0, 1]`: from `#rgba` and `#rrggbbaa` (in
+/// 255ths), from the fourth value of `rgb()`/`hsl()` (a number or a percentage), else 1. A
+/// colour with an alpha of its own (a fill of `rgba(…)`) multiplies with `fill-opacity`; that
+/// is the caller's to do.
+pub fn parse_color_alpha(input: &str) -> Result<(Color, f32), ColorParseError> {
     let err = || ColorParseError { input: input.to_string() };
     // Cap input length before work: a caller feeding untrusted text cannot
     // make this quadratic.
@@ -84,30 +92,27 @@ pub fn parse_color(input: &str) -> Result<Color, ColorParseError> {
     if let Some((name, rest)) = lower.split_once('(') {
         return parse_function(name.trim(), rest).ok_or_else(err);
     }
-    NAMED.iter().find(|(name, _)| *name == lower).map(|(_, rgb)| Color::new((rgb >> 16) as u8, (rgb >> 8) as u8, *rgb as u8)).ok_or_else(err)
+    NAMED.iter().find(|(name, _)| *name == lower).map(|(_, rgb)| (Color::new((rgb >> 16) as u8, (rgb >> 8) as u8, *rgb as u8), 1.0)).ok_or_else(err)
 }
 
-/// Hex digits after `#`: 3 or 4 (each doubled), 6 or 8; the alpha digits are dropped.
-fn parse_hex(digits: &str) -> Option<Color> {
+/// Hex digits after `#`: 3 or 4 (each doubled), 6 or 8; the fourth (or fourth pair) is alpha.
+fn parse_hex(digits: &str) -> Option<(Color, f32)> {
     if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let value = |s: &str| u8::from_str_radix(s, 16).ok();
-    match digits.len() {
-        3 | 4 => {
-            let d = |i: usize| value(digits.get(i..=i)?).map(|v| v * 17);
-            Some(Color::new(d(0)?, d(1)?, d(2)?))
-        }
-        6 | 8 => {
-            let d = |i: usize| value(digits.get(i..i + 2)?);
-            Some(Color::new(d(0)?, d(2)?, d(4)?))
-        }
-        _ => None,
-    }
+    let channels: Vec<u8> = match digits.len() {
+        3 | 4 => (0..digits.len()).map(|i| value(digits.get(i..=i)?).map(|v| v * 17)).collect::<Option<_>>()?,
+        6 | 8 => (0..digits.len() / 2).map(|i| value(digits.get(2 * i..2 * i + 2)?)).collect::<Option<_>>()?,
+        _ => return None,
+    };
+    let (&r, &g, &b) = (channels.first()?, channels.get(1)?, channels.get(2)?);
+    let alpha = channels.get(3).map_or(1.0, |a| f32::from(*a) / 255.0);
+    Some((Color::new(r, g, b), alpha))
 }
 
 /// `rgb(…)`, `rgba(…)`, `hsl(…)`, `hsla(…)` after the `(`, which must close with `)`.
-fn parse_function(name: &str, rest: &str) -> Option<Color> {
+fn parse_function(name: &str, rest: &str) -> Option<(Color, f32)> {
     let body = rest.trim().strip_suffix(')')?;
     // Legacy comma syntax, or modern space syntax with `/ alpha`.
     let parts: Vec<&str> = if body.contains(',') {
@@ -127,26 +132,29 @@ fn parse_function(name: &str, rest: &str) -> Option<Color> {
     if !(parts.len() == 3 || parts.len() == 4) {
         return None;
     }
-    if let Some(alpha) = parts.get(3) {
-        let a = match alpha.strip_suffix('%') {
+    let mut alpha = 1.0;
+    if let Some(text) = parts.get(3) {
+        let a = match text.strip_suffix('%') {
             Some(p) => number(p)? / 100.0,
-            None => number(alpha)?,
+            None => number(text)?,
         };
         if !(0.0..=1.0).contains(&a) {
             return None;
         }
+        alpha = a as f32;
     }
     let (Some(a), Some(b), Some(c)) = (parts.first(), parts.get(1), parts.get(2)) else {
         return None;
     };
-    match name {
-        "rgb" | "rgba" => Some(Color::new(rgb_channel(a)?, rgb_channel(b)?, rgb_channel(c)?)),
+    let color = match name {
+        "rgb" | "rgba" => Color::new(rgb_channel(a)?, rgb_channel(b)?, rgb_channel(c)?),
         "hsl" | "hsla" => {
             let hue = number(a.strip_suffix("deg").unwrap_or(a))?;
-            Some(hsl_to_rgb(hue.rem_euclid(360.0), percent(b)?, percent(c)?))
+            hsl_to_rgb(hue.rem_euclid(360.0), percent(b)?, percent(c)?)
         }
-        _ => None,
-    }
+        _ => return None,
+    };
+    Some((color, alpha))
 }
 
 /// A finite plain decimal number.
@@ -370,6 +378,24 @@ mod tests {
         assert_eq!(c("#fff"), Color::new(255, 255, 255));
         assert_eq!(c("#000"), Color::new(0, 0, 0));
         assert_eq!(c("#abc"), Color::new(0xaa, 0xbb, 0xcc));
+    }
+
+    #[test]
+    fn alpha_is_kept_by_parse_color_alpha() {
+        let a = |input: &str| parse_color_alpha(input).ok().expect("test input should parse");
+        assert_eq!(a("#ff000080"), (Color::new(255, 0, 0), 128.0 / 255.0));
+        assert_eq!(a("#f008"), (Color::new(255, 0, 0), 136.0 / 255.0));
+        assert_eq!(a("#f00"), (Color::new(255, 0, 0), 1.0));
+        assert_eq!(a("rgba(255, 0, 0, 0.25)"), (Color::new(255, 0, 0), 0.25));
+        assert_eq!(a("rgb(0 0 255 / 50%)"), (Color::new(0, 0, 255), 0.5));
+        assert_eq!(a("hsla(120, 100%, 50%, 0)"), (Color::new(0, 255, 0), 0.0));
+        assert_eq!(a("SteelBlue"), (Color::new(0x46, 0x82, 0xb4), 1.0));
+        // parse_color keeps dropping it, and both refuse the same input.
+        assert_eq!(c("#ff000080"), Color::new(255, 0, 0));
+        for bad in ["rgba(255, 0, 0, 1.5)", "#ff00000", "rgb(0 0 0 / -1)", "transparent", "#ggg"] {
+            assert!(parse_color_alpha(bad).is_err(), "{bad}");
+            assert!(parse_color(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

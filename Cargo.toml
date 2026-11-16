@@ -108,6 +108,7 @@ craft-kra = { path = "crates/kra" }
 craft-audio = { path = "crates/audio" }
 craft-latex = { path = "crates/latex" }
 craft-markdown = { path = "crates/markdown" }
+craft-macho = { path = "crates/macho" }
 craft-math = { path = "crates/math" }
 # No default features: craft-audio turns on the craft-media modules each of its features needs.
 craft-media = { path = "crates/media", default-features = false }
@@ -174,7 +175,7 @@ craft-xcf = { path = "crates/xcf" }
 craft-xml = { path = "crates/xml" }
 craft-zip = { path = "crates/zip" }
 craft-y4m = { path = "crates/y4m" }
-craft-macho = { path = "crates/macho" }
+craft-sniff = { path = "crates/sniff" }
 craft-epub = { path = "crates/epub" }
 craft-ews = { path = "crates/ews" }
 craft-video = { path = "crates/video" }

@@ -214,7 +214,7 @@ pub(super) fn dng(raw: IfdBuilder, order: ByteOrder) -> Vec<u8> {
 }
 
 /// [`dng`] with extra IFD 0 tags (where DNG writers put camera-profile tags).
-fn dng_with(raw: IfdBuilder, order: ByteOrder, extra: impl FnOnce(&mut IfdBuilder)) -> Vec<u8> {
+pub(super) fn dng_with(raw: IfdBuilder, order: ByteOrder, extra: impl FnOnce(&mut IfdBuilder)) -> Vec<u8> {
     let mut ifd0 = IfdBuilder::new();
     ifd0.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![1]));
     ifd0.set(t::DNG_VERSION, Value::Byte(vec![1, 6, 0, 0]));
