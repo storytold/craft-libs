@@ -102,9 +102,12 @@ impl Decoder {
         if !is_packet(packet) {
             return Err(Error::Invalid("the packet does not start with a JPEG SOI marker".to_string()));
         }
+        // An Adobe APP14 segment decides whether 3 and 4 components are YCbCr/YCCK or RGB/CMYK:
+        // RGB packets with numeric component ids are only told apart from YCbCr by it.
+        let adobe = craft_jpeg::adobe_transform(packet);
         // AVI `MJPG` packets may leave out the Huffman tables; every other packet keeps its own
         let packet = craft_jpeg::with_avi1_default_huffman(packet);
-        let d = craft_jpeg::decode(&packet, &self.limits, None)?;
+        let d = craft_jpeg::decode(&packet, &self.limits, adobe)?;
         Ok(Frame { width: d.width, height: d.height, channels: d.components, samples: d.samples, damaged: d.damaged })
     }
 }
