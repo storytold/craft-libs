@@ -1,10 +1,10 @@
 # Nikon embedded distortion corrections
 
 Nikon writes its own distortion correction into NEFs from its mirrorless bodies, in the raw SubIFD tag `0xc7d5`
-(NikonNEFInfo). LightCraft reads it for the NIKON Z 6_2 (Z 6II), the NIKON Z 8 and the NIKON Z f and turns it into an
+(NikonNEFInfo). LightCraft reads it for the NIKON Z 6, NIKON Z 7, NIKON Z 6_2 (Z 6II), NIKON Z 8 and NIKON Z f and turns it into an
 `OpcodeList3` `WarpRectilinear`, so it goes through the same profile correction control, optics path, orientation
 handling and DNG export as the other embedded corrections. Other bodies are left alone for now even if they have the
-same tag, because I've only checked files from these three.
+same tag. Body recognition is limited to files checked against their camera JPEGs.
 
 This is distortion only. The vignetting block (`0x0006`) and what looks like lateral CA (`0x0007`) aren't applied
 yet. Like the Sony, Fujifilm and Panasonic corrections it's on by default and can be turned off under Lens
@@ -24,7 +24,7 @@ NikonNEFInfo starts with `"Nikon\0"` and a 4-byte version, followed by a small T
 | Entry | Bytes | What it holds |
 |---|---|---|
 | `0x0005` DistortionInfo | 0–3 | `"0100"` |
-| | 4 | correction mode: 1 "On (Optional)", 3 "On (Required)", 0 none |
+| | 4 | correction mode: 1 "On (Optional)", 3 "On (Required)"; 0 none, 2 "Off" and unknown modes are skipped |
 | | 8–15 | normalisation radius in mm, a signed rational. It's 21.6 (the FX half diagonal) in every file I looked at |
 | | 16–19 | number of terms, 4 |
 | | 20, 28, 36 | the three coefficients, called `k1`, `k2`, `k3` here after ExifTool's names |
@@ -84,18 +84,38 @@ extra correction for Z lenses that isn't in the readable coefficients. NikonNEFI
 didn't try to decode it. Even so, the readable correction takes most of the distortion out. At 24 mm the error at 0.7
 half diagonals goes from −82 px to +25 px, and at 70 mm from about −137 px to under 4 px.
 
+## Z 6 and Z 7 validation
+
+Six CC0 raw.pixls.us files were checked: three Z 6 and three Z 7 exposures of two repeated scenes, all with one
+NIKKOR Z 24-70mm f/4 S (Z 6 at 52 mm and f/6.7, Z 7 at 56 mm and f/5.6). They don't establish coverage at other focal
+lengths or with other lenses. Log-green patches in a quarter-size sensor proxy were matched against the full-size
+embedded JPEG (normalised correlation at least 0.90, and a peak at least 0.02 above competing matches outside its 7 by
+7 neighbourhood). The stored coefficients, zoom and optical centre were used as stored, with no per-photo fit. Radial
+errors are full-size pixels over reliable matches between 0.15 and 0.95 image half diagonals:
+
+| Body | Files | Uncorrected radial median | Corrected radial median | Corrected radial p95 |
+|---|---:|---:|---:|---:|
+| Z 6 | 3 | 82.84-84.00 px | 0.88-0.96 px | 4.69-4.99 px |
+| Z 7 | 3 | 124.21-124.80 px | 1.37-1.46 px | 6.18-6.38 px |
+
+Reliable patches reach about 0.90 half diagonals on the Z 6 and 0.94 on the Z 7, so the extreme corners aren't
+validated. The remaining smooth edge error matches the native Z lens residual described above. The method, file
+hashes and a production render sweep are in
+[LightCraft PR #3796](https://github.com/storytold/lightcraft/pull/3796).
+
 ## What's left out
 
-Only `NIKON Z 6_2`, `NIKON Z 8` and `NIKON Z f` are corrected, matched exactly. A matching tag on another body doesn't tell us its
+Only `NIKON Z 6`, `NIKON Z 7`, `NIKON Z 6_2`, `NIKON Z 8` and `NIKON Z f` are corrected, matched exactly. A matching tag on another body doesn't tell us its
 pixel pitch or image area, so other bodies can be added once someone checks their files. Only the full-frame 3:2
 image area is corrected, because the stored 21.6 mm radius is the FX half diagonal, so DX and other crops are skipped.
-The decoder also skips data it doesn't recognise (another layout, radius or term count, or no correction mode),
+The decoder also skips data it doesn't recognise (another layout, radius or term count, or a correction mode other than 1 or 3),
 values that are clearly wrong (coefficients past ±1, a zoom past ±0.5, a sensor shift over 5% of the frame) and any
 mapping that folds back on itself before the farthest corner.
 
 The tests in `nef_lens` cover the polynomial and zoom, the sensor-shift center and refusing other bodies, layouts
 and crops. `nikon_in_file_distortion_becomes_a_warp` runs a synthetic Z 6II NEF through the header and full decode
-and a DNG export. `nikon_in_file_distortion_is_limited_to_validated_bodies` checks the corpus: the Z f sample gets the
-warp and the D5100, D7000, D7500 and Coolpix B700 samples don't.
+and a DNG export. `nikon_distortion_modes_are_respected_by_probe_and_full_decode` checks that only modes 1 and 3
+give a warp, in the header probe and the full decode alike. `nikon_in_file_distortion_is_limited_to_validated_bodies`
+checks the corpus: the Z f sample gets the warp and the D5100, D7000, D7500 and Coolpix B700 samples don't.
 
 None of my photos, crops or reference images are committed, only the numbers above.

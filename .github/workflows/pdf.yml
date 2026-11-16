@@ -31,19 +31,19 @@ jobs:
       RUSTFLAGS: --cfg craft_pdf_unicode_fixtures
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@v2.22.4
         with:
           egress-policy: audit
-      - uses: actions/checkout@v7
-      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+      - uses: actions/checkout@v7.0.1
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
           components: rustfmt, clippy
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      - uses: step-security/rust-cache@v2.9.2
         with:
           key: craft-pdf
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.12"
       - name: Provision licensed PDF test fonts
@@ -61,14 +61,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@v2.22.4
         with:
           egress-policy: audit
-      - uses: actions/checkout@v7
-      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+      - uses: actions/checkout@v7.0.1
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      - uses: step-security/rust-cache@v2.9.2
         with:
           key: craft-pdf-backends
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -81,19 +81,19 @@ jobs:
       CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@v2.22.4
         with:
           egress-policy: audit
-      - uses: actions/checkout@v7
-      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+      - uses: actions/checkout@v7.0.1
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
           targets: wasm32-unknown-unknown
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      - uses: step-security/rust-cache@v2.9.2
         with:
           key: craft-pdf-wasm
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.12"
       - name: Provision licensed PDF test fonts
@@ -111,7 +111,7 @@ jobs:
       - name: Install the matching WASM test runner
         # A prebuilt, checksum-verified binary instead of building it from source on every run.
         # A version the pinned action does not list yet falls back to `cargo install --locked`.
-        uses: step-security/taiki-e-install-action@76747d22a7567cc4438546a84f11bdf18e670ab8 # v2.87.32
+        uses: step-security/taiki-e-install-action@v2.87.32
         with:
           tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
           fallback: cargo-install
@@ -122,19 +122,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        uses: step-security/harden-runner@v2.22.4
         with:
           egress-policy: audit
-      - uses: actions/checkout@v7
-      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
+      - uses: actions/checkout@v7.0.1
+      - uses: step-security/dtolnay-rust-toolchain@v1.0.0
         with:
           toolchain: stable
           components: clippy
-      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
+      - uses: step-security/rust-cache@v2.9.2
         with:
           key: craft-plate-test
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.12"
       - name: Provision licensed PDF test fonts

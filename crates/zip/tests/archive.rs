@@ -182,3 +182,26 @@ fn a_clone_keeps_its_own_count() {
     assert_eq!((c.budget().used(), z.budget().used()), (3, 0));
     assert!(z.read("a", 10).unwrap().is_some());
 }
+
+#[test]
+fn owned_archive_reads_and_clones_with_independent_budgets() {
+    let bytes = archive(&[("a", b"abc", Compression::Deflated)]);
+    let mut z = Archive::open_owned(bytes, Limits { max_total_bytes: 3, ..ROOMY }).unwrap();
+    let mut clone = z.clone();
+    assert_eq!(z.read("a", 3).unwrap().as_deref(), Some(&b"abc"[..]));
+    assert!(matches!(z.read("a", 3), Err(Error::BudgetSpent { .. })));
+    assert_eq!(clone.read("a", 3).unwrap().as_deref(), Some(&b"abc"[..]));
+    assert_eq!(clone.budget().used(), 3);
+}
+
+#[test]
+fn owned_archive_applies_directory_guards() {
+    let mut bytes = archive(&[("a", b"1", Compression::Stored), ("b", b"2", Compression::Stored)]);
+    assert!(matches!(Archive::open_owned(bytes.clone(), Limits { max_entries: 1, ..ROOMY }), Err(Error::TooManyEntries { .. })));
+    let local = find(&bytes, b"PK\x03\x04", 4);
+    bytes[local + 30] = b'a';
+    let central = find(&bytes, b"PK\x01\x02", find(&bytes, b"PK\x01\x02", 0) + 4);
+    bytes[central + 46] = b'a';
+    assert!(Archive::open_owned(bytes, ROOMY).unwrap().has_duplicate_names());
+    assert!(Archive::open_owned(b"invalid".to_vec(), ROOMY).is_err());
+}

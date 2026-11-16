@@ -1,0 +1,63 @@
+[package]
+name = "craft-image-codecs"
+description = "Bounded, depth- and metadata-preserving codecs for flat raster image formats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+corpus = []
+default = []
+# Opt in to threaded AVIF encoding without enabling AVIF (or assembly) by itself.
+threads = ["ravif?/threading", "rav1e?/threading"]
+sgi = []
+sunraster = []
+avif = ["image/avif", "dep:ravif", "dep:rav1e", "dep:avif-serialize"]
+heif = ["dep:craft-heif"]
+# AVIF decode: craft-video's clean-room pure-Rust AV1 decoder. Native targets only (on wasm32 a
+# decoder panic aborts instead of becoming an error), so wasm32 builds leave AVIF unreadable.
+avif-decode = ["dep:craft-video", "craft-video/av1-decode"]
+
+[dependencies]
+crc32fast = "1.5"
+thiserror = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "gif", "bmp", "tga", "ico", "qoi", "hdr"] }
+png = "0.18"
+tiff = { version = "0.11", default-features = false, features = ["deflate", "fax", "jpeg", "lzw"] }
+exr = { version = "1.73", default-features = false }
+half = "2"
+serde_json = { workspace = true }
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+image-webp = "0.2"
+zune-jpeg = "0.5"
+zune-core = "0.5"
+jpeg-encoder = "0.6"
+craft-jpeg = { workspace = true }
+craft-metadata = { workspace = true }
+craft-tiff = { workspace = true }
+zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
+craft-heif = { workspace = true, optional = true }
+ravif = { version = "0.13", default-features = false, optional = true }
+rav1e = { version = "0.8", default-features = false, optional = true }
+avif-serialize = { version = "0.8", optional = true }
+hayro-jpeg2000 = { version = "=0.3.5", default-features = false, features = ["std", "simd"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+craft-video = { workspace = true, optional = true }
+exr = { version = "1.73", default-features = false, features = ["rayon"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff"] }
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
+craft-media-testkit = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+craft-video = { workspace = true, features = ["av1-decode"] }
+jxl-oxide = { version = "=0.12.6", default-features = false, features = ["rayon"] }
