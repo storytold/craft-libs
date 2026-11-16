@@ -558,6 +558,11 @@ impl Linter<'_> {
 
     /// Reports `what` when any of `args` is a non-zero literal size.
     fn size_rule<'e>(&mut self, rule: &'static str, what: proc_macro2::Span, args: impl IntoIterator<Item = &'e Expr>) {
+        let args: Vec<&Expr> = args.into_iter().collect();
+        // A vector of literal -1, 0 and 1 is a direction, not a size.
+        if rule == VEC2 && args.iter().all(|a| is_unit_literal(a)) {
+            return;
+        }
         let flagged: Vec<&Expr> = args.into_iter().filter(|a| self.is_flagged_size(a)).collect();
         if flagged.is_empty() {
             return;
@@ -703,6 +708,19 @@ impl Linter<'_> {
             );
             self.report(RAW_COLOUR_CONST, p.span(), message);
         }
+    }
+}
+
+/// Whether `e` is the literal -1, 0 or 1 (any sign, float or integer spelling).
+fn is_unit_literal(e: &Expr) -> bool {
+    match peel(e) {
+        Expr::Unary(u) if matches!(u.op, UnOp::Neg(_)) => is_unit_literal(&u.expr),
+        Expr::Lit(l) => match &l.lit {
+            Lit::Float(f) => f.base10_parse::<f64>().is_ok_and(|v| v == 0.0 || v == 1.0),
+            Lit::Int(i) => i.base10_parse::<u64>().is_ok_and(|v| v <= 1),
+            _ => false,
+        },
+        _ => false,
     }
 }
 

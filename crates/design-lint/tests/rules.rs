@@ -34,6 +34,16 @@ fn literal_shapes() {
 }
 
 #[test]
+fn unit_direction_vectors_are_not_sizes() {
+    for call in ["vec2(0.0, -1.0)", "Vec2::new(1., 0.)", "DocVec::new(-1.0, 0.0)", "Vec2::new(1, 0)"] {
+        assert!(clean(&format!("fn f() {{ let v = {call}; }}")), "{call}");
+    }
+    for call in ["vec2(0.0, 5.0)", "Vec2::new(1.0, 2.0)", "vec2(0.5, 0.0)"] {
+        assert!(flagged(&format!("fn f() {{ let v = {call}; }}"), "literal-size/vec2"), "{call}");
+    }
+}
+
+#[test]
 fn consts_resolve_by_module_and_impl_scope() {
     // A module-level const of the same name in another module is a different const.
     let src = "mod a { const GAP: f32 = 0.0; fn f(ui: &mut Ui) { ui.add_space(GAP); } }\nmod b { const GAP: f32 = 4.0; fn g(ui: &mut Ui) { ui.add_space(GAP); } }\n";
