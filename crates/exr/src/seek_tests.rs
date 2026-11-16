@@ -2,6 +2,8 @@
 //! seekable reader; the whole-part decoder ([`crate::decode`]) is the oracle for what a channel
 //! should hold.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+// (lists of channel groups with one group are arrays of one range on purpose)
+#![allow(clippy::single_range_in_vec_init)]
 
 use std::cell::Cell;
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -591,6 +593,8 @@ fn a_wide_dwab_part_with_half_a_gigabyte_blocks_reads_only_with_a_budget_that_al
     assert_eq!(read(1 << 30).err(), Some(Error::Cancelled));
 }
 
+// (budgets over 4 GiB: a 64-bit usize)
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_block_is_held_to_max_block_bytes_whatever_the_total_budget() {
     // The same 512 MiB DWAB block, read with a 64 GiB budget: `max_block_bytes` decides. The
@@ -1169,11 +1173,13 @@ fn valid_dwa_files_pass_the_guard() {
 
 /// A source that panics when anything at or past `chunks` (where the chunks start) is read: a
 /// read that a check should have refused fails fast instead of allocating.
+#[cfg(target_pointer_width = "64")]
 struct NoChunks<'a> {
     inner: Cursor<&'a [u8]>,
     chunks: u64,
 }
 
+#[cfg(target_pointer_width = "64")]
 impl Read for NoChunks<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         assert!(self.inner.position() < self.chunks, "a chunk was read");
@@ -1181,12 +1187,15 @@ impl Read for NoChunks<'_> {
     }
 }
 
+#[cfg(target_pointer_width = "64")]
 impl Seek for NoChunks<'_> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         self.inner.seek(pos)
     }
 }
 
+// (budgets over 4 GiB: a 64-bit usize)
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_tiny_chunk_declaring_a_gigabyte_block_is_refused_before_it_is_read() {
     // A 1 × 1 file whose data window is patched to 2^30 - 2 pixels wide: one row of one f32
@@ -1268,4 +1277,165 @@ fn memory_the_system_cannot_give_is_out_of_memory_not_a_limit() {
     let index = Index::build(&mut Cursor::new(&bytes[..]), &Limits::none(), &never).unwrap();
     let got = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&[(0, 0)], usize::MAX), &never);
     assert!(matches!(got, Err(Error::OutOfMemory(_))), "{got:?}");
+}
+
+#[test]
+#[allow(clippy::reversed_empty_ranges)] // (reversed ranges are what is tested)
+fn empty_reversed_and_extreme_row_ranges_read_without_overflow() {
+    // (alignment to a level's grid near the ends of i64 overflowed before the rows were clamped)
+    let bytes = file(vec![layer(None, (0, 0), (9, 7), &["R"], false, Compression::ZIP1)], (9, 7));
+    let index = indexed(&bytes);
+    let whole = oracle(&bytes, 0, 0.0)[0].clone();
+    for level in 0..=16u32 {
+        for rows in [i64::MAX..i64::MAX, i64::MIN..i64::MIN, i64::MAX - 1..i64::MAX, 5..2, i64::MAX..i64::MIN, -3..-1, 7..9] {
+            let request = Request { rows: Some(rows.clone()), level, ..Request::new(&[(0, 0)], usize::MAX) };
+            let mut bands = 0;
+            read_bands(&mut Cursor::new(&bytes[..]), &index, &request, &never, &mut |_| bands += 1).unwrap();
+            assert_eq!(bands, 0, "{rows:?} at level {level} holds no row");
+            assert_eq!(index.estimate(&request).unwrap().chunks, 0);
+        }
+        // Everything, from one end of i64 to the other.
+        let request = Request { rows: Some(i64::MIN..i64::MAX), level, ..Request::new(&[(0, 0)], usize::MAX) };
+        let read = read_planes(&mut Cursor::new(&bytes[..]), &index, &request, &never).unwrap();
+        let stride = 1usize << level;
+        let expected: Vec<f32> =
+            (0..7).step_by(stride).flat_map(|y| (0..9).step_by(stride).map(move |x| (y, x))).map(|(y, x)| whole[y * 9 + x]).collect();
+        assert_eq!(read.planes[0], expected, "level {level}");
+    }
+}
+
+#[test]
+fn a_sink_can_stop_the_read_with_its_own_error() {
+    // 600 chunks on 4 threads: the sink refuses its third band. Nothing reaches it after that, the
+    // read returns (no hang) with the sink's error unchanged, and the counts say how far it got.
+    let bytes = file(vec![layer(None, (0, 0), (1024, 600), &["R", "G"], false, Compression::Uncompressed)], (1024, 600));
+    let index = indexed(&bytes);
+    let channels = channels_of(&index, 0);
+    let request = Request { workers: Some(4), ..Request::new(&channels, usize::MAX) };
+    let mut calls = 0usize;
+    let mut stats = Stats::default();
+    let got = read_bands_try(
+        &mut Cursor::new(&bytes[..]),
+        &index,
+        &request,
+        &never,
+        &mut |_: Band| {
+            calls += 1;
+            if calls >= 3 { Err("the tile store is full") } else { Ok(()) }
+        },
+        &mut stats,
+    );
+    assert_eq!(got, Err(Stop::Sink("the tile store is full")));
+    assert_eq!(calls, 3, "no band after the sink's error");
+    assert!(stats.lines >= 1 && stats.lines < 600 && stats.bytes > 0, "{stats:?}");
+    // A sink that never fails reads everything, as `read_bands` does.
+    let mut bands = 0usize;
+    let mut sink = |_: Band| -> std::result::Result<(), ()> {
+        bands += 1;
+        Ok(())
+    };
+    read_bands_try(&mut Cursor::new(&bytes[..]), &index, &request, &never, &mut sink, &mut stats).unwrap();
+    assert_eq!((bands, stats.lines), (1200, 600));
+    // The read's own errors come back as such.
+    let mut damaged = bytes.clone();
+    let at = damaged.len() - 200 * 8200;
+    damaged[at..at + 4].copy_from_slice(&7i32.to_le_bytes());
+    let index = indexed(&damaged);
+    let got = read_bands_try(&mut Cursor::new(&damaged[..]), &index, &request, &never, &mut |_| Ok::<(), ()>(()), &mut stats);
+    assert!(matches!(got, Err(Stop::Read(Error::Malformed(_)))), "{got:?}");
+}
+
+/// The planes of `bands` (grouped or not) for `slots` slots of `w × h`, de-interleaved.
+fn planes_of(bands: &[Band], slots: usize, (w, h): (usize, usize)) -> Vec<Vec<f32>> {
+    let mut planes = vec![vec![-1e30; w * h]; slots];
+    for b in bands {
+        assert_eq!(b.samples.len(), b.width * b.height * b.channels);
+        for r in 0..b.height {
+            for c in 0..b.width {
+                for k in 0..b.channels {
+                    planes[b.slot + k][(b.y + r) * w + b.x + c] = b.samples[(r * b.width + c) * b.channels + k];
+                }
+            }
+        }
+    }
+    planes
+}
+
+#[test]
+fn grouped_slots_arrive_interleaved_as_one_band_per_block() {
+    for tiles in [false, true] {
+        let bytes = file(vec![layer(None, (0, 0), (13, 11), &["R", "G", "B", "A", "Z"], tiles, Compression::ZIP1)], (13, 11));
+        let index = indexed(&bytes);
+        // Stored A B G R Z: ask for R G B A as a group, Z alone, and G again in a group of one.
+        let names: Vec<&str> = index.parts()[0].channels.iter().map(|c| c.name.as_str()).collect();
+        let at = |n: &str| (0, names.iter().position(|m| *m == n).unwrap());
+        let channels = [at("R"), at("G"), at("B"), at("A"), at("Z"), at("G")];
+        for (rows, level) in [(None, 0u32), (Some(3..9), 0), (None, 1)] {
+            let base = Request { rows: rows.clone(), level, ..Request::new(&channels, usize::MAX) };
+            let mut single = Vec::new();
+            read_bands(&mut Cursor::new(&bytes[..]), &index, &base, &never, &mut |b| single.push(b)).unwrap();
+            let groups = [0..4, 5..6];
+            let mut grouped = Vec::new();
+            read_bands(&mut Cursor::new(&bytes[..]), &index, &Request { groups: &groups, ..base.clone() }, &never, &mut |b| grouped.push(b)).unwrap();
+            assert!(single.iter().all(|b| b.channels == 1));
+            assert!(grouped.iter().all(|b| b.channels == if b.slot == 0 { 4 } else { 1 }), "{tiles} {rows:?} {level}");
+            assert_eq!(grouped.iter().filter(|b| b.slot == 0).count(), single.iter().filter(|b| b.slot == 0).count(), "one band per block");
+            let size = level_size((13, 11), level);
+            assert_eq!(planes_of(&grouped, 6, size), planes_of(&single, 6, size), "tiles {tiles} rows {rows:?} level {level}");
+            // `read_planes` ignores groups.
+            let with = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request { groups: &groups, ..base.clone() }, &never).unwrap();
+            assert_eq!(with, read_planes(&mut Cursor::new(&bytes[..]), &index, &base, &never).unwrap());
+        }
+    }
+}
+
+#[test]
+fn groups_must_be_slots_of_one_part_each_in_one_group() {
+    let bytes = file(
+        vec![
+            layer(Some("a"), (0, 0), (8, 8), &["R", "G"], false, Compression::ZIP1),
+            layer(Some("b"), (0, 0), (8, 8), &["Z"], false, Compression::ZIP1),
+        ],
+        (8, 8),
+    );
+    let index = indexed(&bytes);
+    let channels = [(0, 0), (0, 1), (1, 0)];
+    let read = |groups: &[std::ops::Range<usize>]| {
+        read_bands(&mut Cursor::new(&bytes[..]), &index, &Request { groups, ..Request::new(&channels, usize::MAX) }, &never, &mut |_| {})
+    };
+    assert!(matches!(read(&[1..3]), Err(Error::Unsupported(m)) if m.contains("spans parts")));
+    for bad in [&[0..2, 1..2][..], &[2..4], &[1..1]] {
+        assert!(matches!(read(bad), Err(Error::Malformed(_))), "{bad:?}");
+    }
+    assert!(read(&[0..2]).is_ok());
+}
+
+#[test]
+fn the_estimate_covers_what_the_read_does() {
+    // A flat colour in ZIP16 (decodes to far more than it reads), lines of a ramp, and tiles.
+    let (w, h) = (1024usize, 600usize);
+    let list = vec![AnyChannel::new("R", FlatSamples::F32(vec![0.25; w * h])), AnyChannel::new("G", FlatSamples::F32(vec![0.5; w * h]))];
+    let encoding = Encoding { compression: Compression::ZIP16, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
+    let flat = file(vec![Layer::new((w, h), LayerAttributes::default(), encoding, AnyChannels::sort(list.into()))], (w, h));
+    let ramp = file(vec![layer(None, (0, 0), (1024, 600), &["R", "G"], false, Compression::Uncompressed)], (1024, 600));
+    let tiled = file(vec![layer(None, (0, 0), (300, 200), &["R", "G", "B"], true, Compression::PIZ)], (300, 200));
+    for bytes in [&flat, &ramp, &tiled] {
+        let index = indexed(bytes);
+        let channels = channels_of(&index, 0);
+        for (rows, level, workers) in [(None, 0u32, None), (Some(50..120), 0, Some(4)), (None, 1, Some(0))] {
+            let request = Request { rows: rows.clone(), level, workers, ..Request::new(&channels, usize::MAX) };
+            let estimate = index.estimate(&request).unwrap();
+            let read = read_planes(&mut Cursor::new(&bytes[..]), &index, &request, &never).unwrap();
+            let what = format!("{rows:?} level {level}: {estimate:?} {:?}", read.stats);
+            assert_eq!(estimate.chunks, read.stats.chunks.iter().sum::<usize>(), "{what}");
+            assert_eq!(estimate.compressed_bytes, read.stats.bytes, "{what}");
+            assert!(estimate.working_bytes >= read.stats.in_flight, "{what}");
+            let (ow, oh) = level_size((index.display().width as usize, index.display().height as usize), level);
+            assert_eq!(estimate.planes_bytes, (ow * oh * 4 * channels.len()) as u64, "{what}");
+        }
+    }
+    // It refuses what the read refuses.
+    let index = indexed(&ramp);
+    assert!(matches!(index.estimate(&Request::new(&[(0, 0)], 1024)), Err(Error::LimitExceeded(_))));
+    assert!(matches!(index.estimate(&Request::new(&[(0, 9)], usize::MAX)), Err(Error::Malformed(_))));
 }

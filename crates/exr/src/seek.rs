@@ -25,6 +25,13 @@
 //! converted to `f32` (integer samples above 2^24 lose precision); outside a part's data window
 //! (and in rows no chunk holds) a plane has the channel's fill value.
 //!
+//! A tile writer (an image editor storing a picture in tiles at its own depth) uses it like this:
+//! [`Index::build`], then [`Index::estimate`] to reserve the working memory and size a progress
+//! bar (one step per chunk), then [`read_bands_try`] with the colour channels as one group
+//! ([`Request::groups`]), so each block arrives as one band of interleaved pixels to write into
+//! the tiles it covers. Its sink checks the tile budget or scratch disk before each band and
+//! returns its own error to stop the read; the read winds down and hands that error back.
+//!
 //! Deep parts are not read here (see [`crate::deep`]); a flat part beside them is. Tiled parts
 //! are read from their largest resolution level. Every size a header declares is checked before
 //! it is used and every allocation is bounded by a limit or reserved fallibly.
@@ -625,13 +632,19 @@ pub struct Request<'a> {
     /// block is one strip of the file (at most 256 scan lines, for DWAB): 8 GiB is a 16K-wide
     /// strip of 256 lines of 512 f32 channels.
     pub max_block_bytes: Option<usize>,
+    /// Runs of request slots delivered together, as one band per block whose pixels hold the
+    /// slots' values in slot order (`0..4` over R, G, B, A of a part: one RGBA band): for a caller
+    /// that stores pixels interleaved. Every slot of a group must name a channel of the same part
+    /// (they then share every block), and no slot may be in two groups; slots in no group come one
+    /// band each, as without groups. Empty: no groups. [`read_planes`] ignores it.
+    pub groups: &'a [Range<usize>],
 }
 
 impl<'a> Request<'a> {
     /// Every row of `channels` at full resolution, fill 0, up to `max_bytes` of samples, with as
     /// many decoding threads as the machine runs at once.
     pub fn new(channels: &'a [(usize, usize)], max_bytes: usize) -> Request<'a> {
-        Request { channels, fill: &[], rows: None, level: 0, max_bytes, workers: None, max_block_bytes: None }
+        Request { channels, fill: &[], rows: None, level: 0, max_bytes, workers: None, max_block_bytes: None, groups: &[] }
     }
 }
 
@@ -641,18 +654,21 @@ pub fn level_size((width, height): (usize, usize), level: u32) -> (usize, usize)
     (width.div_ceil(stride), height.div_ceil(stride))
 }
 
-/// A rectangle of rows of one requested channel, decoded: `samples` holds `height` rows of
-/// `width` values, row by row. `x` and `y` are in the output grid, counted from the display
-/// window's top-left corner (0, 0, not its absolute position): display-window pixels at level 0,
-/// every `2^level`-th pixel above.
+/// A rectangle of rows of one requested channel, or of a group of them ([`Request::groups`]),
+/// decoded: `samples` holds `height` rows of `width` pixels, row by row, each pixel `channels`
+/// values in slot order. `x` and `y` are in the output grid, counted from the display window's
+/// top-left corner (0, 0, not its absolute position): display-window pixels at level 0, every
+/// `2^level`-th pixel above.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Band {
-    /// The position of the channel in [`Request::channels`].
+    /// The position of the channel in [`Request::channels`]; for a group, its first slot.
     pub slot: usize,
     pub x: usize,
     pub y: usize,
     pub width: usize,
     pub height: usize,
+    /// The values per pixel: 1, or the size of the group the band is of.
+    pub channels: usize,
     pub samples: Vec<f32>,
 }
 
@@ -670,6 +686,23 @@ pub struct Stats {
     pub in_flight: u64,
 }
 
+/// What a read will take, from [`Index::estimate`], before anything is read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Estimate {
+    /// The chunks it fetches: one unit of progress each (a read hands every chunk's bands over
+    /// together).
+    pub chunks: usize,
+    /// The bytes of those chunks it reads from the source.
+    pub compressed_bytes: u64,
+    /// An upper estimate of the most memory the read holds at once besides what the sink keeps:
+    /// the decoded bytes in flight (as [`Stats::in_flight`] counts them), as much again for the
+    /// decompressors' scratch, two pieces of compressed bytes, and each worker's copy of the
+    /// chunk it decodes.
+    pub working_bytes: u64,
+    /// The bytes of the planes [`read_planes`] allocates for the request.
+    pub planes_bytes: u64,
+}
+
 /// The planes of [`read_planes`]: one per requested channel, `width` × `height` (the display
 /// window at the request's level).
 #[derive(Debug, Clone, PartialEq)]
@@ -679,6 +712,32 @@ pub struct Planes {
     pub planes: Vec<Vec<f32>>,
     pub stats: Stats,
 }
+
+/// How a read with a fallible sink ([`read_bands_try`]) ended early.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stop<E> {
+    /// The read failed.
+    Read(Error),
+    /// The sink returned this error; nothing was handed to it after.
+    Sink(E),
+}
+
+impl<E> From<Error> for Stop<E> {
+    fn from(e: Error) -> Self {
+        Stop::Read(e)
+    }
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for Stop<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Stop::Read(e) => e.fmt(f),
+            Stop::Sink(e) => e.fmt(f),
+        }
+    }
+}
+
+impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for Stop<E> {}
 
 /// The planes' geometry for [`chunk_bands`].
 struct Geometry<'a> {
@@ -690,6 +749,8 @@ struct Geometry<'a> {
     rows: Range<i64>,
     /// Each part's channel → the request slots that name it.
     slots: &'a [Vec<Vec<usize>>],
+    /// The request's groups of slots delivered interleaved.
+    groups: &'a [Range<usize>],
 }
 
 impl Geometry<'_> {
@@ -701,7 +762,8 @@ impl Geometry<'_> {
     /// A chunk holding display rows `a..b` has a row read.
     fn any_wanted(&self, a: i64, b: i64) -> bool {
         let first = a.max(self.rows.start);
-        let first = first + (self.stride - first.rem_euclid(self.stride)) % self.stride;
+        // (saturating: the rows are clamped to the display window, but the chunk's top may not be)
+        let first = first.saturating_add((self.stride - first.rem_euclid(self.stride)) % self.stride);
         first < b.min(self.rows.end)
     }
 
@@ -723,89 +785,30 @@ struct Planned {
     cost: u64,
 }
 
-/// The bands of what `request` asks for, handed to `sink` one decoded block at a time, in file
-/// order: by offset in the file, so a part written bottom-up (`LineOrder::Decreasing`) arrives
-/// bottom-up, and the chunks of several parts arrive interleaved as the file stores them. Within
-/// a block, the bands come by request slot.
-///
-/// The chunks are read on the calling thread, in pieces of chunks that follow each other in the
-/// file, and decompressed on worker threads ([`Request::workers`]) while the next piece is read.
-/// Each time a piece has been read, and while waiting, the calling thread hands every band that
-/// is next in file order to `sink`, so the first bands arrive after the first few hundred
-/// kilobytes have been read, not after the whole request, and `sink` needs to be neither `Send`
-/// nor `Sync`.
-///
-/// Memory is bounded. At most one piece is read ahead of what has been delivered, so at most two
-/// pieces of compressed bytes (8 MiB, or one larger chunk) are held. Each chunk's decoded bytes
-/// are estimated from the headers as its decompressed block plus 4 bytes per pixel for each
-/// requested slot of its part (see [`Stats::in_flight`]); the chunks in flight stay within
-/// 64 MiB of that, and a chunk whose estimate alone is over 64 MiB is decoded alone, once
-/// everything before it has been delivered, so however many workers run, at most one such chunk
-/// is held at a time. A block may take no more than [`Request::max_block_bytes`] (by default
-/// 256 MiB, or [`Request::max_bytes`] if that is more); a needed chunk over it is refused
-/// ([`Error::LimitExceeded`]) before anything is read.
-/// For one big chunk the real peak is several times its block: its compressed bytes in the
-/// piece, the `exr` crate's copy of its payload (a chunk's declared size is checked against the
-/// bytes it holds first, so that copy is no larger than the chunk), the decompressed block, the
-/// decompressor's scratch buffers, and the `f32` bands; roughly 3 to 4 times
-/// `max(256 MiB, max_bytes)` at worst. Where threads can't be started (WebAssembly) the chunks
-/// are decoded on the calling thread instead. `cancel` is polled before each piece, before each
-/// chunk is handed to `sink`, and at least every 50 ms while waiting for the workers.
-///
-/// A band lies inside the planes the request describes ([`level_size`] of the display window);
-/// rows or columns no chunk or data window covers are not delivered. A chunk the request needs
-/// whose offset lies outside the file fails the read before anything is read or delivered
-/// ([`Error::Malformed`]). A chunk that can't be decoded or isn't the block its offset-table
-/// entry stands for fails the read when its turn comes: the bands before it have been delivered
-/// by then.
-pub fn read_bands<R: Read + Seek + ?Sized>(
-    source: &mut R,
-    index: &Index,
-    request: &Request,
-    cancel: &dyn Fn() -> bool,
-    sink: &mut dyn FnMut(Band),
-) -> Result<Stats> {
-    read_bands_within(source, index, request, cancel, sink, IN_FLIGHT_BYTES)
+/// What a request needs, worked out from the index alone: the shared first step of a read and of
+/// [`Index::estimate`].
+struct Plan {
+    /// Per part and channel: the request slots that name it.
+    slots: Vec<Vec<Vec<usize>>>,
+    size: (usize, usize),
+    out: (usize, usize),
+    stride: i64,
+    rows: Range<i64>,
+    /// The chunks to read, in file order.
+    jobs: Vec<Planned>,
+    /// The decoding threads to start.
+    workers: usize,
 }
 
-/// [`read_bands`] that keeps what it did in `stats` as it goes, so the counts are there also when
-/// the read fails or is cancelled (they then say how far it got). `stats` is reset first.
-pub fn read_bands_with_stats<R: Read + Seek + ?Sized>(
-    source: &mut R,
-    index: &Index,
-    request: &Request,
-    cancel: &dyn Fn() -> bool,
-    sink: &mut dyn FnMut(Band),
-    stats: &mut Stats,
-) -> Result<()> {
-    read_into(source, index, request, cancel, sink, IN_FLIGHT_BYTES, stats)
+impl Plan {
+    fn geometry<'a>(&'a self, request: &Request<'a>) -> Geometry<'a> {
+        Geometry { size: self.size, out: self.out, stride: self.stride, rows: self.rows.clone(), slots: &self.slots, groups: request.groups }
+    }
 }
 
-/// [`read_bands`] keeping at most `budget` decoded bytes in flight (the tests use a small one).
-pub(crate) fn read_bands_within<R: Read + Seek + ?Sized>(
-    source: &mut R,
-    index: &Index,
-    request: &Request,
-    cancel: &dyn Fn() -> bool,
-    sink: &mut dyn FnMut(Band),
-    budget: u64,
-) -> Result<Stats> {
-    let mut stats = Stats::default();
-    read_into(source, index, request, cancel, sink, budget, &mut stats)?;
-    Ok(stats)
-}
-
-/// The read behind [`read_bands`], counting into `stats`.
-fn read_into<R: Read + Seek + ?Sized>(
-    source: &mut R,
-    index: &Index,
-    request: &Request,
-    cancel: &dyn Fn() -> bool,
-    sink: &mut dyn FnMut(Band),
-    budget: u64,
-    stats: &mut Stats,
-) -> Result<()> {
-    *stats = Stats { chunks: vec![0; index.layout.len()], ..Default::default() };
+/// Checks `request` against `index` and lists the chunks it needs (see [`read_bands`] for the
+/// checks): nothing is read.
+fn plan(index: &Index, request: &Request) -> Result<Plan> {
     let level = request.level.min(16);
     let stride = 1i64 << level;
     let (w, h) = (index.display.width as usize, index.display.height as usize);
@@ -825,8 +828,28 @@ fn read_into<R: Read + Seek + ?Sized>(
             s.push(slot);
         }
     }
+    // Groups: slots of one part (so they share every block), none in two groups.
+    let mut grouped = vec![false; request.channels.len()];
+    for group in request.groups {
+        let members = request
+            .channels
+            .get(group.clone())
+            .filter(|m| !m.is_empty())
+            .ok_or_else(|| malformed(format!("channel group {group:?} is empty or past the requested channels")))?;
+        if members.iter().any(|(part, _)| Some(*part) != members.first().map(|m| m.0)) {
+            return Err(Error::Unsupported(format!("channel group {group:?} spans parts")));
+        }
+        for taken in grouped.get_mut(group.clone()).unwrap_or_default() {
+            if std::mem::replace(taken, true) {
+                return Err(malformed(format!("channel group {group:?} overlaps another")));
+            }
+        }
+    }
     let rows = request.rows.clone().unwrap_or(0..h as i64);
-    let geometry = Geometry { size: (w, h), out, stride, rows: rows.start.max(0)..rows.end.min(h as i64), slots: &slots };
+    // (both ends inside the display window, so an empty or reversed range at either end of i64
+    // stays empty instead of overflowing when aligned to the level's grid)
+    let rows = rows.start.clamp(0, h as i64)..rows.end.clamp(0, h as i64);
+    let geometry = Geometry { size: (w, h), out, stride, rows: rows.clone(), slots: &slots, groups: request.groups };
     // What the request delivers: the rows read, at the level, of every requested channel.
     let need = plane_bytes((out.0, geometry.rows_read()), request.channels.len());
     if need > request.max_bytes {
@@ -865,22 +888,180 @@ fn read_into<R: Read + Seek + ?Sized>(
         }
     }
     jobs.sort_by_key(|j| j.offset);
-    if jobs.is_empty() {
-        return Ok(());
-    }
     // (no more threads than chunks can be in flight: two pieces)
     let workers =
         request.workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from)).min(jobs.len()).min(2 * PIECE_CHUNKS);
+    Ok(Plan { slots, size: (w, h), out, stride, rows, jobs, workers })
+}
+
+impl Index {
+    /// What reading `request` will take, before anything is read: the chunks (one unit of
+    /// progress each), their bytes, the most memory the read holds at once, and the planes
+    /// [`read_planes`] allocates. Fails as the read would on the same request (limits, unknown or
+    /// deep channels), so an app can reserve memory and size a progress bar first.
+    pub fn estimate(&self, request: &Request) -> Result<Estimate> {
+        estimate_within(self, request, IN_FLIGHT_BYTES)
+    }
+}
+
+/// [`Index::estimate`] for a read keeping at most `budget` decoded bytes in flight.
+fn estimate_within(index: &Index, request: &Request, budget: u64) -> Result<Estimate> {
+    let plan = plan(index, request)?;
+    let sum = |f: fn(&Planned) -> u64| plan.jobs.iter().map(f).fold(0u64, u64::saturating_add);
+    let most = |f: fn(&Planned) -> u64| plan.jobs.iter().map(f).max().unwrap_or(0);
+    let (compressed, longest) = (sum(|j| j.len), most(|j| j.len));
+    // As the read bounds them: decoded bytes within the budget or one chunk, two pieces.
+    let decoded = sum(|j| j.cost).min(budget.max(most(|j| j.cost)));
+    let pieces = compressed.min(PIECE_BYTES.max(longest).saturating_mul(2));
+    let copies = (plan.workers.max(1) as u64).saturating_mul(longest).min(compressed);
+    let (w, h) = level_size(plan.size, request.level.min(16));
+    Ok(Estimate {
+        chunks: plan.jobs.len(),
+        compressed_bytes: compressed,
+        working_bytes: decoded.saturating_mul(2).saturating_add(pieces).saturating_add(copies),
+        planes_bytes: plane_bytes((w, h), request.channels.len()) as u64,
+    })
+}
+
+/// The bands of what `request` asks for, handed to `sink` one decoded block at a time, in file
+/// order: by offset in the file, so a part written bottom-up (`LineOrder::Decreasing`) arrives
+/// bottom-up, and the chunks of several parts arrive interleaved as the file stores them. Within
+/// a block, the bands come by request slot (a group at its first slot).
+///
+/// The chunks are read on the calling thread, in pieces of chunks that follow each other in the
+/// file, and decompressed on worker threads ([`Request::workers`]) while the next piece is read.
+/// Each time a piece has been read, and while waiting, the calling thread hands every band that
+/// is next in file order to `sink`, so the first bands arrive after the first few hundred
+/// kilobytes have been read, not after the whole request, and `sink` needs to be neither `Send`
+/// nor `Sync`.
+///
+/// Memory is bounded. At most one piece is read ahead of what has been delivered, so at most two
+/// pieces of compressed bytes (8 MiB, or one larger chunk) are held. Each chunk's decoded bytes
+/// are estimated from the headers as its decompressed block plus 4 bytes per pixel for each
+/// requested slot of its part (see [`Stats::in_flight`]); the chunks in flight stay within
+/// 64 MiB of that, and a chunk whose estimate alone is over 64 MiB is decoded alone, once
+/// everything before it has been delivered, so however many workers run, at most one such chunk
+/// is held at a time. A block may take no more than [`Request::max_block_bytes`] (by default
+/// 256 MiB, or [`Request::max_bytes`] if that is more); a needed chunk over it is refused
+/// ([`Error::LimitExceeded`]) before anything is read.
+/// For one big chunk the real peak is several times its block: its compressed bytes in the
+/// piece, the `exr` crate's copy of its payload (a chunk's declared size is checked against the
+/// bytes it holds first, so that copy is no larger than the chunk), the decompressed block, the
+/// decompressor's scratch buffers, and the `f32` bands; roughly 3 to 4 times
+/// `max(256 MiB, max_bytes)` at worst ([`Index::estimate`] gives the bound for a request). Where
+/// threads can't be started (WebAssembly) the chunks are decoded on the calling thread instead.
+/// `cancel` is polled before each piece, before each chunk is handed to `sink`, and at least
+/// every 50 ms while waiting for the workers.
+///
+/// A band lies inside the planes the request describes ([`level_size`] of the display window);
+/// rows or columns no chunk or data window covers are not delivered. A chunk the request needs
+/// whose offset lies outside the file fails the read before anything is read or delivered
+/// ([`Error::Malformed`]). A chunk that can't be decoded or isn't the block its offset-table
+/// entry stands for fails the read when its turn comes: the bands before it have been delivered
+/// by then.
+pub fn read_bands<R: Read + Seek + ?Sized>(
+    source: &mut R,
+    index: &Index,
+    request: &Request,
+    cancel: &dyn Fn() -> bool,
+    sink: &mut dyn FnMut(Band),
+) -> Result<Stats> {
+    read_bands_within(source, index, request, cancel, sink, IN_FLIGHT_BYTES)
+}
+
+/// [`read_bands`] that keeps what it did in `stats` as it goes, so the counts are there also when
+/// the read fails or is cancelled (they then say how far it got). `stats` is reset first.
+pub fn read_bands_with_stats<R: Read + Seek + ?Sized>(
+    source: &mut R,
+    index: &Index,
+    request: &Request,
+    cancel: &dyn Fn() -> bool,
+    sink: &mut dyn FnMut(Band),
+    stats: &mut Stats,
+) -> Result<()> {
+    read_infallible(source, index, request, cancel, sink, IN_FLIGHT_BYTES, stats)
+}
+
+/// [`read_bands_with_stats`] with a sink that can stop the read with an error of its own (a tile
+/// store out of room, a full scratch disk): nothing more is read or handed to the sink after it
+/// fails, the decoding threads wind down as on a cancel, and the sink's error comes back as
+/// [`Stop::Sink`], unchanged. `stats` says how far the read got either way.
+///
+/// This is also the way to pull: a caller that wants to decide band by band whether to go on (and
+/// check a budget before each one) does that in the sink. A pulling iterator would have to run the
+/// read on a thread of its own, because the read hands bands over from the middle of its loop.
+pub fn read_bands_try<R: Read + Seek + ?Sized, E>(
+    source: &mut R,
+    index: &Index,
+    request: &Request,
+    cancel: &dyn Fn() -> bool,
+    sink: &mut dyn FnMut(Band) -> std::result::Result<(), E>,
+    stats: &mut Stats,
+) -> std::result::Result<(), Stop<E>> {
+    read_into(source, index, request, cancel, sink, IN_FLIGHT_BYTES, stats)
+}
+
+/// [`read_bands`] keeping at most `budget` decoded bytes in flight (the tests use a small one).
+pub(crate) fn read_bands_within<R: Read + Seek + ?Sized>(
+    source: &mut R,
+    index: &Index,
+    request: &Request,
+    cancel: &dyn Fn() -> bool,
+    sink: &mut dyn FnMut(Band),
+    budget: u64,
+) -> Result<Stats> {
+    let mut stats = Stats::default();
+    read_infallible(source, index, request, cancel, sink, budget, &mut stats)?;
+    Ok(stats)
+}
+
+/// [`read_into`] with a sink that can't fail.
+fn read_infallible<R: Read + Seek + ?Sized>(
+    source: &mut R,
+    index: &Index,
+    request: &Request,
+    cancel: &dyn Fn() -> bool,
+    sink: &mut dyn FnMut(Band),
+    budget: u64,
+    stats: &mut Stats,
+) -> Result<()> {
+    let mut sink = |band: Band| -> std::result::Result<(), std::convert::Infallible> {
+        sink(band);
+        Ok(())
+    };
+    read_into(source, index, request, cancel, &mut sink, budget, stats).map_err(|stop| match stop {
+        Stop::Read(e) => e,
+        Stop::Sink(never) => match never {},
+    })
+}
+
+/// The read behind [`read_bands`], counting into `stats`.
+fn read_into<R: Read + Seek + ?Sized, E>(
+    source: &mut R,
+    index: &Index,
+    request: &Request,
+    cancel: &dyn Fn() -> bool,
+    sink: &mut dyn FnMut(Band) -> std::result::Result<(), E>,
+    budget: u64,
+    stats: &mut Stats,
+) -> std::result::Result<(), Stop<E>> {
+    *stats = Stats { chunks: vec![0; index.layout.len()], ..Default::default() };
+    let plan = plan(index, request)?;
+    let geometry = plan.geometry(request);
+    let jobs = &plan.jobs;
+    if jobs.is_empty() {
+        return Ok(());
+    }
     // (declared outside the scope because the workers borrow the receiving end)
     let (to_workers, queue) = mpsc::channel::<Job>();
     let queue = Mutex::new(queue);
     std::thread::scope(|scope| {
-        // Owned by this closure so that every way out of it (an error, a cancel) drops the
-        // sending end, which ends the workers' loops before the scope waits for them.
+        // Owned by this closure so that every way out of it (an error, a cancel, the sink's
+        // error) drops the sending end, which ends the workers' loops before the scope waits.
         let to_workers = to_workers;
         let (done, results) = mpsc::channel();
         let mut started = 0usize;
-        for _ in 0..workers {
+        for _ in 0..plan.workers {
             let (queue, done, geometry) = (&queue, done.clone(), &geometry);
             let worker =
                 std::thread::Builder::new().name("exr-decode".into()).spawn_scoped(scope, move || decode_worker(index, geometry, queue, &done));
@@ -898,7 +1079,7 @@ fn read_into<R: Read + Seek + ?Sized>(
         // The sequence number of the first chunk of the piece read last.
         let mut last_piece = 0usize;
         // Hands over what is next in order and takes it off the bytes in flight.
-        let mut deliver = |order: &mut InOrder, in_flight: &mut u64, stats: &mut Stats| -> Result<()> {
+        let mut deliver = |order: &mut InOrder, in_flight: &mut u64, stats: &mut Stats| -> std::result::Result<(), Stop<E>> {
             let before = order.next;
             let delivered = order.deliver(sink, stats, cancel);
             let done: u64 = jobs.get(before..order.next).unwrap_or_default().iter().map(|j| j.cost).fold(0, u64::saturating_add);
@@ -907,7 +1088,7 @@ fn read_into<R: Read + Seek + ?Sized>(
         };
         while submitted < jobs.len() {
             if cancel() {
-                return Err(Error::Cancelled);
+                return Err(Error::Cancelled.into());
             }
             let rest = jobs.get(submitted..).unwrap_or_default();
             let take = piece_len(rest, most, budget);
@@ -922,7 +1103,7 @@ fn read_into<R: Read + Seek + ?Sized>(
                 order.accept(seq, result);
                 deliver(&mut order, &mut in_flight, stats)?;
                 if cancel() {
-                    return Err(Error::Cancelled);
+                    return Err(Error::Cancelled.into());
                 }
             }
             most = most.saturating_mul(2).min(PIECE_BYTES);
@@ -950,7 +1131,7 @@ fn read_into<R: Read + Seek + ?Sized>(
         // Everything is read: the rest as it is decoded.
         while order.next < submitted {
             if cancel() {
-                return Err(Error::Cancelled);
+                return Err(Error::Cancelled.into());
             }
             let (seq, result) = next_result(&results, cancel)?;
             order.accept(seq, result);
@@ -998,7 +1179,9 @@ pub fn read_planes<R: Read + Seek + ?Sized>(source: &mut R, index: &Index, reque
         plane.resize(n, request.fill.get(slot).copied().unwrap_or(0.0));
         planes.push(plane);
     }
-    let stats = read_bands(source, index, request, cancel, &mut |band: Band| {
+    // (one plane per slot: groups would interleave)
+    let request = Request { groups: &[], ..request.clone() };
+    let stats = read_bands(source, index, &request, cancel, &mut |band: Band| {
         let Some(plane) = planes.get_mut(band.slot) else { return };
         for r in 0..band.height {
             let start = (band.y + r).checked_mul(ow).and_then(|row| row.checked_add(band.x));
@@ -1093,17 +1276,23 @@ impl InOrder {
     /// Hands every chunk that is next in order to `sink`, polling `cancel` before each one; the
     /// first chunk that failed to decode ends the read with its error (after the chunks before it
     /// were delivered).
-    fn deliver(&mut self, sink: &mut dyn FnMut(Band), stats: &mut Stats, cancel: &dyn Fn() -> bool) -> Result<()> {
+    /// The sink's error stops the delivery at once (no band after it).
+    fn deliver<E>(
+        &mut self,
+        sink: &mut dyn FnMut(Band) -> std::result::Result<(), E>,
+        stats: &mut Stats,
+        cancel: &dyn Fn() -> bool,
+    ) -> std::result::Result<(), Stop<E>> {
         while self.waiting.contains_key(&self.next) {
             if cancel() {
-                return Err(Error::Cancelled);
+                return Err(Error::Cancelled.into());
             }
             let Some(decoded) = self.waiting.remove(&self.next) else { break };
             self.next += 1;
             let (bands, lines) = decoded?;
             stats.lines = stats.lines.saturating_add(lines);
             for band in bands {
-                sink(band);
+                sink(band).map_err(Stop::Sink)?;
             }
         }
         Ok(())
@@ -1294,9 +1483,10 @@ fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Ge
     }
     // One band per run of consecutive rows of a channel that start in the same column and are as
     // wide as each other (all the rows of a scan-line block or of a tile).
-    let mut bands = Vec::new();
+    let mut by_slot: std::collections::BTreeMap<usize, Vec<Band>> = std::collections::BTreeMap::new();
     for (slot, mut list) in rows {
         list.sort_by_key(|(row, _, _)| *row);
+        let bands = by_slot.entry(slot).or_default();
         let mut current: Option<Band> = None;
         for (row, col, values) in list {
             if let Some(b) = current.as_mut()
@@ -1309,9 +1499,43 @@ fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Ge
                 continue;
             }
             bands.extend(current.take());
-            current = Some(Band { slot, x: col, y: row, width: values.len(), height: 1, samples: values });
+            current = Some(Band { slot, x: col, y: row, width: values.len(), height: 1, channels: 1, samples: values });
         }
         bands.extend(current);
     }
-    Ok((bands, lines))
+    Ok((group_bands(by_slot, g.groups)?, lines))
+}
+
+/// The bands of one block, by slot, in slot order, with each group's slots interleaved into one
+/// band per rectangle at the group's first slot. The slots of a group are channels of one part,
+/// so they cover the same rectangles; a group whose slots don't is a damaged block.
+fn group_bands(mut by_slot: std::collections::BTreeMap<usize, Vec<Band>>, groups: &[Range<usize>]) -> Result<Vec<Band>> {
+    let mut out = Vec::new();
+    for group in groups {
+        let members: Vec<Vec<Band>> = group.clone().filter_map(|slot| by_slot.remove(&slot)).collect();
+        if members.is_empty() {
+            continue;
+        }
+        let n = group.len();
+        let first = members.first().map_or(&[][..], Vec::as_slice);
+        let same = |bands: &Vec<Band>| {
+            bands.len() == first.len() && bands.iter().zip(first).all(|(a, b)| (a.x, a.y, a.width, a.height) == (b.x, b.y, b.width, b.height))
+        };
+        if members.len() != n || !members.iter().all(same) {
+            return Err(malformed("the channels of a group decoded to different rectangles"));
+        }
+        for (k, band) in first.iter().enumerate() {
+            let pixels = band.samples.len();
+            let mut samples = Vec::new();
+            samples.try_reserve_exact(pixels.saturating_mul(n)).map_err(|_| Error::OutOfMemory("band allocation".into()))?;
+            for p in 0..pixels {
+                samples.extend(members.iter().map(|m| m.get(k).and_then(|b| b.samples.get(p)).copied().unwrap_or(0.0)));
+            }
+            out.push(Band { slot: group.start, channels: n, samples, ..band.clone() });
+        }
+    }
+    out.extend(by_slot.into_values().flatten());
+    // (slot order: a group at its first slot)
+    out.sort_by_key(|b| b.slot);
+    Ok(out)
 }
