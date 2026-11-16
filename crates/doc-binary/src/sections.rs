@@ -2,7 +2,7 @@
 //! the `Plcfhdd` stories of the header subdocument ([MS-DOC] §2.8.25, §2.9.244).
 
 use craft_wordmodel::section::NumFormat;
-use craft_wordmodel::section::{Columns, SectionProps, SectionStart};
+use craft_wordmodel::section::{SectionProps, SectionStart};
 
 use crate::fib::{Fib, pair};
 use crate::sprm::{self, Prl};
@@ -14,6 +14,7 @@ pub(crate) const MAX_SECTIONS: usize = 1024;
 const S_BKC: u16 = 0x3009;
 const S_TITLE_PAGE: u16 = 0x300A; // sprmSFTitlePage
 const S_CCOLUMNS: u16 = 0x500B;
+const S_DXA_COLUMNS: u16 = 0x900C; // sprmSDxaColumns: the space between evenly spaced columns
 const S_PGN_START: u16 = 0x300C; // sprmSPgnStart
 const S_ORIENTATION: u16 = 0x301D; // sprmSBOrientation
 const S_HDR_TOP: u16 = 0xB017;
@@ -97,6 +98,13 @@ pub(crate) fn parse_with(word: &[u8], table: &[u8], fib: &Fib, sepx: impl Fn(&[u
                 apply_section(&mut props, &prl);
             }
         }
+        // sprmSNFtn and sprmSNEdn count only with continuous numbering ([MS-DOC] §2.6.4; Word
+        // allows another start only then), whatever order the sprms come in.
+        for pr in [&mut props.footnote_pr, &mut props.endnote_pr] {
+            if matches!(pr.num_restart, Some(craft_wordmodel::section::NoteRestart::EachSect | craft_wordmodel::section::NoteRestart::EachPage)) {
+                pr.num_start = None;
+            }
+        }
         // Without an explicit orientation sprm, infer it from the page shape.
         if !explicit_orient {
             if props.page_w < props.page_h {
@@ -135,7 +143,13 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
         S_TITLE_PAGE => s.title_page = prl.operand.first().is_some_and(|&v| v != 0),
         S_CCOLUMNS => {
             if let Some(c) = s16(prl) {
-                s.columns = Columns { count: (c as u32).saturating_add(1).min(44), ..Default::default() };
+                // Only the count: the spacing is its own sprm, which may come first.
+                s.columns.count = (c as u32).saturating_add(1).min(44);
+            }
+        }
+        S_DXA_COLUMNS => {
+            if let Some(v) = s16(prl) {
+                s.columns.space = tw(i32::from(v as u16));
             }
         }
         S_PGN_START => {
@@ -195,14 +209,19 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
                 s.gutter = tw(v as i32);
             }
         }
-        S_FPC => {
-            if prl.operand.first() == Some(&2) {
-                s.footnote_pr.pos = Some(craft_wordmodel::section::NotePos::BeneathText);
-            }
-        }
+        // A section's own value is explicit, whatever the document's: 1 the bottom of the page,
+        // 2 beneath the text.
+        S_FPC => match prl.operand.first() {
+            Some(1) => s.footnote_pr.pos = Some(craft_wordmodel::section::NotePos::PageBottom),
+            Some(2) => s.footnote_pr.pos = Some(craft_wordmodel::section::NotePos::BeneathText),
+            _ => {}
+        },
+        // As explicit: 0 continuous, which the document's restart doesn't override.
         S_RNC_FTN | S_RNC_EDN => {
             let pr = if prl.op == S_RNC_FTN { &mut s.footnote_pr } else { &mut s.endnote_pr };
-            pr.num_restart = prl.operand.first().and_then(|&v| crate::dop::restart(u16::from(v)));
+            if let Some(&v) = prl.operand.first() {
+                pr.num_restart = crate::dop::restart(u16::from(v)).or((v == 0).then_some(craft_wordmodel::section::NoteRestart::Continuous));
+            }
         }
         S_N_FTN | S_N_EDN => {
             if let [a, b, ..] = prl.operand {

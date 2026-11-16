@@ -589,6 +589,10 @@ fn custom_mark(ctx: &WalkCtx<'_>, cp: u32) -> Option<(String, u32)> {
         if (c as u32) < 0x20 {
             break;
         }
+        // A symbol character is the placeholder U+0028 with sprmCSymbol naming it, as in the
+        // text; the mark keeps the character (it has no font of its own).
+        let symbol = (c == '(').then(|| fc_of(at).and_then(|fc| symbol_operand(ctx.chpx_bins.chpx(ctx.word, fc)))).flatten();
+        let c = symbol.and_then(|(_, xchar)| char::from_u32(u32::from(xchar))).unwrap_or(c);
         mark.push(c);
         at = at.saturating_add(units.max(1));
     }
@@ -639,17 +643,16 @@ fn attach_sections(doc: &mut Document, paras: &mut [table::ParaOut], sects: &[se
         props.footers = HeaderSet { even: id_of(2), default: id_of(3), first: id_of(5) };
         props
     };
-    for (si, sec) in sects.iter().enumerate() {
-        let is_final = si + 1 == sects.len() || sec.end_cp >= ccp_text;
-        if is_final {
-            continue; // the last section, below
-        }
+    // The final section is the first that reaches the end of the main text (in a malformed
+    // PlcfSed, sections after it are ignored), else the last one.
+    let final_si = sects.iter().position(|s| s.end_cp >= ccp_text).unwrap_or(sects.len().saturating_sub(1));
+    for (si, sec) in sects.iter().enumerate().take(final_si) {
         if let Some(p) = ending.get(&sec.end_cp).and_then(|&i| paras.get_mut(i)) {
             p.para.section = Some(Box::new(with_parts(si, &sec.props)));
         }
     }
-    if let Some(last) = sects.last() {
-        doc.last_section = with_parts(sects.len() - 1, &last.props);
+    if let Some(last) = sects.get(final_si) {
+        doc.last_section = with_parts(final_si, &last.props);
     }
 }
 
@@ -842,14 +845,8 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         // blocking every later one.
         while marks.peek().is_some_and(|&(mcp, _)| *mcp <= cp) {
             if let Some((_, m)) = marks.next() {
-                let obj = match m {
-                    notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
-                    notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
-                    notes::Mark::CommentStart(id) => InlineObject::CommentStart { id: *id },
-                    notes::Mark::CommentEnd(id) => InlineObject::CommentEnd { id: *id },
-                };
                 pb.push('\u{FFFC}', CharProps::default());
-                pb.objects.push(obj);
+                pb.objects.push(mark_object(m));
             }
         }
         let (c, units) = match ctx.pieces.char_at(ctx.word, cp) {
@@ -1038,6 +1035,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         }
         cp = cp.saturating_add(units);
     }
+    close_marks(marks.take_while(|&&(mcp, _)| mcp <= cp_end), &mut out, &mut pb);
     if !pb.text.is_empty() {
         let done = pb;
         out.push(ParaOut {
@@ -1047,6 +1045,40 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         });
     }
     out
+}
+
+/// Boundaries left at the end of a walk (a range ending after the last paragraph mark): they
+/// close in the last paragraph, as Word ends them, not in one of their own; with text after the
+/// last mark, in that text.
+fn close_marks<'m>(marks: impl Iterator<Item = &'m (u32, notes::Mark)>, out: &mut [ParaOut], pb: &mut ParaBuild) {
+    for (_, m) in marks {
+        match out.last_mut().filter(|_| pb.text.is_empty()) {
+            Some(last) => {
+                let p = &mut last.para;
+                let len = '\u{FFFC}'.len_utf8();
+                match p.runs.last_mut() {
+                    Some(r) if r.props == CharProps::default() => r.len += len,
+                    _ => p.runs.push(Run { len, props: CharProps::default() }),
+                }
+                p.text.push('\u{FFFC}');
+                p.objects.push(mark_object(m));
+            }
+            None => {
+                pb.push('\u{FFFC}', CharProps::default());
+                pb.objects.push(mark_object(m));
+            }
+        }
+    }
+}
+
+/// The inline object a bookmark or comment boundary becomes.
+fn mark_object(m: &notes::Mark) -> InlineObject {
+    match m {
+        notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
+        notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
+        notes::Mark::CommentStart(id) => InlineObject::CommentStart { id: *id },
+        notes::Mark::CommentEnd(id) => InlineObject::CommentEnd { id: *id },
+    }
 }
 
 /// Field assembly: `instr` collects everything before the separator (nested fields
@@ -1200,7 +1232,8 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
         };
         // The run's character style, whose formatting joins the paragraph style's as the base of
         // the run's own sprms (see `fmt::with_char_style`).
-        let char_style = char_style(ctx, grpprl);
+        let prc_style = prc_with_style(ctx.pieces.piece_prm(cp));
+        let char_style = char_style(ctx, prc_style.unwrap_or(grpprl));
         let combined;
         let base = match char_style {
             Some(cs) => {
@@ -1209,7 +1242,17 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
             }
             None => para_base,
         };
-        let mut props = char_props(grpprl, ctx.fonts, base);
+        // A Prc naming a style resets what the CHPX gave the run, but for what sprmCIstd keeps.
+        let mut props = match prc_style {
+            Some(_) => {
+                let mut kept = base.clone();
+                for prl in sprm::iter(grpprl).filter(|p| p.sgc() == 2 && fmt::kept_by_istd(p.op)) {
+                    fmt::apply_char(&mut kept, &prl, base, ctx.fonts);
+                }
+                kept
+            }
+            None => char_props(grpprl, ctx.fonts, base),
+        };
         apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
         // Kept as direct formatting: what differs from what the styles give the run, as the model
         // resolves them (the paragraph style, then the character style over it). A toggle the
@@ -1264,7 +1307,15 @@ fn style_of(ctx: &WalkCtx<'_>, istd: u16) -> Option<String> {
 /// read ahead once per paragraph.
 fn style_ahead(ctx: &WalkCtx<'_>, cp: u32, end: u32) -> Option<String> {
     let mut at = cp;
+    // No further than the walk may read: past that it stops anyway, and a file whose pieces
+    // repeat a stretch with no paragraph mark can't make this scan run on for it. Each step,
+    // a character or a skipped stretch, counts.
+    let mut left = ctx.budget.get();
     while at < end {
+        if left == 0 {
+            return None;
+        }
+        left -= 1;
         match ctx.pieces.char_at(ctx.word, at) {
             Ok((c, units)) => {
                 let section_mark = c == '\u{C}' && ctx.sect_ends.binary_search(&at.saturating_add(1)).is_ok();
@@ -1368,10 +1419,8 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
             if !work.charge(g.len() as u64, Cost::Formatting) {
                 return;
             }
-            for prl in sprm::iter(g) {
-                if prl.sgc() == 2 {
-                    fmt::apply_char(props, &prl, base, fonts);
-                }
+            for prl in fmt::after_istd(g) {
+                fmt::apply_char(props, &prl, base, fonts);
             }
         }
         PrmRef::Grpprl(None) => {}
@@ -1381,12 +1430,19 @@ fn apply_prm(props: &mut CharProps, prm: PrmRef<'_>, fonts: &[String], base: &Ch
 /// Character props from a CHPX grpprl applied over `base`.
 fn char_props(grpprl: &[u8], fonts: &[String], base: &CharProps) -> CharProps {
     let mut p = base.clone();
-    for prl in sprm::iter(grpprl) {
-        if prl.sgc() == 2 {
-            fmt::apply_char(&mut p, &prl, base, fonts);
-        }
+    for prl in fmt::after_istd(grpprl) {
+        fmt::apply_char(&mut p, &prl, base, fonts);
     }
     p
+}
+
+/// A piece's Prm1 grpprl, when it names a character style (`sprmCIstd`): applied after the
+/// CHPX, its style is the run's and resets the CHPX's formatting.
+fn prc_with_style<'w>(prm: PrmRef<'w>) -> Option<&'w [u8]> {
+    match prm {
+        PrmRef::Grpprl(Some(g)) if fmt::char_style_istd(g).is_some() => Some(g),
+        _ => None,
+    }
 }
 
 /// Read a root-level stream fully; `None` if it is absent or cannot be read. A stream larger than
