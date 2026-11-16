@@ -1560,6 +1560,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-dds"
+version = "0.1.0"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "craft-deckcraft-format"
 version = "0.1.0"
 dependencies = [
@@ -2060,6 +2067,7 @@ name = "craft-image-codecs"
 version = "0.1.0"
 dependencies = [
  "avif-serialize",
+ "craft-dds",
  "craft-heif",
  "craft-jpeg",
  "craft-media-testkit",
