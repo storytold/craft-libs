@@ -119,6 +119,16 @@ pub enum LiveShape {
         /// Inner radius over outer radius; 1 for a plain polygon.
         star_ratio: f64,
     },
+    /// A triangle: one corner radius for every corner.
+    #[non_exhaustive]
+    Triangle {
+        /// Width in document pixels.
+        width: f64,
+        /// Height in document pixels.
+        height: f64,
+        /// The corner radius in document pixels.
+        corner_radius: f64,
+    },
     /// A line.
     #[non_exhaustive]
     Line {
@@ -144,6 +154,11 @@ impl LiveShape {
     /// A polygon (a star below a `star_ratio` of 1) of `width` by `height`.
     pub fn polygon(width: f64, height: f64, corner_radius: f64, sides: u32, star_ratio: f64) -> Self {
         LiveShape::Polygon { width, height, corner_radius, sides, star_ratio }
+    }
+
+    /// A triangle of `width` by `height` with `corner_radius` at every corner.
+    pub fn triangle(width: f64, height: f64, corner_radius: f64) -> Self {
+        LiveShape::Triangle { width, height, corner_radius }
     }
 
     /// A line of `weight`.

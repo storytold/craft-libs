@@ -41,12 +41,17 @@ fn apply(change: ShapeChange, shape: &mut LiveShape, look: &mut ShapeAppearance)
         }
         (
             ShapeChange::Size { width: w, height: h },
-            LiveShape::Rect { width, height, .. } | LiveShape::Ellipse { width, height } | LiveShape::Polygon { width, height, .. },
+            LiveShape::Rect { width, height, .. }
+            | LiveShape::Ellipse { width, height }
+            | LiveShape::Polygon { width, height, .. }
+            | LiveShape::Triangle { width, height, .. },
         ) => {
             (*width, *height) = (w, h);
         }
         (ShapeChange::Radii(next), LiveShape::Rect { radii, .. }) => *radii = next,
-        (ShapeChange::CornerRadius(next), LiveShape::Polygon { corner_radius, .. }) => *corner_radius = next,
+        (ShapeChange::CornerRadius(next), LiveShape::Polygon { corner_radius, .. } | LiveShape::Triangle { corner_radius, .. }) => {
+            *corner_radius = next
+        }
         (ShapeChange::Sides(next), LiveShape::Polygon { sides, .. }) => *sides = next,
         (ShapeChange::StarRatio(next), LiveShape::Polygon { star_ratio, .. }) => *star_ratio = next,
         (ShapeChange::Weight(next), LiveShape::Line { weight, .. }) => *weight = next,
@@ -93,6 +98,11 @@ fn shape_panel_rect(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(ShapePanel<'static>, covers = [Default], drive = Drive::Never)]
 fn shape_panel_polygon(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     panel(ui, data, polygon())
+}
+
+#[story(ShapePanel<'static>, covers = [Default], drive = Drive::Never)]
+fn shape_panel_triangle(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    panel(ui, data, LiveShape::triangle(240.0, 200.0, 0.0))
 }
 
 #[story(ShapePanel<'static>, covers = [Default], drive = Drive::Never)]

@@ -1,4 +1,4 @@
-//! The shape cells: the arrowhead rows behind the popover and the Shape panel.
+//! The shape cells: the arrowhead rows behind the popover and the Shape panel, and the panel's rows by shape.
 
 use craft_behavior::EditEvent;
 use craft_color::ui::Paint;
@@ -169,4 +169,29 @@ fn a_concavity_typed_past_its_range_keeps_the_end_and_reports_it_once_from_the_p
     kept.concavity = 50.0;
     assert_eq!(host.borrow().shape, LiveShape::arrow_line(3.0, kept), "panel: 80 keeps 50");
     assert_eq!(host.borrow().alerts.len(), 1, "panel: the clamp is reported once");
+}
+
+#[trial]
+fn a_triangle_shows_its_size_and_one_corner_radius() {
+    let host = Rc::new(RefCell::new(PanelHost {
+        shape: LiveShape::triangle(240.0, 200.0, 0.0),
+        look: ShapeAppearance::new(Paint::None, Paint::None, 2.0),
+        events: Vec::new(),
+    }));
+    let shown = Rc::clone(&host);
+    let mut fixture = Fixture::new(move |ui| {
+        let mut held = shown.borrow_mut();
+        let PanelHost { shape, look, events } = &mut *held;
+        events.extend(ShapePanel::new("Shape properties", shape, look, 72.0).show(ui).events);
+    });
+    fixture.settle();
+    for shown in ["Width", "Height", "Corner radius"] {
+        assert!(fixture.by_label(shown).is_some(), "a triangle shows {shown}");
+    }
+    for absent in ["Sides", "Star ratio", "Top Left"] {
+        assert!(fixture.by_label(absent).is_none(), "a triangle has no {absent} field");
+    }
+    type_into(&mut fixture, "Corner radius", "12");
+    let radius = host.borrow().events.iter().rev().find_map(|event| event.value().cloned());
+    assert_eq!(radius, Some(ShapeChange::CornerRadius(12.0)), "the radius is one radius for every corner");
 }

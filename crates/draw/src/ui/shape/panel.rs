@@ -65,10 +65,11 @@ pub struct ShapePanelOutput {
 ///   [`stroke_open`](Self::stroke_open)). Stroke width 0 is no stroke; an edit that turns a stroke on at 0 carries
 ///   [`ShapeChange::ENABLED_STROKE_WIDTH`] in the same change; an arrow step that clamps at 0 reports nothing.
 /// - Shape (a collapsible section), by the [`LiveShape`]: W and H (1 to 300,000 px, whole pixels) for a rect,
-///   ellipse or polygon; a rect's "Corner radius" (0 to 150,000, sets all four) then Top Left, Top Right, Bottom
-///   Left, Bottom Right rows (PhotoCraft's row order, mapped to the radii order TL, TR, BR, BL); a polygon's Corner
-///   radius, Sides (3 to 100) and Star ratio (1 to 100 %, stored 0.01 to 1); a line's Weight (1 to 10,000), and with
-///   arrowheads its Start and End check boxes, Width, Length and Concavity (-50 to 50 %, whole), then the "Set as default" check box ([`arrow_default`](Self::arrow_default)).
+///   ellipse, polygon or triangle; a rect's "Corner radius" (0 to 150,000, sets all four) then Top Left, Top Right,
+///   Bottom Left, Bottom Right rows (PhotoCraft's row order, mapped to the radii order TL, TR, BR, BL); a polygon's
+///   Corner radius, Sides (3 to 100) and Star ratio (1 to 100 %, stored 0.01 to 1); a triangle's Corner radius; a
+///   line's Weight (1 to 10,000), and with arrowheads its Start and End check boxes, Width, Length and Concavity
+///   (-50 to 50 %, whole), then the "Set as default" check box ([`arrow_default`](Self::arrow_default)).
 /// - A value typed past its field's range is clamped and reported once in [`ShapePanelOutput::out_of_range`].
 /// - A locked layer ([`ShapeAppearance::locked`]) disables the whole panel.
 /// - Keyboard: every field and chip is a Tab stop in reading order; sections fold with their title rows. Right to
@@ -496,6 +497,11 @@ impl<'p, 'a> Cells<'p, 'a> {
                 self.number_row(ui, count, sides_change);
                 let ratio = NumberCell::percent(units, "star-ratio", &words.star_ratio, star_ratio * 100.0, RATIO_PERCENT);
                 self.number_row(ui, ratio, |percent| ShapeChange::StarRatio(percent / 100.0));
+            }
+            LiveShape::Triangle { width, height, corner_radius } => {
+                self.size_row(ui, (*width, *height));
+                let radius = NumberCell::pixels(units, ppi, "corner-radius", &words.corner_radius, *corner_radius, RADIUS_RANGE);
+                self.number_row(ui, radius, ShapeChange::CornerRadius);
             }
             LiveShape::Line { weight, arrows } => {
                 let cell = NumberCell::pixels(units, ppi, "weight", &words.weight, *weight, LINE_WEIGHT_RANGE);
