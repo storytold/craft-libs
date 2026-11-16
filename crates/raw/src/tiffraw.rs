@@ -461,7 +461,7 @@ pub(crate) fn lossy_jpeg(src: &[u8], cpp: usize, max_samples: usize) -> Result<(
 /// Validate the actual frame before decode allocates its output. Edge tiles may store
 /// a smaller frame covering all visible samples or bounded whole-MCU padding.
 #[cfg(feature = "dng")]
-fn lossy_jpeg_with_tile(
+pub(crate) fn lossy_jpeg_with_tile(
     src: &[u8],
     cpp: usize,
     max_samples: usize,

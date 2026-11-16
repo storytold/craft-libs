@@ -229,25 +229,14 @@ pub fn unpack(bytes: &[u8], w: usize, h: usize, spp: usize, bits: u32, big_endia
     if bytes.len() < need {
         return Err(Error::Truncated);
     }
-    let mut out = Vec::with_capacity(per_row * h);
-    for row in bytes.chunks_exact(row_bytes.max(1)).take(h) {
+    let mut out = vec![0u16; per_row * h];
+    let order = if big_endian { craft_tiff::ByteOrder::Big } else { craft_tiff::ByteOrder::Little };
+    // the same unpackers the full DNG reader uses (`crate::unpack`)
+    for (row, dst) in bytes.chunks_exact(row_bytes.max(1)).zip(out.chunks_exact_mut(per_row.max(1))) {
         match bits {
-            8 => out.extend(row.iter().map(|&b| u16::from(b))),
-            16 => out.extend(row.as_chunks::<2>().0.iter().map(|&b| if big_endian { u16::from_be_bytes(b) } else { u16::from_le_bytes(b) })),
-            _ => {
-                let mut acc: u32 = 0;
-                let mut n: u32 = 0;
-                let mut it = row.iter();
-                for _ in 0..per_row {
-                    while n < bits {
-                        acc = (acc << 8) | u32::from(*it.next().ok_or(Error::Truncated)?);
-                        n += 8;
-                    }
-                    n -= bits;
-                    out.push(((acc >> n) & ((1 << bits) - 1)) as u16);
-                    acc &= (1 << n) - 1;
-                }
-            }
+            8 => dst.iter_mut().zip(row).for_each(|(o, &b)| *o = u16::from(b)),
+            16 => crate::unpack::read_u16s(row, order, dst),
+            _ => crate::unpack::unpack_msb(row, bits, dst),
         }
     }
     Ok(out)
@@ -258,7 +247,7 @@ fn decode_chunk(c: &Chunk, l: &RawLayout, big_endian: bool) -> Result<Vec<u16>> 
     let need = c.w * c.h * l.samples_per_pixel;
     match l.compression {
         1 => unpack(c.bytes, c.w, c.h, l.samples_per_pixel, l.bits, big_endian),
-        34892 => lossy_jpeg(c.bytes, need, l.samples_per_pixel),
+        34892 => lossy_jpeg(c, l),
         _ => {
             // the JPEG's samples fill the chunk in raster order (its own width × components may
             // differ from the chunk's, e.g. two components of half the width)
@@ -275,39 +264,28 @@ fn decode_chunk(c: &Chunk, l: &RawLayout, big_endian: bool) -> Result<Vec<u16>> 
     }
 }
 
-/// Decode a baseline (lossy) JPEG tile or strip (Compression 34892) into `need` 8-bit samples:
-/// one component (greyscale) or three (colour, converted from YCbCr by the JPEG decoder as the
-/// JPEG says), in raster order.
-fn lossy_jpeg(bytes: &[u8], need: usize, spp: usize) -> Result<Vec<u16>> {
-    use image::ImageDecoder;
-    let bad = |_| Error::Malformed("lossy JPEG tile");
-    let decode = || -> Result<Vec<u16>> {
-        let mut d = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).map_err(bad)?;
-        let channels = match d.color_type() {
-            image::ColorType::L8 => 1usize,
-            image::ColorType::Rgb8 => 3,
-            c => return Err(Error::Unsupported(format!("lossy JPEG DNG tile of colour type {c:?}"))),
-        };
-        if channels != spp {
-            return Err(Error::Malformed("lossy JPEG components differ from SamplesPerPixel"));
-        }
-        let (w, h) = d.dimensions();
-        let total = (w as usize).checked_mul(h as usize).and_then(|v| v.checked_mul(channels)).ok_or(Error::TooLarge)?;
-        if total < need {
-            return Err(Error::Malformed("lossy JPEG smaller than its tile or strip"));
-        }
-        if total > need.saturating_mul(4).saturating_add(65_536) || total > MAX_SAMPLES {
-            return Err(Error::TooLarge);
-        }
-        let mut limits = image::Limits::default();
-        limits.max_alloc = Some(total as u64 * 4 + (1 << 20));
-        d.set_limits(limits).map_err(bad)?;
-        let mut buf = vec![0u8; total];
-        d.read_image(&mut buf).map_err(bad)?;
-        Ok(buf.iter().take(need).map(|&v| u16::from(v)).collect())
-    };
-    // a third-party decoder: a panic in it is an error for this file, not a crash
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)).unwrap_or(Err(Error::Malformed("lossy JPEG decoder failed")))
+/// Decode a baseline (lossy) JPEG tile or strip (Compression 34892) into the chunk's 8-bit
+/// samples: one component (greyscale) or three (colour, converted from YCbCr as the JPEG says), in
+/// raster order. It is the full DNG reader's decoder (`tiffraw`, zune-jpeg), with the same check
+/// that the JPEG covers the chunk's visible part and is at most MCU-padded beyond it.
+fn lossy_jpeg(c: &Chunk, l: &RawLayout) -> Result<Vec<u16>> {
+    let spp = l.samples_per_pixel;
+    let need = c.w * c.h * spp;
+    let visible = (c.w.min(l.width.saturating_sub(c.x)), c.h.min(l.height.saturating_sub(c.y)));
+    let max = need.saturating_mul(4).saturating_add(65_536).min(MAX_SAMPLES);
+    let (px, w, h, _) = crate::tiffraw::lossy_jpeg_with_tile(c.bytes, spp, max, Some((c.w, c.h, visible.0, visible.1))).map_err(|e| match e {
+        crate::RawError::Unsupported(m) => Error::Unsupported(m),
+        _ => Error::Malformed("lossy JPEG tile"),
+    })?;
+    // the JPEG's rows are its own width; the chunk keeps its `c.w` x `c.h` top-left corner, and
+    // the part of a coded chunk past a smaller JPEG (outside the image) stays zero
+    let mut out = vec![0u16; need];
+    let n = c.w.min(w) * spp;
+    for (y, dst) in out.chunks_exact_mut(c.w * spp).take(h).enumerate() {
+        let src = px.get(y * w * spp..y * w * spp + n).ok_or(Error::Truncated)?;
+        dst[..n].iter_mut().zip(src).for_each(|(o, &v)| *o = u16::from(v));
+    }
+    Ok(out)
 }
 
 /// Read the raw image of `ifd`.

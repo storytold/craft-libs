@@ -18,6 +18,11 @@
 //! Input is treated as hostile: the picture size is capped by [`Limits`], and a run-length file
 //! must be long enough to hold the pixels its header declares before anything is allocated.
 
+/// Uncompressed RGBA8-to-Targa encoding.
+pub mod rgba8_raw;
+
+#[cfg(test)]
+mod metadata_tests;
 #[cfg(test)]
 mod tests;
 
@@ -57,11 +62,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Limits {
     /// Most pixels (width × height) a picture may have. Default 2^28 (16384 × 16384).
     pub max_pixels: u64,
+    /// Maximum combined palette, stored-pixel and RGBA allocation bytes. Default 256 MiB.
+    pub max_decoded_bytes: usize,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_pixels: 1 << 28 }
+        Self { max_pixels: 1 << 28, max_decoded_bytes: 256 << 20 }
     }
 }
 
@@ -180,6 +187,102 @@ impl Stored {
     }
 }
 
+fn metadata_offset(body: &[u8], offset: usize, first_pixel: usize) -> Option<usize> {
+    // Optional metadata cannot replace the header, image ID, or colour map.
+    (offset >= first_pixel && offset < body.len()).then_some(offset)
+}
+
+/// The start of every developer-directory payload with a nonzero length, from the directory at
+/// `directory` in `body` (none when that offset holds no readable directory).
+fn developer_payload_starts(body: &[u8], directory: usize) -> Vec<usize> {
+    let Some(count) =
+        body.get(directory..directory.saturating_add(2)).and_then(|v| v.first_chunk::<2>()).map(|v| usize::from(u16::from_le_bytes(*v)))
+    else {
+        return Vec::new();
+    };
+    let Some(fields) = body.get(directory.saturating_add(2)..) else { return Vec::new() };
+    fields
+        .chunks(10)
+        .take(count)
+        .filter_map(|field| {
+            let start = field.get(2..6).and_then(|v| v.first_chunk::<4>()).map(|v| u32::from_le_bytes(*v) as usize)?;
+            let length = field.get(6..10).and_then(|v| v.first_chunk::<4>()).map(|v| u32::from_le_bytes(*v))?;
+            (length != 0).then_some(start)
+        })
+        .collect()
+}
+
+fn image_data_end(bytes: &[u8], first_pixel: usize) -> Result<usize> {
+    if !bytes.ends_with(SIGNATURE) {
+        return Ok(bytes.len());
+    }
+    // A TGA 2.0 footer cannot begin inside the mandatory header. A legacy image
+    // may end with the same signature as pixel bytes.
+    let Some(footer) = bytes.len().checked_sub(SIGNATURE.len() + 8).filter(|&at| at >= HEADER) else {
+        return Ok(bytes.len());
+    };
+    let offsets = bytes.get(footer..footer + 8).and_then(|b| b.first_chunk::<8>()).ok_or(Error::Malformed("truncated footer"))?;
+    let extension = offsets.first_chunk::<4>().map(|v| u32::from_le_bytes(*v) as usize).ok_or(Error::Malformed("truncated footer"))?;
+    let directory =
+        offsets.get(4..).and_then(|v| v.first_chunk::<4>()).map(|v| u32::from_le_bytes(*v) as usize).ok_or(Error::Malformed("truncated footer"))?;
+    let body = bytes.get(..footer).ok_or(Error::Malformed("truncated footer"))?;
+    let mut end = footer;
+
+    if let Some(offset) = metadata_offset(body, extension, first_pixel) {
+        // An in-body reference is a conservative image boundary, even if it overlaps
+        // required pixels. Those bytes cannot be distinguished from a truncated image
+        // whose missing pixels are supplied by metadata.
+        end = end.min(offset);
+        // TGA 2.0 extension fields at byte offsets 482, 486 and 490 point to the colour
+        // correction, postage-stamp and scan-line tables. The record's first two bytes give
+        // its size (495 in TGA 2.0); a shorter record has no such fields, and a record never
+        // reaches into a developer directory that follows it, so those bytes are not read as
+        // table offsets. Tables may precede the record.
+        let declared =
+            body.get(offset..offset.saturating_add(2)).and_then(|v| v.first_chunk::<2>()).map_or(0, |v| usize::from(u16::from_le_bytes(*v)));
+        let mut record_end = offset.saturating_add(declared.min(495));
+        // The developer directory and its payloads may sit anywhere after the pixels, a payload
+        // before its directory included; whichever starts first after the extension ends it.
+        // A directory offset of zero means there is none: the header is not read as one.
+        let payloads = metadata_offset(body, directory, first_pixel).map(|d| developer_payload_starts(body, d)).unwrap_or_default();
+        for next in std::iter::once(directory).chain(payloads) {
+            if next > offset {
+                record_end = record_end.min(next);
+            }
+        }
+        if let Some(area) = body.get(offset..record_end.min(body.len())) {
+            for field in [482, 486, 490] {
+                if let Some(value) = area.get(field..field + 4).and_then(|v| v.first_chunk::<4>())
+                    && let Some(table) = metadata_offset(body, u32::from_le_bytes(*value) as usize, first_pixel)
+                {
+                    end = end.min(table);
+                }
+            }
+        }
+    }
+
+    if let Some(offset) = metadata_offset(body, directory, first_pixel) {
+        end = end.min(offset);
+        if let Some(count) =
+            body.get(offset..offset.saturating_add(2)).and_then(|v| v.first_chunk::<2>()).map(|v| usize::from(u16::from_le_bytes(*v)))
+            && let Some(fields) = body.get(offset.saturating_add(2)..)
+        {
+            // A corrupt count or final entry does not hide earlier payload offsets. Each
+            // entry has a 2-byte tag followed by a 4-byte offset and 4-byte length.
+            for field in fields.chunks(10).take(count) {
+                if let Some(value) = field.get(2..6).and_then(|v| v.first_chunk::<4>())
+                    && let Some(length) = field.get(6..10).and_then(|v| v.first_chunk::<4>())
+                    && u32::from_le_bytes(*length) != 0
+                    && let Some(payload) = metadata_offset(body, u32::from_le_bytes(*value) as usize, first_pixel)
+                {
+                    end = end.min(payload);
+                }
+            }
+        }
+    }
+    Ok(end)
+}
+
 /// Decodes a Targa file to straight-alpha RGBA8, top row first.
 pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Picture> {
     let err = Error::Malformed;
@@ -208,13 +311,14 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Picture> {
     } else {
         None
     };
-    let mut at = HEADER + id_len;
-    if let Some(l) = map_entry {
-        let end = at + map_len * l.bytes();
-        let map = bytes.get(at..end).ok_or(err("truncated colour map"))?;
-        palette = map.chunks_exact(l.bytes()).map(|e| l.rgba(e)).collect();
-        at = end;
-    }
+    let map_start = HEADER + id_len;
+    let first_pixel = match map_entry {
+        Some(layout) => map_start.checked_add(map_len * layout.bytes()).ok_or(err("colour map"))?,
+        None => map_start,
+    };
+    let end = image_data_end(bytes, first_pixel)?;
+    let bytes = bytes.get(..end).ok_or(err("truncated image data"))?;
+    let at = first_pixel;
     let (stored_as, mapped) = match kind & 7 {
         1 => {
             if map_type != 1 || !matches!(depth, 8 | 16) {
@@ -232,14 +336,35 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Picture> {
     };
     let data = bytes.get(at..).unwrap_or_default();
     let bpp = stored_as.bytes();
+    let stored_bytes = pixels.checked_mul(bpp).ok_or(Error::LimitExceeded("image size"))?;
+    let rgba_bytes = pixels.checked_mul(4).ok_or(Error::LimitExceeded("image size"))?;
+    let palette_bytes = if map_entry.is_some() { map_len * 4 } else { 0 };
+    let aggregate =
+        stored_bytes.checked_add(rgba_bytes).and_then(|n| n.checked_add(palette_bytes)).ok_or(Error::LimitExceeded("decode allocation bytes"))?;
+    if aggregate > limits.max_decoded_bytes {
+        return Err(Error::LimitExceeded("decode allocation bytes"));
+    }
+    if let Some(layout) = map_entry {
+        let map = bytes.get(map_start..first_pixel).ok_or(err("truncated colour map"))?;
+        palette.try_reserve_exact(map_len).map_err(|_| Error::LimitExceeded("allocation failed"))?;
+        palette.extend(map.chunks_exact(layout.bytes()).map(|entry| layout.rgba(entry)));
+    }
     // The stored values, in file order.
     let stored: Vec<u8> = if rle {
         unpack_rle(data, pixels, bpp)?
     } else {
         let n = pixels.checked_mul(bpp).ok_or(Error::LimitExceeded("image size"))?;
-        data.get(..n).ok_or(err("truncated pixel data"))?.to_vec()
+        {
+            let source = data.get(..n).ok_or(err("truncated pixel data"))?;
+            let mut values = Vec::new();
+            values.try_reserve_exact(n).map_err(|_| Error::LimitExceeded("allocation failed"))?;
+            values.extend_from_slice(source);
+            values
+        }
     };
-    let mut rgba = vec![0u8; pixels.checked_mul(4).ok_or(Error::LimitExceeded("image size"))?];
+    let mut rgba = Vec::new();
+    rgba.try_reserve_exact(rgba_bytes).map_err(|_| Error::LimitExceeded("allocation failed"))?;
+    rgba.resize(rgba_bytes, 0u8);
     for (i, v) in stored.chunks_exact(bpp).enumerate().take(pixels) {
         let (x, y) = (i % w, i / w);
         let x = if right_to_left { w - 1 - x } else { x };
@@ -283,7 +408,8 @@ fn unpack_rle(mut data: &[u8], pixels: usize, bpp: usize) -> Result<Vec<u8>> {
         return Err(short);
     }
     let total = pixels.checked_mul(bpp).ok_or(Error::LimitExceeded("image size"))?;
-    let mut out = Vec::with_capacity(total);
+    let mut out = Vec::new();
+    out.try_reserve_exact(total).map_err(|_| Error::LimitExceeded("allocation failed"))?;
     while out.len() < total {
         let (&head, rest) = data.split_first().ok_or(short.clone())?;
         let count = usize::from(head & 0x7F) + 1;
