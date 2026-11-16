@@ -13,6 +13,8 @@
 //!   demuxers and [`TrackDecoder`]; everything else (FLAC, Vorbis, CAF, ADPCM, A-law, µ-law) through
 //!   `symphonia`, which is to be replaced by native decoders. Feature `decode-native` is the
 //!   same without symphonia.
+//! - [`encode_ogg_vorbis`] and [`vorbis::encoder`] (feature `vorbis-encode`): Ogg Vorbis files
+//!   and Vorbis packets from a pure-Rust encoder, 1 to 8 channels, quality -1 to 10, with tags.
 //! - [`TrackDecoder`] (any decoder feature): one track's packets from any demuxer to planar
 //!   `f32` in WAV channel order.
 //! - [`encode`], [`FileEncoder`]: WAV/BWF/RF64 and AIFF/AIFF-C (feature `pcm-encode`, which also
@@ -27,7 +29,8 @@
 //! - Codec modules for packet-level use, each with its own features: [`aac`] (`aac-decode`,
 //!   `aac-encode`), [`alac`] (`alac-decode`, `alac-encode`), [`opus`] (`opus-decode`, and
 //!   [`opus::encoder`] with `opus-encode`), [`ac3`] (`ac3-decode`), [`mpa`] (`mpa-decode`), [`mp3`]
-//!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-encode`: the packet encoder).
+//!   (`mp3-decode`, `mp3-encode`), [`flac`] (`flac-decode`: the frame and file decoder;
+//!   `flac-encode`: the packet encoder), [`qoa`] (`qoa-decode`, `qoa-encode`: whole QOA files).
 //!
 //! The shared types below build with no features.
 
@@ -49,12 +52,18 @@ pub mod opus;
 mod pcm;
 #[cfg(feature = "peaks")]
 pub mod peaks;
+#[cfg(any(feature = "qoa-decode", feature = "qoa-encode"))]
+pub mod qoa;
 #[cfg(feature = "decode-native")]
 mod read;
 #[cfg(any(feature = "aac-decode", feature = "alac-decode", feature = "opus-decode", feature = "ac3-decode", feature = "mpa-decode"))]
 mod track;
+#[cfg(feature = "vorbis-encode")]
+pub mod vorbis;
 #[cfg(any(feature = "decode-native", feature = "pcm-encode"))]
 mod wav;
+/// Bounded WAV/RF64 cue, adtl and XMP marker metadata, without audio decoding.
+pub mod wav_markers;
 #[cfg(any(
     feature = "pcm-encode",
     feature = "flac-encode",
@@ -66,8 +75,18 @@ mod wav;
     feature = "vorbis-encode"
 ))]
 mod write;
+
+/// PCM WAVE and AIFF wrappers for interchange essence.
+#[cfg(feature = "pcm-encode")]
+pub mod essence_pcm;
+/// Streaming WAVE and AIFF headers and sample packing.
+pub mod pcm_export;
+/// Interleaved PCM packet decoding.
+pub mod pcm_interleaved;
+/// Range-backed PCM WAVE access and a 16-bit PCM writer.
+pub mod wav_range;
 #[cfg(feature = "vorbis-encode")]
-pub use write::{OGG_BITRATES, encode_ogg};
+pub use write::{OGG_BITRATES, OggVorbisOptions, encode_ogg, encode_ogg_vorbis, quality_for_bitrate};
 
 /// The FLAC packet encoder (RFC 9639), for a caller that muxes FLAC itself (into MP4, Matroska or
 /// its own `.flac` writer): planar integer samples in, frames out, and the STREAMINFO to patch in
@@ -88,10 +107,15 @@ pub use write::{OGG_BITRATES, encode_ogg};
 /// assert!(file.len() < 48_000 * 2 * 2 / 2); // well under half of 16-bit PCM
 /// # Ok::<(), craft_audio::flac::Error>(())
 /// ```
-#[cfg(feature = "flac-encode")]
+#[cfg(any(feature = "flac-encode", feature = "flac-decode"))]
 pub mod flac {
+    #[cfg(feature = "flac-decode")]
+    pub use crate::flac_decode::{DEFAULT_MAX_VALUES, DecodeError, Decoded, Decoder, Frame, StreamInfo, decode, decode_with_limit};
+    #[cfg(feature = "flac-encode")]
     pub use crate::write::flac::encoder::{Encoder, EncoderConfig, Error, STREAMINFO_OFFSET};
 }
+#[cfg(feature = "flac-decode")]
+mod flac_decode;
 
 pub use buffer::AudioBuffer;
 /// The craft-media this crate is built with, for its containers: using it rather than a separate
@@ -270,7 +294,9 @@ pub enum EncodeFormat {
     Ac3,
     /// An E-AC-3 stream: up to 7.1 at 32, 44.1 or 48 kHz.
     Eac3,
-    /// Ogg Vorbis, whole-buffer encoding only.
+    /// Ogg Vorbis, 1–8 channels at any sample rate, whole-buffer encoding only. Variable bit
+    /// rate: a [`RateControl::Bitrate`] picks the quality whose nominal rate it is
+    /// ([`quality_for_bitrate`]), [`RateControl::Quality`] sets it directly.
     Ogg,
 }
 
@@ -371,7 +397,7 @@ impl EncodeFormat {
             EncodeFormat::Mp3 => cfg!(feature = "mp3-encode"),
             EncodeFormat::Ac3 => cfg!(feature = "ac3-encode"),
             EncodeFormat::Eac3 => cfg!(feature = "eac3-encode"),
-            EncodeFormat::Ogg => cfg!(all(feature = "vorbis-encode", not(target_arch = "wasm32"))),
+            EncodeFormat::Ogg => cfg!(feature = "vorbis-encode"),
         }
     }
 
@@ -392,9 +418,9 @@ impl EncodeFormat {
     pub fn max_channels(self) -> u16 {
         match self {
             EncodeFormat::Wav | EncodeFormat::Aiff => 32_767,
-            EncodeFormat::Flac | EncodeFormat::Aac | EncodeFormat::Alac | EncodeFormat::Eac3 => 8,
+            EncodeFormat::Flac | EncodeFormat::Aac | EncodeFormat::Alac | EncodeFormat::Eac3 | EncodeFormat::Ogg => 8,
             EncodeFormat::Ac3 => 6,
-            EncodeFormat::Mp3 | EncodeFormat::Ogg => 2,
+            EncodeFormat::Mp3 => 2,
         }
     }
 
@@ -408,7 +434,10 @@ impl EncodeFormat {
             EncodeFormat::Aac => &[&[0x4], &[0x3], &[0x7], &[0x107], &[0x607], &[0x60F], &[0x70F], &[0xFF]],
             // Apple's layout tags for 1–8 channels, surrounds as back speakers.
             EncodeFormat::Alac => &[&[0x4], &[0x3], &[0x7], &[0x107], &[0x37], &[0x3F], &[0x13F], &[0xFF]],
-            EncodeFormat::Mp3 | EncodeFormat::Ogg => &[&[0x4], &[0x3]],
+            EncodeFormat::Mp3 => &[&[0x4], &[0x3]],
+            // The Vorbis I §4.3.9 layouts for 1–8 channels (6.1 with a back centre and sides, 7.1
+            // with sides and backs), written in Vorbis order.
+            EncodeFormat::Ogg => &[&[0x4], &[0x3], &[0x7], &[0x33], &[0x37], &[0x3F], &[0x70F], &[0x63F]],
             // The coding modes 1/0 to 3/2 with and without an LFE, by channel count.
             EncodeFormat::Ac3 => &[&[0x4], &[0x3, 0xC], &[0x7, 0x103, 0xB], &[0x107, 0x603, 0xF, 0x10B], &[0x607, 0x10F, 0x60B], &[0x60F]],
             // The same, and 7.1 with backs and sides.
@@ -450,10 +479,10 @@ impl EncodeFormat {
         }
     }
 
-    /// Whether the format takes [`RateControl::Quality`]: AAC. The other lossy formats are
-    /// written at a constant bit rate only.
+    /// Whether the format takes [`RateControl::Quality`]: AAC and Ogg Vorbis. The other lossy
+    /// formats are written at a constant bit rate only.
     pub fn supports_quality(self) -> bool {
-        self == EncodeFormat::Aac
+        matches!(self, EncodeFormat::Aac | EncodeFormat::Ogg)
     }
 
     /// Whether the format loses audio: AAC, MP3, AC-3 and E-AC-3. These take
@@ -472,11 +501,12 @@ pub enum RateControl {
     /// set of rates (MP3, AC-3) uses the highest one not above it; a rate outside what the
     /// stream can carry is moved to the nearest one inside. AAC is written at 6 kbit/s or a
     /// quarter of the sample rate per channel at least: from about half of that down its encoder
-    /// codes silence. Vorbis treats this as a VBR target (64–500 kbit/s), falling back to
-    /// a quality preset when that target is unsupported; it does not promise a constant bitrate.
+    /// codes silence. Vorbis takes 64–500 kbit/s and writes the quality whose nominal rate that is
+    /// ([`quality_for_bitrate`]); its rate varies with the audio.
     Bitrate(u32),
     /// A constant quality from 0.0 (smallest) to 1.0 (best), at whatever bit rate each frame
-    /// needs. AAC only; values outside the range are clamped, and NaN is an error.
+    /// needs. AAC and Vorbis (0.0 is Vorbis quality -1, 1.0 quality 10); values outside the range
+    /// are clamped, and NaN is an error.
     Quality(f32),
 }
 
@@ -742,3 +772,6 @@ mod tests {
         assert!(matches!(e, AudioError::Encode(_)), "{e}");
     }
 }
+
+/// DVD and Blu-ray LPCM packet decoding.
+pub mod lpcm;

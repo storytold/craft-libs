@@ -310,9 +310,10 @@ fn load(locale: PackLocale) -> (Arc<AffixDict>, Option<PathBuf>, u64) {
     }
 }
 
-/// Select an embedded dictionary with regional-to-language fallback.
+/// Select an embedded dictionary with the same regional fallback as installed packs.
 fn embedded_dictionary(table: &[crate::packs::EmbeddedPack], names: &[String], key: &str) -> Option<(Arc<AffixDict>, Option<PathBuf>, u64)> {
-    let packs = crate::packs::embedded_in(table, names, |pack| !pack.dic.is_empty());
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let packs = crate::packs::embedded_spelling_in(table, &refs);
     if packs.is_empty() {
         crate::hunspell::clear_load_error(key);
     }
@@ -397,6 +398,18 @@ mod tests {
         ];
         let (dictionary, _, _) = embedded_dictionary(&packs, &names(l("hu-HU")), "test-embedded-empty-affixes").unwrap();
         assert!(dictionary.check("plainword") && !dictionary.check("wrongword"));
+    }
+
+    /// A generic language request can use a spelling pack for another region.
+    #[test]
+    fn generic_embedded_spelling_tries_a_different_region() {
+        crate::hold_dictionary_tests();
+        let packs = [
+            crate::packs::EmbeddedPack { locale: "ro-ro", aff: b"", dic: b"1\nwronglanguage\n", patterns: "", nonstandard: "" },
+            crate::packs::EmbeddedPack { locale: "hu-sk", aff: b"", dic: b"1\nregionalword\n", patterns: "", nonstandard: "" },
+        ];
+        let (dictionary, _, _) = embedded_dictionary(&packs, &names(l("hu")), "test-same-language-regional").unwrap();
+        assert!(dictionary.check("regionalword") && !dictionary.check("wronglanguage"));
     }
 
     /// Regression: malformed embedded regional spelling falls back to generic.

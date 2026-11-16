@@ -4,11 +4,14 @@
 //! called through hidden names), so this is its own decoder, with its own function table
 //! ([`super::ftab`]) and its own copies of craft-xls's depth guards and limits. Anything outside the
 //! token set it knows is reported as unsupported, and the caller keeps the cell's cached value.
-//! So is a formula that needs something the reader doesn't read: a user's defined name (XLSB
-//! names are not read yet) or Python code stored outside the cell.
+//! So is a formula that needs something the reader doesn't read: a defined name whose own
+//! formula could not be read, a table whose part could not be read, or Python code stored
+//! outside the cell. Defined names' formulas are decoded here too ([`Mode::Name`]), and
+//! structured references (`PtgList`) are spelled from the tables in [`Links`].
 //!
 //! Names keep their file spelling (`_xlfn.CONCAT`, `_xlpm.x`), as `.xlsx` formula text has them.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS};
@@ -136,13 +139,26 @@ pub(super) struct Xti {
     pub last: i32,
 }
 
-/// A `BrtName` as far as cell formulas need it.
+/// A `BrtName` as far as formulas need it.
 #[derive(Clone, Debug)]
 pub(super) struct Name {
-    /// The name as written (`_xlfn.CONCAT`, `_xlpm.x`, `Rate`).
+    /// The name as `.xlsx` spells it (`_xlfn.CONCAT`, `_xlpm.x`, `_xlnm.Print_Area`, `Rate`).
     pub text: String,
     /// `fFutureFunction`: a hidden name standing for a function newer than the file format.
     pub future: bool,
+    /// `itab`: the sheet a sheet-scoped name belongs to, by its place in `BrtBundleSh` order.
+    pub scope: Option<u32>,
+    /// Its own formula was read, so it is one of the workbook's defined names.
+    pub read: bool,
+}
+
+impl Name {
+    /// Whether a formula may use the name: one the formula text itself defines (a newer
+    /// function, a LET parameter), or a defined name the reader gives. A name's formula may use
+    /// any other name: its text is the same either way.
+    fn usable(&self, mode: Mode) -> bool {
+        self.future || is_param(&self.text) || self.read || mode == Mode::Name
+    }
 }
 
 /// Workbook-level tables formulas refer to.
@@ -155,23 +171,49 @@ pub(crate) struct Links {
     pub(super) names: Vec<Name>,
     pub(super) books: Vec<Book>,
     pub(super) xti: Vec<Xti>,
+    /// Every table by its `idList`, which `PtgList` names: `None` for an id two tables share.
+    pub(super) tables: HashMap<u32, Option<ListInfo>>,
+}
+
+/// A table as structured references need it: its display name and its columns' names.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ListInfo {
+    pub name: String,
+    pub columns: Vec<String>,
 }
 
 /// Whether a name stands for a LET parameter (`_xlpm.x`), which only the formula itself defines.
-fn is_param(name: &str) -> bool {
+pub(super) fn is_param(name: &str) -> bool {
     name.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("_xlpm."))
 }
 
 impl Links {
-    /// The sheets a 3-D reference names, or `None` for a deleted sheet (the reference is `#REF!`).
-    fn sheet_sel(&self, ixti: u16) -> Result<Option<SheetSel>, Unsupported> {
+    /// `PtgName`'s and `PtgNameX`'s name: a 1-based index into every `BrtName`. A cell formula
+    /// using a defined name the reader doesn't give would calculate to `#NAME?`, so it keeps its
+    /// saved result instead.
+    fn name(&self, index: u32, mode: Mode) -> Result<&Name, Unsupported> {
+        let i = usize::try_from(index).ok().and_then(|i| i.checked_sub(1));
+        let name = i.and_then(|i| self.names.get(i)).ok_or(Unsupported("reference to a missing defined name"))?;
+        if !name.usable(mode) {
+            return Err(Unsupported("defined names whose formula could not be read"));
+        }
+        Ok(name)
+    }
+
+    /// Sheet link `ixti`, which must be through this workbook's own supporting link.
+    fn this_book(&self, ixti: u16) -> Result<&Xti, Unsupported> {
         let x = self.xti.get(usize::from(ixti)).ok_or(Unsupported("reference to a missing sheet link"))?;
         match usize::try_from(x.book).ok().and_then(|b| self.books.get(b)) {
-            Some(Book::This) => {}
-            Some(Book::External) => return Err(Unsupported("references to other workbooks (external links)")),
-            Some(_) => return Err(Unsupported("references through add-in or same-sheet links")),
-            None => return Err(Unsupported("reference to a missing workbook link")),
+            Some(Book::This) => Ok(x),
+            Some(Book::External) => Err(Unsupported("references to other workbooks (external links)")),
+            Some(_) => Err(Unsupported("references through add-in or same-sheet links")),
+            None => Err(Unsupported("reference to a missing workbook link")),
         }
+    }
+
+    /// The sheets a 3-D reference names, or `None` for a deleted sheet (the reference is `#REF!`).
+    fn sheet_sel(&self, ixti: u16) -> Result<Option<SheetSel>, Unsupported> {
+        let x = self.this_book(ixti)?;
         // -1: "the first sheet in the reference cannot be found" (a deleted sheet).
         if x.first == -1 || x.last == -1 {
             return Ok(None);
@@ -235,10 +277,15 @@ const LAST_COL: u32 = MAX_COLS - 1;
 
 /// Where a formula lives: a cell formula's references hold coordinates; a shared formula's
 /// relative tokens (`PtgRefN`, `PtgAreaN`) hold offsets from the shared formula's first cell.
+///
+/// A defined name's relative references are offsets from A1 that wrap around the grid
+/// (`RgceLocRel`), in its 3-D references too: `.xlsx` spells them as the cell they reach from A1
+/// (one column left is `Data!XFD1`).
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Mode {
     Cell,
     Shared(CellRef),
+    Name,
 }
 
 /// RgceLoc ([MS-XLSB] 2.5.98.91): a row and a `ColRelShort` (14-bit column, then the
@@ -266,7 +313,13 @@ fn loc(row: u32, col: u16, mode: Mode) -> Result<Anchor, Unsupported> {
     match mode {
         Mode::Cell => anchor(row, col),
         Mode::Shared(base) => relative_anchor(row, col, base),
+        Mode::Name => relative_anchor(row, col, CellRef::new(0, 0)),
     }
+}
+
+/// A 3-D reference's cell: a coordinate, except in a defined name.
+fn loc3d(row: u32, col: u16, mode: Mode) -> Result<Anchor, Unsupported> {
+    if mode == Mode::Name { loc(row, col, mode) } else { anchor(row, col) }
 }
 
 /// RgceArea: a range spanning every row (or column) is a whole-column (row) reference.
@@ -296,6 +349,11 @@ fn reference(sheet: Option<SheetSel>, kind: RefKind) -> Expr {
 /// represented. A shared formula's tokens are decoded once for each of its cells
 /// (`Mode::Shared` with that cell), whose relative references are offsets from it.
 pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Result<Expr, Unsupported> {
+    decode_using(rgce, rgcb, links, mode, &mut Vec::new())
+}
+
+/// [`decode`], adding to `used` the 0-based index of every defined name the formula uses.
+pub(super) fn decode_using(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode, used: &mut Vec<usize>) -> Result<Expr, Unsupported> {
     if rgce.len() > MAX_RGCE {
         return Err(Unsupported("formula too long"));
     }
@@ -470,14 +528,9 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
             }
             0x23 => {
                 // PtgName: a 1-based index into every BrtName, hidden ones included.
-                let i = usize::try_from(t.u32()?).ok().and_then(|i| i.checked_sub(1));
-                let name = i.and_then(|i| links.names.get(i)).ok_or(Unsupported("reference to a missing defined name"))?;
-                // Defined names are not imported from XLSB yet: a cell using one would calculate
-                // to #NAME?, so it keeps its saved result. Newer functions and LET parameters are
-                // hidden names that the formula text itself defines.
-                if !name.future && !is_param(&name.text) {
-                    return Err(Unsupported("defined names"));
-                }
+                let index = t.u32()?;
+                let name = links.name(index, mode)?;
+                used.extend(usize::try_from(index).ok().and_then(|i| i.checked_sub(1)));
                 push(&mut stack, kids, Expr::Name(name.text.clone()))?;
             }
             0x24 => {
@@ -510,36 +563,59 @@ pub(super) fn decode(rgce: &[u8], rgcb: &[u8], links: &Links, mode: Mode) -> Res
                 t.take(12)?;
                 push(&mut stack, kids, Expr::Error(CellError::Ref))?;
             }
-            0x39 => return Err(Unsupported("names in other workbooks or on other sheets")),
+            0x39 => {
+                // PtgNameX: a name through a supporting link. Through this workbook's own link
+                // it is a sheet-scoped name used from another sheet, which `.xlsx` spells
+                // `'Other Sheet'!Local`: Excel's files show it, [MS-XLSB] doesn't say.
+                let ixti = t.u16()?;
+                let index = t.u32()?;
+                links.this_book(ixti)?;
+                let name = links.name(index, mode)?;
+                used.extend(usize::try_from(index).ok().and_then(|i| i.checked_sub(1)));
+                let sheet = name.scope.and_then(|s| links.sheets.get(usize::try_from(s).ok()?).cloned().flatten());
+                let sheet = sheet.ok_or(Unsupported("names in other workbooks or on other sheets"))?;
+                push(&mut stack, kids, Expr::Name(format!("{sheet}!{}", name.text)))?;
+            }
             0x3A => {
                 let ixti = t.u16()?;
                 let (r, c) = (t.u32()?, t.u16()?);
-                let kind = RefKind::Cell(anchor(r, c)?);
+                let kind = RefKind::Cell(loc3d(r, c, mode)?);
                 push(&mut stack, kids, reference(links.sheet_sel(ixti)?, kind))?;
             }
             0x3B => {
                 let ixti = t.u16()?;
                 let (r0, r1, c0, c1) = (t.u32()?, t.u32()?, t.u16()?, t.u16()?);
-                let kind = area(r0, r1, c0, c1)?;
+                let kind = area_of(loc3d(r0, c0, mode)?, loc3d(r1, c1, mode)?)?;
                 push(&mut stack, kids, reference(links.sheet_sel(ixti)?, kind))?;
             }
             0x3C | 0x3D => {
+                // PtgRefErr3d, PtgAreaErr3d: a deleted cell or range, which `.xlsx` spells
+                // `Sheet2!#REF!` (`#REF!` when the sheet is gone too). The sheet link must still
+                // be one the reader follows: an external #REF! stays cached.
                 let ixti = t.u16()?;
                 t.take(if id == 0x3C { 6 } else { 12 })?;
-                // The sheet link must still be one the reader follows: an external #REF! stays cached.
-                links.sheet_sel(ixti)?;
-                push(&mut stack, kids, Expr::Error(CellError::Ref))?;
+                push(&mut stack, kids, reference(links.sheet_sel(ixti)?, RefKind::Deleted))?;
             }
             0x01 => return Err(Unsupported("the shared or array formula form")),
             0x02 => return Err(Unsupported("what-if data tables")),
-            0x18 => return Err(Unsupported("structured table references")),
+            0x18 => {
+                if t.u8()? != 0x19 {
+                    return Err(Unsupported("unknown formula token"));
+                }
+                let text = list(&mut t, links)?;
+                push(&mut stack, kids, Expr::Structured(text))?;
+            }
             0x2C => {
-                let Mode::Shared(_) = mode else { return Err(Unsupported("relative references in a cell formula")) };
+                if mode == Mode::Cell {
+                    return Err(Unsupported("relative references in a cell formula"));
+                }
                 let (r, c) = (t.u32()?, t.u16()?);
                 push(&mut stack, kids, Expr::Ref(Reference { sheet: SheetSel::Current, kind: RefKind::Cell(loc(r, c, mode)?) }))?;
             }
             0x2D => {
-                let Mode::Shared(_) = mode else { return Err(Unsupported("relative references in a cell formula")) };
+                if mode == Mode::Cell {
+                    return Err(Unsupported("relative references in a cell formula"));
+                }
                 let (r0, r1, c0, c1) = (t.u32()?, t.u32()?, t.u16()?, t.u16()?);
                 let kind = area_of(loc(r0, c0, mode)?, loc(r1, c1, mode)?)?;
                 push(&mut stack, kids, Expr::Ref(Reference { sheet: SheetSel::Current, kind }))?;
@@ -570,6 +646,87 @@ fn bare_function(name: String) -> String {
         Some(bare) if ISO.iter().any(|f| f.eq_ignore_ascii_case(bare)) => bare.to_string(),
         _ => name,
     }
+}
+
+/// `PtgList` ([MS-XLSB] 2.5.98.52), after its two token bytes: a structured reference, spelled
+/// as `.xlsx` has it (`Sales[Val]`, `Sales[[#Headers],[Key]]`, `Sales[[#This Row],[A]:[B]]`).
+/// The two spacing flags put a space inside the outer brackets and after each comma, as Excel
+/// shows the reference.
+fn list(t: &mut Bytes<'_>, links: &Links) -> Result<String, Unsupported> {
+    let ixti = t.u16()?;
+    let bits = t.u16()?;
+    let index = t.u32()?;
+    let (first, last) = (usize::from(t.u16()?), usize::from(t.u16()?));
+    if bits & 0x3000 != 0 {
+        return Err(Unsupported("structured references to deleted tables or to tables in other workbooks"));
+    }
+    // The table's sheet link: a table is always in this workbook, on one of its sheets.
+    links.sheet_sel(ixti)?;
+    let table = links.tables.get(&index).and_then(Option::as_ref).ok_or(Unsupported("structured references to tables the reader could not read"))?;
+    let rows: &[&str] = match (bits >> 2) & 0x1F {
+        0x00 => &[],
+        0x01 => &["#All"],
+        0x02 => &["#Headers"],
+        0x04 => &["#Data"],
+        0x06 => &["#Headers", "#Data"],
+        0x08 => &["#Totals"],
+        0x0C => &["#Data", "#Totals"],
+        0x10 => &["#This Row"],
+        _ => return Err(Unsupported("unknown structured reference rows")),
+    };
+    let column = |i: usize| table.columns.get(i).map(|c| escape_column(c)).ok_or(Unsupported("structured reference to a missing table column"));
+    let columns = match bits & 3 {
+        0 => None,
+        1 => Some((column(first)?, None)),
+        2 if first <= last => Some((column(first)?, Some(column(last)?))),
+        _ => return Err(Unsupported("invalid structured reference columns")),
+    };
+    let pad = if bits & 0x80 != 0 { " " } else { "" };
+    let mut s = table.name.clone();
+    match (rows, &columns) {
+        ([], None) => s.push_str("[]"),
+        ([], Some((c, None))) => {
+            s.push('[');
+            s.push_str(pad);
+            s.push_str(c);
+            s.push_str(pad);
+            s.push(']');
+        }
+        ([row], None) => {
+            s.push('[');
+            s.push_str(pad);
+            s.push_str(row);
+            s.push_str(pad);
+            s.push(']');
+        }
+        _ => {
+            let mut items: Vec<String> = rows.iter().map(|r| format!("[{r}]")).collect();
+            match &columns {
+                Some((a, Some(b))) => items.push(format!("[{a}]:[{b}]")),
+                Some((a, None)) => items.push(format!("[{a}]")),
+                None => {}
+            }
+            let comma = if bits & 0x100 != 0 { ", " } else { "," };
+            s.push('[');
+            s.push_str(pad);
+            s.push_str(&items.join(comma));
+            s.push_str(pad);
+            s.push(']');
+        }
+    }
+    Ok(s)
+}
+
+/// A column name in a structured reference: `'` escapes `[`, `]`, `#` and `'` (`It''s '['#1']`).
+fn escape_column(name: &str) -> String {
+    let mut s = String::with_capacity(name.len());
+    for c in name.chars() {
+        if matches!(c, '[' | ']' | '#' | '\'') {
+            s.push('\'');
+        }
+        s.push(c);
+    }
+    s
 }
 
 /// Text written out in the formula: a string, or strings joined with `&` (how Python code
