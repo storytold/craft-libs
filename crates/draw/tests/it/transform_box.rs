@@ -683,7 +683,8 @@ fn moved_by(h: &Harness) -> Vec2 {
 fn the_box_moves_from_the_first_pointer_move_after_the_press_and_keeps_up_with_no_jump() {
     let mut h = upright();
     let slop = craft_ui::testing::input::slop(h.fixture.ctx());
-    let from = h.screen(Point::new(200.0, 150.0));
+    // Inside, away from the reference point at the box's centre.
+    let from = h.screen(Point::new(150.0, 120.0));
     frame(&mut h, vec![pointer::moved(from)]);
     frame(&mut h, vec![pointer::press(from)]);
     frame(&mut h, Vec::new());
@@ -703,7 +704,7 @@ fn the_box_moves_from_the_first_pointer_move_after_the_press_and_keeps_up_with_n
 
     // A move inside the slop and a release there still commit the move the user saw.
     let mut h = upright();
-    let from = h.screen(Point::new(200.0, 150.0));
+    let from = h.screen(Point::new(150.0, 120.0));
     frame(&mut h, vec![pointer::moved(from)]);
     frame(&mut h, vec![pointer::press(from)]);
     frame(&mut h, vec![pointer::moved(from + by(slop / 2.0, 0.0))]);
@@ -717,7 +718,7 @@ fn the_box_moves_from_the_first_pointer_move_after_the_press_and_keeps_up_with_n
 fn a_click_on_the_box_moves_nothing_and_a_jittery_click_outside_applies_the_box_as_it_was() {
     let mut h = upright();
     let slop = craft_ui::testing::input::slop(h.fixture.ctx());
-    let inside = h.screen(Point::new(200.0, 150.0));
+    let inside = h.screen(Point::new(150.0, 120.0));
     frame(&mut h, vec![pointer::moved(inside)]);
     frame(&mut h, vec![pointer::press(inside)]);
     frame(&mut h, vec![pointer::release(inside)]);

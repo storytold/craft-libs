@@ -205,7 +205,8 @@ impl Component for RulerOverlay<'_> {
             let across = along.normalized().rot90() * reach;
             cx.part(LINE.at(0), HitShape::Polygon(vec![a + across, b + across, b - across, a - across]))
                 .sense(Sense::DRAG)
-                .priority(HitPriority::new(HitLevel::Edge, 0));
+                .priority(HitPriority::new(HitLevel::Edge, 0))
+                .pointer_only("the arrow keys move the whole ruler while no end has focus");
         }
     }
 

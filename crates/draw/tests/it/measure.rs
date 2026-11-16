@@ -111,6 +111,11 @@ impl CanvasTool for Driven {
 
     fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
 
+    // The Ruler's cursor reads only the line and the canvas, so a pass of a new tool gives it.
+    fn cursor(&self, cx: &ToolContext<'_>) -> craft_behavior::Cursor {
+        RulerTool::new().pass(*self.line.borrow()).cursor(cx)
+    }
+
     fn command_form(&self) -> ToolPath {
         ToolPath::Command("the Ruler Line... command")
     }
@@ -385,11 +390,13 @@ fn a_read_only_ruler_paints_and_takes_no_press() {
     fixture.fixture().frame(Vec::new());
     let end = screen(ruler.end);
     let shapes = fixture.fixture().frame_shapes();
-    let paths = |test: &dyn Fn(&[egui::Pos2]) -> bool| {
-        shapes.iter().filter(|shape| matches!(shape, egui::Shape::Path(path) if test(&path.points))).count()
-    };
+    let paths =
+        |test: &dyn Fn(&[egui::Pos2]) -> bool| shapes.iter().filter(|shape| matches!(shape, egui::Shape::Path(path) if test(&path.points))).count();
     let close = |a: egui::Pos2, b: egui::Pos2| (a - b).length() < 0.5;
-    assert!(paths(&|points: &[egui::Pos2]| points.iter().any(|p| close(*p, screen(ruler.start))) && points.iter().any(|p| close(*p, end))) > 0, "the line paints");
+    assert!(
+        paths(&|points: &[egui::Pos2]| points.iter().any(|p| close(*p, screen(ruler.start))) && points.iter().any(|p| close(*p, end))) > 0,
+        "the line paints"
+    );
     assert!(paths(&|points: &[egui::Pos2]| points.len() == 2 && close(points[0].lerp(points[1], 0.5), end)) >= 2, "the cross at the end paints");
 
     fixture.press_at(end).release_at(end);
