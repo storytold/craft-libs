@@ -386,9 +386,13 @@ fn axis_format_code_length_is_capped() {
         let x = format!(r#"<c:valAx {NS}><c:numFmt formatCode="{code}" sourceLinked="0"/></c:valAx>"#);
         axis(Some(&crate::xml::parse(x.as_bytes()).unwrap())).fmt
     };
-    let ok = format!("{}0", "x".repeat(254));
+    use craft_wordmodel::chart::MAX_FMT;
+    // The limit is the model's, counted in characters (a CJK character is one).
+    let ok = format!("{}0", "x".repeat(MAX_FMT - 1));
     assert_eq!(fmt(&ok), Some(ok.clone()));
-    assert_eq!(fmt(&format!("{}0", "x".repeat(300))), None);
+    let cjk = format!("{}0", "\u{5143}".repeat(MAX_FMT - 1));
+    assert_eq!(fmt(&cjk), Some(cjk.clone()));
+    assert_eq!(fmt(&format!("{}0", "x".repeat(MAX_FMT))), None);
 }
 
 #[test]
@@ -589,4 +593,309 @@ fn series_without_a_usable_c_idx_take_their_place() {
     // The largest unsignedInt `c:idx` allows draws, without a panic.
     let big = [renumbered(&a, &format!(r#"<c:idx val="{}"/>"#, u32::MAX))];
     assert_eq!(column_colours(&big).0.len(), 1);
+}
+
+#[test]
+fn bar_category_labels_start_after_the_axis_title() {
+    let long = "A category label that is much too long for its column";
+    let title = r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>Region</a:t></a:r></a:p></c:rich></c:tx></c:title>"#;
+    let plot = format!(
+        r#"<c:barChart><c:barDir val="bar"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/>{title}</c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#,
+        ser(0, "S", Some("FF0000"), &[long, "Short"], &["4", "8"]),
+    );
+    let items = chart_items(&space(&plot), &theme(), 300.0, 200.0);
+    let rect_of = |f: &dyn Fn(&str, &TextAlign) -> bool| -> Vec<[f32; 4]> {
+        items
+            .iter()
+            .filter_map(|it| if let GraphicItem::Text { rect, text, align, .. } = it { f(text, align).then_some(*rect) } else { None })
+            .collect()
+    };
+    let title_rect = rect_of(&|t, _| t == "Region");
+    assert_eq!(title_rect.len(), 1);
+    let strip_end = title_rect[0][0] + title_rect[0][2];
+    let labels = rect_of(&|t, a| matches!(a, TextAlign::Right) && t != "Region" && (long.contains(t) || t == "Short"));
+    assert!(!labels.is_empty());
+    assert!(labels.iter().all(|r| r[0] >= strip_end - 1e-3), "labels {labels:?} overlap the title strip ending at {strip_end}");
+    assert!(labels.iter().all(|r| r[2] <= 0.4 * 300.0), "{labels:?}");
+}
+
+#[test]
+fn category_gridlines_follow_the_points_when_the_axis_crosses_mid() {
+    let line = |cross: &str| {
+        let plot = format!(
+            r#"<c:lineChart><c:grouping val="standard"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/><c:majorGridlines/></c:catAx><c:valAx><c:axId val="2"/><c:crossBetween val="{cross}"/></c:valAx>"#,
+            ser(0, "L", Some("FF0000"), &["Q1", "Q2", "Q3"], &["1", "5", "3"]),
+        );
+        let items = chart_items(&space(&plot), &theme(), 300.0, 200.0);
+        let grid: Vec<f32> = items
+            .iter()
+            .filter_map(|it| match it {
+                GraphicItem::Path { segs, stroke: Some(c), .. } if *c == GRID => match segs.first() {
+                    Some(PathSeg::Move(x, _)) => Some(*x),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        let pts: Vec<f32> = items
+            .iter()
+            .filter_map(|it| match it {
+                GraphicItem::Path { segs, stroke: Some(c), .. } if *c == Rgb(255, 0, 0) => Some(
+                    segs.iter().filter_map(|s| if let PathSeg::Move(x, _) | PathSeg::Line(x, _) = s { Some(*x) } else { None }).collect::<Vec<f32>>(),
+                ),
+                _ => None,
+            })
+            .next()
+            .unwrap_or_default();
+        (grid, pts)
+    };
+    for cross in ["midCat", "between"] {
+        let (grid, pts) = line(cross);
+        assert_eq!(grid.len(), 3, "{cross}");
+        assert_eq!(pts.len(), 3, "{cross}");
+        assert!(grid.iter().zip(&pts).all(|(g, p)| (g - p).abs() < 1e-3), "{cross}: grid {grid:?} points {pts:?}");
+    }
+}
+
+/// A line chart with one series; `extra` goes into the series (`c:marker`, `c:dLbls`), `axes`
+/// into the value axis.
+fn line_with(extra: &str, val_axis: &str) -> Vec<GraphicItem> {
+    let s = ser(0, "S", Some("FF0000"), &["Q1", "Q2", "Q3"], &["3.2", "4.1", "5"]).replace("<c:cat>", &format!("{extra}<c:cat>"));
+    let plot = format!(
+        r#"<c:lineChart><c:grouping val="standard"/>{s}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/>{val_axis}</c:valAx>"#
+    );
+    chart_items(&space(&plot), &theme(), 300.0, 200.0)
+}
+
+fn marker_xml(symbol: &str, size: u32) -> String {
+    format!(r#"<c:marker><c:symbol val="{symbol}"/><c:size val="{size}"/></c:marker>"#)
+}
+
+#[test]
+fn marker_symbols_are_drawn_as_their_shape() {
+    let shapes = |items: &[GraphicItem], kind: ShapeKind| {
+        items
+            .iter()
+            .filter(|it| matches!(it, GraphicItem::Shape { kind: k, rect, .. } if *k == kind && rect[2] > 3.0 && rect[2] < 20.0 && rect[3] > 1.0))
+            .count()
+    };
+    let paths = |items: &[GraphicItem], filled: bool| {
+        items
+            .iter()
+            .filter(|it| matches!(it, GraphicItem::Path { fill, segs, .. } if fill.is_some() == filled && segs.len() <= 12 && segs.len() >= 3))
+            .count()
+    };
+    // One marker per point, in the series' size.
+    let circle = line_with(&marker_xml("circle", 9), "");
+    assert_eq!(shapes(&circle, ShapeKind::Ellipse), 3);
+    assert!(circle.iter().any(|it| matches!(it, GraphicItem::Shape { kind: ShapeKind::Ellipse, rect, .. } if (rect[2] - 9.0).abs() < 1e-3)));
+    let square = line_with(&marker_xml("square", 7), "");
+    assert_eq!(shapes(&square, ShapeKind::Rectangle) - shapes(&circle, ShapeKind::Rectangle), 3, "a square per point");
+    assert_eq!(shapes(&square, ShapeKind::Ellipse), 0, "no circles");
+    // Diamonds and triangles are filled polygons; x, plus and star are strokes.
+    let base = paths(&line_with("", ""), true);
+    assert_eq!(paths(&line_with(&marker_xml("diamond", 7), ""), true) - base, 3);
+    assert_eq!(paths(&line_with(&marker_xml("triangle", 7), ""), true) - base, 3);
+    for symbol in ["x", "plus", "star"] {
+        let items = line_with(&marker_xml(symbol, 7), "");
+        assert!(items.iter().any(|it| matches!(it, GraphicItem::Path { fill: None, stroke: Some(_), segs, .. } if segs.len() >= 6)), "{symbol}");
+        assert_eq!(shapes(&items, ShapeKind::Ellipse), 0, "{symbol} is not a circle");
+    }
+    // Dash and dot are small shapes; `none` and unknown names never crash (unknown: a circle).
+    assert_eq!(shapes(&line_with(&marker_xml("dash", 7), ""), ShapeKind::Rectangle) - shapes(&circle, ShapeKind::Rectangle), 3);
+    assert_eq!(shapes(&line_with(&marker_xml("dot", 7), ""), ShapeKind::Ellipse), 3);
+    assert_eq!(shapes(&line_with(&marker_xml("none", 7), ""), ShapeKind::Ellipse), 0);
+    assert_eq!(shapes(&line_with(&marker_xml("wibble", 7), ""), ShapeKind::Ellipse), 3);
+    // Hostile sizes are clamped.
+    for size in ["0", "99999999999", "-4", "x"] {
+        let items = line_with(&format!(r#"<c:marker><c:symbol val="square"/><c:size val="{size}"/></c:marker>"#), "");
+        assert!(items.iter().all(|it| match it {
+            GraphicItem::Shape { rect, .. } => rect.iter().all(|v| v.is_finite()) && rect[2] <= 300.0,
+            _ => true,
+        }));
+    }
+}
+
+#[test]
+fn data_labels_use_their_own_format_code() {
+    let dl = |num: &str| format!(r#"<c:dLbls>{num}<c:showVal val="1"/></c:dLbls>"#);
+    let shown = |items: &[GraphicItem]| -> Vec<String> {
+        items.iter().filter_map(|it| if let GraphicItem::Text { text, .. } = it { Some(text.clone()) } else { None }).collect()
+    };
+    let own = shown(&line_with(&dl(r#"<c:numFmt formatCode="0.00" sourceLinked="0"/>"#), ""));
+    assert!(own.contains(&"3.20".to_string()) && own.contains(&"5.00".to_string()), "{own:?}");
+    // Linked to the source: the series' format (General here).
+    let linked = shown(&line_with(&dl(r#"<c:numFmt formatCode="0.00" sourceLinked="1"/>"#), ""));
+    assert!(linked.contains(&"3.2".to_string()) && linked.contains(&"5".to_string()), "{linked:?}");
+    // A format code beyond the cap is ignored, not applied.
+    let long = "0".repeat(craft_wordmodel::chart::MAX_FMT + 1);
+    let capped = shown(&line_with(&dl(&format!(r#"<c:numFmt formatCode="{long}" sourceLinked="0"/>"#)), ""));
+    assert!(capped.contains(&"3.2".to_string()), "{capped:?}");
+}
+
+#[test]
+fn value_axis_title_turns_counter_clockwise_like_word() {
+    let title = |body: &str| format!(r#"<c:title><c:tx><c:rich>{body}<a:p><a:r><a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title>"#);
+    let angle = |items: &[GraphicItem]| {
+        items.iter().find_map(|it| if let GraphicItem::Text { text, angle, .. } = it { (text == "Revenue").then_some(*angle) } else { None })
+    };
+    // The file's rotation (`-5400000` is 90° counter-clockwise), or Word's default when it says none.
+    assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="-5400000" vert="horz"/>"#))), Some(-90.0));
+    assert_eq!(angle(&line_with("", &title("<a:bodyPr/>"))), Some(-90.0));
+    assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="5400000" vert="horz"/>"#))), Some(90.0));
+    // A horizontal title (`rot="0"`) stays horizontal: the plot makes room for it (see below).
+    assert_eq!(angle(&line_with("", &title(r#"<a:bodyPr rot="0" vert="horz"/>"#))), Some(0.0));
+    // Hostile values stay finite.
+    let odd = angle(&line_with("", &title(r#"<a:bodyPr rot="99999999999999999999"/>"#)));
+    assert!(odd.is_some_and(f32::is_finite));
+}
+
+fn first_ellipse(items: &[GraphicItem]) -> Option<([f32; 4], Rgb)> {
+    items.iter().find_map(|it| match it {
+        GraphicItem::Shape { kind: ShapeKind::Ellipse, rect, fill: Some(c), .. } if rect[2] > 3.0 && rect[2] < 20.0 => Some((*rect, *c)),
+        _ => None,
+    })
+}
+
+#[test]
+fn markers_use_the_automatic_series_colour_not_the_line_colour() {
+    // The series has an explicit red line/fill but no marker fill: Word draws the markers in the
+    // palette colour of the series index (accent 1 here).
+    let items = line_with(&marker_xml("circle", 9), "");
+    assert_eq!(first_ellipse(&items).map(|e| e.1), Some(theme()[4]));
+    // A marker's own fill wins.
+    let own =
+        r#"<c:marker><c:symbol val="circle"/><c:size val="9"/><c:spPr><a:solidFill><a:srgbClr val="00AA00"/></a:solidFill></c:spPr></c:marker>"#;
+    assert_eq!(first_ellipse(&line_with(own, "")).map(|e| e.1), Some(Rgb(0, 0xAA, 0)));
+}
+
+#[test]
+fn line_data_labels_default_to_the_right_and_honour_dlblpos() {
+    let dl = |pos: &str| format!(r#"{}<c:dLbls>{pos}<c:showVal val="1"/></c:dLbls>"#, marker_xml("circle", 9));
+    let text_rect = |items: &[GraphicItem]| {
+        items.iter().find_map(|it| if let GraphicItem::Text { text, rect, .. } = it { (text == "3.2").then_some(*rect) } else { None })
+    };
+    let at = |pos: &str| {
+        let items = line_with(&dl(pos), "");
+        let (m, _) = first_ellipse(&items).unwrap();
+        let t = text_rect(&items).unwrap();
+        // Centre of the marker and of the label box.
+        ((t[0] + t[2] / 2.0) - (m[0] + m[2] / 2.0), (t[1] + t[3] / 2.0) - (m[1] + m[3] / 2.0), t, m)
+    };
+    let (dx, dy, t, m) = at("");
+    assert!(t[0] >= m[0] + m[2] && dy.abs() < 1.0, "default is right of the marker: {dx} {dy}");
+    let (dx, dy, t, m) = at(r#"<c:dLblPos val="r"/>"#);
+    assert!(t[0] >= m[0] + m[2] && dy.abs() < 1.0, "{dx} {dy}");
+    let (dx, dy, _, _) = at(r#"<c:dLblPos val="t"/>"#);
+    assert!(dx.abs() < 1.0 && dy < -4.0, "{dx} {dy}");
+    let (dx, dy, _, _) = at(r#"<c:dLblPos val="b"/>"#);
+    assert!(dx.abs() < 1.0 && dy > 4.0, "{dx} {dy}");
+    let (dx, dy, t, m) = at(r#"<c:dLblPos val="l"/>"#);
+    assert!(t[0] + t[2] <= m[0] && dy.abs() < 1.0, "{dx} {dy}");
+    let (dx, dy, _, _) = at(r#"<c:dLblPos val="ctr"/>"#);
+    assert!(dx.abs() < 1.0 && dy.abs() < 1.0, "{dx} {dy}");
+    // Unknown positions fall back to the default.
+    let (_, _, t, m) = at(r#"<c:dLblPos val="wibble"/>"#);
+    assert!(t[0] >= m[0] + m[2]);
+}
+
+#[test]
+fn horizontal_value_axis_title_gets_its_own_strip() {
+    let title = |rot: &str, name: &str| {
+        format!(r#"<c:title><c:tx><c:rich><a:bodyPr{rot}/><a:p><a:r><a:t>{name}</a:t></a:r></a:p></c:rich></c:tx></c:title>"#)
+    };
+    let plot_left = |items: &[GraphicItem]| {
+        // The first gridline's start is the plot's left edge.
+        items.iter().find_map(|it| match it {
+            GraphicItem::Path { segs, stroke: Some(_), fill: None, .. } if segs.len() == 2 => match segs.first() {
+                Some(PathSeg::Move(x, _)) => Some(*x),
+                _ => None,
+            },
+            _ => None,
+        })
+    };
+    let rect_of = |items: &[GraphicItem], name: &str| {
+        items.iter().find_map(|it| if let GraphicItem::Text { text, rect, .. } = it { text.starts_with(name).then_some(*rect) } else { None })
+    };
+    let turned = line_with("", &title(r#" rot="-5400000" vert="horz""#, "Revenue"));
+    let flat = line_with("", &title(r#" rot="0" vert="horz""#, "Revenue"));
+    let (a, b) = (plot_left(&turned).unwrap(), plot_left(&flat).unwrap());
+    assert!(b > a + 10.0, "a horizontal title takes more room than a turned one: {a} {b}");
+    // The title box lies left of the plot and inside the chart.
+    let r = rect_of(&flat, "Revenue").unwrap();
+    assert!(r[0] >= 0.0 && r[0] + r[2] <= b + 0.5, "{r:?} {b}");
+    // A hostile title never takes more than a quarter of the width and stays finite.
+    let long = "Wibble ".repeat(500);
+    let items = line_with("", &title(r#" rot="0""#, &long));
+    let p = plot_left(&items).unwrap();
+    assert!(p.is_finite() && p <= 300.0 * 0.3, "{p}");
+}
+
+/// A one-series chart whose series carries `sp` as its `c:spPr`.
+fn chart_with_sp(kind: &str, sp: &str) -> Vec<GraphicItem> {
+    let s = ser(0, "S", None, &["Q1", "Q2"], &["4", "8"]).replace("<c:cat>", &format!("{sp}<c:cat>"));
+    let plot = match kind {
+        "area" => format!(
+            r#"<c:areaChart><c:grouping val="standard"/>{s}<c:axId val="1"/><c:axId val="2"/></c:areaChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+        ),
+        dir => format!(
+            r#"<c:barChart><c:barDir val="{dir}"/><c:grouping val="clustered"/>{s}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+        ),
+    };
+    chart_items(&space(&plot), &theme(), 300.0, 200.0)
+}
+
+/// The series' closed shapes: (filled, stroked with the given width).
+fn series_shapes(items: &[GraphicItem], width: f32) -> (usize, usize) {
+    let closed = |segs: &[PathSeg]| segs.iter().any(|s| matches!(s, PathSeg::Close));
+    let fills = items.iter().filter(|it| matches!(it, GraphicItem::Path { segs, fill: Some(_), .. } if closed(segs))).count();
+    let strokes = items
+        .iter()
+        .filter(|it| matches!(it, GraphicItem::Path { segs, fill: None, stroke: Some(_), stroke_width, .. } if closed(segs) && (*stroke_width - width).abs() < 0.01))
+        .count();
+    (fills, strokes)
+}
+
+#[test]
+fn unfilled_bars_keep_their_explicit_outline() {
+    let outlined = r#"<c:spPr><a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr>"#;
+    let no_line = r#"<c:spPr><a:noFill/><a:ln><a:noFill/></a:ln></c:spPr>"#;
+    for dir in ["col", "bar"] {
+        // Two points, two outlines, no fill.
+        assert_eq!(series_shapes(&chart_with_sp(dir, outlined), 2.0), (0, 2), "{dir}");
+        // Control: no fill and no line draws nothing.
+        assert_eq!(series_shapes(&chart_with_sp(dir, no_line), 2.0), (0, 0), "{dir}");
+    }
+}
+
+#[test]
+fn no_fill_area_series_is_not_painted() {
+    let filled = r#"<c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr>"#;
+    let none = r#"<c:spPr><a:noFill/><a:ln w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:ln></c:spPr>"#;
+    assert_eq!(series_shapes(&chart_with_sp("area", filled), 2.0).0, 1);
+    assert_eq!(series_shapes(&chart_with_sp("area", none), 2.0).0, 0);
+}
+
+#[test]
+fn source_linked_series_labels_do_not_inherit_the_chart_format() {
+    let dl = |fmt: &str| format!(r#"<c:dLbls><c:numFmt formatCode="{fmt}" sourceLinked="{{}}"/><c:showVal val="1"/></c:dLbls>"#);
+    let shown = |items: &[GraphicItem]| -> Vec<String> {
+        items.iter().filter_map(|it| if let GraphicItem::Text { text, .. } = it { Some(text.clone()) } else { None }).collect()
+    };
+    // Chart-level 0%; the series' own labels are `linked` (or have no labels element at all).
+    let run = |series_dl: &str| {
+        let s = ser(0, "S", Some("FF0000"), &["Q1", "Q2", "Q3"], &["3.2", "4.1", "5"]).replace("<c:cat>", &format!("{series_dl}<c:cat>"));
+        let chart_dl = dl("0%").replace("{}", "0");
+        let plot = format!(
+            r#"<c:lineChart><c:grouping val="standard"/>{s}{chart_dl}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#
+        );
+        shown(&chart_items(&space(&plot), &theme(), 300.0, 200.0))
+    };
+    for linked in ["1", "true"] {
+        let own = run(&dl("General").replace("{}", linked));
+        assert!(own.contains(&"3.2".to_string()) && !own.contains(&"320%".to_string()), "sourceLinked={linked}: {own:?}");
+    }
+    // Control: a series without a label format still takes the chart's.
+    let inherited = run(r#"<c:dLbls><c:showVal val="1"/></c:dLbls>"#);
+    assert!(inherited.contains(&"320%".to_string()), "{inherited:?}");
 }

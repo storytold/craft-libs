@@ -18,7 +18,10 @@
 //! - CFA: the X-Trans layout record (36 bytes, 0 = R, 1 = G, 2 = B) is stored in reverse order and, reversed,
 //!   is anchored at raw pixel (0, 0) — verified on X-Trans I and III samples by minimising the difference
 //!   between horizontally / vertically adjacent "green" samples over all 72 orientations/phases, and by colour
-//!   renders. Bayer bodies (X-A series) use RGGB at (0, 0), verified by colour renders.
+//!   renders. Bayer FujiLayout (`0x0130`) gives the reversed 2×2 pattern in its low two bits
+//!   (0 = R, 1/3 = G, 2 = B); absent layout records retain the assumed RGGB fallback.
+//! - RawExposureBias (`0x9650`) is a signed big-endian 16-bit fraction; its negative is the
+//!   baseline exposure used to restore the camera's dynamic-range exposure reduction.
 //! - Striped predictive compression is decoded by `rafc`; see `docs/raf-compression.md`.
 
 use crate::shared::white_from_data_sourced;
@@ -87,7 +90,7 @@ fn pair(h: &Header, tag: u16) -> Option<(usize, usize)> {
 pub(crate) fn raw_ifd(raw: &[u8]) -> Result<Ifd> {
     let tiff = Tiff::parse(raw).map_err(|_| RawError::Unsupported("RAF without a raw IFD (older FinePix layout)".into()))?;
     let off = tiff.ifds.first().and_then(|i| i.u64(0xf000)).ok_or_else(|| RawError::Unsupported("RAF without a raw IFD".into()))?;
-    let (ifd, _) = craft_tiff::parse_ifd_at(raw, off, ByteOrder::Little, 0, false, &Default::default())?;
+    let (ifd, _) = craft_tiff::parse_ifd_at(raw, off, tiff.order, 0, false, &Default::default())?;
     Ok(ifd)
 }
 
@@ -122,12 +125,42 @@ fn camera_name(b: &[u8]) -> String {
     String::from_utf8_lossy(name.get(..end).unwrap_or_default()).trim().to_string()
 }
 
-/// The CFA: X-Trans from the (reversed) layout record, else RGGB.
-fn cfa(h: &Header) -> Cfa {
-    match record(h, XTRANS_LAYOUT) {
-        Some(l) if l.len() == 36 && l.iter().all(|&c| c <= 2) => Cfa { width: 6, height: 6, pattern: l.iter().rev().copied().collect() },
-        _ => Cfa::bayer_static("RGGB"),
+/// Layout records are reversed and anchored at sensor (0, 0). FujiLayout's low
+/// two bits encode Bayer colour; both 1 and 3 denote green.
+fn cfa(h: &Header) -> Result<Cfa> {
+    if let Some(l) = record(h, XTRANS_LAYOUT) {
+        if l.len() != 36 || l.iter().any(|&c| c > 2) {
+            return Err(RawError::Unsupported("Fujifilm RAF with an unknown X-Trans layout".into()));
+        }
+        return Ok(Cfa { width: 6, height: 6, pattern: l.iter().rev().copied().collect(), origin_x: 0, origin_y: 0 });
     }
+    let Some(l) = record(h, 0x0130) else { return Ok(Cfa::bayer_static("RGGB")) };
+    let cfa = Cfa { width: 2, height: 2, pattern: l.iter().rev().map(|&c| if c & 3 == 3 { 1 } else { c & 3 }).collect(), origin_x: 0, origin_y: 0 };
+    // Colour counts alone also accept adjacent green sites; the two greens
+    // must occupy opposite corners of the 2x2 Bayer repeat.
+    if l.len() != 4 || !matches!(cfa.pattern.as_slice(), [0, 1, 1, 2] | [2, 1, 1, 0] | [1, 0, 2, 1] | [1, 2, 0, 1]) {
+        return Err(RawError::Unsupported("Fujifilm RAF with an unknown Bayer layout".into()));
+    }
+    Ok(cfa)
+}
+
+/// Fuji RawExposureBias is a signed big-endian 16-bit fraction, undone like
+/// DNG BaselineExposure. Invalid or implausible metadata does not alter exposure.
+fn baseline_exposure(h: &Header) -> f64 {
+    record(h, 0x9650)
+        .and_then(|d| {
+            let num = i16::from_be_bytes(d.get(..2)?.try_into().ok()?);
+            let den = i16::from_be_bytes(d.get(2..4)?.try_into().ok()?);
+            (den != 0).then(|| -f64::from(num) / f64::from(den))
+        })
+        .filter(|v| v.is_finite() && v.abs() <= 8.0)
+        .unwrap_or(0.0)
+}
+
+/// The codec fixes the green-site geometry; exchanging the two non-green
+/// planes only exchanges their colour labels, so RGGB and BGGR are both valid.
+fn compressed_layout_supported(cfa: &Cfa) -> bool {
+    *cfa == Cfa::xtrans() || *cfa == Cfa::bayer_static("RGGB") || *cfa == Cfa::bayer_static("BGGR")
 }
 
 /// Unpack one row of `bits`-bit samples in Fujifilm's packing. `words32`: the raw IFD's `0xf006` flag is set, the
@@ -135,7 +168,7 @@ fn cfa(h: &Header) -> Cfa {
 /// LSB-first bit stream, or (other depths) the same 32-bit words.
 pub(crate) fn unpack_row(src: &[u8], bits: u32, words32: bool, out: &mut [u16]) {
     match bits {
-        16 => out.iter_mut().zip(src.as_chunks::<2>().0).for_each(|(o, c)| *o = u16::from_le_bytes([c[0], c[1]])),
+        16 if !words32 => out.iter_mut().zip(src.as_chunks::<2>().0).for_each(|(o, c)| *o = u16::from_le_bytes([c[0], c[1]])),
         12 if !words32 => unpack_lsb(src, 12, out),
         _ => unpack_words32_msb(src, ByteOrder::Little, bits, out),
     }
@@ -169,7 +202,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     let src = raw
         .get(off..off.checked_add(len).ok_or_else(|| RawError::Corrupt("RAF strip size overflow".into()))?)
         .ok_or_else(|| RawError::Corrupt("RAF strip outside file".into()))?;
-    let cfa = cfa(&h);
+    let cfa = cfa(&h)?;
     let compression = be32(bytes, 108).unwrap_or(0);
     let compressed = match compression {
         0 => false,
@@ -178,8 +211,13 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
     };
     let mut data = Vec::new();
     if compressed {
-        if cfa.width == 6 && cfa != Cfa::xtrans() {
-            return Err(RawError::Unsupported("Fujifilm compressed RAF with an unknown X-Trans layout".into()));
+        if !compressed_layout_supported(&cfa) {
+            return Err(RawError::Unsupported("Fujifilm compressed RAF with an unsupported CFA layout".into()));
+        }
+        if !src.starts_with(b"IS") {
+            // A recognized RAF compression mode can wrap an unknown packing. Do not
+            // feed it to the IS codec; damage inside an identified IS stream stays Corrupt.
+            return Err(RawError::Unsupported("Fujifilm compressed RAF without a supported IS signature".into()));
         }
         let flag = if compression == 2 { 1 } else { 0 };
         if src.get(2) != Some(&flag) {
@@ -188,9 +226,18 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         data = crate::rafc::decode(src, w, hgt, bits, cfa.width == 6, mode, limits)?;
     } else {
         let words32 = ifd.u64(PACKED_WORDS).is_some_and(|v| v != 0);
-        // Samples may use 16-bit words (e.g. 14-bit X-T20); otherwise they are packed at `bits`.
-        let store = if len as u64 >= (n as u64) * 2 { 16 } else { bits };
-        let packed_row = w.checked_mul(store as usize).map(|n| n.div_ceil(8)).ok_or(RawError::Limit("RAF row too large"))?;
+        // An explicit packed-word flag wins over the size heuristic: padding in short
+        // packed rows can occupy as many bytes as unpacked 16-bit samples.
+        // Unflagged samples may use 16-bit words (e.g. 14-bit X-T20).
+        let store = if !words32 && len as u64 >= (n as u64) * 2 { 16 } else { bits };
+        let row_bits = w.checked_mul(store as usize).ok_or(RawError::Limit("RAF row too large"))?;
+        // Word-packed rows store the high bits in the last little-endian word's final bytes.
+        // Reading only ceil(bits / 8) bytes would lose those samples, not just padding.
+        let packed_row = if words32 || (store != 16 && store != 12) {
+            row_bits.div_ceil(32).checked_mul(4).ok_or(RawError::Limit("RAF row too large"))?
+        } else {
+            row_bits.div_ceil(8)
+        };
         let stride = match get(0xf005)?.unwrap_or(0) {
             0 => packed_row,
             words => words.checked_mul(4).ok_or(RawError::Limit("RAF stride too large"))?.max(packed_row),
@@ -204,7 +251,11 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
             data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
                 // `required <= src.len()` proves these row offsets fit, including the final row.
                 let s = src.get(y * stride..y * stride + packed_row).unwrap_or(&[]);
-                unpack_row(s, store, words32, row);
+                if !words32 && store == 16 && raw.starts_with(b"MM") {
+                    crate::unpack::read_u16s(s, ByteOrder::Big, row);
+                } else {
+                    unpack_row(s, store, words32, row);
+                }
             });
         }
     }
@@ -244,9 +295,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         active_area: active,
         crop: Rect::new(0, 0, active.width, active.height),
         orientation,
-        color: ColorData { kelvin_presets, ..Default::default() },
+        color: ColorData { kelvin_presets, baseline_exposure: baseline_exposure(&h), ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists { list3: crate::raf_lens::corrections(&camera_name(bytes), &ifd, active), ..Default::default() },
         camera: ifd0
@@ -254,6 +306,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
             .unwrap_or_else(|| Camera { model: Some(camera_name(bytes)).filter(|n| !n.is_empty()), ..Default::default() }),
         cinema: Default::default(),
         lens_metadata: Default::default(),
+        notices: crate::RawNotices { assumed_cfa: record(&h, XTRANS_LAYOUT).is_none() && record(&h, 0x0130).is_none(), ..Default::default() },
         level_sources: crate::LevelSources { black: black_source, white: white_source },
     };
     img.validate_for(mode)?;
@@ -476,6 +529,181 @@ pub(super) mod tests {
         // too little data for the size: compressed
         let bytes = raf(w, h, 14, vec![0; 20], None, b"");
         assert!(matches!(crate::decode(&bytes), Err(RawError::Unsupported(_))));
+    }
+
+    #[test]
+    fn word_packed_rows_keep_the_final_partial_word_and_reject_truncation() {
+        for (w, bits, flag) in [(30u32, 14u32, 0u32), (22, 12, 1), (6, 12, 1), (5, 16, 1)] {
+            let h = 6u32;
+            let px: Vec<u16> = (0..w * h).map(|i| ((i * 977 + 101) % (1 << bits)) as u16).collect();
+            // Independently place each sample bit into whole little-endian 32-bit row words.
+            let strip: Vec<u8> = px
+                .chunks(w as usize)
+                .flat_map(|row| {
+                    let mut words = vec![0u32; (row.len() * bits as usize).div_ceil(32)];
+                    for (i, &sample) in row.iter().enumerate() {
+                        for bit in 0..bits as usize {
+                            let at = i * bits as usize + bit;
+                            words[at / 32] |= u32::from((sample >> (bits as usize - 1 - bit)) & 1) << (31 - at % 32);
+                        }
+                    }
+                    words.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>()
+                })
+                .collect();
+            let bytes = raf_flagged(w, h, bits, strip, None, &[], flag);
+            assert_eq!(crate::decode(&bytes).unwrap().data, RawData::U16(px));
+            assert!(crate::decode(&bytes[..bytes.len() - 1]).is_err());
+        }
+    }
+
+    #[test]
+    fn big_endian_words_and_bayer_layout_preserve_exact_sensor_values() {
+        use craft_tiff::{IfdBuilder, TiffWriter, Value};
+        let (w, h) = (6u32, 4u32);
+        let px: Vec<u16> = (0..w * h).map(|i| (i * 977 + 123) as u16).collect();
+        for order in [ByteOrder::Little, ByteOrder::Big] {
+            let build = |at| {
+                let mut sensor = IfdBuilder::new();
+                for (tag, value) in [(0xf001, w), (0xf002, h), (0xf003, 16), (0xf007, at), (0xf008, w * h * 2)] {
+                    sensor.set(tag, Value::Long(vec![value]));
+                }
+                let mut root = IfdBuilder::new();
+                root.set_child(0xf000, sensor);
+                TiffWriter::new(order, false).write(&[root]).unwrap()
+            };
+            let mut raw = build(build(0).len() as u32);
+            raw.extend(px.iter().flat_map(|v| if order == ByteOrder::Big { v.to_be_bytes() } else { v.to_le_bytes() }));
+            let mut bytes = raf(w, h, 16, vec![0; (w * h * 2) as usize], None, &[]);
+            let raw_at = be32(&bytes, 100).unwrap();
+            bytes.truncate(raw_at);
+            bytes[104..108].copy_from_slice(&(raw.len() as u32).to_be_bytes());
+            bytes.extend(raw);
+            // A four-site Bayer record is reversed in storage, just like the X-Trans record.
+            let dir_at = be32(&bytes, 92).unwrap();
+            let mut records = bytes[dir_at..raw_at].to_vec();
+            let n = u32::from_be_bytes(records[..4].try_into().unwrap()) + 1;
+            records[..4].copy_from_slice(&n.to_be_bytes());
+            records.extend_from_slice(&[0x01, 0x30, 0, 4, 0x08, 0x09, 0x0b, 0x0a]);
+            bytes.splice(dir_at..raw_at, records.clone());
+            bytes[96..100].copy_from_slice(&(records.len() as u32).to_be_bytes());
+            bytes[100..104].copy_from_slice(&((raw_at + 8) as u32).to_be_bytes());
+            let image = crate::decode(&bytes).unwrap();
+            assert_eq!(image.data, RawData::U16(px.clone()));
+            assert_eq!(image.cfa.unwrap().name(), "BGGR");
+        }
+    }
+
+    #[test]
+    fn raw_exposure_bias_is_preserved_as_baseline_exposure_and_invalid_values_are_ignored() {
+        for (num, den, expected) in [(-72i16, 100i16, 0.72f64), (1, 0, 0.0), (32767, 1, 0.0)] {
+            let mut bytes = raf(6, 4, 16, pack(&[1000; 24], 16), None, &[]);
+            let (dir_at, raw_at) = (be32(&bytes, 92).unwrap(), be32(&bytes, 100).unwrap());
+            let mut records = bytes[dir_at..raw_at].to_vec();
+            let n = u32::from_be_bytes(records[..4].try_into().unwrap()) + 1;
+            records[..4].copy_from_slice(&n.to_be_bytes());
+            records.extend_from_slice(&[0x96, 0x50, 0, 4]);
+            records.extend(num.to_be_bytes());
+            records.extend(den.to_be_bytes());
+            bytes.splice(dir_at..raw_at, records.clone());
+            bytes[96..100].copy_from_slice(&(records.len() as u32).to_be_bytes());
+            bytes[100..104].copy_from_slice(&((raw_at + 8) as u32).to_be_bytes());
+            for mode in [Mode::Header, Mode::Full] {
+                assert!((decode(&bytes, mode, &Limits::default()).unwrap().color.baseline_exposure - expected).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_declared_cfa_layouts_are_not_silently_replaced() {
+        for (tag, data) in [(0x0130, vec![8, 8, 10, 10]), (0x0130, vec![1, 2, 1, 0]), (0x0131, vec![3; 36])] {
+            let header = Header { jpeg: None, records: vec![(tag, data.as_slice())], raw: None };
+            assert!(matches!(cfa(&header), Err(RawError::Unsupported(_))));
+        }
+    }
+
+    fn with_bayer_record(mut bytes: Vec<u8>, pattern: [u8; 4]) -> Vec<u8> {
+        let (dir_at, raw_at) = (be32(&bytes, 92).unwrap(), be32(&bytes, 100).unwrap());
+        let mut records = bytes[dir_at..raw_at].to_vec();
+        let count = u32::from_be_bytes(records[..4].try_into().unwrap()) + 1;
+        records[..4].copy_from_slice(&count.to_be_bytes());
+        records.extend_from_slice(&[0x01, 0x30, 0, 4]);
+        records.extend_from_slice(&pattern);
+        bytes.splice(dir_at..raw_at, records.clone());
+        bytes[96..100].copy_from_slice(&(records.len() as u32).to_be_bytes());
+        bytes[100..104].copy_from_slice(&((raw_at + 8) as u32).to_be_bytes());
+        bytes
+    }
+
+    #[test]
+    fn non_bayer_geometry_is_rejected_in_header_and_full_modes() {
+        // Reversal gives RGBG: correct colour counts, but both greens in one column.
+        let bytes = with_bayer_record(raf(6, 4, 16, pack(&[1000; 24], 16), None, &[]), [1, 2, 1, 0]);
+        for mode in [Mode::Header, Mode::Full] {
+            assert!(matches!(decode(&bytes, mode, &Limits::default()), Err(RawError::Unsupported(why)) if why.contains("Bayer layout")));
+        }
+    }
+
+    #[test]
+    fn all_four_bayer_geometries_preserve_the_stored_samples() {
+        let pixels: Vec<u16> = (0..24).map(|i| 123 + i * 977).collect();
+        for (stored, expected) in [([2, 1, 1, 0], "RGGB"), ([0, 1, 1, 2], "BGGR"), ([1, 2, 0, 1], "GRBG"), ([1, 0, 2, 1], "GBRG")] {
+            let bytes = with_bayer_record(raf(6, 4, 16, pack(&pixels, 16), None, &[]), stored);
+            for mode in [Mode::Header, Mode::Full] {
+                let image = decode(&bytes, mode, &Limits::default()).unwrap();
+                assert_eq!((image.width, image.height), (6, 4));
+                assert_eq!(image.cfa.as_ref().unwrap().name(), expected);
+                assert_eq!(image.data, RawData::U16(if mode == Mode::Full { pixels.clone() } else { Vec::new() }));
+            }
+        }
+    }
+
+    #[test]
+    fn compressed_bayer_requires_the_layout_assumed_by_its_predictor() {
+        let strip = b"IS\x01\x00\x0e\0\x12\x06\0\x03\x0c\x03\0\x02\0\x03".to_vec();
+        let mut bytes = raf(780, 18, 14, strip, None, &[]);
+        let (dir_at, raw_at) = (be32(&bytes, 92).unwrap(), be32(&bytes, 100).unwrap());
+        let mut records = bytes[dir_at..raw_at].to_vec();
+        let n = u32::from_be_bytes(records[..4].try_into().unwrap()) + 1;
+        records[..4].copy_from_slice(&n.to_be_bytes());
+        // Reversed GRBG: a valid Bayer pattern, but not the RGGB order of this codec.
+        records.extend_from_slice(&[0x01, 0x30, 0, 4, 0x0b, 0x0a, 0x08, 0x09]);
+        bytes.splice(dir_at..raw_at, records.clone());
+        bytes[96..100].copy_from_slice(&(records.len() as u32).to_be_bytes());
+        bytes[100..104].copy_from_slice(&((raw_at + 8) as u32).to_be_bytes());
+        for mode in [Mode::Header, Mode::Full] {
+            assert!(matches!(decode(&bytes, mode, &Limits::default()), Err(RawError::Unsupported(why)) if why.contains("layout")));
+        }
+    }
+
+    #[test]
+    fn compressed_layout_accepts_both_red_blue_orders_without_accepting_wrong_green_phase() {
+        for name in ["RGGB", "BGGR"] {
+            assert!(compressed_layout_supported(&Cfa::bayer_static(name)), "{name}");
+        }
+        for name in ["GRBG", "GBRG"] {
+            assert!(!compressed_layout_supported(&Cfa::bayer_static(name)), "{name}");
+        }
+        let mut other = Cfa::xtrans();
+        assert!(compressed_layout_supported(&other));
+        other.pattern.swap(0, 2);
+        assert!(!compressed_layout_supported(&other));
+    }
+
+    #[test]
+    fn unknown_compressed_signature_is_unsupported_but_identified_stream_damage_is_corrupt() {
+        let header = b"IS\x01\x00\x0e\0\x12\x06\0\x03\x0c\x03\0\x02\0\x03".to_vec();
+        let known = raf(780, 18, 14, header, None, &[]);
+        let raw_at = be32(&known, 100).unwrap();
+        let strip_at = raw_at + raw_ifd(&known[raw_at..]).unwrap().u64(0xf007).unwrap() as usize;
+        let mut unknown = known.clone();
+        unknown[strip_at..strip_at + 2].copy_from_slice(b"XX");
+        for mode in [Mode::Header, Mode::Full] {
+            assert!(matches!(decode(&unknown, mode, &Limits::default()), Err(RawError::Unsupported(why)) if why.contains("signature")));
+            assert!(
+                matches!(decode(&known, mode, &Limits::default()), Err(RawError::Corrupt(_))),
+                "identified but truncated IS stream must remain corrupt"
+            );
+        }
     }
 
     /// Raw IFD flag `0xf006` selects the 32-bit-word packing at 12 bits; without it 12 bits are an LSB-first stream.

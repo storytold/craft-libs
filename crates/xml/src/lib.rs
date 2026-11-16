@@ -25,6 +25,7 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
+pub mod dtd;
 mod read;
 mod tree;
 pub mod value;
@@ -44,11 +45,14 @@ pub enum Error {
     #[error("the XML is larger than {0} bytes")]
     TooLarge(usize),
     /// Elements nest deeper than [`Limits::max_depth`].
-    #[error("XML elements nest deeper than {0} levels")]
+    #[error("XML elements are nested deeper than {0} levels")]
     TooDeep(usize),
     /// The tree would hold more than [`Limits::max_nodes`] nodes.
     #[error("the XML holds more than {0} nodes")]
     TooManyNodes(usize),
+    /// The tree would hold more than [`Limits::max_elements`] elements.
+    #[error("the XML holds more than {0} elements")]
+    TooManyElements(usize),
     /// One start tag has more than [`Limits::max_attrs`] attributes.
     #[error("an XML element has more than {0} attributes")]
     TooManyAttrs(usize),
@@ -76,6 +80,14 @@ pub enum Error {
 impl Error {
     /// Was a limit exceeded (as opposed to the markup being wrong)?
     pub fn is_limit(&self) -> bool {
-        matches!(self, Error::TooLarge(_) | Error::TooDeep(_) | Error::TooManyNodes(_) | Error::TooManyAttrs(_) | Error::TooManyAttrsTotal(_))
+        matches!(
+            self,
+            Error::TooLarge(_)
+                | Error::TooDeep(_)
+                | Error::TooManyNodes(_)
+                | Error::TooManyElements(_)
+                | Error::TooManyAttrs(_)
+                | Error::TooManyAttrsTotal(_)
+        )
     }
 }
