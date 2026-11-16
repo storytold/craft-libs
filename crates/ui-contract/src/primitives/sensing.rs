@@ -759,10 +759,13 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
         let mut machine = std::mem::take(&mut state.machine);
         let step = machine.step(input, |at| {
             // The press-target rule: egui's click target decides, its drag target only for a drag-only root; the
-            // root starts a press when that target is its own or there is none.
+            // root starts a press when that target is its own or there is none, and a root whose widgets sense
+            // neither, which egui never names, as where there is none. A root under a modal layer starts none.
+            let root = state.root.map(|root| root.id);
+            let takes = |untargeted| crate::runtime::sampler::root_takes_press(ctx, root, layer, at, untargeted);
             let mine = |id: Option<Id>| match id {
                 Some(id) => state.widgets.contains(&id) || member_widget_of(&state.previous, id),
-                None => crate::runtime::sampler::takes_untargeted(ctx, state.root.map(|root| root.id), at),
+                None => takes(true),
             };
             let targets = pass_pointer.press_targets;
             let allowed = if union_sense.contains(Sense::CLICK) {
@@ -770,13 +773,14 @@ fn outcome_in(ctx: &Context, read: &PassRead, arena: ArenaId, layer: Layer, enab
             } else if union_sense.contains(Sense::DRAG) {
                 mine(targets.drag)
             } else {
-                true
+                mine(None)
             };
             // A root whose own widget is not the click target still starts the press its parts win under it.
-            let allowed = allowed
-                || state
-                    .root
-                    .is_some_and(|own| own.rect.contains(at) && pointer::press_winner(ctx, at, targets).is_some_and(|(_, winner)| winner == own.id));
+            let allowed = takes(false)
+                && (allowed
+                    || state.root.is_some_and(|own| {
+                        own.rect.contains(at) && pointer::press_winner(ctx, at, targets).is_some_and(|(_, winner)| winner == own.id)
+                    }));
             if !enabled || !allowed {
                 return None;
             }
