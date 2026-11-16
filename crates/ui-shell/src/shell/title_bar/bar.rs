@@ -15,6 +15,7 @@ use crate::primitives::{RectSide, RuleKind};
 use crate::runtime::access::Name;
 use crate::runtime::egui::pass;
 use crate::runtime::env::Env;
+use crate::runtime::memory;
 use crate::runtime::windows::{self, WindowAction, WindowHost};
 use crate::shell::app_shell::RegionBody;
 use crate::shell::{Caption, CaptionButton, CaptionIcons, Frame, ShellWords, SlotSize};
@@ -287,14 +288,15 @@ impl Container for TitleBar<'_> {
 /// `CaptionIcons::for_desktop` once per desktop value and kept for the app's bars while the desktop stays the same.
 fn desktop_icons(ctx: &egui::Context) -> Option<CaptionIcons> {
     let desktop = WindowHost::of(ctx).desktop()?;
-    let key = egui::Id::unique("craft_ui.title_bar.desktop_icons");
-    let kept = ctx.data(|data| data.get_temp::<(Desktop, Option<CaptionIcons>)>(key));
-    if let Some((seen, icons)) = &kept
-        && *seen == desktop
-    {
-        return icons.clone();
-    }
-    let icons = CaptionIcons::for_desktop(&desktop, kept.and_then(|(_, icons)| icons));
-    ctx.data_mut(|data| data.insert_temp(key, (desktop, icons.clone())));
-    icons
+    let key = memory::unique("craft_ui.title_bar.desktop_icons");
+    memory::with_session(ctx, key, |kept: &mut Option<(Desktop, Option<CaptionIcons>)>| {
+        if let Some((seen, icons)) = kept.as_ref()
+            && *seen == desktop
+        {
+            return icons.clone();
+        }
+        let icons = CaptionIcons::for_desktop(&desktop, kept.take().and_then(|(_, icons)| icons));
+        *kept = Some((desktop, icons.clone()));
+        icons
+    })
 }

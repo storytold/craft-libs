@@ -103,3 +103,11 @@ fn family_modules_neither_import_runtime_egui_nor_build_egui_text() {
     let shell = analyze_contract(&src, Path::new("crates/x/src/shell/app.rs"), &layered, false);
     assert!(shell.iter().all(|f| f.rule != "contract/runtime-egui"), "layer 7 hosts the adapter");
 }
+
+#[test]
+fn a_salt_inside_a_scope_closure_is_not_the_scope_builders() {
+    let inner = "fn f(ui: &mut Ui) {\n    ui.scope_builder(UiBuilder::new().max_rect(r), |ui| Button::new(\"a\").id_salt(\"b\").show(ui));\n}\n";
+    assert!(!rules_at(inner, "src/ui/a.rs", &scope()).contains(&"contract/memory"));
+    let salted = "fn f(ui: &mut Ui) {\n    ui.scope_builder(UiBuilder::new().id_salt(\"b\"), |ui| ());\n}\n";
+    assert!(rules_at(salted, "src/ui/a.rs", &scope()).contains(&"contract/memory"));
+}

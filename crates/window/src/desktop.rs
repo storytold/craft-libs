@@ -50,6 +50,23 @@ impl Desktop {
     }
 }
 
+/// The SVG file of each freedesktop icon name in `icons`, looked up in icon theme `theme` with its parents and
+/// `hicolor` and read only when small (`read_small`). Icon themes are Linux's: elsewhere every entry is `None`.
+pub fn theme_svgs<const N: usize>(theme: &str, icons: [&str; N]) -> [Option<Vec<u8>>; N] {
+    #[cfg(target_os = "linux")]
+    {
+        let Some(found) = IconTheme::load(theme, &base_dirs(&|key: &str| std::env::var(key).ok())) else {
+            return [const { None }; N];
+        };
+        icons.map(|icon| found.find_svg(icon).and_then(|path| read_small(&path)))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (theme, icons);
+        [const { None }; N]
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", test))]
 /// Compositors and window managers that tile, matched against the `XDG_CURRENT_DESKTOP` entries.
 const TILING: &[&str] = &["sway", "hyprland", "i3", "niri", "river", "bspwm", "awesome", "dwl", "qtile", "herbstluftwm", "leftwm", "xmonad", "dwm"];

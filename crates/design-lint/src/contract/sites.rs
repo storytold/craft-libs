@@ -18,7 +18,8 @@ pub(crate) const EGUI_ROOTS: [&str; 7] = ["egui", "epaint", "emath", "ecolor", "
 #[derive(Debug, Default)]
 pub(crate) struct Args {
     pub count: usize,
-    /// Every identifier inside the arguments, nested ones included.
+    /// Every identifier inside the arguments, nested ones included, except inside a closure argument: its body is
+    /// read as sites of its own, so a call there does not count as an argument of this one.
     pub idents: Vec<String>,
     /// Whether a numeric literal appears.
     pub has_literal: bool,
@@ -140,9 +141,12 @@ fn args_of<'a>(args: impl IntoIterator<Item = &'a Expr>) -> Args {
     let mut out = Args::default();
     for e in args {
         out.count += 1;
-        out.has_closure |= matches!(e, Expr::Closure(_));
+        let closure = matches!(e, Expr::Closure(_));
+        out.has_closure |= closure;
         let tokens = e.to_token_stream();
-        summarize(tokens.clone(), &mut out.idents);
+        if !closure {
+            summarize(tokens.clone(), &mut out.idents);
+        }
         out.has_literal |= has_number(tokens);
     }
     out
