@@ -1,4 +1,12 @@
 //! Context-aware parsing of DNG opcode parameters. Image processing remains the caller's job.
+//!
+//! The typed [`crate::opcodes`] model is the file's own view (owned, serialisable, lenient: a
+//! malformed opcode becomes `Unknown`, a zero pitch reads as 1, coordinates stay as written). This
+//! module answers a different question for a caller about to apply an opcode to a given image:
+//! parameters borrowed from the record (bad-pixel lists are not copied), checked strictly (a zero
+//! pitch, a count larger than its bytes or a warp on a mosaic is an error) and areas clamped to the
+//! image. The record envelope comes from [`crate::opcode_raw`]; the rectangle on the wire is
+//! [`crate::opcodes::Area`], which [`Area::clamp`] turns into image coordinates.
 
 /// Image properties used to validate and clamp opcode parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,24 +131,38 @@ impl<'a> Reader<'a> {
         Ok(a)
     }
     fn area(&mut self, c: Context) -> Result<Area, ParseError> {
-        let mut a = [0usize; 8];
-        for v in &mut a {
-            *v = self.u32()? as usize;
-        }
-        let [top, left, bottom, right, plane, planes, row_pitch, col_pitch] = a;
-        if row_pitch == 0 || col_pitch == 0 {
+        let wire = crate::opcodes::Area {
+            top: self.u32()?,
+            left: self.u32()?,
+            bottom: self.u32()?,
+            right: self.u32()?,
+            plane: self.u32()?,
+            planes: self.u32()?,
+            row_pitch: self.u32()?,
+            col_pitch: self.u32()?,
+        };
+        Area::clamp(wire, c)
+    }
+}
+impl Area {
+    /// The area of an opcode as written ([`crate::opcodes::Area`]) clamped to the image of `c`:
+    /// coordinates to its size, the plane range to its planes. A zero pitch is an error here (the
+    /// typed reader reads it as 1).
+    pub fn clamp(wire: crate::opcodes::Area, c: Context) -> Result<Area, ParseError> {
+        if wire.row_pitch == 0 || wire.col_pitch == 0 {
             return Err(ParseError::Malformed("opcode area with a zero pitch"));
         }
-        let plane = plane.min(c.planes);
+        let px = |v: u32| v as usize;
+        let plane = px(wire.plane).min(c.planes);
         Ok(Area {
-            top: top.min(c.height),
-            left: left.min(c.width),
-            bottom: bottom.min(c.height),
-            right: right.min(c.width),
+            top: px(wire.top).min(c.height),
+            left: px(wire.left).min(c.width),
+            bottom: px(wire.bottom).min(c.height),
+            right: px(wire.right).min(c.width),
             plane,
-            planes: planes.min(c.planes - plane),
-            row_pitch,
-            col_pitch,
+            planes: px(wire.planes).min(c.planes - plane),
+            row_pitch: px(wire.row_pitch),
+            col_pitch: px(wire.col_pitch),
         })
     }
 }
@@ -371,5 +393,26 @@ mod tests {
         assert_eq!(parse(5, &u(&[0, u32::MAX, u32::MAX]), ctx()), Err(ParseError::Malformed("FixBadPixelsList counts larger than its parameters")));
         let a = u(&[0, 0, 3, 4, 0, 1, 1, 1]);
         assert_eq!(parse(10, &[a, u(&[1]), f(&[f32::NAN])].concat(), ctx()), Err(ParseError::Malformed("non-finite opcode parameter")));
+    }
+
+    #[test]
+    fn typed_areas_clamp_to_the_image() {
+        let c = ctx();
+        let wire = crate::opcodes::Area { top: 1, left: 2, bottom: 9_999, right: 9_999, plane: 9, planes: 9, row_pitch: 2, col_pitch: 1 };
+        let a = Area::clamp(wire, c).unwrap();
+        assert_eq!((a.bottom, a.right), (c.height, c.width));
+        assert_eq!((a.plane, a.planes), (c.planes, 0));
+        assert!(Area::clamp(crate::opcodes::Area { row_pitch: 0, ..wire }, c).is_err());
+        // the typed reader and this one agree on a well-formed area
+        let typed = crate::opcodes::Opcode::MapTable { area: crate::opcodes::Area { col_pitch: 1, ..wire }, table: vec![1, 2] };
+        let bytes = crate::opcodes::write_list(&[typed]);
+        let record = &crate::opcode_raw::parse(&bytes, 1).unwrap()[0];
+        match parse(record.id, &record.params, c).unwrap() {
+            Params::MapTable { area, table } => {
+                assert_eq!(area, a);
+                assert_eq!(table, [1, 2]);
+            }
+            other => panic!("MapTable expected, got {other:?}"),
+        }
     }
 }
