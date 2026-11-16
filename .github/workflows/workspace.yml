@@ -25,11 +25,16 @@ jobs:
     with:
       os: '["ubuntu-latest","windows-latest","macos-latest"]'
       timeout-minutes: 120
-      tools: ""
+      # The Windows leg runs its tests with nextest (.config/nextest.toml).
+      tools: cargo-nextest@0.9.150
       packages: mesa-vulkan-drivers libvulkan1
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       linux-env: WGPU_BACKEND=vulkan
-      windows-env: CRAFT_PRINT_REQUIRE_QUEUE=1
+      # rust-lld (shipped with the toolchain) links the Windows leg's ~370 test executables per
+      # feature set much faster than link.exe. It changes no compiled code.
+      windows-env: |
+        CRAFT_PRINT_REQUIRE_QUEUE=1
+        CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld
       env: CRAFT_PRINT_REQUIRE_QUEUE=0
       setup-command: |
         set -euo pipefail
@@ -58,8 +63,12 @@ jobs:
         cargo fmt --check
         cargo clippy --workspace --all-targets --locked -- -D warnings
         cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-        cargo test --workspace --locked
-        cargo test --workspace --all-features --locked
+        # The same tests as `cargo test`, run in parallel across test binaries instead of one
+        # binary at a time; nextest skips doctests, so `cargo test --doc` runs them.
+        cargo nextest run --workspace --locked --profile ci
+        cargo test --workspace --doc --locked
+        cargo nextest run --workspace --all-features --locked --profile ci
+        cargo test --workspace --doc --all-features --locked
 
   msrv:
     name: Rust 1.95
