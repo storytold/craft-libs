@@ -8,7 +8,6 @@ use crate::runtime::egui::text_layout;
 use crate::runtime::env::Env;
 use crate::style::{DataColor, Ink, StyleCx, UiTokens, ink_color};
 use craft_i18n::Direction;
-use craft_theme::Variant;
 use egui::epaint::text::{FontId, TextDirection};
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, Context, FontFamily, Painter, Stroke};
@@ -55,20 +54,7 @@ impl<'a> ContentPainterCx<'a> {
     /// it draws the face of.
     #[doc(hidden)]
     pub fn style_cx(&self) -> StyleCx<'_> {
-        let env = self.env;
-        StyleCx::new(
-            self.painter.ctx(),
-            &env.tokens,
-            &env.values,
-            env.size,
-            Variant::SECONDARY,
-            env.direction,
-            env.scale,
-            env.os,
-            env.active,
-            env.key,
-            env.line_ratio,
-        )
+        StyleCx::of_env(self.painter.ctx(), self.env)
     }
 
     /// Runs `paint` with a `Draw` over this painter, in the scope's tokens and direction.
