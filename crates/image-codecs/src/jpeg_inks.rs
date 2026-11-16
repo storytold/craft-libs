@@ -57,7 +57,8 @@ pub fn jpeg_icc_profile(bytes: &[u8]) -> Option<Vec<u8>> {
 ///
 /// Errors: bytes that aren't a JPEG with readable headers ([`CodecError::InvalidImage`]); one of
 /// other than four components, or a frame `zune-jpeg` doesn't decode, such as an arithmetic-coded
-/// or 12-bit one ([`CodecError::Unsupported`]); a size past `limits`; and data that doesn't decode.
+/// or 12-bit one ([`CodecError::Unsupported`]); a size past `limits`; and data that doesn't decode,
+/// including frames `zune-jpeg` panics on, which are caught.
 pub fn decode_jpeg_inks(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let bad = |m: &str| CodecError::InvalidImage(format!("JPEG inks: {m}"));
     let mut d = headers(bytes).ok_or_else(|| bad("not a JPEG with readable headers"))?;
@@ -70,7 +71,12 @@ pub fn decode_jpeg_inks(bytes: &[u8], limits: &Limits) -> Result<Image, CodecErr
     let (w, h) = (u32::try_from(w).map_err(|_| bad("width"))?, u32::try_from(h).map_err(|_| bad("height"))?);
     limits.check(w, h, ChannelLayout::Cmyk, SampleType::U8)?;
     d.set_options(DecoderOptions::default().jpeg_set_out_colorspace(space));
-    let mut data = d.decode().map_err(|e| CodecError::unsupported(Format::Jpeg, format!("inks: {e}")))?;
+    // zune-jpeg 0.5 asserts on some subsampled four-component frames whose first component isn't
+    // the largest (a scratch row too short for its upsampler): that is an error here, not a panic.
+    let decoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| d.decode()));
+    let mut data = decoded
+        .map_err(|_| CodecError::unsupported(Format::Jpeg, "inks: zune-jpeg failed on this file"))?
+        .map_err(|e| CodecError::unsupported(Format::Jpeg, format!("inks: {e}")))?;
     for p in data.as_chunks_mut::<4>().0 {
         if space == ColorSpace::YCCK {
             let [y, cb, cr] = [p[0], p[1], p[2]].map(f32::from);

@@ -193,3 +193,19 @@ fn matches_the_reference_reader() {
     assert_eq!(seen + refused, 7 * 2 * 2 * 3 * 2);
     assert!(seen > refused);
 }
+
+/// zune-jpeg 0.5 panics on some subsampled CMYK frames whose first component isn't the largest
+/// (here `jpeg-encoder`'s 2×2 K with C, M and Y at 1×1, progressive): an error, not a panic.
+#[test]
+fn frames_zune_panics_on_are_errors() {
+    for (w, h) in [(1u16, 1u16), (3, 3)] {
+        let mut out = Vec::new();
+        let mut enc = jpeg_encoder::Encoder::new(&mut out, 70);
+        enc.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2);
+        enc.set_progressive(true);
+        enc.encode(&vec![9; usize::from(w * h) * 4], w, h, jpeg_encoder::ColorType::Cmyk).unwrap();
+        assert!(std::panic::catch_unwind(|| reference_inks(&out)).is_err(), "the reference reader panics on {w}x{h}");
+        assert!(matches!(decode_jpeg_inks(&out, &Limits::default()), Err(CodecError::Unsupported { .. })), "{w}x{h}");
+        assert_eq!((jpeg_components(&out), jpeg_dimensions(&out)), (Some(4), Some((u32::from(w), u32::from(h)))));
+    }
+}
