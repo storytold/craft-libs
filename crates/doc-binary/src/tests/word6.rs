@@ -862,9 +862,20 @@ fn sections_take_their_properties() {
     use craft_wordmodel::section::SectionStart;
     assert_eq!((s[0].start, s[0].landscape, s[0].page_w), (SectionStart::NextPage, false, 612.0));
     assert_eq!((s[1].start, s[1].landscape, s[1].page_w, s[1].page_h), (SectionStart::Continuous, true, 792.0, 612.0));
-    assert_eq!((s[2].start, s[2].columns.count), (SectionStart::OddPage, 3));
+    assert_eq!((s[2].start, s[2].columns.count, s[2].columns.space), (SectionStart::OddPage, 3, 18.0));
     assert_eq!((s[2].margin_left, s[2].margin_right, s[2].margin_top, s[2].margin_bottom), (144.0, 36.0, 108.0, 54.0));
     assert_eq!((s[2].header, s[2].footer), (54.0, 45.0));
+}
+
+#[test]
+fn the_final_section_is_the_one_reaching_the_end_of_the_text() {
+    // A malformed PlcfSed with a third section past the text: the second, which reaches the end
+    // of the text (CP 9), is the final one, and the third is ignored, as the paragraphs before
+    // it are given their sections.
+    let landscape: &[u8] = &[0xA2, 0x02, 0xA4, 0xE0, 0x3D, 0xA5, 0xD0, 0x2F];
+    let d = Doc6 { text: b"One\r\x0cTwo\r", sections: &[(5, &[]), (9, landscape), (14, &[])], ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert!(doc.last_section.landscape);
 }
 
 #[test]

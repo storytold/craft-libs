@@ -2,7 +2,7 @@
 //! the `Plcfhdd` stories of the header subdocument ([MS-DOC] §2.8.25, §2.9.244).
 
 use craft_wordmodel::section::NumFormat;
-use craft_wordmodel::section::{Columns, SectionProps, SectionStart};
+use craft_wordmodel::section::{SectionProps, SectionStart};
 
 use crate::fib::{Fib, pair};
 use crate::sprm::{self, Prl};
@@ -14,6 +14,7 @@ pub(crate) const MAX_SECTIONS: usize = 1024;
 const S_BKC: u16 = 0x3009;
 const S_TITLE_PAGE: u16 = 0x300A; // sprmSFTitlePage
 const S_CCOLUMNS: u16 = 0x500B;
+const S_DXA_COLUMNS: u16 = 0x900C; // sprmSDxaColumns: the space between evenly spaced columns
 const S_PGN_START: u16 = 0x300C; // sprmSPgnStart
 const S_ORIENTATION: u16 = 0x301D; // sprmSBOrientation
 const S_HDR_TOP: u16 = 0xB017;
@@ -135,7 +136,13 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
         S_TITLE_PAGE => s.title_page = prl.operand.first().is_some_and(|&v| v != 0),
         S_CCOLUMNS => {
             if let Some(c) = s16(prl) {
-                s.columns = Columns { count: (c as u32).saturating_add(1).min(44), ..Default::default() };
+                // Only the count: the spacing is its own sprm, which may come first.
+                s.columns.count = (c as u32).saturating_add(1).min(44);
+            }
+        }
+        S_DXA_COLUMNS => {
+            if let Some(v) = s16(prl) {
+                s.columns.space = tw(i32::from(v as u16));
             }
         }
         S_PGN_START => {
