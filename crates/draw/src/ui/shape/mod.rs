@@ -53,15 +53,16 @@ pub struct Arrowheads {
     pub width: f64,
     /// The head's length in document pixels.
     pub length: f64,
-    /// The head's concavity in percent.
+    /// The head's concavity in percent of its length, in [`ARROW_CONCAVITY`](Self::ARROW_CONCAVITY); below 0 the
+    /// back bulges out.
     pub concavity: f64,
 }
 
 impl Arrowheads {
     /// The range of the width and length fields, in document pixels (production and engine units).
     pub const ARROW_SIZE: RangeInclusive<f64> = 1.0..=4096.0;
-    /// The range of the concavity field, in percent.
-    pub const ARROW_CONCAVITY: RangeInclusive<f64> = 0.0..=100.0;
+    /// The range of the concavity field, in whole percent.
+    pub const ARROW_CONCAVITY: RangeInclusive<f64> = -50.0..=50.0;
 
     /// No arrowheads at the default size.
     pub const fn new() -> Self {

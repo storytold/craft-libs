@@ -54,6 +54,8 @@ pub struct ShapePanelOutput {
     pub screen_pick: Option<(ShapePaint, ScreenPickGesture)>,
     /// A chip asked for the app's full colour picker, with the chip it is for.
     pub pick_color: Option<(ShapePaint, ColorRequest)>,
+    /// A value typed past its field's range this pass, which the field clamped: the app answers with its range alert.
+    pub out_of_range: Option<RangeAlert>,
 }
 
 /// A shape layer's Properties sections, as PhotoCraft's `shape_properties`.
@@ -66,8 +68,8 @@ pub struct ShapePanelOutput {
 ///   ellipse or polygon; a rect's "Corner radius" (0 to 150,000, sets all four) then Top Left, Top Right, Bottom
 ///   Left, Bottom Right rows (PhotoCraft's row order, mapped to the radii order TL, TR, BR, BL); a polygon's Corner
 ///   radius, Sides (3 to 100) and Star ratio (1 to 100 %, stored 0.01 to 1); a line's Weight (1 to 10,000), and with
-///   arrowheads its Start and End check boxes, Width, Length and Concavity, then the "Set as default" check box
-///   ([`arrow_default`](Self::arrow_default)).
+///   arrowheads its Start and End check boxes, Width, Length and Concavity (-50 to 50 %, whole), then the "Set as default" check box ([`arrow_default`](Self::arrow_default)).
+/// - A value typed past its field's range is clamped and reported once in [`ShapePanelOutput::out_of_range`].
 /// - A locked layer ([`ShapeAppearance::locked`]) disables the whole panel.
 /// - Keyboard: every field and chip is a Tab stop in reading order; sections fold with their title rows. Right to
 ///   left the rows mirror; the corner names stay.
@@ -171,15 +173,16 @@ impl<'a> ShapePanel<'a> {
         } else {
             body(ui);
         }
-        ShapePanelOutput { events: pass.events, screen_pick: pass.screen_pick, pick_color: pass.pick_color }
+        ShapePanelOutput { events: pass.events, screen_pick: pass.screen_pick, pick_color: pass.pick_color, out_of_range: pass.out_of_range }
     }
 }
 
 /// One number cell: the field's key, caption, value, range, the lengths it converts between and what reads its text.
+/// An empty value (`None`) shows an empty field.
 pub(super) struct NumberCell {
     pub key: &'static str,
     pub caption: Label,
-    pub value: f64,
+    pub value: Option<f64>,
     pub range: RangeInclusive<f64>,
     lengths: Option<LengthUnits>,
     codec: NumberCodec,
@@ -187,13 +190,27 @@ pub(super) struct NumberCell {
 
 impl NumberCell {
     /// A length in pixels with up to two decimals, in a document of `pixels_per_inch`.
-    pub fn pixels(units: &Units, pixels_per_inch: f64, key: &'static str, caption: &Label, value: f64, range: RangeInclusive<f64>) -> Self {
-        Self::length(units, pixels_per_inch, PIXEL_DECIMALS, key, caption, value, range)
+    pub fn pixels(
+        units: &Units,
+        pixels_per_inch: f64,
+        key: &'static str,
+        caption: &Label,
+        value: impl Into<Option<f64>>,
+        range: RangeInclusive<f64>,
+    ) -> Self {
+        Self::length(units, pixels_per_inch, PIXEL_DECIMALS, key, caption, value.into(), range)
     }
 
     /// A length in whole pixels, in a document of `pixels_per_inch`.
-    pub fn whole_pixels(units: &Units, pixels_per_inch: f64, key: &'static str, caption: &Label, value: f64, range: RangeInclusive<f64>) -> Self {
-        Self::length(units, pixels_per_inch, 0, key, caption, value, range)
+    pub fn whole_pixels(
+        units: &Units,
+        pixels_per_inch: f64,
+        key: &'static str,
+        caption: &Label,
+        value: impl Into<Option<f64>>,
+        range: RangeInclusive<f64>,
+    ) -> Self {
+        Self::length(units, pixels_per_inch, 0, key, caption, value.into(), range)
     }
 
     fn length(
@@ -202,7 +219,7 @@ impl NumberCell {
         decimals: usize,
         key: &'static str,
         caption: &Label,
-        value: f64,
+        value: Option<f64>,
         range: RangeInclusive<f64>,
     ) -> Self {
         let lengths = LengthUnits::new(UnitKind::Pixels, UnitKind::Pixels, pixels_per_inch);
@@ -216,26 +233,37 @@ impl NumberCell {
         }
     }
 
+    /// A number with up to `decimals` decimals, read in `unit` (none for a plain number).
+    pub fn plain(
+        units: &Units,
+        unit: Option<UnitKind>,
+        decimals: usize,
+        key: &'static str,
+        caption: &Label,
+        value: impl Into<Option<f64>>,
+        range: RangeInclusive<f64>,
+    ) -> Self {
+        NumberCell { key, caption: caption.clone(), value: value.into(), range, lengths: None, codec: NumberCodec::new(units.reader(unit), decimals) }
+    }
+
     /// A plain whole number.
     pub fn count(units: &Units, key: &'static str, caption: &Label, value: f64, range: RangeInclusive<f64>) -> Self {
-        NumberCell { key, caption: caption.clone(), value, range, lengths: None, codec: NumberCodec::new(units.reader(None), 0) }
+        Self::plain(units, None, 0, key, caption, value, range)
     }
 
     /// A percentage with up to one decimal.
     pub fn percent(units: &Units, key: &'static str, caption: &Label, value: f64, range: RangeInclusive<f64>) -> Self {
-        NumberCell {
-            key,
-            caption: caption.clone(),
-            value,
-            range,
-            lengths: None,
-            codec: NumberCodec::new(units.reader(Some(UnitKind::Percent)), PERCENT_DECIMALS),
-        }
+        Self::plain(units, Some(UnitKind::Percent), PERCENT_DECIMALS, key, caption, value, range)
+    }
+
+    /// A whole percentage.
+    pub fn whole_percent(units: &Units, key: &'static str, caption: &Label, value: f64, range: RangeInclusive<f64>) -> Self {
+        Self::plain(units, Some(UnitKind::Percent), 0, key, caption, value, range)
     }
 
     /// The field over the cell's value.
     pub fn field(&self) -> NumberField<'static> {
-        let value = Bind::given(Some(self.value));
+        let value = Bind::given(self.value);
         let field = match self.lengths {
             Some(lengths) => NumberField::length(self.caption.clone(), value, lengths),
             None => NumberField::new(self.caption.clone(), value),
@@ -243,19 +271,25 @@ impl NumberCell {
         field.range(self.range.clone()).codec(self.codec.clone())
     }
 
-    /// The edit of the field shown in `ui` and the alert of a typed value that was clamped; an emptied field keeps the
-    /// value.
-    pub fn show(&self, ui: &mut Ui) -> (EditEvents<f64>, Option<RangeAlert>) {
-        let kept = self.value;
+    /// The edit of the field shown in `ui`, an emptied field as `None`, and the alert of a typed value that was
+    /// clamped.
+    pub fn show_optional(&self, ui: &mut Ui) -> (EditEvents<Option<f64>>, Option<RangeAlert>) {
         let out = self.field().scrub_by_label().show(ui);
-        let alert = out.out_of_range;
-        (out.edit.events.map(|value| value.unwrap_or(kept)), alert)
+        (out.edit.events, out.out_of_range)
     }
 
-    /// The field in a row under its caption, which scrubs it: the edit of the field.
-    pub fn labelled(&self, ui: &mut Ui) -> EditEvents<f64> {
+    /// The edit of the field shown in `ui` and the alert of a typed value that was clamped; an emptied field keeps the
+    /// value. For a cell that always has a value.
+    pub fn show(&self, ui: &mut Ui) -> (EditEvents<f64>, Option<RangeAlert>) {
+        let kept = self.value.unwrap_or(*self.range.start());
+        let (events, alert) = self.show_optional(ui);
+        (events.map(|value| value.unwrap_or(kept)), alert)
+    }
+
+    /// The field in a row under its caption, which scrubs it: the edit of the field and its range alert.
+    pub fn labelled(&self, ui: &mut Ui) -> (EditEvents<f64>, Option<RangeAlert>) {
         let side = SideLabel::new().scrub(true);
-        Field::new(self.caption.clone()).id_salt(self.key).side(side).show(ui, |ui, _| self.show(ui).0).inner.unwrap_or_default()
+        Field::new(self.caption.clone()).id_salt(self.key).side(side).show(ui, |ui, _| self.show(ui)).inner.unwrap_or_default()
     }
 }
 
@@ -278,6 +312,8 @@ pub(super) struct Cells<'p, 'a> {
     pub events: Vec<EditEvent<ShapeChange>>,
     pub screen_pick: Option<(ShapePaint, ScreenPickGesture)>,
     pub pick_color: Option<(ShapePaint, ColorRequest)>,
+    /// The range alert of a value typed past its cell's range this run.
+    pub out_of_range: Option<RangeAlert>,
 }
 
 impl<'p, 'a> Cells<'p, 'a> {
@@ -302,6 +338,7 @@ impl<'p, 'a> Cells<'p, 'a> {
             events: Vec::new(),
             screen_pick: None,
             pick_color: None,
+            out_of_range: None,
         }
     }
 
@@ -310,6 +347,14 @@ impl<'p, 'a> Cells<'p, 'a> {
         self.events.clear();
         self.screen_pick = None;
         self.pick_color = None;
+        self.out_of_range = None;
+    }
+
+    /// Keeps a cell's range alert; a cell without one leaves the alert of an earlier cell.
+    pub fn alert(&mut self, alert: Option<RangeAlert>) {
+        if alert.is_some() {
+            self.out_of_range = alert;
+        }
     }
 
     /// The paint chip of `which`, decorated by the app's setup.
@@ -371,8 +416,9 @@ impl<'p, 'a> Cells<'p, 'a> {
 
     fn width_row(&mut self, ui: &mut Ui) {
         let cell = width_cell(self.words, self.units, self.pixels_per_inch, self.appearance);
-        let events = cell.labelled(ui);
+        let (events, alert) = cell.labelled(ui);
         take_width(self.appearance, events, &mut self.events);
+        self.alert(alert);
     }
 
     fn style_row(&mut self, ui: &mut Ui, corners: bool) {
@@ -383,8 +429,9 @@ impl<'p, 'a> Cells<'p, 'a> {
 
     /// A labelled row with `cell`; its edit goes out through `change`.
     fn number_row(&mut self, ui: &mut Ui, cell: NumberCell, change: impl Fn(f64) -> ShapeChange) {
-        let events = cell.labelled(ui);
+        let (events, alert) = cell.labelled(ui);
         self.events.extend(events.map(&change));
+        self.alert(alert);
     }
 
     /// The W and H row of a rect, ellipse or polygon: whole pixels, 1 to 300,000.
@@ -396,12 +443,20 @@ impl<'p, 'a> Cells<'p, 'a> {
         ];
         let glyphs = [&words.width, &words.height];
         let mut edits = [EditEvents::new(), EditEvents::new()];
+        let mut alerts = [None, None];
         Row::new().fill_width().show(ui, |ui, _| {
-            for ((cell, glyph), edit) in cells.iter().zip(glyphs).zip(edits.iter_mut()) {
-                let side = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone()))).scrub(true);
-                *edit = Field::new(cell.caption.clone()).id_salt(cell.key).side(side).show(ui, |ui, _| cell.show(ui).0).inner.unwrap_or_default();
+            for (((cell, glyph), edit), alert) in cells.iter().zip(glyphs).zip(edits.iter_mut()).zip(alerts.iter_mut()) {
+                (*edit, *alert) = Field::new(cell.caption.clone())
+                    .id_salt(cell.key)
+                    .side(glyph_side(glyph))
+                    .show(ui, |ui, _| cell.show(ui))
+                    .inner
+                    .unwrap_or_default();
             }
         });
+        for alert in alerts {
+            self.alert(alert);
+        }
         let [w, h] = edits;
         self.events.extend(w.map(|w| ShapeChange::Size { width: w, height }));
         self.events.extend(h.map(|h| ShapeChange::Size { width, height: h }));
@@ -448,8 +503,9 @@ impl<'p, 'a> Cells<'p, 'a> {
                     None => self.number_row(ui, cell, ShapeChange::Weight),
                     Some(arrows) => {
                         // PhotoCraft's order puts the weight between the head's length and its concavity.
-                        let edits = arrow_rows(ui, words, units, ppi, *arrows, |ui| self.number_row(ui, cell, ShapeChange::Weight));
+                        let (edits, alert) = arrow_rows(ui, words, units, ppi, *arrows, |ui| self.number_row(ui, cell, ShapeChange::Weight));
                         self.events.extend(edits.into_iter().map(|edit| edit.map(ShapeChange::Arrowheads)));
+                        self.alert(alert);
                         if let Some(link) = arrow_default {
                             let _ = Checkbox::new(link.reborrowed())
                                 .label(words.set_as_default.clone())
@@ -461,6 +517,11 @@ impl<'p, 'a> Cells<'p, 'a> {
             }
         }
     }
+}
+
+/// The side label of a cell shown by a short glyph (W, H) instead of its caption, which scrubs it.
+pub(super) fn glyph_side(glyph: &Label) -> SideLabel {
+    SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text(glyph.clone()))).scrub(true)
 }
 
 /// The change a Sides value makes: a whole number of sides in range.

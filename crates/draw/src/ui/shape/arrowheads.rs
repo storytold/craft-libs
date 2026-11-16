@@ -12,6 +12,7 @@ use craft_ui::form::FieldGroup;
 use craft_ui::layout_components::Row;
 use craft_ui::popover::Popover;
 use craft_ui::runtime::env::{Env, Units};
+use craft_ui::text::RangeAlert;
 use egui::{Response, Ui};
 
 /// The arrowhead popover: which ends carry a head and the head's width, length and concavity. Its `open` flag is read
@@ -33,6 +34,8 @@ pub struct ArrowheadsOutput {
     /// The edits of this pass in order, each the whole value with one field replaced. A gesture's first pass carries
     /// its `Begin` and first `Update` together.
     pub edits: Vec<EditEvent<Arrowheads>>,
+    /// A value typed past its field's range this pass, which the field clamped: the app answers with its range alert.
+    pub out_of_range: Option<RangeAlert>,
 }
 
 impl<'a> ArrowheadsPopover<'a> {
@@ -58,19 +61,19 @@ impl<'a> ArrowheadsPopover<'a> {
             let event = EditEvent::set(Mixed::Same(was), !was, Arc::from(words.arrowheads.as_str()), None);
             let _ = open.reborrow().apply(&event);
         }
-        let mut edits = Vec::new();
+        let (mut edits, mut out_of_range) = (Vec::new(), None);
         let _ = Popover::new(words.arrowheads.clone(), open.reborrowed()).opened_by(&gear).show(ui, |ui, _| {
             FieldGroup::new(words.arrowheads.clone()).labels(LabelScheme::Inspector).show(ui, |ui, _| {
-                edits = arrow_rows(ui, &words, &units, pixels_per_inch, current, |_| {});
+                (edits, out_of_range) = arrow_rows(ui, &words, &units, pixels_per_inch, current, |_| {});
             });
         });
-        ArrowheadsOutput { response: gear, edits }
+        ArrowheadsOutput { response: gear, edits, out_of_range }
     }
 }
 
 /// The arrowhead rows of `value`, shared by the popover and the Shape panel: the Start and End check boxes, then Width
-/// and Length, then whatever `after_length` adds (the panel's Weight), then Concavity. Each edit is the whole value with
-/// its one field replaced.
+/// and Length, then whatever `after_length` adds (the panel's Weight), then Concavity (-50 to 50 %, whole). Each edit is
+/// the whole value with its one field replaced; the alert is that of a value typed past its field's range.
 pub(super) fn arrow_rows(
     ui: &mut Ui,
     words: &ShapeWords,
@@ -78,8 +81,8 @@ pub(super) fn arrow_rows(
     pixels_per_inch: f64,
     value: Arrowheads,
     after_length: impl FnOnce(&mut Ui),
-) -> Vec<EditEvent<Arrowheads>> {
-    let mut edits = Vec::new();
+) -> (Vec<EditEvent<Arrowheads>>, Option<RangeAlert>) {
+    let (mut edits, mut alerts) = (Vec::new(), Vec::new());
     let (mut start, mut end) = (EditEvents::new(), EditEvents::new());
     Row::new().show(ui, |ui, _| {
         start = Checkbox::new(Bind::given(value.start)).label(words.arrow_start.clone()).show(ui).events;
@@ -87,12 +90,18 @@ pub(super) fn arrow_rows(
     });
     edits.extend(start.map(|on| Arrowheads { start: on, ..value }));
     edits.extend(end.map(|on| Arrowheads { end: on, ..value }));
-    let width = NumberCell::pixels(units, pixels_per_inch, "arrow-width", &words.arrow_width, value.width, Arrowheads::ARROW_SIZE).labelled(ui);
+    let (width, alert) =
+        NumberCell::pixels(units, pixels_per_inch, "arrow-width", &words.arrow_width, value.width, Arrowheads::ARROW_SIZE).labelled(ui);
     edits.extend(width.map(|width| Arrowheads { width, ..value }));
-    let length = NumberCell::pixels(units, pixels_per_inch, "arrow-length", &words.arrow_length, value.length, Arrowheads::ARROW_SIZE).labelled(ui);
+    alerts.push(alert);
+    let (length, alert) =
+        NumberCell::pixels(units, pixels_per_inch, "arrow-length", &words.arrow_length, value.length, Arrowheads::ARROW_SIZE).labelled(ui);
     edits.extend(length.map(|length| Arrowheads { length, ..value }));
+    alerts.push(alert);
     after_length(ui);
-    let concavity = NumberCell::percent(units, "arrow-concavity", &words.arrow_concavity, value.concavity, Arrowheads::ARROW_CONCAVITY).labelled(ui);
+    let (concavity, alert) =
+        NumberCell::whole_percent(units, "arrow-concavity", &words.arrow_concavity, value.concavity, Arrowheads::ARROW_CONCAVITY).labelled(ui);
     edits.extend(concavity.map(|concavity| Arrowheads { concavity, ..value }));
-    edits
+    alerts.push(alert);
+    (edits, alerts.into_iter().flatten().last())
 }
