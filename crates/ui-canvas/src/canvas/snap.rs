@@ -28,7 +28,7 @@ pub struct Snap {
 pub struct GestureSnap {
     /// Whether the gesture reads the Control key itself, so Control does not suspend snapping.
     pub reads_control: bool,
-    /// The kinds of target the gesture snaps to (Distort corners skip layer edges and centres).
+    /// The kinds of target the gesture snaps to (an explicit Distort snaps its corners to guides only).
     pub kinds: craft_behavior::geometry::SnapKinds,
 }
 

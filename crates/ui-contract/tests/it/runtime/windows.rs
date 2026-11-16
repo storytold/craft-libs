@@ -1,7 +1,8 @@
 //! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
 //! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
 //! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows,
-//! injected keys across a focus loss, non-finite injected points, the window that has the keys, and `act`.
+//! injected keys across a focus loss, non-finite injected points, a repeated injected press, the window that has the
+//! keys, and `act`.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
@@ -464,6 +465,44 @@ fn non_finite_injected_points_queue_nothing_and_a_release_there_lets_go() {
     host.inject_pointer(ViewportId::ROOT, InjectedPointer::up(nan, Mods::NONE));
     frames(4);
     assert!(!down.get(), "a release at a non-finite point lets the button go");
+    assert_eq!(presses.get(), 1);
+}
+
+/// An injected press of a button injected input holds already queues nothing, as a window never sends one: the
+/// pointer stays where the first press went down, and one release lets the button go. A modal that opens during a
+/// drag on a canvas sees no second press, and the drag keeps its moves and its release.
+#[trial]
+fn a_press_of_a_held_injected_button_queues_nothing() {
+    use craft_ui::runtime::windows::InjectedPointer;
+
+    let windows = Windows::new();
+    let host = WindowHost::of(&windows.ctx);
+    let presses = Cell::new(0);
+    let down = Cell::new(false);
+    let latest = Cell::new(None);
+    let frames = |count| {
+        for _ in 0..count {
+            windows.frame(vec![], vec![], |ui| {
+                ui.ctx().input(|input| {
+                    presses.set(presses.get() + u32::from(input.pointer.primary_pressed()));
+                    down.set(input.pointer.primary_down());
+                    latest.set(input.pointer.latest_pos());
+                });
+            });
+        }
+    };
+    frames(1);
+    let (first, second) = (Pos2::new(40.0, 40.0), Pos2::new(90.0, 60.0));
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::down(PointerButton::Primary, first, Mods::NONE, None));
+    frames(4);
+    assert!(down.get(), "the first press is held");
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::down(PointerButton::Primary, second, Mods::NONE, None));
+    frames(4);
+    assert_eq!(presses.get(), 1, "the repeated press reaches nothing");
+    assert_eq!(latest.get(), Some(first), "nor moves the pointer");
+    host.inject_pointer(ViewportId::ROOT, InjectedPointer::up(second, Mods::NONE));
+    frames(4);
+    assert!(!down.get(), "one release lets the button go");
     assert_eq!(presses.get(), 1);
 }
 

@@ -117,6 +117,22 @@ fn nudges_within_the_pause_fold_into_one_step() {
     assert_eq!(steps(&mut plain), 2);
 }
 
+// Undo or Redo inside the nudge pause ends the run first: the nudges are a step of their own, which drops what was
+// undone before them.
+#[trial]
+fn undo_or_redo_inside_the_nudge_pause_keeps_the_nudges_as_their_own_step() {
+    let at = |s: &TransformSession<Warp>| s.quad()[0];
+    let mut s = session().nudge_pause(Some(1.0));
+    drag(&mut s, moved(doc(30.0, 0.0)), 0.0);
+    drag(&mut s, moved(doc(60.0, 0.0)), 0.1);
+    assert!(s.undo());
+    nudge(&mut s, moved(doc(31.0, 0.0)), 0.2);
+    assert!(!s.redo(), "the nudge dropped the undone drag");
+    assert!(near(at(&s), Point::new(31.0, 0.0)), "{:?}", at(&s));
+    assert!(s.undo(), "the nudge is a step");
+    assert!(near(at(&s), Point::new(30.0, 0.0)), "{:?}", at(&s));
+}
+
 // Between a Box Begin and its Commit, undo and redo return false and change nothing.
 
 // `homography` maps the frame's corners onto the box's corners and its centre into the box; a box

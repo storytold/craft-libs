@@ -5,7 +5,7 @@
 #[cfg(feature = "screen-testing")]
 mod stories;
 
-use craft_behavior::geometry::SnapLine;
+use craft_behavior::geometry::{SNAP_PX, SnapKind, SnapKinds, SnapLine};
 use craft_behavior::geometry::quad::{self, BoxAllow, BoxDrag, BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2 as DocVec};
 use craft_behavior::{
@@ -252,9 +252,11 @@ fn slop_sense(part: BoxPart) -> Sense {
 ///   corner winning where both reach), the inside or the outside. Parts the [rules](Self::rules) refuse take no
 ///   press, except the outside in [`RotateZone::Outside`], where a click applies. An Alt press away from the handles
 ///   moves the reference point there and drags it, whether it shows or not.
-/// - Snapping is the canvas's ([`canvas_snap`]): a dragged point snaps through [`Snap::point`], and the lines it
-///   snapped to are [`TransformBoxOutput::snapped`] for the host's one drawing site. Without a canvas snap nothing
-///   snaps. A pass reports the lines of its own drag events only.
+/// - Snapping is the canvas's ([`canvas_snap`]): a dragged handle snaps through [`Snap::point`] and a box moved from
+///   inside snaps its bounds through [`Snap::rect_of`]; the lines the result reaches are
+///   [`TransformBoxOutput::snapped`] for the host's one drawing site. Without a canvas snap nothing snaps but the
+///   reference point, which snaps to the box's nine points only. In Distort only the corners snap, to guides. A pass
+///   reports the lines of its own drag events only.
 /// - The box is one Tab stop with one part group, whose arrival is the picked part. Page Down and Page Up pick the
 ///   next and previous part (the whole box, the corners and edges clockwise from the top left, the reference
 ///   point), Home and End the first and last. The arrows move the picked part as a plain drag of it would, one
@@ -403,31 +405,55 @@ impl<'a> TransformBox<'a> {
         quad::drag(state, state, part, at, at + by, Mods::NONE, &self.rules)
     }
 
-    /// The box the pointer at screen position `pos` gives a drag, snapped through the canvas's `snap` and rounded, with
-    /// the lines it snapped to. A corner, an edge or the reference point snaps the grabbed point, not the pointer: a
-    /// press a few pixels off the handle still lands the handle on the line. The Control key suspends the snapping
-    /// unless it changes what the drag does (off macOS Ctrl is ⌘: a corner distorts, an edge skews).
+    /// The box the pointer at screen position `pos` gives a drag, snapped and rounded, with the lines it snapped to.
+    ///
+    /// - A corner or an edge snaps the grabbed handle through the canvas's `snap`, not the pointer: a press a few
+    ///   pixels off the handle still lands the handle on the line. A distorting corner reports only the lines it
+    ///   reaches once the box's folding rule has placed it: a corner stopped short of a line claims no alignment.
+    /// - A drag from inside snaps the bounds of the moved box (its edges and centre).
+    /// - The reference point snaps to the nine points of the box at the press (corners, edge midpoints, centre) and
+    ///   to nothing else, with or without the canvas's snap, the Control key held or not.
+    /// - In [`TransformMode::Distort`] only the corners snap, and to guides only. The outside (rotating) never snaps.
+    /// - The Control key suspends the snapping unless the drag reads it (off macOS Ctrl is ⌘): where it changes what
+    ///   the drag does (a corner distorts, an edge skews) or on a corner that distorts.
     fn proposal(&self, space: &CanvasSpace, snap: Option<&Snap>, grip: &Grip, pos: Pos2, mods: Mods) -> (BoxState, Vec<SnapLine>) {
         let to = space.view.to_doc(pos);
-        let reads_control = self.rules.drag_kind(grip.part, mods) != self.rules.drag_kind(grip.part, Mods { cmd: false, ..mods });
-        let quad = &grip.start.quad;
-        let grabbed = match grip.part {
-            BoxPart::Corner(i) => Some(quad[usize::from(i % 4)]),
-            BoxPart::Edge(i) => Some(quad[usize::from(i % 4)].midpoint(quad[usize::from(i + 1) % 4])),
-            BoxPart::Pivot => Some(grip.start.pivot),
-            _ => None,
-        };
-        let (to, lines) = match (snap, grabbed) {
-            (Some(snap), Some(grabbed)) => {
+        let kind = self.rules.drag_kind(grip.part, mods);
+        let reads_control = mods.cmd && (kind != self.rules.drag_kind(grip.part, Mods { cmd: false, ..mods }) || kind == Some(BoxDrag::Distort));
+        let distort_mode = self.rules.effective_mode() == TransformMode::Distort;
+        let kinds = if distort_mode { SnapKinds::only(SnapKind::Guide) } else { SnapKinds::ALL };
+        let gesture = GestureSnap::default().reads_control(reads_control).kinds(kinds);
+        let grabbed = handle_point(&grip.start, grip.part);
+        let (to, mut lines) = match (grip.part, snap, grabbed) {
+            (BoxPart::Pivot, _, Some(grabbed)) if !distort_mode => {
                 let off = grip.from - grabbed;
-                let (at, lines) = snap.point(to - off, mods, GestureSnap::default().reads_control(reads_control));
+                (box_point_pull(&grip.start, to - off, space.view.doc_len(SNAP_PX as f32)) + off, Vec::new())
+            }
+            (BoxPart::Corner(_), Some(snap), Some(grabbed)) | (BoxPart::Edge(_), Some(snap), Some(grabbed))
+                if !distort_mode || matches!(grip.part, BoxPart::Corner(_)) =>
+            {
+                let off = grip.from - grabbed;
+                let (at, lines) = snap.point(to - off, mods, gesture);
                 (at + off, lines)
             }
-            (Some(snap), None) => snap.point(to, mods, GestureSnap::default().reads_control(reads_control)),
-            (None, _) => (to, Vec::new()),
+            (BoxPart::Inside, Some(snap), _) if !distort_mode => {
+                let moved = bounds_of(&grip.start.quad) + (to - grip.from);
+                let (by, lines) = snap.rect_of(moved, mods, kinds);
+                (to + by, lines)
+            }
+            _ => (to, Vec::new()),
         };
         let dragged = quad::drag(&grip.start, &grip.last, grip.part, grip.from, to, mods, &self.rules);
-        (if self.pixel_grid { on_pixel_grid(dragged) } else { dragged }, lines)
+        let dragged = if self.pixel_grid { on_pixel_grid(dragged) } else { dragged };
+        if kind == Some(BoxDrag::Distort)
+            && let Some(at) = handle_point(&dragged, grip.part)
+        {
+            lines.retain(|line| {
+                let across = if matches!(line.along, Axis::Y) { at.x } else { at.y };
+                (across - line.position).abs() < 1e-6
+            });
+        }
+        (dragged, lines)
     }
 
     /// The pointer for `part` at `pointer`, `dragging` during its drag.
@@ -966,6 +992,19 @@ fn handle_point(state: &BoxState, part: BoxPart) -> Option<Point> {
         BoxPart::Pivot => Some(state.pivot),
         _ => None,
     }
+}
+
+/// The bounds of `quad`.
+fn bounds_of(quad: &[Point; 4]) -> DocRect {
+    quad[1..].iter().fold(DocRect::from_points(quad[0], quad[0]), |r, p| r.union_pt(*p))
+}
+
+/// `p` pulled onto the nearest of the nine points of `state`'s box (its corners, edge midpoints and centre) within
+/// `reach` document units, else `p`.
+fn box_point_pull(state: &BoxState, p: Point, reach: f64) -> Point {
+    let q = &state.quad;
+    let points = [q[0], q[1], q[2], q[3], q[0].midpoint(q[1]), q[1].midpoint(q[2]), q[2].midpoint(q[3]), q[3].midpoint(q[0]), q[0].midpoint(q[2]).midpoint(q[1].midpoint(q[3]))];
+    points.into_iter().map(|a| (a.distance(p), a)).filter(|(d, _)| *d <= reach).min_by(|a, b| a.0.total_cmp(&b.0)).map_or(p, |(_, a)| a)
 }
 
 /// The corner of `screen` nearest `p` and its distance.
