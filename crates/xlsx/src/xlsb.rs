@@ -1,11 +1,13 @@
-//! Binary workbooks ([MS-XLSB]): the workbook part, shared strings and worksheet cells, from
-//! their records. Cell formulas are decoded from their tokens ([`formula`]) into the text an
-//! `.xlsx` file holds; one that can't be keeps only its saved result, with a warning saying why.
-//! Styles are not read. A record that does not parse fails the read.
+//! Binary workbooks ([MS-XLSB]): the workbook part, shared strings and worksheets (rows, cells,
+//! columns, default sizes, merged cells), from their records. Cell formulas are decoded from
+//! their tokens ([`formula`]) into the text an `.xlsx` file holds; one that can't be keeps only
+//! its saved result, with a warning saying why. The styles part is read into the same
+//! [`crate::styles::Styles`] ([`styles`]). A record that does not parse fails the read.
 
 mod expr;
 mod formula;
 mod ftab;
+mod styles;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,17 +15,20 @@ use std::sync::Arc;
 use craft_opc::{ContentTypes, Rels};
 use craft_sheet::{CellError, CellRef, MAX_COLS, MAX_ROWS, Range, Visibility};
 
-use crate::sheet::{Cell, CellFormula, CellValue, FormulaKind, Row, SheetPart};
+use crate::features::SheetFormat;
+use crate::sheet::{Cell, CellFormula, CellValue, Column, FormulaKind, Row, SheetPart};
 use crate::strings::StringItem;
 use crate::workbook::{SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings};
 pub(crate) use formula::Links;
 use formula::{Book, Mode, Name, Xti};
+pub(crate) use styles::styles;
 
 pub(crate) const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
 pub(crate) const WORKSHEET: &str = "application/vnd.ms-excel.worksheet";
 pub(crate) const STRINGS: &str = "application/vnd.ms-excel.sharedStrings";
+pub(crate) const STYLES: &str = "application/vnd.ms-excel.styles";
 /// Most sheets in the workbook.
 const MAX_SHEETS: usize = 1024;
 /// Supporting links (this workbook, add-ins, other workbooks) read at most; past it, formulas
@@ -31,6 +36,10 @@ const MAX_SHEETS: usize = 1024;
 const MAX_BOOKS: usize = 65_536;
 /// Most merged ranges in one worksheet.
 const MAX_MERGES: usize = 100_000;
+/// Most column records in one worksheet: one per column.
+const MAX_COLUMNS: usize = MAX_COLS as usize;
+/// The tallest row, in twips (409.6 points).
+const MAX_ROW_TWIPS: u16 = 8192;
 /// Defined names (Excel's hidden ones for newer functions included) read at most; past it, the
 /// workbook's formulas keep their saved results.
 const MAX_NAMES: usize = 65_536;
@@ -174,12 +183,16 @@ struct Records<'a, 'l> {
     bytes: Bytes<'a>,
     limits: &'l Limits,
     budget: &'l Budget,
-    blocks: Vec<u16>,
+    /// Each open block's end record, and whether its records are read.
+    blocks: Vec<(u16, bool)>,
+    /// Read the alternate content meant for Excel 2007 (version 12), as an `.xlsx` reader sees
+    /// the main attribute where Excel keeps a newer spelling in an extension.
+    excel_2007: bool,
 }
 
 impl<'a, 'l> Records<'a, 'l> {
     fn new(bytes: &'a [u8], limits: &'l Limits, budget: &'l Budget) -> Self {
-        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![] }
+        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![], excel_2007: false }
     }
 
     fn next(&mut self, warnings: &mut Warnings) -> Result<Option<(u16, &'a [u8])>, Error> {
@@ -208,6 +221,7 @@ impl<'a, 'l> Records<'a, 'l> {
                 // BrtFRTBegin, BrtACBegin.
                 35 | 37 => {
                     let mut b = Bytes::new(payload);
+                    let mut read = false;
                     if id == 35 {
                         b.take(4)?;
                     } else {
@@ -215,22 +229,32 @@ impl<'a, 'l> Records<'a, 'l> {
                         if count == 0 {
                             return Err(invalid("empty alternate-content version list"));
                         }
-                        b.take(usize::from(count) * 4)?;
+                        // ACProductVersion: fileVersion, then fileProduct (15 bits) and
+                        // fileExtension (the version and later).
+                        for _ in 0..count {
+                            let (version, product) = (b.u16()?, b.u16()?);
+                            let later = product & 0x8000 != 0;
+                            read |= self.excel_2007 && product & 0x7FFF == 0 && (version == 12 || later && version <= 12);
+                        }
                     }
                     b.finish()?;
                     if self.blocks.len() >= 64 {
                         return Err(invalid("extension blocks nested too deeply"));
                     }
-                    self.blocks.push(id + 1);
-                    warnings.warn("unsupported XLSB future-record and alternate-content blocks were skipped");
+                    // Inside a skipped block, everything is skipped.
+                    let read = read && self.blocks.iter().all(|(_, r)| *r);
+                    self.blocks.push((id + 1, read));
+                    if !read {
+                        warnings.warn("unsupported XLSB future-record and alternate-content blocks were skipped");
+                    }
                 }
                 // BrtFRTEnd, BrtACEnd.
                 36 | 38 => {
-                    if self.blocks.pop() != Some(id) || !payload.is_empty() {
+                    if self.blocks.pop().map(|(end, _)| end) != Some(id) || !payload.is_empty() {
                         return Err(invalid("mismatched extension block end"));
                     }
                 }
-                _ if !self.blocks.is_empty() => {}
+                _ if self.blocks.iter().any(|(_, read)| !read) => {}
                 _ => return Ok(Some((id, payload))),
             }
         }
@@ -747,7 +771,87 @@ fn value(id: u16, b: &mut Bytes<'_>, strings: usize, limits: &Limits, budget: &B
     Ok(value)
 }
 
-/// A worksheet part: rows (BrtRowHdr) and cells inside BrtBeginSheetData, merged cells after.
+/// `BrtRowHdr` after `rw`, up to its column spans: the row's height, flags and style, as the
+/// `.xlsx` row Excel writes. `miyRw` is the height of every row: it is `ht` when set by hand
+/// (`fUnsynced`) or when it differs from the sheet's default, and past 8192 twips it is ignored.
+fn row_header(index: u32, b: &mut Bytes<'_>, default_twips: Option<u16>) -> Result<Row, Error> {
+    let ixfe = b.u32()?;
+    let twips = b.u16()?;
+    let [borders, flags, phonetic] = [b.u8()?, b.u8()?, b.u8()?];
+    let custom = flags & 0x20 != 0;
+    let height = (twips <= MAX_ROW_TWIPS && (custom || default_twips.is_some_and(|d| d != twips))).then(|| f64::from(twips) / 20.0);
+    let mut attrs = vec![];
+    for (bit, byte, name) in [(1, borders, "thickTop"), (2, borders, "thickBot"), (1, phonetic, "ph")] {
+        if byte & bit != 0 {
+            attrs.push((name.to_string(), "1".to_string()));
+        }
+    }
+    Ok(Row {
+        index,
+        height,
+        custom_height: custom && height.is_some(),
+        hidden: flags & 0x10 != 0,
+        outline_level: flags & 7,
+        collapsed: flags & 0x08 != 0,
+        style: (flags & 0x40 != 0).then_some(ixfe),
+        cells: vec![],
+        attrs,
+    })
+}
+
+/// `BrtWsFmtInfo`: `sheetFormatPr` as Excel writes it, and the default row height in twips.
+/// `dxGCol` is the default width in 256ths of a character (`0xFFFFFFFF`: none set);
+/// `cchDefColWidth` is the base width, left out at its default of 8.
+fn sheet_format(b: &mut Bytes<'_>) -> Result<(SheetFormat, u16), Error> {
+    let width = b.u32()?;
+    let base = b.u16()?;
+    let twips = b.u16()?;
+    let flags = b.u16()?;
+    let rows = b.u8()?;
+    let cols = b.u8()?;
+    let set = |bit: u16| (flags & bit != 0).then_some(true);
+    let level = |n: u8| (n > 0).then_some(u32::from(n.min(7)));
+    let format = SheetFormat {
+        base_col_width: (base != 8).then_some(u32::from(base)),
+        default_col_width: (width != u32::MAX).then(|| f64::from(width) / 256.0),
+        default_row_height: Some(f64::from(twips) / 20.0),
+        custom_height: set(1),
+        zero_height: set(2),
+        thick_top: set(4),
+        thick_bottom: set(8),
+        outline_level_row: level(rows),
+        outline_level_col: level(cols),
+        attrs: vec![],
+    };
+    Ok((format, twips))
+}
+
+/// `BrtColInfo`: `None` for a range outside the grid or backwards. `coldx` is the width in 256ths
+/// of a character, which is the `.xlsx` width exactly.
+fn column(b: &mut Bytes<'_>) -> Result<Option<Column>, Error> {
+    let first = b.u32()?;
+    let last = b.u32()?;
+    let width = b.u32()?;
+    let style = b.u32()?;
+    let flags = b.u16()?;
+    if first > last || last >= MAX_COLS {
+        return Ok(None);
+    }
+    Ok(Some(Column {
+        first,
+        last,
+        width: Some(f64::from(width) / 256.0),
+        custom_width: flags & 2 != 0,
+        best_fit: flags & 4 != 0,
+        hidden: flags & 1 != 0,
+        outline_level: ((flags >> 8) & 7) as u8,
+        collapsed: flags & 0x1000 != 0,
+        style: (style != 0).then_some(style),
+    }))
+}
+
+/// A worksheet part: the sheet's default sizes (BrtWsFmtInfo) and columns (BrtColInfo) before
+/// BrtBeginSheetData, rows (BrtRowHdr) and cells inside it, merged cells after.
 /// Formulas refer to the workbook's `links`; with none, each keeps its saved result.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn worksheet(
@@ -764,8 +868,13 @@ pub(crate) fn worksheet(
     let mut sheet = SheetPart::default();
     let mut data = false;
     let mut data_seen = false;
+    // Every BrtColInfo counts toward the cap, a skipped one too.
+    let mut column_records = 0usize;
     let mut row: Option<Row> = None;
     let mut col = None;
+    // The default row height in twips: a row of another height has `ht` even when it was not set
+    // by hand (a large font, a thick border), as Excel writes it in `.xlsx`.
+    let mut default_twips: Option<u16> = None;
     // BrtCellMeta applies to the cell record that follows it (a dynamic-array formula), as `cm`
     // does in `.xlsx`: a one-based index into the metadata part's cell metadata. Excel may write
     // the cell's BrtValueMeta (a rich value, such as a spill error) in between.
@@ -834,15 +943,14 @@ pub(crate) fn worksheet(
                 if r >= MAX_ROWS || row.as_ref().is_some_and(|previous| r <= previous.index) {
                     return Err(invalid("row is out of bounds or unordered"));
                 }
-                // ixfe, miyRw and the flags are not read.
-                b.take(9)?;
+                let next = row_header(r, &mut b, default_twips)?;
                 let spans = b.u32()?;
                 if spans > 16 {
                     return Err(invalid("too many row spans"));
                 }
                 b.take(spans as usize * 8)?;
                 b.finish()?;
-                if let Some(previous) = row.replace(Row { index: r, ..Row::default() }) {
+                if let Some(previous) = row.replace(next) {
                     each(previous)?;
                 }
                 sheet.rows += 1;
@@ -900,6 +1008,31 @@ pub(crate) fn worksheet(
                     ..Cell::default()
                 });
                 col = Some(c);
+            }
+            485 => {
+                if data_seen {
+                    return Err(invalid("sheet format after worksheet data"));
+                }
+                let (format, twips) = sheet_format(&mut b)?;
+                b.finish()?;
+                default_twips = Some(twips);
+                sheet.features.format = Some(format);
+            }
+            60 => {
+                if data_seen {
+                    return Err(invalid("column after worksheet data"));
+                }
+                if column_records >= MAX_COLUMNS {
+                    return Err(Error::TooLarge(format!("XLSB exceeds {MAX_COLUMNS} column records")));
+                }
+                column_records += 1;
+                let column = column(&mut b)?;
+                b.finish()?;
+                let Some(column) = column else {
+                    warnings.warn("invalid XLSB column ranges were skipped");
+                    continue;
+                };
+                sheet.columns.push(column);
             }
             176 => {
                 if data {

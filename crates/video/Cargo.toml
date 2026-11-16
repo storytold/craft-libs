@@ -36,6 +36,8 @@ mpeg4 = ["mpeg4-encode"]
 mpeg4-encode = ["craft-media/bitstream"]
 # FFV1 lossless video (RFC 9043): version 3, range coder, decoder and encoder.
 ffv1 = []
+# Motion JPEG: a frame-level decoder and encoder over `craft-jpeg`.
+mjpeg = ["dep:craft-jpeg"]
 # Apple ProRes (SMPTE RDD 36): decoder and encoder.
 prores = ["craft-media/bitstream"]
 # H.264 / AVC: decoder and encoder; `h264-decode` or `h264-encode` for one of them.
@@ -59,10 +61,11 @@ av1-large-encode = ["av1-encode", "dep:rav1e"]
 # Sierra VMD video (8-bit paletted): decoder.
 vmd = []
 # Decode and encode across worker threads (rayon) in the codecs that support it.
-threads = ["dep:rayon"]
+threads = ["dep:rayon", "rav1e?/threading"]
 
 [dependencies]
 craft-media = { workspace = true }
+craft-jpeg = { workspace = true, optional = true }
 thiserror = { workspace = true }
 rayon = { workspace = true, optional = true }
 
@@ -77,6 +80,10 @@ craft-media = { workspace = true, features = ["avi", "vmd"] }
 [[test]]
 name = "vmd"
 required-features = ["vmd"]
+
+[[test]]
+name = "mjpeg"
+required-features = ["mjpeg"]
 
 [[test]]
 name = "dnx"
