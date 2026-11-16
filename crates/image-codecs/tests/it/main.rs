@@ -14,6 +14,7 @@ mod exr_stream;
 mod fidelity;
 mod gif_frames;
 mod heif;
+mod jpeg_inks;
 mod jpegls_oracle;
 mod limits;
 mod malformed;
