@@ -152,7 +152,7 @@ impl BandState {
         let sg0: i16 = if d < 0 { -1 } else { 0 };
         for i in 1..=6 {
             let sgi = if self.d[i] < 0 { -1 } else { 0 };
-            let wd2 = if sg0 == sgi { wd1 } else { -wd1 };
+            let wd2 = if sg0 == sgi { wd1 } else { wd1.saturating_neg() };
             let wd3 = mult(self.b[i], 32640);
             self.b[i] = wd2.saturating_add(wd3);
         }
@@ -162,7 +162,7 @@ impl BandState {
         let sg1 = if self.p[1] < 0 { -1 } else { 0 };
         let sg2 = if self.p[2] < 0 { -1 } else { 0 };
         let wd1 = self.a[1].saturating_add(self.a[1]).saturating_add(self.a[1].saturating_add(self.a[1]));
-        let wd2 = if sg0 == sg1 { -wd1 } else { wd1 } >> 7;
+        let wd2 = if sg0 == sg1 { wd1.saturating_neg() } else { wd1 } >> 7;
         let wd3: i16 = if sg0 == sg2 { 128 } else { -128 };
         let wd4 = wd2.saturating_add(wd3);
         let wd5 = mult(self.a[2], 32512);
@@ -607,6 +607,9 @@ pub fn encode_interleaved(samples: &[i16], channels: usize) -> Result<Vec<u8>, E
     if channels == 1 {
         return encode(samples);
     }
+    if samples.len() > MAX_SAMPLES {
+        return Err(Error::InputTooLarge);
+    }
     let frame_len = channels.saturating_mul(2);
     if !samples.len().is_multiple_of(frame_len) {
         return Err(Error::OddSampleCount(samples.len()));
@@ -678,5 +681,13 @@ mod tests {
         let garbage = [0xFF, 0x00, 0x55, 0xAA, 0x12, 0x34, 0x7F, 0x80];
         let dec = decode(&garbage).expect("decode garbage");
         assert_eq!(dec.len(), 16);
+    }
+
+    #[test]
+    fn uppol2_overflow_does_not_panic() {
+        let mut state = BandState::new(true);
+        state.a[1] = -8192;
+        state.p = [0, 0, 0];
+        state.update_predictor(0, 0, 0);
     }
 }
