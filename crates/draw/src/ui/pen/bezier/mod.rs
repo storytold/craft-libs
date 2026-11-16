@@ -14,8 +14,8 @@ mod words;
 use craft_behavior::geometry::{SelectionOperation, axis_or_diagonal};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{
-    Axis, CanvasView, CursorPriority, EditCommand, GesturePhase, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape,
-    PartKey, PartRef, PointerButton, PressPhase, PressStart, Roving, Sense,
+    Axis, CancelReason, CanvasView, CursorPriority, EditCommand, GesturePhase, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape,
+    PartKey, PartRef, PointerButton, PressCancel, PressPhase, PressStart, Roving, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
@@ -257,6 +257,8 @@ struct Held {
     start: Vec<EditPath>,
     /// Past the click slop: the gesture began.
     began: bool,
+    /// The tool the press began under: the press stays that tool's until it ends, whatever the host's tool becomes.
+    tool: BezierTool,
 }
 
 /// Where a press is in a pass: the view and snap it maps through, the press, the pointer and the modifiers held.
@@ -398,6 +400,10 @@ pub struct BezierOverlay<'a> {
     /// thickness replaces the line width (and the selected segment grows by the same amount).
     #[prop]
     path_options: Option<&'a PathOptionsSettings>,
+    /// The host ended what the open press was editing (its target changed): the press is cancelled in this pass and
+    /// reports nothing more.
+    #[prop]
+    cancelled: bool,
     report: Report,
     marquee: Option<DocRect>,
     hover_mark: Option<BezierHit>,
@@ -415,6 +421,7 @@ impl<'a> BezierOverlay<'a> {
             anchors: AnchorsShown::default(),
             segment_mark: SegmentMark::default(),
             path_options: None,
+            cancelled: false,
             report: Report::default(),
             marquee: None,
             hover_mark: None,
@@ -776,7 +783,7 @@ impl<'a> BezierOverlay<'a> {
                         tools::anchor_click(self.tool, hit, press.mods, self.selection, &mut self.report);
                         *cx.press_slot::<Held>() = None;
                     } else {
-                        *cx.press_slot::<Held>() = Some(Held { origin: start.origin, target, start: paths.to_vec(), began: false });
+                        *cx.press_slot::<Held>() = Some(Held { origin: start.origin, target, start: paths.to_vec(), began: false, tool: self.tool });
                     }
                 }
                 PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
@@ -796,7 +803,7 @@ impl<'a> BezierOverlay<'a> {
             match press.phase {
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     self.report.pressed_empty = true;
-                    *cx.press_slot::<Held>() = Some(Held { origin: start.origin, target: Target::Marquee, start: Vec::new(), began: false });
+                    *cx.press_slot::<Held>() = Some(Held { origin: start.origin, target: Target::Marquee, start: Vec::new(), began: false, tool: self.tool });
                 }
                 PressPhase::DragStart { start, pos, .. } | PressPhase::Drag { start, pos, .. } if start.button == PointerButton::Primary => {
                     let first = matches!(press.phase, PressPhase::DragStart { .. });
@@ -825,9 +832,9 @@ impl<'a> BezierOverlay<'a> {
             (Some(held), _) => held,
             (None, Some(item)) => {
                 let target = self.press_target(item.hit(paths, view, start.origin), start, mods, paths);
-                Held { origin: start.origin, target, start: paths.to_vec(), began: false }
+                Held { origin: start.origin, target, start: paths.to_vec(), began: false, tool: self.tool }
             }
-            (None, None) => Held { origin: start.origin, target: Target::Marquee, start: Vec::new(), began: false },
+            (None, None) => Held { origin: start.origin, target: Target::Marquee, start: Vec::new(), began: false, tool: self.tool },
         };
         let moves = !matches!(held.target, Target::Nothing | Target::Toggle { .. } | Target::Pick { .. });
         if first && moves {
@@ -1187,8 +1194,16 @@ impl Component for BezierOverlay<'_> {
     fn update(&mut self, cx: &mut Cx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
         let Some(paths) = cx.value().cloned() else { return };
+        if let Some(held) = cx.press_slot::<Held>().as_ref() {
+            self.tool = held.tool;
+        }
         let scene = self.scene(&paths, &space.view, cx.rect, cx.style.reach);
-        self.run_pointer(cx, &space, &scene, &paths);
+        if self.cancelled && cx.press_slot::<Held>().take().is_some() {
+            cx.cancel(CancelReason::HostChanged);
+            cx.cancel_press(PressCancel::Disabled);
+        } else {
+            self.run_pointer(cx, &space, &scene, &paths);
+        }
         self.run_keys(cx, &space, &scene, &paths);
     }
 

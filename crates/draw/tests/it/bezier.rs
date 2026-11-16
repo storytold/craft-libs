@@ -174,6 +174,8 @@ struct State {
     tool_clicks: usize,
     /// The anchor tool the canvas runs under the overlay, if any.
     canvas_tool: Option<PathTool>,
+    /// The host ended what the open press was editing.
+    cancelled: bool,
     /// Passes in which that tool ran a gesture.
     tool_gestures: usize,
 }
@@ -239,6 +241,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         lone_selects: 0,
         tool_clicks: 0,
         canvas_tool: None,
+        cancelled: false,
         tool_gestures: 0,
     }));
     let shown = Rc::clone(&state);
@@ -270,6 +273,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
                 .handles(st.handles)
                 .anchors(st.anchors)
                 .segment_mark(st.segment_mark)
+                .cancelled(st.cancelled)
                 .show_at(ui, body.rect)
         });
         if canvas.output.click_at().is_some() {
@@ -870,4 +874,38 @@ fn arrow_keys_nudge_the_selected_anchors_and_shift_nudges_farther() {
     let Some(PathEdit::MoveAnchors { by: far, .. }) = h.last_change() else { panic!("{:?}", h.last_change()) };
     assert!(far.x > small.x, "{small:?} {far:?}");
     assert_eq!(h.state.borrow().changes.len(), 2, "one edit per press");
+}
+
+// A press belongs to the tool it began under: switching the host's tool in the middle of a drag leaves the drag its
+// own, and it commits as that tool's edit.
+#[trial]
+fn a_press_keeps_the_tool_it_began_under_across_a_tool_switch() {
+    let mut h = two_paths();
+    let anchor = h.screen(p(160.0, 60.0));
+    h.press_at(anchor);
+    h.move_to(anchor + vec2(FAR * 0.5, FAR * 0.5));
+    h.update(|st| st.tool = BezierTool::Anchors);
+    h.move_to(anchor + vec2(FAR, FAR));
+    h.release_at(anchor + vec2(FAR, FAR));
+    let st = h.state.borrow();
+    assert_eq!(st.seen.last(), Some(&Seen::Commit), "{:?}", st.seen);
+    assert!(matches!(st.changes.last(), Some(PathEdit::MoveAnchors { path: 1, .. })), "{:?}", st.changes);
+}
+
+// A press the host cancels reports nothing more: no commit, no one-shot edit from its release, and the paths stay.
+#[trial]
+fn a_cancelled_press_reports_nothing_on_release() {
+    let mut h = two_paths();
+    let before = h.state.borrow().paths.clone();
+    let anchor = h.screen(p(160.0, 60.0));
+    h.press_at(anchor);
+    h.move_to(anchor + vec2(FAR * 0.5, FAR * 0.5));
+    h.update(|st| st.cancelled = true);
+    h.update(|st| st.cancelled = false);
+    h.move_to(anchor + vec2(FAR, FAR));
+    h.release_at(anchor + vec2(FAR, FAR));
+    let st = h.state.borrow();
+    assert!(st.seen.contains(&Seen::Cancel), "{:?}", st.seen);
+    assert!(!st.seen.contains(&Seen::Commit) && !st.seen.contains(&Seen::Set), "{:?}", st.seen);
+    assert_eq!(st.paths, before);
 }
