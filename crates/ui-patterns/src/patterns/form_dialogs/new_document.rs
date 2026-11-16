@@ -32,7 +32,8 @@ use details::Right;
 
 pub(crate) use presets::push_recent;
 pub use presets::{
-    BackgroundContents, BitDepth, ColorMode, ColorProfiles, DocumentOptions, DocumentPreset, NewDocumentPresetWords, Orientation, PresetCategory,
+    BackgroundContents, BitDepth, ColorMode, ColorProfiles, DocumentOptions, DocumentPreset, NewDocumentPresetWords, Orientation, PIXEL_ASPECTS,
+    PresetCategory, SQUARE_PIXELS,
 };
 
 /// The key of the colour request Custom makes.
@@ -84,19 +85,34 @@ craft_ui::words! {
         transparent: "newDocument.transparent" = "Transparent";
         custom_color: "newDocument.customColor" = "Custom…";
         custom_swatch: "newDocument.customSwatch" = "Custom background color";
-        save_preset: "newDocument.savePreset" = "Save Preset…";
+        /// The icon right of Name that opens the naming pane, and the pane's header.
+        save_preset_title: "newDocument.savePresetTitle" = "Save Document Preset";
+        /// The naming pane's button that saves the preset.
+        save_preset: "newDocument.savePreset" = "Save Preset";
         preset_name: "newDocument.presetName" = "Preset Name";
-        save: "newDocument.save" = "Save";
+        /// The name the naming pane proposes: `{n}` is the first number no saved preset has.
+        saved_name: template "newDocument.savedName" = "Saved {n}";
         no_saved: "newDocument.noSaved" = "No saved presets yet.";
         too_many: "newDocument.tooMany" = "At most 256 document presets can be saved";
+        bitmap: "newDocument.bitmap" = "Bitmap";
         grayscale: "newDocument.grayscale" = "Grayscale";
         rgb_color: "newDocument.rgbColor" = "RGB Color";
         cmyk_color: "newDocument.cmykColor" = "CMYK Color";
         lab_color: "newDocument.labColor" = "Lab Color";
+        depth_1: "newDocument.depth1" = "1 bit";
         depth_8: "newDocument.depth8" = "8 bit";
         depth_16: "newDocument.depth16" = "16 bit";
         depth_32: "newDocument.depth32" = "32 bit (float)";
         orientation: "newDocument.orientation" = "Orientation";
+        pixel_aspect: "newDocument.pixelAspect" = "Pixel Aspect Ratio";
+        square_pixels: "newDocument.pixelAspectSquare" = "Square Pixels";
+        d1_dv_ntsc: "newDocument.pixelAspectD1DvNtsc" = "D1/DV NTSC (0.91)";
+        d1_dv_pal: "newDocument.pixelAspectD1DvPal" = "D1/DV PAL (1.09)";
+        d1_dv_ntsc_widescreen: "newDocument.pixelAspectD1DvNtscWidescreen" = "D1/DV NTSC Widescreen (1.21)";
+        hdv_1080: "newDocument.pixelAspectHdv1080" = "HDV 1080/DVCPRO HD 720 (1.33)";
+        d1_dv_pal_widescreen: "newDocument.pixelAspectD1DvPalWidescreen" = "D1/DV PAL Widescreen (1.46)";
+        anamorphic_2_to_1: "newDocument.pixelAspectAnamorphic2To1" = "Anamorphic 2:1 (2)";
+        dvcpro_hd_1080: "newDocument.pixelAspectDvcproHd1080" = "DVCPRO HD 1080 (1.5)";
         /// `{n}` is how many cards the open tab lists.
         presets_heading: template "newDocument.presetsHeading" = "Blank Document Presets ({n})";
         preset_details: "newDocument.presetDetails" = "Preset Details";
@@ -123,6 +139,7 @@ struct Setup {
     screen_ppi: f64,
     profiles: Vec<ColorProfiles>,
     app_name: Option<Label>,
+    custom_pixel_aspects: Vec<(String, String)>,
 }
 
 /// What the columns read besides the session: the setup, the remembered lists, the words and the units.
@@ -164,7 +181,7 @@ struct Shared<'a> {
 }
 
 /// What the dialog keeps while it is open besides the settings: the fields that show the size, the open tab and card,
-/// and the state of the Save Preset row. It lives in the dialog's body slot.
+/// the Save Document Preset pane and whether a card turned Artboards on. It lives in the dialog's body slot.
 #[derive(Clone)]
 struct Session {
     /// The width, height and resolution fields of the settings.
@@ -176,8 +193,11 @@ struct Session {
     card: Option<usize>,
     /// The orientation picked with the control; built-in cards turn with it.
     orientation: Option<Orientation>,
-    /// The Save Preset name row, when open.
+    /// The Save Document Preset pane's name, while the pane stands in for the details.
     naming: Option<String>,
+    /// A Web or Mobile card turned Artboards on, so a card of another tab turns it off again; the user's own tick ends
+    /// it.
+    preset_artboard: bool,
     /// A save was refused and its reason shows under the name field.
     name_tried: bool,
     focus_name: bool,
@@ -193,6 +213,7 @@ impl Default for Session {
             card: None,
             orientation: None,
             naming: None,
+            preset_artboard: false,
             name_tried: false,
             focus_name: true,
             focus_preset_name: false,
@@ -201,7 +222,7 @@ impl Default for Session {
 }
 
 impl Session {
-    /// Drops what the user was doing with the settings: the picked card, the orientation, the Save Preset row and a
+    /// Drops what the user was doing with the settings: the picked card, the orientation, the Save Document Preset pane and a
     /// running size edit. The fields that show the size follow the settings by themselves.
     fn reset(&mut self) {
         self.card = None;
@@ -216,10 +237,22 @@ impl Session {
     fn apply_card(&mut self, values: &mut DocumentOptions, card: &cards::Card, points_per_inch: f64) {
         if card.restores_all {
             restore_all(values, &card.settings);
+            self.preset_artboard = false;
         } else {
             values.size = card.settings.size;
             values.pixels_per_inch = card.settings.pixels_per_inch;
             values.unit = card.settings.unit;
+            match card.artboard {
+                Some(true) if !values.artboard => {
+                    values.artboard = true;
+                    self.preset_artboard = true;
+                }
+                Some(false) if self.preset_artboard => {
+                    values.artboard = false;
+                    self.preset_artboard = false;
+                }
+                _ => {}
+            }
         }
         self.size = values.linked(points_per_inch);
         self.gesture = None;
@@ -257,6 +290,7 @@ fn open_options(values: &mut DocumentOptions, clipboard: Option<PixelSize>, scre
 
 fn mode_label(words: &NewDocumentWords, mode: ColorMode) -> &Label {
     match mode {
+        ColorMode::Bitmap => &words.bitmap,
         ColorMode::Grayscale => &words.grayscale,
         ColorMode::Rgb => &words.rgb_color,
         ColorMode::Cmyk => &words.cmyk_color,
@@ -266,6 +300,7 @@ fn mode_label(words: &NewDocumentWords, mode: ColorMode) -> &Label {
 
 fn depth_label(words: &NewDocumentWords, depth: BitDepth) -> &Label {
     match depth {
+        BitDepth::One => &words.depth_1,
         BitDepth::Eight => &words.depth_8,
         BitDepth::Sixteen => &words.depth_16,
         BitDepth::ThirtyTwo => &words.depth_32,
@@ -459,11 +494,15 @@ fn body(ui: &mut Ui, form: &mut FormCx<'_, '_>, values: &mut DocumentOptions, sh
 ///   then the recent documents kept under [`remember_recent`](NewDocumentDialog::remember_recent) (the last 20), then the built-in defaults not yet among them. Saved lists the user's presets in a list
 ///   whose Delete key removes the picked ones, with "No saved presets yet." when there are none.
 /// - Cards: a click or an arrow fills the details; Enter on a card or a double click creates. A built-in card turns with
-///   the orientation control. Saved and recent cards restore every setting but the name.
-/// - Details: Name, Width and Height with their units, Orientation, Artboards, Resolution, Color Mode, Depth, Color
-///   Profile and Background Contents. Save Preset opens a name row under the column; Enter there saves the preset and
-///   does not create the document. The name is checked by the preset library (not blank, different from the saved
-///   names ignoring case), and at most 256 presets are kept.
+///   the orientation control. Saved and recent cards restore every setting but the name. A Web or Mobile card turns
+///   Artboards on; a card of another category turns it off again only when such a card turned it on.
+/// - Details: Name with the Save Document Preset icon, Width and Height with their units, Orientation, Artboards,
+///   Resolution, Color Mode, Depth, Color Profile, Pixel Aspect Ratio (the built-in ratios, then the app's
+///   [`custom_pixel_aspects`](NewDocumentDialog::custom_pixel_aspects)) and Background Contents. Bitmap takes only 1
+///   bit and offers no Transparent background ([`DocumentOptions::fitted`]).
+/// - Save Document Preset: the icon opens a pane in place of the details with the first free `Saved N` selected;
+///   Save Preset or Enter saves the preset and does not create the document, Cancel goes back. The name is checked by
+///   the preset library (not blank, different from the saved names ignoring case), and at most 256 presets are kept.
 /// - Keys: Tab walks the fields, Enter is Create unless a field owns it, Escape closes. Holding Alt turns Close into
 ///   Reset, which restores the settings from when the dialog opened and keeps it open. Ctrl+Z inside the dialog steps
 ///   the dialog's own settings.
@@ -505,6 +544,10 @@ pub struct NewDocumentDialog<'a> {
     /// The colour profiles each mode offers.
     #[prop]
     profiles: Vec<ColorProfiles>,
+    /// The app's own pixel aspect ratios as `(id, name)`, listed after the built-in ones ([`PIXEL_ASPECTS`]); the
+    /// names are the user's and are not translated.
+    #[prop]
+    custom_pixel_aspects: Vec<(String, String)>,
     /// Binds the saved presets of the Saved tab to `saved`, in place of the list the dialog keeps across runs. Each
     /// save and delete is also reported in [`NewDocumentOutput::presets`] for the app to store.
     #[prop]
@@ -547,6 +590,7 @@ impl<'a> NewDocumentDialog<'a> {
             print_resolution: 300.0,
             screen_resolution: 72.0,
             profiles: Vec::new(),
+            custom_pixel_aspects: Vec::new(),
             saved: None,
             recent: None,
             tab: None,
@@ -570,6 +614,7 @@ impl<'a> NewDocumentDialog<'a> {
             print_resolution,
             screen_resolution,
             profiles,
+            custom_pixel_aspects,
             mut saved,
             recent: mut recent_bound,
             mut tab,
@@ -601,6 +646,7 @@ impl<'a> NewDocumentDialog<'a> {
             screen_ppi: screen_resolution,
             profiles,
             app_name,
+            custom_pixel_aspects,
         };
         let untitled = words.untitled.as_str().to_owned();
         let shared = Shared {
@@ -814,7 +860,11 @@ impl StackDialog for HostedNewDocument {
                 restore_all(&mut self.options, &item.value);
                 Ok(())
             }
-            _ => set_serde_field(&mut self.options, field, value),
+            _ => {
+                set_serde_field(&mut self.options, field, value)?;
+                self.options = self.options.clone().fitted();
+                Ok(())
+            }
         }
     }
 

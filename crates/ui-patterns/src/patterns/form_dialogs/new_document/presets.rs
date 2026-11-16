@@ -33,6 +33,8 @@ pub(super) const RESOLUTION_UNITS: [UnitKind; 2] = [UnitKind::PixelsPerInch, Uni
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ColorMode {
+    /// One bit per pixel, black or white.
+    Bitmap,
     /// One grey channel.
     Grayscale,
     /// Red, green and blue.
@@ -48,6 +50,8 @@ pub enum ColorMode {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum BitDepth {
+    /// 1 bit: a Bitmap document's only depth.
+    One,
     /// 8 bits per channel.
     #[default]
     Eight,
@@ -55,6 +59,45 @@ pub enum BitDepth {
     Sixteen,
     /// 32-bit floating point.
     ThirtyTwo,
+}
+
+impl ColorMode {
+    /// Every mode in the Color Mode list's order (Photoshop's).
+    pub const ALL: [ColorMode; 5] = [ColorMode::Bitmap, ColorMode::Grayscale, ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab];
+
+    /// The depths the mode takes, the one a mode switch lands on first: Bitmap is 1 bit only, every other mode 8,
+    /// 16 or 32.
+    pub fn depths(self) -> &'static [BitDepth] {
+        match self {
+            ColorMode::Bitmap => &[BitDepth::One],
+            _ => &[BitDepth::Eight, BitDepth::Sixteen, BitDepth::ThirtyTwo],
+        }
+    }
+
+    /// Whether the background may be transparent: a Bitmap pixel is black or white.
+    pub fn allows_transparent(self) -> bool {
+        self != ColorMode::Bitmap
+    }
+}
+
+/// The pixel aspect ratios New Document lists before the app's own, as `(id, ratio)` in Photoshop's order. The ids
+/// are the ones PhotoCraft's View › Pixel Aspect Ratio uses; `square` is the default.
+pub const PIXEL_ASPECTS: [(&str, f64); 8] = [
+    (SQUARE_PIXELS, 1.0),
+    ("d1DvNtsc", 0.91),
+    ("d1DvPal", 1.09),
+    ("d1DvNtscWidescreen", 1.21),
+    ("hdv1080", 1.33),
+    ("d1DvPalWidescreen", 1.46),
+    ("anamorphic2To1", 2.0),
+    ("dvcproHd1080", 1.5),
+];
+
+/// The id of square pixels, the default pixel aspect ratio.
+pub const SQUARE_PIXELS: &str = "square";
+
+fn square_pixels() -> String {
+    SQUARE_PIXELS.to_owned()
 }
 
 /// What fills the new document's background layer.
@@ -118,6 +161,10 @@ pub struct DocumentOptions {
     pub background: BackgroundContents,
     /// Artboards: the document starts with one artboard of this size.
     pub artboard: bool,
+    /// The pixel aspect ratio's id: one of [`PIXEL_ASPECTS`] or an id the app listed with
+    /// `NewDocumentDialog::custom_pixel_aspects`.
+    #[serde(default = "square_pixels")]
+    pub pixel_aspect: String,
 }
 
 impl Default for DocumentOptions {
@@ -134,6 +181,7 @@ impl Default for DocumentOptions {
             profile: None,
             background: BackgroundContents::White,
             artboard: false,
+            pixel_aspect: square_pixels(),
         }
     }
 }
@@ -147,6 +195,21 @@ impl DocumentOptions {
             && self.depth == other.depth
             && self.background == other.background
             && self.profile == other.profile
+    }
+
+    /// The settings with the depth and background the colour mode takes: a depth the mode lacks becomes the mode's
+    /// first (switching to Bitmap gives 1 bit, leaving it 8 bit), and a transparent background under Bitmap becomes
+    /// white.
+    #[must_use]
+    pub fn fitted(mut self) -> Self {
+        let depths = self.color_mode.depths();
+        if !depths.contains(&self.depth) {
+            self.depth = depths[0];
+        }
+        if !self.color_mode.allows_transparent() && self.background == BackgroundContents::Transparent {
+            self.background = BackgroundContents::White;
+        }
+        self
     }
 
     /// Whether the settings fit what the dialog can show: a damaged remembered value does not.
@@ -200,12 +263,21 @@ pub struct DocumentPreset {
     pub height: u32,
     /// Resolution in pixels per inch.
     pub pixels_per_inch: f64,
+    /// Picking the card turns Artboards on (Photoshop's Web and Mobile presets).
+    pub artboard: bool,
 }
 
 impl DocumentPreset {
     /// The card `id`, named `name` in English, for a page of `width` x `height` pixels at `pixels_per_inch`.
     pub const fn new(id: &'static str, name: &'static str, width: u32, height: u32, pixels_per_inch: f64) -> Self {
-        Self { id, name, width, height, pixels_per_inch }
+        Self { id, name, width, height, pixels_per_inch, artboard: false }
+    }
+
+    /// The card turns Artboards on when picked.
+    #[must_use]
+    pub const fn artboard(mut self) -> Self {
+        self.artboard = true;
+        self
     }
 
     /// Whether the preset is for print (300 ppi and up): its card and fields show inches at the app's print resolution;
@@ -309,22 +381,22 @@ impl PresetCategory {
                 "web",
                 "Web",
                 vec![
-                    DocumentPreset::new("web-most-common", "Web Most Common", 1366, 768, 72.0),
-                    DocumentPreset::new("web-minimum", "Web Minimum", 1024, 768, 72.0),
-                    DocumentPreset::new("web-large", "Web Large", 1920, 1080, 72.0),
-                    DocumentPreset::new("macbook-pro-16", "MacBook Pro 16\"", 3456, 2234, 72.0),
-                    DocumentPreset::new("imac-24", "iMac 24\"", 4480, 2520, 72.0),
+                    DocumentPreset::new("web-most-common", "Web Most Common", 1366, 768, 72.0).artboard(),
+                    DocumentPreset::new("web-minimum", "Web Minimum", 1024, 768, 72.0).artboard(),
+                    DocumentPreset::new("web-large", "Web Large", 1920, 1080, 72.0).artboard(),
+                    DocumentPreset::new("macbook-pro-16", "MacBook Pro 16\"", 3456, 2234, 72.0).artboard(),
+                    DocumentPreset::new("imac-24", "iMac 24\"", 4480, 2520, 72.0).artboard(),
                 ],
             ),
             PresetCategory::new(
                 "mobile",
                 "Mobile",
                 vec![
-                    DocumentPreset::new("iphone-16", "iPhone 16", 1179, 2556, 72.0),
-                    DocumentPreset::new("iphone-16-pro-max", "iPhone 16 Pro Max", 1320, 2868, 72.0),
-                    DocumentPreset::new("ipad-pro-13", "iPad Pro 13\"", 2064, 2752, 72.0),
-                    DocumentPreset::new("android-1080p", "Android 1080p", 1080, 1920, 72.0),
-                    DocumentPreset::new("apple-watch-45", "Apple Watch 45mm", 396, 484, 72.0),
+                    DocumentPreset::new("iphone-16", "iPhone 16", 1179, 2556, 72.0).artboard(),
+                    DocumentPreset::new("iphone-16-pro-max", "iPhone 16 Pro Max", 1320, 2868, 72.0).artboard(),
+                    DocumentPreset::new("ipad-pro-13", "iPad Pro 13\"", 2064, 2752, 72.0).artboard(),
+                    DocumentPreset::new("android-1080p", "Android 1080p", 1080, 1920, 72.0).artboard(),
+                    DocumentPreset::new("apple-watch-45", "Apple Watch 45mm", 396, 484, 72.0).artboard(),
                 ],
             ),
             PresetCategory::new(

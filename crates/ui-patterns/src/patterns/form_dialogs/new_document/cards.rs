@@ -61,6 +61,9 @@ pub(super) struct Card {
     /// What the card sets: the size and unit, or (a recent document, a saved preset) everything but the name.
     pub(super) settings: DocumentOptions,
     pub(super) restores_all: bool,
+    /// What a category card does to Artboards: `Some(true)` turns it on (Web, Mobile), `Some(false)` takes back what
+    /// such a card turned on; `None` (Recent, Clipboard, Saved) leaves it.
+    pub(super) artboard: Option<bool>,
     /// The hover text of a recent document, which names everything it restores.
     pub(super) detail: Option<String>,
     /// The width and height the page outline has.
@@ -259,6 +262,7 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
             aspect: (settings.size.width, settings.size.height),
             settings,
             restores_all: false,
+            artboard: Some(preset.artboard),
             detail: None,
             saved: None,
         }
@@ -282,6 +286,7 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
                     aspect: (settings.size.width, settings.size.height),
                     settings: settings.clone(),
                     restores_all: true,
+                    artboard: None,
                     detail: None,
                     saved: Some(preset.id),
                 }
@@ -297,6 +302,7 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
                     aspect: (size.width, size.height),
                     settings,
                     restores_all: false,
+                    artboard: None,
                     detail: None,
                     saved: None,
                 });
@@ -316,12 +322,13 @@ fn cards_of(tab: TabId, session: &Session, values: &DocumentOptions, read: &Read
                     aspect: (recent.size.width, recent.size.height),
                     settings: recent.clone(),
                     restores_all: true,
+                    artboard: None,
                     detail: Some(detail),
                     saved: None,
                 });
             }
             for preset in &setup.recent_defaults {
-                let card = preset_card(preset);
+                let card = Card { artboard: None, ..preset_card(preset) };
                 let listed =
                     recents.iter().any(|recent| recent.size == card.settings.size && recent.pixels_per_inch == card.settings.pixels_per_inch);
                 if !listed {
