@@ -240,10 +240,11 @@ impl Overlay {
         overlay
     }
 
-    /// A dialog: modal, floating, movable and resizable. `.modeless()` gives rank `Window`.
+    /// A dialog: modal with no backdrop (the window behind stays at true contrast), floating, movable and resizable.
+    /// `.modeless()` gives rank `Window`.
     pub fn dialog() -> Overlay {
         let mut overlay = Overlay::base(
-            Rank::modal(Backdrop::Scrim),
+            Rank::modal(Backdrop::None),
             Place::Float(FloatPlace::centred()),
             OverlayFit::ContentCapped(DIALOG_SHARE),
             OwnerClass::Dialog,
