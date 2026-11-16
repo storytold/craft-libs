@@ -1,6 +1,6 @@
 //! Allocation-free lexical nesting preflight for timeline XML and JSON.
 //!
-//! Extracted from EffectCraft's interchange reader, originally by Brandon Thomas.
+//! Extracted from EffectCraft's interchange reader; original attribution is retained in Git history.
 //! These functions preserve its lightweight byte-scanner behavior. They do not validate
 //! syntax, expand entities, decode encodings, or replace a bounded format parser. In
 //! particular XML self-closing elements do not increase the count, and declarations are
