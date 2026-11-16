@@ -444,3 +444,15 @@ fn a_chunk_imported_twice_counts_its_dropped_pictures_past_the_list_once() {
     assert_eq!(d.missing_pictures.list.len(), craft_wordmodel::MAX_MISSING_PICTURES);
     assert_eq!(d.missing_pictures.total, n as u64);
 }
+
+#[test]
+fn a_part_a_chunk_could_not_read_is_listed_with_the_chunk() {
+    let bytes = package(&format!("{}{CHUNK}", p("Before")), Some(("htm", "application/xhtml+xml", b"<p>x</p>")));
+    let import = |_: &AltChunk| {
+        let mut d = Document::from_text("Chunk");
+        d.skipped_parts = vec!["word/media/image1.png".to_string()];
+        Some(d)
+    };
+    let d = read_with(&bytes, &ReadOptions { chunks: Some(&import), ..Default::default() }).unwrap();
+    assert_eq!(d.skipped_parts, vec!["word/afchunk.htm > word/media/image1.png".to_string()]);
+}

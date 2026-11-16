@@ -83,6 +83,8 @@ impl Reader<'_> {
         // The pictures the chunk's own reader dropped are the file's too (strict export, #6005),
         // each named by the chunk and its part in it (`word/afchunk1.docx > word/header1.xml`).
         // A chunk in another format brings none: those importers record nothing yet (#6007).
+        let skipped = std::mem::take(&mut doc.skipped_parts);
+        self.doc.skipped_parts.extend(skipped.into_iter().map(|name| format!("{part} > {name}")));
         let nested = std::mem::take(&mut doc.missing_pictures);
         let list_len = nested.list.len() as u64;
         for mut item in nested.list {
