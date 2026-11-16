@@ -950,6 +950,11 @@ impl HostedParamDialog {
         self
     }
 
+    /// [`held_ok`](HostedParamDialog::held_ok) for a dialog already open.
+    pub fn hold_ok(&mut self) {
+        self.hold = true;
+    }
+
     /// The OK filed by a held dialog, once.
     pub fn take_ok(&mut self) -> Option<ParamResult> {
         self.held.take()
