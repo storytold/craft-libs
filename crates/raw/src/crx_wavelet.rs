@@ -6,6 +6,7 @@
 //! neighbouring low/high coefficients; only outer image edges are symmetric.
 
 use crate::{RawError, Result};
+use rayon::prelude::*;
 
 #[derive(Clone, Debug)]
 pub(crate) struct Band {
@@ -16,10 +17,6 @@ pub(crate) struct Band {
 
 fn corrupt() -> RawError {
     RawError::Corrupt("invalid CRX wavelet subband geometry".into())
-}
-
-fn checked_sample(v: i64) -> Result<i32> {
-    i32::try_from(v).map_err(|_| RawError::Corrupt("CRX wavelet coefficient overflow".into()))
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -34,40 +31,112 @@ fn sizes(length: usize, before: bool, after: bool) -> (usize, usize) {
     (length.div_ceil(2) + usize::from(after && length.is_multiple_of(2)), length / 2 + usize::from(before) + usize::from(after))
 }
 
+/// Whether a lifted value still fits the i32 coefficient range.
+fn fits(value: i64) -> bool {
+    i32::try_from(value).is_ok()
+}
+
+fn overflow() -> RawError {
+    RawError::Corrupt("CRX wavelet coefficient overflow".into())
+}
+
 fn inverse_line(low: &[i32], high: &[i32], out: &mut [i32], before: bool, after: bool) -> Result<()> {
     let (low_count, high_count) = sizes(out.len(), before, after);
     if out.is_empty() || low.len() != low_count || high.len() != high_count {
         return Err(corrupt());
     }
-    if high.is_empty() {
+    let Some(&last_high) = high.last() else {
         let value = low.first().copied().ok_or_else(corrupt)?;
         *out.first_mut().ok_or_else(corrupt)? = value;
         return Ok(());
-    }
+    };
     // The high-pass storage starts at -1 when there is a preceding tile.
     // Only absent external neighbours are reflected at the image boundary.
-    let high_at = |index: usize| -> Result<i32> { high.get(index.min(high.len().saturating_sub(1))).copied().ok_or_else(corrupt) };
-    let even = |i: usize| -> Result<i32> {
-        let left = high_at((i + usize::from(before)).saturating_sub(1))?;
-        let right = high_at(i + usize::from(before))?;
-        let update = (i64::from(left) + i64::from(right) + 2).div_euclid(4);
-        checked_sample(i64::from(*low.get(i).ok_or_else(corrupt)?) - update)
+    let shift = usize::from(before);
+    let high_at = |index: usize| i64::from(high.get(index).copied().unwrap_or(last_high));
+    let even = |i: usize, value: i32| i64::from(value) - ((high_at((i + shift).saturating_sub(1)) + high_at(i + shift) + 2) >> 2);
+    let mut in_range = true;
+    for (i, (slot, &value)) in out.iter_mut().step_by(2).zip(low).enumerate() {
+        let lifted = even(i, value);
+        in_range &= fits(lifted);
+        *slot = lifted as i32;
+    }
+    // With a following tile, the last odd sample's right neighbour is the even sample past the end.
+    let length = out.len();
+    let past_end = if after && length.is_multiple_of(2) { low.get(length / 2).map(|&value| even(length / 2, value)) } else { None };
+    in_range &= past_end.is_none_or(fits);
+    for i in 0..length / 2 {
+        let left = out.get(2 * i).copied().map_or(0, i64::from);
+        let right = out.get(2 * i + 2).copied().map(i64::from).or(past_end).unwrap_or(left);
+        let lifted = high_at(i + shift) + ((left + right) >> 1);
+        in_range &= fits(lifted);
+        if let Some(slot) = out.get_mut(2 * i + 1) {
+            *slot = lifted as i32;
+        }
+    }
+    if in_range { Ok(()) } else { Err(overflow()) }
+}
+
+/// `out = low - floor((left + right + 2) / 4)` per column: one even row of the vertical lifting.
+fn even_row(out: &mut [i32], low: &[i32], left: &[i32], right: &[i32]) -> bool {
+    let mut in_range = true;
+    for (((slot, &l), &a), &b) in out.iter_mut().zip(low).zip(left).zip(right) {
+        let lifted = i64::from(l) - ((i64::from(a) + i64::from(b) + 2) >> 2);
+        in_range &= fits(lifted);
+        *slot = lifted as i32;
+    }
+    in_range
+}
+
+/// `out = high + floor((above + below) / 2)` per column: one odd row of the vertical lifting.
+fn odd_row(out: &mut [i32], high: &[i32], above: &[i32], below: &[i32]) -> bool {
+    let mut in_range = true;
+    for (((slot, &h), &a), &b) in out.iter_mut().zip(high).zip(above).zip(below) {
+        let lifted = i64::from(h) + ((i64::from(a) + i64::from(b)) >> 1);
+        in_range &= fits(lifted);
+        *slot = lifted as i32;
+    }
+    in_range
+}
+
+/// [`inverse_line`] applied to every column of `out`, on whole rows instead of strided columns.
+///
+/// `rows` holds the low-pass rows, then the high-pass rows, each `width` wide. Runs in parallel over
+/// pairs of output rows: each pair lifts its even row, recomputes the next even row (the following
+/// pair's, or the one a following tile supplies past the end) and lifts its odd row from both.
+fn inverse_columns(rows: &[i32], out: &mut [i32], width: usize, before: bool, after: bool) -> Result<()> {
+    let height = out.len().checked_div(width).filter(|&h| h > 0 && h * width == out.len()).ok_or_else(corrupt)?;
+    let (low_count, high_count) = sizes(height, before, after);
+    if rows.len() != (low_count + high_count) * width {
+        return Err(corrupt());
+    }
+    let (low, high) = (rows.get(..low_count * width).ok_or_else(corrupt)?, rows.get(low_count * width..).ok_or_else(corrupt)?);
+    let low_row = |i: usize| low.get(i * width..(i + 1) * width).ok_or_else(corrupt);
+    let Some(last_high) = high_count.checked_sub(1) else {
+        let first = out.get_mut(..width).ok_or_else(corrupt)?;
+        first.copy_from_slice(low_row(0)?);
+        return Ok(());
     };
-    for i in 0..out.len().div_ceil(2) {
-        *out.get_mut(i * 2).ok_or_else(corrupt)? = even(i)?;
-    }
-    for i in 0..out.len() / 2 {
-        let left = out.get(i * 2).copied().ok_or_else(corrupt)?;
-        let right = match out.get(i * 2 + 2).copied() {
-            Some(value) => value,
-            None if after => even(i + 1)?,
-            None => left,
-        };
-        let prediction = (i64::from(left) + i64::from(right)).div_euclid(2);
-        let value = high_at(i + usize::from(before))?;
-        *out.get_mut(i * 2 + 1).ok_or_else(corrupt)? = checked_sample(i64::from(value) + prediction)?;
-    }
-    Ok(())
+    let high_row = |i: usize| {
+        let i = i.min(last_high);
+        high.get(i * width..(i + 1) * width).ok_or_else(corrupt)
+    };
+    let shift = usize::from(before);
+    out.par_chunks_mut(2 * width).enumerate().try_for_each_init(Vec::new, |next, (i, pair)| -> Result<()> {
+        let (even, odd) = pair.split_at_mut(width);
+        let mut in_range = even_row(even, low_row(i)?, high_row((i + shift).saturating_sub(1))?, high_row(i + shift)?);
+        if !odd.is_empty() {
+            let below: &[i32] = if 2 * i + 2 < height || after {
+                next.resize(width, 0);
+                in_range &= even_row(next, low_row(i + 1)?, high_row(i + shift)?, high_row(i + shift + 1)?);
+                next.as_slice()
+            } else {
+                &*even
+            };
+            in_range &= odd_row(odd, high_row(i + shift)?, even, below);
+        }
+        if in_range { Ok(()) } else { Err(overflow()) }
+    })
 }
 
 fn valid_band(band: &Band, width: usize, height: usize) -> bool {
@@ -97,32 +166,18 @@ pub(crate) fn inverse_level(ll: &Band, hl: &Band, lh: &Band, hh: &Band, width: u
     let mut temporary = zeroed(intermediate_count)?;
     // CRX analysis is vertical then horizontal. Integer rounding means that
     // synthesis must reverse that order, including for quantized subbands.
-    for y in 0..lhgt + hhgt {
+    temporary.par_chunks_mut(width).enumerate().try_for_each(|(y, row)| {
         let (lo, hi, by) = if y < lhgt { (ll, hl, y) } else { (lh, hh, y - lhgt) };
         inverse_line(
             lo.data.get(by * lw..(by + 1) * lw).ok_or_else(corrupt)?,
             hi.data.get(by * hw..(by + 1) * hw).ok_or_else(corrupt)?,
-            temporary.get_mut(y * width..(y + 1) * width).ok_or_else(corrupt)?,
+            row,
             edges.left,
             edges.right,
-        )?;
-    }
+        )
+    })?;
     let mut data = zeroed(count)?;
-    let mut low = zeroed(lhgt)?;
-    let mut high = zeroed(hhgt)?;
-    let mut column = zeroed(height)?;
-    for x in 0..width {
-        for (y, value) in low.iter_mut().enumerate() {
-            *value = temporary.get(y * width + x).copied().ok_or_else(corrupt)?;
-        }
-        for (y, value) in high.iter_mut().enumerate() {
-            *value = temporary.get((y + lhgt) * width + x).copied().ok_or_else(corrupt)?;
-        }
-        inverse_line(&low, &high, &mut column, edges.top, edges.bottom)?;
-        for (y, &value) in column.iter().enumerate() {
-            *data.get_mut(y * width + x).ok_or_else(corrupt)? = value;
-        }
-    }
+    inverse_columns(&temporary, &mut data, width, edges.top, edges.bottom)?;
     Ok(Band { width, height, data })
 }
 
@@ -333,6 +388,141 @@ mod tests {
                 (0..9).flat_map(|y| (tile * 20..tile * 20 + 20).map(move |x| ((x * 23 + y * 37 + x * y * 7) % 101) - 50)).collect();
             assert_eq!(reconstruct(&bands, 20, 9, 3, edges).unwrap(), expected);
             assert!(reconstruct(&bands, 20, 9, 3, TileEdges::default()).is_err());
+        }
+    }
+
+    /// The lifting before the row-wise rewrite: a checked closure per sample, as a reference.
+    fn reference_line(low: &[i32], high: &[i32], out: &mut [i32], before: bool, after: bool) -> Result<()> {
+        let (low_count, high_count) = sizes(out.len(), before, after);
+        if out.is_empty() || low.len() != low_count || high.len() != high_count {
+            return Err(corrupt());
+        }
+        if high.is_empty() {
+            out[0] = low[0];
+            return Ok(());
+        }
+        let checked = |v: i64| i32::try_from(v).map_err(|_| overflow());
+        let high_at = |index: usize| high[index.min(high.len() - 1)];
+        let even = |i: usize| -> Result<i32> {
+            let left = high_at((i + usize::from(before)).saturating_sub(1));
+            let right = high_at(i + usize::from(before));
+            checked(i64::from(low[i]) - (i64::from(left) + i64::from(right) + 2).div_euclid(4))
+        };
+        for i in 0..out.len().div_ceil(2) {
+            out[i * 2] = even(i)?;
+        }
+        for i in 0..out.len() / 2 {
+            let left = out[i * 2];
+            let right = match out.get(i * 2 + 2).copied() {
+                Some(value) => value,
+                None if after => even(i + 1)?,
+                None => left,
+            };
+            out[i * 2 + 1] = checked(i64::from(high_at(i + usize::from(before))) + (i64::from(left) + i64::from(right)).div_euclid(2))?;
+        }
+        Ok(())
+    }
+
+    /// One level before the row-wise rewrite: horizontal lines, then strided columns.
+    fn reference_level(bands: &[Band; 4], width: usize, height: usize, edges: TileEdges) -> Result<Vec<i32>> {
+        let [ll, hl, lh, hh] = bands;
+        let (lhgt, hhgt) = sizes(height, edges.top, edges.bottom);
+        let mut temporary = vec![0; width * (lhgt + hhgt)];
+        for y in 0..lhgt + hhgt {
+            let (lo, hi, by) = if y < lhgt { (ll, hl, y) } else { (lh, hh, y - lhgt) };
+            reference_line(
+                &lo.data[by * lo.width..(by + 1) * lo.width],
+                &hi.data[by * hi.width..(by + 1) * hi.width],
+                &mut temporary[y * width..(y + 1) * width],
+                edges.left,
+                edges.right,
+            )?;
+        }
+        let mut data = vec![0; width * height];
+        let mut column = vec![0; height];
+        for x in 0..width {
+            let low: Vec<i32> = (0..lhgt).map(|y| temporary[y * width + x]).collect();
+            let high: Vec<i32> = (lhgt..lhgt + hhgt).map(|y| temporary[y * width + x]).collect();
+            reference_line(&low, &high, &mut column, edges.top, edges.bottom)?;
+            for (y, &value) in column.iter().enumerate() {
+                data[y * width + x] = value;
+            }
+        }
+        Ok(data)
+    }
+
+    fn xorshift(seed: &mut u64) -> u64 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 7;
+        *seed ^= *seed << 17;
+        *seed
+    }
+
+    /// Small coefficients, or (with `extreme`) values near the i32 limits so lifting can overflow.
+    fn coefficients(seed: &mut u64, count: usize, extreme: bool) -> Vec<i32> {
+        (0..count)
+            .map(|_| {
+                let r = xorshift(seed);
+                if extreme && r.is_multiple_of(5) {
+                    if r & 32 == 0 { i32::MAX - (r >> 40) as i32 % 4 } else { i32::MIN + (r >> 40) as i32 % 4 }
+                } else {
+                    (r % 2001) as i32 - 1000
+                }
+            })
+            .collect()
+    }
+
+    const EDGE_CASES: [(bool, bool); 4] = [(false, false), (true, false), (false, true), (true, true)];
+
+    #[test]
+    fn line_lifting_matches_the_reference_for_every_length_and_edge() {
+        let mut seed = 0x0123_4567_89ab_cdef;
+        for length in 1..=40 {
+            for (before, after) in EDGE_CASES {
+                let (low_count, high_count) = sizes(length, before, after);
+                for extreme in [false, true] {
+                    let low = coefficients(&mut seed, low_count, extreme);
+                    let high = coefficients(&mut seed, high_count, extreme);
+                    let (mut fast, mut reference) = (vec![0; length], vec![0; length]);
+                    let fast_result = inverse_line(&low, &high, &mut fast, before, after);
+                    let reference_result = reference_line(&low, &high, &mut reference, before, after);
+                    let case = format!("length {length}, before {before}, after {after}, extreme {extreme}");
+                    assert_eq!(fast_result.is_ok(), reference_result.is_ok(), "{case}");
+                    assert_eq!(
+                        fast_result.as_ref().err().map(ToString::to_string),
+                        reference_result.as_ref().err().map(ToString::to_string),
+                        "{case}"
+                    );
+                    if fast_result.is_ok() {
+                        assert_eq!(fast, reference, "{case}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn row_wise_level_matches_column_lifting_for_every_size_and_edge() {
+        let mut seed = 0xfeed_beef_dead_cafe;
+        for width in 1..=17 {
+            for height in 1..=17 {
+                for (left, right) in EDGE_CASES {
+                    for (top, bottom) in EDGE_CASES {
+                        let edges = TileEdges { left, right, top, bottom };
+                        let (lw, hw) = sizes(width, left, right);
+                        let (lhgt, hhgt) = sizes(height, top, bottom);
+                        // Overflow cases on the smaller sizes only; they fail early and are cheap.
+                        let extreme = width * height < 40 && xorshift(&mut seed).is_multiple_of(2);
+                        let mut band = |w, h| Band { width: w, height: h, data: coefficients(&mut seed, w * h, extreme) };
+                        let bands = [band(lw, lhgt), band(hw, lhgt), band(lw, hhgt), band(hw, hhgt)];
+                        let fast = inverse_level(&bands[0], &bands[1], &bands[2], &bands[3], width, height, edges);
+                        let reference = reference_level(&bands, width, height, edges);
+                        let case = format!("{width}x{height}, {edges:?}, extreme {extreme}");
+                        assert_eq!(fast.as_ref().ok().map(|band| &band.data), reference.as_ref().ok(), "{case}");
+                        assert_eq!(fast.as_ref().err().map(ToString::to_string), reference.as_ref().err().map(ToString::to_string), "{case}");
+                    }
+                }
+            }
         }
     }
 }
