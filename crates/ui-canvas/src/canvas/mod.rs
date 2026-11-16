@@ -37,7 +37,7 @@ pub use words::CanvasWords;
 pub use tool::tool_probe;
 pub use tool::{CanvasTool, NoTool, ToolAccess, ToolAction, ToolAnchor, ToolClaims, ToolContext, ToolKey, ToolPointer, ViewEase};
 pub use tool_groups::{PickStep, tool_pick};
-pub use tool_host::{ContextRequest, StandInKey, ToolHost, ToolHostResponse, ToolInput, ToolReadout, ViewPan};
+pub use tool_host::{ContextRequest, StandInKey, ToolHost, ToolHostResponse, ToolInput, ToolReadout, ViewPan, tool_pass};
 
 mod raster_source;
 pub use raster_source::{PixelRect, RasterSource};
@@ -106,6 +106,7 @@ use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
 use crate::runtime::lock_keys;
+use crate::runtime::measure;
 use crate::runtime::motion::{Animate as _, spec};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::geometry::crop::normalized_angle;
@@ -481,6 +482,23 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// The tool host's input of this pass: settled in `update`, so the body and `finish` read the same.
+    fn tool_pass(&self, cx: &Cx<'_, Self>) -> ToolPass {
+        let press = Self::background_press(cx).0;
+        let caps_lock = lock_keys::caps_lock(&cx.response.ctx);
+        let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock);
+        ToolPass {
+            id: cx.response.id,
+            rect: cx.response.rect,
+            press,
+            space,
+            view: self.settled.map(|settled| settled.target).filter(|target| Some(*target) != self.given),
+            snap: self.snapped(cx.env.shell().os),
+            document: self.document_size(),
+            navigation: self.navigation,
+        }
+    }
+
     /// Shows the body zoomed and moved by `transform`, so controls and members keep canvas-space geometry.
     #[must_use]
     pub fn transform(mut self, transform: CanvasTransform) -> Self {
@@ -489,7 +507,7 @@ impl<'a> Canvas<'a> {
     }
 }
 
-/// What a canvas reports: its response and the press the tool gets.
+/// What a canvas reports: its response and the press the tool got.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct CanvasOutput {
@@ -498,25 +516,18 @@ pub struct CanvasOutput {
     /// The press on the background part: a press no canvas control claimed. A middle-button press pans the view and
     /// is never a tool press, so this is idle while one runs.
     pub press: PressState,
-    /// The view on screen and the interface scale, for a canvas given a view. [`ToolHost::run`] hands it to the tool.
+    /// The view on screen and the interface scale, for a canvas given a view.
     pub space: Option<CanvasSpace>,
     /// The canvas's view of this pass, when it differs from the view the app gave: this pass's rect, the first fit,
     /// the wheel, a middle-button pan, the view commands and the Overscroll clamp. A zoom that eases reports its
     /// target; the canvas shows the way there itself. [`ToolHost::run`] carries it in [`ToolHostResponse::view`]
     /// when no tool set a view, so an app with a tool host copies that one view.
     pub view: Option<CanvasView>,
-    pub(crate) snap: Option<Snap>,
-    pub(crate) document: Option<Size>,
-    pub(crate) navigation: NavigationOptions,
+    /// The pass's tool input, for the callers that still run the host after the canvas (see [`ToolHost::run`]).
+    pub(crate) pass: ToolPass,
 }
 
 impl CanvasOutput {
-    /// `view` as the canvas keeps it: inside the document's edges with Overscroll off. The tool host passes a tool's
-    /// view through it.
-    pub(crate) fn clamped(&self, view: CanvasView) -> CanvasView {
-        clamped(view, self.document, &self.navigation)
-    }
-
     /// Where a primary press on the background was released without a drag. A tool that creates geometry opens its
     /// command form at this point.
     pub fn click_at(&self) -> Option<Pos2> {
@@ -524,6 +535,50 @@ impl CanvasOutput {
             PressPhase::Release { start, pos, click: true, .. } if start.button == PointerButton::Primary => Some(pos),
             _ => None,
         }
+    }
+}
+
+/// Transitional: a host run after the canvas reads the output's copy of the pass. Removed with the last such caller.
+impl AsRef<ToolPass> for CanvasOutput {
+    fn as_ref(&self) -> &ToolPass {
+        &self.pass
+    }
+}
+
+/// What the tool host of a canvas runs on in one pass: the canvas's id and rect, the press its background part got,
+/// its space, view, snapping and navigation. The canvas settles these before its body runs and publishes them to the
+/// body ([`tool_pass`]), so the body runs the host after its canvas controls (whose parts take a press first) and
+/// before its picture, and the picture shows what this pass's press and moves did. A measuring run publishes none:
+/// the host never runs in one.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ToolPass {
+    /// The canvas's id, which keys the host's state.
+    pub id: egui::Id,
+    /// The canvas's rect.
+    pub rect: Rect,
+    /// The press on the background part, as [`CanvasOutput::press`].
+    pub press: PressState,
+    /// The view on screen and the interface scale, for a canvas given a view. The host hands it to the tool.
+    pub space: Option<CanvasSpace>,
+    /// The canvas's view of this pass, when it differs from the view the app gave, as [`CanvasOutput::view`].
+    pub view: Option<CanvasView>,
+    pub(crate) snap: Option<Snap>,
+    pub(crate) document: Option<Size>,
+    pub(crate) navigation: NavigationOptions,
+}
+
+impl ToolPass {
+    /// `view` as the canvas keeps it: inside the document's edges with Overscroll off. The tool host passes a tool's
+    /// view through it.
+    pub(crate) fn clamped(&self, view: CanvasView) -> CanvasView {
+        clamped(view, self.document, &self.navigation)
+    }
+}
+
+impl AsRef<ToolPass> for ToolPass {
+    fn as_ref(&self) -> &ToolPass {
+        self
     }
 }
 
@@ -582,11 +637,13 @@ impl Component for Canvas<'_> {
         };
     }
 
-    /// The canvas's [`CanvasSpace`] for its body; a canvas without a view hides an outer canvas's.
+    /// The canvas's [`CanvasSpace`] and [`ToolPass`] for its body; a canvas without a view hides an outer canvas's
+    /// space.
     fn content_env(&self, cx: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
-        let background = BackgroundPress::of(&Self::background_press(cx).0, self.context_key);
-        space::publish(values, self.space(cx.response.id, cx.env.scale().0, background, lock_keys::caps_lock(&cx.response.ctx)));
-        snap::publish(values, self.snapped(cx.env.shell().os));
+        let pass = self.tool_pass(cx);
+        space::publish(values, pass.space);
+        snap::publish(values, pass.snap.clone());
+        tool_host::publish(values, (!measure::active(&cx.response.ctx)).then_some(pass));
     }
 
     /// The background part the active tool gets. It sits in the canvas root's space, the parent layer's. A press on it
@@ -600,13 +657,8 @@ impl Component for Canvas<'_> {
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
-        let press = Self::background_press(&cx).0;
-        let caps_lock = lock_keys::caps_lock(&cx.response.ctx);
-        let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock);
-        let view = self.settled.map(|settled| settled.target).filter(|target| Some(*target) != self.given);
-        let document = self.document_size();
-        let snap = self.snapped(cx.env.shell().os);
-        CanvasOutput { response: cx.response.clone(), press, space, view, snap, document, navigation: self.navigation }
+        let pass = self.tool_pass(&cx);
+        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, pass }
     }
 }
 

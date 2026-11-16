@@ -8,6 +8,7 @@ use craft_keymap::Mods;
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, MomentaryTool,
     NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer, canvas_space,
+    tool_pass,
 };
 use craft_ui::contract::{Bind, Lazy, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
@@ -1394,4 +1395,63 @@ fn show_transformation_values_gates_the_readouts_paint_and_never_the_hud() {
         "Show Transformation Values off: nothing paints, the rows are still reported"
     );
     assert_eq!(readout_during_a_drag(true, Some(false)), (true, true), "a hud paints with Show Transformation Values off");
+}
+
+/// A tool that keeps the points of its gesture: the press and every drag.
+#[derive(Default)]
+struct Trail {
+    points: Vec<Pos2>,
+}
+
+impl CanvasTool for Trail {
+    fn press(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.points.push(pointer.pos);
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, pointer: &ToolPointer, _: &mut ToolContext<'_>) {
+        self.points.push(pointer.pos);
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("a test tool")
+    }
+}
+
+/// Input, tool, picture: the host runs in the canvas's body before the picture, so with one pass a frame the picture
+/// of each frame already holds that frame's press and moves.
+#[trial]
+fn the_picture_of_a_pass_shows_that_passes_press_and_moves() {
+    let tool = Rc::new(RefCell::new(Trail::default()));
+    // How many of the tool's points the picture of the last pass drew.
+    let drawn = Rc::new(Cell::new(0_usize));
+    let (held, picture) = (Rc::clone(&tool), Rc::clone(&drawn));
+    let mut fixture = Fixture::new(move |ui| {
+        let _ = Canvas::new("Document").document(DOCUMENT).show(ui, |ui, body| {
+            if let Some(pass) = tool_pass(&body.env) {
+                let _ = ToolHost::new().run(ui, &pass, &mut *held.borrow_mut());
+            }
+            picture.set(held.borrow().points.len());
+        });
+    });
+    fixture.settle();
+    fixture.ctx().options_mut(|options| options.max_passes = std::num::NonZeroUsize::MIN);
+    let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
+    fixture.frame(vec![pointer::moved(centre)]);
+    let mut frames = vec![vec![pointer::press(centre)]];
+    frames.extend((1..=4).map(|step| vec![pointer::moved(centre + BY * (step as f32 / 4.0))]));
+    for events in frames {
+        let before = tool.borrow().points.len();
+        fixture.frame(events);
+        assert_eq!(fixture.passes(), 1, "one pass a frame");
+        let points = tool.borrow().points.len();
+        assert!(points > before, "the frame's press or move reached the tool ({before} -> {points})");
+        assert_eq!(drawn.get(), points, "the picture of the frame holds every point the tool took in it");
+    }
 }
