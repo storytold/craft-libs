@@ -15,21 +15,21 @@ default = ["system"]
 system = ["dep:fontique"]
 
 [dependencies]
-harfrust = "0.13"
+harfrust = "0.16"
 kurbo = { workspace = true }
-skrifa = { version = "0.47", default-features = false, features = ["std"] }
+skrifa = { version = "0.48", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 unicode-bidi = "0.3.18"
 unicode-segmentation = "1.13"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-fontique = { version = "0.11.1", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
+fontique = { version = "0.13.0", default-features = false, features = ["system", "fontconfig-dlopen"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-registry = "0.6"
+windows-registry = "0.100"
 
 [dev-dependencies]
-write-fonts = "0.54"
+write-fonts = "0.56"
 
 [lints]
 workspace = true
