@@ -587,6 +587,10 @@ fn custom_mark(ctx: &WalkCtx<'_>, cp: u32) -> Option<(String, u32)> {
         if (c as u32) < 0x20 {
             break;
         }
+        // A symbol character is the placeholder U+0028 with sprmCSymbol naming it, as in the
+        // text; the mark keeps the character (it has no font of its own).
+        let symbol = (c == '(').then(|| fc_of(at).and_then(|fc| symbol_operand(ctx.chpx_bins.chpx(ctx.word, fc)))).flatten();
+        let c = symbol.and_then(|(_, xchar)| char::from_u32(u32::from(xchar))).unwrap_or(c);
         mark.push(c);
         at = at.saturating_add(units.max(1));
     }
@@ -637,17 +641,16 @@ fn attach_sections(doc: &mut Document, paras: &mut [table::ParaOut], sects: &[se
         props.footers = HeaderSet { even: id_of(2), default: id_of(3), first: id_of(5) };
         props
     };
-    for (si, sec) in sects.iter().enumerate() {
-        let is_final = si + 1 == sects.len() || sec.end_cp >= ccp_text;
-        if is_final {
-            continue; // the last section, below
-        }
+    // The final section is the first that reaches the end of the main text (in a malformed
+    // PlcfSed, sections after it are ignored), else the last one.
+    let final_si = sects.iter().position(|s| s.end_cp >= ccp_text).unwrap_or(sects.len().saturating_sub(1));
+    for (si, sec) in sects.iter().enumerate().take(final_si) {
         if let Some(p) = ending.get(&sec.end_cp).and_then(|&i| paras.get_mut(i)) {
             p.para.section = Some(Box::new(with_parts(si, &sec.props)));
         }
     }
-    if let Some(last) = sects.last() {
-        doc.last_section = with_parts(sects.len() - 1, &last.props);
+    if let Some(last) = sects.get(final_si) {
+        doc.last_section = with_parts(final_si, &last.props);
     }
 }
 
@@ -840,14 +843,8 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         // blocking every later one.
         while marks.peek().is_some_and(|&(mcp, _)| *mcp <= cp) {
             if let Some((_, m)) = marks.next() {
-                let obj = match m {
-                    notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
-                    notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
-                    notes::Mark::CommentStart(id) => InlineObject::CommentStart { id: *id },
-                    notes::Mark::CommentEnd(id) => InlineObject::CommentEnd { id: *id },
-                };
                 pb.push('\u{FFFC}', CharProps::default());
-                pb.objects.push(obj);
+                pb.objects.push(mark_object(m));
             }
         }
         let (c, units) = match ctx.pieces.char_at(ctx.word, cp) {
@@ -1036,6 +1033,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         }
         cp = cp.saturating_add(units);
     }
+    close_marks(marks.take_while(|&&(mcp, _)| mcp <= cp_end), &mut out, &mut pb);
     if !pb.text.is_empty() {
         let done = pb;
         out.push(ParaOut {
@@ -1045,6 +1043,40 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         });
     }
     out
+}
+
+/// Boundaries left at the end of a walk (a range ending after the last paragraph mark): they
+/// close in the last paragraph, as Word ends them, not in one of their own; with text after the
+/// last mark, in that text.
+fn close_marks<'m>(marks: impl Iterator<Item = &'m (u32, notes::Mark)>, out: &mut [ParaOut], pb: &mut ParaBuild) {
+    for (_, m) in marks {
+        match out.last_mut().filter(|_| pb.text.is_empty()) {
+            Some(last) => {
+                let p = &mut last.para;
+                let len = '\u{FFFC}'.len_utf8();
+                match p.runs.last_mut() {
+                    Some(r) if r.props == CharProps::default() => r.len += len,
+                    _ => p.runs.push(Run { len, props: CharProps::default() }),
+                }
+                p.text.push('\u{FFFC}');
+                p.objects.push(mark_object(m));
+            }
+            None => {
+                pb.push('\u{FFFC}', CharProps::default());
+                pb.objects.push(mark_object(m));
+            }
+        }
+    }
+}
+
+/// The inline object a bookmark or comment boundary becomes.
+fn mark_object(m: &notes::Mark) -> InlineObject {
+    match m {
+        notes::Mark::Start(name) => InlineObject::BookmarkStart { name: name.clone() },
+        notes::Mark::End(name) => InlineObject::BookmarkEnd { name: name.clone() },
+        notes::Mark::CommentStart(id) => InlineObject::CommentStart { id: *id },
+        notes::Mark::CommentEnd(id) => InlineObject::CommentEnd { id: *id },
+    }
 }
 
 /// Field assembly: `instr` collects everything before the separator (nested fields
