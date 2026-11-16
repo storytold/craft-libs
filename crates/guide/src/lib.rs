@@ -111,17 +111,26 @@ impl GuideController {
         let dim_color = Color32::from_black_alpha(160);
         painter.rect_filled(screen_rect, 0.0, dim_color);
 
-        // 2. Cutout target spotlight if found
+        // 2. Cutout target spotlight if found and valid on screen
         if let Some(&target_rect) = self.registered_targets.get(&step.target_id) {
-            let padded = target_rect.expand(6.0);
-            painter.rect_stroke(padded, 4.0, egui::Stroke::new(2.5, Color32::from_rgb(0, 120, 212)), egui::StrokeKind::Outside);
+            // Guard against zero-area or off-screen bounding boxes
+            if target_rect.is_positive() && screen_rect.intersects(target_rect) {
+                let clamped = target_rect.intersect(screen_rect);
+                let padded = clamped.expand(6.0);
+                painter.rect_stroke(padded, 4.0, egui::Stroke::new(2.5, Color32::from_rgb(0, 120, 212)), egui::StrokeKind::Outside);
 
-            // Popover callout card next to target
-            let card_pos = Pos2::new(padded.center().x - 140.0, (padded.bottom() + 12.0).min(screen_rect.bottom() - 140.0));
-            let card_rect = Rect::from_min_size(card_pos, Vec2::new(280.0, 110.0));
+                // Popover callout card clamped safely within screen bounds
+                let card_x = (padded.center().x - 140.0).clamp(screen_rect.left() + 16.0, (screen_rect.right() - 296.0).max(screen_rect.left()));
+                let card_y = if padded.bottom() + 130.0 <= screen_rect.bottom() {
+                    padded.bottom() + 12.0
+                } else {
+                    (padded.top() - 122.0).max(screen_rect.top() + 16.0)
+                };
+                let card_rect = Rect::from_min_size(Pos2::new(card_x, card_y), Vec2::new(280.0, 110.0));
 
-            painter.rect_filled(card_rect, 8.0, Color32::from_rgb(255, 255, 255));
-            painter.rect_stroke(card_rect, 8.0, egui::Stroke::new(1.0, Color32::from_gray(210)), egui::StrokeKind::Outside);
+                painter.rect_filled(card_rect, 8.0, Color32::from_rgb(255, 255, 255));
+                painter.rect_stroke(card_rect, 8.0, egui::Stroke::new(1.0, Color32::from_gray(210)), egui::StrokeKind::Outside);
+            }
         }
     }
 }
