@@ -1,0 +1,27 @@
+[package]
+name = "craft-proof-hybrid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "High-performance hybrid spellchecking & neural proofing engine combining native OS checkers, Hunspell, and contextual AI"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-proof = { path = "../proof" }
+craft-i18n = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSRange"] }
+objc2-app-kit = { version = "0.3", features = ["NSSpellChecker"] }
+
+[features]
+default = []
+ai-backend = []
