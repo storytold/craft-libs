@@ -9,7 +9,7 @@
 //! character and paragraph formatting listed below, table rows, the paragraph styles (with
 //! their formatting), the sections, the headers and footers, the footnotes and endnotes (with
 //! their separators and options), the comments, the character styles of runs, and paragraph and
-//! cell borders and shading, and inline pictures.
+//! cell borders and shading, inline pictures, and the bookmarks of the main text.
 //!
 //! The layout as observed:
 //!
@@ -343,14 +343,17 @@ impl Fib6 {
     }
 
     /// A Word 97 FIB holding the pairs whose structures have the Word 97 shape here or that
-    /// [`crate::comments`] reads in their Word 6 shape: the sections', the notes' and the comments'
-    /// (4, 5 and the authors' 36), all in the WordDocument stream, which takes the Table stream's place), so
-    /// the Word 97 readers of those read them. The rest are left out: the header table has another
-    /// shape ([`header_stories`]), and the bookmarks' names are 8-bit.
+    /// [`crate::comments`] and [`crate::notes::parse_bookmarks`] read in their Word 6 shape: the
+    /// sections', the notes', the comments' (4, 5 and the authors' 36) and the bookmarks' (21-23),
+    /// all in the WordDocument stream, which takes the Table stream's place, so the Word 97
+    /// readers of those read them. The header table is left out: it has another shape
+    /// ([`header_stories`]).
     pub(crate) fn as_word97(&self) -> crate::fib::Fib {
         use crate::fib::pair;
         let mut pairs = vec![0; PAIRS * 2];
-        for i in [pair::PLCF_FND_REF, pair::PLCF_FND_TXT, 4, 5, pair::PLCF_SED, 36, pair::PLCF_END_REF, pair::PLCF_END_TXT] {
+        let bookmarks = [pair::STTBF_BKMK, pair::PLCF_BKF, pair::PLCF_BKL];
+        let notes = [pair::PLCF_FND_REF, pair::PLCF_FND_TXT, pair::PLCF_END_REF, pair::PLCF_END_TXT];
+        for i in [4, 5, pair::PLCF_SED, 36].into_iter().chain(notes).chain(bookmarks) {
             if let (Some(&(fc, lcb)), Some(slot)) = (self.pairs.get(i), pairs.get_mut(i * 2..i * 2 + 2)) {
                 slot.copy_from_slice(&[fc, lcb]);
             }

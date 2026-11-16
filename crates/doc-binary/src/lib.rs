@@ -367,7 +367,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     note_parts(&ctx, &mut doc, &endnotes, (edn_base, fib.ccp.edn), NoteKind::Endnote, &mut note_links, &mut pics, max_paragraphs)?;
     // Sorted so the main walk finds each reference by binary search.
     note_links.sort_by_key(|l| l.cp);
-    let mut marks = notes::parse_bookmarks(&table, &fib);
+    let mut marks = notes::parse_bookmarks(&table, &fib, comments::Layout::Word97);
     let atn_base = hdd_base.saturating_add(fib.ccp.hdd);
     let comments = comments::parse(&table, &fib, comments::Layout::Word97);
     comment_parts(&ctx, &mut doc, comments, (atn_base, fib.ccp.atn), &mut marks, &mut pics, max_paragraphs)?;
@@ -450,7 +450,7 @@ fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: u
     let endnotes = notes::parse_notes(word, &fib97, fib::pair::PLCF_END_REF, fib::pair::PLCF_END_TXT);
     note_parts(&ctx, &mut doc, &endnotes, (edn_base, fib.ccp_edn), NoteKind::Endnote, &mut note_links, &mut pics, max_paragraphs)?;
     note_links.sort_by_key(|l| l.cp);
-    let mut marks = Vec::new();
+    let mut marks = notes::parse_bookmarks(word, &fib97, comments::Layout::Word6(content.pieces.default_code_page()));
     let atn_base = hdd_base.saturating_add(fib.ccp_hdd).saturating_add(fib.ccp_mcr);
     let comments = comments::parse(word, &fib97, comments::Layout::Word6(content.pieces.default_code_page()));
     comment_parts(&ctx, &mut doc, comments, (atn_base, fib.ccp_atn), &mut marks, &mut pics, max_paragraphs)?;

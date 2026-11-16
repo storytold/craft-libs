@@ -1842,6 +1842,42 @@ fn hyperlink_target_keeps_the_address_after_a_bare_switch() {
     assert_eq!(super::hyperlink_target(r#"HYPERLINK "http://example.com/a%22b""#), Some("http://example.com/a%22b".into()));
 }
 
+/// `p`'s text with each bookmark start written `[name[` and each end `]name]`, other objects `*`.
+fn with_bookmarks(p: &craft_wordmodel::para::Paragraph) -> String {
+    use craft_wordmodel::para::InlineObject as O;
+    let mut objects = p.objects.iter();
+    p.text
+        .chars()
+        .map(|c| match (c, c == '\u{FFFC}') {
+            (_, true) => match objects.next() {
+                Some(O::BookmarkStart { name }) => format!("[{name}["),
+                Some(O::BookmarkEnd { name }) => format!("]{name}]"),
+                _ => "*".to_string(),
+            },
+            (c, false) => c.to_string(),
+        })
+        .collect()
+}
+
+#[test]
+fn bookmark_ends_follow_ibkl_and_the_end_table_holds_cps_only() {
+    // As Word 2016 writes a bookmark inside another, then a third: the starts in start order
+    // (Outer 0, Inner 4, Last 14), the ends in end order (7, 13, 18), each FBKF's ibkl naming its
+    // end. Read by position, Outer took Inner's end; read with 2-byte data, the 16-byte end
+    // table gave two ends, and Last was dropped.
+    let text = "one two three last\r";
+    let ccp = text.chars().count() as u32;
+    let fbkf: Vec<u8> = [1i16, 0, 2].iter().flat_map(|i| [i.to_le_bytes(), [0, 0]].concat()).collect();
+    let spec = StructSpec {
+        text,
+        extra_pairs: vec![(21, sttbf_bkmk(&["Outer", "Inner", "Last"])), (22, plc(&[0, 4, 14, ccp], &fbkf)), (23, plc(&[7, 13, 18, ccp], &[]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    assert_eq!(with_bookmarks(p0), "[Outer[one [Inner[two]Inner] three]Outer] [Last[last]Last]");
+}
+
 #[test]
 fn bookmarks_become_objects() {
     let text = "Hello world\r";

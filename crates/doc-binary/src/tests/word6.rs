@@ -112,6 +112,8 @@ struct Doc6<'a> {
     /// Comments: (reference CPs, story CPs, the 20-byte ATRDs), and the authors' list (pair 36).
     comments: (&'a [u32], &'a [u32], &'a [u8]),
     owners: &'a [u8],
+    /// Other (pair, bytes) structures, appended as they are.
+    raw_pairs: &'a [(usize, &'a [u8])],
 }
 
 fn put16(v: &mut [u8], at: usize, x: u16) {
@@ -222,6 +224,10 @@ fn word_stream(d: &Doc6) -> Vec<u8> {
     plc(&mut w, 3, d.footnotes.1, &[]);
     plc(&mut w, 46, d.endnotes.0, &frds(d.endnotes.0.len()));
     plc(&mut w, 47, d.endnotes.1, &[]);
+    for (pair, bytes) in d.raw_pairs {
+        pairs.push((*pair, w.len() as u32, bytes.len() as u32));
+        w.extend_from_slice(bytes);
+    }
     if !d.owners.is_empty() {
         pairs.push((36, w.len() as u32, d.owners.len() as u32));
         w.extend_from_slice(d.owners);
@@ -1317,4 +1323,24 @@ fn inline_pictures_are_read() {
     assert_eq!(*crop, [0.1, 50.0 / 600.0, 0.2, 0.25]);
     assert_eq!(media.as_str(), "image1.wmf");
     assert_eq!(doc.media.get("image1.wmf").map(|m| m.as_slice()), Some(wmf));
+}
+
+#[test]
+fn bookmarks_are_read() {
+    // As Word 95 wrote the sample's nested pair, then a hidden one: the names as a u16 byte count
+    // and length-prefixed 8-bit names, the starts with their FBKFs (ibkl, bkc), the ends in end
+    // order. Word 2016 reads Outer as "one two three" and Inner as "two".
+    let mut sttb = vec![0, 0];
+    for n in ["Outer", "Inner", "_Hlt1"] {
+        sttb.push(n.len() as u8);
+        sttb.extend_from_slice(n.as_bytes());
+    }
+    let size = sttb.len() as u16;
+    put16(&mut sttb, 0, size);
+    let cps = |cps: &[u32], data: &[u8]| [cps.iter().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>(), data.to_vec()].concat();
+    let bkf = cps(&[0, 4, 14, 20], &[1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0]);
+    let bkl = cps(&[7, 13, 18, 20], &[]);
+    let raw_pairs: &[(usize, &[u8])] = &[(21, &sttb), (22, &bkf), (23, &bkl)];
+    let doc = read(&word6_file(&Doc6 { text: b"one two three last\r", raw_pairs, ..Default::default() })).expect("opens");
+    assert_eq!(super::with_bookmarks(first_para(&doc)), "[Outer[one [Inner[two]Inner] three]Outer] [_Hlt1[last]_Hlt1]");
 }
