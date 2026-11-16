@@ -672,3 +672,67 @@ fn a_level_live_lines_ends_stand_for_the_sides() {
 fn kurbo_vec(x: f64, y: f64) -> craft_behavior::kurbo::Vec2 {
     craft_behavior::kurbo::Vec2::new(x, y)
 }
+
+/// How far the box's first corner moved from where `RECT` puts it, in screen points (the view is upright at scale 1).
+fn moved_by(h: &Harness) -> Vec2 {
+    let corner = h.state().quad[0];
+    by((corner.x - RECT.x0) as f32, (corner.y - RECT.y0) as f32)
+}
+
+#[trial]
+fn the_box_moves_from_the_first_pointer_move_after_the_press_and_keeps_up_with_no_jump() {
+    let mut h = upright();
+    let slop = craft_ui::testing::input::slop(h.fixture.ctx());
+    // Inside, away from the reference point at the box's centre.
+    let from = h.screen(Point::new(150.0, 120.0));
+    frame(&mut h, vec![pointer::moved(from)]);
+    frame(&mut h, vec![pointer::press(from)]);
+    frame(&mut h, Vec::new());
+    assert!(h.host.borrow().events.is_empty(), "a press alone moves nothing: {:?}", h.host.borrow().events);
+    // One step per frame, a third of the slop each, through the slop and past it.
+    for step in 1..=9 {
+        let offset = by(slop / 3.0 * step as f32, slop / 6.0 * step as f32);
+        frame(&mut h, vec![pointer::moved(from + offset)]);
+        assert!((moved_by(&h) - offset).length() < 1e-3, "step {step}: the box keeps the pointer's offset {offset:?}, moved {:?}", moved_by(&h));
+    }
+    let end = from + by(slop * 3.0, slop * 1.5);
+    frame(&mut h, vec![pointer::release(end)]);
+    frame(&mut h, Vec::new());
+    let events = h.host.borrow().events.clone();
+    assert_eq!(events.iter().filter(|seen| **seen == Seen::Begin).count(), 1, "one gesture: {events:?}");
+    assert_eq!(events.iter().filter(|seen| **seen == Seen::Commit).count(), 1, "one commit: {events:?}");
+
+    // A move inside the slop and a release there still commit the move the user saw.
+    let mut h = upright();
+    let from = h.screen(Point::new(150.0, 120.0));
+    frame(&mut h, vec![pointer::moved(from)]);
+    frame(&mut h, vec![pointer::press(from)]);
+    frame(&mut h, vec![pointer::moved(from + by(slop / 2.0, 0.0))]);
+    frame(&mut h, vec![pointer::release(from + by(slop / 2.0, 0.0))]);
+    frame(&mut h, Vec::new());
+    assert!((moved_by(&h) - by(slop / 2.0, 0.0)).length() < 1e-3, "the box stays where it followed to: {:?}", moved_by(&h));
+    assert_eq!(h.host.borrow().events.last(), Some(&Seen::Commit), "{:?}", h.host.borrow().events);
+}
+
+#[trial]
+fn a_click_on_the_box_moves_nothing_and_a_jittery_click_outside_applies_the_box_as_it_was() {
+    let mut h = upright();
+    let slop = craft_ui::testing::input::slop(h.fixture.ctx());
+    let inside = h.screen(Point::new(150.0, 120.0));
+    frame(&mut h, vec![pointer::moved(inside)]);
+    frame(&mut h, vec![pointer::press(inside)]);
+    frame(&mut h, vec![pointer::release(inside)]);
+    frame(&mut h, Vec::new());
+    assert!(h.host.borrow().events.is_empty(), "a click on the box proposes nothing: {:?}", h.host.borrow().events);
+    assert_eq!(h.state(), BoxState::from_rect(RECT));
+
+    let outside = h.screen(Point::new(340.0, 260.0));
+    frame(&mut h, vec![pointer::moved(outside)]);
+    frame(&mut h, vec![pointer::press(outside)]);
+    frame(&mut h, vec![pointer::moved(outside + by(slop / 2.0, slop / 3.0))]);
+    frame(&mut h, vec![pointer::release(outside + by(slop / 2.0, slop / 3.0))]);
+    frame(&mut h, Vec::new());
+    assert!(h.host.borrow().events.is_empty(), "a jittery click outside turns nothing: {:?}", h.host.borrow().events);
+    assert_eq!(h.state(), BoxState::from_rect(RECT), "the box stays as it was");
+    assert_eq!(h.host.borrow().applied, 1, "the click outside applies");
+}

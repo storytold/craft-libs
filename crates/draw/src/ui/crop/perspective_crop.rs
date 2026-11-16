@@ -22,8 +22,8 @@ use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
 
 use super::words::CropWords;
 
-/// The quad of a perspective crop in document units, corners ordered top left, top right, bottom right, bottom left;
-/// `None` before one is drawn.
+/// The quad of a perspective crop in document units, its corners in the order of the crop's top left, top right,
+/// bottom right, bottom left; `None` before one is drawn.
 pub type PerspectiveQuad = Option<[Point; 4]>;
 
 /// Fewest and most grid steps along a side.
@@ -119,8 +119,9 @@ struct Report {
 /// - Shift on a corner drag keeps the axis the pointer moved less along; Alt on a corner of an upright quad moves the
 ///   neighbouring corners too, so it stays a rectangle.
 /// - With a `shield` the document outside a valid quad is dimmed, under the grid.
-/// - A quad that is not convex or is wound differently from its box draws in the invalid colour without the grid and
-///   cannot be committed.
+/// - The corners stay where the user puts them: a quad wound counter-clockwise (a box flipped on one axis) applies
+///   mirrored, a box turned half way round applies upside down.
+/// - A quad that is not convex draws in the invalid colour without the grid and cannot be committed.
 /// - The quad and its corners are one Tab stop. Page Down and Page Up pick the whole quad or a corner; the arrows move
 ///   the picked corner (1 document unit, Shift 10), or the whole quad when it is picked. Enter applies a valid quad.
 ///   Esc cancels a drag, else discards.
@@ -155,7 +156,7 @@ impl<'a> PerspectiveCropQuad<'a> {
 pub struct PerspectiveCropOutput {
     /// A drag (`Begin` on the first move, `Commit` on release; Esc cancels it) or an arrow key's `Set`.
     pub edit: EditResponse<PerspectiveQuad>,
-    /// Enter while the quad is convex and wound like its box.
+    /// Enter while the quad is convex ([`is_valid`]).
     pub apply: bool,
     /// Esc with no drag.
     pub discard: bool,
@@ -201,7 +202,8 @@ fn upright(q: &[Point; 4]) -> bool {
 ///
 /// - Shift keeps the press position's coordinate of the corner on the axis the drag moved less along.
 /// - Alt on a corner of an upright quad moves the two neighbouring corners one coordinate each, so it stays a
-///   rectangle, put in order when the corner passes the opposite one. A skewed quad's corner moves alone.
+///   rectangle. The corners stay as they lie when the corner passes the opposite one, so the box flips. A skewed
+///   quad's corner moves alone.
 fn dragged(drag: &Drag, to: Point, mods: Mods) -> [Point; 4] {
     match drag.grab {
         Grab::Corner { index, offset } => {
@@ -222,7 +224,6 @@ fn dragged(drag: &Drag, to: Point, mods: Mods) -> [Point; 4] {
                 let (in_row, in_column) = if index % 2 == 0 { (next, prev) } else { (prev, next) };
                 quad[in_row].y = target.y;
                 quad[in_column].x = target.x;
-                return ordered(quad);
             }
             quad
         }
@@ -433,10 +434,15 @@ pub fn ordered(points: [Point; 4]) -> [Point; 4] {
     v
 }
 
-/// Whether `q` (top left, top right, bottom right, bottom left) is a usable perspective crop quad: finite, strictly
-/// convex with every corner angle above about 0.06 degrees, wound clockwise on screen (y down) and at least one unit^2
-/// in area.
+/// Whether `q` (top left, top right, bottom right, bottom left of the crop it maps onto) is a usable perspective crop
+/// quad: finite, strictly convex in either winding, every corner angle above about 0.06 degrees and at least one
+/// unit^2 in area. A quad wound counter-clockwise on screen (a box flipped on one axis) applies mirrored.
 pub fn is_valid(q: &[Point; 4]) -> bool {
+    wound_clockwise(q) || wound_clockwise(&[q[0], q[3], q[2], q[1]])
+}
+
+/// [`is_valid`] for a quad wound clockwise on screen (y down).
+fn wound_clockwise(q: &[Point; 4]) -> bool {
     if !finite(q) {
         return false;
     }

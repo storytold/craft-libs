@@ -27,7 +27,8 @@ fn gesture(fixture: &mut Fixture, target: &Target, by: f32) {
 }
 
 /// A release within slop of a press on a clicking component is one click. A press that moves past slop starts one
-/// drag on a component that drags and is no click on one that does not. The slop is the runtime's: it installs the
+/// drag on a component that drags and is no click on one that does not. A drag part that senses `SETS_ON_PRESS` or
+/// `FOLLOWS_IN_SLOP` begins one gesture within slop too, ended by a Commit. The slop is the runtime's: it installs the
 /// theme's `size.hit.slop` as egui's click distance.
 fn slop_separates_click_from_drag(subject: &Subject) -> Result<(), String> {
     let probe = subject.probe;
@@ -50,11 +51,11 @@ fn slop_separates_click_from_drag(subject: &Subject) -> Result<(), String> {
                 }
             }
             Plan::Drag(Grip { part, .. }) if probe.carries_value() => {
-                // A part whose press sets the value begins its gesture at the press, within slop or not.
-                let on_press = fixture
-                    .root_id()
-                    .is_some_and(|id| crate::runtime::pointer::sensing_parts(fixture.ctx(), id, Sense::SETS_ON_PRESS).contains(&part));
-                for (by, begins) in [(0.5 * slop, usize::from(on_press)), (2.0 * slop, 1)] {
+                // A part whose press sets the value begins its gesture at the press, and one that follows within slop at
+                // the first move: either begins within slop.
+                let senses = |sense: Sense| fixture.root_id().is_some_and(|id| crate::runtime::pointer::part_senses(fixture.ctx(), id, part, sense));
+                let within = senses(Sense::SETS_ON_PRESS) || senses(Sense::FOLLOWS_IN_SLOP);
+                for (by, begins) in [(0.5 * slop, usize::from(within)), (2.0 * slop, 1)] {
                     let mut fixture = input_fixture(story);
                     let Some(grip) = fixture.root_id().and_then(|id| fixture.part(id, part)) else { continue };
                     fixture.take_outputs();
@@ -67,8 +68,8 @@ fn slop_separates_click_from_drag(subject: &Subject) -> Result<(), String> {
                             story.name
                         ));
                     }
-                    if on_press && by < slop && kinds.last() != Some(&EditKind::Commit) {
-                        return Err(format!("{}: a press within slop that sets the value ended {kinds:?}, not with a Commit", story.name));
+                    if within && by < slop && kinds.last() != Some(&EditKind::Commit) {
+                        return Err(format!("{}: a press within slop that begins a gesture ended {kinds:?}, not with a Commit", story.name));
                     }
                 }
             }

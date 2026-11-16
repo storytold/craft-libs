@@ -5,7 +5,7 @@ use bitflags::bitflags;
 bitflags! {
     /// What a root or a part senses. The egui adapter maps the root's sense to egui's.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-    pub struct Sense: u16 {
+    pub struct Sense: u32 {
         /// Hover only.
         const HOVER = 1;
         /// A press released within slop activates.
@@ -45,6 +45,11 @@ bitflags! {
         /// A zoom zone: a vertical wheel over the shape zooms the view of the innermost enclosing taker of the zoom
         /// share (a ruler over its time area). The shape takes no wheel share itself.
         const WHEEL_ZOOMS_VIEW = 32768;
+        /// The gesture begins at the first move after the press, inside slop, and the value follows the pointer from
+        /// there, so it does not jump when the press passes slop. A press released with no move is a click. Declared
+        /// with `DRAG` by a part whose click does nothing a drag could be mistaken for (a transform box's handles).
+        /// The component begins the gesture from `PressPhase::Held`.
+        const FOLLOWS_IN_SLOP = 65536;
     }
 }
 

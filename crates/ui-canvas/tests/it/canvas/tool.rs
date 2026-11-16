@@ -1256,3 +1256,63 @@ fn the_tool_and_the_canvas_controls_read_one_precise_cursor_from_the_canvas() {
         }
     }
 }
+
+/// A tool that asks for a readout, or a hud, on every drag step.
+struct Measuring {
+    hud: bool,
+}
+
+impl CanvasTool for Measuring {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        let rows = vec![(craft_ui::runtime::env::Label::from("W"), "123 px".to_owned())];
+        if self.hud { cx.hud(rows) } else { cx.readout(rows) }
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the Measure command")
+    }
+}
+
+/// Holds a drag of a `Measuring` tool under Show Transformation Values `shown`: whether the value painted and whether
+/// the host reported the rows.
+fn readout_during_a_drag(hud: bool, shown: Option<bool>) -> (bool, bool) {
+    let reported = Rc::new(Cell::new(false));
+    let seen = Rc::clone(&reported);
+    let tool = RefCell::new(Measuring { hud });
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let shown = Canvas::new("Document").document(DOCUMENT).view(CanvasView::new(room, Point::new(600.0, 450.0), 0.5)).show(ui, |_, _| {});
+        let reply = ToolHost::new().run(ui, &shown.output, &mut *tool.borrow_mut());
+        seen.set(reply.readout.is_some_and(|readout| readout.rows.iter().any(|(_, value)| value == "123 px")));
+    });
+    if let Some(shown) = shown {
+        fixture.root_value(craft_ui::canvas::ShowReadouts(shown));
+    }
+    fixture.settle();
+    let centre = fixture.by_role(Role::CANVAS).into_iter().next().expect("a canvas").center();
+    // The last frame is a move, so the tool's drag asks for its rows in the frame the texts are read from.
+    fixture.frame(vec![pointer::moved(centre)]);
+    fixture.frame(vec![pointer::press(centre)]);
+    for step in 1..=4 {
+        fixture.frame(vec![pointer::moved(centre + BY * (step as f32 / 4.0))]);
+    }
+    let painted = fixture.texts().iter().any(|run| run.text.contains("123 px"));
+    (painted, reported.get())
+}
+
+#[trial]
+fn show_transformation_values_gates_the_readouts_paint_and_never_the_hud() {
+    assert_eq!(readout_during_a_drag(false, None), (true, true), "by default a tool's readout paints and is reported");
+    assert_eq!(readout_during_a_drag(false, Some(false)), (false, true), "Show Transformation Values off: nothing paints, the rows are still reported");
+    assert_eq!(readout_during_a_drag(true, Some(false)), (true, true), "a hud paints with Show Transformation Values off");
+}

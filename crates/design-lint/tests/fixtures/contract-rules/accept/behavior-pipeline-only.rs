@@ -5,7 +5,7 @@ use crate::contract::Cx;
 
 fn pressed(cx: &Cx<'_, Chip>) -> bool {
     let state: &PressState = cx.press();
-    matches!(state.phase(), Some(PressPhase::Held))
+    matches!(state.phase(), Some(PressPhase::Held { .. }))
 }
 
 fn stack(scopes: &mut Stack) {

@@ -4,6 +4,7 @@ use super::store::{Revision, TextureKey, TextureState, TextureStore, TextureStor
 use super::words::TextureWords;
 use crate::runtime::egui::{memory, pass, repaint};
 use crate::runtime::env::Env;
+use crate::runtime::replay;
 use craft_host::queue::{Cancel, JobQueue, QueueOptions};
 use craft_host::{Jobs, Wake, default_jobs};
 use egui::{Color32, ColorImage, Context};
@@ -154,12 +155,15 @@ impl<K> Default for Pools<K> {
 ///   default). The rest wait for later frames and the loader asks for the next pass at once. A result for a
 ///   revision other than the one last asked for is discarded; a `LoadedPicture::Blank` answer is stored with
 ///   `TextureStore::put_empty` and a failure with `TextureStore::put_failure`.
-/// - **Dropping.** In that first call, keys nobody asked for in this frame or the previous one are dropped from the
-///   queue: rows scrolled away, a panel closed. A frame that does not draw the list asks for nothing, so its jobs
+/// - **Dropping.** In that first call, keys nobody asked for in this frame or the previous one are dropped in every
+///   state of their job: queued jobs leave the queue, running ones are cancelled and finished results are discarded
+///   unstored: rows scrolled away, a panel closed. A frame that does not draw the list asks for nothing, so its jobs
 ///   are dropped at the next frame that draws. Asked keys move to the priority they were last asked with.
 /// - **Failures.** A job returns a `LoadFailure`; the state carries it. A job that panics is stored as
 ///   `LoadFailure::Panicked`.
-/// - **Waking.** The queue asks for a pass when a job finishes; no timed repaint.
+/// - **Waking.** The queue asks for a pass when a job finishes; no timed repaint. A `Loading` answer notes the
+///   asking code as still moving (`runtime::replay`), so a settled region that shows a stand-in runs in that pass,
+///   asks again and shows the finished picture, and its asking keeps the job.
 /// - **Without lanes** (`lanes == 0`) the first call in a frame runs one job inline.
 pub struct TextureLoader<K: TextureKey> {
     store: TextureStore<K>,
@@ -233,6 +237,7 @@ impl<K: TextureKey> TextureLoader<K> {
             asked.frame = frame;
             Some(())
         })?;
+        replay::note_unsettled(ctx);
         Some(TextureState::Loading { stand_in: state.shown() })
     }
 
@@ -262,6 +267,7 @@ impl<K: TextureKey> TextureLoader<K> {
             // The job runs in the next frame's `run_frame_work`; the web repaints only on input.
             repaint::request(ctx);
         }
+        replay::note_unsettled(ctx);
         TextureState::Loading { stand_in }
     }
 
@@ -280,9 +286,9 @@ impl<K: TextureKey> TextureLoader<K> {
         })
     }
 
-    /// In the first call of a frame, runs the frame's work: an inline job when there are no lanes, dropping jobs
-    /// nobody asked for, then storing finished results while the store's upload allowance lasts. A result for
-    /// another revision than the one last asked for is discarded.
+    /// In the first call of a frame, runs the frame's work: an inline job when there are no lanes, dropping the jobs
+    /// and results of keys nobody asked for, then storing finished results while the store's upload allowance lasts.
+    /// A result for another revision than the one last asked for is discarded.
     fn run_frame_work(&self, ctx: &Context) {
         let frame = pass::root_frame_nr(ctx);
         let first = self.with(ctx, |pool| pool.polled.replace(frame) != Some(frame));
@@ -295,9 +301,9 @@ impl<K: TextureKey> TextureLoader<K> {
         let batch = self.with(ctx, |pool| {
             let recent = frame.saturating_sub(1);
             let asked = &mut pool.asked;
-            for key in pool.queue.reprioritize(|key, _| asked.get(key).filter(|asked| asked.frame >= recent).map(|asked| asked.priority)) {
-                asked.remove(&key);
-            }
+            pool.queue.reprioritize(|key, _| asked.get(key).filter(|asked| asked.frame >= recent).map(|asked| asked.priority));
+            // A key nobody asked for recently loses its record, so its finished result is discarded below too.
+            asked.retain(|_, asked| asked.frame >= recent);
             while let Some(finished) = pool.queue.try_recv() {
                 let (revision, result) = finished.result;
                 pool.waiting.push((finished.key, revision, result));

@@ -18,7 +18,7 @@ pub use bar::{RulerBar, RulerBarOutput};
 pub use distances::box_distances;
 pub use model::{MIN_LINE, RulerLine, RulerPart, RulerReading};
 pub use overlay::{RulerOverlay, RulerOverlayStyle};
-pub use tool::{RulerPass, RulerTool};
+pub use tool::{RulerPass, RulerTool, show_ruler};
 pub use words::RulerWords;
 
 use craft_ui::patterns::form_dialogs::{Param, ParamDialog, ParamKind};

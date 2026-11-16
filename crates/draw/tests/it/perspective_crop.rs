@@ -12,7 +12,7 @@ use craft_ui::canvas::{Canvas, ToolHost};
 use craft_ui::contract::ShowContainer as _;
 use craft_ui::runtime::access::Role;
 use craft_ui::testing::{Fixture, trial};
-use egui::{Event, Modifiers, PointerButton, Pos2, Vec2};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, Vec2};
 
 const SIZE: Size = Size::new(400.0, 300.0);
 const SHIFT: Modifiers = Modifiers { shift: true, ..Modifiers::NONE };
@@ -25,13 +25,16 @@ struct Rig {
     tool: Rc<RefCell<PerspectiveCropTool>>,
     /// The active document the pass is given; `None` keys nothing.
     document: Rc<Cell<Option<CropDocKey>>>,
+    /// Whether the quad reported `apply` in any frame since the last [`Rig::applied`].
+    apply: Rc<Cell<bool>>,
 }
 
 impl Rig {
     fn new() -> Self {
         let tool = Rc::new(RefCell::new(PerspectiveCropTool::new()));
         let document = Rc::new(Cell::new(None));
-        let (shown, active) = (Rc::clone(&tool), Rc::clone(&document));
+        let apply = Rc::new(Cell::new(false));
+        let (shown, active, applied) = (Rc::clone(&tool), Rc::clone(&document), Rc::clone(&apply));
         let mut fixture = Fixture::new(move |ui| {
             let mut tool = shown.borrow_mut();
             let room = ui.available_rect_before_wrap();
@@ -39,12 +42,13 @@ impl Rig {
             let input = PerspectiveInput { document: active.get(), ..Default::default() };
             let mut pass = tool.pass(input);
             let canvas = Canvas::new("Document").document(SIZE).view(view).show(ui, |ui, body| {
-                let _ = pass.show_quad(ui, body.rect);
+                let output = pass.show_quad(ui, body.rect);
+                applied.set(applied.get() || output.apply);
             });
             let _ = ToolHost::new().run(ui, &canvas.output, &mut pass);
         });
         fixture.settle();
-        Rig { fixture, tool, document }
+        Rig { fixture, tool, document, apply }
     }
 
     /// The screen point of document point `(x, y)`: the view shows (200, 150) at the canvas's centre.
@@ -109,6 +113,15 @@ impl Rig {
 
     fn placing(&self) -> usize {
         self.tool.borrow().placing()
+    }
+
+    /// Presses Enter and whether the quad applied.
+    fn enter_applies(&mut self) -> bool {
+        self.fixture.frame(Vec::new());
+        self.apply.set(false);
+        self.fixture.key(Key::Enter, Modifiers::NONE);
+        self.fixture.frame(Vec::new());
+        self.apply.take()
     }
 }
 
@@ -197,8 +210,29 @@ fn perspective_box_and_corner_modifiers_and_clicks() {
     rig.drag((300.0, 220.0), (320.0, 230.0), ALT);
     assert!(near(rig.quad(), [(120.0, 80.0), (300.0, 80.0), (320.0, 230.0), (100.0, 220.0)]), "a skewed quad's corner moves alone: {:?}", rig.quad());
     rig.set(upright);
+    rig.drag((300.0, 220.0), (50.0, 220.0), ALT);
+    assert!(
+        near(rig.quad(), [(100.0, 80.0), (50.0, 80.0), (50.0, 220.0), (100.0, 220.0)]),
+        "Alt past the opposite corner along x keeps the corners as they lie, a mirrored box: {:?}",
+        rig.quad()
+    );
+    assert!(rig.quad().is_some_and(|q| is_valid(&q)), "a mirrored box is valid");
+    assert!(rig.enter_applies(), "Enter applies a mirrored box");
+    rig.set(upright);
     rig.drag((300.0, 220.0), (50.0, 40.0), ALT);
-    assert!(rig.quad().is_some_and(|q| is_valid(&q)), "Alt past the opposite corner stays a valid quad: {:?}", rig.quad());
+    assert!(
+        near(rig.quad(), [(100.0, 80.0), (50.0, 80.0), (50.0, 40.0), (100.0, 40.0)]),
+        "Alt past the opposite corner on both axes keeps the corners as they lie, a box turned upside down: {:?}",
+        rig.quad()
+    );
+    assert!(rig.enter_applies(), "Enter applies an upside-down box");
+    // A bow-tie and a quad with three corners on a line are invalid in either winding and do not apply.
+    for quad in [[(100.0, 80.0), (300.0, 220.0), (300.0, 80.0), (100.0, 220.0)], [(100.0, 80.0), (200.0, 80.0), (300.0, 80.0), (200.0, 220.0)]] {
+        let points = quad.map(|(x, y)| Point::new(x, y));
+        assert!(!is_valid(&points) && !is_valid(&[points[0], points[3], points[2], points[1]]), "{quad:?} is invalid");
+        rig.set(quad);
+        assert!(!rig.enter_applies(), "Enter does not apply {quad:?}");
+    }
 
     // A click on a corner with no drag changes nothing.
     rig.set(upright);
