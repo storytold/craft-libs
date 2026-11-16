@@ -527,7 +527,7 @@ fn the_format_queries_agree_with_the_writer() {
     // The most channels is the most: one more is refused, by the layouts of a format that has
     // a fixed set and by the writer of one that has not.
     let most: Vec<u16> = EncodeFormat::ALL.iter().map(|f| f.max_channels()).collect();
-    assert_eq!(most, [32_767, 32_767, 8, 8, 8, 2, 6, 8, 2]);
+    assert_eq!(most, [32_767, 32_767, 8, 8, 8, 2, 6, 8, 8]);
     for &format in EncodeFormat::ALL {
         let most = format.max_channels();
         match format.fixed_layouts(most) {

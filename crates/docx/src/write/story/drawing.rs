@@ -69,9 +69,18 @@ impl Writer<'_> {
     }
 
     /// A shape's or text box's `wps:wsp`, at `off` in its group (or 0, 0). In a group it carries
-    /// its own `wps:cNvPr` with drawing id `id`.
-    pub(super) fn wsp(&mut self, w: &mut W, o: &InlineObject, id: Option<&str>, off: (f32, f32), rels: &mut PartRels, depth: usize) {
-        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform, extra } = o else { return };
+    /// its own `wps:cNvPr` with drawing id `id`. Returns where in `w` its `w:txbxContent` was
+    /// written, for a VML fallback to repeat.
+    pub(super) fn wsp(
+        &mut self,
+        w: &mut W,
+        o: &InlineObject,
+        id: Option<&str>,
+        off: (f32, f32),
+        rels: &mut PartRels,
+        depth: usize,
+    ) -> Option<std::ops::Range<usize>> {
+        let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform, extra } = o else { return None };
         let geom = freeform.as_deref().filter(|_| *kind == ShapeKind::Freeform);
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
@@ -181,6 +190,7 @@ impl Writer<'_> {
         // its place in it instead.
         let part = (*story).and_then(|id| self.doc.parts.get(&id).filter(|p| p.kind == craft_wordmodel::PartKind::TextBox).map(|p| (id, p)));
         let link = part.and_then(|(id, _)| self.txbx_links.get(&id).copied());
+        let mut content = None;
         if let Some((n, seq)) = link.filter(|(_, seq)| *seq > 0) {
             w.empty("wps:linkedTxbx", &[("id", &n.to_string()), ("seq", &seq.to_string())]);
         } else if let Some((id, part)) = part
@@ -190,6 +200,7 @@ impl Writer<'_> {
                 Some((n, _)) => w.open("wps:txbx", &[("id", &n.to_string())]),
                 None => w.open("wps:txbx", &[]),
             }
+            let start = w.s.len();
             w.open("w:txbxContent", &[]);
             if self.written_boxes.insert(id) {
                 let blocks = part.blocks.clone();
@@ -198,6 +209,7 @@ impl Writer<'_> {
                 w.empty("w:p", &[]);
             }
             w.close("w:txbxContent");
+            content = Some(start..w.s.len());
             w.close("wps:txbx");
             self.boxes.leave();
         }
@@ -231,6 +243,7 @@ impl Writer<'_> {
             w.close("wps:bodyPr");
         }
         w.close("wps:wsp");
+        content
     }
 
     /// A `w:drawing` holding `graphic` (an `a:graphic`) in a frame of the object's size and place.
