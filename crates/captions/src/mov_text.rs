@@ -13,11 +13,11 @@
 //!   - `hlit`: Highlighted character range.
 //!   - `hclr`: Highlight color (RGBA).
 //!   - `krok`: Karaoke highlight timing and character spans.
-//!   - `dlay`: Scroll delay in milliseconds.
+//!   - `dlay`: Scroll delay in track-timescale ticks.
 //!   - `href`: Hypertext link URL and alt text.
 //!   - `tbox`: Text box override coordinates (`top, left, bottom, right`).
 //!   - `blnk`: Blinking text character range.
-//!   - `wrap`: Text wrap flag (0 = automatic wrap, 1 = no wrap).
+//!   - `twrp`: Text wrap flag (0 = no wrap, 1 = automatic soft wrap).
 //!
 //! ## Style Flags
 //!
@@ -270,13 +270,14 @@ impl Tx3gConfig {
 
         // ftab box
         let mut ftab_payload = Vec::new();
-        ftab_payload.extend_from_slice(&(self.fonts.len() as u16).to_be_bytes());
-        for (id, name) in &self.fonts {
+        let fonts = &self.fonts[..self.fonts.len().min(u16::MAX as usize)];
+        ftab_payload.extend_from_slice(&(fonts.len() as u16).to_be_bytes());
+        for (id, name) in fonts {
             ftab_payload.extend_from_slice(&id.to_be_bytes());
             let name_bytes = name.as_bytes();
-            let len = name_bytes.len().min(255) as u8;
-            ftab_payload.push(len);
-            ftab_payload.extend_from_slice(&name_bytes[..len as usize]);
+            let limit = name.floor_char_boundary(name_bytes.len().min(255));
+            ftab_payload.push(limit as u8);
+            ftab_payload.extend_from_slice(&name_bytes[..limit]);
         }
         let ftab_size = 8u32.saturating_add(ftab_payload.len() as u32);
         out.extend_from_slice(&ftab_size.to_be_bytes());
@@ -419,7 +420,7 @@ pub fn read_sample(data: &[u8]) -> Result<TextSample> {
                 let end = u16::from_be_bytes([payload[2], payload[3]]);
                 sample.blinking.push((start, end));
             }
-            b"wrap" => {
+            b"twrp" | b"wrap" => {
                 if payload.is_empty() {
                     return Err(Error::Truncated);
                 }
@@ -465,6 +466,9 @@ pub fn write_sample(sample: &TextSample) -> Result<Vec<u8>> {
 
     // 1. styl box
     if !sample.styles.is_empty() {
+        if sample.styles.len() > u16::MAX as usize {
+            return Err(Error::InvalidBox("too many styles in sample"));
+        }
         let size = 8u32.checked_add(2).and_then(|s| s.checked_add(sample.styles.len() as u32 * 12)).ok_or(Error::InvalidBox("styl size overflow"))?;
         out.extend_from_slice(&size.to_be_bytes());
         out.extend_from_slice(b"styl");
@@ -496,6 +500,9 @@ pub fn write_sample(sample: &TextSample) -> Result<Vec<u8>> {
 
     // 4. krok box
     if let Some((start_time, ref entries)) = sample.karaoke {
+        if entries.len() > u16::MAX as usize {
+            return Err(Error::InvalidBox("too many karaoke entries"));
+        }
         let size = 8u32.checked_add(6).and_then(|s| s.checked_add(entries.len() as u32 * 8)).ok_or(Error::InvalidBox("krok size overflow"))?;
         out.extend_from_slice(&size.to_be_bytes());
         out.extend_from_slice(b"krok");
@@ -550,32 +557,58 @@ pub fn write_sample(sample: &TextSample) -> Result<Vec<u8>> {
         out.extend_from_slice(&end.to_be_bytes());
     }
 
-    // 9. wrap box
+    // 9. twrp box
     if let Some(flag) = sample.wrap_flag {
         out.extend_from_slice(&9u32.to_be_bytes());
-        out.extend_from_slice(b"wrap");
+        out.extend_from_slice(b"twrp");
         out.push(flag);
     }
 
     Ok(out)
 }
 
+fn push_escaped_char(out: &mut String, ch: char) {
+    match ch {
+        '&' => out.push_str("&amp;"),
+        '<' => out.push_str("&lt;"),
+        '>' => out.push_str("&gt;"),
+        _ => out.push(ch),
+    }
+}
+
 /// Convert a [`TextSample`] into HTML-style formatted markup (`<b>`, `<i>`, `<u>`, `<font color="...">`).
 pub fn sample_to_markup(sample: &TextSample) -> String {
     if sample.styles.is_empty() {
-        return sample.text.clone();
+        let mut out = String::with_capacity(sample.text.len());
+        for ch in sample.text.chars() {
+            push_escaped_char(&mut out, ch);
+        }
+        return out;
     }
 
     let chars: Vec<char> = sample.text.chars().collect();
     let n = chars.len();
+    if n == 0 {
+        return String::new();
+    }
+
+    let mut starts: std::collections::HashMap<u16, Vec<&StyleRecord>> = std::collections::HashMap::new();
+    let mut ends: std::collections::HashMap<u16, Vec<&StyleRecord>> = std::collections::HashMap::new();
+    for st in &sample.styles {
+        if st.end_char > st.start_char {
+            starts.entry(st.start_char).or_default().push(st);
+            ends.entry(st.end_char).or_default().push(st);
+        }
+    }
+
     let mut out = String::with_capacity(sample.text.len() + sample.styles.len() * 16);
 
     for (i, &ch) in chars.iter().enumerate() {
         let char_idx = i as u16;
 
         // Open tags for any style starting at char_idx
-        for st in &sample.styles {
-            if st.start_char == char_idx && st.end_char > st.start_char {
+        if let Some(list) = starts.get(&char_idx) {
+            for st in list {
                 let has_color = st.text_color_rgba != [255, 255, 255, 255];
                 if has_color {
                     out.push_str(&format!(
@@ -595,11 +628,11 @@ pub fn sample_to_markup(sample: &TextSample) -> String {
             }
         }
 
-        out.push(ch);
+        push_escaped_char(&mut out, ch);
 
         // Close tags for any style ending at char_idx + 1
-        for st in sample.styles.iter().rev() {
-            if st.end_char == char_idx + 1 && st.end_char > st.start_char {
+        if let Some(list) = ends.get(&(char_idx + 1)) {
+            for st in list.iter().rev() {
                 if st.is_underline() {
                     out.push_str("</u>");
                 }
@@ -617,25 +650,31 @@ pub fn sample_to_markup(sample: &TextSample) -> String {
         }
     }
 
-    // Handle any zero-length styles at end of string
-    if n == 0 {
-        return sample.text.clone();
-    }
-
     out
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CharFormatting {
+    flags: u8,
+    color: [u8; 4],
+}
+
+impl Default for CharFormatting {
+    fn default() -> Self {
+        Self { flags: 0, color: [255, 255, 255, 255] }
+    }
 }
 
 /// Parse HTML-style formatted markup (`<b>`, `<i>`, `<u>`, `<font color="...">`) into a [`TextSample`].
 pub fn markup_to_sample(markup: &str) -> TextSample {
-    let mut text = String::with_capacity(markup.len());
-    let mut styles = Vec::new();
+    let mut bold_depth = 0usize;
+    let mut italic_depth = 0usize;
+    let mut underline_depth = 0usize;
+    let mut color_stack: Vec<[u8; 4]> = Vec::new();
 
-    let mut bold_starts: Vec<u16> = Vec::new();
-    let mut italic_starts: Vec<u16> = Vec::new();
-    let mut underline_starts: Vec<u16> = Vec::new();
-    let mut color_starts: Vec<(u16, [u8; 4])> = Vec::new();
+    let mut decoded_chars: Vec<char> = Vec::with_capacity(markup.len());
+    let mut char_styles: Vec<CharFormatting> = Vec::with_capacity(markup.len());
 
-    let mut current_char = 0u16;
     let mut chars = markup.chars().peekable();
 
     while let Some(ch) = chars.next() {
@@ -649,68 +688,97 @@ pub fn markup_to_sample(markup: &str) -> TextSample {
             }
             let trimmed = tag.trim().to_ascii_lowercase();
             if trimmed == "b" {
-                bold_starts.push(current_char);
-            } else if trimmed == "/b"
-                && let Some(start) = bold_starts.pop()
-                && current_char > start
-            {
-                styles.push(StyleRecord {
-                    start_char: start,
-                    end_char: current_char,
-                    font_id: 1,
-                    face_style_flags: STYLE_FLAG_BOLD,
-                    font_size: 16,
-                    text_color_rgba: [255, 255, 255, 255],
-                });
+                bold_depth += 1;
+            } else if trimmed == "/b" {
+                bold_depth = bold_depth.saturating_sub(1);
             } else if trimmed == "i" {
-                italic_starts.push(current_char);
-            } else if trimmed == "/i"
-                && let Some(start) = italic_starts.pop()
-                && current_char > start
-            {
-                styles.push(StyleRecord {
-                    start_char: start,
-                    end_char: current_char,
-                    font_id: 1,
-                    face_style_flags: STYLE_FLAG_ITALIC,
-                    font_size: 16,
-                    text_color_rgba: [255, 255, 255, 255],
-                });
+                italic_depth += 1;
+            } else if trimmed == "/i" {
+                italic_depth = italic_depth.saturating_sub(1);
             } else if trimmed == "u" {
-                underline_starts.push(current_char);
-            } else if trimmed == "/u"
-                && let Some(start) = underline_starts.pop()
-                && current_char > start
-            {
-                styles.push(StyleRecord {
-                    start_char: start,
-                    end_char: current_char,
-                    font_id: 1,
-                    face_style_flags: STYLE_FLAG_UNDERLINE,
-                    font_size: 16,
-                    text_color_rgba: [255, 255, 255, 255],
-                });
+                underline_depth += 1;
+            } else if trimmed == "/u" {
+                underline_depth = underline_depth.saturating_sub(1);
             } else if trimmed.starts_with("font") {
                 if let Some(color) = parse_font_color(&tag) {
-                    color_starts.push((current_char, color));
+                    color_stack.push(color);
                 }
-            } else if trimmed == "/font"
-                && let Some((start, color)) = color_starts.pop()
-                && current_char > start
-            {
-                styles.push(StyleRecord {
-                    start_char: start,
-                    end_char: current_char,
-                    font_id: 1,
-                    face_style_flags: 0,
-                    font_size: 16,
-                    text_color_rgba: color,
-                });
+            } else if trimmed == "/font" {
+                color_stack.pop();
             }
         } else {
-            text.push(ch);
-            current_char = current_char.saturating_add(1);
+            let mut text_chunk = String::new();
+            text_chunk.push(ch);
+            while let Some(&next) = chars.peek() {
+                if next == '<' {
+                    break;
+                }
+                text_chunk.push(next);
+                chars.next();
+            }
+
+            let decoded = crate::decode_entities(&text_chunk);
+            let mut flags = 0u8;
+            if bold_depth > 0 {
+                flags |= STYLE_FLAG_BOLD;
+            }
+            if italic_depth > 0 {
+                flags |= STYLE_FLAG_ITALIC;
+            }
+            if underline_depth > 0 {
+                flags |= STYLE_FLAG_UNDERLINE;
+            }
+            let color = color_stack.last().copied().unwrap_or([255, 255, 255, 255]);
+            let fmt = CharFormatting { flags, color };
+
+            for c in decoded.chars() {
+                decoded_chars.push(c);
+                char_styles.push(fmt);
+            }
         }
+    }
+
+    let text: String = decoded_chars.iter().collect();
+
+    // Group adjacent characters with identical non-default formatting into sorted, non-overlapping style runs.
+    let mut styles = Vec::new();
+    let mut run_start: Option<(usize, CharFormatting)> = None;
+
+    for (idx, &fmt) in char_styles.iter().enumerate() {
+        let is_styled = fmt.flags != 0 || fmt.color != [255, 255, 255, 255];
+        match run_start {
+            Some((start, current_fmt)) => {
+                if fmt != current_fmt {
+                    if current_fmt.flags != 0 || current_fmt.color != [255, 255, 255, 255] {
+                        styles.push(StyleRecord {
+                            start_char: start as u16,
+                            end_char: idx as u16,
+                            font_id: 1,
+                            face_style_flags: current_fmt.flags,
+                            font_size: 16,
+                            text_color_rgba: current_fmt.color,
+                        });
+                    }
+                    run_start = if is_styled { Some((idx, fmt)) } else { None };
+                }
+            }
+            None => {
+                if is_styled {
+                    run_start = Some((idx, fmt));
+                }
+            }
+        }
+    }
+
+    if let Some((start, fmt)) = run_start {
+        styles.push(StyleRecord {
+            start_char: start as u16,
+            end_char: char_styles.len() as u16,
+            font_id: 1,
+            face_style_flags: fmt.flags,
+            font_size: 16,
+            text_color_rgba: fmt.color,
+        });
     }
 
     TextSample { text, styles, ..Default::default() }
@@ -764,19 +832,40 @@ pub fn decode_timed_samples<'a, I>(doc: &mut Document, samples: I, timescale: u3
 where
     I: IntoIterator<Item = (u64, u32, &'a [u8])>,
 {
+    decode_timed_samples_with_config(doc, samples, timescale, None)
+}
+
+/// Decode a stream of timed text samples into a [`Document`], applying an optional sample description configuration.
+pub fn decode_timed_samples_with_config<'a, I>(doc: &mut Document, samples: I, timescale: u32, config: Option<&Tx3gConfig>) -> Result<()>
+where
+    I: IntoIterator<Item = (u64, u32, &'a [u8])>,
+{
     if timescale == 0 {
         return Ok(());
     }
+    let ts = timescale as i128;
     for (pts, duration, data) in samples {
-        let sample = read_sample(data)?;
+        let mut sample = read_sample(data)?;
         if sample.text.trim().is_empty() {
             continue;
         }
-        let start_sec = pts as f64 / timescale as f64;
-        let end_sec = (pts + duration as u64) as f64 / timescale as f64;
-        let start = Tick((start_sec * TICKS_PER_SECOND as f64).round() as i64);
-        let end = Tick((end_sec * TICKS_PER_SECOND as f64).round() as i64);
-        doc.cues.push(sample_to_cue(&sample, start, end));
+        if sample.styles.is_empty()
+            && let Some(cfg) = config
+            && (cfg.default_style.face_style_flags != 0 || cfg.default_style.text_color_rgba != [255, 255, 255, 255])
+        {
+            sample.styles.push(StyleRecord {
+                start_char: 0,
+                end_char: sample.text.chars().count() as u16,
+                font_id: cfg.default_style.font_id,
+                face_style_flags: cfg.default_style.face_style_flags,
+                font_size: cfg.default_style.font_size,
+                text_color_rgba: cfg.default_style.text_color_rgba,
+            });
+        }
+        let end_pts = pts.checked_add(duration as u64).ok_or(Error::InvalidBox("timestamp interval overflow"))?;
+        let start_ticks = (pts as i128 * TICKS_PER_SECOND as i128 / ts) as i64;
+        let end_ticks = (end_pts as i128 * TICKS_PER_SECOND as i128 / ts) as i64;
+        doc.cues.push(sample_to_cue(&sample, Tick(start_ticks), Tick(end_ticks)));
     }
     Ok(())
 }

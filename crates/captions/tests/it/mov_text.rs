@@ -173,6 +173,50 @@ fn test_markup_conversion() {
 }
 
 #[test]
+fn test_nested_styles_sorted_non_overlapping() {
+    let markup = "<b>A<i>B</i>C</b>";
+    let sample = markup_to_sample(markup);
+    assert_eq!(sample.text, "ABC");
+    assert_eq!(sample.styles.len(), 3);
+    // [0, 1): A is bold
+    assert_eq!(sample.styles[0].start_char, 0);
+    assert_eq!(sample.styles[0].end_char, 1);
+    assert_eq!(sample.styles[0].face_style_flags, STYLE_FLAG_BOLD);
+    // [1, 2): B is bold + italic
+    assert_eq!(sample.styles[1].start_char, 1);
+    assert_eq!(sample.styles[1].end_char, 2);
+    assert_eq!(sample.styles[1].face_style_flags, STYLE_FLAG_BOLD | STYLE_FLAG_ITALIC);
+    // [2, 3): C is bold
+    assert_eq!(sample.styles[2].start_char, 2);
+    assert_eq!(sample.styles[2].end_char, 3);
+    assert_eq!(sample.styles[2].face_style_flags, STYLE_FLAG_BOLD);
+}
+
+#[test]
+fn test_entities_and_literal_escaping() {
+    let markup = "A &amp; <b>B &lt; C</b>";
+    let sample = markup_to_sample(markup);
+    assert_eq!(sample.text, "A & B < C");
+    assert_eq!(sample.styles.len(), 1);
+    assert_eq!(sample.styles[0].start_char, 4);
+    assert_eq!(sample.styles[0].end_char, 9);
+
+    let roundtripped = sample_to_markup(&sample);
+    assert_eq!(roundtripped, "A &amp; <b>B &lt; C</b>");
+}
+
+#[test]
+fn test_twrp_box() {
+    let sample = TextSample { text: "Wrap me".to_string(), wrap_flag: Some(1), ..Default::default() };
+    let bytes = write_sample(&sample).expect("write sample");
+    // Verify bytes contain twrp box
+    assert!(bytes.windows(4).any(|w| w == b"twrp"));
+
+    let read_back = read_sample(&bytes).expect("read sample");
+    assert_eq!(read_back.wrap_flag, Some(1));
+}
+
+#[test]
 fn test_tx3g_config_roundtrip() {
     let cfg = Tx3gConfig {
         display_flags: 0x0000_0001,
