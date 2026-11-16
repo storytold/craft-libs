@@ -87,11 +87,15 @@ fn latex_labels_in_a_row_are_read_in_linear_time() {
 }
 
 /// Empty optional arguments in a row after a definition are skipped in linear time: the text after
-/// each `]` is read where it lies in the token, not copied.
+/// each `]` is read where it lies in the token, not copied, and a run of no-break spaces at the
+/// token's end is not read again for each argument.
 #[test]
 fn latex_optional_arguments_in_a_row_are_read_in_linear_time() {
-    let cases: [fn(usize) -> String; 2] =
-        [|n| "\\newcommand{\\foo}".to_string() + &"[]".repeat(n) + "x", |n| "\\usepackage".to_string() + &"[] ".repeat(n) + "x"];
+    let cases: [fn(usize) -> String; 3] = [
+        |n| "\\newcommand{\\foo}".to_string() + &"[]".repeat(n) + "x",
+        |n| "\\usepackage".to_string() + &"[] ".repeat(n) + "x",
+        |n| "\\newcommand{\\foo}".to_string() + &"[]".repeat(n) + &"\u{a0}".repeat(n) + "\n\nx",
+    ];
     for make in cases {
         assert_eq!(text(&make(3)), "x");
         let (small, large) = (fastest(&make(50_000)), fastest(&make(200_000)));

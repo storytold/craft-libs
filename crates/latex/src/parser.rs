@@ -290,7 +290,9 @@ impl<'a> Parser<'a> {
         };
         out.push_str(s.get(..end).unwrap_or(""));
         let rest = s.get(end + 1..).unwrap_or("");
-        if !rest.trim().is_empty() {
+        // Checked from the start only: a no-break space stays in its token, so the end can be a
+        // long run of whitespace that every argument in a row would read again.
+        if !rest.trim_start().is_empty() {
             self.pending = Some(rest);
         }
         true
