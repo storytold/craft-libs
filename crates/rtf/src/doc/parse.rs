@@ -267,10 +267,6 @@ fn finalize(mut r: Reader) -> Parsed {
 
 /// Most grid columns a table gets (the document model's own cap).
 const MAX_GRID_COLS: usize = 63;
-/// Grid columns under this width, in twips (6 pt), merge while the rows leave room: import widens
-/// any narrower column to 6 pt, which grows the table, and files exported from spreadsheets put
-/// edges a few twips apart.
-const MIN_GRID_GAP: i64 = 120;
 /// Grid columns of this width or less, in twips (1 pt), always merge: the document model refuses
 /// them, and would then give the table equal columns.
 const NO_GRID_GAP: i64 = 20;
@@ -282,9 +278,9 @@ const NO_GRID_GAP: i64 = 20;
 ///
 /// One odd row never costs the whole table its grid (a form exported from a spreadsheet, with
 /// many narrow columns, otherwise had its wide title squeezed into one of four equal columns):
-/// - Over [`MAX_GRID_COLS`] edges, or edges closer than [`MIN_GRID_GAP`], merge, leaving a column
-///   for each cell of the widest row ([`coarse_edges`]); each cell edge moves to the nearest
-///   grid edge.
+/// - Over [`MAX_GRID_COLS`] edges, or edges [`NO_GRID_GAP`] or less apart, merge
+///   ([`coarse_edges`]); each cell edge moves to the nearest grid edge. Narrow columns over a
+///   point stay: import keeps them as narrow as the file gives them.
 /// - A cell that ends at or before the previous one (a zero-width cell, or a cell with no
 ///   `\cellx` of its own) still gets a grid column of its own; cells pushed past the table's
 ///   right edge move back.
@@ -298,7 +294,7 @@ pub(super) fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f3
     if edges.is_empty() {
         return Vec::new();
     }
-    let grid = coarse_edges(&edges, rows.iter().map(Vec::len).max().unwrap_or(0));
+    let grid = coarse_edges(&edges);
     // Each cell's right edge as a grid edge number (1 = the first grid column's right edge).
     let mut ends: Vec<Vec<usize>> = Vec::with_capacity(rows.len());
     for (row, x) in rows.iter().zip(rights) {
@@ -339,10 +335,9 @@ pub(super) fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f3
 
 /// The grid edges kept from the sorted, distinct, positive `edges`. The narrowest column merges
 /// into the next, one at a time, so an edge moves only when it has to: while there are over
-/// [`MAX_GRID_COLS`] columns, or columns of [`NO_GRID_GAP`] or less, and while a column is under
-/// [`MIN_GRID_GAP`] and more columns remain than the `widest_row`'s cells. The table's right edge
-/// is always kept.
-fn coarse_edges(edges: &[i32], widest_row: usize) -> Vec<i32> {
+/// [`MAX_GRID_COLS`] columns, or columns of [`NO_GRID_GAP`] or less. The table's right edge is
+/// always kept.
+fn coarse_edges(edges: &[i32]) -> Vec<i32> {
     let n = edges.len();
     // Each edge's neighbours among the edges still kept.
     let mut left: Vec<Option<usize>> = (0..n).map(|i| i.checked_sub(1)).collect();
@@ -360,7 +355,7 @@ fn coarse_edges(edges: &[i32], widest_row: usize) -> Vec<i32> {
         if !kept.get(i).copied().unwrap_or(false) || w != width(i, &left) {
             continue;
         }
-        if count <= MAX_GRID_COLS && w > NO_GRID_GAP && (w >= MIN_GRID_GAP || count <= widest_row) {
+        if count <= MAX_GRID_COLS && w > NO_GRID_GAP {
             break;
         }
         // The column's right edge goes, unless it is the table's: then its left edge does.

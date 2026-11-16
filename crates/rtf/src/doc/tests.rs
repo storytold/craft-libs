@@ -390,6 +390,26 @@ fn page_size_and_margins() {
 }
 
 #[test]
+fn narrow_grid_columns_keep_their_width() {
+    // Rows' edges a few points apart, as in a form exported from a spreadsheet. The table stays as
+    // wide as its source, through an export and back too.
+    let rtf = br"{\rtf1\ansi
+\trowd\cellx400\cellx800 \pard\intbl a\cell b\cell\row
+\trowd\cellx80\cellx480\cellx800 \pard\intbl c\cell d\cell e\cell\row
+\pard after\par}";
+    let table = |doc: &Document| match doc.body.iter().find_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t.clone()) } else { None })
+    {
+        Some(t) => t,
+        None => panic!("no table"),
+    };
+    let doc = import(rtf).unwrap();
+    let t = table(&doc);
+    assert_eq!(t.grid, [4.0, 16.0, 4.0, 16.0]);
+    assert_eq!(t.rows[0].cells.iter().map(|c| c.props.width).collect::<Vec<_>>(), [Some(20.0), Some(20.0)]);
+    assert_eq!(table(&import(export(&doc).as_bytes()).unwrap()).grid, t.grid);
+}
+
+#[test]
 fn table_grid_from_cell_edges_and_borders() {
     // Rows whose cells don't line up share one grid: edges 2000, 3000, 9000.
     let rtf = br"{\rtf1\ansi
@@ -565,16 +585,16 @@ fn table_grid_keeps_a_column_for_each_cell_of_the_widest_row() {
 }
 
 #[test]
-fn table_grid_merges_columns_import_would_widen() {
-    // Columns under 6 pt that no row needs: import raises each one to 6 pt, so this table of
-    // 3 pt columns doubled in width. Merged, it keeps its 60 pt.
+fn table_grid_keeps_narrow_columns_at_their_width() {
+    // Columns under 6 pt that no row needs keep their 3 pt: import no longer widens them, so the
+    // table keeps its 60 pt.
     let mut rtf = String::from(r"{\rtf1\ansi ");
     for k in 1..=20 {
         rtf.push_str(&rtf_row(&[k * 60, 1200]));
     }
     rtf.push_str(r"\pard\par}");
     let (widths, _) = grid_of(rtf.as_bytes());
-    assert!(widths.iter().all(|&w| w >= 6.0), "{widths:?}");
+    assert_eq!(widths, [3.0; 20], "{widths:?}");
     let d = import(rtf.as_bytes()).unwrap();
     let t = d.body.iter().find_map(|b| if let craft_wordmodel::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
     assert_eq!(t.grid.iter().sum::<f32>(), 60.0, "{:?}", t.grid);
