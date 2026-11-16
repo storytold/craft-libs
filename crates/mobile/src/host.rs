@@ -153,9 +153,21 @@ pub(crate) struct Host<A> {
     /// What the shell last heard of [`CraftApp::busy`].
     busy: bool,
     /// Texture changes from frames that didn't draw, uploaded with the next one that does.
-    pending_textures: egui::TexturesDelta,
+    pending_textures: PendingTextures,
     /// The power state the app last heard: it hears each change once.
     power: Option<crate::Power>,
+}
+
+/// Texture changes from frames that didn't draw, for the next one that does. A host that goes
+/// before it draws again drops them: its renderer, and every texture in it, goes too.
+#[derive(Default)]
+struct PendingTextures(egui::TexturesDelta);
+
+impl Drop for PendingTextures {
+    fn drop(&mut self) {
+        // egui checks that a dropped delta is empty; these were never meant to be applied.
+        self.0.clear();
+    }
 }
 
 /// How often a busy app runs while nothing else wakes it, so it notices its work has finished
@@ -241,7 +253,7 @@ impl<A: CraftApp> Host<A> {
             keyboard_shown: false,
             on_screen: true,
             busy: false,
-            pending_textures: egui::TexturesDelta::default(),
+            pending_textures: PendingTextures::default(),
             power: None,
         })
     }
@@ -281,6 +293,7 @@ impl<A: CraftApp> Host<A> {
                 log::warn!("craft-mobile: no surface texture ({other:?}); reconfiguring");
                 surface.configure(&rs.device, &self.surface_config);
                 rs.queue.submit(user_buffers);
+                free_textures(&mut rs.renderer.write(), &mut textures);
                 self.wake();
                 return;
             }
@@ -304,10 +317,7 @@ impl<A: CraftApp> Host<A> {
         }
         rs.queue.submit(user_buffers.into_iter().chain(std::iter::once(encoder.finish())));
         rs.queue.present(texture);
-        let mut renderer = rs.renderer.write();
-        for id in &textures.free {
-            renderer.free_texture(id);
-        }
+        free_textures(&mut rs.renderer.write(), &mut textures);
     }
 
     /// Tell the shell when the panels' state changed.
@@ -472,6 +482,14 @@ impl<A: CraftApp> HostOps for Host<A> {
     }
 }
 
+/// Free the textures egui let go of. Taken out, not just read: egui (Storytold's fork) checks in
+/// debug builds that a texture delta is empty when it is dropped, so no freed texture is forgotten.
+fn free_textures(renderer: &mut egui_wgpu::Renderer, textures: &mut egui::TexturesDelta) {
+    for id in textures.free.drain() {
+        renderer.free_texture(&id);
+    }
+}
+
 /// An RGBA8 buffer as an egui image, when its length matches its size.
 fn color_image(width: u32, height: u32, rgba: &[u8]) -> Option<egui::ColorImage> {
     let (w, h) = (usize::try_from(width).ok()?, usize::try_from(height).ok()?);
@@ -517,7 +535,7 @@ impl<A: CraftApp> Host<A> {
         self.platform.set_pasted(None);
         self.platform_output(&output.platform_output);
         self.viewport_commands(output.viewport_output.values().flat_map(|v| &v.commands));
-        let mut textures = std::mem::take(&mut self.pending_textures);
+        let mut textures = std::mem::take(&mut self.pending_textures.0);
         textures.append(output.textures_delta);
         match surface {
             Some(surface) => {
@@ -525,7 +543,7 @@ impl<A: CraftApp> Host<A> {
                 let primitives = self.ctx.tessellate(output.shapes, ppp);
                 self.paint(surface, &primitives, textures, ppp);
             }
-            None => self.pending_textures = textures,
+            None => self.pending_textures.0 = textures,
         }
         self.publish();
         self.publish_busy();
@@ -628,6 +646,31 @@ mod tests {
     fn touches_reach_egui_without_a_force() {
         let t = Touch { id: 3, phase: TouchPhase::Move, pos: Pos2::new(1.0, 2.0), force: 0.7 };
         assert!(matches!(touch_event(t), Event::Touch { force: None, .. }));
+    }
+
+    /// egui's fork checks that a texture delta is empty when it is dropped (debug builds panic
+    /// otherwise), so freeing must take the ids out, not just read them.
+    #[test]
+    fn a_frames_freed_textures_are_taken_out_of_its_delta() {
+        let Ok(adapter) = pollster::block_on(wgpu::Instance::default().request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no GPU adapter here: skipped");
+            return;
+        };
+        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a device with default limits");
+        let mut renderer = egui_wgpu::Renderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, RendererOptions::default());
+        let mut textures = egui::TexturesDelta::default();
+        textures.free(egui::TextureId::Managed(7));
+        free_textures(&mut renderer, &mut textures);
+        assert!(textures.is_empty());
+    }
+
+    /// Texture changes kept for a frame that never comes (the host goes while off screen) are
+    /// dropped without tripping that check.
+    #[test]
+    fn pending_texture_changes_can_be_dropped() {
+        let mut pending = PendingTextures::default();
+        pending.0.free(egui::TextureId::Managed(7));
+        drop(pending);
     }
 
     /// Off screen nothing draws (no GPU work in the background); a busy app still runs.
