@@ -36,6 +36,7 @@
 
 pub mod base64;
 mod container;
+pub mod stream;
 
 pub use container::{Entries, Part, Tail, entry, is_compressed, json_part, marker_at, sniff, split_tail};
 

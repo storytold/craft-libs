@@ -17,6 +17,7 @@
 //! Input is treated as hostile: every read is bounds-checked, chunk sizes are checked against the
 //! file, and the number of frames recorded is capped by the caller.
 
+pub mod anim;
 #[cfg(feature = "frames")]
 pub mod frames;
 #[cfg(test)]

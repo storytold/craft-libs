@@ -6,3 +6,9 @@ mod audio;
 #[cfg(all(feature = "decode", feature = "encode"))]
 #[path = "codecs/main.rs"]
 mod codecs;
+#[cfg(all(feature = "flac-decode", feature = "flac-encode"))]
+#[path = "flac_decode.rs"]
+mod flac_decode;
+#[cfg(feature = "qoa")]
+#[path = "qoa_oracle.rs"]
+mod qoa_oracle;

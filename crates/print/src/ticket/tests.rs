@@ -428,3 +428,159 @@ fn values_past_a_long_name_or_many_spaces_are_respelled_in_place() {
     };
     assert_eq!(respell(&long("ns0000"), &brother("brpsk")), Some(long("brpsk")));
 }
+
+/// A validated ticket that keeps only the sides its DEVMODE extension could read, as a legacy
+/// host-based driver (HP LaserJet P1102, storytold/craft-libs#7230) returns one.
+fn validated_partial(width: Option<u32>, height: Option<u32>) -> String {
+    let side = |name: &str, value: Option<u32>| {
+        value.map_or(String::new(), |v| {
+            format!(r#"<psf:ScoredProperty name="psk:{name}"><psf:Value xsi:type="xsd:integer">{v}</psf:Value></psf:ScoredProperty>"#)
+        })
+    };
+    format!(
+        r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:ISOA4">{}{}</psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Portrait"/></psf:Feature>
+<psf:Feature name="psk:PageScaling"><psf:Option name="psk:None"/></psf:Feature>
+</psf:PrintTicket>"#,
+        side("MediaSizeWidth", width),
+        side("MediaSizeHeight", height)
+    )
+}
+
+/// storytold/craft-libs#7230: the driver reports one side of the paper as zero for a real
+/// sheet. With the sheet the request names, the job goes on with the size it asked for; a
+/// side the driver did report must still agree with it, and a request that names no sheet is
+/// refused as before.
+#[test]
+fn a_legacy_v3_drivers_zero_side_falls_back_to_the_requested_paper() {
+    let a4 = (210_000, 297_000);
+    assert_eq!(verify_ticket(&validated_partial(None, Some(297_000)), Some(a4), false), Ok(a4));
+    assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_000)), Some(a4), false), Ok(a4), "a zero side is a missing one");
+    assert_eq!(verify_ticket(&validated_partial(Some(297_000), None), Some(a4), false), Ok(a4), "either way round");
+    // 0.5 pt (176 µm) inside the tolerance still agrees.
+    assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_176)), Some(a4), false), Ok(a4));
+    assert_eq!(verify_ticket(&validated_partial(Some(0), Some(297_250)), Some(a4), false), Ok(a4), "exactly the tolerance");
+    // A side that disagrees means the driver changed the paper, not that it has a roll.
+    let changed = verify_ticket(&validated_partial(Some(0), Some(279_400)), Some(a4), false).unwrap_err();
+    assert!(changed.to_string().contains("changed the paper size"), "{changed}");
+    assert!(!changed.to_string().contains("roll"), "{changed}");
+    assert!(verify_ticket(&validated_partial(Some(0), Some(297_251)), Some(a4), false).is_err(), "one µm past the tolerance");
+    // Without a sheet named the zero side stays roll-like.
+    assert!(verify_ticket(&validated_partial(Some(0), Some(297_000)), None, false).is_err());
+    assert!(verify_ticket(&validated_partial(None, Some(297_000)), None, false).is_err());
+    // Both sides gone is refused whatever the request names.
+    for wanted in [Some(a4), None] {
+        for (width, height) in [(None, None), (Some(0), Some(0))] {
+            let refused = verify_ticket(&validated_partial(width, height), wanted, false).unwrap_err();
+            assert!(refused.to_string().contains("roll"), "{refused}");
+        }
+    }
+}
+
+/// A validated ticket whose width the option refers to a parameter the ticket sets
+/// (`MediaSizeWidth` a `ParameterRef`, storytold/craft-libs#1225), as a driver writes one.
+fn validated_referenced(width: u32, height: u32) -> String {
+    format!(
+        r#"<psf:PrintTicket version="1" xmlns:psf="{NS_PSF}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:ParameterInit name="psk:PageMediaSizeWidth"><psf:Value xsi:type="xsd:integer">{width}</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:PageMediaSize"><psf:Option name="psk:ISOA4">
+<psf:ScoredProperty name="psk:MediaSizeWidth"><psf:ParameterRef name="psk:PageMediaSizeWidth"/></psf:ScoredProperty>
+<psf:ScoredProperty name="psk:MediaSizeHeight"><psf:Value xsi:type="xsd:integer">{height}</psf:Value></psf:ScoredProperty>
+</psf:Option></psf:Feature>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Portrait"/></psf:Feature>
+<psf:Feature name="psk:PageScaling"><psf:Option name="psk:None"/></psf:Feature>
+</psf:PrintTicket>"#
+    )
+}
+
+/// A paper side a driver keeps in a `ParameterRef` is resolved through the `ParameterInit`
+/// the ticket sets, and checked like a direct one: a referenced width that disagrees with the
+/// sheet the request names is refused, one that agrees is taken.
+#[test]
+fn a_referenced_paper_side_is_resolved_through_the_parameter_it_names() {
+    let a4 = (210_000, 297_000);
+    assert_eq!(verify_ticket(&validated_referenced(210_000, 297_000), Some(a4), false), Ok(a4));
+    assert_eq!(verify_ticket(&validated_referenced(209_750, 297_000), Some(a4), false), Ok((209_750, 297_000)), "exactly the tolerance");
+    // A referenced size that disagrees is refused, not rewritten from the request.
+    let changed = verify_ticket(&validated_referenced(400_000, 297_000), Some(a4), false).unwrap_err();
+    assert!(changed.to_string().contains("changed the paper size"), "{changed}");
+    // A reference to a parameter the ticket does not set is a missing side, which falls back
+    // to the requested paper like any unreadable one.
+    let unset =
+        validated_referenced(400_000, 297_000).replace(r#"name="psk:PageMediaSizeWidth"><psf:Value"#, r#"name="psk:OtherParameter"><psf:Value"#);
+    assert_eq!(verify_ticket(&unset, Some(a4), false), Ok(a4), "a parameter the ticket does not set is a missing side");
+}
+
+/// A paper the driver keeps one side of (storytold/craft-libs#7230) is a candidate of last
+/// resort only: no full entry matched, a Print Schema keyword entry, and its known side
+/// agrees with the sheet.
+#[cfg(windows)]
+#[test]
+fn a_partially_known_paper_is_a_candidate_of_last_resort_only() {
+    let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+    let partial = paper(0, 297_000, Some("A4"), true);
+    let alone = [partial.clone()];
+    assert_eq!(matching_paper(&alone, 595.28, 841.89), Some(0), "no full entry: the partial one is taken");
+    // A full candidate, however it spells its option, wins over the partial one.
+    let with_full = [partial, paper(210_100, 297_000, Some("A4"), false)];
+    assert_eq!(matching_paper(&with_full, 595.28, 841.89), Some(1), "the full entry wins");
+    // A vendor's own entry is no partial candidate.
+    assert_eq!(matching_paper(&[paper(0, 297_000, Some("A4"), false)], 595.28, 841.89), None);
+    // A partial entry whose known side disagrees is no candidate.
+    assert_eq!(matching_paper(&[paper(0, 279_400, Some("Letter"), true)], 595.28, 841.89), None);
+    // Both sides gone: nothing known to agree with.
+    assert_eq!(matching_paper(&[paper(0, 0, Some("A4"), true)], 595.28, 841.89), None);
+}
+
+/// One partial paper whose known side agrees is still taken, named like the requested
+/// standard sheet or not. The known side agrees only to a quarter of a millimetre: exactly
+/// the tolerance is taken, one micrometre past it is another paper.
+#[cfg(windows)]
+#[test]
+fn a_single_partially_known_paper_that_agrees_is_still_taken() {
+    let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+    assert_eq!(matching_paper(&[paper(215_900, 0, Some("Legal 215.9 x 355.6 mm"), true)], 612.0, 1008.0), Some(0), "named like the sheet");
+    assert_eq!(matching_paper(&[paper(215_900, 0, None, true)], 612.0, 1008.0), Some(0), "or without a name at all");
+    assert_eq!(matching_paper(&[paper(0, 297_250, None, true)], 595.28, 841.89), Some(0), "exactly the tolerance");
+    assert_eq!(matching_paper(&[paper(0, 297_251, None, true)], 595.28, 841.89), None, "one µm past the tolerance");
+}
+
+/// storytold/craft-libs#1225 (Code Rabbit, second round): a single partial paper whose known
+/// side agrees is still refused when its own name is known and contradicts the requested
+/// standard sheet — the width the driver kept is shared by Letter and Legal, and a known
+/// Letter name is evidence against choosing it for a Legal sheet (INV-4). "Extra" is a
+/// modifier word, another paper: a known "Letter Extra" name contradicts a Letter sheet too.
+/// Without a name there is nothing contradicting, and the agreeing entry is taken as before.
+#[cfg(windows)]
+#[test]
+fn a_single_partially_known_paper_whose_known_name_contradicts_the_sheet_is_refused() {
+    let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+    assert_eq!(
+        matching_paper(&[paper(215_900, 0, Some("Letter 215.9 x 279.4 mm"), true)], 612.0, 1008.0),
+        None,
+        "a known Letter name is not a Legal sheet"
+    );
+    assert_eq!(
+        matching_paper(&[paper(215_900, 0, Some("Letter Extra 215.9 x 431.8 mm"), true)], 612.0, 792.0),
+        None,
+        "a known \"Letter Extra\" name is not a Letter sheet"
+    );
+    assert_eq!(matching_paper(&[paper(215_900, 0, None, true)], 612.0, 1008.0), Some(0), "an unnamed twin stands, the agreement alone");
+}
+
+/// storytold/craft-libs#1225: two partial papers that both agree (Letter and Legal share a
+/// width) are told apart by name, as full candidates are; when nothing tells them apart,
+/// none is chosen, not the first one that agrees.
+#[cfg(windows)]
+#[test]
+fn two_partially_known_papers_that_agree_are_told_apart_by_their_names() {
+    let paper = |width, height, name, keyword| Paper { width, height, name, keyword };
+    let both = [paper(215_900, 0, Some("Letter"), true), paper(215_900, 0, Some("Legal"), true)];
+    assert_eq!(matching_paper(&both, 612.0, 1008.0), Some(1), "the partial named like the sheet wins");
+    assert_eq!(matching_paper(&both, 612.0, 792.0), Some(0), "and for a Letter sheet, the Letter one");
+    let unnamed = [paper(215_900, 0, None, true), paper(215_900, 0, None, true)];
+    assert_eq!(matching_paper(&unnamed, 612.0, 1008.0), None, "nothing to tell them apart by");
+    let same_name = [paper(215_900, 0, Some("Legal"), true), paper(215_900, 0, Some("Legal"), true)];
+    assert_eq!(matching_paper(&same_name, 612.0, 1008.0), None, "two of the same name are ambiguous too");
+}

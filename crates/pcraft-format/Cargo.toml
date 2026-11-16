@@ -17,3 +17,6 @@ serde = { workspace = true }
 # the nesting against `Limits::max_depth` before parsing.
 serde_json = { workspace = true, features = ["unbounded_depth"] }
 thiserror = { workspace = true }
+
+# Same pure-Rust backend as the PhotoCraft source codec. MIT OR Apache-2.0.
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }

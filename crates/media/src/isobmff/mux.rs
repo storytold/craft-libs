@@ -54,12 +54,18 @@ pub struct TrackConfig {
     pub media_start: Option<i64>,
     /// `hdlr` name; a sensible default is used when `None`.
     pub handler_name: Option<String>,
+    /// Audio pre-roll: puts every sample in a `roll` sample group (`sgpd` + `sbgp`, ISO/IEC
+    /// 14496-12 §10.1) with this roll distance, the number of samples a decoder must decode before
+    /// (negative) a sample for its output to be correct; -1 for AAC. Apple's decoders take an AAC
+    /// track's priming from the edit list only when the track has this group. Written by
+    /// [`Mp4Writer`]; [`FragmentedWriter`] ignores it.
+    pub roll_distance: Option<i16>,
 }
 
 impl TrackConfig {
     /// Configuration for `entry` and a media `timescale` in ticks per second, with language `und`, no edits and no handler name.
     pub fn new(entry: SampleEntry, timescale: u32) -> Self {
-        TrackConfig { entry, timescale, language: "und".into(), edits: Vec::new(), media_start: None, handler_name: None }
+        TrackConfig { entry, timescale, language: "und".into(), edits: Vec::new(), media_start: None, handler_name: None, roll_distance: None }
     }
 }
 
@@ -342,5 +348,106 @@ mod tests {
         let f = crate::isobmff::open(out.as_slice()).unwrap();
         assert_eq!(f.read_chapters(out.as_slice()).unwrap().len(), crate::isobmff::MAX_CHAPTERS);
         assert_eq!(f.chpl_chapters.len(), crate::isobmff::MAX_CHAPTERS);
+    }
+
+    /// `roll_distance` puts every sample in one `roll` group; without it, or without samples,
+    /// the track has no sample group.
+    #[test]
+    fn roll_distance_is_a_sample_group_over_every_sample() {
+        let file = |roll: Option<i16>, samples: u32| {
+            let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+            let mut cfg = TrackConfig::new(SampleEntry::aac(vec![0x11, 0x90], 2, 48_000), 48_000);
+            cfg.roll_distance = roll;
+            let t = w.add_track(cfg).unwrap();
+            for _ in 0..samples {
+                w.write_sample(t, WriteSample { data: &[0; 8], duration: 1024, composition_offset: 0, is_sync: true }).unwrap();
+            }
+            w.finish().unwrap().into_inner()
+        };
+        let out = file(Some(-1), 5);
+        let f = crate::isobmff::open(out.as_slice()).unwrap();
+        let groups = &f.tracks[0].sample_groups;
+        assert_eq!(groups.len(), 1);
+        assert_eq!((groups[0].grouping_type, groups[0].runs.as_slice()), (crate::isobmff::FourCc(*b"roll"), [(5, 1)].as_slice()));
+        assert_eq!(groups[0].descriptions, [(-1i16).to_be_bytes().to_vec()]);
+        assert_eq!(f.tracks[0].samples.len(), 5);
+        for out in [file(None, 5), file(Some(-1), 0)] {
+            assert!(crate::isobmff::open(out.as_slice()).unwrap().tracks[0].sample_groups.is_empty());
+        }
+        // The boxes as ISO/IEC 14496-12 §8.9 has them (and ffmpeg writes them): `sgpd` version 1
+        // with a default description length of 2, one description; `sbgp` version 0, one run.
+        let sgpd = [&26u32.to_be_bytes()[..], b"sgpd", &[1, 0, 0, 0], b"roll", &[0, 0, 0, 2, 0, 0, 0, 1, 0xFF, 0xFF]].concat();
+        let sbgp = [&28u32.to_be_bytes()[..], b"sbgp", &[0, 0, 0, 0], b"roll", &[0, 0, 0, 1, 0, 0, 0, 5, 0, 0, 0, 1]].concat();
+        let both = [sgpd, sbgp].concat();
+        assert!(out.windows(both.len()).any(|w| w == both));
+    }
+
+    /// A writer positioned where the header's end would pass `u64::MAX` is refused, not overflowed.
+    #[test]
+    fn a_writer_at_the_end_of_the_position_range_is_refused() {
+        for back in [0, 1, 10, 27] {
+            let mut bytes = [0u8; 8];
+            let mut sink = Cursor::new(&mut bytes[..]);
+            sink.set_position(u64::MAX - back);
+            assert!(matches!(Mp4Writer::new(sink, WriterOptions::new(Brand::Mp4)), Err(Error::Mux(_))), "{back} before the end");
+        }
+    }
+
+    /// A writer that keeps taking bytes where positions end makes writing fail, not overflow.
+    #[test]
+    fn samples_past_the_last_position_are_refused() {
+        struct Endless(u64);
+        impl Write for Endless {
+            fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+                self.0 = self.0.wrapping_add(data.len() as u64);
+                Ok(data.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl Seek for Endless {
+            fn seek(&mut self, _: SeekFrom) -> std::io::Result<u64> {
+                Ok(self.0)
+            }
+        }
+        let mut w = Mp4Writer::new(Endless(u64::MAX - 100), WriterOptions::new(Brand::Mp4)).unwrap();
+        let v = w.add_track(TrackConfig::new(avc_entry(), 1000)).unwrap();
+        let sample = WriteSample { data: &[0; 40], duration: 40, composition_offset: 0, is_sync: true };
+        w.write_sample(v, sample).unwrap();
+        assert!(matches!(w.write_sample(v, sample), Err(Error::Mux(_))));
+    }
+
+    /// A file begun in the middle of a writer is a file from there: its chunk offsets count from
+    /// its own first byte, with `moov` at the end or in front, a timecode track and chapters.
+    #[test]
+    fn a_file_begun_mid_writer_has_offsets_from_its_start() {
+        let file = |prefix: usize, faststart: bool| {
+            let mut sink = Cursor::new(vec![0xAA; prefix]);
+            sink.set_position(prefix as u64);
+            let mut opts = WriterOptions::new(Brand::Mov);
+            opts.chapters = vec![Chapter { start: 0, title: "one".into() }];
+            let mut w = Mp4Writer::new(sink, opts).unwrap();
+            let v = w.add_track(TrackConfig::new(avc_entry(), 1000)).unwrap();
+            let tc = TimecodeConfig { timescale: 1000, frame_duration: 40, frames_per_second: 25, ..Default::default() };
+            w.add_timecode_track(v, tc, 7).unwrap();
+            for i in 0..4u8 {
+                w.write_sample(v, WriteSample { data: &[i + 1; 10], duration: 40, composition_offset: 0, is_sync: true }).unwrap();
+            }
+            let out = if faststart { w.finish_faststart() } else { w.finish() }.unwrap();
+            assert_eq!(out.position(), out.get_ref().len() as u64);
+            out.into_inner()
+        };
+        for faststart in [false, true] {
+            let (plain, offset) = (file(0, faststart), file(100, faststart));
+            assert!(offset[..100].iter().all(|&b| b == 0xAA));
+            assert!(offset[100..] == plain, "faststart {faststart}");
+            let f = crate::isobmff::open(plain.as_slice()).unwrap();
+            assert_eq!(f.tracks.len(), 3);
+            for i in 0..4 {
+                assert_eq!(f.read_sample(plain.as_slice(), 0, i).unwrap(), vec![i as u8 + 1; 10]);
+            }
+            assert_eq!(f.read_sample(plain.as_slice(), 1, 0).unwrap(), 7u32.to_be_bytes());
+        }
     }
 }

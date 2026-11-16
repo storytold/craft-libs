@@ -7,12 +7,21 @@ use super::{
     text_sample_entry_payload, too_many_samples, validate_track,
 };
 
+/// The position after `bytes` more. A writer that takes bytes past the last position a file can
+/// have is an error here, not an overflow.
+fn advance(pos: u64, bytes: usize) -> Result<u64> {
+    pos.checked_add(bytes as u64).ok_or_else(|| Error::Mux("the file would end past the last position".into()))
+}
+
 /// Progressive MP4/MOV writer: `ftyp`, then one `mdat` streamed to `W`, then `moov` at [`finish`](Self::finish)
 /// (or moved in front of `mdat` by [`finish_faststart`](Self::finish_faststart)).
 pub struct Mp4Writer<W: Write + Seek> {
     w: W,
     opts: WriterOptions,
     tracks: Vec<WTrack>,
+    /// The writer's position when the file was begun: chunk offsets count from here, the first
+    /// byte of the file, wherever in the writer that is.
+    start: u64,
     /// Offset of the placeholder box (8 bytes) preceding the mdat header.
     pad_pos: u64,
     mdat_pos: u64,
@@ -23,18 +32,22 @@ pub struct Mp4Writer<W: Write + Seek> {
 }
 
 impl<W: Write + Seek> Mp4Writer<W> {
-    /// Start a file: writes `ftyp`, a placeholder box and the `mdat` header.
+    /// Start a file at the writer's current position: writes `ftyp`, a placeholder box and the
+    /// `mdat` header.
     pub fn new(mut w: W, opts: WriterOptions) -> Result<Self> {
         let start = w.stream_position()?;
         let mut b = BoxBuf::new();
         write_ftyp(&mut b, opts.brand);
-        let pad_pos = start + b.len() as u64;
+        let pad = b.len() as u64;
         b.leaf(if opts.brand == Brand::Mov { b"wide" } else { b"free" }, &[]);
-        let mdat_pos = start + b.len() as u64;
+        let mdat = b.len() as u64;
         b.leaf(b"mdat", &[]);
+        // A writer positioned at the very end of what a position can count has no room for the
+        // header; the positions below are sums that would overflow.
+        let pos = start.checked_add(b.len() as u64).ok_or_else(|| Error::Mux("the writer's position leaves no room for a file".into()))?;
+        let (pad_pos, mdat_pos) = (start + pad, start + mdat);
         w.write_all(&b.buf)?;
-        let pos = start + b.len() as u64;
-        Ok(Mp4Writer { w, opts, tracks: Vec::new(), pad_pos, mdat_pos, pos, last_track: None, chapters: Vec::new() })
+        Ok(Mp4Writer { w, opts, tracks: Vec::new(), start, pad_pos, mdat_pos, pos, last_track: None, chapters: Vec::new() })
     }
 
     /// Add a track; returns its index (track ids are index + 1).
@@ -123,8 +136,8 @@ impl<W: Write + Seek> Mp4Writer<W> {
             return Err(too_many_samples());
         }
         self.w.write_all(s.data)?;
-        let offset = self.pos;
-        self.pos += s.data.len() as u64;
+        let offset = self.pos - self.start;
+        self.pos = advance(self.pos, s.data.len())?;
         let contiguous = self.last_track == Some(track);
         self.last_track = Some(track);
         let tr = &mut self.tracks[track];
@@ -164,8 +177,8 @@ impl<W: Write + Seek> Mp4Writer<W> {
             };
             let d = rescale(vd, vts, tts).max(tc_dur as u64).min(u32::MAX as u64) as u32;
             self.w.write_all(&start.to_be_bytes())?;
-            let off = self.pos;
-            self.pos += 4;
+            let off = self.pos - self.start;
+            self.pos = advance(self.pos, 4)?;
             self.last_track = None;
             let t = &mut self.tracks[i].t;
             t.stts.push((1, d));
@@ -222,13 +235,13 @@ impl<W: Write + Seek> Mp4Writer<W> {
         }
         let id = self.tracks.len() as u32 + 1;
         let mut t = Tables::new();
-        let off = self.pos;
+        let off = self.pos - self.start;
         for (i, c) in self.chapters.iter().enumerate() {
             let end = self.chapters.get(i + 1).map_or(duration, |n| n.start);
             let d = u32::try_from(end.saturating_sub(c.start)).map_err(|_| Error::Mux("chapter longer than 2^32 movie ticks".into()))?;
             let data = text_sample(&c.title);
             self.w.write_all(&data)?;
-            self.pos += data.len() as u64;
+            self.pos = advance(self.pos, data.len())?;
             Tables::push_run(&mut t.stts, 1, d);
             Tables::push_run(&mut t.ctts, 1, 0);
             t.sizes.push(data.len() as u32);

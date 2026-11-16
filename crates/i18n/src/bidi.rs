@@ -57,14 +57,13 @@ pub(super) fn wrap(initiator: char, value: &str) -> String {
             PDF if open.last() == Some(&false) => {
                 open.pop();
             }
-            PDF => continue,
             PDI if isolates > 0 => {
                 while open.pop() == Some(false) {
                     out.push(PDF);
                 }
                 isolates -= 1;
             }
-            PDI => continue,
+            PDF | PDI => continue,
             _ => {}
         }
         out.push(c);

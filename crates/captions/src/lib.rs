@@ -4,7 +4,7 @@
 //! - **Files:** [SubRip](srt) (`.srt`), [WebVTT](vtt) (`.vtt`), [Scenarist SCC](scc) (`.scc`,
 //!   CEA-608 pop-on, roll-up and paint-on on read; pop-on on write), [MacCaption MCC](mcc)
 //!   (`.mcc`, SMPTE ST 334-2 packets with CEA-608 and CEA-708), [EBU STL](stl) (`.stl`, EBU
-//!   Tech 3264) and [TTML](ttml) (`.ttml` IMSC1 Text profile, `.dfxp` DFXP) parse into a
+//!   Tech 3264), [ASS/SSA](ass) (`.ass`, `.ssa`) and [TTML](ttml) (`.ttml` IMSC1 Text profile, `.dfxp` DFXP) parse into a
 //!   [`Document`] of [`Cue`]s and write back. Readers are forgiving (BOM, UTF-16, Windows-1252
 //!   fallback, CRLF/CR, missing SRT indexes, `,` or `.` milliseconds, missing hours, no blank
 //!   line between cues); writers are strict. WebVTT cue identifiers, cue settings, `<v Speaker>`
@@ -32,6 +32,7 @@
 #[doc = include_str!("../README.md")]
 struct ReadmeExamples;
 
+pub mod ass;
 pub mod cea608;
 pub mod mcc;
 pub mod scc;
@@ -69,10 +70,12 @@ pub enum Format {
     Ttml,
     /// DFXP (TTML1).
     Dfxp,
+    /// Advanced SubStation Alpha (also reads SubStation Alpha).
+    Ass,
 }
 
 impl Format {
-    pub const ALL: [Format; 7] = [Format::Srt, Format::WebVtt, Format::Scc, Format::Mcc, Format::Stl, Format::Ttml, Format::Dfxp];
+    pub const ALL: [Format; 8] = [Format::Srt, Format::WebVtt, Format::Scc, Format::Mcc, Format::Stl, Format::Ttml, Format::Dfxp, Format::Ass];
     pub fn name(self) -> &'static str {
         match self {
             Format::Srt => "SubRip (SRT)",
@@ -82,6 +85,7 @@ impl Format {
             Format::Stl => "EBU STL",
             Format::Ttml => "TTML (IMSC1)",
             Format::Dfxp => "DFXP (TTML1)",
+            Format::Ass => "Advanced SubStation Alpha (ASS)",
         }
     }
     pub fn extension(self) -> &'static str {
@@ -93,6 +97,7 @@ impl Format {
             Format::Stl => "stl",
             Format::Ttml => "ttml",
             Format::Dfxp => "dfxp",
+            Format::Ass => "ass",
         }
     }
     pub fn from_name(s: &str) -> Option<Format> {
@@ -104,6 +109,7 @@ impl Format {
             "stl" | "ebu-stl" | "ebustl" | "ebu" => Some(Format::Stl),
             "ttml" | "imsc" | "imsc1" | "xml" => Some(Format::Ttml),
             "dfxp" => Some(Format::Dfxp),
+            "ass" | "ssa" => Some(Format::Ass),
             _ => None,
         }
     }
@@ -251,6 +257,9 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     if head.starts_with("File Format=MacCaption_MCC") {
         return Some(Format::Mcc);
     }
+    if head.starts_with("[Script Info]") {
+        return Some(Format::Ass);
+    }
     let ext = ext.map(|e| e.trim_start_matches('.').to_ascii_lowercase());
     if (head.starts_with('<') && (head.contains("<tt ") || head.contains("<tt>") || head.contains(":tt ")))
         && (head.contains("ns/ttml") || head.contains("ttaf1"))
@@ -262,7 +271,7 @@ pub fn detect(bytes: &[u8], ext: Option<&str>) -> Option<Format> {
     match ext.as_deref() {
         Some("srt") if has_arrow_timing || head.is_empty() => Some(Format::Srt),
         Some("vtt") if has_arrow_timing => Some(Format::WebVtt),
-        Some("srt" | "vtt" | "scc" | "mcc" | "stl" | "ttml" | "dfxp" | "xml") => None,
+        Some("srt" | "vtt" | "scc" | "mcc" | "stl" | "ttml" | "dfxp" | "xml" | "ass" | "ssa") => None,
         _ if has_arrow_timing => Some(Format::Srt),
         _ => None,
     }
@@ -296,6 +305,7 @@ fn parse_unbounded(bytes: &[u8], format: Format) -> Result<Document> {
         Format::Scc => scc::parse(&text),
         Format::Mcc => mcc::parse(&text),
         Format::Ttml | Format::Dfxp => ttml::parse(&text),
+        Format::Ass => ass::parse(&text),
         Format::Stl => stl::parse(bytes),
     }
 }
@@ -333,6 +343,7 @@ pub fn write(doc: &Document, format: Format, opts: WriteOptions) -> Vec<u8> {
         Format::Stl => stl::write(doc, opts.rate, opts.program),
         Format::Ttml => ttml::write(doc, ttml::Flavor::Imsc1, opts.rate, doc.language.as_deref().unwrap_or("")).into_bytes(),
         Format::Dfxp => ttml::write(doc, ttml::Flavor::Dfxp, opts.rate, doc.language.as_deref().unwrap_or("")).into_bytes(),
+        Format::Ass => ass::write(doc).into_bytes(),
     }
 }
 

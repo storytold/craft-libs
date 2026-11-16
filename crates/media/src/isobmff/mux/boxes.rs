@@ -340,6 +340,23 @@ pub(super) fn write_stbl(b: &mut BoxBuf, t: &WTrack, qt: bool, shift: u64, force
         }
     }
     b.end(m);
+    if let Some(distance) = t.cfg.roll_distance
+        && sample_count > 0
+    {
+        // One description, which every sample maps to.
+        let m = b.start_full(b"sgpd", 1, 0);
+        b.bytes(b"roll");
+        b.u32(2);
+        b.u32(1);
+        b.i16(distance);
+        b.end(m);
+        let m = b.start_full(b"sbgp", 0, 0);
+        b.bytes(b"roll");
+        b.u32(1);
+        b.u32(sample_count);
+        b.u32(1);
+        b.end(m);
+    }
     b.end(stbl);
     Ok(())
 }

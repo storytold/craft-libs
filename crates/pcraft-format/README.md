@@ -5,7 +5,7 @@ references, the entry paths, the limits for reading a manifest, and the runner f
 migrations. The document model stays in PhotoCraft and is a type parameter here. The crate
 does not read ZIP archives, open files or decode tiles. No `unsafe`, no panics on malformed
 input, and it builds for `wasm32-unknown-unknown`. The dependencies are `serde`, `serde_json`
-and `thiserror`.
+`thiserror`, and `flate2`.
 
 ```toml
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" }
@@ -114,3 +114,15 @@ limits.max_manifest_bytes = 16 << 20;
 
 `.github/workflows/pcraft-format.yml` runs fmt, clippy and the tests on Linux and Windows, and
 a `wasm32-unknown-unknown` check.
+
+## Brush-tip envelope
+
+`tip::encode`, `tip::decode` and `tip::decode_with_max_side` share PhotoCraft's PCTIP1
+brush-tip codec: a six-byte magic, one-byte depth, little-endian width/height and zlib
+samples. Eight-bit-compatible samples use 8 bits, otherwise 16-bit little-endian.
+Dimensions, sample count, exact inflated length and caller preview side limits are checked.
+Preset group schemas, tip hashes and storage policy remain application-owned.
+
+Ported from `storytold/photocraft` commit `19aec5eb44131de44361189d64910e7b3e19e57c`,
+`crates/engine/src/preset_store.rs`. Original codec by Brandon Thomas (PhotoCraft #82),
+with later bounds/backend/storage changes by David Mann and FinnNk, under MIT OR Apache-2.0.

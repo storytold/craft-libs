@@ -202,12 +202,25 @@ pub(crate) fn paper_names(width: f64, height: f64) -> &'static [&'static str] {
 }
 
 /// Whether a driver's paper name is `name`: it starts with it, ignoring case, and the name ends
-/// there ("A4 210 x 297 mm", not "A4 Extra" for "A4" or "ARCH E1" for "ARCH E").
+/// there — either nothing follows ("arch d"), or a separator and the sheet's dimensions ("A4
+/// 210 x 297 mm"). After a separator, dimensions are a digit: a word is a modifier, another
+/// paper ("A4 Extra", "A4 (Extra)"), and anything joined to the name without a separator is
+/// another paper too ("A4Extra", "ARCH E1" for "ARCH E").
 #[cfg(windows)]
 pub(crate) fn names_paper(display: Option<&str>, name: &str) -> bool {
     let Some(display) = display else { return false };
-    display.get(..name.len()).is_some_and(|start| start.eq_ignore_ascii_case(name))
-        && display.get(name.len()..).is_some_and(|rest| rest.chars().next().is_none_or(|c| !c.is_alphanumeric()))
+    let Some(rest) = display.get(name.len()..) else { return false };
+    if !display.get(..name.len()).is_some_and(|start| start.eq_ignore_ascii_case(name)) {
+        return false;
+    }
+    let after = rest.trim_start_matches(|c: char| !c.is_alphanumeric());
+    match after.chars().next() {
+        // The name ends here, or a separator introduces the sheet's dimensions.
+        None => true,
+        Some(c) if !c.is_alphabetic() => after.len() < rest.len(),
+        // A word, directly after the name or after a separator, is a modifier: another paper.
+        Some(_) => false,
+    }
 }
 
 /// A driver paper offered for the job: its size in micrometres (as the driver lists it), its
@@ -225,6 +238,17 @@ pub(crate) struct Paper<'a> {
 /// The driver paper for a sheet of `width` × `height` points (either way round): within a
 /// quarter of a millimetre, preferring the one named like the standard size, then a Print Schema
 /// keyword, then the closest; on a tie the driver's own order. Its index in `papers`.
+///
+/// An entry the driver keeps only one side of (the other reads zero, a legacy host-based driver's
+/// DEVMODE metric, storytold/craft-libs#7230) is a candidate of last resort (INV-4): only when no
+/// full entry matched, only a Print Schema keyword entry, and only while its known side agrees
+/// with the sheet, either way round. A single such entry is still refused when its own name is
+/// known and contradicts the requested standard sheet (INV-4): a known conflicting name is
+/// evidence against the choice, and failing closed is safer than a guess. Without a name there is
+/// nothing contradicting, so the agreement alone is enough. Several such entries that all agree
+/// (a Letter and a Legal option share a width) are told apart by name, as full candidates are:
+/// the one named like the requested standard sheet wins, and when that leaves more than one, or
+/// none, nothing is chosen — a guess here would lay the sheets out for the wrong paper.
 #[cfg(windows)]
 pub(crate) fn matching_paper(papers: &[Paper<'_>], width: f64, height: f64) -> Option<usize> {
     let (w, h) = (micrometres(width.min(height))?, micrometres(width.max(height))?);
@@ -239,7 +263,33 @@ pub(crate) fn matching_paper(papers: &[Paper<'_>], width: f64, height: f64) -> O
         })
         .collect();
     candidates.sort_by_key(|(_, p, off)| (!names.iter().any(|n| names_paper(p.name, n)), !p.keyword, *off));
-    candidates.first().map(|(i, _, _)| *i)
+    if let Some(index) = candidates.first().map(|(i, _, _)| *i) {
+        return Some(index);
+    }
+    let agrees = |side: u32| side.abs_diff(w) <= PAPER_TOLERANCE || side.abs_diff(h) <= PAPER_TOLERANCE;
+    let partials: Vec<usize> = papers
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.keyword && (p.width == 0) != (p.height == 0) && (p.width == 0 || agrees(p.width)) && (p.height == 0 || agrees(p.height)))
+        .map(|(i, _)| i)
+        .collect();
+    match partials.as_slice() {
+        [only] => {
+            // INV-4: a known name that contradicts the requested standard sheet is evidence
+            // against this single partial record — refuse it; without a name, the known side's
+            // agreement is all the evidence there is, and the record stands.
+            let contradicts = papers[*only].name.is_some_and(|name| !names.iter().any(|n| names_paper(Some(name), n)));
+            (!contradicts).then_some(*only)
+        }
+        // Ambiguous by agreement alone: a partial named like the requested standard sheet wins.
+        _ => {
+            let named: Vec<usize> = partials.iter().copied().filter(|i| names.iter().any(|n| names_paper(papers[*i].name, n))).collect();
+            match named.as_slice() {
+                [only] => Some(*only),
+                _ => None,
+            }
+        }
+    }
 }
 
 fn named(node: roxmltree::Node<'_, '_>, local: &str) -> bool {
@@ -282,12 +332,32 @@ pub(crate) fn two_sided(xml: &str) -> Option<bool> {
     )
 }
 
-/// The integer value of the Print Schema element under `node` with this keyword name.
-fn integer(node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> {
+/// The `Value` of the Print Schema element `element`: its own, or one a `ParameterRef` names
+/// through the `ParameterInit` under the document's root that sets it (a driver may keep a paper
+/// side or a resolution this way). `None` when the element has neither, or names a parameter the
+/// ticket does not set.
+fn resolved_value<'a>(document: &'a roxmltree::Document<'a>, element: roxmltree::Node<'a, 'a>) -> Option<roxmltree::Node<'a, 'a>> {
+    let value = element.children().find(|v| v.has_tag_name((NS_PSF, "Value")) || v.has_tag_name((NS_PSF, "ParameterRef")))?;
+    if value.has_tag_name((NS_PSF, "Value")) {
+        return Some(value);
+    }
+    let parameter = expanded(value, value.attribute("name")?);
+    document
+        .root_element()
+        .children()
+        .filter(|p| p.has_tag_name((NS_PSF, "ParameterInit")))
+        .find(|p| p.attribute("name").is_some_and(|name| expanded(*p, name) == parameter))?
+        .children()
+        .find(|v| v.has_tag_name((NS_PSF, "Value")))
+}
+
+/// The integer value of the Print Schema element under `node` with this keyword name, direct or
+/// through a `ParameterRef` the ticket resolves ([`resolved_value`]).
+fn integer(document: &roxmltree::Document<'_>, node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> {
     node.descendants()
         .find(|n| n.has_tag_name((NS_PSF, tag)) && named(*n, name))
-        .and_then(|n| n.children().find(|v| v.has_tag_name((NS_PSF, "Value"))))
-        .and_then(|n| n.text())
+        .and_then(|element| resolved_value(document, element))
+        .and_then(|value| value.text())
         .and_then(|v| v.trim().parse::<u32>().ok())
 }
 
@@ -295,14 +365,35 @@ fn integer(node: roxmltree::Node<'_, '_>, tag: &str, name: &str) -> Option<u32> 
 /// paper (when `paper` is given, that one, to a quarter of a millimetre). Returns the paper's
 /// width and height in micrometres as the driver lists it. Only those schema fields are read:
 /// some drivers return empty vendor parameters that a stricter parser would refuse.
+///
+/// A zero or unreadable side (`MediaSizeWidth` gone) is roll-like only while the request itself
+/// names no sheet (INV-2): a legacy host-based driver keeps the paper metric in its DEVMODE
+/// extension and reads back a zero side for a real sheet (HP LaserJet P1102, storytold/craft-libs#7230), so
+/// with a sheet named the job falls back to the size the request asked for (INV-1,
+/// fail-closed: every refusal here is before anything reaches the spooler). A side the driver
+/// did report must agree with the sheet asked for, either way round (INV-3); both sides gone is
+/// refused whatever the request names (INV-5). The fallback is logged (INV-7).
 pub(crate) fn verify_ticket(xml: &str, paper: Option<(u32, u32)>, landscape: bool) -> Result<(u32, u32), Error> {
     let document = crate::xml::parse(xml).map_err(spool_error)?;
     let feature = |name: &str| document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Feature")) && named(*n, name));
     let media = feature("PageMediaSize").ok_or_else(|| spool_error("the printer's driver did not confirm the paper size; nothing was sent"))?;
-    let size = integer(media, "ScoredProperty", "MediaSizeWidth")
-        .zip(integer(media, "ScoredProperty", "MediaSizeHeight"))
-        .filter(|(w, h)| *w > 0 && *h > 0)
-        .ok_or_else(|| spool_error("the printer's driver gave a paper without a size (a roll?); nothing was sent"))?;
+    let width = integer(&document, media, "ScoredProperty", "MediaSizeWidth").filter(|w| *w > 0);
+    let height = integer(&document, media, "ScoredProperty", "MediaSizeHeight").filter(|h| *h > 0);
+    let without_a_size = spool_error("the printer's driver gave a paper without a size (a roll?); nothing was sent");
+    let size = match (width, height, paper) {
+        (Some(w), Some(h), _) => (w, h),
+        (None, None, _) | (_, _, None) => return Err(without_a_size),
+        (Some(reported), None, Some(wanted)) | (None, Some(reported), Some(wanted)) => {
+            let (w, h) = wanted;
+            // Either way round: the one side the driver did report against the sheet's width or height.
+            let agrees = |other: u32| reported.abs_diff(other) <= PAPER_TOLERANCE;
+            if !agrees(w) && !agrees(h) {
+                return Err(spool_error("the printer's driver changed the paper size; nothing was sent (choose a paper size it has)"));
+            }
+            log::warn!("the printer's driver reported only {reported} µm of the paper; going on with the requested {w} × {h} µm");
+            (w, h)
+        }
+    };
     if let Some((w, h)) = paper {
         let same = |a: (u32, u32), b: (u32, u32)| a.0.abs_diff(b.0) <= PAPER_TOLERANCE && a.1.abs_diff(b.1) <= PAPER_TOLERANCE;
         if !same(size, (w, h)) && !same(size, (h, w)) {
@@ -395,7 +486,9 @@ pub(crate) fn one_job_sides(xml: &str) -> Option<bool> {
             _ => return None,
         }
     }
-    if features(&["JobNUpAllDocumentsContiguously", "DocumentNUp"]).any(|f| integer(f, "ScoredProperty", "PagesPerSheet").is_some_and(|n| n > 1)) {
+    if features(&["JobNUpAllDocumentsContiguously", "DocumentNUp"])
+        .any(|f| integer(&document, f, "ScoredProperty", "PagesPerSheet").is_some_and(|n| n > 1))
+    {
         return None;
     }
     if features(&["JobBindAllDocuments", "DocumentBinding", "JobStapleAllDocuments", "DocumentStaple"])
@@ -432,7 +525,7 @@ pub(crate) fn verify_job_options(xml: &str, job: &Job, pages: usize, offered: Of
     };
     let refused = |field: &str| spool_error(format!("the printer's driver did not retain the requested {field}; nothing was sent"));
     let copies = job.copies.clamp(1, 999);
-    if integer(root, "ParameterInit", "JobCopiesAllDocuments") != Some(copies) {
+    if integer(&document, root, "ParameterInit", "JobCopiesAllDocuments") != Some(copies) {
         return Err(refused("copy count"));
     }
     if copies > 1 && pages > 1 && !option("DocumentCollate").is_some_and(|n| named(n, if job.collate { "Collated" } else { "Uncollated" })) {
@@ -508,19 +601,7 @@ fn feature_option(document: &roxmltree::Document<'_>, feature: &str) -> Option<F
         .children()
         .filter(|n| n.has_tag_name((NS_PSF, "ScoredProperty")))
         .filter_map(|n| {
-            let value = match n.children().find(|v| v.has_tag_name((NS_PSF, "Value")) || v.has_tag_name((NS_PSF, "ParameterRef")))? {
-                value if value.has_tag_name((NS_PSF, "Value")) => value,
-                reference => {
-                    let parameter = expanded(reference, reference.attribute("name")?);
-                    document
-                        .root_element()
-                        .children()
-                        .filter(|p| p.has_tag_name((NS_PSF, "ParameterInit")))
-                        .find(|p| p.attribute("name").is_some_and(|name| expanded(*p, name) == parameter))?
-                        .children()
-                        .find(|v| v.has_tag_name((NS_PSF, "Value")))?
-                }
-            };
+            let value = resolved_value(document, n)?;
             let text = value.text()?.trim();
             let value = match text.parse::<i64>() {
                 _ if is_qname_value(value) => expanded(value, text),
@@ -755,11 +836,11 @@ fn value_start(xml: &str, attribute: std::ops::Range<usize>) -> Option<usize> {
 pub(crate) fn imageable_margin(capabilities_xml: &str) -> Option<u32> {
     let document = crate::xml::parse(capabilities_xml).ok()?;
     let imageable = document.root_element().children().find(|n| n.has_tag_name((NS_PSF, "Property")) && named(*n, "PageImageableSize"))?;
-    let width = integer(imageable, "Property", "ImageableSizeWidth")?;
-    let height = integer(imageable, "Property", "ImageableSizeHeight")?;
+    let width = integer(&document, imageable, "Property", "ImageableSizeWidth")?;
+    let height = integer(&document, imageable, "Property", "ImageableSizeHeight")?;
     let area = imageable.children().find(|n| n.has_tag_name((NS_PSF, "Property")) && named(*n, "ImageableArea"))?;
-    let (x, y) = (integer(area, "Property", "OriginWidth")?, integer(area, "Property", "OriginHeight")?);
-    let (w, h) = (integer(area, "Property", "ExtentWidth")?, integer(area, "Property", "ExtentHeight")?);
+    let (x, y) = (integer(&document, area, "Property", "OriginWidth")?, integer(&document, area, "Property", "OriginHeight")?);
+    let (w, h) = (integer(&document, area, "Property", "ExtentWidth")?, integer(&document, area, "Property", "ExtentHeight")?);
     let right = width.checked_sub(x)?.checked_sub(w)?;
     let bottom = height.checked_sub(y)?.checked_sub(h)?;
     Some(x.max(y).max(right).max(bottom))

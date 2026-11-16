@@ -1342,3 +1342,39 @@ fn a_custom_flatpak_identity_is_used_for_the_restart() {
     assert_eq!(args.last().map(String::as_str), Some("ai.artcraft.app"));
     assert!(!args.iter().any(|arg| arg == "ai.storyteller.artcraft"));
 }
+
+#[test]
+fn nextest_archive_binaries_do_not_update_themselves() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("relocated-artifacts");
+    let exe = root.join("debug/build/artcraft-launcher-native/hash/out/artcraft_launcher_native-hash");
+    std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    std::fs::write(&exe, "ELF").unwrap();
+    let metadata = root.join("nextest/binaries-metadata.json");
+    std::fs::create_dir_all(metadata.parent().unwrap()).unwrap();
+    // Names alone are not evidence of a Cargo build tree.
+    assert!(!is_development_build(&exe, false));
+    std::fs::write(&metadata, "{}").unwrap();
+    assert!(!is_development_build(&exe, false), "empty inventory is not evidence");
+    let inventory = serde_json::json!({
+        "rust-build-meta": {"target-directory": "/original/target"},
+        "rust-binaries": {"launcher": {"binary-path": "/original/target/debug/build/artcraft-launcher-native/hash/out/artcraft_launcher_native-hash"}}
+    });
+    std::fs::write(&metadata, inventory.to_string()).unwrap();
+    assert!(is_development_build(&exe, false));
+    assert_eq!(current_at(&crate::suite::LAUNCHER, &exe, false), None);
+    assert!(!is_development_build(&exe, true), "explicit developer opt-in remains available");
+    let installed = root.join("bin/artcraft-launcher");
+    assert!(!is_development_build(&installed, false), "an unlisted descendant installation is not a test binary");
+    std::fs::remove_file(&metadata).unwrap();
+    std::fs::create_dir(&metadata).unwrap();
+    assert!(!is_development_build(&exe, false), "metadata must be a file");
+    #[cfg(unix)]
+    {
+        std::fs::remove_dir(&metadata).unwrap();
+        let external = dir.path().join("inventory.json");
+        std::fs::write(&external, inventory.to_string()).unwrap();
+        std::os::unix::fs::symlink(external, &metadata).unwrap();
+        assert!(!is_development_build(&exe, false), "symlink inventory is not evidence");
+    }
+}

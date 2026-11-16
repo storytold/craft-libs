@@ -10,11 +10,13 @@
 //!
 //! # Where this crate stops
 //!
-//! The samples come out as the file stores them (after a DNG `LinearizationTable`): black is not subtracted,
-//! nothing is scaled, cropped, white balanced or demosaiced, opcode lists and profile tables are parsed but not
-//! applied, and no colour transform is computed from the matrices. Normalisation, demosaicing, highlight
-//! handling, the DNG colour model's arithmetic, lens corrections, tone and everything after belong to the
-//! develop pipeline, which reads the public fields of the types here.
+//! The samples come out as the file stores them (after a DNG `LinearizationTable`, except when the file
+//! also has an `OpcodeList1`: that list runs on the stored codes first, and applying it is the develop
+//! pipeline's work, so the table is left unapplied and carried on [`RawImage::linearization_table`]).
+//! Black is not subtracted, nothing is scaled, cropped, white balanced or demosaiced, opcode lists and
+//! profile tables are parsed but not applied, and no colour transform is computed from the matrices.
+//! Normalisation, demosaicing, highlight handling, the DNG colour model's arithmetic, lens corrections,
+//! tone and everything after belong to the develop pipeline, which reads the public fields of the types here.
 //!
 //! # Formats
 //!
@@ -66,6 +68,9 @@ mod crw;
 mod crx;
 #[cfg(feature = "cr3")]
 mod crx_wavelet;
+/// DNG camera-profile file parsing and writing.
+#[cfg(feature = "dng")]
+pub mod dcp;
 #[cfg(feature = "dng")]
 mod dng;
 #[cfg(feature = "dng")]
@@ -97,6 +102,8 @@ pub mod kelvin;
 mod kodak;
 pub mod lens_metadata;
 pub mod ljpeg;
+/// Optimized lossless JPEG decoder for streams with line-aligned restarts.
+pub mod ljpeg_lines;
 #[cfg(feature = "arw")]
 mod llvc;
 #[cfg(feature = "mef")]
@@ -146,8 +153,8 @@ pub use opcodes::{Opcode, OpcodeLists};
 #[cfg(feature = "arw")]
 pub use preview::embedded_preview_dynamic_range_optimized;
 pub use preview::{
-    PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering,
-    embedded_preview_from_range,
+    DecodedPreview, PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_jpeg_preview, embedded_jpeg_preview_covering,
+    embedded_jxl_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering, embedded_preview_from_range,
 };
 #[cfg(feature = "dng")]
 pub use semantic::{SemanticMask, semantic_masks};
@@ -636,6 +643,22 @@ pub fn probe_info(bytes: &[u8]) -> Result<RawInfo> {
     probe_info_with(bytes, &Limits::default())
 }
 
+/// Orientation of a supported raw, read through the same format parser as [`probe_info`].
+pub fn orientation(bytes: &[u8]) -> Option<u16> {
+    if let Ok(info) = probe_info(bytes) {
+        return Some(info.orientation.to_exif());
+    }
+    // A damaged/unsupported pixel IFD must not hide usable orientation metadata from preview
+    // fallback. CR3 keeps IFD0 in its CMT1 box; TIFF-based raws keep it at the file start.
+    // The `cr3` module exists only with the `cr3` feature: this gate is required so
+    // `cargo check -p craft-raw --no-default-features --features dng` builds (E0433 otherwise).
+    #[cfg(feature = "cr3")]
+    if probe(bytes) == Some(RawFormat::Cr3) {
+        return cr3::orientation(bytes);
+    }
+    craft_tiff::Tiff::parse(bytes).ok()?.ifds.first()?.u16(craft_tiff::tags::ORIENTATION).or(Some(1))
+}
+
 /// [`probe_info`] within `limits`: a file that declares more than they allow fails as [`decode_with`] would.
 pub fn probe_info_with(bytes: &[u8], limits: &Limits) -> Result<RawInfo> {
     decode_in(bytes, Mode::Header, limits).map(RawImage::into_info)
@@ -785,6 +808,11 @@ pub struct Cfa {
     pub height: usize,
     /// `width × height` colour indices, row-major, anchored at image pixel (0, 0).
     pub pattern: Vec<u8>,
+    /// The sensor-space coordinate where this periodic pattern is anchored.
+    #[serde(default)]
+    pub origin_x: usize,
+    #[serde(default)]
+    pub origin_y: usize,
 }
 
 impl Cfa {
@@ -801,13 +829,13 @@ impl Cfa {
                 })
             })
             .collect::<Option<_>>()?;
-        (p.len() == 4).then_some(Cfa { width: 2, height: 2, pattern: p })
+        (p.len() == 4).then_some(Cfa { width: 2, height: 2, pattern: p, origin_x: 0, origin_y: 0 })
     }
     /// A 2×2 Bayer layout named in code (`"RGGB"`, `"BGGR"`, `"GRBG"`, `"GBRG"`). Only for literal
     /// names (tested below); anything else falls back to RGGB instead of failing.
     #[cfg_attr(not(feature = "crw"), allow(dead_code))]
     pub(crate) fn bayer_static(s: &'static str) -> Cfa {
-        Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, pattern: vec![0, 1, 1, 2] })
+        Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, pattern: vec![0, 1, 1, 2], origin_x: 0, origin_y: 0 })
     }
     /// The Fujifilm X-Trans 6×6 layout (as commonly documented), anchored at (0, 0).
     pub fn xtrans() -> Cfa {
@@ -822,16 +850,20 @@ impl Cfa {
                 })
             })
             .collect();
-        Cfa { width: 6, height: 6, pattern }
+        Cfa { width: 6, height: 6, pattern, origin_x: 0, origin_y: 0 }
     }
     #[inline]
     pub fn color_at(&self, x: usize, y: usize) -> u8 {
-        self.pattern[(y % self.height) * self.width + (x % self.width)]
+        let relative = |v: usize, origin: usize, period: usize| {
+            let (v, origin) = (v % period, origin % period);
+            if v >= origin { v - origin } else { period - (origin - v) }
+        };
+        self.pattern[relative(y, self.origin_y, self.height) * self.width + relative(x, self.origin_x, self.width)]
     }
     /// The same pattern anchored at `(dx, dy)` of the current anchor (e.g. after cropping to an active area).
     pub fn shifted(&self, dx: usize, dy: usize) -> Cfa {
         let pattern = (0..self.height).flat_map(|y| (0..self.width).map(move |x| (x, y))).map(|(x, y)| self.color_at(x + dx, y + dy)).collect();
-        Cfa { width: self.width, height: self.height, pattern }
+        Cfa { width: self.width, height: self.height, pattern, origin_x: 0, origin_y: 0 }
     }
     pub fn is_bayer(&self) -> bool {
         if self.width != 2 || self.height != 2 {
@@ -848,7 +880,7 @@ impl Cfa {
     }
     /// Pattern name like `"RGGB"` for 2×2 patterns.
     pub fn name(&self) -> String {
-        self.pattern.iter().map(|&c| ['R', 'G', 'B', '?'][c.min(3) as usize]).collect()
+        self.shifted(0, 0).pattern.iter().map(|&c| ['R', 'G', 'B', '?'][c.min(3) as usize]).collect()
     }
     fn valid(&self) -> bool {
         self.width > 0 && self.height > 0 && self.width <= 16 && self.height <= 16 && self.pattern.len() == self.width * self.height
@@ -975,6 +1007,20 @@ pub struct ColorData {
     pub kelvin_presets: Option<kelvin::KelvinPresets>,
 }
 
+/// Bounded diagnostics for decisions actually made by a raw decoder. An absent optional tag
+/// does not itself set a notice; hosts can translate these flags into their own warning text
+/// without inferring a fallback from missing metadata or retaining source-controlled strings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RawNotices {
+    /// Explicit default-crop metadata needed correction or a fallback to the active area.
+    pub default_crop_adjusted: bool,
+    /// A source profile gain table could not be used and was omitted from the decoded image.
+    pub gain_table_omitted: bool,
+    /// The CFA layout was selected by a decoder fallback instead of usable source metadata.
+    pub assumed_cfa: bool,
+}
+
 /// A decoded raw image.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawImage {
@@ -1002,6 +1048,12 @@ pub struct RawImage {
     pub wb_multipliers: Option<[f32; 3]>,
     /// Whether a `LinearizationTable` was applied to `data`.
     pub linearized: bool,
+    /// The file's `LinearizationTable`, when present. `data` has already been mapped through it when
+    /// [`Self::linearized`] is true. When `linearized` is false and this is `Some`, the table was left
+    /// unapplied so `OpcodeList1` can run on the stored samples first (DNG chapter 7); call
+    /// [`Self::apply_linearization`] after that list.
+    #[serde(default)]
+    pub linearization_table: Option<Vec<u16>>,
     /// Height of a sensor pixel over its width (1.0 for square pixels). The D1X and D1H write 2.0: their frame is
     /// 4028 x 1324 and the picture is 3:2 only once the rows are doubled. A developer stretches the rows by
     /// this factor.
@@ -1019,6 +1071,9 @@ pub struct RawImage {
     /// measured levels are placeholders.
     #[serde(default)]
     pub level_sources: LevelSources,
+    /// Fixed-size decoder decisions, separate from ordinary missing optional metadata.
+    #[serde(default)]
+    pub notices: RawNotices,
 }
 
 impl RawImage {
@@ -1075,6 +1130,23 @@ impl RawImage {
     /// Validate internal consistency (dimensions vs data length, CFA shape, rectangles).
     pub fn validate(&self) -> Result<()> {
         self.check(true)
+    }
+
+    /// Map integer `data` through [`Self::linearization_table`] when the table has not yet been applied.
+    /// No-op when [`Self::linearized`] is already true, the table is missing, or the samples are not
+    /// integers. Call this after `OpcodeList1`, which DNG applies to the stored codes (chapter 7).
+    pub fn apply_linearization(&mut self) {
+        if self.linearized {
+            return;
+        }
+        let Some(table) = self.linearization_table.as_deref().filter(|t| !t.is_empty()) else {
+            return;
+        };
+        if let RawData::U16(v) = &mut self.data {
+            let last = table.len() - 1;
+            v.iter_mut().for_each(|s| *s = table[(*s as usize).min(last)]);
+            self.linearized = true;
+        }
     }
 
     fn check(&self, samples: bool) -> Result<()> {
@@ -1149,5 +1221,23 @@ mod checked_arithmetic_tests {
         }
         assert_eq!(Orientation::from_exif(0), Orientation::Normal);
         assert_eq!(Orientation::from_exif(9), Orientation::Normal);
+    }
+}
+
+#[cfg(test)]
+mod raw_notices_tests {
+    use super::*;
+
+    #[test]
+    fn missing_notices_default_to_no_claims_and_explicit_flags_are_independent() {
+        type Error = serde::de::value::Error;
+        let empty = serde::de::value::MapDeserializer::<_, Error>::new(std::iter::empty::<(&str, bool)>());
+        assert_eq!(RawNotices::deserialize(empty).unwrap(), RawNotices::default());
+        let one = serde::de::value::MapDeserializer::<_, Error>::new([("assumed_cfa", true)].into_iter());
+        let notices = RawNotices::deserialize(one).unwrap();
+        let copied = notices;
+        assert_eq!(notices, copied);
+        assert_eq!(notices, RawNotices { assumed_cfa: true, default_crop_adjusted: false, gain_table_omitted: false });
+        assert!(!std::mem::needs_drop::<RawNotices>(), "decoder notices own no allocated strings");
     }
 }

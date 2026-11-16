@@ -145,7 +145,9 @@ impl Locale {
                     rows.entry(e.context).or_default().insert(e.source, e.translation);
                 }
             }
-            problems.iter().for_each(|p| log::warn!("translation catalog: {p}; row skipped"));
+            for p in &problems {
+                log::warn!("translation catalog: {p}; row skipped");
+            }
             Parsed { rows, problems }
         })
     }

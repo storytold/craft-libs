@@ -15,7 +15,7 @@
 //! `IRMAK` and `ırmak`. Plain `str::to_lowercase` follows no locale and turns `İ` into `i` plus a
 //! combining dot, which nothing typed would match.
 //!
-//! The Turkish i handling and sigma folding come from PdfCraft's `fold_case` (snipeTR,
+//! The Turkish i handling and sigma folding come from `PdfCraft`'s `fold_case` (snipeTR,
 //! nevicia2010-hub).
 
 use std::ops::Range;
@@ -90,7 +90,7 @@ impl Folder {
     }
 
     /// One cluster, already in NFKD.
-    fn fold_cluster(&self, cluster: &str, out: &mut String) {
+    fn fold_cluster(self, cluster: &str, out: &mut String) {
         let mut chars = cluster.chars().peekable();
         while let Some(c) = chars.next() {
             match c {

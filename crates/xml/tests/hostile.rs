@@ -19,6 +19,18 @@ fn text_len(e: &El) -> usize {
 }
 
 #[test]
+fn strict_end_tags_keep_first_root_and_entity_compatibility() {
+    let opts = Options { strict_end_tags: true, unknown_entity: UnknownEntity::Literal, doctype: Doctype::Ignore, ..Options::default() };
+    let root = opts.parse(b"<!DOCTYPE a [<!ENTITY ignored 'x'>]><a>&unknown;<b/></a><tail/>").unwrap();
+    assert_eq!(root.name, "a");
+    assert_eq!(root.text().as_ref(), "&unknown;");
+
+    for malformed in [b"<a><b></a>".as_slice(), b"<a><b/>".as_slice(), b"</a><b/>".as_slice()] {
+        assert!(opts.parse(malformed).is_err(), "{}", String::from_utf8_lossy(malformed));
+    }
+}
+
+#[test]
 fn a_depth_bomb_is_refused_at_the_limit() {
     let limits = Limits { max_depth: 8, ..Limits::DEFAULT };
     let nested = |n: usize| format!("{}{}", "<a>".repeat(n), "</a>".repeat(n));
@@ -79,7 +91,11 @@ fn an_attribute_flood_is_refused_at_the_limit() {
         let opts = opts.with_limits(limits);
         for (k, kind) in kinds.iter().enumerate() {
             let _ = opts.parse(tag(16, kind).as_bytes());
-            assert_eq!(opts.parse(tag(17, kind).as_bytes()).err().map(|e| e.is_limit() || (opts.strict && k == 3)), Some(true), "kind {k}");
+            assert_eq!(
+                opts.parse(tag(17, kind).as_bytes()).err().map(|e| e.is_limit() || (opts.strict && (k == 1 || k == 3))),
+                Some(true),
+                "kind {k}"
+            );
             assert!(opts.first_start(tag(17, kind).as_bytes(), "a").is_none());
         }
         assert_eq!(opts.parse(tag(17, kinds[0]).as_bytes()), Err(Error::TooManyAttrs(16)));
@@ -367,6 +383,23 @@ fn a_node_count_charges_a_budget_shared_by_several_parts() {
     assert_eq!(short.parse(part.as_bytes()), Err(Error::TooManyNodes(200)));
 }
 
+#[test]
+fn element_limits_are_independent_and_streamed_rows_release_them() {
+    let limited = Options::default().with_limits(Limits { max_elements: 2, ..Limits::DEFAULT });
+    assert_eq!(limited.parse(b"<r><a/><b/></r>"), Err(Error::TooManyElements(2)));
+
+    let streaming = Options::default().with_limits(Limits { max_elements: 3, ..Limits::DEFAULT });
+    let mut rows = 0;
+    let root = streaming
+        .parse_streaming(b"<s><row><a/></row><row><b/></row></s>", &["row"], |_| {
+            rows += 1;
+            Ok::<(), Error>(())
+        })
+        .unwrap();
+    assert_eq!(rows, 2);
+    assert!(root.children.is_empty());
+}
+
 /// A part that cannot be read to its end still gives what came before the failure.
 #[test]
 fn a_failed_streaming_read_returns_what_it_had() {
@@ -435,4 +468,42 @@ fn a_strict_pull_reader_refuses_what_is_outside_the_root() {
     }
     // white space, comments and instructions may stand outside the root
     assert!(read(strict, b"<?xml version='1.0'?>\r\n <!-- c -->\t<a>x</a>\n<?pi?> ").is_ok());
+}
+
+#[test]
+fn strict_attributes_are_unique_before_name_rewriting() {
+    use craft_xml::{Names, Options};
+    for names in [Names::AsWritten, Names::Local] {
+        let strict = Options { names, ..Options::default() }.strict();
+        for xml in [
+            "<r a='1' a='2'/>",
+            "<r xmlns:p='urn:x' xmlns:q='urn:x' p:a='1' q:a='2'/>",
+            "<r xml:a='1' xmlns:p='http://www.w3.org/XML/1998/namespace' p:a='2'/>",
+            "<r xmlns:p='urn:x'><c xmlns:q='urn:x' p:a='1' q:a='2'/></r>",
+        ] {
+            assert!(strict.parse(xml.as_bytes()).is_err(), "{xml}");
+            let mut events = strict.events(xml.as_bytes());
+            assert!(
+                loop {
+                    match events.next() {
+                        Ok(Some(_)) => {}
+                        Ok(None) => break false,
+                        Err(_) => break true,
+                    }
+                },
+                "{xml}"
+            );
+        }
+        for xml in [
+            "<r xmlns='urn:x' xmlns:p='urn:x' a='1' p:a='2'/>",
+            "<r p:a='1' q:a='2'/>",
+            "<r xmlns:p='urn:x'><c xmlns:p='urn:y' xmlns:q='urn:x' p:a='1' q:a='2'/></r>",
+        ] {
+            assert!(strict.parse(xml.as_bytes()).is_ok(), "{xml}");
+        }
+        assert!(Options { names, ..Options::default() }.parse(b"<r a='1' a='2'/>").is_ok());
+    }
+    let strict = Options { limits: craft_xml::Limits { max_attrs: 2, ..craft_xml::Limits::DEFAULT }, ..Options::default() }.strict();
+    assert!(strict.parse(b"<r xmlns:a='a' xmlns:b='b'><c xmlns:c='c'/></r>").is_err());
+    assert!(strict.parse(b"<r a='1' b='2' c='3'/>").is_err());
 }

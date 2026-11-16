@@ -136,11 +136,11 @@ pub(super) fn plural_rules(code: &str) -> Option<(PluralRules, Vec<PluralCategor
             categories.push(c);
         }
     }
-    categories.sort_by_key(rank);
+    categories.sort_by_key(|c| rank(*c));
     Some((rules, categories))
 }
 
-pub(super) fn rank(c: &PluralCategory) -> u8 {
+pub(super) fn rank(c: PluralCategory) -> u8 {
     match c {
         PluralCategory::Zero => 0,
         PluralCategory::One => 1,

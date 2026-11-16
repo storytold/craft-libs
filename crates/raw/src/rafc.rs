@@ -183,14 +183,15 @@ struct State {
 }
 
 impl State {
+    /// The smallest `k` with `count << k >= sum`. `count << k0` has the bit length of `sum` (for `k0` the bit-length
+    /// difference), so it is at most one step short.
+    #[inline]
     fn k(self) -> u32 {
-        let mut k = 0;
-        while self.count << k < self.sum {
-            k += 1;
-        }
-        k
+        let k = self.count.leading_zeros().saturating_sub(self.sum.leading_zeros());
+        k + u32::from(self.count << k < self.sum)
     }
 
+    #[inline]
     fn update(&mut self, delta: i32) {
         self.sum += delta.unsigned_abs();
         if self.count == 64 {
@@ -202,8 +203,7 @@ impl State {
 }
 
 #[inline]
-fn quant(v: i32, near: u32) -> i32 {
-    let t = [18 + 3 * near, 67 + 5 * near, 276 + 7 * near];
+fn quant(v: i32, near: u32, t: &[u32; 3]) -> i32 {
     let a = v.unsigned_abs();
     let bucket = if a <= near {
         0
@@ -232,124 +232,169 @@ fn even_prediction(nw: i32, n: i32, ne: i32, nn: i32) -> i32 {
     (pair + 2 * n) >> 2
 }
 
-#[inline]
-fn sample(rows: &[Vec<i32>], y: usize, x: usize) -> Result<i32> {
-    rows.get(y).and_then(|r| r.get(x)).copied().ok_or_else(|| corrupt("invalid predictor position"))
+/// Residual coding parameters of one precision (`2 * precision + 1` is the quantizer step).
+#[derive(Clone, Copy)]
+struct Coding {
+    range: u32,
+    bits: u32,
+    limit: u32,
+    step: i32,
 }
 
-fn decode_stripe(stripe: &Stripe<'_>, height: usize, bits: u32, xtrans: bool) -> Result<Vec<u16>> {
-    let size = if xtrans { BLOCK * 2 / 3 } else { BLOCK / 2 };
-    let mut previous = vec![vec![vec![0; size + 2]; 2]; 3];
-    let max = (1u32 << bits) - 1;
-    let range = |near: u32| (max + 2 * near) / (2 * near + 1) + 1;
-    let seed = |near: u32| State { sum: ((range(near) + 32) / 64).max(2), count: 1 };
-    let mut states = [[[seed(0); 41]; 2]; 3];
-    // Smooth regions retain finer precision and independent state across block quantizer changes.
-    let mut fine = [[[[seed(0); 5]; 2]; 3], [[[seed(1); 5]; 2]; 3], [[[seed(2); 5]; 2]; 3]];
-    let mut last_near = None;
-    let mut reader = Bits::new(stripe.bytes);
-    let n = height.checked_mul(stripe.width).filter(|&n| n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
-    // a capacity hint only: the stripe's declared height is the file's word, so the reservation is capped at a sample
-    // per bit of the stripe's real bytes (all stripes reserve in parallel; a one-byte stripe must not take 2 GiB)
-    let mut output = Vec::with_capacity(n.min(stripe.bytes.len().saturating_mul(8)));
-    for group in 0..height / 6 {
-        let near = match stripe.quantizers {
-            Some(q) => u32::from(*q.get(group).ok_or_else(|| corrupt("truncated quantizer table"))?),
-            None => 0,
+impl Coding {
+    fn new(max: u32, sample_bits: u32, precision: u32) -> Self {
+        let range = (max + 2 * precision) / (2 * precision + 1) + 1;
+        let bits = 32 - (range - 1).leading_zeros();
+        Self { range, bits, limit: 4 * sample_bits - bits - 1, step: (2 * precision + 1) as i32 }
+    }
+}
+
+/// Everything that depends only on a six-row group's quantizer, computed when the quantizer changes.
+struct Group {
+    near: u32,
+    thresholds: [u32; 3],
+    main: Coding,
+    /// Precisions 0, 1 and 2 for the low-gradient sites.
+    fine: [Coding; 3],
+}
+
+impl Group {
+    fn new(near: u32, max: u32, sample_bits: u32) -> Self {
+        Self {
+            near,
+            thresholds: [18 + 3 * near, 67 + 5 * near, 276 + 7 * near],
+            main: Coding::new(max, sample_bits, near),
+            fine: [0, 1, 2].map(|p| Coding::new(max, sample_bits, p)),
+        }
+    }
+}
+
+fn seed(max: u32, near: u32) -> State {
+    let range = (max + 2 * near) / (2 * near + 1) + 1;
+    State { sum: ((range + 32) / 64).max(2), count: 1 }
+}
+
+/// Colour vectors of one stripe, kept for the rows of a six-row group plus the two rows above it. Red and blue get
+/// three rows per group, green six; they are stored one after the other in one buffer of rows `stride` wide.
+const ROWS: [usize; 3] = [5, 8, 5];
+const BASE: [usize; 3] = [0, 5, 13];
+const TOTAL_ROWS: usize = 18;
+
+/// The three lines a sample is predicted from: the two above and the one being decoded. Each line has one edge
+/// cell on both sides, which the new line takes from the line above.
+struct Lines<'a> {
+    above2: &'a [i32],
+    above: &'a [i32],
+    current: &'a mut [i32],
+}
+
+impl<'a> Lines<'a> {
+    fn new(plane: &'a mut [i32], y: usize, stride: usize) -> Self {
+        let (done, rest) = plane.split_at_mut(y * stride);
+        let done: &[i32] = done;
+        let current = &mut rest[..stride];
+        let above = &done[(y - 1) * stride..];
+        let above2 = &done[(y - 2) * stride..(y - 1) * stride];
+        current[0] = above[1];
+        current[stride - 1] = above[stride - 2];
+        Self { above2, above, current }
+    }
+}
+
+struct Coder<'a> {
+    reader: Bits<'a>,
+    states: [[[State; 41]; 2]; 3],
+    /// Smooth regions retain finer precision and independent state across block quantizer changes.
+    fine: [[[[State; 5]; 2]; 3]; 3],
+    max: u32,
+    xtrans: bool,
+}
+
+impl Coder<'_> {
+    /// Decodes one sample's residual with the context its gradients select and applies it to the prediction.
+    #[inline]
+    fn residual(&mut self, g: &Group, pair: usize, odd: usize, (d1, d2): (i32, i32), predict: i32) -> Result<i32> {
+        let near = g.near;
+        let contrast = d1.unsigned_abs() + d2.unsigned_abs();
+        let precision = match contrast {
+            0..=5 => 0,
+            6 => near.min(1),
+            7 => near.min(2),
+            _ => near,
         };
-        if last_near != Some(near) {
-            states = [[[seed(near); 41]; 2]; 3];
-            last_near = Some(near);
+        let (context, state, coding) = if precision < near {
+            let sign = |v: i32| if v.unsigned_abs() <= precision { 0 } else { v.signum() };
+            let context = 3 * sign(d1) + sign(d2);
+            (context, &mut self.fine[precision as usize][pair % 3][odd][context.unsigned_abs() as usize], g.fine[precision as usize])
+        } else {
+            let context = 9 * quant(d1, near, &g.thresholds) + quant(d2, near, &g.thresholds);
+            (context, &mut self.states[pair % 3][odd][context.unsigned_abs() as usize], g.main)
+        };
+        let mut delta = self.reader.residual(state.k(), coding.bits, coding.range, coding.limit)?;
+        state.update(delta);
+        if context < 0 {
+            delta = -delta;
         }
-        let mut rows = previous;
+        let mut value = predict + delta * coding.step;
+        if value < -(precision as i32) {
+            value += coding.range as i32 * coding.step;
+        } else if value > (self.max + precision) as i32 {
+            value -= coding.range as i32 * coding.step;
+        }
+        Ok(value.clamp(0, self.max as i32))
+    }
+
+    /// One position of the two colour lines of a pair: the even column (`odd == 0`) or the one seven behind it.
+    #[inline]
+    fn position(&mut self, g: &Group, pair: usize, odd: usize, pos: usize, lines: &mut [Lines<'_>; 2]) -> Result<()> {
+        let x = pos + 1;
+        for (which, l) in lines.iter_mut().enumerate() {
+            let (nw, north, ne) = (l.above[x - 1], l.above[x], l.above[x + 1]);
+            let real = !self.xtrans || (MASKS[pair][which] >> (pos % 4)) & 1 != 0;
+            l.current[x] = if odd == 0 {
+                let nn = l.above2[x];
+                let predict = even_prediction(nw, north, ne, nn);
+                if real { self.residual(g, pair, 0, (north - nn, nw - north), predict)? } else { predict }
+            } else {
+                let (west, east) = (l.current[x - 1], l.current[x + 1]);
+                let predict = if (nw.min(ne)..=nw.max(ne)).contains(&north) { (west + east) >> 1 } else { (west + east + 2 * north) >> 2 };
+                if real { self.residual(g, pair, 1, (north - nw, nw - west), predict)? } else { predict }
+            };
+        }
+        Ok(())
+    }
+
+    /// Decodes the six colour-vector pairs of one group into `buf`.
+    fn group(&mut self, g: &Group, buf: &mut [i32], size: usize) -> Result<()> {
+        let stride = size + 2;
+        let (red, rest) = buf.split_at_mut(ROWS[0] * stride);
+        let (green, blue) = rest.split_at_mut(ROWS[1] * stride);
         for pair in 0..6 {
-            let colours = if pair % 2 == 0 { [0, 1] } else { [1, 2] };
-            for &colour in &colours {
-                let lines = rows.get_mut(colour).ok_or_else(|| corrupt("invalid colour vector"))?;
-                let mut row = vec![0; size + 2];
-                let prev = lines.len() - 1;
-                let left = sample(lines, prev, 1)?;
-                let right = sample(lines, prev, size)?;
-                if let Some(v) = row.first_mut() {
-                    *v = left;
-                }
-                if let Some(v) = row.last_mut() {
-                    *v = right;
-                }
-                lines.push(row);
-            }
+            let mut lines = if pair % 2 == 0 {
+                [Lines::new(&mut *red, 2 + pair / 2, stride), Lines::new(&mut *green, 2 + pair, stride)]
+            } else {
+                [Lines::new(&mut *green, 2 + pair, stride), Lines::new(&mut *blue, 2 + pair / 2, stride)]
+            };
             for even in (0..size + 8).step_by(2) {
-                for (odd, position) in [(0, Some(even)), (1, even.checked_sub(7))] {
-                    let Some(pos) = position.filter(|&x| x < size) else { continue };
-                    let x = pos + 1;
-                    for (which, &colour) in colours.iter().enumerate() {
-                        let lines = rows.get_mut(colour).ok_or_else(|| corrupt("invalid colour vector"))?;
-                        let y = lines.len() - 1;
-                        let (nw, north, ne, nn) =
-                            (sample(lines, y - 1, x - 1)?, sample(lines, y - 1, x)?, sample(lines, y - 1, x + 1)?, sample(lines, y - 2, x)?);
-                        let west = sample(lines, y, x - 1)?;
-                        let east = sample(lines, y, x + 1)?;
-                        let (predict, d1, d2) = if odd == 0 {
-                            (even_prediction(nw, north, ne, nn), north - nn, nw - north)
-                        } else {
-                            let p = if (nw.min(ne)..=nw.max(ne)).contains(&north) { (west + east) >> 1 } else { (west + east + 2 * north) >> 2 };
-                            (p, north - nw, nw - west)
-                        };
-                        let real = !xtrans || MASKS.get(pair).and_then(|m| m.get(which)).is_some_and(|m| (m >> (pos % 4)) & 1 != 0);
-                        let value = if real {
-                            let contrast = d1.unsigned_abs() + d2.unsigned_abs();
-                            let precision = match contrast {
-                                0..=5 => 0,
-                                6 => near.min(1),
-                                7 => near.min(2),
-                                _ => near,
-                            };
-                            let (context, state) = if precision < near {
-                                let sign = |v: i32| if v.unsigned_abs() <= precision { 0 } else { v.signum() };
-                                let context = 3 * sign(d1) + sign(d2);
-                                let state = fine
-                                    .get_mut(precision as usize)
-                                    .and_then(|f| f.get_mut(pair % 3))
-                                    .and_then(|s| s.get_mut(odd))
-                                    .and_then(|s| s.get_mut(context.unsigned_abs() as usize))
-                                    .ok_or_else(|| corrupt("invalid fine coding context"))?;
-                                (context, state)
-                            } else {
-                                let context = 9 * quant(d1, near) + quant(d2, near);
-                                let state = states
-                                    .get_mut(pair % 3)
-                                    .and_then(|s| s.get_mut(odd))
-                                    .and_then(|s| s.get_mut(context.unsigned_abs() as usize))
-                                    .ok_or_else(|| corrupt("invalid coding context"))?;
-                                (context, state)
-                            };
-                            let coded_range = range(precision);
-                            let coded_bits = 32 - (coded_range - 1).leading_zeros();
-                            let mut delta = reader.residual(state.k(), coded_bits, coded_range, 4 * bits - coded_bits - 1)?;
-                            state.update(delta);
-                            if context < 0 {
-                                delta = -delta;
-                            }
-                            let step = (2 * precision + 1) as i32;
-                            let mut value = predict + delta * step;
-                            if value < -(precision as i32) {
-                                value += coded_range as i32 * step;
-                            } else if value > (max + precision) as i32 {
-                                value -= coded_range as i32 * step;
-                            }
-                            value.clamp(0, max as i32)
-                        } else {
-                            predict
-                        };
-                        *lines.get_mut(y).and_then(|r| r.get_mut(x)).ok_or_else(|| corrupt("invalid predictor position"))? = value;
-                    }
+                if even < size {
+                    self.position(g, pair, 0, even, &mut lines)?;
+                }
+                if even >= 7 && even - 7 < size {
+                    self.position(g, pair, 1, even - 7, &mut lines)?;
                 }
             }
         }
-        for y in 0..6 {
-            for x in 0..stripe.width {
+        Ok(())
+    }
+}
+
+/// For each of the six rows of a group, where each output sample sits in the colour-vector buffer.
+fn placement(xtrans: bool, width: usize, stride: usize) -> [Vec<usize>; 6] {
+    std::array::from_fn(|y| {
+        (0..width)
+            .map(|x| {
                 let colour = if xtrans {
-                    XTRANS.get(y).and_then(|r| r.get(x % 6)).copied().ok_or_else(|| corrupt("invalid CFA position"))?
+                    XTRANS[y][x % 6]
                 } else {
                     match (y % 2, x % 2) {
                         (0, 0) => 0,
@@ -359,10 +404,49 @@ fn decode_stripe(stripe: &Stripe<'_>, height: usize, bits: u32, xtrans: bool) ->
                 };
                 let row = 2 + if colour == 1 { y } else { y / 2 };
                 let col = 1 + if xtrans { 2 * (x / 3) + (x % 3).min(1) } else { x / 2 };
-                output.push(sample(rows.get(colour).ok_or_else(|| corrupt("invalid colour vector"))?, row, col)? as u16);
-            }
+                (BASE[colour] + row) * stride + col
+            })
+            .collect()
+    })
+}
+
+fn decode_stripe(stripe: &Stripe<'_>, height: usize, bits: u32, xtrans: bool) -> Result<Vec<u16>> {
+    let size = if xtrans { BLOCK * 2 / 3 } else { BLOCK / 2 };
+    let stride = size + 2;
+    let max = (1u32 << bits) - 1;
+    let mut coder = Coder {
+        reader: Bits::new(stripe.bytes),
+        states: [[[seed(max, 0); 41]; 2]; 3],
+        fine: [[[[seed(max, 0); 5]; 2]; 3], [[[seed(max, 1); 5]; 2]; 3], [[[seed(max, 2); 5]; 2]; 3]],
+        max,
+        xtrans,
+    };
+    let mut last_near = None;
+    let mut group = Group::new(0, max, bits);
+    let n = height.checked_mul(stripe.width).filter(|&n| n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
+    // a capacity hint only: the stripe's declared height is the file's word, so the reservation is capped at a sample
+    // per bit of the stripe's real bytes (all stripes reserve in parallel; a one-byte stripe must not take 2 GiB)
+    let mut output = Vec::with_capacity(n.min(stripe.bytes.len().saturating_mul(8)));
+    let place = placement(xtrans, stripe.width, stride);
+    let mut buf = vec![0i32; TOTAL_ROWS * stride];
+    for index in 0..height / 6 {
+        let near = match stripe.quantizers {
+            Some(q) => u32::from(*q.get(index).ok_or_else(|| corrupt("truncated quantizer table"))?),
+            None => 0,
+        };
+        if last_near != Some(near) {
+            coder.states = [[[seed(max, near); 41]; 2]; 3];
+            group = Group::new(near, max, bits);
+            last_near = Some(near);
         }
-        previous = rows.into_iter().map(|mut r| r.split_off(r.len() - 2)).collect();
+        coder.group(&group, &mut buf, size)?;
+        for row in &place {
+            output.extend(row.iter().map(|&at| buf[at] as u16));
+        }
+        // the last two rows of each colour are the next group's rows above
+        for (base, rows) in BASE.iter().zip(ROWS) {
+            buf.copy_within((base + rows - 2) * stride..(base + rows) * stride, base * stride);
+        }
     }
     Ok(output)
 }
@@ -589,4 +673,261 @@ mod tests {
             }
         }
     }
+}
+
+/// The straightforward decoder this module started from (shift loop for `k`, an `Option`/`Result` neighbour read
+/// per access, a `Vec` per colour line, one pixel placed at a time), kept as the oracle for the optimised one.
+#[cfg(test)]
+mod differential {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    fn k_by_shifting(state: State) -> u32 {
+        let mut k = 0;
+        while state.count << k < state.sum {
+            k += 1;
+        }
+        k
+    }
+
+    fn quant_by_table(v: i32, near: u32) -> i32 {
+        let t = [18 + 3 * near, 67 + 5 * near, 276 + 7 * near];
+        quant(v, near, &t)
+    }
+
+    fn sample(rows: &[Vec<i32>], y: usize, x: usize) -> Result<i32> {
+        rows.get(y).and_then(|r| r.get(x)).copied().ok_or_else(|| corrupt("invalid predictor position"))
+    }
+
+    fn reference_stripe(stripe: &Stripe<'_>, height: usize, bits: u32, xtrans: bool) -> Result<Vec<u16>> {
+        let size = if xtrans { BLOCK * 2 / 3 } else { BLOCK / 2 };
+        let mut previous = vec![vec![vec![0; size + 2]; 2]; 3];
+        let max = (1u32 << bits) - 1;
+        let range = |near: u32| (max + 2 * near) / (2 * near + 1) + 1;
+        let seed = |near: u32| State { sum: ((range(near) + 32) / 64).max(2), count: 1 };
+        let mut states = [[[seed(0); 41]; 2]; 3];
+        let mut fine = [[[[seed(0); 5]; 2]; 3], [[[seed(1); 5]; 2]; 3], [[[seed(2); 5]; 2]; 3]];
+        let mut last_near = None;
+        let mut reader = Bits::new(stripe.bytes);
+        let n = height.checked_mul(stripe.width).filter(|&n| n <= crate::MAX_SAMPLES).ok_or(RawError::Limit("image too large"))?;
+        let mut output = Vec::with_capacity(n.min(stripe.bytes.len().saturating_mul(8)));
+        for group in 0..height / 6 {
+            let near = match stripe.quantizers {
+                Some(q) => u32::from(*q.get(group).ok_or_else(|| corrupt("truncated quantizer table"))?),
+                None => 0,
+            };
+            if last_near != Some(near) {
+                states = [[[seed(near); 41]; 2]; 3];
+                last_near = Some(near);
+            }
+            let mut rows = previous;
+            for pair in 0..6 {
+                let colours = if pair % 2 == 0 { [0, 1] } else { [1, 2] };
+                for &colour in &colours {
+                    let lines = rows.get_mut(colour).ok_or_else(|| corrupt("invalid colour vector"))?;
+                    let mut row = vec![0; size + 2];
+                    let prev = lines.len() - 1;
+                    let left = sample(lines, prev, 1)?;
+                    let right = sample(lines, prev, size)?;
+                    if let Some(v) = row.first_mut() {
+                        *v = left;
+                    }
+                    if let Some(v) = row.last_mut() {
+                        *v = right;
+                    }
+                    lines.push(row);
+                }
+                for even in (0..size + 8).step_by(2) {
+                    for (odd, position) in [(0, Some(even)), (1, even.checked_sub(7))] {
+                        let Some(pos) = position.filter(|&x| x < size) else { continue };
+                        let x = pos + 1;
+                        for (which, &colour) in colours.iter().enumerate() {
+                            let lines = rows.get_mut(colour).ok_or_else(|| corrupt("invalid colour vector"))?;
+                            let y = lines.len() - 1;
+                            let (nw, north, ne, nn) =
+                                (sample(lines, y - 1, x - 1)?, sample(lines, y - 1, x)?, sample(lines, y - 1, x + 1)?, sample(lines, y - 2, x)?);
+                            let west = sample(lines, y, x - 1)?;
+                            let east = sample(lines, y, x + 1)?;
+                            let (predict, d1, d2) = if odd == 0 {
+                                (even_prediction(nw, north, ne, nn), north - nn, nw - north)
+                            } else {
+                                let p = if (nw.min(ne)..=nw.max(ne)).contains(&north) { (west + east) >> 1 } else { (west + east + 2 * north) >> 2 };
+                                (p, north - nw, nw - west)
+                            };
+                            let real = !xtrans || MASKS.get(pair).and_then(|m| m.get(which)).is_some_and(|m| (m >> (pos % 4)) & 1 != 0);
+                            let value = if real {
+                                let contrast = d1.unsigned_abs() + d2.unsigned_abs();
+                                let precision = match contrast {
+                                    0..=5 => 0,
+                                    6 => near.min(1),
+                                    7 => near.min(2),
+                                    _ => near,
+                                };
+                                let (context, state) = if precision < near {
+                                    let sign = |v: i32| if v.unsigned_abs() <= precision { 0 } else { v.signum() };
+                                    let context = 3 * sign(d1) + sign(d2);
+                                    let state = fine
+                                        .get_mut(precision as usize)
+                                        .and_then(|f| f.get_mut(pair % 3))
+                                        .and_then(|s| s.get_mut(odd))
+                                        .and_then(|s| s.get_mut(context.unsigned_abs() as usize))
+                                        .ok_or_else(|| corrupt("invalid fine coding context"))?;
+                                    (context, state)
+                                } else {
+                                    let context = 9 * quant_by_table(d1, near) + quant_by_table(d2, near);
+                                    let state = states
+                                        .get_mut(pair % 3)
+                                        .and_then(|s| s.get_mut(odd))
+                                        .and_then(|s| s.get_mut(context.unsigned_abs() as usize))
+                                        .ok_or_else(|| corrupt("invalid coding context"))?;
+                                    (context, state)
+                                };
+                                let coded_range = range(precision);
+                                let coded_bits = 32 - (coded_range - 1).leading_zeros();
+                                let mut delta = reader.residual(k_by_shifting(*state), coded_bits, coded_range, 4 * bits - coded_bits - 1)?;
+                                state.update(delta);
+                                if context < 0 {
+                                    delta = -delta;
+                                }
+                                let step = (2 * precision + 1) as i32;
+                                let mut value = predict + delta * step;
+                                if value < -(precision as i32) {
+                                    value += coded_range as i32 * step;
+                                } else if value > (max + precision) as i32 {
+                                    value -= coded_range as i32 * step;
+                                }
+                                value.clamp(0, max as i32)
+                            } else {
+                                predict
+                            };
+                            *lines.get_mut(y).and_then(|r| r.get_mut(x)).ok_or_else(|| corrupt("invalid predictor position"))? = value;
+                        }
+                    }
+                }
+            }
+            for y in 0..6 {
+                for x in 0..stripe.width {
+                    let colour = if xtrans {
+                        XTRANS.get(y).and_then(|r| r.get(x % 6)).copied().ok_or_else(|| corrupt("invalid CFA position"))?
+                    } else {
+                        match (y % 2, x % 2) {
+                            (0, 0) => 0,
+                            (1, 1) => 2,
+                            _ => 1,
+                        }
+                    };
+                    let row = 2 + if colour == 1 { y } else { y / 2 };
+                    let col = 1 + if xtrans { 2 * (x / 3) + (x % 3).min(1) } else { x / 2 };
+                    output.push(sample(rows.get(colour).ok_or_else(|| corrupt("invalid colour vector"))?, row, col)? as u16);
+                }
+            }
+            previous = rows.into_iter().map(|mut r| r.split_off(r.len() - 2)).collect();
+        }
+        Ok(output)
+    }
+
+    /// Deterministic bytes: uniform (0), mostly zero (1: long unary prefixes and escapes) or one-heavy (2: short
+    /// prefixes and small residuals, which stay inside the range of every quantizer so the stream decodes to the end).
+    fn bytes(seed: u64, len: usize, kind: u8) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..len)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                let b = (x >> 24) as u8;
+                match kind {
+                    1 if x & 0b11 != 0 => 0,
+                    2 => b | (x >> 40) as u8,
+                    _ => b,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn k_without_the_shift_loop_matches_it() {
+        let mut sums: Vec<u32> = (0..=4200).collect();
+        for i in 0..=30 {
+            sums.extend([(1u32 << i) - 1, 1 << i, (1 << i) + 1]);
+        }
+        for count in 1..=64 {
+            for &sum in &sums {
+                let state = State { sum, count };
+                assert_eq!(state.k(), k_by_shifting(state), "count {count}, sum {sum}");
+            }
+        }
+    }
+
+    /// Every variant the stripe decoder handles (lossless and lossy, Bayer and X-Trans, 12/14/16 bits, full and
+    /// partial stripes, quantizer changes, fine contexts) gives the oracle's samples, or its error, on
+    /// uniform pseudo-random entropy streams that reach all contexts, one-heavy ones that every quantizer table decodes
+    /// to the end, and sparse ones that reach the escapes. Each quantizer table must have streams that finish.
+    #[test]
+    fn stripe_decoder_matches_the_straightforward_one() {
+        let quantizers: [Option<&[u8]>; 4] =
+            [None, Some([0, 1, 2, 3].as_slice()), Some([2, 2, 7, 0, 40, 255].as_slice()), Some([1, 1, 0, 5, 5, 9, 2].as_slice())];
+        // uniform and one-heavy streams that decode to the end, per quantizer table
+        let mut finished = [0usize; 4];
+        for bits in [12, 14, 16] {
+            for xtrans in [false, true] {
+                for (table, q) in quantizers.into_iter().enumerate() {
+                    for (seed, width, kind) in [(1, BLOCK, 0), (2, 301, 0), (3, 12, 0), (4, BLOCK, 1), (5, BLOCK, 2), (6, 301, 2)] {
+                        let data = bytes(seed * 31 + u64::from(bits), 32 << 10, kind);
+                        let groups = q.map_or(3, <[u8]>::len);
+                        let stripe = Stripe { bytes: &data, quantizers: q, width };
+                        let want = reference_stripe(&stripe, groups * 6, bits, xtrans).map_err(|e| e.to_string());
+                        let got = decode_stripe(&stripe, groups * 6, bits, xtrans).map_err(|e| e.to_string());
+                        assert_eq!(got, want, "bits {bits}, xtrans {xtrans}, quantizers {q:?}, width {width}, stream kind {kind}");
+                        finished[table] += usize::from(want.is_ok() && kind != 1);
+                    }
+                }
+            }
+        }
+        eprintln!("dense streams decoded to the end per quantizer table (of 30): {finished:?}");
+        assert!(finished.iter().all(|&n| n > 0), "some quantizer table never decodes to the end: {finished:?}");
+    }
+
+    /// Optional: the CC0 files of docs/raf-corpus.sha256 in the directory named by `LIGHTCRAFT_RAF_CORPUS` (file
+    /// names as listed there, e.g. `raf-fuji-xt5-6122.raf`). Each present file's SHA-256 is checked, then the
+    /// decoded sensor samples are compared with the hash recorded from the decoder before the optimisation.
+    #[test]
+    fn optional_cc0_samples_decode_as_recorded() {
+        let Some(directory) = std::env::var_os("LIGHTCRAFT_RAF_CORPUS") else { return };
+        let list = include_str!("../docs/raf-corpus.sha256");
+        for line in list.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+            let mut columns = line.split_whitespace();
+            let (Some(digest), Some(path)) = (columns.next(), columns.next()) else { panic!("bad corpus row {line:?}") };
+            let name = path.rsplit('/').next().unwrap();
+            let Ok(bytes) = std::fs::read(std::path::Path::new(&directory).join(name)) else { continue };
+            let sha = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>();
+            assert_eq!(sha, digest, "{name}: not the published file");
+            let Some(&(_, expected)) = RECORDED.iter().find(|(n, _)| *n == name) else { panic!("{name}: no recorded hash") };
+            let image = crate::decode(&bytes).unwrap();
+            let crate::RawData::U16(data) = &image.data else { panic!("{name}: not 16-bit samples") };
+            let hash = data.iter().flat_map(|v| v.to_le_bytes()).fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100000001b3));
+            assert_eq!(hash, expected, "{name}");
+        }
+    }
+
+    /// FNV-1a over the little-endian decoded samples, recorded from `upstream/main` before the change.
+    const RECORDED: &[(&str, u64)] = &[
+        ("raf-fuji-gfx100-3773.raf", 0x1195d3ab70da7cb4),
+        ("raf-fuji-gfx100-3775.raf", 0xb7c7c1a7717ef93c),
+        ("raf-fuji-gfx100rf-8091.raf", 0x49110f1b80eefe2e),
+        ("raf-fuji-gfx100s-4495.raf", 0x84ab46122f72796c),
+        ("raf-fuji-gfx100s-4503.raf", 0x63debf0afde73e2e),
+        ("raf-fuji-gfx50s-1435.raf", 0xb3e570a6c88455f5),
+        ("raf-fuji-xe5-8509.raf", 0x6a7d5cde2832d4f3),
+        ("raf-fuji-xh2-6001.raf", 0x466a5707ea484f9c),
+        ("raf-fuji-xh2-6002.raf", 0xbbf043676476925a),
+        ("raf-fuji-xm5-7748.raf", 0xedd17960a117a553),
+        ("raf-fuji-xt2-865.raf", 0xe020816ec114436f),
+        ("raf-fuji-xt20-compressed.raf", 0x85014025edc2cebd),
+        ("raf-fuji-xt4-3914.raf", 0x7c98e527dbe01f23),
+        ("raf-fuji-xt4-3918.raf", 0xfb4ba0df34c1c904),
+        ("raf-fuji-xt5-6122.raf", 0x8f76abd57de79a94),
+        ("raf-fuji-xt5-6123.raf", 0x0b2784853c31278d),
+        ("raf-fuji-xt50-7807.raf", 0xa8e2be9cac387ebc),
+    ];
 }

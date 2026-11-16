@@ -426,6 +426,18 @@ fn shipped_cmyk(bytes: &[u8], b: Builtin) -> Profile {
     })
 }
 
+/// Generates the compact ICC v2.1 sRGB matrix/TRC profile used by PDFCraft.
+///
+/// Unlike [`Builtin::Srgb`]'s v4 profile, this uses a 1024-sample tone curve and
+/// v2 `desc`/`text` tags for consumers that require a v2 output intent. The legacy
+/// description `sRGB (PdfCraft)` is retained to preserve existing document bytes.
+/// The generated profile contains no external assets; callers choose where it is
+/// appropriate (including their own PDF/A conformance policy).
+/// All sizes are fixed; no input-controlled allocation or recursion is involved.
+pub fn srgb_v2() -> Vec<u8> {
+    crate::builtin_v2::srgb()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -17,21 +17,22 @@
 //! [`draw`] bounds what drawing a tree with resvg allocates.
 //!
 //! Stack: usvg uses about 15 kB of stack for each level of nesting (measured natively by
-//! VectorCraft). [`Limits::depth`] levels, times one more than [`Limits::embedded_depth`], must
+//! VectorCraft). [`Limits::tree_depth`] levels, times one more than [`Limits::embedded_depth`], must
 //! fit the stack of the thread that calls [`parse`]: the default of 256 needs a thread with
 //! 16 MB or so, and a 1 MB stack takes a depth of about 34.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 pub use usvg;
 
 use crate::paths::{MAX_CSS_SELECTOR_CHECKS, StyleMap, computed_style, parse_stylesheets};
 use crate::{guard, svgz};
 
+pub mod document;
 pub mod draw;
 
 /// What one import may use. The defaults suit a desktop app that parses on a thread with a
@@ -40,8 +41,12 @@ pub mod draw;
 pub struct Limits {
     /// Bytes of the document, unpacked if it is SVGZ.
     pub bytes: usize,
-    /// How deep elements may nest, references followed (the root alone is 1).
+    /// How deep the XML elements may nest (the root alone is 1).
     pub depth: usize,
+    /// Maximum depth usvg may create after following references such as `<use>`, patterns,
+    /// clip paths, masks and markers (the root alone is 1). Choose this for the stack available
+    /// to the parsing thread; usvg conversion recurses after this preflight.
+    pub tree_depth: usize,
     /// Bytes the document type's entity references may expand to in all.
     pub entity_bytes: usize,
     /// Refuse a document type that declares an entity holding markup, instead of counting what
@@ -58,6 +63,10 @@ pub struct Limits {
     pub embedded_bytes: usize,
     /// SVG documents embedded inside one another, for [`image_resolver`].
     pub embedded_depth: usize,
+    /// Decoded RGBA pixels retained across the raster images embedded in one drawing. Dimensions
+    /// are probed before usvg hands the bytes to a decoder; repeated references to the same data
+    /// URL share one charge.
+    pub embedded_raster_pixels: u64,
 }
 
 impl Default for Limits {
@@ -65,6 +74,7 @@ impl Default for Limits {
         Limits {
             bytes: 64 << 20,
             depth: 256,
+            tree_depth: 256,
             entity_bytes: guard::MAX_ENTITY_EXPANSION,
             refuse_entity_markup: false,
             attributes: guard::MAX_ATTRIBUTES,
@@ -72,6 +82,7 @@ impl Default for Limits {
             xml_nodes: 4_000_000,
             embedded_bytes: 32 << 20,
             embedded_depth: 4,
+            embedded_raster_pixels: 24_000_000,
         }
     }
 }
@@ -101,13 +112,19 @@ pub enum Error {
     /// usvg's own error.
     #[error("invalid SVG: {0}")]
     Parse(String),
+    /// The root viewport is missing or has dimensions this SVG helper cannot preserve.
+    #[error("invalid SVG root viewport: {0}")]
+    Viewport(String),
+    /// The rewritten SVG would exceed the caller's output byte budget.
+    #[error("rewritten SVG exceeds {0} bytes")]
+    OutputTooLarge(usize),
 }
 
 /// The SVG text of the bytes of an SVG or SVGZ file, checked against `limits`: what [`parse`]
 /// hands usvg. For a caller that edits the text before it parses ([`parse_text`]).
 pub fn text<'a>(bytes: &'a [u8], limits: &Limits) -> Result<Cow<'a, str>, Error> {
     let text = svgz::text(bytes, limits.bytes)?;
-    checked(&text, limits)?;
+    preflight(&text, limits)?;
     Ok(text)
 }
 
@@ -119,12 +136,51 @@ pub fn parse(bytes: &[u8], limits: &Limits, options: &usvg::Options<'_>) -> Resu
 
 /// [`parse`] for SVG text the caller already holds.
 pub fn parse_text(svg: &str, limits: &Limits, options: &usvg::Options<'_>) -> Result<usvg::Tree, Error> {
-    let xml = checked(svg, limits)?;
-    usvg::Tree::from_xmltree(&xml, options).map_err(|e| Error::Parse(e.to_string()))
+    preflight(svg, limits)?.parse(options)
 }
 
-/// Every check on SVG text, cheapest first; the XML it parses to on the way.
-fn checked<'s>(svg: &'s str, limits: &Limits) -> Result<roxmltree::Document<'s>, Error> {
+/// Read the root SVG's unitless width and height without constructing a rendering tree.
+///
+/// Lengths with units, percentages, missing dimensions, and non-SVG roots return `Ok(None)`;
+/// malformed or over-limit XML returns the same bounded parsing error as [`parse_text`].
+pub fn root_unitless_size(svg: &str, limits: &Limits) -> Result<Option<(f64, f64)>, Error> {
+    let checked = preflight(svg, limits)?;
+    let root = checked.xml.root_element();
+    if root.tag_name().name() != "svg" {
+        return Ok(None);
+    }
+    let Some((width, height)) =
+        root.attribute("width").and_then(|value| value.parse::<f64>().ok()).zip(root.attribute("height").and_then(|value| value.parse::<f64>().ok()))
+    else {
+        return Ok(None);
+    };
+    Ok(Some((width, height)))
+}
+
+/// SVG text after shared byte, entity, attribute, XML and expansion-depth checks.
+/// Keep it opaque so consumers use the same checked tree and don't reparse XML locally.
+pub struct Preflight<'s> {
+    xml: roxmltree::Document<'s>,
+    depth: usize,
+    /// [`height`]: the nesting usvg converts, references followed.
+    height: usize,
+}
+
+impl Preflight<'_> {
+    /// The deepest stack of open source elements, before references are followed; a
+    /// self-closing leaf opens no level (`<svg><g><path/></g></svg>` is 2).
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Converts this already-checked XML into the configured usvg tree.
+    pub fn parse(self, options: &usvg::Options<'_>) -> Result<usvg::Tree, Error> {
+        usvg::Tree::from_xmltree(&self.xml, options).map_err(|e| Error::Parse(e.to_string()))
+    }
+}
+
+/// Checks already-decoded SVG text once, retaining the parsed XML for both depth policy and tree conversion.
+pub fn preflight<'s>(svg: &'s str, limits: &Limits) -> Result<Preflight<'s>, Error> {
     let preflight_limits = crate::preflight::Limits {
         bytes: limits.bytes,
         depth: limits.depth,
@@ -134,7 +190,7 @@ fn checked<'s>(svg: &'s str, limits: &Limits) -> Result<roxmltree::Document<'s>,
         attribute_work: limits.attribute_work,
         xml_nodes: limits.xml_nodes,
     };
-    let xml = crate::preflight::parse_text(svg, &preflight_limits).map_err(|e| match e {
+    let (xml, _, depth) = crate::preflight::parse_text_with_depth(svg, &preflight_limits).map_err(|e| match e {
         crate::preflight::Error::Text(e) => Error::Text(e),
         crate::preflight::Error::Entities => Error::Entities,
         crate::preflight::Error::EntityMarkup => Error::EntityMarkup,
@@ -142,10 +198,69 @@ fn checked<'s>(svg: &'s str, limits: &Limits) -> Result<roxmltree::Document<'s>,
         crate::preflight::Error::TooWide(attributes) => Error::TooWide(attributes),
         crate::preflight::Error::Xml(msg) => Error::Xml(msg),
     })?;
-    if height(&xml, limits.depth)?.is_none() {
-        return Err(Error::TooDeep(limits.depth));
+    let Some(height) = height(&xml, limits.tree_depth)? else {
+        return Err(Error::TooDeep(limits.tree_depth));
+    };
+    Ok(Preflight { xml, depth, height })
+}
+
+/// Dimensions of an SVG viewport in SVG user units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Viewport {
+    pub width: f64,
+    pub height: f64,
+}
+
+/// Wraps a validated SVG root in a new viewport while preserving the original root as content.
+/// The original root must have finite, positive pixel or point dimensions, and the wrapped
+/// output must still pass [`preflight`] under `limits`.
+pub fn rewrite_root_viewport(svg: &str, target: Viewport, limits: &Limits, output_limit: usize) -> Result<String, Error> {
+    if !target.width.is_finite() || !target.height.is_finite() || target.width <= 0.0 || target.height <= 0.0 {
+        return Err(Error::Viewport("target dimensions must be finite and positive".into()));
     }
-    Ok(xml)
+    let checked = preflight(svg, limits)?;
+    let root = checked.xml.root_element();
+    if root.tag_name().name() != "svg" {
+        return Err(Error::Viewport("root element is not svg".into()));
+    }
+    let root_dimension = |key: &str| {
+        let value = root.attribute(key)?;
+        let value = value.trim();
+        let (number, scale) = match value.strip_suffix("pt") {
+            Some(points) => (points, 4.0 / 3.0),
+            None => (value.strip_suffix("px").unwrap_or(value), 1.0),
+        };
+        number.parse::<f64>().ok().map(|n| n * scale).filter(|n| n.is_finite() && *n > 0.0)
+    };
+    let (width, height) = root_dimension("width")
+        .zip(root_dimension("height"))
+        .ok_or_else(|| Error::Viewport("source has no finite pixel or point dimensions".into()))?;
+    let range = root.range();
+    let preamble = svg.get(..range.start).ok_or_else(|| Error::Viewport("invalid XML preamble range".into()))?;
+    let inner = svg.get(range).ok_or_else(|| Error::Viewport("invalid root element range".into()))?;
+    let prefix = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}" viewBox="0 0 {} {}" preserveAspectRatio="none">"#,
+        target.width, target.height, width, height
+    );
+    let len = preamble
+        .len()
+        .checked_add(prefix.len())
+        .and_then(|n| n.checked_add(inner.len()))
+        .and_then(|n| n.checked_add(6))
+        .ok_or(Error::OutputTooLarge(output_limit))?;
+    if len > output_limit {
+        return Err(Error::OutputTooLarge(output_limit));
+    }
+    let mut output = String::new();
+    output.try_reserve_exact(len).map_err(|_| Error::OutputTooLarge(output_limit))?;
+    output.push_str(preamble);
+    output.push_str(&prefix);
+    output.push_str(inner);
+    output.push_str("</svg>");
+    // The wrapper adds a level, so a source at the depth limit can come out over it: check the
+    // output under the limits `parse_text` applies rather than return text it would refuse.
+    preflight(&output, limits)?;
+    Ok(output)
 }
 
 /// Properties whose value an element's descendants use too: the paint server they name is
@@ -264,18 +379,208 @@ pub fn height(xml: &roxmltree::Document<'_>, most: usize) -> Result<Option<usize
 struct Used {
     bytes: AtomicUsize,
     depth: AtomicUsize,
+    xml_depth: AtomicUsize,
+    svg_count: AtomicUsize,
+    svg_depth: AtomicUsize,
+    raster_pixels: AtomicU64,
+    raster_data: Mutex<HashSet<usize>>,
+    invalid_raster: AtomicUsize,
+    raster_limit: AtomicUsize,
+    invalid_svg: AtomicUsize,
+    svg_limit: AtomicUsize,
+    svg_resource_limit: AtomicUsize,
 }
 
-fn raster(data: &[u8]) -> bool {
-    data.starts_with(b"\x89PNG")
-        || data.starts_with(&[0xff, 0xd8, 0xff])
-        || data.starts_with(b"GIF8")
-        || (data.len() > 12 && data.get(8..12) == Some(b"WEBP"))
+/// What resolving one drawing's embedded images used or refused.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImageUsage {
+    /// Unique decoded raster pixels reserved before decode.
+    pub raster_pixels: u64,
+    /// Unpacked SVG bytes consumed by embedded SVG data URLs.
+    pub embedded_svg_bytes: usize,
+    /// Embedded SVG images parsed, including nested images.
+    pub embedded_svg_count: usize,
+    /// Deepest embedded SVG chain.
+    pub embedded_svg_depth: usize,
+    /// Raster image data that could not be probed or decoded by the usvg resolver.
+    pub invalid_raster_images: usize,
+    /// Raster images refused by their per-image or aggregate pixel limit.
+    pub raster_limit_images: usize,
+    /// Embedded SVG data that was invalid.
+    pub invalid_svg_images: usize,
+    /// Embedded SVG data refused by byte or nesting limits.
+    pub svg_limit_images: usize,
+    /// Subset of `svg_limit_images` refused by unpacked byte or embedded-document-chain limits.
+    /// XML/tree-depth omissions and invalid or corrupt data do not set this counter. Consumers
+    /// can reject resource overruns while still allowing an optional, over-deep child to be omitted.
+    pub svg_resource_limit_images: usize,
+}
+
+/// A data-URL resolver and the accounting for the one drawing it serves.
+///
+/// Keep this value while parsing, then read [`usage`](Self::usage). Linked files are never read.
+pub struct ImageResolver {
+    limits: Limits,
+    used: Arc<Used>,
+}
+
+impl ImageResolver {
+    /// Create one resolver budget for one drawing import.
+    pub fn new(limits: Limits) -> Self {
+        ImageResolver {
+            limits,
+            used: Arc::new(Used {
+                bytes: AtomicUsize::new(0),
+                depth: AtomicUsize::new(0),
+                xml_depth: AtomicUsize::new(0),
+                svg_count: AtomicUsize::new(0),
+                svg_depth: AtomicUsize::new(0),
+                raster_pixels: AtomicU64::new(0),
+                raster_data: Mutex::new(HashSet::new()),
+                invalid_raster: AtomicUsize::new(0),
+                raster_limit: AtomicUsize::new(0),
+                invalid_svg: AtomicUsize::new(0),
+                svg_limit: AtomicUsize::new(0),
+                svg_resource_limit: AtomicUsize::new(0),
+            }),
+        }
+    }
+
+    /// Resolver to put in `usvg::Options::image_href_resolver`.
+    pub fn resolver(&self) -> usvg::ImageHrefResolver<'static> {
+        image_resolver_for(self.limits, Arc::clone(&self.used))
+    }
+
+    /// Record the already-checked depth of the outer SVG before parsing it. Embedded SVGs then
+    /// share the same total XML recursion budget instead of each receiving a fresh allowance.
+    pub fn set_document_depth(&self, depth: usize) {
+        self.used.xml_depth.store(depth, Ordering::Relaxed);
+    }
+
+    /// Account for malformed image data URLs before usvg discards them without calling
+    /// its image resolver. Call once for the outer document, before `parse_text`.
+    /// Nested SVGs are checked automatically. The scan shares the normal XML limits and
+    /// streaming-validates URL encoding without allocating another decoded image buffer.
+    pub fn check_document(&self, svg: &str) -> Result<(), Error> {
+        let checked = preflight(svg, &self.limits)?;
+        account_invalid_data_urls(&checked.xml, &self.used);
+        Ok(())
+    }
+
+    /// Snapshot accounting after parsing has finished.
+    pub fn usage(&self) -> ImageUsage {
+        ImageUsage {
+            raster_pixels: self.used.raster_pixels.load(Ordering::Relaxed),
+            embedded_svg_bytes: self.used.bytes.load(Ordering::Relaxed),
+            embedded_svg_count: self.used.svg_count.load(Ordering::Relaxed),
+            embedded_svg_depth: self.used.svg_depth.load(Ordering::Relaxed),
+            invalid_raster_images: self.used.invalid_raster.load(Ordering::Relaxed),
+            raster_limit_images: self.used.raster_limit.load(Ordering::Relaxed),
+            invalid_svg_images: self.used.invalid_svg.load(Ordering::Relaxed),
+            svg_limit_images: self.used.svg_limit.load(Ordering::Relaxed),
+            svg_resource_limit_images: self.used.svg_resource_limit.load(Ordering::Relaxed),
+        }
+    }
+}
+
+// usvg's data-URL decoder returns before resolve_data for invalid base64. Count
+// these omissions separately, including feImage, without reading linked resources.
+fn account_invalid_data_urls(xml: &roxmltree::Document<'_>, used: &Used) {
+    for node in xml.descendants().filter(|n| n.is_element() && matches!(n.tag_name().name(), "image" | "feImage")) {
+        let href = node.attribute(("http://www.w3.org/1999/xlink", "href")).or_else(|| node.attribute("href"));
+        let Some(href) = href else { continue };
+        let url = match data_url::DataUrl::process(href) {
+            Ok(url) => url,
+            // Use the parser's normalized scheme recognition, including whitespace.
+            Err(data_url::DataUrlError::NoComma) => {
+                used.invalid_raster.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            Err(data_url::DataUrlError::NotADataUrl) => continue,
+        };
+        if url.decode(|_| Ok::<(), std::convert::Infallible>(())).is_err() {
+            used.invalid_raster.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+
+fn raster_format(data: &[u8]) -> Option<craft_image_codecs::Format> {
+    match craft_image_codecs::detect(data)? {
+        format @ (craft_image_codecs::Format::Png
+        | craft_image_codecs::Format::Jpeg
+        | craft_image_codecs::Format::Gif
+        | craft_image_codecs::Format::WebP) => Some(format),
+        _ => None,
+    }
+}
+
+fn raster_image(used: &Used, limits: &Limits, data: Arc<Vec<u8>>, format: craft_image_codecs::Format) -> Option<usvg::ImageKind> {
+    let Ok((width, height)) = craft_image_codecs::probe_allocation_size(&data) else {
+        used.invalid_raster.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+    if !matches!(
+        format,
+        craft_image_codecs::Format::Png | craft_image_codecs::Format::Jpeg | craft_image_codecs::Format::Gif | craft_image_codecs::Format::WebP
+    ) {
+        used.invalid_raster.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+    let pixels = u64::from(width).checked_mul(u64::from(height))?;
+    if pixels == 0 || pixels > limits.embedded_raster_pixels {
+        used.raster_limit.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+    let pointer = Arc::as_ptr(&data) as usize;
+    let mut seen = used.raster_data.lock().unwrap_or_else(PoisonError::into_inner);
+    if seen.insert(pointer) {
+        let mut current = used.raster_pixels.load(Ordering::Relaxed);
+        loop {
+            let next = current.checked_add(pixels)?;
+            if next > limits.embedded_raster_pixels {
+                seen.remove(&pointer);
+                used.raster_limit.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            match used.raster_pixels.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+    drop(seen);
+    // A valid header is not proof of valid pixels. resvg can silently omit a damaged
+    // image later; decode now under explicit limits so omission accounting is honest.
+    let decode_limits = craft_image_codecs::Limits::new(width, height, pixels, limits.embedded_raster_pixels.saturating_mul(8));
+    let options = craft_image_codecs::DecodeOptions { limits: decode_limits, keep_orientation: true };
+    if let Err(error) = craft_image_codecs::decode_as_with(format, &data, &options) {
+        // No tree retains this allocation on failure. Forget its address before it
+        // can be reused, but keep the pixel charge for the decode work already spent.
+        used.raster_data.lock().unwrap_or_else(PoisonError::into_inner).remove(&pointer);
+        match error {
+            craft_image_codecs::CodecError::LimitExceeded(_) => {
+                used.raster_limit.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {
+                used.invalid_raster.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        return None;
+    }
+    Some(match format {
+        craft_image_codecs::Format::Png => usvg::ImageKind::PNG(data),
+        craft_image_codecs::Format::Jpeg => usvg::ImageKind::JPEG(data),
+        craft_image_codecs::Format::Gif => usvg::ImageKind::GIF(data),
+        craft_image_codecs::Format::WebP => usvg::ImageKind::WEBP(data),
+        _ => return None,
+    })
 }
 
 /// An embedded SVG document, if the budgets allow it.
 fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'_>) -> Option<usvg::ImageKind> {
     if used.depth.load(Ordering::Relaxed) >= limits.embedded_depth {
+        used.svg_limit.fetch_add(1, Ordering::Relaxed);
+        used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
         return None;
     }
     let left = limits.embedded_bytes.saturating_sub(used.bytes.load(Ordering::Relaxed));
@@ -283,17 +588,66 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
         Ok(text) => text,
         // What a refused document unpacked before it was refused was work too: it uses up what
         // is left, so the next image can't repeat it.
-        Err(_) => {
+        Err(error) => {
             used.bytes.fetch_add(left, Ordering::Relaxed);
+            used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            if matches!(error, svgz::Error::TooLarge(_)) {
+                used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
+            }
             return None;
         }
     };
+    // The raw/inflated bytes can fit while UTF-16/Latin-1 decoding expands
+    // beyond the aggregate allowance. A refusal consumes the remaining work.
+    if text.len() > left {
+        used.bytes.fetch_add(left, Ordering::Relaxed);
+        used.svg_limit.fetch_add(1, Ordering::Relaxed);
+        used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
     used.bytes.fetch_add(text.len(), Ordering::Relaxed);
-    let xml = checked(&text, limits).ok()?;
-    used.depth.fetch_add(1, Ordering::Relaxed);
-    let tree = usvg::Tree::from_xmltree(&xml, options);
+    let checked = match preflight(&text, limits) {
+        Ok(checked) => checked,
+        // Decoding UTF-16 or Latin-1 can exceed the text cap after the
+        // raw/inflated bytes fitted. This is a resource refusal, not invalid XML.
+        Err(Error::Text(svgz::Error::TooLarge(_))) => {
+            used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            used.svg_resource_limit.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        Err(Error::TooDeep(_)) => {
+            used.svg_limit.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+        Err(_) => {
+            used.invalid_svg.fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
+    };
+    // The nesting usvg converts, references followed, not the source depth alone.
+    let xml_depth = checked.height;
+    let total_depth = used.xml_depth.load(Ordering::Relaxed).checked_add(xml_depth);
+    let Some(total_depth) = total_depth.filter(|depth| *depth <= limits.tree_depth) else {
+        used.svg_limit.fetch_add(1, Ordering::Relaxed);
+        return None;
+    };
+    let previous_depth = used.xml_depth.swap(total_depth, Ordering::Relaxed);
+    let depth = used.depth.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    used.svg_depth.fetch_max(depth, Ordering::Relaxed);
+    account_invalid_data_urls(&checked.xml, used);
+    let tree = checked.parse(options);
+    used.xml_depth.store(previous_depth, Ordering::Relaxed);
     used.depth.fetch_sub(1, Ordering::Relaxed);
-    tree.ok().map(usvg::ImageKind::SVG)
+    match tree {
+        Ok(tree) => {
+            used.svg_count.fetch_add(1, Ordering::Relaxed);
+            Some(usvg::ImageKind::SVG(tree))
+        }
+        Err(_) => {
+            used.invalid_svg.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
 }
 
 /// An image resolver for `usvg::Options::image_href_resolver` that reads `<image>` data URLs
@@ -302,22 +656,35 @@ fn embedded(used: &Used, limits: &Limits, data: &[u8], options: &usvg::Options<'
 /// [`Limits::embedded_depth`] inside one another. An image past a limit is left out. Linked
 /// files are never read. One resolver is one import's budget: make a new one for each [`parse`].
 pub fn image_resolver(limits: Limits) -> usvg::ImageHrefResolver<'static> {
-    let used = Arc::new(Used { bytes: AtomicUsize::new(0), depth: AtomicUsize::new(0) });
+    ImageResolver::new(limits).resolver()
+}
+
+fn image_resolver_for(limits: Limits, used: Arc<Used>) -> usvg::ImageHrefResolver<'static> {
     usvg::ImageHrefResolver {
-        resolve_data: Box::new(move |mime, data, options| match mime {
-            "image/jpg" | "image/jpeg" => Some(usvg::ImageKind::JPEG(data)),
-            "image/png" => Some(usvg::ImageKind::PNG(data)),
-            "image/gif" => Some(usvg::ImageKind::GIF(data)),
-            "image/webp" => Some(usvg::ImageKind::WEBP(data)),
-            "image/svg+xml" => embedded(&used, &limits, &data, options),
-            "text/plain" if raster(&data) => match data.first() {
-                Some(0x89) => Some(usvg::ImageKind::PNG(data)),
-                Some(0xff) => Some(usvg::ImageKind::JPEG(data)),
-                Some(b'G') => Some(usvg::ImageKind::GIF(data)),
-                _ => Some(usvg::ImageKind::WEBP(data)),
-            },
-            "text/plain" => embedded(&used, &limits, &data, options),
-            _ => None,
+        resolve_data: Box::new(move |mime, data, options| {
+            let detected = raster_format(&data);
+            let format = match mime {
+                "image/jpg" | "image/jpeg" => (detected == Some(craft_image_codecs::Format::Jpeg)).then_some(craft_image_codecs::Format::Jpeg),
+                "image/png" => (detected == Some(craft_image_codecs::Format::Png)).then_some(craft_image_codecs::Format::Png),
+                "image/gif" => (detected == Some(craft_image_codecs::Format::Gif)).then_some(craft_image_codecs::Format::Gif),
+                "image/webp" => (detected == Some(craft_image_codecs::Format::WebP)).then_some(craft_image_codecs::Format::WebP),
+                "text/plain" => detected,
+                _ => None,
+            };
+            if let Some(format) = format {
+                return raster_image(&used, &limits, data, format);
+            }
+            // usvg can decode only the raster variants above. Count every other declared
+            // image as an invalid raster so strict consumers can reject it instead of
+            // silently accepting a document after the image was omitted (for example BMP).
+            if mime.starts_with("image/") && mime != "image/svg+xml" {
+                used.invalid_raster.fetch_add(1, Ordering::Relaxed);
+            }
+            match mime {
+                "image/svg+xml" => embedded(&used, &limits, &data, options),
+                "text/plain" => embedded(&used, &limits, &data, options),
+                _ => None,
+            }
         }),
         resolve_string: Box::new(|_, _| None),
     }

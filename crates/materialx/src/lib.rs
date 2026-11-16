@@ -183,7 +183,14 @@ const OPENPBR_WRITABLE: &[(&str, InputKind)] = &[
 impl Document {
     /// Parses a MaterialX document while enforcing size, nesting and node-count limits.
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
-        let limits = Limits { max_input: MAX_BYTES, max_depth: MAX_DEPTH, max_nodes: MAX_NODES, max_attrs: 256, max_attrs_total: 400_000 };
+        let limits = Limits {
+            max_input: MAX_BYTES,
+            max_depth: MAX_DEPTH,
+            max_nodes: MAX_NODES,
+            max_elements: MAX_NODES,
+            max_attrs: 256,
+            max_attrs_total: 400_000,
+        };
         let options = Options {
             doctype: Doctype::Reject,
             unknown_entity: UnknownEntity::Error,
@@ -320,7 +327,13 @@ impl Document {
             .and_then(|i| i.attr("nodename"))
             .and_then(|n| nodes.get(n).copied())
             .and_then(|d| d.children("input").find(|i| i.attr("name") == Some("displacement")))
-            .and_then(|i| resolve_value(&self.root, i, None, &nodes, &outputs, 0, &mut warnings).map(|f| f.value));
+            .and_then(|i| resolve_value(&self.root, i, None, &nodes, &outputs, 0, &mut warnings))
+            .map(|found| {
+                if tiling.is_none() {
+                    tiling = found.tiling;
+                }
+                found.value
+            });
         Ok(Material {
             name: mat.attr("name").unwrap_or("Material").to_owned(),
             shader: kind,
@@ -543,6 +556,19 @@ mod tests {
         assert_eq!(Document::parse(b"<root/>").err(), Some(Error::Root));
         assert!(Document::parse(b"<!DOCTYPE materialx [<!ENTITY x 'y'>]><materialx/>").is_err());
         assert!(matches!(Document::parse(&vec![b' '; MAX_BYTES + 1]), Err(Error::Xml(XmlError::TooLarge(_)))));
+    }
+
+    #[test]
+    fn displacement_image_supplies_tiling_when_surface_inputs_do_not() {
+        let xml = br#"<materialx>
+          <open_pbr_surface name="S"><input name="base_color" value="0.3,0.4,0.5"/></open_pbr_surface>
+          <tiledimage name="H"><input name="file" value="height.png"/><input name="uvtiling" value="4,2"/></tiledimage>
+          <displacement name="D"><input name="displacement" nodename="H"/></displacement>
+          <surfacematerial name="M"><input name="surfaceshader" nodename="S"/><input name="displacementshader" nodename="D"/></surfacematerial>
+        </materialx>"#;
+        let material = Document::parse(xml).unwrap().read_material(None).unwrap();
+        assert_eq!(material.displacement, Some(Value::Image("height.png".into())));
+        assert_eq!(material.uv_tiling, [4.0, 2.0]);
     }
 
     #[test]
