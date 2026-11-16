@@ -487,6 +487,10 @@ impl<'m> ToolHost<'m> {
         if !measuring && view_only {
             sampler::pass_tool_gesture(&ctx, canvas.response.id, CanvasGesture::PRIMARY);
         }
+        // A momentary tool takes the next press anywhere on the canvas, over the session members on its body.
+        if !measuring {
+            pointer::withhold_members(&ctx, canvas.response.id, momentary_tool.is_some());
+        }
         // With no gesture and no momentary tool, a held stand-in key makes the stand-in the tool of hover, cursor and
         // paint while the selected tool does not take a primary press.
         let lent = if state.gesture.is_none() && momentary_tool.is_none() && !takes_primary {

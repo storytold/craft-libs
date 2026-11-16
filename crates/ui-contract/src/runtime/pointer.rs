@@ -96,6 +96,8 @@ pub(crate) struct Memory {
     requested: Option<(u64, PressCancel)>,
     /// Whether any arena of the viewport holds an open press; sensing registers it, as the layer above.
     press_probe: Option<fn(&Context) -> bool>,
+    /// The arena roots whose members the next pass resolves without (`withhold_members`), with the pass that asked.
+    withheld: HashMap<Id, u64>,
 }
 
 /// What one root registered on one layer: its shapes and its egui widgets.
@@ -248,6 +250,31 @@ pub(crate) fn cancel_press(ctx: &Context, reason: PressCancel) {
     let viewport = pass::current_viewport(ctx);
     let pass_nr = pass::pass_nr(ctx, viewport);
     PerViewport::<Memory>::with(ctx, viewport, |memory| memory.requested = Some((pass_nr, reason)));
+}
+
+/// Whether the arena of `root` resolves the presses and hover of the next pass without its members' shapes. A canvas
+/// host sets it each pass from the tool it runs: while a momentary tool (the Hand of a held Space, the Zoom of a held
+/// Command) is in effect, a press anywhere on the canvas lands on the canvas itself, over the session members on its
+/// body (a transform box, a crop frame), and the host gives it to that tool. A press already open keeps its target.
+pub fn withhold_members(ctx: &Context, root: Id, withheld: bool) {
+    if !crate::runtime::measure::effect(ctx, "pointer::withhold_members") {
+        return;
+    }
+    let viewport = pass::current_viewport(ctx);
+    let pass_nr = pass::pass_nr(ctx, viewport);
+    PerViewport::<Memory>::with(ctx, viewport, |memory| {
+        if withheld {
+            memory.withheld.insert(root, pass_nr);
+        } else {
+            memory.withheld.remove(&root);
+        }
+    });
+}
+
+/// Whether the arena of `root` resolves the running pass of `viewport` (`pass_nr`) without its members: its host
+/// asked so in this pass or the one before, the pass whose shapes this one resolves over.
+pub(crate) fn members_withheld(ctx: &Context, viewport: ViewportId, pass_nr: u64, root: Id) -> bool {
+    PerViewport::<Memory>::with(ctx, viewport, |memory| memory.withheld.get(&root).is_some_and(|asked| asked + 1 >= pass_nr))
 }
 
 /// Registers how the viewport tells that a press is captured. Sensing owns the arenas' machines.
