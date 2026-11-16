@@ -39,7 +39,8 @@ impl Matrix {
         match c {
             1 => Some(Matrix::Bt709),
             5 | 6 => Some(Matrix::Bt601),
-            9 | 10 => Some(Matrix::Bt2020Ncl),
+            // H.273 table 4: code 10 is constant luminance, not this matrix.
+            9 => Some(Matrix::Bt2020Ncl),
             _ => None,
         }
     }
@@ -48,7 +49,8 @@ impl Matrix {
 /// Transfer characteristics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Transfer {
-    /// BT.709 / BT.1886 display (pure 2.4 gamma is what NLEs use for display-referred decode).
+    /// BT.709 display, approximated with the sRGB curve by this slim conversion layer.
+    /// This is not a pure-gamma BT.1886 decode.
     #[default]
     Bt709,
     Srgb,
@@ -126,8 +128,7 @@ impl HdrMetadata {
     pub fn peak_nits(&self) -> Option<f32> {
         let known = |v: Option<f32>| v.filter(|n| *n > 0.0);
         let p = match (known(self.max_cll), known(self.mastering_max_nits)) {
-            (Some(c), Some(m)) => c.min(m),
-            (Some(c), None) => c,
+            (Some(c), _) => c,
             (None, m) => m?,
         };
         Some(p.clamp(REFERENCE_WHITE_NITS as f32, 10_000.0))
@@ -420,6 +421,7 @@ mod tests {
     #[test]
     fn hdr_peak_nits() {
         assert_eq!(HdrMetadata::default().peak_nits(), None);
+        assert_eq!(HdrMetadata { max_cll: Some(4000.0), mastering_max_nits: Some(1000.0), ..HdrMetadata::default() }.peak_nits(), Some(4000.0));
         assert_eq!(HdrMetadata { max_cll: Some(1000.0), mastering_max_nits: Some(4000.0), ..HdrMetadata::default() }.peak_nits(), Some(1000.0));
         assert_eq!(HdrMetadata { max_cll: Some(0.0), mastering_max_nits: Some(400.0), ..HdrMetadata::default() }.peak_nits(), Some(400.0));
         // never below reference white
@@ -428,6 +430,8 @@ mod tests {
 
     #[test]
     fn codes() {
+        assert_eq!(Matrix::from_code(9), Some(Matrix::Bt2020Ncl));
+        assert_eq!(Matrix::from_code(10), None);
         assert_eq!(Matrix::from_code(1), Some(Matrix::Bt709));
         assert_eq!(Matrix::from_code(6), Some(Matrix::Bt601));
         assert_eq!(Transfer::from_code(16), Some(Transfer::Pq));

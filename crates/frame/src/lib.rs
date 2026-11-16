@@ -31,6 +31,7 @@ pub const DEFAULT_MAX_FRAME_BYTES: usize = 1 << 30;
 pub enum FrameError {
     InvalidLayout,
     InvalidBitDepth,
+    InvalidSample,
     TooLarge,
     Allocation,
 }
@@ -39,6 +40,7 @@ impl std::fmt::Display for FrameError {
         f.write_str(match self {
             Self::InvalidLayout => "frame storage does not match its dimensions",
             Self::InvalidBitDepth => "unsupported frame sample bit depth",
+            Self::InvalidSample => "frame sample exceeds its declared bit depth",
             Self::TooLarge => "frame exceeds the allocation limit",
             Self::Allocation => "unable to allocate frame buffer",
         })
@@ -191,7 +193,14 @@ impl VideoFrame {
                 if !(9..=16).contains(bits) {
                     return Err(FrameError::InvalidBitDepth);
                 }
-                planar(planes.each_ref().map(|p| p.len()), *chroma, alpha.as_ref().map(|p| p.len()))
+                planar(planes.each_ref().map(|p| p.len()), *chroma, alpha.as_ref().map(|p| p.len()))?;
+                let max = (1u32 << bits) - 1;
+                // Alpha is full-range at the declared depth. Out-of-range values would produce
+                // opacity above one and corrupt premultiplied colors; unused padding is ignored.
+                if alpha.as_ref().is_some_and(|a| a.iter().take(pixels).any(|&v| u32::from(v) > max)) {
+                    return Err(FrameError::InvalidSample);
+                }
+                Ok(())
             }
             _ => Err(FrameError::InvalidLayout),
         }
@@ -470,6 +479,34 @@ mod tests {
         assert_eq!(fast.to_rgba8(), Err(FrameError::InvalidLayout));
     }
 
+    #[test]
+    fn yuv16_alpha_respects_declared_bit_depth() {
+        let make = |alpha, bits| VideoFrame {
+            width: 1,
+            height: 1,
+            data: PixelData::Yuv16 {
+                planes: [Arc::new(vec![128]), Arc::new(vec![128]), Arc::new(vec![128])],
+                chroma: Chroma::C444,
+                bits,
+                alpha: Some(Arc::new(vec![alpha])),
+            },
+            color: ColorInfo::REC709,
+            par: (1, 1),
+            pts: Tick::ZERO,
+        };
+        for bits in [9, 10, 12, 16] {
+            let max = ((1u32 << bits) - 1) as u16;
+            let valid = make(max, bits);
+            assert_eq!(valid.to_linear_f32().unwrap()[3], 1.0);
+            assert_eq!(valid.to_rgba8().unwrap()[3], 255);
+            if bits < 16 {
+                let invalid = make(max + 1, bits);
+                assert!(invalid.to_linear_f32().is_err());
+                assert!(invalid.to_rgba8().is_err());
+                assert!(make(u16::MAX, bits).validate().is_err());
+            }
+        }
+    }
     #[test]
     fn frame_allocations_are_checked_before_reserving() {
         assert!(matches!(VideoFrame::transparent_f32(u32::MAX, u32::MAX), Err(FrameError::TooLarge)));
