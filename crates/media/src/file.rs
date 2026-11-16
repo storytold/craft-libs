@@ -16,6 +16,53 @@ fn eof() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "read past end of byte source")
 }
 
+/// Open `path` for reading without blocking on a FIFO that was swapped in after the metadata check
+/// (`O_NONBLOCK`; it changes nothing for a regular file, and the callers check the handle's type).
+/// `O_NONBLOCK` has no std constant (no libc dependency here): it is 0o4000 on most Linux targets,
+/// 0x80 on Linux MIPS, 0x4000 on Linux SPARC and 4 on the BSD family, and the open stays a plain
+/// one on any other target.
+fn open_nonblocking(path: &Path) -> io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        #[cfg(all(
+            any(target_os = "linux", target_os = "android"),
+            any(target_arch = "mips", target_arch = "mips32r6", target_arch = "mips64", target_arch = "mips64r6")
+        ))]
+        o.custom_flags(0x80);
+        #[cfg(all(any(target_os = "linux", target_os = "android"), any(target_arch = "sparc", target_arch = "sparc64")))]
+        o.custom_flags(0x4000);
+        #[cfg(all(
+            any(target_os = "linux", target_os = "android"),
+            not(any(
+                target_arch = "mips",
+                target_arch = "mips32r6",
+                target_arch = "mips64",
+                target_arch = "mips64r6",
+                target_arch = "sparc",
+                target_arch = "sparc64"
+            ))
+        ))]
+        o.custom_flags(0o4000);
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "dragonfly"
+        ))]
+        o.custom_flags(0x4);
+    }
+    o.open(path)
+}
+
+fn not_a_file(path: &Path) -> io::Error {
+    io::Error::new(io::ErrorKind::NotFound, format!("{} is not a file", path.display()))
+}
+
 /// Files [`FileReader`]s keep open at most, together. Past this many, the least recently read file
 /// is closed and its reader reopens it on demand.
 pub const MAX_OPEN_FILES: usize = 128;
@@ -103,10 +150,14 @@ impl FileReader {
     }
 
     pub(crate) fn open_in(path: &Path, pool: &Arc<FilePool>) -> io::Result<Self> {
-        let file = std::fs::File::open(path)?;
+        // checked before opening: opening a named pipe with no writer blocks the caller for good
+        if !std::fs::metadata(path)?.is_file() {
+            return Err(not_a_file(path));
+        }
+        let file = open_nonblocking(path)?;
         let m = file.metadata()?;
         if !m.is_file() {
-            return Err(io::Error::new(io::ErrorKind::NotFound, format!("{} is not a file", path.display())));
+            return Err(not_a_file(path));
         }
         let id = pool.next_id();
         pool.insert(id, file);
@@ -120,7 +171,7 @@ impl FileReader {
         if let Some(file) = self.pool.get(self.id) {
             return Ok(file);
         }
-        let file = std::fs::File::open(&self.path)?;
+        let file = open_nonblocking(&self.path)?;
         let m = file.metadata()?;
         if !m.is_file() || m.len() < self.len {
             return Err(io::Error::other(format!("{} changed since it was opened", self.path.display())));
@@ -201,6 +252,32 @@ mod tests {
         assert!(readers[0].read_at(0, &mut b).is_err());
         drop(readers);
         assert_eq!(pool.open_count(), 0, "dropped readers close their files");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A named pipe with no writer would block `open` for good: refuse it first.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_is_refused_without_blocking() {
+        let dir = craft_media_testkit::private_dir("file-fifo");
+        let fifo = dir.join("pipe");
+        if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+            return; // no mkfifo here
+        }
+        assert!(FileReader::open(&fifo).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The open itself must not block on a FIFO swapped in after the path check (a FIFO with no writer).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn opening_a_fifo_with_no_writer_does_not_block() {
+        let dir = craft_media_testkit::private_dir("file-fifo-open");
+        let fifo = dir.join("pipe");
+        if std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+            let f = super::open_nonblocking(&fifo).unwrap();
+            assert!(!f.metadata().unwrap().is_file());
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 }
