@@ -234,21 +234,25 @@ fn locate(data: &[u8], fc_pic: u32, pics: &mut Pictures) -> Option<Found> {
         return Some(Found::Shape { w, h, key, props });
     }
     // The crops are twips off the goal size, before scaling (Word 2016's reading of Word 95
-    // files): as fractions of it, they take their share off the size.
-    let share = |crop: f32, goal: f32| if goal > 0.0 { (crop / goal).clamp(0.0, 0.99) } else { 0.0 };
-    let crop = [share(i16_at(8), dxa_goal), share(i16_at(10), dya_goal), share(i16_at(12), dxa_goal), share(i16_at(14), dya_goal)];
-    let [cl, ct, cr, cb] = crop;
+    // files): as fractions of it, they take their share off the size. A negative crop extends
+    // the picture outward: it adds to the size, but the model's crop (0 to 1) can't show it.
+    let share = |crop: f32, goal: f32| if goal > 0.0 { (crop / goal).clamp(-10.0, 0.99) } else { 0.0 };
+    let signed = [share(i16_at(8), dxa_goal), share(i16_at(10), dya_goal), share(i16_at(12), dxa_goal), share(i16_at(14), dya_goal)];
+    let [cl, ct, cr, cb] = signed;
     let w = (dxa_goal / 20.0 * (1.0 - cl - cr).max(0.01) * scale(mx)).clamp(1.0, 1584.0);
     let h = (dya_goal / 20.0 * (1.0 - ct - cb).max(0.01) * scale(my)).clamp(1.0, 1584.0);
+    let crop = signed.map(|c| c.max(0.0));
     let body = pic.get(cb_header..end)?;
-    let (at, len, ext) = match sniff(body) {
-        Some(at) => {
+    // Word 6.0/95 files store every picture as a Windows metafile (`mm` 8; a bitmap is drawn
+    // by one StretchDIBits record). A valid metafile header wins over the raster signatures,
+    // which its records' bytes can happen to spell.
+    let (at, len, ext) = match wmf_len(body) {
+        Some(len) => (0, len, "wmf"),
+        None => {
+            let at = sniff(body)?;
             let image = body.get(at..)?;
             (at, image.len(), ext_of(image))
         }
-        // Word 6.0/95 files store every picture as a Windows metafile (`mm` 8; a bitmap is
-        // drawn by one StretchDIBits record).
-        None => (0, wmf_len(body)?, "wmf"),
     };
     let start = base.checked_add(cb_header)?.checked_add(at)?;
     Some(Found::Range(Located { w, h, crop, range: start..start.checked_add(len)?, ext }))

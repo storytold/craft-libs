@@ -147,8 +147,16 @@ impl Anlv {
         let text8 = |b: &[u8]| -> String { b.iter().map(|&c| craft_codepage::code_page_byte(code_page, c)).collect() };
         let part = |a: &Anlv, k: usize| format!("{}%{}{}", text8(&a.before), k + 1, text8(&a.after));
         let (format, text) = if bullet {
-            // A bullet's character is its text before, kept with the font it names.
-            let c: String = self.before.iter().map(|&c| crate::list::bullet_char(u16::from(c))).collect();
+            // A bullet's character is its text before, kept with the font it names. In a symbol
+            // font its byte is a glyph there, mapped to Unicode as Word 97 bullets are; in any
+            // other, a character of the code page (an "o" stays an "o").
+            let symbol_font = (self.ftc & 0x8000 == 0)
+                && fonts.get(usize::from(self.ftc)).is_some_and(|f| {
+                    let f = f.to_ascii_lowercase();
+                    f.starts_with("symbol") || f.starts_with("wingdings")
+                });
+            let c: String =
+                if symbol_font { self.before.iter().map(|&c| crate::list::bullet_char(u16::from(c))).collect() } else { text8(&self.before) };
             (NumFormat::Bullet, if c.is_empty() { "\u{2022}".to_owned() } else { c })
         } else {
             let mut t = String::new();
@@ -226,12 +234,15 @@ pub(crate) struct Lists {
     /// `[lo, hi)` FC ranges, ascending and apart.
     runs: Vec<(u32, u32, Own)>,
     styles: Vec<(u16, Own)>,
+    /// Each Prc's numbering sprms, by index: a fast save records a paragraph's change there, on
+    /// the piece holding its mark, applied after its PAPX.
+    prcs: Vec<Own>,
 }
 
 impl Lists {
     /// From the paragraph runs `(lo, hi, own)` (the first of overlapping ones kept, as for their
     /// formatting) and each style's base and own sprms.
-    pub(crate) fn new(mut runs: Vec<(u32, u32, Own)>, styles: Vec<(u16, Own)>) -> Lists {
+    pub(crate) fn new(mut runs: Vec<(u32, u32, Own)>, styles: Vec<(u16, Own)>, prcs: Vec<Own>) -> Lists {
         runs.sort_by_key(|r| r.0);
         let mut kept: Vec<(u32, u32, Own)> = Vec::new();
         for r in runs {
@@ -240,19 +251,23 @@ impl Lists {
             }
         }
         kept.retain(|r| !r.2.is_empty());
-        Lists { runs: kept, styles }
+        Lists { runs: kept, styles, prcs }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.runs.is_empty() && self.styles.iter().all(|s| s.1.is_empty())
+        self.runs.is_empty() && self.styles.iter().all(|s| s.1.is_empty()) && self.prcs.iter().all(Own::is_empty)
     }
 
-    /// The level and number of the paragraph whose mark is at `fc`, in style `istd`: each its own,
-    /// else its style's or the nearest base's.
-    pub(crate) fn at(&self, fc: u32, istd: u16) -> (u8, Option<&Anlv>) {
+    /// The level and number of the paragraph whose mark is at `fc`, in style `istd`, its mark's
+    /// piece naming Prc `prc` (a Prm1): each the Prc's, else the paragraph's own, else its
+    /// style's or the nearest base's.
+    pub(crate) fn at(&self, fc: u32, istd: u16, prc: Option<usize>) -> (u8, Option<&Anlv>) {
         let i = self.runs.partition_point(|r| r.0 <= fc);
         let own = i.checked_sub(1).and_then(|i| self.runs.get(i)).filter(|r| fc < r.1).map(|r| &r.2);
-        let (mut nlvl, mut anld) = (own.and_then(|o| o.nlvl), own.and_then(|o| o.anld.as_ref()));
+        let prc = prc.and_then(|i| self.prcs.get(i));
+        let nlvl = prc.and_then(|o| o.nlvl).or(own.and_then(|o| o.nlvl));
+        let anld = prc.and_then(|o| o.anld.as_ref()).or(own.and_then(|o| o.anld.as_ref()));
+        let (mut nlvl, mut anld) = (nlvl, anld);
         let mut at = istd;
         for _ in 0..MAX_STYLE_DEPTH {
             if nlvl.is_some() && anld.is_some() {
@@ -283,8 +298,11 @@ struct Builder<'a> {
     bullets: HashMap<Anlv, u32>,
     /// Heading lists by `OLST` (or, for a section without one, `None`), with their levels.
     headings: HashMap<Option<Vec<Anlv>>, (u32, u32, Vec<Anlv>)>,
-    /// Heading levels a paragraph's own `ANLD` sets in a section without an `OLST`: the num.
-    heading_overrides: HashMap<(u8, Anlv), u32>,
+    /// Heading levels set by the paragraphs' own `ANLD`s in sections without an `OLST`, each
+    /// num by the levels down to its own.
+    heading_overrides: HashMap<Vec<Option<Anlv>>, u32>,
+    /// The last `ANLD` seen at each level there: a level shows the ones above it with `fPrev`.
+    heading_seen: Vec<Option<Anlv>>,
 }
 
 impl Builder<'_> {
@@ -354,16 +372,25 @@ impl Builder<'_> {
         };
         match (olst, own) {
             (None, Some(a)) => {
-                if let Some(&n) = self.heading_overrides.get(&(level, a.clone())) {
+                let lv = usize::from(level);
+                self.heading_seen.resize(9, None);
+                if let Some(slot) = self.heading_seen.get_mut(lv) {
+                    *slot = Some(a.clone());
+                }
+                // This level and the ones above it as last set: the num overrides them all, as
+                // the labels of this level read them.
+                let key: Vec<Option<Anlv>> = self.heading_seen.iter().take(lv + 1).cloned().collect();
+                if let Some(&n) = self.heading_overrides.get(&key) {
                     return n;
                 }
-                let mut above = levels;
-                if let Some(slot) = above.get_mut(usize::from(level)) {
-                    *slot = a.clone();
-                }
-                let l = a.level(usize::from(level), &above, false, self.fonts, self.code_page);
-                let n = self.num(abstract_id, vec![(level, l)]);
-                self.heading_overrides.insert((level, a.clone()), n);
+                let above: Vec<Anlv> = levels.iter().zip(&key).map(|(d, s)| s.clone().unwrap_or_else(|| d.clone())).collect();
+                let overrides = key
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, s)| s.as_ref().map(|s| (k as u8, s.level(k, &above, false, self.fonts, self.code_page))))
+                    .collect();
+                let n = self.num(abstract_id, overrides);
+                self.heading_overrides.insert(key, n);
                 n
             }
             _ => num,
@@ -390,6 +417,7 @@ pub(crate) fn number<'l>(
         bullets: HashMap::new(),
         headings: HashMap::new(),
         heading_overrides: HashMap::new(),
+        heading_seen: Vec::new(),
     };
     let mut body: Option<Run> = None;
     // In a table: the column, and each column's run.
@@ -469,6 +497,14 @@ mod tests {
         assert_eq!((a.nfc, a.before.as_slice(), a.after.as_slice(), a.start, a.indent), (3, &b"("[..], &b")"[..], 1, 360));
         let l = a.level(0, &[], false, &[], 1252);
         assert_eq!((l.text.as_str(), l.format, l.hanging), ("(%1)", NumFormat::UpperLetter, 18.0));
+    }
+
+    #[test]
+    fn a_bullet_maps_symbol_glyphs_only_in_a_symbol_font() {
+        // An "o" (0x6F) is Symbol's open circle, but in any other font, or with none, an "o".
+        let fonts = ["Symbol".to_owned(), "Arial".to_owned()];
+        let bullet = |ftc: u16| Anlv { nfc: 0xFF, before: vec![0x6F], ftc, ..Default::default() }.level(0, &[], true, &fonts, 1252).text;
+        assert_eq!((bullet(0).as_str(), bullet(1).as_str(), bullet(0x8001).as_str()), ("\u{25CB}", "o", "o"));
     }
 
     #[test]

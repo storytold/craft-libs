@@ -433,6 +433,8 @@ pub(crate) fn content(word: &[u8], fib: &Fib6) -> Result<Content, DocbinError> {
     let chp_runs = fib.pair(PAIR_BTE_CHPX).map(|(fc, lcb)| fkp_runs(word, fc, lcb, false)).unwrap_or_default();
     let pap_runs = fib.pair(PAIR_BTE_PAPX).map(|(fc, lcb)| fkp_runs(word, fc, lcb, true)).unwrap_or_default();
     let (styles, facts, style_lists) = fib.pair(PAIR_STSH).map(|(fc, lcb)| stylesheet(word, fc, lcb)).unwrap_or_default();
+    // Each Prc's numbering sprms, untranslated, by index (the Prcs are translated in order).
+    let prc_lists = std::cell::RefCell::new(Vec::new());
     let windows = fib.chse == 0;
     let default_code_page = match fib.chse {
         // Text that no run covers is formatted by the Normal style.
@@ -468,7 +470,11 @@ pub(crate) fn content(word: &[u8], fib: &Fib6) -> Result<Content, DocbinError> {
         // The Prcs then carry Word 97 sprms, as the CHPXs and PAPXs do: the walk applies their
         // character sprms to the piece's text and their paragraph sprms to the paragraph whose mark
         // the piece holds.
-        let table = PieceTable::parse_word6(word, fc, lcb, text, piece_code_page, translate_prc)?;
+        let translate = |g: &[u8]| {
+            prc_lists.borrow_mut().push(crate::anld::Own::of(sprms(g)));
+            translate_prc(g)
+        };
+        let table = PieceTable::parse_word6(word, fc, lcb, text, piece_code_page, translate)?;
         if multibyte_piece.get() {
             return Err(east_asian());
         }
@@ -484,7 +490,11 @@ pub(crate) fn content(word: &[u8], fib: &Fib6) -> Result<Content, DocbinError> {
     let chpx = Bins::translated(chp_runs.iter().map(|r| TranslatedRun { lo: r.lo, hi: r.hi, istd: 0, grpprl: translate_chp(r.grpprl) }).collect());
     let papx =
         Bins::translated(pap_runs.iter().map(|r| TranslatedRun { lo: r.lo, hi: r.hi, istd: r.istd, grpprl: translate_pap(r.grpprl) }).collect());
-    let lists = crate::anld::Lists::new(pap_runs.iter().map(|r| (r.lo, r.hi, crate::anld::Own::of(sprms(r.grpprl)))).collect(), style_lists);
+    let lists = crate::anld::Lists::new(
+        pap_runs.iter().map(|r| (r.lo, r.hi, crate::anld::Own::of(sprms(r.grpprl)))).collect(),
+        style_lists,
+        prc_lists.into_inner(),
+    );
     Ok(Content { pieces, chpx, papx, fonts: fonts.into_iter().map(|f| f.name).collect(), styles, lists })
 }
 

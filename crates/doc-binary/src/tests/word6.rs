@@ -1114,9 +1114,20 @@ fn sections_take_their_properties() {
     use craft_wordmodel::section::SectionStart;
     assert_eq!((s[0].start, s[0].landscape, s[0].page_w), (SectionStart::NextPage, false, 612.0));
     assert_eq!((s[1].start, s[1].landscape, s[1].page_w, s[1].page_h), (SectionStart::Continuous, true, 792.0, 612.0));
-    assert_eq!((s[2].start, s[2].columns.count), (SectionStart::OddPage, 3));
+    assert_eq!((s[2].start, s[2].columns.count, s[2].columns.space), (SectionStart::OddPage, 3, 18.0));
     assert_eq!((s[2].margin_left, s[2].margin_right, s[2].margin_top, s[2].margin_bottom), (144.0, 36.0, 108.0, 54.0));
     assert_eq!((s[2].header, s[2].footer), (54.0, 45.0));
+}
+
+#[test]
+fn the_final_section_is_the_one_reaching_the_end_of_the_text() {
+    // A malformed PlcfSed with a third section past the text: the second, which reaches the end
+    // of the text (CP 9), is the final one, and the third is ignored, as the paragraphs before
+    // it are given their sections.
+    let landscape: &[u8] = &[0xA2, 0x02, 0xA4, 0xE0, 0x3D, 0xA5, 0xD0, 0x2F];
+    let d = Doc6 { text: b"One\r\x0cTwo\r", sections: &[(5, &[]), (9, landscape), (14, &[])], ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert!(doc.last_section.landscape);
 }
 
 #[test]
@@ -1211,6 +1222,29 @@ fn footnotes_and_endnotes_are_read() {
 }
 
 #[test]
+fn a_comment_at_the_end_of_the_text_closes_in_the_last_paragraph() {
+    // A comment whose reference CP is the end of the main text (6, past its last paragraph
+    // mark): its start and end were queued there, and the walk stopped before emitting them.
+    // Both now close the last paragraph, as Word ends a range there.
+    use craft_wordmodel::para::InlineObject;
+    let mut atrd = vec![0u8; 20];
+    atrd[16..20].copy_from_slice(&[0xFF; 4]);
+    let d = Doc6 {
+        text: b"Alpha\r\x05 C\r\r",
+        stories: [0, 0, 0, 5, 0],
+        comments: (&[6, 7], &[0, 4, 5], &atrd),
+        owners: b"\x03Ann",
+        ..Default::default()
+    };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let p = first_para(&doc);
+    assert_eq!(p.text, "Alpha\u{FFFC}\u{FFFC}");
+    let ends: Vec<bool> = p.objects.iter().map(|o| matches!(o, InlineObject::CommentEnd { .. })).collect();
+    assert_eq!(ends, [false, true]);
+    assert_eq!(doc.body.len(), 1, "no paragraph of their own");
+}
+
+#[test]
 fn comments_are_read_and_anchored_at_their_references() {
     // As Word 95 writes two comments (`atn2`): 0x05 at each reference, the stories after the main
     // text in the comment subdocument (0x44), 20-byte ATRDs and 8-bit authors. Word reads Bob
@@ -1297,6 +1331,26 @@ fn picf6(goal: (i16, i16), scale: (u16, u16), crop: [i16; 4], body: &[u8]) -> Ve
     }
     p.extend_from_slice(body);
     p
+}
+
+#[test]
+fn a_metafile_spelling_a_bitmap_signature_stays_a_metafile_and_a_negative_crop_adds_to_the_size() {
+    // The WMF of `inline_pictures_are_read` with its SetWindowExt height 0x4D42: "BM" at offset
+    // 24, which the raster check took for a bitmap there and kept ten bytes of. Cropped -200 on
+    // the left (the picture extends outward) and 100 on the right of a 1000-twip goal at 100 %:
+    // 1100 twips, 55 pt, wide; the model's crop keeps only the right one.
+    let wmf: &[u8] = &[1, 0, 9, 0, 0, 3, 17, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0x0C, 0x02, 0x42, 0x4D, 0xE8, 0x03, 3, 0, 0, 0, 0, 0];
+    let mut text = b"A\x01\r\0".to_vec();
+    let first = TEXT_AT + text.len() as u32;
+    text.extend(picf6((1000, 600), (1000, 1000), [-200, 0, 100, 0], wmf));
+    let a = [&[0x75, 1, 0x44, 4][..], &first.to_le_bytes()].concat();
+    let runs: &[(u32, u32, &[u8])] = &[(0, 1, &[]), (1, 2, &a), (2, 3, &[])];
+    let doc = read(&word6_file(&Doc6 { text: &text, ccp: Some(3), runs, ..Default::default() })).expect("opens");
+    let [craft_wordmodel::para::InlineObject::Image { media, w, crop, .. }] = first_para(&doc).objects.as_slice() else { panic!("one image") };
+    assert_eq!(media.as_str(), "image1.wmf");
+    assert_eq!(doc.media.get("image1.wmf").map(|m| m.as_slice()), Some(wmf));
+    assert!((*w - 55.0).abs() < 1e-3, "{w}");
+    assert_eq!(*crop, [0.0, 0.0, 0.1, 0.0]);
 }
 
 #[test]
@@ -1387,7 +1441,9 @@ fn numbered_and_bulleted_paragraphs_count_as_word_95_does() {
     // bullet and a skipped paragraph don't break the count, nor does another start; a plain
     // paragraph and other text after the number do. Word 95 shows 1. 2. • 3. - 4. - 1. 1).
     let dec = [&[0x0D, 10][..], &anld(0, b"", b".", 0x08, 1)].concat();
-    let bullet = [&[0x0D, 11][..], &anld(0xFF, &[0xB7], b"", 0x08, 0)].concat();
+    // The bullet in Symbol (font 1), as Word 95 wrote `\pnf1`: its 0xB7 is that font's bullet.
+    let mut bullet = [&[0x0D, 11][..], &anld(0xFF, &[0xB7], b"", 0x08, 0)].concat();
+    bullet[10..12].copy_from_slice(&1u16.to_le_bytes());
     let start7 = [&[0x0D, 10][..], &anld(0, b"", b".", 0x08, 7)].concat();
     let paren = [&[0x0D, 10][..], &anld(0, b"", b")", 0x08, 1)].concat();
     let style = |name, papx| Some(Std { sti: 0x0FFE, sgc: 1, base: 0, name, papx, chpx: &[] });
@@ -1401,8 +1457,33 @@ fn numbered_and_bulleted_paragraphs_count_as_word_95_does() {
     let paras: &[(u32, u32, &[u8])] =
         &[(0, 2, &[]), (2, 4, &[]), (4, 6, &[]), (6, 8, &[]), (8, 10, &[0x0D, 12]), (10, 12, &[]), (12, 14, &[]), (14, 16, &[]), (16, 18, &[])];
     let para_styles = &[1, 1, 2, 1, 1, 3, 0, 1, 4];
-    let doc = read(&word6_file(&Doc6 { text: b"a\rb\rx\rc\rs\rd\rp\re\rf\r", paras, para_styles, styles, ..Default::default() })).expect("opens");
+    let fonts: &[(u8, &str)] = &[(0, "Times New Roman"), (2, "Symbol")];
+    let doc =
+        read(&word6_file(&Doc6 { text: b"a\rb\rx\rc\rs\rd\rp\re\rf\r", paras, para_styles, styles, fonts, ..Default::default() })).expect("opens");
     assert_eq!(labels(&doc), ["1. a", "2. b", "\u{2022} x", "3. c", " s", "4. d", " p", "1. e", "1) f"]);
+}
+
+#[test]
+fn headings_without_an_olst_show_the_levels_above_in_their_own_formats() {
+    // No OLST: each heading's own ANLD sets its level, upper roman at level 1, decimal with
+    // fPrev at level 2. The level-2 heading shows the level above in its own format, I.1., not
+    // the default decimal's 1.1.
+    let h1 = [&[0x0D, 1][..], &anld(1, b"", b".", 0x08, 1)].concat();
+    let h2 = [&[0x0D, 2][..], &anld(0, b"", b".", 0x0C, 1)].concat();
+    let paras: &[(u32, u32, &[u8])] = &[(0, 2, &h1), (2, 4, &h2)];
+    let doc = read(&word6_file(&Doc6 { text: b"a\rb\r", paras, ..Default::default() })).expect("opens");
+    assert_eq!(labels(&doc), ["I. a", "I.1. b"]);
+}
+
+#[test]
+fn numbering_a_fast_save_records_in_a_prc_counts() {
+    // A fast save numbered the second paragraph: the change is only in the Prc (a Prm1) of the
+    // piece holding its mark, applied after its PAPX.
+    let dec = [&[0x0D, 10][..], &anld(0, b"", b".", 0x08, 1)].concat();
+    let prcs: &[&[u8]] = &[&dec];
+    let d = Doc6 { text: b"a\rb\r", pieces: Some(&[(2, 0), (2, 2)]), prms: &[0, 0x0001], prcs, ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert_eq!(labels(&doc), [" a", "1. b"]);
 }
 
 #[test]
@@ -1455,7 +1536,7 @@ fn frames_and_drop_caps_are_read() {
             ..Default::default()
         })
     );
-    assert_eq!((p[1].props.drop_cap, p[1].props.drop_cap_margin), (Some(3), None));
+    assert_eq!((p[1].props.drop_cap, p[1].props.drop_cap_margin), (Some(3), Some(false)));
     assert_eq!(p[2].props.frame, None);
 }
 
