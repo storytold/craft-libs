@@ -33,6 +33,7 @@ craft_ui::words! {
         readout_scratch: template "bars.statusReadoutScratch" = "Scratch: {used}/{available}";
         readout_efficiency_text: template "bars.statusReadoutEfficiencyText" = "Efficiency: {value}";
         readout_dimensions_text: template "bars.statusReadoutDimensionsText" = "{width} x {height}";
+        readout_dimensions_resolution_text: template "bars.statusReadoutDimensionsResolutionText" = "{width} x {height} ({resolution} ppi)";
         readout_timing_text: template "bars.statusReadoutTimingText" = "Timing: {value}";
     }
 }
