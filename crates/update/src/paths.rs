@@ -26,14 +26,24 @@ impl Paths {
 
     /// Discovers paths for an app from a specific executable path.
     pub fn for_exe(app: &App, exe: &Path) -> Result<Self, String> {
-        if let Some(parent) = exe.parent()
-            && parent.join("portable.txt").is_file()
-        {
-            let data_dir_name = format!("{}Data", app.name.replace(' ', ""));
-            return Ok(Self::under(&parent.join(data_dir_name)));
+        if let Some(root) = Self::portable_root_for_exe(app, exe) {
+            return Ok(Self::under(&root));
         }
         let dir = if cfg!(any(target_os = "macos", target_os = "windows")) { app.name } else { app.id };
         Self::per_user(dir)
+    }
+
+    /// Portable mode's folder, when a `portable.txt` beside the current executable asks for it:
+    /// where [`for_app`](Self::for_app) puts everything (`<NameWithoutSpaces>Data`), for files an
+    /// app keeps beside it, such as its settings.
+    pub fn portable_root(app: &App) -> Option<PathBuf> {
+        Self::portable_root_for_exe(app, &std::env::current_exe().ok()?)
+    }
+
+    /// [`portable_root`](Self::portable_root) for a specific executable path.
+    pub fn portable_root_for_exe(app: &App, exe: &Path) -> Option<PathBuf> {
+        let dir = exe.parent()?;
+        dir.join("portable.txt").is_file().then(|| dir.join(format!("{}Data", app.name.replace(' ', ""))))
     }
 
     /// The per-user folders named `dir` (`ArtCraft Launcher` on macOS and Windows,
@@ -87,6 +97,18 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_mode_keeps_everything_beside_the_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("artcraft-launcher.exe");
+        let launcher = &crate::suite::LAUNCHER;
+        assert_eq!(Paths::portable_root_for_exe(launcher, &exe), None);
+        std::fs::write(dir.path().join("portable.txt"), b"").unwrap();
+        let root = dir.path().join("ArtCraftLauncherData");
+        assert_eq!(Paths::portable_root_for_exe(launcher, &exe).as_deref(), Some(root.as_path()));
+        assert_eq!(Paths::for_exe(launcher, &exe).unwrap().data, root.join("data"));
+    }
 
     #[test]
     fn atomic_write_does_not_overwrite_an_unrelated_temporary_file() {
