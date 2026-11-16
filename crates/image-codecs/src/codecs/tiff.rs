@@ -207,8 +207,10 @@ fn camera_raw_mode(b: &[u8], legacy: bool) -> bool {
                 }
                 TAG_SUB_IFDS if count == 1 => queue.extend(value(e)),
                 TAG_SUB_IFDS => {
-                    // More than one offset: they are stored at the entry's offset.
-                    let at = u32_at(e.saturating_add(8)).unwrap_or(0) as usize;
+                    // More than one offset: they are stored at the entry's offset. A cut-off
+                    // offset field means no array, not one at the start of the file.
+                    let Some(at) = u32_at(e.saturating_add(8)) else { continue };
+                    let at = at as usize;
                     for k in 0..count.min(8) as usize {
                         queue.extend(u32_at(at.saturating_add(4 * k)));
                     }

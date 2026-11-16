@@ -221,6 +221,10 @@ impl VideoFrame {
     /// without alpha, and a copy for RGBA8).
     pub fn to_rgba8(&self) -> Vec<u8> {
         let (w, h) = (self.width as usize, self.height as usize);
+        // Empty pictures have no rows; Rayon rejects a zero-sized row chunk.
+        if w == 0 || h == 0 {
+            return Vec::new();
+        }
         match &self.data {
             PixelData::Rgba8(d) => d.as_ref().clone(),
             PixelData::Yuv8 { planes, chroma, alpha: None } if matches!(self.color.transfer, Transfer::Bt709 | Transfer::Srgb) => {
@@ -302,6 +306,16 @@ pub fn default_matrix(width: u32, height: u32) -> Matrix {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_frames_convert_without_zero_sized_chunks() {
+        for (w, h) in [(0, 0), (0, 1), (1, 0)] {
+            let frame = VideoFrame::transparent_f32(w, h);
+            assert!(frame.to_rgba8().is_empty());
+            assert!(frame.to_linear_f32().is_empty());
+            assert!(frame.luma8().is_empty());
+        }
+    }
 
     #[test]
     fn rgba8_roundtrips_through_to_rgba8() {
