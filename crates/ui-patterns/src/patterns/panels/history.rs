@@ -137,6 +137,9 @@ impl Outcome for HistoryPanelOutput {
 }
 
 /// The row a context menu was asked for; it lives in the panel's stack memory while the menu is open.
+/// Whether a row may be deleted.
+type DeletePredicate<'a> = Box<dyn Fn(&HistoryKey) -> bool + 'a>;
+
 #[derive(Clone, Copy, Default)]
 struct MenuTarget(Option<HistoryKey>);
 
@@ -157,7 +160,7 @@ pub struct HistoryPanel<'a> {
     source: Option<HistoryKey>,
     has_source: bool,
     thumbs: Option<(&'a Thumbnails<u64>, &'a dyn ThumbSource<u64>)>,
-    can_delete: Option<Box<dyn Fn(&HistoryKey) -> bool + 'a>>,
+    can_delete: Option<DeletePredicate<'a>>,
     footer: HistoryFooter,
     reveal: Option<HistoryKey>,
     rename: Option<u64>,
@@ -182,7 +185,6 @@ impl<'a> HistoryPanel<'a> {
     }
 
     /// Shows the source column and marks the row that is the source of the history brush.
-    #[must_use]
     pub fn source(mut self, source: Option<HistoryKey>) -> Self {
         self.source = source;
         self.has_source = true;
@@ -190,42 +192,36 @@ impl<'a> HistoryPanel<'a> {
     }
 
     /// Shows the pictures of the snapshot rows from `source`.
-    #[must_use]
     pub fn thumbnails(mut self, thumbnails: &'a Thumbnails<u64>, source: &'a dyn ThumbSource<u64>) -> Self {
         self.thumbs = Some((thumbnails, source));
         self
     }
 
     /// Which rows the Delete button and key take; the others refuse. Without it every row is taken.
-    #[must_use]
     pub fn can_delete(mut self, can: impl Fn(&HistoryKey) -> bool + 'a) -> Self {
         self.can_delete = Some(Box::new(can));
         self
     }
 
     /// Which footer buttons show.
-    #[must_use]
     pub fn footer(mut self, footer: HistoryFooter) -> Self {
         self.footer = footer;
         self
     }
 
     /// Scrolls to `key` and shows it.
-    #[must_use]
     pub fn reveal(mut self, key: HistoryKey) -> Self {
         self.reveal = Some(key);
         self
     }
 
     /// Opens the rename field of the snapshot `snapshot`.
-    #[must_use]
     pub fn start_rename(mut self, snapshot: u64) -> Self {
         self.rename = Some(snapshot);
         self
     }
 
     /// Whether the panel takes input.
-    #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self

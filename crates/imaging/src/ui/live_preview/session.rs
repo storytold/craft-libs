@@ -98,7 +98,7 @@ impl LivePreview {
 
     /// [`key`](Self::key), recording `area` (document pixels) as what the preview of this key changes, so
     /// [`switch`](Self::switch) recomposites only that: a tool's preview that changes a small part of the region
-    /// (Patch heals around one offset). The last [`AREA_KEYS`] keys keep their area; an older key falls back to the
+    /// (Patch heals around one offset). The last `AREA_KEYS` keys keep their area; an older key falls back to the
     /// region, which damages more, never less.
     pub fn key_in(&mut self, settings: u64, now: f64, area: PixelRect) -> PreviewKey {
         let key = self.key(settings, now);

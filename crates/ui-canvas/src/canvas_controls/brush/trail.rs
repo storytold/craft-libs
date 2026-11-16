@@ -54,7 +54,7 @@ fn texel_span(lo: f64, hi: f64, origin: f64, scale: f64, extent: u32) -> Option<
 
 /// A coverage in 0..=1 as a byte; a NaN is none.
 fn byte(coverage: f32) -> u8 {
-    (coverage.max(0.0).min(1.0) * 255.0).round() as u8
+    (coverage.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
 impl CoverageMask {

@@ -226,7 +226,6 @@ impl<'a> StartScreen<'a> {
     }
 
     /// Cards, rows and templates ask `thumbnails.state(..)` for what they show; `source` gives each key's revision.
-    #[must_use]
     pub fn thumbnails(mut self, thumbnails: &'a Thumbnails<ThumbKey>, source: &'a dyn ThumbSource<ThumbKey>) -> Self {
         self.thumbnails = Some((thumbnails, source));
         self

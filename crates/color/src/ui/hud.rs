@@ -105,14 +105,12 @@ impl<'a> ColorHud<'a> {
 
     /// The colour under `at` when the host's press began; the popover is placed so this colour's point sits at `at`.
     /// Without it the area's middle sits at `at`.
-    #[must_use]
     pub fn start(mut self, color: Srgba) -> Self {
         self.start = Some(color);
         self
     }
 
     /// Whether the host's press is still held.
-    #[must_use]
     pub fn held(mut self, held: bool) -> Self {
         self.held = held;
         self

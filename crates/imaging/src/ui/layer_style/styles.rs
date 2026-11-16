@@ -1,7 +1,7 @@
 //! The Styles page: the host's style presets in a [`PresetBrowser`] grid.
 
 use craft_theme::TypeRole;
-use craft_ui::contract::{Bind, Props as _, Show as _};
+use craft_ui::contract::{Bind, Show as _};
 use craft_ui::display::Text;
 use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetRow, PresetState, ThumbInfo};
 use craft_ui::primitives::ContentPainterCx;

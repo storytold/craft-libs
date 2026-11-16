@@ -440,6 +440,17 @@ fn char_at(lines: &[HostLine], pos: TextPos) -> usize {
     line.chars.start + line.text[..byte].chars().count()
 }
 
+/// The clipboard's text when the pass's input asks to paste and the clipboard has it ready.
+fn pasted_text(cx: &mut Cx<'_, TextEditor<'_>>, inputs: &[EditorInput]) -> Option<std::sync::Arc<str>> {
+    if !inputs.iter().any(|input| matches!(input, EditorInput::Edit(EditCommand::Paste))) {
+        return None;
+    }
+    match cx.clipboard().paste() {
+        Pending::Ready(content) => content.text.clone(),
+        _ => None,
+    }
+}
+
 impl Component for TextEditor<'_> {
     const ROLE: Role = Role::MULTILINE_TEXT_INPUT;
     const INPUT: craft_ui::contract::Input = craft_ui::contract::Input::Editor;
@@ -485,14 +496,7 @@ impl Component for TextEditor<'_> {
         }
         let press = *cx.press();
         let now = cx.now();
-        let pasted = if inputs.iter().any(|input| matches!(input, EditorInput::Edit(EditCommand::Paste))) {
-            match cx.clipboard().paste() {
-                Pending::Ready(content) => content.text.clone(),
-                _ => None,
-            }
-        } else {
-            None
-        };
+        let pasted = pasted_text(cx, &inputs);
         let mut copied: Option<String> = None;
         let mut session = std::mem::take(cx.memory::<Session>());
         let mut edits = Edits {

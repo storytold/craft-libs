@@ -57,7 +57,6 @@ impl<'a> AdjustmentsPanel<'a> {
     }
 
     /// Offers only `kinds`, in that order.
-    #[must_use]
     pub fn kinds(mut self, kinds: &'a [AdjustmentKind]) -> Self {
         self.kinds = kinds;
         self

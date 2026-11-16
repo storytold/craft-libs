@@ -207,7 +207,7 @@ pub fn has_icon(id: &IconId) -> bool {
     svg_set::lookup(id.name()).is_some()
 }
 
-/// The names of the built-in catalog's icons, sorted; app icon sets registered with [`register_app_icons`] are not
+/// The names of the built-in catalog's icons, sorted; app icon sets registered with [`register_app_icons`](super::register_app_icons) are not
 /// listed.
 pub fn icon_names() -> &'static [&'static str] {
     svg_set::names()

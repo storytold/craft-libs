@@ -5,7 +5,7 @@ use craft_ui::runtime::requests::ColorRequest;
 use crate::gradient::StopRow;
 
 /// A marker of the stop bar: a colour stop, an opacity stop, or the midpoint after stop `i` of a
-/// row. Indices are into the stops as the bar shows them ([`GradientStops::opacity_stops`] for
+/// row. Indices are into the stops as the bar shows them ([`GradientStops::opacity_stops`](crate::gradient::GradientStops::opacity_stops) for
 /// the opacity row).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]

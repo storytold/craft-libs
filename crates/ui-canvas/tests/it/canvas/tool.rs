@@ -322,7 +322,7 @@ enum Crowd {
 
 /// A `Band` canvas inset in the room with one `Crowd` around it. Returns the fixture, the app's view and the canvas's
 /// rect.
-fn crowded_canvas(crowd: Crowd) -> (Fixture, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Rect>>) {
+fn crowded_canvas(crowd: Crowd) -> CanvasRig<Rect> {
     let view = Rc::new(Cell::new(None::<CanvasView>));
     let canvas = Rc::new(Cell::new(Rect::NOTHING));
     let (shown_view, shown_canvas) = (Rc::clone(&view), Rc::clone(&canvas));
@@ -405,6 +405,12 @@ fn an_open_polygon_keeps_its_vertices_while_the_view_scrolls_under_a_resting_poi
     assert!(after.x > before.x, "the view scrolls while the polygon is open: {before:?} -> {after:?}");
     assert_eq!(tool.borrow().vertices, inside, "the vertices stay where they were clicked");
 }
+
+/// A fixture with the view the canvas reported and the last value the body saw.
+type CanvasRig<Seen> = (Fixture, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Seen>>);
+
+/// `CanvasRig` with the context requests the canvas raised.
+type MenuRig = (Fixture, Rc<RefCell<Vec<ContextRequest>>>, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Rect>>);
 
 type Log = Rc<RefCell<Vec<String>>>;
 
@@ -801,15 +807,12 @@ fn an_injected_pen_reading_reaches_the_tool() {
 /// press after its release runs the selected tool.
 /// A canvas with the momentary set and `main` as the selected tool, zoomed in, so the document is larger than the
 /// canvas and the Hand has room to pan: returns the fixture, the app's view and the canvas's id.
-fn momentary_canvas(main: Probe) -> (Fixture, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Id>>) {
+fn momentary_canvas(main: Probe) -> CanvasRig<Id> {
     momentary_canvas_with(main, |_, _| {})
 }
 
 /// `momentary_canvas` with `body` as the canvas's body.
-fn momentary_canvas_with(
-    main: Probe,
-    mut body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static,
-) -> (Fixture, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Id>>) {
+fn momentary_canvas_with(main: Probe, mut body: impl FnMut(&mut egui::Ui, &mut craft_ui::contract::BodyCx<'_>) + 'static) -> CanvasRig<Id> {
     let main = RefCell::new(main);
     let (view, canvas) = (Rc::new(Cell::new(None::<CanvasView>)), Rc::new(Cell::new(Id::NULL)));
     let (shown_view, shown_canvas) = (Rc::clone(&view), Rc::clone(&canvas));
@@ -857,7 +860,7 @@ fn a_queued_space_held_over_a_press_pans_with_the_hand_and_the_press_after_its_r
 fn a_held_space_pans_over_a_canvas_control_and_leaves_it_unchanged() {
     // Around the document's centre, which the zoomed-in view shows.
     let start = craft_behavior::geometry::CropBox::upright(craft_behavior::kurbo::Rect::new(580.0, 430.0, 620.0, 470.0));
-    let crop = Rc::new(RefCell::new(start.clone()));
+    let crop = Rc::new(RefCell::new(start));
     let shown = Rc::clone(&crop);
     let log = Log::default();
     let (mut fixture, view, canvas) = momentary_canvas_with(Probe::new("main", &log), move |ui, body| {
@@ -917,7 +920,7 @@ fn a_queued_space_whose_hand_the_gate_refuses_leaves_the_press_to_the_selected_t
 }
 
 /// A canvas under a dialog that keeps the canvas: returns the fixture, the app's view and the canvas's rect.
-fn kept_canvas<T: CanvasTool + 'static>(tool: Rc<RefCell<T>>) -> (Fixture, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Rect>>) {
+fn kept_canvas<T: CanvasTool + 'static>(tool: Rc<RefCell<T>>) -> CanvasRig<Rect> {
     let view = Rc::new(Cell::new(None::<CanvasView>));
     let rect = Rc::new(Cell::new(Rect::NOTHING));
     let (shown_view, shown_rect) = (Rc::clone(&view), Rc::clone(&rect));
@@ -1115,7 +1118,7 @@ fn a_secondary_click_with_the_momentary_hand_asks_for_its_menu() {
 
 /// A canvas with the Hand selected, with the momentary set when `momentary` and scroll bars in its body when `bars`.
 /// Returns the fixture, the menu requests, the app's view and the canvas's rect.
-fn menu_canvas(momentary: bool, bars: bool) -> (Fixture, Rc<RefCell<Vec<ContextRequest>>>, Rc<Cell<Option<CanvasView>>>, Rc<Cell<Rect>>) {
+fn menu_canvas(momentary: bool, bars: bool) -> MenuRig {
     let (contexts, view, rect) = (Rc::new(RefCell::new(Vec::new())), Rc::new(Cell::new(None::<CanvasView>)), Rc::new(Cell::new(Rect::NOTHING)));
     let (shown_contexts, shown_view, shown_rect) = (Rc::clone(&contexts), Rc::clone(&view), Rc::clone(&rect));
     let mut hand = HandTool::new(NavigationOptions::default());

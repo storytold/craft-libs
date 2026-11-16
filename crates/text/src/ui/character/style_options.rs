@@ -13,7 +13,7 @@ use craft_ui::form::Field;
 use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::patterns::form_dialogs::HostRequests;
 use craft_ui::runtime::env::{Env, Label, WordTemplate};
-use craft_ui::text::{NumberPick, TextField};
+use craft_ui::text::TextField;
 use egui::{Response, Ui};
 
 use super::paragraph::{INDENT_RANGE, SPACE_RANGE};

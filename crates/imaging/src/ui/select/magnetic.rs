@@ -673,7 +673,6 @@ fn close_radius(cx: &ToolContext<'_>, place: &Place) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::MagneticSettings;
 
     #[test]
     fn width_steps_by_one_and_shift_jumps_to_the_limits() {

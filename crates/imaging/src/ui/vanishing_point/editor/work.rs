@@ -264,7 +264,7 @@ impl Work<'_> {
             VanishingTool::Stamp => match self.stamp_press(p, mods, words) {
                 Ok(pressed) => Some(pressed),
                 Err(message) => {
-                    self.editor.status = Some(message);
+                    self.editor.status = Some(*message);
                     Some(Pressed::Done)
                 }
             },
@@ -288,8 +288,8 @@ impl Work<'_> {
     }
 
     /// Stamp's press: Alt sets the source, otherwise a stroke starts. `Err` is the message of a refused press.
-    fn stamp_press(&mut self, p: [f64; 2], mods: Mods, words: &VanishingPointWords) -> Result<Pressed, StatusMessage> {
-        let refused = |text: &Label| StatusMessage::new(text.clone()).tone(Tone::Warn);
+    fn stamp_press(&mut self, p: [f64; 2], mods: Mods, words: &VanishingPointWords) -> Result<Pressed, Box<StatusMessage>> {
+        let refused = |text: &Label| Box::new(StatusMessage::new(text.clone()).tone(Tone::Warn));
         if mods.alt {
             if !self.on_plane(p) {
                 return Err(refused(&words.stamp_no_source));

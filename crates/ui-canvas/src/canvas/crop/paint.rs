@@ -51,11 +51,11 @@ fn paint_frame(draw: &Draw<'_>, cx: &Cx<'_, CropOverlay<'_>>, scene: &Scene<'_, 
         return;
     }
     let editing = scene.drag.is_some();
-    if scene.started {
-        if let Some(fill) = overlay.shield.fill_on(scene.space, style.canvas.egui(), editing) {
-            let corners = [area.left_top(), area.right_top(), area.right_bottom(), area.left_bottom()];
-            super::paint_outside(draw, corners, &q, DataColor::new(fill));
-        }
+    if scene.started
+        && let Some(fill) = overlay.shield.fill_on(scene.space, style.canvas.egui(), editing)
+    {
+        let corners = [area.left_top(), area.right_top(), area.right_bottom(), area.left_bottom()];
+        super::paint_outside(draw, corners, &q, DataColor::new(fill));
     }
     let line = if scene.refused { style.invalid } else { style.line };
     if scene.started {

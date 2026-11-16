@@ -91,6 +91,14 @@ fn columns_on_the_width_convert_through_the_column_size() {
         }
     }
 
+    relative_columns();
+    degenerate_column_sizes();
+    shared_unit();
+    resample_off();
+}
+
+/// A relative change keeps 0 at 0 and its sign.
+fn relative_columns() {
     let mut relative = document().column_size(COLUMNS);
     relative.relative(true);
     relative.lock(false);
@@ -104,7 +112,10 @@ fn columns_on_the_width_convert_through_the_column_size() {
     relative.set_width(-372.0);
     assert!(relative.set_width_unit(UnitKind::Columns));
     assert!(close(relative.width(), -2.0), "a shrink of two columns reads -2, not {}", relative.width());
+}
 
+/// A degenerate or negative column size falls back to 180 pt / 12 pt, a negative gutter counts as none.
+fn degenerate_column_sizes() {
     let degenerate = [
         ColumnSize { width: 0.0, gutter: f64::NAN },
         ColumnSize { width: f64::NAN, gutter: f64::INFINITY },
@@ -121,7 +132,10 @@ fn columns_on_the_width_convert_through_the_column_size() {
     assert!(no_gutter.set_width_unit(UnitKind::Columns));
     no_gutter.set_width(2.0);
     assert_eq!(pixels(&no_gutter).0, 200, "a negative gutter counts as none");
+}
 
+/// The height keeps the shared unit; another unit turns Columns off.
+fn shared_unit() {
     let mut shared = document();
     assert!(!shared.set_width_unit(UnitKind::Columns), "without a column size the width offers no Columns");
     assert_eq!(shared.width_unit(), UnitKind::Pixels);
@@ -132,7 +146,10 @@ fn columns_on_the_width_convert_through_the_column_size() {
     assert!(close(shared.height(), 800.0 / 72.0), "the height still reads in inches");
     assert!(shared.set_width_unit(UnitKind::Pixels));
     assert_eq!((shared.width_unit(), shared.unit()), (UnitKind::Pixels, UnitKind::Pixels), "another unit turns Columns off and sets both");
+}
 
+/// With Resample off a Columns width changes the resolution.
+fn resample_off() {
     let mut fixed = document().column_size(COLUMNS);
     fixed.resampling(false);
     assert!(fixed.set_width_unit(UnitKind::Columns));

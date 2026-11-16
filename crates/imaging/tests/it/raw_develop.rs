@@ -184,8 +184,7 @@ fn raw_develop_switches_raws_and_finishes_with_each_footer_button() {
     let events = host.borrow_mut().get_mut::<Hosted>().map(Hosted::take_events).unwrap_or_default();
     assert!(events.contains(&RawDevelopEvent::Show(1)), "a filmstrip pick reports Show(1): {events:?}");
 
-    let mut next = RawDevelopSettings::default();
-    next.exposure = 0.5;
+    let next = RawDevelopSettings { exposure: 0.5, ..Default::default() };
     host.borrow_mut().get_mut::<Hosted>().expect("open").workspace_mut().show_item(1, next.clone(), next, Some(Demosaic::Bilinear));
     fixture.idle(4);
     fixture.key(Key::Z, Modifiers::COMMAND).idle(4);
@@ -308,8 +307,7 @@ fn a_tone_zone_drag_moves_exposure_from_where_it_started() {
     let mut fixture = fixture(&host, &rerun);
     host.borrow_mut().open(HostedWorkspace::new(RawDevelopWorkspace::new(open(RawTarget::Filter)), Source::with_histogram()));
     fixture.idle(10);
-    let mut start = RawDevelopSettings::default();
-    start.exposure = -2.0;
+    let start = RawDevelopSettings { exposure: -2.0, ..Default::default() };
     host.borrow_mut().get_mut::<Hosted>().expect("open").workspace_mut().show_item(0, start.clone(), start, None);
     fixture.idle(4);
 

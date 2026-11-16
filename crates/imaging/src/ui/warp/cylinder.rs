@@ -201,13 +201,6 @@ pub enum CylinderHandle {
     Surface,
 }
 
-impl CylinderHandle {
-    /// The place of a handle with a part among [`HANDLES`]; `None` for the surface.
-    fn index(self) -> Option<usize> {
-        HANDLES.iter().position(|&handle| handle == self)
-    }
-}
-
 /// The look of the cylinder editor: its lines in `overlay.line` over `overlay.halo`, the corners as handle squares and
 /// the other handles as small handle circles.
 #[derive(Clone, Debug, PartialEq, ComponentStyle)]
@@ -302,10 +295,8 @@ impl<'a> CylinderWarp<'a> {
                     cx.commit();
                 }
             }
-            PressPhase::Cancel { .. } => {
-                if cx.press_slot::<Press>().take().is_some_and(|held| held.began) {
-                    cx.cancel(CancelReason::Escape);
-                }
+            PressPhase::Cancel { .. } if cx.press_slot::<Press>().take().is_some_and(|held| held.began) => {
+                cx.cancel(CancelReason::Escape);
             }
             _ => {}
         }

@@ -287,7 +287,7 @@ impl Container for TitleBar<'_> {
 /// `CaptionIcons::for_desktop` once per desktop value and kept for the app's bars while the desktop stays the same.
 fn desktop_icons(ctx: &egui::Context) -> Option<CaptionIcons> {
     let desktop = WindowHost::of(ctx).desktop()?;
-    let key = egui::Id::new("craft_ui.title_bar.desktop_icons");
+    let key = egui::Id::unique("craft_ui.title_bar.desktop_icons");
     let kept = ctx.data(|data| data.get_temp::<(Desktop, Option<CaptionIcons>)>(key));
     if let Some((seen, icons)) = &kept
         && *seen == desktop

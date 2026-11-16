@@ -3,7 +3,7 @@
 use std::hash::Hash;
 
 use craft_behavior::{EditEvents, IconId};
-use craft_ui::contract::{Bind, EditResponse, Outcome, Props as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, EditResponse, Outcome, Props as _, ShowContainer as _};
 use craft_ui::layout_components::Stack;
 use craft_ui::patterns::presets::{PresetBrowser, PresetEvent, PresetFooterEvent, PresetFooterOptions, PresetReorder, PresetRow, PresetState};
 use craft_ui::runtime::drag::DropZone;

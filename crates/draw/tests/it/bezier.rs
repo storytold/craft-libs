@@ -248,7 +248,7 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         };
         st.view = Some(view);
         let selection = st.selection.clone();
-        let canvas_id = ui.id().with("document canvas");
+        let canvas_id = ui.scope_id().with("document canvas");
         let canvas = Canvas::new("Document").id(canvas_id).view(view);
         let canvas = if st.pans { canvas.document(Size::new(4000.0, 4000.0)) } else { canvas };
         let canvas = canvas.show(ui, |ui, body| {

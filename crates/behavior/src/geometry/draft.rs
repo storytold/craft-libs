@@ -285,7 +285,7 @@ impl OutlineDraft {
     }
 
     /// The pointer moved to `at` with the button up: only the rubber band follows, to where a click would place the
-    /// point ([`shift_step`](Self::shift_step)); hover moves never become vertices. [`DraftEvent::Changed`] while an outline is open.
+    /// point (`shift_step`); hover moves never become vertices. [`DraftEvent::Changed`] while an outline is open.
     pub fn hover(&mut self, at: DraftPoint) -> Option<DraftEvent> {
         if !self.is_open() || !at.at.x.is_finite() || !at.at.y.is_finite() {
             return None;

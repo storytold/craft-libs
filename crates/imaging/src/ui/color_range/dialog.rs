@@ -129,22 +129,29 @@ impl Pass {
     }
 
     /// A whole-number slider row over `range`, enabled or not.
-    fn slider(
-        &mut self,
-        ui: &mut Ui,
-        label: &Label,
-        value: f64,
-        range: RangeInclusive<f64>,
-        percent: bool,
-        enabled: bool,
-        set: fn(&mut ColorRangeValue, f64),
-    ) {
-        let mut field = SliderField::new(label.clone(), Bind::given(value), range).step(1.0).enabled(enabled);
-        if percent {
+    fn slider(&mut self, ui: &mut Ui, label: &Label, value: f64, scale: Scale, enabled: bool, set: fn(&mut ColorRangeValue, f64)) {
+        let mut field = SliderField::new(label.clone(), Bind::given(value), scale.range).step(1.0).enabled(enabled);
+        if scale.percent {
             field = field.unit_kind(UnitKind::Percent);
         }
         let events = field.show(ui).events;
         self.lift(events, move |value, x| set(value, x.round()));
+    }
+}
+
+/// How a slider row reads: its range and whether the value shows as a percentage.
+struct Scale {
+    range: RangeInclusive<f64>,
+    percent: bool,
+}
+
+impl Scale {
+    fn percent(range: RangeInclusive<f64>) -> Self {
+        Scale { range, percent: true }
+    }
+
+    fn plain(range: RangeInclusive<f64>) -> Self {
+        Scale { range, percent: false }
     }
 }
 
@@ -249,24 +256,24 @@ impl<'a> ColorRangeDialog<'a> {
             let events = Checkbox::new(Bind::given(now.localized)).label(words.localized.clone()).enabled(c.sampling).show(ui).events;
             pass.lift(events, |value, on| value.localized = on);
             if c.tonal {
-                pass.slider(ui, &words.fuzziness, now.tone_fuzziness, 0.0..=100.0, true, c.fuzziness, |v, x| v.tone_fuzziness = x);
+                pass.slider(ui, &words.fuzziness, now.tone_fuzziness, Scale::percent(0.0..=100.0), c.fuzziness, |v, x| v.tone_fuzziness = x);
             } else {
-                pass.slider(ui, &words.fuzziness, now.fuzziness, 0.0..=200.0, false, c.fuzziness, |v, x| v.fuzziness = x);
+                pass.slider(ui, &words.fuzziness, now.fuzziness, Scale::plain(0.0..=200.0), c.fuzziness, |v, x| v.fuzziness = x);
             }
             if c.range {
-                pass.slider(ui, &words.range, now.range, 0.0..=100.0, true, true, |v, x| v.range = x);
+                pass.slider(ui, &words.range, now.range, Scale::percent(0.0..=100.0), true, |v, x| v.range = x);
             }
             if c.tonal {
                 match now.select {
                     ColorRangeSelect::Shadows => {
-                        pass.slider(ui, &words.shadows_up_to, now.shadows_level, 0.0..=255.0, false, true, |v, x| v.shadows_level = x);
+                        pass.slider(ui, &words.shadows_up_to, now.shadows_level, Scale::plain(0.0..=255.0), true, |v, x| v.shadows_level = x);
                     }
                     ColorRangeSelect::Highlights => {
-                        pass.slider(ui, &words.highlights_from, now.highlights_level, 0.0..=255.0, false, true, |v, x| v.highlights_level = x);
+                        pass.slider(ui, &words.highlights_from, now.highlights_level, Scale::plain(0.0..=255.0), true, |v, x| v.highlights_level = x);
                     }
                     _ => {
-                        pass.slider(ui, &words.midtones_from, now.midtones_low, 0.0..=255.0, false, true, |v, x| v.midtones_low = x);
-                        pass.slider(ui, &words.midtones_to, now.midtones_high, 0.0..=255.0, false, true, |v, x| v.midtones_high = x);
+                        pass.slider(ui, &words.midtones_from, now.midtones_low, Scale::plain(0.0..=255.0), true, |v, x| v.midtones_low = x);
+                        pass.slider(ui, &words.midtones_to, now.midtones_high, Scale::plain(0.0..=255.0), true, |v, x| v.midtones_high = x);
                     }
                 }
             }

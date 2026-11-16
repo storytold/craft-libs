@@ -5,7 +5,7 @@ use crate::ui::character::{CharacterValues, ParagraphValues, TextAlign};
 use crate::ui::type_options::{TextAntiAlias, TextOrientation};
 use craft_theme::Rgba;
 use craft_ui::bars::{Bar, BarKind};
-use craft_ui::contract::{Show as _, ShowContainer as _};
+use craft_ui::contract::ShowContainer as _;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

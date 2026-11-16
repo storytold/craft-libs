@@ -3,7 +3,7 @@
 use craft_behavior::EditEvent;
 use craft_color::ui::Paint;
 use craft_draw::ui::{Arrowheads, ArrowheadsPopover, LiveShape, ShapeAppearance, ShapeChange, ShapePanel};
-use craft_ui::contract::{Bind, Show as _};
+use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
 use egui::vec2;
 use std::cell::RefCell;

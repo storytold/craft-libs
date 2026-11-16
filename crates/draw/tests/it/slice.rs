@@ -35,10 +35,13 @@ fn drawn(events: &[SliceEvent]) -> Option<Rect> {
 /// A new slice is rounded by its style: Fixed Ratio keeps the ratio on whole pixels and a click makes none; Fixed Size
 /// is exactly its pixels on the press's pixel, drawn up and left too, and a click makes it; a Normal drag no wider
 /// and no taller than two pixels is a click that selects.
+/// A style case: its name, constraint, drag start, drag delta and the slice it draws.
+type StyleCase = (&'static str, Constraint, (f64, f64), (f32, f32), Option<Rect>);
+
 #[trial]
 fn a_slice_is_drawn_by_its_style() {
     // Starts have a fractional part so that float noise in the pointer's position cannot move a pixel edge.
-    let cases: [(&str, Constraint, (f64, f64), (f32, f32), Option<Rect>); 6] = [
+    let cases: [StyleCase; 6] = [
         ("Fixed Ratio 2:1 from a 20.8 px drag", Constraint::Ratio(2.0, 1.0), (50.5, 50.5), (20.8, 0.0), Some(Rect::new(50.0, 50.0, 71.0, 61.0))),
         ("Fixed Ratio click", Constraint::Ratio(2.0, 1.0), (50.5, 50.5), (0.0, 0.0), None),
         ("Fixed Size drawn up and left", Constraint::Size(20.0, 10.0), (60.4, 60.6), (-5.0, -5.0), Some(Rect::new(41.0, 51.0, 61.0, 61.0))),
@@ -109,9 +112,12 @@ enum Outcome {
 
 /// A drag of a user slice moves it by whole pixels (a `Move` from `Begin` to `Commit`); a corner and an edge handle
 /// move only their edges and never empty the slice; a press on an auto or layer slice only selects.
+/// A move case: its name, the user slice grabbed, drag start, drag delta and the outcome.
+type MoveCase = (&'static str, Option<usize>, (f64, f64), (f32, f32), Outcome);
+
 #[trial]
 fn user_slices_move_and_resize_and_other_slices_only_select() {
-    let cases: [(&str, Option<usize>, (f64, f64), (f32, f32), Outcome); 6] = [
+    let cases: [MoveCase; 6] = [
         ("move by whole pixels", Some(1), (90.0, 80.0), (13.3, 7.6), Outcome::Moved(Rect::new(53.0, 48.0, 153.0, 128.0))),
         ("corner handle", Some(1), (140.0, 120.0), (10.0, 6.0), Outcome::Resized(Rect::new(40.0, 40.0, 150.0, 126.0))),
         ("edge handle", Some(1), (140.0, 80.0), (-30.0, 25.0), Outcome::Resized(Rect::new(40.0, 40.0, 110.0, 120.0))),

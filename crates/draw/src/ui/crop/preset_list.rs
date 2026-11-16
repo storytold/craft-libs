@@ -3,7 +3,7 @@
 use super::bar_words::CropBarWords;
 use super::options::{CROP_RATIOS, CROP_SIZES, CropPresetChoice, CropRatio, CropSizeFields};
 use super::{CropDocument, CropRatioChange, CropSettings, CropUserPreset};
-use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Props as _, Show as _};
+use craft_ui::contract::{Bind, Entry, NoValue, Outcome, Show as _};
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Units};
 use egui::{Response, Ui};

@@ -173,7 +173,7 @@ impl RawDevelopOpen {
 #[non_exhaustive]
 pub enum RawDevelopEvent {
     /// The settings changed.
-    Settings(EditEvent<RawDevelopSettings>),
+    Settings(Box<EditEvent<RawDevelopSettings>>),
     /// A filmstrip pick: the app keeps the current raw's settings and calls `show_item`.
     Show(usize),
     /// Load Settings asks the app for a file.
@@ -227,7 +227,7 @@ enum Footer {
 /// A change the passes ask of the workspace, applied after the dialog has been shown.
 enum Action {
     /// An edit of the settings from the panel or the scope's tone zones.
-    Edit(EditEvent<RawDevelopSettings>),
+    Edit(Box<EditEvent<RawDevelopSettings>>),
     /// The Auto button.
     Auto,
     /// A filmstrip pick.
@@ -358,7 +358,7 @@ impl RawDevelopWorkspace {
         let event = EditEvent::set(Mixed::Same(self.settings.clone()), next.clone(), name, None);
         self.history.record(&event);
         self.settings = next;
-        self.queued.push(RawDevelopEvent::Settings(event));
+        self.queued.push(RawDevelopEvent::Settings(Box::new(event)));
         true
     }
 
@@ -382,7 +382,7 @@ impl RawDevelopWorkspace {
             }
             _ => {}
         }
-        RawDevelopEvent::Settings(event)
+        RawDevelopEvent::Settings(Box::new(event))
     }
 
     /// Steps the history and reports the step as a change of the settings named `name`.
@@ -393,7 +393,7 @@ impl RawDevelopWorkspace {
         }
         self.diagnostic = None;
         let event = EditEvent::set(Mixed::Same(before), self.settings.clone(), name, None);
-        Some(RawDevelopEvent::Settings(event))
+        Some(RawDevelopEvent::Settings(Box::new(event)))
     }
 
     /// The result the button `finish` answers.
@@ -553,26 +553,26 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
                 let (at, has_selection) = (w.hover, source.has_selection());
                 FullWindowSide::new(words.settings.clone()).show(ui, |ui, _| {
                     let mut floating = floating_now;
-                    if let Some(state) = w.scope.as_mut() {
-                        if !floating_now {
-                            let region = state.settings.selected_region;
-                            let mut out = None;
-                            source.scope(before, region, at, &mut |frame| {
-                                let strip = RawScopeStrip::new(&mut *state, frame.as_ref(), Bind::given(settings.clone()))
-                                    .floating(Bind::bound(&mut floating))
-                                    .has_selection(has_selection)
-                                    .show(ui);
-                                out = Some(strip);
-                            });
-                            // A source that shows no frame still gets its strip.
-                            let strip = out.unwrap_or_else(|| {
-                                RawScopeStrip::new(&mut *state, None, Bind::given(settings.clone()))
-                                    .floating(Bind::bound(&mut floating))
-                                    .has_selection(has_selection)
-                                    .show(ui)
-                            });
-                            actions.borrow_mut().extend(strip.edit.events.into_iter().map(Action::Edit));
-                        }
+                    if let Some(state) = w.scope.as_mut()
+                        && !floating_now
+                    {
+                        let region = state.settings.selected_region;
+                        let mut out = None;
+                        source.scope(before, region, at, &mut |frame| {
+                            let strip = RawScopeStrip::new(&mut *state, frame.as_ref(), Bind::given(settings.clone()))
+                                .floating(Bind::bound(&mut floating))
+                                .has_selection(has_selection)
+                                .show(ui);
+                            out = Some(strip);
+                        });
+                        // A source that shows no frame still gets its strip.
+                        let strip = out.unwrap_or_else(|| {
+                            RawScopeStrip::new(&mut *state, None, Bind::given(settings.clone()))
+                                .floating(Bind::bound(&mut floating))
+                                .has_selection(has_selection)
+                                .show(ui)
+                        });
+                        actions.borrow_mut().extend(strip.edit.events.into_iter().map(|event| Action::Edit(Box::new(event))));
                     }
                     let mut panel = RawDevelopPanel::new(Bind::given(settings.clone()).reset(original.clone()));
                     if let Some(demosaic) = demosaic {
@@ -580,7 +580,7 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
                     }
                     let out = panel.show(ui);
                     let mut queued = actions.borrow_mut();
-                    queued.extend(out.edit.events.into_iter().map(Action::Edit));
+                    queued.extend(out.edit.events.into_iter().map(|event| Action::Edit(Box::new(event))));
                     if out.auto {
                         queued.push(Action::Auto);
                     }
@@ -766,7 +766,7 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
                             );
                         });
                         if let Some(float) = out {
-                            actions.borrow_mut().extend(float.edit.events.into_iter().map(Action::Edit));
+                            actions.borrow_mut().extend(float.edit.events.into_iter().map(|event| Action::Edit(Box::new(event))));
                         }
                     }
                     w.floating = floating;
@@ -774,14 +774,13 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
             });
 
         let output = shown.output;
-        drop(ws);
         let mut events = std::mem::take(&mut self.queued);
         for step in actions.borrow().iter().filter_map(|action| if let Action::Step(step) = action { Some(*step) } else { None }) {
             events.extend(self.step(step, Arc::from(words.name.as_str())));
         }
         for action in actions.into_inner() {
             match action {
-                Action::Edit(event) => events.push(self.take_edit(event, alt)),
+                Action::Edit(event) => events.push(self.take_edit(*event, alt)),
                 Action::Auto => self.run_auto(source, Arc::from(words.auto.as_str())),
                 Action::Show(index) => events.push(RawDevelopEvent::Show(index)),
                 Action::Step(_) => {}

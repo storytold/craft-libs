@@ -54,21 +54,18 @@ impl OpeningCard {
     }
 
     /// The muted message under the title.
-    #[must_use]
     pub fn message(mut self, message: impl Into<Label>) -> Self {
         self.message = Some(message.into());
         self
     }
 
     /// How far the job is, 0 to 1; `None` shows an indeterminate bar.
-    #[must_use]
     pub fn fraction(mut self, fraction: Option<f32>) -> Self {
         self.fraction = fraction;
         self
     }
 
     /// The Cancel button's text; without it the card has no Cancel.
-    #[must_use]
     pub fn cancel(mut self, cancel: impl Into<Label>) -> Self {
         self.cancel = Some(cancel.into());
         self

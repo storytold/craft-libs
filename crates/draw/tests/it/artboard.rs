@@ -55,7 +55,10 @@ impl CanvasTool for Driven {
     }
 }
 
-fn shown(placing: Option<Size>) -> (ToolFixture<Driven>, Rc<Cell<Option<Size>>>, Rc<RefCell<Vec<ArtboardEvent>>>) {
+/// The fixture, the size being placed and the events the tool raised.
+type Shown = (ToolFixture<Driven>, Rc<Cell<Option<Size>>>, Rc<RefCell<Vec<ArtboardEvent>>>);
+
+fn shown(placing: Option<Size>) -> Shown {
     let placing = Rc::new(Cell::new(placing));
     let log = Rc::new(RefCell::new(Vec::new()));
     let driven = Driven { tool: ArtboardTool::new(), placing: Rc::clone(&placing), log: Rc::clone(&log) };

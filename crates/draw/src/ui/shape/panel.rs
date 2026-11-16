@@ -31,7 +31,9 @@ pub enum ShapePaint {
 
 /// The app's decoration of a paint chip (the Gradient, Pattern and Picture editors), which also shows it, so the
 /// decoration's borrows of app state last only for the call.
-pub struct ChipSetup<'a>(Box<dyn for<'b> FnMut(ShapePaint, PaintChip<'b>, &mut Ui) -> PaintChipOutput + 'a>);
+pub struct ChipSetup<'a>(SetupFn<'a>);
+
+type SetupFn<'a> = Box<dyn for<'b> FnMut(ShapePaint, PaintChip<'b>, &mut Ui) -> PaintChipOutput + 'a>;
 
 impl<'a> ChipSetup<'a> {
     pub(super) fn new(setup: impl for<'b> FnMut(ShapePaint, PaintChip<'b>, &mut Ui) -> PaintChipOutput + 'a) -> Self {

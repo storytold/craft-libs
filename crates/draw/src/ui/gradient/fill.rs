@@ -32,11 +32,11 @@ impl GradientStyle {
     /// The style's name.
     pub fn label(self, words: &GradientFillWords) -> Label {
         match self {
-            GradientStyle::Linear => words.linear.clone().into(),
-            GradientStyle::Radial => words.radial.clone().into(),
-            GradientStyle::Angle => words.angle_style.clone().into(),
-            GradientStyle::Reflected => words.reflected.clone().into(),
-            GradientStyle::Diamond => words.diamond.clone().into(),
+            GradientStyle::Linear => words.linear.clone(),
+            GradientStyle::Radial => words.radial.clone(),
+            GradientStyle::Angle => words.angle_style.clone(),
+            GradientStyle::Reflected => words.reflected.clone(),
+            GradientStyle::Diamond => words.diamond.clone(),
         }
     }
 

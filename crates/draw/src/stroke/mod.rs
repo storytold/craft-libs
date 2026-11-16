@@ -330,7 +330,7 @@ impl StrokeStyle {
         let scale = self.dash_scale() * length_scale;
         let pattern: Vec<f64> = self.dashes.iter().map(|&d| f64::from(d) * scale).collect();
         // `!(x > y)` also refuses a NaN total.
-        if !(pattern.iter().sum::<f64>() > MIN_RUN) {
+        if pattern.iter().sum::<f64>().partial_cmp(&MIN_RUN) != Some(std::cmp::Ordering::Greater) {
             return path.clone();
         }
         let cut = match self.dash_align {

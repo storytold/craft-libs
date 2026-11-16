@@ -318,6 +318,9 @@ fn near(got: [f64; 7], want: [f64; 7], what: &str) {
     assert!(got.iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-3), "{what}: {got:?} against {want:?}");
 }
 
+/// A handle case: the handle's place, the drag in document units, the values after and the name.
+type HandleCase = ((f64, f64), (f32, f32), [f64; 7], &'static str);
+
 #[trial]
 fn cylinder_handles_drag_their_values_and_keep_them_sound() {
     // RECT is 180 wide: the half axis is 90, the centre 190. Depths 0.5, wrap 0.85 (its handle 0.15 of the half axis out).
@@ -325,7 +328,7 @@ fn cylinder_handles_drag_their_values_and_keep_them_sound() {
     let (top_right, bottom_left, bend, bottom, wrap, surface) =
         ((280.0, 80.0), (100.0, 200.0), (190.0, 125.0), (190.0, 245.0), (203.5, 185.0), (130.0, 160.0));
     // (handle's place, the drag in document units, the values after)
-    let cases: [((f64, f64), (f32, f32), [f64; 7], &str); 10] = [
+    let cases: [HandleCase; 10] = [
         (top_right, (-30.0, 15.0), [100.0, 200.0, 250.0, 95.0, 0.5, 0.5, 0.85], "the top right corner takes its silhouette and its edge"),
         (bottom_left, (10.0, -20.0), [110.0, 180.0, 280.0, 80.0, 0.5, 0.5, 0.85], "the bottom left corner takes its silhouette and its edge"),
         (bend, (0.0, 9.0), [100.0, 200.0, 280.0, 80.0, 0.6, 0.6, 0.85], "Bend moves both depths by the drag over the half axis"),

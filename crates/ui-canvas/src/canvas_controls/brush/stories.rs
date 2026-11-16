@@ -67,9 +67,9 @@ fn stamped(y: f64) -> CoverageMask {
 
 /// The footprint of one tone. The mask is kept across passes (stamped once), so the trail uploads only what changed.
 fn footprint_of(ui: &mut Ui, name: &'static str, label: &'static str, tone: TrailTone, y: f64) -> StoryOutput {
-    let kept = ui.data_mut(|data| data.get_temp_mut_or_insert_with(Id::new(("footprint", name)), || Arc::new(Mutex::new(stamped(y)))).clone());
+    let kept = ui.data_mut(|data| data.get_temp_mut_or_insert_with(Id::unique(("footprint", name)), || Arc::new(Mutex::new(stamped(y)))).clone());
     let mut mask = kept.lock().unwrap_or_else(PoisonError::into_inner);
-    on_canvas_view(ui, brush_view, Some(&StoryDocument::STANDARD), |ui, rect, _| StrokeTrail::new(label, &mut *mask).tone(tone).show_at(ui, rect))
+    on_canvas_view(ui, brush_view, Some(&StoryDocument::STANDARD), |ui, rect, _| StrokeTrail::new(label, &mut mask).tone(tone).show_at(ui, rect))
 }
 
 #[story(StrokeTrail<'static>, covers = [Default])]

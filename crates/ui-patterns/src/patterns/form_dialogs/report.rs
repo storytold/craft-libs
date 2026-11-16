@@ -93,7 +93,6 @@ impl<'a> ReportDialog<'a> {
 
     /// Plain `lines` shown as the notes, in place of ones built with [`ReportNote`]: each line is selectable text,
     /// and Copy hands them back as they are.
-    #[must_use]
     pub fn lines(mut self, lines: Vec<Label>) -> Self {
         self.lines = lines;
         self

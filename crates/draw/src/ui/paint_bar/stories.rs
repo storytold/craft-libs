@@ -2,7 +2,7 @@
 
 use super::{EraserMode, PaintBar, PaintTool, PaintValues};
 use craft_ui::bars::{Bar, BarKind};
-use craft_ui::contract::{Entry, Show as _, ShowContainer as _};
+use craft_ui::contract::{Entry, ShowContainer as _};
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

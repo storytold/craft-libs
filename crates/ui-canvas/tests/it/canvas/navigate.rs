@@ -92,7 +92,7 @@ fn cmd_or_ctrl_with_page_down_on_a_focused_canvas_control_scrolls_the_canvas_sid
     let mut fixture = Fixture::new(move |ui| {
         let mut given = shown.get();
         given.rect = ui.available_rect_before_wrap();
-        let canvas = ui.id().with("document canvas");
+        let canvas = ui.scope_id().with("document canvas");
         let canvas = Canvas::new("Document")
             .id(canvas)
             .document(Size::new(4000.0, 4000.0))
@@ -169,6 +169,9 @@ fn at_a_whole_device_zoom_with_no_rotation_the_shown_view_puts_document_pixels_o
     let p = set.view.to_screen(Point::new(17.0, 29.0)) * set.pixels_per_point;
     assert!((p.x - p.x.round()).abs() < 1e-3 && (p.y - p.y.round()).abs() < 1e-3, "a view set at a whole zoom is shown aligned: {p:?}");
 }
+
+/// A case of the wheel table: its name, navigation, the events it sends, whether it reads as a pan, and the zoom it ends at.
+type NavCase<'a> = (&'a str, NavigationOptions, &'a dyn Fn(Pos2) -> Vec<Vec<egui::Event>>, bool, f64);
 
 type WheelRig = (Fixture, Rc<Cell<CanvasView>>, Rc<Cell<Option<f64>>>, Rc<Cell<egui::Rect>>);
 
@@ -414,7 +417,7 @@ fn pinch_and_rotation_follow_the_gesture_options_and_the_flip() {
         vec![fingers(TouchPhase::Start, at, Vec2::new(50.0, 0.0)), fingers(TouchPhase::Move, at, turned), fingers(TouchPhase::End, at, turned)]
     };
     // (case, options (pinch, gestures, rotate), input, zooms, degrees turned)
-    let cases: [(&str, NavigationOptions, &dyn Fn(Pos2) -> Vec<Vec<egui::Event>>, bool, f64); 12] = [
+    let cases: [NavCase<'_>; 12] = [
         ("the trackpad's pinch", navigation(true, true, false), pinch, true, 0.0),
         ("the fingers' pinch", navigation(true, true, false), spread, true, 0.0),
         ("the trackpad's pinch without Zoom with Trackpad Pinch", navigation(false, true, false), pinch, false, 0.0),

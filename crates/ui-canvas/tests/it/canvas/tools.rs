@@ -18,21 +18,20 @@ const DOCUMENT: Size = Size::new(1200.0, 900.0);
 const FRAME: f64 = 1.0 / 60.0;
 
 /// A tool on a canvas whose view the rig keeps across frames as the host reports it, with the pans the host reported.
-struct Rig<T: CanvasTool + 'static> {
+struct Rig {
     fixture: Fixture,
-    tool: Rc<RefCell<T>>,
     view: Rc<Cell<Option<CanvasView>>>,
     pans: Rc<RefCell<Vec<(DocVec, bool)>>>,
 }
 
-impl<T: CanvasTool + 'static> Rig<T> {
-    fn new(tool: T, start: impl Fn(egui::Rect) -> CanvasView + 'static) -> Self {
+impl Rig {
+    fn new<T: CanvasTool + 'static>(tool: T, start: impl Fn(egui::Rect) -> CanvasView + 'static) -> Self {
         Self::scaled(tool, 1.0, NavigationOptions::default(), start)
     }
 
     /// A rig whose canvas shows at `ppp` pixels per point from its first frame, with the canvas's navigation options
     /// `navigation`.
-    fn scaled(tool: T, ppp: f32, navigation: NavigationOptions, start: impl Fn(egui::Rect) -> CanvasView + 'static) -> Self {
+    fn scaled<T: CanvasTool + 'static>(tool: T, ppp: f32, navigation: NavigationOptions, start: impl Fn(egui::Rect) -> CanvasView + 'static) -> Self {
         let tool = Rc::new(RefCell::new(tool));
         let view = Rc::new(Cell::new(None::<CanvasView>));
         let pans = Rc::new(RefCell::new(Vec::<(DocVec, bool)>::new()));
@@ -49,7 +48,7 @@ impl<T: CanvasTool + 'static> Rig<T> {
         });
         fixture.ctx().set_pixels_per_point(ppp);
         fixture.settle();
-        Rig { fixture, tool, view, pans }
+        Rig { fixture, view, pans }
     }
 
     fn view(&self) -> CanvasView {

@@ -266,7 +266,7 @@ fn swatches_panel_reports_each_edit_and_leaves_the_library() {
     let blue = SwatchColor::Rgb([0.0, 0.0, 1.0]);
     let entry = |name: &str, color: SwatchColor| craft_color::palette::SwatchEntry::new(name.to_owned(), color);
     let groups = vec![
-        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red", red.clone()), entry("Color Swatch 1", blue.clone())] },
+        SwatchGroup { name: "Basics".to_owned(), entries: vec![entry("Red", red), entry("Color Swatch 1", blue)] },
         SwatchGroup { name: "Other".to_owned(), entries: vec![entry("Blue", blue)] },
     ];
     let (mut fixture, edits) = swatches_rig(groups.clone());

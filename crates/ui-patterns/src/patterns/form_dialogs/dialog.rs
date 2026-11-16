@@ -1025,7 +1025,7 @@ pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str,
         return Err(FieldRefusal::Inactive.message(field));
     }
     let writes = if companion(param) {
-        Some(vec![(field.to_owned(), Some(FieldValue::Json(value.clone())).filter(|_| !value.is_null()))])
+        Some(vec![(field.to_owned(), (!value.is_null()).then_some(FieldValue::Json(value.clone())))])
     } else if param.key != field {
         value.as_str().map(|unit| vec![(field.to_owned(), Some(FieldValue::Text(unit.to_owned())))])
     } else if matches!(param.kind, ParamKind::Files { .. }) {

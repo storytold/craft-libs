@@ -20,7 +20,7 @@ use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
 use serde_json::{Value, json};
 
-use crate::screenshot::{Captures, DocumentId, Finished, screenshot_reply};
+use crate::screenshot::{Captures, DocumentId, Finished, ScreenshotRequest, screenshot_reply};
 use crate::synthetic::TARGET_CHANGED;
 
 /// A reply: the JSON object the transport writes as one line.
@@ -198,7 +198,7 @@ impl ControlChannel {
             Reply::AfterInput => self.input_waiters.push(reply),
             Reply::AfterJob(job) => self.job_waiters.push((job, reply)),
             Reply::Screenshot { token, path, viewport } => {
-                if let Err((reply, e)) = self.captures.admit(token, path, viewport, reply, document, settle_ms, motion::now()) {
+                if let Err((reply, e)) = self.captures.admit(ScreenshotRequest { token, path, viewport, reply, document, settle_ms }, motion::now()) {
                     let _ = reply.send(json!({"ok": false, "error": e}));
                 }
             }

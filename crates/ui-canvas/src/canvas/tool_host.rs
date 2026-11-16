@@ -579,7 +579,7 @@ impl<'m> ToolHost<'m> {
         let current = state.gesture.map(|active| active.last).or_else(|| over.then(|| hover_pointer(&input, canvas.press)).flatten());
         // The tool of hover, cursor, paint and claims: the one the running gesture latched, else the stand-in lent for
         // the held key, else the momentary tool in effect, else the selected tool.
-        let pass: &dyn CanvasTool = run_as(momentary.as_deref_mut(), momentary_tool, &mut *tool);
+        let pass: &dyn CanvasTool = run_as(momentary, momentary_tool, &mut *tool);
         let effective: &dyn CanvasTool = match state.gesture.map_or(lent, |active| active.stand_in) {
             Some(StandInKey::Command) => command_stand_in.as_deref().unwrap_or(pass),
             Some(StandInKey::Alt) => alt_stand_in.as_deref().unwrap_or(pass),

@@ -114,7 +114,7 @@ const MAX_FONT_BYTES: u64 = 128 << 20;
 /// reinstalled.
 ///
 /// The loader retains no font bytes: a file is read once, checked, and handed to egui as owned data, one
-/// face per file. Memory is bounded by [`MAX_FONT_BYTES`] per file and [`MAX_SCRIPT_READS`] files per script,
+/// face per file. Memory is bounded by `MAX_FONT_BYTES` per file and [`MAX_SCRIPT_READS`] files per script,
 /// so there is no blob budget to enforce. In a collection the face is chosen by character-map coverage, then by
 /// the Han region's family, and a face whose tables are malformed is skipped.
 pub struct OnDemandFonts {

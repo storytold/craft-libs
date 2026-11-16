@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use craft_automation::control::ControlResponse;
 use craft_automation::screenshot::{
     CaptureGeometry, Captures, DEADLINE, DocumentId, Finished, MAX_IMAGE_BYTES, MAX_PENDING, MAX_RETRIES, MAX_TOTAL_BYTES, SETTLE_PASSES,
-    WINDOW_CLOSED,
+    ScreenshotRequest, WINDOW_CLOSED,
 };
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
@@ -39,7 +39,7 @@ fn admit_for(
     now: Instant,
 ) -> Result<Receiver<ControlResponse>, String> {
     let (tx, rx) = channel();
-    captures.admit(token, None, viewport, tx, document, 0.0, now).map(|()| rx).map_err(|(_, e)| e)
+    captures.admit(ScreenshotRequest { token, path: None, viewport, reply: tx, document, settle_ms: 0.0 }, now).map(|()| rx).map_err(|(_, e)| e)
 }
 
 fn admit(captures: &mut Captures, token: u64, now: Instant) -> Result<Receiver<ControlResponse>, String> {

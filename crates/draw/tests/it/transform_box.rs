@@ -132,7 +132,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
             host.view = view;
             host.state
         };
-        let canvas_id = ui.id().with("document canvas");
+        let canvas_id = ui.scope_id().with("document canvas");
         let mut canvas = Canvas::new("Document").id(canvas_id).view(view);
         if config.snap {
             canvas = canvas.snap(snap.clone());

@@ -302,7 +302,7 @@ fn an_option_click_runs_the_rows_alternate() {
 
     let click = |mods: Mods| dispatch.chosen(&merge, Some(&shortcut), false, false, mods, Some(&alternate));
     assert_eq!(click(held([false, false, true, false])), Event::Click(stamp.clone()));
-    assert_eq!(*seen.lock().unwrap(), [stamp.clone()], "the hook sees the alternate");
+    assert_eq!(*seen.lock().unwrap(), std::slice::from_ref(&stamp), "the hook sees the alternate");
     assert_eq!(click(Mods::default()), Event::Click(merge.clone()), "no ⌥: the row's own command");
     assert_eq!(click(held([false, false, false, true])), Event::Click(merge.clone()), "another modifier is not the alternate's");
 

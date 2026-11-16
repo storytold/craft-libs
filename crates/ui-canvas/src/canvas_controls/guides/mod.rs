@@ -6,7 +6,7 @@ pub mod reading;
 #[cfg(feature = "testing")]
 mod stories;
 
-pub use reading::{GuideReading, running};
+pub use reading::GuideReading;
 
 use super::words::CanvasControlWords;
 use crate::canvas::{
@@ -174,7 +174,7 @@ pub(crate) fn guides_id(canvas: egui::Id) -> egui::Id {
 
 impl<'a> Guides<'a> {
     /// The guides named `label` over `guides`, in document units, on the canvas `canvas` (the id of the `Canvas` whose
-    /// body shows them, [`CanvasSpace::canvas`](crate::canvas::CanvasSpace::canvas)): they take their id from it, so
+    /// body shows them): they take their id from it, so
     /// [`running`] finds their drag by the canvas.
     pub fn new(label: impl Into<Label>, canvas: egui::Id, guides: Bind<'a, Vec<Guide>>) -> Self {
         Guides {

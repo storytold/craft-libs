@@ -480,7 +480,7 @@ impl SwatchLibrary {
                     },
                     None => None,
                 };
-                self.add(color.clone(), Some(name), group).is_some()
+                self.add(*color, Some(name), group).is_some()
             }
             SwatchEdit::NewGroup { name } => self.new_group(name).is_some(),
             SwatchEdit::Rename { swatch, name } => self.find(swatch).is_some_and(|at| self.rename(at, name)),
@@ -545,13 +545,14 @@ pub fn swatch_rows(groups: &[SwatchGroup], words: &SwatchesWords) -> Vec<PresetR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
     fn group(name: &str, entries: &[&str]) -> SwatchGroup {
         SwatchGroup { name: name.to_owned(), entries: entries.iter().map(|n| SwatchEntry::new((*n).to_owned(), SwatchColor::Gray(0.5))).collect() }
     }
 
     /// Edits that move several items down or up give the order the browser's own reorder gives.
-    #[test]
+    #[trial]
     fn multi_item_moves_apply_as_the_reorder_does() {
         let library = SwatchLibrary::new(vec![group("G", &["A", "B", "C", "D"]), group("H", &["E"])]);
         let swatch = |n: &str| SwatchKey::Swatch(n.to_owned());

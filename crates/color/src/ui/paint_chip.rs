@@ -504,7 +504,7 @@ impl Component for PaintChip<'_> {
                         shown.picked = recent.edit.as_ref().and_then(|edit| edit.value()).copied();
                     }
                     if let Some((groups, state)) = swatches.as_mut() {
-                        let groups: &[SwatchGroup] = *groups;
+                        let groups: &[SwatchGroup] = groups;
                         let rows = swatch_rows(groups, &swatch_words);
                         let colors: HashMap<&str, &SwatchColor> =
                             groups.iter().flat_map(|g| g.entries.iter().map(|e| (e.name.as_str(), &e.color))).collect();

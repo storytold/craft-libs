@@ -487,7 +487,7 @@ impl CropSession {
         self.dismissed = None;
     }
 
-    /// The frame the last [`reset`](Self::reset) made, while no other step replaced it.
+    /// The frame the last `reset` made, while no other step replaced it.
     pub fn reset_to(&self) -> Option<CropBox> {
         self.reset_to
     }

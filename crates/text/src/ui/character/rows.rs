@@ -65,7 +65,7 @@ impl Lengths<'_> {
     }
 
     /// The kerning field: a number or the name of a presets row (Metrics, Optical).
-    pub(crate) fn kerning(
+    pub(super) fn kerning(
         &self,
         ui: &mut Ui,
         label: Label,

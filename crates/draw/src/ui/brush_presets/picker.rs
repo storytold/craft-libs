@@ -272,8 +272,11 @@ pub struct BrushPresetPicker<'a, K: Value + Eq + Hash> {
     opened_at: Option<(Pos2, Bind<'a, bool>)>,
     compact: bool,
     enabled: bool,
-    app_rows: Option<Box<dyn FnOnce(&mut Ui) + 'a>>,
+    app_rows: Option<AppRows<'a>>,
 }
+
+/// The app's own rows of the picker's gear menu.
+type AppRows<'a> = Box<dyn FnOnce(&mut Ui) + 'a>;
 
 impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
     /// A picker named `label` over the presets in `rows` (build each with [`brush_row`](super::brush_row)), holding the

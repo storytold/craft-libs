@@ -189,7 +189,7 @@ impl Rig {
 
     /// The turn of the view the canvas shows, in degrees; `None` before the tool set one.
     fn view_turn(&self) -> Option<f64> {
-        self.host.borrow().view.map(|view| f64::from(view.rotation))
+        self.host.borrow().view.map(|view| view.rotation)
     }
 
     fn drag(&mut self, from: (f64, f64), to: (f64, f64)) {
@@ -277,7 +277,7 @@ fn leaving_during_a_drag_ends_it_at_its_last_frame_and_applies() {
 }
 
 #[trial]
-fn the_default_frame_fits_the_ratio_follows_the_selection_and_hides_after_discard() {
+fn the_default_frame_fits_the_ratio_and_follows_the_selection() {
     // A new default frame fits the saved ratio about its centre.
     let mut square = classic();
     square.ratio = CropRatio::sides(1.0, 1.0);
@@ -304,7 +304,11 @@ fn the_default_frame_fits_the_ratio_follows_the_selection_and_hides_after_discar
         assert_eq!(tool.frame(), Some(upright(50.0, 0.0, 350.0, 300.0)), "the ratio fits the canvas, not the selection");
         assert!(!tool.session().from_selection() && !tool.shows_selection_entry(&ratio) && !tool.session().applies());
     }
+}
 
+#[trial]
+fn the_default_frame_takes_no_box_step_and_hides_after_discard() {
+    let selection = Rect::new(100.0, 50.0, 300.0, 250.0);
     // X on a square default frame makes no box step.
     let mut rig = Rig::new(classic());
     rig.host.borrow_mut().document = CropDocument::new(CropDocKey::new(3), Size::new(300.0, 300.0), 72.0);

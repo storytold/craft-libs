@@ -36,8 +36,7 @@ impl Rig {
             let mut tool = shown.borrow_mut();
             let room = ui.available_rect_before_wrap();
             let view = CanvasView::new(room, Point::new(200.0, 150.0), 1.0);
-            let mut input = PerspectiveInput::default();
-            input.document = active.get();
+            let input = PerspectiveInput { document: active.get(), ..Default::default() };
             let mut pass = tool.pass(input);
             let canvas = Canvas::new("Document").document(SIZE).view(view).show(ui, |ui, body| {
                 let _ = pass.show_quad(ui, body.rect);

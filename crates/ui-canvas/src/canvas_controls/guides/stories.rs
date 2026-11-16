@@ -18,7 +18,7 @@ const MOST_GUIDES: usize = 2;
 /// [`StoryDocument::STANDARD`] at 100 % centred on its middle, as `on_canvas` does; the control gets the canvas's rect
 /// and its id, which the guides are keyed by.
 fn on_guides_canvas(ui: &mut Ui, mut control: impl FnMut(&mut Ui, Rect, Id) -> GuidesOutput) -> StoryOutput {
-    let canvas = ui.id().with("guides story canvas");
+    let canvas = ui.scope_id().with("guides story canvas");
     let document: &dyn RasterSource = &StoryDocument::STANDARD;
     let room = stage(ui);
     let size = document.size();

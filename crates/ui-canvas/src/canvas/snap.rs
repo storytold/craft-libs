@@ -66,7 +66,7 @@ impl Snap {
     }
 
     /// The snapping distance in document units for this pass, or `None` when snapping is off, the canvas has not given
-    /// this snap its pass ([`at`](Self::at)) or the Control key suspends it (unless `reads_control`): the one gate of
+    /// this snap its pass (`at`) or the Control key suspends it (unless `reads_control`): the one gate of
     /// `apply`, `point` and `rect`, and the reach a gesture's snapped lines were found with.
     pub fn reach(&self, mods: Mods, reads_control: bool) -> Option<f64> {
         self.tolerance.filter(|_| self.options.on && !snap_suspended(mods, self.os, reads_control))

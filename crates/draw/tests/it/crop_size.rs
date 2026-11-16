@@ -27,12 +27,13 @@ fn document(width: f64, height: f64, resolution: f64) -> CropDocument {
 }
 
 fn fields(width: Option<(f64, UnitKind)>, height: Option<(f64, UnitKind)>, resolution: &str, unit: ResolutionUnit) -> CropSizeFields {
-    let mut fields = CropSizeFields::default();
-    fields.width = width.map(|(value, unit)| CropLength::new(value, unit));
-    fields.height = height.map(|(value, unit)| CropLength::new(value, unit));
-    fields.resolution = resolution.to_owned();
-    fields.resolution_unit = unit;
-    fields
+    CropSizeFields {
+        width: width.map(|(value, unit)| CropLength::new(value, unit)),
+        height: height.map(|(value, unit)| CropLength::new(value, unit)),
+        resolution: resolution.to_owned(),
+        resolution_unit: unit,
+        ..Default::default()
+    }
 }
 
 fn near(value: Option<f64>, expected: f64) -> bool {
@@ -71,8 +72,7 @@ fn size_targets_convert_units_and_perspective_limits_round_inward() {
     assert!(zero.width.is_none() && zero.height.is_none(), "{zero:?}");
 
     // The settings' target needs the W × H × Resolution mode and both sides.
-    let mut settings = CropSettings::default();
-    settings.size = fields(inch(4.0), inch(5.0), "300", ResolutionUnit::PixelsPerInch);
+    let mut settings = CropSettings { size: fields(inch(4.0), inch(5.0), "300", ResolutionUnit::PixelsPerInch), ..Default::default() };
     assert!(settings.target(&doc, &postscript).is_none(), "a ratio that is not W x H x Resolution has no target");
     settings.ratio = CropRatio::Size;
     let target = settings.target(&doc, &postscript).expect("both sides");
@@ -87,8 +87,7 @@ fn size_targets_convert_units_and_perspective_limits_round_inward() {
     assert_eq!(per_inch.resolution, "29999.999");
     assert_eq!(per_inch.width, Some(CropLength::new(800.0, UnitKind::Pixels)));
     assert_eq!(per_inch.height, Some(CropLength::new(600.0, UnitKind::Pixels)));
-    let mut per_cm = CropSizeFields::default();
-    per_cm.resolution_unit = ResolutionUnit::PixelsPerCentimetre;
+    let mut per_cm = CropSizeFields { resolution_unit: ResolutionUnit::PixelsPerCentimetre, ..Default::default() };
     per_cm.front_image(&high, Some((0.394, 11_811.023)));
     assert_eq!(per_cm.resolution, "11811.023", "30000 / 2.54 rounds to 11811.024, past the limit");
     assert!(per_cm.resolution_ppi().is_some_and(|ppi| ppi <= 29_999.999), "the stored value converts back inside the limit");

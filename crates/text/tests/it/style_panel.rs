@@ -10,6 +10,9 @@ use craft_ui::contract::Bind;
 use craft_ui::testing::{Fixture, trial};
 use egui::{Key, Modifiers};
 
+/// The selection the panel shows, the actions it reported and the warnings it raised.
+type PanelState = Rc<RefCell<(Selection<u64>, Vec<TextStyleAction>, usize)>>;
+
 #[trial]
 fn a_click_applies_alt_clears_overrides_and_a_double_click_opens_options_except_on_none() {
     let state = Rc::new(RefCell::new((Selection::<u64>::default(), Vec::<TextStyleAction>::new())));
@@ -58,7 +61,7 @@ fn every_attempt_to_apply_a_character_style_at_a_bare_caret_warns_and_applies_no
         *warnings += usize::from(out.status.is_some());
     });
     fixture.idle(10);
-    let warnings = |state: &Rc<RefCell<(Selection<u64>, Vec<TextStyleAction>, usize)>>| std::mem::take(&mut state.borrow_mut().2);
+    let warnings = |state: &PanelState| std::mem::take(&mut state.borrow_mut().2);
 
     let emphasis = fixture.by_label("Emphasis").expect("the Emphasis row is shown");
     fixture.click(&emphasis).idle(4);

@@ -4,7 +4,7 @@
 use super::{ArtboardBackground, ArtboardWords};
 use craft_theme::Srgba;
 use craft_ui::choice::Swatch;
-use craft_ui::contract::{Bind, Entry, Outcome, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Entry, Show as _, ShowContainer as _};
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::requests::ColorRequest;

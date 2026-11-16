@@ -7,7 +7,7 @@ use std::rc::Rc;
 use craft_behavior::EditEvent;
 use craft_draw::ui::{EraserMode, MIXER_COMBINATIONS, PaintBar, PaintTool, PaintValues};
 use craft_ui::bars::{Bar, BarKind};
-use craft_ui::contract::{Entry, Show as _, ShowContainer as _};
+use craft_ui::contract::{Entry, ShowContainer as _};
 use craft_ui::testing::focus::AccessActionKind;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Fixture, Room, trial};

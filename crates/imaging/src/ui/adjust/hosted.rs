@@ -17,6 +17,9 @@ use serde::de::DeserializeOwned;
 
 use super::{AdjustContext, LevelsClip, TonePicker};
 
+/// The target a reset aims for, from the current and the opening value.
+type ResetWith<V> = Box<dyn Fn(&V, &V) -> V + Send>;
+
 /// The phase of the editor's edit this pass, mirroring [`craft_behavior::EditEvent`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -105,7 +108,7 @@ pub struct HostedAdjustDialog<V, E = ()> {
     resizable: bool,
     remember: Option<SaveKey>,
     canvas: Option<egui::Id>,
-    reset_with: Option<Box<dyn Fn(&V, &V) -> V + Send>>,
+    reset_with: Option<ResetWith<V>>,
     picker: Option<TonePicker>,
     channel: usize,
     clipping: Option<LevelsClip>,

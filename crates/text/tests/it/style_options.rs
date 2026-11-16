@@ -15,8 +15,7 @@ fn changes(edits: &RefCell<Vec<EditEvent<StyleOptionsChange>>>) -> Vec<StyleOpti
 
 #[trial]
 fn a_row_left_out_of_the_style_takes_no_input_and_its_check_includes_it() {
-    let mut character = CharacterValues::default();
-    character.size = Some(12.0);
+    let character = CharacterValues { size: Some(12.0), ..Default::default() };
     let values = StyleOptionValues::new("Emphasis", character);
     let edits = Rc::new(RefCell::new(Vec::new()));
     let sink = edits.clone();

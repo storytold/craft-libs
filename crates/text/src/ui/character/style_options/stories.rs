@@ -3,7 +3,6 @@
 use super::{StyleAttribute, StyleOptionValues, TextStyleOptions};
 use crate::ui::character::{CharacterValues, Kerning, Leading, ParagraphValues, TextAlign};
 use craft_theme::Rgba;
-use craft_ui::contract::Show as _;
 use craft_ui::testing::{Drive, StoryData, StoryOutput, story};
 use egui::Ui;
 

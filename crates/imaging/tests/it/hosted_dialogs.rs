@@ -149,7 +149,7 @@ fn a_seed_moves_the_reset_baseline() {
 
     let slider = fixture.by_role(craft_ui::contract::Role::SLIDER).first().cloned().expect("the Brightness slider");
     fixture.drag(&slider, Vec2::new(slider.rect.width() / 4.0, 0.0)).settle();
-    let value = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<Adjust>().map(|dialog| dialog.value().clone());
+    let value = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<Adjust>().map(|dialog| *dialog.value());
     assert_ne!(value(&host), Some(seeded), "the drag edits the value");
     fixture.hold(Modifiers::ALT).idle(2);
     let reset = fixture.by_label("Reset").expect("Alt turns Cancel into Reset");

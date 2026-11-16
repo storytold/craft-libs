@@ -175,7 +175,7 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     let pixels = document.pixel_size();
     let (view, show_rulers) = (document.view, document.rulers);
     let editing = matches!(tool, Tool::Move | Tool::Marquee);
-    let canvas_id = ui.id().with("mock document canvas");
+    let canvas_id = ui.scope_id().with("mock document canvas");
     let shown = {
         let Document { layers, guides, guide, marquee, zero, units: unit, .. } = &mut *document;
         Canvas::new("Document").id(canvas_id).view(view).document(page.size()).show_rulers(show_rulers).rulers(units, units, *zero).show(

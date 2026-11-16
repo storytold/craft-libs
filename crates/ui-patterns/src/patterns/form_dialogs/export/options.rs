@@ -401,7 +401,6 @@ impl<'a> FormatOptionsDialog<'a> {
     /// Offers the TIFF rows of a document: Discard Layers when it has `layered`, Save Transparency when it is
     /// `transparent`, and the layered-file note with Don't show again when `layer_note` is set (while the layers are
     /// kept). Without this call the dialog offers every row.
-    #[must_use]
     pub fn tiff_document(mut self, layered: bool, transparent: bool, layer_note: bool) -> Self {
         self.tiff = TiffDocument { layered, transparent, layer_note };
         self

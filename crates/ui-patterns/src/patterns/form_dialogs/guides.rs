@@ -643,7 +643,7 @@ impl HostedGuideLayoutDialog {
 impl StackDialog for HostedGuideLayoutDialog {
     type Result = GuideLayoutResult;
 
-    /// Answers what OK answers: the guide list of [`layout_guides`]; `None` while the layout is invalid.
+    /// Answers what OK answers: the guide list of `layout_guides`; `None` while the layout is invalid.
     fn confirm(&mut self, _ctx: &egui::Context) -> Option<Self::Result> {
         let GuideLayoutDialog { units, document, artboards, existing, first_key, .. } = (self.build)(Bind::bound(&mut self.values));
         let values = self.values;

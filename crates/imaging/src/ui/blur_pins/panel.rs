@@ -41,7 +41,6 @@ impl<'a> BlurPinsPanel<'a> {
     /// Inside a modal body, declares the canvas gesture each pass, so the pins on the canvas keep their presses while
     /// the Blur Gallery dialog is modal. The pins take presses and drags at any time, so the pass-through is
     /// [`CanvasGesture::PRIMARY`] whenever the panel is shown.
-    #[must_use]
     pub fn canvas(mut self, canvas: egui::Id) -> Self {
         self.canvas = Some(canvas);
         self

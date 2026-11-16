@@ -4,7 +4,7 @@
 use craft_behavior::dock::{Action, Floating, Layout, Node, Permissions, Workspace};
 use craft_behavior::placement::Placement;
 use craft_host::target::{Backend, Caps, Os, ShellInfo};
-use craft_ui::contract::{Bind, BodyCx, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, BodyCx, ShowContainer as _};
 use craft_ui::docking::{DockConfig, DockPanels, PanelSpec};
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::popover::DropVeil;

@@ -11,6 +11,13 @@ use super::controls::{GRADING_TAIL, Rows, section};
 use super::words::RawDevelopWords;
 use crate::raw::{GradeWheel, RawDevelopSettings};
 
+/// Reads a band's value of a tab from the settings.
+type BandGet = fn(&RawDevelopSettings, usize) -> f32;
+/// Writes a band's value of a tab into the settings.
+type BandSet = fn(&mut RawDevelopSettings, usize, f32);
+/// A band's word.
+type BandWord = fn(&RawDevelopWords) -> &Label;
+
 /// The Color Mixer's tabs: the band property a row edits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum MixerTab {
@@ -21,7 +28,7 @@ enum MixerTab {
 
 impl MixerTab {
     /// Reads and writes the tab's value of band `k`.
-    fn accessors(self) -> (fn(&RawDevelopSettings, usize) -> f32, fn(&mut RawDevelopSettings, usize, f32)) {
+    fn accessors(self) -> (BandGet, BandSet) {
         match self {
             MixerTab::Hue => (|s, k| s.hsl_hue[k], |s, k, v| s.hsl_hue[k] = v),
             MixerTab::Saturation => (|s, k| s.hsl_sat[k], |s, k, v| s.hsl_sat[k] = v),
@@ -31,7 +38,7 @@ impl MixerTab {
 }
 
 /// The eight bands: their word and the hue (degrees) their track is drawn around.
-const BANDS: [(fn(&RawDevelopWords) -> &Label, f32); 8] = [
+const BANDS: [(BandWord, f32); 8] = [
     (|w| &w.band_reds, 0.0),
     (|w| &w.band_oranges, 30.0),
     (|w| &w.band_yellows, 60.0),

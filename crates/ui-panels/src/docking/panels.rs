@@ -54,7 +54,7 @@ pub trait DockPanels<P> {
 type Running<P> = Vec<Vec<Action<P>>>;
 
 fn running_id() -> Id {
-    Id::new("dock area requests")
+    Id::unique("dock area requests")
 }
 
 /// Hands `actions` to the dock area over panels `P` whose pass is running on `ctx`: a panel body, or code a body
