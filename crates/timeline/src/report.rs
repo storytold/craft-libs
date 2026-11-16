@@ -98,8 +98,9 @@ impl std::fmt::Display for Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use craft_ui::testing::trial;
 
-    #[test]
+    #[trial]
     fn limited_entries_share_one_budget_and_keep_existing_counts() {
         let mut r = Report::default();
         r.info_limited(Some(2), "a");
