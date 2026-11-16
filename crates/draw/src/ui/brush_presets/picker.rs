@@ -14,7 +14,7 @@ use craft_ui::form::SliderField;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::menu::{Menu, MenuItem};
 use craft_ui::patterns::presets::{
-    CellShape, PickerField, PresetBrowser, PresetEvent, PresetFooterOptions, PresetPicker, PresetRow, PresetState, PresetView,
+    CellShape, PickerField, PresetBrowser, PresetEvent, PresetFooterOptions, PresetPicker, PresetRow, PresetState, PresetView, PreviewPaint,
 };
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label, UnitKind};
@@ -280,6 +280,10 @@ pub struct BrushPresetPicker<'a, K: Value + Eq + Hash> {
     /// App rows drawn under the head.
     #[prop(name = "rows", boxed = "FnOnce(&mut Ui) + 'a")]
     app_rows: Option<AppRows<'a>>,
+    /// Paints the brush's current tip on the chip, as the app's engine draws it (its falloff, angle and roundness, a
+    /// sampled tip's shape); without it the chip shows the picked preset's tip.
+    #[prop]
+    tip: Option<PreviewPaint>,
 }
 
 /// The app's own rows of the picker's gear menu.
@@ -309,6 +313,7 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
             compact: false,
             enabled: true,
             app_rows: None,
+            tip: None,
         }
     }
 
@@ -335,6 +340,7 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
             compact,
             enabled,
             mut app_rows,
+            tip: tip_paint,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<BrushPresetWords>();
@@ -474,6 +480,9 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
                 .tools(tools);
             if let Some(key) = resizable.clone() {
                 picker = picker.resizable(key);
+            }
+            if let Some(paint) = tip_paint.clone() {
+                picker = picker.face_thumb(paint);
             }
             if let Some((at, open)) = opened_at.as_mut() {
                 picker = picker.open_at(*at, open.reborrowed());

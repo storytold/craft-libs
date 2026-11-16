@@ -13,7 +13,7 @@ use std::sync::Arc;
 use super::browser::{BrowserTools, PresetBrowser, ThumbPainter};
 use super::event::{PresetEvent, PresetOutput};
 use super::footer::PresetFooterOptions;
-use super::model::{CellShape, PresetRow, ThumbInfo};
+use super::model::{CellShape, PresetRow, PreviewPaint, ThumbInfo};
 use super::state::{DefaultOpen, PresetState, PresetView};
 use super::words::PresetWords;
 use crate::contract::{
@@ -221,6 +221,11 @@ pub struct PresetPicker<'a, K: Value + Eq + Hash + 'static> {
     /// Paints the popover's thumbnails (a swatch, a gradient ramp, a brush tip) in place of each row's own `preview`.
     #[prop(func = "Fn(&ContentPainterCx, Rect, ThumbInfo<'_, K>)")]
     preview: Option<ThumbPainter<'a, K>>,
+    /// Paints the thumbnail of the closed field in place of the picked preset's `preview`, whatever is picked: the
+    /// value the host holds when it is more than a preset (a brush's current tip). Without it the field shows the
+    /// picked preset's preview.
+    #[prop]
+    face_thumb: Option<PreviewPaint>,
     /// The columns of the popover's grid: the popover is as wide as this many tiles, at least its field.
     #[prop]
     columns: u16,
@@ -274,6 +279,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             create_row: None,
             detach_row: None,
             preview: None,
+            face_thumb: None,
             columns: 6,
             resizable: None,
             opened_at: None,
@@ -332,6 +338,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
             create_row,
             detach_row,
             preview,
+            face_thumb,
             columns,
             resizable,
             mut opened_at,
@@ -354,6 +361,7 @@ impl<'a, K: Value + Eq + Hash + 'static> PresetPicker<'a, K> {
                         placeholder: placeholder.clone(),
                         display_name: display_name.clone(),
                         caption: caption.clone(),
+                        face_thumb: face_thumb.clone(),
                         edit_face,
                         open,
                         toggle: false,
@@ -526,6 +534,7 @@ struct PickerFace<'a, K: Value + Eq + Hash + 'static> {
     placeholder: Option<Label>,
     display_name: Option<Label>,
     caption: Option<Label>,
+    face_thumb: Option<PreviewPaint>,
     edit_face: bool,
     open: bool,
     toggle: bool,
@@ -588,6 +597,18 @@ impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
     /// candidates and the painted face are both built here.
     fn face_of(&self, text: Label, row: Option<&PresetRow<K>>, paint: bool) -> SelectFace<'static> {
         let face = SelectFace::new(text);
+        if let Some(thumb) = self.face_thumb.as_ref().filter(|_| self.field != PickerField::Name) {
+            let face = if row.is_some() { face } else { face.placeholder() };
+            let draw = paint.then(|| Arc::clone(thumb));
+            let face = face
+                .thumb(self.cell_shape.aspect(), move |cx, rect| {
+                    if let Some(draw) = &draw {
+                        draw(cx, rect);
+                    }
+                })
+                .name(!self.thumb_only());
+            return self.captioned(face);
+        }
         match (row, self.field) {
             (None, PickerField::Thumbnail | PickerField::Chip) => self.empty_thumb(face.placeholder()),
             (None, _) => face.placeholder(),
