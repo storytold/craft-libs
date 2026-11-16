@@ -1,7 +1,7 @@
 //! Pre-R2007 DXF text is written in the `$DWGCODEPAGE` code page: characters it has as their
 //! bytes, the others as `\U+XXXX` escapes; every form reads back to the same text.
 
-use craft_dxf::{Tag, parse, write_ascii, write_ascii_in, write_binary_in};
+use craft_dxf::{Tag, parse, write_ascii, write_ascii_in, write_ascii_in_page, write_binary_in};
 
 fn file(code_page: &str, text: &str) -> Vec<Tag> {
     vec![
@@ -28,11 +28,15 @@ fn contains(bytes: &[u8], part: &[u8]) -> bool {
 #[test]
 fn text_is_written_in_the_code_page() {
     // (code page, text, the bytes written for it)
-    let cases: [(&str, &str, &[u8]); 6] = [
+    let cases: [(&str, &str, &[u8]); 8] = [
         ("ANSI_1252", "Ação € 图", b"A\xE7\xE3o \x80 \\U+56FE"),
         ("ANSI_1251", "Слой é", b"\xD1\xEB\xEE\xE9 \\U+00E9"),
         ("ANSI_932", "表図面 é", b"\x95\x5C\x90\x7D\x96\xCA \\U+00E9"),
         ("DOS850", "Größe €", b"Gr\x94\xE1e \\U+20AC"),
+        // DOS 864: byte 0x25 is the Arabic percent sign, so a literal `%` is escaped.
+        ("DOS864", "50% \u{066A}\u{00B0}", b"50\\U+0025 %\x80"),
+        // Only the percent sign: every byte is ASCII, and it still reads back as U+066A.
+        ("DOS864", "50\u{066A}", b"50%"),
         ("ANSI_1252", "😀", b"\\U+D83D\\U+DE00"),
         // A code page CADCraft doesn't know: everything non-ASCII is escaped.
         ("ANSI_1361", "Ação", b"A\\U+00E7\\U+00E3o"),
@@ -60,7 +64,7 @@ fn unknown_ascii_and_utf8_code_pages_are_pure_ascii() {
     }
 }
 
-/// Code page bytes that happen to form valid UTF-8 (`СІ` in ANSI_1251 is D1 B2, which is U+0472
+/// Code page bytes that happen to form valid UTF-8 (`СІ` in `ANSI_1251` is D1 B2, which is U+0472
 /// in UTF-8) would be read back as UTF-8 from an ASCII file, so that file is written with
 /// escapes. Binary DXF reads strings by the header's code page and keeps the bytes.
 #[test]
@@ -75,6 +79,27 @@ fn code_page_bytes_that_are_valid_utf8_are_escaped_in_ascii() {
     assert_eq!(parse(&binary).unwrap()[10].str(), "СІ");
     // Bytes that are not valid UTF-8 stay as they are.
     assert!(contains(&write_ascii_in(&file("ANSI_1251", "Слой"), "ANSI_1251"), b"\xD1\xEB\xEE\xE9"));
+}
+
+/// `write_ascii_in_page`, for a reader that decodes by `$DWGCODEPAGE` and never guesses UTF-8 (the
+/// DWG bridge's acadrust), keeps the code page bytes even when they form valid UTF-8 (`Ã©` in
+/// ANSI_1252 is C3 A9, `é` in UTF-8), escapes only what the code page lacks, and escapes a
+/// backslash that starts an escape. Otherwise it writes what `write_ascii_in` writes.
+#[test]
+fn page_writer_keeps_code_page_bytes_that_are_valid_utf8() {
+    let tags = file("ANSI_1252", "Ã© Média Ω \\U+00E9");
+    let page = write_ascii_in_page(&tags, "ANSI_1252");
+    assert!(contains(&page, b"\xC3\xA9 M\xE9dia \\U+03A9 \\U+005CU+00E9"), "{:?}", String::from_utf8_lossy(&page));
+    // Text whose bytes are all valid UTF-8: `write_ascii_in` still falls back to escapes, the
+    // page writer keeps them.
+    let utf8_like = file("ANSI_1252", "Ã©");
+    assert!(write_ascii_in(&utf8_like, "ANSI_1252").is_ascii());
+    assert!(contains(&write_ascii_in_page(&utf8_like, "ANSI_1252"), b"\r\n\xC3\xA9\r\n"));
+    let plain = file("ANSI_1252", "Ação");
+    assert_eq!(write_ascii_in_page(&plain, "ANSI_1252"), write_ascii_in(&plain, "ANSI_1252"));
+    for cp in ["EBCDIC", "ASCII", "UTF8"] {
+        assert_eq!(write_ascii_in_page(&plain, cp), write_ascii(&plain).into_bytes(), "{cp}");
+    }
 }
 
 /// A literal `\U+` or `\M+` in the text (#2050) reads back as written alongside code page bytes,

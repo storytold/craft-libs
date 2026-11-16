@@ -123,7 +123,8 @@ impl ImageInfo {
     /// costs it a length check.
     fn chunk_grid(&self) -> (usize, u32, usize) {
         let (across, down) = self.grid();
-        let per_plane = across as usize * down as usize;
+        // saturating: two u32s multiply past a 32-bit usize (wasm32), where an unchecked product wraps
+        let per_plane = (across as usize).saturating_mul(down as usize);
         let planes = if self.planar == 2 { self.samples_per_pixel as usize } else { 1 };
         (self.offsets.len().min(per_plane.saturating_mul(planes)), across, per_plane)
     }
@@ -142,9 +143,12 @@ impl ImageInfo {
     }
 
     /// All chunks that have an offset. Missing byte counts are inferred as "to the next offset / end of data"
-    /// using `data_len`.
+    /// using `data_len`. A file holds at most one chunk per byte, so no more than `data_len` descriptors are
+    /// built: offsets are bounded only by the reader's value budget and may overlap, and a hostile directory
+    /// would otherwise cost 48 bytes of descriptor for every few bytes of file.
     pub fn chunks(&self, data_len: u64) -> Vec<Chunk> {
         let (n, across, per_plane) = self.chunk_grid();
+        let n = n.min(usize::try_from(data_len).unwrap_or(usize::MAX));
         let (cw, ch) = self.chunk_size();
         let mut out = Vec::with_capacity(n);
         // the distinct offsets in order, for chunks without a byte count (sorted once, not scanned per chunk)
@@ -222,6 +226,25 @@ mod tests {
         assert_eq!(inferred.single_chunk(100).map(|c| c.len), Some(30));
         assert!(strips(vec![50, 10], vec![10, 5]).single_chunk(100).is_none(), "a multi-chunk image has no single chunk");
         assert!(strips(Vec::new(), Vec::new()).single_chunk(100).is_none());
+    }
+
+    /// An image declaring far more strips than the file has bytes gets at most one descriptor per byte.
+    #[test]
+    fn chunk_count_is_capped_by_the_file_size() {
+        let info = strips(vec![1; 5000], vec![1; 5000]);
+        assert_eq!(info.chunks(100).len(), 100);
+        assert_eq!(info.chunks(0).len(), 0);
+        assert_eq!(info.chunks(5000).len(), 5000);
+        assert_eq!(info.chunks(u64::MAX).len(), 5000, "a file that holds them all is unaffected");
+    }
+
+    /// 1 x 1 tiles on a 65536 x 65536 image: 2^32 chunks per plane, still counted from the offsets present.
+    #[test]
+    fn a_huge_tile_grid_is_counted_without_wrapping() {
+        let mut info = strips(vec![1, 2, 3], vec![1, 1, 1]);
+        (info.width, info.height, info.layout) = (65536, 65536, Layout::Tiles { tile_width: 1, tile_height: 1 });
+        assert_eq!(info.chunks(100).len(), 3);
+        assert_eq!(info.chunks(100)[2].x, 2);
     }
 
     #[test]

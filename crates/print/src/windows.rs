@@ -19,14 +19,14 @@ use winprint::ticket::{FeatureOptionPack as _, PageMediaSize, PrintCapabilities,
 
 use crate::sheets::{self, Fit, SAME};
 use crate::ticket::{self, Paper};
-use crate::{Cancel, Error, Job, Printer, Scaling};
+use crate::{Cancel, Error, Job, Printer, Scaling, rgb};
 
 fn spool_error(e: impl std::fmt::Display) -> Error {
     Error::Spool(e.to_string())
 }
 
 /// The user's default printer; `None` when there is none.
-fn default_printer() -> Option<String> {
+pub(crate) fn default_printer() -> Option<String> {
     winsafe::GetDefaultPrinter().ok().filter(|n| !n.is_empty())
 }
 
@@ -223,8 +223,73 @@ fn hold(job: &Job, title: &str) {
     }
 }
 
+/// The job's [`Job::driver_settings`] as a ticket for `device`, without what the job's own ticket
+/// decides ([`ticket::driver_settings_xml`]); `None` when the job has none, or has settings
+/// chosen for another printer ([`crate::settings_for`]).
+fn chosen_settings(device: &PrinterDevice, job: &Job) -> Result<Option<PrintTicket>, Error> {
+    let Some(settings) = crate::settings_for(job, device.name()) else { return Ok(None) };
+    let converted = {
+        let _provider = print_ticket_provider();
+        PrintTicket::from_dev_mode(device, settings.dev_mode().as_bytes())
+    }
+    .map_err(|e| spool_error(format!("the printer's driver could not read the settings chosen in its dialog; choose them again: {e}")))?;
+    let xml = std::str::from_utf8(converted.get_xml()).map_err(spool_error)?;
+    Ok(Some(PrintTicket::from_xml(ticket::driver_settings_xml(xml, job)?)))
+}
+
+/// The settings [`crate::driver_settings_dialog`] opens the driver's dialog on, for the queue
+/// named `printer`: the job's earlier choices in that dialog, without what the job decides,
+/// when they are for this printer and the driver still reads and merges them, laid over the user's
+/// own settings ([`user_ticket`]; the printer's defaults when they can't be read), with the job's
+/// copies and collation merged in, validated by the driver and converted to its DEVMODE.
+pub(crate) fn settings_seed(job: &Job, printer: &str) -> Result<crate::Seed, Error> {
+    let device = select_device(PrinterDevice::all().map_err(spool_error)?, Some(printer), None)?;
+    // Earlier settings the driver no longer reads (after a driver update, or restored from an
+    // app's own copy) are left out, so the dialog still opens and can replace them.
+    let earlier = chosen_settings(&device, job);
+    let replaces_unreadable = earlier.is_err();
+    let chosen = earlier.ok().flatten();
+    let options = ticket::dialog_xml(job)?;
+    // Read before the provider is held below: the dialog opens on the user's own settings, as
+    // their jobs start from them.
+    let user = user_ticket(&device);
+    let unreadable = |e: &dyn std::fmt::Display| spool_error(format!("the printer driver's settings could not be read: {e}"));
+    let seed = |chosen: Option<PrintTicket>| -> Result<rgb::DevMode, Error> {
+        let _provider = print_ticket_provider();
+        let seed = {
+            let mut builder = PrintTicketBuilder::new(&device).map_err(|e| unreadable(&e))?;
+            if let Some(user) = &user {
+                builder.merge(user.clone()).map_err(|e| unreadable(&e))?;
+            }
+            if let Some(chosen) = chosen {
+                builder.merge(chosen).map_err(|e| unreadable(&e))?;
+            }
+            builder.merge(PrintTicket::from_xml(options.clone())).map_err(|e| unreadable(&e))?;
+            builder.build().map_err(|e| unreadable(&e))?
+        };
+        let bytes = seed.to_dev_mode(&device).map_err(|e| unreadable(&e))?;
+        let whole = crate::whole_dev_mode(bytes).ok_or_else(|| unreadable(&"the driver's settings are shorter than they say"))?;
+        rgb::DevMode::from_bytes(whole).map_err(|e| unreadable(&e))
+    };
+    // Earlier settings the driver reads but then refuses to merge or convert back are left out
+    // the same way; an error with the job's own options alone is returned.
+    let had_earlier = chosen.is_some();
+    match seed(chosen) {
+        Ok(dev_mode) => Ok(crate::Seed { dev_mode, replaces_unreadable }),
+        Err(_) if had_earlier => Ok(crate::Seed { dev_mode: seed(None)?, replaces_unreadable: true }),
+        Err(e) => Err(e),
+    }
+}
+
 fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape: bool) -> Result<DriverTicket, Error> {
-    let base = user_ticket(device);
+    let chosen = chosen_settings(device, job)?;
+    let chosen_xml = chosen.as_ref().map(|chosen| chosen.get_xml().to_vec());
+    // The job starts from the user's own settings, with any chosen for this job in the driver's
+    // dialog laid over them; the job's own options are merged over both below.
+    let base = match (user_ticket(device), chosen) {
+        (Some(user), Some(chosen)) => Some(overlay(&user, &chosen)?),
+        (user, chosen) => chosen.or(user),
+    };
     let capabilities_xml = {
         let _provider = print_ticket_provider();
         #[cfg(test)]
@@ -245,7 +310,28 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         .collect();
     let media = ticket::matching_paper(&papers, sheet.0, sheet.1).and_then(|i| medias.get(i));
     let wanted = match (media, job.scaling) {
-        (Some(m), _) => Some((m.size().width_in_micron(), m.size().height_in_micron())),
+        (Some(m), _) => {
+            let size = (m.size().width_in_micron(), m.size().height_in_micron());
+            // INV-6: a driver that keeps one side of the paper metric in its DEVMODE extension
+            // (storytold/craft-libs#7230) reports a zero side; the wanted size then is the sheet
+            // the job asked for, not the zero record, which would poison the cross-check and hand
+            // `sheets::plan` a width of zero.
+            if size.0 == 0 || size.1 == 0 {
+                match (ticket::micrometres(sheet.0), ticket::micrometres(sheet.1)) {
+                    (Some(w), Some(h)) => Some((w, h)),
+                    _ => {
+                        return Err(spool_error(format!(
+                            "{} has no {:.2} × {:.2} inch paper; choose a paper size it has, or add this one in its driver",
+                            device.name(),
+                            sheet.0 / 72.0,
+                            sheet.1 / 72.0
+                        )));
+                    }
+                }
+            } else {
+                Some(size)
+            }
+        }
         (None, Scaling::ShrinkToFit) => None,
         (None, Scaling::Exact) => {
             return Err(spool_error(format!(
@@ -302,7 +388,10 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         // The builder closes its provider when it is dropped, before the guard.
         let mut builder = PrintTicketBuilder::new(device).map_err(spool_error)?;
         if let Some(base) = &base {
-            builder.merge(base.clone()).map_err(spool_error)?;
+            builder.merge(base.clone()).map_err(|e| match chosen_xml {
+                Some(_) => spool_error(format!("the printer's driver refused the settings chosen in its dialog: {e}")),
+                None => spool_error(e),
+            })?;
         }
         builder.merge(PrintTicket::from_xml(requested_xml.clone())).map_err(spool_error)?;
         builder.build().map_err(spool_error)?
@@ -335,9 +424,11 @@ fn driver_ticket(device: &PrinterDevice, job: &Job, sheet: (f64, f64), landscape
         && settled_landscape == turned
     {
         ticket::verify_ticket(xml, None, turned, !scaling_offered.is_empty())?;
+        verify_chosen(chosen_xml.as_deref(), xml)?;
         return Ok(DriverTicket { ticket: in_drivers_spelling(device, requested), validated, paper: size });
     }
     let paper = ticket::verify_ticket(xml, wanted, turned, !scaling_offered.is_empty())?;
+    verify_chosen(chosen_xml.as_deref(), xml)?;
     Ok(DriverTicket { ticket: validated.clone(), validated, paper })
 }
 
@@ -354,6 +445,15 @@ fn overlay(base: &PrintTicket, over: &PrintTicket) -> Result<PrintTicket, Error>
     document.properties.retain(|p| !top.properties.iter().any(|t| same(&t.name, &p.name)));
     document.properties.extend(top.properties);
     Ok(PrintTicket::from(document))
+}
+
+/// A media type, resolution or quality chosen in the driver's dialog that the driver replaced to
+/// resolve a conflict with the job's paper ([`ticket::verify_chosen_options`]).
+fn verify_chosen(chosen_xml: Option<&[u8]>, validated: &str) -> Result<(), Error> {
+    match chosen_xml {
+        Some(chosen) => ticket::verify_chosen_options(std::str::from_utf8(chosen).map_err(spool_error)?, validated),
+        None => Ok(()),
+    }
 }
 
 /// The ticket with the driver's vendor namespaces under the prefixes the driver declares them with
@@ -651,6 +751,64 @@ mod tests {
                 assert!(retained.is_err(), "unsupported explicit option must not be silently dropped");
             }
         }
+    }
+
+    /// Settings from the driver's own dialog, here landscape and four uncollated copies converted
+    /// to the driver's DEVMODE, leave the job's paper, orientation and copies as the job asks;
+    /// settings chosen for another printer leave the job's ticket as it is without them; and
+    /// earlier settings with no fields set, which a driver either refuses or reads without an
+    /// error, open the dialog as if the job had none.
+    /// `CRAFT_PRINT_TEST_PRINTER` names the queue. Sends no job and opens no dialog.
+    #[test]
+    #[ignore = "needs CRAFT_PRINT_TEST_PRINTER naming an installed printer; sends no job"]
+    fn the_driver_dialogs_settings_leave_the_jobs_own_options() {
+        let name = std::env::var("CRAFT_PRINT_TEST_PRINTER").unwrap();
+        let device = select_device(PrinterDevice::all().unwrap(), Some(&name), None).unwrap();
+        let chosen = format!(
+            r#"<psf:PrintTicket version="1" xmlns:psf="{}" xmlns:psk="{NS_PSK}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<psf:ParameterInit name="psk:JobCopiesAllDocuments"><psf:Value xsi:type="xsd:integer">4</psf:Value></psf:ParameterInit>
+<psf:Feature name="psk:DocumentCollate"><psf:Option name="psk:Uncollated"/></psf:Feature>
+<psf:Feature name="psk:PageOrientation"><psf:Option name="psk:Landscape"/></psf:Feature>
+</psf:PrintTicket>"#,
+            ticket::NS_PSF
+        );
+        let bytes = {
+            let _provider = print_ticket_provider();
+            PrintTicket::from_xml(chosen).to_dev_mode(&device)
+        }
+        .unwrap();
+        let dev_mode = rgb::DevMode::from_bytes(crate::whole_dev_mode(bytes).unwrap()).unwrap();
+        let job = Job { copies: 2, driver_settings: Some(crate::DriverSettings::new(device.name(), dev_mode.clone())), ..Job::default() };
+        let DriverTicket { validated: ticket, paper, .. } = driver_ticket(&device, &job, (612.0, 792.0), false).unwrap();
+        let xml = std::str::from_utf8(ticket.get_xml()).unwrap();
+        eprintln!("{xml}");
+        let capabilities = {
+            let _provider = print_ticket_provider();
+            PrintCapabilities::fetch_xml_for_ticket(&device, None)
+        }
+        .unwrap();
+        let offered = ticket::offered(std::str::from_utf8(&capabilities).unwrap());
+        // Two pages, so the job's collation is checked too, on a driver that can collate.
+        let pages = if offered.collate == Some(false) { 1 } else { 2 };
+        ticket::verify_job_options(xml, &job, pages, offered).unwrap();
+        assert_eq!(paper, (215_900, 279_400));
+        assert_eq!(ticket::verify_ticket(xml, Some(paper), false, true).unwrap(), paper, "the job's portrait sheet keeps its orientation");
+
+        let plain = Job { copies: 2, ..Job::default() };
+        let other = Job { driver_settings: Some(crate::DriverSettings::new("Craft Test Print: no such queue", dev_mode)), ..plain.clone() };
+        let xml_of = |job: &Job| driver_ticket(&device, job, (612.0, 792.0), false).unwrap().validated.get_xml().to_vec();
+        assert_eq!(xml_of(&other), xml_of(&plain), "settings for another printer are left out");
+
+        let mut zeros = vec![0u8; 220];
+        zeros[68..70].copy_from_slice(&220u16.to_le_bytes());
+        let zeroed =
+            Job { driver_settings: Some(crate::DriverSettings::new(device.name(), rgb::DevMode::from_bytes(zeros).unwrap())), ..plain.clone() };
+        let seed = settings_seed(&zeroed, device.name()).unwrap();
+        // Only the size is set (no dmFields, no private section): a driver may refuse such
+        // settings or read them without an error.
+        let refused = chosen_settings(&device, &zeroed).is_err();
+        assert_eq!(seed.replaces_unreadable, refused, "the dialog replaces the settings only when the driver refuses them");
+        assert_eq!(seed.dev_mode, settings_seed(&plain, device.name()).unwrap().dev_mode, "the dialog opens as if the job had no settings");
     }
 
     /// A real job, for checking a printer by hand (paper, or a paused queue's spool file):

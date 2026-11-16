@@ -14,14 +14,14 @@ description = "System PDF print spooler for the Craft apps: CUPS and Windows"
 # PDF loader updates below are independent of this public transport API. This rev adds
 # DEVMODE-carrying GDI jobs for label printers (storytold/winprint.rs#13); it moves to the
 # storytold merge commit, with winprint below, once that is merged.
-craft-winprint-gdi = { git = "https://github.com/MaxFairwinds/winprint.rs", rev = "f43857d5b055a997f121e78af8c1f2a60f61d8aa" }
+craft-winprint-gdi = { git = "https://github.com/MaxFairwinds/winprint.rs", rev = "0fc2a8280a6c1d24db8fce502eb3bebe244b077a" }
+# Says why the printer list is empty when lpstat can't run (e.g. a Flatpak without CUPS tools),
+# and why a job went on with the paper the request names while the driver reported only one side
+# of it (storytold/craft-libs#7230).
+log = "0.4"
 
 [lints]
 workspace = true
-
-[target.'cfg(unix)'.dependencies]
-# Says why the printer list is empty when lpstat can't run (e.g. a Flatpak without CUPS tools).
-log = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 # Printing without starting anything (storytold/pdfcraft#1107): the printer list (EnumPrinters)
@@ -36,10 +36,12 @@ log = "0.4"
 # storytold/pdfcraft#4941), writes QName values as prefix:local so drivers accept the merged
 # ticket (winprint.rs#12, storytold/pdfcraft#3823), and reads whitespace-padded integers in
 # PrintCapabilities (winprint.rs#3, storytold/pdfcraft#2430). Pinned to an immutable revision;
-# review before bumping.
-# storytold/winprint.rs main plus PrintTicket::user_default and the GDI crate's user_settings/print_pages
-# (MaxFairwinds/winprint.rs feat/user-default-ticket; to move to storytold/winprint.rs once merged).
-winprint = { git = "https://github.com/MaxFairwinds/winprint.rs", rev = "f43857d5b055a997f121e78af8c1f2a60f61d8aa", default-features = false }
+# review before bumping. The settings chosen in a driver's own dialog become a ticket through
+# `PrintTicket::from_dev_mode` (winprint.rs#24). This pin is storytold/winprint.rs main with #24,
+# plus PrintTicket::user_default and the GDI crate's user_settings/print_pages
+# (MaxFairwinds/winprint.rs feat/user-default-ticket, storytold/winprint.rs#13; to move to
+# storytold/winprint.rs once merged).
+winprint = { git = "https://github.com/MaxFairwinds/winprint.rs", rev = "0fc2a8280a6c1d24db8fce502eb3bebe244b077a", default-features = false }
 # GetDefaultPrinter (MIT).
 winsafe = { version = "0.0.29", default-features = false, features = ["winspool"] }
 # The job file's private folder.

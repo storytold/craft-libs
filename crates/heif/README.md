@@ -24,6 +24,7 @@ let info = craft_heif::probe(&bytes)?;           // size, depth, alpha: check li
 let img = craft_heif::decode(&bytes, &craft_heif::Options::default())?;
 // img.width, img.height, img.has_alpha, img.bit_depth, img.data (RGB/RGBA u16), img.colour, img.icc, img.exif, img.xmp
 let thumb = craft_heif::decode_thumbnail(&bytes, 256, &Default::default())?; // Option<Decoded>
+let (exif, xmp) = craft_heif::read_metadata(&bytes)?;  // no picture decoded: for cataloguing
 ```
 
 Chroma is upsampled like libheif by default.
@@ -34,6 +35,25 @@ Apple's blends the neighbouring column and, for 4:2:0, the neighbouring row.
 Errors are `Error::Unsupported` (image sequences, overlays, 4:2:2/4:4:4, …), `Error::Limit` or
 `Error::Malformed`. It never panics: every call into heic-rs runs under `catch_unwind`, and a panic
 inside it (PhotoCraft's fuzzing found two in 0.1.1) becomes `Error::Malformed`.
+
+Features: `decode` (default) is the decoder above. `metadata` adds `craft_heif::items`, which reads
+the `Exif` and XMP items from the box structure alone (`pitm`, `iinf`, `iref`, `iloc`, `idat`),
+without heic-rs:
+
+- `items::read` returns the photo's own EXIF and XMP: the items `cdsc` ties to the primary image or
+  to an image it is made from (`dimg`: grid tiles, `iden`, `iovl`, `tmap`), else those tied to no
+  image. A thumbnail's or depth map's metadata is not the photo's.
+- `items::scan` returns every EXIF and XMP item, whichever image it describes, and says when it
+  can't be sure it saw them all: `Scan::complete` is false for an incomplete or damaged item
+  catalog, and an item whose bytes can't be read comes back as `Unreadable`. An app that must
+  prove a file has no location (before an export that removes it) refuses when unsure.
+- `items::exif_tiff` finds the TIFF stream in an `Exif` item, with or without a correct offset
+  field or an `Exif\0\0` prefix.
+
+The reader walks at most 65,536 boxes and walks `iloc` once. It gathers at most 16 MiB per item,
+and a scan gathers at most 64 MiB in all. A build with
+`default-features = false, features = ["metadata"]` has no heic-rs dependency, and its
+`read_metadata` is `items::read`. With both features, a test checks that the two readers agree.
 
 Feature `testdata` exposes `craft_heif::testdata`: lossless synthetic HEIF files (PCM-coded
 32 × 32 HEVC pictures, grids, every property above) for the tests of the crates above.

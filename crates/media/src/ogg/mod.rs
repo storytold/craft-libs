@@ -1,4 +1,4 @@
-//! Clean-room Ogg demuxer, written from RFC 3533 (the Ogg encapsulation format), RFC 7845 (Ogg
+//! Clean-room Ogg demuxer and page writer, written from RFC 3533 (the Ogg encapsulation format), RFC 7845 (Ogg
 //! Opus) and the Vorbis I specification's Ogg mapping (section A).
 //!
 //! [`open`] reads every page (capture pattern, header, lacing values, CRC-32 checked; damaged
@@ -11,6 +11,9 @@
 //! [`OpusTiming`] implements RFC 7845 §4: packet start positions from granule positions and
 //! TOC-derived durations, the pre-skip, and end trimming of the final page, so a player can seek
 //! to any 48 kHz sample.
+//!
+//! [`PageWriter`] writes the pages of a logical bitstream, and [`opus_tags`] and
+//! [`vorbis_comment`] build the comment headers of Ogg Opus and Ogg Vorbis.
 //!
 //! Layer L0: no dependencies beyond `std`, no `unsafe`, builds for `wasm32-unknown-unknown`.
 //!
@@ -25,6 +28,9 @@ use std::fmt;
 use std::io;
 
 pub use crate::source::{ByteSource, ReadSeekSource};
+pub use write::{PAGE_TARGET_BYTES, PAGE_TARGET_PACKETS, PageWriter, opus_tags, vorbis_comment};
+
+mod write;
 
 /// Errors from reading an Ogg file.
 #[non_exhaustive]
@@ -778,8 +784,15 @@ pub struct OpusTiming {
     pub total: i64,
 }
 
+/// Largest granule position [`OpusTiming::of`] trusts: 2^62 samples at 48 kHz is about 3 million years.
+pub const MAX_OPUS_GRANULE: i64 = 1 << 62;
+
 impl OpusTiming {
     /// Timing of the Opus stream `s` (`pre_skip` from its `OpusHead`).
+    ///
+    /// A granule position outside `0..=MAX_OPUS_GRANULE` (a negative value other than -1, or an
+    /// absurdly large one) is treated like a missing granule: the page's packets continue from the
+    /// previous position instead of jumping to a nonsense one.
     pub fn of(stream: &Stream, pre_skip: u32) -> OpusTiming {
         // Granule positions come straight from the file, so the arithmetic saturates: a hostile
         // value gives wrong positions, never an overflow.
@@ -789,10 +802,11 @@ impl OpusTiming {
         let mut i = 0;
         let mut cursor: Option<i64> = None;
         let mut trimmed_end: Option<i64> = None;
+        let granule_of = |k: usize| stream.packets.get(k).and_then(|p| p.granule).filter(|g| (0..=MAX_OPUS_GRANULE).contains(g));
         while i < n {
             // packets completing on the same page: i..j, the last carries the page granule
             let mut j = i;
-            while j < n && stream.packets[j].granule.is_none() {
+            while j < n && granule_of(j).is_none() {
                 j += 1;
             }
             if j == n {
@@ -806,7 +820,7 @@ impl OpusTiming {
                 cursor = Some(c);
                 break;
             }
-            let Some(g) = stream.packets[j].granule else { break };
+            let Some(g) = granule_of(j) else { break };
             let sum = durations[i..=j].iter().fold(0i64, |a, &d| a.saturating_add(i64::from(d)));
             let eos = stream.packets[j].eos;
             let end = match cursor.map(|c| c.saturating_add(sum)) {
@@ -871,3 +885,5 @@ impl VorbisInfo {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_tests;

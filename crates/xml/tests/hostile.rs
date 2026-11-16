@@ -20,11 +20,40 @@ fn text_len(e: &El) -> usize {
 
 #[test]
 fn the_defaults_are_the_documented_ones() {
-    assert_eq!(Limits::default(), Limits { max_input: 256 * 1024 * 1024, max_depth: 256, max_nodes: 2_000_000, max_attrs: 1024 });
-    for e in [Error::TooLarge(1), Error::TooDeep(1), Error::TooManyNodes(1), Error::TooManyAttrs(1)] {
+    assert_eq!(
+        Limits::default(),
+        Limits {
+            max_input: 256 * 1024 * 1024,
+            max_depth: 256,
+            max_nodes: 2_000_000,
+            max_elements: usize::MAX,
+            max_attrs: 1024,
+            max_attrs_total: 4_000_000
+        }
+    );
+    for e in [
+        Error::TooLarge(1),
+        Error::TooDeep(1),
+        Error::TooManyNodes(1),
+        Error::TooManyElements(1),
+        Error::TooManyAttrs(1),
+        Error::TooManyAttrsTotal(1),
+    ] {
         assert!(e.is_limit(), "{e}");
     }
     assert!(!Error::NoRoot.is_limit() && !Error::Doctype.is_limit());
+}
+
+#[test]
+fn strict_end_tags_keep_first_root_and_entity_compatibility() {
+    let opts = Options { strict_end_tags: true, unknown_entity: UnknownEntity::Literal, doctype: Doctype::Ignore, ..Options::default() };
+    let root = opts.parse(b"<!DOCTYPE a [<!ENTITY ignored 'x'>]><a>&unknown;<b/></a><tail/>").unwrap();
+    assert_eq!(root.name, "a");
+    assert_eq!(root.text().as_ref(), "&unknown;");
+
+    for malformed in [b"<a><b></a>".as_slice(), b"<a><b/>".as_slice(), b"</a><b/>".as_slice()] {
+        assert!(opts.parse(malformed).is_err(), "{}", String::from_utf8_lossy(malformed));
+    }
 }
 
 #[test]
@@ -88,7 +117,11 @@ fn an_attribute_flood_is_refused_at_the_limit() {
         let opts = opts.with_limits(limits);
         for (k, kind) in kinds.iter().enumerate() {
             let _ = opts.parse(tag(16, kind).as_bytes());
-            assert_eq!(opts.parse(tag(17, kind).as_bytes()).err().map(|e| e.is_limit() || (opts.strict && k == 3)), Some(true), "kind {k}");
+            assert_eq!(
+                opts.parse(tag(17, kind).as_bytes()).err().map(|e| e.is_limit() || (opts.strict && (k == 1 || k == 3))),
+                Some(true),
+                "kind {k}"
+            );
             assert!(opts.first_start(tag(17, kind).as_bytes(), "a").is_none());
         }
         assert_eq!(opts.parse(tag(17, kinds[0]).as_bytes()), Err(Error::TooManyAttrs(16)));
@@ -327,4 +360,209 @@ fn markup_that_is_not_xml_is_an_error() {
             assert!(opts.first_start(bytes, "a").is_none() || bytes.starts_with(b"<a "));
         }
     }
+}
+
+/// Attributes are the one thing a node count does not see: 1,025 elements of 1,024 attributes
+/// each are 1,025 nodes and 1,049,600 `(String, String)` pairs, about 50 MB of headers from
+/// 5 MB of input.
+#[test]
+fn attributes_are_bounded_over_the_whole_tree() {
+    let el = format!("<c{}/>", " a=\"\"".repeat(1024));
+    let doc = format!("<r>{}</r>", el.repeat(1025));
+    let limits = Limits { max_attrs_total: 1024 * 1024, ..Limits::DEFAULT };
+    let opts = Options::default().with_limits(limits);
+    let err = opts.parse(doc.as_bytes()).unwrap_err();
+    assert_eq!(err, Error::TooManyAttrsTotal(1024 * 1024));
+    assert!(err.is_limit());
+    // exactly at the limit is accepted
+    let fits = format!("<r>{}</r>", el.repeat(1024));
+    assert_eq!(opts.parse(fits.as_bytes()).map(|r| r.children.len()), Ok(1024));
+    // the default stops a document that is nothing but attributes
+    let hostile = format!("<r>{}</r>", el.repeat(4000));
+    assert_eq!(parse(hostile.as_bytes()), Err(Error::TooManyAttrsTotal(4_000_000)));
+    // streamed elements take their attributes with them: any number of rows, as long as the
+    // ones held at once fit
+    let mut rows = 0;
+    let root = opts.parse_streaming(doc.as_bytes(), &["c"], |c| {
+        rows += c.attrs.len();
+        Ok::<(), Error>(())
+    });
+    assert_eq!((rows, root.map(|r| r.children.len())), (1025 * 1024, Ok(0)));
+    let tight = Options::default().with_limits(Limits { max_attrs_total: 1023, ..Limits::DEFAULT });
+    assert_eq!(tight.parse_streaming(doc.as_bytes(), &["c"], |_| Ok::<(), Error>(())), Err(Error::TooManyAttrsTotal(1023)));
+}
+
+/// An internal subset is found wherever it hides, and looking for it is linear in the input.
+#[test]
+fn an_internal_subset_is_refused_wherever_it_hides() {
+    let opts = Options { doctype: Doctype::RejectInternalSubset, ..Options::default() };
+    assert!(opts.parse(b"<!DOCTYPE xmeml><xmeml/>").is_ok());
+    assert!(opts.parse(b"<!DOCTYPE xmeml SYSTEM \"a>b\"><xmeml/>").is_ok());
+    // the first marker sits in a comment; the real declaration follows
+    let hidden = "<!-- <!DOCTYPE x> --><!DOCTYPE xmeml [<!ENTITY a \"aaaa\">]><xmeml>&a;</xmeml>";
+    assert_eq!(opts.parse(hidden.as_bytes()), Err(Error::Doctype));
+    // a `>` inside the system literal does not end the declaration early
+    let quoted = "<!DOCTYPE xmeml SYSTEM \"a>b\" [<!ENTITY a \"aaaa\">]><xmeml>&a;</xmeml>";
+    assert_eq!(opts.parse(quoted.as_bytes()), Err(Error::Doctype));
+    assert_eq!(opts.parse(b"<?pi <!DOCTYPE a> ?><!DOCTYPE x [<!ENTITY a \"b\">]><x/>"), Err(Error::Doctype));
+    // many markers in one comment, and many that never close
+    let marker = "<!DOCTYPE ";
+    let in_comment = format!("<!--{}--><x/>", marker.repeat(100_000));
+    let unclosed = format!("<x>{}", marker.repeat(100_000));
+    let start = std::time::Instant::now();
+    assert!(opts.parse(in_comment.as_bytes()).is_ok());
+    let _ = opts.parse(unclosed.as_bytes());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+}
+
+/// A reader of many parts keeps one budget: each tree is charged at its node count and the next
+/// part is read with what is left, so it stops before its tree is built.
+#[test]
+fn a_node_count_charges_a_budget_shared_by_several_parts() {
+    let part = format!("<r>{}</r>", "<a>t</a>".repeat(100));
+    let mut left = 450_usize;
+    let mut read = 0;
+    for _ in 0..4 {
+        let opts = Options::default().with_limits(Limits { max_nodes: left, ..Limits::DEFAULT });
+        match opts.parse(part.as_bytes()) {
+            Ok(root) => {
+                // the root, 100 elements and 100 text nodes
+                assert_eq!(root.node_count(), 201);
+                left -= root.node_count();
+                read += 1;
+            }
+            Err(e) => assert_eq!(e, Error::TooManyNodes(48)),
+        }
+    }
+    assert_eq!((read, left), (2, 48));
+    // exactly what the limit counts: a tree of n nodes reads with max_nodes n, not n - 1
+    let exact = Options::default().with_limits(Limits { max_nodes: 201, ..Limits::DEFAULT });
+    assert!(exact.parse(part.as_bytes()).is_ok());
+    let short = Options::default().with_limits(Limits { max_nodes: 200, ..Limits::DEFAULT });
+    assert_eq!(short.parse(part.as_bytes()), Err(Error::TooManyNodes(200)));
+}
+
+#[test]
+fn element_limits_are_independent_and_streamed_rows_release_them() {
+    let limited = Options::default().with_limits(Limits { max_elements: 2, ..Limits::DEFAULT });
+    assert_eq!(limited.parse(b"<r><a/><b/></r>"), Err(Error::TooManyElements(2)));
+
+    let streaming = Options::default().with_limits(Limits { max_elements: 3, ..Limits::DEFAULT });
+    let mut rows = 0;
+    let root = streaming
+        .parse_streaming(b"<s><row><a/></row><row><b/></row></s>", &["row"], |_| {
+            rows += 1;
+            Ok::<(), Error>(())
+        })
+        .unwrap();
+    assert_eq!(rows, 2);
+    assert!(root.children.is_empty());
+}
+
+/// A part that cannot be read to its end still gives what came before the failure.
+#[test]
+fn a_failed_streaming_read_returns_what_it_had() {
+    let opts = Options::local().with_limits(Limits { max_nodes: 1000, ..Limits::DEFAULT });
+    let sheet = |row: &str| format!("<worksheet><cols><col min='1'/></cols><sheetData><row r='1'/>{row}</sheetData><mergeCells/></worksheet>");
+    // one row over the node limit
+    let huge = sheet(&format!("<row r='2'>{}</row>", "<c/>".repeat(1001)));
+    let mut rows = Vec::new();
+    let (root, err) = opts.parse_streaming_partial(huge.as_bytes(), &["row"], |r| {
+        rows.push(r.attr_u32("r"));
+        Ok::<(), Error>(())
+    });
+    assert_eq!(err, Some(Error::TooManyNodes(1000)));
+    let root = root.unwrap();
+    assert!(root.child("cols").is_some(), "what was complete before the error is kept");
+    assert!(root.child("mergeCells").is_none(), "nothing after it is");
+    assert_eq!(rows, [Some(1)], "the row that failed is not handed out");
+    assert_eq!(
+        root.child("sheetData").and_then(|d| d.child("row")).and_then(|r| r.attr_u32("r")),
+        Some(2),
+        "it is in the tree, as far as it was read"
+    );
+    // the same input through parse_streaming is the error alone
+    assert_eq!(opts.parse_streaming(huge.as_bytes(), &["row"], |_| Ok::<(), Error>(())), Err(Error::TooManyNodes(1000)));
+    // an error from the callback
+    let (root, err) = opts.parse_streaming_partial(sheet("").as_bytes(), &["row"], |_| Err(Error::NoRoot));
+    assert_eq!((root.map(|r| r.children.len()), err), (Some(2), Some(Error::NoRoot)));
+    // markup the tokenizer cannot read
+    let (root, err) = opts.parse_streaming_partial(b"<worksheet><cols/><sheetData><row b='1", &["row"], |_| Ok::<(), Error>(()));
+    assert!(matches!(err, Some(Error::Syntax { .. })), "{err:?}");
+    assert!(root.is_some_and(|r| r.child("cols").is_some()));
+    // a whole document, and nothing at all
+    let (root, err) = opts.parse_streaming_partial(sheet("").as_bytes(), &["row"], |_| Ok::<(), Error>(()));
+    assert_eq!((root.map(|r| r.children.len()), err), (Some(3), None));
+    assert_eq!(opts.parse_streaming_partial(b"", &[], |_| Ok::<(), Error>(())), (None, Some(Error::NoRoot)));
+    let tiny = Options::default().with_limits(Limits { max_input: 2, ..Limits::DEFAULT });
+    assert_eq!(tiny.parse_streaming_partial(b"<a/>", &[], |_| Ok::<(), Error>(())), (None, Some(Error::TooLarge(2))));
+}
+
+/// The pull reader builds no tree, so a strict one has to refuse by itself what the tree reader
+/// refuses: a second root element and character data outside the root. A reader that stopped
+/// believing a damaged file would otherwise take its first element for the whole document.
+#[test]
+fn a_strict_pull_reader_refuses_what_is_outside_the_root() {
+    fn read(opts: Options<'_>, doc: &[u8]) -> Result<usize, Error> {
+        let mut events = opts.events(doc);
+        let mut n = 0;
+        while events.next()?.is_some() {
+            n += 1;
+        }
+        Ok(n)
+    }
+    let strict = Options::default().strict();
+    for (doc, msg) in [
+        (&b"<a/><b/>"[..], "more than one root element"),
+        (b"<a></a><b>", "more than one root element"),
+        (b"<a/>text", "text outside the root element"),
+        (b"text<a/>", "text outside the root element"),
+        (b"<a/><![CDATA[x]]>", "text outside the root element"),
+        (b"<a/>&amp;", "text outside the root element"),
+    ] {
+        let shown = String::from_utf8_lossy(doc);
+        assert!(matches!(read(strict, doc), Err(Error::Syntax { msg: m, .. }) if m == msg), "{shown}");
+        assert_eq!(strict.parse(doc).map(|_| ()).map_err(|e| matches!(e, Error::Syntax { .. })), Err(true), "{shown}");
+        assert!(read(Options::default(), doc).is_ok(), "a lenient read takes {shown}");
+    }
+    // white space, comments and instructions may stand outside the root
+    assert!(read(strict, b"<?xml version='1.0'?>\r\n <!-- c -->\t<a>x</a>\n<?pi?> ").is_ok());
+}
+
+#[test]
+fn strict_attributes_are_unique_before_name_rewriting() {
+    use craft_xml::{Names, Options};
+    for names in [Names::AsWritten, Names::Local] {
+        let strict = Options { names, ..Options::default() }.strict();
+        for xml in [
+            "<r a='1' a='2'/>",
+            "<r xmlns:p='urn:x' xmlns:q='urn:x' p:a='1' q:a='2'/>",
+            "<r xml:a='1' xmlns:p='http://www.w3.org/XML/1998/namespace' p:a='2'/>",
+            "<r xmlns:p='urn:x'><c xmlns:q='urn:x' p:a='1' q:a='2'/></r>",
+        ] {
+            assert!(strict.parse(xml.as_bytes()).is_err(), "{xml}");
+            let mut events = strict.events(xml.as_bytes());
+            assert!(
+                loop {
+                    match events.next() {
+                        Ok(Some(_)) => {}
+                        Ok(None) => break false,
+                        Err(_) => break true,
+                    }
+                },
+                "{xml}"
+            );
+        }
+        for xml in [
+            "<r xmlns='urn:x' xmlns:p='urn:x' a='1' p:a='2'/>",
+            "<r p:a='1' q:a='2'/>",
+            "<r xmlns:p='urn:x'><c xmlns:p='urn:y' xmlns:q='urn:x' p:a='1' q:a='2'/></r>",
+        ] {
+            assert!(strict.parse(xml.as_bytes()).is_ok(), "{xml}");
+        }
+        assert!(Options { names, ..Options::default() }.parse(b"<r a='1' a='2'/>").is_ok());
+    }
+    let strict = Options { limits: craft_xml::Limits { max_attrs: 2, ..craft_xml::Limits::DEFAULT }, ..Options::default() }.strict();
+    assert!(strict.parse(b"<r xmlns:a='a' xmlns:b='b'><c xmlns:c='c'/></r>").is_err());
+    assert!(strict.parse(b"<r a='1' b='2' c='3'/>").is_err());
 }

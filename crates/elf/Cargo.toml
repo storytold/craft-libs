@@ -1,0 +1,23 @@
+[package]
+name = "craft-elf"
+description = "ELF program headers and dynamic section entries from hostile bytes, from Craft Anything: 32/64-bit, either byte order, with bounded counts and overflow-checked offsets, plus segment, permission and dynamic tag names. Pure Rust, no I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+# `serde`: `Serialize` on `ProgramHeader` (addresses as `0x…` strings), for apps that report
+# segments as JSON.
+serde = { workspace = true, optional = true }
+
+[features]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json = { workspace = true }
