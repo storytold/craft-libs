@@ -277,3 +277,25 @@ fn short_lossy_jpeg_strips_are_charged_their_own_rows() {
     let band = w * rows * 3;
     assert_eq!(&img.data[..band], &img.data[img.data.len() - band..]);
 }
+
+#[test]
+fn a_small_lossy_jpeg_in_a_huge_tile_is_charged_the_whole_tile() {
+    // a 256 x 256 RGB image in one 16384 x 16384 tile whose JPEG is only 256 x 256 (padded with
+    // comments to pass the bytes-per-sample guard): the JPEG's frame is small, but decoding fills
+    // the whole tile (about 1.5 GiB of samples), so it is refused before anything is allocated
+    let (w, tile) = (256usize, 16384usize);
+    let px: Vec<u8> = (0..w * w).flat_map(|i| [(i % 251) as u8, 90, 160]).collect();
+    let mut jpeg = Vec::new();
+    jpeg_encoder::Encoder::new(&mut jpeg, 90).encode(&px, w as u16, w as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+    let mut padded = jpeg[..2].to_vec();
+    let need = tile * tile * 3 / 768 + 1;
+    while padded.len() < need {
+        padded.extend_from_slice(&[0xFF, 0xFE, 0xFF, 0xFF]);
+        padded.extend(std::iter::repeat_n(0u8, 0xFFFF - 2));
+    }
+    padded.extend_from_slice(&jpeg[2..]);
+    let mut raw = base_ifd(w, w, 8, 3, false);
+    raw.set(t::COMPRESSION, Value::Short(vec![34892]));
+    raw.set_image(ImageData::Tiles { tile_width: tile as u32, tile_height: tile as u32, tiles: vec![padded] });
+    assert_eq!(lines(&dng(raw, ByteOrder::Little)).unwrap_err(), Error::TooLarge);
+}
