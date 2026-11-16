@@ -253,6 +253,35 @@ mod tests {
         assert_eq!(got.iter().find(|r| r.0 == "Header").map(|r| r.1), Some(Some(0)), "{got:?}");
     }
 
+    /// A further paragraph moved out of its item (to the margin) is body text: a list starting with
+    /// a header after it, less indented than the list before, keeps the header in its list.
+    #[test]
+    fn a_list_header_after_an_outdented_further_paragraph_is_in_its_list() {
+        let mut doc = craft_wordmodel::Document::new();
+        let num = std::sync::Arc::make_mut(&mut doc.numbering).add_list(craft_wordmodel::ListKind::Numbered);
+        let numbered = move |p: &mut craft_wordmodel::ParaProps| {
+            p.numbering = Some(NumRef { num, level: 0 });
+            p.indent_left = Some(72.0);
+        };
+        let outdented = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(0.0);
+        };
+        let header = |p: &mut craft_wordmodel::ParaProps| {
+            p.list_item = Some(0);
+            p.indent_left = Some(36.0);
+        };
+        let numbered_36 = move |p: &mut craft_wordmodel::ParaProps| {
+            p.numbering = Some(NumRef { num, level: 0 });
+            p.indent_left = Some(36.0);
+        };
+        let body = doc_of(&[("One", &numbered), ("Out", &outdented), ("Header", &header), ("Two", &numbered_36)]).body;
+        doc.body = body;
+        let got = items(&from_doc(&doc).blocks);
+        assert_eq!(got.iter().find(|r| r.0 == "Out").map(|r| r.1), Some(None), "{got:?}");
+        assert_eq!(got.iter().find(|r| r.0 == "Header").map(|r| r.1), Some(Some(0)), "{got:?}");
+    }
+
     /// A list item's further paragraph in a table cell a table style formats stays one.
     #[test]
     fn a_further_paragraph_in_a_styled_cell_stays_in_its_item() {

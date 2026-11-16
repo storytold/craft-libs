@@ -939,6 +939,8 @@ fn flow_paras_at(doc: &Document, p: &Paragraph, opts: FlowOpts, at: &mut ItemTex
             for q in &mut paras {
                 q.item = None;
             }
+            // Moved out of its item, it is body text: the lists before it have ended.
+            *at = [None; 9];
         }
     } else {
         // Body text: the lists before it have ended, and where their items' text was with them.
