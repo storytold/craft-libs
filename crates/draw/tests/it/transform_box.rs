@@ -724,6 +724,39 @@ fn a_band_press_at_any_corner_rotates_after_the_hand_off_to_the_whole_outside() 
     }
 }
 
+/// A border zone rotates only near the box's sides; further out the press is the box's and does nothing.
+#[trial]
+fn a_border_zone_rotates_only_within_its_reach_of_the_sides() {
+    let press_and_turn = |h: &mut Harness, start: Pos2| {
+        let centre = h.screen(RECT.center());
+        let turn = by(-(start.y - centre.y), start.x - centre.x).normalized() * 30.0;
+        frame(h, vec![pointer::moved(start)]);
+        frame(h, vec![pointer::press(start)]);
+        frame(h, vec![pointer::moved(start + turn * 0.5)]);
+        frame(h, vec![pointer::moved(start + turn)]);
+        frame(h, vec![pointer::release(start + turn)]);
+        frame(h, Vec::new());
+    };
+    let side = |h: &Harness| h.screen(Point::new(RECT.x1, RECT.center().y));
+
+    let mut near = harness(BoxState::from_rect(RECT), |config| config.zone = RotateZone::border(28.0));
+    let start = side(&near) + by(14.0, 0.0);
+    press_and_turn(&mut near, start);
+    let turned = near.state().quad;
+    assert!((turned[1].y - turned[0].y).abs() > 1.0, "a press within the reach turns the box: {turned:?}");
+    assert_eq!(near.host.borrow().events.last(), Some(&Seen::Commit));
+
+    let mut far = harness(BoxState::from_rect(RECT), |config| config.zone = RotateZone::border(28.0));
+    let start = side(&far) + by(60.0, 0.0);
+    press_and_turn(&mut far, start);
+    assert!(far.host.borrow().events.is_empty(), "a press past the reach turns nothing: {:?}", far.host.borrow().events);
+    assert_eq!(far.state(), BoxState::from_rect(RECT));
+    frame(&mut far, vec![pointer::press(start)]);
+    frame(&mut far, vec![pointer::release(start)]);
+    frame(&mut far, Vec::new());
+    assert_eq!(far.host.borrow().applied, 0, "a click past the reach applies nothing");
+}
+
 /// A level line's ends stand for the side handles they point to.
 #[trial]
 fn a_level_live_lines_ends_stand_for_the_sides() {

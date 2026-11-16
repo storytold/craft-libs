@@ -30,8 +30,9 @@ use crate::ui::corner::{CornerStyle, paint_widget};
 pub const BOX: PartKey = PartKey::new("box");
 
 /// The parts that stand for the outside of the box near corner `i`: `OUTSIDE.at(i)` is the outside nearest that corner
-/// in [`RotateZone::Outside`] and the band at that corner in [`RotateZone::Band`]. One key scheme in both zones, so a
-/// press that began on a band keeps its part when the box it hands off to takes the whole outside.
+/// in [`RotateZone::Outside`] and [`RotateZone::Border`] and the band at that corner in [`RotateZone::Band`]. One key
+/// scheme in every zone, so a press that began on a band keeps its part when the box it hands off to takes the whole
+/// outside.
 const OUTSIDE: PartKey = PartKey::new("outside");
 
 /// The pointer-only part of an edge: the whole side, beside the midpoint handle `BOX.at(Edge(k))` that the keyboard
@@ -77,7 +78,7 @@ const BAND_INNER_IN_HANDLES: f32 = 0.625;
 const BAND_OUTER_IN_HANDLES: f32 = 2.25;
 
 /// Where a press outside the box rotates it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub enum RotateZone {
     /// Anywhere outside (PhotoCraft's Free Transform); the rotate pointer shows within the rotate reach of a corner.
@@ -85,6 +86,30 @@ pub enum RotateZone {
     Outside,
     /// Only the band outside a corner (PhotoCraft's Move tool controls); the rest of the outside is the tool's.
     Band,
+    /// Only within `points` screen points of the box's sides (PhotoCraft's type box with ⌘ held). The whole outside is
+    /// still the box's: a press further out starts nothing and applies nothing, and reaches neither the content under
+    /// the box nor the tool, and the pointer there is the arrow.
+    #[non_exhaustive]
+    Border {
+        /// The reach outside the sides, in screen points.
+        points: f32,
+    },
+}
+
+impl RotateZone {
+    /// The zone within `points` screen points of the box's sides.
+    pub const fn border(points: f32) -> Self {
+        RotateZone::Border { points }
+    }
+
+    /// Whether a press on the outside at `pointer`, on the screen, rotates the box whose corners are `quad` on the
+    /// screen.
+    fn rotates_at(self, quad: &[Point; 4], pointer: Pos2) -> bool {
+        match self {
+            RotateZone::Border { points } => border_distance(quad, pointer) <= points,
+            RotateZone::Outside | RotateZone::Band => true,
+        }
+    }
 }
 
 /// What of the box takes the pointer and the keys ([`TransformOverlay::reach`](super::TransformOverlay::reach)).
@@ -273,7 +298,8 @@ fn slop_sense(part: BoxPart) -> Sense {
 ///   a double click inside) and closes it on [`discard`](TransformBoxOutput::discard).
 /// - The pointer takes the nearest handle or the reference point, else a side (the whole side along its length, a
 ///   corner winning where both reach), the inside or the outside. Parts the [rules](Self::rules) refuse take no
-///   press, except the outside in [`RotateZone::Outside`], where a click applies. An Alt press away from the handles
+///   press, except the outside in [`RotateZone::Outside`] and within the reach of [`RotateZone::Border`], where a
+///   click applies. An Alt press away from the handles
 ///   moves the reference point there and drags it, whether it shows or not.
 /// - Snapping is the canvas's ([`canvas_snap`]): a dragged handle snaps through [`Snap::point`] and a box moved from
 ///   inside snaps its bounds through [`Snap::rect_of`]; the lines the result reaches are
@@ -495,8 +521,9 @@ impl<'a> TransformBox<'a> {
         let turn = || Cursor::from(PaintedCursor::turn(quad::bisector(screen, corner)));
         let along = |from: usize| vec2_of(screen.quad[(from + 1) % 4] - screen.quad[from % 4]);
         match (kind, part) {
+            (BoxDrag::Rotate, BoxPart::Outside) if !dragging && !self.rotate_zone.rotates_at(&screen.quad, pointer) => CursorIcon::Default.into(),
             (BoxDrag::Rotate, BoxPart::Outside) => {
-                if dragging || self.rotate_zone == RotateZone::Band || away <= style.rotate_reach {
+                if dragging || matches!(self.rotate_zone, RotateZone::Band | RotateZone::Border { .. }) || away <= style.rotate_reach {
                     turn()
                 } else {
                     CursorIcon::Alias.into()
@@ -599,6 +626,8 @@ impl<'a> TransformBox<'a> {
                 cx.cursor(cursor, CursorPriority::Part);
             }
             match press.phase {
+                // Past a border zone's reach the outside keeps the press and does nothing with it.
+                PressPhase::Down { start, .. } if part == BoxPart::Outside && !self.rotate_zone.rotates_at(&screen.quad, start.origin) => {}
                 PressPhase::Down { start, .. } if start.button == PointerButton::Primary => {
                     let from = space.view.to_doc(start.origin);
                     // The move reach only moves: an Alt press there is a move too.
@@ -937,7 +966,7 @@ impl Component for TransformBox<'_> {
             cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
         }
         match self.rotate_zone {
-            RotateZone::Outside => {
+            RotateZone::Outside | RotateZone::Border { .. } => {
                 for (corner, region) in outside_regions(&quad, rect).into_iter().enumerate() {
                     cx.part(OUTSIDE.at(corner as u64), HitShape::Polygon(region))
                         .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Outside))
@@ -1097,6 +1126,20 @@ fn box_point_pull(state: &BoxState, p: Point, reach: f64) -> Point {
 fn nearest_corner(screen: &BoxState, p: Pos2) -> (usize, f32) {
     let p = Point::new(f64::from(p.x), f64::from(p.y));
     (0..4).map(|i| (i, screen.quad[i].distance(p) as f32)).min_by(|a, b| a.1.total_cmp(&b.1)).unwrap_or((0, f32::INFINITY))
+}
+
+/// The distance from `p` to the nearest side of the box whose corners are `quad`, all on the screen.
+fn border_distance(quad: &[Point; 4], p: Pos2) -> f32 {
+    let p = Point::new(f64::from(p.x), f64::from(p.y));
+    (0..4)
+        .map(|side| {
+            let (a, b) = (quad[side], quad[(side + 1) % 4]);
+            let along = b - a;
+            let length = along.hypot2();
+            let t = if length > 0.0 { ((p - a).dot(along) / length).clamp(0.0, 1.0) } else { 0.0 };
+            (p - (a + along * t)).hypot() as f32
+        })
+        .fold(f32::INFINITY, f32::min)
 }
 
 /// The outside of the box `quad` within `within`, split into one region per corner: region `i` lies between the rays

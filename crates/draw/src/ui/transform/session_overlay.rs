@@ -17,8 +17,8 @@ use craft_ui::runtime::env::{Env, Label};
 use egui::{AsIdSalt, Id, IdSalt, Rect, Ui};
 
 use super::{
-    ApplyBy, TransformBox, TransformChoice, TransformEdit, TransformMenuWords, TransformPhase, TransformReach, TransformSession, TransformSettings,
-    TransformWarp,
+    ApplyBy, RotateZone, TransformBox, TransformChoice, TransformEdit, TransformMenuWords, TransformPhase, TransformReach, TransformSession,
+    TransformSettings, TransformWarp,
 };
 
 /// What the overlay reported this pass.
@@ -67,6 +67,7 @@ pub struct TransformOverlay<'a, W> {
     mods: Option<Mods>,
     menu_rows: &'a [Entry<String>],
     reach: TransformReach,
+    rotate_zone: RotateZone,
     id: IdSource,
 }
 
@@ -81,6 +82,7 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             mods: None,
             menu_rows: &[],
             reach: TransformReach::Box,
+            rotate_zone: RotateZone::Outside,
             id: IdSource::Auto,
         }
     }
@@ -117,6 +119,14 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         self
     }
 
+    /// Where a press outside the box rotates it: anywhere outside (the default, Free Transform), or only near its
+    /// sides ([`RotateZone::Border`]).
+    #[must_use]
+    pub fn rotate_zone(mut self, zone: RotateZone) -> Self {
+        self.rotate_zone = zone;
+        self
+    }
+
     /// The app's own box rules in place of [`TransformSession::box_rules`]: a 45° rotate step, a Move tool's rules.
     /// The session's mode and what it allows still win.
     #[must_use]
@@ -148,6 +158,7 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             .rules(rules)
             .reference_point(session.reference_point())
             .reach(self.reach)
+            .rotate_zone(self.rotate_zone)
             .id_source(self.id);
         if let Some(mods) = self.mods {
             tbox = tbox.mods(mods);
