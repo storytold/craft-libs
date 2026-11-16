@@ -41,6 +41,8 @@ pub mod ac3;
 #[cfg(any(feature = "alac-decode", feature = "alac-encode"))]
 pub mod alac;
 mod buffer;
+#[cfg(feature = "g722")]
+pub mod g722;
 mod layout;
 #[cfg(any(feature = "mp3-encode", feature = "mp3-decode"))]
 pub mod mp3;
