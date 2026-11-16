@@ -83,8 +83,13 @@ for new pictures (`vm = i + 1`) and the `XLDAPR` dynamic-array metadata (`cm = 1
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 
-A binary workbook gives the same `Workbook`, strings, rows and merged cells. Its styles are not read
-(each cell keeps its format index). Its defined names are those of `definedNames` in the `.xlsx`
+A binary workbook gives the same `Workbook`, strings, rows and merged cells, and the same `Styles`:
+number formats, fonts, fills, borders, cell and cell style formats, cell styles, differential
+formats and the indexed colours, as Excel writes them in `styles.xml` (default fill colours and
+empty settings left out, a cell style format's `apply*="0"`, a number format with a newer locale tag
+in its Excel 2007 spelling, as `formatCode` has it). Custom table styles and recent colours are not
+read; a damaged styles part is a warning and no styles, while one past a cap (65,536 entries in a
+table, 1,024 gradient stops) or past `binary_text` is too large. Its defined names are those of `definedNames` in the `.xlsx`
 Excel writes: built-in names as `_xlnm.Print_Area`, sheet-scoped names with their `localSheetId`,
 relative references as the cell they reach from A1, macro names with their `function`, `xlm` or
 `vbProcedure`, `functionGroupId`, `shortcutKey`, `description` and `help`. Excel's hidden names for

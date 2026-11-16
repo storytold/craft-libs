@@ -568,3 +568,39 @@ fn a_read_is_capped_where_the_file_has_grown() {
     assert!(matches!(read_capped(&path.with_extension("missing"), 9), Err(FontFileError::Io(_))));
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn shape_plan_cache_reuses_and_evicts_plans() {
+    let data = font(&spec("Test", "Regular", 400));
+    let face = harfrust::FontRef::from_index(&data, 0).unwrap();
+    let shaper_data = harfrust::ShaperData::new(&face);
+    let shaper = shaper_data.shaper(&face).build();
+    let cache = ShapePlanCache::default();
+    let make = |language: &harfrust::Language| cache.get_or_create(&shaper, None, harfrust::Direction::LeftToRight, None, Some(language), &[]);
+    let languages: Vec<harfrust::Language> = ('a'..='z').flat_map(|a| ['a', 'b'].map(move |b| format!("{a}{b}").parse().unwrap())).collect();
+    let first = make(&languages[0]);
+    assert!(Arc::ptr_eq(&first, &make(&languages[0])));
+    for language in languages.iter().skip(1) {
+        make(language);
+    }
+    assert_eq!(cache.len(), ShapePlanCache::CAPACITY);
+    assert!(!Arc::ptr_eq(&first, &make(&languages[0])));
+    assert_eq!(cache.len(), ShapePlanCache::CAPACITY);
+}
+
+#[test]
+fn bounded_sfnt_reader_preserves_face_names_and_collection_indices() {
+    let mut bold = spec("Example", "Bold Italic", 700);
+    bold.italic = true;
+    let data = font(&bold);
+    let faces = crate::sfnt::read_faces_bytes(&data);
+    assert_eq!(faces.len(), 1);
+    assert_eq!((&*faces[0].family, &*faces[0].style, faces[0].weight, faces[0].italic), ("Example", "Bold Italic", 700, true));
+    let mut hidden = spec("Hidden", "Regular", 400);
+    hidden.outlines = false;
+    let combined = collection(&[font(&hidden), data]);
+    let faces = crate::sfnt::read_faces_bytes(&combined);
+    assert_eq!(faces.len(), 1);
+    assert_eq!((faces[0].index, faces[0].family.as_str()), (1, "Example"));
+    assert!(crate::sfnt::read_faces_bytes(b"invalid").is_empty());
+}
