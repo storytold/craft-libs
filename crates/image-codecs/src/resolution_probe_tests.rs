@@ -212,3 +212,55 @@ fn truncated_and_corrupted_headers_never_panic() {
         }
     }
 }
+
+#[test]
+fn png_phys_must_be_a_whole_nine_byte_chunk() {
+    // A pHYs that declares no data doesn't borrow the bytes after it.
+    let mut empty = png_chunk(b"pHYs", &[]);
+    empty.extend_from_slice(&phys(11_811, 11_811, 1)[8..]);
+    assert_eq!(file_resolution(&png(&[empty])), None);
+    // Cut off before its CRC.
+    let whole = png(&[phys(11_811, 11_811, 1)]);
+    let crc_at = whole.len() - 12 - 4;
+    assert_eq!(file_resolution(&whole[..crc_at]), None);
+    assert_eq!(file_resolution(&whole[..crc_at + 4]), Some((300.0, 300.0)));
+}
+
+/// A PNG chunk with its real CRC, for the decoder's own probe, which checks it.
+fn crc_chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+    let mut c = png_chunk(kind, data);
+    let body = c.get(4..c.len() - 4).unwrap().to_vec();
+    let mut crc = !0u32;
+    for b in body {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & (crc & 1).wrapping_neg());
+        }
+    }
+    let n = c.len();
+    c[n - 4..].copy_from_slice(&(!crc).to_be_bytes());
+    c
+}
+
+#[test]
+fn png_zero_phys_leaves_the_exif_resolution() {
+    let exif = crc_chunk(b"eXIf", &tiff(false, 600, 600, Some(2)));
+    let zero = |x: u32, y: u32| {
+        let mut d = x.to_be_bytes().to_vec();
+        d.extend_from_slice(&y.to_be_bytes());
+        d.push(1);
+        crc_chunk(b"pHYs", &d)
+    };
+    let png = |chunks: &[Vec<u8>]| {
+        let mut p = b"\x89PNG\r\n\x1a\n".to_vec();
+        p.extend_from_slice(&crc_chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0]));
+        chunks.iter().for_each(|c| p.extend_from_slice(c));
+        // The decoder's probe reads up to the image data, so there has to be some.
+        p.extend_from_slice(&crc_chunk(b"IDAT", &[0x78, 0x9c, 0x63, 0, 0, 0, 1, 0, 1]));
+        p.extend_from_slice(&crc_chunk(b"IEND", &[]));
+        p
+    };
+    assert_eq!(file_resolution(&png(std::slice::from_ref(&exif))), Some((600.0, 600.0)));
+    assert_eq!(file_resolution(&png(&[zero(0, 0), exif.clone()])), Some((600.0, 600.0)));
+    assert_eq!(file_resolution(&png(&[zero(11_811, 0), exif])), Some((600.0, 600.0)));
+}

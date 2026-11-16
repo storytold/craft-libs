@@ -75,7 +75,9 @@ fn png_phys(bytes: &[u8]) -> Option<(f32, f32)> {
         let len = usize::try_from(be_u32(bytes, pos)?).ok()?;
         let data = pos.checked_add(8)?;
         match bytes.get(pos.checked_add(4)?..data)? {
-            b"pHYs" => return phys(bytes.get(data..data.checked_add(9)?)?),
+            // A `pHYs` chunk holds exactly nine bytes; the whole chunk, CRC included, must be there.
+            b"pHYs" if len == 9 => return bytes.get(data..data.checked_add(13)?).and_then(|chunk| phys(chunk.get(..9)?)),
+            b"pHYs" => return None,
             b"IDAT" | b"IEND" => return None,
             _ => pos = data.checked_add(len)?.checked_add(4)?,
         }
@@ -85,10 +87,13 @@ fn png_phys(bytes: &[u8]) -> Option<(f32, f32)> {
 
 /// `pHYs`: pixels per unit in x and y, then the unit (1 = metre; 0 = aspect ratio only).
 fn phys(data: &[u8]) -> Option<(f32, f32)> {
-    if *data.get(8)? != 1 {
+    let (x, y) = (be_u32(data, 0)?, be_u32(data, 4)?);
+    // As the decoder does: a zero count, or a unit other than the metre, records no resolution,
+    // so the `eXIf` resolution can still answer.
+    if *data.get(8)? != 1 || x == 0 || y == 0 {
         return None;
     }
-    Some((png::dpi_of_ppm(be_u32(data, 0)?), png::dpi_of_ppm(be_u32(data, 4)?)))
+    Some((png::dpi_of_ppm(x), png::dpi_of_ppm(y)))
 }
 
 /// The resolution of a PNG's `eXIf` chunk, read by the decoder's own header probe.
