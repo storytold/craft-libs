@@ -29,6 +29,7 @@ pub mod platform;
 mod pointer;
 mod session;
 pub mod snapshot;
+mod storage;
 
 #[cfg(target_os = "android")]
 #[doc(hidden)]
@@ -49,8 +50,11 @@ pub use snapshot::{DocumentInfo, Item, Snapshot};
 /// The frame itself is [`eframe::App`]'s: `raw_input_hook`, then `logic` and `ui` in one pass.
 pub trait CraftApp: eframe::App + 'static {
     /// Build the app on `ctx`. `wgpu` is the shell's GPU when it came up; `platform` is how the
-    /// app reaches the shell (file pickers, exports): keep it.
-    fn create(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>, platform: Platform) -> Self
+    /// app reaches the shell (file pickers, exports): keep it. `storage` holds what
+    /// [`eframe::App::save`] saved last time, as eframe's `CreationContext::storage` does; the host
+    /// calls `save` as the app leaves the screen and every [`eframe::App::auto_save_interval`].
+    /// `None` when the shell gave no data folder.
+    fn create(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>, platform: Platform, storage: Option<&dyn eframe::Storage>) -> Self
     where
         Self: Sized;
 
@@ -221,7 +225,12 @@ mod tests {
     }
 
     impl CraftApp for Probe {
-        fn create(_ctx: &egui::Context, _wgpu: Option<eframe::egui_wgpu::RenderState>, _platform: Platform) -> Self {
+        fn create(
+            _ctx: &egui::Context,
+            _wgpu: Option<eframe::egui_wgpu::RenderState>,
+            _platform: Platform,
+            _storage: Option<&dyn eframe::Storage>,
+        ) -> Self {
             Self
         }
         fn open_file(&mut self, _ctx: &egui::Context, _file: PickedFile) {}

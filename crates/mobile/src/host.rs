@@ -15,6 +15,7 @@ use egui::{Event, Pos2, RawInput, TouchDeviceId, TouchId, TouchPhase, ViewportId
 use crate::input::{Input, hover_event, key_events, scroll_events, secondary_click_events};
 use crate::platform::{Pasted, Platform, Request, WriteOutcome};
 use crate::pointer::TouchPointer;
+use crate::storage::FileStorage;
 use crate::{Action, CraftApp, PickedFile, Snapshot};
 
 /// Why the host could not start.
@@ -156,6 +157,10 @@ pub(crate) struct Host<A> {
     pending_textures: PendingTextures,
     /// The power state the app last heard: it hears each change once.
     power: Option<crate::Power>,
+    /// Where [`eframe::App::save`] keeps the app's settings; `None` without a data folder.
+    storage: Option<FileStorage>,
+    /// When the app last saved, for [`eframe::App::auto_save_interval`].
+    saved: Instant,
 }
 
 /// Texture changes from frames that didn't draw, for the next one that does. A host that goes
@@ -232,7 +237,8 @@ impl<A: CraftApp> Host<A> {
             *next = (*next).min(at);
         });
         let platform = Platform::default();
-        let app = A::create(&ctx, Some(render_state.clone()), platform.clone());
+        let storage = platform.data_dir().map(FileStorage::open);
+        let app = A::create(&ctx, Some(render_state.clone()), platform.clone(), storage.as_ref().map(|s| s as &dyn eframe::Storage));
         Ok(Self {
             ctx,
             app,
@@ -255,6 +261,8 @@ impl<A: CraftApp> Host<A> {
             busy: false,
             pending_textures: PendingTextures::default(),
             power: None,
+            storage,
+            saved: Instant::now(),
         })
     }
 
@@ -458,6 +466,8 @@ impl<A: CraftApp> HostOps for Host<A> {
             Input::Suspend => {
                 self.on_screen = false;
                 let started = Instant::now();
+                // Saved now, as eframe saves on exit: from here the OS may end the app without a word.
+                self.save();
                 self.app.suspend(&self.ctx);
                 // The shell waits for this on the thread the OS watches: work belongs on a worker,
                 // with the app busy until it's done.
@@ -547,7 +557,19 @@ impl<A: CraftApp> Host<A> {
         }
         self.publish();
         self.publish_busy();
+        if self.saved.elapsed() >= self.app.auto_save_interval() {
+            self.save();
+        }
         true
+    }
+
+    /// Let the app save its settings, and write them if they changed.
+    fn save(&mut self) {
+        if let Some(storage) = &mut self.storage {
+            self.app.save(storage);
+            eframe::Storage::flush(storage);
+        }
+        self.saved = Instant::now();
     }
 
     /// Tell the shell when the app starts or stops being busy (its own work, or a write in place

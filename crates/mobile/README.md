@@ -30,7 +30,11 @@ SwiftUI / Compose shell  ──actions (JSON)──▶  craft-mobile host  ─�
    craft-libs checkout at the same commit beside the app (PhotoCraft's scripts look for
    `../craft-libs/crates/mobile` and take `CRAFT_MOBILE_DIR` to point elsewhere).
 2. **`CraftApp`.**
-   - `create`: build the app exactly as the desktop does, minus desktop-only services.
+   - `create`: build the app exactly as the desktop does, minus desktop-only services. Restore
+     settings from `storage` as the desktop does from eframe's `CreationContext::storage`: the
+     host keeps them in the app's data folder and calls `App::save` as the app leaves the screen
+     and every `App::auto_save_interval`. (`eframe::get_value`/`set_value` need eframe's
+     `persistence` feature in the app's own dependencies; egui's memory isn't persisted.)
    - `wgpu_configuration`: rarely needed. The default device asks for the adapter's own limits
      (egui-wgpu's defaults are more than the iPad simulator allows).
    - `open_file`: push into the app's inbox (most apps already have one for the web build).
