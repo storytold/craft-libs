@@ -1328,6 +1328,26 @@ fn picf6(goal: (i16, i16), scale: (u16, u16), crop: [i16; 4], body: &[u8]) -> Ve
 }
 
 #[test]
+fn a_metafile_spelling_a_bitmap_signature_stays_a_metafile_and_a_negative_crop_adds_to_the_size() {
+    // The WMF of `inline_pictures_are_read` with its SetWindowExt height 0x4D42: "BM" at offset
+    // 24, which the raster check took for a bitmap there and kept ten bytes of. Cropped -200 on
+    // the left (the picture extends outward) and 100 on the right of a 1000-twip goal at 100 %:
+    // 1100 twips, 55 pt, wide; the model's crop keeps only the right one.
+    let wmf: &[u8] = &[1, 0, 9, 0, 0, 3, 17, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0x0C, 0x02, 0x42, 0x4D, 0xE8, 0x03, 3, 0, 0, 0, 0, 0];
+    let mut text = b"A\x01\r\0".to_vec();
+    let first = TEXT_AT + text.len() as u32;
+    text.extend(picf6((1000, 600), (1000, 1000), [-200, 0, 100, 0], wmf));
+    let a = [&[0x75, 1, 0x44, 4][..], &first.to_le_bytes()].concat();
+    let runs: &[(u32, u32, &[u8])] = &[(0, 1, &[]), (1, 2, &a), (2, 3, &[])];
+    let doc = read(&word6_file(&Doc6 { text: &text, ccp: Some(3), runs, ..Default::default() })).expect("opens");
+    let [craft_wordmodel::para::InlineObject::Image { media, w, crop, .. }] = first_para(&doc).objects.as_slice() else { panic!("one image") };
+    assert_eq!(media.as_str(), "image1.wmf");
+    assert_eq!(doc.media.get("image1.wmf").map(|m| m.as_slice()), Some(wmf));
+    assert!((*w - 55.0).abs() < 1e-3, "{w}");
+    assert_eq!(*crop, [0.0, 0.0, 0.1, 0.0]);
+}
+
+#[test]
 fn inline_pictures_are_read() {
     // A WMF: the 9-word header (size 17 words), a SetWindowExt record and the EOF record.
     let wmf: &[u8] = &[1, 0, 9, 0, 0, 3, 17, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0x0C, 0x02, 0x58, 0x02, 0xE8, 0x03, 3, 0, 0, 0, 0, 0];
