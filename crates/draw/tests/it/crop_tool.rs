@@ -45,6 +45,17 @@ fn sized(key: u64, width: f64, height: f64) -> CropDocument {
 }
 
 #[trial]
+fn the_first_set_of_a_session_is_a_box_step() {
+    let mut session = CropSession::new();
+    session.ensure_frame(&sized(1, 200.0, 100.0), false, None);
+    let start = session.frame();
+    session.set(upright(10.0, 10.0, 90.0, 60.0), false, "Crop");
+    assert!(session.can_undo(), "the set is a step");
+    assert!(session.undo());
+    assert_eq!(session.frame(), start);
+}
+
+#[trial]
 fn box_undo_redo_steps_committed_gestures_only() {
     let mut session = CropSession::new();
     let ctx = egui::Context::default();

@@ -409,6 +409,9 @@ impl CropSession {
     /// default frame to a ratio alone). Either way it is no longer the selection's bounds.
     pub fn set(&mut self, frame: CropBox, keep_default: bool, label: &str) -> EditEvent<CropBox> {
         self.settle();
+        // The history starts from the frame as it is now: made after the change, it would take the new frame as its
+        // first state and record no step.
+        self.history();
         let before = self.frame.map_or(Mixed::Mixed, Mixed::Same);
         self.frame = Some(frame);
         self.from_selection = false;
