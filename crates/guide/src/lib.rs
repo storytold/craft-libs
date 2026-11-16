@@ -1,4 +1,3 @@
-pub mod app_catalog;
 //! # craft-guide
 //!
 //! Interactive onboarding, step-by-step feature walkthroughs, spotlight overlays,
@@ -9,6 +8,7 @@ pub mod app_catalog;
 //! `TextureCraft`, `MaterialCraft`, `LightCraft`, `AniCraft`, `DesignCraft`,
 //! `FigCraft`, `DeckCraft`, `GridCraft`, `SoundCraft`, and `Craft Launcher`.
 
+pub mod app_catalog;
 use egui::{Color32, Pos2, Rect, Response, Vec2};
 use std::collections::HashMap;
 
