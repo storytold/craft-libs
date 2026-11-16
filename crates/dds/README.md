@@ -11,21 +11,31 @@ craft-dds = { git = "https://github.com/storytold/craft-libs", rev = "<commit>" 
 
 | | Read | Write |
 |---|---|---|
-| Uncompressed | 8, 16, 24 or 32 bits per pixel described by channel masks, RGB or luminance, with or without alpha; padded rows (`DDSD_PITCH`) | BGRA, BGRX, luminance, luminance with alpha |
+| Uncompressed | 8, 16, 24 or 32 bits per pixel described by channel masks, RGB or luminance, with or without alpha; padded rows (`DDSD_PITCH`); 16 bits per channel: `R16_UNORM`, `R16G16_UNORM`, `R16G16B16A16_UNORM` (DXGI 56, 35, 11 and their typeless forms; legacy FourCC 36) | BGRA, BGRX, luminance, luminance with alpha; from 16-bit pixels `R16_UNORM`, `R16G16_UNORM`, `R16G16B16A16_UNORM` |
 | Block-compressed | BC1, BC2, BC3 (DXT1, DXT3, DXT5); unsigned BC4 (ATI1, BC4U, DXGI 79 and 80) and BC5 (ATI2, BC5U, DXGI 82 and 83) | BC1, BC2, BC3, BC4, BC5 |
-| Headers | legacy and DX10 | legacy; DX10 for BC4 and BC5 |
+| Headers | legacy and DX10 | legacy; DX10 for BC4, BC5 and the 16-bit formats |
 | Mip levels | the top level only | optional full chain, box-filtered |
 
 Cubemaps, texture arrays, volume textures, premultiplied-alpha textures (DXT2/DXT4, or DX10 alpha mode 2), signed (SNORM) BC4/BC5 and
-the other DXGI formats (BC6H, BC7, float) are refused with `DdsError::Unsupported` rather than read
+the other DXGI formats (BC6H, BC7, float, signed or integer 16-bit) are refused with `DdsError::Unsupported` rather than read
 in part.
 
-Pixels are 8 bits per channel, interleaved and top row first, in one of four `Layout`s (`Gray`,
+Pixels are 8 bits per channel (`encode`, `Texture::decode`) or 16 bits per channel (`encode16`,
+`Texture::decode16`), interleaved and top row first, in one of four `Layout`s (`Gray`,
 `GrayA`, `Rgb`, `Rgba`). BC1 to BC3 are written from RGBA, BC4 from gray and BC5 from RGB
 (`DdsCompression::layout` names it). BC4 reads back as gray. BC5 stores red and green only, so it
 reads back as RGB with blue 0: for a tangent-space normal map, X and Y, with Z left to the
 renderer. ATI2 files are read as Microsoft's tools read them (red in the first block), not with
 the two blocks swapped as FFmpeg does.
+
+From 16-bit pixels, uncompressed textures keep 16 bits per channel: gray as `R16_UNORM`, gray
+and alpha (or any two channels, such as a normal map's X and Y) as `R16G16_UNORM`, RGB (alpha
+65535) and RGBA as `R16G16B16A16_UNORM`, all with the DX10 header; they read back as gray, gray
+and alpha, and RGBA. BC4 and BC5 keep 8-bit endpoints, as the formats store them, but pick them
+and the indices against the 16-bit values, so a smooth height or normal map has less error than
+when its 8-bit rounding is compressed. BC1 to BC3 round the pixels to 8 bits first.
+`Texture::decode` rounds 16-bit formats to 8 bits; `Texture::decode16` returns them exactly,
+interpolates BC4 and BC5 at 16 bits, and scales every 8-bit format by 257.
 
 ```rust
 use craft_dds::{DdsCompression, DdsOptions, Layout, Texture};
