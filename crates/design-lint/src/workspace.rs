@@ -28,6 +28,7 @@ const CLOSED: &[&str] = &[
     "States",
     "StateMix",
     "ShowReadouts", // the one Show Transformation Values flag: a bool, fixed by meaning
+    "PenDraft",     // whose anchors a pen draft holds: own or foreign, fixed by meaning
     "CollectionEvent", // built or matched in craft-ui-patterns
     "ColumnAlign",     // built or matched in craft-ui-widgets
     "ColumnEvent",     // built or matched in craft-ui-widgets
