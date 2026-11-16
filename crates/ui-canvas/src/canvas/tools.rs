@@ -139,10 +139,10 @@ pub enum ViewCommands {
     /// Show the selected layers' bounds, centred. Disabled without them.
     #[command(label = "Fit Layer(s) on Screen")]
     FitLayers,
-    /// Turn the view clockwise by 15 degrees.
+    /// Turn the view clockwise on screen by 15 degrees, in a mirrored view too.
     #[command(label = "Rotate View Clockwise")]
     RotateClockwise,
-    /// Turn the view counterclockwise by 15 degrees.
+    /// Turn the view counterclockwise on screen by 15 degrees, in a mirrored view too.
     #[command(label = "Rotate View Counterclockwise")]
     RotateCounterclockwise,
     /// Turn the view back to upright.
@@ -202,8 +202,10 @@ impl ViewCommands {
                     zoom::fit_rect(view, bounds, size, pixels_per_point, LAYERS_MARGIN);
                 }
             }
-            ViewCommands::RotateClockwise => view.rotation = normalized_angle(view.rotation + ROTATE_STEP_DEG),
-            ViewCommands::RotateCounterclockwise => view.rotation = normalized_angle(view.rotation - ROTATE_STEP_DEG),
+            ViewCommands::RotateClockwise => view.rotation = normalized_angle(view.rotation + ViewTurn::screen_delta(ROTATE_STEP_DEG, view.flip_x)),
+            ViewCommands::RotateCounterclockwise => {
+                view.rotation = normalized_angle(view.rotation + ViewTurn::screen_delta(-ROTATE_STEP_DEG, view.flip_x));
+            }
             ViewCommands::ResetRotation => view.rotation = 0.0,
         }
         *view != before

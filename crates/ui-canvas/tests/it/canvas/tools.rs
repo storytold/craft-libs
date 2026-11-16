@@ -272,6 +272,28 @@ fn a_hand_pan_reports_its_document_distance_and_its_scroll_all_choice() {
     rig.release(c + egui::vec2(240.0, 0.0), FRAME);
 }
 
+/// Rotate View Clockwise turns the image clockwise on screen (screen y points down, so the angle grows), and
+/// Counterclockwise the other way, in a mirrored view as in a plain one (#4931).
+#[trial]
+fn the_rotate_commands_step_fifteen_degrees_on_screen_in_a_flipped_view_too() {
+    let room = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+    let probe = Point::new(700.0, 480.0);
+    let angle = |view: &CanvasView| {
+        let v = view.to_screen(probe) - view.rect.center();
+        f64::from(v.y).atan2(f64::from(v.x)).to_degrees()
+    };
+    let target = ViewTarget::from(DOCUMENT);
+    for flip_x in [false, true] {
+        for (command, screen_turn) in [(ViewCommands::RotateClockwise, 15.0), (ViewCommands::RotateCounterclockwise, -15.0)] {
+            let before = turned(room, 20.0, flip_x);
+            let mut view = before;
+            assert!(command.apply(&mut view, &target, 1.0), "{command:?} turns the view");
+            let turned_by = (angle(&view) - angle(&before) + 540.0).rem_euclid(360.0) - 180.0;
+            assert!((turned_by - screen_turn).abs() < 0.01, "flip {flip_x}: {command:?} turns the image {screen_turn} degrees on screen, got {turned_by}");
+        }
+    }
+}
+
 #[trial]
 fn a_rotate_view_drag_follows_the_pointer_in_a_flipped_view_and_shift_steps_fifteen_degrees() {
     let probe = Point::new(700.0, 480.0);

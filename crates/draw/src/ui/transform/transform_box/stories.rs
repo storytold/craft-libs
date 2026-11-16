@@ -1,6 +1,7 @@
-//! Stories of the transform box: Free Transform with its reference point, the Move tool's controls and Distort.
+//! Stories of the transform box: Free Transform with its reference point, the Move tool's controls, Distort, the
+//! Ellipse tool's centre mark and the Line tool's live-line controls.
 
-use super::{BOX, RotateZone, TransformBox};
+use super::{BOX, LineLook, RotateZone, TransformBox};
 use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, TransformMode};
 use craft_behavior::kurbo::{Point, Rect as DocRect};
 use craft_ui::canvas::Canvas;
@@ -63,4 +64,19 @@ fn text_frame(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(TransformBox<'static>, covers = [Default])]
 fn text_frame_overflow(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     on_canvas(ui, data, |state| TransformBox::text_frame("Text frame", state, PICTURE).overflow(true))
+}
+
+/// The Move tool's controls with the Ellipse tool's centre mark at the middle of the box.
+#[story(TransformBox<'static>, covers = [Default])]
+fn ellipse_centre_mark(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    on_canvas(ui, data, |state| free_box(state).rotate_zone(RotateZone::Band).inside_moves(false).reference_point(false).centre_mark(true))
+}
+
+/// The Line tool's controls on a live line across the box: a square at each end and the round widget at its middle,
+/// no frame. Each end drags as the corner it points to.
+#[story(TransformBox<'static>, covers = [Default], drive = Drive::Drag(Grip::part(BOX.at(BoxPart::Corner(1).index())).toward(vec2(1.0, -1.0))))]
+fn live_line(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let quad = data.value("box", BoxState::from_rect(PICTURE)).quad;
+    let line = LineLook::new(quad[3], quad[1]);
+    on_canvas(ui, data, move |state| free_box(state).rotate_zone(RotateZone::Band).inside_moves(false).reference_point(false).line(line))
 }

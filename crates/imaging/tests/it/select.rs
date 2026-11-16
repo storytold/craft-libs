@@ -578,7 +578,56 @@ fn lasso_alt_clicks_make_straight_segments_that_retract_and_close() {
 
 // A plain press inside the selection drags the outline instead of drawing.
 
-// A press and release that draw fewer than 3 points (a click, or a two-point drag) deselect.
+// A click outside the selection deselects only when its operation is New: a Shift, Alt or Shift+Alt click, or a plain
+// click with Add on the bar, keeps the selection (#13612). A drag from the same point still selects.
+#[trial]
+fn a_lasso_click_deselects_only_in_new_mode() {
+    let selected = Rect::new(20.0, 20.0, 100.0, 100.0);
+    let shift_alt = Mods { shift: true, alt: true, ..NONE };
+    for (mods, deselects) in [(NONE, true), (Mods::SHIFT, false), (Mods::ALT, false), (shift_alt, false)] {
+        let mut clicked = rig("Lasso", LassoTool::new(), Fake::selected(selected));
+        click(&mut clicked, (200.0, 150.0), mods);
+        let expected = if deselects { vec![SelectEvent::Deselect] } else { Vec::new() };
+        assert_eq!(clicked.tool_mut().events(), expected, "a click with {mods:?}");
+    }
+
+    let mut adding = rig("Lasso", LassoTool::new(), Fake::selected(selected));
+    adding.tool_mut().tool().operation(SelectionOperation::Add);
+    click(&mut adding, (200.0, 150.0), NONE);
+    assert!(adding.tool_mut().events().is_empty(), "a plain click with Add on the bar keeps the selection");
+
+    let mut drawing = rig("Lasso", LassoTool::new(), Fake::selected(selected));
+    down(&mut drawing, (200.0, 150.0), NONE);
+    for point in [(260.0, 150.0), (260.0, 200.0), (230.0, 220.0)] {
+        drag_to(&mut drawing, point, NONE);
+    }
+    up(&mut drawing, (200.0, 200.0), NONE);
+    assert!(
+        matches!(drawing.tool_mut().events().as_slice(), [SelectEvent::Commit { operation: SelectionOperation::New, .. }]),
+        "a drag from outside the selection still selects"
+    );
+}
+
+// The outline keeps the operation its first press latched: Alt at the press over a selection subtracts, and letting go
+// of Alt during the drag changes neither the operation the tool reports nor the commit's. No outline, no operation.
+#[trial]
+fn the_lasso_reports_the_operation_its_outline_latched() {
+    let mut rig = rig("Lasso", LassoTool::new(), Fake::selected(Rect::new(20.0, 20.0, 100.0, 100.0)));
+    assert_eq!(rig.tool_mut().tool().outline_operation(), None);
+    down(&mut rig, (200.0, 150.0), Mods::ALT);
+    drag_to(&mut rig, (260.0, 150.0), Mods::ALT);
+    assert_eq!(rig.tool_mut().tool().outline_operation(), Some(SelectionOperation::Subtract));
+    for point in [(260.0, 200.0), (230.0, 220.0)] {
+        drag_to(&mut rig, point, NONE);
+    }
+    assert_eq!(rig.tool_mut().tool().outline_operation(), Some(SelectionOperation::Subtract), "Alt let go keeps the latched operation");
+    up(&mut rig, (200.0, 200.0), NONE);
+    assert!(
+        matches!(rig.tool_mut().events().as_slice(), [SelectEvent::Commit { operation: SelectionOperation::Subtract, .. }]),
+        "the commit subtracts"
+    );
+    assert_eq!(rig.tool_mut().tool().outline_operation(), None, "the closed outline has no operation");
+}
 
 // ---- the Polygonal Lasso ----
 

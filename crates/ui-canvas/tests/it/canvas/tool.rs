@@ -7,7 +7,7 @@ use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, Gesture
 use craft_keymap::Mods;
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, MomentaryTool,
-    NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer,
+    NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer, canvas_space,
 };
 use craft_ui::contract::{Bind, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
@@ -1204,5 +1204,55 @@ fn a_focused_canvas_leaves_the_cancel_no_tool_took_to_the_window() {
         fixture.frame(vec![key_press(Key::Escape, Modifiers::NONE)]).settle();
         let want = if takes { 0 } else { 1 };
         assert_eq!(cancels.get(), want, "the window sees the Escape only when the tool leaves it (tool takes it: {takes})");
+    }
+}
+
+/// A tool that records whether its context shows the precise cursor, in each pass.
+struct PreciseProbe(Rc<Cell<Option<bool>>>);
+
+impl CanvasTool for PreciseProbe {
+    fn each_pass(&mut self, cx: &mut ToolContext<'_>) {
+        self.0.set(Some(cx.precise()));
+    }
+
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Ignored
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("no command")
+    }
+}
+
+/// The precise cursor has one source, the canvas: its Precise preference, toggled by Caps Lock, reaches the tool and the
+/// body's controls alike.
+#[trial]
+fn the_tool_and_the_canvas_controls_read_one_precise_cursor_from_the_canvas() {
+    for preference in [false, true] {
+        let (tool, body) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(None)));
+        let (tool_seen, body_seen) = (Rc::clone(&tool), Rc::clone(&body));
+        let mut fixture = Fixture::new(move |ui| {
+            let view = CanvasView::new(ui.available_rect_before_wrap(), Point::new(600.0, 450.0), 1.0);
+            let canvas = Canvas::new("Document").document(DOCUMENT).view(view).precise_cursors(preference).show(ui, |_, cx| {
+                body_seen.set(canvas_space(&cx.env).map(|space| space.precise()));
+            });
+            let _ = ToolHost::new().run(ui, &canvas.output, &mut PreciseProbe(Rc::clone(&tool_seen)));
+        });
+        let ctx = fixture.ctx().clone();
+        for caps_lock in [false, true] {
+            WindowHost::of(&ctx).set_caps_lock(Some(caps_lock));
+            fixture.frame(Vec::new());
+            let precise = preference != caps_lock;
+            assert_eq!(tool.get(), Some(precise), "the tool: Precise {preference}, Caps Lock {caps_lock}");
+            assert_eq!(body.get(), Some(precise), "the controls: Precise {preference}, Caps Lock {caps_lock}");
+        }
     }
 }

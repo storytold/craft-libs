@@ -387,7 +387,6 @@ pub struct ToolHost<'m> {
     command_stand_in: Option<&'m mut (dyn CanvasTool + 'm)>,
     alt_stand_in: Option<&'m mut (dyn CanvasTool + 'm)>,
     smart_guide_color: Option<DataColor>,
-    precise_cursors: bool,
 }
 
 impl<'m> ToolHost<'m> {
@@ -433,17 +432,10 @@ impl<'m> ToolHost<'m> {
         self
     }
 
-    /// Preferences > Cursors > Other Cursors (Precise); reaches [`ToolContext::precise`].
-    #[must_use]
-    pub fn precise_cursors(mut self, on: bool) -> Self {
-        self.precise_cursors = on;
-        self
-    }
-
     /// Delivers the pass's pointer and key events to `tool`, paints it over the canvas, and paints the readout it
     /// asked for beside the pointer.
     pub fn run(self, ui: &Ui, canvas: &CanvasOutput, tool: &mut dyn CanvasTool) -> ToolHostResponse {
-        let ToolHost { disabled, mut momentary, mut command_stand_in, mut alt_stand_in, smart_guide_color, precise_cursors } = self;
+        let ToolHost { disabled, mut momentary, mut command_stand_in, mut alt_stand_in, smart_guide_color } = self;
         let ctx = ui.ctx().clone();
         let env = Env::of(ui);
         let key = state_id(canvas.response.id);
@@ -512,7 +504,6 @@ impl<'m> ToolHost<'m> {
             lent: None,
             stand_ins: momentary_tool.is_none(),
             momentary: momentary_tool,
-            precise: precise_cursors,
             space,
             slop: input.slop,
             down: &down,
@@ -593,7 +584,6 @@ impl<'m> ToolHost<'m> {
                 .slop(input.slop)
                 .down(&down)
                 .caps_lock(caps)
-                .precise_cursors(precise_cursors)
                 .gesture(state.gesture.map(|active| active.id))
                 .env(&env);
             match canvas.snap.as_ref() {
@@ -910,8 +900,6 @@ struct Run<'a, 't> {
     stand_ins: bool,
     /// The momentary tool in effect in the pass.
     momentary: Option<MomentaryTool>,
-    /// Preferences > Cursors > Other Cursors is Precise.
-    precise: bool,
 }
 
 impl<'a, 't: 'a> Run<'a, 't> {
@@ -923,7 +911,6 @@ impl<'a, 't: 'a> Run<'a, 't> {
             .slop(self.slop)
             .down(self.down)
             .caps_lock(self.caps)
-            .precise_cursors(self.precise)
             .gesture(self.state.gesture.map(|active| active.id).or(self.ending));
         let cx = cx.env(self.env);
         match self.snap {
