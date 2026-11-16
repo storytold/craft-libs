@@ -334,7 +334,13 @@ impl<T: EdgeTracer> MagneticLassoTool<T> {
 
     /// The outline in progress, `None` while none is open.
     pub fn outline(&self) -> Option<MagneticOutlineView<'_>> {
-        self.outline.as_ref().map(|o| MagneticOutlineView { path: &o.path, anchors: &o.anchors, live: &o.live, operation: o.operation, freehand: o.freehand })
+        self.outline.as_ref().map(|o| MagneticOutlineView {
+            path: &o.path,
+            anchors: &o.anchors,
+            live: &o.live,
+            operation: o.operation,
+            freehand: o.freehand,
+        })
     }
 
     /// An outline with the operation New is open: the app hides the selection's ants.

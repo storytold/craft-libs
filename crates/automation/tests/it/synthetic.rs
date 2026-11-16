@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use craft_automation::synthetic::{At, MAX_CLICKS, NOT_FINITE, MAX_SCREEN_POINT, NO_DOCUMENT, input_method};
+use craft_automation::synthetic::{At, MAX_CLICKS, MAX_SCREEN_POINT, NO_DOCUMENT, NOT_FINITE, input_method};
 use craft_ui::contract::{Bind, Show as _};
 use craft_ui::runtime::egui::injected::hook_without_pass;
 use craft_ui::runtime::windows::WindowHost;

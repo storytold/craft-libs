@@ -30,7 +30,6 @@ craft_ui::words! {
     }
 }
 
-
 /// The label of an axis: its name when the font gives one, else the registered tag's
 /// (`Weight`, `Width`, `Slant`, `Italic`), else the tag itself.
 pub fn axis_label(axis: &FontAxis) -> String {

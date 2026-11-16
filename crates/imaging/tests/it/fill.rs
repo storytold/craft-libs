@@ -16,7 +16,7 @@ use craft_imaging::ui::fill::{
 use craft_imaging::ui::select_mask::EditMode;
 use craft_imaging::ui::wide_angle::PreviewDone;
 use craft_ui::canvas::{PixelRect, RasterSource};
-use craft_ui::dialog::{DialogHost, FullWindowWorkspace as _, DialogResult, HostedWorkspace};
+use craft_ui::dialog::{DialogHost, DialogResult, FullWindowWorkspace as _, HostedWorkspace};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::memory::{SaveKey, saved_value};

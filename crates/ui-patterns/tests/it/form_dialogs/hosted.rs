@@ -177,11 +177,16 @@ fn new_document_lists_its_clipboard_size_at_once_and_keeps_a_set_made_before_the
     let mut fixture = fixture(&host);
     let ctx = fixture.ctx().clone();
     let clipboard = PixelSize::new(640, 480);
-    let dialog = HostedNewDocument::new(&ctx, DocumentOptions::default(), move |options| NewDocumentDialog::new(Bind::bound(options)).clipboard(clipboard));
+    let dialog =
+        HostedNewDocument::new(&ctx, DocumentOptions::default(), move |options| NewDocumentDialog::new(Bind::bound(options)).clipboard(clipboard));
     let id = host.borrow_mut().open(dialog);
     let fields = |host: &Rc<RefCell<DialogHost>>| host.borrow().open_dialogs().into_iter().find(|open| open.id == id).and_then(|open| open.fields);
     let opened = fields(&host).expect("the dialog lists its settings");
-    assert_eq!((opened["size"]["width"].as_u64(), opened["size"]["height"].as_u64()), (Some(640), Some(480)), "the clipboard's size, before the first pass");
+    assert_eq!(
+        (opened["size"]["width"].as_u64(), opened["size"]["height"].as_u64()),
+        (Some(640), Some(480)),
+        "the clipboard's size, before the first pass"
+    );
     assert!(opened["name"].as_str().is_some_and(|name| !name.is_empty()), "the default name, before the first pass");
     assert_eq!(host.borrow_mut().set_json_field(&ctx, id, "size", json!({"width": 800, "height": 600})), Ok(()));
     fixture.idle(10);
