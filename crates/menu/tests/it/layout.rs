@@ -69,7 +69,8 @@ fn clashes_are_resolved_in_the_apps_favour() {
 /// menus on ⌘H moves Hide to ⌃⌘H and is the clash's command, and one on ⌘, takes it from Settings.
 #[trial]
 fn the_keymaps_holder_takes_the_system_keys() {
-    let keys = |sc: &craft_menu::Chord| [("Cmd+H", "tools.fill"), ("Cmd+,", "tools.erase")].iter().find(|(k, _)| chord(k) == *sc).map(|(_, id)| cmd(id));
+    let keys =
+        |sc: &craft_menu::Chord| [("Cmd+H", "tools.fill"), ("Cmd+,", "tools.erase")].iter().find(|(k, _)| chord(k) == *sc).map(|(_, id)| cmd(id));
     let l = mac_layout(&sample(false, true), &LayoutOptions::new("Sample").keys(&keys));
     let clash = |sc: &str| l.clashes.iter().find(|c| c.shortcut == chord(sc)).map(|c| c.command.id.as_str());
     assert_eq!(clash("Cmd+H"), Some("tools.fill"));
