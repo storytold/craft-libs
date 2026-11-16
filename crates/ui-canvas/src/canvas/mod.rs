@@ -104,6 +104,7 @@ use crate::contract::{
 use crate::runtime::commands::{CommandSet as _, CommandState, Commands as _};
 use crate::runtime::env::Label;
 use crate::runtime::focus::KeyUse;
+use crate::runtime::lock_keys;
 use crate::runtime::motion::{Animate as _, spec};
 use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::geometry::crop::normalized_angle;
@@ -185,6 +186,10 @@ pub struct Canvas<'a> {
     /// The pasteboard colour, set once here; the pasteboard and the crop shield read it from the space.
     #[prop]
     pasteboard: PasteboardColor,
+    /// Preferences > Cursors > Other Cursors is Precise. Caps Lock toggles it; the result is published in the
+    /// [`CanvasSpace`] ([`CanvasSpace::precise`]), where the tool and the body's controls read it.
+    #[prop]
+    precise_cursors: bool,
     /// The view of this pass, after the canvas folded in its input.
     settled: Option<Settled>,
     /// The Menu key or Shift+F10 reached the focused canvas this pass.
@@ -229,6 +234,7 @@ impl<'a> Canvas<'a> {
             show_rulers: false,
             keys_to_body: false,
             pasteboard: PasteboardColor::Default,
+            precise_cursors: false,
             rulers: None,
             snap: None,
             settled: None,
@@ -425,7 +431,8 @@ impl<'a> Canvas<'a> {
         self
     }
 
-    fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress) -> Option<CanvasSpace> {
+    /// The space the body and the tool see in this pass; `caps_lock` is whether Caps Lock is on in it.
+    fn space(&self, id: egui::Id, pixels_per_point: f32, background: BackgroundPress, caps_lock: bool) -> Option<CanvasSpace> {
         let (shown, target, easing, keys) = match self.settled {
             Some(settled) => (settled.shown, settled.target, settled.easing, settled.keys),
             None => (self.given?, self.given?, false, BodyKeys::default()),
@@ -441,6 +448,7 @@ impl<'a> Canvas<'a> {
             .with_rulers(self.rulers)
             .with_pasteboard(self.pasteboard)
             .with_background(background)
+            .with_precise(self.precise_cursors != caps_lock)
             .with_canvas(id);
         Some(match self.picture {
             Some(slot) => space.with_picture(slot),
@@ -572,7 +580,8 @@ impl Component for Canvas<'_> {
 
     /// The canvas's [`CanvasSpace`] for its body; a canvas without a view hides an outer canvas's.
     fn content_env(&self, cx: &Cx<'_, Self>, values: &mut crate::runtime::env::AppValues) {
-        space::publish(values, self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&Self::background_press(cx).0, self.context_key)));
+        let background = BackgroundPress::of(&Self::background_press(cx).0, self.context_key);
+        space::publish(values, self.space(cx.response.id, cx.env.scale().0, background, lock_keys::caps_lock(&cx.response.ctx)));
         snap::publish(values, self.snapped(cx.env.shell().os));
     }
 
@@ -588,7 +597,8 @@ impl Component for Canvas<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
         let press = Self::background_press(&cx).0;
-        let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key));
+        let caps_lock = lock_keys::caps_lock(&cx.response.ctx);
+        let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock);
         let view = self.settled.map(|settled| settled.target).filter(|target| Some(*target) != self.given);
         let document = self.document_size();
         let snap = self.snapped(cx.env.shell().os);

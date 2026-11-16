@@ -241,7 +241,6 @@ pub struct ToolContext<'a> {
     /// Whether Caps Lock is on now (a brush shows its precise cursor): the platform's toggle state, read once per
     /// pass, not a count of key presses.
     pub caps_lock: bool,
-    precise_cursors: bool,
     space: Option<CanvasSpace>,
     gesture: Option<GestureId>,
     down: &'a [Key],
@@ -274,7 +273,6 @@ impl<'a> ToolContext<'a> {
             gesture: None,
             down: &[],
             caps_lock: false,
-            precise_cursors: false,
             painter: None,
             style: None,
             env: None,
@@ -326,16 +324,9 @@ impl<'a> ToolContext<'a> {
         self
     }
 
-    /// Whether Preferences > Cursors > Other Cursors is Precise.
-    #[must_use]
-    pub fn precise_cursors(mut self, on: bool) -> Self {
-        self.precise_cursors = on;
-        self
-    }
-
-    /// Whether the tool shows its precise cursor now: `precise_cursors` differs from Caps Lock.
+    /// Whether the tool shows its precise cursor now: the canvas's [`CanvasSpace::precise`]; never without a space.
     pub fn precise(&self) -> bool {
-        self.precise_cursors != self.caps_lock
+        self.space.is_some_and(|space| space.precise())
     }
 
     /// The press arena's slop.

@@ -35,6 +35,7 @@ pub struct CanvasSpace {
     /// The canvas's id, under which its controls claim keys on the focused canvas.
     canvas: Option<egui::Id>,
     pasteboard: PasteboardColor,
+    precise: bool,
     /// The canvas's picture slot for this pass, which [`paint_picture`](Self::paint_picture) appends to; `None` in a
     /// measuring pass.
     picture: Option<PictureSlot>,
@@ -65,6 +66,7 @@ impl CanvasSpace {
             background: BackgroundPress::default(),
             canvas: None,
             pasteboard: PasteboardColor::Default,
+            precise: false,
             picture: None,
         }
     }
@@ -95,6 +97,20 @@ impl CanvasSpace {
 
     fn on_screen(&self, view: CanvasView) -> CanvasView {
         if self.follows_pointer { view } else { pixel_aligned(view, self.pixels_per_point) }
+    }
+
+    /// This space with the precise cursor on or off for this pass ([`precise`](Self::precise)).
+    #[must_use]
+    pub fn with_precise(mut self, precise: bool) -> Self {
+        self.precise = precise;
+        self
+    }
+
+    /// Whether pointers over the canvas show their precise cursor (a crosshair) in this pass: Preferences > Cursors >
+    /// Other Cursors is Precise ([`Canvas::precise_cursors`](super::Canvas::precise_cursors)), toggled by Caps Lock.
+    /// The one source for the canvas's tool (`ToolContext::precise`) and its controls.
+    pub fn precise(&self) -> bool {
+        self.precise
     }
 
     /// This space with the keys the canvas left to its body in the pass.
