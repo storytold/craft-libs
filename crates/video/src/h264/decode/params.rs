@@ -534,9 +534,6 @@ impl Sps {
         if u64::from(self.width()).saturating_mul(u64::from(self.height())) > max_luma_samples {
             return unsupported("picture dimensions exceed the decoder memory limit");
         }
-        if !self.frame_mbs_only {
-            return unsupported("interlaced (field / MBAFF) coding");
-        }
         if self.chroma_array_type() != 1 {
             return unsupported(format!("chroma_format_idc {} (only 4:2:0 is implemented)", self.chroma_format_idc));
         }

@@ -404,8 +404,14 @@ impl Decoder {
         if pps.num_slice_groups > 1 {
             return unsupported("slice groups (FMO)");
         }
+        // An interlaced SPS (frame_mbs_only_flag 0) is accepted; its frame pictures without
+        // macroblock-adaptive frame/field coding decode like progressive ones (7.4.3: MbaffFrameFlag
+        // is 0, every macroblock is a frame macroblock).
         if sh.field_pic {
-            return unsupported("field pictures");
+            return unsupported("interlaced field pictures (PAFF)");
+        }
+        if sps.mb_adaptive_frame_field {
+            return unsupported("interlaced MBAFF frames (mb_adaptive_frame_field_flag)");
         }
         if matches!(sh.slice_type, SliceType::Sp | SliceType::Si) {
             return unsupported("SP/SI slices");
