@@ -202,6 +202,7 @@ fn png_opens_upright_for_every_orientation() {
         let file = png_with_exif(&png, &exif(u32::from(o), o % 2 == 0, false));
         let img = decode(&file).unwrap();
         assert_eq!(img.dimensions(), (w as u32, h as u32), "o={o}");
+        assert_eq!(probe_size(&file).unwrap(), img.dimensions(), "the header probe turns upright too, o={o}");
         assert_eq!(img.data(), &up[..], "o={o}");
         assert_eq!(exif_orientation(img.meta.exif.as_deref().unwrap()), 1, "o={o}: metadata says upright");
         // Decoded in steps and finished by `finish_png_decode`, it is the same image.
@@ -309,8 +310,10 @@ fn tiff_opens_upright_for_every_orientation() {
     let up = exact_scene(w, h);
     for o in 1..=8u16 {
         let (s, sw, sh) = stored(&up, w, h, o);
-        let img = decode(&tiff_with_orientation(&s, sw as u32, sh as u32, o)).unwrap();
+        let file = tiff_with_orientation(&s, sw as u32, sh as u32, o);
+        let img = decode(&file).unwrap();
         assert_eq!(img.dimensions(), (w as u32, h as u32), "o={o}");
+        assert_eq!(probe_size(&file).unwrap(), img.dimensions(), "the header probe turns upright too, o={o}");
         assert_eq!(img.data(), &up[..], "o={o}");
     }
 }
@@ -358,6 +361,7 @@ fn jpeg_opens_upright_for_every_orientation() {
         let file = jpeg_with_exif(&jpeg, &exif(u32::from(o), o > 4, o == 7));
         let img = decode(&file).unwrap();
         assert_blocks(&img, &up, w, h, &format!("o={o}"));
+        assert_eq!(probe_size(&file).unwrap(), img.dimensions(), "the header probe turns upright too, o={o}");
         assert_eq!(exif_orientation(img.meta.exif.as_deref().unwrap()), 1);
     }
 }
@@ -659,7 +663,19 @@ fn long_orientation_reads_and_rewrites_in_both_byte_orders() {
 #[test]
 fn probe_size_matches_decode() {
     let img = synth(7, 5, ChannelLayout::Rgb, SampleType::U8, 3, 0.0);
-    let probed = [Format::WebP, Format::Gif, Format::Bmp, Format::Tga, Format::Qoi, Format::Hdr, Format::Ico, Format::OpenExr];
+    let probed = [
+        Format::Png,
+        Format::Jpeg,
+        Format::Tiff,
+        Format::WebP,
+        Format::Gif,
+        Format::Bmp,
+        Format::Tga,
+        Format::Qoi,
+        Format::Hdr,
+        Format::Ico,
+        Format::OpenExr,
+    ];
     assert!(probed.iter().all(|f| rw_formats().contains(f)));
     for format in rw_formats() {
         let bytes = encode(&img, format, &EncodeOptions::default()).unwrap();

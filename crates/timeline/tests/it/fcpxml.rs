@@ -630,3 +630,16 @@ fn optional_report_limit_bounds_distinct_fcpxml_diagnostics() {
     assert!(craft_timeline::fcpxml::import(&doc, &opts, &mut ordinary).is_ok());
     assert_eq!(ordinary.entries.len(), 10);
 }
+
+#[test]
+fn optional_report_limit_bounds_fcpxml_export_diagnostics_without_changing_output() {
+    let (p, s) = project();
+    let mut ordinary = Report::default();
+    let text = craft_timeline::fcpxml::export(&p, s, &xopts(), &mut ordinary).unwrap();
+    let mut limited = Report::default();
+    let bounded = craft_timeline::fcpxml::export_with_report_limit(&p, s, &xopts(), &mut limited, Some(0)).unwrap();
+    assert_eq!(bounded, text);
+    let total = |r: &Report| r.entries.iter().map(|e| e.count).sum::<u32>();
+    assert_eq!(total(&limited), total(&ordinary));
+    assert!(limited.entries.iter().all(|e| e.message == "further diagnostics omitted"), "{limited}");
+}
