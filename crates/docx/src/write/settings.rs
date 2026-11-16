@@ -50,6 +50,10 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     if s.mirror_margins {
         w.empty("w:mirrorMargins", &[]);
     }
+    // CT_Settings order: after `w:mirrorMargins`, before `w:attachedTemplate`.
+    if s.gutter_at_top {
+        w.empty("w:gutterAtTop", &[]);
+    }
     if let Some(id) = template_rel {
         w.empty("w:attachedTemplate", &[("r:id", id)]);
     }
