@@ -134,6 +134,26 @@ fn test_invalid_and_corrupt_inputs() {
     let bad_crc_frame = vec![SYNCWORD_SBC, 0xBD, 32, 0x55, 0x00, 0x00, 0x00, 0x00];
     assert!(decoder.decode_frame(&bad_crc_frame, &mut dst).is_err());
 
+    // Bitpool capacity exceeded (Mono 4 subbands capacity is 64; 65 must fail)
+    let bad_bitpool_frame = vec![SYNCWORD_SBC, 0x00, 65, 0x00];
+    assert!(decoder.decode_frame(&bad_bitpool_frame, &mut dst).is_err());
+    assert!(Encoder::new(16000, 1, 4, 4, 65, AllocationMethod::Loudness).is_err());
+
+    // Unsupported 15-block configuration (only 16kHz mono 8-subband 26-bitpool is valid mSBC)
+    assert!(Encoder::new(44100, 2, 15, 8, 32, AllocationMethod::Loudness).is_err());
+
+    // Incomplete PCM frames rejected by encoder
+    let mut enc = Encoder::new(44100, 2, 16, 8, 32, AllocationMethod::Loudness).expect("enc");
+    let mut out = Vec::new();
+    assert!(enc.encode(&[0i16; 100], &mut out).is_err());
+
+    // Valid mSBC encoding produces exact 57-byte mSBC frame
+    let mut msbc_enc = Encoder::new(16000, 1, 15, 8, 26, AllocationMethod::Loudness).expect("msbc enc");
+    let mut msbc_out = Vec::new();
+    msbc_enc.encode(&vec![0i16; 120], &mut msbc_out).expect("encode msbc frame");
+    assert_eq!(msbc_out.len(), 57);
+    assert_eq!(msbc_out[0], SYNCWORD_MSBC);
+
     // Hostile fuzzed input should never panic
     let mut seed = 0x1234_5678u32;
     for len in [10, 50, 100, 500] {
@@ -251,4 +271,28 @@ fn test_oracle_ffmpeg_cross_verification() {
 
     let corr = pearson_correlation(&decoded, &ff_msbc_pcm, 0);
     assert!(corr > 0.99, "mSBC decoded output correlation against FFmpeg decoder too low: {corr}");
+
+    // 4. FFmpeg decodes our encoded mSBC file
+    let msbc_sine = generate_sine(16000, 1, 120 * 20);
+    let mut our_msbc_enc = Encoder::new(16000, 1, 15, 8, 26, AllocationMethod::Loudness).expect("msbc enc");
+    let mut our_msbc_bytes = Vec::new();
+    our_msbc_enc.encode(&msbc_sine, &mut our_msbc_bytes).expect("encode msbc");
+
+    let our_msbc_file = dir.join("ours_msbc.sbc");
+    std::fs::write(&our_msbc_file, &our_msbc_bytes).expect("write our msbc fixture");
+
+    let our_msbc_out = Command::new(&ffmpeg)
+        .args(["-v", "error", "-y", "-i"])
+        .arg(&our_msbc_file)
+        .args(["-f", "s16le", "-acodec", "pcm_s16le", "-"])
+        .output()
+        .expect("ffmpeg decode our msbc");
+
+    assert!(our_msbc_out.status.success(), "ffmpeg failed to decode our mSBC: {}", String::from_utf8_lossy(&our_msbc_out.stderr));
+
+    let our_msbc_theirs: Vec<i16> = our_msbc_out.stdout.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect();
+
+    assert!(!our_msbc_theirs.is_empty());
+    let corr_msbc = pearson_correlation(&msbc_sine, &our_msbc_theirs, 73);
+    assert!(corr_msbc > 0.95, "FFmpeg decoded output correlation against our mSBC input too low: {corr_msbc}");
 }

@@ -936,6 +936,14 @@ impl Header {
         let bitpool = src[2];
         let crc_check = src[3];
 
+        let max_bitpool = match channel_mode {
+            ChannelMode::Mono | ChannelMode::DualChannel => 16 * subbands.count(),
+            ChannelMode::Stereo | ChannelMode::JointStereo => 32 * subbands.count(),
+        };
+        if bitpool == 0 || (bitpool as usize) > max_bitpool {
+            return Err(Error::InvalidBitpool(bitpool));
+        }
+
         let mut join = [false; 8];
         if channel_mode == ChannelMode::JointStereo && src.len() >= 5 {
             let join_byte = src[4];
@@ -1054,6 +1062,9 @@ pub enum Error {
     /// Unsupported subbands count.
     #[error("unsupported subband count: {0} (must be 4 or 8)")]
     InvalidSubbands(usize),
+    /// Invalid bitpool value.
+    #[error("invalid bitpool value: {0}")]
+    InvalidBitpool(u8),
     /// Input exceeds safe maximum processing limit.
     #[error("input exceeds safe maximum processing limit")]
     InputTooLarge,
@@ -1246,7 +1257,7 @@ fn compute_bit_allocation(
                         slicecount = slicecount.saturating_add(2);
                     }
                 }
-                if bitcount.saturating_add(slicecount) >= bitpool {
+                if bitcount.saturating_add(slicecount) >= bitpool || bitslice <= -32 {
                     break;
                 }
             }
@@ -1337,7 +1348,7 @@ fn compute_bit_allocation(
                     }
                 }
             }
-            if bitcount.saturating_add(slicecount) >= bitpool {
+            if bitcount.saturating_add(slicecount) >= bitpool || bitslice <= -32 {
                 break;
             }
         }
@@ -1691,6 +1702,20 @@ impl Encoder {
         let subband_cnt = Subbands::from_count(subbands)?;
         let channel_mode = if channels == 1 { ChannelMode::Mono } else { ChannelMode::JointStereo };
 
+        let max_bitpool = match channel_mode {
+            ChannelMode::Mono | ChannelMode::DualChannel => 16 * subband_cnt.count(),
+            ChannelMode::Stereo | ChannelMode::JointStereo => 32 * subband_cnt.count(),
+        };
+        if bitpool == 0 || (bitpool as usize) > max_bitpool {
+            return Err(Error::InvalidBitpool(bitpool));
+        }
+
+        if block_cnt == BlockCount::Blocks15
+            && (sample_rate != 16_000 || channels != 1 || subbands != 8 || bitpool != 26 || allocation_method != AllocationMethod::Loudness)
+        {
+            return Err(Error::InvalidBlockCount(15));
+        }
+
         Ok(Self {
             sample_rate: freq.as_hz(),
             channels,
@@ -1846,30 +1871,35 @@ impl Encoder {
         }
 
         // Frame header bytes
-        let b1 = (freq.code() << 6)
-            | (self.blocks.code() << 4)
-            | (self.channel_mode.code() << 2)
-            | (self.allocation_method.code() << 1)
-            | self.subbands.code();
-        let b2 = self.bitpool;
-
-        let crc = compute_header_crc(b1, b2, self.channel_mode, subbands, self.channels, &join, &scale_factors);
-
-        let flen = Header {
-            syncword: SYNCWORD_SBC,
-            sampling_frequency: freq,
-            blocks: self.blocks,
-            channel_mode: self.channel_mode,
-            allocation_method: self.allocation_method,
-            subbands: self.subbands,
-            bitpool: self.bitpool,
-            crc_check: crc,
-            join,
-        }
-        .frame_length();
+        let is_msbc = self.blocks == BlockCount::Blocks15;
+        let (syncword, b1, b2, crc, flen) = if is_msbc {
+            let crc = compute_header_crc(0x00, 0x00, ChannelMode::Mono, 8, 1, &[false; 8], &scale_factors);
+            (SYNCWORD_MSBC, 0x00, 0x00, crc, 57)
+        } else {
+            let b1 = (freq.code() << 6)
+                | (self.blocks.code() << 4)
+                | (self.channel_mode.code() << 2)
+                | (self.allocation_method.code() << 1)
+                | self.subbands.code();
+            let b2 = self.bitpool;
+            let crc = compute_header_crc(b1, b2, self.channel_mode, subbands, self.channels, &join, &scale_factors);
+            let flen = Header {
+                syncword: SYNCWORD_SBC,
+                sampling_frequency: freq,
+                blocks: self.blocks,
+                channel_mode: self.channel_mode,
+                allocation_method: self.allocation_method,
+                subbands: self.subbands,
+                bitpool: self.bitpool,
+                crc_check: crc,
+                join,
+            }
+            .frame_length();
+            (SYNCWORD_SBC, b1, b2, crc, flen)
+        };
 
         let mut writer = BitWriter::with_capacity(flen)?;
-        writer.write_bits(u32::from(SYNCWORD_SBC), 8)?;
+        writer.write_bits(u32::from(syncword), 8)?;
         writer.write_bits(u32::from(b1), 8)?;
         writer.write_bits(u32::from(b2), 8)?;
         writer.write_bits(u32::from(crc), 8)?;
@@ -1909,6 +1939,9 @@ impl Encoder {
             return Err(Error::InputTooLarge);
         }
         let frame_samples = self.blocks.count() * self.subbands.count() * self.channels;
+        if !pcm.len().is_multiple_of(frame_samples) {
+            return Err(Error::TruncatedFrame { expected: frame_samples, actual: pcm.len() % frame_samples });
+        }
         let mut offset: usize = 0;
         while offset.saturating_add(frame_samples) <= pcm.len() {
             self.encode_frame(&pcm[offset..offset + frame_samples], dst)?;
@@ -1920,6 +1953,9 @@ impl Encoder {
 
 /// Decodes an entire SBC bitstream to 16-bit linear PCM and returns stream info.
 pub fn decode(src: &[u8]) -> Result<(Vec<i16>, StreamInfo), Error> {
+    if src.is_empty() {
+        return Err(Error::TruncatedFrame { expected: 4, actual: 0 });
+    }
     let header = Header::parse(src)?;
     let info = StreamInfo {
         sample_rate: header.sample_rate(),
@@ -1932,7 +1968,18 @@ pub fn decode(src: &[u8]) -> Result<(Vec<i16>, StreamInfo), Error> {
     };
     let mut decoder = Decoder::new();
     let mut dst = Vec::new();
-    decoder.decode(src, &mut dst)?;
+    let mut offset = 0;
+    while offset < src.len() {
+        let frame_hdr = Header::parse(&src[offset..])?;
+        if frame_hdr.sample_rate() != info.sample_rate || frame_hdr.channels() != info.channels || frame_hdr.channel_mode != info.channel_mode {
+            return Err(Error::InvalidSampleRate(frame_hdr.sample_rate()));
+        }
+        let consumed = decoder.decode_frame(&src[offset..], &mut dst)?;
+        if consumed == 0 {
+            break;
+        }
+        offset = offset.saturating_add(consumed);
+    }
     Ok((dst, info))
 }
 
