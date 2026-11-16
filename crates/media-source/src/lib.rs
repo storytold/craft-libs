@@ -115,16 +115,41 @@ pub struct MediaInfo {
 
 /// Reads `audio_streams` from a list, or from the single optional stream older project files wrote.
 fn deserialize_audio_streams<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Vec<AudioStreamInfo>, D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Streams {
-        Many(Vec<AudioStreamInfo>),
-        One(Option<AudioStreamInfo>),
+    struct StreamsVisitor;
+    struct RejectExtra;
+    impl<'de> serde::de::DeserializeSeed<'de> for RejectExtra {
+        type Value = ();
+        fn deserialize<D: serde::Deserializer<'de>>(self, _d: D) -> std::result::Result<(), D::Error> {
+            Err(serde::de::Error::custom("audio stream count exceeds MAX_AUDIO_STREAMS"))
+        }
     }
-    Ok(match Streams::deserialize(d)? {
-        Streams::Many(v) => v,
-        Streams::One(o) => o.into_iter().collect(),
-    })
+    impl<'de> serde::de::Visitor<'de> for StreamsVisitor {
+        type Value = Vec<AudioStreamInfo>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("at most 64 audio streams, a legacy audio object, or null")
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+        fn visit_none<E: serde::de::Error>(self) -> std::result::Result<Self::Value, E> {
+            Ok(Vec::new())
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> std::result::Result<Self::Value, A::Error> {
+            AudioStreamInfo::deserialize(serde::de::value::MapAccessDeserializer::new(map)).map(|stream| vec![stream])
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error> {
+            let mut streams = Vec::new();
+            // Do not reserve from an untrusted size hint or buffer an untagged sequence.
+            while streams.len() < MAX_AUDIO_STREAMS {
+                let Some(stream) = seq.next_element()? else { return Ok(streams) };
+                streams.push(stream);
+            }
+            // Detect an excess entry without deserializing or allocating its contents.
+            seq.next_element_seed(RejectExtra)?;
+            Ok(streams)
+        }
+    }
+    d.deserialize_any(StreamsVisitor)
 }
 
 impl MediaInfo {
@@ -502,6 +527,16 @@ mod tests {
 
     #[test]
     fn audio_streams_serde_accepts_legacy_single_object() {
+        let stream = r#"{"sample_rate":48000,"channels":2,"codec":"pcm","bits_per_sample":null}"#;
+        let prefix = r#"{"name":"a","kind":"Movie","duration":0,"video":null,"audio_streams":["#;
+        let suffix = r#"],"container":"wav","start_timecode":null,"file_size":null}"#;
+        let full = std::iter::repeat_n(stream, MAX_AUDIO_STREAMS).collect::<Vec<_>>().join(",");
+        let info: MediaInfo = serde_json::from_str(&format!("{prefix}{full}{suffix}")).unwrap();
+        assert_eq!(info.audio_streams.len(), MAX_AUDIO_STREAMS);
+        for extra in [stream, r#"{"malformed":"not an audio stream"}"#] {
+            let error = serde_json::from_str::<MediaInfo>(&format!("{prefix}{full},{extra}{suffix}")).unwrap_err();
+            assert!(error.to_string().contains("MAX_AUDIO_STREAMS"), "{error}");
+        }
         let many = r#"{"name":"a","kind":"Movie","duration":0,"video":null,"audio_streams":[{"sample_rate":48000,"channels":2,"codec":"pcm","bits_per_sample":null}],"container":"wav","start_timecode":null,"file_size":null}"#;
         let info: MediaInfo = serde_json::from_str(many).unwrap();
         assert_eq!(info.audio_streams.len(), 1);
