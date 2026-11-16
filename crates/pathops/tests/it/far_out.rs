@@ -150,25 +150,59 @@ fn s_run(x: f64, y: f64) -> BezPath {
 }
 
 /// The sweep checks, in a build with debug assertions, that the order it gives two curves is the one their positions have where it changes
-/// (`intersect_cubics_rec` in `linesweeper`'s `curve/mod.rs`, lines 1301 to 1302 and 1305 to 1306 of 0.5.0), and the check fails for curves that run along one another when they are a few
-/// hundred units across and at about 10 million from the path they outline (a stroke of 20 million across a run of two arcs, 600 across,
-/// at (3,000, 4,000): run 163 of a grid of them; 1 of 700 at 1e7 of distance, 13 at 3e7, 259 at 1e8). The crate refuses what the check fails
-/// in such a build, as `Degenerate`; in a release build the check is not made and the sweep goes on, and what it makes is what the same run
-/// beside it, which the check passes, makes: in 700 runs at each distance from 1e6 to 1e10 areas that differ from one another by no more
-/// than 1e-9 up to 1e8 of distance (4e-9 at 1e9 and 3e-6 at 1e10, the rounding of the areas of figures that large), in under 11 ms each.
+/// (`intersect_cubics_rec` in `linesweeper`'s `curve/mod.rs`, lines 1301 to 1302 and 1305 to 1306 of 0.5.0), and the check can fail for curves that run
+/// along one another when they are a few hundred units across and at about 10 million from the path they outline: a stroke of 20 million across a run of
+/// two arcs, 600 across, at (3,000, 4,000) is run 163 of a grid of them that does on Linux (1 of 700 at 1e7 of distance, 13 at 3e7, 259 at 1e8).
+/// Whether it fails for a run depends on the numbers `sin`, `cos`, `atan2` and `sqrt` give the arcs of it, which the platforms do not round alike (on
+/// Windows it does not fail for this run), so what is held here is the contract and not which of the two a platform gives: a stroke is made, or
+/// (in a build with debug assertions only, where the check is made) refused as `Degenerate`, and never a panic. A release build makes the check's
+/// stroke as it makes the run beside it, which the check passes: in 700 runs at each distance from 1e6 to 1e10 areas that differ from one another by
+/// no more than 1e-9 up to 1e8 of distance (4e-9 at 1e9 and 3e-6 at 1e10, the rounding of the areas of figures that large), in under 11 ms each. Where
+/// both are made, the stroke that the check may fail has the area and the bounds of the one beside it.
 #[test]
-fn a_stroke_that_fails_the_sweeps_debug_check_is_refused_in_a_debug_build_and_made_in_a_release_one() {
+fn a_stroke_that_the_sweeps_debug_check_may_fail_is_refused_or_made_and_never_a_panic() {
     let width = 2.0e7;
     let outline = |run: &BezPath| try_outline_stroke(run, width, Cap::Butt, Join::Miter, 4.0);
-    let beside = outline(&s_run(2.0, 4.0)).expect("the run beside it is outlined");
-    let tripping = outline(&s_run(3.0, 4.0));
-    if cfg!(debug_assertions) {
-        assert_eq!(tripping.map(|_| ()), Err(PathOpsError::Degenerate));
-    } else {
-        let made = tripping.expect("a release build carries on");
-        let (a, b) = (area(&made, NZ), area(&beside, NZ));
+    let (beside, other) = (outline(&s_run(2.0, 4.0)), outline(&s_run(3.0, 4.0)));
+    check_the_contract(cfg!(debug_assertions), &beside, &other);
+}
+
+/// What a stroke that the sweep's debug check may fail is held to, given what the run beside it and the run that may fail it gave, and whether the
+/// check is made (a build with debug assertions): `Ok` or, only where the check is made, `Err(Degenerate)` for each; and where both are `Ok`, the same
+/// area and bounds.
+fn check_the_contract(checked: bool, beside: &Result<BezPath, PathOpsError>, other: &Result<BezPath, PathOpsError>) {
+    for (what, got) in [("the run beside", beside), ("the other run", other)] {
+        if let Err(e) = got {
+            assert!(
+                checked && *e == PathOpsError::Degenerate,
+                "{what}: {e:?}, in a build that {} the check",
+                if checked { "makes" } else { "does not make" }
+            );
+        }
+    }
+    if let (Ok(beside), Ok(made)) = (beside, other) {
+        let (a, b) = (area(made, NZ), area(beside, NZ));
         assert!(a > 1.0e10 && (a - b).abs() <= 1e-8 * b, "{a} against {b}");
         let (m, n) = (made.bounding_box(), beside.bounding_box());
         assert!((m.width() - n.width()).abs() < 1.0 && (m.height() - n.height()).abs() < 1.0, "{m:?} against {n:?}");
     }
+}
+
+/// The contract above, for every pair of results a platform can give (the pairs are made up, as the platforms are not here): in a build that makes
+/// the check, both strokes made (Windows, where the check does not fail the run) or either refused (Linux, where it fails the second); in one that
+/// does not, both made. A refusal in a build that makes no check, a refusal for another reason, and a stroke that is not the one beside it, are not.
+#[test]
+fn the_contract_of_a_stroke_the_check_may_fail_holds_for_what_each_platform_gives() {
+    let square = |side: f64| Ok::<_, PathOpsError>(square_at(0.0, side));
+    let refused = || Err::<BezPath, _>(PathOpsError::Degenerate);
+    let holds = |checked: bool, beside: Result<BezPath, PathOpsError>, other: Result<BezPath, PathOpsError>| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check_the_contract(checked, &beside, &other))).is_ok()
+    };
+    assert!(holds(true, square(1e6), square(1e6)), "a debug build that makes both, as on Windows");
+    assert!(holds(true, square(1e6), refused()), "a debug build that refuses the second, as on Linux");
+    assert!(holds(true, refused(), square(1e6)) && holds(true, refused(), refused()));
+    assert!(holds(false, square(1e6), square(1e6)));
+    assert!(!holds(false, square(1e6), refused()), "a build that makes no check makes the stroke");
+    assert!(!holds(true, square(1e6), Err(PathOpsError::TooComplex)), "another reason to refuse");
+    assert!(!holds(true, square(1e6), square(1.1e6)), "not the stroke beside it");
 }

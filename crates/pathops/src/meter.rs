@@ -1727,19 +1727,52 @@ mod tests {
         }
     }
 
+    /// What `f` gives, or `None` where `linesweeper` fails one of its own checks in it. A build with debug assertions makes checks the sweep does
+    /// not make in a release build (`intersect_cubics_rec` checks that the order it gives two curves is the order their positions have), and
+    /// whether one fails for an input made with `sin`, `cos` or `tan` depends on what the standard library of the platform gives them to the
+    /// last place: a test that sweeps by hand must give way to the check, as the crate's own sweeps do, and may not take for granted that an input
+    /// passes it. Any other panic, and any panic in a release build, goes on.
+    fn unless_refused<T>(f: impl FnOnce() -> T) -> Option<T> {
+        match catch_unwind(AssertUnwindSafe(f)) {
+            Ok(done) => Some(done),
+            Err(payload) => {
+                let message = payload.downcast_ref::<String>().map(String::as_str).or_else(|| payload.downcast_ref::<&str>().copied());
+                if cfg!(debug_assertions) && message.is_some_and(|m| m.starts_with("assertion")) { None } else { std::panic::resume_unwind(payload) }
+            }
+        }
+    }
+
     /// After the last range of each line of a sweep with the pricing of the ranges, every two segments next to one another on it (those that
-    /// stay) are among the pairs charged, or are ones that cost nothing: the count of such pairs, all of them charged.
-    fn every_pair_next_to_one_another_is_charged(name: &str, path: &BezPath) -> usize {
+    /// stay) are among the pairs charged, or are ones that cost nothing: the count of such pairs, all of them charged. `None` where the sweep's
+    /// own check fails for the input ([`unless_refused`]), at any step: the pairs of the lines before it are checked all the same.
+    fn every_pair_next_to_one_another_is_charged(name: &str, path: &BezPath) -> Option<usize> {
         let path = closed(path);
         let eps = eps_for([&path]).expect("finite");
         let segments = segments_of([&path]).expect("segments");
         let mut compared = Comparisons::new(&segments, eps);
-        let mut sweeper = Sweeper::new(&segments, eps);
+        let mut sweeper = unless_refused(|| Sweeper::new(&segments, eps))?;
         let (mut line_bufs, mut range_bufs) = (SweepLineBuffers::default(), SweepLineRangeBuffers::default());
         let (mut ids, mut old) = (Vec::new(), Vec::new());
         let mut checked = 0usize;
-        while let Some(mut line) = sweeper.next_line(&mut line_bufs) {
-            while let Some(range) = line.next_range(&mut range_bufs, &segments) {
+        loop {
+            // Only the calls into `linesweeper` are held to its checks: what this test asserts is asserted outside them.
+            let (sweeper, bufs) = (&mut sweeper, &mut line_bufs);
+            let Some(mut line) = unless_refused(move || {
+                let (sweeper, bufs) = (sweeper, bufs);
+                sweeper.next_line(bufs)
+            })?
+            else {
+                break;
+            };
+            loop {
+                let (line, bufs, all) = (&mut line, &mut range_bufs, &segments);
+                let Some(range) = unless_refused(move || {
+                    let (line, bufs) = (line, bufs);
+                    line.next_range(bufs, all)
+                })?
+                else {
+                    break;
+                };
                 ids.clear();
                 ids.extend(range.segment_range());
                 old.clear();
@@ -1760,12 +1793,17 @@ mod tests {
                 assert!(compared.seen.contains(&(a.min(b), a.max(b))), "{name}: two segments next to one another at {y} are not charged");
             }
         }
-        checked
+        Some(checked)
     }
 
     /// The pairs of segments next to one another on the line after each of its ranges are all charged: for every line of every input here. The
     /// inputs make adjacencies in every way a range can: copies that start at other heights, curves kept apart by others that leave before them
     /// (a crescent between two circles, which ends at a quarter of each arc), curves that cross, and ordinary shapes.
+    ///
+    /// The circles are made with `sin`, `cos` and `tan`, and the sweep's own check of the order of curves this near may fail for them on a platform
+    /// whose standard library rounds those differently (it did on one of the three the crate is tested on: nudging the points of the circles that
+    /// cross by one unit in the last place makes it fail here for 1 in 40). Such an input is not checked, and is given to the crate's own
+    /// sweep instead, which must refuse it in words or make it; the ellipses, lenses and rings are made of exact numbers, and are always checked.
     #[test]
     fn every_pair_next_to_one_another_on_the_line_is_charged() {
         let inputs = [
@@ -1779,10 +1817,54 @@ mod tests {
             ("rings", rings(12, 4.0)),
             ("a star of lines", star(41)),
         ];
-        for (name, path) in inputs {
-            let checked = every_pair_next_to_one_another_is_charged(name, &path);
-            // The circles and the arcs have pairs that may cost; the star of lines has none.
-            assert_eq!(checked > 0, name != "a star of lines", "{name}: {checked} pairs");
+        let (mut checked_inputs, mut refused) = (Vec::new(), Vec::new());
+        for (name, path) in &inputs {
+            match every_pair_next_to_one_another_is_charged(name, path) {
+                // The circles and the arcs have pairs that may cost; the star of lines has none.
+                Some(checked) => {
+                    assert_eq!(checked > 0, *name != "a star of lines", "{name}: {checked} pairs");
+                    checked_inputs.push(*name);
+                }
+                None => refused.push((*name, closed(path))),
+            }
+        }
+        for name in ["ellipses and arcs", "lenses", "rings"] {
+            assert!(checked_inputs.contains(&name), "{name}: made of exact numbers, and refused by the sweep's own check");
+        }
+        // What the crate does with an input the check fails: its dry sweep is under a guard (it counts nothing and lets the sweep that follows
+        // report the panic), and that sweep is refused in words.
+        for (name, path) in &refused {
+            let eps = eps_for([path]).expect("finite");
+            assert_eq!(within([path], eps), Ok(()), "{name}");
+            assert!(matches!(crate::try_normalize(path, FillRule::NonZero), Err(PathOpsError::Degenerate) | Ok(_)), "{name}");
+        }
+    }
+
+    /// The hand-made sweep above gives way to the sweep's own check for an input that fails it, and does not panic: the outline of a stroke whose
+    /// sweep fails the check on Linux in a build with debug assertions ([`crate::debug_checks`]), given to the function above (which panicked
+    /// there before it gave way). Where the platform's arithmetic gets the outline through the check, every pair of it is checked as for any other
+    /// input, and what the test holds is that nothing is a panic.
+    #[test]
+    fn the_sweep_made_by_hand_gives_way_to_the_sweeps_own_check() {
+        let checked = every_pair_next_to_one_another_is_charged("the outline", &crate::debug_checks::outline());
+        if cfg!(all(target_os = "linux", target_arch = "x86_64", debug_assertions)) {
+            assert_eq!(checked, None, "the outline fails the check here");
+        }
+    }
+
+    /// The dry sweep is under a guard: for an input whose sweep fails `linesweeper`'s own check (the outline of a stroke, on Linux in a build with
+    /// debug assertions) it counts nothing and is `Ok`, and the sweep that follows is the one that refuses ([`crate::debug_checks`]). Where the
+    /// check passes the input, it is counted as any other.
+    #[test]
+    fn the_dry_sweep_of_an_input_that_fails_the_sweeps_check_counts_nothing() {
+        let outline = crate::debug_checks::outline();
+        let eps = eps_for([&outline]).expect("finite");
+        let segments = segments_of([&outline]).expect("segments");
+        let counted = dry_counted(&segments, eps, u64::MAX, &mut || 0);
+        if crate::debug_checks::dry_sweep_panics(&outline) {
+            assert_eq!(counted, Ok(0));
+        } else {
+            assert!(matches!(counted, Ok(work) if work > 0), "{counted:?}");
         }
     }
 
@@ -1792,7 +1874,8 @@ mod tests {
     #[cfg_attr(debug_assertions, ignore = "linesweeper checks curves this near in a debug build: run with cargo test --release")]
     #[test]
     fn every_pair_next_to_one_another_in_a_crowd_is_charged() {
-        let checked = every_pair_next_to_one_another_is_charged("a copy beside a curve in a crowd", &curves_beside_a_crowd(2, 1e6, 1.9e-6, 60));
+        let checked = every_pair_next_to_one_another_is_charged("a copy beside a curve in a crowd", &curves_beside_a_crowd(2, 1e6, 1.9e-6, 60))
+            .expect("a release build does not make the sweep's checks");
         assert!(checked > 100, "{checked} pairs");
     }
 

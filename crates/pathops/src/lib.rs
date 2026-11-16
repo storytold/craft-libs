@@ -31,6 +31,8 @@ mod boolean;
 mod budget;
 mod close;
 mod crossings;
+#[cfg(test)]
+mod debug_checks;
 mod edit;
 mod fit;
 mod meter;
