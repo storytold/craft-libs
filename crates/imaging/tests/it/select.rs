@@ -608,6 +608,27 @@ fn a_lasso_click_deselects_only_in_new_mode() {
     );
 }
 
+// The outline keeps the operation its first press latched: Alt at the press over a selection subtracts, and letting go
+// of Alt during the drag changes neither the operation the tool reports nor the commit's. No outline, no operation.
+#[trial]
+fn the_lasso_reports_the_operation_its_outline_latched() {
+    let mut rig = rig("Lasso", LassoTool::new(), Fake::selected(Rect::new(20.0, 20.0, 100.0, 100.0)));
+    assert_eq!(rig.tool_mut().tool().outline_operation(), None);
+    down(&mut rig, (200.0, 150.0), Mods::ALT);
+    drag_to(&mut rig, (260.0, 150.0), Mods::ALT);
+    assert_eq!(rig.tool_mut().tool().outline_operation(), Some(SelectionOperation::Subtract));
+    for point in [(260.0, 200.0), (230.0, 220.0)] {
+        drag_to(&mut rig, point, NONE);
+    }
+    assert_eq!(rig.tool_mut().tool().outline_operation(), Some(SelectionOperation::Subtract), "Alt let go keeps the latched operation");
+    up(&mut rig, (200.0, 200.0), NONE);
+    assert!(
+        matches!(rig.tool_mut().events().as_slice(), [SelectEvent::Commit { operation: SelectionOperation::Subtract, .. }]),
+        "the commit subtracts"
+    );
+    assert_eq!(rig.tool_mut().tool().outline_operation(), None, "the closed outline has no operation");
+}
+
 // ---- the Polygonal Lasso ----
 
 // Shift turns a segment to 45 degree steps from the last vertex, not for the first vertex and not with Alt.

@@ -255,7 +255,13 @@ impl LassoTool {
 
     /// An outline with the operation New is open: the app hides the selection's ants.
     pub fn replaces_selection(&self) -> bool {
-        self.draft.is_open() && self.operation == SelectionOperation::New
+        self.outline_operation() == Some(SelectionOperation::New)
+    }
+
+    /// The operation the open outline latched at its first press, whatever is held now (the cursor's badge and the
+    /// commit agree); `None` while no outline is open.
+    pub fn outline_operation(&self) -> Option<SelectionOperation> {
+        self.draft.is_open().then_some(self.operation)
     }
 }
 
