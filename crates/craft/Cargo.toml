@@ -176,6 +176,13 @@ craft-tcraft = { workspace = true, optional = true }
 craft-texture = { workspace = true, optional = true }
 craft-usd = { workspace = true, optional = true }
 craft-xfl = { workspace = true, optional = true }
+craft-elf = { workspace = true, optional = true }
+craft-format = { workspace = true, optional = true }
+craft-macho = { workspace = true, optional = true }
+craft-mcp-server = { workspace = true, optional = true }
+craft-pe = { workspace = true, optional = true }
+craft-sniff = { workspace = true, optional = true }
+craft-tar = { workspace = true, optional = true }
 
 [features]
 ui = [
@@ -228,7 +235,6 @@ aep = ["dep:craft-aep"]
 affinity = ["dep:craft-affinity"]
 affinity-synth = ["affinity", "craft-affinity/synth"]
 
-ai-agents = ["dep:craft-ai-agents"]
 ai-core = ["dep:craft-ai-core"]
 
 anicraft-format = ["dep:craft-anicraft-format"]
@@ -267,8 +273,7 @@ audio-symphonia = ["audio", "craft-audio/symphonia"]
 audio-vorbis-encode = ["audio", "craft-audio/vorbis-encode"]
 
 automation = ["dep:craft-automation", "keymap"]
-# Agents in the open window: the launcher's switch, the connection file, the link host and the Agents page.
-automation-agents = ["automation", "craft-automation/agents", "ai-agents", "flags"]
+automation-agents = ["automation", "craft-automation/agents"]
 
 ber = ["dep:craft-ber"]
 
@@ -322,6 +327,9 @@ dwg = ["dep:craft-dwg"]
 dxf = ["dep:craft-dxf"]
 
 ecproj-format = ["dep:craft-ecproj-format"]
+
+elf = ["dep:craft-elf"]
+elf-serde = ["elf", "craft-elf/serde"]
 
 eps = ["dep:craft-eps"]
 eps-paths = ["eps", "craft-eps/paths"]
@@ -377,6 +385,8 @@ font-store-bundled-index = ["font-store", "craft-font-store/bundled-index"]
 
 font-subset = ["dep:craft-font-subset"] # native only: HarfBuzz's C++ builds with the target's C++ compiler
 
+format = ["dep:craft-format"]
+
 gainmap = ["dep:craft-gainmap"]
 
 gcode = ["dep:craft-gcode"]
@@ -412,6 +422,8 @@ image-codecs-avif-decode = ["image-codecs", "craft-image-codecs/avif-decode"]
 image-codecs-corpus = ["image-codecs", "craft-image-codecs/corpus"]
 image-codecs-heif = ["image-codecs", "craft-image-codecs/heif"]
 image-codecs-sgi = ["image-codecs", "craft-image-codecs/sgi"]
+image-codecs-sunraster = ["image-codecs", "craft-image-codecs/sunraster"]
+image-codecs-threads = ["image-codecs", "craft-image-codecs/threads"]
 
 imaging = ["dep:craft-imaging", "color", "keymap"]
 
@@ -442,6 +454,9 @@ layers = ["dep:craft-layers"]
 
 lottie = ["dep:craft-lottie"]
 
+macho = ["dep:craft-macho"]
+macho-serde = ["macho", "craft-macho/serde"]
+
 markdown = ["dep:craft-markdown"]
 
 materialx = ["dep:craft-materialx"]
@@ -451,6 +466,8 @@ math = ["dep:craft-math"]
 mcmat = ["dep:craft-mcmat"]
 
 mcp = ["dep:craft-mcp"]
+
+mcp-server = ["dep:craft-mcp-server"]
 
 media = ["dep:craft-media"]
 media-avi = ["media", "craft-media/avi"]
@@ -504,6 +521,7 @@ pcraft-bundle = ["dep:craft-pcraft-bundle"]
 pcraft-format = ["dep:craft-pcraft-format"]
 
 pdf = ["dep:craft-pdf"]
+pdf-content = ["pdf", "craft-pdf/content"]
 pdf-cos = ["pdf", "craft-pdf/cos"]
 pdf-crypt = ["pdf", "craft-pdf/crypt"]
 pdf-filters = ["pdf", "craft-pdf/filters"]
@@ -518,6 +536,9 @@ pdf-write-simple-text = ["pdf", "craft-pdf/write-simple-text"]
 pdf-write-svg = ["pdf", "craft-pdf/write-svg"]
 
 pdn = ["dep:craft-pdn"]
+
+pe = ["dep:craft-pe"]
+pe-serde = ["pe", "craft-pe/serde"]
 
 penpot = ["dep:craft-penpot"]
 
@@ -552,6 +573,7 @@ proto = ["dep:craft-proto"]
 
 ps = ["dep:craft-ps"]
 ps-read = ["ps", "craft-ps/read"]
+ps-write = ["ps", "craft-ps/write"]
 
 psd = ["dep:craft-psd"]
 psd-corpus = ["psd", "craft-psd/corpus"]
@@ -575,6 +597,8 @@ raw-erf = ["raw", "craft-raw/erf"]
 raw-hasselblad = ["raw", "craft-raw/hasselblad"]
 raw-jxl = ["raw", "craft-raw/jxl"]
 raw-kodak = ["raw", "craft-raw/kodak"]
+raw-line-dng = ["raw", "craft-raw/line-dng"]
+raw-line-dng-threads = ["raw", "craft-raw/line-dng-threads"]
 raw-mef = ["raw", "craft-raw/mef"]
 raw-mrw = ["raw", "craft-raw/mrw"]
 raw-nef = ["raw", "craft-raw/nef"]
@@ -608,6 +632,8 @@ sketch = ["dep:craft-sketch"]
 
 smime = ["dep:craft-smime"]
 
+sniff = ["dep:craft-sniff"]
+
 stencilcraft-document = ["dep:craft-stencilcraft-document"]
 
 stencilcraft-format = ["dep:craft-stencilcraft-format"]
@@ -616,6 +642,7 @@ stream-codecs = ["dep:craft-stream-codecs"]
 
 svg = ["dep:craft-svg"]
 svg-draw = ["svg", "craft-svg/draw"]
+svg-paths = ["svg", "craft-svg/paths"]
 svg-tree = ["svg", "craft-svg/tree"]
 svg-tree-core = ["svg", "craft-svg/tree-core"]
 svg-tree-render = ["svg", "craft-svg/tree-render"]
@@ -624,6 +651,9 @@ svg-tree-system-fonts = ["svg", "craft-svg/tree-system-fonts"]
 svg-tree-text = ["svg", "craft-svg/tree-text"]
 
 table = ["dep:craft-table", "keymap"]
+
+tar = ["dep:craft-tar"]
+tar-serde = ["tar", "craft-tar/serde"]
 
 tcraft = ["dep:craft-tcraft"]
 
@@ -673,6 +703,7 @@ text-oriya = ["text", "craft-text/oriya"]
 text-panjabi = ["text", "craft-text/panjabi"]
 text-polish = ["text", "craft-text/polish"]
 text-portuguese = ["text", "craft-text/portuguese"]
+text-positioned = ["text", "craft-text/positioned"]
 text-russian = ["text", "craft-text/russian"]
 text-sanskrit = ["text", "craft-text/sanskrit"]
 text-segment = ["text", "craft-text/segment"]
@@ -737,6 +768,7 @@ video-h264-encode = ["video", "craft-video/h264-encode"]
 video-hevc = ["video", "craft-video/hevc"]
 video-hevc-decode = ["video", "craft-video/hevc-decode"]
 video-hevc-encode = ["video", "craft-video/hevc-encode"]
+video-mjpeg = ["video", "craft-video/mjpeg"]
 video-mpeg2 = ["video", "craft-video/mpeg2"]
 video-mpeg2-decode = ["video", "craft-video/mpeg2-decode"]
 video-mpeg2-encode = ["video", "craft-video/mpeg2-encode"]

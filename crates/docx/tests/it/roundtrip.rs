@@ -956,7 +956,8 @@ fn toc_field_skips_nested_stories() {
     let mut xml = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
     let boxes: Vec<(usize, usize)> = xml.match_indices("<w:txbxContent>").map(|(a, _)| (a, a + xml[a..].find("</w:txbxContent>").unwrap())).collect();
-    assert_eq!(boxes.len(), 2, "{xml}");
+    // Each box twice: its shape and its VML fallback.
+    assert_eq!(boxes.len(), 4, "{xml}");
     let in_box = |i: usize| boxes.iter().any(|(a, b)| (*a..*b).contains(&i));
     for kind in ["begin", "separate", "end"] {
         let at: Vec<usize> = xml.match_indices(&format!(r#"fldCharType="{kind}""#)).map(|(i, _)| i).collect();
@@ -964,7 +965,7 @@ fn toc_field_skips_nested_stories() {
         assert!(!in_box(at[0]), "field {kind} written inside a text box: {xml}");
     }
     let (begin, end) = (xml.find(r#"fldCharType="begin""#).unwrap(), xml.find(r#"fldCharType="end""#).unwrap());
-    assert!(begin > boxes[0].1 && end > boxes[1].1 && end < xml.find("</w:sdt>").unwrap(), "{xml}");
+    assert!(begin > boxes[1].1 && end > boxes[3].1 && end < xml.find("</w:sdt>").unwrap(), "{xml}");
 }
 
 #[test]

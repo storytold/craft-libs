@@ -776,7 +776,7 @@ fn a_secondary_click_on_the_box_opens_the_mode_menu() {
         });
     });
     fixture.settle();
-    let mut right_click = |fixture: &mut Fixture, at: Pos2| {
+    let right_click = |fixture: &mut Fixture, at: Pos2| {
         fixture.frame(vec![pointer::moved(at)]);
         fixture.frame(vec![pointer::secondary(at, true)]);
         fixture.frame(vec![pointer::secondary(at, false)]);

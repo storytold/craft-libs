@@ -1152,9 +1152,9 @@ dependencies = [
 
 [[package]]
 name = "cfg-expr"
-version = "0.20.10"
+version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ba9e9ec16c447027685b1f897b720e18e9a8afd00bd7332c483537e38086c9f"
+checksum = "edd44d82755fb9210fb10d9daf8dd7e522da0efe1d5f263cffc5db07725663ff"
 dependencies = [
  "smallvec",
  "target-lexicon",
@@ -1595,6 +1595,7 @@ dependencies = [
  "craft-dwg",
  "craft-dxf",
  "craft-ecproj-format",
+ "craft-elf",
  "craft-eps",
  "craft-epub",
  "craft-ews",
@@ -1611,6 +1612,7 @@ dependencies = [
  "craft-font-manager",
  "craft-font-store",
  "craft-font-subset",
+ "craft-format",
  "craft-gainmap",
  "craft-gcode",
  "craft-gif",
@@ -1637,11 +1639,13 @@ dependencies = [
  "craft-latex",
  "craft-layers",
  "craft-lottie",
+ "craft-macho",
  "craft-markdown",
  "craft-materialx",
  "craft-math",
  "craft-mcmat",
  "craft-mcp",
+ "craft-mcp-server",
  "craft-media",
  "craft-menu",
  "craft-mesh",
@@ -1660,6 +1664,7 @@ dependencies = [
  "craft-pcraft-format",
  "craft-pdf 0.1.0",
  "craft-pdn",
+ "craft-pe",
  "craft-penpot",
  "craft-pkcs7",
  "craft-platform",
@@ -1687,11 +1692,13 @@ dependencies = [
  "craft-silhouette-studio",
  "craft-sketch",
  "craft-smime",
+ "craft-sniff",
  "craft-stencilcraft-document",
  "craft-stencilcraft-format",
  "craft-stream-codecs",
  "craft-svg",
  "craft-table",
+ "craft-tar",
  "craft-tcraft",
  "craft-text",
  "craft-texture",
@@ -2165,6 +2172,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-elf"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-eps"
 version = "0.1.0"
 dependencies = [
@@ -2384,6 +2400,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-format"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "proptest",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "craft-gainmap"
 version = "0.1.0"
 dependencies = [
@@ -2433,6 +2459,7 @@ name = "craft-heif"
 version = "0.1.0"
 dependencies = [
  "heic-rs",
+ "proptest",
  "rayon",
 ]
 
@@ -2670,6 +2697,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-macho"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-markdown"
 version = "0.1.0"
 dependencies = [
@@ -2715,6 +2751,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
@@ -2756,6 +2800,7 @@ version = "0.1.0"
 dependencies = [
  "craft-opc",
  "craft-xml",
+ "craft-zip",
  "miniz_oxide 0.9.1",
  "serde_json",
 ]
@@ -2983,6 +3028,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pe"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-penpot"
 version = "0.1.0"
 dependencies = [
@@ -3165,6 +3219,7 @@ name = "craft-ps"
 version = "0.1.0"
 dependencies = [
  "craft-eps",
+ "flate2",
  "kurbo",
  "miniz_oxide 0.8.9",
  "pdf-writer",
@@ -3231,6 +3286,13 @@ dependencies = [
  "zune-core",
  "zune-jpeg",
  "zune-jpegxl",
+]
+
+[[package]]
+name = "craft-render-parity"
+version = "0.1.0"
+dependencies = [
+ "craft-cms",
 ]
 
 [[package]]
@@ -3361,6 +3423,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sniff"
+version = "0.1.0"
+
+[[package]]
 name = "craft-stencilcraft-document"
 version = "0.1.0"
 dependencies = [
@@ -3433,6 +3499,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-tar"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "craft-tcraft"
 version = "0.1.0"
 dependencies = [
@@ -3455,6 +3528,7 @@ dependencies = [
  "egui",
  "hypher",
  "icu_segmenter",
+ "kurbo",
  "miniz_oxide 0.8.9",
  "regex",
  "regex-syntax",
@@ -3841,6 +3915,7 @@ dependencies = [
 name = "craft-video"
 version = "0.1.0"
 dependencies = [
+ "craft-jpeg",
  "craft-media",
  "craft-media-testkit",
  "rav1e",
@@ -5173,9 +5248,9 @@ dependencies = [
 
 [[package]]
 name = "fixedbitset"
-version = "0.5.7"
+version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+checksum = "5905ec755cc8386d7928353e4d356d2be3e89e81e5ca01fe630a1ca4d08dc175"
 
 [[package]]
 name = "flagset"
@@ -7224,6 +7299,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
+ "rayon",
 ]
 
 [[package]]
@@ -9269,6 +9345,7 @@ dependencies = [
  "loop9",
  "quick-error 2.0.1",
  "rav1e",
+ "rayon",
  "rgb",
 ]
 
@@ -9843,9 +9920,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -13433,9 +13510,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.1.0"
+version = "9.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2886b00003a72c4ccee3f42cfc34908d33b2508a74d827dc2a4244706475c704"
+checksum = "1156b39d142a34b999c2310a50455e0cb3760bf7efad0122f796d813bee26ccb"
 dependencies = [
  "crc32fast",
  "flate2",

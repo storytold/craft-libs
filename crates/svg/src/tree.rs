@@ -13,7 +13,7 @@
 //! [`crate::guard::entities_expand_past`], [`crate::guard::too_wide`] (attributes an element),
 //! [`crate::guard::prescan`] (nesting in the text),
 //! [`height`] (nesting with references followed, as usvg walks them), then usvg.
-//! [`image_resolver`] bounds the SVG documents embedded in `<image>` data URLs the same way.
+//! `image_resolver` (with the `tree` feature) bounds the SVG documents embedded in `<image>` data URLs the same way.
 //! [`draw`] bounds what drawing a tree with resvg allocates.
 //!
 //! Stack: usvg uses about 15 kB of stack for each level of nesting (measured natively by
@@ -38,6 +38,7 @@ use crate::{guard, svgz};
 
 pub mod document;
 pub mod draw;
+pub mod primitive;
 
 /// What one import may use. The defaults suit a desktop app that parses on a thread with a
 /// large stack (see the module text).
@@ -65,9 +66,9 @@ pub struct Limits {
     /// Accept a document type declaration; `false` refuses any `<!DOCTYPE`.
     pub allow_dtd: bool,
     /// Bytes of all SVG documents embedded in `<image>` data URLs, unpacked, for
-    /// [`image_resolver`].
+    /// `image_resolver`.
     pub embedded_bytes: usize,
-    /// SVG documents embedded inside one another, for [`image_resolver`].
+    /// SVG documents embedded inside one another, for `image_resolver`.
     pub embedded_depth: usize,
     /// Decoded RGBA pixels retained across the raster images embedded in one drawing. Dimensions
     /// are probed before usvg hands the bytes to a decoder; repeated references to the same data
@@ -136,7 +137,7 @@ pub fn text<'a>(bytes: &'a [u8], limits: &Limits) -> Result<Cow<'a, str>, Error>
 }
 
 /// The tree of an SVG or SVGZ file, within `limits`. `options` are usvg's: fonts, the default
-/// size, and the image resolver ([`image_resolver`] unless the caller reads linked files).
+/// size, and the image resolver (`image_resolver` unless the caller reads linked files).
 pub fn parse(bytes: &[u8], limits: &Limits, options: &usvg::Options<'_>) -> Result<usvg::Tree, Error> {
     parse_text(&svgz::text(bytes, limits.bytes)?, limits, options)
 }

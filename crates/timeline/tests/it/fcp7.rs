@@ -787,3 +787,17 @@ fn nested_sequence_chain_is_bounded_and_reimported_at_a_shallower_depth() {
     let nested = imported.project.items.values().find(|item| item.name == "S63").and_then(|item| imported.project.sequence(item.id));
     assert!(nested.is_some_and(|seq| seq.video_tracks.first().is_some_and(|track| track.items.len() == 1)));
 }
+
+#[test]
+fn optional_report_limit_bounds_distinct_fcp7_diagnostics() {
+    let clips = (0..10).map(|i| format!("<clipitem id=\"c{i}\"><name>A{i}</name><start>{i}</start><end>{}</end><in>0</in><out>1</out><file id=\"f{i}\"><name>missing{i}</name></file></clipitem>", i + 1)).collect::<String>();
+    let doc = format!("<xmeml><sequence id=\"s\"><name>S</name><media><video><track>{clips}</track></video></media></sequence></xmeml>");
+    let opts = iopts(None);
+    let mut limited = Report::default();
+    assert!(craft_timeline::fcp7::import_with_report_limit(&doc, &opts, &mut limited, Some(2)).is_ok());
+    assert_eq!(limited.entries.len(), 3);
+    assert!(limited.mentions("further diagnostics omitted"));
+    let mut ordinary = Report::default();
+    assert!(craft_timeline::fcp7::import(&doc, &opts, &mut ordinary).is_ok());
+    assert_eq!(ordinary.entries.len(), 10);
+}

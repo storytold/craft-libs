@@ -380,17 +380,22 @@ fn closed_styled_previews_leave_their_composites_to_eviction() {
 
 // With nearest interpolation every zoom and scale gives level 0 with nearest filtering.
 
+/// A preview with the scale it is painted at.
+type PaintedPreview = (Rc<PreviewTextures>, f32);
+/// The texture and size a painted preview showed.
+type ShownPreview = (egui::TextureId, [f32; 2]);
+
 /// Previews painted every frame of a fixture whose host runs jobs only when a trial says (upstream's 5 × 3 white
 /// image).
 struct Mips {
     fixture: Fixture,
     jobs: Arc<ManualJobs>,
     /// The previews the next frames paint, each at its scale.
-    painted: Rc<RefCell<Vec<(Rc<PreviewTextures>, f32)>>>,
+    painted: Rc<RefCell<Vec<PaintedPreview>>>,
     /// The display every painted preview is converted for.
     display: Rc<RefCell<Option<PreviewDisplay>>>,
     /// What each painted preview showed in the last frame.
-    shown: Rc<RefCell<Vec<Option<(egui::TextureId, [f32; 2])>>>>,
+    shown: Rc<RefCell<Vec<Option<ShownPreview>>>>,
     /// The previews' uploads in the last frame, read in the frame.
     uploads: Rc<Cell<usize>>,
 }

@@ -11,6 +11,10 @@ repository.workspace = true
 workspace = true
 
 [features]
+# Bounded DNG strip/tile reader (`dng_lines`): the `dng` reader's unpackers and JPEG decoder.
+line-dng = ["dng"]
+# Decode DNG tile bands in parallel.
+line-dng-threads = ["line-dng"]
 default = ["dng", "jxl", "crw", "hasselblad", "mrw", "erf", "mef", "kodak", "pef", "srw", "cr2", "nef", "rw2", "raf", "orf", "arw", "cr3"]
 ## Adobe DNG, reading and writing: uncompressed, lossless JPEG, lossy JPEG, Deflate.
 dng = ["dep:miniz_oxide", "dep:zune-jpeg", "dep:zune-core"]

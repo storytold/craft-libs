@@ -108,7 +108,7 @@ impl<'a> AgentsPage<'a> {
             let mut next = None;
             let mut field = Field::new(words.control_port.clone()).id_salt("port");
             if mcp_flag {
-                field = field.help(Help::Text(words.port_hint.clone().into()));
+                field = field.help(Help::Text(words.port_hint.clone()));
             }
             field.show(ui, |ui, _| {
                 let number = NumberField::new(words.control_port.clone(), Bind::given(Some(port as f64)))
@@ -140,7 +140,7 @@ impl<'a> AgentsPage<'a> {
                 .map(|choice| {
                     let label: Label = match choice {
                         WhenAppClosed::Launch => words.launch.fill(&[("app", app)]).into(),
-                        WhenAppClosed::Headless => words.headless.clone().into(),
+                        WhenAppClosed::Headless => words.headless.clone(),
                         WhenAppClosed::Error => words.ask.fill(&[("app", app)]).into(),
                     };
                     Entry::new(choice, label)

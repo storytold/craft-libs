@@ -184,7 +184,7 @@ impl CropKept {
 ///   drawn one.
 /// - Dismissal ([`dismiss`](Self::dismiss)): after Discard or an accepted crop the default frame
 ///   is still made but stays hidden until the next press, ratio change or size change
-///   ([`show`](Self::show)), for that document and size only.
+///   ([`show_frame`](Self::show_frame)), for that document and size only.
 /// - [`CropTool`](super::CropTool) is the one writer: the session has no edit type of its own.
 #[derive(Clone, Debug, Default)]
 pub struct CropSession {
@@ -464,7 +464,7 @@ impl CropSession {
     }
 
     /// Discard or an accepted crop: the session is cleared and the document's default frame stays
-    /// hidden until [`show`](Self::show). The next [`ensure_frame`](Self::ensure_frame) still makes
+    /// hidden until [`show_frame`](Self::show_frame). The next [`ensure_frame`](Self::ensure_frame) still makes
     /// the frame, so the hidden overlay has one to show.
     pub fn dismiss(&mut self) {
         let made_for = self.frame_for;

@@ -36,8 +36,9 @@ were. Part names and relationship ids are kept, so a file read and written witho
 where it did, and writing it twice gives the same bytes. The calculation chain is dropped (Excel
 rebuilds it). `XlsxKind` is the workbook part's content type (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`).
 Typed worksheet features (`SheetPart::features`), each mirroring its element with optional
-attributes and the unnamed ones kept: sheet views (panes, selections), print setup (options,
-margins, page setup, header and footer, page breaks), data validation (also read from the `x14`
+attributes and the unnamed ones kept: sheet views (panes, selections), the default sizes
+(`sheetFormatPr`), print setup (options, margins, page setup, header and footer, page breaks),
+data validation (also read from the `x14`
 extension), conditional formats (colour scales, data bars, icon sets, rule extensions kept),
 hyperlinks (with their URLs), the legacy drawing. Comments (`Comments`, from the comments part)
 and the note shapes of the VML drawing (`NoteShape`). A sheet that gains comments and has no VML
@@ -83,13 +84,15 @@ for new pictures (`vm = i + 1`) and the `XLDAPR` dynamic-array metadata (`cm = 1
 The parts this crate writes use the transitional namespaces; a strict file's kept parts stay as
 they were. A binary workbook is not written.
 
-A binary workbook gives the same `Workbook`, strings, rows and merged cells, and the same `Styles`:
+A binary workbook gives the same `Workbook`, strings, rows (with their heights, outline levels,
+hidden flags and styles), columns, default sizes and merged cells, and the same `Styles`:
 number formats, fonts, fills, borders, cell and cell style formats, cell styles, differential
 formats and the indexed colours, as Excel writes them in `styles.xml` (default fill colours and
 empty settings left out, a cell style format's `apply*="0"`, a number format with a newer locale tag
 in its Excel 2007 spelling, as `formatCode` has it). Custom table styles and recent colours are not
 read; a damaged styles part is a warning and no styles, while one past a cap (65,536 entries in a
-table, 1,024 gradient stops) or past `binary_text` is too large. Its cell formulas are decoded from
+table, 1,024 gradient stops) or past `binary_text` is too large. The descent Excel records for rows
+and the sheet (`x14ac:dyDescent`) is in alternate-content blocks, which are skipped. Its cell formulas are decoded from
 their tokens into the text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, apart from
 the four ISO/IEC 29500 functions `.xlsx` names bare, no implicit `@`, the spaces and line breaks
 typed in the formula, numbers as Excel spells them), with `FormulaKind::Shared` or
@@ -111,7 +114,8 @@ are this crate's own, apart from `craft-xls`'s.
   past it, formulas keep their saved results. A formula's tokens are bounded at 16 KB, its
   nesting at 256 levels and its array constants at 65,536 values in all, each charged before
   it is held; once the formula text allowance is spent, no formula is decoded. Fixed caps: 1024
-  sheets, 100,000 merged ranges per sheet, 64 nested extension blocks.
+  sheets, 100,000 merged ranges and 16,384 column records per sheet, 64 nested extension blocks. A
+  row taller than 8,192 twips keeps the default height.
 - Cells and rows outside the 1,048,576 × 16,384 grid are dropped and counted.
 
 SpreadsheetML is read leniently: a damaged optional part is a warning, a damaged worksheet keeps

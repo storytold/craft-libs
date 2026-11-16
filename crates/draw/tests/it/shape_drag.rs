@@ -161,8 +161,7 @@ fn shift_squares_the_box_from_the_shorter_side() {
 
 /// A Rectangle drag under the gear `constraint` with `change` applied to the gear's values.
 fn gear(constraint: BoxConstraint, change: impl FnOnce(&mut BoxConstraints)) -> Shapes {
-    let mut constraints = BoxConstraints::default();
-    constraints.constraint = constraint;
+    let mut constraints = BoxConstraints { constraint, ..Default::default() };
     change(&mut constraints);
     Shapes::new(ShapeDragOptions::new(ShapeKind::Rectangle).constraints(constraints))
 }

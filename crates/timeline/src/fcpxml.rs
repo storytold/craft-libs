@@ -141,6 +141,7 @@ struct Imp<'a, 'c, 'r> {
     b: Builder<'c>,
     opts: &'a ImportOptions<'a>,
     report: &'r mut Report,
+    report_limit: Option<usize>,
     formats: HashMap<String, (FrameRate, u32, u32)>,
     asset_nodes: HashMap<String, Node<'a>>,
     assets: HashMap<String, Asset>,
@@ -183,6 +184,10 @@ struct Ctx {
 /// Read an FCPXML document. Media paths are resolved against `opts.base_dir`; filters are looked
 /// up in `opts.catalog` by name. What cannot be represented is in `report`.
 pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<Imported> {
+    import_with_report_limit(text, opts, report, None)
+}
+/// Read FCPXML with an optional distinct-diagnostic limit.
+pub fn import_with_report_limit(text: &str, opts: &ImportOptions, report: &mut Report, report_limit: Option<usize>) -> Result<Imported> {
     let doc = crate::xml::parse(text).map_err(|e| Error::parse(Format::Fcpxml, e))?;
     let root = Node(&doc);
     if root.name() != "fcpxml" {
@@ -191,7 +196,7 @@ pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<I
     if let Some(v) = root.attribute("version") {
         let minor = v.split('.').nth(1).and_then(|m| m.parse::<u32>().ok()).unwrap_or(0);
         if !v.starts_with("1.") || minor > 11 {
-            report.info(format!("FCPXML version {v} is newer than 1.11; unknown elements were ignored"));
+            report.info_limited(report_limit, format!("FCPXML version {v} is newer than 1.11; unknown elements were ignored"));
         }
     }
     let lib_name = child(root, "library").and_then(|l| child(l, "event")).and_then(|e| e.attribute("name")).unwrap_or("Imported FCPXML");
@@ -199,6 +204,7 @@ pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<I
         b: Builder::new(lib_name, opts.catalog),
         opts,
         report,
+        report_limit,
         formats: HashMap::new(),
         asset_nodes: HashMap::new(),
         assets: HashMap::new(),
@@ -219,7 +225,10 @@ pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<I
                 "format" => {
                     let rate = match r.attribute("frameDuration") {
                         Some(fd) => rate_from_frame_duration(fd).unwrap_or_else(|| {
-                            imp.report.warn(format!("format \"{id}\" has an invalid frameDuration \"{fd}\"; the default frame rate was used"));
+                            imp.report.warn_limited(
+                                imp.report_limit,
+                                format!("format \"{id}\" has an invalid frameDuration \"{fd}\"; the default frame rate was used"),
+                            );
                             FrameRate::default()
                         }),
                         None => FrameRate::default(),
@@ -276,7 +285,7 @@ pub fn import(text: &str, opts: &ImportOptions, report: &mut Report) -> Result<I
         return Err(Error::Empty);
     }
     let mut imported = imp.b.finish();
-    imported.bound(report);
+    imported.bound_with_report_limit(report, report_limit);
     Ok(imported)
 }
 
@@ -318,7 +327,7 @@ impl<'a> Imp<'a, '_, '_> {
                 self.b.file_media(&format!("file:{p}"), &name, &p, &spec, bin)
             }
             None => {
-                self.report.warn(format!("asset \"{name}\" has no media; imported offline"));
+                self.report.warn_limited(self.report_limit, format!("asset \"{name}\" has no media; imported offline"));
                 let p = resolve_path(&name, self.opts.base_dir);
                 let it = self.b.file_media(&format!("asset:{id}"), &name, &p, &spec, bin);
                 if let Some(m) = self.b.p.item_mut(it).and_then(|i| i.as_media_mut()) {
@@ -367,7 +376,7 @@ impl<'a> Imp<'a, '_, '_> {
         // Check before the cache: a truncated resource may already have an item while it
         // is being rebuilt, but a back-edge must never turn that item into a self-cycle.
         if self.media_active.contains(id) {
-            self.report.warn(format!("recursive FCPXML media resource {id:?} ignored"));
+            self.report.warn_limited(self.report_limit, format!("recursive FCPXML media resource {id:?} ignored"));
             return None;
         }
         let depth = self.media_active.len();
@@ -383,9 +392,10 @@ impl<'a> Imp<'a, '_, '_> {
             if !shallower || self.reimports_left == 0 {
                 if self.cache_reaches_active(i) {
                     self.depth_hits += 1;
-                    self.report.warn(format!(
-                        "FCPXML cached media {id:?} could form a recursive graph or exceeds the cache traversal budget; imported as a gap"
-                    ));
+                    self.report.warn_limited(
+                        self.report_limit,
+                        format!("FCPXML cached media {id:?} could form a recursive graph or exceeds the cache traversal budget; imported as a gap"),
+                    );
                     return None;
                 }
                 return Some(i);
@@ -399,7 +409,7 @@ impl<'a> Imp<'a, '_, '_> {
         // would otherwise recurse once per resource.
         if depth >= MAX_MEDIA_DEPTH {
             self.depth_hits += 1;
-            self.report.warn(format!("FCPXML media resource {id:?} is nested too deeply; imported as a gap"));
+            self.report.warn_limited(self.report_limit, format!("FCPXML media resource {id:?} is nested too deeply; imported as a gap"));
             return None;
         }
         self.media_active.insert(id.into());
@@ -447,7 +457,10 @@ impl<'a> Imp<'a, '_, '_> {
     fn storyline(&mut self, seq: &mut Sequence, ctx: &Ctx, spine: Node<'a>, origin: Tick, lane: i32, primary: bool) {
         if self.depth >= MAX_XML_DEPTH {
             self.depth_hits += 1;
-            self.report.warn(format!("XML storylines are nested too deeply (more than {MAX_XML_DEPTH}); deeper clips were skipped"));
+            self.report.warn_limited(
+                self.report_limit,
+                format!("XML storylines are nested too deeply (more than {MAX_XML_DEPTH}); deeper clips were skipped"),
+            );
             return;
         }
         self.depth += 1;
@@ -473,7 +486,7 @@ impl<'a> Imp<'a, '_, '_> {
         let vidx = if lane >= 0 { lane as usize } else { usize::MAX };
         for (pos, el) in transitions {
             if vidx == usize::MAX {
-                self.report.warn("transitions on audio storylines are not supported");
+                self.report.warn_limited(self.report_limit, "transitions on audio storylines are not supported");
                 continue;
             }
             let start = origin + attr_time(el, "offset").unwrap_or(Tick::ZERO);
@@ -501,7 +514,13 @@ impl<'a> Imp<'a, '_, '_> {
             } else {
                 TransitionAlign::CenterAtCut
             };
-            let effect = transition_effect(self.b.catalog, &name, false, self.report);
+            let mut temporary = Report::default();
+            let effect = transition_effect(self.b.catalog, &name, false, &mut temporary);
+            for e in temporary.entries {
+                for _ in 0..e.count {
+                    self.report.push_limited(e.level, self.report_limit, &e.message);
+                }
+            }
             let id = TransitionId(self.b.alloc());
             // The clips may have been moved to another track by placement; find the track holding them.
             let clip = from.or(to).map(|c| c.0);
@@ -527,7 +546,10 @@ impl<'a> Imp<'a, '_, '_> {
     fn element(&mut self, seq: &mut Sequence, ctx: &Ctx, el: Node<'a>, t0: Tick, lane: i32, primary: bool) -> (Tick, Option<ClipId>) {
         if self.depth >= MAX_XML_DEPTH {
             self.depth_hits += 1;
-            self.report.warn(format!("XML elements are nested too deeply (more than {MAX_XML_DEPTH}); deeper clips were skipped"));
+            self.report.warn_limited(
+                self.report_limit,
+                format!("XML elements are nested too deeply (more than {MAX_XML_DEPTH}); deeper clips were skipped"),
+            );
             return (t0, None);
         }
         self.depth += 1;
@@ -556,7 +578,8 @@ impl<'a> Imp<'a, '_, '_> {
                     .flatten()
                     .filter(|a| a.has_video);
                 if asset.is_none() {
-                    self.report.warn(format!("FCPXML <video> \"{name}\" has no supported video asset/source; clip was skipped"));
+                    self.report
+                        .warn_limited(self.report_limit, format!("FCPXML <video> \"{name}\" has no supported video asset/source; clip was skipped"));
                 }
                 asset.map(|a| (a.item, a.start, true, false))
             }
@@ -579,7 +602,7 @@ impl<'a> Imp<'a, '_, '_> {
             }),
             "gap" => None,
             "title" | "audio" | "sync-clip" | "mc-clip" | "live-drawing" => {
-                self.report.warn(format!("FCPXML <{tag}> elements are not supported and were skipped"));
+                self.report.warn_limited(self.report_limit, format!("FCPXML <{tag}> elements are not supported and were skipped"));
                 None
             }
             _ => None,
@@ -624,7 +647,10 @@ impl<'a> Imp<'a, '_, '_> {
                 };
                 let id = ti.id;
                 if self.b.place(seq, kind, pref, ti).is_none() {
-                    self.report.warn(format!("FCPXML {kind:?} lane exceeds the {MAX_IMPORTED_TRACKS}-track import limit; clip was skipped"));
+                    self.report.warn_limited(
+                        self.report_limit,
+                        format!("FCPXML {kind:?} lane exceeds the {MAX_IMPORTED_TRACKS}-track import limit; clip was skipped"),
+                    );
                     continue;
                 }
                 placed.push((kind, id));
@@ -708,7 +734,7 @@ impl<'a> Imp<'a, '_, '_> {
                         set_param(self.b.catalog, ti, "motion", "scale", p);
                     }
                     if nonuniform {
-                        self.report.warn("non-uniform scale was imported as uniform scale");
+                        self.report.warn_limited(self.report_limit, "non-uniform scale was imported as uniform scale");
                     }
                     if let Some(p) = self.kparam(a, "rotation", &kt, |v| ParamValue::Float(-v.trim().parse::<f64>().unwrap_or(0.0))) {
                         set_param(self.b.catalog, ti, "motion", "rotation", p);
@@ -749,7 +775,7 @@ impl<'a> Imp<'a, '_, '_> {
                             }
                             ti.effects.push(inst);
                         }
-                        None => self.report.warn(format!("effect \"{name}\" is not supported and was skipped")),
+                        None => self.report.warn_limited(self.report_limit, format!("effect \"{name}\" is not supported and was skipped")),
                     }
                 }
                 _ => {}
@@ -830,6 +856,7 @@ struct Exp<'a, 'r> {
     p: &'a Project,
     opts: &'a ExportOptions<'a>,
     report: &'r mut Report,
+    report_limit: Option<usize>,
     formats: Vec<(String, FrameRate, u32, u32)>,
     assets: HashMap<ItemId, Res>,
     medias: HashMap<ItemId, Res>,
@@ -840,12 +867,20 @@ struct Exp<'a, 'r> {
     building: Vec<ItemId>,
 }
 
-pub fn export(p: &Project, seq_id: ItemId, opts: &ExportOptions, report: &mut Report) -> Result<String> {
-    let seq = p.sequence(seq_id).ok_or(Error::NoSequence(seq_id))?;
+/// Write FCPXML with an optional distinct-diagnostic limit ([`export`] has none).
+pub fn export_with_report_limit(
+    p: &Project,
+    seq_id: ItemId,
+    opts: &ExportOptions,
+    report: &mut Report,
+    report_limit: Option<usize>,
+) -> Result<String> {
+    let Some(seq) = p.sequence(seq_id) else { return Err(Error::NoSequence(seq_id)) };
     let mut x = Exp {
         p,
         opts,
         report,
+        report_limit,
         formats: Vec::new(),
         assets: HashMap::new(),
         medias: HashMap::new(),
@@ -870,6 +905,11 @@ pub fn export(p: &Project, seq_id: ItemId, opts: &ExportOptions, report: &mut Re
     out.push_str(&body);
     out.push_str("      </project>\n    </event>\n  </library>\n</fcpxml>\n");
     Ok(out)
+}
+
+/// Write the sequence `seq_id` as FCPXML; what it cannot carry is in `report`.
+pub fn export(p: &Project, seq_id: ItemId, opts: &ExportOptions, report: &mut Report) -> Result<String> {
+    export_with_report_limit(p, seq_id, opts, report, None)
 }
 
 /// One storyline element being written.
@@ -910,7 +950,7 @@ impl Exp<'_, '_> {
             return r.id.clone();
         }
         let Some(m) = item_media(self.p, item) else {
-            self.report.warn("clip without media skipped");
+            self.report.warn_limited(self.report_limit, "clip without media skipped");
             return String::new();
         };
         let name = self.p.item(item).map(|i| i.name.clone()).unwrap_or_default();
@@ -946,7 +986,7 @@ impl Exp<'_, '_> {
             return r.id.clone();
         }
         let Some(s) = self.p.sequence(item) else {
-            self.report.warn("missing nested sequence skipped");
+            self.report.warn_limited(self.report_limit, "missing nested sequence skipped");
             return String::new();
         };
         let fmt = self.format(s.settings.frame_rate, s.settings.width, s.settings.height);
@@ -1011,7 +1051,7 @@ impl Exp<'_, '_> {
         }
         let merged_audio: std::collections::HashSet<_> = merged.values().copied().collect();
         if seq.all_tracks().skip(1).any(|t| !t.transitions.is_empty()) {
-            self.report.warn("FCPXML export keeps transitions on V1 only; transitions on other tracks were dropped");
+            self.report.warn_limited(self.report_limit, "FCPXML export keeps transitions on V1 only; transitions on other tracks were dropped");
         }
         // Primary storyline from V1 (gaps fill holes, plus a trailing gap covering connected clips).
         let v1 = seq.video_tracks.first();
@@ -1069,11 +1109,11 @@ impl Exp<'_, '_> {
                         continue;
                     }
                     if let Some(what) = self.unsupported(it, rate) {
-                        self.report.warn(format!("{what}: it is left out and is not read back on import"));
+                        self.report.warn_limited(self.report_limit, format!("{what}: it is left out and is not read back on import"));
                         continue;
                     }
                     let Some(pi) = els.iter().position(|e| e.start <= it.start && it.start < e.end) else {
-                        self.report.warn("a connected clip could not be attached and was dropped");
+                        self.report.warn_limited(self.report_limit, "a connected clip could not be attached and was dropped");
                         continue;
                     };
                     let local = els[pi].local + (it.start - els[pi].start);
@@ -1096,7 +1136,7 @@ impl Exp<'_, '_> {
                     let s = marker_xml(m, local, rate);
                     els[pi].children.push(s);
                 }
-                None => self.report.warn("a sequence marker past the end of the timeline was dropped"),
+                None => self.report.warn_limited(self.report_limit, "a sequence marker past the end of the timeline was dropped"),
             }
         }
         let inner = format!("{pad}    ");
@@ -1163,13 +1203,13 @@ impl Exp<'_, '_> {
         // In the primary storyline, a clip FCPXML cannot carry becomes a gap that keeps the timing
         // (connected ones never get here: see `unsupported`).
         if let Some(what) = self.unsupported(it, rate) {
-            self.report.warn(format!("{what}: it is written as a gap and is not read back on import"));
+            self.report.warn_limited(self.report_limit, format!("{what}: it is written as a gap and is not read back on import"));
             return gap_el(it, &name, offset, rate);
         }
         // Local timeline of the element: origin + source time (retimed clips use a timeMap).
         let (tag, r, origin) = if is_seq {
             let r = if self.building.contains(&base) {
-                self.report.warn("recursive nested sequence");
+                self.report.warn_limited(self.report_limit, "recursive nested sequence");
                 String::new()
             } else {
                 self.media(base)
@@ -1236,7 +1276,7 @@ impl Exp<'_, '_> {
                 || param_modified(self.opts.catalog, a, "channel_volume", "left")
                 || param_modified(self.opts.catalog, a, "channel_volume", "right")
             {
-                self.report.warn("pan and channel volume are not exported to FCPXML");
+                self.report.warn_limited(self.report_limit, "pan and channel volume are not exported to FCPXML");
             }
         }
         for e in standard_effects(self.opts.catalog, it) {
@@ -1258,7 +1298,7 @@ impl Exp<'_, '_> {
                 }
                 s.push_str(&format!("</{tag}>"));
             }
-            self.report.info(format!("effect \"{n}\" written as an FCPXML filter reference (FilmCraft-specific)"));
+            self.report.info_limited(self.report_limit, format!("effect \"{n}\" written as an FCPXML filter reference (FilmCraft-specific)"));
             children.push(s);
         }
         if !primary || kind == TrackKind::Audio {
@@ -1266,7 +1306,7 @@ impl Exp<'_, '_> {
                 children.push(marker_xml(m, to_local(m.start), rate));
             }
         } else if !it.markers.is_empty() {
-            self.report.info("clip markers on V1 are written as primary-storyline markers and import as sequence markers");
+            self.report.info_limited(self.report_limit, "clip markers on V1 are written as primary-storyline markers and import as sequence markers");
             for m in &it.markers {
                 children.push(marker_xml(m, to_local(m.start), rate));
             }
@@ -1300,7 +1340,7 @@ impl Exp<'_, '_> {
             if param_modified(self.opts.catalog, it, "motion", "scale_width")
                 || param(it, "motion", "uniform_scale").and_then(|p| p.value.as_bool()) == Some(false)
             {
-                self.report.warn("non-uniform scale is not exported to FCPXML");
+                self.report.warn_limited(self.report_limit, "non-uniform scale is not exported to FCPXML");
             }
             let mut attrs = Vec::new();
             let mut params = Vec::new();
@@ -1342,7 +1382,7 @@ impl Exp<'_, '_> {
             ));
         }
         if param(it, "opacity", "blend").and_then(|p| p.value.as_f64()).is_some_and(|b| b != 0.0) {
-            self.report.warn("blend modes are not exported to FCPXML");
+            self.report.warn_limited(self.report_limit, "blend modes are not exported to FCPXML");
         }
         let _ = (db_to_gain(0.0), gain_to_db(1.0));
     }

@@ -914,6 +914,8 @@ fn the_magnetic_lasso_shows_the_width_circle_under_the_precise_cursor() {
 #[trial]
 fn width_steps_by_one_and_shift_jumps_to_the_limits() {
     let mut settings = MagneticSettings::default();
+    settings.step_width(1, false);
+    assert_eq!(settings.width, 11.0, "a step adds one to the default width");
     settings.width = 10.4;
     settings.step_width(1, false);
     assert_eq!(settings.width, 11.0, "a step adds one to the rounded width");
