@@ -629,17 +629,87 @@ fn fbx6_model_holds_its_mesh() {
 }
 
 #[test]
-fn ascii_budget_applies_while_reading_values_and_records() {
-    let limits = Limits { max_data_bytes: 512, ..Limits::default() };
-    let many_values = format!("Objects: {{\n A: {}\n}}", "1,".repeat(1000));
-    assert!(matches!(read_document(many_values.as_bytes(), &limits), Err(Error::TooLarge(_))));
-    let many_records = format!("Objects: {{\n{}\n}}", "A: {}\n".repeat(1000));
-    assert!(matches!(read_document(many_records.as_bytes(), &limits), Err(Error::TooLarge(_))));
-    let giant_string = format!("Objects: {{ A: \"{}\" }}", "x".repeat(1024));
-    assert!(matches!(read_document(giant_string.as_bytes(), &limits), Err(Error::TooLarge(_))));
-    // Empty punctuation and comments do not consume memory in proportion to their length.
-    let ignored = format!(";{}\nObjects: {{}}", ",".repeat(10_000));
-    assert!(read_document(ignored.as_bytes(), &limits).is_ok());
+fn layer_zero_takes_precedence_and_an_indexed_layer_needs_indices() {
+    let layer_one = "LayerElementUV: 1 { MappingInformationType: \"ByPolygonVertex\" ReferenceInformationType: \"Direct\" UV: 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25 }\n";
+    let text = ASCII.replace("LayerElementUV: 0 {", &format!("{layer_one} LayerElementUV: 0 {{"));
+    let scene = parse(text.as_bytes()).unwrap();
+    assert_eq!(scene.meshes[0].uv_sets[0][0], [0.0, 1.0]);
+    let missing = ASCII.replace("UVIndex: *7", "UnusedIndex: *7");
+    assert!(parse(missing.as_bytes()).unwrap().meshes[0].uv_sets.is_empty());
+}
+
+#[test]
+fn optional_inactive_pre_rotation_keeps_legacy_placements() {
+    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" { Properties70: { P: \"PreRotation\", \"\", \"\", \"\", 0,0,90 } } }";
+    let doc = document(text.as_bytes());
+    let normal = doc.scene(&Limits::default(), &mut no_external).unwrap();
+    let options = crate::fbx::SceneOptions { apply_inactive_rotation: true, ..Default::default() };
+    let legacy = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    let p = [1.0, 0.0, 0.0];
+    assert_eq!(transform_point(&normal.nodes[0].transform, p), p);
+    let turned = transform_point(&legacy.nodes[0].transform, p);
+    assert!((turned[0]).abs() < 1e-12 && (turned[1] - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn strict_geometry_rejects_bad_arrays_and_keeps_final_polygon() {
+    let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
+    let read_strict = |s: &str| document(s.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options);
+    let unterminated = ASCII.replace("a: 0,1,2,-4,0,1,-5", "a: 0,1,2,-4,0,1,4");
+    assert_eq!(read_strict(&unterminated).unwrap().meshes[0].triangle_count(), 3);
+    for bad in ["a: 0,1,2,-4,0,1,200", "a: 0,1,2,-4,0,1,1.5", "a: 0,1,2,-4,0,1,NaN"] {
+        assert!(read_strict(&ASCII.replace("a: 0,1,2,-4,0,1,-5", bad)).is_err());
+    }
+}
+
+#[test]
+fn scene_option_selects_the_last_parent_connection() {
+    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" {} Model: 2, \"Model::B\", \"Null\" {} Model: 3, \"Model::Child\", \"Null\" {} } Connections: { C: \"OO\",3,1 C: \"OO\",3,2 }";
+    let doc = document(text.as_bytes());
+    let options = crate::fbx::SceneOptions { prefer_last_parent: true, ..Default::default() };
+    let scene = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    assert!(scene.nodes[1].children.contains(&2));
+    let default = doc.scene(&Limits::default(), &mut no_external).unwrap();
+    assert!(default.nodes[0].children.contains(&2));
+}
+
+#[test]
+fn object_only_hierarchy_ignores_property_connections() {
+    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" {} Model: 2, \"Model::B\", \"Null\" {} } Connections: { C: \"OP\",2,1,\"SomeProperty\" }";
+    let doc = document(text.as_bytes());
+    let options = crate::fbx::SceneOptions { only_object_connections: true, ..Default::default() };
+    let scene = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    assert_eq!(scene.roots.len(), 2);
+    assert_eq!(doc.scene(&Limits::default(), &mut no_external).unwrap().roots.len(), 1);
+}
+
+#[test]
+fn binary_scalar_properties_are_bounded_before_reserving() {
+    let mut bytes = BINARY_MAGIC.to_vec();
+    bytes.extend(7400u32.to_le_bytes());
+    let count = 1000u32;
+    let end = bytes.len() + 13 + 1 + count as usize * 2;
+    bytes.extend((end as u32).to_le_bytes());
+    bytes.extend(count.to_le_bytes());
+    bytes.extend((count * 2).to_le_bytes());
+    bytes.push(1);
+    bytes.push(b'A');
+    for _ in 0..count {
+        bytes.extend([b'C', 1]);
+    }
+    let limits = Limits { max_data_bytes: 1024, ..Limits::default() };
+    assert!(matches!(read_document(&bytes, &limits), Err(Error::TooLarge(_))));
+    assert!(read_document(&bytes, &Limits::default()).is_ok());
+}
+
+#[test]
+fn fbx_invalid_material_slot_is_unassigned_and_unnamed_material_has_id() {
+    let text = ASCII.replace("a: 0,1\n", "a: 0,99\n").replace("\"Material::Red\"", "\"\"");
+    let scene = parse(text.as_bytes()).unwrap();
+    assert!(scene.materials.iter().any(|m| m.name == "Material_400"));
+    let parts = &scene.meshes[0].parts;
+    assert!(parts.iter().any(|p| p.material.is_none()));
+    assert!(parts.iter().any(|p| p.material.is_some()));
 }
 
 #[test]
@@ -714,6 +784,40 @@ fn fbx_corner_colors_keep_seams_and_incomplete_layers_are_omitted() {
 }
 
 #[test]
+fn ascii_budget_applies_while_reading_values_and_records() {
+    let limits = Limits { max_data_bytes: 512, ..Limits::default() };
+    let many_values = format!("Objects: {{\n A: {}\n}}", "1,".repeat(1000));
+    assert!(matches!(read_document(many_values.as_bytes(), &limits), Err(Error::TooLarge(_))));
+    let many_records = format!("Objects: {{\n{}\n}}", "A: {}\n".repeat(1000));
+    assert!(matches!(read_document(many_records.as_bytes(), &limits), Err(Error::TooLarge(_))));
+    let giant_string = format!("Objects: {{ A: \"{}\" }}", "x".repeat(1024));
+    assert!(matches!(read_document(giant_string.as_bytes(), &limits), Err(Error::TooLarge(_))));
+    // Empty punctuation and comments do not consume memory in proportion to their length.
+    let ignored = format!(";{}\nObjects: {{}}", ",".repeat(10_000));
+    assert!(read_document(ignored.as_bytes(), &limits).is_ok());
+}
+
+#[test]
+fn strict_ascii_reports_unbalanced_and_unterminated_records() {
+    let strict = |s: &str| crate::fbx::read_document_strict(s.as_bytes(), &Limits::default());
+    assert!(strict(ASCII).is_ok());
+    for s in ["Objects: { A: 1", "Objects: { } }", "Objects: { A: \"unterminated", "Objects: { A: 1 2 }"] {
+        assert!(strict(s).is_err(), "{s}");
+    }
+    assert!(read_document(b"Objects: { A: 1", &Limits::default()).is_ok());
+}
+
+#[test]
+fn strict_binary_requires_a_closing_record() {
+    let doc = document(ASCII.as_bytes());
+    let bytes = write_binary(&doc.records, 7400, false);
+    assert!(crate::fbx::read_document_strict(&bytes, &Limits::default()).is_ok());
+    let truncated = &bytes[..bytes.len() - 29];
+    assert!(read_document(truncated, &Limits::default()).is_ok());
+    assert!(crate::fbx::read_document_strict(truncated, &Limits::default()).is_err());
+}
+
+#[test]
 fn diffuse_materials_preserve_factors_and_texture_candidates() {
     let text = with(
         "Texture: 600, \"Texture::Base\", \"\" { RelativeFilename: \"maps/base.png\" FileName: \"C:/a/base.png\" }\n",
@@ -742,107 +846,46 @@ fn diffuse_materials_preserve_factors_and_texture_candidates() {
 }
 
 #[test]
-fn optional_inactive_pre_rotation_keeps_legacy_placements() {
-    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" { Properties70: { P: \"PreRotation\", \"\", \"\", \"\", 0,0,90 } } }";
-    let doc = document(text.as_bytes());
-    let normal = doc.scene(&Limits::default(), &mut no_external).unwrap();
-    let options = crate::fbx::SceneOptions { apply_inactive_rotation: true, ..Default::default() };
-    let legacy = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
-    let p = [1.0, 0.0, 0.0];
-    assert_eq!(transform_point(&normal.nodes[0].transform, p), p);
-    let turned = transform_point(&legacy.nodes[0].transform, p);
-    assert!((turned[0]).abs() < 1e-12 && (turned[1] - 1.0).abs() < 1e-12);
+fn per_corner_and_per_vertex_material_ids_use_each_polygons_first_corner() {
+    let by_corner = ASCII.replace("MappingInformationType: \"ByPolygon\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *2 {\n\t\t\t\ta: 0,1", "MappingInformationType: \"ByPolygonVertex\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *7 {\n\t\t\t\ta: 0,0,0,0,1,1,1");
+    assert_ne!(by_corner, ASCII);
+    let parts = &parse(by_corner.as_bytes()).unwrap().meshes[0].parts;
+    assert_eq!(parts.len(), 2, "the triangle takes material 1 from its first corner");
+    // The triangle starts at control point 4, whose material is 1.
+    let by_vertex = ASCII.replace("a: 0,1,2,-4,0,1,-5", "a: 0,1,2,-4,4,0,-2").replace(
+        "MappingInformationType: \"ByPolygon\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *2 {\n\t\t\t\ta: 0,1",
+        "MappingInformationType: \"ByControlPoint\"\n\t\t\tReferenceInformationType: \"IndexToDirect\"\n\t\t\tMaterials: *5 {\n\t\t\t\ta: 0,0,0,0,1",
+    );
+    let scene = parse(by_vertex.as_bytes()).unwrap();
+    assert_eq!(scene.meshes[0].parts.len(), 2);
+    assert!(scene.meshes[0].parts.iter().all(|p| p.material.is_some()));
 }
 
 #[test]
-fn layer_zero_takes_precedence_and_an_indexed_layer_needs_indices() {
-    let layer_one = "LayerElementUV: 1 { MappingInformationType: \"ByPolygonVertex\" ReferenceInformationType: \"Direct\" UV: 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25 }\n";
-    let text = ASCII.replace("LayerElementUV: 0 {", &format!("{layer_one} LayerElementUV: 0 {{"));
-    let scene = parse(text.as_bytes()).unwrap();
-    assert_eq!(scene.meshes[0].uv_sets[0][0], [0.0, 1.0]);
-    let missing = ASCII.replace("UVIndex: *7", "UnusedIndex: *7");
-    assert!(parse(missing.as_bytes()).unwrap().meshes[0].uv_sets.is_empty());
-}
-
-#[test]
-fn strict_geometry_rejects_bad_arrays_and_keeps_final_polygon() {
+fn strict_colors_validate_and_read_the_same_layer() {
+    let good = "LayerElementColor: 0 { MappingInformationType: \"AllSame\" ReferenceInformationType: \"Direct\" Colors: 0,1,0,1 }\n";
+    let bad = "LayerElementColor: 1 { MappingInformationType: \"AllSame\" ReferenceInformationType: \"Direct\" Colors: \"bad\",1,0,0,1 }\n";
+    let text = ASCII.replace("LayerElementNormal: 0 {", &format!("{bad} {good} LayerElementNormal: 0 {{"));
     let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
-    let read_strict = |s: &str| document(s.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options);
-    let unterminated = ASCII.replace("a: 0,1,2,-4,0,1,-5", "a: 0,1,2,-4,0,1,4");
-    assert_eq!(read_strict(&unterminated).unwrap().meshes[0].triangle_count(), 3);
-    for bad in ["a: 0,1,2,-4,0,1,200", "a: 0,1,2,-4,0,1,1.5", "a: 0,1,2,-4,0,1,NaN"] {
-        assert!(read_strict(&ASCII.replace("a: 0,1,2,-4,0,1,-5", bad)).is_err());
-    }
+    let scene = document(text.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
+    assert!(scene.meshes[0].colors.iter().all(|c| *c == [0.0, 1.0, 0.0, 1.0]));
+    assert!(!scene.meshes[0].colors.is_empty());
+    let only_bad = ASCII.replace("LayerElementNormal: 0 {", &format!("{} LayerElementNormal: 0 {{", bad.replace(": 1 {", ": 0 {")));
+    assert!(document(only_bad.as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err());
 }
 
 #[test]
-fn strict_ascii_reports_unbalanced_and_unterminated_records() {
-    let strict = |s: &str| crate::fbx::read_document_strict(s.as_bytes(), &Limits::default());
-    assert!(strict(ASCII).is_ok());
-    for s in ["Objects: { A: 1", "Objects: { } }", "Objects: { A: \"unterminated", "Objects: { A: 1 2 }"] {
-        assert!(strict(s).is_err(), "{s}");
-    }
-    assert!(read_document(b"Objects: { A: 1", &Limits::default()).is_ok());
-}
-
-#[test]
-fn scene_option_selects_the_last_parent_connection() {
-    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" {} Model: 2, \"Model::B\", \"Null\" {} Model: 3, \"Model::Child\", \"Null\" {} } Connections: { C: \"OO\",3,1 C: \"OO\",3,2 }";
-    let doc = document(text.as_bytes());
-    let options = crate::fbx::SceneOptions { prefer_last_parent: true, ..Default::default() };
-    let scene = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
-    assert!(scene.nodes[1].children.contains(&2));
-    let default = doc.scene(&Limits::default(), &mut no_external).unwrap();
-    assert!(default.nodes[0].children.contains(&2));
-}
-
-#[test]
-fn fbx_invalid_material_slot_is_unassigned_and_unnamed_material_has_id() {
-    let text = ASCII.replace("a: 0,1\n", "a: 0,99\n").replace("\"Material::Red\"", "\"\"");
-    let scene = parse(text.as_bytes()).unwrap();
-    assert!(scene.materials.iter().any(|m| m.name == "Material_400"));
-    let parts = &scene.meshes[0].parts;
-    assert!(parts.iter().any(|p| p.material.is_none()));
-    assert!(parts.iter().any(|p| p.material.is_some()));
-}
-
-#[test]
-fn binary_scalar_properties_are_bounded_before_reserving() {
-    let mut bytes = BINARY_MAGIC.to_vec();
-    bytes.extend(7400u32.to_le_bytes());
-    let count = 1000u32;
-    let end = bytes.len() + 13 + 1 + count as usize * 2;
-    bytes.extend((end as u32).to_le_bytes());
-    bytes.extend(count.to_le_bytes());
-    bytes.extend((count * 2).to_le_bytes());
-    bytes.push(1);
-    bytes.push(b'A');
-    for _ in 0..count {
-        bytes.extend([b'C', 1]);
-    }
-    let limits = Limits { max_data_bytes: 1024, ..Limits::default() };
-    assert!(matches!(read_document(&bytes, &limits), Err(Error::TooLarge(_))));
-    assert!(read_document(&bytes, &Limits::default()).is_ok());
-}
-
-#[test]
-fn object_only_hierarchy_ignores_property_connections() {
-    let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" {} Model: 2, \"Model::B\", \"Null\" {} } Connections: { C: \"OP\",2,1,\"SomeProperty\" }";
-    let doc = document(text.as_bytes());
-    let options = crate::fbx::SceneOptions { only_object_connections: true, ..Default::default() };
-    let scene = doc.scene_with_options(&Limits::default(), &mut no_external, &options).unwrap();
-    assert_eq!(scene.roots.len(), 2);
-    assert_eq!(doc.scene(&Limits::default(), &mut no_external).unwrap().roots.len(), 1);
-}
-
-#[test]
-fn strict_binary_requires_a_closing_record() {
-    let doc = document(ASCII.as_bytes());
-    let bytes = write_binary(&doc.records, 7400, false);
-    assert!(crate::fbx::read_document_strict(&bytes, &Limits::default()).is_ok());
-    let truncated = &bytes[..bytes.len() - 29];
-    assert!(read_document(truncated, &Limits::default()).is_ok());
-    assert!(crate::fbx::read_document_strict(truncated, &Limits::default()).is_err());
+fn strict_geometry_validates_the_colors_index_alias() {
+    let layer = |index: &str| {
+        format!(
+            "LayerElementColor: 0 {{ MappingInformationType: \"AllSame\" ReferenceInformationType: \"IndexToDirect\" Colors: 0,1,0,1 ColorsIndex: {index} }}\n"
+        )
+    };
+    let with = |index: &str| ASCII.replace("LayerElementNormal: 0 {", &format!("{} LayerElementNormal: 0 {{", layer(index)));
+    let options = crate::fbx::SceneOptions { strict_geometry: true, ..Default::default() };
+    assert!(document(with("0").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_ok());
+    assert!(document(with("\"bad\",0").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err());
+    assert!(document(with("0.5").as_bytes()).scene_with_options(&Limits::default(), &mut no_external, &options).is_err(), "a fractional index");
 }
 
 #[test]

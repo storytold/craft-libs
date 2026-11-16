@@ -1,0 +1,15 @@
+[package]
+name = "craft-usd"
+description = "Bounded USD Crate wire primitives, independent of scene and material policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-decode", "safe-encode"] }
+thiserror.workspace = true
