@@ -577,3 +577,50 @@ fn shift_keeps_an_anchor_drag_on_the_axis_or_the_diagonal() {
         assert_eq!(st.seen.last(), Some(&Seen::Commit));
     }
 }
+
+// Delete Anchor with only some subpaths' anchors shown (#12769): a click on a hidden anchor deletes nothing and
+// edits nothing, selects that anchor and shows only its subpath; the next click on it deletes it.
+#[trial]
+fn a_delete_anchor_click_on_a_hidden_anchor_shows_its_subpath_and_deletes_nothing() {
+    let mut h = harness(vec![path_b()]);
+    h.update(|st| (st.tool, st.selection) = (BezierTool::DeleteAnchor, PathSelection::new(Some(2), Vec::new(), None).shown(Some(vec![0]))));
+    let hidden = h.screen(p(200.0, 220.0));
+    h.press_at(hidden);
+    h.release_at(hidden);
+    {
+        let st = h.state.borrow();
+        assert!(st.deletes.is_empty() && st.changes.is_empty() && st.seen.is_empty(), "{:?} {:?} {:?}", st.deletes, st.changes, st.seen);
+        assert_eq!(st.selection, sel(2, &[(1, 0)]).shown(Some(vec![1])));
+    }
+    h.press_at(hidden);
+    h.release_at(hidden);
+    assert_eq!(h.state.borrow().deletes, [AnchorDelete::new(2, vec![KnotRef::new(1, 0)], false)]);
+}
+
+// The keyboard reaches only the anchors shown: with the square hidden, Home picks the line's first anchor, and the
+// selection keeps showing only the line.
+#[trial]
+fn hidden_anchors_take_no_keyboard_stop() {
+    let mut h = harness(vec![path_b()]);
+    h.update(|st| st.selection = PathSelection::new(Some(2), Vec::new(), None).shown(Some(vec![1])));
+    h.fixture.key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Home, egui::Modifiers::NONE).settle();
+    assert_eq!(h.state.borrow().selection, sel(2, &[(1, 0)]).shown(Some(vec![1])));
+}
+
+// After the host deleted an anchor of a Delete Anchor click: the anchor that followed is selected with only its
+// subpath shown, the first of a closed subpath after its last, none after an open subpath's last; when the delete
+// removed a subpath nothing is selected and every subpath shows.
+#[trial]
+fn after_a_delete_the_following_anchor_is_selected_and_its_subpath_shown() {
+    let deleted = |subpath: usize, knot: usize| {
+        let mut path = path_b();
+        assert!(path.subpaths[subpath].remove_knot(knot));
+        PathSelection::after_delete(&path, KnotRef::new(subpath, knot), 2)
+    };
+    assert_eq!(deleted(0, 1), sel(2, &[(0, 1)]).shown(Some(vec![0])));
+    assert_eq!(deleted(0, 3), sel(2, &[(0, 0)]).shown(Some(vec![0])), "a closed subpath wraps to its first anchor");
+    assert_eq!(deleted(1, 1), sel(2, &[]).shown(Some(vec![1])), "nothing follows an open subpath's last anchor");
+    let mut path = path_b();
+    path.subpaths.remove(1);
+    assert_eq!(PathSelection::after_delete(&path, KnotRef::new(1, 0), 2), sel(2, &[]));
+}

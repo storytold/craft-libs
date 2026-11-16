@@ -284,6 +284,9 @@ struct Item {
     interior: bool,
     /// A segment with both handles retracted.
     straight: bool,
+    /// An anchor or handle the selection shows ([`PathSelection::shows`]). A hidden anchor is not drawn and not in
+    /// the keyboard order, and still takes a press (a Delete Anchor click on it shows its subpath).
+    shown: bool,
     /// An anchor's place among the path's anchors, from 1, and their number.
     ordinal: (usize, usize),
 }
@@ -428,6 +431,7 @@ impl<'a> BezierOverlay<'a> {
                 let anchor = view.to_screen(knot.anchor);
                 let sub = &path.subpaths[knot_ref.subpath];
                 let interior = sub.closed || (knot_ref.knot != 0 && knot_ref.knot + 1 != sub.knots.len());
+                let anchor_shown = self.selection.shows(path.key, knot_ref.subpath);
                 if near.contains(anchor) {
                     items.push(Item {
                         kind: Kind::Anchor,
@@ -438,6 +442,7 @@ impl<'a> BezierOverlay<'a> {
                         shape: HitShape::circle(anchor, reach),
                         interior,
                         straight: false,
+                        shown: anchor_shown,
                         ordinal: (n + 1, count),
                     });
                 }
@@ -452,6 +457,7 @@ impl<'a> BezierOverlay<'a> {
                             shape: HitShape::circle(end, reach),
                             interior,
                             straight: false,
+                            shown: anchor_shown,
                             ordinal: (n + 1, count),
                         });
                     }
@@ -482,6 +488,7 @@ impl<'a> BezierOverlay<'a> {
                             shape: HitShape::polyline(points, false),
                             interior: true,
                             straight: sub.is_straight(i),
+                            shown: true,
                             ordinal: (0, 0),
                         });
                     }
@@ -512,8 +519,23 @@ impl<'a> BezierOverlay<'a> {
     }
 
     /// The selection that has only the anchor a segment insert adds.
-    fn inserted(path: u64, segment: KnotRef) -> PathSelection {
-        PathSelection { path: Some(path), anchors: vec![KnotRef::new(segment.subpath, segment.knot + 1)], segment: None }
+    fn inserted(&self, path: u64, segment: KnotRef) -> PathSelection {
+        self.selecting(path, vec![KnotRef::new(segment.subpath, segment.knot + 1)], None)
+    }
+
+    /// The selection of `anchors` and `segment` of `path`. On the selection's path it keeps the subpaths shown and
+    /// adds those of the selected anchors and segment, so a selected anchor always shows.
+    fn selecting(&self, path: u64, anchors: Vec<KnotRef>, segment: Option<KnotRef>) -> PathSelection {
+        let shown = self.selection.shown.as_ref().filter(|_| self.selection.path == Some(path)).map(|shown| {
+            let mut shown = shown.clone();
+            for subpath in anchors.iter().chain(&segment).map(|k| k.subpath) {
+                if !shown.contains(&subpath) {
+                    shown.push(subpath);
+                }
+            }
+            shown
+        });
+        PathSelection::new(Some(path), anchors, segment).shown(shown)
     }
 
     /// The target a press drags: for the tools that act on the press ([`BezierTool::clicks`]) an insert into a
@@ -541,7 +563,7 @@ impl<'a> BezierOverlay<'a> {
                 Target::Handle { path, knot, side, from: knot_at(path, knot).map_or(Point::ZERO, |k| k.handle(side)) }
             }
             (BezierTool::Curvature, BezierHit::Anchor { path, knot }) => {
-                self.report.select = Some(PathSelection { path: Some(path), anchors: vec![knot], segment: None });
+                self.report.select = Some(self.selecting(path, vec![knot], None));
                 if start.clicks == 2 {
                     Target::Toggle { path, knot }
                 } else {
@@ -563,7 +585,7 @@ impl<'a> BezierOverlay<'a> {
                 let chosen: &[KnotRef] = if self.selection.path == Some(path) { &self.selection.anchors } else { &[] };
                 let all: Vec<KnotRef> = shown.knot_refs().collect();
                 if chosen.is_empty() {
-                    self.report.select = Some(PathSelection { path: Some(path), anchors: Vec::new(), segment: Some(segment) });
+                    self.report.select = Some(self.selecting(path, Vec::new(), Some(segment)));
                     Target::Bend { path, segment, t, from }
                 } else if all.iter().all(|k| chosen.contains(k)) {
                     Target::Anchors { path, anchors: all, from }
@@ -572,7 +594,7 @@ impl<'a> BezierOverlay<'a> {
                 }
             }
             (BezierTool::Convert, BezierHit::Anchor { path, knot }) => {
-                self.report.select = Some(PathSelection { path: Some(path), anchors: vec![knot], segment: None });
+                self.report.select = Some(self.selecting(path, vec![knot], None));
                 Target::Convert { path, knot }
             }
             (_, BezierHit::Anchor { path, knot }) => {
@@ -582,7 +604,7 @@ impl<'a> BezierOverlay<'a> {
                     Self::subpath_anchors(paths, path, knot.subpath)
                 } else if mods.shift && selected {
                     let rest: Vec<KnotRef> = self.selection.anchors.iter().copied().filter(|&k| k != knot).collect();
-                    self.report.select = Some(PathSelection { path: Some(path), anchors: rest, segment: None });
+                    self.report.select = Some(self.selecting(path, rest, None));
                     return Target::Nothing;
                 } else if mods.shift && self.selection.path == Some(path) {
                     self.selection.anchors.iter().copied().chain([knot]).collect()
@@ -592,7 +614,7 @@ impl<'a> BezierOverlay<'a> {
                     vec![knot]
                 };
                 if !selected || mods.alt || mods.shift {
-                    self.report.select = Some(PathSelection { path: Some(path), anchors: anchors.clone(), segment: None });
+                    self.report.select = Some(self.selecting(path, anchors.clone(), None));
                 }
                 Target::Anchors { path, anchors, from }
             }
@@ -600,10 +622,10 @@ impl<'a> BezierOverlay<'a> {
                 let from = Self::segment_point(paths, path, segment, t);
                 if mods.alt {
                     let anchors = Self::subpath_anchors(paths, path, segment.subpath);
-                    self.report.select = Some(PathSelection { path: Some(path), anchors: anchors.clone(), segment: None });
+                    self.report.select = Some(self.selecting(path, anchors.clone(), None));
                     Target::Anchors { path, anchors, from }
                 } else {
-                    self.report.select = Some(PathSelection { path: Some(path), anchors: Vec::new(), segment: Some(segment) });
+                    self.report.select = Some(self.selecting(path, Vec::new(), Some(segment)));
                     Target::Bend { path, segment, t, from }
                 }
             }
@@ -675,7 +697,7 @@ impl<'a> BezierOverlay<'a> {
             SelectionOperation::Intersect => current.into_iter().filter(|k| knots.contains(k)).collect(),
             _ => knots,
         };
-        Some(PathSelection { path: Some(path), anchors, segment: None })
+        Some(self.selecting(path, anchors, None))
     }
 
     /// The pointer on the parts: selection, drags, clicks, the hover mark and the context request.
@@ -708,7 +730,7 @@ impl<'a> BezierOverlay<'a> {
                     let target = self.press_target(hit, start, press.mods, paths);
                     if target == Target::Nothing && self.tool.clicks() {
                         // Delete Anchor and Auto Add/Delete act on an anchor at the press.
-                        tools::anchor_click(self.tool, hit, press.mods, &mut self.report);
+                        tools::anchor_click(self.tool, hit, press.mods, self.selection, &mut self.report);
                         *cx.press_slot::<Held>() = None;
                     } else {
                         *cx.press_slot::<Held>() = Some(Held { origin: start.origin, target, start: paths.to_vec(), began: false });
@@ -745,7 +767,7 @@ impl<'a> BezierOverlay<'a> {
         }
         if let Some((_, hit, mods)) = hovered {
             self.report.hover = Some(hit);
-            self.hover_mark = tools::hover_mark(self.tool, hit, mods);
+            self.hover_mark = tools::hover_mark(self.tool, hit, mods, self.selection);
         }
     }
 
@@ -765,7 +787,7 @@ impl<'a> BezierOverlay<'a> {
         if first && moves {
             held.began = true;
             if let Target::CurvatureInsert { path, segment, .. } | Target::Insert { path, segment, .. } = held.target {
-                self.report.select = Some(Self::inserted(path, segment));
+                self.report.select = Some(self.inserted(path, segment));
             }
             if held.target != Target::Marquee {
                 cx.begin();
@@ -794,7 +816,7 @@ impl<'a> BezierOverlay<'a> {
                 if let Some(edit) = Self::edit(view, snap, self.tool, &target, start.origin, pos, mods) {
                     self.set(cx, paths, edit);
                     if let Target::Insert { path, segment, .. } = target {
-                        self.report.select = Some(Self::inserted(path, segment));
+                        self.report.select = Some(self.inserted(path, segment));
                     }
                 }
             }
@@ -821,16 +843,16 @@ impl<'a> BezierOverlay<'a> {
             Target::Toggle { path, knot } => self.set(cx, &held.start, PathEdit::ToggleCurvature { path, knot }),
             Target::CurvatureInsert { path, segment, t, .. } => {
                 self.set(cx, &held.start, PathEdit::InsertCurvature { path, segment, t, by: Vec2::ZERO });
-                self.report.select = Some(Self::inserted(path, segment));
+                self.report.select = Some(self.inserted(path, segment));
             }
             Target::Insert { path, segment, t, .. } => {
                 self.set(cx, &held.start, PathEdit::InsertAnchor { path, segment, t, by: Vec2::ZERO });
-                self.report.select = Some(Self::inserted(path, segment));
+                self.report.select = Some(self.inserted(path, segment));
             }
             // A click without a drag (a press past the slop is no click) picks the anchor's whole subpath.
             Target::Pick { path, knot } if click => {
                 let anchors = Self::subpath_anchors(paths, path, knot.subpath);
-                self.report.select = Some(PathSelection { path: Some(path), anchors, segment: None });
+                self.report.select = Some(self.selecting(path, anchors, None));
             }
             _ => {}
         }
@@ -838,7 +860,7 @@ impl<'a> BezierOverlay<'a> {
 
     /// The keys of the focused overlay: picking parts, select all, nudges, Insert, Delete, Enter and Escape.
     fn run_keys(&mut self, cx: &mut Cx<'_, Self>, space: &CanvasSpace, scene: &Scene, paths: &[EditPath]) {
-        let keyboard: Vec<&Item> = scene.items.iter().filter(|item| item.kind != Kind::Segment).collect();
+        let keyboard: Vec<&Item> = scene.items.iter().filter(|item| item.kind != Kind::Segment && item.shown).collect();
         let active = cx.active_part();
         let current: Option<&Item> = active.and_then(|part| keyboard.iter().copied().find(|item| item.part() == part));
         let keyed = self.tool.keyed();
@@ -852,7 +874,7 @@ impl<'a> BezierOverlay<'a> {
             && item.kind == Kind::Anchor
             && !self.selection.has_anchor(item.key, item.knot)
         {
-            self.report.select = Some(PathSelection { path: Some(item.key), anchors: vec![item.knot], segment: None });
+            self.report.select = Some(self.selecting(item.key, vec![item.knot], None));
         }
         // With Cmd (Ctrl) a page key is the canvas's: it scrolls sideways and picks no part.
         let steps = |mv: NavMove, mods: MoveMods| !(matches!(mv, NavMove::PageDown | NavMove::PageUp) && mods.lead);
@@ -876,7 +898,7 @@ impl<'a> BezierOverlay<'a> {
                 if !anchors.contains(&item.knot) {
                     anchors.push(item.knot);
                 }
-                self.report.select = Some(PathSelection { path: Some(item.key), anchors, segment: None });
+                self.report.select = Some(self.selecting(item.key, anchors, None));
             }
         }
         while let Some(command) = cx.intents().take_edit() {
@@ -884,7 +906,7 @@ impl<'a> BezierOverlay<'a> {
                 && keyed
                 && let Some(path) = self.focused_path(paths, current)
             {
-                self.report.select = Some(PathSelection { path: Some(path.key), anchors: path.knot_refs().collect(), segment: None });
+                self.report.select = Some(self.selecting(path.key, path.knot_refs().collect(), None));
             }
         }
         if keyed && let Some((direction, mods)) = cx.intents().take_nudge() {
@@ -1083,7 +1105,7 @@ impl Component for BezierOverlay<'_> {
         let arrival = self.selection.path.zip(self.selection.anchors.first().copied());
         for item in &scene.items {
             let press = self.takes(item);
-            let keyboard = item.kind != Kind::Segment && focusable;
+            let keyboard = item.kind != Kind::Segment && item.shown && focusable;
             let selected = item.kind == Kind::Anchor && self.selection.has_anchor(item.key, item.knot);
             let part = cx.part(item.part(), item.shape.clone()).priority(item.priority());
             let part = if press { part.sense(PRESS) } else { part };
@@ -1099,7 +1121,7 @@ impl Component for BezierOverlay<'_> {
                 part.selected();
             }
         }
-        if focusable && scene.items.iter().any(|item| item.kind != Kind::Segment) {
+        if focusable && scene.items.iter().any(|item| item.kind != Kind::Segment && item.shown) {
             cx.roving(Roving::new(NavShape::Flat).home_end(false));
         }
     }
@@ -1173,7 +1195,7 @@ impl Component for BezierOverlay<'_> {
                     });
                     paint_handle(&draw, &style.control, true, item.at, fill, path.color);
                 }
-                Kind::Anchor => {
+                Kind::Anchor if item.shown => {
                     let fill = if self.selection.has_anchor(path.key, item.knot) {
                         Fill::Path(style.line)
                     } else {
@@ -1185,7 +1207,7 @@ impl Component for BezierOverlay<'_> {
                     };
                     paint_handle(&draw, &style.anchor, false, item.at, fill, path.color);
                 }
-                Kind::Segment => {}
+                Kind::Anchor | Kind::Segment => {}
             }
         }
         if let Some(hit) = self.hover_mark
@@ -1213,7 +1235,7 @@ impl Component for BezierOverlay<'_> {
         let (Some(space), Some(paths)) = (canvas_space(&cx.env), cx.value()) else { return };
         let scene = self.scene(paths, &space.view, cx.rect, cx.style.reach);
         let (words, units, rulers) = (cx.words::<BezierWords>(), cx.env.units(), space.rulers());
-        for item in scene.items.iter().filter(|item| item.kind != Kind::Segment) {
+        for item in scene.items.iter().filter(|item| item.kind != Kind::Segment && item.shown) {
             let Some(knot) = paths[item.path].knot(item.knot) else { continue };
             let (point, name) = match item.kind {
                 Kind::Handle(HandleSide::In) => (knot.in_ctrl, words.in_handle.as_str().to_owned()),

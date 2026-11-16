@@ -25,7 +25,7 @@ fn on_canvas(ui: &mut Ui, mut overlay: impl FnMut(&mut Ui, egui::Rect) -> Bezier
 }
 
 fn selected() -> PathSelection {
-    PathSelection { path: Some(1), anchors: vec![KnotRef::new(0, 2)], segment: None }
+    PathSelection::new(Some(1), vec![KnotRef::new(0, 2)], None)
 }
 
 #[story(BezierOverlay<'static>, covers = [Default], drive = Drive::Drag(Grip::part(ANCHOR.at(index(0, KnotRef { subpath: 0, knot: 0 }))).toward(Vec2::X)))]
