@@ -170,6 +170,7 @@ pub struct Preflight<'s> {
     xml: roxmltree::Document<'s>,
     depth: usize,
     /// [`height`]: the nesting usvg converts, references followed.
+    #[cfg_attr(not(feature = "tree"), expect(dead_code, reason = "only the embedded-image resolver reads it"))]
     height: usize,
 }
 
