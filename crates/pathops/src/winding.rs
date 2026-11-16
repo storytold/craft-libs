@@ -17,6 +17,30 @@
 //! of its (at most three) pieces. The rules are `kurbo`'s, so that nothing changes where it was right: a piece takes
 //! its lower end and not its upper (the crossings at a vertex are counted once), a crossing at the point's own `x` is
 //! to its left, a rising piece counts -1 and a falling one +1, and a line is tested as `kurbo` tests it.
+//!
+//! # The numeric domain
+//!
+//! - **Which numbers.** Any finite coordinates, of any size the doubles hold, and any scale, uniform or not. A segment with a coordinate that is not
+//!   finite winds nothing, and so does a point with a coordinate that is not a number; a point whose `x` is infinite is beyond every finite one, and one
+//!   whose `y` is infinite is level with none.
+//! - **Scale.** The winding does not change when an axis is multiplied by a positive number, so each segment is wound in a frame ([`Frame`]): each axis is
+//!   multiplied by the power of two that brings the greatest magnitude of that axis among the control points to between 1 and 2, and the point has the same
+//!   factors. A power of two scales every operation exactly, so the result is the same to the bit as it is at unit size on both axes (a segment 2^1000
+//!   across in `x` and 2^-1000 in `y` winds as it does at unit size, and a quadratic from 1e308 to -1e308 is raised to a cubic of numbers), and no
+//!   sum or product below overflows: each is under 16 in the frame. A slope of nothing, or a step to an infinity, ends the Newton method as it did.
+//!   A point that is too small for the frame is the least number of its sign and not zero, so that it stays on its own side of a control point of exactly 0.
+//! - **Range.** What the doubles cannot hold at once is lost as they lose it: in a segment whose greatest height is 1 (the greatest magnitude of an axis
+//!   is always 1 to 2 in the frame) a control point under 2^-1022 on that axis is 0, and a point's coordinate under it is the least number of its sign.
+//! - **Accuracy.** The heights are compared exactly: a point is over, at or under the end of a piece to the bit. The crossing of a piece with the height of
+//!   a point is found at a parameter where the curve's height is within 8 units in the last place of the segment's greatest height of the point's (the
+//!   greatest residual measured over 80,000 pieces and heights, curves 1, 1e-5 and 3e13 across, level handles, flat ends and heights within 1e-40 of the
+//!   ends of a piece, was 5): the `x` of it is as good as the heights can tell, which is the piece's own extent where the curve is flat to within that
+//!   rounding (a height within a few units of a turn's), and a point nearer to the crossing than that is counted on either side. Newton's method is
+//!   ended by a step of 1e-13 of the piece's range of the parameter and not of the parameter's (a curve 2^45 across, whose crossing is 0.29 from its start,
+//!   has a piece of 3e-14 of the parameter), and the bisection that follows a method that leaves its range halves that range 64 times.
+//!
+//! [`y_pieces`] and [`crossing_x`], which [`crate::offset_path`] reads the spans of a path from, are in the same frame: they bring their cubic to it and give
+//! the results back in the cubic's own numbers.
 
 use kurbo::{BezPath, CubicBez, PathSeg, Point, QuadBez};
 
@@ -28,9 +52,103 @@ pub(crate) const MAX_BISECTIONS: usize = 64;
 /// Most steps of Newton's method for the crossing of one piece, before the range it has narrowed is bisected.
 pub(crate) const NEWTON_STEPS: usize = 12;
 
-/// A Newton step this short (in the parameter, which runs from 0 to 1) is the last: the method converges
-/// quadratically, so the error left is the square of it, under what rounding can tell.
+/// A Newton step this short beside the parameter range of the piece (which runs from `lo` to `hi`, of at most 1) is the last: the method converges
+/// quadratically, so the error left is the square of it, under what rounding can tell. It is beside the range and not absolute, so that a piece that
+/// is shorter than the step (a curve 2^45 across whose first quarter unit is a tiny piece of the parameter) is not taken for found at the first step.
 const NEWTON_DONE: f64 = 1e-13;
+
+/// `2^e` as a number, for `e` from -1022 to 1023.
+fn pow2(e: i32) -> f64 {
+    f64::from_bits(u64::try_from((e + 1023).clamp(1, 2046)).unwrap_or(1) << 52)
+}
+
+/// `v` times `2^e`, in as many steps as it takes (a power of two is a number only from -1022 to 1023): exact where the result is a normal number.
+fn times_pow2(mut v: f64, mut e: i32) -> f64 {
+    while e > 1000 {
+        v *= pow2(1000);
+        e -= 1000;
+    }
+    while e < -1000 {
+        v *= pow2(-1000);
+        e += 1000;
+    }
+    v * pow2(e)
+}
+
+/// The exponent of the finite `m`: `e` where `2^e <= |m| < 2^(e + 1)`; 0 for 0.
+fn exponent_of(m: f64) -> i32 {
+    let m = m.abs();
+    if m == 0.0 {
+        return 0;
+    }
+    if m < f64::MIN_POSITIVE {
+        // A subnormal number is lifted by 2^200 to read it, and the lift is taken off.
+        return exponent_of(m * pow2(200)) - 200;
+    }
+    i32::try_from((m.to_bits() >> 52) & 0x7ff).unwrap_or(1023) - 1023
+}
+
+/// The scale a segment is wound at: a power of two for each axis, which brings the greatest magnitude of that axis among the control points to between
+/// 1 and 2 (see the module). The winding of a segment round a point is the same in it as in the numbers they came in, and the arithmetic is the same to
+/// the bit, scaled, where it does not underflow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Frame {
+    /// The `x` of a point is multiplied by 2 to the power of this.
+    x: i32,
+    /// The same for `y`.
+    y: i32,
+}
+
+impl Frame {
+    /// The frame in which the numbers are as they came.
+    const UNIT: Self = Self { x: 0, y: 0 };
+
+    /// The frame of control points that are all finite; `None` where one is not (a NaN or an infinity).
+    fn of(points: &[Point]) -> Option<Self> {
+        let (mut mx, mut my) = (0.0_f64, 0.0_f64);
+        for p in points {
+            if !(p.x.is_finite() && p.y.is_finite()) {
+                return None;
+            }
+            mx = mx.max(p.x.abs());
+            my = my.max(p.y.abs());
+        }
+        Some(Self { x: -exponent_of(mx), y: -exponent_of(my) })
+    }
+
+    /// A control point in the frame.
+    fn control(self, p: Point) -> Point {
+        Point::new(times_pow2(p.x, self.x), times_pow2(p.y, self.y))
+    }
+
+    /// `c` in the frame.
+    fn cubic(self, c: &CubicBez) -> CubicBez {
+        CubicBez::new(self.control(c.p0), self.control(c.p1), self.control(c.p2), self.control(c.p3))
+    }
+
+    /// A coordinate of the point that is wound round, in the frame: infinite where it is further from the segment than the doubles reach (it compares as it
+    /// should), and where it is a number too small for the frame it is the least number of its sign (so that a height under 2^-1022 of the segment's, just
+    /// under a piece's end of 0, is not taken for 0: `-0.0` is not less than `0.0`).
+    fn query(v: f64, e: i32) -> f64 {
+        let r = times_pow2(v, e);
+        if r == 0.0 && v != 0.0 { f64::from_bits(1).copysign(v) } else { r }
+    }
+
+    /// The point that is wound round, in the frame.
+    fn point(self, p: Point) -> Point {
+        Point::new(Self::query(p.x, self.x), Self::query(p.y, self.y))
+    }
+
+    /// An `x` of the frame in the numbers it came in.
+    fn unscale_x(self, x: f64) -> f64 {
+        times_pow2(x, -self.x)
+    }
+
+    /// A `y` of the frame in the numbers it came in.
+    fn unscale_y(self, y: f64) -> f64 {
+        times_pow2(y, -self.y)
+    }
+}
 
 /// The winding number of the closed subpaths of `path` round `p` (the segments are those of
 /// [`BezPath::segments`], a `ClosePath` giving the line back to the start): each segment's crossing with a ray
@@ -44,45 +162,27 @@ pub(crate) fn winding(path: &BezPath, p: Point) -> i32 {
 /// The winding of one segment round `p`: the crossing of the ray to the left of `p` with it, -1, 0 or +1 for each
 /// monotone piece of it.
 ///
-/// A segment with a coordinate that is not a number winds nothing, and neither does a point that is not one: the box of the control points
-/// drops a NaN (`f64::min` and `f64::max` return the other operand), so a cubic whose finite ends straddle the point's height would count a
-/// crossing it has no way to find. Everything the crate sweeps has been refused for a coordinate that is not a number first
-/// ([`crate::PathOpsError::NonFinite`]); [`crate::Region::contains`] takes a path a caller made.
+/// A segment with a coordinate that is not finite winds nothing, and neither does a point that is not a number (a point with an infinite `x` is beyond
+/// every finite one, and with an infinite `y` is level with none): the box of the control points drops a NaN (`f64::min` and `f64::max` return the other
+/// operand), so a cubic whose finite ends straddle the point's height would count a crossing it has no way to find. Everything the crate sweeps has been
+/// refused for a coordinate that is not finite first ([`crate::PathOpsError::NonFinite`]); [`crate::Region::contains`] takes a path a caller made.
 pub(crate) fn segment_winding(seg: PathSeg, p: Point) -> i32 {
-    if has_nan(seg) || p.x.is_nan() || p.y.is_nan() {
+    if p.x.is_nan() || p.y.is_nan() {
         return 0;
     }
     match seg {
         PathSeg::Line(l) => line_winding(l.p0, l.p1, p),
-        PathSeg::Quad(q) => cubic_winding(&raised(q), p),
+        PathSeg::Quad(q) => quad_winding(q, p),
         PathSeg::Cubic(c) => cubic_winding(&c, p),
     }
-}
-
-/// Does a control point of `seg` have a coordinate that is not a number?
-fn has_nan(seg: PathSeg) -> bool {
-    let nan = |p: Point| p.x.is_nan() || p.y.is_nan();
-    match seg {
-        PathSeg::Line(l) => nan(l.p0) || nan(l.p1),
-        PathSeg::Quad(q) => nan(q.p0) || nan(q.p1) || nan(q.p2),
-        PathSeg::Cubic(c) => nan(c.p0) || nan(c.p1) || nan(c.p2) || nan(c.p3),
-    }
-}
-
-/// `q` as a cubic. `QuadBez::raise` takes the difference of two coordinates before it scales them, and that overflows past 1e300 (from 1e308 to -1e308 it is
-/// infinite, and the controls of the cubic are, and its crossing is at an x that is nowhere): there each control is the mean of the ends it lies between,
-/// which forms no difference. Elsewhere it is `raise` itself, so that the controls are the same to the bit.
-fn raised(q: QuadBez) -> CubicBez {
-    if ![q.p0, q.p1, q.p2].iter().any(|p| p.x.abs() > 1e300 || p.y.abs() > 1e300) {
-        return q.raise();
-    }
-    let mix = |a: Point, b: Point| Point::new(a.x / 3.0 + (2.0 / 3.0) * b.x, a.y / 3.0 + (2.0 / 3.0) * b.y);
-    CubicBez::new(q.p0, mix(q.p0, q.p1), mix(q.p2, q.p1), q.p2)
 }
 
 /// A line's crossing with the ray, as `kurbo` tests it: the end with the smaller `y` is the line's and the other is
 /// not, and a point on the line (as the arithmetic finds it) is to the right of it.
 fn line_winding(start: Point, end: Point, p: Point) -> i32 {
+    if !(start.x.is_finite() && start.y.is_finite() && end.x.is_finite() && end.y.is_finite()) {
+        return 0;
+    }
     let sign = if end.y > start.y {
         if !(p.y >= start.y && p.y < end.y) {
             return 0;
@@ -102,56 +202,54 @@ fn line_winding(start: Point, end: Point, p: Point) -> i32 {
     if p.x >= start.x.max(end.x) {
         return sign;
     }
-    // The line `a x + b y = c`: which side of it the point is on.
-    let a = end.y - start.y;
-    let b = start.x - end.x;
-    if !(a.is_finite() && b.is_finite()) {
-        // A line spanning more than a double holds (from -1e308 to 1e308): the same line and point at half the size, which is exact.
-        // (A coordinate that is itself infinite is no line, and stays out of the loop.)
-        let half = |q: Point| Point::new(q.x * 0.5, q.y * 0.5);
-        let finite = [start, end, p].iter().all(|q| q.x.is_finite() && q.y.is_finite());
-        return if finite { line_winding(half(start), half(end), half(p)) } else { 0 };
-    }
-    // The line is the same, and the side the point is on, when the equation is multiplied by a number, so `a` and `b` are brought to
-    // where `a x` and `b y` can neither overflow (the line's `c` is a product with the start's coordinate: at 1e155 it is infinite, and
-    // the difference with the point's side is not a number, so a sloped line wound its point 0 or the wrong way) nor underflow (at
-    // 1e-165 every product is nothing, and every point is on the line). The number is the power of two below the greater of them
-    // (a subnormal one is lifted to the least normal), which scales exactly: where the arithmetic worked the side is the same.
-    const EXPONENT: u64 = 0x7ff0_0000_0000_0000;
-    let scale = f64::from_bits(a.abs().max(b.abs()).to_bits() & EXPONENT).max(f64::MIN_POSITIVE);
-    let (a, b) = (a / scale, b / scale);
-    // With a and b under 2 the products can still overflow for coordinates past 2^1021 (the slope 1.5 times a point's x of 2.75 x 2^1022):
-    // the same line and point at half the size, which is exact, until the sums are numbers (at most a few times).
-    let (mut start, mut p) = (start, p);
-    for _ in 0..4 {
-        let c = a * start.x + b * start.y;
-        let side = a * p.x + b * p.y - c;
-        if side.is_finite() {
-            return if side * f64::from(sign) <= 0.0 { sign } else { 0 };
-        }
-        let half = |q: Point| Point::new(q.x * 0.5, q.y * 0.5);
-        (start, p) = (half(start), half(p));
-    }
-    0
+    // The point is inside the line's box. The line `a x + b y = c`, and which side of it the point is on, in the frame: every product and sum is under 16, and
+    // each of the two terms of the side is the kurbo's scaled by 2^(fx + fy), so the sign is the same where kurbo's arithmetic works.
+    let Some(frame) = Frame::of(&[start, end]) else { return 0 };
+    let (s, e, q) = (frame.control(start), frame.control(end), frame.point(p));
+    let a = e.y - s.y;
+    let b = s.x - e.x;
+    let c = a * s.x + b * s.y;
+    if (a * q.x + b * q.y - c) * f64::from(sign) <= 0.0 { sign } else { 0 }
 }
 
-/// A cubic's crossings with the ray: its pieces whose height rises or falls the whole way, each of which crosses the
-/// height of `p` once or not at all, and the crossing's `x` against the point's.
-fn cubic_winding(c: &CubicBez, p: Point) -> i32 {
-    let (xs, ys) = coordinates(c);
-    let ((x_min, x_max), (y_min, y_max)) = (bounds(xs), bounds(ys));
-    // The curve is in the box of its control points. (A NaN fails each comparison and is no crossing.)
-    if !(p.y >= y_min && p.y <= y_max && p.x >= x_min) {
+/// A quadratic's crossing with the ray: the quadratic raised to a cubic in the frame, where the differences that `QuadBez::raise` takes cannot overflow.
+fn quad_winding(q: QuadBez, p: Point) -> i32 {
+    // The box of the control points turns most segments away, before the frame is found.
+    if outside_box(&[q.p0.x, q.p1.x, q.p2.x], &[q.p0.y, q.p1.y, q.p2.y], p) {
         return 0;
     }
+    let Some(frame) = Frame::of(&[q.p0, q.p1, q.p2]) else { return 0 };
+    let scaled = QuadBez::new(frame.control(q.p0), frame.control(q.p1), frame.control(q.p2));
+    framed_cubic_winding(&scaled.raise(), frame.point(p))
+}
+
+/// A cubic's crossings with the ray, in the frame of its control points.
+fn cubic_winding(c: &CubicBez, p: Point) -> i32 {
+    // The box of the control points turns most segments away, before the frame is found.
+    let (xs, ys) = coordinates(c);
+    if outside_box(&xs, &ys, p) {
+        return 0;
+    }
+    let Some(frame) = Frame::of(&[c.p0, c.p1, c.p2, c.p3]) else { return 0 };
+    framed_cubic_winding(&frame.cubic(c), frame.point(p))
+}
+
+/// A cubic's crossings with the ray, the cubic and the point in the frame: its pieces whose height rises or falls the whole way, each of which crosses the
+/// height of `p` once or not at all, and the crossing's `x` against the point's.
+fn framed_cubic_winding(c: &CubicBez, p: Point) -> i32 {
+    let (xs, ys) = coordinates(c);
+    if outside_box(&xs, &ys, p) {
+        return 0;
+    }
+    let x_max = bounds(&xs).1;
     let mut winding = 0;
-    for piece in y_pieces(c).iter() {
+    for piece in framed_pieces(c).iter() {
         if (piece.y_lo <= p.y) == (piece.y_hi <= p.y) {
             continue;
         }
         let sign = if piece.y_hi > piece.y_lo { -1 } else { 1 };
         // A point right of the whole box is right of the crossing, and the root need not be found.
-        if p.x >= x_max || p.x >= crossing_x(c, &piece, p.y) {
+        if p.x >= x_max || p.x >= framed_crossing_x(c, &piece, p.y) {
             winding += sign;
         }
     }
@@ -190,15 +288,27 @@ impl Pieces {
 /// `y'(t) / 3 = a (1 - t)^2 + 2 b (1 - t) t + d t^2` between 0 and 1 (`a`, `b` and `d` the steps of the height from
 /// one control point to the next), found by [`quadratic_roots`]: the cubic's own coefficient `a - 2b + d` is nothing
 /// but rounding for a curve whose handles are level, and a formula that divides by it finds the other root where it
-/// is. The ends of the curve are its own ends exactly.
+/// is. The ends of the curve are its own ends exactly. The cubic is cut in the frame of its control points (a cubic that is not finite as it came), and the heights are given back
+/// in its own numbers.
 pub(crate) fn y_pieces(c: &CubicBez) -> Pieces {
+    let frame = Frame::of(&[c.p0, c.p1, c.p2, c.p3]).unwrap_or(Frame::UNIT);
+    let mut pieces = framed_pieces(&frame.cubic(c));
+    for cut in pieces.cuts.iter_mut().take(pieces.len) {
+        cut.1 = frame.unscale_y(cut.1);
+    }
+    if let Some(first) = pieces.cuts.first_mut() {
+        first.1 = c.p0.y;
+    }
+    if let Some(last) = pieces.cuts.get_mut(pieces.len.saturating_sub(1)) {
+        last.1 = c.p3.y;
+    }
+    pieces
+}
+
+/// [`y_pieces`] of a cubic in the frame, in the frame's numbers.
+fn framed_pieces(c: &CubicBez) -> Pieces {
     let [y0, y1, y2, y3] = [c.p0.y, c.p1.y, c.p2.y, c.p3.y];
-    // The steps and their second difference are found on a sixteenth of the heights where those are past 1e300: the steps of heights that large
-    // (3e307, for a handle that goes up by as much and a handle that goes down by as much) are not numbers, nor is the second difference, and the
-    // curve lost its turns. The roots of a quadratic do not change with the scale of its coefficients, and a power of two scales exactly.
-    let shrink = if [y0, y1, y2, y3].iter().any(|y| y.abs() > 1e300) { 0.0625 } else { 1.0 };
-    let [s0, s1, s2, s3] = [y0 * shrink, y1 * shrink, y2 * shrink, y3 * shrink];
-    let (a, b, d) = (s1 - s0, s2 - s1, s3 - s2);
+    let (a, b, d) = (y1 - y0, y2 - y1, y3 - y2);
     let mut turns = [0.0_f64; 2];
     let mut n = 0;
     for t in quadratic_roots(a - 2.0 * b + d, 2.0 * (b - a), a).into_iter().flatten() {
@@ -234,6 +344,13 @@ pub(crate) fn y_pieces(c: &CubicBez) -> Pieces {
     Pieces { cuts, len }
 }
 
+/// The `x` at which the piece of `c` crosses the height `y`, which it does, in the numbers they came in: found in the frame of the control points ([`framed_crossing_x`]).
+pub(crate) fn crossing_x(c: &CubicBez, piece: &Piece, y: f64) -> f64 {
+    let frame = Frame::of(&[c.p0, c.p1, c.p2, c.p3]).unwrap_or(Frame::UNIT);
+    let scaled = Piece { lo: piece.lo, hi: piece.hi, y_lo: times_pow2(piece.y_lo, frame.y), y_hi: times_pow2(piece.y_hi, frame.y) };
+    frame.unscale_x(framed_crossing_x(&frame.cubic(c), &scaled, Frame::query(y, frame.y)))
+}
+
 /// The `x` at which the piece of `c` crosses the height `y`, which it does, found on the piece's parameter range by
 /// Newton's method from where the straight line between the piece's ends crosses, held inside the range the heights
 /// seen so far leave (a step that leaves it, or whose slope is nothing, ends the method), and then by bisection of
@@ -241,24 +358,30 @@ pub(crate) fn y_pieces(c: &CubicBez) -> Pieces {
 /// [`MAX_BISECTIONS`] halvings at most (a range halved to where it can no longer be is done). Each step is one
 /// evaluation of the height, at most [`NEWTON_STEPS`] and [`MAX_BISECTIONS`] of them in all, and never the cubic
 /// formula, so the rounding of coefficients that is the fault of that formula does not come into it. A height that is
-/// one of the piece's own ends is crossed at that end, and the search is not made (see the body).
-pub(crate) fn crossing_x(c: &CubicBez, piece: &Piece, y: f64) -> f64 {
-    let (xs, ys) = coordinates(c);
+/// one of the piece's own ends is crossed at that end, and the search is not made (see the body). Everything is in the frame.
+fn framed_crossing_x(c: &CubicBez, piece: &Piece, y: f64) -> f64 {
+    bernstein(coordinates(c).0, framed_crossing_t(c, piece, y))
+}
+
+/// The parameter at which the piece of `c` crosses the height `y` ([`framed_crossing_x`]).
+fn framed_crossing_t(c: &CubicBez, piece: &Piece, y: f64) -> f64 {
+    let ys = coordinates(c).1;
     // The heights of a piece's ends are what [`bernstein`] finds at its ends (the curve's own ends exactly, and a turn is
     // cut by it), so a height that is one of them is crossed at that end, to the bit. The search cannot say so: the guess is
     // then an end of the range, which it leaves for the middle, and it closes in on that end from one side, within 2^-64
     // of it and not on it, so that a point on the curve at the end of a piece could be told from the crossing by a hair and
     // counted on the wrong side of it (a rising straight cubic wound 0 where the line it lies on winds -1).
     if y == piece.y_lo {
-        return bernstein(xs, piece.lo);
+        return piece.lo;
     }
     if y == piece.y_hi {
-        return bernstein(xs, piece.hi);
+        return piece.hi;
     }
     let [y0, y1, y2, y3] = ys;
     let (a, b, d) = (y1 - y0, y2 - y1, y3 - y2);
     let at_or_below = piece.y_lo <= y;
     let (mut lo, mut hi) = (piece.lo, piece.hi);
+    let done = NEWTON_DONE * (hi - lo);
     let guess = lo + (hi - lo) * ((y - piece.y_lo) / (piece.y_hi - piece.y_lo));
     let mut t = if guess > lo && guess < hi { guess } else { 0.5 * (lo + hi) };
     for _ in 0..NEWTON_STEPS {
@@ -270,7 +393,7 @@ pub(crate) fn crossing_x(c: &CubicBez, piece: &Piece, y: f64) -> f64 {
             hi = t;
         }
         if h == y {
-            return bernstein(xs, t);
+            return t;
         }
         // The slope of the height, `y'(t) = 3 (a (1 - t)^2 + 2 b (1 - t) t + d t^2)`.
         let mt = 1.0 - t;
@@ -278,8 +401,8 @@ pub(crate) fn crossing_x(c: &CubicBez, piece: &Piece, y: f64) -> f64 {
         if !(next > lo && next < hi) {
             break;
         }
-        if (next - t).abs() <= NEWTON_DONE {
-            return bernstein(xs, next);
+        if (next - t).abs() <= done {
+            return next;
         }
         t = next;
     }
@@ -295,7 +418,7 @@ pub(crate) fn crossing_x(c: &CubicBez, piece: &Piece, y: f64) -> f64 {
             hi = mid;
         }
     }
-    bernstein(xs, 0.5 * (lo + hi))
+    0.5 * (lo + hi)
 }
 
 /// The real roots of `a t^2 + b t + c` (none where it has none), found without the loss of the textbook formula
@@ -311,7 +434,8 @@ fn quadratic_roots(a: f64, b: f64, c: f64) -> [Option<f64>; 2] {
     // can neither overflow nor underflow: at 1e155 both are infinite and their difference is not a number, at 1e-165 both are
     // nothing and the quadratic has a double root, and the turns of the curve were lost, or found where they are not. The
     // number is the power of two below the greatest coefficient (a subnormal one is lifted to the least normal), which scales
-    // exactly: where the formula worked the roots are the same to the bit.
+    // exactly: where the formula worked the roots are the same to the bit. (The steps of a height in the frame are under 4, so this is for the steps
+    // that are small beside the greatest height of the curve.)
     const EXPONENT: u64 = 0x7ff0_0000_0000_0000;
     let scale = f64::from_bits(a.abs().max(b.abs()).max(c.abs()).to_bits() & EXPONENT).max(f64::MIN_POSITIVE);
     let (a, b, c) = (a / scale, b / scale, c / scale);
@@ -329,28 +453,31 @@ fn coordinates(c: &CubicBez) -> ([f64; 4], [f64; 4]) {
     ([c.p0.x, c.p1.x, c.p2.x, c.p3.x], [c.p0.y, c.p1.y, c.p2.y, c.p3.y])
 }
 
-/// The least and the greatest of four numbers.
-fn bounds(v: [f64; 4]) -> (f64, f64) {
-    (v.into_iter().fold(f64::INFINITY, f64::min), v.into_iter().fold(f64::NEG_INFINITY, f64::max))
+/// The least and the greatest of some numbers.
+fn bounds(v: &[f64]) -> (f64, f64) {
+    (v.iter().copied().fold(f64::INFINITY, f64::min), v.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+}
+
+/// Is `p` outside the box of the control points `xs` and `ys` of a curve, or to the left of it (the curve is in its box, and the ray from `p` to the left
+/// meets nothing there)? A NaN fails each comparison and is no crossing.
+fn outside_box(xs: &[f64], ys: &[f64], p: Point) -> bool {
+    let ((x_min, _), (y_min, y_max)) = (bounds(xs), bounds(ys));
+    !(p.y >= y_min && p.y <= y_max && p.x >= x_min)
 }
 
 /// One coordinate of the curve with control values `v` at `t`, added in the order [`CubicBez::eval`] adds them.
 fn bernstein(v: [f64; 4], t: f64) -> f64 {
-    // Past 1e300 the sums overflow where the curve does not (a handle of 1e308 beside another: 1.5e308 and 0.5e308 are 2e308): the same sums on a
-    // quarter of the values, which scale exactly (every operation does, so the result is the same to the bit as when it is made at once, where
-    // that is a number), and the quarter back, which a point of the curve (inside the box of its control points) cannot overflow.
-    let k = if v.iter().any(|x| x.abs() > 1e300) { 0.25 } else { 1.0 };
-    let [v0, v1, v2, v3] = v.map(|x| x * k);
+    let [v0, v1, v2, v3] = v;
     let mt = 1.0 - t;
-    (v0 * (mt * mt * mt) + (v1 * (mt * mt * 3.0) + (v2 * (mt * 3.0) + v3 * t) * t) * t) / k
+    v0 * (mt * mt * mt) + (v1 * (mt * mt * 3.0) + (v2 * (mt * 3.0) + v3 * t) * t) * t
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testutil::{Flattened, Rng, distance_to_path, ellipse, polyline, rect};
-    use kurbo::ParamCurve;
     use kurbo::Shape;
+    use kurbo::{Affine, ParamCurve};
 
     #[test]
     fn the_coordinates_evaluate_as_the_curve_does() {
@@ -1001,5 +1128,173 @@ mod tests {
         assert_eq!(winding(&arch(10.05), Point::new(f64::NAN, 3.0)), 0);
         assert_eq!(winding(&arch(10.05), Point::new(30.0, f64::NAN)), 0);
         assert!(sink.abs() < 100_000);
+    }
+
+    /// The frame: a power of two for each axis that brings the greatest magnitude of the axis to between 1 and 2, and takes it back, exactly, for every
+    /// exponent a double has, the subnormal ones too.
+    #[test]
+    fn the_frame_scales_each_axis_to_between_one_and_two_and_back_exactly() {
+        for m in [1.0, 1.999, 2.0, 0.75, 3e300, 1.7e308, 1e-300, 5e-324, 1e-310, 2.2250738585072014e-308, 123.456] {
+            let frame = Frame::of(&[Point::new(m, -m / 3.0), Point::new(-m / 7.0, 0.5 * m)]).expect("finite");
+            let scaled = frame.control(Point::new(m, 0.5 * m));
+            assert!((1.0..2.0).contains(&scaled.x), "{m:e}: x is {}", scaled.x);
+            let down = frame.control(Point::new(-m / 7.0, 0.5 * m));
+            assert_eq!((frame.unscale_x(scaled.x), frame.unscale_y(down.y)), (m, 0.5 * m), "{m:e}");
+        }
+        // Per axis: a tall thin segment is scaled by one factor on `x` and by another on `y`.
+        let tall = Frame::of(&[Point::new(1e-200, 0.0), Point::new(0.0, 1e200)]).expect("finite");
+        assert!(tall.x > 600 && tall.y < -600, "{tall:?}");
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(Frame::of(&[Point::new(1.0, 2.0), Point::new(bad, 0.0)]), None);
+            assert_eq!(Frame::of(&[Point::new(1.0, 2.0), Point::new(0.0, bad)]), None);
+        }
+        assert_eq!(Frame::of(&[Point::ORIGIN, Point::ORIGIN]), Some(Frame::UNIT));
+        assert_eq!(times_pow2(1.0, 1023), pow2(1023));
+        assert_eq!(times_pow2(pow2(1023), -2045), pow2(-1022));
+        assert_eq!(times_pow2(5e-324, 2000), pow2(-1074 + 2000));
+    }
+
+    /// The winding does not change when an axis is multiplied by a power of two, from 2^-1000 to 2^1000 on each axis separately (a thin segment, a
+    /// tall one, one 2^1000 across and 2^-1000 high), to the bit: a line, a quadratic and a cubic, at every point of a grid, near the curve or not.
+    /// At the top of the range, a sum of two of the control points does not overflow in the frame, which it does in the numbers the segment came in.
+    #[test]
+    fn the_winding_of_a_segment_does_not_depend_on_the_scale_of_either_axis() {
+        let unit_points: Vec<Point> =
+            (-4..=26).flat_map(|i| (-8..=26).map(move |j| Point::new(f64::from(i) * 0.125, f64::from(j) * 0.125))).collect();
+        let line = |k: Affine| PathSeg::Line(k * kurbo::Line::new((0.5, 0.25), (2.5, 2.75)));
+        let quad = |k: Affine| PathSeg::Quad(k * QuadBez::new((0.25, 0.0), (3.0, 1.5), (0.75, 3.0)));
+        let cubic = |k: Affine| PathSeg::Cubic(k * CubicBez::new((0.0, 0.0), (1.0, 3.0), (2.0, -1.0), (3.0, 1.0)));
+        let makers: [(&str, &dyn Fn(Affine) -> PathSeg); 3] = [("line", &line), ("quad", &quad), ("cubic", &cubic)];
+        for (name, make) in makers {
+            let unit: Vec<i32> = unit_points.iter().map(|&p| segment_winding(make(Affine::IDENTITY), p)).collect();
+            assert!(unit.iter().any(|&w| w != 0) && unit.contains(&0), "{name}");
+            for (ex, ey) in [
+                (0, 0),
+                (-1000, -1000),
+                (1000, 1000),
+                (-1000, 1000),
+                (1000, -1000),
+                (45, -45),
+                (-300, 700),
+                (700, -300),
+                (1000, 0),
+                (0, -1000),
+                (1, 1000),
+            ] {
+                let (fx, fy) = (pow2(ex), pow2(ey));
+                let k = Affine::scale_non_uniform(fx, fy);
+                for (&p, &w) in unit_points.iter().zip(&unit) {
+                    let got = segment_winding(make(k), Point::new(p.x * fx, p.y * fy));
+                    assert_eq!(got, w, "{name} at 2^{ex} by 2^{ey}, {p:?}");
+                }
+            }
+        }
+    }
+
+    /// A curve 2^45 across whose crossing lies 0.29 from its start (the point, 0.27 from it, is well under 1e-13 of the curve's size, and the first
+    /// Newton step is shorter than the 1e-13 in the parameter that the end of the method was once taken at): `y = 6x - 3x^2` is at 1.5 where `x = 0.2929`
+    /// and 1.7071, both right of the point, which is wound 0.
+    #[test]
+    fn a_crossing_close_to_the_start_of_a_curve_that_is_very_wide_is_found() {
+        let s = pow2(45);
+        let c = CubicBez::new((0.0, 0.0), (s / 3.0, 2.0 * s), (2.0 * s / 3.0, 4.0 * s - s * s), (s, 6.0 * s - 3.0 * s * s));
+        let seg = PathSeg::Cubic(c);
+        assert_eq!(segment_winding(seg, Point::new(0.27, 1.5)), 0);
+        assert_eq!(segment_winding(seg, Point::new(0.31, 1.5)), -1);
+        assert_eq!(segment_winding(seg, Point::new(1.6, 1.5)), -1);
+        assert_eq!(segment_winding(seg, Point::new(1.8, 1.5)), -1 + 1);
+    }
+
+    /// A height under the unit in the last place of the segment's greatest is no height to it: the curve `(0, 0), (1, 0), (2, 0), (3, 1)` rises
+    /// as `t^3`, its crossing at 1e-90 is where the doubles of its heights cannot tell it from the start's (3e-30 across), and a point 0.5 to its
+    /// right is wound -1 (the crossing is found to the heights' rounding, the point is far beyond that).
+    #[test]
+    fn a_height_under_the_rounding_of_the_curves_heights_is_found_within_that_rounding() {
+        let c = CubicBez::new((0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 1.0));
+        for y in [1e-90, 1e-60, 1e-30, 1e-20] {
+            assert_eq!(segment_winding(PathSeg::Cubic(c), Point::new(0.5, y)), -1, "{y:e}");
+            assert_eq!(segment_winding(PathSeg::Cubic(c), Point::new(-0.5, y)), 0, "{y:e}");
+        }
+    }
+
+    /// The point is in the frame as a number too small for it is the least of its sign, not zero: a height just under a piece's end of exactly 0 is
+    /// under it (`-1e-300` scaled by 2^-996 is `-0.0`, which is not under `0.0`), and a point 1e-300 to the left of an end at `x = 0` is left of it.
+    #[test]
+    fn a_point_too_small_for_the_frame_is_on_its_own_side_of_a_zero() {
+        let c = CubicBez::new((0.0, 0.0), (1.0, 3e299), (2.0, 6e299), (3.0, 1e300));
+        assert_eq!(segment_winding(PathSeg::Cubic(c), Point::new(10.0, -1e-300)), 0, "under the start");
+        assert_eq!(segment_winding(PathSeg::Cubic(c), Point::new(10.0, 1e-300)), -1, "over the start");
+        let level = CubicBez::new((0.0, 0.0), (0.0, 1.0), (0.0, 2.0), (0.0, 1e300));
+        assert_eq!(segment_winding(PathSeg::Cubic(level), Point::new(-1e-300, 0.5)), 0, "left of a curve along x = 0");
+        assert_eq!(segment_winding(PathSeg::Cubic(level), Point::new(1e-300, 0.5)), -1, "right of it");
+    }
+
+    /// A segment with a coordinate that is not finite winds nothing, as one with a NaN does; a point at the far left or right is beyond every finite
+    /// crossing, and one at an infinite height is level with none.
+    #[test]
+    fn infinite_coordinates_wind_nothing_and_an_infinite_point_is_beyond_every_crossing() {
+        let finite = CubicBez::new((0.0, 0.0), (1.0, 3.0), (2.0, -1.0), (3.0, 1.0));
+        for bad in [f64::INFINITY, f64::NEG_INFINITY] {
+            for slot in 0..8 {
+                let mut v = [0.0, 0.0, 1.0, 3.0, 2.0, -1.0, 3.0, 1.0];
+                v[slot] = bad;
+                let seg = PathSeg::Cubic(CubicBez::new((v[0], v[1]), (v[2], v[3]), (v[4], v[5]), (v[6], v[7])));
+                assert_eq!(segment_winding(seg, Point::new(1.5, 0.5)), 0, "slot {slot}");
+                // A line has two ends and a quadratic three: the slots they have.
+                let line = PathSeg::Line(kurbo::Line::new((v[0], v[1]), (v[2], v[3])));
+                assert!(slot >= 4 || segment_winding(line, Point::new(1.5, 0.5)) == 0, "line, slot {slot}");
+                let quad = PathSeg::Quad(QuadBez::new((v[0], v[1]), (v[2], v[3]), (v[4], v[5])));
+                assert!(slot >= 6 || segment_winding(quad, Point::new(1.5, 0.5)) == 0, "quadratic, slot {slot}");
+            }
+        }
+        let inside = Point::new(1.5, 0.5);
+        let at = |x: f64, y: f64| segment_winding(PathSeg::Cubic(finite), Point::new(x, y));
+        assert_eq!(at(f64::INFINITY, inside.y), at(1e300, inside.y));
+        assert_eq!(at(f64::NEG_INFINITY, inside.y), 0);
+        assert_eq!((at(1.5, f64::INFINITY), at(1.5, f64::NEG_INFINITY)), (0, 0));
+    }
+
+    /// The crossing is found at a parameter where the height is within a few units in the last place of the curve's greatest height of the height asked
+    /// for: the curves are those that are 1 across and those 3e13 and 1e-5 across, arches, level handles, flat ends (`y = t^3`) and handles that go nearly
+    /// level, and the heights are spread over each piece and within 1e-40 of its ends. Measured over 80,000 of them, the greatest was 5 units.
+    #[test]
+    fn the_crossing_is_found_within_a_few_units_of_the_rounding_of_the_heights() {
+        let mut rng = Rng(0x1234_5678_9abc);
+        let mut worst = 0.0_f64;
+        for case in 0..20_000_u32 {
+            let kind = case % 6;
+            let sx = [1.0, 1.0, 1.0, 3e13, 1e-5, 1.0][kind as usize];
+            let x = |r: &mut Rng| r.range(-1.0, 1.0) * sx;
+            let (y0, y1, y2, y3) = match kind {
+                1 => {
+                    let h = rng.range(-1.0, 1.0);
+                    (0.0, h, h, 0.0)
+                }
+                2 => (0.0, 0.0, 0.0, 1.0),
+                4 => {
+                    let h = rng.range(0.1, 1.0);
+                    (0.0, h, h * 0.999_999_9, 0.0)
+                }
+                _ => (rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-1.0, 1.0), rng.range(-1.0, 1.0)),
+            };
+            let source = CubicBez::new((x(&mut rng), y0), (x(&mut rng), y1), (x(&mut rng), y2), (x(&mut rng), y3));
+            let Some(frame) = Frame::of(&[source.p0, source.p1, source.p2, source.p3]) else { continue };
+            let c = frame.cubic(&source);
+            let ys = coordinates(&c).1;
+            let greatest = ys.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+            for piece in framed_pieces(&c).iter().filter(|p| p.y_lo != p.y_hi) {
+                let (lo, hi) = (piece.y_lo.min(piece.y_hi), piece.y_lo.max(piece.y_hi));
+                for f in [0.5, 0.3, 0.01, 1e-4, 1e-8, 1e-12, 1e-16, 1e-24, 1e-40, 1.0 - 1e-8, 1.0 - 1e-12] {
+                    let y = lo + (hi - lo) * f;
+                    if !(y > lo && y < hi) {
+                        continue;
+                    }
+                    let t = framed_crossing_t(&c, &piece, y);
+                    assert!(t >= piece.lo && t <= piece.hi, "{t} outside {piece:?}");
+                    worst = worst.max((bernstein(ys, t) - y).abs() / (greatest * f64::EPSILON));
+                }
+            }
+        }
+        assert!(worst <= 8.0, "a crossing's height is {worst} units of rounding from the height asked for");
     }
 }
