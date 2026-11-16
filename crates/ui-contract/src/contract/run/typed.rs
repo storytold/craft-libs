@@ -405,6 +405,10 @@ impl<'a, C: Component> ErasedPass<'a> for TypedPass<'_, 'a, C> {
         self.hooks.first_line(self.comp, ctx, id, height)
     }
 
+    fn first_is_row_line(&self) -> bool {
+        self.hooks.first_is_row_line(self.comp)
+    }
+
     fn member(&self) -> bool {
         self.hooks.member(self.comp)
     }

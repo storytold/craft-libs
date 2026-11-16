@@ -144,6 +144,13 @@ pub(crate) trait ShapeHooks<C: Component> {
         Some(height / 2.0)
     }
 
+    /// Whether the root's first line is the line of its own unwrapped `Row` body: it sits on a `Row`'s line by that
+    /// line even where a child of more than one line makes it taller, so the members of a row nested in a row share
+    /// the outer row's line.
+    fn first_is_row_line(&self, _comp: &C) -> bool {
+        false
+    }
+
     /// Whether the root is one member of a bar's line, shown whole or not at all: a leaf is; a body is when it has a
     /// side label (a captioned field), and otherwise only lays out the members it holds.
     fn member(&self, _comp: &C) -> bool {
@@ -557,6 +564,7 @@ pub(crate) trait ErasedPass<'a> {
     fn sized(&self, ui: &Ui, id: Id, size: Vec2) -> Vec2;
     fn fills_width(&self) -> bool;
     fn first_line(&self, ctx: &Context, id: Id, height: f32) -> Option<f32>;
+    fn first_is_row_line(&self) -> bool;
     fn member(&self) -> bool;
     fn fills_width_only(&self) -> bool;
     fn arena(&self) -> bool;
@@ -804,7 +812,8 @@ fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Ve
             .then(|| crate::layout::flow_room(ui).x)
             .filter(|width| width.is_finite())
             .unwrap_or(0.0);
-        let flowed = steps::place(ui, at, Vec2::new(p.measured.x.min(size.x), size.y), InFlow { fill: false, first: first(size.y) });
+        let line = p.p.first_is_row_line();
+        let flowed = steps::place(ui, at, Vec2::new(p.measured.x.min(size.x), size.y), InFlow { fill: false, first: first(size.y), line });
         // The column's first sweep learns which of its held children measured narrower than it settles on.
         if let Some(ColumnSweep::Count(column)) = env.column {
             crate::layout::report_held(&ctx, column, flowed.width());
@@ -814,7 +823,7 @@ fn place_root(p: &Pass<'_, '_, '_>, ui: &mut Ui, at: ShowAt, env: &Env, size: Ve
     } else {
         let fill = p.p.fills_width() && !p.p.fills_width_only();
         let size = if inert { Vec2::ZERO } else { size };
-        steps::place(ui, at, size, InFlow { fill, first: first(size.y) })
+        steps::place(ui, at, size, InFlow { fill, first: first(size.y), line: p.p.first_is_row_line() })
     };
     (rect, held)
 }

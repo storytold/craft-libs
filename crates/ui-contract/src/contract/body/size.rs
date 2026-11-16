@@ -117,9 +117,13 @@ impl<'b> BodyHooks<'b> {
 
     /// The axes the container is given where `env` is its parent's: a rect it is shown at gives both; an inline
     /// container that fills an axis takes the room only where its parent was given that axis.
+    ///
+    /// A fill-width container whose body is a row, shown on the line of a row given its height, is given that height
+    /// too: the line is a fixed cross extent, and the container fills it (a bar in a shell slot).
     pub(super) fn given_axes(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> (bool, bool) {
         let sizing = self.sizing(props);
-        let (x, y) = (sizing != Sizing::Content, sizing == Sizing::Fill);
+        let fills_line = sizing == Sizing::FillWidth && unwrapped_row(props) && env.row_line.is_some();
+        let (x, y) = (sizing != Sizing::Content, sizing == Sizing::Fill || fills_line);
         match (at, &props.mount) {
             (ShowAt::Rect(_), _) => (true, true),
             (ShowAt::Flow, Mount::Inline) => (x && env.gives_width(), y && !env.content.1),
@@ -132,6 +136,20 @@ impl<'b> BodyHooks<'b> {
     /// container takes what its content took. A content-sized mount, a row or a grid stops it.
     pub(super) fn passes_width(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> bool {
         matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline)) && self.sizing(props) == Sizing::Content && env.given_column
+    }
+
+    /// Whether the container centres its body's line in the height it is given: its body is a row that does not scroll
+    /// along the height, and the container is given its height (a rect it is shown at, a fill, a fixed row line it
+    /// fills). Its padding then keeps the members off the start and end edges only (`pads`).
+    pub(super) fn centres_line(&self, props: &ContainerProps) -> bool {
+        self.given.1 && unwrapped_row(props) && !scroll_of(props).is_some_and(|scroll| scroll.vertical_on())
+    }
+
+    /// The container's padding along each axis: `ContainerProps::pad` on both, or along the line only where the
+    /// container centres its line in its height.
+    pub(super) fn pads(&self, props: &ContainerProps, tokens: &crate::style::UiTokens) -> Vec2 {
+        let pad = super::regions::pad_of(tokens, props.pad);
+        Vec2::new(pad, if self.centres_line(props) { 0.0 } else { pad })
     }
 
     /// Whether the container's body is laid out across the width it is offered: the container is given the width,
@@ -292,4 +310,9 @@ impl<'b> BodyHooks<'b> {
             _ => bounds,
         }
     }
+}
+
+/// Whether the container's body is a `Row` that does not wrap: its children sit on one line.
+pub(super) fn unwrapped_row(props: &ContainerProps) -> bool {
+    matches!(props.layout, crate::layout::BodyLayout::Row { wrap: false, .. })
 }
