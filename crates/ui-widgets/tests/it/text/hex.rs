@@ -1,4 +1,4 @@
-//! The hex field: uppercase digits behind a fixed `#` that is not part of the text, a typed colour applies before
+//! The hex field: uppercase digits without the `#`, which its row shows, a typed colour applies before
 //! Enter, one digit per channel reads and writes web colours, and a draft that is no colour says why.
 
 use craft_theme::Rgba;
