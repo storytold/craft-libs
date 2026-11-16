@@ -353,6 +353,8 @@ impl Decoder {
             f.wait_complete();
         }
         self.shared.wait_reports();
+        // no picture is in flight now; the cache refills with the next picture
+        self.shared.bufs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         self.first_picture = true;
         self.gray_reference = None;
         pics
@@ -970,6 +972,15 @@ mod tests {
         } else {
             frame.row::<u16>(0).unwrap().y.as_ptr() as usize
         }
+    }
+
+    /// `flush` drops the cached window buffers, so memory of a large parallel picture is not kept.
+    #[test]
+    fn flush_releases_cached_window_buffers() {
+        let mut decoder = Decoder::with_threads(4);
+        decoder.shared.bufs.lock().unwrap().push(Box::new(0u8));
+        decoder.flush();
+        assert!(decoder.shared.bufs.lock().unwrap().is_empty());
     }
 
     /// `flush` returns only after every dispatched picture job has reported its statistics and
