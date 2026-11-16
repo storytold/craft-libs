@@ -11,6 +11,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/craft-libs"
 
 [workspace.dependencies]
+craft-http-url = { path = "crates/http-url" }
 craft-usd = { path = "crates/usd" }
 craft-smime = { path = "crates/smime" }
 craft-ber = { path = "crates/ber" }
