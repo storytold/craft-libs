@@ -1768,3 +1768,44 @@ fn empty_ordinary_names_and_their_dependants_keep_cached_values() {
     assert!(book.warnings.iter().any(|w| w.contains("empty formula")), "{:?}", book.warnings);
     assert!(book.warnings.iter().any(|w| w.contains("names using a name that was left out")), "{:?}", book.warnings);
 }
+
+#[test]
+fn scoped_names_do_not_rebind_shadowed_workbook_names() {
+    let token = |i: u32| [&[0x23u8][..], &i.to_le_bytes()].concat();
+    let list = vec![
+        brt_name(0, 0, WORKBOOK, "Rate", &[0x1E, 1, 0], None),         // 1
+        brt_name(0, 0, 1, "rAtE", &[0x1E, 2, 0], None),                // 2: Hidden shadows Rate case-insensitively.
+        brt_name(0, 0, 1, "Alias", &token(1), None),                   // 3: must not become Hidden!rAtE.
+        brt_name(0, 0, 1, "Forward", &token(5), None),                 // 4
+        brt_name(0, 0, 1, "Dependent", &token(3), None),               // 5
+        brt_name(0, 0, 0, "Fine", &token(1), None),                    // 6: no shadow on Data.
+        brt_name(0, 0, 1, "LocalAlias", &token(2), None),              // 7: intentionally uses Hidden!rAtE.
+        brt_name(0, 0, WORKBOOK, "Other", &[0x1E, 3, 0], None),        // 8
+        brt_name(0, 0, 1, "Other", &[], None),                         // 9: malformed, but still an ordinary source shadow.
+        brt_name(0, 0, 1, "Conservative", &token(8), None),            // 10
+        brt_name(0, 0, WORKBOOK, "Synthetic", &[0x1E, 4, 0], None),    // 11
+        brt_name(0x0002_0000, 0, 1, "Synthetic", &[0x1C, 0x1D], None), // 12: future-function metadata.
+        brt_name(0, 0, 1, "SyntheticControl", &token(11), None),       // 13: synthetic name is not a local definition.
+    ];
+    let mut data = row(0);
+    for (col, index) in [3u32, 4, 5, 6, 10, 13].into_iter().enumerate() {
+        // PtgNameX qualifies these names on their own sheets.
+        let formula = [&[0x39u8, 0, 0][..], &index.to_le_bytes()].concat();
+        data.extend(formula_cell(col as u32 + 1, &formula, &[]));
+    }
+    let bytes = package(&book_with_names(&list), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    let xml = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="Rate">1</definedName><definedName name="rAtE" localSheetId="1">2</definedName><definedName name="Fine" localSheetId="0">Rate</definedName><definedName name="LocalAlias" localSheetId="1">rAtE</definedName><definedName name="Other">3</definedName><definedName name="Synthetic">4</definedName><definedName name="SyntheticControl" localSheetId="1">Synthetic</definedName></definedNames></workbook>"#;
+    assert_eq!(wb.defined_names, xml_names(xml));
+    let book = read(&bytes).unwrap();
+    for col in 1..=3 {
+        assert_eq!(book.sheets[0].formula(CellRef::new(0, col)), None);
+        assert_eq!(book.sheets[0].value(CellRef::new(0, col)), Value::Number(0.0));
+    }
+    assert_eq!(book.sheets[0].formula(CellRef::new(0, 4)), Some("Data!Fine"));
+    assert_eq!(book.sheets[0].formula(CellRef::new(0, 5)), None);
+    assert_eq!(book.sheets[0].value(CellRef::new(0, 5)), Value::Number(0.0));
+    assert_eq!(book.sheets[0].formula(CellRef::new(0, 6)), Some("Hidden!SyntheticControl"));
+    assert!(book.warnings.iter().any(|w| w.contains("workbook names shadowed by local names")), "{:?}", book.warnings);
+    assert!(book.warnings.iter().any(|w| w.contains("names using a name that was left out")), "{:?}", book.warnings);
+}

@@ -10,7 +10,7 @@ mod formula;
 mod ftab;
 mod styles;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use craft_opc::{ContentTypes, Rels};
@@ -433,6 +433,14 @@ fn defined_names(
     // out is left out too, whatever their order, so a cell using it keeps its saved result.
     let mut omitted = vec![false; links.names.len()];
     let mut kept = vec![];
+    // PtgName identifies a record, but a bare workbook name in a sheet-scoped definition
+    // would instead bind to a same-spelled local name. Without a workbook qualifier, keep
+    // the cached results rather than silently changing that identity. Index once so hostile
+    // files with many names and references cannot turn this check into a quadratic scan.
+    // Ordinary shadows still count if their own formulas are omitted: do not infer a new
+    // binding from a partially emitted name environment. Synthetic names are not definitions.
+    let local_names: HashSet<_> =
+        links.names.iter().filter(|n| !n.future && !formula::is_param(&n.text)).filter_map(|n| n.scope.map(|s| (s, n.text.to_lowercase()))).collect();
     for p in pending {
         let Some(name) = links.names.get(p.index) else { continue };
         if name.future || formula::is_param(&name.text) {
@@ -474,6 +482,18 @@ fn defined_names(
                 continue;
             }
         };
+        if name.scope.is_some_and(|scope| {
+            used.iter().filter_map(|&i| links.names.get(i)).any(|target| {
+                target.scope.is_none()
+                    && !target.future
+                    && !formula::is_param(&target.text)
+                    && local_names.contains(&(scope, target.text.to_lowercase()))
+            })
+        }) {
+            warnings.warn("XLSB: some defined names were left out (workbook names shadowed by local names)");
+            omit(&mut omitted, p.index);
+            continue;
+        }
         if !budget.try_formula_text(formula.len(), limits) {
             warnings.warn("XLSB: some defined names were left out (more formula text than the limits allow)");
             omit(&mut omitted, p.index);
