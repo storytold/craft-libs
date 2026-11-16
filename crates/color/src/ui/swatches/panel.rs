@@ -54,6 +54,7 @@ impl Outcome for SwatchesPanelOutput {
 /// - Tooltips name the swatch and its value; AccessKit as the preset browser's grid, each swatch named.
 /// - The files of Import, Replace and Export go out as `PresetFileRequest`s from the panel menu; the host answers
 ///   them with [`SwatchesPanel::apply_file`].
+/// - It fills the room it is given, and its browser scrolls the swatches: show it outside a body that scrolls.
 #[must_use = "show the panel with `show`"]
 #[derive(Pattern)]
 pub struct SwatchesPanel<'a> {
@@ -92,7 +93,7 @@ impl<'a> SwatchesPanel<'a> {
         let mut held_state = Held::new(state);
         let ctx = ui.ctx().clone();
         let rename_scope = ui.scope_id().with("browser-rows");
-        let mut shown = Stack::new().show(ui, |ui, cx| {
+        let mut shown = Stack::new().fill().show(ui, |ui, cx| {
             let before_state = held_state.read(cx)?;
             let mut st = before_state.clone();
             if st.selected.as_ref().is_some_and(|k| !has(groups, k)) {

@@ -7,7 +7,7 @@ use craft_ui::contract::{PaneEdge, Role, Show as _, ShowContainer as _};
 use craft_ui::display::Text;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::WindowKey;
-use craft_ui::shell::AppShell;
+use craft_ui::shell::{AppShell, Title, TitleBar};
 use craft_ui::testing::{Fixture, Frames, trial};
 use egui::{Rect, Vec2};
 use std::cell::Cell;
@@ -109,4 +109,42 @@ fn a_bar_in_a_top_slot_fills_it_and_centres_its_members_on_one_line() {
     for (name, rect) in [("the bar's member", member), ("the nested row's member", nested)] {
         assert!((rect.center().y - slot.center().y).abs() <= SLACK, "{name} {rect:?} sits on the middle of the slot {slot:?}");
     }
+}
+
+/// A title bar in the title slot shows its leading content inside the slot, on the slot's middle.
+#[trial]
+fn a_title_bar_in_the_title_slot_shows_its_content_there() {
+    let seen = Rc::new(Cell::new(None::<(Rect, Rect, Rect)>));
+    let out = Rc::clone(&seen);
+    let mut fixture = Fixture::new(move |ui| {
+        let (mut bar, mut member) = (Rect::NOTHING, Rect::NOTHING);
+        let shown = AppShell::new(WindowKey::main())
+            .title_bar(|ui, _, _: &mut ()| {
+                bar = TitleBar::new()
+                    .show_titled(
+                        ui,
+                        Title::new("S"),
+                        |ui, _| {
+                            member = Button::new("File").show(ui).rect;
+                        },
+                        |_, _| {},
+                    )
+                    .response
+                    .rect;
+            })
+            .options_bar(true, |ui, _, _: &mut ()| {
+                let _ = Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
+                    Button::new("Alpha").show(ui);
+                });
+            })
+            .body(|_, _, _| {})
+            .show(ui, &mut ());
+        if let Some(slot) = shown.regions.slots.iter().find(|(key, _)| *key == "title").map(|(_, rect)| *rect) {
+            out.set(Some((slot, bar, member)));
+        }
+    });
+    fixture.room(Vec2::new(600.0, 300.0)).settle();
+    let (slot, bar, member) = seen.get().expect("the title slot shows");
+    assert!(member.width() > 0.0 && slot.contains_rect(member), "the bar's member {member:?} shows in the slot {slot:?} (bar {bar:?})");
+    assert!((member.center().y - slot.center().y).abs() <= 1.0, "the member {member:?} sits on the slot's middle {slot:?}");
 }

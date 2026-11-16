@@ -1184,16 +1184,22 @@ fn this_pass(ctx: &egui::Context, sizing: bool, id: Id) -> Option<Vec2> {
 }
 
 /// The line of the unwrapped `Row` body `id` in this pass's measuring run, with the line it shares already in it: how
-/// far below its top the line's centre lies, and the row's height once its children sit on it.
-fn row_line(ctx: &egui::Context, sizing: bool, id: Id) -> Option<(f32, f32)> {
-    this_pass(ctx, sizing, sub(id, "line")).map(|took| (took.x, took.y)).filter(|(_, height)| *height > 0.0)
+/// far below its top the line's centre lies, and the row's height once its children sit on it. A line measured while
+/// the row shared another line (a row centred in another height) is not this pass's.
+fn row_line(ctx: &egui::Context, sizing: bool, id: Id, shared: Option<f32>) -> Option<(f32, f32)> {
+    let found = if sizing { None } else { layout_memory::measured(ctx, sub(id, "line")) }?;
+    let same = (found.room.y - shared.unwrap_or(0.0)).abs() <= ONE_LINE_SLACK;
+    Some((found.took.x, found.took.y)).filter(|(_, height)| same && *height > 0.0)
 }
 
 /// The line the members of the unwrapped `Row` body `body` sit on in this pass's measuring run, with the line it shares
 /// with its container's regions already in it: what the container's end region sets its children on, so the end
 /// content meets the members' line as the members meet each other. `None` for any other body.
 pub(crate) fn members_line(ctx: &egui::Context, body: Id) -> Option<RowLine> {
-    row_line(ctx, false, body).map(|(centre, height)| RowLine { body, centre: Some(centre), height: Some(height) })
+    layout_memory::measured(ctx, sub(body, "line"))
+        .map(|found| found.took)
+        .filter(|took| took.y > 0.0)
+        .map(|took| RowLine { body, centre: Some(took.x), height: Some(took.y) })
 }
 
 /// The line the unwrapped `Row` body `body` sets its children on: its own (`centre`, `height`), or the line `shared`
@@ -1237,7 +1243,8 @@ fn record_line(ui: &mut Ui, sizing: bool, id: Id, shared: Option<f32>) {
     // What a child took without reporting its line still counts toward the row's height.
     let height = line.height.unwrap_or(0.0).max(ui.min_rect().height());
     let centre = line.centre.unwrap_or(0.0);
-    found(&ctx, sizing, sub(id, "line"), Vec2::ZERO, if height > 0.0 { Vec2::new(centre, height) } else { Vec2::ZERO });
+    // The record keeps the line it shared, which `row_line` matches.
+    found(&ctx, sizing, sub(id, "line"), Vec2::new(0.0, shared.unwrap_or(0.0)), if height > 0.0 { Vec2::new(centre, height) } else { Vec2::ZERO });
     if height <= 0.0 {
         return;
     }
@@ -1305,7 +1312,7 @@ pub(crate) fn run_body_measured<R>(
         }
         BodyLayout::Row { wrap: false, align: RowAlign::SpaceBetween } => {
             let (inner, _) = child::block(ui, None, child::row_layout(rtl, false), |ui| {
-                let line = on_line(id, row_line(&ctx, sizing, id), shared);
+                let line = on_line(id, row_line(&ctx, sizing, id, shared), shared);
                 let installed = Env::install_for(
                     ui,
                     env.derive_local(|scoped| {
@@ -1323,7 +1330,7 @@ pub(crate) fn run_body_measured<R>(
         }
         BodyLayout::Row { wrap: false, align: RowAlign::Start } => {
             let room = ui.available_rect_before_wrap();
-            let line = on_line(id, row_line(&ctx, sizing, id), shared);
+            let line = on_line(id, row_line(&ctx, sizing, id, shared), shared);
             let inner = run_sharing(ui, env, id, Axis::X, child::row_layout(rtl, false), |ui| {
                 let installed = Env::install_for(
                     ui,
@@ -1358,7 +1365,7 @@ pub(crate) fn run_body_measured<R>(
             };
             // A wrapped row has a line per wrap, so its children stay on the top of each, and its first child gives its
             // first line.
-            let line = (!*wrap).then(|| on_line(id, row_line(&ctx, sizing, id), shared));
+            let line = (!*wrap).then(|| on_line(id, row_line(&ctx, sizing, id, shared), shared));
             // Where its least is asked, a wrapping row is as narrow as its widest child at its least: every child on a
             // line of its own.
             let block_layout = if *wrap && env.least { child::column_layout(rtl) } else { child::row_layout(rtl, *wrap) };
