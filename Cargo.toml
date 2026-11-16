@@ -15,8 +15,10 @@ craft-shx = { path = "crates/shx" }
 craft-http-url = { path = "crates/http-url" }
 craft-usd = { path = "crates/usd" }
 craft-smime = { path = "crates/smime" }
+craft-ssip = { path = "crates/ssip" }
 craft-ber = { path = "crates/ber" }
 craft-proto = { path = "crates/proto" }
+craft-render-parity = { path = "crates/render-parity" }
 acadrust = "=0.6.6"
 log = "0.4"
 # internal: add each crate here as `craft-<name> = { path = "crates/<name>" }`
@@ -27,6 +29,7 @@ craft-affinity = { path = "crates/affinity" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-anicraft-format = { path = "crates/anicraft-format" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
+craft-pe = { path = "crates/pe" }
 craft-ps = { path = "crates/ps", version = "=0.1.0" }
 craft-pdn = { path = "crates/pdn" }
 craft-plate-test = { path = "crates/plate-test" }
@@ -63,6 +66,7 @@ craft-designcraft-format = { path = "crates/designcraft-format" }
 craft-dxf = { path = "crates/dxf" }
 craft-drawingml = { path = "crates/drawingml" }
 craft-eps = { path = "crates/eps" }
+craft-elf = { path = "crates/elf" }
 craft-file-formats = { path = "crates/file-formats" }
 craft-file-import = { path = "crates/file-import" }
 vectorcraft-doc = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
@@ -92,6 +96,7 @@ craft-heif = { path = "crates/heif" }
 craft-fig = { path = "crates/fig" }
 craft-fonts-build = { path = "crates/fonts-build" }
 craft-i18n = { path = "crates/i18n" }
+craft-ipc = { path = "crates/ipc" }
 craft-idml = { path = "crates/idml" }
 craft-indd = { path = "crates/indd" }
 craft-jmap = { path = "crates/jmap" }
@@ -108,6 +113,7 @@ craft-kra = { path = "crates/kra" }
 craft-audio = { path = "crates/audio" }
 craft-latex = { path = "crates/latex" }
 craft-markdown = { path = "crates/markdown" }
+craft-macho = { path = "crates/macho" }
 craft-math = { path = "crates/math" }
 # No default features: craft-audio turns on the craft-media modules each of its features needs.
 craft-media = { path = "crates/media", default-features = false }
@@ -174,6 +180,8 @@ craft-xcf = { path = "crates/xcf" }
 craft-xml = { path = "crates/xml" }
 craft-zip = { path = "crates/zip" }
 craft-y4m = { path = "crates/y4m" }
+craft-sniff = { path = "crates/sniff" }
+craft-tar = { path = "crates/tar" }
 craft-epub = { path = "crates/epub" }
 craft-ews = { path = "crates/ews" }
 craft-video = { path = "crates/video" }
@@ -196,13 +204,11 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-unused_workspace_dependencies = "allow"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
 too_many_arguments = "deny"
-unused_workspace_dependencies = "allow"
 wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"

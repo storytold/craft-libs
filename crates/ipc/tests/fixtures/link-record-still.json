@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "link_id": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+  "target_app": "photocraft",
+  "target_project": "art/poster.photocraft",
+  "result_path": "Project Links/0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d.png",
+  "result_epoch": 3,
+  "asset": {
+    "kind": "still",
+    "moniker": "craft://photocraft/9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f/image/flattened"
+  },
+  "producer": { "app": "photocraft", "app_version": "0.4.2", "doc_id": "9f8e7d6c-5b4a-4c3d-8e2f-1a0b9c8d7e6f" },
+  "format": { "w": 4096, "h": 2160, "alpha": false },
+  "created": "2026-10-23T09:30:00.250+02:00"
+}
