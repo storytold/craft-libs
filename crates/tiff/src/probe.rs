@@ -45,6 +45,7 @@ pub fn first_image_compression(bytes: &[u8]) -> Option<u16> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::ByteOrder;
