@@ -554,17 +554,58 @@ fn a_channel_requested_twice_is_delivered_in_both_slots() {
 fn a_block_is_bounded_by_the_bytes_the_decompressor_allocates_for_it() {
     // One row 4 Mi pixels wide of one f32 channel: 16 MiB. PIZ holds 32 rows a block, but a
     // one-row part's block is that row; 16 such rows of four channels in one ZIP16 block are 1 GiB.
-    for (compression, (w, h), channels, accepted) in
-        [(Compression::PIZ, (4 << 20, 1), &["R"][..], true), (Compression::ZIP16, (4 << 20, 16), &["R", "G", "B", "A"][..], false)]
+    // Both index; a read refuses the 1 GiB block unless its `max_bytes` allows that much.
+    // (`cancel` stops each read that passes the check before a chunk is fetched.)
+    let stop = || true;
+    for (compression, (w, h), channels, big) in
+        [(Compression::PIZ, (4 << 20, 1), &["R"][..], false), (Compression::ZIP16, (4 << 20, 16), &["R", "G", "B", "A"][..], true)]
     {
         let mut bytes = file(vec![layer(None, (0, 0), (1, h), channels, false, compression)], (1, h));
         patch_box(&mut bytes, "dataWindow", [0, 0, w - 1, h as i32 - 1]);
-        let got = Index::build(&mut Cursor::new(&bytes[..]), &Limits::none(), &never);
-        if accepted {
-            assert!(got.is_ok(), "{compression:?}: {got:?}");
-        } else {
+        let index = Index::build(&mut Cursor::new(&bytes[..]), &Limits::none(), &never).unwrap();
+        let read = |max_bytes| read_bands(&mut Cursor::new(&bytes[..]), &index, &Request::new(&[(0, 0)], max_bytes), &stop, &mut |_| {});
+        let got = read(256 << 20);
+        if big {
             assert!(matches!(&got, Err(Error::LimitExceeded(m)) if m.contains("block")), "{compression:?}: {got:?}");
+            assert_eq!(read(1 << 30).err(), Some(Error::Cancelled), "{compression:?}: allowed with max_bytes 1 GiB");
+        } else {
+            assert_eq!(got.err(), Some(Error::Cancelled), "{compression:?}");
         }
+    }
+}
+
+#[test]
+fn a_wide_dwab_part_with_half_a_gigabyte_blocks_reads_only_with_a_budget_that_allows_them() {
+    // 16K wide, 256 lines (one DWAB block), 64 half channels: 128 bytes a pixel, 512 MiB a block.
+    let mut bytes = many_channels(1, 1, 64, true, Compression::DWAB(None));
+    patch_box(&mut bytes, "dataWindow", [0, 0, 16383, 255]);
+    patch_box(&mut bytes, "displayWindow", [0, 0, 16383, 255]);
+    let index = Index::build(&mut Cursor::new(&bytes[..]), &Limits::none(), &never).unwrap();
+    assert_eq!(index.chunks(0).map(|c| (c.width, c.height)).collect::<Vec<_>>(), [(16384, 256)]);
+    let stop = || true;
+    let read = |max_bytes| read_bands(&mut Cursor::new(&bytes[..]), &index, &Request::new(&[(0, 0)], max_bytes), &stop, &mut |_| {});
+    let got = read(256 << 20);
+    assert!(matches!(&got, Err(Error::LimitExceeded(m)) if m.contains("block")), "{got:?}");
+    assert_eq!(read((512 << 20) - 1).err().map(|e| matches!(e, Error::LimitExceeded(_))), Some(true));
+    assert_eq!(read(512 << 20).err(), Some(Error::Cancelled), "a 512 MiB block within max_bytes passes the check");
+    assert_eq!(read(1 << 30).err(), Some(Error::Cancelled));
+}
+
+#[test]
+fn a_chunk_over_the_in_flight_budget_is_decoded_alone() {
+    // 64 rows of one f32 channel, 16 wide, one row a chunk: each chunk holds a 64-byte block and
+    // 64 bytes of bands, 128 bytes in flight; with a budget of 100 no two may be in flight at
+    // once, however many workers there are.
+    let bytes = file(vec![layer(None, (0, 0), (16, 64), &["R"], false, Compression::ZIP1)], (16, 64));
+    let index = indexed(&bytes);
+    let whole = oracle(&bytes, 0, 0.0);
+    for _ in 0..20 {
+        let mut plane = vec![f32::NAN; 16 * 64];
+        let request = Request { workers: Some(8), ..Request::new(&[(0, 0)], usize::MAX) };
+        let mut sink = |b: Band| plane[b.y * 16..(b.y + b.height) * 16].copy_from_slice(&b.samples);
+        let stats = super::seek::read_bands_within(&mut Cursor::new(&bytes[..]), &index, &request, &never, &mut sink, 100).unwrap();
+        assert_eq!(stats.in_flight, 128, "one chunk at a time");
+        assert_eq!(vec![plane], whole);
     }
 }
 

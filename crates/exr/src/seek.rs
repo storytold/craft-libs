@@ -117,9 +117,11 @@ const MAX_ATTRIBUTES: usize = 4096;
 /// can't hold anyway) is refused before anything is sized by it. 16 million chunks is a 64K ×
 /// 64K picture in 16 × 16 tiles.
 const MAX_CHUNKS: usize = 1 << 24;
-/// The most bytes one uncompressed block of a part may take: the decompressor allocates that much
-/// for a block before it looks at the data, so a hostile header (a data window a billion pixels
-/// wide over one tiny chunk) would otherwise ask for gigabytes.
+/// The most bytes one decompressed block may take in a read whose [`Request::max_bytes`] is
+/// smaller: the decompressor allocates a block's bytes before it looks at the data, so a hostile
+/// header (a data window a billion pixels wide over one tiny chunk) would otherwise ask for
+/// gigabytes. A read allows blocks up to `max(this, max_bytes)`: a caller that budgets more memory
+/// can read files with larger blocks (wide DWAB parts with many channels hold 512 MiB a block).
 const MAX_BLOCK_BYTES: usize = 256 << 20;
 /// Chunks are read in pieces: a run of chunks that follow each other in the file, read with one
 /// request (one round trip to a network share, not one per chunk). The first piece is small so
@@ -414,7 +416,8 @@ fn check_part(index: usize, h: &Header, limits: &Limits) -> Result<()> {
     if !crate_bound_fits(h) {
         return Err(malformed(format!("the block size of part {index} overflows")));
     }
-    block_bytes(h).ok_or_else(|| Error::LimitExceeded(format!("a block of part {index} is over {MAX_BLOCK_BYTES} bytes")))?;
+    // (how large a block may be depends on the read: see `read_bands`)
+    block_bytes(h).ok_or_else(|| malformed(format!("the block size of part {index} overflows")))?;
     Ok(())
 }
 
@@ -425,13 +428,13 @@ fn pixel_bytes(h: &Header) -> Option<usize> {
 
 /// The bytes of the largest block the decompressor allocates for a chunk of `h`: a pixel's bytes
 /// times a tile's area, or times the width and the rows of a scan-line block (no more than the
-/// part has). `None` past [`MAX_BLOCK_BYTES`] or when it overflows.
+/// part has). `None` when it overflows.
 fn block_bytes(h: &Header) -> Option<usize> {
     let pixels = match h.blocks {
         exr::meta::BlockDescription::Tiles(t) => t.tile_size.0.checked_mul(t.tile_size.1)?,
         exr::meta::BlockDescription::ScanLines => h.compression.scan_lines_per_block().min(h.layer_size.1).checked_mul(h.layer_size.0)?,
     };
-    pixel_bytes(h)?.checked_mul(pixels).filter(|b| *b <= MAX_BLOCK_BYTES)
+    pixel_bytes(h)?.checked_mul(pixels)
 }
 
 /// Whether the `exr` crate's own bound on a chunk of `h` (`Header::max_block_byte_size`: like
@@ -558,7 +561,9 @@ pub struct Request<'a> {
     /// Every `2^level`-th row and column of the display window (0: full resolution, at most 16).
     pub level: u32,
     /// The most bytes of samples the read may produce: [`read_bands`] checks the requested rows
-    /// at the level, [`read_planes`] the whole display-window planes it allocates.
+    /// at the level, [`read_planes`] the whole display-window planes it allocates. It also raises
+    /// the most one decompressed block may take above the 256 MiB default (a block over both is
+    /// refused before anything is read).
     pub max_bytes: usize,
     /// The most threads that decompress (`None`: as many as the machine runs at once; `Some(0)`:
     /// none, everything is decoded on the calling thread). Never more than the chunks need.
@@ -674,7 +679,11 @@ struct Planned {
 /// nor `Sync`. Memory is bounded: at most one piece is read ahead of what has been delivered (so
 /// at most two pieces of compressed bytes, 8 MiB, or one larger chunk, are held), and the
 /// decoded bytes in flight (decompressed blocks and waiting bands, estimated from the headers,
-/// see [`Stats::in_flight`]) stay within 64 MiB or one chunk's worth. Besides, each worker holds
+/// see [`Stats::in_flight`]) stay within 64 MiB or one chunk's worth: a chunk whose block alone is
+/// over 64 MiB is decoded alone, once everything before it has been delivered, so however many
+/// workers run, at most one such block is held at a time. A block may take no more than 256 MiB,
+/// or [`Request::max_bytes`] if that is more; a needed chunk over it is refused
+/// ([`Error::LimitExceeded`]) before anything is read. Besides, each worker holds
 /// a copy of the compressed chunk it decodes: a chunk's declared size is checked against the
 /// bytes it holds before the `exr` crate allocates by it. Where threads can't be started
 /// (WebAssembly) the chunks are decoded on the calling thread instead. `cancel` is polled before
@@ -760,7 +769,9 @@ fn read_into<R: Read + Seek + ?Sized>(
     if need > request.max_bytes {
         return Err(Error::LimitExceeded(format!("the requested rows need {need} bytes, more than the {} the read may use", request.max_bytes)));
     }
-    // The chunks to read, in file order.
+    // The chunks to read, in file order. The decompressor allocates each one's whole block, so a
+    // block may take no more than the read allows (see `MAX_BLOCK_BYTES`).
+    let most_block = (MAX_BLOCK_BYTES.max(request.max_bytes)) as u64;
     let mut jobs: Vec<Planned> = Vec::new();
     for (pi, part) in index.layout.iter().enumerate() {
         let requested = slots.get(pi).map_or(0, |s| s.iter().map(Vec::len).sum::<usize>());
@@ -776,7 +787,14 @@ fn read_into<R: Read + Seek + ?Sized>(
                 return Err(malformed("a chunk offset outside the file"));
             }
             let pixels = (c.cols as u64).saturating_mul(c.rows as u64);
-            let cost = pixels.saturating_mul(part.pixel_bytes as u64).saturating_add(pixels.saturating_mul(requested as u64).saturating_mul(4));
+            let block = pixels.saturating_mul(part.pixel_bytes as u64);
+            if block > most_block {
+                return Err(Error::LimitExceeded(format!(
+                    "a block of part {pi} decompresses to {block} bytes, more than the {most_block} a read with max_bytes {} may use",
+                    request.max_bytes
+                )));
+            }
+            let cost = block.saturating_add(pixels.saturating_mul(requested as u64).saturating_mul(4));
             jobs.try_reserve(1).map_err(|_| Error::LimitExceeded("chunk list allocation".into()))?;
             jobs.push(Planned { part: pi, offset: c.offset, len: c.len, chunk: *c, cost });
         }
