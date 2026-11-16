@@ -156,9 +156,7 @@ impl Sh {
     /// keep the theme's background colour so adjacent nodes remain separated.
     fn recolor(&mut self, spec: &SmartArtSpec, i: usize) {
         let Some(c) = spec.items.get(i).and_then(|it| it.color) else { return };
-        if let Some(o) = spec.items.get(i).and_then(|it| it.opacity) {
-            self.alpha = Some(u32::from(o) * 1000);
-        }
+        self.alpha = Some(u32::from(spec.items.get(i).and_then(|it| it.opacity).unwrap_or(100).min(100)) * 1000);
         for p in [&mut self.fill, &mut self.line] {
             if let Paint::Accent(_, tint) = *p {
                 *p = Paint::Rgb(c, tint);
@@ -794,7 +792,7 @@ pub fn data_xml(spec: &SmartArtSpec, drawing_rel: &str) -> String {
                 match it.opacity {
                     Some(o) => {
                         w.open("a:srgbClr", &[("val", &c.hex())]);
-                        w.empty("a:alpha", &[("val", &(u32::from(o) * 1000).to_string())]);
+                        w.empty("a:alpha", &[("val", &(u32::from(o.min(100)) * 1000).to_string())]);
                         w.close("a:srgbClr");
                     }
                     None => w.empty("a:srgbClr", &[("val", &c.hex())]),
@@ -1285,6 +1283,18 @@ mod opacity_tests {
         let items = smart_art_items(&spec, &[], 400.0, 250.0);
         let GraphicItem::Shape { alpha, .. } = &items[0] else { panic!("shape first") };
         assert!((alpha - 0.12).abs() < 0.01, "{alpha}");
+    }
+    #[test]
+    fn an_omitted_opacity_on_a_coloured_item_is_solid_and_hostile_values_write_clamped() {
+        let mut spec = SmartArtSpec::sample(SmartArtLayout::Venn);
+        spec.items[0].color = Some(Rgb(0x12, 0x34, 0x56));
+        let items = smart_art_items(&spec, &[], 400.0, 250.0);
+        let GraphicItem::Shape { alpha, .. } = &items[0] else { panic!("shape first") };
+        assert!((alpha - 1.0).abs() < 0.01, "{alpha}");
+        spec.items[0].opacity = Some(250);
+        let drawing = drawing_xml(&spec, 400.0, 250.0);
+        assert!(!drawing.contains("val=\"250000\""), "{drawing}");
+        assert!(drawing.contains("val=\"100000\""), "{drawing}");
     }
     #[test]
     fn opacity_of_0_50_and_100_survives_and_hostile_values_are_clamped() {
