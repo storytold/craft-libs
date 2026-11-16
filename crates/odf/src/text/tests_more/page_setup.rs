@@ -620,6 +620,27 @@ fn later_pages_with_a_header_follow_a_first_page_without_one() {
     assert!(layout(&s, "pmnext").contains(r#"style:num-format="I""#), "{s}");
 }
 
+/// Later pages showing no header whose layout still has a header's measurements: their text starts
+/// at the margin, so a top margin change moves it by as much, not past the unused header.
+#[test]
+fn later_pages_without_a_header_ignore_their_layouts_header_measurements() {
+    let page =
+        r#"fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="20pt" fo:margin-bottom="20pt" fo:margin-left="2cm" fo:margin-right="2cm""#;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pmfirst"><style:page-layout-properties {page}/></style:page-layout><style:page-layout style:name="pmnext"><style:page-layout-properties {page}/><style:header-style><style:header-footer-properties fo:min-height="40pt" fo:margin-bottom="10pt"/></style:header-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pmnext"/><style:master-page style:name="First_20_Page" style:page-layout-name="pmfirst" style:next-style-name="Standard"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="P1" style:family="paragraph" style:master-page-name="First_20_Page"/></office:automatic-styles><office:body><office:text><text:p text:style-name="P1">x</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    assert!((d.last_section.margin_top - 20.0).abs() < 0.01, "{}", d.last_section.margin_top);
+    d.last_section.margin_top = 30.0;
+    let s = crate::text::tests::entry(&export(&d).unwrap(), "styles.xml");
+    let later = s.split(r#"style:name="pmnext""#).nth(1).and_then(|r| r.split("</style:page-layout>").next()).unwrap();
+    assert!(later.contains(r#"fo:margin-top="30pt""#), "the text 10 pt lower: {later}");
+    assert!(later.contains(r#"fo:min-height="40pt""#) && later.contains(r#"fo:margin-bottom="10pt""#), "its header's style as read: {later}");
+}
+
 /// A file listing another master page before `Standard`, its first paragraph naming none: WordCraft
 /// reads the first pages from the first one listed, so a change to them is still there when the
 /// saved file is read again.

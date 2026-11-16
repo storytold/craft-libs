@@ -864,14 +864,17 @@ fn patch_side(file: String, original: &str, (then, now): (&str, &str), side: &Si
     let band_moved = (was.0 - is.0).abs() >= 0.005;
     // Its spacing may have changed already, without its height (see `patch_layout`).
     let spaced = (was.2 - is.2).abs() >= 0.005;
-    let same_reach = (reach(before) - reach(was)).abs() < 0.5;
+    // Where the file's page started its text: past its band only where its pages show one (a
+    // layout may keep a band's measurements its master page doesn't use).
+    let started = if shown { reach(before) } else { before.0 };
+    let same_reach = (started - reach(was)).abs() < 0.5;
     // (Where the section's first page has no band, its margin is where its text starts.)
     let same_margin = (before.0 - was.0).abs() < 0.5 || (before.0 - reach(was)).abs() < 0.5;
     if !(moved || band_moved || spaced) || (!own && !same_reach && !same_margin) {
         return Some(file);
     }
     // Where its text is to start.
-    let target = if own || same_reach { reach(is) } else { reach(before) + reach(is) - reach(was) };
+    let target = if own || same_reach { reach(is) } else { started + reach(is) - reach(was) };
     let length = |v: f32| Some(super::writer::pt(v));
     if !shown {
         return if moved { with_attrs(&file, LAYOUT, &[(side.margin.to_string(), length(target))]) } else { Some(file) };
