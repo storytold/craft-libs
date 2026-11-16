@@ -171,7 +171,12 @@ impl Pieces {
 /// is. The ends of the curve are its own ends exactly.
 pub(crate) fn y_pieces(c: &CubicBez) -> Pieces {
     let [y0, y1, y2, y3] = [c.p0.y, c.p1.y, c.p2.y, c.p3.y];
-    let (a, b, d) = (y1 - y0, y2 - y1, y3 - y2);
+    // The steps and their second difference are found on a sixteenth of the heights where those are past 1e300: the steps of heights that large
+    // (3e307, for a handle that goes up by as much and a handle that goes down by as much) are not numbers, nor is the second difference, and the
+    // curve lost its turns. The roots of a quadratic do not change with the scale of its coefficients, and a power of two scales exactly.
+    let shrink = if [y0, y1, y2, y3].iter().any(|y| y.abs() > 1e300) { 0.0625 } else { 1.0 };
+    let [s0, s1, s2, s3] = [y0 * shrink, y1 * shrink, y2 * shrink, y3 * shrink];
+    let (a, b, d) = (s1 - s0, s2 - s1, s3 - s2);
     let mut turns = [0.0_f64; 2];
     let mut n = 0;
     for t in quadratic_roots(a - 2.0 * b + d, 2.0 * (b - a), a).into_iter().flatten() {
@@ -671,6 +676,29 @@ mod tests {
             assert_eq!(turns.len(), 3, "{s}: {turns:?}");
             assert!((turns[0] - 0.211_324_865_405_187).abs() < 1e-12 && (turns[1] - 0.788_675_134_594_813).abs() < 1e-12, "{s}: {turns:?}");
             assert_eq!(winding(&s_curve(s), Point::new(2.25 * s, -0.1 * s)), 1, "{s}");
+        }
+    }
+
+    /// At the top of the range (1e300 and past it) the steps of the heights and their second difference are not numbers: for a handle that goes up
+    /// by 3e307 and a handle that goes down by as much the second difference is 1.8e308, and the quadratic found no turns, so that the lower lobe
+    /// of the curve wound nothing.
+    #[test]
+    fn a_cubic_at_the_top_of_the_range_keeps_its_turns() {
+        for s in [3e307, 2.9e307, -3e307, 1e300, 1.5e308] {
+            let c = CubicBez::new((0.0, 0.0), (s, s), (2.0 * s, -s), (3.0 * s, 0.0));
+            if !(c.p3.x.is_finite() && c.p2.x.is_finite()) {
+                continue;
+            }
+            let turns: Vec<f64> = y_pieces(&c).iter().map(|p| p.hi).collect();
+            assert_eq!(turns.len(), 3, "{s}: {turns:?}");
+            assert!((turns[0] - 0.211_324_865_405_187).abs() < 1e-12 && (turns[1] - 0.788_675_134_594_813).abs() < 1e-12, "{s}: {turns:?}");
+        }
+        // The two lobes wind as they do at unit scale (the points are well inside them).
+        let lobes = |s: f64| [Point::new(2.25 * s, -0.1 * s), Point::new(0.75 * s, 0.1 * s)].map(|p| winding(&s_curve(s), p));
+        let unit = lobes(1.0);
+        assert!(unit[0] == 1 && unit[1] != 0, "{unit:?}");
+        for s in [3e307, 1e300] {
+            assert_eq!(lobes(s), unit, "at {s}");
         }
     }
 
