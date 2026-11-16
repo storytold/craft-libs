@@ -46,7 +46,7 @@ craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "<
 | BMP | yes | yes | U8 | RGB, RGBA | yes | no | no | no | yes (header pixels per metre) | no | no | `image` |
 | TGA | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | no | `image` (read) / built in (RLE write, one scanline per packet) |
 | ICO | yes | yes | U8 | RGBA (at most 256×256) | yes | no | no | no | no | no | no | `image` |
-| DDS | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | yes (BC1–BC3, when `EncodeOptions::dds` asks for one) | built in |
+| DDS | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | yes (BC1–BC5, when `EncodeOptions::dds` asks for one) | [`craft-dds`](../dds/README.md) |
 | Netpbm (PBM/PGM/PPM/PAM/PFM) | yes | yes | U8, U16, F32 (float: PFM gray/RGB only) | all six (PAM `CMYK`/`CMYK_ALPHA`) | yes (PAM) | no | no | no | no | no | no | built in |
 | QOI | yes | yes | U8 | RGB, RGBA | yes | no | no | no | no | no | no | `image` |
 | OpenEXR | yes | yes | F16, F32 | Y, YA, RGB, RGBA | yes | no | no | no | no | no | no | `exr` |
@@ -95,20 +95,29 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   Reading remains in the separate #2868 PR. The `ASYMMETRIC_EXCEPTIONS`
   entry stays until import is merged.
 
-* **DDS.** The top mip level of a 2D texture: uncompressed pixels described by channel masks
-  (8, 16, 24 or 32 bits, RGB or luminance, with or without alpha) or BC1/BC2/BC3 (DXT1/DXT3/DXT5),
-  with the legacy header or the DX10 one. Uncompressed row padding follows the header's
-  `DDSD_PITCH` stride; without that flag, rows are tightly packed. Everything opens as U8; the
-  other mip levels are ignored. Cubemaps, texture arrays, volume textures, premultiplied DXT2/DXT4 and other formats
-  (BC4–BC7, float) are refused with `CodecError::Unsupported`. Writing (`EncodeOptions::dds`) makes
-  a 2D texture with the legacy header: uncompressed by default (BGRA, BGRX, or luminance with or
-  without alpha, so it reads back exactly), or BC1/BC2/BC3. The block encoder is our own, from
+* **DDS** (through [`craft-dds`](../dds/README.md), whose `DdsCompression` and `DdsOptions` are
+  re-exported). The top mip level of a 2D texture: uncompressed pixels described by channel masks
+  (8, 16, 24 or 32 bits, RGB or luminance, with or without alpha), BC1/BC2/BC3 (DXT1/DXT3/DXT5) or
+  unsigned BC4/BC5 (ATI1/ATI2, BC4U/BC5U, DXGI 79, 80, 82 and 83), with the legacy header or the
+  DX10 one. BC4 opens as Gray and BC5 as RGB with blue 0 (BC5 stores only red and green; a normal
+  map's Z is not reconstructed). ATI2 is read as Microsoft reads it, red in the first block.
+  Uncompressed row padding follows the header's `DDSD_PITCH` stride; without that flag, rows are
+  tightly packed. Everything opens as U8; the other mip levels are ignored. Cubemaps, texture
+  arrays, volume textures, premultiplied-alpha textures (DXT2/DXT4, or DX10 alpha mode 2), signed (SNORM) BC4/BC5 and other formats
+  (BC6H, BC7, float) are refused with `CodecError::Unsupported`. Writing (`EncodeOptions::dds`)
+  makes a 2D texture: uncompressed by default (BGRA, BGRX, or luminance with or without alpha, so
+  it reads back exactly), BC1/BC2/BC3 (from RGBA) with the legacy header, or BC4 (from gray, for
+  roughness, height and other single-channel maps) and BC5 (from RGB, blue dropped, for normal
+  maps) with the DX10 header (`BC4_UNORM`, `BC5_UNORM`). The plan converts other layouts to what
+  the compression stores, so `fidelity_warnings` reports colour to gray for BC4 and dropped alpha
+  for both; BC5's dropped blue comes under `LossyCompression`. The block encoder is our own, from
   Microsoft's public block-compression documentation: RGB565 endpoints fitted along each block's
   principal axis and refined by least squares, indices picked against the palette the reader
-  decodes; BC1 turns texels under half opacity into its transparent black, and BC3 picks
-  whichever alpha mode fits. `mipmaps` adds the full chain down to 1×1, each level a box filter
-  of the one above (the last column and row of an odd-sized level average three pixels, so none
-  is dropped). Cubemaps, arrays, BC4–BC7 and sRGB (DX10-only) formats aren't written.
+  decodes; BC1 turns texels under half opacity into its transparent black, and BC3, BC4 and BC5
+  pick whichever mode of their value blocks fits. `mipmaps` adds the full chain down to 1×1, each
+  level a box filter of the one above (the last column and row of an odd-sized level average
+  three pixels, so none is dropped). Cubemaps, arrays, BC6H, BC7 and sRGB (DX10-only) formats
+  aren't written.
 
 * **FITS.** The image in the primary HDU, or the first `IMAGE` extension, is read; `NAXIS3 = 3`
   opens as RGB and any other plane count opens the first plane with `DecodeWarning::MorePages`.
