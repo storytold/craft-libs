@@ -22,9 +22,13 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Bounded classic TIFF directory reader with lazy value access.
+pub mod classic;
+
 pub mod image;
 pub mod makernote;
 pub mod packbits;
+pub mod probe;
 mod reader;
 pub mod tags;
 pub mod writer;

@@ -37,9 +37,53 @@ pub(crate) struct JpegMeta {
     pub dpi: Option<(f32, f32)>,
     /// The APP13 Photoshop image resource blocks (`8BIM` ...), segments joined, without the header.
     pub photoshop: Option<Vec<u8>>,
+    /// Whether an Adobe APP14 marker identifies the four-component samples as inverted CMYK.
+    pub adobe_marker: bool,
     pub adobe_transform: Option<u8>,
     /// (width, height, components) from the first SOFn.
     pub frame: Option<(u32, u32, u8)>,
+    /// [`crate::JpegInfo::held_coefficients`] of the first SOFn and the first scan.
+    pub held_coefficients: u64,
+}
+
+/// The first frame of `b` as [`crate::JpegInfo`], from its markers alone (see [`crate::jpeg_info`]).
+pub(crate) fn info(b: &[u8]) -> Option<crate::JpegInfo> {
+    let m = scan_metadata(b);
+    let (width, height, components) = m.frame?;
+    let layout = match components {
+        1 => ChannelLayout::Gray,
+        3 => ChannelLayout::Rgb,
+        4 => ChannelLayout::Cmyk,
+        _ => return None,
+    };
+    let held_coefficients = m.held_coefficients;
+    Some(crate::JpegInfo { width, height, layout, whole_coefficients: uses_craft_jpeg(b), held_coefficients })
+}
+
+/// Bytes of the coefficients `zune-jpeg` holds beside its output for a frame it can't turn into
+/// rows as it reads (see [`crate::JpegInfo::held_coefficients`]), from the frame's header
+/// segment `seg` and the number of components in its first scan: per component, a 64-value
+/// block of `i16`s for each of its H × V blocks in every MCU (A.2), the MCUs covering the frame
+/// at the largest sampling factors. 0 for any other frame.
+fn held_coefficients(marker: u8, seg: &[u8], scan_components: Option<u8>) -> u64 {
+    let &[8, h0, h1, w0, w1, n, ref comps @ ..] = seg else { return 0 };
+    // Progressive scans refine every block in turn; a sequential first scan without every
+    // component leaves its rows unfinished until the scans that bring the others.
+    let held = match marker {
+        0xC2 => true,
+        0xC0 | 0xC1 => scan_components.is_some_and(|s| s < n),
+        _ => false,
+    };
+    if !held {
+        return 0;
+    }
+    let (h, w) = (u64::from(u16::from_be_bytes([h0, h1])), u64::from(u16::from_be_bytes([w0, w1])));
+    let factors: Vec<(u64, u64)> =
+        comps.as_chunks::<3>().0.iter().take(usize::from(n)).map(|&[_, f, _]| (u64::from(f >> 4), u64::from(f & 15))).collect();
+    let hmax = factors.iter().map(|f| f.0).max().unwrap_or(1).max(1);
+    let vmax = factors.iter().map(|f| f.1).max().unwrap_or(1).max(1);
+    let mcus = w.div_ceil(8 * hmax) * h.div_ceil(8 * vmax);
+    factors.iter().map(|&(fh, fv)| mcus * fh * fv * 64 * 2).sum()
 }
 
 /// Walk the marker segments up to SOS and collect metadata.
@@ -49,6 +93,9 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
     // Photoshop splits a large resource block over consecutive APP13 segments.
     let mut photoshop: Vec<u8> = Vec::new();
     let mut jfif_dpi = None;
+    // The first frame header and the number of components in the first scan.
+    let mut sof: Option<(u8, &[u8])> = None;
+    let mut scan_components = None;
     let mut i = 2;
     while i + 4 <= b.len() {
         if b[i] != 0xFF {
@@ -64,6 +111,7 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
             continue;
         }
         if marker == 0xDA || marker == 0xD9 {
+            scan_components = (marker == 0xDA).then(|| b.get(i + 4).copied()).flatten();
             break;
         }
         let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
@@ -100,14 +148,19 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
                 let h = u16::from_be_bytes([seg[1], seg[2]]) as u32;
                 let w = u16::from_be_bytes([seg[3], seg[4]]) as u32;
                 m.frame = Some((w, h, seg[5]));
+                sof = Some((marker, seg));
             }
-            0xEE if seg.len() >= 12 && seg.starts_with(b"Adobe") => {
-                m.adobe_transform = Some(seg[11]);
+            0xEE if seg.starts_with(b"Adobe") => {
+                m.adobe_marker = true;
+                if seg.len() >= 12 {
+                    m.adobe_transform = Some(seg[11]);
+                }
             }
             _ => {}
         }
         i += 2 + len;
     }
+    m.held_coefficients = sof.map_or(0, |(marker, seg)| held_coefficients(marker, seg, scan_components));
     m.dpi = photoshop_resolution(&photoshop)
         .or_else(|| m.xmp.as_deref().and_then(xmp_resolution))
         .or_else(|| m.exif.as_deref().and_then(exif_resolution))
@@ -142,6 +195,36 @@ enum DataEnd {
 /// measured on these, not on the file length, which APP padding can inflate without
 /// adding image data.
 fn data_end(b: &[u8]) -> (DataEnd, u64) {
+    data_end_mode(b, false)
+}
+
+/// Whether JPEG `b` holds too little scan data for a `w` × `h` frame to be worth decoding: no scan
+/// data at all, or under one byte for every [`MAX_PIXELS_PER_BYTE`] pixels (counted on the scan
+/// data the marker walk crosses, so APP padding doesn't count). `zune-jpeg` allocates the whole
+/// output before it reads a scan, so a few bytes could otherwise ask for a frame of any size.
+pub(crate) fn scan_too_short(b: &[u8], w: u32, h: u32) -> bool {
+    let (end, scan_bytes) = data_end(b);
+    end == DataEnd::Empty || u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
+}
+
+/// Whether the marker walk actually reaches the first EOI, with malformed segment lengths refused.
+pub(crate) fn reaches_eoi(b: &[u8]) -> bool {
+    data_end_mode(b, true).0 == DataEnd::Complete
+}
+
+fn find_ff(b: &[u8]) -> Option<usize> {
+    const ONES: u64 = 0x0101_0101_0101_0101;
+    let (words, tail) = b.as_chunks::<8>();
+    for (i, word) in words.iter().enumerate() {
+        let x = !u64::from_ne_bytes(*word);
+        if x.wrapping_sub(ONES) & !x & (ONES << 7) != 0 {
+            return word.iter().position(|&v| v == 0xff).map(|j| i * 8 + j);
+        }
+    }
+    tail.iter().position(|&v| v == 0xff).map(|j| words.len() * 8 + j)
+}
+
+fn data_end_mode(b: &[u8], strict: bool) -> (DataEnd, u64) {
     // Where the bytes run out: inside the image data once a scan has held some.
     let cut = |scan_data: bool, scanned: u64| (if scan_data { DataEnd::Truncated } else { DataEnd::Empty }, scanned);
     let mut i = 2; // past SOI
@@ -154,7 +237,7 @@ fn data_end(b: &[u8]) -> (DataEnd, u64) {
             // segments after the stray bytes (padding among them) are still recognised. Stray
             // bytes are not scan data, so they never count (junk would buy budget as padding
             // did); with no marker left, the image data ends here.
-            let Some(p) = b.get(i..).and_then(|r| r.iter().position(|&v| v == 0xFF)) else { return cut(scan_data, scanned) };
+            let Some(p) = b.get(i..).and_then(find_ff) else { return cut(scan_data, scanned) };
             i += p;
             continue;
         }
@@ -163,15 +246,19 @@ fn data_end(b: &[u8]) -> (DataEnd, u64) {
             0xD9 => return (DataEnd::Complete, scanned),
             0xFF => i += 1,
             0x01 | 0xD0..=0xD8 => i += 2,
+            0x00 if strict => i += 2,
             _ => {
                 let Some(len) = b.get(i + 2..i + 4).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_be_bytes) else {
                     return cut(scan_data, scanned);
                 };
+                if strict && len < 2 {
+                    return cut(scan_data, scanned);
+                }
                 i = i.saturating_add(2 + usize::from(len));
                 if code == 0xDA {
                     let start = i;
                     loop {
-                        let Some(p) = b.get(i..).and_then(|r| r.iter().position(|&v| v == 0xFF)) else {
+                        let Some(p) = b.get(i..).and_then(find_ff) else {
                             // EOF inside this scan: everything from the scan start to the end
                             // of the file is scan data (inside a declared segment it may not
                             // be, so only count what remains).
@@ -244,6 +331,40 @@ fn without_extended_xmp(b: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Whether the first frame header of `b` samples its first component below the largest
+/// horizontal or vertical sampling factor of the frame. zune-jpeg 0.5 sizes its upsampler's
+/// scratch row from the first component and asserts on some such frames (jpeg-encoder writes
+/// CMYK that way: C, M and Y at 1×1, K larger). `false` when no frame header can be read.
+fn first_component_subsampled(b: &[u8]) -> bool {
+    if b.get(..2) != Some(&[0xFF, 0xD8]) {
+        return false;
+    }
+    let mut i = 2;
+    while let (Some(&0xFF), Some(&m)) = (b.get(i), b.get(i + 1)) {
+        match m {
+            0xFF => i += 1,
+            0x01 | 0xD0..=0xD8 => i += 2,
+            0xD9 | 0xDA => return false,
+            _ => {
+                let Some(len) = b.get(i + 2..i + 4).map(|l| usize::from(u16::from_be_bytes([l[0], l[1]]))) else { return false };
+                if matches!(m, 0xC0..=0xCF) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
+                    let Some(seg) = b.get(i + 4..i + 2 + len.max(2)) else { return false };
+                    let n = usize::from(seg.get(5).copied().unwrap_or(0));
+                    let factors: Vec<(u8, u8)> = (0..n).filter_map(|c| seg.get(6 + c * 3 + 1)).map(|f| (f >> 4, f & 0x0F)).collect();
+                    let (Some(&(h0, v0)), Some(hmax), Some(vmax)) =
+                        (factors.first(), factors.iter().map(|f| f.0).max(), factors.iter().map(|f| f.1).max())
+                    else {
+                        return false;
+                    };
+                    return h0 < hmax || v0 < vmax;
+                }
+                i += 2 + len;
+            }
+        }
+    }
+    false
+}
+
 /// Whether `craft-jpeg` (rather than `zune-jpeg`) decodes the file: arithmetic coding
 /// (SOF9–SOF11), lossless (SOF3), or a DCT frame whose precision isn't 8 bits (#4934, #5003).
 /// This includes 12-bit progressive Huffman (SOF2), which `craft-jpeg` supports.
@@ -264,9 +385,21 @@ fn craft_jpeg_error(e: craft_jpeg::Error) -> CodecError {
     }
 }
 
+fn undo_craft_cmyk_inversion_u8(samples: &mut [u8], enabled: bool) {
+    if enabled {
+        samples.iter_mut().for_each(|v| *v = 255 - *v);
+    }
+}
+
+fn undo_craft_cmyk_inversion_u16(samples: &mut [u16], enabled: bool) {
+    if enabled {
+        samples.iter_mut().for_each(|v| *v = 65535 - *v);
+    }
+}
+
 /// Decode a file [`uses_craft_jpeg`] routes away from `zune-jpeg`; `damaged` says entropy-coded
 /// data was cut short or corrupt.
-fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>) -> Result<(Image, bool), CodecError> {
+fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>, adobe_marker: bool) -> Result<(Image, bool), CodecError> {
     let mut lim = craft_jpeg::Limits::default();
     lim.max_pixels = limits.max_pixels;
     lim.max_alloc = limits.max_alloc;
@@ -277,9 +410,19 @@ fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>)
         4 => ChannelLayout::Cmyk,
         n => return Err(err(format!("{n} components"))),
     };
+    // craft-jpeg returns non-YCC CMYK samples with Adobe's inversion already undone,
+    // regardless of whether the file actually has an Adobe marker. Unmarked four-component
+    // streams are also found with direct ink samples, so restore those when using this backend.
+    let restore_unmarked_cmyk = !adobe_marker && matches!(layout, ChannelLayout::Cmyk);
     let img = match d.samples {
-        craft_jpeg::Samples::U8(px) => Image::from_raw(d.width, d.height, layout, SampleType::U8, px)?,
-        craft_jpeg::Samples::U16(px) => Image::from_u16(d.width, d.height, layout, &px)?,
+        craft_jpeg::Samples::U8(mut px) => {
+            undo_craft_cmyk_inversion_u8(&mut px, restore_unmarked_cmyk);
+            Image::from_raw(d.width, d.height, layout, SampleType::U8, px)?
+        }
+        craft_jpeg::Samples::U16(mut px) => {
+            undo_craft_cmyk_inversion_u16(&mut px, restore_unmarked_cmyk);
+            Image::from_u16(d.width, d.height, layout, &px)?
+        }
     };
     Ok((img, d.damaged))
 }
@@ -288,6 +431,39 @@ fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>)
 /// one-bit DC code (512 pixels a byte for a flat image under ideal Huffman tables), and real files,
 /// truncated or not, are far above this.
 const MAX_PIXELS_PER_BYTE: u64 = 2048;
+
+/// Decode with craft-jpeg: the files [`uses_craft_jpeg`] routes away from `zune-jpeg`, and the
+/// ones `zune-jpeg` panics on.
+fn decode_whole(bytes: &[u8], limits: &Limits, meta: JpegMeta, end: DataEnd, scan_bytes: u64) -> Result<Image, CodecError> {
+    // craft-jpeg sizes its buffers from the frame header before it reads a scan.
+    if scan_bytes == 0 {
+        return Err(err("the file has no scan data"));
+    }
+    if let Some((w, h, _)) = meta.frame
+        && end == DataEnd::Truncated
+        // Only truncated scans: arithmetic coding (SOF9–SOF11) can spend well under a bit on
+        // a flat block, so a complete scan may be shorter than this bound.
+        && u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
+    {
+        return Err(err("the truncated scan is too short for the frame it declares"));
+    }
+    let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform, meta.adobe_marker)?;
+    img.icc = meta.icc;
+    img.meta = Metadata { exif: meta.exif, xmp: meta.xmp, dpi: meta.dpi, photoshop_resources: meta.photoshop, ..Default::default() };
+    if end == DataEnd::Truncated || damaged {
+        img.warnings.push(DecodeWarning::Truncated { format: F });
+    }
+    Ok(img)
+}
+
+/// The stored size and EXIF block [`decode`] would find, from the marker segments before the
+/// first scan: the first frame header's size, checked against `limits`, and the APP1 EXIF block.
+pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, Option<Vec<u8>>), CodecError> {
+    let meta = scan_metadata(bytes);
+    let (w, h, _) = meta.frame.ok_or_else(|| err("no frame header before the image data"))?;
+    limits.check_size(w, h)?;
+    Ok((w, h, meta.exif))
+}
 
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let (end, scan_bytes) = data_end(bytes);
@@ -298,26 +474,9 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     if let Some((w, h, nc)) = meta.frame {
         limits.check_bytes(w, h, u64::from(nc.max(1)))?;
     }
-    if uses_craft_jpeg(bytes) {
-        // craft-jpeg sizes its buffers from the frame header before it reads a scan.
-        if scan_bytes == 0 {
-            return Err(err("the file has no scan data"));
-        }
-        if let Some((w, h, _)) = meta.frame
-            && end == DataEnd::Truncated
-            // Only truncated scans: arithmetic coding (SOF9–SOF11) can spend well under a bit on
-            // a flat block, so a complete scan may be shorter than this bound.
-            && u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
-        {
-            return Err(err("the truncated scan is too short for the frame it declares"));
-        }
-        let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform)?;
-        img.icc = meta.icc;
-        img.meta = Metadata { exif: meta.exif, xmp: meta.xmp, dpi: meta.dpi, photoshop_resources: meta.photoshop, ..Default::default() };
-        if end == DataEnd::Truncated || damaged {
-            img.warnings.push(DecodeWarning::Truncated { format: F });
-        }
-        return Ok(img);
+    // Where a panic aborts (wasm32), the frames zune-jpeg may panic on can't be caught below.
+    if uses_craft_jpeg(bytes) || (cfg!(panic = "abort") && first_component_subsampled(bytes)) {
+        return decode_whole(bytes, limits, meta, end, scan_bytes);
     }
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(65535).set_max_height(65535);
     let stripped = without_extended_xmp(bytes);
@@ -343,15 +502,21 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         return Err(err(format!("{what} is too short for the frame it declares")));
     }
     dec.set_options(dec.options().jpeg_set_out_colorspace(out_cs));
-    let mut px = dec.decode().map_err(err)?;
+    // zune-jpeg 0.5 asserts on some subsampled four-component frames whose first component isn't
+    // the largest (its upsampler's scratch row is sized from that component): craft-jpeg reads them.
+    let Ok(decoded) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dec.decode())) else {
+        return decode_whole(bytes, limits, meta, end, scan_bytes);
+    };
+    let mut px = decoded.map_err(err)?;
     let expected = w as usize * h as usize * layout.channels();
     if px.len() < expected {
         return Err(err("short pixel buffer"));
     }
     px.truncate(expected);
     match input {
-        // Adobe-style CMYK is stored inverted (255 = no ink).
-        ColorSpace::CMYK => px.iter_mut().for_each(|v| *v = 255 - *v),
+        // Adobe-style CMYK is stored inverted (255 = no ink). Four-component JPEGs without
+        // APP14 are also encountered with their CMYK samples stored as ink values directly.
+        ColorSpace::CMYK if meta.adobe_marker => px.iter_mut().for_each(|v| *v = 255 - *v),
         ColorSpace::YCCK => {
             for p in px.as_chunks_mut::<4>().0 {
                 let (y, cb, cr) = (p[0] as f32, p[1] as f32 - 128.0, p[2] as f32 - 128.0);
@@ -403,6 +568,9 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
     // Optimized keeps the standard tables until that decoder is updated. Progressive is fine.
     let progressive = opts.jpeg_format == JpegFormat::Progressive;
     enc.set_progressive(progressive);
+    if progressive && let Some(scans) = opts.jpeg_progressive_scans {
+        enc.set_progressive_scans(scans);
+    }
     let optimized = opts.jpeg_format == JpegFormat::Optimized && !subsampled;
     enc.set_optimized_huffman_tables(progressive || optimized);
     let e = |e: jpeg_encoder::EncodingError| CodecError::encode(F, e);
@@ -571,6 +739,90 @@ mod tests {
     /// Return whether the JPEG begins with a JFIF APP0 segment.
     fn has_jfif_app0(bytes: &[u8]) -> bool {
         bytes.get(2..11) == Some(b"\xff\xe0\0\x10JFIF\0")
+    }
+
+    /// `info` reads the frame from the markers, and which decoder the file goes to.
+    #[test]
+    fn ff_search_matches_plain_search() {
+        let mut b: Vec<u8> = (0..300u32).map(|i| (i * 7 % 255) as u8).collect();
+        for at in [None, Some(0), Some(7), Some(8), Some(15), Some(203), Some(296), Some(299)] {
+            if let Some(i) = at {
+                b[i] = 0xff;
+            }
+            for start in [0, 1, 5, 9, 290, 299, 300] {
+                let s = &b[start..];
+                assert_eq!(find_ff(s), s.iter().position(|&v| v == 0xff));
+            }
+        }
+    }
+
+    #[test]
+    fn info_reads_the_frame_and_the_decoder() {
+        let img = Image::from_raw(37, 21, ChannelLayout::Rgb, SampleType::U8, vec![128; 37 * 21 * 3]).unwrap();
+        let rgb = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+        let rgb_info = crate::JpegInfo { width: 37, height: 21, layout: ChannelLayout::Rgb, whole_coefficients: false, held_coefficients: 0 };
+        assert_eq!(info(&rgb), Some(rgb_info));
+        // A 12-bit extended frame (SOF1) declaring 40,000 × 30,000 gray, markers only.
+        let mut twelve = vec![0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12];
+        twelve.extend_from_slice(&30_000u16.to_be_bytes());
+        twelve.extend_from_slice(&40_000u16.to_be_bytes());
+        twelve.extend_from_slice(&[1, 1, 0x11, 0, 0xFF, 0xD9]);
+        let twelve_info =
+            crate::JpegInfo { width: 40_000, height: 30_000, layout: ChannelLayout::Gray, whole_coefficients: true, held_coefficients: 0 };
+        assert_eq!(info(&twelve), Some(twelve_info));
+        assert_eq!(info(b"not a jpeg"), None);
+        // Markers only, 200 × 100 with `n` components: four are CMYK, two no layout `decode` returns.
+        let sof0 = |n: u8| {
+            let mut b = vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 8 + 3 * n, 8, 0, 100, 0, 200, n];
+            for i in 1..=n {
+                b.extend_from_slice(&[i, 0x11, 0]);
+            }
+            b.extend_from_slice(&[0xFF, 0xD9]);
+            b
+        };
+        assert_eq!(info(&sof0(4)).map(|i| (i.width, i.height, i.layout)), Some((200, 100, ChannelLayout::Cmyk)));
+        assert_eq!(info(&sof0(2)), None);
+    }
+
+    /// A frame the decoder can't turn into rows as it reads reports every coefficient it holds:
+    /// a block of 64 `i16`s per component block of every MCU. That is an 8-bit progressive frame
+    /// (SOF2), or an 8-bit sequential one whose first scan lacks some of its components.
+    #[test]
+    fn info_counts_the_coefficients_a_decode_holds() {
+        // Markers only: SOI, a frame of `marker` declaring 48,000 × 34,200 with `factors`, a first
+        // scan of the first `scan` components when given, EOI.
+        let frame = |marker: u8, precision: u8, factors: &[u8], scan: Option<u8>| {
+            let mut b = vec![0xFF, 0xD8, 0xFF, marker, 0, 8 + 3 * factors.len() as u8, precision];
+            b.extend_from_slice(&34_200u16.to_be_bytes());
+            b.extend_from_slice(&48_000u16.to_be_bytes());
+            b.push(factors.len() as u8);
+            for (i, &f) in factors.iter().enumerate() {
+                b.extend_from_slice(&[i as u8 + 1, f, 0]);
+            }
+            if let Some(n) = scan {
+                b.extend_from_slice(&[0xFF, 0xDA, 0, 6 + 2 * n, n]);
+                for c in 1..=n {
+                    b.extend_from_slice(&[c, 0]);
+                }
+                b.extend_from_slice(&[0, 63, 0]);
+            }
+            b.extend_from_slice(&[0xFF, 0xD9]);
+            b
+        };
+        let held = |b: &[u8]| info(b).map(|i| i.held_coefficients);
+        let all_444 = 6_000 * 4_275 * 3 * 128;
+        // 4:4:4: 6,000 × 4,275 MCUs of one block per component.
+        assert_eq!(held(&frame(0xC2, 8, &[0x11, 0x11, 0x11], Some(1))), Some(all_444));
+        // 4:2:0: 3,000 × 2,138 MCUs of 4 + 1 + 1 blocks.
+        assert_eq!(held(&frame(0xC2, 8, &[0x22, 0x11, 0x11], None)), Some(3_000 * 2_138 * 6 * 128));
+        // Sequential frames whose first scan lacks components hold them all too.
+        assert_eq!(held(&frame(0xC0, 8, &[0x11, 0x11, 0x11], Some(1))), Some(all_444));
+        assert_eq!(held(&frame(0xC1, 8, &[0x11, 0x11, 0x11], Some(2))), Some(all_444));
+        // A sequential first scan with every component is read a line of MCUs at a time, and a
+        // 12-bit progressive frame goes to craft-jpeg: they hold none.
+        assert_eq!(held(&frame(0xC0, 8, &[0x11, 0x11, 0x11], Some(3))), Some(0));
+        assert_eq!(held(&frame(0xC0, 8, &[0x11, 0x11, 0x11], None)), Some(0));
+        assert_eq!(held(&frame(0xC2, 12, &[0x11, 0x11, 0x11], None)), Some(0));
     }
 
     /// An APP1 Extended XMP fragment (GUID, total size, offset, data).
@@ -822,6 +1074,25 @@ mod tests {
     }
 
     #[test]
+    fn first_component_subsampling() {
+        let sof = |comps: &[(u8, u8)]| {
+            let mut s = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC2, 0, (8 + 3 * comps.len()) as u8, 8, 0, 8, 0, 8, comps.len() as u8];
+            for (i, &(h, v)) in comps.iter().enumerate() {
+                s.extend([i as u8 + 1, (h << 4) | v, 0]);
+            }
+            s
+        };
+        assert!(first_component_subsampled(&sof(&[(1, 1), (1, 1), (1, 1), (2, 2)])));
+        assert!(first_component_subsampled(&sof(&[(1, 2), (1, 2), (2, 1)])));
+        assert!(!first_component_subsampled(&sof(&[(2, 2), (1, 1), (1, 1)])));
+        assert!(!first_component_subsampled(&sof(&[(1, 1); 4])));
+        assert!(!first_component_subsampled(&sof(&[])));
+        assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xDA, 0, 2]));
+        assert!(!first_component_subsampled(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 20, 8]));
+        assert!(!first_component_subsampled(b"not a jpeg"));
+    }
+
+    #[test]
     fn routing() {
         assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
         assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]));
@@ -889,6 +1160,47 @@ mod tests {
         let px = img.to_u16_samples().unwrap();
         assert!(px.iter().all(|&v| v.abs_diff(want) <= 1), "{:?} vs {want}", &px[..4]);
         assert!(img.warnings.is_empty());
+    }
+
+    #[test]
+    fn unmarked_cmyk_restores_direct_ink_polarity_on_craft_backend() {
+        // craft-jpeg always returns non-YCC four-component samples with Adobe inversion undone.
+        // The adapter restores direct inks only when no APP14 marker identifies Adobe storage.
+        let mut u8_samples = [0, 32, 200, 255];
+        undo_craft_cmyk_inversion_u8(&mut u8_samples, true);
+        assert_eq!(u8_samples, [255, 223, 55, 0]);
+        undo_craft_cmyk_inversion_u8(&mut u8_samples, false);
+        assert_eq!(u8_samples, [255, 223, 55, 0], "marked samples keep craft-jpeg polarity");
+
+        let mut u16_samples = [0, 8192, 32768, 65535];
+        undo_craft_cmyk_inversion_u16(&mut u16_samples, true);
+        assert_eq!(u16_samples, [65535, 57343, 32767, 0]);
+        undo_craft_cmyk_inversion_u16(&mut u16_samples, false);
+        assert_eq!(u16_samples, [65535, 57343, 32767, 0], "marked samples keep craft-jpeg polarity");
+    }
+
+    #[test]
+    fn twelve_bit_cmyk_without_app14_keeps_direct_ink_polarity_on_craft_backend() {
+        let image = Image::from_u8(16, 16, ChannelLayout::Cmyk, [10u8, 100, 200, 50].repeat(256)).unwrap();
+        let mut marked = crate::encode(&image, Format::Jpeg, &EncodeOptions { jpeg_quality: 95, ..Default::default() }).unwrap();
+        let sof = marked.windows(2).position(|pair| pair == [0xFF, 0xC0]).expect("baseline SOF0");
+        marked[sof + 1] = 0xC1;
+        marked[sof + 4] = 12;
+        assert!(uses_craft_jpeg(&marked), "12-bit SOF1 routes through craft-jpeg");
+
+        let app14 = b"\xFF\xEE\x00\x0EAdobe";
+        let start = marked.windows(app14.len()).position(|part| part == app14).expect("Adobe APP14 marker");
+        let mut unmarked = Vec::with_capacity(marked.len() - 16);
+        unmarked.extend_from_slice(&marked[..start]);
+        unmarked.extend_from_slice(&marked[start + 16..]);
+        assert!(uses_craft_jpeg(&unmarked));
+
+        let adobe = crate::decode(&marked).unwrap().to_u16_samples().unwrap();
+        let direct_inks = crate::decode(&unmarked).unwrap().to_u16_samples().unwrap();
+        assert_eq!(adobe.len(), direct_inks.len());
+        for (&stored_adobe, &ink) in adobe.iter().zip(&direct_inks) {
+            assert_eq!(ink, 65535 - stored_adobe, "unmarked samples remain direct inks");
+        }
     }
 
     #[test]
