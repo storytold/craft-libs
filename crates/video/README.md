@@ -37,13 +37,15 @@ every decoder's output converts into with `VideoFrame::try_from` (always built; 
 comes with its codec's feature):
 
 - Planes are `[Y, Cb, Cr]`, `[R, G, B]` or `[Y]` (`ColorFamily`), plus an optional alpha plane.
-  DNx and VP9 store RGB as G, B, R; the conversion reorders them.
-- Samples keep the decoder's storage, `u8` or `u16`, with a bit depth per plane. Converting moves
-  the buffers and copies no samples.
+  DNx, VP9 and AV1 (identity matrix) store RGB as G, B, R; the conversion reorders them.
+- Samples keep the decoder's storage, `u8` or `u16`, with a bit depth per plane (HEVC chroma may
+  differ from luma). Converting moves the buffers and copies no samples.
+- Chroma subsampling is a log2 shift per axis, 0 to 3 (FFV1 codes up to 3).
 - Colour is given as ITU-T H.273 code points (`ColorTags`), mapped from each codec's own
   signalling. Codecs that do not signal a value leave it unspecified (2).
 - `pts`, sample aspect ratio, field order and the decoder's draft flag are carried over where the
-  decoder reports them.
+  decoder reports them. ProRes signals the picture's shape (4:3 or 16:9); the sample aspect
+  ratio is worked out from it and the frame size.
 
 The constructors check that every plane's buffer, stride and size fit the frame, so a picture
 with inconsistent fields is an error, not an out-of-bounds read.

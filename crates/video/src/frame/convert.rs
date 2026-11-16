@@ -17,6 +17,33 @@ fn sar(num: u32, den: u32) -> Option<(u32, u32)> {
     (num != 0 && den != 0).then_some((num, den))
 }
 
+/// The sample aspect ratio of a ProRes `aspect_ratio_information` code: 1 is square pixels, 2 and
+/// 3 give the picture's shape (4:3 and 16:9), 0 and the reserved codes say nothing.
+#[cfg(feature = "prores")]
+pub(super) fn prores_sar(code: u8, width: u32, height: u32) -> Option<(u32, u32)> {
+    let (dar_w, dar_h): (u64, u64) = match code {
+        1 => return Some((1, 1)),
+        2 => (4, 3),
+        3 => (16, 9),
+        _ => return None,
+    };
+    // sar = dar * height / width, in lowest terms. Neither product can overflow `u64`.
+    let (mut num, mut den) = (dar_w * u64::from(height), dar_h * u64::from(width));
+    let (mut a, mut b) = (num, den);
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    if a == 0 {
+        return None;
+    }
+    num /= a;
+    den /= a;
+    match (u32::try_from(num), u32::try_from(den)) {
+        (Ok(n), Ok(d)) if n != 0 && d != 0 => Some((n, d)),
+        _ => None,
+    }
+}
+
 /// ProRes stores `0` for "unspecified" where H.273 uses `2`.
 #[cfg(feature = "prores")]
 fn h273(code: u8) -> u8 {
@@ -47,18 +74,20 @@ impl TryFrom<crate::h264::decode::Picture> for VideoFrame {
 impl TryFrom<crate::hevc::decode::Picture> for VideoFrame {
     type Error = FrameError;
 
-    /// A 4:2:0 or 4:2:2 frame, 8-bit storage at bit depth 8 and 16-bit above.
+    /// A 4:2:0 or 4:2:2 frame, 8-bit storage at bit depth 8 and 16-bit above. The chroma planes
+    /// carry the stream's chroma bit depth, which may differ from the luma depth.
     fn try_from(p: crate::hevc::decode::Picture) -> Result<Self, FrameError> {
         use crate::hevc::decode::{ChromaFormat, Plane as P};
         let bits = depth(p.bit_depth)?;
+        let chroma_bits = depth(p.bit_depth_chroma)?;
         let samples = |pl: P| match pl {
             P::U8(v) => Samples::U8(v),
             P::U16(v) => Samples::U16(v),
         };
         let planes = vec![
             Plane::new(p.width, p.height, p.y_stride, bits, samples(p.y))?,
-            Plane::new(p.chroma_width, p.chroma_height, p.uv_stride, bits, samples(p.u))?,
-            Plane::new(p.chroma_width, p.chroma_height, p.uv_stride, bits, samples(p.v))?,
+            Plane::new(p.chroma_width, p.chroma_height, p.uv_stride, chroma_bits, samples(p.u))?,
+            Plane::new(p.chroma_width, p.chroma_height, p.uv_stride, chroma_bits, samples(p.v))?,
         ];
         let sub = match p.chroma {
             ChromaFormat::C420 => Subsampling::S420,
@@ -119,7 +148,9 @@ impl TryFrom<crate::vp9::decode::Picture> for VideoFrame {
 impl TryFrom<crate::av1::decode::Picture> for VideoFrame {
     type Error = FrameError;
 
-    /// A YCbCr frame, or a gray one for a monochrome stream; 16-bit storage at every bit depth.
+    /// A YCbCr frame, a gray one for a monochrome stream, or an RGB one for a 4:4:4 stream with
+    /// the identity matrix (`matrix_coefficients` 0), whose coded G, B, R planes are reordered to
+    /// R, G, B; 16-bit storage at every bit depth.
     fn try_from(p: crate::av1::decode::Picture) -> Result<Self, FrameError> {
         let [y, u, v] = p.planes;
         let y = Plane::packed(p.width, p.height, p.bit_depth, Samples::U16(y))?;
@@ -130,7 +161,13 @@ impl TryFrom<crate::av1::decode::Picture> for VideoFrame {
             let (cw, ch) = sub.chroma_size(p.width, p.height);
             let u = Plane::packed(cw, ch, p.bit_depth, Samples::U16(u))?;
             let v = Plane::packed(cw, ch, p.bit_depth, Samples::U16(v))?;
-            (ColorFamily::YCbCr, sub, vec![y, u, v])
+            // AV1 requires 4:4:4 with the identity matrix; a subsampled picture tagged with it
+            // cannot be RGB and stays as coded.
+            if p.matrix_coefficients == 0 && sub == Subsampling::S444 {
+                (ColorFamily::Rgb, sub, vec![v, y, u])
+            } else {
+                (ColorFamily::YCbCr, sub, vec![y, u, v])
+            }
         };
         let mut f = VideoFrame::new(p.width, p.height, family, sub, planes, None)?;
         f.color =
@@ -200,7 +237,8 @@ impl TryFrom<crate::vp8::Picture> for VideoFrame {
 impl TryFrom<crate::prores::Frame> for VideoFrame {
     type Error = FrameError;
 
-    /// A 4:2:2 or 4:4:4 frame with optional alpha, 16-bit storage. The range is limited.
+    /// A 4:2:2 or 4:4:4 frame with optional alpha, 16-bit storage. The range is limited. The
+    /// sample aspect ratio follows from `aspect_ratio` and the frame size.
     fn try_from(p: crate::prores::Frame) -> Result<Self, FrameError> {
         use crate::prores::{ChromaFormat, Interlace};
         let sub = match p.chroma {
@@ -216,6 +254,7 @@ impl TryFrom<crate::prores::Frame> for VideoFrame {
         let alpha = p.alpha.map(|a| Plane::packed(p.width, p.height, p.bit_depth, Samples::U16(a))).transpose()?;
         let mut f = VideoFrame::new(p.width, p.height, ColorFamily::YCbCr, sub, planes, alpha)?;
         f.color = ColorTags { primaries: h273(p.color.primaries), transfer: h273(p.color.transfer), matrix: h273(p.color.matrix), full_range: false };
+        f.sar = prores_sar(p.aspect_ratio, p.width, p.height);
         f.field_order = match p.interlace {
             Interlace::Progressive => FieldOrder::Progressive,
             Interlace::TopFieldFirst => FieldOrder::TopFieldFirst,

@@ -7,7 +7,8 @@
 //! A conversion moves the sample buffers; it does not copy or rescale samples.
 //!
 //! Plane order is fixed by [`ColorFamily`]: `[Y, Cb, Cr]`, `[R, G, B]` or `[Y]`. Decoders that
-//! store RGB in another order (DNx and VP9 store G, B, R) are reordered by the conversion.
+//! store RGB in another order (DNx, VP9 and identity-matrix AV1 store G, B, R) are reordered by
+//! the conversion.
 //!
 //! The constructors check that the planes and their buffers agree in size, so reading a row
 //! never goes out of bounds. They do not check that sample values fit the bit depth.
@@ -159,12 +160,12 @@ pub enum ColorFamily {
 }
 
 /// Chroma subsampling as log2 factors: the chroma planes are `width.div_ceil(1 << x)` by
-/// `height.div_ceil(1 << y)`.
+/// `height.div_ceil(1 << y)`. FFV1 codes shifts up to 3; the other codecs stop at 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Subsampling {
-    /// log2 of the horizontal factor (0 to 2).
+    /// log2 of the horizontal factor (0 to 3).
     pub x: u8,
-    /// log2 of the vertical factor (0 to 2).
+    /// log2 of the vertical factor (0 to 3).
     pub y: u8,
 }
 
@@ -176,9 +177,12 @@ impl Subsampling {
     /// 4:4:4, also used for RGB and gray frames.
     pub const S444: Subsampling = Subsampling { x: 0, y: 0 };
 
-    /// Chroma plane size for a luma size.
+    /// Largest shift a frame accepts.
+    pub const MAX_SHIFT: u8 = 3;
+
+    /// Chroma plane size for a luma size. A shift above [`Subsampling::MAX_SHIFT`] counts as that.
     pub fn chroma_size(self, width: u32, height: u32) -> (u32, u32) {
-        (width.div_ceil(1 << self.x.min(2)), height.div_ceil(1 << self.y.min(2)))
+        (width.div_ceil(1 << self.x.min(Self::MAX_SHIFT)), height.div_ceil(1 << self.y.min(Self::MAX_SHIFT)))
     }
 }
 
@@ -243,7 +247,7 @@ pub struct VideoFrame {
 impl VideoFrame {
     /// A frame from its planes, in the order [`ColorFamily`] gives. Fails when the number of planes
     /// does not fit `family`, a plane's size does not follow from `width`, `height` and
-    /// `subsampling`, a shift is above 2, or an RGB or gray frame is subsampled. The alpha plane is
+    /// `subsampling`, a shift is above 3, or an RGB or gray frame is subsampled. The alpha plane is
     /// full size. The colour tags and timing start unset.
     pub fn new(
         width: u32,
@@ -253,8 +257,8 @@ impl VideoFrame {
         planes: Vec<Plane>,
         alpha: Option<Plane>,
     ) -> Result<VideoFrame, FrameError> {
-        if subsampling.x > 2 || subsampling.y > 2 {
-            return Err(FrameError::Shape("subsampling shift above 2"));
+        if subsampling.x > Subsampling::MAX_SHIFT || subsampling.y > Subsampling::MAX_SHIFT {
+            return Err(FrameError::Shape("subsampling shift above 3"));
         }
         if family != ColorFamily::YCbCr && subsampling != Subsampling::S444 {
             return Err(FrameError::Shape("only YCbCr frames are subsampled"));

@@ -46,7 +46,10 @@ fn frame_checks_planes_against_its_shape() {
     assert!(VideoFrame::new(5, 3, ColorFamily::YCbCr, Subsampling::S422, planes(), None).is_err());
     assert!(VideoFrame::new(5, 3, ColorFamily::Gray, Subsampling::S444, planes(), None).is_err());
     assert!(VideoFrame::new(5, 3, ColorFamily::Rgb, Subsampling::S420, planes(), None).is_err());
-    assert!(VideoFrame::new(5, 3, ColorFamily::YCbCr, Subsampling { x: 3, y: 0 }, planes(), None).is_err());
+    assert_eq!(
+        VideoFrame::new(5, 3, ColorFamily::YCbCr, Subsampling { x: 4, y: 0 }, planes(), None),
+        Err(FrameError::Shape("subsampling shift above 3"))
+    );
     assert!(VideoFrame::new(5, 3, ColorFamily::YCbCr, Subsampling::S420, planes(), Some(u8_plane(3, 2, 0))).is_err());
     let a = VideoFrame::new(5, 3, ColorFamily::YCbCr, Subsampling::S420, planes(), Some(u8_plane(5, 3, 255))).unwrap();
     assert_eq!(a.alpha().map(Plane::width), Some(5));
@@ -116,6 +119,7 @@ fn hevc_picture_converts() {
         chroma_height: 2,
         chroma: ChromaFormat::C422,
         bit_depth: 10,
+        bit_depth_chroma: 10,
         y: P::U16(vec![64; 8]),
         u: P::U16(vec![512; 4]),
         v: P::U16(vec![512; 4]),
@@ -128,11 +132,16 @@ fn hevc_picture_converts() {
         sar: (1, 1),
         draft: true,
     };
-    let f = VideoFrame::try_from(p).unwrap();
+    let f = VideoFrame::try_from(p.clone()).unwrap();
     assert_eq!((f.subsampling(), f.bit_depth()), (Subsampling::S422, 10));
     assert_eq!(f.planes()[2].row_u16(1), Some(&[512, 512][..]));
     assert_eq!(f.color, ColorTags { primaries: 9, transfer: 16, matrix: 9, full_range: false });
     assert_eq!((f.sar, f.draft), (Some((1, 1)), true));
+
+    // 10-bit luma with 8-bit chroma: both stored as `u16`, each plane with its own depth.
+    let mixed = VideoFrame::try_from(Picture { bit_depth_chroma: 8, u: P::U16(vec![128; 4]), v: P::U16(vec![128; 4]), ..p }).unwrap();
+    assert_eq!(mixed.planes().iter().map(Plane::bit_depth).collect::<Vec<_>>(), [10, 8, 8]);
+    assert_eq!(mixed.planes()[1].row_u16(0), Some(&[128, 128][..]));
 }
 
 #[cfg(feature = "av1-decode")]
@@ -178,6 +187,37 @@ fn av1_420_rounds_chroma_up() {
     };
     let f = VideoFrame::try_from(p).unwrap();
     assert_eq!((f.planes()[1].width(), f.planes()[1].height()), (2, 2));
+}
+
+/// The identity matrix codes G, B, R in the Y, U, V planes.
+#[cfg(feature = "av1-decode")]
+#[test]
+fn av1_identity_matrix_is_rgb_reordered_to_r_g_b() {
+    let p = crate::av1::decode::Picture {
+        width: 2,
+        height: 2,
+        bit_depth: 8,
+        subsampling_x: 0,
+        subsampling_y: 0,
+        mono_chrome: false,
+        planes: [vec![1; 4], vec![2; 4], vec![3; 4]],
+        color_primaries: 1,
+        transfer_characteristics: 13,
+        matrix_coefficients: 0,
+        full_range: true,
+        pts: 0,
+        draft: false,
+    };
+    let f = VideoFrame::try_from(p.clone()).unwrap();
+    assert_eq!(f.family(), ColorFamily::Rgb);
+    let first = |f: &VideoFrame, i: usize| f.planes()[i].row_u16(0).and_then(|r| r.first().copied());
+    assert_eq!([first(&f, 0), first(&f, 1), first(&f, 2)], [Some(3), Some(1), Some(2)]);
+    assert_eq!(f.color, ColorTags { primaries: 1, transfer: 13, matrix: 0, full_range: true });
+
+    // Any other matrix keeps the coded order.
+    let y = VideoFrame::try_from(crate::av1::decode::Picture { matrix_coefficients: 1, ..p }).unwrap();
+    assert_eq!(y.family(), ColorFamily::YCbCr);
+    assert_eq!([first(&y, 0), first(&y, 1), first(&y, 2)], [Some(1), Some(2), Some(3)]);
 }
 
 #[cfg(feature = "vp9-decode")]
@@ -259,6 +299,28 @@ fn prores_frame_converts() {
     assert_eq!(f.alpha().map(Plane::bit_depth), Some(10));
     assert_eq!(f.color, ColorTags { primaries: 2, transfer: 1, matrix: 2, full_range: false });
     assert_eq!((f.field_order, f.pts), (FieldOrder::TopFieldFirst, None));
+    assert_eq!(f.sar, None);
+}
+
+#[cfg(feature = "prores")]
+#[test]
+fn prores_aspect_ratio_gives_the_sample_aspect_ratio() {
+    use crate::prores::{ChromaFormat, Frame};
+    let sar = |code: u8, w: u32, h: u32| {
+        let mut p = Frame::new(w, h, ChromaFormat::Yuv422, 10, false).unwrap();
+        p.aspect_ratio = code;
+        VideoFrame::try_from(p).unwrap().sar
+    };
+    // 0 is unknown and 4 to 15 are reserved.
+    assert_eq!([sar(0, 720, 486), sar(4, 720, 486)], [None, None]);
+    assert_eq!(sar(1, 720, 486), Some((1, 1)));
+    // 720 x 486 shown at 4:3 and at 16:9.
+    assert_eq!(sar(2, 720, 486), Some((9, 10)));
+    assert_eq!(sar(3, 720, 486), Some((6, 5)));
+    // 1920 x 1080 at 16:9 has square pixels.
+    assert_eq!(sar(3, 1920, 1080), Some((1, 1)));
+    assert_eq!(convert::prores_sar(2, u32::MAX, u32::MAX), Some((4, 3)));
+    assert_eq!(convert::prores_sar(2, 0, 4), None);
 }
 
 #[cfg(feature = "dnx")]
@@ -325,6 +387,18 @@ fn ffv1_frames_convert() {
     assert_eq!(r.color, ColorTags { matrix: 0, full_range: true, ..ColorTags::UNSPECIFIED });
     assert!(VideoFrame::try_from(ffv1_frame(Colorspace::Rgb, (0, 0), &[9])).is_err());
     assert!(VideoFrame::try_from(ffv1_frame(Colorspace::YCbCr, (0, 0), &[])).is_err());
+    // FFV1 codes shifts up to 3: an 8 x 1 frame at (3, 0) has one chroma sample per plane.
+    let wide = crate::ffv1::Frame {
+        width: 8,
+        height: 1,
+        colorspace: Colorspace::YCbCr,
+        bit_depth: 8,
+        chroma_shift: (3, 0),
+        planes: vec![vec![0; 8], vec![0; 1], vec![0; 1]],
+    };
+    let wide = VideoFrame::try_from(wide).unwrap();
+    assert_eq!(wide.subsampling(), Subsampling { x: 3, y: 0 });
+    assert_eq!((wide.planes()[1].width(), wide.planes()[1].height(), wide.planes()[2].samples().len()), (1, 1, 1));
     // A 2 x 2 chroma plane needs 4 samples.
     assert!(VideoFrame::try_from(ffv1_frame(Colorspace::YCbCr, (1, 1), &[9, 3, 4])).is_err());
 }
