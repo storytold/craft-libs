@@ -11,8 +11,8 @@ repository.workspace = true
 workspace = true
 
 [features]
-# Bounded DNG strip/tile reader, with FilmCraft-compatible baseline JPEG decoding.
-line-dng = ["dep:image"]
+# Bounded DNG strip/tile reader (`dng_lines`): the `dng` reader's unpackers and JPEG decoder.
+line-dng = ["dng"]
 # Decode DNG tile bands in parallel.
 line-dng-threads = ["line-dng"]
 default = ["dng", "jxl", "crw", "hasselblad", "mrw", "erf", "mef", "kodak", "pef", "srw", "cr2", "nef", "rw2", "raf", "orf", "arw", "cr3"]
@@ -52,7 +52,6 @@ cr3 = ["dep:craft-metadata"]
 crw = ["dep:craft-crw", "dep:chrono"]
 
 [dependencies]
-image = { version = "0.25", default-features = false, features = ["jpeg"], optional = true }
 craft-tiff = { workspace = true }
 craft-crw = { workspace = true, optional = true }
 # The CR3 container (ISO base media boxes, CMT1-4, tracks, CMP1 / CDI1): the one CR3 parser.
