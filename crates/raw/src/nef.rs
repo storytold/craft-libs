@@ -329,6 +329,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode, limits: &Limits) -> Result<RawIma
         color: ColorData::default(),
         wb_multipliers: wb,
         linearized: false,
+        linearization_table: None,
         pixel_aspect,
         // Nikon's in-file distortion correction, about the optical centre (which follows the sensor shift)
         opcodes: OpcodeLists {
@@ -671,6 +672,7 @@ fn small_raw(bytes: &[u8], tiff: &Tiff, info: &ImageInfo, strip: craft_tiff::ima
         // the stored colour is already white balanced (see above)
         wb_multipliers: Some([1.0; 3]),
         linearized: false,
+        linearization_table: None,
         pixel_aspect: 1.0,
         opcodes: OpcodeLists::default(),
         camera: tiff.ifds.first().map(Camera::from_ifd0).unwrap_or_default(),

@@ -1245,6 +1245,21 @@ mod tests {
     }
 
     #[test]
+    fn engineering_formats_round_the_full_mantissa() {
+        for (code, value, expected) in [
+            ("##0.0E+00", 999.94, "999.9E+00"),
+            ("##0.0E+00", 0.99994, "999.9E-03"),
+            ("##0.0E+00", -999.94, "-999.9E+00"),
+            ("#0.0E+00", 99.94, "99.9E+00"),
+            ("##0.0E+00", 999.96, "1.0E+03"),
+            ("#0.0E+00", 99.96, "1.0E+02"),
+        ] {
+            assert_eq!(format(code, value, None), expected, "{code}, {value}");
+        }
+        assert_eq!(format("##0.0E+00", 999.94, Some("de-DE")), "999,9E+00");
+    }
+
+    #[test]
     fn never_panics() {
         for code in [
             "",

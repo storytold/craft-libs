@@ -21,17 +21,39 @@
 //! ```
 
 mod catalog;
+mod embedding;
 mod env;
+mod face_data;
+mod fallback;
 mod fontconfig;
+mod ligature;
+mod line_break;
+mod outline;
+mod plan_cache;
 mod registry;
 mod scan;
+mod segments;
+/// Bounded SFNT face metadata discovery over caller-provided random-access readers.
+pub mod sfnt;
+mod shape;
 mod suitcase;
 pub mod system;
+mod visual_order;
 
 pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch};
+pub use embedding::{SubsetEmbedding, subset_embedding};
 pub use env::{FontEnv, Os, font_dirs, font_store_dir, office_font_dirs};
+pub use face_data::FaceData;
+pub use fallback::{cluster_face, drawable_characters};
 pub use fontconfig::fontconfig_dirs;
+pub use ligature::ligature_caret_stops;
+pub use line_break::settle_line_break;
+pub use outline::{FontOutline, GlyphPen, OutlineError};
+pub use plan_cache::ShapePlanCache;
 pub use scan::{FaceInfo, LocalizedName, Source, is_font_file, style_italic, style_weight, style_width};
+pub use segments::SegmentBoundary;
+pub use shape::{RunGlyph, RunInput, ShapeRunError, shape_run};
+pub use visual_order::{VisualGlyph, visual_order};
 
 #[cfg(test)]
 mod tests;
