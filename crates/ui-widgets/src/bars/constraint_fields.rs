@@ -3,7 +3,7 @@
 
 use super::words::BarWords;
 use crate::buttons::IconButton;
-use crate::contract::{Bind, Entry, Gap, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing, clicked};
+use crate::contract::{Bind, Entry, Gap, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, clicked};
 use crate::form::Field;
 use crate::layout_components::Row;
 use crate::menu::Menu;
@@ -150,7 +150,7 @@ impl<'a> ConstraintFields<'a> {
                 Entry::new(StyleChoice::FixedRatio, words.constraint_fixed_ratio.clone()),
                 Entry::new(StyleChoice::FixedSize, words.constraint_fixed_size.clone()),
             ];
-            Field::new(words.constraint_style.clone()).id_salt("style").sizing(Sizing::Content).show(ui, |ui, _| {
+            Field::new(words.constraint_style.clone()).id_salt("style").show(ui, |ui, _| {
                 let pick = Select::new(words.constraint_style.clone(), Bind::given(StyleChoice::of(before)), &styles).show(ui);
                 if let Some(picked) = pick.value().copied()
                     && picked != StyleChoice::of(before)
@@ -259,7 +259,7 @@ impl Cells<'_> {
             low.min(high)..=low.max(high)
         });
         let mut edited = None;
-        Field::new(cell.caption.clone()).id_salt(cell.key).enabled(cell.enabled).side(SideLabel::new().scrub(true)).sizing(Sizing::Content).show(
+        Field::new(cell.caption.clone()).id_salt(cell.key).enabled(cell.enabled).side(SideLabel::new().scrub(true)).show(
             ui,
             |ui, _| {
                 let mut field = NumberField::new(cell.caption.clone(), Bind::given(Some(shown))).range(range.clone()).scrub_by_label();

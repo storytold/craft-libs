@@ -26,9 +26,9 @@ craft_ui::words! {
         height: "cropBar.height" = "Height";
         resolution: "cropBar.resolution" = "Resolution";
         resolution_unit: "cropBar.resolutionUnit" = "Resolution unit";
-        angle: "cropBar.angle" = "Angle";
         swap: "cropBar.swap" = "Swaps height and width";
         clear: "cropBar.clear" = "Clear";
+        straighten_name: "cropBar.straightenName" = "Straighten";
         straighten: "cropBar.straighten" = "Straighten the image by drawing a line on it";
         overlay: "cropBar.overlay" = "Set the overlay options for the Crop tool";
         /// The overlays, in the order of `CropGuide::ALL`.
@@ -60,7 +60,7 @@ craft_ui::words! {
         delete_pixels: "cropBar.deletePixels" = "Delete Cropped Pixels";
         /// The Fill select's name.
         fill_name: "cropBar.fillName" = "Fill";
-        fill_background: "cropBar.fillBackground" = "Background (Default)";
+        fill_background: "cropBar.fillBackground" = "Background (default)";
         fill_content_aware: "cropBar.fillContentAware" = "Content-Aware Fill";
         /// The preset list's Selection entry.
         selection: "cropBar.selection" = "Selection";

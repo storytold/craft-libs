@@ -3,7 +3,7 @@
 
 use super::words::BarWords;
 use crate::buttons::IconButton;
-use crate::contract::{Bind, Entry, GlyphLabel, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel, Sizing};
+use crate::contract::{Bind, Entry, LabelKind, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, SideLabel};
 use crate::display::{Elide, Text};
 use crate::form::Field;
 use crate::layout_components::Row;
@@ -56,6 +56,8 @@ pub struct StatusValues {
     pub document_profile: Option<String>,
     /// The document's size in pixels, shown in the user's unit.
     pub document_dimensions: Option<PixelSize>,
+    /// The document's resolution in pixels per inch, shown after its dimensions.
+    pub document_resolution: Option<f64>,
     /// The measurement scale text, shown as given.
     pub measurement_scale: Option<String>,
     /// Used and available bytes.
@@ -112,9 +114,15 @@ impl StatusItem {
             StatusItem::DocumentDimensions => values.document_dimensions.map_or_else(
                 || MISSING.to_owned(),
                 |size| {
-                    words
-                        .readout_dimensions_text
-                        .fill(&[("width", &units.pixels(f64::from(size.width))), ("height", &units.pixels(f64::from(size.height)))])
+                    let (width, height) = (units.pixels(f64::from(size.width)), units.pixels(f64::from(size.height)));
+                    match values.document_resolution {
+                        Some(ppi) => words.readout_dimensions_resolution_text.fill(&[
+                            ("width", &width),
+                            ("height", &height),
+                            ("resolution", &units.number(ppi, 0..=2)),
+                        ]),
+                        None => words.readout_dimensions_text.fill(&[("width", &width), ("height", &height)]),
+                    }
                 },
             ),
             StatusItem::MeasurementScale => given(&values.measurement_scale),
@@ -196,8 +204,7 @@ impl<'a> StatusReadout<'a> {
         self
     }
 
-    /// Shows the readout in a row: the zoom field, whose glyph label scrubs the zoom, the info text and the menu
-    /// button.
+    /// Shows the readout in a row: the zoom field, which scrubs the zoom, the info text and the menu button.
     pub fn show(mut self, ui: &mut Ui) -> StatusReadoutOutput {
         let env = Env::of(ui);
         let words = env.words::<BarWords>();
@@ -210,10 +217,8 @@ impl<'a> StatusReadout<'a> {
                 Some(Mixed::Same(current)) => Some(current),
                 _ => None,
             };
-            let glyph = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::icon(IconId::new("zoom_in")))).scrub(true);
             let field = Field::new(words.readout_zoom.clone())
-                .side(glyph)
-                .sizing(Sizing::Content)
+                .side(SideLabel::new().kind(LabelKind::Hidden))
                 .show(ui, |ui, _| ZoomField::new(words.readout_zoom.clone(), current, document).scrub(true).show(ui));
             let field = field.inner.map(|zoom| {
                 invalid_zoom = zoom.invalid_zoom;

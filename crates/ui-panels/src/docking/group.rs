@@ -256,7 +256,10 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
     /// The group named by `anchor` (one of its panels) with its `panels`, `active` showing. The group is named by the
     /// active panel's title.
     pub fn new(anchor: P, panels: &'a [PanelTitle], active: PanelKey) -> Self {
-        let props = ContainerProps::new().sizing(Sizing::Fill).header(HeaderRegion::new()).command_scope(DockCommands::SCOPE);
+        let props = ContainerProps::new()
+            .sizing(Sizing::Fill)
+            .header(HeaderRegion::new().fill(SurfaceKind::Background))
+            .command_scope(DockCommands::SCOPE);
         let title = panels.iter().find(|panel| panel.key == active).map(|panel| panel.title.clone()).unwrap_or_default();
         DockGroup {
             common: Common::new(),
@@ -336,10 +339,9 @@ impl<P: Clone + Hash + Send + Sync + 'static> Component for DockGroup<'_, P> {
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let strip = Rect::from_min_size(cx.rect.min, Vec2::new(cx.rect.width(), cx.style.header));
-        // Painted here, not as the container's surface, which lies over what `paint` draws.
+        // Painted here, not as the container's surface, which lies over what `paint` draws. The header's band paints
+        // the strip over it.
         ui.draw().surface(cx.rect, SurfaceKind::Panel, Corners::All);
-        ui.draw().surface(strip, SurfaceKind::Background, Corners::None);
         if cx.part_if_declared(MENU).is_some() {
             ui.face(MENU, Self::menu_face(cx.words::<DockWords>().panel_menu.clone()));
         }

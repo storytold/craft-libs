@@ -77,7 +77,8 @@ impl Outcome for BarOutput {
 /// A bar over a chrome surface whose body holds the members in reading order: a tool bar's at the standard control
 /// size, an options or status bar's at the small one. They are one roving group unless the bar is made of
 /// [`tab_stops`](Bar::tab_stops). The bar is as tall as its tallest member plus the control padding, and takes the
-/// width it is offered. A bar of one row lays its body out as a row; a bar of several rows as a stack whose rows the
+/// width it is offered. On the line of a row given its height (a top or bottom slot of the shell) it fills that height
+/// and its members sit on the line's middle, with its padding at the start and end only. A bar of one row lays its body out as a row; a bar of several rows as a stack whose rows the
 /// caller makes with `Row`. A member that fills (a leaf with `Sizing::FillWidth`, a fill-width `Row`) takes the room the view
 /// leaves. A row too long for the bar first narrows its selects and elidable text, the last first, down to their
 /// readable least (`TextRun::READABLE_CHARACTERS`), then scrolls, so a member past the edge is reached by Tab and

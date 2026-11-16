@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
 use craft_theme::Srgba;
-use craft_ui::buttons::IconButton;
+use craft_theme::ControlSize;
+use craft_ui::buttons::{IconButton, ToggleButton};
 use craft_ui::choice::{Checkbox, Swatch};
 use craft_ui::contract::{
-    Bind, BodyCx, Entry, Gap, LabelKind, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, Trigger, clicked,
+    Bind, BodyCx, Entry, Gap, LabelKind, PopupKind, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Trigger, clicked,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
@@ -20,13 +21,14 @@ use craft_ui::runtime::env::{Env, Label, UnitKind};
 use craft_ui::text::{NumberField, RangeAlert};
 use egui::{Response, Ui};
 
-use crate::ui::brush_settings::BrushSizeField;
-
 #[cfg(feature = "screen-testing")]
 mod stories;
 mod words;
 
 pub use words::PaintBarWords;
+
+/// The icon of the toggles that let pen pressure control the opacity or the size.
+const PRESSURE: &str = "target";
 
 /// The painting tools the bar serves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -197,7 +199,10 @@ pub const MIXER_GROUP_STARTS: [usize; 4] = [1, 4, 7, 10];
 #[derive(Clone, Default)]
 struct SmoothingOpen(bool);
 
-/// The bar's members for one painting tool.
+/// The bar's members for one painting tool, after the preset picker that carries the size and the hardness: a rule,
+/// Mode, Opacity and the pressure-for-opacity toggle, Flow and the build-up toggle (not the Pencil), Smoothing and its
+/// options (the Pencil's Auto Erase in their place), Erase to History for the Eraser, a rule and the
+/// pressure-for-size toggle. The Mixer Brush shows its load, combinations and mix values instead.
 #[must_use = "show the bar with `show`"]
 #[derive(craft_ui::contract::Pattern)]
 #[pattern(probe(PaintBar<'static, u32>))]
@@ -205,7 +210,6 @@ pub struct PaintBar<'a, M: Value> {
     tool: PaintTool,
     values: &'a mut PaintValues<M>,
     eraser_mode: Option<&'a mut EraserMode>,
-    max_size: f64,
     modes: &'a [Entry<M>],
 }
 
@@ -229,18 +233,12 @@ pub struct PaintBarOutput<M> {
 impl<'a, M: Value> PaintBar<'a, M> {
     /// The bar of `tool` over `values`.
     pub fn new(tool: PaintTool, values: &'a mut PaintValues<M>) -> Self {
-        PaintBar { tool, values, eraser_mode: None, max_size: 5000.0, modes: &[] }
+        PaintBar { tool, values, eraser_mode: None, modes: &[] }
     }
 
     /// The Eraser's mode, shown for the Eraser tool.
     pub fn eraser_mode(mut self, mode: &'a mut EraserMode) -> Self {
         self.eraser_mode = Some(mode);
-        self
-    }
-
-    /// The largest brush size.
-    pub fn max_size(mut self, max: f64) -> Self {
-        self.max_size = max;
         self
     }
 
@@ -252,7 +250,7 @@ impl<'a, M: Value> PaintBar<'a, M> {
 
     /// Shows the members.
     pub fn show(self, ui: &mut Ui) -> PaintBarOutput<M> {
-        let PaintBar { tool, values, mut eraser_mode, max_size, modes } = self;
+        let PaintBar { tool, values, mut eraser_mode, modes } = self;
         let words = Env::of(ui).words::<PaintBarWords>();
         let eraser = if tool == PaintTool::Eraser { eraser_mode.as_deref().copied().unwrap_or_default() } else { EraserMode::Brush };
         // The Block eraser has no brush engine behind it; the Pencil eraser has no soft edge and no flow.
@@ -272,30 +270,31 @@ impl<'a, M: Value> PaintBar<'a, M> {
                 pass.check(ui, &words.sample_all_layers, true, None, pass.values.mixer.sample_all_layers, |v, x| v.mixer.sample_all_layers = x);
                 return;
             }
-            pass.size(ui, &words.size, max_size, sized);
-            if tool != PaintTool::Pencil {
-                pass.percent(ui, "hardness", &words.hardness, sized && soft, pass.values.hardness, |v, x| v.hardness = x);
-            }
+            // The preset picker before the bar carries the size and the hardness.
+            Divider::vertical().show(ui);
             if tool == PaintTool::Eraser {
                 pass.eraser(ui, &words, eraser_mode.as_deref_mut());
             } else {
                 pass.mode(ui, &words.mode, modes);
             }
             pass.percent(ui, "opacity", &words.opacity, sized, pass.values.opacity, |v, x| v.opacity = x);
-            pass.check(ui, &words.pressure_opacity, sized, None, pass.values.pressure_opacity, |v, x| v.pressure_opacity = x);
+            pass.toggle(ui, PRESSURE, &words.pressure_opacity, sized, pass.values.pressure_opacity, |v, x| v.pressure_opacity = x);
             if tool != PaintTool::Pencil {
                 pass.percent(ui, "flow", &words.flow, sized && soft, pass.values.flow, |v, x| v.flow = x);
-                pass.check(ui, &words.build_up, sized && soft, None, pass.values.build_up, |v, x| v.build_up = x);
+                pass.toggle(ui, "sparkles", &words.build_up, sized && soft, pass.values.build_up, |v, x| v.build_up = x);
             }
             pass.percent(ui, "smoothing", &words.smoothing, true, pass.values.smoothing.amount, |v, x| v.smoothing.amount = x);
-            pass.smoothing_options(ui, cx, &words);
+            if tool == PaintTool::Pencil {
+                Divider::vertical().show(ui);
+                pass.check(ui, &words.auto_erase, true, Some(&words.auto_erase_tip), pass.values.auto_erase, |v, x| v.auto_erase = x);
+            } else {
+                pass.smoothing_options(ui, cx, &words);
+            }
             if tool == PaintTool::Eraser {
                 pass.check(ui, &words.erase_to_history, true, None, pass.values.erase_to_history, |v, x| v.erase_to_history = x);
             }
-            if tool == PaintTool::Pencil {
-                pass.check(ui, &words.auto_erase, true, Some(&words.auto_erase_tip), pass.values.auto_erase, |v, x| v.auto_erase = x);
-            }
-            pass.check(ui, &words.pressure_size, sized, None, pass.values.pressure_size, |v, x| v.pressure_size = x);
+            Divider::vertical().show(ui);
+            pass.toggle(ui, PRESSURE, &words.pressure_size, sized, pass.values.pressure_size, |v, x| v.pressure_size = x);
         });
         PaintBarOutput {
             response: shown.output,
@@ -348,23 +347,12 @@ impl<M: Value> Pass<'_, M> {
         }
     }
 
-    /// The Size row.
-    fn size(&mut self, ui: &mut Ui, caption: &Label, max: f64, enabled: bool) {
-        let current = self.values.size;
-        // The size field draws its own caption, so the wrapper only carries the enabled state. The body may run more than
-        // once in a pass and only the run that reads the input reports its events, so every run's events are collected.
-        let collected: RefCell<EditEvents<f64>> = RefCell::new(EditEvents::new());
-        let _ =
-            Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt("size").sizing(Sizing::Content).enabled(enabled).show(
-                ui,
-                |ui, _| {
-                    for event in BrushSizeField::new(caption.clone(), Bind::given(current), max).show(ui).edit.events.clone() {
-                        collected.borrow_mut().push(event);
-                    }
-                },
-            );
-        let events = collected.into_inner();
-        self.emit(events, |v, size| v.size = size);
+    /// A pen toggle over a flag: an icon button that stays pressed while on, named `caption`; a click is one `Set`.
+    fn toggle(&mut self, ui: &mut Ui, icon: &'static str, caption: &Label, enabled: bool, current: bool, set: fn(&mut PaintValues<M>, bool)) {
+        let shown = ToggleButton::new(caption.clone(), Bind::given(current)).icon(IconId::new(icon)).icon_only().size(ControlSize::Md).enabled(enabled).show(ui);
+        if let Some(next) = shown.value().copied() {
+            self.set_with(caption, |v| set(v, next));
+        }
     }
 
     /// A percent field over a fraction 0..1.
@@ -372,7 +360,7 @@ impl<M: Value> Pass<'_, M> {
         // The body may run more than once in a pass and only the run that reads the input reports its events, so every
         // run's events and alert are collected.
         let collected: RefCell<(EditEvents<Option<f64>>, Option<RangeAlert>)> = RefCell::new((EditEvents::new(), None));
-        let _ = Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).sizing(Sizing::Content).enabled(enabled).show(
+        let _ = Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).enabled(enabled).show(
             ui,
             |ui, _| {
                 let field = NumberField::new(caption.clone(), Bind::given(Some(current * 100.0)))
@@ -417,7 +405,6 @@ impl<M: Value> Pass<'_, M> {
         let current = self.values.mode.clone();
         let pick = Field::new(caption.clone())
             .id_salt("mode")
-            .sizing(Sizing::Content)
             .show(ui, |ui, _| Select::new(caption.clone(), Bind::given(current.clone()), entries).show(ui).value().cloned())
             .inner
             .flatten();
@@ -437,7 +424,6 @@ impl<M: Value> Pass<'_, M> {
         let current = *mode;
         let pick = Field::new(words.mode.clone())
             .id_salt("mode")
-            .sizing(Sizing::Content)
             .show(ui, |ui, _| Select::new(words.mode.clone(), Bind::given(current), &entries).show(ui).value().copied())
             .inner
             .flatten();
@@ -499,7 +485,6 @@ impl<M: Value> Pass<'_, M> {
         let pick = Field::new(words.combination.clone())
             .side(SideLabel::new().kind(LabelKind::Hidden))
             .id_salt("mixer-combination")
-            .sizing(Sizing::Content)
             .show(ui, |ui, _| Select::new(words.combination.clone(), Bind::given(shown), &entries).show(ui).value().copied())
             .inner
             .flatten();

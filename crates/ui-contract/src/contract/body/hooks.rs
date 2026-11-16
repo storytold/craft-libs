@@ -5,7 +5,7 @@ use super::open::open_now;
 use super::placement::{Placement, measure_layer, overlay_of, shown_placement};
 use super::regions::{
     LabelColumns, LabelsFound, RegionFrame, RegionSizes, RuleBands, end_full_height, footer_in_end, footer_rule_under, gap_of, header_gap_of,
-    label_extra_of, least_of, pad_of, pad_vec, paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
+    label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
 };
 use super::reorder::REORDER_BAND;
 use super::scroll::{
@@ -283,12 +283,12 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.given.1 |= self.over_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
-        let room = self.room.x - 2.0 * pad_vec(scx.tokens, props).x;
+        let room = self.room.x - 2.0 * self.pads(props, scx.tokens).x;
         let width = if self.measured_body.is_some() { self.shared_width(room, props) } else { 0.0 };
         self.overflow = self.wanted_width(props).map_or(0.0, |wanted| (wanted - room.max(0.0)).max(0.0));
         let (header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
         let height = self.regions_size(props, body, header, self.measured_footer, end).y;
-        Vec2::new(width, height) + 2.0 * pad_vec(scx.tokens, props)
+        Vec2::new(width, height) + 2.0 * self.pads(props, scx.tokens)
     }
 
     /// The regions run once in an invisible sizing pass over the room, as `content` runs them, and the container takes
@@ -371,7 +371,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if at.ui.is_sizing_pass() && self.given == (true, true) && self.room.is_finite() && !scrolled_share {
             return self.room;
         }
-        let pad = 2.0 * pad_vec(at.scx.tokens, &props);
+        let pad = 2.0 * self.pads(&props, at.scx.tokens);
         let vertical = scroll_of(&props).is_some_and(|scroll| scroll.vertical_on());
         let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
         // A record a run of this pass left serves as before; a kept one serves only while the inputs it was measured
@@ -500,7 +500,13 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
                 // where it is shown: its measure never sets the column's width.
                 let held = !self.given.0 && self.held(props, &Env::of(ui));
                 let room = if held { room.min(crate::layout::flow_room(ui).x) } else { room };
-                Vec2::new(crate::layout::fill_size(ui, id, craft_behavior::Axis::X, size.x, room, self.given.0 || held), size.y)
+                // Given the height of the row line it sits on, it fills that line (`given_axes`).
+                let height = if self.given.1 {
+                    crate::layout::fill_size(ui, id, craft_behavior::Axis::Y, size.y, crate::layout::flow_room(ui).y, true)
+                } else {
+                    size.y
+                };
+                Vec2::new(crate::layout::fill_size(ui, id, craft_behavior::Axis::X, size.x, room, self.given.0 || held), height)
             }
             Sizing::Content => size,
         }
@@ -518,6 +524,12 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
     /// (`layout::FirstLines`).
     fn first_line(&self, _comp: &C, ctx: &Context, id: Id, _height: f32) -> Option<f32> {
         layout_memory::measured(ctx, sub(id, "first")).map(|found| found.took.y)
+    }
+
+    /// A container with no header whose body is an unwrapped row reports that row's line as its first line.
+    fn first_is_row_line(&self, comp: &C) -> bool {
+        let props = comp.props(Internal::new());
+        props.header.is_none() && super::size::unwrapped_row(props)
     }
 
     fn member(&self, comp: &C) -> bool {
@@ -539,7 +551,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             return None;
         }
         let tokens = cx.tokens;
-        let pad = pad_vec(tokens, &props);
+        let pad = self.pads(&props, tokens);
         let inner = content.shrink2(pad);
         let regions = self.regions(&props, inner, pad, self.room_size(rect, inner), rtl, self.measured_sizes());
         let (_, slots) = self.header_line(regions.header, pad_of(tokens, header.inset), parts, rtl);
@@ -551,7 +563,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let ctx = pcx.ui.ctx().clone();
         let rtl = pcx.flow.is_rtl();
         let tokens = pcx.tokens;
-        let pad = pad_vec(tokens, &props);
+        let pad = self.pads(&props, tokens);
         let inner = pcx.content_rect.shrink2(pad);
         let room = self.room_size(rect, inner);
         let regions = self.regions(&props, inner, pad, room, rtl, self.measured_sizes());
@@ -679,7 +691,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let rtl = env.direction.is_rtl();
         let node = matches!(C::ROLE, Role::Node(_));
         let scroll = scroll_of(&props);
-        let pad = pad_vec(&env.tokens, &props);
+        let pad = self.pads(&props, &env.tokens);
         let inner = cx.core.content_rect.shrink2(pad);
         let room = self.room_size(rect, inner);
         let mut regions = self.regions(&props, inner, pad, room, rtl, self.measured_sizes());
@@ -791,6 +803,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             (regions.body, regions.beside) = (placed.body, placed.beside);
         }
         let line = shared_line(&props, beside);
+        // A row given its height sets its line at the middle of its band: the line is as high as the band.
+        let line = if self.centres_line(&props) { Some(line.unwrap_or(0.0).max(regions.body.height())) } else { line };
         // B2 label: the control gets the rect the label leaves; the label column adds to the container's extent.
         let mut body_rect = regions.body;
         let mut label_rect = Rect::NOTHING;
@@ -1256,7 +1270,7 @@ impl BodyHooks<'_> {
     ) -> Vec2 {
         let props = Arc::clone(&self.props);
         let (id, ctx) = (cx.core.id, at.ui.ctx().clone());
-        let pad = 2.0 * pad_vec(at.scx.tokens, &props);
+        let pad = 2.0 * self.pads(&props, at.scx.tokens);
         #[cfg(feature = "testing")]
         crate::runtime::measure::count_body(&ctx, id);
         layout_memory::begin_measure(&ctx, id);

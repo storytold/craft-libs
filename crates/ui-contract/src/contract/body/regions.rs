@@ -49,12 +49,13 @@ pub fn pad_of(tokens: &UiTokens, pad: Pad) -> f32 {
     }
 }
 
-/// A container's padding on each side along each axis: its tier on the edges its props name, none on the others.
-pub(super) fn pad_vec(tokens: &UiTokens, props: &ContainerProps) -> Vec2 {
-    let pad = pad_of(tokens, props.pad);
-    match props.pad_edges {
+/// A container's padding on each side along each axis: its tier on `edges`, none on the others.
+pub(super) fn pad_vec(tokens: &UiTokens, pad: Pad, edges: PadEdges) -> Vec2 {
+    let pad = pad_of(tokens, pad);
+    match edges {
         PadEdges::All => Vec2::splat(pad),
         PadEdges::Block => Vec2::new(0.0, pad),
+        PadEdges::Inline => Vec2::new(pad, 0.0),
     }
 }
 

@@ -19,7 +19,7 @@ pub use date::{
     Calendar, CalendarOutput, CalendarStyle, CalendarView, DateCodec, DatePicker, DatePrecision, PickedDate, local_month_grid, month_grid,
 };
 pub use dress::RowDress;
-pub use face::{SelectFace, SelectFaceStyle, toggle_on_key};
+pub use face::{FaceKind, SelectFace, SelectFaceStyle, toggle_on_key};
 pub use icon_picker::{IconPicker, IconPickerGroup, IconPickerItem, IconPickerOutput};
 pub use select::{Select, SelectStyle};
 pub use tree_picker::{TreeEntry, TreePicker, TreePickerStyle};

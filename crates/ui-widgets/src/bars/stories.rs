@@ -3,7 +3,7 @@
 use super::{Bar, BarHome, BarItem, BarItems, BarKind, BarTool, ItemDisplay, StatusItem, StatusMessage, StatusProgress, StatusReadout, StatusValues};
 use crate::buttons::Link;
 use crate::choice::{Checkbox, Segmented};
-use crate::contract::{Bind, Entry, Props as _, Sizing};
+use crate::contract::{Bind, Entry, Props as _};
 use crate::contract::{Show as _, ShowContainer as _};
 use crate::display::{Divider, Shade, Text};
 use crate::form::Field;
@@ -55,11 +55,10 @@ fn bar_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let shown = Bar::new("Brush options", BarKind::Options).commit_cancel("Commit transform", "Cancel transform").show(ui, |ui, _| {
         BarHome::new("Home", Bind::bound(&mut home)).show(ui);
         BarTool::new(IconId::new("brush"), "Brush").show(ui);
-        Field::new("Size").sizing(Sizing::Content).show(ui, |ui, _| NumberField::new("Size", Bind::bound(&mut size)).range(1.0..=5000.0).show(ui));
+        Field::new("Size").show(ui, |ui, _| NumberField::new("Size", Bind::bound(&mut size)).range(1.0..=5000.0).show(ui));
         Field::new("Opacity")
-            .sizing(Sizing::Content)
             .show(ui, |ui, _| NumberField::new("Opacity", Bind::bound(&mut opacity)).range(1.0..=100.0).show(ui));
-        Field::new("Mode").sizing(Sizing::Content).show(ui, |ui, _| Select::new("Mode", Bind::bound(&mut mode), &modes).show(ui));
+        Field::new("Mode").show(ui, |ui, _| Select::new("Mode", Bind::bound(&mut mode), &modes).show(ui));
         Divider::vertical().show(ui);
         Checkbox::new(Bind::bound(&mut sample_all)).label("Sample All Layers").show(ui);
         Text::new("Samples the visible image").shade(Shade::Faint).show(ui);
@@ -78,11 +77,11 @@ fn bar_captioned(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
     let modes = [Entry::new(0u8, "Light"), Entry::new(1, "Dark"), Entry::new(2, "System")];
     Bar::new("Appearance", BarKind::Options)
         .trailing(|ui, _| {
-            Field::new("Workspace").sizing(Sizing::Content).show(ui, |ui, _| Segmented::new("Workspace", Bind::given(0u8), &modes).show(ui));
+            Field::new("Workspace").show(ui, |ui, _| Segmented::new("Workspace", Bind::given(0u8), &modes).show(ui));
         })
         .show(ui, |ui, _| {
-            Field::new("Theme").sizing(Sizing::Content).show(ui, |ui, _| Select::new("Theme", Bind::given(0u8), &themes).show(ui));
-            Field::new("Mode").sizing(Sizing::Content).show(ui, |ui, _| Segmented::new("Mode", Bind::given(1u8), &modes).show(ui));
+            Field::new("Theme").show(ui, |ui, _| Select::new("Theme", Bind::given(0u8), &themes).show(ui));
+            Field::new("Mode").show(ui, |ui, _| Segmented::new("Mode", Bind::given(1u8), &modes).show(ui));
         })
         .into()
 }

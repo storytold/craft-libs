@@ -22,13 +22,13 @@ use crate::contract::{
 };
 use crate::layout_components::Stack;
 use crate::list::RowTest;
-use crate::pickers::SelectFace;
+use crate::pickers::{FaceKind, SelectFace};
 use crate::popover::Popover;
 use crate::primitives::ContentPainterCx;
 use crate::runtime::env::{EnvView, Label};
 use crate::runtime::memory::StageAccess;
 use crate::runtime::overlay::CloseReason;
-use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook};
+use crate::style::{ComponentStyle, FocusLook, StyleCx, SurfaceLook, UiTokens};
 use crate::tile_grid::TileZoom;
 use craft_behavior::{EditEvent, EditEvents, HitLevel, HitPriority, Intent, Metrics, Mixed, PartKey, PressPhase, Sense, Value};
 use egui::{Pos2, Rect, Response, Ui, Vec2};
@@ -63,6 +63,10 @@ pub enum PickerField {
     Name,
     /// The thumbnail, then the name.
     ThumbnailAndName,
+    /// A compact chip that sits on a bar's line: a small thumbnail over the caption, the dropdown arrow beside them,
+    /// on no field well (the hover fill shows under the pointer and while the presets are open). A brush preset's tip
+    /// over its size in an options bar.
+    Chip,
 }
 
 /// The style of a preset picker's field: the field well and the focus edge; the face carries the padding.
@@ -516,6 +520,7 @@ struct PickerFace<'a, K: Value + Eq + Hash + 'static> {
     common: Common,
     value: Bind<'a, Option<K>>,
     rows: &'a [PresetRow<K>],
+    #[style_key]
     field: PickerField,
     cell_shape: CellShape,
     placeholder: Option<Label>,
@@ -545,6 +550,11 @@ impl<K: Value> Outcome for FaceOutput<K> {
 }
 
 impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
+    /// Whether the field shows the thumbnail without the name.
+    fn thumb_only(&self) -> bool {
+        matches!(self.field, PickerField::Thumbnail | PickerField::Chip)
+    }
+
     fn preset(&self, key: &K) -> Option<&PresetRow<K>> {
         self.rows.iter().find(|row| !row.is_group() && row.key == *key)
     }
@@ -559,8 +569,9 @@ impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
         }
     }
 
-    /// `face` with the caption under its thumbnail, when the picker has one.
+    /// `face` with the caption under its thumbnail, when the picker has one, at the chip's size for a chip.
     fn captioned<'f>(&self, face: SelectFace<'f>) -> SelectFace<'f> {
+        let face = if self.field == PickerField::Chip { face.kind(FaceKind::Chip) } else { face };
         match &self.caption {
             Some(caption) => face.thumb_caption(caption.clone()),
             None => face,
@@ -569,7 +580,7 @@ impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
 
     /// `face` with an empty thumbnail of the cell shape, and the name unless the field shows the thumbnail alone.
     fn empty_thumb<'f>(&self, face: SelectFace<'f>) -> SelectFace<'f> {
-        self.captioned(face.thumb(self.cell_shape.aspect(), |_, _| {}).name(self.field != PickerField::Thumbnail))
+        self.captioned(face.thumb(self.cell_shape.aspect(), |_, _| {}).name(!self.thumb_only()))
     }
 
     /// The face of a field showing `text`: with a `row`, its thumbnail and name as `field` says; without, the muted
@@ -578,7 +589,7 @@ impl<K: Value + Eq + Hash + 'static> PickerFace<'_, K> {
     fn face_of(&self, text: Label, row: Option<&PresetRow<K>>, paint: bool) -> SelectFace<'static> {
         let face = SelectFace::new(text);
         match (row, self.field) {
-            (None, PickerField::Thumbnail) => self.empty_thumb(face.placeholder()),
+            (None, PickerField::Thumbnail | PickerField::Chip) => self.empty_thumb(face.placeholder()),
             (None, _) => face.placeholder(),
             (Some(row), field) => match (&row.preview, field) {
                 (_, PickerField::Name) | (None, _) => face,
@@ -603,8 +614,19 @@ impl<K: Value + Eq + Hash + 'static> Component for PickerFace<'_, K> {
     type Style = PresetPickerStyle;
     type Output = FaceOutput<K>;
 
-    fn style(cx: &StyleCx<'_>, _: PickerFaceStyleKey<K>) -> PresetPickerStyle {
-        PresetPickerStyle { surface: cx.dropdown(), metrics: Metrics::new(), focus: cx.focus_look() }
+    fn style(cx: &StyleCx<'_>, key: PickerFaceStyleKey<K>) -> PresetPickerStyle {
+        let surface = if key.field == PickerField::Chip {
+            // A chip has no well: the state layer, held at the hover fill while the presets are open, as the
+            // dropdown's well is.
+            let mut look = SurfaceLook::new(cx.state_layer()).radius(UiTokens::corner(cx.tokens.shape.radius.control));
+            let hover = cx.color(cx.tokens.color.state.hover);
+            look.fill.off.hover = hover;
+            look.fill.off.pressed = hover;
+            look
+        } else {
+            cx.dropdown()
+        };
+        PresetPickerStyle { surface, metrics: Metrics::new(), focus: cx.focus_look() }
     }
 
     fn sense(&self) -> Sense {

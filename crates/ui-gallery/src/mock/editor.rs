@@ -207,7 +207,7 @@ fn title_bar(ui: &mut Ui, state: &MockState) {
     let document = &state.document;
     let title = if document.dirty { Title::unsaved(document.title.clone()) } else { Title::new(document.title.clone()) };
     let frame = Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: Layout::default() });
-    TitleBar::new().frame(frame).separator().show_titled(
+    TitleBar::new().frame(frame).show_titled(
         ui,
         title,
         |ui, _| {

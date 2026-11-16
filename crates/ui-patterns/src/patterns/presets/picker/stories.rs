@@ -1,8 +1,9 @@
 //! Stories of `PresetPicker`.
 
 use super::{PickerField, PresetPicker};
+use crate::bars::{Bar, BarKind};
 use crate::choice::SwatchFace;
-use crate::contract::{Bind, Role, Validity};
+use crate::contract::{Bind, Role, ShowContainer as _, Validity};
 use crate::list::ThumbAspect;
 use crate::patterns::presets::{PresetRow, PresetState};
 use crate::runtime::env::Message;
@@ -35,6 +36,18 @@ fn preset_picker(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let rows = rows();
     let (swatch, state) = data.value("swatch", (Some(AMBER), PresetState::<u32>::new()));
     PresetPicker::new("Swatch", Bind::bound(swatch), &rows, Bind::bound(state)).field(PickerField::ThumbnailAndName).show(ui).into()
+}
+
+/// The compact chip in an options bar: the swatch over its caption, on the bar's line.
+#[story(PresetPicker<'static, u32>, covers = [], drive = Drive::Never)]
+fn preset_picker_chip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    let rows = rows();
+    let (swatch, state) = data.value("chip", (Some(TEAL), PresetState::<u32>::new()));
+    let mut output = None;
+    Bar::new("Brush options", BarKind::Options).show(ui, |ui, _| {
+        output = Some(PresetPicker::new("Swatch", Bind::bound(&mut *swatch), &rows, Bind::bound(&mut *state)).field(PickerField::Chip).caption("20").show(ui));
+    });
+    output.map(StoryOutput::from).unwrap_or_default()
 }
 
 #[story(PresetPicker<'static, u32>, covers = [Mixed], drive = Drive::Never)]

@@ -52,9 +52,14 @@ pub struct Field {
 }
 
 impl Field {
-    /// A field labelled `label`, beside its control, filling the width offered.
+    /// A field labelled `label`, beside its control, filling the width offered; among the members of a bar it takes
+    /// its content width. `sizing` overrides both.
     pub fn new(label: impl Into<Label>) -> Self {
-        let props = ContainerProps::new().sizing(Sizing::FillWidth).footer(FooterRegion::new().gap(Gap::Tight).status()).label(SideLabel::new());
+        let props = ContainerProps::new()
+            .sizing(Sizing::FillWidth)
+            .content_in_bar()
+            .footer(FooterRegion::new().gap(Gap::Tight).status())
+            .label(SideLabel::new());
         Field { common: Common::new(), props, help: None, layout: None, value: None }.label(label)
     }
 

@@ -9,6 +9,7 @@ use craft_ui::contract::{BodyCx, SizeLimits};
 use craft_ui::docking::{DockHeights, DockPanels, PanelSpec};
 use craft_ui::menu::PanelRow;
 use craft_ui::notices::Notice;
+use craft_window::policy::WindowKind;
 use egui::Ui;
 
 /// The viewer's panels as the dock's contents.
@@ -29,6 +30,8 @@ impl DockPanels<PanelId> for GalleryDock<'_> {
             PanelId::Stories => spec.heights(DockHeights::new(80.0).compact(60.0)),
             PanelId::Properties | PanelId::Inspect | PanelId::Tokens => spec.heights(DockHeights::new(240.0).compact(120.0).fill(300.0)),
             PanelId::Problems | PanelId::Detail | PanelId::AppSizes => spec.heights(DockHeights::new(210.0)),
+            // The centre's pages are documents: the dock shows them edge to edge.
+            PanelId::Overview | PanelId::Component(_) | PanelId::Preview => spec.window_kind(WindowKind::Document),
             _ => spec,
         }
     }

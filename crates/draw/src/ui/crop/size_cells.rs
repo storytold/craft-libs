@@ -4,7 +4,7 @@ use super::options::{CropLength, FIELD_MAX, LENGTH_MIN, ResolutionUnit, trim_num
 use super::{CropBarWords, CropDocument, CropSizeFields};
 use craft_behavior::{IconId, NumberCodec};
 use craft_ui::buttons::IconButton;
-use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
+use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::form::Field;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{LengthUnits, UnitKind, Units};
@@ -100,7 +100,7 @@ pub(super) fn show(
     let resolution = size.resolution.trim().replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0);
     let mut typed = None;
     let mut alert = None;
-    Field::new(words.resolution.clone()).id_salt("size-resolution").sizing(Sizing::Content).show(ui, |ui, _| {
+    Field::new(words.resolution.clone()).id_salt("size-resolution").show(ui, |ui, _| {
         let codec = NumberCodec::new(units.reader(None), limits.resolution_decimals);
         let field = NumberField::new(words.resolution.clone(), Bind::given(resolution)).codec(codec).range(low..=high).automatic(true).show(ui);
         typed = field.value().copied();
@@ -155,7 +155,7 @@ fn length_field(
     let mut typed = None;
     let mut typed_unit = None;
     let mut alert = None;
-    Field::new(caption.clone()).id_salt(salt).sizing(Sizing::Content).show(ui, |ui, _| {
+    Field::new(caption.clone()).id_salt(salt).show(ui, |ui, _| {
         let lengths = LengthUnits::new(unit, unit, pixels_per_inch);
         let range = limits.length_range(unit, pixels_per_inch, points_per_inch);
         let field = NumberField::length(caption.clone(), Bind::given(value.map(|length| length.value)), lengths).range(range).show(ui);

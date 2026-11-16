@@ -898,6 +898,9 @@ pub(crate) struct InFlow {
     /// rows run along Y, or a container whose first child is one. The child is one line when that centre lies at
     /// half its height (`one_line`).
     pub first: Option<f32>,
+    /// `first` is the line of the child's own unwrapped `Row` body: the child sits on a row's line by it even when it
+    /// is more than one line (a nested row with a child of two lines).
+    pub line: bool,
 }
 
 /// How far a one-line child's first-line centre may lie from half its height: half a pixel at the scales the box runs.
@@ -919,7 +922,7 @@ fn one_line(first: Option<f32>, height: f32) -> Option<f32> {
 /// sits at the vertical centre of its cell.
 #[doc(hidden)]
 pub fn place_in_flow(ui: &mut Ui, size: Vec2) -> Rect {
-    place_in_cell(ui, size, InFlow { fill: false, first: Some(size.y / 2.0) })
+    place_in_cell(ui, size, InFlow { fill: false, first: Some(size.y / 2.0), line: false })
 }
 
 /// `place_in_flow` for a child that is `child`. In a measuring run the child reports its line to the row around it
@@ -927,7 +930,7 @@ pub fn place_in_flow(ui: &mut Ui, size: Vec2) -> Rect {
 pub(crate) fn place_in_cell(ui: &mut Ui, size: Vec2, child: InFlow) -> Rect {
     let env = Env::of(ui);
     let (line, target) = (env.row_line, env.first_line);
-    let child = InFlow { first: one_line(child.first, size.y), ..child };
+    let child = InFlow { first: if child.line { child.first } else { one_line(child.first, size.y) }, ..child };
     let above = line.and_then(|line| line.centre).zip(child.first).map_or(0.0, |(centre, first)| (centre - first).max(0.0));
     let slot = Vec2::new(size.x, line.and_then(|line| line.height).map_or(above + size.y, |height| height.max(above + size.y)));
     let (rect, in_cell) = take_in(ui, env.grid, slot);

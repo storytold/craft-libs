@@ -10,13 +10,13 @@ use craft_behavior::{EditEvent, EditEvents, IconId, NumberCodec};
 use craft_ui::buttons::{Button, IconButton, ToggleButton};
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{
-    Bind, BodyCx, Entry, Gap, LabelKind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, Sizing, clicked,
+    Bind, BodyCx, Entry, Gap, LabelKind, NoValue, Outcome, Props as _, Remember as _, Show as _, ShowContainer as _, SideLabel, clicked,
 };
 use craft_ui::display::Divider;
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
-use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
+use craft_ui::runtime::env::{Env, Label, Units};
 use craft_ui::runtime::requests::ColorRequest;
 use craft_ui::text::NumberField;
 use egui::{Response, Ui};
@@ -46,8 +46,6 @@ pub struct CropBarOutput {
     pub ratio: Option<CropRatioChange>,
     /// The Straighten button was pressed: the app calls `CropTool::toggle_straighten`.
     pub straighten: bool,
-    /// The Angle field was edited: the app turns the frame to this angle, in degrees.
-    pub angle: Option<f64>,
     /// New Crop Preset…: the app opens its dialog with [`CropSettings::preset_name`].
     pub new_preset: bool,
     /// Delete Crop Preset…: the app opens its dialog.
@@ -83,8 +81,8 @@ impl Outcome for CropBarOutput {
 /// - Order (Photoshop's): the preset list ([`CropPresetList`]: Selection when offered, Ratio, W x H x Resolution, the
 ///   ratio presets, the size presets, the user's presets, Front Image, a rule, New Crop Preset…, Delete Crop
 ///   Preset…); the W and H ratio fields (0 to 99,999 with 3 decimals) with the swap button between them, or in
-///   W × H × Resolution mode the W, H and Resolution fields with the px/in or px/cm select; Clear; the Angle field;
-///   the Straighten toggle (pressed while armed); the overlay menu ([`CropOverlayMenu`]); the gear popover
+///   W × H × Resolution mode the W, H and Resolution fields with the px/in or px/cm select; Clear; the labelled
+///   Straighten toggle (pressed while armed); the frame's angle is edited on the canvas; the overlay menu ([`CropOverlayMenu`]); the gear popover
 ///   ([`CropOptionsMenu`]); the Delete Cropped Pixels check box; Fill and its select; the help button when a help
 ///   label is given; Reset.
 /// - W and H keep their lengths with the unit they were entered in ([`CropLength`](super::CropLength)); a cleared
@@ -94,7 +92,7 @@ impl Outcome for CropBarOutput {
 ///   is `None`; Original Ratio and Front Image without a document.
 /// - Fill's first entry reads Transparent while Delete Cropped Pixels is off and Background while it is on.
 /// - **Keyboard and AccessKit:** the list is a select named "Crop ratio" with the chosen entry as its value; the
-///   fields are named Width, Height, Resolution and Angle; the Straighten toggle has its pressed state; the menus
+///   fields are named Width, Height and Resolution; the Straighten toggle has its pressed state; the menus
 ///   open with Enter or Space.
 #[must_use = "show the bar's children with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
@@ -107,9 +105,6 @@ pub struct CropBar<'a> {
     /// The Straighten toggle's pressed state (`CropTool::straighten_armed`).
     #[prop]
     straighten: bool,
-    /// The frame's angle in degrees, for the Angle field; without a frame the field is disabled.
-    #[prop(quantity = "angle in degrees")]
-    angle: Option<f64>,
     /// The help button after Fill; `Some` shows it, named by the label.
     #[prop(into)]
     help: Option<Label>,
@@ -132,7 +127,6 @@ impl<'a> CropBar<'a> {
             document,
             user_presets: &[],
             straighten: false,
-            angle: None,
             help: None,
             can_reset: false,
             selection_entry: false,
@@ -142,7 +136,7 @@ impl<'a> CropBar<'a> {
 
     /// Shows the bar's children.
     pub fn show(self, ui: &mut Ui) -> CropBarOutput {
-        let Self { settings, document, user_presets, straighten, angle, help, can_reset, selection_entry, selection_chosen } = self;
+        let Self { settings, document, user_presets, straighten, help, can_reset, selection_entry, selection_chosen } = self;
         let env = Env::of(ui);
         let words = env.words::<CropBarWords>();
         let units = env.units();
@@ -179,20 +173,17 @@ impl<'a> CropBar<'a> {
                 settings.clear();
                 report.ratio = Some(CropRatioChange { editing: false });
             }
-            Field::new(words.angle.clone()).id_salt("angle").sizing(Sizing::Content).enabled(angle.is_some()).show(ui, |ui, _| {
-                let field = NumberField::new(words.angle.clone(), Bind::given(angle)).unit_kind(UnitKind::Degrees).range(-180.0..=180.0).show(ui);
-                if let Some(turned) = field.value().copied().flatten() {
-                    report.angle = Some(turned);
-                }
-            });
-            let toggle = ToggleButton::new(words.straighten.clone(), Bind::given(straighten)).icon(IconId::new("ruler")).icon_only().show(ui);
+            let toggle = ToggleButton::new(words.straighten_name.clone(), Bind::given(straighten))
+                .icon(IconId::new("ruler"))
+                .tooltip(words.straighten.clone())
+                .show(ui);
             report.straighten |= toggle.value().is_some();
             CropOverlayMenu::new(settings).show(ui);
             report.pick_color = CropOptionsMenu::new(settings).show(ui).pick_color;
             Checkbox::new(Bind::bound(&mut settings.delete_pixels)).label(words.delete_pixels.clone()).show(ui);
             let background = if settings.delete_pixels { words.fill_background.clone() } else { words.fill_transparent.clone() };
             let fills = [Entry::new(CropFill::Background, background), Entry::new(CropFill::ContentAware, words.fill_content_aware.clone())];
-            Field::new(words.fill_name.clone()).id_salt("fill").sizing(Sizing::Content).show(ui, |ui, _| {
+            Field::new(words.fill_name.clone()).id_salt("fill").show(ui, |ui, _| {
                 let pick = Select::new(words.fill_name.clone(), Bind::given(settings.fill), &fills).show(ui);
                 if let Some(fill) = pick.value().copied() {
                     settings.fill = fill;
@@ -208,7 +199,6 @@ impl<'a> CropBar<'a> {
             response: shown.output,
             ratio: report.ratio,
             straighten: report.straighten,
-            angle: report.angle,
             new_preset: report.new_preset,
             delete_preset: report.delete_preset,
             pick_color: report.pick_color,
@@ -226,7 +216,6 @@ impl<'a> CropBar<'a> {
 struct Report {
     ratio: Option<CropRatioChange>,
     straighten: bool,
-    angle: Option<f64>,
     new_preset: bool,
     delete_preset: bool,
     pick_color: Option<ColorRequest>,
@@ -285,7 +274,7 @@ fn ratio_field(
     let current = shown.get(side).copied().unwrap_or(0.0);
     let salt = if side == 0 { "ratio-width" } else { "ratio-height" };
     let mut events = EditEvents::new();
-    Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt(salt).sizing(Sizing::Content).show(ui, |ui, _| {
+    Field::new(caption.clone()).side(SideLabel::new().kind(LabelKind::Hidden)).id_salt(salt).show(ui, |ui, _| {
         let codec = NumberCodec::new(units.reader(None), RATIO_DECIMALS);
         let field = NumberField::new(caption.clone(), Bind::given((current > 0.0).then_some(current)))
             .codec(codec)

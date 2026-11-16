@@ -5,7 +5,7 @@ use super::placement::overlay_of;
 use super::regions::{RegionSizes, end_full_height, footer_in_end};
 use super::scroll::scroll_of;
 use crate::contract::run::ShowAt;
-use crate::contract::{ContainerProps, Mount, ShellPane, Sizing};
+use crate::contract::{ContainerProps, Mount, PadEdges, ShellPane, Sizing};
 use crate::runtime::egui::areas;
 use crate::runtime::env::Env;
 use crate::runtime::layout_memory;
@@ -117,9 +117,15 @@ impl<'b> BodyHooks<'b> {
 
     /// The axes the container is given where `env` is its parent's: a rect it is shown at gives both; an inline
     /// container that fills an axis takes the room only where its parent was given that axis.
+    ///
+    /// A container that fits its content in a bar (`ContainerProps::content_in_bar`) is not given the width there.
+    /// A fill-width container whose body is a row, shown on the line of a row given its height, is given that height
+    /// too: the line is a fixed cross extent, and the container fills it (a bar in a shell slot).
     pub(super) fn given_axes(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> (bool, bool) {
         let sizing = self.sizing(props);
-        let (x, y) = (sizing != Sizing::Content, sizing == Sizing::Fill);
+        let fills_line = sizing == Sizing::FillWidth && unwrapped_row(props) && env.row_line.is_some();
+        let fits_bar = props.content_in_bar && env.values.get::<crate::contract::InBar>().0;
+        let (x, y) = (sizing != Sizing::Content && !fits_bar, sizing == Sizing::Fill || fills_line);
         match (at, &props.mount) {
             (ShowAt::Rect(_), _) => (true, true),
             (ShowAt::Flow, Mount::Inline) => (x && env.gives_width(), y && !env.content.1),
@@ -132,6 +138,24 @@ impl<'b> BodyHooks<'b> {
     /// container takes what its content took. A content-sized mount, a row or a grid stops it.
     pub(super) fn passes_width(&self, props: &ContainerProps, env: &Env, at: ShowAt) -> bool {
         matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline)) && self.sizing(props) == Sizing::Content && env.given_column
+    }
+
+    /// Whether the container centres its body's line in the height it is given: its body is a row that does not scroll
+    /// along the height, and the container is given its height (a rect it is shown at, a fill, a fixed row line it
+    /// fills). Its padding then keeps the members off the start and end edges only (`pad_edges`).
+    pub(super) fn centres_line(&self, props: &ContainerProps) -> bool {
+        self.given.1 && unwrapped_row(props) && !scroll_of(props).is_some_and(|scroll| scroll.vertical_on())
+    }
+
+    /// The edges the container's padding tier applies to: `ContainerProps::pad_edges`, or the start and end edges where
+    /// the container centres its line in its height.
+    pub(super) fn pad_edges(&self, props: &ContainerProps) -> PadEdges {
+        if self.centres_line(props) { PadEdges::Inline } else { props.pad_edges }
+    }
+
+    /// The container's padding on each side along each axis.
+    pub(super) fn pads(&self, props: &ContainerProps, tokens: &crate::style::UiTokens) -> Vec2 {
+        super::regions::pad_vec(tokens, props.pad, self.pad_edges(props))
     }
 
     /// Whether the container's body is laid out across the width it is offered: the container is given the width,
@@ -292,4 +316,9 @@ impl<'b> BodyHooks<'b> {
             _ => bounds,
         }
     }
+}
+
+/// Whether the container's body is a `Row` that does not wrap: its children sit on one line.
+pub(super) fn unwrapped_row(props: &ContainerProps) -> bool {
+    matches!(props.layout, crate::layout::BodyLayout::Row { wrap: false, .. })
 }

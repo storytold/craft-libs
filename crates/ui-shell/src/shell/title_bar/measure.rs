@@ -73,6 +73,16 @@ impl Strip {
     pub(super) fn new(end: &End, height: f32) -> Strip {
         Strip { inset: end.inset, widths: end.captions.iter().map(|slot| slot.rect.width()).collect(), height }
     }
+
+    /// The strip of `end` that keeps the bar's content `pad` off the window's edge when the end holds no captions and
+    /// no traffic lights.
+    pub(super) fn padded(end: &End, height: f32, pad: f32) -> Strip {
+        let mut strip = Strip::new(end, height);
+        if strip.widths.is_empty() && strip.inset <= 0.0 {
+            strip.inset = pad;
+        }
+        strip
+    }
 }
 
 impl Arrangement for Strip {

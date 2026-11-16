@@ -3,10 +3,6 @@
 craft_ui::words! {
     /// The words of [`PaintBar`](super::PaintBar), English by default (Photoshop's).
     pub struct PaintBarWords {
-        /// The Size field's caption.
-        size: "paintBar.size" = "Size";
-        /// The Hardness field's caption.
-        hardness: "paintBar.hardness" = "Hardness";
         /// The Opacity field's caption.
         opacity: "paintBar.opacity" = "Opacity";
         /// The Flow field's caption.

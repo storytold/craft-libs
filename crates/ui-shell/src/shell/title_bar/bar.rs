@@ -8,10 +8,9 @@ use super::style::TitleBarStyle;
 use super::title::{Title, centre_line};
 use crate::contract::{
     Access, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, DragBand, EndRegion, Gap, HeaderRegion, NoValue, Outcome, Pad,
-    PaintUi, PartsCx, Role, ShowContainer as _, Sizing, WordSetCx as _,
+    PartsCx, Role, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::layout::{Placed, arrange};
-use crate::primitives::{RectSide, RuleKind};
 use crate::runtime::access::Name;
 use crate::runtime::egui::pass;
 use crate::runtime::env::Env;
@@ -57,6 +56,8 @@ impl Outcome for TitleBarOutput {
 /// - **Integrated.** The caption buttons of the window's layout sit at the two ends, flush with the window's edges.
 ///   A double click maximizes or restores.
 ///
+/// An end with no caption buttons or lights keeps the content `space.pad.regular` off the window's edge.
+///
 /// In full screen the bar shows no captions and reserves no room. The free area is the container's move band:
 /// pressing and dragging it moves the window, and a double click acts as above.
 ///
@@ -80,9 +81,6 @@ pub struct TitleBar<'a> {
     /// Whether a bar in a native frame shows the title.
     #[prop(flag)]
     title_when_native: bool,
-    /// A divider rule along the bar's bottom edge, for a bar whose window draws no edge under it.
-    #[prop(flag)]
-    separator: bool,
     /// The content at the end of the bar, before the caption buttons.
     #[prop(func = "FnMut(&mut Ui, &mut crate::contract::BodyCx<'_>)")]
     trailing: Option<RegionBody<'a>>,
@@ -118,7 +116,6 @@ impl<'a> TitleBar<'a> {
             frame: None,
             maximized: None,
             title_when_native: false,
-            separator: false,
             trailing: None,
             title: None,
             clicked: None,
@@ -164,7 +161,9 @@ impl<'a> TitleBar<'a> {
     /// Shows one end's room and buttons, and acts on a click: Minimize and Maximize go to the window the bar acts on,
     /// Close is reported.
     fn show_end(&mut self, ui: &mut Ui, cx: &BodyCx<'_>, end: &End, window: &Window) {
-        let height = SlotSize::TitleBar.resolve(&Env::of(ui).tokens);
+        let tokens = Env::of(ui).tokens.clone();
+        let height = SlotSize::TitleBar.resolve(&tokens);
+        let pad = tokens.tokens().space.pad.regular;
         // The running window's captions take the glyphs of the desktop's icon theme; a frame given in place of the
         // window's (a story, a preview) draws the family's own.
         let ctx = cx.memory.ctx().clone();
@@ -184,7 +183,7 @@ impl<'a> TitleBar<'a> {
                 Placed::new(("caption", index), button)
             })
             .collect();
-        arrange(ui, &Strip::new(end, height), &mut buttons);
+        arrange(ui, &Strip::padded(end, height, pad), &mut buttons);
         let (host, viewport) = (WindowHost::of(&ctx), pass::current_viewport(&ctx));
         for (slot, placed) in end.captions.iter().zip(&buttons) {
             if !placed.response().is_some_and(Response::clicked) {
@@ -244,14 +243,6 @@ impl Component for TitleBar<'_> {
         if self.title.as_ref().is_some_and(Title::is_unsaved) {
             access.description(words.unsaved.as_str());
         }
-    }
-
-    /// The [`separator`](TitleBar::separator) along the bottom edge, over the content.
-    fn paint_over(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        if !self.separator {
-            return;
-        }
-        ui.draw().edge_rule(RuleKind::Divider, cx.rect, RectSide::Bottom);
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> TitleBarOutput {

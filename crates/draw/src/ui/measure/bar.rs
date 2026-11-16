@@ -6,7 +6,7 @@ use super::words::RulerWords;
 use craft_ui::buttons::Button;
 use craft_ui::canvas::CanvasRulers;
 use craft_ui::choice::Checkbox;
-use craft_ui::contract::{Bind, Gap, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, Sizing, clicked};
+use craft_ui::contract::{Bind, Gap, NoValue, Outcome, Props as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::display::{Divider, Text};
 use craft_ui::form::Field;
 use craft_ui::layout_components::Row;
@@ -122,7 +122,7 @@ impl<'a> RulerBar<'a> {
 
 /// One readout: a caption above a tabular value, named `name` for AccessKit.
 fn readout(ui: &mut Ui, salt: &'static str, name: Label, value: String) {
-    Field::new(name).id_salt(salt).sizing(Sizing::Content).value(value.clone()).show(ui, |ui, _| {
+    Field::new(name).id_salt(salt).value(value.clone()).show(ui, |ui, _| {
         Text::new(value.clone()).role(TypeRole::Mono).show(ui);
     });
 }

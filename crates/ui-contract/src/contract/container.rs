@@ -147,6 +147,9 @@ pub enum PadEdges {
     /// The top and bottom edges only: a column given its width whose children centre across it, as a tool rail does
     /// in its pane.
     Block,
+    /// The start and end edges only: a row given its height that centres its line in it, as a bar does in its pane.
+    /// The body picks it for such a row whatever the props name.
+    Inline,
 }
 
 /// The padding of every popup surface around its content.
@@ -691,6 +694,9 @@ pub struct ContainerProps {
     pub pad_edges: PadEdges,
     /// How the size follows the content.
     pub sizing: Sizing,
+    /// Among the members of a bar (`InBar`) the container takes its content width, whatever `sizing` says: a field
+    /// fills the width of a form and fits its content in a bar. Setting `sizing` clears it.
+    pub content_in_bar: bool,
     /// The height the body offers its children in flow, in place of the flow's (unbounded in a scrolling body): the
     /// most a child takes. Every child takes its content height, a child that fills or scrolls at most this height,
     /// as a scrolling list is as tall as its rows until they outgrow the room. A host that shows content of either
@@ -777,6 +783,7 @@ impl ContainerProps {
             && self.pad == other.pad
             && self.pad_edges == other.pad_edges
             && self.sizing == other.sizing
+            && self.content_in_bar == other.content_in_bar
             && self.room_height == other.room_height
             && self.layout == other.layout
             && self.header == other.header
@@ -806,6 +813,7 @@ impl ContainerProps {
             pad: Pad::None,
             pad_edges: PadEdges::All,
             sizing: Sizing::Content,
+            content_in_bar: false,
             room_height: None,
             layout: BodyLayout::Stack,
             header: None,
@@ -866,6 +874,13 @@ impl ContainerProps {
     /// How the size follows the content.
     pub const fn sizing(mut self, sizing: Sizing) -> Self {
         self.sizing = sizing;
+        self.content_in_bar = false;
+        self
+    }
+
+    /// Takes the content width among the members of a bar ([`content_in_bar`](Self::content_in_bar)).
+    pub const fn content_in_bar(mut self) -> Self {
+        self.content_in_bar = true;
         self
     }
 

@@ -7,9 +7,11 @@ use crate::display::{Divider, Icon};
 use crate::primitives::IconSpec;
 use crate::runtime::env::Label;
 use craft_behavior::IconId;
+use craft_theme::ControlSize;
 use egui::{Response, Ui};
 
-/// The Home button at the start of an options bar: a toggle with the home icon, then a rule. The host decides what
+/// The Home button at the start of an options bar: a toggle with the home icon at the standard control size, as tall
+/// as a bar's tool icons, then a rule. The host decides what
 /// it shows and when it can toggle.
 #[must_use = "show the button with `show`"]
 #[derive(crate::contract::Pattern)]
@@ -33,7 +35,12 @@ impl<'a> BarHome<'a> {
 
     /// Shows the button and the rule after it.
     pub fn show(self, ui: &mut Ui) -> EditResponse<bool> {
-        let shown = ToggleButton::new(self.label, self.on).icon(IconSpec::svg(IconId::new("home"))).icon_only().enabled(self.enabled).show(ui);
+        let shown = ToggleButton::new(self.label, self.on)
+            .icon(IconSpec::svg(IconId::new("home")))
+            .icon_only()
+            .size(ControlSize::Md)
+            .enabled(self.enabled)
+            .show(ui);
         Divider::vertical().show(ui);
         shown
     }
@@ -80,7 +87,7 @@ impl BarTool {
 
     /// Shows the icon, its arrow and the rule after them.
     pub fn show(self, ui: &mut Ui) -> BarToolOutput {
-        let shown: ButtonOutput = IconButton::new(self.icon).label(self.label).enabled(self.enabled).show(ui);
+        let shown: ButtonOutput = IconButton::new(self.icon).label(self.label).size(ControlSize::Md).enabled(self.enabled).show(ui);
         Icon::new(DisclosureGlyph::dropdown()).enabled(self.enabled).show(ui);
         Divider::vertical().show(ui);
         BarToolOutput { response: shown.response }

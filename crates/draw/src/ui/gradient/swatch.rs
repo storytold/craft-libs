@@ -3,7 +3,7 @@
 use craft_behavior::{CursorIcon, CursorPriority, Metrics, Sense};
 use craft_ui::choice::SwatchMetrics;
 use craft_ui::contract::{
-    Access, Common, Component, Cx, DisabledLook, MeasureCx, Outcome, PaintUi, Pointer as _, PopupKind, Props as _, Role, Sizing,
+    Access, Common, Component, Cx, DisabledLook, InBar, MeasureCx, Outcome, PaintUi, Pointer as _, PopupKind, Props as _, Role, Sizing,
 };
 use craft_ui::style::{ComponentStyle, FocusLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Response, Vec2};
@@ -27,6 +27,8 @@ pub struct GradientSwatchStyle {
     radius: CornerRadius,
     /// The ring on the well's outline, which separates the well from the panel.
     edge: StyleColor,
+    /// The width of a swatch among a bar's members: `size.length.short`.
+    in_bar: f32,
 }
 
 /// What a gradient swatch reports.
@@ -52,8 +54,8 @@ impl Outcome for GradientSwatchOutput {
 ///
 /// The ramp is drawn over the checkerboard where it is translucent, inside the swatch's ring. The
 /// swatch edits nothing; a click is the host's cue. The well has the gradient chip aspect
-/// (`GradientRamp::CHIP_ASPECT`); with `Sizing::FillWidth` it takes the wider width the layout
-/// offers (an options bar cell). AccessKit sees a button named by the label, with `has_popup`
+/// (`GradientRamp::CHIP_ASPECT`); among a bar's members it is `size.length.short` wide, and with
+/// `Sizing::FillWidth` it takes the wider width the layout offers. AccessKit sees a button named by the label, with `has_popup`
 /// when the host opens a dialog on the click.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(content_painter)]
@@ -90,7 +92,14 @@ impl Component for GradientSwatch<'_> {
 
     fn style(cx: &StyleCx<'_>, _: GradientSwatchStyleKey) -> GradientSwatchStyle {
         let (radius, edge) = GradientRamp::chip_look(cx);
-        GradientSwatchStyle { metrics: Metrics::new(), focus: cx.focus_look(), side: SwatchMetrics::of(cx).side, radius, edge }
+        GradientSwatchStyle {
+            metrics: Metrics::new(),
+            focus: cx.focus_look(),
+            side: SwatchMetrics::of(cx).side,
+            radius,
+            edge,
+            in_bar: cx.tokens.size.length.short,
+        }
     }
 
     fn measure(&mut self, cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -99,6 +108,8 @@ impl Component for GradientSwatch<'_> {
         let chip = height * f32::from(wide) / f32::from(high);
         let width = if cx.resolved.sizing() == Some(Sizing::FillWidth) {
             cx.room.filter(|room| room.is_finite()).map_or(chip, |room| room.max(chip))
+        } else if cx.env.get::<InBar>().0 {
+            cx.style.in_bar.max(chip)
         } else {
             chip
         };
