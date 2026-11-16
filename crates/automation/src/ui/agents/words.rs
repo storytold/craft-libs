@@ -31,6 +31,7 @@ craft_ui::words! {
         no_settings_folder: template "agents.noSettingsFolder" = "Agents can't connect: {app} has no settings folder (no home folder).";
         token_file: template "agents.tokenFile" = "Agents can't connect: the token file could not be written: {error}";
         listen: template "agents.listen" = "Couldn't listen on 127.0.0.1:{port}: {error}";
+        port_out_of_range: template "agents.portOutOfRange" = "Agents can't connect: the control port {port} is outside 0 to 65535.";
         publish: template "agents.publish" = "Couldn't publish the agent connection: {error}";
     }
 }
@@ -43,6 +44,7 @@ impl AgentsWords {
             LinkProblem::NoSettingsFolder => self.no_settings_folder.fill(&[("app", app)]),
             LinkProblem::TokenFile(error) => self.token_file.fill(&[("error", error)]),
             LinkProblem::Listen { port, error } => self.listen.fill(&[("port", &port.to_string()), ("error", error)]),
+            LinkProblem::PortOutOfRange(port) => self.port_out_of_range.fill(&[("port", &port.to_string())]),
             LinkProblem::Publish(error) => self.publish.fill(&[("error", error)]),
             LinkProblem::App(note) => note.clone(),
         }

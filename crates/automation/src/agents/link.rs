@@ -37,6 +37,8 @@ pub enum LinkProblem {
         /// Why.
         error: String,
     },
+    /// The control port setting is outside 0..=65535; nothing listens.
+    PortOutOfRange(u32),
     /// The connection file could not be written; nothing listens without it.
     Publish(String),
     /// The app's own note ([`AgentLink::note`]), such as a folder it could not use.
@@ -50,6 +52,7 @@ impl fmt::Display for LinkProblem {
             Self::NoSettingsFolder => f.write_str("Agents can't connect: the app has no settings folder (no home folder)."),
             Self::TokenFile(e) => write!(f, "Agents can't connect: the token file could not be written: {e}"),
             Self::Listen { port, error } => write!(f, "Couldn't listen on 127.0.0.1:{port}: {error}"),
+            Self::PortOutOfRange(port) => write!(f, "Agents can't connect: the control port {port} is outside 0 to 65535."),
             Self::Publish(e) => write!(f, "Couldn't publish the agent connection: {e}"),
             Self::App(note) => f.write_str(note),
         }
@@ -204,8 +207,10 @@ impl AgentLink {
             return Ok(());
         }
         update.stopped = self.running.take().is_some();
-        // The setting's range is 0..=65535; anything else picks a free port.
-        let port = u16::try_from(want.control_port).unwrap_or(0);
+        // A setting outside 0..=65535 names no port; a retry would not change that, so none is scheduled.
+        let Ok(port) = u16::try_from(want.control_port) else {
+            return Err(LinkProblem::PortOutOfRange(want.control_port));
+        };
         match self.start(&dir, port, want.control_port, host) {
             Ok((running, requests)) => {
                 log::info!("agents can connect on {}", running.server.addr);

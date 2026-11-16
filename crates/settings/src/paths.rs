@@ -137,10 +137,11 @@ pub fn resolve_named(app_id: &str, folder: &str, portable: &Portable, location: 
     resolve_checked(app_id, folder, portable, location, probe, ensure_writable)
 }
 
-/// [`resolve_named`] without touching the disk: a portable folder is taken as found, without creating it or
-/// checking that it is writable. For [`SettingsStore::read`](crate::SettingsStore::read), which writes nothing.
+/// [`resolve_named`] without changing the disk: the portable folder is judged by its permissions (see
+/// [`accepts_files`]) instead of creating it and writing a probe, with the same fallback to the platform folder.
+/// For [`SettingsStore::read`](crate::SettingsStore::read), which writes nothing.
 pub(crate) fn resolve_unprobed(app_id: &str, folder: &str, portable: &Portable, location: &Location, probe: &Probe) -> Resolved {
-    resolve_checked(app_id, folder, portable, location, probe, |_| Ok(()))
+    resolve_checked(app_id, folder, portable, location, probe, accepts_files)
 }
 
 /// The folder rules, with `writable` deciding whether a portable folder is used.
@@ -193,6 +194,20 @@ fn resolve_checked(
 fn ensure_writable(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     crate::recovery::check_writable(dir)
+}
+
+/// Whether `dir`, or for a folder that doesn't exist yet its nearest existing ancestor (where
+/// [`ensure_writable`] would create it), is a folder with write permission. Reads metadata only.
+fn accepts_files(dir: &Path) -> std::io::Result<()> {
+    let existing = dir.ancestors().find(|ancestor| ancestor.exists()).unwrap_or(dir);
+    let meta = std::fs::metadata(existing)?;
+    if !meta.is_dir() {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotADirectory, format!("{} is not a folder", existing.display())));
+    }
+    if meta.permissions().readonly() {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, format!("{} is read-only", existing.display())));
+    }
+    Ok(())
 }
 
 /// The marker found and the folder it points at, when `exe_dir` has one.

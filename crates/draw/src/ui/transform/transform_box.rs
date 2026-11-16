@@ -303,7 +303,7 @@ pub struct TransformBox<'a> {
     line: Option<LineLook>,
     /// A plain press within `points` screen points outside the frame moves the box (0: off). Crate-private: the
     /// public entry is `TransformOverlay::move_reach`.
-    #[prop(quantity = "press reach outside the frame, in screen points")]
+    #[prop(quantity = "press reach outside the frame, in screen points", vis = "pub(crate)")]
     move_reach: f32,
     /// Whether this pass holds a drag of the reference point, so the hidden point is drawn while it moves.
     pivot_held: bool,

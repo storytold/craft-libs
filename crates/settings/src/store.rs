@@ -166,7 +166,8 @@ impl<T: Settings> SettingsStore<T> {
 
     /// The settings [`open_with`](Self::open_with) would load from `options`, read without opening a store: for a
     /// second process, or a read before the application's store opens. It takes the same load path, and touches
-    /// nothing on disk: no folder is created, none is checked for writing (a portable folder is taken as found), a
+    /// nothing on disk: no folder is created, none is probed by writing (a portable folder that its permissions show as read-only falls back to the platform
+    /// folder, as in `open_with`), a
     /// damaged `config.toml` reads as defaults and stays where it is, and with no `config.toml` the legacy files are
     /// imported in memory only.
     pub fn read(options: &OpenOptions<T>) -> (T, LoadReport) {
@@ -188,6 +189,7 @@ impl<T: Settings> SettingsStore<T> {
             warning: resolved.warning.clone(),
             source: Source::Defaults,
             broken_moved_to: None,
+            damaged: None,
             section_errors: Vec::new(),
             migrated_from: None,
             read_only: None,
@@ -382,6 +384,7 @@ impl<T: Settings> SettingsStore<T> {
         let mut doc = match document::parse(text) {
             Ok(doc) => doc,
             Err(_) => {
+                report.damaged = Some(path.to_path_buf());
                 if damaged == Damaged::MoveAside {
                     match self.files.move_aside(path) {
                         Ok(moved) => report.broken_moved_to = Some(moved),

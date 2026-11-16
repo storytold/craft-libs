@@ -182,7 +182,39 @@ fn a_read_sees_what_a_store_wrote_and_touches_nothing_on_disk() {
     let (prefs, report) = SettingsStore::<Prefs>::read(&read_options(tmp.path()));
     assert_eq!(prefs.general.language, Prefs::default().general.language);
     assert!(report.broken_moved_to.is_none());
+    assert_eq!(report.damaged.as_deref(), Some(config_path(tmp.path()).as_path()), "a damaged file is named, not read as absent");
+    assert!(report.has_problems());
     assert_eq!(read_config(tmp.path()), broken, "a read never moves or rewrites the file");
     let moved = std::fs::read_dir(tmp.path()).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("config.broken-"));
     assert!(!moved, "nothing is moved aside");
+}
+
+/// A portable folder that is not writable: `read` loads the platform folder, as `open_with` does.
+#[cfg(unix)]
+#[test]
+fn a_read_falls_back_to_the_platform_folder_like_an_open() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let exe = tmp.path().join("exe");
+    let portable = exe.join("config");
+    let platform = tmp.path().join("platform");
+    std::fs::create_dir_all(&portable).unwrap();
+    std::fs::create_dir_all(platform.join("testcraft")).unwrap();
+    std::fs::write(exe.join("portable"), "").unwrap();
+    write_config(&portable, "schema_version = 2\n[general]\nlanguage = \"portable\"\n");
+    write_config(&platform.join("testcraft"), "schema_version = 2\n[general]\nlanguage = \"platform\"\n");
+    let options = || {
+        let probe = craft_settings::Probe { env: Box::new(|_| None), exe_dir: Some(exe.clone()), platform_config_dir: Some(platform.clone()) };
+        OpenOptions::<Prefs>::new(Location::Auto).probe(probe)
+    };
+    let (prefs, _) = SettingsStore::<Prefs>::read(&options());
+    assert_eq!(prefs.general.language, "portable");
+
+    std::fs::set_permissions(&portable, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let (prefs, report) = SettingsStore::<Prefs>::read(&options());
+    let (store, _) = SettingsStore::open_with(options());
+    std::fs::set_permissions(&portable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(prefs.general.language, "platform");
+    assert!(report.warning.is_some());
+    assert_eq!(store.get().general.language, "platform", "an open takes the same folder");
 }

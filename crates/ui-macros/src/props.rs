@@ -15,6 +15,8 @@ struct Prop {
     boxed_bounds: Option<syn::punctuated::Punctuated<TypeParamBound, syn::Token![+]>>,
     name: Option<Ident>,
     func: Option<TypeParamBound>,
+    /// The setter's visibility from `vis = ".."`; `pub` when absent.
+    vis: Option<syn::Visibility>,
 }
 
 /// The declared quantity of a `quantity = ".."` option: it states that a numeric prop is not a size, for the
@@ -53,11 +55,14 @@ fn parse_prop(attr: &Attribute) -> syn::Result<Prop> {
         } else if meta.path.is_ident("func") {
             let bound: LitStr = meta.value()?.parse()?;
             prop.func = Some(bound.parse().map_err(|_| syn::Error::new(bound.span(), "`func` is a closure bound such as \"Fn(&K) -> bool\""))?);
+        } else if meta.path.is_ident("vis") {
+            let vis: LitStr = meta.value()?.parse()?;
+            prop.vis = Some(vis.parse().map_err(|_| syn::Error::new(vis.span(), "`vis` is a visibility such as \"pub(crate)\""))?);
         } else if meta.path.is_ident("quantity") {
             read_quantity(&meta)?;
         } else {
             return Err(meta.error(
-                "unknown `prop` option; expected `into`, `flag`, `boxed`, `boxed = \"..\"`, `name = \"..\"`, `func = \"..\"` or `quantity = \"..\"`",
+                "unknown `prop` option; expected `into`, `flag`, `boxed`, `boxed = \"..\"`, `name = \"..\"`, `func = \"..\"`, `vis = \"..\"` or `quantity = \"..\"`",
             ));
         }
         Ok(())
@@ -85,6 +90,7 @@ fn setter(field: &Field, attr: &Attribute) -> syn::Result<TokenStream> {
         return Err(syn::Error::new_spanned(field_name, "a `#[prop]` needs a doc comment: it becomes the setter's documentation"));
     }
     let name = prop.name.as_ref().unwrap_or(field_name);
+    let vis = prop.vis.as_ref().map_or_else(|| quote!(pub), |vis| quote!(#vis));
     let ty = &field.ty;
     let (parameter, stored) = if prop.flag {
         if prop.into || !is_named(ty, "bool") {
@@ -93,7 +99,7 @@ fn setter(field: &Field, attr: &Attribute) -> syn::Result<TokenStream> {
         let body = quote!(self.#field_name = true;);
         return Ok(quote! {
             #(#docs)*
-            pub fn #name(mut self) -> Self {
+            #vis fn #name(mut self) -> Self {
                 #body
                 self
             }
@@ -111,7 +117,7 @@ fn setter(field: &Field, attr: &Attribute) -> syn::Result<TokenStream> {
         };
         return Ok(quote! {
             #(#docs)*
-            pub fn #name<T: #bounds>(mut self, value: T) -> Self {
+            #vis fn #name<T: #bounds>(mut self, value: T) -> Self {
                 self.#field_name = ::core::option::Option::Some(::std::boxed::Box::new(value));
                 self
             }
@@ -136,7 +142,7 @@ fn setter(field: &Field, attr: &Attribute) -> syn::Result<TokenStream> {
     };
     Ok(quote! {
         #(#docs)*
-        pub fn #name(mut self, #parameter) -> Self {
+        #vis fn #name(mut self, #parameter) -> Self {
             self.#field_name = #stored;
             self
         }

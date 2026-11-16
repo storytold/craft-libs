@@ -98,6 +98,9 @@ pub struct LoadReport {
     pub warning: Option<String>,
     /// Where the values came from.
     pub source: Source,
+    /// The `config.toml` that could not be parsed. Defaults were used. [`SettingsStore::open_with`](crate::SettingsStore::open_with)
+    /// moves it aside (see `broken_moved_to`); [`SettingsStore::read`](crate::SettingsStore::read) leaves it in place.
+    pub damaged: Option<PathBuf>,
     /// Set when a damaged `config.toml` was renamed; the new name.
     pub broken_moved_to: Option<PathBuf>,
     /// Values replaced by their defaults. A `config.toml` value is also taken out of the file, which
@@ -112,7 +115,7 @@ pub struct LoadReport {
 impl LoadReport {
     /// True when something should be shown to the user.
     pub fn has_problems(&self) -> bool {
-        self.broken_moved_to.is_some() || !self.section_errors.is_empty() || self.read_only.is_some()
+        self.damaged.is_some() || self.broken_moved_to.is_some() || !self.section_errors.is_empty() || self.read_only.is_some()
     }
 }
 

@@ -237,22 +237,22 @@ pub struct ParamDialog<'a> {
     answers: Vec<HostAnswer>,
     /// Marks the bound values as opened by the host with `opening`, so the first pass doesn't open them again and
     /// Reset restores `opening`.
-    #[prop]
+    #[prop(vis = "pub(crate)")]
     values_opened: Option<DialogFields>,
     /// Makes OK keep the dialog open and report its answer in `ParamDialogOutput::held`.
-    #[prop(name = "hold_ok")]
+    #[prop(name = "hold_ok", vis = "pub(crate)")]
     hold: bool,
     /// Closes the dialog as OK in this pass: the host accepted the held answer.
-    #[prop]
+    #[prop(vis = "pub(crate)")]
     finish_held: bool,
     /// Shows `reason` under the rows while the values are `refused`.
-    #[prop]
+    #[prop(vis = "pub(crate)")]
     refusal: Option<(Label, DialogFields)>,
     /// Centres the preview pane's view on the picture point `point` in this pass; without a picture it does nothing.
-    #[prop(name = "centre_on")]
+    #[prop(name = "centre_on", vis = "pub(crate)")]
     centre: Option<Pos2>,
     /// The colours the colour rows show in place of their values in this pass, by row key.
-    #[prop]
+    #[prop(vis = "pub(crate)")]
     preview_colors: Vec<(String, Srgba)>,
 }
 

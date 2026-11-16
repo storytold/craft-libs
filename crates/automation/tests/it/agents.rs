@@ -235,6 +235,13 @@ fn a_new_port_restarts_with_the_same_token_and_a_taken_port_is_retried() {
     assert_eq!(link.status().port, Some(taken_port));
     assert_eq!(link.status().problem, None);
     assert_eq!(std::fs::read_to_string(dir.path().join(TOKEN_FILE)).unwrap(), token);
+
+    // A port setting outside 0..=65535 is a problem, not a random port.
+    let out = link.sync(Some(&on(70_000)), &host);
+    assert!(out.requests.is_none());
+    assert_eq!(link.status().problem, Some(LinkProblem::PortOutOfRange(70_000)));
+    assert_eq!(link.status().port, None);
+    assert_eq!(read_connection(dir.path()).unwrap(), None, "the listener stopped and no file is left");
 }
 
 /// Ten syncs with the same settings start one server.
