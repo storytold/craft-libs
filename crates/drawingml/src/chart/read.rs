@@ -497,7 +497,7 @@ fn category_format(pa: &El, cat_ax: Option<&El>) -> Option<String> {
     // gives no number format, and no later series does.
     let cat = pa
         .elements()
-        .filter(|g| g.local().ends_with("Chart"))
+        .filter(|g| g.local().ends_with("Chart") && group_chart_type(g.local(), g).is_some())
         .flat_map(|g| g.children(Local("ser")))
         .filter_map(|s| s.child(Local("cat")).or_else(|| s.child(Local("xVal"))))
         .find(|c| !strings_capped(c, MAX_CACHE_POINTS).is_empty())?;

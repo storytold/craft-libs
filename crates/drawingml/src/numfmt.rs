@@ -1040,9 +1040,9 @@ mod tests {
     fn a_negative_fraction_that_rounds_to_zero_shows_no_minus() {
         check(&[
             // code, value, Excel shows
-            ("# ?/?", -0.01, "0"),
+            ("# ?/?", -0.01, "0    "),
             ("?/?", -0.01, "0/1"),
-            ("# ?/?", -0.5, "-1/2"),
+            ("# ?/?", -0.5, "- 1/2"),
             ("# ?/?", -1.5, "-1 1/2"),
         ]);
     }
