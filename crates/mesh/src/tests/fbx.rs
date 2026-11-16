@@ -629,6 +629,16 @@ fn fbx6_model_holds_its_mesh() {
 }
 
 #[test]
+fn layer_zero_takes_precedence_and_an_indexed_layer_needs_indices() {
+    let layer_one = "LayerElementUV: 1 { MappingInformationType: \"ByPolygonVertex\" ReferenceInformationType: \"Direct\" UV: 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25, 0.25,0.25 }\n";
+    let text = ASCII.replace("LayerElementUV: 0 {", &format!("{layer_one} LayerElementUV: 0 {{"));
+    let scene = parse(text.as_bytes()).unwrap();
+    assert_eq!(scene.meshes[0].uv_sets[0][0], [0.0, 1.0]);
+    let missing = ASCII.replace("UVIndex: *7", "UnusedIndex: *7");
+    assert!(parse(missing.as_bytes()).unwrap().meshes[0].uv_sets.is_empty());
+}
+
+#[test]
 fn optional_inactive_pre_rotation_keeps_legacy_placements() {
     let text = "FBXHeaderExtension: { FBXVersion: 7400 } Objects: { Model: 1, \"Model::A\", \"Null\" { Properties70: { P: \"PreRotation\", \"\", \"\", \"\", 0,0,90 } } }";
     let doc = document(text.as_bytes());
