@@ -150,6 +150,9 @@ pub(super) struct BodyHooks<'b> {
     /// A content-sized container that passes the width its column gives it on to its own body (`passes`): it is not
     /// given the width, but its body is laid out as if it were.
     passes: bool,
+    /// A fill-width container held in the content-sized column it sits in (`held`): it shows across the width the
+    /// column settles on, so its body is offered the room.
+    held: bool,
     /// A held fill-width container (`held`) whose content column measured its held children across its width
     /// (`ColumnSweep::Column`): in the column's second sweep and in the real run after one. Its body is laid out
     /// across that width as if it were given it.
@@ -224,6 +227,7 @@ impl<'b> BodyHooks<'b> {
             given: (false, false),
             fixed_height: false,
             passes: false,
+            held: false,
             across: false,
             in_column: true,
             follows_end: false,
