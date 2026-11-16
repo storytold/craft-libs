@@ -80,7 +80,9 @@ pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag, easing_view};
 
 mod rulers;
 mod scrollbars;
-pub use rulers::{INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers, RulersOutput, StepLadder, TickRule};
+pub use rulers::{
+    INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers, RulersOutput, StepLadder, TickRule,
+};
 pub use scrollbars::{CanvasScrollbars, CanvasScrollbarsOutput};
 
 // canvas-navigator-a

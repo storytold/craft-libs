@@ -3,10 +3,10 @@
 use crate::contract::Pointer as _;
 use crate::contract::cx::CxCore;
 use crate::primitives::{FocusKind, FocusRing, PaintShape, StateLayer, StateLayerKind, surface_look_shapes};
+use crate::runtime::egui::areas::Layer;
 use crate::runtime::env::{Env, EnvValue};
 use crate::style::{Ink, StateSet, StyleView, surface_style};
 use craft_theme::Opacity;
-use crate::runtime::egui::areas::Layer;
 use egui::{Color32, Shape, Ui};
 
 /// The ink the surface reads in: the surface kind of the state, else `inherited`.

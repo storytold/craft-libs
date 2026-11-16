@@ -24,7 +24,8 @@ use super::{AppPaint, PixelRect, RasterSource, canvas_space};
 use crate::contract::{Access, Common, Component, Cx, NoValue, Outcome, PaintUi, Props as _, Role};
 use crate::primitives::textures::UNTINTED;
 use crate::primitives::{
-    CachedTexture, Checker, CheckerArea, Draw, PaintSlot, Revision, RuleKind, TextureState, TextureStore, TextureStoreOptions, texture_factor, texture_side,
+    CachedTexture, Checker, CheckerArea, Draw, PaintSlot, Revision, RuleKind, TextureState, TextureStore, TextureStoreOptions, texture_factor,
+    texture_side,
 };
 use crate::runtime::env::Label;
 use crate::runtime::memory::Remember as _;
