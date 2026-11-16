@@ -33,8 +33,8 @@ pub enum RawFormat {
     Nv12,
     /// Luma only (`Y800`, `GREY`, `Y8  `).
     Gray8,
-    /// 24-bit R, G, B; rows padded to an even byte count (QuickTime `raw ` at depth 24). A sample
-    /// too short for the padding is read with unpadded rows.
+    /// 24-bit R, G, B; rows padded to an even byte count (QuickTime `raw ` at depth 24). The
+    /// last row's pad byte may be missing.
     Rgb24,
     /// 10-bit 4:2:2 Y'CbCr, six pixels in four little-endian words, rows padded to 128 bytes
     /// (QuickTime `v210`); shown at 8 bits.
@@ -118,14 +118,14 @@ pub fn decode(format: RawFormat, width: u32, height: u32, bottom_up: bool, s: &[
         }
         RawFormat::Rgb24 => {
             // QuickTime starts each scanline on an even byte, so odd widths carry one pad byte
-            let padded = (w * 3).next_multiple_of(2);
-            let stride = if s.len() >= padded * h { padded } else { w * 3 };
-            if s.len() < stride * h {
+            let (row_len, stride) = (w * 3, (w * 3).next_multiple_of(2));
+            if h > 0 && s.len() < stride * (h - 1) + row_len {
                 return Err(short());
             }
             let mut rgba = Vec::with_capacity(w * h * 4);
-            for row in s.chunks_exact(stride).take(h) {
-                for px in row[..w * 3].as_chunks::<3>().0 {
+            for r in 0..h {
+                let row = s.get(r * stride..r * stride + row_len).ok_or_else(short)?;
+                for px in row.as_chunks::<3>().0 {
                     rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
                 }
             }
@@ -281,6 +281,9 @@ mod tests {
         assert_eq!(decode(RawFormat::Rgb24, 1, 1, false, &[1, 2, 3])?, RawPixels::Rgba(vec![1, 2, 3, 255]));
         // odd width: each row carries one pad byte
         assert_eq!(decode(RawFormat::Rgb24, 1, 2, false, &[1, 2, 3, 0, 4, 5, 6, 0])?, RawPixels::Rgba(vec![1, 2, 3, 255, 4, 5, 6, 255]));
+        // the last row's pad byte may be missing, but earlier rows are still padded
+        assert_eq!(decode(RawFormat::Rgb24, 1, 2, false, &[1, 2, 3, 0, 4, 5, 6])?, RawPixels::Rgba(vec![1, 2, 3, 255, 4, 5, 6, 255]));
+        assert!(decode(RawFormat::Rgb24, 1, 2, false, &[1, 2, 3, 4, 5, 6]).is_err(), "unpadded rows are too short");
         assert_eq!(decode(RawFormat::Rgb24, 2, 1, false, &[1, 2, 3, 4, 5, 6])?, RawPixels::Rgba(vec![1, 2, 3, 255, 4, 5, 6, 255]));
         assert_eq!(decode(RawFormat::Bgrx32, 1, 1, false, &[1, 2, 3, 9])?, RawPixels::Rgba(vec![3, 2, 1, 255]));
         // v210: Cb, Y0, Cr in the first word, Y1 in the low bits of the second; rows are 128 bytes.
