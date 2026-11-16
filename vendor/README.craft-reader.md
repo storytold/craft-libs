@@ -98,6 +98,16 @@ the transferred decoder patches.
 Synthetic unit tests cover these boundaries; two version tests and the introductory doctest
 use synthetic PDFs so they do not rely on the absent upstream corpus. No corpus is copied.
 
+`DecodeLimits` also carries the two image limits: `with_max_decoded_image` sets the most bytes
+the last filter of an image of known size may produce (1 GiB by default), and
+`with_max_image_pixels` sets the most pixels an image or mask may have for the interpreter to
+decode it (2^28 by default, at most 2^32), before and after its codec decodes it. With 64-bit
+pointers a caller may raise either one; elsewhere a raise is clamped to the default.
+`image_size_ok` keeps the 2^28 default. An 8-bit `DeviceRGB` image with the default or inverted `/Decode` and no transfer function keeps its decoded samples as its
+RGB data instead of copying them into a second buffer. Tests:
+`decode_limits_tests::image_limits_default_and_caller_figures` in hayro-syntax and
+`image_limits` in `crates/pdf/tests/interpretation.rs`.
+
 Compatibility patches follow the resource scopes and text-showing order in
 [Hayro 0.8.0, revision ea9c81dc70cde40c64205986fdcfcd481fe934d8](https://github.com/LaurenzV/hayro/tree/ea9c81dc70cde40c64205986fdcfcd481fe934d8),
 under the same MIT OR Apache-2.0 licence. Explicit page and nested-object resource
