@@ -865,10 +865,7 @@ struct Exp<'a, 'r> {
     building: Vec<ItemId>,
 }
 
-pub fn export(p: &Project, seq_id: ItemId, opts: &ExportOptions, report: &mut Report) -> Result<String> {
-    export_with_report_limit(p, seq_id, opts, report, None)
-}
-/// Write FCPXML with an optional distinct-diagnostic limit.
+/// Write FCPXML with an optional distinct-diagnostic limit ([`export`] has none).
 pub fn export_with_report_limit(
     p: &Project,
     seq_id: ItemId,
@@ -876,7 +873,7 @@ pub fn export_with_report_limit(
     report: &mut Report,
     report_limit: Option<usize>,
 ) -> Result<String> {
-    let seq = p.sequence(seq_id).ok_or(Error::NoSequence(seq_id))?;
+    let Some(seq) = p.sequence(seq_id) else { return Err(Error::NoSequence(seq_id)) };
     let mut x = Exp {
         p,
         opts,
@@ -906,6 +903,11 @@ pub fn export_with_report_limit(
     out.push_str(&body);
     out.push_str("      </project>\n    </event>\n  </library>\n</fcpxml>\n");
     Ok(out)
+}
+
+/// Write the sequence `seq_id` as FCPXML; what it cannot carry is in `report`.
+pub fn export(p: &Project, seq_id: ItemId, opts: &ExportOptions, report: &mut Report) -> Result<String> {
+    export_with_report_limit(p, seq_id, opts, report, None)
 }
 
 /// One storyline element being written.
