@@ -43,6 +43,19 @@ pub struct Calibration {
     pub as_shot_white_xy: Option<(f64, f64)>,
     pub baseline_exposure: f64,
 }
+/// SMPTE ST 12-1 time code of a CinemaDNG frame: the crate's [`crate::Timecode`], which the full
+/// reader's `CinemaTags` uses too.
+pub use crate::Timecode;
+
+/// File-level capture fields, without image geometry or rendering policy.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CaptureInfo {
+    pub dng_version: [u8; 4],
+    pub frame_rate: Option<(i64, i64)>,
+    pub timecode: Option<Timecode>,
+    pub camera: Option<String>,
+    pub reel: Option<String>,
+}
 /// Metadata reader with the file's main and raw IFDs.
 pub struct Metadata<'a, 'i> {
     pub tiff: Tiff<'a>,
@@ -168,6 +181,33 @@ impl Metadata<'_, '_> {
         })
     }
 
+    fn text(&self, tag: u16) -> Option<String> {
+        self.main_tag(tag).and_then(|e| self.tiff.ascii(e).ok()).filter(|s| !s.is_empty())
+    }
+    /// Read file-level CinemaDNG and camera fields.
+    pub fn capture_info(&self) -> CaptureInfo {
+        let dng_version = self
+            .main_tag(tags::DNG_VERSION)
+            .and_then(|e| self.tiff.uints(e).ok())
+            .and_then(|v| v.get(..4).map(|v| [0, 1, 2, 3].map(|i| v[i] as u8)))
+            .unwrap_or_default();
+        let frame_rate = self.main_tag(tags::FRAME_RATE).and_then(|e| {
+            let b = self.tiff.value_bytes(e).ok()?;
+            if !matches!(e.ty, craft_tiff::classic::Type::SRational | craft_tiff::classic::Type::Rational) {
+                return None;
+            }
+            let n = i64::from(self.tiff.u32_of(b.get(0..4)?.try_into().ok()?) as i32);
+            let d = i64::from(self.tiff.u32_of(b.get(4..8)?.try_into().ok()?) as i32);
+            crate::dng::plausible_frame_rate(n, d).then_some((n, d))
+        });
+        let timecode = self.main_tag(tags::TIME_CODES).and_then(|e| self.tiff.value_bytes(e).ok()).and_then(Timecode::from_bytes);
+        let camera = self.text(tags::UNIQUE_CAMERA_MODEL).or_else(|| {
+            let mm = [self.text(tags::MAKE), self.text(tags::MODEL)].into_iter().flatten().collect::<Vec<_>>().join(" ");
+            (!mm.is_empty()).then_some(mm)
+        });
+        CaptureInfo { dng_version, frame_rate, timecode, camera, reel: self.text(tags::REEL_NAME) }
+    }
+
     /// The colour tags.
     pub fn calibration(&self) -> Result<Calibration> {
         let illum = |tag| self.main_tag(tag).map(|e| self.tiff.uint(e)).transpose();
@@ -191,6 +231,14 @@ impl Metadata<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timecode_is_the_crate_timecode() {
+        let tc = Timecode { frames: 12, seconds: 34, minutes: 12, hours: 9, drop_frame: true };
+        assert_eq!(Timecode::from_bytes(&[0x52, 0x34, 0x12, 0x09]), Some(tc));
+        let shared: crate::Timecode = tc;
+        assert_eq!(Timecode::from_bytes(&shared.to_bytes()), Some(tc));
+    }
 
     #[test]
     fn calibration_defaults_and_rejects_bad_rational() -> Result<()> {
