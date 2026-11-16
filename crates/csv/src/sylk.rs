@@ -241,20 +241,22 @@ fn parse_value(arg: &str) -> Value {
 
 /// ISO 6937's diacritics (codes 0xC1–0xCF): each code, its combining mark, and the letters it
 /// composes with, as pairs of letter and precomposed letter (from Unicode's canonical composition).
+/// A diacritic on a SPACE is the spacing accent (`´`, `¨`, `ˇ`, ...), as in glibc's ISO_6937 map; the
+/// grave, circumflex and tilde have none, since `` ` ``, `^` and `~` are plain ASCII.
 const ISO6937_DIACRITICS: [(u8, char, &str); 13] = [
     (0xC1, '\u{0300}', "AÀaàEÈeèIÌiìNǸnǹOÒoòUÙuùWẀwẁYỲyỳ"), // grave
-    (0xC2, '\u{0301}', "AÁaáCĆcćEÉeéGǴgǵIÍiíKḰkḱLĹlĺMḾmḿNŃnńOÓoóPṔpṕRŔrŕSŚsśUÚuúWẂwẃYÝyýZŹzź"), // acute
+    (0xC2, '\u{0301}', " ´AÁaáCĆcćEÉeéGǴgǵIÍiíKḰkḱLĹlĺMḾmḿNŃnńOÓoóPṔpṕRŔrŕSŚsśUÚuúWẂwẃYÝyýZŹzź"), // acute
     (0xC3, '\u{0302}', "AÂaâCĈcĉEÊeêGĜgĝHĤhĥIÎiîJĴjĵOÔoôSŜsŝUÛuûWŴwŵYŶyŷZẐzẑ"), // circumflex
     (0xC4, '\u{0303}', "AÃaãEẼeẽIĨiĩNÑnñOÕoõUŨuũVṼvṽYỸyỹ"), // tilde
-    (0xC5, '\u{0304}', "AĀaāEĒeēGḠgḡIĪiīOŌoōUŪuūYȲyȳ"),     // macron
-    (0xC6, '\u{0306}', "AĂaăEĔeĕGĞgğIĬiĭOŎoŏUŬuŭ"),         // breve
-    (0xC7, '\u{0307}', "AȦaȧBḂbḃCĊcċDḊdḋEĖeėFḞfḟGĠgġHḢhḣIİMṀmṁNṄnṅOȮoȯPṖpṗRṘrṙSṠsṡTṪtṫWẆwẇXẊxẋYẎyẏZŻzż"), // dot above
-    (0xC8, '\u{0308}', "AÄaäEËeëHḦhḧIÏiïOÖoötẗUÜuüWẄwẅXẌxẍYŸyÿ"), // diaeresis
-    (0xCA, '\u{030a}', "AÅaåUŮuůwẘyẙ"),                     // ring
-    (0xCB, '\u{0327}', "CÇcçDḐdḑEȨeȩGĢgģHḨhḩKĶkķLĻlļNŅnņRŖrŗSŞsşTŢtţ"), // cedilla
-    (0xCD, '\u{030b}', "OŐoőUŰuű"),                         // double acute
-    (0xCE, '\u{0328}', "AĄaąEĘeęIĮiįOǪoǫUŲuų"),             // ogonek
-    (0xCF, '\u{030c}', "AǍaǎCČcčDĎdďEĚeěGǦgǧHȞhȟIǏiǐjǰKǨkǩLĽlľNŇnňOǑoǒRŘrřSŠsšTŤtťUǓuǔZŽzž"), // caron
+    (0xC5, '\u{0304}', " ¯AĀaāEĒeēGḠgḡIĪiīOŌoōUŪuūYȲyȳ"),   // macron
+    (0xC6, '\u{0306}', " ˘AĂaăEĔeĕGĞgğIĬiĭOŎoŏUŬuŭ"),       // breve
+    (0xC7, '\u{0307}', " ˙AȦaȧBḂbḃCĊcċDḊdḋEĖeėFḞfḟGĠgġHḢhḣIİMṀmṁNṄnṅOȮoȯPṖpṗRṘrṙSṠsṡTṪtṫWẆwẇXẊxẋYẎyẏZŻzż"), // dot above
+    (0xC8, '\u{0308}', " ¨AÄaäEËeëHḦhḧIÏiïOÖoötẗUÜuüWẄwẅXẌxẍYŸyÿ"), // diaeresis
+    (0xCA, '\u{030a}', " ˚AÅaåUŮuůwẘyẙ"),                   // ring
+    (0xCB, '\u{0327}', " ¸CÇcçDḐdḑEȨeȩGĢgģHḨhḩKĶkķLĻlļNŅnņRŖrŗSŞsşTŢtţ"), // cedilla
+    (0xCD, '\u{030b}', " ˝OŐoőUŰuű"),                       // double acute
+    (0xCE, '\u{0328}', " ˛AĄaąEĘeęIĮiįOǪoǫUŲuų"),           // ogonek
+    (0xCF, '\u{030c}', " ˇAǍaǎCČcčDĎdďEĚeěGǦgǧHȞhȟIǏiǐjǰKǨkǩLĽlľNŇnňOǑoǒRŘrřSŠsšTŤtťUǓuǔZŽzž"), // caron
 ];
 
 /// ISO 6937's spacing characters above ASCII (codes 0xA1–0xFE that aren't diacritics).
