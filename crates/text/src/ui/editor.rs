@@ -32,7 +32,7 @@ use craft_behavior::kurbo::Point;
 use craft_behavior::{
     CancelReason, CanvasView, CursorIcon, CursorPriority, EditCommand, EditorInput, GesturePhase, Metrics, PressPhase, Sense, TextPos,
 };
-use craft_ui::canvas::canvas_space;
+use craft_ui::canvas::{canvas_space, context_click};
 use craft_ui::contract::{
     Animate as _, Bind, BindMut, CommandSet as _, Commands as _, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Outcome,
     PaintUi, PartsCx, Pointer as _, Props as _, Remember as _, Role,
@@ -300,6 +300,9 @@ pub struct TextEditorOutput {
     pub ended: Option<EditorEnd>,
     /// The Character panel command was pressed: the host shows or hides the panel. Set for the one pass.
     pub character_panel: bool,
+    /// Where a secondary press on the editor was released, for the host's context menu (the type edit menu, which acts
+    /// on the live edit). The editor's part takes the press, so the canvas's tool never sees it. Set for the one pass.
+    pub context: Option<Pos2>,
 }
 
 impl Outcome for TextEditorOutput {
@@ -352,6 +355,7 @@ pub struct TextEditor<'a> {
     changed: bool,
     selection_changed: bool,
     character_panel: bool,
+    context: Option<Pos2>,
     ended: Option<EditorEnd>,
 }
 
@@ -367,6 +371,7 @@ impl<'a> TextEditor<'a> {
             changed: false,
             selection_changed: false,
             character_panel: false,
+            context: None,
             ended: None,
         }
         .label(label)
@@ -471,7 +476,7 @@ impl Component for TextEditor<'_> {
     }
 
     fn sense(&self) -> Sense {
-        Sense::CLICK | Sense::DRAG | Sense::FOCUS | Sense::TAKE_FOCUS
+        Sense::CLICK | Sense::DRAG | Sense::CONTEXT_CLICK | Sense::FOCUS | Sense::TAKE_FOCUS
     }
 
     fn measure(&mut self, _cx: &MeasureCx<'_, Self>) -> Vec2 {
@@ -638,6 +643,7 @@ impl Component for TextEditor<'_> {
         self.changed = done.changed;
         self.selection_changed = selection != before;
         self.character_panel = character_panel;
+        self.context = context_click(&press);
     }
 
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
@@ -724,6 +730,7 @@ impl Component for TextEditor<'_> {
             selection_changed: self.selection_changed,
             edit: cx.edit_response(),
             character_panel: self.character_panel,
+            context: self.context,
             ended: self.ended,
         }
     }
