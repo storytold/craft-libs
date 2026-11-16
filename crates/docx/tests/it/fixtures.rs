@@ -2197,6 +2197,50 @@ fn formatting_revisions_round_trip() {
     assert_eq!(again.revisions, d.revisions);
 }
 
+#[test]
+fn numbering_change_without_active_list_roundtrips() {
+    let body = r#"<w:p><w:pPr><w:numPr><w:numberingChange w:id="1" w:author="Alice" w:date="2026-10-01T00:00:00Z" w:original="%1:1:0:."/></w:numPr></w:pPr><w:r><w:t>Removed</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    assert!(p[0].props.numbering.is_none());
+    let nc = p[0].props.num_change.as_deref().expect("numberingChange read back");
+    assert_eq!(nc.original, "%1:1:0:.");
+
+    let bytes = craft_docx::write(&d).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:numPr><w:numberingChange w:id="#), "{xml}");
+    assert!(xml.contains(r#"w:original="%1:1:0:."/></w:numPr>"#), "{xml}");
+
+    let again = craft_docx::read(&bytes).unwrap();
+    let ap = paras(&again);
+    assert!(ap[0].props.numbering.is_none());
+    let anc = ap[0].props.num_change.as_deref().expect("numberingChange preserved after save");
+    assert_eq!(anc.original, "%1:1:0:.");
+}
+
+#[test]
+fn numbering_change_original_preserves_long_values_within_bound() {
+    let long_orig = "%1:1:0:.".repeat(64); // 512 chars, well past the old 256-char cap
+    assert!(long_orig.len() > 256 && long_orig.len() < 4096);
+    let over_cap = "x".repeat(5000);
+    let body = format!(
+        r#"<w:p><w:pPr><w:numPr><w:numberingChange w:id="1" w:author="Alice" w:original="{long_orig}"/></w:numPr></w:pPr><w:r><w:t>Long</w:t></w:r></w:p>
+<w:p><w:pPr><w:numPr><w:numberingChange w:id="2" w:author="Alice" w:original="{over_cap}"/></w:numPr></w:pPr><w:r><w:t>Bounded</w:t></w:r></w:p>"#
+    );
+    let d = read_body(&body);
+    let p = paras(&d);
+    assert_eq!(p[0].props.num_change.as_deref().map(|n| n.original.as_str()), Some(long_orig.as_str()));
+    assert_eq!(p[1].props.num_change.as_deref().map(|n| n.original.chars().count()), Some(4096));
+
+    let bytes = craft_docx::write(&d).unwrap();
+    let again = craft_docx::read(&bytes).unwrap();
+    let ap = paras(&again);
+    assert_eq!(ap[0].props.num_change.as_deref().map(|n| n.original.as_str()), Some(long_orig.as_str()));
+}
+
 /// A package with `styles`, a theme (accent1 4472C4, accent2 ED7D31, major font "Major Face") and,
 /// when given, `settings`.
 fn themed_docx(body: &str, styles: &str, settings: Option<&str>) -> Document {
