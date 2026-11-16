@@ -285,11 +285,23 @@ fn mixed_headers(deep_first: bool, tiled: bool, (w, h): (usize, usize)) -> Vec<u
 /// [`mixed_headers`] with the flat part's compression code (0 for none, or 3 for ZIP, which
 /// holds 16 scan lines a block), its float channels, and the width and height of its tiles.
 fn mixed_headers_with(deep_first: bool, tiled: bool, (w, h): (usize, usize), compression: u8, flat_channels: &[&str], tile: u32) -> Vec<u8> {
+    mixed_headers_with_deep_size(deep_first, tiled, (w, h), compression, flat_channels, tile, (3, 2))
+}
+
+fn mixed_headers_with_deep_size(
+    deep_first: bool,
+    tiled: bool,
+    (w, h): (usize, usize),
+    compression: u8,
+    flat_channels: &[&str],
+    tile: u32,
+    deep_size: (usize, usize),
+) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&0x0131_2f76u32.to_le_bytes());
     out.extend_from_slice(&(2u32 | 0x800 | 0x1000).to_le_bytes());
     for deep in if deep_first { [true, false] } else { [false, true] } {
-        let (w, h, channels): (usize, usize, &[&str]) = if deep { (3, 2, &["A"]) } else { (w, h, flat_channels) };
+        let (w, h, channels): (usize, usize, &[&str]) = if deep { (deep_size.0, deep_size.1, &["A"]) } else { (w, h, flat_channels) };
         let mut chlist = Vec::new();
         for name in channels {
             chlist.extend_from_slice(name.as_bytes());
@@ -612,4 +624,30 @@ fn the_flat_parts_of_a_mixed_file_must_fit_the_file() {
     }
     // The deep part's samples are not counted, and a small flat part passes the same ratio.
     assert!(parts(&mixed_file(false, false).0, &tight).is_ok());
+}
+
+#[test]
+fn deep_samples_do_not_count_against_the_flat_expansion_ratio() {
+    // The 4 MiB deep plane would exceed max_ratio=1 plus the 1 MiB slack if counted.
+    // Header inspection does not allocate those samples; deep decoding bounds its own counts.
+    let headers = mixed_headers_with_deep_size(false, false, (1, 1), 0, &["R"], 2, (1024, 1024));
+    let limits = Limits { max_ratio: 1, max_bytes: 8 * 1024 * 1024, ..Limits::default() };
+    assert!(parts(&headers, &limits).is_ok());
+}
+
+#[test]
+fn mixed_display_decode_bounds_each_block_not_the_whole_flat_part() {
+    for (tiled, block_bytes) in [(false, 36), (true, 48)] {
+        for deep_first in [false, true] {
+            let (bytes, _) = mixed_file(deep_first, tiled);
+            let flat = usize::from(deep_first);
+            let keep = |name: &str| name == "flat.R";
+            // The full flat part is 72 bytes; the selected plane is 24 bytes.
+            let limits = Limits { max_bytes: block_bytes, ..Limits::default() };
+            let part = decode_display_part(&bytes, flat, &keep, &|_| 0.0, &limits).unwrap();
+            assert_eq!(part.channels[0].samples, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+            let tight = Limits { max_bytes: block_bytes - 1, ..limits };
+            assert!(matches!(decode_display_part(&bytes, flat, &keep, &|_| 0.0, &tight), Err(Error::LimitExceeded(_))));
+        }
+    }
 }
