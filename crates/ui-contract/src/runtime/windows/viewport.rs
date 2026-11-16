@@ -128,7 +128,7 @@ pub(crate) fn take_close_request(ctx: &Context, id: Id) -> bool {
 /// Whether container `id` shows in an OS window that has not reported its place yet: its body lays out in room the OS
 /// has not given, so what it takes there is no size of its content.
 pub(crate) fn unplaced(ctx: &Context, id: Id) -> bool {
-    super::WindowHost::of(ctx).viewports_available()
+    super::mount_window(ctx, id)
         && PerViewport::<Record>::with(ctx, viewports::viewport_id(id), |record| record.kind.is_some() && record.seen.is_none())
 }
 

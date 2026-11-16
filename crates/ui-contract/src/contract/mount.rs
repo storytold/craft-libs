@@ -14,7 +14,7 @@ use crate::runtime::layout_memory;
 use crate::runtime::memory::{MemoryStage, SaveKey, sub};
 use crate::runtime::motion::{self, Presence};
 use crate::runtime::overlay::CloseReason;
-use crate::runtime::windows::{self, ViewportOpen, WindowHost, WindowSpec};
+use crate::runtime::windows::{self, ViewportOpen, WindowSpec};
 use craft_behavior::ScopeKind;
 use egui::{Id, Pos2, Rect, Ui, Vec2};
 
@@ -51,7 +51,7 @@ pub(super) fn host(props: &ContainerProps, at: &HostCx<'_>, open: bool, title: &
         },
         Mount::FullWindow => full_window(props.focus),
         Mount::Viewport { fallback, spec } => {
-            let viewports = WindowHost::of(ctx).viewports_available();
+            let viewports = windows::mount_window(ctx, at.id);
             // A full-window container without OS windows covers the main window, as `Mount::FullWindow` does.
             if !viewports && fallback.is_full_window() {
                 full_window(fallback.focus)

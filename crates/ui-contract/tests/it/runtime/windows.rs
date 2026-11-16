@@ -1,7 +1,7 @@
 //! `runtime::windows`: the input hook per viewport, window info per viewport, the press release after an OS
-//! resize (H4), the raise of a modal's window, the mount of a full-window container, the size of a content-sized
-//! window, the app id of child windows, injected keys across a focus loss, non-finite injected points, the window
-//! that has the keys, and `act`.
+//! resize (H4), the raise of a modal's window, the mount of a full-window container (in a window of its own, or in a
+//! full-screen or Wayland-maximized main window), the size of a content-sized window, the app id of child windows,
+//! injected keys across a focus loss, non-finite injected points, the window that has the keys, and `act`.
 
 use craft_behavior::{Cursor, CursorIcon, PointerButton};
 use craft_host::target::{Backend, Caps, Os, ShellInfo, WindowChrome, WindowInfo, WindowKind};
@@ -141,6 +141,24 @@ fn a_blocking_modal_is_raised_when_the_main_window_gains_focus() {
     windows.root_info(focus(true));
     assert!(raised_child(&modal_frame(&windows)), "the main window gained focus: the modal's window is raised");
     assert!(!raised_child(&modal_frame(&windows)), "the main window keeps focus: nothing more is raised");
+
+    // A full-window dialog in a window of its own (the Camera Raw form) is raised the same way.
+    let windows = Windows::new();
+    let frame = || {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::full_window("Workspace").show(ui, |_, _| {});
+        })
+    };
+    windows.root_info(focus(false));
+    let mut out = None;
+    for _ in 0..4 {
+        out = Some(frame());
+    }
+    let (dialog, _) = builder_titled(&out.expect("the frames ran"), "Workspace");
+    let raised = |out: &Out| out.commands.iter().any(|(id, command)| *id == dialog && *command == ViewportCommand::Minimized(false));
+    assert!(!raised(&frame()), "the main window stays unfocused: the dialog's window is not raised");
+    windows.root_info(focus(true));
+    assert!(raised(&frame()), "the main window gained focus: the dialog's window is raised");
 }
 
 /// A container mounted in an OS viewport that opens as `spec`, with a body the trial gives it.
@@ -262,6 +280,59 @@ fn a_full_window_viewport_fills_the_main_window_without_viewports_and_opens_its_
     let (_, tree) = out.trees.iter().rfind(|(id, _)| *id == ViewportId::ROOT).expect("the root's tree");
     let shown = tree.keys().into_iter().find(|key| tree.role_of(*key) == Some(Role::GROUP) && tree.name_of(*key) == Some("Workspace"));
     assert_eq!(shown.and_then(|key| tree.bounds_of(key)), Some(content.get()), "the workspace covers the main window");
+}
+
+/// FW3: a viewport mount opened from a full-screen window, or from a maximized one on Wayland, shows in that window
+/// instead of a window of its own: a window opened over it would cover it, the compositor would send it no frames, and
+/// the dialog drawn inside them would freeze. A main window that goes full screen under an open dialog takes the dialog
+/// in, and the dialog stays open.
+#[trial]
+fn a_viewport_mount_stays_in_a_full_screen_or_wayland_maximized_window() {
+    let state = |fullscreen: bool, maximized: bool| ViewportInfo { fullscreen: Some(fullscreen), maximized: Some(maximized), ..ViewportInfo::default() };
+    let frame = |windows: &Windows| {
+        windows.frame(vec![], vec![], |ui| {
+            Palette::full_window("Workspace").show(ui, |_, _| {});
+        })
+    };
+    let own_window = |out: &Out| out.builders.iter().any(|(_, builder)| builder.title.as_deref() == Some("Workspace"));
+    let in_root = |out: &Out| {
+        out.trees.iter().rfind(|(id, _)| *id == ViewportId::ROOT).is_some_and(|(_, tree)| {
+            tree.keys().into_iter().any(|key| tree.role_of(key) == Some(Role::GROUP) && tree.name_of(key) == Some("Workspace"))
+        })
+    };
+    let cases = [
+        (Backend::X11, false, false, true),
+        (Backend::X11, true, false, false),
+        (Backend::X11, false, true, true),
+        (Backend::Wayland, false, false, true),
+        (Backend::Wayland, true, false, false),
+        (Backend::Wayland, false, true, false),
+    ];
+    for (backend, fullscreen, maximized, own) in cases {
+        let windows = Windows::with(InstallSpec::new(ShellInfo::default().backend(backend), Arc::new(FakeSystem::new())));
+        windows.root_info(state(fullscreen, maximized));
+        let mut out = None;
+        for _ in 0..4 {
+            out = Some(frame(&windows));
+        }
+        let out = out.expect("the frames ran");
+        let case = format!("{backend:?}, full screen {fullscreen}, maximized {maximized}");
+        assert_eq!(own_window(&out), own, "{case}: a window of its own");
+        assert_eq!(in_root(&out), !own, "{case}: shown in the main window");
+    }
+
+    let windows = Windows::with(InstallSpec::new(ShellInfo::default().backend(Backend::X11), Arc::new(FakeSystem::new())));
+    for _ in 0..4 {
+        frame(&windows);
+    }
+    assert!(own_window(&frame(&windows)), "a normal main window: the dialog opens its own window");
+    windows.root_info(state(true, false));
+    let mut out = None;
+    for _ in 0..4 {
+        out = Some(frame(&windows));
+    }
+    let out = out.expect("the frames ran");
+    assert!(!own_window(&out) && in_root(&out), "the main window went full screen: the dialog shows in it and is still open");
 }
 
 /// A window sized by its content sends no size before it has reported its place, so it never opens at what its body

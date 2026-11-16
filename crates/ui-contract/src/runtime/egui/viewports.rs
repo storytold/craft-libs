@@ -8,6 +8,11 @@ pub(crate) fn available(ctx: &Context) -> bool {
     !ctx.embed_viewports()
 }
 
+/// The viewport the running viewport was opened from; the root for the root.
+pub(crate) fn parent(ctx: &Context) -> ViewportId {
+    ctx.parent_viewport_id()
+}
+
 /// How a viewport opens.
 pub(crate) struct Spec<'a> {
     /// The window title.

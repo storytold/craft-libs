@@ -1,5 +1,5 @@
-//! The full-window parts' own logic: the view's fit and zoom rules, the wheel zoom, Escape on a focused canvas and the
-//! mapped overlay.
+//! The full-window parts' own logic: the view's fit and zoom rules, the wheel zoom, Escape on a focused canvas, the
+//! close of the dialog's own window and the mapped overlay.
 
 use craft_behavior::PixelSize;
 use craft_ui::canvas::ViewCommands;
@@ -312,6 +312,52 @@ mod escape {
             assert_eq!(open.get(), takes_escape, "Escape closes the dialog only when the tool leaves it (tool takes it: {takes_escape})");
             assert_eq!(window_cancels.get(), 0, "the window sees no Escape (tool takes it: {takes_escape})");
         }
+    }
+}
+
+/// A full-window dialog in a window of its own.
+mod own_window {
+    use craft_ui::contract::{Bind, ShowContainer as _};
+    use craft_ui::dialog::{DialogResult, FullWindowDialog};
+    use craft_ui::runtime::overlay::CloseReason;
+    use craft_ui::runtime::windows::WindowSpec;
+    use craft_ui::testing::trial;
+    use craft_ui_test_kit::windows::Windows;
+    use egui::{ViewportEvent, ViewportInfo};
+    use std::cell::Cell;
+
+    // The OS closing the dialog's window (its close button, a window manager's close) is a cancel: the dialog reports
+    // `Requested`, which every host but OK reads as Cancel, so an outer gesture over its edits is taken back.
+    #[trial]
+    fn closing_a_full_window_dialogs_own_window_cancels_it() {
+        let windows = Windows::new();
+        let open = Cell::new(true);
+        let closed = Cell::new(None);
+        let frame = || {
+            windows.frame(vec![], vec![], |ui| {
+                let mut is_open = open.get();
+                let output = FullWindowDialog::new("Workspace")
+                    .own_window(WindowSpec::dialog())
+                    .outer_gesture(true)
+                    .opened(Bind::bound(&mut is_open))
+                    .show(ui, |_, _| {})
+                    .output;
+                open.set(is_open);
+                if let Some(reason) = output.closed {
+                    closed.set(Some((reason, matches!(output.result(|| ()), Some(DialogResult::Cancel)))));
+                }
+            })
+        };
+        for _ in 0..4 {
+            frame();
+        }
+        assert!(open.get(), "the dialog opened in its own window");
+        windows.child_info(ViewportInfo { events: vec![ViewportEvent::Close], ..ViewportInfo::default() });
+        for _ in 0..2 {
+            frame();
+        }
+        assert!(!open.get(), "closing the dialog's window closes the dialog");
+        assert_eq!(closed.get(), Some((CloseReason::Requested, true)), "the close is a cancel");
     }
 }
 

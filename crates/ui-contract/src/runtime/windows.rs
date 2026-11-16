@@ -10,7 +10,7 @@ use crate::runtime::frame::PerViewport;
 use crate::runtime::overlay;
 use crate::runtime::pass_state;
 use craft_behavior::{Cursor, CursorIcon, CursorPriority};
-use craft_host::target::{Caps, EdgeInsets, Os, ShellInfo, WindowChrome, WindowKind};
+use craft_host::target::{Backend, Caps, EdgeInsets, Os, ShellInfo, WindowChrome, WindowKind, WindowState};
 use craft_window::desktop::Desktop;
 use craft_window::native::NativeWindow;
 use craft_window::policy::{Captions, Decision, Frame, LayoutWatch};
@@ -299,6 +299,28 @@ pub(crate) fn begin(ctx: &Context) {
 /// shows the blocked cursor and refuses to close.
 pub(crate) fn blocking_modal(ctx: &Context) -> Option<ViewportId> {
     overlay::modal_viewport(ctx, pass::current_viewport(ctx))
+}
+
+/// Whether container `id`'s viewport mount shows in an OS window of its own this pass: OS viewports are available,
+/// and the window it opens from is neither full screen nor, on Wayland, maximized. A window opened over such a
+/// window covers it; the compositor then sends the covered window no frames, and the immediate viewport, drawn inside
+/// them, freezes. Otherwise the mount shows its fallback layer in the opener.
+///
+/// It reads only this pass's facts, so the mount, the body (which runs inside the child's pass) and the window steps
+/// agree within a pass.
+pub(crate) fn mount_window(ctx: &Context, id: Id) -> bool {
+    if !WindowHost::of(ctx).viewports_available() {
+        return false;
+    }
+    let current = pass::current_viewport(ctx);
+    let opener = if current == viewports::viewport_id(id) { viewports::parent(ctx) } else { current };
+    let shell = shell_of(ctx, opener);
+    let covers = match shell.window.state {
+        WindowState::Fullscreen => true,
+        WindowState::Maximized => shell.backend == Backend::Wayland,
+        _ => false,
+    };
+    !covers
 }
 
 /// Refuses the close request of the running viewport while an app-modal layer blocks it, and raises the modal's
