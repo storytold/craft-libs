@@ -277,6 +277,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.room = self.mount_room(props, ui, id, at);
         let env = Env::of(ui);
         self.given = self.given_axes(props, &env, at);
+        self.fixed_height = self.fixed_height(props, at);
         self.passes = self.passes_width(props, &env, at);
         self.across = self.held(props, &env) && matches!(env.column, Some(ColumnSweep::Column(_)));
         self.in_column = label::in_column(ui);
@@ -333,6 +334,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             None => self.mount_room(&props, at.ui, id, at.at),
         };
         self.given = self.given_axes(&props, at.env, at.at);
+        self.fixed_height = self.fixed_height(&props, at.at);
         self.passes = self.passes_width(&props, at.env, at.at);
         self.across = self.held(&props, at.env) && matches!(at.env.column, Some(ColumnSweep::Column(_)));
         // A held container across its column measures at the column's width.

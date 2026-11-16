@@ -144,6 +144,9 @@ pub(super) struct BodyHooks<'b> {
     /// The axes (horizontal, vertical) the container is given: it fills them, and its own container was given them
     /// too or it is shown at a rect. Along the others it sizes from its content.
     given: (bool, bool),
+    /// The height the container is given is a fixed extent (`fixed_height`): a rect it is shown at, a pane's, or the
+    /// row line it fills.
+    fixed_height: bool,
     /// A content-sized container that passes the width its column gives it on to its own body (`passes`): it is not
     /// given the width, but its body is laid out as if it were.
     passes: bool,
@@ -219,6 +222,7 @@ impl<'b> BodyHooks<'b> {
             reports: Vec::new(),
             fixed: false,
             given: (false, false),
+            fixed_height: false,
             passes: false,
             across: false,
             in_column: true,

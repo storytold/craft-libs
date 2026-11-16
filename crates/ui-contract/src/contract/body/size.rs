@@ -140,11 +140,18 @@ impl<'b> BodyHooks<'b> {
         matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline)) && self.sizing(props) == Sizing::Content && env.given_column
     }
 
+    /// Whether the height the container is given (`given_axes`) is a fixed extent: a rect it is shown at, a pane's, or
+    /// the row line a fill-width row fills. An inline container that fills takes a share of its parent's room, which
+    /// follows the content.
+    pub(super) fn fixed_height(&self, props: &ContainerProps, at: ShowAt) -> bool {
+        self.given.1 && !(matches!((at, &props.mount), (ShowAt::Flow, Mount::Inline)) && self.sizing(props) == Sizing::Fill)
+    }
+
     /// Whether the container centres its body's line in the height it is given: its body is a row that does not scroll
-    /// along the height, and the container is given its height (a rect it is shown at, a fill, a fixed row line it
-    /// fills). Its padding then keeps the members off the start and end edges only (`pad_edges`).
+    /// along the height, and that height is a fixed extent (`fixed_height`). Its padding then keeps the members off the
+    /// start and end edges only (`pad_edges`).
     pub(super) fn centres_line(&self, props: &ContainerProps) -> bool {
-        self.given.1 && unwrapped_row(props) && !scroll_of(props).is_some_and(|scroll| scroll.vertical_on())
+        self.given.1 && self.fixed_height && unwrapped_row(props) && !scroll_of(props).is_some_and(|scroll| scroll.vertical_on())
     }
 
     /// The edges the container's padding tier applies to: `ContainerProps::pad_edges`, or the start and end edges where
