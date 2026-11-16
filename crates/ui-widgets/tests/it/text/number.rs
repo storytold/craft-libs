@@ -469,6 +469,8 @@ fn a_draft_that_is_no_number_owes_no_range_alert() {
             let out = NumberField::new("Amount", Bind::bound(&mut now)).id_salt("amount").range(0.0..=100.0).commit_decimals(0).show(ui);
             held.set(now);
             seen.borrow_mut().extend(out.out_of_range.clone());
+            // Where Tab takes the focus, so the field commits.
+            NumberField::new("Other", Bind::bound(&mut Some(1.0))).id_salt("other").show(ui);
         });
         fixture.settle();
         let amount = fixture.by_label("Amount").expect("the field");
