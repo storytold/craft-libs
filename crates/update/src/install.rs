@@ -3673,6 +3673,117 @@ esac
         );
     }
 
+    /// A Flatpak the user installed from a repository is never replaced by the launcher's bundle:
+    /// the refusal names the repository's own update command, and nothing is downloaded.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_repository_flatpak_is_not_replaced_by_a_bundle_install() {
+        let app = crate::App::by_id("photocraft").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let http = Http::new(crate::TEST_AGENT).unwrap();
+        let mut phases = Vec::new();
+        let mut phase = |p: JobPhase| phases.push(p);
+        let mut job = Job {
+            http: &http,
+            paths: &paths,
+            stop: &Stop::default(),
+            phase: &mut phase,
+            install_locations: &InstallLocations::default(),
+            replace: false,
+        };
+        let release = Release { version: version::parse("0.20.0"), tag: "v0.20.0".into(), ..Release::default() };
+        let asset = Asset { name: "photocraft-0.20.0-linux-x86_64.flatpak".into(), ..Asset::default() };
+        let installed = Installed {
+            version: version::parse("0.19.0"),
+            source: InstallSource::Flatpak,
+            location: app.bundle_id(),
+            package: Some(app.bundle_id()),
+            externally_managed: true,
+            origin: Some("flatpark".into()),
+            installation: Some("work".into()),
+        };
+        let error = install(app, &release, &asset, PackageKind::Flatpak, Some(&installed), None, &mut job).unwrap_err();
+        assert_eq!(
+            error,
+            "PhotoCraft was installed from a Flatpak repository. Update it with flatpak update --installation=work ai.storyteller.photocraft"
+        );
+        assert!(phases.is_empty(), "the bundle installer started for a Flatpak the user manages");
+        assert!(!paths.cache.exists(), "the refusal must come before anything is downloaded");
+    }
+
+    /// `update_flatpak_app` drives the user's own copy: the scope flag for the installation it sits
+    /// in, a successful update, and Flatpak's error text with its `error: ` prefix removed. A
+    /// stand-in `flatpak` on PATH reports what it was asked to run; the test runs in child
+    /// processes so that PATH stays private to it (as `updater`'s pretend-version test does).
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_flatpak_from_a_repository_is_updated_through_its_own_installation() {
+        const NAME: &str = "install::tests::a_flatpak_from_a_repository_is_updated_through_its_own_installation";
+        const DIR: &str = "CRAFT_UPDATE_FAKE_FLATPAK_DIR";
+        if std::env::var_os(DIR).is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let script = r#"#!/bin/sh
+echo "$(basename "$0") $*" >> "$CRAFT_UPDATE_FAKE_FLATPAK_CALLS"
+case "$*" in
+*denied.app*) echo "error: Permission denied" >&2; exit 1 ;;
+*diskfull.app*) echo "Error: Disk full" >&2; exit 1 ;;
+*silent.app*) exit 1 ;;
+esac
+exit 0
+"#;
+            for program in ["flatpak", "flatpak-spawn"] {
+                let path = dir.path().join(program);
+                std::fs::write(&path, script).unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            let path = format!("{}:{}", dir.path().display(), std::env::var("PATH").unwrap_or_default());
+            for sandboxed in [false, true] {
+                let calls = dir.path().join(format!("calls-{sandboxed}"));
+                let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+                cmd.args(["--exact", NAME, "--nocapture"])
+                    .env(DIR, dir.path())
+                    .env("CRAFT_UPDATE_FAKE_FLATPAK_CALLS", &calls)
+                    .env("PATH", &path)
+                    .env_remove("FLATPAK_ID");
+                if sandboxed {
+                    cmd.env("FLATPAK_ID", "ai.storyteller.photocraft");
+                }
+                let status = cmd.status().unwrap();
+                assert!(status.success(), "the sandboxed={sandboxed} run failed");
+            }
+            return;
+        }
+        let calls = std::env::var_os("CRAFT_UPDATE_FAKE_FLATPAK_CALLS").map(PathBuf::from).unwrap();
+        let app = crate::App::by_id("photocraft").unwrap();
+        let stop = Stop::default();
+        let mut phase = |_| ();
+        let id = app.bundle_id();
+        assert_eq!(linux::update_flatpak_app(app, &id, None, &stop, &mut phase), Ok(()));
+        assert_eq!(
+            linux::update_flatpak_app(app, "denied.app", Some("user"), &stop, &mut phase),
+            Err("Flatpak couldn't update PhotoCraft: Permission denied".to_string())
+        );
+        assert_eq!(
+            linux::update_flatpak_app(app, "diskfull.app", Some("work"), &stop, &mut phase),
+            Err("Flatpak couldn't update PhotoCraft: Disk full".to_string())
+        );
+        assert_eq!(
+            linux::update_flatpak_app(app, "silent.app", Some("system"), &stop, &mut phase),
+            Err("Flatpak couldn't update PhotoCraft".to_string())
+        );
+        let prefix = if process::in_sandbox() { "flatpak-spawn --host --watch-bus flatpak" } else { "flatpak" };
+        let expected: Vec<String> = vec![
+            format!("{prefix} update --system -y --noninteractive {id}"),
+            format!("{prefix} update --user -y --noninteractive denied.app"),
+            format!("{prefix} update --installation=work -y --noninteractive diskfull.app"),
+            format!("{prefix} update --system -y --noninteractive silent.app"),
+        ];
+        let calls = std::fs::read_to_string(&calls).unwrap();
+        assert_eq!(calls.lines().map(str::to_string).collect::<Vec<_>>(), expected);
+    }
+
     #[test]
     #[cfg(target_os = "linux")]
     fn update_flatpak_app_respects_cancellation() {
