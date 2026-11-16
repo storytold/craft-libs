@@ -12,6 +12,8 @@ use crate::sprm::{self, Prl, Toggle};
 const C_BOLD: u16 = 0x0835;
 const C_ITALIC: u16 = 0x0836;
 const C_STRIKE: u16 = 0x0837;
+const C_OUTLINE: u16 = 0x0838;
+const C_SHADOW: u16 = 0x0839;
 const C_SMALL_CAPS: u16 = 0x083A;
 const C_CAPS: u16 = 0x083B;
 const C_HIDDEN: u16 = 0x083C; // sprmCFVanish
@@ -19,7 +21,10 @@ const C_KUL: u16 = 0x2A3E; // underline style (Kul)
 const C_ICO: u16 = 0x2A42; // palette colour
 const C_CR: u16 = 0x6870; // explicit COLORREF
 const C_HPS: u16 = 0x4A43; // half-points
-const C_HPS_POS: u16 = 0x4845; // super/subscript by half-points
+const C_HPS_POS: u16 = 0x4845; // raised (+) or lowered (−) position in half-points
+const C_ISS: u16 = 0x2A48; // superscript (1) or subscript (2)
+const C_DXA_SPACE: u16 = 0x8840; // character spacing in twips
+const C_HPS_KERN: u16 = 0x484B; // kerning from this size, in half-points
 const C_FTC0: u16 = 0x4A4F; // font index (ASCII)
 const C_FTC1: u16 = 0x4A50; // East Asian font index (sprmCRgFtc1)
 const C_FTC_BI: u16 = 0x4A5E; // complex-script font index (sprmCFtcBi)
@@ -45,6 +50,9 @@ const P_DYA_LINE: u16 = 0x6412;
 const P_KEEP: u16 = 0x2405; // keep lines together
 const P_KEEP_FOLLOW: u16 = 0x2406; // keep with next
 const P_PAGE_BREAK_BEFORE: u16 = 0x2407;
+const P_NO_LINE_NUMBERS: u16 = 0x240C; // sprmPFNoLineNumb
+const P_NO_AUTO_HYPH: u16 = 0x242A; // sprmPFNoAutoHyph
+const P_WIDOW_CONTROL: u16 = 0x2431; // sprmPFWidowControl
 const P_OUTLVL: u16 = 0x2640;
 // Paragraph borders ([MS-DOC] §2.6.2). The 80 forms carry a Brc80 (palette colour), the
 // newer ones a BrcOperand: cb(1) + Brc(8, with a full COLORREF).
@@ -184,6 +192,13 @@ fn s16_of(p: &Prl) -> Option<i16> {
     u16_of(p).map(|v| v as i16)
 }
 
+/// Set `prop` from a Bool8 operand: 0 off, anything else on. A missing operand changes nothing.
+fn set_flag(prop: &mut Option<bool>, p: &Prl) {
+    if let Some(&b) = p.operand.first() {
+        *prop = Some(b != 0);
+    }
+}
+
 fn set(props: &mut Option<bool>, t: Toggle, base: bool) {
     *props = Some(match t {
         Toggle::On => true,
@@ -243,15 +258,33 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
                 p.size = Some((hps as f32 / 2.0).clamp(1.0, 1638.0));
             }
         }
+        // A raised or lowered position, not superscript: Word writes superscript and subscript as
+        // sprmCIss, and reads this one as `w:position` (Word 2016's reading of its own files).
         C_HPS_POS => {
             if let Some(pos) = s16_of(prl) {
-                p.vert_align = Some(match pos {
-                    pos if pos > 0 => VertAlign::Superscript,
-                    pos if pos < 0 => VertAlign::Subscript,
-                    _ => VertAlign::Baseline,
-                });
+                p.position = Some((f32::from(pos) / 2.0).clamp(-1584.0, 1584.0));
             }
         }
+        C_ISS => {
+            p.vert_align = match prl.operand.first().copied() {
+                Some(0) => Some(VertAlign::Baseline),
+                Some(1) => Some(VertAlign::Superscript),
+                Some(2) => Some(VertAlign::Subscript),
+                _ => p.vert_align,
+            };
+        }
+        C_DXA_SPACE => {
+            if let Some(v) = s16_of(prl) {
+                p.spacing = Some((f32::from(v) / 20.0).clamp(-1584.0, 1584.0));
+            }
+        }
+        C_HPS_KERN => {
+            if let Some(v) = u16_of(prl) {
+                p.kern = Some((f32::from(v) / 2.0).min(1638.0));
+            }
+        }
+        C_OUTLINE => set(&mut p.outline, sprm::toggle(prl), base.outline.unwrap_or(false)),
+        C_SHADOW => set(&mut p.shadow, sprm::toggle(prl), base.shadow.unwrap_or(false)),
         C_FTC0 => {
             if let Some(name) = u16_of(prl).and_then(|i| fonts.get(i as usize)) {
                 p.font = Some(name.clone());
@@ -394,21 +427,14 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
                 });
             }
         }
-        P_KEEP => {
-            if matches!(sprm::toggle(prl), Toggle::On) {
-                p.keep_lines = Some(true);
-            }
-        }
-        P_KEEP_FOLLOW => {
-            if matches!(sprm::toggle(prl), Toggle::On) {
-                p.keep_next = Some(true);
-            }
-        }
-        P_PAGE_BREAK_BEFORE => {
-            if matches!(sprm::toggle(prl), Toggle::On) {
-                p.page_break_before = Some(true);
-            }
-        }
+        // Bool8 operands: 0 turns off what a style turns on (Word writes `2405 00` for a paragraph
+        // of a keep-together style that isn't, and reads it as `w:keepLines w:val="0"`).
+        P_KEEP => set_flag(&mut p.keep_lines, prl),
+        P_KEEP_FOLLOW => set_flag(&mut p.keep_next, prl),
+        P_PAGE_BREAK_BEFORE => set_flag(&mut p.page_break_before, prl),
+        P_WIDOW_CONTROL => set_flag(&mut p.widow_control, prl),
+        P_NO_LINE_NUMBERS => set_flag(&mut p.suppress_line_numbers, prl),
+        P_NO_AUTO_HYPH => set_flag(&mut p.suppress_hyphens, prl),
         P_OUTLVL => {
             if let Some(&l) = prl.operand.first() {
                 p.outline_level = Some(l.min(8));

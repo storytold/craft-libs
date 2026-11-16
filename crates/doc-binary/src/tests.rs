@@ -2233,6 +2233,86 @@ fn piece_prm_paragraph_formatting_applies_to_the_marks_paragraph() {
 }
 
 #[test]
+fn piece_prm0_widow_control_is_sprm_p_f_widow_control() {
+    // Prm0 isprm 0x33 is sprmPFWidowControl (0x2431, [MS-DOC] §2.9.215), operand 0: off.
+    let spec = RichSpec {
+        text: "Text\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(4, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc_with(&spec, &RichExtra { prm: 0x33 << 1, ..Default::default() })).expect("opens");
+    assert_eq!(para0(&doc).props.widow_control, Some(false));
+}
+
+/// What Word 2016 writes for these paragraph properties, and reads back as `.docx`: widow control
+/// off (`2431 00`) and on, no line numbers (`240C 01`), no hyphenation (`242A 01`), and a
+/// paragraph of a keep-together, keep-with-next style that turns them off (`2405 00`, `2406 00`).
+#[test]
+fn paragraph_flags_and_their_off_values_are_read() {
+    let spec = RichSpec {
+        text: "a\rb\rc\rd\r",
+        styles: vec![
+            (1, 0x0FFF, "Normal", Vec::new(), Vec::new()),
+            (1, 0, "Kept", grpprl(&[(0x2405, &[0x01]), (0x2406, &[0x01]), (0x2407, &[0x01])]), Vec::new()),
+        ],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, grpprl(&[(0x2431, &[0x00]), (0x240C, &[0x01]), (0x242A, &[0x01])])),
+            (2, 0, grpprl(&[(0x2431, &[0x01])])),
+            (4, 1, grpprl(&[(0x2405, &[0x00]), (0x2406, &[0x00]), (0x2407, &[0x00])])),
+            (6, 1, Vec::new()),
+        ],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let ps: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.clone()).collect();
+    assert_eq!((ps[0].widow_control, ps[0].suppress_line_numbers, ps[0].suppress_hyphens), (Some(false), Some(true), Some(true)));
+    assert_eq!(ps[1].widow_control, Some(true));
+    assert_eq!((ps[2].keep_lines, ps[2].keep_next, ps[2].page_break_before), (Some(false), Some(false), Some(false)));
+    // The style's own, unchanged by a paragraph that doesn't override them.
+    assert_eq!(ps[3].keep_lines, None);
+    let kept = doc.styles.styles.iter().find(|s| s.name == "Kept").expect("style");
+    assert_eq!((kept.para.keep_lines, kept.para.keep_next, kept.para.page_break_before), (Some(true), Some(true), Some(true)));
+}
+
+/// What Word 2016 writes for these character properties (and reads back as `.docx`):
+/// superscript and subscript are `sprmCIss` (`2A48 01`, `02`); `sprmCHpsPos` is a raised or
+/// lowered position (`w:position` 6 and -4 half-points), not superscript; spacing in twips
+/// (`w:spacing` 20, -10); kerning from 12 pt (`w:kern` 24 half-points); outline and shadow.
+#[test]
+fn character_position_spacing_kerning_and_effects_are_read() {
+    let spec = RichSpec {
+        text: "abcdefghi\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![
+            (0, grpprl(&[(0x2A48, &[0x01])])),
+            (1, grpprl(&[(0x2A48, &[0x02])])),
+            (2, grpprl(&[(0x4845, &6i16.to_le_bytes())])),
+            (3, grpprl(&[(0x4845, &(-4i16).to_le_bytes())])),
+            (4, grpprl(&[(0x8840, &20i16.to_le_bytes())])),
+            (5, grpprl(&[(0x8840, &(-10i16).to_le_bytes())])),
+            (6, grpprl(&[(0x484B, &24u16.to_le_bytes())])),
+            (7, grpprl(&[(0x0838, &[0x81])])),
+            (8, grpprl(&[(0x0839, &[0x81])])),
+            (9, Vec::new()),
+        ],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    use craft_wordmodel::props::VertAlign;
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let p = para0(&doc);
+    let r: Vec<_> = p.runs.iter().map(|r| r.props.clone()).collect();
+    assert_eq!((r[0].vert_align, r[1].vert_align), (Some(VertAlign::Superscript), Some(VertAlign::Subscript)));
+    assert_eq!((r[2].position, r[2].vert_align, r[3].position, r[3].vert_align), (Some(3.0), None, Some(-2.0), None));
+    assert_eq!((r[4].spacing, r[5].spacing), (Some(1.0), Some(-0.5)));
+    assert_eq!(r[6].kern, Some(12.0));
+    assert_eq!((r[7].outline, r[8].shadow), (Some(true), Some(true)));
+}
+
+#[test]
 fn piece_prm_character_formatting_applied() {
     // #458. Bit 0 of a Prm is fComplex ([MS-DOC] §2.9.215/§2.9.216): Prm0 = isprm in bits
     // 1-7 plus a one-byte operand in bits 8-15 (isprm 0x55 is sprmCFBold); Prm1 = a

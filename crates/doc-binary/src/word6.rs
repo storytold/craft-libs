@@ -8,8 +8,8 @@
 //! What is read: the main text, its paragraphs and fields, the code page of each run, the
 //! character and paragraph formatting listed below, table rows, the paragraph styles (with
 //! their formatting), the sections, the headers and footers, the footnotes and endnotes (with
-//! their separators and options), and the comments. Character styles, pictures, borders, shading
-//! and tabs are not read yet.
+//! their separators and options), and the comments. Character styles, pictures, borders and
+//! shading are not read yet.
 //!
 //! The layout as observed:
 //!
@@ -123,29 +123,52 @@ mod chp {
     pub(super) const BOLD: u8 = 0x55;
     /// Italic, a toggle.
     pub(super) const ITALIC: u8 = 0x56;
+    /// Strikethrough, outline and shadow, toggles.
+    pub(super) const STRIKE: u8 = 0x57;
+    pub(super) const OUTLINE: u8 = 0x58;
+    pub(super) const SHADOW: u8 = 0x59;
     /// Small capitals, a toggle.
     pub(super) const SMALL_CAPS: u8 = 0x5A;
     /// All capitals, a toggle.
     pub(super) const CAPS: u8 = 0x5B;
+    /// Hidden text, a toggle.
+    pub(super) const HIDDEN: u8 = 0x5C;
     /// The font: a 2-byte index into the font table.
     pub(super) const FONT: u8 = 0x5D;
-    /// Underline: 0 none, 1 single (the only values seen).
+    /// Underline, as Word 97's `Kul`: 0 none, 1 single, 2 words, 3 double, 4 dotted (the values
+    /// Word 95 writes).
     pub(super) const UNDERLINE: u8 = 0x5E;
+    /// Character spacing in twips (signed, 2 bytes).
+    pub(super) const SPACING: u8 = 0x60;
     /// Colour: an index into Word's 16-colour palette, as Word 97's `Ico`.
     pub(super) const COLOR: u8 = 0x62;
     /// Size in half-points (2 bytes).
     pub(super) const SIZE: u8 = 0x63;
     /// The language (2 bytes, a Windows LCID): with no non-ANSI font, it gives the code page.
     pub(super) const LID: u8 = 0x61;
+    /// Raised (+) or lowered (−) position in half-points (signed, 2 bytes).
+    pub(super) const POSITION: u8 = 0x65;
+    /// 1 superscript, 2 subscript (1 byte).
+    pub(super) const ISS: u8 = 0x68;
+    /// Kerning from this size up, in half-points (2 bytes).
+    pub(super) const KERN: u8 = 0x6B;
 }
 
 /// Paragraph and table sprms read, by Word 6.0/95 opcode, matched like [`chp`]'s.
 mod pap {
     /// Alignment: 0 left, 1 centred, 2 right, 3 justified.
     pub(super) const JC: u8 = 0x05;
+    /// Keep lines together (1 byte, 0 or 1).
+    pub(super) const KEEP: u8 = 0x07;
     /// Keep with the next paragraph (1 byte; on the heading styles H1-H6, which Word shows with
     /// keepNext; [MS-DOC]'s isprm table has sprmPFKeepFollow at 0x08).
     pub(super) const KEEP_NEXT: u8 = 0x08;
+    /// Page break before (1 byte).
+    pub(super) const PAGE_BREAK_BEFORE: u8 = 0x09;
+    /// Suppress line numbers (1 byte).
+    pub(super) const NO_LINE_NUMBERS: u8 = 0x0E;
+    /// Tab stops: Word 97's `PChgTabsPapxOperand` (cb, the stops removed, the stops added).
+    pub(super) const TABS: u8 = 0x0F;
     /// Right indent in twips (signed, 2 bytes).
     pub(super) const RIGHT: u8 = 0x10;
     /// Left indent in twips.
@@ -154,10 +177,18 @@ mod pap {
     pub(super) const FIRST: u8 = 0x13;
     /// Line spacing: the 4-byte Word 97 `LSPD` (dyaLine, fMultLinespace).
     pub(super) const LINE: u8 = 0x14;
+    /// Space before and after in twips (2 bytes).
+    pub(super) const BEFORE: u8 = 0x15;
+    pub(super) const AFTER: u8 = 0x16;
     /// The paragraph is in a table.
     pub(super) const IN_TABLE: u8 = 0x18;
     /// The mark ends a table row.
     pub(super) const TTP: u8 = 0x19;
+    /// Suppress automatic hyphenation (1 byte).
+    pub(super) const NO_AUTO_HYPH: u8 = 0x2C;
+    /// Widow control (1 byte). Word 95 writes it only to turn it off: on is its default, as in
+    /// the model.
+    pub(super) const WIDOW: u8 = 0x33;
     /// Row alignment (2 bytes): 1 centred.
     pub(super) const ROW_JC: u8 = 0xB6;
     /// Row height in twips (signed, 2 bytes): positive at least, negative exactly.
@@ -172,14 +203,30 @@ mod pap {
 mod w97 {
     pub(super) const C_BOLD: u16 = 0x0835;
     pub(super) const C_ITALIC: u16 = 0x0836;
+    pub(super) const C_STRIKE: u16 = 0x0837;
+    pub(super) const C_OUTLINE: u16 = 0x0838;
+    pub(super) const C_SHADOW: u16 = 0x0839;
     pub(super) const C_SMALL_CAPS: u16 = 0x083A;
     pub(super) const C_CAPS: u16 = 0x083B;
+    pub(super) const C_VANISH: u16 = 0x083C;
     pub(super) const C_KUL: u16 = 0x2A3E;
     pub(super) const C_ICO: u16 = 0x2A42;
     pub(super) const C_HPS: u16 = 0x4A43;
     pub(super) const C_FTC0: u16 = 0x4A4F;
+    pub(super) const C_HPS_POS: u16 = 0x4845;
+    pub(super) const C_ISS: u16 = 0x2A48;
+    pub(super) const C_DXA_SPACE: u16 = 0x8840;
+    pub(super) const C_HPS_KERN: u16 = 0x484B;
     pub(super) const P_JC80: u16 = 0x2403;
+    pub(super) const P_KEEP: u16 = 0x2405;
     pub(super) const P_KEEP_FOLLOW: u16 = 0x2406;
+    pub(super) const P_PAGE_BREAK_BEFORE: u16 = 0x2407;
+    pub(super) const P_NO_LINE_NUMBERS: u16 = 0x240C;
+    pub(super) const P_CHG_TABS_PAPX: u16 = 0xC60D;
+    pub(super) const P_DYA_BEFORE: u16 = 0xA413;
+    pub(super) const P_DYA_AFTER: u16 = 0xA414;
+    pub(super) const P_NO_AUTO_HYPH: u16 = 0x242A;
+    pub(super) const P_WIDOW_CONTROL: u16 = 0x2431;
     pub(super) const P_DXA_RIGHT80: u16 = 0x840E;
     pub(super) const P_DXA_LEFT80: u16 = 0x840F;
     pub(super) const P_DXA_LEFT1_80: u16 = 0x8411;
@@ -718,14 +765,15 @@ fn sprms(grpprl: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
             // and 0x5B are also seen in real files.
             // 0x0D, 0x0E, 0x1D, 0x25 and 0x2C are one-byte paragraph sprms of [MS-DOC]'s isprm table
             // too (numbering level, no line numbers, frame anchoring, wrapping, no hyphenation).
-            0x05 | 0x08 | 0x0D | 0x0E | 0x18 | 0x19 | 0x1D | 0x25 | 0x2C | 0x33 | 0x55..=0x5C | 0x5E | 0x62 | 0x68 | 0x75 | 0xB7 | 0xB9 => 1,
+            // 0x07 and 0x09 (keep together, page break before) were matched against Word.
+            0x05 | 0x07..=0x09 | 0x0D | 0x0E | 0x18 | 0x19 | 0x1D | 0x25 | 0x2C | 0x33 | 0x55..=0x5C | 0x5E | 0x62 | 0x68 | 0x75 | 0xB7 | 0xB9 => 1,
             // Section sprms ([`SEP`]): the operand of the Word 97 sprm each stands for.
             0x8E | 0x8F | 0x93 | 0x96 | 0x97 | 0x99 | 0x9F | 0xA2 => 1,
             0x8C | 0x8D | 0x90 | 0x91 | 0x9A..=0x9D | 0xA1 | 0xA4..=0xAB => 2,
-            // 0x1A/0x1B: a frame's position; 0x6B: kerning in half-points (H1 has 0x0024; Word
-            // shows kern=36).
-            0x10 | 0x11 | 0x13 | 0x15 | 0x16 | 0x1A | 0x1B | 0x26 | 0x27 | 0x28 | 0x29 | 0x2F | 0x50 | 0x5D | 0x60 | 0x61 | 0x63 | 0x6B | 0xB6
-            | 0xB8 | 0xBD | 0xC0 => 2,
+            // 0x1A/0x1B: a frame's position; 0x65: a raised or lowered position; 0x6B: kerning in
+            // half-points (H1 has 0x0024; Word shows kern=36).
+            0x10 | 0x11 | 0x13 | 0x15 | 0x16 | 0x1A | 0x1B | 0x26 | 0x27 | 0x28 | 0x29 | 0x2F | 0x50 | 0x5D | 0x60 | 0x61 | 0x63 | 0x65 | 0x6B
+            | 0xB6 | 0xB8 | 0xBD | 0xC0 => 2,
             0x14 => 4,
             // A count byte, then that many bytes (0x0C: a bulleted style's numbering, 52 bytes).
             0x0C | 0x0F | 0x44 | 0xBF => 1 + usize::from(*after.first()?),
@@ -754,8 +802,17 @@ fn translate_chp(grpprl: &[u8]) -> Vec<u8> {
             chp::ITALIC => prl(&mut out, w97::C_ITALIC, v),
             chp::SMALL_CAPS => prl(&mut out, w97::C_SMALL_CAPS, v),
             chp::CAPS => prl(&mut out, w97::C_CAPS, v),
-            // Only none and single were seen; any other value is left unread.
-            chp::UNDERLINE if matches!(v, [0] | [1]) => prl(&mut out, w97::C_KUL, v),
+            chp::STRIKE => prl(&mut out, w97::C_STRIKE, v),
+            chp::OUTLINE => prl(&mut out, w97::C_OUTLINE, v),
+            chp::SHADOW => prl(&mut out, w97::C_SHADOW, v),
+            chp::HIDDEN => prl(&mut out, w97::C_VANISH, v),
+            // Only none, single, words, double and dotted were seen; any other value is left unread.
+            chp::UNDERLINE if matches!(v, [0..=4]) => prl(&mut out, w97::C_KUL, v),
+            chp::SPACING => prl(&mut out, w97::C_DXA_SPACE, v),
+            chp::POSITION => prl(&mut out, w97::C_HPS_POS, v),
+            // Only baseline, superscript and subscript were seen.
+            chp::ISS if matches!(v, [0..=2]) => prl(&mut out, w97::C_ISS, v),
+            chp::KERN => prl(&mut out, w97::C_HPS_KERN, v),
             chp::COLOR => prl(&mut out, w97::C_ICO, v),
             chp::SIZE => prl(&mut out, w97::C_HPS, v),
             chp::FONT => prl(&mut out, w97::C_FTC0, v),
@@ -867,7 +924,16 @@ fn translate_pap(grpprl: &[u8]) -> Vec<u8> {
         match op {
             // Only 0-3 were seen: another value is left unread.
             pap::JC if matches!(v, [0..=3]) => prl(&mut out, w97::P_JC80, v),
+            pap::KEEP => prl(&mut out, w97::P_KEEP, v),
             pap::KEEP_NEXT => prl(&mut out, w97::P_KEEP_FOLLOW, v),
+            pap::PAGE_BREAK_BEFORE => prl(&mut out, w97::P_PAGE_BREAK_BEFORE, v),
+            pap::NO_LINE_NUMBERS => prl(&mut out, w97::P_NO_LINE_NUMBERS, v),
+            pap::NO_AUTO_HYPH => prl(&mut out, w97::P_NO_AUTO_HYPH, v),
+            pap::WIDOW => prl(&mut out, w97::P_WIDOW_CONTROL, v),
+            // The same operand as Word 97's, count byte included.
+            pap::TABS => prl(&mut out, w97::P_CHG_TABS_PAPX, v),
+            pap::BEFORE => prl(&mut out, w97::P_DYA_BEFORE, v),
+            pap::AFTER => prl(&mut out, w97::P_DYA_AFTER, v),
             pap::RIGHT => prl(&mut out, w97::P_DXA_RIGHT80, v),
             pap::LEFT => prl(&mut out, w97::P_DXA_LEFT80, v),
             pap::FIRST => prl(&mut out, w97::P_DXA_LEFT1_80, v),

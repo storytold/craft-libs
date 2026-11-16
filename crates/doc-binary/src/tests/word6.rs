@@ -572,9 +572,9 @@ fn character_formatting_is_read() {
 
 #[test]
 fn unseen_operand_values_are_left_unread() {
-    // Underline 3 and "multiple" line spacing were never seen in a real file, so they aren't
-    // guessed at.
-    let runs: &[(u32, u32, &[u8])] = &[(0, 3, &[0x5E, 0x03])];
+    // Underline 6 (Word 97's thick) and "multiple" line spacing were never seen in a file Word 95
+    // wrote, so they aren't guessed at.
+    let runs: &[(u32, u32, &[u8])] = &[(0, 3, &[0x5E, 0x06])];
     let paras: &[(u32, u32, &[u8])] = &[(0, 3, &[0x14, 0xF0, 0x00, 0x01, 0x00])];
     let doc = read(&word6_file(&Doc6 { text: b"Hi\r", runs, paras, ..Default::default() })).expect("opens");
     let p = first_para(&doc);
@@ -605,6 +605,119 @@ fn paragraph_formatting_is_read() {
     assert_eq!((p.indent_left, p.indent_right, p.indent_first), (Some(36.0), Some(18.0), Some(-36.0)));
     assert_eq!(p.line_spacing, Some(craft_wordmodel::props::LineSpacing::AtLeast(27.0)));
     assert_eq!(ps[1].props.align, Some(craft_wordmodel::props::Align::Center));
+}
+
+/// The paragraph sprms Word 95 wrote for one property each (`para.doc`), as Word 2016 reads them
+/// (its `.docx`): widow control off; 12 pt before and 18 pt after; keep together, keep with next
+/// and page break before; no line numbers; no hyphenation; and a paragraph of a style that keeps
+/// its lines together and has 6 pt before, turning both off (with the PAPX's padding byte). A
+/// paragraph with none of them keeps widow control on, Word 95's default.
+#[test]
+fn paragraph_spacing_keep_and_widow_control_are_read() {
+    let paras: &[(u32, u32, &[u8])] = &[
+        (0, 2, &[0x33, 0x00]),
+        (2, 4, &[0x15, 0xF0, 0x00, 0x16, 0x68, 0x01]),
+        (4, 6, &[0x07, 0x01, 0x08, 0x01, 0x09, 0x01]),
+        (6, 8, &[0x0E, 0x01]),
+        (8, 10, &[0x2C, 0x01]),
+        (10, 12, &[0x07, 0x00, 0x15, 0x00, 0x00, 0x00]),
+        (12, 14, &[]),
+    ];
+    let styles = &[
+        Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", ..Default::default() }),
+        Some(Std {
+            sti: 0x0FFE,
+            sgc: 1,
+            base: 0,
+            name: "Spaced",
+            papx: &[0x07, 0x01, 0x08, 0x01, 0x15, 0x78, 0x00, 0x16, 0x3C, 0x00],
+            ..Default::default()
+        }),
+    ];
+    let d = Doc6 { text: b"a\rb\rc\rd\re\rf\rg\r", paras, para_styles: &[0, 0, 0, 0, 0, 1, 0], styles, ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let ps: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.clone()).collect();
+    assert_eq!(ps[0].widow_control, Some(false));
+    assert_eq!((ps[1].space_before, ps[1].space_after), (Some(12.0), Some(18.0)));
+    assert_eq!((ps[2].keep_lines, ps[2].keep_next, ps[2].page_break_before), (Some(true), Some(true), Some(true)));
+    assert_eq!(ps[3].suppress_line_numbers, Some(true));
+    assert_eq!(ps[4].suppress_hyphens, Some(true));
+    assert_eq!((ps[5].keep_lines, ps[5].space_before), (Some(false), Some(0.0)));
+    assert_eq!(ps[6].widow_control, None);
+    let spaced = doc.styles.styles.iter().find(|s| s.name == "Spaced").expect("style");
+    assert_eq!(
+        (spaced.para.keep_lines, spaced.para.keep_next, spaced.para.space_before, spaced.para.space_after),
+        (Some(true), Some(true), Some(6.0), Some(3.0))
+    );
+}
+
+/// Tab stops as Word 95 wrote them (`tabs.doc`): 25 pt left, 150 pt centred and 300 pt right with
+/// a dot leader in one paragraph; and in a paragraph of a style with stops at 50 pt and 250 pt
+/// (right), the 50 pt one removed and one at 100 pt added. Word 2016 reads the same stops.
+#[test]
+fn tab_stops_are_read() {
+    use craft_wordmodel::props::{TabAlign, TabLeader};
+    let multi: &[u8] = &[0x0F, 0x0B, 0x00, 0x03, 0xF4, 0x01, 0xB8, 0x0B, 0x70, 0x17, 0x00, 0x01, 0x0A, 0x00];
+    let changed: &[u8] = &[0x0F, 0x07, 0x01, 0xE8, 0x03, 0x01, 0xD0, 0x07, 0x00, 0x00];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 2, multi), (2, 4, changed)];
+    let styles = &[
+        Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", ..Default::default() }),
+        Some(Std {
+            sti: 0x0FFE,
+            sgc: 1,
+            base: 0,
+            name: "Tabbed",
+            papx: &[0x0F, 0x08, 0x00, 0x02, 0xE8, 0x03, 0x88, 0x13, 0x00, 0x02],
+            ..Default::default()
+        }),
+    ];
+    let d = Doc6 { text: b"a\rb\r", paras, para_styles: &[0, 1], styles, ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let tabs = |i: usize| -> Vec<(f32, TabAlign, TabLeader)> {
+        let p = doc.body.iter().filter_map(|b| b.as_para()).nth(i).expect("para");
+        p.props.tabs.iter().flatten().map(|t| (t.pos, t.align, t.leader)).collect()
+    };
+    assert_eq!(
+        tabs(0),
+        [(25.0, TabAlign::Left, TabLeader::None), (150.0, TabAlign::Center, TabLeader::None), (300.0, TabAlign::Right, TabLeader::Dot)]
+    );
+    assert_eq!(tabs(1), [(50.0, TabAlign::Clear, TabLeader::None), (100.0, TabAlign::Left, TabLeader::None)]);
+    let tabbed = doc.styles.styles.iter().find(|s| s.name == "Tabbed").expect("style");
+    let style_tabs: Vec<_> = tabbed.para.tabs.iter().flatten().map(|t| (t.pos, t.align)).collect();
+    assert_eq!(style_tabs, [(50.0, TabAlign::Left), (250.0, TabAlign::Right)]);
+}
+
+/// The character sprms Word 95 wrote for one property each (`chr.doc`), as Word 2016 reads them:
+/// superscript, subscript, raised 3 pt and lowered 2 pt (a position, not superscript), hidden,
+/// expanded 1 pt and condensed 0.5 pt, kerning from 12 pt, strikethrough, outline, shadow, and
+/// double underline. The toggles are 0x81, as Word 95 writes them over a plain style.
+#[test]
+fn character_effects_position_spacing_and_kerning_are_read() {
+    use craft_wordmodel::props::{Underline, VertAlign};
+    let runs: &[(u32, u32, &[u8])] = &[
+        (0, 1, &[0x68, 0x01]),
+        (1, 2, &[0x68, 0x02]),
+        (2, 3, &[0x65, 0x06, 0x00]),
+        (3, 4, &[0x65, 0xFC, 0xFF]),
+        (4, 5, &[0x5C, 0x81]),
+        (5, 6, &[0x60, 0x14, 0x00]),
+        (6, 7, &[0x60, 0xF6, 0xFF]),
+        (7, 8, &[0x6B, 0x18, 0x00]),
+        (8, 9, &[0x57, 0x81]),
+        (9, 10, &[0x58, 0x81]),
+        (10, 11, &[0x59, 0x81]),
+        (11, 12, &[0x5E, 0x03]),
+        (12, 13, &[]),
+    ];
+    let doc = read(&word6_file(&Doc6 { text: b"abcdefghijkl\r", runs, ..Default::default() })).expect("opens");
+    let r: Vec<_> = first_para(&doc).runs.iter().map(|r| r.props.clone()).collect();
+    assert_eq!((r[0].vert_align, r[1].vert_align), (Some(VertAlign::Superscript), Some(VertAlign::Subscript)));
+    assert_eq!((r[2].position, r[3].position, r[2].vert_align), (Some(3.0), Some(-2.0), None));
+    assert_eq!(r[4].hidden, Some(true));
+    assert_eq!((r[5].spacing, r[6].spacing), (Some(1.0), Some(-0.5)));
+    assert_eq!(r[7].kern, Some(12.0));
+    assert_eq!((r[8].strike, r[9].outline, r[10].shadow), (Some(true), Some(true), Some(true)));
+    assert_eq!(r[11].underline, Some(Underline::Double));
 }
 
 /// A Word 6 table definition sprm (0xBE): the cell edges, then a 10-byte descriptor per cell
