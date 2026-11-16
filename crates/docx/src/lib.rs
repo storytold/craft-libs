@@ -109,6 +109,19 @@ pub fn read_with(bytes: &[u8], opts: &ReadOptions) -> Result<craft_wordmodel::Do
     read::read_package(bytes, opts.chunks)
 }
 
+/// [`read_with`] within the caller's decompression budgets instead of the crate's own (256 MiB a
+/// part, 512 MiB a package): for a host with less memory than a desktop, such as a server isolate.
+/// A part that inflates past `max_part` bytes, or a package past `max_total`, is refused with
+/// [`DocxError::Limit`]. A nested WordprocessingML `w:altChunk` package is held to `max_part`
+/// too, and to what the file's own parts left of `max_total`; one over that is left out.
+pub fn read_limited(bytes: &[u8], opts: &ReadOptions, max_part: u64, max_total: u64) -> Result<craft_wordmodel::Document, DocxError> {
+    if is_encrypted(bytes) {
+        let package = zeroize::Zeroizing::new(decrypt(bytes, opts.password)?);
+        return read::read_package_limited(&package, opts.chunks, max_part, max_total);
+    }
+    read::read_package_limited(bytes, opts.chunks, max_part, max_total)
+}
+
 /// Which kind of WordprocessingML package to write. The main part's content type differs per
 /// kind, and Word refuses a file whose content type doesn't match its extension.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

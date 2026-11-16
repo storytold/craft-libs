@@ -3,7 +3,7 @@
 
 use std::io::Write;
 
-use craft_docx::{AltChunk, ReadOptions, read, read_with};
+use craft_docx::{AltChunk, DocxError, ReadOptions, read, read_limited, read_with};
 use craft_wordmodel::{Block, Document, InlineObject, StoryRef};
 
 const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
@@ -296,6 +296,42 @@ fn match_src_keeps_a_word_chunks_own_formatting() {
             assert_eq!(look(2), (10.0, 11.0, true));
         }
     }
+}
+
+/// A nested WordprocessingML chunk is a package of its own: it unpacks under the budgets the
+/// caller gave the file, charged against what the file's own parts left of the total, not under
+/// the crate's defaults.
+#[test]
+fn a_nested_package_is_held_to_the_callers_decompression_budget() {
+    const MIB: u64 = 1024 * 1024;
+    // 300 KB of text deflates to a few hundred bytes: the inner package fits any budget as the
+    // outer package's part, and inflates well past a 64 KiB total or a 128 KiB part.
+    let inner = package(&p(&format!("INNER-MARKER {}", "x".repeat(300_000))), None);
+    let bytes = package(&format!("{}{CHUNK}{}", p("Before"), p("After")), Some(("docx", DOCX_MAIN, &inner)));
+    assert!(bytes.len() < 16 * 1024, "the outer package is {} bytes", bytes.len());
+    let opts = ReadOptions::default();
+    let text = |max_part: u64, max_total: u64| read_limited(&bytes, &opts, max_part, max_total).unwrap().plain_text(StoryRef::Body);
+    // Budgets with room for the chunk bring it in, as `read` does.
+    assert!(text(MIB, 4 * MIB).contains("INNER-MARKER"));
+    assert!(read(&bytes).unwrap().plain_text(StoryRef::Body).contains("INNER-MARKER"));
+    // A total the chunk's own parts overrun leaves the chunk out; the document around it is read.
+    let tight = text(MIB, 64 * 1024);
+    assert!(!tight.contains("INNER-MARKER"), "the nested package must not outspend the caller's total");
+    assert!(tight.starts_with("Before") && tight.contains("After"), "{:?}", tight.get(..32));
+    // So does a part limit its document part overruns.
+    assert!(!text(128 * 1024, 4 * MIB).contains("INNER-MARKER"), "the nested package must not outspend the caller's part limit");
+}
+
+/// The file's own parts are held to the caller's budgets too: a part or a package over them is
+/// refused, where the crate's defaults read it.
+#[test]
+fn a_package_over_the_callers_decompression_budget_is_refused() {
+    let bytes = package(&p(&"x".repeat(300_000)), None);
+    let opts = ReadOptions::default();
+    assert!(read(&bytes).is_ok());
+    assert!(read_limited(&bytes, &opts, 1024 * 1024, 4 * 1024 * 1024).is_ok());
+    assert!(matches!(read_limited(&bytes, &opts, 128 * 1024, 4 * 1024 * 1024), Err(DocxError::Limit(_))));
+    assert!(matches!(read_limited(&bytes, &opts, 1024 * 1024, 64 * 1024), Err(DocxError::Limit(_))));
 }
 
 #[test]

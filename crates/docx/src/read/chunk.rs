@@ -108,8 +108,9 @@ impl Reader<'_> {
             log::warn!("docx: alternative format chunks nest deeper than {MAX_CHUNK_NESTING}; the inner ones are left out");
             return None;
         }
-        let pkg =
-            Package::open_limited(bytes, MAX_PART, self.chunks.bytes).map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}")).ok()?;
+        let pkg = Package::open_limited(bytes, self.chunks.part, self.chunks.bytes)
+            .map_err(|e| log::warn!("docx: unreadable nested document chunk: {e}"))
+            .ok()?;
         self.chunks.bytes = self.chunks.bytes.saturating_sub(pkg.size());
         let state = ChunkState { nesting: self.chunks.nesting + 1, depth: depth + 1, ..self.chunks };
         let (doc, left, bytes, graphic) =
@@ -128,6 +129,9 @@ pub(crate) struct ChunkState<'a> {
     pub left: usize,
     /// Chunk bytes (nested packages unpacked) left in the file's budget.
     pub bytes: u64,
+    /// The most one part of a nested package may inflate to: [`MAX_PART`], or the caller's
+    /// tighter limit ([`crate::read_limited`]).
+    pub part: u64,
     /// Graphic work left in the file's budget ([`super::MAX_GRAPHIC_WORK`]): nested documents'
     /// charts and diagrams count against it too.
     pub graphic: usize,
@@ -140,7 +144,7 @@ pub(crate) struct ChunkState<'a> {
 
 impl<'a> ChunkState<'a> {
     pub fn new(import: Option<ChunkImporter<'a>>) -> Self {
-        ChunkState { left: MAX_CHUNKS, bytes: MAX_TOTAL, graphic: super::MAX_GRAPHIC_WORK, nesting: 0, depth: 0, import }
+        ChunkState { left: MAX_CHUNKS, bytes: MAX_TOTAL, part: MAX_PART, graphic: super::MAX_GRAPHIC_WORK, nesting: 0, depth: 0, import }
     }
 }
 
