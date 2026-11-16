@@ -98,6 +98,13 @@ pub(crate) fn parse_with(word: &[u8], table: &[u8], fib: &Fib, sepx: impl Fn(&[u
                 apply_section(&mut props, &prl);
             }
         }
+        // sprmSNFtn and sprmSNEdn count only with continuous numbering ([MS-DOC] §2.6.4; Word
+        // allows another start only then), whatever order the sprms come in.
+        for pr in [&mut props.footnote_pr, &mut props.endnote_pr] {
+            if matches!(pr.num_restart, Some(craft_wordmodel::section::NoteRestart::EachSect | craft_wordmodel::section::NoteRestart::EachPage)) {
+                pr.num_start = None;
+            }
+        }
         // Without an explicit orientation sprm, infer it from the page shape.
         if !explicit_orient {
             if props.page_w < props.page_h {
@@ -202,14 +209,19 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
                 s.gutter = tw(v as i32);
             }
         }
-        S_FPC => {
-            if prl.operand.first() == Some(&2) {
-                s.footnote_pr.pos = Some(craft_wordmodel::section::NotePos::BeneathText);
-            }
-        }
+        // A section's own value is explicit, whatever the document's: 1 the bottom of the page,
+        // 2 beneath the text.
+        S_FPC => match prl.operand.first() {
+            Some(1) => s.footnote_pr.pos = Some(craft_wordmodel::section::NotePos::PageBottom),
+            Some(2) => s.footnote_pr.pos = Some(craft_wordmodel::section::NotePos::BeneathText),
+            _ => {}
+        },
+        // As explicit: 0 continuous, which the document's restart doesn't override.
         S_RNC_FTN | S_RNC_EDN => {
             let pr = if prl.op == S_RNC_FTN { &mut s.footnote_pr } else { &mut s.endnote_pr };
-            pr.num_restart = prl.operand.first().and_then(|&v| crate::dop::restart(u16::from(v)));
+            if let Some(&v) = prl.operand.first() {
+                pr.num_restart = crate::dop::restart(u16::from(v)).or((v == 0).then_some(craft_wordmodel::section::NoteRestart::Continuous));
+            }
         }
         S_N_FTN | S_N_EDN => {
             if let [a, b, ..] = prl.operand {

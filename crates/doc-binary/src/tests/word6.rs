@@ -970,6 +970,29 @@ fn footnotes_and_endnotes_are_read() {
 }
 
 #[test]
+fn a_comment_at_the_end_of_the_text_closes_in_the_last_paragraph() {
+    // A comment whose reference CP is the end of the main text (6, past its last paragraph
+    // mark): its start and end were queued there, and the walk stopped before emitting them.
+    // Both now close the last paragraph, as Word ends a range there.
+    use craft_wordmodel::para::InlineObject;
+    let mut atrd = vec![0u8; 20];
+    atrd[16..20].copy_from_slice(&[0xFF; 4]);
+    let d = Doc6 {
+        text: b"Alpha\r\x05 C\r\r",
+        stories: [0, 0, 0, 5, 0],
+        comments: (&[6, 7], &[0, 4, 5], &atrd),
+        owners: b"\x03Ann",
+        ..Default::default()
+    };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let p = first_para(&doc);
+    assert_eq!(p.text, "Alpha\u{FFFC}\u{FFFC}");
+    let ends: Vec<bool> = p.objects.iter().map(|o| matches!(o, InlineObject::CommentEnd { .. })).collect();
+    assert_eq!(ends, [false, true]);
+    assert_eq!(doc.body.len(), 1, "no paragraph of their own");
+}
+
+#[test]
 fn comments_are_read_and_anchored_at_their_references() {
     // As Word 95 writes two comments (`atn2`): 0x05 at each reference, the stories after the main
     // text in the comment subdocument (0x44), 20-byte ATRDs and 8-bit authors. Word reads Bob
