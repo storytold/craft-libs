@@ -516,7 +516,7 @@ impl<'a> Imp<'a, '_, '_> {
             let effect = transition_effect(self.b.catalog, &name, false, &mut temporary);
             for e in temporary.entries {
                 for _ in 0..e.count {
-                    self.report.warn_limited(self.report_limit, &e.message);
+                    self.report.push_limited(e.level, self.report_limit, &e.message);
                 }
             }
             let id = TransitionId(self.b.alloc());
