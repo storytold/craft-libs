@@ -40,9 +40,14 @@ pub enum ShapeGeometry {
         /// The bounds of the ellipse.
         rect: Rect,
     },
-    /// A regular polygon or star inscribed in the ellipse of `rect` (the Box frame: PhotoCraft's Triangle and
-    /// Polygon). `sides` in [`SIDES`]; `star_ratio` in [`STAR_RATIO`], 1 for a plain polygon.
-    /// The Triangle tool is 3 sides.
+    /// A triangle filling `rect`: the apex at the top centre, the base on the bottom edge (PhotoCraft's Triangle
+    /// tool and Create Triangle).
+    Triangle {
+        /// The triangle's bounds.
+        rect: Rect,
+    },
+    /// A regular polygon or star inscribed in the ellipse of `rect` (the Box frame: PhotoCraft's Polygon).
+    /// `sides` in [`SIDES`]; `star_ratio` in [`STAR_RATIO`], 1 for a plain polygon.
     Polygon {
         /// The box whose inscribed ellipse holds the polygon.
         rect: Rect,
@@ -93,9 +98,10 @@ impl ShapeGeometry {
     ///   to half the shorter side, as kurbo's `RoundedRect` does); all radii 0 is the plain
     ///   rectangle.
     /// - `Ellipse`: kurbo's `Ellipse::from_rect`.
+    /// - `Triangle`: the top centre, the bottom right and the bottom left of `rect`.
     /// - `Polygon`: the outline of [`RadialPolygon`](Self::RadialPolygon) with the first point
     ///   straight up, its outer points on the ellipse inscribed in `rect` (PhotoCraft's engine:
-    ///   a triangle's base lies a quarter of the height below the centre, not on the bottom
+    ///   a 3-sided polygon's base lies a quarter of the height below the centre, not on the bottom
     ///   edge); a star alternates outer and inner points, the inner ones on the ellipse
     ///   scaled by `star_ratio`.
     /// - `RadialPolygon`: `sides` outer points on the circle of `radius`, the first at `rotation`
@@ -105,7 +111,7 @@ impl ShapeGeometry {
     /// - `Custom`: the box itself (the app draws the preset).
     pub fn to_path(&self, tolerance: f64) -> BezPath {
         // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs:73-79 (the kinds: `roundedRect` with four
-        // equal radii, ellipse, a polygon of 3 sides for the Triangle, `polygon_sides.max(3)`).
+        // equal radii, ellipse, `triangle` filling its rect, `polygon_sides.max(3)`).
         // new: PhotoCraft's engine draws the outline; here it is kurbo's `RoundedRect`, `Ellipse`
         // and a point list, so engines without one share it.
         let tolerance = tolerance.max(f64::EPSILON);
@@ -119,6 +125,11 @@ impl ShapeGeometry {
                 }
             }
             Self::Ellipse { rect } => Ellipse::from_rect(rect.abs()).to_path(tolerance),
+            Self::Triangle { rect } => {
+                // pc: #13350 (the triangle fills its box, apex on top).
+                let rect = rect.abs();
+                closed(&[Point::new(rect.center().x, rect.y0), Point::new(rect.x1, rect.y1), Point::new(rect.x0, rect.y1)])
+            }
             Self::Polygon { rect, sides, star_ratio } => {
                 let rect = rect.abs();
                 let (c, rx, ry) = (rect.center(), rect.width() / 2.0, rect.height() / 2.0);
@@ -145,32 +156,74 @@ impl ShapeGeometry {
     pub fn bounds(&self) -> Rect {
         // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs:85-96 `shape_bounds` (a line's ends' box).
         match *self {
-            Self::Rect { rect, .. } | Self::Ellipse { rect } | Self::Polygon { rect, .. } | Self::Custom { rect, .. } => rect.abs(),
+            Self::Rect { rect, .. } | Self::Ellipse { rect } | Self::Triangle { rect } | Self::Polygon { rect, .. } | Self::Custom { rect, .. } => {
+                rect.abs()
+            }
             Self::RadialPolygon { center, radius, .. } => Rect::new(center.x - radius, center.y - radius, center.x + radius, center.y + radius),
             Self::Line { from, to, .. } => Rect::from_points(from, to),
         }
     }
 }
 
-/// The box a drag from `start` to `end` draws, in whole pixels, or `None` when a side is under
+/// How a box drag turns the press and the pointer into a box ([`box_drag`]). The default draws the dragged box.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct BoxRule {
+    /// Both sides take the drag's shorter extent, each keeping its direction (⇧).
+    pub square: bool,
+    /// The press is the centre: the box is twice the extent (⌥). With `fixed`, the release is the centre.
+    pub from_centre: bool,
+    /// A fixed width and height: the box has this size with its top left at the release, whatever the drag.
+    pub fixed: Option<(f64, f64)>,
+    /// A width to height ratio: the largest box of this ratio inside the dragged one, from the press.
+    pub ratio: Option<(f64, f64)>,
+}
+
+/// The box a drag from `start` to `end` draws under `rule`, in whole pixels, or `None` when a side is under
 /// [`MIN_SIDE`].
 ///
-/// - `square` (⇧): both sides take the larger absolute extent, each keeping its direction.
-/// - `from_centre` (⌥): `start` is the centre; the box is twice the extent.
+/// - `fixed` (both sides finite and above 0): that size at the release; `square` and `ratio` do not apply.
+/// - `square`: both sides take the drag's shorter extent, each keeping its direction.
+/// - `ratio` (both parts finite and above 0): the largest box of that ratio inside the (squared) drag.
+/// - `from_centre`: `start` is the centre; the box is twice the extent.
 /// - The top left and the size round to whole pixels, as PhotoCraft rounds `[x, y, w, h]`.
-pub fn box_drag(start: Point, end: Point, square: bool, from_centre: bool) -> Option<Rect> {
-    // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs:63-72 (⇧: `m = w.abs().max(h.abs())` with the
-    // signs kept; ⌥: origin `start - (w, h)`, size doubled; `[x0.min(x0 + w).round(), …,
-    // w.abs().round(), …]`; `rect[2] < 1.0 || rect[3] < 1.0` draws nothing).
-    let (mut w, mut h) = (end.x - start.x, end.y - start.y);
-    if square {
-        let m = w.abs().max(h.abs());
-        (w, h) = (m * sign(w), m * sign(h));
-    }
-    let (x0, y0) = if from_centre { (start.x - w, start.y - h) } else { (start.x, start.y) };
-    let (w, h) = if from_centre { (w * 2.0, h * 2.0) } else { (w, h) };
+pub fn box_drag(start: Point, end: Point, rule: BoxRule) -> Option<Rect> {
+    // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs `drag_box` (⇧: `m = w.abs().min(h.abs())` with the
+    // signs kept, #13222; ⌥: origin `start - (w, h)`, size doubled; the Rectangle gear's Fixed Size and
+    // Proportional, #13343), `shape_geometry` (`[x0.min(x0 + w).round(), …, w.abs().round(), …]`;
+    // `rect[2] < 1.0 || rect[3] < 1.0` draws nothing).
+    let (x0, y0, w, h) = if let Some((fw, fh)) = rule.fixed.and_then(positive) {
+        // From Center with Fixed Size is not measured: the size is centred on the release.
+        if rule.from_centre { (end.x - fw / 2.0, end.y - fh / 2.0, fw, fh) } else { (end.x, end.y, fw, fh) }
+    } else {
+        let (mut w, mut h) = (end.x - start.x, end.y - start.y);
+        if rule.square {
+            let m = w.abs().min(h.abs());
+            (w, h) = (m * sign(w), m * sign(h));
+        }
+        if let Some((rw, rh)) = rule.ratio.and_then(positive) {
+            let s = (w.abs() / rw).min(h.abs() / rh);
+            (w, h) = (rw * s * sign(w), rh * s * sign(h));
+        }
+        if rule.from_centre { (start.x - w, start.y - h, w * 2.0, h * 2.0) } else { (start.x, start.y, w, h) }
+    };
     let (x, y, w, h) = (x0.min(x0 + w).round(), y0.min(y0 + h).round(), w.abs().round(), h.abs().round());
     (w >= MIN_SIDE && h >= MIN_SIDE).then(|| Rect::new(x, y, x + w, y + h))
+}
+
+/// `pair` when both parts are finite and above 0 (a gear field that is not empty).
+fn positive(pair: (f64, f64)) -> Option<(f64, f64)> {
+    (pair.0.is_finite() && pair.1.is_finite() && pair.0 > 0.0 && pair.1 > 0.0).then_some(pair)
+}
+
+/// The tight box of the equilateral triangle, apex up, inscribed in the circle of `square`: what ⇧ draws with the
+/// Triangle tool (#13350). With the square centred on the press (⇧⌥), the triangle's centre is the press.
+pub fn equilateral_in(square: Rect) -> Rect {
+    let square = square.abs();
+    let r = square.width() / 2.0;
+    let half_base = r * 3f64.sqrt() / 2.0;
+    let x = square.center().x - half_base;
+    Rect::new(x, square.y0, x + 2.0 * half_base, square.y0 + 1.5 * r)
 }
 
 /// The end of a line dragged from `from` to `to`, or `None` when it is shorter than

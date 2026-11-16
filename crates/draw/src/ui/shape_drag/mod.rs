@@ -11,11 +11,15 @@ mod dialog;
 mod tool;
 mod words;
 
+use std::ops::RangeInclusive;
+
 use craft_behavior::EditEvent;
 use craft_keymap::Mods;
 use kurbo::Point;
+use serde::{Deserialize, Serialize};
 
 use crate::geometry::shape::ShapeGeometry;
+use crate::ui::shape::VectorMode;
 
 pub use dialog::{CreateShapeDialog, CreateShapeOptions, CreatedShape};
 pub use tool::ShapeDragTool;
@@ -57,6 +61,52 @@ pub enum ShapeFrame {
     Radial,
 }
 
+/// What the Rectangle tool's gear keeps a box drag to ([`BoxConstraints::constraint`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum BoxConstraint {
+    /// The dragged box.
+    #[default]
+    Unconstrained,
+    /// A square; ⇧ draws the dragged box instead.
+    Square,
+    /// The gear's width and height, with the top left at the release.
+    FixedSize,
+    /// The largest box of the gear's width to height ratio inside the drag, from the press.
+    Proportional,
+}
+
+/// The Rectangle tool's gear: a constraint, its sizes, and From Center. A Fixed Size or Proportional pair with an
+/// empty field (`None`) or a 0 draws as Unconstrained.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct BoxConstraints {
+    /// The constraint chosen.
+    pub constraint: BoxConstraint,
+    /// Fixed Size's width and height in pixels, in [`FIXED`](Self::FIXED); empty to start.
+    pub fixed: (Option<f64>, Option<f64>),
+    /// Proportional's width and height, in [`RATIO`](Self::RATIO); 1 : 1 to start.
+    pub ratio: (Option<f64>, Option<f64>),
+    /// The press is the box's centre; ⌥ draws from the corner instead.
+    pub from_center: bool,
+}
+
+impl BoxConstraints {
+    /// The range of a Fixed Size field, in whole pixels.
+    pub const FIXED: RangeInclusive<f64> = 0.0..=300_000.0;
+    /// The range of a Proportional field.
+    pub const RATIO: RangeInclusive<f64> = 0.0..=99_999.0;
+}
+
+impl Default for BoxConstraints {
+    /// Unconstrained, Fixed Size empty, Proportional 1 : 1, From Center off.
+    fn default() -> Self {
+        BoxConstraints { constraint: BoxConstraint::Unconstrained, fixed: (None, None), ratio: (Some(1.0), Some(1.0)), from_center: false }
+    }
+}
+
 /// The tool options a drag reads each pass: the kind from the selected tool, the rest from the
 /// options bar (PhotoCraft's `ToolOptions`). [`ShapeToolSettings::drag_options`](super::shape::ShapeToolSettings::drag_options)
 /// builds it from the stored settings.
@@ -73,6 +123,11 @@ pub struct ShapeDragOptions {
     pub star_ratio: f64,
     /// The Line's weight, at least 1.
     pub line_weight: f64,
+    /// The gear's constraints for a box drag; ⇧ and ⌥ turn its Square and From Center off.
+    pub constraints: BoxConstraints,
+    /// What the drag makes: a Rectangle in Shape mode ends a click within 1 screen point, every other drag within
+    /// the press slop.
+    pub mode: VectorMode,
 }
 
 impl ShapeDragOptions {
@@ -108,12 +163,35 @@ impl ShapeDragOptions {
         self.line_weight = weight;
         self
     }
+
+    /// The gear's constraints for a box drag (Photoshop shows the gear for the Rectangle only).
+    #[must_use]
+    pub fn constraints(mut self, constraints: BoxConstraints) -> Self {
+        self.constraints = constraints;
+        self
+    }
+
+    /// What the drag makes (the options bar's mode).
+    #[must_use]
+    pub fn mode(mut self, mode: VectorMode) -> Self {
+        self.mode = mode;
+        self
+    }
 }
 
 impl Default for ShapeDragOptions {
-    /// Rectangle, square corners, 5 sides, a plain polygon, weight 3 (PhotoCraft's defaults).
+    /// Rectangle, square corners, 5 sides, a plain polygon, weight 3, unconstrained, Shape mode (PhotoCraft's
+    /// defaults).
     fn default() -> Self {
-        ShapeDragOptions { kind: ShapeKind::Rectangle, corner_radius: 0.0, sides: 5, star_ratio: 1.0, line_weight: 3.0 }
+        ShapeDragOptions {
+            kind: ShapeKind::Rectangle,
+            corner_radius: 0.0,
+            sides: 5,
+            star_ratio: 1.0,
+            line_weight: 3.0,
+            constraints: BoxConstraints::default(),
+            mode: VectorMode::Shape,
+        }
     }
 }
 

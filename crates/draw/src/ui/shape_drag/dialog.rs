@@ -9,7 +9,7 @@ use craft_behavior::Mixed;
 use craft_theme::variant::Tone;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Props as _, Remember as _, Show as _, ShowContainer as _};
-use craft_ui::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use craft_ui::dialog::{Alert, DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
 use craft_ui::form::{Field, FieldGroup};
 use craft_ui::notices::{Notice, NoticeLayout};
 use craft_ui::patterns::form_dialogs::{FormDialog, GuideUnits};
@@ -17,7 +17,7 @@ use craft_ui::pickers::UnitSelect;
 use craft_ui::runtime::env::{Env, Label, UnitKind, Units};
 use craft_ui::runtime::memory::{SaveKey, saved_value, set_saved_value};
 use craft_ui::sections::DialogRole;
-use craft_ui::text::{LinkMode, LinkedFields, LinkedLayout, NumberField};
+use craft_ui::text::{LinkMode, LinkedFields, LinkedLayout, NumberField, RangeAlert};
 use egui::Ui;
 use kurbo::{Point, Rect};
 use serde::{Deserialize, Serialize};
@@ -151,9 +151,10 @@ struct Memory {
 ///   "Radius" label, with the "Link radii" toggle between the columns (`LinkMode::Equal`, on by
 ///   default). Polygon and Star: Sides (3–100) and Star Ratio (1–100 %, default 100); the Polygon drag
 ///   keeps ratio 1. Then "From Center".
-/// - A width or height outside [`CreateShapeOptions::SIZE`] shows [`CreateShapeWords::bad_size`] under
-///   the fields and disables OK; so does a click farther than 300,000 px from the origin
-///   ([`CreateShapeWords::bad_position`]).
+/// - A width or height typed past [`CreateShapeOptions::SIZE`] keeps the nearest end and raises the range alert,
+///   which the app opens from [`take_range_alert`](Self::take_range_alert) (#13358). A size set out of range
+///   through automation shows [`CreateShapeWords::bad_size`] under the fields and disables OK; so does a click
+///   farther than 300,000 px from the origin ([`CreateShapeWords::bad_position`]).
 /// - OK answers [`CreatedShape`] at the click (centred on it with From Center, unrounded) and
 ///   remembers width, height, From Center and the star ratio per kind; Cancel answers nothing and
 ///   remembers nothing.
@@ -165,6 +166,10 @@ pub struct CreateShapeDialog {
     units: [UnitKind; 2],
     /// Whether the dialog is open: bound to the form's open state, so the host's dialog closes with it.
     open: bool,
+    /// The title of the range alert; the dialog's own title when `None`.
+    alert_title: Option<Label>,
+    /// The last range alert a size field raised, with the env it showed in (which words it), until the app takes it.
+    range_alert: Option<(RangeAlert, Env)>,
 }
 
 /// The document a dialog without [`CreateShapeOptions::units`] measures in: pixels, with no percent.
@@ -209,7 +214,7 @@ fn answer(o: &CreateShapeOptions, words: &CreateShapeWords, units: &Units) -> Re
             ShapeGeometry::Rect { rect, radii }
         }
         ShapeKind::Ellipse => ShapeGeometry::Ellipse { rect },
-        ShapeKind::Triangle => ShapeGeometry::Polygon { rect, sides: 3, star_ratio: 1.0 },
+        ShapeKind::Triangle => ShapeGeometry::Triangle { rect },
         ShapeKind::Polygon | ShapeKind::Star => {
             let ratio = if o.star_ratio.is_finite() { o.star_ratio.clamp(0.01, 1.0) } else { 1.0 };
             ShapeGeometry::Polygon { rect, sides, star_ratio: ratio }
@@ -217,6 +222,19 @@ fn answer(o: &CreateShapeOptions, words: &CreateShapeWords, units: &Units) -> Re
         ShapeKind::Line | ShapeKind::Custom => return Err(String::new()),
     };
     Ok(CreatedShape { kind: o.kind, geometry, from_center: o.from_center })
+}
+
+/// The dialog's title for `kind`.
+fn title_of(kind: ShapeKind, words: &CreateShapeWords) -> Label {
+    let title = match kind {
+        ShapeKind::RoundedRectangle => &words.rounded_rectangle,
+        ShapeKind::Ellipse => &words.ellipse,
+        ShapeKind::Triangle => &words.triangle,
+        ShapeKind::Polygon => &words.polygon,
+        ShapeKind::Star => &words.star,
+        ShapeKind::Rectangle | ShapeKind::Line | ShapeKind::Custom => &words.rectangle,
+    };
+    Label::from(title.as_str().to_owned())
 }
 
 /// The save key of the kind: `craft_draw.shape.create.<kind>`.
@@ -272,7 +290,22 @@ impl CreateShapeDialog {
     /// Create Shape with `options`.
     pub fn new(options: CreateShapeOptions) -> Self {
         let ruler = options.units.map_or(UnitKind::Pixels, |units| units.ruler);
-        CreateShapeDialog { id: dialog_id("shape.create"), options, units: [ruler; 2], open: true }
+        CreateShapeDialog { id: dialog_id("shape.create"), options, units: [ruler; 2], open: true, alert_title: None, range_alert: None }
+    }
+
+    /// The title of the range alert a size field raises (the app's name); the dialog's title by default.
+    #[must_use]
+    pub fn alert_title(mut self, title: impl Into<Label>) -> Self {
+        self.alert_title = Some(title.into());
+        self
+    }
+
+    /// The range alert of a width or height typed past [`CreateShapeOptions::SIZE`], worded once; `None` until a
+    /// size field raises one, and after it was taken.
+    pub fn take_range_alert(&mut self) -> Option<Alert<'static>> {
+        let (alert, env) = self.range_alert.take()?;
+        let title = self.alert_title.clone().unwrap_or_else(|| title_of(self.options.kind, &env.words::<CreateShapeWords>()));
+        Some(Alert::range(title, &alert, &env))
     }
 
     /// Puts the kind's remembered values over the opening ones, once, before the first show, OK or set reads them:
@@ -297,7 +330,8 @@ impl CreateShapeDialog {
     }
 }
 
-/// One size field (`axis` 0 is Width, 1 Height) in its unit; sets `size` when the number changed.
+/// One size field (`axis` 0 is Width, 1 Height) in its unit; sets `size` when the number changed. The range alert
+/// of a typed number past [`CreateShapeOptions::SIZE`].
 fn size_field(
     ui: &mut Ui,
     axis: usize,
@@ -306,7 +340,7 @@ fn size_field(
     size: &mut (f64, f64),
     document: &GuideUnits,
     entries: &[Entry<UnitKind>],
-) {
+) -> Option<RangeAlert> {
     let extent = extent_of(document, axis);
     let shown = shown_size(document, axis, *unit, *size);
     let (low, high) = (
@@ -326,6 +360,7 @@ fn size_field(
     {
         set_size(document, axis, *unit, size, value);
     }
+    out.out_of_range
 }
 
 /// The pixels a percentage of size field `axis` is of: the document's width or height.
@@ -372,22 +407,20 @@ fn body(
     words: &CreateShapeWords,
     numbers: &Units,
     latest: &RefCell<Option<Memory>>,
+    typed: &mut Option<RangeAlert>,
 ) -> bool {
     let document = values.units.unwrap_or_else(pixels_only);
     let entries: Vec<Entry<UnitKind>> = length_units(values).map(|kind| Entry::new(kind, Label::from(numbers.symbol(kind)))).collect();
     let kind = values.kind;
-    let name = match kind {
-        ShapeKind::RoundedRectangle => &words.rounded_rectangle,
-        ShapeKind::Ellipse => &words.ellipse,
-        ShapeKind::Triangle => &words.triangle,
-        ShapeKind::Polygon => &words.polygon,
-        ShapeKind::Star => &words.star,
-        ShapeKind::Rectangle | ShapeKind::Line | ShapeKind::Custom => &words.rectangle,
-    };
-    FieldGroup::new(name.clone()).show(ui, |ui, _| {
+    FieldGroup::new(title_of(kind, words)).show(ui, |ui, _| {
         let (width, height) = (Label::from(words.width.as_str().to_owned()), Label::from(words.height.as_str().to_owned()));
-        Field::new(width.clone()).show(ui, |ui, _| size_field(ui, 0, &width, &mut units[0], &mut values.size, &document, &entries));
-        Field::new(height.clone()).show(ui, |ui, _| size_field(ui, 1, &height, &mut units[1], &mut values.size, &document, &entries));
+        for (axis, caption) in [(0, &width), (1, &height)] {
+            Field::new(caption.clone()).show(ui, |ui, _| {
+                if let Some(alert) = size_field(ui, axis, caption, &mut units[axis], &mut values.size, &document, &entries) {
+                    *typed = Some(alert);
+                }
+            });
+        }
         if matches!(kind, ShapeKind::Rectangle | ShapeKind::RoundedRectangle) {
             Field::new(Label::from(words.radius.as_str().to_owned())).show(ui, |ui, _| {
                 // The radii are top-left, top-right, bottom-right, bottom-left; the two columns read
@@ -541,23 +574,13 @@ impl StackDialog for CreateShapeDialog {
         let env = Env::of(ui);
         let words = env.words::<CreateShapeWords>();
         let numbers = env.units();
-        let title = Label::from(
-            match self.options.kind {
-                ShapeKind::RoundedRectangle => &words.rounded_rectangle,
-                ShapeKind::Ellipse => &words.ellipse,
-                ShapeKind::Triangle => &words.triangle,
-                ShapeKind::Polygon => &words.polygon,
-                ShapeKind::Star => &words.star,
-                ShapeKind::Rectangle | ShapeKind::Line | ShapeKind::Custom => &words.rectangle,
-            }
-            .as_str()
-            .to_owned(),
-        );
+        let title = title_of(self.options.kind, &words);
         self.recall(ui.ctx());
         let write_key = save_key(self.options.kind);
         let latest = Rc::new(RefCell::new(None::<Memory>));
         let write = Rc::clone(&latest);
-        let CreateShapeDialog { options, units, open, .. } = self;
+        let mut typed = None::<RangeAlert>;
+        let CreateShapeDialog { options, units, open, range_alert, .. } = self;
         let shown = FormDialog::new(title, Bind::bound(options))
             .opened(Bind::bound(open))
             .alt_resets(false)
@@ -570,7 +593,10 @@ impl StackDialog for CreateShapeDialog {
                     }
                 })
             })
-            .show(ui, |ui, _, values| body(ui, values, units, &words, &numbers, &latest));
+            .show(ui, |ui, _, values| body(ui, values, units, &words, &numbers, &latest, &mut typed));
+        if let Some(alert) = typed {
+            *range_alert = Some((alert, env.clone()));
+        }
         match (shown.accepted, shown.closed) {
             (Some(values), _) => answer(&values, &words, &numbers).ok().map(DialogResult::Ok),
             (None, Some(_)) => Some(DialogResult::Cancel),

@@ -2,18 +2,19 @@
 
 use std::sync::Arc;
 
-use craft_behavior::geometry::turn_to_45;
+use craft_behavior::geometry::axis_or_diagonal;
 use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, Mixed};
 use craft_keymap::{Key, Mods};
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::path_runs;
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
-use kurbo::Point;
+use kurbo::{Point, Vec2};
 
 use super::words::ShapeDragWords;
-use super::{ShapeDragEvent, ShapeDragOptions, ShapeDragRules, ShapeFrame, ShapeKind};
-use crate::geometry::shape::{RadialFrame, SIDES, ShapeGeometry, box_drag, line_drag};
+use super::{BoxConstraint, ShapeDragEvent, ShapeDragOptions, ShapeDragRules, ShapeFrame, ShapeKind};
+use crate::geometry::shape::{BoxRule, MIN_SIDE, RadialFrame, SIDES, ShapeGeometry, box_drag, equilateral_in, line_drag};
+use crate::ui::shape::VectorMode;
 
 /// The flattening tolerance of the outline being drawn, in screen points.
 const OUTLINE_TOLERANCE: f32 = 0.25;
@@ -27,11 +28,16 @@ const OUTLINE_TOLERANCE: f32 = 0.25;
 /// - The press starts at the snapped point; past the press slop the drag begins and each pass reports
 ///   the shape it would draw; release commits it.
 /// - A side under 1 px makes nothing: the gesture is cancelled as `Dismissed`.
-/// - A press and release inside the slop is a [`Click`](ShapeDragEvent::Click) at the press.
-/// - ⇧ makes a square or circle (a Line: 45° steps keeping its length); ⌥ draws from the centre.
+/// - A press and release inside the slop is a [`Click`](ShapeDragEvent::Click) at the press; a Rectangle in
+///   Shape mode has a slop of 1 screen point, so a 2 × 1 point drag draws.
+/// - ⇧ makes a square or circle from the drag's shorter side (a Line: onto the axis within 30° of it, keeping the
+///   offset along it, else onto the diagonal at the shorter offset); ⌥ draws from the centre.
 ///   Both may go down or up mid-drag; the shape follows the modifiers held now.
-/// - Space held moves the shape being drawn without resizing it: the press point moves with the
-///   pointer while Space is down, and the box snaps as a whole.
+/// - The options' [`BoxConstraints`](super::BoxConstraints) (the Rectangle tool's gear) keep a box drag square, at a
+///   fixed size at the release, or at a ratio, and From Center draws from the press as the centre; with Square or
+///   From Center on, ⇧ or ⌥ turns it off.
+/// - Space held moves the shape being drawn without resizing it: every move while Space is down, the first one
+///   included, moves the press point by the pointer's motion, and the box snaps as a whole.
 /// - Esc cancels (the host calls [`cancel`](CanvasTool::cancel)); so does a tool switch: `Cancel`
 ///   goes out when a drag had begun.
 ///
@@ -78,6 +84,8 @@ struct Drag {
     options: ShapeDragOptions,
     /// The press on screen, for the press slop.
     press: egui::Pos2,
+    /// How far the pointer may move from the press, in screen points, before the drag begins.
+    click_slop: f32,
     /// The press as the pointer made it, snapped.
     origin: Point,
     /// The press, moved by Space.
@@ -86,8 +94,6 @@ struct Drag {
     at: Point,
     /// Past the press slop: `Begin` went out.
     began: bool,
-    /// Whether Space was held in the last call.
-    space: bool,
     /// A radial star's inner radius held by Ctrl/Cmd.
     inner: Option<f64>,
     /// Sides or points as changed by ↑ and ↓ during this drag.
@@ -141,10 +147,12 @@ impl ShapeDragTool {
     }
 
     /// The shape a drag from `start` to `at` with `mods` draws under the options and rules, or `None`
-    /// when a side is under 1 px: [`box_drag`] for the box kinds (Rectangle with four equal radii when
-    /// `corner_radius` > 0, Rounded Rectangle always with them, Triangle a 3-sided polygon, Polygon and
+    /// when a side is under 1 px: [`box_drag`] for the box kinds under the options' constraints, ⇧
+    /// toggling Square and ⌥ From Center (Rectangle with four equal radii when
+    /// `corner_radius` > 0, Rounded Rectangle always with them, Triangle filling the box (⇧: the equilateral
+    /// triangle in the square's circle), Polygon and
     /// Star with the options' sides and ratio, Custom a `Custom` box keeping proportions with ⇧),
-    /// [`line_drag`] for a Line (weight at least 1, ⇧ turning the end to 45° steps), and
+    /// [`line_drag`] for a Line (weight at least 1, ⇧ snapping the end by [`line_shift`]), and
     /// [`RadialFrame::drag`] in the radial frame.
     fn shape_of(&self, drag: &Drag, mods: Mods) -> Option<ShapeGeometry> {
         // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs:50-82 `shape_geometry`.
@@ -152,8 +160,9 @@ impl ShapeDragTool {
         let o = &drag.options;
         let radii = [o.corner_radius.max(0.0); 4];
         if o.kind == ShapeKind::Line {
-            let end = if mods.shift { turn_to_45(drag.start, drag.at) } else { drag.at };
-            let to = line_drag(drag.start, end)?;
+            // The drag's own length decides whether a line is drawn, before ⇧ shortens a diagonal.
+            line_drag(drag.start, drag.at)?;
+            let to = if mods.shift { line_shift(drag.start, drag.at) } else { drag.at };
             return Some(ShapeGeometry::Line { from: drag.start, to, weight: o.line_weight.max(1.0) });
         }
         if self.radial(o.kind) {
@@ -171,13 +180,21 @@ impl ShapeDragTool {
             };
             return Some(frame.geometry(drag.sides, star_ratio));
         }
-        let rect = box_drag(drag.start, drag.at, mods.shift, mods.alt)?;
+        let c = &o.constraints;
+        let pair = |(w, h): (Option<f64>, Option<f64>)| w.zip(h);
+        let rule = BoxRule {
+            square: mods.shift != (c.constraint == BoxConstraint::Square),
+            from_centre: mods.alt != c.from_center,
+            fixed: (c.constraint == BoxConstraint::FixedSize).then(|| pair(c.fixed)).flatten(),
+            ratio: (c.constraint == BoxConstraint::Proportional).then(|| pair(c.ratio)).flatten(),
+        };
+        let rect = box_drag(drag.start, drag.at, rule)?;
         Some(match o.kind {
             ShapeKind::Rectangle if o.corner_radius > 0.0 => ShapeGeometry::Rect { rect, radii },
             ShapeKind::Rectangle => ShapeGeometry::Rect { rect, radii: [0.0; 4] },
             ShapeKind::RoundedRectangle => ShapeGeometry::Rect { rect, radii },
             ShapeKind::Ellipse => ShapeGeometry::Ellipse { rect },
-            ShapeKind::Triangle => ShapeGeometry::Polygon { rect, sides: 3, star_ratio: 1.0 },
+            ShapeKind::Triangle => ShapeGeometry::Triangle { rect: if rule.square { equilateral_in(rect) } else { rect } },
             ShapeKind::Polygon => ShapeGeometry::Polygon { rect, sides: drag.sides, star_ratio: 1.0 },
             ShapeKind::Star => ShapeGeometry::Polygon { rect, sides: drag.sides, star_ratio: o.star_ratio },
             ShapeKind::Custom | ShapeKind::Line => ShapeGeometry::Custom { rect, keep_proportions: mods.shift },
@@ -197,14 +214,13 @@ impl ShapeDragTool {
             self.drag = Some(drag);
             return;
         }
-        let space_held = cx.held(Key::Space);
-        if space_held && drag.space {
+        // pc: #13867 (the Frame tool: every move with Space held, the first included, moves the box by the motion).
+        if cx.held(Key::Space) {
             drag.start += at - drag.at;
         }
-        drag.space = space_held;
         drag.at = at;
         if !drag.began {
-            if pos.distance(drag.press) < cx.slop {
+            if pos.distance(drag.press) < drag.click_slop {
                 self.drag = Some(drag);
                 return;
             }
@@ -239,6 +255,19 @@ impl ShapeDragTool {
     }
 }
 
+/// The end of a ⇧ Line drag from `from` to `to`: [`axis_or_diagonal`], with a line on an axis at least
+/// [`MIN_SIDE`] long (a drag of a pixel can keep less than that along its axis).
+fn line_shift(from: Point, to: Point) -> Point {
+    // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs `shape_geometry` (#13243: `dx.abs().max(1.0).copysign(dx)` on
+    // an axis).
+    let d = axis_or_diagonal(from, to) - from;
+    if d.x != 0.0 && d.y != 0.0 {
+        return from + d;
+    }
+    let at_least = |v: f64| if v == 0.0 { 0.0 } else { v.abs().max(MIN_SIDE).copysign(v) };
+    from + Vec2::new(at_least(d.x), at_least(d.y))
+}
+
 impl CanvasTool for ShapeDragTool {
     fn press(&mut self, pointer: &ToolPointer, cx: &mut ToolContext<'_>) -> ToolAction {
         // pc: crates/ui-egui/src/canvas/gesture.rs:84 (a shape drag that stays inside
@@ -246,17 +275,19 @@ impl CanvasTool for ShapeDragTool {
         let Some(space) = cx.space() else { return ToolAction::Ignored };
         let options = self.options;
         let origin = cx.snap(space.view.to_doc(pointer.pos));
+        // pc: crates/ui-egui/src/dialogs/shape_dialog.rs `is_tool_click` (#13340).
+        let click_slop = if options.kind == ShapeKind::Rectangle && options.mode == VectorMode::Shape { 1.0 } else { cx.slop };
         self.next = self.next.next();
         self.drag = Some(Drag {
             id: self.next,
             label: Arc::from(cx.words::<ShapeDragWords>().draw.as_str()),
             options,
             press: pointer.pos,
+            click_slop,
             origin,
             start: origin,
             at: origin,
             began: false,
-            space: cx.held(Key::Space),
             inner: None,
             sides: options.sides.clamp(*SIDES.start(), *SIDES.end()),
             shape: None,

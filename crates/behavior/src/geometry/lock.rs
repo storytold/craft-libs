@@ -1,11 +1,15 @@
-//! Direction locking for ⇧ drags: [`Directions`], [`lock_direction`], [`round_to_direction`], [`turn_to_45`] and
-//! [`polygon_step`].
+//! Direction locking for ⇧ drags: [`Directions`], [`lock_direction`], [`round_to_direction`], [`turn_to_45`],
+//! [`polygon_step`] and [`axis_or_diagonal`].
 
 use kurbo::{Point, Vec2};
 
 /// Extra angle in degrees the pointer must pass the half-way line between two directions by
 /// before a locked direction switches, so it doesn't flicker near the diagonal.
 pub const LOCK_HYSTERESIS_DEGREES: f64 = 8.0;
+
+/// How near an axis, in degrees, a ⇧ line or anchor drag must point to snap onto the axis rather than the diagonal
+/// ([`axis_or_diagonal`]).
+pub const AXIS_BAND_DEGREES: f64 = 30.0;
 
 /// The directions ⇧ locks a move to.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -53,6 +57,28 @@ pub fn polygon_step(from: Point, point: Point) -> Point {
     }
     // Inside a diagonal's sector both offsets have the diagonal's signs.
     let shorter = delta.x.abs().min(delta.y.abs());
+    from + Vec2::new(shorter.copysign(delta.x), shorter.copysign(delta.y))
+}
+
+/// Shift's rule for the Line tool and anchor drags: within [`AXIS_BAND_DEGREES`] of an axis, `point` moves onto the
+/// axis through `from` and keeps its offset along it; otherwise onto the 45° diagonal, at the shorter of its two
+/// offsets on both axes. `point` itself for a zero or non-finite offset.
+pub fn axis_or_diagonal(from: Point, point: Point) -> Point {
+    // Photoshop flattens a 26.6° drag and keeps a 39.8° one diagonal (#13243); anchors stay on the axis at a 5:12
+    // slope (22.6°) and go diagonal at 45° (#13207).
+    let delta = point - from;
+    if !delta.x.is_finite() || !delta.y.is_finite() || delta == Vec2::ZERO {
+        return point;
+    }
+    let tan = AXIS_BAND_DEGREES.to_radians().tan();
+    let (ax, ay) = (delta.x.abs(), delta.y.abs());
+    if ay < ax * tan {
+        return Point::new(point.x, from.y);
+    }
+    if ax < ay * tan {
+        return Point::new(from.x, point.y);
+    }
+    let shorter = ax.min(ay);
     from + Vec2::new(shorter.copysign(delta.x), shorter.copysign(delta.y))
 }
 

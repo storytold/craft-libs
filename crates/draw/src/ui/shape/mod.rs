@@ -293,6 +293,6 @@ impl Default for ShapeToolSettings {
 impl ShapeToolSettings {
     /// The drag options of `kind` with these values.
     pub fn drag_options(&self, kind: ShapeKind) -> ShapeDragOptions {
-        ShapeDragOptions { kind, corner_radius: self.corner_radius, sides: self.sides, star_ratio: self.star_ratio, line_weight: self.line_weight }
+        ShapeDragOptions::new(kind).corner_radius(self.corner_radius).sides(self.sides).star_ratio(self.star_ratio).line_weight(self.line_weight)
     }
 }

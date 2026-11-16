@@ -6,7 +6,7 @@ use crate::contract::{
 };
 use crate::runtime::env::{Label, UnitKind};
 use crate::style::{ComponentStyle, StyleCx};
-use crate::text::NumberField;
+use crate::text::{NumberField, RangeAlert};
 use craft_behavior::{EditEvents, Flow, Metrics, Mixed, Proposal, Sense};
 use egui::{Rect, Response, Vec2, pos2};
 use std::ops::{Deref, RangeInclusive};
@@ -24,7 +24,8 @@ pub struct UnitSelectStyle {
     number: f32,
 }
 
-/// The output of a unit select: the number's edit, and the unit's edit when a unit was picked.
+/// The output of a unit select: the number's edit, the unit's edit when a unit was picked, and the number field's
+/// range alert.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct UnitSelectOutput {
@@ -32,6 +33,9 @@ pub struct UnitSelectOutput {
     pub edit: EditResponse<Option<f64>>,
     /// The unit the user picked this pass.
     pub unit: EditEvents<UnitKind>,
+    /// A typed number the field clamped to its range, in the pass it committed (the number field's own
+    /// `out_of_range`): the app shows the range alert.
+    pub out_of_range: Option<RangeAlert>,
 }
 
 impl Deref for UnitSelectOutput {
@@ -77,13 +81,25 @@ pub struct UnitSelect<'a> {
     number_enabled: Option<bool>,
     /// The unit child's event of this pass, kept from `paint` to `finish`.
     unit_event: EditEvents<UnitKind>,
+    /// The number child's range alert of this pass, kept from `paint` to `finish`.
+    out_of_range: Option<RangeAlert>,
 }
 
 impl<'a> UnitSelect<'a> {
     /// A number field named `label` over `value`, with a select of `units` over `unit` after it.
     pub fn new(label: impl Into<Label>, value: Bind<'a, Option<f64>>, unit: Bind<'a, UnitKind>, units: &'a [Entry<UnitKind>]) -> Self {
-        UnitSelect { common: Common::new(), value, unit, units, range: None, unit_label: None, number_enabled: None, unit_event: EditEvents::new() }
-            .label(label)
+        UnitSelect {
+            common: Common::new(),
+            value,
+            unit,
+            units,
+            range: None,
+            unit_label: None,
+            number_enabled: None,
+            unit_event: EditEvents::new(),
+            out_of_range: None,
+        }
+        .label(label)
     }
 
     fn number(&self, name: Label, value: Mixed<Option<f64>>, kind: Option<UnitKind>) -> NumberField<'static> {
@@ -158,12 +174,13 @@ impl Component for UnitSelect<'_> {
         let start = cx.value().and_then(|value| *value);
         let number = ui.child("number", place(number_rect), self.number(group.clone(), shown, kind));
         cx.adopt(&number, &start, |value, mine| *mine = *value);
+        self.out_of_range = number.out_of_range;
         let select = Select::new(self.select_name(&group), self.unit.reborrowed(), self.units);
         self.unit_event = ui.child("unit", place(select_rect), select).events;
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> UnitSelectOutput {
-        UnitSelectOutput { edit: cx.edit_response(), unit: self.unit_event }
+        UnitSelectOutput { edit: cx.edit_response(), unit: self.unit_event, out_of_range: self.out_of_range }
     }
 }
 
