@@ -48,6 +48,7 @@ craft-atomic = { path = "crates/atomic" }
 craft-captions = { path = "crates/captions" }
 craft-cfb = { path = "crates/cfb" }
 craft-codepage = { path = "crates/codepage" }
+craft-convert = { path = "crates/convert" }
 craft-cms = { path = "crates/cms" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
