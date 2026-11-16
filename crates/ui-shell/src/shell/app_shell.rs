@@ -535,7 +535,8 @@ impl<'a, S> AppShell<'a, S> {
                         let pane = ShellPane::new(slot.key()).edge(*edge).extent(extent).at(rect_of(slot.key()));
                         // Every slot but the title is a chrome pane: it paints the surface under its bar or rail and
                         // the rule toward the body. The title bar paints its own.
-                        let mut region = if *title { ShellRegion::pane(pane) } else { ShellRegion::chrome(pane) }.id_salt(("slot", slot.key()));
+                        let region = if *title { ShellRegion::pane(pane) } else { ShellRegion::chrome(pane) };
+                        let mut region = region.id_salt(("slot", slot.key()));
                         // A bar is as high as its content and the slot as high as its token, so the bar sits at the
                         // slot's centre line.
                         let centred = !*title && matches!(edge, PaneEdge::Top | PaneEdge::Bottom);

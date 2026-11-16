@@ -53,8 +53,8 @@ pub fn pad_of(tokens: &UiTokens, pad: Pad) -> f32 {
 pub(super) fn pad_vec(tokens: &UiTokens, props: &ContainerProps) -> Vec2 {
     let pad = pad_of(tokens, props.pad);
     match props.pad_edges {
+        PadEdges::All => Vec2::splat(pad),
         PadEdges::Block => Vec2::new(0.0, pad),
-        _ => Vec2::splat(pad),
     }
 }
 
