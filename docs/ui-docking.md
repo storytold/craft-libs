@@ -98,6 +98,7 @@ The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords
 - A tab drag carries a `PanelDrag`; a group or column drag carries a `GroupDrag`. Groups and columns register `DockSpot`s in `DockTargets`, and `resolve_drop` maps the spot under the pointer to an `Action`.
 - Ctrl or Cmd held at the release floats the drop. A release over the dragged unit's own group leaves it where it is.
 - A drag ends without a change when another arrangement replaces the workspace it started on: it records the workspace's revision, which `Workspace::replace` and the `WorkspaceSet` switch and reset change. The dock's own edits keep the revision, so they keep the drag.
+- A dock column's last open group fills the column: it takes the height the other groups leave and asks for its `DockHeights::fill`. The other groups keep the height the user gave them, or take their `DockHeights::default`, which shrinks towards `compact` before the filling group gets less than its fill. Groups that ask for no heights share the free height with the filling group.
 - Split handles are Tab stops, and the arrow keys move them. A divider drag is one gesture in `DockAreaOutput::edit`.
 - A panel command (`DockCommands`) acts on the shown panel of the group that takes it. A menu row, a key and the command palette run the same code: `actions` turns the command into `Action`s.
 

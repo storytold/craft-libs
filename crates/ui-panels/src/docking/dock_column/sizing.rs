@@ -66,7 +66,7 @@ pub struct GroupSize {
     /// The least height.
     pub min: f32,
     /// The heights the panels ask for, with the strip added to `fill` only when it is above 0, so 0 still means the
-    /// group does not ask to fill.
+    /// group asks for no more than its minimum when it fills the column.
     pub content: Option<DockHeights>,
 }
 
@@ -77,24 +77,21 @@ impl GroupSize {
     }
 }
 
-/// The heights of stacked groups in a column body `room` high. Minimized groups take `strip`, groups with a saved
-/// height keep it, and the groups the user never resized whose content asks to fill share what is left. Without
-/// those, the groups without content heights share it, and when every open group has a height the last one takes
-/// the rest. Other groups take their default height, or their minimum. Default heights shrink towards their compact
-/// heights until the filling groups get their fill height, nearest the filling groups first; then every height
-/// shrinks in proportion towards its minimum.
+/// The heights of stacked groups in a column body `room` high. The column's last open group fills it: it takes what
+/// is left, and asks for its fill height (its minimum when its fill is 0). Groups the user never resized that ask
+/// for no heights share what is left with it. Minimized groups take `strip`, other groups with a saved height keep
+/// it, and the rest take their default height. Default heights shrink towards their compact heights until the
+/// filling groups get their fill height, nearest the filling groups first; then every height shrinks in proportion
+/// towards its minimum.
 pub fn group_heights(groups: &[GroupSize], strip: f32, room: f32) -> Vec<f32> {
     let saved = |group: &GroupSize| group.saved.filter(|height| height.is_finite());
     let open: Vec<usize> = (0..groups.len()).filter(|at| groups.get(*at).is_some_and(|group| !group.minimized)).collect();
-    let unsaved =
-        |at: &usize, test: fn(Option<DockHeights>) -> bool| groups.get(*at).is_some_and(|group| saved(group).is_none() && test(group.content));
-    let mut shared: Vec<usize> = open.iter().copied().filter(|at| unsaved(at, |content| content.is_some_and(|content| content.fill > 0.0))).collect();
-    if shared.is_empty() {
-        shared = open.iter().copied().filter(|at| unsaved(at, |content| content.is_none())).collect();
-    }
-    if shared.is_empty() {
-        shared.extend(open.last());
-    }
+    let last = open.last().copied();
+    let shared: Vec<usize> = open
+        .iter()
+        .copied()
+        .filter(|at| Some(*at) == last || groups.get(*at).is_some_and(|group| saved(group).is_none() && group.content.is_none()))
+        .collect();
     let sized: Vec<usize> = open.iter().copied().filter(|at| !shared.contains(at)).collect();
     let mut defaulted: Vec<usize> = sized.iter().copied().filter(|at| groups.get(*at).is_some_and(|group| saved(group).is_none())).collect();
     let mut heights: Vec<f32> = groups
