@@ -1,11 +1,15 @@
 # craft-automation
 
-Drive a running Craft app from tests, agents and the CLI, and record and play actions. The control channel, its transport, screenshots, the profiler and the trace are desktop only; `actions` and `ui::actions` build on every target, the browser included.
+Drive a running Craft app from tests, agents and the CLI, and record and play actions. The control channel, its transport, screenshots, the profiler and the trace are desktop only; `actions`, `ui::actions` and the agent settings build on every target, the browser included.
+
+Features: `ui` (the egui parts), `agents` (agents in the open window: the launcher's switch, the connection file, the link host and the Agents page; desktop), `screen-testing` (stories and the integration binary; turns on both).
 
 | Module | What it gives the app |
 | --- | --- |
 | `actions` | Recorded actions (every target): `ActionList` of `Action`s and `ActionStep`s, `ActionsFile`, playback with `ActionPlayer` and `ActionRunner` under a `PlaybackBudget`, and `Recording`. The app keeps the command table. |
 | `ui::actions` | `ActionsPanel` (every target): sets, actions and steps as a tree, include and dialog cells, rename (`start_rename`), drag to move, Button Mode, the footer and the menus (`ActionsPanelCommands`, `ActionsMenuFacts` and `panel_rows`, which leaves out the rows the host has no command for). It runs nothing; it reports `ActionsEvent`s. `ActionsPanelState` holds its view state. `ActionsWords` holds its words. |
+| `agents` | AI agents in the open window. Every target: `AgentSettings` (Control Port, the folders agents may open from and save to, `WhenAppClosed`, Allow Agent Control) and `agents_allowed`. Desktop, feature `agents`: `AgentSwitch`, the ArtCraft Launcher's switch for the app behind the suite's `AI-MCP` flag, watched on a thread; the connection file (`Connection`, `write_connection`, `read_connection`, `remove_stale_connection`, `probe`) that the app's `<id>-cli mcp` finds the open window by. With `ui`: `AgentLink`, the link host that starts, moves, stops and retries the agents' control server to match the settings and publishes the connection file. |
+| `ui::agents` | `AgentsPage` (desktop, features `agents` and `ui`): the Agents page of Preferences, a custom page over the agent settings in the Preferences draft, with the link's status; the folder rows are `PathSetting`s. `AgentsWords` holds its words. |
 | `args` | `ControlOptions`: the `--control <PORT>`, `--control-token`, `--control-token-file` values and their `<APP>_CONTROL_*` environment fallbacks, checked the way the apps' command lines report them (usage errors exit 2). |
 | `security` | Tokens (`generate_token`, `validate_token`, `server_token`, `client_token`), the authentication handshake (`ServerHandshake`: the challenge handshake, which never sends the token, or the one-frame `auth {token}`), bounded line reads, connection and request limits. |
 | `protocol` | The JSON-lines wire format: one `{"id", "method", "params"}` request per line, one `{"id", "ok", "result" | "error"}` reply per line; `Params` validators that name the bad parameter. |
