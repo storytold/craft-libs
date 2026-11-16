@@ -9,7 +9,7 @@ use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, MomentaryTool,
     NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer, canvas_space,
 };
-use craft_ui::contract::{Bind, Sampler as _, Show as _, ShowContainer as _};
+use craft_ui::contract::{Bind, Lazy, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
 use craft_ui::display::Text;
 use craft_ui::primitives::Draw;
@@ -19,6 +19,7 @@ use craft_ui::runtime::frame;
 use craft_ui::runtime::windows::WindowHost;
 use craft_ui::style::DataColor;
 use craft_ui::testing::input::key_press;
+use craft_ui::testing::layout::in_region;
 use craft_ui::testing::{Fixture, ToolFixture, pointer, trial};
 use egui::{Color32, Id, Key, Modifiers, Pos2, Rect, Shape, Vec2};
 use std::cell::{Cell, RefCell};
@@ -801,6 +802,80 @@ fn an_injected_pen_reading_reaches_the_tool() {
     fixture.run_injected();
     let pressures = probe.borrow().pressures.clone();
     assert!(pressures.len() == 2 && (pressures[0] - 0.3).abs() < 1e-4 && (pressures[1] - 0.7).abs() < 1e-4, "{pressures:?}");
+}
+
+/// A tool that asks for a repaint in every drag, as a brush that previews its stroke does.
+#[derive(Default)]
+struct Painter {
+    drags: usize,
+}
+
+impl CanvasTool for Painter {
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, cx: &mut ToolContext<'_>) {
+        self.drags += 1;
+        cx.request_repaint();
+    }
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Freehand("the painter only asks for repaints")
+    }
+}
+
+/// A stroke on the canvas, whose tool asks for a repaint in every drag, runs neither of the settled panels beside it
+/// (each shows a content version), from its press to its release, and each of its move frames runs one pass.
+#[trial]
+fn a_stroke_runs_no_settled_panel_beside_the_canvas_and_one_pass_per_move() {
+    let painter = Rc::new(RefCell::new(Painter::default()));
+    let runs: Rc<[Cell<usize>; 2]> = Rc::default();
+    let canvas = Rc::new(Cell::new(Id::NULL));
+    let (shown_painter, shown_runs, shown_canvas) = (Rc::clone(&painter), Rc::clone(&runs), Rc::clone(&canvas));
+    let mut fixture = Fixture::new(move |ui| {
+        let room = ui.available_rect_before_wrap();
+        let (side, document) = room.split_left_right_at_x(room.left() + 160.0);
+        in_region(ui, side, |ui| {
+            for (at, name) in ["Layers", "Navigator"].into_iter().enumerate() {
+                Lazy::new(name, 0.0).settles(true).content(1).show(ui, |ui| {
+                    shown_runs[at].set(shown_runs[at].get() + 1);
+                    Text::new(name).show(ui);
+                });
+            }
+        });
+        in_region(ui, document, |ui| {
+            let view = CanvasView::new(document, Point::new(600.0, 450.0), 1.0);
+            let shown = Canvas::new("Document").document(DOCUMENT).view(view).show(ui, |_, _| {});
+            shown_canvas.set(shown.output.response.id);
+            let _ = ToolHost::new().run(ui, &shown.output, &mut *shown_painter.borrow_mut());
+        });
+    });
+    fixture.settle();
+    let at = fixture.by_role(Role::CANVAS)[0].rect.center();
+    let ctx = fixture.ctx().clone();
+    ToolHost::inject(&ctx, canvas.get(), ToolInput::down(PointerButton::Primary, at));
+    for step in 1..=6 {
+        ToolHost::inject(&ctx, canvas.get(), ToolInput::moved(at + Vec2::new(8.0 * step as f32, 4.0 * step as f32)));
+    }
+    ToolHost::inject(&ctx, canvas.get(), ToolInput::up(at + Vec2::new(48.0, 24.0)));
+    let host = WindowHost::of(&ctx);
+    let mut frames = Vec::new();
+    while !host.injected_idle() && frames.len() < 64 {
+        runs.iter().for_each(|runs| runs.set(0));
+        fixture.frame(Vec::new());
+        frames.push((fixture.passes(), [runs[0].get(), runs[1].get()]));
+    }
+    assert!(painter.borrow().drags > 0, "the moves reach the tool, which asks for repaints");
+    assert!(frames.iter().all(|(_, runs)| *runs == [0, 0]), "no settled panel runs during the stroke: {frames:?}");
+    let moves = &frames[1..frames.len() - 1];
+    assert!(moves.iter().all(|(passes, _)| *passes == 1), "each move frame runs one pass: {frames:?}");
 }
 
 /// A queued Space starts the momentary Hand as the real key does: the press it is held over pans the view, and the

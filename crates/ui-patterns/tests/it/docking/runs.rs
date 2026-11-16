@@ -1,5 +1,5 @@
-//! The runs of a settled docked layout: each group adds the same runs whatever its tab count, and a closed menu, the
-//! group's header controls and its tabs add none.
+//! The runs of a settled docked layout: each group adds the same runs whatever its tab count, a closed menu, the
+//! group's header controls and its tabs add none, and a panel body with a content version runs only when it changes.
 
 use craft_behavior::Axis;
 use craft_behavior::dock::{Layout, Node, SplitSize, Workspace};
@@ -9,6 +9,8 @@ use craft_ui::menu::PanelRow;
 use craft_ui::patterns::dock::DockArea;
 use craft_ui::testing::{Fixture, last_pass_runs, trial};
 use egui::{Ui, Vec2};
+use std::cell::Cell;
+use std::rc::Rc;
 
 struct Panels;
 
@@ -69,4 +71,48 @@ fn a_settled_dock_group_runs_the_same_whatever_its_tab_count() {
     let shown = settled_runs(2, 3);
     let parts: Vec<_> = shown.iter().filter(|(ty, _)| matches!(short(ty), "Row" | "Tab" | "IconButton" | "GroupGrip")).collect();
     assert!(parts.is_empty(), "a settled dock ran header parts as runs: {parts:?}");
+}
+
+/// Two panels in two groups: panel 0 gives the content version `version`, panel 1 none. Each body counts its runs.
+struct Versioned {
+    runs: Rc<[Cell<usize>; 2]>,
+    version: Rc<Cell<u64>>,
+}
+
+impl DockPanels<usize> for Versioned {
+    fn spec(&self, panel: &usize) -> PanelSpec {
+        PanelSpec::new(format!("Panel {panel}"))
+    }
+
+    fn body(&mut self, panel: &usize, _: &mut Ui, _: &mut BodyCx<'_>) {
+        self.runs[*panel].set(self.runs[*panel].get() + 1);
+    }
+
+    fn content(&self, panel: &usize) -> Option<u64> {
+        (*panel == 0).then(|| self.version.get())
+    }
+}
+
+/// A panel body with a content version runs in the frame its version changes and settles otherwise; a body without one
+/// runs every frame.
+#[trial]
+fn a_panel_body_with_a_content_version_runs_only_when_its_version_changes() {
+    let (runs, version): (Rc<[Cell<usize>; 2]>, _) = (Rc::default(), Rc::new(Cell::new(1)));
+    let root = Node::split(Axis::X, SplitSize::Ratio(0.5), Node::tabs(vec![0], 0), Node::tabs(vec![1], 0));
+    let mut workspace = Workspace::new(Layout::new(Some(root), Vec::new()));
+    let mut panels = Versioned { runs: Rc::clone(&runs), version: Rc::clone(&version) };
+    let mut fixture = Fixture::new(move |ui| {
+        DockArea::new("Dock", Bind::bound(&mut workspace), &mut panels, DockConfig::default()).show(ui);
+    });
+    fixture.room(Vec2::new(1200.0, 600.0)).settle();
+    let mut frame = || {
+        runs.iter().for_each(|runs| runs.set(0));
+        fixture.frame(Vec::new());
+        [runs[0].get(), runs[1].get()]
+    };
+    let [versioned, plain] = frame();
+    assert!(versioned == 0 && plain > 0, "the versioned body settles, the other runs: {versioned}, {plain}");
+    version.set(2);
+    assert!(frame()[0] > 0, "a new version runs the versioned body");
+    assert_eq!(frame()[0], 0, "and it settles at it");
 }

@@ -14,13 +14,13 @@ use super::screen_mode::{ScreenMode, ScreenModeCommands, ScreenModeFollow};
 use super::words::ShellWords;
 use crate::contract::overlay::Resize;
 use crate::contract::{
-    Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, PaneEdge, Props as _, Remember as _, Role, ShellPane,
-    ShowContainer as _, Sizing,
+    Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, Lazy, Mount, NoValue, Outcome, PaneEdge, Props as _, Remember as _,
+    Role, ShellPane, ShowContainer as _, Sizing,
 };
 use crate::notices::ToastStack;
 use crate::runtime::commands::{CommandAccess as _, CommandSet as _};
 use crate::runtime::egui::pass;
-use crate::runtime::env::{AppValues, BodyMode, Env, Label, RevealEdge, ShellCx, ShellEntry, ShellRegions, WindowKey};
+use crate::runtime::env::{AppValues, BodyMode, Env, Label, RevealEdge, ShellCx, ShellEntry, ShellRegions, SlotKey, WindowKey};
 use crate::runtime::focus::FocusPolicy;
 use crate::runtime::frame::{note_shell, take_chrome_toggles};
 use crate::runtime::overlay::{OpenFilter, any_open};
@@ -411,6 +411,15 @@ impl<'a, S> AppShell<'a, S> {
         self
     }
 
+    /// Gives the slot keyed `key`, added before, the version of the app data it shows ([`Slot::content`]), for the
+    /// slots the `options_bar`, `tools` and `status` builders make.
+    pub fn content(mut self, key: SlotKey, version: u64) -> Self {
+        for placed in self.title.iter_mut().chain(self.slots.iter_mut()).filter(|placed| placed.slot.key() == key) {
+            placed.slot = placed.slot.clone().content(version);
+        }
+        self
+    }
+
     /// Lays out the slots, then the body in what is left, runs the window's dialogs over them and shows the toasts of
     /// the window. Each slot and the body get `app`, one after the other: the slots that do not cover the body, then the
     /// body, then the slots a reveal lays over it.
@@ -542,7 +551,13 @@ impl<'a, S> AppShell<'a, S> {
                         if let Some(label) = slot.name().cloned().or_else(|| named.map(|name| name(&words))) {
                             region = region.label(label);
                         }
-                        region.show(ui, |ui, bcx| add(ui, bcx, app));
+                        let content = slot.content_version();
+                        region.show(ui, |ui, bcx| match content {
+                            Some(version) => {
+                                Lazy::new(("slot", slot.key()), 0.0).settles(true).content(version).show(ui, |ui| add(ui, bcx, app));
+                            }
+                            None => add(ui, bcx, app),
+                        });
                     }
                 };
                 show_slots(ui, false, app);
