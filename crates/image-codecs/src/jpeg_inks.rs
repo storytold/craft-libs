@@ -57,7 +57,9 @@ pub fn jpeg_icc_profile(bytes: &[u8]) -> Option<Vec<u8>> {
 ///
 /// Errors: bytes that aren't a JPEG with readable headers ([`CodecError::InvalidImage`]); one of
 /// other than four components, or a frame `zune-jpeg` doesn't decode, such as an arithmetic-coded
-/// or 12-bit one ([`CodecError::Unsupported`]); a size past `limits`; and data that doesn't decode,
+/// or 12-bit one ([`CodecError::Unsupported`]); a size past `limits`; scan data too short for the
+/// frame (under a byte for every 2048 pixels, refused before anything is allocated); and data that
+/// doesn't decode,
 /// including frames `zune-jpeg` panics on, which are caught.
 pub fn decode_jpeg_inks(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let bad = |m: &str| CodecError::InvalidImage(format!("JPEG inks: {m}"));
@@ -70,6 +72,9 @@ pub fn decode_jpeg_inks(bytes: &[u8], limits: &Limits) -> Result<Image, CodecErr
     let (w, h) = d.dimensions().ok_or_else(|| bad("no size"))?;
     let (w, h) = (u32::try_from(w).map_err(|_| bad("width"))?, u32::try_from(h).map_err(|_| bad("height"))?);
     limits.check(w, h, ChannelLayout::Cmyk, SampleType::U8)?;
+    if crate::codecs::jpeg::scan_too_short(bytes, w, h) {
+        return Err(bad("the scan data is too short for the frame it declares"));
+    }
     d.set_options(DecoderOptions::default().jpeg_set_out_colorspace(space));
     // zune-jpeg 0.5 asserts on some subsampled four-component frames whose first component isn't
     // the largest (a scratch row too short for its upsampler): that is an error here, not a panic.

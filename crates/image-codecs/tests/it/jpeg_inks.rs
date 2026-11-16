@@ -115,6 +115,10 @@ fn other_jpegs_are_refused() {
         other[sof + 4] = precision;
         assert!(decode_jpeg_inks(&other, &Limits::default()).is_err(), "SOF {marker:#x}, {precision} bits");
     }
+    // A tiny file declaring a large frame is refused before zune-jpeg allocates its output.
+    let mut huge = cmyk.clone();
+    huge[sof + 5..sof + 9].copy_from_slice(&[0x20, 0x00, 0x20, 0x00]);
+    assert!(matches!(decode_jpeg_inks(&huge, &Limits::default()), Err(CodecError::InvalidImage(m)) if m.contains("too short")));
     let tight = Limits { max_pixels: 100, ..Limits::default() };
     assert!(matches!(decode_jpeg_inks(&cmyk, &tight), Err(CodecError::LimitExceeded(_))));
     assert!(matches!(decode_jpeg_inks(b"not a jpeg", &Limits::default()), Err(CodecError::InvalidImage(_))));
@@ -157,7 +161,7 @@ fn matches_the_reference_reader() {
     let (mut seen, mut refused) = (0, 0);
     for (i, (w, h)) in [(1u16, 1u16), (7, 3), (8, 8), (17, 9), (33, 31), (64, 5), (100, 77)].into_iter().enumerate() {
         let (wu, n) = (usize::from(w), usize::from(w) * usize::from(h));
-        let noise: Vec<u8> = (0..n * 4).map(|k| ((k * 2_654_435_761 + i * 97) >> 7) as u8).collect();
+        let noise: Vec<u8> = (0..n * 4).map(|k| ((k as u64).wrapping_mul(2_654_435_761).wrapping_add(i as u64 * 97) >> 7) as u8).collect();
         let ramp: Vec<u8> = (0..n * 4).map(|k| (k / 4 % wu * 255 / wu.max(2)) as u8).collect();
         for samples in [&noise, &ramp] {
             for ty in [ColorType::Cmyk, ColorType::CmykAsYcck] {
