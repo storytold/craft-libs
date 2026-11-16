@@ -18,7 +18,6 @@ craft-i18n = { workspace = true }
 craft-theme = { workspace = true }
 egui = { workspace = true, optional = true }
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
-craft-ai-agents = { workspace = true, optional = true }
 craft-ai-core = { workspace = true, optional = true }
 craft-atomic = { workspace = true, optional = true }
 craft-audio = { workspace = true, optional = true }
@@ -234,8 +233,6 @@ aep = ["dep:craft-aep"]
 
 affinity = ["dep:craft-affinity"]
 affinity-synth = ["affinity", "craft-affinity/synth"]
-
-ai-agents = ["dep:craft-ai-agents"]
 
 ai-core = ["dep:craft-ai-core"]
 
