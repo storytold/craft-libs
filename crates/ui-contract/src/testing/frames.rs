@@ -18,6 +18,8 @@ pub struct Frames {
     /// The context the frames run on.
     pub ctx: Context,
     time: f64,
+    /// Whether a frame leaves the clock where it is: only [`Frames::advance`] moves it on.
+    still: bool,
     /// The time of the last frame these frames ran, to tell when another driver of the context has run it since.
     given: f64,
     root: RootEnv,
@@ -108,6 +110,7 @@ impl Frames {
         Frames {
             ctx,
             time: 0.0,
+            still: false,
             given: 0.0,
             root: RootEnv::default(),
             cursor: egui::CursorIcon::Default,
@@ -228,6 +231,12 @@ impl Frames {
         self.files.dropped = names.iter().map(|name| (*name).to_owned()).collect();
     }
 
+    /// Keeps the clock still: a frame no longer moves it on, so time passes only where a test calls
+    /// [`advance`](Self::advance). Held-pointer repeats, hover delays and animations then wait for the test.
+    pub fn still_clock(&mut self) {
+        self.still = true;
+    }
+
     /// Moves the clock on by `seconds` before the next frame.
     pub fn advance(&mut self, seconds: f64) {
         self.time += seconds;
@@ -248,7 +257,9 @@ impl Frames {
         if context > self.given {
             self.time = self.time.max(context);
         }
-        self.time += DT;
+        if !self.still {
+            self.time += DT;
+        }
         self.given = self.time;
     }
 
