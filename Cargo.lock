@@ -1452,6 +1452,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-control-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "subtle",
+]
+
+[[package]]
 name = "craft-crs"
 version = "0.1.0"
 dependencies = [
@@ -1678,6 +1686,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-fcproj-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-fig"
 version = "0.1.0"
 dependencies = [
@@ -1768,6 +1785,7 @@ name = "craft-font-catalog"
 version = "0.1.0"
 dependencies = [
  "fontique",
+ "kurbo 0.13.1",
  "skrifa 0.47.0",
  "thiserror 2.0.21",
  "windows-registry",
@@ -1884,6 +1902,10 @@ dependencies = [
  "encoding_rs",
  "proptest",
 ]
+
+[[package]]
+name = "craft-http-url"
+version = "0.1.0"
 
 [[package]]
 name = "craft-i18n"
