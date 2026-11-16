@@ -523,7 +523,8 @@ impl<'s> ReadChannels<'s> for DisplaySelect<'_> {
         // the kept planes and each block fit.
         let block_pixels = match header.blocks {
             exr::meta::BlockDescription::Tiles(tiles) => tiles.tile_size.0.min(layer_w).checked_mul(tiles.tile_size.1.min(layer_h)),
-            exr::meta::BlockDescription::ScanLines => header.compression.scan_lines_per_block().checked_mul(layer_w),
+            // a part shorter than its compression's scan-line group has only its own rows
+            exr::meta::BlockDescription::ScanLines => header.compression.scan_lines_per_block().min(layer_h).checked_mul(layer_w),
         };
         let Some(block_bytes) = block_pixels.and_then(|pixels| pixels.checked_mul(header.channels.bytes_per_pixel.max(1))) else {
             self.block_limit.set(Some(format!("data-window block size exceeds {}", self.limits.max_bytes)));

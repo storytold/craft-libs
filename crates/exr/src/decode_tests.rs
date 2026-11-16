@@ -144,6 +144,10 @@ fn decoded_display_part_bounds_each_all_channel_block() {
     let r = |name: &str| name == "R";
     assert!(matches!(decode_display_part(&bytes, 0, &r, &|_| 0.0, &Limits { max_bytes: 16, ..Limits::default() }), Err(Error::LimitExceeded(_))));
     assert_eq!(decode_display_part(&bytes, 0, &r, &|_| 0.0, &Limits { max_bytes: 64, ..Limits::default() }).unwrap().channels.len(), 1);
+    // ZIP groups 16 scan lines, but a one-row part's block is that row: still 64 bytes, not 1024
+    let zip16 = file(vec![layer(None, 4, 1, &["R", "G", "B", "A"], false, exr::prelude::Compression::ZIP16)], (4, 1));
+    assert!(matches!(decode_display_part(&zip16, 0, &r, &|_| 0.0, &Limits { max_bytes: 63, ..Limits::default() }), Err(Error::LimitExceeded(_))));
+    assert_eq!(decode_display_part(&zip16, 0, &r, &|_| 0.0, &Limits { max_bytes: 64, ..Limits::default() }).unwrap().channels.len(), 1);
     // A tile is the block of a tiled part: a 4x4 tile of four f32 channels is 256 bytes, while
     // the whole 8x8 part is 1024 and the kept R plane of the 2x2 display window only 16.
     let tiled = file(vec![layer(None, 8, 8, &["R", "G", "B", "A"], true, exr::prelude::Compression::ZIP1)], (2, 2));
