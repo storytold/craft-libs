@@ -655,10 +655,10 @@ pub fn level_size((width, height): (usize, usize), level: u32) -> (usize, usize)
 }
 
 /// A rectangle of rows of one requested channel, or of a group of them ([`Request::groups`]),
-/// decoded: `samples` holds `height` rows of `width` pixels, row by row, each pixel `channels`
-/// values in slot order. `x` and `y` are in the output grid, counted from the display window's
-/// top-left corner (0, 0, not its absolute position): display-window pixels at level 0, every
-/// `2^level`-th pixel above.
+/// decoded: `samples` holds `height` rows of `width` pixels, row by row, each pixel
+/// `values_per_pixel` values in slot order. `x` and `y` are in the output grid, counted from the
+/// display window's top-left corner (0, 0, not its absolute position): display-window pixels at
+/// level 0, every `2^level`-th pixel above.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Band {
     /// The position of the channel in [`Request::channels`]; for a group, its first slot.
@@ -668,7 +668,12 @@ pub struct Band {
     pub width: usize,
     pub height: usize,
     /// The values per pixel: 1, or the size of the group the band is of.
-    pub channels: usize,
+    pub values_per_pixel: usize,
+    /// The chunk the band was decoded from: its number in the read, from 0 in file order, counting
+    /// the chunks [`Index::estimate`] counts. A chunk may give no band (none of its rows on the
+    /// level's grid, say) or several; the bands of a chunk come together, so progress is the
+    /// highest `chunk` seen plus one, out of [`Estimate::chunks`].
+    pub chunk: usize,
     pub samples: Vec<f32>,
 }
 
@@ -695,11 +700,15 @@ pub struct Estimate {
     /// The bytes of those chunks it reads from the source.
     pub compressed_bytes: u64,
     /// An upper estimate of the most memory the read holds at once besides what the sink keeps:
-    /// the decoded bytes in flight (as [`Stats::in_flight`] counts them), as much again for the
-    /// decompressors' scratch, two pieces of compressed bytes, and each worker's copy of the
-    /// chunk it decodes.
+    /// the decoded bytes in flight (as [`Stats::in_flight`] counts them: each chunk's
+    /// decompressed block and its bands, exactly as large as they are made, grouped or not), as
+    /// much again for the decompressors' scratch, two pieces of compressed bytes, and each
+    /// worker's copy of the chunk it decodes.
     pub working_bytes: u64,
-    /// The bytes of the planes [`read_planes`] allocates for the request.
+    /// The bytes of the planes [`read_planes`] would allocate for the request (whole display
+    /// window planes, one per slot: it ignores [`Request::groups`]). Not part of `working_bytes`,
+    /// and not checked here: [`read_planes`] checks it against [`Request::max_bytes`] when it
+    /// runs, a caller that collects bands itself checks what it allocates.
     pub planes_bytes: u64,
 }
 
@@ -737,7 +746,14 @@ impl<E: std::fmt::Display> std::fmt::Display for Stop<E> {
     }
 }
 
-impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for Stop<E> {}
+impl<E: std::fmt::Debug + std::fmt::Display> std::error::Error for Stop<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Stop::Read(e) => Some(e),
+            Stop::Sink(_) => None,
+        }
+    }
+}
 
 /// The planes' geometry for [`chunk_bands`].
 struct Geometry<'a> {
@@ -749,8 +765,9 @@ struct Geometry<'a> {
     rows: Range<i64>,
     /// Each part's channel → the request slots that name it.
     slots: &'a [Vec<Vec<usize>>],
-    /// The request's groups of slots delivered interleaved.
-    groups: &'a [Range<usize>],
+    /// Per request slot: the band it goes into (the first slot of its group, or itself), that
+    /// band's values per pixel, and the slot's place among them.
+    units: &'a [(usize, usize, usize)],
 }
 
 impl Geometry<'_> {
@@ -798,11 +815,13 @@ struct Plan {
     jobs: Vec<Planned>,
     /// The decoding threads to start.
     workers: usize,
+    /// Per request slot: see [`Geometry::units`].
+    units: Vec<(usize, usize, usize)>,
 }
 
 impl Plan {
-    fn geometry<'a>(&'a self, request: &Request<'a>) -> Geometry<'a> {
-        Geometry { size: self.size, out: self.out, stride: self.stride, rows: self.rows.clone(), slots: &self.slots, groups: request.groups }
+    fn geometry(&self) -> Geometry<'_> {
+        Geometry { size: self.size, out: self.out, stride: self.stride, rows: self.rows.clone(), slots: &self.slots, units: &self.units }
     }
 }
 
@@ -829,6 +848,7 @@ fn plan(index: &Index, request: &Request) -> Result<Plan> {
         }
     }
     // Groups: slots of one part (so they share every block), none in two groups.
+    let mut units: Vec<(usize, usize, usize)> = (0..request.channels.len()).map(|slot| (slot, 1, 0)).collect();
     let mut grouped = vec![false; request.channels.len()];
     for group in request.groups {
         let members = request
@@ -844,12 +864,15 @@ fn plan(index: &Index, request: &Request) -> Result<Plan> {
                 return Err(malformed(format!("channel group {group:?} overlaps another")));
             }
         }
+        for (k, unit) in units.get_mut(group.clone()).unwrap_or_default().iter_mut().enumerate() {
+            *unit = (group.start, group.len(), k);
+        }
     }
     let rows = request.rows.clone().unwrap_or(0..h as i64);
     // (both ends inside the display window, so an empty or reversed range at either end of i64
     // stays empty instead of overflowing when aligned to the level's grid)
     let rows = rows.start.clamp(0, h as i64)..rows.end.clamp(0, h as i64);
-    let geometry = Geometry { size: (w, h), out, stride, rows: rows.clone(), slots: &slots, groups: request.groups };
+    let geometry = Geometry { size: (w, h), out, stride, rows: rows.clone(), slots: &slots, units: &units };
     // What the request delivers: the rows read, at the level, of every requested channel.
     let need = plane_bytes((out.0, geometry.rows_read()), request.channels.len());
     if need > request.max_bytes {
@@ -891,7 +914,7 @@ fn plan(index: &Index, request: &Request) -> Result<Plan> {
     // (no more threads than chunks can be in flight: two pieces)
     let workers =
         request.workers.unwrap_or_else(|| std::thread::available_parallelism().map_or(1, usize::from)).min(jobs.len()).min(2 * PIECE_CHUNKS);
-    Ok(Plan { slots, size: (w, h), out, stride, rows, jobs, workers })
+    Ok(Plan { slots, size: (w, h), out, stride, rows, jobs, workers, units })
 }
 
 impl Index {
@@ -905,7 +928,7 @@ impl Index {
 }
 
 /// [`Index::estimate`] for a read keeping at most `budget` decoded bytes in flight.
-fn estimate_within(index: &Index, request: &Request, budget: u64) -> Result<Estimate> {
+pub(crate) fn estimate_within(index: &Index, request: &Request, budget: u64) -> Result<Estimate> {
     let plan = plan(index, request)?;
     let sum = |f: fn(&Planned) -> u64| plan.jobs.iter().map(f).fold(0u64, u64::saturating_add);
     let most = |f: fn(&Planned) -> u64| plan.jobs.iter().map(f).max().unwrap_or(0);
@@ -985,7 +1008,8 @@ pub fn read_bands_with_stats<R: Read + Seek + ?Sized>(
 /// [`read_bands_with_stats`] with a sink that can stop the read with an error of its own (a tile
 /// store out of room, a full scratch disk): nothing more is read or handed to the sink after it
 /// fails, the decoding threads wind down as on a cancel, and the sink's error comes back as
-/// [`Stop::Sink`], unchanged. `stats` says how far the read got either way.
+/// [`Stop::Sink`], unchanged. `stats` says how far the read got either way; after a sink error
+/// its `lines` include the chunk whose band the sink refused (the chunk was decoded whole).
 ///
 /// This is also the way to pull: a caller that wants to decide band by band whether to go on (and
 /// check a budget before each one) does that in the sink. A pulling iterator would have to run the
@@ -1047,7 +1071,7 @@ fn read_into<R: Read + Seek + ?Sized, E>(
 ) -> std::result::Result<(), Stop<E>> {
     *stats = Stats { chunks: vec![0; index.layout.len()], ..Default::default() };
     let plan = plan(index, request)?;
-    let geometry = plan.geometry(request);
+    let geometry = plan.geometry();
     let jobs = &plan.jobs;
     if jobs.is_empty() {
         return Ok(());
@@ -1225,10 +1249,14 @@ fn decode_worker(index: &Index, g: &Geometry, queue: &Mutex<Receiver<Job>>, done
             Err(_) => return,
         };
         let Ok(job) = next else { return };
-        let mut report = Report { seq: job.seq, done, sent: false };
+        let seq = job.seq;
+        let mut report = Report { seq, done, sent: false };
         let decoded = decode_job(index, g, &job);
+        // (its share of the piece's bytes goes now, not after the result is taken: the two-pieces
+        // bound counts on it)
+        drop(job);
         report.sent = true;
-        if done.send((job.seq, decoded)).is_err() {
+        if done.send((seq, decoded)).is_err() {
             return;
         }
     }
@@ -1254,8 +1282,14 @@ impl Drop for Report<'_> {
 /// chunk, never raised (where panics unwind).
 fn decode_job(index: &Index, g: &Geometry, job: &Job) -> Decoded {
     let buf = job.data.get(job.range.clone()).unwrap_or_default();
-    catch_unwind(AssertUnwindSafe(|| chunk_bands(index, job.part, &job.chunk, buf, g)))
-        .unwrap_or_else(|_| Err(malformed("a chunk could not be decompressed")))
+    let decoded = catch_unwind(AssertUnwindSafe(|| chunk_bands(index, job.part, &job.chunk, buf, g)))
+        .unwrap_or_else(|_| Err(malformed("a chunk could not be decompressed")));
+    decoded.map(|(mut bands, lines)| {
+        for band in &mut bands {
+            band.chunk = job.seq;
+        }
+        (bands, lines)
+    })
 }
 
 /// Puts decoded chunks back into file order: the workers finish them in any order, the sink gets
@@ -1418,8 +1452,19 @@ fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Ge
     let lines = block.index.pixel_size.1;
     let ((lw, lh), (w, h)) = (part.size, g.size);
     let (ow, _) = g.out;
-    // Per request slot: the rows converted, as (output row, output column, values).
-    let mut rows: std::collections::BTreeMap<usize, Vec<(usize, usize, Vec<f32>)>> = std::collections::BTreeMap::new();
+    // The output rows of the block: its data-window rows that land in the display window on a
+    // wanted row. They are consecutive in the output grid (wanted rows are every stride-th).
+    let (by, bh) = (block.index.pixel_position.1, block.index.pixel_size.1);
+    let out_rows: Vec<usize> = (by..by.saturating_add(bh))
+        .filter_map(|y| usize::try_from(y as i64 + part.offset.1).ok())
+        .filter(|ty| *ty < h && g.wanted(*ty as i64))
+        .map(|ty| ty / g.stride as usize)
+        .collect();
+    let (Some(&top), Some(&bottom)) = (out_rows.first(), out_rows.last()) else { return Ok((Vec::new(), lines)) };
+    let height = bottom.saturating_sub(top).saturating_add(1);
+    // One band per output unit (a group, or a slot of its own), each row written straight into it
+    // at its place: no band is copied or regrown.
+    let mut bands: std::collections::BTreeMap<usize, Band> = std::collections::BTreeMap::new();
     // (typed: the line reader is generic over the sample type, and an untyped `0` would make the
     // integer buffer `i32`, turning ids from 2^31 up negative)
     let (mut f16s, mut f32s, mut u32s): (Vec<exr::prelude::f16>, Vec<f32>, Vec<u32>) = (Vec::new(), Vec::new(), Vec::new());
@@ -1476,66 +1521,31 @@ fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Ge
         if values.is_empty() || col.saturating_add(values.len()) > ow {
             continue;
         }
-        // (a channel requested more than once gets its rows in each of its slots)
+        // (a channel requested more than once goes into each of its slots)
         for slot in wanted {
-            rows.entry(*slot).or_default().push((row, col, values.clone()));
-        }
-    }
-    // One band per run of consecutive rows of a channel that start in the same column and are as
-    // wide as each other (all the rows of a scan-line block or of a tile).
-    let mut by_slot: std::collections::BTreeMap<usize, Vec<Band>> = std::collections::BTreeMap::new();
-    for (slot, mut list) in rows {
-        list.sort_by_key(|(row, _, _)| *row);
-        let bands = by_slot.entry(slot).or_default();
-        let mut current: Option<Band> = None;
-        for (row, col, values) in list {
-            if let Some(b) = current.as_mut()
-                && b.x == col
-                && b.width == values.len()
-                && b.y + b.height == row
-            {
-                b.samples.extend_from_slice(&values);
-                b.height += 1;
-                continue;
+            let Some(&(unit, n, k)) = g.units.get(*slot) else { continue };
+            let band = match bands.entry(unit) {
+                std::collections::btree_map::Entry::Occupied(band) => band.into_mut(),
+                std::collections::btree_map::Entry::Vacant(place) => {
+                    let len = height.saturating_mul(values.len()).saturating_mul(n);
+                    let mut samples = Vec::new();
+                    samples.try_reserve_exact(len).map_err(|_| Error::OutOfMemory("band allocation".into()))?;
+                    samples.resize(len, 0.0);
+                    place.insert(Band { slot: unit, x: col, y: top, width: values.len(), height, values_per_pixel: n, chunk: 0, samples })
+                }
+            };
+            // (every line of a block covers the same columns; a block whose lines don't is damaged)
+            if band.x != col || band.width != values.len() || row < top || row > bottom {
+                return Err(malformed("the lines of a block disagree on where they lie"));
             }
-            bands.extend(current.take());
-            current = Some(Band { slot, x: col, y: row, width: values.len(), height: 1, channels: 1, samples: values });
-        }
-        bands.extend(current);
-    }
-    Ok((group_bands(by_slot, g.groups)?, lines))
-}
-
-/// The bands of one block, by slot, in slot order, with each group's slots interleaved into one
-/// band per rectangle at the group's first slot. The slots of a group are channels of one part,
-/// so they cover the same rectangles; a group whose slots don't is a damaged block.
-fn group_bands(mut by_slot: std::collections::BTreeMap<usize, Vec<Band>>, groups: &[Range<usize>]) -> Result<Vec<Band>> {
-    let mut out = Vec::new();
-    for group in groups {
-        let members: Vec<Vec<Band>> = group.clone().filter_map(|slot| by_slot.remove(&slot)).collect();
-        if members.is_empty() {
-            continue;
-        }
-        let n = group.len();
-        let first = members.first().map_or(&[][..], Vec::as_slice);
-        let same = |bands: &Vec<Band>| {
-            bands.len() == first.len() && bands.iter().zip(first).all(|(a, b)| (a.x, a.y, a.width, a.height) == (b.x, b.y, b.width, b.height))
-        };
-        if members.len() != n || !members.iter().all(same) {
-            return Err(malformed("the channels of a group decoded to different rectangles"));
-        }
-        for (k, band) in first.iter().enumerate() {
-            let pixels = band.samples.len();
-            let mut samples = Vec::new();
-            samples.try_reserve_exact(pixels.saturating_mul(n)).map_err(|_| Error::OutOfMemory("band allocation".into()))?;
-            for p in 0..pixels {
-                samples.extend(members.iter().map(|m| m.get(k).and_then(|b| b.samples.get(p)).copied().unwrap_or(0.0)));
+            let base = (row - top).saturating_mul(band.width).saturating_mul(n);
+            for (i, v) in values.iter().enumerate() {
+                if let Some(slot) = band.samples.get_mut(base + i * n + k) {
+                    *slot = *v;
+                }
             }
-            out.push(Band { slot: group.start, channels: n, samples, ..band.clone() });
         }
     }
-    out.extend(by_slot.into_values().flatten());
-    // (slot order: a group at its first slot)
-    out.sort_by_key(|b| b.slot);
-    Ok(out)
+    drop(block);
+    Ok((bands.into_values().collect(), lines))
 }

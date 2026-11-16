@@ -1349,11 +1349,11 @@ fn a_sink_can_stop_the_read_with_its_own_error() {
 fn planes_of(bands: &[Band], slots: usize, (w, h): (usize, usize)) -> Vec<Vec<f32>> {
     let mut planes = vec![vec![-1e30; w * h]; slots];
     for b in bands {
-        assert_eq!(b.samples.len(), b.width * b.height * b.channels);
+        assert_eq!(b.samples.len(), b.width * b.height * b.values_per_pixel);
         for r in 0..b.height {
             for c in 0..b.width {
-                for k in 0..b.channels {
-                    planes[b.slot + k][(b.y + r) * w + b.x + c] = b.samples[(r * b.width + c) * b.channels + k];
+                for k in 0..b.values_per_pixel {
+                    planes[b.slot + k][(b.y + r) * w + b.x + c] = b.samples[(r * b.width + c) * b.values_per_pixel + k];
                 }
             }
         }
@@ -1377,8 +1377,8 @@ fn grouped_slots_arrive_interleaved_as_one_band_per_block() {
             let groups = [0..4, 5..6];
             let mut grouped = Vec::new();
             read_bands(&mut Cursor::new(&bytes[..]), &index, &Request { groups: &groups, ..base.clone() }, &never, &mut |b| grouped.push(b)).unwrap();
-            assert!(single.iter().all(|b| b.channels == 1));
-            assert!(grouped.iter().all(|b| b.channels == if b.slot == 0 { 4 } else { 1 }), "{tiles} {rows:?} {level}");
+            assert!(single.iter().all(|b| b.values_per_pixel == 1));
+            assert!(grouped.iter().all(|b| b.values_per_pixel == if b.slot == 0 { 4 } else { 1 }), "{tiles} {rows:?} {level}");
             assert_eq!(grouped.iter().filter(|b| b.slot == 0).count(), single.iter().filter(|b| b.slot == 0).count(), "one band per block");
             let size = level_size((13, 11), level);
             assert_eq!(planes_of(&grouped, 6, size), planes_of(&single, 6, size), "tiles {tiles} rows {rows:?} level {level}");
@@ -1432,10 +1432,94 @@ fn the_estimate_covers_what_the_read_does() {
             assert!(estimate.working_bytes >= read.stats.in_flight, "{what}");
             let (ow, oh) = level_size((index.display().width as usize, index.display().height as usize), level);
             assert_eq!(estimate.planes_bytes, (ow * oh * 4 * channels.len()) as u64, "{what}");
+            // Measured from what is decoded: the largest chunk's block and bands (decoded, and
+            // as much again for scratch) fit in the working bytes.
+            let largest = decoded_per_chunk(bytes, &index, &request).into_iter().max().unwrap_or(0);
+            assert!(estimate.working_bytes >= 2 * largest, "{what}, largest chunk {largest}");
         }
     }
     // It refuses what the read refuses.
     let index = indexed(&ramp);
     assert!(matches!(index.estimate(&Request::new(&[(0, 0)], 1024)), Err(Error::LimitExceeded(_))));
     assert!(matches!(index.estimate(&Request::new(&[(0, 9)], usize::MAX)), Err(Error::Malformed(_))));
+}
+
+/// Per chunk of a read of part 0 of `bytes`: its decompressed block's bytes (all of the part's
+/// channels over the chunk's pixels) plus the bytes of the bands it gave, as decoded.
+fn decoded_per_chunk(bytes: &[u8], index: &Index, request: &Request) -> Vec<u64> {
+    let pixel_bytes: u64 = index.parts()[0].channels.iter().map(|c| if c.sample == crate::decode::SampleType::F16 { 2 } else { 4 }).sum();
+    let mut bands_of: std::collections::BTreeMap<usize, u64> = std::collections::BTreeMap::new();
+    read_bands(&mut Cursor::new(bytes), index, request, &never, &mut |b: Band| {
+        assert_eq!(b.samples.len(), b.width * b.height * b.values_per_pixel, "exactly sized");
+        assert_eq!(b.samples.capacity(), b.samples.len(), "no slack");
+        *bands_of.entry(b.chunk).or_default() += 4 * b.samples.len() as u64;
+    })
+    .unwrap();
+    // The chunks a read fetches, in file order, as the bands number them.
+    let mut chunks: Vec<ChunkInfo> = index.chunks(0).collect();
+    chunks.sort_by_key(|c| c.offset);
+    let estimate = index.estimate(request).unwrap();
+    let needed: Vec<ChunkInfo> = chunks
+        .into_iter()
+        .filter(|c| {
+            let rows = request.rows.clone().unwrap_or(0..i64::MAX);
+            let stride = 1i64 << request.level;
+            (c.y as i64..(c.y + c.height) as i64).any(|r| rows.contains(&r) && r % stride == 0)
+        })
+        .collect();
+    assert_eq!(needed.len(), estimate.chunks);
+    needed.iter().enumerate().map(|(i, c)| (c.width * c.height) as u64 * pixel_bytes + bands_of.get(&i).copied().unwrap_or(0)).collect()
+}
+
+#[test]
+fn a_grouped_read_with_duplicates_keeps_one_chunk_in_flight_at_its_decoded_size() {
+    // 1024 × 64 RGBA f32 in ZIP16: 16-row blocks of 256 KiB. R, G, B, A and R again as one group:
+    // each block's band is 16 × 1024 × 5 values (320 KiB), so a chunk is 576 KiB decoded, over
+    // a 64 KiB budget: one at a time.
+    let bytes = file(vec![layer(None, (0, 0), (1024, 64), &["R", "G", "B", "A"], false, Compression::ZIP16)], (1024, 64));
+    let index = indexed(&bytes);
+    let names: Vec<&str> = index.parts()[0].channels.iter().map(|c| c.name.as_str()).collect();
+    let at = |n: &str| (0, names.iter().position(|m| *m == n).unwrap());
+    let channels = [at("R"), at("G"), at("B"), at("A"), at("R")];
+    let groups = [0..5];
+    let request = Request { groups: &groups, workers: Some(4), ..Request::new(&channels, usize::MAX) };
+    let decoded = decoded_per_chunk(&bytes, &index, &request);
+    assert_eq!(decoded, vec![(256 + 320) << 10; 4], "block and band of each chunk, as decoded");
+    let budget = 64 << 10;
+    let mut bands = Vec::new();
+    let stats = super::seek::read_bands_within(&mut Cursor::new(&bytes[..]), &index, &request, &never, &mut |b| bands.push(b), budget).unwrap();
+    assert_eq!(stats.in_flight, (256 + 320) << 10, "one chunk at a time, counted at its decoded size");
+    let estimate = super::seek::estimate_within(&index, &request, budget).unwrap();
+    assert!(estimate.working_bytes >= 2 * ((256 + 320) << 10), "{estimate:?}");
+    // The interleaved values, duplicates included, are those of per-channel reads.
+    let mut single = Vec::new();
+    read_bands(&mut Cursor::new(&bytes[..]), &index, &Request::new(&channels, usize::MAX), &never, &mut |b| single.push(b)).unwrap();
+    assert_eq!(planes_of(&bands, 5, (1024, 64)), planes_of(&single, 5, (1024, 64)));
+}
+
+#[test]
+fn bands_say_which_chunk_they_came_from_for_progress() {
+    // Tiles of 4 × 4 over 9 × 7 (six chunks), and one-row chunks read at level 2 over some rows.
+    let tiled = file(vec![layer(None, (0, 0), (9, 7), &["R", "G"], true, Compression::ZIP1)], (9, 7));
+    let lines = file(vec![layer(None, (0, 0), (8, 16), &["Y"], false, Compression::ZIP1)], (8, 16));
+    for (bytes, request) in [
+        (&tiled, Request::new(&[(0, 0), (0, 1)], usize::MAX)),
+        (&lines, Request { rows: Some(3..14), level: 2, workers: Some(2), ..Request::new(&[(0, 0)], usize::MAX) }),
+    ] {
+        let index = indexed(bytes);
+        let estimate = index.estimate(&request).unwrap();
+        let mut seen = Vec::new();
+        read_bands(&mut Cursor::new(&bytes[..]), &index, &request, &never, &mut |b| seen.push(b.chunk)).unwrap();
+        assert!(seen.windows(2).all(|w| w[0] <= w[1]), "in order: {seen:?}");
+        seen.dedup();
+        assert_eq!(seen, (0..estimate.chunks).collect::<Vec<_>>(), "every chunk, numbered as the estimate counts");
+    }
+}
+
+#[test]
+fn a_stop_s_source_is_the_read_error() {
+    use std::error::Error as _;
+    let read: Stop<String> = Stop::Read(Error::Cancelled);
+    assert_eq!(read.source().map(|e| e.to_string()), Some(Error::Cancelled.to_string()));
+    assert!(Stop::Sink("full".to_string()).source().is_none());
 }
