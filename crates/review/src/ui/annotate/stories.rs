@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use craft_behavior::CanvasView;
-use craft_ui::canvas::{Canvas, ToolHost};
+use craft_ui::canvas::{Canvas, ToolHost, tool_pass};
 use craft_ui::contract::{Show as _, ShowContainer as _};
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, pointer, story};
 use egui::Ui;
@@ -115,11 +115,11 @@ fn tool_drawing_a_rectangle(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let annotations = samples();
     let room = ui.available_rect_before_wrap();
     let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
-    let canvas = Canvas::new("Page").view(view).show(ui, |ui, cx| {
+    let _ = Canvas::new("Page").view(view).show(ui, |ui, cx| {
         AnnotationOverlay::new("Annotations", &annotations, &[]).show_at(ui, cx.rect);
+        if let (Some(pass), Ok(mut tool)) = (tool_pass(&cx.env), shared.0.lock()) {
+            let _ = ToolHost::new().run(ui, &pass, &mut *tool);
+        }
     });
-    if let Ok(mut tool) = shared.0.lock() {
-        let _ = ToolHost::new().run(ui, &canvas.output, &mut *tool);
-    }
     StoryOutput::default()
 }

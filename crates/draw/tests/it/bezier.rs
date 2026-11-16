@@ -6,7 +6,7 @@ use craft_draw::ui::{
     AnchorDelete, AnchorTool, AnchorsShown, BezierHit, BezierOverlay, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef,
     PathEdit, PathSelection, PathTool, SegmentMark,
 };
-use craft_ui::canvas::{Canvas, Guide, ToolHost};
+use craft_ui::canvas::{Canvas, Guide, ToolHost, tool_pass};
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, pointer, trial};
@@ -260,23 +260,27 @@ fn harness_with(paths: Vec<EditPath>, pans: bool) -> Harness {
         let canvas_id = ui.scope_id().with("document canvas");
         let canvas = Canvas::new("Document").id(canvas_id).view(view).precise_cursors(st.precise);
         let canvas = if st.pans { canvas.document(Size::new(4000.0, 4000.0)) } else { canvas };
+        let mut reply = None;
         let canvas = canvas.show(ui, |ui, body| {
             // The guides lie under the paths: a stack position hides the levels of the ones below it.
             if !st.guides.is_empty() {
                 Guides::new("Guides", canvas_id, Bind::bound(&mut st.guides)).interactive(true).show_at(ui, body.rect);
             }
-            BezierOverlay::new("Paths", Bind::bound(&mut st.paths), &selection)
+            let output = BezierOverlay::new("Paths", Bind::bound(&mut st.paths), &selection)
                 .tool(st.tool)
                 .handles(st.handles)
                 .anchors(st.anchors)
                 .segment_mark(st.segment_mark)
-                .show_at(ui, body.rect)
+                .show_at(ui, body.rect);
+            if let (Some(tool), Some(pass)) = (st.canvas_tool, tool_pass(&body.env)) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut AnchorTool::new(tool)));
+            }
+            output
         });
         if canvas.output.click_at().is_some() {
             st.tool_clicks += 1;
         }
-        if let Some(tool) = st.canvas_tool {
-            let reply = ToolHost::new().run(ui, &canvas.output, &mut AnchorTool::new(tool));
+        if let Some(reply) = reply {
             st.tool_gestures += usize::from(reply.gesture.is_some());
         }
         if st.pans {

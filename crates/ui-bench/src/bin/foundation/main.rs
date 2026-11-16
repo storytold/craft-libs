@@ -12,7 +12,7 @@ use craft_behavior::kurbo::Point;
 use craft_behavior::{Axis, CanvasView, ColumnKey, ColumnWidth, DisplayOrder, ItemSource, PixelSize, RulerUnits, Selection};
 use craft_host::target::ShellInfo;
 use craft_ui::canvas::{
-    Canvas, Guide, GuideKey, HandTool, NavigationOptions, PixelRect, RasterDisplay, RasterSource, RulerText, Rulers, ToolHost, pan,
+    Canvas, Guide, GuideKey, HandTool, NavigationOptions, PixelRect, RasterDisplay, RasterSource, RulerText, Rulers, ToolHost, pan, tool_pass,
 };
 use craft_ui::canvas_controls::Guides;
 use craft_ui::contract::ColumnSpec;
@@ -474,12 +474,16 @@ impl Scene for CanvasViewScene {
         pan(view, vec2(3.0, 2.0));
         let text = RulerText::new(RulerUnits::pixels(), UnitKind::Pixels);
         let canvas = ui.scope_id().with("canvas scene");
+        let mut hosted = None;
         let shown = Canvas::new("Document").id(canvas).view(*view).rulers(text, text, *zero).show_rulers(true).show(ui, |ui, body| {
-            let _ = RasterDisplay::new("Picture", &SOURCE).show_at(ui, body.rect);
             let _ = Guides::new("Guides", canvas, Bind::bound(&mut *guides)).show_at(ui, body.rect);
             let _ = Rulers::new("Rulers", Bind::bound(&mut *zero)).show_at(ui, body.rect);
+            if let Some(pass) = tool_pass(&body.env) {
+                hosted = Some(ToolHost::new().run(ui, &pass, &mut *hand));
+            }
+            let _ = RasterDisplay::new("Picture", &SOURCE).picture().show_at(ui, body.rect);
         });
-        if let Some(next) = ToolHost::new().run(ui, &shown.output, hand).view {
+        if let Some(next) = hosted.and_then(|hosted| hosted.view).or(shown.output.view) {
             *view = next;
         }
     }
