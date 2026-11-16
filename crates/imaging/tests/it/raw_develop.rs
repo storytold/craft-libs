@@ -224,6 +224,18 @@ fn key_event(key: Key, pressed: bool) -> Event {
 }
 
 #[trial]
+fn ok_accepts_a_curve_left_as_stored() {
+    let stacked = vec![[0.0, 0.0], [60.0, 40.0], [60.0, 200.0], [255.0, 255.0]];
+    let stored = RawDevelopSettings { point_curve: stacked.clone(), ..RawDevelopSettings::default() };
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let fixture = fixture(&host, &Rc::new(Cell::new(false)));
+    let open = RawDevelopOpen::new("IMG_0001.CR3", PixelSize::new(IMAGE[0], IMAGE[1]), RawTarget::SmartFilter, stored);
+    host.borrow_mut().open(HostedWorkspace::new(RawDevelopWorkspace::new(open), Source::new()));
+    assert!(host.borrow_mut().confirm::<Hosted>(fixture.ctx()), "an older Smart Filter's curve left as stored passes OK");
+    assert!(finish(&host).is_some());
+}
+
+#[trial]
 fn before_shows_the_before_picture_and_edits_nothing() {
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = fixture(&host, &Rc::new(Cell::new(false)));

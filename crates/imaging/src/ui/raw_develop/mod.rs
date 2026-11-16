@@ -249,6 +249,9 @@ pub struct RawDevelopWorkspace {
     size: PixelSize,
     target: RawTarget,
     settings: RawDevelopSettings,
+    /// The settings the workspace, or the raw now shown, started from: a curve left as stored passes OK, so an older
+    /// Smart Filter stays editable.
+    stored: RawDevelopSettings,
     original: RawDevelopSettings,
     demosaic: Option<Demosaic>,
     history: EditHistory<RawDevelopSettings>,
@@ -287,6 +290,7 @@ impl RawDevelopWorkspace {
             size: open.size,
             target: open.target,
             history: EditHistory::new(&open.settings),
+            stored: open.settings.clone(),
             settings: open.settings,
             original: open.original,
             demosaic: open.demosaic,
@@ -329,6 +333,7 @@ impl RawDevelopWorkspace {
     /// over.
     pub fn show_item(&mut self, current: usize, settings: RawDevelopSettings, original: RawDevelopSettings, demosaic: Option<Demosaic>) {
         self.history = EditHistory::new(&settings);
+        self.stored = settings.clone();
         self.settings = settings;
         self.original = original;
         self.demosaic = demosaic;
@@ -886,7 +891,7 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
 
     fn confirm(&mut self, ctx: &Context, source: &Self::Source) -> Option<Self::Result> {
         let _ = (ctx, source);
-        self.settings.validate().ok()?;
+        self.settings.validate_changes(&self.stored).ok()?;
         Some(self.result(self.target.accept()))
     }
 }
