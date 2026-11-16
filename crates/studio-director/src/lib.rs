@@ -180,6 +180,82 @@ impl StudioDirector {
     }
 }
 
+impl StudioDirector {
+    /// Translates a natural language creative request into multi-app execution steps.
+    pub fn translate_concept_to_app_pipeline(&self, concept: &str) -> Vec<AppCommandDispatch> {
+        let mut plan = Vec::new();
+
+        // 1. Scripting / Structure in WordCraft
+        plan.push(AppCommandDispatch {
+            target_app: "wordcraft".into(),
+            tool_name: "create_scene_outline".into(),
+            parameters: serde_json::json!({
+                "concept": concept,
+                "format": "screenplay",
+                "include_dialogue": true
+            }),
+            order: 1,
+        });
+
+        // 2. Visual layout & UI components in FigCraft / VectorCraft
+        plan.push(AppCommandDispatch {
+            target_app: "figcraft".into(),
+            tool_name: "generate_storyboard_frames".into(),
+            parameters: serde_json::json!({
+                "auto_layout": true,
+                "aspect_ratio": "16:9"
+            }),
+            order: 2,
+        });
+
+        // 3. 3D Space, Camera & Geometry in CADCraft
+        plan.push(AppCommandDispatch {
+            target_app: "cadcraft".into(),
+            tool_name: "construct_spatial_environment".into(),
+            parameters: serde_json::json!({
+                "geometry_units": "meters",
+                "coordinate_system": "Z-up"
+            }),
+            order: 3,
+        });
+
+        // 4. Photorealistic or stylized raster rendering in PhotoCraft
+        plan.push(AppCommandDispatch {
+            target_app: "photocraft".into(),
+            tool_name: "render_and_grade_plates".into(),
+            parameters: serde_json::json!({
+                "passes": ["beauty", "depth", "occlusion"],
+                "color_profile": "Display-P3"
+            }),
+            order: 4,
+        });
+
+        // 5. Motion Graphics & Visual Effects in EffectCraft
+        plan.push(AppCommandDispatch {
+            target_app: "effectcraft".into(),
+            tool_name: "apply_motion_tracking_and_vfx".into(),
+            parameters: serde_json::json!({
+                "motion_blur": true,
+                "fps": 60
+            }),
+            order: 5,
+        });
+
+        // 6. Timeline assembly in FilmCraft
+        plan.push(AppCommandDispatch {
+            target_app: "filmcraft".into(),
+            tool_name: "assemble_multitrack_sequence".into(),
+            parameters: serde_json::json!({
+                "sync_audio": true,
+                "transitions": "cross_dissolve"
+            }),
+            order: 6,
+        });
+
+        plan
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +277,13 @@ mod tests {
         assert_eq!(s.app_dispatches[1].target_app, "cadcraft");
         assert_eq!(s.app_dispatches[2].target_app, "photocraft");
         assert_eq!(s.app_dispatches[3].target_app, "filmcraft");
+        let pipeline = director.translate_concept_to_app_pipeline("A magical sunrise over the hills");
+        assert_eq!(pipeline.len(), 6);
+        assert_eq!(pipeline[0].target_app, "wordcraft");
+        assert_eq!(pipeline[1].target_app, "figcraft");
+        assert_eq!(pipeline[2].target_app, "cadcraft");
+        assert_eq!(pipeline[3].target_app, "photocraft");
+        assert_eq!(pipeline[4].target_app, "effectcraft");
+        assert_eq!(pipeline[5].target_app, "filmcraft");
     }
 }
