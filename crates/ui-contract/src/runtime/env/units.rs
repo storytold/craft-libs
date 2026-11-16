@@ -203,6 +203,7 @@ impl UnitKind {
 
 /// The column size of a document: `n` columns are `n·(width + gutter) − gutter` points.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ColumnSize {
     /// The width of one column, in points; a value that is not a finite number above 0 counts as 180.
     pub width: f64,
@@ -211,6 +212,11 @@ pub struct ColumnSize {
 }
 
 impl ColumnSize {
+    /// The column size with columns `width` points wide `gutter` points apart.
+    pub const fn new(width: f64, gutter: f64) -> Self {
+        Self { width, gutter }
+    }
+
     /// The column width used when the given one is not a finite number above 0.
     const FALLBACK_WIDTH: f64 = 180.0;
     /// The gutter used when the given one is not finite.

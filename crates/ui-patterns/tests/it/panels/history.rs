@@ -18,7 +18,7 @@ fn rig(source: Option<HistoryKey>, with_source: bool) -> (Fixture, Seen) {
         Fixture::new(move |ui| {
             let mut panel = HistoryPanel::new(&rows, Some(HistoryKey::State(2)))
                 .can_delete(|key| *key != HistoryKey::State(1))
-                .footer(HistoryFooter { delete: true, new_snapshot: false, new_document: false });
+                .footer(HistoryFooter::default().delete(true));
             if with_source {
                 panel = panel.source(source);
             }

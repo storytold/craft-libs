@@ -434,9 +434,9 @@ impl RawDevelopWorkspace {
         for event in self.sampler_tool.take_events() {
             // A refused point (the eleventh, one off the picture) is the tool's toast, not a state change.
             let _ = match event {
-                SamplerEvent::Add { at } => self.samplers.add(at, size).map(|_| ()),
-                SamplerEvent::Move { index, to } => self.samplers.move_point(index, to, size),
-                SamplerEvent::Remove { index } => self.samplers.remove(index),
+                SamplerEvent::Add { at, .. } => self.samplers.add(at, size).map(|_| ()),
+                SamplerEvent::Move { index, to, .. } => self.samplers.move_point(index, to, size),
+                SamplerEvent::Remove { index, .. } => self.samplers.remove(index),
                 _ => Ok(()),
             };
         }

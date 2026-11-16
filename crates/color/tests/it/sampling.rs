@@ -82,7 +82,7 @@ fn a_new_point_lands_at_the_release_and_a_dragged_point_moves_on_release() {
     tool.press_at(at);
     assert!(events(&tool).is_empty(), "a press only starts the carry");
     tool.release_at(at);
-    assert_eq!(events(&tool), [SamplerEvent::Add { at: [100.0, 50.0] }]);
+    assert_eq!(events(&tool), [SamplerEvent::add([100.0, 50.0])]);
     let outside = doc_to_screen(&tool, [320.5, 50.5]);
     tool.press_at(at).release_at(outside);
     assert!(events(&tool).is_empty(), "released off the canvas places none");
@@ -96,18 +96,18 @@ fn a_new_point_lands_at_the_release_and_a_dragged_point_moves_on_release() {
     tool.press_at(on).release_at(on);
     assert!(events(&tool).is_empty(), "a click on the point's own pixel moves nothing");
     tool.press_at(near).release_at(near);
-    assert_eq!(events(&tool), [SamplerEvent::Move { index: 0, to: [102.0, 50.0] }]);
+    assert_eq!(events(&tool), [SamplerEvent::moved(0, [102.0, 50.0])]);
     let outside = doc_to_screen(&tool, [320.5, 50.5]);
     tool.drag_from(on, outside - on);
-    assert_eq!(events(&tool), [SamplerEvent::Remove { index: 0 }], "a point dropped off the canvas is removed");
+    assert_eq!(events(&tool), [SamplerEvent::removed(0)], "a point dropped off the canvas is removed");
 
     // Alt: a click on a point removes it, off a point it adds.
     tool.fixture().hold(Modifiers::ALT);
     tool.press_at(on).release_at(on);
-    assert_eq!(events(&tool), [SamplerEvent::Remove { index: 0 }]);
+    assert_eq!(events(&tool), [SamplerEvent::removed(0)]);
     let empty = doc_to_screen(&tool, [200.5, 150.5]);
     tool.press_at(empty).release_at(empty);
-    assert_eq!(events(&tool), [SamplerEvent::Add { at: [200.0, 150.0] }]);
+    assert_eq!(events(&tool), [SamplerEvent::add([200.0, 150.0])]);
     tool.fixture().hold(Modifiers::NONE);
 
     // At the limit nothing is carried and one notice is set.

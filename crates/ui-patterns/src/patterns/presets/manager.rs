@@ -59,6 +59,7 @@ impl<G, K> PresetManagerTaken<G, K> {
 }
 
 /// What a [`PresetManager`] reports.
+#[non_exhaustive]
 pub struct PresetManagerOutput<G, K> {
     /// The manager's response.
     pub response: Response,

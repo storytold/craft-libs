@@ -346,6 +346,7 @@ pub fn count_clicks(previous: Option<(Pos2, f64, u32, Mods)>, pos: Pos2, time: f
 #[non_exhaustive]
 pub enum PointerEvent {
     /// The pointer moved, with the pen's reading for the move when the runtime has one.
+    #[non_exhaustive]
     Moved {
         /// Where the pointer is.
         at: Pos2,
@@ -377,6 +378,11 @@ pub enum PointerEvent {
 }
 
 impl PointerEvent {
+    /// The pointer moved to `at`, with the pen's reading for the move when the runtime has one.
+    pub const fn moved(at: Pos2, sample: Option<PointerSample>) -> Self {
+        PointerEvent::Moved { at, sample }
+    }
+
     /// The primary button going down at `pos`, `time`, as the `clicks`th press in a row.
     pub const fn pressed(pos: Pos2, time: f64, clicks: u32) -> Self {
         PointerEvent::Pressed { button: PointerButton::Primary, pos, time, clicks }

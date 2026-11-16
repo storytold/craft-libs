@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 /// The zone values the rig starts from: each zone at its index, in -100 to 100.
 fn start_values() -> ZoneValues {
-    ZoneValues(vec![0.0, 1.0, 2.0, 3.0, 4.0])
+    ZoneValues::new(vec![0.0, 1.0, 2.0, 3.0, 4.0])
 }
 
 /// A fixture of the tone zones alone over a 200 by 100 plot at the origin, over values that start at

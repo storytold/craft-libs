@@ -314,7 +314,7 @@ pub(crate) fn pointer_read(ctx: &Context) -> PointerRead {
                 Event::PointerMoved(pos) => {
                     stirred = true;
                     moves.push(events.len());
-                    events.push(PointerEvent::Moved { at: *pos, sample: None });
+                    events.push(PointerEvent::moved(*pos, None));
                 }
                 Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => {
                     // Only the next press sets the barrel state again, so a missed release never remaps a plain tap.

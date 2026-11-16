@@ -47,6 +47,7 @@ const MARK_LEN: f32 = 10.0;
 
 /// Which marks the preview draws.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PrintMarks {
     /// Corner crop marks.
     pub corner_crop: bool,
@@ -102,6 +103,7 @@ impl PrintSheet {
 
 /// One titled section of the app's rows (Color Management, Position and Size, Printing Marks,
 /// Functions, Save as PDF).
+#[non_exhaustive]
 pub struct PrintSection {
     /// The section's title.
     pub title: Label,
@@ -109,8 +111,16 @@ pub struct PrintSection {
     pub params: Vec<Param>,
 }
 
+impl PrintSection {
+    /// The section titled `title` with its `params` rows.
+    pub fn new(title: impl Into<Label>, params: Vec<Param>) -> Self {
+        Self { title: title.into(), params }
+    }
+}
+
 /// How a print dialog finished.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PrintFinish {
     /// Print the document.
     Print,

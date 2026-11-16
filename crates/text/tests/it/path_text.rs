@@ -207,7 +207,7 @@ fn coincident_markers_pick_their_end_by_the_first_motion() {
     let lap = TAU * RADIUS;
     // On a full lap: a press ahead of the markers grabs the start, behind them the end, between them the body.
     for (offset, grab, direction) in [(3.0, PathGrab::Start, 1.0), (-3.0, PathGrab::End, -1.0), (0.0, PathGrab::Body, 1.0)] {
-        let mut h = harness(Config::circle(PathRange { start: 0.0, end: lap, flip: false }));
+        let mut h = harness(Config::circle(PathRange::new(0.0, lap, false)));
         let tangent = h.direction(0.0);
         let from = h.at(0.0) + tangent * offset;
         h.frame(vec![pointer::moved(from)]);
@@ -222,7 +222,7 @@ fn coincident_markers_pick_their_end_by_the_first_motion() {
     }
     // Not on a full lap: the first motion picks the end (forward) or the start (backward).
     for forward in [true, false] {
-        let mut h = harness(Config::circle(PathRange { start: 50.0, end: 50.0, flip: false }));
+        let mut h = harness(Config::circle(PathRange::new(50.0, 50.0, false)));
         let tangent = h.direction(50.0);
         let from = h.at(50.0);
         let sign = if forward { 1.0 } else { -1.0 };
@@ -243,7 +243,7 @@ fn a_body_drag_at_an_open_end_keeps_the_paragraph_anchor() {
     // (anchor, the arc length the pointer is dragged to from 40, the range afterwards)
     let cases = [(0.0, 100.0, (80.0, 100.0)), (1.0, 100.0, (60.0, 100.0)), (0.5, 90.0, (80.0, 100.0))];
     for (anchor, to, (start, end)) in cases {
-        let mut config = Config::line(100.0, PathRange { start: 20.0, end: 60.0, flip: false });
+        let mut config = Config::line(100.0, PathRange::new(20.0, 60.0, false));
         config.anchor = anchor;
         config.boxes = boxes.clone();
         let mut h = harness(config);
@@ -253,7 +253,7 @@ fn a_body_drag_at_an_open_end_keeps_the_paragraph_anchor() {
         assert!(close(range.start, start, 1e-6) && close(range.end, end, 1e-6), "anchor {anchor}: {range:?}");
     }
     // A click with no drag changes nothing.
-    let mut config = Config::line(100.0, PathRange { start: 20.0, end: 60.0, flip: false });
+    let mut config = Config::line(100.0, PathRange::new(20.0, 60.0, false));
     config.boxes = boxes;
     let mut h = harness(config);
     let at = h.at(40.0);
@@ -261,13 +261,13 @@ fn a_body_drag_at_an_open_end_keeps_the_paragraph_anchor() {
     h.frame(vec![pointer::press(at)]);
     h.frame(vec![pointer::release(at)]);
     h.frame(Vec::new());
-    assert_eq!(h.range(), PathRange { start: 20.0, end: 60.0, flip: false });
+    assert_eq!(h.range(), PathRange::new(20.0, 60.0, false));
     assert!(h.host.borrow().events.is_empty(), "no edit: {:?}", h.host.borrow().events);
 }
 
 #[trial]
 fn crossing_the_path_flips_the_text_and_keeps_its_span() {
-    let start = PathRange { start: 20.0, end: 60.0, flip: false };
+    let start = PathRange::new(20.0, 60.0, false);
     // Within 4 points of the path nothing flips.
     let mut h = harness(Config::line(120.0, start));
     let from = h.at(60.0);

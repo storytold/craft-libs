@@ -647,10 +647,10 @@ impl<'m> ToolHost<'m> {
         let host = WindowHost::of(ctx);
         match input {
             ToolInput::Down { button, pos, sample, mods } => {
-                host.inject_pointer(viewport, InjectedPointer::Down { button, at: pos, mods, pen: sample });
+                host.inject_pointer(viewport, InjectedPointer::down(button, pos, mods, sample));
             }
-            ToolInput::Move { pos, sample, mods } => host.inject_pointer(viewport, InjectedPointer::Move { at: pos, mods, pen: sample }),
-            ToolInput::Up { pos, mods } => host.inject_pointer(viewport, InjectedPointer::Up { at: pos, mods }),
+            ToolInput::Move { pos, sample, mods } => host.inject_pointer(viewport, InjectedPointer::move_to(pos, mods, sample)),
+            ToolInput::Up { pos, mods } => host.inject_pointer(viewport, InjectedPointer::up(pos, mods)),
             ToolInput::Hold { key } => host.inject_hold(viewport, key),
             ToolInput::LetGo { key } => host.inject_let_go(viewport, key),
         }
@@ -1100,7 +1100,7 @@ impl<'a, 't: 'a> Run<'a, 't> {
             pass.events[from..]
                 .iter()
                 .filter_map(|event| match event {
-                    PointerEvent::Moved { at, sample } => Some((*at, *sample)),
+                    PointerEvent::Moved { at, sample, .. } => Some((*at, *sample)),
                     _ => None,
                 })
                 .collect()

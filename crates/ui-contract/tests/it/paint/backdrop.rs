@@ -18,10 +18,10 @@ fn transparent_capture_composites_over_paper_and_missing_capture_uses_fallback()
     let image = ColorImage::new([2, 2], vec![Color32::TRANSPARENT; 4]);
     let thumbnail = Thumbnail::from_image(&image, 2, Color32::RED);
     assert!(thumbnail.is_some());
-    let layers = [BackdropLayer { rect: area(), thumbnail: thumbnail.as_ref(), fallback: Color32::BLUE }];
+    let layers = [BackdropLayer::new(area(), thumbnail.as_ref(), Color32::BLUE)];
     let image = compose(area(), &layers, Color32::GREEN);
     assert!(image.as_ref().is_some_and(|image| image.pixels.iter().all(|p| *p == Color32::RED)));
-    let layers = [BackdropLayer { rect: area(), thumbnail: None, fallback: Color32::BLUE }];
+    let layers = [BackdropLayer::new(area(), None, Color32::BLUE)];
     let image = compose(area(), &layers, Color32::GREEN);
     assert!(image.as_ref().is_some_and(|image| image.pixels.iter().all(|p| *p == Color32::BLUE)));
 }
@@ -30,7 +30,7 @@ fn transparent_capture_composites_over_paper_and_missing_capture_uses_fallback()
 fn downsampling_and_softening_mix_neighbours_without_changing_opaque_output() {
     let image = ColorImage::new([2, 1], vec![Color32::BLACK, Color32::WHITE]);
     let thumbnail = Thumbnail::from_image(&image, 1, Color32::WHITE);
-    let layers = [BackdropLayer { rect: area(), thumbnail: thumbnail.as_ref(), fallback: Color32::RED }];
+    let layers = [BackdropLayer::new(area(), thumbnail.as_ref(), Color32::RED)];
     let image = compose(area(), &layers, Color32::GREEN);
     assert!(image.as_ref().is_some_and(|image| image.pixels.iter().all(|p| p.a() == 255 && p.r() > 0 && p.r() < 255)));
 }

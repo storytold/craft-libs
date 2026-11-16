@@ -232,11 +232,19 @@ impl WebSlices {
 
 /// A slice of the document: its number and its rectangle in document pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct WebSlice {
     /// The slice's number.
     pub number: u32,
     /// The slice's rectangle in document pixels.
     pub rect: egui::Rect,
+}
+
+impl WebSlice {
+    /// The slice numbered `number` over `rect`.
+    pub const fn new(number: u32, rect: egui::Rect) -> Self {
+        Self { number, rect }
+    }
 }
 
 impl Default for SaveForWebOptions {

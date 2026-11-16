@@ -33,7 +33,7 @@ fn texture() -> SizedTexture {
 fn slices() -> Vec<WebSlice> {
     [(1, 0.0), (2, 100.0)]
         .into_iter()
-        .map(|(number, left)| WebSlice { number, rect: Rect::from_min_size(pos2(left, 0.0), vec2(100.0, 100.0)) })
+        .map(|(number, left)| WebSlice::new(number, Rect::from_min_size(pos2(left, 0.0), vec2(100.0, 100.0))))
         .collect()
 }
 

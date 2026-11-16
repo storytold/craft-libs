@@ -22,6 +22,7 @@ pub enum ThemeChoice {
     /// Follow the system's light or dark mode.
     System,
     /// A theme in its light (`dark: false`) or dark mode.
+    #[non_exhaustive]
     Theme {
         /// The theme.
         id: ThemeId,
@@ -33,6 +34,11 @@ pub enum ThemeChoice {
 }
 
 impl ThemeChoice {
+    /// The theme `id` in its dark mode when `dark`, else its light mode.
+    pub fn theme(id: ThemeId, dark: bool) -> Self {
+        ThemeChoice::Theme { id, dark }
+    }
+
     /// The choice a command made, `None` for any other command or an unknown parameter.
     pub fn from_command(command: &CommandRef) -> Option<ThemeChoice> {
         if command.id != THEME_COMMAND {

@@ -124,12 +124,12 @@ fn the_task_bar_follows_its_anchor_until_moved_and_stays_inside_the_area() {
     fixture.settle();
     assert!((seen(&scene).rect.min - pinned.rect.min).length() < SLACK, "a pinned bar stays while the anchor moves");
 
-    scene.borrow_mut().place = TaskBarPlace { pinned: false, at: Some([f32::NAN, 0.0]) };
+    scene.borrow_mut().place = TaskBarPlace::new(false, Some([f32::NAN, 0.0]));
     fixture.settle();
     let unset = seen(&scene);
     assert!(centred_under_anchor(&unset), "a non-finite place counts as unset: {:?}", unset.rect);
 
-    scene.borrow_mut().place = TaskBarPlace { pinned: false, at: Some([1.0e30, -1.0e30]) };
+    scene.borrow_mut().place = TaskBarPlace::new(false, Some([1.0e30, -1.0e30]));
     fixture.settle();
     let far = seen(&scene);
     assert!(inside_area(&far), "a place far outside comes back inside {:?}: {:?}", far.area, far.rect);

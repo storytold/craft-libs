@@ -36,7 +36,7 @@ fn a_row_left_out_of_the_style_takes_no_input_and_its_check_includes_it() {
     fixture.click(&include).idle(4);
     assert_eq!(
         changes(&edits),
-        vec![StyleOptionsChange::Include { attribute: StyleAttribute::Size, on: true }],
+        vec![StyleOptionsChange::include(StyleAttribute::Size, true)],
         "the check of a row that is not included includes it"
     );
 }

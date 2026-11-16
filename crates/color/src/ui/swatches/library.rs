@@ -403,6 +403,7 @@ pub(super) fn value_text(color: &SwatchColor, book: &str) -> String {
 #[non_exhaustive]
 pub enum SwatchEdit {
     /// Adds `color` named `name` to `group`, or the first group.
+    #[non_exhaustive]
     Add {
         /// The group's name, `None` for the first group.
         group: Option<String>,
@@ -412,11 +413,13 @@ pub enum SwatchEdit {
         color: SwatchColor,
     },
     /// Adds an empty group.
+    #[non_exhaustive]
     NewGroup {
         /// The new group's name.
         name: String,
     },
     /// Renames a swatch.
+    #[non_exhaustive]
     Rename {
         /// The swatch's current name.
         swatch: String,
@@ -424,6 +427,7 @@ pub enum SwatchEdit {
         name: String,
     },
     /// Renames a group.
+    #[non_exhaustive]
     RenameGroup {
         /// The group's current name.
         group: String,
@@ -431,16 +435,19 @@ pub enum SwatchEdit {
         name: String,
     },
     /// Deletes a swatch.
+    #[non_exhaustive]
     Delete {
         /// The swatch's name.
         swatch: String,
     },
     /// Deletes a group with its swatches.
+    #[non_exhaustive]
     DeleteGroup {
         /// The group's name.
         group: String,
     },
     /// Moves a swatch.
+    #[non_exhaustive]
     MoveTo {
         /// The swatch's name.
         swatch: String,
@@ -450,6 +457,7 @@ pub enum SwatchEdit {
         at: usize,
     },
     /// Moves a group.
+    #[non_exhaustive]
     MoveGroup {
         /// The group's name.
         group: String,
@@ -459,12 +467,25 @@ pub enum SwatchEdit {
     /// Puts the default swatches back.
     Reset,
     /// Imports `groups`, replacing the library when `replace`.
+    #[non_exhaustive]
     Import {
         /// The groups the file holds.
         groups: Vec<SwatchGroup>,
         /// Whether they replace the library.
         replace: bool,
     },
+}
+
+impl SwatchEdit {
+    /// Adds `color` named `name` to `group`, or the first group.
+    pub fn add(group: Option<String>, name: String, color: SwatchColor) -> Self {
+        SwatchEdit::Add { group, name, color }
+    }
+
+    /// Deletes the swatch named `swatch`.
+    pub fn delete(swatch: String) -> Self {
+        SwatchEdit::Delete { swatch }
+    }
 }
 
 impl SwatchLibrary {

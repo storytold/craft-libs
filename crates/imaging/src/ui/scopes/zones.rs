@@ -114,9 +114,15 @@ impl ZoneScale {
 
 /// The values of the controls the tone zones edit, one per zone in the zones' order, each in its control's units.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct ZoneValues(pub Vec<f32>);
 
 impl ZoneValues {
+    /// The values of the zones in order, one per zone.
+    pub fn new(values: Vec<f32>) -> Self {
+        Self(values)
+    }
+
     /// These values with zone `at` set to what `to` makes of its value and scale, held to the zone's range; `None`
     /// when the zone has no value or no scale.
     fn with(&self, scales: &[ZoneScale], at: usize, to: impl FnOnce(f32, &ZoneScale) -> f32) -> Option<ZoneValues> {

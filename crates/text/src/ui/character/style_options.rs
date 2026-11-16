@@ -151,6 +151,7 @@ pub enum StyleOptionsChange {
     /// The style's new name.
     Rename(String),
     /// An include check switched.
+    #[non_exhaustive]
     Include {
         /// The attribute.
         attribute: StyleAttribute,
@@ -161,6 +162,13 @@ pub enum StyleOptionsChange {
     Character(CharacterChange),
     /// A paragraph field.
     Paragraph(ParagraphChange),
+}
+
+impl StyleOptionsChange {
+    /// The include check of `attribute` switched to `on`.
+    pub fn include(attribute: StyleAttribute, on: bool) -> Self {
+        StyleOptionsChange::Include { attribute, on }
+    }
 }
 
 /// What the options editor did this pass.

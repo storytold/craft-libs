@@ -72,6 +72,7 @@ impl TextAntiAlias {
 
 /// The direction the text runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TextOrientation {
     /// Horizontal lines.
     Horizontal,

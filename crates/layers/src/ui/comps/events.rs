@@ -80,6 +80,7 @@ impl Outcome for LayerCompsOutput {
 /// arrive as [`LayerCompsEvent::Reorder`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, CommandSet)]
 #[command(prefix = "layerCompsPanel")]
+#[non_exhaustive]
 pub enum LayerCompsRowCommands {
     /// Move the comp up.
     #[command(label = "Move Up")]
