@@ -185,3 +185,94 @@ fn an_embedded_svg_in_a_local_scene_is_local_too() {
     let Segment::LineTo(p) = rect.segments[1] else { panic!("{:?}", rect.segments) };
     assert!(close(p, [1.0, 0.0]), "inside its own scaled group: {p:?}");
 }
+
+fn fill_pattern(path: &Path) -> Option<&Pattern> {
+    match path.fill.as_ref()? {
+        Paint::Pattern { pattern, .. } => pattern.as_ref(),
+        _ => None,
+    }
+}
+
+const PATTERN: &str = r##"<defs><pattern id="dots" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="translate(1 2)">
+    <rect width="2" height="2" fill="#f00"/>
+</pattern></defs>
+<g transform="scale(2)"><rect id="a" width="10" height="10" fill="url(#dots)"/><rect id="b" x="20" width="10" height="10" fill="url(#dots)" fill-opacity="0.5"/></g>"##;
+
+#[test]
+fn a_pattern_paint_carries_its_tile_and_content() {
+    let tree = tree(PATTERN);
+    let local = Document::from_tree_local(&tree, 64);
+    let all = paths(&local.nodes);
+    let a = all.iter().find(|p| p.id == "a").unwrap();
+    let pattern = fill_pattern(a).unwrap();
+    assert_eq!(pattern.id, "dots");
+    assert_eq!(pattern.rect, [0.0, 0.0, 4.0, 4.0]);
+    assert!(close([pattern.transform[4], pattern.transform[5]], [1.0, 2.0]) && close([pattern.transform[0], pattern.transform[3]], [1.0, 1.0]));
+    let tile = paths(&pattern.content);
+    assert_eq!(tile.len(), 1);
+    assert_eq!(tile[0].fill, Some(Paint::Color { rgb: [255, 0, 0], opacity: 1.0 }));
+
+    // Every use shares one converted tile, and keeps its own opacity.
+    let b = all.iter().find(|p| p.id == "b").unwrap();
+    assert!(std::sync::Arc::ptr_eq(&pattern.content, &fill_pattern(b).unwrap().content));
+    assert!(matches!(b.fill, Some(Paint::Pattern { opacity, .. }) if (opacity - 0.5).abs() < 1e-6));
+}
+
+#[test]
+fn an_absolute_scene_maps_the_tile_to_the_document() {
+    let tree = tree(PATTERN);
+    let absolute = Document::from_tree(&tree, 64);
+    let a = paths(&absolute.nodes).into_iter().find(|p| p.id == "a").unwrap();
+    let pattern = fill_pattern(a).unwrap();
+    // translate(1 2), then the group's scale(2).
+    assert!(close([pattern.transform[0], pattern.transform[3]], [2.0, 2.0]), "{:?}", pattern.transform);
+    assert!(close([pattern.transform[4], pattern.transform[5]], [2.0, 4.0]), "{:?}", pattern.transform);
+    // The tile's content stays in tile space.
+    let Segment::LineTo(p) = paths(&pattern.content)[0].segments[1] else { panic!() };
+    assert!(close(p, [2.0, 0.0]), "{p:?}");
+}
+
+#[test]
+fn bounding_box_pattern_units_are_resolved() {
+    let tree = tree(
+        r##"<defs><pattern id="half" width=".5" height=".5"><rect width="1" height="1"/></pattern></defs><rect x="0" width="10" height="20" fill="url(#half)"/>"##,
+    );
+    let document = Document::from_tree_local(&tree, 64);
+    let pattern = fill_pattern(paths(&document.nodes)[0]).unwrap();
+    assert_eq!(pattern.rect, [0.0, 0.0, 5.0, 10.0]);
+}
+
+#[test]
+fn nested_patterns_convert_within_the_depth_limit() {
+    let svg = r##"<defs>
+        <pattern id="inner" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="1" height="1"/></pattern>
+        <pattern id="outer" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="4" fill="url(#inner)"/></pattern>
+    </defs><rect width="8" height="8" fill="url(#outer)"/>"##;
+    let tree = tree(svg);
+    let deep = Document::from_tree_local(&tree, 64);
+    let outer = fill_pattern(paths(&deep.nodes)[0]).unwrap();
+    let inner = fill_pattern(paths(&outer.content)[0]).unwrap();
+    assert_eq!(inner.id, "inner");
+    assert!(!deep.too_deep);
+
+    let shallow = Document::from_tree_local(&tree, 1);
+    assert!(shallow.too_deep);
+    let outer = fill_pattern(paths(&shallow.nodes)[0]).unwrap();
+    assert!(fill_pattern(paths(&outer.content)[0]).is_none(), "past the limit: no content");
+}
+
+#[test]
+fn a_pattern_that_refers_to_itself_ends() {
+    let tree = tree(
+        r##"<defs><pattern id="loop" width="2" height="2" patternUnits="userSpaceOnUse"><rect width="2" height="2" fill="url(#loop)"/></pattern></defs><rect width="4" height="4" fill="url(#loop)"/>"##,
+    );
+    let document = Document::from_tree_local(&tree, 64);
+    // usvg may drop the reference; if it keeps it, the inner use has no content.
+    for path in paths(&document.nodes) {
+        if let Some(pattern) = fill_pattern(path) {
+            for inner in paths(&pattern.content) {
+                assert!(fill_pattern(inner).is_none());
+            }
+        }
+    }
+}
