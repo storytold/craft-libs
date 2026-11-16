@@ -14,8 +14,8 @@ mod words;
 use craft_behavior::geometry::{SelectionOperation, axis_or_diagonal};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{
-    Axis, CanvasView, CursorPriority, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape, PartKey,
-    PartRef, PointerButton, PressPhase, PressStart, Roving, Sense,
+    Axis, CanvasView, CursorPriority, EditCommand, GesturePhase, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape,
+    PartKey, PartRef, PointerButton, PressPhase, PressStart, Roving, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
@@ -817,13 +817,16 @@ impl<'a> BezierOverlay<'a> {
             if let Target::CurvatureInsert { path, segment, .. } | Target::Insert { path, segment, .. } = held.target {
                 self.report.select = Some(self.inserted(path, segment));
             }
-            if held.target != Target::Marquee {
-                cx.begin();
-            }
+            cx.begin();
         }
         if held.began {
             match held.target {
-                Target::Marquee => self.marquee = Some(DocRect::from_points(view.to_doc(start.origin), view.to_doc(pos))),
+                // A marquee is a gesture like the other drags: Escape cancels it and the cancelled one selects nothing.
+                Target::Marquee => {
+                    if matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) {
+                        self.marquee = Some(DocRect::from_points(view.to_doc(start.origin), view.to_doc(pos)));
+                    }
+                }
                 _ => {
                     if let Some(edit) = Self::edit(view, snap, self.tool, &held.target, start.origin, pos, mods) {
                         self.propose(cx, &held.start, edit);
@@ -854,8 +857,11 @@ impl<'a> BezierOverlay<'a> {
         };
         if held.target == Target::Marquee {
             if held.began {
-                let rect = DocRect::from_points(view.to_doc(start.origin), view.to_doc(pos));
-                self.report.select = self.marquee_selection(paths, rect, mods);
+                if matches!(cx.gesture(), Some(GesturePhase::Begin | GesturePhase::Update)) {
+                    let rect = DocRect::from_points(view.to_doc(start.origin), view.to_doc(pos));
+                    self.report.select = self.marquee_selection(paths, rect, mods);
+                    cx.commit();
+                }
             } else if *self.selection != PathSelection::default() {
                 self.report.select = Some(PathSelection::default());
             }
