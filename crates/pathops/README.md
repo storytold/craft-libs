@@ -762,7 +762,11 @@ or so, measured once in a release build:
   either side fail it for 13, 259, 327 and 275 of the 700. The crate catches the panic, so a debug build (`cargo test` too) answers `Degenerate` for them. A release build makes no
   check and goes on, and made the same outline for every one of the 700 runs at every distance from 1e6 to 1e10: no panic, 11 ms a run at the most, areas within 1e-9 of one
   another up to 1e8 on either side, 4e-9 at 1e9 and 3e-6 at 1e10 (the rounding of an area that large). So the answer of a release build is the right one where it can be checked, and a
-  debug build refuses what it would have made; a test pins both (`tests/it/far_out.rs`). No cheap check before or after the sweep sees the condition (it is the sweep's own comparison
+  debug build refuses what it would have made. Which runs fail the check differs from one platform to the next: it is hair-trigger, failing or not by the last place of the numbers a run is
+  made of (the arcs of these runs are made with `sin`, `cos` and `atan2`, which the standard libraries do not round alike; the outline of the stroke at (3,000, 4,000), moved by up to a unit in the last
+  place in each coordinate, fails it for 3 of 300 variants, and one variant fails it in the planar map's sweep and not in the topology's). So the tests hold the contract and not which of the two a
+  platform gives: a stroke is made or, in a build with debug assertions only, refused as `Degenerate`, and a panic comes out of no public function (`tests/it/far_out.rs`, and `src/debug_checks.rs`,
+  which gives every function that sweeps an outline whose sweep fails the check on Linux). No cheap check before or after the sweep sees the condition (it is the sweep's own comparison
   of two curves), so a release build is not guarded.
 - The estimate of the entries of the windings counts one crossing for each pair of curves when an eighth of the
   one lies within the bounds of an eighth of the other, where two cubics may cross up to nine times, so curves
