@@ -21,16 +21,22 @@
 //! ```
 
 mod catalog;
+mod embedding;
 mod env;
 mod fontconfig;
+mod outline;
 mod registry;
 mod scan;
+/// Bounded SFNT face metadata discovery over caller-provided random-access readers.
+pub mod sfnt;
 mod suitcase;
 pub mod system;
 
 pub use catalog::{Catalog, FontData, FontFileError, Limits, Lister, LoadedFace, Match, Watch};
+pub use embedding::{SubsetEmbedding, subset_embedding};
 pub use env::{FontEnv, Os, font_dirs, font_store_dir, office_font_dirs};
 pub use fontconfig::fontconfig_dirs;
+pub use outline::{FontOutline, GlyphPen, OutlineError};
 pub use scan::{FaceInfo, LocalizedName, Source, is_font_file, style_italic, style_weight, style_width};
 
 #[cfg(test)]

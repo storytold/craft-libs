@@ -899,7 +899,7 @@ struct Layer {
 impl Layer {
     /// The layer and its flat array of `width` numbers per entry.
     fn of(geom: &Record, element: &str, data: &str, index: &[&str], width: usize) -> Option<(Layer, Vec<f64>)> {
-        let e = geom.child(element)?;
+        let e = geom.children_named(element).min_by_key(|e| e.props.first().and_then(Prop::as_i64) != Some(0))?;
         let mapping = match e.child("MappingInformationType").and_then(|m| m.str_at(0)).unwrap_or("ByPolygonVertex") {
             "ByPolygonVertex" => Mapping::PolygonVertex,
             "ByVertex" | "ByVertice" | "ByControlPoint" => Mapping::Vertex,
@@ -908,7 +908,7 @@ impl Layer {
             _ => return None,
         };
         let reference = e.child("ReferenceInformationType").and_then(|m| m.str_at(0)).unwrap_or("Direct");
-        let index = (reference != "Direct").then(|| index.iter().find_map(|n| e.child(n)).map(Record::ints)).flatten();
+        let index = if matches!(reference, "IndexToDirect" | "Index") { Some(index.iter().find_map(|n| e.child(n))?.ints()) } else { None };
         let data = e.child(data)?.floats();
         Some((Layer { mapping, index, len: data.len() / width }, data))
     }

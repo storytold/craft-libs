@@ -454,7 +454,7 @@ type PerGlyph<'a> = dyn FnMut(&mut Interp, u32, usize) -> R<(f64, f64)> + 'a;
 
 /// Show (or, with `draw` false, measure) a string: the total advance in user space.
 /// `per_char` gives each glyph's extra displacement (or, with `replace`, its whole advance).
-fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &mut PerGlyph<'_>) -> R<(f64, f64)> {
+fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &mut PerGlyph<'_>, text: Option<&str>) -> R<(f64, f64)> {
     let font = match ip.gs.font.clone() {
         Some(f) => f,
         None => return err("invalidfont"),
@@ -468,6 +468,12 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
         let fm = font_matrix(&font);
         s.iter().map(|c| (u32::from(*c), font.clone(), fm, crate::read::composite::Key2::Code(*c))).collect()
     };
+    // Glyph procedures can issue arbitrary paint and clip operations. The selected jobs, not
+    // the composite font's family, determine whether this show can have a synthetic wrapper.
+    let marked = text.filter(|_| !jobs.iter().any(|(_, leaf, _, _)| leaf.get_name(b"FontType").and_then(|v| v.num()) == Some(3.0)));
+    if let Some(text) = marked {
+        ip.out.begin_actual_text(text, &ip.gs.clip).map_err(PsErr::Fatal)?;
+    }
     let mut total = (0.0, 0.0);
     let mut text_paths: Vec<(Vec<crate::read::gstate::Seg>, crate::read::gstate::DevColor)> = Vec::new();
     let mut text_segments = 0usize;
@@ -572,11 +578,18 @@ fn show_glyphs(ip: &mut Interp, s: &[u8], draw: bool, replace: bool, per_char: &
         Ok(total)
     })();
     let path_limit = matches!(&result, Err(PsErr::Fatal(message)) if message == "PostScript (path limit)");
-    if (result.is_ok() || !path_limit) && !ip.gs.nulldev {
-        for (path, color) in text_paths {
-            ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
+    let paint_result = (|| {
+        if (result.is_ok() || !path_limit) && !ip.gs.nulldev {
+            for (path, color) in text_paths {
+                ip.out.fill(&ip.gs.clip, &path, false, color).map_err(PsErr::Fatal)?;
+            }
         }
+        Ok(())
+    })();
+    if marked.is_some() {
+        ip.out.end_actual_text();
     }
+    paint_result?;
     result
 }
 
@@ -593,17 +606,8 @@ fn show_string(ip: &mut Interp, s: &[u8], draw: bool, per_char: &mut PerGlyph<'_
     // Whitespace-only shows advance the text position but emit no painted glyphs; avoid bloating
     // the content stream with an empty semantic marked-content wrapper for them.
     let text = ip.gs.font.as_ref().and_then(|font| actual_text(font, s));
-    if draw
-        && !ip.charpath
-        && let Some(text) = text.filter(|text| text.chars().any(|c| !c.is_whitespace()))
-    {
-        ip.out.begin_actual_text(&text);
-        let result = show_glyphs(ip, s, draw, false, per_char);
-        ip.out.end_actual_text();
-        result
-    } else {
-        show_glyphs(ip, s, draw, false, per_char)
-    }
+    let text = text.filter(|text| draw && !ip.charpath && text.chars().any(|c| !c.is_whitespace()));
+    show_glyphs(ip, s, draw, false, per_char, text.as_deref())
 }
 
 pub fn show(ip: &mut Interp) -> R {
@@ -652,14 +656,21 @@ fn explicit_show(ip: &mut Interp, xs: bool, ys: bool) -> R {
         return err("nocurrentpoint");
     }
     let step = if xs && ys { 2 } else { 1 };
-    show_glyphs(ip, &s, true, true, &mut |_, _, i| {
-        let d = |k: usize| disp.get(i * step + k).copied().unwrap_or(0.0);
-        Ok(match (xs, ys) {
-            (true, true) => (d(0), d(1)),
-            (true, false) => (d(0), 0.0),
-            _ => (0.0, d(0)),
-        })
-    })
+    show_glyphs(
+        ip,
+        &s,
+        true,
+        true,
+        &mut |_, _, i| {
+            let d = |k: usize| disp.get(i * step + k).copied().unwrap_or(0.0);
+            Ok(match (xs, ys) {
+                (true, true) => (d(0), d(1)),
+                (true, false) => (d(0), 0.0),
+                _ => (0.0, d(0)),
+            })
+        },
+        None,
+    )
     .map(|_| ())
 }
 
