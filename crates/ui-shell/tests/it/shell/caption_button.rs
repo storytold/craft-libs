@@ -29,6 +29,15 @@ fn hostile_svgs_render_nothing() {
     assert!(mask_of(image.as_bytes(), GLYPH_PX).is_some_and(|mask| mask.iter().all(|coverage| *coverage == 0)), "nothing drawn");
 }
 
+/// Icons parse on the UI thread: a document nested deeper than its stack takes is refused, not a stack overflow.
+#[trial]
+fn an_icon_nested_past_its_depth_is_refused_not_a_crash() {
+    let deep = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">{}<path d="M4 4h8v8H4z"/>{}</svg>"#, "<g>".repeat(200), "</g>".repeat(200));
+    assert!(mask_of(deep.as_bytes(), GLYPH_PX).is_none());
+    let shallow = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">{}<path d="M4 4h8v8H4z"/>{}</svg>"#, "<g>".repeat(8), "</g>".repeat(8));
+    assert!(mask_of(shallow.as_bytes(), GLYPH_PX).is_some_and(|mask| mask.iter().any(|coverage| *coverage > 0)), "a shallow icon draws");
+}
+
 /// A glyph is a square coverage mask of the drawing, fitted to the asked side; the glyphs a theme lacks have none.
 #[trial]
 fn masks_are_square_coverage() {

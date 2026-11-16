@@ -62,8 +62,8 @@ craft-fonts-build = { workspace = true }
 # Only `color_fonts` reads it: the feature turns on epaint's colour glyphs.
 epaint = { version = "0.37", default-features = false, optional = true }
 
-# Icon rasterising; the version egui_extras's `svg` feature uses, so apps build one copy.
-resvg = { version = "0.45.1", default-features = false }
+# Icon parsing and rasterising: the bounded usvg/resvg stack every Craft app shares, without text or raster images.
+craft-svg = { workspace = true, features = ["draw"] }
 # `std::time::Instant` on native; the browser clock on wasm, where `Instant::now` panics.
 web-time = "1.1"
 

@@ -26,17 +26,23 @@ vectorcraft-pathops = { workspace = true }
 usvg = { version = "=0.48.1", default-features = false, optional = true }
 # Rendering the parsed tree uses the matching renderer version. Keep it behind an opt-in feature
 # so callers that only need bounded SVG text/tree parsing do not pull in raster backends.
-resvg = { version = "=0.48.1", default-features = false, features = ["text", "raster-images"], optional = true }
+resvg = { version = "=0.48.1", default-features = false, optional = true }
 
 data-url = { version = "0.3.2", optional = true }
 
 [features]
-# `craft_svg::tree`: usvg behind the bounded entry point.
-tree = ["dep:usvg", "dep:data-url", "dep:craft-image-codecs"]
+# `craft_svg::tree` without images: usvg behind the bounded entry point, the preflight, the
+# limits and the draw check. For a caller that parses SVG it trusts no `<image>` in (UI icons).
+tree-core = ["dep:usvg"]
+# `craft_svg::tree`: usvg behind the bounded entry point, with the data-URL image resolver.
+tree = ["tree-core", "dep:data-url", "dep:craft-image-codecs"]
 # Text converted to paths (needs a font database in the options).
 tree-text = ["tree", "usvg/text"]
 # The system's fonts in `usvg::fontdb`.
 tree-system-fonts = ["tree-text", "usvg/system-fonts"]
-# Bounded rendering of a parsed tree through the matching resvg/tiny-skia versions.
-tree-render = ["tree", "dep:resvg"]
+# Bounded drawing of a parsed tree through the matching resvg/tiny-skia versions, without text or
+# raster images (`tree::draw::render`, `render_node`, the `resvg` and `tiny_skia` re-exports).
+draw = ["tree-core", "dep:resvg"]
+# Bounded rendering of a parsed tree with its text and raster images.
+tree-render = ["tree", "draw", "resvg/text", "resvg/raster-images"]
 tree-render-system-fonts = ["tree-render", "resvg/system-fonts"]

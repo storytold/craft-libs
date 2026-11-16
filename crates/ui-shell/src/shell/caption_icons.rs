@@ -137,10 +137,13 @@ fn theme_files(_theme: &str) -> [Option<Arc<[u8]>>; 4] {
     Default::default()
 }
 
+/// Bytes drawing one caption icon may allocate, its target included.
+const MASK_DRAW_BUDGET: u64 = 64 << 20;
+
 /// An SVG's coverage (alpha) as a `px` x `px` mask, the drawing fitted and centred. `None` for an unreadable SVG or
 /// an absurd size.
 fn rasterize_mask(svg: &[u8], px: u32) -> Option<CaptionMask> {
-    use resvg::tiny_skia;
+    use craft_svg::tree::draw::{self, tiny_skia};
     if !(1..=MAX_MASK_SIDE).contains(&px) {
         return None;
     }
@@ -155,8 +158,8 @@ fn rasterize_mask(svg: &[u8], px: u32) -> Option<CaptionMask> {
         }
         let scale = px as f32 / side;
         let (dx, dy) = ((px as f32 - size.width() * scale) / 2.0, (px as f32 - size.height() * scale) / 2.0);
-        let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
-        resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale).post_translate(dx, dy), &mut pixmap.as_mut());
+        let transform = tiny_skia::Transform::from_scale(scale, scale).post_translate(dx, dy);
+        let pixmap = draw::render(&tree, transform, px, px, 0, MASK_DRAW_BUDGET).ok()?;
         Some(pixmap.data().as_chunks::<4>().0.iter().map(|[_, _, _, a]| *a).collect())
     }))
     .ok()
