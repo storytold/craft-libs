@@ -165,6 +165,14 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
     } else {
         ifd.set(t::WHITE_LEVEL, Value::Long(white));
     }
+    // A table still to be applied (OpcodeList1 has to run on the stored codes first) is written
+    // with the samples. Once the samples have been mapped, writing the tag would apply it twice
+    // on the next read of a file without list 1.
+    if !raw.linearized
+        && let Some(table) = raw.linearization_table.as_deref().filter(|t| !t.is_empty())
+    {
+        ifd.set(t::LINEARIZATION_TABLE, Value::Short(table.to_vec()));
+    }
     let a = raw.active_area;
     ifd.set(t::ACTIVE_AREA, Value::Long(vec![a.y as u32, a.x as u32, (a.y + a.height) as u32, (a.x + a.width) as u32]));
     ifd.set(t::DEFAULT_CROP_ORIGIN, Value::Long(vec![raw.crop.x as u32, raw.crop.y as u32]));
@@ -457,6 +465,7 @@ mod tests {
             color: crate::ColorData::default(),
             wb_multipliers: None,
             linearized: false,
+            linearization_table: None,
             pixel_aspect: 1.0,
             opcodes: OpcodeLists::default(),
             camera: Default::default(),
@@ -514,6 +523,7 @@ mod tests {
             color: crate::ColorData::default(),
             wb_multipliers: None,
             linearized: false,
+            linearization_table: None,
             pixel_aspect: 1.0,
             opcodes: OpcodeLists::default(),
             camera: Default::default(),
