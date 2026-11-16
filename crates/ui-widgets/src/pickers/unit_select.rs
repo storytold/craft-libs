@@ -4,10 +4,10 @@ use super::select::Select;
 use crate::contract::{
     Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Entry, MeasureCx, Outcome, PaintUi, Props as _, Role, WordSetCx as _,
 };
-use crate::runtime::env::{Label, UnitKind};
+use crate::runtime::env::{Label, UnitKind, Units};
 use crate::style::{ComponentStyle, StyleCx};
 use crate::text::{NumberField, RangeAlert};
-use craft_behavior::{EditEvents, Flow, Metrics, Mixed, Proposal, Sense};
+use craft_behavior::{EditEvents, Flow, Metrics, Mixed, NumberCodec, Proposal, Sense};
 use egui::{Rect, Response, Vec2, pos2};
 use std::ops::{Deref, RangeInclusive};
 
@@ -59,9 +59,10 @@ impl Outcome for UnitSelectOutput {
     }
 }
 
-/// A number field with a select of units after it. The select picks the unit kind the field reads typed text in and
-/// shows its number with, and the kind sets the digits and the step of the number; the number itself is the field's value, and the unit goes to its own binding, so the app
-/// converts the number when the unit changes.
+/// A number field with a select of units after it. The select picks the unit kind the field reads typed text in
+/// (its spellings: "12 mm") and shows its number with, and the kind sets the digits and the step of the number; the
+/// select names the unit, so the field shows the number alone. The number itself is the field's value, and the unit
+/// goes to its own binding, so the app converts the number when the unit changes.
 #[derive(crate::contract::Component, crate::contract::Props)]
 #[component]
 pub struct UnitSelect<'a> {
@@ -102,7 +103,7 @@ impl<'a> UnitSelect<'a> {
         .label(label)
     }
 
-    fn number(&self, name: Label, value: Mixed<Option<f64>>, kind: Option<UnitKind>) -> NumberField<'static> {
+    fn number(&self, name: Label, value: Mixed<Option<f64>>, kind: Option<(UnitKind, &Units)>) -> NumberField<'static> {
         let field = NumberField::new(name, Bind::given(value));
         let field = match self.number_enabled {
             Some(on) => field.enabled(on),
@@ -113,7 +114,7 @@ impl<'a> UnitSelect<'a> {
             None => field,
         };
         match kind {
-            Some(kind) => field.unit_kind(kind).step(kind.step()),
+            Some((kind, units)) => field.codec(NumberCodec::new(units.reader(Some(kind)), *kind.decimals().end())).step(kind.step()),
             None => field,
         }
     }
@@ -172,7 +173,8 @@ impl Component for UnitSelect<'_> {
         };
         let shown = shown_of(cx.value());
         let start = cx.value().and_then(|value| *value);
-        let number = ui.child("number", place(number_rect), self.number(group.clone(), shown, kind));
+        let units = cx.env.units();
+        let number = ui.child("number", place(number_rect), self.number(group.clone(), shown, kind.map(|kind| (kind, &units))));
         cx.adopt(&number, &start, |value, mine| *mine = *value);
         self.out_of_range = number.out_of_range;
         let select = Select::new(self.select_name(&group), self.unit.reborrowed(), self.units);

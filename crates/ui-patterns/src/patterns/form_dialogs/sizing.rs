@@ -334,7 +334,7 @@ impl Kit {
         let env = Env::of(ui);
         let units = env.units();
         let entries =
-            |kinds: &[UnitKind]| -> Vec<Entry<UnitKind>> { kinds.iter().map(|kind| Entry::new(*kind, Label::from(units.symbol(*kind)))).collect() };
+            |kinds: &[UnitKind]| -> Vec<Entry<UnitKind>> { kinds.iter().map(|kind| Entry::new(*kind, units.name(*kind))).collect() };
         let lengths = entries(&LENGTH_UNITS);
         let mut widths = lengths.clone();
         widths.extend(entries(&[UnitKind::Columns]));

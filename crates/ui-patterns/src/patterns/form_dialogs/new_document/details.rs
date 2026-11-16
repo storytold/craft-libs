@@ -80,9 +80,9 @@ fn apply_number(session: &mut Session, events: &EditEvents<Option<f64>>, set: im
     }
 }
 
-/// The entries of a unit list, named by the units' symbols.
+/// The entries of a unit list, named by the units' names.
 fn unit_entries(read: &Read<'_>, kinds: &[UnitKind]) -> Vec<Entry<UnitKind>> {
-    kinds.iter().map(|kind| Entry::new(*kind, read.units.symbol(*kind))).collect()
+    kinds.iter().map(|kind| Entry::new(*kind, read.units.name(*kind))).collect()
 }
 
 /// Shows the column.

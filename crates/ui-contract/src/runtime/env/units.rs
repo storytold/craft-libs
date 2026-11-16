@@ -1,7 +1,7 @@
 //! `Units`: what typed number input and unit readouts need from the env (core 2.1): the locale's separators and the
 //! unit spellings of a number's kind in the user's language, and the file sizes and durations written with them.
 
-use super::EnvValue;
+use super::{EnvValue, Label};
 use craft_behavior::NumberCodec;
 use craft_behavior::quantity::{Reader, is_unit_spelling};
 use craft_i18n::{FileSize, Format, WordSet as _, Words};
@@ -10,7 +10,8 @@ use std::ops::RangeInclusive;
 use std::sync::{Arc, OnceLock};
 
 craft_ui::words! {
-    /// The unit words: `{n}` is where the number goes.
+    /// The unit words: `{n}` is where the number goes. The `_name` words name a unit in a list of units (a unit
+    /// select), without a number.
     pub struct UnitWords {
         pixels: unit "units.pixels" = "{n} px";
         percent: unit "units.percent" = "{n}%";
@@ -28,6 +29,21 @@ craft_ui::words! {
         lines_per_centimetre: unit "units.linesPerCentimetre" = "{n} lpcm";
         minutes: unit "units.minutes" = "{n} min";
         columns: unit "units.columns" = "{n} col";
+        pixels_name: "units.pixelsName" = "Pixels";
+        percent_name: "units.percentName" = "Percent";
+        degrees_name: "units.degreesName" = "Degrees";
+        points_name: "units.pointsName" = "Points";
+        times_name: "units.timesName" = "Times";
+        inches_name: "units.inchesName" = "Inches";
+        centimetres_name: "units.centimetresName" = "Centimetres";
+        millimetres_name: "units.millimetresName" = "Millimetres";
+        picas_name: "units.picasName" = "Picas";
+        pixels_per_inch_name: "units.pixelsPerInchName" = "Pixels/Inch";
+        pixels_per_centimetre_name: "units.pixelsPerCentimetreName" = "Pixels/Centimetre";
+        minutes_name: "units.minutesName" = "Minutes";
+        columns_name: "units.columnsName" = "Columns";
+        lines_per_inch_name: "units.linesPerInchName" = "Lines/Inch";
+        lines_per_centimetre_name: "units.linesPerCentimetreName" = "Lines/Centimetre";
     }
 }
 
@@ -340,6 +356,29 @@ impl Units {
             UnitKind::LinesPerInch => words.lines_per_inch.as_str(),
             UnitKind::LinesPerCentimetre => words.lines_per_centimetre.as_str(),
         }
+    }
+
+    /// The unit's name in the user's language, as a list of units shows it: Pixels, Pixels/Inch.
+    pub fn name(&self, kind: UnitKind) -> Label {
+        let words = &*self.words;
+        let name = match kind {
+            UnitKind::Pixels => &words.pixels_name,
+            UnitKind::Percent => &words.percent_name,
+            UnitKind::Degrees => &words.degrees_name,
+            UnitKind::Points => &words.points_name,
+            UnitKind::Times => &words.times_name,
+            UnitKind::Inches => &words.inches_name,
+            UnitKind::Centimetres => &words.centimetres_name,
+            UnitKind::Millimetres => &words.millimetres_name,
+            UnitKind::Picas => &words.picas_name,
+            UnitKind::PixelsPerInch => &words.pixels_per_inch_name,
+            UnitKind::PixelsPerCentimetre => &words.pixels_per_centimetre_name,
+            UnitKind::Minutes => &words.minutes_name,
+            UnitKind::Columns => &words.columns_name,
+            UnitKind::LinesPerInch => &words.lines_per_inch_name,
+            UnitKind::LinesPerCentimetre => &words.lines_per_centimetre_name,
+        };
+        name.clone()
     }
 
     /// The unit's spelling in the user's language without the number: `mm`, `px`.
