@@ -2811,6 +2811,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-tar"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "craft-tcraft"
 version = "0.1.0"
 dependencies = [
