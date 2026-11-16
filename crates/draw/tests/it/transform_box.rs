@@ -135,10 +135,14 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
     for target in &shown_config.borrow().targets {
         targets.add(*target);
     }
-    let snap = Snap::new(Arc::new(targets), SnapOptions::default());
+    let targets = Arc::new(targets);
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let config = shown_config.borrow().clone();
+        // A box on the pixel grid alone has the grid through a snap that snaps to nothing.
+        let mut options = SnapOptions::default();
+        options.on = config.snap;
+        let snap = Snap::new(Arc::clone(&targets), options).whole_pixels(config.pixel_grid);
         let view = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0)
             .rotation(config.rotation)
             .flip_x(config.flip);
@@ -149,8 +153,8 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
         };
         let canvas_id = ui.scope_id().with("document canvas");
         let mut canvas = Canvas::new("Document").id(canvas_id).view(view);
-        if config.snap {
-            canvas = canvas.snap(snap.clone());
+        if config.snap || config.pixel_grid {
+            canvas = canvas.snap(snap);
         }
         if let Some(ruler) = config.rulers {
             canvas = canvas.rulers(ruler, ruler, Point::ZERO);
@@ -170,8 +174,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                     .inside_moves(config.inside_moves)
                     .reference_point(config.reference_point)
                     .centre_mark(config.centre_mark)
-            }
-            .pixel_grid(config.pixel_grid);
+            };
             if let Some(mods) = config.mods {
                 control = control.mods(mods);
             }

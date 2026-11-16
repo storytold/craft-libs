@@ -119,3 +119,23 @@ fn snap_targets_snap_points_and_boxes_unless_control_suspends() {
     assert_eq!(snap.rect(DocRect::new(60.0, 10.0, 97.0, 40.0), Mods::NONE), (Vec2::ZERO, Vec::new()));
     assert_eq!(snapped_with(&mut fixture, Modifiers::NONE), NEAR);
 }
+
+/// The pixel grid: a snap with whole pixels rounds the point a tool snaps after the target snap, also with View > Snap
+/// off and with Control suspending it, and leaves the offset of a moved box to the targets.
+#[trial]
+fn whole_pixels_round_snapped_points_but_not_box_offsets() {
+    const OFF_GRID: Point = Point::new(110.4, 180.6);
+    let mut off = SnapOptions::default();
+    off.on = false;
+    for options in [SnapOptions::default(), off] {
+        let (mut fixture, seen) = rig(Snap::new(targets(), options).whole_pixels(true));
+        fixture.fixture().os(Platform::Mac).frame(Vec::new());
+        let snap = seen.borrow().clone().expect("the canvas publishes its snap to its body");
+        assert_eq!(snap.point(OFF_GRID, Mods::NONE, GestureSnap::default()).0, Point::new(110.0, 181.0), "on {}", options.on);
+        assert_eq!(snap.point(OFF_GRID, Mods::CTRL, GestureSnap::default()).0, Point::new(110.0, 181.0), "Control held, on {}", options.on);
+        assert_eq!(snap.apply(Axis::Y, 110.4, Mods::NONE), 110.0);
+        assert_eq!(snap.rect(DocRect::new(10.2, 10.0, 40.2, 40.0), Mods::NONE).0, Vec2::ZERO, "a box away from the targets keeps its offset");
+    }
+    let (mut fixture, _) = rig(Snap::new(targets(), SnapOptions::default()).whole_pixels(true));
+    assert_eq!(snapped_with(&mut fixture, Modifiers::NONE), Point::new(100.0, 200.0), "a point on a target stays on it");
+}

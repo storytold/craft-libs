@@ -309,10 +309,6 @@ pub struct TransformBox<'a> {
     /// Whether a press inside moves the box. Off leaves it to the tool.
     #[prop]
     inside_moves: bool,
-    /// Rounds an upright box and its corners to whole document units before it is proposed (Snap Transforms to Pixel
-    /// Grid). Keys are not rounded.
-    #[prop]
-    pixel_grid: bool,
     /// The modifiers every test of this box reads in place of the pointer's: a touch host's sticky modifiers.
     #[prop]
     mods: Option<Mods>,
@@ -356,7 +352,6 @@ impl<'a> TransformBox<'a> {
             reference_point: true,
             rotate_zone: RotateZone::Outside,
             inside_moves: true,
-            pixel_grid: false,
             mods: None,
             overflow: false,
             session_arrows: true,
@@ -475,7 +470,8 @@ impl<'a> TransformBox<'a> {
             _ => (to, Vec::new()),
         };
         let dragged = quad::drag(&grip.start, &grip.last, grip.part, grip.from, to, mods, &self.rules);
-        let dragged = if self.pixel_grid { on_pixel_grid(dragged) } else { dragged };
+        // The canvas's pixel grid rounds an upright box and its corners to whole document units; keys are not rounded.
+        let dragged = if snap.is_some_and(Snap::rounds_to_pixels) { on_pixel_grid(dragged) } else { dragged };
         if kind == Some(BoxDrag::Distort)
             && let Some(at) = handle_point(&dragged, grip.part)
         {

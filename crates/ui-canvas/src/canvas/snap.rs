@@ -20,6 +20,7 @@ pub struct Snap {
     options: SnapOptions,
     tolerance: Option<f64>,
     os: Platform,
+    whole_pixels: bool,
 }
 
 /// The gesture's snap options in one argument: whether the gesture reads Control itself, and a kind filter.
@@ -49,22 +50,44 @@ impl GestureSnap {
 impl Snap {
     /// The snapping over `targets` with `options`; the tolerance is set by the canvas each pass.
     pub fn new(targets: Arc<SnapTargets>, options: SnapOptions) -> Self {
-        Snap { targets, options, tolerance: None, os: Platform::current() }
+        Snap { targets, options, tolerance: None, os: Platform::current(), whole_pixels: false }
+    }
+
+    /// This snap rounding every point it gives to whole document units when `on`: the pixel grid for drawn points and
+    /// transform boxes (Preferences > Tools > Snap Vector Tools and Transforms to Pixel Grid, as the app decides it
+    /// applies). The rounding follows the target snap and holds with snapping off or suspended by Control.
+    #[must_use]
+    pub fn whole_pixels(mut self, on: bool) -> Self {
+        self.whole_pixels = on;
+        self
+    }
+
+    /// Whether this snap rounds its points to whole document units.
+    pub fn rounds_to_pixels(&self) -> bool {
+        self.whole_pixels
+    }
+
+    fn rounded(&self, position: f64) -> f64 {
+        if self.whole_pixels { position.round() } else { position }
     }
 
     /// `position` across a guide running `along`, snapped.
     pub fn apply(&self, along: Axis, position: f64, mods: Mods) -> f64 {
-        let Some(tolerance) = self.reach(mods, false) else { return position };
-        self.targets.nearest(along, position, tolerance).map_or(position, |target| target.position)
+        let snapped = match self.reach(mods, false) {
+            Some(tolerance) => self.targets.nearest(along, position, tolerance).map_or(position, |target| target.position),
+            None => position,
+        };
+        self.rounded(snapped)
     }
 
     /// `point` snapped on both axes to the targets of `gesture.kinds`, with the lines to draw; the input and no lines
     /// when snapping is off.
     pub fn point(&self, point: Point, mods: Mods, gesture: GestureSnap) -> (Point, Vec<SnapLine>) {
-        match self.reach(mods, gesture.reads_control) {
+        let (at, lines) = match self.reach(mods, gesture.reads_control) {
             Some(tolerance) => self.targets.snap_point_of(point, tolerance, gesture.kinds),
             None => (point, Vec::new()),
-        }
+        };
+        (Point::new(self.rounded(at.x), self.rounded(at.y)), lines)
     }
 
     /// The offset that moves `rect` onto a snap target, with the lines to draw; zero when snapping is off.
@@ -102,14 +125,18 @@ impl Snap {
 
 impl PartialEq for Snap {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.targets, &other.targets) && self.options == other.options && self.tolerance == other.tolerance && self.os == other.os
+        Arc::ptr_eq(&self.targets, &other.targets)
+            && self.options == other.options
+            && self.tolerance == other.tolerance
+            && self.os == other.os
+            && self.whole_pixels == other.whole_pixels
     }
 }
 
 impl std::fmt::Debug for Snap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The targets can number thousands of grid lines, so they are left out.
-        f.debug_struct("Snap").field("options", &self.options).field("tolerance", &self.tolerance).field("os", &self.os).finish_non_exhaustive()
+        f.debug_struct("Snap").field("options", &self.options).field("tolerance", &self.tolerance).field("os", &self.os).field("whole_pixels", &self.whole_pixels).finish_non_exhaustive()
     }
 }
 

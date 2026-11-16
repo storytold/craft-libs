@@ -64,7 +64,6 @@ pub struct TransformOverlay<'a, W> {
     session: &'a TransformSession<W>,
     settings: &'a TransformSettings,
     rules: Option<BoxRules>,
-    pixel_grid: bool,
     mods: Option<Mods>,
     menu_rows: &'a [Entry<String>],
     reach: TransformReach,
@@ -79,7 +78,6 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
             session,
             settings,
             rules: None,
-            pixel_grid: false,
             mods: None,
             menu_rows: &[],
             reach: TransformReach::Box,
@@ -127,14 +125,6 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         self
     }
 
-    /// Rounds dragged boxes to whole document units (Snap Transforms to Pixel Grid; the app's rule for shape layers
-    /// and paths).
-    #[must_use]
-    pub fn pixel_grid(mut self, on: bool) -> Self {
-        self.pixel_grid = on;
-        self
-    }
-
     /// The modifiers every test reads in place of the pointer's (a touch host's sticky modifiers).
     #[must_use]
     pub fn mods(mut self, mods: Option<Mods>) -> Self {
@@ -157,7 +147,6 @@ impl<'a, W: TransformWarp> TransformOverlay<'a, W> {
         let mut tbox = TransformBox::new(self.label.clone(), Bind::given(*session.state()), session.rect(), session.skew_v())
             .rules(rules)
             .reference_point(session.reference_point())
-            .pixel_grid(self.pixel_grid)
             .reach(self.reach)
             .id_source(self.id);
         if let Some(mods) = self.mods {
