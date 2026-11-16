@@ -88,12 +88,21 @@ craft_ui::words! {
 pub struct GradientPreview {
     /// Stops as (position 0–1, colour), ascending by position.
     pub stops: Vec<(f32, Srgba)>,
+    /// Whether the host's gradient runs end to start. The ramp keeps the stops as given; the flag is part of the
+    /// preview's value so that a Reverse edit, which leaves the stops alone, still changes the paint the chip sets.
+    pub reverse: bool,
 }
 
 impl GradientPreview {
-    /// A preview through `stops`.
+    /// A preview through `stops`, not reversed.
     pub fn new(stops: Vec<(f32, Srgba)>) -> Self {
-        GradientPreview { stops }
+        GradientPreview { stops, reverse: false }
+    }
+
+    /// The preview with the gradient reversed or not.
+    pub fn reversed(mut self, reverse: bool) -> Self {
+        self.reverse = reverse;
+        self
     }
 }
 
