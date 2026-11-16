@@ -55,7 +55,7 @@ The host implements `DockPanels<P>`:
 | `spec` | The panel's `PanelSpec`, read every pass: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`. |
 | `permissions` | The panel's `Permissions` (default `ALL`). |
 | `body` | Shows the panel's body. |
-| `group_view` | Takes a whole group in place of its tab strip and body; a canvas group draws its document here. Default `None`. |
+| `group_view` | Takes a whole group in place of its tab strip and body, in a `Ui` held to the group's rect; a canvas group draws its document here. Default `None`. |
 | `group_header` | The host's controls in a group header, before the tab strip. |
 | `panel_rows` | The host's rows of a panel's menu, before the dock's own. |
 

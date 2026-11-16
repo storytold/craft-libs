@@ -24,7 +24,7 @@ use craft_behavior::dock::{
     Action, Column, DockEdge, DockError, Group, Layout, Location, Node, PanelPlace, Permissions, SplitSize, Workspace, node_at,
 };
 use craft_behavior::{CancelReason, DockSide, EditEvent, EditEvents, Flow, GestureId, GesturePhase, Mixed, Proposal};
-use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2, ViewportId};
+use egui::{Context, Id, Pos2, Rect, Response, Ui, UiBuilder, Vec2, ViewportId};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -758,7 +758,19 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let scene = self.scene;
         let anchor = members.first()?;
         let active = active.min(members.len() - 1);
-        if let Some(height) = self.panels.group_view(members, active, ui, at, body) {
+        let viewed = match at {
+            // The view draws in a child `Ui` held to the group's rect and clipped to it: it lays out in the group's
+            // room, never in the room the area has left.
+            GroupAt::Show(rect) => {
+                ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+                    ui.shrink_clip_rect(rect);
+                    self.panels.group_view(members, active, ui, at, body)
+                })
+                .inner
+            }
+            GroupAt::Measure(_) => self.panels.group_view(members, active, ui, at, body),
+        };
+        if let Some(height) = viewed {
             return matches!(at, GroupAt::Measure(_)).then_some(height);
         }
         let titles: Vec<PanelTitle> = members
