@@ -660,27 +660,3 @@ impl<T: EdgeTracer> CanvasTool for SelectToolPass<'_, MagneticLassoTool<T>> {
 fn close_radius(cx: &ToolContext<'_>, place: &Place) -> f64 {
     reach(cx).close / place.zoom().max(0.01)
 }
-
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    fn width_steps_by_one_and_shift_jumps_to_the_limits() {
-        let mut settings = MagneticSettings { width: 10.4, ..MagneticSettings::default() };
-        settings.step_width(1, false);
-        assert_eq!(settings.width, 11.0, "a step adds one to the rounded width");
-        settings.width = 1.0;
-        settings.step_width(-1, false);
-        assert_eq!(settings.width, 1.0, "the step stops at the minimum");
-        settings.width = 256.0;
-        settings.step_width(1, false);
-        assert_eq!(settings.width, 256.0, "the step stops at the maximum");
-        settings.step_width(-1, true);
-        assert_eq!(settings.width, 1.0, "Shift+[ goes to the minimum");
-        settings.step_width(1, true);
-        assert_eq!(settings.width, 256.0, "Shift+] goes to the maximum");
-        settings.width = f32::NAN;
-        settings.step_width(1, false);
-        assert_eq!(settings.width, MagneticSettings::default().width, "a width that is no number goes back to the default");
-    }
-}

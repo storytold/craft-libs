@@ -487,7 +487,7 @@ impl SelectMaskWorkspace {
         let common = env.words::<CommonWords>();
         let title = FullWindowTitle::new(words.name.clone()).subject(self.subject.clone()).zoom(self.zoom_percent).label(&env);
         let slots = SelectMaskTool::slots();
-        self.begin_pass(ui.ctx());
+        self.start_pass(ui.ctx());
         let request = self.request_now();
         let key = format!("{request:?}");
         let reset = Cell::new(false);
@@ -665,7 +665,7 @@ impl SelectMaskWorkspace {
 
     /// The start of a pass: the first pass reads the stored settings, a change the app made to the settings since the
     /// last pass reaches the view and the refinement values, and the edits `perform` recorded are reported.
-    fn begin_pass(&mut self, ctx: &Context) {
+    fn start_pass(&mut self, ctx: &Context) {
         if !std::mem::replace(&mut self.recalled, true)
             && let Some(key) = &self.remember
         {

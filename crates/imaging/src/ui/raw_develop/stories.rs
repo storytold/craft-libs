@@ -12,8 +12,9 @@ use craft_ui::contract::{Bind, Role};
 use craft_ui::dialog::{HostedWorkspace, stories::hosted};
 use craft_ui::primitives::Revision;
 use craft_ui::runtime::pending::Job;
+use craft_ui::testing::input::key_press;
 use craft_ui::testing::{Drive, Fixture, StoryData, StoryOutput, story};
-use egui::{Color32, ColorImage, Event, Key, Modifiers, Ui};
+use egui::{Color32, ColorImage, Key, Modifiers, Ui};
 
 use super::{
     Demosaic, RawDevelopOpen, RawDevelopPanel, RawDevelopSource, RawDevelopWorkspace, RawFilmItem, RawFilmstrip, RawFloatingScope, RawPreviewRequest,
@@ -141,8 +142,7 @@ fn smart_filter_with_edits(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 
 /// Y goes down and stays down: the workspace shows the picture before the settings.
 fn hold_before(fixture: &mut Fixture) {
-    let key = |pressed| Event::Key { key: Key::Y, physical_key: Some(Key::Y), pressed, repeat: false, modifiers: Modifiers::NONE };
-    fixture.frame(vec![key(true)]);
+    fixture.frame(vec![key_press(Key::Y, Modifiers::NONE)]);
 }
 
 #[story(RawDevelopWorkspace, covers = [], drive = Drive::Custom(hold_before))]
