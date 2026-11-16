@@ -519,7 +519,7 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
     const KEY: &'static str = "filter.cameraRaw";
 
     fn show(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, Self::Source>) -> WorkspacePass<Self::Event, Self::Result> {
-        let WorkspaceCx { source, revision, open, .. } = cx;
+        let WorkspaceCx { source, revision, open, hold_ok, ok_waits, .. } = cx;
         let env = Env::of(ui);
         let words = env.words::<RawDevelopWords>();
         let common = env.words::<CommonWords>();
@@ -529,9 +529,11 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
 
         let name = if self.target == RawTarget::OpenRaw { words.name.clone() } else { words.name_filter.clone() };
         let title: Label = FullWindowTitle::new(name).subject(self.subject.clone()).zoom(self.view.zoom_percent()).label(&env);
-        let mut plan = vec![(Footer::Finish(self.target.accept()), FooterButton::new(self.target_label(&words, &common), DialogRole::Accept))];
+        // A held OK files its answer for the app and keeps the workspace open until the app answers; the buttons that finish wait meanwhile.
+        let finishing = |button: FooterButton| button.stays_open(hold_ok).enabled(!ok_waits);
+        let mut plan = vec![(Footer::Finish(self.target.accept()), finishing(FooterButton::new(self.target_label(&words, &common), DialogRole::Accept)))];
         if self.target == RawTarget::OpenRaw {
-            plan.push((Footer::Finish(RawFinish::Done), FooterButton::new(words.done.clone(), DialogRole::Other)));
+            plan.push((Footer::Finish(RawFinish::Done), finishing(FooterButton::new(words.done.clone(), DialogRole::Other))));
         }
         plan.push((Footer::Save, FooterButton::new(words.save_settings.clone(), DialogRole::Other).stays_open(true)));
         plan.push((Footer::Load, FooterButton::new(words.load_settings.clone(), DialogRole::Other).stays_open(true)));
@@ -804,11 +806,14 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
             Some(Footer::Finish(finish)) => finish,
             _ => self.target.accept(),
         };
-        let result = match self.requested.take() {
-            Some(finish) => Some(DialogResult::Ok(self.result(finish))),
-            None => output.result(|| self.result(finish)),
+        let (result, held) = match (self.requested.take(), hold_ok) {
+            (Some(finish), true) => (None, Some(self.result(finish))),
+            (Some(finish), false) => (Some(DialogResult::Ok(self.result(finish))), None),
+            // Esc and Cancel close the workspace either way.
+            (None, true) => (output.closed.map(|_| DialogResult::Cancel), matches!(footer, Some(Footer::Finish(_))).then(|| self.result(finish))),
+            (None, false) => (output.result(|| self.result(finish)), None),
         };
-        WorkspacePass::new(output.response, events).result(result)
+        WorkspacePass::new(output.response, events).held(held).result(result)
     }
 
     fn json_fields(&self, source: &Self::Source) -> Option<serde_json::Value> {

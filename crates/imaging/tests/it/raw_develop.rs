@@ -218,6 +218,22 @@ fn raw_develop_switches_raws_and_finishes_with_each_footer_button() {
     assert_eq!(finish(&host), Some(RawFinish::Ok));
 }
 
+#[trial]
+fn a_held_ok_files_its_answer_and_keeps_the_workspace_open_until_the_app_answers() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host, &Rc::new(Cell::new(false)));
+    host.borrow_mut().open(HostedWorkspace::new(RawDevelopWorkspace::new(open(RawTarget::OpenRaw)), Source::new()).held_ok());
+    fixture.idle(10);
+    let done = fixture.by_label("Done").expect("Done");
+    fixture.click(&done).idle(4);
+    let held = host.borrow_mut().get_mut::<Hosted>().expect("Done keeps the workspace open").take_ok();
+    assert_eq!(held.map(|result| result.finish), Some(RawFinish::Done), "Done files its answer for the app");
+
+    host.borrow_mut().get_mut::<Hosted>().expect("open").answer_ok(Ok(()));
+    fixture.idle(4);
+    assert_eq!(finish(&host), Some(RawFinish::Done), "the app's answer closes the workspace with the filed result");
+}
+
 /// The key `key` going down or up, as a keyboard reports it.
 fn key_event(key: Key, pressed: bool) -> Event {
     Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers: Modifiers::NONE }
