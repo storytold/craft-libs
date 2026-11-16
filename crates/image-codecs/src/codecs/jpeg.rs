@@ -389,6 +389,30 @@ fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>,
 /// truncated or not, are far above this.
 const MAX_PIXELS_PER_BYTE: u64 = 2048;
 
+/// Decode with craft-jpeg: the files [`uses_craft_jpeg`] routes away from `zune-jpeg`, and the
+/// ones `zune-jpeg` panics on.
+fn decode_whole(bytes: &[u8], limits: &Limits, meta: JpegMeta, end: DataEnd, scan_bytes: u64) -> Result<Image, CodecError> {
+    // craft-jpeg sizes its buffers from the frame header before it reads a scan.
+    if scan_bytes == 0 {
+        return Err(err("the file has no scan data"));
+    }
+    if let Some((w, h, _)) = meta.frame
+        && end == DataEnd::Truncated
+        // Only truncated scans: arithmetic coding (SOF9–SOF11) can spend well under a bit on
+        // a flat block, so a complete scan may be shorter than this bound.
+        && u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
+    {
+        return Err(err("the truncated scan is too short for the frame it declares"));
+    }
+    let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform, meta.adobe_marker)?;
+    img.icc = meta.icc;
+    img.meta = Metadata { exif: meta.exif, xmp: meta.xmp, dpi: meta.dpi, photoshop_resources: meta.photoshop, ..Default::default() };
+    if end == DataEnd::Truncated || damaged {
+        img.warnings.push(DecodeWarning::Truncated { format: F });
+    }
+    Ok(img)
+}
+
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let (end, scan_bytes) = data_end(bytes);
     if end == DataEnd::Empty {
@@ -399,25 +423,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         limits.check_bytes(w, h, u64::from(nc.max(1)))?;
     }
     if uses_craft_jpeg(bytes) {
-        // craft-jpeg sizes its buffers from the frame header before it reads a scan.
-        if scan_bytes == 0 {
-            return Err(err("the file has no scan data"));
-        }
-        if let Some((w, h, _)) = meta.frame
-            && end == DataEnd::Truncated
-            // Only truncated scans: arithmetic coding (SOF9–SOF11) can spend well under a bit on
-            // a flat block, so a complete scan may be shorter than this bound.
-            && u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
-        {
-            return Err(err("the truncated scan is too short for the frame it declares"));
-        }
-        let (mut img, damaged) = decode_craft_jpeg(bytes, limits, meta.adobe_transform, meta.adobe_marker)?;
-        img.icc = meta.icc;
-        img.meta = Metadata { exif: meta.exif, xmp: meta.xmp, dpi: meta.dpi, photoshop_resources: meta.photoshop, ..Default::default() };
-        if end == DataEnd::Truncated || damaged {
-            img.warnings.push(DecodeWarning::Truncated { format: F });
-        }
-        return Ok(img);
+        return decode_whole(bytes, limits, meta, end, scan_bytes);
     }
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(65535).set_max_height(65535);
     let stripped = without_extended_xmp(bytes);
@@ -443,7 +449,12 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         return Err(err(format!("{what} is too short for the frame it declares")));
     }
     dec.set_options(dec.options().jpeg_set_out_colorspace(out_cs));
-    let mut px = dec.decode().map_err(err)?;
+    // zune-jpeg 0.5 asserts on some subsampled four-component frames whose first component isn't
+    // the largest (its upsampler's scratch row is sized from that component): craft-jpeg reads them.
+    let Ok(decoded) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dec.decode())) else {
+        return decode_whole(bytes, limits, meta, end, scan_bytes);
+    };
+    let mut px = decoded.map_err(err)?;
     let expected = w as usize * h as usize * layout.channels();
     if px.len() < expected {
         return Err(err("short pixel buffer"));
