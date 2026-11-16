@@ -60,8 +60,11 @@ pub struct LegacyFile<T> {
     /// store reports them in [`LoadReport::section_errors`](crate::LoadReport::section_errors), the
     /// same place a `config.toml` load puts its own. An `Err` means the file is unusable and the
     /// next legacy file is tried.
-    pub parse: fn(&[u8]) -> Result<(T, Vec<SectionError>), String>,
+    pub parse: ParseLegacy<T>,
 }
+
+/// Parses a legacy file's bytes: the value and the values reset to defaults, or why the file is unusable.
+pub type ParseLegacy<T> = fn(&[u8]) -> Result<(T, Vec<SectionError>), String>;
 
 /// A legacy file that parsed: its value, the values reset to defaults, and where it was.
 pub type Imported<T> = (T, Vec<SectionError>, PathBuf);
