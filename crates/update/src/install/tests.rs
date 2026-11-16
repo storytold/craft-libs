@@ -75,7 +75,7 @@ fn a_release_without_a_checksum_is_refused_before_anything_is_fetched() {
     assert!(!phases.contains(&JobPhase::Installing));
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn tarball(path: &Path, entries: &[&str]) {
     let f = std::fs::File::create(path).unwrap();
     let mut b = tar::Builder::new(flate2::write::GzEncoder::new(f, flate2::Compression::fast()));
