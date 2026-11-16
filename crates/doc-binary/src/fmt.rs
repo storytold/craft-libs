@@ -361,6 +361,52 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
 }
 
 /// The character style a CHPX grpprl names (`sprmCIstd`), if any: the last one.
+/// The character sprms whose values survive `sprmCIstd` ([MS-DOC] §2.6.1: "During steps 1 and 3,
+/// preserve the previous values of the following"): revision marks and their authors, dates and
+/// save IDs, right-to-left and complex-script text, hidden field and web text, special
+/// characters, pictures and OLE objects, symbols, the font hint, highlighting, font fix-up and
+/// equation justification.
+pub(crate) fn kept_by_istd(op: u16) -> bool {
+    matches!(
+        op,
+        0x0800 // sprmCFRMarkDel
+            | 0x0801 // sprmCFRMarkIns
+            | 0x0802 // sprmCFFldVanish
+            | 0x6A03 // sprmCPicLocation
+            | 0x4804 // sprmCIbstRMark
+            | 0x6805 // sprmCDttmRMark
+            | 0x0806 // sprmCFData
+            | 0x4807 // sprmCIdslRMark
+            | 0x6A09 // sprmCSymbol
+            | 0x080A // sprmCFOle2
+            | 0x2A0C // sprmCHighlight
+            | 0x0811 // sprmCFWebHidden
+            | 0x6815 // sprmCRsidProp
+            | 0x6816 // sprmCRsidText
+            | 0x6817 // sprmCRsidRMDel
+            | 0xC81A // sprmCFMathPr
+            | 0x0855 // sprmCFSpec
+            | 0x0856 // sprmCFObj
+            | 0x085A // sprmCFBiDi
+            | 0x0882 // sprmCFComplexScripts
+            | 0x4863 // sprmCIbstRMarkDel
+            | 0x6864 // sprmCDttmRMarkDel
+            | 0x286F // sprmCIdctHint
+            | 0xCA57 // sprmCPropRMark90
+            | 0xCA89 // sprmCPropRMark
+            | 0x2A83 // sprmCWall
+            | 0x2A86 // sprmCNeedFontFixup
+            | 0x2A90 // sprmCFSdtVanish
+    )
+}
+
+/// The character sprms of `grpprl` that count, in order: `sprmCIstd` first resets the run to its
+/// paragraph style, so a sprm before the last one counts only if [`kept_by_istd`].
+pub(crate) fn after_istd<'g>(grpprl: &'g [u8]) -> impl Iterator<Item = Prl<'g>> {
+    let last = sprm::iter(grpprl).enumerate().filter(|(_, p)| p.op == C_ISTD).map(|(i, _)| i).last();
+    sprm::iter(grpprl).enumerate().filter(move |(i, p)| p.sgc() == 2 && last.is_none_or(|l| *i >= l || kept_by_istd(p.op))).map(|(_, p)| p)
+}
+
 pub(crate) fn char_style_istd(grpprl: &[u8]) -> Option<u16> {
     sprm::iter(grpprl).filter(|p| p.op == C_ISTD).filter_map(|p| u16_of(&p)).last()
 }
