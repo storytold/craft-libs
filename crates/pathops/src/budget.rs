@@ -586,7 +586,7 @@ fn ends_cost(ends: &[Point], copies: &[u32], long: Option<&[bool]>, eps: f64, ce
         square.0 += 1;
         square.1 += u64::from(copies.get(k / 2).copied().unwrap_or(1).saturating_sub(1));
         if long.is_some() {
-            *exact.entry((p.x.to_bits(), p.y.to_bits())).or_default() += 1;
+            *exact.entry((bits(p.x), bits(p.y))).or_default() += 1;
         }
     }
     // The most ends at one exact point in each square.
@@ -625,11 +625,17 @@ fn long_segments(seg: &Segments) -> Vec<bool> {
     seg.boxes.iter().map(|b| b.width() > across || b.height() > across).collect()
 }
 
+/// The bits of a coordinate, with the two zeros the same (`-0.0` is `0.0` to the sweep, and its copies and its ends at a point are copies and
+/// ends at a point however the zeros are signed).
+fn bits(x: f64) -> u64 {
+    if x == 0.0 { 0 } else { x.to_bits() }
+}
+
 /// For each segment of `seg`, how many there are of it, itself among them (the same points, either way round).
 fn copies_of(seg: &Segments) -> Vec<u32> {
     use std::hash::{DefaultHasher, Hash, Hasher};
     let key = |s: &PathSeg| -> u64 {
-        let b = |p: Point| (p.x.to_bits(), p.y.to_bits());
+        let b = |p: Point| (bits(p.x), bits(p.y));
         let (pts, n) = match s {
             PathSeg::Line(l) => ([b(l.p0), b(l.p1), (0, 0), (0, 0)], 2),
             PathSeg::Quad(q) => ([b(q.p0), b(q.p1), b(q.p2), (1, 1)], 3),
@@ -3159,6 +3165,32 @@ mod tests {
         work::reset();
         assert!(with_limits(roomy, || sweep_fits([&both])));
         assert_eq!(work::take(Work::CrossingPairs), 0);
+    }
+
+    /// A zero is a zero to the keys of the copies of a segment and of the ends at one point, whichever way it is signed: 200 copies of a line from
+    /// (0, 0), written with `-0.0` for the zeros in every other one, are 200 copies and ends at one point, as when none is.
+    #[test]
+    fn a_signed_zero_is_the_same_coordinate_to_the_keys_of_copies_and_of_ends() {
+        let copies_written = |signed: bool| {
+            let mut path = BezPath::new();
+            for k in 0..200 {
+                let z = if signed && k % 2 == 1 { -0.0 } else { 0.0 };
+                path.move_to((z, z));
+                path.line_to((50.0, 7.0));
+            }
+            path
+        };
+        let read = |signed: bool| {
+            let mut seg = Segments::default();
+            seg.add_path(&copies_written(signed));
+            let copies = copies_of(&seg);
+            let ends = ends_at_points(&seg.ends, &copies, &long_segments(&seg), seg.extent);
+            (copies, ends)
+        };
+        let (plain, signed) = (read(false), read(true));
+        assert!(plain.0.iter().all(|&n| n == 200), "{:?}", &plain.0[..3]);
+        assert!(signed.0 == plain.0, "the copies of the first two: {:?}", &signed.0[..2]);
+        assert_eq!(signed.1, plain.1, "the ends at a point");
     }
 
     /// The first kind is walked where each kind could come to the limit alone and the two could not. Ten lines through a point moved ten
