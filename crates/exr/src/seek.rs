@@ -34,8 +34,9 @@
 //! becomes [`Error::Malformed`]. Where panics abort (`wasm32-unknown-unknown`), `catch_unwind`
 //! does nothing, so this module checks beforehand what it knows the crate would panic on: the
 //! chunk layout is computed here with checked arithmetic instead of the crate's (which panics on
-//! some sizes), the crate's block-size formula is checked for overflow, and a chunk's coordinates
-//! and level are checked before the crate interprets them. A panic inside the crate's header
+//! some sizes), the crate's block-size formula is checked for overflow, and a chunk's part,
+//! coordinates, level and declared size are checked before the crate reads it. A panic inside
+//! the crate's header
 //! parsing or a decompressor on damaged data is not ruled out there.
 
 use std::io::{Cursor, Read, Seek, SeekFrom};
@@ -46,7 +47,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use exr::block::UncompressedBlock;
-use exr::block::chunk::{Chunk, CompressedBlock};
+use exr::block::chunk::Chunk;
 use exr::math::Vec2;
 use exr::meta::MetaData;
 use exr::meta::attribute::SampleType as ExrSample;
@@ -54,16 +55,20 @@ use exr::meta::header::Header;
 
 use crate::decode::{Limits, PartInfo, Window, check_previews, part_info};
 
-/// Why a read failed.
+/// Why a read failed. More kinds may be added: a `match` needs a catch-all arm.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// The file is damaged, or a chunk can't be decompressed.
     #[error("OpenEXR: {0}")]
     Malformed(String),
-    /// A valid file this reader does not cover (HTJ2K compression, subsampled channels, channels
-    /// of deep parts).
+    /// A valid file this reader does not cover (subsampled channels, channels of deep parts).
     #[error("unsupported OpenEXR: {0}")]
     Unsupported(String),
+    /// A valid file whose compression this reader does not decode (HTJ2K): the name of the
+    /// compression. An app may hand such a file to another decoder.
+    #[error("unsupported OpenEXR compression: {0}")]
+    UnsupportedCompression(String),
     /// The file declares more than [`Limits`] (or this module's own bounds) allow, or the request
     /// needs more than [`Request::max_bytes`] (or than the system can give).
     #[error("OpenEXR exceeds a limit: {0}")]
@@ -132,6 +137,23 @@ const IN_FLIGHT_BYTES: u64 = 64 << 20;
 /// How often a wait for the workers polls `cancel`.
 const CANCEL_POLL: Duration = Duration::from_millis(50);
 
+/// One chunk of a part's full-resolution level, as [`Index::chunks`] lists it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkInfo {
+    /// Where the chunk starts in the file.
+    pub offset: u64,
+    /// The bytes read for it: up to the next chunk in the file (or the file's end), at most a
+    /// block's bytes plus its header; 0 when its offset lies outside the file (a read that needs
+    /// it fails).
+    pub len: u64,
+    /// Its top-left pixel in the part's data window, counted from the data window's corner (0, 0),
+    /// and its size in pixels.
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
 /// One chunk of the full-resolution level of a part, in offset-table order.
 #[derive(Debug, Clone, Copy)]
 struct ChunkRef {
@@ -177,7 +199,21 @@ impl Index {
     /// `limits` (the window and pixel limits; `max_bytes` and `max_ratio` bound what the whole
     /// file may decode to in [`crate::decode`] and play no part here, a read is bounded by
     /// [`Request::max_bytes`]). Nothing is sized by pixels. `cancel` is polled while reading.
+    /// The display window and every data window are held to `limits.max_pixels`; see
+    /// [`Index::build_with_display_limit`] to hold the display window to its own bound.
     pub fn build<R: Read + Seek + ?Sized>(source: &mut R, limits: &Limits, cancel: &dyn Fn() -> bool) -> Result<Index> {
+        Index::build_with_display_limit(source, limits, limits.max_pixels, cancel)
+    }
+
+    /// [`Index::build`] with the display window held to `max_display_pixels` instead of
+    /// `limits.max_pixels`, which then bounds the data windows only: an app may allow parts larger
+    /// than the picture it shows (overscan) while keeping the planes it allocates smaller.
+    pub fn build_with_display_limit<R: Read + Seek + ?Sized>(
+        source: &mut R,
+        limits: &Limits,
+        max_display_pixels: u64,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Index> {
         let len = source.seek(SeekFrom::End(0)).map_err(io)?;
         source.seek(SeekFrom::Start(0)).map_err(io)?;
         let prefix = read_headers(source, cancel)?;
@@ -192,7 +228,7 @@ impl Index {
         }
         for (i, h) in meta.headers.iter().enumerate() {
             if matches!(h.compression, exr::prelude::Compression::HTJ2K32 | exr::prelude::Compression::HTJ2K256) {
-                return Err(Error::Unsupported("HTJ2K compression".into()));
+                return Err(Error::UnsupportedCompression("HTJ2K".into()));
             }
             check_part(i, h, limits)?;
         }
@@ -200,7 +236,7 @@ impl Index {
         let display = first.shared_attributes.display_window;
         let (dw, dh) = (display.size.0, display.size.1);
         let display_pixels = (dw as u64).saturating_mul(dh as u64);
-        if dw == 0 || dh == 0 || dw > limits.max_width as usize || dh > limits.max_height as usize || display_pixels > limits.max_pixels {
+        if dw == 0 || dh == 0 || dw > limits.max_width as usize || dh > limits.max_height as usize || display_pixels > max_display_pixels {
             return Err(Error::LimitExceeded(format!("display window of {dw}x{dh}")));
         }
         let tables = read_tables(source, &meta, prefix.len() as u64, len, cancel)?;
@@ -232,6 +268,21 @@ impl Index {
     /// covers it, and a request's rows and a band's position count from its top-left corner.
     pub fn display(&self) -> Window {
         self.display
+    }
+
+    /// The chunks of part `part`'s full-resolution level, in offset-table order (none for a deep
+    /// part or a part that doesn't exist): where each lies in the file and which pixels of the
+    /// part's data window it holds. For diagnostics and tests; [`read_bands`] picks the chunks a
+    /// request needs by itself.
+    pub fn chunks(&self, part: usize) -> impl Iterator<Item = ChunkInfo> + '_ {
+        self.layout.get(part).map_or(&[][..], |p| p.chunks.as_slice()).iter().map(|c| ChunkInfo {
+            offset: c.offset,
+            len: c.len,
+            x: c.x,
+            y: c.y,
+            width: c.cols,
+            height: c.rows,
+        })
     }
 
     /// The file's length when it was indexed.
@@ -360,6 +411,9 @@ fn check_part(index: usize, h: &Header, limits: &Limits) -> Result<()> {
     if h.channels.list.is_empty() || h.channels.list.len() > 4096 {
         return Err(malformed(format!("channel count of part {index}")));
     }
+    if !crate_bound_fits(h) {
+        return Err(malformed(format!("the block size of part {index} overflows")));
+    }
     block_bytes(h).ok_or_else(|| Error::LimitExceeded(format!("a block of part {index} is over {MAX_BLOCK_BYTES} bytes")))?;
     Ok(())
 }
@@ -369,17 +423,28 @@ fn pixel_bytes(h: &Header) -> Option<usize> {
     h.channels.list.iter().map(|c| c.sample_type.bytes_per_sample()).try_fold(0usize, usize::checked_add)
 }
 
-/// The most bytes a block of `h` may take, by the formula the `exr` crate uses to cap what it
-/// reads and decompresses for one chunk (`Header::max_block_byte_size`: a pixel's bytes times a
-/// tile's area, or times the width and the scan lines a block holds, even when the part has
-/// fewer rows), computed with checked arithmetic: `None` past [`MAX_BLOCK_BYTES`] or when it
-/// overflows. Checking it here keeps the crate's own (unchecked) computation from overflowing.
+/// The bytes of the largest block the decompressor allocates for a chunk of `h`: a pixel's bytes
+/// times a tile's area, or times the width and the rows of a scan-line block (no more than the
+/// part has). `None` past [`MAX_BLOCK_BYTES`] or when it overflows.
 fn block_bytes(h: &Header) -> Option<usize> {
     let pixels = match h.blocks {
         exr::meta::BlockDescription::Tiles(t) => t.tile_size.0.checked_mul(t.tile_size.1)?,
-        exr::meta::BlockDescription::ScanLines => h.compression.scan_lines_per_block().checked_mul(h.layer_size.0)?,
+        exr::meta::BlockDescription::ScanLines => h.compression.scan_lines_per_block().min(h.layer_size.1).checked_mul(h.layer_size.0)?,
     };
     pixel_bytes(h)?.checked_mul(pixels).filter(|b| *b <= MAX_BLOCK_BYTES)
+}
+
+/// Whether the `exr` crate's own bound on a chunk of `h` (`Header::max_block_byte_size`: like
+/// [`block_bytes`] but with every scan line a block may hold, even past the part's last row) can
+/// be computed: the crate computes it without overflow checks. It is not a limit here: before
+/// the crate reads a chunk, [`check_chunk_header`] has made sure the size the chunk declares is
+/// no more than the bytes it holds, so the crate never allocates by that bound.
+fn crate_bound_fits(h: &Header) -> bool {
+    let pixels = match h.blocks {
+        exr::meta::BlockDescription::Tiles(t) => t.tile_size.0.checked_mul(t.tile_size.1),
+        exr::meta::BlockDescription::ScanLines => h.compression.scan_lines_per_block().checked_mul(h.layer_size.0),
+    };
+    pixels.zip(pixel_bytes(h)).and_then(|(pixels, bytes)| pixels.checked_mul(bytes)).is_some()
 }
 
 /// The offset tables, one per part, read from where the headers end.
@@ -609,15 +674,18 @@ struct Planned {
 /// nor `Sync`. Memory is bounded: at most one piece is read ahead of what has been delivered (so
 /// at most two pieces of compressed bytes, 8 MiB, or one larger chunk, are held), and the
 /// decoded bytes in flight (decompressed blocks and waiting bands, estimated from the headers,
-/// see [`Stats::in_flight`]) stay within 64 MiB or one chunk's worth. Where threads can't be
-/// started (WebAssembly) the chunks are decoded on the calling thread instead. `cancel` is polled
-/// before each piece and at least every 50 ms while waiting for the workers.
+/// see [`Stats::in_flight`]) stay within 64 MiB or one chunk's worth. Besides, each worker holds
+/// a copy of the compressed chunk it decodes: a chunk's declared size is checked against the
+/// bytes it holds before the `exr` crate allocates by it. Where threads can't be started
+/// (WebAssembly) the chunks are decoded on the calling thread instead. `cancel` is polled before
+/// each piece, after each chunk a wait brings, and at least every 50 ms while waiting.
 ///
 /// A band lies inside the planes the request describes ([`level_size`] of the display window);
 /// rows or columns no chunk or data window covers are not delivered. A chunk the request needs
-/// whose offset lies outside the file fails the whole read ([`Error::Malformed`]), as does a
-/// chunk that can't be decoded or isn't the block its offset-table entry stands for; the bands
-/// before it have been delivered by then.
+/// whose offset lies outside the file fails the read before anything is read or delivered
+/// ([`Error::Malformed`]). A chunk that can't be decoded or isn't the block its offset-table
+/// entry stands for fails the read when its turn comes: the bands before it have been delivered
+/// by then.
 pub fn read_bands<R: Read + Seek + ?Sized>(
     source: &mut R,
     index: &Index,
@@ -626,6 +694,19 @@ pub fn read_bands<R: Read + Seek + ?Sized>(
     sink: &mut dyn FnMut(Band),
 ) -> Result<Stats> {
     read_bands_within(source, index, request, cancel, sink, IN_FLIGHT_BYTES)
+}
+
+/// [`read_bands`] that keeps what it did in `stats` as it goes, so the counts are there also when
+/// the read fails or is cancelled (they then say how far it got). `stats` is reset first.
+pub fn read_bands_with_stats<R: Read + Seek + ?Sized>(
+    source: &mut R,
+    index: &Index,
+    request: &Request,
+    cancel: &dyn Fn() -> bool,
+    sink: &mut dyn FnMut(Band),
+    stats: &mut Stats,
+) -> Result<()> {
+    read_into(source, index, request, cancel, sink, IN_FLIGHT_BYTES, stats)
 }
 
 /// [`read_bands`] keeping at most `budget` decoded bytes in flight (the tests use a small one).
@@ -637,7 +718,22 @@ pub(crate) fn read_bands_within<R: Read + Seek + ?Sized>(
     sink: &mut dyn FnMut(Band),
     budget: u64,
 ) -> Result<Stats> {
-    let mut stats = Stats { chunks: vec![0; index.layout.len()], ..Default::default() };
+    let mut stats = Stats::default();
+    read_into(source, index, request, cancel, sink, budget, &mut stats)?;
+    Ok(stats)
+}
+
+/// The read behind [`read_bands`], counting into `stats`.
+fn read_into<R: Read + Seek + ?Sized>(
+    source: &mut R,
+    index: &Index,
+    request: &Request,
+    cancel: &dyn Fn() -> bool,
+    sink: &mut dyn FnMut(Band),
+    budget: u64,
+    stats: &mut Stats,
+) -> Result<()> {
+    *stats = Stats { chunks: vec![0; index.layout.len()], ..Default::default() };
     let level = request.level.min(16);
     let stride = 1i64 << level;
     let (w, h) = (index.display.width as usize, index.display.height as usize);
@@ -687,7 +783,7 @@ pub(crate) fn read_bands_within<R: Read + Seek + ?Sized>(
     }
     jobs.sort_by_key(|j| j.offset);
     if jobs.is_empty() {
-        return Ok(stats);
+        return Ok(());
     }
     // (no more threads than chunks can be in flight: two pieces)
     let workers =
@@ -741,10 +837,13 @@ pub(crate) fn read_bands_within<R: Read + Seek + ?Sized>(
             while order.next < last_piece || (order.next < submitted && in_flight.saturating_add(cost) > budget) {
                 let (seq, result) = next_result(&results, cancel)?;
                 order.accept(seq, result);
-                deliver(&mut order, &mut in_flight, &mut stats)?;
+                deliver(&mut order, &mut in_flight, stats)?;
+                if cancel() {
+                    return Err(Error::Cancelled);
+                }
             }
             most = most.saturating_mul(2).min(PIECE_BYTES);
-            let Piece { data, chunks } = read_piece(source, piece, &mut pos, &mut stats)?;
+            let Piece { data, chunks } = read_piece(source, piece, &mut pos, stats)?;
             let data = Arc::new(data);
             last_piece = submitted;
             in_flight = in_flight.saturating_add(cost);
@@ -763,7 +862,7 @@ pub(crate) fn read_bands_within<R: Read + Seek + ?Sized>(
             while let Ok((seq, result)) = results.try_recv() {
                 order.accept(seq, result);
             }
-            deliver(&mut order, &mut in_flight, &mut stats)?;
+            deliver(&mut order, &mut in_flight, stats)?;
         }
         // Everything is read: the rest as it is decoded.
         while order.next < submitted {
@@ -772,9 +871,9 @@ pub(crate) fn read_bands_within<R: Read + Seek + ?Sized>(
             }
             let (seq, result) = next_result(&results, cancel)?;
             order.accept(seq, result);
-            deliver(&mut order, &mut in_flight, &mut stats)?;
+            deliver(&mut order, &mut in_flight, stats)?;
         }
-        Ok(stats)
+        Ok(())
     })
 }
 
@@ -978,29 +1077,56 @@ fn read_piece<R: Read + Seek + ?Sized>(source: &mut R, piece: &[Planned], pos: &
     Ok(Piece { data, chunks })
 }
 
-/// Decompress the chunk `buf` of part `pi`, which its offset table says is `expected`, and convert
-/// the lines of the requested channels to bands (`g.slots`: each channel's request slots): the
-/// bands, and the scan lines decompressed. A chunk that names another part, level or position
-/// than its offset-table entry is refused before it is decompressed.
-fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Geometry) -> Result<(Vec<Band>, usize)> {
-    let meta = &index.meta;
-    let (Some(header), Some(part)) = (meta.headers.get(pi), index.layout.get(pi)) else { return Err(malformed("no such part")) };
-    let mut read = buf;
-    let chunk = Chunk::read(&mut read, meta).map_err(exr_error)?;
-    if chunk.layer_index != pi {
-        return Err(malformed("a chunk of another part where its offset table points"));
-    }
-    // (checked before the crate computes the block's position, which panics on some levels)
-    let in_place = match &chunk.compressed_block {
-        CompressedBlock::ScanLine(b) => {
-            i64::from(b.y_coordinate) == i64::from(header.own_attributes.layer_position.1).saturating_add(expected.y as i64)
+/// Checks the header of the chunk `buf` of flat part `pi` (`header`), which its offset table
+/// says is `expected`, before the `exr` crate reads it: the crate allocates and zero-fills the
+/// payload size a chunk declares (up to its own bound per block, which can be hundreds of
+/// megabytes) before reading it, and computes a tile's position from the level it declares
+/// (panicking on some). The header is the part number (in multi-part files), then the first
+/// scan line's y or the tile's column, row and level (x, y), then the payload size, all `i32`.
+fn check_chunk_header(meta: &MetaData, header: &Header, pi: usize, expected: &ChunkRef, buf: &[u8]) -> Result<()> {
+    let word = |i: usize| buf.get(i * 4..i * 4 + 4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(i32::from_le_bytes);
+    let short = || malformed("a chunk shorter than its header");
+    let mut at = 0usize;
+    if meta.requirements.is_multilayer() {
+        if usize::try_from(word(0).ok_or_else(short)?).ok() != Some(pi) {
+            return Err(malformed("a chunk of another part where its offset table points"));
         }
-        CompressedBlock::Tile(b) => b.coordinates.level_index == Vec2(0, 0) && b.coordinates.tile_index == Vec2(expected.tile.0, expected.tile.1),
-        _ => false,
+        at = 1;
+    }
+    let in_place = match header.blocks {
+        exr::meta::BlockDescription::ScanLines => {
+            let y = word(at).ok_or_else(short)?;
+            at += 1;
+            i64::from(y) == i64::from(header.own_attributes.layer_position.1).saturating_add(expected.y as i64)
+        }
+        exr::meta::BlockDescription::Tiles(_) => {
+            let tile = [word(at), word(at + 1), word(at + 2), word(at + 3)];
+            at += 4;
+            let [Some(x), Some(y), Some(lx), Some(ly)] = tile else { return Err(short()) };
+            (usize::try_from(x).ok(), usize::try_from(y).ok()) == (Some(expected.tile.0), Some(expected.tile.1)) && (lx, ly) == (0, 0)
+        }
     };
     if !in_place {
         return Err(malformed("a chunk is not the block its offset table entry stands for"));
     }
+    let size = usize::try_from(word(at).ok_or_else(short)?).map_err(|_| malformed("a chunk declaring a negative size"))?;
+    if size > buf.len().saturating_sub((at + 1) * 4) {
+        return Err(malformed("a chunk declaring more bytes than it holds"));
+    }
+    Ok(())
+}
+
+/// Decompress the chunk `buf` of part `pi`, which its offset table says is `expected`, and convert
+/// the lines of the requested channels to bands (`g.slots`: each channel's request slots): the
+/// bands, and the scan lines decompressed. A chunk that names another part, level or position
+/// than its offset-table entry, or declares more bytes than it holds, is refused before the
+/// `exr` crate reads it.
+fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Geometry) -> Result<(Vec<Band>, usize)> {
+    let meta = &index.meta;
+    let (Some(header), Some(part)) = (meta.headers.get(pi), index.layout.get(pi)) else { return Err(malformed("no such part")) };
+    check_chunk_header(meta, header, pi, expected, buf)?;
+    let mut read = buf;
+    let chunk = Chunk::read(&mut read, meta).map_err(exr_error)?;
     let block = UncompressedBlock::decompress_chunk(chunk, meta, false).map_err(exr_error)?;
     if block.index.level != Vec2(0, 0) || block.index.pixel_position != Vec2(expected.x, expected.y) {
         return Err(malformed("a chunk is not the block its offset table entry stands for"));

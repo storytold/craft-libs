@@ -551,13 +551,14 @@ fn a_channel_requested_twice_is_delivered_in_both_slots() {
 }
 
 #[test]
-fn a_block_is_bounded_by_the_size_the_exr_crate_reads_for_it() {
-    // One row 4 Mi pixels wide of one f32 channel: 16 MiB a row. PIZ holds 32 rows a block, and
-    // the `exr` crate sizes what it reads for a chunk by that (512 MiB) even when the part has one
-    // row; ZIP1 holds one row a block (16 MiB).
-    for (compression, accepted) in [(Compression::ZIP1, true), (Compression::PIZ, false)] {
-        let mut bytes = file(vec![layer(None, (0, 0), (1, 1), &["R"], false, compression)], (1, 1));
-        patch_box(&mut bytes, "dataWindow", [0, 0, (4 << 20) - 1, 0]);
+fn a_block_is_bounded_by_the_bytes_the_decompressor_allocates_for_it() {
+    // One row 4 Mi pixels wide of one f32 channel: 16 MiB. PIZ holds 32 rows a block, but a
+    // one-row part's block is that row; 16 such rows of four channels in one ZIP16 block are 1 GiB.
+    for (compression, (w, h), channels, accepted) in
+        [(Compression::PIZ, (4 << 20, 1), &["R"][..], true), (Compression::ZIP16, (4 << 20, 16), &["R", "G", "B", "A"][..], false)]
+    {
+        let mut bytes = file(vec![layer(None, (0, 0), (1, h), channels, false, compression)], (1, h));
+        patch_box(&mut bytes, "dataWindow", [0, 0, w - 1, h as i32 - 1]);
         let got = Index::build(&mut Cursor::new(&bytes[..]), &Limits::none(), &never);
         if accepted {
             assert!(got.is_ok(), "{compression:?}: {got:?}");
@@ -565,6 +566,141 @@ fn a_block_is_bounded_by_the_size_the_exr_crate_reads_for_it() {
             assert!(matches!(&got, Err(Error::LimitExceeded(m)) if m.contains("block")), "{compression:?}: {got:?}");
         }
     }
+}
+
+/// A file of `channels` channels named `c0`, `c1`, … of `w × h` pixels, f32 or half.
+fn many_channels(w: usize, h: usize, channels: usize, half: bool, compression: Compression) -> Vec<u8> {
+    use exr::prelude::f16;
+    let list: Vec<AnyChannel<FlatSamples>> = (0..channels)
+        .map(|k| {
+            let samples = (0..w * h).map(|i| ((i * 3 + k * 7) % 50) as f32 / 8.0);
+            let samples = if half { FlatSamples::F16(samples.map(f16::from_f32).collect()) } else { FlatSamples::F32(samples.collect()) };
+            AnyChannel::new(format!("c{k:03}").as_str(), samples)
+        })
+        .collect();
+    let encoding = Encoding { compression, blocks: Blocks::ScanLines, line_order: LineOrder::Increasing };
+    file(vec![Layer::new((w, h), LayerAttributes::default(), encoding, AnyChannels::sort(list.into()))], (w, h))
+}
+
+#[test]
+fn wide_dwab_parts_with_many_channels_are_accepted() {
+    // DWAB holds 256 scan lines a block, and the `exr` crate's bound on a chunk counts all 256
+    // even in a part with fewer rows: over 256 MiB for these, though each block is a few MiB.
+    let dwab = Compression::DWAB(None);
+    for (w, h, channels, half) in [(65536, 1, 16, false), (4096, 8, 70, false), (8192, 4, 65, true)] {
+        let mut bytes = many_channels(1, 1, channels, half, dwab);
+        patch_box(&mut bytes, "dataWindow", [0, 0, w - 1, h - 1]);
+        let got = Index::build(&mut Cursor::new(&bytes[..]), &Limits::none(), &never);
+        assert!(got.is_ok(), "{w} × {h}, {channels} channels: {got:?}");
+    }
+    // A real one: one row 4096 wide of 65 f32 channels (the crate's bound: 256 × 1 MiB).
+    let bytes = many_channels(4096, 1, 65, false, dwab);
+    let index = indexed(&bytes);
+    let channels = channels_of(&index, 0);
+    let read = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&channels, usize::MAX), &never).unwrap();
+    assert_eq!(read.planes, oracle(&bytes, 0, 0.0));
+}
+
+#[test]
+fn a_chunk_declaring_more_bytes_than_it_holds_is_refused_before_the_crate_reads_it() {
+    // A one-pixel-wide part in 4096 × 16 tiles: each chunk holds 16 pixels, but the `exr` crate
+    // would allocate whatever size up to a whole tile (256 KiB) a chunk declares.
+    let part = layer(None, (0, 0), (1, 32), &["R"], false, Compression::ZIP1);
+    let part =
+        Layer::new((1, 32), LayerAttributes::default(), Encoding { blocks: Blocks::Tiles(Vec2(4096, 16)), ..part.encoding }, part.channel_data);
+    let good = file(vec![part], (1, 32));
+    let table = table_at(&good, 2);
+    let chunk = u64::from_le_bytes(good[table..table + 8].try_into().unwrap()) as usize;
+    assert!(indexed(&good).chunks(0).all(|c| (c.width, c.height) == (1, 16)));
+    for size in [4096 * 16 * 4 - 1, -1i32] {
+        let mut bytes = good.clone();
+        // (tile column, row, level x and y, then the size)
+        bytes[chunk + 16..chunk + 20].copy_from_slice(&size.to_le_bytes());
+        let index = indexed(&bytes);
+        let got = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&[(0, 0)], usize::MAX), &never);
+        assert!(matches!(&got, Err(Error::Malformed(m)) if m.starts_with("a chunk declaring")), "size {size}: {got:?}");
+    }
+}
+
+#[test]
+fn a_chunk_naming_another_part_is_refused() {
+    use super::decode_tests::mixed_file;
+    // The flat part's first chunk names the deep part.
+    let (mut bytes, offsets) = mixed_file(false, false);
+    bytes[offsets[0][0]..offsets[0][0] + 4].copy_from_slice(&1i32.to_le_bytes());
+    let index = indexed(&bytes);
+    let got = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&[(0, 0)], usize::MAX), &never);
+    assert!(matches!(&got, Err(Error::Malformed(m)) if m.contains("another part")), "{got:?}");
+}
+
+#[test]
+fn a_failed_or_cancelled_read_still_reports_how_far_it_got() {
+    // Row 400's chunk of 600 claims another row (see the damaged-chunk test).
+    let mut bytes = file(vec![layer(None, (0, 0), (1024, 600), &["R", "G"], false, Compression::Uncompressed)], (1024, 600));
+    let at = bytes.len() - (600 - 400) * 8200;
+    bytes[at..at + 4].copy_from_slice(&7i32.to_le_bytes());
+    let index = indexed(&bytes);
+    let channels = channels_of(&index, 0);
+    let request = Request { workers: Some(4), ..Request::new(&channels, usize::MAX) };
+    let mut stats = Stats::default();
+    let got = read_bands_with_stats(&mut Cursor::new(&bytes[..]), &index, &request, &never, &mut |_| {}, &mut stats);
+    assert!(matches!(got, Err(Error::Malformed(_))), "{got:?}");
+    assert_eq!(stats.lines, 400, "the lines delivered before the damaged chunk");
+    assert!(stats.chunks[0] > 400 && stats.bytes >= 400 * 8200, "{stats:?}");
+    // Called off after the first band.
+    let stop = Cell::new(false);
+    let got = read_bands_with_stats(&mut Cursor::new(&bytes[..]), &index, &request, &|| stop.get(), &mut |_| stop.set(true), &mut stats);
+    assert_eq!(got.err(), Some(Error::Cancelled));
+    assert!(stats.lines > 0 && stats.lines < 600 && stats.chunks[0] > 0, "{stats:?}");
+}
+
+#[test]
+fn the_index_lists_the_chunks_of_the_full_resolution_level() {
+    use super::decode_tests::mixed_file;
+    use exr::math::RoundingMode;
+    use exr::prelude::Levels;
+    let sizes: Vec<usize> = exr::meta::mip_map_levels(RoundingMode::Down, Vec2(9, 7)).map(|(_, size)| size.area()).collect();
+    let bytes =
+        tiled_levels(Levels::Mip { rounding_mode: RoundingMode::Down, level_data: sizes.iter().map(|n| FlatSamples::F32(vec![1.0; *n])).collect() });
+    let index = indexed(&bytes);
+    let chunks: Vec<ChunkInfo> = index.chunks(0).collect();
+    let tiles: Vec<(usize, usize, usize, usize)> = chunks.iter().map(|c| (c.x, c.y, c.width, c.height)).collect();
+    assert_eq!(tiles, [(0, 0, 4, 4), (4, 0, 4, 4), (8, 0, 1, 4), (0, 4, 4, 3), (4, 4, 4, 3), (8, 4, 1, 3)]);
+    assert!(chunks.iter().all(|c| c.len > 0 && c.offset > 0 && c.offset + c.len <= bytes.len() as u64));
+    assert_eq!(index.chunks(1).count(), 0, "no such part");
+    let (mixed, offsets) = mixed_file(true, false);
+    let index = indexed(&mixed);
+    assert_eq!(index.chunks(0).count(), 0, "a deep part");
+    assert_eq!(index.chunks(1).map(|c| (c.offset as usize, c.y, c.height)).collect::<Vec<_>>(), [(offsets[1][0], 0, 1), (offsets[1][1], 1, 1)]);
+}
+
+#[test]
+fn htj2k_compression_is_its_own_error() {
+    let mut bytes = file(vec![layer(None, (0, 0), (4, 4), &["R"], false, Compression::ZIP1)], (4, 4));
+    let tag = b"compression\0compression\0";
+    let at = bytes.windows(tag.len()).position(|w| w == tag).unwrap() + tag.len() + 4;
+    for code in [10u8, 11] {
+        bytes[at] = code;
+        let got = Index::build(&mut Cursor::new(&bytes[..]), &Limits::default(), &never);
+        assert_eq!(got.err(), Some(Error::UnsupportedCompression("HTJ2K".into())), "code {code}");
+    }
+}
+
+#[test]
+fn the_display_window_may_have_its_own_pixel_limit() {
+    // A 16 × 16 data window (overscan) over an 8 × 8 display window.
+    let bytes = file(vec![layer(None, (-4, -4), (16, 16), &["R"], false, Compression::ZIP1)], (8, 8));
+    let limits = Limits { max_pixels: 256, ..Limits::default() };
+    let build = |display| Index::build_with_display_limit(&mut Cursor::new(&bytes[..]), &limits, display, &never);
+    assert!(build(64).is_ok());
+    assert!(matches!(&build(63), Err(Error::LimitExceeded(m)) if m.contains("display window")), "{:?}", build(63));
+    // The data windows stay bound by `max_pixels`.
+    let tight = Limits { max_pixels: 255, ..Limits::default() };
+    let got = Index::build_with_display_limit(&mut Cursor::new(&bytes[..]), &tight, 1 << 20, &never);
+    assert!(matches!(&got, Err(Error::LimitExceeded(m)) if m.contains("part 0")), "{got:?}");
+    // `build` holds both to `max_pixels`.
+    assert!(Index::build(&mut Cursor::new(&bytes[..]), &Limits { max_pixels: 63, ..Limits::default() }, &never).is_err());
+    assert!(Index::build(&mut Cursor::new(&bytes[..]), &limits, &never).is_ok());
 }
 
 #[test]
