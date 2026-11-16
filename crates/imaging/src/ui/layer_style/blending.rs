@@ -200,7 +200,7 @@ fn with_current(modes: &[Entry<String>], current: &str) -> Vec<Entry<String>> {
 
 /// A 0..=100 % slider and field, whole percent.
 fn percent(ui: &mut Ui, label: &Label, value: f32) -> craft_ui::contract::EditResponse<f64> {
-    SliderField::new(label.clone(), Bind::given(f64::from(value)), 0.0..=100.0).step(1.0).unit_kind(UnitKind::Percent).show(ui)
+    SliderField::new(label.clone(), Bind::given(f64::from(value)), 0.0..=100.0).step(1.0).unit_kind(UnitKind::Percent).show(ui).edit
 }
 
 /// The Advanced Blending checks' values, in Photoshop's order.

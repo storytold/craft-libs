@@ -134,7 +134,7 @@ impl Pass {
         if scale.percent {
             field = field.unit_kind(UnitKind::Percent);
         }
-        let events = field.show(ui).events;
+        let events = field.show(ui).edit.events;
         self.lift(events, move |value, x| set(value, x.round()));
     }
 }

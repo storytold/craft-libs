@@ -24,7 +24,7 @@ use crate::pickers::{Select, UnitSelect};
 use crate::runtime::env::{Env, Label, UnitKind, Units, with_env};
 
 use crate::sections::{HeaderStrength, Section};
-use crate::text::{NumberField, SelectableText, TextField};
+use crate::text::{NumberField, RangeAlert, SelectableText, TextField};
 
 use crate::value_drag::{AngleDial, PointPicker, SliderScale};
 
@@ -45,8 +45,6 @@ mod stories;
 const WHOLE: u32 = 0;
 /// A point row's numbers run over the whole image, in percent.
 const PERCENT: RangeInclusive<f64> = 0.0..=100.0;
-/// The most digits an angle shows.
-const ANGLE_DECIMALS: u32 = 1;
 /// The largest value of a Random button over an int row with no upper bound.
 const RANDOM_HIGH: i64 = i32::MAX as i64;
 /// The first state of the Random button's sequence when the caller gives no seed.
@@ -74,6 +72,8 @@ pub struct ParamRowsOutput {
     pub eyedropper: Option<EyedropperRequest>,
     /// The folder a files row asked the host to list this pass; the host answers with `HostAnswer::Listing`.
     pub listing: Option<ListingRequest>,
+    /// A typed value a row clamped to its range, in the pass it committed: the host shows the range alert.
+    pub out_of_range: Option<RangeAlert>,
 }
 
 impl Outcome for ParamRowsOutput {
@@ -193,9 +193,9 @@ impl<'a> ParamRows<'a> {
             })
         };
         let shown = if read_only { with_env(ui, |scope| scope.read_only = Some(true), group) } else { group(ui) };
-        let (pick_color, path, eyedropper, listing) =
-            if read_only { Default::default() } else { (pass.color, pass.path, pass.eyedropper, pass.listing) };
-        ParamRowsOutput { response: shown.output, changed, values, pick_color, path, eyedropper, listing }
+        let (pick_color, path, eyedropper, listing, out_of_range) =
+            if read_only { Default::default() } else { (pass.color, pass.path, pass.eyedropper, pass.listing, pass.out_of_range) };
+        ParamRowsOutput { response: shown.output, changed, values, pick_color, path, eyedropper, listing, out_of_range }
     }
 }
 
@@ -229,6 +229,8 @@ struct Pass<'p> {
     eyedropper: Option<EyedropperRequest>,
     /// The folder a files row asked the host to list.
     listing: Option<ListingRequest>,
+    /// The range alert of the number row that clamped a typed value; one a pass is the most a user can cause.
+    out_of_range: Option<RangeAlert>,
     /// An eyedropper row is armed.
     sampling: bool,
     /// The patterns a pattern row offers.
@@ -280,6 +282,7 @@ impl<'p> Pass<'p> {
             path: None,
             eyedropper: None,
             listing: None,
+            out_of_range: None,
             sampling: false,
             patterns,
             canvas,
@@ -297,6 +300,7 @@ impl<'p> Pass<'p> {
         self.path = None;
         self.eyedropper = None;
         self.listing = None;
+        self.out_of_range = None;
         self.sampling = false;
     }
 
@@ -378,7 +382,7 @@ impl<'p> Pass<'p> {
             ParamKind::Bool { default } => self.check(ui, line, *default),
             ParamKind::Choice { options, .. } => self.choice(ui, line, options),
             ParamKind::Radio { options, .. } => self.radio_options(ui, line, options),
-            ParamKind::Angle { default } => self.angle(ui, line, *default),
+            ParamKind::Angle { default, min, max, decimals } => self.angle(ui, line, *default, *min..=*max, *decimals),
             ParamKind::Color { .. } => self.color(ui, line),
             ParamKind::Grid { cells, .. } => self.grid(ui, line, *cells),
             ParamKind::Point { default } => self.point(ui, line, *default),
@@ -394,6 +398,13 @@ impl<'p> Pass<'p> {
         }
     }
 
+    /// Keeps a row's range alert for the output.
+    fn alert(&mut self, alert: Option<RangeAlert>) {
+        if alert.is_some() {
+            self.out_of_range = alert;
+        }
+    }
+
     fn range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, scale: SliderScale) {
         let value = self.work.number(line.key).unwrap_or(*range.start());
         let places = line.param.option().range_places();
@@ -405,7 +416,10 @@ impl<'p> Pass<'p> {
             if let Some(kind) = line.param.unit {
                 slider = slider.unit_kind(kind);
             }
-            if let Some(v) = slider.show(ui).value().cloned() {
+            let shown = slider.show(ui);
+            let value = shown.value().cloned();
+            self.alert(shown.out_of_range);
+            if let Some(v) = value {
                 self.work.set(line.key, rounded(v, places));
             }
         });
@@ -418,7 +432,9 @@ impl<'p> Pass<'p> {
             if let Some(range) = range.clone() {
                 field = field.range(range);
             }
-            if let Some(v) = field.show(ui).edit.value().cloned().flatten() {
+            let shown = field.show(ui);
+            self.alert(shown.out_of_range);
+            if let Some(v) = shown.edit.value().cloned().flatten() {
                 self.work.set(line.key, FieldValue::Number(v));
             }
         });
@@ -444,7 +460,9 @@ impl<'p> Pass<'p> {
                 if let Some(range) = range.clone() {
                     field = field.range(range);
                 }
-                if let Some(v) = field.show(ui).edit.value().cloned().flatten() {
+                let shown = field.show(ui);
+                self.alert(shown.out_of_range);
+                if let Some(v) = shown.edit.value().cloned().flatten() {
                     self.work.set(line.key, FieldValue::Number(v * factor));
                 }
             });
@@ -478,7 +496,9 @@ impl<'p> Pass<'p> {
                 if let Some(range) = range.clone() {
                     field = field.range(range);
                 }
-                if let Some(v) = field.show(ui).edit.value().cloned().flatten() {
+                let shown = field.show(ui);
+                self.alert(shown.out_of_range);
+                if let Some(v) = shown.edit.value().cloned().flatten() {
                     self.work.set(line.key, FieldValue::Int(v.round() as i64));
                 }
                 if random && clicked(&Button::new(self.words.randomize.clone()).id_salt("random").show(ui)) {
@@ -632,14 +652,21 @@ impl<'p> Pass<'p> {
         });
     }
 
-    fn angle(&mut self, ui: &mut Ui, line: &Line<'_>, default: f64) {
+    /// An angle row: the dial and the field over `range` at `decimals` digits. The field clamps a typed angle into
+    /// the range and raises the range alert.
+    fn angle(&mut self, ui: &mut Ui, line: &Line<'_>, default: f64, range: std::ops::RangeInclusive<f64>, decimals: u32) {
         let value = self.work.number(line.key).unwrap_or(default);
         let field_name = Label::from(self.words.angle_field.fill(&[("name", line.name.as_str())]));
         line.show(ui, |ui| {
             beside(ui, |ui| {
-                let dial = AngleDial::new(Bind::given(value)).label(line.name.clone()).id_salt("dial").show(ui);
-                let field = number_field(self.units, field_name.clone(), Some(value), ANGLE_DECIMALS, Some(UnitKind::Degrees)).id_salt("field");
-                let typed = field.show(ui).edit.value().cloned().flatten();
+                let dial = AngleDial::new(Bind::given(value)).label(line.name.clone()).range(range.clone()).id_salt("dial").show(ui);
+                let field = number_field(self.units, field_name.clone(), Some(value), decimals, Some(UnitKind::Degrees))
+                    .range(range.clone())
+                    .commit_decimals(decimals as usize)
+                    .id_salt("field");
+                let shown = field.show(ui);
+                self.alert(shown.out_of_range);
+                let typed = shown.edit.value().cloned().flatten();
                 if let Some(v) = dial.value().cloned().or(typed) {
                     self.work.set(line.key, FieldValue::Number(v));
                 }
@@ -739,7 +766,9 @@ impl<'p> Pass<'p> {
                 };
                 for (axis, name) in names.iter().enumerate() {
                     let field = number_field(self.units, name.clone(), Some(point[axis]), 1, Some(UnitKind::Percent)).range(PERCENT).id_salt(axis);
-                    if let Some(v) = field.show(ui).edit.value().cloned().flatten() {
+                    let shown = field.show(ui);
+                    self.alert(shown.out_of_range);
+                    if let Some(v) = shown.edit.value().cloned().flatten() {
                         next[axis] = v;
                     }
                 }
@@ -811,7 +840,9 @@ impl<'p> Pass<'p> {
                 }
                 let field = number_field(self.units, line.name.clone(), Some(last), decimals, line.param.unit).range(range.clone());
                 let field = field.id_salt("field").enabled(self.work.number(line.key).is_some());
-                if let Some(v) = field.show(ui).edit.value().cloned().flatten() {
+                let shown = field.show(ui);
+                self.alert(shown.out_of_range);
+                if let Some(v) = shown.edit.value().cloned().flatten() {
                     self.work.set(line.key, FieldValue::Number(v));
                 }
             });

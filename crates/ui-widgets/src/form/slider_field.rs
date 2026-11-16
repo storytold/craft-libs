@@ -4,16 +4,16 @@
 mod stories;
 
 use crate::contract::{
-    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, MeasureCx, PaintUi, Props as _, Role, SideLabel, Sizing, Validity,
-    WordSetCx as _,
+    Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, FieldLayout, MeasureCx, Outcome, PaintUi, Props as _, Role, SideLabel, Sizing,
+    Validity, WordSetCx as _,
 };
 use crate::runtime::env::{Label, UnitKind};
 use crate::style::{ComponentStyle, StyleCx};
-use crate::text::NumberField;
+use crate::text::{NumberField, RangeAlert};
 use crate::value_drag::{Slider, SliderScale, SliderThumb, TrackFace};
 use craft_behavior::{Flow, Metrics, Mixed, Proposal, Sense, decimals_for_step};
-use egui::{Rect, Vec2, pos2};
-use std::ops::RangeInclusive;
+use egui::{Rect, Response, Vec2, pos2};
+use std::ops::{Deref, RangeInclusive};
 
 /// The step of the number field when the field sets none: hundredths on a short range, whole numbers on a long one.
 const SHORT_RANGE: f64 = 10.0;
@@ -94,6 +94,39 @@ pub struct SliderField<'a> {
     field_sizing: Option<Sizing>,
     /// The number field's width from this pass's measure (its `Proposal::Ideal` call, which runs before `paint`).
     field_width: f32,
+    /// The field's range alert of this pass, which `finish` reports.
+    out_of_range: Option<RangeAlert>,
+}
+
+/// What a slider field reports: the edit of its value and its field's range alert.
+#[non_exhaustive]
+pub struct SliderFieldOutput {
+    /// The edit response of the value.
+    pub edit: EditResponse<f64>,
+    /// A value typed into the field outside the range and clamped, in the pass it committed; never for a slider drag
+    /// or a step.
+    pub out_of_range: Option<RangeAlert>,
+}
+
+impl Deref for SliderFieldOutput {
+    type Target = EditResponse<f64>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.edit
+    }
+}
+
+impl Outcome for SliderFieldOutput {
+    type Value = f64;
+
+    fn response(&self) -> &Response {
+        &self.edit.response
+    }
+
+    #[cfg(feature = "testing")]
+    fn story_facts(&self) -> crate::testing::StoryOutput {
+        self.edit.story_facts()
+    }
 }
 
 impl<'a> SliderField<'a> {
@@ -114,6 +147,7 @@ impl<'a> SliderField<'a> {
             thumb: SliderThumb::Round,
             field_sizing: None,
             field_width: 0.0,
+            out_of_range: None,
         }
         .label(label)
     }
@@ -240,7 +274,7 @@ impl Component for SliderField<'_> {
     const STOPS: bool = false;
     const OVERLAYS: bool = false;
     type Style = SliderFieldStyle;
-    type Output = EditResponse<f64>;
+    type Output = SliderFieldOutput;
 
     fn style(cx: &StyleCx<'_>, _: SliderFieldStyleKey) -> SliderFieldStyle {
         let control = cx.control();
@@ -310,6 +344,7 @@ impl Component for SliderField<'_> {
             }
             SliderFieldLayout::Inline => ui.child("field", place(field), field_view),
         };
+        self.out_of_range = typed.out_of_range.clone();
         let dragged = ui.child("slider", place(track), look.slider(&name, shown, Some(&on_slider), face));
         let start = *self.range.start();
         cx.adopt(&typed, &start, |value, mine| {
@@ -320,8 +355,8 @@ impl Component for SliderField<'_> {
         cx.adopt(&dragged, &start, |value, mine| *mine = *value);
     }
 
-    fn finish(self, cx: Cx<'_, Self>) -> EditResponse<f64> {
-        cx.edit_response()
+    fn finish(self, cx: Cx<'_, Self>) -> SliderFieldOutput {
+        SliderFieldOutput { edit: cx.edit_response(), out_of_range: self.out_of_range }
     }
 }
 

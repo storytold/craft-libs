@@ -227,7 +227,7 @@ impl Rows<'_> {
     /// The Opacity slider (0..=100 %, whole numbers); its edit is the pass's edit.
     fn slider(&mut self, ui: &mut Ui, label: &Label, value: f64, range: RangeInclusive<f64>, set: Write<f64>) {
         let field = SliderField::new(label.clone(), Bind::given(value), range).step(1.0).unit_kind(UnitKind::Percent);
-        self.pass.edit.extend(lift(field.show(ui).events, self.base, set));
+        self.pass.edit.extend(lift(field.show(ui).edit.events, self.base, set));
     }
 
     /// A check box over `value`; its edit is the pass's edit.

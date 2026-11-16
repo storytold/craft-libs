@@ -62,7 +62,7 @@ impl<'a> BlurPinsPanel<'a> {
                 Some((index, amount)) => {
                     let (label, unit) = if kind == BlurKind::Spin { (&words.blur_angle, UnitKind::Degrees) } else { (&words.blur, UnitKind::Pixels) };
                     let row = SliderField::new(label.clone(), Bind::given(amount), 0.0..=kind.max()).step(1.0).unit_kind(unit).show(ui);
-                    for event in row.events {
+                    for event in row.edit.events {
                         if let Some(&value) = event.value() {
                             pins.pins[index].amount = value.clamp(0.0, kind.max());
                         }

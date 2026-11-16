@@ -14,13 +14,14 @@ use super::rows::{ParamRows, ParamRowsOutput};
 
 use crate::contract::{Bind, BodyCx, CanvasGesture, NoValue, Outcome, Remember as _, Sampler as _, SaveKey, Show as _, ShowContainer as _};
 
-use crate::dialog::{Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, StackDialog, dialog_id};
+use crate::dialog::{Alert, Dialog, DialogId, DialogResult, DialogStack, FieldRefusal, FooterHooks, HeldAnswer, HeldOk, StackDialog, dialog_id};
 
 use crate::display::{Shade, Text};
 use crate::layout_components::{Row, Stack};
 use crate::notices::{Notice, NoticeLayout};
 
 use crate::runtime::env::{Env, Label};
+use crate::text::RangeAlert;
 
 use crate::runtime::memory::MemoryStage;
 
@@ -170,6 +171,10 @@ pub struct ParamDialog<'a> {
     /// The second button's label when it is not Cancel (Close, say).
     #[prop]
     cancel_label: Option<Label>,
+    /// The title of the range alert a hosted dialog words for a clamped value ([`HostedParamDialog::take_range_alert`]);
+    /// the dialog's title when not set. An app names itself here.
+    #[prop(into)]
+    alert_title: Option<Label>,
     /// Whether holding Alt turns the second button into Reset; the default is true.
     #[prop]
     alt_resets: bool,
@@ -274,6 +279,7 @@ impl<'a> ParamDialog<'a> {
             ok_reason: None,
             ok_label: None,
             cancel_label: None,
+            alert_title: None,
             alt_resets: true,
             outer_gesture: false,
             history: false,
@@ -415,6 +421,7 @@ impl<'a> ParamDialog<'a> {
             ok_reason,
             ok_label,
             cancel_label,
+            alert_title: _,
             alt_resets,
             outer_gesture,
             history,
@@ -790,6 +797,9 @@ pub struct HostedParamDialog {
     fields: DialogFields,
     build: Box<Build>,
     requests: HostRequests,
+    /// The last range alert a row raised, with its title and the env the dialog showed in (which words it), until the
+    /// host takes it.
+    range_alert: Option<(Label, RangeAlert, Env)>,
     /// Whether the dialog is open: bound to the dialog's `opened` prop, so the dialog's own open state, kept under
     /// its id, cannot hold a dialog closed that the host opened again.
     open: bool,
@@ -843,6 +853,7 @@ impl HostedParamDialog {
             fields,
             build: Box::new(build),
             requests: HostRequests::new(),
+            range_alert: None,
             open: true,
             previews,
             preview_on: true,
@@ -965,6 +976,13 @@ impl HostedParamDialog {
     /// The folder listing a files row asked for, once.
     pub fn take_listing(&mut self) -> Option<ListingRequest> {
         self.requests.take_listing()
+    }
+
+    /// The range alert of a value typed past a row's range and clamped, worded and titled
+    /// ([`ParamDialog::alert_title`]), once: the host opens it.
+    pub fn take_range_alert(&mut self) -> Option<Alert<'static>> {
+        let (title, alert, env) = self.range_alert.take()?;
+        Some(Alert::range(title, &alert, &env))
     }
 
     /// Answers the listing request `key` with the `files` of its folder.
@@ -1117,9 +1135,13 @@ impl StackDialog for HostedParamDialog {
         if let Some(picture) = self.picture {
             dialog = dialog.preview(picture);
         }
+        let alert_title = dialog.alert_title.clone().unwrap_or_else(|| dialog.title.clone());
         let shown = dialog.show(ui);
         if let Some(mut rows) = shown.rows {
             self.requests.absorb(&mut rows);
+            if let Some(alert) = rows.out_of_range {
+                self.range_alert = Some((alert_title, alert, Env::of(ui)));
+            }
         }
         if let Some(point) = shown.preview_click {
             self.requests.request_preview_click(point);

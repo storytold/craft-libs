@@ -114,7 +114,7 @@ impl<'a> WideAnglePanel<'a> {
                         .unit_kind(unit)
                         .step(step)
                         .id_salt(name(&words).as_str());
-                    edit.extend(field.show(ui).events.map(|value| {
+                    edit.extend(field.show(ui).edit.events.map(|value| {
                         let mut shown = session.clone();
                         set(&mut shown, value);
                         shown

@@ -251,7 +251,7 @@ impl Rows<'_> {
         if let Some(kind) = track.unit {
             field = field.unit_kind(kind);
         }
-        self.edit.extend(lift(field.show(ui).events, self.base, set));
+        self.edit.extend(lift(field.show(ui).edit.events, self.base, set));
     }
 
     /// A check box over `value`; its edit is the pass's edit.

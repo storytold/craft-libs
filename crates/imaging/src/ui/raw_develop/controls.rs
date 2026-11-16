@@ -232,7 +232,7 @@ impl<'p> Rows<'p> {
         if let Some(stops) = &stops {
             field = field.track_face(TrackFace::new(ToneRamp::new(stops)));
         }
-        let events = field.show(ui).events;
+        let events = field.show(ui).edit.events;
         self.pass.edit.extend(lift(events, self.base, &|settings: &mut RawDevelopSettings, v: f64| set(settings, v as f32)));
     }
 

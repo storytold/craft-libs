@@ -279,7 +279,7 @@ fn rows(ui: &mut Ui, words: &PictureFillWords, pass: &mut Pass<'_>, modes: &Mode
                 .unit_kind(UnitKind::Percent)
                 .id_salt("slider")
                 .layout(SliderFieldLayout::Inline);
-            event = slider.show(ui).events;
+            event = slider.show(ui).edit.events;
         });
         let base = fill.clone();
         pass.take(event, move |v| PictureFill { transparency: (v / 100.0).clamp(0.0, 1.0), ..base.clone() });

@@ -204,7 +204,7 @@ impl Rows<'_> {
         if let Some(kind) = unit {
             field = field.unit_kind(kind);
         }
-        self.pass.edit.extend(lift(field.show(ui).events, self.base, set));
+        self.pass.edit.extend(lift(field.show(ui).edit.events, self.base, set));
     }
 
     /// A check box over `value`; the new value when the user toggled it, whose edit is the pass's edit.

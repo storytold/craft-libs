@@ -581,3 +581,65 @@ fn hosted_dialogs_of_two_commands_stay_open_together() {
         );
     }
 }
+
+/// Global Light (#14980): an angle row over -360 to 360 in whole degrees and a range row 0 to 90.
+fn light(fields: &mut DialogFields) -> ParamDialog<'_> {
+    let params = vec![
+        Param::new("angle", "Angle", ParamKind::angle_in(-360.0, 360.0, 120.0, 0)),
+        Param::new("altitude", "Altitude", ParamKind::range(0.0, 90.0, 30.0, craft_ui::value_drag::SliderScale::Linear)).decimals(0),
+        Param::new("size", "Size", ParamKind::int(Some(1), Some(300_000), 100)),
+    ];
+    ParamDialog::new("light", "Global Light", params).values(Bind::bound(fields)).alert_title("PhotoCraft")
+}
+
+// A value typed past a row's range is clamped and the hosted dialog keeps one range alert until the host takes it; a
+// value in range, a step key and text that is no number raise none. 180 stays 180, and a typed fraction rounds to the
+// row's whole degrees.
+#[trial]
+fn a_typed_value_past_a_rows_range_is_clamped_and_the_host_takes_one_range_alert() {
+    let (host, twice) = (Rc::new(RefCell::new(DialogHost::new())), Rc::new(Cell::new(false)));
+    let mut fixture = host_fixture(&host, &twice);
+    host.borrow_mut().open(HostedParamDialog::new(fixture.ctx(), "light", DialogFields::new(), light));
+    fixture.idle(6);
+    let enter = |fixture: &mut Fixture, label: &str, text: &str| {
+        let field = fixture.by_label(label).unwrap_or_else(|| panic!("the {label} field"));
+        fixture.click(&field).settle();
+        fixture.key(Key::A, Modifiers::COMMAND).type_text(text);
+        fixture.key(Key::Tab, Modifiers::NONE).settle();
+    };
+    let number = |key: &str| on_dialog(&host, |dialog| dialog.fields().number(key)).flatten();
+    let alert = || on_dialog(&host, |dialog| dialog.take_range_alert().is_some()).unwrap_or(false);
+
+    enter(&mut fixture, "Angle in degrees", "400");
+    assert_eq!(number("angle"), Some(360.0), "400 is clamped to 360");
+    assert!(alert(), "the clamp raises the range alert");
+    assert!(!alert(), "the alert is taken once");
+    enter(&mut fixture, "Angle in degrees", "180");
+    assert_eq!(number("angle"), Some(180.0), "180 stays 180");
+    enter(&mut fixture, "Angle in degrees", "12.6");
+    assert_eq!(number("angle"), Some(13.0), "a fraction rounds to whole degrees");
+    assert!(!alert(), "values in range raise no alert");
+
+    let field = fixture.by_label("Angle in degrees").expect("the angle field");
+    fixture.click(&field).settle();
+    fixture.key(Key::ArrowUp, Modifiers::NONE).settle();
+    assert_eq!(number("angle"), Some(14.0), "Up steps one degree");
+    fixture.key(Key::ArrowUp, Modifiers::SHIFT).settle();
+    assert_eq!(number("angle"), Some(20.0), "Shift+Up steps to the next ten");
+    enter(&mut fixture, "Angle in degrees", "355");
+    fixture.click(&field).settle();
+    fixture.key(Key::ArrowUp, Modifiers::SHIFT).settle();
+    assert_eq!(number("angle"), Some(360.0), "a step stops at the end");
+    assert!(!alert(), "a step raises no alert");
+
+    enter(&mut fixture, "Altitude", "95");
+    assert_eq!(number("altitude"), Some(90.0), "the range row clamps 95 to 90");
+    assert!(alert(), "the range row raises the alert too");
+
+    enter(&mut fixture, "Size", "0");
+    assert_eq!(on_dialog(&host, |dialog| dialog.fields().int("size")).flatten(), Some(1), "an int row clamps 0 to 1");
+    assert!(alert(), "the int row raises the alert");
+    enter(&mut fixture, "Size", "abc");
+    assert_eq!(on_dialog(&host, |dialog| dialog.fields().int("size")).flatten(), Some(1), "text that is no number leaves the value");
+    assert!(!alert(), "and raises no alert");
+}

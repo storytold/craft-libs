@@ -177,7 +177,7 @@ impl<'a> AxisSliders<'a> {
                 let slider = SliderField::new(name.clone(), Bind::bound(&mut value).reset(default), f64::from(axis.min)..=f64::from(axis.max))
                     .step(if wide { 1.0 } else { 0.01 })
                     .show(ui);
-                for event in slider.events {
+                for event in slider.edit.events {
                     let clamp = |v: f64| (v as f32).clamp(axis.min, axis.max);
                     let event = event.map(|v| {
                         let mut all = held.clone();

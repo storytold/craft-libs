@@ -62,8 +62,13 @@ impl<'a> BrushSizeField<'a> {
             Some(original) => diameter.reset(original.clamp(1.0, max)),
             None => diameter,
         };
-        let edit =
-            SliderField::new(label, diameter, 1.0..=max).scale(SliderScale::Log).step(1.0).unit_kind(UnitKind::Pixels).enabled(max > 1.0).show(ui);
+        let edit = SliderField::new(label, diameter, 1.0..=max)
+            .scale(SliderScale::Log)
+            .step(1.0)
+            .unit_kind(UnitKind::Pixels)
+            .enabled(max > 1.0)
+            .show(ui)
+            .edit;
         BrushSizeOutput { response: edit.response.clone(), edit }
     }
 }

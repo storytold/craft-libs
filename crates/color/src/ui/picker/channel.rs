@@ -214,6 +214,7 @@ impl<'a> ChannelRow<'a> {
                     .field_sizing(Sizing::Content)
                     .thumb(SliderThumb::Triangle)
                     .show(ui)
+                    .edit
             })
             .inner
     }

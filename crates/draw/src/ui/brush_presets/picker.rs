@@ -384,7 +384,7 @@ impl<'a, K: Value + Eq + Hash> BrushPresetPicker<'a, K> {
                                 .step(1.0)
                                 .unit_kind(UnitKind::Percent)
                                 .show(ui);
-                            hardness = field.events.map(|percent| (percent / 100.0).clamp(0.0, 1.0));
+                            hardness = field.edit.events.map(|percent| (percent / 100.0).clamp(0.0, 1.0));
                         }
                     });
                 });

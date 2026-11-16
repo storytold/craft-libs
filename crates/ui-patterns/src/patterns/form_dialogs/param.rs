@@ -87,6 +87,12 @@ pub enum ParamKind {
     Angle {
         /// The angle in degrees shown when nothing is remembered.
         default: f64,
+        /// The least angle; the field clamps below it and says so.
+        min: f64,
+        /// The greatest angle; the field clamps above it and says so.
+        max: f64,
+        /// The digits after the decimal point the field keeps; 0 takes whole degrees.
+        decimals: u32,
     },
     /// A colour the host's picker chooses; `None`: unset until picked.
     #[non_exhaustive]
@@ -206,9 +212,15 @@ impl ParamKind {
         ParamKind::Radio { options, default }
     }
 
-    /// An angle dial with its field.
+    /// An angle dial with its field: one turn, -180 to 180, to a tenth of a degree.
     pub fn angle(default: f64) -> Self {
-        ParamKind::Angle { default }
+        ParamKind::Angle { default, min: -180.0, max: 180.0, decimals: 1 }
+    }
+
+    /// An angle dial with its field over `min` to `max` degrees at `decimals` digits: Global Light's -360 to 360 in
+    /// whole degrees. A range wider than a turn does not wrap, so 180 stays 180.
+    pub fn angle_in(min: f64, max: f64, default: f64, decimals: u32) -> Self {
+        ParamKind::Angle { default, min, max, decimals }
     }
 
     /// A colour the host's picker chooses.
@@ -259,7 +271,7 @@ impl ParamKind {
     /// The value a field of this kind starts with.
     pub fn default_value(&self) -> Option<FieldValue> {
         Some(match self {
-            ParamKind::Range { default, .. } | ParamKind::Angle { default } => FieldValue::Number(*default),
+            ParamKind::Range { default, .. } | ParamKind::Angle { default, .. } => FieldValue::Number(*default),
             ParamKind::Int { default, .. } => FieldValue::Int(*default),
             ParamKind::Number { default, .. } => FieldValue::Number(*default),
             ParamKind::Bool { default } => FieldValue::Bool(*default),
@@ -302,7 +314,7 @@ impl ParamKind {
         };
         match (self, value) {
             (ParamKind::Range { min, max, .. }, v) => number(v).is_some_and(|n| n.is_finite() && n >= *min && n <= *max),
-            (ParamKind::Angle { .. }, v) => number(v).is_some_and(f64::is_finite),
+            (ParamKind::Angle { min, max, .. }, v) => number(v).is_some_and(|n| n.is_finite() && n >= *min && n <= *max),
             (ParamKind::Int { min, max, .. }, FieldValue::Int(i)) => min.is_none_or(|m| *i >= m) && max.is_none_or(|m| *i <= m),
             (ParamKind::Number { min, max, .. }, v) => {
                 number(v).is_some_and(|n| n.is_finite() && min.is_none_or(|m| n >= m) && max.is_none_or(|m| n <= m))
