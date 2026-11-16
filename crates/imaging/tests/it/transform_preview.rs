@@ -356,6 +356,25 @@ fn the_styled_frame_is_rebuilt_only_when_its_key_changes() {
     expect_build(&nearest, &source, Some(&display), "filter");
 }
 
+/// Previews made one after another, as Free Transform sessions are, each composited in its own frame and then
+/// closed: the context keeps fewer composites than there were previews, since the closed ones are evicted when the
+/// store needs the room.
+#[trial]
+fn closed_styled_previews_leave_their_composites_to_eviction() {
+    const PREVIEWS: usize = 600;
+    let (mut fixture, ctx) = context();
+    let (textures, source) = (styled_textures(), Fake::new(2));
+    let allocated = || ctx.tex_manager().read().num_allocated();
+    let before = allocated();
+    for n in 0..PREVIEWS {
+        let preview = StyledPreview::new(format!("session-{n}"));
+        assert!(preview.composite(&ctx, &frame(&textures, square(10.0, 10.0, 8.0), 1.0), &source, None).is_some());
+        fixture.idle(1);
+    }
+    let kept = allocated() - before;
+    assert!(kept < PREVIEWS, "{kept} composites kept for {PREVIEWS} closed previews");
+}
+
 // The budget is 30 ms dragging and 120 ms at rest over the cost per pixel plus the resample's, clamped to 0.25 to 8
 // million pixels.
 

@@ -9,7 +9,7 @@
 //! only when its key changes (box, zoom, document revision, display key, texture level, filter).
 //! The composite is drawn over transparency with Normal blending, like the mesh it replaces.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use craft_behavior::geometry::Homography;
 use craft_behavior::kurbo::{Point, Rect};
@@ -23,7 +23,7 @@ use super::{PreviewDisplay, PreviewQuality, PreviewTextures};
 const COORD_LIMIT: f64 = 5.0e8;
 /// Rounds of shrinking the scale until the content fits the budget.
 const ROUNDS: u32 = 6;
-/// The salt of the styled composite's texture stores.
+/// The salt of the styled composites' texture stores: one per filter in a context, keyed by the preview's name.
 const STORE: &str = "craft_imaging.styled_preview";
 
 /// How long a styled rebuild may take (LC25, LC26): the work pixels a composite may have are the
@@ -316,14 +316,14 @@ struct StyledState {
 /// The styled composite of a session's moving layer, kept until its key changes. The app keeps one
 /// per session while the layer has a style.
 pub struct StyledPreview {
-    name: String,
+    name: Arc<str>,
     state: Mutex<StyledState>,
 }
 
 impl StyledPreview {
     /// `name` keys the texture in egui.
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), state: Mutex::new(StyledState::default()) }
+        Self { name: Arc::from(name.into()), state: Mutex::new(StyledState::default()) }
     }
 
     /// How many times the composite was made: once per change of its key.
@@ -332,10 +332,11 @@ impl StyledPreview {
         self.state.lock().unwrap_or_else(PoisonError::into_inner).builds
     }
 
-    /// The store of the composite's picture: one per filter, one entry each.
-    fn store(&self, ctx: &Context, crisp: bool) -> TextureStore<()> {
+    /// The store of the composites with `crisp`'s filter. Every preview of the context shares it, so a closed
+    /// preview's composite is evicted when the store needs the room.
+    fn store(ctx: &Context, crisp: bool) -> TextureStore<Arc<str>> {
         let filter = if crisp { TextureOptions::NEAREST } else { TextureOptions::LINEAR };
-        TextureStore::in_context(ctx, (STORE, self.name.as_str(), crisp), TextureStoreOptions::frames().filter(filter))
+        TextureStore::in_context(ctx, (STORE, crisp), TextureStoreOptions::frames().filter(filter))
     }
 
     /// The composite for `frame` and the document rectangle it covers, compositing again through
@@ -366,7 +367,7 @@ impl StyledPreview {
         };
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(shown) = state.shown.as_ref().filter(|s| s.key == key)
-            && let Some(texture) = self.store(ctx, shown.crisp).state(ctx, &(), shown.revision).shown()
+            && let Some(texture) = Self::store(ctx, shown.crisp).state(ctx, &self.name, shown.revision).shown()
         {
             return Some((texture.id, shown.rect));
         }
@@ -388,8 +389,8 @@ impl StyledPreview {
             None => composed,
         };
         let revision = Revision::new(state.builds + 1);
-        self.store(ctx, !crisp).forget(ctx, &());
-        let texture = self.store(ctx, crisp).put(ctx, (), revision, pixels);
+        Self::store(ctx, !crisp).forget(ctx, &self.name);
+        let texture = Self::store(ctx, crisp).put(ctx, Arc::clone(&self.name), revision, pixels);
         let rect = plan.document_rect();
         state.failed = None;
         state.shown = Some(Shown { key, revision, crisp, rect });
