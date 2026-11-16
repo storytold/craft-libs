@@ -156,11 +156,9 @@ impl ShapeGeometry {
     pub fn bounds(&self) -> Rect {
         // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs:85-96 `shape_bounds` (a line's ends' box).
         match *self {
-            Self::Rect { rect, .. }
-            | Self::Ellipse { rect }
-            | Self::Triangle { rect }
-            | Self::Polygon { rect, .. }
-            | Self::Custom { rect, .. } => rect.abs(),
+            Self::Rect { rect, .. } | Self::Ellipse { rect } | Self::Triangle { rect } | Self::Polygon { rect, .. } | Self::Custom { rect, .. } => {
+                rect.abs()
+            }
             Self::RadialPolygon { center, radius, .. } => Rect::new(center.x - radius, center.y - radius, center.x + radius, center.y + radius),
             Self::Line { from, to, .. } => Rect::from_points(from, to),
         }

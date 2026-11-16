@@ -12,9 +12,9 @@ use craft_ui::runtime::env::Label;
 use kurbo::{Point, Vec2};
 
 use super::words::ShapeDragWords;
-use crate::ui::shape::VectorMode;
 use super::{BoxConstraint, ShapeDragEvent, ShapeDragOptions, ShapeDragRules, ShapeFrame, ShapeKind};
 use crate::geometry::shape::{BoxRule, MIN_SIDE, RadialFrame, SIDES, ShapeGeometry, box_drag, equilateral_in, line_drag};
+use crate::ui::shape::VectorMode;
 
 /// The flattening tolerance of the outline being drawn, in screen points.
 const OUTLINE_TOLERANCE: f32 = 0.25;
