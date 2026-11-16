@@ -1181,7 +1181,11 @@ fn pen(r: Bytes) -> Option<Obj> {
             off += 4 + (r.u32(off)? as usize).min(1 << 20);
         }
     }
-    let color = brush(r, off)?.color();
+    // A pen whose texture brush was not read is counted like a lost brush object.
+    let Some(fill) = brush(r, off) else {
+        return lost_texture(r.tail(off)?).then_some(Obj::LostBrush);
+    };
+    let color = fill.color();
     Some(Obj::Pen { color, width: if width.is_finite() { width.clamp(0.0, 1.0e5) } else { 0.0 } })
 }
 
@@ -1290,16 +1294,20 @@ fn region_node(r: Bytes, off: usize, depth: usize, work: &mut usize) -> Option<(
     }
 }
 
-/// The area a path encloses: its outline when that is one convex figure, else the rectangle
-/// around it. The flag is set when the rectangle stands in for a path that encloses some area.
+/// The area a path encloses: its outline when that is one convex figure, none when its figures all
+/// lie on a line, else the rectangle around it. The flag is set when the rectangle stands in for
+/// the path.
 fn area_of_ops(ops: &[Op]) -> (Vec<P>, bool) {
+    if !crate::geom::encloses_area(ops) {
+        return (Vec::new(), false);
+    }
     let subs = flatten(ops);
     if let [(pts, _)] = subs.as_slice()
         && let Some(c) = convex(pts)
     {
         return (c, false);
     }
-    (ops_bbox(ops).map(rect_poly).unwrap_or_default(), crate::geom::encloses_area(ops))
+    (ops_bbox(ops).map(rect_poly).unwrap_or_default(), true)
 }
 
 /// Two areas' intersection, and whether it ran out of work and kept the first area instead.

@@ -1335,7 +1335,12 @@ impl Canvas {
         let (x0, x1) = (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max));
         let (y0, y1) = (ys.iter().copied().fold(f64::INFINITY, f64::min), ys.iter().copied().fold(f64::NEG_INFINITY, f64::max));
         let dev = if xf[1] == 0.0 && xf[2] == 0.0 { dev } else { [x0, y0, x1 - x0, y1 - y0] };
+        let was_full = self.full;
         self.push(Raw::Bitmap { rect: dev, xf, img, region: RawClip::default() });
+        // A bitmap the item or byte limit refuses is counted once, however many pieces a clip cuts it into.
+        if self.full && !was_full {
+            self.drop_image();
+        }
     }
 
     /// Draws a bitmap that a record asked to combine with raster operation `rop` (already applied by

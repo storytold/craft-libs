@@ -78,10 +78,10 @@ pub struct Picture {
     /// the picture holds what came before. The limits that cut one path, string, region or dash
     /// pattern short do not set it.
     pub truncated: bool,
-    /// Images the file asks to draw that the reader did not read: bitmaps past a size, byte or decode
-    /// limit or in a form the reader cannot decode, EMF+ metafile images that do not parse or are
-    /// nested deeper than 3 levels, and pattern or texture brushes whose bitmap was not read (counted
-    /// when the brush is created). An image whose source rectangle selects none of its pixels, or that
+    /// Images the file asks to draw that the reader did not read: bitmaps past a size, item, byte or
+    /// decode limit or in a form the reader cannot decode, EMF+ metafile images that do not parse or
+    /// are nested deeper than 3 levels, and pattern or texture brushes whose bitmap was not read, a
+    /// pen's brush included (counted when the brush or pen is created). An image whose source rectangle selects none of its pixels, or that
     /// has no pixels, draws nothing and is not counted. Bitmaps left out while clipping to an EMF+
     /// clip (see the README's limits) are not counted here.
     pub dropped_images: u32,

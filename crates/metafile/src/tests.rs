@@ -487,6 +487,34 @@ fn canvas_stops_at_the_byte_budget() {
 }
 
 #[test]
+fn a_bitmap_the_byte_budget_refuses_is_counted_once() {
+    let img = || Rgba { w: 4, h: 4, px: vec![0u8; 64] };
+    let diamond = || Some(vec![(2.0, 0.0), (4.0, 2.0), (2.0, 4.0), (0.0, 2.0)]);
+    let mut cv = Canvas::new();
+    cv.set_clip(diamond());
+    cv.bitmap([0.0, 0.0, 4.0, 4.0], img());
+    assert!(!cv.full() && !cv.items.is_empty() && cv.dropped_images == 0, "a bitmap that is kept");
+    // The clip cuts the bitmap into pieces, and none of them fits: one image is counted.
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 1);
+    cv.set_clip(diamond());
+    cv.bitmap([0.0, 0.0, 4.0, 4.0], img());
+    assert!(cv.full() && cv.items.is_empty());
+    assert_eq!(cv.dropped_images, 1);
+    // A clip that leaves none of the bitmap refuses nothing.
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 1);
+    cv.set_clip(Some(vec![(100.0, 100.0), (110.0, 100.0), (110.0, 110.0)]));
+    cv.bitmap([0.0, 0.0, 4.0, 4.0], img());
+    assert!(!cv.full() && cv.dropped_images == 0);
+    // A bitmap drawn with a raster operation is counted the same way.
+    let mut cv = Canvas::new();
+    cv.hold(MAX_BYTES - 1);
+    cv.bitmap_rop([0.0, 0.0, 4.0, 4.0], img(), 0x00CC_0020);
+    assert!(cv.full() && cv.dropped_images == 1 && cv.unplayed_raster_ops == 0);
+}
+
+#[test]
 fn oversized_dib_header_size_is_rejected_without_overflow() {
     let mut info = info_header(2, 2, 24, 16);
     info[0..4].copy_from_slice(&0xFFFF_FFF0u32.to_le_bytes());

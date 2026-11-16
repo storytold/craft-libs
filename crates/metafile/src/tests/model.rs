@@ -485,6 +485,17 @@ fn pattern_and_texture_brushes_that_are_not_read_are_counted() {
     let none = cat(vec![h32(0xDBC0_1002), h32(1), h32(0), h32(4), h32(16), h32(0x0026_200A), h32(0)]);
     assert_eq!(parse(&texture(none)).unwrap().dropped_images, 0);
     assert_eq!(parse(&texture(bitmap_2x2())).unwrap().dropped_images, 0);
+    // A pen whose brush is such a texture brush.
+    let pen = |image: Vec<u8>| {
+        let brush = cat(vec![h32(0xDBC0_1002), h32(2), h32(0), h32(0), image]);
+        let pen = cat(vec![h32(0xDBC0_1002), h32(0), h32(0), h32(0), f32s(&[1.0]), brush]);
+        emf(&[plus_comment(&[plus_header(false), prec(0x4008, 0x0200 | 5, &pen)])], [0; 4], [0; 4])
+    };
+    let short = cat(vec![h32(0xDBC0_1002), h32(1), h32(4), h32(4), h32(16), h32(0x0026_200A), h32(0), vec![1, 2, 3]]);
+    assert_eq!(parse(&pen(short)).unwrap().dropped_images, 1);
+    let none = cat(vec![h32(0xDBC0_1002), h32(1), h32(0), h32(4), h32(16), h32(0x0026_200A), h32(0)]);
+    assert_eq!(parse(&pen(none)).unwrap().dropped_images, 0);
+    assert_eq!(parse(&pen(bitmap_2x2())).unwrap().dropped_images, 0);
 }
 
 #[test]
@@ -641,6 +652,25 @@ fn emfplus_clips_that_are_not_applied_are_counted() {
     let obj = cat(vec![h32(0xDBC0_1002), h32(4), h32(2), xor, inf]);
     assert_eq!(plus(vec![prec(0x4008, 0x0400 | 6, &obj), prec(0x4034, 6, &[])]), 0, "an XOR region added to an unlimited one");
     assert_eq!(plus(vec![clip(1, [0.0, 0.0, 50.0, 50.0]), clip(0, [1.0, 1.0, 5.0, 5.0])]), 0, "intersect and replace are applied");
+}
+
+#[test]
+fn an_emfplus_clip_on_a_diagonal_line_encloses_nothing() {
+    let fill = prec(0x400A, 0x8000, &cat(vec![h32(0xFF00_0000), h32(1), f32s(&[0.0, 0.0, 100.0, 100.0])]));
+    let drawn = |clip: Vec<Vec<u8>>| {
+        let mut all = vec![plus_header(false)];
+        all.extend(clip);
+        all.push(fill.clone());
+        let p = parse(&emf(&[plus_comment(&all)], [0; 4], [0; 4])).unwrap();
+        (p.items.len(), p.ignored_clips)
+    };
+    let line = cat(vec![h32(0xDBC0_1002), h32(2), h32(0), f32s(&[0.0, 0.0, 10.0, 10.0]), vec![0, 1]]);
+    // SetClipPath with the line replaces the clip with nothing.
+    assert_eq!(drawn(vec![prec(0x4008, 0x0300 | 9, &line), prec(0x4033, 9, &[])]), (0, 0));
+    // A region whose one node is the line.
+    let node = cat(vec![h32(0x1000_0001), h32(line.len() as u32), line]);
+    let region = cat(vec![h32(0xDBC0_1002), h32(1), node]);
+    assert_eq!(drawn(vec![prec(0x4008, 0x0400 | 6, &region), prec(0x4034, 6, &[])]), (0, 0));
 }
 
 #[test]
