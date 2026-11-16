@@ -468,6 +468,31 @@ fn an_edited_paragraph_keeps_its_styles_file_name_beside_an_unused_namesake() {
     }
 }
 
+/// A style made after reading (`NewChild`), based on a file's style beside an unused namesake
+/// (`My_20_Custom`, WordCraft's `MyCustom`, beside `MyCustom`), derives from the file's style it
+/// was based on.
+#[test]
+fn a_new_style_based_on_one_beside_an_unused_namesake_derives_from_it() {
+    use std::sync::Arc;
+    let s = r##"<style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="My_20_Custom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="9pt"/></style:style><style:style style:name="MyCustom" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="30pt" fo:color="#ff0000"/></style:style>"##;
+    let mut d = opened(s, &["My_20_Custom"]);
+    let id = d.body[0].as_para().unwrap().props.style.clone().unwrap();
+    let mut child = d.styles.get(&id).unwrap().clone();
+    (child.id, child.name, child.based_on, child.next) = ("NewChild".into(), "NewChild".into(), Some(id.clone()), None);
+    (child.para, child.chr) = Default::default();
+    Arc::make_mut(&mut d.styles).upsert(child);
+    d.restyle(&id, Some("NewChild".to_string()));
+    let bytes = export(&d).unwrap();
+    let saved = styles_of(&bytes);
+    let new = saved.split("<style:style ").find(|t| t.starts_with(r#"style:name="NewChild""#)).and_then(|t| t.split('>').next());
+    assert!(new.is_some_and(|n| n.contains(r#"style:parent-style-name="My_20_Custom""#)), "{saved}");
+    let theirs = def_named(&saved, "MyCustom").unwrap_or_else(|| panic!("{saved}"));
+    assert!(theirs.contains(r#"fo:font-size="30pt""#), "as read: {theirs}");
+    let back = import(&bytes).unwrap();
+    let got = back.styles.resolve_char(back.body[0].as_para().unwrap().props.style.as_deref(), &Default::default()).size;
+    assert_eq!(got, 9.0, "{saved}\n{}", content_of(&bytes));
+}
+
 /// The same for a character style: edited text's automatic style derives from the file's
 /// character style it was read with (`My_20_Accent`), not an unused namesake (`MyAccent`).
 #[test]

@@ -270,7 +270,7 @@ pub(super) fn children(xml: &str, container: &str, group: &str) -> (Vec<(String,
 
 /// `xml` (a part WordCraft wrote) with `container`'s children as read: the file's (those of
 /// `group` in `defs`, in `order`; `pick` may choose WordCraft's instead, or neither), then
-/// WordCraft's own the file had none of by that key.
+/// WordCraft's own the file had none of by that key (as `fresh` gives them, by key and markup).
 fn with_as_read(
     xml: &str,
     container: &str,
@@ -278,6 +278,7 @@ fn with_as_read(
     defs: &BTreeMap<String, Arc<str>>,
     order: &[String],
     pick: &dyn Fn(&str, &str, Option<&str>) -> Option<String>,
+    fresh: &dyn Fn(&str, &str) -> String,
 ) -> String {
     let (kids, content) = children(xml, container, group);
     let Some((from, to)) = content else { return xml.to_string() };
@@ -295,7 +296,7 @@ fn with_as_read(
         if !defs.contains_key(k)
             && let Some(x) = xml.get(*a..*b)
         {
-            body.push_str(x);
+            body.push_str(&fresh(k, x));
         }
     }
     let (Some(head), Some(tail)) = (xml.get(..from), xml.get(to..)) else { return xml.to_string() };
@@ -322,14 +323,22 @@ pub(super) fn with_common_as_read(
     order: &[String],
     changed: &BTreeSet<String>,
     rewritten: &BTreeMap<String, Option<String>>,
+    read: &std::collections::HashMap<String, String>,
 ) -> String {
-    with_as_read(styles, "office:styles", "common", defs, order, &|k, d, ours| match ours {
+    let pick = |k: &str, d: &str, ours: Option<&str>| match ours {
         _ if rewritten.contains_key(k) => rewritten.get(k).cloned().flatten(),
         Some(o) if drawing_def(o) || changed.contains(k) => Some(o.to_string()),
         None if changed.contains(k) => None,
         // (The default graphic style is the file's: WordCraft's drawings say what they need.)
         _ => Some(d.to_string()),
-    })
+    };
+    // A style of WordCraft's own derives from (or is followed by) the file's style a style was
+    // read from, not an unread namesake of it ([`read_names`]).
+    let fresh = |k: &str, d: &str| {
+        let family = if k.ends_with("|text") { "|text" } else { "" };
+        renamed(d, &|attr, v| (attr != "style:name").then(|| read.get(&format!("{v}{family}")).cloned()).flatten())
+    };
+    with_as_read(styles, "office:styles", "common", defs, order, &pick, &fresh)
 }
 
 /// What becomes of the file's styles (`defs`) that `changed` touches, by their keys: WordCraft's
@@ -410,7 +419,7 @@ pub(super) fn rewritten_defs(
 
 /// The file's names for the styles the import read whose name as WordCraft writes them (`ours`)
 /// is a style of the file's the import didn't read (`MyCustom` beside `My_20_Custom`): by that
-/// name with its family's key suffix (`MyCustom`, `MyCustom|text`), escaped. That namesake keeps
+/// name with its family's key suffix (`MyCustom`, `MyCustom|text`), unescaped. That namesake keeps
 /// its own definition ([`rewritten_defs`]), so markup written from the model names the file's
 /// style the text was read with instead.
 pub(super) fn read_names(
@@ -425,7 +434,7 @@ pub(super) fn read_names(
         let mine = format!("{}{family}", ours(id));
         let namesake = format!("common:{mine}");
         if mine != rest && defs.contains_key(&namesake) && !ids.contains_key(&namesake) {
-            out.entry(mine).or_insert_with(|| super::writer::x(name));
+            out.entry(mine).or_insert_with(|| name.to_string());
         }
     }
     out
@@ -487,8 +496,9 @@ pub(super) fn changed(then: &BTreeMap<String, u64>, now: &BTreeMap<String, u64>)
 /// the file had none by that name. For a document whose page setup is as read but for `patches`.
 pub(super) fn with_pages_as_read(styles: &str, defs: &BTreeMap<String, Arc<str>>, order: &[String], patches: &BTreeMap<String, String>) -> String {
     let keep_file = |k: &str, d: &str, _: Option<&str>| Some(patches.get(k).cloned().unwrap_or_else(|| d.to_string()));
-    let s = with_as_read(styles, "office:automatic-styles", "sauto", defs, order, &keep_file);
-    with_as_read(&s, "office:master-styles", "master", defs, order, &keep_file)
+    let as_is = |_: &str, d: &str| d.to_string();
+    let s = with_as_read(styles, "office:automatic-styles", "sauto", defs, order, &keep_file, &as_is);
+    with_as_read(&s, "office:master-styles", "master", defs, order, &keep_file, &as_is)
 }
 
 /// A section starting a page: the file's master page it uses (`None`: the file's first), and what
