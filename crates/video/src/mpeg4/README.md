@@ -107,13 +107,18 @@ output:
   -2048 to 2047 and dense blocks of extreme coefficients. Xvid's older MMX IDCT differs from
   its SSE2 one only on such extreme blocks.
 
-Two cases where the decoder follows the standard and ffmpeg does not:
+Three cases where the decoder follows the standard and ffmpeg does not:
 
 - Field direct mode scales the co-located macroblock's field vectors (§7.6.9.5). ffmpeg's decoder
   predicts these macroblocks from the vector difference alone. On ffmpeg's own interlaced
   streams with B-VOPs this decoder's B pictures are closer to the source, by up to 2.4 dB.
 - The mean vector of a GMC macroblock is rounded to the nearest integer. With one warping point
   at half-sample accuracy, ffmpeg rounds a negative mean one lower.
+- A vector predictor outside the range of `fcode` (a field macroblock's vertical predictor, the
+  sum of its two field verticals, can be) is added to the difference as it is, and the sum wraps
+  into the range (§7.6.3.1). With a difference of 0 ffmpeg keeps the predictor itself: from a
+  predictor of 32 at fcode 1 this decoder's vector is −32 and ffmpeg's 32, which is outside the
+  range. With a difference of −1 both give 31.
 
 ### Not supported
 

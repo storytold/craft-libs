@@ -326,7 +326,7 @@ fn read_mv(r: &mut BitReader, fcode: u8, pred: i32) -> Result<i32> {
         if code < 0 { -d } else { d }
     };
     let (low, high, range) = (-32 * f, 32 * f - 1, 64 * f);
-    let mut v = pred.clamp(low, high) + diff;
+    let mut v = pred + diff;
     if v < low {
         v += range;
     } else if v > high {
@@ -1008,5 +1008,20 @@ mod tests {
         assert_eq!(read_mv(&mut r, 1, 31).ok(), Some(-32));
         assert_eq!(median(3, -1, 7), 3);
         assert_eq!(median(5, 5, 1), 5);
+    }
+
+    #[test]
+    fn a_predictor_beyond_the_range_is_not_clamped() {
+        use craft_media::bitstream::BitWriter;
+        // A field macroblock's vertical predictor (the sum of its field verticals) can be 32 at
+        // fcode 1: the difference is added to it as it is, and only the sum wraps.
+        let mut w = BitWriter::new();
+        w.write_bit(true); // motion_code 0
+        w.write_bits(0b011, 3); // motion_code -1
+        w.write_bits(0, 16);
+        let data = w.finish();
+        let mut r = BitReader::new(&data);
+        assert_eq!(read_mv(&mut r, 1, 32).ok(), Some(-32));
+        assert_eq!(read_mv(&mut r, 1, 32).ok(), Some(31));
     }
 }

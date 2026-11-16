@@ -300,6 +300,61 @@ fn xvid_streams_decode_bit_exact() {
     }
 }
 
+/// The predictor from a field macroblock (the sum of its field verticals) can leave the range of
+/// `fcode`; the vector difference is added to it as it is, and only the sum wraps (§7.6.3.1).
+/// Two field macroblocks of vertical difference +8 each store a frame predictor of 32 at fcode 1
+/// (range −32 to 31); the frame macroblock after them, of difference −1, has the vector 31.
+#[test]
+fn a_predictor_beyond_the_vector_range_wraps_with_the_difference() {
+    let Some(ff) = ffmpeg() else { return };
+    let intra = encode(&ff, "mvwrap", "64x48", 1, &["-qscale:v", "2", "-bf", "0", "-flags", "+ildct+ilme"]);
+    let info = craft_video::mpeg4::probe(&intra).expect("probe");
+    assert!(info.interlaced);
+    let mut w = BitWriter::new();
+    w.write_bits(0x1B6, 32);
+    w.write_bits(0b01, 2); // P
+    w.write_bit(false); // modulo_time_base
+    w.write_bit(true);
+    w.write_bits(1, (32 - info.time_resolution.saturating_sub(1).leading_zeros()).max(1));
+    w.write_bit(true);
+    w.write_bit(true); // vop_coded
+    w.write_bit(false); // vop_rounding_type
+    w.write_bits(0, 3); // intra_dc_vlc_thr
+    w.write_bit(true); // top_field_first
+    w.write_bit(false); // alternate_vertical_scan_flag
+    w.write_bits(4, 5); // vop_quant
+    w.write_bits(1, 3); // vop_fcode_forward
+    // not_coded 0, mcbpc (inter, cbpc 0), cbpy (none coded)
+    let inter = [(0, 1), (1, 1), (3, 2)];
+    for _ in 0..2 {
+        // field_prediction, top field from the top field, bottom from the bottom; per field a
+        // horizontal motion_code 0 and a vertical motion_code +8.
+        for (v, n) in inter.into_iter().chain([(1, 1), (0, 1), (1, 1)]).chain([(1, 1), (11, 9), (0, 1)].repeat(2)) {
+            w.write_bits(v, n);
+        }
+    }
+    // frame prediction, motion_code 0 horizontally and -1 vertically
+    for (v, n) in inter.into_iter().chain([(0, 1), (1, 1), (0b011, 3)]) {
+        w.write_bits(v, n);
+    }
+    for _ in 3..12 {
+        w.write_bit(true); // not_coded
+    }
+    w.write_bit(false);
+    while !w.is_byte_aligned() {
+        w.write_bit(true);
+    }
+    let stream = [intra, w.finish()].concat();
+    let reference = reference(&ff, &stream, "mvwrap");
+    let (pics, dec) = decode_all(&chunks(&stream));
+    assert_eq!(dec.errors(), 0, "{:?}", dec.last_error());
+    assert_eq!(pics.len(), 2);
+    for (i, p) in pics.iter().enumerate() {
+        let q = psnr(&planes(p), frame(p, &reference, i));
+        assert!(q >= FLOOR, "picture {i} is {q:.2} dB from ffmpeg's");
+    }
+}
+
 /// A sequence without Xvid user data that follows an Xvid one in the same decoder is decoded
 /// with the exact IDCT, as a fresh decoder decodes it.
 #[test]
@@ -652,6 +707,12 @@ fn corrupt_streams_never_panic() {
                 let _ = d.decode(c, 0);
             }
             let _ = d.flush();
+            // The whole buffer as one chunk and as configuration headers: `chunks` drops what
+            // follows the last VOP start code, so a buffer without one never reaches the parser.
+            let mut d = Decoder::new();
+            let _ = d.decode(data, 0);
+            let _ = d.flush();
+            let _ = Decoder::new().decode_headers(data);
         });
     }
 }
