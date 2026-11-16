@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- What craftkit's FileProvider shares: copied images, for the clipboard, and shared documents. -->
+<paths>
+    <cache-path name="clipboard" path="craftkit-clipboard/" />
+    <cache-path name="share" path="craftkit-share/" />
+</paths>

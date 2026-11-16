@@ -291,6 +291,10 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   header fields, MIME parts and multiparts, encoded-words, RFC 2231 parameters, base64 and
   quoted-printable, character sets, address lists, dates, mbox files and the `multipart/related`
   lookups of MHT web archives. What a message means (body, attachments, flags) stays in each app.
+- [`craft-mobile`](crates/mobile/README.md): hosts a Craft app (egui + wgpu) in a native iPadOS
+  (SwiftUI, `swift/CraftKit`) or Android (Compose, `android/craftkit`) shell: files, commands and
+  panel state bridged to native chrome, touch and stylus input, power and memory events. The one
+  crate that needs `unsafe` (the C and JNI interfaces and wgpu surfaces); see its README.
 - [`craft-openpgp`](crates/openpgp/README.md): OpenPGP as mail carries it: PGP/MIME and cleartext
   Digital signatures checked, attached Public keys and `Autocrypt:` headers read, a secret key
   file inspected without using it. Built on rPGP; no I/O, and every size and count is capped.

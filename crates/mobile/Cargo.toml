@@ -1,0 +1,52 @@
+[package]
+name = "craft-mobile"
+description = "Hosts a Craft app (egui + wgpu) in a native iPadOS or Android view, with files, commands and panel state bridged to SwiftUI and Compose."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+eframe = { version = "0.37", default-features = false, features = ["wgpu"] }
+egui = { workspace = true }
+log = "0.4"
+pollster = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# The JNI layer: `craftkit` (Compose) calls it, and the render thread calls back.
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+jni = "0.21"
+ndk = { version = "0.9", default-features = false }
+# eframe links winit, whose android-activity needs a backend chosen. The app never runs as a
+# NativeActivity (craftkit's Compose activity hosts it), so `android::android_main` is a stub.
+winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+
+# Logs to the unified log (Console, crash reports, `log show`), where iOS keeps them.
+[target.'cfg(target_os = "ios")'.dependencies]
+oslog = "0.2"
+
+# Not `[lints] workspace = true`: the workspace forbids `unsafe_code`, and this crate is where the
+# native shells' `unsafe` lives (raw handles for wgpu surfaces, byte buffers crossing the C/JNI
+# boundary, the exported symbols). It denies `unsafe_code` instead, so each use is an item-level
+# `#[expect(unsafe_code, reason = "...")]` with a SAFETY comment; otherwise the workspace lints
+# are copied below, keep them in step.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+module_name_repetitions = "allow"

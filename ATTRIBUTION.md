@@ -34,6 +34,7 @@ author, source and license. Library code and original assets are under the repos
 | `crates/prc/src/acof/table.rs` (the rows of the PRC `Double` prefix-code table, reformatted as Rust tuples) | Kristof Ralovich (prc-rs); the table is defined by ISO 14739-1 | [ralovich/prc-rs@287b671](https://github.com/ralovich/prc-rs/blob/287b671bb5b31b05efb5ec1b98f7c359b9e4dd7d/src/double.rs), through [PdfCraft `crates/prc`](https://github.com/storytold/pdfcraft/tree/80e26e674d1aa33078e83c8139875047f3289eb6/crates/prc) | MIT (`licenses/prc-rs/LICENSE.txt`; the notice is also in the file header) |
 | `crates/math/tests/corpus/equations.tsv`, `crates/math/tests/corpus/latex.tsv` (unmodified) | shuff57 (equaSHion) | [storytold/craft-libs#29](https://github.com/storytold/craft-libs/pull/29) at `7a6ef6b9`, `corpus/` | MIT OR Apache-2.0 |
 | `crates/math/tests/corpus/omml/*.xml` (unmodified) | WordCraft and DeckCraft contributors, collected by shuff57 (equaSHion) | [storytold/craft-libs#29](https://github.com/storytold/craft-libs/pull/29) at `7a6ef6b9`, `corpus/omml/` | MIT OR Apache-2.0 |
+| `crates/mobile/android/craftkit/src/main/res/drawable/craft_ic_*.xml` (Material Icons, filled: `add`, `content_paste`, `folder_open`, `layers`, `redo`, `save`, `undo`, `visibility`, `visibility_off`; colour set to white) | Google | [google/material-design-icons](https://github.com/google/material-design-icons) | Apache-2.0 |
 
 Original assets are covered by the repository licence.
 
