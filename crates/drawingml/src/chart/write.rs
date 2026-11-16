@@ -398,7 +398,12 @@ fn series(w: &mut Writer, c: &Chart, s: &Series, i: usize, kind: ChartType, g: G
         });
         match (&c.category_format, nums) {
             (Some(code), Some(nums)) => num_cache_fmt(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &nums, code),
-            _ => str_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &c.categories),
+            // Mixed number and text categories are strings, as Excel writes them: the numbers as
+            // their formatted labels, which a reload could not rebuild from the raw serials.
+            _ => {
+                let labels: Vec<String> = (0..c.categories.len()).map(|i| c.category_label(i)).collect();
+                str_cache(w, &or(&r.categories, format!("Sheet1!$A$2:$A${last}")), &labels)
+            }
         }
         w.close();
         w.open("c:val", &[]);
@@ -1298,5 +1303,19 @@ mod cache_cap_tests {
         t.series.push(Series { name: "S".into(), values: vec![Some(1.0), Some(2.0)], ..Default::default() });
         let text = String::from_utf8(super::chart_xml(&t).0).unwrap();
         assert!(text.contains("<c:strCache>") && text.contains(r#"<c:date1904 val="0"/>"#), "{text}");
+    }
+
+    #[test]
+    fn mixed_date_and_text_categories_keep_their_labels_through_a_write() {
+        let mut c = Chart {
+            kind: ChartType::Bar,
+            categories: vec!["45292".into(), "TBD".into()],
+            category_format: Some("mmm-yy".into()),
+            ..Default::default()
+        };
+        c.series.push(Series { name: "S".into(), values: vec![Some(1.0), Some(2.0)], ..Default::default() });
+        assert_eq!((c.category_label(0).as_str(), c.category_label(1).as_str()), ("Jan-24", "TBD"));
+        let back = crate::chart::read::read_chart_xml(&super::chart_xml(&c).0).unwrap();
+        assert_eq!((back.category_label(0).as_str(), back.category_label(1).as_str()), ("Jan-24", "TBD"));
     }
 }

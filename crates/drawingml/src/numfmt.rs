@@ -296,12 +296,21 @@ fn holds((op, n): (Op, f64), v: f64) -> bool {
     }
 }
 
-/// The section a value takes when the first two sections carry conditions: its index and whether
-/// a negative value shows its minus sign. `None` without conditions (the sign picks the section).
+/// Which section a value takes when the first two sections carry conditions.
+enum Pick {
+    /// The section's index and whether a negative value shows its minus sign.
+    Section(usize, bool),
+    /// No condition holds and no section takes the rest: Excel shows hashes.
+    NoMatch,
+}
+
+/// The section a value takes when the first two sections carry conditions (see [`Pick`]).
+/// `None` without conditions (the sign picks the section).
 /// An unconditioned first section takes `>0` (`>=0` in a two-section format), an unconditioned
 /// second one the rest (`<0` in a three-section format), and a third section takes what is left.
-/// As in Excel, only a format of one section adds the minus sign itself.
-fn conditional(secs: &[&str], v: f64) -> Option<(usize, bool)> {
+/// As in Excel, only a format of one section adds the minus sign itself. A value that meets no
+/// condition, with no third section to take it, matches nothing.
+fn conditional(secs: &[&str], v: f64) -> Option<Pick> {
     let conds: Vec<Option<(Op, f64)>> = secs.iter().take(2).map(|s| condition(s)).collect();
     let (c1, c2) = (conds.first().copied().flatten(), conds.get(1).copied().flatten());
     if c1.is_none() && c2.is_none() {
@@ -309,14 +318,14 @@ fn conditional(secs: &[&str], v: f64) -> Option<(usize, bool)> {
     }
     let n = secs.len().min(3);
     let minus = v < 0.0 && secs.len() < 2;
-    if holds(c1.unwrap_or(if n >= 3 { (Op::Gt, 0.0) } else { (Op::Ge, 0.0) }), v) || n < 2 {
-        return Some((0, minus));
+    if holds(c1.unwrap_or(if n >= 3 { (Op::Gt, 0.0) } else { (Op::Ge, 0.0) }), v) {
+        return Some(Pick::Section(0, minus));
     }
     let d2 = c2.or(if n >= 3 { Some((Op::Lt, 0.0)) } else { None });
-    if d2.is_none_or(|d| holds(d, v)) {
-        return Some((1, false));
+    if n >= 2 && d2.is_none_or(|d| holds(d, v)) {
+        return Some(Pick::Section(1, false));
     }
-    Some((if n >= 3 { 2 } else { 1 }, false))
+    Some(if n >= 3 { Pick::Section(2, false) } else { Pick::NoMatch })
 }
 
 /// `v` formatted with the Excel number format `code` in language `lang` (axis labels: the text
@@ -334,10 +343,13 @@ pub fn format_dated(code: &str, v: f64, lang: Option<&str>, date_1904: bool) -> 
         return String::new();
     }
     let secs = sections(code);
+    // A date before its first day shows hashes whichever section takes it, so keep the value's own sign.
+    let negative = v < 0.0;
     // The section for the value: by the conditions, else by the sign. A negative or zero section
     // shows the value unsigned.
     let (sec, v, minus) = match (conditional(&secs, v), secs.as_slice(), v) {
-        (Some((i, minus)), _, v) => (secs.get(i).copied().unwrap_or(""), v.abs(), minus),
+        (Some(Pick::NoMatch), ..) => return "#".repeat(8),
+        (Some(Pick::Section(i, minus)), _, v) => (secs.get(i).copied().unwrap_or(""), v.abs(), minus),
         (None, [_, neg, ..], v) if v < 0.0 => (*neg, -v, false),
         (None, [_, _, zero, ..], v) if v == 0.0 => (*zero, v, false),
         (None, [pos, ..], v) => (*pos, v.abs(), v < 0.0),
@@ -349,7 +361,7 @@ pub fn format_dated(code: &str, v: f64, lang: Option<&str>, date_1904: bool) -> 
     }
     if let Some(dt) = date_tokens(sec) {
         // Excel shows a date before its first day as hashes.
-        return if minus { "#".repeat(8) } else { date_text(&dt, v, date_1904, dec) };
+        return if negative { "#".repeat(8) } else { date_text(&dt, v, date_1904, dec) };
     }
     let toks = tokens(sec);
     let first = toks.iter().position(|t| matches!(t, Tok::Digit(_)));
@@ -359,9 +371,12 @@ pub fn format_dated(code: &str, v: f64, lang: Option<&str>, date_1904: bool) -> 
         let s: String = toks.iter().filter_map(|t| if let Tok::Lit(s) = t { Some(s.as_str()) } else { None }).collect();
         return s.trim().to_string();
     };
-    let (out, zero) = match fraction(&toks, v, sep).or_else(|| sci(&toks, v, sep, dec)) {
-        Some(o) => (o, false),
-        None => fixed(&toks, first, last, v, sep, dec),
+    let (out, zero) = match fraction(&toks, v, sep) {
+        Some(o) => o,
+        None => match sci(&toks, v, sep, dec) {
+            Some(o) => (o, false),
+            None => fixed(&toks, first, last, v, sep, dec),
+        },
     };
     let out = out.trim().replace(PAD, " ");
     // A negative number that rounds to zero shows no minus sign.
@@ -493,8 +508,9 @@ fn fixed_with(toks: &[Tok], first: usize, last: usize, sep: char, dec: char, rou
 
 /// A fraction format (`# ?/?`, `# ??/??`, `?/8`, `0/0`): the whole part, then the numerator over the
 /// denominator closest to the value, with at most as many digits as the denominator has
-/// placeholders (a fixed denominator as written). `None` if the section is no fraction format.
-fn fraction(toks: &[Tok], v: f64, sep: char) -> Option<String> {
+/// placeholders (a fixed denominator as written), and whether it rounds to zero. `None` if the
+/// section is no fraction format.
+fn fraction(toks: &[Tok], v: f64, sep: char) -> Option<(String, bool)> {
     if toks.contains(&Tok::Dot) {
         return None;
     }
@@ -609,7 +625,7 @@ fn fraction(toks: &[Tok], v: f64, sep: char) -> Option<String> {
             format!("{whole_text} {frac}")
         }
     };
-    Some(format!("{before}{body}{after}"))
+    Some((format!("{before}{body}{after}"), n == 0.0 && whole == 0.0))
 }
 
 /// A token of a date or time format.
@@ -1018,6 +1034,42 @@ mod tests {
             ("0.00;(0.00)", -0.0033, "(0.00)"),
             ("0.00E+00", -2.89e-9, "-2.89E-09"),
         ]);
+    }
+
+    #[test]
+    fn a_negative_fraction_that_rounds_to_zero_shows_no_minus() {
+        check(&[
+            // code, value, Excel shows
+            ("# ?/?", -0.01, "0"),
+            ("?/?", -0.01, "0/1"),
+            ("# ?/?", -0.5, "-1/2"),
+            ("# ?/?", -1.5, "-1 1/2"),
+        ]);
+    }
+
+    #[test]
+    fn a_value_meeting_no_condition_shows_hashes() {
+        check(&[
+            // code, value, Excel shows
+            ("[>100]0;[<0]0", 50.0, "########"),
+            ("[>100]0;[<0]0", 150.0, "150"),
+            ("[>100]0;[<0]0", -5.0, "5"),
+            ("[>100]0", 50.0, "########"),
+            ("[>100]0", 150.0, "150"),
+            // a second section without a condition takes the rest
+            ("[>100]0;0.0", 50.0, "50.0"),
+            // a third section takes the rest
+            ("[>100]0;[<0]0;0.00", 50.0, "50.00"),
+        ]);
+    }
+
+    #[test]
+    fn a_negative_date_shows_hashes_in_every_section() {
+        for code in ["m/d/yyyy", "m/d/yyyy;m/d/yyyy", "[<0]m/d/yyyy;m/d/yyyy", "m/d/yyyy;m/d/yyyy;m/d/yyyy"] {
+            assert_eq!(format(code, -1.0, None), "########", "{code}");
+            assert_eq!(format_dated(code, -1.0, None, true), "########", "{code} 1904");
+            assert_eq!(format(code, 1.0, None), "1/1/1900", "{code}");
+        }
     }
 
     #[test]

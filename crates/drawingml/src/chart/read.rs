@@ -492,16 +492,15 @@ fn read_axes<'a>(c: &mut Chart, pa: &'a El, primary_val: &Option<String>) -> (Op
 /// case the format code of the category cells. `None` when the categories are text (their cached
 /// strings show as they are) or the file gives only General.
 fn category_format(pa: &El, cat_ax: Option<&El>) -> Option<String> {
-    // The first series with categories gives them, as in `read_series`.
+    // The first series with categories gives them, as in `read_series`: its cache is the one
+    // `strings_capped` reads, so a series whose categories are multi-level text or a bare value
+    // gives no number format, and no later series does.
     let cat = pa
         .elements()
         .filter(|g| g.local().ends_with("Chart"))
         .flat_map(|g| g.children(Local("ser")))
         .filter_map(|s| s.child(Local("cat")).or_else(|| s.child(Local("xVal"))))
-        .find(|c| {
-            let cache = c.find(Local("strCache")).or_else(|| c.find(Local("numCache"))).or_else(|| c.find(Local("strLit")));
-            cache.or_else(|| c.find(Local("numLit"))).is_some_and(|k| k.child(Local("pt")).is_some())
-        })?;
+        .find(|c| !strings_capped(c, MAX_CACHE_POINTS).is_empty())?;
     if cat.find(Local("strCache")).or_else(|| cat.find(Local("strLit"))).is_some() {
         return None;
     }
@@ -977,6 +976,19 @@ mod tests {
         }
         // a category index past the data has no label
         assert_eq!(category_chart(&num_cat("m/d/yyyy"), bare, "").category_label(5), "");
+    }
+
+    #[test]
+    fn the_category_format_comes_from_the_series_that_gave_the_categories() {
+        // The first series has multi-level text categories, the second numeric dates.
+        let xml = format!(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:cat><c:multiLvlStrRef><c:multiLvlStrCache><c:ptCount val="1"/><c:lvl><c:pt idx="0"><c:v>2024</c:v></c:pt></c:lvl></c:multiLvlStrCache></c:multiLvlStrRef></c:cat><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser><c:ser><c:idx val="1"/><c:cat>{}</c:cat><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart><c:dateAx><c:axId val="1"/></c:dateAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea></c:chart></c:chartSpace>"#,
+            num_cat("m/d/yyyy")
+        );
+        let c = read_chart_xml(xml.as_bytes()).unwrap();
+        assert_eq!(c.categories, ["2024"]);
+        assert_eq!(c.category_format, None);
+        assert_eq!(c.category_label(0), "2024");
     }
 
     #[test]
