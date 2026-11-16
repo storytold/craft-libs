@@ -220,7 +220,7 @@ fn a_triangle_fills_its_box_and_shift_makes_it_equilateral() {
     assert!(equal.len() >= 3, "a triangle: {equal:?}");
     let sides = [(equal[0] - equal[1]).hypot(), (equal[1] - equal[2]).hypot(), (equal[2] - equal[0]).hypot()];
     assert!(sides.iter().all(|side| (side - 20.0 * 3f64.sqrt()).abs() < 1e-9), "three equal sides in the 40 px square's circle: {sides:?}");
-    assert_eq!(equal[0], Point::new(120.0, 100.0), "the apex is the top of the circle");
+    assert!((equal[0] - Point::new(120.0, 100.0)).hypot() < 1e-9, "the apex is the top of the circle, got {:?}", equal[0]);
 
     shapes.drag(PRESS, to, Modifiers::SHIFT | Modifiers::ALT);
     let centred = corners(shapes.committed());
