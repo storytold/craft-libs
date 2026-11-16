@@ -195,7 +195,9 @@ fn parse_bg_layers(val: &str) -> Option<Vec<BgLayer<'_>>> {
             }
         } else if !in_raw_url && val[i..].starts_with("/*") {
             // CSS comments outside strings and URLs are consumed before delimiter classification
-            push_shorthand_token(val, &mut start, i, &mut current_tokens, &mut total_tokens)?;
+            if paren_depth == 0 {
+                push_shorthand_token(val, &mut start, i, &mut current_tokens, &mut total_tokens)?;
+            }
             if let Some(end_offset) = val[i + 2..].find("*/") {
                 byte_idx = i + 2 + end_offset + 2;
             } else {
@@ -264,6 +266,47 @@ fn parse_bg_layers(val: &str) -> Option<Vec<BgLayer<'_>>> {
     Some(layers)
 }
 
+fn is_valid_rgb_component(s: &str) -> bool {
+    let s = trim_css_whitespace(s);
+    if s.eq_ignore_ascii_case("none") {
+        return true;
+    }
+    if let Some(p) = s.strip_suffix('%') {
+        trim_css_whitespace(p).parse::<f32>().is_ok_and(|v| v.is_finite())
+    } else {
+        s.parse::<f32>().is_ok_and(|v| v.is_finite())
+    }
+}
+
+fn is_valid_hue_component(s: &str) -> bool {
+    let s = trim_css_whitespace(s);
+    if s.eq_ignore_ascii_case("none") {
+        return true;
+    }
+    let num_str = if let Some(deg) = s.strip_suffix("deg") {
+        deg
+    } else if let Some(rad) = s.strip_suffix("rad") {
+        rad
+    } else if let Some(turn) = s.strip_suffix("turn") {
+        turn
+    } else {
+        s
+    };
+    trim_css_whitespace(num_str).parse::<f32>().is_ok_and(|v| v.is_finite())
+}
+
+fn is_valid_zero_alpha(a: &str) -> bool {
+    let a = trim_css_whitespace(a);
+    if a.eq_ignore_ascii_case("none") || a == "0" || a == "0%" || a == "0.0" {
+        return true;
+    }
+    if let Some(p) = a.strip_suffix('%') {
+        trim_css_whitespace(p).parse::<f32>().is_ok_and(|v| v <= 0.0)
+    } else {
+        a.parse::<f32>().is_ok_and(|v| v <= 0.0)
+    }
+}
+
 /// Returns true if a CSS color expression specifies a fully transparent color (alpha = 0).
 fn is_zero_alpha_color(s: &str) -> bool {
     let s = trim_css_whitespace(s).to_ascii_lowercase();
@@ -279,61 +322,47 @@ fn is_zero_alpha_color(s: &str) -> bool {
         }
         return false;
     }
-    // Must be a valid parseable color in craft_flow to ensure all required components are valid.
-    if parse_color(&s).is_none() {
-        return false;
-    }
     if let Some(inner) = s.strip_prefix("rgb(").or_else(|| s.strip_prefix("rgba(")) {
         let Some(inner) = inner.strip_suffix(')') else { return false };
         let (rgb_part, alpha_part) = inner.split_once('/').map_or((inner, None), |(a, b)| (a, Some(b)));
-        let alpha_str = match alpha_part {
+        let (parts, alpha_str) = match alpha_part {
             Some(a) => {
                 let parts: Vec<&str> = if rgb_part.contains(',') { rgb_part.split(',').collect() } else { rgb_part.split_whitespace().collect() };
-                if parts.len() != 3 {
-                    return false;
-                }
-                Some(a.trim())
+                (parts, a)
             }
             None => {
                 let parts: Vec<&str> = if inner.contains(',') { inner.split(',').collect() } else { inner.split_whitespace().collect() };
-                if parts.len() == 4 { Some(parts[3].trim()) } else { None }
+                if parts.len() == 4 {
+                    (parts[..3].to_vec(), parts[3])
+                } else {
+                    return false;
+                }
             }
         };
-        if let Some(a) = alpha_str {
-            if a == "0" || a == "0%" || a == "0.0" || a == "none" {
-                return true;
-            }
-            if let Ok(val) = a.strip_suffix('%').unwrap_or(a).trim().parse::<f32>() {
-                return val <= 0.0;
-            }
-        }
-        return false;
+        return parts.len() == 3 && parts.iter().all(|&p| is_valid_rgb_component(p)) && is_valid_zero_alpha(alpha_str);
     }
     if let Some(inner) = s.strip_prefix("hsl(").or_else(|| s.strip_prefix("hsla(")) {
         let Some(inner) = inner.strip_suffix(')') else { return false };
         let (hsl_part, alpha_part) = inner.split_once('/').map_or((inner, None), |(a, b)| (a, Some(b)));
-        let alpha_str = match alpha_part {
+        let (parts, alpha_str) = match alpha_part {
             Some(a) => {
                 let parts: Vec<&str> = if hsl_part.contains(',') { hsl_part.split(',').collect() } else { hsl_part.split_whitespace().collect() };
-                if parts.len() != 3 {
-                    return false;
-                }
-                Some(a.trim())
+                (parts, a)
             }
             None => {
                 let parts: Vec<&str> = if inner.contains(',') { inner.split(',').collect() } else { inner.split_whitespace().collect() };
-                if parts.len() == 4 { Some(parts[3].trim()) } else { None }
+                if parts.len() == 4 {
+                    (parts[..3].to_vec(), parts[3])
+                } else {
+                    return false;
+                }
             }
         };
-        if let Some(a) = alpha_str {
-            if a == "0" || a == "0%" || a == "0.0" || a == "none" {
-                return true;
-            }
-            if let Ok(val) = a.strip_suffix('%').unwrap_or(a).trim().parse::<f32>() {
-                return val <= 0.0;
-            }
-        }
-        return false;
+        return parts.len() == 3
+            && is_valid_hue_component(parts[0])
+            && is_valid_rgb_component(parts[1])
+            && is_valid_rgb_component(parts[2])
+            && is_valid_zero_alpha(alpha_str);
     }
     false
 }

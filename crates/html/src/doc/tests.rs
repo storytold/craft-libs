@@ -1576,3 +1576,25 @@ fn code_block_export_preserves_foreground_color() {
     assert!(exported.contains("color:#FFFFFF"), "exported code inlines must keep foreground: {}", exported);
     assert!(exported.contains("const x = 1;"), "exported code text preserved: {}", exported);
 }
+
+#[test]
+fn background_comments_inside_functions() {
+    let html = r#"<div style="background:linear-gradient(/* stops */ #111111,#222222) #111111;color:white"><p>text</p></div>"#;
+    let doc = import(html);
+    let craft_wordmodel::Block::Para(p) = &*doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p.props.shading, Some(craft_wordmodel::Rgb(0x11, 0x11, 0x11)));
+    assert_eq!(p.runs[0].props.color, Some(craft_wordmodel::TextColor::Rgb(craft_wordmodel::Rgb(0xff, 0xff, 0xff))));
+}
+
+#[test]
+fn zero_alpha_colors_with_none_channels() {
+    let html = r#"<div style="background-color:red;background-color:rgb(none none none / 0)"><p>text</p></div>"#;
+    let doc = import(html);
+    let craft_wordmodel::Block::Para(p) = &*doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p.props.shading, None);
+
+    let html2 = r#"<div style="background:red;background:rgb(none none none / 0)"><p>text</p></div>"#;
+    let doc2 = import(html2);
+    let craft_wordmodel::Block::Para(p2) = &*doc2.body[0] else { panic!("expected Para") };
+    assert_eq!(p2.props.shading, None);
+}
