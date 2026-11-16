@@ -11,7 +11,7 @@ mod style;
 mod tools;
 mod words;
 
-use craft_behavior::geometry::{SelectionOperation, turn_to_45};
+use craft_behavior::geometry::{SelectionOperation, axis_or_diagonal};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{
     Axis, CanvasView, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape, PartKey, PartRef,
@@ -614,7 +614,8 @@ impl<'a> BezierOverlay<'a> {
     /// The edit of a press at `origin` dragged to `pointer`: the whole move from the press.
     fn edit(view: &CanvasView, snap: Option<&Snap>, tool: BezierTool, target: &Target, origin: Pos2, pointer: Pos2, mods: Mods) -> Option<PathEdit> {
         let delta = view.to_doc(pointer) - view.to_doc(origin);
-        let locked = |delta: Vec2| if mods.shift { turn_to_45(Point::ZERO, Point::ZERO + delta).to_vec2() } else { delta };
+        // ⇧ keeps an anchor move on the axis within the axis band and on the diagonal past it, as the Line tool does.
+        let locked = |delta: Vec2| if mods.shift { axis_or_diagonal(Point::ZERO, Point::ZERO + delta).to_vec2() } else { delta };
         let snapped = |p: Point| match snap {
             Some(snap) => Point::new(snap.apply(Axis::Y, p.x, mods), snap.apply(Axis::X, p.y, mods)),
             None => p,
