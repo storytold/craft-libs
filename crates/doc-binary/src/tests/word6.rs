@@ -1114,9 +1114,20 @@ fn sections_take_their_properties() {
     use craft_wordmodel::section::SectionStart;
     assert_eq!((s[0].start, s[0].landscape, s[0].page_w), (SectionStart::NextPage, false, 612.0));
     assert_eq!((s[1].start, s[1].landscape, s[1].page_w, s[1].page_h), (SectionStart::Continuous, true, 792.0, 612.0));
-    assert_eq!((s[2].start, s[2].columns.count), (SectionStart::OddPage, 3));
+    assert_eq!((s[2].start, s[2].columns.count, s[2].columns.space), (SectionStart::OddPage, 3, 18.0));
     assert_eq!((s[2].margin_left, s[2].margin_right, s[2].margin_top, s[2].margin_bottom), (144.0, 36.0, 108.0, 54.0));
     assert_eq!((s[2].header, s[2].footer), (54.0, 45.0));
+}
+
+#[test]
+fn the_final_section_is_the_one_reaching_the_end_of_the_text() {
+    // A malformed PlcfSed with a third section past the text: the second, which reaches the end
+    // of the text (CP 9), is the final one, and the third is ignored, as the paragraphs before
+    // it are given their sections.
+    let landscape: &[u8] = &[0xA2, 0x02, 0xA4, 0xE0, 0x3D, 0xA5, 0xD0, 0x2F];
+    let d = Doc6 { text: b"One\r\x0cTwo\r", sections: &[(5, &[]), (9, landscape), (14, &[])], ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    assert!(doc.last_section.landscape);
 }
 
 #[test]
@@ -1211,6 +1222,29 @@ fn footnotes_and_endnotes_are_read() {
 }
 
 #[test]
+fn a_comment_at_the_end_of_the_text_closes_in_the_last_paragraph() {
+    // A comment whose reference CP is the end of the main text (6, past its last paragraph
+    // mark): its start and end were queued there, and the walk stopped before emitting them.
+    // Both now close the last paragraph, as Word ends a range there.
+    use craft_wordmodel::para::InlineObject;
+    let mut atrd = vec![0u8; 20];
+    atrd[16..20].copy_from_slice(&[0xFF; 4]);
+    let d = Doc6 {
+        text: b"Alpha\r\x05 C\r\r",
+        stories: [0, 0, 0, 5, 0],
+        comments: (&[6, 7], &[0, 4, 5], &atrd),
+        owners: b"\x03Ann",
+        ..Default::default()
+    };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let p = first_para(&doc);
+    assert_eq!(p.text, "Alpha\u{FFFC}\u{FFFC}");
+    let ends: Vec<bool> = p.objects.iter().map(|o| matches!(o, InlineObject::CommentEnd { .. })).collect();
+    assert_eq!(ends, [false, true]);
+    assert_eq!(doc.body.len(), 1, "no paragraph of their own");
+}
+
+#[test]
 fn comments_are_read_and_anchored_at_their_references() {
     // As Word 95 writes two comments (`atn2`): 0x05 at each reference, the stories after the main
     // text in the comment subdocument (0x44), 20-byte ATRDs and 8-bit authors. Word reads Bob
@@ -1297,6 +1331,26 @@ fn picf6(goal: (i16, i16), scale: (u16, u16), crop: [i16; 4], body: &[u8]) -> Ve
     }
     p.extend_from_slice(body);
     p
+}
+
+#[test]
+fn a_metafile_spelling_a_bitmap_signature_stays_a_metafile_and_a_negative_crop_adds_to_the_size() {
+    // The WMF of `inline_pictures_are_read` with its SetWindowExt height 0x4D42: "BM" at offset
+    // 24, which the raster check took for a bitmap there and kept ten bytes of. Cropped -200 on
+    // the left (the picture extends outward) and 100 on the right of a 1000-twip goal at 100 %:
+    // 1100 twips, 55 pt, wide; the model's crop keeps only the right one.
+    let wmf: &[u8] = &[1, 0, 9, 0, 0, 3, 17, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0x0C, 0x02, 0x42, 0x4D, 0xE8, 0x03, 3, 0, 0, 0, 0, 0];
+    let mut text = b"A\x01\r\0".to_vec();
+    let first = TEXT_AT + text.len() as u32;
+    text.extend(picf6((1000, 600), (1000, 1000), [-200, 0, 100, 0], wmf));
+    let a = [&[0x75, 1, 0x44, 4][..], &first.to_le_bytes()].concat();
+    let runs: &[(u32, u32, &[u8])] = &[(0, 1, &[]), (1, 2, &a), (2, 3, &[])];
+    let doc = read(&word6_file(&Doc6 { text: &text, ccp: Some(3), runs, ..Default::default() })).expect("opens");
+    let [craft_wordmodel::para::InlineObject::Image { media, w, crop, .. }] = first_para(&doc).objects.as_slice() else { panic!("one image") };
+    assert_eq!(media.as_str(), "image1.wmf");
+    assert_eq!(doc.media.get("image1.wmf").map(|m| m.as_slice()), Some(wmf));
+    assert!((*w - 55.0).abs() < 1e-3, "{w}");
+    assert_eq!(*crop, [0.0, 0.0, 0.1, 0.0]);
 }
 
 #[test]
