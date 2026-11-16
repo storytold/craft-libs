@@ -38,7 +38,9 @@ const PICTURE: [usize; 2] = [240, 160];
 fn sheet(ui: &Ui, marks: bool) -> PrintSheet {
     let id = TextureCache::texture(ui.ctx(), "print-dialog-story", || ColorImage::filled(PICTURE, Color32::from_rgb(0x4a, 0x7f, 0xc1)));
     let picture = SizedTexture::new(id, Vec2::new(PICTURE[0] as f32, PICTURE[1] as f32));
+    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
     let image = Rect::from_min_size(pos2(72.0, 72.0), Vec2::new(468.0, 312.0));
+    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
     let sheet = PrintSheet::new(Vec2::new(612.0, 792.0), image, picture, "468 × 312 pt".into())
         .printable(Rect::from_min_size(pos2(18.0, 18.0), Vec2::new(576.0, 756.0)));
     if marks { sheet.marks(PrintMarks { corner_crop: true, registration: true, ..PrintMarks::default() }) } else { sheet }
@@ -47,7 +49,9 @@ fn sheet(ui: &Ui, marks: bool) -> PrintSheet {
 /// The sheet of the preview story: Letter paper, the image box centred over a sample photo.
 fn preview_sheet(ui: &Ui) -> PrintSheet {
     let id = TextureCache::texture(ui.ctx(), "print-preview-story", || sample_picture(1, [240, 320]));
+    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
     let image = Rect::from_center_size(pos2(306.0, 396.0), Vec2::new(360.0, 480.0));
+    // design: allow[literal-size/vec2](page and paper sizes are document points, story data)
     PrintSheet::new(Vec2::new(612.0, 792.0), image, SizedTexture::new(id, Vec2::new(240.0, 320.0)), "360 × 480 pt".into())
 }
 
