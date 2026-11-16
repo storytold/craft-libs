@@ -11,7 +11,8 @@ use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelSource, MouseWheelUnit, 
 
 pub use egui::RawInput;
 
-/// What the one-press rule needs between frames, for one viewport.
+/// The events that wait for the next frame, for one viewport: the one-press rule's and those the key stage cuts at a
+/// focus move (`keys::input_hook`).
 #[derive(Default)]
 pub(crate) struct HeldInput {
     events: Vec<Event>,
@@ -19,6 +20,13 @@ pub(crate) struct HeldInput {
 }
 
 impl HeldInput {
+    /// Holds `events`, which a later step of this pass's input hook cut, for the next frame, ahead of the events held
+    /// already: they arrived before them.
+    pub(crate) fn hold_ahead(&mut self, mut events: Vec<Event>) {
+        events.append(&mut self.events);
+        self.events = events;
+    }
+
     /// Whether events wait for the next frame.
     #[cfg(feature = "testing")]
     pub(crate) fn holds(&self) -> bool {

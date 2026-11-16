@@ -553,7 +553,10 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) {
     let held_back = PerViewport::<ViewportRecord>::with(ctx, viewport, |record| raw_input::hold_back_presses(input, frame, &mut record.held));
     // H3: the key stage strips what the runtime owns; egui decides on a repaint from the events left.
     ime::input_hook(ctx, &mut input.events, viewport);
-    let stripped = keys::input_hook(ctx, input);
+    let (stripped, later) = keys::input_hook(ctx, input);
+    if !later.is_empty() {
+        PerViewport::<ViewportRecord>::with(ctx, viewport, |record| record.held.hold_ahead(later));
+    }
     // H3b: a press outside the top menu family goes no further than the menu's dismissal.
     let absorbed = overlay::absorb_presses(ctx, input);
     // H4: release after an OS resize.

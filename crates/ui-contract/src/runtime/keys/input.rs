@@ -188,7 +188,8 @@ impl Strip<'_> {
         alt.down = held;
     }
 
-    fn press(&self, batch: &mut Batch, key: Key, input: &KeyInput, repeat: bool) -> bool {
+    /// What the key stage makes of a press of `key` with `input`.
+    fn use_of(&self, key: Key, input: &KeyInput) -> PressUse {
         let mods = input.mods;
         let claimed = self.claims.iter().find(|chord| self.layout.matches(chord, input, self.os));
         let ctrl_tab = key == Key::Tab && (if self.os == Os::Mac { mods.ctrl && !mods.cmd } else { mods.cmd });
@@ -211,54 +212,131 @@ impl Strip<'_> {
             .find(|(key, chord)| !matches!(key, WindowShortcut::Chrome(_)) && self.layout.matches(chord, input, self.os))
             .map(|(key, _)| *key);
         if let Some(chord) = claimed {
-            batch.claimed.push(*chord);
-            false
+            PressUse::Claimed(*chord)
         } else if let Some((command, _)) = edit {
-            batch.clips.push(*command);
-            false
+            PressUse::Edit(*command)
         } else if key == Key::Space && self.canvas_space {
-            // The canvas has Space (`runtime::sampler`): only the shortcut dispatcher reads it, so the dialog's
-            // focused control does not activate. Its shortcut follows the held rule: a space a text field types is
-            // the field's.
-            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true });
-            if !repeat {
-                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1) });
-            }
-            false
+            PressUse::CanvasSpace
         } else if (self.foreign && (bare_tab || escape)) || canvas_tab || canvas_edit {
-            // The app's own focused widget or popup, or the canvas with nothing focused, reads the key from egui; the
-            // runtime routes nothing for it, so no shortcut toggles the chrome or fires an edit command with it either.
-            true
+            PressUse::Egui
         } else if bare_tab && self.no_stops {
-            // egui moves its own focus with it, from nothing focused into the app's own widgets (`focus::begin`).
-            batch.nav.tab_to_egui = true;
-            true
+            PressUse::TabToEgui
         } else if bare_tab && !self.keeps_tab {
-            batch.tabs.push(TabPress { input: *input, repeat });
-            false
+            PressUse::Tab
         } else if ctrl_tab {
-            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
-            false
+            PressUse::CtrlTab
         } else if let Some(WindowShortcut::Pane { forward }) = window_shortcut {
-            batch.nav.panes.push(forward);
-            false
+            PressUse::Pane(forward)
         } else if escape {
-            batch.escapes += 1;
-            false
+            PressUse::Escape
         } else if window_shortcut == Some(WindowShortcut::MenuBar) && self.menu_bar {
-            batch.menu.push(MenuKey::Focus);
-            false
+            PressUse::MenuBar
         } else if mnemonic {
-            batch.menu.push(MenuKey::Letter(key.name().chars().next().unwrap_or('A')));
-            false
+            PressUse::Mnemonic(key.name().chars().next().unwrap_or('A'))
         } else {
-            batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
-            if !repeat {
-                batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1) });
-            }
-            true
+            PressUse::Press
         }
     }
+
+    fn press(&self, batch: &mut Batch, key: Key, input: &KeyInput, repeat: bool) -> bool {
+        let mods = input.mods;
+        match self.use_of(key, input) {
+            PressUse::Claimed(chord) => {
+                batch.claimed.push(chord);
+                false
+            }
+            PressUse::Edit(command) => {
+                batch.clips.push(command);
+                false
+            }
+            PressUse::CanvasSpace => {
+                // The canvas has Space (`runtime::sampler`): only the shortcut dispatcher reads it, so the dialog's
+                // focused control does not activate. Its shortcut follows the held rule: a space a text field types is
+                // the field's.
+                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: true });
+                if !repeat {
+                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1) });
+                }
+                false
+            }
+            // The app's own focused widget or popup, or the canvas with nothing focused, reads the key from egui; the
+            // runtime routes nothing for it, so no shortcut toggles the chrome or fires an edit command with it either.
+            PressUse::Egui => true,
+            PressUse::TabToEgui => {
+                // egui moves its own focus with it, from nothing focused into the app's own widgets (`focus::begin`).
+                batch.nav.tab_to_egui = true;
+                true
+            }
+            PressUse::Tab => {
+                batch.tabs.push(TabPress { input: *input, repeat });
+                false
+            }
+            PressUse::CtrlTab => {
+                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
+                false
+            }
+            PressUse::Pane(forward) => {
+                batch.nav.panes.push(forward);
+                false
+            }
+            PressUse::Escape => {
+                batch.escapes += 1;
+                false
+            }
+            PressUse::MenuBar => {
+                batch.menu.push(MenuKey::Focus);
+                false
+            }
+            PressUse::Mnemonic(letter) => {
+                batch.menu.push(MenuKey::Letter(letter));
+                false
+            }
+            PressUse::Press => {
+                batch.presses.push(Press { key, mods, repeat, in_egui: None, release: None, text: None, canvas: false });
+                if !repeat {
+                    batch.shortcuts.push(Shortcut { input: *input, phase: FirePhase::Press, press: Some(batch.presses.len() - 1) });
+                }
+                true
+            }
+        }
+    }
+
+    /// Whether `event` ends the pass's key events: a press that moves focus in the begin hook (Tab, a pane key) after
+    /// key input of this pass, which the focused component reads in the pass. The begin hook moves focus before any
+    /// component runs, so the press and every event after it wait for the next frame (`HeldInput`): the component
+    /// reads what came before the move, and the move and what follows it apply in the order they arrived.
+    fn ends_pass(&self, batch: &Batch, event: &KeyEvent) -> bool {
+        let KeyEvent::Press { key, input, .. } = event else { return false };
+        let typed = !batch.texts.is_empty() || !batch.presses.is_empty() || !batch.clips.is_empty() || !batch.claimed.is_empty() || batch.escapes > 0;
+        typed && matches!(self.use_of(*key, input), PressUse::Tab | PressUse::Pane(_))
+    }
+}
+
+/// What the key stage makes of one press (`Strip::use_of`).
+enum PressUse {
+    /// The focused component or a capture claims the chord.
+    Claimed(Chord),
+    /// The chord of an edit command the focused component lists.
+    Edit(EditCommand),
+    /// The Space of the canvas a dialog keeps open.
+    CanvasSpace,
+    /// The app's own widget or popup, or the canvas with nothing focused, reads the key from egui.
+    Egui,
+    /// A bare Tab egui moves its own focus with.
+    TabToEgui,
+    /// A bare Tab: a focus move or a chrome toggle, which `take_nav` decides.
+    Tab,
+    /// The page switch of the focused stop.
+    CtrlTab,
+    /// A pane move, forward when `true`.
+    Pane(bool),
+    Escape,
+    /// The window's key that focuses the menu bar.
+    MenuBar,
+    /// Alt and a letter: the menu bar's mnemonic.
+    Mnemonic(char),
+    /// Any other press: routing and the shortcut dispatcher read it.
+    Press,
 }
 
 /// The chords the focused component of `record` claims: its stop's, its state-dependent ones (`keys::claim`), and a
@@ -303,8 +381,9 @@ pub(super) fn chrome_toggle_of(ctx: &Context, input: &KeyInput) -> Option<Chrome
 }
 
 /// The input hook's key steps (H3). Reads only `RawInput` and records keyed by `input.viewport_id`. Returns
-/// whether it removed an event, so the hook asks for a repaint.
-pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
+/// whether it removed an event, so the hook asks for a repaint, and the events that wait for the next frame
+/// (`Strip::ends_pass`), in order.
+pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> (bool, Vec<egui::Event>) {
     let viewport = input.viewport_id;
     // The canvas a modal layer keeps open takes the events its reach admits and nothing else (`runtime::sampler`).
     let (hole, trimmed) = sampler::hook(ctx, input);
@@ -316,7 +395,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
             overlay::note_dropped_press(ctx, viewport);
         }
         with(ctx, viewport, |stage| stage.keyed = false);
-        return removed || trimmed;
+        return (removed || trimmed, Vec::new());
     }
     let os = crate::runtime::windows::os_of(ctx);
     let record = focus::record(ctx, viewport);
@@ -329,7 +408,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     let window_shortcuts = commands::window_shortcuts(ctx);
     let no_stops = keys.is_none() && !record.foreign && focus::tab_from_nothing(ctx, viewport);
     let latin = input.latin_layout_chars.clone();
-    let (batch, visible) = with(ctx, viewport, |stage| {
+    let (batch, visible, later) = with(ctx, viewport, |stage| {
         let mut claims = focused_claims(&record, stage);
         claims.extend(stage.captures.iter().map(|(_, chord)| *chord));
         let edits = |command| keys.is_some_and(|keys| keys.edits.contains(command));
@@ -354,9 +433,14 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
         };
         let mut batch = Batch::default();
         let mut visible = None;
+        let mut later = Vec::new();
         stage.keyed = false;
         input.events.retain(|event| {
             let read = raw_input::key_event(event, os, &latin);
+            if !later.is_empty() || strip.ends_pass(&batch, &read) {
+                later.push(event.clone());
+                return false;
+            }
             note_down(&mut stage.down, &read);
             stage.keyed |= matches!(read, KeyEvent::Press { .. } | KeyEvent::Text(_) | KeyEvent::Clip { .. });
             visible = match &read {
@@ -369,7 +453,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
         for (physical, mods, text) in std::mem::take(&mut batch.learned) {
             stage.layout.observe(physical, mods, &text);
         }
-        (batch, visible)
+        (batch, visible, later)
     });
     if let Some(visible) = visible {
         focus::set_visible(ctx, viewport, visible);
@@ -380,7 +464,7 @@ pub(crate) fn input_hook(ctx: &Context, input: &mut RawInput) -> bool {
     with(ctx, viewport, |stage| {
         stage.batch = batch;
     });
-    trimmed || input.events.len() != before
+    (trimmed || input.events.len() != before, later)
 }
 
 /// Updates the keys held after `event`: a press adds its key, a release removes it, and the window losing focus
