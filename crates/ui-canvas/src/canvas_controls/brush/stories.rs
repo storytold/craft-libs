@@ -17,8 +17,7 @@ use crate::testing::{Drive, StoryData, StoryOutput, story};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{CancelReason, CanvasView, Cursor, PaintedCursor, PointerButton};
 use craft_keymap::Mods;
-use egui::{Id, Rect, Ui};
-use std::sync::{Arc, Mutex, PoisonError};
+use egui::{Rect, Ui};
 
 /// The zoom, in percent of one device pixel per document pixel.
 const ZOOM: f64 = 400.0;
@@ -66,25 +65,24 @@ fn stamped(y: f64) -> CoverageMask {
 }
 
 /// The footprint of one tone. The mask is kept across passes (stamped once), so the trail uploads only what changed.
-fn footprint_of(ui: &mut Ui, name: &'static str, label: &'static str, tone: TrailTone, y: f64) -> StoryOutput {
-    let kept = ui.data_mut(|data| data.get_temp_mut_or_insert_with(Id::unique(("footprint", name)), || Arc::new(Mutex::new(stamped(y)))).clone());
-    let mut mask = kept.lock().unwrap_or_else(PoisonError::into_inner);
-    on_canvas_view(ui, brush_view, Some(&StoryDocument::STANDARD), |ui, rect, _| StrokeTrail::new(label, &mut mask).tone(tone).show_at(ui, rect))
+fn footprint_of(ui: &mut Ui, data: &mut StoryData, label: &'static str, tone: TrailTone, y: f64) -> StoryOutput {
+    let mask = data.note::<Option<CoverageMask>>("footprint", None).get_or_insert_with(|| stamped(y));
+    on_canvas_view(ui, brush_view, Some(&StoryDocument::STANDARD), |ui, rect, _| StrokeTrail::new(label, mask).tone(tone).show_at(ui, rect))
 }
 
 #[story(StrokeTrail<'static>, covers = [Default])]
-fn footprint_light(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    footprint_of(ui, "light", "Light footprint", TrailTone::Light, 100.0)
+fn footprint_light(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    footprint_of(ui, data, "Light footprint", TrailTone::Light, 100.0)
 }
 
 #[story(StrokeTrail<'static>, covers = [Default])]
-fn footprint_shade(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    footprint_of(ui, "shade", "Shade footprint", TrailTone::Shade, 100.0)
+fn footprint_shade(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    footprint_of(ui, data, "Shade footprint", TrailTone::Shade, 100.0)
 }
 
 #[story(StrokeTrail<'static>, covers = [Default])]
-fn footprint_danger(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
-    footprint_of(ui, "danger", "Danger footprint", TrailTone::Danger, 100.0)
+fn footprint_danger(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
+    footprint_of(ui, data, "Danger footprint", TrailTone::Danger, 100.0)
 }
 
 #[story(SourceMarker, covers = [Default])]

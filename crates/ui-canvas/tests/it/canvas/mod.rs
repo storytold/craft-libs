@@ -14,6 +14,8 @@ mod pasteboard;
 
 mod raster;
 
+mod rulers;
+
 mod scrollbars;
 
 mod snap;

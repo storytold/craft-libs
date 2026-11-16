@@ -12,6 +12,7 @@ mod icon;
 mod ime_surface;
 mod kit;
 mod marker;
+mod paint_slot;
 pub(crate) mod pointer_art;
 mod record;
 mod reset_mark;
@@ -43,6 +44,7 @@ pub use kit::{
     fill_polygon, grid_lines, grid_lines_with, marching_ants, outline, ramp, ticks,
 };
 pub use marker::{Marker, MarkerSize};
+pub use paint_slot::PaintSlot;
 pub use reset_mark::ResetMark;
 pub use rule::{RectSide, Rule, RuleKind};
 pub use scroll_bar::{HiddenContent, ScrollBar};

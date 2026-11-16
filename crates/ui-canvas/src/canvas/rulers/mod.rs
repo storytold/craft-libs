@@ -6,9 +6,8 @@
 mod stories;
 mod ticks;
 
-pub use ticks::{INCH_EIGHTHS, INCH_SIXTEENTHS, RulerTick, StepLadder, TickRule};
+pub use ticks::{INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerTick, StepLadder, TickRule};
 
-pub(crate) use self::ticks::LABEL_STEP_MIN;
 use super::words::CanvasWords;
 use super::{CanvasRulers, CanvasSpace, GuideDrag, RulerText, Snap, canvas_snap, canvas_space, context_menu, readout};
 use crate::contract::overlay::Anchor;

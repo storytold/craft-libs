@@ -57,7 +57,6 @@ pub use raster::{DetailPlan, Extent, RasterDisplay, RasterDisplayOutput, RasterS
 mod opacity_keys;
 mod snap;
 pub use opacity_keys::OpacityDigit;
-pub(crate) use rulers::LABEL_STEP_MIN;
 pub use rulers::{NUDGE, NUDGE_FAR};
 pub use snap::{GestureSnap, Snap, canvas_snap, snap_suspended, snap_tolerance};
 pub(crate) use space::context_menu;
@@ -81,7 +80,7 @@ pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag, easing_view};
 
 mod rulers;
 mod scrollbars;
-pub use rulers::{INCH_EIGHTHS, INCH_SIXTEENTHS, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers, RulersOutput, StepLadder, TickRule};
+pub use rulers::{INCH_EIGHTHS, INCH_SIXTEENTHS, LABEL_STEP_MIN, RulerCommands, RulerMargins, RulerPart, RulerTick, Rulers, RulersOutput, StepLadder, TickRule};
 pub use scrollbars::{CanvasScrollbars, CanvasScrollbarsOutput};
 
 // canvas-navigator-a
@@ -113,7 +112,7 @@ use craft_behavior::{
     CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, Intent, Metrics, Mixed, PartKey, PointerButton, PressPhase, PressState, Sense,
     WheelNotch,
 };
-use egui::{Pos2, Rect, Response, Shape, Vec2};
+use egui::{Pos2, Rect, Response, Vec2};
 use zoom_motion::{Steer, ViewMotion};
 
 pub(crate) const BACKGROUND: PartKey = PartKey::new("background");
@@ -203,7 +202,7 @@ pub struct Canvas<'a> {
     #[prop(name = "view_follows_pointer")]
     follows_pointer: bool,
     /// The slot the body's paint reserved for the picture, published in the [`CanvasSpace`]; none in a measuring pass.
-    picture: Option<space::PictureSlot>,
+    picture: Option<crate::primitives::PaintSlot>,
 }
 
 /// A canvas's view in one pass.
@@ -549,10 +548,8 @@ impl Component for Canvas<'_> {
     }
 
     /// Reserves the slot the picture paints into, under every canvas control of the body (`CanvasSpace::paint_picture`).
-    fn paint(&mut self, _ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
-        let layer = cx.response.layer_id;
-        let idx = cx.core.ctx.graphics_mut(|graphics| graphics.entry(layer).add(cx.content_rect, Shape::Noop));
-        self.picture = Some(space::PictureSlot { layer, idx });
+    fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
+        self.picture = Some(ui.reserve_slot(cx.content_rect));
     }
 
     /// The view of this pass, kept for the body and `finish`.
