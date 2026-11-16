@@ -44,7 +44,7 @@ stroke_drawings = [
     "mark-out", "marquee-column", "marquee-row", "overwrite-clip", "padding-bottom", "padding-left", "padding-right",
     "padding-top", "painting-symmetry", "pen-add-anchor",
     "pen-curvature", "pen-delete-anchor", "pen-freeform", "protractor", "quick-selection", "route-curved", "route-elbow",
-    "route-straight", "shear-horizontal", "stroke-align-center",
+    "route-straight", "skew-horizontal", "skew-vertical", "stroke-align-center",
     "stroke-align-inside", "stroke-align-outside", "stroke-cap-butt",
     "stroke-cap-round", "stroke-cap-square", "stroke-join-bevel", "stroke-join-miter", "stroke-join-round",
     "symmetry-diagonal", "symmetry-dual", "symmetry-horizontal", "symmetry-vertical", "sync-lock",
@@ -592,13 +592,16 @@ phosphor = "arrows-down-up"
 carbon = "arrows--vertical"
 tabler = "arrows-down-up"
 
-# The transform panels' flip, scale and shear glyphs. Each name is the axis the change runs along:
+# The transform panels' flip, scale and skew glyphs. Each name is the axis the change runs along:
 # `flip_horizontal` mirrors left and right, so the axis it mirrors about is the vertical one the drawing shows.
-# The `symmetry_*` names read the other way round, naming the line the drawing shows. Phosphor 2.0.8 draws no
-# flip and no skew, so the base set draws those (ATTRIBUTION.md); its `arrows-out-line-horizontal` and
-# `-vertical` are the axis-of-scale marks, and Lucide and Tabler draw the same flips, Tabler the same skew.
-# `shear_horizontal` is horizontal skew. These entries add drawings to the catalogue; they do not change the
-# existing transform controls, which expose horizontal and vertical skew separately.
+# The `symmetry_*` names read the other way round, naming the line the drawing shows; `skew_horizontal` and
+# `skew_vertical` are the skew along x and along y. None of these is directional: a side or an axis of the
+# screen stays where it is under right-to-left. Lucide and Tabler draw the flips, Tabler draws the skew pair and
+# the two axes of scale (its `arrow-autofit-width` and `-height`: a box whose width or height is spanned by
+# outward arrows), and Phosphor's `arrows-out-line-horizontal` and `-vertical` are the base set's marks for the
+# axis of scale; Phosphor draws no flip and no skew, so the base set draws those (ATTRIBUTION.md). Tabler's file
+# names read the other way round: its `skew-y` leans the sides and so draws the horizontal skew, and its `skew-x`
+# leans the top and bottom and draws the vertical one.
 
 [[icon]]
 name = "flip_horizontal"
@@ -618,16 +621,24 @@ tabler = "flip-vertical"
 name = "scale_horizontal"
 directional = false
 phosphor = "arrows-out-line-horizontal"
+tabler = "arrow-autofit-width"
 
 [[icon]]
 name = "scale_vertical"
 directional = false
 phosphor = "arrows-out-line-vertical"
+tabler = "arrow-autofit-height"
 
 [[icon]]
-name = "shear_horizontal"
+name = "skew_horizontal"
 directional = false
-phosphor = "shear-horizontal"
+phosphor = "skew-horizontal"
+tabler = "skew-y"
+
+[[icon]]
+name = "skew_vertical"
+directional = false
+phosphor = "skew-vertical"
 tabler = "skew-x"
 
 [[icon]]
@@ -805,8 +816,9 @@ directional = false
 phosphor = "distribute-vertical"
 
 # The layout panels' spacing glyphs: a frame with the space on one side, and the gap between two items. Each gap
-# name is the axis the gap runs along, as the flip, scale and shear names are. Phosphor 2.0.8 draws neither, so
-# the base set draws its own (ATTRIBUTION.md); Lucide's `gap-horizontal` and `gap-vertical` and Tabler's
+# name is the axis the gap runs along, as the flip, scale and skew names are, and none of them mirrors under
+# right-to-left: a side of the screen stays that side. Phosphor 2.0.8 draws neither a padding nor a gap, so the
+# base set draws its own (ATTRIBUTION.md); Lucide's `gap-horizontal` and `gap-vertical` and Tabler's
 # `spacing-horizontal` and `spacing-vertical` are the same meanings.
 
 [[icon]]

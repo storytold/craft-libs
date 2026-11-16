@@ -12,7 +12,6 @@ mod drag;
 mod egui_surface;
 mod fonts;
 mod icon_ids;
-mod icons;
 mod keys_consumed;
 mod layout;
 mod motion;
