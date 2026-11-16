@@ -1,17 +1,18 @@
-//! `HexField`: a text field over a colour's hex digits behind a fixed `#`, and `HexCodec`, the codec behind it.
+//! `HexField`: a text field over a colour's hex digits, the `#` side label its row shows before it, and `HexCodec`,
+//! the codec behind it.
 
 #[cfg(feature = "testing")]
 mod stories;
 
 use super::TextField;
-use crate::contract::Bind;
+use crate::contract::{Bind, GlyphLabel, LabelKind, SideLabel};
 use crate::runtime::env::Label;
 use craft_behavior::{Caret, Codec, NotAValue};
 use craft_i18n::Word;
 use craft_theme::Rgba;
 use std::borrow::Cow;
 
-/// A colour's hexadecimal digits, uppercase and without the `#`, which the field shows before them: `RRGGBB`, or
+/// A colour's hexadecimal digits, uppercase and without the `#`, which the field's row shows before them: `RRGGBB`, or
 /// `RGB` with one digit per channel, each channel on its nearest doubled digit (a web colour). With `alpha` the
 /// alpha digits follow (`RRGGBBAA`, `RGBA`).
 ///
@@ -110,12 +111,17 @@ pub type HexField<'a> = TextField<'a, HexCodec>;
 const NOT_HEX: Word = Word::keyed("hexField.unparsed", "Not a hex color");
 
 impl<'a> TextField<'a, HexCodec> {
-    /// A hex field named `label` that shows and edits `value`: monospace digits behind a fixed `#`. A draft that is no
-    /// colour says so ("Not a hex color", `TextField::unparsed`).
+    /// A hex field named `label` that shows and edits `value` as monospace digits. A draft that is no colour says so
+    /// ("Not a hex color", `TextField::unparsed`). Its row names the digits with [`hash_label`](Self::hash_label).
     pub fn hex(label: impl Into<Label>, value: Bind<'a, Rgba>) -> Self {
-        let mut field = TextField::with_codec(label, value, HexCodec::default()).mono().prefix("#").unparsed(NOT_HEX);
+        let mut field = TextField::with_codec(label, value, HexCodec::default()).mono().unparsed(NOT_HEX);
         field.empty = Some(Rgba::rgb(0, 0, 0));
         field
+    }
+
+    /// The `#` before a hex field: the glyph side label of the `Field` that holds it, in every place a hex field shows.
+    pub fn hash_label() -> SideLabel {
+        SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text("#")))
     }
 
     /// Digits per channel: 2 (`RRGGBB`, the default) or 1 (`RGB`, a web colour).

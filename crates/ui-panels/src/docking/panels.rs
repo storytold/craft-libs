@@ -28,14 +28,17 @@ pub trait DockPanels<P> {
         Permissions::ALL
     }
 
-    /// Shows `panel`'s body in `ui`.
+    /// Shows `panel`'s body in `ui`: the group's body, inset from its edges by the panel padding. The group is the
+    /// body's panel and its tab the body's title, so the body shows no framework `Panel` or padding of its own; content
+    /// taller than the group scrolls in the body's own scrolling container. A document panel's body
+    /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge.
     fn body(&mut self, panel: &P, ui: &mut Ui, cx: &mut BodyCx<'_>);
 
     /// Takes the group holding `panels`, whose tab `active` is selected, in place of its tab strip and body: at
-    /// `GroupAt::Show(rect)` it shows its view in `rect`, at `GroupAt::Measure(width)` it measures that view at `width`
-    /// the way it shows it, and it returns the height the view takes (at `Show`, the rect's). `None` (the default)
-    /// leaves the group to the dock, at both. A canvas group uses the panels to tell which document it holds and draws
-    /// it at the group's rect.
+    /// `GroupAt::Show(rect)` it shows its view in `ui`, which the dock holds to `rect` and clips to it; at
+    /// `GroupAt::Measure(width)` it measures that view at `width` the way it shows it. It returns the height the view
+    /// takes (at `Show`, the rect's). `None` (the default) leaves the group to the dock, at both. A canvas group uses
+    /// the panels to tell which document it holds and draws it in the room `ui` has.
     fn group_view(&mut self, _panels: &[P], _active: usize, _ui: &mut Ui, _at: GroupAt, _cx: &mut BodyCx<'_>) -> Option<f32> {
         None
     }

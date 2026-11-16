@@ -9,7 +9,7 @@ use craft_ui::contract::{Bind, GlyphLabel, LabelKind, Outcome, Pattern, Props as
 use craft_ui::form::Field;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::runtime::env::{Env, Label};
-use craft_ui::text::{NumberField, TextField};
+use craft_ui::text::{HexField, NumberField, TextField};
 use egui::{Response, Ui};
 
 /// The channels the fields edit, in field order.
@@ -97,7 +97,7 @@ impl Outcome for ColorReadoutOutput {
     }
 }
 
-/// A colour as a hex field (its digits behind the field's own "#") and three number fields (R, G, B, each 0 to 255,
+/// A colour as a hex field (its digits after a "#" side label) and three number fields (R, G, B, each 0 to 255,
 /// after their letters and as wide as their widest value), in one row that folds the R, G and B fields onto a second
 /// line where the row does not fit. An edit in any field
 /// reports the whole colour, with the other channels and the alpha as given. While the value is mixed, the hex field
@@ -143,7 +143,10 @@ impl<'a> ColorReadout<'a> {
             Row::new().wrap(true).show(ui, |ui, _| {
                 events.clear();
                 channel_edits.clear();
-                events.extend(TextField::hex(words.hex.as_str().to_owned(), Bind::given(held)).sizing(Sizing::Content).show(ui).events);
+                let hex = Field::new(words.hex.clone()).side(HexField::hash_label()).sizing(Sizing::Content);
+                if let Some(out) = hex.show(ui, |ui, _| TextField::hex(words.hex.as_str().to_owned(), Bind::given(held)).sizing(Sizing::Content).show(ui)).inner {
+                    events.extend(out.events);
+                }
                 Row::new().show(ui, |ui, _| {
                     let names = [&words.red, &words.green, &words.blue];
                     let channels = RgbModel.channels();

@@ -42,7 +42,7 @@ impl Adornment {
         Adornment { kind: Kind::Button(part, icon.into(), name) }
     }
 
-    /// Text in the field's line, in `role`: a unit after a number, a fixed `#` before hex digits. It takes the width of
+    /// Text in the field's line, in `role`, such as a unit after a number. It takes the width of
     /// its run, which the field measures with [`Adornment::measured`] before placing it, and sits against the text
     /// with no gap between them.
     pub fn text(label: impl Into<Label>, role: TypeRole) -> Adornment {

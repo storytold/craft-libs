@@ -7,7 +7,7 @@ use craft_behavior::{IconId, Selection, keyed};
 use craft_theme::variant::Tone;
 use craft_ui::bars::StatusMessage;
 use craft_ui::contract::{
-    ActivateOn, Bind, CollectionEvent, CommandSet, Commands as _, ListDrag, NoValue, Outcome, Props as _, Remember as _, SelectMode,
+    ActivateOn, Bind, CollectionEvent, CommandSet, Commands as _, ListDrag, NoValue, Outcome, Pad, Props as _, Remember as _, SelectMode,
     ShowCollection as _, ShowContainer as _,
 };
 use craft_ui::list::{List, ListRow, RowInk};
@@ -231,6 +231,7 @@ const START_ACTIONS: usize = 2;
 ///   else itself.
 /// - Footer: Clear Override and Redefine at the start edge; Style Options, Duplicate, New and Delete at the end edge,
 ///   each disabled while its condition doesn't hold. The panel menu ([`TextStylesPanel::panel_rows`]) has the same commands under the same conditions.
+/// - Padding: none of its own. The panel is a dock body, docked or floating, and the dock group insets it.
 #[must_use = "show the panel with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
 pub struct TextStylesPanel<'a> {
@@ -354,7 +355,7 @@ impl<'a> TextStylesPanel<'a> {
             }
         };
 
-        let shown = Panel::new(label.clone()).collection_body().command_scope(TextStyleCommand::SCOPE).footer(footer).show(ui, |ui, cx| {
+        let shown = Panel::new(label.clone()).pad(Pad::None).collection_body().command_scope(TextStyleCommand::SCOPE).footer(footer).show(ui, |ui, cx| {
             let before = cx.memory::<Facts>().clone();
             while let Some((command, _)) = cx.take_command::<TextStyleCommand>() {
                 if let Some(found) = before.action(command) {

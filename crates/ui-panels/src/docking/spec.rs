@@ -7,7 +7,8 @@ use craft_host::target::WindowKind;
 use egui::Vec2;
 
 /// Body heights a panel asks for in a dock column while the user has not resized its group. Like [`SizeLimits`]
-/// they exclude the tab strip, and a group takes the largest of each among its panels.
+/// they exclude the tab strip, and a group takes the largest of each among its panels. The dock picks the group that
+/// fills a column: its last open group.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct DockHeights {
@@ -15,8 +16,8 @@ pub struct DockHeights {
     pub default: f32,
     /// The height it gives way down to, so the group that fills the column keeps its `fill`.
     pub compact: f32,
-    /// The height it asks for when it fills the column: groups at their default shrink towards `compact` before it
-    /// gets less.
+    /// The height it asks for when it is the column's last open group, which fills the column: groups at their
+    /// default shrink towards `compact` before it gets less.
     pub fill: f32,
 }
 
@@ -60,8 +61,7 @@ pub struct PanelSpec {
     /// Body size limits.
     pub limits: SizeLimits,
     /// How the panel's group sizes itself in a dock column until the user resizes it. `None` shares the column's
-    /// free height with the other groups that have none when no group asks for a fill, and takes the group's
-    /// minimum when one does.
+    /// free height with the column's last open group, which fills it, and with the other groups that have none.
     pub heights: Option<DockHeights>,
     /// The size the panel floats at: its width and the most height it takes. `None`: the size of the group it floats
     /// out of, else `FloatSpace`'s default size.

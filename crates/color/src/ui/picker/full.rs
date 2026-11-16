@@ -13,7 +13,7 @@ use craft_ui::layout_components::{Grid, Row, Stack};
 use craft_ui::primitives::IconSpec;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::style::{ComponentStyle, StyleCx, TypeRole};
-use craft_ui::text::NumberField;
+use craft_ui::text::{HexField, NumberField};
 use egui::{Rect, Response, Ui, Vec2};
 
 use super::channel::{ChannelRule, ChannelUnit, channel_name};
@@ -261,8 +261,9 @@ impl<'a> Body<'a> {
                                 self.model_fields(ui, pass, *model, ModelChoice { visible, offered: &offered }, words, got);
                             }
                             if column == 0 {
-                                let label = SideLabel::new().kind(LabelKind::Glyph(GlyphLabel::text("#")));
-                                Field::new(words.hex.as_str().to_owned()).side(label).show(ui, |ui, _| self.hex_field(ui, pass, words, got));
+                                Field::new(words.hex.as_str().to_owned())
+                                    .side(HexField::hash_label())
+                                    .show(ui, |ui, _| self.hex_field(ui, pass, words, got));
                             }
                         });
                     }

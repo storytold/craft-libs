@@ -4,12 +4,12 @@
 use craft_behavior::Mixed;
 use craft_theme::ColorModel;
 use craft_ui::contract::{Bind, Entry, LabelScheme, Props as _, Show as _, ShowContainer as _};
-use craft_ui::form::FieldGroup;
+use craft_ui::form::{Field, FieldGroup};
 use craft_ui::layout_components::Row;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{self, FocusTarget};
-use craft_ui::text::TextField;
+use craft_ui::text::{HexField, TextField};
 use egui::Ui;
 
 use super::channel::{ChannelRow, ChannelRule, ChannelUnit, channel_name};
@@ -77,7 +77,7 @@ impl<'a> Body<'a> {
             }
         }
         Row::new().show(ui, |ui, _| {
-            self.hex_field(ui, pass, &words, got);
+            Field::new(words.hex.as_str().to_owned()).side(HexField::hash_label()).show(ui, |ui, _| self.hex_field(ui, pass, &words, got));
             self.sample_button(ui, &words, got);
         });
     }

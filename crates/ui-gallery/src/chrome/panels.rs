@@ -11,7 +11,7 @@ use craft_behavior::{Selection, keyed};
 use craft_theme::Explained;
 use craft_theme::report::ContrastReport;
 use craft_ui::buttons::IconButton;
-use craft_ui::contract::{Bind, CollectionEvent, Pad, Props as _, RowAlign, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
+use craft_ui::contract::{Bind, CollectionEvent, Props as _, RowAlign, Scroll, SelectMode, Show as _, ShowCollection as _, ShowContainer as _};
 use craft_ui::display::{Shade, Text};
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::list::{List, ListRow, OpenSet, RowEvent, TrailingFace, TrailingPart};
@@ -65,15 +65,10 @@ pub struct Panels<'a> {
     pub inspect: Inspect<'a>,
 }
 
-/// `add` in the panel's padding, scrolling vertically. The body may run more than once in a pass, so `add` is `FnMut`.
+/// `add` filling the panel's body and scrolling vertically; the dock group insets the body. The body may run more than
+/// once in a pass, so `add` is `FnMut`.
 fn scrolled(ui: &mut Ui, mut add: impl FnMut(&mut Ui)) {
-    Stack::new().fill().pad(Pad::Regular).scroll(Scroll::vertical()).show(ui, |ui, _| add(ui));
-}
-
-/// `add` in the panel's padding, for a body that is a collection or scrolls itself. Like `scrolled`, `add` may run more
-/// than once in a pass.
-fn padded(ui: &mut Ui, mut add: impl FnMut(&mut Ui)) {
-    Stack::new().fill().pad(Pad::Regular).show(ui, |ui, _| add(ui));
+    Stack::new().fill().scroll(Scroll::vertical()).show(ui, |ui, _| add(ui));
 }
 
 /// The tree row part that opens a component's tab.
@@ -162,7 +157,7 @@ impl Panels<'_> {
         let before = self.selected().map(|component| component.type_name);
         let mut opened = None;
         let (filter, selection, open) = (&mut *self.filter, &mut *self.selection, &mut *self.open);
-        Stack::new().fill().pad(Pad::Regular).show(ui, |ui, _| {
+        Stack::new().fill().show(ui, |ui, _| {
             TextField::search("Filter components", Bind::bound(&mut *filter)).placeholder("Filter components").show(ui);
             let listed = List::<TreeKey>::new("Components")
                 .select(SelectMode::Single)
@@ -218,7 +213,7 @@ impl Panels<'_> {
         let mut selection = Selection::default();
         selection.items.extend(shown);
         let before = selection.items.clone();
-        Stack::new().fill().pad(Pad::Regular).show(ui, |ui, _| {
+        Stack::new().fill().show(ui, |ui, _| {
             let source = keyed(&listed, |at| *at);
             List::<usize>::new("Stories")
                 .select(SelectMode::Single)
@@ -281,7 +276,7 @@ impl Panels<'_> {
     fn theme_panel(&mut self, ui: &mut Ui, mut body: impl FnMut(&mut Self, &mut Ui, &Arc<Explained>, &Arc<ContrastReport>)) {
         self.themes.refresh(&self.subject);
         let (Some(explained), Some(report)) = (self.themes.explained().cloned(), self.themes.report().cloned()) else { return };
-        padded(ui, |ui| body(self, ui, &explained, &report));
+        body(self, ui, &explained, &report);
     }
 
     fn problems(&mut self, ui: &mut Ui) {

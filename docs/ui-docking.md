@@ -54,8 +54,8 @@ The host implements `DockPanels<P>`:
 | --- | --- |
 | `spec` | The panel's `PanelSpec`, read every pass: label, icon, `SizeLimits`, `DockHeights`, float size, `allow_native`, `window_kind`, `canvas`. |
 | `permissions` | The panel's `Permissions` (default `ALL`). |
-| `body` | Shows the panel's body. |
-| `group_view` | Takes a whole group in place of its tab strip and body; a canvas group draws its document here. Default `None`. |
+| `body` | Shows the panel's body, filling the group's body inset by the panel padding (`Pad::Regular`). The group is the body's panel, so the body adds no `Panel` or padding of its own. A document panel's body (`WindowKind::Document`) is shown edge to edge. |
+| `group_view` | Takes a whole group in place of its tab strip and body, in a `Ui` held to the group's rect; a canvas group draws its document here. Default `None`. |
 | `group_header` | The host's controls in a group header, before the tab strip. |
 | `panel_rows` | The host's rows of a panel's menu, before the dock's own. |
 
@@ -98,6 +98,7 @@ The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords
 - A tab drag carries a `PanelDrag`; a group or column drag carries a `GroupDrag`. Groups and columns register `DockSpot`s in `DockTargets`, and `resolve_drop` maps the spot under the pointer to an `Action`.
 - Ctrl or Cmd held at the release floats the drop. A release over the dragged unit's own group leaves it where it is.
 - A drag ends without a change when another arrangement replaces the workspace it started on: it records the workspace's revision, which `Workspace::replace` and the `WorkspaceSet` switch and reset change. The dock's own edits keep the revision, so they keep the drag.
+- A dock column's last open group fills the column: it takes the height the other groups leave and asks for its `DockHeights::fill`. The other groups keep the height the user gave them, or take their `DockHeights::default`, which shrinks towards `compact` before the filling group gets less than its fill. Groups that ask for no heights share the free height with the filling group.
 - Split handles are Tab stops, and the arrow keys move them. A divider drag is one gesture in `DockAreaOutput::edit`.
 - A panel command (`DockCommands`) acts on the shown panel of the group that takes it. A menu row, a key and the command palette run the same code: `actions` turns the command into `Action`s.
 
@@ -115,7 +116,7 @@ The theme's docking sizes (`DockSizes`) set the drop bands and zones. `DockWords
 
 A floating window is a `Floating` in the layout: its `rect` in logical points in the app's viewport, and `native` and `monitor` while it is an OS window. `FloatingGroup` shows it. With `DockConfig::native_windows` (on by default), every floating window opens in its own OS window (`docking::native`) where the window host opens OS windows and reports where they are (`WindowHost::positions_reported`; not on Wayland); a window never shown native yet opens over its place in the main window. Elsewhere, and for a panel with `allow_native` off, the window stays inside the main window. The OS close of a native window is its Close action: the window closes when every panel in it may close. Dragging a native window by its title row moves the whole window and docks it where it is released over a group of the main window, as a floating window inside the main window does: the window host runs that move (`runtime::windows::keeps_app_drag`). On macOS the row's press hands the move to the OS, the app follows the system pointer and button (`Caps::OS_MOVES_TRACKED`), and a press that ends within the click distance is a click, which docks nothing; elsewhere the app moves the window, and Escape puts it back. The app sends an OS window its place only when the app changes it (an undo, a reloaded layout); the OS's own moves and resizes are recorded and never sent back. `window_kind` says whether an OS window is a document or a tool window. A tool window's title row is its only title bar, whatever frame the main window has (`craft_window::policy::tool_frame`).
 
-A panel or group floated out of the dock (a drag, the Float command, a tab torn out of the window) opens at the width it had docked and at the height its group measures at in a floating window's room (`Proposal::Size`), at most `size.float.height`: content that fills its body opens at that height, other content at its own. A column opens at its docked size, at most that height. The area measures once, where the float starts: for a drag in the pass it starts, which adds the size to the drag's payload (`runtime::drag::amend`). A panel's own `PanelSpec` float size wins, and a window that already floats keeps its size.
+A panel or group floated out of the dock (a drag, the Float command, a tab torn out of the window) opens at the width it had docked and at the height its group measures at in a floating window's room (`Proposal::Size`), at most `size.float.height`: a panel's body fills the group, so it opens at that height; a document's body opens at that height when its content fills it, else at its own. A column opens at its docked size, at most that height. The area measures once, where the float starts: for a drag in the pass it starts, which adds the size to the drag's payload (`runtime::drag::amend`). A panel's own `PanelSpec` float size wins, and a window that already floats keeps its size.
 
 ## SplitArea on its own
 

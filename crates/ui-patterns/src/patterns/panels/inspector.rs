@@ -1,7 +1,7 @@
 //! `Inspector` (24.4): the properties of one target in a `Panel`, with the target's icon, name and kind in the header.
 
 use super::words::PanelWords;
-use crate::contract::{BodyCx, LabelScheme, Props as _, Show as _, ShowContainer as _};
+use crate::contract::{BodyCx, LabelScheme, Pad, Props as _, Show as _, ShowContainer as _};
 use crate::notices::{Notice, NoticeLayout};
 use crate::primitives::IconSpec;
 use crate::runtime::env::{Env, Label};
@@ -21,6 +21,7 @@ mod stories;
 ///   a change of target.
 /// - No target: the body is replaced by a centred notice, `empty` or "No properties", and the header shows the label.
 /// - The body can hold a `SectionStack` for sections the user reorders.
+/// - Padding: none of its own. An inspector is a dock body, docked or floating, and the dock group insets it.
 #[derive(crate::contract::Pattern)]
 pub struct Inspector<'a> {
     label: Label,
@@ -93,7 +94,7 @@ impl<'a> Inspector<'a> {
         let Inspector { label, target, icon, name, kind, empty, actions, menu } = self;
         let shown = target.is_some();
         let title = if shown { name.unwrap_or(label) } else { label };
-        let mut panel = Panel::new(title).titled().actions(actions).labels(LabelScheme::Inspector);
+        let mut panel = Panel::new(title).titled().actions(actions).labels(LabelScheme::Inspector).pad(Pad::None);
         if shown {
             if let Some(icon) = icon {
                 panel = panel.icon(icon);
