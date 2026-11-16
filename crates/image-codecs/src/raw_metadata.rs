@@ -58,12 +58,45 @@ pub fn jpeg_xmp(xmp: &str) -> Result<Vec<u8>, CodecError> {
 }
 
 /// Restore bytes in the first existing JPEG EXIF payload when it has room. No segment is inserted.
+///
+/// The EXIF APP1 is found by walking the marker segments before the first scan, so an `Exif\0\0`
+/// inside another segment (a comment, say) is never taken for it, and the copy must fit inside
+/// the APP1's own declared length, not merely inside the file.
 pub fn replace_jpeg_exif(jpeg: &mut [u8], exif: &[u8]) {
-    if let Some(pos) = jpeg.windows(6).position(|w| w == b"Exif\0\0")
-        && let Some(end) = pos.checked_add(6).and_then(|v| v.checked_add(exif.len()))
-        && let Some(dst) = jpeg.get_mut(pos + 6..end)
+    if let Some(payload) = jpeg_exif_payload(jpeg)
+        && let Some(dst) = jpeg.get_mut(payload).and_then(|p| p.get_mut(..exif.len()))
     {
         dst.copy_from_slice(exif);
+    }
+}
+
+/// The byte range of the TIFF data in the first EXIF APP1 (after `Exif\0\0`), up to the end of
+/// that segment; `None` when the header segments end, are damaged, or hold no EXIF APP1.
+fn jpeg_exif_payload(jpeg: &[u8]) -> Option<std::ops::Range<usize>> {
+    if jpeg.get(..2) != Some(&[0xff, 0xd8][..]) {
+        return None;
+    }
+    let mut p = 2usize;
+    loop {
+        // fill bytes (0xff) may precede a marker
+        while jpeg.get(p) == Some(&0xff) && jpeg.get(p + 1) == Some(&0xff) {
+            p += 1;
+        }
+        let (&0xff, &marker) = (jpeg.get(p)?, jpeg.get(p + 1)?) else { return None };
+        match marker {
+            // TEM and RSTn carry no length
+            0x01 | 0xd0..=0xd7 => p += 2,
+            // start of scan, end of image: no header segment follows
+            0xda | 0xd9 | 0x00 => return None,
+            _ => {
+                let len = usize::from(u16::from_be_bytes([*jpeg.get(p + 2)?, *jpeg.get(p + 3)?]));
+                let end = p.checked_add(2)?.checked_add(len).filter(|&e| len >= 2 && e <= jpeg.len())?;
+                if marker == 0xe1 && jpeg.get(p + 4..end)?.starts_with(b"Exif\0\0") {
+                    return Some(p + 10..end);
+                }
+                p = end;
+            }
+        }
     }
 }
 
@@ -185,12 +218,21 @@ mod tests {
                     original[at] = value;
                     let mut shared = original.clone();
                     if format == Format::Jpeg {
+                        // the old byte search; the segment walk writes where it did or, when the
+                        // mutation broke the segment structure or the APP1 length, not at all
+                        let untouched = original.clone();
                         if let Some(pos) = original.windows(6).position(|w| w == b"Exif\0\0")
                             && let Some(dst) = original.get_mut(pos + 6..pos + 6 + EXIF.len())
                         {
                             dst.copy_from_slice(EXIF);
                         }
                         replace_jpeg_exif(&mut shared, EXIF);
+                        assert!(shared == original || shared == untouched, "Jpeg: byte {at} value {value}");
+                        if at == 0 && value == 255 {
+                            // SOI kept: a real replacement
+                            assert_eq!(shared, original);
+                        }
+                        continue;
                     } else if format == Format::Png {
                         old_png(&mut original, EXIF);
                         replace_png_exif(&mut shared, EXIF).unwrap();
@@ -222,6 +264,47 @@ mod tests {
             assert_eq!(decoded.meta.exif.as_deref().map(crate::exif_orientation), Some(6), "{format:?}");
         }
     }
+    #[test]
+    fn jpeg_exif_is_found_by_segment_not_by_signature() {
+        fn segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+            [&[0xff, marker][..], &((payload.len() + 2) as u16).to_be_bytes(), payload].concat()
+        }
+        let tail = [0xff, 0xda, 0, 2, 0xff, 0xd9];
+        let exif_app1 = segment(0xe1, &[&b"Exif\0\0"[..], &[0; 26]].concat());
+        // a comment carrying the signature comes first: only the APP1 is rewritten
+        let comment = segment(0xfe, &[&b"Exif\0\0"[..], &[7; 40]].concat());
+        let mut jpeg = [&[0xff, 0xd8, 0xff][..], &comment, &exif_app1, &tail].concat();
+        let before = jpeg.clone();
+        replace_jpeg_exif(&mut jpeg, &[9; 26]);
+        let app1_data = 3 + comment.len() + 10;
+        assert_eq!(&jpeg[..app1_data], &before[..app1_data]);
+        assert_eq!(&jpeg[app1_data..app1_data + 26], &[9; 26]);
+        assert_eq!(&jpeg[app1_data + 26..], &before[app1_data + 26..]);
+        // no EXIF APP1, only the comment: nothing changes
+        let mut only_comment = [&[0xff, 0xd8][..], &comment, &tail].concat();
+        let before = only_comment.clone();
+        replace_jpeg_exif(&mut only_comment, &[9; 26]);
+        assert_eq!(only_comment, before);
+        // a replacement larger than the APP1 is refused even though the file continues
+        let mut small = [&[0xff, 0xd8][..], &exif_app1, &segment(0xe2, &[1; 64]), &tail].concat();
+        let before = small.clone();
+        replace_jpeg_exif(&mut small, &[9; 28]);
+        assert_eq!(small, before);
+        // markers without a length, damaged lengths, a scan before any APP1, and a non-JPEG
+        let mut tem = [&[0xff, 0xd8, 0xff, 0x01][..], &exif_app1, &tail].concat();
+        replace_jpeg_exif(&mut tem, &[9; 26]);
+        assert_eq!(&tem[14..40], &[9; 26]);
+        for broken in [vec![0xff, 0xd8, 0xff, 0xe1, 0, 1], vec![0xff, 0xd8, 0xff, 0xe1, 0xff, 0xff, 0], tail.to_vec(), vec![0xff, 0xd8, 0xff, 0xda]] {
+            let mut b = broken.clone();
+            replace_jpeg_exif(&mut b, &[9; 2]);
+            assert_eq!(b, broken);
+        }
+        let mut no_marker = [&[0xff, 0xd8, 0x12][..], &exif_app1].concat();
+        let before = no_marker.clone();
+        replace_jpeg_exif(&mut no_marker, &[9; 26]);
+        assert_eq!(no_marker, before);
+    }
+
     #[test]
     fn jpeg_segments_keep_order_and_enforce_limits() {
         let parts = jpeg_segments(JpegMetadata { exif: Some(EXIF), xmp: Some("<x/>"), icc: Some(&[1, 2]), ppi: Some(300) }).unwrap();
