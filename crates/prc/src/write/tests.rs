@@ -259,3 +259,46 @@ fn a_textured_material_carries_its_glow() {
     assert_eq!(r.textured, 1);
     assert_eq!(emissives(&r.prc), [[1.0, 0.0, 0.0]]);
 }
+
+/// A chain of `n` nodes, the last holding the pane.
+fn chain(n: usize) -> MeshScene {
+    let mut s = scene();
+    s.nodes = (0..n).map(|i| node("link", (i + 1 == n).then_some(0), if i + 1 < n { vec![i + 1] } else { vec![] })).collect();
+    s
+}
+
+/// The writer accepts no deeper nesting than this crate's reader walks, with
+/// one root or with the root the writer adds over several.
+#[test]
+fn the_deepest_accepted_chain_reads_back() {
+    for roots in [1, 2] {
+        let mut s = chain(MAX_NODE_DEPTH);
+        if roots == 2 {
+            s.nodes.push(node("bolt", Some(1), vec![]));
+            s.roots = vec![0, MAX_NODE_DEPTH];
+        }
+        let file = PrcFile::parse(&write_prc(&s).unwrap().prc).unwrap();
+        assert!(file.model_tree().is_ok(), "{roots} root(s)");
+        assert!(!file.placements().unwrap().is_empty());
+    }
+    assert_eq!(write_prc(&chain(MAX_NODE_DEPTH + 1)), Err(PrcWriteError::NotATree("nested too deeply")));
+}
+
+#[test]
+fn supplied_normals_are_stored_not_replaced() {
+    let mut s = scene();
+    let up = [[0.0, 0.0, 1.0], [0.0, 0.6, 0.8], [0.6, 0.0, 0.8]];
+    s.meshes[0].primitives[0].normals = up.to_vec();
+    let r = write_prc(&s).unwrap();
+    assert_eq!(r.flat_normals, 2, "only the bolt's primitives get flat normals");
+    let file = PrcFile::parse(&r.prc).unwrap();
+    let meshes: Vec<_> = file.file_structures.iter().flat_map(|fs| fs.tessellations().unwrap()).collect();
+    let supplied = |t: &&crate::Tessellation| matches!(t, crate::Tessellation::Mesh(m) if m.normals.len() == 3);
+    let Some(crate::Tessellation::Mesh(pane)) = meshes.iter().find(supplied) else { panic!("{meshes:?}") };
+    assert_eq!(pane.normals, up);
+    assert_eq!(pane.triangle_normals, [[0, 1, 2]]);
+    assert!(!pane.normals_recalculated);
+    let mut s = scene();
+    s.meshes[0].primitives[0].normals = vec![[0.0, 0.0, 1.0]];
+    assert!(matches!(write_prc(&s), Err(PrcWriteError::BadIndex { .. })), "one normal for three vertices");
+}

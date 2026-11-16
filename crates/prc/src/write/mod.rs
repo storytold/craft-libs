@@ -170,10 +170,10 @@ pub enum PrcWriteError {
         index: usize,
     },
     /// The nodes are not a forest (a node with two parents, a parented
-    /// root, or a nesting deeper than [`MAX_DEPTH`]).
+    /// root, or a nesting deeper than [`MAX_NODE_DEPTH`]).
     #[error("the node hierarchy is not a tree: {0}")]
     NotATree(&'static str),
-    /// A coordinate, normal, matrix entry, colour or the unit is NaN or
+    /// A coordinate, normal, matrix entry, colour (emissive too) or the unit is NaN or
     /// infinite, or the unit is not positive.
     #[error("the scene holds a non-finite or invalid number ({0})")]
     BadNumber(&'static str),
@@ -189,8 +189,10 @@ pub enum PrcWriteError {
     },
 }
 
-/// The deepest node nesting the writer accepts.
-pub const MAX_DEPTH: usize = 1024;
+/// The deepest node nesting the writer accepts, counting a root as 1: this
+/// crate's reader walks 64 levels below the root occurrence, and the writer
+/// may add a root of its own.
+pub const MAX_NODE_DEPTH: usize = 64;
 
 /// Write `scene` as a single-file-structure PRC stream.
 ///
@@ -275,11 +277,11 @@ fn ids(scene: &MeshScene) -> AllIds {
     let h = fnv.0;
     let (hi, lo) = ((h >> 32) as u32, h as u32);
     AllIds {
-        structure: UniqueId([hi, lo, 0x7064_6663, 1]),
+        structure: UniqueId([hi, lo, 0x6372_6166, 1]),
         container: container::Ids {
-            file: UniqueId([hi, lo, 0x7064_6663, 0]),
-            // "pdfc" "raft": who wrote the stream.
-            application: UniqueId([0x6366_6470, 0x7466_6172, 0, 1]),
+            file: UniqueId([hi, lo, 0x6372_6166, 0]),
+            // "craf" "tlib": who wrote the stream.
+            application: UniqueId([0x6661_7263, 0x6269_6c74, 0, 1]),
         },
     }
 }

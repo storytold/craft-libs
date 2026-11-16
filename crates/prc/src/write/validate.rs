@@ -2,7 +2,7 @@
 //! occurrence order, which meshes become parts, which primitives become
 //! tessellations.
 
-use super::{MAX_DEPTH, MeshScene, PrcWriteError, ScenePrimitive};
+use super::{MAX_NODE_DEPTH, MeshScene, PrcWriteError, ScenePrimitive};
 
 /// One `ProductOccurrence`: the node it is for (`None` for the synthetic
 /// root over several roots) and its sons as occurrence indices.
@@ -187,6 +187,7 @@ fn check_numbers(scene: &MeshScene) -> Result<(), PrcWriteError> {
         }
     }
     finite(scene.materials.iter().flat_map(|m| m.rgba), "colour")?;
+    finite(scene.materials.iter().flat_map(|m| m.emissive), "emissive colour")?;
     for p in scene.meshes.iter().flat_map(|m| &m.primitives) {
         finite(p.positions.iter().flatten().copied(), "position")?;
         finite(p.normals.iter().flatten().copied(), "normal")?;
@@ -196,7 +197,7 @@ fn check_numbers(scene: &MeshScene) -> Result<(), PrcWriteError> {
 }
 
 /// Every child and root names a node, no node has two parents, no root
-/// has one or is listed twice, and no chain is deeper than [`MAX_DEPTH`].
+/// has one or is listed twice, and no chain is deeper than [`MAX_NODE_DEPTH`].
 /// With one parent at most each and distinct parentless roots, what the
 /// roots reach has no cycle and holds each node once, so the occurrences
 /// number no more than the nodes.
@@ -224,7 +225,7 @@ fn check_forest(scene: &MeshScene) -> Result<(), PrcWriteError> {
     let mut stack: Vec<usize> = scene.roots.clone();
     while let Some(i) = stack.pop() {
         let d = depth.get(i).copied().unwrap_or(0).saturating_add(1);
-        if d > MAX_DEPTH {
+        if d > MAX_NODE_DEPTH {
             return Err(PrcWriteError::NotATree("nested too deeply"));
         }
         for &c in scene.nodes.get(i).map(|n| n.children.as_slice()).unwrap_or(&[]) {
@@ -238,7 +239,7 @@ fn check_forest(scene: &MeshScene) -> Result<(), PrcWriteError> {
 }
 
 /// Occurrences with every son before its father and the root last
-/// [WD 7.3.6: a son precedes the occurrence that uses it], under a
+/// [WD 7.3.6], under a
 /// synthetic root when there is not exactly one.
 fn occurrences(scene: &MeshScene) -> Result<Vec<Occ>, PrcWriteError> {
     let mut out = Vec::new();

@@ -40,5 +40,6 @@ pub use schema::Schema;
 pub use tess::{Tessellation, TriangleMesh, TriangleStyle};
 pub use tree::{EntityOverrides, MAX_PLACEMENTS, ModelNode, ModelUnits, NameSource, Placement, Rgba, StyleAlpha};
 pub use write::{
-    MAX_DEPTH, MeshScene, PrcWriteError, PrcWriteReport, SceneMaterial, SceneMesh, SceneNode, ScenePrimitive, SceneTexture, TextureWrap, write_prc,
+    MAX_NODE_DEPTH, MeshScene, PrcWriteError, PrcWriteReport, SceneMaterial, SceneMesh, SceneNode, ScenePrimitive, SceneTexture, TextureWrap,
+    write_prc,
 };

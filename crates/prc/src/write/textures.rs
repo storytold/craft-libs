@@ -183,6 +183,7 @@ fn material(w: &mut BitWriter, (m, mat): (usize, &SceneMaterial), emissive: u32,
 // Test code: a panic is the failure report.
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
+    use super::super::SceneTexture;
     use super::*;
 
     #[test]
@@ -204,5 +205,36 @@ mod tests {
         assert_eq!(picture_info(&empty), None, "a PNG no pixels wide");
         let flat = [0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 0, 0, 7];
         assert_eq!(picture_info(&flat), None, "a JPEG no lines high");
+    }
+
+    /// The written definition's components and S and T wraps.
+    fn definition(t: SceneTexture) -> (u8, [i32; 2]) {
+        let scene = MeshScene { textures: vec![t], ..MeshScene::default() };
+        let mut w = BitWriter::default();
+        definitions(&mut w, &scene, 7);
+        let bytes = w.finish().unwrap();
+        let mut r = crate::BitReader::new(&bytes);
+        // Count, type, base (no attributes, default name), no CAD id, no CAD persistent id, id.
+        assert_eq!([r.unsigned_integer().unwrap(), r.unsigned_integer().unwrap(), r.unsigned_integer().unwrap()], [1, TEXTURE_DEFINITION, 0]);
+        assert!(r.bit().unwrap());
+        assert_eq!([r.unsigned_integer().unwrap(), r.unsigned_integer().unwrap(), r.unsigned_integer().unwrap()], [0, 0, 7]);
+        // Picture, dimension, mapping, mapped attribute, intensities, one component set.
+        assert_eq!(r.unsigned_integer().unwrap(), 1);
+        assert_eq!(r.character().unwrap(), 2);
+        assert_eq!([r.integer().unwrap()], [MAPPING_STORED]);
+        r.unsigned_integer().unwrap();
+        assert_eq!([r.unsigned_integer().unwrap(), r.unsigned_integer().unwrap()], [0, 1]);
+        let components = r.character().unwrap();
+        // Function, the two blend sources, applying mode.
+        assert_eq!([r.integer().unwrap(), r.integer().unwrap(), r.integer().unwrap()], [FUNCTION_MODULATE, 0, 0]);
+        r.character().unwrap();
+        (components, [r.integer().unwrap(), r.integer().unwrap()])
+    }
+
+    #[test]
+    fn wraps_and_alpha_are_written() {
+        let t = SceneTexture { image: vec![], wrap: [TextureWrap::Clamp, TextureWrap::MirroredRepeat], alpha: true };
+        assert_eq!(definition(t), (COMPONENTS_RGBA, [4, 5]));
+        assert_eq!(definition(SceneTexture::default()), (COMPONENTS_RGB, [1, 1]));
     }
 }
