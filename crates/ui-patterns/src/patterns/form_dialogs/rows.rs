@@ -91,6 +91,8 @@ impl Outcome for ParamRowsOutput {
 ///   which the pass writes. The host keeps its own history of the values and its own Reset.
 /// - **Rows.** A row is shown while its `visible_when` holds and takes input while its `enabled_when` holds. A
 ///   [`Param::section`] opens a section whose body is the rows up to the next section.
+///   A range row is a slider and its number field beside the row's label, or stacked under the label
+///   ([`sliders`](ParamRows::sliders)).
 /// - **Requests.** A colour press, a Browse press and the eyedropper toggle come back in [`ParamRowsOutput`].
 /// - **Random.** The Random button of an int row draws from a sequence seeded by `seed`'s binding; without one the
 ///   sequence starts the same in every run.
@@ -107,12 +109,31 @@ pub struct ParamRows<'a> {
     canvas: Option<Id>,
     patterns: &'a [PresetRow<String>],
     preview_colors: &'a [(String, Srgba)],
+    sliders: SliderFieldLayout,
 }
 
 impl<'a> ParamRows<'a> {
     /// Rows for `params` over `fields`, the group named `label`.
     pub fn new(label: impl Into<Label>, params: &'a [Param], fields: Bind<'a, DialogFields>) -> Self {
-        ParamRows { label: label.into(), params, fields, seed: None, read_only: false, canvas: None, patterns: &[], preview_colors: &[] }
+        ParamRows {
+            label: label.into(),
+            params,
+            fields,
+            seed: None,
+            read_only: false,
+            canvas: None,
+            patterns: &[],
+            preview_colors: &[],
+            sliders: SliderFieldLayout::Inline,
+        }
+    }
+
+    /// How the range rows arrange their slider and number field: `Inline` (the default) puts them on one line beside
+    /// the row's label; `Stacked` puts the label and the number field on one line and the slider across the width
+    /// under them.
+    pub fn sliders(mut self, layout: SliderFieldLayout) -> Self {
+        self.sliders = layout;
+        self
     }
 
     /// The colours child pickers preview, by colour row key: each such row draws its colour for the pass in place of
@@ -150,13 +171,14 @@ impl<'a> ParamRows<'a> {
 
     /// Shows the rows across the width offered.
     pub fn show(self, ui: &mut Ui) -> ParamRowsOutput {
-        let ParamRows { label, params, mut fields, mut seed, read_only, canvas, patterns, preview_colors } = self;
+        let ParamRows { label, params, mut fields, mut seed, read_only, canvas, patterns, preview_colors, sliders } = self;
         let env = Env::of(ui);
         let words = env.words::<ParamWords>();
         let units = env.units();
         let name: Arc<str> = label.as_str().into();
         let mut pass = Pass::new(&words, &units, patterns, canvas);
         pass.previews = preview_colors;
+        pass.sliders = sliders;
         let mut changed = false;
         let mut values = None;
         let mut group = |ui: &mut Ui| {
@@ -239,6 +261,8 @@ struct Pass<'p> {
     canvas: Option<Id>,
     /// The colours shown in colour rows in place of their values (`ParamRows::preview_colors`).
     previews: &'p [(String, Srgba)],
+    /// How range rows arrange their slider and number field (`ParamRows::sliders`).
+    sliders: SliderFieldLayout,
 }
 
 /// A parameter as the pass shows it: its key, its label without the colon, and whether it takes input.
@@ -287,6 +311,7 @@ impl<'p> Pass<'p> {
             patterns,
             canvas,
             previews: &[],
+            sliders: SliderFieldLayout::Inline,
         }
     }
 
@@ -405,16 +430,24 @@ impl<'p> Pass<'p> {
         }
     }
 
+    /// A range row: inline beside its label in the row's field, or stacked under its own caption across the form.
     fn range(&mut self, ui: &mut Ui, line: &Line<'_>, range: RangeInclusive<f64>, scale: SliderScale) {
         let value = self.work.number(line.key).unwrap_or(*range.start());
         let places = line.param.option().range_places();
-        line.show(ui, |ui| {
-            let mut slider = SliderField::new(line.name.clone(), Bind::given(value), range.clone()).scale(scale).layout(SliderFieldLayout::Inline);
+        let layout = self.sliders;
+        let mut show = |ui: &mut Ui| {
+            let mut slider = SliderField::new(line.name.clone(), Bind::given(value), range.clone()).scale(scale).layout(layout);
             if let Some(places) = places {
                 slider = slider.step(10f64.powi(-(places as i32)));
             }
             if let Some(kind) = line.param.unit {
                 slider = slider.unit_kind(kind);
+            }
+            if layout == SliderFieldLayout::Stacked {
+                slider = slider.id_salt(line.key).enabled(line.enabled);
+                if let Some(tip) = line.param.tooltip_text() {
+                    slider = slider.tooltip(tip.clone());
+                }
             }
             let shown = slider.show(ui);
             let value = shown.value().cloned();
@@ -422,7 +455,11 @@ impl<'p> Pass<'p> {
             if let Some(v) = value {
                 self.work.set(line.key, rounded(v, places));
             }
-        });
+        };
+        match layout {
+            SliderFieldLayout::Stacked => show(ui),
+            _ => line.show(ui, show),
+        }
     }
 
     fn number(&mut self, ui: &mut Ui, line: &Line<'_>, range: Option<RangeInclusive<f64>>, step: f64, decimals: u32) {
