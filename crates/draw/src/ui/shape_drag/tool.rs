@@ -36,8 +36,8 @@ const OUTLINE_TOLERANCE: f32 = 0.25;
 /// - The options' [`BoxConstraints`](super::BoxConstraints) (the Rectangle tool's gear) keep a box drag square, at a
 ///   fixed size at the release, or at a ratio, and From Center draws from the press as the centre; with Square or
 ///   From Center on, ⇧ or ⌥ turns it off.
-/// - Space held moves the shape being drawn without resizing it: the press point moves with the
-///   pointer while Space is down, and the box snaps as a whole.
+/// - Space held moves the shape being drawn without resizing it: every move while Space is down, the first one
+///   included, moves the press point by the pointer's motion, and the box snaps as a whole.
 /// - Esc cancels (the host calls [`cancel`](CanvasTool::cancel)); so does a tool switch: `Cancel`
 ///   goes out when a drag had begun.
 ///
@@ -94,8 +94,6 @@ struct Drag {
     at: Point,
     /// Past the press slop: `Begin` went out.
     began: bool,
-    /// Whether Space was held in the last call.
-    space: bool,
     /// A radial star's inner radius held by Ctrl/Cmd.
     inner: Option<f64>,
     /// Sides or points as changed by ↑ and ↓ during this drag.
@@ -216,11 +214,10 @@ impl ShapeDragTool {
             self.drag = Some(drag);
             return;
         }
-        let space_held = cx.held(Key::Space);
-        if space_held && drag.space {
+        // pc: #13867 (the Frame tool: every move with Space held, the first included, moves the box by the motion).
+        if cx.held(Key::Space) {
             drag.start += at - drag.at;
         }
-        drag.space = space_held;
         drag.at = at;
         if !drag.began {
             if pos.distance(drag.press) < drag.click_slop {
@@ -291,7 +288,6 @@ impl CanvasTool for ShapeDragTool {
             start: origin,
             at: origin,
             began: false,
-            space: cx.held(Key::Space),
             inner: None,
             sides: options.sides.clamp(*SIDES.start(), *SIDES.end()),
             shape: None,

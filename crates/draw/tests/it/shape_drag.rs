@@ -245,6 +245,27 @@ fn a_shape_mode_rectangle_ends_a_click_within_one_point() {
     assert!(nudge(ShapeKind::Ellipse, VectorMode::Shape).clicked(), "other kinds keep the press slop");
 }
 
+/// Space held moves the box by the pointer's whole motion, the first move after Space went down included; released,
+/// the drag resizes again.
+#[trial]
+fn space_moves_the_box_by_the_full_motion() {
+    let mut shapes = Shapes::new(ShapeDragOptions::new(ShapeKind::Rectangle));
+    let corner = PRESS + Vec2::new(40.0, 30.0);
+    shapes.press(PRESS, Modifiers::NONE);
+    shapes.move_to(corner, Modifiers::NONE);
+    assert_eq!(shapes.proposed().map(|shape| shape.bounds()), Some(Rect::new(100.0, 100.0, 140.0, 130.0)));
+
+    shapes.space(true);
+    shapes.move_to(corner + Vec2::new(10.0, 5.0), Modifiers::NONE);
+    assert_eq!(shapes.proposed().map(|shape| shape.bounds()), Some(Rect::new(110.0, 105.0, 150.0, 135.0)), "the first move moves the box");
+
+    shapes.space(false);
+    let end = corner + Vec2::new(30.0, 25.0);
+    shapes.move_to(end, Modifiers::NONE);
+    shapes.release(end, Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(110.0, 105.0, 170.0, 155.0)), "without Space the drag resizes from the moved press");
+}
+
 #[trial]
 fn the_shape_tool_owes_the_canvas_what_every_tool_owes() {
     ToolFixture::with_view("Shape", tool(ShapeKind::Rectangle), room_view, |_, _| {}).check();
