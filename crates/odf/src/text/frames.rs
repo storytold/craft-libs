@@ -454,9 +454,36 @@ pub(crate) fn z_index(float: Option<&Float>, unset: u32) -> u32 {
 }
 
 /// The `draw:z-index` the objects of `doc` without a stored order take: past the highest stored
-/// one (a stored order is one more than its `draw:z-index`), 0 when none has one.
+/// one (a stored order is one more than its `draw:z-index`), 0 when none has one. A group's
+/// members are written with their own orders too, so theirs count as well as the floating
+/// objects' ([`craft_wordmodel::Document::stacking_orders`]).
 pub(crate) fn unset_z_index(doc: &craft_wordmodel::Document) -> u32 {
-    doc.stacking_orders().0.last().copied().unwrap_or(0)
+    use craft_wordmodel::para::{GroupChild, InlineObject};
+    fn members(children: &[GroupChild], depth: usize, top: &mut u32) {
+        for c in children {
+            if let Some((_, _, f)) = c.obj.frame() {
+                *top = (*top).max(f.z);
+            }
+            if let InlineObject::Group { children, .. } = &c.obj
+                && depth < craft_flow::MAX_GROUP_DEPTH
+            {
+                members(children, depth + 1, top);
+            }
+        }
+    }
+    let mut top = doc.stacking_orders().0.last().copied().unwrap_or(0);
+    for blocks in std::iter::once(&doc.body).chain(doc.parts.values().map(|p| &p.blocks)) {
+        for b in blocks {
+            craft_wordmodel::walk::each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    if let InlineObject::Group { children, .. } = o {
+                        members(children, 0, &mut top);
+                    }
+                }
+            });
+        }
+    }
+    top
 }
 
 /// How far a frame `h` points tall in line with the text is raised from standing on the

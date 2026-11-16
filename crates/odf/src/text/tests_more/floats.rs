@@ -397,6 +397,30 @@ fn an_object_made_here_is_written_above_the_stored_orders() {
     assert_eq!(z, ["3", "4"], "{content}");
 }
 
+/// A group's members are written with their own stacking orders, so a member without one (made
+/// in WordCraft) goes above a member's stored order too, not just above the floating objects'.
+#[test]
+fn an_object_made_here_is_written_above_the_group_members_stored_orders() {
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p><draw:g text:anchor-type="paragraph"><draw:rect svg:width="1in" svg:height="1in" svg:x="0in" svg:y="0in"/><draw:ellipse svg:width="1in" svg:height="1in" svg:x="1in" svg:y="0in"/></draw:g>Text beside.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&zip_of(&[("content.xml", content.as_bytes())])).unwrap();
+    // The group stored at the bottom, its first member stored above it, its second made here.
+    d.objects_mut(&|o| matches!(o, InlineObject::Group { .. }), &mut |o| {
+        let InlineObject::Group { float, children, .. } = o else { return };
+        float.z = 1;
+        let wrap = float.wrap;
+        for (c, z) in children.iter_mut().zip([4, 0]) {
+            if let Some(f) = c.obj.float_mut() {
+                (f.wrap, f.z) = (wrap, z);
+            }
+        }
+    });
+    let content = crate::text::tests::entry(&crate::text::tests::export_model(&d).unwrap(), "content.xml");
+    let z: Vec<&str> = content.split(r#"draw:z-index=""#).skip(1).filter_map(|s| s.split('"').next()).collect();
+    assert_eq!(z, ["0", "3", "4"], "the group's, the stored member's, the member made here above it: {content}");
+}
+
 #[test]
 fn a_frame_anchored_to_a_page_stays_on_that_page() {
     // LibreOffice's page-anchored frames name their page. Written without it, a frame on page 3
