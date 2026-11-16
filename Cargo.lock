@@ -1499,6 +1499,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-color"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+]
+
+[[package]]
 name = "craft-control"
 version = "0.1.0"
 dependencies = [
@@ -1923,6 +1931,16 @@ dependencies = [
  "proptest",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "craft-frame"
+version = "0.1.0"
+dependencies = [
+ "craft-color",
+ "craft-time",
+ "rayon",
+ "serde",
 ]
 
 [[package]]
