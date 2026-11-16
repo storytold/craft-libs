@@ -14,7 +14,7 @@ fn action(name: &str, commands: &[&str]) -> Action {
 }
 
 fn list_of(actions: Vec<Action>) -> ActionList {
-    ActionList::from_file(ActionsFile { version: ActionsFile::VERSION, actions, sets: Vec::new() })
+    ActionList::from_file(ActionsFile::new(actions, Vec::new()))
 }
 
 /// Runs every step by recording its command.
@@ -85,17 +85,67 @@ fn action_list_file_round_trip_keeps_pc_json() {
 #[trial]
 fn action_names_in_a_file_keep_their_own_names_and_rename_only_repeats() {
     let names = |list: &ActionList| list.actions.iter().map(|action| action.name.clone()).collect::<Vec<_>>();
-    let file = || ActionsFile {
-        version: ActionsFile::VERSION,
-        actions: vec![action("Foo", &[]), action("Foo", &[]), action("Foo 2", &[])],
-        sets: Vec::new(),
-    };
+    let file = || ActionsFile::new(vec![action("Foo", &[]), action("Foo", &[]), action("Foo 2", &[])], Vec::new());
     assert_eq!(names(&ActionList::from_file(file())), ["Foo", "Foo 3", "Foo 2"]);
 
     let mut list = list_of(vec![action("Foo", &[])]);
     let merged = list.merge_file(file(), false, |_, _| {});
     assert_eq!(names(&list), ["Foo", "Foo 3", "Foo 4", "Foo 2"]);
     assert_eq!(merged.renames, [("Foo".to_owned(), "Foo 3".to_owned()), ("Foo".to_owned(), "Foo 4".to_owned())]);
+}
+
+// A PhotoCraft file with folder occurrences: two folders named "Basics" and an empty one become
+// sets with unique names, the empty one an empty set; of two actions named "Play", the shortcut
+// owner keeps the name; each unique stored id maps to its action's final name, a repeated one to
+// none; and the occurrence fields are never written back.
+#[trial]
+fn action_file_folder_occurrences_become_unique_names() {
+    let text = r#"{"version":1,"set_rows":["Basics","Basics","Empty"],"actions":[
+        {"name":"Play","steps":[],"set":"Basics","set_slot":0,"action_id":"0123456789abcdef0123456789abcdef"},
+        {"name":"Play","steps":[],"set":"Basics","set_slot":1,"legacy_shortcut_owner":true},
+        {"name":"Loose","steps":[],"action_id":"ffffffffffffffffffffffffffffffff"},
+        {"name":"Twin","steps":[],"action_id":"ffffffffffffffffffffffffffffffff"}]}"#;
+    let (list, merged) = ActionList::load(ActionsFile::from_json(text).unwrap());
+    let names: Vec<(&str, Option<&str>)> = list.actions().iter().map(|action| (action.name.as_str(), action.set.as_deref())).collect();
+    assert_eq!(names, [("Play 2", Some("Basics")), ("Play", Some("Basics 2")), ("Loose", None), ("Twin", None)]);
+    assert_eq!(list.sets(), ["Basics", "Basics 2", "Empty"]);
+    assert_eq!(merged.ids, [("0123456789abcdef0123456789abcdef".to_owned(), "Play 2".to_owned())]);
+    let saved = list.to_file().to_json().unwrap();
+    assert!(["set_rows", "set_slot", "action_id", "legacy_shortcut_owner"].iter().all(|field| !saved.contains(field)));
+}
+
+// Clear All, Reset (append and replace) and Replace each keep one undo that restores the list as it
+// was, actions and empty sets alike; any other edit after them leaves nothing to undo.
+#[trial]
+fn action_library_commands_keep_one_undo() {
+    let mut list = list_of(vec![action("Invert Colors", &["image.invert"])]);
+    list.new_set("Empty").unwrap();
+    let before = (list.actions().to_vec(), list.sets().into_iter().map(str::to_owned).collect::<Vec<_>>());
+    let state = |list: &ActionList| (list.actions().to_vec(), list.sets().into_iter().map(str::to_owned).collect::<Vec<_>>());
+    let defaults = || ActionsFile::new(vec![Action { set: Some("Basics".into()), ..action("Invert Colors", &["image.invert"]) }], Vec::new());
+
+    list.clear_all();
+    assert!(list.actions().is_empty() && list.sets().is_empty());
+    assert_eq!(list.library_undo(), Some(LibraryEdit::ClearAll));
+    assert_eq!(list.undo_library(), Ok(LibraryEdit::ClearAll));
+    assert_eq!(state(&list), before);
+
+    list.reset(defaults(), true, |_, _| {});
+    let names: Vec<&str> = list.actions().iter().map(|action| action.name.as_str()).collect();
+    assert_eq!(names, ["Invert Colors", "Invert Colors 2"]);
+    assert_eq!(list.undo_library(), Ok(LibraryEdit::Reset));
+    assert_eq!(state(&list), before);
+
+    list.reset(defaults(), false, |_, _| {});
+    assert_eq!(list.sets(), ["Basics"]);
+    list.undo_library().unwrap();
+    assert_eq!(state(&list), before);
+
+    list.replace_all(ActionsFile::new(vec![action("Other", &[])], Vec::new()), |_, _| {});
+    assert_eq!(list.actions().len(), 1);
+    list.set_color(0, ActionColor::Red).unwrap();
+    assert_eq!(list.library_undo(), None);
+    assert_eq!(list.undo_library(), Err(ActionListError::NothingToUndo));
 }
 
 /// A runner whose steps are named by what they do: `pause`, `wait`, `stop`, `deny` (refused by the

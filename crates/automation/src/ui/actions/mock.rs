@@ -70,7 +70,7 @@ pub fn action(name: &str, set: Option<&str>, commands: &[&str]) -> Action {
 
 /// The list of `actions`.
 pub fn list_of(actions: Vec<Action>) -> ActionList {
-    ActionList::from_file(ActionsFile { version: ActionsFile::VERSION, actions, sets: Vec::new() })
+    ActionList::from_file(ActionsFile::new(actions, Vec::new()))
 }
 
 /// Sharpen (levels, curves, blur) and Vignette (mask, blur) loose; Glow (glow) in the set Effects.

@@ -222,3 +222,29 @@ fn actions_panel_disabled_reports_nothing() {
     assert_eq!(take(&shared), [], "a disabled panel reports no event");
     assert_eq!(shared.borrow().state.selected, None, "a click selects no row");
 }
+
+/// The panel menu's last group is Clear All Actions, Reset Actions…, Load Actions…, Replace Actions…, Save Actions…;
+/// the three whole-list commands are off while recording, Clear All also with nothing to clear, and each reports
+/// its event.
+#[trial]
+fn actions_panel_menu_offers_the_library_commands() {
+    use craft_automation::ui::actions::{ActionsMenuAction, ActionsMenuFacts, ActionsPanelCommands as C, panel_rows};
+    use craft_ui::menu::PanelRow;
+    use craft_ui::runtime::commands::CommandRef;
+    let rows = panel_rows(ActionsMenuFacts::new(), &|_| true);
+    let last: Vec<String> = rows.iter().rev().take_while(|row| !matches!(row, PanelRow::Separator)).map(|row| format!("{row:?}")).collect();
+    let expected: Vec<String> =
+        [C::Save, C::Replace, C::Load, C::Reset, C::ClearAll].into_iter().map(|c| format!("{:?}", PanelRow::Command(CommandRef::from(c)))).collect();
+    assert_eq!(last, expected);
+
+    let mut panel = ActionsPanelState::default();
+    let list = list_of(vec![action("A", None, &["image.invert"])]);
+    let idle = ActionsMenuFacts::new();
+    let recording = ActionsMenuFacts::new().recording(true);
+    for command in [C::ClearAll, C::Reset, C::Replace] {
+        assert!(command.state(&panel, &list, idle).is_enabled() && !command.state(&panel, &list, recording).is_enabled());
+    }
+    assert!(!C::ClearAll.state(&panel, &ActionList::new(), idle).is_enabled());
+    let events: Vec<_> = [C::ClearAll, C::Reset, C::Replace].into_iter().map(|c| c.run(&mut panel, &list, idle)).collect();
+    assert_eq!(events, [ActionsEvent::ClearAll, ActionsEvent::Reset, ActionsEvent::Replace].map(|event| Some(ActionsMenuAction::Event(event))));
+}

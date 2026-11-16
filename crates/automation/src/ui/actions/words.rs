@@ -48,5 +48,17 @@ craft_ui::words! {
         /// The modifier check row elsewhere.
         ctrl: "actions.ctrl" = "Ctrl";
         color: "actions.color" = "Color";
+        /// The title of the Clear All Actions question.
+        clear_all_title: "actions.clearAllTitle" = "Clear All Actions";
+        clear_all_question: "actions.clearAllQuestion" = "Clear all actions?";
+        /// The title of the Reset Actions question.
+        reset_title: "actions.resetTitle" = "Reset Actions";
+        reset_question: "actions.resetQuestion" = "Replace the current actions?";
+        /// Reset's answer that keeps the current actions and adds the starting sets.
+        append: "actions.append" = "Append";
+        /// The title of the Replace Actions question.
+        replace_title: "actions.replaceTitle" = "Replace Actions";
+        /// `{count}` is the number of actions in the file, `{file}` its name.
+        replace_question: template "actions.replaceQuestion" = "Replace all actions with {count} actions from {file}?";
     }
 }

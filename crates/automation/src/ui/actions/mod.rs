@@ -5,7 +5,7 @@
 //! | Part | Names |
 //! |---|---|
 //! | The panel | [`ActionsPanel`], [`ActionsPanelOutput`], [`ActionsEvent`], [`ActionMove`], [`ActionPlace`], [`ActionSelection`], [`ShortcutChoice`] |
-//! | The app's side | [`ActionsHost`], [`ActionsPanelCommands`], [`ActionsMenuFacts`] and [`panel_rows`] (the panel menu), [`ActionsMenuAction`] |
+//! | The app's side | [`ActionsHost`], [`ActionsPanelCommands`], [`ActionsMenuFacts`] and [`panel_rows`] (the panel menu), [`ActionsMenuAction`], [`LibraryPrompt`] (Clear All, Reset, Replace) |
 //! | State | [`ActionsPanelState`], [`ActionsSettings`] (persisted) |
 //! | Columns and words | [`INCLUDE_COLUMN`], [`DIALOG_COLUMN`], [`ActionsWords`] |
 
@@ -15,6 +15,7 @@ mod menu;
 #[cfg(feature = "screen-testing")]
 pub mod mock;
 mod panel;
+mod prompt;
 mod rows;
 #[cfg(feature = "screen-testing")]
 mod stories;
@@ -22,6 +23,7 @@ mod words;
 
 pub use body::{ActionMove, ActionPlace};
 pub use menu::{ActionsMenuAction, ActionsMenuFacts, ActionsPanelCommands, panel_rows};
+pub use prompt::LibraryPrompt;
 pub use panel::{ActionSelection, ActionsEvent, ActionsHost, ActionsPanel, ActionsPanelOutput, ActionsPanelState, ActionsSettings, ShortcutChoice};
 pub use rows::{DIALOG_COLUMN, INCLUDE_COLUMN};
 pub use words::ActionsWords;

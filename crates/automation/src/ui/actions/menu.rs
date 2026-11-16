@@ -92,9 +92,18 @@ pub enum ActionsPanelCommands {
     /// Run an action over many files.
     #[command(label = "Batch…")]
     Batch,
+    /// Remove every action and set.
+    #[command(label = "Clear All Actions")]
+    ClearAll,
+    /// Put back the app's starting sets, in place of the list or added to it.
+    #[command(label = "Reset Actions…")]
+    Reset,
     /// Load actions from a file.
     #[command(label = "Load Actions…")]
     Load,
+    /// Replace every action with the actions of a file.
+    #[command(label = "Replace Actions…")]
+    Replace,
     /// Save every action to a file.
     #[command(label = "Save Actions…")]
     Save,
@@ -145,7 +154,8 @@ impl ActionsPanelCommands {
     /// a selected or first action, Delete follows the footer's Delete, Duplicate a deletable
     /// selection or a set (not while recording), Record Again a selected step (not while
     /// recording), Insert Menu Item… and Insert Stop… a selected action or step, Insert Path the
-    /// same with a path selected, Save an action or a selected set, Playback Options… not while
+    /// same with a path selected, Save an action or a selected set, Clear All an action or a set and
+    /// Reset and Replace always, all three not while recording or waiting, Playback Options… not while
     /// waiting, Allow Tool Recording is checked with the fact, Start Recording is off while
     /// recording and Stop Recording only on while it runs, and Button Mode is checked with the
     /// state's setting and off while recording.
@@ -155,6 +165,8 @@ impl ActionsPanelCommands {
         let on_row = matches!(panel.selected, Some(ActionSelection::Action(_) | ActionSelection::Step(..)));
         let set_selected = matches!(&panel.selected, Some(ActionSelection::Set(name)) if list.sets().contains(&name.as_str()));
         let state = CommandState::new();
+        // The whole-list commands wait while a recording or a paused playback holds an action.
+        let library_idle = !recording && !facts.waiting;
         match self {
             ActionsPanelCommands::NewAction | ActionsPanelCommands::NewSet | ActionsPanelCommands::StartRecording => state.enabled(!recording),
             ActionsPanelCommands::SetOptions => state.enabled(current_set(panel, list).is_some()),
@@ -167,6 +179,8 @@ impl ActionsPanelCommands {
             ActionsPanelCommands::Batch => state.enabled(play_target(panel.selected.as_ref(), list).is_some()),
             ActionsPanelCommands::Save => state.enabled(any || set_selected),
             ActionsPanelCommands::Load => state,
+            ActionsPanelCommands::ClearAll => state.enabled(library_idle && (any || !list.sets().is_empty())),
+            ActionsPanelCommands::Reset | ActionsPanelCommands::Replace => state.enabled(library_idle),
             ActionsPanelCommands::ButtonMode => state.enabled(!recording).checked(panel.settings.button_mode),
             ActionsPanelCommands::Duplicate => {
                 let deletable = panel.selected.as_ref().is_some_and(|selected| delete_event(selected, false).is_some());
@@ -206,6 +220,9 @@ impl ActionsPanelCommands {
             ActionsPanelCommands::InsertStop => selected_action(selected, list).map(|_| ActionsEvent::InsertStop)?,
             ActionsPanelCommands::Batch => ActionsEvent::Batch(play_target(selected, list)?.0),
             ActionsPanelCommands::Load => ActionsEvent::Load,
+            ActionsPanelCommands::ClearAll => ActionsEvent::ClearAll,
+            ActionsPanelCommands::Reset => ActionsEvent::Reset,
+            ActionsPanelCommands::Replace => ActionsEvent::Replace,
             ActionsPanelCommands::Save => ActionsEvent::Save { set: None },
             ActionsPanelCommands::ButtonMode => {
                 panel.settings.button_mode = !panel.settings.button_mode;
@@ -229,7 +246,8 @@ impl ActionsPanelCommands {
 /// The rows of the Actions panel's menu, for the dock's `PanelMenu`, in Photoshop's groups: New
 /// Action…, New Set…, Set Options…, Duplicate, Delete | Play, Start Recording (Stop Recording
 /// while `facts.recording`), Record Again | Insert Menu Item…, Insert Stop…, Insert Path, Batch… |
-/// Playback Options…, Allow Tool Recording, Button Mode | Load and Save Actions…. A row `offered`
+/// Playback Options…, Allow Tool Recording, Button Mode | Clear All Actions, Reset Actions…, Load
+/// Actions…, Replace Actions…, Save Actions…. A row `offered`
 /// refuses is left out, and a group left empty loses its separator.
 pub fn panel_rows(facts: ActionsMenuFacts, offered: &dyn Fn(ActionsPanelCommands) -> bool) -> Vec<PanelRow> {
     use ActionsPanelCommands as C;
@@ -239,7 +257,7 @@ pub fn panel_rows(facts: ActionsMenuFacts, offered: &dyn Fn(ActionsPanelCommands
         &[C::Play, record, C::RecordAgain],
         &[C::InsertMenuItem, C::InsertStop, C::InsertPath, C::Batch],
         &[C::PlaybackOptions, C::ToolRecording, C::ButtonMode],
-        &[C::Load, C::Save],
+        &[C::ClearAll, C::Reset, C::Load, C::Replace, C::Save],
     ];
     let mut rows = Vec::new();
     for group in groups {

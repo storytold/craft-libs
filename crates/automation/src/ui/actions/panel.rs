@@ -217,6 +217,15 @@ pub enum ActionsEvent {
     Batch(usize),
     /// Load Actions… (the app's file dialog).
     Load,
+    /// Clear All Actions: the app asks with [`LibraryPrompt::ClearAll`](super::LibraryPrompt) and
+    /// answers OK with [`ActionList::clear_all`].
+    ClearAll,
+    /// Reset Actions…: the app asks with [`LibraryPrompt::Reset`](super::LibraryPrompt), whose
+    /// Append keeps the list ([`ActionList::reset`]).
+    Reset,
+    /// Replace Actions…: the app picks a file, then asks with
+    /// [`LibraryPrompt::Replace`](super::LibraryPrompt) ([`ActionList::replace_all`]).
+    Replace,
     /// Save Actions…, or Save Set… for one set.
     #[non_exhaustive]
     Save {

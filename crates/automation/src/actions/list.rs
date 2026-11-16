@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use super::file::ActionsFile;
+use super::file::{ActionOccurrence, ActionsFile};
 use super::model::{Action, ActionColor, ActionInclude, ActionStep};
 
 /// Why an [`ActionList`] edit was refused. The app shows the message; nothing changed.
@@ -27,6 +27,8 @@ pub enum ActionListError {
     NameTaken(String),
     /// The name is empty or only white space.
     EmptyName,
+    /// No Clear All, Reset or Replace to undo: none was made, or an edit since ended its undo.
+    NothingToUndo,
 }
 
 impl std::fmt::Display for ActionListError {
@@ -38,6 +40,7 @@ impl std::fmt::Display for ActionListError {
             ActionListError::OutOfRange => f.write_str("destination is out of range"),
             ActionListError::NameTaken(_) => f.write_str("an action with this name already exists"),
             ActionListError::EmptyName => f.write_str("\"name\" is empty"),
+            ActionListError::NothingToUndo => f.write_str("no Actions library change is available to undo"),
         }
     }
 }
@@ -52,6 +55,31 @@ pub struct MergedFile {
     pub added: Vec<usize>,
     /// The (name in the file, name given) pair of each action renamed to stay unique.
     pub renames: Vec<(String, String)>,
+    /// The (stored id, name given) pair of each action a PhotoCraft file gave an `action_id`, so
+    /// the app moves what it keyed by the id (`actions.playById:<id>` shortcuts, calls by
+    /// `actionId`) to the name. An id the file repeats is left out, as PhotoCraft ignores it.
+    pub ids: Vec<(String, String)>,
+}
+
+/// Which whole-list command an undo reverts: the Actions panel's Clear All Actions, Reset
+/// Actions… or Replace Actions….
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LibraryEdit {
+    /// [`ActionList::clear_all`].
+    ClearAll,
+    /// [`ActionList::reset`].
+    Reset,
+    /// [`ActionList::replace_all`].
+    Replace,
+}
+
+/// The list before the last whole-list command.
+#[derive(Clone, Debug, PartialEq)]
+struct LibrarySnapshot {
+    edit: LibraryEdit,
+    actions: Vec<Action>,
+    sets: Vec<String>,
 }
 
 /// The recorded actions: one flat list (PhotoCraft's engine, journal and file are flat), each
@@ -67,12 +95,16 @@ pub struct MergedFile {
 ///
 /// Action names are unique across the whole list, whatever their sets: the app finds an action
 /// by its name (calls, function keys, scripts). An edit that would repeat a name is refused, and
-/// a loaded file's repeated names are renamed (`Foo`, `Foo 2`).
+/// a loaded file's repeated names are renamed (`Foo`, `Foo 2`). Set names are unique likewise.
+///
+/// Clear All, Reset and Replace keep one undo: [`undo_library`](Self::undo_library) restores the
+/// list as it was before the last of them, until any other edit ends it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ActionList {
     pub(super) actions: Vec<Action>,
     pub(super) sets: Vec<String>,
     pub(super) revision: u64,
+    undo: Option<Box<LibrarySnapshot>>,
 }
 
 impl ActionList {
@@ -474,18 +506,41 @@ impl ActionList {
     /// actions of every set the file names are dropped first. The file's empty sets are added when
     /// absent. `calls(step, &renames)` runs once on every step of every action just added, after
     /// all renames are known (also when there are none).
+    ///
+    /// A PhotoCraft file's folder occurrences become sets: the first occurrence of a set name
+    /// keeps it (and joins a set of that name already in the list, as a plain file's set does),
+    /// each later one gets a unique name (`Set 2`), and an empty one becomes an empty set. Of the
+    /// actions sharing a name, the file's shortcut owner keeps the name. The stored ids come back
+    /// in [`MergedFile::ids`].
     pub fn merge_file(&mut self, file: ActionsFile, replace: bool, mut calls: impl FnMut(&mut ActionStep, &[(String, String)])) -> MergedFile {
-        let ActionsFile { actions, sets, .. } = file;
+        let ActionsFile { mut actions, sets, occurrences, .. } = file;
         if replace {
-            let named: BTreeSet<&str> = actions.iter().filter_map(|action| action.set.as_deref()).chain(sets.iter().map(String::as_str)).collect();
+            let named: BTreeSet<&str> = actions
+                .iter()
+                .filter_map(|action| action.set.as_deref())
+                .chain(sets.iter().map(String::as_str))
+                .chain(occurrences.set_rows.iter().map(String::as_str))
+                .collect();
             self.actions.retain(|action| !action.set.as_deref().is_some_and(|set| named.contains(set)));
         }
+        let fields = |index: usize| occurrences.actions.get(index).cloned().unwrap_or_default();
+        let empty_sets = self.fold_occurrences(&mut actions, sets, &occurrences.set_rows, &fields);
+        // The shortcut owners claim first, so each keeps its name over an earlier namesake.
+        let owners = (0..actions.len()).filter(|&i| fields(i).legacy_shortcut_owner);
+        let order: Vec<usize> = owners.chain((0..actions.len()).filter(|&i| !fields(i).legacy_shortcut_owner)).collect();
+        let claimed = Names::of(&self.actions).claim_all(order.iter().map(|&i| actions[i].name.as_str()));
+        let mut given = vec![String::new(); actions.len()];
+        for (&i, name) in order.iter().zip(claimed) {
+            given[i] = name;
+        }
         let mut merged = MergedFile::default();
-        let mut names = Names::of(&self.actions);
-        let claimed = names.claim_all(actions.iter().map(|action| action.name.as_str()));
-        for (mut action, name) in actions.into_iter().zip(claimed) {
+        let ids = file_ids(&occurrences.actions);
+        for (index, (mut action, name)) in actions.into_iter().zip(given).enumerate() {
             if name != action.name {
                 merged.renames.push((action.name.clone(), name.clone()));
+            }
+            if let Some(Some(id)) = ids.get(index) {
+                merged.ids.push((id.clone(), name.clone()));
             }
             action.name = name;
             self.actions.push(action);
@@ -496,7 +551,7 @@ impl ActionList {
                 calls(step, &merged.renames);
             }
         }
-        for set in sets {
+        for set in empty_sets {
             if !self.sets().contains(&set.as_str()) {
                 self.sets.push(set);
             }
@@ -505,16 +560,128 @@ impl ActionList {
         merged
     }
 
-    /// The list a file holds (its empty sets included). A name the file repeats is renamed as
-    /// [`merge_file`](Self::merge_file) renames a clash (`Foo`, `Foo 2`); a call by that name
-    /// keeps reaching the first action that has it.
-    pub fn from_file(file: ActionsFile) -> Self {
-        let ActionsFile { mut actions, sets, .. } = file;
-        let claimed = Names::default().claim_all(actions.iter().map(|action| action.name.as_str()));
-        for (action, name) in actions.iter_mut().zip(claimed) {
-            action.name = name;
+    /// Gives each action of a file the set name of its folder occurrence and returns the file's
+    /// empty sets: the plain ones, then each occurrence that holds no action. The first
+    /// occurrence of a name keeps it; a later one, or one whose name a plain set of the file has,
+    /// claims a name unique among the list's sets and the file's.
+    fn fold_occurrences(
+        &self,
+        actions: &mut [Action],
+        sets: Vec<String>,
+        set_rows: &[String],
+        fields: &dyn Fn(usize) -> ActionOccurrence,
+    ) -> Vec<String> {
+        if set_rows.is_empty() {
+            return sets;
         }
-        Self { actions, sets, revision: 0 }
+        // An action's slot counts only where the file's occurrence still has its set name.
+        let slot_of =
+            |index: usize, action: &Action| fields(index).set_slot.filter(|&slot| set_rows.get(slot).map(String::as_str) == action.set.as_deref());
+        let plain: HashSet<&str> = actions
+            .iter()
+            .enumerate()
+            .filter(|(index, action)| slot_of(*index, action).is_none())
+            .filter_map(|(_, action)| action.set.as_deref())
+            .chain(sets.iter().map(String::as_str))
+            .collect();
+        let mut names = Names::new(self.sets().into_iter().chain(plain.iter().copied()).map(str::to_owned));
+        let mut first: HashSet<&str> = HashSet::new();
+        let slot_names: Vec<String> = set_rows
+            .iter()
+            .map(|caption| {
+                if !plain.contains(caption.as_str()) && first.insert(caption.as_str()) {
+                    names.taken.insert(caption.clone());
+                    caption.clone()
+                } else {
+                    names.claim(caption)
+                }
+            })
+            .collect();
+        let mut filled = vec![false; set_rows.len()];
+        let slots: Vec<Option<usize>> = actions.iter().enumerate().map(|(index, action)| slot_of(index, action)).collect();
+        for (action, slot) in actions.iter_mut().zip(slots) {
+            if let Some(slot) = slot {
+                action.set = Some(slot_names[slot].clone());
+                filled[slot] = true;
+            }
+        }
+        let mut empty = sets;
+        empty.extend(slot_names.into_iter().zip(filled).filter(|(_, filled)| !filled).map(|(name, _)| name));
+        empty
+    }
+
+    /// The list a file holds (its empty sets included), named as [`merge_file`](Self::merge_file)
+    /// names a file's actions and sets in an empty list: a name the file repeats is renamed
+    /// (`Foo`, `Foo 2`), and a call by that name keeps reaching the first action that has it. The
+    /// app that keys anything by a PhotoCraft file's stored ids uses [`load`](Self::load).
+    pub fn from_file(file: ActionsFile) -> Self {
+        Self::load(file).0
+    }
+
+    /// [`from_file`](Self::from_file) with what loading renamed and the stored ids.
+    pub fn load(file: ActionsFile) -> (Self, MergedFile) {
+        let mut list = Self::new();
+        let merged = list.merge_file(file, false, |_, _| {});
+        list.revision = 0;
+        (list, merged)
+    }
+
+    /// Clear All Actions: no action and no set. [`undo_library`](Self::undo_library) restores
+    /// them.
+    pub fn clear_all(&mut self) {
+        self.library_edit(LibraryEdit::ClearAll, |list| {
+            list.actions.clear();
+            list.sets.clear();
+        });
+    }
+
+    /// Reset Actions…: the app's `defaults` (its starting sets), added to the list with `append`
+    /// (renamed where a name is taken, as [`merge_file`](Self::merge_file) does), else in place
+    /// of everything. `calls` is as for `merge_file`.
+    pub fn reset(&mut self, defaults: ActionsFile, append: bool, calls: impl FnMut(&mut ActionStep, &[(String, String)])) -> MergedFile {
+        self.library_edit(LibraryEdit::Reset, |list| {
+            if !append {
+                list.actions.clear();
+                list.sets.clear();
+            }
+            list.merge_file(defaults, false, calls)
+        })
+    }
+
+    /// Replace Actions…: the list becomes what `file` holds, named as [`load`](Self::load) names
+    /// it. `calls` is as for [`merge_file`](Self::merge_file).
+    pub fn replace_all(&mut self, file: ActionsFile, calls: impl FnMut(&mut ActionStep, &[(String, String)])) -> MergedFile {
+        self.library_edit(LibraryEdit::Replace, |list| {
+            list.actions.clear();
+            list.sets.clear();
+            list.merge_file(file, false, calls)
+        })
+    }
+
+    /// The whole-list command [`undo_library`](Self::undo_library) would revert, for the app's
+    /// Undo label; `None` when an edit since ended it.
+    pub fn library_undo(&self) -> Option<LibraryEdit> {
+        self.undo.as_ref().map(|snapshot| snapshot.edit)
+    }
+
+    /// Restores the list as it was before the last Clear All, Reset or Replace and returns which
+    /// one it reverted.
+    pub fn undo_library(&mut self) -> Result<LibraryEdit, ActionListError> {
+        let snapshot = self.undo.take().ok_or(ActionListError::NothingToUndo)?;
+        let LibrarySnapshot { edit, actions, sets } = *snapshot;
+        self.actions = actions;
+        self.sets = sets;
+        self.touch();
+        Ok(edit)
+    }
+
+    /// Runs a whole-list command and keeps the list from before it as the one undo.
+    fn library_edit<R>(&mut self, edit: LibraryEdit, apply: impl FnOnce(&mut Self) -> R) -> R {
+        let snapshot = LibrarySnapshot { edit, actions: self.actions.clone(), sets: self.sets.clone() };
+        let result = apply(self);
+        self.touch();
+        self.undo = Some(Box::new(snapshot));
+        result
     }
 
     /// Replaces the whole list with `with` (a list loaded or restored from elsewhere): its actions
@@ -529,7 +696,7 @@ impl ActionList {
     /// The list as a file (version [`ActionsFile::VERSION`]; the empty sets in `sets`).
     pub fn to_file(&self) -> ActionsFile {
         let empty = self.sets().into_iter().filter(|set| !self.actions.iter().any(|action| action.set.as_deref() == Some(*set)));
-        ActionsFile { version: ActionsFile::VERSION, actions: self.actions.clone(), sets: empty.map(str::to_owned).collect() }
+        ActionsFile::new(self.actions.clone(), empty.map(str::to_owned).collect())
     }
 
     /// Whether an action has `name`.
@@ -551,10 +718,22 @@ impl ActionList {
     }
 
     /// Marks the list changed by an edit made outside these calls (the app replaced an action's
-    /// steps).
+    /// steps). Every edit ends the undo of the last Clear All, Reset or Replace.
     pub fn touch(&mut self) {
         self.revision = self.revision.wrapping_add(1);
+        self.undo = None;
     }
+}
+
+/// Each action's stored id, where it is PhotoCraft's form (32 lowercase hex digits) and no other
+/// action of the file has it.
+fn file_ids(occurrences: &[ActionOccurrence]) -> Vec<Option<String>> {
+    let valid = |id: &&String| id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    let mut count: HashMap<&str, usize> = HashMap::new();
+    for id in occurrences.iter().filter_map(|occurrence| occurrence.action_id.as_ref()).filter(valid) {
+        *count.entry(id).or_default() += 1;
+    }
+    occurrences.iter().map(|occurrence| occurrence.action_id.clone().filter(|id| valid(&id) && count.get(id.as_str()) == Some(&1))).collect()
 }
 
 /// The names taken so far and, per base name, the next suffix to try, so claiming one base many

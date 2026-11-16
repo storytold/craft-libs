@@ -158,3 +158,26 @@ fn cancel_on_a_standard_prompt_answers_its_cancel_with_the_tag() {
     assert!(matches!(host.take::<StandardPrompt>(), Some(DialogResult::Cancel)), "a prompt without Cancel closes from outside");
     assert!(host.is_empty());
 }
+
+/// The Actions library questions: Reset answers Append (the Alternate) with its tag; Clear All and Replace have no
+/// Append, so a confirm choosing it is refused.
+#[trial]
+fn actions_library_prompts_offer_append_only_on_reset() {
+    use craft_automation::ui::actions::{ActionsWords, LibraryPrompt};
+    use craft_ui::runtime::words::CommonWords;
+    let ctx = Context::default();
+    let mut host = DialogHost::new();
+    let (words, common) = (ActionsWords::default(), CommonWords::default());
+    let reset = host.open(LibraryPrompt::Reset.prompt(&words, &common));
+    assert_eq!(call(&mut host, &ctx, "ui.dialog.confirm", json!({"dialog": reset.value(), "choice": "alternate"})), Ok(Value::Null));
+    let Some(DialogResult::Ok(answer)) = host.take::<StandardPrompt>() else { panic!("Reset answers Append") };
+    assert_eq!((answer.choice, answer.tag::<LibraryPrompt>()), (PromptChoice::Alternate, Some(&LibraryPrompt::Reset)));
+
+    for kind in [LibraryPrompt::ClearAll, LibraryPrompt::replace(3, "set.atn")] {
+        let prompt = host.open(kind.prompt(&words, &common));
+        assert!(call(&mut host, &ctx, "ui.dialog.confirm", json!({"dialog": prompt.value(), "choice": "alternate"})).is_err());
+        assert_eq!(call(&mut host, &ctx, "ui.dialog.confirm", json!({"dialog": prompt.value(), "choice": "proceed"})), Ok(Value::Null));
+        let Some(DialogResult::Ok(answer)) = host.take::<StandardPrompt>() else { panic!("OK answers Proceed") };
+        assert_eq!((answer.choice, answer.tag::<LibraryPrompt>()), (PromptChoice::Proceed, Some(&kind)));
+    }
+}
