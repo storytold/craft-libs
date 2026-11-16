@@ -385,6 +385,8 @@ impl Codec for FamilyCodec {
 struct Typing {
     draft: Option<String>,
     lead: Option<String>,
+    /// The lead's family was proposed by the pointer, so it ends when the pointer leaves the rows.
+    lead_by_pointer: bool,
     hide_classes: bool,
     expanded: Vec<String>,
     rested: Vec<String>,
@@ -561,6 +563,7 @@ impl Component for FontPicker<'_> {
         // The one place the picker forgets what belongs to an open list.
         let typing = cx.memory::<Typing>();
         typing.lead = None;
+        typing.lead_by_pointer = false;
         typing.expanded.clear();
         typing.rested.clear();
         if matches!(cx.gesture(), Some(craft_behavior::GesturePhase::Begin | craft_behavior::GesturePhase::Update)) {

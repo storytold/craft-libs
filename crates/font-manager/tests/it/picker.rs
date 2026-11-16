@@ -121,7 +121,7 @@ fn similar_fonts_put_the_current_family_first_and_leave_the_list_alone_without_a
 }
 
 #[trial]
-fn the_row_under_the_pointer_is_proposed_as_the_preview_and_closing_the_list_cancels_it() {
+fn the_row_under_the_pointer_is_proposed_as_the_preview_until_the_pointer_leaves_or_the_list_closes() {
     let (mut fx, seen) = rig(catalog_of(&[INTER_REGULAR, epaint_default_fonts::HACK_REGULAR]), vec![]);
     assert_eq!(seen.borrow().preview, None, "a closed list previews nothing");
     open(&mut fx);
@@ -130,6 +130,14 @@ fn the_row_under_the_pointer_is_proposed_as_the_preview_and_closing_the_list_can
     fx.settle();
     assert_eq!(seen.borrow().preview.as_deref(), Some("Hack"), "the hovered row proposes its family");
     assert!(seen.borrow().picks.is_empty(), "a hover picks nothing");
+
+    fx.frame(vec![Event::PointerGone]);
+    fx.settle();
+    assert_eq!(seen.borrow().preview, None, "the preview ends when the pointer leaves the rows");
+    let hack = fx.by_label("Hack").expect("the Hack row");
+    fx.frame(vec![Event::PointerMoved(hack.center())]);
+    fx.settle();
+    assert_eq!(seen.borrow().preview.as_deref(), Some("Hack"), "the pointer back on the row previews it again");
 
     fx.key(Key::Escape, Modifiers::NONE);
     fx.settle();

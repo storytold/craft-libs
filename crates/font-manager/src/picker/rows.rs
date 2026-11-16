@@ -12,7 +12,7 @@ use craft_ui::buttons::{Button, ToggleButton};
 use craft_ui::choice::{Radio, RadioGroup};
 use craft_ui::contract::overlay::Dismiss;
 use craft_ui::contract::{
-    Bind, CollectionEvent, Cx, Edit as _, Overlay, OverlayUi, Overlays as _, Props as _, Remember as _, Show as _, ShowCollection as _,
+    Bind, CollectionEvent, Cx, Edit as _, LeadSource, Overlay, OverlayUi, Overlays as _, Props as _, Remember as _, Show as _, ShowCollection as _,
     ShowContainer as _, WordSetCx as _, clicked,
 };
 use craft_ui::display::{Picture, PictureSize, Text};
@@ -306,6 +306,8 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let banner_text = picker.preview_text;
     let name = words.list.clone();
     let mut stars: Vec<(String, bool)> = Vec::new();
+    let mut over_rows = false;
+    let mut under_pointer: Option<SlotKey> = None;
     let events = ui.show(popup, Overlay::dropdown().dismiss(Dismiss::new().focus_left(true)), |ui, _| {
         let mut events = Vec::new();
         Stack::new().show(ui, |ui, _| {
@@ -374,6 +376,9 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
                                 }
                             }
                         });
+                    over_rows = rows.response.contains_pointer();
+                    let pointer = ui.ctx().pointer_hover_pos();
+                    under_pointer = pointer.and_then(|at| rows.shown.iter().find(|row| row.rect.contains(at)).map(|row| row.key.clone()));
                     events = rows.events;
                 });
             });
@@ -383,9 +388,11 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
     let mut picked: Option<SlotKey> = None;
     for event in events.into_iter().flatten() {
         match event {
-            CollectionEvent::LeadMoved { key, .. } => {
+            CollectionEvent::LeadMoved { key, by } => {
                 if let Some(family) = slot_of(&slots, &key).and_then(Slot::family) {
-                    cx.memory::<Typing>().lead = Some(family.to_owned());
+                    let typing = cx.memory::<Typing>();
+                    typing.lead = Some(family.to_owned());
+                    typing.lead_by_pointer = by == LeadSource::Pointer;
                     cx.propose(family.to_owned());
                 }
             }
@@ -413,6 +420,27 @@ pub(super) fn popup<'a>(picker: &mut FontPicker<'a>, ui: &mut OverlayUi<'_>, cx:
         }
     }
     cx.memory::<Typing>().hide_classes = hide_classes;
+    // A preview the pointer proposed ends when the pointer leaves the rows (a keyed row keeps its preview). The
+    // collection keeps its lead on the row, so the pointer coming back to that row reports no move: the row under it
+    // proposes again.
+    let (by_pointer, led) = {
+        let typing = cx.memory::<Typing>();
+        (typing.lead_by_pointer, typing.lead.is_some())
+    };
+    if by_pointer && !over_rows {
+        let typing = cx.memory::<Typing>();
+        typing.lead = None;
+        typing.lead_by_pointer = false;
+        cx.cancel(craft_behavior::CancelReason::Dismissed);
+    } else if over_rows
+        && !led
+        && let Some(family) = under_pointer.and_then(|key| slot_of(&slots, &key).and_then(Slot::family).map(str::to_owned))
+    {
+        let typing = cx.memory::<Typing>();
+        typing.lead = Some(family.clone());
+        typing.lead_by_pointer = true;
+        cx.propose(family);
+    }
     if let Some(mut changed) = settings.clone().filter(|_| !stars.is_empty()) {
         for (family, on) in &stars {
             changed.set_favorite(family, *on);
