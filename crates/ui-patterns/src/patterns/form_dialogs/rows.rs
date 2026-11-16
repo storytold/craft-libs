@@ -90,7 +90,7 @@ impl Outcome for ParamRowsOutput {
 /// - **Values.** They live in the caller's [`DialogFields`] binding; a missing key shows its parameter's default,
 ///   which the pass writes. The host keeps its own history of the values and its own Reset.
 /// - **Rows.** A row is shown while its `visible_when` holds and takes input while its `enabled_when` holds. A
-///   [`Param::section`] opens a section whose body is the rows up to the next section.
+///   [`Param::section`] opens a section, a bold title under a rule, whose body is the rows up to the next section.
 ///   A range row is a slider and its number field beside the row's label, or stacked under the label
 ///   ([`sliders`](ParamRows::sliders)).
 /// - **Requests.** A colour press, a Browse press and the eyedropper toggle come back in [`ParamRowsOutput`].
@@ -376,7 +376,7 @@ impl<'p> Pass<'p> {
             let end = tail.iter().position(is_section).unwrap_or(tail.len());
             let (body, after) = tail.split_at(end);
             if head.visible(&self.work) {
-                group(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
+                Section::fixed(plain(&head.label)).id_salt(head.key.as_str()).show(ui, |ui, _| {
                     for param in body {
                         self.row(ui, param);
                     }
@@ -672,7 +672,7 @@ impl<'p> Pass<'p> {
     /// A radio row is its own section: the title shows the row's name once, and the group it names follows.
     fn radio_options(&mut self, ui: &mut Ui, line: &Line<'_>, options: &[(String, Label)]) {
         let value = self.work.text(line.key).map(str::to_owned).or_else(|| line.param.kind.default_value().and_then(text_of)).unwrap_or_default();
-        group(line.name.clone()).id_salt(line.key).show(ui, |ui, _| {
+        Section::fixed(line.name.clone()).strength(HeaderStrength::Caption).id_salt(line.key).show(ui, |ui, _| {
             let mut group = RadioGroup::new(line.name.clone(), Bind::given(value.clone())).enabled(line.enabled);
             if let Some(tip) = line.param.tooltip_text() {
                 group = group.tooltip(tip.clone());
@@ -950,11 +950,6 @@ fn text_of(value: FieldValue) -> Option<String> {
         FieldValue::Text(text) => Some(text),
         _ => None,
     }
-}
-
-/// The heading of a group of rows (a section, or a row of radio buttons): a quiet caption, with no rule.
-fn group<'a>(title: impl Into<Label>) -> Section<'a> {
-    Section::fixed(title).strength(HeaderStrength::Caption)
 }
 
 /// A row's label without a trailing colon: the form puts its own beside the control.
