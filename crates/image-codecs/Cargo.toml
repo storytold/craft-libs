@@ -13,6 +13,8 @@ workspace = true
 [features]
 corpus = []
 default = []
+# Opt in to threaded AVIF encoding without enabling AVIF (or assembly) by itself.
+threads = ["ravif?/threading", "rav1e?/threading"]
 sgi = []
 sunraster = []
 avif = ["image/avif", "dep:ravif", "dep:rav1e", "dep:avif-serialize"]
