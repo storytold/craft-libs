@@ -598,10 +598,68 @@ fn push_vlq(out: &mut Vec<u8>, v: u64) -> Result<(), MidiError> {
 }
 
 /// An event ready to be serialised: `(tick, order, bytes)`. `order` breaks ties at one tick.
-struct WEvent {
-    tick: u64,
-    order: u8,
-    bytes: Vec<u8>,
+/// An already encoded SMF event at an absolute source tick.
+///
+/// `bytes` must contain one complete channel, meta, or SysEx event, including its
+/// status and any length, but no delta time. The caller owns payload validity.
+/// Do not provide running-status fragments or End-of-Track (added by the writer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimedEvent {
+    pub tick: u64,
+    pub order: u8,
+    pub bytes: Vec<u8>,
+}
+
+type WEvent = TimedEvent;
+
+/// Encode an SMF meta event, without its delta time.
+pub fn encode_meta_event(kind: u8, data: &[u8]) -> Result<Vec<u8>, MidiError> {
+    meta(kind, data)
+}
+
+/// Serialize source-timed events without normalizing ticks or trimming notes.
+///
+/// Tracks and same-tick events retain their input order (with `order` as the tie
+/// breaker). Format must be 0 (exactly one track) or 1. Division is PPQ 1..=32767.
+/// Channel running-status compression is disabled. `clamp_deltas` is an explicit
+/// compatibility option: gaps above the SMF 28-bit maximum are saturated rather
+/// than rejected. It can shorten represented time and should normally be false.
+///
+/// `max_bytes` bounds the conservative serialized size (four bytes per delta),
+/// not caller-owned events or sorting memory. Encoded payloads are trusted; this
+/// is a framing primitive, not validation of arbitrary untrusted event bytes.
+pub fn write_timed_smf(format: u16, division: u16, tracks: Vec<Vec<TimedEvent>>, clamp_deltas: bool, max_bytes: usize) -> Result<Vec<u8>, MidiError> {
+    if format > 1 || (format == 0 && tracks.len() != 1) || division == 0 || division > 0x7fff {
+        return Err(MidiError::Write("invalid format, track count, or PPQ division".into()));
+    }
+    let count = u16::try_from(tracks.len()).map_err(|_| MidiError::Write("more than 65535 tracks".into()))?;
+    let mut bound = 14usize;
+    for track in &tracks {
+        bound = bound.checked_add(12).ok_or_else(|| MidiError::Write("output size overflow".into()))?;
+        let mut body = 4usize;
+        for event in track {
+            let size = event.bytes.len().checked_add(4).ok_or_else(|| MidiError::Write("event size overflow".into()))?;
+            body = body.checked_add(size).ok_or_else(|| MidiError::Write("track size overflow".into()))?;
+            bound = bound.checked_add(size).ok_or_else(|| MidiError::Write("output size overflow".into()))?;
+        }
+        if body > u32::MAX as usize {
+            return Err(MidiError::Write("track larger than 4 GiB".into()));
+        }
+    }
+    if bound > max_bytes {
+        return Err(MidiError::Write("serialized output exceeds byte budget".into()));
+    }
+    let mut out = Vec::new();
+    out.try_reserve(bound).map_err(|_| MidiError::Write("output allocation failed".into()))?;
+    out.extend_from_slice(b"MThd");
+    out.extend_from_slice(&6u32.to_be_bytes());
+    out.extend_from_slice(&format.to_be_bytes());
+    out.extend_from_slice(&count.to_be_bytes());
+    out.extend_from_slice(&division.to_be_bytes());
+    for track in tracks {
+        write_track_policy(&mut out, track, clamp_deltas, false)?;
+    }
+    Ok(out)
 }
 
 fn clamp_tick(t: i64) -> u64 {
@@ -615,17 +673,22 @@ fn meta(kind: u8, data: &[u8]) -> Result<Vec<u8>, MidiError> {
     Ok(b)
 }
 
-fn write_track(out: &mut Vec<u8>, mut events: Vec<WEvent>) -> Result<(), MidiError> {
+fn write_track(out: &mut Vec<u8>, events: Vec<WEvent>) -> Result<(), MidiError> {
+    write_track_policy(out, events, false, true)
+}
+
+fn write_track_policy(out: &mut Vec<u8>, mut events: Vec<WEvent>, clamp_deltas: bool, running_status: bool) -> Result<(), MidiError> {
     events.sort_by_key(|e| (e.tick, e.order));
     let mut body = Vec::new();
     let mut last_tick = 0u64;
     let mut running: Option<u8> = None;
     for e in &events {
-        push_vlq(&mut body, e.tick - last_tick)?;
+        let delta = e.tick - last_tick;
+        push_vlq(&mut body, if clamp_deltas { delta.min(MAX_VLQ) } else { delta })?;
         last_tick = e.tick;
         let status = e.bytes.first().copied().unwrap_or(0);
         if (0x80..=0xEF).contains(&status) {
-            if running == Some(status) {
+            if running_status && running == Some(status) {
                 body.extend_from_slice(e.bytes.get(1..).unwrap_or(&[]));
             } else {
                 body.extend_from_slice(&e.bytes);
@@ -846,5 +909,33 @@ mod tests {
         // The earlier note is trimmed to the start of the next same-pitch note; later notes keep their length;
         // of two notes starting together only the longer survives.
         assert_eq!(got, vec![(0, 100), (100, 200), (1000, 100), (2000, 900)]);
+    }
+    #[test]
+    fn timed_writer_preserves_source_ticks_payloads_and_stable_order() {
+        let events = vec![
+            TimedEvent { tick: 96, order: 3, bytes: vec![0x90, 60, 100] },
+            TimedEvent { tick: 96, order: 1, bytes: vec![0x80, 60, 0] },
+            TimedEvent { tick: 96, order: 3, bytes: vec![0x90, 60, 110] },
+        ];
+        let out = write_timed_smf(0, 96, vec![events], false, 53).unwrap();
+        assert_eq!(&out[..14], b"MThd\0\0\0\x06\0\0\0\x01\0\x60");
+        assert_eq!(&out[22..], &[96, 0x80, 60, 0, 0, 0x90, 60, 100, 0, 0x90, 60, 110, 0, 0xff, 0x2f, 0]);
+    }
+
+    #[test]
+    fn timed_writer_checks_budget_format_division_and_delta_policy() {
+        let event = TimedEvent { tick: MAX_VLQ + 1, order: 0, bytes: vec![0xc0, 1] };
+        assert!(write_timed_smf(0, 480, vec![vec![event.clone()]], false, 32).is_err());
+        let out = write_timed_smf(0, 480, vec![vec![event.clone()]], true, 32).unwrap();
+        assert_eq!(&out[22..26], &[0xff, 0xff, 0xff, 0x7f]);
+        assert!(write_timed_smf(0, 480, vec![vec![event]], true, 31).is_err());
+        assert!(write_timed_smf(0, 96, vec![], false, 32).is_err());
+        assert!(write_timed_smf(2, 96, vec![], false, 32).is_err());
+        for division in [0, 0x8000, u16::MAX] {
+            assert!(write_timed_smf(1, division, vec![], false, 32).is_err());
+        }
+        assert_eq!(write_timed_smf(1, 96, vec![], false, 14).unwrap().len(), 14);
+        assert!(write_timed_smf(1, 96, vec![], false, 13).is_err());
+        assert_eq!(encode_meta_event(4, b"Piano").unwrap(), b"\xff\x04\x05Piano");
     }
 }

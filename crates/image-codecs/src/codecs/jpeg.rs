@@ -198,6 +198,15 @@ fn data_end(b: &[u8]) -> (DataEnd, u64) {
     data_end_mode(b, false)
 }
 
+/// Whether JPEG `b` holds too little scan data for a `w` × `h` frame to be worth decoding: no scan
+/// data at all, or under one byte for every [`MAX_PIXELS_PER_BYTE`] pixels (counted on the scan
+/// data the marker walk crosses, so APP padding doesn't count). `zune-jpeg` allocates the whole
+/// output before it reads a scan, so a few bytes could otherwise ask for a frame of any size.
+pub(crate) fn scan_too_short(b: &[u8], w: u32, h: u32) -> bool {
+    let (end, scan_bytes) = data_end(b);
+    end == DataEnd::Empty || u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
+}
+
 /// Whether the marker walk actually reaches the first EOI, with malformed segment lengths refused.
 pub(crate) fn reaches_eoi(b: &[u8]) -> bool {
     data_end_mode(b, true).0 == DataEnd::Complete

@@ -63,6 +63,7 @@ pub fn parse_aiff(b: &[u8]) -> Option<(Vec<u8>, u16, u32, u16)> {
     if b.len() < 12 || &b[..4] != b"FORM" || !(&b[8..12] == b"AIFF" || &b[8..12] == b"AIFC") {
         return None;
     }
+    let aifc = &b[8..12] == b"AIFC";
     let mut at = 12;
     let mut comm = None;
     while at + 8 <= b.len() {
@@ -73,7 +74,17 @@ pub fn parse_aiff(b: &[u8]) -> Option<(Vec<u8>, u16, u32, u16)> {
             let ch = u16::from_be_bytes([body[0], body[1]]);
             let bits = u16::from_be_bytes([body[6], body[7]]);
             let sr = from_extended(body[8..18].try_into().ok()?).round() as u32;
-            let little = body.len() >= 22 && &body[18..22] == b"sowt";
+            // AIFF has no compression code (trailing COMM bytes mean nothing); AIFF-C must name one
+            // of the integer PCM codes, or the samples are not integer PCM at all
+            let little = if aifc {
+                match body.get(18..22)? {
+                    b"NONE" | b"twos" => false,
+                    b"sowt" => true,
+                    _ => return None,
+                }
+            } else {
+                false
+            };
             comm = Some((ch, sr, bits, little));
         } else if id == b"SSND" && body.len() >= 8 {
             let (ch, sr, bits, little) = comm?;
@@ -143,5 +154,36 @@ mod tests {
             let _ = parse_wav(&w[..cut]);
             let _ = parse_aiff(&a[..cut.min(a.len())]);
         }
+    }
+
+    #[test]
+    fn aifc_needs_an_integer_pcm_compression_code() {
+        let file = |kind: &[u8; 4], code: &[u8]| {
+            let mut comm = vec![0, 1, 0, 0, 0, 1, 0, 16];
+            comm.extend_from_slice(&[0x40, 0x0E, 0xBB, 0x80, 0, 0, 0, 0, 0, 0]);
+            comm.extend_from_slice(code);
+            let mut body = kind.to_vec();
+            body.extend_from_slice(b"COMM");
+            body.extend_from_slice(&(comm.len() as u32).to_be_bytes());
+            body.extend_from_slice(&comm);
+            if comm.len() & 1 == 1 {
+                body.push(0);
+            }
+            body.extend_from_slice(b"SSND");
+            body.extend_from_slice(&10u32.to_be_bytes());
+            body.extend_from_slice(&[0; 8]);
+            body.extend_from_slice(&[0x12, 0x34]);
+            let mut v = b"FORM".to_vec();
+            v.extend_from_slice(&(body.len() as u32).to_be_bytes());
+            v.extend_from_slice(&body);
+            v
+        };
+        assert_eq!(parse_aiff(&file(b"AIFC", b"NONE")).map(|p| p.0), Some(vec![0x34, 0x12]));
+        assert_eq!(parse_aiff(&file(b"AIFC", b"twos")).map(|p| p.0), Some(vec![0x34, 0x12]));
+        assert_eq!(parse_aiff(&file(b"AIFC", b"sowt")).map(|p| p.0), Some(vec![0x12, 0x34]));
+        assert!(parse_aiff(&file(b"AIFC", b"fl32")).is_none(), "float samples are not integer PCM");
+        assert!(parse_aiff(&file(b"AIFC", b"")).is_none(), "AIFF-C without a compression code");
+        // plain AIFF ignores trailing COMM bytes
+        assert_eq!(parse_aiff(&file(b"AIFF", b"sowt")).map(|p| p.0), Some(vec![0x34, 0x12]));
     }
 }
