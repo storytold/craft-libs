@@ -144,7 +144,9 @@ impl<'a> ColorReadout<'a> {
                 events.clear();
                 channel_edits.clear();
                 let hex = Field::new(words.hex.clone()).side(HexField::hash_label()).sizing(Sizing::Content);
-                if let Some(out) = hex.show(ui, |ui, _| TextField::hex(words.hex.as_str().to_owned(), Bind::given(held)).sizing(Sizing::Content).show(ui)).inner {
+                if let Some(out) =
+                    hex.show(ui, |ui, _| TextField::hex(words.hex.as_str().to_owned(), Bind::given(held)).sizing(Sizing::Content).show(ui)).inner
+                {
                     events.extend(out.events);
                 }
                 Row::new().show(ui, |ui, _| {

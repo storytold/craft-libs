@@ -56,8 +56,7 @@ fn bar_options(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
         BarHome::new("Home", Bind::bound(&mut home)).show(ui);
         BarTool::new(IconId::new("brush"), "Brush").show(ui);
         Field::new("Size").show(ui, |ui, _| NumberField::new("Size", Bind::bound(&mut size)).range(1.0..=5000.0).show(ui));
-        Field::new("Opacity")
-            .show(ui, |ui, _| NumberField::new("Opacity", Bind::bound(&mut opacity)).range(1.0..=100.0).show(ui));
+        Field::new("Opacity").show(ui, |ui, _| NumberField::new("Opacity", Bind::bound(&mut opacity)).range(1.0..=100.0).show(ui));
         Field::new("Mode").show(ui, |ui, _| Select::new("Mode", Bind::bound(&mut mode), &modes).show(ui));
         Divider::vertical().show(ui);
         Checkbox::new(Bind::bound(&mut sample_all)).label("Sample All Layers").show(ui);

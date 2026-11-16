@@ -45,7 +45,9 @@ fn preset_picker_chip(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let (swatch, state) = data.value("chip", (Some(TEAL), PresetState::<u32>::new()));
     let mut output = None;
     Bar::new("Brush options", BarKind::Options).show(ui, |ui, _| {
-        output = Some(PresetPicker::new("Swatch", Bind::bound(&mut *swatch), &rows, Bind::bound(&mut *state)).field(PickerField::Chip).caption("20").show(ui));
+        output = Some(
+            PresetPicker::new("Swatch", Bind::bound(&mut *swatch), &rows, Bind::bound(&mut *state)).field(PickerField::Chip).caption("20").show(ui),
+        );
     });
     output.map(StoryOutput::from).unwrap_or_default()
 }

@@ -256,10 +256,8 @@ impl<'a, P: Clone + Hash + Send + Sync + 'static> DockGroup<'a, P> {
     /// The group named by `anchor` (one of its panels) with its `panels`, `active` showing. The group is named by the
     /// active panel's title.
     pub fn new(anchor: P, panels: &'a [PanelTitle], active: PanelKey) -> Self {
-        let props = ContainerProps::new()
-            .sizing(Sizing::Fill)
-            .header(HeaderRegion::new().fill(SurfaceKind::Background))
-            .command_scope(DockCommands::SCOPE);
+        let props =
+            ContainerProps::new().sizing(Sizing::Fill).header(HeaderRegion::new().fill(SurfaceKind::Background)).command_scope(DockCommands::SCOPE);
         let title = panels.iter().find(|panel| panel.key == active).map(|panel| panel.title.clone()).unwrap_or_default();
         DockGroup {
             common: Common::new(),

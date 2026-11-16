@@ -14,8 +14,8 @@ use super::screen_mode::{ScreenMode, ScreenModeCommands, ScreenModeFollow};
 use super::words::ShellWords;
 use crate::contract::overlay::Resize;
 use crate::contract::{
-    Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, PaneEdge, Props as _, Remember as _, Role, ShellPane,
-    ShowContainer as _, Sizing,
+    Bind, BodyCx, BodyLayout, Common, Component, Container, ContainerProps, Cx, Mount, NoValue, Outcome, PaneEdge, Props as _, Remember as _, Role,
+    ShellPane, ShowContainer as _, Sizing,
 };
 use crate::notices::ToastStack;
 use crate::runtime::commands::{CommandAccess as _, CommandSet as _};

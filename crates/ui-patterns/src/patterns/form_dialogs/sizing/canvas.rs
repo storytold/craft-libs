@@ -4,13 +4,13 @@ use super::{CanvasExtension, Kit, LinkedSize, SizeForm, SizingOutput, set_size_j
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Props as _, Show as _, ShowContainer as _};
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, StackDialog, dialog_id};
+use crate::display::Text;
 use crate::form::Field;
 use crate::pickers::{Anchor9, ReferencePoint, Select};
-use crate::display::Text;
 use crate::runtime::env::{ColumnSize, Label, UnitKind};
 use crate::sections::Section;
-use craft_theme::variant::Tone;
 use craft_behavior::PixelSize;
+use craft_theme::variant::Tone;
 use egui::Ui;
 use serde_json::json;
 
@@ -195,8 +195,7 @@ impl<'a> CanvasSize<'a> {
                 sized_section(ui, "new", &words.new_size, kit.file_size(now, bytes_per_pixel), kit.tone_of(now), |ui| {
                     kit.refusal(ui, now);
                     kit.sides(ui, &mut state.size);
-                    let check =
-                        Checkbox::new(Bind::given(state.size.is_relative())).label(words.relative.clone()).id_salt("relative").show(ui);
+                    let check = Checkbox::new(Bind::given(state.size.is_relative())).label(words.relative.clone()).id_salt("relative").show(ui);
                     if let Some(on) = check.value().copied() {
                         state.size.relative(on);
                     }

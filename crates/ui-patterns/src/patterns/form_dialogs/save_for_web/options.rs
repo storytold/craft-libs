@@ -332,10 +332,7 @@ fn metadata_row(ui: &mut Ui, words: &SaveForWebWords, options: &mut SaveForWebOp
 
 /// Image Size: Width and Height in pixels or percent, the Percent row and the Resample method.
 fn size_section(ui: &mut Ui, words: &SaveForWebWords, sizing: &SizingWords, units: &Units, link: &mut LinkedSize, resample: &mut Resample) {
-    let kinds = [
-        Entry::new(UnitKind::Pixels, units.name(UnitKind::Pixels)),
-        Entry::new(UnitKind::Percent, units.name(UnitKind::Percent)),
-    ];
+    let kinds = [Entry::new(UnitKind::Pixels, units.name(UnitKind::Pixels)), Entry::new(UnitKind::Percent, units.name(UnitKind::Percent))];
     Section::fixed(words.image_size.clone()).id_salt("size").show(ui, |ui, _| {
         row(ui, &words.width, "width", |ui| {
             let range = link.width_range();

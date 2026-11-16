@@ -634,8 +634,7 @@ impl FooterBar {
                         DialogRole::Destructive => Variant::DANGER,
                         DialogRole::Cancel | DialogRole::Other => Variant::SECONDARY,
                     };
-                    let mut widget =
-                        Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
+                    let mut widget = Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
                     if column {
                         widget = widget.sizing(Sizing::FillWidth);
                     }

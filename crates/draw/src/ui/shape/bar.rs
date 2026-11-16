@@ -122,15 +122,11 @@ impl<'a> ShapeBar<'a> {
                 let check = Checkbox::new(Bind::given(fill_on)).label(words.fill.clone()).show(ui).events;
                 pass.events.extend(check.map(ShapeChange::FillOn));
                 let hidden = SideLabel::new().kind(LabelKind::Hidden);
-                let fill = Field::new(words.fill_color.clone())
-                    .id_salt("fill")
-                    .side(hidden)
-                    .show(ui, |ui, _| pass.chip(ui, ShapePaint::Fill));
+                let fill = Field::new(words.fill_color.clone()).id_salt("fill").side(hidden).show(ui, |ui, _| pass.chip(ui, ShapePaint::Fill));
                 if let Some(out) = fill.inner {
                     pass.take_chip(ShapePaint::Fill, out);
                 }
-                let stroke =
-                    Field::new(words.stroke.clone()).id_salt("stroke").show(ui, |ui, _| pass.chip(ui, ShapePaint::Stroke));
+                let stroke = Field::new(words.stroke.clone()).id_salt("stroke").show(ui, |ui, _| pass.chip(ui, ShapePaint::Stroke));
                 if let Some(out) = stroke.inner {
                     pass.take_chip(ShapePaint::Stroke, out);
                 }
@@ -160,12 +156,8 @@ impl<'a> ShapeBar<'a> {
             if let Some((cell, change)) = cell {
                 Divider::vertical().show(ui);
                 let side = SideLabel::new().scrub(true);
-                let (events, alert) = Field::new(cell.caption.clone())
-                    .id_salt(cell.key)
-                    .side(side)
-                    .show(ui, |ui, _| cell.show(ui))
-                    .inner
-                    .unwrap_or_default();
+                let (events, alert) =
+                    Field::new(cell.caption.clone()).id_salt(cell.key).side(side).show(ui, |ui, _| cell.show(ui)).inner.unwrap_or_default();
                 pass.events.extend(events.map(change));
                 pass.alert(alert);
             }

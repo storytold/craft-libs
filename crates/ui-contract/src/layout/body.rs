@@ -1196,10 +1196,11 @@ fn row_line(ctx: &egui::Context, sizing: bool, id: Id, shared: Option<f32>) -> O
 /// with its container's regions already in it: what the container's end region sets its children on, so the end
 /// content meets the members' line as the members meet each other. `None` for any other body.
 pub(crate) fn members_line(ctx: &egui::Context, body: Id) -> Option<RowLine> {
-    layout_memory::measured(ctx, sub(body, "line"))
-        .map(|found| found.took)
-        .filter(|took| took.y > 0.0)
-        .map(|took| RowLine { body, centre: Some(took.x), height: Some(took.y) })
+    layout_memory::measured(ctx, sub(body, "line")).map(|found| found.took).filter(|took| took.y > 0.0).map(|took| RowLine {
+        body,
+        centre: Some(took.x),
+        height: Some(took.y),
+    })
 }
 
 /// The line the unwrapped `Row` body `body` sets its children on: its own (`centre`, `height`), or the line `shared`

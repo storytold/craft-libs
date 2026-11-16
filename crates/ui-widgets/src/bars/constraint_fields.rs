@@ -259,29 +259,26 @@ impl Cells<'_> {
             low.min(high)..=low.max(high)
         });
         let mut edited = None;
-        Field::new(cell.caption.clone()).id_salt(cell.key).enabled(cell.enabled).side(SideLabel::new().scrub(true)).show(
-            ui,
-            |ui, _| {
-                let mut field = NumberField::new(cell.caption.clone(), Bind::given(Some(shown))).range(range.clone()).scrub_by_label();
-                if let Some(c) = conversion {
-                    field = if units.is_some() {
-                        // Fixed Size with the host's units: typed text may carry any unit, read through the document.
-                        // Its right-click is the unit menu, so the field opens no edit menu of its own.
-                        let reader = Env::of(ui).units().document_reader(c.unit, c.extent, c.pixels_per_inch, c.points_per_inch);
-                        field.codec(NumberCodec::new(reader, *c.unit.decimals().end())).own_context_menu()
-                    } else {
-                        field.unit_kind(c.unit)
-                    };
-                }
-                let out = field.show(ui);
-                edited = out.value().copied().flatten();
-                if let Some(s) = units {
-                    let entries: Vec<Entry<UnitKind>> = s.units.iter().map(|entry| entry.clone().checked(entry.value() == Some(&s.unit))).collect();
-                    let menu = Menu::context(cell.caption.clone(), &out.response).values().pick(ui, &entries);
-                    *unit_picked = unit_picked.or(menu.picked);
-                }
-            },
-        );
+        Field::new(cell.caption.clone()).id_salt(cell.key).enabled(cell.enabled).side(SideLabel::new().scrub(true)).show(ui, |ui, _| {
+            let mut field = NumberField::new(cell.caption.clone(), Bind::given(Some(shown))).range(range.clone()).scrub_by_label();
+            if let Some(c) = conversion {
+                field = if units.is_some() {
+                    // Fixed Size with the host's units: typed text may carry any unit, read through the document.
+                    // Its right-click is the unit menu, so the field opens no edit menu of its own.
+                    let reader = Env::of(ui).units().document_reader(c.unit, c.extent, c.pixels_per_inch, c.points_per_inch);
+                    field.codec(NumberCodec::new(reader, *c.unit.decimals().end())).own_context_menu()
+                } else {
+                    field.unit_kind(c.unit)
+                };
+            }
+            let out = field.show(ui);
+            edited = out.value().copied().flatten();
+            if let Some(s) = units {
+                let entries: Vec<Entry<UnitKind>> = s.units.iter().map(|entry| entry.clone().checked(entry.value() == Some(&s.unit))).collect();
+                let menu = Menu::context(cell.caption.clone(), &out.response).values().pick(ui, &entries);
+                *unit_picked = unit_picked.or(menu.picked);
+            }
+        });
         let edited = edited?;
         let Some(c) = conversion else { return Some(edited) };
         // A field that shows a rounded value commits the rounded value when it is left: that is no change.

@@ -12,9 +12,7 @@ mod words;
 // Panel.
 mod panel;
 
-pub use footer::{
-    DialogRole, DropAction, DropActionOutput, DropActionStyle, FooterAction, FooterBar, FooterButton, FooterDrop, FooterOutput,
-};
+pub use footer::{DialogRole, DropAction, DropActionOutput, DropActionStyle, FooterAction, FooterBar, FooterButton, FooterDrop, FooterOutput};
 pub use group_box::{GroupBox, GroupBoxStyle};
 pub use section::{Section, SectionOutput, SectionStyle};
 pub use stack::{SectionStack, SectionStackOutput, SectionStackStyle, StackRows, StackSlot};

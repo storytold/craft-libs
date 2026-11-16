@@ -59,7 +59,9 @@ impl ListRow<'_> {
                             icon.color.get_or_insert(cx.resolve(&cx.style.trailing_icon.color));
                             ui.draw().icon(shape, &icon);
                         }
-                        TrailingFace::Icon(icon) => ui.face(key, IconButton::new(icon.clone()).focusable(false).enabled(*enabled).glyphs(GlyphRole::PanelRail)),
+                        TrailingFace::Icon(icon) => {
+                            ui.face(key, IconButton::new(icon.clone()).focusable(false).enabled(*enabled).glyphs(GlyphRole::PanelRail))
+                        }
                         TrailingFace::Disclosure { open } => ui.face(key, Disclosure::new(Bind::given(*open)).node(false).enabled(*enabled)),
                         TrailingFace::Strong(text) => {
                             ui.draw().text(*slot, &trailing_run(text, true));

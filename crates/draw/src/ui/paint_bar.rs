@@ -4,8 +4,8 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use craft_behavior::{EditEvent, EditEvents, IconId, Mixed, Value};
-use craft_theme::Srgba;
 use craft_theme::ControlSize;
+use craft_theme::Srgba;
 use craft_ui::buttons::{IconButton, ToggleButton};
 use craft_ui::choice::{Checkbox, Swatch};
 use craft_ui::contract::{
@@ -349,7 +349,12 @@ impl<M: Value> Pass<'_, M> {
 
     /// A pen toggle over a flag: an icon button that stays pressed while on, named `caption`; a click is one `Set`.
     fn toggle(&mut self, ui: &mut Ui, icon: &'static str, caption: &Label, enabled: bool, current: bool, set: fn(&mut PaintValues<M>, bool)) {
-        let shown = ToggleButton::new(caption.clone(), Bind::given(current)).icon(IconId::new(icon)).icon_only().size(ControlSize::Md).enabled(enabled).show(ui);
+        let shown = ToggleButton::new(caption.clone(), Bind::given(current))
+            .icon(IconId::new(icon))
+            .icon_only()
+            .size(ControlSize::Md)
+            .enabled(enabled)
+            .show(ui);
         if let Some(next) = shown.value().copied() {
             self.set_with(caption, |v| set(v, next));
         }
@@ -360,24 +365,21 @@ impl<M: Value> Pass<'_, M> {
         // The body may run more than once in a pass and only the run that reads the input reports its events, so every
         // run's events and alert are collected.
         let collected: RefCell<(EditEvents<Option<f64>>, Option<RangeAlert>)> = RefCell::new((EditEvents::new(), None));
-        let _ = Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).enabled(enabled).show(
-            ui,
-            |ui, _| {
-                let field = NumberField::new(caption.clone(), Bind::given(Some(current * 100.0)))
-                    .unit_kind(UnitKind::Percent)
-                    .range(0.0..=100.0)
-                    .commit_decimals(0)
-                    .scrub_by_label()
-                    .show(ui);
-                let mut sink = collected.borrow_mut();
-                for event in field.edit.events.clone() {
-                    sink.0.push(event);
-                }
-                if field.out_of_range.is_some() {
-                    sink.1 = field.out_of_range;
-                }
-            },
-        );
+        let _ = Field::new(caption.clone()).side(SideLabel::new().scrub(true)).id_salt(salt).enabled(enabled).show(ui, |ui, _| {
+            let field = NumberField::new(caption.clone(), Bind::given(Some(current * 100.0)))
+                .unit_kind(UnitKind::Percent)
+                .range(0.0..=100.0)
+                .commit_decimals(0)
+                .scrub_by_label()
+                .show(ui);
+            let mut sink = collected.borrow_mut();
+            for event in field.edit.events.clone() {
+                sink.0.push(event);
+            }
+            if field.out_of_range.is_some() {
+                sink.1 = field.out_of_range;
+            }
+        });
         let (events, alert) = collected.into_inner();
         if alert.is_some() {
             self.out_of_range = alert;

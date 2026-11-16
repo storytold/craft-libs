@@ -355,78 +355,79 @@ impl<'a> TextStylesPanel<'a> {
             }
         };
 
-        let shown = Panel::new(label.clone()).pad(Pad::None).collection_body().command_scope(TextStyleCommand::SCOPE).footer(footer).show(ui, |ui, cx| {
-            let before = cx.memory::<Facts>().clone();
-            while let Some((command, _)) = cx.take_command::<TextStyleCommand>() {
-                if let Some(found) = before.action(command) {
-                    action.set(Some(found));
-                }
-            }
-            let held = selection.reborrow().read(cx).and_then(|held| held.same().cloned()).unwrap_or_default();
-            let facts = Facts { paragraph, target, overridden, current, picked: held.lead.or(current), selected: held.items.clone() };
-            for command in [
-                TextStyleCommand::ClearOverride,
-                TextStyleCommand::Redefine,
-                TextStyleCommand::New,
-                TextStyleCommand::Duplicate,
-                TextStyleCommand::Delete,
-                TextStyleCommand::Options,
-                TextStyleCommand::SelectUnused,
-            ] {
-                cx.publish(command, CommandState::new().enabled(facts.action(command).is_some()));
-            }
-            *cx.memory::<Facts>() = facts;
-
-            let source = keyed(rows, |row: &TextStyleRow| row.id);
-            let mode = if highlighting { SelectMode::Multi } else { SelectMode::Single };
-            let list = List::new(label.clone())
-                .id(list_id)
-                .select(mode)
-                .activate(ActivateOn::Click)
-                .allow_empty(true)
-                .deletable(true)
-                .max_rows(8)
-                .can_drag(move |_| highlighting)
-                .drag_payload(|drag: &ListDrag<u64>| Some(drag.clone()))
-                .selection(selection.reborrowed());
-            let list = match &empty {
-                Some(text) => list.empty(text.clone()),
-                None => list,
-            };
-            let shown_rows = list.show_items(ui, &source, &mut |id, _| {
-                let Some(row) = rows.iter().find(|row| row.id == *id) else { return ListRow::new(Label::Empty) };
-                let is_current = target && current == Some(*id);
-                let marked = is_current && overridden;
-                let none = *id == 0 && !paragraph;
-                let name = if marked { words.overridden_name.fill(&[("name", row.name.as_str())]) } else { row.name.clone() };
-                let spoken = if marked { words.overridden_spoken.fill(&[("name", row.name.as_str())]) } else { row.name.clone() };
-                let description = if none { words.no_character_style.as_str().to_owned() } else { tip.clone() };
-                let styled = ListRow::new(name).accessible_name(spoken).description(description).highlight(is_current);
-                if none { styled.ink(RowInk::Dimmed) } else { styled }
-            });
-            let (events, second) = (shown_rows.events, shown_rows.activation_clicks >= 2);
-
-            let pointer = craft_ui::runtime::pointer::frame(ui.ctx());
-            let alt = pointer.mods.alt;
-            let plain = !pointer.mods.shift && !pointer.mods.cmd;
-            for event in events {
-                match event {
-                    CollectionEvent::Activate(id) if second && (id != 0 || paragraph) => action.set(Some(TextStyleAction::Options(id))),
-                    CollectionEvent::Activate(id) if target && (paragraph || text_selected) && plain => {
-                        action.set(Some(TextStyleAction::apply(id, alt)));
+        let shown =
+            Panel::new(label.clone()).pad(Pad::None).collection_body().command_scope(TextStyleCommand::SCOPE).footer(footer).show(ui, |ui, cx| {
+                let before = cx.memory::<Facts>().clone();
+                while let Some((command, _)) = cx.take_command::<TextStyleCommand>() {
+                    if let Some(found) = before.action(command) {
+                        action.set(Some(found));
                     }
-                    // A character style at a bare caret has nothing to apply to: the attempt warns instead.
-                    CollectionEvent::Activate(_) if target && !paragraph && !text_selected && plain => hint.set(true),
-                    CollectionEvent::Delete(keys) if keys.len() > 1 => action.set(Some(TextStyleAction::DeleteHighlighted)),
-                    CollectionEvent::Delete(keys) => {
-                        if let Some(id) = keys.first().copied().filter(|id| *id != 0) {
-                            action.set(Some(TextStyleAction::Delete(id)));
+                }
+                let held = selection.reborrow().read(cx).and_then(|held| held.same().cloned()).unwrap_or_default();
+                let facts = Facts { paragraph, target, overridden, current, picked: held.lead.or(current), selected: held.items.clone() };
+                for command in [
+                    TextStyleCommand::ClearOverride,
+                    TextStyleCommand::Redefine,
+                    TextStyleCommand::New,
+                    TextStyleCommand::Duplicate,
+                    TextStyleCommand::Delete,
+                    TextStyleCommand::Options,
+                    TextStyleCommand::SelectUnused,
+                ] {
+                    cx.publish(command, CommandState::new().enabled(facts.action(command).is_some()));
+                }
+                *cx.memory::<Facts>() = facts;
+
+                let source = keyed(rows, |row: &TextStyleRow| row.id);
+                let mode = if highlighting { SelectMode::Multi } else { SelectMode::Single };
+                let list = List::new(label.clone())
+                    .id(list_id)
+                    .select(mode)
+                    .activate(ActivateOn::Click)
+                    .allow_empty(true)
+                    .deletable(true)
+                    .max_rows(8)
+                    .can_drag(move |_| highlighting)
+                    .drag_payload(|drag: &ListDrag<u64>| Some(drag.clone()))
+                    .selection(selection.reborrowed());
+                let list = match &empty {
+                    Some(text) => list.empty(text.clone()),
+                    None => list,
+                };
+                let shown_rows = list.show_items(ui, &source, &mut |id, _| {
+                    let Some(row) = rows.iter().find(|row| row.id == *id) else { return ListRow::new(Label::Empty) };
+                    let is_current = target && current == Some(*id);
+                    let marked = is_current && overridden;
+                    let none = *id == 0 && !paragraph;
+                    let name = if marked { words.overridden_name.fill(&[("name", row.name.as_str())]) } else { row.name.clone() };
+                    let spoken = if marked { words.overridden_spoken.fill(&[("name", row.name.as_str())]) } else { row.name.clone() };
+                    let description = if none { words.no_character_style.as_str().to_owned() } else { tip.clone() };
+                    let styled = ListRow::new(name).accessible_name(spoken).description(description).highlight(is_current);
+                    if none { styled.ink(RowInk::Dimmed) } else { styled }
+                });
+                let (events, second) = (shown_rows.events, shown_rows.activation_clicks >= 2);
+
+                let pointer = craft_ui::runtime::pointer::frame(ui.ctx());
+                let alt = pointer.mods.alt;
+                let plain = !pointer.mods.shift && !pointer.mods.cmd;
+                for event in events {
+                    match event {
+                        CollectionEvent::Activate(id) if second && (id != 0 || paragraph) => action.set(Some(TextStyleAction::Options(id))),
+                        CollectionEvent::Activate(id) if target && (paragraph || text_selected) && plain => {
+                            action.set(Some(TextStyleAction::apply(id, alt)));
                         }
+                        // A character style at a bare caret has nothing to apply to: the attempt warns instead.
+                        CollectionEvent::Activate(_) if target && !paragraph && !text_selected && plain => hint.set(true),
+                        CollectionEvent::Delete(keys) if keys.len() > 1 => action.set(Some(TextStyleAction::DeleteHighlighted)),
+                        CollectionEvent::Delete(keys) => {
+                            if let Some(id) = keys.first().copied().filter(|id| *id != 0) {
+                                action.set(Some(TextStyleAction::Delete(id)));
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
-            }
-        });
+            });
         TextStylesPanelOutput {
             response: shown.output.response,
             action: action.get(),
