@@ -737,6 +737,28 @@ fn a_click_on_the_box_moves_nothing_and_a_jittery_click_outside_applies_the_box_
     assert_eq!(h.host.borrow().applied, 1, "the click outside applies");
 }
 
+// A double click inside whose presses wobble within the slop and come back applies the box as it was: the wobble the
+// box followed is cancelled, never committed as a move before the apply.
+#[trial]
+fn a_jittery_double_click_inside_applies_with_no_move_committed() {
+    let mut h = upright();
+    let slop = craft_ui::testing::input::slop(h.fixture.ctx());
+    let inside = h.screen(Point::new(150.0, 120.0));
+    frame(&mut h, vec![pointer::moved(inside)]);
+    for _ in 0..2 {
+        frame(&mut h, vec![pointer::press(inside)]);
+        frame(&mut h, vec![pointer::moved(inside + by(slop / 3.0, slop / 4.0))]);
+        frame(&mut h, vec![pointer::moved(inside)]);
+        frame(&mut h, vec![pointer::release(inside)]);
+    }
+    frame(&mut h, Vec::new());
+    let events = h.host.borrow().events.clone();
+    assert!(events.contains(&Seen::Begin), "the box followed the wobble: {events:?}");
+    assert!(!events.contains(&Seen::Commit), "no move is committed: {events:?}");
+    assert_eq!(h.state(), BoxState::from_rect(RECT), "the box stays as it was");
+    assert_eq!(h.host.borrow().applied, 1, "the double click applies");
+}
+
 /// A secondary click on the session's box opens the mode menu (its rows are on the page); with the menu closed again, a
 /// secondary click away from the box opens none.
 #[trial]

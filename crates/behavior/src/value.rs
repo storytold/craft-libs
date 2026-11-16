@@ -93,6 +93,8 @@ pub enum CancelReason {
     HostChanged,
     /// An undo or redo command ran while the gesture was open.
     UndoDuringGesture,
+    /// The gesture ended with the value it began with: a click that moved within slop and came back.
+    Unchanged,
 }
 
 impl CancelReason {
