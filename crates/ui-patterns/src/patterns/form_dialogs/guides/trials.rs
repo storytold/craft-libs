@@ -110,14 +110,15 @@ fn a_new_guide_remembers_its_confirmed_values_for_the_next_open() {
     let position = fixture.by_label("Position").expect("the Position field");
     fixture.click(&position).settle();
     fixture.key(egui::Key::A, egui::Modifiers::COMMAND);
-    fixture.type_text("120");
+    let typed = 120.0;
+    fixture.type_text(&typed.to_string());
     fixture.key(egui::Key::Enter, egui::Modifiers::NONE).settle();
     assert!(!open.get(), "Enter is OK");
     let confirmed: Vec<_> = made.borrow().iter().map(|guide| (guide.along, guide.position, guide.color)).collect();
-    assert_eq!(confirmed, [(Axis::Y, 120.0, Some(GuideColor::Magenta.rgba()))], "OK makes the guide of the edited values");
+    assert_eq!(confirmed, [(Axis::Y, typed, Some(GuideColor::Magenta.rgba()))], "OK makes the guide of the edited values");
 
     reopen(&mut fixture);
-    assert_eq!(*values.borrow(), NewGuideValues::new(Axis::Y, 120.0, GuideColor::Magenta), "the next open starts from the confirmed values");
+    assert_eq!(*values.borrow(), NewGuideValues::new(Axis::Y, typed, GuideColor::Magenta), "the next open starts from the confirmed values");
     let horizontal = fixture.by_label("Horizontal").expect("the orientation offers Horizontal");
     fixture.click(&horizontal).settle();
     assert_eq!(values.borrow().along, Axis::X, "the click edits the values");
@@ -126,5 +127,5 @@ fn a_new_guide_remembers_its_confirmed_values_for_the_next_open() {
     assert_eq!(made.borrow().len(), 1, "Cancel makes no guide");
 
     reopen(&mut fixture);
-    assert_eq!(*values.borrow(), NewGuideValues::new(Axis::Y, 120.0, GuideColor::Magenta), "Cancel stored nothing: the OK'd values come back");
+    assert_eq!(*values.borrow(), NewGuideValues::new(Axis::Y, typed, GuideColor::Magenta), "Cancel stored nothing: the OK'd values come back");
 }
