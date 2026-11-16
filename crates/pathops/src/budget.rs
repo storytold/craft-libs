@@ -1310,9 +1310,12 @@ fn crossing_work_within(seg: &Segments, eps: f64, cap: usize) -> bool {
     // refused before the lines are walked), and the other unless it could not take the sum past the limit.
     let mut total = 0u64;
     let curves_first = curves_most > lines_most;
-    for curves_now in [curves_first, !curves_first] {
+    for (turn, curves_now) in [curves_first, !curves_first].into_iter().enumerate() {
         let most = if curves_now { curves_most } else { lines_most };
-        if most > 0.0 && total as f64 + most > limit as f64 && !(if curves_now { curve_work(&mut total) } else { line_work(&mut total) }) {
+        // The first is walked at once, whatever it could come to by itself: the two together could pass the limit (the sum above does not fit it), and
+        // each of them could fit it alone. The second is walked only where what the first came to, with all that the second could add, passes it.
+        let could_pass = turn == 0 || total as f64 + most > limit as f64;
+        if most > 0.0 && could_pass && !(if curves_now { curve_work(&mut total) } else { line_work(&mut total) }) {
             return false;
         }
     }
@@ -3156,6 +3159,39 @@ mod tests {
         work::reset();
         assert!(with_limits(roomy, || sweep_fits([&both])));
         assert_eq!(work::take(Work::CrossingPairs), 0);
+    }
+
+    /// The first kind is walked where each kind could come to the limit alone and the two could not. Ten lines through a point moved ten
+    /// tolerances or so (the walk counts 1,370, and the most they could come to, 1.7 times 10 x 9², is 1,377) and seven pieces of an arc (567)
+    /// are under a limit of 1,400 one by one, and over it together (1,937, and the most they could come to, 1,944): the estimate of the two
+    /// is past the limit, and neither was walked, for neither estimate was past it alone, so that both were admitted, at any limit from
+    /// 1,377 to 1,943.
+    #[test]
+    fn the_kinds_are_walked_where_each_fits_the_limit_alone_and_the_two_could_not() {
+        use kurbo::ParamCurve;
+        let arc = kurbo::CubicBez::new((0.0, 0.0), (100.0, 150.0), (300.0, 150.0), (400.0, 0.0));
+        let pieces = {
+            let mut p = BezPath::new();
+            let by = kurbo::Vec2::new(5000.0, 0.0);
+            for k in 1..=7 {
+                let s = arc.subsegment(0.0..k as f64 / 7.0);
+                p.move_to(s.p0 + by);
+                p.curve_to(s.p1 + by, s.p2 + by, s.p3 + by);
+            }
+            p
+        };
+        let lines = moved_star(10, 1e-5);
+        let both = {
+            let mut b = lines.clone();
+            b.extend(pieces.iter());
+            b
+        };
+        let fits = |path: &BezPath, limit: usize| with_limits(Limits { crossing_work: limit, ..Limits::default() }, || sweep_fits([path]));
+        let least = |path: &BezPath| (1..4_000).find(|&limit| fits(path, limit)).expect("a limit that admits it");
+        assert_eq!((least(&lines), least(&pieces)), (1_370, 567));
+        assert!(fits(&lines, 1_400) && fits(&pieces, 1_400), "alone");
+        assert!(!fits(&both, 1_400), "together");
+        assert_eq!(least(&both), 1_370 + 567, "the work of the two is the sum of the work of each");
     }
 
     /// A line of 1,000 across `m` vertical lines that do not cross one another, whose places along it all lie within `spread` tolerances
