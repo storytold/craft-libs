@@ -588,12 +588,15 @@ impl<W: TransformWarp> TransformSession<W> {
         }
     }
 
-    /// Undo or redo one step; refused while a gesture runs.
+    /// Undo or redo one step; refused while a gesture runs. A change not yet at rest (a run of nudges inside the
+    /// nudge pause) becomes its own step first, so Undo takes it back and Redo finds nothing after it.
     fn step(&mut self, step: Step) -> bool {
+        // pc: crates/ui-egui/src/tools/transform_tool/commit.rs:441 (`step` settles before it pops).
         if self.dragging() {
             return false;
         }
         self.last_nudge = None;
+        self.record_rest();
         let moved = self.history.step(&mut self.draft, step);
         self.rested = self.draft.clone();
         self.changed = false;
