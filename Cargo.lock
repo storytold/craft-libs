@@ -2146,6 +2146,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-media"
 version = "0.1.0"
 dependencies = [
@@ -2729,6 +2737,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-sniff"
+version = "0.1.0"
+
+[[package]]
 name = "craft-stencilcraft-document"
 version = "0.1.0"
 dependencies = [
@@ -2963,6 +2975,7 @@ dependencies = [
 name = "craft-video"
 version = "0.1.0"
 dependencies = [
+ "craft-jpeg",
  "craft-media",
  "craft-media-testkit",
  "rav1e",

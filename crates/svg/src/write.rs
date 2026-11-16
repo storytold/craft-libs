@@ -362,6 +362,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "paths")]
     fn writes_a_document_the_reader_reads() {
         let mut w = SvgWriter::new();
         assert!(!w.is_empty());
