@@ -22,7 +22,7 @@ miniz_oxide = { workspace = true, optional = true }
 weezl = { workspace = true, optional = true }
 skrifa = { workspace = true, optional = true }
 kurbo = { workspace = true, optional = true }
-flate2 = { version = "1", default-features = false, features = ["rust_backend"], optional = true }
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"], optional = true }
 
 [[example]]
 name = "eps2pdf"

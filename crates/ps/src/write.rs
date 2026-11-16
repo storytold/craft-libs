@@ -62,8 +62,12 @@ pub fn push_num_places(s: &mut String, v: f64, places: u32) {
     }
     let start = s.len();
     let _ = write!(s, "{v:.*}", places as usize);
-    let keep = s[start..].trim_end_matches('0').trim_end_matches('.').len();
-    s.truncate(start + keep);
+    // Only trim fractional zeros. With `places == 0` the token has no decimal point, and
+    // trimming would turn 1e15 into "1".
+    if s[start..].contains('.') {
+        let keep = s[start..].trim_end_matches('0').trim_end_matches('.').len();
+        s.truncate(start + keep);
+    }
 }
 
 /// `vs` as numbers separated by spaces, then a space.
@@ -232,7 +236,7 @@ pub fn deflate(data: &[u8]) -> Vec<u8> {
 /// zlib `data` inflated, when it is valid and at most `max` bytes.
 pub fn inflate(data: &[u8], max: u64) -> Option<Vec<u8>> {
     let mut out = vec![];
-    flate2::read::ZlibDecoder::new(data).take(max + 1).read_to_end(&mut out).ok()?;
+    flate2::read::ZlibDecoder::new(data).take(max.saturating_add(1)).read_to_end(&mut out).ok()?;
     (out.len() as u64 <= max).then_some(out)
 }
 
@@ -277,6 +281,8 @@ mod tests {
         assert_eq!(nums, "1 2.5 ");
         assert_eq!(places(1.0, 20), "1");
         assert_eq!(places(1.23456789, 9), "1.23456789");
+        assert_eq!(places(1e15, 0), "1000000000000000");
+        assert_eq!(places(1e15 - 1.0, 0), "999999999999999");
     }
 
     #[test]
@@ -329,5 +335,7 @@ mod tests {
         assert_eq!(inflate(&compressed, (data.len() as u64) - 1), None);
         assert_eq!(inflate(b"not zlib", 64), None);
         assert_eq!(inflate(&deflate(b""), 0).as_deref(), Some(&b""[..]));
+        let hello = deflate(b"hello");
+        assert_eq!(inflate(&hello, u64::MAX).as_deref(), Some(&b"hello"[..]));
     }
 }
