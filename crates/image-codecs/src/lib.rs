@@ -120,6 +120,14 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
     finish_format(format, bytes, img, opts)
 }
 
+/// Decode AVIF pixels and report their original AV1 bit depth (8, 10 or 12).
+/// The returned image may use a wider sample type, particularly for linear HDR.
+#[cfg(all(feature = "avif-decode", not(target_arch = "wasm32")))]
+pub fn decode_avif_with_depth(bytes: &[u8], opts: &DecodeOptions) -> Result<(Image, u8), CodecError> {
+    let (image, depth) = codecs::avif_decode::decode_with_depth(bytes, &opts.limits, opts.keep_orientation)?;
+    Ok((finish_format(Format::Avif, bytes, image, opts)?, depth))
+}
+
 /// What [`decode_as_with`] does with a PNG decoded in steps by [`PngDecodeRows`] (`img` is its
 /// output): the resolution from the metadata, the upright orientation and the final limit check,
 /// so the result equals [`decode_as_with`]'s on the same file.
