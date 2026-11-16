@@ -240,3 +240,20 @@ fn unpack_reads_every_depth_in_both_byte_orders() {
     assert_eq!(dng_lines::unpack(&[0x12, 0x30, 0x45, 0x60], 3, 2, 1, 4, true).unwrap(), [1, 2, 3, 4, 5, 6]);
     assert_eq!(dng_lines::unpack(&[0x12], 3, 1, 1, 4, true).unwrap_err(), Error::Truncated);
 }
+
+#[test]
+fn a_lossless_jpeg_larger_than_its_tile_is_refused_before_decoding_it_all() {
+    // 16 x 16 tiles each holding a 512 x 512 lossless JPEG: the decoder may allocate only the
+    // tile's samples (and a little slack), not the frame the JPEG claims
+    let big = craft_raw::ljpeg::encode(&vec![7u16; 512 * 512], 512, 512, 1, 16, 1, 0);
+    let mut raw = base_ifd(32, 16, 16, 1, true);
+    raw.set(t::COMPRESSION, Value::Short(vec![7]));
+    raw.set_image(ImageData::Tiles { tile_width: 16, tile_height: 16, tiles: vec![big.clone(), big] });
+    assert!(matches!(lines(&dng(raw, ByteOrder::Little)), Err(Error::TooLarge | Error::Malformed(_))));
+    // the same tiles coded at their own size decode
+    let fit = craft_raw::ljpeg::encode(&vec![7u16; 16 * 16], 16, 16, 1, 16, 1, 0);
+    let mut raw = base_ifd(32, 16, 16, 1, true);
+    raw.set(t::COMPRESSION, Value::Short(vec![7]));
+    raw.set_image(ImageData::Tiles { tile_width: 16, tile_height: 16, tiles: vec![fit.clone(), fit] });
+    assert_eq!(lines(&dng(raw, ByteOrder::Little)).unwrap().data, vec![7; 32 * 16]);
+}

@@ -49,9 +49,10 @@ impl From<crate::ljpeg_lines::Error> for Error {
 
 /// Largest raw image decoded, in samples (width × height × samples per pixel).
 pub const MAX_SAMPLES: usize = 1 << 27;
-/// Decoded tiles are padded to tile boundaries, so their aggregate can exceed the useful image.
-/// Keep that temporary work within the same bound as a complete decoded raw frame.
-const MAX_DECODED_TILE_SAMPLES: usize = MAX_SAMPLES;
+/// Decoded tiles are padded to tile boundaries, and a JPEG may be coded a little larger than its
+/// chunk ([`decode_budget`]), so the samples decoding may allocate can exceed the useful image.
+/// Keep that temporary work within a quarter more than a complete decoded raw frame.
+const MAX_DECODED_TILE_SAMPLES: usize = MAX_SAMPLES + MAX_SAMPLES / 4;
 
 /// Photometric interpretations of DNG raw data.
 pub const PHOTOMETRIC_CFA: u64 = 32803;
@@ -166,9 +167,12 @@ pub fn layout(t: &Tiff, ifd: &Ifd) -> Result<RawLayout> {
 struct Chunk<'a> {
     x: usize,
     y: usize,
-    /// Pixel size of the chunk as coded (tiles are whole even at the image edge).
+    /// Pixel size of the chunk inside the image's rows (tiles are whole even at the image edge;
+    /// a last strip ends at the image).
     w: usize,
     h: usize,
+    /// Rows a coder may still have written (a last strip coded at full RowsPerStrip).
+    coded_h: usize,
     bytes: &'a [u8],
 }
 
@@ -202,7 +206,7 @@ fn chunks<'a>(t: &Tiff<'a>, ifd: &Ifd, l: &RawLayout) -> Result<Vec<Chunk<'a>>> 
         let bytes = t.data.get(start..end).ok_or(Error::Truncated)?;
         // strips end at the image; tiles are coded whole
         let h = if ifd.get(tags::TILE_OFFSETS).is_some() { th } else { th.min(l.height - y) };
-        out.push(Chunk { x, y, w: tw, h, bytes });
+        out.push(Chunk { x, y, w: tw, h, coded_h: th, bytes });
         if len != 0 {
             ranges.push((start, end));
         }
@@ -223,13 +227,14 @@ pub fn unpack(bytes: &[u8], w: usize, h: usize, spp: usize, bits: u32, big_endia
     if !(1..=16).contains(&bits) {
         return Err(Error::Malformed("unsupported bits per sample"));
     }
-    let per_row = w * spp;
-    let row_bytes = (per_row * bits as usize).div_ceil(8);
+    let per_row = w.checked_mul(spp).ok_or(Error::TooLarge)?;
+    let samples = per_row.checked_mul(h).filter(|&n| n <= MAX_SAMPLES).ok_or(Error::TooLarge)?;
+    let row_bytes = per_row.checked_mul(bits as usize).ok_or(Error::TooLarge)?.div_ceil(8);
     let need = row_bytes.checked_mul(h).ok_or(Error::TooLarge)?;
     if bytes.len() < need {
         return Err(Error::Truncated);
     }
-    let mut out = vec![0u16; per_row * h];
+    let mut out = vec![0u16; samples];
     let order = if big_endian { craft_tiff::ByteOrder::Big } else { craft_tiff::ByteOrder::Little };
     // the same unpackers the full DNG reader uses (`crate::unpack`)
     for (row, dst) in bytes.chunks_exact(row_bytes.max(1)).zip(out.chunks_exact_mut(per_row.max(1))) {
@@ -242,23 +247,39 @@ pub fn unpack(bytes: &[u8], w: usize, h: usize, spp: usize, bits: u32, big_endia
     Ok(out)
 }
 
-/// Decode one chunk into `w` × `h` × `spp` samples.
-fn decode_chunk(c: &Chunk, l: &RawLayout, big_endian: bool) -> Result<Vec<u16>> {
+/// The most samples decoding chunk `c` may allocate, charged against the aggregate budget before
+/// anything is decoded: the samples themselves when uncompressed; for lossless JPEG the coded rows
+/// with an eighth of slack (the frame may be coded a little larger than its chunk); for lossy JPEG
+/// the chunk rounded up to the 32-pixel MCU padding `tiffraw` accepts.
+fn decode_budget(c: &Chunk, l: &RawLayout) -> Option<usize> {
+    let spp = l.samples_per_pixel;
+    match l.compression {
+        1 => c.w.checked_mul(c.h)?.checked_mul(spp),
+        34892 => c.w.checked_next_multiple_of(32)?.checked_mul(c.coded_h.checked_next_multiple_of(32)?)?.checked_mul(spp),
+        _ => {
+            let coded = c.w.checked_mul(c.coded_h)?.checked_mul(spp)?;
+            coded.checked_add(coded / 8)?.checked_add(64)
+        }
+    }
+}
+
+/// Decode one chunk into `w` × `h` × `spp` samples, allocating at most `budget` samples.
+fn decode_chunk(c: &Chunk, l: &RawLayout, big_endian: bool, budget: usize) -> Result<Vec<u16>> {
     let need = c.w * c.h * l.samples_per_pixel;
     match l.compression {
         1 => unpack(c.bytes, c.w, c.h, l.samples_per_pixel, l.bits, big_endian),
-        34892 => lossy_jpeg(c, l),
+        34892 => lossy_jpeg(c, l, budget),
         _ => {
             // the JPEG's samples fill the chunk in raster order (its own width × components may
-            // differ from the chunk's, e.g. two components of half the width)
-            // slack for a JPEG coded larger than its chunk (e.g. a last strip at full RowsPerStrip);
-            // the samples past `need` are dropped below
-            let d = ljpeg::decode(c.bytes, need.saturating_add(65_536 * 4))?;
+            // differ from the chunk's, e.g. two components of half the width); the samples past
+            // `need` (a last strip coded at full RowsPerStrip) are dropped, and so is their capacity
+            let d = ljpeg::decode(c.bytes, budget)?;
             if d.samples.len() < need {
                 return Err(Error::Malformed("lossless JPEG smaller than its tile or strip"));
             }
             let mut s = d.samples;
             s.truncate(need);
+            s.shrink_to_fit();
             Ok(s)
         }
     }
@@ -268,15 +289,15 @@ fn decode_chunk(c: &Chunk, l: &RawLayout, big_endian: bool) -> Result<Vec<u16>> 
 /// samples: one component (greyscale) or three (colour, converted from YCbCr as the JPEG says), in
 /// raster order. It is the full DNG reader's decoder (`tiffraw`, zune-jpeg), with the same check
 /// that the JPEG covers the chunk's visible part and is at most MCU-padded beyond it.
-fn lossy_jpeg(c: &Chunk, l: &RawLayout) -> Result<Vec<u16>> {
+fn lossy_jpeg(c: &Chunk, l: &RawLayout, budget: usize) -> Result<Vec<u16>> {
     let spp = l.samples_per_pixel;
     let need = c.w * c.h * spp;
     let visible = (c.w.min(l.width.saturating_sub(c.x)), c.h.min(l.height.saturating_sub(c.y)));
-    let max = need.saturating_mul(4).saturating_add(65_536).min(MAX_SAMPLES);
-    let (px, w, h, _) = crate::tiffraw::lossy_jpeg_with_tile(c.bytes, spp, max, Some((c.w, c.h, visible.0, visible.1))).map_err(|e| match e {
-        crate::RawError::Unsupported(m) => Error::Unsupported(m),
-        _ => Error::Malformed("lossy JPEG tile"),
-    })?;
+    let (px, w, h, _) =
+        crate::tiffraw::lossy_jpeg_with_tile(c.bytes, spp, budget, Some((c.w, c.coded_h, visible.0, visible.1))).map_err(|e| match e {
+            crate::RawError::Unsupported(m) => Error::Unsupported(m),
+            _ => Error::Malformed("lossy JPEG tile"),
+        })?;
     // the JPEG's rows are its own width; the chunk keeps its `c.w` x `c.h` top-left corner, and
     // the part of a coded chunk past a smaller JPEG (outside the image) stays zero
     let mut out = vec![0u16; need];
@@ -297,24 +318,29 @@ pub fn read(t: &Tiff, ifd: &Ifd) -> Result<RawImage> {
         return Err(Error::TooLarge);
     }
     let chunks = chunks(t, ifd, &l)?;
-    // every sample takes at least one bit of file (a Huffman code is at least one bit long);
-    // lossy JPEG at least two bits per 8 × 8 block and component (a DC code and an end of
-    // block), so a tiny file cannot claim a huge picture
-    let per_byte = if l.compression == 34892 { 256 } else { 8 };
+    // every coded sample takes at least one bit of file (a Huffman code is at least one bit long);
+    // a lossy JPEG block at least two bits (a DC code and an end of block), and one luma block of
+    // 64 pixels carries at most 64 × spp samples however far the chroma is subsampled, so a tiny
+    // file cannot claim a huge picture
+    let per_byte = if l.compression == 34892 { 256 * spp } else { 8 };
     let coded: usize = chunks.iter().map(|c| c.bytes.len()).fold(0usize, usize::saturating_add);
     if total.div_ceil(per_byte) > coded {
         return Err(Error::Truncated);
     }
+    // what decoding may allocate, chunk by chunk, within one decoded frame's worth of samples
+    let mut budgets = Vec::with_capacity(chunks.len());
     let mut decoded_samples = 0usize;
     for c in &chunks {
         let n = c.w.checked_mul(c.h).and_then(|v| v.checked_mul(spp)).ok_or(Error::TooLarge)?;
-        decoded_samples = decoded_samples.checked_add(n).ok_or(Error::TooLarge)?;
-        if n > MAX_SAMPLES || decoded_samples > MAX_DECODED_TILE_SAMPLES {
+        let budget = decode_budget(c, &l).filter(|&b| b <= MAX_SAMPLES).ok_or(Error::TooLarge)?;
+        decoded_samples = decoded_samples.checked_add(budget).ok_or(Error::TooLarge)?;
+        if decoded_samples > MAX_DECODED_TILE_SAMPLES {
             return Err(Error::TooLarge);
         }
         if n.div_ceil(per_byte) > c.bytes.len() {
             return Err(Error::Truncated);
         }
+        budgets.push(budget);
     }
     let raw = |data| RawImage { width: l.width, height: l.height, samples_per_pixel: spp, bits: l.bits, data };
     // one chunk covering the image (a single strip): its samples are the image, no copy
@@ -322,7 +348,7 @@ pub fn read(t: &Tiff, ifd: &Ifd) -> Result<RawImage> {
         && (c.x, c.y, c.w) == (0, 0, l.width)
         && c.h >= l.height
     {
-        let mut d = decode_chunk(c, &l, t.big_endian)?;
+        let mut d = decode_chunk(c, &l, t.big_endian, budgets[0])?;
         d.truncate(total);
         if d.len() == total {
             return Ok(raw(d));
@@ -336,11 +362,13 @@ pub fn read(t: &Tiff, ifd: &Ifd) -> Result<RawImage> {
     let (band_rows, across) = (first.h.max(1), l.width.div_ceil(first.w.max(1)));
     let mut data = vec![0u16; total];
     let band = |k: usize, out: &mut [u16]| -> Result<()> {
-        let mine = chunks.get(k * across..((k + 1) * across).min(chunks.len())).unwrap_or(&[]);
+        let range = k * across..((k + 1) * across).min(chunks.len());
+        let mine = chunks.get(range.clone()).unwrap_or(&[]);
+        let budget = budgets.get(range).unwrap_or(&[]);
         #[cfg(feature = "line-dng-threads")]
-        let decoded: Vec<Result<Vec<u16>>> = mine.par_iter().map(|c| decode_chunk(c, &l, t.big_endian)).collect();
+        let decoded: Vec<Result<Vec<u16>>> = mine.par_iter().zip(budget).map(|(c, &b)| decode_chunk(c, &l, t.big_endian, b)).collect();
         #[cfg(not(feature = "line-dng-threads"))]
-        let decoded: Vec<Result<Vec<u16>>> = mine.iter().map(|c| decode_chunk(c, &l, t.big_endian)).collect();
+        let decoded: Vec<Result<Vec<u16>>> = mine.iter().zip(budget).map(|(c, &b)| decode_chunk(c, &l, t.big_endian, b)).collect();
         for (c, d) in mine.iter().zip(decoded) {
             let d = d?;
             let cw = c.w.min(l.width.saturating_sub(c.x));
@@ -401,5 +429,9 @@ mod unpack_tests {
         assert!(matches!(unpack(&[0], 1 << 20, 1 << 10, 1, 0, false), Err(Error::Malformed(_))));
         assert!(matches!(unpack(&[0; 64], 4, 1, 1, 17, false), Err(Error::Malformed(_))));
         assert_eq!(unpack(&[0x12, 0x34, 0x50], 2, 1, 1, 12, true).unwrap(), vec![0x123, 0x450]);
+        // dimensions whose products overflow, or exceed the sample limit, fail before allocating
+        assert_eq!(unpack(&[], isize::MAX as usize + 1, 1, 1, 2, false), Err(Error::TooLarge));
+        assert_eq!(unpack(&[], usize::MAX, 2, 1, 16, false), Err(Error::TooLarge));
+        assert_eq!(unpack(&[], 1 << 20, 1 << 8, 1, 1, false), Err(Error::TooLarge));
     }
 }
