@@ -237,6 +237,8 @@ impl<K> BlendKeyPick<K> {
 /// - A [`BlendShortcut`] picks the entry whose position it is. A position whose mode isn't listed (Clear or Behind for
 ///   layers, Pass Through for a painting tool, Overlay for the Healing Brush) picks nothing: the command is taken, so
 ///   the letter does not reach the single-letter tool keys.
+/// - An entry [`enabled`](Self::enabled) rules out is never picked: a step goes on past it the same way, staying put
+///   when no other entry is enabled, and its letter picks nothing (the command is still taken).
 /// - A key release picks nothing; holding a step key repeats the step.
 /// - No AccessKit node: the app's blend control announces the new mode. Keys are not directional, so nothing mirrors
 ///   in a right-to-left interface.
@@ -244,12 +246,19 @@ impl<K> BlendKeyPick<K> {
 pub struct BlendKeys<'a, K> {
     entries: &'a [BlendKeyEntry<K>],
     current: Option<&'a K>,
+    enabled: Option<&'a dyn Fn(&K) -> bool>,
 }
 
 impl<'a, K: Clone + PartialEq> BlendKeys<'a, K> {
     /// The keys over `entries`, in menu order.
     pub fn new(entries: &'a [BlendKeyEntry<K>]) -> Self {
-        Self { entries, current: None }
+        Self { entries, current: None, enabled: None }
+    }
+
+    /// Which entries the keys may pick: a greyed mode is skipped. Every entry when not set.
+    pub fn enabled(mut self, enabled: &'a dyn Fn(&K) -> bool) -> Self {
+        self.enabled = Some(enabled);
+        self
     }
 
     /// The target's mode now, where the steps start from.
@@ -269,29 +278,44 @@ impl<'a, K: Clone + PartialEq> BlendKeys<'a, K> {
         if phase == FirePhase::Release {
             return None;
         }
+        let enabled = |key: &K| self.enabled.is_none_or(|enabled| enabled(key));
         if let Some(step) = BlendStep::from_ref(command) {
             let step = match step {
                 BlendStep::Next => 1,
                 BlendStep::Previous => -1,
             };
-            return stepped(self.entries, self.current, step).map(|entry| BlendKeyPick::Stepped(entry.key.clone()));
+            return stepped(self.entries, self.current, step, &enabled).map(|entry| BlendKeyPick::Stepped(entry.key.clone()));
         }
         let shortcut = BlendShortcut::from_ref(command)?;
-        self.entries.iter().find(|entry| entry.shortcut == Some(shortcut)).map(|entry| BlendKeyPick::Lettered(entry.key.clone()))
+        self.entries
+            .iter()
+            .find(|entry| entry.shortcut == Some(shortcut))
+            .filter(|entry| enabled(&entry.key))
+            .map(|entry| BlendKeyPick::Lettered(entry.key.clone()))
     }
 }
 
-/// The entry `step` places after (or before, when negative) `current` in `entries`, wrapping; an
-/// unlisted or absent `current` steps from the top (`step > 0`) or the bottom. `None` for an
-/// empty list.
-fn stepped<'e, K: PartialEq>(entries: &'e [BlendKeyEntry<K>], current: Option<&K>, step: i32) -> Option<&'e BlendKeyEntry<K>> {
-    // pc: crates/ui-egui/src/input/blend_keys.rs:18 `stepped` (`rem_euclid`; unlisted: 0 or n − 1).
+/// The first enabled entry `step` places after (or before, when negative) `current` in `entries`, wrapping; an
+/// unlisted or absent `current` steps from the top (`step > 0`) or the bottom. `None` for an empty list, or when no
+/// entry other than `current` is enabled.
+fn stepped<'e, K: PartialEq>(
+    entries: &'e [BlendKeyEntry<K>],
+    current: Option<&K>,
+    step: i32,
+    enabled: &dyn Fn(&K) -> bool,
+) -> Option<&'e BlendKeyEntry<K>> {
+    // pc: crates/ui-egui/src/input/blend_keys.rs:18 `stepped` (`rem_euclid`; unlisted: 0 or n − 1); fade_modes.rs
+    // `step_past` for greyed modes.
     let n = i32::try_from(entries.len()).ok().filter(|n| *n > 0)?;
     let at = current.and_then(|c| entries.iter().position(|e| e.key == *c)).and_then(|i| i32::try_from(i).ok());
-    let next = match at {
+    let first = match at {
         Some(i) => (i + step).rem_euclid(n),
         None if step > 0 => 0,
         None => n - 1,
     };
-    entries.get(usize::try_from(next).ok()?)
+    (0..n)
+        .map(|k| (first + k * step.signum()).rem_euclid(n))
+        .take_while(|i| Some(*i) != at)
+        .filter_map(|i| entries.get(usize::try_from(i).ok()?))
+        .find(|entry| enabled(&entry.key))
 }

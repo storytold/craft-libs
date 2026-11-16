@@ -325,13 +325,12 @@ impl<'p> Pass<'p> {
             fired.push(letter);
         }
         let mut current = self.work.text(&param.key).map(str::to_owned).or_else(|| param.kind.default_value().and_then(text_of)).unwrap_or_default();
+        let offered = |id: &String| param.option_enabled(id);
         for fired in fired {
-            if let Some(pick) = BlendKeys::new(&entries).current(&current).fired(&fired) {
+            if let Some(pick) = BlendKeys::new(&entries).current(&current).enabled(&offered).fired(&fired) {
                 let id = pick.into_key();
-                if param.option_enabled(&id) {
-                    self.work.set(param.key.as_str(), FieldValue::Text(id.clone()));
-                    current = id;
-                }
+                self.work.set(param.key.as_str(), FieldValue::Text(id.clone()));
+                current = id;
             }
         }
     }

@@ -174,6 +174,31 @@ fn a_blend_row_steps_and_picks_by_its_keys_inside_the_dialog() {
     fixture.key(Key::M, Modifiers::SHIFT | Modifiers::ALT).settle();
     assert_eq!(held("mode").as_deref(), Some("multiply"), "Shift+Alt+M picks Multiply");
     assert_eq!(held("other").as_deref(), Some("normal"), "a second Blend row does not move");
+
+    // A greyed mode (#13852): the keys step past it and its letter picks nothing; the closed list's Down skips it too.
+    let values = Rc::new(RefCell::new(DialogFields::new()));
+    let shown = values.clone();
+    let mut fixture = Fixture::new(move |ui| {
+        let params = vec![Param::new("mode", "Mode", ParamKind::blend(modes(), None)).disabled_options(["dissolve"])];
+        let _ = ParamDialog::new("blend", "Blend", params).values(Bind::bound(&mut *shown.borrow_mut())).show(ui);
+    });
+    fixture.settle();
+    let held = || values.borrow().text("mode").map(str::to_owned);
+    fixture.key(Key::Equals, Modifiers::SHIFT).settle();
+    assert_eq!(held().as_deref(), Some("multiply"), "Shift+= steps past the greyed Dissolve");
+    fixture.key(Key::Minus, Modifiers::SHIFT).settle();
+    assert_eq!(held().as_deref(), Some("normal"), "Shift+- steps back past it");
+    fixture.key(Key::I, Modifiers::SHIFT | Modifiers::ALT).settle();
+    assert_eq!(held().as_deref(), Some("normal"), "the greyed mode's letter picks nothing");
+    // Tab to the Mode list: the closed list's role types ahead and moves with the arrows.
+    for _ in 0..4 {
+        if fixture.focused_role().is_some_and(|role| role.type_ahead && role.moves) {
+            break;
+        }
+        fixture.key(Key::Tab, Modifiers::NONE).settle();
+    }
+    fixture.key(Key::ArrowDown, Modifiers::NONE).settle();
+    assert_eq!(held().as_deref(), Some("multiply"), "Down on the closed list skips the greyed mode");
 }
 
 /// A pattern row shows the first pattern for a stored id the rows lack without writing it, a pick writes the pattern's
