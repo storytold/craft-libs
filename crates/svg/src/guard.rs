@@ -178,6 +178,10 @@ pub fn too_wide(svg: &str, most: usize, most_work: usize) -> bool {
 pub struct Prescan<'s> {
     /// Whether the elements nest deeper than the cap. The pass stops there.
     pub too_deep: bool,
+    /// Deepest element nesting observed (markup entities count ten times).
+    pub depth: usize,
+    /// Deepest stack of unclosed source elements, excluding self-closing leaves.
+    pub open_depth: usize,
     /// The text with each data URL in an element's attribute values left out: a `data:` value's
     /// quotes kept, a `url(…)`'s parentheses and quotes. Borrowed when there is none, and the
     /// whole text when `too_deep`. An embedded picture is a data URL and most of the text when
@@ -250,7 +254,7 @@ pub fn prescan(svg: &str, most: usize) -> Prescan<'_> {
         (b.len(), false)
     };
     // (now, deepest) of the elements, and of the markup inside the document type.
-    let (mut elements, mut entities) = ((0usize, 0usize), (0usize, 0usize));
+    let (mut elements, mut entities, mut open_depth) = ((0usize, 0usize), (0usize, 0usize), 0usize);
     let mut doctype_end = 0;
     let mut i = 0;
     while let Some(at) = b.get(i..).and_then(|rest| rest.iter().position(|c| *c == b'<')).map(|at| i + at) {
@@ -287,8 +291,14 @@ pub fn prescan(svg: &str, most: usize) -> Prescan<'_> {
             end
         };
         if elements.1.saturating_add(entities.1.saturating_mul(10)) > most {
-            return Prescan { too_deep: true, markers: Cow::Borrowed(svg) };
+            return Prescan {
+                too_deep: true,
+                depth: elements.1.saturating_add(entities.1.saturating_mul(10)),
+                open_depth,
+                markers: Cow::Borrowed(svg),
+            };
         }
+        open_depth = open_depth.max(elements.0);
     }
     let markers = if data_values.is_empty() {
         Cow::Borrowed(svg)
@@ -303,7 +313,7 @@ pub fn prescan(svg: &str, most: usize) -> Prescan<'_> {
         text.push_str(svg.get(from..).unwrap_or_default());
         Cow::Owned(text)
     };
-    Prescan { too_deep: false, markers }
+    Prescan { too_deep: false, depth: elements.1.saturating_add(entities.1.saturating_mul(10)), open_depth, markers }
 }
 
 #[cfg(test)]

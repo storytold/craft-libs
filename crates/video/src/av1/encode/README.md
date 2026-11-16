@@ -8,9 +8,10 @@ no `unsafe`, builds for `wasm32-unknown-unknown`).
 The optional `av1-large-encode` feature exposes `LargeEncoder`, a tiled rav1e-backed encoder for
 8-bit 4:2:0 frames up to 8192 samples per side. Use it when the clean-room `Encoder`'s one-tile
 limits (4096 samples per side and 2304 superblocks) would reject the frame. It supports constant
-quantizer rate control and emits one low-latency packet per input frame. The fallback is native
-only; the clean-room encoder remains available without the feature and supports 8- and 10-bit
-input.
+quantizer rate control. `push` returns packets available so far, which can be empty while frames
+are buffered; `finish` returns delayed packets. Each packet includes its input frame number for
+matching durations. The fallback is native only; the clean-room encoder remains available without
+the feature and supports 8- and 10-bit input.
 
 ## What is implemented
 
