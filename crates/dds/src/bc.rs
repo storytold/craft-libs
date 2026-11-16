@@ -579,7 +579,7 @@ mod tests {
         let bits: u64 = (0..16).fold(0, |b, t| b | 2 << (3 * t));
         let b = bits.to_le_bytes();
         let block = [200, 50, b[0], b[1], b[2], b[3], b[4], b[5]];
-        assert_eq!(decode_values16(&block), [((6 * 200 + 50) * 257 + 3) / 7; 16]);
+        assert_eq!(decode_values16(&block), [(((6 * 200 + 50) * 257 + 3) / 7_u32) as u16; 16]);
         assert_eq!(decode_values(&block), [179; 16]);
         // Six-value mode's indices 6 and 7 are 0 and 65535.
         let bits: u64 = (0..16).fold(0, |b, t| b | (6 + (t % 2)) << (3 * t));

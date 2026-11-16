@@ -35,7 +35,9 @@ and alpha, and RGBA. BC4 and BC5 keep 8-bit endpoints, as the formats store them
 and the indices against the 16-bit values, so a smooth height or normal map has less error than
 when its 8-bit rounding is compressed. BC1 to BC3 round the pixels to 8 bits first.
 `Texture::decode` rounds 16-bit formats to 8 bits; `Texture::decode16` returns them exactly,
-interpolates BC4 and BC5 at 16 bits, and scales every 8-bit format by 257.
+rescales channel-mask fields from their own width (a 16-bit luminance field exactly),
+interpolates BC4 and BC5 at 16 bits, and scales BC1 to BC3 by 257. `craft-image-codecs` still
+reads DDS at 8 bits.
 
 ```rust
 use craft_dds::{DdsCompression, DdsOptions, Layout, Texture};

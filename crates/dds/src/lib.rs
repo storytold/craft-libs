@@ -11,7 +11,7 @@
 //!
 //! Writing: a 2D texture, uncompressed (BGRA or BGRX, luminance with or without alpha),
 //! BC1/BC2/BC3 or BC4/BC5, optionally with its full mip chain. The legacy header describes all
-//! but BC4 and BC5, which are written with the DX10 header (`BC4_UNORM`, `BC5_UNORM`): their
+//! but BC4, BC5 and the 16-bit formats, which are written with the DX10 header (`BC4_UNORM`, `BC5_UNORM`): their
 //! legacy FourCCs are vendor names that programs read differently (ATI2's two blocks are swapped
 //! by some). BC6H, BC7 and sRGB formats aren't written.
 //!
@@ -105,7 +105,7 @@ impl std::error::Error for DdsError {}
 #[non_exhaustive]
 pub enum DdsCompression {
     /// Uncompressed, 8 bits per channel: BGRA (BGRX without alpha), or luminance with or
-    /// without alpha for grayscale. Lossless.
+    /// without alpha for grayscale. From [`encode16`], 16 bits per channel instead. Lossless.
     #[default]
     None,
     /// BC1 (DXT1): 4 bits per pixel. Alpha is on or off: texels under half opacity become
@@ -270,7 +270,9 @@ enum Encoding {
     Bc2,
     Bc3,
     /// 16 bits per channel, little-endian: gray, gray and alpha (or red and green), or RGBA.
-    Unorm16 { channels: usize },
+    Unorm16 {
+        channels: usize,
+    },
     /// One value block: gray.
     Bc4,
     /// Two value blocks: red, then green.
@@ -499,9 +501,10 @@ impl<'a> Texture<'a> {
     }
 
     /// The top mip level's pixels in [`Texture::layout`] at 16 bits per channel, bounded by
-    /// [`DEFAULT_MAX_DECODE_BYTES`]. 16-bit formats come back exactly, as do channel masks wider
-    /// than 8 bits; BC4 and BC5 values are interpolated at 16 bits; every other format is its
-    /// 8-bit value times 257 (so 255 is 65535).
+    /// [`DEFAULT_MAX_DECODE_BYTES`]. 16-bit formats come back exactly; channel-mask fields are
+    /// rescaled from their own width to 0..=65535 (a 16-bit luminance field exactly, an 8-bit one
+    /// times 257); BC4 and BC5 values are interpolated at 16 bits; BC1 to BC3 are their 8-bit
+    /// values times 257 (so 255 is 65535).
     pub fn decode16(&self) -> Result<Vec<u16>, DdsError> {
         self.decode16_with_limit(DEFAULT_MAX_DECODE_BYTES)
     }
@@ -903,6 +906,7 @@ pub fn encode16(width: u32, height: u32, layout: Layout, pixels: &[u16], options
         return Err(encode_err("texture dimensions must be nonzero"));
     }
     let store = Store::new16(options.compression, layout)?;
+    check_len((width, height), layout, pixels)?;
     if matches!(store, Store::Bc1 | Store::Bc2 | Store::Bc3) {
         let mut narrow = alloc_zeroed(pixels.len())?;
         for (d, &v) in narrow.iter_mut().zip(pixels) {
@@ -913,16 +917,29 @@ pub fn encode16(width: u32, height: u32, layout: Layout, pixels: &[u16], options
     encode_levels((width, height), layout, pixels, store, options.mipmaps, write_level16)
 }
 
-/// A level writer: one level of `width` × `height` pixels (in the image's layout) into `dst`.
-type WriteLevel<T> = fn(Store, &[T], (usize, usize), &mut [u8]) -> Result<(), DdsError>;
-
-/// The header and every level of `pixels`, each written by `write`.
-fn encode_levels<T: Sample>((width, height): (u32, u32), layout: Layout, pixels: &[T], store: Store, mipmaps: bool, write: WriteLevel<T>) -> Result<Vec<u8>, DdsError> {
+/// Refuses a pixel buffer that isn't `width` × `height` pixels of `layout`.
+fn check_len<T: Sample>((width, height): (u32, u32), layout: Layout, pixels: &[T]) -> Result<(), DdsError> {
     let expected = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(layout.channels()));
     if expected != Some(pixels.len()) {
         let unit = if size_of::<T>() == 1 { "bytes" } else { "16-bit samples" };
         return Err(encode_err(format!("{} {unit} of pixels for a {width}x{height} {layout:?} texture", pixels.len())));
     }
+    Ok(())
+}
+
+/// A level writer: one level of `width` × `height` pixels (in the image's layout) into `dst`.
+type WriteLevel<T> = fn(Store, &[T], (usize, usize), &mut [u8]) -> Result<(), DdsError>;
+
+/// The header and every level of `pixels`, each written by `write`.
+fn encode_levels<T: Sample>(
+    (width, height): (u32, u32),
+    layout: Layout,
+    pixels: &[T],
+    store: Store,
+    mipmaps: bool,
+    write: WriteLevel<T>,
+) -> Result<Vec<u8>, DdsError> {
+    check_len((width, height), layout, pixels)?;
     let levels = if mipmaps { mip_levels(width, height) } else { 1 };
     let top = (width as usize, height as usize);
     // Every level's size, checked before anything is allocated.
@@ -1237,9 +1254,15 @@ mod tests {
     #[test]
     fn uncompressed_16_bit_pixels_round_trip_exactly() {
         let (w, h) = (7, 5);
-        for (layout, dxgi, read_as, pixel_bytes) in [(Layout::Gray, 56, Layout::Gray, 2), (Layout::GrayA, 35, Layout::GrayA, 4), (Layout::Rgb, 11, Layout::Rgba, 8), (Layout::Rgba, 11, Layout::Rgba, 8)] {
+        for (layout, dxgi, read_as, pixel_bytes) in [
+            (Layout::Gray, 56, Layout::Gray, 2),
+            (Layout::GrayA, 35, Layout::GrayA, 4),
+            (Layout::Rgb, 11, Layout::Rgba, 8),
+            (Layout::Rgba, 11, Layout::Rgba, 8),
+        ] {
             let pixels = spread16(w, h, layout.channels());
-            let want: Vec<u16> = if layout == Layout::Rgb { pixels.chunks(3).flat_map(|p| [p[0], p[1], p[2], 65535]).collect() } else { pixels.clone() };
+            let want: Vec<u16> =
+                if layout == Layout::Rgb { pixels.chunks(3).flat_map(|p| [p[0], p[1], p[2], 65535]).collect() } else { pixels.clone() };
             for mipmaps in [false, true] {
                 let file = encode16(w as u32, h as u32, layout, &pixels, DdsOptions { compression: DdsCompression::None, mipmaps }).unwrap();
                 assert_eq!(le32(&file, HEADER).unwrap(), dxgi, "{layout:?}");
@@ -1288,6 +1311,40 @@ mod tests {
         let texture = Texture::parse(&l16).unwrap();
         assert_eq!(texture.decode16().unwrap(), [300, 65000]);
         assert_eq!(texture.decode().unwrap(), [1, 253]);
+        // G16R16 as masks (red low, green high) reads as RGB at 16 bits, blue 0.
+        let mut g16r16 = l16[..HEADER].to_vec();
+        g16r16[80..84].copy_from_slice(&DDPF_RGB.to_le_bytes());
+        g16r16[20..24].copy_from_slice(&8u32.to_le_bytes());
+        g16r16[88..92].copy_from_slice(&32u32.to_le_bytes());
+        g16r16[96..100].copy_from_slice(&0xffff_0000u32.to_le_bytes());
+        g16r16.extend([300u16, 40000, 65535, 7].iter().flat_map(|v| v.to_le_bytes()));
+        let texture = Texture::parse(&g16r16).unwrap();
+        assert_eq!((texture.layout(), texture.decode16().unwrap()), (Layout::Rgb, vec![300, 40000, 0, 65535, 7, 0]));
+    }
+
+    #[test]
+    fn typeless_and_padded_16_bit_textures_are_read() {
+        // Rows padded to 8 bytes, as other writers may store them: the padding is skipped.
+        let file = encode16(3, 2, Layout::Gray, &[1, 2, 3, 4, 5, 6], DdsOptions::default()).unwrap();
+        let mut padded = file[..HEADER + DX10_HEADER].to_vec();
+        padded[20..24].copy_from_slice(&8u32.to_le_bytes());
+        for row in file[HEADER + DX10_HEADER..].chunks(6) {
+            padded.extend_from_slice(row);
+            padded.extend_from_slice(&[0xee, 0xee]);
+        }
+        assert_eq!(Texture::parse(&padded).unwrap().decode16().unwrap(), [1, 2, 3, 4, 5, 6]);
+        // The typeless forms read as the UNORM ones; typeless RGBA refuses premultiplied alpha too.
+        for (unorm, typeless, layout) in [(56u32, 53u32, Layout::Gray), (35, 33, Layout::GrayA), (11, 9, Layout::Rgba)] {
+            let pixels = spread16(3, 2, layout.channels());
+            let file = encode16(3, 2, layout, &pixels, DdsOptions::default()).unwrap();
+            assert_eq!(le32(&file, HEADER).unwrap(), unorm);
+            let mut retyped = file.clone();
+            retyped[HEADER..HEADER + 4].copy_from_slice(&typeless.to_le_bytes());
+            let texture = Texture::parse(&retyped).unwrap();
+            assert_eq!((texture.layout(), texture.decode16().unwrap()), (layout, pixels));
+            retyped[HEADER + 16] = 2;
+            assert_eq!(Texture::parse(&retyped).is_err(), layout == Layout::Rgba);
+        }
     }
 
     #[test]
@@ -1297,12 +1354,15 @@ mod tests {
         let (w, h) = (62usize, 61usize);
         let at = |i: usize| (i % w, i / w);
         let height: Vec<u16> = (0..w * h).map(|i| (20_000 + at(i).0 * 29 + at(i).1 * 11) as u16).collect();
-        let normal: Vec<u16> = (0..w * h).flat_map(|i| [(10_000 + at(i).0 * 23 + at(i).1 * 7) as u16, (40_000 + at(i).1 * 27 + at(i).0 * 5) as u16, 65535]).collect();
+        let normal: Vec<u16> =
+            (0..w * h).flat_map(|i| [(10_000 + at(i).0 * 23 + at(i).1 * 7) as u16, (40_000 + at(i).1 * 27 + at(i).0 * 5) as u16, 65535]).collect();
         for (compression, layout, pixels) in [(DdsCompression::Bc4, Layout::Gray, &height), (DdsCompression::Bc5, Layout::Rgb, &normal)] {
             let options = DdsOptions { compression, mipmaps: true };
             let rounded: Vec<u8> = pixels.iter().map(|&v| to8(v)).collect();
-            let from16 = Texture::parse(&encode16(w as u32, h as u32, layout, pixels, options).unwrap()).unwrap();
-            let from8 = Texture::parse(&encode(w as u32, h as u32, layout, &rounded, options).unwrap()).unwrap();
+            let (file16, file8) =
+                (encode16(w as u32, h as u32, layout, pixels, options).unwrap(), encode(w as u32, h as u32, layout, &rounded, options).unwrap());
+            let from16 = Texture::parse(&file16).unwrap();
+            let from8 = Texture::parse(&file8).unwrap();
             let channels = layout.channels();
             // Root-mean-square error of the stored channels (BC5: red and green), in 16-bit units.
             let rms = |got: &[u16]| {
@@ -1337,10 +1397,21 @@ mod tests {
             for layout in [Layout::Gray, Layout::GrayA, Layout::Rgb, Layout::Rgba] {
                 let options = DdsOptions { compression, mipmaps: false };
                 let n = layout.channels();
-                assert_eq!(encode16(1, 1, layout, &[9; 4][..n], options).is_ok(), encode(1, 1, layout, &[9; 4][..n], options).is_ok(), "{compression:?} from {layout:?}");
+                assert_eq!(
+                    encode16(1, 1, layout, &[9; 4][..n], options).is_ok(),
+                    encode(1, 1, layout, &[9; 4][..n], options).is_ok(),
+                    "{compression:?} from {layout:?}"
+                );
             }
         }
         assert!(matches!(encode16(2, 2, Layout::Rgb, &[0; 11], DdsOptions::default()), Err(DdsError::Encode(_))));
+        let bc1 = DdsOptions { compression: DdsCompression::Bc1, mipmaps: false };
+        assert_eq!(encode16(1, 1, Layout::Rgba, &[0; 3], bc1), Err(DdsError::Encode("3 16-bit samples of pixels for a 1x1 Rgba texture".into())));
+        // Reading BC1 to BC3 at 16 bits: their 8-bit values times 257.
+        let file = encode16(6, 5, Layout::Rgba, &pixels, bc1).unwrap();
+        let texture = Texture::parse(&file).unwrap();
+        let narrow = texture.decode().unwrap();
+        assert_eq!(texture.decode16().unwrap(), narrow.iter().map(|&v| u16::from(v) * 257).collect::<Vec<_>>());
         assert!(matches!(encode16(0, 2, Layout::Rgb, &[], DdsOptions::default()), Err(DdsError::Encode(_))));
     }
 
