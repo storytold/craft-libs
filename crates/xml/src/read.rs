@@ -1,6 +1,7 @@
 //! Reading: the pull reader over `quick-xml`, the tree builder on top of it, and streaming.
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use quick_xml::Reader;
@@ -12,6 +13,10 @@ use crate::write::is_xml_char;
 
 /// The namespace the `xml` prefix is always bound to.
 pub const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+/// [`Events::scope_ids`] id of the XML namespace, bound to `xml:` without a declaration.
+const XML_NS_ID: usize = usize::MAX;
+/// Expanded-name id of an attribute in no namespace (or with an undeclared prefix).
+const NO_NS_ID: usize = usize::MAX - 1;
 
 /// What the reader refuses to exceed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -469,6 +474,10 @@ pub struct Events<'o, 'i> {
     end_names: bool,
     open: Vec<Open>,
     scope: Vec<(String, String)>,
+    /// For each binding in `scope`, an id shared by every binding of an equal URI (the index of
+    /// the first such binding, or [`XML_NS_ID`]), with the URI's hash. Strict reads compare
+    /// expanded attribute names by this id instead of copying the URI for each attribute.
+    scope_ids: Vec<(u64, usize)>,
     /// The end of an empty element, due after its start.
     pending: bool,
     /// Whether a root element has started.
@@ -500,7 +509,7 @@ impl<'o, 'i> Events<'o, 'i> {
         cfg.trim_text_start = false;
         cfg.trim_text_end = false;
         cfg.expand_empty_elements = false;
-        Events { reader, opts, end_names, open: Vec::new(), scope: Vec::new(), pending: false, rooted: false, span: 0..0 }
+        Events { reader, opts, end_names, open: Vec::new(), scope: Vec::new(), scope_ids: Vec::new(), pending: false, rooted: false, span: 0..0 }
     }
 
     /// The bytes of the input the last event was read from. Both events of an empty element
@@ -614,6 +623,7 @@ impl<'o, 'i> Events<'o, 'i> {
     fn end(&mut self) -> Event {
         let (scope, name) = self.open.pop().map_or((0, String::new()), |o| (o.scope, o.name));
         self.scope.truncate(scope);
+        self.scope_ids.truncate(scope);
         Event::End { name }
     }
 
@@ -669,6 +679,7 @@ impl<'o, 'i> Events<'o, 'i> {
             if is_ns_decl(key) {
                 let prefix = self.decode(key.get(6..).unwrap_or_default())?.into_owned();
                 let uri = self.attr_value(&a.value)?;
+                self.scope_ids.push(self.uri_id(&uri));
                 self.scope.push((prefix, uri));
             }
         }
@@ -678,6 +689,20 @@ impl<'o, 'i> Events<'o, 'i> {
             return Err(Error::TooManyAttrs(self.opts.limits.max_attrs));
         }
         Ok(())
+    }
+
+    /// The id an expanded name uses for `uri`: one hash and at most one full comparison per
+    /// declaration, so a long URI costs its length once however many attributes use it.
+    fn uri_id(&self, uri: &str) -> (u64, usize) {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        uri.hash(&mut h);
+        let hash = h.finish();
+        if uri == XML_NS {
+            return (hash, XML_NS_ID);
+        }
+        let first = self.scope_ids.iter().zip(&self.scope).position(|((h, _), (_, u))| *h == hash && u == uri);
+        (hash, first.map_or(self.scope.len(), |i| self.scope_ids.get(i).map_or(i, |(_, id)| *id)))
     }
 
     /// In a strict read: is the reader before or after the root element?
@@ -699,7 +724,7 @@ impl<'o, 'i> Events<'o, 'i> {
             _ => None,
         };
         let scope = self.scope.len();
-        if canonical.is_some() {
+        if canonical.is_some() || self.opts.strict {
             self.declare(e)?;
         }
         let raw = e.name();
@@ -707,6 +732,8 @@ impl<'o, 'i> Events<'o, 'i> {
         let mut out = Vec::new();
         let mut attrs = e.attributes();
         attrs.with_checks(false);
+        let mut raw_names = BTreeSet::new();
+        let mut expanded_names = BTreeSet::new();
         for (seen, a) in attrs.enumerate() {
             if seen >= limits.max_attrs {
                 return Err(Error::TooManyAttrs(limits.max_attrs));
@@ -718,6 +745,30 @@ impl<'o, 'i> Events<'o, 'i> {
             };
             let key = a.key.as_ref();
             let decl = is_ns_decl(key);
+            if self.opts.strict {
+                let raw_key = self.decode(key)?;
+                if !raw_names.insert(raw_key.to_string()) {
+                    return self.syntax(format!("duplicate attribute `{raw_key}`"));
+                }
+                if !decl {
+                    // Default namespaces do not apply to attributes. Keep undeclared prefixes
+                    // distinct so standalone fragments retain the reader's existing behaviour.
+                    let expanded = match raw_key.split_once(':') {
+                        Some(("xml", local)) => (XML_NS_ID, local),
+                        Some((prefix, local)) => self
+                            .scope
+                            .iter()
+                            .zip(&self.scope_ids)
+                            .rev()
+                            .find(|((p, _), _)| p == prefix)
+                            .map_or((NO_NS_ID, raw_key.as_ref()), |(_, (_, id))| (*id, local)),
+                        None => (NO_NS_ID, raw_key.as_ref()),
+                    };
+                    if !expanded_names.insert((expanded.0, expanded.1.to_string())) {
+                        return self.syntax(format!("duplicate expanded attribute `{raw_key}`"));
+                    }
+                }
+            }
             if decl && !self.opts.ns_decls {
                 continue;
             }

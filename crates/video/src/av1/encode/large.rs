@@ -30,6 +30,19 @@ impl LargeEncoder {
 
     /// Creates the tiled encoder with a rav1e speed preset from 1 (slower) to 10 (faster).
     pub fn with_speed(cfg: &EncoderConfig, speed: u8) -> Result<Self, Error> {
+        let mut normalized = cfg.clone();
+        if let RateControl::ConstantQ(q) = normalized.rate {
+            normalized.rate = RateControl::ConstantQ(q.max(1));
+        }
+        Self::with_exact_quantizer(&normalized, speed)
+    }
+
+    /// Creates a tiled encoder preserving the exact rav1e constant quantizer, including zero.
+    ///
+    /// This is for callers migrating from rav1e's `0..=255` quality input. Zero is not lossless:
+    /// rav1e still clamps coded quantization indices, but uses a distinct rate-distortion target.
+    /// [`Self::with_speed`] retains the shared API's existing minimum-quantizer normalization.
+    pub fn with_exact_quantizer(cfg: &EncoderConfig, speed: u8) -> Result<Self, Error> {
         if cfg.width < 16 || cfg.height < 16 || cfg.width > 8192 || cfg.height > 8192 {
             return Err(Error::InvalidConfig("large AV1 frame dimensions must be 16..=8192".into()));
         }
@@ -52,7 +65,7 @@ impl LargeEncoder {
             matrix_coefficients: MatrixCoefficients::BT709,
         });
         ec.low_latency = true;
-        ec.quantizer = quality.max(1) as usize;
+        ec.quantizer = usize::from(quality);
         ec.min_quantizer = ec.quantizer.min(255) as u8;
         ec.min_key_frame_interval = 1;
         ec.max_key_frame_interval = cfg.keyint.clamp(1, 120) as u64;
@@ -207,6 +220,74 @@ fn sample_data(data: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_zero_quantizer_matches_direct_rav1e() {
+        let mut cfg = EncoderConfig::new(64, 48, 24, 1);
+        cfg.rate = RateControl::ConstantQ(0);
+        cfg.keyint = 120;
+        let y: Vec<u16> = (0..64 * 48).map(|i| ((i * 13 + i / 64 * 41) % 256) as u16).collect();
+        let u: Vec<u16> = (0..32 * 24).map(|i| ((i * 29) % 256) as u16).collect();
+        let v: Vec<u16> = (0..32 * 24).map(|i| ((i * 53) % 256) as u16).collect();
+        let frame = Frame { y: &y, u: &u, v: &v, y_stride: 64, uv_stride: 32 };
+        let mut actual = LargeEncoder::with_exact_quantizer(&cfg, 10).unwrap();
+        let mut packets = actual.push(&frame, true).unwrap();
+        packets.extend(actual.finish().unwrap());
+
+        // Frozen direct-rav1e settings used by the original consumer at quality 100.
+        let mut ec = Rav1eConfig::with_speed_preset(10);
+        ec.width = 64;
+        ec.height = 48;
+        ec.time_base = Rational::new(1, 24);
+        ec.bit_depth = 8;
+        ec.chroma_sampling = ChromaSampling::Cs420;
+        ec.pixel_range = PixelRange::Limited;
+        ec.color_description = Some(ColorDescription {
+            color_primaries: ColorPrimaries::BT709,
+            transfer_characteristics: TransferCharacteristics::BT709,
+            matrix_coefficients: MatrixCoefficients::BT709,
+        });
+        ec.low_latency = true;
+        ec.quantizer = 0;
+        ec.min_quantizer = 0;
+        ec.min_key_frame_interval = 1;
+        ec.max_key_frame_interval = 120;
+        ec.tiles = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 16);
+        let mut direct: Context<u8> = Config::new().with_encoder_config(ec).new_context().unwrap();
+        let mut input = direct.new_frame();
+        for (plane, (samples, stride)) in input.planes.iter_mut().zip([(&y, 64), (&u, 32), (&v, 32)]) {
+            let bytes: Vec<u8> = samples.iter().map(|&p| p as u8).collect();
+            plane.copy_from_raw_u8(&bytes, stride, 1);
+        }
+        let params = FrameParameters { frame_type_override: FrameTypeOverride::Key, ..Default::default() };
+        direct.send_frame((input, params)).unwrap();
+        direct.flush();
+        let mut expected = Vec::new();
+        loop {
+            match direct.receive_packet() {
+                Ok(p) => expected.push(BufferedPacket {
+                    input_frame_number: p.input_frameno,
+                    packet: Packet { data: sample_data(&p.data).unwrap().0, keyframe: p.frame_type == FrameType::KEY },
+                }),
+                Err(rav1e::prelude::EncoderStatus::Encoded) => {}
+                Err(rav1e::prelude::EncoderStatus::LimitReached) => break,
+                Err(e) => panic!("direct rav1e failed: {e}"),
+            }
+        }
+        assert_eq!(packets, expected);
+        assert_eq!(packets.len(), 1);
+
+        // Existing callers keep their former zero-to-one normalization.
+        let encode = |cfg: &EncoderConfig| {
+            let mut enc = LargeEncoder::with_speed(cfg, 10).unwrap();
+            let mut out = enc.push(&frame, true).unwrap();
+            out.extend(enc.finish().unwrap());
+            out
+        };
+        let normalized = encode(&cfg);
+        cfg.rate = RateControl::ConstantQ(1);
+        assert_eq!(normalized, encode(&cfg));
+    }
 
     #[test]
     fn buffered_frames_are_returned_with_input_numbers_and_finish_drains() {

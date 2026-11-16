@@ -59,3 +59,6 @@ pub mod vp9;
 
 #[cfg(any(feature = "av1-decode", feature = "av1-encode"))]
 pub mod av1;
+
+/// Uncompressed AVI and QuickTime pixel layouts.
+pub mod raw_video;

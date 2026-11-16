@@ -493,6 +493,8 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         kind,
         list,
         align: p.props.align,
+        // Direction can come from the paragraph's style (`w:bidi` in the style's pPr).
+        rtl: doc.styles.resolve_para(&p.props).bidi,
         page_break: p.props.page_break_before.unwrap_or(false),
         keep_next: p.props.keep_next.unwrap_or(false),
         inlines: Vec::new(),
@@ -536,6 +538,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         kind,
                         list: None,
                         align: p.props.align,
+                        rtl: out.rtl,
                         page_break: true,
                         keep_next: p.props.keep_next.unwrap_or(false),
                         inlines: Vec::new(),
@@ -658,7 +661,10 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
             {
                 (li.list, li.label) = (0, None);
             }
-            let old = Para { kind, list, align: c.old.align, page_break: c.old.page_break_before.unwrap_or(false), ..Default::default() };
+            // Direction resolved like the current paragraph's: the old properties' own `w:bidi`, else
+            // the style's.
+            let rtl = doc.styles.resolve_para(&c.old).bidi;
+            let old = Para { kind, list, align: c.old.align, rtl, page_break: c.old.page_break_before.unwrap_or(false), ..Default::default() };
             Box::new(FmtChange { mark: rev_mark(doc, c.rev), old })
         });
     }
@@ -749,7 +755,7 @@ fn graphic_group(
                 let inline = Inline::Shape { kind: *kind, w: rect[2] * sx, h: rect[3] * sy, float: None, blocks: Vec::new(), look, path: None };
                 Some(Member { x: rect[0] * sx, y: rect[1] * sy, inline })
             }
-            GraphicItem::Text { rect, text, size, color, bold, align, font } if finite(rect) && !text.trim().is_empty() => {
+            GraphicItem::Text { rect, text, size, color, bold, align, font, .. } if finite(rect) && !text.trim().is_empty() => {
                 let size = if size.is_finite() { size.clamp(1.0, 400.0) } else { 11.0 };
                 // One line, centred vertically in its place as the graphic draws it.
                 let line = size * 1.2;
