@@ -1,12 +1,12 @@
 //! `ControlChannel` deadlines and the loopback server's limits.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
-use std::sync::mpsc::channel;
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 use craft_automation::client::ControlClient;
-use craft_automation::control::{ControlChannel, ControlRequest, Reply, expired_error, result_reply, timeout_error};
+use craft_automation::control::{ControlChannel, ControlRequest, ControlResponse, Reply, expired_error, result_reply, timeout_error};
 use craft_automation::security::{CHALLENGE_METHOD, MAX_REQUEST_BYTES, ProofRole, generate_nonce, handshake_proof, proof_matches};
 use craft_automation::server;
 use craft_ui::runtime::motion;
@@ -102,9 +102,10 @@ fn host() -> WindowHost {
 fn an_unauthenticated_connection_is_closed_at_the_deadline_whatever_it_sends() {
     // A short deadline, so the test does not wait out the real one.
     let deadline = Duration::from_millis(400);
-    let (rx, addr) = server::start_with_deadline(0, TOKEN.into(), host(), deadline).expect("started");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bound");
+    let (rx, server) = server::serve_with_deadline(listener, TOKEN.into(), host(), deadline).expect("started");
     // Blank lines and partial frames, one byte every 20 ms: each read succeeds long before the idle timeout.
-    let mut stream = TcpStream::connect(addr).expect("connected");
+    let mut stream = TcpStream::connect(server.addr).expect("connected");
     let started = motion::now();
     let mut closed = false;
     for i in 0..1000 {
@@ -124,8 +125,8 @@ fn an_unauthenticated_connection_is_closed_at_the_deadline_whatever_it_sends() {
 /// A request line over `MAX_REQUEST_BYTES` without a newline gets an error reply and the connection is closed.
 #[trial]
 fn an_over_long_request_is_refused_and_closes_the_connection() {
-    let (rx, addr) = server::start(0, TOKEN.into(), host()).expect("started");
-    let mut stream = TcpStream::connect(addr).expect("connected");
+    let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let mut stream = TcpStream::connect(server.addr).expect("connected");
     stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
     let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
     writeln!(stream, "{}", json!({"id": 1, "method": "auth", "params": {"token": TOKEN}})).expect("written");
@@ -139,17 +140,54 @@ fn an_over_long_request_is_refused_and_closes_the_connection() {
     assert!(rx.try_recv().is_err());
 }
 
+/// Answers the next request, which must be `test.ping`, with `pong`.
+fn answer_one_ping(rx: Receiver<ControlRequest>) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let req = rx.recv_timeout(Duration::from_secs(5)).expect("a request");
+        assert_eq!(req.method, "test.ping");
+        let pong: ControlResponse = json!({"ok": true, "result": "pong"});
+        req.reply.send(pong).expect("replied");
+    })
+}
+
+/// Authenticates with the one-frame token, sends `test.ping` and returns its reply.
+fn ping(addr: SocketAddr) -> Value {
+    let mut stream = TcpStream::connect(addr).expect("connected");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+    let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
+    writeln!(stream, "{}", json!({"id": 1, "method": "auth", "params": {"token": TOKEN}})).expect("written");
+    assert_eq!(read_json(&mut reader).expect("a reply")["ok"], true);
+    writeln!(stream, "{}", json!({"id": 2, "method": "test.ping"})).expect("written");
+    read_json(&mut reader).expect("a reply")
+}
+
+/// A server on port 0 reports the port it bound, serves, and after it is dropped the port binds again at once; dropping
+/// one server leaves another one serving.
+#[trial]
+fn a_listening_server_stops_when_dropped_and_frees_its_port() {
+    let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let (other_rx, other) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let addr = server.addr;
+    assert_ne!(addr.port(), 0);
+    let handler = answer_one_ping(rx);
+    assert_eq!(ping(addr), json!({"id": 2, "ok": true, "result": "pong"}));
+    handler.join().expect("handler ran");
+
+    drop(server);
+    TcpListener::bind(addr).expect("the port is free once the server is dropped");
+
+    let handler = answer_one_ping(other_rx);
+    assert_eq!(ping(other.addr), json!({"id": 2, "ok": true, "result": "pong"}));
+    handler.join().expect("handler ran");
+}
+
 /// A connection that authenticates with the challenge handshake learns the server holds the token, never sends it,
 /// and then has its requests dispatched.
 #[trial]
 fn a_challenge_authenticated_connection_is_served() {
-    let (rx, addr) = server::start(0, TOKEN.into(), host()).expect("started");
-    let handler = std::thread::spawn(move || {
-        let req = rx.recv_timeout(Duration::from_secs(5)).expect("a request");
-        assert_eq!(req.method, "test.ping");
-        req.reply.send(json!({"ok": true, "result": "pong"})).expect("replied");
-    });
-    let mut stream = TcpStream::connect(addr).expect("connected");
+    let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let handler = answer_one_ping(rx);
+    let mut stream = TcpStream::connect(server.addr).expect("connected");
     stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
     let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
     let client_nonce = generate_nonce().expect("a nonce");
@@ -183,7 +221,8 @@ fn capture_state(client: &mut ControlClient, doc: &Value, state: &Value, label: 
 /// against a server and a method table built as the guide shows.
 #[trial]
 fn the_documented_capture_client_sends_setup_steps_and_capture() {
-    let (requests, addr) = server::start(0, TOKEN.into(), host()).expect("started");
+    let (requests, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let addr = server.addr;
     let doc = json!({
         "size": {"width": 1280, "height": 800},
         "theme": "pro",
