@@ -68,11 +68,8 @@ impl Strip<'_> {
                 let pushed = batch.presses.len();
                 let claims = batch.claimed.len();
                 let kept = self.press(batch, key, &input, repeat);
-                batch.last_press = Some(LastPress {
-                    input,
-                    pressed: (batch.presses.len() > pushed).then_some(pushed),
-                    claimed: batch.claimed.len() > claims,
-                });
+                batch.last_press =
+                    Some(LastPress { input, pressed: (batch.presses.len() > pushed).then_some(pushed), claimed: batch.claimed.len() > claims });
                 if kept {
                     if let Some(press) = batch.presses.get_mut(pushed) {
                         press.in_egui = Some(batch.egui_presses);

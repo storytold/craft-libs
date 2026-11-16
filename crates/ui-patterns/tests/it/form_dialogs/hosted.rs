@@ -320,7 +320,8 @@ fn export_as_writes_one_file_per_scale_all_row_and_only_from_its_button() {
 fn image_size_readout_counts_whole_byte_rows_and_says_was_only_after_a_change() {
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = fixture(&host);
-    host.borrow_mut().open(HostedImageSize::new(ImageSizeValues::new(PixelSize::new(9, 8)), |values| ImageSize::new(values).bytes_per_pixel(1.0 / 8.0)));
+    host.borrow_mut()
+        .open(HostedImageSize::new(ImageSizeValues::new(PixelSize::new(9, 8)), |values| ImageSize::new(values).bytes_per_pixel(1.0 / 8.0)));
     fixture.settle();
     let texts = |fixture: &Fixture| fixture.texts().iter().map(|painted| painted.text.clone()).collect::<Vec<_>>();
     assert!(texts(&fixture).iter().any(|text| text == "16 bytes"), "2 bytes a row, 8 rows: {:?}", texts(&fixture));
