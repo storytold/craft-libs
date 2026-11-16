@@ -29,6 +29,9 @@ struct R<'a, 'b> {
     budget: usize,
     /// Outcome of the source-clip search under each segment: deterministic, so it is made once.
     clip_search: HashMap<u32, std::result::Result<Option<u32>, SearchLimit>>,
+    /// Visits and queued references left for source-clip searches over the whole document:
+    /// distinct roots over one shared graph would otherwise each search it in full.
+    search_budget: usize,
 }
 
 /// Components one document may expand into timeline items; a small file can reference the same
@@ -40,6 +43,8 @@ const BUDGET_WARNING: &str = "OMF composition is too large to import completely 
 /// Most visited components, and most queued references, one source-clip search may spend.
 const MAX_CLIP_SEARCH_VISITS: usize = 100_000;
 const MAX_CLIP_SEARCH_PENDING: usize = 1_000_000;
+/// Work all source-clip searches in one document may spend together.
+const MAX_DOCUMENT_SEARCH_WORK: usize = 2_000_000;
 
 pub(crate) fn read(bytes: &[u8], report: &mut Report) -> Result<Document> {
     read_with_budget(bytes, report, MAX_COMPONENT_VISITS)
@@ -61,6 +66,7 @@ fn read_with_budget(bytes: &[u8], report: &mut Report, budget: usize) -> Result<
         sources: HashMap::new(),
         budget,
         clip_search: HashMap::new(),
+        search_budget: MAX_DOCUMENT_SEARCH_WORK,
     };
     let mob_list = r.refs(head, "OMFI:HEAD:Mobs");
     let mob_list = if mob_list.is_empty() {
@@ -260,17 +266,30 @@ impl R<'_, '_> {
         let len = units_to_ticks(self.len(seg), rate.0, rate.1);
         // Depth alone does not bound a graph that references the same component many times at
         // every level, so each visit also spends from a per-document budget.
-        if depth > 32 || self.budget == 0 {
-            if self.budget == 0 {
-                self.report.warn(BUDGET_WARNING);
-            }
+        // A visit stopped by depth spends from it too.
+        if self.budget == 0 {
+            self.report.warn(BUDGET_WARNING);
             return vec![CItem::Filler(len)];
         }
         self.budget -= 1;
+        if depth > 32 {
+            return vec![CItem::Filler(len)];
+        }
         match &self.class(seg) {
             b"SEQU" => {
                 let mut out = Vec::new();
+                let mut expanded = 0i64;
                 for c in self.refs(seg, "OMFI:SEQU:Components") {
+                    if self.budget == 0 {
+                        // the rest of the sequence keeps its duration as one gap, not a gap per reference
+                        self.report.warn(BUDGET_WARNING);
+                        let rest = self.len(seg).saturating_sub(expanded);
+                        if rest > 0 {
+                            out.push(CItem::Filler(units_to_ticks(rest, rate.0, rate.1)));
+                        }
+                        break;
+                    }
+                    expanded = expanded.saturating_add(self.len(c));
                     out.extend(self.segment(c, rate, depth + 1));
                 }
                 out
@@ -364,15 +383,37 @@ impl R<'_, '_> {
         if let Some(found) = self.clip_search.get(&seg) {
             return *found;
         }
-        let found = self.first_clip_within(seg, MAX_CLIP_SEARCH_VISITS, MAX_CLIP_SEARCH_PENDING);
+        let mut spent = 0;
+        let found = if self.search_budget == 0 {
+            Err(SearchLimit)
+        } else {
+            let visits = MAX_CLIP_SEARCH_VISITS.min(self.search_budget);
+            let pending = MAX_CLIP_SEARCH_PENDING.min(self.search_budget);
+            self.first_clip_within(seg, visits, pending, &mut spent)
+        };
+        self.search_budget = self.search_budget.saturating_sub(spent);
         self.clip_search.insert(seg, found);
         found
     }
 
-    fn first_clip_within(&self, seg: u32, max_visits: usize, max_pending: usize) -> std::result::Result<Option<u32>, SearchLimit> {
+    /// `spent` receives the visits plus queued references the search used.
+    fn first_clip_within(&self, seg: u32, max_visits: usize, max_pending: usize, spent: &mut usize) -> std::result::Result<Option<u32>, SearchLimit> {
         let mut visited = HashSet::new();
         let mut todo = vec![seg];
         let mut queued = 1usize;
+        let found = Self::search_from(self, &mut visited, &mut todo, &mut queued, max_visits, max_pending);
+        *spent = visited.len().saturating_add(queued);
+        found
+    }
+
+    fn search_from(
+        &self,
+        visited: &mut HashSet<u32>,
+        todo: &mut Vec<u32>,
+        queued: &mut usize,
+        max_visits: usize,
+        max_pending: usize,
+    ) -> std::result::Result<Option<u32>, SearchLimit> {
         while let Some(seg) = todo.pop() {
             if !visited.insert(seg) {
                 continue;
@@ -385,8 +426,8 @@ impl R<'_, '_> {
                 b"SEQU" => {
                     let comps = self.refs(seg, "OMFI:SEQU:Components");
                     // sequences may share one component list, so queued references grow with expansions, not visits
-                    queued = queued.saturating_add(comps.len());
-                    if queued > max_pending {
+                    *queued = queued.saturating_add(comps.len());
+                    if *queued > max_pending {
                         return Err(SearchLimit);
                     }
                     todo.extend(comps.into_iter().rev());
@@ -564,8 +605,9 @@ mod tests {
             sources: HashMap::new(),
             budget: 0,
             clip_search: HashMap::new(),
+            search_budget: MAX_DOCUMENT_SEARCH_WORK,
         };
-        r.first_clip_within(root, max_visits, max_pending)
+        r.first_clip_within(root, max_visits, max_pending, &mut 0)
     }
 
     #[test]
@@ -639,6 +681,7 @@ mod tests {
             sources: HashMap::new(),
             budget: 0,
             clip_search: HashMap::new(),
+            search_budget: MAX_DOCUMENT_SEARCH_WORK,
         };
         let first = r.first_clip(s).ok();
         assert!(matches!(first, Some(Some(_))));
@@ -668,5 +711,59 @@ mod tests {
         assert!(tracks <= 50, "{tracks} tracks from a budget of 50");
         assert!(doc.compositions.len() <= 2, "{} compositions", doc.compositions.len());
         assert!(report.has_warnings());
+    }
+
+    fn with_reader<T>(bytes: &[u8], budget: usize, search_budget: usize, f: impl FnOnce(&mut R) -> T) -> (T, Report) {
+        let c = Container::open(bytes).unwrap();
+        let mut report = Report::default();
+        let mut r = R {
+            c: &c,
+            report: &mut report,
+            be: true,
+            mobs: HashMap::new(),
+            media: HashMap::new(),
+            doc: Document::default(),
+            sources: HashMap::new(),
+            budget,
+            clip_search: HashMap::new(),
+            search_budget,
+        };
+        let out = f(&mut r);
+        (out, report)
+    }
+
+    #[test]
+    fn depth_limited_components_spend_the_budget() {
+        // a chain 33 sequences deep whose last one repeats a depth-limited sequence many times
+        let mut w = Writer::new();
+        let deep = obj(&mut w, b"SEQU");
+        let chain: Vec<u32> = (0..33).map(|_| obj(&mut w, b"SEQU")).collect();
+        for pair in chain.windows(2) {
+            list(&mut w, pair[0], "OMFI:SEQU:Components", &[pair[1]]);
+        }
+        list(&mut w, chain[32], "OMFI:SEQU:Components", &[deep; 1000]);
+        let bytes = w.finish();
+        let (items, report) = with_reader(&bytes, 100, MAX_DOCUMENT_SEARCH_WORK, |r| r.segment(chain[0], (48_000, 1), 0));
+        assert!(items.len() <= 100, "{} items from a budget of 100", items.len());
+        assert!(report.mentions(BUDGET_WARNING));
+    }
+
+    #[test]
+    fn source_clip_searches_share_a_document_budget() {
+        // distinct roots over one shared clip-free graph
+        let mut w = Writer::new();
+        let fills: Vec<u32> = (0..50).map(|_| obj(&mut w, b"FILL")).collect();
+        let shared = obj(&mut w, b"SEQU");
+        list(&mut w, shared, "OMFI:SEQU:Components", &fills);
+        let roots: Vec<u32> = (0..30).map(|_| obj(&mut w, b"SEQU")).collect();
+        for &root in &roots {
+            list(&mut w, root, "OMFI:SEQU:Components", &[shared]);
+        }
+        let bytes = w.finish();
+        let (results, _) = with_reader(&bytes, 0, 500, |r| roots.iter().map(|&root| r.first_clip(root)).collect::<Vec<_>>());
+        assert!(matches!(results[0], Ok(None)), "the first search fits");
+        assert!(results.iter().any(|r| r.is_err()), "later searches run out of the shared budget");
+        let (results, _) = with_reader(&bytes, 0, MAX_DOCUMENT_SEARCH_WORK, |r| roots.iter().map(|&root| r.first_clip(root)).collect::<Vec<_>>());
+        assert!(results.iter().all(|r| matches!(r, Ok(None))));
     }
 }
