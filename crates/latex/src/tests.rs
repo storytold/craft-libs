@@ -302,6 +302,40 @@ fn a_definition_with_a_default_argument_shows_nothing() {
 }
 
 #[test]
+fn a_box_shows_only_its_text() {
+    // The box's position, size, scale or angle showed before its text.
+    for src in [
+        "a\\parbox{3cm}{x}b",
+        "a\\parbox[t][2cm][s]{3cm}{x}b",
+        "a\\raisebox{2pt}{x}b",
+        "a\\raisebox{2pt}[0pt][0pt]{x}b",
+        "a\\scalebox{2}{x}b",
+        "a\\scalebox{2}[1]{x}b",
+        "a\\resizebox{2cm}{!}{x}b",
+        "a\\resizebox*{2cm}{1cm}{x}b",
+        "a\\rotatebox{90}{x}b",
+        "a\\rotatebox[origin=c]{90}{x}b",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["axb".to_string()], "{src}");
+    }
+}
+
+#[test]
+fn settings_that_are_not_text_show_nothing() {
+    for src in [
+        "\\hyphenation{ta-ble}word",
+        "\\addvspace{1ex}word",
+        "\\enlargethispage{2\\baselineskip}word",
+        "\\enlargethispage*{1cm}word",
+        "\\selectlanguage{german}word",
+        "\\newlength{\\gap}\\settowidth{\\gap}{wide}word",
+        "\\newcounter{step}word",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+}
+
+#[test]
 fn special_characters_round_trip() {
     let text = "50% of $5 & #1_a {b} ~c^ \\d <e> |f| -- ``g'' tab\there";
     let d = Document::from_text(text);

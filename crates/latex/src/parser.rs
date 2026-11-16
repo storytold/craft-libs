@@ -84,6 +84,15 @@ const DROP_WITH_ARGS: &[&str] = &[
     "newfontfamily",
     "date",
     "thanks",
+    "hyphenation",
+    "addvspace",
+    "enlargethispage",
+    "enlargethispage*",
+    "selectlanguage",
+    "newcounter",
+    "settowidth",
+    "settoheight",
+    "settodepth",
     "maketitle*",
     "tableofcontents",
     "listoffigures",
@@ -738,6 +747,36 @@ impl<'a> Parser<'a> {
                 let key = self.arg_raw();
                 self.flush();
                 self.text(&format!("[{}] ", label.unwrap_or(key)));
+            }
+            "parbox" | "raisebox" | "scalebox" | "resizebox" | "resizebox*" | "rotatebox" => {
+                // The box's position, size, scale or angle place it; only its last argument is
+                // text.
+                match name {
+                    "parbox" => {
+                        let _ = self.opt_arg();
+                        let _ = self.opt_arg();
+                        let _ = self.opt_arg();
+                        let _ = self.arg_raw();
+                    }
+                    "raisebox" => {
+                        let _ = self.arg_raw();
+                        let _ = self.opt_arg();
+                        let _ = self.opt_arg();
+                    }
+                    "scalebox" => {
+                        let _ = self.arg_raw();
+                        let _ = self.opt_arg();
+                    }
+                    "rotatebox" => {
+                        let _ = self.opt_arg();
+                        let _ = self.arg_raw();
+                    }
+                    _ => {
+                        let _ = self.arg_raw();
+                        let _ = self.arg_raw();
+                    }
+                }
+                self.with_arg(|_| {});
             }
             "multicolumn" | "multirow" => {
                 // Outside a tabular: keep the content.
