@@ -257,3 +257,23 @@ fn a_lossless_jpeg_larger_than_its_tile_is_refused_before_decoding_it_all() {
     raw.set_image(ImageData::Tiles { tile_width: 16, tile_height: 16, tiles: vec![fit.clone(), fit] });
     assert_eq!(lines(&dng(raw, ByteOrder::Little)).unwrap().data, vec![7; 32 * 16]);
 }
+
+#[test]
+fn short_lossy_jpeg_strips_are_charged_their_own_rows() {
+    // 8192 x 4096 RGB (below MAX_SAMPLES) in 16-row lossy JPEG strips: each strip's JPEG is exactly
+    // 16 rows, so the decode budget charges 16 rows, not the 32 of the MCU padding allowance (which
+    // would put the image over the aggregate budget and refuse it)
+    let (w, h, rows) = (8192usize, 4096usize, 16usize);
+    let strip: Vec<u8> = (0..w * rows).flat_map(|i| [(i % 251) as u8, 90, 160]).collect();
+    let mut jpeg = Vec::new();
+    jpeg_encoder::Encoder::new(&mut jpeg, 90).encode(&strip, w as u16, rows as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+    let mut raw = base_ifd(w, h, 8, 3, false);
+    raw.set(t::COMPRESSION, Value::Short(vec![34892]));
+    raw.set_image(ImageData::Strips { rows_per_strip: rows as u32, strips: vec![jpeg; h / rows] });
+    let img = lines(&dng(raw, ByteOrder::Little)).unwrap();
+    assert_eq!((img.width, img.height, img.samples_per_pixel), (w, h, 3));
+    assert_eq!(img.data.len(), w * h * 3);
+    // every strip holds the same picture
+    let band = w * rows * 3;
+    assert_eq!(&img.data[..band], &img.data[img.data.len() - band..]);
+}

@@ -2561,6 +2561,7 @@ name = "craft-ps"
 version = "0.1.0"
 dependencies = [
  "craft-eps",
+ "flate2",
  "kurbo 0.13.1",
  "miniz_oxide 0.8.9",
  "pdf-writer",
@@ -2735,6 +2736,10 @@ dependencies = [
  "x509-cert 0.3.0",
  "zeroize",
 ]
+
+[[package]]
+name = "craft-sniff"
+version = "0.1.0"
 
 [[package]]
 name = "craft-stencilcraft-document"

@@ -174,6 +174,7 @@ craft-xcf = { path = "crates/xcf" }
 craft-xml = { path = "crates/xml" }
 craft-zip = { path = "crates/zip" }
 craft-y4m = { path = "crates/y4m" }
+craft-sniff = { path = "crates/sniff" }
 craft-epub = { path = "crates/epub" }
 craft-ews = { path = "crates/ews" }
 craft-video = { path = "crates/video" }
@@ -196,13 +197,11 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-unused_workspace_dependencies = "allow"
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(craft_pdf_unicode_fixtures)"] }
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
 too_many_arguments = "deny"
-unused_workspace_dependencies = "allow"
 wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
