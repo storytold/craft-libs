@@ -6,8 +6,8 @@ use std::sync::Arc;
 use craft_wordmodel::numbering::ListKind;
 use craft_wordmodel::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use craft_wordmodel::props::{
-    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, Rgb, RowProps,
-    TabAlign, TabLeader, TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, Kashida, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, Rgb,
+    RowProps, TabAlign, TabLeader, TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use craft_wordmodel::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use craft_wordmodel::styles::{Style, StyleKind};
@@ -163,6 +163,7 @@ fn every_para_prop_round_trips() {
     let pp = ParaProps {
         style: Some("Heading1".into()),
         align: Some(Align::Justify),
+        kashida: Some(Kashida::Medium),
         indent_left: Some(36.0),
         indent_right: Some(18.0),
         indent_first: Some(-18.0),
