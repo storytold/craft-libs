@@ -7,12 +7,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use craft_automation::agents::{
-    AgentSwitch, CONNECTION_FILE, Connection, TOKEN_FILE, agents_allowed, read_connection, remove_connection, remove_stale_connection,
-    write_connection,
+    AgentLink, AgentSettings, AgentSwitch, CONNECTION_FILE, Connection, LinkProblem, PROBE_TIMEOUT, TOKEN_FILE, agents_allowed, probe, read_connection,
+    remove_connection, remove_stale_connection, write_connection,
 };
+use craft_automation::server;
 use craft_host::Wake;
 use craft_ui::runtime::motion;
+use craft_ui::runtime::windows::WindowHost;
 use craft_ui::testing::trial;
+use egui::Context;
 
 fn temp_dir(tag: &str) -> tempfile::TempDir {
     tempfile::Builder::new().prefix(&format!("craft-agents-{tag}-")).tempdir().expect("a temp dir")
@@ -143,4 +146,154 @@ fn a_damaged_foreign_or_stale_connection_file_counts_as_none() {
     write_connection(dir, &Connection { pid: 1, ..Connection::new(closed, dir.join(TOKEN_FILE), "x") }).unwrap();
     remove_stale_connection(dir);
     assert!(!dir.join(CONNECTION_FILE).exists(), "nothing listens on {closed}");
+}
+
+fn host() -> WindowHost {
+    WindowHost::of(&Context::default())
+}
+
+fn on(port: u32) -> AgentSettings {
+    AgentSettings { control_port: port, ..AgentSettings::default() }
+}
+
+/// A port nothing listens on: bound, then closed.
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+/// Off publishes nothing; on publishes the bound port and this process, and something answers there; a folder-only
+/// change keeps the port and gives no new channel; off removes the file and frees the port.
+#[trial]
+fn turning_agents_on_publishes_a_reachable_connection_and_off_removes_it() {
+    let dir = temp_dir("link");
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "MyApp 1.0");
+    let off = link.sync(None, &host);
+    assert!(off.requests.is_none() && !off.stopped && !off.changed);
+    assert_eq!(read_connection(dir.path()).unwrap(), None);
+
+    let started = link.sync(Some(&on(0)), &host);
+    assert!(started.requests.is_some() && started.changed);
+    let port = link.status().port.expect("listening");
+    let c = read_connection(dir.path()).unwrap().expect("published");
+    assert_eq!((c.port, c.pid, c.app.as_str()), (port, std::process::id(), "MyApp 1.0"));
+    assert!(probe(port, PROBE_TIMEOUT));
+    let token = std::fs::read_to_string(dir.path().join(TOKEN_FILE)).unwrap();
+
+    let folders = AgentSettings { read_root: "/in".into(), ..on(0) };
+    let kept = link.sync(Some(&folders), &host);
+    assert!(kept.requests.is_none() && !kept.stopped && kept.changed, "a folder change keeps the server");
+    assert_eq!(link.status().port, Some(port));
+    assert_eq!(std::fs::read_to_string(dir.path().join(TOKEN_FILE)).unwrap(), token);
+
+    let stopped = link.sync(None, &host);
+    assert!(stopped.stopped && stopped.changed);
+    assert_eq!(link.status().port, None);
+    assert!(!dir.path().join(CONNECTION_FILE).exists());
+    TcpListener::bind(("127.0.0.1", port)).expect("the port is free");
+}
+
+/// A new port restarts the server with the same token; a taken port is named, publishes nothing, and is tried again
+/// without a setting change until it is free.
+#[trial]
+fn a_new_port_restarts_with_the_same_token_and_a_taken_port_is_retried() {
+    let dir = temp_dir("link-port");
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x").retry_after(Duration::ZERO);
+    assert!(link.sync(Some(&on(0)), &host).requests.is_some());
+    let token = std::fs::read_to_string(dir.path().join(TOKEN_FILE)).unwrap();
+
+    let wanted = free_port();
+    let moved = link.sync(Some(&on(u32::from(wanted))), &host);
+    assert!(moved.stopped && moved.requests.is_some());
+    assert_eq!(link.status().port, Some(wanted));
+    assert_eq!(read_connection(dir.path()).unwrap().expect("published").port, wanted);
+    assert_eq!(std::fs::read_to_string(dir.path().join(TOKEN_FILE)).unwrap(), token, "the token is kept across restarts");
+
+    let taken = TcpListener::bind("127.0.0.1:0").unwrap();
+    let taken_port = taken.local_addr().unwrap().port();
+    let failed = link.sync(Some(&on(u32::from(taken_port))), &host);
+    assert!(failed.stopped && failed.requests.is_none());
+    assert!(matches!(link.status().problem, Some(LinkProblem::Listen { port, .. }) if port == taken_port), "{:?}", link.status());
+    assert_eq!(link.status().port, None);
+    assert_eq!(read_connection(dir.path()).unwrap(), None, "nothing listens without a file, and no file without a listener");
+
+    // Still taken: the retry fails the same way and changes nothing.
+    let again = link.sync(Some(&on(u32::from(taken_port))), &host);
+    assert!(again.requests.is_none() && !again.changed);
+    drop(taken);
+    let retried = link.sync(Some(&on(u32::from(taken_port))), &host);
+    assert!(retried.requests.is_some() && retried.changed, "freeing the port is enough");
+    assert_eq!(link.status().port, Some(taken_port));
+    assert_eq!(link.status().problem, None);
+    assert_eq!(std::fs::read_to_string(dir.path().join(TOKEN_FILE)).unwrap(), token);
+}
+
+/// Ten syncs with the same settings start one server.
+#[trial]
+fn an_unchanged_sync_starts_nothing() {
+    let dir = temp_dir("link-same");
+    let host = host();
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x");
+    let updates: Vec<_> = (0..10).map(|_| link.sync(Some(&on(0)), &host)).collect();
+    assert_eq!(updates.iter().filter(|u| u.requests.is_some()).count(), 1);
+    assert_eq!(updates.iter().filter(|u| u.changed).count(), 1);
+    assert!(updates.iter().all(|u| !u.stopped));
+    assert!(link.status().port.is_some());
+}
+
+/// Allow Agent Control off, no settings folder and an unusable token file each keep agents out: no channel, no file,
+/// and the port is free.
+#[trial]
+fn allow_agent_control_off_and_no_settings_folder_keep_agents_out() {
+    let host = host();
+    let dir = temp_dir("link-off");
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x");
+    assert!(link.sync(Some(&on(0)), &host).requests.is_some());
+    let port = link.status().port.expect("listening");
+    let refused = link.sync(Some(&AgentSettings { allow_agent_control: false, ..on(0) }), &host);
+    assert!(refused.stopped && refused.requests.is_none());
+    assert_eq!(link.status().problem, Some(LinkProblem::NotAllowed));
+    assert!(!dir.path().join(CONNECTION_FILE).exists());
+    TcpListener::bind(("127.0.0.1", port)).expect("the port is free");
+
+    let mut homeless = AgentLink::new(None, "x");
+    assert!(homeless.sync(Some(&on(0)), &host).requests.is_none());
+    assert_eq!(homeless.status().problem, Some(LinkProblem::NoSettingsFolder));
+
+    let bad = temp_dir("link-token");
+    std::fs::create_dir(bad.path().join(TOKEN_FILE)).unwrap();
+    let wanted = free_port();
+    let mut link = AgentLink::new(Some(bad.path().to_path_buf()), "x");
+    assert!(link.sync(Some(&on(u32::from(wanted))), &host).requests.is_none());
+    assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
+    assert!(!bad.path().join(CONNECTION_FILE).exists());
+    TcpListener::bind(("127.0.0.1", wanted)).expect("nothing listens");
+    let status = serde_json::to_value(link.status()).unwrap();
+    assert!(status["error"].as_str().unwrap().starts_with("Agents can't connect: the token file"), "{status}");
+}
+
+/// Dropping the link stops its server and removes its connection file.
+#[trial]
+fn dropping_the_link_removes_its_connection_file() {
+    let dir = temp_dir("link-drop");
+    let mut link = AgentLink::new(Some(dir.path().to_path_buf()), "x");
+    assert!(link.sync(Some(&on(0)), &host()).requests.is_some());
+    let port = link.status().port.expect("listening");
+    drop(link);
+    assert!(!dir.path().join(CONNECTION_FILE).exists());
+    TcpListener::bind(("127.0.0.1", port)).expect("the port is free");
+}
+
+/// A server the launch options started is reported with its port, and the settings change nothing.
+#[trial]
+fn from_launch_reports_the_launch_flags() {
+    let (_requests, server) = server::listen(0, "0".repeat(64), host()).expect("started");
+    let port = server.addr.port();
+    let mut link = AgentLink::from_launch(server);
+    assert_eq!((link.status().port, link.status().launch_flags), (Some(port), true));
+    let update = link.sync(None, &host());
+    assert!(!update.stopped && !update.changed && update.requests.is_none());
+    assert_eq!(link.status().port, Some(port));
+    assert_eq!(serde_json::to_value(link.status()).unwrap(), serde_json::json!({"port": port, "launchFlags": true, "error": null}));
 }

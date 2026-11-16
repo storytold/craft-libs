@@ -32,11 +32,15 @@ pub use settings::{AgentSettings, WhenAppClosed, agents_allowed, folder};
 
 #[cfg(all(feature = "agents", not(target_arch = "wasm32")))]
 mod connection;
+#[cfg(all(feature = "agents", feature = "ui", not(target_arch = "wasm32")))]
+mod link;
 #[cfg(all(feature = "agents", not(target_arch = "wasm32")))]
 mod switch;
 #[cfg(all(feature = "agents", not(target_arch = "wasm32")))]
 pub use connection::{
     CONNECTION_FILE, Connection, PROBE_TIMEOUT, TOKEN_FILE, probe, read_connection, remove_connection, remove_stale_connection, write_connection,
 };
+#[cfg(all(feature = "agents", feature = "ui", not(target_arch = "wasm32")))]
+pub use link::{AgentLink, AgentLinkStatus, LinkProblem, LinkUpdate, RETRY};
 #[cfg(all(feature = "agents", not(target_arch = "wasm32")))]
 pub use switch::{AgentSwitch, POLL, launcher_allows, mcp_flag};
