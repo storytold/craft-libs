@@ -3653,6 +3653,26 @@ esac
         assert_eq!(managed_elsewhere_with(app, &bundle_installed, false, |_| None), None);
     }
 
+    /// A copy in a named Flatpak installation is addressed through that installation, not the
+    /// default system scope.
+    #[test]
+    fn a_named_flatpak_installation_is_addressed_by_name() {
+        let app = crate::App::by_id("photocraft").unwrap();
+        let installed = Installed {
+            version: version::parse("0.19.0"),
+            source: InstallSource::Flatpak,
+            location: "ai.storyteller.photocraft".into(),
+            package: Some("ai.storyteller.photocraft".into()),
+            externally_managed: true,
+            origin: Some("flatpark".into()),
+            installation: Some("work".into()),
+        };
+        assert_eq!(
+            managed_elsewhere_with(app, &installed, false, |_| None).as_deref(),
+            Some("PhotoCraft was installed from a Flatpak repository. Update it with flatpak update --installation=work ai.storyteller.photocraft")
+        );
+    }
+
     #[test]
     #[cfg(target_os = "linux")]
     fn update_flatpak_app_respects_cancellation() {

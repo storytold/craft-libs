@@ -769,6 +769,113 @@ mod tests {
         assert!(strip_cli_prefix("photocraft-cli 1.0.0", "photocraft").is_none());
     }
 
+    /// The launcher's own record is the first thing detection trusts, and its source is the
+    /// launcher rather than whatever installed the file underneath.
+    #[test]
+    fn a_manifest_record_for_a_file_that_is_there_is_a_launcher_install() {
+        let app = App::by_id("photocraft").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photocraft.AppImage");
+        std::fs::write(&path, b"").unwrap();
+        let mut manifest = crate::manifest::Manifest::default();
+        manifest.apps.insert(
+            app.id.to_string(),
+            crate::manifest::Record {
+                version: "0.6.1".into(),
+                kind: crate::PackageKind::AppImage,
+                path: path.clone(),
+                installed_at: 0,
+                files: Vec::new(),
+                needs_root: false,
+            },
+        );
+        let found = from_manifest(app, &manifest).expect("the record names a file that is there");
+        assert_eq!(found.source, InstallSource::Launcher);
+        assert_eq!(found.version.map(|v| v.to_string()).as_deref(), Some("0.6.1"));
+        assert_eq!(found.location, path.display().to_string());
+        assert!(!found.externally_managed);
+        assert_eq!(found.origin, None);
+        assert_eq!(found.installation, None);
+    }
+
+    /// A record whose file the user removed is not an install, so detection keeps looking.
+    #[test]
+    fn a_manifest_record_for_a_file_that_is_gone_is_not_an_install() {
+        let app = App::by_id("photocraft").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut manifest = crate::manifest::Manifest::default();
+        manifest.apps.insert(
+            app.id.to_string(),
+            crate::manifest::Record {
+                version: "0.6.0".into(),
+                kind: crate::PackageKind::AppImage,
+                path: dir.path().join("gone.AppImage"),
+                installed_at: 0,
+                files: Vec::new(),
+                needs_root: false,
+            },
+        );
+        assert!(from_manifest(app, &manifest).is_none());
+    }
+
+    /// A package the snapshot already found, as the launcher sees it after a package-manager
+    /// query: only the fields detection reads are varied.
+    #[cfg(target_os = "linux")]
+    fn injected(manager: InstallSource, installation: Option<&str>, origin: Option<&str>) -> crate::packages::Package {
+        crate::packages::Package {
+            manager,
+            name: match manager {
+                InstallSource::Flatpak => "ai.storyteller.photocraft".to_string(),
+                _ => "photocraft".to_string(),
+            },
+            version: "0.6.2".into(),
+            user: installation == Some("user"),
+            origin: origin.map(str::to_string),
+            installation: installation.map(str::to_string),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_deb_package_is_reported_with_its_manager_and_version() {
+        let app = App::by_id("photocraft").unwrap();
+        let snapshot = Snapshot { packages: vec![injected(InstallSource::Deb, None, None)] };
+        let found = linux::detect(app, &snapshot).expect("the injected package is installed");
+        assert_eq!(found.source, InstallSource::Deb);
+        assert_eq!(found.version.map(|v| v.to_string()).as_deref(), Some("0.6.2"));
+        assert_eq!(found.package.as_deref(), Some("photocraft"));
+        assert!(!found.externally_managed);
+        assert_eq!(found.installation, None);
+    }
+
+    /// A Flatpak from a remote the launcher doesn't drive stays externally managed, in every
+    /// scope the `flatpak remotes` query can need.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_flatpak_from_a_repository_remote_is_externally_managed() {
+        let app = App::by_id("photocraft").unwrap();
+        for installation in [Some("user"), Some("system"), Some("custom"), None] {
+            let snapshot = Snapshot { packages: vec![injected(InstallSource::Flatpak, installation, Some("flathub"))] };
+            let found = linux::detect(app, &snapshot).expect("the injected Flatpak is installed");
+            assert_eq!(found.source, InstallSource::Flatpak);
+            assert!(found.externally_managed, "{installation:?}");
+            assert_eq!(found.location, "ai.storyteller.photocraft");
+            assert_eq!(found.origin.as_deref(), Some("flathub"));
+            assert_eq!(found.installation.as_deref(), installation);
+        }
+    }
+
+    /// FlatPark's own remote is known to manage the copy without asking flatpak again.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_flatpark_flatpak_is_externally_managed_without_asking_its_remotes() {
+        let app = App::by_id("photocraft").unwrap();
+        let snapshot = Snapshot { packages: vec![injected(InstallSource::Flatpak, Some("user"), Some("flatpark"))] };
+        let found = linux::detect(app, &snapshot).expect("the injected Flatpak is installed");
+        assert!(found.externally_managed);
+        assert_eq!(found.origin.as_deref(), Some("flatpark"));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn finds_appimages_in_every_folder_newest_first() {

@@ -895,6 +895,18 @@ mod update_cancel_tests {
         assert!(start.elapsed() < Duration::from_secs(5));
     }
 
+    /// A descendant that outlives the helper keeps the pipes open; the caller gets an error at
+    /// the deadline instead of waiting for it.
+    #[test]
+    fn output_held_open_by_a_descendant_fails_at_the_deadline() {
+        let mut cmd = command("sh");
+        cmd.args(["-c", "sleep 8 &"]);
+        let start = Instant::now();
+        let err = cancellable_output(cmd, || Ok(())).expect_err("a descendant holding the pipes should time out");
+        assert!(err.contains("did not close after completion"), "{err}");
+        assert!(start.elapsed() < Duration::from_secs(8), "{:?}", start.elapsed());
+    }
+
     #[test]
     fn retains_both_output_streams_and_exit_status() {
         let mut cmd = command("sh");

@@ -137,6 +137,8 @@ mod tests {
             parse_flatpak_list("ai.storyteller.wordcraft\t\nai.storyteller.cadcraft\t0.3.0\n"),
             [("ai.storyteller.wordcraft".into(), String::new()), ("ai.storyteller.cadcraft".into(), "0.3.0".into())]
         );
+        // A row with no id is not a package listing.
+        assert!(parse_flatpak_list_with_origin("\t0.2.0\tflatpark\tuser\n").is_empty());
         let info = "\nWordCraft - Word processor\n\n          ID: ai.storyteller.wordcraft\n     Version: 0.3.0\n      Branch: master\n";
         assert_eq!(parse_flatpak_info(info).as_deref(), Some("0.3.0"));
         assert_eq!(parse_flatpak_info("Version: \n"), None);
