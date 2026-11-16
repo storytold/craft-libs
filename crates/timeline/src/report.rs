@@ -35,7 +35,10 @@ impl Report {
             self.entries.push(ReportEntry { level, message, count: 1 });
         }
     }
-    /// Add a warning while bounding distinct diagnostics. Existing messages continue to be counted.
+    /// Add a warning while bounding distinct diagnostics. `limit` counts every distinct entry already
+    /// in the report, informational ones included, exactly like FilmCraft's `MAX_REPORT_ENTRIES`
+    /// budget this replaces; past it a new message is counted under "further diagnostics omitted".
+    /// Existing messages continue to be counted.
     pub fn warn_limited(&mut self, limit: Option<usize>, message: impl Into<String>) {
         let mut message = message.into();
         if let Some(limit) = limit

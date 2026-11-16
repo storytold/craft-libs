@@ -223,16 +223,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "aotuv_lancer_vorbis_sys"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bc4fd1a61860d2f1198b60bedd30910eaffa978f1ee6214dfb24ac70d589225"
-dependencies = [
- "cc",
- "ogg_next_sys",
-]
-
-[[package]]
 name = "arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -339,6 +329,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "astc-decode"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d6058e6202e20b7fa445692ec4b77ca8eb02508091fcd479ea753d9f60e376b"
 
 [[package]]
 name = "async-broadcast"
@@ -1414,7 +1410,6 @@ dependencies = [
  "serde_json",
  "symphonia",
  "thiserror 2.0.21",
- "vorbis_rs",
 ]
 
 [[package]]
@@ -1425,6 +1420,7 @@ version = "0.1.0"
 name = "craft-captions"
 version = "0.1.0"
 dependencies = [
+ "craft-media-testkit",
  "craft-timeline",
  "craft-xml",
  "proptest",
@@ -1453,6 +1449,14 @@ name = "craft-codepage"
 version = "0.1.0"
 dependencies = [
  "encoding_rs",
+]
+
+[[package]]
+name = "craft-control-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "subtle",
 ]
 
 [[package]]
@@ -1488,6 +1492,17 @@ version = "0.1.0"
 dependencies = [
  "craft-xml",
  "proptest",
+]
+
+[[package]]
+name = "craft-deckcraft-format"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zip",
 ]
 
 [[package]]
@@ -1671,6 +1686,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-fcproj-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-fig"
 version = "0.1.0"
 dependencies = [
@@ -1761,8 +1785,12 @@ name = "craft-font-catalog"
 version = "0.1.0"
 dependencies = [
  "fontique",
+ "harfrust 0.13.3",
+ "kurbo 0.13.1",
  "skrifa 0.47.0",
  "thiserror 2.0.21",
+ "unicode-bidi",
+ "unicode-segmentation",
  "windows-registry",
  "write-fonts 0.54.1",
 ]
@@ -1822,6 +1850,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-format"
+version = "0.1.0"
+dependencies = [
+ "craft-zip",
+ "proptest",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "craft-gainmap"
 version = "0.1.0"
 dependencies = [
@@ -1841,6 +1879,15 @@ version = "0.1.0"
 dependencies = [
  "gif",
  "image",
+]
+
+[[package]]
+name = "craft-gridcraft-format"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1877,6 +1924,10 @@ dependencies = [
  "encoding_rs",
  "proptest",
 ]
+
+[[package]]
+name = "craft-http-url"
+version = "0.1.0"
 
 [[package]]
 name = "craft-i18n"
@@ -1928,6 +1979,7 @@ dependencies = [
  "craft-jpeg",
  "craft-media-testkit",
  "craft-metadata",
+ "craft-tiff",
  "craft-video",
  "crc32fast",
  "exr",
@@ -1983,6 +2035,7 @@ name = "craft-jsonrpc"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -2125,6 +2178,7 @@ version = "0.1.0"
 dependencies = [
  "craft-opc",
  "craft-xml",
+ "craft-zip",
  "miniz_oxide 0.9.1",
  "serde_json",
 ]
@@ -2619,6 +2673,10 @@ name = "craft-sheet"
 version = "0.1.0"
 
 [[package]]
+name = "craft-shx"
+version = "0.1.0"
+
+[[package]]
 name = "craft-silhouette-studio"
 version = "0.1.0"
 dependencies = [
@@ -2757,6 +2815,8 @@ dependencies = [
 name = "craft-texture"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "dds",
  "rayon",
  "thiserror 2.0.21",
 ]
@@ -2852,6 +2912,14 @@ dependencies = [
  "winreg",
  "winsafe",
  "zip",
+]
+
+[[package]]
+name = "craft-usd"
+version = "0.1.0"
+dependencies = [
+ "lz4_flex",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3292,6 +3360,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd2735a791158376708f9347fe8faba9667589d82427ef3aed6794a8981de3d9"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "dds"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e917a58e17b27d2f15626c490754ccced7f46592dc5b5f39a3013b89cba5f068"
+dependencies = [
+ "astc-decode",
+ "bitflags 2.13.2",
+ "glam",
+ "resize",
+ "zerocopy",
 ]
 
 [[package]]
@@ -4541,6 +4622,12 @@ dependencies = [
  "log",
  "xml-rs",
 ]
+
+[[package]]
+name = "glam"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "151665d9be52f9bb40fc7966565d39666f2d1e69233571b71b87791c7e0528b3"
 
 [[package]]
 name = "glifo"
@@ -6054,6 +6141,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
+name = "lz4_flex"
+version = "0.11.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
+
+[[package]]
 name = "maybe-owned"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6066,6 +6159,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ea1f30cedd69f0a2954655f7188c6a834246d2bcf1e315e2ac40c4b24dc9519"
 dependencies = [
  "cfg-if",
+ "rayon",
 ]
 
 [[package]]
@@ -6809,15 +6903,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c7959d3349f484aec36462f98226983578bf7d33f9b034c32967489c7000e1f"
 dependencies = [
  "phf 0.11.3",
-]
-
-[[package]]
-name = "ogg_next_sys"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed2d7a48e247c2bb07e633aefb65a38648ea58c7eedd4e4408a5861721ab049b"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -7912,6 +7997,7 @@ dependencies = [
  "loop9",
  "quick-error 2.0.1",
  "rav1e",
+ "rayon",
  "rgb",
 ]
 
@@ -8133,6 +8219,15 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "resize"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71725ecd5e0197b54fe859055b108688472ab6a358f8fbe5cee4a556b1b5bfea"
+dependencies = [
+ "rgb",
 ]
 
 [[package]]
@@ -8454,9 +8549,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -9846,7 +9941,19 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -10637,20 +10744,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "vorbis_rs"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49c5da94d280f7a27e8c937e9b73df2da3e23a2583f48471fd8fb4c72f9c1933"
-dependencies = [
- "aotuv_lancer_vorbis_sys",
- "errno",
- "getrandom 0.4.3",
- "ogg_next_sys",
- "thiserror 2.0.21",
- "tinyvec",
-]
 
 [[package]]
 name = "wait-timeout"
@@ -11881,9 +11974,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.1.0"
+version = "9.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2886b00003a72c4ccee3f42cfc34908d33b2508a74d827dc2a4244706475c704"
+checksum = "1156b39d142a34b999c2310a50455e0cb3760bf7efad0122f796d813bee26ccb"
 dependencies = [
  "crc32fast",
  "flate2",
