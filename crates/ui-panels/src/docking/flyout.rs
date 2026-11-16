@@ -111,10 +111,10 @@ impl Flyout {
         if bounded { overlay.bounds(self.within) } else { overlay }
     }
 
-    /// Shows the flyout of `popup` while it is open, its top left at `anchor` (a point, or a rect's top left), and
-    /// returns what it showed; `None` while it is closed. `body` returns the height it measures for
+    /// Shows the flyout as the layer of `popup` while it is open, its top left at `anchor` (a point, or a rect's top
+    /// left), and returns what it showed; `None` while it is closed. `body` returns the height it measures for
     /// `GroupAt::Measure`, or `None` to take the flyout's own height.
-    pub fn show(
+    pub fn show_popup(
         mut self,
         ui: &mut OverlayUi<'_>,
         popup: PopupHandle,

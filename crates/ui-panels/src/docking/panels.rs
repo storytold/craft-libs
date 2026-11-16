@@ -4,6 +4,7 @@ use super::flyout::GroupAt;
 use super::spec::PanelSpec;
 use crate::contract::BodyCx;
 use crate::menu::PanelRow;
+use crate::runtime::memory;
 use craft_behavior::dock::{Action, Permissions};
 use egui::{Context, Id, Ui};
 
@@ -54,7 +55,7 @@ pub trait DockPanels<P> {
 type Running<P> = Vec<Vec<Action<P>>>;
 
 fn running_id() -> Id {
-    Id::unique("dock area requests")
+    memory::unique("dock area requests")
 }
 
 /// Hands `actions` to the dock area over panels `P` whose pass is running on `ctx`: a panel body, or code a body
@@ -64,33 +65,23 @@ fn running_id() -> Id {
 ///
 /// With no such pass running, the actions come back for the caller to apply.
 pub fn request_actions<P: Clone + Send + Sync + 'static>(ctx: &Context, actions: Vec<Action<P>>) -> Result<(), Vec<Action<P>>> {
-    ctx.data_mut(|data| {
-        let running = data.get_temp_mut_or_default::<Running<P>>(running_id());
-        if let Some(open) = running.last_mut() {
+    memory::with_session(ctx, running_id(), |running: &mut Running<P>| match running.last_mut() {
+        Some(open) => {
             open.extend(actions);
-            return Ok(());
+            Ok(())
         }
-        data.remove::<Running<P>>(running_id());
-        Err(actions)
+        None => Err(actions),
     })
 }
 
 /// Opens the request list of a dock area's pass on `ctx`. The area calls it before its bodies run.
 #[doc(hidden)]
 pub fn open_requests<P: Clone + Send + Sync + 'static>(ctx: &Context) {
-    ctx.data_mut(|data| data.get_temp_mut_or_default::<Running<P>>(running_id()).push(Vec::new()));
+    memory::with_session(ctx, running_id(), |running: &mut Running<P>| running.push(Vec::new()));
 }
 
-/// Closes the innermost request list on `ctx` and returns what it took. The area calls it when its bodies have run;
-/// the last close leaves nothing in the context.
+/// Closes the innermost request list on `ctx` and returns what it took. The area calls it when its bodies have run.
 #[doc(hidden)]
 pub fn close_requests<P: Clone + Send + Sync + 'static>(ctx: &Context) -> Vec<Action<P>> {
-    ctx.data_mut(|data| {
-        let running = data.get_temp_mut_or_default::<Running<P>>(running_id());
-        let requested = running.pop().unwrap_or_default();
-        if running.is_empty() {
-            data.remove::<Running<P>>(running_id());
-        }
-        requested
-    })
+    memory::with_session(ctx, running_id(), |running: &mut Running<P>| running.pop().unwrap_or_default())
 }
