@@ -72,6 +72,9 @@ pub(crate) struct FocusedRecord {
     pub(crate) claims: Vec<craft_keymap::Chord>,
     /// The component of the focused stop: only its state-dependent claims hold.
     pub(crate) focused: Option<Id>,
+    /// The arena root of the focused stop when the stop is a non-text member of an arena (a part of a canvas's frame
+    /// overlay): the root's state-dependent claims hold too, so a canvas tool's keys work with a part focused.
+    pub(crate) root: Option<Id>,
     /// The focused stop switches pages with Ctrl+Tab.
     pub(crate) pages: bool,
     pub(crate) menu_bar: bool,

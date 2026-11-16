@@ -22,15 +22,15 @@ use std::sync::Arc;
 pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let os = crate::runtime::windows::os_of(ctx);
     let target = focus::focused_rec(ctx);
-    let (batch, nodes, captures) = current(ctx, |stage| {
+    let (batch, nodes, captures, held_claims) = current(ctx, |stage| {
         stage.routed.clear();
         stage.contexts.clear();
         stage.claimed.clear();
         stage.activated.clear();
-        stage.claims.clear();
+        let held_claims = std::mem::take(&mut stage.claims);
         stage.last_open_edits = std::mem::take(&mut stage.open_edits);
         stage.last_nodes = std::mem::take(&mut stage.nodes);
-        (std::mem::take(&mut stage.batch), stage.last_nodes.clone(), std::mem::take(&mut stage.captures))
+        (std::mem::take(&mut stage.batch), stage.last_nodes.clone(), std::mem::take(&mut stage.captures), held_claims)
     });
     let modal = overlay::any_open(ctx, overlay::OpenFilter::Modal);
     let stale_repeat = |stale: &mut bool, press: &Press| {
@@ -96,6 +96,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         }
     }
     let focused = target.as_ref().map(|rec| rec.stop.id);
+    let root = target.as_ref().filter(|rec| rec.stop.root != rec.stop.id && !rec.stop.text).map(|rec| rec.stop.root);
     // The web sends a chord's key press and its clipboard event: the command reaches the component once.
     let mut clips = batch.clips.clone();
     clips.dedup();
@@ -125,7 +126,12 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     for chord in &batch.claimed {
         match driven.and_then(|driven| driven.intent_of(chord)) {
             Some(intent) => push(&mut routed, driven.map(|driven| driven.list), intent, false),
-            None => claimed.extend(captures.iter().find(|(_, held)| held == chord).map(|(owner, _)| *owner).or(focused).map(|id| (id, *chord))),
+            None => {
+                // A capture's owner, else the claim's: the focused component's own, then its arena root's.
+                let held = |owner: Option<Id>| held_claims.iter().find(|(id, held)| Some(*id) == owner && held == chord).map(|(id, _)| *id);
+                let owner = captures.iter().find(|(_, held)| held == chord).map(|(owner, _)| *owner);
+                claimed.extend(owner.or_else(|| held(focused)).or_else(|| held(root)).or(focused).map(|id| (id, *chord)));
+            }
         }
     }
     for request in &batch.access {
