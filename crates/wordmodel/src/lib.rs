@@ -29,6 +29,7 @@ pub mod effects;
 pub mod eq;
 pub mod fields;
 pub mod fill;
+pub mod font_kind;
 pub mod freeform;
 pub mod geom;
 pub mod graphic;

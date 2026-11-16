@@ -1901,8 +1901,21 @@ fn flat_opc_round_trip_equals_docx() {
     assert!(text.starts_with("<?xml") && text.contains("<?mso-application progid=\"Word.Document\"?>"));
     assert!(text.contains("pkg:name=\"/word/document.xml\"") && text.contains("<pkg:binaryData>"));
     assert_eq!(craft_docx::sniff_xml(&xml), craft_docx::XmlKind::FlatOpc);
-    let back = craft_docx::read_xml(&xml).expect("read flat");
-    assert_eq!(back, rt(&d));
+    let mut back = craft_docx::read_xml(&xml).expect("read flat");
+    // `pkg:xmlData` inlines a part without its XML declaration, so a kept XML part (the font
+    // table) comes back without one; the markup is the same.
+    let mut want = rt(&d);
+    for doc in [&mut back, &mut want] {
+        for v in doc.passthrough.values_mut() {
+            if let Some(rest) =
+                v.strip_prefix(b"<?xml").and_then(|r| r.iter().position(|&b| b == b'>').map(|e| r[e + 1..].trim_ascii_start().to_vec()))
+            {
+                *v = std::sync::Arc::new(rest);
+            }
+        }
+    }
+    assert!(back.passthrough.contains_key("word/fontTable.xml"));
+    assert_eq!(back, want);
     assert_eq!(back.media.len(), 1);
 }
 

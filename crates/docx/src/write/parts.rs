@@ -7,6 +7,7 @@ use super::{
     BTreeMap, Blocks, CT_WML, Document, DocxError, Flavor, HashMap, MAX_VBA_RELATED, PartRels, VBA_PROJECT_PART, VBA_RELATED, W, Writer, embed,
     glossary, rt, settings_merge, watermark, xml,
 };
+use crate::package::FONT_TABLE_PART;
 
 /// The parts of the package [`write_as`] zips, in order, `[Content_Types].xml` first: (part name
 /// without the leading `/`, bytes).
@@ -160,7 +161,13 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         PartRels::default(),
     );
 
-    wr.embeds.font_table(&mut rels);
+    // The file's own font table, else one naming the fonts the document uses.
+    if !wr.embeds.font_table(&mut rels)
+        && let Some(table) = super::font_table::font_table_xml(doc)
+    {
+        rels.add(rt::FONT_TABLE, "fontTable.xml", false);
+        push_part(&mut entries, &mut overrides, FONT_TABLE_PART, table, &format!("{CT_WML}fontTable+xml"), PartRels::default());
+    }
 
     // Media referenced by some drawing (orphan parts would make the package suspect).
     let mut media_types: BTreeMap<String, &str> = BTreeMap::new();
