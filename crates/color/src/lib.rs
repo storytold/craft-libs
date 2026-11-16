@@ -154,24 +154,41 @@ pub fn rgb_to_ycbcr(r: f32, g: f32, b: f32, m: Matrix) -> [f32; 3] {
     [y, (b - y) / (2.0 * (1.0 - kb)), (r - y) / (2.0 * (1.0 - kr))]
 }
 
+/// Unsupported integer sample depth. Normalization supports 8 through 16 bits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidBitDepth(pub u32);
+
+impl std::fmt::Display for InvalidBitDepth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unsupported sample bit depth {}; expected 8..=16", self.0)
+    }
+}
+impl std::error::Error for InvalidBitDepth {}
+
 /// Normalise an integer luma code value to 0..1 given bit depth and range.
 #[inline]
-pub fn normalize_y(v: u32, bits: u32, range: Range) -> f32 {
+pub fn normalize_y(v: u32, bits: u32, range: Range) -> Result<f32, InvalidBitDepth> {
+    if !(8..=16).contains(&bits) {
+        return Err(InvalidBitDepth(bits));
+    }
     let scale = (1u32 << (bits - 8)) as f32;
-    match range {
+    Ok(match range {
         Range::Limited => (v as f32 - 16.0 * scale) / (219.0 * scale),
         Range::Full => v as f32 / ((1u32 << bits) - 1) as f32,
-    }
+    })
 }
 
 /// Normalise an integer chroma code value to −0.5..0.5 given bit depth and range.
 #[inline]
-pub fn normalize_c(v: u32, bits: u32, range: Range) -> f32 {
+pub fn normalize_c(v: u32, bits: u32, range: Range) -> Result<f32, InvalidBitDepth> {
+    if !(8..=16).contains(&bits) {
+        return Err(InvalidBitDepth(bits));
+    }
     let scale = (1u32 << (bits - 8)) as f32;
-    match range {
+    Ok(match range {
         Range::Limited => (v as f32 - 128.0 * scale) / (224.0 * scale),
         Range::Full => (v as f32 - (1u32 << (bits - 1)) as f32) / ((1u32 << bits) - 1) as f32,
-    }
+    })
 }
 
 /// sRGB electro-optical transfer (encoded → linear).
@@ -356,11 +373,19 @@ mod tests {
     }
 
     #[test]
+    fn invalid_bit_depths_are_errors_not_shifts() {
+        for bits in [0, 1, 7, 17, 31, 32, u32::MAX] {
+            assert_eq!(normalize_y(0, bits, Range::Full), Err(InvalidBitDepth(bits)));
+            assert_eq!(normalize_c(0, bits, Range::Limited), Err(InvalidBitDepth(bits)));
+        }
+    }
+
+    #[test]
     fn limited_range_levels() {
-        assert_eq!(normalize_y(16, 8, Range::Limited), 0.0);
-        assert_eq!(normalize_y(235, 8, Range::Limited), 1.0);
-        assert_eq!(normalize_y(940, 10, Range::Limited), 1.0);
-        assert_eq!(normalize_c(128, 8, Range::Limited), 0.0);
+        assert_eq!(normalize_y(16, 8, Range::Limited).unwrap(), 0.0);
+        assert_eq!(normalize_y(235, 8, Range::Limited).unwrap(), 1.0);
+        assert_eq!(normalize_y(940, 10, Range::Limited).unwrap(), 1.0);
+        assert_eq!(normalize_c(128, 8, Range::Limited).unwrap(), 0.0);
     }
 
     #[test]
