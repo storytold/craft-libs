@@ -222,6 +222,14 @@ mod pap {
     pub(super) const WIDOW: u8 = 0x33;
     /// Row alignment (2 bytes): 1 centred.
     pub(super) const ROW_JC: u8 = 0xB6;
+    /// The row's gap, half the space between its cells' text (2 bytes, twips), whether it can't
+    /// split across pages (1 byte) and whether it is a header row (1 byte): Word 97's
+    /// `sprmTDxaGapHalf`, `sprmTFCantSplit` and `sprmTTableHeader`. The row sprms are Word 97's
+    /// `sprmT*` index + 0xB6, as Word 95 wrote `\trgaph`, `\trkeep` and `\trhdr` and Word 2016
+    /// read them.
+    pub(super) const GAP_HALF: u8 = 0xB8;
+    pub(super) const CANT_SPLIT: u8 = 0xB9;
+    pub(super) const TABLE_HEADER: u8 = 0xBA;
     /// Row height in twips (signed, 2 bytes): positive at least, negative exactly.
     pub(super) const ROW_HEIGHT: u8 = 0xBD;
     /// The row's cells: u16 count, cell count, (count + 1) i16 cell edges, then a 10-byte
@@ -277,6 +285,9 @@ mod w97 {
     pub(super) const P_SHD80: u16 = 0x442D;
     pub(super) const T_DEF_TABLE_SHD80: u16 = 0xD609;
     pub(super) const T_JC: u16 = 0x5400;
+    pub(super) const T_DXA_GAP_HALF: u16 = 0x9602;
+    pub(super) const T_CANT_SPLIT: u16 = 0x3403;
+    pub(super) const T_TABLE_HEADER: u16 = 0x3404;
     pub(super) const T_ROW_HEIGHT: u16 = 0x9407;
     pub(super) const T_DEF_TABLE: u16 = 0xD608;
     pub(super) const T_MERGE: u16 = 0x5624;
@@ -818,7 +829,7 @@ fn sprms(grpprl: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
             // 0x0D, 0x0E, 0x1D, 0x25 and 0x2C are one-byte paragraph sprms of [MS-DOC]'s isprm table
             // too (numbering level, no line numbers, frame anchoring, wrapping, no hyphenation).
             // 0x07 and 0x09 (keep together, page break before) were matched against Word.
-            0x05 | 0x07..=0x09 | 0x0D | 0x0E | 0x18 | 0x19 | 0x1D | 0x25 | 0x2C | 0x33 | 0x55..=0x5C | 0x5E | 0x62 | 0x68 | 0x75 | 0xB7 | 0xB9 => 1,
+            0x05 | 0x07..=0x09 | 0x0D | 0x0E | 0x18 | 0x19 | 0x1D | 0x25 | 0x2C | 0x33 | 0x55..=0x5C | 0x5E | 0x62 | 0x68 | 0x75 | 0xB9 | 0xBA => 1,
             // A drop cap (one byte here, two in Word 97), matched against Word.
             0x2E => 1,
             // Section sprms ([`SEP`]): the operand of the Word 97 sprm each stands for.
@@ -828,8 +839,12 @@ fn sprms(grpprl: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
             // from text; 0x65: a raised or lowered position; 0x6B: kerning in
             // half-points (H1 has 0x0024; Word shows kern=36); 0x26-0x2A: paragraph borders.
             0x10 | 0x11 | 0x13 | 0x15 | 0x16 | 0x1A | 0x1B | 0x1C | 0x2D | 0x30 | 0x31 | 0x26 | 0x27 | 0x28 | 0x29 | 0x2A | 0x2F | 0x50 | 0x5D
-            | 0x60 | 0x61 | 0x63 | 0x65 | 0x6B | 0xB6 | 0xB8 | 0xBD | 0xC0 => 2,
-            0x14 => 4,
+            | 0x60 | 0x61 | 0x63 | 0x65 | 0x6B | 0xB6 | 0xB8 | 0xBD => 2,
+            // 0x14: line spacing. 0xC0: a row's table autoformat (Word 97's sprmTTlp: its number,
+            // then its flags, which Word 2016 writes as w:tblLook; not read). Read as two bytes,
+            // its flags framed as a one-byte "0xB7" whenever they were 0x00B7, and stopped the
+            // row's sprms otherwise.
+            0x14 | 0xC0 => 4,
             // A count byte, then that many bytes (0x0C: a paragraph's numbering, 52 bytes; 0x85: a
             // section's heading numbering, 212).
             0x0C | 0x0F | 0x44 | 0xBF | crate::anld::OLST => 1 + usize::from(*after.first()?),
@@ -1016,6 +1031,9 @@ fn translate_pap(grpprl: &[u8]) -> Vec<u8> {
             pap::IN_TABLE => prl(&mut out, w97::P_IN_TABLE, v),
             pap::TTP => prl(&mut out, w97::P_TTP, v),
             pap::ROW_JC => prl(&mut out, w97::T_JC, v),
+            pap::GAP_HALF => prl(&mut out, w97::T_DXA_GAP_HALF, v),
+            pap::CANT_SPLIT => prl(&mut out, w97::T_CANT_SPLIT, v),
+            pap::TABLE_HEADER => prl(&mut out, w97::T_TABLE_HEADER, v),
             pap::ROW_HEIGHT => prl(&mut out, w97::T_ROW_HEIGHT, v),
             pap::DEF_TABLE => def_table(&mut out, v),
             pap::BRC_TOP | pap::BRC_LEFT | pap::BRC_BOTTOM | pap::BRC_RIGHT | pap::BRC_BETWEEN => {

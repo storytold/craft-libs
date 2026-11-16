@@ -1458,3 +1458,28 @@ fn frames_and_drop_caps_are_read() {
     assert_eq!((p[1].props.drop_cap, p[1].props.drop_cap_margin), (Some(3), None));
     assert_eq!(p[2].props.frame, None);
 }
+
+#[test]
+fn row_sprms_are_framed_and_read() {
+    // As Word 95 wrote `\trgaph108\trkeep\trhdr`: the gap (0xB8, 2 bytes), can't split (0xB9) and
+    // a header row (0xBA), then a table autoformat (0xC0: 4 bytes, its number and flags, here
+    // 0x0012), then the row definition. Read as 2 bytes, 0xC0 left "12 00" as the next opcode,
+    // unknown, and the row lost its cells' widths after it. Word 2016 reads the first row as a
+    // header that can't split, the second as neither.
+    let text = b"A\x07B\x07\x07C\x07D\x07\x07after\r";
+    let mut row1 = vec![0x18, 1, 0x19, 1, 0xB8, 0x6C, 0x00, 0xB9, 1, 0xBA, 1, 0xC0, 0x08, 0x00, 0x12, 0x00];
+    row1.extend(def_table(&[0, 1440, 4320], &[0, 0]));
+    let mut row2 = vec![0x18, 1, 0x19, 1, 0xB8, 0x6C, 0x00, 0xC0, 0x08, 0x00, 0x12, 0x00];
+    row2.extend(def_table(&[0, 1440, 4320], &[0, 0]));
+    let cell: &[u8] = &[0x18, 1];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 2, cell), (2, 4, cell), (4, 5, &row1), (5, 7, cell), (7, 9, cell), (9, 10, &row2), (10, 16, &[])];
+    let doc = read(&word6_file(&Doc6 { text, paras, ..Default::default() })).expect("opens");
+    let t = doc.body.iter().find_map(|b| match &**b {
+        craft_wordmodel::Block::Table(t) => Some(t),
+        _ => None,
+    });
+    let t = t.expect("a table");
+    assert_eq!(t.grid, [72.0, 144.0]);
+    let rows: Vec<(bool, bool)> = t.rows.iter().map(|r| (r.props.header, r.props.cant_split)).collect();
+    assert_eq!(rows, [(true, true), (false, false)]);
+}
