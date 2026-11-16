@@ -7,23 +7,23 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use craft_automation::agents::{
-    AgentLink, AgentSettings, AgentSwitch, CONNECTION_FILE, Connection, LinkProblem, PROBE_TIMEOUT, TOKEN_FILE, agents_allowed, probe, read_connection,
-    remove_connection, remove_stale_connection, write_connection,
-};
 use craft_automation::agents::AgentLinkStatus;
+use craft_automation::agents::{
+    AgentLink, AgentSettings, AgentSwitch, CONNECTION_FILE, Connection, LinkProblem, PROBE_TIMEOUT, TOKEN_FILE, agents_allowed, probe,
+    read_connection, remove_connection, remove_stale_connection, write_connection,
+};
 use craft_automation::server;
 use craft_automation::ui::agents::AgentsPage;
 use craft_host::{AppInfo, Host, PickId, Picked, ScriptedFiles, Wake};
 use craft_ui::contract::Role;
 use craft_ui::patterns::preferences::SettingsDraft;
-use craft_ui::testing::Fixture;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use craft_ui::runtime::motion;
 use craft_ui::runtime::windows::WindowHost;
+use craft_ui::testing::Fixture;
 use craft_ui::testing::trial;
 use egui::Context;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 fn temp_dir(tag: &str) -> tempfile::TempDir {
     tempfile::Builder::new().prefix(&format!("craft-agents-{tag}-")).tempdir().expect("a temp dir")
@@ -281,6 +281,21 @@ fn allow_agent_control_off_and_no_settings_folder_keep_agents_out() {
     assert!(status["error"].as_str().unwrap().starts_with("Agents can't connect: the token file"), "{status}");
 }
 
+/// A token file that can't be written (here the settings folder is a file) keeps agents out: the problem is reported,
+/// nothing is published and the port is let go.
+#[trial]
+fn a_token_file_that_cannot_be_written_keeps_agents_out() {
+    let dir = temp_dir("link-token-folder");
+    let settings = dir.path().join("not-a-folder");
+    std::fs::write(&settings, b"").unwrap();
+    let port = free_port();
+    let mut link = AgentLink::new(Some(settings), "x");
+    assert!(link.sync(Some(&on(u32::from(port))), &host()).requests.is_none());
+    assert_eq!(link.status().port, None);
+    assert!(matches!(link.status().problem, Some(LinkProblem::TokenFile(_))), "{:?}", link.status());
+    TcpListener::bind(("127.0.0.1", port)).expect("the port was let go");
+}
+
 /// Dropping the link stops its server and removes its connection file.
 #[trial]
 fn dropping_the_link_removes_its_connection_file() {
@@ -339,7 +354,13 @@ fn shows(fixture: &Fixture, text: &str) -> bool {
 fn with_the_flag_the_page_points_to_the_launcher() {
     let intro_part = "ArtCraft Launcher › Settings › AI agents › Let AI agents use Craft apps";
     let off = page(true, AgentLinkStatus::default());
-    let intro = off.fixture.tree().keys().into_iter().filter_map(|node| off.fixture.tree().name_of(node).map(str::to_owned)).find(|name| name.contains(intro_part));
+    let intro = off
+        .fixture
+        .tree()
+        .keys()
+        .into_iter()
+        .filter_map(|node| off.fixture.tree().name_of(node).map(str::to_owned))
+        .find(|name| name.contains(intro_part));
     assert!(intro.is_some(), "the intro names the launcher's switch");
     assert!(shows(&off.fixture, "Off: turn on AI agents in ArtCraft Launcher › Settings › AI agents."));
     assert!(shows(&off.fixture, "Folder agents can open from") && shows(&off.fixture, "Folder agents can save to"));

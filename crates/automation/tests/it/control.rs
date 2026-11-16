@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use craft_automation::client::ControlClient;
 use craft_automation::control::{ControlChannel, ControlRequest, ControlResponse, Reply, expired_error, result_reply, timeout_error};
+use craft_automation::protocol::MAX_RESPONSE_BYTES;
 use craft_automation::security::{CHALLENGE_METHOD, MAX_REQUEST_BYTES, ProofRole, generate_nonce, handshake_proof, proof_matches};
 use craft_automation::server;
 use craft_ui::runtime::motion;
@@ -258,4 +259,88 @@ fn the_documented_capture_client_sends_setup_steps_and_capture() {
         ]
     );
     assert_eq!(reply, json!({"path": "new-pencil.png", "width": 1280, "height": 800}));
+}
+
+/// Connects and authenticates with the one-frame token.
+fn authenticated(addr: SocketAddr) -> (TcpStream, BufReader<TcpStream>) {
+    let mut stream = TcpStream::connect(addr).expect("connected");
+    stream.set_read_timeout(Some(Duration::from_secs(5))).expect("timeout");
+    let mut reader = BufReader::new(stream.try_clone().expect("cloned"));
+    writeln!(stream, "{}", json!({"id": "auth", "method": "auth", "params": {"token": TOKEN}})).expect("written");
+    assert_eq!(read_json(&mut reader).expect("a reply")["ok"], true);
+    (stream, reader)
+}
+
+/// A reply over `MAX_RESPONSE_BYTES` becomes an error reply with the request's id on its own line, and the next
+/// request on the connection is still served.
+#[trial]
+fn an_oversized_reply_keeps_its_framing_and_id_and_the_connection_serves_on() {
+    let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let handler = std::thread::spawn(move || {
+        let first = rx.recv_timeout(Duration::from_secs(5)).expect("a request");
+        assert_eq!(first.method, "test.large");
+        assert!(first.deadline.is_some_and(|d| d > motion::now()), "native requests carry their reply deadline");
+        first.reply.send(json!({"ok": true, "result": "x".repeat(MAX_RESPONSE_BYTES)})).expect("replied");
+        let second = rx.recv_timeout(Duration::from_secs(5)).expect("a request");
+        assert_eq!(second.method, "test.small");
+        second.reply.send(json!({"ok": true, "result": "still serving"})).expect("replied");
+    });
+    let (mut stream, mut reader) = authenticated(server.addr);
+    writeln!(stream, "{}", json!({"id": 2, "method": "test.large"})).expect("written");
+    let rejected = read_json(&mut reader).expect("a reply");
+    assert_eq!(rejected["id"], 2);
+    assert_eq!(rejected["ok"], false);
+    assert!(rejected["error"].as_str().expect("an error").contains("operation may have completed"), "{rejected}");
+    writeln!(stream, "{}", json!({"id": 3, "method": "test.small"})).expect("written");
+    let accepted = read_json(&mut reader).expect("a reply");
+    assert_eq!(accepted["id"], 3);
+    assert_eq!(accepted["result"], "still serving");
+    handler.join().expect("handler ran");
+}
+
+/// A request that isn't valid JSON is answered with `id: null` and a `bad JSON` error, and the connection keeps
+/// serving.
+#[trial]
+fn a_bad_json_request_gets_a_null_id_and_the_connection_serves_on() {
+    let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let handler = std::thread::spawn(move || {
+        let req = rx.recv_timeout(Duration::from_secs(5)).expect("a request");
+        assert_eq!(req.method, "test.after");
+        req.reply.send(json!({"ok": true, "result": "still serving"})).expect("replied");
+    });
+    let (mut stream, mut reader) = authenticated(server.addr);
+    writeln!(stream, "{{not json}}").expect("written");
+    let bad = read_json(&mut reader).expect("a reply");
+    let bad = bad.as_object().expect("an object");
+    assert_eq!(bad.get("id"), Some(&Value::Null), "{bad:?}");
+    assert_eq!(bad.get("ok"), Some(&Value::Bool(false)));
+    assert!(bad.get("error").and_then(Value::as_str).expect("an error").starts_with("bad JSON: "), "{bad:?}");
+    writeln!(stream, "{}", json!({"id": 7, "method": "test.after"})).expect("written");
+    let after = read_json(&mut reader).expect("a reply");
+    assert_eq!(after["id"], 7);
+    assert_eq!(after["result"], "still serving");
+    handler.join().expect("handler ran");
+}
+
+/// A second `auth` on an authenticated connection is refused as already authenticated without reaching the app, and
+/// the connection keeps serving.
+#[trial]
+fn a_repeated_auth_is_answered_already_authenticated_without_dispatching() {
+    let (rx, server) = server::listen(0, TOKEN.into(), host()).expect("started");
+    let handler = std::thread::spawn(move || {
+        let req = rx.recv_timeout(Duration::from_secs(5)).expect("a request");
+        assert_eq!(req.method, "test.after", "a repeated auth must not reach the app");
+        req.reply.send(json!({"ok": true, "result": "still serving"})).expect("replied");
+    });
+    let (mut stream, mut reader) = authenticated(server.addr);
+    writeln!(stream, "{}", json!({"id": "again", "method": "auth", "params": {"token": TOKEN}})).expect("written");
+    let again = read_json(&mut reader).expect("a reply");
+    assert_eq!(again["id"], "again");
+    assert_eq!(again["ok"], false);
+    assert_eq!(again["error"], "already authenticated");
+    writeln!(stream, "{}", json!({"id": 9, "method": "test.after"})).expect("written");
+    let after = read_json(&mut reader).expect("a reply");
+    assert_eq!(after["id"], 9);
+    assert_eq!(after["result"], "still serving");
+    handler.join().expect("handler ran");
 }
