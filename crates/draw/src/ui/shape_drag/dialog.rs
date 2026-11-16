@@ -209,7 +209,7 @@ fn answer(o: &CreateShapeOptions, words: &CreateShapeWords, units: &Units) -> Re
             ShapeGeometry::Rect { rect, radii }
         }
         ShapeKind::Ellipse => ShapeGeometry::Ellipse { rect },
-        ShapeKind::Triangle => ShapeGeometry::Polygon { rect, sides: 3, star_ratio: 1.0 },
+        ShapeKind::Triangle => ShapeGeometry::Triangle { rect },
         ShapeKind::Polygon | ShapeKind::Star => {
             let ratio = if o.star_ratio.is_finite() { o.star_ratio.clamp(0.01, 1.0) } else { 1.0 };
             ShapeGeometry::Polygon { rect, sides, star_ratio: ratio }

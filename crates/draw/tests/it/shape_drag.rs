@@ -194,6 +194,37 @@ fn the_rectangle_gear_constrains_the_drag_and_shift_and_alt_turn_it_off() {
     assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 100.0, 160.0, 130.0)), "the largest 2 : 1 box inside the drag");
 }
 
+/// The corners of the triangle `shape` draws, from the apex clockwise.
+fn corners(shape: Option<ShapeGeometry>) -> Vec<Point> {
+    let Some(shape @ ShapeGeometry::Triangle { .. }) = shape else { return Vec::new() };
+    shape.to_path(0.1).elements().iter().filter_map(|el| el.end_point()).collect()
+}
+
+/// A Triangle drag fills its box, apex on top; ⇧ draws the equilateral triangle in the circle of the shorter
+/// side's square; ⇧⌥ centres it on the press.
+#[trial]
+fn a_triangle_fills_its_box_and_shift_makes_it_equilateral() {
+    let mut shapes = Shapes::new(ShapeDragOptions::new(ShapeKind::Triangle));
+    let to = PRESS + Vec2::new(60.0, 40.0);
+    shapes.drag(PRESS, to, Modifiers::NONE);
+    let plain = corners(shapes.committed());
+    assert_eq!(plain.first(), Some(&Point::new(130.0, 100.0)), "the apex is the box's top centre: {plain:?}");
+    assert!(plain.len() >= 3 && plain[1..].iter().all(|p| p.y == 140.0), "the base lies on the bottom edge: {plain:?}");
+
+    shapes.drag(PRESS, to, Modifiers::SHIFT);
+    let equal = corners(shapes.committed());
+    assert!(equal.len() >= 3, "a triangle: {equal:?}");
+    let sides = [(equal[0] - equal[1]).hypot(), (equal[1] - equal[2]).hypot(), (equal[2] - equal[0]).hypot()];
+    assert!(sides.iter().all(|side| (side - 20.0 * 3f64.sqrt()).abs() < 1e-9), "three equal sides in the 40 px square's circle: {sides:?}");
+    assert_eq!(equal[0], Point::new(120.0, 100.0), "the apex is the top of the circle");
+
+    shapes.drag(PRESS, to, Modifiers::SHIFT | Modifiers::ALT);
+    let centred = corners(shapes.committed());
+    assert!(centred.len() >= 3, "a triangle: {centred:?}");
+    let centre = (centred[0].to_vec2() + centred[1].to_vec2() + centred[2].to_vec2()) / 3.0;
+    assert!((centre.to_point() - PRESS).hypot() < 1e-9, "⇧⌥ puts the centre on the press, got {centre:?}");
+}
+
 #[trial]
 fn the_shape_tool_owes_the_canvas_what_every_tool_owes() {
     ToolFixture::with_view("Shape", tool(ShapeKind::Rectangle), room_view, |_, _| {}).check();

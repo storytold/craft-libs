@@ -13,7 +13,7 @@ use kurbo::{Point, Vec2};
 
 use super::words::ShapeDragWords;
 use super::{BoxConstraint, ShapeDragEvent, ShapeDragOptions, ShapeDragRules, ShapeFrame, ShapeKind};
-use crate::geometry::shape::{BoxRule, MIN_SIDE, RadialFrame, SIDES, ShapeGeometry, box_drag, line_drag};
+use crate::geometry::shape::{BoxRule, MIN_SIDE, RadialFrame, SIDES, ShapeGeometry, box_drag, equilateral_in, line_drag};
 
 /// The flattening tolerance of the outline being drawn, in screen points.
 const OUTLINE_TOLERANCE: f32 = 0.25;
@@ -147,7 +147,8 @@ impl ShapeDragTool {
     /// The shape a drag from `start` to `at` with `mods` draws under the options and rules, or `None`
     /// when a side is under 1 px: [`box_drag`] for the box kinds under the options' constraints, ⇧
     /// toggling Square and ⌥ From Center (Rectangle with four equal radii when
-    /// `corner_radius` > 0, Rounded Rectangle always with them, Triangle a 3-sided polygon, Polygon and
+    /// `corner_radius` > 0, Rounded Rectangle always with them, Triangle filling the box (⇧: the equilateral
+    /// triangle in the square's circle), Polygon and
     /// Star with the options' sides and ratio, Custom a `Custom` box keeping proportions with ⇧),
     /// [`line_drag`] for a Line (weight at least 1, ⇧ snapping the end by [`line_shift`]), and
     /// [`RadialFrame::drag`] in the radial frame.
@@ -191,7 +192,7 @@ impl ShapeDragTool {
             ShapeKind::Rectangle => ShapeGeometry::Rect { rect, radii: [0.0; 4] },
             ShapeKind::RoundedRectangle => ShapeGeometry::Rect { rect, radii },
             ShapeKind::Ellipse => ShapeGeometry::Ellipse { rect },
-            ShapeKind::Triangle => ShapeGeometry::Polygon { rect, sides: 3, star_ratio: 1.0 },
+            ShapeKind::Triangle => ShapeGeometry::Triangle { rect: if rule.square { equilateral_in(rect) } else { rect } },
             ShapeKind::Polygon => ShapeGeometry::Polygon { rect, sides: drag.sides, star_ratio: 1.0 },
             ShapeKind::Star => ShapeGeometry::Polygon { rect, sides: drag.sides, star_ratio: o.star_ratio },
             ShapeKind::Custom | ShapeKind::Line => ShapeGeometry::Custom { rect, keep_proportions: mods.shift },

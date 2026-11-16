@@ -40,9 +40,14 @@ pub enum ShapeGeometry {
         /// The bounds of the ellipse.
         rect: Rect,
     },
-    /// A regular polygon or star inscribed in the ellipse of `rect` (the Box frame: PhotoCraft's Triangle and
-    /// Polygon). `sides` in [`SIDES`]; `star_ratio` in [`STAR_RATIO`], 1 for a plain polygon.
-    /// The Triangle tool is 3 sides.
+    /// A triangle filling `rect`: the apex at the top centre, the base on the bottom edge (PhotoCraft's Triangle
+    /// tool and Create Triangle).
+    Triangle {
+        /// The triangle's bounds.
+        rect: Rect,
+    },
+    /// A regular polygon or star inscribed in the ellipse of `rect` (the Box frame: PhotoCraft's Polygon).
+    /// `sides` in [`SIDES`]; `star_ratio` in [`STAR_RATIO`], 1 for a plain polygon.
     Polygon {
         /// The box whose inscribed ellipse holds the polygon.
         rect: Rect,
@@ -93,9 +98,10 @@ impl ShapeGeometry {
     ///   to half the shorter side, as kurbo's `RoundedRect` does); all radii 0 is the plain
     ///   rectangle.
     /// - `Ellipse`: kurbo's `Ellipse::from_rect`.
+    /// - `Triangle`: the top centre, the bottom right and the bottom left of `rect`.
     /// - `Polygon`: the outline of [`RadialPolygon`](Self::RadialPolygon) with the first point
     ///   straight up, its outer points on the ellipse inscribed in `rect` (PhotoCraft's engine:
-    ///   a triangle's base lies a quarter of the height below the centre, not on the bottom
+    ///   a 3-sided polygon's base lies a quarter of the height below the centre, not on the bottom
     ///   edge); a star alternates outer and inner points, the inner ones on the ellipse
     ///   scaled by `star_ratio`.
     /// - `RadialPolygon`: `sides` outer points on the circle of `radius`, the first at `rotation`
@@ -105,7 +111,7 @@ impl ShapeGeometry {
     /// - `Custom`: the box itself (the app draws the preset).
     pub fn to_path(&self, tolerance: f64) -> BezPath {
         // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs:73-79 (the kinds: `roundedRect` with four
-        // equal radii, ellipse, a polygon of 3 sides for the Triangle, `polygon_sides.max(3)`).
+        // equal radii, ellipse, `triangle` filling its rect, `polygon_sides.max(3)`).
         // new: PhotoCraft's engine draws the outline; here it is kurbo's `RoundedRect`, `Ellipse`
         // and a point list, so engines without one share it.
         let tolerance = tolerance.max(f64::EPSILON);
@@ -119,6 +125,11 @@ impl ShapeGeometry {
                 }
             }
             Self::Ellipse { rect } => Ellipse::from_rect(rect.abs()).to_path(tolerance),
+            Self::Triangle { rect } => {
+                // pc: #13350 (the triangle fills its box, apex on top).
+                let rect = rect.abs();
+                closed(&[Point::new(rect.center().x, rect.y0), Point::new(rect.x1, rect.y1), Point::new(rect.x0, rect.y1)])
+            }
             Self::Polygon { rect, sides, star_ratio } => {
                 let rect = rect.abs();
                 let (c, rx, ry) = (rect.center(), rect.width() / 2.0, rect.height() / 2.0);
@@ -145,7 +156,11 @@ impl ShapeGeometry {
     pub fn bounds(&self) -> Rect {
         // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs:85-96 `shape_bounds` (a line's ends' box).
         match *self {
-            Self::Rect { rect, .. } | Self::Ellipse { rect } | Self::Polygon { rect, .. } | Self::Custom { rect, .. } => rect.abs(),
+            Self::Rect { rect, .. }
+            | Self::Ellipse { rect }
+            | Self::Triangle { rect }
+            | Self::Polygon { rect, .. }
+            | Self::Custom { rect, .. } => rect.abs(),
             Self::RadialPolygon { center, radius, .. } => Rect::new(center.x - radius, center.y - radius, center.x + radius, center.y + radius),
             Self::Line { from, to, .. } => Rect::from_points(from, to),
         }
@@ -201,6 +216,16 @@ pub fn box_drag(start: Point, end: Point, rule: BoxRule) -> Option<Rect> {
 /// `pair` when both parts are finite and above 0 (a gear field that is not empty).
 fn positive(pair: (f64, f64)) -> Option<(f64, f64)> {
     (pair.0.is_finite() && pair.1.is_finite() && pair.0 > 0.0 && pair.1 > 0.0).then_some(pair)
+}
+
+/// The tight box of the equilateral triangle, apex up, inscribed in the circle of `square`: what ⇧ draws with the
+/// Triangle tool (#13350). With the square centred on the press (⇧⌥), the triangle's centre is the press.
+pub fn equilateral_in(square: Rect) -> Rect {
+    let square = square.abs();
+    let r = square.width() / 2.0;
+    let half_base = r * 3f64.sqrt() / 2.0;
+    let x = square.center().x - half_base;
+    Rect::new(x, square.y0, x + 2.0 * half_base, square.y0 + 1.5 * r)
 }
 
 /// The end of a line dragged from `from` to `to`, or `None` when it is shorter than
