@@ -239,6 +239,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   primitives (`.abr`, `.asl`, `.aco`, `.act`, `.ase`, `.grd`, `.pat`, `.atn`, `.csh`, `.shc`) and
   the Photoshop blocks of a layered TIFF. Bounded and panic-free on hostile input. Compositing
   and the mapping onto a document stay in each app.
+- [`craft-ipc`](crates/ipc/README.md): Craft apps talking on one machine: per-user local sockets (Unix socket, Windows named pipe), token auth, instance discovery, launch on demand, focus hand-off, frame transfer and linked-file watching. Native only: it does not build for `wasm32`. Protocol in [PROTOCOL.md](crates/ipc/PROTOCOL.md).
 - [`craft-jmap`](crates/jmap/README.md): the JMAP protocol core (RFC 8620), from MailCraft, without
   sockets: session, requests of method calls with back-references, responses, ids, address
   templates, credentials and the judgement of HTTP answers, over any HTTP implementation. Bounded
