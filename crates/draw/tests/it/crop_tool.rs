@@ -307,6 +307,33 @@ fn the_default_frame_fits_the_ratio_and_follows_the_selection() {
 }
 
 #[trial]
+fn p_and_h_belong_to_the_crop_only_while_a_frame_is_pending() {
+    // The untouched default frame leaves P and H to the app.
+    let mut rig = Rig::new(classic());
+    rig.run();
+    rig.host.borrow_mut().events.clear();
+    rig.fixture.key(Key::P, Modifiers::NONE);
+    rig.fixture.key(Key::H, Modifiers::NONE);
+    rig.run();
+    assert!(!rig.host.borrow().events.iter().any(|event| matches!(event, CropEvent::Settings(_))), "neither key was the crop's");
+
+    // A pending frame takes P (Classic Mode) and H (Show Cropped Area, inert in Classic Mode).
+    rig.drag((100.0, 80.0), (300.0, 220.0));
+    rig.run();
+    assert!(rig.host.borrow().tool.session().pending());
+    rig.fixture.key(Key::P, Modifiers::NONE);
+    rig.run();
+    assert!(!rig.host.borrow().settings.shield.classic_mode, "P left Classic Mode");
+    let shown = rig.host.borrow().settings.shield.show_cropped_area;
+    rig.fixture.key(Key::H, Modifiers::NONE);
+    rig.run();
+    assert_eq!(rig.host.borrow().settings.shield.show_cropped_area, !shown, "H toggles Show Cropped Area in image mode");
+    rig.fixture.key(Key::P, Modifiers::NONE);
+    rig.run();
+    assert!(rig.host.borrow().settings.shield.classic_mode, "P again goes back");
+}
+
+#[trial]
 fn the_default_frame_takes_no_box_step_and_hides_after_discard() {
     let selection = Rect::new(100.0, 50.0, 300.0, 250.0);
     // X on a square default frame makes no box step.
