@@ -28,7 +28,9 @@ pub trait DockPanels<P> {
         Permissions::ALL
     }
 
-    /// Shows `panel`'s body in `ui`.
+    /// Shows `panel`'s body in `ui`: the group's body, inset from its edges by the panel padding. The group is the
+    /// body's panel and its tab the body's title, so the body shows no framework `Panel` or padding of its own; content
+    /// taller than the group scrolls in the body's own scrolling container.
     fn body(&mut self, panel: &P, ui: &mut Ui, cx: &mut BodyCx<'_>);
 
     /// Takes the group holding `panels`, whose tab `active` is selected, in place of its tab strip and body: at

@@ -3,7 +3,8 @@
 
 use super::hide::{self, Shown};
 use crate::contract::overlay::PlacementChange;
-use crate::contract::{Bind, BindMut, BodyCx, Cx, Entry, NoValue, Outcome, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _};
+use crate::contract::{Bind, BindMut, BodyCx, Cx, Entry, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _};
+use crate::layout_components::Stack;
 use crate::docking::SplitFramesCx as _;
 use crate::docking::stack::{StackSection, StackSections, section_heights};
 use crate::docking::tree::FrameRules;
@@ -636,6 +637,12 @@ fn float_space<P: Clone + PartialEq>(bounds: Rect, sizes: &DockSizes, config: &D
     space
 }
 
+/// Shows a docked panel's body as its group holds it: filling the group's body, inset from its edges by the panel
+/// padding. The group is the body's panel and its tab the body's title, so a docked body pads and frames nothing itself.
+fn inset(ui: &mut Ui, mut body: impl FnMut(&mut Ui, &mut BodyCx<'_>)) {
+    let _ = Stack::new().fill().pad(Pad::Regular).show(ui, |ui, cx| body(ui, cx));
+}
+
 impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
     /// One group of the docked tree or of a floating window: a tab group, or the sections of an accordion.
     fn leaf(&mut self, ui: &mut Ui, body: &mut BodyCx<'_>, node: &Node<P>, rect: Rect) {
@@ -807,19 +814,19 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         let rect = match at {
             GroupAt::Measure(width) => {
                 let measured =
-                    make(active, look.minimized).measure_in(ui, Proposal::Width(width), |ui, body| panels.borrow_mut().body(shown, ui, body));
+                    make(active, look.minimized).measure_in(ui, Proposal::Width(width), |ui, _| inset(ui, |ui, body| panels.borrow_mut().body(shown, ui, body)));
                 return Some(measured.y);
             }
             GroupAt::Show(rect) => rect,
         };
-        let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panels.borrow_mut().body(shown, ui, body)).output;
+        let output = make(active, look.minimized).show_at(ui, rect, |ui, _| inset(ui, |ui, body| panels.borrow_mut().body(shown, ui, body))).output;
         // The size `panel` floats at out of this group: the group's width, and the height the group measures at with
         // `panel` shown in a floating window's room, so content that fills the body takes that room.
         let fitted = |ui: &Ui, panel: &P| {
             let at = members.iter().position(|member| member == panel).unwrap_or(active);
             let room = Vec2::new(rect.width(), scene.space.content_room());
-            let measured = make(at, false).id(output.response.id).measure_in(ui, Proposal::Size(room), |ui, body| {
-                panels.borrow_mut().body(&members[at], ui, body);
+            let measured = make(at, false).id(output.response.id).measure_in(ui, Proposal::Size(room), |ui, _| {
+                inset(ui, |ui, body| panels.borrow_mut().body(&members[at], ui, body));
             });
             Vec2::new(rect.width(), measured.y)
         };
