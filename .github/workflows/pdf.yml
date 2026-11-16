@@ -116,6 +116,20 @@ jobs:
           tool: wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
           fallback: cargo-install
       - run: cargo test -p craft-pdf --all-features --locked --target wasm32-unknown-unknown
+      - name: Read the contract's wasm-bindgen version
+        # The contract is its own workspace with its own Cargo.lock, so its wasm-bindgen can
+        # differ from the root lock the runner above was installed from. A runner built for
+        # another version rejects the module.
+        id: contract-wasm-bindgen
+        shell: bash
+        run: |
+          runner_version=$(python3 -c 'import tomllib; d=tomllib.load(open("crates/pdf/read-only-contract/Cargo.lock", "rb")); print(next(p["version"] for p in d["package"] if p["name"] == "wasm-bindgen"))')
+          echo "version=$runner_version" >> "$GITHUB_OUTPUT"
+      - name: Install the contract's matching WASM test runner
+        uses: step-security/taiki-e-install-action@v2.87.32
+        with:
+          tool: wasm-bindgen@${{ steps.contract-wasm-bindgen.outputs.version }}
+          fallback: cargo-install
       - run: cargo test --manifest-path crates/pdf/read-only-contract/Cargo.toml --locked --target wasm32-unknown-unknown
   plate-test:
     name: Plate tests and craft-prepress
