@@ -51,8 +51,10 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
     let mut consumed = vec![Taken::No; batch.presses.len()];
     let driven = target.as_ref().and_then(|rec| Driven::of(ctx, rec));
     let field_list = target.as_ref().filter(|_| driven.is_none()).and_then(|rec| list_of_field(ctx, rec));
-    // Whether a component took each text of the pass, as typing, type-ahead or digits.
+    // Whether a component took each text of the pass, as typing, type-ahead or digits; and whether the framework took
+    // it from egui's input, so no egui text widget reads it in this pass (`withdraw_taken`).
     let mut taken_texts = vec![false; batch.texts.len()];
+    let mut withdrawn_texts: Vec<usize> = batch.texts.iter().enumerate().filter(|(_, typed)| typed.claimed).map(|(at, _)| at).collect();
     if let Some(rec) = &target {
         for (press, taken) in batch.presses.iter().zip(&mut consumed).filter(|(press, _)| !press.canvas) {
             *taken = if stale_repeat(&mut stale, press) {
@@ -62,9 +64,19 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
                 apply_press(ctx, rec, press, route, &mut routed, &mut activated)
             };
         }
-        for (text, taken) in batch.texts.iter().zip(&mut taken_texts) {
-            let route = text_route(ctx, rec, driven, text);
+        // The focused stop reads its typing from egui's input when it is a text field (its egui text widget) or an app's
+        // own widget; any other taker reads the text as an intent only, and the text leaves egui's input.
+        let reads_egui = rec.stop.host || rec.stop.keys.owner == OwnerClass::Text;
+        for (at, (typed, taken)) in batch.texts.iter().zip(&mut taken_texts).enumerate() {
+            if typed.claimed {
+                *taken = true;
+                continue;
+            }
+            let route = text_route(ctx, rec, driven, &typed.text);
             *taken = !route.is_empty();
+            if route.iter().any(|(to, _)| !(reads_egui && *to == rec.stop.id)) {
+                withdrawn_texts.push(at);
+            }
             for (to, intent) in route {
                 push(&mut routed, Some(to), intent, false);
             }
@@ -95,7 +107,7 @@ pub(crate) fn begin(ctx: &Context, press_captured: bool) -> EscapeRouting {
         push(&mut routed, focused, Intent::Edit(command), false);
     }
     let (shortcuts, held) = owned_shortcuts(ctx, target.as_ref(), &batch, &consumed, &taken_texts);
-    withdraw_held(ctx, target.as_ref(), &batch, &held);
+    withdraw_taken(ctx, target.as_ref(), &batch, &held, &withdrawn_texts);
     let pasted = batch.paste.as_deref().zip(focused).map(|(text, id)| (id, Arc::<str>::from(text)));
     let escapes = craft_behavior::focus::route_escapes(batch.escapes, press_captured);
     for _ in 0..escapes.to_components {
@@ -290,20 +302,20 @@ pub fn focus_holds(ctx: &Context, chord: Chord) -> bool {
     holds_press(owner, Some(&rec), &press, taken, typed)
 }
 
-/// Takes the presses the focused component holds out of the running pass's egui input, where the app reads its own
-/// keys: one press, one action. A held press whose release has not come yet leaves its release to the strip. The
-/// app's own widget (`Stop::host`) reads its keys from egui, so its presses stay.
-fn withdraw_held(ctx: &Context, target: Option<&StopRec>, batch: &Batch, held: &[bool]) {
-    if target.is_some_and(|rec| rec.stop.host) {
-        return;
-    }
+/// Takes what the framework handed to one taker out of the running pass's egui input, where the app and egui's text
+/// widgets read their keys: one press, one action, and one text, one reader. `held` marks the presses the focused
+/// component holds; the app's own widget (`Stop::host`) reads its keys from egui, so its presses stay. `texts` are the
+/// places in `Batch::texts` of the texts a claim or a framework taker took. A held press whose release has not come yet
+/// leaves its release to the strip.
+fn withdraw_taken(ctx: &Context, target: Option<&StopRec>, batch: &Batch, held: &[bool], texts: &[usize]) {
+    let host = target.is_some_and(|rec| rec.stop.host);
     let presses: Vec<&Press> =
-        batch.presses.iter().zip(held).filter(|(press, held)| **held && press.in_egui.is_some()).map(|(press, _)| press).collect();
-    if presses.is_empty() {
+        batch.presses.iter().zip(held).filter(|(press, held)| !host && **held && press.in_egui.is_some()).map(|(press, _)| press).collect();
+    if presses.is_empty() && texts.is_empty() {
         return;
     }
     let places: Vec<usize> = presses.iter().filter_map(|press| press.in_egui).collect();
-    let open = crate::runtime::egui::input::withdraw_presses(ctx, &places);
+    let open = crate::runtime::egui::input::withdraw(ctx, &places, texts);
     current(ctx, |stage| {
         for key in presses.iter().zip(open).filter(|(_, open)| *open).filter_map(|(press, _)| press.release) {
             if !stage.consumed.contains(&key) {

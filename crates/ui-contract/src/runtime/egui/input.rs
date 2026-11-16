@@ -11,7 +11,8 @@ use egui::{Context, Event, Id, ImeEvent, Key, MouseWheelSource, MouseWheelUnit, 
 
 pub use egui::RawInput;
 
-/// What the one-press rule needs between frames, for one viewport.
+/// The events that wait for the next frame, for one viewport: the one-press rule's and those the key stage cuts at a
+/// focus move (`keys::input_hook`).
 #[derive(Default)]
 pub(crate) struct HeldInput {
     events: Vec<Event>,
@@ -19,6 +20,13 @@ pub(crate) struct HeldInput {
 }
 
 impl HeldInput {
+    /// Holds `events`, which a later step of this pass's input hook cut, for the next frame, ahead of the events held
+    /// already: they arrived before them.
+    pub(crate) fn hold_ahead(&mut self, mut events: Vec<Event>) {
+        events.append(&mut self.events);
+        self.events = events;
+    }
+
     /// Whether events wait for the next frame.
     #[cfg(feature = "testing")]
     pub(crate) fn holds(&self) -> bool {
@@ -43,10 +51,10 @@ pub(crate) fn hold_back_presses(input: &mut RawInput, frame: u64, held: &mut Hel
     !held.events.is_empty()
 }
 
-/// Takes key presses out of the running pass's input: `places` counts the input's key presses, in order. Each press
-/// goes with its release when that is in the input too; otherwise its key is no longer down. Returns, for each
-/// place, whether the release is still to come.
-pub(crate) fn withdraw_presses(ctx: &Context, places: &[usize]) -> Vec<bool> {
+/// Takes key presses and texts out of the running pass's input: `places` counts the input's key presses, in order,
+/// and `texts` its text events. Each press goes with its release when that is in the input too; otherwise its key is
+/// no longer down. Returns, for each place, whether the release is still to come.
+pub(crate) fn withdraw(ctx: &Context, places: &[usize], texts: &[usize]) -> Vec<bool> {
     ctx.input_mut(|input| {
         let presses: Vec<(usize, egui::Key)> = input
             .events
@@ -58,6 +66,10 @@ pub(crate) fn withdraw_presses(ctx: &Context, places: &[usize]) -> Vec<bool> {
             })
             .collect();
         let mut gone = vec![false; input.events.len()];
+        let text_events = input.events.iter().enumerate().filter(|(_, event)| matches!(event, Event::Text(_))).map(|(at, _)| at);
+        for (nth, at) in text_events.enumerate() {
+            gone[at] |= texts.contains(&nth);
+        }
         let mut open = Vec::with_capacity(places.len());
         for (at, key) in places.iter().filter_map(|place| presses.get(*place).copied()) {
             gone[at] = true;
