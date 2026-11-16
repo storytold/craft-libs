@@ -305,9 +305,43 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
                 p.highlight = Some(*h);
             }
         }
-        C_ISTD => {} // resolved separately through the style table
+        // The run's character style: taken by `char_style_istd` before the run's sprms are applied,
+        // since its formatting is part of their base.
+        C_ISTD => {}
         _ => {}
     }
+}
+
+/// The character style a CHPX grpprl names (`sprmCIstd`), if any: the last one.
+pub(crate) fn char_style_istd(grpprl: &[u8]) -> Option<u16> {
+    sprm::iter(grpprl).filter(|p| p.op == C_ISTD).filter_map(|p| u16_of(&p)).last()
+}
+
+/// The formatting a run in character style `chr` has before its own sprms, in a paragraph whose
+/// style gives `para`: the character style's properties over the paragraph style's, except that a
+/// toggle property the character style turns on inverts the paragraph style's value (a bold
+/// character style in a bold paragraph is not bold). That combined value is also what a run's
+/// `0x81` toggle operand inverts. As Word shows files Word 95 and Word 2016 wrote, for bold,
+/// italic, caps and strikethrough; the other toggle sprms are read the same way.
+pub(crate) fn with_char_style(para: &CharProps, chr: &CharProps) -> CharProps {
+    let mut out = para.clone();
+    out.overlay(chr);
+    let toggles = [
+        (&mut out.bold, para.bold, chr.bold),
+        (&mut out.italic, para.italic, chr.italic),
+        (&mut out.strike, para.strike, chr.strike),
+        (&mut out.outline, para.outline, chr.outline),
+        (&mut out.shadow, para.shadow, chr.shadow),
+        (&mut out.small_caps, para.small_caps, chr.small_caps),
+        (&mut out.caps, para.caps, chr.caps),
+        (&mut out.hidden, para.hidden, chr.hidden),
+    ];
+    for (slot, p, c) in toggles {
+        if let Some(c) = c {
+            *slot = Some(p.unwrap_or(false) ^ c);
+        }
+    }
+    out
 }
 
 /// Custom tab stops from `sprmPChgTabsPapx` / `sprmPChgTabs` ([MS-DOC] PChgTabsPapxOperand,

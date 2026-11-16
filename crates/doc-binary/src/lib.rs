@@ -389,10 +389,9 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
 }
 
 /// Read a Word 6.0/95 file ([`word6`]): its text, with its character and paragraph formatting and
-/// table rows translated to Word 97 sprms, through the same walk as a Word 97 file. Its paragraph
-/// styles, sections, headers and footers, notes and comments are read as a Word 97 file's, from
-/// the structures [`word6`] puts in the Word 97 shape (and [`comments`] reads in their Word 6
-/// shape); character styles are not yet.
+/// table rows translated to Word 97 sprms, through the same walk as a Word 97 file. Its styles,
+/// sections, headers and footers, notes and comments are read as a Word 97 file's, from the
+/// structures [`word6`] puts in the Word 97 shape (and [`comments`] reads in their Word 6 shape).
 fn read_word6(comp: &craft_cfb::CompoundFile<'_>, word: &[u8], max_paragraphs: usize) -> Result<Document, DocbinError> {
     let fib = word6::Fib6::parse(word)?;
     let content = word6::content(word, &fib)?;
@@ -776,6 +775,10 @@ struct ParaBuild {
     run_gen: Option<u64>,
     /// Inline objects, each anchored at a U+FFFC pushed into `text`.
     objects: Vec<InlineObject>,
+    /// The paragraph style its runs' formatting builds on, read ahead from the paragraph's mark
+    /// when its first formatted character is read (`None` until then): `props.style` is only
+    /// set when the walk reaches the mark.
+    run_style: Option<Option<String>>,
 }
 
 impl ParaBuild {
@@ -829,7 +832,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
     // Field assembly state: instruction characters are swallowed, the result is kept until
     // the end character, then emitted as one object (hyperlinks keep their result text).
     let mut field: Option<FieldBuild> = None;
-    let mut fmt = FmtState::default();
+    let mut fmt = FmtState { walk_end: cp_end, ..FmtState::default() };
     while cp < cp_end {
         // Bookmark boundaries at this CP (main-document walks only; subdocument walks get
         // an empty table and `cp` never matches the main-document CPs).
@@ -894,9 +897,7 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                     combined = v;
                     &combined
                 };
-                if let Some(st) = ctx.raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()) {
-                    pb.props.style = Some(fmt::style_id(&st.name));
-                }
+                pb.props.style = style_of(ctx, istd);
                 let mut row = table::decode(papx);
                 row.cell_mark = c == '\u{7}';
                 // Only table marks keep their table context; a plain paragraph would carry
@@ -1181,19 +1182,42 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
     };
     let grpprl = run.grpprl;
     let prm = span.map_or(0, |s| s.prm());
-    let style = pb.props.style.as_deref();
+    if pb.run_style.is_none() {
+        pb.run_style = Some(style_ahead(ctx, cp, st.walk_end));
+    }
+    let style = pb.run_style.as_ref().and_then(|s| s.as_deref());
     let hit = st.memo.as_ref().is_some_and(|m| std::ptr::eq(m.chpx, grpprl) && m.prm == prm && m.style.as_deref() == style);
     if !hit {
         let default;
-        let base = match style.and_then(|id| ctx.sheet.get(id)) {
+        let para_base = match style.and_then(|id| ctx.sheet.get(id)) {
             Some(sty) => &sty.chr,
             None => {
                 default = CharProps::default();
                 &default
             }
         };
+        // The run's character style, whose formatting joins the paragraph style's as the base of
+        // the run's own sprms (see `fmt::with_char_style`).
+        let char_style = char_style(ctx, grpprl);
+        let combined;
+        let base = match char_style {
+            Some(cs) => {
+                combined = fmt::with_char_style(para_base, &cs.chr);
+                &combined
+            }
+            None => para_base,
+        };
         let mut props = char_props(grpprl, ctx.fonts, base);
         apply_prm(&mut props, ctx.pieces.piece_prm(cp), ctx.fonts, base, ctx.work);
+        // Kept as direct formatting: what differs from what the styles give the run, as the model
+        // resolves them (the paragraph style, then the character style over it). A toggle the
+        // styles cancel is kept, since the model overlays them (#1801).
+        let styled = match char_style {
+            Some(cs) => para_base.clone().overlaid(&cs.chr),
+            None => para_base.clone(),
+        };
+        let mut props = props.minus(&styled);
+        props.style = char_style.map(|cs| cs.id.clone());
         st.memo = Some(FmtMemo { chpx: grpprl, prm, style: style.map(str::to_owned), props });
         st.generation += 1;
     }
@@ -1226,6 +1250,45 @@ fn push_formatted<'a>(pb: &mut ParaBuild, cp: u32, c: char, ctx: &WalkCtx<'a>, f
     }
 }
 
+/// The model id of paragraph style `istd`, when it names a style.
+fn style_of(ctx: &WalkCtx<'_>, istd: u16) -> Option<String> {
+    ctx.raw_styles.get(usize::from(istd)).filter(|s| !s.name.is_empty()).map(|s| fmt::style_id(&s.name))
+}
+
+/// The style of the paragraph `cp` is in: that of the paragraph mark the walk ends it at (the
+/// first paragraph, cell or section mark from `cp`, before `end`), read as the mark reads it.
+/// A paragraph's runs build their formatting on its style, and a run's toggle operand `0x81`
+/// inverts the style's value, so the style is needed before the mark is reached. The text is
+/// read ahead once per paragraph.
+fn style_ahead(ctx: &WalkCtx<'_>, cp: u32, end: u32) -> Option<String> {
+    let mut at = cp;
+    while at < end {
+        match ctx.pieces.char_at(ctx.word, at) {
+            Ok((c, units)) => {
+                let section_mark = c == '\u{C}' && ctx.sect_ends.binary_search(&at.saturating_add(1)).is_ok();
+                if matches!(c, '\r' | '\u{7}') || section_mark {
+                    let (istd, _) = ctx.papx_bins.papx(ctx.word, ctx.pieces.fc_of_cp(at).unwrap_or(0));
+                    return style_of(ctx, istd);
+                }
+                at = at.saturating_add(units.max(1));
+            }
+            Err(next) => at = next,
+        }
+    }
+    None
+}
+
+/// The character style a run's CHPX names (`sprmCIstd`): a named character style other than
+/// Default Paragraph Font, which Word shows as no style. An index naming anything else is ignored.
+fn char_style<'a>(ctx: &WalkCtx<'a>, grpprl: &[u8]) -> Option<&'a craft_wordmodel::styles::Style> {
+    let raw = ctx.raw_styles.get(usize::from(fmt::char_style_istd(grpprl)?))?;
+    if raw.stk != 2 || raw.name.is_empty() {
+        return None;
+    }
+    let id = fmt::style_id(&raw.name);
+    ctx.sheet.get(&id).filter(|s| s.kind == craft_wordmodel::styles::StyleKind::Character && s.id != "Default Paragraph Font")
+}
+
 /// What the walk carries from one character to the next while it resolves formatting: the piece
 /// and the CHPX run the last character was in (so most characters need no search), and the last
 /// formatting resolved.
@@ -1236,6 +1299,8 @@ struct FmtState<'a> {
     memo: Option<FmtMemo<'a>>,
     /// Counts the memo's replacements, so equal values mean the same properties.
     generation: u64,
+    /// The end of the CP range walked, where [`style_ahead`] stops.
+    walk_end: u32,
 }
 
 /// The last character formatting resolved, reused while the CHPX, the piece's Prm and the

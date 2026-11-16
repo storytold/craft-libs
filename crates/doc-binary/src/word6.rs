@@ -8,8 +8,8 @@
 //! What is read: the main text, its paragraphs and fields, the code page of each run, the
 //! character and paragraph formatting listed below, table rows, the paragraph styles (with
 //! their formatting), the sections, the headers and footers, the footnotes and endnotes (with
-//! their separators and options), and the comments. Character styles, pictures, borders and
-//! shading are not read yet.
+//! their separators and options), the comments, and the character styles of runs. Pictures,
+//! borders and shading are not read yet.
 //!
 //! The layout as observed:
 //!
@@ -119,6 +119,9 @@ const MAX_STYLE_DEPTH: usize = 16;
 /// Character sprms read, by Word 6.0/95 opcode. Each one was matched against Word's own reading of
 /// the corpus files (the `.docx` it saves from them).
 mod chp {
+    /// The run's character style: a 2-byte style index, as Word 97's `sprmCIstd` (Word reads
+    /// `w:rStyle`; runs in Default Paragraph Font have none).
+    pub(super) const CHAR_STYLE: u8 = 0x50;
     /// Bold, a toggle (0 off, 1 on, 0x80 as the style, 0x81 the opposite of the style).
     pub(super) const BOLD: u8 = 0x55;
     /// Italic, a toggle.
@@ -213,6 +216,7 @@ mod w97 {
     pub(super) const C_ICO: u16 = 0x2A42;
     pub(super) const C_HPS: u16 = 0x4A43;
     pub(super) const C_FTC0: u16 = 0x4A4F;
+    pub(super) const C_ISTD: u16 = 0x4A30;
     pub(super) const C_HPS_POS: u16 = 0x4845;
     pub(super) const C_ISS: u16 = 0x2A48;
     pub(super) const C_DXA_SPACE: u16 = 0x8840;
@@ -798,6 +802,7 @@ fn translate_chp(grpprl: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     for (op, v) in sprms(grpprl) {
         match op {
+            chp::CHAR_STYLE => prl(&mut out, w97::C_ISTD, v),
             chp::BOLD => prl(&mut out, w97::C_BOLD, v),
             chp::ITALIC => prl(&mut out, w97::C_ITALIC, v),
             chp::SMALL_CAPS => prl(&mut out, w97::C_SMALL_CAPS, v),

@@ -2312,6 +2312,76 @@ fn character_position_spacing_kerning_and_effects_are_read() {
     assert_eq!((r[7].outline, r[8].shadow), (Some(true), Some(true)));
 }
 
+/// Character styles as Word 2016 writes them (`sprmCIstd`) and shows them: the run takes the style
+/// (`w:rStyle`) and its formatting; a run's `0x81` inverts the paragraph style's value combined
+/// with the character style's, where a bold character style in a bold paragraph is not bold; and
+/// a character style's font beats its paragraph style's.
+#[test]
+fn character_styles_apply_to_their_runs() {
+    let spec = RichSpec {
+        text: "abcde\rfgh\r",
+        styles: vec![
+            (1, 0x0FFF, "Normal", Vec::new(), Vec::new()),
+            (1, 0, "BoldPara", Vec::new(), grpprl(&[(0x0835, &[0x81]), (0x4A4F, &1u16.to_le_bytes())])),
+            (2, 0x0FFF, "MyStrong", Vec::new(), grpprl(&[(0x0835, &[0x81]), (0x2A42, &[0x06])])),
+            (2, 0x0FFF, "TimesStyle", Vec::new(), grpprl(&[(0x4A4F, &0u16.to_le_bytes())])),
+        ],
+        fonts: vec!["Times New Roman", "Arial"],
+        chpx_runs: vec![
+            (0, Vec::new()),
+            (1, grpprl(&[(0x4A30, &2u16.to_le_bytes())])),
+            (2, grpprl(&[(0x4A30, &2u16.to_le_bytes()), (0x0835, &[0x81])])),
+            (3, Vec::new()),
+            (6, grpprl(&[(0x4A30, &2u16.to_le_bytes())])),
+            (7, grpprl(&[(0x4A30, &2u16.to_le_bytes()), (0x0835, &[0x81])])),
+            (8, grpprl(&[(0x4A30, &3u16.to_le_bytes())])),
+            (9, Vec::new()),
+        ],
+        papx_entries: vec![(0, 0, Vec::new()), (6, 1, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let ps: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    let runs = |i: usize| -> Vec<(Option<String>, bool, String)> {
+        let p = ps[i];
+        p.runs
+            .iter()
+            .map(|r| {
+                let c = doc.styles.resolve_char(p.props.style.as_deref(), &r.props);
+                (r.props.style.clone(), c.bold, c.font)
+            })
+            .collect()
+    };
+    let strong = || Some("MyStrong".to_owned());
+    let (times, arial) = ("Times New Roman".to_owned(), "Arial".to_owned());
+    // In Normal: plain, MyStrong (bold), MyStrong with 0x81 (not bold), plain.
+    assert_eq!(
+        runs(0),
+        [(None, false, times.clone()), (strong(), true, times.clone()), (strong(), false, times.clone()), (None, false, times.clone())]
+    );
+    assert!(ps[0].runs[1].props.color.is_none(), "the style's colour stays the style's");
+    // In BoldPara (bold, Arial): MyStrong cancels the bold, 0x81 brings it back, and TimesStyle's
+    // font wins over the paragraph style's.
+    assert_eq!(runs(1), [(strong(), false, arial.clone()), (strong(), true, arial), (Some("TimesStyle".to_owned()), true, times)]);
+}
+
+/// A run's `0x81` in a paragraph whose style turns the property on turns it off: the paragraph
+/// style is the base the operand inverts, though the walk reaches the paragraph's mark, and so its
+/// style, only after the run.
+#[test]
+fn a_toggle_inverts_its_paragraph_styles_value() {
+    let spec = RichSpec {
+        text: "ab\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new()), (1, 0, "BoldPara", Vec::new(), grpprl(&[(0x0835, &[0x81])]))],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, grpprl(&[(0x0835, &[0x81])])), (1, Vec::new())],
+        papx_entries: vec![(0, 1, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let p = para0(&doc);
+    let bold: Vec<bool> = p.runs.iter().map(|r| doc.styles.resolve_char(p.props.style.as_deref(), &r.props).bold).collect();
+    assert_eq!(bold, [false, true]);
+}
+
 #[test]
 fn piece_prm_character_formatting_applied() {
     // #458. Bit 0 of a Prm is fComplex ([MS-DOC] §2.9.215/§2.9.216): Prm0 = isprm in bits

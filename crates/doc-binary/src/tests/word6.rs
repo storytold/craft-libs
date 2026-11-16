@@ -720,6 +720,33 @@ fn character_effects_position_spacing_and_kerning_are_read() {
     assert_eq!(r[11].underline, Some(Underline::Double));
 }
 
+/// Character styles as Word 95 writes them (`cs.doc`) and Word 2016 shows them: 0x50 names the
+/// run's style; in a bold paragraph style, a bold character style is not bold, and `55 81` over
+/// it is.
+#[test]
+fn character_styles_apply_to_their_runs() {
+    let runs: &[(u32, u32, &[u8])] =
+        &[(0, 1, &[0x50, 0x02, 0x00]), (1, 2, &[0x50, 0x02, 0x00, 0x55, 0x81]), (2, 4, &[]), (4, 5, &[0x50, 0x02, 0x00]), (5, 6, &[])];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 4, &[]), (4, 6, &[])];
+    let styles = &[
+        Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", ..Default::default() }),
+        Some(Std { sti: 0x0FFE, sgc: 1, base: 0, name: "BoldPara", chpx: &[0x55, 0x81], ..Default::default() }),
+        Some(Std { sti: 0x0FFE, sgc: 2, base: 0x0FFF, name: "MyStrong", chpx: &[0x55, 0x81, 0x62, 0x06], ..Default::default() }),
+    ];
+    let d = Doc6 { text: b"abc\rd\r", runs, paras, para_styles: &[1, 0], styles, ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let ps: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    let runs = |i: usize| -> Vec<(Option<String>, bool)> {
+        let p = ps[i];
+        p.runs.iter().map(|r| (r.props.style.clone(), doc.styles.resolve_char(p.props.style.as_deref(), &r.props).bold)).collect()
+    };
+    let strong = || Some("MyStrong".to_owned());
+    assert_eq!(runs(0), [(strong(), false), (strong(), true), (None, true)]);
+    assert_eq!(runs(1), [(strong(), true)]);
+    let style = doc.styles.get("MyStrong").expect("MyStrong");
+    assert_eq!(style.kind, craft_wordmodel::styles::StyleKind::Character);
+}
+
 /// A Word 6 table definition sprm (0xBE): the cell edges, then a 10-byte descriptor per cell
 /// whose first word holds the merge flags.
 fn def_table(edges: &[i16], rgfs: &[u16]) -> Vec<u8> {
