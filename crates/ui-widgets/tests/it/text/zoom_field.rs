@@ -172,7 +172,8 @@ fn close(a: f64, b: f64) -> bool {
 #[trial]
 fn the_zoom_field_reads_ratios_and_one_separator_and_refuses_the_rest() {
     use Input::{Pasted, Typed};
-    let rows: [(bool, Input, Option<&str>, f64, bool, bool); 10] = [
+    type Row = (bool, Input, Option<&'static str>, f64, bool, bool);
+    let rows: [Row; 10] = [
         (false, Typed("045"), Some("45"), 45.0, false, false),
         (false, Typed("1/2"), Some("50"), 50.0, false, false),
         (false, Pasted("5/2"), Some("250"), 250.0, false, false),

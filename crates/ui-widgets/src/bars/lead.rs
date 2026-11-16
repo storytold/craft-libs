@@ -26,7 +26,6 @@ impl<'a> BarHome<'a> {
     }
 
     /// Whether the button takes input; it is enabled by default.
-    #[must_use]
     pub fn enabled(mut self, on: bool) -> Self {
         self.enabled = on;
         self
@@ -74,7 +73,6 @@ impl BarTool {
     }
 
     /// Whether the icon takes input; it is enabled by default. The arrow draws in the disabled look with it.
-    #[must_use]
     pub fn enabled(mut self, on: bool) -> Self {
         self.enabled = on;
         self

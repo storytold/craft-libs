@@ -36,12 +36,15 @@ pub struct PictureStyle {
     height: f32,
 }
 
+/// A content painter that paints into the picture's rect.
+type Paint<'a> = Box<dyn Fn(&ContentPainterCx, Rect) + 'a>;
+
 /// Where a picture's content comes from.
 enum Source<'a> {
     /// Pixels the caller makes, stored as a texture under `key`.
     Image { key: u64, image: &'a dyn Fn() -> ColorImage },
     /// A content painter that paints into the picture's rect.
-    Painter(Box<dyn Fn(&ContentPainterCx, Rect) + 'a>),
+    Painter(Paint<'a>),
 }
 
 /// A picture of an image the caller makes (`new`) or of what a content painter paints (`painter`); both sit in a rect

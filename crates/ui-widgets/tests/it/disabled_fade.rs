@@ -108,7 +108,7 @@ fn a_disabled_faded_component_paints_its_enabled_look_faded_once() {
         "the veil is painted after the tile's last shape"
     );
     let mut own = disabled.clone();
-    own.remove(veil);
+    let _veil = own.remove(veil);
     let (own, enabled) = (colors(&own), colors(&enabled));
     assert_eq!(own, enabled, "under the veil the disabled tile paints its enabled colours");
     let painting = own.iter().filter(|shape| shape.iter().any(|color| color.a() > 0)).count();

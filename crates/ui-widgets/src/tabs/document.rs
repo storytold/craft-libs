@@ -196,14 +196,12 @@ impl<'a, D: Clone + Eq + Hash + Send + Sync + std::fmt::Debug + 'static> Documen
     }
 
     /// Every tab takes the strip's taller form.
-    #[must_use]
     pub fn large(mut self, on: bool) -> Self {
         self.large = on;
         self
     }
 
     /// The strip takes files dragged from the operating system and reports them as `FilesDropped`.
-    #[must_use]
     pub fn takes_files(mut self, on: bool) -> Self {
         self.takes_files = on;
         self
