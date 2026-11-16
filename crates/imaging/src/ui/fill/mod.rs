@@ -916,7 +916,7 @@ impl FullWindowWorkspace for ContentAwareFillWorkspace {
 
     /// The settings, and the bar's `tool`, `brushSize`, `brushMode` (`"add"`, `"subtract"`), `lassoMode` (`"new"`,
     /// `"add"`, `"subtract"`, `"intersect"`) and `expandBy`.
-    fn json_fields(&self) -> Option<serde_json::Value> {
+    fn json_fields(&self, _source: &Self::Source) -> Option<serde_json::Value> {
         let mut fields = serde_fields(&self.settings)?;
         let bar = fields.as_object_mut()?;
         let brush_mode = if self.options.brush_add { "add" } else { "subtract" };

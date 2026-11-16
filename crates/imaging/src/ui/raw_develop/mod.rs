@@ -811,7 +811,7 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
         WorkspacePass::new(output.response, events).result(result)
     }
 
-    fn json_fields(&self) -> Option<serde_json::Value> {
+    fn json_fields(&self, source: &Self::Source) -> Option<serde_json::Value> {
         let mut fields = serde_fields(&self.settings)?;
         if let serde_json::Value::Object(map) = &mut fields {
             map.insert("before".to_owned(), serde_json::Value::Bool(self.before));
@@ -819,7 +819,11 @@ impl FullWindowWorkspace for RawDevelopWorkspace {
             let view = if self.view.is_fit() { serde_json::Value::from("fit") } else { serde_json::Value::from(self.view.zoom_percent()) };
             map.insert("view".to_owned(), view);
             let scope = self.scope.as_ref().map(|state| state.settings.clone()).unwrap_or_default();
+            let lab = scope.lab_readouts;
             map.insert("scope".to_owned(), serde_json::to_value(scope).unwrap_or(serde_json::Value::Null));
+            let read = |at: [f64; 2]| preview::readout_json(source, at, self.before, lab);
+            map.insert("pointerReadout".to_owned(), self.hover.map_or(serde_json::Value::Null, read));
+            map.insert("samplerReadouts".to_owned(), self.samplers.points().iter().copied().map(read).collect());
         }
         Some(fields)
     }

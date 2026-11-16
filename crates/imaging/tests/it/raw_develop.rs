@@ -284,7 +284,7 @@ fn readout_shown(fixture: &Fixture) -> bool {
 }
 
 fn scope_json(host: &Rc<RefCell<DialogHost>>) -> serde_json::Value {
-    let fields = host.borrow_mut().get_mut::<Hosted>().and_then(|hosted| hosted.workspace().json_fields());
+    let fields = host.borrow_mut().get_mut::<Hosted>().and_then(|hosted| hosted.workspace().json_fields(&**hosted.source()));
     fields.and_then(|fields| fields.get("scope").cloned()).unwrap_or_default()
 }
 

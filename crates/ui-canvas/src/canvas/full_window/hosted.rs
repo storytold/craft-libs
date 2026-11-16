@@ -39,8 +39,10 @@ pub trait FullWindowWorkspace: Send + 'static {
     /// it binds to `open` ([`opened`](crate::dialog::FullWindowDialog::opened)).
     fn show(&mut self, ui: &mut Ui, cx: WorkspaceCx<'_, Self::Source>) -> WorkspacePass<Self::Event, Self::Result>;
 
-    /// The workspace's fields as JSON for the automation surface; `None` when it has none.
-    fn json_fields(&self) -> Option<serde_json::Value> {
+    /// The workspace's fields as JSON for the automation surface; `None` when it has none. `source` is what the app
+    /// shows the workspace, for the fields that read it (the readout under the pointer).
+    fn json_fields(&self, source: &Self::Source) -> Option<serde_json::Value> {
+        let _ = source;
         None
     }
 
@@ -321,7 +323,7 @@ impl<W: FullWindowWorkspace> StackDialog for HostedWorkspace<W> {
     }
 
     fn json_fields(&self) -> Option<serde_json::Value> {
-        self.workspace.json_fields()
+        self.workspace.json_fields(&*self.source)
     }
 
     fn set_json_field(&mut self, ctx: &Context, field: &str, value: serde_json::Value) -> Result<(), String> {

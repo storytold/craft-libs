@@ -514,7 +514,7 @@ impl FullWindowWorkspace for VanishingPointWorkspace {
         WorkspacePass::new(shown.output.response.clone(), events).result(result)
     }
 
-    fn json_fields(&self) -> Option<Value> {
+    fn json_fields(&self, _source: &Self::Source) -> Option<Value> {
         let mut fields = serde_fields(&self.settings)?;
         let map = fields.as_object_mut()?;
         let selected = self.editor.selected().map_or(Value::Null, Value::from);

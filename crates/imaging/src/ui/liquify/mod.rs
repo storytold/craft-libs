@@ -737,7 +737,7 @@ impl FullWindowWorkspace for LiquifyWorkspace {
     }
 
     /// The settings (the brush keys at the top level) and `preview`.
-    fn json_fields(&self) -> Option<serde_json::Value> {
+    fn json_fields(&self, _source: &Self::Source) -> Option<serde_json::Value> {
         let mut fields = serde_fields(&self.edit.settings)?;
         fields.as_object_mut()?.insert("preview".to_owned(), serde_json::Value::Bool(self.preview));
         Some(fields)
