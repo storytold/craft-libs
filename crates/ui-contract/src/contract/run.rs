@@ -20,7 +20,7 @@ use crate::runtime::{commands, focus, inspect, keys, memory};
 use crate::style::{Ink, StateSet, StyleCx, StyleView, UiTokens};
 use craft_behavior::{Flow, Input, KeyRole, NavMove, PartRef, PressState, Proposal, Roving, Sense};
 use craft_theme::Variant;
-use egui::{Context, Id, Pos2, Rect, Response, Ui, Vec2};
+use egui::{Context, Id, IdMap, Pos2, Rect, Response, Ui, Vec2};
 use std::any::TypeId;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1213,7 +1213,7 @@ pub(crate) fn bar_member(ctx: &Context, env: &Env, hit: Rect, rule: bool) -> boo
 
 /// The rules a bar line shows this pass that wait for the member after them: the shapes each painted, by line.
 #[derive(Default)]
-pub(crate) struct BarRules(HashMap<Id, Vec<HeldRule>>);
+pub(crate) struct BarRules(IdMap<Vec<HeldRule>>);
 
 /// A rule's paint: `shapes` of the paint list of `layer`, in the pass `pass`.
 struct HeldRule {

@@ -17,9 +17,9 @@ use crate::runtime::egui::sizing;
 use crate::runtime::frame::{self, PerViewport};
 use craft_behavior::layout_memory::{SizeTween, measure_tolerance, measured_change_asks_for_discard};
 use craft_behavior::{Axis, Proposal};
-use egui::{Context, Id, Vec2};
+use egui::{Context, Id, IdMap, IdSet, Vec2};
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 /// What an entry holds.
@@ -111,7 +111,7 @@ enum Item {
 }
 
 /// The inputs outside a measure that it read (`read_input`), by key: the widest value of each.
-pub(crate) type Inputs = HashMap<Id, f32>;
+pub(crate) type Inputs = IdMap<f32>;
 
 /// One measure call a component got, the inputs besides its room it read, and its answer.
 #[derive(Clone)]
@@ -135,10 +135,10 @@ struct Transcript {
     /// The inputs the run measured under.
     key: Box<dyn Any + Send + Sync>,
     items: Vec<Item>,
-    leaves: HashMap<Id, Leaf>,
+    leaves: IdMap<Leaf>,
     /// What the real run of the pass that measured found for the body's regions and its rows that run lazily: the
     /// backstop for content that allocates without a component.
-    real: Mutex<Option<HashMap<Id, Vec2>>>,
+    real: Mutex<Option<IdMap<Vec2>>>,
 }
 
 /// A record of this pass's runs.
@@ -191,7 +191,7 @@ enum Undo {
 
 impl Scope {
     fn boundary() -> Scope {
-        Scope { body: None, boundary: true, served: None, fresh: None, visited: HashSet::new(), fills: HashSet::new(), reported: Vec::new() }
+        Scope { body: None, boundary: true, served: None, fresh: None, visited: IdSet::default(), fills: IdSet::default(), reported: Vec::new() }
     }
 }
 
@@ -202,7 +202,7 @@ enum Open {
     Body {
         id: Id,
         items: Vec<Item>,
-        leaves: HashMap<Id, Leaf>,
+        leaves: IdMap<Leaf>,
         inputs: Inputs,
     },
     Boundary,
@@ -223,19 +223,19 @@ struct Scope {
     /// this pass left (whose `real` this run fills).
     served: Option<Arc<Transcript>>,
     fresh: Option<Arc<Transcript>>,
-    visited: HashSet<Id>,
-    fills: HashSet<Id>,
+    visited: IdSet,
+    fills: IdSet,
     /// What the real run contributed in this scope.
     reported: Vec<(Id, f32)>,
 }
 
 #[derive(Default)]
 pub(crate) struct Entries {
-    entries: HashMap<Id, Entry>,
-    measured: HashMap<Id, Found>,
-    kept: HashMap<Id, Kept>,
+    entries: IdMap<Entry>,
+    measured: IdMap<Found>,
+    kept: IdMap<Kept>,
     /// The bodies whose records a kept transcript gave in this pass, with that transcript.
-    served: HashMap<Id, Arc<Transcript>>,
+    served: IdMap<Arc<Transcript>>,
     measuring: Vec<Open>,
     scopes: Vec<Scope>,
     /// The kept calls a real run asks again, as the transcript, the component and the call's index, innermost last:
@@ -252,7 +252,7 @@ impl Entries {
     /// inside, up to the first boundary, and asks for the discard pass.
     fn changed(&mut self, frame: u64, body: Option<Id>) {
         log::debug!(target: sizing::RERUN_LOG, "the content of {body:?} changed from its kept transcript");
-        let invalidate = |kept: &mut HashMap<Id, Kept>, body: Id| {
+        let invalidate = |kept: &mut IdMap<Kept>, body: Id| {
             if let Some(kept) = kept.get_mut(&body) {
                 kept.valid = false;
                 kept.moved = Some(frame);
@@ -598,10 +598,10 @@ pub(crate) fn read_input(ctx: &Context, from: usize, key: Id, value: f32) -> f32
 /// outside its room, which the call's transcript entry keeps.
 pub(crate) fn measure_call<R>(ctx: &Context, f: impl FnOnce() -> R) -> (R, Inputs) {
     if !crate::runtime::measure::active(ctx) {
-        return (f(), Inputs::new());
+        return (f(), Inputs::default());
     }
     let moment = Moment::of(ctx);
-    with(ctx, &moment, |memory| memory.measuring.push(Open::Call { inputs: Inputs::new() }));
+    with(ctx, &moment, |memory| memory.measuring.push(Open::Call { inputs: Inputs::default() }));
     let out = f();
     let inputs = with(ctx, &moment, |memory| {
         let at = memory.measuring.iter().rposition(|open| matches!(open, Open::Call { .. }))?;
@@ -898,7 +898,9 @@ pub(crate) fn run_found(ctx: &Context, id: Id) -> bool {
 /// Opens the measuring run of `body`: what it hands forward until `end_measure` becomes its transcript.
 pub(crate) fn begin_measure(ctx: &Context, body: Id) {
     let moment = Moment::of(ctx);
-    with(ctx, &moment, |memory| memory.measuring.push(Open::Body { id: body, items: Vec::new(), leaves: HashMap::new(), inputs: Inputs::new() }));
+    with(ctx, &moment, |memory| {
+        memory.measuring.push(Open::Body { id: body, items: Vec::new(), leaves: IdMap::default(), inputs: Inputs::default() })
+    });
 }
 
 /// Closes the measuring run of `body` and keeps its transcript under the inputs `key` it ran under.

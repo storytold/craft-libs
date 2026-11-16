@@ -4,7 +4,7 @@
 use super::hide::{self, Shown};
 use crate::contract::overlay::PlacementChange;
 use crate::contract::{
-    Bind, BindMut, BodyCx, Cx, Entry, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _,
+    Bind, BindMut, BodyCx, Cx, Entry, Lazy, NoValue, Outcome, Pad, Pointer as _, Props as _, ShowContainer as _, Sizing, WordSetCx as _,
 };
 use crate::docking::SplitFramesCx as _;
 use crate::docking::stack::{StackSection, StackSections, section_heights};
@@ -818,20 +818,19 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Pass<'_, P> {
         };
         let rect = match at {
             GroupAt::Measure(width) => {
-                let measured =
-                    make(active, look.minimized).measure_in(ui, Proposal::Width(width), |ui, body| panels.borrow_mut().body(shown, ui, body));
+                let measured = make(active, look.minimized).measure_in(ui, Proposal::Width(width), |ui, body| panel_body(&panels, shown, ui, body));
                 return Some(measured.y);
             }
             GroupAt::Show(rect) => rect,
         };
-        let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panels.borrow_mut().body(shown, ui, body)).output;
+        let output = make(active, look.minimized).show_at(ui, rect, |ui, body| panel_body(&panels, shown, ui, body)).output;
         // The size `panel` floats at out of this group: the group's width, and the height the group measures at with
         // `panel` shown in a floating window's room, so content that fills the body takes that room.
         let fitted = |ui: &Ui, panel: &P| {
             let at = members.iter().position(|member| member == panel).unwrap_or(active);
             let room = Vec2::new(rect.width(), scene.space.content_room());
             let measured = make(at, false).id(output.response.id).measure_in(ui, Proposal::Size(room), |ui, body| {
-                panels.borrow_mut().body(&members[at], ui, body);
+                panel_body(&panels, &members[at], ui, body);
             });
             Vec2::new(rect.width(), measured.y)
         };
@@ -1147,5 +1146,16 @@ fn window_edit<P: Clone + Eq + Hash>(
             None => Some(EditEvent::set(Mixed::Same(current.clone()), moved()?, label, None)),
         },
         _ => moving.take().map(|held| EditEvent::cancel(held.id, CancelReason::Dismissed, Some(Mixed::Same(held.before)))),
+    }
+}
+
+/// Shows `panel`'s body in a group's body; a panel with a content version settles (`DockPanels::content`).
+fn panel_body<'p, P: Hash>(panels: &RefCell<&mut (dyn DockPanels<P> + 'p)>, panel: &P, ui: &mut Ui, body: &mut BodyCx<'_>) {
+    let content = panels.borrow().content(panel);
+    match content {
+        Some(version) => {
+            Lazy::new(("panel", PanelKey::of(panel).0), 0.0).settles(true).content(version).show(ui, |ui| panels.borrow_mut().body(panel, ui, body));
+        }
+        None => panels.borrow_mut().body(panel, ui, body),
     }
 }

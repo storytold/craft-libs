@@ -34,6 +34,14 @@ pub trait DockPanels<P> {
     /// (`PanelSpec::window_kind` `Document`) gets the group's body edge to edge.
     fn body(&mut self, panel: &P, ui: &mut Ui, cx: &mut BodyCx<'_>);
 
+    /// The version of the app data `panel`'s body shows that the framework does not track (a document's revision, a
+    /// job's progress). With one, the body settles (`Lazy::settles` with `Lazy::content`): it runs only when its
+    /// version, its room or something the framework tracks in it changed, the pointer is over it or focus is in it, and
+    /// otherwise repaints its last run. `None` (the default) runs the body every pass.
+    fn content(&self, _panel: &P) -> Option<u64> {
+        None
+    }
+
     /// Takes the group holding `panels`, whose tab `active` is selected, in place of its tab strip and body: at
     /// `GroupAt::Show(rect)` it shows its view in `ui`, which the dock holds to `rect` and clips to it; at
     /// `GroupAt::Measure(width)` it measures that view at `width` the way it shows it. It returns the height the view

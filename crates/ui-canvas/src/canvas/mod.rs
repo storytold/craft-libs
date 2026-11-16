@@ -75,7 +75,7 @@ pub use navigate::{
     Autoscroll, FlickPan, NavigateBar, NavigateBarOutput, NavigationOptions, PageKey, TouchpadGlide, WheelAction, WheelInput, WheelNavigation, pan,
 };
 pub use rotate::{RotateView, RotateViewOutput, RotateViewStyle, ViewTurn};
-pub use tools::{HandTool, RotateViewTool, ViewCommands, ViewTarget, ZoomTool};
+pub use tools::{HandTool, LayerBounds, RotateViewTool, ViewCommands, ViewTarget, ZoomTool};
 pub use zoom_motion::{HoldZoom, ZoomAnimation, ZoomDrag, easing_view};
 
 mod rulers;
@@ -157,13 +157,15 @@ pub struct Canvas<'a> {
     view: Option<Bind<'a, CanvasView>>,
     /// The view the binding held when the pass began.
     given: Option<CanvasView>,
-    /// The document the view shows: its size in document units (a `Size` is enough), and the artboard, layer bounds
-    /// and resolution some view commands need ([`ViewTarget`]). With a view and a document, the canvas fits a view
+    /// The document the view shows: its size in document units (a `Size` is enough), and the artboard and resolution
+    /// some view commands need ([`ViewTarget`]). With a view and a document, the canvas fits a view
     /// never shown, keeps the wheel's zoom inside the document's zoom range, keeps the document in view with Overscroll
     /// off, and applies the view commands routed to it ([`ViewCommands`]); without either, the view commands are
     /// disabled for it, and so is each command whose fact the target lacks.
     #[prop(into)]
     document: Option<ViewTarget>,
+    /// The bounds Fit Layers on Screen shows ([`layer_bounds`](Self::layer_bounds)).
+    layer_bounds: Option<LayerBounds<'a>>,
     /// The user's navigation options: how the wheel and a pinch move the view ([`WheelNavigation`]), whether a zoom
     /// eases (Animated Zoom) and whether the view may leave the document (Overscroll).
     #[prop]
@@ -231,6 +233,7 @@ impl<'a> Canvas<'a> {
             view: None,
             given: None,
             document: None,
+            layer_bounds: None,
             navigation: NavigationOptions::default(),
             show_rulers: false,
             keys_to_body: false,
@@ -273,6 +276,14 @@ impl<'a> Canvas<'a> {
         self
     }
 
+    /// The bounds Fit Layers on Screen shows, asked only in the pass that runs the command. Without it Fit Layers is
+    /// disabled for this canvas.
+    #[must_use]
+    pub fn layer_bounds(mut self, bounds: LayerBounds<'a>) -> Self {
+        self.layer_bounds = Some(bounds);
+        self
+    }
+
     /// Eases from `from`, the view the app drew last, to the view given this pass, as the canvas eases its own zoom
     /// commands: an app's zoom step made outside the canvas (a menu row, a Zoom tool click before the app's tools run
     /// on the tool host). `anchor` keeps a document point under a screen point along the way. With Animated Zoom off,
@@ -306,13 +317,13 @@ impl<'a> Canvas<'a> {
         let pixels_per_point = cx.env.scale().0;
         let target = view.zip(self.document);
         for command in ViewCommands::ALL {
-            let enabled = target.is_some_and(|(view, document)| command.available(&view, &document, pixels_per_point));
+            let enabled = target.is_some_and(|(view, document)| command.available(&view, &document, self.layer_bounds, pixels_per_point));
             cx.publish(command, CommandState::new().enabled(enabled));
         }
         let (view, document) = target?;
         let (mut next, mut zoomed) = (view, false);
         while let Some((command, _)) = cx.take_command::<ViewCommands>() {
-            zoomed |= command.apply(&mut next, &document, pixels_per_point) && command.zooms();
+            zoomed |= command.apply(&mut next, &document, self.layer_bounds, pixels_per_point) && command.zooms();
         }
         (next != view).then_some((next, zoomed))
     }
@@ -341,7 +352,7 @@ impl<'a> Canvas<'a> {
             let never_shown = !(view.rect.width() > 0.0 && view.rect.height() > 0.0);
             view.rect = area;
             if never_shown && let Some(document) = self.document {
-                ViewCommands::FitOnScreen.apply(&mut view, &document, pixels_per_point);
+                ViewCommands::FitOnScreen.apply(&mut view, &document, None, pixels_per_point);
             }
         }
         let mut jumped = false;

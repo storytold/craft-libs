@@ -9,9 +9,8 @@ use crate::runtime::measure;
 use crate::runtime::memory::sub;
 use crate::runtime::pass_state;
 use craft_behavior::{Axis, ColumnWidth, Flow, GridCursor, GridMeasure};
-use egui::{Id, Rect, Ui, Vec2};
+use egui::{Id, IdMap, Rect, Ui, Vec2};
 use std::borrow::Cow;
-use std::collections::HashMap;
 
 /// How a body lays out its children, in reading order: mirrored under a right-to-left direction.
 #[derive(Clone, Debug, PartialEq)]
@@ -87,16 +86,16 @@ impl BodyLayout {
 
 /// The cursors of the `Grid` and spread `Row` bodies running this pass, by body id.
 #[derive(Default)]
-pub(crate) struct Cursors(HashMap<Id, Cursor>);
+pub(crate) struct Cursors(IdMap<Cursor>);
 
 /// The number of children that fill the main axis of each `Stack` or `Row` body measured this pass, by body id.
 #[derive(Default)]
-pub(crate) struct FillCounts(HashMap<Id, u32>);
+pub(crate) struct FillCounts(IdMap<u32>);
 
 /// The narrowest width a held fill-width child of each content-sized `Stack` column measured at in the first sweep of
 /// the column's measuring run (`report_held`), by column id.
 #[derive(Default)]
-pub(crate) struct HeldWidths(HashMap<Id, f32>);
+pub(crate) struct HeldWidths(IdMap<f32>);
 
 /// Reports a held fill-width child of the content-sized column `column` in its first sweep: the `width` it measured
 /// at. A column with no first sweep open takes no report.
@@ -112,11 +111,11 @@ pub(crate) fn report_held(ctx: &egui::Context, column: Id, width: f32) {
 /// of its first line's centre, or `None` for a child with no line of its own. A container's measuring sweep opens and
 /// closes its header's and body's targets; a body's sweep starts its own target afresh.
 #[derive(Default)]
-pub(crate) struct FirstLines(HashMap<Id, Option<f32>>);
+pub(crate) struct FirstLines(IdMap<Option<f32>>);
 
 /// What the children of each unwrapped `Row` body took in the sweep of a measuring run running now, by body id.
 #[derive(Default)]
-pub(crate) struct RowLines(HashMap<Id, LineTook>);
+pub(crate) struct RowLines(IdMap<LineTook>);
 
 /// What the children of a row took about its line.
 #[derive(Clone, Copy, Default)]
@@ -279,11 +278,11 @@ impl ShrinkUnit {
 
 /// The units each `Row` body counting this pass reported, in order, by body id.
 #[derive(Default)]
-pub(crate) struct ShrinkReports(HashMap<Id, Vec<Reported>>);
+pub(crate) struct ShrinkReports(IdMap<Vec<Reported>>);
 
 /// The least widths the body units of each `Row` body asking for them this pass reported, by row id.
 #[derive(Default)]
-pub(crate) struct LeastReports(HashMap<Id, HashMap<Id, f32>>);
+pub(crate) struct LeastReports(IdMap<IdMap<f32>>);
 
 /// Reports the widths of the unit `leaf` of the row `row` that counts them: a leaf's whole and least widths, or `None`
 /// for a body.
@@ -520,7 +519,7 @@ fn run_shrinking<R>(ui: &mut Ui, id: Id, mut body: impl FnMut(&mut Ui) -> R) -> 
     if probe {
         #[cfg(feature = "testing")]
         measure::count_least(&ctx, id);
-        pass_state::with::<LeastReports, _>(&ctx, |reports| reports.0.insert(id, HashMap::new()));
+        pass_state::with::<LeastReports, _>(&ctx, |reports| reports.0.insert(id, IdMap::default()));
         crate::contract::keeping_ids(&ctx, || {
             layout_memory::probing(&ctx, || {
                 let mut least = ui.new_child(egui::UiBuilder::new().layout(layout));

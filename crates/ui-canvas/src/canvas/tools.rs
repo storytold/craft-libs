@@ -34,7 +34,8 @@ const SCREEN_PPI: f64 = 72.0;
 
 /// What the view commands act on: the document's size and the facts some commands need. The app gives it to
 /// [`Canvas::document`](super::Canvas::document); a command whose fact is absent is disabled
-/// ([`ViewCommands::available`]).
+/// ([`ViewCommands::available`]). Fit Layers reads the layers' bounds from [`LayerBounds`] instead, which only the
+/// command runs.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ViewTarget {
@@ -42,8 +43,6 @@ pub struct ViewTarget {
     pub document: Size,
     /// The artboard Fit Artboard on Screen shows (the active layer's board, else the last one), in document units.
     pub artboard: Option<Rect>,
-    /// The bounds Fit Layer(s) on Screen shows (the selected layers' content), in document units.
-    pub layers: Option<Rect>,
     /// The document's resolution in pixels per inch, for Print Size.
     pub ppi: Option<f64>,
     /// The screen resolution Print Size shows the document at, in pixels per inch (Preferences, Units & Rulers).
@@ -52,22 +51,15 @@ pub struct ViewTarget {
 }
 
 impl ViewTarget {
-    /// A document of `size` with no artboard, no layer bounds and no resolution.
+    /// A document of `size` with no artboard and no resolution.
     pub fn new(document: Size) -> Self {
-        Self { document, artboard: None, layers: None, ppi: None, screen_ppi: SCREEN_PPI }
+        Self { document, artboard: None, ppi: None, screen_ppi: SCREEN_PPI }
     }
 
     /// The artboard Fit Artboard on Screen shows.
     #[must_use]
     pub fn artboard(mut self, artboard: Rect) -> Self {
         self.artboard = Some(artboard);
-        self
-    }
-
-    /// The bounds Fit Layer(s) on Screen shows.
-    #[must_use]
-    pub fn layers(mut self, layers: Rect) -> Self {
-        self.layers = Some(layers);
         self
     }
 
@@ -96,6 +88,11 @@ impl From<Size> for ViewTarget {
         Self::new(document)
     }
 }
+
+/// The bounds Fit Layer(s) on Screen shows (the selected layers' content), in document units, asked only when the
+/// command runs: an app finds them by walking its layers' pixels, which no other pass needs. The app gives it to
+/// [`Canvas::layer_bounds`](super::Canvas::layer_bounds); `None` from it changes nothing.
+pub type LayerBounds<'a> = &'a dyn Fn() -> Option<Rect>;
 
 /// A rect with area, or none.
 fn with_area(rect: Option<Rect>) -> Option<Rect> {
@@ -167,9 +164,9 @@ impl ViewCommands {
         ViewCommands::ResetRotation,
     ];
 
-    /// Applies the command to `view` for `target` at `pixels_per_point`. Returns whether the view changed: a command
-    /// whose fact `target` lacks changes nothing.
-    pub fn apply(self, view: &mut CanvasView, target: &ViewTarget, pixels_per_point: f32) -> bool {
+    /// Applies the command to `view` for `target` and the layers' bounds `layers` at `pixels_per_point`. Returns whether
+    /// the view changed: a command whose fact is absent changes nothing. Only Fit Layers asks `layers`.
+    pub fn apply(self, view: &mut CanvasView, target: &ViewTarget, layers: Option<LayerBounds<'_>>, pixels_per_point: f32) -> bool {
         let before = *view;
         let size = target.document;
         let zoom_about_centre = |view: &mut CanvasView, device: f64| {
@@ -198,7 +195,7 @@ impl ViewCommands {
                 }
             }
             ViewCommands::FitLayers => {
-                if let Some(bounds) = with_area(target.layers) {
+                if let Some(bounds) = with_area(layers.and_then(|layers| layers())) {
                     zoom::fit_rect(view, bounds, size, pixels_per_point, LAYERS_MARGIN);
                 }
             }
@@ -211,14 +208,15 @@ impl ViewCommands {
         *view != before
     }
 
-    /// Whether the command can run on `view` for `target`: Zoom In and Zoom Out stop at the ends of the zoom range,
-    /// Print Size needs the document's resolution, Fit Artboard an artboard and Fit Layers the layers' bounds.
-    pub fn available(self, view: &CanvasView, target: &ViewTarget, pixels_per_point: f32) -> bool {
+    /// Whether the command can run on `view` for `target` and the layers' bounds `layers`: Zoom In and Zoom Out stop at
+    /// the ends of the zoom range, Print Size needs the document's resolution, Fit Artboard an artboard and Fit Layers
+    /// the layers' bounds, which it does not ask for here.
+    pub fn available(self, view: &CanvasView, target: &ViewTarget, layers: Option<LayerBounds<'_>>, pixels_per_point: f32) -> bool {
         match self {
-            ViewCommands::ZoomIn | ViewCommands::ZoomOut => self.apply(&mut view.clone(), target, pixels_per_point),
+            ViewCommands::ZoomIn | ViewCommands::ZoomOut => self.apply(&mut view.clone(), target, None, pixels_per_point),
             ViewCommands::PrintSize => target.print_zoom().is_some(),
             ViewCommands::FitArtboard => with_area(target.artboard).is_some(),
-            ViewCommands::FitLayers => with_area(target.layers).is_some(),
+            ViewCommands::FitLayers => layers.is_some(),
             _ => true,
         }
     }

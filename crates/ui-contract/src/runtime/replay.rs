@@ -14,7 +14,7 @@ use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame;
 use crate::runtime::pass_state;
 use crate::runtime::reads::BindKey;
-use egui::{Context, Id};
+use egui::{Context, Id, IdSet};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -70,11 +70,12 @@ pub(crate) struct Record {
     journal: Vec<Entry>,
     egui: egui::PassRecords,
     /// The egui widgets of the run.
-    pub(crate) widgets: HashSet<Id>,
+    pub(crate) widgets: IdSet,
     pub(crate) facts: Facts,
 }
 
-fn recording(ctx: &Context) -> bool {
+/// Whether a record is open around the running code.
+pub(crate) fn recording(ctx: &Context) -> bool {
     OPEN.load(Ordering::Acquire) > 0 && pass_state::with::<Recorder, _>(ctx, |recorder| !recorder.open.is_empty())
 }
 

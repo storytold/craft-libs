@@ -11,7 +11,7 @@
 //!
 //! A settling child (`Lazy::settles`) also keeps its last real run (`runtime::replay`): while it is settled, it adds
 //! that run to the pass again in place of running, in view or not, inside a scroll area or not. It is settled when
-//! nothing the framework tracks has changed for it since that run (`settled`).
+//! nothing the framework tracks has changed for it since that run, its content version included (`settled`).
 
 use crate::runtime::egui::areas::Layer;
 use crate::runtime::egui::{focus as focus_state, input as input_state, pass};
@@ -19,8 +19,8 @@ use crate::runtime::focus::{self, Transcript};
 use crate::runtime::frame::{self, PerViewport};
 use crate::runtime::reads::BindKey;
 use crate::runtime::replay::{self, Record};
-use egui::{Context, Id, Layout, Rect, Vec2};
-use std::collections::{HashMap, HashSet};
+use egui::{Context, Id, IdMap, IdSet, Layout, Rect, Vec2};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// The view of the innermost scroll area, as the run that lays its content out sees it: the rect the pass shows,
@@ -140,14 +140,19 @@ struct Settled {
     rect: Rect,
     /// The pointer was over it, or one of its stops held focus: it runs again to show that they left.
     engaged: bool,
+    /// The version of the app data it showed (`Lazy::content`).
+    content: Option<u64>,
 }
 
 /// What changed in the frame for every settling child.
 #[derive(Default)]
 struct Changes {
-    /// Every settling child runs through this frame: a frame with input other than pointer motion, an app's repaint
-    /// request or an edit of a given value unsettles every child for that frame and the next.
+    /// Every settling child runs through this frame: an app's repaint request outside every settling child or an edit
+    /// of a given value unsettles every child for that frame and the next.
     unsettled_through: u64,
+    /// Every settling child with no content version runs through this frame: a frame with input other than pointer
+    /// motion unsettles them for that frame and the next.
+    input_through: u64,
     /// The pass whose input was looked at.
     scanned: u64,
     /// The values changed in a frame, and the frame.
@@ -156,12 +161,12 @@ struct Changes {
 
 #[derive(Default)]
 pub(crate) struct Store {
-    entries: HashMap<Id, Entry>,
+    entries: IdMap<Entry>,
     changes: Changes,
     /// The last frame each scroll area reached one of its children in.
-    reached: HashMap<Id, u64>,
+    reached: IdMap<u64>,
     /// What the real run that lays a scroll area's content out found, by area, from `begin` to `placed`.
-    placed: HashMap<Id, Placed>,
+    placed: IdMap<Placed>,
     /// The frame the entries were last pruned in.
     pruned: u64,
 }
@@ -191,7 +196,7 @@ fn with<R>(ctx: &Context, f: impl FnOnce(&mut Store, u64, u64) -> R) -> R {
             store.entries.retain(|_, entry| {
                 entry.touched + 1 >= frame || entry.owner.is_some_and(|owner| reached.get(&owner).is_none_or(|ran| ran + 1 < frame))
             });
-            let owners: HashSet<Id> = store.entries.values().filter_map(|entry| entry.owner).collect();
+            let owners: IdSet = store.entries.values().filter_map(|entry| entry.owner).collect();
             store.reached.retain(|owner, _| owners.contains(owner));
         }
         f(store, pass_nr, frame)
@@ -254,10 +259,12 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 ///   none of that held in its last run;
 /// - none of its stops holds focus or is the target of a focus request, now or in its last run;
 /// - no value it read (a bound value, an inspection record, a command's state) changed this frame (`note_edit`);
-/// - no frame unsettled every child (`unsettle`): input other than pointer motion this frame or the one before, an app's
-///   repaint request or an edit of a given value;
+/// - its content version is the one of its last run;
+/// - no frame unsettled every child (`unsettle`): an app's repaint request outside every settling child or an edit of a
+///   given value, this frame or the one before;
+/// - for a child with no content version: no input other than pointer motion this frame or the one before;
 /// - the run did nothing a replay cannot repeat (`runtime::replay`).
-pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>) -> Option<Vec2> {
+pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, place: Option<Place>, content: Option<u64>) -> Option<Vec2> {
     let input = ctx.input(|input| {
         input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
     });
@@ -268,13 +275,13 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
         if store.changes.scanned != pass_nr {
             store.changes.scanned = pass_nr;
             if input {
-                store.changes.unsettled_through = store.changes.unsettled_through.max(frame + 1);
+                store.changes.input_through = store.changes.input_through.max(frame + 1);
             }
         }
         let changes = &store.changes;
         // Usually empty: only the values written this frame.
         let edited = (changes.edited.0 == frame).then(|| changes.edited.1.clone());
-        let unsettled = changes.unsettled_through >= frame;
+        let unsettled = changes.unsettled_through >= frame || (content.is_none() && changes.input_through >= frame);
         let entry = store.touch(owner, id, frame);
         let replays = match entry.replays {
             Some((decided_in, replays)) if decided_in == pass_nr => replays,
@@ -283,6 +290,7 @@ pub(crate) fn settled(ctx: &Context, owner: Option<Id>, id: Id, sizing: bool, pl
                     && entry.settled.as_ref().is_some_and(|settled| {
                         let facts = &settled.record.facts;
                         settled.frame < frame
+                            && settled.content == content
                             && !settled.engaged
                             && !facts.unsettled
                             && !facts.blocked
@@ -338,11 +346,12 @@ pub(crate) fn keep(ctx: &Context, owner: Option<Id>, id: Id) {
     });
 }
 
-/// Keeps the real run `record` of the settling child `id`, which ran at `place` and took `rect`.
-pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rect) {
+/// Keeps the real run `record` of the settling child `id`, which ran at `place`, took `rect` and showed the app data
+/// of version `content`.
+pub(crate) fn ran(ctx: &Context, id: Id, record: Record, place: Place, rect: Rect, content: Option<u64>) {
     let targets = focus::targets(ctx);
     let engaged_now = record.focus.stop_ids().any(|stop| targets.contains(&Some(stop)));
-    let mut settled = Settled { record, frame: 0, place, rect, engaged: engaged_now };
+    let mut settled = Settled { record, frame: 0, place, rect, engaged: engaged_now, content };
     settled.engaged |= engaged(ctx, &settled);
     with(ctx, |store, _, frame| {
         settled.frame = frame;
@@ -363,7 +372,8 @@ pub(crate) fn note_edit(ctx: &Context, key: BindKey) {
     });
 }
 
-/// Unsettles every settling child for this frame and the next: a change the framework cannot attribute to a child.
+/// Unsettles every settling child for this frame and the next: a change of app data the framework cannot attribute to
+/// a child.
 pub(crate) fn unsettle(ctx: &Context) {
     with(ctx, |store, _, frame| store.changes.unsettled_through = store.changes.unsettled_through.max(frame + 1));
 }

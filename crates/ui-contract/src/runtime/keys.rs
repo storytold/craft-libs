@@ -7,7 +7,7 @@ use crate::runtime::egui::input::Action;
 use crate::runtime::frame::PerViewport;
 use craft_behavior::EditCommand;
 use craft_keymap::{Chord, Key, KeyInput, Layout, Mods};
-use egui::{Context, Id, Vec2, ViewportId};
+use egui::{Context, Id, IdMap, Vec2, ViewportId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -218,7 +218,7 @@ pub(crate) struct Stage {
     layout: Layout,
     nodes: HashMap<u64, Node>,
     last_nodes: HashMap<u64, Node>,
-    activated: HashMap<Id, Id>,
+    activated: IdMap<Id>,
     alt: AltTrack,
     /// The keys down now, as the input hook read them before it withheld any press.
     down: Vec<Key>,

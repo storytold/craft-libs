@@ -395,10 +395,24 @@ pub(crate) fn announce(ctx: &Context, text: String) {
     pass_state::with::<FrameState, _>(ctx, |state| state.output.announcements.push(text));
 }
 
-/// Asks for another pass of the viewport the running pass belongs to.
+/// Asks for another pass of the viewport the running pass belongs to. Asked inside a settling child
+/// (`Lazy::settles`), that child runs again; asked outside every one, the app says data it shows changed, so every
+/// settling child runs.
 #[doc(hidden)]
 pub fn request_repaint(ctx: &Context) {
-    crate::runtime::lazy::unsettle(ctx);
+    if crate::runtime::replay::recording(ctx) {
+        crate::runtime::replay::note_unsettled(ctx);
+    } else {
+        crate::runtime::lazy::unsettle(ctx);
+    }
+    raw_input::request_repaint_of(ctx, pass::current_viewport(ctx));
+}
+
+/// Asks for another pass of the viewport the running pass belongs to, to move what the caller itself shows (a tool's
+/// preview, a view that eases): no app data changed, so only the settling child it is asked in runs again.
+#[doc(hidden)]
+pub fn request_own_repaint(ctx: &Context) {
+    crate::runtime::replay::note_unsettled(ctx);
     raw_input::request_repaint_of(ctx, pass::current_viewport(ctx));
 }
 

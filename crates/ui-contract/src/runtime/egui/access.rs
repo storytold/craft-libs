@@ -10,10 +10,10 @@ mod text;
 mod tree;
 
 use crate::runtime::pass_state;
-#[cfg(feature = "testing")]
-use egui::FullOutput;
 use egui::{Context, Id, ViewportId};
-use std::collections::{HashMap, HashSet};
+#[cfg(feature = "testing")]
+use egui::{FullOutput, IdMap, IdSet};
+use std::collections::HashMap;
 
 use super::pass;
 
@@ -106,9 +106,9 @@ pub(crate) fn set_focus(ctx: &Context, id: Id) {
 #[derive(Default)]
 struct Emitted {
     order: HashMap<u64, usize>,
-    written: HashSet<Id>,
+    written: IdSet,
     /// Text widgets whose node folds into their owner's node, each with its owner.
-    folded: HashMap<Id, Id>,
+    folded: IdMap<Id>,
     /// Whether the runtime reported a focused node this pass.
     focus_set: bool,
 }
@@ -182,7 +182,7 @@ pub(crate) fn order_children(ctx: &Context) {
 
 /// While a modal layer is open in `viewport`, hides the nodes the runtime wrote on layers below it: what sits behind
 /// a modal is inert for assistive technology, as it is for the pointer and the keys.
-fn hide_behind_modal(ctx: &Context, viewport: ViewportId, written: &HashSet<Id>) {
+fn hide_behind_modal(ctx: &Context, viewport: ViewportId, written: &IdSet) {
     // Without a modal nothing is behind one; this spares reading every written node's response.
     if crate::runtime::commands::modal_root(ctx, viewport).is_none() {
         return;

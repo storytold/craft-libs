@@ -1,6 +1,6 @@
 //! Settling children (`Lazy::settles`): a settled child adds its last run to the pass in place of running, and runs
 //! when something it shows may have changed: the pointer over it, a bound value, inspection record or command state it
-//! read, its room, an animation.
+//! read, its room, its content version, an animation or a repaint asked inside it.
 
 use crate::values::kit::{AT, INITIAL, Scrub, Seen};
 use craft_ui::buttons::Button;
@@ -8,7 +8,7 @@ use craft_ui::contract::{Bind, CommandSet, Lazy, Props as _, Show as _, ShowCont
 use craft_ui::display::Spinner;
 use craft_ui::layout_components::Stack;
 use craft_ui::runtime::commands::{CommandInput, CommandScope, CommandState, Commands as _};
-use craft_ui::runtime::inspect;
+use craft_ui::runtime::{frame, inspect};
 use craft_ui::testing::layout::in_region;
 use craft_ui::testing::pointer::{moved, press, release};
 use craft_ui::testing::{Frames, last_pass_measuring_runs, trial};
@@ -23,12 +23,17 @@ const READER: Rect = Rect { min: Pos2::new(150.0, 70.0), max: Pos2::new(250.0, 9
 const SETTLED: usize = 4;
 
 /// Two settling children, `reader` and `other`, under a scrub bound to the value the reader's own scrub shows. The
-/// scrub that edits comes before the children in the pass when `editor_first`, else after them.
+/// scrub that edits comes before the children in the pass when `editor_first`, else after them. Each child shows the
+/// content version in `versions`, if any; `other` asks for a repaint in each run while `repaints` holds, and the app
+/// asks for one outside both children while `app_repaints` holds.
 struct Scene {
     value: RefCell<f32>,
     room: Cell<Vec2>,
     editor_first: bool,
     spinner: bool,
+    versions: [Cell<Option<u64>>; 2],
+    repaints: Cell<bool>,
+    app_repaints: Cell<bool>,
     runs: [Cell<usize>; 2],
     buttons: [Cell<(Id, Rect)>; 2],
     seen: Seen,
@@ -41,25 +46,43 @@ impl Scene {
             room: Cell::new(ROOM),
             editor_first,
             spinner,
+            versions: Default::default(),
+            repaints: Cell::new(false),
+            app_repaints: Cell::new(false),
             runs: Default::default(),
             buttons: [Cell::new((Id::NULL, Rect::NOTHING)), Cell::new((Id::NULL, Rect::NOTHING))],
             seen: Seen::default(),
         }
     }
 
+    /// The settling child `key`, with the content version of child `at`.
+    fn child(&self, key: &str, at: usize) -> Lazy {
+        let child = Lazy::new(key, 0.0).settles(true);
+        match self.versions[at].get() {
+            Some(version) => child.content(version),
+            None => child,
+        }
+    }
+
     fn show(&self, ui: &mut Ui) {
+        if self.app_repaints.get() {
+            frame::request_repaint(ui.ctx());
+        }
         if self.editor_first {
             self.editor(ui);
         }
         in_region(ui, Rect::from_min_size(ORIGIN, self.room.get()), |ui| {
-            Lazy::new("reader", 0.0).settles(true).show(ui, |ui| {
+            self.child("reader", 0).show(ui, |ui| {
                 self.runs[0].set(self.runs[0].get() + 1);
                 let response = Button::new("Alpha").show(ui).response;
                 self.buttons[0].set((response.id, response.rect));
                 Scrub::new(Bind::bound(&mut *self.value.borrow_mut())).id_salt("reader").seen(&self.seen).show_at(ui, READER);
             });
-            Lazy::new("other", 0.0).settles(true).show(ui, |ui| {
+            self.child("other", 1).show(ui, |ui| {
                 self.runs[1].set(self.runs[1].get() + 1);
+                if self.repaints.get() {
+                    frame::request_repaint(ui.ctx());
+                }
                 // In a body, whose measure a run that is not settled takes from what its last run kept.
                 Stack::new().show(ui, |ui, _| {
                     let response = Button::new("Beta").show(ui).response;
@@ -197,6 +220,37 @@ fn a_child_with_a_running_animation_runs_every_frame() {
     for frame in 0..SETTLED {
         assert_eq!(scene.frame(&mut frames, vec![]), [0, 1], "frame {frame}: the spinner's child runs, the other does not");
     }
+}
+
+/// A repaint asked inside a settling child runs that child again, and only it.
+#[trial]
+fn a_repaint_asked_inside_a_settled_child_runs_only_that_child() {
+    let scene = Scene::new(false, false);
+    scene.repaints.set(true);
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    for frame in 0..SETTLED {
+        assert_eq!(scene.frame(&mut frames, vec![]), [0, 1], "frame {frame}: the child that asks runs, the other does not");
+    }
+}
+
+/// A child with a content version runs in the frame its version changes, and only then; input elsewhere in the window
+/// leaves it settled, and a repaint the app asks for outside every child runs it.
+#[trial]
+fn a_child_with_a_content_version_runs_when_it_changes() {
+    let scene = Scene::new(false, false);
+    scene.versions.iter().for_each(|version| version.set(Some(1)));
+    let mut frames = Frames::new();
+    scene.settle(&mut frames);
+    let away = Pos2::new(ORIGIN.x + ROOM.x + 90.0, ORIGIN.y + ROOM.y + 40.0);
+    for events in [vec![moved(away)], vec![press(away)], vec![release(away)], vec![]] {
+        assert_eq!(scene.frame(&mut frames, events.clone()), [0, 0], "input elsewhere ({events:?}) runs no versioned child");
+    }
+    scene.versions[0].set(Some(2));
+    assert_eq!(scene.frame(&mut frames, vec![]), [1, 0], "the child whose version changed runs, the other does not");
+    assert_eq!(scene.frame(&mut frames, vec![]), [0, 0], "both settle at the new version");
+    scene.app_repaints.set(true);
+    assert_eq!(scene.frame(&mut frames, vec![]), [1, 1], "an app repaint outside both children runs both");
 }
 
 /// The app commands the command scene's children show.

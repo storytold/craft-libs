@@ -4,15 +4,15 @@ use crate::contract::IdSource;
 use crate::runtime::egui::pass;
 use crate::runtime::frame::{PerViewport, Stamped};
 use crate::runtime::inspect;
-use egui::{Context, Id, Ui};
+use egui::{Context, Id, IdMap, IdSet, Ui};
 use std::any::TypeId;
-use std::collections::{HashMap, HashSet};
 
 /// The `Auto` ordinals and the ids registered in one pass of one viewport.
 #[derive(Default)]
 pub(crate) struct IdPass {
-    next: HashMap<(Id, TypeId), u32>,
-    seen: HashSet<Id>,
+    /// Under the scope's id joined with the component type's.
+    next: IdMap<u32>,
+    seen: IdSet,
 }
 
 /// Runs `f` as a measuring run that leaves the `Auto` ordinals as it found them, so the run that follows in the same
@@ -36,7 +36,7 @@ pub(crate) fn draft<R>(ctx: &Context, run: impl FnOnce() -> R, keep: impl FnOnce
 pub(crate) fn keeping_ids<R>(ctx: &Context, f: impl FnOnce() -> (R, bool)) -> R {
     let viewport = pass::current_viewport(ctx);
     let pass_nr = pass::pass_nr(ctx, viewport);
-    let ordinals = |take: Option<HashMap<(Id, TypeId), u32>>| {
+    let ordinals = |take: Option<IdMap<u32>>| {
         PerViewport::<Stamped<IdPass>>::with_pass(
             ctx,
             viewport,
@@ -80,7 +80,7 @@ pub(crate) fn id(ui: &Ui, source: &IdSource, register: bool, advance: bool, ty: 
                 pass_nr,
                 |pass, _| *pass = IdPass::default(),
                 |pass| {
-                    let slot = pass.next.entry((scope, ty)).or_insert(0);
+                    let slot = pass.next.entry(scope.with(ty)).or_insert(0);
                     let n = *slot;
                     if advance {
                         *slot += 1;

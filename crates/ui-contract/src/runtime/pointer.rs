@@ -13,7 +13,7 @@ use craft_behavior::{
 };
 use craft_keymap::Mods;
 use craft_theme::HitSizes;
-use egui::{Context, Id, Pos2, Rect, Vec2, ViewportId};
+use egui::{Context, Id, IdMap, Pos2, Rect, Vec2, ViewportId};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -97,7 +97,7 @@ pub(crate) struct Memory {
     /// Whether any arena of the viewport holds an open press; sensing registers it, as the layer above.
     press_probe: Option<fn(&Context) -> bool>,
     /// The arena roots whose members the next pass resolves without (`withhold_members`), with the pass that asked.
-    withheld: HashMap<Id, u64>,
+    withheld: IdMap<u64>,
 }
 
 /// What one root registered on one layer: its shapes and its egui widgets.
@@ -110,7 +110,7 @@ struct RootRecord {
     click: bool,
 }
 
-type LayerRecord = HashMap<Layer, HashMap<Id, RootRecord>>;
+type LayerRecord = HashMap<Layer, IdMap<RootRecord>>;
 
 #[derive(Default)]
 pub(crate) struct Shapes {

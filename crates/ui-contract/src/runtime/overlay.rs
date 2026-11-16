@@ -12,9 +12,8 @@ use crate::runtime::pointer;
 use craft_behavior::OwnerClass;
 use craft_behavior::overlay::Side;
 use egui::emath::TSTransform;
-use egui::{Context, Id, Pos2, Rect, ViewportId};
+use egui::{Context, Id, IdMap, IdSet, Pos2, Rect, ViewportId};
 use smallvec::SmallVec;
-use std::collections::HashMap;
 
 /// A modal's backdrop.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -235,7 +234,7 @@ pub(crate) struct TopModal {
 
 #[derive(Default)]
 pub(crate) struct Persist {
-    raised: HashMap<Id, u64>,
+    raised: IdMap<u64>,
     counter: u64,
     modal: bool,
     /// The layers of the last pass, bottom to top, as `end_pass` handed them to egui.
@@ -252,9 +251,9 @@ pub(crate) struct Persist {
     /// A popup stands over a modal layer here, as of the last finished pass.
     popup_over_modal: bool,
     /// The layers that first showed while the primary button was held, until that press ends.
-    held_open: std::collections::HashSet<Id>,
+    held_open: IdSet,
     /// The root frame and pass each shown layer first ran its body in; gone with the layer's last entry.
-    appeared: HashMap<Id, (u64, u64)>,
+    appeared: IdMap<(u64, u64)>,
 }
 
 /// The closes queued and not yet taken, each with the root frame that queued it and whether it is carried: a carried
@@ -674,7 +673,7 @@ pub(crate) fn record(ctx: &Context, mut entry: OpenEntry) {
 }
 
 /// Groups `entries` into families, each parent first, ordered bottom to top.
-fn families(entries: &[OpenEntry], raised: &HashMap<Id, u64>) -> Vec<Vec<OpenEntry>> {
+fn families(entries: &[OpenEntry], raised: &IdMap<u64>) -> Vec<Vec<OpenEntry>> {
     let root_of = |entry: &OpenEntry| {
         let mut at = entry;
         while let Some(parent) = at.parent.and_then(|parent| entries.iter().find(|other| other.id == parent)) {

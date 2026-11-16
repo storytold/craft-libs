@@ -17,8 +17,7 @@ use crate::runtime::motion::{self};
 use crate::runtime::overlay::{self, CloseReason};
 use crate::style::SurfaceKind;
 use craft_behavior::PartRef;
-use egui::{Context, Id, Rect, Ui, UiBuilder};
-use std::collections::HashMap;
+use egui::{Context, Id, IdMap, Rect, Ui, UiBuilder};
 
 /// What the `overlay` hook gets: one call per anchored popup of this component, built at step 10 with the open state
 /// of every popup `cx.popup` registered this pass.
@@ -33,7 +32,7 @@ pub struct OverlayUi<'a> {
     pub(crate) to_screen: egui::emath::TSTransform,
     pub(crate) resolved: &'a Resolved<'a>,
     pub(crate) env: Env,
-    pub(crate) open: HashMap<Id, bool>,
+    pub(crate) open: IdMap<bool>,
     /// Popups whose dismissal or body request was decided in this pass; step 15 writes their slots.
     #[doc(hidden)]
     pub closed: Vec<(Id, CloseReason)>,
@@ -49,7 +48,7 @@ pub(crate) struct OverlayOwner {
 }
 
 impl<'a> OverlayUi<'a> {
-    pub(crate) fn new(ctx: &'a Context, owner: OverlayOwner, ui: &'a mut Ui, resolved: &'a Resolved<'a>, env: Env, open: HashMap<Id, bool>) -> Self {
+    pub(crate) fn new(ctx: &'a Context, owner: OverlayOwner, ui: &'a mut Ui, resolved: &'a Resolved<'a>, env: Env, open: IdMap<bool>) -> Self {
         let to_screen = areas::layer_to_screen(ctx, ui.layer_id());
         let OverlayOwner { id, anchor, parts } = owner;
         OverlayUi { ctx, ui, owner: id, anchor, to_screen, resolved, env, open, closed: Vec::new(), parts }
