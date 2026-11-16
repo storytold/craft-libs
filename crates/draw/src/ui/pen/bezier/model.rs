@@ -114,8 +114,8 @@ impl EditSubpath {
     }
 }
 
-/// A path the overlays show: the host's key for it, its subpaths and its colour.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// A path the overlays show: the host's key for it, its subpaths, its colour and what it allows.
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct EditPath {
     /// The host's key, stable across frames.
@@ -125,12 +125,30 @@ pub struct EditPath {
     /// The layer colour its outline, anchors and handles are drawn in (DesignCraft, VectorCraft);
     /// the overlay's line colour without one.
     pub color: Option<Srgba>,
+    /// Whether the path takes copies of its subpaths: Direct Selection's ⌥ drag on a segment drags a copy of the
+    /// subpath ([`PathEdit::DuplicateSubpath`]) instead of the subpath itself. The host turns it off for a path
+    /// whose subpaths are not copied that way (PhotoCraft: the pen draft and Type Paths, where the drag moves the
+    /// subpath).
+    pub copies: bool,
+}
+
+impl Default for EditPath {
+    fn default() -> Self {
+        Self::new(0, Vec::new())
+    }
 }
 
 impl EditPath {
-    /// The path the host keys `key`, made of `subpaths`, in the overlay's colour.
+    /// The path the host keys `key`, made of `subpaths`, in the overlay's colour, taking copies of its subpaths.
     pub fn new(key: u64, subpaths: Vec<EditSubpath>) -> Self {
-        Self { key, subpaths, color: None }
+        Self { key, subpaths, color: None, copies: true }
+    }
+
+    /// The path taking copies of its subpaths ([`copies`](Self::copies)) or not.
+    #[must_use]
+    pub fn copies(mut self, copies: bool) -> Self {
+        self.copies = copies;
+        self
     }
 
     /// The path in its own colour (a layer's), else the overlay's.
@@ -339,6 +357,17 @@ pub enum PathEdit {
         /// The toggled anchor.
         knot: KnotRef,
     },
+    /// Direct Selection's ⌥ drag on a segment: a copy of subpath `subpath` goes last in the path and moves, with
+    /// its handles, by `by`; the source stays. Photoshop names the step "Drag Path".
+    #[non_exhaustive]
+    DuplicateSubpath {
+        /// The path's host key.
+        path: u64,
+        /// The copied subpath.
+        subpath: usize,
+        /// The copy's move, in document units.
+        by: Vec2,
+    },
 }
 
 /// A request to delete anchors of a path.
@@ -401,6 +430,11 @@ impl PathEdit {
         PathEdit::ToggleCurvature { path, knot }
     }
 
+    /// A copy of `subpath` of the path keyed `path`, appended and moved by `by`.
+    pub fn duplicate_subpath(path: u64, subpath: usize, by: Vec2) -> Self {
+        PathEdit::DuplicateSubpath { path, subpath, by }
+    }
+
     /// The edit's path.
     pub fn path(&self) -> u64 {
         match *self {
@@ -411,7 +445,8 @@ impl PathEdit {
             | PathEdit::MoveCurvature { path, .. }
             | PathEdit::InsertCurvature { path, .. }
             | PathEdit::InsertAnchor { path, .. }
-            | PathEdit::ToggleCurvature { path, .. } => path,
+            | PathEdit::ToggleCurvature { path, .. }
+            | PathEdit::DuplicateSubpath { path, .. } => path,
         }
     }
 }

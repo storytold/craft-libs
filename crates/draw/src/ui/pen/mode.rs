@@ -72,7 +72,7 @@ impl PathMode {
     /// Where the draft shows without sensing (⌘, Add Anchor, Delete Anchor, Convert Point, Direct Selection), the
     /// anchor tools edit it as they edit a path: the host passes the open draft to the
     /// [`BezierOverlay`](super::BezierOverlay) as one more [`EditPath`](super::EditPath), last in the slice under a
-    /// key of its own, and applies the overlay's `insert`, `delete` and `edit` for that key to its draft
+    /// key of its own and taking no copies ([`EditPath::copies`](super::EditPath::copies)), and applies the overlay's `insert`, `delete` and `edit` for that key to its draft
     /// ([`EditSubpath::insert_at`](super::EditSubpath::insert_at),
     /// [`remove_knot`](super::EditSubpath::remove_knot), [`PathEdit::apply`](super::PathEdit::apply)).
     pub fn resolve(tool: PathTool, mods: Mods, drawing: bool, auto_add_delete: bool) -> PathMode {

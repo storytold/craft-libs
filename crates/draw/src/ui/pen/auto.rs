@@ -20,7 +20,7 @@ pub(super) enum AutoEdit {
 
 /// The draft as the one path of a hit test.
 fn as_path(draft: &EditSubpath) -> EditPath {
-    EditPath { key: 0, subpaths: vec![draft.clone()], color: None }
+    EditPath::new(0, vec![draft.clone()])
 }
 
 impl PenTool {

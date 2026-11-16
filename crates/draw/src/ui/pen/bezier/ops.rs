@@ -139,6 +139,8 @@ impl PathEdit {
     ///   reflow and no smoothing, so a straight segment gets a corner knot.
     /// - `ToggleCurvature`: a smooth knot becomes a corner with retracted handles, a corner
     ///   becomes smooth, then the subpath reflows.
+    /// - `DuplicateSubpath`: a copy of the subpath goes last and moves, with its handles, by `by`;
+    ///   the source stays.
     pub fn apply(&self, path: &mut EditPath) -> bool {
         if path.key != self.path() {
             return false;
@@ -222,6 +224,13 @@ impl PathEdit {
                 k.in_ctrl += *by;
                 k.out_ctrl += *by;
                 sp.reflow();
+            }
+            PathEdit::DuplicateSubpath { subpath, by, .. } => {
+                let Some(copy) = path.subpaths.get(*subpath).cloned() else { return false };
+                let last = path.subpaths.len();
+                let anchors: Vec<KnotRef> = (0..copy.knots.len()).map(|knot| KnotRef::new(last, knot)).collect();
+                path.subpaths.push(copy);
+                move_knots(path, &anchors, *by);
             }
             PathEdit::ToggleCurvature { knot, .. } => {
                 if !knot_ok(path, *knot) {

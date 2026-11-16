@@ -54,7 +54,9 @@ pub const MAX_ANCHORS: usize = 100_000;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BezierTool {
-    /// Direct Selection: select and move anchors, turn handles, bend segments, marquee.
+    /// Direct Selection: select and move anchors, turn handles, bend segments, marquee. ⌥ on a segment selects its
+    /// subpath, and a drag moves a copy of it ([`PathEdit::DuplicateSubpath`]; the subpath itself with ⌘, Ctrl or ⇧
+    /// held too, or on a path that takes no copies, [`EditPath::copies`]).
     #[default]
     Direct,
     /// Convert Point (also the Pen with ⌥): a click on an anchor makes a corner, a drag from it pulls out smooth
@@ -223,6 +225,12 @@ enum Target {
         path: u64,
         segment: KnotRef,
         t: f64,
+        from: Point,
+    },
+    /// Direct Selection's ⌥ drag on a segment: a copy of `subpath` dragged from `from`, the grabbed point.
+    Duplicate {
+        path: u64,
+        subpath: usize,
         from: Point,
     },
     /// ⌥ with Delete Anchor on an anchor: a click picks the anchor's whole subpath, a drag does nothing.
@@ -523,6 +531,14 @@ impl<'a> BezierOverlay<'a> {
         self.selecting(path, vec![KnotRef::new(segment.subpath, segment.knot + 1)], None)
     }
 
+    /// The selection of every anchor of the copy a [`PathEdit::DuplicateSubpath`] of `subpath` adds to `path` of
+    /// `start`, the paths before the copy.
+    fn copied(&self, start: &[EditPath], path: u64, subpath: usize) -> PathSelection {
+        let copy = Self::path(start, path).map_or(0, |p| p.subpaths.len());
+        let count = Self::path(start, path).and_then(|p| p.subpaths.get(subpath)).map_or(0, |s| s.knots.len());
+        self.selecting(path, (0..count).map(|knot| KnotRef::new(copy, knot)).collect(), None)
+    }
+
     /// The selection of `anchors` and `segment` of `path`. On the selection's path it keeps the subpaths shown and
     /// adds those of the selected anchors and segment, so a selected anchor always shows.
     fn selecting(&self, path: u64, anchors: Vec<KnotRef>, segment: Option<KnotRef>) -> PathSelection {
@@ -623,7 +639,14 @@ impl<'a> BezierOverlay<'a> {
                 if mods.alt {
                     let anchors = Self::subpath_anchors(paths, path, segment.subpath);
                     self.report.select = Some(self.selecting(path, anchors.clone(), None));
-                    Target::Anchors { path, anchors, from }
+                    // pc: crates/ui-egui/src/tools/direct_select.rs `alt_duplicates` (#13211): Photoshop was not
+                    // measured with ⌘, Ctrl or ⇧ held too; those move the subpath.
+                    let copies = self.tool == BezierTool::Direct
+                        && !mods.cmd
+                        && !mods.ctrl
+                        && !mods.shift
+                        && Self::path(paths, path).is_some_and(|p| p.copies);
+                    if copies { Target::Duplicate { path, subpath: segment.subpath, from } } else { Target::Anchors { path, anchors, from } }
                 } else {
                     self.report.select = Some(self.selecting(path, Vec::new(), Some(segment)));
                     Target::Bend { path, segment, t, from }
@@ -658,6 +681,7 @@ impl<'a> BezierOverlay<'a> {
                 PathEdit::InsertCurvature { path, segment, t, by: snapped(from + locked(delta)) - from }
             }
             &Target::Insert { path, segment, t, from } => PathEdit::InsertAnchor { path, segment, t, by: snapped(from + locked(delta)) - from },
+            &Target::Duplicate { path, subpath, from } => PathEdit::DuplicateSubpath { path, subpath, by: snapped(from + locked(delta)) - from },
             Target::Nothing | Target::Toggle { .. } | Target::Pick { .. } | Target::Marquee => return None,
         })
     }
@@ -815,8 +839,10 @@ impl<'a> BezierOverlay<'a> {
                 let target = self.press_target(item.hit(paths, view, start.origin), start, mods, paths);
                 if let Some(edit) = Self::edit(view, snap, self.tool, &target, start.origin, pos, mods) {
                     self.set(cx, paths, edit);
-                    if let Target::Insert { path, segment, .. } = target {
-                        self.report.select = Some(self.inserted(path, segment));
+                    match target {
+                        Target::Insert { path, segment, .. } => self.report.select = Some(self.inserted(path, segment)),
+                        Target::Duplicate { path, subpath, .. } => self.report.select = Some(self.copied(paths, path, subpath)),
+                        _ => {}
                     }
                 }
             }
@@ -834,6 +860,10 @@ impl<'a> BezierOverlay<'a> {
         if held.began {
             if let Some(edit) = Self::edit(view, snap, self.tool, &held.target, start.origin, pos, mods) {
                 self.propose(cx, &held.start, edit);
+            }
+            // The copy is what was dragged: it ends up selected, not the source.
+            if let Target::Duplicate { path, subpath, .. } = held.target {
+                self.report.select = Some(self.copied(&held.start, path, subpath));
             }
             cx.commit();
             return;

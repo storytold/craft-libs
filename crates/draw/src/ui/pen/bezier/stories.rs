@@ -15,7 +15,7 @@ fn paths() -> Vec<EditPath> {
     let open = vec![Knot::corner(Point::new(200.0, 130.0)), Knot::corner(Point::new(300.0, 130.0)), curve];
     let triangle = [(200.0, 230.0), (300.0, 230.0), (250.0, 310.0)].map(|(x, y)| Knot::corner(Point::new(x, y))).to_vec();
     let subpaths = vec![EditSubpath { knots: triangle, closed: true }];
-    vec![EditPath { key: 1, subpaths: vec![EditSubpath { knots: open, closed: false }], color: None }, EditPath { key: 2, subpaths, color: None }]
+    vec![EditPath::new(1, vec![EditSubpath { knots: open, closed: false }]), EditPath::new(2, subpaths)]
 }
 
 /// Shows the overlay `overlay` builds and shows as the only canvas control of a canvas whose view has the document

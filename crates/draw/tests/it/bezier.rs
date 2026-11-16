@@ -624,3 +624,68 @@ fn after_a_delete_the_following_anchor_is_selected_and_its_subpath_shown() {
     path.subpaths.remove(1);
     assert_eq!(PathSelection::after_delete(&path, KnotRef::new(1, 0), 2), sel(2, &[]));
 }
+
+// Direct Selection's ⌥ drag on a segment drags a copy of its subpath (#13756): the copy goes last, moved by the drag,
+// the source stays, and the copy ends selected, its anchors shown beside those already shown. ⇧ during the drag takes
+// the anchor ⇧ rule. A ⌥ click selects the subpath and edits nothing; on a path that takes no copies the drag moves
+// the subpath.
+#[trial]
+fn an_alt_drag_on_a_segment_drags_a_copy_of_its_subpath() {
+    let on_square = |h: &Harness| h.screen(p(100.0, 200.0));
+    let square = || path_b().subpaths[0].clone();
+
+    let mut h = harness(vec![path_b()]);
+    h.update(|st| st.selection = PathSelection::new(Some(2), Vec::new(), None).shown(Some(vec![1])));
+    let on = on_square(&h);
+    h.fixture.hold(egui::Modifiers::ALT);
+    h.drag(on, vec2(0.0, 80.0));
+    h.fixture.hold(egui::Modifiers::NONE);
+    {
+        let st = h.state.borrow();
+        assert!(matches!(st.changes.last(), Some(PathEdit::DuplicateSubpath { path: 2, subpath: 0, .. })), "{:?}", st.changes);
+        let subpaths = &st.paths[0].subpaths;
+        assert_eq!(subpaths.len(), 3);
+        assert_eq!(subpaths[..2], path_b().subpaths[..], "the source stays");
+        let moved = subpaths[2].knots.iter().zip(&square().knots).all(|(copy, source)| copy.anchor.distance(source.anchor + Vec2::new(0.0, 80.0)) < 1e-3);
+        assert!(moved && subpaths[2].closed, "{:?}", subpaths[2]);
+        assert_eq!(st.selection, sel(2, &[(2, 0), (2, 1), (2, 2), (2, 3)]).shown(Some(vec![1, 0, 2])));
+        assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)), "{:?}", st.seen);
+    }
+
+    // ⇧ once the drag is under way: a 5:12 move stays on the horizontal.
+    let mut h = harness(vec![path_b()]);
+    let on = on_square(&h);
+    h.fixture.hold(egui::Modifiers::ALT);
+    h.press_at(on);
+    h.move_to(on + vec2(30.0, -12.5));
+    h.fixture.hold(egui::Modifiers::ALT | egui::Modifiers::SHIFT);
+    h.move_to(on + vec2(60.0, -25.0));
+    h.release_at(on + vec2(60.0, -25.0));
+    h.fixture.hold(egui::Modifiers::NONE);
+    let first = h.state.borrow().paths[0].subpaths[2].knots[0].anchor;
+    assert!(first.distance(p(120.0, 200.0)) < 1e-3, "{first:?}");
+
+    // A ⌥ click selects the subpath.
+    let mut h = harness(vec![path_b()]);
+    let on = on_square(&h);
+    h.fixture.hold(egui::Modifiers::ALT);
+    h.press_at(on);
+    h.release_at(on);
+    h.fixture.hold(egui::Modifiers::NONE);
+    {
+        let st = h.state.borrow();
+        assert_eq!(st.selection, sel(2, &[(0, 0), (0, 1), (0, 2), (0, 3)]));
+        assert!(st.changes.is_empty() && st.seen.is_empty(), "{:?} {:?}", st.changes, st.seen);
+        assert_eq!(st.paths, [path_b()]);
+    }
+
+    // A path that takes no copies: the subpath moves.
+    let mut h = harness(vec![path_b().copies(false)]);
+    let on = on_square(&h);
+    h.fixture.hold(egui::Modifiers::ALT);
+    h.drag(on, vec2(0.0, 80.0));
+    h.fixture.hold(egui::Modifiers::NONE);
+    let st = h.state.borrow();
+    assert!(matches!(st.changes.last(), Some(PathEdit::MoveAnchors { path: 2, anchors, .. }) if anchors.len() == 4), "{:?}", st.changes);
+    assert_eq!(st.paths[0].subpaths.len(), 2);
+}
