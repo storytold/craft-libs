@@ -217,9 +217,9 @@ impl Component for RulerOverlay<'_> {
         let targets = [Target::Point(RulerPart::Protractor), Target::Point(RulerPart::End), Target::Point(RulerPart::Start), Target::Line];
         for target in targets {
             let Some(result) = cx.part_if_declared(target.reference()) else { continue };
-            let press = result.press;
+            let (press, hovered) = (result.press, result.hovered);
             let running = cx.press_slot::<Grab>().is_some_and(|grab| grab.0.is_some());
-            if result.hovered && !press.phase.is_press() && !running {
+            if hovered && !press.phase.is_press() && !running {
                 let arm = press.mods.alt && target.starts_arm(line);
                 cx.cursor(ruler_cursor(space.precise(), arm), CursorPriority::Part);
             }
