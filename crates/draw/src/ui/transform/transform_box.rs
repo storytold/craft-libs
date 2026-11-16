@@ -41,8 +41,12 @@ const EDGE: PartKey = PartKey::new("edge");
 /// The pointer-only move part at the centre of a box whose reference point is hidden.
 const CENTRE: PartKey = PartKey::new("centre");
 
-/// The pointer-only strip along side `k`, outside the frame, within the move reach.
+/// The pointer-only parts of the move reach outside the frame: `MOVE_RING.at(k)` for `k` below 4 is the strip along
+/// side `k`, and `MOVE_RING.at(4 + i)` the round sector outside corner `i`.
 const MOVE_RING: PartKey = PartKey::new("moveRing");
+
+/// The segments of the arc of each round corner of the move reach.
+const RING_ARC_STEPS: usize = 8;
 
 /// The rank of a side among the handles: below corners, midpoints, the reference point and the centre, so a corner
 /// wins where a corner and a side both reach, and the nearest of the others wins among themselves.
@@ -562,8 +566,8 @@ impl<'a> TransformBox<'a> {
     /// move strips.
     fn pointer_parts(&self) -> Vec<(PartRef, BoxPart)> {
         if self.move_only().is_some() {
-            let sides = if self.ring_reach().is_some() { 0..4 } else { 0..0 };
-            return sides.map(|side| (MOVE_RING.at(side), BoxPart::Inside)).collect();
+            let parts = if self.ring_reach().is_some() { 0..8 } else { 0..0 };
+            return parts.map(|part| (MOVE_RING.at(part), BoxPart::Inside)).collect();
         }
         let mut parts: Vec<_> = self.keyboard_parts().into_iter().map(|part| (BOX.at(part.index()), part)).collect();
         if self.line.is_some() {
@@ -742,16 +746,50 @@ fn paint_frame(draw: &Draw<'_>, style: &TransformBoxStyle, corners: [Pos2; 4]) {
     draw.stroke(&outline, StrokeWidth::Medium, style.line);
 }
 
-/// The move strips along the sides of the box whose corners are `quad` on the screen, each `points` wide outside it.
+/// The move reach outside the box whose corners are `quad` on the screen: every point within `points` of its border,
+/// as a strip along each side and a round sector outside each corner (PhotoCraft's type move reach measures the
+/// distance to the nearest side, pc-prod-e76 type_transform.rs:156-196).
 fn declare_ring(cx: &mut PartsCx<'_, TransformBox<'_>>, quad: &[Pos2; 4], points: f32) {
-    let outer = quad::outset(quad, points);
-    for side in 0..4usize {
-        let next = (side + 1) % 4;
-        cx.part(MOVE_RING.at(side as u64), HitShape::Polygon(vec![quad[side], quad[next], outer[next], outer[side]]))
+    let outward = outward_normals(quad);
+    let mut declare = |part: usize, shape: Vec<Pos2>| {
+        cx.part(MOVE_RING.at(part as u64), HitShape::Polygon(shape))
             .sense(Sense::DRAG | Sense::CLICK | slop_sense(BoxPart::Inside))
             .priority(HitPriority::new(HitLevel::Body, RING_SUB))
             .pointer_only(MOVE_BY_KEY);
+    };
+    for side in 0..4usize {
+        let (a, b, out) = (quad[side], quad[(side + 1) % 4], outward[side] * points);
+        declare(side, vec![a, b, b + out, a + out]);
     }
+    for corner in 0..4usize {
+        let (from, to) = (outward[(corner + 3) % 4], outward[corner]);
+        let (start, mut turn) = (from.angle(), to.angle() - from.angle());
+        if turn > std::f32::consts::PI {
+            turn -= std::f32::consts::TAU;
+        } else if turn < -std::f32::consts::PI {
+            turn += std::f32::consts::TAU;
+        }
+        let centre = quad[corner];
+        let arc = (0..=RING_ARC_STEPS).map(|step| centre + Vec2::angled(start + turn * step as f32 / RING_ARC_STEPS as f32) * points);
+        declare(4 + corner, std::iter::once(centre).chain(arc).collect());
+    }
+}
+
+/// The unit normal of each side of `quad` that points out of the box, whichever way its corners turn; a side with no
+/// length points away from the box's centre.
+fn outward_normals(quad: &[Pos2; 4]) -> [Vec2; 4] {
+    let area: f32 = (0..4).map(|k| quad[k].to_vec2().x * quad[(k + 1) % 4].y - quad[(k + 1) % 4].x * quad[k].y).sum();
+    let turn = if area < 0.0 { -1.0 } else { 1.0 };
+    let centre = quad.iter().fold(Vec2::ZERO, |sum, corner| sum + corner.to_vec2()) / 4.0;
+    std::array::from_fn(|side| {
+        let (a, b) = (quad[side], quad[(side + 1) % 4]);
+        let along = b - a;
+        if along.length() > 1e-3 {
+            Vec2::new(along.y, -along.x).normalized() * turn
+        } else {
+            (a.to_vec2() - centre).normalized()
+        }
+    })
 }
 
 /// The reference point's glyph centred at `centre`: a circle crossed by two arms, over its halo. The one glyph of the

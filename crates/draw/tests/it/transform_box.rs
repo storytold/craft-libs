@@ -537,6 +537,7 @@ fn a_move_only_overlay_takes_a_press_only_in_its_reach_and_moves_the_box() {
         (Point::new(RECT.x1 - 3.0, 150.0), "just inside a side's middle"),
         (Point::new(RECT.x1 + 60.0, 150.0), "past the reach"),
         (Point::new(RECT.x1 + 60.0, RECT.y1 + 60.0), "past a corner, where the box would rotate"),
+        (Point::new(RECT.x1 + 30.0, RECT.y1 + 30.0), "diagonally off a corner, within the reach of each side's line but not of the corner"),
     ];
     for (at, what) in untaken {
         let before = session.borrow().quad();
@@ -555,6 +556,11 @@ fn a_move_only_overlay_takes_a_press_only_in_its_reach_and_moves_the_box() {
         after[0].x > before[0].x + 1.0 && after[0].y > before[0].y + 1.0 && (size(after) - size(before)).abs() < 1e-6,
         "the box moves and keeps its size: {before:?} -> {after:?}"
     );
+
+    // Within the reach of a corner, off both sides' ends: the round corner holds it.
+    let corner = session.borrow().quad()[2];
+    let (at_press, _) = drag(Point::new(corner.x + 20.0, corner.y + 20.0), Point::new(corner.x + 40.0, corner.y + 30.0));
+    assert_eq!(at_press, Some(BoxPart::Inside), "a press within the reach of a corner moves the box");
 }
 
 /// The snap lines of a session box drag reach the tool host through `TransformTool`, as the crop frame's do: the host
