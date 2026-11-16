@@ -127,6 +127,13 @@ impl<F: Clone> Dpb<F> {
 
     /// Insert "non-existing" frames for a frame_num gap (8.2.5.2). `make_frame` gives each one's
     /// picture and POC.
+    ///
+    /// Only the last `max_num_ref_frames` missing frames are built; the sliding window would drop
+    /// the others before the gap ends. `poc_state` is not called once per missing frame: it sees the
+    /// first skipped frame (when frames are skipped) and then each built frame, in decoding order.
+    /// That suffices for state that only changes where frame_num decreases, like
+    /// `PocState::update_gap_frame` (FrameNumOffset, 8.2.1), and keeps the work per gap bounded by
+    /// `max_num_ref_frames` instead of MaxFrameNum.
     pub fn fill_frame_num_gap(
         &mut self,
         prev_ref_frame_num: u32,
@@ -138,18 +145,24 @@ impl<F: Clone> Dpb<F> {
     ) {
         let mut unused = (prev_ref_frame_num + 1) % max_frame_num;
         // Missing frames before the last `max_num_ref_frames` would be dropped by the sliding window
-        // (oldest FrameNumWrap first) before the gap ends, so only their POC / frame_num bookkeeping
-        // runs; building pictures for them would cost up to max_frame_num frames per access unit.
+        // (oldest FrameNumWrap first) before the gap ends, so no picture is built for them; building
+        // pictures for them would cost up to max_frame_num frames per access unit.
         let gap = if frame_num >= unused { frame_num - unused } else { (frame_num % max_frame_num) + max_frame_num - unused };
         let skip = gap.saturating_sub(max_num_ref_frames.max(1).try_into().unwrap_or(u32::MAX));
-        let mut guard = 0;
+        if skip > 0 {
+            // Their POC bookkeeping (FrameNumOffset, 8.2.1) only grows when frame_num decreases,
+            // which within one gap (shorter than MaxFrameNum) happens at most once, at the wrap
+            // to 0. At least one built frame follows the skipped run, so visiting the first
+            // skipped frame and then the built ones in order sees that decrease exactly when it
+            // lies inside the skipped run: the state matches visiting every missing frame, in
+            // constant time for any gap length, whatever frame_num the POC state saw last.
+            let first = unused;
+            let last = first.saturating_add(skip - 1) % max_frame_num;
+            poc_state(first);
+            unused = (last + 1) % max_frame_num;
+        }
+        let mut guard = skip;
         while unused != frame_num && guard < max_frame_num {
-            if guard < skip {
-                poc_state(unused);
-                unused = (unused + 1) % max_frame_num;
-                guard += 1;
-                continue;
-            }
             self.sliding_window(unused, max_frame_num, max_num_ref_frames);
             let (frame, poc, meta) = make_frame(unused);
             poc_state(unused);
@@ -448,6 +461,7 @@ impl<F: Clone> Default for Dpb<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::h264::decode::slice::PocState;
 
     fn meta() -> Arc<OutputMeta> {
         Arc::new(OutputMeta {
@@ -554,11 +568,206 @@ mod tests {
         let mut upd = |f: u32| updated.push(f);
         dpb.fill_frame_num_gap(0, 32768, 1 << 16, 4, &mut make, &mut upd);
         assert!(made <= 4, "gap fill materialised {made} frames, expected <= 4");
-        assert_eq!(updated, (1..32768).collect::<Vec<u32>>());
+        // the skipped frames 1..=32763 cost one POC update, the four built frames one each
+        assert_eq!(updated, vec![1, 32764, 32765, 32766, 32767]);
         let mut refs: Vec<u32> = dpb.entries.iter().filter(|e| e.mark == RefMark::Short).map(|e| e.frame_num).collect();
         refs.sort_unstable();
         assert_eq!(refs, vec![32764, 32765, 32766, 32767]);
         assert!(dpb.entries.iter().all(|e| e.frame == e.frame_num));
+    }
+
+    /// A sequence parameter set with a `bits`-bit frame_num and POC type `poc_type`.
+    fn gap_sps(bits: u32, poc_type: u32) -> crate::h264::decode::params::Sps {
+        let mut w = craft_media::bitstream::BitWriter::new();
+        w.write_bits(66, 8);
+        w.write_bits(0, 8);
+        w.write_bits(30, 8);
+        w.write_ue(0); // sps id
+        w.write_ue(bits - 4); // log2_max_frame_num - 4
+        w.write_ue(poc_type);
+        match poc_type {
+            0 => w.write_ue(0),
+            1 => {
+                w.write_bit(false);
+                w.write_se(-1); // offset_for_non_ref_pic
+                w.write_se(1); // offset_for_top_to_bottom_field
+                w.write_ue(1);
+                w.write_se(2);
+            }
+            _ => {}
+        }
+        w.write_ue(1); // max_num_ref_frames
+        w.write_bit(true); // gaps allowed
+        w.write_ue(0);
+        w.write_ue(0);
+        w.write_bit(true);
+        w.write_bit(true);
+        w.write_bit(false);
+        w.write_bit(false);
+        w.rbsp_trailing();
+        crate::h264::decode::params::Sps::parse(&w.finish()).expect("sps")
+    }
+
+    /// Fills the gap from `prev_ref` to `frame_num` in a DPB pre-filled with short-term references,
+    /// driving the real `PocState::update_gap_frame` from `prior`, and checks the POC state, the
+    /// POC of the picture after the gap (each POC type) and the built frames against visiting every
+    /// missing frame (`every`: the state after visiting them all).
+    fn check_gap_against_every_frame(
+        sps: &[crate::h264::decode::params::Sps; 3],
+        prev_ref: u32,
+        frame_num: u32,
+        mnrf: usize,
+        prior: &PocState,
+        every: &PocState,
+    ) {
+        let max = sps[0].max_frame_num();
+        let m = meta();
+        let mut dpb: Dpb<u32> = Dpb::new();
+        for k in 0..mnrf.max(1) as u32 {
+            let f = (prev_ref + max - k % max) % max;
+            dpb.entries.push(DpbEntry {
+                frame: f,
+                poc: 0,
+                frame_num: f,
+                long_term_frame_idx: 0,
+                mark: RefMark::Short,
+                needed_for_output: false,
+                non_existing: false,
+                meta: m.clone(),
+            });
+        }
+        let mut state = prior.clone();
+        let mut calls = 0usize;
+        let mut make = |f: u32| (f, 0, m.clone());
+        let mut upd = |f: u32| {
+            calls += 1;
+            state.update_gap_frame(f, &sps[0]);
+        };
+        dpb.fill_frame_num_gap(prev_ref, frame_num, max, mnrf, &mut make, &mut upd);
+        let at = || format!("MaxFrameNum {max} prev_ref {prev_ref} frame_num {frame_num} mnrf {mnrf} prior {prior:?}");
+        assert_eq!(&state, every, "{}", at());
+        let mut next = reference_slice();
+        next.frame_num = frame_num;
+        for s in sps {
+            assert_eq!(state.compute(&next, s), every.compute(&next, s), "{}", at());
+        }
+        let gap = (frame_num + max - prev_ref - 1) % max;
+        let built = gap.min(mnrf.max(1) as u32);
+        assert!(calls <= 1 + built as usize, "{calls} POC updates, {}", at());
+        let mut short: Vec<u32> = dpb.entries.iter().filter(|e| e.mark == RefMark::Short).map(|e| e.frame_num).collect();
+        short.sort_unstable();
+        let mut want: Vec<u32> = (0..built).map(|k| (frame_num + max - 1 - k) % max).collect();
+        want.sort_unstable();
+        assert!(dpb.entries.iter().filter(|e| e.non_existing).map(|e| e.frame_num).all(|f| want.contains(&f)), "{}", at());
+        assert!(short.len() <= mnrf.max(1), "{}", at());
+    }
+
+    /// Prior POC states to start a gap from: the previous picture was the previous reference or the
+    /// non-reference picture after it, plus one state outside that order (alternately a previous
+    /// picture with another frame_num, or one from an SPS with a longer frame_num).
+    fn gap_priors(sps: &crate::h264::decode::params::Sps, prev_ref: u32, extra: u32) -> Vec<PocState> {
+        let max = sps.max_frame_num();
+        let odd = if prev_ref.is_multiple_of(2) { (prev_ref + extra) % max } else { max + extra };
+        [prev_ref, (prev_ref + 1) % max, odd]
+            .into_iter()
+            .map(|f| {
+                let mut p = PocState::default();
+                p.update_gap_frame(f, sps);
+                p
+            })
+            .collect()
+    }
+
+    /// The gap fill gives the POC state the same FrameNumOffset as visiting every missing frame, with
+    /// the decoder's real `PocState::update_gap_frame`: exhaustively for frame_num widths 4 to 8,
+    /// and for a deterministic sample biased to gaps that wrap past frame_num 0 for widths 9 to 16.
+    #[test]
+    fn frame_num_gap_poc_bookkeeping_matches_visiting_every_frame() {
+        const MNRF: [usize; 6] = [0, 1, 2, 3, 15, 16];
+        let run = |bits: u32, prev_ref: u32, gaps: &[u32], extra: u32| {
+            let sps = [gap_sps(bits, 0), gap_sps(bits, 1), gap_sps(bits, 2)];
+            let max = sps[0].max_frame_num();
+            for prior in gap_priors(&sps[0], prev_ref, extra) {
+                // the state after visiting every missing frame, advanced one gap length at a time
+                let mut every = prior.clone();
+                let mut visited = 0u32;
+                for &gap in gaps {
+                    while visited < gap {
+                        every.update_gap_frame((prev_ref + 1 + visited) % max, &sps[0]);
+                        visited += 1;
+                    }
+                    let frame_num = (prev_ref + 1 + gap) % max;
+                    for mnrf in MNRF {
+                        check_gap_against_every_frame(&sps, prev_ref, frame_num, mnrf, &prior, &every);
+                    }
+                }
+            }
+        };
+        for bits in 4..=8u32 {
+            let max = 1u32 << bits;
+            for prev_ref in 0..max {
+                // every gap length 1..=max-2 (frame_num is neither PrevRefFrameNum nor the next one)
+                let gaps: Vec<u32> = (1..max - 1).collect();
+                run(bits, prev_ref, &gaps, prev_ref % 7 + 2);
+            }
+        }
+        let mut seed = 0x2545_f491u32;
+        let mut rand = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        for bits in 9..=16u32 {
+            let max = 1u32 << bits;
+            for i in 0..24 {
+                // most gaps start shortly before the wrap and end shortly after it
+                let prev_ref = if i % 4 == 3 { rand() % max } else { max - 1 - rand() % 40 };
+                let mut gaps: Vec<u32> = (0..12)
+                    .map(|_| 1 + rand() % (max - 2))
+                    .chain([max - prev_ref - 1, max - prev_ref, max - 2])
+                    .filter(|&g| (1..max - 1).contains(&g))
+                    .collect();
+                gaps.sort_unstable();
+                gaps.dedup();
+                run(bits, prev_ref, &gaps, rand() % max);
+            }
+        }
+    }
+
+    /// A gap that wraps (frame_num below the previous reference's) builds the frames just before
+    /// frame_num and does constant work for the rest.
+    #[test]
+    fn wrapping_frame_num_gap_is_filled() {
+        let mut dpb: Dpb<u32> = Dpb::new();
+        let m = meta();
+        let mut make = |f: u32| (f, 0, m.clone());
+        let mut visited = Vec::new();
+        let mut upd = |f: u32| visited.push(f);
+        // 65530 -> 5: frames 65531..=65535 and 0..=4 are missing
+        dpb.fill_frame_num_gap(65530, 5, 1 << 16, 3, &mut make, &mut upd);
+        assert_eq!(visited, vec![65531, 2, 3, 4]);
+        let mut refs: Vec<u32> = dpb.entries.iter().filter(|e| e.mark == RefMark::Short).map(|e| e.frame_num).collect();
+        refs.sort_unstable();
+        assert_eq!(refs, vec![2, 3, 4]);
+    }
+
+    /// The longest possible gap costs a bounded number of callbacks.
+    #[test]
+    fn longest_frame_num_gap_does_constant_work() {
+        let mut dpb: Dpb<u32> = Dpb::new();
+        let m = meta();
+        let mut made = 0u32;
+        let mut make = |f: u32| {
+            made += 1;
+            (f, 0, m.clone())
+        };
+        let mut calls = 0u32;
+        let mut upd = |_f: u32| calls += 1;
+        // prev_ref 65535 -> frame_num 65534: 65534 missing frames, wrapping through 0
+        dpb.fill_frame_num_gap(65535, 65534, 1 << 16, 1, &mut make, &mut upd);
+        assert_eq!(made, 1);
+        assert!(calls <= 2, "{calls} POC updates");
     }
 
     /// Existing short-term references are still evicted by a gap no longer than the window.
