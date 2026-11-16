@@ -12,8 +12,8 @@ use craft_ui::runtime::env::Label;
 use kurbo::{Point, Vec2};
 
 use super::words::ShapeDragWords;
-use super::{ShapeDragEvent, ShapeDragOptions, ShapeDragRules, ShapeFrame, ShapeKind};
-use crate::geometry::shape::{MIN_SIDE, RadialFrame, SIDES, ShapeGeometry, box_drag, line_drag};
+use super::{BoxConstraint, ShapeDragEvent, ShapeDragOptions, ShapeDragRules, ShapeFrame, ShapeKind};
+use crate::geometry::shape::{BoxRule, MIN_SIDE, RadialFrame, SIDES, ShapeGeometry, box_drag, line_drag};
 
 /// The flattening tolerance of the outline being drawn, in screen points.
 const OUTLINE_TOLERANCE: f32 = 0.25;
@@ -31,6 +31,9 @@ const OUTLINE_TOLERANCE: f32 = 0.25;
 /// - ⇧ makes a square or circle from the drag's shorter side (a Line: onto the axis within 30° of it, keeping the
 ///   offset along it, else onto the diagonal at the shorter offset); ⌥ draws from the centre.
 ///   Both may go down or up mid-drag; the shape follows the modifiers held now.
+/// - The options' [`BoxConstraints`](super::BoxConstraints) (the Rectangle tool's gear) keep a box drag square, at a
+///   fixed size at the release, or at a ratio, and From Center draws from the press as the centre; with Square or
+///   From Center on, ⇧ or ⌥ turns it off.
 /// - Space held moves the shape being drawn without resizing it: the press point moves with the
 ///   pointer while Space is down, and the box snaps as a whole.
 /// - Esc cancels (the host calls [`cancel`](CanvasTool::cancel)); so does a tool switch: `Cancel`
@@ -142,7 +145,8 @@ impl ShapeDragTool {
     }
 
     /// The shape a drag from `start` to `at` with `mods` draws under the options and rules, or `None`
-    /// when a side is under 1 px: [`box_drag`] for the box kinds (Rectangle with four equal radii when
+    /// when a side is under 1 px: [`box_drag`] for the box kinds under the options' constraints, ⇧
+    /// toggling Square and ⌥ From Center (Rectangle with four equal radii when
     /// `corner_radius` > 0, Rounded Rectangle always with them, Triangle a 3-sided polygon, Polygon and
     /// Star with the options' sides and ratio, Custom a `Custom` box keeping proportions with ⇧),
     /// [`line_drag`] for a Line (weight at least 1, ⇧ snapping the end by [`line_shift`]), and
@@ -173,7 +177,15 @@ impl ShapeDragTool {
             };
             return Some(frame.geometry(drag.sides, star_ratio));
         }
-        let rect = box_drag(drag.start, drag.at, mods.shift, mods.alt)?;
+        let c = &o.constraints;
+        let pair = |(w, h): (Option<f64>, Option<f64>)| w.zip(h);
+        let rule = BoxRule {
+            square: mods.shift != (c.constraint == BoxConstraint::Square),
+            from_centre: mods.alt != c.from_center,
+            fixed: (c.constraint == BoxConstraint::FixedSize).then(|| pair(c.fixed)).flatten(),
+            ratio: (c.constraint == BoxConstraint::Proportional).then(|| pair(c.ratio)).flatten(),
+        };
+        let rect = box_drag(drag.start, drag.at, rule)?;
         Some(match o.kind {
             ShapeKind::Rectangle if o.corner_radius > 0.0 => ShapeGeometry::Rect { rect, radii },
             ShapeKind::Rectangle => ShapeGeometry::Rect { rect, radii: [0.0; 4] },

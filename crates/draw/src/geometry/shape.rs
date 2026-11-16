@@ -152,25 +152,55 @@ impl ShapeGeometry {
     }
 }
 
-/// The box a drag from `start` to `end` draws, in whole pixels, or `None` when a side is under
+/// How a box drag turns the press and the pointer into a box ([`box_drag`]). The default draws the dragged box.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct BoxRule {
+    /// Both sides take the drag's shorter extent, each keeping its direction (⇧).
+    pub square: bool,
+    /// The press is the centre: the box is twice the extent (⌥). With `fixed`, the release is the centre.
+    pub from_centre: bool,
+    /// A fixed width and height: the box has this size with its top left at the release, whatever the drag.
+    pub fixed: Option<(f64, f64)>,
+    /// A width to height ratio: the largest box of this ratio inside the dragged one, from the press.
+    pub ratio: Option<(f64, f64)>,
+}
+
+/// The box a drag from `start` to `end` draws under `rule`, in whole pixels, or `None` when a side is under
 /// [`MIN_SIDE`].
 ///
-/// - `square` (⇧): both sides take the drag's shorter extent, each keeping its direction.
-/// - `from_centre` (⌥): `start` is the centre; the box is twice the extent.
+/// - `fixed` (both sides finite and above 0): that size at the release; `square` and `ratio` do not apply.
+/// - `square`: both sides take the drag's shorter extent, each keeping its direction.
+/// - `ratio` (both parts finite and above 0): the largest box of that ratio inside the (squared) drag.
+/// - `from_centre`: `start` is the centre; the box is twice the extent.
 /// - The top left and the size round to whole pixels, as PhotoCraft rounds `[x, y, w, h]`.
-pub fn box_drag(start: Point, end: Point, square: bool, from_centre: bool) -> Option<Rect> {
+pub fn box_drag(start: Point, end: Point, rule: BoxRule) -> Option<Rect> {
     // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs `drag_box` (⇧: `m = w.abs().min(h.abs())` with the
-    // signs kept, #13222; ⌥: origin `start - (w, h)`, size doubled), `shape_geometry` (`[x0.min(x0 + w).round(), …,
-    // w.abs().round(), …]`; `rect[2] < 1.0 || rect[3] < 1.0` draws nothing).
-    let (mut w, mut h) = (end.x - start.x, end.y - start.y);
-    if square {
-        let m = w.abs().min(h.abs());
-        (w, h) = (m * sign(w), m * sign(h));
-    }
-    let (x0, y0) = if from_centre { (start.x - w, start.y - h) } else { (start.x, start.y) };
-    let (w, h) = if from_centre { (w * 2.0, h * 2.0) } else { (w, h) };
+    // signs kept, #13222; ⌥: origin `start - (w, h)`, size doubled; the Rectangle gear's Fixed Size and
+    // Proportional, #13343), `shape_geometry` (`[x0.min(x0 + w).round(), …, w.abs().round(), …]`;
+    // `rect[2] < 1.0 || rect[3] < 1.0` draws nothing).
+    let (x0, y0, w, h) = if let Some((fw, fh)) = rule.fixed.and_then(positive) {
+        // From Center with Fixed Size is not measured: the size is centred on the release.
+        if rule.from_centre { (end.x - fw / 2.0, end.y - fh / 2.0, fw, fh) } else { (end.x, end.y, fw, fh) }
+    } else {
+        let (mut w, mut h) = (end.x - start.x, end.y - start.y);
+        if rule.square {
+            let m = w.abs().min(h.abs());
+            (w, h) = (m * sign(w), m * sign(h));
+        }
+        if let Some((rw, rh)) = rule.ratio.and_then(positive) {
+            let s = (w.abs() / rw).min(h.abs() / rh);
+            (w, h) = (rw * s * sign(w), rh * s * sign(h));
+        }
+        if rule.from_centre { (start.x - w, start.y - h, w * 2.0, h * 2.0) } else { (start.x, start.y, w, h) }
+    };
     let (x, y, w, h) = (x0.min(x0 + w).round(), y0.min(y0 + h).round(), w.abs().round(), h.abs().round());
     (w >= MIN_SIDE && h >= MIN_SIDE).then(|| Rect::new(x, y, x + w, y + h))
+}
+
+/// `pair` when both parts are finite and above 0 (a gear field that is not empty).
+fn positive(pair: (f64, f64)) -> Option<(f64, f64)> {
+    (pair.0.is_finite() && pair.1.is_finite() && pair.0 > 0.0 && pair.1 > 0.0).then_some(pair)
 }
 
 /// The end of a line dragged from `from` to `to`, or `None` when it is shorter than

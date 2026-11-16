@@ -4,7 +4,7 @@ use craft_behavior::kurbo::{Point, Rect, Vec2};
 use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::geometry::shape::ShapeGeometry;
 use craft_draw::ui::shape_drag::{
-    CreateShapeDialog, CreateShapeOptions, CreatedShape, ShapeDragEvent, ShapeDragOptions, ShapeDragTool, ShapeKind,
+    BoxConstraint, BoxConstraints, CreateShapeDialog, CreateShapeOptions, CreatedShape, ShapeDragEvent, ShapeDragOptions, ShapeDragTool, ShapeKind,
 };
 use craft_ui::dialog::{DialogHost, DialogId, DialogResult};
 use craft_ui::testing::{ToolFixture, trial};
@@ -153,6 +153,45 @@ fn shift_squares_the_box_from_the_shorter_side() {
     let mut shapes = Shapes::new(ShapeDragOptions::new(ShapeKind::Ellipse));
     shapes.drag(PRESS, PRESS + Vec2::new(20.0, 60.0), Modifiers::SHIFT);
     assert_eq!(shapes.committed(), Some(ShapeGeometry::Ellipse { rect: Rect::new(100.0, 100.0, 120.0, 120.0) }), "a circle of the shorter side");
+}
+
+/// A Rectangle drag under the gear `constraint` with `change` applied to the gear's values.
+fn gear(constraint: BoxConstraint, change: impl FnOnce(&mut BoxConstraints)) -> Shapes {
+    let mut constraints = BoxConstraints::default();
+    constraints.constraint = constraint;
+    change(&mut constraints);
+    Shapes::new(ShapeDragOptions::new(ShapeKind::Rectangle).constraints(constraints))
+}
+
+/// The gear's Square and From Center hold without ⇧ or ⌥, which turn them off; Fixed Size puts its size at the
+/// release; Proportional draws the largest box of its ratio inside the drag; an empty Fixed Size field draws the
+/// dragged box.
+#[trial]
+fn the_rectangle_gear_constrains_the_drag_and_shift_and_alt_turn_it_off() {
+    let to = PRESS + Vec2::new(60.0, 20.0);
+    let mut shapes = gear(BoxConstraint::Square, |_| {});
+    shapes.drag(PRESS, to, Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 100.0, 120.0, 120.0)), "Square holds without ⇧");
+    shapes.drag(PRESS, to, Modifiers::SHIFT);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 100.0, 160.0, 120.0)), "⇧ turns Square off");
+
+    let mut shapes = gear(BoxConstraint::Unconstrained, |c| c.from_center = true);
+    shapes.drag(PRESS, to, Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(40.0, 80.0, 160.0, 120.0)), "From Center draws about the press");
+    shapes.drag(PRESS, to, Modifiers::ALT);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 100.0, 160.0, 120.0)), "⌥ turns From Center off");
+
+    let mut shapes = gear(BoxConstraint::FixedSize, |c| c.fixed = (Some(30.0), Some(10.0)));
+    shapes.drag(PRESS, to, Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(160.0, 120.0, 190.0, 130.0)), "Fixed Size puts its top left at the release");
+
+    let mut shapes = gear(BoxConstraint::FixedSize, |c| c.fixed = (Some(30.0), None));
+    shapes.drag(PRESS, to, Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 100.0, 160.0, 120.0)), "an empty field draws the dragged box");
+
+    let mut shapes = gear(BoxConstraint::Proportional, |c| c.ratio = (Some(2.0), Some(1.0)));
+    shapes.drag(PRESS, PRESS + Vec2::new(60.0, 50.0), Modifiers::NONE);
+    assert_eq!(shapes.committed_box(), Some(Rect::new(100.0, 100.0, 160.0, 130.0)), "the largest 2 : 1 box inside the drag");
 }
 
 #[trial]
