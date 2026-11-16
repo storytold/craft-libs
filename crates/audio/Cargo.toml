@@ -79,6 +79,7 @@ symphonia = { version = "0.6.1", optional = true, default-features = false, feat
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
 proptest = { workspace = true }
+serde_json = { workspace = true }
 
 [[example]]
 name = "info"

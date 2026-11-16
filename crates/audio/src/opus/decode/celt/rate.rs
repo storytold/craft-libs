@@ -4,10 +4,6 @@ use super::tables::{EBANDS, LOG2_FRAC_TABLE, MAX_LM, NB_EBANDS, OVERLAP};
 use crate::opus::decode::range::{BITRES, RangeDecoder};
 
 pub use crate::opus::rate_common::get_pulses;
-#[cfg(test)]
-use crate::opus::rate_common::log2_frac;
-#[cfg(test)]
-pub use crate::opus::rate_common::pvq_v;
 pub const MAX_FINE_BITS: i32 = 8;
 const FINE_OFFSET: i32 = 21;
 pub const QTHETA_OFFSET: i32 = 4;
