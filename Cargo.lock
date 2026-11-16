@@ -1561,6 +1561,7 @@ dependencies = [
  "craft-aaf",
  "craft-aep",
  "craft-affinity",
+ "craft-ai-agents",
  "craft-ai-core",
  "craft-anicraft-format",
  "craft-assuan",
@@ -1750,6 +1751,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ai-agents"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-ai-integrations?rev=35e0352666a117407d62230a6c6c2366f3e21a3b#35e0352666a117407d62230a6c6c2366f3e21a3b"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-ai-core"
 version = "0.1.0"
 dependencies = [
@@ -1802,17 +1813,24 @@ name = "craft-automation"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "craft-ai-agents",
+ "craft-atomic",
  "craft-behavior",
+ "craft-flags",
+ "craft-host",
  "craft-keymap",
  "craft-platform",
  "craft-theme",
  "craft-ui",
  "egui",
  "getrandom 0.3.4",
+ "hmac 0.12.1",
  "log",
  "png 0.17.16",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
