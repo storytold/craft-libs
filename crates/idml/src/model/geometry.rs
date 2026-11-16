@@ -5,6 +5,19 @@ use craft_xml::{El, Local};
 
 use crate::value::{nums, point_str};
 
+/// Why a bounded path geometry was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PathGeometryError {
+    #[error("too many points")]
+    TooManyPoints,
+    #[error("point without an anchor")]
+    MissingAnchor,
+    #[error("malformed point")]
+    MalformedPoint,
+    #[error("non-finite point")]
+    NonFinitePoint,
+}
+
 /// Most points one geometry keeps by default; points past it are dropped.
 pub const MAX_PATH_POINTS: usize = 1_000_000;
 
@@ -82,6 +95,45 @@ impl PathGeometry {
             paths.push(SubPath { open: g.attr("PathOpen") == Some("true"), points });
         }
         PathGeometry { paths }
+    }
+
+    /// Parse a path geometry without silently discarding malformed points, keeping at most
+    /// `max` point elements. Missing direction handles default to the anchor.
+    pub fn try_from_el_capped(pg: &El, max: usize) -> Result<PathGeometry, PathGeometryError> {
+        let point = |value: Option<&str>, required: bool| -> Result<Option<[f64; 2]>, PathGeometryError> {
+            let Some(value) = value else {
+                return if required { Err(PathGeometryError::MissingAnchor) } else { Ok(None) };
+            };
+            let mut nums = value.split_whitespace();
+            let Some(x) = nums.next().and_then(|n| n.parse::<f64>().ok()) else { return Err(PathGeometryError::MalformedPoint) };
+            let Some(y) = nums.next().and_then(|n| n.parse::<f64>().ok()) else { return Err(PathGeometryError::MalformedPoint) };
+            if nums.next().is_some() {
+                return Err(PathGeometryError::MalformedPoint);
+            }
+            if !(x.is_finite() && y.is_finite()) {
+                return Err(PathGeometryError::NonFinitePoint);
+            }
+            Ok(Some([x, y]))
+        };
+        let mut count = 0usize;
+        let mut paths = Vec::new();
+        for geometry in pg.children(Local("GeometryPathType")) {
+            let mut points = Vec::new();
+            if let Some(array) = geometry.child(Local("PathPointArray")) {
+                for el in array.children(Local("PathPointType")) {
+                    count = count.saturating_add(1);
+                    if count > max {
+                        return Err(PathGeometryError::TooManyPoints);
+                    }
+                    let anchor = point(el.attr("Anchor"), true)?.ok_or(PathGeometryError::MissingAnchor)?;
+                    let left = point(el.attr("LeftDirection"), false)?.unwrap_or(anchor);
+                    let right = point(el.attr("RightDirection"), false)?.unwrap_or(anchor);
+                    points.push(PathPoint { anchor, left, right });
+                }
+            }
+            paths.push(SubPath { open: geometry.attr("PathOpen") == Some("true"), points });
+        }
+        Ok(PathGeometry { paths })
     }
 
     /// The `PathGeometry` element.

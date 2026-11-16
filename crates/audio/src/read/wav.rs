@@ -115,6 +115,50 @@ fn parse_bext(c: &[u8]) -> Option<BwfInfo> {
     })
 }
 
+/// Cap optional metadata independently of audio length, including on range-backed sources.
+const IXML_MAX: usize = 1 << 20;
+
+/// iXML's BEXT mirror is a fallback only: a real `bext` always wins, including timestamp zero.
+/// Read the two unsigned 32-bit words, not arbitrary text that merely contains their tag names.
+fn ixml_time_reference(bytes: &[u8]) -> Option<u64> {
+    let options = craft_xml::Options {
+        doctype: craft_xml::Doctype::Reject,
+        ..craft_xml::Options::default().strict().with_limits(craft_xml::Limits {
+            max_input: IXML_MAX,
+            max_depth: 32,
+            max_nodes: 8192,
+            max_attrs: 64,
+            max_attrs_total: 8192,
+            ..craft_xml::Limits::default()
+        })
+    };
+    let root = options.parse(bytes).ok()?;
+    if root.name != "BWFXML" {
+        return None;
+    }
+    let mut bexts = root.children("BEXT");
+    let bext = bexts.next()?;
+    if bexts.next().is_some() {
+        return None;
+    }
+    let word = |name: &str| -> Option<Option<u32>> {
+        let mut fields = bext.children(name);
+        let Some(field) = fields.next() else { return Some(None) };
+        if fields.next().is_some() || field.children.iter().any(|n| matches!(n, craft_xml::Node::El(_))) {
+            return None;
+        }
+        let text = field.text();
+        let text = text.trim();
+        if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        Some(Some(text.parse().ok()?))
+    };
+    let low = word("BWF_TIME_REFERENCE_LOW")??;
+    let high = word("BWF_TIME_REFERENCE_HIGH")?.unwrap_or(0);
+    Some((u64::from(high) << 32) | u64::from(low))
+}
+
 /// Refuse the WAVE file at `at`, which symphonia reads (A-law, ADPCM, ...), if an INFO entry
 /// claims more bytes than the file holds: symphonia allocates each entry's length. Chunks are
 /// walked where symphonia reads them: after the bytes a chunk's parser used, not its length.
@@ -239,7 +283,7 @@ fn pcm_layout(fmt: &Fmt) -> Result<Option<(PcmKind, SampleFormat)>> {
 }
 
 /// Parse a WAV file's chunks: its format, `bext` metadata and where its samples are. Only chunk
-/// headers and the small `fmt `, `bext` and `ds64` bodies are read.
+/// headers, small `fmt `, `bext` and `ds64` bodies, and at most one 1 MiB iXML document are read.
 pub(crate) fn parse(src: &Src<'_>) -> Result<WavParse> {
     if !is_wav(&src.bytes_upto(0, 12)) {
         return Err(AudioError::Malformed("not a RIFF/RF64 WAVE file".into()));
@@ -249,6 +293,8 @@ pub(crate) fn parse(src: &Src<'_>) -> Result<WavParse> {
     let mut ds64_data: Option<u64> = None;
     let mut fmt: Option<Fmt> = None;
     let mut bwf: Option<BwfInfo> = None;
+    let mut ixml_time = None;
+    let mut ixml_seen = false;
     let mut data: Option<(u64, u64)> = None;
 
     let mut pos: u64 = 12;
@@ -288,7 +334,18 @@ pub(crate) fn parse(src: &Src<'_>) -> Result<WavParse> {
             let small = |n: u64| src.bytes(body, usize::try_from(declared.min(n)).unwrap_or(0)).unwrap_or_default();
             match &id {
                 b"fmt " => fmt = Some(parse_fmt(&small(256))?),
-                b"bext" => bwf = parse_bext(&small(4096)),
+                b"bext" => {
+                    if let Some(info) = parse_bext(&small(4096)) {
+                        bwf = Some(info);
+                    }
+                }
+                b"iXML" if !ixml_seen => {
+                    // Inspect at most one bounded document, not 100,000 individually bounded trees.
+                    ixml_seen = true;
+                    if declared <= IXML_MAX as u64 {
+                        ixml_time = ixml_time_reference(&small(IXML_MAX as u64));
+                    }
+                }
                 b"ds64" => ds64_data = le_u64(&small(64), 8),
                 _ => {}
             }
@@ -297,6 +354,9 @@ pub(crate) fn parse(src: &Src<'_>) -> Result<WavParse> {
         pos = next;
     }
 
+    if bwf.is_none() {
+        bwf = ixml_time.map(|time_reference| BwfInfo { time_reference, ..BwfInfo::default() });
+    }
     let fmt = fmt.ok_or_else(|| AudioError::Malformed("WAV has no fmt chunk".into()))?;
     if fmt.channels == 0 {
         return Err(AudioError::Malformed("WAV declares zero channels".into()));

@@ -9,6 +9,7 @@
 mod fixtures;
 
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use egui::{Color32, Context, Event, FullOutput, Modifiers, PointerButton, Pos2, RawInput, Rect, Response, TextureId, Ui};
 use egui_kittest::{TestRenderer, wgpu::WgpuTestRenderer};
@@ -26,6 +27,17 @@ struct Mesh {
 struct Capture {
     image: RgbaImage,
     meshes: Option<Vec<Mesh>>,
+}
+
+/// Lets one test at a time hold a wgpu renderer. Each renderer creates its own Vulkan instance and
+/// device. When one test uses its device while a test on another thread creates or destroys one,
+/// the Vulkan loader now and then crashes the test binary with SIGSEGV.
+static GPU_LOCK: Mutex<()> = Mutex::new(());
+
+/// Take this before creating a renderer (`let _gpu = gpu_lock();`), so it is released after the
+/// renderer is dropped. A test that failed while holding it does not block the others.
+fn gpu_lock() -> MutexGuard<'static, ()> {
+    GPU_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn context(theme: Theme, scale: f32) -> Context {
@@ -184,6 +196,7 @@ impl Artifacts {
 
 #[test]
 fn rendered_controls_match_independent_reference_pixels_and_meshes() {
+    let _gpu = gpu_lock();
     let mut renderer = WgpuTestRenderer::new();
     let mut artifacts = Artifacts::new("controls");
     let mut count = 0;
@@ -213,6 +226,7 @@ fn rendered_controls_match_independent_reference_pixels_and_meshes() {
 
 #[test]
 fn visual_comparisons_detect_color_spacing_and_stroke_mutations() {
+    let _gpu = gpu_lock();
     let mut renderer = WgpuTestRenderer::new();
     let mut artifacts = Artifacts::new("negative-controls");
     let mut count = 0;
@@ -241,6 +255,7 @@ fn toolbar_fitting_matches_literal_group_and_overflow_positions() {
     use craft_ui::layout::fit_toolbar;
     use egui::{Align, Layout, Stroke, StrokeKind, UiBuilder, pos2, vec2};
 
+    let _gpu = gpu_lock();
     let mut renderer = WgpuTestRenderer::new();
     let mut artifacts = Artifacts::new("toolbar");
     let mut count = 0;
@@ -295,6 +310,7 @@ fn widget_palette_renders_all_five_states_with_existing_borders_and_expansion() 
     use craft_ui::theme::WidgetPalette;
     use egui::{CornerRadius, Stroke, StrokeKind, pos2, vec2};
 
+    let _gpu = gpu_lock();
     let mut renderer = WgpuTestRenderer::new();
     let mut artifacts = Artifacts::new("widget-palette");
     for theme in [Theme::Light, Theme::Dark] {
