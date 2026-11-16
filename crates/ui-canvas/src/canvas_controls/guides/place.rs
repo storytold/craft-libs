@@ -120,9 +120,3 @@ pub(super) fn with_guide(guides: &[Guide], guide: Guide) -> Vec<Guide> {
 pub(super) fn fresh_key(guides: &[Guide]) -> GuideKey {
     GuideKey::new(guides.iter().map(|guide| guide.key.get() + 1).max().unwrap_or(0))
 }
-
-/// The guide that holds the place of `key` once it is gone: the next in `order`, else the one before it.
-pub(super) fn after_removal(guides: &[Guide], order: &[usize], key: GuideKey) -> Option<GuideKey> {
-    let at = order.iter().position(|&index| guides[index].key == key)?;
-    order.get(at + 1).or_else(|| at.checked_sub(1).and_then(|before| order.get(before))).map(|&index| guides[index].key)
-}
