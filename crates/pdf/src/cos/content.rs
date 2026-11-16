@@ -137,6 +137,10 @@ pub struct Ops<'a> {
     ends: &'a [usize],
     boundary: usize,
     comment_edges: Vec<(bool, bool)>,
+    /// Arrays, dictionaries and hex strings whose read failed, until as many `]` or `>` (of either
+    /// kind) have passed: what follows the opener is re-read token by token, and a sign there is
+    /// left to the lexer, not read as 0.
+    broken: usize,
 }
 
 impl<'a> Ops<'a> {
@@ -151,6 +155,7 @@ impl<'a> Ops<'a> {
             ends,
             boundary: 0,
             comment_edges: vec![(false, false); ends.len()],
+            broken: 0,
         }
     }
 
@@ -170,7 +175,7 @@ impl Iterator for Ops<'_> {
     type Item = Op;
 
     fn next(&mut self) -> Option<Op> {
-        let Ops { data, lx, operands, start, skipped, ambiguous_images, ends, boundary, comment_edges: edges } = self;
+        let Ops { data, lx, operands, start, skipped, ambiguous_images, ends, boundary, comment_edges: edges, broken } = self;
         let (data, ends): (&[u8], &[usize]) = (data, ends);
         loop {
             let trivia = lx.pos;
@@ -187,6 +192,14 @@ impl Iterator for Ops<'_> {
                 return None;
             };
             let at = lx.pos;
+            if *broken == 0
+                && let Some(run) = lone_minus(data, at)
+            {
+                lx.pos = at + run;
+                start.get_or_insert(at);
+                operands.push(Object::Int(0));
+                continue;
+            }
             let operand_start = matches!(b, b'/' | b'(' | b'<' | b'[' | b'+' | b'-' | b'.') || b.is_ascii_digit();
             if operand_start {
                 match lx.object() {
@@ -200,6 +213,9 @@ impl Iterator for Ops<'_> {
                         lx.pos = data.len();
                     }
                     Err(_) => {
+                        if matches!(b, b'[' | b'<') {
+                            *broken += 1;
+                        }
                         let read = lx.pos.saturating_sub(at);
                         #[cfg(test)]
                         tests::RESCANNED.with(|c| c.set(c.get() + read));
@@ -219,6 +235,9 @@ impl Iterator for Ops<'_> {
             }
             if is_delim(b) {
                 // A stray `)`, `>`, `]`, `{`, `}`.
+                if matches!(b, b']' | b'>') {
+                    *broken = broken.saturating_sub(1);
+                }
                 lx.pos += 1;
                 *skipped += 1;
                 continue;
@@ -270,6 +289,23 @@ impl Iterator for Ops<'_> {
             }
         }
     }
+}
+
+/// The length of the token at `at` when it is one or two signs with a minus among them, followed by
+/// whitespace, a delimiter or the end (`-`, `--`, `-+`, `+-`). That is no number to the lexer, but
+/// the number 0 to hayro-syntax, both the copy vendored here and PdfCraft's. A lone `-` occurs in
+/// real files: PDF.js bug 1753983 has one among the operands of `c`. The two copies disagree on `+`
+/// and `++` and on runs such as `---`, both read `+++` as an unknown operator, and signs after a
+/// digit belong to that number, so the lexer's reading of those stands. No more than four bytes
+/// are looked at: the one before `at` and three from it.
+fn lone_minus(data: &[u8], at: usize) -> Option<usize> {
+    if !at.checked_sub(1).and_then(|i| data.get(i)).is_none_or(|c| is_ws(*c) || is_delim(*c)) {
+        return None;
+    }
+    let token = data.get(at..)?;
+    let run = token.iter().take(2).take_while(|c| matches!(c, b'+' | b'-')).count();
+    let ends = token.get(run).is_none_or(|c| is_ws(*c) || is_delim(*c));
+    (run > 0 && ends && token.get(..run)?.contains(&b'-')).then_some(run)
 }
 
 /// Record the piece boundaries crossed by the comments in `trivia` (skipped whitespace and
