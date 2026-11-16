@@ -176,6 +176,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   every frame's position, delay, disposal and transparent colour, the loop count and the first
   frame's colour table, without decompressing pixels. Tells an animation from a still and whether
   a file can hold the picture it declares before a decoder runs.
+- [`craft-gridcraft-format`](crates/gridcraft-format/README.md): GridCraft's native JSON workbook
+  (`.json`, `.scjson`): the extensions, the reader, the pretty writer, and newer entries kept
+  unread and written back into a list. The workbook model and what follows a read stay in GridCraft.
 - [`craft-hdr`](crates/hdr/src/lib.rs): Radiance HDR (RGBE) picture reader, from FilmCraft: flat,
   old and new run-length scan lines and all eight axis orders, to linear float RGB. Scan lines are
   validated before the picture is allocated.
