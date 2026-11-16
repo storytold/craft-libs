@@ -143,12 +143,42 @@ pub enum Segment {
     Close,
 }
 
-/// A resolved color or an unsupported SVG paint server.
+/// A resolved color, gradient or pattern.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Paint {
-    Color { rgb: [u8; 3], opacity: f32 },
-    Gradient { kind: GradientKind, stops: Vec<GradientStop>, transform: [f64; 6], spread: Spread, opacity: f32 },
-    Pattern,
+    Color {
+        rgb: [u8; 3],
+        opacity: f32,
+    },
+    Gradient {
+        kind: GradientKind,
+        stops: Vec<GradientStop>,
+        transform: [f64; 6],
+        spread: Spread,
+        opacity: f32,
+    },
+    /// A `<pattern>`; `None` when its content is past the depth limit or refers back to the
+    /// pattern itself.
+    Pattern {
+        pattern: Option<Pattern>,
+        opacity: f32,
+    },
+}
+
+/// A resolved `<pattern>` tile. usvg has already applied `patternUnits`,
+/// `patternContentUnits` and `viewBox`, so the tile and its content share one space.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pattern {
+    /// The element's `id`.
+    pub id: String,
+    /// The tile `[x, y, width, height]` in tile space.
+    pub rect: [f64; 4],
+    /// Maps tile space into the painted path's space: `patternTransform` in a local scene; in
+    /// an absolute scene, `patternTransform` followed by the path's transform to the document.
+    pub transform: [f64; 6],
+    /// What one tile draws, in tile space ([`Coordinates::Local`] whatever the scene's
+    /// coordinates). Shared by every use of the same pattern.
+    pub content: std::sync::Arc<Vec<Node>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -221,7 +251,7 @@ impl Document {
     fn convert(tree: &usvg::Tree, max_depth: usize, coordinates: Coordinates) -> Self {
         let size = tree.size();
         let mut document = Self { width: f64::from(size.width()), height: f64::from(size.height()), coordinates, ..Self::default() };
-        let mut cx = Convert { doc: &mut document, max_depth, local: coordinates == Coordinates::Local };
+        let mut cx = Convert { doc: &mut document, max_depth, local: coordinates == Coordinates::Local, patterns: std::collections::HashMap::new() };
         let nodes = cx.group(tree.root(), tree.root().abs_transform(), 0, &[]);
         document.nodes = nodes;
         document
@@ -279,7 +309,7 @@ fn spread(s: usvg::SpreadMethod) -> Spread {
     }
 }
 
-fn color(paint: &usvg::Paint, opacity: f32) -> Paint {
+fn color(paint: &usvg::Paint, opacity: f32, pattern: impl FnOnce(&std::sync::Arc<usvg::Pattern>) -> Option<Pattern>) -> Paint {
     match paint {
         usvg::Paint::Color(c) => Paint::Color { rgb: [c.red, c.green, c.blue], opacity },
         usvg::Paint::LinearGradient(g) => Paint::Gradient {
@@ -317,7 +347,7 @@ fn color(paint: &usvg::Paint, opacity: f32) -> Paint {
             spread: spread(g.spread_method()),
             opacity,
         },
-        usvg::Paint::Pattern(_) => Paint::Pattern,
+        usvg::Paint::Pattern(source) => Paint::Pattern { pattern: pattern(source), opacity },
     }
 }
 
@@ -339,6 +369,9 @@ struct Convert<'d> {
     doc: &'d mut Document,
     max_depth: usize,
     local: bool,
+    /// Pattern content already converted, by the address of usvg's shared pattern; `None` while
+    /// a pattern is being converted, so a pattern that refers back to itself gets no content.
+    patterns: std::collections::HashMap<usize, Option<std::sync::Arc<Vec<Node>>>>,
 }
 
 impl Convert<'_> {
@@ -357,7 +390,7 @@ impl Convert<'_> {
             source_path.push(index);
             match node {
                 usvg::Node::Path(path) => {
-                    if let Some(path) = self.path(path, parent, source_path) {
+                    if let Some(path) = self.path(path, parent, source_path, depth) {
                         result.push(Node::Path(Box::new(path)));
                     }
                 }
@@ -452,7 +485,31 @@ impl Convert<'_> {
 
     /// A visible, non-empty path. Its own absolute transform is its group's in usvg, so in a
     /// local scene its segments stay as they are and its transform is normally the identity.
-    fn path(&self, path: &usvg::Path, parent: usvg::Transform, source_path: Vec<usize>) -> Option<Path> {
+    /// The tile of `pattern` painted on a path at `depth` whose own transform to the document is
+    /// `abs`.
+    fn pattern(&mut self, pattern: &std::sync::Arc<usvg::Pattern>, abs: usvg::Transform, depth: usize) -> Option<Pattern> {
+        let key = std::sync::Arc::as_ptr(pattern) as usize;
+        let content = match self.patterns.get(&key) {
+            Some(done) => done.clone(),
+            None if depth >= self.max_depth => {
+                self.doc.too_deep = true;
+                None
+            }
+            None => {
+                self.patterns.insert(key, None);
+                let local = std::mem::replace(&mut self.local, true);
+                let nodes = self.group(pattern.root(), pattern.root().abs_transform(), depth + 1, &[]);
+                self.local = local;
+                let content = Some(std::sync::Arc::new(nodes));
+                self.patterns.insert(key, content.clone());
+                content
+            }
+        }?;
+        let placement = if self.local { pattern.transform() } else { abs.pre_concat(pattern.transform()) };
+        Some(Pattern { id: pattern.id().to_string(), rect: rect(pattern.rect().to_rect()), transform: transform(placement), content })
+    }
+
+    fn path(&mut self, path: &usvg::Path, parent: usvg::Transform, source_path: Vec<usize>, depth: usize) -> Option<Path> {
         if !path.is_visible() || path.data().is_empty() {
             return None;
         }
@@ -476,13 +533,13 @@ impl Convert<'_> {
                 }
             })
             .collect();
-        let fill = path.fill().map(|f| color(f.paint(), f.opacity().get()));
+        let fill = path.fill().map(|f| color(f.paint(), f.opacity().get(), |p| self.pattern(p, abs, depth)));
         let fill_rule = match path.fill().map(usvg::Fill::rule) {
             Some(usvg::FillRule::EvenOdd) => FillRule::EvenOdd,
             _ => FillRule::NonZero,
         };
         let stroke = path.stroke().map(|s| Stroke {
-            paint: color(s.paint(), s.opacity().get()),
+            paint: color(s.paint(), s.opacity().get(), |p| self.pattern(p, abs, depth)),
             width: f64::from(s.width().get()) * scale,
             cap: match s.linecap() {
                 usvg::LineCap::Butt => LineCap::Butt,
