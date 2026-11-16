@@ -327,6 +327,14 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 let removed: Vec<Cell> = cells.drain(a + 1..b).collect();
                 if let Some(first) = cells.get_mut(a) {
                     first.props.span = ((b - a) as u32).min(63);
+                    // The merged cell's right edge is its last cell's: so is its right border
+                    // (Word keeps the cells and draws the last one's there).
+                    let right = removed.last().map(|c| c.props.borders.and_then(|b| b.right));
+                    if let Some(right) = right
+                        && (right.is_some() || first.props.borders.is_some())
+                    {
+                        first.props.borders.get_or_insert_default().right = right;
+                    }
                     for c in removed {
                         first.blocks.extend(c.blocks.into_iter().filter(|x| x.as_para().is_none_or(|p| !p.is_empty())));
                     }
