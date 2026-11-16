@@ -1,7 +1,7 @@
 //! `TransformBox`, `TransformOverlay` and `TransformTool`: the parts the pointer takes, what each drag does, the
 //! keys, the readout and the overlay's edits.
 
-use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, ScaleRule};
+use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, ScaleRule, TransformMode};
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, EditEvent, RulerUnits, Ticks};
@@ -51,6 +51,8 @@ struct Config {
     f32_host: bool,
     centre_mark: bool,
     line: Option<LineLook>,
+    /// Snap targets beside the guides at [`SNAP_XS`].
+    targets: Vec<SnapTarget>,
 }
 
 /// What the host keeps of the box and what the passes reported.
@@ -65,6 +67,8 @@ struct Host {
     id: egui::Id,
     view: CanvasView,
     guide_events: usize,
+    /// The snap lines the last pass reported.
+    snapped: usize,
 }
 
 struct Harness {
@@ -92,6 +96,7 @@ fn defaults() -> Config {
         f32_host: false,
         centre_mark: false,
         line: None,
+        targets: Vec::new(),
     }
 }
 
@@ -117,12 +122,16 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
         id: egui::Id::NULL,
         view: CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0),
         guide_events: 0,
+        snapped: 0,
     }));
     let shown_host = Rc::clone(&host);
     let mut guides = vec![Guide::new(GuideKey::new(1), craft_behavior::Axis::Y, 300.0)];
     let mut targets = SnapTargets::new();
     for x in SNAP_XS {
         targets.add(SnapTarget::new(craft_behavior::Axis::Y, x, SnapKind::Guide));
+    }
+    for target in &shown_config.borrow().targets {
+        targets.add(*target);
     }
     let snap = Snap::new(Arc::new(targets), SnapOptions::default());
     let mut fixture = Fixture::new(move |ui| {
@@ -172,6 +181,7 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
         if let Some((output, guide_edits)) = canvas.inner {
             let mut host = shown_host.borrow_mut();
             host.guide_events += guide_edits;
+            host.snapped = output.snapped.len();
             host.id = output.edit.response.id;
             host.applied += usize::from(output.apply.is_some());
             host.discarded += usize::from(output.discard);
@@ -789,4 +799,103 @@ fn a_secondary_click_on_the_box_opens_the_mode_menu() {
 
     right_click(&mut fixture, screen(Point::new(200.0, 150.0)));
     assert!(fixture.by_label("Distort").is_some(), "a secondary click on the box opens the mode menu");
+}
+
+/// A drag from inside snaps the moved box's edges, not the pointer: the right edge lands on the guide at 310 while the
+/// pointer stays far from both guides.
+#[trial]
+fn a_box_moved_from_inside_snaps_its_edges() {
+    let mut h = harness(BoxState::from_rect(RECT), |config| config.snap = true);
+    let from = h.screen(Point::new(130.0, 120.0));
+    frame(&mut h, vec![pointer::moved(from)]);
+    frame(&mut h, vec![pointer::press(from)]);
+    frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
+    frame(&mut h, vec![pointer::moved(from + by(7.0, 0.0))]);
+    assert_eq!(h.host.borrow().snapped, 1, "the right edge's line");
+    frame(&mut h, vec![pointer::release(from + by(7.0, 0.0))]);
+    let moved = h.state().quad[0].x - RECT.x0;
+    assert!((moved - 10.0).abs() < 1e-6, "the box moved {moved}, its right edge onto 310");
+}
+
+/// Free Transform's corner snaps to a layer edge and a guide alike; an explicit Distort corner snaps to guides only,
+/// and a corner the folding rule stops short of a guide crossing claims no line.
+#[trial]
+fn a_distort_corner_snaps_to_guides_only_and_claims_no_line_it_stops_short_of() {
+    let layer_edge = SnapTarget::new(craft_behavior::Axis::X, 230.0, SnapKind::LayerEdge);
+    for (mode, expected, lines) in [(TransformMode::Free, Point::new(310.0, 230.0), 2), (TransformMode::Distort, Point::new(310.0, 227.0), 1)] {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.snap = true;
+            config.rules = BoxRules::in_mode(mode).with_aspect_linked(false);
+            config.targets = vec![layer_edge];
+        });
+        let from = h.screen(Point::new(300.0, 220.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(4.0, 4.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(7.0, 7.0))]);
+        let corner = h.state().quad[2];
+        assert!(corner.distance(expected) < 1e-6, "{mode:?}: {corner:?}, expected {expected:?}");
+        assert_eq!(h.host.borrow().snapped, lines, "{mode:?}");
+    }
+
+    // The guides cross at (250, 180), past the diagonal from corner 1 to corner 3: corner 0 there would fold the box.
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.snap = true;
+        config.rules = BoxRules::in_mode(TransformMode::Distort);
+        config.targets = vec![
+            SnapTarget::new(craft_behavior::Axis::Y, 250.0, SnapKind::Guide),
+            SnapTarget::new(craft_behavior::Axis::X, 180.0, SnapKind::Guide),
+        ];
+    });
+    let from = h.screen(Point::new(100.0, 80.0));
+    frame(&mut h, vec![pointer::moved(from)]);
+    frame(&mut h, vec![pointer::press(from)]);
+    frame(&mut h, vec![pointer::moved(from + by(4.0, 4.0))]);
+    frame(&mut h, vec![pointer::moved(from + by(147.0, 97.0))]);
+    let q = h.state().quad;
+    assert!(q[0].distance(Point::new(250.0, 180.0)) > 1.0, "the crossing would fold the box: {q:?}");
+    for i in 0..4 {
+        let (a, b, c) = (q[i], q[(i + 1) % 4], q[(i + 2) % 4]);
+        assert!((b - a).cross(c - b) > 0.0, "still convex: {q:?}");
+    }
+    assert_eq!(h.host.borrow().snapped, 0, "a stopped corner reports no guide line");
+}
+
+/// Off macOS Control is ⌘: on an explicit Distort corner it keeps the snapping, in Skew and Perspective it suspends it.
+#[trial]
+fn control_keeps_snapping_on_an_explicit_distort_corner_only() {
+    for (mode, snaps) in [(TransformMode::Distort, true), (TransformMode::Skew, false), (TransformMode::Perspective, false)] {
+        let mut h = harness(BoxState::from_rect(RECT), |config| {
+            config.snap = true;
+            config.mods = Some(Mods::CMD);
+            config.rules = BoxRules::in_mode(mode);
+        });
+        h.fixture.os(Platform::Windows);
+        let from = h.screen(Point::new(300.0, 220.0));
+        frame(&mut h, vec![pointer::moved(from)]);
+        frame(&mut h, vec![pointer::press(from)]);
+        frame(&mut h, vec![pointer::moved(from + by(4.0, 0.0))]);
+        frame(&mut h, vec![pointer::moved(from + by(7.0, 0.0))]);
+        let x = h.state().quad[2].x;
+        assert_eq!((x - 310.0).abs() < 1e-6, snaps, "{mode:?}: corner at x {x}");
+    }
+}
+
+/// The reference point snaps to the turned box's nine points and to nothing else, with the canvas's snapping on or
+/// off: 2 units off the guide at 160 it stays put.
+#[trial]
+fn the_reference_point_snaps_to_the_turned_boxs_points_only() {
+    let turned = BoxState::from_rect(RECT).turned_about_pivot(30f64.to_radians());
+    for snap in [true, false] {
+        let mut h = harness(turned, |config| config.snap = snap);
+        let centre = turned.pivot;
+        drag(&mut h, centre, Point::new(158.0, 150.0));
+        let pivot = h.state().pivot;
+        assert!(pivot.distance(Point::new(158.0, 150.0)) < 1e-6, "snap {snap}: no pull to the guide: {pivot:?}");
+        let corner = turned.quad[1];
+        drag(&mut h, pivot, corner + kurbo_vec(-2.0, 1.0));
+        let pivot = h.state().pivot;
+        assert!(pivot.distance(corner) < 1e-6, "snap {snap}: onto the corner: {pivot:?} vs {corner:?}");
+        assert_eq!(h.state().quad, turned.quad, "the box never moved");
+    }
 }

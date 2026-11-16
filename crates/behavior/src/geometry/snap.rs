@@ -59,6 +59,11 @@ impl SnapKinds {
         }
     }
 
+    /// The set of `kind` alone.
+    pub const fn only(kind: SnapKind) -> Self {
+        SnapKinds(Self::bit(kind))
+    }
+
     /// This set without `kind`.
     pub fn without(self, kind: SnapKind) -> Self {
         SnapKinds(self.0 & !Self::bit(kind))
@@ -313,8 +318,8 @@ impl SnapTargets {
         self.snap_point_of(point, tolerance, SnapKinds::ALL)
     }
 
-    /// [`snap_point`](Self::snap_point) to the targets of a kind in `kinds` only (a Distort corner skips layer edges
-    /// and centres).
+    /// [`snap_point`](Self::snap_point) to the targets of a kind in `kinds` only (a Distort corner snaps to guides
+    /// only).
     ///
     /// Public: craft-ui-canvas's `Snap::point` filters through it.
     pub fn snap_point_of(&self, point: Point, tolerance: f64, kinds: SnapKinds) -> (Point, Vec<SnapLine>) {
