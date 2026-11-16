@@ -261,12 +261,13 @@ pub struct RulerSizes {
     pub tick: RulerTickSizes,
 }
 
-/// The lengths of a ruler's tick marks, in logical pixels. The minor tick is `space.gap.tight` and the major tick
-/// spans the ruler's depth.
+/// The lengths of a ruler's tick marks, in logical pixels. The major tick spans the ruler's depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RulerTickSizes {
     /// The tick halfway between two labelled ticks.
     pub mid: f32,
+    /// The tick between two other ticks.
+    pub minor: f32,
 }
 
 /// The sizes of the panes of a dock's split, in logical pixels.

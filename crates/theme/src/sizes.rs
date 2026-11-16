@@ -141,6 +141,7 @@ pub(crate) fn leaves(b: &mut Preset) -> Vec<Leaf<'_>> {
         "base.size.window.cascade" Num 8.0..=96.0 => s.window.cascade;
         "base.size.pane.least" Num 16.0..=128.0 => s.pane.least;
         "base.size.ruler.tick.mid" Num 1.0..=32.0 => s.ruler.tick.mid;
+        "base.size.ruler.tick.minor" Num 1.0..=32.0 => s.ruler.tick.minor;
         "base.size.story.height" Num 120.0..=1024.0 => s.story.height;
         "base.size.story.width_min" Num 120.0..=1024.0 => s.story.width_min;
         "base.size.story.width_max" Num 120.0..=2048.0 => s.story.width_max;
