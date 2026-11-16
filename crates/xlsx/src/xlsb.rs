@@ -1,11 +1,13 @@
 //! Binary workbooks ([MS-XLSB]): the workbook part, shared strings and worksheet cells, from
 //! their records. Cell formulas are decoded from their tokens ([`formula`]) into the text an
 //! `.xlsx` file holds; one that can't be keeps only its saved result, with a warning saying why.
-//! Styles are not read. A record that does not parse fails the read.
+//! The styles part is read into the same [`crate::styles::Styles`] ([`styles`]). A record that
+//! does not parse fails the read.
 
 mod expr;
 mod formula;
 mod ftab;
+mod styles;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,11 +21,13 @@ use crate::workbook::{SheetEntry, SheetKind, Workbook};
 use crate::{Error, Limits, Warnings};
 pub(crate) use formula::Links;
 use formula::{Book, Mode, Name, Xti};
+pub(crate) use styles::styles;
 
 pub(crate) const MAIN: &str = "application/vnd.ms-excel.main";
 const BINARY_MAIN: &str = "application/vnd.ms-excel.sheet.binary.macroEnabled.main";
 pub(crate) const WORKSHEET: &str = "application/vnd.ms-excel.worksheet";
 pub(crate) const STRINGS: &str = "application/vnd.ms-excel.sharedStrings";
+pub(crate) const STYLES: &str = "application/vnd.ms-excel.styles";
 /// Most sheets in the workbook.
 const MAX_SHEETS: usize = 1024;
 /// Supporting links (this workbook, add-ins, other workbooks) read at most; past it, formulas
@@ -174,12 +178,16 @@ struct Records<'a, 'l> {
     bytes: Bytes<'a>,
     limits: &'l Limits,
     budget: &'l Budget,
-    blocks: Vec<u16>,
+    /// Each open block's end record, and whether its records are read.
+    blocks: Vec<(u16, bool)>,
+    /// Read the alternate content meant for Excel 2007 (version 12), as an `.xlsx` reader sees
+    /// the main attribute where Excel keeps a newer spelling in an extension.
+    excel_2007: bool,
 }
 
 impl<'a, 'l> Records<'a, 'l> {
     fn new(bytes: &'a [u8], limits: &'l Limits, budget: &'l Budget) -> Self {
-        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![] }
+        Self { bytes: Bytes::new(bytes), limits, budget, blocks: vec![], excel_2007: false }
     }
 
     fn next(&mut self, warnings: &mut Warnings) -> Result<Option<(u16, &'a [u8])>, Error> {
@@ -208,6 +216,7 @@ impl<'a, 'l> Records<'a, 'l> {
                 // BrtFRTBegin, BrtACBegin.
                 35 | 37 => {
                     let mut b = Bytes::new(payload);
+                    let mut read = false;
                     if id == 35 {
                         b.take(4)?;
                     } else {
@@ -215,22 +224,32 @@ impl<'a, 'l> Records<'a, 'l> {
                         if count == 0 {
                             return Err(invalid("empty alternate-content version list"));
                         }
-                        b.take(usize::from(count) * 4)?;
+                        // ACProductVersion: fileVersion, then fileProduct (15 bits) and
+                        // fileExtension (the version and later).
+                        for _ in 0..count {
+                            let (version, product) = (b.u16()?, b.u16()?);
+                            let later = product & 0x8000 != 0;
+                            read |= self.excel_2007 && product & 0x7FFF == 0 && (version == 12 || later && version <= 12);
+                        }
                     }
                     b.finish()?;
                     if self.blocks.len() >= 64 {
                         return Err(invalid("extension blocks nested too deeply"));
                     }
-                    self.blocks.push(id + 1);
-                    warnings.warn("unsupported XLSB future-record and alternate-content blocks were skipped");
+                    // Inside a skipped block, everything is skipped.
+                    let read = read && self.blocks.iter().all(|(_, r)| *r);
+                    self.blocks.push((id + 1, read));
+                    if !read {
+                        warnings.warn("unsupported XLSB future-record and alternate-content blocks were skipped");
+                    }
                 }
                 // BrtFRTEnd, BrtACEnd.
                 36 | 38 => {
-                    if self.blocks.pop() != Some(id) || !payload.is_empty() {
+                    if self.blocks.pop().map(|(end, _)| end) != Some(id) || !payload.is_empty() {
                         return Err(invalid("mismatched extension block end"));
                     }
                 }
-                _ if !self.blocks.is_empty() => {}
+                _ if self.blocks.iter().any(|(_, read)| !read) => {}
                 _ => return Ok(Some((id, payload))),
             }
         }
