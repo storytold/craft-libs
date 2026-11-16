@@ -2956,6 +2956,7 @@ dependencies = [
 name = "craft-video"
 version = "0.1.0"
 dependencies = [
+ "craft-jpeg",
  "craft-media",
  "craft-media-testkit",
  "rav1e",
