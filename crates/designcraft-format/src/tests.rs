@@ -167,3 +167,51 @@ fn bytes_supplied_for_a_linked_asset_are_not_written() -> Result<(), Box<dyn std
     assert_eq!(load::<Value>(&bytes)?.assets, [("8".to_owned(), b"kept".to_vec())]);
     Ok(())
 }
+
+#[test]
+fn explicit_legacy_flags_survive_duplicate_and_nested_frame_ids() -> Result<(), Box<dyn std::error::Error>> {
+    let frame = json!({"id":7,"content":{"type":"text","options":{"legacyFirstBaseline":true}}});
+    let legacy = json!({"spreads":[{"items":[frame.clone(),frame.clone(),{"children":[frame.clone()]}]}],"parents":[{"items":[frame.clone()]}],"stories":{"9":{"objects":[{"item":frame}]}}});
+    let loaded = load::<Value>(&serde_json::to_vec(&legacy)?)?;
+    for pointer in ["/spreads/0/items/0", "/spreads/0/items/1", "/spreads/0/items/2/children/0", "/parents/0/items/0", "/stories/9/objects/0/item"] {
+        assert_eq!(loaded.document.pointer(&format!("{pointer}/content/options/legacyFirstBaseline")), Some(&json!(true)));
+    }
+    assert_eq!(required_version(&loaded.document, &[]), 6);
+    let bytes = save(&loaded.document, "test", None, &[], &[])?;
+    assert_eq!(load::<Value>(&bytes)?.document, loaded.document);
+    // The same bounded envelope reader with the old capability refuses this file.
+    assert!(matches!(craft_document_bundle::read(&bytes, 5, BUNDLE), Err(craft_document_bundle::Error::TooNew(6))));
+    Ok(())
+}
+
+#[test]
+fn modern_versions_do_not_gain_legacy_baselines_and_false_flags_do_not_raise_version() -> Result<(), Box<dyn std::error::Error>> {
+    for version in 2..=5 {
+        let doc = json!({"spreads":[{"items":[{"id":7,"content":{"type":"text","options":{}}}]}]});
+        let mut out = Cursor::new(Vec::new());
+        craft_document_bundle::write_to(&mut out, &serde_json::to_vec(&doc)?, version, "test", None, &[], &[], BUNDLE)?;
+        let loaded = load::<Value>(out.get_ref())?;
+        assert!(loaded.document.pointer("/spreads/0/items/0/content/options/legacyFirstBaseline").is_none());
+    }
+    assert_eq!(required_version(&json!({"legacyFirstBaseline":false}), &[]), 2);
+    assert_eq!(required_version(&json!({"assets":{"1":{"storage":"linked"}},"legacyFirstBaseline":true}), &[]), 6);
+    Ok(())
+}
+
+#[test]
+fn ambiguous_format_one_documents_do_not_silently_switch_baseline_metrics() -> Result<(), Box<dyn std::error::Error>> {
+    let frame = json!({"id":7,"content":{"type":"text","options":{}}});
+    let doc = json!({"spreads":[{"items":[frame.clone(),frame]}]});
+    let loaded = load::<Value>(&serde_json::to_vec(&doc)?)?;
+    for index in 0..2 {
+        assert!(loaded.document.pointer(&format!("/spreads/0/items/{index}/content/options/legacyFirstBaseline")).is_none());
+    }
+    assert_eq!(required_version(&loaded.document, &[]), 2);
+    Ok(())
+}
+
+#[test]
+fn an_uninspected_wide_document_conservatively_requires_the_newest_reader() {
+    let wide = Value::Array(vec![Value::Null; 1_000_001]);
+    assert_eq!(required_version(&wide, &[]), VERSION);
+}
