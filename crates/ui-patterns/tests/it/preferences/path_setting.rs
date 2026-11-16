@@ -61,8 +61,7 @@ fn a_path_setting_writes_the_picked_folder_into_its_draft_entry() {
     });
     fixture.host(Arc::new(Host::builder(AppInfo { id: "test", name: "Test", version: "1.0" }).files(files.clone()).build()));
     fixture.settle();
-    let browse: Vec<_> =
-        fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Browse…")).collect();
+    let browse: Vec<_> = fixture.by_role(Role::BUTTON).into_iter().filter(|button| fixture.tree().name_of(button.node) == Some("Browse…")).collect();
     assert_eq!(browse.len(), 2, "one Browse per entry");
     fixture.click(&browse[1]);
     fixture.settle();

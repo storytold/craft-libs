@@ -31,10 +31,7 @@ fn texture() -> SizedTexture {
 
 /// Two side-by-side slices, 1 on the left half and 2 on the right.
 fn slices() -> Vec<WebSlice> {
-    [(1, 0.0), (2, 100.0)]
-        .into_iter()
-        .map(|(number, left)| WebSlice::new(number, Rect::from_min_size(pos2(left, 0.0), vec2(100.0, 100.0))))
-        .collect()
+    [(1, 0.0), (2, 100.0)].into_iter().map(|(number, left)| WebSlice::new(number, Rect::from_min_size(pos2(left, 0.0), vec2(100.0, 100.0)))).collect()
 }
 
 /// A host running `web` every pass, in a room large enough for the dialog.

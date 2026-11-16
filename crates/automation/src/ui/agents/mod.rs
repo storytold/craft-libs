@@ -127,7 +127,8 @@ impl<'a> AgentsPage<'a> {
 
             for (name, label) in [("readRoot", &words.read_root), ("writeRoot", &words.write_root)] {
                 let folder_key = key(name);
-                let out = PathSetting::new(label.clone(), &folder_key, draft, PickRequest::folder(PICK_PURPOSE)).placeholder(words.none.clone()).show(ui);
+                let out =
+                    PathSetting::new(label.clone(), &folder_key, draft, PickRequest::folder(PICK_PURPOSE)).placeholder(words.none.clone()).show(ui);
                 changed |= out.changed;
                 browsing = browsing.or(out.browsing);
             }

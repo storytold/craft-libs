@@ -96,7 +96,8 @@ pub fn read(text: &str) -> Result<ForeignSet, KysError> {
         return Err(KysError::TooLarge);
     }
     let text = text.trim_start_matches('\u{feff}');
-    let options = Options { limits: Limits { max_depth: MAX_DEPTH, ..Limits::DEFAULT }, doctype: Doctype::Reject, strict: true, ..Options::default() };
+    let options =
+        Options { limits: Limits { max_depth: MAX_DEPTH, ..Limits::DEFAULT }, doctype: Doctype::Reject, strict: true, ..Options::default() };
     let mut events = options.events(text.as_bytes());
     let not_a_set = |e: craft_xml::Error| KysError::NotASet(e.to_string());
     let (mut depth, mut rooted, mut set_name) = (0_usize, false, None);

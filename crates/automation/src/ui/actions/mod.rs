@@ -23,7 +23,7 @@ mod words;
 
 pub use body::{ActionMove, ActionPlace};
 pub use menu::{ActionsMenuAction, ActionsMenuFacts, ActionsPanelCommands, panel_rows};
-pub use prompt::LibraryPrompt;
 pub use panel::{ActionSelection, ActionsEvent, ActionsHost, ActionsPanel, ActionsPanelOutput, ActionsPanelState, ActionsSettings, ShortcutChoice};
+pub use prompt::LibraryPrompt;
 pub use rows::{DIALOG_COLUMN, INCLUDE_COLUMN};
 pub use words::ActionsWords;

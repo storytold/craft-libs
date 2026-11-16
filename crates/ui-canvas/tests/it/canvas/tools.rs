@@ -289,7 +289,10 @@ fn the_rotate_commands_step_fifteen_degrees_on_screen_in_a_flipped_view_too() {
             let mut view = before;
             assert!(command.apply(&mut view, &target, 1.0), "{command:?} turns the view");
             let turned_by = (angle(&view) - angle(&before) + 540.0).rem_euclid(360.0) - 180.0;
-            assert!((turned_by - screen_turn).abs() < 0.01, "flip {flip_x}: {command:?} turns the image {screen_turn} degrees on screen, got {turned_by}");
+            assert!(
+                (turned_by - screen_turn).abs() < 0.01,
+                "flip {flip_x}: {command:?} turns the image {screen_turn} degrees on screen, got {turned_by}"
+            );
         }
     }
 }

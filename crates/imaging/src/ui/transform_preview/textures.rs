@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use craft_host::queue::Cancel;
 use craft_ui::primitives::{
-    LoadFailure, LoadResult, LoadedPicture, LoaderOptions, Priority, Revision, TextureLoader, TextureState, TextureStatistics, TextureStore, TextureStoreOptions,
+    LoadFailure, LoadResult, LoadedPicture, LoaderOptions, Priority, Revision, TextureLoader, TextureState, TextureStatistics, TextureStore,
+    TextureStoreOptions,
 };
 use egui::{Color32, ColorImage, Context, TextureId, TextureOptions};
 

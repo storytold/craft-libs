@@ -388,7 +388,8 @@ fn the_info_panel_shows_the_rulers_measure_while_it_has_one() {
     assert_eq!(measure_names(Some(InfoMeasure::protractor("45.0°", "200.00", "141.42"))), [true, false, true, true], "a protractor: A, L1 and L2");
     assert_eq!(measure_names(None), [false; 4], "no ruler, no measure names");
     let mut fixture = Fixture::new(|ui| {
-        let readings = craft_color::ui::InfoReadings::new().measure(Some(InfoMeasure::protractor("45.0°", "200.00", "141.42"))).document(Some([640, 480]));
+        let readings =
+            craft_color::ui::InfoReadings::new().measure(Some(InfoMeasure::protractor("45.0°", "200.00", "141.42"))).document(Some([640, 480]));
         let _ = craft_color::ui::InfoPanel::new("Info", &readings).show(ui);
     });
     fixture.settle();

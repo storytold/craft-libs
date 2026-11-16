@@ -87,7 +87,19 @@ pub struct Wheel {
 impl Wheel {
     /// A scroll of `scroll` points with no zoom.
     pub const fn new(scroll: Vec2, mods: Mods, unit: WheelUnit, phase: WheelPhase) -> Self {
-        Wheel { scroll, zoom: 1.0, mods, unit, phase, source: WheelSource::Unknown, at: None, zooms: false, touch_zoom: 1.0, rotation: 0.0, touch_rotation: 0.0 }
+        Wheel {
+            scroll,
+            zoom: 1.0,
+            mods,
+            unit,
+            phase,
+            source: WheelSource::Unknown,
+            at: None,
+            zooms: false,
+            touch_zoom: 1.0,
+            rotation: 0.0,
+            touch_rotation: 0.0,
+        }
     }
 
     /// The same gesture with zoom factor `zoom`.
@@ -495,9 +507,7 @@ fn split_at<O: Copy + PartialEq>(
     under.sort_by(|a, b| a.rect.area().total_cmp(&b.rect.area()));
     // A trackpad steps a value control only while it is focused or armed: over anything else it scrolls the panel.
     let fingers = wheel.source.fingers();
-    let open = |taker: &WheelTaker<O>| {
-        (!taker.gated && !(fingers && taker.value)) || armed == Some(taker.owner) || focused == Some(taker.owner)
-    };
+    let open = |taker: &WheelTaker<O>| (!taker.gated && !(fingers && taker.value)) || armed == Some(taker.owner) || focused == Some(taker.owner);
     // The running gesture's owner, while it is registered and open; it takes its axes wherever the pointer is. A
     // focused field holds the wheel by the field rule alone, so a wheel with Alt or Cmd/Ctrl still reaches the view.
     let held: Option<&WheelTaker<O>> = latch

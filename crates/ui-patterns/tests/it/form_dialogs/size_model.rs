@@ -116,11 +116,7 @@ fn relative_columns() {
 
 /// A degenerate or negative column size falls back to 180 pt / 12 pt, a negative gutter counts as none.
 fn degenerate_column_sizes() {
-    let degenerate = [
-        ColumnSize::new(0.0, f64::NAN),
-        ColumnSize::new(f64::NAN, f64::INFINITY),
-        ColumnSize::new(-5.0, f64::NAN),
-    ];
+    let degenerate = [ColumnSize::new(0.0, f64::NAN), ColumnSize::new(f64::NAN, f64::INFINITY), ColumnSize::new(-5.0, f64::NAN)];
     for column_size in degenerate {
         let mut size = document().column_size(column_size);
         assert!(size.set_width_unit(UnitKind::Columns));
