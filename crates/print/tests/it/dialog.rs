@@ -88,6 +88,29 @@ fn the_image_box_drag_reports_the_new_position() {
     check(vec2(306.0, 396.0));
 }
 
+/// The drag keeps reporting while the pointer is far outside the sheet: the position follows the pointer's travel from
+/// the press wherever it goes, so a box dragged off the page keeps its capture, and the release commits it there.
+#[trial]
+fn the_image_box_drag_keeps_its_capture_off_the_sheet() {
+    let (mut fixture, log) = rig(vec2(612.0, 792.0));
+    let image = fixture.by_label("Image box").expect("the image box is in the access tree");
+    let scale = image.rect.width() / IMAGE_SIZE.x;
+    let from = image.center();
+    let away = vec2(-400.0, 0.0);
+    fixture.drag_hold_at(from, away);
+    let expected = IMAGE_AT + away / scale;
+    {
+        let log = log.borrow();
+        let Some(EditEvent::Update { value, .. }) = log.last() else { panic!("the drag updates: {log:?}") };
+        assert!((*value - expected).length() < 0.01, "the position follows a pointer outside the sheet: {value:?} should be {expected:?}");
+        assert!(value.x < IMAGE_AT.x - 100.0, "the box left the sheet's left edge: {value:?}");
+    }
+    fixture.release_at(from + away);
+    let log = log.borrow();
+    let Some(EditEvent::Commit { after, .. }) = log.last() else { panic!("the release commits: {log:?}") };
+    assert!((*after - expected).length() < 0.01, "committed {after:?} should be {expected:?}");
+}
+
 /// The listing of the dialog's values carries what the app's `json_form` adds, over the settings keys.
 #[trial]
 fn the_json_form_adds_to_the_listing() {
