@@ -23,7 +23,7 @@
 
 use std::fs;
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use craft_cloud::{Capability, Entry, EntryKind};
 use craft_ui::cloud::{Account, CloudBackend, Event, Fault, Job, Post};
@@ -33,8 +33,16 @@ use craft_ui::cloud::{Account, CloudBackend, Event, Fault, Job, Post};
 /// `Entry::id` and `Entry::path` are the same slash-separated path relative to
 /// `root`, always starting with `/` below the root itself (the root's own
 /// path is the empty string, matching [`Job::List`]'s contract). Neither is
-/// an OS path; both go through [`resolve`] before anything touches a
-/// filesystem, so a name containing `..` can never walk out of `root`.
+/// an OS path; both go through [`resolve`] and then [`confine_to_root`]
+/// before anything touches a filesystem. A [`Job::Create`] name is not a
+/// path at all; it goes through the same per-segment check [`resolve`] uses,
+/// [`confine_segment`], on its own. Together the two refuse `..`, an
+/// absolute form, a Windows drive letter or UNC prefix, and a backslash,
+/// regardless of which platform this crate is built for, since a name
+/// reaches this backend from whatever platform the UI runs on. No-escape
+/// through a symlink or a Windows junction is a separate policy, stated on
+/// [`confine_to_root`] itself, and every one of [`list`], [`read`],
+/// [`write`] and [`create`] applies it.
 pub struct LocalBackend {
     root: PathBuf,
     /// Shown in the account badge. Nothing else reads it.
@@ -111,23 +119,79 @@ fn account(display: String) -> Account {
 }
 
 /// Turns a [`Job`]'s slash-separated path into a real filesystem path under
-/// `root`, refusing anything that would walk back out of it.
+/// `root`, refusing anything that is not a run of ordinary names.
 ///
-/// `..` is the only way out, so `..` is the only segment refused. `.` and
-/// repeated or leading slashes are just an empty segment and are skipped,
-/// the same way a browser's address bar collapses them.
+/// `.` and repeated or leading slashes are just an empty segment and are
+/// skipped, the same way a browser's address bar collapses them. Every other
+/// segment goes through [`confine_segment`], which is what actually refuses
+/// `..`, an absolute form, a backslash or a drive letter, or anything else
+/// that is not one ordinary name. This function never touches disk, so it
+/// cannot see a symlink or a junction; [`confine_to_root`] is the other half
+/// of the promise, and every caller of `resolve` runs both.
 fn resolve(root: &Path, path: &str) -> Result<PathBuf, Fault> {
     let mut real = root.to_path_buf();
     for segment in path.split('/') {
         if segment.is_empty() || segment == "." {
             continue;
         }
-        if segment == ".." {
-            return Err(Fault::Refused(format!("{path} reaches outside this folder")));
-        }
-        real.push(segment);
+        real.push(confine_segment(segment)?);
     }
     Ok(real)
+}
+
+/// Confines one path segment, or a whole [`Job::Create`] name, to a single
+/// ordinary file or folder name.
+///
+/// Accepted only when `segment` parses as exactly one [`Component::Normal`]
+/// equal to `segment` itself: no empty name, no `.` or `..`, no absolute
+/// form, and nothing left over for a second component to hide in. A
+/// `std::path::Component` parse alone does not catch every one of those on
+/// every platform; a Unix build's parser does not know what `C:` or
+/// `\\server\share` mean, so it would wave a Windows drive letter or a UNC
+/// prefix straight through as one ordinary name. A `:` or a `\` is refused
+/// outright first, on every platform, for exactly that reason: a name
+/// reaches this backend's public [`CloudBackend::submit`] from whatever
+/// platform the UI happens to run on, and a Windows-shaped escape must not
+/// slip past a Linux build's narrower native parser, or the reverse.
+fn confine_segment(segment: &str) -> Result<&str, Fault> {
+    if segment.contains('\\') || segment.contains(':') {
+        return Err(Fault::Refused(format!("{segment} is not a plain file name")));
+    }
+    let mut components = Path::new(segment).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(name)), None) if name == std::ffi::OsStr::new(segment) => Ok(segment),
+        _ => Err(Fault::Refused(format!("{segment} is not a plain file name"))),
+    }
+}
+
+/// Confirms a path already built from nothing but [`confine_segment`]-checked
+/// names still cannot have reached outside `root` through a symlink or, on
+/// Windows, a directory junction.
+///
+/// The no-escape policy: `candidate` need not exist yet, since [`write`] and
+/// [`create`] both route a path that may still be about to be created
+/// through here. Starting at `candidate` and walking up through its
+/// ancestors, the first one that does exist is canonicalised and compared
+/// against the canonicalised `root`. Nothing below that ancestor exists
+/// either, so a link cannot sit on any of the remaining components, and
+/// every one of them is already known to be ordinary `Component::Normal`
+/// text, never `..` or an absolute form, because [`confine_segment`] is what
+/// built them. A canonical path that lands outside `root` is refused;
+/// nothing here ever opens, reads or writes through it.
+fn confine_to_root(root: &Path, candidate: &Path) -> Result<PathBuf, Fault> {
+    let real_root = fs::canonicalize(root).map_err(|error| io_fault(&error))?;
+    let mut probe = candidate;
+    loop {
+        match fs::canonicalize(probe) {
+            Ok(real) if real == real_root || real.starts_with(&real_root) => return Ok(candidate.to_path_buf()),
+            Ok(_) => return Err(Fault::Refused("that path leaves this folder".to_owned())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => match probe.parent() {
+                Some(parent) => probe = parent,
+                None => return Err(io_fault(&error)),
+            },
+            Err(error) => return Err(io_fault(&error)),
+        }
+    }
 }
 
 /// The path a listed child gets, given the folder it was found in.
@@ -155,7 +219,7 @@ fn io_fault(error: &std::io::Error) -> Fault {
 }
 
 fn list(root: &Path, path: &str) -> Result<Vec<Entry>, Fault> {
-    let dir = resolve(root, path)?;
+    let dir = confine_to_root(root, &resolve(root, path)?)?;
     let read = fs::read_dir(&dir).map_err(|error| io_fault(&error))?;
     let mut entries = Vec::new();
     for item in read {
@@ -189,7 +253,7 @@ fn list(root: &Path, path: &str) -> Result<Vec<Entry>, Fault> {
 /// carry the old etag into the reloaded document, so the very next save would
 /// conflict again on a copy that is actually current.
 fn read(root: &Path, entry: &Entry) -> Result<(Entry, Vec<u8>), Fault> {
-    let file = resolve(root, &entry.id)?;
+    let file = confine_to_root(root, &resolve(root, &entry.id)?)?;
     let bytes = fs::read(&file).map_err(|error| io_fault(&error))?;
     let meta = fs::metadata(&file).map_err(|error| io_fault(&error))?;
     let fresh = Entry { size: Some(meta.len()), etag: Some(etag_of(&meta)), ..entry.clone() };
@@ -200,7 +264,7 @@ fn read(root: &Path, entry: &Entry) -> Result<(Entry, Vec<u8>), Fault> {
 /// `entry.etag` was read. A file that no longer exists has nothing to
 /// conflict with, the same way a provider treats a deleted document.
 fn write(root: &Path, entry: &Entry, bytes: &[u8]) -> Result<Entry, Fault> {
-    let file = resolve(root, &entry.id)?;
+    let file = confine_to_root(root, &resolve(root, &entry.id)?)?;
     if let Ok(meta) = fs::metadata(&file)
         && Some(etag_of(&meta)) != entry.etag
     {
@@ -215,7 +279,11 @@ fn write(root: &Path, entry: &Entry, bytes: &[u8]) -> Result<Entry, Fault> {
 }
 
 fn create(root: &Path, folder: &str, name: &str, bytes: &[u8]) -> Result<Entry, Fault> {
-    let dir = resolve(root, folder)?;
+    // `name` is never a path: it is one [`Job::Create`] field that names the
+    // new file, so it goes through `confine_segment` directly rather than
+    // through `resolve`, which only ever splits and confines a slash path.
+    let name = confine_segment(name)?;
+    let dir = confine_to_root(root, &resolve(root, folder)?)?;
     fs::create_dir_all(&dir).map_err(|error| io_fault(&error))?;
     let file = dir.join(name);
     // Exclusive creation, not an `exists` check ahead of a separate write: two
@@ -265,6 +333,51 @@ mod tests {
         let root = PathBuf::from("/cloud/root");
         assert_eq!(resolve(&root, "//Archive//2026/").unwrap(), root.join("Archive").join("2026"));
         assert_eq!(resolve(&root, "").unwrap(), root);
+    }
+
+    #[test]
+    fn confine_segment_accepts_only_a_single_ordinary_name() {
+        for ordinary in ["Minutes.txt", "Archive", "2026", "a name with spaces.docx"] {
+            assert!(confine_segment(ordinary).is_ok(), "{ordinary} is an ordinary name");
+        }
+    }
+
+    #[test]
+    fn confine_segment_refuses_empty_dot_and_dot_dot() {
+        for bad in ["", ".", ".."] {
+            assert!(confine_segment(bad).is_err(), "{bad:?} is not a single ordinary name");
+        }
+    }
+
+    #[test]
+    fn confine_segment_refuses_a_slash_hidden_inside_a_create_name() {
+        assert!(confine_segment("folder/evil").is_err());
+        assert!(confine_segment("../outside.txt").is_err());
+        assert!(confine_segment("/outside.txt").is_err());
+    }
+
+    #[test]
+    fn confine_segment_refuses_windows_separators_and_prefixes_on_every_platform() {
+        for bad in ["..\\outside.txt", "C:\\x", "C:evil", "\\\\server\\share\\x"] {
+            assert!(confine_segment(bad).is_err(), "{bad:?} must be refused on every platform, not only on Windows");
+        }
+    }
+
+    #[test]
+    fn confine_to_root_accepts_a_path_that_does_not_exist_yet_under_an_existing_root() {
+        let root = tempfile::tempdir().unwrap();
+        let candidate = root.path().join("not-written-yet.txt");
+        assert!(confine_to_root(root.path(), &candidate).is_ok());
+    }
+
+    #[test]
+    fn confine_to_root_refuses_a_candidate_that_canonicalises_outside_root() {
+        let root = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        // Built from a path that never went through `confine_segment` (this
+        // helper is tested on its own merits), standing in for whatever a
+        // symlink or junction would otherwise have redirected into `root`.
+        assert!(confine_to_root(root.path(), elsewhere.path()).is_err());
     }
 
     #[test]
