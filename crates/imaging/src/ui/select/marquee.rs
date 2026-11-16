@@ -1,7 +1,8 @@
 //! [`MarqueeTool`]: the Rectangular, Elliptical, Single Row and Single Column Marquees on the tool host.
 
 use craft_behavior::geometry::{
-    ConstrainStyle, Constraint, MarqueeGesture, MarqueeRect, SelectionOperation, fixed_size_pixels, marquee_pixels, square_pixels,
+    ConstrainStyle, Constraint, MarqueeGesture, MarqueeRect, SelectionOperation, SnapKind, SnapKinds, fixed_size_pixels, marquee_pixels,
+    square_pixels,
 };
 use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, PaintedCursor};
 use craft_keymap::{Key, Mods};
@@ -343,7 +344,12 @@ impl CanvasTool for SelectToolPass<'_, MarqueeTool> {
             let unmoved = inside.clone();
             let event = inside.end(raw, pointer.mods, place.zoom(), &mut |rect| moved_selection_snap(cx, rect));
             let still = matches!(&event, SelectEvent::DragSelection(EditEvent::Commit { after, .. }) if after.delta == [0, 0]);
-            let picked = line.filter(|_| still).and_then(|line| Some((single_line(tool.kind, line.size, line.at)?, line.operation)));
+            // The click selects the line at the press snapped as a point, not to the selection it replaces (on a
+            // one-pixel line its edges would pick the line beside it).
+            let not_selection = SnapKinds::ALL.without(SnapKind::Selection);
+            let picked = line
+                .filter(|_| still)
+                .and_then(|line| Some((single_line(tool.kind, line.size, cx.snap_of(line.at, not_selection))?, line.operation)));
             match picked {
                 Some((rect, operation)) => {
                     // The press was a click: the drag ends with no change, and the click selects the line.

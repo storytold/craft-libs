@@ -406,6 +406,12 @@ impl<'a> ToolContext<'a> {
         Point::new(self.snap_along(Axis::Y, point.x), self.snap_along(Axis::X, point.y))
     }
 
+    /// [`snap`](Self::snap) to the targets of a kind in `kinds` only, with no lines: a click that selects at the point
+    /// leaves out the selection it replaces.
+    pub fn snap_of(&self, point: Point, kinds: SnapKinds) -> Point {
+        self.snap.map_or(point, |snap| snap.point(point, self.mods, super::GestureSnap::default().kinds(kinds)).0)
+    }
+
     /// The coordinate `position` across a guide that would run along `along`, snapped as [`snap`](Self::snap) does:
     /// an x coordinate is across `Axis::Y`.
     pub fn snap_along(&self, along: Axis, position: f64) -> f64 {

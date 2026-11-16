@@ -478,7 +478,8 @@ fn a_marquee_corner_and_a_dragged_selection_snap_to_a_guide() {
     hold(&mut rig, Modifiers::NONE);
     assert_eq!(tags(&rig.tool_mut().events()), ["begin", "update 58,0", "commit 58,0"], "Control suspends the box snap");
 
-    // A click inside a selection whose edge lies within the tolerance of the guide moves nothing and calls no snap.
+    // A click inside a selection whose edge lies within the tolerance of the guide moves nothing and calls no snap of
+    // its bounds.
     let near = Rect::new(72.0, 30.0, 97.0, 60.0);
     let mut rig = snapped_rig("Marquee", MarqueeTool::new(MarqueeKind::Rectangle), Fake::selected(near));
     click(&mut rig, (80.0, 45.0), NONE);
@@ -488,6 +489,11 @@ fn a_marquee_corner_and_a_dragged_selection_snap_to_a_guide() {
     let events = rig.tool_mut().events();
     assert_eq!(tags(&events[..2]), ["begin", "cancel"], "{events:?}");
     assert_eq!(events[2..], [commit((0.0, 45.0, 400.0, 46.0), SelectionOperation::New)], "the click selects the row");
+    // The clicked line snaps as a point: 4.5 pixels left of the guide, the column on it.
+    let mut rig = snapped_rig("Marquee", MarqueeTool::new(MarqueeKind::SingleColumn), Fake::selected(near));
+    click(&mut rig, (95.5, 45.0), NONE);
+    let events = rig.tool_mut().events();
+    assert_eq!(events[2..], [commit((100.0, 0.0, 101.0, 300.0), SelectionOperation::New)], "the click selects the guide's column");
 }
 
 // Inside the click distance a selection drag still moves: one that snapping pulls back to its start (its edge on the
