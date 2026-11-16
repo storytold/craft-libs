@@ -156,8 +156,17 @@ fn record(cv: &mut Canvas, func: u16, r: Bytes) {
             Some(())
         }
         0x0142 => {
-            // A pattern the reader cannot decode still takes its handle slot.
-            let b = dib_pattern_brush(r).map_or(Obj::Other, Obj::Brush);
+            // A pattern the reader cannot decode still takes its handle slot, and is counted as a
+            // dropped image unless it has no pixels.
+            let b = dib_pattern_brush(r).map_or_else(
+                || {
+                    if !pattern_has_no_pixels(r) {
+                        cv.drop_image();
+                    }
+                    Obj::Other
+                },
+                Obj::Brush,
+            );
             cv.add_object(None, b);
             Some(())
         }
@@ -239,6 +248,12 @@ fn dib_pattern_brush(r: Bytes) -> Option<Brush> {
     let n = dib::info_len(dib)?;
     let img = dib::decode(Bytes(dib.slice(0, n)?), dib.tail(n)?, false)?;
     Brush::pattern(img, usage == 1)
+}
+
+/// Whether the DIB of a DIBCREATEPATTERNBRUSH record has a readable header that gives it no pixels.
+fn pattern_has_no_pixels(r: Bytes) -> bool {
+    let Some(dib) = r.tail(10) else { return false };
+    dib::has_no_pixels(dib, dib::info_len(dib).and_then(|n| dib.tail(n)))
 }
 
 /// Font object (MS-WMF 2.2.1.2): height, width, escapement, orientation, weight (i16 each), italic,
@@ -393,13 +408,24 @@ fn dib_stretchblt(cv: &mut Canvas, r: Bytes) -> Option<()> {
 
 /// A DIB at `at`, stretched from source rectangle `src` into `dst` (both in logical units, pixels for `src`).
 /// The raster operation `rop` decides how the pixels combine (see [`dib::prepare`]).
+/// A DIB that cannot be read, or is past a limit, is counted as a dropped image. A raster operation
+/// that takes no source fills the destination instead (see [`Canvas::fill_rop`]).
 fn dib_blit(cv: &mut Canvas, r: Bytes, at: usize, rop: u32, dst: [f64; 4], src: [f64; 4]) -> Option<()> {
-    let dib = r.tail(at)?;
-    let n = dib::info_len(dib)?;
-    let info = dib.slice(0, n)?;
-    let bits = dib.tail(n)?;
-    let (mut img, dst) = dib::decode_clip(Bytes(info), bits, false, src.map(|v| v as i64), dst)?;
+    if !dib::uses_source(rop) {
+        cv.fill_rop(dst, rop);
+        return Some(());
+    }
+    let dib = r.tail(at).filter(|d| !d.0.is_empty())?;
+    let src = src.map(|v| v as i64);
+    let info = dib::info_len(dib).and_then(|n| Some((Bytes(dib.slice(0, n)?), dib.tail(n)?)));
+    let decoded = info.and_then(|(info, bits)| dib::decode_clip(info, bits, false, src, dst));
+    let Some((mut img, dst)) = decoded else {
+        if !dib::crop_misses(dib, info.map(|(_, bits)| bits), src) {
+            cv.drop_image();
+        }
+        return None;
+    };
     dib::prepare(&mut img, dib::Blend::Rop(rop));
-    cv.bitmap(dst, img);
+    cv.bitmap_rop(dst, img, rop);
     Some(())
 }

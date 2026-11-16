@@ -299,6 +299,9 @@ fn item_cap_stops_the_parse_and_keeps_the_rest() {
     let recs: Vec<Vec<u8>> = (0..MAX_ITEMS + 10).map(|_| rect.clone()).collect();
     let p = parse(&wmf(&recs, None)).unwrap();
     assert_eq!(p.items.len(), MAX_ITEMS);
+    assert!(p.truncated);
+    let p = parse(&wmf(&recs[..MAX_ITEMS], None)).unwrap();
+    assert_eq!((p.items.len(), p.truncated), (MAX_ITEMS, false), "exactly the cap is not past it");
 }
 
 #[test]
@@ -906,7 +909,7 @@ fn place_fits_the_frame_scales_strokes_and_drops_far_paths() {
                 clips: Vec::new(),
             },
         ],
-        skipped_records: 0,
+        ..Default::default()
     };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]);
     assert_eq!(placed.len(), 1);
@@ -931,7 +934,7 @@ fn a_huge_pen_is_held_to_what_covers_the_frame() {
                 region: None,
                 clips: Vec::new(),
             }],
-            skipped_records: 0,
+            ..Default::default()
         };
         match pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]).first() {
             Some(crate::PlacedItem::Path { stroke, .. }) => stroke.map(|s| s.1),
@@ -950,7 +953,7 @@ fn a_huge_pen_is_held_to_what_covers_the_frame() {
 fn crop_window_keeps_a_sliver_and_stays_finite() {
     let [x, y, w, h] = crate::crop_window([0.0, 0.51771, 0.0, 0.45485]);
     assert!(x == 0.0 && w == 1.0 && (y - 0.51771).abs() < 1e-6 && (h - 0.02744).abs() < 1e-5, "{y} {h}");
-    let pic = crate::Picture { width: 100.0, height: 1000.0, items: Vec::new(), skipped_records: 0 };
+    let pic = crate::Picture { width: 100.0, height: 1000.0, items: Vec::new(), ..Default::default() };
     let tf = pic.fit(kurbo::Rect::new(0.0, 0.0, 100.0, 27.44), [0.0, 0.51771, 0.0, 0.45485]).unwrap();
     // The kept band of the source (517.71..545.15) is the frame (0..27.44).
     let top = tf * kurbo::Point::new(0.0, 517.71);
@@ -979,7 +982,7 @@ fn crop_window_with_negative_sides_pads_the_source() {
     let [x, _, w, _] = crate::crop_window([f32::MIN, 0.0, -1e9, 0.0]);
     assert!(x == -100.0 && w == 201.0, "{x} {w}");
     // The source sits in the middle half of the frame.
-    let pic = crate::Picture { width: 100.0, height: 50.0, items: Vec::new(), skipped_records: 0 };
+    let pic = crate::Picture { width: 100.0, height: 50.0, items: Vec::new(), ..Default::default() };
     let tf = pic.fit(kurbo::Rect::new(0.0, 0.0, 100.0, 100.0), [0.0, -0.5, 0.0, -0.5]).unwrap();
     let (top, bottom) = (tf * kurbo::Point::new(0.0, 0.0), tf * kurbo::Point::new(100.0, 50.0));
     assert!((top.y - 25.0).abs() < 1e-9 && (bottom.y - 75.0).abs() < 1e-9 && (bottom.x - 100.0).abs() < 1e-9, "{top:?} {bottom:?}");
@@ -1012,7 +1015,7 @@ fn the_narrowest_crop_on_the_largest_frame_keeps_its_content() {
                 clips: Vec::new(),
             },
         ],
-        skipped_records: 0,
+        ..Default::default()
     };
     let frame = kurbo::Rect::new(1584.0, 1584.0, 5584.0, 5584.0);
     // The last sliver, the first sliver, and sides that overlap.
@@ -1039,7 +1042,7 @@ fn place_counts_the_items_own_clip_region_before_keeping_it() {
     let region = || Some(vec![[0.0, 0.0, 50.0, 25.0], [10.0, 10.0, 20.0, 20.0]]);
     let frame = kurbo::Rect::new(0.0, 0.0, 100.0, 50.0);
     let placed = |second: Item| {
-        let pic = crate::Picture { width: 100.0, height: 50.0, items: vec![path(segs.clone(), None), second], skipped_records: 0 };
+        let pic = crate::Picture { width: 100.0, height: 50.0, items: vec![path(segs.clone(), None), second], ..Default::default() };
         pic.place(frame, [0.0; 4]).len()
     };
     let small = vec![Seg::Move(0.0, 0.0), Seg::Line(1.0, 1.0)];
@@ -1070,7 +1073,7 @@ fn place_expands_a_clip_region_once_for_the_items_that_share_it() {
         region: Some(region.clone()),
         clips: Vec::new(),
     };
-    let pic = crate::Picture { width: 100.0, height: 50.0, items: (0..2000).map(|_| item()).collect(), skipped_records: 0 };
+    let pic = crate::Picture { width: 100.0, height: 50.0, items: (0..2000).map(|_| item()).collect(), ..Default::default() };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 100.0, 50.0), [0.0; 4]);
     assert_eq!(placed.len(), 2000);
     let regions: Vec<_> = placed
@@ -1096,7 +1099,7 @@ fn place_keeps_only_finite_bounded_bitmaps_with_area() {
             bitmap([0.0, 0.0, f32::INFINITY, 10.0]),
             bitmap([10.0, 5.0, 10.0, 10.0]),
         ],
-        skipped_records: 0,
+        ..Default::default()
     };
     let placed = pic.place(kurbo::Rect::new(0.0, 0.0, 200.0, 100.0), [0.0; 4]);
     assert_eq!(placed.len(), 1);
@@ -1249,7 +1252,7 @@ fn take_pixels_returns_only_drawable_bitmaps() {
         clips: Vec::new(),
     };
     assert_eq!(path.take_pixels(), None);
-    let pic = |width: f32, height: f32| crate::Picture { width, height, items: Vec::new(), skipped_records: 0 };
+    let pic = |width: f32, height: f32| crate::Picture { width, height, items: Vec::new(), ..Default::default() };
     assert!(pic(1.0, 2.0).has_size());
     assert!(!pic(0.0, 2.0).has_size() && !pic(f32::NAN, 2.0).has_size() && !pic(1.0, f32::INFINITY).has_size());
 }
@@ -1908,6 +1911,7 @@ fn pattern_brush_pixels_count_against_the_byte_budget() {
     recs.push(wrec(0x041B, &cat(vec![h16(9), h16(9), h16(0), h16(0)])));
     let p = wmf200(&recs);
     assert!(p.items.is_empty(), "the parse stopped at the budget: {:?}", p.items.len());
+    assert!(p.truncated);
 }
 
 fn item_region(item: &Item) -> Option<&[[f32; 4]]> {
