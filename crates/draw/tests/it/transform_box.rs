@@ -559,7 +559,7 @@ fn a_move_only_overlay_takes_a_press_only_in_its_reach_and_moves_the_box() {
 #[trial]
 fn the_session_boxs_snap_lines_reach_the_tool_host() {
     use craft_draw::ui::transform::TransformTool;
-    use craft_ui::canvas::ToolHost;
+    use craft_ui::canvas::{ToolHost, tool_pass};
     let session = Rc::new(RefCell::new(TransformSession::<()>::new(RECT)));
     let view = Rc::new(RefCell::new(CanvasView::new(egui::Rect::NOTHING, Point::ZERO, 1.0)));
     let lines = Rc::new(RefCell::new(Vec::new()));
@@ -574,17 +574,18 @@ fn the_session_boxs_snap_lines_reach_the_tool_host() {
         let room = ui.available_rect_before_wrap();
         let at = CanvasView::new(room, Point::new(f64::from(room.width()) / 2.0, f64::from(room.height()) / 2.0), 1.0);
         *shown_view.borrow_mut() = at;
+        let mut response = None;
         let canvas = Canvas::new("Document").view(at).snap(snap.clone()).show(ui, |ui, body| {
             let session = shown_session.borrow();
-            TransformOverlay::new("Free Transform", &session, &settings).show_at(ui, body.rect)
+            let shown = TransformOverlay::new("Free Transform", &session, &settings).show_at(ui, body.rect);
+            if let Some(pass) = tool_pass(&body.env) {
+                let mut tool = TransformTool::new(&session, shown.snapped.clone());
+                response = Some(ToolHost::new().run(ui, &pass, &mut tool));
+            }
+            shown
         });
         let Some(shown) = canvas.inner else { return };
-        let response = {
-            let session = shown_session.borrow();
-            let mut tool = TransformTool::new(&session, shown.snapped);
-            ToolHost::new().run(ui, &canvas.output, &mut tool)
-        };
-        shown_lines.borrow_mut().push(response.snapped.len());
+        shown_lines.borrow_mut().push(response.unwrap_or_default().snapped.len());
         let mut session = shown_session.borrow_mut();
         for edit in shown.edits {
             session.apply(edit, 0.0);

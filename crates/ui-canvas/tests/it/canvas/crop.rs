@@ -5,7 +5,7 @@ use craft_behavior::geometry::{
 };
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{Axis, CancelReason, CanvasView, EditEvent};
-use craft_ui::canvas::{Canvas, CanvasTool, CropOverlay, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer};
+use craft_ui::canvas::{Canvas, CanvasTool, CropOverlay, Snap, ToolAction, ToolContext, ToolHost, ToolPath, ToolPointer, tool_pass};
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
@@ -560,12 +560,15 @@ fn scrolling_host() -> (Fixture, Rc<Cell<Option<Vec2>>>) {
     let mut fixture = Fixture::new(move |ui| {
         let room = ui.available_rect_before_wrap();
         let view = CanvasView::new(room, Point::new(200.0, 150.0), 1.0);
-        let shown = Canvas::new("Document").view(view).show(ui, |ui, body| {
+        let mut reply = None;
+        let _ = Canvas::new("Document").view(view).show(ui, |ui, body| {
             let out = CropOverlay::new("Crop", Bind::bound(&mut *crop.borrow_mut())).show_at(ui, body.rect);
             seen.set(out.scrolls_at);
+            if let Some(pass) = tool_pass(&body.env) {
+                reply = Some(ToolHost::new().run(ui, &pass, &mut *tool.borrow_mut()));
+            }
         });
-        let reply = ToolHost::new().run(ui, &shown.output, &mut *tool.borrow_mut());
-        reported.set(reply.past_edge);
+        reported.set(reply.unwrap_or_default().past_edge);
     });
     fixture.settle();
     (fixture, past_edge)

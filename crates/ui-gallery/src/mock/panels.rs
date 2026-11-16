@@ -9,6 +9,7 @@ use craft_behavior::kurbo::Rect as DocRect;
 use craft_behavior::{ColumnKey, ColumnWidth, PixelSize, RulerUnits, Ticks, keyed};
 use craft_ui::canvas::{
     Canvas, CanvasScrollbars, CanvasSpace, NoTool, PageFrame, Pasteboard, PixelRect, RasterDisplay, RasterSource, RulerText, Rulers, ToolHost,
+    tool_pass,
 };
 use craft_ui::canvas_controls::{Guides, Marquee};
 use craft_ui::contract::SizeLimits;
@@ -120,7 +121,7 @@ fn ruler_text(kind: UnitKind) -> RulerText {
 pub(super) fn show_layers(ui: &mut Ui, at: egui::Rect, layers: &[Layer], size: PixelSize) {
     for layer in layers.iter().rev().filter(|layer| layer.visible) {
         let source = LayerFill { layer, size };
-        let _ = RasterDisplay::new(layer.name.clone(), &source).show_at(ui, at);
+        let _ = RasterDisplay::new(layer.name.clone(), &source).picture().show_at(ui, at);
     }
 }
 
@@ -158,14 +159,6 @@ impl RasterSource for LayerFill<'_> {
     }
 }
 
-/// What the canvas body found out in a pass.
-struct BodyResult {
-    /// The view the scroll bars set.
-    scrolled: Option<craft_behavior::CanvasView>,
-    /// The pointer is over a scroll bar, so the tool leaves the press alone.
-    over_bars: bool,
-}
-
 /// The document area: the pasteboard, the visible layers, the selection, the rulers with their guides and the scroll
 /// bars on a canvas whose tool host runs the current tool and reports the one view.
 fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
@@ -176,51 +169,56 @@ fn canvas(ui: &mut Ui, document: &mut Document, tool: Tool, tools: &mut Tools) {
     let (view, show_rulers) = (document.view, document.rulers);
     let editing = matches!(tool, Tool::Move | Tool::Marquee);
     let canvas_id = ui.scope_id().with("mock document canvas");
-    let shown = {
-        let Document { layers, guides, guide, marquee, zero, units: unit, .. } = &mut *document;
-        Canvas::new("Document").id(canvas_id).view(view).document(page.size()).show_rulers(show_rulers).rulers(units, units, *zero).show(
-            ui,
-            |ui, body| {
-                let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
-                show_layers(ui, body.rect, layers, pixels);
-                if let Some(rect) = *marquee {
-                    let _ = Marquee::rect("Selection", rect).show_at(ui, body.rect);
+    // What the host reported; none in a measuring run, where it does not run.
+    let mut reported = None;
+    let mut scrolled = None;
+    let _ = Canvas::new("Document").id(canvas_id).view(view).document(page.size()).show_rulers(show_rulers).rulers(units, units, document.zero).show(
+        ui,
+        |ui, body| {
+            let _ = Pasteboard::new("Pasteboard", &pages).show_at(ui, body.rect);
+            let mut content = body.rect;
+            let mut pending = None;
+            let Document { guides, guide, zero, units: unit, .. } = &mut *document;
+            if show_rulers {
+                let rulers = Rulers::new("Rulers", Bind::bound(zero)).units(&UNITS).show_at(ui, body.rect);
+                content = rulers.content_rect();
+                pending = rulers.guide;
+                if let Some(picked) = rulers.unit_picked {
+                    *unit = picked;
                 }
-                let mut content = body.rect;
-                let mut pending = None;
-                if show_rulers {
-                    let rulers = Rulers::new("Rulers", Bind::bound(zero)).units(&UNITS).show_at(ui, body.rect);
-                    content = rulers.content_rect();
-                    pending = rulers.guide;
-                    if let Some(picked) = rulers.unit_picked {
-                        *unit = picked;
-                    }
-                }
-                let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
-                if let Some(selected) = *guide {
-                    controls = controls.selected_guide(selected);
-                }
-                if let Some(drag) = pending {
-                    controls = controls.pending(drag);
-                }
-                if let Some(select) = controls.show_at(ui, body.rect).select {
-                    *guide = select;
-                }
-                let bars = CanvasScrollbars::new("Scroll bars", Bind::given(view), page).show_at(ui, content);
-                BodyResult { scrolled: bars.view.value().copied(), over_bars: bars.over }
-            },
-        )
-    };
-    let result = shown.inner;
-    let host = ToolHost::new().momentary(&mut tools.momentary).enabled(!result.as_ref().is_some_and(|result| result.over_bars));
-    let reported = match tool {
-        Tool::Hand => host.run(ui, &shown.output, &mut tools.hand),
-        Tool::Zoom => host.run(ui, &shown.output, &mut tools.zoom),
-        Tool::Move => host.run(ui, &shown.output, &mut MoveTool::new(document, Directions::Four)),
-        Tool::Marquee => host.run(ui, &shown.output, &mut MarqueeTool::new(document)),
-        Tool::Brush | Tool::Pencil | Tool::Eraser | Tool::Stamp => host.run(ui, &shown.output, &mut NoTool),
-    };
-    if let Some(next) = result.and_then(|result| result.scrolled).or(reported.view) {
+            }
+            let mut controls = Guides::new("Guides", canvas_id, Bind::bound(guides)).interactive(editing);
+            if let Some(selected) = *guide {
+                controls = controls.selected_guide(selected);
+            }
+            if let Some(drag) = pending {
+                controls = controls.pending(drag);
+            }
+            if let Some(select) = controls.show_at(ui, body.rect).select {
+                *guide = select;
+            }
+            let bars = CanvasScrollbars::new("Scroll bars", Bind::given(view), page).show_at(ui, content);
+            scrolled = bars.view.value().copied();
+            // The tool runs after the controls, which take a press first, and before the picture and the selection,
+            // which show what it did with this pass's input. The tool leaves the press alone over a scroll bar.
+            if let Some(pass) = tool_pass(&body.env) {
+                let host = ToolHost::new().momentary(&mut tools.momentary).enabled(!bars.over);
+                reported = Some(match tool {
+                    Tool::Hand => host.run(ui, &pass, &mut tools.hand),
+                    Tool::Zoom => host.run(ui, &pass, &mut tools.zoom),
+                    Tool::Move => host.run(ui, &pass, &mut MoveTool::new(document, Directions::Four)),
+                    Tool::Marquee => host.run(ui, &pass, &mut MarqueeTool::new(document)),
+                    Tool::Brush | Tool::Pencil | Tool::Eraser | Tool::Stamp => host.run(ui, &pass, &mut NoTool),
+                });
+            }
+            show_layers(ui, body.rect, &document.layers, pixels);
+            if let Some(rect) = document.marquee {
+                let _ = Marquee::rect("Selection", rect).show_at(ui, body.rect);
+            }
+        },
+    );
+    let reported: craft_ui::canvas::ToolHostResponse = reported.unwrap_or_default();
+    if let Some(next) = scrolled.or(reported.view) {
         document.view = next;
     }
 }

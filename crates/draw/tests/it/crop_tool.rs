@@ -5,7 +5,7 @@ use craft_behavior::CanvasView;
 use craft_behavior::geometry::CropBox;
 use craft_behavior::kurbo::{Point, Rect, Size};
 use craft_draw::ui::crop::{CropDocKey, CropDocument, CropEvent, CropInput, CropRatio, CropSession, CropSettings, CropTool};
-use craft_ui::canvas::{Canvas, NavigationOptions, Snap, ToolHost};
+use craft_ui::canvas::{Canvas, NavigationOptions, Snap, ToolHost, tool_pass};
 use craft_ui::contract::ShowContainer as _;
 use craft_ui::runtime::access::Role;
 use craft_ui::runtime::env::{Env, Units};
@@ -144,7 +144,6 @@ impl Rig {
             let base = CanvasView::new(room, Point::new(200.0, 150.0), 1.0);
             let view = host.view.unwrap_or(if host.turned_start { base.rotation(30.0) } else { base });
             let showing = host.shown;
-            let input = CropInput::new(&host.ctx, &host.settings, &host.document);
             // Overscroll on: the rig's canvas shows the whole document at fit, where Overscroll off holds the view, and
             // image mode moves and turns the view.
             let mut navigation = NavigationOptions::default();
@@ -156,15 +155,18 @@ impl Rig {
             // The body and the host run as an app with a split body runs them: the body's report reaches the host's
             // pass of the same frame.
             let tool = &mut host.tool;
-            let mut frame = None;
-            let canvas = canvas.show(ui, |ui, body| {
-                if showing {
-                    frame = Some(tool.show_frame(ui, body.rect, &input));
+            let (ctx, settings, document) = (&host.ctx, &host.settings, &host.document);
+            let mut hosted = None;
+            let _ = canvas.show(ui, |ui, body| {
+                let input = CropInput::new(ctx, settings, document);
+                let frame = showing.then(|| tool.show_frame(ui, body.rect, &input));
+                if let Some(canvas) = tool_pass(&body.env) {
+                    let mut pass = tool.pass(input, frame);
+                    let response = ToolHost::new().run(ui, &canvas, &mut pass);
+                    hosted = Some((response, pass.finish().events));
                 }
             });
-            let mut pass = host.tool.pass(input, frame);
-            let response = ToolHost::new().run(ui, &canvas.output, &mut pass);
-            let events = pass.finish().events;
+            let (response, events) = hosted.unwrap_or_default();
             host.past_edge_passes += usize::from(response.past_edge.is_some());
             host.snap_passes += usize::from(!response.snapped.is_empty());
             if let Some(view) = response.view {

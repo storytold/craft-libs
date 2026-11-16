@@ -6,7 +6,11 @@
 //!     EyedropperBar::new(&mut options).show(ui);
 //! });
 //! let mut tool = EyedropperTool::new(options, |doc, size, source| composite_color(doc, size, source)).foreground(foreground);
-//! tool_host.run(ui, &canvas, &mut tool);
+//! Canvas::new("Document").show(ui, |ui, body| {
+//!     if let Some(canvas) = tool_pass(&body.env) {
+//!         tool_host.run(ui, &canvas, &mut tool);
+//!     }
+//! });
 //! if let Some(pick) = tool.take() {
 //!     *(if pick.background { &mut background } else { &mut foreground }) = pick.color;
 //! }

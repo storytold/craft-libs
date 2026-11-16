@@ -3,7 +3,7 @@
 
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Size};
-use craft_ui::canvas::{Canvas, HandTool, NavigationOptions, ToolHost, canvas_space};
+use craft_ui::canvas::{Canvas, HandTool, NavigationOptions, ToolHost, canvas_space, tool_pass};
 use craft_ui::contract::{Bind, ShowContainer as _};
 use craft_ui::patterns::canvas::NavigatorPanel;
 use craft_ui::testing::{Fixture, trial};
@@ -48,13 +48,22 @@ impl Document {
                 NavigatorPanel::new("Navigator", Bind::bound(&mut *held.borrow_mut()), DOC).navigation(navigation).show(ui);
             }
             let given = *held.borrow();
-            let shown =
-                Canvas::new("Document").view(given).document(DOC).navigation(navigation).show_rulers(ruled.get()).show_at(ui, at.get(), |_, body| {
+            let mut hosted = None;
+            let shown = Canvas::new("Document").view(given).document(DOC).navigation(navigation).show_rulers(ruled.get()).show_at(
+                ui,
+                at.get(),
+                |ui, body| {
                     if let Some(space) = canvas_space(&body.env) {
                         saw.borrow_mut().push((body.rect, space.view));
                     }
-                });
-            let next = if options.hand { ToolHost::new().run(ui, &shown.output, &mut hand).view } else { shown.output.view };
+                    if options.hand
+                        && let Some(pass) = tool_pass(&body.env)
+                    {
+                        hosted = Some(ToolHost::new().run(ui, &pass, &mut hand));
+                    }
+                },
+            );
+            let next = hosted.and_then(|hosted| hosted.view).or(shown.output.view);
             if let Some(next) = next {
                 *held.borrow_mut() = next;
             }

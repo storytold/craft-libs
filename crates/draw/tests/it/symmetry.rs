@@ -28,7 +28,7 @@ fn segments_clip_to_the_page_and_vanish_when_the_centre_line_misses_it() {
 #[trial]
 fn the_open_transform_symmetry_takes_escape_and_every_press_on_the_canvas() {
     use craft_draw::ui::symmetry::{SymmetryHandles, SymmetryTool, SymmetryTransform};
-    use craft_ui::canvas::{Canvas, ToolHost};
+    use craft_ui::canvas::{Canvas, ToolHost, tool_pass};
     use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
     use craft_ui::testing::Fixture;
     use std::cell::RefCell;
@@ -47,16 +47,20 @@ fn the_open_transform_symmetry_takes_escape_and_every_press_on_the_canvas() {
     let mut fixture = Fixture::new(move |ui| {
         let view = craft_behavior::CanvasView::new(ui.available_rect_before_wrap(), Point::new(200.0, 150.0), 1.0);
         let mut preview = shown.borrow().preview();
-        let canvas = Canvas::new("Document")
-            .view(view)
-            .show(ui, |ui, body| SymmetryHandles::new("Symmetry", Bind::bound(&mut preview), page).session().show_at(ui, body.rect));
+        let mut reply = None;
+        let canvas = Canvas::new("Document").view(view).show(ui, |ui, body| {
+            let out = SymmetryHandles::new("Symmetry", Bind::bound(&mut preview), page).session().show_at(ui, body.rect);
+            if let Some(pass) = tool_pass(&body.env) {
+                let held = shown.borrow();
+                reply = Some(ToolHost::new().run(ui, &pass, &mut SymmetryTool::new(&held, true)));
+            }
+            out
+        });
         if let Some(out) = canvas.inner {
             out.edit.events.iter().for_each(|event| shown.borrow_mut().apply(event));
             sn.borrow_mut().discarded |= out.discard;
         }
-        let held = shown.borrow();
-        let reply = ToolHost::new().run(ui, &canvas.output, &mut SymmetryTool::new(&held, true));
-        sn.borrow_mut().ignored_presses += usize::from(reply.ignored_press.is_some());
+        sn.borrow_mut().ignored_presses += usize::from(reply.is_some_and(|reply| reply.ignored_press.is_some()));
     });
     fixture.settle().key(egui::Key::Escape, egui::Modifiers::NONE).settle();
     assert!(seen.borrow().discarded, "Escape with nothing focused discards the session");

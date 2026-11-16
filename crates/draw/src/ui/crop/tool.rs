@@ -140,10 +140,18 @@ impl<'a> CropInput<'a> {
 /// let document = CropDocument::new(CropDocKey::new(1), Size::new(1200.0, 800.0), 300.0);
 /// let input = CropInput::new(&ctx, &settings, &document);
 /// let mut frame = None;
-/// let canvas = Canvas::new("Document").show(ui, |ui, body| frame = Some(crop.show_frame(ui, body.rect, &input)));
-/// let mut pass = crop.pass(input, frame);
-/// let host = ToolHost::new().run(ui, &canvas.output, &mut pass);
-/// for event in pass.finish().events {
+/// let mut pass = None;
+/// let mut host = None;
+/// let _ = Canvas::new("Document").show(ui, |ui, body| {
+///     // The canvas controls first, then the host on the canvas's pass.
+///     frame = Some(crop.show_frame(ui, body.rect, &input));
+///     if let Some(canvas) = tool_pass(&body.env) {
+///         let mut tool = crop.pass(input, frame.take());
+///         host = Some(ToolHost::new().run(ui, &canvas, &mut tool));
+///         pass = Some(tool);
+///     }
+/// });
+/// for event in pass.map(|pass| pass.finish().events).unwrap_or_default() {
 ///     match event {
 ///         CropEvent::Apply(commit) => { /* run the crop command, then */ crop.applied(true); }
 ///         CropEvent::Settings(next) => settings = next,

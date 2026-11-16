@@ -10,7 +10,11 @@
 //! }
 //! // In the app's canvas pass, while a dropper is armed:
 //! let mut tool = DropperTool::new(|doc| composite_color(doc));
-//! tool_host.run(ui, &canvas, &mut tool);
+//! Canvas::new("Document").show(ui, |ui, body| {
+//!     if let Some(canvas) = tool_pass(&body.env) {
+//!         tool_host.run(ui, &canvas, &mut tool);
+//!     }
+//! });
 //! if let Some(color) = tool.take() {
 //!     requests.answer_eyedropper(key, color);
 //! }

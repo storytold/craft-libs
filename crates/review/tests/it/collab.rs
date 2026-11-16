@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_review::collab::{PEOPLE_COLORS, ParticipantId};
-use craft_ui::canvas::{Canvas, ToolHost};
+use craft_ui::canvas::{Canvas, ToolHost, tool_pass};
 use craft_ui::contract::ShowContainer as _;
 use craft_ui::testing::{Fixture, trial};
 
@@ -49,8 +49,11 @@ fn escape_cancels_a_pending_edit_before_it_stops_following() {
         }
         let stopped = craft_review::ui::FollowFrame::new("Following", PEOPLE_COLORS[1], "Following Bo Chen")
             .show(ui, |ui, _| {
-                let shown = Canvas::new("Document").view(view).show(ui, |_, _| {});
-                let _ = ToolHost::new().run(ui, &shown.output, &mut Editing(edit.clone()));
+                let _ = Canvas::new("Document").view(view).show(ui, |ui, body| {
+                    if let Some(pass) = tool_pass(&body.env) {
+                        let _ = ToolHost::new().run(ui, &pass, &mut Editing(edit.clone()));
+                    }
+                });
             })
             .output
             .stopped;

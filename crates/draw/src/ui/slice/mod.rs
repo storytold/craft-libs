@@ -6,13 +6,17 @@
 //!
 //! ```no_run
 //! use craft_draw::ui::slice::{SliceCommand, SliceEvent, SliceItem, SliceOverlay, SliceTool};
-//! use craft_ui::canvas::{Canvas, ToolHost, ToolPath};
+//! use craft_ui::canvas::{Canvas, ToolHost, ToolPath, tool_pass};
 //! use craft_ui::contract::{Show as _, ShowContainer as _};
 //! # fn demo(ui: &mut egui::Ui, tool: &mut SliceTool, slices: &[SliceItem], selected: usize, locked: bool) {
 //! let shown = Canvas::new("Document").show(ui, |ui, body| {
-//!     SliceOverlay::new("Slices", slices).selected_slice(selected).pick(true).locked(locked).show_at(ui, body.rect)
+//!     let output = SliceOverlay::new("Slices", slices).selected_slice(selected).pick(true).locked(locked).show_at(ui, body.rect);
+//!     // The host runs after the canvas controls.
+//!     if let Some(pass) = tool_pass(&body.env) {
+//!         let _ = ToolHost::new().run(ui, &pass, &mut *tool);
+//!     }
+//!     output
 //! });
-//! let _ = ToolHost::new().run(ui, &shown.output, tool);
 //! let mut events = tool.take_events();
 //! events.extend(shown.inner.map(|output| output.events).unwrap_or_default());
 //! for event in events {
