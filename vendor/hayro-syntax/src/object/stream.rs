@@ -10,7 +10,7 @@ use crate::object::{Array, ObjectIdentifier};
 use crate::object::{Object, ObjectLike, ObjectRefLike};
 use crate::reader::Reader;
 use crate::reader::{Readable, ReaderContext, ReaderExt, Skippable};
-use crate::trivia::is_white_space_character;
+use crate::trivia::{is_eol_character, is_regular_character, is_white_space_character};
 use crate::util::{OptionLog, find_needle};
 use alloc::borrow::Cow;
 use alloc::vec::Vec;
@@ -201,9 +201,9 @@ impl<'a> Stream<'a> {
 
     /// PdfCraft patch: the decoded data of the stream, for callers that budget what a page
     /// holds. Flate, LZW and RunLength stop at `max` bytes (and at
-    /// this PDF's ordinary stream limit in any case). A stream without filters is returned
-    /// as it is; ASCIIHex and ASCII85 barely expand, and the image codecs stop at their own pixel
-    /// limits.
+    /// this PDF's ordinary stream limit in any case), and a JBIG2 page that would decode past it
+    /// is refused. A stream without filters is returned as it is; ASCIIHex and ASCII85 barely
+    /// expand, and the other image codecs stop at their own pixel limits.
     pub fn decoded_within(&self, max: usize) -> Result<Cow<'a, [u8]>, DecodeFailure> {
         self.decode_within(&ImageDecodeParams::default(), max)
             .map(|r| r.data)
@@ -214,6 +214,7 @@ impl<'a> Stream<'a> {
         image_params: &ImageDecodeParams,
         max: usize,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
+        crate::cancel::check(self.dict.ctx().control()).ok_or(DecodeFailure::StreamDecode)?;
         self.decode_raw_within(self.raw_data(), image_params, max)
     }
 
@@ -233,7 +234,10 @@ impl<'a> Stream<'a> {
         image_params: &ImageDecodeParams,
         max: usize,
     ) -> Result<FilterResult<'a>, DecodeFailure> {
+        let control = self.dict.ctx().control();
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         let filters_and_params = self.filters_and_params();
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         let count = filters_and_params.filters.len();
 
         let mut current: Option<FilterResult<'a>> = None;
@@ -246,10 +250,11 @@ impl<'a> Stream<'a> {
         {
             // PdfCraft patch: see `filter::decode_limit`.
             let limit = crate::filter::decode_limit(image_params, i + 1 == count, self.dict.ctx().decode_limits()).min(max);
-            let new = filter.apply(current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data), params, image_params, limit)?;
+            let new = filter.apply(current.as_ref().map(|c| c.data.as_ref()).unwrap_or(&data), params, image_params, limit, self.dict.ctx().control())?;
             current = Some(new);
         }
 
+        crate::cancel::check(control).ok_or(DecodeFailure::StreamDecode)?;
         Ok(current.unwrap_or(FilterResult {
             data,
             image_data: None,
@@ -285,10 +290,20 @@ impl<'a> Readable<'a> for Stream<'a> {
         let offset = r.offset();
         parse_proper(r, &dict)
             .or_else(|| {
+                // PdfCraft patch (36): before searching on, which could reach a later object.
+                r.jump(offset);
+                parse_declared(r, &dict, true)
+            })
+            .or_else(|| {
+                crate::cancel::check(ctx.control())?;
                 warn!("failed to parse stream, trying to parse it manually");
 
                 r.jump(offset);
                 parse_fallback(r, &dict)
+            })
+            .or_else(|| {
+                r.jump(offset);
+                parse_declared(r, &dict, false)
             })
             .error_none("was unable to manually parse the stream")
     }
@@ -373,6 +388,11 @@ fn parse_proper<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>> {
     let data = r.read_bytes(length as usize)?;
     r.skip_white_spaces();
     r.forward_tag(b"endstream")?;
+    // PdfCraft patch (36): a whole token (ISO 32000-2 7.2.3), so a wrong `/Length` that stops
+    // before payload such as `endstreamer` does not end the stream there.
+    if r.tail().and_then(|t| t.first().copied()).is_some_and(is_regular_character) {
+        return None;
+    }
 
     Some(Stream::new(data, dict.clone()))
 }
@@ -388,9 +408,10 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
     forward_stream_eol(r)?;
 
     let tail = r.tail()?;
-    let endstream_offset = find_needle(tail, b"endstream")?;
-    let data_end = trim_trailing_ascii_whitespace(&tail[..endstream_offset]);
-    let data = tail.get(..data_end)?;
+    let control = dict.ctx().control();
+    let endstream_offset = find_endstream(tail, control)?;
+    let data_end = trim_trailing_ascii_whitespace(&tail[..endstream_offset], control)?;
+   let data = tail.get(..data_end)?;
 
     r.read_bytes(endstream_offset)?;
     r.skip_white_spaces();
@@ -399,18 +420,123 @@ fn parse_fallback<'a>(r: &mut Reader<'a>, dict: &Dict<'a>) -> Option<Stream<'a>>
     Some(Stream::new(data, dict.clone()))
 }
 
-fn trim_trailing_ascii_whitespace(data: &[u8]) -> usize {
-    let mut end = data.len();
+/// PdfCraft patch (36): a stream with no `endstream` after it, as a producer that writes
+/// `endstrea` leaves every stream, is the bytes its `/Length` gives, "how many bytes of the PDF
+/// file are used for the stream's data" (ISO 32000-2 7.3.8.2), as other readers take it. Neither
+/// [`parse_proper`] nor [`parse_fallback`] found it, so every font and page content of such a file
+/// was lost and its pages drew blank. Only a `/Length` the data holds is read.
+///
+/// With `at_an_end`, tried before [`parse_fallback`], the `/Length` must also end where the
+/// stream would ([`at_stream_end`]): before a whole `endstream`, before a misspelt one
+/// (`endstrea`) or `endobj` where the object ends too, or at the end of the data. Otherwise the search for `endstream` would run on into a later object and take its
+/// header and data as this stream's. Without it, tried last, after the search found no
+/// `endstream` in the rest of the data, so it doesn't search again.
+fn parse_declared<'a>(r: &mut Reader<'a>, dict: &Dict<'a>, at_an_end: bool) -> Option<Stream<'a>> {
+    let length = dict.get::<u32>(LENGTH)?;
+
+    r.skip_white_spaces_and_comments();
+    r.forward_tag(b"stream")?;
+    forward_stream_eol(r)?;
+    let data = r.read_bytes(usize::try_from(length).ok()?)?;
+    if at_an_end && !at_stream_end(r.tail().unwrap_or_default()) {
+        return None;
+    }
+
+    Some(Stream::new(data, dict.clone()))
+}
+
+fn find_endstream_raw(data: &[u8], control: Option<&crate::cancel::Control>) -> Option<usize> {
+    const NEEDLE: &[u8] = b"endstream";
+    if control.is_none() {
+        return find_needle(data, NEEDLE);
+    }
+    for start in (0..data.len()).step_by(64 * 1024) {
+        crate::cancel::check(control)?;
+        // Look ahead past each chunk so a keyword crossing its boundary is preserved.
+        let end = start.saturating_add(64 * 1024 + NEEDLE.len() - 1).min(data.len());
+        if let Some(offset) = find_needle(data.get(start..end)?, NEEDLE) {
+            return Some(start + offset);
+        }
+    }
+    None
+}
+
+/// PdfCraft patch (36): the first `endstream` in `data` that is a whole token (ISO 32000-2
+/// 7.2.3), not the start of payload bytes such as `endstreamer`.
+fn find_endstream(data: &[u8], control: Option<&crate::cancel::Control>) -> Option<usize> {
+    let mut from = 0;
+    loop {
+        let at = from + find_endstream_raw(data.get(from..)?, control)?;
+        let end = at + b"endstream".len();
+        if !data.get(end).copied().is_some_and(is_regular_character) {
+            return Some(at);
+        }
+        from = end;
+    }
+}
+
+/// PdfCraft patch (36): whether `rest`, the data after a stream's `/Length` bytes, is where the
+/// stream ends. A whole `endstream` token is. A misspelt one (`endstrea`), an `endobj` with the
+/// `endstream` left out, or both, are only where the object ends as well, before the end of the
+/// data, another object's `N G obj` header, or `xref`, `trailer` or `startxref`: payload such as
+/// `endobj more`, where a wrong `/Length` stops, is not, and the search for `endstream` runs on.
+fn at_stream_end(rest: &[u8]) -> bool {
+    let rest = skip_trivia(rest);
+    if keyword(rest, b"endstream").is_some() {
+        return true;
+    }
+    let (rest, misspelt) = keyword(rest, b"endstrea").map_or((rest, false), |r| (skip_trivia(r), true));
+    let (rest, endobj) = keyword(rest, b"endobj").map_or((rest, false), |r| (skip_trivia(r), true));
+    if !(misspelt || endobj) {
+        return rest.is_empty();
+    }
+    rest.is_empty()
+        || [&b"xref"[..], b"trailer", b"startxref"].iter().any(|kw| keyword(rest, kw).is_some())
+        || object_header(rest)
+}
+
+/// Whether `rest` starts with an indirect object's `N G obj` header.
+fn object_header(rest: &[u8]) -> bool {
+    fn number(r: &[u8]) -> Option<&[u8]> {
+        let digits = r.iter().take_while(|b| b.is_ascii_digit()).count();
+        (digits > 0).then(|| skip_trivia(r.get(digits..).unwrap_or_default()))
+    }
+    number(rest).and_then(number).is_some_and(|r| keyword(r, b"obj").is_some())
+}
+
+/// What follows `kw` at the start of `data` when it is a whole token there.
+fn keyword<'a>(data: &'a [u8], kw: &[u8]) -> Option<&'a [u8]> {
+    data.strip_prefix(kw).filter(|tail| !tail.first().copied().is_some_and(is_regular_character))
+}
+
+/// `data` with leading white space and comments skipped.
+fn skip_trivia(mut data: &[u8]) -> &[u8] {
+    loop {
+        match data.first() {
+            Some(b) if is_white_space_character(*b) => data = data.get(1..).unwrap_or_default(),
+            Some(b'%') => {
+                let eol = data.iter().position(|b| is_eol_character(*b)).unwrap_or(data.len());
+                data = data.get(eol..).unwrap_or_default();
+            }
+            _ => return data,
+        }
+    }
+}
+
+fn trim_trailing_ascii_whitespace(data: &[u8], control: Option<&crate::cancel::Control>) -> Option<usize> {
+   let mut end = data.len();
+    let mut checks = crate::cancel::Checkpoints::new(control);
 
     while data
         .get(end.wrapping_sub(1))
         .copied()
         .is_some_and(is_white_space_character)
     {
+        checks.at(data.len() - end)?;
         end -= 1;
     }
 
-    end
+    Some(end)
 }
 
 impl<'a> TryFrom<Object<'a>> for Stream<'a> {
@@ -462,6 +588,47 @@ mod tests {
         assert_eq!(stream.data, b"abcdefghij");
     }
 
+    #[test]
+    fn fallback_search_polls_before_reaching_a_distant_endstream() {
+        use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let armed = alloc::sync::Arc::new(AtomicBool::new(false));
+        let polls = alloc::sync::Arc::new(AtomicUsize::new(0));
+        let flag = armed.clone();
+        let counter = polls.clone();
+        let cancel = crate::Cancellation::new(move || flag.load(Ordering::Relaxed) && counter.fetch_add(1, Ordering::Relaxed) + 1 == 2);
+        let control = crate::cancel::Control::new(&cancel);
+        let ctx = ReaderContext::dummy_with_control(crate::DecodeLimits::default(), Some(control));
+        let dict = Reader::new(b"<< >>").read_with_context::<crate::object::Dict<'_>>(&ctx).unwrap();
+        let mut data = b"stream\n".to_vec();
+        data.extend(core::iter::repeat_n(b'x', 2 << 20));
+        data.extend_from_slice(b"\nendstream");
+        armed.store(true, Ordering::Relaxed);
+        assert!(super::parse_fallback(&mut Reader::new(&data), &dict).is_none());
+        assert_eq!(polls.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn fallback_preserves_endstream_across_search_boundaries() {
+        for length in (64 * 1024 - 9)..(64 * 1024 + 2) {
+            let (control, _) = crate::cancel::stop_at(usize::MAX);
+            let ctx = ReaderContext::dummy_with_control(crate::DecodeLimits::default(), Some(control));
+            let dict = Reader::new(b"<< >>").read_with_context::<crate::object::Dict<'_>>(&ctx).unwrap();
+            let mut data = b"stream\n".to_vec();
+            data.extend(core::iter::repeat_n(b'x', length));
+            data.extend_from_slice(b"endstream");
+            let stream = super::parse_fallback(&mut Reader::new(&data), &dict).unwrap();
+            assert_eq!(stream.data, alloc::vec![b'x'; length]);
+        }
+    }
+
+    #[test]
+    fn fallback_whitespace_trimming_is_cancellable_too() {
+        use core::sync::atomic::Ordering;
+        let (control, polls) = crate::cancel::stop_at(2);
+        assert!(super::trim_trailing_ascii_whitespace(&alloc::vec![b' '; 2 << 20], Some(&control)).is_none());
+        assert_eq!(polls.load(Ordering::Relaxed), 2);
+    }
+
     /// A dictionary followed by some other object's stream is not itself a stream.
     /// `parse_fallback` used to latch onto that later `stream` keyword.
     #[test]
@@ -485,6 +652,40 @@ mod tests {
                 .unwrap();
 
             assert_eq!(stream.data, b"abcdefghij");
+        }
+    }
+
+    /// PdfCraft patch (36): the bytes of the stream read from `data`, or `None`.
+    fn read_data(data: &[u8]) -> Option<alloc::vec::Vec<u8>> {
+        Reader::new(data).read_with_context::<Stream<'_>>(&ReaderContext::dummy()).map(|s| s.data.to_vec())
+    }
+
+    /// PdfCraft patch (36, ISO 32000-2 7.3.8.2): a stream whose `endstream` is misspelt (`endstrea`)
+    /// or left out before `endobj` is its `/Length`, not the bytes up to a later object's `endstream`.
+    #[test]
+    fn a_stream_without_endstream_is_its_length_before_a_later_one() {
+        for end in ["endstrea\nendobj", "endobj"] {
+            let data = format!("<< /Length 5 >> stream\nHELLO\n{end}\n5 0 obj << /Length 5 >> stream\nWORLD\nendstream\nendobj\n");
+            assert_eq!(read_data(data.as_bytes()).as_deref(), Some(&b"HELLO"[..]), "{end:?}");
+        }
+        // No `/Length` the data holds, and nothing to search for: not a stream.
+        assert_eq!(read_data(b"<< /Length 99 >> stream\nHELLO\nendstrea"), None);
+        assert_eq!(read_data(b"<< >> stream\nHELLO\nendstrea"), None);
+    }
+
+    /// PdfCraft patch (36): a wrong `/Length` that stops before payload that begins like an end marker
+    /// does not end the stream there (a token runs on through regular characters, ISO 32000-2 7.2.3);
+    /// an `endobj` or `endstrea` the object does not end after (`endobj more`) does not either, while one
+    /// followed by another object's header, `trailer` or the end of the data does.
+    #[test]
+    fn a_stream_does_not_end_inside_a_longer_word() {
+        for word in ["endobject", "endstreak", "endstreamer", "endobj more", "endstrea more", "endstrea endobj more"] {
+            let data = format!("<< /Length 5 >> stream\nHELLO {word} more\nendstream\nendobj\n");
+            assert_eq!(read_data(data.as_bytes()), Some(format!("HELLO {word} more").into_bytes()), "{word}");
+        }
+        for end in ["endobj\n", "endstrea\n", "endstrea\nendobj\n%c\n", "endstrea\n6 0 obj << >> endobj\n", "endobj\ntrailer\n"] {
+            let data = format!("<< /Length 5 >> stream\nHELLO\n{end}");
+            assert_eq!(read_data(data.as_bytes()).as_deref(), Some(&b"HELLO"[..]), "{end:?}");
         }
     }
 }

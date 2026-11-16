@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn the_uninstall_records_answer_only_when_the_lookup_cannot_run() {
         let copy = MsiCopy::Registered { hive: MsiScope::PerMachine };
-        let blocked = |_: &str| Err(ProbeError::Unavailable("PowerShell is blocked".into()));
+        let blocked = |_: &str| Err(ProbeError::Unavailable("the registry could not be read".into()));
         assert_eq!(update_arguments(copy, &codes(&[CODE]), blocked, |_| vec![MsiScope::PerMachine]).unwrap(), ["ALLUSERS=1"]);
         for unclear in [ProbeError::Unknown, ProbeError::Conflicting] {
             assert!(update_arguments(copy, &codes(&[CODE]), |_| Err(unclear), |_| panic!("must not read the records")).is_err());
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn missing_mixed_or_mismatched_records_stop_the_fallback() {
         let copy = MsiCopy::Registered { hive: MsiScope::PerMachine };
-        let blocked = |_: &str| Err(ProbeError::Unavailable("PowerShell is blocked".into()));
+        let blocked = |_: &str| Err(ProbeError::Unavailable("the registry could not be read".into()));
         assert!(update_arguments(copy, &codes(&[CODE]), blocked, |_| vec![]).is_err());
         assert!(update_arguments(copy, &codes(&[CODE]), blocked, |_| vec![MsiScope::PerMachine, MsiScope::PerUser]).is_err());
         let error = update_arguments(copy, &codes(&[CODE]), blocked, |_| vec![MsiScope::PerUser]).unwrap_err();

@@ -1,0 +1,44 @@
+[package]
+name = "craft-zip"
+description = "ZIP archives from untrusted files: a preflight of the end records and central directory before anything is indexed, entry reads that don't trust declared sizes, duplicate-name detection, and a deterministic writer."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+# `deflate-flate2` with flate2's default miniz_oxide backend, as craft-update pins it (zip's own
+# `deflate` feature would switch a whole app's flate2 to zlib-rs).
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+# The backend of zip's deflate: `deflate-flate2` leaves the choice to the build.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# `lenient`: DEFLATE for the raw-bytes reader.
+miniz_oxide = { workspace = true, optional = true }
+# `lenient` entry methods beyond stored and DEFLATE. All pure Rust and wasm32-safe.
+bzip2-rs = { version = "0.1", optional = true } # MIT OR Apache-2.0
+lzma-rs = { version = "0.3", optional = true } # MIT
+ruzstd = { version = "0.9.1", default-features = false, features = ["std"], optional = true } # MIT
+# `serde`: `Serialize` on the `lenient` listing types, for apps that report listings as JSON.
+serde = { workspace = true, optional = true }
+
+[features]
+# `zip64_entry_count_sample`, the regression input for a reader's own entry-count test.
+test-support = []
+# `craft_zip::lenient`: the raw-bytes reader for inspectors (from Craft Anything), without `zip`.
+lenient = ["dep:miniz_oxide"]
+# Method 12.
+lenient-bzip2 = ["lenient", "dep:bzip2-rs"]
+# Methods 14 (ZIP LZMA) and 95 (XZ).
+lenient-lzma = ["lenient", "dep:lzma-rs"]
+# Method 93.
+lenient-zstd = ["lenient", "dep:ruzstd"]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+craft-zip = { path = ".", features = ["test-support", "lenient-bzip2", "lenient-lzma", "lenient-zstd", "serde"] }
+serde_json = { workspace = true }

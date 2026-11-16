@@ -53,6 +53,10 @@ mod floating_tests;
 #[cfg(test)]
 mod group_tests;
 #[cfg(test)]
+mod handle_names_tests;
+#[cfg(test)]
+mod host_hooks_tests;
+#[cfg(test)]
 mod iconic_tests;
 #[cfg(all(test, feature = "native-windows"))]
 mod ime_tests;

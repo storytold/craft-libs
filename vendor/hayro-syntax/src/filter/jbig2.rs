@@ -18,10 +18,14 @@ const MAX_PIXELS: u64 = 1 << 28;
 ///
 /// The `params` dictionary may contain a `JBIG2Globals` entry pointing to
 /// a stream with shared symbol dictionaries.
+///
+/// PdfCraft patch: `limit` is the most bytes the page may decode to (see `filter::decode_limit`),
+/// checked against the page header's dimensions before any output is allocated.
 pub(crate) fn decode(
     data: &[u8],
     params: &Dict<'_>,
     image_params: &ImageDecodeParams,
+    limit: usize,
 ) -> Option<FilterResult<'static>> {
     // PdfCraft patch: globals are plain segment data. A globals stream filtered as an image
     // could name further globals of its own, recursing once per stream in the chain.
@@ -41,6 +45,24 @@ pub(crate) fn decode(
 
     if u64::from(image.width()) * u64::from(image.height()) > MAX_PIXELS {
         warn!("embedded JBIG2 page is too large");
+
+        return None;
+    }
+
+    // PdfCraft patch: the page's bit-packed size (also what `hayro_jbig2` holds for the page
+    // bitmap) and the size of the output built below. An image of known size has a limit in its
+    // dictionary's 1-bit pixels, so its packed size is checked, and the 8-bit output it is widened
+    // to stays within `MAX_PIXELS`. A stream decoded without image dimensions, such as an output
+    // intent's ICC profile, gets back every byte built, so the output itself must fit.
+    let packed_len = (image.width() as usize).div_ceil(8).checked_mul(image.height() as usize)?;
+    let luma_len = (image.width() as usize).checked_mul(image.height() as usize)?;
+    let sized_image = image_params.bpc.is_some()
+        && image_params.num_components.is_some()
+        && image_params.width != 0
+        && image_params.height != 0;
+    let output_len = if image_params.is_indexed { packed_len } else { luma_len };
+    if (if sized_image { packed_len } else { output_len }) > limit {
+        warn!("embedded JBIG2 page decodes past the stream's limit");
 
         return None;
     }
@@ -150,7 +172,30 @@ mod tests {
         let data = page_information(65_535, 65_535);
         for is_indexed in [false, true] {
             let params = ImageDecodeParams { is_indexed, bpc: Some(1), num_components: Some(1), target_dimension: None, width: 1, height: 1 };
-            assert!(decode(&data, &Dict::empty(), &params).is_none());
+            assert!(decode(&data, &Dict::empty(), &params, usize::MAX).is_none());
         }
+    }
+
+    /// PdfCraft patch: a page within the pixel cap but past the caller's limit is refused before
+    /// its output is allocated. Without image dimensions (an ICC profile decoded with a 16 MiB
+    /// limit) the 8-bit output must fit; an image of known size is measured in 1-bit pixels.
+    #[test]
+    fn a_page_past_the_limit_is_refused() {
+        let data = page_information(16_384, 16_384);
+        let untyped = ImageDecodeParams::default();
+        assert!(decode(&data, &Dict::empty(), &untyped, 16 << 20).is_none());
+        let sized = ImageDecodeParams { is_indexed: false, bpc: Some(1), num_components: Some(1), target_dimension: None, width: 16_384, height: 16_384 };
+        assert!(decode(&data, &Dict::empty(), &sized, (16_384 / 8 * 16_384) - 1).is_none());
+    }
+
+    #[test]
+    fn a_page_within_the_limit_decodes() {
+        let data = page_information(64, 64);
+        let untyped = ImageDecodeParams::default();
+        let out = decode(&data, &Dict::empty(), &untyped, 64 * 64).expect("64 x 64 page");
+        assert_eq!(out.data.len(), 64 * 64);
+        assert!(decode(&data, &Dict::empty(), &untyped, 64 * 64 - 1).is_none());
+        let sized = ImageDecodeParams { is_indexed: false, bpc: Some(1), num_components: Some(1), target_dimension: None, width: 64, height: 64 };
+        assert_eq!(decode(&data, &Dict::empty(), &sized, 2 * 64 / 8 * 64).expect("sized page").data.len(), 64 * 64);
     }
 }

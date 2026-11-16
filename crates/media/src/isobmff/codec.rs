@@ -1,5 +1,6 @@
 //! Sample entries (`stsd` children) and codec configuration records: parsing and serialization.
 
+use crate::CodecId;
 use crate::bitstream::BitReader;
 use crate::isobmff::bytes::{BoxBuf, Cur, FourCc, boxes};
 use crate::isobmff::error::{Error, Result};
@@ -35,6 +36,10 @@ pub struct VideoParams {
     pub temporal_quality: u32,
     pub spatial_quality: u32,
     pub color: Option<ColorInfo>,
+    /// QuickTime `logs`: the CoreMedia log transfer-function identifier (for example
+    /// `com.apple.rec2020.apple-log`). Non-empty UTF-8 without NUL, at most 255 bytes; anything
+    /// else, or a second `logs` box, reads as `None`.
+    pub log_transfer_function: Option<String>,
     /// `pasp`: (hSpacing, vSpacing).
     pub pixel_aspect: Option<(u32, u32)>,
     pub clean_aperture: Option<CleanAperture>,
@@ -182,7 +187,8 @@ pub enum CodecConfig {
     Apv(ApvConfig),
     Aac(AacConfig),
     /// MPEG-1/2 audio (esds object type 0x69/0x6B, or QuickTime `.mp3` / `.mp2`). Usually layer
-    /// III, but these name no layer: ffmpeg stores MP2 as `mp4a` + 0x6B. Each frame header has it.
+    /// III, but these name no layer: ffmpeg stores MP2 as `mp4a` + 0x6B. Each frame header has it,
+    /// and [`crate::isobmff::Track::codec_params`] reports the layer the first frame names.
     Mp3,
     Pcm(PcmConfig),
     /// ALAC magic cookie (ALACSpecificConfig, 24 bytes, optionally followed by a channel layout).
@@ -208,6 +214,51 @@ pub enum CodecConfig {
 }
 
 impl CodecConfig {
+    /// The codec this configuration is for. `Mp3` covers every MPEG audio layer: these entries
+    /// name none, and each frame header has it (ffmpeg stores MP2 as `mp4a` + 0x6B);
+    /// [`crate::isobmff::Track::codec_params`] reads it from the first frame.
+    pub fn codec_id(&self) -> CodecId {
+        match self {
+            CodecConfig::Avc(_) => CodecId::H264,
+            CodecConfig::Hevc(_) => CodecId::Hevc,
+            CodecConfig::Av1(_) => CodecId::Av1,
+            CodecConfig::Vp9(_) => CodecId::Vp9,
+            CodecConfig::ProRes { .. } => CodecId::ProRes,
+            CodecConfig::Jpeg { .. } => CodecId::Mjpeg,
+            CodecConfig::Aac(_) => CodecId::Aac,
+            CodecConfig::Mp3 => CodecId::Mp3,
+            CodecConfig::Pcm(_) => CodecId::Pcm,
+            CodecConfig::Alac { .. } => CodecId::Alac,
+            CodecConfig::Opus(_) => CodecId::Opus,
+            CodecConfig::Flac(_) => CodecId::Flac,
+            CodecConfig::Ac3 { .. } => CodecId::Ac3,
+            CodecConfig::Eac3 { .. } => CodecId::Eac3,
+            CodecConfig::Dnx { .. } => CodecId::Dnxhd,
+            CodecConfig::Apv(_) => CodecId::Apv,
+            CodecConfig::Timecode(_) | CodecConfig::Unknown { .. } => CodecId::Unknown,
+        }
+    }
+
+    /// The codec configuration in Matroska's `CodecPrivate` form (see [`crate::CodecParams`]):
+    /// the `OpusHead` built from `dOps`, `fLaC` + the `dfLa` metadata blocks, the other records
+    /// as stored.
+    pub fn extradata(&self) -> Vec<u8> {
+        match self {
+            CodecConfig::Avc(c) => c.to_bytes(),
+            CodecConfig::Hevc(c) => c.to_bytes(),
+            CodecConfig::Av1(c) => c.to_bytes(),
+            CodecConfig::Vp9(c) => c.to_bytes(),
+            CodecConfig::Apv(c) => c.record_bytes(),
+            CodecConfig::Aac(a) => a.asc.clone(),
+            CodecConfig::Alac { cookie } => cookie.clone(),
+            CodecConfig::Opus(o) => o.opus_head(),
+            CodecConfig::Flac(f) => [b"fLaC".as_slice(), &f.metadata_blocks].concat(),
+            CodecConfig::Ac3 { dac3 } => dac3.clone(),
+            CodecConfig::Eac3 { dec3 } => dec3.clone(),
+            _ => Vec::new(),
+        }
+    }
+
     /// A short human-readable codec name.
     pub fn name(&self) -> &'static str {
         match self {
@@ -633,6 +684,23 @@ pub struct OpusConfig {
 }
 
 impl OpusConfig {
+    /// The Ogg Opus identification header (RFC 7845 §5.1) this `dOps` box describes: the same
+    /// fields, little-endian, behind the `OpusHead` magic.
+    pub fn opus_head(&self) -> Vec<u8> {
+        let mut h = Vec::with_capacity(19 + self.channel_mapping.len());
+        h.extend_from_slice(b"OpusHead");
+        h.push(1);
+        h.push(self.output_channels);
+        h.extend_from_slice(&self.pre_skip.to_le_bytes());
+        h.extend_from_slice(&self.input_sample_rate.to_le_bytes());
+        h.extend_from_slice(&self.output_gain.to_le_bytes());
+        h.push(self.channel_mapping_family);
+        if self.channel_mapping_family != 0 {
+            h.extend_from_slice(&self.channel_mapping);
+        }
+        h
+    }
+
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut c = Cur::labeled(data, "dOps");
         let _version = c.u8()?;
@@ -808,12 +876,15 @@ impl ApvConfig {
 
     /// Serialize the full `apvC` box payload (4-byte `FullBox` header + `APVDecoderConfigurationRecord`).
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut b = BoxBuf::new();
-        b.u32(0); // FullBox version = 0, flags = 0
+        [&[0u8; 4][..], &self.record_bytes()].concat() // FullBox version = 0, flags = 0
+    }
+
+    /// Serialize the bare `APVDecoderConfigurationRecord` (Matroska's `CodecPrivate` for `V_APV`).
+    pub fn record_bytes(&self) -> Vec<u8> {
         if !self.raw_record.is_empty() {
-            b.bytes(&self.raw_record);
-            return b.buf;
+            return self.raw_record.clone();
         }
+        let mut b = BoxBuf::new();
         b.u8(1); // configurationVersion = 1
         b.u8(1); // number_of_configuration_entry = 1
         b.u8(1); // pbu_type = 1 (primary frame)
@@ -946,6 +1017,7 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
         let _ctab = c.i16()?;
         let mut codec = None;
         let mut bitrate = None;
+        let mut log_seen = false;
         for b in boxes(c.rest()).map_while(|b| b.ok()) {
             let p = b.payload;
             match &b.kind.0 {
@@ -955,6 +1027,12 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
                 b"vpcC" if f == b"vp09" => codec = Some(CodecConfig::Vp9(VpcConfig::parse(p)?)),
                 b"apvC" if f == b"apv1" => codec = Some(CodecConfig::Apv(ApvConfig::parse(p)?)),
                 b"colr" => v.color = parse_colr(p).ok(),
+                b"logs" => {
+                    // Two identifiers are ambiguous: neither is believed.
+                    v.log_transfer_function =
+                        if log_seen { None } else { std::str::from_utf8(p).ok().filter(|s| valid_log_identifier(s)).map(str::to_owned) };
+                    log_seen = true;
+                }
                 b"mdcv" => v.mastering_display = MasteringDisplay::parse(p),
                 b"clli" if p.len() >= 4 => v.content_light = Some((u16::from_be_bytes([p[0], p[1]]), u16::from_be_bytes([p[2], p[3]]))),
                 b"pasp" => {
@@ -1352,6 +1430,10 @@ impl SampleEntry {
 
     /// Serialize as a complete sample entry box. For PCM the format is chosen from the brand.
     pub(crate) fn write(&self, b: &mut BoxBuf, qt: bool) -> Result<()> {
+        // An identifier the reader would not accept is refused, not truncated.
+        if self.video.as_ref().and_then(|v| v.log_transfer_function.as_deref()).is_some_and(|s| !valid_log_identifier(s)) {
+            return Err(Error::Invalid("invalid log transfer-function identifier".into()));
+        }
         if let CodecConfig::Unknown { fourcc, raw } = &self.codec {
             let m = b.start(&fourcc.0);
             b.bytes(raw);
@@ -1537,6 +1619,11 @@ fn write_video_codec_config(b: &mut BoxBuf, codec: &CodecConfig) {
     }
 }
 
+/// What a `logs` box may hold: a non-empty identifier of at most 255 bytes with no NUL.
+fn valid_log_identifier(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 255 && !s.as_bytes().contains(&0)
+}
+
 fn write_video_descriptive_boxes(b: &mut BoxBuf, v: &VideoParams) {
     if let Some(gamma) = v.gamma {
         b.leaf(b"gama", &gamma.to_be_bytes());
@@ -1546,6 +1633,9 @@ fn write_video_descriptive_boxes(b: &mut BoxBuf, v: &VideoParams) {
     }
     if let Some(color) = &v.color {
         write_color_box(b, color);
+    }
+    if let Some(log) = &v.log_transfer_function {
+        b.leaf(b"logs", log.as_bytes());
     }
     if let Some(display) = &v.mastering_display {
         b.leaf(b"mdcv", &display.to_bytes());
@@ -1624,6 +1714,62 @@ mod tests {
         e.write(&mut b, qt).unwrap();
         let bx = crate::isobmff::bytes::boxes(&b.buf).next().unwrap().unwrap();
         parse_sample_entry(bx.kind, bx.payload, FourCc(*handler), qt).unwrap()
+    }
+
+    /// A QuickTime `logs` box keeps its identifier whatever curve it names; the reader does not
+    /// guess what an unknown one means.
+    #[test]
+    fn log_transfer_function_roundtrip() {
+        for id in ["com.apple.rec2020.apple-log", "com.apple.rec2020.apple-log2", "another.vendor.unknown-curve"] {
+            let mut e = SampleEntry::prores(FourCc(*b"apch"), 64, 64);
+            e.video.as_mut().unwrap().log_transfer_function = Some(id.into());
+            let back = roundtrip(&e, true, b"vide");
+            assert_eq!(back.video.as_ref().unwrap().log_transfer_function.as_deref(), Some(id));
+            assert_eq!(back, e);
+        }
+        // Apple Log is a 35-byte box: the 27 identifier bytes with no terminator.
+        let mut e = SampleEntry::prores(FourCc(*b"apch"), 64, 64);
+        e.video.as_mut().unwrap().log_transfer_function = Some("com.apple.rec2020.apple-log".into());
+        let mut b = BoxBuf::new();
+        e.write(&mut b, true).unwrap();
+        let logs = [&35u32.to_be_bytes()[..], b"logscom.apple.rec2020.apple-log"].concat();
+        assert!(b.buf.windows(logs.len()).any(|w| w == logs));
+    }
+
+    /// The writer refuses an identifier the reader would not accept; it is never truncated.
+    #[test]
+    fn invalid_log_transfer_functions_are_not_written() {
+        for id in [String::new(), "a".repeat(256), "com.apple.rec2020.apple-log\0".into()] {
+            let mut e = SampleEntry::prores(FourCc(*b"apch"), 64, 64);
+            e.video.as_mut().unwrap().log_transfer_function = Some(id);
+            assert!(e.write(&mut BoxBuf::new(), true).is_err());
+        }
+        let mut e = SampleEntry::prores(FourCc(*b"apch"), 64, 64);
+        e.video.as_mut().unwrap().log_transfer_function = Some("a".repeat(255));
+        assert!(e.write(&mut BoxBuf::new(), true).is_ok());
+    }
+
+    /// An empty, oversized, non-UTF-8 or NUL-holding `logs` box, or two of them, reads as unknown.
+    #[test]
+    fn malformed_or_duplicate_logs_boxes_read_as_unknown() {
+        let read = |children: &[&[u8]]| {
+            let mut b = BoxBuf::new();
+            SampleEntry::prores(FourCc(*b"apch"), 64, 64).write(&mut b, true).unwrap();
+            for payload in children {
+                b.leaf(b"logs", payload);
+            }
+            let len = (b.buf.len() as u32).to_be_bytes();
+            b.buf[..4].copy_from_slice(&len);
+            let bx = crate::isobmff::bytes::boxes(&b.buf).next().unwrap().unwrap();
+            parse_sample_entry(bx.kind, bx.payload, FourCc(*b"vide"), true).unwrap().video.unwrap().log_transfer_function
+        };
+        assert_eq!(read(&[b"vendor.curve"]).as_deref(), Some("vendor.curve"));
+        assert_eq!(read(&[b""]), None);
+        assert_eq!(read(&[&[b'a'; 256]]), None);
+        assert_eq!(read(&[b"bad\xFFutf8"]), None);
+        assert_eq!(read(&[b"nul\0inside"]), None);
+        assert_eq!(read(&[b"vendor.curve", b"vendor.curve"]), None);
+        assert_eq!(read(&[b"vendor.curve", b""]), None);
     }
 
     #[test]
@@ -1838,5 +1984,53 @@ mod tests {
     fn asc_parse() {
         assert_eq!(parse_asc(&[0x11, 0x90]), Some((2, 48000, 2)));
         assert_eq!(parse_asc(&[]), None);
+    }
+}
+
+#[cfg(test)]
+mod params_tests {
+    use super::*;
+
+    /// `dOps` is big-endian; the `OpusHead` it becomes is little-endian, with the mapping table
+    /// only for families other than 0.
+    #[test]
+    fn dops_becomes_an_opus_head() {
+        let o = OpusConfig {
+            output_channels: 6,
+            pre_skip: 312,
+            input_sample_rate: 48_000,
+            output_gain: -256,
+            channel_mapping_family: 1,
+            channel_mapping: vec![4, 2, 0, 4, 1, 2, 3, 5],
+        };
+        let h = o.opus_head();
+        assert_eq!(&h[..8], b"OpusHead");
+        assert_eq!(&h[8..19], &[1, 6, 0x38, 0x01, 0x80, 0xBB, 0, 0, 0x00, 0xFF, 1]);
+        assert_eq!(&h[19..], &o.channel_mapping[..]);
+        let stereo = OpusConfig { output_channels: 2, channel_mapping_family: 0, channel_mapping: vec![9, 9], ..o };
+        assert_eq!(stereo.opus_head().len(), 19);
+        assert_eq!(CodecConfig::Opus(stereo).codec_id(), CodecId::Opus);
+    }
+
+    #[test]
+    fn apv_extradata_is_the_bare_record() {
+        let cfg = ApvConfig {
+            profile_idc: 33,
+            level_idc: 60,
+            frame_width: 1920,
+            frame_height: 1080,
+            chroma_format_idc: 2,
+            bit_depth_minus8: 2,
+            ..Default::default()
+        };
+        let record = cfg.record_bytes();
+        assert_eq!(record[0], 1, "configurationVersion");
+        assert_eq!(cfg.to_bytes(), [&[0u8; 4][..], &record].concat());
+        // Matroska's V_APV CodecPrivate carries the record as is; an MP4 track must match it
+        let parsed = ApvConfig::parse(&cfg.to_bytes()).unwrap();
+        assert_eq!(parsed.raw_record, record);
+        assert_eq!(CodecConfig::Apv(parsed.clone()).extradata(), record);
+        assert_eq!(parsed.to_bytes(), cfg.to_bytes());
+        assert_eq!(CodecConfig::Apv(cfg).extradata(), record);
     }
 }

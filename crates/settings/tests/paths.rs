@@ -134,7 +134,9 @@ fn unwritable_folder_is_reported_at_open_not_first_save() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("ro");
     std::fs::create_dir(&dir).unwrap();
-    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    if !common::restrict_directory_writes(&dir) {
+        return;
+    }
     let (mut store, report) = open_in(&dir);
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(store.is_read_only());

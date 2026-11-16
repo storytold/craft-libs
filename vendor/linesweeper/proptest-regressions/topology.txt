@@ -1,0 +1,11 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e06d16cadc32d2ad23df2c5f0b22509a990df8719857f47e2346e415d50443e5 # shrinks to perturbations = [Subdivision { t: 0.9394124935587298, idx: 2015950306058370793, next: Base { idx: 0 } }, Subdivision { t: 0.13141341476907323, idx: 16536748748586597932, next: Base { idx: 0 } }]
+cc 66cc16b5c318ce64564d715666aa9130ee35f41ee43eb20c0f9a8cf770476ae3 # shrinks to perturbations = [Subdivision { t: 0.8093222325403372, idx: 11406037439407339269, next: Base { idx: 0 } }]
+cc bf6883b0e72f307394f6942e6cca0c30d7ca5b1de20b66ebcb20c45904be4870 # shrinks to perturbations = [Point { perturbation: PointPerturbation { x: Ulp(0), y: Ulp(-1) }, idx: 13955836529066927736, next: Base { idx: 0 } }]
+cc a9d1eacd0a3cf800ccfa5c5df4bf6aeba6295a40855cc8aa42a021801a1f31af # shrinks to perturbations = [Point { perturbation: PointPerturbation { x: Ulp(0), y: Ulp(1) }, idx: 12374941241701864599, next: Subdivision { t: 0.8636770242633537, idx: 14298434860461557715, next: Base { idx: 0 } } }, Base { idx: 0 }]
+cc a70758452b3942fb51e74f97c3f255d77637a7b83402f2af7233dbdd53c417b3 # shrinks to perturbations = [Point { perturbation: PointPerturbation { x: Ulp(0), y: Ulp(-1) }, idx: 198564688037606045, next: Base { idx: 0 } }, Point { perturbation: PointPerturbation { x: Eps(-0.06666888378841745), y: Eps(-0.04843769070842934) }, idx: 13190014615537582403, next: Base { idx: 0 } }, Base { idx: 0 }]

@@ -89,12 +89,9 @@ impl Curve {
     /// once here instead of on every call, so building an output table from a long, flat table
     /// costs one scan of it, not one per entry.
     pub fn inverse64_many(&self) -> impl Fn(f64) -> f64 + '_ {
-        let edges = match self {
-            Curve::Table(t) if t.len() >= 2 => Some((edge_index(t, true), edge_index(t, false))),
-            _ => None,
-        };
+        let edges = self.inverse_edges();
         move |y| match (self, edges) {
-            (Curve::Table(t), Some((first, last))) => table_inverse_with(t, y as f32, |start| if start { first } else { last }) as f64,
+            (Curve::Table(_), Some(_)) => self.eval_inverse_with(y as f32, edges) as f64,
             _ => self.eval_inverse64(y),
         }
     }
@@ -105,6 +102,26 @@ impl Curve {
             Curve::Identity => y,
             Curve::Table(t) => table_inverse(t, y),
             _ => self.eval_inverse64(y as f64) as f32,
+        }
+    }
+
+    /// The ends of a sampled curve's flat runs, as [`eval_inverse_with`](Self::eval_inverse_with)
+    /// takes them; `None` for other curves. Finding them scans the table, so a caller that
+    /// inverts the same curve many times finds them once.
+    pub(crate) fn inverse_edges(&self) -> Option<(f32, f32)> {
+        match self {
+            Curve::Table(t) if t.len() >= 2 => Some((edge_index(t, true), edge_index(t, false))),
+            _ => None,
+        }
+    }
+
+    /// [`eval_inverse`](Self::eval_inverse) with the flat-run ends from
+    /// [`inverse_edges`](Self::inverse_edges) of this curve.
+    #[inline]
+    pub(crate) fn eval_inverse_with(&self, y: f32, edges: Option<(f32, f32)>) -> f32 {
+        match (self, edges) {
+            (Curve::Table(t), Some((first, last))) => table_inverse_with(t, y, |start| if start { first } else { last }),
+            _ => self.eval_inverse(y),
         }
     }
 
@@ -288,15 +305,22 @@ fn table_inverse_with(t: &[f32], y: f32, edge: impl Fn(bool) -> f32) -> f32 {
 
 /// For a flat run at the table start (`start = true`) the last index of the run, or for a flat
 /// run at the end the first index of it, as a normalised input.
+///
+/// A table that is inverted is monotonic, so the run is found by bisection, not by a scan: a long
+/// constant table is inverted once per pixel, and scanning it each time made the cost the curve's
+/// length times the image's.
 fn edge_index(t: &[f32], start: bool) -> f32 {
     let n = t.len();
     if start {
         let v = t[0];
-        let i = t.iter().position(|x| (*x - v).abs() > 1e-7).map_or(n - 1, |i| i - 1);
+        // The first value that differs, given they do so from there on.
+        let first_other = t.partition_point(|x| (*x - v).abs() <= 1e-7);
+        let i = if first_other >= n { n - 1 } else { first_other.saturating_sub(1) };
         i as f32 / (n - 1) as f32
     } else {
         let v = t[n - 1];
-        let i = t.iter().rposition(|x| (*x - v).abs() > 1e-7).map_or(0, |i| i + 1);
+        // The start of the trailing run equal to the last value.
+        let i = t.partition_point(|x| (*x - v).abs() > 1e-7);
         i as f32 / (n - 1) as f32
     }
 }
@@ -372,5 +396,20 @@ mod tests {
         assert!((c.eval_inverse64(c.eval64(2.0)) - 2.0).abs() < 1e-9);
         let g = Curve::Gamma(2.2);
         assert!((g.eval64(-0.5) + 0.5f64.powf(2.2)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn inverting_a_long_flat_table_does_not_rescan_it_for_every_pixel() {
+        // Four million zeros and a one: a scan per call would be 8·10¹¹ steps for these calls.
+        let mut t = vec![0.0f32; 4_000_000];
+        t.push(1.0);
+        let c = Curve::Table(t);
+        let started = std::time::Instant::now();
+        let mut last = 0.0;
+        for _ in 0..200_000 {
+            last = c.eval_inverse(0.0);
+        }
+        assert!(last > 0.99, "the flat start ends at the last zero: {last}");
+        assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
     }
 }

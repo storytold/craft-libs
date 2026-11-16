@@ -20,7 +20,7 @@ pub enum VerifyError {
         actual: u64,
     },
     /// The sha256 differs.
-    #[error("the file's sha256 doesn't match the font index")]
+    #[error("the file's sha256 doesn't match the index")]
     Sha256,
     /// It doesn't parse as a font with outlines.
     #[error("the file is not a font, or a damaged one")]

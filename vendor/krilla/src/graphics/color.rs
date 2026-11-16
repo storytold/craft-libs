@@ -108,6 +108,18 @@ impl Tint {
     pub(crate) fn to_u8(self) -> u8 {
         (self.0 * 255.0).round() as u8
     }
+
+    /// `1 - value`, the black ink of a gray. An 8-bit value `n / 255` gives `(255 - n) / 255`,
+    /// as the 8-bit constructors write it. Any other value is subtracted from 1 in f64, from
+    /// the shortest decimal that writes it, so gray 0.96 gives 0.04 rather than 0.04000002.
+    pub(crate) fn complement(self) -> f32 {
+        let byte = self.to_u8();
+        if Tint::from_u8(byte) == self {
+            return Tint::from_u8(255 - byte).0;
+        }
+        let written = self.0.to_string().parse::<f64>().unwrap_or(f64::from(self.0));
+        (1.0 - written) as f32
+    }
 }
 
 impl PartialEq for Tint {
