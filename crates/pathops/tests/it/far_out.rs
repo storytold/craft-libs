@@ -206,3 +206,29 @@ fn the_contract_of_a_stroke_the_check_may_fail_holds_for_what_each_platform_give
     assert!(!holds(true, square(1e6), Err(PathOpsError::TooComplex)), "another reason to refuse");
     assert!(!holds(true, square(1e6), square(1.1e6)), "not the stroke beside it");
 }
+
+/// An Outline cuts two paths that cross where they cross, far from the origin as near it: two lines across a square 100 across, rising by
+/// 100, 10, 1 and a tenth over it (the lines of the last cross at an angle of 0.002 radian), at every distance of the others here. The sweep puts the
+/// crossing within its tolerance of each, 1.4e-3 at 1e11, which is more than the speck a path of this size allows a junction from it, 1e-5, and the
+/// lines were left uncut there (in one piece each, where they are two). Shallower crossings than that are not told from lines that run along one
+/// another by a sweep whose tolerance is a hundredth of their rise, and are not asked for.
+#[test]
+fn an_outline_cuts_paths_that_cross_far_out_as_near_the_origin() {
+    for rise in [100.0, 10.0, 1.0, 0.1] {
+        for x in FAR {
+            let line = |a: (f64, f64), b: (f64, f64)| {
+                let mut p = BezPath::new();
+                p.move_to((x + a.0, x + a.1));
+                p.line_to((x + b.0, x + b.1));
+                p
+            };
+            let shapes = [Shape::new(line((0.0, 0.0), (100.0, rise)), NZ, 0), Shape::new(line((0.0, rise), (100.0, 0.0)), NZ, 1)];
+            let out = try_pathfinder(PathfinderOp::Outline, &shapes).expect("within the limits");
+            let mut pieces = [0usize; 2];
+            for s in &out {
+                pieces[s.key as usize] += 1;
+            }
+            assert_eq!(pieces, [2, 2], "lines rising by {rise} at {x:e}");
+        }
+    }
+}

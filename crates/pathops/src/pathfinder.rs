@@ -921,7 +921,11 @@ fn outline_edges(junctions: Vec<Point>, shapes: &[Shape], validate: bool) -> Opt
     let junctions = Junctions::new(junctions);
     let scale = shapes.iter().filter_map(|s| control_bounds(&s.path)).map(|r| r.width().max(r.height())).fold(1.0, f64::max);
     let tol = scale * 1e-7;
-    let reach = tol.max(1e-6);
+    // How far a junction may lie from a path: a ten-millionth of the size of the shapes, a millionth at the least, and the tolerance of the sweep
+    // that placed it where that is more (the coordinates are past 1e10: 1.4e-3 at 1e11, for a shape that may be a hundred across). The sweep puts
+    // the crossing of two paths at a shallow angle within its tolerance of each, and not nearer to them than that, whatever size they are.
+    let eps = crate::boolean::eps_for(shapes.iter().map(|s| &s.path)).unwrap_or(0.0);
+    let reach = tol.max(1e-6).max(eps);
     // Each subpath of the shapes, with the junctions that lie on its segments.
     let mut walks: Vec<Walk> = Vec::new();
     for s in shapes {
