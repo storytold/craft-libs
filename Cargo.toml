@@ -27,6 +27,7 @@ craft-affinity = { path = "crates/affinity" }
 craft-ai-core = { path = "crates/ai-core" }
 craft-anicraft-format = { path = "crates/anicraft-format" }
 craft-pdf = { path = "crates/pdf", version = "=0.1.0" }
+craft-pe = { path = "crates/pe" }
 craft-ps = { path = "crates/ps", version = "=0.1.0" }
 craft-pdn = { path = "crates/pdn" }
 craft-plate-test = { path = "crates/plate-test" }

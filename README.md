@@ -61,6 +61,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   of compositions, layers, properties, keyframes, effects, masks, shapes, text and footage.
   Clean room, from EffectCraft. Mapping onto an app's document stays in the app.
 - [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
+- [`craft-pe`](crates/pe/src/lib.rs): PE/COFF headers (`.exe`, `.dll`, `.sys`, `.efi`) from untrusted bytes, from Craft Anything: the COFF header, PE32/PE32+ optional header with its data directories bounded by the header's real size, the section table, RVA-to-file mapping and the decoded Rich header.
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 
 - [`craft-pdn`](crates/pdn/README.md): Paint.NET documents (`.pdn`, PDN3), read: the layer list, blend modes and chunked gzip pixel blocks, with a data-only MS-NRBF (.NET binary serialization) reader. From PhotoCraft.
