@@ -35,7 +35,7 @@ pub use words::CanvasWords;
 
 #[doc(hidden)]
 pub use tool::tool_probe;
-pub use tool::{CanvasTool, NoTool, ToolAccess, ToolAction, ToolAnchor, ToolClaims, ToolContext, ToolKey, ToolPointer, ViewEase};
+pub use tool::{CanvasTool, NoTool, ToolAccess, ToolAction, ToolAnchor, ToolClaims, ToolContext, ToolKey, ToolPointer, ToolRegion, ViewEase};
 pub use tool_groups::{PickStep, tool_pick};
 pub use tool_host::{ContextRequest, StandInKey, ToolHost, ToolHostResponse, ToolInput, ToolReadout, ViewPan, tool_pass};
 
@@ -112,13 +112,17 @@ use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
-    CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, Intent, Metrics, Mixed, PartKey, PointerButton, PressPhase, PressState, Sense,
-    WheelNotch,
+    CanvasTransform, CanvasView, EditEvent, HitLevel, HitPriority, HitShape, Intent, Metrics, Mixed, PartKey, PointerButton, PressPhase, PressState,
+    Sense, WheelNotch,
 };
 use egui::{Pos2, Rect, Response, Vec2};
 use zoom_motion::{Steer, ViewMotion};
 
 pub(crate) const BACKGROUND: PartKey = PartKey::new("background");
+
+/// The areas the active tool claims over the canvas controls ([`Canvas::tool_regions`]): `TOOL_REGION.at(i)` is the
+/// region at `i`.
+const TOOL_REGION: PartKey = PartKey::new("toolRegion");
 
 /// Why the background part is pointer-only: the keyboard path of the running tool is its command form
 /// ([`CanvasTool::command_form`]), the one owner of that fact.
@@ -208,6 +212,13 @@ pub struct Canvas<'a> {
     /// framework `CropTool`'s image mode.
     #[prop(name = "view_follows_pointer")]
     follows_pointer: bool,
+    /// The areas where the active tool takes a press over every canvas control this pass, from
+    /// [`CanvasTool::regions`], which the app asks before it shows the canvas. A press there is the canvas's background
+    /// press, the one the tool host and the body's controls read. The canvas maps them to the screen through the view
+    /// given this pass: while the canvas moves the view itself in a pass (the wheel, a middle-button pan, a zoom
+    /// ease), the shapes the next press meets lag that pass's motion. Without a given view nothing is claimed.
+    #[prop]
+    tool_regions: Vec<ToolRegion>,
     /// The slot the body's paint reserved for the picture, published in the [`CanvasSpace`]; none in a measuring pass.
     picture: Option<crate::primitives::PaintSlot>,
 }
@@ -248,6 +259,7 @@ impl<'a> Canvas<'a> {
             context_key: false,
             ease: None,
             follows_pointer: false,
+            tool_regions: Vec::new(),
             picture: None,
         }
         .label(label)
@@ -365,7 +377,7 @@ impl<'a> Canvas<'a> {
                 jumped = true;
             }
         }
-        if let Some(delta) = Self::background_press(cx).1 {
+        if let Some(delta) = self.background_press(cx).1 {
             pan(&mut view, delta);
             jumped = true;
         }
@@ -469,10 +481,14 @@ impl<'a> Canvas<'a> {
         self.snap.clone().map(|snap| snap.at(&view, os))
     }
 
-    /// The press on the background part as the canvas reports it, and the pan of a middle-button drag: a middle press
-    /// pans the view and is never a tool press.
-    fn background_press(cx: &Cx<'_, Self>) -> (PressState, Option<Vec2>) {
-        let press = cx.part(BACKGROUND).press;
+    /// The press on the background part, or on the tool region that holds it, as the canvas reports it, and the pan
+    /// of a middle-button drag: a middle press pans the view and is never a tool press.
+    fn background_press(&self, cx: &Cx<'_, Self>) -> (PressState, Option<Vec2>) {
+        let region = (0..self.tool_regions.len() as u64)
+            .filter_map(|i| cx.part_if_declared(TOOL_REGION.at(i)))
+            .map(|result| result.press)
+            .find(|press| !matches!(press.phase, PressPhase::Idle));
+        let press = region.unwrap_or(cx.part(BACKGROUND).press);
         let middle = press.phase.start().is_some_and(|start| start.button == PointerButton::Middle);
         match press.phase {
             PressPhase::DragStart { start, pos, .. } if middle => (PressState::IDLE, Some(pos - start.origin)),
@@ -484,7 +500,7 @@ impl<'a> Canvas<'a> {
 
     /// The tool host's input of this pass: settled in `update`, so the body and `finish` read the same.
     fn tool_pass(&self, cx: &Cx<'_, Self>) -> ToolPass {
-        let press = Self::background_press(cx).0;
+        let press = self.background_press(cx).0;
         let caps_lock = lock_keys::caps_lock(&cx.response.ctx);
         let space = self.space(cx.response.id, cx.env.scale().0, BackgroundPress::of(&press, self.context_key), caps_lock);
         ToolPass {
@@ -649,11 +665,30 @@ impl Component for Canvas<'_> {
     /// The background part the active tool gets. It sits in the canvas root's space, the parent layer's. A press on it
     /// focuses the canvas, so the keys the tool reads reach it. It has a context menu, so the press machine tells a
     /// secondary click from a secondary drag on it as it does for the primary button.
+    ///
+    /// The tool's regions are parts of the same kind, `over` the body, so they rank above every canvas control.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
-        cx.part(BACKGROUND, rect)
-            .priority(HitPriority::new(HitLevel::Background, 0))
-            .sense(Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG | Sense::TAKE_FOCUS)
-            .pointer_only(TOOL_PATH);
+        let sense = Sense::CLICK | Sense::CONTEXT_CLICK | Sense::DRAG | Sense::TAKE_FOCUS;
+        cx.part(BACKGROUND, rect).priority(HitPriority::new(HitLevel::Background, 0)).sense(sense).pointer_only(TOOL_PATH);
+        if self.tool_regions.is_empty() {
+            return;
+        }
+        // `parts` runs before `update` settles this pass's view: the regions map through the view given.
+        let Some(view) = self.view.as_mut().and_then(|view| view.reborrow().get()).and_then(|held| held.same().copied()) else { return };
+        if !view.rect.is_positive() {
+            return;
+        }
+        for (i, region) in self.tool_regions.iter().enumerate() {
+            let points: Vec<Pos2> = region.points.iter().map(|&p| view.to_screen(p)).collect();
+            if points.len() < 3 {
+                continue;
+            }
+            cx.part(TOOL_REGION.at(i as u64), HitShape::Polygon(points))
+                .priority(HitPriority::new(HitLevel::Background, 0))
+                .sense(sense)
+                .pointer_only(TOOL_PATH)
+                .over();
+        }
     }
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {

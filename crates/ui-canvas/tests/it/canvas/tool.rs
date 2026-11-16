@@ -7,8 +7,8 @@ use craft_behavior::{Axis, CancelReason, CanvasView, Cursor, CursorIcon, Gesture
 use craft_keymap::Mods;
 use craft_ui::canvas::{
     Autoscroll, Canvas, CanvasScrollbars, CanvasTool, ContextRequest, CropOverlay, HandTool, Momentary, MomentaryCommands, MomentaryTool,
-    NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer, canvas_space,
-    tool_pass,
+    NavigationOptions, Snap, StandInKey, ToolAction, ToolClaims, ToolContext, ToolHost, ToolInput, ToolKey, ToolPath, ToolPointer, ToolRegion,
+    canvas_space, tool_pass,
 };
 use craft_ui::contract::{Bind, Lazy, Sampler as _, Show as _, ShowContainer as _};
 use craft_ui::dialog::Dialog;
@@ -150,6 +150,61 @@ fn controls_pressing_reads_a_canvas_control_drag_not_the_tool() {
     assert!(tool_held(&mut fixture), "a press away from the overlay is the tool's");
     assert!(!pressing(&mut fixture), "the tool's gesture is no control's");
     fixture.release_at(away - Vec2::new(30.0, 20.0));
+}
+
+/// A tool that claims `regions` over the canvas controls and counts the presses it gets.
+#[derive(Default)]
+struct Claimer {
+    regions: Vec<ToolRegion>,
+    presses: usize,
+}
+
+impl CanvasTool for Claimer {
+    fn regions(&self) -> Vec<ToolRegion> {
+        self.regions.clone()
+    }
+
+    fn press(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) -> ToolAction {
+        self.presses += 1;
+        ToolAction::Claimed
+    }
+
+    fn drag(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn release(&mut self, _: &ToolPointer, _: &mut ToolContext<'_>) {}
+
+    fn cancel(&mut self, _: CancelReason, _: &mut ToolContext<'_>) {}
+
+    fn paint(&self, _: &Draw<'_>, _: &ToolContext<'_>) {}
+
+    fn command_form(&self) -> ToolPath {
+        ToolPath::Command("the tool's form")
+    }
+}
+
+#[trial]
+fn a_region_the_tool_claims_takes_a_press_over_a_canvas_control_and_the_control_keeps_the_rest() {
+    let start = craft_behavior::kurbo::Rect::new(100.0, 80.0, 300.0, 220.0);
+    let crop = Rc::new(RefCell::new(craft_behavior::geometry::CropBox::upright(start)));
+    let shown = Rc::clone(&crop);
+    // The region covers the frame's top left corner, in document units.
+    let corner = vec![Point::new(85.0, 65.0), Point::new(115.0, 65.0), Point::new(115.0, 95.0), Point::new(85.0, 95.0)];
+    let tool = Claimer { regions: vec![ToolRegion::polygon(corner)], presses: 0 };
+    let view = |rect| CanvasView::new(rect, Point::new(200.0, 150.0), 1.0);
+    let mut fixture = ToolFixture::with_view("Document", tool, view, move |ui, body| {
+        let _ = CropOverlay::new("Crop", Bind::bound(&mut *shown.borrow_mut())).show_at(ui, body.rect);
+    });
+    let by = Vec2::new(20.0, 15.0);
+
+    let claimed = fixture.fixture().by_label("Crop corner, top left").expect("the crop shows its corners").rect.center();
+    fixture.press_at(claimed).move_to(claimed + by * 0.5).move_to(claimed + by).release_at(claimed + by);
+    assert_eq!(fixture.tool().presses, 1, "a press in the claimed region is the tool's background press");
+    assert_eq!(crop.borrow().rect, start, "the corner under the region does not move");
+
+    let free = fixture.fixture().by_label("Crop corner, top right").expect("the crop shows its corners").rect.center();
+    fixture.press_at(free).move_to(free + by * 0.5).move_to(free + by).release_at(free + by);
+    assert_eq!(fixture.tool().presses, 1, "a press outside the region is the control's: the tool gets none");
+    assert_ne!(crop.borrow().rect, start, "the corner outside the region moves");
 }
 
 #[trial]

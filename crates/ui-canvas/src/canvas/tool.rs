@@ -598,6 +598,22 @@ impl ToolClaims {
     }
 }
 
+/// An area of the canvas where the active tool takes a press over every canvas control
+/// ([`CanvasTool::regions`]): a polygon in document units.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct ToolRegion {
+    /// The corners in order, in document units.
+    pub points: Vec<Point>,
+}
+
+impl ToolRegion {
+    /// The polygon with the corners `points`, in document units.
+    pub fn polygon(points: Vec<Point>) -> Self {
+        ToolRegion { points }
+    }
+}
+
 /// A tool on the canvas. The app owns the value and hands it to [`ToolHost::run`](super::ToolHost::run) each
 /// pass; a tool with a gesture in progress keeps its state in itself. One `Begin`...`Commit` makes a drag: `press`
 /// returning [`ToolAction::Claimed`] begins it, `drag` updates it, `release` commits it, `cancel` ends it.
@@ -629,6 +645,16 @@ pub trait CanvasTool {
     /// Default: none.
     fn claims(&self) -> ToolClaims {
         ToolClaims::NONE
+    }
+
+    /// The areas where the tool takes a press over every canvas control in the coming pass, in its state before the
+    /// pass (a type tool's other text while an edit is open, where a press is the tool's and not the edit's move
+    /// reach). The app asks it before it shows the canvas and hands the result to
+    /// [`Canvas::tool_regions`](super::Canvas::tool_regions); a press there is the canvas's background press. A tool
+    /// that runs a gesture from a press in a region keeps claiming that region until the release: a region that is
+    /// gone in the next pass takes the press with it. Default: none.
+    fn regions(&self) -> Vec<ToolRegion> {
+        Vec::new()
     }
 
     /// A key while the canvas has the keyboard and no text part keeps it. Return `true` to take it from the app's
@@ -727,6 +753,10 @@ impl<T: CanvasTool + ?Sized> CanvasTool for &mut T {
 
     fn claims(&self) -> ToolClaims {
         (**self).claims()
+    }
+
+    fn regions(&self) -> Vec<ToolRegion> {
+        (**self).regions()
     }
 
     fn key(&mut self, key: &ToolKey, cx: &mut ToolContext<'_>) -> bool {
