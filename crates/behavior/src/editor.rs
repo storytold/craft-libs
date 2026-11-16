@@ -62,6 +62,11 @@ impl EditorInput {
         EditorInput::Delete { forward, by }
     }
 
+    /// A `DeleteSurrounding` of `before` and `after` characters.
+    pub const fn delete_surrounding(before: usize, after: usize) -> Self {
+        EditorInput::DeleteSurrounding { before, after }
+    }
+
     /// A `Preedit` of `text` with the IME's cursor.
     pub fn preedit(text: impl Into<Arc<str>>, cursor: Option<Range<usize>>) -> Self {
         EditorInput::Preedit { text: text.into(), cursor }

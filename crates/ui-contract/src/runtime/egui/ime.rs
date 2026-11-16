@@ -10,6 +10,11 @@ pub(crate) enum Raw {
         cursor_chars: Option<std::ops::Range<usize>>,
     },
     Commit(String),
+    /// The input method deletes characters around the caret or the marked text.
+    DeleteSurrounding {
+        before: usize,
+        after: usize,
+    },
     /// The OS finished the reset with this request id.
     ResetCompleted(egui::ImeResetId),
     /// The integration dropped the reset request with this id; no completion follows.
@@ -26,6 +31,9 @@ pub(crate) fn take_events(events: &mut Vec<Event>) -> Vec<Raw> {
                     taken.push(Raw::Preedit { text: text.clone(), cursor_chars: active_range_chars.clone() })
                 }
                 ImeEvent::Commit(text) => taken.push(Raw::Commit(text.clone())),
+                ImeEvent::DeleteSurrounding { before_chars, after_chars } => {
+                    taken.push(Raw::DeleteSurrounding { before: *before_chars, after: *after_chars })
+                }
                 _ => {}
             }
             false

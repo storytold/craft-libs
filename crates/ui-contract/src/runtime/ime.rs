@@ -124,6 +124,7 @@ pub(crate) fn begin(ctx: &Context, owner: Option<Id>) {
                     engine.preedit = text.clone();
                     engine.edits.push(EditorInput::preedit(text, cursor));
                 }
+                os::Raw::DeleteSurrounding { before, after } => engine.edits.push(EditorInput::delete_surrounding(before, after)),
                 os::Raw::Commit(text) => {
                     engine.composing = false;
                     engine.preedit.clear();
