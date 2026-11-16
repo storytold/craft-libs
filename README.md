@@ -259,6 +259,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   AC-3/E-AC-3, MP1/MP2, MP3 encoding), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
 - [`craft-latex`](crates/latex/README.md): LaTeX documents read (the everyday subset) and written (a standalone article), to and from the craft-flow model.
+- [`craft-macho`](crates/macho/src/lib.rs): Mach-O header pieces from untrusted bytes, from Craft Anything: universal (fat and fat64) slice tables checked against the file, CPU and load command names, the fixed size each load command needs before its fields are read, and the thread-state program counter.
 - [`craft-markdown`](crates/markdown/README.md): Markdown read and written (a CommonMark subset with GitHub tables and strikethrough), to and from the craft-flow model.
 - [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
