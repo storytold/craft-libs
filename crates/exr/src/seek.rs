@@ -145,14 +145,18 @@ pub struct ChunkInfo {
     /// Where the chunk starts in the file.
     pub offset: u64,
     /// The bytes read for it: up to the next chunk in the file (or the file's end), at most a
-    /// block's bytes plus its header; 0 when its offset lies outside the file (a read that needs
-    /// it fails).
+    /// block's bytes plus its header; 0 when its offset lies outside the chunk area (past the
+    /// file's end, or in the headers or offset tables): a read that needs it fails.
     pub len: u64,
-    /// Its top-left pixel in the part's data window, counted from the data window's corner (0, 0),
-    /// and its size in pixels.
+    /// The column of its top-left pixel in the part's data window, counted from the data
+    /// window's left edge (0).
     pub x: usize,
+    /// The row of its top-left pixel, counted from the data window's top edge (0).
     pub y: usize,
+    /// Its width in pixels (a tile at the right edge, or a scan-line block, may be narrower than
+    /// the tile size; a scan-line block is as wide as the data window).
     pub width: usize,
+    /// Its height in pixels (the last scan-line block or the bottom tiles may hold fewer rows).
     pub height: usize,
 }
 
@@ -413,11 +417,11 @@ fn check_part(index: usize, h: &Header, limits: &Limits) -> Result<()> {
     if h.channels.list.is_empty() || h.channels.list.len() > 4096 {
         return Err(malformed(format!("channel count of part {index}")));
     }
+    // (the decompressor's actual block is no larger than the crate's bound, so it fits too; how
+    // large a block may be depends on the read: see `read_bands`)
     if !crate_bound_fits(h) {
         return Err(malformed(format!("the block size of part {index} overflows")));
     }
-    // (how large a block may be depends on the read: see `read_bands`)
-    block_bytes(h).ok_or_else(|| malformed(format!("the block size of part {index} overflows")))?;
     Ok(())
 }
 
@@ -676,18 +680,23 @@ struct Planned {
 /// Each time a piece has been read, and while waiting, the calling thread hands every band that
 /// is next in file order to `sink`, so the first bands arrive after the first few hundred
 /// kilobytes have been read, not after the whole request, and `sink` needs to be neither `Send`
-/// nor `Sync`. Memory is bounded: at most one piece is read ahead of what has been delivered (so
-/// at most two pieces of compressed bytes, 8 MiB, or one larger chunk, are held), and the
-/// decoded bytes in flight (decompressed blocks and waiting bands, estimated from the headers,
-/// see [`Stats::in_flight`]) stay within 64 MiB or one chunk's worth: a chunk whose block alone is
-/// over 64 MiB is decoded alone, once everything before it has been delivered, so however many
-/// workers run, at most one such block is held at a time. A block may take no more than 256 MiB,
-/// or [`Request::max_bytes`] if that is more; a needed chunk over it is refused
-/// ([`Error::LimitExceeded`]) before anything is read. Besides, each worker holds
-/// a copy of the compressed chunk it decodes: a chunk's declared size is checked against the
-/// bytes it holds before the `exr` crate allocates by it. Where threads can't be started
-/// (WebAssembly) the chunks are decoded on the calling thread instead. `cancel` is polled before
-/// each piece, after each chunk a wait brings, and at least every 50 ms while waiting.
+/// nor `Sync`.
+///
+/// Memory is bounded. At most one piece is read ahead of what has been delivered, so at most two
+/// pieces of compressed bytes (8 MiB, or one larger chunk) are held. Each chunk's decoded bytes
+/// are estimated from the headers as its decompressed block plus 4 bytes per pixel for each
+/// requested slot of its part (see [`Stats::in_flight`]); the chunks in flight stay within
+/// 64 MiB of that, and a chunk whose estimate alone is over 64 MiB is decoded alone, once
+/// everything before it has been delivered, so however many workers run, at most one such chunk
+/// is held at a time. A block may take no more than 256 MiB, or [`Request::max_bytes`] if that is
+/// more; a needed chunk over it is refused ([`Error::LimitExceeded`]) before anything is read.
+/// For one big chunk the real peak is several times its block: its compressed bytes in the
+/// piece, the `exr` crate's copy of its payload (a chunk's declared size is checked against the
+/// bytes it holds first, so that copy is no larger than the chunk), the decompressed block, the
+/// decompressor's scratch buffers, and the `f32` bands; roughly 3 to 4 times
+/// `max(256 MiB, max_bytes)` at worst. Where threads can't be started (WebAssembly) the chunks
+/// are decoded on the calling thread instead. `cancel` is polled before each piece, before each
+/// chunk is handed to `sink`, and at least every 50 ms while waiting for the workers.
 ///
 /// A band lies inside the planes the request describes ([`level_size`] of the display window);
 /// rows or columns no chunk or data window covers are not delivered. A chunk the request needs
@@ -784,7 +793,7 @@ fn read_into<R: Read + Seek + ?Sized>(
                 continue;
             }
             if c.len == 0 {
-                return Err(malformed("a chunk offset outside the file"));
+                return Err(malformed("a chunk offset outside the chunk area of the file"));
             }
             let pixels = (c.cols as u64).saturating_mul(c.rows as u64);
             let block = pixels.saturating_mul(part.pixel_bytes as u64);
@@ -835,7 +844,7 @@ fn read_into<R: Read + Seek + ?Sized>(
         // Hands over what is next in order and takes it off the bytes in flight.
         let mut deliver = |order: &mut InOrder, in_flight: &mut u64, stats: &mut Stats| -> Result<()> {
             let before = order.next;
-            let delivered = order.deliver(sink, stats);
+            let delivered = order.deliver(sink, stats, cancel);
             let done: u64 = jobs.get(before..order.next).unwrap_or_default().iter().map(|j| j.cost).fold(0, u64::saturating_add);
             *in_flight = in_flight.saturating_sub(done);
             delivered
@@ -1025,10 +1034,15 @@ impl InOrder {
         self.waiting.insert(seq, decoded);
     }
 
-    /// Hands every chunk that is next in order to `sink`; the first chunk that failed to decode
-    /// ends the read with its error (after the chunks before it were delivered).
-    fn deliver(&mut self, sink: &mut dyn FnMut(Band), stats: &mut Stats) -> Result<()> {
-        while let Some(decoded) = self.waiting.remove(&self.next) {
+    /// Hands every chunk that is next in order to `sink`, polling `cancel` before each one; the
+    /// first chunk that failed to decode ends the read with its error (after the chunks before it
+    /// were delivered).
+    fn deliver(&mut self, sink: &mut dyn FnMut(Band), stats: &mut Stats, cancel: &dyn Fn() -> bool) -> Result<()> {
+        while self.waiting.contains_key(&self.next) {
+            if cancel() {
+                return Err(Error::Cancelled);
+            }
+            let Some(decoded) = self.waiting.remove(&self.next) else { break };
             self.next += 1;
             let (bands, lines) = decoded?;
             stats.lines = stats.lines.saturating_add(lines);
@@ -1101,7 +1115,7 @@ fn read_piece<R: Read + Seek + ?Sized>(source: &mut R, piece: &[Planned], pos: &
 /// megabytes) before reading it, and computes a tile's position from the level it declares
 /// (panicking on some). The header is the part number (in multi-part files), then the first
 /// scan line's y or the tile's column, row and level (x, y), then the payload size, all `i32`.
-fn check_chunk_header(meta: &MetaData, header: &Header, pi: usize, expected: &ChunkRef, buf: &[u8]) -> Result<()> {
+fn check_chunk_header(meta: &MetaData, header: &Header, pi: usize, expected: &ChunkRef, buf: &[u8]) -> Result<Range<usize>> {
     let word = |i: usize| buf.get(i * 4..i * 4 + 4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(i32::from_le_bytes);
     let short = || malformed("a chunk shorter than its header");
     let mut at = 0usize;
@@ -1131,7 +1145,8 @@ fn check_chunk_header(meta: &MetaData, header: &Header, pi: usize, expected: &Ch
     if size > buf.len().saturating_sub((at + 1) * 4) {
         return Err(malformed("a chunk declaring more bytes than it holds"));
     }
-    Ok(())
+    let start = (at + 1) * 4;
+    Ok(start..start + size)
 }
 
 /// Decompress the chunk `buf` of part `pi`, which its offset table says is `expected`, and convert
@@ -1142,7 +1157,9 @@ fn check_chunk_header(meta: &MetaData, header: &Header, pi: usize, expected: &Ch
 fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Geometry) -> Result<(Vec<Band>, usize)> {
     let meta = &index.meta;
     let (Some(header), Some(part)) = (meta.headers.get(pi), index.layout.get(pi)) else { return Err(malformed("no such part")) };
-    check_chunk_header(meta, header, pi, expected, buf)?;
+    let payload = check_chunk_header(meta, header, pi, expected, buf)?;
+    // (a DWA chunk's counters can make the crate allocate terabytes: see `crate::dwa_guard`)
+    crate::dwa_guard::check_payload(header, (expected.cols, expected.rows), buf.get(payload).unwrap_or_default()).map_err(malformed)?;
     let mut read = buf;
     let chunk = Chunk::read(&mut read, meta).map_err(exr_error)?;
     let block = UncompressedBlock::decompress_chunk(chunk, meta, false).map_err(exr_error)?;

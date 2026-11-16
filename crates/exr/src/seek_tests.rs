@@ -977,3 +977,125 @@ fn the_decoded_bytes_in_flight_stay_within_the_budget_however_well_the_file_comp
     assert!(stats.bytes < 64 << 10, "{} bytes: well compressed", stats.bytes);
     assert!(stats.in_flight > 0 && stats.in_flight <= budget, "{} decoded bytes in flight", stats.in_flight);
 }
+
+#[test]
+fn cancel_is_polled_before_each_chunk_reaches_the_sink() {
+    // Decoded on the calling thread, the first piece's ~30 chunks are ready at once; a cancel
+    // the sink raises after the first chunk's two bands stops the rest.
+    let bytes = file(vec![layer(None, (0, 0), (1024, 600), &["R", "G"], false, Compression::Uncompressed)], (1024, 600));
+    let index = indexed(&bytes);
+    let channels = channels_of(&index, 0);
+    let stop = Cell::new(false);
+    let mut bands = 0usize;
+    let request = Request { workers: Some(0), ..Request::new(&channels, usize::MAX) };
+    let got = read_bands(&mut Cursor::new(&bytes[..]), &index, &request, &|| stop.get(), &mut |_| {
+        bands += 1;
+        stop.set(true);
+    });
+    assert_eq!(got.err(), Some(Error::Cancelled));
+    assert_eq!(bands, 2, "one chunk (both channels), nothing after the cancel");
+}
+
+#[test]
+fn a_chunk_offset_into_the_headers_is_outside_the_chunk_area() {
+    let mut bytes = file(vec![layer(None, (0, 0), (8, 16), &["Y"], false, Compression::ZIP1)], (8, 16));
+    let table = table_at(&bytes, 16);
+    bytes[table..table + 8].copy_from_slice(&8u64.to_le_bytes());
+    let index = indexed(&bytes);
+    assert_eq!(index.chunks(0).next().map(|c| c.len), Some(0));
+    let got = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&[(0, 0)], usize::MAX), &never);
+    assert!(matches!(&got, Err(Error::Malformed(m)) if m.contains("outside the chunk area")), "{got:?}");
+}
+
+/// A single-part scan-line DWA file of `w × h` with these half channels (a ramp each).
+fn dwa_file(compression: Compression, (w, h): (usize, usize), names: &[&str], tiles: bool) -> Vec<u8> {
+    use exr::prelude::f16;
+    let list: Vec<AnyChannel<FlatSamples>> = names
+        .iter()
+        .enumerate()
+        .map(|(k, n)| AnyChannel::new(*n, FlatSamples::F16((0..w * h).map(|i| f16::from_f32(((i % w) + k) as f32 / 64.0)).collect())))
+        .collect();
+    let blocks = if tiles { Blocks::Tiles(Vec2(16, 16)) } else { Blocks::ScanLines };
+    let encoding = Encoding { compression, blocks, line_order: LineOrder::Increasing };
+    file(vec![Layer::new((w, h), LayerAttributes::default(), encoding, AnyChannels::sort(list.into()))], (w, h))
+}
+
+/// `bytes` with DWA counter `field` (0: version … 9: DC count) of the first chunk set to `value`.
+fn with_dwa_counter(bytes: &[u8], field: usize, value: u64) -> Vec<u8> {
+    let index = indexed(bytes);
+    let chunk = index.chunks(0).next().unwrap();
+    let at = chunk.offset as usize;
+    // (y, then the payload size: compressed, so it's no raw copy of the 64 × 32 half block)
+    assert_ne!(i32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()), 64 * 32 * 2);
+    let mut out = bytes.to_vec();
+    out[at + 8 + 8 * field..at + 16 + 8 * field].copy_from_slice(&value.to_le_bytes());
+    out
+}
+
+/// Every reader of the crate refuses `bytes` as damaged, and none aborts.
+fn refused_by_every_reader(bytes: &[u8], what: &str) {
+    use crate::decode::{Error as DecodeError, decode_display_part, decode_part};
+    let index = indexed(bytes);
+    let got = read_planes(&mut Cursor::new(bytes), &index, &Request::new(&[(0, 0)], usize::MAX), &never);
+    assert!(matches!(&got, Err(Error::Malformed(m)) if m.contains("DWA")), "seek, {what}: {got:?}");
+    let got = decode_display_part(bytes, 0, &|_| true, &|_| 0.0, &Limits::default()).map(|_| ());
+    assert!(matches!(&got, Err(DecodeError::Malformed(m)) if m.contains("DWA")), "decode_display_part, {what}: {got:?}");
+    let got = decode_part(bytes, 0, &|_| true, &Limits::default()).map(|_| ());
+    assert!(matches!(&got, Err(DecodeError::Malformed(m)) if m.contains("DWA")), "decode_part, {what}: {got:?}");
+    let got = crate::stream::Decoder::new(Cursor::new(bytes), &never).and_then(|mut d| {
+        while d.next_band(&never)?.is_some() {}
+        Ok(())
+    });
+    assert!(matches!(&got, Err(DecodeError::Malformed(m)) if m.contains("DWA")), "stream, {what}: {got:?}");
+}
+
+#[test]
+fn a_dwa_chunk_declaring_2_to_the_44_dc_values_is_refused_not_an_abort() {
+    // The case that aborted the process: DWAA 64 × 32, one half channel R, DC count 2^44.
+    let bytes = with_dwa_counter(&dwa_file(Compression::DWAA(None), (64, 32), &["R"], false), 9, 1 << 44);
+    refused_by_every_reader(&bytes, "DC count 2^44");
+}
+
+#[test]
+fn every_dwa_counter_the_inflater_sizes_by_is_bounded_by_the_block() {
+    for compression in [Compression::DWAA(None), Compression::DWAB(None)] {
+        // (fields: 1 unknown uncompressed size, 6 RLE uncompressed size, 7 RLE raw size, 8 AC
+        // count, 9 DC count; a value just over each bound, and a huge one)
+        let good = dwa_file(compression, (64, 32), &["R"], false);
+        // The block: 64 × 32 half, 4096 bytes; 8 × 4 DCT blocks of one channel.
+        for (field, over) in [(1, 4097u64), (6, 8193), (7, 4097), (8, 32 * 63 + 1), (9, 33)] {
+            for value in [over, 1 << 44, i64::MAX as u64] {
+                refused_by_every_reader(&with_dwa_counter(&good, field, value), &format!("{compression:?} counter {field} = {value}"));
+            }
+        }
+    }
+}
+
+#[test]
+fn valid_dwa_files_pass_the_guard() {
+    // Odd sizes (blocks padded to 8 × 8 for the DCT), lossy and lossless channels, one-row and
+    // one-column parts, scan lines and tiles.
+    for compression in [Compression::DWAA(None), Compression::DWAB(None)] {
+        for (size, names, tiles) in [
+            ((1, 1), &["R"][..], false),
+            ((9, 7), &["B", "G", "R"][..], false),
+            ((1, 300), &["Y", "A"][..], false),
+            ((300, 1), &["R", "G", "B", "A", "Z"][..], false),
+            ((64, 32), &["R"][..], false),
+            ((37, 41), &["R", "G", "B", "A"][..], true),
+        ] {
+            let bytes = dwa_file(compression, size, names, tiles);
+            let index = indexed(&bytes);
+            let channels = channels_of(&index, 0);
+            let read = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&channels, usize::MAX), &never);
+            assert_eq!(read.map(|r| r.planes).ok(), Some(oracle(&bytes, 0, 0.0)), "{compression:?} {size:?} {names:?} tiles {tiles}");
+            assert!(crate::decode::decode_part(&bytes, 0, &|_| true, &Limits::default()).is_ok());
+            if !tiles {
+                let mut stream = crate::stream::Decoder::new(Cursor::new(&bytes[..]), &never);
+                if let Ok(d) = stream.as_mut() {
+                    while d.next_band(&never).unwrap().is_some() {}
+                }
+            }
+        }
+    }
+}

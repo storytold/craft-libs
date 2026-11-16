@@ -38,6 +38,8 @@ pub mod deep;
 #[cfg(all(test, feature = "decode"))]
 mod deep_tests;
 #[cfg(feature = "decode")]
+mod dwa_guard;
+#[cfg(feature = "decode")]
 pub mod seek;
 #[cfg(all(test, feature = "decode"))]
 mod seek_tests;
