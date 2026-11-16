@@ -349,7 +349,7 @@ fn cbor_item(b: &[u8], pos: &mut usize, depth: u32) -> Option<Value> {
                         Value::from(items.iter().map(|v| v.to_string()).collect::<Vec<_>>().join("."))
                     }
                     ("solc", Value::String(s)) if s.starts_with("0x") && s.len() == 8 => {
-                        let d: Vec<u8> = (0..3).filter_map(|i| u8::from_str_radix(s.get(2 + 2 * i..4 + 2 * i)?, 16).ok()).collect();
+                        let d: Vec<u8> = (0..3).filter_map(|i| hex_byte(s.get(2 + 2 * i..4 + 2 * i)?)).collect();
                         if let [a, bb, c] = d.as_slice() { Value::from(format!("{a}.{bb}.{c}")) } else { v }
                     }
                     ("ipfs", Value::String(s)) if s.starts_with("0x1220") => Value::from(base58(&hex_decode(s.get(2..).unwrap_or("")))),
@@ -378,8 +378,13 @@ fn bytes_value(s: &[u8]) -> String {
     out
 }
 
+/// One byte from two hex digits; `from_str_radix` alone would also accept a leading `+`.
+fn hex_byte(pair: &str) -> Option<u8> {
+    if pair.bytes().all(|c| c.is_ascii_hexdigit()) { u8::from_str_radix(pair, 16).ok() } else { None }
+}
+
 fn hex_decode(s: &str) -> Vec<u8> {
-    (0..s.len() / 2).filter_map(|i| u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()).collect()
+    (0..s.len() / 2).filter_map(|i| hex_byte(s.get(2 * i..2 * i + 2)?)).collect()
 }
 
 fn base58(b: &[u8]) -> String {
@@ -716,6 +721,21 @@ fn reverts_soon(code: &[u8], ins: &[Ins], mut k: usize, index_of: &dyn Fn(usize)
 mod tests {
     use super::*;
     use craft_anything_testkit::formats as fx;
+
+    #[test]
+    fn hex_signs_are_not_hex_digits() {
+        let solc = |v: &str| {
+            let mut b = vec![0xa1, 0x64];
+            b.extend(b"solc");
+            b.push(0x60 + v.len() as u8);
+            b.extend(v.as_bytes());
+            cbor_item(&b, &mut 0, 0).unwrap()["solc"].clone()
+        };
+        assert_eq!(solc("0x+1+2+3"), "0x+1+2+3");
+        assert_eq!(solc("0x000008"), "0.0.8");
+        assert!(hex_decode("+f").is_empty());
+        assert_eq!(hex_decode("0f"), vec![15]);
+    }
 
     /// A plausible trailer length alone must not remove instructions from the analyzed bytecode.
     #[test]
