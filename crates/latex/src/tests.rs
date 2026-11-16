@@ -335,6 +335,40 @@ fn settings_that_are_not_text_show_nothing() {
     }
 }
 
+/// A dropped command takes only its own arguments: `\settowidth{\gap}{wide}{Visible}` keeps `Visible`.
+#[test]
+fn dropped_commands_keep_the_text_after_their_arguments() {
+    for src in [
+        "\\hyphenation{ta-ble}{word}",
+        "\\addvspace{1ex}{word}",
+        "\\enlargethispage{2\\baselineskip}{word}",
+        "\\enlargethispage*{1cm}{word}",
+        "\\selectlanguage{german}{word}",
+        "\\newlength{\\gap}\\settowidth{\\gap}{wide}{word}",
+        "\\settoheight{\\gap}{tall}{word}",
+        "\\settodepth{\\gap}{deep}{word}",
+        "\\newcounter{step}[section]{word}",
+        "\\date{today}{word}",
+        "\\thanks{A note}{word}",
+        "\\captionsetup[figure]{font=it}{word}",
+        "\\setlength{\\parskip}{1em}{word}",
+        "\\setlength\\parindent{0pt}word",
+        "\\newcommand\\foo[1][x]{body}{word}",
+        "\\newenvironment{note}[1]{begin}{end}{word}",
+        "\\def\\foo#1{body}{word}",
+        "\\newtheorem{thm}{Theorem}[section]{word}",
+        "\\addcontentsline{toc}{section}{Intro}{word}",
+        "\\bigskip{word}",
+    ] {
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+    for (name, args) in crate::parser::DROP_WITH_ARGS {
+        let given: String = args.chars().map(|k| if k == 'o' { "[a]" } else { "{a}" }).collect();
+        let src = format!("\\{name}{given}{{word}}");
+        assert_eq!(texts(&format!("\\begin{{document}}{src}\\end{{document}}")), vec!["word".to_string()], "{src}");
+    }
+}
+
 #[test]
 fn special_characters_round_trip() {
     let text = "50% of $5 & #1_a {b} ~c^ \\d <e> |f| -- ``g'' tab\there";

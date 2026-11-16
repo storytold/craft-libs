@@ -16,109 +16,111 @@ pub fn import(bytes: &[u8]) -> Document {
     d
 }
 
-/// Commands dropped together with their arguments (layout and definitions, not text).
-const DROP_WITH_ARGS: &[&str] = &[
-    "documentclass",
-    "usepackage",
-    "RequirePackage",
-    "newcommand",
-    "renewcommand",
-    "providecommand",
-    "newcommand*",
-    "renewcommand*",
-    "providecommand*",
-    "newenvironment",
-    "renewenvironment",
-    "DeclareMathOperator",
-    "DeclareMathOperator*",
-    "def",
-    "let",
-    "setlength",
-    "addtolength",
-    "setcounter",
-    "addtocounter",
-    "stepcounter",
-    "refstepcounter",
-    "vspace",
-    "vspace*",
-    "hspace",
-    "hspace*",
-    "vskip",
-    "hskip",
-    "pagestyle",
-    "thispagestyle",
-    "pagenumbering",
-    "bibliographystyle",
-    "bibliography",
-    "addbibresource",
-    "printbibliography",
-    "input",
-    "include",
-    "includeonly",
-    "graphicspath",
-    "hypersetup",
-    "definecolor",
-    "geometry",
-    "numberwithin",
-    "newtheorem",
-    "newtheorem*",
-    "theoremstyle",
-    "phantom",
-    "hphantom",
-    "vphantom",
-    "index",
-    "nocite",
-    "addcontentsline",
-    "markboth",
-    "markright",
-    "linespread",
-    "setstretch",
-    "fancyhf",
-    "fancyhead",
-    "fancyfoot",
-    "lstset",
-    "captionsetup",
-    "setmainfont",
-    "setsansfont",
-    "setmonofont",
-    "newfontfamily",
-    "date",
-    "thanks",
-    "hyphenation",
-    "addvspace",
-    "enlargethispage",
-    "enlargethispage*",
-    "selectlanguage",
-    "newcounter",
-    "settowidth",
-    "settoheight",
-    "settodepth",
-    "maketitle*",
-    "tableofcontents",
-    "listoffigures",
-    "listoftables",
-    "appendix",
-    "frontmatter",
-    "mainmatter",
-    "backmatter",
-    "cline",
-    "hline",
-    "toprule",
-    "midrule",
-    "bottomrule",
-    "cmidrule",
-    "addlinespace",
-    "endhead",
-    "endfirsthead",
-    "endfoot",
-    "endlastfoot",
-    "rowcolor",
-    "arraystretch",
-    "smallskip",
-    "medskip",
-    "bigskip",
-    "today",
-    "and",
+/// Commands dropped together with their arguments (layout and definitions, not text), each with
+/// the arguments it takes in order: `m` is one `{…}` group or command, and `o` is every `[…]` there.
+/// Text after the last argument stays text.
+pub(super) const DROP_WITH_ARGS: &[(&str, &str)] = &[
+    ("documentclass", "omo"),
+    ("usepackage", "omo"),
+    ("RequirePackage", "omo"),
+    ("newcommand", "mom"),
+    ("renewcommand", "mom"),
+    ("providecommand", "mom"),
+    ("newcommand*", "mom"),
+    ("renewcommand*", "mom"),
+    ("providecommand*", "mom"),
+    ("newenvironment", "momm"),
+    ("renewenvironment", "momm"),
+    ("DeclareMathOperator", "mm"),
+    ("DeclareMathOperator*", "mm"),
+    ("def", "m"),
+    ("let", ""),
+    ("setlength", "mm"),
+    ("addtolength", "mm"),
+    ("setcounter", "mm"),
+    ("addtocounter", "mm"),
+    ("stepcounter", "m"),
+    ("refstepcounter", "m"),
+    ("vspace", "m"),
+    ("vspace*", "m"),
+    ("hspace", "m"),
+    ("hspace*", "m"),
+    ("vskip", "m"),
+    ("hskip", "m"),
+    ("pagestyle", "m"),
+    ("thispagestyle", "m"),
+    ("pagenumbering", "m"),
+    ("bibliographystyle", "m"),
+    ("bibliography", "m"),
+    ("addbibresource", "om"),
+    ("printbibliography", "o"),
+    ("input", "m"),
+    ("include", "m"),
+    ("includeonly", "m"),
+    ("graphicspath", "m"),
+    ("hypersetup", "m"),
+    ("definecolor", "ommm"),
+    ("geometry", "m"),
+    ("numberwithin", "omm"),
+    ("newtheorem", "momo"),
+    ("newtheorem*", "mm"),
+    ("theoremstyle", "m"),
+    ("phantom", "m"),
+    ("hphantom", "m"),
+    ("vphantom", "m"),
+    ("index", "om"),
+    ("nocite", "m"),
+    ("addcontentsline", "mmm"),
+    ("markboth", "mm"),
+    ("markright", "m"),
+    ("linespread", "m"),
+    ("setstretch", "m"),
+    ("fancyhf", "m"),
+    ("fancyhead", "om"),
+    ("fancyfoot", "om"),
+    ("lstset", "m"),
+    ("captionsetup", "om"),
+    ("setmainfont", "omo"),
+    ("setsansfont", "omo"),
+    ("setmonofont", "omo"),
+    ("newfontfamily", "momo"),
+    ("date", "m"),
+    ("thanks", "m"),
+    ("hyphenation", "m"),
+    ("addvspace", "m"),
+    ("enlargethispage", "m"),
+    ("enlargethispage*", "m"),
+    ("selectlanguage", "m"),
+    ("newcounter", "mo"),
+    ("settowidth", "mm"),
+    ("settoheight", "mm"),
+    ("settodepth", "mm"),
+    ("maketitle*", ""),
+    ("tableofcontents", ""),
+    ("listoffigures", ""),
+    ("listoftables", ""),
+    ("appendix", ""),
+    ("frontmatter", ""),
+    ("mainmatter", ""),
+    ("backmatter", ""),
+    ("cline", "m"),
+    ("hline", ""),
+    ("toprule", "o"),
+    ("midrule", "o"),
+    ("bottomrule", "o"),
+    ("cmidrule", "om"),
+    ("addlinespace", "o"),
+    ("endhead", ""),
+    ("endfirsthead", ""),
+    ("endfoot", ""),
+    ("endlastfoot", ""),
+    ("rowcolor", "omo"),
+    ("arraystretch", ""),
+    ("smallskip", ""),
+    ("medskip", ""),
+    ("bigskip", ""),
+    ("today", ""),
+    ("and", ""),
 ];
 
 /// Paragraph-level context from the enclosing environments.
@@ -392,49 +394,44 @@ impl<'a> Parser<'a> {
         self.fmt = saved_fmt;
     }
 
-    /// Skip every `[…]` and `{…}` argument that follows (and, for definitions, the macro name).
+    /// Skip a dropped command's arguments, as its `DROP_WITH_ARGS` entry lists them.
     fn drop_args(&mut self, name: &str) {
-        if matches!(name, "newcommand" | "renewcommand" | "providecommand" | "newcommand*" | "renewcommand*" | "providecommand*" | "def" | "let") {
-            self.skip_spaces();
-            if matches!(self.t.get(self.pos), Some(Tok::Cmd(_))) {
-                self.pos += 1;
-            }
-            if name == "let" {
+        if name == "let" {
+            for _ in 0..2 {
                 self.skip_spaces();
                 if matches!(self.t.get(self.pos), Some(Tok::Cmd(_))) {
                     self.pos += 1;
                 }
-                return;
             }
-            if name == "def" {
-                // `\def\x#1{…}`: the parameter text, then the body.
-                while matches!(self.t.get(self.pos), Some(Tok::Text(_))) {
-                    self.pos += 1;
-                }
+            return;
+        }
+        if name == "def" {
+            // `\def\x#1{…}`: the macro name and its parameter text come before the body.
+            self.skip_spaces();
+            if matches!(self.t.get(self.pos), Some(Tok::Cmd(_))) {
+                self.pos += 1;
+            }
+            while matches!(self.t.get(self.pos), Some(Tok::Text(_))) {
+                self.pos += 1;
             }
         }
-        loop {
-            if self.pending.is_some() {
-                // Text after a `]`: another optional argument, or the text that follows.
-                if self.opt_arg().is_none() {
-                    return;
-                }
+        let args = DROP_WITH_ARGS.iter().find(|(n, _)| *n == name).map_or("", |(_, a)| *a);
+        for kind in args.chars() {
+            if kind == 'o' {
+                // Text after a `]` waits in `pending`: another `[…]`, or the text that follows.
+                while self.opt_arg().is_some() {}
                 continue;
+            }
+            if self.pending.is_some() {
+                return;
             }
             let save = self.pos;
             self.skip_spaces();
-            match self.t.get(self.pos) {
-                Some(Tok::Open) => {
-                    let _ = self.arg_tokens();
-                }
-                Some(Tok::Text(s)) if s.starts_with('[') => {
-                    let _ = self.opt_arg();
-                }
-                _ => {
-                    self.pos = save;
-                    return;
-                }
+            if !matches!(self.t.get(self.pos), Some(Tok::Open | Tok::Cmd(_))) {
+                self.pos = save;
+                return;
             }
+            let _ = self.arg_tokens();
         }
     }
 
@@ -786,7 +783,7 @@ impl<'a> Parser<'a> {
                 self.with_arg(|_| {});
             }
             "begin" | "end" => {}
-            n if DROP_WITH_ARGS.contains(&n) => self.drop_args(n),
+            n if DROP_WITH_ARGS.iter().any(|(d, _)| *d == n) => self.drop_args(n),
             _ => {
                 // Unknown: drop the command, keep its arguments' text.
                 let _ = self.opt_arg();
