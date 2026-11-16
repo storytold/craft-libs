@@ -235,6 +235,15 @@ pub(crate) fn paint(painter: &Painter, tokens: &UiTokens, direction: Direction, 
     }
 }
 
+/// Logs an icon name the catalog and the app sets lack, once per name: the lookup repeats on every repaint.
+fn report_unresolved(name: &str) {
+    static REPORTED: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+    let mut reported = REPORTED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if reported.get_or_insert_with(Default::default).insert(name.to_owned()) {
+        log::error!("icon {name:?} is not in the catalog");
+    }
+}
+
 /// A catalog or app icon as it is drawn: its entry and set, whether it is mirrored, and its stroke width in points.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SvgIcon {
@@ -245,11 +254,11 @@ pub(crate) struct SvgIcon {
 }
 
 impl SvgIcon {
-    /// The icon `id` of `set` at `side` points under `direction` and `mirror`; `None`, with a log line, for a name the
+    /// The icon `id` of `set` at `side` points under `direction` and `mirror`; `None`, with a log line the first time, for a name the
     /// catalog and the registered app sets lack.
     pub(crate) fn of(tokens: &UiTokens, direction: Direction, side: f32, id: &IconId, set: IconSet, mirror: Mirror) -> Option<SvgIcon> {
         let Some(entry) = svg_set::lookup(id.name()) else {
-            log::error!("icon {:?} is not in the catalog", id.name());
+            report_unresolved(id.name());
             return None;
         };
         let mirrored = direction == Direction::Rtl && svg_set::directional(entry) && mirror == Mirror::Auto;
