@@ -229,14 +229,15 @@ pub fn hdr(bytes: &[u8], limits: &Limits) -> Result<Decoded, DecodeError> {
     Ok(Decoded { image, transfer: Transfer::Linear, alpha: Alpha::Straight })
 }
 
-/// The width and height on a Radiance resolution line (the line after the first empty one), read
+/// The width and height on a Radiance resolution line (the line after the first one that is empty
+/// or holds only carriage returns), read
 /// as `craft_hdr::decode` reads it (bytes that are not UTF-8 replaced, tokens after the fourth
 /// ignored), or `None` when the line cannot be read. A line of `max_header` bytes or more is not
 /// converted; `craft_hdr::decode` refuses it.
 #[cfg(feature = "hdr")]
 fn hdr_size(bytes: &[u8], max_header: usize) -> Option<(u32, u32)> {
     let mut lines = bytes.split(|&c| c == b'\n');
-    lines.by_ref().find(|l| l.strip_suffix(b"\r").unwrap_or(l).is_empty())?;
+    lines.by_ref().find(|l| l.iter().all(|&c| c == b'\r'))?;
     let line = lines.next().filter(|l| l.len() < max_header)?;
     let line = String::from_utf8_lossy(line);
     let mut t = line.split_whitespace();
@@ -278,7 +279,7 @@ pub fn exr(bytes: &[u8], limits: &Limits) -> Result<Decoded, DecodeError> {
     let parts = exr_decode::parts(bytes, &exr_limits).map_err(map)?;
     let unsupported = |reason: &str| DecodeError::Unsupported { format: NAME, reason: reason.into() };
     let info = exr_decode::pick_part(&parts).and_then(|i| parts.get(i)).ok_or_else(|| unsupported("no part has color channels"))?;
-    if info.deep {
+    if parts.iter().any(|p| p.deep) {
         return Err(unsupported("deep data"));
     }
     let (layout, picked) = color_channels(info.channels.iter().map(|c| c.name.as_str())).ok_or_else(|| unsupported("no color channels"))?;

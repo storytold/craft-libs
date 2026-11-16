@@ -280,6 +280,9 @@ mod hdr {
         assert_eq!(craft_texture::decode::hdr(wide, &narrow), Err(DecodeError::Image(ImageError::BadSize(100, 2))));
         let tall = b"#?RADIANCE\n\n+X 3 -Y 60\n";
         assert_eq!(craft_texture::decode::hdr(tall, &narrow), Err(DecodeError::Image(ImageError::BadSize(3, 60))));
+        // The decoder treats a line of carriage returns alone as the empty line that ends the header.
+        let crs = b"#?RADIANCE\r\r\n\r\r\n-Y 2 +X 100\n";
+        assert_eq!(craft_texture::decode::hdr(crs, &narrow), Err(DecodeError::Image(ImageError::BadSize(100, 2))));
         // A byte that is not UTF-8 after the four tokens does not hide the sizes.
         let trailing = b"#?RADIANCE\n\n-Y 2 +X 100 \xff\n";
         assert_eq!(craft_texture::decode::hdr(trailing, &narrow), Err(DecodeError::Image(ImageError::BadSize(100, 2))));
@@ -362,5 +365,83 @@ mod exr {
         let l = Limits::default();
         assert_eq!(craft_texture::decode::exr(&[], &l), Err(DecodeError::WrongFormat("OpenEXR")));
         assert!(craft_texture::decode::exr(&file[..file.len() - 8], &l).is_err());
+    }
+
+    /// Appends a header attribute: its name, its type, the payload's size and the payload.
+    fn attr(out: &mut Vec<u8>, name: &str, ty: &str, payload: &[u8]) {
+        for s in [name, ty] {
+            out.extend_from_slice(s.as_bytes());
+            out.push(0);
+        }
+        out.extend_from_slice(&i32::try_from(payload.len()).unwrap().to_le_bytes());
+        out.extend_from_slice(payload);
+    }
+
+    /// A multi-part file of one pixel: a flat scan-line part with float B, G and R channels of
+    /// 0.25, then a deep scan-line part with one float A sample of 0.5.
+    fn flat_and_deep() -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&0x0131_2f76u32.to_le_bytes());
+        out.extend_from_slice(&(2u32 | 0x800 | 0x1000).to_le_bytes());
+        for deep in [false, true] {
+            let names: &[&str] = if deep { &["A"] } else { &["B", "G", "R"] };
+            let mut chlist = Vec::new();
+            for n in names {
+                chlist.extend_from_slice(n.as_bytes());
+                chlist.push(0);
+                chlist.extend_from_slice(&2i32.to_le_bytes()); // float
+                chlist.extend_from_slice(&[0; 4]); // pLinear and reserved
+                chlist.extend_from_slice(&1i32.to_le_bytes());
+                chlist.extend_from_slice(&1i32.to_le_bytes());
+            }
+            chlist.push(0);
+            let window: Vec<u8> = [0i32; 4].iter().flat_map(|v| v.to_le_bytes()).collect();
+            attr(&mut out, "channels", "chlist", &chlist);
+            attr(&mut out, "chunkCount", "int", &1i32.to_le_bytes());
+            attr(&mut out, "compression", "compression", &[0]);
+            attr(&mut out, "dataWindow", "box2i", &window);
+            attr(&mut out, "displayWindow", "box2i", &window);
+            attr(&mut out, "lineOrder", "lineOrder", &[0]);
+            if deep {
+                attr(&mut out, "maxSamplesPerPixel", "int", &1i32.to_le_bytes());
+            }
+            attr(&mut out, "name", "string", if deep { b"deep" } else { b"flat" });
+            attr(&mut out, "pixelAspectRatio", "float", &1f32.to_le_bytes());
+            attr(&mut out, "screenWindowCenter", "v2f", &[0; 8]);
+            attr(&mut out, "screenWindowWidth", "float", &1f32.to_le_bytes());
+            attr(&mut out, "type", "string", if deep { b"deepscanline" } else { b"scanlineimage" });
+            if deep {
+                attr(&mut out, "version", "int", &1i32.to_le_bytes());
+            }
+            out.push(0); // end of this header
+        }
+        out.push(0); // end of the header list
+        // Each chunk starts with its part number and its scan line.
+        let mut flat = [0i32.to_le_bytes(), 0i32.to_le_bytes(), 12i32.to_le_bytes()].concat();
+        (0..3).for_each(|_| flat.extend_from_slice(&0.25f32.to_le_bytes()));
+        // The deep chunk holds the sizes of the count table and of the packed and unpacked
+        // samples, then the table (the running sample count) and the one sample.
+        let mut deep = [1i32.to_le_bytes(), 0i32.to_le_bytes()].concat();
+        (0..3).for_each(|_| deep.extend_from_slice(&4u64.to_le_bytes()));
+        deep.extend_from_slice(&1u32.to_le_bytes());
+        deep.extend_from_slice(&0.5f32.to_le_bytes());
+        let first = out.len() + 16;
+        out.extend_from_slice(&(first as u64).to_le_bytes());
+        out.extend_from_slice(&((first + flat.len()) as u64).to_le_bytes());
+        out.extend_from_slice(&flat);
+        out.extend_from_slice(&deep);
+        out
+    }
+
+    #[test]
+    fn a_deep_part_beside_a_flat_color_part_is_unsupported() {
+        let file = flat_and_deep();
+        let parts = craft_exr::decode::parts(&file, &craft_exr::decode::Limits::default()).unwrap();
+        assert_eq!(parts.iter().map(|p| p.deep).collect::<Vec<_>>(), [false, true]);
+        // The flat part alone decodes, so only the deep part can refuse the file.
+        let flat = craft_exr::decode::decode_part(&file, 0, &|_| true, &craft_exr::decode::Limits::default()).unwrap();
+        assert_eq!(flat.channel("R").unwrap().samples, Samples::F32(vec![0.25]));
+        let refused = craft_texture::decode::exr(&file, &Limits::default());
+        assert_eq!(refused, Err(DecodeError::Unsupported { format: "OpenEXR", reason: "deep data".into() }));
     }
 }
