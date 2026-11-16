@@ -128,7 +128,7 @@ The old app is the visual reference, but not automatically right: judge each dif
 | Part | Library (`craft_automation`) | App |
 |---|---|---|
 | Command-line values | `args::ControlOptions`, `EnvNames` | Parses its own flags and calls `ControlOptions::resolve` |
-| Transport | `server::start`, `ControlClient` | Calls `start`, owns the `ControlChannel` |
+| Transport | `server::listen`, `server::serve`, `ControlClient` | Calls `listen` (or `serve` on a listener it bound earlier), keeps the `Listening` and owns the `ControlChannel` |
 | Request queue, replies | `ControlChannel`, `Reply`, `result_reply` | Runs each request and returns a `Reply` |
 | Input methods | `synthetic::Click`, `KeyPress`, `move_from_params`: the checked parameters of `ui.click`, `ui.key`, `ui.move` | Dispatches the method names to them |
 | Dialog methods | `dialogs`: `ui.dialog.set`, `ui.dialog.confirm`, `ui.dialog.cancel` and the dialog list | Dispatches them; may add `ui.dialog.open` for its own dialog kinds |
@@ -144,7 +144,7 @@ Not provided yet, so the porter supplies each today:
 
 #### Expose the control channel in the app
 
-The app starts the server once and keeps the channel on its UI thread.
+The app starts the server and keeps the channel on its UI thread. The server runs until its `Listening` is dropped.
 
 ```rust
 use craft_automation::args::{ControlOptions, EnvNames};
@@ -160,9 +160,10 @@ if let Some(port) = options.port {
     let token = options.server_token()?;
     eprintln!("myapp: {}", options.token_notice(&token));
     // Port 0 lets the OS pick; the address is the one a client needs.
-    let (requests, addr) = server::start(port, token, WindowHost::of(&egui_ctx))?;
-    eprintln!("myapp: control server listening on {addr}");
+    let (requests, listening) = server::listen(port, token, WindowHost::of(&egui_ctx))?;
+    eprintln!("myapp: control server listening on {}", listening.addr);
     app.control = Some(ControlChannel::new(requests));
+    app.control_server = Some(listening);
 }
 ```
 

@@ -1121,14 +1121,17 @@ Control channel, screenshot queue, profiler and recorded actions for tests and s
 | `control` | Automation control channel | exists |
 | `args` | Command-line values and environment fallbacks of the control channel | exists |
 | `protocol` | JSON-lines wire format and parameter validators | exists |
-| `security` | Tokens, the `auth` handshake and transport limits | exists |
-| `server` | Loopback JSON-lines TCP transport (native) | exists |
+| `security` | Tokens, the authentication handshake (challenge or one-frame token) and transport limits | exists |
+| `server` | Loopback JSON-lines TCP transport (native): `listen`, `serve`, stopped by dropping its `Listening` | exists |
+| `agents`, `ui::agents` | AI agents in the open window: the agent settings, the ArtCraft Launcher's switch, the connection file, the link host and the Agents page of Preferences | exists |
 | `client` | JSON-lines client for tests and command-line tools (native) | exists |
 | `synthetic` | Synthetic pointer and keyboard input: `ui.click`, `ui.move`, `ui.key`, `ui.type` | exists |
 | `dialogs` | `ui.dialog.set`, `ui.dialog.confirm` and `ui.dialog.cancel` over a `DialogHost` | exists |
 | `profiler` | Frame profiler | exists |
 | `screenshot` | Screenshot request queue | exists |
 | `trace` | Frame timing trace | exists |
+
+Agents in the open window. The ArtCraft Launcher's *Settings › AI agents › Let AI agents use Craft apps* is the one switch for every Craft app: with the suite's `AI-MCP` flag on, an app lets agents in when the launcher's app list (`craft-ai-agents`) names it, which `AgentSwitch` watches on a thread; without the flag, the app's own earlier consent decides. While agents may connect, the app's `AgentLink` runs a control server on loopback with the settings' port and the token kept in the settings folder, and publishes `agent-connection.json` there (port, process id, token file, app version). The app's `<id>-cli mcp` reads that file on every tool call and authenticates with the challenge handshake, so an MCP client's configuration holds no port and no token. The handshake's proof labels are `photocraft-control-v1 server` and `photocraft-control-v1 client`, the wire label of version 1 of the protocol. The Agents page of Preferences (`AgentsPage`) is a custom page over the same settings; it has no switch of its own.
 
 #### craft-behavior
 

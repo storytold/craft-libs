@@ -22,8 +22,12 @@ default = []
 # input) and `ui` stories. Without it the crate has no egui: `ControlOptions`, `ControlClient`,
 # `Params` and the recorded actions' model and files.
 ui = ["dep:craft-behavior", "dep:craft-keymap", "dep:craft-ui", "dep:egui"]
-# The Actions panel's stories and mock, and the integration binary `tests/it`.
-screen-testing = ["ui", "craft-ui/testing"]
+# The Actions panel's and the Agents page's stories and mock, and the integration binary `tests/it`.
+screen-testing = ["ui", "agents", "craft-ui/testing"]
+# Agents in the open window (desktop): the ArtCraft Launcher's switch, the connection file an
+# app's `<id>-cli mcp` reads, and with `ui` the link host and the Agents page. The agent settings
+# build on every target without it.
+agents = ["dep:craft-ai-agents", "dep:craft-flags", "dep:craft-atomic", "dep:craft-host"]
 
 [dependencies]
 craft-behavior = { workspace = true, optional = true }
@@ -38,11 +42,18 @@ serde_json = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 base64 = "0.22"
 craft-platform = { workspace = true }
+craft-ai-agents = { workspace = true, optional = true }
+craft-atomic = { workspace = true, optional = true }
+craft-flags = { workspace = true, optional = true }
+craft-host = { workspace = true, optional = true }
 getrandom = "0.3"
+hmac = "0.12"
 log = "0.4"
 png = "0.17"
+sha2 = { version = "0.10", default-features = false, features = ["std"] }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3"
 craft-ui = { workspace = true, features = ["testing"] }
 egui = { workspace = true }

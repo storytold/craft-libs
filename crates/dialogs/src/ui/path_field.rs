@@ -3,7 +3,7 @@
 use craft_behavior::{EditEvent, Mixed};
 use craft_host::target::Caps;
 use craft_host::{PickId, PickRequest};
-use craft_ui::contract::{Bind, Held, NoValue, Outcome, Remember as _, ShowContainer as _, Validity};
+use craft_ui::contract::{Bind, Held, NoValue, Outcome, ShowContainer as _, Validity};
 use craft_ui::form::Field;
 use craft_ui::patterns::form_dialogs::PathRow;
 use craft_ui::runtime::env::{Env, Label, Message};
@@ -16,10 +16,6 @@ craft_ui::words! {
         not_found: "pathField.notFound" = "The file was not found.";
     }
 }
-
-/// The pick the field is waiting for, kept in the field's container while it is shown.
-#[derive(Clone, Copy, Default)]
-struct Ticket(Option<PickId>);
 
 /// What the path field reports.
 #[derive(Debug)]
@@ -44,8 +40,8 @@ impl Outcome for PathFieldOutput {
 }
 
 /// A label, then the path row (a text field with the path and a Browse button) over the bound path. Typing commits on
-/// Enter or focus loss; Browse queues `request` through `host.files()` and the answer fills the field on a later pass
-/// (the field matches tickets, so several fields can browse in turn). Tab order: field, then Browse. With `must_exist`
+/// Enter or focus loss; Browse queues `request` through `host.files()` ([`PathRow::pick`]) and the answer fills the
+/// field on a later pass (rows match tickets, so several fields can browse in turn). Tab order: field, then Browse. With `must_exist`
 /// set, a path that does not exist shows the not-found message under the field.
 #[must_use = "show the field with `show`"]
 #[derive(craft_ui::contract::Pattern, craft_ui::contract::Props)]
@@ -74,27 +70,14 @@ impl<'a> PathField<'a> {
         let mut browsing = None;
         let shown = Field::new(label.clone()).show(ui, |ui, cx| {
             let before = held.read(cx).unwrap_or_default();
-            let host = cx.env.host().cloned();
             let looks = must_exist && cx.env.shell().caps.contains(Caps::FILE_SYSTEM);
             let not_found = words.not_found.clone();
             let check = move |path: &String| {
                 if looks && path_is_missing(path) { Validity::Warn(Message::new(not_found.clone())) } else { Validity::Ok }
             };
-            let mut answered = None;
-            if let Some(ticket) = cx.memory::<Ticket>().0
-                && let Some(picked) = cx.take_pick_answer(ticket)
-            {
-                cx.memory::<Ticket>().0 = None;
-                answered = picked.first_path().map(|path| path.to_string_lossy().into_owned());
-            }
-            let row = PathRow::new(label.clone(), Bind::given(before.clone()).check(check)).show(ui);
-            if row.browse
-                && let Some(host) = &host
-            {
-                let id = host.files().pick(request.clone());
-                cx.memory::<Ticket>().0 = Some(id);
-                browsing = Some(id);
-            }
+            let row = PathRow::new(label.clone(), Bind::given(before.clone()).check(check)).pick(request.clone()).show(ui);
+            browsing = row.browsing;
+            let answered = row.picked;
             let typed = row
                 .edit
                 .into_iter()

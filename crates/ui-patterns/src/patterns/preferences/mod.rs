@@ -5,6 +5,7 @@
 //!   from its settings and its draft. The library keeps no copy of the values.
 //! - [`PreferencesModel`]: what the app implements: pages, draft, apply, cancel, reset, custom rows and nested dialogs.
 //! - [`PreferencesWords`]: every caption of the window.
+//! - [`PathSetting`]: a path setting for a custom row or page, typed or picked through the host's file service.
 //! - [`SettingsDocument`]: a [`PreferencesModel`] built from the app's settings struct, one row per setting by type,
 //!   labels from the key, with [`SettingRule`]s and the [`StandardPage`]s.
 //! - [`matches`](fn@matches), [`list_pages`], [`row_shown`], [`shown_position`]: the search rule on the shared matcher,
@@ -24,7 +25,10 @@ pub use words::{PreferencesWords, SettingsDocumentWords};
 
 // The window, its body and its rows.
 mod body;
+mod path_setting;
 mod rows;
 mod window;
+
+pub use path_setting::{PathSetting, PathSettingOutput};
 
 pub use window::{DEFAULT_SIZE, MIN_SIZE, PreferencesState, PreferencesWindow};
