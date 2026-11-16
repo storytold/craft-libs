@@ -145,14 +145,15 @@ pub enum AutoMaskModel {
     /// paint's gaps along edges filled by a guided filter on log luminance.
     #[default]
     PerPixel,
-    /// Process 9: each dab grows its paint from its centre over a grid of cells in proportion to
-    /// the brush, stopping where the path would cross an edge (a change of luminance beyond
-    /// shading, or of colour) rather than where a pixel differs from the centre by some amount;
-    /// pixels then take it from the like, uniform cells beside them, so the paint ends on the
-    /// photo's edge. It paints solidly to three quarters of the radius, closes small holes, and
-    /// the guided filter on the smoothed luminance fills only what the dabs found to belong.
-    /// Fills noisy, textured and shaded surfaces solidly to their edges, and keeps off a
-    /// neighbour of the same brightness but another colour.
+    /// Process 9: each dab grows over a grid of cells in proportion to the brush from its centre,
+    /// stopping where the path would cross an edge (a change of luminance beyond shading, or of
+    /// colour, or a cell straddling one) rather than where a pixel differs from the centre by some
+    /// amount. What the stroke's dabs found, small holes and seams filled, is a coarse paint whose
+    /// edge lies within a cell of the photo's; a guided filter on the smoothed photo's luminance
+    /// and colour carries it onto the photo's own edge, anti-aliased as the photo is, and the
+    /// brush's feathered footprint (solid to three quarters of the radius) shapes it where the
+    /// stroke ends inside the object. Fills noisy, textured and shaded surfaces solidly to their
+    /// edges, and keeps off a neighbour of the same brightness but another colour.
     Smoothed,
 }
 
@@ -204,132 +205,85 @@ pub fn window_for_reads(
     crate::PixelWindow { x: x0, y: y0, w: x1.saturating_sub(x0).max(1), h: y1.saturating_sub(y0).max(1) }
 }
 
-/// [`AutoMaskModel::Smoothed`]'s scales for a brush of radius `r` px in a `w × h` output, all in
+/// [`AutoMaskModel::Smoothed`]'s scales for a brush of radius `r` px, all in
 /// proportion to the brush (so a preview and the full-size export paint the same shape).
 #[derive(Clone, Copy, Debug)]
 struct Smoothing {
-    /// The edge-preserving smoothing of the photo: window sigma (px) and regularization (EV²:
-    /// luminance differences well under its root are flattened, edges well over it kept).
-    sigma: f32,
+    /// The edge-preserving smoothing of the photo's luminance the paint's edge snaps to: window
+    /// radius (px) and regularization (EV²: differences well under its root are flattened, edges
+    /// well over it kept).
+    radius: usize,
     eps: f32,
-    /// How far the smoothing reaches (px).
-    reach: usize,
     /// The chromaticity is averaged over squares this many px from their centre.
     chroma_box: usize,
-    /// Holes in the paint up to about twice this (px) across are closed.
-    close: usize,
-    /// The final guided filter of the paint on the smoothed luminance.
-    refine_sigma: f32,
-    refine_eps: f32,
-    refine_reach: usize,
+    /// How far (cells) [`CellMap::filled`] looks for cells that belong around a hole.
+    hole: usize,
+    /// The guided filter that carries the cells' coarse paint onto the photo's edges: its window
+    /// radius (px).
+    snap: usize,
 }
 
 /// [`Smoothing::eps`]: luminance texture and noise up to about a third of a stop are flattened.
 const SMOOTH_EPS: f32 = 0.1;
 
 impl Smoothing {
-    fn of(r: f64, w: usize, h: usize) -> Smoothing {
-        let sigma = (0.12 * r).max(1.0) as f32;
-        let (refine_sigma, refine_eps) = auto_refine(r);
+    fn of(r: f64) -> Smoothing {
+        let size = (r / CELLS_PER_RADIUS).round().max(1.0);
         Smoothing {
-            sigma,
+            radius: (0.2 * r).round().max(1.0) as usize,
             eps: SMOOTH_EPS,
-            reach: guided_reach(sigma, w, h),
             chroma_box: (r / (4.0 * CELLS_PER_RADIUS)).round() as usize,
-            close: (r / 6.0).round().max(1.0) as usize,
-            refine_sigma,
-            refine_eps: refine_eps * 0.5,
-            refine_reach: guided_reach(refine_sigma, w, h),
+            hole: HOLE_CELLS,
+            snap: (SNAP_CELLS * size).round().max(2.0) as usize,
         }
     }
 }
 
-/// The photo as [`AutoMaskModel::Smoothed`] compares it: luminance smoothed without crossing
-/// edges over `win`, chromaticity over the smaller `cwin` (only where dabs paint and sample).
+/// The photo as [`AutoMaskModel::Smoothed`] snaps the paint's edge to, over a window, each part
+/// smoothed without crossing edges: log luminance, and two of the chromaticity's three parts (red
+/// and blue over luminance; the third follows from them).
 struct Smoothed {
-    win: PixRect,
-    l: Plane,
-    cwin: PixRect,
-    ch: Rgb32f,
+    l: Vec<f32>,
+    c0: Vec<f32>,
+    c2: Vec<f32>,
 }
 
-/// The colour difference [`chroma_mean`] averages up to, at least, and how many times the
-/// typical difference to the pixels around (their lower quartile: noise) it averages up to more.
-const CHROMA_MEAN_RANGE: f32 = 0.04;
-const CHROMA_MEAN_NOISE: f32 = 4.0;
-
-/// The chromaticity `ch` averaged over a square `r` px from each pixel (25 samples across it,
-/// edges clamped), taking only the samples of much its colour: noise is averaged away, but a
-/// pixel beside an edge only the colour marks (a warm white against a grey wall) keeps its own
-/// side's colour rather than taking some of its neighbour's.
-fn chroma_mean(ch: &Rgb32f, r: usize) -> Rgb32f {
-    if r == 0 {
-        return ch.clone();
-    }
-    let (w, h) = (ch.width, ch.height);
-    let mut offs: Vec<i64> = [-(r as i64), -(r as i64 / 2), 0, r as i64 / 2, r as i64].to_vec();
-    offs.dedup();
-    let mut out = Rgb32f::new(w, h);
-    let mut d = Vec::with_capacity(offs.len() * offs.len());
-    let mut ds: Vec<f32> = Vec::with_capacity(offs.len() * offs.len());
-    for y in 0..h {
-        for x in 0..w {
-            let Some(c) = ch.data.get(y * w + x).copied() else { continue };
-            d.clear();
-            for &oy in &offs {
-                let sy = (y as i64 + oy).clamp(0, h as i64 - 1) as usize;
-                for &ox in &offs {
-                    let sx = (x as i64 + ox).clamp(0, w as i64 - 1) as usize;
-                    if let Some(s) = ch.data.get(sy * w + sx) {
-                        d.push((chroma_distance(*s, c), *s));
-                    }
-                }
-            }
-            ds.clear();
-            ds.extend(d.iter().map(|e| e.0));
-            let nth = ds.len() / 4;
-            let q = if ds.is_empty() { 0.0 } else { *ds.select_nth_unstable_by(nth, f32::total_cmp).1 };
-            let t = CHROMA_MEAN_RANGE.max(CHROMA_MEAN_NOISE * q);
-            let (mut acc, mut wsum) = ([0f32; 3], 0f32);
-            for (dist, s) in &d {
-                let wt = 1.0 - masks_smooth(t, 2.0 * t, *dist);
-                for (a, v) in acc.iter_mut().zip(s) {
-                    *a += wt * v;
-                }
-                wsum += wt;
-            }
-            if let Some(o) = out.data.get_mut(y * w + x) {
-                *o = if wsum > 0.0 { acc.map(|a| a / wsum) } else { c };
-            }
-        }
-    }
-    out
-}
-
-/// Index of output pixel `(x, y)` in a plane over `r`.
-fn index_in(r: &PixRect, x: usize, y: usize) -> Option<usize> {
-    if x < r.x0 || y < r.y0 || x >= r.x1 || y >= r.y1 {
-        return None;
-    }
-    (y - r.y0).checked_mul(r.width())?.checked_add(x - r.x0)
-}
+/// The chromaticity's smoothing flattens differences well under this (texture, noise) and keeps
+/// edges well over it (a warm white against a cooler grey wall: 0.08).
+const SMOOTH_CHROMA: f32 = 0.015;
 
 impl Smoothed {
-    fn of(win: PixRect, cwin: PixRect, img: &Rgb32f, log_l: &Plane, k: &Smoothing) -> Smoothed {
+    /// The smoothed photo over `win`, each smoothing read as far beyond it as it reaches (so a
+    /// window and the whole frame agree).
+    fn of(win: PixRect, img: &Rgb32f, log_l: &Plane, k: &Smoothing) -> Smoothed {
+        let (w, h) = (log_l.width, log_l.height);
         let (ww, wh) = (win.width(), win.height());
-        let l = log_l.crop(win.x0, win.y0, ww, wh);
-        let ls = masks::guided_self(&l, k.sigma, k.eps);
-        // chromaticity averaged over a small square only: smoothing it as far as the luminance,
-        // steered by the luminance, would carry one surface's colour over an edge only the colour
-        // marks (a warm white against a grey wall as bright), a few pixels into its neighbour
+        let cut = |v: Vec<f32>, from: PixRect| -> Vec<f32> {
+            let fw = from.width();
+            let mut o = Vec::with_capacity(ww * wh);
+            for y in win.y0..win.y1 {
+                let s = (y - from.y0) * fw + (win.x0 - from.x0);
+                o.extend_from_slice(v.get(s..s + ww).unwrap_or_default());
+            }
+            o
+        };
+        // (a self-guided filter of box windows: its output reads twice its radius around)
+        let lwin = win.grow(2 * k.radius, w, h);
+        let (lw, lh) = (lwin.width(), lwin.height());
+        let l = log_l.crop(lwin.x0, lwin.y0, lw, lh);
+        let l = || cut(smooth_self(&l.data, lw, lh, k.radius, k.eps), lwin);
+        // (the chromaticity over a small square only: smoothed as far as the luminance, the
+        // corners of an edge only the colour marks would round off)
+        let r = k.chroma_box.max(1);
+        let cwin = win.grow(2 * r, w, h);
         let (cw, chh) = (cwin.width(), cwin.height());
         let ch = img.crop(cwin.x0, cwin.y0, cw, chh).map(chromaticity);
-        Smoothed { win, l: ls, cwin, ch: chroma_mean(&ch, k.chroma_box) }
-    }
-
-    /// The smoothed (luminance, chromaticity) at output pixel `(x, y)` (inside the windows).
-    fn at(&self, x: usize, y: usize) -> Option<(f32, [f32; 3])> {
-        Some((*self.l.data.get(index_in(&self.win, x, y)?)?, *self.ch.data.get(index_in(&self.cwin, x, y)?)?))
+        let part = |q: usize| {
+            let v: Vec<f32> = ch.data.iter().map(|c| c[q]).collect();
+            cut(smooth_self(&v, cw, chh, r, SMOOTH_CHROMA * SMOOTH_CHROMA), cwin)
+        };
+        let (l, (c0, c2)) = rayon::join(l, || rayon::join(|| part(0), || part(2)));
+        Smoothed { l, c0, c2 }
     }
 }
 
@@ -378,22 +332,51 @@ const STEP_NOISE: f32 = 3.0;
 /// gold board beside it); the edges between surfaces are what [`grow`] stops at.
 const REF_CHROMA: f32 = 0.15;
 
-/// A cell whose pixels spread about their mean by up to this much (EV, chromaticity; more where
-/// the cells around are noisier, as [`STEP_NOISE`] raises the free step) is one surface; at twice
-/// it, it straddles an edge and vouches for no pixel ([`pixel_member`]).
-const UNIFORM_EV: f32 = 0.1;
-const UNIFORM_CHROMA: f32 = 0.02;
+/// What a path pays to pass through a cell that straddles an edge (its pixels spread far more
+/// than the cells around: [`grow`]), more than any path may cost: a path may end on such a cell
+/// but not go on from it. Without this, a path walked along a slanting edge from cell to cell,
+/// each holding a little more of the other side, and crossed it a free step at a time.
+const BARRIER: f32 = 1.0;
 
-/// A cell spreading up to this many times as far as the typical cell the dab grew over is uniform
-/// too (a textured surface's cells all spread).
-const UNIFORM_TYPICAL: f32 = 1.5;
+/// A cell's pixels' spread ([`Cells::cell_stats`]) is measured over at least this many pixels
+/// across, the cell and the pixels around it: a photo's edges are a few pixels soft.
+const SPREAD_PX: usize = 6;
 
-/// A pixel this little like the cells around it ([`pixel_member`]) is not like them at all.
-const PIXEL_FAINT: f32 = 0.1;
+/// A cell straddles an edge of colour, as far as [`BARRIER`] goes, when its pixels' chromaticity
+/// spreads this much, or twice as much as noise does, or half again as much as the typical cell in
+/// reach (a textured surface's cells all spread); twice that, fully. A cell holding a sliver of a
+/// neighbour of another colour spreads a hundredth or two.
+const BARRIER_CHROMA: f32 = 0.008;
+const BARRIER_TYPICAL: f32 = 1.5;
 
-/// Chromaticity distance at which a pixel is no longer like a cell ([`pixel_member`]); at least
-/// this, more in noisier cells.
-const PIXEL_CHROMA: f32 = 0.08;
+/// Holes in what a stroke grew over (a freckle, a nostril, a closed eye's crease, a speck on a cake
+/// board, the seam between two things painted) up to about twice this many cells across are
+/// filled ([`CellMap::filled`]): four tenths of the brush's radius.
+const HOLE_CELLS: usize = 4;
+
+/// A cell some dab found to belong this much or more is painted fully, this little or less not
+/// at all ([`CellMap::filled`]): a dab finds a cell partly its own where the way there costs a
+/// little more than is free, which says the cell is likely the object's, not that it is half
+/// painted. Unfirmed, the guided filter carried such halves into the paint as a haze or a
+/// pinhole along a seam.
+const MAP_NONE: f32 = 0.2;
+const MAP_FULL: f32 = 0.6;
+
+/// The window radius of the guided filter that carries the cells' coarse paint onto the photo's
+/// edges, in cells: the coarse edge lies within about a cell of the photo's.
+const SNAP_CELLS: f64 = 1.5;
+
+/// The guided filter's guide: smoothed log luminance over this many EV, chromaticity over this
+/// much, a unit each; and its regularization (in those units squared): differences of colour or
+/// luminance much under its root (texture, noise) are not edges the paint follows.
+const SNAP_EV: f32 = 1.0;
+const SNAP_CHROMA: f32 = 0.04;
+const SNAP_EPS: f32 = 0.02;
+
+/// The guided filter's output is taken from this much to its complement as none to all: a paint's
+/// edge as crisp as the photo's (the filter's own ramp is as wide as its window where the photo's
+/// colour drifts beside the edge), and a filter's faint spill past an edge none.
+const SNAP_SOFT: f32 = 0.1;
 
 /// A cell is wholly the dab's up to this accumulated path cost, not at all past
 /// [`PATH_NONE`].
@@ -407,9 +390,6 @@ const FAR_NONE: f32 = 7.5;
 
 /// A colour as Auto Mask compares it: log luminance and chromaticity.
 type Feature = (f32, [f32; 3]);
-
-/// A cell's slope of log luminance (EV per px across and down) and its centre (output pixels).
-type CellPlane = ((f32, f32), (f32, f32));
 
 /// The distance between two chromaticities.
 #[inline]
@@ -492,32 +472,44 @@ impl Cells {
         if x0 >= x1 || y0 >= y1 {
             return None;
         }
-        // (the pixels' offsets from the middle of the cell's pixels: a rectangle of them, so the
-        // two directions' slopes fit apart)
-        let (cx, cy) = ((x0 + x1 - 1) as f32 / 2.0, (y0 + y1 - 1) as f32 / 2.0);
+        // how far the pixels spread is measured over at least SPREAD_PX across: a cell smaller
+        // than an edge is soft could sit wholly on the edge's ramp and look uniform
+        let e = SPREAD_PX.saturating_sub(self.size).div_ceil(2);
+        let (ex0, ey0, ex1, ey1) = (x0.saturating_sub(e), y0.saturating_sub(e), (x1 + e).min(self.w), (y1 + e).min(self.h));
+        // (the pixels' offsets from the middle of the pixels measured: a rectangle of them, so
+        // the two directions' slopes fit apart)
+        let (cx, cy) = ((ex0 + ex1 - 1) as f32 / 2.0, (ey0 + ey1 - 1) as f32 / 2.0);
         let (mut l, mut ch, mut n) = (0f32, [0f32; 3], 0f32);
-        let (mut lu, mut lv, mut cu, mut cv, mut uu, mut vv) = (0f32, 0f32, [0f32; 3], [0f32; 3], 0f32, 0f32);
-        for y in y0..y1 {
+        let (mut lo, mut cho, mut no) = (0f32, [0f32; 3], 0f32);
+        let (mut lu, mut lv, mut uu, mut vv) = (0f32, 0f32, 0f32, 0f32);
+        for y in ey0..ey1 {
             let v = y as f32 - cy;
-            for x in x0..x1 {
+            for x in ex0..ex1 {
                 let u = x as f32 - cx;
                 let k = y * self.w + x;
                 let lk = *log_l.data.get(k)?;
+                let c = masks::chromaticity(*img.data.get(k)?);
                 l += lk;
                 lu += lk * u;
                 lv += lk * v;
-                let c = masks::chromaticity(*img.data.get(k)?);
                 for q in 0..3 {
                     ch[q] += c[q];
-                    cu[q] += c[q] * u;
-                    cv[q] += c[q] * v;
                 }
                 uu += u * u;
                 vv += v * v;
                 n += 1.0;
+                if x >= x0 && x < x1 && y >= y0 && y < y1 {
+                    lo += lk;
+                    for q in 0..3 {
+                        cho[q] += c[q];
+                    }
+                    no += 1.0;
+                }
             }
         }
-        let mean = (l / n, ch.map(|v| v / n));
+        // (the cell's own colour is its own pixels')
+        let mean = (lo / no, cho.map(|v| v / no));
+        let around = (l / n, ch.map(|v| v / n));
         let slope = |s: f32, d: f32| if d > 0.0 { s / d } else { 0.0 };
         let (gx, gy) = (slope(lu, uu), slope(lv, vv));
         // the luminance's spread about the plane through the cell (its shading taken out: a
@@ -525,45 +517,30 @@ impl Cells {
         // colour's about its mean (shading leaves the colour, so a cell whose colour changes
         // across it straddles an edge)
         let (mut vl, mut vc) = (0f32, 0f32);
-        for y in y0..y1 {
+        for y in ey0..ey1 {
             let v = y as f32 - cy;
-            for x in x0..x1 {
+            for x in ex0..ex1 {
                 let u = x as f32 - cx;
                 let k = y * self.w + x;
-                vl += (log_l.data.get(k)? - mean.0 - gx * u - gy * v).powi(2);
-                vc += chroma_distance(masks::chromaticity(*img.data.get(k)?), mean.1).powi(2);
+                vl += (log_l.data.get(k)? - around.0 - gx * u - gy * v).powi(2);
+                vc += chroma_distance(masks::chromaticity(*img.data.get(k)?), around.1).powi(2);
             }
         }
         // (the fits took degrees of freedom from the pixels: what is left spreads by the rest,
         // so a small cell's spread is not understated)
         let (vl, vc) = (vl / (n - 3.0).max(1.0), vc / (n - 1.0).max(1.0));
-        // (the slope as far as it stands out of the noise: a small, noisy cell's fitted slope is
-        // mostly noise, and carried a cell on it would be a guess)
-        let shrink = |g: f32, d: f32| {
-            let var = if d > 0.0 { vl / d } else { f32::INFINITY };
-            if g * g + var > 0.0 && var.is_finite() { g * g * g / (g * g + var) } else { 0.0 }
-        };
-        Some(CellStats {
-            mean,
-            spread: (vl.sqrt(), vc.sqrt()),
-            change: gx.hypot(gy) * self.size as f32,
-            grad: (shrink(gx, uu), shrink(gy, vv)),
-            centre: (cx + 0.5, cy + 0.5),
-        })
+        Some(CellStats { mean, spread: (vl.sqrt(), vc.sqrt()), change: gx.hypot(gy) * self.size as f32 })
     }
 }
 
 /// A cell's colour as [`AutoMaskModel::Smoothed`] grows over it: its mean, how far its pixels
-/// spread (log luminance about the plane through it, chromaticity about its mean), how far the
-/// plane's luminance changes across the cell (EV), the plane's slope (EV per px across and down,
-/// as far as it stands out of the noise) and the cell's centre (output pixels).
+/// spread (log luminance about the plane through it, chromaticity about its mean) and how far the
+/// plane's luminance changes across the cell (EV).
 #[derive(Clone, Copy, Debug)]
 struct CellStats {
     mean: Feature,
     spread: (f32, f32),
     change: f32,
-    grad: (f32, f32),
-    centre: (f32, f32),
 }
 
 /// The reference of dab `k` of `bd`: the median, channel by channel, of the cells under its centre
@@ -595,20 +572,14 @@ fn reference(bd: &BrushDabs, k: usize, cells: &Cells, img: &Rgb32f, log_l: &Plan
 /// reference it is, so a centre that strays over an edge seeds nothing) by the cheapest path,
 /// a step costing the change across it beyond what is free ([`STEP_FREE_EV`],
 /// [`STEP_FREE_CHROMA`]): the path's steepest step in luminance plus the sum of its steps in
-/// colour. A path may jump over a thin line ([`JUMP_CELLS`]).
+/// colour. A path may jump over a thin line ([`JUMP_CELLS`]) and may not go on from a cell
+/// straddling an edge ([`BARRIER`]).
 struct Grown {
-    /// [`pixel_member`]'s chromaticity tolerance here.
-    chroma_tol: f32,
     i0: usize,
     j0: usize,
     n: usize,
     m: usize,
     member: Vec<f32>,
-    feature: Vec<(f32, [f32; 3])>,
-    /// Each cell's slope of log luminance and centre ([`CellStats`]).
-    plane: Vec<CellPlane>,
-    /// How uniform each cell is ([`Cells::cell_stats`]).
-    uniform: Vec<f32>,
     #[cfg(test)]
     cost: Vec<f32>,
     #[cfg(test)]
@@ -616,14 +587,15 @@ struct Grown {
 }
 
 impl Grown {
-    /// Cell `(i, j)`: how much it belongs, weighted by how uniform it is, its colour, and its
-    /// luminance's slope and centre.
-    fn get(&self, i: usize, j: usize) -> Option<(f32, Feature, CellPlane)> {
+    /// How much cell `(i, j)` is the dab's (0 outside its grid). A cell straddling the object's
+    /// edge may count as the dab's whole: where on it the edge lies is the photo's to say
+    /// ([`snap`]).
+    fn vouch(&self, i: usize, j: usize) -> f32 {
         if i < self.i0 || j < self.j0 || i >= self.i0 + self.n || j >= self.j0 + self.m {
-            return None;
+            return 0.0;
         }
         let k = (j - self.j0) * self.n + (i - self.i0);
-        Some((*self.member.get(k)? * *self.uniform.get(k)?, *self.feature.get(k)?, *self.plane.get(k)?))
+        self.member.get(k).copied().unwrap_or(0.0)
     }
 }
 
@@ -658,7 +630,6 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
     let (n, m) = (i1 + 1 - i0, j1 + 1 - j0);
     let mut feature = Vec::with_capacity(n * m);
     let mut spread = Vec::with_capacity(n * m);
-    let mut plane = Vec::with_capacity(n * m);
     let mut change = Vec::with_capacity(n * m);
     let mut inside = Vec::with_capacity(n * m);
     for j in j0..=j1 {
@@ -667,12 +638,10 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
             // frame must agree)
             let got = cache.get(cells, i, j, img, log_l);
             inside.push(got.is_some());
-            let st =
-                got.unwrap_or(CellStats { mean: refc, spread: (f32::INFINITY, f32::INFINITY), change: 0.0, grad: (0.0, 0.0), centre: (0.0, 0.0) });
+            let st = got.unwrap_or(CellStats { mean: refc, spread: (f32::INFINITY, f32::INFINITY), change: 0.0 });
             feature.push(st.mean);
             spread.push(st.spread);
             change.push(st.change);
-            plane.push((st.grad, st.centre));
         }
     }
     // the noise: how far pixels spread inside the flattest cells around (a low percentile, so
@@ -692,6 +661,18 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
         s.0 = s.0.hypot((c - free_l).max(0.0));
     }
     let ref_c = REF_CHROMA.max(STEP_NOISE * nc);
+    // which cells a path may go on from: not those whose colour spreads past noise and the
+    // typical cell in reach (a textured surface's cells all spread), straddling an edge of colour.
+    // (Luminance alone is no such sign: a crease, a freckle and steep shading spread a cell as
+    // much, and paths cross those, or jump them.)
+    let median = |mut v: Vec<f32>| {
+        v.retain(|x| x.is_finite());
+        v.sort_by(f32::total_cmp);
+        v.get(v.len() / 2).copied().unwrap_or(0.0)
+    };
+    let bc = BARRIER_CHROMA.max(2.0 * qc).max(BARRIER_TYPICAL * median(spread.iter().map(|s| s.1).collect()));
+    let barrier: Vec<f32> = spread.iter().map(|&(_, sc)| BARRIER * masks_smooth(bc, 2.0 * bc, sc)).collect();
+    let mut seeds = vec![false; n * m];
     // a step's cost in luminance and in colour, apart: a path's luminance cost is its steepest
     // step's, its colour cost the sum of its steps' ([`grow`])
     let step_lc = |a: (f32, [f32; 3]), b: (f32, [f32; 3])| {
@@ -716,11 +697,14 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
         let at = (cj - j0) * n + (ci - i0);
         // (a centre on another surface than the reference's costs what stepping onto it would,
         // less what a full member may cost: a centre on texture still seeds its surface)
-        let seed = (step_cost(refc, feature[at]) - PATH_FULL).max(0.0);
-        if seed < cost[at] {
-            cost[at] = seed;
-            parts[at] = (0.0, seed);
-            heap.push(Reverse((key(seed), at)));
+        let s0 = (step_cost(refc, feature[at]) - PATH_FULL).max(0.0);
+        if let Some(sd) = seeds.get_mut(at) {
+            *sd = true;
+        }
+        if s0 < cost[at] {
+            cost[at] = s0;
+            parts[at] = (0.0, s0);
+            heap.push(Reverse((key(s0), at)));
         }
     }
     while let Some(Reverse((kc, at))) = heap.pop() {
@@ -729,6 +713,8 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
             continue;
         }
         let (pl, pc) = parts[at];
+        // (a centre's own cell is where the path starts, whatever it straddles)
+        let pc = if seeds[at] { pc } else { pc + barrier[at] };
         let (x, y) = (at % n, at / n);
         for (dx, dy) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
             // a step to the next cell, or a jump over one or two to a cell like this one: over a
@@ -765,16 +751,6 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
             }
         }
     }
-    // a cell is uniform for the surface the dab grew over: its texture and noise spread every
-    // cell of it alike (the typical spread of the cells reached), an edge through one further
-    let typical = |f: &dyn Fn(&(f32, f32)) -> f32| {
-        let mut v: Vec<f32> = spread.iter().zip(&cost).filter(|(_, c)| **c <= PATH_FULL).map(|(s, _)| f(s)).filter(|x| x.is_finite()).collect();
-        v.sort_by(f32::total_cmp);
-        v.get(v.len() / 2).copied().unwrap_or(0.0)
-    };
-    let (tl, tc) = (typical(&|s| s.0), typical(&|s| s.1));
-    let (ul, uc) = (UNIFORM_EV.max(2.0 * ql).max(UNIFORM_TYPICAL * tl), UNIFORM_CHROMA.max(2.0 * qc).max(UNIFORM_TYPICAL * tc));
-    let uniform: Vec<f32> = spread.iter().map(|&(sl, sc)| (1.0 - masks_smooth(ul, 2.0 * ul, sl)) * (1.0 - masks_smooth(uc, 2.0 * uc, sc))).collect();
     let member = cost
         .iter()
         .zip(&feature)
@@ -785,15 +761,11 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
         })
         .collect();
     Some(Grown {
-        chroma_tol: PIXEL_CHROMA.max(2.0 * free_c),
         i0,
         j0,
         n,
         m,
         member,
-        feature,
-        plane,
-        uniform,
         #[cfg(test)]
         cost,
         #[cfg(test)]
@@ -810,47 +782,99 @@ fn masks_smooth(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// How much output pixel `(x, y)` (its smoothed colour `p`) belongs to grown cells `g`: as much as
-/// the most it is like a nearby cell (up to two away) that belongs and is uniform, so the boundary
-/// falls on the pixels where the photo changes, not on the cells', and a cell straddling the edge
-/// (its mean between the two sides) lends nothing to the other side.
-fn pixel_member(g: &Grown, cells: &Cells, x: usize, y: usize, p: (f32, [f32; 3])) -> f32 {
-    let (ci, cj) = cells.of_pixel(x, y);
-    let cs = cells.size as f32;
-    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-    let mut best = 0f32;
-    for j in cj.saturating_sub(2)..=cj + 2 {
-        for i in ci.saturating_sub(2)..=ci + 2 {
-            if let Some((m, f, ((gx, gy), (cx, cy)))) = g.get(i, j)
-                && m > best
-            {
-                // (nearer cells count for more: a pixel's membership blends between the cells'
-                // centres rather than stepping at their borders)
-                let d = (cx - px).hypot(cy - py) / cs;
-                let near = 1.0 - masks_smooth(1.0, 2.5, d);
-                // (the cell's luminance carried on along its slope, up to a cell past its centre:
-                // shading continues past it, but no further than it was measured)
-                let at = f.0 + gx * (px - cx).clamp(-cs, cs) + gy * (py - cy).clamp(-cs, cs);
-                let dl = (p.0 - at) / masks::AUTO_TOL_EV;
-                let dc = chroma_distance(p.1, f.1) / g.chroma_tol;
-                best = best.max(m * near * (1.0 - masks_smooth(0.5, 1.0, (dl * dl + dc * dc).sqrt())));
-            }
-        }
-    }
-    // (a faint likeness counts for nothing: many dabs each lending a pixel a little would add up,
-    // flow on flow, to a haze of paint past an edge)
-    ((best - PIXEL_FAINT) / (1.0 - PIXEL_FAINT)).max(0.0)
-}
-
 /// The share of a radius an Auto Mask dab of process 9 paints fully before it fades (at least its
 /// own hard core): what belongs to the object under it is painted solidly to its edges, the
 /// feather only softening where the brush ends inside it.
 const AUTO_HARD: f64 = 0.75;
 
-/// [`stamp`] for [`AutoMaskModel::Smoothed`]: each dab paints the pixels its centre's surface
-/// reaches without crossing an edge ([`grow`], [`pixel_member`]), solidly to [`AUTO_HARD`] of
-/// its radius. `elig` (over `area` too) keeps, for each pixel, the most any dab found it to
-/// belong, feather aside: what the refinement may fill up to.
+/// What a process 9 Auto Mask stroke found to belong over a rectangle of [`Cells`]: for each cell,
+/// the most any dab vouched for it ([`Grown::vouch`]). The most, so every dab's finding stands
+/// whichever order they came in: a stroke painted live and the same stroke rendered at once find
+/// the same.
+#[derive(Clone, Debug, Default)]
+struct CellMap {
+    i0: usize,
+    j0: usize,
+    n: usize,
+    m: usize,
+    v: Vec<f32>,
+}
+
+impl CellMap {
+    /// An empty map over the cells holding output pixels `r`.
+    fn over(cells: &Cells, r: PixRect) -> CellMap {
+        if r.is_empty() {
+            return CellMap::default();
+        }
+        let (i0, j0) = cells.of_pixel(r.x0, r.y0);
+        let (i1, j1) = cells.of_pixel(r.x1 - 1, r.y1 - 1);
+        let (n, m) = (i1 + 1 - i0, j1 + 1 - j0);
+        CellMap { i0, j0, n, m, v: vec![0.0; n * m] }
+    }
+
+    fn index(&self, i: usize, j: usize) -> Option<usize> {
+        (i >= self.i0 && j >= self.j0 && i < self.i0 + self.n && j < self.j0 + self.m).then(|| (j - self.j0) * self.n + (i - self.i0))
+    }
+
+    /// Cell `(i, j)` (0 outside the map, and for a cell past the grid's edge).
+    fn get(&self, i: i64, j: i64) -> f32 {
+        if i < 0 || j < 0 {
+            return 0.0;
+        }
+        self.index(i as usize, j as usize).and_then(|k| self.v.get(k)).copied().unwrap_or(0.0)
+    }
+
+    /// The same map over `to`'s cells (cells of both kept, the rest 0).
+    fn moved(&self, to: CellMap) -> CellMap {
+        let mut to = to;
+        for j in 0..self.m {
+            for i in 0..self.n {
+                if let (Some(k), Some(v)) = (to.index(self.i0 + i, self.j0 + j), self.v.get(j * self.n + i))
+                    && let Some(o) = to.v.get_mut(k)
+                {
+                    *o = *v;
+                }
+            }
+        }
+        to
+    }
+
+    /// Cell `(i, j)` firmed ([`MAP_FULL`]) with the holes filled ([`HOLE_CELLS`]): on each of
+    /// eight lines through it, a sixteenth of a turn apart, the less of the most a cell up to
+    /// `hole` away on either side holds; the cell takes the third least of the eight if more than
+    /// its own (two lines may run along a gap). A speck, or a narrow line in any direction (a
+    /// crease, a fold, the seam between two things painted) between cells that belong, is filled;
+    /// a notch in the object's edge open a quarter turn or more, or the edge itself, is not.
+    fn filled(&self, i: i64, j: i64, hole: usize) -> f32 {
+        let firm = |i: i64, j: i64| masks_smooth(MAP_NONE, MAP_FULL, self.get(i, j));
+        let v = firm(i, j);
+        if hole == 0 || v >= 1.0 {
+            return v;
+        }
+        let most = |(dx, dy): (f64, f64)| {
+            (1..=hole).map(|t| firm(i + (dx * t as f64).round() as i64, j + (dy * t as f64).round() as i64)).fold(0f32, f32::max)
+        };
+        let mut lines = LINES.map(|(dx, dy)| most((dx, dy)).min(most((-dx, -dy))));
+        lines.sort_by(f32::total_cmp);
+        v.max(lines[2])
+    }
+}
+
+/// The eight directions [`CellMap::filled`] looks along (unit steps, a sixteenth of a turn apart).
+const LINES: [(f64, f64); 8] = [
+    (1.0, 0.0),
+    (0.923_879_5, 0.382_683_43),
+    (std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2),
+    (0.382_683_43, 0.923_879_5),
+    (0.0, 1.0),
+    (-0.382_683_43, 0.923_879_5),
+    (-std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2),
+    (-0.923_879_5, 0.382_683_43),
+];
+
+/// [`stamp`] for [`AutoMaskModel::Smoothed`]: each dab of `range` paints its feathered circle into
+/// `foot` (over `area`, as a plain brush does but solid to [`AUTO_HARD`] of its radius) and adds
+/// what it found to belong ([`grow`]) to `map`.
 #[allow(clippy::too_many_arguments)]
 fn stamp_smoothed(
     bd: &BrushDabs,
@@ -859,22 +883,19 @@ fn stamp_smoothed(
     h: usize,
     img: &Rgb32f,
     log_l: &Plane,
-    sm: &Smoothed,
-    buf: &mut [f32],
-    elig: &mut [f32],
+    cells: &Cells,
+    foot: &mut [f32],
+    map: &mut CellMap,
     area: PixRect,
 ) {
-    if w == 0 || h == 0 || buf.len() < area.area() || elig.len() < area.area() || img.data.len() != w * h || log_l.data.len() != w * h {
+    if w == 0 || h == 0 || foot.len() < area.area() || img.data.len() != w * h || log_l.data.len() != w * h {
         return;
     }
-    let cells = Cells::of(bd.r, bd.dabs.first().copied(), w, h);
     let mut cache = CellCache::default();
     let bw = area.width();
     for k in range {
         let Some(d) = bd.dabs.get(k).copied() else { break };
         let (r, hard, flow) = bd.dab(k);
-        let Some(refc) = reference(bd, k, &cells, img, log_l) else { continue };
-        let Some(g) = grow(bd, k, r, &cells, img, log_l, refc, &mut cache) else { continue };
         let hard = hard.max(AUTO_HARD * r);
         let rect = dab_rect(d, r, w, h);
         let (x0, x1) = (rect.x0.max(area.x0), rect.x1.min(area.x1));
@@ -885,51 +906,143 @@ fn stamp_smoothed(
                 if dd > r {
                     continue;
                 }
-                let Some(p) = sm.at(x, y) else { continue };
-                let mb = pixel_member(&g, &cells, x, y, p);
-                if mb <= 0.0 {
-                    continue;
+                if let Some(v) = foot.get_mut((y - area.y0) * bw + (x - area.x0)) {
+                    *v = accumulate(*v, dab_alpha(dd, r, hard), flow, bd.density);
                 }
-                let i = (y - area.y0) * bw + (x - area.x0);
-                let a = dab_alpha(dd, r, hard) * mb;
-                if let Some(v) = buf.get_mut(i) {
-                    *v = accumulate(*v, a, flow, bd.density);
-                }
-                if let Some(e) = elig.get_mut(i) {
-                    *e = e.max(mb);
+            }
+        }
+        let Some(refc) = reference(bd, k, cells, img, log_l) else { continue };
+        let Some(g) = grow(bd, k, r, cells, img, log_l, refc, &mut cache) else { continue };
+        for j in g.j0..g.j0 + g.m {
+            for i in g.i0..g.i0 + g.n {
+                let v = g.vouch(i, j);
+                if let Some(o) = map.index(i, j).and_then(|q| map.v.get_mut(q)) {
+                    *o = o.max(v);
                 }
             }
         }
     }
 }
 
-/// A square max (`max` true) or min filter of radius `r` over `p`, separable, edges clamped.
-fn rank_filter(p: &Plane, r: usize, max: bool) -> Plane {
-    let (w, h) = (p.width, p.height);
-    let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
-    let mut t = Plane::new(w, h);
-    for y in 0..h {
-        for x in 0..w {
-            let (a, b) = (x.saturating_sub(r), (x + r).min(w.saturating_sub(1)));
-            let mut v = p.data[y * w + a];
-            for xi in a + 1..=b {
-                v = pick(v, p.data[y * w + xi]);
-            }
-            t.data[y * w + x] = v;
+/// The mean of `p` (`w × h`, row by row) over squares `r` px from each pixel, clipped to the plane.
+fn box_mean(p: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    let n = w * h;
+    if p.len() != n || n == 0 {
+        return vec![0.0; n];
+    }
+    // across: each row's running sums
+    let mut t = vec![0f32; n];
+    let mut acc = vec![0f64; w + 1];
+    for (row, out) in p.chunks_exact(w).zip(t.chunks_exact_mut(w)) {
+        for (x, v) in row.iter().enumerate() {
+            acc[x + 1] = acc[x] + f64::from(*v);
+        }
+        for (x, o) in out.iter_mut().enumerate() {
+            let (a, b) = (x.saturating_sub(r), (x + r + 1).min(w));
+            *o = ((acc[b] - acc[a]) / (b - a) as f64) as f32;
         }
     }
-    let mut o = Plane::new(w, h);
+    // down: running sums of whole rows (row by row, as the plane lies in memory)
+    let mut cum = vec![0f64; (h + 1) * w];
     for y in 0..h {
-        let (a, b) = (y.saturating_sub(r), (y + r).min(h.saturating_sub(1)));
         for x in 0..w {
-            let mut v = t.data[a * w + x];
-            for yi in a + 1..=b {
-                v = pick(v, t.data[yi * w + x]);
-            }
-            o.data[y * w + x] = v;
+            cum[(y + 1) * w + x] = cum[y * w + x] + f64::from(t[y * w + x]);
+        }
+    }
+    let mut o = vec![0f32; n];
+    for y in 0..h {
+        let (a, b) = (y.saturating_sub(r), (y + r + 1).min(h));
+        let k = (b - a) as f64;
+        for x in 0..w {
+            o[y * w + x] = ((cum[b * w + x] - cum[a * w + x]) / k) as f32;
         }
     }
     o
+}
+
+/// The self-guided filter (He, Sun and Tang) of `p` (`w × h`) over squares `r` px from each pixel:
+/// differences well under `eps.sqrt()` flattened, edges well over it kept.
+fn smooth_self(p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
+    let n = w * h;
+    if p.len() != n {
+        return p.to_vec();
+    }
+    // (about the plane's first value: the variance is a difference of squares, of small numbers
+    // precise)
+    let o = p.first().copied().unwrap_or(0.0);
+    let q: Vec<f32> = p.iter().map(|v| v - o).collect();
+    let m = box_mean(&q, w, h, r);
+    let m2 = box_mean(&q.iter().map(|v| v * v).collect::<Vec<f32>>(), w, h, r);
+    let (mut a, mut b) = (vec![0f32; n], vec![0f32; n]);
+    for i in 0..n {
+        let var = (m2[i] - m[i] * m[i]).max(0.0);
+        let k = var / (var + eps);
+        a[i] = k;
+        b[i] = m[i] - k * m[i];
+    }
+    let (a, b) = (box_mean(&a, w, h, r), box_mean(&b, w, h, r));
+    (0..n).map(|i| a[i] * q[i] + b[i] + o).collect()
+}
+
+/// The guided filter (He, Sun and Tang) of `p` steered by a guide of three channels `g`, all
+/// `w × h`, over squares `r` px from each pixel, `eps` the regularization: within each window the
+/// paint is taken as a linear function of the guide's colour, so where the window holds the
+/// photo's edge the paint's edge falls on it, as soft as the photo's own, and where the paint is
+/// flat it stays flat (no specks, no pinholes). Clamped to 0..1.
+fn snap(g: [&[f32]; 3], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
+    let n = w * h;
+    if g.iter().any(|c| c.len() != n) || p.len() != n {
+        return vec![0.0; n];
+    }
+    use rayon::prelude::*;
+    let prod = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).collect::<Vec<f32>>();
+    // the window means of the guide, the paint, their products and the guide's own (its
+    // covariance: xx, xy, xz, yy, yz, zz), each apart
+    let pairs = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2)];
+    let mut inputs: Vec<Vec<f32>> = vec![g[0].to_vec(), g[1].to_vec(), g[2].to_vec(), p.to_vec()];
+    inputs.extend((0..3).map(|c| prod(g[c], p)));
+    inputs.extend(pairs.iter().map(|&(a, b)| prod(g[a], g[b])));
+    let mut means: Vec<Vec<f32>> = inputs.par_iter().map(|v| box_mean(v, w, h, r)).collect();
+    if means.len() != 13 {
+        return vec![0.0; n];
+    }
+    let cg = means.split_off(7);
+    let cp = means.split_off(4);
+    let mp = means.pop().unwrap_or_default();
+    let mg = means;
+    let eps = f64::from(eps);
+    let solve = |i: usize| -> [f32; 4] {
+        // (in f64: the covariances are differences of squares, and the system near singular where
+        // the window's colours lie along a line; f32 would let a stroke painted live and rendered
+        // at once differ)
+        let f = |v: &Vec<f32>| v.get(i).map_or(0.0, |x| f64::from(*x));
+        let mu = [f(&mg[0]), f(&mg[1]), f(&mg[2])];
+        let mpi = f(&mp);
+        let c = |k: usize, a: usize, b: usize| f(&cg[k]) - mu[a] * mu[b];
+        let (sxx, sxy, sxz, syy, syz, szz) = (c(0, 0, 0) + eps, c(1, 0, 1), c(2, 0, 2), c(3, 1, 1) + eps, c(4, 1, 2), c(5, 2, 2) + eps);
+        let v = [f(&cp[0]) - mu[0] * mpi, f(&cp[1]) - mu[1] * mpi, f(&cp[2]) - mu[2] * mpi];
+        // (the 3 × 3 system by its adjugate: positive definite, eps on its diagonal)
+        let (ixx, ixy, ixz) = (syy * szz - syz * syz, sxz * syz - sxy * szz, sxy * syz - sxz * syy);
+        let (iyy, iyz, izz) = (sxx * szz - sxz * sxz, sxy * sxz - sxx * syz, sxx * syy - sxy * sxy);
+        let det = sxx * ixx + sxy * ixy + sxz * ixz;
+        if !(det.is_finite() && det > 0.0) {
+            return [0.0, 0.0, 0.0, mpi as f32];
+        }
+        let k = [
+            (ixx * v[0] + ixy * v[1] + ixz * v[2]) / det,
+            (ixy * v[0] + iyy * v[1] + iyz * v[2]) / det,
+            (ixz * v[0] + iyz * v[1] + izz * v[2]) / det,
+        ];
+        [k[0] as f32, k[1] as f32, k[2] as f32, (mpi - k[0] * mu[0] - k[1] * mu[1] - k[2] * mu[2]) as f32]
+    };
+    let coef: Vec<[f32; 4]> = (0..n).into_par_iter().map(solve).collect();
+    let part = |q: usize| coef.iter().map(|c| c[q]).collect::<Vec<f32>>();
+    let (a0, a1, a2, b) = (part(0), part(1), part(2), part(3));
+    let ab: Vec<Vec<f32>> = [a0, a1, a2, b].par_iter().map(|v| box_mean(v, w, h, r)).collect();
+    let (Some(a0), Some(a1), Some(a2), Some(b)) = (ab.first(), ab.get(1), ab.get(2), ab.get(3)) else {
+        return vec![0.0; n];
+    };
+    (0..n).map(|i| (a0[i] * g[0][i] + a1[i] * g[1][i] + a2[i] * g[2][i] + b[i]).clamp(0.0, 1.0)).collect()
 }
 
 /// What a stroke's dabs are painted with; a raster only takes more dabs painted the same way.
@@ -970,9 +1083,10 @@ pub struct StrokeRaster {
     raw: Vec<f32>,
     /// The refined coverage over `bounds` (Auto Mask strokes; plain ones use `raw`).
     refined: Vec<f32>,
-    /// How much each pixel over `bounds` belongs to what the dabs grew over, feather aside
-    /// ([`AutoMaskModel::Smoothed`]): the refinement fills no further.
-    elig: Vec<f32>,
+    /// [`AutoMaskModel::Smoothed`]: the grid the dabs grow over (set by the first dab) and what
+    /// they found to belong on it, over the cells of `bounds`.
+    cells: Option<Cells>,
+    map: CellMap,
 }
 
 impl StrokeRaster {
@@ -994,7 +1108,8 @@ impl StrokeRaster {
             bounds: PixRect::default(),
             raw: Vec::new(),
             refined: Vec::new(),
-            elig: Vec::new(),
+            cells: None,
+            map: CellMap::default(),
         }
     }
 
@@ -1025,7 +1140,7 @@ impl StrokeRaster {
 
     /// Bytes held.
     pub fn bytes(&self) -> usize {
-        (self.raw.len() + self.refined.len() + self.elig.len()) * 4 + self.dabs.len() * 16 + self.pressure.len() * 4
+        (self.raw.len() + self.refined.len() + self.map.v.len()) * 4 + self.dabs.len() * 16 + self.pressure.len() * 4
     }
 
     /// Whether `bd` continues the stroke painted so far: the same brush, and the dabs painted so
@@ -1080,23 +1195,17 @@ impl StrokeRaster {
             return (!changed.is_empty()).then_some(changed);
         }
         if brush.auto && self.model == AutoMaskModel::Smoothed {
-            let k = Smoothing::of(brush.r, w, h);
-            // the paint changes in `touched`, its closing up to `close` twice beyond, the guided
-            // filter's output its reach beyond that; the inputs of all that come from `win`
-            let out = touched.grow(2 * k.close + k.refine_reach, w, h);
-            // (and the centres of the dabs before the new ones, which their references read)
-            let before = start.saturating_sub(REFERENCE_DABS - 1)..start;
-            let read = before.fold(touched, |acc, j| acc.union(dab_rect(bd.dabs[j], 1.0, w, h)));
-            // the smoothed luminance steers the refinement over `out` and so is read its reach
-            // beyond; the chromaticity only where dabs paint and sample; each smoothing reads
-            // its own reach beyond what it gives
-            let win = read.grow(2 * k.close + 2 * k.refine_reach + k.reach, w, h);
-            let cwin = read.grow(k.reach, w, h);
+            let k = Smoothing::of(brush.r);
+            let cells = *self.cells.get_or_insert_with(|| Cells::of(bd.r, bd.dabs.first().copied(), w, h));
+            // what the dabs found changes over the cells their circles reach (up to a cell past
+            // `touched`), the coarse paint `hole` cells and one more (blending between cells'
+            // centres) beyond, the guided filter's output twice its window beyond that; it reads
+            // the coarse paint and the photo twice its window further again
+            let out = touched.grow(cells.size * (k.hole + 2) + 2 * k.snap, w, h);
             self.cover(out);
-            let sm = Smoothed::of(win, cwin, img, log_l, &k);
             let bounds = self.bounds;
-            stamp_smoothed(bd, new, w, h, img, log_l, &sm, &mut self.raw, &mut self.elig, bounds);
-            self.refine_smoothed(out, &sm, &k);
+            stamp_smoothed(bd, new, w, h, img, log_l, &cells, &mut self.raw, &mut self.map, bounds);
+            self.refine_smoothed(out, &cells, img, log_l, &k);
             return Some(changed.union(out));
         }
         let (sigma, eps) = auto_refine(brush.r);
@@ -1124,8 +1233,6 @@ impl StrokeRaster {
         let (bw, nw) = (self.bounds.width(), next.width());
         let mut raw = vec![0.0; next.area()];
         let mut refined = if auto { vec![0.0; next.area()] } else { Vec::new() };
-        let smoothed = auto && self.model == AutoMaskModel::Smoothed;
-        let mut elig = if smoothed { vec![0.0; next.area()] } else { Vec::new() };
         for y in self.bounds.y0..self.bounds.y1 {
             let src = (y - self.bounds.y0) * bw;
             let dst = (y - next.y0) * nw + (self.bounds.x0 - next.x0);
@@ -1135,14 +1242,13 @@ impl StrokeRaster {
             if let (Some(s), Some(d)) = (self.refined.get(src..src + bw), refined.get_mut(dst..dst + bw)) {
                 d.copy_from_slice(s);
             }
-            if let (Some(s), Some(d)) = (self.elig.get(src..src + bw), elig.get_mut(dst..dst + bw)) {
-                d.copy_from_slice(s);
-            }
         }
         self.bounds = next;
         self.raw = raw;
         self.refined = refined;
-        self.elig = elig;
+        if let Some(cells) = self.cells {
+            self.map = self.map.moved(CellMap::over(&cells, next));
+        }
     }
 
     /// The Auto Mask refinement where the dabs in `touched` changed the paint: the guided filter of
@@ -1183,53 +1289,63 @@ impl StrokeRaster {
         }
     }
 
-    /// The paint over `win` (0 outside the planes).
-    fn raw_in(&self, win: PixRect) -> Plane {
-        self.plane_in(&self.raw, win)
-    }
-
-    /// `plane` (one of the raster's, over `bounds`) over `win` (0 outside the planes).
-    fn plane_in(&self, plane: &[f32], win: PixRect) -> Plane {
+    /// [`AutoMaskModel::Smoothed`]'s coverage over `out`: what the dabs found to belong, holes
+    /// filled and blended between the cells' centres (a coarse paint whose edge lies within about
+    /// a cell of the photo's), carried onto the photo's edges by the guided filter on the smoothed
+    /// photo ([`snap`]), times the brush's feathered footprint.
+    fn refine_smoothed(&mut self, out: PixRect, cells: &Cells, img: &Rgb32f, log_l: &Plane, k: &Smoothing) {
+        let (w, h) = (self.w, self.h);
+        let win = out.grow(2 * k.snap, w, h);
         let (ww, wh) = (win.width(), win.height());
-        let b = self.bounds;
-        let mut p = Plane::new(ww, wh);
-        for y in win.y0.max(b.y0)..win.y1.min(b.y1) {
-            let (x0, x1) = (win.x0.max(b.x0), win.x1.min(b.x1));
-            if x0 >= x1 {
-                continue;
-            }
-            let src = (y - b.y0) * b.width() + (x0 - b.x0);
-            let dst = (y - win.y0) * ww + (x0 - win.x0);
-            if let (Some(s), Some(d)) = (plane.get(src..src + (x1 - x0)), p.data.get_mut(dst..dst + (x1 - x0))) {
-                d.copy_from_slice(s);
+        if ww == 0 || wh == 0 {
+            return;
+        }
+        // the cells' findings, holes filled, over the cells the window's pixels blend between
+        let cs = cells.size as f32;
+        let (ox, oy) = (cells.ox as f32, cells.oy as f32);
+        let at = |v: usize, o: f32| (v as f32 + 0.5 + o) / cs - 0.5;
+        let (ci0, cj0) = (at(win.x0, ox).floor() as i64, at(win.y0, oy).floor() as i64);
+        let (ci1, cj1) = (at(win.x1 - 1, ox).floor() as i64 + 1, at(win.y1 - 1, oy).floor() as i64 + 1);
+        let (cn, cm) = ((ci1 - ci0 + 1) as usize, (cj1 - cj0 + 1) as usize);
+        let (last_i, last_j) = (cells.cols() as i64 - 1, cells.rows() as i64 - 1);
+        let mut fill = vec![0f32; cn * cm];
+        for j in 0..cm {
+            for i in 0..cn {
+                // (past the grid's edge, the edge cell: the paint runs on to the frame's edge)
+                let (ci, cj) = ((ci0 + i as i64).clamp(0, last_i.max(0)), (cj0 + j as i64).clamp(0, last_j.max(0)));
+                fill[j * cn + i] = self.map.filled(ci, cj, k.hole);
             }
         }
-        p
-    }
-
-    /// [`AutoMaskModel::Smoothed`]'s refinement over `out`: the paint closed (holes up to about
-    /// twice `close` filled), then its gaps along edges filled by the guided filter on the
-    /// smoothed luminance, neither past what the dabs found to belong (`elig`, closed alike);
-    /// never less than the paint.
-    fn refine_smoothed(&mut self, out: PixRect, sm: &Smoothed, k: &Smoothing) {
-        let win = sm.win;
-        let p = self.raw_in(win);
-        let closed = rank_filter(&rank_filter(&p, k.close, true), k.close, false);
-        let q = masks::guided_cross(&sm.l, &closed, k.refine_sigma, k.refine_eps);
-        // neither the closing nor the guided filter takes paint past what the dabs found to belong
-        // (its own holes closed alike): across an edge the guided filter would otherwise spread
-        // its window's mean, a soft arc of paint over the neighbour
-        let e = self.plane_in(&self.elig, win);
-        let cap = rank_filter(&rank_filter(&e, k.close, true), k.close, false);
-        let (b, ww) = (self.bounds, win.width());
+        let mut coarse = vec![0f32; ww * wh];
+        for y in 0..wh {
+            let v = at(win.y0 + y, oy);
+            let (j, fv) = (v.floor() as i64, v - v.floor());
+            let jj = (j - cj0).clamp(0, cm as i64 - 2).max(0) as usize;
+            for x in 0..ww {
+                let u = at(win.x0 + x, ox);
+                let (i, fu) = (u.floor() as i64, u - u.floor());
+                let ii = (i - ci0).clamp(0, cn as i64 - 2).max(0) as usize;
+                let c = |di: usize, dj: usize| fill.get((jj + dj).min(cm - 1) * cn + (ii + di).min(cn - 1)).copied().unwrap_or(0.0);
+                coarse[y * ww + x] = (c(0, 0) * (1.0 - fu) + c(1, 0) * fu) * (1.0 - fv) + (c(0, 1) * (1.0 - fu) + c(1, 1) * fu) * fv;
+            }
+        }
+        let sm = Smoothed::of(win, img, log_l, k);
+        // (the guide taken about the photo under the stroke's first dab: the filter's variances
+        // are differences of squares, and of small numbers they keep their precision, so a stroke
+        // painted live and rendered at once agree)
+        let at0 = self.dabs.first().map_or(0, |d| masks::dab_pixel(*d, w, h));
+        let (l0, c0) = (log_l.data.get(at0).copied().unwrap_or(0.0), img.data.get(at0).map_or([0.0; 3], |c| chromaticity(*c)));
+        let g0: Vec<f32> = sm.l.iter().map(|v| (v - l0) / SNAP_EV).collect();
+        let g1: Vec<f32> = sm.c0.iter().map(|c| (c - c0[0]) / SNAP_CHROMA).collect();
+        let g2: Vec<f32> = sm.c2.iter().map(|c| (c - c0[2]) / SNAP_CHROMA).collect();
+        let q = snap([&g0, &g1, &g2], &coarse, ww, wh, k.snap, SNAP_EPS);
+        let b = self.bounds;
         for y in out.y0..out.y1 {
             for x in out.x0..out.x1 {
                 let i = (y - b.y0) * b.width() + (x - b.x0);
                 let wi = (y - win.y0) * ww + (x - win.x0);
-                if let (Some(r), Some(c), Some(v), Some(cap), Some(f)) =
-                    (p.data.get(wi), closed.data.get(wi), q.data.get(wi), cap.data.get(wi), self.refined.get_mut(i))
-                {
-                    *f = r.max(c.max(*v).min(*cap));
+                if let (Some(f), Some(v), Some(o)) = (self.raw.get(i), q.get(wi), self.refined.get_mut(i)) {
+                    *o = f * masks_smooth(SNAP_SOFT, 1.0 - SNAP_SOFT, *v);
                 }
             }
         }

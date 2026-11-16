@@ -243,3 +243,29 @@ fn the_smoothed_model_painted_live_matches_the_committed_stroke_and_is_process_9
     );
     assert_eq!(old.data, v8.data);
 }
+
+/// Process 9 fills a narrow crack between cells that belong, in any direction (a seam, a closed
+/// eye's crease), and a speck; it leaves the object's edge and a wide notch in it alone.
+#[test]
+fn the_cell_map_fills_cracks_and_specks_but_not_notches_or_edges() {
+    let (n, m) = (40usize, 40usize);
+    let mut map = CellMap { i0: 0, j0: 0, n, m, v: vec![0.0; n * m] };
+    // the object: the left 30 columns; a crack two cells wide slanting across it at about 60°,
+    // a speck, and a notch open to the right a quarter turn wide
+    for j in 0..m {
+        for i in 0..30 {
+            let (x, y) = (i as f64, j as f64);
+            let crack = (y - 1.7 * (x - 5.0)).abs() < 1.97 && j < 30 && j > 2;
+            let speck = (i, j) == (8, 34);
+            let notch = (x - 30.0).abs() < (6.0 - (y - 34.0).abs()).max(0.0) && j > 28;
+            map.v[j * n + i] = if crack || speck || notch { 0.0 } else { 1.0 };
+        }
+    }
+    let f = |i: usize, j: usize| map.filled(i as i64, j as i64, HOLE_CELLS);
+    // (a cell well inside the crack, the speck)
+    assert_eq!(f(10, 9), 1.0, "crack");
+    assert_eq!(f(8, 34), 1.0, "speck");
+    // (the wall past the edge, the notch's mouth)
+    assert_eq!(f(33, 10), 0.0, "past the edge");
+    assert_eq!(f(29, 34), 0.0, "notch");
+}

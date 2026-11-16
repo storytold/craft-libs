@@ -10,7 +10,10 @@
 //! `CRAFT_AUTOMASK_PROCESS`, `CRAFT_AUTOMASK_LIVE` (paint as a UI does, a few points at a time
 //! through one cache, and time each update), `CRAFT_AUTOMASK_DAB=<k>` (print dab k's grid of path
 //! costs and memberships), `CRAFT_AUTOMASK_PIXEL=x,y` (which dabs paint that pixel, and why),
-//! `CRAFT_AUTOMASK_POINTS` (JSON: name → `[x, y]`; prints the photo there, and dumps the planes).
+//! `CRAFT_AUTOMASK_POINTS` (JSON: name → `[x, y]`; prints the photo there, and dumps the planes),
+//! `CRAFT_AUTOMASK_MAP` (process 9: `<case>-map.ppm`, what the stroke's dabs found over the cells,
+//! red, and the holes filled, green; with `CRAFT_AUTOMASK_AT=x,y` it prints the cells and the
+//! coverage around that pixel).
 //!
 //! `CRAFT_AUTOMASK_WINDOW=x,y,w,h` (fractions of the photo) renders only that window of the
 //! output, as a zoomed view does, and compares its mask with the whole frame's there. The overlay
@@ -244,7 +247,7 @@ fn photo_probe() {
                     };
                     let border = (x + cells.ox).is_multiple_of(cs) || (y + cells.oy).is_multiple_of(cs);
                     let t = if border { 0.6 } else { 0.3 };
-                    let mb = g.member[q] * g.uniform[q];
+                    let mb = g.member[q];
                     let dot = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(bd.dabs[k]) < 2.0;
                     if dot {
                         return [255, 255, 255];
@@ -254,19 +257,14 @@ fn photo_probe() {
                 for j in 0..g.m {
                     let row: String = (0..g.n).map(|i| format!("{:>5.2}", g.cost[j * g.n + i].min(9.99))).collect();
                     let ls: String = (0..g.n).map(|i| format!("{:>5.2}", g.member[j * g.n + i])).collect();
-                    let us: String = (0..g.n).map(|i| format!("{:>5.2}", g.uniform[j * g.n + i])).collect();
-                    eprintln!("{row}  {ls}  {us}");
+                    eprintln!("{row}  {ls}");
                 }
             }
             if let Some((px, py)) = std::env::var("CRAFT_AUTOMASK_PIXEL")
                 .ok()
                 .and_then(|s| s.split_once(',').map(|(a, b)| (a.parse::<usize>().unwrap(), b.parse::<usize>().unwrap())))
             {
-                let k = Smoothing::of(bd.r, w, h);
-                let all = PixRect { x0: 0, y0: 0, x1: w, y1: h };
-                let sm = Smoothed::of(all, all, &prep.img, &prep.log_l, &k);
-                let p = sm.at(px, py).unwrap();
-                eprintln!("pixel ({px},{py}) smoothed {p:?} raw L {}", prep.log_l.data[py * w + px]);
+                eprintln!("pixel ({px},{py}) raw L {}", prep.log_l.data[py * w + px]);
                 for kk in 0..bd.dabs.len() {
                     let d = bd.dabs[kk];
                     if Point::new(px as f64 + 0.5, py as f64 + 0.5).dist(d) > bd.r {
@@ -274,35 +272,44 @@ fn photo_probe() {
                     }
                     let refc = reference(&bd, kk, &cells, &prep.img, &prep.log_l).unwrap();
                     let g = grow(&bd, kk, bd.r, &cells, &prep.img, &prep.log_l, refc, &mut CellCache::default()).unwrap();
-                    let mb = pixel_member(&g, &cells, px, py, p);
                     let (ci, cj) = cells.of_pixel(px, py);
-                    let mut near = Vec::new();
-                    for j in cj.saturating_sub(2)..=cj + 2 {
-                        for i in ci.saturating_sub(2)..=ci + 2 {
-                            if let Some((m, f, _)) = g.get(i, j)
-                                && m > 0.05
-                            {
-                                near.push(format!(
-                                    "({},{}) m {m:.2} L {:.2} ch {:.3},{:.3}",
-                                    i as i64 - ci as i64,
-                                    j as i64 - cj as i64,
-                                    f.0,
-                                    f.1[0],
-                                    f.1[2]
-                                ));
-                            }
+                    let near: Vec<String> = (cj.saturating_sub(1)..=cj + 1)
+                        .flat_map(|j| (ci.saturating_sub(1)..=ci + 1).map(move |i| (i, j)))
+                        .map(|(i, j)| format!("({},{}) {:.2}", i as i64 - ci as i64, j as i64 - cj as i64, g.vouch(i, j)))
+                        .collect();
+                    eprintln!("  dab {kk} at ({:.0},{:.0}) ref L {:.2} ch {:.3},{:.3}: {}", d.x, d.y, refc.0, refc.1[0], refc.1[2], near.join("; "));
+                }
+            }
+            if std::env::var("CRAFT_AUTOMASK_MAP").is_ok() {
+                // the stroke's cells: what the dabs found (red) and with holes filled (green),
+                // over the photo
+                let mut sr = StrokeRaster::with_model(w, h, AutoMaskModel::Smoothed);
+                sr.update(&bd, &prep.img, &prep.log_l);
+                if let Some(c) = sr.cells {
+                    let k = Smoothing::of(bd.r);
+                    if let Some((px, py)) = std::env::var("CRAFT_AUTOMASK_AT")
+                        .ok()
+                        .and_then(|s| s.split_once(',').map(|(a, b)| (a.parse::<usize>().unwrap(), b.parse::<usize>().unwrap())))
+                    {
+                        let (ci, cj) = c.of_pixel(px, py);
+                        for j in cj - 3..=cj + 3 {
+                            let row: String = (ci - 3..=ci + 3)
+                                .map(|i| format!(" {:.2}/{:.2}", sr.map.get(i as i64, j as i64), sr.map.filled(i as i64, j as i64, k.hole)))
+                                .collect();
+                            eprintln!("cells{row}");
+                        }
+                        for y in py - 6..=py + 6 {
+                            let row: String = (px - 6..=px + 6).map(|x| format!(" {:.2}", sr.alpha_at(x, y))).collect();
+                            eprintln!("alpha{row}");
                         }
                     }
-                    eprintln!(
-                        "  dab {kk} at ({:.0},{:.0}) member {mb:.2} chroma_tol {:.3} ref L {:.2} ch {:.3},{:.3}: {}",
-                        d.x,
-                        d.y,
-                        g.chroma_tol,
-                        refc.0,
-                        refc.1[0],
-                        refc.1[2],
-                        near.join("; ")
-                    );
+                    ppm(&out.join(format!("{case}-map.ppm")), w, h, |x, y| {
+                        let p = plain.data[y * w + x];
+                        let (i, j) = c.of_pixel(x, y);
+                        let (v, f) = (sr.map.get(i as i64, j as i64), sr.map.filled(i as i64, j as i64, k.hole));
+                        let g = |q: u8, t: f32| (f32::from(q) * 0.4 + 150.0 * t) as u8;
+                        [g(p[0], v), g(p[1], f - v), g(p[2] / 2, 0.0)]
+                    });
                 }
             }
             let step = (bd.dabs.len() / 12).max(1);

@@ -225,3 +225,194 @@ fn auto_mask_fills_a_shaded_drifting_surface_within_reach_and_stops_at_its_edge(
     // px of the surface's)
     assert!(failed.is_empty(), "{failed:#?}");
 }
+
+/// A cream object against a grey wall almost as bright, as a cake's shaded side against the wall
+/// behind it: the edge is mostly one of colour (the wall a little cooler), with a thin darker rim
+/// just inside it, a slant and a slow wave, and sensor noise on both sides. Its edge at row `y`
+/// (pixel units of the 480 × 360 frame): the object is left of it.
+fn wall_edge(y: f64) -> f64 {
+    290.0 + 0.3 * (y - 180.0) + 8.0 * (y / 45.0).sin()
+}
+
+/// About normal noise from three hashes, unit spread.
+fn gauss(x: usize, y: usize, seed: u64) -> f32 {
+    (hash(x, y, seed) + hash(x, y, seed + 101) + hash(x, y, seed + 202)) * 1.0
+}
+
+/// The wall scene, the wall `wall_ev` brighter than the object's shaded edge: colours, log
+/// luminance (480 × 360).
+fn wall_scene(wall_ev: f32) -> (Rgb32f, Plane, usize, usize) {
+    let (w, h) = (480usize, 360usize);
+    let img = Rgb32f::from_fn(w, h, |x, y| {
+        let (u, v) = (x as f64 + 0.5, y as f64 + 0.5);
+        let e = wall_edge(v);
+        // (the edge as soft as a lens draws it: a pixel and a half)
+        let t = (1.0 / (1.0 + ((u - e) / 0.8).exp())) as f32;
+        let cream = [1.065f32, 0.99, 0.83];
+        let grey = [1.04f32, 0.99, 0.91];
+        // the object shaded toward its edge, down to the wall's brightness there
+        let obj_ev = 0.15 + 0.6 * ((e - u) / 200.0).clamp(0.0, 1.0) as f32 - 0.5 * (-((e - u - 2.0) / 1.5).powi(2) as f32).exp();
+        let ev = t * obj_ev + (1.0 - t) * wall_ev;
+        let ch: [f32; 3] = std::array::from_fn(|c| t * cream[c] + (1.0 - t) * grey[c]);
+        // sensor noise: 0.04 EV of luminance, a little of colour
+        let g = (0.04 * gauss(x, y, 11) / 1.7).exp2();
+        std::array::from_fn(|c| 0.18 * ev.exp2() * g * ch[c] * (1.0 + 0.006 * gauss(x, y, 21 + c as u64) / 1.7))
+    });
+    let l = img.map(crate::local::log_lum);
+    (img, l, w, h)
+}
+
+#[derive(Debug)]
+struct EdgeMeasure {
+    /// Mean of where the paint crosses 0.5 along each row, less the edge's place (px).
+    offset: f32,
+    /// How far that crossing wanders about its own running mean over 9 rows (RMS, px): a torn,
+    /// ragged edge wanders, a clean one follows the photo's.
+    rough: f32,
+    /// The most it wanders from the edge's place, less the mean offset (px).
+    worst: f32,
+    /// Rows the paint crossed no edge near the photo's (it stopped short, or ran on).
+    lost: usize,
+    /// Mean paint on the wall 3 px or more past the edge where the plain brush paints.
+    leak: f32,
+    /// Wall pixels 3 px or more past the edge painted over 0.05 (specks, haze).
+    specks: usize,
+    /// Object pixels 3 px or more inside the edge the plain brush paints solidly, painted under
+    /// 0.9 (pinholes).
+    holes: usize,
+    /// Separate pieces of paint (0.5 or more), 8-connected.
+    pieces: usize,
+    /// The stroke painted a point at a time against painted at once: the most they differ.
+    live: f32,
+}
+
+fn measure_wall_edge(size: f64, wall_ev: f32) -> EdgeMeasure {
+    let (img, l, w, h) = wall_scene(wall_ev);
+    let f = Frame::new(w, h, &DevelopSettings::default(), true);
+    let r = size * 480.0;
+    // the brush's centre inside the object, its circle reaching over the edge
+    let pts: Vec<(f64, f64)> = (0..=12).map(|i| 50.0 + 260.0 * f64::from(i) / 12.0).map(|y| (wall_edge(y) - 0.45 * r, y)).collect();
+    let mk = |auto: bool| BrushStroke {
+        points: pts.iter().map(|p| Point::new(p.0 / 480.0, p.1 / 360.0)).collect(),
+        size,
+        feather: 50.0,
+        flow: 100.0,
+        auto_mask: auto,
+        ..BrushStroke::default()
+    };
+    let s = mk(true);
+    let plain = painted(&mk(false), &img, &l, w, h);
+    let mut once = StrokeRaster::with_model(w, h, AutoMaskModel::Smoothed);
+    once.update(&brush_dabs(&s, &f, w, h), &img, &l);
+    let a = once.to_plane();
+    let mut live = StrokeRaster::with_model(w, h, AutoMaskModel::Smoothed);
+    for n in 1..=s.points.len() {
+        let part = BrushStroke { points: s.points[..n].to_vec(), ..s.clone() };
+        live.update(&brush_dabs(&part, &f, w, h), &img, &l);
+    }
+    let live_d = live.to_plane().data.iter().zip(&a.data).map(|(p, q)| (p - q).abs()).fold(0f32, f32::max);
+    if let Ok(dir) = std::env::var("CRAFT_SURFACE_OUT") {
+        let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+        for i in 0..w * h {
+            let p = img.data[i].map(|v| (v.max(0.0).powf(1.0 / 2.2) * 255.0).min(255.0));
+            let al = a.data[i] * 0.55;
+            out.extend_from_slice(&[(p[0] * (1.0 - al) + 255.0 * al) as u8, (p[1] * (1.0 - al)) as u8, (p[2] * (1.0 - al)) as u8]);
+        }
+        let _ = std::fs::write(format!("{dir}/wall-{size}-{wall_ev}.ppm"), out);
+    }
+    // where the paint crosses 0.5 on each row the plain brush paints solidly across the edge
+    let mut d = Vec::new();
+    let mut lost = 0;
+    for y in 0..h {
+        let e = wall_edge(y as f64 + 0.5);
+        let (lo, hi) = ((e - 8.0).max(0.0) as usize, ((e + 8.0) as usize).min(w - 1));
+        if ((e - 4.0) as usize..=(e + 4.0) as usize).any(|x| plain.data.get(y * w + x).is_none_or(|v| *v < 0.9)) {
+            continue;
+        }
+        // (the last crossing from paint to none, interpolated)
+        let cross = (lo..hi).rev().find(|&x| a.data[y * w + x] >= 0.5 && a.data[y * w + x + 1] < 0.5).map(|x| {
+            let (p, q) = (a.data[y * w + x], a.data[y * w + x + 1]);
+            x as f64 + 0.5 + f64::from((p - 0.5) / (p - q))
+        });
+        match cross {
+            Some(c) if (c - e).abs() < 7.0 => d.push((c - e) as f32),
+            _ => lost += 1,
+        }
+    }
+    let n = d.len().max(1) as f32;
+    let offset = d.iter().sum::<f32>() / n;
+    let mut rough = 0f32;
+    for i in 0..d.len() {
+        let (a0, a1) = (i.saturating_sub(4), (i + 5).min(d.len()));
+        let m = d[a0..a1].iter().sum::<f32>() / (a1 - a0) as f32;
+        rough += (d[i] - m).powi(2);
+    }
+    let rough = (rough / n).sqrt();
+    let worst = d.iter().map(|v| (v - offset).abs()).fold(0f32, f32::max);
+    let (mut ln, mut lsum, mut specks, mut holes) = (0f32, 0f32, 0, 0);
+    for y in 0..h {
+        let e = wall_edge(y as f64 + 0.5);
+        for x in 0..w {
+            let (u, i) = (x as f64 + 0.5, y * w + x);
+            if u >= e + 3.0 && plain.data[i] > 0.0 {
+                ln += 1.0;
+                lsum += a.data[i];
+                specks += usize::from(a.data[i] > 0.05);
+            }
+            if u <= e - 3.0 && plain.data[i] >= 0.95 && a.data[i] < 0.9 {
+                holes += 1;
+            }
+        }
+    }
+    // pieces of paint: flood fill
+    let mut seen = vec![false; w * h];
+    let mut pieces = 0;
+    for start in 0..w * h {
+        if seen[start] || a.data[start] < 0.5 {
+            continue;
+        }
+        pieces += 1;
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(i) = stack.pop() {
+            let (x, y) = ((i % w) as i64, (i / w) as i64);
+            for (dx, dy) in [(-1i64, -1i64), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                    continue;
+                }
+                let j = ny as usize * w + nx as usize;
+                if !seen[j] && a.data[j] >= 0.5 {
+                    seen[j] = true;
+                    stack.push(j);
+                }
+            }
+        }
+    }
+    EdgeMeasure { offset, rough, worst, lost, leak: lsum / ln.max(1.0), specks, holes, pieces, live: live_d }
+}
+
+/// The paint's edge against a wall almost as bright as the object follows the photo's edge
+/// cleanly: no tears, no haze or specks past it, no pinholes inside, one piece, and the stroke
+/// painted live is the stroke rendered at once.
+#[test]
+fn auto_mask_edge_against_a_wall_as_bright_is_clean() {
+    let mut failed = Vec::new();
+    for (size, wall_ev) in [(0.05, 0.0), (0.1, 0.0), (0.05, -1.0), (0.1, -1.0)] {
+        let m = measure_wall_edge(size, wall_ev);
+        eprintln!("wall {wall_ev} EV, brush {size}: {m:?}");
+        if m.offset.abs() > 1.0
+            || m.rough > 0.3
+            || m.worst > 1.2
+            || m.lost > 0
+            || m.leak > 0.005
+            || m.specks > 0
+            || m.holes > 0
+            || m.pieces != 1
+            || m.live > 1e-4
+        {
+            failed.push(format!("{size} {wall_ev}: {m:?}"));
+        }
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
+}
