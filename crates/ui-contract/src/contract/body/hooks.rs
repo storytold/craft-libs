@@ -5,7 +5,7 @@ use super::open::open_now;
 use super::placement::{Placement, measure_layer, overlay_of, shown_placement};
 use super::regions::{
     LabelColumns, LabelsFound, RegionFrame, RegionSizes, RuleBands, end_full_height, footer_in_end, footer_rule_under, gap_of, header_gap_of,
-    label_extra_of, least_of, pad_of, paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
+    label_extra_of, least_of, pad_of, pad_vec, paint_edge_rule, paint_rules, rect_of, shared_labels, shared_line,
 };
 use super::reorder::REORDER_BAND;
 use super::scroll::{
@@ -283,12 +283,12 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         self.given.1 |= self.over_room(props, &env, at, ui.ctx(), id);
         let measured = self.measured_body.unwrap_or(Vec2::ZERO);
         let body = if self.presence.visible { Vec2::new(measured.x, measured.y * self.presence.t) } else { Vec2::ZERO };
-        let room = self.room.x - 2.0 * pad_of(scx.tokens, props.pad);
+        let room = self.room.x - 2.0 * pad_vec(scx.tokens, props).x;
         let width = if self.measured_body.is_some() { self.shared_width(room, props) } else { 0.0 };
         self.overflow = self.wanted_width(props).map_or(0.0, |wanted| (wanted - room.max(0.0)).max(0.0));
         let (header, end) = (self.measured_header.unwrap_or(Vec2::ZERO), self.measured_end.unwrap_or(Vec2::ZERO));
         let height = self.regions_size(props, body, header, self.measured_footer, end).y;
-        Vec2::new(width, height) + Vec2::splat(2.0 * pad_of(scx.tokens, props.pad))
+        Vec2::new(width, height) + 2.0 * pad_vec(scx.tokens, props)
     }
 
     /// The regions run once in an invisible sizing pass over the room, as `content` runs them, and the container takes
@@ -371,7 +371,7 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         if at.ui.is_sizing_pass() && self.given == (true, true) && self.room.is_finite() && !scrolled_share {
             return self.room;
         }
-        let pad = Vec2::splat(2.0 * pad_of(at.scx.tokens, props.pad));
+        let pad = 2.0 * pad_vec(at.scx.tokens, &props);
         let vertical = scroll_of(&props).is_some_and(|scroll| scroll.vertical_on());
         let tolerance = measure_tolerance(crate::runtime::egui::scale::pixels_per_point(&ctx));
         // A record a run of this pass left serves as before; a kept one serves only while the inputs it was measured
@@ -539,8 +539,9 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             return None;
         }
         let tokens = cx.tokens;
-        let inner = content.shrink(pad_of(tokens, props.pad));
-        let regions = self.regions(&props, inner, pad_of(tokens, props.pad), self.room_size(rect, inner), rtl, self.measured_sizes());
+        let pad = pad_vec(tokens, &props);
+        let inner = content.shrink2(pad);
+        let regions = self.regions(&props, inner, pad, self.room_size(rect, inner), rtl, self.measured_sizes());
         let (_, slots) = self.header_line(regions.header, pad_of(tokens, header.inset), parts, rtl);
         Some(std::rc::Rc::new(slots))
     }
@@ -550,9 +551,10 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let ctx = pcx.ui.ctx().clone();
         let rtl = pcx.flow.is_rtl();
         let tokens = pcx.tokens;
-        let inner = pcx.content_rect.shrink(pad_of(tokens, props.pad));
+        let pad = pad_vec(tokens, &props);
+        let inner = pcx.content_rect.shrink2(pad);
         let room = self.room_size(rect, inner);
-        let regions = self.regions(&props, inner, pad_of(tokens, props.pad), room, rtl, self.measured_sizes());
+        let regions = self.regions(&props, inner, pad, room, rtl, self.measured_sizes());
         let scroll = scroll_of(&props);
         if self.open && scroll.is_some() {
             let at = regions.body;
@@ -677,8 +679,8 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let rtl = env.direction.is_rtl();
         let node = matches!(C::ROLE, Role::Node(_));
         let scroll = scroll_of(&props);
-        let pad = pad_of(&env.tokens, props.pad);
-        let inner = cx.core.content_rect.shrink(pad);
+        let pad = pad_vec(&env.tokens, &props);
+        let inner = cx.core.content_rect.shrink2(pad);
         let room = self.room_size(rect, inner);
         let mut regions = self.regions(&props, inner, pad, room, rtl, self.measured_sizes());
         let surface_slot = SurfaceSlot::reserve(ui, matches!(props.mount, Mount::Layer(_)));
@@ -698,6 +700,20 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
             register_instances(&ctx, &props, id, window);
         }
         let region_env = env.derive(|scoped| self.scope_regions(scoped, &props, cx, window, values, real));
+        // The size and glyph role the container gives its children reach every region: header, body, end region and
+        // footer.
+        let region_env = if props.child_size.is_none() && props.child_glyphs.is_none() {
+            region_env
+        } else {
+            region_env.derive_local(|scoped| {
+                if let Some(size) = props.child_size {
+                    scoped.size = size;
+                }
+                if let Some(role) = props.child_glyphs {
+                    scoped.glyphs = role;
+                }
+            })
+        };
         let body_id = sub(id, "body");
         let gap = Vec2::splat(gap_of(&env.tokens, props.body_gap));
         let owner = BodyOwner::new(cx.style, gap.y);
@@ -734,19 +750,13 @@ impl<C: Container> ShapeHooks<C> for BodyHooks<'_> {
         let animated = props.collapse.is_some_and(|collapse| collapse.animated);
         let is_open = open || (animated && self.presence.visible);
         let enabled = gate.unwrap_or(true);
-        // What the body and the end region share: gate, size, roving group and commands. The body adds its arena,
+        // What the body and the end region share: gate, roving group and commands. The body adds its arena,
         // transform and scroll owner; the end region lies outside them.
-        let line_env = if enabled && props.child_size.is_none() && props.child_glyphs.is_none() && props.roving.is_none() {
+        let line_env = if enabled && props.roving.is_none() {
             region_env.clone()
         } else {
             region_env.derive_local(|scoped| {
                 scoped.enabled &= enabled;
-                if let Some(size) = props.child_size {
-                    scoped.size = size;
-                }
-                if let Some(role) = props.child_glyphs {
-                    scoped.glyphs = role;
-                }
                 if props.roving.is_some() {
                     scoped.roving = Some(crate::contract::steps::body_group(id));
                 }
@@ -1246,7 +1256,7 @@ impl BodyHooks<'_> {
     ) -> Vec2 {
         let props = Arc::clone(&self.props);
         let (id, ctx) = (cx.core.id, at.ui.ctx().clone());
-        let pad = Vec2::splat(2.0 * pad_of(at.scx.tokens, props.pad));
+        let pad = 2.0 * pad_vec(at.scx.tokens, &props);
         #[cfg(feature = "testing")]
         crate::runtime::measure::count_body(&ctx, id);
         layout_memory::begin_measure(&ctx, id);

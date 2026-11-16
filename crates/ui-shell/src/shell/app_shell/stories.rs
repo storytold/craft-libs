@@ -45,7 +45,7 @@ fn app_shell_canvas(ui: &mut Ui, _: &mut StoryData) -> StoryOutput {
         .options_bar(true, |ui, _, _| {
             Text::new("Options").show(ui);
         })
-        .tools(PaneEdge::Start, true, |ui, _, _| {
+        .tools(PaneEdge::Start, 1, true, |ui, _, _| {
             Text::new("Tools").show(ui);
         })
         .status(true, |ui, _, _| {

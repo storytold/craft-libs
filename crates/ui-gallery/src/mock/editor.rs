@@ -82,7 +82,7 @@ impl<'a> EditorMock<'a> {
             .screen_mode(screen_mode)
             .title_bar_if(true, |ui, _, state: &mut MockState| title_bar(ui, state))
             .options_bar(true, |ui, _, state: &mut MockState| options_bar(ui, state))
-            .tools(PaneEdge::Start, true, |ui, _, state: &mut MockState| tool_rail(ui, state))
+            .tools(PaneEdge::Start, 1, true, |ui, _, state: &mut MockState| tool_rail(ui, state))
             .status(true, |ui, _, state: &mut MockState| status_bar(ui, state))
             .body_label(label)
             .body(|ui, cx, state: &mut MockState| body(ui, cx, state));

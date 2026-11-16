@@ -367,10 +367,11 @@ impl<'a, S> AppShell<'a, S> {
         self
     }
 
-    /// The tool rail, a slot keyed `"tools"` at `edge` (the reading start or end) that reveals in body-only mode. It
-    /// is the Tools region on either edge.
-    pub fn tools(mut self, edge: PaneEdge, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
-        let slot = Slot::new(keys::TOOLS).visible(visible).reveal();
+    /// The tool rail, a slot keyed `"tools"` at `edge` (the reading start or end) that reveals in body-only mode, as
+    /// wide as the rail's `columns` (1 or 2, the count the host gives its `ToolRail`). It is the Tools region on either
+    /// edge.
+    pub fn tools(mut self, edge: PaneEdge, columns: usize, visible: bool, add: impl FnMut(&mut Ui, &mut BodyCx<'_>, &mut S) + 'a) -> Self {
+        let slot = Slot::new(keys::TOOLS).columns(columns).visible(visible).reveal();
         self.slots.push(Placed { slot, edge, title: false, named: Some(|words| words.tools.clone()), add: Box::new(add) });
         self
     }

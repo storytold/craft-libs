@@ -137,6 +137,18 @@ pub enum Pad {
     Roomy,
 }
 
+/// The edges a container's padding tier applies to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PadEdges {
+    /// Every edge.
+    #[default]
+    All,
+    /// The top and bottom edges only: a column given its width whose children centre across it, as a tool rail does
+    /// in its pane.
+    Block,
+}
+
 /// The padding of every popup surface around its content.
 pub const POPUP_PAD: Pad = Pad::Control;
 
@@ -167,6 +179,8 @@ pub enum LeastWidth {
     DialogButton,
     /// `size.dialog.side_button`: a button in a dialog's column of buttons beside the body.
     DialogSideButton,
+    /// `size.rail.width` per column: a tool rail of this many columns, as wide as the shell slot that holds it.
+    Rail(std::num::NonZeroU8),
 }
 
 impl LeastWidth {
@@ -177,6 +191,7 @@ impl LeastWidth {
             LeastWidth::Dialog => tokens.size.dialog.least,
             LeastWidth::DialogButton => tokens.size.dialog.button,
             LeastWidth::DialogSideButton => tokens.size.dialog.side_button,
+            LeastWidth::Rail(columns) => tokens.size.rail.width * f32::from(columns.get()),
         }
     }
 }
@@ -672,6 +687,8 @@ pub struct ContainerProps {
     pub surface: Option<SurfaceKind>,
     /// The padding tier.
     pub pad: Pad,
+    /// The edges the padding tier applies to; a collection pads every edge.
+    pub pad_edges: PadEdges,
     /// How the size follows the content.
     pub sizing: Sizing,
     /// The height the body offers its children in flow, in place of the flow's (unbounded in a scrolling body): the
@@ -707,9 +724,9 @@ pub struct ContainerProps {
     /// A divider along the inner edge of a container mounted as an edge pane (`Mount::Pane` at an edge): the edge that
     /// faces the window's centre. Any other container draws nothing.
     pub edge_rule: bool,
-    /// A scope size for the body.
+    /// A scope size for the regions: header, body, end region and footer.
     pub child_size: Option<ControlSize>,
-    /// A scope glyph role for the body: how the icon-only buttons in it show their glyph.
+    /// A scope glyph role for the regions: how the icon-only buttons in them show their glyph.
     pub child_glyphs: Option<GlyphRole>,
     /// The container is an arena root.
     pub arena: bool,
@@ -758,6 +775,7 @@ impl ContainerProps {
         self.mount == other.mount
             && self.surface == other.surface
             && self.pad == other.pad
+            && self.pad_edges == other.pad_edges
             && self.sizing == other.sizing
             && self.room_height == other.room_height
             && self.layout == other.layout
@@ -786,6 +804,7 @@ impl ContainerProps {
             mount: Mount::Inline,
             surface: None,
             pad: Pad::None,
+            pad_edges: PadEdges::All,
             sizing: Sizing::Content,
             room_height: None,
             layout: BodyLayout::Stack,
@@ -835,6 +854,12 @@ impl ContainerProps {
     /// The padding tier.
     pub const fn pad(mut self, pad: Pad) -> Self {
         self.pad = pad;
+        self
+    }
+
+    /// The edges the padding tier applies to.
+    pub const fn pad_edges(mut self, edges: PadEdges) -> Self {
+        self.pad_edges = edges;
         self
     }
 
@@ -937,13 +962,13 @@ impl ContainerProps {
         self
     }
 
-    /// A scope size for the body.
+    /// A scope size for the regions: header, body, end region and footer.
     pub const fn child_size(mut self, size: ControlSize) -> Self {
         self.child_size = Some(size);
         self
     }
 
-    /// A scope glyph role for the body: a rail's buttons show its icons at the rail's side and ink.
+    /// A scope glyph role for the regions: a rail's buttons show its icons at the rail's side and ink.
     pub const fn child_glyphs(mut self, role: GlyphRole) -> Self {
         self.child_glyphs = Some(role);
         self
