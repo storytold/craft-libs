@@ -21,7 +21,7 @@ fn crop_bar_ratio(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let document = document();
     let settings = data.value("settings", CropSettings::default());
     let mut output = None;
-    Bar::new("Options", BarKind::Options).show(ui, |ui, _| output = Some(CropBar::new(settings, &document).angle(0.0).show(ui)));
+    Bar::new("Options", BarKind::Options).show(ui, |ui, _| output = Some(CropBar::new(settings, &document).show(ui)));
     output.map(StoryOutput::from).unwrap_or_default()
 }
 
@@ -81,7 +81,6 @@ fn crop_bar_selection_and_reset(ui: &mut Ui, data: &mut StoryData) -> StoryOutpu
     let mut output = None;
     Bar::new("Options", BarKind::Options).show(ui, |ui, _| {
         let bar = CropBar::new(settings, &document)
-            .angle(0.0)
             .selection_entry(true)
             .selection_chosen(true)
             .can_reset(true)

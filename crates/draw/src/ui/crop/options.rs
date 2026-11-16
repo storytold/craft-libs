@@ -116,7 +116,7 @@ pub struct CropSizeFields {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub enum CropFill {
-    /// "Background (Default)": the background colour or transparency.
+    /// "Background (default)": the background colour or transparency.
     #[default]
     Background,
     /// "Content-Aware Fill": filled from the surroundings (the engine's). Generative Expand is
