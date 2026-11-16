@@ -363,26 +363,34 @@ impl<'p> Pass<'p> {
             return;
         }
         let line = Line { param, key: param.key.as_str(), name: plain(&param.label), enabled: param.enabled(&self.work) };
+        let held = self.work.get(line.key).cloned();
+        self.show_row(ui, &line);
+        param.drop_dependents(held.as_ref(), &mut self.work);
+    }
+
+    /// Shows `line`'s control, chosen by its kind.
+    fn show_row(&mut self, ui: &mut Ui, line: &Line<'_>) {
+        let param = line.param;
         match &param.kind {
-            ParamKind::Range { min, max, scale, .. } => self.range(ui, &line, *min..=*max, *scale),
-            ParamKind::Number { .. } if param.option().units().is_some() => self.with_units(ui, &line),
-            ParamKind::Number { min, max, step, decimals, .. } => self.number(ui, &line, bounds(*min, *max), *step, *decimals),
-            ParamKind::Int { min, max, .. } => self.int(ui, &line, *min, *max),
-            ParamKind::Bool { default } => self.check(ui, &line, *default),
-            ParamKind::Choice { options, .. } => self.choice(ui, &line, options),
-            ParamKind::Radio { options, .. } => self.radio_options(ui, &line, options),
-            ParamKind::Angle { default } => self.angle(ui, &line, *default),
-            ParamKind::Color { .. } => self.color(ui, &line),
-            ParamKind::Grid { cells, .. } => self.grid(ui, &line, *cells),
-            ParamKind::Point { default } => self.point(ui, &line, *default),
-            ParamKind::Channel { names, default } => self.channel(ui, &line, names, *default),
-            ParamKind::Text { default } => self.text(ui, &line, default),
-            ParamKind::OptionalNumber { min, max, initial, decimals, .. } => self.optional(ui, &line, *min..=*max, *initial, *decimals),
-            ParamKind::ReadOnlyText { text } => read_only_text(ui, &line, text),
-            ParamKind::Custom(_) => self.custom(ui, &line),
-            ParamKind::Blend { modes, .. } => self.blend(ui, &line, modes),
-            ParamKind::Pattern { .. } => self.pattern(ui, &line),
-            ParamKind::Files { folder_mode, request, open_files } => self.files(ui, &line, *folder_mode, request, open_files),
+            ParamKind::Range { min, max, scale, .. } => self.range(ui, line, *min..=*max, *scale),
+            ParamKind::Number { .. } if param.option().units().is_some() => self.with_units(ui, line),
+            ParamKind::Number { min, max, step, decimals, .. } => self.number(ui, line, bounds(*min, *max), *step, *decimals),
+            ParamKind::Int { min, max, .. } => self.int(ui, line, *min, *max),
+            ParamKind::Bool { default } => self.check(ui, line, *default),
+            ParamKind::Choice { options, .. } => self.choice(ui, line, options),
+            ParamKind::Radio { options, .. } => self.radio_options(ui, line, options),
+            ParamKind::Angle { default } => self.angle(ui, line, *default),
+            ParamKind::Color { .. } => self.color(ui, line),
+            ParamKind::Grid { cells, .. } => self.grid(ui, line, *cells),
+            ParamKind::Point { default } => self.point(ui, line, *default),
+            ParamKind::Channel { names, default } => self.channel(ui, line, names, *default),
+            ParamKind::Text { default } => self.text(ui, line, default),
+            ParamKind::OptionalNumber { min, max, initial, decimals, .. } => self.optional(ui, line, *min..=*max, *initial, *decimals),
+            ParamKind::ReadOnlyText { text } => read_only_text(ui, line, text),
+            ParamKind::Custom(_) => self.custom(ui, line),
+            ParamKind::Blend { modes, .. } => self.blend(ui, line, modes),
+            ParamKind::Pattern { .. } => self.pattern(ui, line),
+            ParamKind::Files { folder_mode, request, open_files } => self.files(ui, line, *folder_mode, request, open_files),
             ParamKind::Section => {}
         }
     }

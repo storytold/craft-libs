@@ -3,12 +3,13 @@
 
 use craft_ui::contract::{Bind, Role};
 use craft_ui::patterns::blend_keys::{BlendKeyEntry, BlendShortcut};
-use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamRows};
+use craft_ui::patterns::form_dialogs::{DialogFields, FieldValue, Param, ParamDialog, ParamKind, ParamRows, set_param_field};
 use craft_ui::patterns::presets::PresetRow;
 use craft_ui::runtime::env::Label;
 use craft_ui::testing::{Fixture, trial};
 use craft_ui::value_drag::SliderScale;
 use egui::{Key, Modifiers, Vec2};
+use serde_json::json;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -102,6 +103,31 @@ fn rows_follow_their_predicates_and_carry_their_tooltip() {
     fixture.settle();
     let detail = fixture.by_label("Detail").expect("the detail row");
     assert!(fixture.tree().is_disabled_key(detail.node), "disabled for the third value");
+}
+
+// A row that resets its dependents removes them when its value changes, from the row or from automation before any
+// pass; the value it already holds keeps them.
+#[trial]
+fn a_row_that_resets_drops_its_dependents_when_its_value_changes() {
+    let documents = ParamKind::radio(vec![("0".into(), "First".into()), ("1".into(), "Second".into())], Some("0".into()));
+    let params = vec![Param::new("source", "Source", documents).resets(["layer"]), Param::new("layer", "Layer", ParamKind::int(Some(0), None, 0))];
+    let mut fields = DialogFields::new();
+    set_param_field(&params, &mut fields, "source", json!("0")).expect("the source row takes an option");
+    set_param_field(&params, &mut fields, "layer", json!(7)).expect("the layer row takes a number");
+    set_param_field(&params, &mut fields, "source", json!("0")).expect("the same option");
+    assert_eq!(fields.int("layer"), Some(7), "setting the held value keeps the dependent");
+    set_param_field(&params, &mut fields, "source", json!("1")).expect("another option");
+    assert!(!fields.contains("layer"), "another value removes the dependent before any pass");
+
+    let values = Rc::new(RefCell::new(DialogFields::from_pairs([("source", FieldValue::Text("0".into())), ("layer", FieldValue::Int(7))])));
+    let mut fixture = rows(params, &values);
+    let first = fixture.by_label("First").expect("the first option");
+    fixture.click(&first).settle();
+    assert_eq!(values.borrow().int("layer"), Some(7), "a click on the chosen option keeps the dependent");
+    let second = fixture.by_label("Second").expect("the second option");
+    fixture.click(&second).settle();
+    assert_eq!(values.borrow().text("source"), Some("1"));
+    assert_ne!(values.borrow().int("layer"), Some(7), "a click on another option resets the dependent");
 }
 
 // A read-only row shows its text, selectable, and keeps no value.

@@ -466,6 +466,8 @@ pub(crate) struct RowOptions {
     disabled_options: Vec<String>,
     /// The row's select has a search field.
     searchable: bool,
+    /// The keys a change of the row's value removes ([`Param::resets`]).
+    resets: Vec<String>,
 }
 
 /// The units of a number row ([`Param::number_with_units`]).
@@ -581,6 +583,26 @@ impl Param {
     pub fn searchable(mut self) -> Self {
         self.options.get_or_insert_default().searchable = true;
         self
+    }
+
+    /// The keys of the rows that depend on this one (Match Color's source layer on its source document): changing this
+    /// row's value to a different one, through the row, automation (`set_param_field`) or a host answer, removes them,
+    /// so those rows start over from their default. Setting the value it holds keeps them.
+    #[must_use]
+    pub fn resets(mut self, keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.options.get_or_insert_default().resets.extend(keys.into_iter().map(Into::into));
+        self
+    }
+
+    /// Removes the keys the row [`resets`](Param::resets) when its value in `fields` differs from `before`, the value
+    /// it held before the write.
+    pub(crate) fn drop_dependents(&self, before: Option<&FieldValue>, fields: &mut DialogFields) {
+        let Some(options) = self.options.as_deref().filter(|options| !options.resets.is_empty()) else { return };
+        if fields.get(&self.key) != before {
+            for key in &options.resets {
+                fields.remove(key);
+            }
+        }
     }
 
     /// The row takes input only while `fields[key]` equals one of `values`; otherwise it is shown disabled.

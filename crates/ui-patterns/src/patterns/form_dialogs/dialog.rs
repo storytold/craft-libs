@@ -503,6 +503,11 @@ impl<'a> ParamDialog<'a> {
                 Self::open_values(&params, &patterns, saved.as_ref(), values);
             }
             for answer in cx.take_answers() {
+                let answered = match &answer {
+                    HostAnswer::Color { key, .. } | HostAnswer::Eyedropper { key, .. } | HostAnswer::Path { key, .. } => params.iter().find(|param| param.key == *key),
+                    HostAnswer::Listing { .. } => None,
+                };
+                let held = answered.and_then(|param| values.get(&param.key).cloned());
                 match answer {
                     HostAnswer::Color { key, color } | HostAnswer::Eyedropper { key, color } => set_color_field(&params, values, &key, color),
                     HostAnswer::Path { key, path } => values.set(&key, FieldValue::Text(path.to_string_lossy().into_owned())),
@@ -512,6 +517,9 @@ impl<'a> ParamDialog<'a> {
                             values.set(param.folder_files_key(), FieldValue::List(files));
                         }
                     }
+                }
+                if let Some(param) = answered {
+                    param.drop_dependents(held.as_ref(), values);
                 }
             }
             if let Some(canvas) = canvas {
@@ -951,8 +959,9 @@ impl HostedParamDialog {
         self.requests.answer_listing(key, files);
     }
 
-    /// Sets the value under `key` as an edit would; the dialog shows it in its next pass. Unchecked: the app writes
-    /// a value its own custom row holds (Blur Gallery's pins dragged on the canvas), which has no JSON form to check.
+    /// Sets the value under `key`; the dialog shows it in its next pass. Unchecked: the app writes a value its own
+    /// custom row holds (Blur Gallery's pins dragged on the canvas), which has no JSON form to check. It is the app's
+    /// own write, not an edit of a row, so it removes no keys a row [`resets`](Param::resets).
     pub fn set_field(&mut self, key: impl Into<String>, value: FieldValue) {
         self.fields.set(key, value);
     }
@@ -1016,6 +1025,7 @@ pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str,
     let Some(writes) = writes else {
         return Err(FieldRefusal::Rejects(&value).message(field));
     };
+    let held = fields.get(&param.key).cloned();
     for (key, read) in writes {
         match read {
             Some(read) => fields.set(key, read),
@@ -1024,6 +1034,7 @@ pub fn set_param_field(params: &[Param], fields: &mut DialogFields, field: &str,
             }
         }
     }
+    param.drop_dependents(held.as_ref(), fields);
     Ok(())
 }
 
