@@ -1499,6 +1499,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-control"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "craft-control-protocol"
 version = "0.1.0"
 dependencies = [
