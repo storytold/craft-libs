@@ -203,14 +203,14 @@ fn a_resting_scroll_bar_is_a_thin_line_at_its_outer_edge_that_widens_under_the_p
             Axis::X => Rect::from_min_max(pos2(0.0, 100.0), pos2(200.0, 100.0 + look.thickness)),
             _ => Rect::from_min_max(pos2(100.0, 0.0), pos2(100.0 + look.thickness, 200.0)),
         };
-        let thumb = |state: State| {
-            let shapes = ScrollBar::shapes(&look, track, axis, rtl, &span, &StateSet::new(state, Flags::empty(), StateMix::REST));
+        let thumb = |state: State, mix: StateMix| {
+            let shapes = ScrollBar::shapes(&look, track, axis, rtl, &span, &StateSet::new(state, Flags::empty(), mix));
             match shapes.last() {
                 Some(Shape::Rect(shape)) => shape.rect,
                 other => panic!("the thumb is a rect: {other:?}"),
             }
         };
-        let (rest, hover) = (thumb(State::Rest), thumb(State::Hover));
+        let (rest, hover) = (thumb(State::Rest, StateMix::REST), thumb(State::Hover, StateMix::new(1.0, 0.0, 0.0)));
         let across = |rect: Rect| if axis == Axis::X { rect.height() } else { rect.width() };
         assert!(across(rest) < across(hover), "{axis:?}: the resting thumb is thinner: {rest:?} and {hover:?}");
         assert!((across(hover) - across(track)).abs() < EPS, "{axis:?}: under the pointer the thumb fills the track");
