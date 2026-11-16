@@ -2202,6 +2202,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-media-source"
+version = "0.1.0"
+dependencies = [
+ "craft-audio",
+ "craft-color",
+ "craft-frame",
+ "craft-media",
+ "craft-time",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-media-testkit"
 version = "0.1.0"
 
