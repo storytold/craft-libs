@@ -156,7 +156,8 @@ pub struct ImageSize<'a> {
     /// The methods the list offers, in the order of [`Resample::ALL`]; all of them when empty.
     #[prop]
     methods: Vec<Resample>,
-    /// The bytes one pixel takes, for the file size readout.
+    /// The bytes one pixel of the flat image takes, for the file size readout: the mode's colour channels at the
+    /// document's depth, no alpha (1/8 for Bitmap, 1 for Indexed).
     #[prop(quantity = "bytes per pixel")]
     bytes_per_pixel: f64,
 }
@@ -185,10 +186,15 @@ impl<'a> ImageSize<'a> {
                 if let (false, Some(first)) = (entries.iter().any(|entry| entry.value() == Some(&state.method)), first_method) {
                     state.method = first;
                 }
-                let was = kit.file_size(state.size.original(), bytes_per_pixel);
-                let now = state.size.pixels();
+                let (now, original) = (state.size.pixels(), state.size.original());
                 let tone = kit.tone_of(now);
-                let shown = words.size_was.fill(&[("size", kit.file_size(now, bytes_per_pixel).as_str()), ("old", was.as_str())]);
+                let size = kit.file_size(now, bytes_per_pixel);
+                // "(was …)" only once the pixel size differs from the document's.
+                let shown = if now == original {
+                    size
+                } else {
+                    words.size_was.fill(&[("size", size.as_str()), ("old", kit.file_size(original, bytes_per_pixel).as_str())])
+                };
                 kit.readout(ui, &words.image_size, shown, tone);
                 kit.readout(ui, &words.dimensions, kit.dimensions(now), tone);
                 kit.refusal(ui, now);

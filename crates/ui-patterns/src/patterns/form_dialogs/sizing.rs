@@ -350,9 +350,10 @@ impl Kit {
         });
     }
 
-    /// The size of a picture of `size` pixels at `bytes_per_pixel`, as a file size.
+    /// The size of a flat picture of `size` pixels at `bytes_per_pixel`, as a file size. A row takes whole bytes, so a
+    /// Bitmap row of `w` pixels at 1/8 byte each takes `ceil(w / 8)` bytes.
     pub(super) fn file_size(&self, size: PixelSize, bytes_per_pixel: f64) -> String {
-        let bytes = f64::from(size.width) * f64::from(size.height) * bytes_per_pixel;
+        let bytes = (f64::from(size.width) * bytes_per_pixel).ceil() * f64::from(size.height);
         self.units.file_size(bytes.max(0.0).round() as u64)
     }
 
