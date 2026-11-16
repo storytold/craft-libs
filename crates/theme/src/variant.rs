@@ -217,7 +217,12 @@ impl VariantLook {
         // A neutral button without fill shows its secondary glyphs muted; a toned one keeps its tone.
         let muted = if tone == Tone::Neutral { text(c.text.muted) } else { text(fg) };
         match emphasis {
-            Emphasis::Solid => VariantLook::new(States::new(solid, solid_hover, solid_pressed, c.state.disabled_fill), text(on_solid)).radius(button),
+            // A disabled solid button keeps its shape: its solid colour dimmed towards the disabled fill, which alone
+            // would match the panel and leave only the label.
+            Emphasis::Solid => {
+                let dimmed = crate::derive::mix(solid, c.state.disabled_fill, DISABLED_SOLID_DIM);
+                VariantLook::new(States::new(solid, solid_hover, solid_pressed, dimmed), text(on_solid)).radius(button)
+            }
             Emphasis::Soft => VariantLook::new(States::new(soft_fill, soft_fill, soft_fill, c.state.disabled_fill), text(fg))
                 .edge(States::new(edge, edge, edge, c.line.divider))
                 .radius(button),
@@ -230,6 +235,9 @@ impl VariantLook {
         }
     }
 }
+
+/// How far a disabled solid fill moves from its solid colour to the disabled fill.
+const DISABLED_SOLID_DIM: f64 = 0.5;
 
 /// A look for one component's style key, built in a `const`. It describes itself; nothing registers it.
 #[derive(Clone, Copy)]
