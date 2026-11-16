@@ -26,7 +26,7 @@ Grouped by gallery level, then shape, then name.
 | `Pasteboard` | Leaf | `craft_ui_canvas::canvas::pasteboard` | The pasteboard and page frames under a document |
 | `Picture` | Leaf | `craft_ui_widgets::display::picture` | A picture of an image the caller makes (`new`) or of what a content painter paints (`painter`); both sit in a rect of the same token sizes |
 | `PixelGrid` | Leaf | `craft_ui_canvas::canvas_controls::pixel_grid` | The pixel grid over a raster document |
-| `RasterDisplay` | Leaf | `craft_ui_canvas::canvas::raster` | The document display of one canvas: the document drawn through the view of the [`Canvas`](super::Canvas) it is shown in, at the canvas rect |
+| `RasterDisplay` | Leaf | `craft_ui_canvas::canvas::raster` | The document display of one canvas: the document drawn through the view of the `Canvas` it is shown in, at the canvas rect |
 | `RotateView` | Leaf | `craft_ui_canvas::canvas::rotate` | The compass of a turned view: a dial whose needle points where the document's up lies on screen |
 | `Rulers` | Leaf | `craft_ui_canvas::canvas::rulers` | The rulers of a canvas: ticks and labels counted from a zero point, level whatever the view's rotation, a pointer marker, the guide drag-out and the zero point's corner |
 | `SelectionOutline` | Leaf | `craft_ui_canvas::canvas_controls::outline` | Highlights over the selected shapes, in the host's colour (a layer's colour), else the overlay line colour |
@@ -194,11 +194,11 @@ Grouped by gallery level, then shape, then name.
 | `OutputPathRow` | Pattern | `craft_ui_patterns::patterns::form_dialogs::export::path_row` | "Output To", a list of name templates (`[Comp Name].[fileExtension]`) and the resulting file name as a link, for render queues and export dialogs (After Effects' Render Queue) |
 | `PaneArea` | Pattern | `craft_ui_patterns::patterns::dock::panes` | The app's side panes, bottom panes and floating panes around its document |
 | `PanelMenu` | Pattern | `craft_ui_widgets::menu::panel` | The rows of one panel's menu: the host's rows, a separator, then the dock's rows |
-| `ParamDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::dialog` | A dialog from a parameter list: one row per [`Param`], the Preview check box when it [`previews`](ParamDialog::previews), with a preview pane when the host gives a picture, and OK, Cancel, extra buttons and a footer note |
+| `ParamDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::dialog` | A dialog from a parameter list: one row per [`Param`], the Preview check box when it `previews`, with a preview pane when the host gives a picture, and OK, Cancel, extra buttons and a footer note |
 | `ParamRows` | Pattern | `craft_ui_patterns::patterns::form_dialogs::rows` | The rows of a parameter list: a group of one labelled field per visible [`Param`], the control chosen by its [`ParamKind`], in a panel the host lays out or inside a dialog |
 | `PasswordDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::password` | A question with a lock icon, the message, the masked field and the buttons |
 | `PathRow` | Pattern | `craft_ui_patterns::patterns::form_dialogs::path_row` | A text field with the path, taking the row's room, and a Browse button after it, for a row whose enclosing `Field` shows the label |
-| `PathSetting` | Pattern | `craft_ui_patterns::patterns::preferences::path_setting` | A path setting for a custom row or page of Preferences ([`CustomSettings`](super::CustomSettings)): the label, then a text field with the path and a Browse… button, over the draft value at `key` |
+| `PathSetting` | Pattern | `craft_ui_patterns::patterns::preferences::path_setting` | A path setting for a custom row or page of Preferences (`CustomSettings`): the label, then a text field with the path and a Browse… button, over the draft value at `key` |
 | `PdfExportDialog` | Pattern | `craft_ui_patterns::patterns::form_dialogs::pdf_export` | File > Save as PDF: a preset row, Standard and Compatibility, and a list of sections (General, Compression, Marks and Bleeds, Output, Advanced, Security and Summary) beside the shown section |
 | `PreferencesWindow` | Pattern | `craft_ui_patterns::patterns::preferences::window` | The preferences window: a search field over a page list and the shown page, with OK, Cancel and Apply under them |
 | `PresetBrowser` | Pattern | `craft_ui_patterns::patterns::presets::browser` | A library of named presets shown as thumbnails |
