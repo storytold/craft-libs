@@ -254,13 +254,14 @@ fn space_moves_the_anchor_with_its_handles() {
     pen.release(from + vec2(60.0, 50.0), Modifiers::NONE);
 }
 
-// A draft the host hands in gains one anchor; the first removal updates the draft, the next goes back to the handed-in
-// path and ends the draft as discarded, never as an empty commit.
+// A draft the host hands in as a resumed path (`kept` its anchors) gains one anchor; the first removal updates the
+// draft, the next goes back to the handed-in path and ends the draft as discarded, never as an empty commit. A draft
+// handed in with nothing kept (the path Undo gave back) loses its anchors one by one.
 #[trial]
 fn removing_a_resumed_drafts_own_anchor_restores_the_path_and_ends_the_draft() {
     let mut pen = pen();
     let own = EditSubpath::new(vec![Knot::corner(doc(60.0, 60.0)), Knot::corner(doc(160.0, 60.0))], false);
-    pen.fixture.tool_mut().draft(Some(PenDraft::Own(&own)));
+    pen.fixture.tool_mut().draft(Some(PenDraft::Own(&own))).kept(2);
     pen.fixture.fixture().settle();
     pen.sync();
     assert_eq!(pen.kinds(), ["begin"], "the handed-in draft begins its gesture at once");
@@ -276,6 +277,18 @@ fn removing_a_resumed_drafts_own_anchor_restores_the_path_and_ends_the_draft() {
     assert!(pen.kinds().ends_with(&["cancel", "finished"]), "{:?}", pen.kinds());
     assert!(!pen.kinds().contains(&"commit"), "no empty commit removes the path: {:?}", pen.kinds());
     assert_eq!(pen.draft(), EditSubpath::default());
+}
+
+#[trial]
+fn a_handed_in_draft_with_nothing_kept_loses_its_anchors_to_undo() {
+    let mut pen = pen();
+    let given_back = EditSubpath::new(vec![Knot::corner(doc(60.0, 60.0)), Knot::corner(doc(160.0, 60.0)), Knot::corner(doc(160.0, 160.0))], false);
+    pen.fixture.tool_mut().draft(Some(PenDraft::Own(&given_back)));
+    pen.fixture.fixture().settle();
+    assert!(pen.fixture.tool_mut().remove_last());
+    pen.sync();
+    assert_eq!(pen.draft().knots.len(), 2, "the handed-in anchors are the selected tool's to take back");
+    assert!(pen.log.iter().all(|e| !matches!(e, PenEvent::Finished(_))), "the draft stays open");
 }
 
 // ---- Curvature mode ----
