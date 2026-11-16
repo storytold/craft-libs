@@ -173,6 +173,20 @@ fn remove_last_waits_for_a_press_that_is_still_down() {
     assert_eq!(pen.draft().knots.len(), 3, "one request removes one anchor");
 }
 
+// Delete takes back the draft's last anchor; with `deletes` off (the anchors are not the selected tool's to take back)
+// the key is left to the app and the draft stays.
+#[trial]
+fn delete_removes_the_last_anchor_unless_the_host_keeps_the_key() {
+    let mut pen = Pen::three();
+    pen.fixture.fixture().key(egui::Key::Delete, Modifiers::NONE);
+    pen.sync();
+    assert_eq!(pen.draft().knots.len(), 2);
+    pen.fixture.tool_mut().deletes(false);
+    pen.fixture.fixture().key(egui::Key::Delete, Modifiers::NONE);
+    pen.sync();
+    assert_eq!(pen.draft().knots.len(), 2, "the key is the app's");
+}
+
 #[trial]
 fn a_quick_drag_in_one_frame_pulls_the_handles() {
     let mut pen = pen();

@@ -132,8 +132,8 @@ struct Run {
 ///   [`PenEvent::Resumed`].
 /// - Keys while a draft is open: Enter and Escape end it open and keep it (a draft of one anchor is discarded, as no
 ///   path has fewer than two anchors); Backspace and Delete remove the last anchor, the only one discarding the
-///   draft; the host's Undo does the same through [`remove_last`](Self::remove_last). Each ending is
-///   [`PenEvent::Finished`].
+///   draft, unless the host gives them to another tool ([`deletes`](Self::deletes)); the host's Undo does the same
+///   through [`remove_last`](Self::remove_last). Each ending is [`PenEvent::Finished`].
 /// - Look: the path so far, a dashed rubber band from the last anchor to where a click would land (with Path
 ///   Options' Rubber Band), the last anchor's handles, the anchors with the last one filled, and over the first
 ///   anchor the close cue.
@@ -156,6 +156,7 @@ struct Run {
 pub struct PenTool {
     pub(super) mode: PenMode,
     pub(super) sensing: bool,
+    deletes: bool,
     pub(super) auto_add_delete: bool,
     options: PathOptionsSettings,
     pub(super) ends: Vec<(u64, KnotRef, Point)>,
@@ -186,6 +187,7 @@ impl PenTool {
         Self {
             mode: PenMode::default(),
             sensing: true,
+            deletes: true,
             auto_add_delete: false,
             options: PathOptionsSettings::default(),
             ends: Vec::new(),
@@ -265,6 +267,13 @@ impl PenTool {
     /// Backspace, Delete, the host's Undo) while another tool takes the pointer ([`PathMode::draft_senses`](super::PathMode::draft_senses)).
     pub fn sensing(&mut self, sensing: bool) -> &mut Self {
         self.sensing = sensing;
+        self
+    }
+
+    /// Whether Backspace and Delete remove the draft's last anchor; true by default. False leaves them to the app, for
+    /// a draft whose anchors are not the selected tool's to take back (a refused draft kept after a tool switch).
+    pub fn deletes(&mut self, on: bool) -> &mut Self {
+        self.deletes = on;
         self
     }
 
@@ -617,7 +626,7 @@ impl CanvasTool for PenTool {
                 self.end(CancelReason::Escape, PenEnd::Escape);
                 true
             }
-            ToolKey::Delete { .. } => {
+            ToolKey::Delete { .. } if self.deletes => {
                 self.remove_last_anchor(CancelReason::UndoDuringGesture);
                 true
             }
@@ -626,7 +635,7 @@ impl CanvasTool for PenTool {
     }
 
     fn claims(&self) -> ToolClaims {
-        if !self.shown.knots.is_empty() && self.drag.is_none() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
+        if self.deletes && !self.shown.knots.is_empty() && self.drag.is_none() { ToolClaims::NONE.deletes() } else { ToolClaims::NONE }
     }
 
     fn takes(&self, button: PointerButton, mods: Mods) -> bool {
