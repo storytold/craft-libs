@@ -34,8 +34,23 @@ fn codes(max: u32) -> impl Iterator<Item = (u32, f32)> {
 }
 
 /// The largest difference between `f` and `g` over every code of a depth, and the code it is at.
+/// A difference that is not finite fails at its code.
 fn worst(max: u32, f: impl Fn(f32) -> f32, g: impl Fn(f32) -> f32) -> (f32, u32) {
-    codes(max).map(|(n, v)| ((f(v) - g(v)).abs(), n)).fold((0.0, 0), |a, b| if b.0 > a.0 { b } else { a })
+    let mut most = (0.0, 0);
+    for (n, v) in codes(max) {
+        let d = (f(v) - g(v)).abs();
+        assert!(d.is_finite(), "code {n} of {max} gives a difference of {d}");
+        if d > most.0 {
+            most = (d, n);
+        }
+    }
+    most
+}
+
+#[test]
+#[should_panic(expected = "code 0 of 255 gives a difference of NaN")]
+fn worst_fails_on_a_difference_that_is_not_finite() {
+    worst(255, |_| f32::NAN, |v| v);
 }
 
 /// Inputs outside `[0, 1]` that the crates' copies must also agree on.
