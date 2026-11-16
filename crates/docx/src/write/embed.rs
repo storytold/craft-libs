@@ -110,11 +110,23 @@ impl<'d> EmbedWriter<'d> {
         }
     }
 
-    /// Reserve the names of the media files this writer writes.
-    pub fn reserve_media<'a>(&mut self, files: impl Iterator<Item = &'a String>) {
-        for f in files {
-            self.taken.insert(format!("word/media/{f}").to_ascii_lowercase());
+    /// Reserve the names of the media files this writer writes. A kept part already holding a
+    /// media file's bytes under its name (an OLE object's picture, which the document also shows)
+    /// keeps that name: the media file is that part, written once (see [`Self::writes_part`]), so
+    /// neither copy is renamed on each save.
+    pub fn reserve_media<'a>(&mut self, files: impl Iterator<Item = (&'a String, &'a [u8])>) {
+        for (f, bytes) in files {
+            let path = format!("word/media/{f}");
+            let kept = self.available(&path) && self.passthrough.get(&path).is_some_and(|b| b.as_slice() == bytes);
+            if !kept {
+                self.taken.insert(path.to_ascii_lowercase());
+            }
         }
+    }
+
+    /// Whether a kept part is written under `name`.
+    pub fn writes_part(&self, name: &str) -> bool {
+        self.parts.iter().any(|(n, ..)| n == name)
     }
 
     /// Names this writer may give its own parts later (headers, footers, package parts).

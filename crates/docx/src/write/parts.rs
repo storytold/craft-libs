@@ -58,7 +58,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             .collect(),
     };
     wr.assign_media();
-    wr.embeds.reserve_media(wr.media_files.values());
+    wr.embeds.reserve_media(wr.media_files.iter().filter_map(|(key, file)| Some((file, doc.media.get(key)?.as_slice()))));
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut rels = PartRels::default();
@@ -170,6 +170,10 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         }
         if let Some(bytes) = doc.media.get(key) {
             let ext = file.rsplit('.').next().unwrap_or("bin").to_ascii_lowercase();
+            // The same picture kept as an object's part, under this name and with these bytes.
+            if wr.embeds.writes_part(&format!("word/media/{file}")) {
+                continue;
+            }
             media_types.insert(ext, content_type_for(file));
             entries.push((format!("word/media/{file}"), bytes.to_vec()));
         }
