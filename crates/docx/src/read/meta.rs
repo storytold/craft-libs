@@ -56,6 +56,7 @@ impl Reader<'_> {
                 }
                 "m:mathPr" => s.math = Some(math::read_math_pr(k)),
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
+                "w:gutterAtTop" => s.gutter_at_top = on_off(k),
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
                 "w:doNotHyphenateCaps" => s.hyphenate_caps = !on_off(k),
                 "w:hyphenationZone" => {
