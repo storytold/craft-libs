@@ -1,14 +1,17 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
-#![forbid(unsafe_code)]
 
-//! ZIP archives (also APK, JAR, IPA, MSIX, HAP…): central directory listing and bounded entry reads.
+//! ZIP archives (also APK, JAR, IPA, MSIX, HAP…) read leniently from the raw bytes, for
+//! inspectors that must list and describe damaged, prepended, split or oddly encoded archives
+//! rather than refuse them (feature `lenient`). The rest of this crate is the strict side: it
+//! refuses what fails [`crate::preflight`] and reads through the `zip` crate; nothing here uses
+//! `zip`.
 //!
 //! Only the central directory is trusted for the listing. Entry data is located through the local
 //! header, decompressed with a hard output cap, and checked against the recorded CRC-32. Stored,
 //! DEFLATE, bzip2, ZIP LZMA, XZ and Zstandard entries are supported; other methods and encrypted entries are listed.
 //!
-//! The bzip2, LZMA/XZ and Zstandard methods sit behind the default `bzip2`, `lzma` and `zstd`
-//! features; without one, entries using it are listed and reading them is
+//! The bzip2, LZMA/XZ and Zstandard methods sit behind the `lenient-bzip2`, `lenient-lzma` and
+//! `lenient-zstd` features; without one, entries using it are listed and reading them is
 //! [`ZipError::Unsupported`]. [`file::read_named_entry`] reads one entry from a seekable file
 //! without loading the archive. With the `serde` feature the listing types are `Serialize`.
 //!
@@ -18,11 +21,11 @@
 //! against the directory, and CRC-32 verification.
 
 mod bytes;
-#[cfg(any(feature = "bzip2", feature = "lzma", feature = "zstd"))]
+#[cfg(any(feature = "lenient-bzip2", feature = "lenient-lzma", feature = "lenient-zstd"))]
 mod decode;
 pub mod file;
 
-use crate::bytes::Reader;
+use crate::lenient::bytes::Reader;
 
 /// Biggest tail we search for the end-of-central-directory record (64 KiB comment + record).
 pub const EOCD_SEARCH: usize = 22 + 0xffff;
@@ -474,12 +477,12 @@ pub fn read_entry_unverified(data: &[u8], e: &ZipEntry, max_bytes: u64) -> Resul
     Ok(out)
 }
 
-#[cfg(any(feature = "bzip2", feature = "lzma"))]
+#[cfg(any(feature = "lenient-bzip2", feature = "lenient-lzma"))]
 fn decode_bzip2_or_xz(raw: &[u8], e: &ZipEntry, max_bytes: u64) -> Result<Vec<u8>, ZipError> {
     let decoded = match e.method {
-        #[cfg(feature = "bzip2")]
+        #[cfg(feature = "lenient-bzip2")]
         12 => decode::bzip2(raw, max_bytes),
-        #[cfg(feature = "lzma")]
+        #[cfg(feature = "lenient-lzma")]
         95 => decode::xz(raw, max_bytes),
         _ => return Err(not_built(e)),
     };
@@ -489,12 +492,12 @@ fn decode_bzip2_or_xz(raw: &[u8], e: &ZipEntry, max_bytes: u64) -> Result<Vec<u8
     })
 }
 
-#[cfg(not(any(feature = "bzip2", feature = "lzma")))]
+#[cfg(not(any(feature = "lenient-bzip2", feature = "lenient-lzma")))]
 fn decode_bzip2_or_xz(_: &[u8], e: &ZipEntry, _: u64) -> Result<Vec<u8>, ZipError> {
     Err(not_built(e))
 }
 
-#[cfg(feature = "lzma")]
+#[cfg(feature = "lenient-lzma")]
 fn decode_lzma(raw: &[u8], e: &ZipEntry, max_bytes: u64) -> Result<Vec<u8>, ZipError> {
     let header = Reader::new(raw);
     let properties_size = header.u16_le(2).ok_or(ZipError::Truncated("LZMA properties header"))?;
@@ -508,23 +511,23 @@ fn decode_lzma(raw: &[u8], e: &ZipEntry, max_bytes: u64) -> Result<Vec<u8>, ZipE
     })
 }
 
-#[cfg(not(feature = "lzma"))]
+#[cfg(not(feature = "lenient-lzma"))]
 fn decode_lzma(_: &[u8], e: &ZipEntry, _: u64) -> Result<Vec<u8>, ZipError> {
     Err(not_built(e))
 }
 
-#[cfg(feature = "zstd")]
+#[cfg(feature = "lenient-zstd")]
 fn decode_zstd(raw: &[u8], e: &ZipEntry, max_bytes: u64) -> Result<Vec<u8>, ZipError> {
     decode::zstd(raw, max_bytes).map_err(|err| ZipError::Corrupt(format!("zstd stream for {} is damaged: {err}", e.name)))
 }
 
-#[cfg(not(feature = "zstd"))]
+#[cfg(not(feature = "lenient-zstd"))]
 fn decode_zstd(_: &[u8], e: &ZipEntry, _: u64) -> Result<Vec<u8>, ZipError> {
     Err(not_built(e))
 }
 
 /// An entry whose method this build leaves out (see the crate features).
-#[cfg_attr(all(feature = "bzip2", feature = "lzma", feature = "zstd"), allow(dead_code))]
+#[cfg_attr(all(feature = "lenient-bzip2", feature = "lenient-lzma", feature = "lenient-zstd"), allow(dead_code))]
 fn not_built(e: &ZipEntry) -> ZipError {
     ZipError::Unsupported(format!("compression method {} ({}) for {} is not built in", e.method, e.method_name(), e.name))
 }

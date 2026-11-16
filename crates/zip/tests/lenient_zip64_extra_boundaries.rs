@@ -1,7 +1,9 @@
+#![cfg(feature = "lenient")]
 // From Craft Anything crates/formats/tests/zip64_extra_boundaries.rs.
 
+#[path = "lenient_common/mod.rs"]
 mod common;
-use craft_unzip as zip;
+use craft_zip::lenient as zip;
 
 fn archive(extra: &[u8], sentinel: usize) -> Vec<u8> {
     let mut data = common::zip_stored(&[("a", b"x")]);

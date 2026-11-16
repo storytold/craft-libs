@@ -3,9 +3,9 @@
 //! allocating without limit) and never panics on a corrupt or truncated stream.
 
 use std::io;
-#[cfg(any(feature = "bzip2", feature = "lzma"))]
+#[cfg(any(feature = "lenient-bzip2", feature = "lenient-lzma"))]
 use std::io::Read;
-#[cfg(any(feature = "lzma", feature = "zstd"))]
+#[cfg(any(feature = "lenient-lzma", feature = "lenient-zstd"))]
 use std::io::Write;
 
 /// Why a decode stopped.
@@ -14,7 +14,7 @@ pub(crate) enum DecompressError {
     #[error("the compressed stream is damaged")]
     Corrupt,
     #[error("the compressed stream ends early")]
-    #[cfg(any(feature = "lzma", feature = "zstd"))]
+    #[cfg(any(feature = "lenient-lzma", feature = "lenient-zstd"))]
     Truncated,
     #[error("the output would exceed the size limit")]
     TooLarge,
@@ -22,21 +22,21 @@ pub(crate) enum DecompressError {
 
 /// A `Write` sink that collects at most `cap` bytes, then refuses the rest. The `exceeded` flag lets
 /// the caller tell a size-limit stop from a genuine decode error.
-#[cfg(any(feature = "lzma", feature = "zstd"))]
+#[cfg(any(feature = "lenient-lzma", feature = "lenient-zstd"))]
 struct CapWrite {
     buf: Vec<u8>,
     cap: usize,
     exceeded: bool,
 }
 
-#[cfg(any(feature = "lzma", feature = "zstd"))]
+#[cfg(any(feature = "lenient-lzma", feature = "lenient-zstd"))]
 impl CapWrite {
     fn new(cap: usize) -> Self {
         CapWrite { buf: Vec::new(), cap, exceeded: false }
     }
 }
 
-#[cfg(any(feature = "lzma", feature = "zstd"))]
+#[cfg(any(feature = "lenient-lzma", feature = "lenient-zstd"))]
 impl Write for CapWrite {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
         if self.buf.len().saturating_add(data.len()) > self.cap {
@@ -57,7 +57,7 @@ fn cap_of(max_out: u64) -> usize {
 }
 
 /// Read a `Read` source into a `Vec`, capped at `cap` bytes.
-#[cfg(feature = "bzip2")]
+#[cfg(feature = "lenient-bzip2")]
 fn read_capped(mut src: impl Read, cap: usize) -> Result<Vec<u8>, DecompressError> {
     let mut out = Vec::new();
     let mut chunk = [0u8; 64 * 1024];
@@ -77,7 +77,7 @@ fn read_capped(mut src: impl Read, cap: usize) -> Result<Vec<u8>, DecompressErro
     }
 }
 
-#[cfg(feature = "lzma")]
+#[cfg(feature = "lenient-lzma")]
 /// Decompress every xz stream, including standard stream padding, within one output budget.
 pub(crate) fn xz(input: &[u8], max_out: u64) -> Result<Vec<u8>, DecompressError> {
     let ranges = xz_stream_ranges(input, max_out)?;
@@ -95,7 +95,7 @@ pub(crate) fn xz(input: &[u8], max_out: u64) -> Result<Vec<u8>, DecompressError>
     Ok(out.buf)
 }
 
-#[cfg(feature = "lzma")]
+#[cfg(feature = "lenient-lzma")]
 /// Find stream boundaries backwards through their checked footer/index sizes, without
 /// repeatedly trying the decoder at candidate magic bytes inside compressed data.
 fn xz_stream_ranges(input: &[u8], max_out: u64) -> Result<Vec<std::ops::Range<usize>>, DecompressError> {
@@ -112,9 +112,9 @@ fn xz_stream_ranges(input: &[u8], max_out: u64) -> Result<Vec<std::ops::Range<us
         }
         let footer_at = end.checked_sub(12).ok_or(DecompressError::Truncated)?;
         let footer = input.get(footer_at..end).ok_or(DecompressError::Truncated)?;
-        let read = crate::bytes::Reader::new(footer);
+        let read = crate::lenient::bytes::Reader::new(footer);
         let footer_fields = footer.get(4..10).ok_or(DecompressError::Truncated)?;
-        if footer.get(10..) != Some(b"YZ") || read.u32_le(0) != Some(crate::crc32(footer_fields)) {
+        if footer.get(10..) != Some(b"YZ") || read.u32_le(0) != Some(crate::lenient::crc32(footer_fields)) {
             return Err(DecompressError::Corrupt);
         }
         let backward = u64::from(read.u32_le(4).ok_or(DecompressError::Truncated)?);
@@ -122,9 +122,9 @@ fn xz_stream_ranges(input: &[u8], max_out: u64) -> Result<Vec<std::ops::Range<us
         let index_at = footer_at.checked_sub(index_len).ok_or(DecompressError::Truncated)?;
         let index = input.get(index_at..footer_at).ok_or(DecompressError::Truncated)?;
         let crc_at = index.len().checked_sub(4).ok_or(DecompressError::Truncated)?;
-        let index_read = crate::bytes::Reader::new(index);
+        let index_read = crate::lenient::bytes::Reader::new(index);
         let index_fields = index.get(..crc_at).ok_or(DecompressError::Truncated)?;
-        if index.first() != Some(&0) || index_read.u32_le(crc_at) != Some(crate::crc32(index_fields)) {
+        if index.first() != Some(&0) || index_read.u32_le(crc_at) != Some(crate::lenient::crc32(index_fields)) {
             return Err(DecompressError::Corrupt);
         }
         let mut records = index.get(1..crc_at).ok_or(DecompressError::Corrupt)?;
@@ -159,7 +159,7 @@ fn xz_stream_ranges(input: &[u8], max_out: u64) -> Result<Vec<std::ops::Range<us
     Ok(ranges)
 }
 
-#[cfg(feature = "lzma")]
+#[cfg(feature = "lenient-lzma")]
 /// XZ variable-length integers have at most nine bytes and no redundant final zero.
 fn xz_vli(input: &mut &[u8]) -> Result<u64, DecompressError> {
     let mut value = 0u64;
@@ -174,7 +174,7 @@ fn xz_vli(input: &mut &[u8]) -> Result<u64, DecompressError> {
     Err(DecompressError::Corrupt)
 }
 
-#[cfg(feature = "lzma")]
+#[cfg(feature = "lenient-lzma")]
 /// Decode the property bytes and raw stream of a ZIP method-14 member.
 pub(crate) fn lzma_zip(input: &[u8], expected_size: u64, has_end_marker: bool, max_out: u64) -> Result<Vec<u8>, DecompressError> {
     let cap = cap_of(max_out).min(isize::MAX as usize);
@@ -204,13 +204,13 @@ pub(crate) fn lzma_zip(input: &[u8], expected_size: u64, has_end_marker: bool, m
     }
 }
 
-#[cfg(feature = "bzip2")]
+#[cfg(feature = "lenient-bzip2")]
 /// Decompress a bzip2 stream, producing at most `max_out` bytes.
 pub(crate) fn bzip2(input: &[u8], max_out: u64) -> Result<Vec<u8>, DecompressError> {
     read_capped(bzip2_rs::DecoderReader::new(input), cap_of(max_out))
 }
 
-#[cfg(feature = "zstd")]
+#[cfg(feature = "lenient-zstd")]
 /// Decompress a Zstandard stream, producing at most `max_out` bytes.
 pub(crate) fn zstd(mut input: &[u8], max_out: u64) -> Result<Vec<u8>, DecompressError> {
     if input.is_empty() {
@@ -235,9 +235,9 @@ pub(crate) fn zstd(mut input: &[u8], max_out: u64) -> Result<Vec<u8>, Decompress
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testkit as fx;
+    use crate::lenient::testkit as fx;
 
-    #[cfg(feature = "lzma")]
+    #[cfg(feature = "lenient-lzma")]
     #[test]
     fn xz_round_trip() {
         let c = fx::XZ_FIXTURE;
@@ -250,7 +250,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "lzma")]
+    #[cfg(feature = "lenient-lzma")]
     #[test]
     fn xz_concatenated_streams_and_padding_share_one_budget() {
         let input = [fx::XZ_FIXTURE, &[0; 4], fx::XZ_FIXTURE, &[0; 8]].concat();
@@ -264,7 +264,7 @@ mod tests {
         assert!(xz(&empty, 0).unwrap().is_empty());
     }
 
-    #[cfg(feature = "lzma")]
+    #[cfg(feature = "lenient-lzma")]
     #[test]
     fn xz_rejects_incomplete_members_and_nonstandard_padding() {
         for padding in [1, 2, 3, 5] {
@@ -284,7 +284,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "lzma")]
+    #[cfg(feature = "lenient-lzma")]
     #[test]
     fn xz_index_sizes_and_integer_encodings_are_checked() {
         assert_eq!(xz_vli(&mut &[0x80, 0][..]), Err(DecompressError::Corrupt));
@@ -295,12 +295,12 @@ mod tests {
         let backward = u32::from_le_bytes(damaged[footer + 4..footer + 8].try_into().unwrap());
         let index = footer - (backward as usize + 1) * 4;
         damaged[index + 2] = 0;
-        let checksum = crate::crc32(&damaged[index..footer - 4]);
+        let checksum = crate::lenient::crc32(&damaged[index..footer - 4]);
         damaged[footer - 4..footer].copy_from_slice(&checksum.to_le_bytes());
         assert!(xz(&damaged, 1000).is_err());
     }
 
-    #[cfg(feature = "bzip2")]
+    #[cfg(feature = "lenient-bzip2")]
     #[test]
     fn bzip2_round_trip() {
         let c = fx::BZIP2_FIXTURE;
@@ -311,7 +311,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "zstd")]
+    #[cfg(feature = "lenient-zstd")]
     #[test]
     fn zstd_round_trip() {
         let c = fx::ZSTD_FIXTURE;
@@ -322,7 +322,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "zstd")]
+    #[cfg(feature = "lenient-zstd")]
     #[test]
     fn zstandard_members_can_contain_multiple_frames() {
         let frame = fx::ZSTD_FIXTURE;
@@ -340,11 +340,11 @@ mod tests {
     fn garbage_never_panics() {
         for seed in 0..64u64 {
             let n = fx::noise(seed, 400);
-            #[cfg(feature = "lzma")]
+            #[cfg(feature = "lenient-lzma")]
             let _ = xz(&n, 1 << 20);
-            #[cfg(feature = "bzip2")]
+            #[cfg(feature = "lenient-bzip2")]
             let _ = bzip2(&n, 1 << 20);
-            #[cfg(feature = "zstd")]
+            #[cfg(feature = "lenient-zstd")]
             let _ = zstd(&n, 1 << 20);
             let _ = &n;
         }

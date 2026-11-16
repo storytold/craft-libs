@@ -39,7 +39,7 @@ pub(crate) fn build(files: &[(&str, &[u8])]) -> Vec<u8> {
     out
 }
 
-#[cfg(all(feature = "bzip2", feature = "lzma"))]
+#[cfg(all(feature = "lenient-bzip2", feature = "lenient-lzma"))]
 fn build_codec_entry(method: u16, compressed: &[u8], plain: &[u8]) -> Vec<u8> {
     let mut file = build(&[("entry", compressed)]);
     let central = 30 + "entry".len() + compressed.len();
@@ -55,10 +55,10 @@ fn build_codec_entry(method: u16, compressed: &[u8], plain: &[u8]) -> Vec<u8> {
     file
 }
 
-#[cfg(all(feature = "bzip2", feature = "lzma"))]
+#[cfg(all(feature = "lenient-bzip2", feature = "lenient-lzma"))]
 #[test]
 fn bzip2_and_xz_zip_entries_keep_size_crc_and_output_checks() {
-    use crate::testkit::{BZIP2_FIXTURE, BZIP2_PLAIN, XZ_FIXTURE, XZ_PLAIN};
+    use crate::lenient::testkit::{BZIP2_FIXTURE, BZIP2_PLAIN, XZ_FIXTURE, XZ_PLAIN};
     for (method, compressed, plain) in [(12, BZIP2_FIXTURE, BZIP2_PLAIN), (95, XZ_FIXTURE, XZ_PLAIN)] {
         let file = build_codec_entry(method, compressed, plain);
         let original = parse(&file, 1).unwrap().entries.remove(0);
@@ -80,7 +80,7 @@ fn bzip2_and_xz_zip_entries_keep_size_crc_and_output_checks() {
     }
 }
 
-#[cfg(feature = "lzma")]
+#[cfg(feature = "lenient-lzma")]
 fn zip_lzma_member(plain: &[u8], end_marker: bool) -> Vec<u8> {
     let mut encoded = Vec::new();
     let size = if end_marker { None } else { Some(plain.len() as u64) };
@@ -104,7 +104,7 @@ fn zip_lzma_member(plain: &[u8], end_marker: bool) -> Vec<u8> {
     file
 }
 
-#[cfg(feature = "lzma")]
+#[cfg(feature = "lenient-lzma")]
 #[test]
 fn zip_lzma_reads_size_delimited_and_end_marked_streams() {
     for end_marker in [false, true] {
@@ -129,7 +129,7 @@ fn zip_lzma_reads_size_delimited_and_end_marked_streams() {
     }
 }
 
-#[cfg(feature = "lzma")]
+#[cfg(feature = "lenient-lzma")]
 #[test]
 fn zip_lzma_rejects_bad_properties_without_unbounded_dictionaries() {
     let mut file = zip_lzma_member(b"small", true);
@@ -286,7 +286,7 @@ fn lists_and_reads_stored_entries() {
     assert!(matches!(read_entry(&z, &a.entries[1], 3), Err(ZipError::TooLarge(3))));
 }
 
-#[cfg(feature = "zstd")]
+#[cfg(feature = "lenient-zstd")]
 #[test]
 fn zstandard_members_are_read_with_their_limits_and_checks() {
     // A raw Zstandard frame holding "hello zip" (single segment, one raw block).
@@ -373,7 +373,7 @@ fn crc_known_value() {
 #[cfg(feature = "serde")]
 #[test]
 fn listings_serialize_without_empty_warnings_or_unix_mode() {
-    let data = crate::testkit::zip_stored(&[("a.txt", b"hi")]);
+    let data = crate::lenient::testkit::zip_stored(&[("a.txt", b"hi")]);
     let archive = parse(&data, 10).unwrap();
     let value = serde_json::to_value(&archive).unwrap();
     assert!(value.get("warnings").is_none());
@@ -381,10 +381,10 @@ fn listings_serialize_without_empty_warnings_or_unix_mode() {
     assert!(value["entries"][0].get("unix_mode").is_none());
 }
 
-#[cfg(not(feature = "zstd"))]
+#[cfg(not(feature = "lenient-zstd"))]
 #[test]
 fn a_method_left_out_of_the_build_is_unsupported() {
-    let mut data = crate::testkit::zip_stored(&[("a", b"abc")]);
+    let mut data = crate::lenient::testkit::zip_stored(&[("a", b"abc")]);
     let archive = parse(&data, 10).unwrap();
     let mut entry = archive.entries[0].clone();
     entry.method = 93;

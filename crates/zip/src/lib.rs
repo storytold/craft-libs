@@ -13,6 +13,9 @@
 //!   timestamp on every entry so equal input gives equal bytes.
 //! - [`preflight`] is a stricter check of the whole end-record and central-directory structure
 //!   on the raw bytes, for a caller that wants nothing ambiguous to reach a ZIP reader at all.
+//! - `lenient` (feature `lenient`) is the other way round: a reader of the raw bytes without
+//!   `zip`, for inspectors that list and describe damaged or unusual archives instead of refusing
+//!   them, with bounded, CRC-checked entry reads.
 //!
 //! Every limit is the caller's number. Entry-name rules (which names are safe, which spellings
 //! are one part) stay with the format that knows them.
@@ -23,6 +26,8 @@ struct ReadmeExamples;
 
 mod archive;
 mod guard;
+#[cfg(feature = "lenient")]
+pub mod lenient;
 mod metadata_reader;
 pub mod preflight;
 mod seekable;

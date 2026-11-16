@@ -3,7 +3,7 @@
 
 #![allow(clippy::cast_possible_truncation, dead_code)]
 
-use crate::crc32;
+use crate::lenient::crc32;
 
 /// Plaintext of [`XZ_FIXTURE`] and [`LZMA_FIXTURE`].
 pub const XZ_PLAIN: &[u8] = b"Hello, xz compression world!\n";

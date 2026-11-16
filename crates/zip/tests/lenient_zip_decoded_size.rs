@@ -1,7 +1,9 @@
+#![cfg(feature = "lenient")]
 // From Craft Anything crates/formats/tests/zip_decoded_size.rs.
 
+#[path = "lenient_common/mod.rs"]
 mod common;
-use craft_unzip::{self as zip, ZipEntry, ZipError};
+use craft_zip::lenient::{self as zip, ZipEntry, ZipError};
 
 fn deflated(body: &[u8]) -> (Vec<u8>, ZipEntry) {
     let compressed = miniz_oxide::deflate::compress_to_vec(body, 6);

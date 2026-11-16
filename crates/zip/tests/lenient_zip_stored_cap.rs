@@ -1,7 +1,9 @@
+#![cfg(feature = "lenient")]
 // From Craft Anything crates/formats/tests/zip_stored_cap.rs.
 
+#[path = "lenient_common/mod.rs"]
 mod common;
-use craft_unzip::{self as zip, ZipError};
+use craft_zip::lenient::{self as zip, ZipError};
 
 #[test]
 fn a_stored_entry_cannot_understate_its_size_to_bypass_the_output_limit() {

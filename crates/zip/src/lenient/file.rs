@@ -2,8 +2,8 @@
 //! central directory and that entry's bytes are read. For archives too big to hold in memory just
 //! to look at one small entry (a JAR's manifest).
 
-use crate::bytes::Reader;
-use crate::{self as zip, ZipError};
+use crate::lenient::bytes::Reader;
+use crate::lenient::{self as zip, ZipError};
 use std::io::{Read, Seek, SeekFrom};
 
 /// Most central directory read (some hundreds of thousands of entries); a bigger one is refused.
@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn an_entry_is_read_from_the_directory_without_the_whole_file() {
         let filler = vec![7u8; 200_000];
-        let archive = crate::testkit::zip_stored(&[("app/Big.class", &filler), ("META-INF/MANIFEST.MF", MANIFEST), ("META-INF/", b"")]);
+        let archive = crate::lenient::testkit::zip_stored(&[("app/Big.class", &filler), ("META-INF/MANIFEST.MF", MANIFEST), ("META-INF/", b"")]);
         assert_eq!(read(&archive, "META-INF/MANIFEST.MF").unwrap().as_deref(), Some(MANIFEST));
         assert_eq!(read(&archive, "META-INF/MISSING").unwrap(), None);
         assert_eq!(read(&archive, "META-INF/").unwrap(), None, "a folder isn't an entry to read");
@@ -178,7 +178,7 @@ mod tests {
         let names: Vec<String> = (0..3000).map(|i| format!("com/example/generated/Class{i:05}.class")).collect();
         let mut files: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), &b"x"[..])).collect();
         files.push(("META-INF/MANIFEST.MF", MANIFEST));
-        let archive = crate::testkit::zip_stored(&files);
+        let archive = crate::lenient::testkit::zip_stored(&files);
         assert_eq!(read(&archive, "META-INF/MANIFEST.MF").unwrap().as_deref(), Some(MANIFEST));
     }
 
@@ -215,7 +215,7 @@ mod tests {
         let deflated = zip_deflated("META-INF/MANIFEST.MF", MANIFEST);
         assert_eq!(read(&deflated, "META-INF/MANIFEST.MF").unwrap().as_deref(), Some(MANIFEST));
 
-        let mut commented = crate::testkit::zip_stored(&[("META-INF/MANIFEST.MF", MANIFEST)]);
+        let mut commented = crate::lenient::testkit::zip_stored(&[("META-INF/MANIFEST.MF", MANIFEST)]);
         let comment = b"built by PK\x05\x06 tools";
         let at = commented.len() - 2;
         commented[at..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
@@ -227,7 +227,7 @@ mod tests {
     /// the classic fields disagree with it and win, as they do for `zip::parse`.
     #[test]
     fn a_comment_shaped_like_zip64_records_is_not_read_as_them() {
-        let mut archive = crate::testkit::zip_stored(&[("META-INF/MANIFEST.MF", MANIFEST)]);
+        let mut archive = crate::lenient::testkit::zip_stored(&[("META-INF/MANIFEST.MF", MANIFEST)]);
         let end = archive.len() - 22;
         let last = archive.windows(4).rposition(|w| w == b"PK\x01\x02").unwrap();
         let mut fake = b"PK\x06\x06".to_vec();
@@ -250,7 +250,7 @@ mod tests {
     /// only the offset), after a stub too.
     #[test]
     fn zip64_archives_are_read_in_parts() {
-        let archive = crate::testkit::zip_stored(&[("app/Main.class", b"x"), ("META-INF/MANIFEST.MF", MANIFEST)]);
+        let archive = crate::lenient::testkit::zip_stored(&[("app/Main.class", b"x"), ("META-INF/MANIFEST.MF", MANIFEST)]);
         for saturate in [&[][..], &[8, 10, 12, 16], &[16], &[12], &[10], &[4]] {
             let zip64 = as_zip64(&archive, saturate);
             assert_eq!(read(&zip64, "META-INF/MANIFEST.MF").unwrap().as_deref(), Some(MANIFEST), "saturated {saturate:?}");

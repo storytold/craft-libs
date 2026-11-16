@@ -2,7 +2,7 @@
 
 #![allow(dead_code, clippy::cast_possible_truncation)]
 
-use craft_unzip::crc32;
+use craft_zip::lenient::crc32;
 
 /// A stored-only ZIP of `files`.
 pub fn zip_stored(files: &[(&str, &[u8])]) -> Vec<u8> {

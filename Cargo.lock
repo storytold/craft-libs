@@ -2899,19 +2899,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-unzip"
-version = "0.1.0"
-dependencies = [
- "bzip2-rs",
- "lzma-rs",
- "miniz_oxide 0.8.9",
- "ruzstd",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "craft-update"
 version = "0.1.0"
 dependencies = [
@@ -3113,8 +3100,14 @@ dependencies = [
 name = "craft-zip"
 version = "0.1.0"
 dependencies = [
+ "bzip2-rs",
  "craft-zip",
  "flate2",
+ "lzma-rs",
+ "miniz_oxide 0.8.9",
+ "ruzstd",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "zip",
 ]
