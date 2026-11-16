@@ -173,7 +173,7 @@ mod tests {
             fn suggest(&self, word: &str, lang: ProofLang) -> Vec<String> {
                 craft_proof::suggest_in(word, 5, lang)
             }
-            fn check_sentence_context(&self, _sentence: &str, _lang: ProofLang) -> Vec<ContextualIssue> {
+            fn check_sentence_context(&self, sentence: &str, _lang: ProofLang) -> Vec<ContextualIssue> {
                 if sentence.contains("אם הלכתי") {
                     vec![ContextualIssue {
                         start: 0,
