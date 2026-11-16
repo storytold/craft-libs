@@ -252,7 +252,7 @@ impl Document {
         let size = tree.size();
         let mut document = Self { width: f64::from(size.width()), height: f64::from(size.height()), coordinates, ..Self::default() };
         let mut cx = Convert { doc: &mut document, max_depth, local: coordinates == Coordinates::Local, patterns: std::collections::HashMap::new() };
-        let nodes = cx.group(tree.root(), 0, &[]);
+        let nodes = cx.group(tree.root(), tree.root().abs_transform(), 0, &[]);
         document.nodes = nodes;
         document
     }
@@ -381,8 +381,9 @@ impl Convert<'_> {
         if self.local { transform(relative(parent, node)) } else { transform(node) }
     }
 
-    fn group(&mut self, group: &usvg::Group, depth: usize, parent_path: &[usize]) -> Vec<Node> {
-        let parent = group.abs_transform();
+    /// `parent` is the absolute transform `group`'s leaves are placed against: its own, except
+    /// for flattened text, whose outline paths carry the text's while the group has none.
+    fn group(&mut self, group: &usvg::Group, parent: usvg::Transform, depth: usize, parent_path: &[usize]) -> Vec<Node> {
         let mut result = Vec::new();
         for (index, node) in group.children().iter().enumerate() {
             let mut source_path = parent_path.to_vec();
@@ -398,13 +399,15 @@ impl Convert<'_> {
                         self.doc.too_deep = true;
                         continue;
                     }
-                    let children = self.group(child, depth + 1, &source_path);
+                    let children = self.group(child, child.abs_transform(), depth + 1, &source_path);
                     if !children.is_empty() {
                         let bounds = if self.local { child.layer_bounding_box().to_rect() } else { child.abs_layer_bounding_box().to_rect() };
                         result.push(Node::Group {
                             children,
                             opacity: child.opacity().get(),
-                            transform: self.placement(parent, child.abs_transform()),
+                            // Locally, the group's own transform: usvg leaves the absolute one at
+                            // the identity for colour and bitmap glyph groups in text.
+                            transform: if self.local { transform(child.transform()) } else { transform(child.abs_transform()) },
                             bounds: rect(bounds),
                             features: GroupFeatures {
                                 filters: !child.filters().is_empty(),
@@ -424,13 +427,16 @@ impl Convert<'_> {
                         continue;
                     }
                     let flat = text.flattened();
-                    let children = self.group(flat, depth + 1, &source_path);
+                    // The flattened group has no transform of its own, but its outline paths
+                    // have the text's: place its leaves, and the wrapper, in the text's frame.
+                    let frame = if self.local { text.abs_transform() } else { flat.abs_transform() };
+                    let children = self.group(flat, frame, depth + 1, &source_path);
                     if !children.is_empty() {
                         let bounds = if self.local { text.bounding_box() } else { text.abs_bounding_box() };
                         result.push(Node::Group {
                             children,
                             opacity: 1.0,
-                            transform: self.placement(parent, flat.abs_transform()),
+                            transform: self.placement(parent, frame),
                             bounds: rect(bounds),
                             features: GroupFeatures::default(),
                             source_path: NodePath(source_path),
@@ -492,7 +498,7 @@ impl Convert<'_> {
             None => {
                 self.patterns.insert(key, None);
                 let local = std::mem::replace(&mut self.local, true);
-                let nodes = self.group(pattern.root(), depth + 1, &[]);
+                let nodes = self.group(pattern.root(), pattern.root().abs_transform(), depth + 1, &[]);
                 self.local = local;
                 let content = Some(std::sync::Arc::new(nodes));
                 self.patterns.insert(key, content.clone());

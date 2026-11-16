@@ -276,3 +276,37 @@ fn a_pattern_that_refers_to_itself_ends() {
         }
     }
 }
+
+#[cfg(feature = "tree-text")]
+#[test]
+fn local_text_is_placed_and_bounded_in_its_parents_frame() {
+    let mut options = usvg::Options::default();
+    let fonts = options.fontdb_mut();
+    fonts.load_font_data(include_bytes!("../../../ui/tests/fonts/NotoSans-test.ttf").to_vec());
+    let family = fonts.faces().next().unwrap().families[0].0.clone();
+    let svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><g id="move" transform="translate(50 0)"><text id="t" x="5" y="20" font-family="{family}" font-size="10">Hi</text></g></svg>"#
+    );
+    let tree = parse(svg.as_bytes(), &Limits::default(), &options).unwrap();
+    let local = Document::from_tree_local(&tree, 64);
+    let absolute = Document::from_tree(&tree, 64);
+
+    let groups = group_ids(&local.nodes);
+    let text = groups.iter().find(|(id, _)| id == "t").unwrap();
+    assert!(close([text.1[0], text.1[3]], [1.0, 1.0]) && close([text.1[4], text.1[5]], [0.0, 0.0]), "text sits in its group's frame: {text:?}");
+
+    let bounds = |nodes: &[Node]| -> [f64; 4] {
+        let Node::Group { children, .. } = &nodes[0] else { panic!() };
+        let Node::Group { bounds, .. } = &children[0] else { panic!() };
+        *bounds
+    };
+    let (l, a) = (bounds(&local.nodes), bounds(&absolute.nodes));
+    assert!(close([l[0] + 50.0, l[1]], [a[0], a[1]]) && close([l[2], l[3]], [a[2], a[3]]), "local {l:?} vs absolute {a:?}");
+    assert!(l[0] > 0.0 && l[0] < 10.0, "near x=5 in the group's frame: {l:?}");
+
+    let (mut lp, mut ap) = (Vec::new(), Vec::new());
+    document_points(&local.nodes, IDENTITY, true, &mut lp);
+    document_points(&absolute.nodes, IDENTITY, false, &mut ap);
+    assert!(!lp.is_empty() && lp.len() == ap.len());
+    assert!(lp.iter().zip(&ap).all(|(l, a)| close(*l, *a)));
+}
