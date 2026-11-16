@@ -2,18 +2,18 @@
 
 use std::sync::Arc;
 
-use craft_behavior::geometry::turn_to_45;
+use craft_behavior::geometry::axis_or_diagonal;
 use craft_behavior::{CancelReason, Cursor, CursorIcon, EditEvent, GestureId, Mixed};
 use craft_keymap::{Key, Mods};
 use craft_ui::canvas::{CanvasTool, ToolAccess, ToolAction, ToolContext, ToolKey, ToolPath, ToolPointer};
 use craft_ui::canvas_controls::path_runs;
 use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::Label;
-use kurbo::Point;
+use kurbo::{Point, Vec2};
 
 use super::words::ShapeDragWords;
 use super::{ShapeDragEvent, ShapeDragOptions, ShapeDragRules, ShapeFrame, ShapeKind};
-use crate::geometry::shape::{RadialFrame, SIDES, ShapeGeometry, box_drag, line_drag};
+use crate::geometry::shape::{MIN_SIDE, RadialFrame, SIDES, ShapeGeometry, box_drag, line_drag};
 
 /// The flattening tolerance of the outline being drawn, in screen points.
 const OUTLINE_TOLERANCE: f32 = 0.25;
@@ -28,7 +28,8 @@ const OUTLINE_TOLERANCE: f32 = 0.25;
 ///   the shape it would draw; release commits it.
 /// - A side under 1 px makes nothing: the gesture is cancelled as `Dismissed`.
 /// - A press and release inside the slop is a [`Click`](ShapeDragEvent::Click) at the press.
-/// - ⇧ makes a square or circle (a Line: 45° steps keeping its length); ⌥ draws from the centre.
+/// - ⇧ makes a square or circle from the drag's shorter side (a Line: onto the axis within 30° of it, keeping the
+///   offset along it, else onto the diagonal at the shorter offset); ⌥ draws from the centre.
 ///   Both may go down or up mid-drag; the shape follows the modifiers held now.
 /// - Space held moves the shape being drawn without resizing it: the press point moves with the
 ///   pointer while Space is down, and the box snaps as a whole.
@@ -144,7 +145,7 @@ impl ShapeDragTool {
     /// when a side is under 1 px: [`box_drag`] for the box kinds (Rectangle with four equal radii when
     /// `corner_radius` > 0, Rounded Rectangle always with them, Triangle a 3-sided polygon, Polygon and
     /// Star with the options' sides and ratio, Custom a `Custom` box keeping proportions with ⇧),
-    /// [`line_drag`] for a Line (weight at least 1, ⇧ turning the end to 45° steps), and
+    /// [`line_drag`] for a Line (weight at least 1, ⇧ snapping the end by [`line_shift`]), and
     /// [`RadialFrame::drag`] in the radial frame.
     fn shape_of(&self, drag: &Drag, mods: Mods) -> Option<ShapeGeometry> {
         // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs:50-82 `shape_geometry`.
@@ -152,8 +153,9 @@ impl ShapeDragTool {
         let o = &drag.options;
         let radii = [o.corner_radius.max(0.0); 4];
         if o.kind == ShapeKind::Line {
-            let end = if mods.shift { turn_to_45(drag.start, drag.at) } else { drag.at };
-            let to = line_drag(drag.start, end)?;
+            // The drag's own length decides whether a line is drawn, before ⇧ shortens a diagonal.
+            line_drag(drag.start, drag.at)?;
+            let to = if mods.shift { line_shift(drag.start, drag.at) } else { drag.at };
             return Some(ShapeGeometry::Line { from: drag.start, to, weight: o.line_weight.max(1.0) });
         }
         if self.radial(o.kind) {
@@ -237,6 +239,19 @@ impl ShapeDragTool {
         drag.shape = shape;
         self.drag = Some(drag);
     }
+}
+
+/// The end of a ⇧ Line drag from `from` to `to`: [`axis_or_diagonal`], with a line on an axis at least
+/// [`MIN_SIDE`] long (a drag of a pixel can keep less than that along its axis).
+fn line_shift(from: Point, to: Point) -> Point {
+    // pc: crates/ui-egui/src/tools/vector_ui/shapes.rs `shape_geometry` (#13243: `dx.abs().max(1.0).copysign(dx)` on
+    // an axis).
+    let d = axis_or_diagonal(from, to) - from;
+    if d.x != 0.0 && d.y != 0.0 {
+        return from + d;
+    }
+    let at_least = |v: f64| if v == 0.0 { 0.0 } else { v.abs().max(MIN_SIDE).copysign(v) };
+    from + Vec2::new(at_least(d.x), at_least(d.y))
 }
 
 impl CanvasTool for ShapeDragTool {

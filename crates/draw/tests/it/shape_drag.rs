@@ -1,11 +1,14 @@
 //! The Shape tools and the Create Shape dialog. The view maps one document unit to one screen point.
 
-use craft_behavior::CanvasView;
-use craft_behavior::kurbo::{Point, Rect};
+use craft_behavior::kurbo::{Point, Rect, Vec2};
+use craft_behavior::{CanvasView, EditEvent};
 use craft_draw::geometry::shape::ShapeGeometry;
-use craft_draw::ui::shape_drag::{CreateShapeDialog, CreateShapeOptions, CreatedShape, ShapeDragOptions, ShapeDragTool, ShapeKind};
+use craft_draw::ui::shape_drag::{
+    CreateShapeDialog, CreateShapeOptions, CreatedShape, ShapeDragEvent, ShapeDragOptions, ShapeDragTool, ShapeKind,
+};
 use craft_ui::dialog::{DialogHost, DialogId, DialogResult};
 use craft_ui::testing::{ToolFixture, trial};
+use egui::{Event, Modifiers, PointerButton, Pos2};
 use serde_json::{Value, json};
 
 /// The view of a canvas filling `room`, with its middle at the document's middle.
@@ -17,6 +20,123 @@ fn tool(kind: ShapeKind) -> ShapeDragTool {
     let mut tool = ShapeDragTool::new();
     tool.options(ShapeDragOptions::new(kind));
     tool
+}
+
+/// A Shape tool on a canvas, with the events it reported so far.
+struct Shapes {
+    fixture: ToolFixture<ShapeDragTool>,
+    log: Vec<ShapeDragEvent>,
+}
+
+impl Shapes {
+    fn new(options: ShapeDragOptions) -> Self {
+        let mut tool = ShapeDragTool::new();
+        tool.options(options);
+        Shapes { fixture: ToolFixture::with_view("Shape", tool, room_view, |_, _| {}), log: Vec::new() }
+    }
+
+    fn sync(&mut self) {
+        let events = self.fixture.tool_mut().take_events();
+        self.log.extend(events);
+    }
+
+    /// The screen point of the document point `p`.
+    fn at(&self, p: Point) -> Pos2 {
+        room_view(self.fixture.canvas().rect).to_screen(p)
+    }
+
+    fn button(&mut self, p: Point, pressed: bool, modifiers: Modifiers) {
+        let pos = self.at(p);
+        self.fixture.fixture().frame(vec![Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers }]);
+        self.sync();
+    }
+
+    fn press(&mut self, p: Point, modifiers: Modifiers) {
+        self.fixture.fixture().hold(modifiers);
+        let pos = self.at(p);
+        self.fixture.fixture().frame(vec![Event::PointerMoved(pos)]);
+        self.button(p, true, modifiers);
+    }
+
+    fn move_to(&mut self, p: Point, modifiers: Modifiers) {
+        self.fixture.fixture().hold(modifiers);
+        let pos = self.at(p);
+        self.fixture.fixture().frame(vec![Event::PointerMoved(pos)]);
+        self.sync();
+    }
+
+    fn release(&mut self, p: Point, modifiers: Modifiers) {
+        self.button(p, false, modifiers);
+        self.fixture.fixture().hold(Modifiers::NONE);
+        self.fixture.fixture().frame(Vec::new());
+        self.sync();
+    }
+
+    /// Space goes down or up.
+    fn space(&mut self, down: bool) {
+        let key = Event::Key { key: egui::Key::Space, physical_key: None, pressed: down, repeat: false, modifiers: Modifiers::NONE };
+        self.fixture.fixture().frame(vec![key]);
+        self.sync();
+    }
+
+    /// Press at `from`, move past the press slop, then to `to`, and release there, all with `modifiers`.
+    fn drag(&mut self, from: Point, to: Point, modifiers: Modifiers) {
+        self.press(from, modifiers);
+        self.move_to(from + Vec2::new(40.0, 30.0), modifiers);
+        self.move_to(to, modifiers);
+        self.release(to, modifiers);
+    }
+
+    /// The shape the last drag committed.
+    fn committed(&self) -> Option<ShapeGeometry> {
+        self.log.iter().rev().find_map(|event| match event {
+            ShapeDragEvent::Draw(EditEvent::Commit { after, .. }) => Some(after.clone()),
+            _ => None,
+        })
+    }
+
+    /// The shape of the last `Update`.
+    fn proposed(&self) -> Option<ShapeGeometry> {
+        self.log.iter().rev().find_map(|event| match event {
+            ShapeDragEvent::Draw(EditEvent::Update { value, .. }) => Some(value.clone()),
+            _ => None,
+        })
+    }
+
+    /// The box the last drag committed.
+    fn committed_box(&self) -> Option<Rect> {
+        self.committed().map(|shape| shape.bounds())
+    }
+
+    /// Whether the last gesture ended as a click.
+    fn clicked(&self) -> bool {
+        matches!(self.log.last(), Some(ShapeDragEvent::Click { .. }))
+    }
+
+    fn forget(&mut self) {
+        self.log.clear();
+    }
+}
+
+const PRESS: Point = Point::new(100.0, 100.0);
+
+/// A ⇧ Line drag snaps onto the axis within 30° of it, keeping the offset along it and at least a pixel long, and
+/// onto the diagonal at the shorter offset past that; the drag's last proposal is the line it commits.
+#[trial]
+fn a_shift_line_snaps_to_the_axis_or_the_diagonal_and_commits_what_it_proposed() {
+    let mut shapes = Shapes::new(ShapeDragOptions::new(ShapeKind::Line));
+    let line_end = |shape: Option<ShapeGeometry>| match shape {
+        Some(ShapeGeometry::Line { from, to, .. }) => Some(to - from),
+        _ => None,
+    };
+    shapes.drag(PRESS, PRESS + Vec2::new(0.95, 0.4), Modifiers::SHIFT);
+    assert_eq!(line_end(shapes.committed()), Some(Vec2::new(1.0, 0.0)), "a short drag still draws a 1 px horizontal line");
+    assert_eq!(shapes.proposed(), shapes.committed(), "the last proposal is the committed line");
+
+    shapes.forget();
+    shapes.drag(PRESS, PRESS + Vec2::new(-60.0, 50.0), Modifiers::SHIFT);
+    assert_eq!(line_end(shapes.committed()), Some(Vec2::new(-50.0, 50.0)), "past 30° the line takes the diagonal");
+    assert_eq!(shapes.proposed(), shapes.committed());
 }
 
 #[trial]
