@@ -128,8 +128,9 @@ pub(super) struct Parser<'a> {
     fmt: Fmt,
     /// Paragraph context of the enclosing environments.
     ctx: Ctx,
-    /// Text that followed an optional argument's `]` in the same token, emitted next.
-    pending: Option<String>,
+    /// Text that followed an optional argument's `]` in the same token, emitted next. A slice
+    /// of the token, so reading `[]` after `[]` copies nothing.
+    pending: Option<&'a str>,
     /// Open lists: ordered?
     lists: Vec<bool>,
     page_break: bool,
@@ -282,7 +283,7 @@ impl<'a> Parser<'a> {
 
     /// Adds `s` to an optional argument's text up to its `]`. True when the `]` was there; the
     /// text after it then comes next (tokens are shared, so it waits in `pending`).
-    fn close_opt(&mut self, s: &str, out: &mut String) -> bool {
+    fn close_opt(&mut self, s: &'a str, out: &mut String) -> bool {
         let Some(end) = s.find(']') else {
             out.push_str(s);
             return false;
@@ -290,7 +291,7 @@ impl<'a> Parser<'a> {
         out.push_str(s.get(..end).unwrap_or(""));
         let rest = s.get(end + 1..).unwrap_or("");
         if !rest.trim().is_empty() {
-            self.pending = Some(rest.to_string());
+            self.pending = Some(rest);
         }
         true
     }
@@ -436,7 +437,7 @@ impl<'a> Parser<'a> {
     /// Parse until `\end{env}` (when given), a closing brace at this level, or the end.
     fn flush_pending(&mut self) {
         if let Some(p) = self.pending.take() {
-            self.text(&ligatures(&p));
+            self.text(&ligatures(p));
         }
     }
 
@@ -539,7 +540,7 @@ impl<'a> Parser<'a> {
                     let mut chars = t.chars();
                     let first = chars.next().map(String::from).unwrap_or_default();
                     if !chars.as_str().is_empty() {
-                        self.pending = Some(chars.as_str().to_string());
+                        self.pending = Some(chars.as_str());
                     }
                     first
                 }
