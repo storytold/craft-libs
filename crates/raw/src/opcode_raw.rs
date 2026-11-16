@@ -63,7 +63,7 @@ fn wire_length(length: usize) -> Result<u32, EncodeError> {
 }
 
 /// Encode records, rejecting unrepresentable counts and parameter lengths before allocation.
-pub fn try_encode(list: &[Opcode]) -> Result<Vec<u8>, EncodeError> {
+pub fn encode(list: &[Opcode]) -> Result<Vec<u8>, EncodeError> {
     let count = wire_length(list.len())?;
     let mut total = 4usize;
     for op in list {
@@ -82,15 +82,6 @@ pub fn try_encode(list: &[Opcode]) -> Result<Vec<u8>, EncodeError> {
     Ok(out)
 }
 
-/// Encode records as a big-endian opcode list, preserving version and parameter bytes.
-///
-/// # Panics
-/// Panics if a count or parameter length exceeds the wire format or allocation fails.
-/// Use [`try_encode`] when encoding untrusted or potentially large records.
-pub fn encode(list: &[Opcode]) -> Vec<u8> {
-    try_encode(list).expect("DNG opcode list must fit its wire format and available memory")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,14 +92,13 @@ mod tests {
         if let Some(too_large) = (u32::MAX as usize).checked_add(1) {
             assert_eq!(wire_length(too_large), Err(EncodeError));
         }
-        assert_eq!(try_encode(&[]).unwrap(), vec![0, 0, 0, 0]);
+        assert_eq!(encode(&[]).unwrap(), vec![0, 0, 0, 0]);
     }
 
     #[test]
     fn unknown_records_round_trip_and_limits_are_enforced() {
         let records = vec![Opcode { id: 900, version: 0x0107_0100, flags: 3, params: vec![1, 2, 3] }];
-        let bytes = try_encode(&records).unwrap();
-        assert_eq!(encode(&records), bytes);
+        let bytes = encode(&records).unwrap();
         assert_eq!(parse(&bytes, 1).unwrap(), records);
         assert!(parse(&bytes, 0).is_err());
         assert!(parse(&bytes[..bytes.len() - 1], 1).is_err());
