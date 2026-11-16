@@ -49,10 +49,20 @@ fn past(b: &[u8], from: usize, close: &[u8]) -> usize {
     b.get(from..).and_then(|rest| rest.windows(close.len()).position(|w| w == close)).map_or(b.len(), |n| from + n + close.len())
 }
 
+/// Whether `rest` starts an element, attribute list or notation declaration. XML readers skip
+/// these to their first `>`, quotes and brackets included.
+fn skipped_to_first_close(rest: &[u8]) -> bool {
+    [b"<!ELEMENT".as_slice(), b"<!ATTLIST", b"<!NOTATION"].iter().any(|kind| rest.starts_with(kind))
+}
+
 /// The end of the markup declaration that starts at `at` (`<!ENTITY`, `<!ATTLIST`, the start of
 /// a `<!DOCTYPE`): past its `>`, or past the `[` that opens a document type's internal subset.
-/// Quoted literals are skipped, so a `<!--`, `]>` or `>` inside one ends nothing.
+/// Quoted literals are skipped, so a `<!--`, `]>` or `>` inside one ends nothing. An element,
+/// attribute list or notation declaration ends at its first `>`, as XML readers read it.
 fn declaration_end(b: &[u8], at: usize) -> usize {
+    if skipped_to_first_close(b.get(at..).unwrap_or_default()) {
+        return past(b, at + 2, b">");
+    }
     let mut i = at + 2;
     while let Some(&c) = b.get(i) {
         i = match c {
@@ -65,8 +75,8 @@ fn declaration_end(b: &[u8], at: usize) -> usize {
 }
 
 /// The end of the internal subset of a document type that starts at `from` (past its `[`): past
-/// the `]` that closes it. Quoted literals, comments and processing instructions are skipped, so
-/// a `]` inside one closes nothing.
+/// the `]` that closes it. Quoted literals, comments, processing instructions and element,
+/// attribute list and notation declarations are skipped, so a `]` inside one closes nothing.
 fn subset_end(b: &[u8], from: usize) -> usize {
     let mut i = from;
     while let Some(&c) = b.get(i) {
@@ -74,6 +84,7 @@ fn subset_end(b: &[u8], from: usize) -> usize {
         i = match c {
             b'"' | b'\'' => past(b, i + 1, &[c]),
             b']' => return i + 1,
+            _ if skipped_to_first_close(rest) => past(b, i + 2, b">"),
             _ if rest.starts_with(b"<!--") => past(b, i + 4, b"-->"),
             _ if rest.starts_with(b"<?") => past(b, i + 2, b"?>"),
             _ => i + 1,
@@ -552,6 +563,7 @@ mod tests {
             format!("<!DOCTYPE svg [<!NOTATION n SYSTEM '<!--'>{large}]>"),
             format!("<?pi <!-- ?><!DOCTYPE svg [{large}]>"),
             format!("<!DOCTYPE svg [<?pi <![CDATA[ ?>{large}]>"),
+            format!("<!DOCTYPE svg [<!ELEMENT svg [<!-- >{large}]>"),
         ] {
             assert!(expansion_too_large(&format!("{hidden}<svg id=\"{refs}\"/>")));
         }
@@ -564,7 +576,7 @@ mod tests {
     fn markers_in_a_literal_hide_no_markup_from_the_depth_or_attribute_counts() {
         let tenth = DEPTH / 10 + 1;
         let nested = format!("{}{}", "<g>".repeat(tenth), "</g>".repeat(tenth));
-        for bait in ["<!ENTITY c \"<!--\">", "<!ENTITY c \"<?\">", "<!ENTITY c \"]>\">"] {
+        for bait in ["<!ENTITY c \"<!--\">", "<!ENTITY c \"<?\">", "<!ENTITY c \"]>\">", "<!ELEMENT svg ] >"] {
             assert!(too_deep(&format!("<!DOCTYPE svg [{bait}<!ENTITY a \"{nested}\">]><svg>&a;</svg>")), "{bait}");
         }
         // Comments and instructions in a value open and close no element.
@@ -577,6 +589,8 @@ mod tests {
         assert!(!too_deep(&format!("<!DOCTYPE svg [{openers}]>{}", svg(&groups(8)))));
         let many = (0..5000).map(|i| format!(" a{i}=\"1\"")).collect::<String>();
         assert!(wide(&format!("<!DOCTYPE svg [<!ENTITY c \"]>\"><!ENTITY e '<g{many}/>'>]><svg>&e;</svg>")));
+        // An element declaration ends at its first `>`, so a `]` inside it does not end the subset.
+        assert!(wide(&format!("<!DOCTYPE svg [<!ELEMENT svg ] ><!ENTITY e '<g{many}/>'>]><svg>&e;</svg>")));
     }
 
     #[test]
