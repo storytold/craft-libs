@@ -639,6 +639,16 @@ pub fn plan(set: &ForeignSet, keymap: &Keymap, options: &ImportOptions) -> Impor
         }
     }
 
+    // A key the command already has by default stays its main key: the keys of the set follow the defaults in their order.
+    for p in &mut commands {
+        let Some(home) = keymap.bindable(&p.command).map(|b| b.scope.clone()) else { continue };
+        let defaults = keymap.default_bindings(&p.command);
+        let rank = |b: &PlannedBinding| {
+            defaults.iter().position(|d| d.trigger == b.binding.trigger && d.scope_or(&home) == b.binding.scope_or(&home)).unwrap_or(usize::MAX)
+        };
+        p.bindings.sort_by_key(rank);
+    }
+
     if !to_suggest.is_empty() {
         report.suggestions = suggest(keymap, &to_suggest);
     }
