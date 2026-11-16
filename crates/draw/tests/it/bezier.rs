@@ -857,13 +857,14 @@ fn a_convert_click_on_a_corner_reports_its_edit() {
     assert!(st.seen.contains(&Seen::Set), "{:?}", st.seen);
 }
 
-// The arrow keys nudge the selected anchors, ⇧ by a larger step; each press is one edit, and with no anchor selected
-// they move nothing.
+// The arrow keys nudge the selected anchors, ⇧ by a larger step; each press is one edit, and with the path targeted
+// but no anchor selected they move nothing.
 #[trial]
 fn arrow_keys_nudge_the_selected_anchors_and_shift_nudges_farther() {
     let mut h = two_paths();
-    // The canvas, then the overlay.
+    // The canvas, then the overlay. Focus arriving at an anchor selects it, so the selection is emptied after.
     h.fixture.key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Tab, egui::Modifiers::NONE).settle();
+    h.update(|st| st.selection = sel(1, &[]));
     h.fixture.key(egui::Key::ArrowRight, egui::Modifiers::NONE).settle();
     assert!(h.state.borrow().changes.is_empty(), "nothing selected, nothing moves: {:?}", h.state.borrow().changes);
     h.update(|st| st.selection = sel(1, &[(0, 1), (0, 2)]));
@@ -909,15 +910,17 @@ fn a_tool_switch_mid_press_keeps_the_parts_the_press_began_with() {
     assert_eq!(st.selection, sel(1, &[(0, 0), (0, 1)]));
 }
 
-// A press the host cancels (its target went away) ends as Escape ends one: the gesture is cancelled, its release
-// reports nothing, and the paths stay.
+// A press the host cancels (its target went away) ends as Escape ends one: the gesture is cancelled and its release
+// reports nothing. The cancel restores nothing (the host's state moved under the press), so the paths stay where the
+// drag left them and the drag goes no further.
 #[trial]
 fn a_cancelled_press_reports_nothing_on_release() {
     let mut h = two_paths();
-    let before = h.state.borrow().paths.clone();
     let anchor = h.screen(p(160.0, 60.0));
     h.press_at(anchor);
     h.move_to(anchor + vec2(FAR * 0.5, FAR * 0.5));
+    let (before, changes) = (h.state.borrow().paths.clone(), h.state.borrow().changes.len());
+    assert!(changes > 0, "the drag moved the anchor before the cancel");
     let overlay = h.state.borrow().id;
     cancel_press_of(h.fixture.ctx(), overlay);
     h.move_to(anchor + vec2(FAR, FAR));
@@ -925,5 +928,6 @@ fn a_cancelled_press_reports_nothing_on_release() {
     let st = h.state.borrow();
     assert!(st.seen.contains(&Seen::Cancel), "{:?}", st.seen);
     assert!(!st.seen.contains(&Seen::Commit) && !st.seen.contains(&Seen::Set), "{:?}", st.seen);
+    assert_eq!(st.changes.len(), changes, "{:?}", st.changes);
     assert_eq!(st.paths, before);
 }
