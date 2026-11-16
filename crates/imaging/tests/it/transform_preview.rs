@@ -14,7 +14,7 @@ use craft_imaging::ui::transform_preview::{
 };
 use craft_imaging::ui::warp::WarpMesh;
 use craft_ui::canvas::{Canvas, PixelRect};
-use craft_ui::contract::{Show as _, ShowContainer as _};
+use craft_ui::contract::{Lazy, Show as _, ShowContainer as _};
 use craft_ui::testing::{Fixture, trial};
 use egui::{Color32, ColorImage, Shape};
 
@@ -382,6 +382,16 @@ fn white(name: &str) -> Rc<PreviewTextures> {
 
 impl Mips {
     fn new() -> Self {
+        Self::with(false)
+    }
+
+    /// The previews painted inside a settling region (`Lazy::settles`), which replays its last run while nothing the
+    /// framework tracks changed for it.
+    fn settling() -> Self {
+        Self::with(true)
+    }
+
+    fn with(settles: bool) -> Self {
         let jobs = Arc::new(ManualJobs::new());
         let painted = Rc::new(RefCell::new(Vec::<(Rc<PreviewTextures>, f32)>::new()));
         let display = Rc::new(RefCell::new(None::<PreviewDisplay>));
@@ -389,13 +399,20 @@ impl Mips {
         let uploads = Rc::new(Cell::new(0));
         let (paint, converted, seen, counted) = (Rc::clone(&painted), Rc::clone(&display), Rc::clone(&shown), Rc::clone(&uploads));
         let mut fixture = Fixture::new(move |ui| {
-            let display = converted.borrow();
-            let picks = paint
-                .borrow()
-                .iter()
-                .map(|(textures, scale)| textures.pick(ui.ctx(), PreviewTextures::choose(1.0, *scale, false), display.as_ref()))
-                .collect();
-            *seen.borrow_mut() = picks;
+            let run = |ui: &mut egui::Ui| {
+                let display = converted.borrow();
+                let picks = paint
+                    .borrow()
+                    .iter()
+                    .map(|(textures, scale)| textures.pick(ui.ctx(), PreviewTextures::choose(1.0, *scale, false), display.as_ref()))
+                    .collect();
+                *seen.borrow_mut() = picks;
+            };
+            if settles {
+                Lazy::new("previews", 0.0).settles(true).show(ui, run);
+            } else {
+                run(ui);
+            }
             counted.set(PreviewTextures::statistics(ui.ctx()).uploads);
         });
         fixture.host(Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build()));
@@ -404,9 +421,15 @@ impl Mips {
     }
 
     /// One frame painting `previews`.
+    /// A change of the previews or their scales arrives with input, as a drag's does.
     fn paint(&mut self, previews: &[(&Rc<PreviewTextures>, f32)]) {
-        *self.painted.borrow_mut() = previews.iter().map(|(textures, scale)| (Rc::clone(textures), *scale)).collect();
-        self.fixture.frame(Vec::new());
+        let next: Vec<_> = previews.iter().map(|(textures, scale)| (Rc::clone(textures), *scale)).collect();
+        let changed = {
+            let painted = self.painted.borrow();
+            painted.len() != next.len() || painted.iter().zip(&next).any(|(a, b)| !Rc::ptr_eq(&a.0, &b.0) || a.1 != b.1)
+        };
+        *self.painted.borrow_mut() = next;
+        self.fixture.frame(if changed { vec![egui::Event::WindowFocused(true)] } else { Vec::new() });
     }
 
     /// The texture and uv extent the `at`th preview showed.
@@ -424,10 +447,16 @@ fn near_uv(uv: [f32; 2], want: [f32; 2]) -> bool {
 }
 
 /// P91 (#13382): the frame that first needs a mip level builds none on the UI thread; level 0 stands in, the frames
-/// while its job waits do no work for it, and the landing frame uploads it once.
+/// while its job waits do no work for it, and the landing frame uploads it once. In a settling region the frame
+/// after the job lands runs the region again with no other input and shows the level.
 #[trial]
 fn a_mip_level_first_needed_mid_drag_is_built_off_the_ui_thread() {
-    let mut mips = Mips::new();
+    for settles in [false, true] {
+        mips_first_needed_mid_drag(if settles { Mips::settling() } else { Mips::new() });
+    }
+}
+
+fn mips_first_needed_mid_drag(mut mips: Mips) {
     let t = white("drag");
     mips.paint(&[(&t, 1.0)]);
     let (level0, _) = mips.shown(0);

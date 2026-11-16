@@ -248,7 +248,8 @@ pub(crate) fn replay(ctx: &Context, id: Id) {
 /// also needs the child at the `place` it ran at, which a measuring run cannot tell.
 ///
 /// It replays when its last run was in an earlier frame and since then:
-/// - nothing in it moves: no animation off its end value, no repaint asked from inside it, no wake time reached;
+/// - nothing in it moves: no animation off its end value, no repaint asked from inside it, no texture it shows still
+///   loading, no wake time reached;
 /// - the pointer is not over it, no press started on it and none of its widgets is dragged or holds egui focus, and
 ///   none of that held in its last run;
 /// - none of its stops holds focus or is the target of a focus request, now or in its last run;
