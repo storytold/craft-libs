@@ -547,6 +547,12 @@ impl HostedPrint {
         std::mem::take(&mut self.refresh)
     }
 
+    /// Asks for a printer list again on the next pass, as Refresh does: the list the app sent was not the system's
+    /// (its spooler was busy).
+    pub fn request_refresh(&mut self) {
+        self.refresh = true;
+    }
+
     /// Takes the printer list the app sends; `false` while a discovery or a job runs.
     pub fn listen(&mut self, printers: Receiver<Vec<Printer>>) -> bool {
         self.state.listen(printers)
