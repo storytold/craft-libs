@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use craft_fonts_build::ServedFace;
 use craft_ui::fonts::{Family, FetchDone, FetchWake, FontFetcher, FontRef, I18nScripts, SystemFonts, UiFonts};
 use craft_ui::testing::{Frames, trial};
-use egui::FontId;
+use egui::{FontFamily, FontId};
 
 const ARABIC: &[u8] = include_bytes!("../../fonts/NotoSansArabic-test.ttf");
 /// Noto Sans with Vietnamese ổ but not ẫ.
@@ -243,4 +243,55 @@ fn a_failed_download_moves_on_and_is_retried_later() {
     fetch.wait(1.0);
     assert!(!draws('⇥'));
     assert_eq!(fetch.requested(), [MATH_URL]);
+}
+
+const ARABIC_URL: &str = "fonts/noto-sans-arabic/NotoSansArabic.ttf";
+
+/// A language change installs the fonts anew in the same context: a face fetched before it stays, and is not fetched
+/// again.
+#[trial]
+fn a_fetched_face_survives_a_reinstall() {
+    let faces = [ServedFace { coverage: coverage_of(ARABIC), ..served("Noto Sans Arabic", "Regular", &["Arab"], ARABIC_URL, 0) }];
+    let fetch = Arc::new(FakeFetch::default());
+    let (ctx, mut draws) = web_context_with("en", &faces, &fetch);
+    assert!(!draws('ع'));
+    assert_eq!(fetch.requested(), [ARABIC_URL]);
+    fetch.answer(ARABIC_URL, Ok(ARABIC));
+    assert!(draws('ع'));
+
+    web_fonts("ru", &faces).fetcher(Arc::clone(&fetch) as Arc<dyn FontFetcher>).install(&ctx);
+    assert!(draws('ع'), "the fetched face is installed again");
+    assert!(fetch.requested().is_empty(), "nothing is fetched again");
+}
+
+/// Of two served faces that draw Han, the interface language's comes first in the proportional chain, whichever was
+/// fetched first.
+#[trial]
+fn the_interface_languages_served_face_leads() {
+    const JP_URL: &str = "fonts/noto-sans-cjk-jp/NotoSansCJKjp.otf";
+    const SC_URL: &str = "fonts/noto-sans-cjk-sc/NotoSansCJKsc.otf";
+    let han = (0x4E00, 0x9FFF);
+    let faces = [
+        ServedFace {
+            coverage: craft_fonts_build::coverage::encode(&[(0x3040, 0x30FF), han]).leak(),
+            ..served("Noto Sans CJK JP", "Regular", &["Jpan"], JP_URL, 0)
+        },
+        ServedFace { coverage: craft_fonts_build::coverage::encode(&[han]).leak(), ..served("Noto Sans CJK SC", "Regular", &["Hans"], SC_URL, 0) },
+    ];
+    let fetch = Arc::new(FakeFetch::default());
+    let (ctx, mut draws) = web_context_with("zh-CN", &faces, &fetch);
+    // Kana only the Japanese face covers, and Han, which the Simplified Chinese face draws first in this UI.
+    draws('あ');
+    draws('中');
+    let mut asked = fetch.requested();
+    asked.sort_unstable();
+    assert_eq!(asked, [JP_URL, SC_URL], "kana asks for the Japanese face, Han for the Simplified Chinese one");
+    // The Japanese face arrives first.
+    fetch.answer(JP_URL, Ok(NOTO_SANS_LATIN));
+    draws('あ');
+    fetch.answer(SC_URL, Ok(include_bytes!("../../fonts/NotoSansCJKsc-test.otf")));
+    draws('中');
+    let chain = ctx.fonts(|f| f.definitions().families[&FontFamily::Proportional].clone());
+    let at = |name: &str| chain.iter().position(|face| face == name).unwrap_or_else(|| panic!("{name} is in the chain: {chain:?}"));
+    assert!(at("Noto Sans CJK SC Regular") < at("Noto Sans CJK JP Regular"), "the interface language's face leads: {chain:?}");
 }
