@@ -103,7 +103,10 @@ pub fn write(
     let mut missing = Vec::new();
     let mut missing_seen = std::collections::HashSet::<String>::new();
     let mut total = bytes.len() as u64;
-    let mut exceeded = total > package_limits.max_total_bytes || total > package_limits.max_model_bytes;
+    if total > package_limits.max_total_bytes || total > package_limits.max_model_bytes {
+        return Err(too_large(KIND, "the FBX and its textures exceed the package limit"));
+    }
+    let mut exceeded = false;
     doc.diffuse_materials(limits, &mut |paths| {
         // candidates in order of preference: an earlier one that exists wins over a later cached one
         for path in paths {
@@ -112,7 +115,7 @@ pub fn write(
                 return Some(data);
             }
             // once a resolved texture has not fit, the package fails: stop calling the resolver
-            if too_many {
+            if too_many || exceeded {
                 return None;
             }
             if let Some(data) = found(path).filter(|d| d.len() as u64 <= package_limits.max_texture_bytes) {
@@ -231,6 +234,42 @@ mod tests {
         });
         assert!(matches!(result, Err(Error::TooLarge(_))));
         assert!(calls <= bounds().max_entries as usize, "{calls} resolver calls past the entry limit");
+    }
+
+    #[test]
+    fn resolution_stops_once_the_byte_limit_is_passed() {
+        let mut model = String::from("FBXHeaderExtension: { FBXVersion: 7400 } Objects: {");
+        let mut links = String::new();
+        for i in 0..10 {
+            model.push_str(&format!(
+                " Material: {m}, \"Material::M{i}\", \"\" {{ }} Texture: {t}, \"Texture::T{i}\", \"\" {{ RelativeFilename: \"big.png\" }}",
+                m = 2 * i + 1,
+                t = 2 * i + 2
+            ));
+            links.push_str(&format!(" C: \"OP\",{t},{m},\"DiffuseColor\"", m = 2 * i + 1, t = 2 * i + 2));
+        }
+        model.push_str(&format!(" }} Connections: {{{links} }}"));
+        let limits = Limits::default();
+        let doc = read_document(model.as_bytes(), &limits).unwrap();
+        let tight = PackageLimits { max_total_bytes: model.len() as u64 + 4, max_model_bytes: 1 << 20, ..bounds() };
+        let mut calls = 0;
+        let result = write(&doc, "a.fbx", model.as_bytes(), &limits, tight, &mut |_| {
+            calls += 1;
+            Some(b"image".to_vec())
+        });
+        assert!(matches!(result, Err(Error::TooLarge(_))));
+        assert_eq!(calls, 1, "one texture past the limit ends resolution");
+        // a model past its own limit is refused before any texture is resolved
+        let small = PackageLimits { max_model_bytes: 8, ..bounds() };
+        let mut calls = 0;
+        assert!(matches!(
+            write(&doc, "a.fbx", model.as_bytes(), &limits, small, &mut |_| {
+                calls += 1;
+                None
+            }),
+            Err(Error::TooLarge(_))
+        ));
+        assert_eq!(calls, 0);
     }
 
     #[test]
