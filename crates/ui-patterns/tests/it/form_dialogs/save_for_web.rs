@@ -199,3 +199,29 @@ fn advance_frame_keeps_time_across_slow_frames_pauses_and_bad_rates() {
         assert_eq!(frame_of(&host), 3, "a rate of {fps} runs at the default");
     }
 }
+
+/// The options 4-Up's panes 1 and 2 are asked to encode, from the dialog's request for them.
+fn four_up_options(host: &Rc<RefCell<DialogHost>>) -> [SaveForWebOptions; 2] {
+    let wanted = host.borrow_mut().get_mut::<HostedSaveForWeb>().map(HostedSaveForWeb::wanted_variants).expect("the dialog is open");
+    let options = |index: usize| wanted.iter().find(|variant| variant.index == index).expect("the 4-Up pane is asked for").request.options.clone();
+    [options(1), options(2)]
+}
+
+/// Lossy WebP's 4-Up panes show half and a quarter of the quality; lossless WebP has no quality, so they show PNG-8
+/// and GIF instead.
+#[trial]
+fn four_up_webp_halves_the_quality_until_lossless() {
+    let mut options = SaveForWebOptions::default();
+    options.format = WebFormat::WebP;
+    options.quality = 80;
+    let (host, mut fixture) = open(HostedSaveForWeb::new("poster.psd", IMAGE, texture()).options(options));
+    let four_up = fixture.by_label("4-Up").expect("the 4-Up view");
+    fixture.click(&four_up).idle(4);
+    let [half, quarter] = four_up_options(&host);
+    assert_eq!((half.format, half.quality, quarter.quality), (WebFormat::WebP, 40, 20));
+
+    let lossless = fixture.by_label("Lossless").expect("the Lossless check box");
+    fixture.click(&lossless).idle(4);
+    let [half, quarter] = four_up_options(&host);
+    assert_eq!((half.format, quarter.format), (WebFormat::Png8, WebFormat::Gif));
+}

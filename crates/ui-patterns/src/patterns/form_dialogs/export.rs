@@ -350,7 +350,7 @@ pub struct ExportOptions {
     pub resample: Resample,
     /// Scale All: one file per row, each at its multiple of the export size. Empty reads as one 1x row with no
     /// suffix.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub scale_all: Vec<ScaleRow>,
 }
 
