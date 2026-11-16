@@ -578,6 +578,37 @@ fn viewer_windows_stay_shown_at_normal_level() {
 }
 
 #[test]
+fn palettes_are_x11_utility_windows_and_viewers_normal_ones() {
+    // Both kinds set `taskbar` to false, which egui applies on Windows. Under X11 on Linux a
+    // palette is a utility window and a viewer a normal one.
+    use egui::X11WindowType::{Normal, Utility};
+    let palette = if cfg!(target_os = "linux") { Utility } else { Normal };
+    let mut layout = layout(false);
+    layout.floating = vec![Floating::single(vec![5], 0, [300.0, 80.0, 240.0, 300.0]), Floating::single(vec![6], 0, [560.0, 80.0, 240.0, 300.0])];
+    let mut d = driver(layout);
+    d.content.normal = vec![5];
+    d.step(vec![]);
+    let types = |d: &DockDriver<u32, Content>| {
+        [5, 6].map(|panel| {
+            let window = &d.host().windows[&d.viewport(window(d, panel).id)];
+            (window.taskbar, window.window_type)
+        })
+    };
+    assert_eq!(types(&d), [(Some(false), Some(Normal)), (Some(false), Some(palette))]);
+    // The palette becomes a viewer. A new type recreates the window, which opens where it is.
+    let moved = [700.0, 120.0, 240.0, 300.0];
+    d.layout.floating[1].native = Some(moved);
+    d.step(vec![]);
+    d.content.normal = vec![5, 6];
+    d.step(vec![]);
+    assert_eq!(types(&d), [(Some(false), Some(Normal)), (Some(false), Some(Normal))]);
+    if cfg!(target_os = "linux") {
+        let position = d.host().windows[&d.viewport(window(&d, 6).id)].position;
+        assert_eq!(position, Some(pos2(moved[0], moved[1])));
+    }
+}
+
+#[test]
 fn the_app_comes_forward_with_its_viewers_when_it_is_activated() {
     use egui::{ViewportId, WindowLevel};
     let start = || {
