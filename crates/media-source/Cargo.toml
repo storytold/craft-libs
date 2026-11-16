@@ -11,7 +11,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
-craft-audio = { workspace = true, default-features = false }
+craft-audio = { workspace = true }
 craft-color = { workspace = true }
 craft-frame = { workspace = true }
 craft-media = { workspace = true }
