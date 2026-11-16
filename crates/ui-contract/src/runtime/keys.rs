@@ -32,8 +32,6 @@ pub(crate) use input::{input_hook, queue_nav, take_menu_keys, take_nav};
 pub use intents::Intents;
 #[doc(hidden)]
 pub use intents::intents_of;
-#[doc(hidden)]
-pub use intents::leave_to_window;
 #[cfg(feature = "testing")]
 pub(crate) use intents::lent_taken;
 #[doc(hidden)]

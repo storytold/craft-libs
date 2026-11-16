@@ -1,6 +1,6 @@
 //! The intents routed to a component and what it leaves untaken: Submit, Cancel, Escape and context requests.
 
-use super::current;
+use super::{Stage, current};
 use super::route::push;
 use crate::runtime::focus::{self};
 use craft_behavior::focus::{EscapeFacts, EscapeStep, escape_step};
@@ -269,44 +269,52 @@ pub fn intents_of(ctx: &Context, id: Option<Id>, rtl: bool) -> Intents {
 ///
 /// The window's intents are the keys the runtime routes to no component this pass: an Escape (`Intent::Cancel`)
 /// or a plain Enter (`Intent::Submit`) while no framework stop is focused, and the arrows' nudge; with the document
-/// canvas focused, the Escape its sessions and its tool left (`leave_to_window`). A component or a scope that runs
-/// earlier in the pass takes them first (an open dialog takes the Escape that closes it, a canvas session the one
-/// that ends it), so an app that hosts the runtime reads them last in its UI to see what no component took. `rtl`
-/// reads horizontal moves in the window's direction.
+/// canvas focused, the Escape the canvas, its sessions, its tool and every scope around it left. A component or a
+/// scope that runs earlier in the pass takes them first (an open dialog takes the Escape that closes it, a canvas
+/// session the one that ends it), so an app that hosts the runtime reads them last in its UI to see what no
+/// component took. `rtl` reads horizontal moves in the window's direction.
 pub fn with_window_intents(ctx: &Context, rtl: bool, take: impl FnOnce(&mut Intents) -> bool) -> bool {
-    if focus::focused_rec(ctx).is_some_and(|rec| !rec.stop.keys.chrome_key) {
-        return false;
-    }
+    let canvas = match focus::focused_rec(ctx) {
+        Some(rec) if !rec.stop.keys.chrome_key => return false,
+        Some(rec) => Some(rec.stop.id),
+        None => None,
+    };
     let mut window = intents_of(ctx, None, rtl);
+    // The focused canvas's leftover Escape is offered as the window's; it stays in the canvas's slot until taken.
+    let lent_cancel = canvas
+        .filter(|canvas| !window.items.iter().any(|(item, _)| *item == Intent::Cancel) && holds(ctx, Some(*canvas), &Intent::Cancel))
+        .map(|canvas| {
+            window.items.push((Intent::Cancel, false));
+            (canvas, window.items.len() - 1)
+        });
     let taken = take(&mut window);
+    if let Some((canvas, at)) = lent_cancel {
+        let (_, cancel_taken) = window.items.remove(at);
+        if cancel_taken && !crate::runtime::measure::active(ctx) {
+            current(ctx, |stage| take_from(stage, Some(canvas), &Intent::Cancel));
+        }
+    }
     if taken {
         settle(ctx, None, &window);
     }
     taken
 }
 
-/// Moves the intents `which` picks that the focused document canvas `from` left untaken this pass to the window's,
-/// where `with_window_intents` reads them. The canvas's tool host calls it once the canvas's session members and its
-/// tool had their chance. Nothing moves while `from` is not the focused stop.
-#[doc(hidden)]
-pub fn leave_to_window(ctx: &Context, from: Id, which: impl Fn(&Intent) -> bool) {
-    if crate::runtime::measure::active(ctx) || !focus::focused_rec(ctx).is_some_and(|rec| rec.stop.id == from && rec.stop.keys.chrome_key) {
-        return;
-    }
-    current(ctx, |stage| {
-        let Some(routed) = stage.routed.get_mut(&Some(from)) else { return };
-        let mut left = Vec::new();
-        routed.items.retain(|item| {
-            let moves = which(&item.intent);
-            if moves {
-                left.push(item.clone());
-            }
-            !moves
-        });
-        if !left.is_empty() {
-            stage.routed.entry(None).or_default().items.extend(left);
+/// Whether an intent of the kind of `intent` is routed to `id` and not taken this pass.
+fn holds(ctx: &Context, id: Option<Id>, intent: &Intent) -> bool {
+    current(ctx, |stage| stage.routed.get(&id).is_some_and(|routed| routed.items.iter().any(|item| item.intent.same_kind(intent))))
+}
+
+/// Removes one intent of the kind of `intent` routed to `id`; whether there was one.
+fn take_from(stage: &mut Stage, id: Option<Id>, intent: &Intent) -> bool {
+    let Some(routed) = stage.routed.get_mut(&id) else { return false };
+    match routed.items.iter().position(|item| item.intent.same_kind(intent)) {
+        Some(at) => {
+            routed.items.remove(at);
+            true
         }
-    });
+        None => false,
+    }
 }
 
 /// The keys an arena's session control borrowed this pass (`KeyUse::session`), with the ids they were routed to.
@@ -440,16 +448,7 @@ fn take_untaken(ctx: &Context, intent: &Intent) -> bool {
     if crate::runtime::measure::active(ctx) {
         return false;
     }
-    current(ctx, |stage| {
-        let Some(routed) = stage.routed.get_mut(&focused) else { return false };
-        match routed.items.iter().position(|item| item.intent.same_kind(intent)) {
-            Some(at) => {
-                routed.items.remove(at);
-                true
-            }
-            None => false,
-        }
-    })
+    current(ctx, |stage| take_from(stage, focused, intent))
 }
 
 /// What an untaken Escape does in a scope: `None` when no Escape arrived or a component took it. One scope
