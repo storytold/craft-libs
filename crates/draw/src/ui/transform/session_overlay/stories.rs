@@ -10,7 +10,7 @@ use craft_ui::contract::{Bind, Entry};
 use craft_ui::runtime::env::Env;
 use craft_ui::runtime::pointer;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, paint_shapes};
-use craft_ui::testing::{EditKind, StoryData, StoryOutput, ToolStory, story, story_tool, tool_story};
+use craft_ui::testing::{EditKind, StoryData, StoryHost, StoryOutput, ToolStory, story, story_tool, tool_story};
 use egui::{Color32, Ui};
 
 craft_ui::words! {
@@ -112,8 +112,11 @@ fn run_session(ui: &mut Ui, data: &mut StoryData, with_rows: bool) -> StoryOutpu
     ];
     let size = document.size();
     let picture = StoryPicture::new(size.width, size.height, move |p| paint_shapes(&layer, Color32::TRANSPARENT, p));
-    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, kept: &mut TransformKept, _: &BoxState| {
-        TransformOverlay::new("Free Transform", &kept.session, &settings).menu_rows(&rows).show_at(ui, at)
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, kept: &mut TransformKept, _: &mut BoxState, host: &StoryHost| {
+        let shown = TransformOverlay::new("Free Transform", &kept.session, &settings).menu_rows(&rows).show_at(ui, at);
+        let mut tool = TransformTool::new(&kept.session, shown.snapped.clone());
+        let _ = host.run(ui, &mut tool);
+        (shown, tool.take_keys())
     };
     let frame = pointer::frame(ui.ctx());
     let story = ToolStory::new("Document", &picture);
@@ -126,13 +129,9 @@ fn run_session(ui: &mut Ui, data: &mut StoryData, with_rows: bool) -> StoryOutpu
         body,
         |run| {
             let (applied, kept) = (run.document, run.tool);
-            let snapped = run.shown.as_ref().map(|shown| shown.snapped.clone()).unwrap_or_default();
-            let mut tool = TransformTool::new(&kept.session, snapped);
-            let _ = run.host.run(&mut tool);
-            let (key_apply, key_discard) = tool.take_keys();
-            let (edits, apply, discard) = match run.shown {
-                Some(shown) => (shown.edits, shown.apply.is_some(), shown.discard),
-                None => (Vec::new(), false, false),
+            let (edits, apply, discard, (key_apply, key_discard)) = match run.shown {
+                Some((shown, keys)) => (shown.edits, shown.apply.is_some(), shown.discard, keys),
+                None => (Vec::new(), false, false, (false, false)),
             };
             let edits: Vec<TransformEdit<()>> = edits.into_iter().chain(bar.edits).collect();
             let output = StoryOutput {

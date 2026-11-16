@@ -523,8 +523,6 @@ pub struct CanvasOutput {
     /// target; the canvas shows the way there itself. [`ToolHost::run`] carries it in [`ToolHostResponse::view`]
     /// when no tool set a view, so an app with a tool host copies that one view.
     pub view: Option<CanvasView>,
-    /// The pass's tool input, for the callers that still run the host after the canvas (see [`ToolHost::run`]).
-    pub(crate) pass: ToolPass,
 }
 
 impl CanvasOutput {
@@ -535,13 +533,6 @@ impl CanvasOutput {
             PressPhase::Release { start, pos, click: true, .. } if start.button == PointerButton::Primary => Some(pos),
             _ => None,
         }
-    }
-}
-
-/// Transitional: a host run after the canvas reads the output's copy of the pass. Removed with the last such caller.
-impl AsRef<ToolPass> for CanvasOutput {
-    fn as_ref(&self) -> &ToolPass {
-        &self.pass
     }
 }
 
@@ -573,12 +564,6 @@ impl ToolPass {
     /// view through it.
     pub(crate) fn clamped(&self, view: CanvasView) -> CanvasView {
         clamped(view, self.document, &self.navigation)
-    }
-}
-
-impl AsRef<ToolPass> for ToolPass {
-    fn as_ref(&self) -> &ToolPass {
-        self
     }
 }
 
@@ -658,7 +643,7 @@ impl Component for Canvas<'_> {
 
     fn finish(self, cx: Cx<'_, Self>) -> CanvasOutput {
         let pass = self.tool_pass(&cx);
-        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view, pass }
+        CanvasOutput { response: cx.response.clone(), press: pass.press, space: pass.space, view: pass.view }
     }
 }
 

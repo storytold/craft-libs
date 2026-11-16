@@ -3,12 +3,12 @@
 //! gesture to the tool as a hand would, over the script's time.
 
 use craft_behavior::kurbo::Point;
-use craft_behavior::{CancelReason, PointerButton};
+use craft_behavior::{CancelReason, CanvasView, PointerButton};
 use craft_ui::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use craft_ui::primitives::Draw;
 use craft_ui::runtime::access::Role;
 use craft_ui::testing::canvas_story::StoryDocument;
-use craft_ui::testing::{Fixture, Story, StoryData, StoryOutput, ToolScript, ToolStory, pointer, tool_story, trial};
+use craft_ui::testing::{Fixture, Story, StoryData, StoryHost, StoryOutput, ToolScript, ToolStory, pointer, tool_story, trial};
 use egui::{Pos2, Vec2};
 
 /// A tool that draws a line from the press to the release and reports each line it drew.
@@ -62,9 +62,10 @@ fn show_with(ui: &mut egui::Ui, data: &mut StoryData, story: impl FnOnce(ToolSto
         story(ToolStory::new("Document", &picture)),
         Liner::default,
         Lines::new(),
-        |_, _, _, _, _| (),
+        |ui: &mut egui::Ui, _: egui::Rect, _: &CanvasView, tool: &mut Liner, _: &mut Lines, host: &StoryHost| {
+            let _ = host.run(ui, tool);
+        },
         |run| {
-            let _ = run.host.run(run.tool);
             run.document.append(&mut run.tool.drawn);
             StoryOutput::default()
         },

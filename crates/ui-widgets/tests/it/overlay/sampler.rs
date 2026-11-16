@@ -187,7 +187,7 @@ impl Scene {
         self.dialog.shown.set(false);
         let canvas = self.canvas.borrow().id.unwrap_or(Id::NULL);
         let shown = Surface { common: Common::new(), took: &self.canvas, outside: self.outside.get() }.id_salt("canvas").show_at(ui, CANVAS);
-        // The canvas's host runs its tool after the canvas, as `ToolHost::run` does.
+        // The host's entry for its running tool, as `ToolHost::run` calls it each pass.
         if let Some(gesture) = self.tool.get() {
             sampler::pass_tool_gesture(ui.ctx(), shown.id, gesture);
         }

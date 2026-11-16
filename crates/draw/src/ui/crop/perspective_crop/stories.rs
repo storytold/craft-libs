@@ -9,7 +9,7 @@ use craft_ui::canvas::{CropShield, RasterSource as _};
 use craft_ui::contract::{Bind, Show as _, Validity};
 use craft_ui::runtime::env::Message;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, on_picture, paint_shapes};
-use craft_ui::testing::{Drive, Grip, StoryData, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, Grip, StoryData, StoryHost, StoryOutput, ToolStory, story, tool_story};
 use egui::{Color32, Ui};
 
 /// A skewed page marked from corner to corner: a quad that can be committed.
@@ -59,17 +59,17 @@ fn bent_page(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
 #[story(PerspectiveCropQuad<'static>, covers = [], drive = Drive::Never)]
 fn drawing_a_quad(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let picture = paper();
-    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut PerspectiveCropTool, quad: &PerspectiveQuad| {
-        if tool.quad() != quad {
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut PerspectiveCropTool, quad: &mut PerspectiveQuad, host: &StoryHost| {
+        if *tool.quad() != *quad {
             tool.set(*quad);
         }
         let shown = tool.pass(PerspectiveInput::default()).show_quad(ui, at);
         if shown.apply || shown.discard {
             tool.clear();
         }
+        let _ = host.run(ui, &mut tool.pass(PerspectiveInput::default()));
     };
     tool_story(ui, data, ToolStory::new("Document", &picture), PerspectiveCropTool::new, None, body, |run| {
-        let _ = run.host.run(&mut run.tool.pass(PerspectiveInput::default()));
         let _ = run.tool.take_events();
         *run.document = *run.tool.quad();
         StoryOutput::default()

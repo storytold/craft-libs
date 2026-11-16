@@ -12,7 +12,7 @@ use craft_ui::canvas::{Canvas, RasterSource as _};
 use craft_ui::contract::{Entry, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::{Env, UnitKind};
 use craft_ui::testing::canvas_story::StoryDocument;
-use craft_ui::testing::{Drive, EditKind, StoryButton, StoryData, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, EditKind, StoryButton, StoryData, StoryHost, StoryOutput, ToolStory, story, tool_story};
 use egui::Ui;
 
 craft_ui::words! {
@@ -231,21 +231,24 @@ fn slice_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let mut settings = *settings;
     let hide_auto = settings.hide_auto;
     let buttons: Vec<StoryButton> = COMMANDS[..4].iter().map(|(label, _)| *label).chain([HIDE_AUTO]).map(StoryButton::new).collect();
-    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, _: &mut SliceKept, slices: &Slices| {
+    // The tool runs with the settings the bar left; `run` changes the story's copy after the canvas.
+    let shown_settings = settings;
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, kept: &mut SliceKept, slices: &mut Slices, host: &StoryHost| {
         let overlay = SliceOverlay::new("Slices", &slices.items);
         let overlay = match slices.selected {
             Some(number) => overlay.selected_slice(number),
             None => overlay,
         };
         let overlay = overlay.pick(mode == SliceMode::Select).hide_auto(hide_auto).locked(locked).rules(rules);
-        overlay.show_at(ui, at).events
+        let events = overlay.show_at(ui, at).events;
+        kept.tool.mode(mode).items(&slices.items).selected(slices.selected).locked(locked).rules(rules).settings(shown_settings);
+        let _ = host.run(ui, &mut kept.tool);
+        events
     };
     let first = Slices { items: sample_slices(), selected: None };
     let picture = StoryDocument::STANDARD;
     let output = tool_story(ui, data, ToolStory::new("Document", &picture).buttons(&buttons), SliceKept::default, first, body, |run| {
         let (slices, kept) = (run.document, run.tool);
-        kept.tool.mode(mode).items(&slices.items).selected(slices.selected).locked(locked).rules(rules).settings(settings);
-        let _ = run.host.run(&mut kept.tool);
         let mut events = run.shown.unwrap_or_default();
         events.extend(kept.tool.take_events());
         let output = StoryOutput { edits: events.iter().filter_map(edit_kind).collect(), clicked: run.pressed.is_some(), ..StoryOutput::default() };

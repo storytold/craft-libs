@@ -8,7 +8,7 @@ use craft_ui::canvas::RasterSource as _;
 use craft_ui::contract::{Bind, Show as _, ShowContainer as _};
 use craft_ui::runtime::env::Env;
 use craft_ui::testing::canvas_story::{OUTLINE, StoryDocument, StoryPicture, StoryShape, accent, on_picture, paint_shapes};
-use craft_ui::testing::{Drive, EditKind, Grip, StoryButton, StoryData, StoryOutput, ToolStory, story, tool_story};
+use craft_ui::testing::{Drive, EditKind, Grip, StoryButton, StoryData, StoryHost, StoryOutput, ToolStory, story, tool_story};
 use egui::{Color32, Ui, vec2};
 use std::hash::{DefaultHasher, Hash as _, Hasher as _};
 
@@ -246,12 +246,16 @@ fn connector_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     format!("{:?}", connectors.items).hash(&mut hasher);
     let muted = craft_ui::style::rgba_color(Env::of(ui).tokens.color.text.muted);
     let picture = board_picture(ui, &targets, &lines, muted, hasher.finish());
-    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, _: &mut ConnectorKept, connectors: &Connectors| {
-        let index = connectors.selected?;
-        let mut item = connectors.items.get(index)?.clone();
-        let shown = ConnectorHandles::new("Connector", Bind::bound(&mut item), &targets).show_at(ui, at);
-        let edits: Vec<EditKind> = shown.edit.events.iter().filter_map(EditKind::of).collect();
-        Some((index, item, shown.event, edits))
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, kept: &mut ConnectorKept, connectors: &mut Connectors, host: &StoryHost| {
+        let selected = connectors.selected.and_then(|index| Some((index, connectors.items.get(index)?.clone())));
+        let handles = selected.map(|(index, mut item)| {
+            let shown = ConnectorHandles::new("Connector", Bind::bound(&mut item), &targets).show_at(ui, at);
+            let edits: Vec<EditKind> = shown.edit.events.iter().filter_map(EditKind::of).collect();
+            (index, item, shown.event, edits)
+        });
+        kept.tool.targets(&targets).routing(routing);
+        let _ = host.run(ui, &mut kept.tool);
+        handles
     };
     tool_story(
         ui,
@@ -284,8 +288,6 @@ fn connector_tool(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
                     .or(kept.note.take());
                 output.edits = edits;
             }
-            kept.tool.targets(&targets).routing(routing);
-            let _ = run.host.run(&mut kept.tool);
             for event in kept.tool.take_events() {
                 let ConnectorEvent::Draw(edit) = event else { continue };
                 output.edits.extend(EditKind::of(&edit));

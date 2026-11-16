@@ -2,7 +2,7 @@
 //! story keeps, as an app runs it.
 
 use crate::buttons::Button;
-use crate::canvas::{Canvas, CanvasOutput, CanvasTool, RasterSource, ToolHost, ToolHostResponse, ToolInput};
+use crate::canvas::{Canvas, CanvasTool, RasterSource, ToolHost, ToolHostResponse, ToolInput, ToolPass, tool_pass};
 use crate::contract::{BodyCx, Gap, Props as _, Show as _, ShowContainer as _, clicked};
 use crate::layout_components::{Row, Stack};
 use crate::runtime::{frame, pointer};
@@ -209,37 +209,35 @@ struct Playing {
     sent: usize,
 }
 
-/// One pass of a tool story, after the canvas showed: the kept tool, the kept document, what the body's controls
-/// reported, and the host that runs a tool on this pass's canvas.
+/// One pass of a tool story, after the canvas showed: the kept tool, the kept document, what the body reported and
+/// the story button pressed. The story applies the tool's events and its buttons' edits to the document here.
 #[non_exhaustive]
 pub struct ToolRun<'a, T, D, R> {
     /// The tool, kept across passes.
     pub tool: &'a mut T,
     /// The document the tool edits, kept across passes as the story's value `"document"`.
     pub document: &'a mut D,
-    /// What the body returned in the drawing pass: the outputs of the document's canvas controls.
+    /// What the body returned in the drawing pass: the outputs of the document's canvas controls and what the tool
+    /// reported.
     pub shown: Option<R>,
     /// The view the canvas showed.
     pub view: CanvasView,
     /// The story button ([`ToolStory::buttons`]) pressed this pass.
     pub pressed: Option<&'static str>,
-    /// Runs a tool on the canvas.
-    pub host: StoryHost<'a>,
 }
 
-/// The tool host of a tool story's canvas for one pass.
-pub struct StoryHost<'a> {
-    ui: &'a Ui,
-    /// `None` in the stage's measuring run, which shows no canvas.
-    canvas: Option<&'a CanvasOutput>,
+/// The tool host of a tool story's canvas body for one pass: the body runs its tool through it after the canvas
+/// controls and before what shows the tool's state.
+pub struct StoryHost {
+    /// `None` in a measuring run, where no tool runs.
+    pass: Option<ToolPass>,
 }
 
-impl StoryHost<'_> {
-    /// Runs `tool` as the canvas's active tool, as an app's [`ToolHost::run`] does. In the stage's measuring run there
-    /// is no canvas and the tool does not run; the story still returns its readout from the tool's state, so the card
-    /// measures the readout line.
-    pub fn run(&self, tool: &mut dyn CanvasTool) -> ToolHostResponse {
-        self.canvas.map_or_else(ToolHostResponse::default, |canvas| ToolHost::new().run(self.ui, canvas, tool))
+impl StoryHost {
+    /// Runs `tool` as the canvas's active tool, as an app's [`ToolHost::run`] does in its canvas body. In a measuring
+    /// run the tool does not run and the response is empty.
+    pub fn run(&self, ui: &Ui, tool: &mut dyn CanvasTool) -> ToolHostResponse {
+        self.pass.as_ref().map_or_else(ToolHostResponse::default, |pass| ToolHost::new().run(ui, pass, tool))
     }
 }
 
@@ -251,18 +249,19 @@ pub fn story_tool<T: 'static>(data: &mut StoryData, tool: impl FnOnce() -> T) ->
 
 /// Shows a tool live on the canvas `story` over the stage of `ui`. The tool `tool` makes is kept as a note of `data`
 /// (a note: Reset and the runner's drives compare values, and a tool's state in a gesture is no value); `document`
-/// is kept as the value `"document"`, so Reset puts it back. Each pass `body` shows the document's canvas controls at
-/// the canvas rect from the tool and the document (a tool whose pass shows its own controls shows them here), and `run` runs the tool through [`ToolRun::host`] and applies what it reported
-/// to the document, as the app does, returning the story's output with its readout. The story's buttons show in a row
-/// under the canvas: with [`ToolStory::play`] first a Play button, which sends the script's steps as they fall due,
-/// one run at a time.
+/// is kept as the value `"document"`, so Reset puts it back. Each pass `body` is the canvas body, as an app's is: it
+/// shows the document's canvas controls at the canvas rect from the tool and the document (a tool whose pass shows its
+/// own controls shows them here), then runs the tool through the [`StoryHost`], then shows what reads the tool's state.
+/// After the canvas, `run` applies what the tool and the story buttons reported to the document, as the app does,
+/// returning the story's output with its readout. The story's buttons show in a row under the canvas: with
+/// [`ToolStory::play`] first a Play button, which sends the script's steps as they fall due, one run at a time.
 pub fn tool_story<T: 'static, D: Value, R>(
     ui: &mut Ui,
     data: &mut StoryData,
     story: ToolStory<'_>,
     tool: impl FnOnce() -> T,
     document: D,
-    mut body: impl FnMut(&mut Ui, Rect, &CanvasView, &mut T, &D) -> R,
+    mut body: impl FnMut(&mut Ui, Rect, &CanvasView, &mut T, &mut D, &StoryHost) -> R,
     run: impl FnOnce(ToolRun<'_, T, D, R>) -> StoryOutput,
 ) -> StoryOutput {
     let kept = story_tool(data, tool);
@@ -276,7 +275,8 @@ pub fn tool_story<T: 'static, D: Value, R>(
         let canvas = Canvas::new(story.label).document(Size::new(f64::from(size.width), f64::from(size.height))).view(view);
         let shown = canvas.show_at(ui, rect, |ui, body_cx| {
             super::canvas_story::show_document(ui, body_cx.rect, story.picture);
-            body(ui, body_cx.rect, &view, &mut kept.borrow_mut(), &*document)
+            let host = StoryHost { pass: tool_pass(&body_cx.env) };
+            body(ui, body_cx.rect, &view, &mut kept.borrow_mut(), &mut *document, &host)
         });
         (shown, view)
     };
@@ -302,7 +302,7 @@ pub fn tool_story<T: 'static, D: Value, R>(
         let Some(shown) = stage.inner else {
             let view = story.view_of(room, pixels_per_point);
             let mut tool = kept.borrow_mut();
-            return run(ToolRun { tool: &mut tool, document, shown: None, view, pressed: None, host: StoryHost { ui, canvas: None } });
+            return run(ToolRun { tool: &mut tool, document, shown: None, view, pressed: None });
         };
         shown
     };
@@ -327,7 +327,7 @@ pub fn tool_story<T: 'static, D: Value, R>(
     }
     let output = {
         let mut tool = kept.borrow_mut();
-        run(ToolRun { tool: &mut tool, document, shown: shown.inner, view, pressed, host: StoryHost { ui, canvas: Some(&shown.output) } })
+        run(ToolRun { tool: &mut tool, document, shown: shown.inner, view, pressed })
     };
     *data.note::<Option<Playing>>("play", None) = playing;
     output

@@ -4,7 +4,7 @@
 
 use super::{Marquee, MarqueeLook};
 use crate::canvas::testing::canvas_story::{StoryDocument, on_canvas};
-use crate::canvas::testing::tool_story::{ToolStory, tool_story};
+use crate::canvas::testing::tool_story::{StoryHost, ToolStory, tool_story};
 use crate::canvas::{CanvasTool, ToolAction, ToolContext, ToolPath, ToolPointer};
 use crate::canvas_controls::StraightLinePreview;
 use crate::contract::Show as _;
@@ -151,13 +151,12 @@ impl CanvasTool for StrokePass<'_> {
 #[story(StraightLinePreview, covers = [], drive = Drive::Never)]
 fn strokes(ui: &mut Ui, data: &mut StoryData) -> StoryOutput {
     let document = StoryDocument::STANDARD;
-    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut StrokeTool, strokes: &Strokes| {
+    // The preview shows the tool's state, so the tool runs first.
+    let body = |ui: &mut Ui, at: egui::Rect, _: &CanvasView, tool: &mut StrokeTool, strokes: &mut Strokes, host: &StoryHost| {
+        let _ = host.run(ui, &mut StrokePass { tool: &mut *tool, strokes: &mut *strokes });
         if let Some((from, to)) = tool.straight_line(strokes) {
             let _ = StraightLinePreview::new("Straight line", from, to).show_at(ui, at);
         }
     };
-    tool_story(ui, data, ToolStory::new("Document", &document), StrokeTool::default, Strokes::new(), body, |run| {
-        let _ = run.host.run(&mut StrokePass { tool: &mut *run.tool, strokes: &mut *run.document });
-        StoryOutput::default()
-    })
+    tool_story(ui, data, ToolStory::new("Document", &document), StrokeTool::default, Strokes::new(), body, |_| StoryOutput::default())
 }
