@@ -180,10 +180,11 @@ pub struct ScrollBarLook {
     pub track: Stateful<StyleColor>,
     /// The thumb fill per state.
     pub thumb: Stateful<StyleColor>,
-    /// The bar's thickness: its track, and its thumb under the pointer or while pressed.
+    /// The bar's thickness: its track, and its thumb at its widest.
     pub thickness: f32,
-    /// The thumb's thickness at rest.
-    pub rest: f32,
+    /// The thumb's thickness per state: thin at rest along the track's outer edge, the bar's thickness under the
+    /// pointer or while pressed.
+    pub thumb_width: Stateful<f32>,
     /// The shortest the thumb gets along the bar.
     pub min_thumb: f32,
     /// The length of the fade at an edge past which content is hidden.
@@ -206,11 +207,12 @@ pub(crate) fn scroll_bar_look(tokens: &UiTokens) -> ScrollBarLook {
     ));
     let hover = style_color(c.state.hover);
     let track = Stateful::new(clear).off(craft_theme::States::new(clear, hover, hover, clear));
+    let (thickness, rest) = (tokens.size.handle.sm, tokens.stroke.thick);
     ScrollBarLook {
         track,
         thumb,
-        thickness: tokens.size.handle.sm,
-        rest: tokens.stroke.thick,
+        thickness,
+        thumb_width: Stateful::new(rest).off(craft_theme::States::new(rest, thickness, thickness, rest)),
         min_thumb: min_thumb(tokens),
         fade: tokens.size.scroll_fade,
     }

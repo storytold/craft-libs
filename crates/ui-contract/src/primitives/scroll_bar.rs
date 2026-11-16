@@ -85,13 +85,11 @@ impl ScrollBar {
     }
 
     /// The shapes of the bar in `track` along `axis` for `span`, in `state` (the bar's: hovered while the pointer is
-    /// anywhere on it): the track and the fully round thumb. At rest the thumb is `look.rest` thick along the track's
-    /// outer edge (its bottom, or its end side in the reading direction) and the track is clear; hovered or pressed
-    /// the thumb fills the track's thickness.
+    /// anywhere on it): the track and the fully round thumb, `look.thumb_width` thick along the track's outer edge (its
+    /// bottom, or its end side in the reading direction).
     pub fn shapes(look: &ScrollBarLook, track: Rect, axis: Axis, rtl: bool, span: &ScrollSpan, state: &StateSet) -> Vec<Shape> {
         let full = Self::thumb(look.min_thumb, track, axis, rtl, span);
-        let lit = matches!(state.state, craft_theme::State::Hover | craft_theme::State::Pressed);
-        let thumb = if lit { full } else { Self::resting(full, look.rest, axis, rtl) };
+        let thumb = Self::along_edge(full, state.resolve(&look.thumb_width), axis, rtl);
         let round = |rect: Rect| CornerRadius::from(rect.width().min(rect.height()) / 2.0);
         vec![
             Shape::rect_filled(track, round(full), state.resolve(&look.track).egui()),
@@ -99,14 +97,14 @@ impl ScrollBar {
         ]
     }
 
-    /// The resting thumb: `rest` thick along the outer edge of the full thumb `full`.
-    fn resting(full: Rect, rest: f32, axis: Axis, rtl: bool) -> Rect {
+    /// The thumb `width` thick along the outer edge of the full thumb `full`, at most `full`.
+    fn along_edge(full: Rect, width: f32, axis: Axis, rtl: bool) -> Rect {
         let side = if axis == Axis::X { RectSide::Bottom } else { RectSide::end(rtl) };
-        let rest = rest.min(if axis == Axis::X { full.height() } else { full.width() });
+        let width = width.min(if axis == Axis::X { full.height() } else { full.width() });
         match side {
-            RectSide::Bottom => Rect::from_min_max(pos2(full.min.x, full.max.y - rest), full.max),
-            RectSide::Left => Rect::from_min_max(full.min, pos2(full.min.x + rest, full.max.y)),
-            _ => Rect::from_min_max(pos2(full.max.x - rest, full.min.y), full.max),
+            RectSide::Bottom => Rect::from_min_max(pos2(full.min.x, full.max.y - width), full.max),
+            RectSide::Left => Rect::from_min_max(full.min, pos2(full.min.x + width, full.max.y)),
+            _ => Rect::from_min_max(pos2(full.max.x - width, full.min.y), full.max),
         }
     }
 }

@@ -7,7 +7,7 @@ use crate::contract::Show as _;
 use crate::rails::tool::stories::{StoryTools, tools};
 use crate::runtime::commands::CommandState;
 use crate::testing::pointer::{moved, wheel};
-use crate::testing::relations::{above, grows_with};
+use crate::testing::relations::{above, centred_across, grows_with, on_one_line};
 use crate::testing::{Fixture, trial};
 use egui::{Rect, Shape, Vec2};
 use std::cell::Cell;
@@ -134,9 +134,9 @@ fn a_tool_rail_centres_its_buttons_in_its_columns_and_keeps_its_toggles_on_one_l
         }
         let (first, last) = (rect(&fixture, "Move"), rect(&fixture, if columns == 1 { "Move" } else { "Brush" }));
         let grid = first.union(last);
-        assert!((grid.center().x - rail.center().x).abs() < 0.5, "{columns} columns: the buttons are centred: {grid:?} in {rail:?}");
+        assert!(centred_across(grid, rail), "{columns} columns: the buttons are centred: {grid:?} in {rail:?}");
         let (toggle, side) = (rect(&fixture, "Toolbar"), rect(&fixture, "Move Toolbar"));
-        assert!((toggle.center().y - side.center().y).abs() < 0.5, "the toggles share a line: {toggle:?} and {side:?}");
+        assert!(on_one_line(toggle, side), "the toggles share a line: {toggle:?} and {side:?}");
         assert!(above(toggle, first), "the toggles are above the buttons");
     }
 }

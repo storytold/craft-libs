@@ -36,6 +36,16 @@ pub fn same_column(a: Rect, b: Rect) -> bool {
     aligned_left(a, b) && (a.width() - b.width()).abs() <= EPS
 }
 
+/// `a` and `b` share a horizontal centre.
+pub fn centred_across(a: Rect, b: Rect) -> bool {
+    (a.center().x - b.center().x).abs() <= EPS
+}
+
+/// `a` and `b` share a vertical centre: they stand on one line.
+pub fn on_one_line(a: Rect, b: Rect) -> bool {
+    (a.center().y - b.center().y).abs() <= EPS
+}
+
 /// `inner` lies within `outer`.
 pub fn inside(inner: Rect, outer: Rect) -> bool {
     inner.min.x >= outer.min.x - EPS && inner.min.y >= outer.min.y - EPS && inner.max.x <= outer.max.x + EPS && inner.max.y <= outer.max.y + EPS

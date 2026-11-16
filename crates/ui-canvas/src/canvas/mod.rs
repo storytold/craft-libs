@@ -164,7 +164,9 @@ pub struct Canvas<'a> {
     /// disabled for it, and so is each command whose fact the target lacks.
     #[prop(into)]
     document: Option<ViewTarget>,
-    /// The bounds Fit Layers on Screen shows ([`layer_bounds`](Self::layer_bounds)).
+    /// The bounds Fit Layers on Screen shows, asked only in the pass that runs the command. Without it Fit Layers is
+    /// disabled for this canvas.
+    #[prop]
     layer_bounds: Option<LayerBounds<'a>>,
     /// The user's navigation options: how the wheel and a pinch move the view ([`WheelNavigation`]), whether a zoom
     /// eases (Animated Zoom) and whether the view may leave the document (Overscroll).
@@ -273,14 +275,6 @@ impl<'a> Canvas<'a> {
     pub fn view(mut self, view: impl Into<Bind<'a, CanvasView>>) -> Self {
         self.view = Some(view.into());
         self.props.scroll_owner = true;
-        self
-    }
-
-    /// The bounds Fit Layers on Screen shows, asked only in the pass that runs the command. Without it Fit Layers is
-    /// disabled for this canvas.
-    #[must_use]
-    pub fn layer_bounds(mut self, bounds: LayerBounds<'a>) -> Self {
-        self.layer_bounds = Some(bounds);
         self
     }
 
