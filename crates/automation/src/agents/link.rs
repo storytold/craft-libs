@@ -174,7 +174,7 @@ impl AgentLink {
         if self.applied.as_ref().is_some_and(|applied| applied.as_ref() == want) && !retry_due {
             return update;
         }
-        let before = (self.status.clone(), self.applied.clone());
+        let before = (self.status.clone(), self.applied.clone().flatten());
         self.applied = Some(want.cloned());
         self.retry_at = None;
         self.status.problem = None;
@@ -182,7 +182,7 @@ impl AgentLink {
             self.status.problem = Some(problem);
         }
         self.status.port = self.running.as_ref().map(|r| r.server.addr.port());
-        update.changed = (&self.status, &self.applied) != (&before.0, &before.1);
+        update.changed = self.status != before.0 || want != before.1.as_ref();
         update
     }
 
