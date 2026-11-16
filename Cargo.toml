@@ -210,6 +210,8 @@ craft-zip = { path = "crates/zip" }
 craft-y4m = { path = "crates/y4m" }
 craft-sniff = { path = "crates/sniff" }
 craft-tar = { path = "crates/tar" }
+craft-format = { path = "crates/format" }
+craft-mcp-server = { path = "crates/mcp-server" }
 craft-epub = { path = "crates/epub" }
 craft-ews = { path = "crates/ews" }
 craft-video = { path = "crates/video" }
