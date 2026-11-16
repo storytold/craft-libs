@@ -238,6 +238,56 @@ impl StudioDirector {
     /// 3. Shading, lighting pass, texture layers, and atmosphere (PhotoCraft)
 
     /// Generates a realistic or stylized human character subject conforming to anatomical canon.
+
+    /// Plans a composite dual-style character (e.g. half photoreal, half Pixar 3D).
+    pub fn plan_dual_style_split_character(
+        &mut self,
+        prompt: &str,
+        style_left: AestheticStyle,
+        style_right: AestheticStyle,
+        split_axis_ratio: f32, // 0.5 for vertical middle split
+    ) -> Vec<AppCommandDispatch> {
+        vec![
+            AppCommandDispatch {
+                target_app: "cadcraft".into(),
+                tool_name: "setup_perpendicular_wall_walk_rig".into(),
+                parameters: serde_json::json!({
+                    "surface_plane": "wall_vertical_yz",
+                    "gravity_vector": [0.0, -1.0, 0.0],
+                    "contact_plane_angle_deg": 90.0,
+                    "character_pose": "walking_on_wall_stride",
+                    "camera_angle": "side_profile_dramatic_low"
+                }),
+                order: 1,
+            },
+            AppCommandDispatch {
+                target_app: "photocraft".into(),
+                tool_name: "render_dual_style_composite".into(),
+                parameters: serde_json::json!({
+                    "prompt": prompt,
+                    "left_style": format!("{style_left:?}"),
+                    "right_style": format!("{style_right:?}"),
+                    "split_line_x": split_axis_ratio,
+                    "split_transition": "energy_seam_glow",
+                    "left_shader": "photoreal_sss",
+                    "right_shader": "pixar_3d_pbr"
+                }),
+                order: 2,
+            },
+            AppCommandDispatch {
+                target_app: "anicraft".into(),
+                tool_name: "animate_wall_walk_stride_cycle".into(),
+                parameters: serde_json::json!({
+                    "stride_length_cm": 75.0,
+                    "step_duration_secs": 0.5,
+                    "feet_contact_magnetism": "vertical_wall",
+                    "cloth_and_hair_gravity": [0.0, -1.0, 0.0]
+                }),
+                order: 3,
+            },
+        ]
+    }
+
     pub fn synthesize_human_subject(
         &mut self,
         anatomy: &HumanAnatomySpec,
@@ -562,6 +612,18 @@ mod tests {
 
         let vector_human = director.synthesize_human_subject(&anatomy, AestheticStyle::AnimatedVector, "curious", &env);
         assert_eq!(vector_human[1].target_app, "vectorcraft");
+
+        // Test Dual-Style Wall Walker (Half Photoreal, Half Pixar 3D)
+        let split_walker = director.plan_dual_style_split_character(
+            "Man walking on a vertical city wall, half photorealistic human, half stylized Pixar 3D",
+            AestheticStyle::Photorealistic,
+            AestheticStyle::Cinematic3D,
+            0.50,
+        );
+        assert_eq!(split_walker.len(), 3);
+        assert_eq!(split_walker[0].target_app, "cadcraft");
+        assert_eq!(split_walker[1].target_app, "photocraft");
+        assert_eq!(split_walker[2].target_app, "anicraft");
 
         // Test Autonomous Video Editing
         let video_pipeline = director.edit_video_sequence(vec!["take_1.mp4".into(), "take_2.mp4".into()], 12.0, 120.0, "dynamic_action");
