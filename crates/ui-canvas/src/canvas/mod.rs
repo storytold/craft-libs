@@ -108,7 +108,7 @@ use crate::runtime::focus::KeyUse;
 use crate::runtime::lock_keys;
 use crate::runtime::measure;
 use crate::runtime::motion::{Animate as _, spec};
-use crate::style::{ComponentStyle, StyleCx, SurfaceKind};
+use crate::style::{ComponentStyle, Stateful, StyleCx, SurfaceKind, SurfaceLook};
 use craft_behavior::geometry::crop::normalized_angle;
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{
@@ -136,10 +136,14 @@ pub enum ToolPath {
     Freehand(&'static str),
 }
 
-/// The style of a canvas: its surface comes from `ContainerProps`.
+/// The style of a canvas.
 #[derive(Clone, Debug, Default, PartialEq, ComponentStyle)]
 #[non_exhaustive]
 pub struct CanvasStyle {
+    /// The canvas surface. It paints in the paint step, before the canvas reserves its picture slot, so the picture
+    /// lies on the surface and under every canvas control of the body.
+    #[style(surface)]
+    surface: Option<SurfaceLook>,
     #[style(metrics)]
     metrics: Metrics,
     /// How far the rulers' strips push the view's rect in from the canvas's top-left corner, while they show.
@@ -229,7 +233,7 @@ impl<'a> Canvas<'a> {
     /// A canvas named `label`. The keyboard path of its tool is the tool's own
     /// ([`CanvasTool::command_form`]).
     pub fn new(label: impl Into<Label>) -> Self {
-        let props = ContainerProps::new().surface(SurfaceKind::Canvas).arena(true).sizing(Sizing::Fill).command_scope(ViewCommands::SCOPE);
+        let props = ContainerProps::new().arena(true).sizing(Sizing::Fill).command_scope(ViewCommands::SCOPE);
         Canvas {
             common: Common::new(),
             props,
@@ -582,8 +586,9 @@ impl Component for Canvas<'_> {
     type Output = CanvasOutput;
 
     fn style(cx: &StyleCx<'_>, _: CanvasStyleKey) -> CanvasStyle {
+        let surface = SurfaceLook::new(Stateful::new(cx.color(cx.tokens.color.surface.canvas))).kind(SurfaceKind::Canvas);
         // The rulers' own layout says where the view lies inside them.
-        CanvasStyle { rulers: Rulers::content_rect(cx, Rect::ZERO).min.to_vec2(), ..CanvasStyle::default() }
+        CanvasStyle { surface: Some(surface), rulers: Rulers::content_rect(cx, Rect::ZERO).min.to_vec2(), ..CanvasStyle::default() }
     }
 
     fn sense(&self) -> Sense {
