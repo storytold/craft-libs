@@ -38,6 +38,8 @@ assert_eq!((texture.width(), texture.height(), texture.layout()), (6, 5, Layout:
 let decoded = texture.decode()?;
 ```
 
+`Texture::parse` requires a complete header and nonzero dimensions. `Texture::decode` bounds its output buffer to 1 GiB; use `decode_with_limit(max_bytes)` for an explicit per-buffer budget. Allocation is fallible. This is not a total process memory limit. The `craft-image-codecs` adapter forwards its own existing `Limits::max_alloc` instead of imposing the standalone default.
+
 The block encoder is our own: RGB565 endpoints fitted along each block's principal axis and
 refined by least squares, indices picked against the palette the reader decodes; BC1 turns texels
 under half opacity into its transparent black, and BC3, BC4 and BC5 pick whichever mode of their

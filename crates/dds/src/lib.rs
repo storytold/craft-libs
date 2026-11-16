@@ -75,6 +75,8 @@ pub enum DdsError {
     Encode(String),
     /// An output buffer of this many bytes could not be allocated.
     Alloc(usize),
+    /// The decoded output exceeds the caller-selected per-buffer byte limit.
+    LimitExceeded { required: usize, limit: u64 },
 }
 
 impl fmt::Display for DdsError {
@@ -84,6 +86,7 @@ impl fmt::Display for DdsError {
             DdsError::Unsupported(reason) => write!(f, "unsupported DDS: {reason}"),
             DdsError::Encode(reason) => write!(f, "DDS encode failed: {reason}"),
             DdsError::Alloc(len) => write!(f, "cannot allocate {len} bytes for the texture"),
+            DdsError::LimitExceeded { required, limit } => write!(f, "decoded texture requires {required} bytes, exceeding limit {limit}"),
         }
     }
 }
@@ -383,6 +386,9 @@ fn dx10_encoding(b: &[u8]) -> Result<Encoding, DdsError> {
     }
 }
 
+/// Default per-buffer decoded output budget (1 GiB). This is not a total process memory budget.
+pub const DEFAULT_MAX_DECODE_BYTES: u64 = 1024 * 1024 * 1024;
+
 /// A DDS file whose header has been read: its size and pixel layout are known before
 /// [`Texture::decode`] allocates anything, so a caller can check them against its limits.
 pub struct Texture<'a> {
@@ -413,6 +419,12 @@ impl<'a> Texture<'a> {
         }
         let dx10 = le32(b, 80)? & DDPF_FOURCC != 0 && &le32(b, 84)?.to_le_bytes() == b"DX10";
         let (encoding, start) = if dx10 { (dx10_encoding(b)?, HEADER + DX10_HEADER) } else { (legacy_encoding(b)?, HEADER) };
+        if b.len() < start {
+            return Err(bad("truncated header"));
+        }
+        if width == 0 || height == 0 {
+            return Err(bad("texture dimensions must be nonzero"));
+        }
         Ok(Texture { bytes: b, flags, width, height, encoding, start })
     }
 
@@ -429,19 +441,27 @@ impl<'a> Texture<'a> {
         self.encoding.layout()
     }
 
-    /// The top mip level's pixels in [`Texture::layout`].
+    /// The top mip level's pixels in [`Texture::layout`], bounded by [`DEFAULT_MAX_DECODE_BYTES`].
     pub fn decode(&self) -> Result<Vec<u8>, DdsError> {
+        self.decode_with_limit(DEFAULT_MAX_DECODE_BYTES)
+    }
+
+    /// Decode with an explicit per-buffer output byte budget; allocation remains fallible.
+    pub fn decode_with_limit(&self, max_bytes: u64) -> Result<Vec<u8>, DdsError> {
         let (b, flags, encoding) = (self.bytes, self.flags, self.encoding);
         let (width, height) = (self.width, self.height);
         // The same header field is a total level size for BC, but a row stride when DDSD_PITCH is set.
         let pitch = if flags & DDSD_PITCH != 0 { Some(le32(b, 20)?) } else { None };
         let (row_pitch, size) = encoding.level_layout(width, height, pitch)?;
-        let data = b.get(self.start..).and_then(|d| d.get(..size)).ok_or_else(|| bad(format!("truncated pixel data: {size} bytes needed")))?;
         let (w, h) = (width as usize, height as usize);
         let channels = encoding.layout().channels();
         let row_size = w.checked_mul(channels).ok_or_else(|| bad("pixel size overflow"))?;
         let total = row_size.checked_mul(h).ok_or_else(|| bad("pixel size overflow"))?;
-        let mut pixels = vec![0u8; total];
+        if total as u64 > max_bytes {
+            return Err(DdsError::LimitExceeded { required: total, limit: max_bytes });
+        }
+        let data = b.get(self.start..).and_then(|d| d.get(..size)).ok_or_else(|| bad(format!("truncated pixel data: {size} bytes needed")))?;
+        let mut pixels = alloc_zeroed(total)?;
         match encoding {
             Encoding::Masks { bytes, gray, fields } => decode_masks(Masks { bytes, gray, fields }, data, row_pitch, &mut pixels, row_size),
             Encoding::Bc1 | Encoding::Bc2 | Encoding::Bc3 | Encoding::Bc4 | Encoding::Bc5 => {
@@ -684,6 +704,9 @@ fn half((w, h): (usize, usize)) -> (usize, usize) {
 /// Block compressions take the layout [`DdsCompression::layout`] names (RGBA for BC1 to BC3,
 /// gray for BC4, RGB for BC5); uncompressed textures take every layout.
 pub fn encode(width: u32, height: u32, layout: Layout, pixels: &[u8], options: DdsOptions) -> Result<Vec<u8>, DdsError> {
+    if width == 0 || height == 0 {
+        return Err(encode_err("texture dimensions must be nonzero"));
+    }
     let store = Store::new(options.compression, layout)?;
     let expected = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(layout.channels()));
     if expected != Some(pixels.len()) {

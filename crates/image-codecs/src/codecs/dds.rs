@@ -15,6 +15,9 @@ fn error(e: DdsError) -> CodecError {
         DdsError::Unsupported(reason) => CodecError::unsupported(Format::Dds, reason),
         DdsError::Encode(reason) => CodecError::encode(Format::Dds, reason),
         DdsError::Alloc(len) => CodecError::LimitExceeded(format!("cannot allocate {len} elements for the image")),
+        DdsError::LimitExceeded { required, limit } => {
+            CodecError::LimitExceeded(format!("decoded texture requires {required} bytes, exceeding limit {limit}"))
+        }
         other => CodecError::malformed(Format::Dds, other),
     }
 }
@@ -37,7 +40,7 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let texture = Texture::parse(b).map_err(error)?;
     let layout = channel_layout(texture.layout());
     limits.check(texture.width(), texture.height(), layout, SampleType::U8)?;
-    let pixels = texture.decode().map_err(error)?;
+    let pixels = texture.decode_with_limit(limits.max_alloc).map_err(error)?;
     Image::from_u8(texture.width(), texture.height(), layout, pixels)
 }
 
