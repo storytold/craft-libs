@@ -157,14 +157,14 @@ pub struct DockStyle {
     pub wheel_selects_tabs: bool,
     /// A middle click on a tab closes its panel when the panel is closable.
     pub middle_click_closes_tabs: bool,
-    /// Radius of the corners of a group of the split tree or of a dock column (0: square). The
-    /// group's border follows it, and once its body is drawn the four corners outside the radius
-    /// are painted with [`Self::corner_fill`], so a body that fills its rect (a canvas) is
-    /// rounded too. At most half the group's narrower side. A floating group keeps square
-    /// corners: what is behind it is not known.
+    /// Radius of the corners of a group of the split tree (0: square). The group's border follows
+    /// it, and once its body is drawn the four corners outside the radius are painted with
+    /// [`Self::corner_fill`], so a body that fills its rect (a canvas) is rounded too. At most
+    /// half the group's narrower side. The groups of a dock column (stacked flush on the column's
+    /// [`Self::background`]), of an iconic flyout and of a floating window keep square corners.
     pub corner_radius: f32,
-    /// The color around the groups, painted over their corners outside [`Self::corner_radius`]:
-    /// the color the host paints behind the dock (`panel_fill`).
+    /// The color around the groups of the split tree, painted over their corners outside
+    /// [`Self::corner_radius`]: the color the host paints behind the dock (`panel_fill`).
     pub corner_fill: Color32,
 }
 

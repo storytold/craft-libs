@@ -187,11 +187,12 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
     }
 
     /// [`crate::docking::DockStyle::corner_radius`] for a group of `kind` at `rect`, in whole
-    /// points as egui rounds it: 0 for a floating group, at most half the narrower side.
+    /// points as egui rounds it: 0 but for a group of the split tree (`Frame`), at most half the
+    /// narrower side.
     fn corner_radius(&self, rect: Rect, kind: GroupKind) -> u8 {
         let wanted = self.style.corner_radius;
         // Also 0 for a NaN radius and for a rect that is not finite.
-        if matches!(kind, GroupKind::Floating { .. }) || wanted.is_nan() || wanted <= 0.0 || !rect.is_finite() {
+        if kind != GroupKind::Frame || wanted.is_nan() || wanted <= 0.0 || !rect.is_finite() {
             return 0;
         }
         let most = (rect.width().min(rect.height()) / 2.0).clamp(0.0, f32::from(u8::MAX));
