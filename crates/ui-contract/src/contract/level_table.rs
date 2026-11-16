@@ -99,7 +99,6 @@ pub(super) const SURFACES: &[(&str, &str, Surface)] = &[
     ("craft_ui", "DocumentWindow", Own),
     ("craft_ui", "FalloffPreview", Canvas),
     ("craft_ui", "FloatingGroup", Own),
-    ("craft_ui", "Flyout", Own),
     ("craft_ui", "FlyoutButton", Chrome),
     ("craft_ui", "FormDialog", Own),
     ("craft_ui", "FormatOptionsDialog", Own),

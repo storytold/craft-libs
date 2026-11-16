@@ -1436,8 +1436,15 @@ note = "Constructed with `TransformRow::new(state, skew_v)`; the type is `#[non_
 [[type]]
 name = "BarGroups"
 old = "craft_draw::ui::BarGroups"
+new = ""
+status = "removed"
+note = "Replaced by `TransformGroups`."
+
+[[type]]
+name = "TransformGroups"
+old = ""
 new = "craft_draw::ui::TransformGroups"
-status = "moved"
+status = "replaced"
 note = "`#[non_exhaustive]`: start from `TransformGroups::ALL` and clear fields. The panel form leaves out the rows of hidden groups."
 
 [[type]]

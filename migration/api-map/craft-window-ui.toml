@@ -19,7 +19,7 @@ name = "DocumentWindow"
 old = ""
 new = "craft_ui::shell::DocumentWindow"
 status = "replaced"
-note = "craft_window::Viewports::show plus a container per document: one DocumentWindow for each entry of the WindowList, on Mount::Viewport with WindowSpec::document(). `in_list(&mut WindowList<T>, WindowId)` makes the window the list's active one when it gains OS focus (the old `WindowEvent::Focused`); `overlay(FnOnce(Overlay) -> Overlay)` changes the fallback layer; `remember(SaveKey::named(..))` keeps a placement for each document."
+note = "craft_window::Viewports::show plus a container per document: one DocumentWindow for each entry of the WindowList, on Mount::Viewport with WindowSpec::document(). `in_list(&mut WindowList<T>, WindowId)` makes the window the list's active one when it gains OS focus (the old `WindowEvent::Focused`); `overlay(FnOnce(Overlay) -> Overlay)` changes the fallback layer; `remember(SaveKey::named(..))` keeps a placement for each document. Zoom-to-window sizing: in the pass a zoom edit changed the view, the window's body calls `DocumentWindow::wrap_in(cx, canvas_rect, wanted)` with `wanted = zoom::wrapped_canvas(..)`. The window takes that size between its own minimum (`overlay(|o| o.size_limits(..))`) and the monitor's work area, about its centre, and reports `DocumentWindowOutput::wrapped`: `Some(Wrapped::Fits)` (centre the document) or `Some(Wrapped::Capped)` (keep the zoomed spot); `None` without OS windows, when maximised or full screen, or before the window reports its facts."
 
 [[type]]
 name = "Viewports"

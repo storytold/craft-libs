@@ -11,21 +11,21 @@ new_module = "craft_dialogs::ui"
 name = "FileListPicker"
 old = "craft_dialogs::ui::FileListPicker"
 new = "craft_ui::patterns::form_dialogs::FileListPicker"
-status = "same"
+status = "moved"
 note = "A pattern over one `List<usize>`: `FileListPicker::new(label, Bind<FileList>)` with `request`, `folder_mode`, `open_files`, `folder_files` and `info` as props. `show(ui) -> FileListPickerOutput`. The ticket of Browse is kept in the picker's container; Delete and Backspace remove the selected file and Alt+Up and Alt+Down move it (the list's contract keys). Folder mode is the same list over the folder's files with no selection. The buttons sit under the list, not beside it."
 
 [[type]]
 name = "FileList"
 old = "craft_dialogs::ui::FileList"
 new = "craft_ui::patterns::form_dialogs::FileList"
-status = "same"
+status = "moved"
 note = "`#[non_exhaustive]`: build it with `FileList::default()` and set the fields. `problem` takes `&FileListWords`."
 
 [[type]]
 name = "FileListMode"
 old = "craft_dialogs::ui::FileListMode"
 new = "craft_ui::patterns::form_dialogs::FileListMode"
-status = "same"
+status = "moved"
 note = "`#[non_exhaustive]`."
 
 [[type]]

@@ -623,13 +623,6 @@ status = "replaced"
 note = "`capped(size, &monitor, frame, min) -> Vec2`: `size` at least `min` and at most the monitor's work area less the window's `frame`, in points; the cap wins over the minimum. `DocumentWindow::wrap_in` sizes the window with it."
 
 [[type]]
-name = "DocumentWindow"
-old = ""
-new = "craft_ui::shell::DocumentWindow"
-status = "replaced"
-note = "Zoom-to-window sizing: in the pass a zoom edit changed the view, the window's body calls `DocumentWindow::wrap_in(cx, canvas_rect, wanted)` with `wanted = zoom::wrapped_canvas(..)`. The window takes that size between its own minimum (`overlay(|o| o.size_limits(..))`) and the monitor's work area, about its centre, and reports `DocumentWindowOutput::wrapped`: `Some(Wrapped::Fits)` (centre the document) or `Some(Wrapped::Capped)` (keep the zoomed spot); `None` without OS windows, when maximised or full screen, or before the window reports its facts. The rest of the type is in `craft-window-ui.toml`."
-
-[[type]]
 name = "ToolPill"
 old = "craft_ui::canvas::tool_pill::ToolPill"
 new = ""
@@ -723,12 +716,6 @@ type = "SplitViews"
 old = "first(usize)"
 new = ""
 note = "The body shows the panes in the order of `SplitAt::placed`; pane 0 is the top start corner."
-
-[[setter]]
-type = "SplitViews"
-old = ""
-new = "count(usize)"
-note = "The documents a tile arrangement shows, one pane each."
 
 [[setter]]
 type = "SplitViews"

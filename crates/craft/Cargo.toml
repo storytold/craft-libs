@@ -213,7 +213,6 @@ screen-testing = [
     "craft-menu?/screen-testing",
     "craft-pages?/screen-testing",
     "craft-print?/screen-testing",
-    "craft-settings?/testing",
     "craft-review?/screen-testing",
     "craft-table?/screen-testing",
     "craft-text?/screen-testing",
@@ -367,7 +366,7 @@ flow = ["dep:craft-flow"]
 font-catalog = ["dep:craft-font-catalog"]
 font-catalog-system = ["font-catalog", "craft-font-catalog/system"]
 
-font-manager = ["dep:craft-font-manager"] # native only: needs craft-font-store's store and network client
+font-manager = ["dep:craft-font-manager"]
 
 font-store = ["dep:craft-font-store"]
 font-store-bundled-index = ["font-store", "craft-font-store/bundled-index"]
@@ -410,7 +409,7 @@ image-codecs-corpus = ["image-codecs", "craft-image-codecs/corpus"]
 image-codecs-heif = ["image-codecs", "craft-image-codecs/heif"]
 image-codecs-sgi = ["image-codecs", "craft-image-codecs/sgi"]
 
-imaging = ["dep:craft-imaging", "keymap"]
+imaging = ["dep:craft-imaging", "color", "keymap"]
 
 indd = ["dep:craft-indd"]
 
@@ -622,7 +621,7 @@ table = ["dep:craft-table", "keymap"]
 
 tcraft = ["dep:craft-tcraft"]
 
-text = ["dep:craft-text"]
+text = ["dep:craft-text", "keymap"]
 text-afrikaans = ["text", "craft-text/afrikaans"]
 text-albanian = ["text", "craft-text/albanian"]
 text-all-languages = ["text", "craft-text/all-languages"]

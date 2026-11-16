@@ -404,7 +404,6 @@ note = "The close action is named by the dialog title row; `closable(false)` rem
 type = "ParamDialog"
 old = "footer_extra(FnMut(&mut Ui) + Send + 'static)"
 new = ""
-status = "removed"
 note = "A footer line is `footer_note(impl Into<Label>)`; footer buttons that keep the dialog open are `extra_buttons(Vec<(String, Label)>)`, reported as `ParamDialogOutput::footer_action`."
 
 [[setter]]
@@ -505,7 +504,6 @@ new = "below(impl Fn(&mut Ui, &DialogFields))"
 type = "ParamDialog"
 old = "footer_extra(impl FnMut(&mut Ui))"
 new = ""
-status = "removed"
 note = "A footer line is `footer_note(impl Into<Label>)`; footer buttons that keep the dialog open are `extra_buttons(Vec<(String, Label)>)`, reported as `ParamDialogOutput::footer_action`."
 
 [[setter]]
