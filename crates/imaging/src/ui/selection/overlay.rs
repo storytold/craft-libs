@@ -153,7 +153,8 @@ pub struct SelectionOverlay<'a> {
     /// pixels each way. 0 counts as 1.
     #[prop(quantity = "reduction")]
     reduction: u32,
-    /// The outline's map, document point to document point; set with [`mapped`](Self::mapped).
+    /// Draws the outline through `map` (a [`PointMap`], bends kept); `None` draws it where it is.
+    #[prop]
     mapped: Option<PointMap<'a>>,
     /// The Selection Preview mode (Color Range's modes, or Quick Mask).
     #[prop]
@@ -181,12 +182,6 @@ impl<'a> SelectionOverlay<'a> {
             quick_mask: QuickMaskLook::default(),
             unit: UnitKind::Pixels,
         }
-    }
-
-    /// Draws the outline through `map` (a [`PointMap`], bends kept); `None` draws it where it is.
-    pub fn mapped(mut self, map: Option<PointMap<'a>>) -> Self {
-        self.mapped = map;
-        self
     }
 
     /// Shows the overlay over `canvas`, the rect of the canvas it is shown in.
