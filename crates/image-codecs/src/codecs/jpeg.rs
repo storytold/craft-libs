@@ -389,6 +389,15 @@ fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>,
 /// truncated or not, are far above this.
 const MAX_PIXELS_PER_BYTE: u64 = 2048;
 
+/// The stored size and EXIF block [`decode`] would find, from the marker segments before the
+/// first scan: the first frame header's size, checked against `limits`, and the APP1 EXIF block.
+pub(crate) fn probe(bytes: &[u8], limits: &Limits) -> Result<(u32, u32, Option<Vec<u8>>), CodecError> {
+    let meta = scan_metadata(bytes);
+    let (w, h, _) = meta.frame.ok_or_else(|| err("no frame header before the image data"))?;
+    limits.check_size(w, h)?;
+    Ok((w, h, meta.exif))
+}
+
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let (end, scan_bytes) = data_end(bytes);
     if end == DataEnd::Empty {
