@@ -1,6 +1,6 @@
 [package]
 name = "craft-audio"
-description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and ALAC decoders and encoders, AC-3/E-AC-3 decoder and encoder, MP3 decoder and encoder, Opus decoder and encoder, MP1/MP2 decoders."
+description = "Audio file I/O and codecs: WAV/AIFF read and write, FLAC encoder, AAC and ALAC decoders and encoders, AC-3/E-AC-3 decoder and encoder, MP3 decoder and encoder, Opus decoder and encoder, Vorbis encoder, MP1/MP2 decoders."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -19,7 +19,7 @@ workspace = true
 # µ-law and free-format MP3 through symphonia.
 decode = ["decode-native", "symphonia"]
 # `decode` without symphonia: only the formats with a native decoder (others are Unsupported).
-decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-decode", "mp3-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log"]
+decode-native = ["aac-decode", "alac-decode", "opus-decode", "ac3-decode", "mpa-decode", "mp3-decode", "craft-media/isobmff", "craft-media/matroska", "craft-media/ogg", "dep:log", "dep:craft-xml"]
 # The symphonia fallback for the formats with no native decoder yet.
 symphonia = ["decode-native", "dep:symphonia"]
 # Every encoder: the lossless file writers and the AAC, ALAC, AC-3/E-AC-3, MP3 and Opus encoders.
@@ -29,15 +29,22 @@ encode = ["lossless-encode", "aac-encode", "alac-encode", "ac3-encode", "eac3-en
 lossless-encode = ["pcm-encode", "flac-encode"]
 # Encode WAV/BWF/RF64 and AIFF/AIFF-C files.
 pcm-encode = []
+# Decode FLAC files and frames natively (`flac::decode`, `flac::Decoder`).
+flac-decode = []
 # Encode FLAC files.
 flac-encode = ["craft-media/bitstream"]
-# Encode Ogg Vorbis files (desktop only: builds the reference libvorbis from its C sources).
-vorbis-encode = ["dep:vorbis_rs"]
+# The pure-Rust Vorbis encoder (`vorbis::encoder`) and Ogg Vorbis files through `encode` and
+# `encode_ogg_vorbis`.
+vorbis-encode = ["craft-media/ogg"]
 # Codec modules on their own, for packet-level use.
 aac-decode = ["craft-media/bitstream"]
 # The AAC encoder (`aac::Encoder`), and AAC in M4A through `encode` and `FileEncoder`.
 aac-encode = ["craft-media/bitstream", "craft-media/isobmff"]
 opus-decode = []
+# QOA (Quite OK Audio) files: decoder and encoder in the `qoa` module, each on its own.
+qoa = ["qoa-decode", "qoa-encode"]
+qoa-decode = []
+qoa-encode = []
 opus-encode = []
 ac3-decode = ["craft-media/bitstream"]
 mpa-decode = ["craft-media/bitstream"]
@@ -60,15 +67,13 @@ serde = ["dep:serde", "craft-media/serde"]
 
 [dependencies]
 craft-media = { workspace = true }
+craft-xml = { workspace = true, optional = true }
 thiserror = { workspace = true }
 serde = { workspace = true, optional = true }
 log = { version = "0.4", optional = true }
 rayon = { workspace = true, optional = true }
 # symphonia keeps its AAC decoder for AAC in CAF, a container craft-media does not read.
 symphonia = { version = "0.6.1", optional = true, default-features = false, features = ["mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-vorbis_rs = { version = "0.5", optional = true }
 
 [dev-dependencies]
 craft-media-testkit = { workspace = true }
@@ -82,6 +87,14 @@ required-features = ["decode", "lossless-encode", "peaks"]
 [[test]]
 name = "codecs"
 required-features = ["decode", "encode"]
+
+[[test]]
+name = "flac_decode"
+required-features = ["flac-decode", "flac-encode"]
+
+[[test]]
+name = "qoa_oracle"
+required-features = ["qoa"]
 
 [[example]]
 name = "info"
