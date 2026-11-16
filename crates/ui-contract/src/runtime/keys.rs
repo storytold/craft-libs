@@ -37,11 +37,11 @@ pub(crate) use intents::lent_taken;
 #[doc(hidden)]
 pub use intents::settle;
 #[doc(hidden)]
-pub use intents::take_cancel;
-#[doc(hidden)]
 pub use intents::take_submit;
 pub use intents::with_window_intents;
-pub(crate) use intents::{Lent, context_part, context_request, give_back, lend, request_context, route_whole_reset, scope_escape, take_window_cancel};
+pub(crate) use intents::{
+    Lent, context_part, context_request, give_back, lend, request_context, route_whole_reset, scope_escape, take_cancel, take_window_cancel,
+};
 pub(crate) use nodes::{redirect_node, register_expanded, register_node};
 pub use route::focus_holds;
 pub(crate) use route::{activated_member, begin, layout_of, owner_at, pasted_text, queue_edit, take_shortcuts};
