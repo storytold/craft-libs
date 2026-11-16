@@ -308,7 +308,7 @@ fn text_attributes(header: &Header) -> Vec<(String, String)> {
     out
 }
 
-fn part_info(index: usize, header: &Header) -> PartInfo {
+pub(crate) fn part_info(index: usize, header: &Header) -> PartInfo {
     let (w, h) = window_size(header.layer_size);
     let display = &header.shared_attributes.display_window;
     let (dw, dh) = window_size(display.size);
