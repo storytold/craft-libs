@@ -71,7 +71,7 @@ pub fn samples_per_block(block_align: usize, channels: usize) -> Option<usize> {
     }
     let header = 4 * channels;
     let body = block_align.checked_sub(header)?;
-    (body > 0 && body.is_multiple_of(4 * channels)).then(|| body / channels * 2 + 1)
+    if body > 0 && body.is_multiple_of(4 * channels) { (body / channels).checked_mul(2)?.checked_add(1) } else { None }
 }
 
 /// Decode one block, appending its samples interleaved by channel to `out`.

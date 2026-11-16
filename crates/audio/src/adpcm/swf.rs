@@ -93,6 +93,9 @@ pub fn decode(data: &[u8], channels: usize) -> Result<Vec<i16>> {
             states.push(State { predictor: i32::from(sample), index });
         }
         'block: for _ in 1..BLOCK_SAMPLES {
+            if r.bits_left() < channels * (bits as usize) {
+                break 'block;
+            }
             for st in states.iter_mut() {
                 match r.read_bits(bits) {
                     Ok(code) => out.push(st.apply(code, bits)),
@@ -125,7 +128,7 @@ pub fn encode(samples: &[i16], channels: usize, bits: u32) -> Result<Vec<u8>> {
             let first = col.first().copied().unwrap_or(0);
             // the index whose first codes follow the signal most closely
             let mut best = (i64::MAX, 0);
-            for index in 0..=88 {
+            for index in 0..=63 {
                 let mut st = State { predictor: i32::from(first), index };
                 let mut err = 0i64;
                 for &s in col.iter().skip(1).take(16) {

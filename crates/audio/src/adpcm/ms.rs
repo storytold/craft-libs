@@ -32,7 +32,9 @@ impl State {
         let sample = clip16(predicted + signed * self.delta);
         self.s2 = self.s1;
         self.s1 = sample;
-        self.delta = ((ADAPT.get(usize::from(nibble)).copied().unwrap_or(256) * self.delta) >> 8).max(16);
+        let adapt = i64::from(ADAPT.get(usize::from(nibble)).copied().unwrap_or(256));
+        let new_delta = (adapt * i64::from(self.delta)) >> 8;
+        self.delta = (new_delta.min(i32::MAX as i64) as i32).max(16);
         sample as i16
     }
 
@@ -56,7 +58,7 @@ pub fn samples_per_block(block_align: usize, channels: usize) -> Option<usize> {
     }
     let body = block_align.checked_sub(7 * channels).filter(|&b| b > 0)?;
     // codes pair up across channels
-    Some(body * 2 / channels + 2)
+    body.checked_mul(2).map(|b| b / channels + 2)
 }
 
 /// Decode one block, appending its samples interleaved by channel to `out`.

@@ -470,8 +470,8 @@ fn flash_adpcm_matches_ffmpeg_in_both_directions() {
         ffmpeg(&ff, &["-i", &s(&file), "-f", "s16le", "-acodec", "pcm_s16le", &s(&back)]);
         let theirs = read_pcm(&back);
         let ours: Vec<i16> = tags.iter().flat_map(|t| swf::decode(t, channels).expect("decode")).collect();
-        let n = ours.len().min(theirs.len());
-        assert!(n >= 4096 * 3 * channels - 8192, "{n} samples");
+        assert_eq!(ours.len(), 4096 * 3 * channels);
+        assert_eq!(theirs.len(), 4096 * 3 * channels);
         let alt: Vec<i16> = tags.iter().flat_map(|t| alt_swf_decode(t, channels)).collect();
         same_as_either(&format!("swf {channels}ch"), &ours, &alt, &theirs);
         // ffmpeg decodes ours, one 4096-sample stream per tag
@@ -483,8 +483,8 @@ fn flash_adpcm_matches_ffmpeg_in_both_directions() {
             let back = dir.join(format!("our_swf{channels}_{bits}.pcm"));
             ffmpeg(&ff, &["-i", &s(&file), "-f", "s16le", "-acodec", "pcm_s16le", &s(&back)]);
             let theirs = read_pcm(&back);
-            let n = ours.len().min(theirs.len());
-            assert!(n >= 4096 * 3 * channels - 8192, "{bits} bits: {n} samples");
+            assert_eq!(ours.len(), 4096 * 3 * channels);
+            assert_eq!(theirs.len(), 4096 * 3 * channels);
             let alt: Vec<i16> = tags.iter().flat_map(|t| alt_swf_decode(t, channels)).collect();
             same_as_either(&format!("swf {channels}ch {bits} bits, our stream"), &ours, &alt, &theirs);
         }
