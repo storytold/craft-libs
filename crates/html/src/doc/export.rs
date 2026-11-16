@@ -46,10 +46,17 @@ fn align_css(a: Option<Align>) -> Option<&'static str> {
     }
 }
 
-fn text_html(t: &str, at_start: bool) -> String {
+/// `at_start`/`at_end`: `t` begins or ends the paragraph's visible text, where a browser collapses a
+/// plain space, so the space there is written as `&nbsp;` instead. The pair covers the two paragraph
+/// ends only: a line break's own two sides are handled inside one `t` (see the space arm below), not
+/// across inlines. "Visible" means something a browser paints: a bookmark's empty `<a id>`, a note or
+/// comment mark, a shape's anchor and a field boundary show nothing, so text that only follows a
+/// leading bookmark still starts the paragraph (see [`shows_something`]).
+fn text_html(t: &str, at_start: bool, at_end: bool) -> String {
     let mut o = String::new();
     let mut prev_space = at_start;
-    for c in t.chars() {
+    let mut chars = t.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
             '\n' => {
                 o.push_str("<br>");
@@ -57,12 +64,46 @@ fn text_html(t: &str, at_start: bool) -> String {
                 continue;
             }
             '\t' => o.push_str("<span style=\"white-space:pre\">\t</span>"),
-            ' ' if prev_space => o.push_str("&nbsp;"),
+            // A space before a line break in the same inline would collapse too.
+            ' ' if prev_space || matches!(chars.peek(), Some('\n')) || (at_end && chars.peek().is_none()) => o.push_str("&nbsp;"),
             _ => o.push_str(&esc(&c.to_string())),
         }
         prev_space = c == ' ';
     }
     o
+}
+
+/// Whether an inline puts something on the page. A bookmark writes an empty `<a id>`, a note or
+/// comment writes a mark, and a shape, group or field boundary writes nothing: none of them makes
+/// the text around it interior. A space is visible content — it is exactly the space whose collapse
+/// [`text_html`]'s two flags prevent.
+///
+/// Text that `esc` writes nothing for (`U+000C` and `U+000E`, the control characters it drops) is not
+/// visible either; `craft_flow::clean_text` keeps those characters, so a flow can hold such a run.
+fn shows_something(i: &Inline) -> bool {
+    match i {
+        Inline::Text(t, _) => text_shows(t),
+        Inline::Ruby { base, ruby, .. } => text_shows(base) || text_shows(ruby),
+        Inline::Image(_) | Inline::Figure(_) | Inline::Chart(_) | Inline::Equation { .. } => true,
+        Inline::Field { instr, .. } if model::shows_nothing(instr) => false,
+        Inline::Field { result, .. } | Inline::Control { text: result, .. } => text_shows(result),
+        Inline::Anchor(_)
+        | Inline::AnchorEnd(_)
+        | Inline::Note { .. }
+        | Inline::Comment { .. }
+        | Inline::CommentEnd(_)
+        | Inline::Shape { .. }
+        | Inline::Group { .. }
+        | Inline::FieldStart(_)
+        | Inline::FieldEnd => false,
+    }
+}
+
+/// Whether `t` puts anything on the page. `esc` writes nothing for the two control characters it drops
+/// (`U+000C` and `U+000E`), and `craft_flow::clean_text` keeps them, so a run — text, a ruby's base or
+/// annotation, a field's or control's result — can consist of them alone and show nothing.
+fn text_shows(t: &str) -> bool {
+    t.chars().any(|c| !matches!(c, '\u{000C}' | '\u{000E}'))
 }
 
 /// The tags that carry `f`'s character formatting: what opens them, and what closes them
@@ -122,13 +163,21 @@ fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
 /// Inline spans → HTML.
 pub fn inlines_html(inlines: &[Inline]) -> String {
     let mut o = String::new();
-    for i in inlines.iter() {
+    // The last inline that shows anything: text there ends the paragraph's visible content, so a
+    // trailing space needs `&nbsp;`. Finding it once keeps a paragraph that ends in many bookmarks
+    // linear, where comparing the tail at every inline would be quadratic.
+    let last = inlines.iter().rposition(shows_something);
+    // Whether a visible inline has been written: an `<a id>` shows nothing, so a space after a
+    // leading bookmark is still the paragraph's first.
+    let mut wrote_visible = false;
+    for (n, i) in inlines.iter().enumerate() {
+        let at_start = !wrote_visible;
+        let at_end = last == Some(n);
         match i {
             Inline::Text(t, f) => {
                 let (open, close) = fmt_tags(f);
-                let at_start = o.is_empty();
                 o.push_str(&open);
-                o.push_str(&text_html(t, at_start));
+                o.push_str(&text_html(t, at_start, at_end));
                 for c in close.iter().rev() {
                     o.push_str(c);
                 }
@@ -137,9 +186,8 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             // no alignment or size, so the guide's own attributes stay in the document model.
             Inline::Ruby { base, ruby, fmt } => {
                 let (open, close) = fmt_tags(fmt);
-                let at_start = o.is_empty();
                 o.push_str(&open);
-                o.push_str(&format!("<ruby>{}<rt>{}</rt></ruby>", text_html(base, at_start), text_html(ruby, false)));
+                o.push_str(&format!("<ruby>{}<rt>{}</rt></ruby>", text_html(base, at_start, at_end), text_html(ruby, false, false)));
                 for c in close.iter().rev() {
                     o.push_str(c);
                 }
@@ -167,9 +215,8 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
             Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => {
                 let (open, close) = fmt_tags(fmt);
-                let at_start = o.is_empty();
                 o.push_str(&open);
-                o.push_str(&text_html(result, at_start));
+                o.push_str(&text_html(result, at_start, at_end));
                 for c in close.iter().rev() {
                     o.push_str(c);
                 }
@@ -178,6 +225,9 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             Inline::Figure(alt) | Inline::Chart(craft_flow::Chart { alt, .. }) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
             // MathML, which browsers, Word and LibreOffice show as an equation (#816).
             Inline::Equation { linear, display } => o.push_str(&craft_math::mathml::linear_to_mathml(linear, *display)),
+        }
+        if shows_something(i) {
+            wrote_visible = true;
         }
     }
     o

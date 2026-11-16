@@ -767,3 +767,85 @@ fn hostile_style_sheets_never_panic() {
         let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
     }
 }
+
+fn inline_text(s: &str) -> Inline {
+    Inline::Text(s.to_string(), Fmt::default())
+}
+
+fn bookmark(name: &str) -> Inline {
+    Inline::Anchor(name.to_string())
+}
+
+/// #4811: a space that ends the paragraph's visible text collapses in HTML unless it is `&nbsp;`.
+/// The bookmarks after it show nothing, so it is still the end.
+#[test]
+fn a_trailing_space_before_bookmarks_is_kept() {
+    let one = inlines_html(&[inline_text("Total: "), bookmark("a1")]);
+    assert_eq!(one, "Total:&nbsp;<a id=\"a1\"></a>");
+
+    // The same with many bookmarks after it: exactly one kept space. No time assertion — this
+    // documents the shape of the fix (the last visible inline found once), not a benchmark.
+    let mut many = vec![inline_text("Total: ")];
+    many.extend((0..10_000).map(|i| bookmark(&format!("a{i}"))));
+    let long = inlines_html(&many);
+    assert_eq!(long.matches("&nbsp;").count(), 1, "{}", &long[..40.min(long.len())]);
+    assert!(long.starts_with("Total:&nbsp;<a id=\"a0\"></a>"), "{}", &long[..40.min(long.len())]);
+}
+
+/// The other end: a bookmark at the start shows nothing, so the space after it starts the text.
+#[test]
+fn a_leading_space_after_bookmarks_is_kept() {
+    assert_eq!(inlines_html(&[bookmark("top"), inline_text(" next")]), "<a id=\"top\"></a>&nbsp;next");
+}
+
+/// A text of only spaces is visible content: the space starts the paragraph and is kept, and the
+/// text after it is not treated as the first.
+#[test]
+fn spaces_only_text_is_visible() {
+    assert_eq!(inlines_html(&[bookmark("a"), inline_text(" "), inline_text("b")]), "<a id=\"a\"></a>&nbsp;b");
+}
+
+/// An image is visible, so the space after it is interior and stays a plain one (as before).
+#[test]
+fn image_before_text_keeps_the_space() {
+    let html = inlines_html(&[Inline::Figure("chart".to_string()), inline_text(" next")]);
+    assert_eq!(html, "<img alt=\"chart\"> next");
+}
+
+/// A run that `esc` writes nothing for is not visible content: the space after it still starts the
+/// paragraph, and a trailing one does not become the paragraph's end.
+#[test]
+fn escaped_away_text_is_not_visible() {
+    for invisible in ["\u{000C}", "\u{000E}", "\u{000C}\u{000E}"] {
+        let lead = inlines_html(&[inline_text(invisible), inline_text(" x")]);
+        assert_eq!(lead, "&nbsp;x", "{invisible:?} at the start");
+        let trail = inlines_html(&[inline_text("Total: "), inline_text(invisible)]);
+        assert_eq!(trail, "Total:&nbsp;", "{invisible:?} at the end");
+    }
+    // A tab and a line break are written out, so they stay visible.
+    assert_eq!(inlines_html(&[inline_text("\t"), inline_text(" x")]), "<span style=\"white-space:pre\">\t</span> x");
+    assert_eq!(inlines_html(&[inline_text("\n"), inline_text(" x")]), "<br> x");
+
+    // A field result and a control's text go through the same `text_html`, so they need the same
+    // predicate: a result of only dropped characters shows nothing either.
+    let field = |result: &str| Inline::Field { instr: "REF a".to_string(), result: result.to_string(), fmt: Fmt::default(), locked: false };
+    let control = |text: &str| Inline::Control { control: Box::default(), text: text.to_string(), fmt: Fmt::default() };
+    for result in ["\u{000C}", "\u{000E}"] {
+        assert_eq!(inlines_html(&[field(result), inline_text(" x")]), "&nbsp;x", "field result {result:?} at the start");
+        assert_eq!(inlines_html(&[inline_text("Total: "), field(result)]), "Total:&nbsp;", "field result {result:?} at the end");
+        assert_eq!(inlines_html(&[control(result), inline_text(" x")]), "&nbsp;x", "control text {result:?} at the start");
+        assert_eq!(inlines_html(&[inline_text("Total: "), control(result)]), "Total:&nbsp;", "control text {result:?} at the end");
+    }
+    // A field whose result is real text stays visible.
+    assert_eq!(inlines_html(&[field("7"), inline_text(" x")]), "7 x");
+}
+
+/// A ruby with neither base nor annotation paints nothing, so the space before it still ends the
+/// paragraph; one with either text is visible.
+#[test]
+fn empty_ruby_is_not_visible() {
+    let empty = Inline::Ruby { base: String::new(), ruby: String::new(), fmt: Fmt::default() };
+    assert_eq!(inlines_html(&[inline_text("x "), empty]), "x&nbsp;<ruby><rt></rt></ruby>");
+    let filled = Inline::Ruby { base: String::new(), ruby: "kan".to_string(), fmt: Fmt::default() };
+    assert_eq!(inlines_html(&[inline_text("x "), filled]), "x <ruby><rt>kan</rt></ruby>");
+}
