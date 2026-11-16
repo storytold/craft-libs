@@ -67,21 +67,23 @@ fn split_controls(line: &str) -> (String, Vec<(char, String)>) {
     while let Some(open) = rest.find('{') {
         text.push_str(rest.get(..open).unwrap_or(""));
         let after = rest.get(open + 1..).unwrap_or("");
-        let control = after.split_once('}').and_then(|(body, tail)| {
-            let (name, value) = body.split_once(':')?;
-            let mut chars = name.chars();
-            let c = chars.next().filter(|c| c.is_ascii_alphabetic())?;
-            chars.next().is_none().then(|| (c, value.to_string(), tail))
-        });
-        match control {
-            Some((c, value, tail)) => {
-                controls.push((c, value));
+        // Check the fixed-size control prefix before scanning its body. Invalid opening
+        // braces must not repeatedly scan the same suffix for a closing brace.
+        let name = after.as_bytes().first().copied().filter(u8::is_ascii_alphabetic);
+        if let Some(name) = name.filter(|_| after.as_bytes().get(1) == Some(&b':')) {
+            if let Some((body, tail)) = after.get(2..).and_then(|s| s.split_once('}')) {
+                controls.push((char::from(name), body.to_string()));
                 rest = tail;
-            }
-            None => {
+            } else {
+                // No later control can close either: preserve the entire remaining text.
                 text.push('{');
-                rest = after;
+                text.push_str(after);
+                rest = "";
+                break;
             }
+        } else {
+            text.push('{');
+            rest = after;
         }
     }
     text.push_str(rest);
@@ -205,6 +207,17 @@ mod tests {
         assert_eq!(cue_text("{Y:i}a|b"), "<i>a</i>\n<i>b</i>");
         assert_eq!(cue_text("{c:$0000ff}red"), "<font color=\"#ff0000\">red</font>");
         assert_eq!(cue_text("{f:Arial}{s:20}a & b {x"), "a &amp; b {x");
+    }
+
+    #[test]
+    fn malformed_controls_inside_valid_cues_are_preserved() {
+        for raw in ["{".repeat(32_768), "{y:".repeat(16_384)] {
+            let doc = parse(&format!("{{0}}{{25}}{raw}")).unwrap();
+            assert_eq!(doc.cues.len(), 1);
+            assert_eq!(doc.cues[0].text, raw);
+        }
+        assert_eq!(cue_text("{{y:i}hello"), "<i>{hello</i>");
+        assert_eq!(cue_text("{xx:no}{y:b}hello"), "<b>{xx:no}hello</b>");
     }
 
     #[test]

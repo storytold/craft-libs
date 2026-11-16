@@ -72,8 +72,12 @@ fn text_run(s: &str) -> String {
             if let Some((_, len)) = crate::entity_at(rest) {
                 out.push_str(rest.get(..len).unwrap_or(""));
                 advance = len;
-            } else if let Some((body, _)) = rest.get(1..).and_then(|r| r.split_once(';')).filter(|(b, _)| b.len() <= 8)
-                && let Some(ch) = numeric_reference(body)
+            } else if let Some(body) = rest.get(1..).and_then(|r| {
+                // Numeric entities have at most eight body bytes. Never scan the
+                // unbounded remainder again for each malformed ampersand.
+                let end = r.bytes().take(9).position(|b| b == b';')?;
+                r.get(..end)
+            }) && let Some(ch) = numeric_reference(body)
             {
                 out.push_str(&escape_markup(&ch.to_string()));
                 advance = body.len() + 2;
@@ -239,6 +243,15 @@ mod tests {
         assert_eq!(d.cues[0].end, ms_to_tick(3500));
         assert_eq!(d.cues[1].text, "x A y");
         assert_eq!(d.cues[1].end, last_cue_end(ms_to_tick(4000)));
+    }
+
+    #[test]
+    fn malformed_entities_inside_valid_cues_are_bounded() {
+        let raw = "&".repeat(32_768);
+        let doc = parse(&format!("<SAMI><SYNC Start=0><P>{raw}<SYNC Start=1000><P>&nbsp;")).unwrap();
+        assert_eq!(doc.cues.len(), 1);
+        assert_eq!(doc.cues[0].text, "&amp;".repeat(32_768));
+        assert_eq!(text_run("&#0000065; &#00000065; &#x41; &é;"), "A &amp;#00000065; A &amp;é;");
     }
 
     #[test]
