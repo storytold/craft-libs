@@ -2,16 +2,20 @@
 //! through its [`Pasteboard`] page frames, with the page pictures the app renders through craft-ui's texture
 //! contract ([`ThumbSource`]).
 //!
-//! The view is a canvas: the app runs its [`ToolHost`](craft_ui::canvas::ToolHost) over [`PageViewOutput::canvas`]
-//! with the page tools (Select Text, `HandTool` and `ZoomTool`), then hands the view the host reports back with
+//! The view is a canvas: the app's body runs its [`ToolHost`](craft_ui::canvas::ToolHost) with the page tools
+//! (Select Text, `HandTool` and `ZoomTool`) on the canvas's [`PageBody::pass`], after its canvas controls and before
+//! the overlays that show what the tool did, then hands the view the host reports back with
 //! [`PageViewOutput::adopt`].
 //!
 //! ```ignore
+//! let mut reply = None;
 //! let out = PageView::new("Pages", &doc_pages, &mut view_state, paper).options(LayoutOptions::ACROBAT).show(ui, |ui, body| {
+//!     if let Some(pass) = body.pass {
+//!         reply = Some(ToolHost::new().run(ui, pass, &mut tool));
+//!     }
 //!     TextMarks::new(&body.pages, &marks).show_at(ui, body.rect);
 //! });
-//! let tools = ToolHost::new().run(ui, &out.canvas, &mut tool);
-//! if let Some(view) = tools.view { out.adopt(&mut view_state, &view); }
+//! if let Some(view) = reply.and_then(|reply| reply.view) { out.adopt(&mut view_state, &view); }
 //! ```
 
 mod pictures;
@@ -26,7 +30,8 @@ use crate::layout::{
 use craft_behavior::kurbo::{Point, Rect as DocRect, Size};
 use craft_behavior::{CanvasView, MoveMods, NavMove, PressPhase, WheelNotch, ZoomLadder};
 use craft_ui::canvas::{
-    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, canvas_space,
+    BodyKeys, Canvas, CanvasOutput, CanvasScrollbars, NavigationOptions, PageFrame, PageKey, Pasteboard, PasteboardOutput, ToolPass, canvas_space,
+    tool_pass,
 };
 use craft_ui::contract::{Bind, BodyCx, Held, Props as _, Show as _, ShowContainer as _};
 use craft_ui::primitives::textures::ThumbSource;
@@ -175,13 +180,16 @@ pub struct PageBody<'b> {
     pub pages: &'b [PlacedPage],
     /// The view the canvas shows this pass.
     pub view: CanvasView,
+    /// The canvas's tool input of this pass, which the app's tool host runs on; `None` in a measuring run, where no
+    /// tool runs.
+    pub pass: Option<&'b ToolPass>,
 }
 
 /// What the view did this pass.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct PageViewOutput {
-    /// The canvas this pass, for the app's `ToolHost`, `Rulers` and key handling.
+    /// The canvas this pass, for the app's `Rulers` and key handling.
     pub canvas: CanvasOutput,
     /// The pages drawn this pass, in order: the page rectangles overlays and the access page window read.
     pub pages: Vec<PlacedPage>,
@@ -229,7 +237,7 @@ impl PageViewOutput {
 ///   wheel and a pinch zoom about the pointer, as [`NavigationOptions`] say) and the view commands; the view
 ///   reads the result back into its state. [`CanvasScrollbars`] land in their own pass. Not continuous, a page
 ///   that fits turns with the wheel instead, and one zoomed in far enough to pan pans and turns the page at its
-///   edge. Space-drag and the Hand and Zoom tools run in the app's `ToolHost`.
+///   edge. Space-drag and the Hand and Zoom tools run in the app's `ToolHost`, in its body ([`PageBody::pass`]).
 /// - Current page: the page whose rectangle holds the view's middle line (ties at half a point go to the earlier
 ///   page).
 /// - AccessKit: a canvas named by the app; pages-b's describer adds the text under it.
@@ -290,8 +298,9 @@ impl<'a> PageView<'a> {
     }
 
     /// Shows the view in the room left in `ui`, and runs `body` for the app's canvas controls (margins, zones,
-    /// marks, grids), which it shows with `show_at(ui, body.rect)`. `body` runs on every run of the canvas body (the measuring run and
-    /// the real one), so it builds what it shows each time and consumes nothing.
+    /// marks, grids), which it shows with `show_at(ui, body.rect)`, and its tool host, which runs on `body.pass`.
+    /// `body` runs on every run of the canvas body (the measuring run and the real one), so it builds what it shows
+    /// each time and consumes nothing.
     pub fn show(self, ui: &mut Ui, body: impl FnMut(&mut Ui, &PageBody<'_>)) -> PageViewOutput {
         let rect = ui.available_rect_before_wrap();
         self.run(ui, rect, true, body)
@@ -323,7 +332,8 @@ impl<'a> PageView<'a> {
         let mut seen: Option<Seen> = None;
         let mut canvas_body = |ui: &mut Ui, cx: &mut BodyCx<'_>| {
             let next = run_pass(ui, cx, &mut held, &Inputs { source, describer, build: &build, rect, given, paper })?;
-            body(ui, &PageBody { rect: cx.rect, pages: &next.pages, view: next.view });
+            let pass = tool_pass(&cx.env);
+            body(ui, &PageBody { rect: cx.rect, pages: &next.pages, view: next.view, pass: pass.as_ref() });
             let decided = next.next.clone();
             seen = Some(next);
             decided

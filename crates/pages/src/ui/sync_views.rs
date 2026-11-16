@@ -57,9 +57,22 @@ impl Outcome for SyncedViewsOutput {
 /// closure, which gets the half's rect, its state and which half it is; the pair keeps the states together.
 ///
 /// ```ignore
-/// SyncedViews::new("Compare", &mut pair).halves(ui, (&mut old_state, &mut new_state), |ui, rect, state, half| match half {
-///     Lead::Left => PageView::new("Old", &old_pages, state, paper).show_at(ui, rect, |_, _| ()),
-///     Lead::Right => PageView::new("New", &new_pages, state, paper).show_at(ui, rect, |_, _| ()),
+/// SyncedViews::new("Compare", &mut pair).halves(ui, (&mut old_state, &mut new_state), |ui, rect, state, half| {
+///     let (label, pages): (&str, &dyn PageSource) = match half {
+///         Lead::Left => ("Old", &old_pages),
+///         Lead::Right => ("New", &new_pages),
+///     };
+///     // Each half runs the Hand tool in its own canvas body.
+///     let mut reply = None;
+///     let out = PageView::new(label, pages, &mut *state, paper).show_at(ui, rect, |ui, body| {
+///         if let Some(pass) = body.pass {
+///             reply = Some(ToolHost::new().run(ui, pass, &mut hand));
+///         }
+///     });
+///     if let Some(view) = reply.and_then(|reply| reply.view) {
+///         out.adopt(state, &view);
+///     }
+///     out
 /// });
 /// ```
 pub struct SyncedViews<'a> {
