@@ -19,7 +19,7 @@ use crate::runtime::focus::{self, FocusTarget};
 use crate::style::{ComponentStyle, Corners, StyleCx, SurfaceKind};
 use crate::tabs::{Tab, TabKind, TabStrip, TornOff};
 use craft_behavior::{IconId, Metrics, PartKey, PressPhase, Sense, keyed};
-use craft_theme::{ControlSize, HandleSizes};
+use craft_theme::{ControlSize, Tokens};
 use egui::{Id, Pos2, Rect, Response, Ui, Vec2};
 use std::borrow::Cow;
 use std::hash::Hash;
