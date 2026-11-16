@@ -1057,6 +1057,51 @@ fn a_dwa_chunk_declaring_2_to_the_44_dc_values_is_refused_not_an_abort() {
 }
 
 #[test]
+fn a_dwa_chunk_just_above_the_data_window_is_checked_as_the_block_the_decoder_rounds_it_into() {
+    // The `exr` crate divides a scan line's offset from the data window toward zero, so a chunk
+    // at y = -1 (DWAA, 32 lines) or -255 (DWAB, 256 lines) becomes block 0 and is decompressed.
+    use crate::decode::{Error as DecodeError, decode_display_part, decode_part};
+    for (compression, y) in [(Compression::DWAA(None), -1i32), (Compression::DWAA(None), -31), (Compression::DWAB(None), -255)] {
+        let mut bytes = with_dwa_counter(&dwa_file(compression, (64, 32), &["R"], false), 9, 1 << 40);
+        let at = indexed(&bytes).chunks(0).next().unwrap().offset as usize;
+        bytes[at..at + 4].copy_from_slice(&y.to_le_bytes());
+        let got = decode_part(&bytes, 0, &|_| true, &Limits::default()).map(|_| ());
+        assert!(matches!(&got, Err(DecodeError::Malformed(m)) if m.contains("DWA")), "decode_part, {compression:?} y {y}: {got:?}");
+        let got = decode_display_part(&bytes, 0, &|_| true, &|_| 0.0, &Limits::default()).map(|_| ());
+        assert!(matches!(&got, Err(DecodeError::Malformed(m)) if m.contains("DWA")), "decode_display_part, {compression:?} y {y}: {got:?}");
+    }
+}
+
+#[test]
+fn a_dwa_chunk_the_scan_cannot_read_is_refused_not_left_to_the_decoder() {
+    use crate::decode::{Error as DecodeError, decode_part};
+    let good = dwa_file(Compression::DWAA(None), (64, 32), &["R"], false);
+    let table = table_at(&good, 1);
+    // The entry points past the end of the file, and into the last bytes of it.
+    for offset in [good.len() as u64 + 100, good.len() as u64 - 6] {
+        let mut bytes = good.clone();
+        bytes[table..table + 8].copy_from_slice(&offset.to_le_bytes());
+        let got = decode_part(&bytes, 0, &|_| true, &Limits::default()).map(|_| ());
+        assert!(matches!(&got, Err(DecodeError::Malformed(m)) if m.contains("DWA")), "offset {offset}: {got:?}");
+    }
+}
+
+#[test]
+fn a_chunk_declaring_a_small_payload_before_padding_is_held_to_what_the_payload_can_hold() {
+    // A 1 × 1 PIZ file patched to 16 Mi pixels wide (a 64 MiB block) with 100 KiB of padding
+    // after its one chunk: the gap to the file's end could hold the block at 1024 : 1, the few
+    // dozen bytes the chunk declares can't.
+    let mut bytes = file(vec![layer(None, (0, 0), (1, 1), &["R"], false, Compression::PIZ)], (1, 1));
+    patch_box(&mut bytes, "dataWindow", [0, 0, (16 << 20) - 1, 0]);
+    bytes.extend(std::iter::repeat_n(0u8, 100 << 10));
+    let limits = Limits { max_ratio: 1024, ..Limits::none() };
+    let index = Index::build(&mut Cursor::new(&bytes[..]), &limits, &never).unwrap();
+    assert_eq!(index.check_blocks(), Ok(()), "the gap is enough");
+    let got = read_planes(&mut Cursor::new(&bytes[..]), &index, &Request::new(&[(0, 0)], 1 << 30), &never);
+    assert!(matches!(&got, Err(Error::LimitExceeded(m)) if m.contains("can hold")), "{got:?}");
+}
+
+#[test]
 fn every_dwa_counter_the_inflater_sizes_by_is_bounded_by_the_block() {
     for compression in [Compression::DWAA(None), Compression::DWAB(None)] {
         // (fields: 1 unknown uncompressed size, 6 RLE uncompressed size, 7 RLE raw size, 8 AC

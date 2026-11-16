@@ -19,6 +19,8 @@
 //! - the lossy channels are cut into 8 × 8 DCT blocks over the block padded to multiples of 8:
 //!   one DC value and at most 63 AC values per DCT block and channel.
 
+use exr::block::chunk::{CompressedBlock, CompressedScanLineBlock, CompressedTileBlock, TileCoordinates};
+use exr::math::Vec2;
 use exr::meta::header::Header;
 use exr::prelude::Compression;
 
@@ -30,17 +32,27 @@ pub(crate) fn is_dwa(compression: Compression) -> bool {
     matches!(compression, Compression::DWAA(_) | Compression::DWAB(_))
 }
 
+/// What the check needs of a DWA part: the bytes of one pixel of all its channels, and how many
+/// channels it has. `None` when the pixel's bytes overflow.
+fn shape(header: &Header) -> Option<(usize, usize)> {
+    let pixel_bytes = header.channels.list.iter().map(|c| c.sample_type.bytes_per_sample()).try_fold(0usize, usize::checked_add)?;
+    Some((pixel_bytes, header.channels.list.len()))
+}
+
 /// Checks the DWA payload `payload` of a block of `width × height` pixels of the part `header`
 /// describes: an error message when a counter declares more than a valid chunk of that block
 /// can hold. A payload as long as the block's raw bytes is stored uncompressed (the crate doesn't
 /// read counters then); one shorter than the counters is left to the crate, which refuses it.
-pub(crate) fn check_payload(header: &Header, (width, height): (usize, usize), payload: &[u8]) -> Result<(), String> {
+pub(crate) fn check_payload(header: &Header, size: (usize, usize), payload: &[u8]) -> Result<(), String> {
     if !is_dwa(header.compression) {
         return Ok(());
     }
-    let channels = header.channels.list.len();
-    let pixel_bytes = header.channels.list.iter().map(|c| c.sample_type.bytes_per_sample()).try_fold(0usize, usize::checked_add);
-    let raw = pixel_bytes.and_then(|b| b.checked_mul(width)).and_then(|b| b.checked_mul(height)).ok_or("a DWA block size overflows")?;
+    check_shaped(shape(header).ok_or("a DWA pixel size overflows")?, size, payload)
+}
+
+/// [`check_payload`] with the part's [`shape`] worked out already.
+fn check_shaped((pixel_bytes, channels): (usize, usize), (width, height): (usize, usize), payload: &[u8]) -> Result<(), String> {
+    let raw = pixel_bytes.checked_mul(width).and_then(|b| b.checked_mul(height)).ok_or("a DWA block size overflows")?;
     if payload.len() == raw {
         return Ok(());
     }
@@ -65,83 +77,85 @@ pub(crate) fn check_payload(header: &Header, (width, height): (usize, usize), pa
     Ok(())
 }
 
-/// The pixel size of the block a chunk of the part `header` describes, from the coordinates in
-/// its header (the scan-line `y`, or the tile's column, row and level), computed the way the
-/// `exr` crate places it; `None` where the crate would refuse the chunk itself.
-pub(crate) fn block_size(header: &Header, y: Option<i32>, tile: Option<[i32; 4]>) -> Option<(usize, usize)> {
-    let (w, h) = (header.layer_size.0, header.layer_size.1);
-    match (header.blocks, y, tile) {
-        (exr::meta::BlockDescription::ScanLines, Some(y), _) => {
-            let lines = header.compression.scan_lines_per_block();
-            let row = usize::try_from(i64::from(y).checked_sub(i64::from(header.own_attributes.layer_position.1))?).ok()?;
-            let start = (row / lines).checked_mul(lines)?;
-            Some((w, lines.min(h.checked_sub(start).filter(|n| *n > 0)?)))
+/// The pixel size of the block the `exr` crate decompresses a chunk of the part `header`
+/// describes into, from the chunk's coordinates: the crate's own placement
+/// (`Header::get_block_data_indices`, then `get_absolute_block_pixel_coordinates`), so a scan-line
+/// `y` the crate rounds into a block (it divides toward zero: rows just above the data window land
+/// in block 0) is sized as that block. An error where the crate can't place the chunk.
+fn block_size(header: &Header, block: &CompressedBlock) -> Result<(usize, usize), String> {
+    if let CompressedBlock::Tile(tile) = block {
+        // (the crate's level size asserts on levels of 64 and more; no valid file has 32)
+        if tile.coordinates.level_index.0 >= 32 || tile.coordinates.level_index.1 >= 32 {
+            return Err("a DWA tile of an impossible level".into());
         }
-        (exr::meta::BlockDescription::Tiles(t), _, Some([tx, ty, lx, ly])) => {
-            let level = |full: usize, l: i32| -> Option<usize> {
-                let l = u32::try_from(l).ok().filter(|l| *l < 32)?;
-                let size = match t.rounding_mode {
-                    exr::math::RoundingMode::Down => full >> l,
-                    exr::math::RoundingMode::Up => full.div_ceil(1usize << l),
-                };
-                Some(size.max(1))
-            };
-            let (lw, lh) = (level(w, lx)?, level(h, ly)?);
-            let x0 = usize::try_from(tx).ok()?.checked_mul(t.tile_size.0)?;
-            let y0 = usize::try_from(ty).ok()?.checked_mul(t.tile_size.1)?;
-            Some((t.tile_size.0.min(lw.checked_sub(x0).filter(|n| *n > 0)?), t.tile_size.1.min(lh.checked_sub(y0).filter(|n| *n > 0)?)))
-        }
-        _ => None,
     }
+    let tile = header.get_block_data_indices(block).map_err(|e| format!("a DWA chunk the decoder can't place: {e}"))?;
+    let bounds = header.get_absolute_block_pixel_coordinates(tile).map_err(|e| format!("a DWA chunk the decoder can't place: {e}"))?;
+    Ok((bounds.size.0, bounds.size.1))
 }
 
-/// Checks every chunk of the file's DWA parts (flat ones; `tables` is where the offset tables
-/// start) before the `exr` crate's whole-image reader, which offers no hook between reading a
-/// chunk and decompressing it, gets the bytes. Chunks the crate would refuse by themselves
-/// (outside the file, wrong coordinates) are left to it.
+/// Checks every chunk the offset tables point at that is, or names, a flat DWA part (`tables` is
+/// where the offset tables start), before the `exr` crate's whole-image reader, which offers no
+/// hook between reading a chunk and decompressing it, gets the bytes. It fails closed: a chunk of
+/// a DWA part whose part number, coordinates, size or payload can't be read, or whose block can't
+/// be placed, is an error, not left to the crate.
 pub(crate) fn check_file(bytes: &[u8], meta: &exr::meta::MetaData, tables: usize) -> Result<(), String> {
     if !meta.headers.iter().any(|h| !h.deep && is_dwa(h.compression)) {
         return Ok(());
     }
     let multipart = meta.requirements.is_multilayer();
     let word = |at: usize| bytes.get(at..at.checked_add(4)?).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(i32::from_le_bytes);
-    let chunks = meta.headers.iter().map(|h| h.chunk_count).try_fold(0usize, usize::checked_add).ok_or("too many chunks")?;
-    let entries = bytes.get(tables..tables.saturating_add(chunks.saturating_mul(8))).ok_or("the offset tables run past the end of the file")?;
-    // (every table's entries: the crate decodes a chunk as the part the chunk names, whichever
-    // table points at it)
-    for entry in entries.as_chunks::<8>().0 {
-        let Ok(mut at) = usize::try_from(u64::from_le_bytes(*entry)) else { continue };
-        let part = if multipart {
-            let part = word(at).and_then(|p| usize::try_from(p).ok());
-            at = at.saturating_add(4);
-            part
-        } else {
-            Some(0)
-        };
-        let Some(header) = part.and_then(|p| meta.headers.get(p)) else { continue };
-        if header.deep || !is_dwa(header.compression) {
-            continue;
-        }
-        let size = match header.blocks {
-            exr::meta::BlockDescription::ScanLines => {
-                let y = word(at);
-                at = at.saturating_add(4);
-                block_size(header, y, None)
-            }
-            exr::meta::BlockDescription::Tiles(_) => {
-                let tile = [word(at), word(at.saturating_add(4)), word(at.saturating_add(8)), word(at.saturating_add(12))];
-                at = at.saturating_add(16);
-                match tile {
-                    [Some(a), Some(b), Some(c), Some(d)] => block_size(header, None, Some([a, b, c, d])),
-                    _ => None,
+    let cut = || "a DWA chunk cut off by the end of the file".to_string();
+    // Per part: its shape when it is a flat DWA part (worked out once, not per chunk).
+    let shapes: Vec<Option<(usize, usize)>> = meta
+        .headers
+        .iter()
+        .map(|h| if !h.deep && is_dwa(h.compression) { shape(h).ok_or("a DWA pixel size overflows").map(Some) } else { Ok(None) })
+        .collect::<Result<_, _>>()?;
+    let mut table = tables;
+    for (table_part, header) in meta.headers.iter().enumerate() {
+        let entries =
+            bytes.get(table..table.saturating_add(header.chunk_count.saturating_mul(8))).ok_or("the offset tables run past the end of the file")?;
+        table = table.saturating_add(header.chunk_count.saturating_mul(8));
+        for entry in entries.as_chunks::<8>().0 {
+            let offset = usize::try_from(u64::from_le_bytes(*entry)).ok();
+            // The part the crate decodes the chunk as: the one it names (multi-part files).
+            let (part, mut at) = match (multipart, offset) {
+                (false, Some(at)) => (Some(table_part), at),
+                (true, Some(at)) => (word(at).and_then(|p| usize::try_from(p).ok()), at.saturating_add(4)),
+                (_, None) => (None, 0),
+            };
+            let named = part.and_then(|p| shapes.get(p).copied().flatten().map(|s| (p, s)));
+            let Some((part, shape)) = named else {
+                // (not a DWA chunk, unless it sits in a DWA part's table and can't be read)
+                if shapes.get(table_part).copied().flatten().is_some() && part.is_none_or(|p| p >= meta.headers.len()) {
+                    return Err(cut());
                 }
-            }
-        };
-        // (a payload past the file's end fails in the crate before it is decompressed)
-        let (Some(size), Some(len)) = (size, word(at).and_then(|n| usize::try_from(n).ok())) else { continue };
-        let start = at.saturating_add(4);
-        let Some(payload) = bytes.get(start..start.saturating_add(len)) else { continue };
-        check_payload(header, size, payload)?;
+                continue;
+            };
+            let header = meta.headers.get(part).ok_or_else(cut)?;
+            let block = match header.blocks {
+                exr::meta::BlockDescription::ScanLines => {
+                    let y = word(at).ok_or_else(cut)?;
+                    at = at.saturating_add(4);
+                    CompressedBlock::ScanLine(CompressedScanLineBlock { y_coordinate: y, compressed_pixels_le: Vec::new() })
+                }
+                exr::meta::BlockDescription::Tiles(_) => {
+                    let tile = [word(at), word(at.saturating_add(4)), word(at.saturating_add(8)), word(at.saturating_add(12))];
+                    at = at.saturating_add(16);
+                    let [Some(x), Some(y), Some(lx), Some(ly)] = tile else { return Err(cut()) };
+                    let index = |v: i32| usize::try_from(v).map_err(|_| "a DWA tile at a negative position".to_string());
+                    let coordinates = TileCoordinates { tile_index: Vec2(index(x)?, index(y)?), level_index: Vec2(index(lx)?, index(ly)?) };
+                    CompressedBlock::Tile(CompressedTileBlock { coordinates, compressed_pixels_le: Vec::new() })
+                }
+            };
+            let size = block_size(header, &block)?;
+            let len = word(at).ok_or_else(cut)?;
+            let len = usize::try_from(len).map_err(|_| "a DWA chunk declaring a negative size".to_string())?;
+            let start = at.saturating_add(4);
+            let payload = bytes.get(start..start.saturating_add(len)).ok_or_else(cut)?;
+            check_shaped(shape, size, payload)?;
+        }
     }
     Ok(())
 }

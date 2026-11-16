@@ -302,30 +302,32 @@ impl Index {
 
     /// Checks every chunk of the full-resolution level of every flat part against what its bytes
     /// can decompress to (see [`Index::build`]'s `max_ratio`), from the index alone: an app can
-    /// refuse a file before another decoder allocates by its headers. A read makes the same check
-    /// for the chunks it needs, and also holds each block to its own byte limit.
+    /// refuse a file before another decoder allocates by its headers. A chunk's bytes are counted
+    /// here as the gap to the next chunk in the file (the index holds no payload sizes); a read
+    /// makes the same check for the chunks it needs, and again, once a chunk is read, against the
+    /// payload size the chunk declares, and also holds each block to its own byte limit.
     pub fn check_blocks(&self) -> Result<()> {
         for (pi, part) in self.layout.iter().enumerate() {
             let Some(header) = self.meta.headers.get(pi).filter(|h| !h.deep) else { continue };
             for c in &part.chunks {
-                self.check_ratio(pi, header, part, c)?;
+                self.check_ratio(pi, header, part, c, c.len)?;
             }
         }
         Ok(())
     }
 
-    /// Refuses chunk `c` of part `pi` when its decompressed block is more than its bytes can hold:
-    /// at most `max_ratio` bytes per byte (four times that for DWA, whose RLE and zlib stages
-    /// together reach about 132 000 : 1), plus 1 MiB. A hostile header can declare a block of
-    /// gigabytes over a chunk of a few bytes, and the decompressors allocate the whole block first.
-    fn check_ratio(&self, pi: usize, header: &Header, part: &PartLayout, c: &ChunkRef) -> Result<()> {
+    /// Refuses chunk `c` of part `pi` when its decompressed block is more than `len` bytes can
+    /// hold: at most `max_ratio` bytes per byte (four times that for DWA, whose RLE stage, up to
+    /// 64 : 1, and zlib, up to about 1032 : 1, together reach about 66 000 : 1), plus 1 MiB. A
+    /// hostile header can declare a block of gigabytes over a chunk of a few bytes, and the
+    /// decompressors allocate the whole block first.
+    fn check_ratio(&self, pi: usize, header: &Header, part: &PartLayout, c: &ChunkRef, len: u64) -> Result<()> {
         let block = (c.cols as u64).saturating_mul(c.rows as u64).saturating_mul(part.pixel_bytes as u64);
         let ratio = if crate::dwa_guard::is_dwa(header.compression) { self.max_ratio.saturating_mul(4) } else { self.max_ratio };
-        let most = c.len.checked_mul(ratio).and_then(|b| b.checked_add(1 << 20)).unwrap_or(u64::MAX);
+        let most = len.checked_mul(ratio).and_then(|b| b.checked_add(1 << 20)).unwrap_or(u64::MAX);
         if block > most {
             return Err(Error::LimitExceeded(format!(
-                "a block of part {pi} decompresses to {block} bytes, more than its {}-byte chunk can hold ({most})",
-                c.len
+                "a block of part {pi} decompresses to {block} bytes, more than its {len}-byte chunk can hold ({most})"
             )));
         }
         Ok(())
@@ -836,7 +838,7 @@ fn read_into<R: Read + Seek + ?Sized>(
                 return Err(malformed("a chunk offset outside the chunk area of the file"));
             }
             if let Some(header) = index.meta.headers.get(pi) {
-                index.check_ratio(pi, header, part, c)?;
+                index.check_ratio(pi, header, part, c, c.len)?;
             }
             let pixels = (c.cols as u64).saturating_mul(c.rows as u64);
             let block = pixels.saturating_mul(part.pixel_bytes as u64);
@@ -1202,7 +1204,10 @@ fn chunk_bands(index: &Index, pi: usize, expected: &ChunkRef, buf: &[u8], g: &Ge
     let (Some(header), Some(part)) = (meta.headers.get(pi), index.layout.get(pi)) else { return Err(malformed("no such part")) };
     let payload = check_chunk_header(meta, header, pi, expected, buf)?;
     // (a DWA chunk's counters can make the crate allocate terabytes: see `crate::dwa_guard`)
-    crate::dwa_guard::check_payload(header, (expected.cols, expected.rows), buf.get(payload).unwrap_or_default()).map_err(malformed)?;
+    let payload = buf.get(payload).unwrap_or_default();
+    // (planned against the gap to the next chunk; the payload the chunk declares may be smaller)
+    index.check_ratio(pi, header, part, expected, payload.len() as u64)?;
+    crate::dwa_guard::check_payload(header, (expected.cols, expected.rows), payload).map_err(malformed)?;
     let mut read = buf;
     let chunk = Chunk::read(&mut read, meta).map_err(exr_error)?;
     let block = UncompressedBlock::decompress_chunk(chunk, meta, false).map_err(exr_error)?;

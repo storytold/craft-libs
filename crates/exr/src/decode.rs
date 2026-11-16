@@ -281,8 +281,9 @@ pub(super) fn read_meta(bytes: &[u8], limits: &Limits) -> Result<MetaData> {
         return Err(Error::LimitExceeded(format!("{total} bytes across {} parts exceed {}", meta.headers.len(), limits.max_bytes)));
     }
     // A flat part's samples are allocated before its chunks are read, so the file must be able
-    // to hold the flat parts' samples. DWA's run-length channels are zlib-packed on top and reach
-    // about 132000:1, so DWA parts are counted at a quarter. Deep parts size their samples from
+    // to hold the flat parts' samples. DWA's run-length channels are zlib-packed on top (RLE up to
+    // 64:1, zlib up to about 1032:1, about 66000:1 together), so DWA parts are counted at a quarter
+    // (with room to spare). Deep parts size their samples from
     // the file's own counts and are not counted here.
     let declared = flat.saturating_sub(dwa).saturating_add(dwa / 4);
     let capacity = (bytes.len() as u64).saturating_mul(limits.max_ratio).saturating_add(1 << 20);
