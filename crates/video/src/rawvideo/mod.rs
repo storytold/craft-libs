@@ -125,10 +125,26 @@ pub struct Frame {
 
 impl Frame {
     /// A black-filled frame (all zero samples).
-    pub fn new(width: u32, height: u32, kind: Kind, bit_depth: u8) -> Frame {
+    pub fn new(width: u32, height: u32, kind: Kind, bit_depth: u8) -> Result<Frame> {
+        if width == 0 || width > MAX_DIMENSION || height == 0 || height > MAX_DIMENSION {
+            return Err(Error::Frame("dimensions out of range"));
+        }
+        if kind == Kind::Yuv422 && !width.is_multiple_of(2) {
+            return Err(Error::Frame("odd width for 4:2:2"));
+        }
+        if bit_depth != 8 && bit_depth != 10 {
+            return Err(Error::Frame("unsupported bit depth"));
+        }
         let (w, h) = (width as usize, height as usize);
-        let chroma = if kind == Kind::Yuv422 { w / 2 } else { w };
-        Frame { width, height, kind, bit_depth, planes: [vec![0; w * h], vec![0; chroma * h], vec![0; chroma * h]] }
+        let luma_len = w.checked_mul(h).ok_or(Error::Frame("allocation overflow"))?;
+        let chroma_w = if kind == Kind::Yuv422 { w / 2 } else { w };
+        let chroma_len = chroma_w.checked_mul(h).ok_or(Error::Frame("allocation overflow"))?;
+        let total_bytes =
+            luma_len.checked_mul(2).and_then(|l| l.checked_add(chroma_len.checked_mul(4)?)).ok_or(Error::Frame("allocation overflow"))?;
+        if total_bytes as u64 > crate::budget::DECODE_MEMORY_BUDGET {
+            return Err(Error::Frame("frame exceeds memory budget"));
+        }
+        Ok(Frame { width, height, kind, bit_depth, planes: [vec![0; luma_len], vec![0; chroma_len], vec![0; chroma_len]] })
     }
 }
 
@@ -150,7 +166,7 @@ pub fn decode(layout: Layout, width: u32, height: u32, data: &[u8]) -> Result<Fr
     if data.len() < need {
         return Err(Error::Short { got: data.len(), need });
     }
-    let mut f = Frame::new(width, height, layout.kind(), layout.bit_depth());
+    let mut f = Frame::new(width, height, layout.kind(), layout.bit_depth())?;
     let w = width as usize;
     let cw = if f.kind == Kind::Yuv422 { w / 2 } else { w };
     let [p0, p1, p2] = &mut f.planes;

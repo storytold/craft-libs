@@ -10,7 +10,7 @@ const LAYOUTS: [Layout; 6] = [Layout::Uyvy, Layout::Yuyv, Layout::Yvyu, Layout::
 
 /// A frame of pseudo-random samples at the layout's depth.
 fn random_frame(layout: Layout, w: u32, h: u32, seed: u32) -> Frame {
-    let mut f = Frame::new(w, h, layout.kind(), layout.bit_depth());
+    let mut f = Frame::new(w, h, layout.kind(), layout.bit_depth()).expect("new frame");
     let mut x = seed | 1;
     let max = (1u32 << layout.bit_depth()) - 1;
     for p in &mut f.planes {
@@ -44,7 +44,7 @@ fn pack_then_unpack_returns_the_frame() {
 #[test]
 fn the_extremes_of_every_field_survive() {
     for layout in LAYOUTS {
-        let mut f = Frame::new(6, 1, layout.kind(), layout.bit_depth());
+        let mut f = Frame::new(6, 1, layout.kind(), layout.bit_depth()).expect("new frame");
         let max = (1u16 << layout.bit_depth()) - 1;
         for (i, p) in f.planes.iter_mut().enumerate() {
             for (k, v) in p.iter_mut().enumerate() {
@@ -223,4 +223,13 @@ fn ffmpeg_unpacks_what_we_pack() {
             assert!(theirs == f.planes, "{name}: ffmpeg unpacks our packing differently");
         }
     }
+}
+
+#[test]
+fn frame_new_validates_dimensions_and_rejects_oversized_allocation() {
+    assert!(Frame::new(u32::MAX, u32::MAX, Kind::Rgb, 10).is_err());
+    assert!(Frame::new(0, 100, Kind::Rgb, 8).is_err());
+    assert!(Frame::new(100, 0, Kind::Rgb, 8).is_err());
+    assert!(Frame::new(3, 100, Kind::Yuv422, 8).is_err());
+    assert!(Frame::new(100, 100, Kind::Rgb, 12).is_err());
 }
