@@ -206,10 +206,33 @@ pub mod packbits {
     /// `-128` no-op bytes (which are always permitted). Errors, rather than
     /// overflowing, when `out.len() + expected` does not fit in `usize`.
     pub(crate) fn decode_into(src: &[u8], expected: usize, out: &mut Vec<u8>) -> Result<()> {
+        decode_row(src, expected, out, false)
+    }
+
+    /// Appends a recovery row: complete oversized packets are clipped and a short
+    /// row is zero-padded. Truncated packet payloads still fail; trailing packets
+    /// after the row is full are ignored. Strict decoding remains the default.
+    ///
+    /// Output is bounded by `max_row_bytes` and the PSD decoded-size limit.
+    /// Allocation is fallible. Existing output is retained, including on error.
+    pub fn decode_padded_into(src: &[u8], expected: usize, max_row_bytes: usize, out: &mut Vec<u8>) -> Result<()> {
+        if expected > max_row_bytes || expected as u64 > super::MAX_DECODED_BYTES {
+            return Err(PsdError::LimitExceeded("PackBits recovery row exceeds limit"));
+        }
+        out.len().checked_add(expected).ok_or(PsdError::LimitExceeded("PackBits output length overflows usize"))?;
+        out.try_reserve_exact(expected).map_err(|_| PsdError::OutOfMemory("PackBits recovery row allocation failed"))?;
+        decode_row(src, expected, out, true)
+    }
+
+    fn decode_row(src: &[u8], expected: usize, out: &mut Vec<u8>, padded: bool) -> Result<()> {
         let target = out.len().checked_add(expected).ok_or(PsdError::LimitExceeded("PackBits output length overflows usize"))?;
         let mut i = 0;
         while out.len() < target {
             let Some(&h) = src.get(i) else {
+                if padded {
+                    out.resize(target, 0);
+                    break;
+                }
                 return Err(PsdError::Decompress("PackBits row ended early".into()));
             };
             i += 1;
@@ -219,10 +242,10 @@ pub mod packbits {
                 let Some(lit) = src.get(i..i + len) else {
                     return Err(PsdError::Decompress("PackBits literal truncated".into()));
                 };
-                if len > target - out.len() {
+                if !padded && len > target - out.len() {
                     return Err(PsdError::Decompress("PackBits literal overflows row".into()));
                 }
-                out.extend_from_slice(lit);
+                out.extend_from_slice(&lit[..len.min(target - out.len())]);
                 i += len;
             } else if h != -128 {
                 let len = 1 - h as isize;
@@ -231,10 +254,10 @@ pub mod packbits {
                     return Err(PsdError::Decompress("PackBits run truncated".into()));
                 };
                 i += 1;
-                if len > target - out.len() {
+                if !padded && len > target - out.len() {
                     return Err(PsdError::Decompress("PackBits run overflows row".into()));
                 }
-                out.extend(std::iter::repeat_n(b, len));
+                out.extend(std::iter::repeat_n(b, len.min(target - out.len())));
             }
         }
         Ok(())
