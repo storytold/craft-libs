@@ -339,7 +339,7 @@ impl Fib6 {
 
     /// A Word 97 FIB holding the pairs whose structures have the Word 97 shape here or that
     /// [`crate::comments`] reads in their Word 6 shape: the sections', the notes' and the comments'
-    /// (4, 5 and the authors' 36), all in the WordDocument stream, which takes the Table stream's place), so
+    /// (4, 5 and the authors' 36), all in the WordDocument stream, which takes the Table stream's place, so
     /// the Word 97 readers of those read them. The rest are left out: the header table has another
     /// shape ([`header_stories`]), and the bookmarks' names are 8-bit.
     pub(crate) fn as_word97(&self) -> crate::fib::Fib {

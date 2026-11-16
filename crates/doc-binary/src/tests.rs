@@ -1699,6 +1699,26 @@ fn a_custom_note_mark_is_the_references_run() {
 }
 
 #[test]
+fn a_custom_note_mark_can_be_a_symbol() {
+    // Insert > Symbol as a mark: the placeholder U+0028 with sprmCSymbol (font 0, U+F071), as
+    // the body text stores a symbol. The mark is the symbol's character, not "(".
+    let text = "See ( here\r";
+    let ccp = text.chars().count() as u32;
+    let symbol = grpprl(&[(0x6A09, &[0, 0, 0x71, 0xF0])]);
+    let spec = StructSpec {
+        text,
+        chpx_runs: vec![(0, Vec::new()), (4, symbol), (5, Vec::new())],
+        note_stories: vec!["( Note\r"],
+        extra_pairs: vec![(2, plc(&[4, ccp], &0u16.to_le_bytes())), (3, plc(&[0, 7], &[]))],
+        ..structured_spec(text, ccp)
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = para0(&doc);
+    let craft_wordmodel::para::InlineObject::NoteRef { custom, .. } = p0.objects.first().expect("a note reference") else { panic!("not a note") };
+    assert_eq!(custom, "\u{F071}");
+}
+
+#[test]
 fn note_separators_come_from_the_first_header_stories() {
     // [MS-DOC] Plcfhdd: stories 0-2 are the footnotes' separator, continuation separator and
     // continuation notice, 3-5 the endnotes'. Word writes its default separator as a story holding
@@ -3426,4 +3446,60 @@ fn formatting_runs_break_where_the_chpx_changes() {
     // "aaaa" bold, "bbbb" plain plus the field's anchor (3 bytes, default formatting), "ccd" bold
     // (the run from the field to CP 20), "d(ee" italic.
     assert_eq!(shape, [(4, Some(true), None), (7, None, None), (3, Some(true), None), (4, None, Some(true))], "{shape:?}");
+}
+
+/// A section's own note options are explicit, whatever the document's: footnotes at the bottom
+/// of the page (`sprmSFpc` 1) and numbered continuously (`sprmSRncFtn` 0) are kept as such, not
+/// as unset. Endnotes restarting each section ignore their start (`sprmSNEdn`), which counts only
+/// with continuous numbering ([MS-DOC] §2.6.4), here given before the restart.
+#[test]
+fn section_note_options_are_explicit() {
+    use craft_wordmodel::section::{NotePos, NoteRestart};
+    let sepx = grpprl(&[(0x303B, &[1]), (0x303C, &[0]), (0x5041, &5u16.to_le_bytes()), (0x303E, &[1]), (0x503F, &3u16.to_le_bytes())]);
+    let spec = StructSpec {
+        text: "a\rb\r",
+        header_stories: vec![],
+        sections: vec![(4, sepx)],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new()), (2, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let (f, e) = (&doc.last_section.footnote_pr, &doc.last_section.endnote_pr);
+    assert_eq!((f.pos, f.num_restart, f.num_start), (Some(NotePos::PageBottom), Some(NoteRestart::Continuous), Some(3)));
+    assert_eq!((e.num_restart, e.num_start), (Some(NoteRestart::EachSect), None));
+}
+
+/// `sprmCIstd` resets the run to its paragraph style before the style applies ([MS-DOC] §2.6.1),
+/// so bold before it is undone and highlighting, which it keeps, is not: bold then an italic
+/// style is italic, not bold italic. A piece's Prc naming a style is applied after the CHPX, so
+/// its style is the run's, and resets the CHPX's bold too.
+#[test]
+fn a_character_style_resets_the_formatting_before_it() {
+    let styles = vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new()), (2, 0x0FFF, "Emph", Vec::new(), grpprl(&[(0x0836, &[0x01])]))];
+    let read_with = |chpx: Vec<u8>, extra: RichExtra| {
+        let spec = RichSpec {
+            text: "ab\r",
+            styles: styles.clone(),
+            fonts: vec!["Times New Roman"],
+            chpx_runs: vec![(0, chpx), (2, Vec::new())],
+            papx_entries: vec![(0, 0, Vec::new())],
+        };
+        let doc = read(&rich_doc_with(&spec, &extra)).expect("opens");
+        let p = para0(&doc);
+        let r = p.runs.first().expect("a run");
+        let c = doc.styles.resolve_char(p.props.style.as_deref(), &r.props);
+        (r.props.style.clone(), c.bold, c.italic, r.props.highlight.is_some())
+    };
+    let emph = || Some("Emph".to_owned());
+    let chpx = grpprl(&[(0x0835, &[0x01]), (0x2A0C, &[0x07]), (0x4A30, &1u16.to_le_bytes())]);
+    assert_eq!(read_with(chpx, RichExtra::default()), (emph(), false, true, true));
+    let bold = grpprl(&[(0x0835, &[0x01])]);
+    let prc = grpprl(&[(0x4A30, &1u16.to_le_bytes())]);
+    assert_eq!(read_with(bold, RichExtra { prcs: vec![prc], prm: 0x0001, ..Default::default() }), (emph(), false, true, false));
 }
