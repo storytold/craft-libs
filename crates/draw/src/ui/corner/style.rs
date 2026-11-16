@@ -31,7 +31,7 @@ pub struct CornerStyle {
 
 impl CornerStyle {
     /// The corner widgets' look in `cx`.
-    pub(super) fn from_cx(cx: &StyleCx<'_>) -> CornerStyle {
+    pub(crate) fn from_cx(cx: &StyleCx<'_>) -> CornerStyle {
         let tokens = cx.tokens;
         CornerStyle {
             metrics: Metrics::new(),

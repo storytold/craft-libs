@@ -12,12 +12,12 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, WordSetCx as _,
 };
-use craft_ui::primitives::{PaintShape, StrokeWidth};
+use craft_ui::primitives::{Draw, PaintShape, StrokeWidth};
 use craft_ui::runtime::commands::FireSource;
 use craft_ui::runtime::env::Label;
 use craft_ui::runtime::focus::{ActivateKeys, KeyUse};
 use craft_ui::style::StyleCx;
-use egui::{Rect, Response, Vec2};
+use egui::{Pos2, Rect, Response, Vec2};
 
 /// The part of one widget: `WIDGET.at(i)`, `i` counted over the shown widgets in target order, then corner order.
 pub(super) const WIDGET: PartKey = PartKey::new("widget");
@@ -248,12 +248,9 @@ impl Component for CornerWidgets<'_> {
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let Some(space) = canvas_space(&cx.env) else { return };
         let widgets = self.shown(cx.style, cx.value(), &space.view);
-        let (draw, style) = (ui.draw(), &cx.style);
+        let draw = ui.draw();
         for widget in &widgets {
-            let ring = PaintShape::Circle(widget.at, style.widget / 2.0);
-            draw.fill(&ring, style.fill);
-            draw.stroke(&ring, StrokeWidth::Medium, style.color);
-            draw.fill(&PaintShape::Circle(widget.at, style.dot / 2.0), style.color);
+            paint_widget(&draw, widget.at, cx.style);
         }
     }
 
@@ -275,4 +272,13 @@ impl Component for CornerWidgets<'_> {
         let Report { change, cycle_kind, activate } = self.report;
         CornerWidgetsOutput { edit: cx.edit_response(), change, cycle_kind, activate }
     }
+}
+
+/// Paints one round widget centred at `at`: the filled ring and its dot. The one painter of the look, which the
+/// transform box's live-line midpoint shares.
+pub(crate) fn paint_widget(draw: &Draw<'_>, at: Pos2, style: &CornerStyle) {
+    let ring = PaintShape::Circle(at, style.widget / 2.0);
+    draw.fill(&ring, style.fill);
+    draw.stroke(&ring, StrokeWidth::Medium, style.color);
+    draw.fill(&PaintShape::Circle(at, style.dot / 2.0), style.color);
 }

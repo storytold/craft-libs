@@ -18,11 +18,13 @@ use craft_ui::contract::{
     Access, Bind, BindMut, Common, Component, Cx, Edit as _, EditResponse, Focus as _, MeasureCx, Name, Outcome, PaintUi, PartsCx, Pointer as _,
     Props as _, Remember as _, Role, Styled as _, WordSetCx as _,
 };
-use craft_ui::primitives::{Handle, PaintShape, StrokeWidth};
+use craft_ui::primitives::{Draw, Handle, PaintShape, StrokeWidth};
 use craft_ui::runtime::env::{Label, UnitKind};
 use craft_ui::runtime::focus::{FocusShape, KeyUse};
 use craft_ui::style::{ComponentStyle, HandleLook, StyleColor, StyleCx};
 use egui::{CornerRadius, Pos2, Rect, Response, Vec2};
+
+use crate::ui::corner::{CornerStyle, paint_widget};
 
 /// The part of the box a handle, the inside or the reference point is: `BOX.at(part.index())`.
 pub const BOX: PartKey = PartKey::new("box");
@@ -78,6 +80,40 @@ pub enum RotateZone {
     Outside,
     /// Only the band outside a corner (PhotoCraft's Move tool controls); the rest of the outside is the tool's.
     Band,
+}
+
+/// The box drawn as a live line's controls ([`TransformBox::line`]), in document units: a square at each end of the
+/// segment and the round widget at its middle, with no frame. `outline`, for a line with an arrowhead, is the box
+/// aligned with the segment that holds the arrowheads, drawn with a square at the middle of each side.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct LineLook {
+    /// The line's start.
+    pub from: Point,
+    /// The line's end.
+    pub to: Point,
+    /// The box aligned with the segment, corner by corner around it.
+    pub outline: Option<[Point; 4]>,
+}
+
+impl LineLook {
+    /// The controls of the line from `from` to `to`, with no outline.
+    pub fn new(from: Point, to: Point) -> Self {
+        LineLook { from, to, outline: None }
+    }
+
+    /// These controls with the segment-aligned box `outline`.
+    #[must_use]
+    pub fn with_outline(mut self, outline: Option<[Point; 4]>) -> Self {
+        self.outline = outline;
+        self
+    }
+
+    /// Each end that stands for a box handle, with the handle: the corner the end points to, away from the other end
+    /// (on a level or upright line, the side). A line of no length has none.
+    fn ends(&self) -> impl Iterator<Item = (BoxPart, Point)> {
+        [(self.from, self.to), (self.to, self.from)].into_iter().filter_map(|(end, other)| Some((end_part(end, other)?, end)))
+    }
 }
 
 craft_ui::words! {
@@ -137,6 +173,8 @@ pub struct TransformBoxStyle {
     band_outer: f32,
     pivot_radius: f32,
     pivot_arm: f32,
+    /// The round widget at a live line's middle: the corner widgets' look.
+    widget: CornerStyle,
 }
 
 /// Why the box asks to apply.
@@ -206,6 +244,9 @@ impl Default for Grip {
 /// - The box holds the canvas's session (`KeyUse::session`): with the canvas focused or nothing focused, Enter, Escape
 ///   and the arrows reach it before the canvas's tool, and the arrows move the whole box. With
 ///   [`session_arrows`](Self::session_arrows) off the arrows stay the tool's (the Move tool nudges the layer).
+/// - A [centre mark](Self::centre_mark) draws the reference point's glyph at the middle of the box and takes no press.
+///   A [live line's look](Self::line) declares only the line's two ends, each standing for the box handle it points
+///   to, and draws the line's controls in place of the frame.
 /// - Nothing mirrors in a right-to-left interface: the box is the document's.
 #[derive(craft_ui::contract::Component, craft_ui::contract::Props)]
 #[component(canvas_control)]
@@ -243,10 +284,21 @@ pub struct TransformBox<'a> {
     /// box (the default). Off leaves them to the canvas's tool; a focused part still moves by the arrows.
     #[prop]
     session_arrows: bool,
+    /// Whether a centre mark (the reference point's glyph) shows at the middle of the box, under the handles: the
+    /// Ellipse tool's. It takes no press: a press there is the inside's, or the tool's.
+    #[prop]
+    centre_mark: bool,
+    /// Draws the box as a live line's controls (the Line tool's live line as the whole selection). Only the two ends
+    /// take a press and the keys, each as the box handle it points to ([`LineLook`]), so an end drag scales the box as
+    /// that handle does; while it is dragged, the box shows as it scales. No other part is declared.
+    #[prop]
+    line: Option<LineLook>,
     /// How far outside the frame, in screen points, a plain press moves the box (0: off); set by `TransformOverlay`.
     move_reach: f32,
     /// Whether this pass holds a drag of the reference point, so the hidden point is drawn while it moves.
     pivot_held: bool,
+    /// Whether this pass holds a drag that began, so a live line's box shows as it scales.
+    dragging: bool,
     report: Report,
 }
 
@@ -267,8 +319,11 @@ impl<'a> TransformBox<'a> {
             mods: None,
             overflow: false,
             session_arrows: true,
+            centre_mark: false,
+            line: None,
             move_reach: 0.0,
             pivot_held: false,
+            dragging: false,
             report: Report::default(),
         }
         .label(label)
@@ -307,11 +362,22 @@ impl<'a> TransformBox<'a> {
     /// The parts the keyboard walks, in order. A box whose inside does not move has no inside part, so a press or drag
     /// over its body reaches what lies beneath (a type editor under a paragraph frame).
     fn keyboard_parts(&self) -> Vec<BoxPart> {
+        if let Some(line) = &self.line {
+            return line.ends().map(|(part, _)| part).filter(|&part| self.rules.allows(part)).collect();
+        }
         let corners = (0..4u8).map(BoxPart::Corner);
         let edges = (0..4u8).map(BoxPart::Edge);
         let pivot = self.reference_point.then_some(BoxPart::Pivot);
         let inside = self.inside_moves.then_some(BoxPart::Inside);
         inside.into_iter().chain(corners).chain(edges).chain(pivot).filter(|&part| self.rules.allows(part)).collect()
+    }
+
+    /// Where `part` is drawn and taken, in document units: a live line's end, else [`handle_point`].
+    fn part_point(&self, state: &BoxState, part: BoxPart) -> Option<Point> {
+        match &self.line {
+            Some(line) => line.ends().find(|(end_part, _)| *end_part == part).map(|(_, end)| end),
+            None => handle_point(state, part),
+        }
     }
 
     /// The box after an arrow key moves `part` by `by`: as a plain drag of the part would.
@@ -431,6 +497,9 @@ impl<'a> TransformBox<'a> {
     /// outside.
     fn pointer_parts(&self) -> Vec<(PartRef, BoxPart)> {
         let mut parts: Vec<_> = self.keyboard_parts().into_iter().map(|part| (BOX.at(part.index()), part)).collect();
+        if self.line.is_some() {
+            return parts;
+        }
         parts.extend((0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))).map(|k| (EDGE.at(u64::from(k)), BoxPart::Edge(k))));
         if self.declares_centre() {
             parts.push((CENTRE.at(0), BoxPart::Inside));
@@ -537,6 +606,78 @@ impl<'a> TransformBox<'a> {
     }
 }
 
+impl TransformBox<'_> {
+    /// The square of handle `part` at `at` on the screen, filled as the part's state shows when the rules let it take a
+    /// press; `enlarged` with the overflow plus.
+    fn paint_handle(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, part: BoxPart, at: Pos2, enlarged: bool) {
+        let look = &cx.style.handle;
+        let side = if enlarged { look.side * OVERFLOW_IN_HANDLES } else { look.side };
+        let square = PaintShape::Rect(Rect::from_center_size(at, Vec2::splat(side)), CornerRadius::ZERO);
+        let fill = if self.rules.allows(part) { cx.resolve_part(BOX.at(part.index()), &look.fill) } else { cx.resolve(&look.fill) };
+        draw.fill(&square, fill);
+        draw.stroke(&square, StrokeWidth::Thin, look.stroke);
+        if enlarged {
+            Handle::plus(draw, look, at, side);
+        }
+    }
+
+    /// A live line's controls: the segment-aligned box with a square at the middle of each side (drawn only), a
+    /// handle square at each end, and the round widget at the middle of the segment.
+    fn paint_line(&self, draw: &Draw<'_>, cx: &Cx<'_, Self>, view: &CanvasView, line: &LineLook) {
+        let style = cx.style;
+        if let Some(outline) = line.outline {
+            let corners = outline.map(|corner| view.to_screen(corner));
+            paint_frame(draw, style, corners);
+            let look = &style.handle;
+            for k in 0..4 {
+                let middle = corners[k].lerp(corners[(k + 1) % 4], 0.5);
+                let square = PaintShape::Rect(Rect::from_center_size(middle, Vec2::splat(look.side)), CornerRadius::ZERO);
+                draw.fill(&square, cx.resolve(&look.fill));
+                draw.stroke(&square, StrokeWidth::Thin, look.stroke);
+            }
+        }
+        for (part, end) in line.ends() {
+            self.paint_handle(draw, cx, part, view.to_screen(end), false);
+        }
+        paint_widget(draw, view.to_screen(line.from.midpoint(line.to)), &style.widget);
+    }
+}
+
+/// The outline of a box whose corners are `corners` on the screen: the line over its halo.
+fn paint_frame(draw: &Draw<'_>, style: &TransformBoxStyle, corners: [Pos2; 4]) {
+    let outline = PaintShape::Polygon(corners.to_vec());
+    draw.stroke(&outline, StrokeWidth::Thick, style.halo);
+    draw.stroke(&outline, StrokeWidth::Medium, style.line);
+}
+
+/// The reference point's glyph centred at `centre`: a circle crossed by two arms, over its halo. The one glyph of the
+/// reference point and of the centre mark.
+fn paint_centre_glyph(draw: &Draw<'_>, centre: Pos2, style: &TransformBoxStyle) {
+    let (radius, arm) = (style.pivot_radius, style.pivot_arm);
+    for (width, color) in [(StrokeWidth::Thick, style.halo), (StrokeWidth::Medium, style.line)] {
+        draw.stroke(&PaintShape::Circle(centre, radius), width, color);
+        draw.stroke(&PaintShape::Path(vec![centre - Vec2::new(arm, 0.0), centre + Vec2::new(arm, 0.0)]), width, color);
+        draw.stroke(&PaintShape::Path(vec![centre - Vec2::new(0.0, arm), centre + Vec2::new(0.0, arm)]), width, color);
+    }
+}
+
+/// The box handle a line's end at `end` stands for, the other end at `other`: the corner it points to, away from the
+/// other end, or on a level or upright line the side. `None` when the ends meet.
+fn end_part(end: Point, other: Point) -> Option<BoxPart> {
+    let sign = |d: f64| i8::from(d > 0.0) - i8::from(d < 0.0);
+    match (sign(end.x - other.x), sign(end.y - other.y)) {
+        (-1, -1) => Some(BoxPart::Corner(0)),
+        (1, -1) => Some(BoxPart::Corner(1)),
+        (1, 1) => Some(BoxPart::Corner(2)),
+        (-1, 1) => Some(BoxPart::Corner(3)),
+        (0, -1) => Some(BoxPart::Edge(0)),
+        (1, 0) => Some(BoxPart::Edge(1)),
+        (0, 1) => Some(BoxPart::Edge(2)),
+        (-1, 0) => Some(BoxPart::Edge(3)),
+        _ => None,
+    }
+}
+
 /// What the cursor of a part reads: the box on the screen, the canvas space and the style.
 struct CursorLook<'a> {
     space: &'a CanvasSpace,
@@ -565,6 +706,7 @@ impl Component for TransformBox<'_> {
             band_outer: handle.md * BAND_OUTER_IN_HANDLES,
             pivot_radius: cx.tokens.size.handle.sm / 2.0,
             pivot_arm: hit.target,
+            widget: CornerStyle::from_cx(cx),
         }
     }
 
@@ -590,7 +732,8 @@ impl Component for TransformBox<'_> {
     /// The whole box, the corners, the edges and the reference point the rules allow, in keyboard order, then each
     /// side as a pointer-only segment, the centre and the move strips where declared, and the outside. A handle, the
     /// reference point and the centre rank alike, so the nearest wins where they overlap on a small box; they rank above
-    /// a side, which ranks above the inside, which ranks above the outside.
+    /// a side, which ranks above the inside, which ranks above the outside. A live line's controls declare its two
+    /// ends only.
     fn parts(&mut self, rect: Rect, cx: &mut PartsCx<'_, Self>) {
         let (Some(space), Some(state)) = (canvas_space(&cx.env), cx.value().copied()) else { return };
         let style = cx.style;
@@ -610,7 +753,7 @@ impl Component for TransformBox<'_> {
                     FocusShape::Circle,
                 ),
                 handle => {
-                    let at = handle_point(&screen, handle).map_or(Pos2::ZERO, pos);
+                    let at = self.part_point(&state, handle).map_or(Pos2::ZERO, |at| space.view.to_screen(at));
                     (
                         HitShape::circle(at, style.hit),
                         Sense::DRAG | Sense::TAKE_FOCUS,
@@ -621,6 +764,12 @@ impl Component for TransformBox<'_> {
             };
             cx.part(BOX.at(part.index()), shape).sense(sense).priority(priority).focus_shape(focus).focusable();
             any = true;
+        }
+        if self.line.is_some() {
+            if any {
+                cx.roving(Roving::new(NavShape::Flat).page(Some(1)));
+            }
+            return;
         }
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))) {
             let side = usize::from(k);
@@ -673,41 +822,37 @@ impl Component for TransformBox<'_> {
         let held = cx.press_slot::<Grip>().is_some();
         self.run_pointer(cx, &space, &shown);
         self.pivot_held = cx.press_slot::<Grip>().is_some_and(|grip| grip.part == BoxPart::Pivot);
+        self.dragging = cx.press_slot::<Grip>().is_some_and(|grip| grip.began);
         let pressing = held || cx.press_slot::<Grip>().is_some();
         self.run_keys(cx, &space, &shown, pressing);
     }
 
+    /// The frame and its handles, with the centre mark under the handles; or, for a live line not being dragged, the
+    /// line's controls. The reference point over both.
     fn paint(&mut self, ui: &mut PaintUi<'_>, cx: &Cx<'_, Self>) {
         let (Some(space), Some(state)) = (canvas_space(&cx.env), cx.value()) else { return };
         let screen = on_screen(&space.view, state);
         let style = cx.style;
         let draw = ui.draw();
-        let outline = PaintShape::Polygon(screen.quad.map(pos).to_vec());
-        draw.stroke(&outline, StrokeWidth::Thick, style.halo);
-        draw.stroke(&outline, StrokeWidth::Medium, style.line);
-        let look = &style.handle;
-        for i in 0..4u8 {
-            for part in [BoxPart::Corner(i), BoxPart::Edge(i)] {
-                let Some(at) = handle_point(&screen, part) else { continue };
-                let enlarged = self.overflow && part == BoxPart::Corner(2);
-                let side = if enlarged { look.side * OVERFLOW_IN_HANDLES } else { look.side };
-                let square = PaintShape::Rect(Rect::from_center_size(pos(at), Vec2::splat(side)), CornerRadius::ZERO);
-                let fill = if self.rules.allows(part) { cx.resolve_part(BOX.at(part.index()), &look.fill) } else { cx.resolve(&look.fill) };
-                draw.fill(&square, fill);
-                draw.stroke(&square, StrokeWidth::Thin, look.stroke);
-                if enlarged {
-                    Handle::plus(&draw, look, pos(at), side);
+        match self.line.filter(|_| !self.dragging) {
+            Some(line) => self.paint_line(&draw, cx, &space.view, &line),
+            None => {
+                paint_frame(&draw, style, screen.quad.map(pos));
+                if self.centre_mark {
+                    let centre = screen.quad.iter().fold(Vec2::ZERO, |sum, corner| sum + pos(*corner).to_vec2()) / 4.0;
+                    paint_centre_glyph(&draw, centre.to_pos2(), style);
+                }
+                for i in 0..4u8 {
+                    for part in [BoxPart::Corner(i), BoxPart::Edge(i)] {
+                        let Some(at) = handle_point(&screen, part) else { continue };
+                        let enlarged = self.overflow && part == BoxPart::Corner(2);
+                        self.paint_handle(&draw, cx, part, pos(at), enlarged);
+                    }
                 }
             }
         }
         if self.reference_point || self.pivot_held {
-            let centre = pos(screen.pivot);
-            let (radius, arm) = (style.pivot_radius, style.pivot_arm);
-            for (width, color) in [(StrokeWidth::Thick, style.halo), (StrokeWidth::Medium, style.line)] {
-                draw.stroke(&PaintShape::Circle(centre, radius), width, color);
-                draw.stroke(&PaintShape::Path(vec![centre - Vec2::new(arm, 0.0), centre + Vec2::new(arm, 0.0)]), width, color);
-                draw.stroke(&PaintShape::Path(vec![centre - Vec2::new(0.0, arm), centre + Vec2::new(0.0, arm)]), width, color);
-            }
+            paint_centre_glyph(&draw, pos(screen.pivot), style);
         }
     }
 
@@ -722,7 +867,7 @@ impl Component for TransformBox<'_> {
         for part in self.keyboard_parts() {
             let node = access.node(BOX.at(part.index()), Role::BUTTON);
             node.name = Name::Text(words.name_of(part).to_owned());
-            if let Some(at) = handle_point(state, part) {
+            if let Some(at) = self.part_point(state, part) {
                 node.description = Some(format!("{}, {}", across_x.format_value(&units, at.x, zero_x), across_y.format_value(&units, at.y, zero_y)));
             }
         }

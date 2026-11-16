@@ -5,7 +5,7 @@ use craft_behavior::geometry::quad::{BoxPart, BoxRules, BoxState, ScaleRule};
 use craft_behavior::geometry::{SnapKind, SnapOptions, SnapTarget, SnapTargets};
 use craft_behavior::kurbo::{Point, Rect};
 use craft_behavior::{CanvasView, EditEvent, RulerUnits, Ticks};
-use craft_draw::ui::transform::{RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformSession, TransformSettings};
+use craft_draw::ui::transform::{LineLook, RotateZone, TransformBox, TransformEdit, TransformOverlay, TransformSession, TransformSettings};
 use craft_keymap::{Mods, Platform};
 use craft_ui::canvas::{Canvas, RulerText, Snap};
 use craft_ui::canvas::{Guide, GuideKey};
@@ -49,6 +49,8 @@ struct Config {
     rulers: Option<RulerText>,
     /// The host keeps the box in f32, as a text layer keeps its box, and gives it back with its centre as the pivot.
     f32_host: bool,
+    centre_mark: bool,
+    line: Option<LineLook>,
 }
 
 /// What the host keeps of the box and what the passes reported.
@@ -88,6 +90,8 @@ fn defaults() -> Config {
         overflow: false,
         rulers: None,
         f32_host: false,
+        centre_mark: false,
+        line: None,
     }
 }
 
@@ -154,10 +158,14 @@ fn harness(state: BoxState, setup: impl FnOnce(&mut Config)) -> Harness {
                     .rotate_zone(config.zone)
                     .inside_moves(config.inside_moves)
                     .reference_point(config.reference_point)
+                    .centre_mark(config.centre_mark)
             }
             .pixel_grid(config.pixel_grid);
             if let Some(mods) = config.mods {
                 control = control.mods(mods);
+            }
+            if let Some(line) = config.line {
+                control = control.line(line);
             }
             (control.show_at(ui, body.rect), guide_edits)
         });
@@ -568,4 +576,99 @@ fn the_session_boxs_snap_lines_reach_the_tool_host() {
     assert!(step(vec![pointer::moved(from + by(7.0, 0.0))]) > 0, "the corner snapped to x 310: the host reports the line");
     step(vec![pointer::release(from + by(7.0, 0.0))]);
     assert_eq!(step(Vec::new()), 0, "the lines end with the drag");
+}
+
+/// The Ellipse tool's centre mark is drawn only: whatever a press at the middle of the box took without it, it takes
+/// with it (the tool's with the inside off, the move with it on).
+#[trial]
+fn the_centre_mark_takes_no_press() {
+    let middle = Point::new(200.0, 150.0);
+    for inside_moves in [false, true] {
+        let mut hovered = Vec::new();
+        for centre_mark in [false, true] {
+            let mut h = harness(BoxState::from_rect(RECT), |config| {
+                config.reference_point = false;
+                config.inside_moves = inside_moves;
+                config.centre_mark = centre_mark;
+            });
+            hover(&mut h, middle);
+            hovered.push(h.host.borrow().hovered);
+        }
+        assert_eq!(hovered[0], hovered[1], "inside moves {inside_moves}: the mark changes nothing a press there takes");
+    }
+}
+
+/// A live line's controls: only its two ends take a press, each as the box handle it points to, so an end drag scales
+/// the box from the other end. The hidden handles, the inside, the midpoint widget, the outside and the squares on an
+/// arrowhead box's sides take none.
+#[trial]
+fn a_live_line_takes_a_press_only_at_its_ends_and_an_end_drag_scales_from_the_other_end() {
+    // The line runs from the box's bottom left corner to its top right one.
+    let (from, to) = (Point::new(RECT.x0, RECT.y1), Point::new(RECT.x1, RECT.y0));
+    let line = LineLook::new(from, to);
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.rules = free_rules();
+        config.reference_point = false;
+        config.zone = RotateZone::Band;
+        config.line = Some(line);
+    });
+    hover(&mut h, to);
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(1)), "the end at the top right stands for that corner");
+    hover(&mut h, from);
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(3)), "the end at the bottom left stands for that corner");
+    let untaken = [
+        (Point::new(RECT.x0, RECT.y0), "the hidden top left corner"),
+        (Point::new(RECT.x1, RECT.y1), "the hidden bottom right corner"),
+        (Point::new(200.0, RECT.y0), "the hidden top edge"),
+        (from.midpoint(to), "the midpoint widget"),
+        (Point::new(150.0, 190.0), "the inside"),
+        (Point::new(RECT.x1 + 40.0, RECT.y1 + 40.0), "the outside"),
+    ];
+    for (at, what) in untaken {
+        hover(&mut h, at);
+        assert_eq!(h.host.borrow().hovered, None, "{what} takes no press");
+    }
+    drag(&mut h, to, to + kurbo_vec(20.0, -10.0));
+    let quad = h.state().quad;
+    assert!((quad[1].x - (RECT.x1 + 20.0)).abs() < 1e-6 && (quad[1].y - (RECT.y0 - 10.0)).abs() < 1e-6, "the dragged corner follows: {quad:?}");
+    assert!((quad[3].x - RECT.x0).abs() < 1e-6 && (quad[3].y - RECT.y1).abs() < 1e-6, "the other end's corner stays: {quad:?}");
+    assert_eq!(h.host.borrow().events.first(), Some(&Seen::Begin));
+    assert_eq!(h.host.borrow().events.last(), Some(&Seen::Commit));
+
+    // With an arrowhead, the box along the segment holds the line 10 units each side and 15 past each end.
+    let length = from.distance(to);
+    let (u, n) = ((to - from) / length, kurbo_vec(-(to.y - from.y) / length, (to.x - from.x) / length));
+    let outline = [from - u * 15.0 - n * 10.0, to + u * 15.0 - n * 10.0, to + u * 15.0 + n * 10.0, from - u * 15.0 + n * 10.0];
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.rules = free_rules();
+        config.reference_point = false;
+        config.zone = RotateZone::Band;
+        config.line = Some(line.with_outline(Some(outline)));
+    });
+    hover(&mut h, to);
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Corner(1)), "the ends still take a press");
+    for side in [outline[0].midpoint(outline[1]), outline[2].midpoint(outline[3])] {
+        hover(&mut h, side);
+        assert_eq!(h.host.borrow().hovered, None, "the square on the side at {side:?} takes no press");
+    }
+}
+
+/// A level line's ends stand for the side handles they point to.
+#[trial]
+fn a_level_live_lines_ends_stand_for_the_sides() {
+    let (from, to) = (Point::new(RECT.x0, 150.0), Point::new(RECT.x1, 150.0));
+    let mut h = harness(BoxState::from_rect(RECT), |config| {
+        config.rules = free_rules();
+        config.reference_point = false;
+        config.zone = RotateZone::Band;
+        config.line = Some(LineLook::new(from, to));
+    });
+    hover(&mut h, to);
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(1)));
+    hover(&mut h, from);
+    assert_eq!(h.host.borrow().hovered, Some(BoxPart::Edge(3)));
+}
+
+fn kurbo_vec(x: f64, y: f64) -> craft_behavior::kurbo::Vec2 {
+    craft_behavior::kurbo::Vec2::new(x, y)
 }
