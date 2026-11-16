@@ -476,6 +476,28 @@ fn a_straighten_line_fits_when_armed_turns_in_place_when_held_and_always_spends_
 }
 
 #[trial]
+fn a_line_started_with_cmd_keeps_turning_the_frame_in_place_after_cmd_is_let_go() {
+    let fall = 200.0 * 10f64.to_radians().tan();
+    let mut rig = Rig::new(classic());
+    rig.drag((100.0, 80.0), (300.0, 220.0));
+    let before = rig.frame().expect("a drawn frame");
+    rig.fixture.hold(Modifiers::COMMAND);
+    rig.run();
+    let (from, to) = (rig.at(100.0, 150.0), rig.at(300.0, 150.0 + fall));
+    rig.fixture.frame(vec![pointer::moved(from)]);
+    rig.fixture.frame(vec![pointer::press(from)]);
+    rig.fixture.frame(vec![pointer::moved(from + (to - from) * 0.5)]);
+    // Cmd comes up before the line ends: it is still the line it started as.
+    rig.fixture.hold(Modifiers::NONE);
+    rig.fixture.frame(vec![pointer::moved(to)]);
+    rig.fixture.frame(vec![pointer::release(to)]);
+    rig.fixture.frame(Vec::new());
+    let frame = rig.frame().expect("a frame");
+    assert!((frame.angle - 10.0).abs() < 0.1, "angle {}", frame.angle);
+    assert_eq!(frame.rect, before.rect, "size and centre stay");
+}
+
+#[trial]
 fn image_mode_moves_and_turns_the_view_and_classic_mode_the_frame() {
     // A turned view comes upright when the tool runs, in either mode.
     for settings in [CropSettings::default(), classic()] {
