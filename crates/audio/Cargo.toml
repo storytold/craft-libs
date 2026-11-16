@@ -58,6 +58,8 @@ ac3-encode = ["craft-media/bitstream"]
 eac3-encode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) encoder (`mp3`).
 mp3-encode = ["craft-media/bitstream"]
+# Direct Stream Digital (DSD) files: DSF and DSDIFF decoders and DSD-to-PCM decimation.
+dsd = []
 # Multi-resolution waveform overviews (`peaks`).
 peaks = []
 # Encode AAC channels in parallel (with `aac-encode`).
@@ -95,6 +97,10 @@ required-features = ["flac-decode", "flac-encode"]
 [[test]]
 name = "qoa_oracle"
 required-features = ["qoa"]
+
+[[test]]
+name = "dsd_oracle"
+required-features = ["dsd"]
 
 [[example]]
 name = "info"
