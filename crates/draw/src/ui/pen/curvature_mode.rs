@@ -26,6 +26,7 @@ impl PenTool {
     /// - the second click of a double click on an anchor toggles it between smooth and corner and reflows; on empty
     ///   canvas the first click's anchor is under it, so a double click places a corner point.
     pub(super) fn press_curve(&mut self, pointer: &ToolPointer, view: &CanvasView, reach: f32) -> ToolAction {
+        self.carry_on_selected(pointer.pos, view, reach);
         let mut draft = self.shown.clone();
         let n = draft.knots.len();
         let under = draft
@@ -78,6 +79,18 @@ impl PenTool {
         self.change(draft);
         self.drag = Some(Drag { origin: pointer.pos, kind: Kind::Move(index), last: pointer.pos, moved: false, in_ctrl });
         ToolAction::Claimed
+    }
+
+    /// With no draft and the press not on an end point of an open path, the subpath [`carry_on`](PenTool::carry_on)
+    /// names becomes the draft, reported as [`PenEvent::Resumed`]: the press then adds its anchor to it.
+    fn carry_on_selected(&mut self, pos: Pos2, view: &CanvasView, reach: f32) {
+        if !self.shown.knots.is_empty() || self.ends.iter().any(|(_, _, p)| view.to_screen(*p).distance(pos) <= reach) {
+            return;
+        }
+        let Some((path, knot, draft)) = self.carry.take() else { return };
+        self.kept = draft.knots.len();
+        self.shown = draft;
+        self.events.push(PenEvent::Resumed(path, knot));
     }
 
     /// The draft line, the hover preview, the square anchors (the last filled) and the close cue.
