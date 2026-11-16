@@ -144,6 +144,12 @@ fn le64(out: &mut Vec<u8>, v: u64) {
 
 /// Writes `entries` as a zip archive, with a ZIP64 end record if `zip64_end`.
 pub fn write(entries: &[Raw], zip64_end: bool) -> Vec<u8> {
+    write_at(entries, zip64_end, 0)
+}
+
+/// Writes an archive whose offsets count from `base` bytes before the ZIP data.
+/// This models a self-extracting archive that has been adjusted to count from file start.
+pub fn write_at(entries: &[Raw], zip64_end: bool, base: u64) -> Vec<u8> {
     let mut out = Vec::new();
     let mut central = Vec::new();
     let mut offsets = Vec::new();
@@ -161,7 +167,7 @@ pub fn write(entries: &[Raw], zip64_end: bool) -> Vec<u8> {
         let comp = data.len() as u64;
         let flags = e.flags | if e.descriptor { 8 } else { 0 } | if e.utf8 { 0x800 } else { 0 };
         let version: u16 = if e.zip64 { 45 } else { 20 };
-        let offset = out.len() as u64;
+        let offset = base + out.len() as u64;
         offsets.push(offset);
         // The local header.
         le32(&mut out, 0x0403_4b50);
@@ -235,11 +241,11 @@ pub fn write(entries: &[Raw], zip64_end: bool) -> Vec<u8> {
         central.extend_from_slice(&e.name);
         central.extend_from_slice(&extra);
     }
-    let dir_at = out.len() as u64;
+    let dir_at = base + out.len() as u64;
     out.extend_from_slice(&central);
     let n = entries.len() as u64;
     if zip64_end {
-        let record = out.len() as u64;
+        let record = base + out.len() as u64;
         le32(&mut out, 0x0606_4b50);
         le64(&mut out, 44);
         le16(&mut out, 45);
