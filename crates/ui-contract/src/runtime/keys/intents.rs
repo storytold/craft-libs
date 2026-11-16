@@ -437,8 +437,11 @@ pub fn take_submit(ctx: &Context) -> bool {
     take_untaken(ctx, &Intent::Submit)
 }
 
-/// Takes an untaken `Cancel` (Escape) for the focused stop, without deciding what the scope does with it.
-pub(crate) fn take_cancel(ctx: &Context) -> bool {
+/// Takes an untaken `Cancel` (Escape) for the focused stop, without deciding what the scope does with it. An app
+/// that opens a modal layer in the pass an Escape arrives in takes it with this, so the focused component (a frame
+/// part of a canvas, say) does not act on it beneath the layer.
+#[doc(hidden)]
+pub fn take_cancel(ctx: &Context) -> bool {
     take_untaken(ctx, &Intent::Cancel)
 }
 

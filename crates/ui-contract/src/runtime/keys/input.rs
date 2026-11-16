@@ -344,7 +344,7 @@ enum PressUse {
 /// bare End where it declares `EndKey::EndMode`.
 pub(super) fn focused_claims(record: &focus::FocusedRecord, stage: &Stage) -> Vec<Chord> {
     let mut claims = record.claims.clone();
-    claims.extend(stage.claims.iter().filter(|(owner, _)| Some(*owner) == record.focused).map(|(_, chord)| *chord));
+    claims.extend(stage.claims.iter().filter(|(owner, _)| Some(*owner) == record.focused || Some(*owner) == record.root).map(|(_, chord)| *chord));
     // A bare End belongs to a stop that declares `EndKey::EndMode`: it reads the key as a claimed chord and toggles its
     // mode, so no collection navigation or scroll owner takes it as a move to the end.
     if record.keys.is_some_and(|keys| keys.end == EndKey::EndMode) {
