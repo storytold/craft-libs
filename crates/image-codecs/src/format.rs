@@ -308,7 +308,8 @@ pub fn caps(format: Format) -> FormatCaps {
         // Resolution travels in EXIF (WebP has no field of its own).
         Format::WebP => FormatCaps { icc: true, exif: true, xmp: true, dpi: true, animation: true, ..base },
         Format::Gif => FormatCaps { layouts: &[L::Rgba], animation: true, lossy: true, ..base },
-        Format::Bmp => base,
+        // Resolution in the header's pixels per metre (BITMAPINFOHEADER and later).
+        Format::Bmp => FormatCaps { dpi: true, ..base },
         Format::Tga => FormatCaps { layouts: RGB_GRAY, ..base },
         Format::Ico => FormatCaps { layouts: &[L::Rgba], ..base },
         Format::Pnm => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: ALL_LAYOUTS, ..base },
