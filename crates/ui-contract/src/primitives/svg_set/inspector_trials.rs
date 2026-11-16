@@ -1,6 +1,6 @@
 //! The drawings the catalogue gained for the transform and layout panels, read from the generated catalogue itself:
-//! each parses, its ink stays inside its view box, it draws along the axis or on the side its name gives, it does not
-//! mirror, and no two of them are the same document in one set.
+//! each parses, its ink stays inside its view box, it draws along the axis or on the side its name gives in the
+//! coordinates it renders in, it does not mirror, and no two of them are the same document in one set.
 //!
 //! `build.rs` checks the catalogue as data (its tables, a file for every listed name, no unlisted file, the stroke
 //! lists) and reads no drawing. The catalogue's `svg` resolves a name and a set to the document the rasteriser draws,
@@ -11,15 +11,28 @@
 use super::{DIRECTIONAL, IconSet, find, svg};
 use crate::primitives::svg_tree;
 use crate::testing::trial;
-use craft_svg::tree::usvg::tiny_skia_path::PathSegment;
+use craft_svg::tree::usvg::tiny_skia_path::{self, PathSegment, Transform};
 use craft_svg::tree::usvg::{Group, Node, Path};
 use std::collections::BTreeMap;
 
-/// How far an edge may drift from an axis, in view-box units, for the parser to count it as along that axis.
+/// How far an edge may drift from an axis, in the coordinates the drawing renders in, for the trial to count it as
+/// along that axis.
 const STRAIGHT: f32 = 0.01;
 
 /// The slack the view-box check allows, in view-box units: a cap or a join just past the box is not a crop.
 const SLACK: f32 = 1.0;
+
+/// The length of the bar the two fixtures below draw, in view-box units.
+const BAR: f32 = 16.0;
+
+/// A drawing written the awkward way round: a bar that runs along x inside a group rotated 90 degrees about the centre
+/// of its 24 unit box, inside another group that shifts it, so it draws down the box from the top to the bottom. Two
+/// groups, because a reading that applied only the nearest transform and stopped there is a way to get this wrong.
+const ROTATED: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><g transform="translate(2 2)"><g transform="rotate(90 12 12)"><path d="M4 8h16" fill="none" stroke="currentColor" stroke-width="2"/></g></g></svg>"#;
+
+/// The same bar flattened: the edge written where those transforms land it, `M4 8h16` becoming `M18 6v16`, with no
+/// transform at all. The two documents draw the same edge, so a reading of the drawing must give them the same axes.
+const FLAT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M18 6v16" fill="none" stroke="currentColor" stroke-width="2"/></svg>"#;
 
 /// What a glyph's drawing must show. Each name is the axis or the side of the screen its control changes, never a
 /// reading direction.
@@ -80,21 +93,14 @@ impl Painted {
     }
 }
 
-/// Every painted path of `group`, depth first. A path with neither a fill nor a stroke paints nothing (Tabler ships one
-/// as a placeholder) and is left out.
-fn painted(group: &Group) -> Vec<Painted> {
-    fn walk(group: &Group, out: &mut Vec<Painted>) {
+/// The path nodes of `group` that paint, depth first. A path with neither a fill nor a stroke paints nothing (Tabler
+/// ships one as a placeholder) and is left out, and so is one drawn hidden.
+fn drawn_paths(group: &Group) -> Vec<&Path> {
+    fn walk<'a>(group: &'a Group, out: &mut Vec<&'a Path>) {
         for node in group.children() {
             match node {
                 Node::Group(inner) => walk(inner, out),
-                Node::Path(path) if path.is_visible() && (path.fill().is_some() || path.stroke().is_some()) => {
-                    let rect = path.abs_stroke_bounding_box();
-                    out.push(Painted {
-                        rect: [rect.left(), rect.top(), rect.right(), rect.bottom()],
-                        straight: straight_runs(path),
-                        filled: path.fill().is_some(),
-                    });
-                }
+                Node::Path(path) if path.is_visible() && (path.fill().is_some() || path.stroke().is_some()) => out.push(path.as_ref()),
                 _ => {}
             }
         }
@@ -104,22 +110,48 @@ fn painted(group: &Group) -> Vec<Painted> {
     out
 }
 
-/// The longest straight edge of `path` along x and along y, in view-box units. The parser resolves a path's segments
-/// to the coordinates it draws in, so an edge is along an axis when one of its deltas is zero; a curve is read as its
-/// end point, which no edge of these drawings depends on.
+/// Every painted path of `group`, read: its box including the stroke, its straight edges, and whether it is filled.
+fn painted(group: &Group) -> Vec<Painted> {
+    drawn_paths(group)
+        .into_iter()
+        .map(|path| {
+            let rect = path.abs_stroke_bounding_box();
+            Painted { rect: [rect.left(), rect.top(), rect.right(), rect.bottom()], straight: straight_runs(path), filled: path.fill().is_some() }
+        })
+        .collect()
+}
+
+/// The longest straight edge of `path` along x and along y, in the coordinates the drawing renders in: its segments
+/// placed by the path's absolute transform, the one the renderer draws it with.
 fn straight_runs(path: &Path) -> [f32; 2] {
+    straight_edges(path.data(), path.abs_transform())
+}
+
+/// The longest straight edge of `data` along x and along y once `transform` has placed its points, in the units that
+/// transform gives. usvg keeps a path's segments in the element's own coordinates and leaves every transform above them,
+/// a `<g transform>`, the element's own and the root view box's scale, on the node's absolute transform for the renderer
+/// to apply, so `data` alone is not where the drawing lands: `usvg::Path::data`'s "all segments are in absolute
+/// coordinates" means that the commands are absolute (`M`, `L`, not `m`, `l`), never that they are in canvas coordinates.
+/// An edge is along an axis when, drawn, one of its deltas is zero; a curve is read as its end point, which no edge of
+/// these drawings depends on. An identity `transform` reads the document as written. This is the reading
+/// `craft_svg::tree::document` takes when it converts a parsed tree into a document.
+fn straight_edges(data: &tiny_skia_path::Path, transform: Transform) -> [f32; 2] {
+    let placed = |mut point: tiny_skia_path::Point| {
+        transform.map_point(&mut point);
+        (point.x, point.y)
+    };
     let mut runs = [0.0f32; 2];
     let mut from = (0.0f32, 0.0f32);
     let mut start = from;
-    for segment in path.data().segments() {
+    for segment in data.segments() {
         let to = match segment {
             PathSegment::MoveTo(point) => {
-                from = (point.x, point.y);
+                from = placed(point);
                 start = from;
                 continue;
             }
             PathSegment::Close => start,
-            PathSegment::LineTo(point) | PathSegment::QuadTo(.., point) | PathSegment::CubicTo(.., point) => (point.x, point.y),
+            PathSegment::LineTo(point) | PathSegment::QuadTo(.., point) | PathSegment::CubicTo(.., point) => placed(point),
         };
         let (dx, dy) = ((to.0 - from.0).abs(), (to.1 - from.1).abs());
         if dy <= STRAIGHT {
@@ -203,8 +235,44 @@ fn drawn_as(name: &str, set: &str, reads: Reads, ink: &[Painted], view: (f32, f3
     }
 }
 
+/// The reading above is taken where a drawing lands, not where its `d` is written, which is what a glyph drawn sideways
+/// inside a `<g>` exposes: the bar written along x in `ROTATED` draws along y, and `straight_runs` must say so.
+///
+/// The bar's own coordinates still read along x, and `straight_edges` with an identity transform is kept as the reading
+/// of the document as written; that is the reading this trial would compare against if the segments were not placed by
+/// the path's absolute transform, so this case fails the old measurement and passes the drawn one. `FLAT` writes that
+/// same edge where the rotation lands it, with no transform to apply, and the two documents must read alike.
+fn edges_are_read_in_the_coordinates_the_drawing_renders_in() {
+    let rotated = svg_tree::parse(ROTATED.as_bytes()).expect("the rotated fixture parses");
+    let flat = svg_tree::parse(FLAT.as_bytes()).expect("the flattened fixture parses");
+    let bars = drawn_paths(rotated.root());
+    assert_eq!(bars.len(), 1, "the rotated fixture draws one bar");
+    let drawn = straight_runs(bars[0]);
+    assert!(
+        drawn[1] >= BAR - STRAIGHT && drawn[0] <= STRAIGHT,
+        "a bar written along x inside two transformed groups that rotate it draws along y, but its edges read {drawn:?}"
+    );
+    let written = straight_edges(bars[0].data(), Transform::identity());
+    assert!(
+        written[0] >= BAR - STRAIGHT && written[1] <= STRAIGHT,
+        "the coordinates the rotated bar's `d` is written in read {written:?}, along x: that is not an axis the drawing has"
+    );
+    let flats = drawn_paths(flat.root());
+    assert_eq!(flats.len(), 1, "the flattened fixture draws one bar");
+    let flattened = straight_runs(flats[0]);
+    assert!(
+        flattened[1] >= BAR - STRAIGHT && (flattened[0] - drawn[0]).abs() <= STRAIGHT && (flattened[1] - drawn[1]).abs() <= STRAIGHT,
+        "the bar written where the rotation lands it reads {flattened:?} and the rotated one {drawn:?}: both draw the same edge"
+    );
+    // The catalogue's own check on that drawing, which only reads right once the segments are placed: it fails on the
+    // untransformed reading, where the longest straight edge is 16 along x and nothing along y.
+    let view = (rotated.size().width(), rotated.size().height());
+    drawn_as("the rotated bar", "a fixture", Reads::LeansY, &painted(rotated.root()), view);
+}
+
 #[trial]
 fn the_added_transform_and_layout_glyphs_draw_where_their_names_say() {
+    edges_are_read_in_the_coordinates_the_drawing_renders_in();
     for set in IconSet::ALL {
         let mut documents: BTreeMap<&'static [u8], &str> = BTreeMap::new();
         for (name, reads) in ADDED {
