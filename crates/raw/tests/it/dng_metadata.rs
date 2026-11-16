@@ -112,3 +112,34 @@ fn calibration_matches_the_full_reader() {
     assert_eq!(c.forward_matrix, [None, None]);
     assert_eq!(c.camera_calibration, [None, None]);
 }
+
+#[test]
+fn capture_info_matches_the_full_readers_cinema_tags() {
+    use craft_raw::dng_metadata::Timecode;
+    let tc = Timecode { hours: 10, minutes: 59, seconds: 7, frames: 23, drop_frame: true };
+    let bytes = dng_with(cfa_raw(|_| {}), ByteOrder::Big, |ifd0| {
+        ifd0.set(ct::FRAME_RATE, Value::SRational(vec![(24000, 1001)]));
+        ifd0.set(ct::TIME_CODES, Value::Byte(tc.to_bytes().to_vec()));
+        ifd0.set(ct::REEL_NAME, Value::Ascii("A001".into()));
+        ifd0.set(ct::MODEL, Value::Ascii("Cam".into()));
+    });
+    let info = with_metadata(&bytes, |m| m.capture_info());
+    let cinema = craft_raw::decode(&bytes).unwrap().cinema;
+    assert_eq!(info.dng_version, [1, 6, 0, 0]);
+    assert_eq!(info.frame_rate, Some((24000, 1001)));
+    assert_eq!((info.frame_rate, info.timecode), (cinema.frame_rate, cinema.timecode));
+    assert_eq!(info.timecode, Some(tc));
+    assert_eq!(info.reel.as_deref(), cinema.reel_name.as_deref());
+    assert_eq!(info.camera.as_deref(), Some("Hand Cam"));
+    // an implausible rate and a broken time code are dropped by both; UniqueCameraModel wins
+    let bytes = dng_with(cfa_raw(|_| {}), ByteOrder::Little, |ifd0| {
+        ifd0.set(ct::FRAME_RATE, Value::Rational(vec![(5000, 1)]));
+        ifd0.set(ct::TIME_CODES, Value::Byte(vec![0x0a, 0, 0, 0, 0, 0, 0, 0]));
+        ifd0.set(ct::UNIQUE_CAMERA_MODEL, Value::Ascii("Hand Cam Mk II".into()));
+    });
+    let info = with_metadata(&bytes, |m| m.capture_info());
+    assert_eq!((info.frame_rate, info.timecode, info.reel), (None, None, None));
+    assert_eq!(info.camera.as_deref(), Some("Hand Cam Mk II"));
+    let cinema = craft_raw::decode(&bytes).unwrap().cinema;
+    assert_eq!((cinema.frame_rate, cinema.timecode), (None, None));
+}
