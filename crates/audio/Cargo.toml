@@ -46,6 +46,10 @@ qoa = ["qoa-decode", "qoa-encode"]
 qoa-decode = []
 qoa-encode = []
 opus-encode = []
+# GSM 06.10 full-rate speech: decoder and encoder in the `gsm` module, each on its own.
+gsm = ["gsm-decode", "gsm-encode"]
+gsm-decode = []
+gsm-encode = []
 ac3-decode = ["craft-media/bitstream"]
 mpa-decode = ["craft-media/bitstream"]
 # MPEG-1/2 Layer III (MP3) decoder (`mp3::Decoder`).
@@ -91,6 +95,10 @@ required-features = ["decode", "encode"]
 [[test]]
 name = "flac_decode"
 required-features = ["flac-decode", "flac-encode"]
+
+[[test]]
+name = "gsm_oracle"
+required-features = ["gsm"]
 
 [[test]]
 name = "qoa_oracle"
