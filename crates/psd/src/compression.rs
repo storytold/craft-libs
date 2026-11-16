@@ -213,8 +213,9 @@ pub mod packbits {
     /// row is zero-padded. Truncated packet payloads still fail; trailing packets
     /// after the row is full are ignored. Strict decoding remains the default.
     ///
-    /// Output is bounded by `max_row_bytes` and the PSD decoded-size limit.
-    /// Allocation is fallible. Existing output is retained, including on error.
+    /// Appended row bytes are bounded by `max_row_bytes` and the PSD decoded-size
+    /// limit; callers enforce their aggregate image budget. Allocation is fallible.
+    /// Existing output is retained; an error may leave a partially appended row.
     pub fn decode_padded_into(src: &[u8], expected: usize, max_row_bytes: usize, out: &mut Vec<u8>) -> Result<()> {
         if expected > max_row_bytes || expected as u64 > super::MAX_DECODED_BYTES {
             return Err(PsdError::LimitExceeded("PackBits recovery row exceeds limit"));
