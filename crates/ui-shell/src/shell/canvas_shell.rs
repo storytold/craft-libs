@@ -117,8 +117,9 @@ impl<'a> CanvasPanel<'a> {
 
         let mut rail_rect = None;
         if let (Some((label, mut add)), true) = (rail, dock) {
-            let out =
-                ShellRegion::chrome(ShellPane::new("panel_rail").edge(PaneEdge::End)).id_salt("panel_rail").label(label).show(ui, |ui, cx| add(ui, cx));
+            // One rail column wide, as the shell's rails are.
+            let pane = ShellPane::new("panel_rail").edge(PaneEdge::End).extent(env.tokens.size.rail.width);
+            let out = ShellRegion::chrome(pane).id_salt("panel_rail").label(label).show(ui, |ui, cx| add(ui, cx));
             rail_rect = Some(out.response.rect);
         }
         let mut tabs_rect = None;
