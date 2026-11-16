@@ -1737,3 +1737,34 @@ fn module_sheets_and_supporting_links_are_bounded() {
     assert_eq!(wb.sheets[0].formula(CellRef::new(0, 0)), None);
     assert!(wb.warnings.iter().any(|w| w.contains("sheet links or names could not be read")), "{:?}", wb.warnings);
 }
+
+#[test]
+fn empty_ordinary_names_and_their_dependants_keep_cached_values() {
+    // Forward and transitive references to an empty ordinary name must not become dangling
+    // formulas. An empty sheet-scoped Database or another built-in is not the observed
+    // workbook-level Database exception either.
+    let mut list = names();
+    let cell = |i: u32| [&[0x23u8][..], &i.to_le_bytes()].concat();
+    list.push(brt_name(0, 0, WORKBOOK, "Early", &cell(16), None)); // 14
+    list.push(brt_name(0, 0, WORKBOOK, "Empty", &[], None)); // 15
+    list.push(brt_name(0, 0, WORKBOOK, "Alias", &cell(15), None)); // 16
+    list.push(brt_name(0x20, 0, 0, "Database", &[], None)); // 17
+    list.push(brt_name(0x20, 0, WORKBOOK, "Print_Area", &[], None)); // 18
+    list.push(brt_name(0, 0, WORKBOOK, "Fine", &cell(9), None)); // 19
+    let mut data = row(0);
+    for i in 14..=19 {
+        data.extend(formula_cell(i - 13, &cell(i), &[]));
+    }
+    let bytes = package(&book_with_names(&list), &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let wb = Package::open(&bytes, &Limits::default()).unwrap().workbook().unwrap();
+    let xml = NAMES_XML.replace("</definedNames>", r#"<definedName name="Fine">Rate</definedName></definedNames>"#);
+    assert_eq!(wb.defined_names, xml_names(&xml));
+    let book = read(&bytes).unwrap();
+    for col in 1..=5 {
+        assert_eq!(book.sheets[0].formula(CellRef::new(0, col)), None);
+        assert_eq!(book.sheets[0].value(CellRef::new(0, col)), Value::Number(0.0));
+    }
+    assert_eq!(book.sheets[0].formula(CellRef::new(0, 6)), Some("Fine"));
+    assert!(book.warnings.iter().any(|w| w.contains("empty formula")), "{:?}", book.warnings);
+    assert!(book.warnings.iter().any(|w| w.contains("names using a name that was left out")), "{:?}", book.warnings);
+}

@@ -449,11 +449,19 @@ fn defined_names(
                 }
             },
         };
-        // Excel writes a workbook-level built-in with no formula (`Database`) beside a sheet's
-        // own; `.xlsx` leaves it out of `definedNames`, and formulas using it spell its name.
+        // Excel omits the formula for a workbook-level Database built-in and a VBA function
+        // (fFunc, fOB, fProc). They remain usable by formulas without a definedNames entry.
+        // Other empty names are malformed: omitting them must also omit their dependants.
         if p.rgce.is_empty() {
-            if let Some(n) = links.names.get_mut(p.index) {
-                n.read = true;
+            let database = p.flags & 0x20 != 0 && name.scope.is_none() && name.text == "_xlnm.Database";
+            let vba_function = p.flags & 0x0E == 0x0E;
+            if database || vba_function {
+                if let Some(n) = links.names.get_mut(p.index) {
+                    n.read = true;
+                }
+            } else {
+                warnings.warn("XLSB: some defined names were left out (empty formula)");
+                omit(&mut omitted, p.index);
             }
             continue;
         }
