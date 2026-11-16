@@ -626,6 +626,21 @@ fn a_default_turn_shows_the_turn_grid_and_release_restores_the_guide() {
     assert_eq!(rig.seen.borrow().straighten_ended, 1, "the release frame's two passes end Straighten once");
 }
 
+// Escape ends an armed Straighten and leaves the crop; with none armed it discards the started crop.
+#[trial]
+fn escape_ends_an_armed_straighten_before_it_discards_the_crop() {
+    let mut setup = Setup::new();
+    setup.straighten = true;
+    let mut rig = Rig::new(CropBox::upright(RECT), setup);
+    rig.frame(vec![input::key_press(egui::Key::Escape, Modifiers::NONE)]);
+    assert!(rig.seen.borrow().straighten_ended >= 1, "Escape ends Straighten");
+    assert!(!rig.seen.borrow().discarded, "and keeps the crop");
+    let mut rig = Rig::new(CropBox::upright(RECT), Setup::new());
+    rig.frame(vec![input::key_press(egui::Key::Escape, Modifiers::NONE)]);
+    assert!(rig.seen.borrow().discarded, "with no Straighten armed Escape discards the started crop");
+    assert_eq!(rig.seen.borrow().straighten_ended, 0);
+}
+
 #[trial]
 fn a_default_turn_keeps_the_frame_inside_the_turned_image() {
     let image = Rect::new(0.0, 0.0, 400.0, 300.0);

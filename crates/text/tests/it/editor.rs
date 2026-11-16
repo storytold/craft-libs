@@ -92,6 +92,8 @@ struct Session {
     cancels: Rc<Cell<u32>>,
     /// Every session end the editor reported (`TextEditorOutput::ended`).
     ends: Rc<RefCell<Vec<EditorEnd>>>,
+    /// Every context click the editor reported (`TextEditorOutput::context`).
+    contexts: Rc<RefCell<Vec<egui::Pos2>>>,
     /// The next pass asks egui for a second pass of its frame.
     discard: Rc<Cell<bool>>,
 }
@@ -110,6 +112,8 @@ fn session_on(host: Host, quotes: Option<QuoteStyle>, beside: bool) -> Session {
     let (shown_cancels, shown_discard) = (Rc::clone(&cancels), Rc::clone(&discard));
     let ends = Rc::new(RefCell::new(Vec::new()));
     let shown_ends = Rc::clone(&ends);
+    let contexts = Rc::new(RefCell::new(Vec::new()));
+    let shown_contexts = Rc::clone(&contexts);
     let mut other = (Host { text: "xyz".to_owned(), ..Host::default() }, TextSelection::caret_at(0));
     let mut fixture = Fixture::new(move |ui| {
         if shown_discard.take() {
@@ -128,6 +132,7 @@ fn session_on(host: Host, quotes: Option<QuoteStyle>, beside: bool) -> Session {
             shown_commits.set(shown_commits.get() + commits);
             let cancels = output.edit.events.iter().filter(|event| matches!(event, craft_behavior::EditEvent::Cancel { .. })).count() as u32;
             shown_cancels.set(shown_cancels.get() + cancels);
+            shown_contexts.borrow_mut().extend(output.context);
             shown_ends.borrow_mut().extend(output.ended);
             if beside {
                 let (host, selection) = (&mut other.0, &mut other.1);
@@ -136,7 +141,7 @@ fn session_on(host: Host, quotes: Option<QuoteStyle>, beside: bool) -> Session {
         });
     });
     fixture.settle();
-    Session { fixture, host, selection, commits, cancels, ends, discard }
+    Session { fixture, host, selection, commits, cancels, ends, contexts, discard }
 }
 
 impl Session {
@@ -186,6 +191,23 @@ fn a_primary_press_on_the_canvas_background_commits_the_session_with_its_marked_
     editor.fixture.click_at(away).settle();
     assert_eq!(editor.commits.get(), 1, "a primary press on the canvas background commits the session");
     assert_eq!(editor.text(), "abcdkzk", "the marked text stays as typed");
+}
+
+/// A secondary click on the text is reported once as a context click at its release, and neither moves the caret,
+/// selects nor ends the session: the host's menu acts on the live edit.
+#[trial]
+fn a_secondary_click_on_the_text_reports_a_context_click_and_starts_no_drag() {
+    let mut editor = session("abc def", None);
+    editor.focus();
+    let before = *editor.selection.borrow();
+    let at = pos2(60.0, 10.0);
+    editor.fixture.frame(vec![pointer::moved(at)]).frame(vec![pointer::secondary(at, true)]).settle();
+    assert!(editor.contexts.borrow().is_empty(), "nothing is reported before the button is released");
+    editor.fixture.frame(vec![pointer::secondary(at, false)]).settle();
+    assert_eq!(editor.contexts.borrow().len(), 1, "one context click");
+    assert!(editor.contexts.borrow()[0].distance(at) < 1.0);
+    assert_eq!(*editor.selection.borrow(), before, "the caret and selection stay");
+    assert_eq!(editor.commits.get() + editor.cancels.get(), 0, "the session stays open");
 }
 
 fn preedit(text: &str) -> Event {
