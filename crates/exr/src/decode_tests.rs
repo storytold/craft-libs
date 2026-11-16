@@ -651,3 +651,58 @@ fn mixed_display_decode_bounds_each_block_not_the_whole_flat_part() {
         }
     }
 }
+
+#[test]
+fn present_packed_payload_is_bounded_before_allocation() {
+    let packed = 1024 * 1024;
+    let mut bytes = mixed_one_tile(&["R"], 1 << 15, packed);
+    // Make the declared payload present, not merely a truncated-file error. The nominal
+    // huge tile allows this size in exr::Chunk::read, but the actual flat image is 1x1.
+    bytes.resize(bytes.len() + packed as usize, 0);
+    let limits = Limits { max_bytes: 4, ..Limits::default() };
+    assert!(matches!(
+        decode_display_part(&bytes, 0, &|_| true, &|_| 0.0, &limits),
+        Err(Error::LimitExceeded(message)) if message.contains("packed flat block")
+    ));
+    // decode_part also includes the deep header's 24 bytes in its aggregate header budget.
+    let limits = Limits { max_bytes: 32, ..limits };
+    assert!(matches!(decode_part(&bytes, 0, &all, &limits), Err(Error::LimitExceeded(message)) if message.contains("packed flat block")));
+}
+
+#[test]
+fn cropped_mixed_display_bounds_block_tracking() {
+    let mut bytes = mixed_headers_with(false, true, (100, 100), 0, &["R"], 1);
+    // Both display windows are 1x1; the flat data window still has 10,000 one-pixel tiles.
+    let needle = b"displayWindow\0box2i\0";
+    let positions: Vec<usize> = bytes.windows(needle.len()).enumerate().filter_map(|(i, w)| (w == needle).then_some(i + needle.len() + 4)).collect();
+    for at in positions {
+        bytes[at..at + 16].fill(0);
+    }
+    // Supply all offset-table bytes so validation reaches bookkeeping, not truncation.
+    bytes.resize(bytes.len() + (10_000 + 2) * 8, 0);
+    let limits = Limits { max_bytes: 4, ..Limits::default() };
+    assert!(matches!(
+        decode_display_part(&bytes, 0, &|_| true, &|_| 0.0, &limits),
+        Err(Error::LimitExceeded(message)) if message.contains("block tracking")
+    ));
+}
+
+#[test]
+fn dense_block_ordinals_cover_scan_lines_and_all_tile_levels() {
+    use exr::meta::attribute::LevelMode;
+    for tiled in [false, true] {
+        let bytes = file(vec![layer(None, 9, 7, &["R"], tiled, exr::prelude::Compression::ZIP1)], (9, 7));
+        let mut meta = read_meta(&bytes, &Limits::default()).unwrap();
+        let header = &mut meta.headers[0];
+        for mode in [LevelMode::Singular, LevelMode::MipMap, LevelMode::RipMap] {
+            if let exr::meta::BlockDescription::Tiles(tiles) = &mut header.blocks {
+                tiles.level_mode = mode;
+            }
+            for (i, block) in header.blocks_increasing_y_order().enumerate() {
+                assert_eq!(flat_block_ordinal(header, block.location).unwrap(), i);
+            }
+            let absent = TileCoordinates { tile_index: exr::math::Vec2(0, 0), level_index: exr::math::Vec2(100, 100) };
+            assert!(flat_block_ordinal(header, absent).is_err());
+        }
+    }
+}

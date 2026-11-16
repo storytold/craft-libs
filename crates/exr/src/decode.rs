@@ -18,7 +18,7 @@
 use std::io::Cursor;
 
 use exr::block::UncompressedBlock;
-use exr::block::chunk::{Chunk, CompressedBlock, TileCoordinates};
+use exr::block::chunk::{Chunk, CompressedBlock, CompressedScanLineBlock, CompressedTileBlock, TileCoordinates};
 use exr::image::read::image::ReadImage;
 use exr::image::read::layers::{ChannelsReader, ReadAllLayers, ReadChannels};
 use exr::meta::MetaData;
@@ -475,7 +475,7 @@ pub fn decode_display_part(
         let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
         select.seen.set(index);
         let mut reader = select.create_channels_reader(header).map_err(exr_error)?;
-        read_flat_part_chunks(bytes, &meta, index, &mut reader)?;
+        read_flat_part_chunks(bytes, &meta, index, &mut reader, limits)?;
         reader.into_channels()
     } else {
         ReadImage::new(ReadAllLayers { read_channels: select }, |_| {})
@@ -756,6 +756,66 @@ fn tables_start(bytes: &[u8]) -> Result<u64> {
     Ok(cursor.position())
 }
 
+/// Stable dense ordinal without materializing every tile. The library's block iterator
+/// internally allocates a Vec of all coordinates, which is unsuitable for cropped reads.
+fn flat_block_ordinal(header: &Header, tile: TileCoordinates) -> Result<usize> {
+    use exr::math::Vec2;
+    use exr::meta::attribute::LevelMode;
+    let mut start = 0usize;
+    let tile_size = header.max_block_pixel_size();
+    if tile_size.0 == 0 || tile_size.1 == 0 {
+        return Err(malformed("flat block has a zero dimension"));
+    }
+    let mut visit = |level: Vec2<usize>, size: Vec2<usize>| -> Result<Option<usize>> {
+        let nx = size.0.div_ceil(tile_size.0);
+        let ny = size.1.div_ceil(tile_size.1);
+        if tile.level_index == level {
+            if tile.tile_index.0 >= nx || tile.tile_index.1 >= ny {
+                return Err(malformed("flat tile lies outside its level"));
+            }
+            return tile
+                .tile_index
+                .1
+                .checked_mul(nx)
+                .and_then(|n| n.checked_add(tile.tile_index.0))
+                .and_then(|n| start.checked_add(n))
+                .map(Some)
+                .ok_or_else(|| malformed("block ordinal overflow"));
+        }
+        start = nx.checked_mul(ny).and_then(|n| start.checked_add(n)).ok_or_else(|| malformed("block count overflow"))?;
+        Ok(None)
+    };
+    match header.blocks {
+        exr::meta::BlockDescription::Tiles(tiles) => match tiles.level_mode {
+            LevelMode::Singular => {
+                if let Some(i) = visit(Vec2(0, 0), header.layer_size)? {
+                    return Ok(i);
+                }
+            }
+            LevelMode::MipMap => {
+                for (level, size) in exr::meta::mip_map_levels(tiles.rounding_mode, header.layer_size) {
+                    if let Some(i) = visit(Vec2(level, level), size)? {
+                        return Ok(i);
+                    }
+                }
+            }
+            LevelMode::RipMap => {
+                for (level, size) in exr::meta::rip_map_levels(tiles.rounding_mode, header.layer_size) {
+                    if let Some(i) = visit(level, size)? {
+                        return Ok(i);
+                    }
+                }
+            }
+        },
+        exr::meta::BlockDescription::ScanLines => {
+            if let Some(i) = visit(Vec2(0, 0), header.layer_size)? {
+                return Ok(i);
+            }
+        }
+    }
+    Err(malformed("flat tile names a missing level"))
+}
+
 /// Reads the chunks of flat part `index` of a file that also holds deep parts into `reader`.
 ///
 /// The `exr` crate's image reader validates every header before it reads a chunk and refuses
@@ -766,7 +826,7 @@ fn tables_start(bytes: &[u8]) -> Result<u64> {
 /// chunk of the part holds, so the part's chunks hold every one of its blocks. A scan-line
 /// chunk's y must be the first line of its block, and no chunk may declare more bytes than the
 /// file has left after it.
-fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &mut impl ChannelsReader) -> Result<()> {
+fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &mut impl ChannelsReader, limits: &Limits) -> Result<()> {
     let header = meta.headers.get(index).ok_or_else(|| malformed(format!("part {index}")))?;
     let multipart = meta.requirements.is_multilayer();
     let mut long_names = false;
@@ -786,7 +846,15 @@ fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &m
         .ok()
         .and_then(|start| bytes.get(start..start.checked_add(header.chunk_count.checked_mul(8)?)?))
         .ok_or_else(truncated)?;
-    let mut blocks: std::collections::HashSet<TileCoordinates> = header.blocks_increasing_y_order().map(|block| block.location).collect();
+    // One bit per block, not a Vec/HashSet of every coordinate. A cropped display must not
+    // permit unbounded bookkeeping for an enormous data window of tiny tiles.
+    let tracking_bytes = header.chunk_count.div_ceil(8);
+    if tracking_bytes as u64 > limits.max_bytes || tracking_bytes > isize::MAX as usize {
+        return Err(Error::LimitExceeded("block tracking exceeds the byte budget".into()));
+    }
+    let mut seen = Vec::new();
+    seen.try_reserve_exact(tracking_bytes).map_err(|_| Error::LimitExceeded("cannot allocate block tracking".into()))?;
+    seen.resize(tracking_bytes, 0u8);
     for &entry in offsets.as_chunks::<8>().0 {
         let offset = u64::from_le_bytes(entry);
         let chunk = usize::try_from(offset)
@@ -813,9 +881,22 @@ fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &m
         if usize::try_from(size).is_ok_and(|size| size > left) {
             return Err(malformed(format!("the chunk at offset {offset} declares {size} bytes, but {left} remain in the file")));
         }
-        let chunk = Chunk::read(&mut Cursor::new(chunk), meta).map_err(map_exr)?;
-        let tile = header.get_block_data_indices(&chunk.compressed_block).map_err(map_exr)?;
-        if let CompressedBlock::ScanLine(block) = &chunk.compressed_block {
+        let size = usize::try_from(size).map_err(|_| malformed("negative packed chunk length"))?;
+        // Read coordinates without allocating the payload. Validate their real clipped block
+        // and budgets before Chunk::read uses the nominal (possibly huge) tile dimensions.
+        let coordinate_at = if multipart { 4 } else { 0 };
+        let shape = if matches!(header.blocks, exr::meta::BlockDescription::Tiles(_)) {
+            let coordinates = TileCoordinates::read(&mut Cursor::new(&chunk[coordinate_at..])).map_err(map_exr)?;
+            CompressedBlock::Tile(CompressedTileBlock { coordinates, compressed_pixels_le: Vec::new() })
+        } else {
+            let y = chunk
+                .get(coordinate_at..coordinate_at + 4)
+                .and_then(|b| <[u8; 4]>::try_from(b).ok())
+                .ok_or_else(|| malformed("truncated scan-line coordinate"))?;
+            CompressedBlock::ScanLine(CompressedScanLineBlock { y_coordinate: i32::from_le_bytes(y), compressed_pixels_le: Vec::new() })
+        };
+        let tile = header.get_block_data_indices(&shape).map_err(map_exr)?;
+        if let CompressedBlock::ScanLine(block) = &shape {
             // The block index is rounded toward zero, so a y that is not the first line of a
             // block, or lies just above the data window, would still name a block.
             let lines = header.compression.scan_lines_per_block() as i64;
@@ -827,13 +908,30 @@ fn read_flat_part_chunks(bytes: &[u8], meta: &MetaData, index: usize, reader: &m
                 )));
             }
         }
-        if !blocks.remove(&tile) {
-            return Err(malformed(format!(
-                "part {index} has no free slot for block {:?} at level {:?}: it is outside the part or another chunk holds it",
-                tile.tile_index, tile.level_index
-            )));
+        let ordinal = flat_block_ordinal(header, tile)?;
+        let flag = 1u8 << (ordinal % 8);
+        let byte = seen.get_mut(ordinal / 8).ok_or_else(|| malformed("block is outside its chunk table"))?;
+        if *byte & flag != 0 {
+            return Err(malformed("duplicate flat block"));
         }
+        *byte |= flag;
         if reader.filter_block(tile) {
+            let area = header.get_absolute_block_pixel_coordinates(tile).map_err(map_exr)?.size;
+            let raw_size = area
+                .0
+                .checked_mul(area.1)
+                .and_then(|n| n.checked_mul(header.channels.bytes_per_pixel))
+                .ok_or_else(|| Error::LimitExceeded("flat block byte size overflows".into()))?;
+            if raw_size as u64 > limits.max_bytes || raw_size > isize::MAX as usize {
+                return Err(Error::LimitExceeded("flat block exceeds the byte budget".into()));
+            }
+            // Packed size need not be less than raw size for every accepted compression.
+            // Bound its allocation independently, rather than rejecting valid compressed data
+            // solely because a clipped edge block has fewer raw bytes.
+            if size as u64 > limits.max_bytes || size > isize::MAX as usize {
+                return Err(Error::LimitExceeded("packed flat block exceeds the byte budget".into()));
+            }
+            let chunk = Chunk::read(&mut Cursor::new(chunk), meta).map_err(map_exr)?;
             let block = UncompressedBlock::decompress_chunk(chunk, meta, false).map_err(map_exr)?;
             reader.read_block(header, block).map_err(map_exr)?;
         }
@@ -858,7 +956,7 @@ pub fn decode_part(bytes: &[u8], index: usize, keep: &dyn Fn(&str) -> bool, limi
     let planes = if meta.headers.iter().any(|header| header.deep) {
         select.seen.set(index);
         let mut reader = select.create_channels_reader(header).map_err(map_exr)?;
-        read_flat_part_chunks(bytes, &meta, index, &mut reader)?;
+        read_flat_part_chunks(bytes, &meta, index, &mut reader, limits)?;
         reader.into_channels()
     } else {
         let image = ReadImage::new(ReadAllLayers { read_channels: select }, |_| {}).from_buffered(Cursor::new(bytes)).map_err(map_exr)?;
