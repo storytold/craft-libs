@@ -388,6 +388,18 @@ const PATH_NONE: f32 = 0.6;
 const FAR_FULL: f32 = 5.0;
 const FAR_NONE: f32 = 7.5;
 
+/// A cell past where growth stopped is still the dab's, as its rim, when the way to it costs up
+/// to [`RIM_COST`] and under [`RIM_NEARER`] of what the way to it from the nearest other surface
+/// costs (fully; not at all when as much): [`grow`]. The other surface's paths are followed to
+/// [`RIM_OTHER_COST`]; a cell they don't reach has no other surface to be weighed against.
+const RIM_COST: f32 = 6.0;
+const RIM_OTHER_COST: f32 = 24.0;
+const RIM_NEARER: f32 = 0.5;
+
+/// A cell lies flat inside a surface (settled: [`grow`]) when its luminance spreads up to this
+/// much (EV; more where the cells are noisier) and it straddles no edge of colour.
+const SETTLED_EV: f32 = 0.15;
+
 /// A colour as Auto Mask compares it: log luminance and chromaticity.
 type Feature = (f32, [f32; 3]);
 
@@ -574,6 +586,8 @@ fn reference(bd: &BrushDabs, k: usize, cells: &Cells, img: &Rgb32f, log_l: &Plan
 /// [`STEP_FREE_CHROMA`]): the path's steepest step in luminance plus the sum of its steps in
 /// colour. A path may jump over a thin line ([`JUMP_CELLS`]) and may not go on from a cell
 /// straddling an edge ([`BARRIER`]).
+/// Cells growth stopped short of that lie between the dab's surface and the next one, nearer the
+/// dab's by those costs, are its too (its rim: [`RIM_COST`]).
 struct Grown {
     i0: usize,
     j0: usize,
@@ -682,12 +696,69 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
         let (l, c) = step_lc(a, b);
         l + c
     };
-    let mut cost = vec![f32::INFINITY; n * m];
-    // (the path's luminance and colour costs so far, apart)
-    let mut parts = vec![(f32::INFINITY, f32::INFINITY); n * m];
     // (costs as ordered integers: millionths)
     let key = |c: f32| (c * 1e6) as u64;
-    let mut heap = BinaryHeap::new();
+    // the cheapest path's cost to each cell from `from` (cells and what they start at), no path
+    // going on past `cap`; `seeds` are where paths start, whatever they straddle
+    let spread_from = |from: &[(usize, f32)], seeds: &[bool], cap: f32| {
+        let mut cost = vec![f32::INFINITY; n * m];
+        // (the path's luminance and colour costs so far, apart)
+        let mut parts = vec![(f32::INFINITY, f32::INFINITY); n * m];
+        let mut heap = BinaryHeap::new();
+        for &(at, s0) in from {
+            if cost.get(at).is_some_and(|c| s0 < *c) {
+                cost[at] = s0;
+                parts[at] = (0.0, s0);
+                heap.push(Reverse((key(s0), at)));
+            }
+        }
+        while let Some(Reverse((kc, at))) = heap.pop() {
+            let c = cost[at];
+            if key(c) < kc || c > cap {
+                continue;
+            }
+            let (pl, pc) = parts[at];
+            // (a centre's own cell is where the path starts, whatever it straddles)
+            let pc = if seeds[at] { pc } else { pc + barrier[at] };
+            let (x, y) = (at % n, at / n);
+            for (dx, dy) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
+                // a step to the next cell, or a jump over one or two to a cell like this one: over a
+                // thin line (a crease, a fold, the shadow under a ledge) of much the same colour
+                for len in 1..=1 + JUMP_CELLS {
+                    let (nx, ny) = (x as i64 + dx * len as i64, y as i64 + dy * len as i64);
+                    if nx < 0 || ny < 0 || nx >= n as i64 || ny >= m as i64 {
+                        break;
+                    }
+                    let to = ny as usize * n + nx as usize;
+                    if !inside[to] {
+                        break;
+                    }
+                    let (sl, sc) = if len == 1 {
+                        step_lc(feature[at], feature[to])
+                    } else {
+                        let (a, b) = (feature[at], feature[to]);
+                        // (what is jumped over is a line on the surface, not another surface: its
+                        // colour close to both sides'; and the two sides alike as neighbours are, or
+                        // a jump over a cell straddling an edge would cross it as freely as shading)
+                        let mid = (1..len).map(|t| feature[(y as i64 + dy * t as i64) as usize * n + (x as i64 + dx * t as i64) as usize]);
+                        if mid.into_iter().any(|f| chroma_distance(f.1, a.1).min(chroma_distance(f.1, b.1)) > JUMP_CHROMA) {
+                            continue;
+                        }
+                        step_lc(a, b)
+                    };
+                    let (nl, nc) = (pl.max(sl), pc + sc);
+                    let next = nl + nc;
+                    if next < cost[to] {
+                        cost[to] = next;
+                        parts[to] = (nl, nc);
+                        heap.push(Reverse((key(next), to)));
+                    }
+                }
+            }
+        }
+        cost
+    };
+    let mut from = Vec::with_capacity(REFERENCE_DABS);
     for j in k.saturating_sub(REFERENCE_DABS - 1)..=k {
         let Some(c) = bd.dabs.get(j).filter(|c| cells.holds(c.x, c.y)) else { continue };
         let (ci, cj) = cells.at(c.x, c.y);
@@ -701,57 +772,12 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
         if let Some(sd) = seeds.get_mut(at) {
             *sd = true;
         }
-        if s0 < cost[at] {
-            cost[at] = s0;
-            parts[at] = (0.0, s0);
-            heap.push(Reverse((key(s0), at)));
-        }
+        from.push((at, s0));
     }
-    while let Some(Reverse((kc, at))) = heap.pop() {
-        let c = cost[at];
-        if key(c) < kc || c > PATH_NONE {
-            continue;
-        }
-        let (pl, pc) = parts[at];
-        // (a centre's own cell is where the path starts, whatever it straddles)
-        let pc = if seeds[at] { pc } else { pc + barrier[at] };
-        let (x, y) = (at % n, at / n);
-        for (dx, dy) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)] {
-            // a step to the next cell, or a jump over one or two to a cell like this one: over a
-            // thin line (a crease, a fold, the shadow under a ledge) of much the same colour
-            for len in 1..=1 + JUMP_CELLS {
-                let (nx, ny) = (x as i64 + dx * len as i64, y as i64 + dy * len as i64);
-                if nx < 0 || ny < 0 || nx >= n as i64 || ny >= m as i64 {
-                    break;
-                }
-                let to = ny as usize * n + nx as usize;
-                if !inside[to] {
-                    break;
-                }
-                let (sl, sc) = if len == 1 {
-                    step_lc(feature[at], feature[to])
-                } else {
-                    let (a, b) = (feature[at], feature[to]);
-                    // (what is jumped over is a line on the surface, not another surface: its
-                    // colour close to both sides'; and the two sides alike as neighbours are, or
-                    // a jump over a cell straddling an edge would cross it as freely as shading)
-                    let mid = (1..len).map(|t| feature[(y as i64 + dy * t as i64) as usize * n + (x as i64 + dx * t as i64) as usize]);
-                    if mid.into_iter().any(|f| chroma_distance(f.1, a.1).min(chroma_distance(f.1, b.1)) > JUMP_CHROMA) {
-                        continue;
-                    }
-                    step_lc(a, b)
-                };
-                let (nl, nc) = (pl.max(sl), pc + sc);
-                let next = nl + nc;
-                if next < cost[to] {
-                    cost[to] = next;
-                    parts[to] = (nl, nc);
-                    heap.push(Reverse((key(next), to)));
-                }
-            }
-        }
-    }
-    let member = cost
+    // (paths go on past what a member may cost, to [`RIM_COST`]: what the cells of a rim cost.
+    // A path's cost never falls along it, so the costs up to [`PATH_NONE`] are what they were)
+    let cost = spread_from(&from, &seeds, RIM_COST);
+    let mut member: Vec<f32> = cost
         .iter()
         .zip(&feature)
         .map(|(c, f)| {
@@ -760,6 +786,25 @@ fn grow(bd: &BrushDabs, k: usize, r: f64, cells: &Cells, img: &Rgb32f, log_l: &P
                 * (1.0 - masks_smooth(ref_c, 2.0 * ref_c, chroma_distance(f.1, refc.1)))
         })
         .collect();
+    // the rim: cells between what the dab grew over and the next surface (the dark hair at a
+    // head's outline, a soft shadow line along an edge), which growth stopped short of because
+    // the way into them is an edge of a kind, are the dab's when they are much nearer it than
+    // that other surface, by the same path costs measured from the other surface's cells: those
+    // the dab did not reach that lie flat inside something (settled). Without a settled surface
+    // in reach there is nothing to weigh against, and growth stops where it did.
+    let settled: Vec<(usize, f32)> = (0..n * m)
+        .filter(|&q| inside[q] && member[q] <= 0.0 && barrier[q] <= 0.0 && spread[q].0 <= SETTLED_EV.max(2.0 * ql))
+        .map(|q| (q, 0.0))
+        .collect();
+    if !settled.is_empty() && cost.iter().any(|c| *c > PATH_FULL && *c <= RIM_COST) {
+        let other = spread_from(&settled, &vec![false; n * m], RIM_OTHER_COST);
+        for q in 0..n * m {
+            let (c, o) = (cost[q], other[q]);
+            if c > PATH_FULL && c <= RIM_COST && o.is_finite() && o > 0.0 {
+                member[q] = member[q].max(1.0 - masks_smooth(RIM_NEARER, 1.0, c / o));
+            }
+        }
+    }
     Some(Grown {
         i0,
         j0,

@@ -416,3 +416,47 @@ fn auto_mask_edge_against_a_wall_as_bright_is_clean() {
     }
     assert!(failed.is_empty(), "{failed:#?}");
 }
+
+/// A head's outline: skin (left of [`RIM_AT`]) darkening by two stops into dark hair over
+/// [`RIM_WIDE`] px, its colour drifting toward neutral, then a brighter blanket of another colour
+/// beyond a soft edge (400 × 300).
+const RIM_AT: f64 = 200.0;
+const RIM_WIDE: f64 = 12.0;
+
+fn rim_scene() -> (Rgb32f, Plane, usize, usize) {
+    let (w, h) = (400usize, 300usize);
+    let img = Rgb32f::from_fn(w, h, |x, y| {
+        let u = x as f64 + 0.5;
+        let into = ((u - RIM_AT) / RIM_WIDE).clamp(0.0, 1.0) as f32;
+        let skin = [1.24f32, 0.92, 0.86];
+        let hair = [1.15f32, 0.94, 0.98];
+        let blanket = [0.88f32, 1.0, 1.45];
+        // (the hair's outer edge as soft as a lens draws it)
+        let t = (1.0 / (1.0 + ((u - RIM_AT - RIM_WIDE) / 0.8).exp())) as f32;
+        let ev = t * (-0.3 - 2.0 * into) + (1.0 - t) * 0.2;
+        let ch: [f32; 3] = std::array::from_fn(|c| t * (skin[c] + (hair[c] - skin[c]) * into) + (1.0 - t) * blanket[c]);
+        let g = (0.04 * gauss(x, y, 31) / 1.7).exp2();
+        std::array::from_fn(|c| 0.18 * ev.exp2() * g * ch[c] * (1.0 + 0.006 * gauss(x, y, 41 + c as u64) / 1.7))
+    });
+    let l = img.map(crate::local::log_lum);
+    (img, l, w, h)
+}
+
+/// The dark hair at a head's outline is the head's: a stroke over the skin beside it paints on
+/// through the hair to the blanket, and none of the blanket. (Growth stopped where the skin
+/// darkens into the hair, an edge of a kind, and no stroke could paint the band: narrower than
+/// the brush, it is nothing a centre can settle on.)
+#[test]
+fn auto_mask_paints_a_dark_rim_between_its_surface_and_the_next() {
+    let (img, l, w, h) = rim_scene();
+    let a = painted(&stroke(&[(175.0, 90.0), (175.0, 210.0)], 0.1, true), &img, &l, w, h);
+    let mean = |x0: usize, x1: usize| {
+        let v: Vec<f32> = (110..190).flat_map(|y| (x0..x1).map(move |x| (x, y))).map(|(x, y)| a.data[y * w + x]).collect();
+        v.iter().sum::<f32>() / v.len() as f32
+    };
+    let (skin, rim, blanket) = (mean(150, 195), mean(201, 210), mean(216, 240));
+    eprintln!("skin {skin:.3}, rim {rim:.3}, blanket {blanket:.4}");
+    assert!(skin > 0.97, "the skin is painted: {skin}");
+    assert!(rim > 0.9, "the dark rim is painted with it: {rim}");
+    assert!(blanket < 0.01, "the blanket is not: {blanket}");
+}
