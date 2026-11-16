@@ -348,8 +348,9 @@ fn carried_anchors_are_neither_toggled_nor_grabbed() {
         tool.draft(Some(PenDraft::Own(&carried)));
     }
     pen.fixture.fixture().settle();
-    pen.click_doc(60.0, 60.0);
-    pen.click_doc(60.0, 60.0);
+    // The second anchor: a press on the first of a draft of three or more closes it instead.
+    pen.click_doc(160.0, 60.0);
+    pen.click_doc(160.0, 60.0);
     let draft = pen.draft();
     assert_eq!(draft.knots[..3], carried.knots[..], "the carried anchors keep their handles and places");
     assert!(draft.knots.len() > 3, "a press on a carried anchor adds an anchor");
