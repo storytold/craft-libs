@@ -1,8 +1,9 @@
 //! Pooled file [`ByteSource`]s: many clips can be open at once without holding a descriptor each.
 //!
-//! Past [`MAX_OPEN_FILES`] the least recently read file is closed and reopened by path on demand,
-//! so a project with hundreds of sources does not hit the process file-descriptor limit (often 256
-//! on macOS, 1024 on Linux).
+//! Past [`MAX_OPEN_FILES`] retained pool entries, the least recently read file is closed and
+//! reopened by path on demand, so a project with hundreds of sources does not hit the process
+//! file-descriptor limit (often 256 on macOS, 1024 on Linux). The cap does not bound in-flight
+//! `Arc` handles: a file another thread is mid-read stays open until that read ends.
 
 #![cfg(not(target_arch = "wasm32"))]
 
@@ -63,8 +64,10 @@ fn not_a_file(path: &Path) -> io::Error {
     io::Error::new(io::ErrorKind::NotFound, format!("{} is not a file", path.display()))
 }
 
-/// Files [`FileReader`]s keep open at most, together. Past this many, the least recently read file
-/// is closed and its reader reopens it on demand.
+/// Retained pool entries [`FileReader`]s keep open at most, together. Past this many, the least
+/// recently read file is closed and its reader reopens it on demand. The cap does not bound
+/// in-flight `Arc` handles: a file another thread is mid-read stays open until that read ends,
+/// even if the pool has already evicted its entry.
 pub const MAX_OPEN_FILES: usize = 128;
 
 /// The open files of a set of [`FileReader`]s, least recently used first.
@@ -172,7 +175,12 @@ impl FileReader {
     /// being written) is read up to the opened length.
     fn file(&self) -> io::Result<Arc<std::fs::File>> {
         if let Some(file) = self.pool.get(self.id) {
-            return Ok(file);
+            let m = file.metadata()?;
+            if m.is_file() && m.len() >= self.len {
+                return Ok(file);
+            }
+            self.pool.remove(self.id);
+            return Err(io::Error::other(format!("{} changed since it was opened", self.path.display())));
         }
         let file = open_nonblocking(&self.path)?;
         let m = file.metadata()?;
@@ -329,6 +337,25 @@ mod tests {
             "subprocess failed\nstatus: {:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
             out.status
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A file truncated while its handle is still in the pool is refused, same as after eviction.
+    #[test]
+    fn a_truncated_file_is_refused_while_still_pooled() {
+        let dir = craft_media_testkit::private_dir("file-trunc-hit");
+        let path = dir.join("clip.bin");
+        std::fs::write(&path, b"0123456789").unwrap();
+        let pool = Arc::new(FilePool::new(2));
+        let reader = FileReader::open_in(&path, &pool).unwrap();
+        assert_eq!(pool.open_count(), 1);
+        let mut b = [0u8; 5];
+        reader.read_at(0, &mut b).unwrap();
+        assert_eq!(&b, b"01234");
+        std::fs::write(&path, b"short").unwrap();
+        assert!(reader.read_at(0, &mut b).is_err(), "truncation must be refused on a cache hit too");
+        drop(reader);
+        assert_eq!(pool.open_count(), 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
