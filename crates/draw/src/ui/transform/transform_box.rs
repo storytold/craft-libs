@@ -791,7 +791,7 @@ impl Component for TransformBox<'_> {
                     )
                 }
             };
-            cx.part(BOX.at(part.index()), shape).sense(sense).priority(priority).focus_shape(focus).focusable();
+            cx.part(BOX.at(part.index()), shape).sense(sense | Sense::FOLLOWS_IN_SLOP).priority(priority).focus_shape(focus).focusable();
             any = true;
         }
         if self.line.is_some() {
@@ -803,14 +803,14 @@ impl Component for TransformBox<'_> {
         for k in (0..4u8).filter(|&k| self.rules.allows(BoxPart::Edge(k))) {
             let side = usize::from(k);
             cx.part(EDGE.at(u64::from(k)), HitShape::segment(quad[side], quad[(side + 1) % 4]))
-                .sense(Sense::DRAG)
+                .sense(Sense::DRAG | Sense::FOLLOWS_IN_SLOP)
                 .priority(HitPriority::new(HitLevel::Handle, EDGE_SUB))
                 .pointer_only(EDGE_BY_KEY);
         }
         if self.declares_centre() {
             let centre = quad.iter().fold(Vec2::ZERO, |sum, corner| sum + corner.to_vec2()) / 4.0;
             cx.part(CENTRE.at(0), HitShape::circle(centre.to_pos2(), style.hit))
-                .sense(Sense::DRAG | Sense::CLICK)
+                .sense(Sense::DRAG | Sense::CLICK | Sense::FOLLOWS_IN_SLOP)
                 .priority(HitPriority::new(HitLevel::Handle, HANDLE_SUB))
                 .pointer_only(MOVE_BY_KEY);
         }
@@ -819,7 +819,7 @@ impl Component for TransformBox<'_> {
             for side in 0..4usize {
                 let next = (side + 1) % 4;
                 cx.part(MOVE_RING.at(side as u64), HitShape::Polygon(vec![quad[side], quad[next], outer[next], outer[side]]))
-                    .sense(Sense::DRAG | Sense::CLICK)
+                    .sense(Sense::DRAG | Sense::CLICK | Sense::FOLLOWS_IN_SLOP)
                     .priority(HitPriority::new(HitLevel::Body, RING_SUB))
                     .pointer_only(MOVE_BY_KEY);
             }

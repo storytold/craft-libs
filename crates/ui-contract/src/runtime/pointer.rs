@@ -413,6 +413,20 @@ pub(crate) fn part_bounds(ctx: &Context, owner: Id, part: craft_behavior::PartRe
     owned_part_bounds(ctx, |shape_owner| shape_owner == owner, part)
 }
 
+/// Whether the part `part` of `owner` (the arena root or a member) senses all of `sense` in last pass's shape record.
+#[cfg(feature = "testing")]
+pub(crate) fn part_senses(ctx: &Context, owner: Id, part: craft_behavior::PartRef, sense: craft_behavior::Sense) -> bool {
+    let viewport = pass::current_viewport(ctx);
+    PerViewport::<Shapes>::with(ctx, viewport, |record| {
+        record
+            .last
+            .values()
+            .flat_map(|roots| roots.values())
+            .flat_map(|root| root.shapes.iter())
+            .any(|shape| shape.owner == owner && shape.part == Some(part) && shape.sense.contains(sense))
+    })
+}
+
 /// [`part_bounds`] of the owner whose AccessKit node is `node`, for a test that holds the node it found, not the id.
 #[cfg(feature = "testing")]
 pub(crate) fn node_part_bounds(ctx: &Context, node: crate::runtime::egui::access::NodeId, part: craft_behavior::PartRef) -> Option<egui::Rect> {
