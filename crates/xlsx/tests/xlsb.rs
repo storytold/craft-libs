@@ -1840,6 +1840,27 @@ fn a_name_using_a_structured_reference_is_decoded_after_tables_are_indexed() {
 }
 
 #[test]
+fn simple_table_references_preserve_square_bracket_spacing() {
+    let cases = [
+        (1, "Sales[Val]"),
+        (1 | 0x80, "Sales[ Val ]"),
+        (rows(1), "Sales[#All]"),
+        (rows(1) | 0x80, "Sales[ #All ]"),
+        (1 | 0x100, "Sales[Val]"),
+        (rows(1) | 0x100, "Sales[#All]"),
+    ];
+    let mut data = row(0);
+    for (i, (bits, _)) in cases.iter().enumerate() {
+        data.extend(formula_cell(i as u32 + 1, &ptg_list(0, *bits, 1, 1, 1), &[]));
+    }
+    let bytes = book_with_tables(&data, &[sales(&sales_filters())]);
+    let wb = read(&bytes).unwrap();
+    for (i, (_, want)) in cases.iter().enumerate() {
+        assert_eq!(wb.sheets[0].formula(CellRef::new(0, i as u32 + 1)), Some(*want), "{:?}", wb.warnings);
+    }
+}
+
+#[test]
 fn tables_are_read_as_their_xlsx_spelling() {
     // Spacing flags: 0x80 inside the outer brackets, 0x100 after commas.
     let cells: Vec<Vec<u8>> = vec![

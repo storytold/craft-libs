@@ -681,17 +681,22 @@ fn list(t: &mut Bytes<'_>, links: &Links) -> Result<String, Unsupported> {
         2 if first <= last => Some((column(first)?, Some(column(last)?))),
         _ => return Err(Unsupported("invalid structured reference columns")),
     };
+    let pad = if bits & 0x80 != 0 { " " } else { "" };
     let mut s = table.name.clone();
     match (rows, &columns) {
         ([], None) => s.push_str("[]"),
         ([], Some((c, None))) => {
             s.push('[');
+            s.push_str(pad);
             s.push_str(c);
+            s.push_str(pad);
             s.push(']');
         }
         ([row], None) => {
             s.push('[');
+            s.push_str(pad);
             s.push_str(row);
+            s.push_str(pad);
             s.push(']');
         }
         _ => {
@@ -701,7 +706,6 @@ fn list(t: &mut Bytes<'_>, links: &Links) -> Result<String, Unsupported> {
                 Some((a, None)) => items.push(format!("[{a}]")),
                 None => {}
             }
-            let pad = if bits & 0x80 != 0 { " " } else { "" };
             let comma = if bits & 0x100 != 0 { ", " } else { "," };
             s.push('[');
             s.push_str(pad);
