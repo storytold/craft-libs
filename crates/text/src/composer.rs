@@ -374,4 +374,156 @@ mod tests {
         let result = compose(&glyphs, &|_| 3.0, &|_| 0.0, &|_| 0.0, &candidates, &[] as &[Rigid], &params);
         assert_eq!(result, Some(vec![(3, false), (6, false), (8, false)]));
     }
+    struct Flex(f64, f64);
+    impl Flexibility for Flex {
+        fn stretch(&self) -> f64 {
+            self.0
+        }
+        fn shrink(&self) -> f64 {
+            self.1
+        }
+    }
+    struct Wide(f64);
+    impl Glyph for Wide {
+        fn advance(&self) -> f64 {
+            self.0
+        }
+        fn is_space(&self) -> bool {
+            false
+        }
+        fn is_soft_hyphen(&self) -> bool {
+            false
+        }
+    }
+    fn justified() -> Params {
+        Params { justify_last: false, ragged: false, tolerance: 10.0, uniform_from: 0, hyphen_limit: 0 }
+    }
+    fn units(text: &str) -> Vec<Unit> {
+        text.chars().map(Unit).collect()
+    }
+    fn brk(end: usize, hyphen: f64) -> Breakpoint {
+        Breakpoint { end, hyphen }
+    }
+
+    #[test]
+    fn fitness_classes_and_adjustment_ratios() {
+        assert_eq!([-0.6, 0.0, 0.7, 2.0].map(|r| fitness(r, false)), [0, 1, 2, 3]);
+        assert_eq!([0.1, 0.3, 0.5, 0.9].map(|r| fitness(r, true)), [0, 1, 2, 3]);
+        let j = justified();
+        assert_eq!(adjustment_ratio(8.0, 10.0, 4.0, 0.0, false, &j), Some(0.5));
+        assert_eq!(adjustment_ratio(8.0, 10.0, 0.0, 0.0, false, &j), Some(f64::INFINITY));
+        assert_eq!(adjustment_ratio(8.0, 10.0, 4.0, 0.0, true, &j), Some(0.0));
+        assert_eq!(adjustment_ratio(12.0, 10.0, 0.0, 4.0, false, &j), Some(-0.5));
+        assert_eq!(adjustment_ratio(12.0, 10.0, 0.0, 0.0, false, &j), Some(f64::NEG_INFINITY));
+        assert_eq!(adjustment_ratio(10.0, 10.0, 0.0, 0.0, false, &j), Some(0.0));
+        let all = Params { justify_last: true, ..j };
+        assert_eq!(adjustment_ratio(8.0, 10.0, 4.0, 0.0, true, &all), Some(0.5));
+        let ragged = Params { ragged: true, ..j };
+        assert_eq!(adjustment_ratio(11.0, 10.0, 0.0, 0.0, false, &ragged), None);
+    }
+
+    #[test]
+    fn empty_and_unmeasurable_paragraphs() {
+        let none: [Unit; 0] = [];
+        assert_eq!(compose(&none, &|_| 3.0, &|_| 0.0, &|_| 0.0, &[], &[] as &[Rigid], &justified()), Some(vec![]));
+        let huge = [Wide(f64::INFINITY)];
+        assert_eq!(compose(&huge, &|_| 3.0, &|_| 0.0, &|_| 0.0, &[], &[] as &[Rigid], &justified()), None);
+    }
+
+    #[test]
+    fn justified_lines_stretch_and_shrink_within_tolerance() {
+        let glyphs = units("a a b b");
+        let flex: Vec<_> = glyphs.iter().map(|g| if g.0 == ' ' { Flex(1.0, 0.5) } else { Flex(0.0, 0.0) }).collect();
+        let cands = [brk(4, 0.0)];
+        // "a a" (the trailing space is dropped) stretches its inner space to fill 4 units...
+        let lines = compose(&glyphs, &|_| 4.0, &|_| 0.0, &|_| 0.0, &cands, &flex, &justified());
+        assert_eq!(lines, Some(vec![(4, false), (7, false)]));
+        // ...or shrinks it into 2.75.
+        let lines = compose(&glyphs, &|_| 2.75, &|_| 0.0, &|_| 0.0, &cands, &flex, &justified());
+        assert_eq!(lines, Some(vec![(4, false), (7, false)]));
+        // Rigid glyphs can't fill a wider line except the last, so there is no fit.
+        let rigid: Vec<_> = glyphs.iter().map(|_| Rigid).collect();
+        assert_eq!(compose(&glyphs, &|_| 4.0, &|_| 0.0, &|_| 0.0, &cands, &rigid, &justified()), None);
+        // Justify All lets an unstretchable last line through.
+        let all = Params { justify_last: true, ..justified() };
+        let word = units("ab");
+        assert_eq!(compose(&word, &|_| 4.0, &|_| 0.0, &|_| 0.0, &[], &[Rigid, Rigid], &all), Some(vec![(2, false)]));
+    }
+
+    #[test]
+    fn hyphen_limit_and_soft_hyphens() {
+        // "ab-cd-ef" with hyphenation points after each pair: every line wants a hyphen.
+        let glyphs = units("abcdef");
+        let cands = [brk(2, 1.0), brk(4, 1.0)];
+        let ragged = Params { justify_last: false, ragged: true, tolerance: 100.0, uniform_from: 0, hyphen_limit: 0 };
+        let free = compose(&glyphs, &|_| 3.0, &|_| 0.0, &|_| 0.0, &cands, &[] as &[Rigid], &ragged).unwrap();
+        assert_eq!(free, vec![(2, true), (4, true), (6, false)]);
+        // A limit of one hyphenated line in a row forbids the second automatic hyphen.
+        let limited = Params { hyphen_limit: 1, ..ragged };
+        assert_eq!(compose(&glyphs, &|_| 3.0, &|_| 0.0, &|_| 0.0, &cands, &[] as &[Rigid], &limited), None);
+        // A typed soft hyphen stays a break regardless of the limit.
+        let soft = units("ab\u{ad}cd\u{ad}ef");
+        let cands = [brk(3, 1.0), brk(6, 1.0)];
+        let out = compose(&soft, &|_| 4.0, &|_| 0.0, &|_| 0.0, &cands, &[] as &[Rigid], &limited).unwrap();
+        assert_eq!(out, vec![(3, true), (6, true), (8, false)]);
+    }
+
+    #[test]
+    fn credits_are_clamped_to_the_glyph_and_ignored_when_not_finite() {
+        let glyphs = units("aa bb");
+        let cands = [brk(3, 0.0)];
+        let ragged = Params { justify_last: false, ragged: true, tolerance: 100.0, uniform_from: 0, hyphen_limit: 0 };
+        for credit in [f64::NAN, 5.0, -1.0] {
+            let out = compose(&glyphs, &|_| 2.0, &|_| 0.0, &|_| credit, &cands, &[] as &[Rigid], &ragged);
+            assert_eq!(out, Some(vec![(3, false), (5, false)]), "{credit}");
+        }
+        // A start credit gives a wrapped line room back.
+        let out = compose(&units("aa bbb"), &|_| 2.0, &|_| 1.0, &|_| 0.0, &cands, &[] as &[Rigid], &ragged);
+        assert_eq!(out, Some(vec![(3, false), (6, false)]));
+    }
+
+    /// Two lines of width 2, then the frame is full; a line may widen when the frame says so.
+    struct Frame {
+        widen: bool,
+        calls: usize,
+    }
+    impl Measure for Frame {
+        type State = usize;
+        fn first(&mut self) -> usize {
+            0
+        }
+        fn line(&mut self, &k: &usize, _: usize, _: usize) -> Result<Option<(f64, usize)>, Exhausted> {
+            self.calls += 1;
+            if self.calls > 1_000 {
+                return Err(Exhausted);
+            }
+            Ok((k < 2).then_some((2.0, k + 1)))
+        }
+        fn may_widen(&mut self, _: &usize, _: usize, _: usize) -> bool {
+            self.widen
+        }
+    }
+
+    #[test]
+    fn measure_can_end_reach_widen_or_exhaust() {
+        let ragged = Params { justify_last: false, ragged: true, tolerance: 100.0, uniform_from: 0, hyphen_limit: 0 };
+        let two = units("aa bb");
+        let cands = [brk(3, 0.0)];
+        let mut frame = Frame { widen: false, calls: 0 };
+        assert_eq!(compose_with(&two, &mut frame, &|_| 0.0, &|_| 0.0, &cands, &[] as &[Rigid], &ragged), Some(vec![(3, false), (5, false)]));
+        // A third line can't be set: no fit, whether or not the frame may widen.
+        let three = units("aa bb cc");
+        let cands = [brk(3, 0.0), brk(6, 0.0)];
+        for widen in [false, true] {
+            let mut frame = Frame { widen, calls: 0 };
+            assert_eq!(compose_with(&three, &mut frame, &|_| 0.0, &|_| 0.0, &cands, &[] as &[Rigid], &ragged), None);
+        }
+        // Too long for the line, but the frame may widen: the node stays active.
+        let long = units("aaa b");
+        let mut frame = Frame { widen: true, calls: 0 };
+        assert_eq!(compose_with(&long, &mut frame, &|_| 0.0, &|_| 0.0, &[brk(4, 0.0)], &[] as &[Rigid], &ragged), None);
+        // The measure may stop the search.
+        let mut frame = Frame { widen: false, calls: 1_000 };
+        assert_eq!(compose_with(&two, &mut frame, &|_| 0.0, &|_| 0.0, &[brk(3, 0.0)], &[] as &[Rigid], &ragged), None);
+    }
 }
