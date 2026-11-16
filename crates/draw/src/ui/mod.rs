@@ -5,7 +5,7 @@
 //!   [`GradientMapEditor`] and the [`GradientFillEditor`]. The stop bar and the stop rules are
 //!   craft-color's (`craft_color::ui::gradient`).
 //! - [`pen`]: the `PenDraft` of the Pen tool and the [`BezierOverlay`] that edits paths, with the
-//!   path model they share ([`EditPath`]), and the [`PathOptionsPopover`].
+//!   path model they share ([`EditPath`]), the anchor tools' [`AnchorTool`], and the [`PathOptionsPopover`].
 //! - [`stroke`]: the [`StrokeEditor`], the [`StrokeButton`] that opens it and the [`StrokePreview`].
 //! - [`corner`]: the [`CornerWidgets`] for corner radii.
 //! - [`crop`]: the [`PerspectiveCropQuad`], the [`CropTool`] with its [`CropSession`], and the [`CropBar`].
@@ -90,7 +90,7 @@ pub use paths::{PathKind, PathRow, PathsCommands, PathsEvent, PathsFooterButton,
 pub use pattern::{
     PatternColors, PatternFillDialog, PatternFillEditor, PatternFillOptions, PatternFillOutput, PatternSwatch, PatternWords, SwatchPainter,
 };
-pub use pen::{AnchorDelete, PenEnd};
+pub use pen::{AnchorDelete, AnchorTool, PenEnd};
 pub use pen::{AnchorsShown, HitMark, PATH_OPTIONS_COLOR_KEY, PathMode, PathOptionsPopover, PathOptionsSettings, PathTool, PenMode, SegmentMark};
 pub use pen::{
     BezierHit, BezierOverlay, BezierStyle, BezierTool, EditPath, EditSubpath, HandleSide, HandlesShown, Knot, KnotRef, MAX_ANCHORS, PathEdit,
