@@ -284,6 +284,33 @@ fn a_curvature_resume_keeps_the_carried_knots_and_replace_updates_the_draft() {
     pen.release(at, Modifiers::NONE);
 }
 
+/// Three clicks of the Curvature Pen far apart give three anchors, each click an `Update`: on its own, and with the
+/// host handing the draft it holds back in before every frame, as an app's per-pass configuration does.
+#[trial]
+fn three_curvature_clicks_give_three_anchors() {
+    for round_trip in [false, true] {
+        let mut pen = pen();
+        pen.fixture.tool_mut().mode(PenMode::Curvature);
+        let points = [(60.0, 160.0), (160.0, 60.0), (260.0, 160.0)];
+        for (n, (x, y)) in points.into_iter().enumerate() {
+            let at = pen.at(x, y);
+            let updates = pen.kinds().iter().filter(|kind| **kind == "update").count();
+            for event in [Event::PointerMoved(at), button(at, true, Modifiers::NONE), button(at, false, Modifiers::NONE)] {
+                if round_trip {
+                    let held = pen.draft();
+                    let mut tool = pen.fixture.tool_mut();
+                    tool.mode(PenMode::Curvature).draft((!held.knots.is_empty()).then_some(&held)).kept(0);
+                }
+                pen.fixture.fixture().frame(vec![event]);
+                pen.sync();
+            }
+            let what = format!("round trip {round_trip}, click {}", n + 1);
+            assert_eq!(pen.draft().knots.len(), n + 1, "{what}: {:?}", pen.kinds());
+            assert!(pen.kinds().iter().filter(|kind| **kind == "update").count() > updates, "{what}: an Update");
+        }
+    }
+}
+
 // ---- Path modes and Path Options ----
 
 /// A host that ended the draft itself hands in no draft: the pen drops its run without an event, and the next press
