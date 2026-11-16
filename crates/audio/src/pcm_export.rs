@@ -219,7 +219,7 @@ pub fn encode(container: PcmContainer, interleaved: &[f32], format: SampleFormat
 /// A whole file in memory (short audio; exports stream with [`header`] and [`encode`]).
 fn write_whole(container: PcmContainer, interleaved: &[f32], channels: u16, sample_rate: u32, format: SampleFormat) -> Result<Vec<u8>, String> {
     let per_frame = usize::from(channels.max(1));
-    if interleaved.len() % per_frame != 0 {
+    if !interleaved.len().is_multiple_of(per_frame) {
         return Err("the samples do not make whole frames".into());
     }
     let frames = (interleaved.len() / per_frame) as u64;
