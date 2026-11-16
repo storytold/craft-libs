@@ -306,7 +306,7 @@ impl Writer {
             self.named_text.insert(id.to_string());
             props.push('\u{1}');
             let name = odf_name(id);
-            props.push_str(self.read_names.get(&format!("{name}|text")).unwrap_or(&name));
+            props.push_str(&self.read_names.get(&format!("{name}|text")).map_or(name, |n| x(n)));
         }
         if props.is_empty() {
             return None;
@@ -332,7 +332,7 @@ impl Writer {
             (_, _, Some(id)) => {
                 self.named.insert(id.to_string());
                 let name = odf_name(id);
-                self.read_names.get(&name).cloned().unwrap_or(name)
+                self.read_names.get(&name).map_or(name, |n| x(n))
             }
             (Kind::Normal, Some(n), None) => n.to_string(),
             _ => parent_style(p.kind).to_string(),
