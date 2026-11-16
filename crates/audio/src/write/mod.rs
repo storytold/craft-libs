@@ -12,7 +12,7 @@ mod pcm;
 #[cfg(feature = "vorbis-encode")]
 mod vorbis;
 #[cfg(feature = "vorbis-encode")]
-pub use vorbis::{OGG_BITRATES, encode as encode_ogg};
+pub use vorbis::{OGG_BITRATES, OggVorbisOptions, encode as encode_ogg, encode_ogg_vorbis, quality_for_bitrate};
 #[cfg(feature = "pcm-encode")]
 mod raw;
 #[cfg(feature = "pcm-encode")]
@@ -66,15 +66,22 @@ pub fn encode(buf: &AudioBuffer, opts: &EncodeOptions) -> Result<Vec<u8>> {
         EncodeFormat::Aac | EncodeFormat::Alac | EncodeFormat::Mp3 | EncodeFormat::Ac3 | EncodeFormat::Eac3 => coded::encode(buf, opts),
         #[cfg(feature = "vorbis-encode")]
         EncodeFormat::Ogg => {
-            if opts.layout.is_some_and(|layout| !EncodeFormat::Ogg.supports_layout(&layout)) {
-                return Err(AudioError::Unsupported("Vorbis requires a mono or stereo speaker layout".into()));
+            let count = u16::try_from(buf.channels.len()).unwrap_or(u16::MAX);
+            let layout = opts.layout.unwrap_or_else(|| ChannelLayout::default_for(count));
+            if layout.channels() != count {
+                return Err(AudioError::Unsupported(format!("a {}-channel layout for {count} channels", layout.channels())));
             }
-            let kbps = match opts.rate_control {
-                None => 192,
-                Some(crate::RateControl::Bitrate(bps)) => bps / 1000,
-                Some(crate::RateControl::Quality(_)) => return Err(AudioError::Unsupported("Ogg export takes a target bitrate".into())),
+            let map = vorbis::vorbis_map(&layout)?;
+            let quality = match opts.rate_control {
+                None => vorbis::quality_for_bitrate(192, buf.channels.len()),
+                Some(crate::RateControl::Bitrate(bps)) => {
+                    vorbis::quality_for_bitrate((bps / 1000).clamp(OGG_BITRATES.0, OGG_BITRATES.1), buf.channels.len())
+                }
+                Some(crate::RateControl::Quality(q)) if q.is_nan() => return Err(AudioError::Encode("the Vorbis quality is NaN".into())),
+                Some(crate::RateControl::Quality(q)) => -1.0 + 11.0 * q.clamp(0.0, 1.0),
             };
-            vorbis::encode(buf, kbps)
+            let planar: Vec<&[f32]> = map.iter().filter_map(|&i| buf.channels.get(i).map(Vec::as_slice)).collect();
+            vorbis::encode_planar(buf.sample_rate, &planar, &OggVorbisOptions::new(quality))
         }
         #[allow(unreachable_patterns)]
         f => Err(AudioError::Unsupported(format!("writing {f:?}"))),
@@ -106,7 +113,7 @@ const fn extensions() -> ([&'static str; 13], usize) {
     add!(cfg!(feature = "mp3-encode"), "mp3");
     add!(cfg!(feature = "ac3-encode"), "ac3");
     add!(cfg!(feature = "eac3-encode"), "eac3", "ec3");
-    add!(cfg!(all(feature = "vorbis-encode", not(target_arch = "wasm32"))), "ogg");
+    add!(cfg!(feature = "vorbis-encode"), "ogg");
     (all, n)
 }
 
@@ -148,7 +155,7 @@ pub fn encode_format_for(name: &str) -> Option<EncodeFormat> {
         "ac3" => Some(EncodeFormat::Ac3),
         #[cfg(feature = "eac3-encode")]
         "eac3" | "ec3" => Some(EncodeFormat::Eac3),
-        #[cfg(all(feature = "vorbis-encode", not(target_arch = "wasm32")))]
+        #[cfg(feature = "vorbis-encode")]
         "ogg" => Some(EncodeFormat::Ogg),
         _ => None,
     }
