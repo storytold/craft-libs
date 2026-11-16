@@ -18,6 +18,9 @@
 //! Input is treated as hostile: the picture size is capped by [`Limits`], and a run-length file
 //! must be long enough to hold the pixels its header declares before anything is allocated.
 
+/// Uncompressed RGBA8-to-Targa encoding.
+pub mod rgba8_raw;
+
 #[cfg(test)]
 mod tests;
 
