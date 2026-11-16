@@ -62,6 +62,8 @@ fn default_build_formats_all_symmetric() {
         Format::Dpx,
         Format::Cineon,
         Format::Iff,
+        #[cfg(feature = "sgi")]
+        Format::Sgi,
         Format::JpegLs,
     ];
     for f in expected {
@@ -70,10 +72,15 @@ fn default_build_formats_all_symmetric() {
 }
 
 #[test]
-fn avif_never_readable() {
-    assert!(!caps(Format::Avif).read);
+fn avif_is_readable_only_with_the_decode_feature() {
+    assert_eq!(caps(Format::Avif).read, cfg!(all(feature = "avif-decode", not(target_arch = "wasm32"))));
     assert_eq!(caps(Format::Avif).write, cfg!(feature = "avif"));
-    assert!(matches!(decode_as(Format::Avif, b"\0\0\0\x1cftypavif"), Err(CodecError::Unsupported { .. })));
+    let header = decode_as(Format::Avif, b"\0\0\0\x1cftypavif");
+    if caps(Format::Avif).read {
+        assert!(matches!(header, Err(CodecError::Malformed { .. })), "{header:?}");
+    } else {
+        assert!(matches!(header, Err(CodecError::Unsupported { .. })), "{header:?}");
+    }
 }
 
 #[test]
@@ -219,6 +226,23 @@ fn detect_magic_iff() {
     assert_eq!(detect(b"FORM\0\0\0\x14AIFF"), None);
     assert!(decode_as(Format::Iff, b"FORM\0\0\0\x14ILBM").is_err());
 }
+#[cfg(feature = "sgi")]
+#[test]
+fn detect_magic_sgi() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    let img = Image::from_u8(5, 3, ChannelLayout::Rgba, (0..60).collect()).unwrap();
+    let bytes = encode(&img, Format::Sgi, &EncodeOptions::default()).unwrap();
+    assert_eq!(detect(&bytes), Some(Format::Sgi));
+    assert_eq!(from_extension("scan.RGB"), Some(Format::Sgi));
+    assert_eq!(from_extension("scan.bw"), Some(Format::Sgi));
+    assert_eq!(decode(&bytes).unwrap().data(), img.data());
+    assert!(!ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Sgi));
+    assert_eq!(Format::Sgi.max_dimensions(), Some((65535, 65535)));
+    // The magic number alone, without a full header, is not SGI.
+    assert_eq!(detect(&[0x01, 0xda, 0, 1, 0, 2]), None);
+    assert!(decode_as(Format::Sgi, &[0x01, 0xda]).is_err());
+}
+
 #[test]
 fn detect_magic_jpeg_ls() {
     use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
@@ -322,4 +346,17 @@ fn extensions_unique_across_formats() {
     all.sort();
     all.dedup();
     assert_eq!(all.len(), n);
+}
+
+#[cfg(not(feature = "sgi"))]
+#[test]
+fn sgi_requires_explicit_feature() {
+    use craft_image_codecs::{ChannelLayout, EncodeOptions, Image, encode};
+    assert!(!caps(Format::Sgi).read && !caps(Format::Sgi).write);
+    assert!(decode_as(Format::Sgi, &[]).is_err());
+    let image = Image::from_u8(1, 1, ChannelLayout::Gray, vec![0]).unwrap();
+    assert!(encode(&image, Format::Sgi, &EncodeOptions::default()).is_err());
+    let mut header = vec![0; 512];
+    header[..12].copy_from_slice(&[1, 218, 0, 1, 0, 2, 0, 1, 0, 1, 0, 1]);
+    assert_eq!(detect(&header), None);
 }
