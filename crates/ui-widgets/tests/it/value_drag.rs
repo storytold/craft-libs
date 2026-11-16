@@ -282,6 +282,41 @@ fn a_wheel_gesture_that_leaves_a_free_control_does_not_step_it_on_coming_back() 
     assert_eq!(*pick.borrow(), stepped, "coming back over the select in the same gesture does not step it again");
 }
 
+/// A wheel notch down over a free select steps to the next entry, a notch up to the previous one, as over a combo box
+/// and a tab strip.
+#[trial]
+fn a_wheel_notch_down_steps_a_free_select_to_the_next_entry() {
+    use craft_ui::contract::Entry;
+    use craft_ui::pickers::Select;
+    use craft_ui::runtime::env::{WheelScope, with_env};
+    use craft_ui::testing::layout::in_region;
+    use std::cell::Cell;
+
+    let entries: Vec<Entry<u8>> = (40..=60).map(|n| Entry::new(n, format!("{n} pt"))).collect();
+    let pick = RefCell::new(50_u8);
+    let select = Cell::new(Rect::NOTHING);
+    let mut show = |ui: &mut Ui| {
+        in_region(ui, Rect::from_min_size(Pos2::new(10.0, 10.0), Vec2::new(300.0, 200.0)), |ui| {
+            with_env(
+                ui,
+                |set| set.wheel = Some(WheelScope::Free),
+                |ui| select.set(Select::new("Size", Bind::bound(&mut *pick.borrow_mut()), &entries).show(ui).response.rect),
+            );
+        });
+    };
+    let mut frames = Frames::new();
+    frames.idle(3, &mut show);
+    frames.frame(vec![pointer::moved(select.get().center())], &mut show);
+    frames.frame(vec![pointer::wheel_lines(-1.0)], &mut show);
+    frames.advance(1.0);
+    frames.idle(3, &mut show);
+    assert_eq!(*pick.borrow(), 51, "a notch down steps to the next entry");
+    frames.frame(vec![pointer::wheel_lines(1.0)], &mut show);
+    frames.advance(1.0);
+    frames.idle(3, &mut show);
+    assert_eq!(*pick.borrow(), 50, "a notch up steps back");
+}
+
 #[trial]
 fn a_wheel_gesture_keeps_scrolling_the_panel_over_a_free_slider() {
     use craft_behavior::GESTURE_GAP;
