@@ -71,6 +71,18 @@ const TAG_DNG_VERSION: u16 = 50706;
 /// first IFD is often a reduced preview, so this runs before decoding.
 /// Reads only bounds-checked header bytes; anything malformed is "not raw".
 fn camera_raw(b: &[u8]) -> bool {
+    camera_raw_mode(b, false)
+}
+
+/// The older LightCraft RAW/TIFF classification policy, sharing this bounded directory walk.
+pub(crate) fn legacy_camera_raw(b: &[u8]) -> bool {
+    camera_raw_mode(b, true)
+}
+
+fn camera_raw_mode(b: &[u8], legacy: bool) -> bool {
+    if legacy && b.get(8..10) == Some(b"CR") {
+        return true;
+    }
     let le = match b.get(0..4) {
         Some(b"II*\0") => true,
         Some(b"MM\0*") => false,
@@ -92,7 +104,47 @@ fn camera_raw(b: &[u8]) -> bool {
     let value = |e: usize| match u16_at(e.saturating_add(2))? {
         3 => u16_at(e.saturating_add(8)).map(u32::from),
         4 | 13 => u32_at(e.saturating_add(8)),
+        1 | 7 if legacy => b.get(e.saturating_add(8)).copied().map(u32::from),
         _ => None,
+    };
+    // The compatibility policy recognizes Sony lossless YCbCr only when IFD0 names Sony.
+    let is_sony = if legacy {
+        u32_at(4)
+            .and_then(|v| usize::try_from(v).ok())
+            .and_then(|ifd| {
+                let n = usize::from(u16_at(ifd)?);
+                if n > 4096 {
+                    return None;
+                }
+                for i in 0..n {
+                    let e = ifd.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
+                    let tag = u16_at(e)?;
+                    let ty = u16_at(e + 2)?;
+                    let count = u32_at(e + 4)? as usize;
+                    if tag == 0x010f {
+                        let matches = (|| {
+                            let size = match ty {
+                                1 | 2 | 6 | 7 => 1usize,
+                                3 | 8 => 2,
+                                4 | 9 | 11 | 13 => 4,
+                                5 | 10 | 12 => 8,
+                                _ => return None,
+                            };
+                            let len = size.checked_mul(count)?;
+                            let start = if len <= 4 { e + 8 } else { u32_at(e + 8)? as usize };
+                            Some(b.get(start..start.checked_add(len)?)?.get(..4)?.eq_ignore_ascii_case(b"SONY"))
+                        })()
+                        .unwrap_or(false);
+                        if matches {
+                            return Some(true);
+                        }
+                    }
+                }
+                Some(false)
+            })
+            .unwrap_or(false)
+    } else {
+        false
     };
     let mut queue: Vec<u32> = u32_at(4).into_iter().collect();
     let mut visited = 0;
@@ -104,6 +156,44 @@ fn camera_raw(b: &[u8]) -> bool {
         }
         let ifd = ifd as usize;
         let Some(n) = u16_at(ifd) else { continue };
+        if legacy
+            && (n > 4096
+                || (n > 0
+                    && ifd
+                        .checked_add(2)
+                        .and_then(|p| usize::from(n - 1).checked_mul(12).and_then(|v| p.checked_add(v)))
+                        .and_then(|p| p.checked_add(8))
+                        .is_none_or(|end| end > b.len())))
+        {
+            continue;
+        }
+        if is_sony {
+            let mut cfa = false;
+            let (mut compression, mut photo, mut samples) = (None, None, None);
+            let (mut saw_compression, mut saw_photo, mut saw_samples) = (false, false, false);
+            for i in 0..usize::from(n) {
+                let e = ifd.saturating_add(2 + 12 * i);
+                match u16_at(e) {
+                    Some(0x828e) => cfa = true,
+                    Some(0x0103) if !saw_compression => {
+                        saw_compression = true;
+                        compression = value(e);
+                    }
+                    Some(0x0106) if !saw_photo => {
+                        saw_photo = true;
+                        photo = value(e);
+                    }
+                    Some(0x0115) if !saw_samples => {
+                        saw_samples = true;
+                        samples = value(e);
+                    }
+                    _ => {}
+                }
+            }
+            if cfa && compression == Some(7) && photo == Some(6) && samples == Some(3) {
+                return true;
+            }
+        }
         for i in 0..usize::from(n) {
             let e = ifd.saturating_add(2 + 12 * i);
             let (Some(tag), Some(count)) = (u16_at(e), u32_at(e.saturating_add(4))) else {
@@ -111,6 +201,7 @@ fn camera_raw(b: &[u8]) -> bool {
             };
             match tag {
                 TAG_DNG_VERSION => return true,
+                0x0103 if legacy && matches!(value(e), Some(32767 | 32769 | 32770 | 34316 | 34713 | 65000 | 65535)) => return true,
                 TAG_PHOTOMETRIC if matches!(value(e), Some(PHOTOMETRIC_CFA | PHOTOMETRIC_LINEAR_RAW)) => {
                     return true;
                 }
@@ -125,7 +216,7 @@ fn camera_raw(b: &[u8]) -> bool {
                 _ => {}
             }
         }
-        if let Some(next) = u32_at(ifd.saturating_add(2 + 12 * usize::from(n))).filter(|&o| o != 0) {
+        if !legacy && let Some(next) = u32_at(ifd.saturating_add(2 + 12 * usize::from(n))).filter(|&o| o != 0) {
             queue.push(next);
         }
     }

@@ -24,6 +24,9 @@ write-raster = ["dep:flate2", "dep:roxmltree"]
 write-simple-text = ["write", "krilla/simple-text"]
 filters = ["dep:craft-stream-codecs", "dep:flate2", "dep:thiserror"]
 cos = ["crypt", "filters", "dep:chrono", "dep:js-sys", "dep:wasm-bindgen"]
+# Content streams on the object layer (`cos::content`); inline images end where hayro-syntax's
+# tokenizer ends them.
+content = ["cos", "dep:hayro-syntax"]
 crypt = ["dep:aes", "dep:md-5", "dep:sha2", "dep:stringprep", "dep:zeroize", "dep:thiserror"]
 
 [dependencies]

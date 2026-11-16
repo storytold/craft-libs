@@ -79,6 +79,8 @@ mod write;
 /// PCM WAVE and AIFF wrappers for interchange essence.
 #[cfg(feature = "pcm-encode")]
 pub mod essence_pcm;
+/// Streaming WAVE and AIFF headers and sample packing.
+pub mod pcm_export;
 /// Interleaved PCM packet decoding.
 pub mod pcm_interleaved;
 /// Range-backed PCM WAVE access and a 16-bit PCM writer.
@@ -762,3 +764,21 @@ extern crate self as craft_audio;
 #[cfg(test)]
 #[path = "../tests/main.rs"]
 mod integration;
+
+// An encoder refusing its settings is an encode error, not damaged input.
+#[cfg(all(test, feature = "aac-encode"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aac_encoder_settings_are_encode_errors() {
+        let e = match aac::Encoder::new(aac::EncoderConfig::cbr(44_000, 2, 128_000)) {
+            Err(e) => AudioError::from(e),
+            Ok(_) => panic!("44 kHz is not an AAC rate"),
+        };
+        assert!(matches!(e, AudioError::Encode(_)), "{e}");
+    }
+}
+
+/// DVD and Blu-ray LPCM packet decoding.
+pub mod lpcm;

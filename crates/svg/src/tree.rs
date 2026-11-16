@@ -38,6 +38,7 @@ use crate::{guard, svgz};
 
 pub mod document;
 pub mod draw;
+pub mod primitive;
 
 /// What one import may use. The defaults suit a desktop app that parses on a thread with a
 /// large stack (see the module text).

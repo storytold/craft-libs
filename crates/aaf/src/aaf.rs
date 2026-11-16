@@ -58,13 +58,56 @@ pub struct WriteOptions<'a> {
 /// reported.
 pub fn write(doc: &Document, opts: &WriteOptions<'_>, report: &mut Report) -> Result<Vec<u8>> {
     let version = if opts.small_sectors { craft_cfb::Version::V3 } else { craft_cfb::Version::V4 };
-    write::write(doc, version, &opts.identity, report)
+    write::write(doc, version, &opts.identity, &ReferenceOptions::default(), report)
+}
+
+/// Optional interpretation choices for applications retaining older interchange behavior.
+#[derive(Clone, Copy, Debug)]
+pub struct ReadOptions {
+    /// Interpret a source clip's start using its target slot's edit rate.
+    pub source_slot_rate: bool,
+    /// Use the referenced mob name when the clip has no explicit name.
+    pub infer_clip_name: bool,
+    /// Decode percent escapes in relative network locators.
+    pub decode_relative_locator: bool,
+    /// Report selector and nested-scope flattening.
+    pub report_flattening: bool,
+    /// Accept truncated PCM WAVE essence summaries.
+    pub permissive_pcm: bool,
+}
+impl Default for ReadOptions {
+    fn default() -> Self {
+        Self { source_slot_rate: true, infer_clip_name: true, decode_relative_locator: true, report_flattening: true, permissive_pcm: false }
+    }
+}
+/// Read using explicitly selected interpretation choices.
+pub fn read_with_options(bytes: &[u8], options: &ReadOptions, report: &mut Report) -> Result<Document> {
+    read::read(bytes, options, report)
+}
+
+/// Optional compatibility choices for writing source references and locators.
+#[derive(Clone, Copy, Debug)]
+pub struct ReferenceOptions {
+    /// Write source offsets in target-slot units.
+    pub source_slot_rate: bool,
+    /// Percent-encode relative locators.
+    pub encode_relative_locator: bool,
+}
+impl Default for ReferenceOptions {
+    fn default() -> Self {
+        Self { source_slot_rate: true, encode_relative_locator: true }
+    }
+}
+/// Write with explicitly selected reference and locator conventions.
+pub fn write_with_references(doc: &Document, opts: &WriteOptions<'_>, references: &ReferenceOptions, report: &mut Report) -> Result<Vec<u8>> {
+    let version = if opts.small_sectors { craft_cfb::Version::V3 } else { craft_cfb::Version::V4 };
+    write::write(doc, version, &opts.identity, references, report)
 }
 
 /// Read an AAF file: its top-level compositions, the compositions nested in them and their
 /// sources. What cannot be represented is skipped and named in `report`.
 pub fn read(bytes: &[u8], report: &mut Report) -> Result<Document> {
-    read::read(bytes, report)
+    read::read(bytes, &ReadOptions::default(), report)
 }
 
 /// Whether `bytes` look like an AAF file (a compound file whose root has the AAF root class or a

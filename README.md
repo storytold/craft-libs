@@ -61,6 +61,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   Clean room, from EffectCraft. Mapping onto an app's document stays in the app.
 
 - [`craft-ai-core`](crates/ai-core/README.md): the data model and contract for AI in the Craft Apps (connections, models, tools, requests, jobs, consent, history, route spec). Pure, no I/O, wasm-safe. Contract in [docs/ai-shared-layer.md](docs/ai-shared-layer.md).
+- [`craft-pe`](crates/pe/src/lib.rs): PE/COFF headers (`.exe`, `.dll`, `.sys`, `.efi`) from untrusted bytes, from Craft Anything: the COFF header, PE32/PE32+ optional header with its data directories bounded by the header's real size, the section table, RVA-to-file mapping and the decoded Rich header.
 - [`craft-pdf`](crates/pdf/README.md): independently optional PDF parsing, interpretation, rasterization and guarded authoring. Apps retain layout, fonts, editing and export policy; writer-only consumers do not enable the shared reader.
 - [`craft-pdn`](crates/pdn/README.md): Paint.NET documents (`.pdn`, PDN3), read: the layer list, blend modes and chunked gzip pixel blocks, with a data-only MS-NRBF (.NET binary serialization) reader. From PhotoCraft.
 - [`craft-aaf`](crates/aaf/README.md): clean-room AAF (Edit Protocol, structured storage) and OMF Interchange 2.0 (Bento) readers and writers over one mob-style composition model with exact times, clip gain, markers, nested compositions and embedded PCM essence. From FilmCraft.
@@ -117,6 +118,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   EMU units and `a:xfrm`, colours with theme slots and colour transforms, preset shape outlines
   (`a:prstGeom`), custom geometry with guide formulas (`a:custGeom`) and preset text warps
   (`a:prstTxWarp`). From DeckCraft. Takes `craft-xml` trees; packages stay with each format.
+- [`craft-elf`](crates/elf/src/lib.rs): ELF program headers and dynamic section entries from untrusted bytes, from Craft Anything: 32- or 64-bit in either byte order, bounded counts and overflow-checked offsets, virtual-address-to-file mapping through `PT_LOAD`, and segment, permission and dynamic tag names.
 - [`craft-eps`](crates/eps/README.md): Encapsulated PostScript files as a container: the binary
   preview header (read and write), the DSC header comments and bounding boxes (also `(atend)`),
   the EPSI preview bitmap, ASCII85 data, and telling EPS, PostScript and Illustrator files
@@ -213,6 +215,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed), Sony ARW, Canon CR3 and Canon CRW (through
   `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
+- [`craft-render-parity`](crates/render-parity/README.md): test support for the shared develop
+  pipeline (#587): how far two renders of the same photo are apart (per-channel error, CIEDE2000,
+  the worst pixel) and whether that is within a stated tolerance.
 - [`craft-tga`](crates/tga/src/lib.rs): Truevision Targa, from FilmCraft (reader) and PhotoCraft
   (writer): true-colour, grayscale and colour-mapped pictures, raw or run-length encoded, any
   origin, to RGBA8, and a run-length writer whose packets end with their scan line. Bounded on
@@ -270,6 +275,7 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   AC-3/E-AC-3, MP1/MP2, MP3 encoding), streaming and seeking, and packet decoding for any demuxer. See its
   README for formats and features.
 - [`craft-latex`](crates/latex/README.md): LaTeX documents read (the everyday subset) and written (a standalone article), to and from the craft-flow model.
+- [`craft-macho`](crates/macho/src/lib.rs): Mach-O header pieces from untrusted bytes, from Craft Anything: universal (fat and fat64) slice tables checked against the file, CPU and load command names, the fixed size each load command needs before its fields are read, and the thread-state program counter.
 - [`craft-markdown`](crates/markdown/README.md): Markdown read and written (a CommonMark subset with GitHub tables and strikethrough), to and from the craft-flow model.
 - [`craft-math`](crates/math/README.md): equations as one tree (the Office Math object model) with its syntaxes, read and written: OMML, presentation MathML, LaTeX math and the UnicodeMath linear format.
 - [`craft-media`](crates/media/README.md): bit-level I/O (`bitstream`), clean-room MP4/MOV
@@ -414,6 +420,8 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   text-format crates read into and write from. WordCraft's model without its editing code.
 - [`craft-xlsx`](crates/xlsx/README.md): Excel workbooks (`.xlsx`, `.xlsm`, SpreadsheetML, transitional and strict) and binary workbooks (`.xlsb`) on `craft-opc`: the workbook part, shared strings, the styles tables and worksheet rows streamed one at a time, with limits on the package, the XML and the binary records.
 - [`craft-ora`](crates/ora/README.md): OpenRaster documents (`.ora`): the ZIP archive and the `stack.xml` layer tree as written, read with bounded sizes and written. From PhotoCraft.
+- [`craft-sniff`](crates/sniff/src/lib.rs): what a file is from its first bytes: one dependency-free, wasm-safe signature table naming the format, its media type, extension and family for images, audio, video, 3D models, archives, compressed streams, executables and databases. Identifies only; parsing stays with each format's reader.
+- [`craft-tar`](crates/tar/src/lib.rs): TAR (v7, ustar, GNU long names and base-256 sizes, local and global pax overrides) and cpio (newc, crc, odc) member walkers for hostile input, from Craft Anything: list each member, its kind, mode, link target and where its data lies, without extracting. Bounded by the input and a member cap; an optional `serde` feature serializes listings.
 - [`craft-y4m`](crates/y4m/src/lib.rs): YUV4MPEG2 (`.y4m`) reader, from FilmCraft: the stream
   header, colour space layouts at 8 to 16 bits, a frame index built from the `FRAME` lines without
   loading the file, and plane access. Bounded on hostile input.

@@ -30,7 +30,11 @@ mod roundtrip_tests;
 #[cfg(test)]
 mod testdoc;
 
+/// Diagnostic types used by readers and writers.
+pub use craft_timeline::report;
 pub use craft_timeline::report::Report;
+/// Exact time types used by the composition model.
+pub use craft_timeline::time;
 
 /// Error from a reader or writer. Unsupported *features* never error; they go in the [`Report`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

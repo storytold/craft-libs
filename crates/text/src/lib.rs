@@ -29,6 +29,9 @@
 //! turn on the modules that use it.
 #![warn(missing_docs)]
 
+#[cfg(feature = "positioned")]
+pub mod positioned;
+
 #[cfg(feature = "bidi")]
 pub mod bidi;
 #[cfg(feature = "find")]
@@ -68,3 +71,6 @@ mod integration;
 fn main() {
     craft_ui::testing::run(module_path!(), env!("CARGO_PKG_NAME"), &craft_ui::testing::registered_in(env!("CARGO_PKG_NAME")));
 }
+
+/// Paragraph-wide line composition with stateful line measurement.
+pub mod composer;
