@@ -40,15 +40,14 @@ impl GradientStyle {
         }
     }
 
-    /// The style's icon: `gradient_linear`, `gradient_radial`, `gradient_angle`, `gradient_reflected`
-    /// or `gradient_diamond`.
+    /// The style's icon: `gradient`, `circle`, `rotate_cw`, `swap_horizontal` or `diamond`.
     pub fn icon(self) -> IconId {
         IconId::new(match self {
-            GradientStyle::Linear => "gradient_linear",
-            GradientStyle::Radial => "gradient_radial",
-            GradientStyle::Angle => "gradient_angle",
-            GradientStyle::Reflected => "gradient_reflected",
-            GradientStyle::Diamond => "gradient_diamond",
+            GradientStyle::Linear => "gradient",
+            GradientStyle::Radial => "circle",
+            GradientStyle::Angle => "rotate_cw",
+            GradientStyle::Reflected => "swap_horizontal",
+            GradientStyle::Diamond => "diamond",
         })
     }
 }
