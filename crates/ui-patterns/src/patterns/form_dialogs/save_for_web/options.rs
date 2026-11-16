@@ -18,7 +18,7 @@ use crate::pickers::{Select, UnitSelect};
 
 use crate::runtime::env::{Label, UnitKind, Units};
 
-use crate::sections::{HeaderStrength, Section};
+use crate::sections::Section;
 use crate::text::{HexField, NumberField};
 
 use craft_behavior::{NumberCodec, Selection};
@@ -245,7 +245,7 @@ fn palette_section(
             (Label::from(format!("{index} #{r:02x}{g:02x}{b:02x}")), Srgba::from(Rgba([r, g, b, OPAQUE])))
         })
         .collect();
-    Section::fixed(words.color_table.clone()).strength(HeaderStrength::Caption).id_salt("palette").show(ui, |ui, _| {
+    Section::fixed(words.color_table.clone()).id_salt("palette").show(ui, |ui, _| {
         let shown = SwatchTable::new(words.color_table.clone(), &entries).per_row(16).tips(true).selection(Bind::bound(&mut *table)).show_all(ui);
         if let Some(index) = shown.open
             && let (Some((_, color)), Ok(at)) = (entries.get(index), u16::try_from(index))
@@ -336,7 +336,7 @@ fn size_section(ui: &mut Ui, words: &SaveForWebWords, sizing: &SizingWords, unit
         Entry::new(UnitKind::Pixels, Label::from(units.symbol(UnitKind::Pixels))),
         Entry::new(UnitKind::Percent, Label::from(units.symbol(UnitKind::Percent))),
     ];
-    Section::fixed(words.image_size.clone()).strength(HeaderStrength::Caption).id_salt("size").show(ui, |ui, _| {
+    Section::fixed(words.image_size.clone()).id_salt("size").show(ui, |ui, _| {
         row(ui, &words.width, "width", |ui| {
             let range = link.width_range();
             let field = UnitSelect::new(words.width.clone(), Bind::given(Some(link.width())), Bind::given(link.unit()), &kinds)

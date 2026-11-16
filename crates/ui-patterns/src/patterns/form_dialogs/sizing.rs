@@ -39,8 +39,6 @@ craft_ui::words! {
         /// `{width}` and `{height}` are the sides with their unit.
         dimensions_value: template "sizing.dimensionsValue" = "{width} × {height}";
         current_size: "sizing.currentSize" = "Current Size";
-        current_width: "sizing.currentWidth" = "Current width";
-        current_height: "sizing.currentHeight" = "Current height";
         new_size: "sizing.newSize" = "New Size";
         width: "sizing.width" = "Width";
         height: "sizing.height" = "Height";

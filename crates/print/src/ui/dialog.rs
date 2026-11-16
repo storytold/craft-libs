@@ -16,7 +16,7 @@ use craft_ui::runtime::env::{Env, Label};
 use craft_ui::runtime::focus::{ActivateKeys, KeepKeys, KeyUse};
 use craft_ui::runtime::overlay::CloseReason;
 use craft_ui::runtime::requests::HostAnswer;
-use craft_ui::sections::{DialogRole, FooterButton};
+use craft_ui::sections::{DialogRole, FooterButton, Section};
 use craft_ui::style::{ComponentStyle, Corners, RuleKind, StyleCx, SurfaceKind};
 use egui::load::SizedTexture;
 use egui::{Pos2, Rect, Response, Ui, Vec2, pos2, vec2};
@@ -31,6 +31,7 @@ craft_ui::words! {
         print: "printDialog.print" = "Print";
         done: "printDialog.done" = "Done";
         preview: "printDialog.preview" = "Print preview image";
+        printer_setup: "printDialog.printerSetup" = "Printer Setup";
         image_box: "printDialog.imageBox" = "Image box";
     }
 }
@@ -461,11 +462,15 @@ impl<'a> PrintDialog<'a> {
                     Text::new(sheet.readout.clone()).show(ui);
                 });
                 Stack::new().show(ui, |ui, _| {
-                    let panel = PrintPanel::new(settings.reborrowed(), printers).discovering(discovering).busy(busy).show(ui);
-                    refresh |= panel.refresh;
-                    for section in sections {
-                        let mut rows = ParamRows::new(section.title.clone(), &section.params, Bind::bound(&mut *values)).show(ui);
-                        form.requests().absorb(&mut rows);
+                    Section::fixed(words.printer_setup.clone()).id_salt("printer").show(ui, |ui, _| {
+                        let panel = PrintPanel::new(settings.reborrowed(), printers).discovering(discovering).busy(busy).show(ui);
+                        refresh |= panel.refresh;
+                    });
+                    for (at, section) in sections.iter().enumerate() {
+                        Section::fixed(section.title.clone()).id_salt(("section", at)).show(ui, |ui, _| {
+                            let mut rows = ParamRows::new(section.title.clone(), &section.params, Bind::bound(&mut *values)).show(ui);
+                            form.requests().absorb(&mut rows);
+                        });
                     }
                 });
             });
