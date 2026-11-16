@@ -1758,16 +1758,18 @@ mod tests {
     }
 
     /// What `f` gives, or `None` where `linesweeper` fails one of its own checks in it. A build with debug assertions makes checks the sweep does
-    /// not make in a release build (`intersect_cubics_rec` checks that the order it gives two curves is the order their positions have), and
-    /// whether one fails for an input made with `sin`, `cos` or `tan` depends on what the standard library of the platform gives them to the
-    /// last place: a test that sweeps by hand must give way to the check, as the crate's own sweeps do, and may not take for granted that an input
-    /// passes it. Any other panic, and any panic in a release build, goes on.
+    /// not make in a release build (`intersect_cubics_rec` checks that the order it gives two curves is the order their positions have, and
+    /// `line.rs` that the order of two lines is the order of their places), and whether one fails for an input made with `sin`, `cos` or `tan`
+    /// depends on what the standard library of the platform gives them to the last place: a test that sweeps by hand must give way to the check, as
+    /// the crate's own sweeps do, and may not take for granted that an input passes it. Only those two checks are taken (by their text): any other
+    /// panic, an assertion of the test's own included, and any panic in a release build, goes on.
     fn unless_refused<T>(f: impl FnOnce() -> T) -> Option<T> {
         match catch_unwind(AssertUnwindSafe(f)) {
             Ok(done) => Some(done),
             Err(payload) => {
                 let message = payload.downcast_ref::<String>().map(String::as_str).or_else(|| payload.downcast_ref::<&str>().copied());
-                if cfg!(debug_assertions) && message.is_some_and(|m| m.starts_with("assertion")) { None } else { std::panic::resume_unwind(payload) }
+                let check = |m: &str| m.starts_with("assertion failed: solve_x_for_y(cubic") || m == "assertion failed: z0 >= z1";
+                if cfg!(debug_assertions) && message.is_some_and(check) { None } else { std::panic::resume_unwind(payload) }
             }
         }
     }
@@ -1875,6 +1877,10 @@ mod tests {
     /// input, and what the test holds is that nothing is a panic.
     #[test]
     fn the_sweep_made_by_hand_gives_way_to_the_sweeps_own_check() {
+        // Only the sweep's own checks are given way to: an assertion of the test's own, or of anything else, goes on.
+        let some = Some(1);
+        assert!(catch_unwind(|| unless_refused(|| assert!(some.is_none(), "meter regression"))).is_err());
+        assert_eq!(unless_refused(|| 7), Some(7));
         let checked = every_pair_next_to_one_another_is_charged("the outline", &crate::debug_checks::outline());
         if cfg!(all(target_os = "linux", target_arch = "x86_64", debug_assertions)) {
             assert_eq!(checked, None, "the outline fails the check here");
