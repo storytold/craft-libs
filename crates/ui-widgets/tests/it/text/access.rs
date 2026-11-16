@@ -44,10 +44,10 @@ fn a_number_field_that_keeps_its_name_is_described_by_its_caption() {
         let node = NodeKey::of(field.get());
         let described: Vec<Option<&str>> = tree.described_by(field.get()).into_iter().map(|key| tree.name_of(key)).collect();
         if keeps {
-            assert_eq!(name(&tree, node), Some("Clone Source X Offset"), "the field keeps its own name");
+            assert_eq!(name(tree, node), Some("Clone Source X Offset"), "the field keeps its own name");
             assert!(described.contains(&Some("X")), "the caption describes the field: {described:?}");
         } else {
-            assert_eq!(name(&tree, node), Some("X"), "the caption names the field");
+            assert_eq!(name(tree, node), Some("X"), "the caption names the field");
         }
     }
 }

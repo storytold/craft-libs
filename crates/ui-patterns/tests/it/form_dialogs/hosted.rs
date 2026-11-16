@@ -31,8 +31,12 @@ fn canvas_size() -> HostedCanvasSize {
 }
 
 #[allow(clippy::redundant_closure, reason = "the builder must be generic over the bind's lifetime, which the bare path is not")]
+fn image_size_of(values: ImageSizeValues) -> HostedImageSize {
+    HostedImageSize::new(values, |values| ImageSize::new(values))
+}
+
 fn image_size() -> HostedImageSize {
-    HostedImageSize::new(ImageSizeValues::new(PICTURE), |values| ImageSize::new(values))
+    image_size_of(ImageSizeValues::new(PICTURE))
 }
 
 /// The document of the guide dialogs: 3000 × 2000 px at 300 ppi, measured in pixels.
@@ -437,7 +441,7 @@ fn image_size_alt_digits_pick_resample_without_typing_into_a_field() {
     fixture.settle();
 
     // Resample off: the keys pick nothing and type nothing into the resolution field.
-    host.borrow_mut().open(HostedImageSize::new(ImageSizeValues::new(PICTURE).resampling(false), |values| ImageSize::new(values)));
+    host.borrow_mut().open(image_size_of(ImageSizeValues::new(PICTURE).resampling(false)));
     fixture.settle();
     let resolution = fixture.by_label("Resolution").expect("the Resolution field");
     fixture.click(&resolution).settle();

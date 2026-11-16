@@ -276,9 +276,7 @@ fn the_gear_enables_only_the_chosen_sizes_and_escape_keeps_the_pick() {
 
 #[trial]
 fn a_fixed_size_typed_past_its_range_keeps_the_end_and_reports_it_once_and_an_emptied_field_is_empty() {
-    let mut start = BoxConstraints::default();
-    start.constraint = BoxConstraint::FixedSize;
-    start.fixed = (Some(100.0), Some(50.0));
+    let start = BoxConstraints { constraint: BoxConstraint::FixedSize, fixed: (Some(100.0), Some(50.0)), ..Default::default() };
     let (mut fixture, host) = gear(start);
     type_into(&mut fixture, "Fixed Size W", "400000");
     assert_eq!(host.borrow().value.fixed, (Some(300_000.0), Some(50.0)), "a width past 300,000 keeps 300,000");

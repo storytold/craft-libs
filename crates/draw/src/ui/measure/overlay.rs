@@ -109,7 +109,7 @@ pub(super) fn ruler_cursor(precise: bool, protractor: bool) -> Cursor {
 ///   Shift 10, Delete and Backspace clear the line.
 /// - It paints a cross at each point, in the line's look; the app shows the line and the arm with `StraightLinePreview`
 ///   ([`RulerPass::show_line`](super::RulerPass::show_line)).
-/// - [Read only](Self::read_only), it paints the crosses at rest and takes no press, key or focus: the ruler drawn
+/// - [Read only](craft_ui::contract::Props::read_only), it paints the crosses at rest and takes no press, key or focus: the ruler drawn
 ///   under the other tools ([`show_ruler`](super::show_ruler)).
 /// - **AccessKit:** the group's value reads "Length L, angle A°" in the ruler's units; each point is named and valued
 ///   "x, y" in the ruler's units.

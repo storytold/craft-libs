@@ -9,7 +9,7 @@ use super::model::Action;
 ///
 /// A file PhotoCraft wrote with its folder occurrences (`set_rows`, and per action `set_slot`,
 /// `action_id`, `legacy_shortcut_owner`) loads too: those fields are read into
-/// [`FileOccurrences`] and [`ActionList::merge_file`](super::ActionList::merge_file) turns them
+/// `FileOccurrences` and [`ActionList::merge_file`](super::ActionList::merge_file) turns them
 /// into unique set and action names. Names are the list's only identity, so they are never
 /// written back.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

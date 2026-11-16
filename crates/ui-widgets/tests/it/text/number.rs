@@ -459,8 +459,11 @@ fn a_draft_that_is_no_number_owes_no_range_alert() {
     use craft_ui::text::RangeAlert;
     use std::rc::Rc;
 
+    /// A step run after the typing: it gets the fixture and a way to type text.
+    type Step<'a> = &'a dyn Fn(&mut Fixture, &dyn Fn(&mut Fixture, &str));
+
     /// Types "150" over the field without leaving it, then runs `then`; returns the alerts and the value after.
-    fn after_150(then: &dyn Fn(&mut Fixture, &dyn Fn(&mut Fixture, &str))) -> (usize, Option<f64>) {
+    fn after_150(then: Step<'_>) -> (usize, Option<f64>) {
         let value = Rc::new(Cell::new(Some(50.0)));
         let alerts: Rc<RefCell<Vec<RangeAlert>>> = Rc::default();
         let (held, seen) = (value.clone(), alerts.clone());
@@ -488,7 +491,7 @@ fn a_draft_that_is_no_number_owes_no_range_alert() {
     let tab = |fixture: &mut Fixture| {
         fixture.key(Key::Tab, Modifiers::NONE);
     };
-    let cases: [(&str, &dyn Fn(&mut Fixture, &dyn Fn(&mut Fixture, &str)), usize); 4] = [
+    let cases: [(&str, Step<'_>, usize); 4] = [
         (
             "text typed over it, then Tab",
             &|fixture: &mut Fixture, type_over: &dyn Fn(&mut Fixture, &str)| {
