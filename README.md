@@ -198,6 +198,9 @@ See the [release notes](CHANGELOG.md) for included functionality and known limit
   Hasselblad 3FR/FFF, Minolta MRW, Epson ERF, Mamiya MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed), Sony ARW, Canon CR3 and Canon CRW (through
   `craft-crw`) so far; demosaicing and everything after stay with the develop
   pipeline.
+- [`craft-render-parity`](crates/render-parity/README.md): test support for the shared develop
+  pipeline (#587): how far two renders of the same photo are apart (per-channel error, CIEDE2000,
+  the worst pixel) and whether that is within a stated tolerance.
 - [`craft-tga`](crates/tga/src/lib.rs): Truevision Targa, from FilmCraft (reader) and PhotoCraft
   (writer): true-colour, grayscale and colour-mapped pictures, raw or run-length encoded, any
   origin, to RGBA8, and a run-length writer whose packets end with their scan line. Bounded on

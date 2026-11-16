@@ -2631,6 +2631,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-render-parity"
+version = "0.1.0"
+dependencies = [
+ "craft-cms",
+]
+
+[[package]]
 name = "craft-rtf"
 version = "0.1.0"
 dependencies = [
