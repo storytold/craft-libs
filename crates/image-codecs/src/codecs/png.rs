@@ -120,7 +120,7 @@ impl<B: AsRef<[u8]>> AsRef<[u8]> for SharedInput<B> {
 
 /// A PNG decoded in resumable steps, for a caller that must not block for the whole image (the
 /// web build, which has no threads): [`PngDecodeRows::step`] decodes rows until the caller says to
-/// stop, and returns the [`Image`] once the last row and the chunks after it are read. [`decode`]
+/// stop, and returns the `Image` once the last row and the chunks after it are read. `decode`
 /// drives one to the end, so the two give the same image.
 ///
 /// An interlaced (Adam7) PNG decodes in a single step: its passes land at stride positions all
@@ -158,7 +158,7 @@ pub struct PngDecodeRows<B: AsRef<[u8]>> {
 }
 
 impl<B: AsRef<[u8]>> PngDecodeRows<B> {
-    /// Reads the header and refuses what [`decode`] refuses before any pixel is decoded: sizes
+    /// Reads the header and refuses what `decode` refuses before any pixel is decoded: sizes
     /// past `limits`, and a file too small for the image it declares.
     pub fn new(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
         Self::open(bytes, limits, true, false)
@@ -385,11 +385,11 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
 
     /// Decodes the rows of a [`streamable`](PngDecodeRows::streamable) file a group at a time:
     /// `sink(y0, data)` gets whole rows `y0..` in final order, `group` of them at a time (the last
-    /// group may be shorter; 0 counts as 1), native-endian, exactly the samples [`decode`] would
+    /// group may be shorter; 0 counts as 1), native-endian, exactly the samples `decode` would
     /// return, and the decoder keeps only that group. Decodes at least one row, then goes on while
     /// `more()` returns true; `Some` with the extras once the file is read to its end, with the
     /// resolution a format that lacks one takes from its EXIF or XMP. A damaged file fails with
-    /// the error [`decode`] gives, after however many rows were delivered. An orientation (an
+    /// the error `decode` gives, after however many rows were delivered. An orientation (an
     /// `eXIf` after the image data may set one) is for the caller to apply. A new group size
     /// must exceed any partial group retained from an earlier yield; otherwise this returns
     /// an error without consuming another row.
@@ -724,7 +724,7 @@ pub(crate) fn has_additional_images(bytes: &[u8]) -> Result<bool, CodecError> {
     Ok(info.animation_control.is_some_and(|a| u64::from(a.num_frames) + u64::from(info.frame_control.is_none()) > 1))
 }
 
-/// The size and pixel format the rows of [`decode_rows`] come in.
+/// The size and pixel format the rows of `decode_rows` come in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PngHeader {
     pub width: u32,
@@ -733,7 +733,7 @@ pub struct PngHeader {
     pub sample: SampleType,
 }
 
-/// Where [`decode_rows`] sends rows: the index of the first, then whole rows.
+/// Where `decode_rows` sends rows: the index of the first, then whole rows.
 pub type PngRowSink<'a, E> = dyn FnMut(u32, &[u8]) -> Result<(), E> + 'a;
 
 /// Decodes a PNG a group of rows at a time, so the caller never needs the whole decoded image:
@@ -1362,7 +1362,7 @@ fn write_idat<W: Write>(writer: &mut png::Writer<W>, zlib: &[u8], max: usize) ->
 /// A PNG encoded a band of rows at a time, for images too large to hold whole (a multi-gigapixel
 /// print): each band is converted to the encode plan, filtered and deflated on all cores as it
 /// arrives and written as IDAT chunks, so only about one band is ever held. The deflate bands are
-/// [`parallel_idat`]'s, so the zlib stream is the one [`crate::encode`] writes for a large image.
+/// `parallel_idat`'s, so the zlib stream is the one `crate::encode` writes for a large image.
 /// Never interlaced (Adam7 needs the whole image).
 pub struct PngRows<W: Write> {
     writer: png::Writer<W>,

@@ -219,6 +219,8 @@ fn registrations(k: &TokenStream, types: &[Type], declared: &Declared, shape: Sh
     let each = types.iter().map(|ty| quote!(#k::__register_contract!(#ty, #shape, #overlay, [#(#exempt),*], [#(#sample)*], #purpose);));
     let gate = registration_gate();
     Ok(quote! {
+        // Outside the gate: the sample exists in every build, so it is never dead code where the registration is absent.
+        #(const _: () = { let _ = #sample; };)*
         #gate
         const _: () = {
             #(#each)*

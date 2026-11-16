@@ -16,7 +16,7 @@ workspace = true
 [features]
 # Every codec feature turns on one codec module; none is on by default.
 # DNxHD / DNxHR (SMPTE ST 2019-1): decoder and encoder.
-dnx = []
+dnx = ["dep:craft-media"]
 # APV (Advanced Professional Video, RFC 9924): decoder and encoder; `apv-decode` or `apv-encode` for one of them.
 apv = ["apv-decode", "apv-encode"]
 apv-decode = ["craft-media/bitstream"]
@@ -52,7 +52,7 @@ vp9-decode = ["craft-media/bitstream"]
 vp9-encode = ["craft-media/isobmff"]
 # AV1: decoder and encoder; `av1-decode` or `av1-encode` for one of them.
 av1 = ["av1-decode", "av1-encode"]
-av1-decode = []
+av1-decode = ["dep:craft-media"]
 av1-encode = ["craft-media/isobmff"]
 # Tiled AV1 fallback for frames that exceed the clean-room encoder's single-tile limits.
 av1-large-encode = ["av1-encode", "dep:rav1e"]
@@ -60,7 +60,7 @@ av1-large-encode = ["av1-encode", "dep:rav1e"]
 threads = ["dep:rayon"]
 
 [dependencies]
-craft-media = { workspace = true }
+craft-media = { workspace = true, optional = true }
 thiserror = { workspace = true }
 rayon = { workspace = true, optional = true }
 

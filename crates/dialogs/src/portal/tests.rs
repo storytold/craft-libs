@@ -17,7 +17,8 @@ fn the_picked_file_type_gives_a_bare_name_its_extension_and_a_typed_extension_wi
     let two = [Filter::new("Photoshop", &["psd", "psb"]), Filter::new("PNG", &["png"])];
     let only = [Filter::new("Swatches", &["aco"])];
     // (path, opened with, filters, picked type, expected path)
-    let table: [(&str, Option<&str>, &[Filter], Option<usize>, &str); 8] = [
+    type Case<'a> = (&'a str, Option<&'a str>, &'a [Filter], Option<usize>, &'a str);
+    let table: [Case; 8] = [
         ("/s/Untitled", Some("Untitled.psd"), &two, Some(1), "/s/Untitled.png"),
         ("/s/Untitled.psd", Some("Untitled.psd"), &two, Some(1), "/s/Untitled.png"),
         ("/s/art.png", Some("art.psd"), &two, Some(0), "/s/art.png"),

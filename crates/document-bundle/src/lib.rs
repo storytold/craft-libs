@@ -179,7 +179,7 @@ pub fn write(
     Ok(out.into_inner())
 }
 
-/// Like [`write`], streaming the archive into `out`. A writer that fails (for example to cancel
+/// Like [`fn@write`], streaming the archive into `out`. A writer that fails (for example to cancel
 /// a long save) stops the write at the next member or buffer and the error is returned.
 #[allow(clippy::too_many_arguments)]
 pub fn write_to<W: Write + Seek>(
