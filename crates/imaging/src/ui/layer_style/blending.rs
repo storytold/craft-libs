@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use craft_behavior::EditEvents;
 use craft_ui::choice::Checkbox;
 use craft_ui::contract::{Bind, Entry, Props as _, Show as _, ShowContainer as _};
-use craft_ui::form::{Field, FieldGroup, SliderField};
+use craft_ui::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 use craft_ui::layout_components::Stack;
 use craft_ui::pickers::Select;
 use craft_ui::runtime::env::UnitKind;
@@ -200,7 +200,12 @@ fn with_current(modes: &[Entry<String>], current: &str) -> Vec<Entry<String>> {
 
 /// A 0..=100 % slider and field, whole percent.
 fn percent(ui: &mut Ui, label: &Label, value: f32) -> craft_ui::contract::EditResponse<f64> {
-    SliderField::new(label.clone(), Bind::given(f64::from(value)), 0.0..=100.0).step(1.0).unit_kind(UnitKind::Percent).show(ui).edit
+    SliderField::new(label.clone(), Bind::given(f64::from(value)), 0.0..=100.0)
+        .step(1.0)
+        .unit_kind(UnitKind::Percent)
+        .layout(SliderFieldLayout::Inline)
+        .show(ui)
+        .edit
 }
 
 /// The Advanced Blending checks' values, in Photoshop's order.

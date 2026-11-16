@@ -9,7 +9,7 @@ use craft_ui::buttons::Button;
 use craft_ui::choice::{Checkbox, Swatch};
 use craft_ui::contract::{Bind, EditResponse, Entry, Props as _, Show as _, ShowContainer as _, clicked};
 use craft_ui::display::Text;
-use craft_ui::form::{Field, FieldGroup, SliderField};
+use craft_ui::form::{Field, FieldGroup, SliderField, SliderFieldLayout};
 use craft_ui::layout::RowAlign;
 use craft_ui::layout_components::{Row, Stack};
 use craft_ui::patterns::presets::{PresetPicker, PresetRow, PresetState};
@@ -201,8 +201,16 @@ fn field_row(ui: &mut Ui, input: &PageInput<'_>, field: &EffectField, shown: &St
             if let Some(default) = input.spec.defaults.number(key) {
                 bind = bind.reset(default);
             }
-            let slider = SliderField::new(label.clone(), bind.reborrowed(), *min..=*max).unit_kind(unit_kind(*unit)).step(1.0).id_salt(key).show(ui);
-            push_edit(&mut out.edit, style_edit(&slider, input.style, |v| param(StyleValue::Number(v.round()))));
+            let slider = Field::new(label.clone()).id_salt(key).show(ui, |ui, _| {
+                SliderField::new(label.clone(), bind.reborrowed(), *min..=*max)
+                    .unit_kind(unit_kind(*unit))
+                    .step(1.0)
+                    .layout(SliderFieldLayout::Inline)
+                    .show(ui)
+            });
+            if let Some(slider) = slider.inner {
+                push_edit(&mut out.edit, style_edit(&slider, input.style, |v| param(StyleValue::Number(v.round()))));
+            }
         }
         FieldKind::Angle => {
             let value = shown.number(key).unwrap_or(0.0);
