@@ -15,8 +15,8 @@ mod words;
 use kurbo::Point;
 
 pub use style::CornerStyle;
-pub use widgets::{CornerWidgets, CornerWidgetsOutput};
 pub(crate) use widgets::paint_widget;
+pub use widgets::{CornerWidgets, CornerWidgetsOutput};
 pub use words::CornerWords;
 
 /// How a corner is cut. Only shown and cycled with [`CornerWidgets::kinds`] (VectorCraft).

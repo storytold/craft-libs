@@ -2,8 +2,8 @@
 
 use super::PathSetting;
 use crate::patterns::preferences::SettingsDraft;
-use craft_host::PickRequest;
 use crate::testing::{Drive, StoryData, StoryOutput, story};
+use craft_host::PickRequest;
 use egui::Ui;
 
 fn draft(path: &str) -> SettingsDraft {

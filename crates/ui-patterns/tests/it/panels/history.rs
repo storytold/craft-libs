@@ -14,16 +14,15 @@ fn rig(source: Option<HistoryKey>, with_source: bool) -> (Fixture, Seen) {
     let seen: Seen = Rc::new(RefCell::new(Vec::new()));
     let sink = seen.clone();
     let rows = vec![HistoryRow::state(1, "Open"), HistoryRow::state(2, "Brush"), HistoryRow::state(3, "Fill"), HistoryRow::snapshot(7, "Snapshot 1")];
-    let fixture =
-        Fixture::new(move |ui| {
-            let mut panel = HistoryPanel::new(&rows, Some(HistoryKey::State(2)))
-                .can_delete(|key| *key != HistoryKey::State(1))
-                .footer(HistoryFooter::default().delete(true));
-            if with_source {
-                panel = panel.source(source);
-            }
-            sink.borrow_mut().extend(panel.show(ui).events);
-        });
+    let fixture = Fixture::new(move |ui| {
+        let mut panel = HistoryPanel::new(&rows, Some(HistoryKey::State(2)))
+            .can_delete(|key| *key != HistoryKey::State(1))
+            .footer(HistoryFooter::default().delete(true));
+        if with_source {
+            panel = panel.source(source);
+        }
+        sink.borrow_mut().extend(panel.show(ui).events);
+    });
     (fixture, seen)
 }
 

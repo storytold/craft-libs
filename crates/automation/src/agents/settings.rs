@@ -24,7 +24,13 @@ pub struct AgentSettings {
 
 impl Default for AgentSettings {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0, read_root: String::new(), write_root: String::new(), when_app_closed: WhenAppClosed::Launch }
+        Self {
+            allow_agent_control: true,
+            control_port: 0,
+            read_root: String::new(),
+            write_root: String::new(),
+            when_app_closed: WhenAppClosed::Launch,
+        }
     }
 }
 

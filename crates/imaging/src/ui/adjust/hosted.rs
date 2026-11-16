@@ -57,12 +57,7 @@ pub struct AdjustDialogCx<'a> {
 impl<'a> AdjustDialogCx<'a> {
     /// The context for an editor shown in `context` over the dialog's own `picker`, `channel` and `clipping` state, with
     /// no canvas, no curve point to select and no edit phase; the fields set the rest.
-    pub fn new(
-        context: AdjustContext,
-        picker: &'a mut Option<TonePicker>,
-        channel: &'a mut usize,
-        clipping: &'a mut Option<LevelsClip>,
-    ) -> Self {
+    pub fn new(context: AdjustContext, picker: &'a mut Option<TonePicker>, channel: &'a mut usize, clipping: &'a mut Option<LevelsClip>) -> Self {
         Self { context, canvas: None, picker, channel, select_point: None, clipping, edit: None }
     }
 }

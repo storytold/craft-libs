@@ -1313,6 +1313,10 @@ fn readout_during_a_drag(hud: bool, shown: Option<bool>) -> (bool, bool) {
 #[trial]
 fn show_transformation_values_gates_the_readouts_paint_and_never_the_hud() {
     assert_eq!(readout_during_a_drag(false, None), (true, true), "by default a tool's readout paints and is reported");
-    assert_eq!(readout_during_a_drag(false, Some(false)), (false, true), "Show Transformation Values off: nothing paints, the rows are still reported");
+    assert_eq!(
+        readout_during_a_drag(false, Some(false)),
+        (false, true),
+        "Show Transformation Values off: nothing paints, the rows are still reported"
+    );
     assert_eq!(readout_during_a_drag(true, Some(false)), (true, true), "a hud paints with Show Transformation Values off");
 }

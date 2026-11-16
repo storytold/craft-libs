@@ -288,7 +288,8 @@ fn a_full_window_viewport_fills_the_main_window_without_viewports_and_opens_its_
 /// in, and the dialog stays open.
 #[trial]
 fn a_viewport_mount_stays_in_a_full_screen_or_wayland_maximized_window() {
-    let state = |fullscreen: bool, maximized: bool| ViewportInfo { fullscreen: Some(fullscreen), maximized: Some(maximized), ..ViewportInfo::default() };
+    let state =
+        |fullscreen: bool, maximized: bool| ViewportInfo { fullscreen: Some(fullscreen), maximized: Some(maximized), ..ViewportInfo::default() };
     let frame = |windows: &Windows| {
         windows.frame(vec![], vec![], |ui| {
             Palette::full_window("Workspace").show(ui, |_, _| {});

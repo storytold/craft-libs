@@ -1,7 +1,7 @@
 //! The intents routed to a component and what it leaves untaken: Submit, Cancel, Escape and context requests.
 
-use super::{Stage, current};
 use super::route::push;
+use super::{Stage, current};
 use crate::runtime::focus::{self};
 use craft_behavior::focus::{EscapeFacts, EscapeStep, escape_step};
 use craft_behavior::{AccessRequest, CancelRule, EditCommand, EditorInput, Intent, MoveMods, NavMove, PartRef};

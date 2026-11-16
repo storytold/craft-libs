@@ -1,7 +1,7 @@
 //! The SVG icon catalog the build embeds, the app icon sets registered beside it, and their rasteriser.
 
-use egui::{Color32, ColorImage};
 use craft_svg::tree::draw::{self as svg_draw, tiny_skia};
+use egui::{Color32, ColorImage};
 use std::sync::{PoisonError, RwLock};
 
 use super::svg_tree;
