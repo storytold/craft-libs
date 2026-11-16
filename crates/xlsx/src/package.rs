@@ -194,9 +194,15 @@ impl<'a> Package<'a> {
             self.binary_strings = Some(strings.len());
             return Ok(strings);
         }
-        let Some(rel) = rels.first("sharedStrings").filter(|r| !r.external) else { return Ok(Vec::new()) };
-        let Some(bytes) = self.opc.read(&rel.target)? else {
-            self.warn(format!("missing part {}", rel.target));
+        let rel = rels.first("sharedStrings").filter(|r| !r.external);
+        // Some older spreadsheet writers omit the workbook relationship but still emit the
+        // conventional shared-string part. The pre-OPC reader accepted that layout, so retain
+        // compatibility by checking the standard part name only when the relationship is absent.
+        let target = rel.map_or("xl/sharedStrings.xml", |r| r.target.as_str());
+        let Some(bytes) = self.opc.read(target)? else {
+            if rel.is_some() {
+                self.warn(format!("missing part {target}"));
+            }
             return Ok(Vec::new());
         };
         let mut items = Vec::new();
@@ -214,16 +220,28 @@ impl<'a> Package<'a> {
         Ok(items)
     }
 
-    /// The styles part, `None` when the workbook has none (or is binary: its styles are not read).
+    /// The styles part, `None` when the workbook has none. A damaged one is a warning and `None`;
+    /// only a limit is an error.
     pub fn styles(&mut self) -> Result<Option<Styles>, Error> {
-        if self.binary.is_some() {
-            return Ok(None);
-        }
         let rels = self.workbook_rels()?;
         let Some(rel) = rels.first("styles").filter(|r| !r.external) else {
             self.warn("no styles part");
             return Ok(None);
         };
+        if let Some(types) = &self.binary {
+            let read = xlsb::check_type(types, &rel.target, xlsb::STYLES).and_then(|()| {
+                let bytes = self.opc.read(&rel.target)?.ok_or_else(|| xlsb::invalid(format!("missing part {}", rel.target)))?;
+                xlsb::styles(&bytes, &self.limits, &self.budget, &mut self.warnings)
+            });
+            return match read {
+                Ok(styles) => Ok(Some(styles)),
+                Err(Error::TooLarge(m)) => Err(Error::TooLarge(m)),
+                Err(e) => {
+                    self.warn(format!("skipped {}: {e}", rel.target));
+                    Ok(None)
+                }
+            };
+        }
         Ok(self.optional_xml(&rel.target.clone())?.map(Styles::read))
     }
 

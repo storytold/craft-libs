@@ -118,6 +118,66 @@ fn display_window_placement() {
     assert_eq!(to_display_window(&[1.0, 2.0, 3.0, 4.0], far, display, 0.0, 100).unwrap(), [0.0; 6]);
 }
 
+#[test]
+fn decoded_display_part_places_selected_channels_and_checks_total_budget() {
+    let bytes = file(vec![layer(None, 2, 2, &["R", "G"], false, exr::prelude::Compression::ZIP1)], (3, 2));
+    let part = decode_display_part(&bytes, 0, &|name| name == "R", &|_| 9.0, &Limits::default()).unwrap();
+    assert_eq!(part.channels.len(), 1);
+    assert_eq!(part.channels[0].name, "R");
+    assert_eq!(part.channels[0].samples, [0.0, 1.0, 9.0, 2.0, 3.0, 9.0]);
+
+    let limits = Limits { max_bytes: 6 * 4 - 1, ..Limits::default() };
+    assert!(matches!(decode_display_part(&bytes, 0, &all, &|_| 0.0, &limits), Err(Error::LimitExceeded(_))));
+
+    // One selected display plane fits exactly. Both data channels together (2x2x2 f32, 32 bytes)
+    // don't, but they are decompressed one scan-line block (2 pixels x 2 channels) at a time.
+    let block_limits = Limits { max_bytes: 6 * 4, ..Limits::default() };
+    let part = decode_display_part(&bytes, 0, &|name| name == "R", &|_| 9.0, &block_limits).unwrap();
+    assert_eq!(part.channels[0].samples, [0.0, 1.0, 9.0, 2.0, 3.0, 9.0]);
+}
+
+#[test]
+fn decoded_display_part_bounds_each_all_channel_block() {
+    // The kept R plane is 4 pixels of f32 (16 bytes), but each scan-line block carries all four
+    // channels (64 bytes) before the ignored ones are discarded.
+    let bytes = file(vec![layer(None, 4, 1, &["R", "G", "B", "A"], false, exr::prelude::Compression::ZIP1)], (4, 1));
+    let r = |name: &str| name == "R";
+    assert!(matches!(decode_display_part(&bytes, 0, &r, &|_| 0.0, &Limits { max_bytes: 16, ..Limits::default() }), Err(Error::LimitExceeded(_))));
+    assert_eq!(decode_display_part(&bytes, 0, &r, &|_| 0.0, &Limits { max_bytes: 64, ..Limits::default() }).unwrap().channels.len(), 1);
+    // ZIP groups 16 scan lines, but a one-row part's block is that row: still 64 bytes, not 1024
+    let zip16 = file(vec![layer(None, 4, 1, &["R", "G", "B", "A"], false, exr::prelude::Compression::ZIP16)], (4, 1));
+    assert!(matches!(decode_display_part(&zip16, 0, &r, &|_| 0.0, &Limits { max_bytes: 63, ..Limits::default() }), Err(Error::LimitExceeded(_))));
+    assert_eq!(decode_display_part(&zip16, 0, &r, &|_| 0.0, &Limits { max_bytes: 64, ..Limits::default() }).unwrap().channels.len(), 1);
+    // A tile is the block of a tiled part: a 4x4 tile of four f32 channels is 256 bytes, while
+    // the whole 8x8 part is 1024 and the kept R plane of the 2x2 display window only 16.
+    let tiled = file(vec![layer(None, 8, 8, &["R", "G", "B", "A"], true, exr::prelude::Compression::ZIP1)], (2, 2));
+    assert!(matches!(decode_display_part(&tiled, 0, &r, &|_| 0.0, &Limits { max_bytes: 255, ..Limits::default() }), Err(Error::LimitExceeded(_))));
+    assert_eq!(decode_display_part(&tiled, 0, &r, &|_| 0.0, &Limits { max_bytes: 256, ..Limits::default() }).unwrap().channels[0].samples.len(), 4);
+}
+
+#[test]
+fn decoded_display_part_clips_a_wide_data_window_to_the_small_display() {
+    let width = (Limits::default().max_width as usize) + 1;
+    let bytes = file(vec![layer(None, width, 1, &["R"], false, exr::prelude::Compression::ZIP1)], (1, 1));
+    let part = decode_display_part(&bytes, 0, &all, &|_| 9.0, &Limits::default()).unwrap();
+    assert_eq!(part.channels.len(), 1);
+    assert_eq!(part.channels[0].samples, [0.0]);
+}
+
+#[test]
+fn decoded_display_part_rejects_kept_subsampled_channels() {
+    let mut bytes = file(vec![layer(None, 4, 1, &["R"], false, exr::prelude::Compression::Uncompressed)], (4, 1));
+    // exr's writer doesn't emit subsampling yet, so patch the standard chlist sampling field in a
+    // valid uncompressed file. The reader must reject it before looking at the block payload.
+    let tag = b"channels\0chlist\0";
+    let attr = bytes.windows(tag.len()).position(|window| window == tag).unwrap();
+    let payload = attr + tag.len() + 4;
+    let name_end = payload + bytes[payload..].iter().position(|byte| *byte == 0).unwrap();
+    let x_sampling = name_end + 1 + 4 + 1 + 3;
+    bytes[x_sampling..x_sampling + 4].copy_from_slice(&2u32.to_le_bytes());
+    assert!(matches!(decode_display_part(&bytes, 0, &|name| name == "R", &|_| 0.0, &Limits::default()), Err(Error::Unsupported(_))));
+}
+
 /// A 2x2 single-part file whose layer carries a 2x1 preview.
 fn with_preview() -> Vec<u8> {
     let mut attrs = LayerAttributes::named("rgb");

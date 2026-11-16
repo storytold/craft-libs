@@ -85,18 +85,23 @@ The parts this crate writes use the transitional namespaces; a strict file's kep
 they were. A binary workbook is not written.
 
 A binary workbook gives the same `Workbook`, strings, rows (with their heights, outline levels,
-hidden flags and styles), columns, default sizes and merged cells. Its styles are not read (each
-cell keeps its format index). The descent Excel records for rows and the sheet
-(`x14ac:dyDescent`) is in alternate-content blocks, which are skipped. Its cell formulas are
-decoded from their tokens into the text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as
-written, apart from the four ISO/IEC 29500 functions `.xlsx` names bare, no implicit `@`, the
-spaces and line breaks typed in the formula, numbers as Excel spells them), with
-`FormulaKind::Shared` or `FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell
-metadata index. Every cell of a shared formula gets its own text, decoded at the cell, since the
-file keeps the tokens once. A formula whose decoding needs something the reader does not read
-keeps only its saved result, with a warning saying why: user defined names, table references,
-other workbooks, Python code stored outside the cell, data tables. The XLSB function table
-(`xlsb/ftab.rs`) and the expression printer are this crate's own, apart from `craft-xls`'s.
+hidden flags and styles), columns, default sizes and merged cells, and the same `Styles`:
+number formats, fonts, fills, borders, cell and cell style formats, cell styles, differential
+formats and the indexed colours, as Excel writes them in `styles.xml` (default fill colours and
+empty settings left out, a cell style format's `apply*="0"`, a number format with a newer locale tag
+in its Excel 2007 spelling, as `formatCode` has it). Custom table styles and recent colours are not
+read; a damaged styles part is a warning and no styles, while one past a cap (65,536 entries in a
+table, 1,024 gradient stops) or past `binary_text` is too large. The descent Excel records for rows
+and the sheet (`x14ac:dyDescent`) is in alternate-content blocks, which are skipped. Its cell formulas are decoded from
+their tokens into the text an `.xlsx` file holds (`_xlfn.` and `_xlpm.` names as written, apart from
+the four ISO/IEC 29500 functions `.xlsx` names bare, no implicit `@`, the spaces and line breaks
+typed in the formula, numbers as Excel spells them), with `FormulaKind::Shared` or
+`FormulaKind::Array` and their ranges, and `BrtCellMeta` as the cell metadata index. Every cell of a
+shared formula gets its own text, decoded at the cell, since the file keeps the tokens once. A
+formula whose decoding needs something the reader does not read keeps only its saved result, with a
+warning saying why: user defined names, table references, other workbooks, Python code stored
+outside the cell, data tables. The XLSB function table (`xlsb/ftab.rs`) and the expression printer
+are this crate's own, apart from `craft-xls`'s.
 
 ## Hostile input
 
