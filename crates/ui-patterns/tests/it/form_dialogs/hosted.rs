@@ -253,3 +253,63 @@ fn hosted_export_as_finishes_when_the_app_answers_its_save_request() {
     let answered = host.borrow_mut().take::<HostedExportAs>().and_then(DialogResult::ok).map(|result| result.path);
     assert_eq!(answered, Some(path), "the answered path finishes the dialog with it");
 }
+
+/// Export As: Enter alone does not export; Convert to sRGB starts on and its box gives the document's profile; + adds
+/// 0.5x "@0.5x", then 0.75x, and a row's trash button removes it while more than one is left; two rows ask for a folder
+/// and answer one output per row; without folder export, two rows refuse Export.
+#[trial]
+fn export_as_writes_one_file_per_scale_all_row_and_only_from_its_button() {
+    use craft_ui::patterns::form_dialogs::{ExportProfile, ScaleRow, ScaleSize};
+    use craft_ui::runtime::requests::PathKind;
+    assert_eq!(ExportOptions::default().profile, ExportProfile::Srgb, "Convert to sRGB is on by default");
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host);
+    host.borrow_mut().open(HostedExportAs::new("Poster", PICTURE, ExportOptions::default()));
+    fixture.idle(10);
+    let options = |host: &Rc<RefCell<DialogHost>>| host.borrow().get::<HostedExportAs>().map(|dialog| dialog.options().clone()).expect("open");
+    let pick = |host: &Rc<RefCell<DialogHost>>| host.borrow_mut().get_mut::<HostedExportAs>().and_then(HostedExportAs::pick_path);
+
+    fixture.key(Key::Enter, Modifiers::NONE).idle(4);
+    assert!(pick(&host).is_none() && host.borrow().is_open::<HostedExportAs>(), "Enter does not start the export");
+
+    let srgb = fixture.by_label("Convert to sRGB").expect("the Color Space box");
+    fixture.click(&srgb).idle(4);
+    assert_eq!(options(&host).profile, ExportProfile::Document, "unticked keeps the document's profile");
+
+    let one = fixture.by_label("Remove size 1").expect("the first row's trash button");
+    fixture.click(&one).idle(4);
+    assert_eq!(options(&host).scale_rows().len(), 1, "the last row stays");
+    let add = fixture.by_label("Add a size").expect("the + button");
+    fixture.click(&add).idle(4);
+    let add = fixture.by_label("Add a size").expect("the + button");
+    fixture.click(&add).idle(4);
+    assert_eq!(
+        options(&host).scale_all,
+        [ScaleRow::default(), ScaleRow::new(ScaleSize::X0_5, "@0.5x"), ScaleRow::new(ScaleSize::X0_75, "@0.75x")],
+        "+ adds the next sizes"
+    );
+    let third = fixture.by_label("Remove size 3").expect("the third row's trash button");
+    fixture.click(&third).idle(4);
+    assert_eq!(options(&host).scale_all.len(), 2);
+
+    let export = fixture.by_label("Export…").expect("the Export button");
+    fixture.click(&export).idle(4);
+    let request = pick(&host).expect("Export asks where to write");
+    assert!(matches!(request.kind, PathKind::Folder), "two rows ask for a folder");
+    if let Some(dialog) = host.borrow_mut().get_mut::<HostedExportAs>() {
+        dialog.answer_path(request.key.clone(), PathBuf::from("/tmp/out"));
+    }
+    fixture.idle(6);
+    let outputs = host.borrow_mut().take::<HostedExportAs>().and_then(DialogResult::ok).map(|result| result.outputs).expect("answered");
+    let listed: Vec<(PixelSize, &str)> = outputs.iter().map(|output| (output.size, output.suffix.as_str())).collect();
+    assert_eq!(listed, [(PICTURE, ""), (PixelSize::new(800, 450), "@0.5x")], "one output per row");
+
+    let mut two = ExportOptions::default();
+    two.scale_all = vec![ScaleRow::default(), ScaleRow::new(ScaleSize::X2, "@2x")];
+    host.borrow_mut().open(HostedExportAs::new("Poster", PICTURE, two).folder_export(false));
+    fixture.idle(10);
+    let export = fixture.by_label("Export…").expect("the Export button");
+    fixture.click(&export).idle(4);
+    let ctx = fixture.ctx().clone();
+    assert!(pick(&host).is_none() && !host.borrow_mut().confirm::<HostedExportAs>(&ctx), "without a folder two rows refuse Export");
+}

@@ -58,6 +58,16 @@ craft_ui::words! {
         no_estimate: "export.noEstimate" = "—";
         estimating: "export.estimating" = "…";
         untitled: "export.untitled" = "Untitled";
+        scale_all: "export.scaleAll" = "Scale All";
+        add_size: "export.addSize" = "Add a size";
+        /// `{n}` is the row's number.
+        size_n: template "export.sizeN" = "Size {n}";
+        suffix: "export.suffix" = "Suffix";
+        /// `{n}` is the row's number.
+        suffix_n: template "export.suffixN" = "Suffix {n}";
+        /// `{n}` is the row's number.
+        remove_size: template "export.removeSize" = "Remove size {n}";
+        folder_needed: "export.folderNeeded" = "Exporting several sizes at once needs a folder, which this build can't write to; export one size at a time";
         preset: "export.preset" = "Preset";
         new_preset_name: "export.newPresetName" = "Export Preset";
         /// `{size}`: the estimated file size, shown while the exact one is computed.
@@ -158,10 +168,156 @@ pub enum ExportMetadata {
 #[non_exhaustive]
 pub enum ExportProfile {
     /// Uses the document's own profile.
-    #[default]
     Document,
     /// Converts to sRGB.
+    #[default]
     Srgb,
+}
+
+/// A Scale All size: a multiple of the export size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ScaleSize {
+    #[allow(missing_docs)]
+    #[serde(rename = "0.1x")]
+    X0_1,
+    #[allow(missing_docs)]
+    #[serde(rename = "0.25x")]
+    X0_25,
+    #[allow(missing_docs)]
+    #[serde(rename = "0.3x")]
+    X0_3,
+    #[allow(missing_docs)]
+    #[serde(rename = "0.33x")]
+    X0_33,
+    #[allow(missing_docs)]
+    #[serde(rename = "0.5x")]
+    X0_5,
+    #[allow(missing_docs)]
+    #[serde(rename = "0.75x")]
+    X0_75,
+    /// The export size itself.
+    #[default]
+    #[serde(rename = "1x")]
+    X1,
+    #[allow(missing_docs)]
+    #[serde(rename = "1.25x")]
+    X1_25,
+    #[allow(missing_docs)]
+    #[serde(rename = "1.5x")]
+    X1_5,
+    #[allow(missing_docs)]
+    #[serde(rename = "2x")]
+    X2,
+    #[allow(missing_docs)]
+    #[serde(rename = "3x")]
+    X3,
+}
+
+impl ScaleSize {
+    /// Every size in the list's order.
+    pub const ALL: [ScaleSize; 11] = [
+        ScaleSize::X0_1,
+        ScaleSize::X0_25,
+        ScaleSize::X0_3,
+        ScaleSize::X0_33,
+        ScaleSize::X0_5,
+        ScaleSize::X0_75,
+        ScaleSize::X1,
+        ScaleSize::X1_25,
+        ScaleSize::X1_5,
+        ScaleSize::X2,
+        ScaleSize::X3,
+    ];
+
+    /// The sizes the add button gives, in turn: the first one no row has yet (0.3x is never added).
+    pub const ADD_ORDER: [ScaleSize; 9] = [
+        ScaleSize::X0_5,
+        ScaleSize::X0_75,
+        ScaleSize::X0_25,
+        ScaleSize::X2,
+        ScaleSize::X0_33,
+        ScaleSize::X1_5,
+        ScaleSize::X0_1,
+        ScaleSize::X3,
+        ScaleSize::X1_25,
+    ];
+
+    /// The multiple of the export size.
+    pub fn factor(self) -> f64 {
+        match self {
+            ScaleSize::X0_1 => 0.1,
+            ScaleSize::X0_25 => 0.25,
+            ScaleSize::X0_3 => 0.3,
+            ScaleSize::X0_33 => 0.33,
+            ScaleSize::X0_5 => 0.5,
+            ScaleSize::X0_75 => 0.75,
+            ScaleSize::X1 => 1.0,
+            ScaleSize::X1_25 => 1.25,
+            ScaleSize::X1_5 => 1.5,
+            ScaleSize::X2 => 2.0,
+            ScaleSize::X3 => 3.0,
+        }
+    }
+
+    /// The size as the list shows it and a suffix names it: `0.5x`, `2x`.
+    pub fn name(self) -> &'static str {
+        match self {
+            ScaleSize::X0_1 => "0.1x",
+            ScaleSize::X0_25 => "0.25x",
+            ScaleSize::X0_3 => "0.3x",
+            ScaleSize::X0_33 => "0.33x",
+            ScaleSize::X0_5 => "0.5x",
+            ScaleSize::X0_75 => "0.75x",
+            ScaleSize::X1 => "1x",
+            ScaleSize::X1_25 => "1.25x",
+            ScaleSize::X1_5 => "1.5x",
+            ScaleSize::X2 => "2x",
+            ScaleSize::X3 => "3x",
+        }
+    }
+}
+
+/// One Scale All row: a size and the suffix its file name takes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ScaleRow {
+    /// The multiple of the export size.
+    pub size: ScaleSize,
+    /// What the file name of this size ends with, before the extension; empty for none.
+    pub suffix: String,
+}
+
+impl ScaleRow {
+    /// The most rows Scale All holds.
+    pub const MAX_ROWS: usize = 10;
+    /// The most characters of a suffix.
+    pub const MAX_SUFFIX: usize = 64;
+
+    /// A row of `size` with `suffix`.
+    pub fn new(size: ScaleSize, suffix: impl Into<String>) -> Self {
+        ScaleRow { size, suffix: suffix.into() }
+    }
+
+    /// The row the add button appends to `rows`: the next size of [`ScaleSize::ADD_ORDER`] no row has, with the suffix
+    /// `@<size>`; `None` at [`MAX_ROWS`](Self::MAX_ROWS) or when every size is taken.
+    pub fn next(rows: &[ScaleRow]) -> Option<ScaleRow> {
+        if rows.len() >= Self::MAX_ROWS {
+            return None;
+        }
+        let size = ScaleSize::ADD_ORDER.into_iter().find(|size| rows.iter().all(|row| row.size != *size))?;
+        Some(ScaleRow::new(size, format!("@{}", size.name())))
+    }
+}
+
+/// One file an export writes: its size and the suffix its name takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ExportOutput {
+    /// The output size in pixels.
+    pub size: PixelSize,
+    /// What the file name ends with, before the extension; empty for none.
+    pub suffix: String,
 }
 
 /// Export As's values: the dialog's result and what the app keeps between opens.
@@ -191,10 +347,14 @@ pub struct ExportOptions {
     /// How the pixels are made when the output size differs from the document's.
     #[serde(default = "default_resample")]
     pub resample: Resample,
+    /// Scale All: one file per row, each at its multiple of the export size. Empty reads as one 1x row with no
+    /// suffix.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scale_all: Vec<ScaleRow>,
 }
 
 impl Default for ExportOptions {
-    /// PNG at 100 percent, aspect locked, quality 85, document profile embedded, no metadata.
+    /// PNG at 100 percent, aspect locked, quality 85, converted to sRGB with the profile embedded, no metadata.
     fn default() -> Self {
         Self {
             format: "png".to_owned(),
@@ -204,10 +364,11 @@ impl Default for ExportOptions {
             size: ExportSize::Scale(FULL_SCALE),
             lock_aspect: true,
             metadata: ExportMetadata::None,
-            profile: ExportProfile::Document,
+            profile: ExportProfile::Srgb,
             embed_profile: true,
             bits: 0,
             resample: default_resample(),
+            scale_all: Vec::new(),
         }
     }
 }
@@ -262,6 +423,25 @@ impl ExportOptions {
             ExportSize::Scale(scale) => resize_from_scale(source, scale).unwrap_or(source),
             ExportSize::Pixels { width, height } => PixelSize::new(width, height),
         }
+    }
+
+    /// Scale All's rows: the set ones, or one 1x row with no suffix.
+    pub fn scale_rows(&self) -> Vec<ScaleRow> {
+        if self.scale_all.is_empty() { vec![ScaleRow::default()] } else { self.scale_all.clone() }
+    }
+
+    /// The files an export of a document of size `source` writes: one per Scale All row, each side the output size's
+    /// times the row's multiple, rounded, in 1 to the largest document side.
+    pub fn outputs(&self, source: PixelSize) -> Vec<ExportOutput> {
+        let size = self.output_size(source);
+        let side = |n: u32, factor: f64| (f64::from(n) * factor).round().clamp(1.0, MAX_DOCUMENT_SIDE) as u32;
+        self.scale_rows()
+            .into_iter()
+            .map(|row| ExportOutput {
+                size: PixelSize::new(side(size.width, row.size.factor()), side(size.height, row.size.factor())),
+                suffix: row.suffix,
+            })
+            .collect()
     }
 }
 
@@ -336,6 +516,9 @@ pub struct ExportAsResult {
     pub path: PathBuf,
     /// The output size in pixels.
     pub size: PixelSize,
+    /// The files to write ([`ExportOptions::outputs`]). With more than one, `path` is the folder the user chose and
+    /// the app names each file `<name><suffix>.<extension>`.
+    pub outputs: Vec<ExportOutput>,
     remember: Option<(SaveKey, ExportOptions)>,
 }
 

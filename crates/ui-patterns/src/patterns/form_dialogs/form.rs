@@ -153,7 +153,7 @@ type ResetWithFn<'a, V> = Box<dyn Fn(&V, &V) -> V + 'a>;
 ///
 /// - The bind holds the value. [`own`](FormDialog::own) binds the dialog's memory instead, and the value starts from
 ///   `V::default()` each time the dialog opens.
-/// - Keys: Enter is OK unless the body owns it, Escape cancels. Holding Alt turns Cancel into Reset, which restores
+/// - Keys: Enter is OK unless the body owns it or [`enter_confirms`](FormDialog::enter_confirms) is off, Escape cancels. Holding Alt turns Cancel into Reset, which restores
 ///   the value from when the dialog opened (and runs [`on_reset`](FormDialog::on_reset) for what the body keeps).
 /// - The body returns whether the value can be accepted; OK is enabled while it can and `ok_enabled` is true.
 /// - With [`history`](FormDialog::history), Cmd/Ctrl+Z and Shift+Cmd/Ctrl+Z step the dialog's own value; a drag or a
@@ -178,6 +178,7 @@ pub struct FormDialog<'a, V: Value + Default> {
     collection_body: bool,
     closable: bool,
     accept_stays_open: bool,
+    enter_confirms: bool,
     footer_extra: Option<FooterExtraFn<'a>>,
     /// The Preview check box when shown, over its owner's bind or (`None`) the footer's memory.
     preview: Option<Option<Bind<'a, bool>>>,
@@ -208,6 +209,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             collection_body: false,
             closable: true,
             accept_stays_open: false,
+            enter_confirms: true,
             footer_extra: None,
             preview: None,
             extra_buttons: Vec::new(),
@@ -293,6 +295,13 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
         self
     }
 
+    /// Whether Enter, left untaken by the focused part, is OK; the default is true. Off, only a click (or the
+    /// button's own keys) gives OK, as Export As starts only from its Export button.
+    pub fn enter_confirms(mut self, on: bool) -> Self {
+        self.enter_confirms = on;
+        self
+    }
+
     /// Controls before the buttons in the footer.
     pub fn footer_extra(mut self, extra: impl FnMut(&mut Ui) + 'a) -> Self {
         self.footer_extra = Some(Box::new(extra));
@@ -365,6 +374,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
             collection_body,
             closable,
             accept_stays_open,
+            enter_confirms,
             footer_extra,
             preview,
             extra_buttons,
@@ -403,7 +413,7 @@ impl<'a, V: Value + Default> FormDialog<'a, V> {
                 }
             }
         };
-        let mut dialog = Dialog::new(title).closable(closable).close_on_enter(ok_enabled).outer_gesture(outer_gesture);
+        let mut dialog = Dialog::new(title).closable(closable).close_on_enter(ok_enabled && enter_confirms).outer_gesture(outer_gesture);
         dialog = reset.install(dialog, accept, restore);
         if let Some(open) = open {
             dialog = dialog.opened(open);

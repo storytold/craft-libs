@@ -4,12 +4,16 @@
 
 use super::{
     ExportAsResult, ExportFormat, ExportFormatDefaults, ExportMetadata, ExportOptions, ExportPreview, ExportProfile, ExportSize, ExportWords,
-    Revisions, SizeEstimate, export_file_name, size_error_label,
+    Revisions, ScaleRow, ScaleSize, SizeEstimate, export_file_name, size_error_label,
 };
+use crate::buttons::IconButton;
+use crate::contract::clicked;
 use crate::dialog::{DialogId, DialogResult, DialogStack, FieldRefusal, HeldOk, StackDialog, dialog_id, serde_fields, set_serde_field};
 use crate::patterns::form_dialogs::form::{read_bind, write_bind};
 use crate::patterns::presets::{GroupPath, NamedPresetEvent, NamedPresetRow, PickerField, PresetLibrary, PresetPicker, PresetRow, PresetState};
-use crate::runtime::requests::{HostAnswer, PathFilter, PathRequest};
+use crate::runtime::requests::{HostAnswer, PathFilter, PathKind, PathRequest};
+use crate::text::TextField;
+use craft_behavior::IconId;
 
 use crate::choice::Checkbox;
 use crate::contract::{Bind, Entry, NoValue, Outcome, Props as _, Remember as _, SaveKey, Show as _, ShowContainer as _};
@@ -112,10 +116,14 @@ impl Outcome for ExportAsOutput {
 /// computes.
 ///
 /// - The settings: the format, then that format's rows (Lossless, Quality, Bits/Pixel, Transparency), Metadata,
-///   Color Space with Embed Color Profile, and Image Size (Scale, Width, Height, Constrain Proportions, Resample).
-/// - Keys: Tab walks the fields, Enter is Export and Escape cancels. Holding Alt
+///   Color Space (Convert to sRGB, on by default, and Embed Color Profile), Image Size (Scale, Width, Height,
+///   Constrain Proportions, Resample) and Scale All: rows of a size and a file-name suffix, + adding the next size
+///   ([`ScaleRow::next`]) and each row's trash button removing it while more than one is left.
+/// - Keys: Tab walks the fields and Escape cancels; Enter does not export, only the Export button does. Holding Alt
 ///   turns Cancel into Reset, which restores the settings the dialog opened with. Export asks the app for a file
-///   to write (`ExportAsOutput::requests`) and the dialog stays open until the app answers with the path.
+///   to write (`ExportAsOutput::requests`), or a folder with more than one Scale All row, and the dialog stays open
+///   until the app answers with the path. Without [`folder_export`](ExportAsDialog::folder_export), more than one row
+///   refuses Export with a note.
 /// - Settings: the dialog opens on the value in the bind, fitted to the document, and writes its edits back.
 /// - Previews: whenever the settings change, `wanted_preview` carries a new revision. The app encodes a proxy and
 ///   gives it back with `preview`; a size estimate shows at once ("≈ 1.2 MB"), and the app may follow with an exact
@@ -161,6 +169,10 @@ pub struct ExportAsDialog<'a> {
     /// pass (a field edited before the dialog was first shown is not the Reset target).
     #[prop]
     opening: Option<ExportOptions>,
+    /// Whether the app can write a folder of files, for more than one Scale All row; the default is true. A build
+    /// whose file dialog answers no folder (the browser) sets it off.
+    #[prop]
+    folder_export: bool,
 }
 
 impl<'a> ExportAsDialog<'a> {
@@ -181,6 +193,7 @@ impl<'a> ExportAsDialog<'a> {
             presets: None,
             remember: None,
             opening: None,
+            folder_export: true,
         }
     }
 
@@ -201,6 +214,7 @@ impl<'a> ExportAsDialog<'a> {
             mut presets,
             remember,
             opening,
+            folder_export,
         } = self;
         let env = Env::of(ui);
         let words = env.words::<ExportWords>();
@@ -228,6 +242,7 @@ impl<'a> ExportAsDialog<'a> {
             .ok_label(words.export.clone())
             .ok_enabled(!saving)
             .accept_stays_open(true)
+            .enter_confirms(false)
             .answers(answers);
         if let Some(open) = open {
             dialog = dialog.opened(open);
@@ -257,10 +272,14 @@ impl<'a> ExportAsDialog<'a> {
                 });
                 Stack::new().show(ui, |ui, _| pass.preview(ui, values, &mut held));
             });
+            let exportable = folder_export || values.scale_all.len() <= 1;
+            if !exportable {
+                Text::new(words.folder_needed.clone()).role(TypeRole::Caption).tone(Tone::Bad).show(ui);
+            }
             *wanted.borrow_mut() = held.revisions.request(values);
             *form.memory::<Held>() = held;
             *latest.borrow_mut() = Some(values.clone());
-            true
+            exportable
         });
 
         let FormOutput { response, closed, picked, accepted, mut requests, .. } = shown;
@@ -281,8 +300,12 @@ impl<'a> ExportAsDialog<'a> {
     }
 }
 
-/// The save dialog Export asks for: the document's name with the format's extension and filter.
+/// The save dialog Export asks for: the document's name with the format's extension and filter; a folder for more than
+/// one Scale All row.
 fn save_request(formats: &[ExportFormat], options: &ExportOptions, file_name: &str, words: &ExportWords) -> PathRequest {
+    if options.scale_all.len() > 1 {
+        return PathRequest::new(SAVE_KEY, PathKind::Folder);
+    }
     let format = formats.iter().find(|format| format.id == options.format);
     let extension = format.map_or("png", |format| format.extension);
     let name = format!("{}.{extension}", export_file_name(file_name, words.untitled.as_str()));
@@ -293,7 +316,13 @@ fn save_request(formats: &[ExportFormat], options: &ExportOptions, file_name: &s
 /// What Export answers with: the confirmed options, the chosen path, the output size, and the options to remember when
 /// the dialog has a key.
 fn answer_of(options: ExportOptions, source: PixelSize, path: PathBuf, remember: Option<SaveKey>) -> ExportAsResult {
-    ExportAsResult { size: options.output_size(source), remember: remember.map(|key| (key, options.clone())), options, path }
+    ExportAsResult {
+        size: options.output_size(source),
+        outputs: options.outputs(source),
+        remember: remember.map(|key| (key, options.clone())),
+        options,
+        path,
+    }
 }
 
 /// An [`ExportAsDialog`] the [`DialogHost`](crate::dialog::DialogHost) owns. It keeps the settings and the app's
@@ -330,6 +359,7 @@ pub struct HostedExportAs {
     remember: Option<SaveKey>,
     /// The path the host's save dialog answered, or automation set; Export finishes with it.
     path: Option<PathBuf>,
+    folder_export: bool,
     #[cfg(feature = "testing")]
     facts: crate::testing::StoryOutput,
 }
@@ -383,9 +413,17 @@ impl HostedExportAs {
             events: Vec::new(),
             remember: None,
             path: None,
+            folder_export: true,
             #[cfg(feature = "testing")]
             facts: crate::testing::StoryOutput::default(),
         }
+    }
+
+    /// Whether the app can write a folder of files ([`ExportAsDialog::folder_export`]).
+    #[must_use]
+    pub fn folder_export(mut self, on: bool) -> Self {
+        self.folder_export = on;
+        self
     }
 
     /// The formats the list offers.
@@ -461,6 +499,9 @@ impl StackDialog for HostedExportAs {
     /// Answers what the save answer answers. Without a path it asks for the save dialog as Export does and answers
     /// none until the app answers the path.
     fn confirm(&mut self, ctx: &egui::Context) -> Option<Self::Result> {
+        if !self.folder_export && self.options.scale_all.len() > 1 {
+            return None;
+        }
         let Some(path) = self.path.clone() else {
             if !self.saving {
                 let words = Env::of_root(ctx).words::<ExportWords>();
@@ -521,6 +562,7 @@ impl StackDialog for HostedExportAs {
             presets: self.with_presets.then(|| Bind::bound(&mut self.presets)),
             remember: self.remember.clone(),
             opening: Some(self.opening.clone()),
+            folder_export: self.folder_export,
             ..ExportAsDialog::new(self.file_name.clone(), self.source, Bind::bound(&mut self.options))
         };
         let mut shown = dialog.show(ui);
@@ -629,15 +671,18 @@ impl Pass<'_> {
             Entry::new(ExportMetadata::All, words.metadata_all.clone()),
         ];
         choose(ui, &words.metadata, "metadata", &metadata, &mut options.metadata);
-        let profiles =
-            [Entry::new(ExportProfile::Document, words.document_profile.clone()), Entry::new(ExportProfile::Srgb, words.convert_srgb.clone())];
-        choose(ui, &words.color_space, "profile", &profiles, &mut options.profile);
-        check(ui, &words.embed_profile, "embed", &mut options.embed_profile);
+        Section::fixed(words.color_space.clone()).strength(HeaderStrength::Caption).id_salt("color-space").show(ui, |ui, _| {
+            let mut srgb = options.profile == ExportProfile::Srgb;
+            check(ui, &words.convert_srgb, "profile", &mut srgb);
+            options.profile = if srgb { ExportProfile::Srgb } else { ExportProfile::Document };
+            check(ui, &words.embed_profile, "embed", &mut options.embed_profile);
+        });
 
         Section::fixed(words.image_size.clone())
             .strength(HeaderStrength::Caption)
             .id_salt("size")
             .show(ui, |ui, _| self.size(ui, options, held, format));
+        Section::fixed(words.scale_all.clone()).strength(HeaderStrength::Caption).id_salt("scale-all").show(ui, |ui, _| self.scale_all(ui, options));
         if let Some(library) = self.library {
             self.preset_row(ui, options, held, library);
         }
@@ -690,6 +735,55 @@ impl Pass<'_> {
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// Scale All: a row per size, each a size list, a suffix field and a trash button (disabled while one row is left),
+    /// and + adding the next size. The rows are kept only while there is more than one, so a single 1x row with no
+    /// suffix is no rows.
+    fn scale_all(&self, ui: &mut Ui, options: &mut ExportOptions) {
+        let words = self.words;
+        let mut rows = options.scale_rows();
+        let sizes: Vec<Entry<ScaleSize>> = ScaleSize::ALL.iter().map(|size| Entry::new(*size, size.name())).collect();
+        let next = ScaleRow::next(&rows);
+        let add = IconButton::new(IconId::new("plus"))
+            .label(words.add_size.clone())
+            .tooltip(words.add_size.clone())
+            .enabled(next.is_some())
+            .id_salt("add-size")
+            .show(ui);
+        if clicked(&add)
+            && let Some(row) = next
+        {
+            rows.push(row);
+        }
+        let single = rows.len() == 1;
+        let mut remove = None;
+        for (at, row) in rows.iter_mut().enumerate() {
+            let n = (at + 1).to_string();
+            Row::new().id_salt(("scale-row", at)).show(ui, |ui, _| {
+                let name = words.size_n.fill(&[("n", n.as_str())]);
+                if let Some(size) = Select::new(name, Bind::given(row.size), &sizes).show(ui).value().copied() {
+                    row.size = size;
+                }
+                let name = Label::from(words.suffix_n.fill(&[("n", n.as_str())]));
+                let typed =
+                    TextField::new(name, Bind::given(row.suffix.clone())).limit(ScaleRow::MAX_SUFFIX).placeholder(words.suffix.clone()).show(ui);
+                if let Some(suffix) = typed.value().cloned() {
+                    row.suffix = suffix;
+                }
+                let name = Label::from(words.remove_size.fill(&[("n", n.as_str())]));
+                if clicked(&IconButton::new(IconId::new("trash")).label(name.clone()).tooltip(name).enabled(!single).id_salt("remove").show(ui)) {
+                    remove = Some(at);
+                }
+            });
+        }
+        if let Some(at) = remove {
+            rows.remove(at);
+        }
+        let rows = if rows.len() == 1 && rows[0] == ScaleRow::default() { Vec::new() } else { rows };
+        if rows != options.scale_all {
+            options.scale_all = rows;
         }
     }
 
