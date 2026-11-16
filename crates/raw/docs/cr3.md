@@ -187,7 +187,7 @@ the six verified fixtures are unchanged. Partial-subband and
 rounded-plane coding, vertical C-RAW tiling and adaptive low-frequency gains
 remain unsupported (see the variant table above; `cr3_variants.rs` pins each rejection). The decoder bounds image dimensions, sample count,
 tile count, marker headers and temporary allocations. The full sensor buffer is
-allocated only after the first plane decodes, and plane buffers grow row by row,
+allocated only after every plane has decoded, and plane buffers grow row by row,
 so a small crafted file fails before reserving memory for the image it claims.
 
 ## Further bodies: one CC0 file each

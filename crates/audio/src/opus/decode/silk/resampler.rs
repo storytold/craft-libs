@@ -4,25 +4,7 @@
 //! RFC 6716 Table 54 (and the integer delays used when no rate conversion is needed), so that the
 //! SILK output lines up with the CELT layer in Hybrid mode.
 
-/// Dot product with eight independent partial sums, so the additions pipeline and the loop
-/// vectorises instead of waiting on one 4-cycle add chain. Rounds differently from a
-/// sequential sum (the resampler is not normative).
-#[inline]
-fn dot8(a: &[f32], b: &[f32]) -> f32 {
-    let mut s = [0f32; 8];
-    let (ca, ra) = a.as_chunks::<8>();
-    let (cb, rb) = b.as_chunks::<8>();
-    for (x, y) in ca.iter().zip(cb) {
-        for l in 0..8 {
-            s[l] += x[l] * y[l];
-        }
-    }
-    let mut acc = ((s[0] + s[4]) + (s[1] + s[5])) + ((s[2] + s[6]) + (s[3] + s[7]));
-    for (x, y) in ra.iter().zip(rb) {
-        acc += x * y;
-    }
-    acc
-}
+use crate::opus::dot::dot8;
 
 #[derive(Clone)]
 pub struct Resampler {

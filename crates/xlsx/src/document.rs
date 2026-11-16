@@ -209,8 +209,8 @@ pub struct Document {
 }
 
 impl Document {
-    /// Reads every part. A binary workbook is refused: its formulas and styles are not read, so
-    /// it cannot be written back as SpreadsheetML without loss.
+    /// Reads every part. A binary workbook is refused: only some of its parts are read, so it
+    /// cannot be written back as SpreadsheetML without loss.
     pub fn read(bytes: &[u8], limits: &Limits) -> Result<Document, Error> {
         let mut p = Package::open(bytes, limits)?;
         if p.is_binary() {
