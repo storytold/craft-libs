@@ -484,9 +484,14 @@ pub struct CharacterControls<'a> {
     /// Shows the Language select over `(tag, name)` pairs (Photoshop's bottom row).
     #[prop]
     languages: Option<&'a [(String, String)]>,
+    /// The family field is craft-font-manager's font picker over `source`: the catalog, the app's stars, recents and
+    /// filters, the preview text and the served families.
     #[cfg(feature = "font-picker")]
+    #[prop(name = "font_picker")]
     picker: Option<FontPickerSource<'a>>,
+    /// Shows the variable-font axis sliders of `axes` under the style row.
     #[cfg(feature = "font-picker")]
+    #[prop]
     axes: Option<FaceAxes<'a>>,
 }
 
@@ -506,21 +511,6 @@ impl<'a> CharacterControls<'a> {
             #[cfg(feature = "font-picker")]
             axes: None,
         }
-    }
-
-    /// The family field is craft-font-manager's font picker over `source`: the catalog, the app's stars, recents and
-    /// filters, the preview text and the served families.
-    #[cfg(feature = "font-picker")]
-    pub fn font_picker(mut self, source: FontPickerSource<'a>) -> Self {
-        self.picker = Some(source);
-        self
-    }
-
-    /// Shows the variable-font axis sliders of `axes` under the style row.
-    #[cfg(feature = "font-picker")]
-    pub fn axes(mut self, axes: FaceAxes<'a>) -> Self {
-        self.axes = Some(axes);
-        self
     }
 
     /// Shows the controls and returns the changes the user made.

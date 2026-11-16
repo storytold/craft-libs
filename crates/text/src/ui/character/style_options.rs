@@ -212,7 +212,9 @@ pub struct TextStyleOptions<'a> {
     /// The name field takes input.
     #[prop]
     renamable: bool,
+    /// The family field is craft-font-manager's font picker over `source`.
     #[cfg(feature = "font-picker")]
+    #[prop(name = "font_picker")]
     picker: Option<FontPickerSource<'a>>,
 }
 
@@ -237,13 +239,6 @@ impl<'a> TextStyleOptions<'a> {
             #[cfg(feature = "font-picker")]
             picker: None,
         }
-    }
-
-    /// The family field is craft-font-manager's font picker over `source`.
-    #[cfg(feature = "font-picker")]
-    pub fn font_picker(mut self, source: FontPickerSource<'a>) -> Self {
-        self.picker = Some(source);
-        self
     }
 
     /// Shows the editor and returns the changes the user made.

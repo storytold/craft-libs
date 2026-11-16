@@ -112,7 +112,9 @@ pub struct TypeBar<'a> {
     /// Warp Text is available.
     #[prop]
     can_warp: bool,
+    /// The family field is craft-font-manager's font picker over `source`.
     #[cfg(feature = "font-picker")]
+    #[prop(name = "font_picker")]
     picker: Option<FontPickerSource<'a>>,
 }
 
@@ -132,13 +134,6 @@ impl<'a> TypeBar<'a> {
             #[cfg(feature = "font-picker")]
             picker: None,
         }
-    }
-
-    /// The family field is craft-font-manager's font picker over `source`.
-    #[cfg(feature = "font-picker")]
-    pub fn font_picker(mut self, source: FontPickerSource<'a>) -> Self {
-        self.picker = Some(source);
-        self
     }
 
     /// Shows the bar and returns the changes the user made. The bar keeps no state: each pass reports only the
