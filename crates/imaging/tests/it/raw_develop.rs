@@ -107,8 +107,9 @@ impl RawDevelopSource for Source {
         None
     }
 
-    fn sample(&self, _: [f64; 2], _: bool, _: bool) -> Option<ScopeReadout> {
-        None
+    fn sample(&self, _: [f64; 2], before: bool, _: bool) -> Option<ScopeReadout> {
+        let level = f32::from(if before { self.before.level } else { self.after.level }) / 255.0;
+        Some(ScopeReadout::Rgb([level; 3]))
     }
 
     fn has_selection(&self) -> bool {
@@ -223,6 +224,18 @@ fn key_event(key: Key, pressed: bool) -> Event {
 }
 
 #[trial]
+fn ok_accepts_a_curve_left_as_stored() {
+    let stacked = vec![[0.0, 0.0], [60.0, 40.0], [60.0, 200.0], [255.0, 255.0]];
+    let stored = RawDevelopSettings { point_curve: stacked.clone(), ..RawDevelopSettings::default() };
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let fixture = fixture(&host, &Rc::new(Cell::new(false)));
+    let open = RawDevelopOpen::new("IMG_0001.CR3", PixelSize::new(IMAGE[0], IMAGE[1]), RawTarget::SmartFilter, stored);
+    host.borrow_mut().open(HostedWorkspace::new(RawDevelopWorkspace::new(open), Source::new()));
+    assert!(host.borrow_mut().confirm::<Hosted>(fixture.ctx()), "an older Smart Filter's curve left as stored passes OK");
+    assert!(finish(&host).is_some());
+}
+
+#[trial]
 fn before_shows_the_before_picture_and_edits_nothing() {
     let host = Rc::new(RefCell::new(DialogHost::new()));
     let mut fixture = fixture(&host, &Rc::new(Cell::new(false)));
@@ -244,6 +257,25 @@ fn before_shows_the_before_picture_and_edits_nothing() {
     assert!(events.iter().all(|event| !matches!(event, RawDevelopEvent::Settings(_))), "Before edits nothing: {events:?}");
     fixture.key(Key::Z, Modifiers::COMMAND).idle(4);
     assert_eq!(exposure(&host), 0.0, "Before records no history step");
+}
+
+#[trial]
+fn a_sampler_reads_the_picture_on_show() {
+    let host = Rc::new(RefCell::new(DialogHost::new()));
+    let mut fixture = fixture(&host, &Rc::new(Cell::new(false)));
+    host.borrow_mut().open(HostedWorkspace::new(RawDevelopWorkspace::new(open(RawTarget::Filter)), Source::new()));
+    fixture.idle(10);
+    let canvas = focus_canvas(&mut fixture);
+    fixture.key(Key::S, Modifiers::NONE).idle(2);
+    fixture.click(&canvas).idle(4);
+    let reading = |fixture: &Fixture| fixture.texts().iter().find(|run| run.text.starts_with("#1 ")).map(|run| run.text.to_string());
+    let developed = reading(&fixture).expect("a click of the Color Sampler tool adds a sampler");
+
+    fixture.frame(vec![key_event(Key::Y, true)]).idle(6);
+    let before = reading(&fixture).expect("the sampler keeps reading while Before shows");
+    assert_ne!(before, developed, "Before reads the undeveloped pixel");
+    fixture.frame(vec![key_event(Key::Y, false)]).idle(4);
+    assert_eq!(reading(&fixture), Some(developed), "releasing Y reads the developed pixel again");
 }
 
 /// A color sampler's readout shows under the zoom bar.
