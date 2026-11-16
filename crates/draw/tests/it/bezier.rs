@@ -559,7 +559,8 @@ fn insert_on_a_picked_anchor_adds_one_halfway_along_the_segment_leaving_it() {
 // one on the vertical, a 45° move goes on the diagonal; the drag proposes what it commits (#13684).
 #[trial]
 fn shift_keeps_an_anchor_drag_on_the_axis_or_the_diagonal() {
-    let cases = [((60.0, -25.0), p(220.0, 60.0)), ((60.0, -25.00005), p(220.0, 60.0)), ((25.0, 60.0), p(160.0, 120.0)), ((50.0, -50.0), p(210.0, 10.0))];
+    let cases =
+        [((60.0, -25.0), p(220.0, 60.0)), ((60.0, -25.00005), p(220.0, 60.0)), ((25.0, 60.0), p(160.0, 120.0)), ((50.0, -50.0), p(210.0, 10.0))];
     for ((dx, dy), want) in cases {
         let mut h = two_paths();
         let anchor = h.screen(p(160.0, 60.0));
@@ -606,7 +607,11 @@ fn a_delete_anchor_click_on_a_hidden_anchor_shows_its_subpath_and_deletes_nothin
 fn hidden_anchors_take_no_keyboard_stop() {
     let mut h = harness(vec![path_b()]);
     h.update(|st| st.selection = PathSelection::new(Some(2), Vec::new(), None).shown(Some(vec![1])));
-    h.fixture.key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Tab, egui::Modifiers::NONE).key(egui::Key::Home, egui::Modifiers::NONE).settle();
+    h.fixture
+        .key(egui::Key::Tab, egui::Modifiers::NONE)
+        .key(egui::Key::Tab, egui::Modifiers::NONE)
+        .key(egui::Key::Home, egui::Modifiers::NONE)
+        .settle();
     assert_eq!(h.state.borrow().selection, sel(2, &[(1, 0)]).shown(Some(vec![1])));
 }
 
@@ -649,7 +654,8 @@ fn an_alt_drag_on_a_segment_drags_a_copy_of_its_subpath() {
         let subpaths = &st.paths[0].subpaths;
         assert_eq!(subpaths.len(), 3);
         assert_eq!(subpaths[..2], path_b().subpaths[..], "the source stays");
-        let moved = subpaths[2].knots.iter().zip(&square().knots).all(|(copy, source)| copy.anchor.distance(source.anchor + Vec2::new(0.0, 80.0)) < 1e-3);
+        let moved =
+            subpaths[2].knots.iter().zip(&square().knots).all(|(copy, source)| copy.anchor.distance(source.anchor + Vec2::new(0.0, 80.0)) < 1e-3);
         assert!(moved && subpaths[2].closed, "{:?}", subpaths[2]);
         assert_eq!(st.selection, sel(2, &[(2, 0), (2, 1), (2, 2), (2, 3)]).shown(Some(vec![1, 0, 2])));
         assert_eq!((st.seen.first(), st.seen.last()), (Some(&Seen::Begin), Some(&Seen::Commit)), "{:?}", st.seen);

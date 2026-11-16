@@ -14,8 +14,8 @@ mod words;
 use craft_behavior::geometry::{SelectionOperation, axis_or_diagonal};
 use craft_behavior::kurbo::{Point, Rect as DocRect, Vec2};
 use craft_behavior::{
-    Axis, CanvasView, CursorPriority, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape, PartKey, PartRef,
-    PointerButton, PressPhase, PressStart, Roving, Sense,
+    Axis, CanvasView, CursorPriority, EditCommand, Granularity, HitLevel, HitPriority, HitShape, Intent, MoveMods, NavMove, NavShape, PartKey,
+    PartRef, PointerButton, PressPhase, PressStart, Roving, Sense,
 };
 use craft_keymap::{Chord, Key, Mods};
 use craft_theme::Srgba;
