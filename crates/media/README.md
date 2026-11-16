@@ -450,7 +450,13 @@ page yet. Damage recovery may read bytes again up to twice the file's length plu
 is read at most about three times over; the packets kept and the header packets of a stream are
 bounded too, with a warning when a bound is reached.
 `OpusTiming` gives each Opus packet's start, the pre-skip and the end trimming of the final page.
-No muxer.
+
+The muxer side is `PageWriter`, from FilmCraft's `filmcraft-oggmux` by @JordyUSA
+(storytold/filmcraft#4481): it laces the packets of one logical stream into pages (continued
+packets, granule positions, BOS/EOS, CRC-32), puts each header packet on pages of its own, closes
+audio pages at a byte or packet target, and can replace the final granule position for Ogg Opus
+end trimming. `opus_tags` and `vorbis_comment` build the comment headers; tag names that are not
+valid field names (Vorbis I §5.2.1) are left out.
 
 ## `avi`
 

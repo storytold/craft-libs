@@ -269,6 +269,38 @@ impl SvgWriter {
     pub fn fragment() -> SvgWriter {
         SvgWriter::default()
     }
+    /// A document that starts with an XML declaration naming `encoding` (for example `UTF-8` or
+    /// `ISO-8859-1`) and a newline. Nothing is written if `encoding` is not an XML name.
+    pub fn with_encoding(encoding: &str) -> SvgWriter {
+        let mut w = SvgWriter::fragment();
+        w.decl(encoding, "\n");
+        w
+    }
+    /// Writes `<?xml version="1.0" encoding="{encoding}"?>` followed by `newline`. Nothing is
+    /// written if `encoding` is not an XML name.
+    pub fn decl(&mut self, encoding: &str, newline: &str) {
+        if craft_xml::is_name(encoding) {
+            self.0.raw(&format!("<?xml version=\"1.0\" encoding=\"{encoding}\"?>{newline}"));
+        }
+    }
+    /// Writes `<!DOCTYPE name [` + `newline` + `internal` + `newline` + `]>` + `newline`. When
+    /// `internal` is empty, the inner newline is omitted, so a minified document can be
+    /// `<!DOCTYPE svg []>` with no extra breaks. Nothing is written if `name` is not an XML name
+    /// or `internal` contains `]]>`.
+    pub fn doctype_internal(&mut self, name: &str, internal: &str, newline: &str) {
+        if !craft_xml::is_name(name) || internal.contains("]]>") {
+            return;
+        }
+        let mut out = format!("<!DOCTYPE {name} [");
+        if !internal.is_empty() {
+            out.push_str(newline);
+            out.push_str(internal);
+        }
+        out.push_str(newline);
+        out.push_str("]>");
+        out.push_str(newline);
+        self.0.raw(&out);
+    }
     /// Starts the root tag, `<svg xmlns="http://www.w3.org/2000/svg"`: add attributes and end
     /// it with [`Tag::open`].
     pub fn root(&mut self) -> Tag<'_> {
@@ -295,9 +327,13 @@ impl SvgWriter {
     pub fn raw(&mut self, svg: &str) {
         self.0.raw(svg);
     }
+    /// What has been written so far, including any element that is still open.
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
     /// How many bytes have been written so far.
     pub fn len(&self) -> usize {
-        self.0.as_str().len()
+        self.as_str().len()
     }
     /// Has nothing been written yet?
     pub fn is_empty(&self) -> bool {
@@ -362,6 +398,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "paths")]
     fn writes_a_document_the_reader_reads() {
         let mut w = SvgWriter::new();
         assert!(!w.is_empty());
@@ -411,5 +448,38 @@ mod tests {
         w.raw(&inner);
         assert_eq!(w.len(), before + inner.len());
         assert_eq!(w.finish(), "<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0 0\"/></svg>");
+    }
+
+    #[test]
+    fn declaration_names_the_encoding_and_rejects_a_bad_name() {
+        assert_eq!(SvgWriter::with_encoding("UTF-8").finish(), "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        assert_eq!(SvgWriter::with_encoding("ISO-8859-1").finish(), "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>\n");
+        assert!(SvgWriter::with_encoding("UTF-8\"").is_empty());
+        assert!(SvgWriter::with_encoding("").is_empty());
+        let mut compact = SvgWriter::fragment();
+        compact.decl("ISO-8859-1", "");
+        compact.root().open();
+        assert_eq!(compact.as_str(), "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg xmlns=\"http://www.w3.org/2000/svg\">");
+        compact.close();
+        assert_eq!(compact.finish(), "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg xmlns=\"http://www.w3.org/2000/svg\"></svg>");
+    }
+
+    #[test]
+    fn doctype_internal_subset_keeps_caller_newlines() {
+        let mut pretty = SvgWriter::fragment();
+        pretty.doctype_internal("svg", "  <!ENTITY st1 \"fill:red\">", "\n");
+        pretty.root().open();
+        pretty.close();
+        assert_eq!(pretty.finish(), "<!DOCTYPE svg [\n  <!ENTITY st1 \"fill:red\">\n]>\n<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>");
+        let mut compact = SvgWriter::fragment();
+        compact.doctype_internal("svg", "<!ENTITY st1 \"fill:red\">", "");
+        assert_eq!(compact.finish(), "<!DOCTYPE svg [<!ENTITY st1 \"fill:red\">]>");
+        let mut empty = SvgWriter::fragment();
+        empty.doctype_internal("svg", "", "\n");
+        assert_eq!(empty.finish(), "<!DOCTYPE svg [\n]>\n");
+        let mut refused = SvgWriter::fragment();
+        refused.doctype_internal("svg", "]]>", "\n");
+        refused.doctype_internal("not a name", "<!ENTITY st1 \"x\">", "\n");
+        assert!(refused.is_empty());
     }
 }

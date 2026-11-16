@@ -181,6 +181,12 @@ pub struct CcittRawOutput {
 
 /// Decodes CCITT Group 3 or Group 4 fax `data` with caller-specified `params` and `max_rows`,
 /// returning packed MSB-first rows, rows decoded, input bytes consumed, and any decode error.
+///
+/// The rows are read as the parameters say, as PostScript's `CCITTFaxDecode` filter reads them:
+/// on bytes exactly when `encoded_byte_align` is set, whatever codes the data holds (unlike
+/// [`decode_ccitt_within`], which reads Group 3 rows with end-of-line codes by those codes). At
+/// most `rows` rows are read when it is above 0; a caller that ends the rows at the end-of-block
+/// code alone passes 0.
 pub fn decode_ccitt_raw(data: &[u8], p: &CcittParams, max_rows: u32) -> Result<CcittRawOutput, CodecError> {
     if p.columns <= 0 || p.columns > i64::from(MAX_CCITT_COLUMNS) {
         return Err(CodecError::Corrupt { filter: "CCITTFaxDecode", detail: format!("CCITT columns {} outside 1..={MAX_CCITT_COLUMNS}", p.columns) });
@@ -192,7 +198,7 @@ pub fn decode_ccitt_raw(data: &[u8], p: &CcittParams, max_rows: u32) -> Result<C
         rows,
         end_of_block: p.end_of_block,
         end_of_line: p.end_of_line,
-        rows_are_byte_aligned: p.encoded_byte_align && (p.k < 0 || !starts_with_end_of_line(data)),
+        rows_are_byte_aligned: p.encoded_byte_align,
         encoding: match p.k {
             ..0 => hayro_ccitt::EncodingMode::Group4,
             0 => hayro_ccitt::EncodingMode::Group3_1D,
@@ -577,6 +583,72 @@ mod tests {
             let p = CcittParams { k: -1, columns: 64, end_of_line, encoded_byte_align: true, ..CcittParams::default() };
             assert_eq!(decode_ccitt(&[0x80; 16], &p, 16).unwrap(), [0xFF; 8 * 16], "Group 4, end_of_line {end_of_line}");
         }
+    }
+
+    /// `decode_ccitt_raw` reads rows on bytes exactly when `encoded_byte_align` says, as
+    /// PostScript's `CCITTFaxDecode` filter (and `hayro-ccitt` itself) reads them, in every layout
+    /// of Group 3 rows: with or without end-of-line codes, fill before each row or before each
+    /// code's end, an RTC after the rows, and room for more rows than they hold. The codes in the
+    /// data don't make rows the parameters put on bytes read unaligned (which read an aligned RTC
+    /// as one more row, #778).
+    #[test]
+    fn raw_group_3_rows_follow_the_parameters() {
+        let mut cases = 0;
+        for seed in 0..24u64 {
+            let (columns, rows) = (8 + (seed as u32 * 37) % 200, 2 + seed as u32 % 20);
+            let runs = text_like(seed, columns, rows);
+            for k in [0i64, 1, 2] {
+                for (codes, fill) in [(false, Fill::None), (false, Fill::RowStart), (true, Fill::None), (true, Fill::RowStart), (true, Fill::CodeEnd)]
+                {
+                    let mut data = group_3(&runs, codes, k > 0, fill);
+                    if codes {
+                        // RTC: six end-of-line codes (with their 1 tag bits for `k` above 0), each on a byte.
+                        let eol: [u8; 2] = if k > 0 { [0x00, 0x18] } else { [0x00, 0x10] };
+                        (0..6).for_each(|_| data.extend_from_slice(&eol));
+                    }
+                    for (aligned, end_of_line, end_of_block) in [(true, true, true), (true, false, true), (true, true, false), (false, true, true)] {
+                        let p = CcittParams {
+                            k,
+                            columns: i64::from(columns),
+                            end_of_line,
+                            encoded_byte_align: aligned,
+                            end_of_block,
+                            ..CcittParams::default()
+                        };
+                        let max_rows = rows + 8;
+                        let raw = decode_ccitt_raw(&data, &p, max_rows).unwrap();
+                        let settings = hayro_ccitt::DecodeSettings {
+                            columns,
+                            rows: max_rows,
+                            end_of_block,
+                            end_of_line,
+                            rows_are_byte_aligned: aligned,
+                            encoding: if k > 0 { hayro_ccitt::EncodingMode::Group3_2D { k: k as u32 } } else { hayro_ccitt::EncodingMode::Group3_1D },
+                            invert_black: false,
+                        };
+                        let mut filter = Rows::new(columns as usize, max_rows as usize, false);
+                        let used = hayro_ccitt::decode(&data, &mut filter, &mut hayro_ccitt::DecoderContext::new(settings));
+                        let case = format!(
+                            "seed {seed}, {columns} × {rows}, k {k}, codes {codes}, fill {fill:?}, aligned {aligned}, eol {end_of_line}, eob {end_of_block}"
+                        );
+                        assert_eq!((&raw.data, raw.rows_decoded as usize), (&filter.out, filter.done), "{case}");
+                        if let Ok(used) = used {
+                            assert_eq!((raw.bytes_consumed, raw.error), (used, None), "{case}");
+                        }
+                        cases += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(cases, 24 * 3 * 5 * 4);
+        // Rows on bytes with their codes, as `fax`'s writers lay them out, read whole: the rows
+        // and nothing after the RTC.
+        let runs = text_like(7, 74, 4);
+        let mut data = group_3(&runs, true, false, Fill::RowStart);
+        (0..6).for_each(|_| data.extend_from_slice(&[0x00, 0x10]));
+        let p = CcittParams { k: 0, columns: 74, end_of_line: true, encoded_byte_align: true, ..CcittParams::default() };
+        let raw = decode_ccitt_raw(&data, &p, 9).unwrap();
+        assert_eq!((raw.data, raw.rows_decoded), (pack(&runs, 74), 4));
     }
 
     proptest::proptest! {
