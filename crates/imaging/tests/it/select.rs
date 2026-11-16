@@ -891,3 +891,22 @@ fn magnetic_closes_by_start_click_double_click_or_enter_and_retracts_to_the_firs
 // narrows it.
 
 // While the outline is open the tool is one accessible object with its point count (fastening points and the live trace).
+
+// The Magnetic Lasso's cursor follows the canvas's precise cursor (Other Cursors > Precise, swapped by Caps Lock):
+// the width circle while it is on, the lasso icon otherwise (#11690).
+#[trial]
+fn the_magnetic_lasso_shows_the_width_circle_under_the_precise_cursor() {
+    use craft_behavior::{Cursor, PaintedCursor};
+    let (mut rig, _) = magnetic();
+    let over = rig.canvas().center();
+    let ctx = rig.fixture().ctx().clone();
+    rig.fixture().frame(vec![pointer::moved(over)]);
+    for caps_lock in [false, true, false] {
+        craft_ui::runtime::windows::WindowHost::of(&ctx).set_caps_lock(Some(caps_lock));
+        rig.fixture().frame(Vec::new());
+        rig.fixture().frame(Vec::new());
+        let cursor = craft_ui::runtime::cursor::current(&ctx);
+        let circle = matches!(cursor, Some(Cursor::Painted(PaintedCursor::Circle { .. })));
+        assert_eq!(circle, caps_lock, "Caps Lock {caps_lock}: {cursor:?}");
+    }
+}
