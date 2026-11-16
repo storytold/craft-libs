@@ -87,7 +87,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Services, Hide, Hide Others, Show All and Quit, labelled in English with `app_name`
 /// ("Quit WordCraft"). Replaces the default menu of the windowing library; call it once, early.
 ///
-/// Does nothing when this menu or a full menu bar ([`Installed::install`]) is already installed.
+/// Does nothing when this menu or a full menu bar is already installed.
 pub fn install_app_menu(app_name: &str, quit_id: &str, handler: Handler) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if MainThreadMarker::new().is_none() {
         return Err("the application menu is installed on the main thread".into());
