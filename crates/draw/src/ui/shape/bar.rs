@@ -113,11 +113,9 @@ impl<'a> ShapeBar<'a> {
         let (words, units) = (env.words::<ShapeWords>(), env.units());
         let mut pass = Cells::new(&words, &units, pixels_per_inch, appearance, fallbacks, sampled, chips);
         let mut stroke_open = stroke_open;
-        let mut out_of_range = None;
         Row::new().enabled(!appearance.locked).show(ui, |ui, _| {
             // The body may run more than once in a pass; each run starts clean.
             pass.begin();
-            out_of_range = None;
             if paint {
                 let fill_on = !matches!(appearance.fill, craft_color::ui::Paint::None);
                 let check = Checkbox::new(Bind::given(fill_on)).label(words.fill.clone()).show(ui).events;
@@ -169,9 +167,9 @@ impl<'a> ShapeBar<'a> {
                     .inner
                     .unwrap_or_default();
                 pass.events.extend(events.map(change));
-                out_of_range = alert;
+                pass.alert(alert);
             }
         });
-        ShapeBarOutput { events: pass.events, screen_pick: pass.screen_pick, pick_color: pass.pick_color, out_of_range }
+        ShapeBarOutput { events: pass.events, screen_pick: pass.screen_pick, pick_color: pass.pick_color, out_of_range: pass.out_of_range }
     }
 }
