@@ -552,13 +552,13 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         wrap: None,
                         index: None,
                         group: None,
-                        item: None,
+                        // A list item's further paragraph, each piece of it.
+                        item: out.item,
                     };
                     let prev = std::mem::replace(&mut out, next);
                     if prev.inlines.is_empty() {
                         out.page_break |= prev.page_break;
                         out.list = prev.list;
-                        out.item = prev.item;
                     } else {
                         done.push(prev);
                     }
@@ -940,6 +940,9 @@ fn flow_paras_at(doc: &Document, p: &Paragraph, opts: FlowOpts, at: &mut ItemTex
                 q.item = None;
             }
         }
+    } else {
+        // Body text: the lists before it have ended, and where their items' text was with them.
+        *at = [None; 9];
     }
     paras
 }
@@ -1098,6 +1101,8 @@ fn with_cell_text(doc: &Document, blocks: &Blocks, chr: &CharProps, align: Optio
                 if !table.is_empty() {
                     let mut props = doc.styles.table_para_patch(&p.props, &table);
                     props.overlay(&p.props);
+                    // Direct only, so no overlay carries it: a list item's further paragraph stays one.
+                    props.list_item = p.props.list_item;
                     p.props = props;
                 }
                 Arc::new(Block::Para(p))

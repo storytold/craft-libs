@@ -767,3 +767,15 @@ fn hostile_style_sheets_never_panic() {
         let _ = parse_in(&format!("<style>{css}</style><p class='a é'>x</p><td style='width: 1e40px'>y</td>"), &|_| None, true);
     }
 }
+
+/// A list item's further paragraph keeps its alignment (and page break) in its item.
+#[test]
+fn an_items_further_paragraph_keeps_its_alignment() {
+    let mut one = Para { list: Some(model::ListInfo { ordered: true, ..Default::default() }), ..Default::default() };
+    one.push_text("One", &Fmt::default());
+    let mut cont = Para { item: Some(0), align: Some(Align::Center), ..Default::default() };
+    cont.spacing.left = Some(36.0);
+    cont.push_text("Cont", &Fmt::default());
+    let html = export(&model::to_doc(&Flow { blocks: vec![FBlock::Para(one), FBlock::Para(cont)], meta: Meta::default() }));
+    assert!(html.contains("<li>One<p style=\"text-align:center\">Cont</p></li>"), "{html}");
+}

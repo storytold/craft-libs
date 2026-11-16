@@ -284,7 +284,7 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                         if stack.len() != lv + 1 || !stack.last().is_some_and(|s| s.1) {
                             break;
                         }
-                        out.push_str(&format!("<p>{}</p>", inlines_html(&q.inlines)));
+                        out.push_str(&para_html(q));
                         i += 1;
                         continue;
                     };

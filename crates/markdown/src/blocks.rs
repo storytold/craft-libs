@@ -593,6 +593,19 @@ fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &
             && p.kind == Kind::Normal
         {
             p.kind = Kind::Quote;
+            // A quoted list item's further paragraph: the writers keep only plain paragraphs in
+            // an item, so it joins the item's last paragraph with a line break, as a block in an
+            // item does, and the list goes on after it.
+            if p.item.is_some() {
+                p.item = None;
+                if let Some(FBlock::Para(prev)) = out.last_mut()
+                    && prev.list.is_some()
+                {
+                    prev.push_text("\n", &Fmt::default());
+                    prev.inlines.append(&mut p.inlines);
+                    continue;
+                }
+            }
         }
         out.push(block);
     }

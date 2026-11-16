@@ -336,3 +336,33 @@ fn a_further_paragraph_written_from_the_model_stays_in_its_item() {
         "{xml}"
     );
 }
+
+/// A list item's further paragraph opening or closing a section kept as read ends the list there,
+/// as an item doing so does: the section opens before it, or closes after it, not somewhere past.
+#[test]
+fn a_further_paragraph_opening_or_closing_a_section_ends_the_list_there() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:list-style style:name="L"><text:list-level-style-number text:level="1" style:num-format="1" style:num-suffix="."/></text:list-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_X}><office:body><office:text><text:section text:name="S"><text:list xml:id="l1" text:style-name="L"><text:list-item><text:p>Zero</text:p></text:list-item><text:list-item><text:p>One</text:p><text:p>Cont</text:p></text:list-item></text:list></text:section><text:list text:style-name="L" text:continue-list="l1"><text:list-item><text:p>Two</text:p></text:list-item></text:list></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    // Edited, so the list is written from the model; the section's paragraphs are as read.
+    let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == "One")).unwrap();
+    d.insert_text(&craft_wordmodel::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+    let c = crate::text::tests::content_of(&export(&d).unwrap());
+    let (close, two) = (c.find("</text:section>"), c.find(">Two<"));
+    assert!(close.is_some() && two.is_some() && close < two, "the section closes before Two: {c}");
+    assert!(c.find(">Cont<") < close, "{c}");
+    // And one opening a section starts after the list: the section opens before it.
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_X}><office:body><office:text><text:list xml:id="l1" text:style-name="L"><text:list-item><text:p>One</text:p></text:list-item></text:list><text:section text:name="S"><text:list text:style-name="L" text:continue-list="l1"><text:list-header><text:p>Header</text:p></text:list-header><text:list-item><text:p>Two</text:p></text:list-item></text:list></text:section></office:text></office:body></office:document-content>"#
+    );
+    let mut d = import(&package(&content, Some(&styles))).unwrap();
+    let i = d.body.iter().position(|b| b.as_para().is_some_and(|p| p.text == "One")).unwrap();
+    d.insert_text(&craft_wordmodel::Pos::body(i, 0), "Edited ", &Default::default()).unwrap();
+    let c = crate::text::tests::content_of(&export(&d).unwrap());
+    let (open, header) = (c.find("<text:section"), c.find(">Header<"));
+    assert!(open.is_some() && header.is_some() && open < header, "the section opens before Header: {c}");
+}

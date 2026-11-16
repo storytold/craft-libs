@@ -864,3 +864,19 @@ fn a_block_after_a_sublist_keeps_the_next_items_number() {
         assert_eq!(html.matches("<ol").count(), 1, "{src:?}: one list: {html}");
     }
 }
+
+/// A quoted list item's further paragraph stays in its item: the list goes on after it, in the
+/// quote, and keeps its numbers.
+#[test]
+fn a_quoted_items_further_paragraph_keeps_the_list() {
+    let d = import("> 1. One\n>\n>    Cont\n>\n> 2. Two\n");
+    let nums: Vec<u32> = d.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.numbering.map(|n| n.num)).collect();
+    assert_eq!(nums.len(), 2, "{nums:?}");
+    assert_eq!(nums[0], nums[1], "one list: {nums:?}");
+    let text: String = d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<Vec<_>>().join("|");
+    assert!(text.contains("Cont"), "{text}");
+    let md = export(&d);
+    assert!(md.contains("> 2. Two") && !md.contains("> 1. Two"), "{md}");
+    let html = craft_html::doc::export(&d);
+    assert_eq!(html.matches("<ol").count(), 1, "one list: {html}");
+}

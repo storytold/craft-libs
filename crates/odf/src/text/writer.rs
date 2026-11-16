@@ -111,11 +111,16 @@ fn list_run(blocks: &[FBlock], start: usize, wraps: bool) -> (usize, [ListOut; 9
     let mut last = 0usize;
     while let Some(FBlock::Para(q)) = blocks.get(i) {
         let Some(li) = q.list else {
+            // A section it opens or closes ends the run, as an item's does.
+            let wrap = q.wrap.as_deref().filter(|_| wraps);
             match model::continues_list(blocks, i).map(usize::from) {
-                Some(lv) if i > start && lv <= last => {
+                Some(lv) if i > start && lv <= last && !wrap.is_some_and(|w| !w.0.is_empty()) => {
                     // The items below it are closed.
                     last = lv;
                     i += 1;
+                    if wrap.is_some_and(|w| w.1 > 0) {
+                        break;
+                    }
                     continue;
                 }
                 _ => break,
