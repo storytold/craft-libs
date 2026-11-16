@@ -35,7 +35,9 @@ pub fn transform_is_safe(t: &[f64; 6]) -> bool {
 /// line endings, the trailing paragraph terminator and non-finite transform values verbatim.
 /// Callers must validate geometry before rendering. A complete 52-byte prefix is required;
 /// a missing, unsupported or malformed text descriptor produces empty text. Warp and bounds
-/// are not interpreted. Descriptor parsing retains the shared parser's allocation limits.
+/// are not interpreted. Above [`MAX_BYTES`], the descriptor is not parsed and text is empty,
+/// retaining the fixed transform so consumers can preserve the original block without decoding
+/// an oversized descriptor. Inputs within that cap retain the shared parser's allocation limits.
 pub fn parse_tysh_text_prefix(data: &[u8]) -> Option<(String, [f64; 6])> {
     let f = |at: usize| data.get(at..at + 8).map(|b| f64::from_be_bytes(b.try_into().unwrap_or([0; 8])));
     let mut m = [0.0; 6];
@@ -44,6 +46,9 @@ pub fn parse_tysh_text_prefix(data: &[u8]) -> Option<(String, [f64; 6])> {
     }
     // text version (2) at 50, descriptor version (4) at 52, descriptor at 56.
     let rest = data.get(52..)?;
+    if data.len() > MAX_BYTES {
+        return Some((String::new(), m));
+    }
     let text = VersionedDescriptor::parse_prefix(rest).ok().and_then(|(d, _)| match d.descriptor.get("Txt ") {
         Some(D::Text(t)) => Some(t.to_string_lossy()),
         _ => None,
@@ -292,6 +297,18 @@ mod tests {
         unsupported[52..56].copy_from_slice(&99u32.to_be_bytes());
         assert_eq!(parse_tysh_text_prefix(&unsupported), Some((String::new(), sample().transform)));
         assert_eq!(parse_tysh_text_prefix(&bytes), Some((String::new(), sample().transform)));
+    }
+
+    #[test]
+    fn recovery_prefix_bounds_descriptor_work_without_losing_preservation_geometry() {
+        let mut t = sample();
+        t.text = t.text.with("Txt ", D::Text(UnicodeString::new_nul("kept")));
+        let mut bytes = write_tysh(&t).unwrap();
+        bytes.resize(MAX_BYTES, 0);
+        assert_eq!(parse_tysh_text_prefix(&bytes), Some(("kept".into(), t.transform)));
+        bytes.push(0);
+        assert_eq!(parse_tysh_text_prefix(&bytes), Some((String::new(), t.transform)));
+        assert!(parse_tysh(&bytes).is_none());
     }
 
     #[test]
