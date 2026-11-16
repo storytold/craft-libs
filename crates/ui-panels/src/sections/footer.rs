@@ -530,25 +530,6 @@ pub(crate) fn display_order(roles: &[DialogRole], windows: bool, column: bool) -
     order
 }
 
-/// The labels of one prompt's buttons with their letters in the same style: `(Y)es` when every label starts with
-/// its letter (case-insensitive), otherwise the letter is appended to every label (`Ja (Y)`, `Nein (N)`), so one
-/// prompt never mixes the two. An answer without a letter keeps its text. macOS shows plain labels: the letters
-/// still work.
-pub fn accelerator_labels(answers: &[(&str, Option<char>)], os: Os) -> Vec<String> {
-    let starts_with = |label: &str, letter: char| label.chars().next().is_some_and(|first| first.to_uppercase().eq(letter.to_uppercase()));
-    let inline = answers.iter().all(|(label, letter)| letter.is_none_or(|letter| starts_with(label, letter)));
-    answers
-        .iter()
-        .map(|(label, letter)| match letter {
-            Some(letter) if os != Os::Mac => match label.chars().next() {
-                Some(first) if inline => format!("({first}){}", &label[first.len_utf8()..]),
-                _ => format!("{label} ({})", letter.to_uppercase()),
-            },
-            _ => (*label).to_owned(),
-        })
-        .collect()
-}
-
 impl FooterBar {
     /// A footer bar whose content is its body. It spans its region, so its content sits at the region's end edge; in a
     /// container sized from its content it takes its content's width there and never widens the container.
@@ -643,12 +624,6 @@ impl FooterBar {
                 let lettered = letters_reach_footer(&ctx);
                 // A text part does not own modified chords, so a focused field does not stop a button's chord.
                 let chorded = crate::runtime::overlay::drawing_top_modal(&ctx);
-                // Labels are resolved in the scope's language before the letters decorate them.
-                let env = Env::of(ui);
-                let resolved: Vec<Label> = buttons.iter().map(|button| env.view().resolve(&button.label)).collect();
-                let lettering: Vec<(&str, Option<char>)> =
-                    resolved.iter().zip(buttons).map(|(label, button)| (label.as_str(), button.letter)).collect();
-                let labels = accelerator_labels(&lettering, crate::runtime::windows::os_of(&ctx));
                 // Initial focus lands on the first enabled Accept button on every OS.
                 let default_at = buttons.iter().position(|button| button.role == DialogRole::Accept && button.enabled);
                 let least = if column { LeastWidth::DialogSideButton } else { LeastWidth::DialogButton };
@@ -660,7 +635,7 @@ impl FooterBar {
                         DialogRole::Cancel | DialogRole::Other => Variant::SECONDARY,
                     };
                     let mut widget =
-                        Button::new(button.label.clone()).painted(labels[at].clone()).variant(variant).enabled(button.enabled).least_width(least);
+                        Button::new(button.label.clone()).variant(variant).enabled(button.enabled).least_width(least);
                     if column {
                         widget = widget.sizing(Sizing::FillWidth);
                     }
