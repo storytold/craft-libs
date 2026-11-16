@@ -23,8 +23,8 @@ fn icon(name: &'static str) -> Option<SvgIcon> {
     SvgIcon::of(&tokens, Direction::Ltr, 24.0, &IconId::from(std::borrow::Cow::Borrowed(name)), IconSet::default(), Mirror::Auto)
 }
 
-fn mask(name: &'static str) -> ColorImage {
-    icon(name).expect("the name resolves").mask(24.0, 1.0)
+fn mask(name: &'static str) -> Option<ColorImage> {
+    icon(name).map(|icon| icon.mask(24.0, 1.0))
 }
 
 #[trial]

@@ -287,6 +287,17 @@ pub fn apply(builder: egui::ViewportBuilder, frame: &Frame) -> egui::ViewportBui
     }
 }
 
+impl From<&crate::Frame> for Frame {
+    /// The old two-way frame as a new one: `Desktop` is `Native`, `App(layout)` is integrated
+    /// with generic captions.
+    fn from(old: &crate::Frame) -> Self {
+        match old {
+            crate::Frame::Desktop => Frame::Native,
+            crate::Frame::App(layout) => Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: layout.clone() }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,16 +342,5 @@ mod tests {
         assert_ne!(laid.layout, base.layout);
 
         assert_eq!(decided(TitleBarPref::System, Some("breeze"), Some("close:")), Frame::Native, "a native frame has no captions to change");
-    }
-}
-
-impl From<&crate::Frame> for Frame {
-    /// The old two-way frame as a new one: `Desktop` is `Native`, `App(layout)` is integrated
-    /// with generic captions.
-    fn from(old: &crate::Frame) -> Self {
-        match old {
-            crate::Frame::Desktop => Frame::Native,
-            crate::Frame::App(layout) => Frame::Integrated(Captions { family: CaptionFamily::Generic, layout: layout.clone() }),
-        }
     }
 }
