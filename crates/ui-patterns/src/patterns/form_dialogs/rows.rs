@@ -807,7 +807,7 @@ impl<'p> Pass<'p> {
 
     fn custom(&mut self, ui: &mut Ui, line: &Line<'_>) {
         let ParamKind::Custom(row) = &line.param.kind else { return };
-        let mut context = CustomContext::new(line.name.clone(), self.work.clone(), self.canvas);
+        let mut context = CustomContext::new(line.name.clone(), self.canvas);
         line.show_body(ui, |ui| {
             let _ = row.draw(ui, &mut self.work, &mut context);
         });

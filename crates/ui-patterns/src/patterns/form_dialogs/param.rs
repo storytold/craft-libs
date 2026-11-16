@@ -375,7 +375,6 @@ impl PartialEq for CustomRow {
 #[non_exhaustive]
 pub struct CustomContext {
     title: Label,
-    colors: DialogFields,
     request: Option<ColorRequest>,
     canvas: Option<egui::Id>,
     eyedropper: Option<EyedropperRequest>,
@@ -383,9 +382,9 @@ pub struct CustomContext {
 }
 
 impl CustomContext {
-    /// The context of a row labelled `title` over `colors`, the values at the start of the pass.
-    pub(crate) fn new(title: Label, colors: DialogFields, canvas: Option<egui::Id>) -> Self {
-        CustomContext { title, colors, request: None, canvas, eyedropper: None, sampling: false }
+    /// The context of a row labelled `title`.
+    pub(crate) fn new(title: Label, canvas: Option<egui::Id>) -> Self {
+        CustomContext { title, request: None, canvas, eyedropper: None, sampling: false }
     }
 
     /// Arms the host's eyedropper for the colour under `request.key`, as a colour row's dropper toggle does.
@@ -403,12 +402,10 @@ impl CustomContext {
         self.canvas
     }
 
-    /// Asks the host for its colour picker for the value under `key`, which needs no row of its own. The picker opens
-    /// at the colour the form holds under `key` (black without one), titled with the row's label. The request is
-    /// reported once, as a colour row's press is (`ParamRowsOutput::pick_color`); the host answers by writing the
-    /// colour under `key`.
-    pub fn pick_color(&mut self, key: &str) {
-        let color = Srgba::from_rgb_array(self.colors.color(key).unwrap_or([0.0; 3]));
+    /// Asks the host for its colour picker, open at `color` (the colour the row shows) and titled with the row's label;
+    /// the host answers by writing the picked colour under `key`, which needs no row of its own. The request is
+    /// reported once, as a colour row's press is (`ParamRowsOutput::pick_color`).
+    pub fn pick_color(&mut self, key: &str, color: Srgba) {
         self.request = Some(ColorRequest::new(key, color).title(self.title.clone()));
     }
 
