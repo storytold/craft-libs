@@ -67,6 +67,35 @@ fn lookup_picks_the_nearest_scope() {
     assert_eq!(press(&strict, "L", &Active::panel("Timeline")), run("timeline.loop"));
 }
 
+/// A command shows a chord only where the lookup runs it: of two application commands on one chord the catalog-first
+/// one shows it and is its holder, the other shows its next key; a panel or context binding shows where it applies,
+/// and a panel-only chord's holder is the panel's command.
+#[test]
+fn a_command_shows_only_the_chords_the_lookup_runs_it_for() {
+    let catalog = vec![
+        app("layer.hide", &["Cmd+,"]),
+        app("edit.settings", &["Cmd+,", "Cmd+Alt+,"]),
+        app("view.extras", &["Cmd+H"]),
+        in_scope("timeline.copy", "Timeline", &["Cmd+C"]),
+        app("edit.copy", &["Cmd+C"]),
+        in_scope("text.bold", "Text", &["Cmd+B"]),
+        in_scope("timeline.loop", "Timeline", &["Cmd+L"]),
+    ];
+    let km = Keymap::new(catalog, scopes().with_panel_fallthrough(false), Platform::Mac);
+    assert_eq!(km.shown_chord(&cmd("layer.hide")), Some(chord("Cmd+,")));
+    assert_eq!(km.shown_chord(&cmd("edit.settings")), Some(chord("Cmd+Alt+,")), "the shadowed key is not shown");
+    assert_eq!(km.holder(&chord("Cmd+,")), Some(cmd("layer.hide")));
+    assert_eq!(km.shown_chord(&cmd("timeline.copy")), Some(chord("Cmd+C")), "in its panel the panel's command runs");
+    assert_eq!(km.shown_chord(&cmd("edit.copy")), Some(chord("Cmd+C")));
+    assert_eq!(km.holder(&chord("Cmd+C")), Some(cmd("edit.copy")), "with no panel focused");
+    assert_eq!(km.shown_chord(&cmd("text.bold")), Some(chord("Cmd+B")));
+    assert_eq!(km.holder(&chord("Cmd+L")), Some(cmd("timeline.loop")), "a panel-only chord");
+    assert_eq!(km.holder(&chord("Cmd+K")), None);
+
+    let alone = Keymap::new(vec![app("layer.hide", &["Cmd+,"]), app("edit.settings", &["Cmd+,"])], Scopes::new(), Platform::Mac);
+    assert_eq!(alone.shown_chord(&cmd("edit.settings")), None, "every key shadowed");
+}
+
 #[test]
 fn overrides_write_the_map_form_unless_a_command_has_several_keys() {
     let mut o = Overrides::new();

@@ -8,18 +8,15 @@ use crate::model::{Builtin, ItemKind, MenuBar};
 /// Give each item the shortcut its command has in `keymap`, the user's overrides included, and
 /// make the items of toggle commands (kind [`CommandKind::Toggle`]) check items.
 ///
-/// The shortcut is the first single-press binding, one in the command's home scope first; a
-/// double press can't be a menu shortcut. A command the keymap binds to nothing loses its
-/// shortcut, and an item whose command the keymap doesn't know keeps its own. A toggle's check
-/// item keeps its checked state; radio items stay radio items. Call it on the app's bar, before
-/// the layout.
+/// The shortcut is [`Keymap::shown_chord`]: the first single-press binding that runs the command,
+/// one in its home scope first, so a chord another command wins is not shown. A command with no
+/// such binding loses its shortcut, and an item whose command the keymap doesn't know keeps its
+/// own. A toggle's check item keeps its checked state; radio items stay radio items. Call it on
+/// the app's bar, before the layout.
 pub fn apply_keymap(bar: &mut MenuBar, keymap: &Keymap) {
     bar.for_each_item_mut(|it| {
         let Some(bindable) = keymap.bindable(&it.command) else { return };
-        let bindings = keymap.bindings(&it.command);
-        let single = || bindings.iter().filter(|b| !b.trigger.double);
-        let home = single().find(|b| *b.scope_or(&bindable.scope) == bindable.scope);
-        it.shortcut = home.or_else(|| single().next()).map(|b| b.trigger.chord);
+        it.shortcut = keymap.shown_chord(&it.command);
         if bindable.kind == CommandKind::Toggle && it.kind == ItemKind::Plain {
             it.kind = ItemKind::Check(false);
         }

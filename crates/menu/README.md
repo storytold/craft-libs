@@ -75,8 +75,9 @@ it resolved:
   documents. A Window menu is added if the app has none. **File** gets Close Window (⌘W).
 - **Clashes:** when the app binds ⌘H, ⌥⌘H, ⌘M, ⌘W, ⌘, or ⌘Q to a command, the command keeps
   it. Hide and Minimize move to ⌃⌘H and ⌃⌘M, the others go without a shortcut, and each case is
-  reported as a `Clash`. Shortcuts bound outside the menus (tool and canvas keys) count when the
-  app lists them: `LayoutOptions::new("PhotoCraft").extra_shortcuts(&[(chord, command), ..])`.
+  reported as a `Clash`. The command the app's keymap gives a key to counts, in a menu or not (tool
+  and canvas keys), when the app passes its keymap's holder:
+  `LayoutOptions::new("PhotoCraft").keys(&|chord| commands::holder(ctx, chord))`.
 
 The labels the layouts write (`About {app}`, `Preferences…`, `Exit`, `Window`, `Minimize`, …)
 are English. To translate them, pass `LayoutOptions::new(app_name).label(label)`,
@@ -86,9 +87,9 @@ substitutes `{app}`.
 ## Keymap
 
 `apply_keymap(&mut bar, &keymap)` gives each item the shortcut its command has in the app's
-`craft_keymap::Keymap`, the user's overrides included: the first single-press binding, one in
-the command's home scope first. A command the keymap knows but binds to nothing loses its
-shortcut; an item whose command the keymap doesn't know keeps its own. Items of toggle commands
+`craft_keymap::Keymap`, the user's overrides included: `Keymap::shown_chord`, the first
+single-press binding that runs the command, one in its home scope first, so a chord another
+command wins is not shown. A command the keymap knows with no such binding loses its shortcut; an item whose command the keymap doesn't know keeps its own. Items of toggle commands
 (`CommandDef::toggle`) become check items, keeping their checked state; radio items stay radio
 items.
 

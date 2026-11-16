@@ -381,8 +381,7 @@ impl Board {
                 Some(_) => reached,
             };
         let live = app || instance.is_some_and(|id| self.is_live(ctx, id));
-        let chord =
-            self.keymap.as_ref().and_then(|cache| cache.keymap.bindings(command).into_iter().find(|b| !b.trigger.double).map(|b| b.trigger.chord));
+        let chord = self.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command));
         let resolved = ResolvedCommand {
             label: state.and_then(|s| s.title_ref().cloned()).unwrap_or_else(|| Arc::from(def.map_or(command.id.as_str(), |def| def.label.as_str()))),
             icon: def.and_then(|def| def.icon.clone()),
@@ -629,6 +628,16 @@ pub(crate) fn edit_chords(ctx: &Context) -> Arc<[(EditCommand, Chord)]> {
 /// The bindings the window's keymap gives `command`; none before the first frame builds one.
 pub(crate) fn bindings(ctx: &Context, command: &CommandRef) -> Vec<craft_keymap::Binding> {
     with(ctx, |board| board.keymap.as_ref().map(|cache| cache.keymap.bindings(command)).unwrap_or_default())
+}
+
+/// The chord the window's keymap shows for `command` (`Keymap::shown_chord`); none before the first frame builds one.
+pub(crate) fn chord(ctx: &Context, command: &CommandRef) -> Option<Chord> {
+    with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.shown_chord(command)))
+}
+
+/// The command that holds `chord` in the window's keymap (`Keymap::holder`); none before the first frame builds one.
+pub(crate) fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
+    with(ctx, |board| board.keymap.as_ref().and_then(|cache| cache.keymap.holder(chord)))
 }
 
 /// The chords bound to the window's keys, which the input hook takes before any component.

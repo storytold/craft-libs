@@ -244,7 +244,7 @@ pub struct ResolvedCommand {
     pub label: Arc<str>,
     /// The icon name.
     pub icon: Option<Cow<'static, str>>,
-    /// The first single-press binding.
+    /// The chord surfaces show: the first single-press binding that runs the command ([`chord`]).
     pub chord: Option<Chord>,
     /// The state ANDed with the gate, the modal rule and the instance's liveness.
     pub enabled: bool,
@@ -447,6 +447,20 @@ pub fn resolve(ctx: &Context, command: impl Into<CommandRef>) -> ResolvedCommand
 /// window's platform, double presses included. Empty before the first frame.
 pub fn bindings(ctx: &Context, command: &CommandRef) -> Vec<Binding> {
     board::bindings(ctx, command)
+}
+
+/// The chord a surface shows for `command`: its first single-press binding in the runtime's keymap that runs it
+/// where the binding applies, so a binding another command wins (a nearer scope, else catalog order) is never shown.
+/// [`ResolvedCommand::chord`] is the same. `None` before the first frame.
+pub fn chord(ctx: &Context, command: &CommandRef) -> Option<Chord> {
+    board::chord(ctx, command)
+}
+
+/// The command a key `chord` belongs to for a surface that takes it whatever has focus, such as a system menu item:
+/// the command a press runs with no panel focused, else one that binds it in a panel or context scope. `None` before
+/// the first frame.
+pub fn holder(ctx: &Context, chord: &Chord) -> Option<CommandRef> {
+    board::holder(ctx, chord)
 }
 
 /// `command` as [`resolve`] shows it, from the window under the modal layer whose body is running, as that window is

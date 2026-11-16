@@ -47,8 +47,8 @@
 //!   backend. **File** ([`MenuRole::File`]) gets Close Window unless the app binds ⌘W;
 //! - **clashes** with the system's keys (⌘H, ⌥⌘H, ⌘M, ⌘W, ⌘,, ⌘Q) are resolved in the app's
 //!   favour and reported ([`Clash`]); Hide and Minimize move to ⌃⌘H and ⌃⌘M, as Photoshop does,
-//!   the others go without a shortcut. Shortcuts the app binds outside its menus count too
-//!   ([`LayoutOptions::extra_shortcuts`]).
+//!   the others go without a shortcut. A system item gives way to the command the app's keymap
+//!   gives the key to, in a menu or not ([`LayoutOptions::keys`]), and to an item that shows it.
 //!
 //! **Alternates.** An [`Item`] or [`Row`] can carry an [`Alternate`]: while its modifiers are held
 //! as the row is clicked, the row runs the alternate's command, in the in-window bar and the native

@@ -65,6 +65,19 @@ fn clashes_are_resolved_in_the_apps_favour() {
     assert_eq!(l.clashes.iter().find(|c| c.shortcut == chord("Cmd+H")).map(|c| c.resolution), Some("Hide has no shortcut"));
 }
 
+/// The keymap's holder of a chord takes it from the system items whether a row shows it or not: a command outside the
+/// menus on ⌘H moves Hide to ⌃⌘H and is the clash's command, and one on ⌘, takes it from Settings.
+#[trial]
+fn the_keymaps_holder_takes_the_system_keys() {
+    let keys = |sc: &craft_menu::Chord| [("Cmd+H", "tools.fill"), ("Cmd+,", "tools.erase")].iter().find(|(k, _)| chord(k) == *sc).map(|(_, id)| cmd(id));
+    let l = mac_layout(&sample(false, true), &LayoutOptions::new("Sample").keys(&keys));
+    let clash = |sc: &str| l.clashes.iter().find(|c| c.shortcut == chord(sc)).map(|c| c.command.id.as_str());
+    assert_eq!(clash("Cmd+H"), Some("tools.fill"));
+    assert_eq!(l.bar.find(&Builtin::Hide.command()).unwrap().shortcut, Some(chord("Ctrl+Cmd+H")));
+    assert_eq!(clash("Cmd+,"), Some("tools.erase"));
+    assert_eq!(l.bar.find(&cmd("prefs.general")).unwrap().shortcut, None, "Settings gives ⌘, way");
+}
+
 /// Labels, enabled and checked are updated in place; a shortcut or a check item that used to be
 /// plain needs a rebuild. A document opening or closing rebuilds only the Window menu.
 #[trial]

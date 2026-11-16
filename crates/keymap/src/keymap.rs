@@ -407,6 +407,44 @@ impl Keymap {
         }
     }
 
+    /// The chord a menu row, a tooltip or a button shows for `command`: its first single-press binding, one in its
+    /// home scope first, that runs it. A binding runs the command when the lookup of its chord, where the binding
+    /// applies (an application binding with no panel focused, a panel binding with its panel focused, a context
+    /// binding with its context active), gives the command or a cycle that holds it. `None` when every binding is
+    /// shadowed or the command has none.
+    pub fn shown_chord(&self, command: &CommandRef) -> Option<Chord> {
+        let i = self.find(command)?;
+        let home = &self.catalog[i].scope;
+        let single = || self.current[i].iter().filter(|(trigger, _)| !trigger.double);
+        let runs = |(trigger, scope): &&Bound| {
+            let name = [scope.as_str()];
+            let active = match self.scopes.kind(scope) {
+                ScopeKind::Application => Active::NONE,
+                ScopeKind::Panel => Active::panel(name[0]),
+                ScopeKind::Context => Active { panel: None, contexts: &name, typing: false },
+            };
+            match self.lookup(&trigger.chord, false, &active) {
+                Lookup::None => false,
+                Lookup::Run(c) => self.find(&c) == Some(i),
+                Lookup::Cycle(cycle) => cycle.iter().any(|c| self.find(c) == Some(i)),
+            }
+        };
+        single().filter(|(_, scope)| scope == home).chain(single().filter(|(_, scope)| scope != home)).find(runs).map(|(trigger, _)| trigger.chord)
+    }
+
+    /// The command that holds `chord` for a surface that takes the key whatever has focus (a system menu item): the
+    /// command a single press runs with no panel focused (a cycle's first), else the first command in catalog order
+    /// that binds it in a panel or context scope.
+    pub fn holder(&self, chord: &Chord) -> Option<CommandRef> {
+        match self.lookup(chord, false, &Active::NONE) {
+            Lookup::Run(c) => return Some(c),
+            Lookup::Cycle(cycle) => return cycle.into_iter().next(),
+            Lookup::None => {}
+        }
+        let want = Trigger { chord: chord.effective(self.platform), double: false };
+        self.by_trigger.get(&want)?.iter().find(|&&(i, k)| self.at(i, k).is_some()).map(|&(i, _)| self.catalog[i].command.clone())
+    }
+
     /// Adds a binding to a command.
     pub fn assign(&mut self, command: &CommandRef, binding: Binding, policy: Policy) -> Result<Assigned, AssignError> {
         let i = self.find(command).ok_or(AssignError::UnknownCommand)?;

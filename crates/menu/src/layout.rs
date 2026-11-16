@@ -1,7 +1,5 @@
 //! The platform layouts of an app's menus. See the crate docs for what they do.
 
-use std::collections::HashMap;
-
 use craft_host::target::{Os, Runtime};
 use craft_keymap::{Chord, CommandRef, Key, Mods};
 
@@ -55,8 +53,8 @@ impl Target {
     }
 }
 
-/// The app's name, its translations of the labels the layout writes itself, and its shortcuts
-/// that no menu item shows.
+/// The app's name, its translations of the labels the layout writes itself, and its keymap's holder
+/// of a chord.
 #[non_exhaustive]
 pub struct LayoutOptions<'a> {
     /// Shown in the About, Hide and Quit items.
@@ -67,15 +65,16 @@ pub struct LayoutOptions<'a> {
     /// `Help`, and each [`Standard::english`]. `{app}` is replaced by [`LayoutOptions::app_name`]
     /// afterwards.
     pub label: &'a dyn Fn(&'static str) -> String,
-    /// Shortcuts the app binds outside its menus (tool keys, canvas keys), with their commands:
-    /// the system items give way to them as to menu shortcuts.
-    pub extra_shortcuts: &'a [(Chord, CommandRef)],
+    /// The command the app's keymap gives a chord to, whatever has focus
+    /// (`craft_ui::runtime::commands::holder`): a system item gives way to it, and to an item that
+    /// shows the chord.
+    pub keys: &'a dyn Fn(&Chord) -> Option<CommandRef>,
 }
 
 impl<'a> LayoutOptions<'a> {
     /// English labels.
     pub fn new(app_name: &'a str) -> LayoutOptions<'a> {
-        LayoutOptions { app_name, label: &english, extra_shortcuts: &[] }
+        LayoutOptions { app_name, label: &english, keys: &no_keys }
     }
 
     /// Set the app's translation of the labels a layout writes; see [`LayoutOptions::label`].
@@ -84,9 +83,9 @@ impl<'a> LayoutOptions<'a> {
         self
     }
 
-    /// Set the shortcuts the app binds outside its menus; see [`LayoutOptions::extra_shortcuts`].
-    pub fn extra_shortcuts(mut self, shortcuts: &'a [(Chord, CommandRef)]) -> LayoutOptions<'a> {
-        self.extra_shortcuts = shortcuts;
+    /// Set the app's keymap holder of a chord; see [`LayoutOptions::keys`].
+    pub fn keys(mut self, keys: &'a dyn Fn(&Chord) -> Option<CommandRef>) -> LayoutOptions<'a> {
+        self.keys = keys;
         self
     }
 
@@ -101,6 +100,10 @@ impl<'a> LayoutOptions<'a> {
 
 fn english(s: &'static str) -> String {
     s.into()
+}
+
+fn no_keys(_: &Chord) -> Option<CommandRef> {
+    None
 }
 
 /// A system or browser shortcut the app also uses for one of its commands.
@@ -143,13 +146,10 @@ pub fn layout(bar: &MenuBar, target: Target, options: &LayoutOptions) -> Layout 
 pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
     let mut bar = shown_on(bar, Target::Mac);
     let mut clashes = Vec::new();
-    let mut bound: HashMap<Chord, CommandRef> = HashMap::new();
-    let menu_shortcuts = bar.items().into_iter().filter_map(|it| Some((it.shortcut?, &it.command)));
-    let extra = options.extra_shortcuts.iter().map(|(sc, command)| (*sc, command));
-    for (sc, command) in menu_shortcuts.chain(extra) {
-        bound.entry(sc).or_insert_with(|| command.clone());
-    }
-    let taken = |sc: Chord, own: Option<&CommandRef>| bound.get(&sc).filter(|cmd| Some(*cmd) != own).cloned();
+    // A chord's owner: the keymap's holder, else an item that shows it (a key no keymap holds).
+    let shown: Vec<(Chord, CommandRef)> = bar.items().into_iter().filter_map(|it| Some((it.shortcut?, it.command.clone()))).collect();
+    let owner = |sc: Chord| (options.keys)(&sc).or_else(|| shown.iter().find(|(c, _)| *c == sc).map(|(_, command)| command.clone()));
+    let taken = |sc: Chord, own: &[CommandRef]| owner(sc).filter(|cmd| !own.contains(cmd));
     let tagged = |role: ItemRole| {
         move |n: &Node| match n {
             Node::Item(it) => it.role == Some(role),
@@ -174,8 +174,7 @@ pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
         menu.extend([Node::Item(it), Node::Separator]);
     }
     if let Some(s) = settings {
-        let own = node_commands(&s);
-        let comma = bound.get(&CMD_COMMA).filter(|cmd| !own.contains(*cmd)).cloned();
+        let comma = taken(CMD_COMMA, &node_commands(&s));
         menu.push(settings_node(s, comma, options, &mut clashes));
     }
     if let Some(mut l) = language {
@@ -195,9 +194,9 @@ pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
     menu.extend([options.standard(Standard::Services), Node::Separator]);
     let mut hide = Item::new(Builtin::Hide.command(), options.text("Hide {app}")).role(ItemRole::Hide);
     hide.layout_shortcut = true;
-    match taken(CMD_H, None) {
+    match taken(CMD_H, &[]) {
         Some(command) => {
-            let free = taken(CTRL_CMD_H, None).is_none();
+            let free = taken(CTRL_CMD_H, &[]).is_none();
             if free {
                 hide.shortcut = Some(CTRL_CMD_H);
             }
@@ -209,7 +208,7 @@ pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
     menu.push(Node::Item(hide));
     let mut hide_others = Item::new(Builtin::HideOthers.command(), options.text("Hide Others"));
     hide_others.layout_shortcut = true;
-    match taken(ALT_CMD_H, None) {
+    match taken(ALT_CMD_H, &[]) {
         Some(command) => clashes.push(Clash { shortcut: ALT_CMD_H, system: "Hide Others", command, resolution: "Hide Others has no shortcut" }),
         None => hide_others.shortcut = Some(ALT_CMD_H),
     }
@@ -219,7 +218,7 @@ pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
         _ => Item::new(Builtin::Quit.command(), "").role(ItemRole::Quit),
     };
     quit.label = options.text("Quit {app}");
-    match taken(CMD_Q, Some(&quit.command)) {
+    match taken(CMD_Q, std::slice::from_ref(&quit.command)) {
         Some(command) => {
             clashes.push(Clash { shortcut: CMD_Q, system: "Quit", command, resolution: "Quit has no shortcut" });
             quit.shortcut = None;
@@ -232,7 +231,7 @@ pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
     menu.push(Node::Item(quit));
     bar.menus.insert(0, Menu::new(options.app_name, menu).role(MenuRole::App));
 
-    match taken(CMD_W, None) {
+    match taken(CMD_W, &[]) {
         Some(command) => clashes.push(Clash { shortcut: CMD_W, system: "Close Window", command, resolution: "no system Close Window item" }),
         None => {
             if let Some(file) = bar.menus.iter_mut().find(|m| m.role == MenuRole::File) {
@@ -241,11 +240,11 @@ pub fn mac_layout(bar: &MenuBar, options: &LayoutOptions) -> Layout {
         }
     }
 
-    let minimize = match taken(CMD_M, None) {
+    let minimize = match taken(CMD_M, &[]) {
         Some(command) => {
             let mut it = Item::new(Builtin::Minimize.command(), options.text("Minimize")).role(ItemRole::Minimize);
             it.layout_shortcut = true;
-            let free = taken(CTRL_CMD_M, None).is_none();
+            let free = taken(CTRL_CMD_M, &[]).is_none();
             if free {
                 it.shortcut = Some(CTRL_CMD_M);
             }
