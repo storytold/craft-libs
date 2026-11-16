@@ -189,7 +189,8 @@ pub(crate) fn show(ui: &mut Ui, edit: Edit<'_>) -> Shown {
                     .event_filter(filter)
                     .return_key(if multiline { Some(egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::Enter)) } else { None })
                     .layouter(&mut layouter)
-                    // A laid-out galley sits at the rect's corner, as a painted run does.
+                    // A laid-out galley sits at the rect's corner. Other text follows the same logical placement
+                    // rule as primitives::text::free_room_before, with the row centred vertically.
                     .align(match (align, rtl) {
                         _ if galley.is_some() => egui::Align2::LEFT_TOP,
                         (HAlign::Center, _) => egui::Align2::CENTER_CENTER,

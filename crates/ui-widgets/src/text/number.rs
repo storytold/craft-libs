@@ -364,7 +364,7 @@ impl<'a, V: NumberValue + 'static> NumberField<'a, V> {
     }
 
     /// The unit, measured, then the chevrons: what sits after the text. The unit stands apart at the end of the value
-    /// area, so units line up in a column of fields and the number centres in the room before its unit. A
+    /// area, so units line up in a column of fields; the value's alignment applies within the room before its unit. A
     /// content-sized field's unit is as wide as the widest of its column group's.
     fn after_text(&self, cx: &MeasureCx<'_, Self>, chevrons: &[(PartKey, Label)]) -> Vec<Adornment> {
         let shared = content_sized(cx);
