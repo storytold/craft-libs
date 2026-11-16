@@ -2,9 +2,11 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use craft_behavior::CanvasView;
 use craft_behavior::kurbo::{Point, Rect as DocRect};
+use craft_host::{AppInfo, Host, ManualJobs};
 use craft_imaging::fold_order::cell_order;
 use craft_imaging::ui::transform_preview::{
     PreviewDisplay, PreviewMap, PreviewPixels, PreviewTextures, StylePlan, StyledBudget, StyledContent, StyledFrame, StyledPreview, StyledSource,
@@ -358,3 +360,173 @@ fn the_styled_frame_is_rebuilt_only_when_its_key_changes() {
 // million pixels.
 
 // With nearest interpolation every zoom and scale gives level 0 with nearest filtering.
+
+/// Previews painted every frame of a fixture whose host runs jobs only when a trial says (upstream's 5 × 3 white
+/// image).
+struct Mips {
+    fixture: Fixture,
+    jobs: Arc<ManualJobs>,
+    /// The previews the next frames paint, each at its scale.
+    painted: Rc<RefCell<Vec<(Rc<PreviewTextures>, f32)>>>,
+    /// The display every painted preview is converted for.
+    display: Rc<RefCell<Option<PreviewDisplay>>>,
+    /// What each painted preview showed in the last frame.
+    shown: Rc<RefCell<Vec<Option<(egui::TextureId, [f32; 2])>>>>,
+    /// The previews' uploads in the last frame, read in the frame.
+    uploads: Rc<Cell<usize>>,
+}
+
+fn white(name: &str) -> Rc<PreviewTextures> {
+    Rc::new(PreviewTextures::new(name, PreviewPixels::new(solid([5, 3], Color32::WHITE), [1.0, 1.0])))
+}
+
+impl Mips {
+    fn new() -> Self {
+        let jobs = Arc::new(ManualJobs::new());
+        let painted = Rc::new(RefCell::new(Vec::<(Rc<PreviewTextures>, f32)>::new()));
+        let display = Rc::new(RefCell::new(None::<PreviewDisplay>));
+        let shown = Rc::new(RefCell::new(Vec::new()));
+        let uploads = Rc::new(Cell::new(0));
+        let (paint, converted, seen, counted) = (Rc::clone(&painted), Rc::clone(&display), Rc::clone(&shown), Rc::clone(&uploads));
+        let mut fixture = Fixture::new(move |ui| {
+            let display = converted.borrow();
+            let picks = paint
+                .borrow()
+                .iter()
+                .map(|(textures, scale)| textures.pick(ui.ctx(), PreviewTextures::choose(1.0, *scale, false), display.as_ref()))
+                .collect();
+            *seen.borrow_mut() = picks;
+            counted.set(PreviewTextures::statistics(ui.ctx()).uploads);
+        });
+        fixture.host(Arc::new(Host::builder(AppInfo { id: "trial", name: "Trial", version: "0" }).jobs(jobs.clone()).build()));
+        fixture.settle();
+        Mips { fixture, jobs, painted, display, shown, uploads }
+    }
+
+    /// One frame painting `previews`.
+    fn paint(&mut self, previews: &[(&Rc<PreviewTextures>, f32)]) {
+        *self.painted.borrow_mut() = previews.iter().map(|(textures, scale)| (Rc::clone(textures), *scale)).collect();
+        self.fixture.frame(Vec::new());
+    }
+
+    /// The texture and uv extent the `at`th preview showed.
+    fn shown(&self, at: usize) -> (egui::TextureId, [f32; 2]) {
+        self.shown.borrow()[at].expect("a texture")
+    }
+
+    fn uploads(&self) -> usize {
+        self.uploads.get()
+    }
+}
+
+fn near_uv(uv: [f32; 2], want: [f32; 2]) -> bool {
+    (uv[0] - want[0]).abs() < 1e-6 && (uv[1] - want[1]).abs() < 1e-6
+}
+
+/// P91 (#13382): the frame that first needs a mip level builds none on the UI thread; level 0 stands in, the frames
+/// while its job waits do no work for it, and the landing frame uploads it once.
+#[trial]
+fn a_mip_level_first_needed_mid_drag_is_built_off_the_ui_thread() {
+    let mut mips = Mips::new();
+    let t = white("drag");
+    mips.paint(&[(&t, 1.0)]);
+    let (level0, _) = mips.shown(0);
+    let built = t.levels_built();
+    mips.paint(&[(&t, 0.3)]);
+    assert_eq!(mips.shown(0).0, level0, "level 0 stands in");
+    assert_eq!(t.levels_built(), built, "the frame built no level");
+    assert_eq!(mips.jobs.waiting(), 1, "one job builds level 1");
+    for _ in 0..3 {
+        mips.paint(&[(&t, 0.3)]);
+        assert_eq!(mips.jobs.waiting(), 1, "a frame while the job waits queues no second one");
+        assert_eq!(t.levels_built(), built, "and builds no level");
+        assert_eq!(mips.uploads(), 0, "and uploads nothing");
+    }
+    mips.jobs.run_all();
+    mips.paint(&[(&t, 0.3)]);
+    let (level1, uv) = mips.shown(0);
+    assert_ne!(level1, level0, "level 1 has its own texture");
+    assert!(near_uv(uv, [5.0 / 6.0, 3.0 / 4.0]), "level 1's extent: {uv:?}");
+    assert_eq!(mips.uploads(), 1, "the landing frame uploads one texture");
+    mips.paint(&[(&t, 0.3)]);
+    assert_eq!((mips.shown(0).0, mips.uploads()), (level1, 0), "a later frame uploads nothing");
+}
+
+#[trial]
+fn the_closest_finer_level_stands_in_while_a_level_builds() {
+    let mut mips = Mips::new();
+    let t = white("finer");
+    mips.paint(&[(&t, 1.0)]);
+    mips.paint(&[(&t, 0.3)]);
+    mips.jobs.run_all();
+    mips.paint(&[(&t, 0.3)]);
+    let level1 = mips.shown(0);
+    mips.paint(&[(&t, 0.1)]);
+    assert_eq!(mips.shown(0), level1, "level 1 stands in for level 3");
+    mips.jobs.run_all();
+    mips.paint(&[(&t, 0.1)]);
+    let (level3, uv) = mips.shown(0);
+    assert_ne!(level3, level1.0);
+    assert!(near_uv(uv, [5.0 / 8.0, 3.0 / 8.0]), "level 3's extent: {uv:?}");
+}
+
+#[trial]
+fn a_level_with_nothing_finer_uploaded_for_the_display_is_built_at_once() {
+    let mut mips = Mips::new();
+    let t = white("at-once");
+    mips.paint(&[(&t, 0.3)]);
+    assert_eq!(mips.jobs.waiting(), 0, "a first frame at level 1 builds it in the frame");
+    assert!(near_uv(mips.shown(0).1, [5.0 / 6.0, 3.0 / 4.0]), "level 1 shows at once");
+    mips.paint(&[(&t, 1.0)]);
+    *mips.display.borrow_mut() = Some(PreviewDisplay::new(7, ColorImage::clone));
+    mips.paint(&[(&t, 0.3)]);
+    assert_eq!(mips.jobs.waiting(), 0, "nothing is uploaded for the new display, so level 1 is built in the frame");
+    assert!(near_uv(mips.shown(0).1, [5.0 / 6.0, 3.0 / 4.0]));
+}
+
+/// A preview closed while its level builds neither uploads the level nor keeps it; one still painted does.
+#[trial]
+fn levels_finishing_after_the_box_closed_are_not_uploaded_and_while_it_is_open_are() {
+    let mut entries = Vec::new();
+    for open in [false, true] {
+        let mut mips = Mips::new();
+        let (t, other) = (white("closing"), white("other"));
+        mips.paint(&[(&t, 1.0)]);
+        mips.paint(&[(&t, 0.3)]);
+        for _ in 0..2 {
+            if open { mips.paint(&[(&t, 0.3)]) } else { mips.paint(&[]) }
+        }
+        mips.jobs.run_all();
+        // The other preview's second frame asks the loader, which stores or drops the finished level.
+        for scale in [1.0, 0.3] {
+            let mut previews = vec![(&other, scale)];
+            if open {
+                previews.push((&t, 0.3));
+            }
+            mips.paint(&previews);
+        }
+        entries.push(PreviewTextures::statistics(mips.fixture.ctx()).entries);
+    }
+    assert_eq!(entries[1], entries[0] + 1, "only the open preview's level is uploaded: {entries:?}");
+}
+
+/// A new preview under an old name with other pixels shows its own pixels, not the old textures.
+#[trial]
+fn a_new_preview_under_the_same_name_shows_its_own_pixels() {
+    let ctx = egui::Context::default();
+    let uploaded = |id: egui::TextureId| {
+        let mut delta = ctx.tex_manager().write().take_delta();
+        let texel = delta.set.get(&id).and_then(|sets| sets.first()).map(|set| match &set.image {
+            egui::ImageData::Color(image) => image.pixels[0],
+        });
+        delta.clear();
+        texel
+    };
+    let first = PreviewTextures::new("same", PreviewPixels::new(solid([2, 2], Color32::WHITE), [1.0, 1.0]));
+    let (id, _) = first.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
+    assert_eq!(uploaded(id), Some(Color32::WHITE));
+    drop(first);
+    let second = PreviewTextures::new("same", PreviewPixels::new(solid([2, 2], Color32::BLACK), [1.0, 1.0]));
+    let (id, _) = second.pick(&ctx, TextureChoice::new(0, false), None).expect("uploaded");
+    assert_eq!(uploaded(id), Some(Color32::BLACK), "the new pixels go up");
+}

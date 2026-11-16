@@ -89,6 +89,41 @@ fn frame(frames: &mut Frames, run: impl FnOnce()) {
     });
 }
 
+/// A job that finishes after its key went unasked for two frames is discarded like a queued one; asked in the frame
+/// before, its result is stored.
+#[trial]
+fn a_result_finishing_while_its_key_goes_unasked_is_not_stored() {
+    for asked_again in [false, true] {
+        let mut frames = Frames::new();
+        let ctx = frames.ctx.clone();
+        let (loader, jobs) = loader_with(&ctx, 1, 16);
+        let runs = Arc::new(AtomicUsize::new(0));
+        frame(&mut frames, || {
+            loader.request(&ctx, &1, Revision::new(1), Priority::VISIBLE, || counted(&runs, SMALL));
+        });
+        frame(&mut frames, || {
+            if asked_again {
+                loader.ask(&ctx, &1, Revision::new(1), Priority::VISIBLE);
+            }
+            loader.request(&ctx, &2, Revision::new(1), Priority::VISIBLE, || counted(&runs, SMALL));
+        });
+        jobs.run_all();
+        assert_eq!(runs.load(Ordering::Relaxed), 2, "both jobs ran");
+        let (first, second) = (Cell::new(TextureState::Missing), Cell::new(TextureState::Missing));
+        frame(&mut frames, || {
+            second.set(loader.ask(&ctx, &2, Revision::new(1), Priority::VISIBLE).expect("settled"));
+            first.set(loader.cache().state(&ctx, &1, Revision::new(1)));
+        });
+        assert!(ready(&second.into_inner()), "the asked key's result is stored");
+        let first = first.into_inner();
+        if asked_again {
+            assert!(ready(&first), "asked in the frame before, the result is stored: {first:?}");
+        } else {
+            assert!(matches!(first, TextureState::Missing), "unasked for two frames, the result is dropped: {first:?}");
+        }
+    }
+}
+
 #[trial]
 fn a_result_of_an_older_revision_is_discarded() {
     let mut frames = Frames::new();
