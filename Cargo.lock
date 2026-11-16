@@ -1561,7 +1561,6 @@ dependencies = [
  "craft-aaf",
  "craft-aep",
  "craft-affinity",
- "craft-ai-agents",
  "craft-ai-core",
  "craft-anicraft-format",
  "craft-assuan",
