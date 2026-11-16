@@ -18,6 +18,7 @@ craft-i18n = { workspace = true }
 craft-theme = { workspace = true }
 egui = { workspace = true, optional = true }
 toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+craft-ai-agents = { workspace = true, optional = true }
 craft-ai-core = { workspace = true, optional = true }
 craft-atomic = { workspace = true, optional = true }
 craft-audio = { workspace = true, optional = true }
@@ -227,6 +228,7 @@ aep = ["dep:craft-aep"]
 affinity = ["dep:craft-affinity"]
 affinity-synth = ["affinity", "craft-affinity/synth"]
 
+ai-agents = ["dep:craft-ai-agents"]
 ai-core = ["dep:craft-ai-core"]
 
 anicraft-format = ["dep:craft-anicraft-format"]
@@ -265,6 +267,8 @@ audio-symphonia = ["audio", "craft-audio/symphonia"]
 audio-vorbis-encode = ["audio", "craft-audio/vorbis-encode"]
 
 automation = ["dep:craft-automation", "keymap"]
+# Agents in the open window: the launcher's switch, the connection file, the link host and the Agents page.
+automation-agents = ["automation", "craft-automation/agents", "ai-agents", "flags"]
 
 ber = ["dep:craft-ber"]
 

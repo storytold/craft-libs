@@ -76,6 +76,8 @@ vectorcraft-doc = { git = "https://github.com/storytold/vectorcraft.git", rev = 
 vectorcraft-eps = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
 vectorcraft-geom = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
 vectorcraft-pathops = { git = "https://github.com/storytold/vectorcraft.git", rev = "6b3a6b8788ebcb420d69449199cbdf323888d27e" }
+# The ArtCraft Launcher's list of apps AI agents may use, shared with the launcher and the MCP gateway.
+craft-ai-agents = { git = "https://github.com/storytold/craft-ai-integrations", rev = "35e0352666a117407d62230a6c6c2366f3e21a3b" }
 craft-doc = { path = "crates/doc" }
 craft-docpath = { path = "crates/docpath" }
 craft-dpx = { path = "crates/dpx" }
