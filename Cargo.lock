@@ -2168,6 +2168,7 @@ version = "0.1.0"
 dependencies = [
  "craft-opc",
  "craft-xml",
+ "craft-zip",
  "miniz_oxide 0.9.1",
  "serde_json",
 ]
