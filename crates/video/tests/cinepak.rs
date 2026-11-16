@@ -280,8 +280,8 @@ fn test_hostile_inputs_never_panic() {
     let huge_dims = [0x00, 0, 0, 10, 0xFF, 0xFF, 0xFF, 0xFF, 0, 1];
     assert!(matches!(decoder.decode(&huge_dims), Err(Error::MemoryBudget { .. })));
 
-    // Interframe before keyframe
-    let inter_first = [0x01, 0, 0, 10, 0, 16, 0, 16, 0, 1];
+    // Interframe before keyframe (inter strip 0x1100)
+    let inter_first = [0x01, 0, 0, 22, 0, 16, 0, 16, 0, 1, 0x11, 0x00, 0, 12, 0, 0, 0, 0, 0, 16, 0, 16];
     assert!(matches!(decoder.decode(&inter_first), Err(Error::MissingReference)));
 
     // Random garbage
@@ -567,4 +567,165 @@ fn test_partial_codebook_updates() {
     let frame1 = decoder.decode(&f1).expect("decode f1");
     // Vector 1 is now white, so the block should be white
     assert_eq!(frame1.pixel_rgb(0, 0).expect("pixel"), [255, 255, 255]);
+}
+
+#[test]
+fn test_intra_strip_with_flag_one_decodes_on_fresh_decoder() {
+    // Packet with flags = 0x01, but an intra strip (0x1000). Fresh decoder must decode without MissingReference.
+    let mut data = Vec::new();
+    let total_len = 37u32;
+    let strip_len = 27u16;
+
+    // Frame header with flag 0x01
+    data.push(0x01);
+    data.extend_from_slice(&total_len.to_be_bytes()[1..4]);
+    data.extend_from_slice(&4u16.to_be_bytes()); // Width 4
+    data.extend_from_slice(&4u16.to_be_bytes()); // Height 4
+    data.extend_from_slice(&1u16.to_be_bytes()); // 1 strip
+
+    // Strip header: intra (0x1000)
+    data.extend_from_slice(&0x1000u16.to_be_bytes());
+    data.extend_from_slice(&strip_len.to_be_bytes());
+    data.extend_from_slice(&0u16.to_be_bytes());
+    data.extend_from_slice(&0u16.to_be_bytes());
+    data.extend_from_slice(&4u16.to_be_bytes());
+    data.extend_from_slice(&4u16.to_be_bytes());
+
+    // Subchunk 0x22 (V1 color full): green (Y=144, U=-72, V=-72)
+    data.push(0x22);
+    data.extend_from_slice(&10u32.to_be_bytes()[1..4]);
+    data.extend_from_slice(&[144, 144, 144, 144, (-72i8) as u8, (-72i8) as u8]);
+
+    // Subchunk 0x32 (vector)
+    data.push(0x32);
+    data.extend_from_slice(&5u32.to_be_bytes()[1..4]);
+    data.push(0);
+
+    let mut decoder = Decoder::new();
+    let frame = decoder.decode(&data).expect("intra strip with flag 1 must succeed on fresh decoder");
+    assert!(frame.key);
+    assert_eq!(frame.pixel_rgb(0, 0).expect("pixel"), [0, 252, 0]);
+}
+
+#[test]
+fn test_strip_codebook_inheritance() {
+    // 4x8 frame with 2 strips (4x4 each).
+    // flags = 0x01 (can_inherit enabled).
+    // Strip 0 defines a V1 red codebook and vectors.
+    // Strip 1 has NO codebook subchunk, and inherits Strip 0's codebook.
+    let mut data = Vec::new();
+    let strip0_len = 12 + 10 + 5; // 27 bytes
+    let strip1_len = 12 + 5; // 17 bytes (no 0x22 codebook, only vector!)
+    let total_len = (10 + strip0_len + strip1_len) as u32; // 54 bytes
+
+    data.push(0x01); // can_inherit
+    data.extend_from_slice(&total_len.to_be_bytes()[1..4]);
+    data.extend_from_slice(&4u16.to_be_bytes()); // Width 4
+    data.extend_from_slice(&8u16.to_be_bytes()); // Height 8
+    data.extend_from_slice(&2u16.to_be_bytes()); // 2 strips
+
+    // Strip 0: intra (0x1000)
+    data.extend_from_slice(&0x1000u16.to_be_bytes());
+    data.extend_from_slice(&(strip0_len as u16).to_be_bytes());
+    data.extend_from_slice(&0u16.to_be_bytes());
+    data.extend_from_slice(&0u16.to_be_bytes());
+    data.extend_from_slice(&4u16.to_be_bytes());
+    data.extend_from_slice(&4u16.to_be_bytes());
+    // Strip 0 codebook (V1 red: Y=72, U=-37, V=91)
+    data.push(0x22);
+    data.extend_from_slice(&10u32.to_be_bytes()[1..4]);
+    data.extend_from_slice(&[72, 72, 72, 72, (-37i8) as u8, 91u8]);
+    // Strip 0 vector 0
+    data.push(0x32);
+    data.extend_from_slice(&5u32.to_be_bytes()[1..4]);
+    data.push(0);
+
+    // Strip 1: intra (0x1000) with y0=4..8
+    data.extend_from_slice(&0x1000u16.to_be_bytes());
+    data.extend_from_slice(&(strip1_len as u16).to_be_bytes());
+    data.extend_from_slice(&4u16.to_be_bytes());
+    data.extend_from_slice(&0u16.to_be_bytes());
+    data.extend_from_slice(&8u16.to_be_bytes());
+    data.extend_from_slice(&4u16.to_be_bytes());
+    // Strip 1 has NO codebook: uses inherited vector 0 from Strip 0
+    data.push(0x32);
+    data.extend_from_slice(&5u32.to_be_bytes()[1..4]);
+    data.push(0);
+
+    let mut decoder = Decoder::new();
+    let frame = decoder.decode(&data).expect("strip 1 must inherit strip 0 codebook");
+    assert_eq!(frame.width, 4);
+    assert_eq!(frame.height, 8);
+
+    // Both strip 0 (y=0..4) and strip 1 (y=4..8) must be red
+    for y in 0..8 {
+        for x in 0..4 {
+            let px = frame.pixel_rgb(x, y).expect("pixel");
+            assert!(px[0] > 200 && px[1] == 0 && px[2] == 0, "mismatch at ({x}, {y})");
+        }
+    }
+}
+
+#[test]
+fn test_decode_error_leaves_decoder_state_unchanged() {
+    let mut decoder = Decoder::new();
+
+    // 1. Decode a valid frame: 4x4 red
+    let f0 = build_synthetic_v1_keyframe([72, 72, 72, 72], -37, 91);
+    let frame0 = decoder.decode(&f0).expect("decode f0");
+    let px0 = frame0.pixel_rgb(0, 0).expect("pixel");
+    assert!(px0[0] > 200);
+
+    // 2. Attempt to decode a corrupted frame that claims 2 strips but cuts off inside strip 1
+    let mut corrupt = Vec::new();
+    corrupt.push(0x01);
+    let total_len = 50u32;
+    corrupt.extend_from_slice(&total_len.to_be_bytes()[1..4]);
+    corrupt.extend_from_slice(&4u16.to_be_bytes());
+    corrupt.extend_from_slice(&4u16.to_be_bytes());
+    corrupt.extend_from_slice(&2u16.to_be_bytes()); // 2 strips
+    // Strip 0: valid 27 bytes (blue codebook)
+    corrupt.extend_from_slice(&0x1000u16.to_be_bytes());
+    corrupt.extend_from_slice(&27u16.to_be_bytes());
+    corrupt.extend_from_slice(&0u16.to_be_bytes());
+    corrupt.extend_from_slice(&0u16.to_be_bytes());
+    corrupt.extend_from_slice(&4u16.to_be_bytes());
+    corrupt.extend_from_slice(&4u16.to_be_bytes());
+    corrupt.push(0x22);
+    corrupt.extend_from_slice(&10u32.to_be_bytes()[1..4]);
+    corrupt.extend_from_slice(&[72, 72, 72, 72, 91u8, (-37i8) as u8]);
+    corrupt.push(0x32);
+    corrupt.extend_from_slice(&5u32.to_be_bytes()[1..4]);
+    corrupt.push(0);
+    // Strip 1: declared size 20, but we stop early
+    corrupt.extend_from_slice(&0x1000u16.to_be_bytes());
+    corrupt.extend_from_slice(&20u16.to_be_bytes());
+
+    let err = decoder.decode(&corrupt);
+    assert!(matches!(err, Err(Error::Truncated)));
+
+    // 3. Now decode an interframe referencing frame 0.
+    // Strip 0 codebook should still be red (not blue from the aborted frame).
+    let mut f2 = Vec::new();
+    f2.push(0x01);
+    let f2_strip_len = 17u16; // 12 header + 5 vector
+    let f2_total = (10 + f2_strip_len) as u32;
+    f2.extend_from_slice(&f2_total.to_be_bytes()[1..4]);
+    f2.extend_from_slice(&4u16.to_be_bytes());
+    f2.extend_from_slice(&4u16.to_be_bytes());
+    f2.extend_from_slice(&1u16.to_be_bytes());
+    f2.extend_from_slice(&0x1100u16.to_be_bytes()); // inter strip
+    f2.extend_from_slice(&f2_strip_len.to_be_bytes());
+    f2.extend_from_slice(&0u16.to_be_bytes());
+    f2.extend_from_slice(&0u16.to_be_bytes());
+    f2.extend_from_slice(&4u16.to_be_bytes());
+    f2.extend_from_slice(&4u16.to_be_bytes());
+    // Re-use vector 0
+    f2.push(0x32);
+    f2.extend_from_slice(&5u32.to_be_bytes()[1..4]);
+    f2.push(0);
+
+    let frame2 = decoder.decode(&f2).expect("decode f2");
+    let px2 = frame2.pixel_rgb(0, 0).expect("pixel");
+    assert!(px2[0] > 200 && px2[2] == 0, "codebook should still be red, got {px2:?}");
 }

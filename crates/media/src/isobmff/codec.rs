@@ -188,6 +188,8 @@ pub enum CodecConfig {
     /// Cinepak (`cvid`).
     Cinepak {
         fourcc: FourCc,
+        color_table_id: i16,
+        color_table: Option<Vec<u8>>,
     },
     Aac(AacConfig),
     /// MPEG-1/2 audio (esds object type 0x69/0x6B, or QuickTime `.mp3` / `.mp2`). Usually layer
@@ -1020,7 +1022,8 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
         let n = (name[0] as usize).min(31);
         v.compressor_name = String::from_utf8_lossy(&name[1..1 + n]).into_owned();
         v.depth = c.u16()?;
-        let _ctab = c.i16()?;
+        let ctab = c.i16()?;
+        let color_table_bytes = if ctab == 0 { parse_qt_color_table(&mut c) } else { None };
         let mut codec = None;
         let mut bitrate = None;
         let mut log_seen = false;
@@ -1063,17 +1066,7 @@ pub(crate) fn parse_sample_entry(format: FourCc, payload: &[u8], handler: FourCc
                 _ => {}
             }
         }
-        let codec = match codec {
-            Some(c) => c,
-            None => match f {
-                b"apch" | b"apcn" | b"apcs" | b"apco" | b"ap4h" | b"ap4x" => CodecConfig::ProRes { fourcc: format },
-                b"jpeg" | b"mjpa" | b"mjpb" => CodecConfig::Jpeg { fourcc: format },
-                b"AVdn" | b"AVdh" => CodecConfig::Dnx { fourcc: format },
-                b"apv1" => CodecConfig::Apv(ApvConfig::default()),
-                b"cvid" | b"CVID" => CodecConfig::Cinepak { fourcc: format },
-                _ => unknown(),
-            },
-        };
+        let codec = resolve_video_codec(format, f, codec, ctab, color_table_bytes, payload);
         return Ok(SampleEntry { format, data_reference_index, codec, video: Some(v), audio: None, bitrate });
     }
     if audio_like {
@@ -1235,6 +1228,53 @@ fn descriptor(c: &mut Cur) -> Result<(u8, usize)> {
     Ok((tag, len))
 }
 
+fn parse_qt_color_table(c: &mut Cur<'_>) -> Option<Vec<u8>> {
+    if c.rest().len() < 8 {
+        return None;
+    }
+    let ct_seed = c.u32().ok()?;
+    let ct_flags = c.u16().ok()?;
+    let ct_size = c.u16().ok()?;
+    let num_entries = (ct_size as usize).checked_add(1)?;
+    let payload_len = num_entries.checked_mul(8)?;
+    if c.rest().len() < payload_len {
+        return None;
+    }
+    let entries = c.bytes(payload_len).ok()?;
+    let mut ct = Vec::with_capacity(8 + payload_len);
+    ct.extend_from_slice(&ct_seed.to_be_bytes());
+    ct.extend_from_slice(&ct_flags.to_be_bytes());
+    ct.extend_from_slice(&ct_size.to_be_bytes());
+    ct.extend_from_slice(entries);
+    Some(ct)
+}
+
+fn resolve_video_codec(
+    format: FourCc,
+    f: &[u8; 4],
+    codec: Option<CodecConfig>,
+    ctab: i16,
+    color_table: Option<Vec<u8>>,
+    payload: &[u8],
+) -> CodecConfig {
+    if let Some(c) = codec {
+        return c;
+    }
+    let unknown = || CodecConfig::Unknown { fourcc: format, raw: payload.to_vec() };
+    match f {
+        b"apch" | b"apcn" | b"apcs" | b"apco" | b"ap4h" | b"ap4x" => CodecConfig::ProRes { fourcc: format },
+        b"jpeg" | b"mjpa" | b"mjpb" => CodecConfig::Jpeg { fourcc: format },
+        b"AVdn" | b"AVdh" => CodecConfig::Dnx { fourcc: format },
+        b"apv1" => CodecConfig::Apv(ApvConfig::default()),
+        b"cvid" | b"CVID" => match ctab {
+            0 => color_table.map_or_else(unknown, |ct| CodecConfig::Cinepak { fourcc: format, color_table_id: 0, color_table: Some(ct) }),
+            -1 => CodecConfig::Cinepak { fourcc: format, color_table_id: -1, color_table: None },
+            _ => unknown(),
+        },
+        _ => unknown(),
+    }
+}
+
 fn parse_esds(p: &[u8]) -> Result<CodecConfig> {
     let mut c = Cur::labeled(p, "esds");
     c.full_header()?;
@@ -1340,6 +1380,7 @@ impl SampleEntry {
                 _ => "Apple ProRes 4444 XQ",
             },
             CodecConfig::Jpeg { .. } => "Photo - JPEG",
+            CodecConfig::Cinepak { .. } => "Cinepak",
             _ => "",
         };
         SampleEntry {
@@ -1415,6 +1456,11 @@ impl SampleEntry {
     pub fn jpeg(width: u16, height: u16) -> Self {
         let f = FourCc(*b"jpeg");
         Self::video(f, CodecConfig::Jpeg { fourcc: f }, width, height)
+    }
+    /// Cinepak entry (`cvid`).
+    pub fn cinepak(width: u16, height: u16) -> Self {
+        let f = FourCc(*b"cvid");
+        Self::video(f, CodecConfig::Cinepak { fourcc: f, color_table_id: -1, color_table: None }, width, height)
     }
     /// AAC entry (`mp4a` + `esds`) from an AudioSpecificConfig.
     pub fn aac(asc: Vec<u8>, channels: u32, sample_rate: u32) -> Self {
@@ -1605,7 +1651,14 @@ impl SampleEntry {
         nb[1..1 + n].copy_from_slice(&name[..n]);
         b.bytes(&nb);
         b.u16(v.depth);
-        b.i16(-1);
+        if let CodecConfig::Cinepak { color_table_id, color_table, .. } = &self.codec {
+            b.i16(*color_table_id);
+            if let Some(ct) = color_table {
+                b.bytes(ct);
+            }
+        } else {
+            b.i16(-1);
+        }
         write_video_codec_config(b, &self.codec);
         write_video_descriptive_boxes(b, v);
         if let Some(br) = self.bitrate {
@@ -1721,6 +1774,38 @@ mod tests {
         e.write(&mut b, qt).unwrap();
         let bx = crate::isobmff::bytes::boxes(&b.buf).next().unwrap().unwrap();
         parse_sample_entry(bx.kind, bx.payload, FourCc(*handler), qt).unwrap()
+    }
+
+    #[test]
+    fn cinepak_palette_roundtrip() {
+        let f = FourCc(*b"cvid");
+        let mut ct = Vec::new();
+        ct.extend_from_slice(&0u32.to_be_bytes()); // ctSeed
+        ct.extend_from_slice(&0u16.to_be_bytes()); // ctFlags
+        ct.extend_from_slice(&3u16.to_be_bytes()); // ctSize = 3 (4 entries)
+        for i in 0..4u16 {
+            ct.extend_from_slice(&i.to_be_bytes()); // value
+            ct.extend_from_slice(&(i * 1000).to_be_bytes()); // r
+            ct.extend_from_slice(&(i * 2000).to_be_bytes()); // g
+            ct.extend_from_slice(&(i * 3000).to_be_bytes()); // b
+        }
+        let entry = SampleEntry {
+            format: f,
+            data_reference_index: 1,
+            codec: CodecConfig::Cinepak { fourcc: f, color_table_id: 0, color_table: Some(ct.clone()) },
+            video: Some(VideoParams { width: 320, height: 240, depth: 8, compressor_name: "Cinepak".into(), ..Default::default() }),
+            audio: None,
+            bitrate: None,
+        };
+        let parsed = roundtrip(&entry, true, b"vide");
+        assert_eq!(parsed.format, f);
+        match parsed.codec {
+            CodecConfig::Cinepak { color_table_id, color_table, .. } => {
+                assert_eq!(color_table_id, 0);
+                assert_eq!(color_table, Some(ct));
+            }
+            other => panic!("expected Cinepak codec, got {:?}", other),
+        }
     }
 
     /// A QuickTime `logs` box keeps its identifier whatever curve it names; the reader does not

@@ -122,7 +122,7 @@ impl Decoder {
         }
 
         let flags = data[0];
-        let is_key = (flags & 0x01) == 0;
+        let can_inherit = (flags & 0x01) != 0;
         let total_len = ((data[1] as usize) << 16) | ((data[2] as usize) << 8) | (data[3] as usize);
         let width = u16::from_be_bytes([data[4], data[5]]) as u32;
         let height = u16::from_be_bytes([data[6], data[7]]) as u32;
@@ -130,6 +130,14 @@ impl Decoder {
 
         if width == 0 || height == 0 {
             return Err(Error::InvalidHeader("width and height must be non-zero"));
+        }
+        let w = width as u64;
+        let h = height as u64;
+        let area = w.checked_mul(h).ok_or(Error::MemoryBudget { width, height })?;
+        let rgb_bytes = area.checked_mul(3).ok_or(Error::MemoryBudget { width, height })?;
+        let total_est = rgb_bytes.checked_add(area.checked_mul(2).unwrap_or(0)).ok_or(Error::MemoryBudget { width, height })?;
+        if total_est > crate::budget::DECODE_MEMORY_BUDGET {
+            return Err(Error::MemoryBudget { width, height });
         }
         if num_strips == 0 {
             return Err(Error::InvalidHeader("strip count must be greater than zero"));
@@ -141,6 +149,23 @@ impl Decoder {
             return Err(Error::Truncated);
         }
 
+        // Validate strip headers and check if any strip is inter-coded.
+        let mut scan_offset = 10;
+        let mut has_inter = false;
+        for _ in 0..num_strips {
+            let strip_hdr_data = data.get(scan_offset..).ok_or(Error::Truncated)?;
+            let hdr = StripHeader::parse(strip_hdr_data)?;
+            let strip_end = scan_offset.checked_add(hdr.size).ok_or(Error::Truncated)?;
+            if strip_end > total_len {
+                return Err(Error::Truncated);
+            }
+            if (hdr.id & 0xFF00) == 0x1100 {
+                has_inter = true;
+            }
+            scan_offset = strip_end;
+        }
+
+        let is_key = !has_inter;
         let mut frame = if is_key {
             Frame::new(width, height, false)?
         } else {
@@ -152,9 +177,16 @@ impl Decoder {
         };
         frame.key = is_key;
 
-        if is_key || self.strips.len() < num_strips {
-            self.strips.resize_with(num_strips, StripState::default);
-        }
+        // Stage strip updates in a local copy so decode errors leave decoder state unchanged.
+        let mut strips = if can_inherit {
+            let mut s = self.strips.clone();
+            if s.len() < num_strips {
+                s.resize_with(num_strips, StripState::default);
+            }
+            s
+        } else {
+            vec![StripState::default(); num_strips]
+        };
 
         let mut offset = 10;
         let mut prev_bottom_y = 0;
@@ -164,16 +196,18 @@ impl Decoder {
             let strip_hdr_data = data.get(offset..).ok_or(Error::Truncated)?;
             let hdr = StripHeader::parse(strip_hdr_data)?;
 
-            let strip_end = offset.checked_add(hdr.size).ok_or(Error::Truncated)?;
-            if strip_end > total_len {
-                return Err(Error::Truncated);
-            }
-
+            let strip_end = offset + hdr.size;
             let bounds = hdr.resolve_bounds(s_idx == 0, prev_bottom_y, width, height)?;
             prev_bottom_y = bounds.3;
 
+            // When codebook inheritance is enabled, subsequent strips initialize from the preceding strip.
+            if can_inherit && s_idx > 0 {
+                let prev_strip = strips[s_idx - 1].clone();
+                strips[s_idx] = prev_strip;
+            }
+
             let strip_slice = &data[offset + 12..strip_end];
-            let strip = match self.strips.get_mut(s_idx) {
+            let strip = match strips.get_mut(s_idx) {
                 Some(s) => s,
                 None => return Err(Error::InvalidStrip("strip index out of bounds")),
             };
@@ -254,6 +288,7 @@ impl Decoder {
         }
 
         frame.is_color = any_color;
+        self.strips = strips;
         self.last_frame = Some(frame.clone());
         Ok(frame)
     }
