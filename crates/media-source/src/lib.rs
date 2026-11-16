@@ -13,6 +13,8 @@
 //! [`SharedSource`] is `Arc<dyn MediaSource>`. It is not `craft_audio::SharedSource`, which is a
 //! `ByteSource` marker used by the audio decoder.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
+
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
@@ -201,14 +203,33 @@ pub type ReaderOpener = fn(name: &str, head: &[u8], reader: &SharedBytes) -> Opt
 /// Bytes sniffed by [`open_reader`].
 pub const HEAD_LEN: usize = 64 * 1024;
 
+/// Default ceiling for a whole-file fallback or an offline output buffer (256 MiB).
+/// Streaming openers are tried first. Use open_reader_within for an explicit different file budget.
+pub const DEFAULT_MAX_MEDIA_BYTES: usize = 256 << 20;
+
+fn allocate<T: Default + Clone>(len: usize, max_bytes: usize) -> io::Result<Vec<T>> {
+    if len.checked_mul(std::mem::size_of::<T>()).is_none_or(|bytes| bytes > max_bytes || bytes > isize::MAX as usize) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "media buffer exceeds allocation limit"));
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(|e| io::Error::other(format!("cannot allocate media buffer: {e}")))?;
+    out.resize(len, T::default());
+    Ok(out)
+}
+
 fn io_named(name: &str, e: io::Error) -> MediaError {
     MediaError::Io(format!("{name}: {e}"))
 }
 
 /// Read `len` bytes at `offset` (fewer at the end of the source).
 pub fn read_range(r: &dyn ByteSource, offset: u64, len: usize) -> io::Result<Vec<u8>> {
-    let n = (r.len().saturating_sub(offset)).min(len as u64) as usize;
-    let mut v = vec![0u8; n];
+    read_range_within(r, offset, len, DEFAULT_MAX_MEDIA_BYTES)
+}
+
+fn read_range_within(r: &dyn ByteSource, offset: u64, len: usize, max_bytes: usize) -> io::Result<Vec<u8>> {
+    let n = usize::try_from(r.len().saturating_sub(offset).min(len as u64))
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "media length is not representable"))?;
+    let mut v = allocate(n, max_bytes)?;
     r.read_at(offset, &mut v)?;
     Ok(v)
 }
@@ -227,7 +248,7 @@ pub fn open_bytes(name: &str, bytes: Arc<[u8]>, extra: &[Opener]) -> Result<Shar
 /// Open media from a reader: `reader_openers` first; otherwise read the whole file (if it fits in
 /// `max_whole`) and use [`open_bytes`] with `extra`.
 pub fn open_reader(name: &str, reader: SharedBytes, reader_openers: &[ReaderOpener], extra: &[Opener]) -> Result<SharedSource> {
-    open_reader_within(name, reader, reader_openers, extra, u64::MAX)
+    open_reader_within(name, reader, reader_openers, extra, DEFAULT_MAX_MEDIA_BYTES as u64)
 }
 
 /// Like [`open_reader`], but a file no reader opener takes is read whole only up to `max_whole`
@@ -247,19 +268,23 @@ pub fn open_reader_within(
             return r;
         }
     }
+    if extra.is_empty() {
+        return Err(MediaError::Unsupported(format!("{name}: unrecognised format")));
+    }
     if reader.len() > max_whole {
         return Err(MediaError::Unsupported(format!("{name}: no streaming reader for this format, and it is too large to read whole here")));
     }
-    let all = read_range(&*reader, 0, usize::try_from(reader.len()).unwrap_or(usize::MAX)).map_err(|e| io_named(name, e))?;
+    let len = usize::try_from(reader.len()).map_err(|_| MediaError::Unsupported(format!("{name}: media length is not representable")))?;
+    let budget = usize::try_from(max_whole).unwrap_or(usize::MAX);
+    let all = read_range_within(&*reader, 0, len, budget).map_err(|e| io_named(name, e))?;
     open_bytes(name, all.into(), extra)
 }
 
-/// Open a path with [`open_reader`]. Uses an unpooled [`std::fs::File`]; callers that open many
-/// files at once should pass a pooled craft-media `FileReader` (once that type is on main) as
-/// the [`SharedBytes`] instead.
+/// Open a regular file through the shared pooled FileReader. Non-files (including FIFOs)
+/// are refused without a blocking open, using the same contract as other media readers.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_path(path: &Path, reader_openers: &[ReaderOpener], extra: &[Opener]) -> Result<SharedSource> {
-    let file = std::fs::File::open(path).map_err(|e| MediaError::Io(format!("{}: {e}", path.display())))?;
+    let file = craft_media::FileReader::open(path).map_err(|e| MediaError::Io(format!("{}: {e}", path.display())))?;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     open_reader(&name, Arc::new(file), reader_openers, extra)
 }
@@ -279,16 +304,37 @@ impl MediaSource for OfflineSource {
     }
     fn video_frame(&self, req: FrameRequest) -> Result<Arc<VideoFrame>> {
         let v = self.info.video.as_ref().ok_or(MediaError::NoStream("video"))?;
+        if !req.scale.is_finite() || req.scale <= 0.0 || v.width == 0 || v.height == 0 {
+            return Err(MediaError::Decode("invalid offline frame dimensions or scale".into()));
+        }
         let s = req.scale.clamp(0.02, 1.0);
         let (w, h) = (((v.width as f32 * s) as u32).max(2), ((v.height as f32 * s) as u32).max(2));
-        let mut px = vec![0u8; (w * h * 4) as usize];
+        let samples = usize::try_from(w)
+            .ok()
+            .and_then(|w| usize::try_from(h).ok().and_then(|h| w.checked_mul(h)))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| MediaError::Decode("offline frame dimensions overflow".into()))?;
+        let mut px = allocate::<u8>(samples, DEFAULT_MAX_MEDIA_BYTES)?;
         for p in px.as_chunks_mut::<4>().0 {
             p.copy_from_slice(&[140, 16, 16, 255]);
         }
-        Ok(Arc::new(VideoFrame::rgba8(w, h, px).with_pts(req.time)))
+        Ok(Arc::new(VideoFrame::rgba8(w, h, px).map_err(|e| MediaError::Decode(e.to_string()))?.with_pts(req.time)))
     }
     fn audio(&self, _start: i64, frames: usize, sample_rate: u32) -> Result<AudioBuffer> {
-        Ok(AudioBuffer::new(sample_rate, audio_channels(&self.info), frames))
+        let channels = usize::from(audio_channels(&self.info));
+        let bytes = frames
+            .checked_mul(channels)
+            .and_then(|n| n.checked_mul(std::mem::size_of::<f32>()))
+            .ok_or_else(|| MediaError::Decode("offline audio dimensions overflow".into()))?;
+        if bytes > DEFAULT_MAX_MEDIA_BYTES {
+            return Err(MediaError::Decode("offline audio exceeds allocation limit".into()));
+        }
+        let mut planes = Vec::new();
+        planes.try_reserve_exact(channels).map_err(|e| MediaError::Io(e.to_string()))?;
+        for _ in 0..channels {
+            planes.push(allocate::<f32>(frames, DEFAULT_MAX_MEDIA_BYTES)?);
+        }
+        Ok(AudioBuffer { sample_rate, channels: planes })
     }
 }
 
@@ -338,6 +384,81 @@ mod tests {
         if head.starts_with(b"OK") { Some(Ok(Arc::new(silent(name, MediaKind::Movie)))) } else { None }
     }
 
+    struct HugeSource;
+    impl ByteSource for HugeSource {
+        fn len(&self) -> u64 {
+            u64::MAX
+        }
+        fn read_at(&self, _offset: u64, buf: &mut [u8]) -> io::Result<()> {
+            assert!(buf.len() <= HEAD_LEN, "must reject whole-file allocation before reading");
+            buf.fill(0);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn whole_file_fallback_and_explicit_ranges_are_bounded() {
+        let reader: SharedBytes = Arc::new(HugeSource);
+        assert!(open_reader("large.ok", reader.clone(), &[], &[accept_ok]).is_err());
+        assert!(open_reader_within("large.ok", reader.clone(), &[], &[accept_ok], u64::MAX).is_err());
+        assert!(read_range(&HugeSource, 0, usize::MAX).is_err());
+        assert!(read_range_within(&HugeSource, 0, 10, 9).is_err());
+        assert_eq!(read_range_within(&HugeSource, 0, 10, 10).unwrap(), vec![0; 10]);
+    }
+
+    struct SniffOnlySource(std::sync::atomic::AtomicUsize);
+    impl ByteSource for SniffOnlySource {
+        fn len(&self) -> u64 {
+            u64::MAX
+        }
+        fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+            assert_eq!(offset, 0);
+            assert_eq!(buf.len(), HEAD_LEN);
+            assert_eq!(self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst), 0, "must only sniff once");
+            buf.fill(0);
+            buf[..2].copy_from_slice(b"OK");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn no_fallback_stops_after_sniff_and_streaming_opener_precedes_size_cap() {
+        let reader = Arc::new(SniffOnlySource(std::sync::atomic::AtomicUsize::new(0)));
+        let error = open_reader("unknown", reader.clone(), &[], &[]).err().unwrap();
+        assert!(matches!(error, MediaError::Unsupported(_)));
+        assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let reader = Arc::new(SniffOnlySource(std::sync::atomic::AtomicUsize::new(0)));
+        let source = open_reader_within("large.mov", reader.clone(), &[reader_ok], &[accept_ok], 0).unwrap();
+        assert_eq!(source.info().kind, MediaKind::Movie);
+        assert_eq!(reader.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn hostile_offline_metadata_and_requests_are_errors() {
+        let mut source = silent("bad", MediaKind::Synthetic);
+        source.info.video.as_mut().unwrap().width = u32::MAX;
+        source.info.video.as_mut().unwrap().height = u32::MAX;
+        assert!(source.video_frame(FrameRequest::full(Tick::ZERO)).is_err());
+        assert!(source.audio(0, usize::MAX, 48000).is_err());
+        let source = silent("bad-scale", MediaKind::Synthetic);
+        for scale in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+            assert!(source.video_frame(FrameRequest { time: Tick::ZERO, scale }).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_path_refuses_a_fifo_without_waiting_for_a_writer() {
+        let root = std::env::temp_dir().join(format!("craft-media-source-fifo-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("fifo");
+        if std::process::Command::new("mkfifo").arg(&path).status().is_ok_and(|s| s.success()) {
+            assert!(open_path(&path, &[], &[]).is_err());
+            std::fs::remove_file(&path).unwrap();
+        }
+        std::fs::remove_dir(&root).unwrap();
+    }
+
     #[test]
     fn importable_extensions_match_regardless_of_case() {
         for name in ["clip.mov", "clip.MOV", "clip.Mov", "shot.MP4", "IMG_0001.JPG", "sound.WAV", "take.M2TS"] {
@@ -375,7 +496,7 @@ mod tests {
 
         let big = vec![0u8; HEAD_LEN + 8];
         let r: SharedBytes = Arc::new(big);
-        let e = open_reader_within("a.avi", r, &[], &[], HEAD_LEN as u64).err().expect("expected error");
+        let e = open_reader_within("a.avi", r, &[], &[accept_ok], HEAD_LEN as u64).err().expect("expected error");
         assert!(matches!(e, MediaError::Unsupported(s) if s.contains("too large")));
     }
 
