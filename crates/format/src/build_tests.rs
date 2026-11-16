@@ -73,3 +73,26 @@ fn refuses_gaps_bad_names_missing_notes_and_missing_folders() {
     assert!(refused(&dir).contains("`//!` note"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_step_is_a_declaration_not_a_mention() {
+    assert!(!declares_step("//! No fn step() is needed.\n"));
+    assert!(!declares_step("//! a note\n// fn step(v) was removed\nconst X: u8 = 1;\n"));
+    assert!(declares_step("//! a note\npub fn step (v: &mut Value) -> Result<(), E> { Ok(()) }\n"));
+    assert!(declares_step("//! a note\npub(crate) fn  step(v: &mut Value) -> Result<(), E> { Ok(()) }\n"));
+    assert!(declares_step("//! a note\n    fn step(v: &mut Value) {}\n"));
+    assert!(!declares_step("//! a note\nfn stepper(v: &mut Value) {}\nfn fnstep() {}\n"));
+}
+
+#[test]
+fn a_documentation_only_change_has_no_step_and_a_missing_version_folder_fails() {
+    let dir = scratch("doc-only");
+    write(&dir.join("drawing/v4/doc.rs"), "//! No fn step() is needed.\n");
+    let code = lists(&dir, &[DRAWING]).unwrap().code;
+    assert!(code.contains("Part { name: \"doc\", step: None }"), "{code}");
+    // a version folder that can't be listed is an error, not an empty format
+    let missing = parts(&dir.join("drawing/v9"), "x", false, &mut String::new(), &mut String::new());
+    assert!(missing.is_err());
+    assert!(parts(&dir.join("drawing/pending"), "x", true, &mut String::new(), &mut String::new()).is_ok());
+    let _ = std::fs::remove_dir_all(&dir);
+}

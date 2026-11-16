@@ -87,3 +87,42 @@ fn replaced_sections_and_elements_are_reported_lost() {
     assert!(said.restore_into(&mut fresh).is_empty());
     assert_eq!(fresh["shapes"], json!([{"name": "star"}, {"points": 3}]));
 }
+
+/// Retained container metadata alone needs a container to survive the save.
+#[test]
+fn container_metadata_alone_needs_a_container() {
+    let mut said = NewerFile::new("App", &newer());
+    assert!(!said.needs_container());
+    said.container = Some(json!({"layout": 2}));
+    assert!(said.needs_container());
+}
+
+/// An edit that replaces a retained field keeps the edit and reports the replaced value.
+#[test]
+fn a_replaced_retained_field_is_reported() {
+    let mut said = NewerFile::new("App", &newer());
+    said.compare(&json!({"extra": 1}), &json!({}), "placeholder", &[]);
+    let mut edited = json!({"extra": 2});
+    assert_eq!(said.restore_into(&mut edited), ["field `extra`"]);
+    assert_eq!(edited, json!({"extra": 2}));
+    let mut same = json!({"extra": 1});
+    assert!(said.restore_into(&mut same).is_empty());
+}
+
+/// Records are matched by id and by name across long lists, and an index anchor only while the
+/// list keeps its length.
+#[test]
+fn records_match_by_id_name_or_unchanged_index() {
+    let records: Vec<Value> = (0..2000).map(|i| json!({"id": i, "extra": i})).collect();
+    let known: Vec<Value> = (0..2000).map(|i| json!({"id": i})).collect();
+    let mut said = NewerFile::new("App", &newer());
+    said.compare(&json!({"items": records}), &json!({"items": known}), "placeholder", &[]);
+    let mut saved = json!({"items": (0..2000).rev().map(|i| json!({"id": i})).collect::<Vec<_>>()});
+    assert!(said.restore_into(&mut saved).is_empty());
+    assert_eq!(saved["items"][0], json!({"id": 1999, "extra": 1999}));
+    let mut by_name = NewerFile::new("App", &newer());
+    by_name.compare(&json!({"l": [{"name": "a", "x": 1}, [1, 2]]}), &json!({"l": [{"name": "a"}, [1]]}), "placeholder", &[]);
+    let mut renamed = json!({"l": [{"name": "a"}]});
+    by_name.restore_into(&mut renamed);
+    assert_eq!(renamed["l"][0], json!({"name": "a", "x": 1}));
+}

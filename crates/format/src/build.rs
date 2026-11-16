@@ -44,14 +44,17 @@ pub fn lists(manifest: &Path, families: &[Family]) -> Result<Lists, String> {
 /// A family's `FOLDED` and `PENDING` lists; its folded formats follow on from its base.
 fn family_lists(family: &Family, root: &Path, out: &mut String, mods: &mut String) -> Result<(), String> {
     let Family { folder, base, list_prefix } = family;
-    let mut folded: Vec<(u32, PathBuf)> = std::fs::read_dir(root)
-        .map_err(|e| format!("{}: {e}", root.display()))?
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            let version = path.file_name()?.to_str()?.strip_prefix('v')?.parse().ok()?;
-            path.is_dir().then_some((version, path))
-        })
-        .collect();
+    let mut folded: Vec<(u32, PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(root).map_err(|e| format!("{}: {e}", root.display()))? {
+        // an entry that can't be read could be a version folder: fail rather than drop it
+        let path = entry.map_err(|e| format!("{}: {e}", root.display()))?.path();
+        let version = path.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix('v')).and_then(|n| n.parse().ok());
+        if let Some(version) = version
+            && path.is_dir()
+        {
+            folded.push((version, path));
+        }
+    }
     folded.sort();
     for (i, (version, _)) in folded.iter().enumerate() {
         let expected = base + 1 + i as u32;
@@ -68,19 +71,42 @@ fn family_lists(family: &Family, root: &Path, out: &mut String, mods: &mut Strin
     );
     for (version, dir) in &folded {
         let _ = writeln!(out, "    ({version}, &[");
-        parts(dir, &format!("{module}v{version}"), out, mods)?;
+        parts(dir, &format!("{module}v{version}"), false, out, mods)?;
         out.push_str("    ]),\n");
     }
     let _ = writeln!(out, "];\n\n/// The changes no release has a number for yet (`{folder}/pending/`).\nconst {list_prefix}PENDING: &[Part] = &[");
-    parts(&root.join("pending"), &format!("{module}pending"), out, mods)?;
+    parts(&root.join("pending"), &format!("{module}pending"), true, out, mods)?;
     out.push_str("];\n\n");
     Ok(())
 }
 
-/// The `Part`s of the change files in `dir`, in file-name order, and a module for each.
-fn parts(dir: &Path, prefix: &str, out: &mut String, mods: &mut String) -> Result<(), String> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return Ok(()) };
-    let mut files: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == "rs")).collect();
+/// Whether a change file declares its `step` function (`fn step(`, `pub fn step (` …) on a line of
+/// code: a mention in a comment or a note is not a declaration.
+fn declares_step(text: &str) -> bool {
+    text.lines().map(str::trim_start).filter(|line| !line.starts_with("//")).any(|line| {
+        let line = line.strip_prefix("pub(crate)").or_else(|| line.strip_prefix("pub")).unwrap_or(line).trim_start();
+        line.strip_prefix("fn").is_some_and(|rest| {
+            rest.starts_with(char::is_whitespace) && rest.trim_start().strip_prefix("step").is_some_and(|rest| rest.trim_start().starts_with('('))
+        })
+    })
+}
+
+/// The `Part`s of the change files in `dir`, in file-name order, and a module for each. A missing
+/// folder is an empty list only where it may be absent (`optional`: `pending/`); any other error
+/// reading it fails the build rather than leave a change out of the lists.
+fn parts(dir: &Path, prefix: &str, optional: bool, out: &mut String, mods: &mut String) -> Result<(), String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if optional && e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("{}: {e}", dir.display())),
+    };
+    let mut files: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|e| format!("{}: {e}", dir.display()))?.path();
+        if path.extension().is_some_and(|x| x == "rs") {
+            files.push(path);
+        }
+    }
     files.sort();
     for path in files {
         let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
@@ -92,7 +118,7 @@ fn parts(dir: &Path, prefix: &str, out: &mut String, mods: &mut String) -> Resul
             return Err(format!("{}: start a format change with a `//!` note", path.display()));
         }
         let module = format!("{prefix}_{}", name.replace('-', "_"));
-        let step = if text.contains("fn step(") { format!("Some({module}::step)") } else { "None".into() };
+        let step = if declares_step(&text) { format!("Some({module}::step)") } else { "None".into() };
         let _ = writeln!(out, "        Part {{ name: {name:?}, step: {step} }},");
         let _ = writeln!(mods, "#[path = {:?}]\nmod {module};", path.display().to_string());
     }

@@ -20,6 +20,8 @@
 //! Steps are JSON-level (the file's shape) and return the app's own error type; every error this
 //! crate makes is a [`FormatError`], which the app's error type takes `From`.
 
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
+
 use serde_json::Value;
 
 pub mod build;
@@ -157,7 +159,10 @@ impl<E> Family<'_, E> {
     /// The version in one of this family's format tags; `None` for any other tag, another
     /// family's included.
     pub fn version_of(&self, s: &str) -> Option<u32> {
-        s.strip_prefix(self.prefix).or_else(|| self.legacy_prefix.and_then(|p| s.strip_prefix(p)))?.parse().ok()
+        // each tag form parses on its own: a legacy prefix may start with the primary one
+        // (`app/` and `app/design/`)
+        let parse = |prefix: &str| s.strip_prefix(prefix).and_then(|n| n.parse().ok());
+        parse(self.prefix).or_else(|| self.legacy_prefix.and_then(parse))
     }
 
     /// The change a name a file of format `version` lists stands for: its alias's, or itself.

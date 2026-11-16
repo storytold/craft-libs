@@ -12,7 +12,7 @@
 //! saved ([`NewerFile::restore_into`]), as they came. What can't be put back because the file was
 //! changed around it is what `restore_into` returns.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
@@ -118,9 +118,9 @@ impl NewerFile {
     }
 
     /// Whether the next save needs a container to keep what the file holds: plain JSON has no room
-    /// for parts beside the file's own.
+    /// for parts beside the file's own, nor for the container's own `container.json`.
     pub fn needs_container(&self) -> bool {
-        !self.parts.is_empty()
+        !self.parts.is_empty() || self.container.is_some()
     }
 
     /// Whether anything kept back names this text (a blob's name in a container).
@@ -315,9 +315,10 @@ fn vanished(raw: &Value, known: &Value, path: &str, paths: &mut Vec<String>, pla
         }
         (Value::Array(raw), Value::Array(known)) => {
             let mut items = Vec::new();
+            let positions = Positions::of(known);
             for (at, element) in raw.iter().enumerate() {
                 let anchor = anchor_of(element).unwrap_or(Anchor::Index { at, of: raw.len() });
-                let Some(partner) = find(known, &anchor) else { continue };
+                let Some(partner) = positions.find(known.len(), &anchor).and_then(|i| known.get(i)) else { continue };
                 let label = match (element.get("name").and_then(Value::as_str), &anchor) {
                     (Some(name), _) => format!("{path}[{name}]"),
                     (None, Anchor::Id(id)) => format!("{path}[{id}]"),
@@ -340,19 +341,34 @@ fn anchor_of(element: &Value) -> Option<Anchor> {
     element.get("name").and_then(Value::as_str).map(|name| Anchor::Name(name.to_string()))
 }
 
-fn find<'a>(list: &'a [Value], anchor: &Anchor) -> Option<&'a Value> {
-    match anchor {
-        Anchor::Id(id) => list.iter().find(|x| x.get("id").and_then(Value::as_u64) == Some(*id)),
-        Anchor::Name(name) => list.iter().find(|x| x.get("name").and_then(Value::as_str) == Some(name)),
-        Anchor::Index { at, of } => (list.len() == *of).then(|| list.get(*at)).flatten(),
-    }
+/// Where each id and name first appears in a list, so matching records is not a scan per record.
+struct Positions {
+    ids: HashMap<u64, usize>,
+    names: HashMap<String, usize>,
 }
 
-fn find_mut<'a>(list: &'a mut [Value], anchor: &Anchor) -> Option<&'a mut Value> {
-    match anchor {
-        Anchor::Id(id) => list.iter_mut().find(|x| x.get("id").and_then(Value::as_u64) == Some(*id)),
-        Anchor::Name(name) => list.iter_mut().find(|x| x.get("name").and_then(Value::as_str) == Some(name)),
-        Anchor::Index { at, of } => (list.len() == *of).then(|| list.get_mut(*at)).flatten(),
+impl Positions {
+    fn of(list: &[Value]) -> Positions {
+        let (mut ids, mut names) = (HashMap::new(), HashMap::new());
+        for (i, x) in list.iter().enumerate() {
+            if let Some(id) = x.get("id").and_then(Value::as_u64) {
+                ids.entry(id).or_insert(i);
+            }
+            if let Some(name) = x.get("name").and_then(Value::as_str) {
+                names.entry(name.to_string()).or_insert(i);
+            }
+        }
+        Positions { ids, names }
+    }
+
+    /// The position of the record `anchor` names in a list of `len` records (an index anchor
+    /// only while the list keeps its length).
+    fn find(&self, len: usize, anchor: &Anchor) -> Option<usize> {
+        match anchor {
+            Anchor::Id(id) => self.ids.get(id).copied(),
+            Anchor::Name(name) => self.names.get(name).copied(),
+            Anchor::Index { at, of } => (len == *of && at < of).then_some(*at),
+        }
     }
 }
 
@@ -372,7 +388,12 @@ fn apply(kept: &Kept, value: &mut Value, path: &str, lost: &mut Vec<String>) {
                     (Kept::Field(v), None) => {
                         object.insert(key.clone(), v.clone());
                     }
-                    (Kept::Field(_), Some(_)) => {}
+                    // the edited value stays; a retained one it replaced is reported
+                    (Kept::Field(v), Some(existing)) => {
+                        if existing != v {
+                            lost.push(format!("field `{inner}`"));
+                        }
+                    }
                     (sub, Some(inner_value)) => apply(sub, inner_value, &inner, lost),
                     // The list it was in is empty and not written: its elements were deleted.
                     (Kept::Items(_), None) => {}
@@ -385,8 +406,10 @@ fn apply(kept: &Kept, value: &mut Value, path: &str, lost: &mut Vec<String>) {
                 lost.push(format!("field `{path}`"));
                 return;
             };
+            let positions = Positions::of(list);
+            let len = list.len();
             for (anchor, sub) in items {
-                match (find_mut(list, anchor), anchor) {
+                match (positions.find(len, anchor).and_then(|i| list.get_mut(i)), anchor) {
                     (Some(element), _) => apply(sub, element, path, lost),
                     (None, Anchor::Index { at, .. }) => lost.push(format!("element {at} of `{path}`")),
                     (None, _) => {}

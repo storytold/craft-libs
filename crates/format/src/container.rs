@@ -37,11 +37,14 @@ pub struct Limits {
     pub level: fn(&str, usize) -> i64,
     /// Whether a container of this many bytes may be read, or why not.
     pub check_size: fn(u64) -> Result<(), String>,
-    /// Whether the work is cancelled (a save the person stopped): a long part is written a piece
-    /// at a time and stops before the next piece when this says so. `None`: it cannot be
-    /// cancelled here.
+    /// Whether the work is cancelled (a save the person stopped): checked before each part, and
+    /// a long part is written a piece at a time and stops before the next piece when this says
+    /// so ([`FormatError::Cancelled`]). `None`: it cannot be cancelled here.
     pub cancelled: Option<fn() -> bool>,
 }
+
+/// The most bytes of a part written between two cancellation checks.
+const PIECE: usize = 1 << 20;
 
 fn invalid(message: impl std::fmt::Display) -> FormatError {
     FormatError::Invalid(message.to_string())
@@ -128,26 +131,54 @@ impl Writer {
         if bytes.len() > (self.limits.part_limit)(name) {
             return Err(invalid("part too large"));
         }
-        if !self.names.insert(name.to_owned()) {
+        if self.names.contains(name) {
             return Ok(());
         }
-        self.expanded = self.expanded.checked_add(bytes.len()).ok_or_else(|| invalid("expanded size overflow"))?;
-        if self.expanded > (self.limits.max_expanded)() || self.names.len() > self.limits.max_entries {
+        // Check the counters this part would leave, and commit them only once it is written: a
+        // refused part is not remembered as written.
+        let expanded = self.expanded.checked_add(bytes.len()).ok_or_else(|| invalid("expanded size overflow"))?;
+        if expanded > (self.limits.max_expanded)() || self.names.len().saturating_add(1) > self.limits.max_entries {
             return Err(invalid("package too large"));
         }
+        let cancelled = self.limits.cancelled;
+        if cancelled.is_some_and(|c| c()) {
+            return Err(FormatError::Cancelled);
+        }
+        let compression = if compressed { craft_zip::Compression::Deflated } else { craft_zip::Compression::Stored };
+        match cancelled {
+            Some(cancelled) if bytes.len() > PIECE => {
+                let mut stopped = false;
+                let written = self.zip.add_with(name, compression, |out| {
+                    for piece in bytes.chunks(PIECE) {
+                        if cancelled() {
+                            stopped = true;
+                            return Err(std::io::Error::other("cancelled"));
+                        }
+                        out.write_all(piece)?;
+                    }
+                    Ok(())
+                });
+                if stopped {
+                    return Err(FormatError::Cancelled);
+                }
+                written.map_err(invalid)?;
+            }
+            _ => self.zip.add(name, bytes, compression).map_err(invalid)?,
+        }
+        self.names.insert(name.to_owned());
+        self.expanded = expanded;
         if let Some((include, parts)) = &mut self.tracked
             && include(name)
         {
             let digest = digest.unwrap_or_else(|| sha256(bytes));
             parts.push(PartDigest { name: name.to_owned(), len: bytes.len() as u64, digest });
         }
-        let compression = if compressed { craft_zip::Compression::Deflated } else { craft_zip::Compression::Stored };
-        self.zip.add(name, bytes, compression).map_err(invalid)?;
         Ok(())
     }
 
     /// Would `entries` more optional parts of `extra` bytes, stored uncompressed, still keep the
-    /// file within `budget` and its expanded size within the reader's budget?
+    /// file within `budget` and its expanded size within the reader's budget? The parts already
+    /// written count at their expanded size (an upper bound on what they take in the file).
     pub fn room(&self, entries: usize, extra: usize, budget: usize) -> bool {
         self.names.len().saturating_add(entries) <= self.limits.max_entries && extra <= self.space(entries, budget)
     }
@@ -157,15 +188,14 @@ impl Writer {
         if self.names.len().saturating_add(entries) > self.limits.max_entries {
             return 0;
         }
-        budget
-            .saturating_sub(self.names.len().saturating_add(entries).saturating_mul(256).saturating_add(65_536))
-            .min((self.limits.max_expanded)().saturating_sub(self.expanded))
+        let overhead = self.names.len().saturating_add(entries).saturating_mul(256).saturating_add(65_536);
+        budget.saturating_sub(overhead.saturating_add(self.expanded)).min((self.limits.max_expanded)().saturating_sub(self.expanded))
     }
 
     /// Add a payload as a blob, `blobs/<sha256>.<extension>`, and say its name, for the JSON that
     /// refers to it.
     pub fn blob(&mut self, bytes: &[u8], extension: &str, compressed: bool) -> Result<Value, FormatError> {
-        self.resolved = self
+        let resolved = self
             .resolved
             .checked_add(bytes.len())
             .filter(|&n| n <= (self.limits.max_expanded)())
@@ -173,6 +203,7 @@ impl Writer {
         let digest = sha256(bytes);
         let name = format!("blobs/{}.{extension}", hex(&digest));
         self.part_with_digest(&name, bytes, compressed, Some(digest))?;
+        self.resolved = resolved;
         Ok(Value::String(name))
     }
 }
@@ -194,10 +225,16 @@ impl Reader {
         let length = source.seek(SeekFrom::End(0)).map_err(invalid)?;
         (limits.check_size)(length).map_err(invalid)?;
 
-        // Read all bytes into memory for the archive.
+        // Read all bytes into memory for the archive, no more than the length just approved: a file
+        // that grew since is refused rather than read past its budget.
         source.seek(SeekFrom::Start(0)).map_err(invalid)?;
-        let mut bytes = Vec::with_capacity(length as usize);
-        source.read_to_end(&mut bytes).map_err(invalid)?;
+        let capacity = usize::try_from(length).map_err(|_| invalid("file too large"))?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(capacity).map_err(|_| invalid("file too large"))?;
+        source.take(length.saturating_add(1)).read_to_end(&mut bytes).map_err(invalid)?;
+        if bytes.len() as u64 != length {
+            return Err(invalid("the file changed while it was read"));
+        }
 
         let mut archive = craft_zip::Archive::open_owned(
             bytes,
@@ -206,16 +243,21 @@ impl Reader {
         .map_err(invalid)?;
 
         // Validate entry names match format rules: no empty, no backslashes,
-        // no path components that are "." or "..", and no duplicates.
+        // no path components that are "." or "..", and no duplicates; and every part's declared
+        // size within its configured limit.
         let mut name_set = BTreeSet::new();
         for entry_idx in 0..archive.len() {
-            if let Ok(Some(name)) = archive.entry_name(entry_idx)
-                && (name.is_empty()
+            if let Ok(Some(name)) = archive.entry_name(entry_idx) {
+                if name.is_empty()
                     || name.contains('\\')
                     || name.split('/').any(|c| c.is_empty() || c == "." || c == "..")
-                    || !name_set.insert(name))
-            {
-                return Err(invalid("duplicate or invalid archive entry"));
+                    || !name_set.insert(name.clone())
+                {
+                    return Err(invalid("duplicate or invalid archive entry"));
+                }
+                if archive.declared_size(&name).is_some_and(|size| size > (limits.part_limit)(&name) as u64) {
+                    return Err(invalid("part too large"));
+                }
             }
         }
 
@@ -243,8 +285,9 @@ impl Reader {
         self.archive.names().map(|n| n.into_owned()).collect()
     }
 
-    /// The part of this name, at most `limit` bytes.
+    /// The part of this name, at most `limit` bytes and never more than its configured limit.
     pub fn limited_part(&mut self, name: &str, limit: usize) -> Result<Vec<u8>, FormatError> {
+        let limit = limit.min((self.limits.part_limit)(name));
         let expected = self.archive.declared_size(name).ok_or_else(|| invalid("part not found"))?;
         if expected > limit as u64 {
             return Err(invalid("part too large"));
@@ -329,7 +372,11 @@ impl Thumbnail {
         let key =
             serde_json::to_vec(&serde_json::json!({"format": self.format, "app": self.app, "document": digest(document), "payload": digest(png)}))
                 .map_err(invalid)?;
-        if !writer.room(2, key.len().saturating_add(png.len()), budget) {
+        let fits = |name: &str, len: usize| len <= (writer.limits.part_limit)(name);
+        if !fits("cache/thumbnail.json", key.len())
+            || !fits("cache/thumbnail.png", png.len())
+            || !writer.room(2, key.len().saturating_add(png.len()), budget)
+        {
             return Ok(());
         }
         writer.part("cache/thumbnail.json", &key, false)?;

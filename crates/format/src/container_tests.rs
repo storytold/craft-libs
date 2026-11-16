@@ -66,3 +66,98 @@ fn a_thumbnail_is_keyed_to_its_file() {
     let mut reader = Reader::new(Cursor::new(writer.finish().unwrap()), LIMITS).unwrap();
     assert!(picture.read(&mut reader, 64).is_err(), "stale");
 }
+
+/// A refused part is not remembered as written: once the budget is raised it is written.
+#[test]
+fn a_refused_part_can_be_written_later() {
+    static BUDGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(4);
+    let limits = Limits { max_expanded: || BUDGET.load(std::sync::atomic::Ordering::SeqCst), ..LIMITS };
+    let mut writer = Writer::new(limits);
+    assert_eq!(writer.part("a.json", b"12345678", false), Err(FormatError::Invalid("package too large".into())));
+    assert!(writer.blob(b"12345678", "bin", false).is_err());
+    BUDGET.store(1 << 20, std::sync::atomic::Ordering::SeqCst);
+    writer.part("a.json", b"12345678", false).unwrap();
+    writer.blob(b"12345678", "bin", false).unwrap();
+    let reader = Reader::new(Cursor::new(writer.finish().unwrap()), limits).unwrap();
+    assert_eq!(reader.part_names().len(), 2, "both parts were written on the retry");
+}
+
+/// A cancelled save writes no more parts, whether the part is small or written in pieces.
+#[test]
+fn cancellation_stops_the_save() {
+    let cancelled = Limits { cancelled: Some(|| true), ..LIMITS };
+    let mut writer = Writer::new(cancelled);
+    assert_eq!(writer.part("a.json", b"a", false), Err(FormatError::Cancelled));
+    // cancelled after the first piece of a long part: checks before the part, then per piece
+    static CHECKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let midway = Limits {
+        cancelled: Some(|| CHECKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 2),
+        max_expanded: || 1 << 22,
+        part_limit: |_| 1 << 22,
+        ..LIMITS
+    };
+    let mut writer = Writer::new(midway);
+    assert_eq!(writer.part("big.big", &vec![0; PIECE + 1], true), Err(FormatError::Cancelled));
+    assert_eq!(CHECKS.load(std::sync::atomic::Ordering::SeqCst), 3);
+    let going = Limits { cancelled: Some(|| false), max_expanded: || 1 << 22, part_limit: |_| 1 << 22, ..LIMITS };
+    let mut writer = Writer::new(going);
+    writer.part("big.big", &vec![7; PIECE + 1], true).unwrap();
+    let mut reader = Reader::new(Cursor::new(writer.finish().unwrap()), going).unwrap();
+    assert_eq!(reader.limited_part("big.big", 1 << 22).unwrap().len(), PIECE + 1);
+}
+
+/// Room counts what is already written, and the reader keeps every part's configured limit.
+#[test]
+fn room_counts_written_parts_and_reads_keep_part_limits() {
+    let mut writer = Writer::new(LIMITS);
+    writer.part("large.big", &[0; 500 * 1024], false).unwrap();
+    assert!(!writer.room(1, 200 * 1024, 600 * 1024));
+    assert!(writer.room(1, 1024, 1 << 20));
+    let wide = Limits { part_limit: |_| 1 << 20, ..LIMITS };
+    let mut writer = Writer::new(wide);
+    writer.part("document.json", &[b' '; 2048], false).unwrap();
+    let bytes = writer.finish().unwrap();
+    assert!(Reader::new(Cursor::new(bytes.clone()), LIMITS).is_err(), "declared past its configured limit");
+    let mut reader = Reader::new(Cursor::new(bytes), wide).unwrap();
+    assert!(reader.limited_part("document.json", 4096).is_ok());
+}
+
+/// A thumbnail past a cache part's own limit is left out, never failing the save.
+#[test]
+fn a_thumbnail_past_its_part_limit_is_left_out() {
+    let picture = Thumbnail { format: "app-thumbnail/1", app: "1.0", size: [2, 1], max_bytes: 2048 };
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    png.extend_from_slice(&2u32.to_be_bytes());
+    png.extend_from_slice(&1u32.to_be_bytes());
+    png.resize(1500, 0);
+    let mut writer = Writer::new(LIMITS);
+    picture.write(&mut writer, &png, b"{}", 8 << 20).unwrap();
+    let reader = Reader::new(Cursor::new(writer.finish().unwrap()), LIMITS).unwrap();
+    assert!(!reader.has_part("cache/thumbnail.json") && !reader.has_part("cache/thumbnail.png"));
+}
+
+/// A source that grows after its length was approved is refused.
+#[test]
+fn a_source_that_grows_while_read_is_refused() {
+    struct Growing(Cursor<Vec<u8>>, bool);
+    impl Read for Growing {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.1 {
+                self.1 = true;
+                let end = self.0.get_ref().len();
+                self.0.get_mut().extend_from_slice(&[0; 16]);
+                self.0.set_position(self.0.position().min(end as u64));
+            }
+            self.0.read(buf)
+        }
+    }
+    impl Seek for Growing {
+        fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
+            self.0.seek(to)
+        }
+    }
+    let mut writer = Writer::new(LIMITS);
+    writer.part("document.json", b"{}", false).unwrap();
+    let bytes = writer.finish().unwrap();
+    assert!(Reader::new(Growing(Cursor::new(bytes), false), LIMITS).err().is_some_and(|e| e.to_string().contains("changed")));
+}

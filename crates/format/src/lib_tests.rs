@@ -132,3 +132,11 @@ fn a_newer_file_is_told_by_its_number_or_an_unknown_change() {
     assert_eq!(FAMILY.newer(4, Some(&["old-c".to_string()])), Some(Newer { format: 4, reads_up_to: 6, unknown_changes: vec!["old-c".to_string()] }));
     assert_eq!(FAMILY.newer(2, Some(&["z".to_string()])), None, "a list beside a hand-written format means nothing");
 }
+
+#[test]
+fn a_legacy_prefix_that_extends_the_primary_one_is_read() {
+    let nested = Family { prefix: "app/", legacy_prefix: Some("app/design/"), ..FAMILY };
+    assert_eq!(nested.version_of("app/design/3"), Some(3));
+    assert_eq!(nested.version_of("app/4"), Some(4));
+    assert_eq!(nested.version_of("app/design/x"), None);
+}
