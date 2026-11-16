@@ -311,6 +311,11 @@ impl Reader<'_> {
                 "dcterms:created" => c.created = t,
                 "dcterms:modified" => c.modified = t,
                 "cp:category" => c.category = t,
+                "dc:language" => c.language = t,
+                "cp:contentStatus" => c.content_status = t,
+                "dc:identifier" => c.identifier = t,
+                "cp:version" => c.version = t,
+                "cp:lastPrinted" => c.last_printed = t,
                 _ => {}
             }
         }
