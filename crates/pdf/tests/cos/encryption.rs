@@ -39,9 +39,11 @@ fn fixture_with(extra: &str) -> Vec<u8> {
     out
 }
 
+/// Every algorithm, RC4-40 and RC4-128 included: those two are the legacy schemes, which
+/// `set_encryption` refuses.
 fn protect(alg: Algorithm, user: &str, owner: &str, permissions: i32) -> Vec<u8> {
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: alg,
         user_password: user,
         owner_password: owner,
@@ -287,7 +289,7 @@ fn signature_contents_stay_unencrypted() {
             c.set(b"Test".to_vec(), Object::Array(vec![Object::Ref(sig), Object::Ref(untyped), Object::Ref(note)]))
         })
         .unwrap();
-        doc.set_encryption(&NewEncryption {
+        doc.set_encryption_legacy(&NewEncryption {
             algorithm: alg,
             user_password: "",
             owner_password: "owner",
@@ -423,7 +425,7 @@ fn an_earlier_revision_opens_with_the_documents_own_credentials() {
         // Another file, encrypted with other keys: the document's key is no use, and it says so.
         let other = {
             let mut doc = Document::open(Arc::new(fixture())).unwrap();
-            doc.set_encryption(&NewEncryption {
+            doc.set_encryption_legacy(&NewEncryption {
                 algorithm: alg,
                 user_password: "user",
                 owner_password: "owner",
@@ -444,7 +446,7 @@ fn an_earlier_revision_opens_with_the_documents_own_credentials() {
 /// instead of as an indirect object.
 fn protect_inline(alg: Algorithm, user: &str, owner: &str) -> Vec<u8> {
     let mut doc = Document::open(Arc::new(fixture())).unwrap();
-    doc.set_encryption(&NewEncryption {
+    doc.set_encryption_legacy(&NewEncryption {
         algorithm: alg,
         user_password: user,
         owner_password: owner,
