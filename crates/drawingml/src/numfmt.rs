@@ -328,6 +328,24 @@ fn conditional(secs: &[&str], v: f64) -> Option<Pick> {
     Some(if n >= 3 { Pick::Section(2, false) } else { Pick::NoMatch })
 }
 
+/// `sec` without its `[...]` parts (conditions, colours, locales) outside quotes.
+fn without_brackets(sec: &str) -> String {
+    let (mut out, mut quoted, mut bracket) = (String::new(), false, false);
+    for c in sec.chars() {
+        match c {
+            '"' if !bracket => {
+                quoted = !quoted;
+                out.push(c);
+            }
+            '[' if !quoted => bracket = true,
+            ']' if bracket => bracket = false,
+            _ if !bracket => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// `v` formatted with the Excel number format `code` in language `lang` (axis labels: the text
 /// section of a format doesn't apply). Dates count from 1900 as Excel does.
 pub fn format(code: &str, v: f64, lang: Option<&str>) -> String {
@@ -355,7 +373,7 @@ pub fn format_dated(code: &str, v: f64, lang: Option<&str>, date_1904: bool) -> 
         (None, [pos, ..], v) => (*pos, v.abs(), v < 0.0),
         (None, [], v) => ("General", v.abs(), v < 0.0),
     };
-    if sec.trim().eq_ignore_ascii_case("general") || (secs.len() == 1 && sec.trim().is_empty()) {
+    if without_brackets(sec).trim().eq_ignore_ascii_case("general") || (secs.len() == 1 && sec.trim().is_empty()) {
         let s = general(v, dec);
         return if minus { format!("-{s}") } else { s };
     }
@@ -371,7 +389,9 @@ pub fn format_dated(code: &str, v: f64, lang: Option<&str>, date_1904: bool) -> 
         let s: String = toks.iter().filter_map(|t| if let Tok::Lit(s) = t { Some(s.as_str()) } else { None }).collect();
         return s.trim().to_string();
     };
-    let (out, zero) = match fraction(&toks, v, sep) {
+    // A percent sign scales the value before the fraction is picked, as in `fixed`.
+    let fv = if toks.contains(&Tok::Percent) { v * 100.0 } else { v };
+    let (out, zero) = match fraction(&toks, fv, sep) {
         Some(o) => o,
         None => match sci(&toks, v, sep, dec) {
             Some(o) => (o, false),
@@ -482,11 +502,22 @@ fn fixed_with(toks: &[Tok], first: usize, last: usize, sep: char, dec: char, rou
     let ip = ip.trim_start_matches('0');
     // Placeholders left of the number's digits: `0` shows a zero, `?` a space, `#` nothing.
     let missing = int_kinds.iter().rev().skip(ip.len());
-    let zeros = missing.clone().filter(|c| **c == '0').count();
-    let pads = missing.filter(|c| **c == '?').count();
-    let ip = format!("{}{ip}", "0".repeat(zeros));
+    // The missing placeholders keep their order: `0???` shows 25 as `0 25`. Spaces before the first
+    // zero stay outside the grouping.
+    let missing: Vec<char> = missing.rev().copied().collect();
+    let lead = missing.iter().take_while(|c| **c == '?').count();
+    let rest: String = missing
+        .iter()
+        .skip(lead)
+        .filter_map(|c| match c {
+            '0' => Some('0'),
+            '?' => Some(PAD),
+            _ => None,
+        })
+        .collect();
+    let ip = format!("{rest}{ip}");
     let mut num = if grouping { group(&ip, sep) } else { ip };
-    num.insert_str(0, &PAD.to_string().repeat(pads));
+    num.insert_str(0, &PAD.to_string().repeat(lead));
     if dot.is_some() {
         num.push(dec);
         // The fraction's digits up to the last one that is not zero show; after it a `0` still
@@ -805,12 +836,15 @@ fn date_text(toks: &[DTok], v: f64, date_1904: bool, dec: char) -> String {
     }
     let subs = toks.iter().find_map(|t| if let DTok::Frac(n) = t { Some((*n).min(3)) } else { None }).unwrap_or(0);
     let shows_sec = toks.iter().any(|t| matches!(t, DTok::Sec(_) | DTok::Elapsed('s', _)));
-    let mut ms = (v * 86_400_000.0).round() as i64;
-    // Seconds that show are rounded to what shows; without them the time is cut, not rounded.
-    if shows_sec || subs > 0 {
+    let exact = v * 86_400_000.0;
+    // Seconds that show are rounded once, to what shows (a hundredth of a millisecond of slack
+    // absorbs the float error of the serial); without them the time is cut, not rounded.
+    let ms = if shows_sec || subs > 0 {
         let unit = 10i64.pow(3 - subs as u32);
-        ms = (ms + unit / 2) / unit * unit;
-    }
+        ((exact / unit as f64 + 0.5 + 1e-5).floor() as i64) * unit
+    } else {
+        exact.round() as i64
+    };
     let days = ms.div_euclid(86_400_000);
     // Rounding the time up can carry into the day after the last one Excel shows.
     if days > if date_1904 { 2_957_003 } else { 2_958_465 } {
@@ -1145,6 +1179,32 @@ mod tests {
             (r#"[>=1000]0,"K";0"#, -5.0, "5"),
             (r#"[>=1000]0,"K""#, 5000.0, "5K"),
         ]);
+    }
+
+    #[test]
+    fn general_with_condition_is_a_number() {
+        check(&[
+            ("[<0]General;0", -5.0, "5"),
+            ("[<0]General;0", 5.0, "5"),
+            ("[Red]General", 2.5, "2.5"),
+            // Quoted text stays text.
+            (r#"[<0]"General";0"#, -5.0, "General"),
+        ]);
+    }
+
+    #[test]
+    fn missing_integer_placeholders_keep_their_order() {
+        check(&[("0???", 25.0, "0 25"), ("???0", 25.0, "  25")]);
+    }
+
+    #[test]
+    fn percent_fraction_scales_before_the_fraction() {
+        check(&[("# ?/?%", 0.125, "12 1/2%")]);
+    }
+
+    #[test]
+    fn seconds_round_once_from_the_serial() {
+        check(&[("ss", 0.4996 / 86_400.0, "00"), ("ss", 0.5004 / 86_400.0, "01"), ("ss.0", 0.04996 / 86_400.0, "00.0")]);
     }
 
     #[test]
